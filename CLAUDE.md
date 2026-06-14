@@ -5,3 +5,5 @@ Each source directory in this repo must have a README.md that describes the inte
 When looking for APIs or an understanding of how something works, always start with the documentation.
 
 If you are making more than a trivial change, always use the /orchestrate skill, to make sure that tests are run and the implementation is verified.
+
+Prefer end-to-end and integration tests over mocks. The purpose of this application is to communicate with a Neovim process, so the tests should actually start a Neovim process and communicate with it.
