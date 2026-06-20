@@ -43,6 +43,53 @@ Source of truth: `README.md`, `architecture.md`, `build.md` (docs override impl)
 Full `wrapNeovim` plugin baking, swift-bridge/macOS, GTK/libadwaita front-end,
 native cmdline/messages/popupmenu, theming, LSP/treesitter bundling.
 
+## Progress log
+- Stage A DONE: `flake.nix` + `.envrc` created. User restarted; devShell active
+  (cargo/rustc 1.96.0, WOLF_NVIM_BIN -> nvim 0.12.2). Resuming Stage B onward.
+
+## Progress log (cont.)
+- Stages C/D/E (code) DONE by coder. Workspace + wolf-core compile clean (no
+  warnings, clippy clean). GUI-free `cargo tree` check: clean. All 9 integration
+  tests pass (real nvim via WOLF_NVIM_BIN), stable over 5x + 10x flaky reruns.
+  Two real bugs fixed: input-burst reordering (ordered input pump + key fusing)
+  and shutdown deadlock (cooperative write_async + bounded shutdown). Deviations:
+  parking_lot arc_lock owned read guard, tempfile promoted to normal dep,
+  write_async added. Still TODO: per-dir READMEs + build.md + architecture.md §8
+  (technical-writer), reviewer pass, and 3 approved test additions below.
+- DECISION: approved all 3 coder-recommended test additions (high-risk coverage):
+  (a) wide-char grid_line (double-width glyph -> trailing empty cell + alignment),
+  (b) grid_scroll content-shift assertion, (c) key_to_notation F-key + Alt/Meta.
+
+## Progress log (cont. 2)
+- 3 added tests run: wide_char_grid_line exposed a REAL bug (impl synthesized a
+  trailing wide-cell that nvim already emits explicitly -> misalignment after
+  double-width glyph). Fixed in src/redraw.rs (store nvim's empty cell verbatim).
+  Meta->`<D-s>` and Alt->`<A-x>` already correct. All 12 tests pass, stable; tree
+  GUI-free; clippy clean.
+- DECISION: approve ONE final test addition — direct grid_line `[text,hl,repeat]`
+  expansion assertion (covers freshly-modified column-advance logic). Then proceed
+  to reviewer + technical-writer.
+
+## Progress log (cont. 3)
+- Reviewer: APPROVED, no blockers. All load-bearing reqs confirmed. 4 minor
+  Should-fix notes triaged:
+  - S3 (fix): key_to_notation should NOT emit `<S-x>` for printable chars; deliver
+    shifted glyph, drop S- prefix for printables; document the contract.
+  - S4 (fix): de-dup the two key-translation paths (apply vs apply_batch).
+  - S1 (test): add down-direction grid_scroll content-shift assertion.
+  - S2 (test): assert win_viewport.linecount equals buffer line count.
+  - N1-N3 + fnameescape fidelity: ACCEPTED as-is for Phase 1.
+- 13 tests confirmed passing by coder (reviewer's inability to read tests 2-13 was
+  broken Glob/Grep tooling, not a real gap).
+
+## Progress log (cont. 4)
+- S3/S4 src fixes landed (key_to_notation no S- for printable chars + documented
+  contract; single key-translation path via shared nvim_input helper). Test type
+  mismatch (linecount u64 vs usize) fixed in test. ALL 15 TESTS PASS, stable;
+  clippy -D warnings clean; tree GUI-free. viewport linecount==50 assumption holds.
+- REMAINING: Stage B docs (build.md, architecture.md §8 note) + Stage E per-dir
+  READMEs (technical-writer). Then report completion.
+
 ## Orchestration note (amended)
 After `flake.nix` and `.envrc` are created, the orchestrator PAUSES and asks the
 user to restart so the devShell/direnv environment is active before any build or

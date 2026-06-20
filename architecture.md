@@ -155,6 +155,15 @@ Delivery:
 - **macOS:** a pinned Neovim plus its tools is bundled inside the `.app`. The GUI
   launches that absolute bundled path, never `nvim` from the user's `PATH`.
 
+**Phase 1 status.** The Neovim binary is pinned and hermetic from day one, via
+the flake devShell: core locates it only through `WOLF_NVIM_BIN` (never `PATH`,
+never `/nix/store` scanning) and launches it `--embed --clean -u
+runtime/nvim/init.lua` with `-i NONE -n`, pinning `NVIM_APPNAME=wolf` and the
+`XDG_*` dirs under a private temp dir. Full `wrapNeovim` plugin baking
+(markdown / markdown_inline treesitter grammars, the `marksman` LSP, a formatter)
+is **deferred to a later phase**; Phase 1 runs the bare pinned binary with the
+repo's `init.lua` and relies on Neovim's built-in markdown syntax highlighting.
+
 ## The core↔front-end contract
 
 The boundary is intentionally narrow and FFI-shaped (decision 1). Two directions:

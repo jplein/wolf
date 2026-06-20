@@ -1,0 +1,221 @@
+//! Spawning and supervising the captive, hermetic Neovim child process.
+//!
+//! Neovim is located *only* via `WOLF_NVIM_BIN` (exported by the flake devShell),
+//! never PATH and never by scanning `/nix/store`. It is launched
+//! `--embed --clean -u <init.lua> -i NONE -n` with `NVIM_APPNAME` and the
+//! `XDG_*` dirs pinned under a private temp dir so it cannot read the user's
+//! config/state. All RPC is generic/untyped to insulate us from nvim-rs's older
+//! typed API.
+
+use std::path::PathBuf;
+use std::process::Stdio;
+use std::time::Duration;
+
+use nvim_rs::compat::tokio::Compat;
+use nvim_rs::error::LoopError;
+use nvim_rs::{create::tokio::new_child_cmd, Neovim};
+use rmpv::Value;
+use tokio::process::{ChildStdin, Command};
+use tokio::task::JoinHandle;
+
+use crate::redraw::RedrawHandler;
+
+/// Application name pinned for the captive nvim, isolating its state dirs.
+const NVIM_APPNAME: &str = "wolf";
+
+/// How long to wait for the child to exit after `qa!` before force-killing.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long to wait for the `qa!` RPC itself before moving on (nvim exits rather
+/// than replying, so this normally elapses or errors — both are fine).
+const QUIT_GRACE: Duration = Duration::from_secs(2);
+
+/// Errors from spawning or driving the captive Neovim.
+#[derive(Debug, thiserror::Error)]
+pub enum NvimError {
+    /// `WOLF_NVIM_BIN` was unset or empty.
+    #[error("WOLF_NVIM_BIN is not set; the pinned nvim binary must be provided by the flake devShell")]
+    BinNotSet,
+    /// Failed to create the isolated state directories.
+    #[error("failed to set up isolated nvim state dir: {0}")]
+    StateDir(#[source] std::io::Error),
+    /// Failed to spawn the child process / establish the RPC channel.
+    #[error("failed to spawn nvim child process: {0}")]
+    Spawn(#[source] std::io::Error),
+    /// A generic RPC call failed.
+    #[error("nvim RPC call failed: {0}")]
+    Rpc(String),
+    /// Attaching as a UI failed.
+    #[error("nvim_ui_attach failed: {0}")]
+    Attach(String),
+}
+
+/// Configuration for launching the captive Neovim.
+#[derive(Clone, Debug)]
+pub struct NvimConfig {
+    /// Absolute path to the pinned nvim binary (from `WOLF_NVIM_BIN`).
+    pub nvim_bin: PathBuf,
+    /// Path to the in-repo `runtime/nvim/init.lua`.
+    pub init_lua: PathBuf,
+    /// `NVIM_APPNAME` value.
+    pub appname: String,
+    /// Root for the isolated `XDG_*` dirs (a private temp dir).
+    pub state_root: PathBuf,
+    /// Initial UI column count.
+    pub initial_cols: u16,
+    /// Initial UI row count.
+    pub initial_rows: u16,
+    // Kept alive so the temp dir is not deleted while nvim runs.
+    _state_guard: std::sync::Arc<tempfile::TempDir>,
+}
+
+impl NvimConfig {
+    /// Builds a config from the environment: reads `WOLF_NVIM_BIN` and creates a
+    /// private temp dir to host the isolated `XDG_*` state.
+    pub fn from_env(init_lua: PathBuf, cols: u16, rows: u16) -> Result<Self, NvimError> {
+        let bin = std::env::var("WOLF_NVIM_BIN")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .ok_or(NvimError::BinNotSet)?;
+
+        let temp = tempfile::Builder::new()
+            .prefix("wolf-nvim-state-")
+            .tempdir()
+            .map_err(NvimError::StateDir)?;
+        let state_root = temp.path().to_path_buf();
+
+        Ok(Self {
+            nvim_bin: PathBuf::from(bin),
+            init_lua,
+            appname: NVIM_APPNAME.to_string(),
+            state_root,
+            initial_cols: cols,
+            initial_rows: rows,
+            _state_guard: std::sync::Arc::new(temp),
+        })
+    }
+}
+
+/// A live captive Neovim: the RPC handle plus the io-loop join handle and child.
+pub struct NvimProcess {
+    nvim: Neovim<Compat<ChildStdin>>,
+    io_handle: JoinHandle<Result<(), Box<LoopError>>>,
+    child: tokio::process::Child,
+}
+
+impl NvimProcess {
+    /// Returns a clone of the RPC handle for issuing generic calls.
+    #[must_use]
+    pub fn handle(&self) -> Neovim<Compat<ChildStdin>> {
+        self.nvim.clone()
+    }
+
+    /// Attaches as an `ext_linegrid` UI at `cols * rows`.
+    pub async fn ui_attach(&self, cols: u16, rows: u16) -> Result<(), NvimError> {
+        let opts = vec![
+            (Value::from("ext_linegrid"), Value::from(true)),
+            (Value::from("rgb"), Value::from(true)),
+        ];
+        let _ = self
+            .nvim
+            .call(
+                "nvim_ui_attach",
+                vec![
+                    Value::from(cols),
+                    Value::from(rows),
+                    Value::Map(opts),
+                ],
+            )
+            .await
+            .map_err(|e| NvimError::Attach(e.to_string()))?
+            .map_err(|e| NvimError::Attach(format!("{e:?}")))?;
+        Ok(())
+    }
+
+    /// Requests a UI resize via `nvim_ui_try_resize`. The authoritative grid size
+    /// is whatever the resulting `grid_resize` carries.
+    pub async fn try_resize(&self, cols: u16, rows: u16) -> Result<(), NvimError> {
+        let _ = self
+            .nvim
+            .call(
+                "nvim_ui_try_resize",
+                vec![Value::from(cols), Value::from(rows)],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+        Ok(())
+    }
+
+    /// Cleanly shuts down: asks nvim to quit, awaits the io loop (bounded), then
+    /// ensures the child is reaped.
+    ///
+    /// A front-end may hold a snapshot read guard across this call; that is safe
+    /// because the redraw handler acquires the snapshot write lock cooperatively
+    /// (see [`crate::render::SharedSnapshot::write_async`]) and so never pins a
+    /// worker thread waiting for the reader to drop.
+    pub async fn shutdown(mut self) -> Result<(), NvimError> {
+        // Ask nvim to quit. nvim exits rather than replying, so bound the call and
+        // ignore the result (a timeout/error just means it is already exiting).
+        let _ = tokio::time::timeout(
+            QUIT_GRACE,
+            self.nvim.call("nvim_command", vec![Value::from("qa!")]),
+        )
+        .await;
+
+        // Give the io loop a bounded chance to finish on its own (stdout EOF when
+        // nvim exits); if it overruns, force-kill the child.
+        match tokio::time::timeout(SHUTDOWN_TIMEOUT, &mut self.io_handle).await {
+            Ok(_join) => {}
+            Err(_elapsed) => {
+                let _ = self.child.start_kill();
+                self.io_handle.abort();
+            }
+        }
+        // Best-effort reap so we leave no zombie.
+        let _ = tokio::time::timeout(SHUTDOWN_TIMEOUT, self.child.wait()).await;
+        Ok(())
+    }
+}
+
+/// Spawns the captive Neovim with the given redraw handler.
+///
+/// Launches `--embed --clean -u <init.lua> -i NONE -n`, pinning `NVIM_APPNAME`
+/// and the `XDG_*` dirs under `cfg.state_root`. Returns the live process; the
+/// caller then `ui_attach`es.
+pub async fn spawn(cfg: &NvimConfig, handler: RedrawHandler) -> Result<NvimProcess, NvimError> {
+    let config_home = cfg.state_root.join("config");
+    let data_home = cfg.state_root.join("data");
+    let state_home = cfg.state_root.join("state");
+    let cache_home = cfg.state_root.join("cache");
+    for d in [&config_home, &data_home, &state_home, &cache_home] {
+        std::fs::create_dir_all(d).map_err(NvimError::StateDir)?;
+    }
+
+    let mut cmd = Command::new(&cfg.nvim_bin);
+    cmd.arg("--embed")
+        .arg("--clean")
+        .arg("-u")
+        .arg(&cfg.init_lua)
+        .arg("-i")
+        .arg("NONE")
+        .arg("-n")
+        .env("NVIM_APPNAME", &cfg.appname)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env("XDG_STATE_HOME", &state_home)
+        .env("XDG_CACHE_HOME", &cache_home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+
+    let (nvim, io_handle, child) = new_child_cmd(&mut cmd, handler)
+        .await
+        .map_err(NvimError::Spawn)?;
+
+    Ok(NvimProcess {
+        nvim,
+        io_handle,
+        child,
+    })
+}
