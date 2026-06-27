@@ -1,0 +1,27 @@
+[package]
+name = "wolf-gnome"
+description = "GTK4/Adwaita front-end for Wolf. Tier-1 scope: the widget-free, headlessly-testable seams (gdk_key input translation + Cairo/Pango paint). The windowed application (ApplicationWindow, DrawingArea, run loop, wake marshalling) is deferred."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lib]
+name = "wolf_gnome"
+path = "src/lib.rs"
+
+[dependencies]
+wolf-core = { path = "../wolf-core" }
+
+# gtk-rs crates. NOTE on versioning: in the real gtk-rs ecosystem the gtk4-rs
+# repo (gtk4/gdk4/gsk4) and the "core" repo (cairo-rs/pango/pangocairo/glib/...)
+# are released together but carry DIFFERENT minor numbers; gdk4 0.11.x depends on
+# the core crates at 0.22.x. So the invariant is "one coherent release set", not
+# "one identical minor": gdk4 = 0.11 MUST be paired with cairo/pango/pangocairo =
+# 0.22 (mismatched -sys minors fail to link). Deferred (window phase, do NOT add):
+# gtk4 (gtk), libadwaita (adw).
+gdk = { version = "0.11", package = "gdk4" }
+# cairo-rs is renamed to `cairo` and needs the `png` feature for ImageSurface PNG
+# I/O (used by the #[ignore]d golden-regeneration dev-aid test).
+cairo = { version = "0.22", package = "cairo-rs", features = ["png"] }
+pango = "0.22"
+pangocairo = "0.22"

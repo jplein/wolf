@@ -41,6 +41,26 @@
             rustToolchain
             pkgs.neovim
             pkgs.pkg-config
+
+            # GTK4 / Cairo / Pango toolchain for the wolf-gnome front-end's
+            # Tier-1 testable seams (gdk_key, paint). These provide the .pc files
+            # that the gtk-rs `-sys` crates probe at build time: gtk4 (gtk4.pc +
+            # GDK for gdk4-sys), cairo, pango (pangocairo.pc too), glib,
+            # gdk-pixbuf, graphene, harfbuzz. Deliberately NOT included (window
+            # phase): libadwaita, wrapGAppsHook4, gsettings/icon themes.
+            pkgs.gtk4
+            pkgs.cairo
+            pkgs.pango
+            pkgs.glib
+            pkgs.gdk-pixbuf
+            pkgs.graphene
+            pkgs.harfbuzz
+
+            # Deterministic offscreen golden render: pinned font stack so Pango
+            # measurement / Cairo rasterization is reproducible.
+            pkgs.fontconfig
+            pkgs.freetype
+            pkgs.dejavu_fonts
           ];
 
           shellHook = ''
@@ -48,6 +68,16 @@
             # pinned nvim. Do not rely on PATH.
             export WOLF_NVIM_BIN="${pkgs.lib.getExe pkgs.neovim}"
             export RUST_SRC_PATH="${rustToolchain}/lib/rustlib/src/rust/library"
+
+            # Pin the font stack for deterministic golden renders. We generate a
+            # fontconfig file from the repo-controlled template that exposes ONLY
+            # the pinned DejaVu fonts (no host font dirs) and point FONTCONFIG_FILE
+            # at it. This keeps glyph measurement/rasterization reproducible.
+            __wolf_fonts_conf="$(mktemp -t wolf-fonts.XXXXXX.conf)"
+            ${pkgs.gnused}/bin/sed \
+              "s|@DEJAVU_FONTS@|${pkgs.dejavu_fonts}|g" \
+              "$PWD/crates/wolf-gnome/testdata/fonts.conf" > "$__wolf_fonts_conf"
+            export FONTCONFIG_FILE="$__wolf_fonts_conf"
           '';
         };
       }

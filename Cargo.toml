@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/wolf-core"]
+members = ["crates/wolf-core", "crates/wolf-gnome"]
 
 [workspace.package]
 edition = "2021"

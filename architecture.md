@@ -58,6 +58,10 @@ The UI layer. Each one:
 Rust, using GTK 4 and libadwaita. Consumes `wolf-core` as a **normal Rust crate
 dependency**. Should feel like a GNOME application.
 
+**Phase status.** Tier 1 seams exist (`gdk_key`, `paint`), verified headlessly
+without a display; the window, run loop, wake marshalling, and theming are still
+deferred. See [`crates/wolf-gnome/README.md`](crates/wolf-gnome/README.md).
+
 #### wolf-macos
 
 Swift, using AppKit. Consumes `wolf-core` through generated **swift-bridge**

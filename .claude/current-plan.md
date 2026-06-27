@@ -1,260 +1,257 @@
-# Current Plan: Start wolf-core (Phase 1)
+# Plan: Tier 1 testability for the wolf-gnome GTK/Adwaita front-end
+
+## Status: COMPLETE ✅
+
+### Final state
+- Tests: wolf-gnome gdk_key 1✓, paint_golden 3✓ (+1 ignored), roundtrip_nvim 1✓ (real nvim);
+  wolf-core regression 15✓; clippy --all-targets clean; GUI denylist clean.
+- Docs: crate/src/tests READMEs added; architecture.md Tier-1 status line; S1 doc-comment fixed.
+- Tree clean (no stray scratch file; the diagnostic was stale). New crate fully populated.
+
+## Status (was): REVIEWER PASS (seam code approved) — technical-writer closing docs
+
+### Reviewer verdict: seam code correct & in-scope. Outstanding items routed to technical-writer:
+- M1: create crates/wolf-gnome/{README.md, src/README.md, tests/README.md} (CLAUDE.md mandate + plan §6).
+- M2: add wolf-gnome Tier-1 status line to architecture.md (§6).
+- S1: fix src/input.rs module doc comment that references the nonexistent
+  `gdk::Key::from_unicode` (doc/impl discrepancy) — code uses gdk::Key constants +
+  keyval.to_unicode(); correct the comment to match.
+- N1 (too_many_arguments allow on draw_glyph) + N2: ACCEPTED as-is for Tier 1 (no refactor pass).
+Note: M1/M2 were always the technical-writer step (workflow step 8/plan order step 9), not a regression.
+
+### Final test run (coder, via nix develop)
+- wolf-gnome: gdk_key 1✓, paint_golden 3✓ (1 ignored), roundtrip_nvim 1✓ (real nvim). clippy --all-targets clean.
+- wolf-core regression: 15✓. GUI denylist: clean. No implementation fixes were needed after the test fix.
+
+### Coder result
+- Implemented flake.nix (GTK toolchain + pinned fontconfig/DejaVu), testdata/fonts.conf,
+  workspace member, Cargo.toml, src/lib.rs, src/input.rs (gdk_key), src/render.rs (paint+CellMetrics).
+- gtk-rs: gdk4 0.11.2 + cairo-rs/pango/pangocairo 0.22.x against flake's GTK 4.22.4/cairo 1.18.4/pango 1.57.1.
+- paint_golden.rs: 3 passed, 1 ignored. wolf-core: still green. clippy clean. GUI denylist: clean.
+
+### ORCHESTRATOR DECISIONS
+- D1 (gtk-rs versions): ACCEPT coder deviation. gdk4 0.11 pairs with core crates 0.22
+  ("one coherent release set", not identical minors) — that's the real ecosystem invariant.
+- D2 (flake $PWD fontconfig path): ACCEPT as-is for now (documented test cmd runs from repo root).
+- D3 (TEST BUG): `gdk::Key::from_unicode` does NOT exist in gdk4-rs (0.9 or 0.11).
+  Used in gdk_key.rs + roundtrip_nvim.rs → both fail to compile. APPROVED FIX: add the
+  coder-verified helper to each test file and replace from_unicode calls:
+      use gdk::glib::translate::from_glib;
+      fn key_from_char(c: char) -> gdk::Key { unsafe { from_glib(gdk::unicode_to_keyval(c as u32)) } }
+  This is test-side only; it does NOT change gdk_key's contract (printables still carry the
+  exact glyph; gdk_key reads keyval.to_unicode() and sets shift:false for Char). Route to test-writer.
+
+### Test-writer output (files created)
+- crates/wolf-gnome/tests/gdk_key.rs (table-driven, layout-independent)
+- crates/wolf-gnome/tests/paint_golden.rs (structural ARGB sampling; #[ignore]d PNG regen)
+- crates/wolf-gnome/tests/roundtrip_nvim.rs (real-nvim, types "Hello", shift contract)
+- crates/wolf-gnome/tests/common/mod.rs (require_nvim_bin, init_lua_path ../../runtime/nvim/init.lua, config, wake_channel/FlushWaiter, FLUSH_TIMEOUT=10s)
+
+### NOTES the coder MUST honor (from test-writer)
+1. Lib named `wolf_gnome` re-exporting gdk_key, paint, CellMetrics at crate root.
+2. Cargo.toml MUST rename deps: `gdk4`→`gdk`, `cairo-rs`→`cairo` (tests use `use gdk::` / `use cairo::`).
+3. `CellMetrics.cell_w` and `cell_h` must be `pub` (paint_golden reads them).
+4. cairo dep MUST enable the `png` feature (else #[ignore]d regen won't compile).
+5. Pixel sampling assumes little-endian ARGB32 (B,G,R,A) — fine on x86_64 Linux.
+6. gdk::Key associated consts used (Return, Page_Up, ISO_Left_Tab...); if pinned
+   gtk-rs minor names differ, gdk_key impl may use from_name internally — keep contract.
+7. Shift contract: printables built via gdk::Key::from_unicode carrying exact glyph;
+   gdk_key reads keyval.to_unicode() and ALWAYS sets shift:false for Char; named keys
+   keep shift (ISO_Left_Tab+SHIFT→Tab{shift:true}).
 
 ## Problem statement
 
-Build the foundational `wolf-core` Rust library for Wolf, a Markdown editor that
-embeds Neovim as its editing engine. Phase 1 stands up the platform-agnostic core
-that launches a hermetic, pinned `nvim --embed`, attaches as an `ext_linegrid`
-UI, folds the `redraw` event stream into a render-state snapshot, accepts abstract
-input events, and is verified headlessly (no GUI front-end yet).
+Stand up the first platform front-end crate, `wolf-gnome`, but scoped **only** to
+its testable "seams" and their tests — **not** the full windowed application. The
+goal is to establish the testing foundation described as "Tier 1" so future
+front-end work is verifiable without a display server.
 
-Source of truth: `README.md`, `architecture.md`, `build.md` (docs override impl).
+### In scope
+1. Create `crates/wolf-gnome` and add it to the workspace `members`.
+2. Add the GTK4 / libadwaita / Cairo / Pango toolchain to the `flake.nix`
+   devShell. The flake currently **deliberately** ships no GUI toolkit; this is
+   the build gate. The `cargo tree` denylist in `wolf-core/README.md` stays
+   scoped to `wolf-core` only (GTK is allowed in `wolf-gnome`).
+3. A pure input-translation function `gdk_key(keyval, modifiers) -> wolf_core::KeyEvent`,
+   unit-tested table-driven, honoring the **shift-glyph contract** (printable
+   chars carry the already-shifted glyph with `shift = false`; `S-` only for
+   named keys).
+4. A `paint(cr: &cairo::Context, snap: &Snapshot, metrics)` free function,
+   golden-image-tested against an offscreen Cairo `ImageSurface` (no window).
+5. A round-trip integration test: real `gdk_key` translation -> `WolfCore::start`
+   -> wait for flush -> assert the snapshot, against **real Neovim** (reuse the
+   `examples/grid_dump.rs` pattern; no mocks, per project policy).
 
-### The one hard rule
-`wolf-core` must compile with **no GUI toolkit in its dependency tree**.
+### Out of scope (defer)
+The actual `ApplicationWindow`, `DrawingArea` wiring, wake marshalling, the run
+loop, file dialogs, theming, mouse/scroll. Keep `paint()` and `gdk_key()` as
+**free functions independent of any widget** so they are testable headlessly.
 
-### Environment constraints (NixOS)
-- Toolchain (Rust + pinned `nvim`) comes from a NixOS-only `flake.nix` devShell,
-  activated by a Linux-guarded `.envrc` (`use flake`).
-- Do NOT use `rustc`/`cargo`/`nvim` from the system PATH; do NOT search `/nix/store`.
-  All builds/tests run inside the devShell.
+### Design constraints (from architecture.md / CLAUDE.md)
+- Docs are the source of truth; every source dir needs a `README.md`.
+- Rendering is Cairo/Pango per architecture decision 2.
+- Prefer real-nvim E2E/integration over mocks.
 
-### Scope (in)
-1. `flake.nix` (NixOS-only): Rust toolchain + pinned hermetic `nvim`; no GUI deps.
-2. `.envrc`: Linux-guarded `use flake`.
-3. Fill in `build.md` (flake/direnv workflow); note in `architecture.md` §8 that
-   binary pinning is day-one, plugin baking (treesitter/marksman) is later.
-4. Cargo workspace + `crates/wolf-core` skeleton (compiles, GUI-free).
-5. `runtime/nvim/init.lua`: minimal isolated markdown config.
-6. `src/nvim`: spawn + supervise captive `nvim --embed --clean -u init.lua` via
-   nvim-rs over stdio, pinned XDG_*/NVIM_APPNAME.
-7. `src/render`: render-state model (grid cells char+hl_id, hl table from
-   hl_attr_define/default_colors_set, cursor from mode_info_set/mode_change,
-   win_viewport).
-8. `src/redraw`: handler for grid_line, grid_scroll, grid_resize, grid_clear,
-   flush -> snapshot behind a lock; flush triggers wake callback.
-9. `src/input`: key -> nvim notation + mouse/scroll/resize/open/save.
-10. `src/api`: FFI-shaped front-end surface + wake callback.
-11. Headless verification: `examples/grid_dump.rs` + integration tests against the
-    pinned nvim.
-12. `README.md` in each source dir.
+## Environment gate (CONFIRMED by orchestrator probe)
+- Current devShell has **none** of gtk4/libadwaita-1/cairo/pango/pangocairo
+  (`pkg-config --exists` all fail). Expected — the flake excludes GUI toolkits.
+- **Consequence for the coder:** after editing `flake.nix`, the already-loaded
+  direnv environment will NOT have GTK. Build/test must run via
+  `nix develop --command cargo test ...` (re-evaluates the flake) or after a
+  manual devShell reload. The coder should use `nix develop --command ...`.
+- `WOLF_NVIM_BIN` is provided by the devShell and is required by the round-trip
+  test (it spawns real nvim).
 
-### Scope (out — later phases)
-Full `wrapNeovim` plugin baking, swift-bridge/macOS, GTK/libadwaita front-end,
-native cmdline/messages/popupmenu, theming, LSP/treesitter bundling.
+## Key existing API (for reference)
+- `WolfCore::start(cfg: CoreConfig, wake: WakeFn) -> Result<WolfCore, CoreError>`
+- `CoreConfig { init_lua: PathBuf, cols: u16, rows: u16 }`
+- `read_snapshot() -> SnapshotReadGuard` (Derefs to `Snapshot`)
+- `send_input(InputEvent)`, `resize(cols, rows)`, `shutdown(self)`
+- `Snapshot { grid, highlights, cursor, mode_infos, viewport, seq }`
+- `Grid::cell(row, col) -> Option<&Cell>`, `Cell { text, hl_id }`
+- `HighlightTable::resolve(hl_id) -> ResolvedStyle`, `Rgb { r, g, b }`
+- `KeyEvent { key: Key, ctrl, shift, alt, meta }`, `key_to_notation`
+- `examples/grid_dump.rs` is the canonical headless driver template.
 
 ## Progress log
-- Stage A DONE: `flake.nix` + `.envrc` created. User restarted; devShell active
-  (cargo/rustc 1.96.0, WOLF_NVIM_BIN -> nvim 0.12.2). Resuming Stage B onward.
+- (orchestrator) Probed devShell: GUI libs absent as expected. Plan file reset
+  from stale Phase 1 content. Next: invoke architect.
+- (orchestrator) Architect plan recorded below. Next: test-writer.
 
-## Progress log (cont.)
-- Stages C/D/E (code) DONE by coder. Workspace + wolf-core compile clean (no
-  warnings, clippy clean). GUI-free `cargo tree` check: clean. All 9 integration
-  tests pass (real nvim via WOLF_NVIM_BIN), stable over 5x + 10x flaky reruns.
-  Two real bugs fixed: input-burst reordering (ordered input pump + key fusing)
-  and shutdown deadlock (cooperative write_async + bounded shutdown). Deviations:
-  parking_lot arc_lock owned read guard, tempfile promoted to normal dep,
-  write_async added. Still TODO: per-dir READMEs + build.md + architecture.md §8
-  (technical-writer), reviewer pass, and 3 approved test additions below.
-- DECISION: approved all 3 coder-recommended test additions (high-risk coverage):
-  (a) wide-char grid_line (double-width glyph -> trailing empty cell + alignment),
-  (b) grid_scroll content-shift assertion, (c) key_to_notation F-key + Alt/Meta.
+---
 
-## Progress log (cont. 2)
-- 3 added tests run: wide_char_grid_line exposed a REAL bug (impl synthesized a
-  trailing wide-cell that nvim already emits explicitly -> misalignment after
-  double-width glyph). Fixed in src/redraw.rs (store nvim's empty cell verbatim).
-  Meta->`<D-s>` and Alt->`<A-x>` already correct. All 12 tests pass, stable; tree
-  GUI-free; clippy clean.
-- DECISION: approve ONE final test addition — direct grid_line `[text,hl,repeat]`
-  expansion assertion (covers freshly-modified column-advance logic). Then proceed
-  to reviewer + technical-writer.
+# ARCHITECT PLAN
 
-## Progress log (cont. 3)
-- Reviewer: APPROVED, no blockers. All load-bearing reqs confirmed. 4 minor
-  Should-fix notes triaged:
-  - S3 (fix): key_to_notation should NOT emit `<S-x>` for printable chars; deliver
-    shifted glyph, drop S- prefix for printables; document the contract.
-  - S4 (fix): de-dup the two key-translation paths (apply vs apply_batch).
-  - S1 (test): add down-direction grid_scroll content-shift assertion.
-  - S2 (test): assert win_viewport.linecount equals buffer line count.
-  - N1-N3 + fnameescape fidelity: ACCEPTED as-is for Phase 1.
-- 13 tests confirmed passing by coder (reviewer's inability to read tests 2-13 was
-  broken Glob/Grep tooling, not a real gap).
+## 0. Summary
+Stand up `crates/wolf-gnome` containing only its two pure, widget-free seams —
+`gdk_key()` (GDK key → `wolf_core::KeyEvent`) and `paint()` (`Snapshot` → Cairo
+`ImageSurface`) — plus toolchain + tests to verify them headlessly. No window,
+DrawingArea, run loop, or wake marshalling. `wolf-core` GUI denylist stays scoped
+to `wolf-core`; GTK allowed in `wolf-gnome`.
 
-## Progress log (cont. 4)
-- S3/S4 src fixes landed (key_to_notation no S- for printable chars + documented
-  contract; single key-translation path via shared nvim_input helper). Test type
-  mismatch (linecount u64 vs usize) fixed in test. ALL 15 TESTS PASS, stable;
-  clippy -D warnings clean; tree GUI-free. viewport linecount==50 assumption holds.
-- REMAINING: Stage B docs (build.md, architecture.md §8 note) + Stage E per-dir
-  READMEs (technical-writer). Then report completion.
+## 1. flake.nix changes
+Add to devShell `packages` (compile-time, pkg-config `.pc` probed by gtk-rs `-sys`):
+`gtk4` (provides gtk4.pc + GDK for gdk4-sys), `cairo`, `pango` (provides
+pangocairo.pc too), `glib`, `gdk-pixbuf`, `graphene`, `harfbuzz`, keep
+`pkg-config`. Runtime for deterministic golden render: `fontconfig`, `freetype`,
+and a pinned font `dejavu_fonts` (DejaVu Sans Mono). shellHook: export
+`FONTCONFIG_FILE` pointing at a minimal repo-controlled `fonts.conf` exposing ONLY
+the pinned font (disable host font dirs) so Pango can't pick up host fonts; keep
+existing `WOLF_NVIM_BIN`/`RUST_SRC_PATH`. Do NOT add (window-only): `libadwaita`,
+`wrapGAppsHook4`, gsettings/icon-theme packages.
+BUILD GATE: after editing flake.nix the coder MUST run via
+`nix develop --command cargo ...` (re-evaluates flake); direnv env is stale.
+Verify first: `nix develop --command pkg-config --exists gtk4 cairo pango pangocairo`.
 
-## Orchestration note (amended)
-After `flake.nix` and `.envrc` are created, the orchestrator PAUSES and asks the
-user to restart so the devShell/direnv environment is active before any build or
-test work proceeds.
+## 2. Crate scaffolding
+- `crates/wolf-gnome/Cargo.toml`: `[lib]` name `wolf_gnome`, path `src/lib.rs`
+  (LIBRARY not bin for Tier 1, so tests import the seams; main.rs deferred).
+  deps: `wolf-core` (path), and Tier-1 gtk-rs crates ALL pinned to ONE aligned
+  gtk-rs minor: `gdk4` (as gdk), `cairo-rs` (as cairo), `pango`, `pangocairo`.
+  Deferred (do NOT add): `gtk4` (gtk), `libadwaita` (adw). Comment that all
+  gtk-rs crates must share the same minor (mismatched -sys minors fail to link).
+  Golden compare uses cairo's own PNG I/O (no image crate).
+- Root `Cargo.toml`: `members = ["crates/wolf-core", "crates/wolf-gnome"]`.
+- `src/lib.rs` declares `pub mod input;` `pub mod render;` and re-exports
+  `gdk_key`, `paint`, `CellMetrics`. No gtk4/adw import anywhere yet.
 
-## Architect's plan
+## 3. gdk_key(keyval, state) -> Option<wolf_core::KeyEvent>
+Signature: `pub fn gdk_key(keyval: gdk::Key, state: gdk::ModifierType) ->
+Option<wolf_core::KeyEvent>`. Real gtk-rs types (matches future
+EventControllerKey callback exactly; gdk::Key constants are compile-time, no
+display). `Option` so unmapped/bare-modifier/dead/control keyvals → None.
+Mapping: Return & KP_Enter→Enter; Escape→Esc; Tab & ISO_Left_Tab→Tab;
+BackSpace→Backspace; Delete→Delete; arrows; Home/End; Page_Up/Down→PageUp/Down;
+F1..=F12→Key::F(n) (named const for F-key base); else `keyval.to_unicode()` →
+non-control char → Char(c), else None.
+Modifiers: ctrl=CONTROL_MASK, alt=ALT_MASK, meta=SUPER_MASK, shift=SHIFT_MASK.
+SHIFT CONTRACT: printable branch sets `shift:false` ALWAYS (to_unicode already
+gives shifted glyph); named keys pass real `shift` through (so <S-Tab>, <S-Left>,
+<S-F5>). ISO_Left_Tab+SHIFT → Key::Tab with shift:true.
+None for: bare Shift_L/R, Control_L/R, Alt_L/R, Super_L/R, Caps_Lock; no-unicode
+or control-char keyvals; unmapped named keys.
 
-### Key cross-cutting decisions
-- **Use generic untyped nvim-rs RPC** (`Neovim::call`/`input`/`command`) for all
-  version-sensitive calls; consume the `redraw` stream as raw `Vec<rmpv::Value>`.
-  This insulates us from nvim-rs 0.9.2's older typed API vs nvim 0.12.
-- **nvim located only via `WOLF_NVIM_BIN`** (exported by the flake devShell). Never
-  PATH, never `/nix/store` scanning.
-- **GUI-free enforcement** = documented `cargo tree` denylist check (Wolf's analog
-  of depguard): deny `gtk4 gtk glib gdk4 cairo cairo-rs pango libadwaita objc objc2
-  cocoa core-graphics winit wgpu skia-safe softbuffer`.
-- The Go/tarjeta/golangci conventions that leaked into context DO NOT APPLY (Rust
-  project). Use clippy + cargo-tree denylist + named consts + no mutable globals.
-
-### BUILD ORDER
-- **Stage A (then HARD PAUSE):** `flake.nix`, `.envrc`. User runs `direnv allow` /
-  restarts so toolchain + `WOLF_NVIM_BIN` are live. No cargo/nvim before this.
-- **Stage B (docs):** `build.md` (replace TODO), `architecture.md` §8 phase note.
-- **Stage C (skeleton, compiles empty):** workspace `Cargo.toml`,
-  `crates/wolf-core/Cargo.toml`, `src/lib.rs` stubs, `runtime/nvim/init.lua`.
-- **Stage D (modules, in dep order):** render → input → redraw → nvim → api →
-  finalize lib.rs re-exports.
-- **Stage E (verification):** `examples/grid_dump.rs`, integration tests, per-dir
-  READMEs.
-
-### flake.nix (Stage A)
-- NixOS-only (systems: x86_64-linux, aarch64-linux; no darwin outputs).
-- Inputs: pinned `nixpkgs` (rev shipping nvim ≥ 0.12), `rust-overlay` (oxalica;
-  chosen over nixpkgs rustPlatform because we want a devShell toolchain with
-  rust-analyzer/clippy/rustfmt, not a build derivation), `flake-utils` optional.
-- devShell (`pkgs.mkShell`) exposes: rustToolchain (stable pinned, extensions
-  rust-src/rust-analyzer/clippy/rustfmt), `pkgs.neovim`, `pkgs.pkg-config`
-  (defensive). shellHook exports `WOLF_NVIM_BIN="${lib.getExe pkgs.neovim}"`.
-- No GUI libs in the shell.
-
-### .envrc (Stage A)
+## 4. paint(cr, snap, metrics)
 ```
-if [ "$(uname -s)" = "Linux" ]; then
-  use flake
-fi
+pub struct CellMetrics { cell_w: f64, cell_h: f64, baseline: f64,
+    font: pango::FontDescription }
+pub fn paint(cr: &cairo::Context, snap: &wolf_core::Snapshot, metrics: &CellMetrics)
 ```
-No-op on non-Linux. No other-platform branches.
+Pure/widget-free (test binds an ImageSurface; prod binds DrawingArea ctx). Helper
+`CellMetrics::for_font(cr, family, size_pt)` measuring monospace advance + ascent
+via pango Layout/FontMetrics; named consts for default test font family + pt size.
+Algorithm per row×col: `cell = grid.cell(r,c)` (skip None); `style =
+highlights.resolve(cell.hl_id)` (reverse already applied); fg = style.fg OR
+defaults.fg OR FALLBACK_FG, bg likewise; Rgb 0–255 → Cairo 0.0–1.0 (named 255.0);
+fill bg rect (col*cell_w,row*cell_h,cell_w,cell_h) — HANDLE cairo Result, don't
+drop; if `cell.text.is_empty()` skip fg (wide-trailing/never-painted cell — bg
+fill preserves alignment); else pangocairo create_layout(cr), set FontDescription
+(toggle bold/italic per style), set text, set_source_rgb(fg), move_to cell
+top-left, show_layout. underline via AttrList or manual line (minimal for Tier 1;
+undercurl/strikethrough deferred — note in README). One reusable FontDescription;
+clone only to toggle bold/italic. No system theme query (deferred).
 
-### build.md (Stage B)
-Prereqs (NixOS, Nix flakes, direnv+nix-direnv); `direnv allow` to enter devShell;
-`WOLF_NVIM_BIN` points at pinned hermetic nvim; `cargo build` / `cargo test` (tests
-spawn pinned nvim via WOLF_NVIM_BIN, headless since `nvim --embed` needs no TTY);
-toolchain pinned by flake — don't use system cargo/nvim; note wrapNeovim plugin
-baking deferred.
+## 5. Test plan (test-writer)
+`tests/gdk_key.rs` — table-driven, no display/no nvim. Named keys incl.
+KP_Enter, ISO_Left_Tab+SHIFT→Tab{shift:true}, arrows, Home/End, PageUp/Down,
+F1/F5/F12; printable+shift: a→Char('a',shift:false), A→Char('A',shift:false),
+'<'→Char('<'); modifiers on named keys (Ctrl+Left, Ctrl+Shift+Left), Super+s
+(meta,shift:false), Alt+x; None cases (Shift_L/Control_L/Super_L/Caps_Lock,
+no-unicode keyval). Keep assertions LAYOUT-INDEPENDENT (letter case + named keys,
+avoid shifted punctuation flakiness). Ctrl+letter must use base unicode + ctrl,
+not a control char in Char.
+`tests/paint_golden.rs` — hand-built deterministic Snapshot (e.g. 4×2 grid, one
+defined hl_id w/ distinct fg/bg + default_colors_set, include a wide-trailing
+empty cell) via core public ctors (Grid::new/set_cell, HighlightTable::define/
+set_defaults, Snapshot; Cell/HlAttr fields public). ImageSurface ARgb32 + Context
++ pinned CellMetrics; paint; flush. COMPARE STRATEGY (preference order):
+(1) PRIMARY always-on STRUCTURAL assertions — sample raw ImageSurface::data() ARGB
+at CENTER of known cell rects: bg fill is rasterizer-independent → exact equality;
+glyph cell has non-bg pixels in its rect; wide-trailing/empty cell rect is bg-only
+(skip path). (2) OPTIONAL exact-PNG golden under tests/testdata/, regen via
+WOLF_REGEN_GOLDEN=1 or #[ignore] helper (write_to_png), compared with tolerance
+or env-gated (NOT whole-image hash — too brittle across freetype/fontconfig).
+Recommendation: structural-only as the gate; PNG regen as dev aid. Font pinned via
+FONTCONFIG_FILE.
+`tests/roundtrip_nvim.rs` + local `tests/common/mod.rs` (wolf-gnome can't import
+core's tests/common): fail-loud WOLF_NVIM_BIN check, init_lua_path resolving
+`../../runtime/nvim/init.lua` from wolf-gnome CARGO_MANIFEST_DIR, wake channel +
+flush waiter (mirror core's common). Flow: gdk_key(i) → send_input → type word via
+gdk_key printables → gdk_key(Escape) → wait+drain flushes → assert row_text(0)
+contains the word. Also assert a shifted letter lands uppercase (shift contract
+end-to-end). Run via `nix develop --command cargo test -p wolf-gnome`.
 
-### architecture.md §8 (Stage B)
-Append a "Phase 1 status" note: nvim binary pinned/hermetic from day one via the
-flake devShell (located via WOLF_NVIM_BIN, launched `--embed --clean -u
-runtime/nvim/init.lua` with isolated XDG_*/NVIM_APPNAME); full wrapNeovim plugin
-baking (treesitter grammars, marksman) deferred. Keep existing §8 text intact.
+## 6. READMEs
+Create `crates/wolf-gnome/README.md` (purpose, Tier 1 scope, the two seams +
+contracts, build/test via nix develop + pinned font + WOLF_NVIM_BIN, deferred
+list, note core denylist N/A here), `crates/wolf-gnome/src/README.md` (per-module:
+lib re-exports, input.rs gdk_key mapping/shift/None, render.rs paint algo +
+CellMetrics + skip + fallback + attrs applied vs deferred),
+`crates/wolf-gnome/tests/README.md` (3 test areas, golden strategy + regen cmd,
+font pinning, headless/real-nvim split). Modify `architecture.md`: 1–2 line status
+"wolf-gnome Phase: Tier 1 seams exist (gdk_key, paint), verified headlessly;
+window/run-loop/wake/theming deferred."
 
-### Cargo.toml workspace + crates/wolf-core/Cargo.toml (Stage C)
-- Workspace: resolver "2", members ["crates/wolf-core"], `[workspace.package]`
-  edition 2021, optional `[workspace.dependencies]`.
-- wolf-core deps: `nvim-rs 0.9` (feature use-tokio), `tokio 1` (rt-multi-thread,
-  macros, io-util, process, sync, time), `rmpv 1.3`, `parking_lot 0.12`,
-  `thiserror`, `tracing`, `async-trait 0.1` (Handler is async_trait-shaped).
-- dev-deps: `tokio` (test-util, macros, rt-multi-thread), `tempfile 3`,
-  `tracing-subscriber 0.3`.
-- None pull a GUI toolkit (verify with cargo tree denylist).
+## 7. Risks
+Golden nondeterminism (mitigate: pinned font+fonts.conf + structural assertions,
+not hashing). Cairo/Pango offscreen needs no display (confirmed CI-safe). gdk::Key
+constants compile-time, no display for gdk_key tests. gtk-rs version pinning: all 4
+crates same minor; let -sys build scripts report needed lib version vs
+nixos-unstable's gtk4/pango/cairo, pick matching gtk-rs minor (0.9 vs 0.11), pin
+it. Layout dependence: keep gdk_key asserts layout-independent. Verify
+`../../runtime/nvim/init.lua` relative path.
 
-### runtime/nvim/init.lua (Stage C)
-`--clean`-compatible markdown-only isolated config. Set: swapfile=false,
-shadafile=NONE, undofile=false, backup/writebackup=false, shortmess+=I,
-termguicolors=true (so hl_attr_define/default_colors_set carry RGB),
-number=false, signcolumn=no, ruler=false, showcmd=false, laststatus=0,
-mouse=a, wrap=false (deterministic test columns). No treesitter/LSP (deferred;
-comment saying so). Header comment: hermetic, loaded via --embed --clean -u.
+## 8. Implementation order
+1) flake.nix (+verify pkg-config). 2) workspace members. 3) crate skeleton +
+empty-compiling lib.rs (flush out -sys/pkg-config issues early). 4) input.rs
+gdk_key + re-export. 5) tests/gdk_key.rs (fastest loop). 6) render.rs
+CellMetrics+paint + re-export. 7) tests/paint_golden.rs (structural first).
+8) tests/common + roundtrip_nvim.rs. 9) READMEs + architecture.md line.
 
-### src/render (Stage D, first — pure data)
-Types: `HlAttr{fg,bg,special:Option<u32>, bold/italic/underline/undercurl/
-strikethrough/reverse:bool}`, `DefaultColors{fg,bg,special}`,
-`HighlightTable{defaults, attrs:HashMap<u64,HlAttr>}` with `resolve(hl_id)->
-ResolvedStyle`, `define`, `set_defaults`; `Cell{text:String, hl_id:u64}` (text =
-one grapheme cluster, "" for trailing wide cell); `Grid{cols,rows,cells:Vec<Cell>}`
-with resize/clear/cell/set_cell/scroll/row_text; `CursorShape`,
-`ModeInfo{shape,cell_percentage,attr_id,name}`, `Cursor{row,col,mode_idx}`;
-`Viewport{topline,botline,curline,linecount}`; `Snapshot{grid,highlights,cursor,
-mode_infos,viewport,seq}`; `SharedSnapshot(Arc<parking_lot::RwLock<Snapshot>>)`
-with new/read/write/clone_handle.
-LOCKING INVARIANT: one RwLock; redraw takes the write lock once per whole batch,
-NEVER holds it across `.await`; wake fired after unlock. Named consts for color
-shifts/masks (no bare magic numbers).
-
-### src/input (Stage D)
-`InputEvent{Key,Mouse,Scroll,Resize{cols,rows},Open{path},Save,SaveAs{path}}`;
-`KeyEvent{key:Key, ctrl/shift/alt/meta}`, `Key{Char,Enter,Esc,Tab,Backspace,
-arrows,Home,End,PageUp,PageDown,F(u8),...}`; Mouse/Scroll enums.
-`key_to_notation(&KeyEvent)->String` (modifier order C-,S-,A-,D-; Enter=<CR>,
-Esc=<Esc>, Tab=<Tab>, BS=<BS>, '<'=<lt>; plain 'a'->"a").
-`apply(nvim,&InputEvent)`: Key->nvim_input(notation); Mouse->nvim_input_mouse;
-Scroll->wheel; Resize->nvim_ui_try_resize (grid corrected by resulting
-grid_resize, don't resize locally); Open->`edit {fnameescape path}`;
-Save->`write`; SaveAs->`saveas {path}`. Provide fnameescape helper.
-
-### src/redraw (Stage D)
-`WakeFn=Arc<dyn Fn()+Send+Sync>`. `RedrawHandler{snapshot:SharedSnapshot,
-wake:WakeFn}` impl `nvim_rs::Handler` (`type Writer=Compat<ChildStdin>`,
-handle_notify routes name=="redraw" to private `apply_redraw(Vec<Value>)`).
-apply_redraw: take write lock ONCE per batch; match event:
-grid_resize/grid_clear/grid_line (walk cells: [text],[text,hl],[text,hl,repeat],
-carry-forward hl_id, expand repeat, wide-char trailing empty cell)/grid_scroll/
-hl_attr_define/default_colors_set/mode_info_set/mode_change/grid_cursor_goto/
-win_viewport/flush(bump seq, DROP lock, then call wake)/unknown=ignore.
-Wake may run on a tokio worker thread (front-end marshals to UI thread).
-
-### src/nvim (Stage D)
-`NvimConfig{nvim_bin,init_lua,appname,state_root,initial_cols,initial_rows}` with
-`from_env()` (reads WOLF_NVIM_BIN, builds isolated XDG dirs under a private temp).
-`NvimError` (BinNotSet/Spawn/Rpc/Attach). `spawn(&cfg, RedrawHandler)->NvimProcess`:
-tokio Command for nvim_bin with args `--embed --clean -u <init.lua> -i NONE -n`;
-env-pin NVIM_APPNAME=wolf + XDG_{CONFIG,DATA,STATE,CACHE}_HOME under state_root;
-`new_child_cmd` -> (neovim, io_handle); ui_attach via generic RPC
-`nvim_ui_attach(cols,rows,{ext_linegrid=true,rgb=true})` (only ext_linegrid).
-`NvimProcess`: handle() (clone for RPC), ui_attach, try_resize, shutdown
-(`qa!` + await io_handle w/ timeout, kill on timeout). Generic RPC only.
-
-### src/api (Stage D)
-FFI-shaped (swift-bridge-expressible later; none added now). `WolfCore{runtime:
-tokio::runtime::Runtime, nvim:NvimProcess, snapshot:SharedSnapshot}`,
-`CoreConfig{init_lua,cols,rows}`. `start(cfg, WakeFn)->Result<WolfCore>` builds
-multi-thread rt, block_on(nvim::spawn), wires wake into RedrawHandler, ui_attach.
-`read_snapshot()->SnapshotReadGuard` (GTK path); `send_input(InputEvent)`
-(non-blocking: runtime.spawn(apply)); `resize(cols,rows)`; `shutdown()`.
-One wake callback (on flush), no per-event callbacks across boundary.
-
-### examples/grid_dump.rs (Stage E)
-Reads WOLF_NVIM_BIN + init.lua path; WolfCore::start with wake setting a channel;
-open/type a few keys; wait for flush; print grid.row_text per row + cursor + a
-sampled cell's resolved fg/bg; shutdown. `cargo run -p wolf-core --example grid_dump`.
-
-### Integration tests — crates/wolf-core/tests/ (Stage E)
-Real nvim via WOLF_NVIM_BIN (no mocks, per CLAUDE.md), headless. `common/mod.rs`
-helpers (start_core_with_temp_md, wait_for_flush(timeout), temp .md). Tests must
-FAIL (not silently pass) if WOLF_NVIM_BIN unset. Generous flush timeout (5–10s).
-Cases:
-1. spawn_and_attach: grid size matches; defaults populated; mode_infos non-empty; shutdown Ok.
-2. type_text_appears_in_grid: i + "Hello" + Esc -> row 0 starts "Hello"; H cell hl resolves non-None fg.
-3. open_existing_markdown: "# Title" -> row 0 contains it; heading hl_id differs from body.
-4. cursor_moves: j/l advance cursor.row/col; i selects insert ModeInfo (vertical bar).
-5. resize_updates_grid: resize -> grid cols/rows match (nvim_ui_try_resize -> grid_resize).
-6. save_writes_file: type + Save -> file on disk contains text.
-7. save_as_new_path: type + SaveAs -> new path exists with content.
-8. scroll_emits_viewport: tall buffer + Scroll Down -> viewport.topline increases.
-9. key_notation_unit: pure asserts on key_to_notation.
-
-### Per-directory READMEs (Stage E, CLAUDE.md requirement)
-crates/wolf-core/README.md (overview + GUI-free rule + cargo tree denylist cmd +
-WOLF_NVIM_BIN dep), and a README.md in each of src/{nvim,render,redraw,input,api}
-and runtime/nvim describing interfaces/functions.
-
-### Risks
-nvim-rs 0.9.2 typed API vs nvim 0.12 (use generic RPC); Handler needs async-trait;
-Child ownership/Writer type (verify at code time, supervise via io_handle);
-lock latency/deadlock (whole-batch lock, no await held, wake after unlock); wake on
-worker thread (Send+Sync); grid_line parsing (wide/repeat/carried hl — highest bug
-risk, covered by tests 2/3); GUI-free regression (cargo tree denylist); test
-flakiness from nvim startup (channel wait + generous timeout).
+## 9/10. Deps + lint
+New nixpkgs: gtk4, cairo, pango, glib, gdk-pixbuf, graphene, harfbuzz, fontconfig,
+freetype, dejavu_fonts. New cargo (wolf-gnome only): gdk4, cairo-rs, pango,
+pangocairo (+ wolf-core path). Must NOT enter wolf-core tree (denylist still
+passes since wolf-gnome→wolf-core, not reverse). Rust/clippy (Go/depguard notes
+N/A): name magic numbers (255.0 divisor, font size, F-key base, test dims); do NOT
+drop cairo `Result`s (handle/expect); keep gdk_key→Option<KeyEvent>, paint→().
