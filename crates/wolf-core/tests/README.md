@@ -25,7 +25,13 @@ Shared helpers used across the test binaries:
 - `require_nvim_bin()` — fail-loud `WOLF_NVIM_BIN` check; returns the path.
 - `init_lua_path()` — resolves the in-repo `runtime/nvim/init.lua` from
   `CARGO_MANIFEST_DIR`.
-- `config(cols, rows)` — builds a `CoreConfig` pointing at that `init.lua`.
+- `fresh_cwd()` — a fresh, persistent temp directory (NOT a dropped guard) to
+  serve as a test core's `cwd`, so the MRU cache `.wolf/` and the picker's search
+  root are isolated per run.
+- `config(cols, rows)` — builds a `CoreConfig` pointing at that `init.lua`, using
+  a `fresh_cwd()` as the `cwd`.
+- `config_in(cwd, cols, rows)` — same, but with an explicit `cwd` (used by the MRU
+  and file-search tests that assert against a known directory layout).
 - `wake_channel()` → `(WakeFn, FlushWaiter)`; `FlushWaiter::wait_for_flush(timeout)`
   blocks until the next flush (panics on timeout/disconnect), `drain()` discards
   queued wakes. The `WakeFn` is an `mpsc::Sender<()>` closure (`Send + Sync`,
@@ -39,8 +45,42 @@ Shared helpers used across the test binaries:
 
 ## Coverage
 
-Fifteen tests cover the redraw → snapshot and input pipelines against the real
-pinned Neovim:
+Forty tests total: thirty integration tests (seven `tests/*.rs` binaries, all
+driving a real pinned Neovim and/or real SQLite/filesystem) plus ten pure
+in-module unit tests for the ranking function.
+
+### File picker (real SQLite / filesystem / git / Neovim — no mocks)
+
+- **MRU cache** (`mru.rs`, real SQLite + fs, six tests) — `open` creates
+  `.wolf/mru.sqlite` and `recent()` starts empty; three records come back
+  most-recent-first with 0/1/2 ranks; re-recording an older path moves it to the
+  front without duplicating; deleting a file omits it from `recent()` AND prunes
+  its row from the cache; `recent()` is capped at `MRU_LIMIT`; `display` is
+  relative to the cwd while `path` is absolute.
+- **Open records MRU** (`mru_open_records.rs`, real Neovim, one test) — after
+  `start_core_with_temp_md`, `mru_recent()` contains the opened path (the input
+  pump recorded the `Open`).
+- **Streaming traversal** (`file_search.rs`, real fs + real git via shelled
+  `git init`, eight tests, polling until `complete`) — a non-repo lists plain
+  files + dotfiles but no directories; symlinks are included only when they target
+  a plain file; a symlink loop does not hang; a git repo respects `.gitignore`
+  (cwd and nested/ancestor) and excludes `.git/` while including untracked files;
+  the `.wolf/` cache is excluded; the MRU seed is present synchronously and not
+  duplicated when rediscovered; `cancel` stops streaming.
+
+### Ranking (pure, in-module)
+
+`rank.rs` has ten table-driven `#[cfg(test)]` unit tests (no fs/Neovim): empty
+query returns all entries MRU-first; case-insensitive matching; subsequence match
+and non-match exclusion; MRU outranks a stronger non-MRU match; strict-prefix
+beats a scattered subsequence; word splitting on separators; full-word match tops
+the prefix group; deterministic length/lexicographic tie-breaks; and the decisive
+`match_start` (key 5) and `span` (key 6) tie-breaks.
+
+### Redraw / input pipeline (real Neovim)
+
+The original fifteen tests cover the redraw → snapshot and input pipelines against
+the real pinned Neovim:
 
 - **Spawn / attach** — grid size matches the requested cols/rows; default colors
   populated; `mode_infos` non-empty; clean `shutdown`.

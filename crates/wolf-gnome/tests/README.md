@@ -2,9 +2,10 @@
 
 Tests for the seams and the windowed application. They split into **headless**
 checks (no display, no nvim), one **real-Neovim** end-to-end round-trip (no mocks,
-per project policy), and one **opt-in headless-compositor** smoke test that
-launches the real window. Everything runs through `nix develop --command` so the
-GTK toolchain, the pinned font, and `WOLF_NVIM_BIN` are present:
+per project policy), and three **opt-in headless-compositor** cage smoke tests
+that launch the real window (one window-render smoke + two file-picker smokes).
+Everything runs through `nix develop --command` so the GTK toolchain, the pinned
+font, and `WOLF_NVIM_BIN` are present:
 
 ```sh
 nix develop --command cargo test -p wolf-gnome
@@ -46,6 +47,22 @@ cell_bg)` without panicking); the **guard** cases where a degenerate honored pai
 must NOT be honored (fill equal to the underlying cell background, or fill equal to
 glyph) and instead inverts; and the **fallback** case where unset cell colors reach
 the white/black `FALLBACK_FG` / `FALLBACK_BG`.
+
+## `picker.rs` unit tests (in `src/picker.rs`, headless)
+
+The picker's pure seams are unit-tested **inside their own module** (a
+`#[cfg(test)] mod tests` in [`src/picker.rs`](../src/picker.rs)), needing no GTK,
+display, or nvim — `gdk::Key` constants are compile-time and the keyvals are built
+with the same `key_from_char` helper used by `gdk_key.rs`:
+
+- `is_picker_trigger_table` — the Ctrl+Shift+P chord is matched case-insensitively
+  on the letter (`'p'` and `'P'`), an extra modifier (ALT) does not disqualify it,
+  and a missing CONTROL/SHIFT or the wrong letter yields `false`.
+- `next_selection_table` — down/up within range, clamp at both ends with NO wrap,
+  empty list → `None`, single row, and out-of-range/negative `current` clamped.
+- `restored_index_table` — empty list → `None` regardless of reset/prev; reset →
+  `Some(0)`; preserve in range; preserve clamped when `prev` exceeds the new len;
+  preserve with no prev defaults to `0`.
 
 ## `gdk_key.rs` — input translation (headless, table-driven)
 
@@ -108,27 +125,52 @@ shift-glyph contract end-to-end), leaves insert mode with `Escape`, waits for an
 drains flushes, and asserts row 0 contains the word. Requires `WOLF_NVIM_BIN`
 (`common::require_nvim_bin` fails loud if unset).
 
-## `smoke_headless.rs` — windowed app (opt-in, real compositor)
+## `smoke_headless.rs` — windowed app + picker (opt-in, real compositor)
 
-A single `#[test] #[ignore]` (`window_renders_typed_text_under_cage`) that proves
-the whole stack actually draws a window. It is opt-in because it needs a compositor
-and an OCR toolchain a normal `cargo test` will not have. Run it explicitly:
+Three `#[test] #[ignore]`d cage smokes that prove the whole stack actually draws a
+window and drives the file picker. They are opt-in because they need a compositor
+and an OCR toolchain a normal `cargo test` will not have. Run them explicitly:
 
 ```sh
 nix develop --command cargo test -p wolf-gnome -- --ignored
 ```
 
-Mechanism: it locates the built binary via `CARGO_BIN_EXE_wolf-gnome` and runs the
-whole interactive scenario as one `sh -c` string **inside `cage`** (the headless
-wlroots compositor) so that `wtype` and `grim` inherit cage's `WAYLAND_DISPLAY`
-(cage exports it only to its child process tree). The scenario launches the app in
-the background, polls (not a fixed sleep) until the window maps, types `ihello`
-(insert mode + the word) and `Escape` via `wtype`, captures the live window with
-`grim` to a PNG under `XDG_RUNTIME_DIR`, then OCRs it on the host with `tesseract
-… stdout --psm 11` ("sparse text" mode — the default page-segmentation mode returns
-empty on the sparse light-on-dark editor grid) and asserts the lowercased output
-loosely `contains("hello")`. The app is launched with `WOLF_FONT_PT=28` so glyphs
-are large enough to OCR.
+**Serialization (`CAGE_LOCK`).** Each test launches its own `cage` compositor, and
+two compositors started concurrently contend for the same Wayland socket under
+`XDG_RUNTIME_DIR` (lockfile error), which would fail both under the default
+parallel harness. So all three tests acquire a shared `static CAGE_LOCK:
+Mutex<()>` for their whole body, forcing serial execution; poisoning is recovered
+from (`into_inner`) so one panicking test does not cascade into the others.
+
+**Mechanism (common to all three).** Each locates the built binary via
+`CARGO_BIN_EXE_wolf-gnome` and runs its interactive scenario as one `sh -c` string
+**inside `cage`** (the headless wlroots compositor) so that `wtype` and `grim`
+inherit cage's `WAYLAND_DISPLAY` (cage exports it only to its child process tree).
+The scenario launches the app in the background, polls (not a fixed sleep) until
+the window maps, drives it via `wtype`, captures the live window with `grim` to a
+PNG under `XDG_RUNTIME_DIR`, then OCRs it on the host with `tesseract … stdout
+--psm 11` ("sparse text" mode — the default page-segmentation mode returns empty
+on the sparse light-on-dark editor grid). The app is launched with
+`WOLF_FONT_PT=28` so glyphs are large enough to OCR, and a stale screenshot is
+removed first so a previous run cannot make a test pass.
+
+- **`window_renders_typed_text_under_cage`** — types `ihello` (insert mode + the
+  word) and `Escape`, then moves the cursor off row 0 (a normal-mode `o` + `Escape`
+  parks the block cursor on an empty row 1 so it does not OCR-distort the asserted
+  word), and asserts the OCR loosely `contains("hello")`.
+- **`picker_opens_and_loads_selected_file_under_cage`** — drops a known
+  `pickertarget.md` (heading `# PICKERTARGET`) into a fresh temp dir launched as
+  the app's working directory; opens the picker with **Ctrl+Shift+P**
+  (`wtype -M ctrl -M shift -k p -m shift -m ctrl`), types the query `picker`,
+  presses `Return`, and asserts the OCR contains `pickertarget` — proving the
+  picker opened, matched, selected, and nvim `:e`'d the file.
+- **`picker_arrow_navigation_selects_second_match_under_cage`** — drops two
+  matching files (`pick1.md` → row 0, `pick2.md` → row 1 by the rank tiebreaks,
+  neither in the MRU) into the temp cwd; opens the picker, types `pick`, presses
+  `Down` once to move the **list** selection to row 1, then `Return`, and asserts
+  the OCR contains `picktwo` (row 1's heading) and does NOT contain `pickone`
+  (row 0's) — proving `Down` moved the selection off the top row and `Enter`
+  opened the selected row.
 
 Required toolchain + env (all from the flake devShell smoke toolchain): `cage`,
 `wtype`, `grim`, `tesseract` on `PATH`; `WOLF_NVIM_BIN` set; and a set, writable

@@ -12,6 +12,7 @@
 #![allow(dead_code)] // Not every helper is used by every test binary.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
@@ -61,17 +62,48 @@ pub fn init_lua_path() -> PathBuf {
         .join("init.lua")
 }
 
-/// Builds a `CoreConfig` with the resolved init.lua path and the given grid size.
+/// Monotonic counter to disambiguate temp `cwd`s created within one process.
+static CWD_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Creates a fresh, unique directory under the OS temp dir to serve as a core
+/// `cwd`, and returns its path.
 ///
-/// NOTE: assumes `CoreConfig` has public fields `init_lua`, `cols`, `rows`
-/// (per plan §src/api). If `CoreConfig` instead exposes a builder/constructor,
-/// the coder should adapt this single helper.
+/// The directory is intentionally NOT auto-deleted: [`config`] returns only a
+/// `CoreConfig`, so there is no `TempDir` guard to keep alive, and the MRU cache
+/// (S1) lives at `<cwd>/.wolf/mru.sqlite`. Leaking one small temp dir per test is
+/// acceptable for this hermetic suite, and avoids the directory vanishing out
+/// from under `WolfCore::start` before it opens the cache.
+pub fn fresh_cwd() -> PathBuf {
+    let n = CWD_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time is before the unix epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("wolf-test-cwd-{pid}-{nanos}-{n}"));
+    std::fs::create_dir_all(&dir).expect("failed to create temp cwd directory");
+    dir
+}
+
+/// Builds a `CoreConfig` with the resolved init.lua path, the given grid size,
+/// and a fresh per-call `cwd` (so each core gets its own MRU cache directory).
+///
+/// NOTE: assumes `CoreConfig` has public fields `init_lua`, `cols`, `rows`, and
+/// (new in S1) `cwd` (per plan §D6). If `CoreConfig` instead exposes a
+/// builder/constructor, the coder should adapt [`config_in`] (the single literal).
 pub fn config(cols: u16, rows: u16) -> CoreConfig {
+    config_in(fresh_cwd(), cols, rows)
+}
+
+/// Like [`config`] but with an explicit `cwd`, for tests that must control where
+/// the MRU cache (`<cwd>/.wolf/mru.sqlite`) lives so they can inspect it.
+pub fn config_in(cwd: PathBuf, cols: u16, rows: u16) -> CoreConfig {
     require_nvim_bin();
     CoreConfig {
         init_lua: init_lua_path(),
         cols,
         rows,
+        cwd,
     }
 }
 

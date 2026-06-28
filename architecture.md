@@ -36,6 +36,16 @@ Responsibilities:
   (`nvim_input`, `nvim_input_mouse`) and Ex commands.
 - Own app-level semantics: open/save (delegated to Neovim), recent files, and the
   hermetic launch/isolation of the captive Neovim.
+- Maintain a **most-recently-used (MRU) file cache** — a small SQLite database at
+  `<cwd>/.wolf/mru.sqlite` — recording every opened file and pruning entries whose
+  backing file has been deleted. Reads are synchronous (the cache loads instantly).
+- Drive an **asynchronous, streaming file-list traversal** of the working
+  directory (the picker's source): a `FileSearch` session that seeds the MRU
+  synchronously then walks the tree on the tokio runtime (via the `ignore` crate —
+  respecting `.gitignore`, excluding `.git/`/`.wolf/`, including untracked files,
+  plain files and symlinks-to-files only), streaming results to the front-end. A
+  pure ranking function orders results (case-insensitive, MRU-first, with a
+  filename-word strict-prefix preference).
 
 Responsibilities it explicitly does **not** have: deciding what text or colors
 appear (Neovim does), drawing pixels (the front-ends do), or knowing about
@@ -68,10 +78,14 @@ with reverse-video colors so it is reliably visible; key
 input flows through a `gtk::EventControllerKey`; resizing maps pixels to a grid
 size and calls `WolfCore::resize`; and the core's wake is marshalled from its tokio
 worker thread onto the GTK main thread (via an `async-channel` drained by
-`glib::spawn_future_local`) to trigger redraws. Files are opened from within Neovim
-(`:e`); there are no file dialogs. Still deferred: file dialogs, theming,
-mouse/scroll input, a native command line / messages / popup menu, and HiDPI scale
-handling. See [`crates/wolf-gnome/README.md`](crates/wolf-gnome/README.md).
+`glib::spawn_future_local`) to trigger redraws. A built-in **file picker** (opened
+with **Ctrl+Shift+P** or a header-bar Open button) floats over the editor as a
+textbox + fuzzy-matched list, fed by core's streaming `FileSearch` + ranking and
+opening the selected file via the `open(path)` intent (recorded in the MRU); there
+are still no native file dialogs, and saving is from within Neovim. Still deferred:
+native file dialogs, theming, mouse/scroll input, a native command line / messages
+/ popup menu, and HiDPI scale handling. See
+[`crates/wolf-gnome/README.md`](crates/wolf-gnome/README.md).
 
 #### wolf-macos
 
@@ -198,6 +212,17 @@ Core does not push pixels or per-event callbacks across the boundary. Instead it
 applies `redraw` batches to the snapshot and, on `flush`, signals the front-end
 that a new frame is ready (a "redraw needed" wake — see threading). The front-end
 then reads the current snapshot on its UI thread and paints.
+
+### Output: file-search session (core → front-end)
+
+The file picker reuses the same snapshot+wake shape rather than a bespoke channel.
+`WolfCore::start_file_search(wake)` returns a `FileSearch` handle whose `read()`
+exposes an owned snapshot of the results collected so far (`entries`, `complete`,
+`version`); the MRU seed is present synchronously, and the background traversal
+streams more in, bumping `version` and firing the **same wake callback** after each
+batch. The front-end reads + ranks + repaints exactly as it does for redraws.
+Dropping (or cancelling) the handle stops the traversal. Selection feeds back in as
+an `open(path)` input event (below), which core also records in the MRU.
 
 ### Output: intents (core → front-end)
 

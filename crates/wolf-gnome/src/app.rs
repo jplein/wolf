@@ -33,6 +33,7 @@ use adw::prelude::*;
 use gtk::glib;
 use wolf_core::{CoreConfig, CursorShape, InputEvent, Snapshot, WakeFn, WolfCore};
 
+use crate::picker::{self, PickerHandle};
 use crate::render::draw_glyph;
 use crate::{cursor, grid_size_for, paint, CellMetrics};
 
@@ -127,6 +128,7 @@ fn build_ui(app: &adw::Application) {
         init_lua: init_lua_path(),
         cols: INITIAL_COLS,
         rows: INITIAL_ROWS,
+        cwd: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
     };
     let core = match WolfCore::start(cfg, wake) {
         Ok(core) => core,
@@ -146,9 +148,30 @@ fn build_ui(app: &adw::Application) {
         .focusable(true)
         .build();
 
+    // The editor area is the overlay's main child; the picker is added as an
+    // overlay child (built below) so it floats over the editor when open.
+    let overlay = gtk::Overlay::new();
+    overlay.set_child(Some(&area));
+
+    let picker = picker::build(&overlay, &area, &core);
+
+    // Header bar with an "Open" button that opens the picker.
+    let header = adw::HeaderBar::new();
+    let open_button = gtk::Button::builder()
+        .icon_name("document-open-symbolic")
+        .tooltip_text("Open file (Ctrl+Shift+P)")
+        .build();
+    {
+        let picker = picker.clone();
+        open_button.connect_clicked(move |_button| {
+            picker.open();
+        });
+    }
+    header.pack_start(&open_button);
+
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    content.append(&adw::HeaderBar::new());
-    content.append(&area);
+    content.append(&header);
+    content.append(&overlay);
 
     let window = adw::ApplicationWindow::builder()
         .application(app)
@@ -171,9 +194,9 @@ fn build_ui(app: &adw::Application) {
     area.queue_draw();
 
     wire_draw(&area, &metrics, &core);
-    wire_keys(&window, &core);
+    wire_keys(&window, &core, &picker);
     wire_resize(&area, &metrics, &core);
-    wire_close(&window, &core);
+    wire_close(&window, &core, &picker);
 
     window.present();
     // Focus the drawing area so key events have a focused target to bubble from.
@@ -234,11 +257,29 @@ fn draw_cursor(cr: &cairo::Context, snap: &Snapshot, metrics: &CellMetrics) {
     }
 }
 
-/// Installs the key controller: GDK key -> [`crate::gdk_key`] -> core input.
-fn wire_keys(window: &adw::ApplicationWindow, core: &Rc<RefCell<Option<WolfCore>>>) {
+/// Installs the key controller. While the picker is open, keys are left for the
+/// focused picker widgets (forwarding to the core is suppressed). Otherwise the
+/// trigger chord (Ctrl+Shift+P) opens the picker, and any other key is translated
+/// via the pure [`crate::gdk_key`] seam into core input.
+fn wire_keys(
+    window: &adw::ApplicationWindow,
+    core: &Rc<RefCell<Option<WolfCore>>>,
+    picker: &PickerHandle,
+) {
     let core = core.clone();
+    let picker = picker.clone();
     let controller = gtk::EventControllerKey::new();
     controller.connect_key_pressed(move |_controller, keyval, _keycode, state| {
+        // Picker open: let the focused picker widgets handle the key; never forward
+        // to nvim/core.
+        if picker.is_open() {
+            return glib::Propagation::Proceed;
+        }
+        // Trigger chord: open the picker and consume the key.
+        if crate::is_picker_trigger(keyval, state) {
+            picker.open();
+            return glib::Propagation::Stop;
+        }
         match crate::gdk_key(keyval, state) {
             Some(event) => {
                 if let Some(core) = core.borrow().as_ref() {
@@ -266,9 +307,17 @@ fn wire_resize(area: &gtk::DrawingArea, metrics: &Rc<CellMetrics>, core: &Rc<Ref
 
 /// Installs the close handler: take the core out (releasing the RefCell borrow in
 /// its own statement) and shut it down cleanly.
-fn wire_close(window: &adw::ApplicationWindow, core: &Rc<RefCell<Option<WolfCore>>>) {
+fn wire_close(
+    window: &adw::ApplicationWindow,
+    core: &Rc<RefCell<Option<WolfCore>>>,
+    picker: &PickerHandle,
+) {
     let core = core.clone();
+    let picker = picker.clone();
     window.connect_close_request(move |_window| {
+        // Close the picker first so its FileSearch is dropped (cancelling any
+        // in-flight traversal) before the core shuts down.
+        picker.close();
         // Take in its own statement so the RefCell borrow is released before
         // shutdown() (which consumes the core and blocks on teardown).
         let taken = core.borrow_mut().take();

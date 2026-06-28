@@ -1,2 +1,5 @@
 .direnv/
 target/
+
+# Wolf MRU cache (created in the cwd at runtime)
+.wolf/

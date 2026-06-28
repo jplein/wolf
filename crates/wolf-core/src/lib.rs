@@ -15,22 +15,31 @@
 //! ## Modules
 //!
 //! - [`render`]: the toolkit-agnostic render-state model and shared snapshot.
+//! - [`files`]: the async streaming file-list traversal and `FileSearch` session.
+//! - [`mru`]: the most-recently-used file cache (SQLite).
+//! - [`rank`]: pure fuzzy-match + ranking for the file picker.
 //! - [`input`]: abstract input events and their translation to Neovim RPC.
 //! - [`redraw`]: the `redraw` handler that folds events into the snapshot.
 //! - [`nvim`]: spawning/supervising the captive, hermetic Neovim.
 //! - [`api`]: the FFI-shaped front-end surface ([`WolfCore`]).
 
 pub mod api;
+pub mod files;
 pub mod input;
+pub mod mru;
 pub mod nvim;
+pub mod rank;
 pub mod redraw;
 pub mod render;
 
 pub use api::{CoreConfig, CoreError, SnapshotReadGuard, WolfCore};
+pub use files::{FileEntry, FileSearch, FileSearchReadGuard};
 pub use input::{
     key_to_notation, InputEvent, Key, KeyEvent, MouseAction, MouseButton, MouseEvent,
     ScrollDirection, ScrollEvent,
 };
+pub use mru::{MruError, MruStore, MRU_LIMIT};
+pub use rank::{rank_matches, Match, MatchKey};
 pub use redraw::WakeFn;
 pub use render::{
     Cell, Cursor, CursorShape, DefaultColors, Grid, HighlightTable, HlAttr, ModeInfo,

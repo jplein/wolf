@@ -15,10 +15,11 @@ opened from within Neovim via `:e`).
 ## `lib.rs`
 
 Crate root. Declares the public modules (`pub mod app;`, `pub mod cursor;`,
-`pub mod geometry;`, `pub mod input;`, `pub mod render;`) and re-exports the public
-surface: `gdk_key` (from `input`), `paint` + `CellMetrics` (from `render`), and
-`grid_size_for` (from `geometry`). The `cursor` module's `cursor_rect` /
-`cursor_colors` are reached via the module path rather than re-exported.
+`pub mod geometry;`, `pub mod input;`, `pub mod picker;`, `pub mod render;`) and
+re-exports the public surface: `gdk_key` (from `input`), `paint` + `CellMetrics`
+(from `render`), `grid_size_for` (from `geometry`), and `is_picker_trigger` (from
+`picker`). The `cursor` module's `cursor_rect` / `cursor_colors` are reached via
+the module path rather than re-exported.
 
 ## `app.rs`
 
@@ -27,10 +28,14 @@ All GTK4/Adwaita application wiring. `pub fn run() -> glib::ExitCode` builds an
 constructs the window and attaches a freshly started `WolfCore`:
 
 - **Construction.** An `adw::ApplicationWindow` (title "Wolf", default 960×640)
-  whose content is a vertical `gtk::Box` of an `adw::HeaderBar` over a focusable
-  `gtk::DrawingArea`. Cell metrics are measured **once** (via a throwaway 1×1
-  `ImageSurface` probe → `CellMetrics::for_font`) and shared by Rc with the draw
-  and resize closures.
+  whose content is a vertical `gtk::Box` of an `adw::HeaderBar` over a
+  `gtk::Overlay`. The overlay's main child is the focusable `gtk::DrawingArea`;
+  the file picker (built by [`picker::build`](#pickerrs)) is added as an overlay
+  child so it floats over the editor when open. The header bar carries an **Open**
+  button (`document-open-symbolic`, tooltip "Open file (Ctrl+Shift+P)") whose
+  click opens the picker. `CoreConfig.cwd` is set from `std::env::current_dir()`.
+  Cell metrics are measured **once** (via a throwaway 1×1 `ImageSurface` probe →
+  `CellMetrics::for_font`) and shared by Rc with the draw and resize closures.
 - **Wake bridge + threading.** A bounded `async-channel` (capacity 1) carries
   wake signals; the `WakeFn` (the only thing that crosses a thread boundary)
   `try_send`s from the tokio worker, and a `glib::spawn_future_local` task on the
@@ -45,14 +50,18 @@ constructs the window and attaches a freshly started `WolfCore`:
   For a `Block` cursor it then redraws the cell's glyph in the inverted glyph color
   via `render::draw_glyph` so it stays readable (skipped when the cell is empty or
   out of grid bounds); `Vertical`/`Horizontal` bars leave the glyph untouched.
-- **Key controller.** A `gtk::EventControllerKey` on the window routes keys via
-  the pure `gdk_key` seam into `WolfCore::send_input` (`Stop` when handled, else
-  `Proceed`).
+- **Key controller (+ picker wiring).** A `gtk::EventControllerKey` on the window:
+  while the picker is open it `Proceed`s (keys are left for the focused picker
+  widgets and never forwarded to nvim/core); otherwise the trigger chord
+  (`is_picker_trigger`, Ctrl+Shift+P) opens the picker and consumes the key
+  (`Stop`); any other key routes via the pure `gdk_key` seam into
+  `WolfCore::send_input` (`Stop` when handled, else `Proceed`).
 - **Resize.** `connect_resize` → `grid_size_for(width, height, cell_w, cell_h)` →
   `WolfCore::resize`.
 - **Lifecycle / shutdown.** `WolfCore` lives in `Rc<RefCell<Option<WolfCore>>>` on
-  the main thread; `connect_close_request` takes it out (in its own statement to
-  release the borrow) and runs `WolfCore::shutdown`.
+  the main thread; `connect_close_request` first closes the picker (dropping its
+  `FileSearch` so any in-flight traversal is cancelled), then takes the core out
+  (in its own statement to release the borrow) and runs `WolfCore::shutdown`.
 
 Key constants: `APP_ID` (`org.wolf.Wolf`), `FONT_FAMILY` (`DejaVu Sans Mono`),
 `DEFAULT_FONT_PT` (`14.0`) with the `FONT_PT_ENV` (`WOLF_FONT_PT`) override,
@@ -177,3 +186,64 @@ pub fn cursor_colors(snap: &wolf_core::Snapshot) -> (wolf_core::Rgb, wolf_core::
   `FALLBACK_FG` (white) / `FALLBACK_BG` (black). An out-of-range `mode_idx`, empty
   `mode_infos`, or an out-of-bounds cursor cell all fall through to inversion
   without panicking (via `.get`).
+
+## `picker.rs`
+
+The GNOME file-picker UI. Almost all of it is GTK widget wiring (which cannot be
+unit-tested headlessly); the small pure seams (`is_picker_trigger`,
+`next_selection`, `restored_index`) are factored out and unit-tested in the
+module's own `#[cfg(test)] mod tests`, like `geometry.rs` / `cursor.rs`.
+
+**Widgets.** `build(overlay, area, core) -> PickerHandle` constructs a floating
+`gtk::Box` (a `SearchEntry` over a `ScrolledWindow` wrapping a single-selection
+`ListBox`), adds it as an `Overlay` child over the editor `area`, wires all
+signals, and returns a `PickerHandle`. The box starts hidden. `PickerHandle`
+exposes `open()` / `close()` (both idempotent) and `is_open()` (the app queries it
+to suppress key forwarding while the picker has focus). Trigger: **Ctrl+Shift+P**
+or the header-bar Open button.
+
+**Streaming refresh (the wake pattern).** `open()` calls
+`WolfCore::start_file_search(wake)`, shows + focuses the entry, and does an initial
+refresh so the MRU seed appears immediately. The `wake` (a `WakeFn` fired from a
+tokio worker on each traversal batch) only `try_send`s onto a bounded
+`async-channel` (capacity `PICKER_WAKE_CHANNEL_CAP = 1`, coalescing a burst; the
+send is **drop-safe** so a late cancel-path wake is harmless); a
+`glib::spawn_future_local` task drains it on the GTK main thread and calls
+`refresh()`. `connect_search_changed` also refreshes on every query change.
+`refresh()` reads the live `FileSearch` snapshot, calls `wolf_core::rank_matches`,
+and rebuilds the `ListBox` from the top `PICKER_MAX_ROWS = 200` matches, keeping a
+parallel `row_paths` vec (row index → absolute path). The drain task holds only a
+`Weak` ref to the picker state, so dropping the handle ends the task (no cycle).
+
+**Keyboard navigation.** A capture-phase `EventControllerKey` on the picker box:
+`Esc` closes; `Up`/`Down` move the **list** selection (not the entry's text
+cursor) via `move_selection` (`next_selection`, clamped `[0, n-1]`, no wrap) and
+are consumed; every other key proceeds to the `SearchEntry` so typing flows.
+Selection is **preserved** across a streaming rebuild unless the query changed:
+`refresh()` uses `last_query` to decide reset-vs-preserve and `restored_index`
+(reset → row 0; else the clamped previous index; `None` for an empty list) to pick
+the row to select.
+
+**Activation.** `Enter` in the entry (`connect_activate`) or a `row-activated`
+signal calls `activate_selection`, which sends `InputEvent::Open { path }` for the
+selected row (or the first row if none) to the core — the MRU is auto-recorded by
+the core input pump — then closes the picker. With **zero** rows it is a true
+no-op (it neither sends `Open` nor closes). `close()` drops the `FileSearch`
+(cancelling the traversal), hides the box, and returns focus to the editor.
+
+**Pure seams (unit-tested):**
+
+```rust
+pub fn is_picker_trigger(keyval: gdk::Key, state: gdk::ModifierType) -> bool
+fn next_selection(current: i32, delta: i32, n_rows: i32) -> Option<usize>
+fn restored_index(reset_to_top: bool, prev: Option<usize>, new_len: usize) -> Option<usize>
+```
+
+- `is_picker_trigger` — `true` iff `CONTROL && SHIFT && letter == 'p'`
+  (case-insensitive on the letter; other modifiers like ALT are ignored). Pure and
+  display-free, re-exported from the crate root.
+- `next_selection` — `clamp(current + delta, 0, n_rows - 1)`, `None` when
+  `n_rows <= 0` (no wrap; a negative/out-of-range `current` is clamped by the same
+  formula).
+- `restored_index` — `None` for an empty list; `Some(0)` when resetting to the
+  top; else the preserved `prev` (defaulting to `0`) clamped into the new range.

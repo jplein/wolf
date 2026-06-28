@@ -12,6 +12,7 @@
 #![allow(dead_code)] // Not every helper is used by every test binary.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::time::Duration;
@@ -58,16 +59,42 @@ pub fn init_lua_path() -> PathBuf {
         .join("init.lua")
 }
 
-/// Builds a `CoreConfig` with the resolved init.lua path and the given grid size.
+/// Monotonic counter to disambiguate temp `cwd`s created within one process.
+static CWD_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Creates a fresh, unique directory under the OS temp dir to serve as a core
+/// `cwd`, and returns its path. Not auto-deleted (see the wolf-core harness for
+/// the rationale): the MRU cache (S1) lives at `<cwd>/.wolf/mru.sqlite`.
+pub fn fresh_cwd() -> PathBuf {
+    let n = CWD_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time is before the unix epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("wolf-test-cwd-{pid}-{nanos}-{n}"));
+    std::fs::create_dir_all(&dir).expect("failed to create temp cwd directory");
+    dir
+}
+
+/// Builds a `CoreConfig` with the resolved init.lua path, the given grid size,
+/// and a fresh per-call `cwd`.
 ///
 /// NOTE to coder: assumes `CoreConfig` has public fields `init_lua`, `cols`,
-/// `rows` (as it does today in wolf-core). If that changes, adapt this one helper.
+/// `rows`, and (new in S1) `cwd` (per plan §D6). If that changes, adapt
+/// [`config_in`] (the single literal).
 pub fn config(cols: u16, rows: u16) -> CoreConfig {
+    config_in(fresh_cwd(), cols, rows)
+}
+
+/// Like [`config`] but with an explicit `cwd`.
+pub fn config_in(cwd: PathBuf, cols: u16, rows: u16) -> CoreConfig {
     require_nvim_bin();
     CoreConfig {
         init_lua: init_lua_path(),
         cols,
         rows,
+        cwd,
     }
 }
 

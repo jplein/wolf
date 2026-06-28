@@ -4,17 +4,25 @@ The `wolf-core` source modules. Each is a single file (not a subdirectory). Data
 flows: `nvim` spawns the captive Neovim and hands its `redraw` stream to a
 `redraw::RedrawHandler`, which folds events into the `render` snapshot; `input`
 translates abstract events back into RPC; `api` ties it together behind the
-FFI-shaped `WolfCore`.
+FFI-shaped `WolfCore`. The file picker adds three more modules: `mru` (the
+SQLite most-recently-used cache), `files` (the async streaming file-list
+traversal + the `FileSearch` session), and `rank` (the pure fuzzy-match/ranking
+function the front-end calls to order results).
 
-Dependency order: `render` → `input` → `redraw` → `nvim` → `api`.
+Dependency order: `render` → `input` → `redraw` → `nvim` → `files` → `mru` →
+`rank` → `api`. (`files` uses `redraw::WakeFn`; both `mru` and `rank` build on
+`files::FileEntry` — `FileEntry`'s home is `files.rs`, re-exported from `mru` and
+the crate root.)
 
 ## `lib.rs`
 
-Crate root. Declares the public modules (`api`, `input`, `nvim`, `redraw`,
-`render`) and re-exports the public surface: `WolfCore`, `CoreConfig`,
-`CoreError`, `SnapshotReadGuard`; the input types and `key_to_notation`; `WakeFn`;
-and the render-state types. Documents the one hard rule (no GUI toolkit in the
-dependency tree).
+Crate root. Declares the public modules (`api`, `files`, `input`, `mru`, `nvim`,
+`rank`, `redraw`, `render`) and re-exports the public surface: `WolfCore`,
+`CoreConfig`, `CoreError`, `SnapshotReadGuard`; `FileEntry`, `FileSearch`,
+`FileSearchReadGuard` (from `files`); `MruStore`, `MruError`, `MRU_LIMIT` (from
+`mru`); `rank_matches`, `Match`, `MatchKey` (from `rank`); the input types and
+`key_to_notation`; `WakeFn`; and the render-state types. Documents the one hard
+rule (no GUI toolkit in the dependency tree).
 
 ## `render.rs`
 
@@ -124,11 +132,122 @@ Spawning and supervising the captive, hermetic Neovim child process.
 
 All RPC is generic/untyped (`Neovim::call`).
 
+## `files.rs`
+
+The async, streaming file-list traversal and its `FileSearch` session. This is
+the picker's view of "all files under the search root": the synchronous MRU seed
+plus the background walk's results, streamed in as they are found.
+
+Key types:
+
+- `FileEntry { path: PathBuf, display: String, mru_rank: Option<u32> }` — the
+  canonical home of `FileEntry` (re-exported from `mru` and the crate root).
+  `path` is absolute (used to issue `InputEvent::Open`); `display` is the path
+  relative to the search root (what the UI shows and `rank` ranks); `mru_rank`
+  is `Some(0)` for the most recently opened file, `None` if not in the MRU.
+- `FileSearchState { entries: Vec<FileEntry>, complete: bool, version: u64, .. }`
+  — the collected state behind one `RwLock`. `entries` is the MRU seed first,
+  then streamed traversal results in discovery order; `complete` flips true once
+  the walk finishes; `version` is a monotonic counter bumped on every append so
+  readers can detect change. A private `seen: HashSet<PathBuf>` dedups the MRU
+  seed against rediscovered files. `FileSearchState::seeded(seed)` (crate-internal)
+  builds the initial state at `version = 1`, `complete = false`.
+- `FileSearchReadGuard` — an OWNED read guard (`ArcRwLockReadGuard`) that `Deref`s
+  to `FileSearchState`, so a reader holds `guard.entries` / `.complete` /
+  `.version` independently of the `FileSearch`'s lifetime (mirrors
+  `OwnedSnapshotReadGuard`).
+- `FileSearch { .. }` — a live search session: `read() -> FileSearchReadGuard`,
+  `cancel()` (sets an `AtomicBool`), and `Drop` also cancels (so closing the
+  picker or starting a new search stops the old walk promptly).
+  `FileSearch::from_parts(state, cancel)` is crate-internal.
+
+`spawn_traversal(root, state, cancel, wake, handle)` (crate-internal) runs the
+walk on `handle.spawn_blocking` (the `ignore` walk is blocking IO). It appends
+found files in `TRAVERSAL_BATCH` (256) chunks — bumping `version` and calling
+`wake` **after** the write lock drops — checks `cancel` each iteration, and on
+finish appends the remainder, sets `complete` (unless cancelled), and fires a
+final `wake`. The write lock is held only for the short, IO-free append.
+
+**Traversal rules (plan §D3/§D6).** The `ignore` crate (ripgrep's walker) is
+configured `parents(true)`, `hidden(false)`, `git_ignore`/`git_global`/
+`git_exclude(true)`, `ignore(false)`, `require_git(false)`, `follow_links(false)`
+— behaving like `git ls-files --others --exclude-standard` inside a repo and a
+plain recursive walk outside one. So: dotfiles are shown (only `.gitignore`
+filters), `.gitignore` is honored in the cwd or any ancestor up to the repo root,
+untracked-but-not-ignored files are included, symlink loops cannot hang it, and
+`.git/` and our own `.wolf/` cache are never descended into (via `filter_entry`,
+with a defensive `has_excluded_component` backstop). `is_listable_file` classifies
+each entry: plain files are kept, a symlink is kept only when its target is a
+plain file (`std::fs::metadata` follows the link), and directories / broken or
+directory symlinks are dropped. Display strings are built via `display_for`
+(relative to the root using the platform separator).
+
+## `mru.rs`
+
+The most-recently-used file cache: a small SQLite database at
+`<cwd>/.wolf/mru.sqlite` so the picker can offer recent files synchronously
+(before the async traversal completes) and rank them first.
+
+- `MruStore` (`Clone`, `Arc`-backed) — holds the shared connection
+  (`Arc<parking_lot::Mutex<rusqlite::Connection>>`) plus the canonical cwd used
+  to relativize stored paths into `FileEntry::display`.
+- `MruError` (`thiserror`) — `Open` (open/init failed), `Io` (`.wolf` dir),
+  `Query` (a query failed).
+- `MruStore::open(cwd: &Path) -> Result<MruStore, MruError>` — creates the
+  `.wolf` directory, canonicalizes the cwd, opens the database, enables WAL
+  journaling + a `busy_timeout` (`MRU_BUSY_TIMEOUT_MS = 2000`), and ensures the
+  `mru(path TEXT PRIMARY KEY, opened_at INTEGER NOT NULL)` table exists.
+- `record(&self, path: &Path)` — **fire-and-forget**: upserts `(path,
+  opened_at = now-millis)`, storing the canonical path if the file exists else
+  the path absolutized against the cwd; errors are logged via `tracing`, never
+  propagated, so opening a file is never blocked by a cache hiccup.
+- `recent(&self) -> Vec<FileEntry>` — the most-recently-opened files newest-first
+  (`ORDER BY opened_at DESC, rowid DESC LIMIT MRU_LIMIT`, `MRU_LIMIT = 50`).
+  Entries whose backing file no longer exists are **pruned inline** (omitted from
+  the result AND `DELETE`d via the same connection); `mru_rank` is the 0-based
+  position in the returned list.
+
+`MRU_LIMIT` is re-exported from the crate root. `FileEntry` is re-exported here
+from `files.rs` (its true home). All SQLite work is synchronous, guarded by the
+mutex, with short critical sections that never span an `.await`.
+
+## `rank.rs`
+
+Pure, IO-free fuzzy-match + ranking for the picker — unit-tested headlessly (no
+filesystem, Neovim, or GUI), mirroring how the GNOME `geometry.rs` / `cursor.rs`
+seams stay testable.
+
+- `rank_matches(query: &str, entries: &[FileEntry]) -> Vec<Match>` (`#[must_use]`)
+  — an EMPTY query returns ALL entries **MRU-first** (ascending `mru_rank`, then
+  non-MRU entries in stable original order); a NON-EMPTY query keeps only entries
+  whose `display` contains `query` as a **case-insensitive subsequence** (both
+  sides ASCII-lowercased) and orders them by `MatchKey`.
+- `Match { index: usize, key: MatchKey }` — `index` points into the input
+  `entries` slice (callers map results back by index); `key` is the sort key.
+- `MatchKey` (derived `Ord`, every field "lower = better", declared in priority
+  order): (1) `mru_group` (`0` if in the MRU cache else `1` — **MRU first, LOCKED**),
+  (2) `mru_rank` (`u32::MAX` if not in MRU), (3) `prefix_group` (`0` if the query
+  is a ci-prefix of some filename word else `1`), (4) `word_index` of the earliest
+  prefixed word, (5) `match_start` (first matched char index), (6) `span`
+  (`last - first`), (7) `len` (`display.chars().count()`), (8) `display`
+  lexicographic.
+
+A "word" comes from the FILENAME only (the last path component, split on
+`/ \ _ - . space`); a directory component contributes no word. "Strict prefix of
+a word" is `word.starts_with(query)` case-insensitively, so a full-word match is
+still group `0` and wins the later length tie-break against a longer word sharing
+the prefix. Word splitting uses `WORD_SEPARATORS`; the empty-query path is handled
+by `rank_empty`. The module has table-driven `#[cfg(test)]` unit tests.
+
 ## `api.rs`
 
 The FFI-shaped front-end surface. Documented in detail in the crate
 [`README.md`](../README.md). In brief: `WolfCore` owns the tokio runtime, the
-`NvimProcess`, the `SharedSnapshot`, and the ordered input channel; `CoreConfig`,
-`CoreError`, and `SnapshotReadGuard` (an owned read guard that `Deref`s to
-`Snapshot`) round out the surface. A single `INPUT_COALESCE_DELAY` lets a
-synchronous burst of `send_input` calls coalesce into one applied batch.
+`NvimProcess`, the `SharedSnapshot`, the ordered input channel, the `MruStore`,
+and the configured `cwd`; `CoreConfig` (now including `cwd`), `CoreError` (now
+including a `Mru` variant), and `SnapshotReadGuard` (an owned read guard that
+`Deref`s to `Snapshot`) round out the surface. A single `INPUT_COALESCE_DELAY`
+lets a synchronous burst of `send_input` calls coalesce into one applied batch;
+the input pump also records every drained `InputEvent::Open` into the MRU cache.
+`mru_recent()` exposes the cache and `start_file_search(&self, wake) -> FileSearch`
+seeds the MRU synchronously then spawns the streaming traversal on the runtime.

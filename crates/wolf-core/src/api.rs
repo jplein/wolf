@@ -10,12 +10,17 @@
 //! wake callback, fired on `flush`; no per-event callbacks cross the boundary.
 
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::Duration;
 
+use parking_lot::RwLock;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{self, UnboundedSender};
 
+use crate::files::{self, FileSearch, FileSearchState};
 use crate::input::{self, InputEvent, Nvim};
+use crate::mru::{FileEntry, MruError, MruStore};
 use crate::nvim::{self, NvimConfig, NvimError, NvimProcess};
 use crate::redraw::{RedrawHandler, WakeFn};
 use crate::render::{OwnedSnapshotReadGuard, SharedSnapshot, Snapshot};
@@ -34,6 +39,9 @@ pub struct CoreConfig {
     pub cols: u16,
     /// Initial grid height in rows.
     pub rows: u16,
+    /// Working directory: the picker's search root and the location of the MRU
+    /// cache (`<cwd>/.wolf/mru.sqlite`).
+    pub cwd: PathBuf,
 }
 
 /// Errors from starting or driving the core.
@@ -45,6 +53,9 @@ pub enum CoreError {
     /// An error from the captive Neovim layer.
     #[error(transparent)]
     Nvim(#[from] NvimError),
+    /// An error from the MRU cache layer.
+    #[error(transparent)]
+    Mru(#[from] MruError),
 }
 
 /// A read guard over the current render-state [`Snapshot`].
@@ -73,6 +84,12 @@ pub struct WolfCore {
     /// single consumer task in FIFO order, so keystrokes never reorder (which
     /// would garble typed text).
     input_tx: UnboundedSender<InputEvent>,
+    /// The most-recently-used file cache. Cloned (cheaply, it is `Arc`-backed)
+    /// into the input pump so opens record into it.
+    mru: MruStore,
+    /// The configured working directory: the file picker's search root (the
+    /// traversal root is this path, canonicalized).
+    cwd: PathBuf,
 }
 
 impl WolfCore {
@@ -84,6 +101,9 @@ impl WolfCore {
             .enable_all()
             .build()
             .map_err(CoreError::Runtime)?;
+
+        let mru = MruStore::open(&cfg.cwd)?;
+        let cwd = cfg.cwd.clone();
 
         let snapshot = SharedSnapshot::new(cfg.cols as usize, cfg.rows as usize);
         let handler = RedrawHandler::new(snapshot.clone_handle(), wake);
@@ -108,6 +128,7 @@ impl WolfCore {
         // on. A brief settle yield lets a synchronous burst fully enqueue first.
         let (input_tx, mut input_rx) = mpsc::unbounded_channel::<InputEvent>();
         let pump_nvim: Nvim = nvim.handle();
+        let pump_mru = mru.clone();
         runtime.spawn(async move {
             while let Some(first) = input_rx.recv().await {
                 // Let any siblings enqueued in the same synchronous burst arrive.
@@ -118,6 +139,13 @@ impl WolfCore {
                     batch.push(ev);
                 }
                 input::apply_batch(&pump_nvim, &batch).await;
+
+                // Record every opened file in the MRU cache (fire-and-forget).
+                for ev in &batch {
+                    if let InputEvent::Open { path } = ev {
+                        pump_mru.record(path);
+                    }
+                }
             }
         });
 
@@ -126,6 +154,8 @@ impl WolfCore {
             nvim,
             snapshot,
             input_tx,
+            mru,
+            cwd,
         })
     }
 
@@ -146,6 +176,42 @@ impl WolfCore {
         if self.input_tx.send(event).is_err() {
             tracing::warn!("input dropped: core input pump is gone");
         }
+    }
+
+    /// Returns the most-recently-opened files (newest first), pruning any whose
+    /// backing file no longer exists. See [`MruStore::recent`].
+    #[must_use]
+    pub fn mru_recent(&self) -> Vec<FileEntry> {
+        self.mru.recent()
+    }
+
+    /// Starts a streaming file search rooted at the configured cwd.
+    ///
+    /// The MRU cache is seeded SYNCHRONOUSLY before returning (so the very first
+    /// [`FileSearch::read`] already shows recent files), then the async traversal
+    /// is spawned on the core's tokio runtime; it streams discovered files into
+    /// the shared state, bumping `version` and calling `wake` after each batch and
+    /// once more when `complete`. Dropping (or [`FileSearch::cancel`]-ing) the
+    /// returned handle stops the traversal.
+    #[must_use]
+    pub fn start_file_search(&self, wake: WakeFn) -> FileSearch {
+        // The traversal root is the cwd canonicalized, matching the canonical
+        // paths the MRU stores so the dedup set lines up; fall back to the cwd
+        // as-is if canonicalization fails.
+        let root = std::fs::canonicalize(&self.cwd).unwrap_or_else(|_| self.cwd.clone());
+
+        let state = Arc::new(RwLock::new(FileSearchState::seeded(self.mru.recent())));
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        files::spawn_traversal(
+            root,
+            state.clone(),
+            cancel.clone(),
+            wake,
+            self.runtime.handle().clone(),
+        );
+
+        FileSearch::from_parts(state, cancel)
     }
 
     /// Requests a grid resize. The authoritative size arrives via `grid_resize`.

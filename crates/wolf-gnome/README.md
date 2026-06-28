@@ -9,17 +9,22 @@ front-end section and decision 2 on native paint). It consumes
 
 This crate is a **runnable single-window GTK 4 / libadwaita application**. The
 window is one `adw::ApplicationWindow` (with an `adw::HeaderBar`) whose content is
-a single `gtk::DrawingArea`. There are **no file dialogs** — files are opened from
-within Neovim via its own commands (`:e`, `:w`, `:saveas`).
+a `gtk::DrawingArea` (inside a `gtk::Overlay` that also hosts the file picker).
+There are still **no native file dialogs** — but a built-in **file picker**
+(textbox + fuzzy-matched list, see [The file picker](#the-file-picker)) opens
+files, and saving is from within Neovim (`:w`, `:saveas`).
 
-The application is built on top of three pure, widget-free **seams** that can also
-be verified *headlessly*, with no display server, no window, and no event loop:
+The application is built on top of pure, widget-free **seams** that can also be
+verified *headlessly*, with no display server, no window, and no event loop:
 
 - `gdk_key` — GDK keyval + modifier state → `wolf_core::KeyEvent`.
 - `paint` — render a `wolf_core::Snapshot` onto a Cairo context.
 - `grid_size_for` — pixel size + measured cell size → grid `(cols, rows)`.
 - `cursor_rect` / `cursor_colors` (`cursor.rs`) — the cursor's shape geometry and
   its reverse-video `(fill, glyph)` color pair, computed without GTK.
+- `is_picker_trigger` (`picker.rs`) — whether a keyval + modifier state is the
+  picker's Ctrl+Shift+P trigger; plus the file-private `next_selection` /
+  `restored_index` list-navigation helpers, all unit-tested headlessly.
 
 These stay free functions independent of any widget, which is exactly what makes
 them testable without a display. The application wiring that binds them to a live
@@ -77,6 +82,36 @@ the window and attaches a freshly started `WolfCore`:
   `RefCell` borrow) and runs `WolfCore::shutdown` for a clean teardown. Only the
   `WakeFn` ever crosses a thread boundary. If `WolfCore::start` fails, the error
   is logged and no window is built.
+
+## The file picker
+
+The window has a built-in file picker (implemented in
+[`src/picker.rs`](src/README.md)). It opens two ways: the **Ctrl+Shift+P** key
+chord (deliberately non-conflicting — every Neovim key, including `<C-p>`, is
+preserved) and a header-bar **Open** button. It floats over the editor as an
+`Overlay` child: a search textbox over a results list.
+
+- **Filtering.** Typing fuzzy-matches against the file list (a streaming
+  traversal of the cwd, seeded by the MRU cache — both provided by `wolf-core`).
+  Matching is **case-insensitive** and **MRU files rank first**; among the rest, a
+  query that is a strict prefix of a filename word is preferred over a merely
+  scattered subsequence. An empty query lists all files (MRU-first). The actual
+  ranking is `wolf_core::rank_matches`; the picker only renders the top results.
+- **Navigation + activation.** `Up`/`Down` move the list selection (focus stays
+  in the textbox, so typing keeps working; selection is preserved as streamed
+  results arrive). `Enter` (or clicking a row) opens the selected file; `Esc`
+  closes the picker. While it is open, all keys go to the picker and are not
+  forwarded to Neovim.
+- **Open + MRU.** Selecting a file sends it through `wolf-core` as
+  `InputEvent::Open { path }`, which Neovim loads via `:e`; the core's input pump
+  records the open in the MRU cache, so it ranks first next time. There is no
+  separate "select" path.
+
+The only pure, headlessly-tested seam here is `is_picker_trigger` (the trigger
+predicate); the navigation clamp/preserve logic is factored into the pure
+`next_selection` / `restored_index` helpers (also unit-tested), with the full
+end-to-end behavior covered by the opt-in picker cage smokes (see
+[`tests/README.md`](tests/README.md)).
 
 ## The seams
 
@@ -213,9 +248,10 @@ enables the `png` feature for the `#[ignore]`d golden-regeneration dev-aid test.
 
 ## Deferred to later phases
 
-The window exists, but the following remain deferred:
+The window and the file picker exist, but the following remain deferred:
 
-- File dialogs (open / save / save-as) — files are opened from within Neovim.
+- Native file dialogs (open / save / save-as) — opening now goes through the
+  built-in file picker; saving is still from within Neovim (`:w`, `:saveas`).
 - Theming (querying the OS theme and pushing it into Neovim).
 - Mouse and scroll input.
 - Native command line / messages / popup menu (currently grid-drawn).

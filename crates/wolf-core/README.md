@@ -27,6 +27,13 @@ gtk gtk4 glib gdk4 cairo cairo-rs pango libadwaita
 objc objc2 cocoa core-graphics winit wgpu skia-safe softbuffer
 ```
 
+The file picker adds two dependencies — `rusqlite` (with the `bundled` feature,
+which vendors SQLite via `cc`) for the MRU cache and `ignore` (ripgrep's pure-Rust
+walker) for the traversal. Both are deliberately GUI-free: they pull **no** GUI
+toolkit into core's tree, so the denylist above is unchanged (the command and the
+denied-crate list stay exactly as written) and stays clean. The flake also needs
+no change (no system SQLite/libgit2 to provision).
+
 ## Public API surface
 
 Re-exported from the crate root (`wolf_core::…`):
@@ -46,9 +53,32 @@ Re-exported from the crate root (`wolf_core::…`):
   same ordered channel, so it never races pending keystrokes.
 - `shutdown(self) -> Result<(), CoreError>` — cleanly quits the captive Neovim
   and tears down the runtime.
+- `mru_recent(&self) -> Vec<FileEntry>` — the most-recently-opened files (newest
+  first), pruning any whose backing file no longer exists. See `MruStore::recent`.
+- `start_file_search(&self, wake: WakeFn) -> FileSearch` — starts a streaming file
+  search rooted at the configured cwd (see "The file-search session" below).
 
-`CoreConfig { init_lua: PathBuf, cols: u16, rows: u16 }`. `CoreError` is
-`Runtime(io::Error)` or `Nvim(NvimError)`.
+`CoreConfig { init_lua: PathBuf, cols: u16, rows: u16, cwd: PathBuf }` — `cwd` is
+the picker's search root and the location of the MRU cache
+(`<cwd>/.wolf/mru.sqlite`). `CoreError` is `Runtime(io::Error)`, `Nvim(NvimError)`,
+or `Mru(MruError)`.
+
+### File picker — search session + ranking
+
+- `FileSearch` (from [`files`](src/files.rs)) — a live search session.
+  `read(&self) -> FileSearchReadGuard` (owned guard, `Deref`s to a state owning
+  `entries: Vec<FileEntry>`, `complete: bool`, `version: u64`); `cancel(&self)`
+  stops the background traversal, and `Drop` cancels too.
+- `FileEntry { path: PathBuf, display: String, mru_rank: Option<u32> }` — an
+  absolute `path` (to `Open`), a `display` (relative to the root, what the UI
+  shows + ranks), and the MRU rank (`Some(0)` = most recent, `None` = not in MRU).
+- `rank_matches(query: &str, entries: &[FileEntry]) -> Vec<Match>` (from
+  [`rank`](src/rank.rs)) — pure fuzzy match + ranking: empty query = all entries
+  MRU-first; non-empty = case-insensitive subsequence match, MRU-first then a
+  filename-word strict-prefix preference. `Match { index, key: MatchKey }`.
+- `MruStore` / `MruError` / `MRU_LIMIT` (from [`mru`](src/mru.rs)) — the SQLite
+  MRU cache. Front-ends normally reach it via `mru_recent()` / `start_file_search`
+  rather than directly.
 
 ### Wake callback — `WakeFn` (from [`redraw`](src/redraw.rs))
 
@@ -88,6 +118,28 @@ char and leave `shift = false`; `S-` is emitted only for named keys.
 - **Hermetic launch.** `nvim --embed --clean -u runtime/nvim/init.lua -i NONE -n`
   with `NVIM_APPNAME=wolf` and isolated `XDG_{CONFIG,DATA,STATE,CACHE}_HOME` under
   a private temp dir, so the captive editor cannot read the user's config/state.
+
+## The file-search session
+
+The picker drives a `FileSearch` session that mirrors the render-state
+snapshot+wake mechanism rather than streaming callbacks across the boundary:
+
+- `start_file_search(wake)` first seeds the MRU cache **synchronously** into the
+  shared `FileSearchState` (so the very first `read()` already shows recent files),
+  then spawns the `ignore`-crate traversal on the core's tokio runtime
+  (`spawn_blocking`, since the walk is blocking IO).
+- The traversal streams discovered files into the shared state in batches, bumping
+  `version` and firing the same `wake` callback after each batch (and once more on
+  `complete`) — exactly the marshal-onto-the-UI-thread-then-read pattern the
+  front-end already implements for redraws.
+- The front-end reads the current entries via the owned `FileSearchReadGuard`,
+  ranks them with `rank_matches`, and renders. Dropping (or `cancel`-ing) the
+  `FileSearch` stops the traversal (e.g. closing the picker or starting a new
+  search).
+- **Opening a file records the MRU.** Selection feeds `InputEvent::Open { path }`
+  through the normal input channel; the ordered input pump records each drained
+  `Open` into the `MruStore` (synchronously, never across an `.await`), so no
+  separate "select" call exists and `input.rs` stays storage-free.
 
 ## Threading and locking model
 

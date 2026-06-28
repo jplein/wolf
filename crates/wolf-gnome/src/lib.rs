@@ -24,8 +24,10 @@ pub mod app;
 pub mod cursor;
 pub mod geometry;
 pub mod input;
+pub mod picker;
 pub mod render;
 
 pub use geometry::grid_size_for;
 pub use input::gdk_key;
+pub use picker::is_picker_trigger;
 pub use render::{paint, CellMetrics};
