@@ -9,10 +9,12 @@ front-end section and decision 2 on native paint). It consumes
 
 This crate is a **runnable single-window GTK 4 / libadwaita application**. The
 window is one `adw::ApplicationWindow` (with an `adw::HeaderBar`) whose content is
-a `gtk::DrawingArea` (inside a `gtk::Overlay` that also hosts the file picker).
-There are still **no native file dialogs** — but a built-in **file picker**
-(textbox + fuzzy-matched list, see [The file picker](#the-file-picker)) opens
-files, and saving is from within Neovim (`:w`, `:saveas`).
+a horizontal `gtk::Paned`: a **file-tree sidebar** on the left (see
+[The file-tree sidebar](#the-file-tree-sidebar)) and, on the right, a
+`gtk::DrawingArea` inside a `gtk::Overlay` that also hosts the file picker. There
+are still **no native file dialogs** — but a built-in **file picker** (textbox +
+fuzzy-matched list, see [The file picker](#the-file-picker)) opens files, and
+saving is from within Neovim (`:w`, `:saveas`).
 
 The application is built on top of pure, widget-free **seams** that can also be
 verified *headlessly*, with no display server, no window, and no event loop:
@@ -25,6 +27,10 @@ verified *headlessly*, with no display server, no window, and no event loop:
 - `is_picker_trigger` (`picker.rs`) — whether a keyval + modifier state is the
   picker's Ctrl+Shift+P trigger; plus the file-private `next_selection` /
   `restored_index` list-navigation helpers, all unit-tested headlessly.
+- `children_of` / `ancestors_to_reveal` / `node_rel_path` / `rel_path_for`
+  (`tree.rs`) — the pure hierarchical projection of the picker's flat file list
+  into the file-tree sidebar's per-directory children + reveal helpers,
+  unit-tested headlessly.
 
 These stay free functions independent of any widget, which is exactly what makes
 them testable without a display. The application wiring that binds them to a live
@@ -46,7 +52,9 @@ It requires `WOLF_NVIM_BIN` to point at the pinned Neovim (the devShell exports
 it; nvim is never taken from `PATH`). The font size defaults to **14.0 pt** and
 can be overridden via the `WOLF_FONT_PT` environment variable (the smoke test sets
 it to `28` so glyphs are large enough to OCR). The font family is `DejaVu Sans
-Mono`, the GApplication id is `org.wolf.Wolf`, and the default window is 960×640.
+Mono`, the GApplication id is `org.wolf.Wolf`, and the default window is 1200×640
+(widened from the editor-only default to leave the editor pane its usual width
+after the 250 px file-tree sidebar).
 
 ## Architecture wiring
 
@@ -82,6 +90,42 @@ the window and attaches a freshly started `WolfCore`:
   `RefCell` borrow) and runs `WolfCore::shutdown` for a clean teardown. Only the
   `WakeFn` ever crosses a thread boundary. If `WolfCore::start` fails, the error
   is logged and no window is built.
+
+## The file-tree sidebar
+
+The left pane of the `gtk::Paned` is a file-tree sidebar (implemented in
+[`src/tree_view.rs`](src/README.md), built on the pure
+[`src/tree.rs`](src/README.md) projection). It lists the working directory as a
+hierarchy and tracks the file being edited:
+
+- **Same source as the picker.** It is populated by a long-lived
+  `wolf_core::FileSearch` started at build time — the exact mechanism the picker
+  uses (the streaming `ignore` traversal seeded by the MRU; `.git/`/`.wolf/`/
+  `.gitignored` excluded consistently). The tree is a hierarchical projection of
+  that flat file list: directories are derived from file paths, and only
+  directories that (transitively) contain a listed file appear. It streams in as
+  the traversal progresses.
+- **Layout.** A `gtk::ListView` over a `gtk::TreeListModel` + `gtk::TreeExpander`
+  (the modern, non-deprecated tree widgets). The **top level is expanded by
+  default**; all other directories start collapsed.
+- **Single-click.** A single click on a **file** opens it (`InputEvent::Open`,
+  recorded in the MRU) and returns focus to the editor; a single click on a
+  **directory** toggles its expansion.
+- **Highlight + reveal the current file.** The file currently being edited (from
+  `wolf_core::Snapshot::current_file`, delivered on the render wake) is shown in
+  bold and **revealed**: its ancestor directories are expanded, its row is
+  selected, and it is scrolled into view. This happens after **both** picker
+  navigation and Neovim-driven navigation (e.g. `:e`), since core tracks the active
+  buffer via an autocmd regardless of how it changed.
+
+The pure, headlessly-tested seams are in `tree.rs` (`children_of`,
+`ancestors_to_reveal`, `node_rel_path`, `rel_path_for`); the GTK wiring in
+`tree_view.rs` cannot be unit-tested headlessly and is exercised by the
+`tree_sidebar_shows_files_under_cage` smoke (see [`tests/README.md`](tests/README.md)).
+
+**v1 limitation:** a `current_file` change rebuilds the tree's root store, which
+collapses any manual nested expansion (the reveal re-expands the path to the new
+current file, but other manually-opened directories are not restored).
 
 ## The file picker
 
@@ -245,6 +289,12 @@ not "one identical minor" — mismatched `-sys` minors fail to link. `libadwaita
 0.9 carries no version feature, targeting the system GTK already present.) These
 are built against the flake's GTK 4.22, cairo 1.18, and pango 1.57. `cairo-rs`
 enables the `png` feature for the `#[ignore]`d golden-regeneration dev-aid test.
+
+`gtk4` enables the **`v4_12`** feature, which the file-tree sidebar's
+`gtk::ListView::scroll_to` (used by reveal to scroll the current file into view)
+requires. This raises the minimum **system GTK to 4.12**; the flake's GTK 4.22
+satisfies it. The feature is `wolf-gnome`-only and does not affect `wolf-core`'s
+GUI denylist.
 
 ## Deferred to later phases
 

@@ -3,8 +3,9 @@
 The `wolf-gnome` source modules. Each is a single file (not a subdirectory). The
 crate is **both a library and a binary**: a `[[bin]]` (`main.rs` → `app.rs`) runs
 the windowed application, while the library keeps the pure, widget-free seams
-(`input.rs`, `render.rs`, `geometry.rs`, `cursor.rs`) so they stay testable without
-a display. See the crate [`README.md`](../README.md).
+(`input.rs`, `render.rs`, `geometry.rs`, `cursor.rs`, `tree.rs`) so they stay
+testable without a display. The GTK glue that binds them to live widgets lives in
+`app.rs`, `picker.rs`, and `tree_view.rs`. See the crate [`README.md`](../README.md).
 
 ## `main.rs`
 
@@ -15,11 +16,12 @@ opened from within Neovim via `:e`).
 ## `lib.rs`
 
 Crate root. Declares the public modules (`pub mod app;`, `pub mod cursor;`,
-`pub mod geometry;`, `pub mod input;`, `pub mod picker;`, `pub mod render;`) and
-re-exports the public surface: `gdk_key` (from `input`), `paint` + `CellMetrics`
-(from `render`), `grid_size_for` (from `geometry`), and `is_picker_trigger` (from
-`picker`). The `cursor` module's `cursor_rect` / `cursor_colors` are reached via
-the module path rather than re-exported.
+`pub mod geometry;`, `pub mod input;`, `pub mod picker;`, `pub mod render;`,
+`pub mod tree;`, `pub mod tree_view;`) and re-exports the public surface:
+`gdk_key` (from `input`), `paint` + `CellMetrics` (from `render`), `grid_size_for`
+(from `geometry`), and `is_picker_trigger` (from `picker`). The `cursor` module's
+`cursor_rect` / `cursor_colors`, and the `tree` / `tree_view` items, are reached
+via the module path rather than re-exported.
 
 ## `app.rs`
 
@@ -27,20 +29,25 @@ All GTK4/Adwaita application wiring. `pub fn run() -> glib::ExitCode` builds an
 `adw::Application` with id `org.wolf.Wolf` and, on `activate`, `build_ui`
 constructs the window and attaches a freshly started `WolfCore`:
 
-- **Construction.** An `adw::ApplicationWindow` (title "Wolf", default 960×640)
+- **Construction.** An `adw::ApplicationWindow` (title "Wolf", default 1200×640)
   whose content is a vertical `gtk::Box` of an `adw::HeaderBar` over a
-  `gtk::Overlay`. The overlay's main child is the focusable `gtk::DrawingArea`;
-  the file picker (built by [`picker::build`](#pickerrs)) is added as an overlay
-  child so it floats over the editor when open. The header bar carries an **Open**
-  button (`document-open-symbolic`, tooltip "Open file (Ctrl+Shift+P)") whose
-  click opens the picker. `CoreConfig.cwd` is set from `std::env::current_dir()`.
-  Cell metrics are measured **once** (via a throwaway 1×1 `ImageSurface` probe →
-  `CellMetrics::for_font`) and shared by Rc with the draw and resize closures.
+  `gtk::Paned` (horizontal). The Paned's **start** child is the file-tree sidebar
+  (built by [`tree_view::build`](#tree_viewrs)); its **end** child is the
+  `gtk::Overlay`, whose main child is the focusable `gtk::DrawingArea` and whose
+  overlay child is the file picker ([`picker::build`](#pickerrs), floating over the
+  editor when open). The Paned divider position starts at `TREE_PANE_WIDTH` (250
+  px). The header bar carries an **Open** button (`document-open-symbolic`, tooltip
+  "Open file (Ctrl+Shift+P)") whose click opens the picker. `CoreConfig.cwd` is set
+  from `std::env::current_dir()`. Cell metrics are measured **once** (via a
+  throwaway 1×1 `ImageSurface` probe → `CellMetrics::for_font`) and shared by Rc
+  with the draw and resize closures.
 - **Wake bridge + threading.** A bounded `async-channel` (capacity 1) carries
   wake signals; the `WakeFn` (the only thing that crosses a thread boundary)
   `try_send`s from the tokio worker, and a `glib::spawn_future_local` task on the
-  GTK main thread drains it and calls `queue_draw`. `WolfCore` is started before
-  the window is built; if it fails, the error is logged and no window appears.
+  GTK main thread drains it and, per signal, calls `area.queue_draw()` **and**
+  `tree.on_render_wake()` (so the tree highlights/reveals the current file carried
+  by the same render wake). `WolfCore` is started before the window is built; if it
+  fails, the error is logged and no window appears.
 - **Draw func + mode-aware cursor.** Reads `read_snapshot()`, calls the pure
   `paint` seam, then draws a cursor at the cursor cell. `draw_cursor` is GTK glue
   only: it takes the shape and `cell_percentage` from
@@ -59,14 +66,19 @@ constructs the window and attaches a freshly started `WolfCore`:
 - **Resize.** `connect_resize` → `grid_size_for(width, height, cell_w, cell_h)` →
   `WolfCore::resize`.
 - **Lifecycle / shutdown.** `WolfCore` lives in `Rc<RefCell<Option<WolfCore>>>` on
-  the main thread; `connect_close_request` first closes the picker (dropping its
-  `FileSearch` so any in-flight traversal is cancelled), then takes the core out
-  (in its own statement to release the borrow) and runs `WolfCore::shutdown`.
+  the main thread; `connect_close_request` first closes the picker **and** the tree
+  (each dropping its `FileSearch` so any in-flight traversal is cancelled) before
+  the core shuts down, then takes the core out (in its own statement to release the
+  borrow) and runs `WolfCore::shutdown`. `wire_close` takes the `&TreeHandle`
+  alongside the `&PickerHandle` for this.
 
 Key constants: `APP_ID` (`org.wolf.Wolf`), `FONT_FAMILY` (`DejaVu Sans Mono`),
 `DEFAULT_FONT_PT` (`14.0`) with the `FONT_PT_ENV` (`WOLF_FONT_PT`) override,
-`INITIAL_COLS`/`INITIAL_ROWS` (80×24), `WINDOW_WIDTH`/`WINDOW_HEIGHT` (960×640),
-`WAKE_CHANNEL_CAP` (1), and `RGB_MAX` (255.0).
+`INITIAL_COLS`/`INITIAL_ROWS` (80×24), `WINDOW_WIDTH`/`WINDOW_HEIGHT` (1200×640),
+`TREE_PANE_WIDTH` (250), `WAKE_CHANNEL_CAP` (1), and `RGB_MAX` (255.0).
+`WINDOW_WIDTH` was widened from the editor-only default so that, after the tree
+takes `TREE_PANE_WIDTH` on the left, the editor pane keeps roughly its previous
+width (important for the OCR smoke tests).
 
 ## `geometry.rs`
 
@@ -247,3 +259,96 @@ fn restored_index(reset_to_top: bool, prev: Option<usize>, new_len: usize) -> Op
   formula).
 - `restored_index` — `None` for an empty list; `Some(0)` when resetting to the
   top; else the preserved `prev` (defaulting to `0`) clamped into the new range.
+
+## `tree.rs`
+
+The **pure, GTK-free** hierarchical projection of the picker's flat file list,
+unit-tested headlessly in its own `#[cfg(test)] mod tests` (mirroring
+`geometry.rs` / `cursor.rs`). The file picker's `FileSearch` produces a flat list
+of `wolf_core::FileEntry` (relative `/`-separated `display`, absolute `path`); this
+module turns it into the per-directory children GTK's lazy `TreeListModel`
+create-func needs, plus the reveal helpers.
+
+```rust
+pub enum TreeNode {
+    Dir  { name: String, rel_path: String },
+    File { name: String, rel_path: String, abs_path: std::path::PathBuf },
+}
+pub fn children_of(entries: &[wolf_core::FileEntry], dir: &str) -> Vec<TreeNode>
+pub fn ancestors_to_reveal(rel_path: &str) -> Vec<String>
+pub fn node_rel_path(node: &TreeNode) -> &str
+pub fn rel_path_for(entries: &[wolf_core::FileEntry], abs: &std::path::Path) -> Option<String>
+```
+
+- `TreeNode` — one immediate child of a directory. `rel_path` is the full relative
+  path from the cwd root (a dir `b` under `a` has `name = "b"`, `rel_path = "a/b"`);
+  a `File`'s `rel_path` equals the originating `FileEntry::display` and its
+  `abs_path` is that entry's `path`.
+- `children_of(entries, dir)` (`#[must_use]`) — the IMMEDIATE children of `dir`
+  (`dir == ""` is the cwd root). Each `display` is split on `/`; the component just
+  after `dir` becomes a `File` (when it is the entry's final component) or a `Dir`.
+  Dir nodes are **deduped** by `rel_path`, and only dirs that (transitively)
+  contain a listed file appear (automatic — dirs are derived from file paths, so no
+  phantom dirs). The result is sorted **directories first, then files**, each group
+  **case-insensitively by `name`** with `rel_path` as a deterministic tie-break.
+  O(n) per call (fine for lazy per-directory expansion).
+- `ancestors_to_reveal(rel_path)` (`#[must_use]`) — the ancestor dir rel-paths from
+  the root down to the file's parent: `"a/b/c.md"` → `["a", "a/b"]`; `"c.md"` →
+  `[]`; `""` → `[]`.
+- `node_rel_path(node)` — the `rel_path` of either variant.
+- `rel_path_for(entries, abs)` (`#[must_use]`) — the current-file → tree-display
+  mapping used by `tree_view`'s reveal: returns `entry.display.clone()` for the
+  FIRST entry whose `path == abs` **exactly** (a parent-dir prefix does not match),
+  else `None`.
+
+The separator is always `/` (it is `FileEntry::display`'s separator).
+
+## `tree_view.rs`
+
+The **GTK glue** that turns `tree`'s pure projection into a live file-tree sidebar
+(a `gtk::ListView` driven by a `gtk::TreeListModel`). It mirrors `picker.rs`'s
+patterns: a long-lived `wolf_core::FileSearch` started at build time, an
+`async-channel` + `glib::spawn_future_local` drain that refreshes on each traversal
+batch, `Rc`/`RefCell` interior mutability on the single GTK main thread, and a
+`Weak` upgrade in the drain task to avoid a reference cycle.
+
+**`build(core, area) -> TreeHandle`** assembles the widgets and returns a handle.
+`TreeHandle` exposes `widget()` (the root `gtk::ScrolledWindow`, placed as the
+Paned start child), `on_render_wake()` (called from the app's render drain), and
+`close()` (drops the `FileSearch`, cancelling the traversal — called by
+`wire_close` before shutdown).
+
+- **Model.** Each `TreeNode` is wrapped in a `glib::BoxedAnyObject` (no custom
+  GObject subclass). The root `gio::ListStore` holds `children_of(entries, "")`
+  (the cwd's immediate children, so the top level is "expanded by default"). A
+  `gtk::TreeListModel` (passthrough = false, **autoexpand = false**) lazily
+  materializes each directory's children via a create-func that re-runs
+  `children_of` against the latest shared `entries` (files return `None`). A
+  `gtk::SingleSelection` wraps it with `set_autoselect(false)` (no stray row-0
+  highlight before a reveal), and the `gtk::ListView` uses
+  `set_single_click_activate(true)`.
+- **Factory.** A `gtk::SignalListItemFactory` builds a `gtk::TreeExpander` + a
+  `gtk::Label` per row; bind sets `expander.set_list_row(..)`, the label text to the
+  node name, and adds/removes the `CURRENT_FILE_CSS` (`wolf-current-file`, bold via
+  CSS loaded once into the default display) class iff the row's `File` `abs_path`
+  equals `Snapshot::current_file`.
+- **Streaming refresh.** The long-lived `FileSearch` fires a drop-safe `wake`
+  (bounded(1) `async-channel`) on each batch; the drain task calls `refresh()`,
+  which copies the latest entries, rebuilds the root store from
+  `children_of(entries, "")`, then retries any `pending_reveal`. The initial
+  `refresh()` shows the MRU seed immediately.
+- **Highlight + reveal.** `on_render_wake()` reads `Snapshot::current_file`; if it
+  changed since `last_current`, it records it, stashes it as `pending_reveal`, and
+  `refresh()`es (so fresh binds pick up the highlight) then `reveal`s. `reveal(abs)`
+  maps the path via `rel_path_for`, expands its `ancestors_to_reveal` top-down
+  (re-scanning row positions after each expansion via `find_row`), `selects` the
+  file row, and `list_view.scroll_to(pos, …)` it into view (needs the gtk `v4_12`
+  feature). Because the current file can arrive before the tree has streamed in,
+  an unresolved reveal stays in `pending_reveal` and is retried on each refresh.
+- **Single-click activation.** `connect_activate` → `activate(pos)`: a `File` sends
+  `InputEvent::Open { path }` then `area.grab_focus()` (returns focus to the
+  editor); a `Dir` toggles its row's expansion.
+
+**v1 limitation (documented in the code):** rebuilding the root store on each
+refresh collapses any manual nested expansion; the subsequent reveal re-expands the
+path to the current file, but other manually-expanded directories are not restored.

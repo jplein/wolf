@@ -114,6 +114,7 @@ impl WolfCore {
         let nvim = runtime.block_on(async {
             let proc = nvim::spawn(&nvim_cfg, handler).await?;
             proc.ui_attach(cfg.cols, cfg.rows).await?;
+            proc.setup_current_file_tracking().await?;
             Ok::<NvimProcess, NvimError>(proc)
         })?;
 

@@ -131,6 +131,44 @@ const PICKER_NAV_OCR_PRESENT: &str = "picktwo";
 /// proving navigation moved the selection off the top row before activating.
 const PICKER_NAV_OCR_ABSENT: &str = "pickone";
 
+// ---------------------------------------------------------------------------
+// Tree-sidebar population smoke (the left-hand file tree lists cwd files).
+//
+// This scenario proves the S3 tree sidebar POPULATES from the same FileSearch
+// mechanism as the picker: a distinctively-named markdown file dropped into the
+// app's cwd must appear (by FILENAME) in the left-hand tree, with no picker
+// interaction at all. We assert ONLY that the filename text renders in the
+// window (loose OCR contains), which demonstrates the long-lived FileSearch fed
+// the tree projection (`children_of`) and the ListView drew the row.
+//
+// NOTE to coder: this asserts tree POPULATION only (the filename is visible in
+// the sidebar). Single-click-to-open and the current-file highlight/reveal are
+// NOT verified here — they are covered by S1 (current_file core tests), S2 +
+// `rel_path_for` pure unit tests, and manual/visual checking, because OCR cannot
+// reliably confirm a highlight color and we deliberately avoid pixel-accurate
+// row clicking (too flaky — the architect explicitly avoids it).
+//
+// NOTE to coder: adding the gtk::Paned + tree ListView to the left of the editor
+// MUST NOT break the existing `window_renders_typed_text_under_cage` and
+// `picker_*_under_cage` OCR assertions — the editor must still render its glyphs
+// (OCR_WORD / PICKER_OCR) in the right-hand pane. Verify those three smokes still
+// pass after wiring the Paned (e.g. give the editor pane adequate width).
+
+/// Tree-sidebar smoke markdown file dropped into the launched app's temp cwd.
+/// Its NAME is OCR-friendly and unlikely to be misread; the tree shows this
+/// FILENAME (`treenode.md`) in the sidebar regardless of whether the editor has
+/// it open.
+const TREE_FILE_NAME: &str = "treenode.md";
+
+/// Heading written into [`TREE_FILE_NAME`]. Kept DISTINCT from the filename so a
+/// match on [`TREE_OCR`] is unambiguous: the assertion targets the FILENAME word
+/// `treenode` (which the filename itself contains), not this heading.
+const TREE_HEADING: &str = "# TREEHEADING";
+
+/// Lowercased substring OCR must find to prove the tree rendered the file row:
+/// the distinctive filename word (`treenode.md` contains `treenode`).
+const TREE_OCR: &str = "treenode";
+
 /// External binaries the scenario shells out to. All come from the flake's
 /// smoke toolchain; absence means the devShell was not entered.
 const REQUIRED_TOOLS: [&str; 4] = ["cage", "wtype", "grim", "tesseract"];
@@ -430,6 +468,56 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
+/// The TREE-SIDEBAR scenario, run as a single `sh -c` string INSIDE `cage` (same
+/// structure as [`SCENARIO`]): launch the app, wait for the window to map, then
+/// wait a little longer for the long-lived FileSearch to stream results into the
+/// tree, and screenshot. No keyboard interaction at all — we only assert the
+/// sidebar lists the file by name, which depends purely on tree population from
+/// the app's cwd (set via `Command::current_dir` by the caller).
+const TREE_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
+WAIT_TRIES=25
+WAIT_INTERVAL=0.2
+SETTLE=0.5
+# Extra settle for the streamed FileSearch traversal to populate the tree.
+TREE_SETTLE=1.0
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the Wayland display to be usable
+# (cheap no-op wtype succeeds only once cage has a mapped surface).
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome tree smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw, plus extra time for the tree's
+# FileSearch to stream the cwd listing into the sidebar.
+sleep "$SETTLE"
+sleep "$TREE_SETTLE"
+
+# Capture the live window to the output PNG.
+grim "$OUT_PNG"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
 /// Creates a fresh, unique temp directory to serve as the launched app's working
 /// directory. The app derives `CoreConfig.cwd` from `std::env::current_dir()`, so
 /// the picker traverses (and the MRU cache `.wolf/` lands in) this directory. Not
@@ -698,6 +786,89 @@ fn picker_arrow_navigation_selects_second_match_under_cage() {
         "OCR unexpectedly contained {PICKER_NAV_OCR_ABSENT:?}: it looks like row 0 ({PICKER_NAV_FILE_A}) \
          was opened, i.e. `Down` did NOT move the selection off the top row. PNG kept at {} for \
          inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+}
+
+#[test]
+#[ignore = "headless-compositor smoke test; run explicitly with --ignored (needs flake smoke toolchain)"]
+fn tree_sidebar_shows_files_under_cage() {
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // Create a fresh temp cwd and drop the distinctively-named markdown file into
+    // it. The app reads `std::env::current_dir()` for `CoreConfig.cwd`, so we
+    // launch cage with this directory as its working directory (see `.current_dir`
+    // below); the long-lived FileSearch then populates the tree from this cwd.
+    let cwd = make_temp_cwd();
+    let target = cwd.join(TREE_FILE_NAME);
+    std::fs::write(&target, format!("{TREE_HEADING}\n"))
+        .unwrap_or_else(|e| panic!("failed to write tree smoke file {}: {e}", target.display()));
+
+    // Put the screenshot under XDG_RUNTIME_DIR (guaranteed writable) and start
+    // from a clean slate so a stale PNG cannot pass.
+    let out_png = runtime_dir.join("wolf_gnome_tree_smoke.png");
+    if out_png.exists() {
+        std::fs::remove_file(&out_png).unwrap_or_else(|e| {
+            panic!(
+                "failed to remove stale screenshot {}: {e}",
+                out_png.display()
+            )
+        });
+    }
+
+    // Run the whole tree scenario inside cage, with the temp dir as the working
+    // directory so the app picks it up as its cwd and the tree populates from it.
+    let status = Command::new("cage")
+        .arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg(TREE_SCENARIO)
+        .current_dir(&cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        // Large font so the rendered glyphs are legible to tesseract.
+        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
+        .status()
+        .expect("failed to spawn `cage` for the headless tree smoke scenario");
+    assert!(
+        status.success(),
+        "cage tree scenario exited unsuccessfully ({status}); the app may have failed to launch, \
+         the window may not have mapped, or grim failed. Screenshot expected at {}.",
+        out_png.display()
+    );
+
+    // The screenshot must exist and be non-empty.
+    let png_meta = std::fs::metadata(&out_png).unwrap_or_else(|e| {
+        panic!(
+            "expected screenshot {} to exist after the cage tree scenario, but: {e}",
+            out_png.display()
+        )
+    });
+    assert!(
+        png_meta.len() > 0,
+        "screenshot {} exists but is empty (grim produced no image data)",
+        out_png.display()
+    );
+
+    // OCR the screenshot and assert (loosely) that the file's NAME rendered in the
+    // sidebar — proving the long-lived FileSearch populated the tree projection
+    // and the ListView drew the row. This verifies tree POPULATION only (same
+    // mechanism as the picker); highlight/reveal and single-click-open are covered
+    // by S1/S2 + `rel_path_for` pure tests and manual checking (see the NOTE to
+    // coder near the TREE_* consts).
+    let ocr_text = ocr_to_lowercase(&out_png);
+    assert!(
+        ocr_text.contains(TREE_OCR),
+        "OCR of the rendered window did not contain {TREE_OCR:?} (loose match). This usually means \
+         the tree sidebar did not populate from the cwd FileSearch (or the Paned layout hid/clipped \
+         the tree pane). PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
         out_png.display()
     );
 }

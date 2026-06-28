@@ -57,7 +57,7 @@ fn type_text_appears_in_grid() {
     core.send_input(key(Key::Esc));
 
     // Wait for the resulting redraw to land in the snapshot.
-    waiter.wait_for_flush(FLUSH_TIMEOUT);
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
     let snap = core.read_snapshot();
 
@@ -230,7 +230,7 @@ fn resize_updates_grid() {
 
     waiter.drain();
     core.resize(RESIZE_COLS, RESIZE_ROWS);
-    waiter.wait_for_flush(FLUSH_TIMEOUT);
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
     let snap = core.read_snapshot();
     assert_eq!(
@@ -272,7 +272,7 @@ fn scroll_shifts_grid_content() {
     // Scroll down half a screen; <C-d> moves the view down, shifting grid content.
     waiter.drain();
     core.send_input(common::ctrl(Key::Char('d')));
-    waiter.wait_for_flush(FLUSH_TIMEOUT);
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
     let after_row0 = core.read_snapshot().grid.row_text(0);
     let after_num = trailing_line_number(&after_row0)
@@ -311,7 +311,7 @@ fn scroll_emits_viewport() {
     // Scroll down half a screen. Per the InputEvent API, <C-d> moves down.
     waiter.drain();
     core.send_input(common::ctrl(Key::Char('d')));
-    waiter.wait_for_flush(FLUSH_TIMEOUT);
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
     let new_topline = core.read_snapshot().viewport.topline;
     assert!(
@@ -346,7 +346,7 @@ fn scroll_up_shifts_grid_content_down() {
     // scroll back into. `G` moves to the last line.
     waiter.drain();
     core.send_input(ch('G'));
-    waiter.wait_for_flush(FLUSH_TIMEOUT);
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
     let before_row0 = core.read_snapshot().grid.row_text(0);
     let before_num = trailing_line_number(&before_row0).expect(
@@ -366,7 +366,7 @@ fn scroll_up_shifts_grid_content_down() {
     // buffer line, which holds regardless of the exact scroll amount/chunking.
     waiter.drain();
     core.send_input(common::ctrl(Key::Char('u')));
-    waiter.wait_for_flush(FLUSH_TIMEOUT);
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
     let after_row0 = core.read_snapshot().grid.row_text(0);
     let after_num = trailing_line_number(&after_row0)

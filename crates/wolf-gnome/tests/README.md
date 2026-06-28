@@ -2,10 +2,10 @@
 
 Tests for the seams and the windowed application. They split into **headless**
 checks (no display, no nvim), one **real-Neovim** end-to-end round-trip (no mocks,
-per project policy), and three **opt-in headless-compositor** cage smoke tests
-that launch the real window (one window-render smoke + two file-picker smokes).
-Everything runs through `nix develop --command` so the GTK toolchain, the pinned
-font, and `WOLF_NVIM_BIN` are present:
+per project policy), and four **opt-in headless-compositor** cage smoke tests
+that launch the real window (one window-render smoke, two file-picker smokes, and
+one file-tree-sidebar smoke). Everything runs through `nix develop --command` so
+the GTK toolchain, the pinned font, and `WOLF_NVIM_BIN` are present:
 
 ```sh
 nix develop --command cargo test -p wolf-gnome
@@ -63,6 +63,26 @@ with the same `key_from_char` helper used by `gdk_key.rs`:
 - `restored_index_table` — empty list → `None` regardless of reset/prev; reset →
   `Some(0)`; preserve in range; preserve clamped when `prev` exceeds the new len;
   preserve with no prev defaults to `0`.
+
+## `tree.rs` unit tests (in `src/tree.rs`, headless)
+
+The pure hierarchical-projection seams are unit-tested **inside their own module**
+(a `#[cfg(test)] mod tests` in [`src/tree.rs`](../src/tree.rs)), needing no GTK,
+display, or nvim — `FileEntry`s are synthesized from `display` strings (with
+`path = /root/{display}` by convention):
+
+- `children_of` cases — the root lists top-level **dirs first then files**, each
+  group case-insensitively by name; nested dirs return only immediate children; a
+  deep file surfaces each intermediate dir at the right level; dirs are deduped
+  across many files; a top-level file does not surface a same-named dir (only dirs
+  with files appear); and case does not reorder dirs-before-files.
+- `ancestors_to_reveal_cases` — `"a/b/c.md"` → `["a", "a/b"]`, `"c.md"` → `[]`,
+  `"a/c.md"` → `["a"]`, `"x/y/z/f.md"` → `["x", "x/y", "x/y/z"]`.
+- `node_rel_path_both_variants` — the `rel_path` of a `Dir` and a `File`.
+- `rel_path_for` cases — returns the matching entry's `display`; `None` for an
+  absent path; `None` for empty entries; and a parent-dir **prefix** does NOT match
+  (the path comparison is exact).
+- `empty_entries_yield_empty` — empty input yields empty children / ancestors.
 
 ## `gdk_key.rs` — input translation (headless, table-driven)
 
@@ -125,11 +145,12 @@ shift-glyph contract end-to-end), leaves insert mode with `Escape`, waits for an
 drains flushes, and asserts row 0 contains the word. Requires `WOLF_NVIM_BIN`
 (`common::require_nvim_bin` fails loud if unset).
 
-## `smoke_headless.rs` — windowed app + picker (opt-in, real compositor)
+## `smoke_headless.rs` — windowed app + picker + tree (opt-in, real compositor)
 
-Three `#[test] #[ignore]`d cage smokes that prove the whole stack actually draws a
-window and drives the file picker. They are opt-in because they need a compositor
-and an OCR toolchain a normal `cargo test` will not have. Run them explicitly:
+Four `#[test] #[ignore]`d cage smokes that prove the whole stack actually draws a
+window, drives the file picker, and populates the file-tree sidebar. They are
+opt-in because they need a compositor and an OCR toolchain a normal `cargo test`
+will not have. Run them explicitly:
 
 ```sh
 nix develop --command cargo test -p wolf-gnome -- --ignored
@@ -138,11 +159,11 @@ nix develop --command cargo test -p wolf-gnome -- --ignored
 **Serialization (`CAGE_LOCK`).** Each test launches its own `cage` compositor, and
 two compositors started concurrently contend for the same Wayland socket under
 `XDG_RUNTIME_DIR` (lockfile error), which would fail both under the default
-parallel harness. So all three tests acquire a shared `static CAGE_LOCK:
+parallel harness. So all four tests acquire a shared `static CAGE_LOCK:
 Mutex<()>` for their whole body, forcing serial execution; poisoning is recovered
 from (`into_inner`) so one panicking test does not cascade into the others.
 
-**Mechanism (common to all three).** Each locates the built binary via
+**Mechanism (common to all four).** Each locates the built binary via
 `CARGO_BIN_EXE_wolf-gnome` and runs its interactive scenario as one `sh -c` string
 **inside `cage`** (the headless wlroots compositor) so that `wtype` and `grim`
 inherit cage's `WAYLAND_DISPLAY` (cage exports it only to its child process tree).
@@ -171,6 +192,17 @@ removed first so a previous run cannot make a test pass.
   the OCR contains `picktwo` (row 1's heading) and does NOT contain `pickone`
   (row 0's) — proving `Down` moved the selection off the top row and `Enter`
   opened the selected row.
+- **`tree_sidebar_shows_files_under_cage`** — drops a distinctively-named
+  `treenode.md` into a fresh temp cwd launched as the app's working directory, then
+  (with **no keyboard interaction**) waits an extra settle for the long-lived
+  `FileSearch` to stream the cwd listing into the sidebar, screenshots, and asserts
+  the OCR contains `treenode` — proving the tree **populated** from the same
+  FileSearch mechanism as the picker (`children_of` projection + the `ListView`
+  drew the row). It verifies population only; single-click-open and the
+  highlight/reveal of the current file are covered by the S1 `current_file` core
+  tests and the `tree.rs` / `rel_path_for` pure unit tests (OCR cannot reliably
+  confirm a highlight color, and pixel-accurate row clicking is deliberately
+  avoided as too flaky).
 
 Required toolchain + env (all from the flake devShell smoke toolchain): `cage`,
 `wtype`, `grim`, `tesseract` on `PATH`; `WOLF_NVIM_BIN` set; and a set, writable

@@ -42,7 +42,9 @@ Re-exported from the crate root (`wolf_core::…`):
 
 - `WolfCore::start(cfg: CoreConfig, wake: WakeFn) -> Result<WolfCore, CoreError>`
   — builds a multi-thread tokio runtime, spawns the captive Neovim, wires `wake`
-  into the redraw handler, and attaches as an `ext_linegrid` UI.
+  into the redraw handler, attaches as an `ext_linegrid` UI, and (after attach)
+  installs current-file tracking so `Snapshot.current_file` follows the active
+  buffer.
 - `read_snapshot(&self) -> SnapshotReadGuard` — owned read guard over the current
   render-state `Snapshot` (the front-end holds it for a paint, then drops it).
   `Deref`s to `Snapshot`; its lifetime is independent of `&self`.
@@ -100,10 +102,19 @@ char and leave `shift = false`; `S-` is emitted only for named keys.
 
 ### Render state (from [`render`](src/render.rs))
 
-`Snapshot` (grid + highlights + cursor + mode_infos + viewport + seq) plus
-`Grid`, `Cell`, `HighlightTable`, `HlAttr`, `ResolvedStyle`, `DefaultColors`,
-`Rgb`, `Cursor`, `CursorShape`, `ModeInfo`, `Viewport`, and the lock-guarded
-`SharedSnapshot`. See [`src/README.md`](src/README.md) for per-type detail.
+`Snapshot` (grid + highlights + cursor + mode_infos + viewport + current_file +
+seq) plus `Grid`, `Cell`, `HighlightTable`, `HlAttr`, `ResolvedStyle`,
+`DefaultColors`, `Rgb`, `Cursor`, `CursorShape`, `ModeInfo`, `Viewport`, and the
+lock-guarded `SharedSnapshot`. See [`src/README.md`](src/README.md) for per-type
+detail.
+
+`Snapshot.current_file: Option<PathBuf>` is the absolute, canonicalized path of
+the buffer currently being edited in nvim (`None` for an unnamed buffer). It is
+updated out-of-band from the redraw stream by the `wolf_current_file`
+notification (a `BufEnter`/`BufWinEnter`/`BufFilePost` autocmd installed after
+attach — see "How core embeds Neovim") and the wake fires after each change (it
+does NOT bump `seq`). The front-end reads it to highlight and reveal the current
+file in its file tree (the GNOME sidebar uses exactly this).
 
 ## How core embeds Neovim
 
@@ -118,6 +129,13 @@ char and leave `shift = false`; `S-` is emitted only for named keys.
 - **Hermetic launch.** `nvim --embed --clean -u runtime/nvim/init.lua -i NONE -n`
   with `NVIM_APPNAME=wolf` and isolated `XDG_{CONFIG,DATA,STATE,CACHE}_HOME` under
   a private temp dir, so the captive editor cannot read the user's config/state.
+- **Current-file tracking.** Immediately after `ui_attach`, core calls
+  `setup_current_file_tracking`: it reads its own RPC channel id from
+  `nvim_get_api_info` and invokes `_G.wolf_setup_current_file_tracking(chan)` (in
+  `runtime/nvim/init.lua`) over `nvim_exec_lua`, which registers a
+  `BufEnter`/`BufWinEnter`/`BufFilePost` autocmd that `rpcnotify`s
+  `wolf_current_file` with `expand('%:p')` (plus one initial emit). The handler
+  folds each notification into `Snapshot.current_file` and wakes the front-end.
 
 ## The file-search session
 

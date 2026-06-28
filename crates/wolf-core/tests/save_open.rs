@@ -85,7 +85,7 @@ fn save_writes_file() {
     core.send_input(ch('i'));
     common::type_str(&core, SAVE_TEXT);
     core.send_input(key(Key::Esc));
-    waiter.wait_for_flush(FLUSH_TIMEOUT);
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
     core.send_input(InputEvent::Save);
 
@@ -106,7 +106,7 @@ fn save_as_new_path() {
     core.send_input(ch('i'));
     common::type_str(&core, SAVE_TEXT);
     core.send_input(key(Key::Esc));
-    waiter.wait_for_flush(FLUSH_TIMEOUT);
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
     // SaveAs to a brand-new path that does not yet exist on disk.
     let (_dir, path) = common::temp_md_path();

@@ -26,6 +26,8 @@ pub mod geometry;
 pub mod input;
 pub mod picker;
 pub mod render;
+pub mod tree;
+pub mod tree_view;
 
 pub use geometry::grid_size_for;
 pub use input::gdk_key;

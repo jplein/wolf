@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{mpsc, Arc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use std::io::Write as _;
 
@@ -107,27 +107,89 @@ pub fn config_in(cwd: PathBuf, cols: u16, rows: u16) -> CoreConfig {
     }
 }
 
-/// A wait handle backed by an mpsc channel. The wake callback sends `()` on each
-/// flush; tests call `wait_for_flush` to block until the next one.
+/// A wait handle backed by an mpsc channel. The wake callback sends `()` on
+/// EVERY wake — both real redraw flushes and out-of-band wakes such as the
+/// `wolf_current_file` notification. To distinguish a genuine redraw flush from
+/// an out-of-band wake, `wait_for_flush` keys on the snapshot's `seq` (the redraw
+/// frame counter, bumped only on a real flush) ADVANCING, not on the raw wake
+/// count. A `current_file` change wakes but does NOT bump `seq`, so it is ignored
+/// here while still letting `current_file.rs` observe it by polling directly.
 pub struct FlushWaiter {
     rx: Receiver<()>,
 }
 
 impl FlushWaiter {
-    /// Blocks until the next flush/wake or panics after `timeout`.
-    pub fn wait_for_flush(&self, timeout: Duration) {
-        match self.rx.recv_timeout(timeout) {
-            Ok(()) => {}
-            Err(RecvTimeoutError::Timeout) => panic!(
-                "timed out after {timeout:?} waiting for a redraw flush/wake from nvim"
-            ),
-            Err(RecvTimeoutError::Disconnected) => {
-                panic!("wake channel disconnected before a flush arrived (nvim/core gone?)")
+    /// Blocks until a genuine redraw flush lands, i.e. until `core`'s snapshot
+    /// `seq` advances beyond its value at the moment of this call. Out-of-band
+    /// wakes (e.g. `wolf_current_file`, which does not bump `seq`) are consumed
+    /// and ignored so they cannot be mistaken for a flush. Panics after `timeout`.
+    pub fn wait_for_flush(&self, core: &WolfCore, timeout: Duration) {
+        let baseline = core.read_snapshot().seq;
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match self.rx.recv_timeout(remaining) {
+                Ok(()) => {
+                    // A wake arrived; it is only a real flush if seq advanced.
+                    if core.read_snapshot().seq > baseline {
+                        return;
+                    }
+                    // Out-of-band wake (e.g. current_file): keep waiting.
+                }
+                Err(RecvTimeoutError::Timeout) => panic!(
+                    "timed out after {timeout:?} waiting for a redraw flush from nvim \
+                     (snapshot seq never advanced past {baseline})"
+                ),
+                Err(RecvTimeoutError::Disconnected) => {
+                    panic!("wake channel disconnected before a flush arrived (nvim/core gone?)")
+                }
             }
         }
     }
 
-    /// Drains any already-queued flush signals without blocking. Useful to
+    /// Blocks until the FIRST redraw flush has landed, i.e. until `core`'s
+    /// snapshot `seq` reaches at least 1.
+    ///
+    /// Unlike [`wait_for_flush`](Self::wait_for_flush), this keys on an ABSOLUTE
+    /// threshold (`seq >= 1`) rather than on `seq` advancing from a captured
+    /// baseline. That is required for the startup/attach wait: the attach redraw
+    /// flush (`seq` 0 -> 1) lands DURING `WolfCore::start` (it `block_on`s
+    /// `ui_attach` before returning), so by the time a test calls this the snapshot
+    /// is already at `seq == 1`. An advance-based wait would baseline at 1 and then
+    /// block forever for `seq > 1`. This method therefore RETURNS IMMEDIATELY when
+    /// `seq >= 1` already (the common case), and only otherwise blocks on the wake
+    /// channel. Out-of-band wakes (e.g. `wolf_current_file`, which does not bump
+    /// `seq`) are consumed and ignored. Panics after `timeout`.
+    pub fn wait_for_initial_flush(&self, core: &WolfCore, timeout: Duration) {
+        const INITIAL_FLUSH_SEQ: u64 = 1;
+        // Common case: the attach flush already landed during WolfCore::start.
+        if core.read_snapshot().seq >= INITIAL_FLUSH_SEQ {
+            return;
+        }
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match self.rx.recv_timeout(remaining) {
+                Ok(()) => {
+                    // A wake arrived; the attach flush only counts once seq >= 1.
+                    if core.read_snapshot().seq >= INITIAL_FLUSH_SEQ {
+                        return;
+                    }
+                    // Out-of-band wake (e.g. current_file): keep waiting.
+                }
+                Err(RecvTimeoutError::Timeout) => panic!(
+                    "timed out after {timeout:?} waiting for the initial redraw flush \
+                     from nvim (snapshot seq never reached {INITIAL_FLUSH_SEQ})"
+                ),
+                Err(RecvTimeoutError::Disconnected) => panic!(
+                    "wake channel disconnected before the initial flush arrived \
+                     (nvim/core gone?)"
+                ),
+            }
+        }
+    }
+
+    /// Drains any already-queued wake signals without blocking. Useful to
     /// discard wakes that occurred before a test starts observing.
     pub fn drain(&self) {
         while self.rx.try_recv().is_ok() {}
@@ -193,13 +255,16 @@ pub fn start_core_with_temp_md_sized(
         .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
 
     // Wait for the initial attach/flush before opening so we don't race startup.
-    waiter.wait_for_flush(FLUSH_TIMEOUT);
+    // The attach flush (seq 0 -> 1) lands during WolfCore::start, so this keys on
+    // the absolute threshold (seq >= 1) and returns immediately in the common case;
+    // an advance-based wait would baseline at 1 and block forever.
+    waiter.wait_for_initial_flush(&core, FLUSH_TIMEOUT);
 
     // Open the file; nvim will emit a redraw + flush once the buffer is shown.
     core.send_input(InputEvent::Open {
         path: file.path().to_path_buf(),
     });
-    waiter.wait_for_flush(FLUSH_TIMEOUT);
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
     (core, waiter, file)
 }
@@ -210,7 +275,8 @@ pub fn start_core_sized(cols: u16, rows: u16) -> (WolfCore, FlushWaiter) {
     let (wake, waiter) = wake_channel();
     let core = WolfCore::start(config(cols, rows), wake)
         .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
-    waiter.wait_for_flush(FLUSH_TIMEOUT);
+    // Attach flush (seq 0 -> 1) lands during WolfCore::start; key on seq >= 1.
+    waiter.wait_for_initial_flush(&core, FLUSH_TIMEOUT);
     (core, waiter)
 }
 

@@ -31,7 +31,7 @@ gdk = { version = "0.11", package = "gdk4" }
 # to the SAME coherent gtk-rs release set as gdk4 0.11 (libadwaita 0.9 depends on
 # gtk4 0.11 / gdk4 0.11 / cairo-pango 0.22). NO version feature on adw (we target
 # the system GTK already present, not a newer pinned ABI).
-gtk = { version = "0.11", package = "gtk4" }
+gtk = { version = "0.11", package = "gtk4", features = ["v4_12"] }
 adw = { version = "0.9", package = "libadwaita" }
 # cairo-rs is renamed to `cairo` and needs the `png` feature for ImageSurface PNG
 # I/O (used by the #[ignore]d golden-regeneration dev-aid test).

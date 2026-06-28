@@ -32,10 +32,25 @@ Shared helpers used across the test binaries:
   a `fresh_cwd()` as the `cwd`.
 - `config_in(cwd, cols, rows)` — same, but with an explicit `cwd` (used by the MRU
   and file-search tests that assert against a known directory layout).
-- `wake_channel()` → `(WakeFn, FlushWaiter)`; `FlushWaiter::wait_for_flush(timeout)`
-  blocks until the next flush (panics on timeout/disconnect), `drain()` discards
-  queued wakes. The `WakeFn` is an `mpsc::Sender<()>` closure (`Send + Sync`,
-  since the wake may fire on a tokio worker thread).
+- `wake_channel()` → `(WakeFn, FlushWaiter)`. The `WakeFn` is an
+  `mpsc::Sender<()>` closure (`Send + Sync`, since the wake may fire on a tokio
+  worker thread) that signals on **every** wake — both real redraw flushes and
+  out-of-band wakes such as the `wolf_current_file` notification. The `FlushWaiter`
+  is therefore **seq-based** (it keys on the snapshot's `seq`, the redraw-frame
+  counter, not on the raw wake count, so a `current_file` wake — which does NOT
+  bump `seq` — is consumed and ignored rather than mistaken for a flush):
+  - `wait_for_flush(&core, timeout)` blocks until `core`'s snapshot `seq` advances
+    beyond its value at the call (panics on timeout/disconnect). Used for
+    post-input waits, where the input pump's coalesce delay guarantees the flush
+    is still in the future when the baseline is captured.
+  - `wait_for_initial_flush(&core, timeout)` blocks until `seq >= 1` (the attach
+    flush). It keys on that ABSOLUTE threshold rather than an advance because the
+    attach redraw (`seq` 0 → 1) lands DURING `WolfCore::start`, so it usually
+    returns immediately; an advance-based wait would baseline at 1 and block
+    forever. Used for the startup/attach wait in `start_core_sized` and the first
+    wait in `start_core_with_temp_md_sized`. Robust to out-of-band current_file
+    wakes.
+  - `drain()` discards queued wakes without blocking.
 - `temp_md(content)` / `temp_md_path()` — a `.md` temp file with content, or a
   not-yet-created path for `SaveAs`.
 - `start_core_with_temp_md[_sized](content[, cols, rows])` — starts a core, opens
@@ -45,9 +60,9 @@ Shared helpers used across the test binaries:
 
 ## Coverage
 
-Forty tests total: thirty integration tests (seven `tests/*.rs` binaries, all
-driving a real pinned Neovim and/or real SQLite/filesystem) plus ten pure
-in-module unit tests for the ranking function.
+Forty-four tests total: thirty-four integration tests (eight `tests/*.rs`
+binaries, all driving a real pinned Neovim and/or real SQLite/filesystem) plus
+ten pure in-module unit tests for the ranking function.
 
 ### File picker (real SQLite / filesystem / git / Neovim — no mocks)
 
@@ -67,6 +82,21 @@ in-module unit tests for the ranking function.
   (cwd and nested/ancestor) and excludes `.git/` while including untracked files;
   the `.wolf/` cache is excluded; the MRU seed is present synchronously and not
   duplicated when rediscovered; `cancel` stops streaming.
+
+### Current-file tracking (real Neovim)
+
+`current_file.rs` (four tests) verifies `Snapshot.current_file` against a real,
+hermetic nvim. Because the `wolf_current_file` notification is SEPARATE from
+redraw flushes, these tests **poll** `read_snapshot().current_file` (draining
+wakes) with a generous timeout, canonicalizing both sides (`/tmp` is often
+symlinked):
+
+- opening a file via `InputEvent::Open` sets `current_file` to its canonical path;
+- opening a file by **typing `:e <path><CR>`** as keystrokes (not via `Open`) also
+  sets it — exercising the autocmd reveal path for nvim-driven buffer changes;
+- a core started with no file open (unnamed buffer) reports `None` (the initial
+  emit's empty `expand('%:p')` maps to `None`);
+- `current_file` follows a buffer switch (open A, then open B → it moves to B).
 
 ### Ranking (pure, in-module)
 

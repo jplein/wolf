@@ -7,6 +7,7 @@
 //! **drops the lock**, and only then fires the front-end wake callback. The lock
 //! is never held across an `.await`.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -25,6 +26,12 @@ use crate::render::{
 /// May run on a tokio worker thread, hence `Send + Sync`; the front-end is
 /// responsible for marshalling onto its UI thread.
 pub type WakeFn = Arc<dyn Fn() + Send + Sync>;
+
+/// Name of the out-of-band notification carrying the active buffer's absolute
+/// path (`expand('%:p')`), emitted by the `WolfCurrentFile` autocmd in
+/// `runtime/nvim/init.lua`. Routed separately from `redraw` in
+/// [`RedrawHandler::handle_notify`].
+const CURRENT_FILE_EVENT: &str = "wolf_current_file";
 
 /// `nvim-rs` [`Handler`] that applies redraw batches to a [`SharedSnapshot`].
 #[derive(Clone)]
@@ -51,12 +58,21 @@ impl Handler for RedrawHandler {
         args: Vec<Value>,
         _neovim: Neovim<Self::Writer>,
     ) {
-        if name != "redraw" {
-            return;
-        }
-        let fired = self.apply_redraw(args).await;
-        if fired {
-            (self.wake)();
+        match name.as_str() {
+            "redraw" => {
+                let fired = self.apply_redraw(args).await;
+                if fired {
+                    (self.wake)();
+                }
+            }
+            CURRENT_FILE_EVENT => {
+                // `apply_current_file` acquires and DROPS the write lock before
+                // returning, so the wake fires strictly after the lock is
+                // released — same wake-after-unlock invariant as the redraw path.
+                self.apply_current_file(args).await;
+                (self.wake)();
+            }
+            _ => {}
         }
     }
 }
@@ -94,6 +110,35 @@ impl RedrawHandler {
         }
         // Lock drops here as `snap` goes out of scope at function return.
         flushed
+    }
+
+    /// Applies a `wolf_current_file` notification: sets the snapshot's
+    /// `current_file` to the canonicalized active-buffer path, or `None` for an
+    /// unnamed buffer (empty/absent argument).
+    ///
+    /// The first argument is `expand('%:p')`. An empty string (unnamed buffer)
+    /// maps to `None`; otherwise the path is canonicalized to match the
+    /// canonical paths the file picker emits, falling back to the raw path if
+    /// canonicalization fails (e.g. the file no longer exists).
+    ///
+    /// The write lock is acquired via [`SharedSnapshot::write_async`] and is NOT
+    /// held across any `.await`; it is dropped before returning so the caller's
+    /// wake fires after the lock is released.
+    async fn apply_current_file(&self, args: Vec<Value>) {
+        let target: Option<PathBuf> = match args.first().and_then(Value::as_str) {
+            Some(p) if !p.is_empty() => {
+                Some(std::fs::canonicalize(p).unwrap_or_else(|_| PathBuf::from(p)))
+            }
+            _ => None,
+        };
+
+        let mut snap = self.snapshot.write_async().await;
+        snap.current_file = target;
+        // A current_file change is NOT a redraw frame, so `seq` (the redraw-frame
+        // counter, advanced only on `flush`) is intentionally left unchanged. The
+        // caller still fires the wake after this lock drops so the front-end can
+        // re-read the snapshot.
+        // Lock drops here as `snap` goes out of scope at function return.
     }
 }
 

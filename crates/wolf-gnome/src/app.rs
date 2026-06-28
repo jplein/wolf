@@ -35,6 +35,7 @@ use wolf_core::{CoreConfig, CursorShape, InputEvent, Snapshot, WakeFn, WolfCore}
 
 use crate::picker::{self, PickerHandle};
 use crate::render::draw_glyph;
+use crate::tree_view::{self, TreeHandle};
 use crate::{cursor, grid_size_for, paint, CellMetrics};
 
 /// The GApplication id. Adwaita uses it for resource paths, the default window
@@ -58,10 +59,16 @@ const INITIAL_COLS: u16 = 80;
 /// Initial grid rows (see [`INITIAL_COLS`]).
 const INITIAL_ROWS: u16 = 24;
 
-/// Default window size in pixels.
-const WINDOW_WIDTH: i32 = 960;
+/// Default window size in pixels. Widened from the editor-only default so that,
+/// after the tree sidebar takes [`TREE_PANE_WIDTH`] on the left, the editor pane
+/// keeps roughly its previous width (important for the OCR smoke tests).
+const WINDOW_WIDTH: i32 = 1200;
 /// Default window height in pixels (see [`WINDOW_WIDTH`]).
 const WINDOW_HEIGHT: i32 = 640;
+
+/// Default width (px) of the file-tree sidebar pane (the `gtk::Paned` divider
+/// position).
+const TREE_PANE_WIDTH: i32 = 250;
 
 /// Wake channel capacity. One slot is enough: it coalesces a burst of flushes into
 /// a single queued redraw (a dropped "full" send just means a redraw is already
@@ -155,6 +162,13 @@ fn build_ui(app: &adw::Application) {
 
     let picker = picker::build(&overlay, &area, &core);
 
+    // The file-tree sidebar on the left; the editor (overlay) on the right.
+    let tree = tree_view::build(&core, &area);
+    let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
+    paned.set_start_child(Some(&tree.widget()));
+    paned.set_end_child(Some(&overlay));
+    paned.set_position(TREE_PANE_WIDTH);
+
     // Header bar with an "Open" button that opens the picker.
     let header = adw::HeaderBar::new();
     let open_button = gtk::Button::builder()
@@ -171,7 +185,7 @@ fn build_ui(app: &adw::Application) {
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.append(&header);
-    content.append(&overlay);
+    content.append(&paned);
 
     let window = adw::ApplicationWindow::builder()
         .application(app)
@@ -181,12 +195,15 @@ fn build_ui(app: &adw::Application) {
         .content(&content)
         .build();
 
-    // Drain the wake channel on the main thread, redrawing on each frame signal.
+    // Drain the wake channel on the main thread, redrawing on each frame signal and
+    // letting the tree react to a current-file change carried by the same wake.
     {
         let area = area.clone();
+        let tree = tree.clone();
         glib::spawn_future_local(async move {
             while wake_rx.recv().await.is_ok() {
                 area.queue_draw();
+                tree.on_render_wake();
             }
         });
     }
@@ -196,7 +213,7 @@ fn build_ui(app: &adw::Application) {
     wire_draw(&area, &metrics, &core);
     wire_keys(&window, &core, &picker);
     wire_resize(&area, &metrics, &core);
-    wire_close(&window, &core, &picker);
+    wire_close(&window, &core, &picker, &tree);
 
     window.present();
     // Focus the drawing area so key events have a focused target to bubble from.
@@ -311,13 +328,16 @@ fn wire_close(
     window: &adw::ApplicationWindow,
     core: &Rc<RefCell<Option<WolfCore>>>,
     picker: &PickerHandle,
+    tree: &TreeHandle,
 ) {
     let core = core.clone();
     let picker = picker.clone();
+    let tree = tree.clone();
     window.connect_close_request(move |_window| {
-        // Close the picker first so its FileSearch is dropped (cancelling any
-        // in-flight traversal) before the core shuts down.
+        // Close the picker and tree first so their FileSearches are dropped
+        // (cancelling any in-flight traversal) before the core shuts down.
         picker.close();
+        tree.close();
         // Take in its own statement so the RefCell borrow is released before
         // shutdown() (which consumes the core and blocks on teardown).
         let taken = core.borrow_mut().take();

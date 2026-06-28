@@ -19,7 +19,7 @@ fn cursor_moves() {
     waiter.drain();
     core.send_input(ch('j'));
     core.send_input(ch('l'));
-    waiter.wait_for_flush(FLUSH_TIMEOUT);
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
     let moved = core.read_snapshot().cursor;
     assert!(
@@ -38,7 +38,7 @@ fn cursor_moves() {
     // Enter insert mode; the selected ModeInfo should reflect insert mode.
     waiter.drain();
     core.send_input(ch('i'));
-    waiter.wait_for_flush(FLUSH_TIMEOUT);
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
     let snap = core.read_snapshot();
     let mode = snap

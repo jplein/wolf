@@ -14,6 +14,7 @@
 //! dropped (on `flush`). Readers take the *read* lock for the duration of a paint.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use parking_lot::{
@@ -384,6 +385,11 @@ pub struct Snapshot {
     pub mode_infos: Vec<ModeInfo>,
     /// Viewport info for the scrollbar.
     pub viewport: Viewport,
+    /// Absolute, canonicalized path of the buffer currently being edited in
+    /// nvim, or `None` for an unnamed buffer. Updated out-of-band from the
+    /// redraw stream via the `wolf_current_file` notification (see
+    /// [`crate::redraw`]); defaults to `None`.
+    pub current_file: Option<PathBuf>,
     /// Monotonic frame sequence number, bumped on each `flush`.
     pub seq: u64,
 }

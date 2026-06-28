@@ -109,7 +109,10 @@ fn start_core_in(cwd: &Path) -> WolfCore {
         wake,
     )
     .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
-    waiter.wait_for_flush(common::FLUSH_TIMEOUT);
+    // This is the attach wait directly after start with no intervening input.
+    // The attach flush (seq 0 -> 1) already landed during WolfCore::start, so use
+    // the absolute-threshold initial-flush wait (an advance-based wait would hang).
+    waiter.wait_for_initial_flush(&core, common::FLUSH_TIMEOUT);
     core
 }
 

@@ -51,8 +51,13 @@ Key types:
   cell_percentage, attr_id }`, `Cursor { row, col, mode_idx }`.
 - `Viewport { topline, botline, curline, linecount }` (all `u64`, as nvim
   reports; `topline` is 1-based).
-- `Snapshot { grid, highlights, cursor, mode_infos, viewport, seq }` — `seq` is a
-  monotonic frame counter bumped on each `flush`. `Snapshot::new(cols, rows)`.
+- `Snapshot { grid, highlights, cursor, mode_infos, viewport, current_file, seq }`
+  — `current_file: Option<PathBuf>` is the absolute, canonicalized path of the
+  buffer currently being edited in nvim (or `None` for an unnamed buffer); it is
+  updated out-of-band from the redraw stream via the `wolf_current_file`
+  notification (see `redraw.rs`) and defaults to `None`. `seq` is a monotonic
+  frame counter bumped on each `flush` (a `current_file` change does NOT bump it).
+  `Snapshot::new(cols, rows)`.
 - `SharedSnapshot` — `Arc<RwLock<Snapshot>>` wrapper: `new`, `read()`,
   `read_arc()` (owned guard), `write()`, `write_async()` (cooperative, non-pinning
   acquire from async code), `clone_handle()`. `OwnedSnapshotReadGuard` is the
@@ -98,7 +103,9 @@ The `redraw` handler: folds Neovim's redraw stream into the shared snapshot.
   drops.
 - `RedrawHandler { snapshot, wake }` — `RedrawHandler::new(SharedSnapshot,
   WakeFn)`. Implements `nvim_rs::Handler` with `type Writer = Compat<ChildStdin>`;
-  `handle_notify` ignores everything but `name == "redraw"`.
+  `handle_notify` routes two notifications and ignores the rest: `"redraw"` →
+  `apply_redraw`, and the `CURRENT_FILE_EVENT` const (`"wolf_current_file"`) →
+  `apply_current_file`.
 
 `apply_redraw` takes the write lock once via `write_async`, walks the batch, and
 returns whether a `flush` was seen so the caller can wake after the lock drops.
@@ -108,6 +115,19 @@ Handled events: `grid_resize`, `grid_clear`, `grid_line` (walks cell tuples
 no synthesized placeholder), `grid_scroll`, `hl_attr_define`,
 `default_colors_set`, `mode_info_set`, `mode_change`, `grid_cursor_goto`,
 `win_viewport`, and `flush` (bumps `seq`). Unknown events are ignored.
+
+**Current-file tracking.** `CURRENT_FILE_EVENT = "wolf_current_file"` names an
+out-of-band notification carrying the active buffer's absolute path
+(`expand('%:p')`), emitted by the `WolfCurrentFile` autocmd in
+`runtime/nvim/init.lua`. `apply_current_file` parses the first argument: an empty
+string (unnamed buffer) becomes `None`; otherwise the path is canonicalized (to
+match the canonical paths the file picker emits, falling back to the raw path if
+canonicalization fails) and stored in `Snapshot.current_file`. It acquires the
+write lock via `write_async` and does **not** hold it across an `.await`; it does
+**not** bump `seq` (a current-file change is not a redraw frame). The lock drops
+before returning, then `handle_notify` fires the wake — same wake-after-unlock
+invariant as the redraw path — so the front-end re-reads the snapshot (e.g. to
+highlight/reveal the file tree's current file).
 
 ## `nvim.rs`
 
@@ -126,9 +146,20 @@ Spawning and supervising the captive, hermetic Neovim child process.
   `new_child_cmd`.
 - `NvimProcess` — `handle()` (clone the RPC handle), `ui_attach(cols, rows)`
   (attaches `ext_linegrid` + `rgb`), `try_resize(cols, rows)`
-  (`nvim_ui_try_resize`), and `shutdown(self)` (sends `qa!` bounded by a grace
-  timeout, awaits the io loop bounded by a shutdown timeout, force-kills and reaps
-  on overrun).
+  (`nvim_ui_try_resize`), `setup_current_file_tracking()` (see below), and
+  `shutdown(self)` (sends `qa!` bounded by a grace timeout, awaits the io loop
+  bounded by a shutdown timeout, force-kills and reaps on overrun).
+- `setup_current_file_tracking(&self) -> Result<(), NvimError>` — installs the
+  current-file autocmd inside the captive nvim. It looks up this RPC channel's id
+  via `nvim_get_api_info` (which returns `[channel_id, metadata]`), then calls the
+  `_G.wolf_setup_current_file_tracking` helper (defined in
+  `runtime/nvim/init.lua`) over `nvim_exec_lua`, passing the channel id as a Lua
+  vararg (`...`) rather than interpolating it into the code string (no
+  injection/formatting hazard). The helper registers a
+  `BufEnter`/`BufWinEnter`/`BufFilePost` autocmd that `rpcnotify`s
+  `wolf_current_file` and emits once immediately. `api::WolfCore::start` calls
+  this after `ui_attach`, so the front-end learns the active buffer's path as soon
+  as the UI is attached and on every later buffer switch / rename.
 
 All RPC is generic/untyped (`Neovim::call`).
 
