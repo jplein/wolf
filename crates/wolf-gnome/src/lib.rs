@@ -9,6 +9,8 @@
 //!   `ImageSurface` in tests, a `DrawingArea` context in production).
 //! - [`grid_size_for`]: the pure pixel-to-grid geometry used by the window's
 //!   resize handler (testable without GTK).
+//! - [`cursor`]: the pure, GTK-free cursor geometry ([`cursor::cursor_rect`]) and
+//!   mode-aware color logic ([`cursor::cursor_colors`]), unit-tested headlessly.
 //!
 //! The windowed application now exists: [`app::run`] builds a single
 //! `adw::ApplicationWindow` with a header bar and a `gtk::DrawingArea`, attaches a
@@ -19,6 +21,7 @@
 //! they remain testable without a display.
 
 pub mod app;
+pub mod cursor;
 pub mod geometry;
 pub mod input;
 pub mod render;

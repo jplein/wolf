@@ -1,206 +1,207 @@
-# Plan: wolf-gnome windowed application (single window, no dialogs)
+# Plan: wolf-gnome mode-aware cursor (fix invisible cursor)
 
-## Status: COMPLETE ✅ (windowed app shipped)
+## Status: COMPLETE ✅ (mode-aware cursor shipped)
 
 ### Final state
-- App: single adw::ApplicationWindow + HeaderBar + DrawingArea; paint via Cairo/Pango;
-  EventControllerKey input; resize; semi-transparent block cursor; wake marshalled to GTK
-  main thread; clean shutdown. NO file dialogs (open via :e). Verified rendering "hello"
-  under cage (real screenshot + OCR).
-- Tests: geometry 2✓, gdk_key 1✓, paint_golden 3✓, roundtrip_nvim 1✓, headless smoke ✓(--ignored).
-  wolf-core regression 15✓. clippy clean. GUI denylist CLEAN.
-- Docs: crate/src/tests READMEs + architecture.md updated; smoke comment fixed.
-- New files: src/app.rs, src/geometry.rs, src/main.rs, tests/smoke_headless.rs, tests/testdata/.
-- Accepted follow-ups (not done, out of scope): N1 duplicate-activation guard, N2 dedup color consts.
+- Cursor is now OPAQUE reverse-video, mode-aware via ModeInfo.shape: BLOCK in normal
+  (fills cell, redraws glyph inverted so it stays readable), VERTICAL BAR in insert,
+  HORIZONTAL bar where nvim reports it. Reliably visible (inversion of underlying cell;
+  honor mode hl only when visibly distinct). New pure module cursor.rs (cursor_rect +
+  cursor_colors), unit-tested headlessly.
+- Tests: wolf-gnome lib 14✓ (cursor geometry + colors incl 3 S1 guard cases), Tier-1
+  intact, smoke (--ignored) ✓ under cage, wolf-core 15✓, clippy clean, denylist CLEAN.
+- Docs: architecture.md + crate/src/tests READMEs + in-code comments all updated.
+- New file: crates/wolf-gnome/src/cursor.rs. Removed CURSOR_ALPHA/FALLBACK_CURSOR/cursor_color.
 
-## (history) REVIEWER APPROVED — technical-writer updating docs (final step)
+## (history) S1 HARDENED, ALL GREEN — technical-writer updating docs (final step)
 
-### Reviewer verdict: APPROVED, no Must-fix. All 10 check areas PASS (threading/wake,
-borrow discipline, lifecycle/shutdown, draw/cursor, input, resize, scope, architecture,
-flake hygiene, clippy). Nits ACCEPTED AS-IS (out of scope / cosmetic):
-- N1: connect_activate not guarded against duplicate activation (single-instance second
-  launch would spawn 2nd window+nvim). Normal single `cargo run` fine. Follow-up, not now.
-- N2: RGB_MAX/white constants duplicated in app.rs and render.rs (render's private). Cosmetic.
+### S1 fix landed: cursor_colors now honors the mode hl ONLY when visible (bg != cell_bg AND
+bg != fg), else inverts. N1 redundant .or removed. Rgb derives PartialEq/Eq (no core change).
+Tests: wolf-gnome lib 14✓ (incl 3 new guard cases), Tier-1 intact, wolf-core 15✓, clippy clean,
+denylist CLEAN. No deviations.
 
-## (history) ALL TESTS PASS (incl. headless smoke) — proceeding to reviewer
+## (history) REVIEWER APPROVED w/ S1 — hardening honor path (test-writer then coder)
 
-### Final test run
-- wolf-gnome normal: geometry 2✓, gdk_key 1✓, paint_golden 3✓(+regen ign), roundtrip_nvim 1✓.
-- wolf-gnome smoke (--ignored): window_renders_typed_text_under_cage ✓ (real app under cage, typed
-  "hello", grim screenshot, tesseract --psm 11 OCR confirmed) — passed first try, no flakiness.
-- wolf-core regression 15✓. clippy clean. GUI denylist CLEAN.
-- TODO for technical-writer: smoke test doc comment (~line 239) still says "tesseract <png> stdout"
-  without --psm 11 — update for accuracy.
+### Reviewer verdict: APPROVED w/ minor notes. Shape work complete+correct; edges/scope/lint clean.
+### ORCHESTRATOR DECISION on S1 (substantive, correctness-first):
+S1: cursor_colors' "honor mode attr_id" gate checks the DEFAULTS-MERGED resolved style, so a
+half-defined Cursor hl (e.g. only dark bg; fg filled from defaults) passes "both Some" and can
+re-introduce dark-on-dark invisibility; the inversion safety net is dead whenever defaults set.
+Benign for bare --clean (our target) but the "always visible" guarantee isn't enforced.
+FIX (self-contained in cursor.rs, NO core change): honor the mode cursor hl ONLY when it yields a
+VISIBLE cursor — i.e. resolved fg AND bg both Some AND honored fill (bg) != underlying cell
+background AND bg != fg. Otherwise fall through to INVERSION (fill=cell_fg, glyph=cell_bg).
+Define underlying cell background = (cell present: resolve(cell.hl_id).bg or defaults.bg or
+FALLBACK_BG; cell None: defaults.bg or FALLBACK_BG).
+N1: remove the redundant `.or(defaults.fg/bg)` in the inversion branch (resolve already merged
+defaults) — cosmetic cleanup, do alongside.
+- Existing honor test (distinct colors, no defaults) STILL passes (fill != bg, fg != bg).
+- Order: test-writer adds the guard test case(s), then coder implements + runs.
+- Docs still pending (technical-writer): architecture.md:65, README.md:58, src/README.md:38-39,54-55
+  (drop CURSOR_ALPHA/FALLBACK_CURSOR, add cursor.rs section). In-code app.rs/lib.rs docs already done.
 
-## (history) CODER DONE (app works; 1 OCR test bug) — test-writer fixing tesseract PSM
+## (history) CODER DONE (all green, no deviations) — proceeding to reviewer
 
 ### Coder result
-- App IMPLEMENTED + LAUNCHES under cage; coder viewed screenshot: "Wolf" headerbar,
-  "hello" rendered, block cursor, ~ markers. Full stack (window/paint/input/cursor/resize) works.
-- Versions: gtk4 0.11.3, gdk4 0.11.2, libadwaita 0.9.1, glib 0.22.7, cairo/pango 0.22, async-channel 2.5.
-- Tests: geometry 2✓, gdk_key 1✓, paint_golden 3✓(+1 ign), roundtrip_nvim 1✓. wolf-core 15✓.
-  clippy clean. denylist CLEAN. Build ~22s.
-
-### ORCHESTRATOR DECISIONS
-- D1: ACCEPT coder deviations — (a) start WolfCore before building window (honors
-  "on start Err, don't build window"); (b) run_with_args::<&str>(&[]) so GApplication
-  ignores real argv (bin takes no args).
-- D2 (SMOKE TEST BUG): tesseract default PSM(3) returns EMPTY on sparse light-on-dark
-  editor text; coder verified --psm 11 (and --psm 6) reliably read "hello" from the REAL
-  rendered window (ran twice, deterministic). APPROVED FIX: add `.arg("--psm").arg("11")`
-  to the tesseract Command in tests/smoke_headless.rs ocr_to_lowercase. Loose contains("hello")
-  assertion stays. This is the ONLY change; the app is correct. Route to test-writer.
+- render.rs: FALLBACK_FG/BG + draw_glyph -> pub(crate) (verified white/black per D-CUR3).
+- cursor.rs: cursor_rect + cursor_colors + consts + pct_fraction helper (pure, no GTK).
+- lib.rs: pub mod cursor. app.rs: draw_cursor rewritten (mode-aware, opaque inversion,
+  block redraws glyph inverted via render::draw_glyph; OOR cell -> no panic); removed
+  cursor_color/CURSOR_ALPHA/FALLBACK_CURSOR + unused Rgb import. In-code docs updated.
+- Tests: cursor 9✓, wolf-gnome lib 11✓, gdk_key 1✓, paint_golden 3✓, roundtrip_nvim 1✓;
+  wolf-core 15✓; clippy clean (no new #[allow]); denylist CLEAN; smoke (--ignored) ✓ under cage.
+- No deviations. Optional deferred: offscreen structural cursor-pixel test (architect already deferred).
 
 ### Test-writer output
-- src/geometry.rs: placeholder header + #[cfg(test)] mod tests (coder implements grid_size_for ABOVE it).
-- tests/smoke_headless.rs: single #[test] #[ignore] window_renders_typed_text_under_cage.
+- crates/wolf-gnome/src/cursor.rs: module doc + NOTE-to-coder placeholder + #[cfg(test)] mod tests
+  (cursor_rect_table + named_constants_match_contract; cursor_colors hand-built-snapshot tests).
+- Won't compile until coder adds cursor_rect/cursor_colors/MIN_BAR_PX/DEFAULT_CELL_PCT/PCT_DENOM
+  ABOVE the tests, and adds `pub mod cursor;` to lib.rs.
 
-### ORCHESTRATOR DECISION (geometry semantics)
-- D-GEO: grid_size_for returns (1,1) as a WHOLE result if EITHER cell size is
-  degenerate (0/neg/NaN/inf) OR EITHER dim is non-positive. Coder must implement
-  whole-result collapse to match the test (not per-axis). Fine for a resize guard.
+### ORCHESTRATOR DECISIONS
+- D-CUR1: cursor_colors must use highlights.resolve(attr_id) (resolved style), per plan.
+- D-CUR2 (unspecified edge flagged by test-writer): if grid.cell(cursor.row,cursor.col) is None
+  (cursor out of grid bounds), cursor_colors must NOT panic — fall through to
+  defaults.fg/bg then FALLBACK_FG/BG. draw_cursor likewise: skip the glyph redraw if cell is None.
+- D-CUR3: promoted render.rs FALLBACK_FG must equal white(255,255,255) and FALLBACK_BG black(0,0,0)
+  (tests assert literals). Coder: verify render.rs's existing FALLBACK consts ARE these values;
+  if they differ, STOP and report (do not silently change either).
 
-### NOTES coder must honor (from test-writer)
-- geometry.rs won't compile until grid_size_for(i32,i32,f64,f64)->(u16,u16) is added above tests.
-- App must honor WOLF_FONT_PT env override (smoke test sets it to 28) and launch with NO CLI args.
-- Must add `pub mod geometry;` to lib.rs AND declare `[[bin]] wolf-gnome` so CARGO_BIN_EXE_wolf-gnome exists.
-
-## Problem statement
-Build the actual windowed `wolf-gnome` GTK/Adwaita app, wiring the existing
-Tier-1 seams (`gdk_key`, `paint`, `CellMetrics`) into ONE real window. Users open
-files via Neovim commands (`:e`); NO file dialogs.
-
-### In scope (requirements)
-1. `adw::Application` + `adw::ApplicationWindow` with a header bar + a
-   `gtk::DrawingArea` as content.
-2. `WolfCore::start` with a wake callback that marshals from the tokio worker
-   thread onto the GTK main thread (async-channel + `glib::spawn_future_local`)
-   and calls `queue_draw`.
-3. `DrawingArea::set_draw_func` reads `core.read_snapshot()` and calls existing
-   `paint()` onto the widget's Cairo context using `CellMetrics::for_font`.
-4. `gtk::EventControllerKey` -> existing `gdk_key()` -> `core.send_input()`.
-5. On DrawingArea resize, a PURE testable fn (pixels -> (cols,rows)) computes the
-   grid size; call `core.resize()`.
-6. Minimal block cursor drawn at `snapshot.cursor`.
-7. Hold `WolfCore` in `Rc<RefCell<Option<WolfCore>>>`; clean `shutdown` on close.
-
-### Deps to add now (were deferred in Tier 1)
-- Cargo: `gtk4` (as `gtk`) + `libadwaita` (as `adw`), pinned to the SAME gtk-rs
-  release set already in use (gdk4 0.11 / cairo-pango 0.22).
-- flake.nix: `libadwaita` + GApplication runtime deps so it actually launches
-  (wrapGAppsHook4 or env: gsettings-desktop-schemas, adwaita-icon-theme,
-  GSETTINGS_SCHEMA_DIR / XDG_DATA_DIRS).
-- Add a `[[bin]]` (`src/main.rs`); keep the lib seams (`lib.rs`) intact.
-
-### Verification (USER-CHOSEN: build + unit glue + headless-compositor smoke)
-- Unit-test the PURE resize-geometry function (pixels -> cols/rows).
-- Build + clippy clean (via `nix develop --command`).
-- Headless-compositor smoke: provision `cage` (headless wlroots), `wtype`,
-  `grim`, `tesseract` in the flake; an OPT-IN / ignored-by-default test launches
-  the real app under cage, types a key via wtype, captures with grim, OCRs the
-  grid to confirm a real window renders.
-
-### Constraints
-- Build gate: all builds/tests via `nix develop --command ...` (direnv env stale
-  after flake edits).
-- Do NOT break wolf-core's GUI denylist — GTK stays in wolf-gnome only.
-- Docs are source of truth: update crate/src/tests READMEs + architecture.md so
-  they reflect that the window now exists.
-- Prefer real nvim; no mocks.
-
-### Existing seams to reuse (do NOT reimplement)
-- `wolf_gnome::gdk_key(keyval: gdk::Key, state: gdk::ModifierType) -> Option<KeyEvent>`
-- `wolf_gnome::paint(cr: &cairo::Context, snap: &Snapshot, metrics: &CellMetrics)`
-- `wolf_gnome::CellMetrics { pub cell_w, pub cell_h, baseline, font }` +
-  `CellMetrics::for_font(cr, family, size_pt)`
-- Core API: `WolfCore::start/read_snapshot/send_input/resize/shutdown`,
-  `CoreConfig { init_lua, cols, rows }`, `WakeFn = Arc<dyn Fn()+Send+Sync>`.
-
-## Progress log
-- (orchestrator) Plan reset for windowed-app phase. Tier 1 is COMPLETE (seams +
-  tests landed and green). Next: invoke architect.
-- (orchestrator) Architect plan recorded below. Version pairing verified:
-  gtk4 0.11 + libadwaita 0.9 (no version feature) coherent with gdk4 0.11 /
-  cairo-pango 0.22 / system GTK 4.22. Next: test-writer.
+### NOTE coder must honor
+- Tests assert fallback literals white/black rather than importing the consts; ensure the
+  pub(crate) FALLBACK_FG/BG equal those. Tests use highlights.resolve path.
 
 ---
 
-# ARCHITECT PLAN
+# ARCHITECT PLAN (condensed)
 
-## Key decisions
-- Add `gtk` (gtk4 0.11), `adw` (libadwaita 0.9, NO version feature), `async-channel 2`
-  to wolf-gnome/Cargo.toml. Add `[[bin]] wolf-gnome -> src/main.rs`. Keep [lib] seams.
-- New modules: `src/geometry.rs` (PURE), `src/app.rs` (all GTK wiring), `src/main.rs` (thin).
-  `lib.rs` adds `pub mod app; pub mod geometry; pub use geometry::grid_size_for;`.
-- App id `org.wolf.Wolf`; defaults: font DejaVu Sans Mono 14pt (env `WOLF_FONT_PT` override),
-  CoreConfig 80x24, window 960x640.
+## Root cause
+50%-alpha overlay + bg-first color pick from the bare-nvim Cursor hl => dark-on-dark,
+invisible. Fix must NOT depend on Cursor hl being well-defined.
 
-## flake.nix
-LAUNCH-ALWAYS packages: libadwaita, gsettings-desktop-schemas, adwaita-icon-theme,
-hicolor-icon-theme, librsvg, shared-mime-info. shellHook (APPEND, keep WOLF_NVIM_BIN +
-FONTCONFIG_FILE): export XDG_DATA_DIRS (gsettings-desktop-schemas + gtk4 schemas +
-adwaita/hicolor icon shares) AND GSETTINGS_SCHEMA_DIR (both schema dirs). Prefer explicit
-env exports over wrapGAppsHook4 for `nix develop --command cargo run` (fallback:
-wrapGAppsHook4 in nativeBuildInputs if schema errors persist).
-SMOKE-ONLY packages: cage, wtype, grim, tesseract. shellHook smoke env: XDG_RUNTIME_DIR
-(default to mktemp if unset), WLR_BACKENDS=headless, WLR_LIBINPUT_NO_DEVICES=1. Do NOT
-export WAYLAND_DISPLAY (cage sets it for children). Comment which pkgs are launch vs smoke.
+## Color strategy: reverse-video INVERSION (opaque)
+`cursor_colors(snap) -> (fill: Rgb, glyph: Rgb)`:
+1. mode = mode_infos.get(cursor.mode_idx).
+2. If mode.attr_id resolves to BOTH fg+bg Some => honor it: fill=bg, glyph=fg.
+3. Else INVERT underlying cell: resolve grid.cell(row,col).hl_id; fill = cell_fg
+   (style.fg or defaults.fg or FALLBACK_FG/white); glyph = cell_bg (style.bg or
+   defaults.bg or FALLBACK_BG/black).
+Promote render.rs FALLBACK_FG/FALLBACK_BG to pub(crate) and reuse (no drift). REMOVE
+app.rs CURSOR_ALPHA + FALLBACK_CURSOR. Keep RGB_MAX; use opaque set_source_rgb.
 
-## geometry.rs (PURE, no GTK/pango)
-`pub fn grid_size_for(width_px: i32, height_px: i32, cell_w: f64, cell_h: f64) -> (u16,u16)`
-(deliberate divergence from &CellMetrics sketch: take f64s so tests need nothing GTK).
-cols=floor(w/cell_w), rows=floor(h/cell_h); clamp each to [1, u16::MAX]; non-positive
-dims or zero/neg/NaN/inf cell sizes -> (1,1). `#[must_use]`. Cast lints: clamp THEN
-convert, narrow #[allow] w/ comment.
+## Shape geometry: PURE helper in NEW module crates/wolf-gnome/src/cursor.rs
+`cursor_rect(shape, cell_x, cell_y, cell_w, cell_h, cell_percentage: Option<u32>)
+ -> (x,y,w,h)`:
+- Block => full cell (ignores pct).
+- Vertical => left bar: w = (cell_w*pct).max(MIN_BAR_PX).min(cell_w), full height.
+- Horizontal => bottom bar: h=(cell_h*pct).max(MIN_BAR_PX).min(cell_h), full width,
+  y=cell_y+cell_h-h.
+Consts: MIN_BAR_PX=2.0, DEFAULT_CELL_PCT=0.25 (Neovim convention when None),
+PCT_DENOM=100.0. pct = cell_percentage.map(f64::from(p)/100).unwrap_or(0.25).clamp(0,1)
+(cell_percentage is a PERCENT 1-100). f64::from(p) (no cast lint). Pure, no GTK.
 
-## app.rs wiring (build order inside build_ui)
-1. window + adw::HeaderBar + DrawingArea. 2. measure CellMetrics ONCE via throwaway 1x1
-ImageSurface probe (CellMetrics::for_font), store in Rc<CellMetrics> (shared by draw +
-resize; available even if resize fires before first draw). 3. async_channel::bounded(1)
-(coalesces flushes). 4. WakeFn = Arc::new(move || { let _=wake_tx.try_send(()); })
-(Send+Sync, fires on tokio worker; dropping Full is correct). 5. init_lua =
-CARGO_MANIFEST_DIR/../../runtime/nvim/init.lua; WolfCore::start(CoreConfig{80,24}, wake);
-store Rc<RefCell<Option<WolfCore>>>. 6. AFTER start: glib::spawn_future_local(async move {
-while wake_rx.recv().await.is_ok() { area.queue_draw(); } }); plus one initial queue_draw.
-7. set_draw_func, key controller, resize handler.
-DRAW: borrow core, read_snapshot(), paint(cr,&snap,&metrics), then block cursor at
-cursor.row/col*cell_w/h as semi-transparent filled rect (rgba alpha 0.5 so glyph shows;
-color from mode_infos[cursor.mode_idx].attr_id resolved, else default fg/white). Keep
-snapshot guard short (drop before closure returns).
-INPUT: gtk::EventControllerKey on window; set DrawingArea focusable+grab_focus;
-connect_key_pressed -> gdk_key(keyval,state) -> Some => send_input(Key), Propagation::Stop;
-None => Proceed. No IMContext.
-RESIZE: connect_resize -> grid_size_for(w,h,metrics.cell_w,metrics.cell_h) -> core.resize;
-do NOT resize local grid (authoritative size returns via grid_resize).
-LIFECYCLE: window.connect_close_request -> take Option out in its own stmt (release
-RefCell borrow), then core.shutdown() (consumes self). run(): adw::Application::builder
-.application_id(APP_ID), connect_activate(build_ui), app.run(). On WolfCore::start err,
-log + don't build window.
+## draw_cursor rewrite (app.rs, GTK glue only)
+shape = mode_infos.get(mode_idx).map(.shape).unwrap_or(Block); pct from same.
+(fill,glyph)=cursor_colors(snap); cell_x=col*cell_w, cell_y=row*cell_h;
+(x,y,w,h)=cursor_rect(...); opaque fill rect. THEN only for Block (covers glyph):
+if grid.cell(row,col) has non-empty text, render::draw_glyph(cr, metrics, cell_x,
+cell_y, &text, glyph, &resolve(hl_id)) to redraw glyph inverted. Vertical/Horizontal:
+no redraw (thin bar leaves glyph visible). Empty cell: rect only. Promote render.rs
+draw_glyph to pub(crate) (no duplication, exact alignment). wire_draw order unchanged
+(paint then draw_cursor).
 
 ## Tests (test-writer)
-- geometry: `#[cfg(test)] mod tests` in geometry.rs (pure). Cases: typical
-  (800,592,8,16)->(100,37); flooring (17,17,8,16)->(2,1); min-1 clamp for tiny/zero/negative
-  dims ->(1,1); degenerate cell sizes 0/neg/NaN/inf ->(1,1); huge dims clamp to u16::MAX.
-- smoke: tests/smoke_headless.rs, single `#[test] #[ignore]` (run with --ignored). Locate
-  bin via env!("CARGO_BIN_EXE_wolf-gnome"). Run WHOLE scenario inside cage so wtype/grim
-  inherit cage's WAYLAND_DISPLAY: `cage -- sh -c '<scenario>'` inheriting env (WOLF_NVIM_BIN,
-  WLR_BACKENDS, XDG_RUNTIME_DIR, FONTCONFIG_FILE; set WOLF_FONT_PT=28). Scenario: launch app
-  bg, poll/wait ~3s for window, `wtype -- ihello`, `wtype -k Escape`, settle, `grim $OUT_PNG`,
-  kill app. Host: `tesseract $OUT_PNG stdout`, lowercase, assert contains "hello" (loose).
-  Fail with clear msg if cage/wtype/grim/tesseract absent or XDG_RUNTIME_DIR unwritable.
-  Wait loops not fixed sleeps; large font; short lowercase word.
-- Tier-1 tests unchanged + must pass; wolf-core 15 must pass; denylist clean.
+A. PURE unit tests in cursor.rs #[cfg(test)] (mirror geometry.rs):
+   cursor_rect: Block=full cell (any pct); Vertical Some(25) on cell_w=20 -> w=5.0,
+   x=cell_x, h=cell_h; Vertical None -> 0.25; tiny pct -> floored to MIN_BAR_PX;
+   Some(150) -> clamp 1.0 -> w=cell_w; Horizontal Some(25) -> h=0.25*cell_h,
+   y=cell_y+cell_h-h, full width; min-height + None analogous. Non-square dims + eps.
+   cursor_colors (hand-built Snapshots): attr_id both set -> (bg,fg) honor; bg-only/
+   fg-only/none -> inversion (cell_fg,cell_bg); mode_idx OOR -> inversion no panic;
+   empty mode_infos -> inversion no panic; unset cell colors -> FALLBACK_FG/BG.
+B. Smoke: DO NOT couple cursor to OCR (fragile). Keep "hello" assertion; add a NOTE
+   that cursor geometry/color is covered by cursor unit tests + visual confirmation.
+   (Optional deferred: offscreen ImageSurface cursor structural test — defer unless
+   reviewer wants it.)
+C. Green gate: wolf-core 15, Tier-1 (gdk_key/paint_golden/roundtrip_nvim), geometry,
+   new cursor tests, clippy, GUI denylist (no new deps).
 
 ## Docs (technical-writer later)
-crate README (window exists, cargo run cmd, WOLF_FONT_PT, opt-in smoke --ignored + deps),
-src README (main.rs/app.rs/geometry.rs), tests README (geometry unit + smoke), architecture.md
-wolf-gnome status note -> windowed app exists (window/DrawingArea paint/key input/resize/block
-cursor); deferred dialogs/theming/mouse/scroll/native cmdline.
+app.rs module doc ~L14, draw_cursor/(removed)cursor_color comments; src/README.md
+(drop CURSOR_ALPHA/FALLBACK_CURSOR + "semi-transparent block" bullet, add ## cursor.rs);
+README.md "Draw." bullet L58-60; lib.rs module doc add cursor; architecture.md L65
+"semi-transparent block cursor" -> "mode-aware cursor: block normal / bar insert,
+driven by ModeInfo.shape".
 
-## Risks
-Schema/icon discovery = most likely launch failure (mitigate via XDG_DATA_DIRS +
-GSETTINGS_SCHEMA_DIR; fallback wrapGAppsHook4). gtk-rs 0.11 vs system GTK 4.22: pin 0.11/0.9
-no version feature. WolfCore non-Send: held only in Rc on main thread, only WakeFn crosses
-threads; tokio runtime vs glib loop independent (communicate via snapshot lock + channel);
-keep read borrows short. cage flakiness: run-all-in-cage + retry loops + loose OCR + #[ignore].
-Cursor shape: block for v1. HiDPI: 96-dpi probe ignores scale, deferred.
+## Lint/risks
+No new deps (denylist unaffected). cell_percentage is percent /100. usize->f64 keep
+existing `as f64` form (no new #[allow] expected; add narrow one w/ reason if clippy
+flags). OOR mode_idx + empty mode_infos handled via .get + Block/inversion fallback.
+draw_glyph reuse => exact alignment. Wide-trailing: cell.text.is_empty() guard.
+Remove dead CURSOR_ALPHA/FALLBACK_CURSOR (else unused warn).
+
+## Impl order
+1. render.rs: FALLBACK_FG/BG + draw_glyph -> pub(crate). 2. new cursor.rs
+(cursor_rect+cursor_colors+consts+tests). 3. lib.rs `pub mod cursor;`. 4. app.rs
+rewrite draw_cursor, remove cursor_color/CURSOR_ALPHA/FALLBACK_CURSOR. 5. docs.
+
+---
+
+
+## Problem statement
+The character grid renders correctly, but the cursor is INVISIBLE, and it should be
+mode-aware: a BLOCK cursor in normal mode, a VERTICAL BAR in insert mode.
+
+### Two problems
+1. **Invisible cursor.** `crates/wolf-gnome/src/app.rs` `draw_cursor` (lines ~207-219)
+   fills the cursor cell with `set_source_rgba(color, CURSOR_ALPHA=0.5)`. `cursor_color`
+   (lines ~222-239) resolves from `mode_infos[cursor.mode_idx].attr_id` -> resolve ->
+   bg, else fg, else `defaults.fg`, else white. Likely failure: in the bare `--clean`
+   nvim the Cursor highlight resolves to a bg close to the editor background (dark on
+   dark), and at 50% alpha it disappears. The whole approach (semi-transparent +
+   bg-first color pick) is fragile.
+2. **No shape.** It always draws a full-cell block; it ignores `ModeInfo.shape`.
+
+### Required behavior
+- BLOCK cursor in normal mode, VERTICAL BAR in insert mode — driven by
+  `mode_infos[cursor.mode_idx].shape` (NOT by mode name), so it generalizes:
+  - `CursorShape::Block`  => fill the whole cell.
+  - `CursorShape::Vertical` => thin vertical bar at the LEFT of the cell
+    (width from `cell_percentage` if set, else a small fixed fraction; min ~1-2px).
+  - `CursorShape::Horizontal` => thin bar at the BOTTOM of the cell
+    (height from `cell_percentage` else small fraction; min ~1-2px).
+- RELIABLY VISIBLE over both background and glyph. Conventional terminal approach is
+  to INVERT: a block cursor fills the cell with a contrasting/opaque color and the
+  glyph reads against it (e.g. fill with the cell's fg and redraw the glyph in the
+  cell's bg), rather than a translucent overlay. Investigate what looks right; opaque
+  + contrasting is the goal. A bar cursor is a thin opaque line in a visible color.
+
+### Available render-state (wolf-core/src/render.rs — do NOT modify core)
+- `Snapshot.cursor: Cursor { row, col, mode_idx: usize }`
+- `Snapshot.mode_infos: Vec<ModeInfo>`; `ModeInfo { name: String, shape: CursorShape,
+  cell_percentage: Option<u32>, attr_id: Option<u64> }`
+- `enum CursorShape { Block, Horizontal, Vertical }`
+- `Snapshot.highlights: HighlightTable` with `resolve(hl_id) -> ResolvedStyle { fg, bg,
+  ... }`; `defaults: DefaultColors { fg, bg, special }`; `Rgb { r, g, b }`.
+- The cell under the cursor: `snap.grid.cell(row, col)` -> `Cell { text, hl_id }`;
+  resolve its style for inversion colors.
+
+### Scope
+- ONLY cursor rendering in `crates/wolf-gnome/src/app.rs`. A small PURE helper
+  (e.g. cursor rect geometry from shape + cell box + cell_percentage) is encouraged
+  so it can be unit-tested without GTK (mirror the geometry.rs pattern).
+- Verify: build + clippy clean (via `nix develop --command`); confirm/extend the
+  headless cage smoke test so it still renders (ideally assert the cursor region
+  differs from an empty cell, or at least the app renders + types).
+- Update READMEs / architecture.md cursor wording (they currently say "block cursor"
+  / "semi-transparent block cursor" — should describe mode-aware block/bar).
+- Do NOT regress wolf-core (15 tests) or the GUI denylist. Keep wolf-gnome Tier-1 +
+  geometry tests green.
+
+### Existing constants/helpers in app.rs (relevant)
+CURSOR_ALPHA=0.5 (likely removed/changed), RGB_MAX=255.0, FALLBACK_CURSOR=white,
+draw_cursor, cursor_color, wire_draw (calls paint then draw_cursor).
+
+## Progress log
+- (orchestrator) Read app.rs cursor code + render.rs CursorShape/ModeInfo. Grounded the
+  problem statement. Next: invoke architect.

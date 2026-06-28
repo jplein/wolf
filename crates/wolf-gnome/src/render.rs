@@ -27,13 +27,13 @@ use wolf_core::{ResolvedStyle, Rgb, Snapshot};
 const RGB_MAX: f64 = 255.0;
 
 /// Fallback foreground when neither the highlight nor the editor defaults set one.
-const FALLBACK_FG: Rgb = Rgb {
+pub(crate) const FALLBACK_FG: Rgb = Rgb {
     r: 255,
     g: 255,
     b: 255,
 };
 /// Fallback background when neither the highlight nor the editor defaults set one.
-const FALLBACK_BG: Rgb = Rgb { r: 0, g: 0, b: 0 };
+pub(crate) const FALLBACK_BG: Rgb = Rgb { r: 0, g: 0, b: 0 };
 
 /// Per-cell geometry plus the base font used to paint a [`Snapshot`].
 ///
@@ -129,7 +129,7 @@ fn set_source(cr: &cairo::Context, color: Rgb) {
 /// Lays out and draws one cell's text in `fg`, toggling bold/italic/underline per
 /// `style`.
 #[allow(clippy::too_many_arguments)]
-fn draw_glyph(
+pub(crate) fn draw_glyph(
     cr: &cairo::Context,
     metrics: &CellMetrics,
     x: f64,

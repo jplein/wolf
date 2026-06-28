@@ -62,7 +62,9 @@ dependency**. Should feel like a GNOME application.
 `adw::ApplicationWindow` (with an `adw::HeaderBar`) whose content is a
 `gtk::DrawingArea`. The pure seams (`gdk_key`, `paint`, `grid_size_for`), verified
 headlessly without a display, are wired onto a live `WolfCore`: the drawing area
-paints snapshots via Cairo/Pango and overlays a semi-transparent block cursor; key
+paints snapshots via Cairo/Pango and overlays a mode-aware cursor (a block in
+normal mode, a thin bar in insert mode, driven by `ModeInfo.shape`), drawn opaque
+with reverse-video colors so it is reliably visible; key
 input flows through a `gtk::EventControllerKey`; resizing maps pixels to a grid
 size and calls `WolfCore::resize`; and the core's wake is marshalled from its tokio
 worker thread onto the GTK main thread (via an `async-channel` drained by

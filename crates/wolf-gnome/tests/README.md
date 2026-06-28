@@ -25,6 +25,28 @@ infinite, including a single-axis NaN), and the upper clamp of `i32::MAX` dims t
 `u16::MAX`. A second test, `grid_size_for_independent_axes`, proves cols and rows
 are computed separately (wide-but-short and narrow-but-tall grids).
 
+## `cursor.rs` unit tests (in `src/cursor.rs`, headless)
+
+The pure cursor geometry and color logic is unit-tested **inside its own module**
+(a `#[cfg(test)] mod tests` in [`src/cursor.rs`](../src/cursor.rs)), needing no GTK,
+display, or nvim. A table-driven `cursor_rect_table` covers the geometry per shape:
+`Block` always returns the full cell (ignoring `cell_percentage`); `Vertical` is a
+left bar of full height whose width is `cell_percentage` of `cell_w` (default
+`0.25`), floored to `MIN_BAR_PX` for tiny percentages and capped at `cell_w` for
+out-of-range ones; `Horizontal` is the analogous bottom bar against `cell_h`
+(anchored to the bottom edge). Deliberately non-square cells and a non-zero origin
+keep width/height math and offsets distinguishable. `named_constants_match_contract`
+pins `MIN_BAR_PX` / `DEFAULT_CELL_PCT` / `PCT_DENOM`.
+
+A second group covers `cursor_colors` over hand-built `Snapshot`s: the **honor**
+path (a mode cursor highlight with distinct fg + bg → `(bg, fg)`, including with
+editor defaults set); the **inversion** path (bg-only, fg-only, `attr_id` `None`,
+out-of-range `mode_idx`, and empty `mode_infos` all fall through to `(cell_fg,
+cell_bg)` without panicking); the **guard** cases where a degenerate honored pair
+must NOT be honored (fill equal to the underlying cell background, or fill equal to
+glyph) and instead inverts; and the **fallback** case where unset cell colors reach
+the white/black `FALLBACK_FG` / `FALLBACK_BG`.
+
 ## `gdk_key.rs` — input translation (headless, table-driven)
 
 Table-driven unit tests for `wolf_gnome::gdk_key`, layout-independent: assertions
@@ -114,6 +136,10 @@ Required toolchain + env (all from the flake devShell smoke toolchain): `cage`,
 silent skip) on any missing precondition, since absence means the smoke toolchain
 was not provisioned. A stale screenshot is removed first so a previous run cannot
 make the test pass.
+
+**NOTE:** the smoke test asserts only the typed `hello`, not the cursor; cursor
+geometry and color are covered by the pure `cursor.rs` unit tests above plus visual
+confirmation (OCR is too fragile to couple to the cursor).
 
 ## `common/mod.rs`
 

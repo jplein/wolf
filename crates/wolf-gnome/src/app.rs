@@ -11,7 +11,9 @@
 //!   [`glib::spawn_future_local`] task running on the GTK main thread drains it and
 //!   calls [`gtk::DrawingArea::queue_draw`].
 //! - **Paint:** the draw func reads [`WolfCore::read_snapshot`] and hands it to the
-//!   pure [`crate::paint`] seam, then overlays a semi-transparent block cursor.
+//!   pure [`crate::paint`] seam, then draws a mode-aware cursor (an opaque block
+//!   in normal mode, a thin bar in insert/replace) via the pure [`crate::cursor`]
+//!   helpers, inverting the underlying cell so it stays reliably visible.
 //! - **Input:** a [`gtk::EventControllerKey`] routes keys through the pure
 //!   [`crate::gdk_key`] seam into [`WolfCore::send_input`].
 //! - **Resize:** the drawing area's resize maps pixels to a grid size via the pure
@@ -29,9 +31,10 @@ use std::sync::Arc;
 
 use adw::prelude::*;
 use gtk::glib;
-use wolf_core::{CoreConfig, InputEvent, Rgb, Snapshot, WakeFn, WolfCore};
+use wolf_core::{CoreConfig, CursorShape, InputEvent, Snapshot, WakeFn, WolfCore};
 
-use crate::{grid_size_for, paint, CellMetrics};
+use crate::render::draw_glyph;
+use crate::{cursor, grid_size_for, paint, CellMetrics};
 
 /// The GApplication id. Adwaita uses it for resource paths, the default window
 /// icon, and single-instance behavior.
@@ -64,19 +67,8 @@ const WINDOW_HEIGHT: i32 = 640;
 /// pending).
 const WAKE_CHANNEL_CAP: usize = 1;
 
-/// Alpha for the block cursor overlay, so the glyph underneath stays visible.
-const CURSOR_ALPHA: f64 = 0.5;
-
 /// Divisor to convert an 8-bit color channel (0–255) to Cairo's 0.0–1.0 range.
 const RGB_MAX: f64 = 255.0;
-
-/// Fallback cursor color when neither the mode's cursor highlight nor the editor
-/// default foreground is set.
-const FALLBACK_CURSOR: Rgb = Rgb {
-    r: 255,
-    g: 255,
-    b: 255,
-};
 
 /// Runs the windowed `wolf-gnome` application, returning the process exit code.
 #[must_use]
@@ -188,7 +180,7 @@ fn build_ui(app: &adw::Application) {
     area.grab_focus();
 }
 
-/// Installs the draw function: paint the snapshot, then overlay a block cursor.
+/// Installs the draw function: paint the snapshot, then draw the cursor.
 fn wire_draw(area: &gtk::DrawingArea, metrics: &Rc<CellMetrics>, core: &Rc<RefCell<Option<WolfCore>>>) {
     let metrics = metrics.clone();
     let core = core.clone();
@@ -204,38 +196,42 @@ fn wire_draw(area: &gtk::DrawingArea, metrics: &Rc<CellMetrics>, core: &Rc<RefCe
     });
 }
 
-/// Draws a semi-transparent filled block cursor at the snapshot's cursor cell.
+/// Draws the mode-aware cursor at the snapshot's cursor cell.
+///
+/// The shape follows the current mode's [`CursorShape`] (block in normal mode, a
+/// thin vertical/horizontal bar otherwise). The fill is opaque and contrasting:
+/// [`cursor::cursor_colors`] honors a well-defined cursor highlight or inverts the
+/// underlying cell. For a block cursor the cell's glyph is redrawn in the inverted
+/// color so it reads against the fill; bar cursors leave the glyph untouched.
 fn draw_cursor(cr: &cairo::Context, snap: &Snapshot, metrics: &CellMetrics) {
-    let color = cursor_color(snap);
-    let x = snap.cursor.col as f64 * metrics.cell_w;
-    let y = snap.cursor.row as f64 * metrics.cell_h;
-    cr.set_source_rgba(
-        f64::from(color.r) / RGB_MAX,
-        f64::from(color.g) / RGB_MAX,
-        f64::from(color.b) / RGB_MAX,
-        CURSOR_ALPHA,
-    );
-    cr.rectangle(x, y, metrics.cell_w, metrics.cell_h);
-    cr.fill().expect("cairo cursor fill failed");
-}
+    let mode = snap.mode_infos.get(snap.cursor.mode_idx);
+    let shape = mode.map_or(CursorShape::Block, |m| m.shape);
+    let pct = mode.and_then(|m| m.cell_percentage);
 
-/// Resolves the block cursor's color: the current mode's cursor highlight (bg,
-/// then fg), else the editor default foreground, else white.
-fn cursor_color(snap: &Snapshot) -> Rgb {
-    let attr_id = snap
-        .mode_infos
-        .get(snap.cursor.mode_idx)
-        .and_then(|mode| mode.attr_id);
-    if let Some(id) = attr_id {
-        let style = snap.highlights.resolve(id);
-        if let Some(bg) = style.bg {
-            return bg;
-        }
-        if let Some(fg) = style.fg {
-            return fg;
+    let (fill, glyph) = cursor::cursor_colors(snap);
+
+    let cell_x = snap.cursor.col as f64 * metrics.cell_w;
+    let cell_y = snap.cursor.row as f64 * metrics.cell_h;
+    let (x, y, w, h) = cursor::cursor_rect(shape, cell_x, cell_y, metrics.cell_w, metrics.cell_h, pct);
+
+    cr.set_source_rgb(
+        f64::from(fill.r) / RGB_MAX,
+        f64::from(fill.g) / RGB_MAX,
+        f64::from(fill.b) / RGB_MAX,
+    );
+    cr.rectangle(x, y, w, h);
+    cr.fill().expect("cairo cursor fill failed");
+
+    // A block cursor covers the glyph, so redraw it inverted; a thin bar leaves
+    // the glyph visible and needs no redraw.
+    if shape == CursorShape::Block {
+        if let Some(cell) = snap.grid.cell(snap.cursor.row, snap.cursor.col) {
+            if !cell.text.is_empty() {
+                let style = snap.highlights.resolve(cell.hl_id);
+                draw_glyph(cr, metrics, cell_x, cell_y, &cell.text, glyph, &style);
+            }
         }
     }
-    snap.highlights.defaults.fg.unwrap_or(FALLBACK_CURSOR)
 }
 
 /// Installs the key controller: GDK key -> [`crate::gdk_key`] -> core input.

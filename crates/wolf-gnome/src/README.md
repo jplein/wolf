@@ -2,9 +2,9 @@
 
 The `wolf-gnome` source modules. Each is a single file (not a subdirectory). The
 crate is **both a library and a binary**: a `[[bin]]` (`main.rs` → `app.rs`) runs
-the windowed application, while the library keeps the three pure, widget-free seams
-(`input.rs`, `render.rs`, `geometry.rs`) so they stay testable without a display.
-See the crate [`README.md`](../README.md).
+the windowed application, while the library keeps the pure, widget-free seams
+(`input.rs`, `render.rs`, `geometry.rs`, `cursor.rs`) so they stay testable without
+a display. See the crate [`README.md`](../README.md).
 
 ## `main.rs`
 
@@ -14,10 +14,11 @@ opened from within Neovim via `:e`).
 
 ## `lib.rs`
 
-Crate root. Declares the public modules (`pub mod app;`, `pub mod geometry;`,
-`pub mod input;`, `pub mod render;`) and re-exports the public surface: `gdk_key`
-(from `input`), `paint` + `CellMetrics` (from `render`), and `grid_size_for` (from
-`geometry`).
+Crate root. Declares the public modules (`pub mod app;`, `pub mod cursor;`,
+`pub mod geometry;`, `pub mod input;`, `pub mod render;`) and re-exports the public
+surface: `gdk_key` (from `input`), `paint` + `CellMetrics` (from `render`), and
+`grid_size_for` (from `geometry`). The `cursor` module's `cursor_rect` /
+`cursor_colors` are reached via the module path rather than re-exported.
 
 ## `app.rs`
 
@@ -35,10 +36,15 @@ constructs the window and attaches a freshly started `WolfCore`:
   `try_send`s from the tokio worker, and a `glib::spawn_future_local` task on the
   GTK main thread drains it and calls `queue_draw`. `WolfCore` is started before
   the window is built; if it fails, the error is logged and no window appears.
-- **Draw func + block cursor.** Reads `read_snapshot()`, calls the pure `paint`
-  seam, then overlays a semi-transparent (alpha 0.5) filled block cursor at the
-  cursor cell, colored from the mode's cursor highlight (bg, then fg), else the
-  editor default fg, else white.
+- **Draw func + mode-aware cursor.** Reads `read_snapshot()`, calls the pure
+  `paint` seam, then draws a cursor at the cursor cell. `draw_cursor` is GTK glue
+  only: it takes the shape and `cell_percentage` from
+  `mode_infos[cursor.mode_idx]` (defaulting to `CursorShape::Block`), delegates the
+  rectangle to `cursor::cursor_rect` and the `(fill, glyph)` colors to
+  `cursor::cursor_colors`, and issues an **opaque** Cairo fill (`set_source_rgb`).
+  For a `Block` cursor it then redraws the cell's glyph in the inverted glyph color
+  via `render::draw_glyph` so it stays readable (skipped when the cell is empty or
+  out of grid bounds); `Vertical`/`Horizontal` bars leave the glyph untouched.
 - **Key controller.** A `gtk::EventControllerKey` on the window routes keys via
   the pure `gdk_key` seam into `WolfCore::send_input` (`Stop` when handled, else
   `Proceed`).
@@ -51,8 +57,7 @@ constructs the window and attaches a freshly started `WolfCore`:
 Key constants: `APP_ID` (`org.wolf.Wolf`), `FONT_FAMILY` (`DejaVu Sans Mono`),
 `DEFAULT_FONT_PT` (`14.0`) with the `FONT_PT_ENV` (`WOLF_FONT_PT`) override,
 `INITIAL_COLS`/`INITIAL_ROWS` (80×24), `WINDOW_WIDTH`/`WINDOW_HEIGHT` (960×640),
-`WAKE_CHANNEL_CAP` (1), `CURSOR_ALPHA` (0.5), `RGB_MAX` (255.0), and
-`FALLBACK_CURSOR` (white).
+`WAKE_CHANNEL_CAP` (1), and `RGB_MAX` (255.0).
 
 ## `geometry.rs`
 
@@ -133,3 +138,42 @@ pub fn paint(cr: &cairo::Context, snap: &wolf_core::Snapshot, metrics: &CellMetr
   the layout.
 - **Attributes applied**: bold, italic, single underline. **Deferred** for Tier
   1: undercurl and strikethrough. No system theme is queried.
+
+`FALLBACK_FG` / `FALLBACK_BG` and `draw_glyph` are `pub(crate)` so the `cursor`
+module and `app.rs` can reuse them (no color/alignment drift).
+
+## `cursor.rs`
+
+The pure, GTK-free cursor geometry and color logic (mirrors `geometry.rs`: no
+widget, no display, no nvim — fully unit-tested in its own `#[cfg(test)] mod
+tests`). `app.rs`'s `draw_cursor` is the only GTK glue: it computes the cell box
+from `CellMetrics`, calls these two functions, issues the opaque fill, and (for a
+block) redraws the glyph via `render::draw_glyph`.
+
+```rust
+pub fn cursor_rect(shape: wolf_core::CursorShape, cell_x: f64, cell_y: f64, cell_w: f64, cell_h: f64, cell_percentage: Option<u32>) -> (f64, f64, f64, f64)
+pub fn cursor_colors(snap: &wolf_core::Snapshot) -> (wolf_core::Rgb, wolf_core::Rgb)
+```
+
+- **`cursor_rect`** returns the `(x, y, w, h)` to fill for `shape` within the cell
+  box:
+  - `Block` → the whole cell, ignoring `cell_percentage`.
+  - `Vertical` → a left bar of full height; width = `cell_percentage` of `cell_w`,
+    floored to `MIN_BAR_PX` and capped at `cell_w`.
+  - `Horizontal` → a bottom bar of full width (anchored to the cell's bottom
+    edge); height follows the same rule against `cell_h`.
+  - `cell_percentage` is a **PERCENT** (1–100): it is divided by `PCT_DENOM`
+    (`100.0`) and clamped to `0.0..=1.0`, defaulting to `DEFAULT_CELL_PCT`
+    (`0.25`, Neovim's convention) when `None`. Named constants: `MIN_BAR_PX`
+    (`2.0`), `DEFAULT_CELL_PCT` (`0.25`), `PCT_DENOM` (`100.0`).
+- **`cursor_colors`** returns the `(fill, glyph)` pair using **reverse video**. It
+  honors the current mode's cursor highlight (`mode_infos[cursor.mode_idx].attr_id`,
+  resolved) as `(fill, glyph) = (bg, fg)` **only when that yields a visible
+  cursor** — both fg and bg resolve to `Some`, the fill `bg` differs from the
+  underlying cell's background (no dark-on-dark over an identical cell), and `bg`
+  differs from `fg` (the glyph is not invisible against its own fill). Otherwise it
+  **inverts** the underlying cell: `fill` = the cell's fg, `glyph` = the cell's bg,
+  each falling back through the editor defaults and finally to `render`'s
+  `FALLBACK_FG` (white) / `FALLBACK_BG` (black). An out-of-range `mode_idx`, empty
+  `mode_infos`, or an out-of-bounds cursor cell all fall through to inversion
+  without panicking (via `.get`).

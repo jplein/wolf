@@ -18,6 +18,8 @@ be verified *headlessly*, with no display server, no window, and no event loop:
 - `gdk_key` — GDK keyval + modifier state → `wolf_core::KeyEvent`.
 - `paint` — render a `wolf_core::Snapshot` onto a Cairo context.
 - `grid_size_for` — pixel size + measured cell size → grid `(cols, rows)`.
+- `cursor_rect` / `cursor_colors` (`cursor.rs`) — the cursor's shape geometry and
+  its reverse-video `(fill, glyph)` color pair, computed without GTK.
 
 These stay free functions independent of any widget, which is exactly what makes
 them testable without a display. The application wiring that binds them to a live
@@ -54,10 +56,15 @@ the window and attaches a freshly started `WolfCore`:
   `glib::spawn_future_local` task on the GTK main thread drains the channel and
   calls `DrawingArea::queue_draw`.
 - **Draw.** The draw func borrows the core, calls `read_snapshot()` (keeping the
-  read guard short), hands the snapshot to the pure `paint` seam, then overlays a
-  **semi-transparent block cursor** (alpha 0.5 so the glyph underneath stays
-  visible) at the snapshot's cursor cell. The cursor color is the current mode's
-  cursor-highlight bg (then fg), else the editor default fg, else white.
+  read guard short), hands the snapshot to the pure `paint` seam, then draws a
+  **mode-aware cursor** at the snapshot's cursor cell. The shape comes from the
+  current mode's `ModeInfo.shape` (a block in normal mode, a thin vertical/
+  horizontal bar in insert/replace), drawn **opaque** via `cursor_rect`. The
+  `(fill, glyph)` colors come from `cursor_colors`, which uses **reverse video**:
+  it honors the mode's cursor highlight only when that yields a visibly distinct
+  pair, otherwise inverts the underlying cell. For a block cursor the cell's glyph
+  is redrawn in the inverted color so it stays readable against the fill; a bar
+  cursor leaves the glyph untouched.
 - **Input.** A `gtk::EventControllerKey` on the window routes each key through the
   pure `gdk_key` seam; a `Some` result is sent via `WolfCore::send_input` and the
   event is consumed (`Propagation::Stop`), a `None` is left to propagate.
