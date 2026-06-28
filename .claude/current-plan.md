@@ -1,257 +1,206 @@
-# Plan: Tier 1 testability for the wolf-gnome GTK/Adwaita front-end
+# Plan: wolf-gnome windowed application (single window, no dialogs)
 
-## Status: COMPLETE ✅
+## Status: COMPLETE ✅ (windowed app shipped)
 
 ### Final state
-- Tests: wolf-gnome gdk_key 1✓, paint_golden 3✓ (+1 ignored), roundtrip_nvim 1✓ (real nvim);
-  wolf-core regression 15✓; clippy --all-targets clean; GUI denylist clean.
-- Docs: crate/src/tests READMEs added; architecture.md Tier-1 status line; S1 doc-comment fixed.
-- Tree clean (no stray scratch file; the diagnostic was stale). New crate fully populated.
+- App: single adw::ApplicationWindow + HeaderBar + DrawingArea; paint via Cairo/Pango;
+  EventControllerKey input; resize; semi-transparent block cursor; wake marshalled to GTK
+  main thread; clean shutdown. NO file dialogs (open via :e). Verified rendering "hello"
+  under cage (real screenshot + OCR).
+- Tests: geometry 2✓, gdk_key 1✓, paint_golden 3✓, roundtrip_nvim 1✓, headless smoke ✓(--ignored).
+  wolf-core regression 15✓. clippy clean. GUI denylist CLEAN.
+- Docs: crate/src/tests READMEs + architecture.md updated; smoke comment fixed.
+- New files: src/app.rs, src/geometry.rs, src/main.rs, tests/smoke_headless.rs, tests/testdata/.
+- Accepted follow-ups (not done, out of scope): N1 duplicate-activation guard, N2 dedup color consts.
 
-## Status (was): REVIEWER PASS (seam code approved) — technical-writer closing docs
+## (history) REVIEWER APPROVED — technical-writer updating docs (final step)
 
-### Reviewer verdict: seam code correct & in-scope. Outstanding items routed to technical-writer:
-- M1: create crates/wolf-gnome/{README.md, src/README.md, tests/README.md} (CLAUDE.md mandate + plan §6).
-- M2: add wolf-gnome Tier-1 status line to architecture.md (§6).
-- S1: fix src/input.rs module doc comment that references the nonexistent
-  `gdk::Key::from_unicode` (doc/impl discrepancy) — code uses gdk::Key constants +
-  keyval.to_unicode(); correct the comment to match.
-- N1 (too_many_arguments allow on draw_glyph) + N2: ACCEPTED as-is for Tier 1 (no refactor pass).
-Note: M1/M2 were always the technical-writer step (workflow step 8/plan order step 9), not a regression.
+### Reviewer verdict: APPROVED, no Must-fix. All 10 check areas PASS (threading/wake,
+borrow discipline, lifecycle/shutdown, draw/cursor, input, resize, scope, architecture,
+flake hygiene, clippy). Nits ACCEPTED AS-IS (out of scope / cosmetic):
+- N1: connect_activate not guarded against duplicate activation (single-instance second
+  launch would spawn 2nd window+nvim). Normal single `cargo run` fine. Follow-up, not now.
+- N2: RGB_MAX/white constants duplicated in app.rs and render.rs (render's private). Cosmetic.
 
-### Final test run (coder, via nix develop)
-- wolf-gnome: gdk_key 1✓, paint_golden 3✓ (1 ignored), roundtrip_nvim 1✓ (real nvim). clippy --all-targets clean.
-- wolf-core regression: 15✓. GUI denylist: clean. No implementation fixes were needed after the test fix.
+## (history) ALL TESTS PASS (incl. headless smoke) — proceeding to reviewer
+
+### Final test run
+- wolf-gnome normal: geometry 2✓, gdk_key 1✓, paint_golden 3✓(+regen ign), roundtrip_nvim 1✓.
+- wolf-gnome smoke (--ignored): window_renders_typed_text_under_cage ✓ (real app under cage, typed
+  "hello", grim screenshot, tesseract --psm 11 OCR confirmed) — passed first try, no flakiness.
+- wolf-core regression 15✓. clippy clean. GUI denylist CLEAN.
+- TODO for technical-writer: smoke test doc comment (~line 239) still says "tesseract <png> stdout"
+  without --psm 11 — update for accuracy.
+
+## (history) CODER DONE (app works; 1 OCR test bug) — test-writer fixing tesseract PSM
 
 ### Coder result
-- Implemented flake.nix (GTK toolchain + pinned fontconfig/DejaVu), testdata/fonts.conf,
-  workspace member, Cargo.toml, src/lib.rs, src/input.rs (gdk_key), src/render.rs (paint+CellMetrics).
-- gtk-rs: gdk4 0.11.2 + cairo-rs/pango/pangocairo 0.22.x against flake's GTK 4.22.4/cairo 1.18.4/pango 1.57.1.
-- paint_golden.rs: 3 passed, 1 ignored. wolf-core: still green. clippy clean. GUI denylist: clean.
+- App IMPLEMENTED + LAUNCHES under cage; coder viewed screenshot: "Wolf" headerbar,
+  "hello" rendered, block cursor, ~ markers. Full stack (window/paint/input/cursor/resize) works.
+- Versions: gtk4 0.11.3, gdk4 0.11.2, libadwaita 0.9.1, glib 0.22.7, cairo/pango 0.22, async-channel 2.5.
+- Tests: geometry 2✓, gdk_key 1✓, paint_golden 3✓(+1 ign), roundtrip_nvim 1✓. wolf-core 15✓.
+  clippy clean. denylist CLEAN. Build ~22s.
 
 ### ORCHESTRATOR DECISIONS
-- D1 (gtk-rs versions): ACCEPT coder deviation. gdk4 0.11 pairs with core crates 0.22
-  ("one coherent release set", not identical minors) — that's the real ecosystem invariant.
-- D2 (flake $PWD fontconfig path): ACCEPT as-is for now (documented test cmd runs from repo root).
-- D3 (TEST BUG): `gdk::Key::from_unicode` does NOT exist in gdk4-rs (0.9 or 0.11).
-  Used in gdk_key.rs + roundtrip_nvim.rs → both fail to compile. APPROVED FIX: add the
-  coder-verified helper to each test file and replace from_unicode calls:
-      use gdk::glib::translate::from_glib;
-      fn key_from_char(c: char) -> gdk::Key { unsafe { from_glib(gdk::unicode_to_keyval(c as u32)) } }
-  This is test-side only; it does NOT change gdk_key's contract (printables still carry the
-  exact glyph; gdk_key reads keyval.to_unicode() and sets shift:false for Char). Route to test-writer.
+- D1: ACCEPT coder deviations — (a) start WolfCore before building window (honors
+  "on start Err, don't build window"); (b) run_with_args::<&str>(&[]) so GApplication
+  ignores real argv (bin takes no args).
+- D2 (SMOKE TEST BUG): tesseract default PSM(3) returns EMPTY on sparse light-on-dark
+  editor text; coder verified --psm 11 (and --psm 6) reliably read "hello" from the REAL
+  rendered window (ran twice, deterministic). APPROVED FIX: add `.arg("--psm").arg("11")`
+  to the tesseract Command in tests/smoke_headless.rs ocr_to_lowercase. Loose contains("hello")
+  assertion stays. This is the ONLY change; the app is correct. Route to test-writer.
 
-### Test-writer output (files created)
-- crates/wolf-gnome/tests/gdk_key.rs (table-driven, layout-independent)
-- crates/wolf-gnome/tests/paint_golden.rs (structural ARGB sampling; #[ignore]d PNG regen)
-- crates/wolf-gnome/tests/roundtrip_nvim.rs (real-nvim, types "Hello", shift contract)
-- crates/wolf-gnome/tests/common/mod.rs (require_nvim_bin, init_lua_path ../../runtime/nvim/init.lua, config, wake_channel/FlushWaiter, FLUSH_TIMEOUT=10s)
+### Test-writer output
+- src/geometry.rs: placeholder header + #[cfg(test)] mod tests (coder implements grid_size_for ABOVE it).
+- tests/smoke_headless.rs: single #[test] #[ignore] window_renders_typed_text_under_cage.
 
-### NOTES the coder MUST honor (from test-writer)
-1. Lib named `wolf_gnome` re-exporting gdk_key, paint, CellMetrics at crate root.
-2. Cargo.toml MUST rename deps: `gdk4`→`gdk`, `cairo-rs`→`cairo` (tests use `use gdk::` / `use cairo::`).
-3. `CellMetrics.cell_w` and `cell_h` must be `pub` (paint_golden reads them).
-4. cairo dep MUST enable the `png` feature (else #[ignore]d regen won't compile).
-5. Pixel sampling assumes little-endian ARGB32 (B,G,R,A) — fine on x86_64 Linux.
-6. gdk::Key associated consts used (Return, Page_Up, ISO_Left_Tab...); if pinned
-   gtk-rs minor names differ, gdk_key impl may use from_name internally — keep contract.
-7. Shift contract: printables built via gdk::Key::from_unicode carrying exact glyph;
-   gdk_key reads keyval.to_unicode() and ALWAYS sets shift:false for Char; named keys
-   keep shift (ISO_Left_Tab+SHIFT→Tab{shift:true}).
+### ORCHESTRATOR DECISION (geometry semantics)
+- D-GEO: grid_size_for returns (1,1) as a WHOLE result if EITHER cell size is
+  degenerate (0/neg/NaN/inf) OR EITHER dim is non-positive. Coder must implement
+  whole-result collapse to match the test (not per-axis). Fine for a resize guard.
+
+### NOTES coder must honor (from test-writer)
+- geometry.rs won't compile until grid_size_for(i32,i32,f64,f64)->(u16,u16) is added above tests.
+- App must honor WOLF_FONT_PT env override (smoke test sets it to 28) and launch with NO CLI args.
+- Must add `pub mod geometry;` to lib.rs AND declare `[[bin]] wolf-gnome` so CARGO_BIN_EXE_wolf-gnome exists.
 
 ## Problem statement
+Build the actual windowed `wolf-gnome` GTK/Adwaita app, wiring the existing
+Tier-1 seams (`gdk_key`, `paint`, `CellMetrics`) into ONE real window. Users open
+files via Neovim commands (`:e`); NO file dialogs.
 
-Stand up the first platform front-end crate, `wolf-gnome`, but scoped **only** to
-its testable "seams" and their tests — **not** the full windowed application. The
-goal is to establish the testing foundation described as "Tier 1" so future
-front-end work is verifiable without a display server.
+### In scope (requirements)
+1. `adw::Application` + `adw::ApplicationWindow` with a header bar + a
+   `gtk::DrawingArea` as content.
+2. `WolfCore::start` with a wake callback that marshals from the tokio worker
+   thread onto the GTK main thread (async-channel + `glib::spawn_future_local`)
+   and calls `queue_draw`.
+3. `DrawingArea::set_draw_func` reads `core.read_snapshot()` and calls existing
+   `paint()` onto the widget's Cairo context using `CellMetrics::for_font`.
+4. `gtk::EventControllerKey` -> existing `gdk_key()` -> `core.send_input()`.
+5. On DrawingArea resize, a PURE testable fn (pixels -> (cols,rows)) computes the
+   grid size; call `core.resize()`.
+6. Minimal block cursor drawn at `snapshot.cursor`.
+7. Hold `WolfCore` in `Rc<RefCell<Option<WolfCore>>>`; clean `shutdown` on close.
 
-### In scope
-1. Create `crates/wolf-gnome` and add it to the workspace `members`.
-2. Add the GTK4 / libadwaita / Cairo / Pango toolchain to the `flake.nix`
-   devShell. The flake currently **deliberately** ships no GUI toolkit; this is
-   the build gate. The `cargo tree` denylist in `wolf-core/README.md` stays
-   scoped to `wolf-core` only (GTK is allowed in `wolf-gnome`).
-3. A pure input-translation function `gdk_key(keyval, modifiers) -> wolf_core::KeyEvent`,
-   unit-tested table-driven, honoring the **shift-glyph contract** (printable
-   chars carry the already-shifted glyph with `shift = false`; `S-` only for
-   named keys).
-4. A `paint(cr: &cairo::Context, snap: &Snapshot, metrics)` free function,
-   golden-image-tested against an offscreen Cairo `ImageSurface` (no window).
-5. A round-trip integration test: real `gdk_key` translation -> `WolfCore::start`
-   -> wait for flush -> assert the snapshot, against **real Neovim** (reuse the
-   `examples/grid_dump.rs` pattern; no mocks, per project policy).
+### Deps to add now (were deferred in Tier 1)
+- Cargo: `gtk4` (as `gtk`) + `libadwaita` (as `adw`), pinned to the SAME gtk-rs
+  release set already in use (gdk4 0.11 / cairo-pango 0.22).
+- flake.nix: `libadwaita` + GApplication runtime deps so it actually launches
+  (wrapGAppsHook4 or env: gsettings-desktop-schemas, adwaita-icon-theme,
+  GSETTINGS_SCHEMA_DIR / XDG_DATA_DIRS).
+- Add a `[[bin]]` (`src/main.rs`); keep the lib seams (`lib.rs`) intact.
 
-### Out of scope (defer)
-The actual `ApplicationWindow`, `DrawingArea` wiring, wake marshalling, the run
-loop, file dialogs, theming, mouse/scroll. Keep `paint()` and `gdk_key()` as
-**free functions independent of any widget** so they are testable headlessly.
+### Verification (USER-CHOSEN: build + unit glue + headless-compositor smoke)
+- Unit-test the PURE resize-geometry function (pixels -> cols/rows).
+- Build + clippy clean (via `nix develop --command`).
+- Headless-compositor smoke: provision `cage` (headless wlroots), `wtype`,
+  `grim`, `tesseract` in the flake; an OPT-IN / ignored-by-default test launches
+  the real app under cage, types a key via wtype, captures with grim, OCRs the
+  grid to confirm a real window renders.
 
-### Design constraints (from architecture.md / CLAUDE.md)
-- Docs are the source of truth; every source dir needs a `README.md`.
-- Rendering is Cairo/Pango per architecture decision 2.
-- Prefer real-nvim E2E/integration over mocks.
+### Constraints
+- Build gate: all builds/tests via `nix develop --command ...` (direnv env stale
+  after flake edits).
+- Do NOT break wolf-core's GUI denylist — GTK stays in wolf-gnome only.
+- Docs are source of truth: update crate/src/tests READMEs + architecture.md so
+  they reflect that the window now exists.
+- Prefer real nvim; no mocks.
 
-## Environment gate (CONFIRMED by orchestrator probe)
-- Current devShell has **none** of gtk4/libadwaita-1/cairo/pango/pangocairo
-  (`pkg-config --exists` all fail). Expected — the flake excludes GUI toolkits.
-- **Consequence for the coder:** after editing `flake.nix`, the already-loaded
-  direnv environment will NOT have GTK. Build/test must run via
-  `nix develop --command cargo test ...` (re-evaluates the flake) or after a
-  manual devShell reload. The coder should use `nix develop --command ...`.
-- `WOLF_NVIM_BIN` is provided by the devShell and is required by the round-trip
-  test (it spawns real nvim).
-
-## Key existing API (for reference)
-- `WolfCore::start(cfg: CoreConfig, wake: WakeFn) -> Result<WolfCore, CoreError>`
-- `CoreConfig { init_lua: PathBuf, cols: u16, rows: u16 }`
-- `read_snapshot() -> SnapshotReadGuard` (Derefs to `Snapshot`)
-- `send_input(InputEvent)`, `resize(cols, rows)`, `shutdown(self)`
-- `Snapshot { grid, highlights, cursor, mode_infos, viewport, seq }`
-- `Grid::cell(row, col) -> Option<&Cell>`, `Cell { text, hl_id }`
-- `HighlightTable::resolve(hl_id) -> ResolvedStyle`, `Rgb { r, g, b }`
-- `KeyEvent { key: Key, ctrl, shift, alt, meta }`, `key_to_notation`
-- `examples/grid_dump.rs` is the canonical headless driver template.
+### Existing seams to reuse (do NOT reimplement)
+- `wolf_gnome::gdk_key(keyval: gdk::Key, state: gdk::ModifierType) -> Option<KeyEvent>`
+- `wolf_gnome::paint(cr: &cairo::Context, snap: &Snapshot, metrics: &CellMetrics)`
+- `wolf_gnome::CellMetrics { pub cell_w, pub cell_h, baseline, font }` +
+  `CellMetrics::for_font(cr, family, size_pt)`
+- Core API: `WolfCore::start/read_snapshot/send_input/resize/shutdown`,
+  `CoreConfig { init_lua, cols, rows }`, `WakeFn = Arc<dyn Fn()+Send+Sync>`.
 
 ## Progress log
-- (orchestrator) Probed devShell: GUI libs absent as expected. Plan file reset
-  from stale Phase 1 content. Next: invoke architect.
-- (orchestrator) Architect plan recorded below. Next: test-writer.
+- (orchestrator) Plan reset for windowed-app phase. Tier 1 is COMPLETE (seams +
+  tests landed and green). Next: invoke architect.
+- (orchestrator) Architect plan recorded below. Version pairing verified:
+  gtk4 0.11 + libadwaita 0.9 (no version feature) coherent with gdk4 0.11 /
+  cairo-pango 0.22 / system GTK 4.22. Next: test-writer.
 
 ---
 
 # ARCHITECT PLAN
 
-## 0. Summary
-Stand up `crates/wolf-gnome` containing only its two pure, widget-free seams —
-`gdk_key()` (GDK key → `wolf_core::KeyEvent`) and `paint()` (`Snapshot` → Cairo
-`ImageSurface`) — plus toolchain + tests to verify them headlessly. No window,
-DrawingArea, run loop, or wake marshalling. `wolf-core` GUI denylist stays scoped
-to `wolf-core`; GTK allowed in `wolf-gnome`.
+## Key decisions
+- Add `gtk` (gtk4 0.11), `adw` (libadwaita 0.9, NO version feature), `async-channel 2`
+  to wolf-gnome/Cargo.toml. Add `[[bin]] wolf-gnome -> src/main.rs`. Keep [lib] seams.
+- New modules: `src/geometry.rs` (PURE), `src/app.rs` (all GTK wiring), `src/main.rs` (thin).
+  `lib.rs` adds `pub mod app; pub mod geometry; pub use geometry::grid_size_for;`.
+- App id `org.wolf.Wolf`; defaults: font DejaVu Sans Mono 14pt (env `WOLF_FONT_PT` override),
+  CoreConfig 80x24, window 960x640.
 
-## 1. flake.nix changes
-Add to devShell `packages` (compile-time, pkg-config `.pc` probed by gtk-rs `-sys`):
-`gtk4` (provides gtk4.pc + GDK for gdk4-sys), `cairo`, `pango` (provides
-pangocairo.pc too), `glib`, `gdk-pixbuf`, `graphene`, `harfbuzz`, keep
-`pkg-config`. Runtime for deterministic golden render: `fontconfig`, `freetype`,
-and a pinned font `dejavu_fonts` (DejaVu Sans Mono). shellHook: export
-`FONTCONFIG_FILE` pointing at a minimal repo-controlled `fonts.conf` exposing ONLY
-the pinned font (disable host font dirs) so Pango can't pick up host fonts; keep
-existing `WOLF_NVIM_BIN`/`RUST_SRC_PATH`. Do NOT add (window-only): `libadwaita`,
-`wrapGAppsHook4`, gsettings/icon-theme packages.
-BUILD GATE: after editing flake.nix the coder MUST run via
-`nix develop --command cargo ...` (re-evaluates flake); direnv env is stale.
-Verify first: `nix develop --command pkg-config --exists gtk4 cairo pango pangocairo`.
+## flake.nix
+LAUNCH-ALWAYS packages: libadwaita, gsettings-desktop-schemas, adwaita-icon-theme,
+hicolor-icon-theme, librsvg, shared-mime-info. shellHook (APPEND, keep WOLF_NVIM_BIN +
+FONTCONFIG_FILE): export XDG_DATA_DIRS (gsettings-desktop-schemas + gtk4 schemas +
+adwaita/hicolor icon shares) AND GSETTINGS_SCHEMA_DIR (both schema dirs). Prefer explicit
+env exports over wrapGAppsHook4 for `nix develop --command cargo run` (fallback:
+wrapGAppsHook4 in nativeBuildInputs if schema errors persist).
+SMOKE-ONLY packages: cage, wtype, grim, tesseract. shellHook smoke env: XDG_RUNTIME_DIR
+(default to mktemp if unset), WLR_BACKENDS=headless, WLR_LIBINPUT_NO_DEVICES=1. Do NOT
+export WAYLAND_DISPLAY (cage sets it for children). Comment which pkgs are launch vs smoke.
 
-## 2. Crate scaffolding
-- `crates/wolf-gnome/Cargo.toml`: `[lib]` name `wolf_gnome`, path `src/lib.rs`
-  (LIBRARY not bin for Tier 1, so tests import the seams; main.rs deferred).
-  deps: `wolf-core` (path), and Tier-1 gtk-rs crates ALL pinned to ONE aligned
-  gtk-rs minor: `gdk4` (as gdk), `cairo-rs` (as cairo), `pango`, `pangocairo`.
-  Deferred (do NOT add): `gtk4` (gtk), `libadwaita` (adw). Comment that all
-  gtk-rs crates must share the same minor (mismatched -sys minors fail to link).
-  Golden compare uses cairo's own PNG I/O (no image crate).
-- Root `Cargo.toml`: `members = ["crates/wolf-core", "crates/wolf-gnome"]`.
-- `src/lib.rs` declares `pub mod input;` `pub mod render;` and re-exports
-  `gdk_key`, `paint`, `CellMetrics`. No gtk4/adw import anywhere yet.
+## geometry.rs (PURE, no GTK/pango)
+`pub fn grid_size_for(width_px: i32, height_px: i32, cell_w: f64, cell_h: f64) -> (u16,u16)`
+(deliberate divergence from &CellMetrics sketch: take f64s so tests need nothing GTK).
+cols=floor(w/cell_w), rows=floor(h/cell_h); clamp each to [1, u16::MAX]; non-positive
+dims or zero/neg/NaN/inf cell sizes -> (1,1). `#[must_use]`. Cast lints: clamp THEN
+convert, narrow #[allow] w/ comment.
 
-## 3. gdk_key(keyval, state) -> Option<wolf_core::KeyEvent>
-Signature: `pub fn gdk_key(keyval: gdk::Key, state: gdk::ModifierType) ->
-Option<wolf_core::KeyEvent>`. Real gtk-rs types (matches future
-EventControllerKey callback exactly; gdk::Key constants are compile-time, no
-display). `Option` so unmapped/bare-modifier/dead/control keyvals → None.
-Mapping: Return & KP_Enter→Enter; Escape→Esc; Tab & ISO_Left_Tab→Tab;
-BackSpace→Backspace; Delete→Delete; arrows; Home/End; Page_Up/Down→PageUp/Down;
-F1..=F12→Key::F(n) (named const for F-key base); else `keyval.to_unicode()` →
-non-control char → Char(c), else None.
-Modifiers: ctrl=CONTROL_MASK, alt=ALT_MASK, meta=SUPER_MASK, shift=SHIFT_MASK.
-SHIFT CONTRACT: printable branch sets `shift:false` ALWAYS (to_unicode already
-gives shifted glyph); named keys pass real `shift` through (so <S-Tab>, <S-Left>,
-<S-F5>). ISO_Left_Tab+SHIFT → Key::Tab with shift:true.
-None for: bare Shift_L/R, Control_L/R, Alt_L/R, Super_L/R, Caps_Lock; no-unicode
-or control-char keyvals; unmapped named keys.
+## app.rs wiring (build order inside build_ui)
+1. window + adw::HeaderBar + DrawingArea. 2. measure CellMetrics ONCE via throwaway 1x1
+ImageSurface probe (CellMetrics::for_font), store in Rc<CellMetrics> (shared by draw +
+resize; available even if resize fires before first draw). 3. async_channel::bounded(1)
+(coalesces flushes). 4. WakeFn = Arc::new(move || { let _=wake_tx.try_send(()); })
+(Send+Sync, fires on tokio worker; dropping Full is correct). 5. init_lua =
+CARGO_MANIFEST_DIR/../../runtime/nvim/init.lua; WolfCore::start(CoreConfig{80,24}, wake);
+store Rc<RefCell<Option<WolfCore>>>. 6. AFTER start: glib::spawn_future_local(async move {
+while wake_rx.recv().await.is_ok() { area.queue_draw(); } }); plus one initial queue_draw.
+7. set_draw_func, key controller, resize handler.
+DRAW: borrow core, read_snapshot(), paint(cr,&snap,&metrics), then block cursor at
+cursor.row/col*cell_w/h as semi-transparent filled rect (rgba alpha 0.5 so glyph shows;
+color from mode_infos[cursor.mode_idx].attr_id resolved, else default fg/white). Keep
+snapshot guard short (drop before closure returns).
+INPUT: gtk::EventControllerKey on window; set DrawingArea focusable+grab_focus;
+connect_key_pressed -> gdk_key(keyval,state) -> Some => send_input(Key), Propagation::Stop;
+None => Proceed. No IMContext.
+RESIZE: connect_resize -> grid_size_for(w,h,metrics.cell_w,metrics.cell_h) -> core.resize;
+do NOT resize local grid (authoritative size returns via grid_resize).
+LIFECYCLE: window.connect_close_request -> take Option out in its own stmt (release
+RefCell borrow), then core.shutdown() (consumes self). run(): adw::Application::builder
+.application_id(APP_ID), connect_activate(build_ui), app.run(). On WolfCore::start err,
+log + don't build window.
 
-## 4. paint(cr, snap, metrics)
-```
-pub struct CellMetrics { cell_w: f64, cell_h: f64, baseline: f64,
-    font: pango::FontDescription }
-pub fn paint(cr: &cairo::Context, snap: &wolf_core::Snapshot, metrics: &CellMetrics)
-```
-Pure/widget-free (test binds an ImageSurface; prod binds DrawingArea ctx). Helper
-`CellMetrics::for_font(cr, family, size_pt)` measuring monospace advance + ascent
-via pango Layout/FontMetrics; named consts for default test font family + pt size.
-Algorithm per row×col: `cell = grid.cell(r,c)` (skip None); `style =
-highlights.resolve(cell.hl_id)` (reverse already applied); fg = style.fg OR
-defaults.fg OR FALLBACK_FG, bg likewise; Rgb 0–255 → Cairo 0.0–1.0 (named 255.0);
-fill bg rect (col*cell_w,row*cell_h,cell_w,cell_h) — HANDLE cairo Result, don't
-drop; if `cell.text.is_empty()` skip fg (wide-trailing/never-painted cell — bg
-fill preserves alignment); else pangocairo create_layout(cr), set FontDescription
-(toggle bold/italic per style), set text, set_source_rgb(fg), move_to cell
-top-left, show_layout. underline via AttrList or manual line (minimal for Tier 1;
-undercurl/strikethrough deferred — note in README). One reusable FontDescription;
-clone only to toggle bold/italic. No system theme query (deferred).
+## Tests (test-writer)
+- geometry: `#[cfg(test)] mod tests` in geometry.rs (pure). Cases: typical
+  (800,592,8,16)->(100,37); flooring (17,17,8,16)->(2,1); min-1 clamp for tiny/zero/negative
+  dims ->(1,1); degenerate cell sizes 0/neg/NaN/inf ->(1,1); huge dims clamp to u16::MAX.
+- smoke: tests/smoke_headless.rs, single `#[test] #[ignore]` (run with --ignored). Locate
+  bin via env!("CARGO_BIN_EXE_wolf-gnome"). Run WHOLE scenario inside cage so wtype/grim
+  inherit cage's WAYLAND_DISPLAY: `cage -- sh -c '<scenario>'` inheriting env (WOLF_NVIM_BIN,
+  WLR_BACKENDS, XDG_RUNTIME_DIR, FONTCONFIG_FILE; set WOLF_FONT_PT=28). Scenario: launch app
+  bg, poll/wait ~3s for window, `wtype -- ihello`, `wtype -k Escape`, settle, `grim $OUT_PNG`,
+  kill app. Host: `tesseract $OUT_PNG stdout`, lowercase, assert contains "hello" (loose).
+  Fail with clear msg if cage/wtype/grim/tesseract absent or XDG_RUNTIME_DIR unwritable.
+  Wait loops not fixed sleeps; large font; short lowercase word.
+- Tier-1 tests unchanged + must pass; wolf-core 15 must pass; denylist clean.
 
-## 5. Test plan (test-writer)
-`tests/gdk_key.rs` — table-driven, no display/no nvim. Named keys incl.
-KP_Enter, ISO_Left_Tab+SHIFT→Tab{shift:true}, arrows, Home/End, PageUp/Down,
-F1/F5/F12; printable+shift: a→Char('a',shift:false), A→Char('A',shift:false),
-'<'→Char('<'); modifiers on named keys (Ctrl+Left, Ctrl+Shift+Left), Super+s
-(meta,shift:false), Alt+x; None cases (Shift_L/Control_L/Super_L/Caps_Lock,
-no-unicode keyval). Keep assertions LAYOUT-INDEPENDENT (letter case + named keys,
-avoid shifted punctuation flakiness). Ctrl+letter must use base unicode + ctrl,
-not a control char in Char.
-`tests/paint_golden.rs` — hand-built deterministic Snapshot (e.g. 4×2 grid, one
-defined hl_id w/ distinct fg/bg + default_colors_set, include a wide-trailing
-empty cell) via core public ctors (Grid::new/set_cell, HighlightTable::define/
-set_defaults, Snapshot; Cell/HlAttr fields public). ImageSurface ARgb32 + Context
-+ pinned CellMetrics; paint; flush. COMPARE STRATEGY (preference order):
-(1) PRIMARY always-on STRUCTURAL assertions — sample raw ImageSurface::data() ARGB
-at CENTER of known cell rects: bg fill is rasterizer-independent → exact equality;
-glyph cell has non-bg pixels in its rect; wide-trailing/empty cell rect is bg-only
-(skip path). (2) OPTIONAL exact-PNG golden under tests/testdata/, regen via
-WOLF_REGEN_GOLDEN=1 or #[ignore] helper (write_to_png), compared with tolerance
-or env-gated (NOT whole-image hash — too brittle across freetype/fontconfig).
-Recommendation: structural-only as the gate; PNG regen as dev aid. Font pinned via
-FONTCONFIG_FILE.
-`tests/roundtrip_nvim.rs` + local `tests/common/mod.rs` (wolf-gnome can't import
-core's tests/common): fail-loud WOLF_NVIM_BIN check, init_lua_path resolving
-`../../runtime/nvim/init.lua` from wolf-gnome CARGO_MANIFEST_DIR, wake channel +
-flush waiter (mirror core's common). Flow: gdk_key(i) → send_input → type word via
-gdk_key printables → gdk_key(Escape) → wait+drain flushes → assert row_text(0)
-contains the word. Also assert a shifted letter lands uppercase (shift contract
-end-to-end). Run via `nix develop --command cargo test -p wolf-gnome`.
+## Docs (technical-writer later)
+crate README (window exists, cargo run cmd, WOLF_FONT_PT, opt-in smoke --ignored + deps),
+src README (main.rs/app.rs/geometry.rs), tests README (geometry unit + smoke), architecture.md
+wolf-gnome status note -> windowed app exists (window/DrawingArea paint/key input/resize/block
+cursor); deferred dialogs/theming/mouse/scroll/native cmdline.
 
-## 6. READMEs
-Create `crates/wolf-gnome/README.md` (purpose, Tier 1 scope, the two seams +
-contracts, build/test via nix develop + pinned font + WOLF_NVIM_BIN, deferred
-list, note core denylist N/A here), `crates/wolf-gnome/src/README.md` (per-module:
-lib re-exports, input.rs gdk_key mapping/shift/None, render.rs paint algo +
-CellMetrics + skip + fallback + attrs applied vs deferred),
-`crates/wolf-gnome/tests/README.md` (3 test areas, golden strategy + regen cmd,
-font pinning, headless/real-nvim split). Modify `architecture.md`: 1–2 line status
-"wolf-gnome Phase: Tier 1 seams exist (gdk_key, paint), verified headlessly;
-window/run-loop/wake/theming deferred."
-
-## 7. Risks
-Golden nondeterminism (mitigate: pinned font+fonts.conf + structural assertions,
-not hashing). Cairo/Pango offscreen needs no display (confirmed CI-safe). gdk::Key
-constants compile-time, no display for gdk_key tests. gtk-rs version pinning: all 4
-crates same minor; let -sys build scripts report needed lib version vs
-nixos-unstable's gtk4/pango/cairo, pick matching gtk-rs minor (0.9 vs 0.11), pin
-it. Layout dependence: keep gdk_key asserts layout-independent. Verify
-`../../runtime/nvim/init.lua` relative path.
-
-## 8. Implementation order
-1) flake.nix (+verify pkg-config). 2) workspace members. 3) crate skeleton +
-empty-compiling lib.rs (flush out -sys/pkg-config issues early). 4) input.rs
-gdk_key + re-export. 5) tests/gdk_key.rs (fastest loop). 6) render.rs
-CellMetrics+paint + re-export. 7) tests/paint_golden.rs (structural first).
-8) tests/common + roundtrip_nvim.rs. 9) READMEs + architecture.md line.
-
-## 9/10. Deps + lint
-New nixpkgs: gtk4, cairo, pango, glib, gdk-pixbuf, graphene, harfbuzz, fontconfig,
-freetype, dejavu_fonts. New cargo (wolf-gnome only): gdk4, cairo-rs, pango,
-pangocairo (+ wolf-core path). Must NOT enter wolf-core tree (denylist still
-passes since wolf-gnome→wolf-core, not reverse). Rust/clippy (Go/depguard notes
-N/A): name magic numbers (255.0 divisor, font size, F-key base, test dims); do NOT
-drop cairo `Result`s (handle/expect); keep gdk_key→Option<KeyEvent>, paint→().
+## Risks
+Schema/icon discovery = most likely launch failure (mitigate via XDG_DATA_DIRS +
+GSETTINGS_SCHEMA_DIR; fallback wrapGAppsHook4). gtk-rs 0.11 vs system GTK 4.22: pin 0.11/0.9
+no version feature. WolfCore non-Send: held only in Rc on main thread, only WakeFn crosses
+threads; tokio runtime vs glib loop independent (communicate via snapshot lock + channel);
+keep read borrows short. cage flakiness: run-all-in-cage + retry loops + loose OCR + #[ignore].
+Cursor shape: block for v1. HiDPI: 96-dpi probe ignores scale, deferred.

@@ -58,9 +58,18 @@ The UI layer. Each one:
 Rust, using GTK 4 and libadwaita. Consumes `wolf-core` as a **normal Rust crate
 dependency**. Should feel like a GNOME application.
 
-**Phase status.** Tier 1 seams exist (`gdk_key`, `paint`), verified headlessly
-without a display; the window, run loop, wake marshalling, and theming are still
-deferred. See [`crates/wolf-gnome/README.md`](crates/wolf-gnome/README.md).
+**Phase status.** The windowed application now exists: a single
+`adw::ApplicationWindow` (with an `adw::HeaderBar`) whose content is a
+`gtk::DrawingArea`. The pure seams (`gdk_key`, `paint`, `grid_size_for`), verified
+headlessly without a display, are wired onto a live `WolfCore`: the drawing area
+paints snapshots via Cairo/Pango and overlays a semi-transparent block cursor; key
+input flows through a `gtk::EventControllerKey`; resizing maps pixels to a grid
+size and calls `WolfCore::resize`; and the core's wake is marshalled from its tokio
+worker thread onto the GTK main thread (via an `async-channel` drained by
+`glib::spawn_future_local`) to trigger redraws. Files are opened from within Neovim
+(`:e`); there are no file dialogs. Still deferred: file dialogs, theming,
+mouse/scroll input, a native command line / messages / popup menu, and HiDPI scale
+handling. See [`crates/wolf-gnome/README.md`](crates/wolf-gnome/README.md).
 
 #### wolf-macos
 

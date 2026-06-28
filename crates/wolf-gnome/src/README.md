@@ -1,16 +1,72 @@
 # wolf-gnome/src
 
-The `wolf-gnome` source modules. Each is a single file (not a subdirectory). For
-Tier 1 the crate is a **library** of two pure, widget-free seams; there is no
-`main.rs` and no `gtk4`/`libadwaita` import anywhere yet (deferred — see the crate
-[`README.md`](../README.md)).
+The `wolf-gnome` source modules. Each is a single file (not a subdirectory). The
+crate is **both a library and a binary**: a `[[bin]]` (`main.rs` → `app.rs`) runs
+the windowed application, while the library keeps the three pure, widget-free seams
+(`input.rs`, `render.rs`, `geometry.rs`) so they stay testable without a display.
+See the crate [`README.md`](../README.md).
+
+## `main.rs`
+
+The thin binary entry point. `main` only forwards the process exit code from
+[`app::run`](#apprs); the binary takes **no** command-line arguments (files are
+opened from within Neovim via `:e`).
 
 ## `lib.rs`
 
-Crate root. Declares the public modules (`pub mod input;`, `pub mod render;`) and
-re-exports the public surface: `gdk_key` (from `input`), and `paint` +
-`CellMetrics` (from `render`). It imports no GTK widget toolkit (`gtk4`/`adw`) —
-only the input-translation and paint seams live here.
+Crate root. Declares the public modules (`pub mod app;`, `pub mod geometry;`,
+`pub mod input;`, `pub mod render;`) and re-exports the public surface: `gdk_key`
+(from `input`), `paint` + `CellMetrics` (from `render`), and `grid_size_for` (from
+`geometry`).
+
+## `app.rs`
+
+All GTK4/Adwaita application wiring. `pub fn run() -> glib::ExitCode` builds an
+`adw::Application` with id `org.wolf.Wolf` and, on `activate`, `build_ui`
+constructs the window and attaches a freshly started `WolfCore`:
+
+- **Construction.** An `adw::ApplicationWindow` (title "Wolf", default 960×640)
+  whose content is a vertical `gtk::Box` of an `adw::HeaderBar` over a focusable
+  `gtk::DrawingArea`. Cell metrics are measured **once** (via a throwaway 1×1
+  `ImageSurface` probe → `CellMetrics::for_font`) and shared by Rc with the draw
+  and resize closures.
+- **Wake bridge + threading.** A bounded `async-channel` (capacity 1) carries
+  wake signals; the `WakeFn` (the only thing that crosses a thread boundary)
+  `try_send`s from the tokio worker, and a `glib::spawn_future_local` task on the
+  GTK main thread drains it and calls `queue_draw`. `WolfCore` is started before
+  the window is built; if it fails, the error is logged and no window appears.
+- **Draw func + block cursor.** Reads `read_snapshot()`, calls the pure `paint`
+  seam, then overlays a semi-transparent (alpha 0.5) filled block cursor at the
+  cursor cell, colored from the mode's cursor highlight (bg, then fg), else the
+  editor default fg, else white.
+- **Key controller.** A `gtk::EventControllerKey` on the window routes keys via
+  the pure `gdk_key` seam into `WolfCore::send_input` (`Stop` when handled, else
+  `Proceed`).
+- **Resize.** `connect_resize` → `grid_size_for(width, height, cell_w, cell_h)` →
+  `WolfCore::resize`.
+- **Lifecycle / shutdown.** `WolfCore` lives in `Rc<RefCell<Option<WolfCore>>>` on
+  the main thread; `connect_close_request` takes it out (in its own statement to
+  release the borrow) and runs `WolfCore::shutdown`.
+
+Key constants: `APP_ID` (`org.wolf.Wolf`), `FONT_FAMILY` (`DejaVu Sans Mono`),
+`DEFAULT_FONT_PT` (`14.0`) with the `FONT_PT_ENV` (`WOLF_FONT_PT`) override,
+`INITIAL_COLS`/`INITIAL_ROWS` (80×24), `WINDOW_WIDTH`/`WINDOW_HEIGHT` (960×640),
+`WAKE_CHANNEL_CAP` (1), `CURSOR_ALPHA` (0.5), `RGB_MAX` (255.0), and
+`FALLBACK_CURSOR` (white).
+
+## `geometry.rs`
+
+The pure pixel-to-grid geometry seam (no GTK/pango):
+
+```rust
+pub fn grid_size_for(width_px: i32, height_px: i32, cell_w: f64, cell_h: f64) -> (u16, u16)
+```
+
+`cols = floor(width_px / cell_w)`, `rows = floor(height_px / cell_h)`, each clamped
+to `[1, u16::MAX]`. As a resize guard, the **whole** result collapses to `(1, 1)`
+if either pixel dimension is non-positive or either cell size is degenerate (zero,
+negative, NaN, or infinite). The clamp is done in `f64` space *before* the cast, so
+the truncating cast to `u16` is saturating-safe by construction. `#[must_use]`.
 
 ## `input.rs`
 

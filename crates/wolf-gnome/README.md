@@ -5,20 +5,73 @@ embeds Neovim (see [`architecture.md`](../../architecture.md), esp. the
 front-end section and decision 2 on native paint). It consumes
 [`wolf-core`](../wolf-core/README.md) as a normal Rust crate dependency.
 
-## Tier 1 scope
+## Scope
 
-This crate currently contains **only its two pure, widget-free "seams"** — the
-parts of a future windowed application that can be verified *headlessly*, with no
-display server, no window, and no event loop:
+This crate is a **runnable single-window GTK 4 / libadwaita application**. The
+window is one `adw::ApplicationWindow` (with an `adw::HeaderBar`) whose content is
+a single `gtk::DrawingArea`. There are **no file dialogs** — files are opened from
+within Neovim via its own commands (`:e`, `:w`, `:saveas`).
+
+The application is built on top of three pure, widget-free **seams** that can also
+be verified *headlessly*, with no display server, no window, and no event loop:
 
 - `gdk_key` — GDK keyval + modifier state → `wolf_core::KeyEvent`.
 - `paint` — render a `wolf_core::Snapshot` onto a Cairo context.
+- `grid_size_for` — pixel size + measured cell size → grid `(cols, rows)`.
 
-Both are free functions independent of any widget, which is exactly what makes
-them testable without a display. The actual windowed application does **not**
-exist yet (see [Deferred to later phases](#deferred-to-later-phases)).
+These stay free functions independent of any widget, which is exactly what makes
+them testable without a display. The application wiring that binds them to a live
+[`wolf_core::WolfCore`] lives in [`src/app.rs`](src/README.md) and the thin
+binary entry point in [`src/main.rs`](src/README.md).
 
-## The two seams
+## Running
+
+After editing `flake.nix` the already-loaded direnv environment is stale, so run
+through `nix develop --command`, which re-evaluates the flake:
+
+```sh
+nix develop --command cargo run -p wolf-gnome
+```
+
+This needs a display (a Wayland or X11 session), or it can be run under the
+headless smoke compositor (see [The headless smoke test](#the-headless-smoke-test)).
+It requires `WOLF_NVIM_BIN` to point at the pinned Neovim (the devShell exports
+it; nvim is never taken from `PATH`). The font size defaults to **14.0 pt** and
+can be overridden via the `WOLF_FONT_PT` environment variable (the smoke test sets
+it to `28` so glyphs are large enough to OCR). The font family is `DejaVu Sans
+Mono`, the GApplication id is `org.wolf.Wolf`, and the default window is 960×640.
+
+## Architecture wiring
+
+`app::run` builds an `adw::Application`, and on `activate` `build_ui` constructs
+the window and attaches a freshly started `WolfCore`:
+
+- **Wake marshalling.** `WolfCore` runs Neovim on its own tokio runtime and fires
+  a single `WakeFn` on a tokio worker thread when a new frame is ready. Because
+  that thread cannot touch GTK, the wake only `try_send`s onto a bounded
+  `async-channel` (capacity 1, which coalesces a burst of flushes — a dropped
+  "full" send just means a redraw is already pending). A
+  `glib::spawn_future_local` task on the GTK main thread drains the channel and
+  calls `DrawingArea::queue_draw`.
+- **Draw.** The draw func borrows the core, calls `read_snapshot()` (keeping the
+  read guard short), hands the snapshot to the pure `paint` seam, then overlays a
+  **semi-transparent block cursor** (alpha 0.5 so the glyph underneath stays
+  visible) at the snapshot's cursor cell. The cursor color is the current mode's
+  cursor-highlight bg (then fg), else the editor default fg, else white.
+- **Input.** A `gtk::EventControllerKey` on the window routes each key through the
+  pure `gdk_key` seam; a `Some` result is sent via `WolfCore::send_input` and the
+  event is consumed (`Propagation::Stop`), a `None` is left to propagate.
+- **Resize.** The drawing area's `connect_resize` maps the pixel allocation to a
+  grid size via the pure `grid_size_for` seam and calls `WolfCore::resize`; the
+  authoritative size comes back via core's `grid_resize`.
+- **Lifecycle.** `WolfCore` is non-`Send`; it lives only on the main thread in an
+  `Rc<RefCell<Option<WolfCore>>>`, shared by the draw/key/resize/close closures.
+  Closing the window takes the core out (in its own statement, to release the
+  `RefCell` borrow) and runs `WolfCore::shutdown` for a clean teardown. Only the
+  `WakeFn` ever crosses a thread boundary. If `WolfCore::start` fails, the error
+  is logged and no window is built.
+
+## The seams
 
 ### `gdk_key` (from [`input`](src/input.rs))
 
@@ -87,7 +140,19 @@ Per-cell algorithm:
    and draw it in fg.
 
 Attributes applied: **bold**, *italic*, and single **underline**. Undercurl and
-strikethrough are deferred for Tier 1. No system theme is queried (deferred).
+strikethrough are deferred. No system theme is queried (deferred).
+
+### `grid_size_for` (from [`geometry`](src/geometry.rs))
+
+```rust
+pub fn grid_size_for(width_px: i32, height_px: i32, cell_w: f64, cell_h: f64) -> (u16, u16)
+```
+
+The resize handler's pure pixel-to-grid math, kept GTK/pango-free so it is
+unit-testable headlessly. `cols = floor(width_px / cell_w)`, `rows = floor(height_px
+/ cell_h)`, each clamped to `[1, u16::MAX]`. As a resize guard, the **whole** result
+collapses to `(1, 1)` if either pixel dimension is non-positive or either cell size
+is degenerate (zero, negative, NaN, or infinite).
 
 ## Building and testing
 
@@ -110,28 +175,45 @@ The round-trip test spawns **real Neovim** (no mocks, per project policy) locate
 via `WOLF_NVIM_BIN` (also exported by the devShell). See
 [`tests/README.md`](tests/README.md).
 
+### The headless smoke test
+
+An **opt-in, `#[ignore]`d** end-to-end test launches the real application under a
+headless Wayland compositor and confirms it actually draws a window a human could
+see. Run it explicitly:
+
+```sh
+nix develop --command cargo test -p wolf-gnome -- --ignored
+```
+
+It requires the flake's smoke toolchain (`cage`, `wtype`, `grim`, `tesseract` on
+`PATH`), a set and writable `XDG_RUNTIME_DIR` (where the Wayland socket lives), and
+`WOLF_NVIM_BIN`. The test runs the whole scenario inside `cage`, types `hello` in
+insert mode via `wtype`, screenshots the live window with `grim`, and OCRs it with
+`tesseract --psm 11` ("sparse text" mode, needed for the light-on-dark editor
+grid), asserting the output loosely contains `hello`. Missing preconditions fail
+loud rather than silently skipping. See [`tests/README.md`](tests/README.md).
+
 ## gtk-rs versions
 
-The Tier-1 gtk-rs crates are one coherent gtk-rs release set: `gdk4` 0.11.x with
-`cairo-rs` / `pango` / `pangocairo` 0.22.x. (In the gtk-rs ecosystem the gtk4-rs
-repo and the "core" repo are released together but carry different minor numbers;
-the invariant is "one coherent release set", not "one identical minor" —
-mismatched `-sys` minors fail to link.) These are built against the flake's GTK
-4.22, cairo 1.18, and pango 1.57. `cairo-rs` enables the `png` feature for the
-`#[ignore]`d golden-regeneration dev-aid test.
+The gtk-rs crates are one coherent gtk-rs release set: `gtk4` 0.11.x / `gdk4`
+0.11.x / `libadwaita` 0.9.x with `cairo-rs` / `pango` / `pangocairo` 0.22.x. (In
+the gtk-rs ecosystem the gtk4-rs repo and the "core" repo are released together
+but carry different minor numbers; the invariant is "one coherent release set",
+not "one identical minor" — mismatched `-sys` minors fail to link. `libadwaita`
+0.9 carries no version feature, targeting the system GTK already present.) These
+are built against the flake's GTK 4.22, cairo 1.18, and pango 1.57. `cairo-rs`
+enables the `png` feature for the `#[ignore]`d golden-regeneration dev-aid test.
 
 ## Deferred to later phases
 
-The full windowed application is **not** built yet. Deferred:
+The window exists, but the following remain deferred:
 
-- `ApplicationWindow` / `HeaderBar` and the libadwaita chrome.
-- `DrawingArea` wiring (binding `paint` to a real widget context).
-- The glib wake marshalling and the run loop.
-- File dialogs (open / save / save-as).
+- File dialogs (open / save / save-as) — files are opened from within Neovim.
 - Theming (querying the OS theme and pushing it into Neovim).
 - Mouse and scroll input.
-- The `gtk4` (`gtk`) and `libadwaita` (`adw`) crates — deliberately not yet
-  dependencies.
+- Native command line / messages / popup menu (currently grid-drawn).
+- HiDPI scale handling (the cell-measurement probe is 96-dpi).
+- IME / `IMContext` composition input.
 
 ## Note on the GUI denylist
 

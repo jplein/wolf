@@ -56,11 +56,35 @@
             pkgs.graphene
             pkgs.harfbuzz
 
+            # LAUNCH-ALWAYS: deps the real windowed app needs to start up. The
+            # gtk-rs libadwaita -sys crate probes libadwaita-1.pc; the rest are
+            # GApplication *runtime* requirements (GSettings schemas + an icon
+            # theme + SVG/MIME loaders) without which adw::Application aborts on
+            # activate. They are exposed to the app via XDG_DATA_DIRS /
+            # GSETTINGS_SCHEMA_DIR in the shellHook below.
+            pkgs.libadwaita
+            pkgs.gsettings-desktop-schemas
+            pkgs.adwaita-icon-theme
+            pkgs.hicolor-icon-theme
+            pkgs.librsvg
+            pkgs.shared-mime-info
+
             # Deterministic offscreen golden render: pinned font stack so Pango
             # measurement / Cairo rasterization is reproducible.
             pkgs.fontconfig
             pkgs.freetype
             pkgs.dejavu_fonts
+
+            # SMOKE-ONLY: the opt-in headless end-to-end smoke test
+            # (tests/smoke_headless.rs, run with `--ignored`) launches the real
+            # window under a headless Wayland compositor and OCRs a screenshot.
+            # cage = headless wlroots compositor, wtype = synthetic keystrokes,
+            # grim = screenshot, tesseract = OCR. Not needed to build or to run
+            # the app interactively.
+            pkgs.cage
+            pkgs.wtype
+            pkgs.grim
+            pkgs.tesseract
           ];
 
           shellHook = ''
@@ -78,6 +102,31 @@
               "s|@DEJAVU_FONTS@|${pkgs.dejavu_fonts}|g" \
               "$PWD/crates/wolf-gnome/testdata/fonts.conf" > "$__wolf_fonts_conf"
             export FONTCONFIG_FILE="$__wolf_fonts_conf"
+
+            # --- LAUNCH-ALWAYS: GApplication runtime discovery -----------------
+            # The real adw::Application needs to find (a) GSettings schemas (the
+            # desktop-wide schemas plus GTK4's own) and (b) an icon theme + the
+            # hicolor fallback, or it aborts on activate. We export these
+            # explicitly (rather than wrapGAppsHook4) so a plain
+            # `nix develop --command cargo run` works. XDG_DATA_DIRS lets GIO/GTK
+            # discover glib-2.0/schemas and icons/; GSETTINGS_SCHEMA_DIR points
+            # GSettings straight at the compiled schema dirs as a belt-and-braces.
+            __gsd_schemas="${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}"
+            __gtk4_schemas="${pkgs.gtk4}/share/gsettings-schemas/${pkgs.gtk4.name}"
+            export XDG_DATA_DIRS="$__gsd_schemas:$__gtk4_schemas:${pkgs.adwaita-icon-theme}/share:${pkgs.hicolor-icon-theme}/share:${pkgs.shared-mime-info}/share''${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
+            export GSETTINGS_SCHEMA_DIR="$__gsd_schemas/glib-2.0/schemas:$__gtk4_schemas/glib-2.0/schemas''${GSETTINGS_SCHEMA_DIR:+:$GSETTINGS_SCHEMA_DIR}"
+
+            # --- SMOKE-ONLY: headless Wayland compositor env -------------------
+            # Used only by the opt-in `--ignored` smoke test (cage/wtype/grim).
+            # XDG_RUNTIME_DIR holds the Wayland socket; default it to a private
+            # mktemp dir if the host has not set one. wlroots is told to use its
+            # headless backend with no real input devices. We do NOT export
+            # WAYLAND_DISPLAY — cage creates and exports it for its child tree.
+            if [ -z "''${XDG_RUNTIME_DIR:-}" ]; then
+              export XDG_RUNTIME_DIR="$(mktemp -d -t wolf-xdg-runtime.XXXXXX)"
+            fi
+            export WLR_BACKENDS=headless
+            export WLR_LIBINPUT_NO_DEVICES=1
           '';
         };
       }

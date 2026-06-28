@@ -1,13 +1,29 @@
 # wolf-gnome/tests
 
-Tests for the two Tier-1 seams. They split into **headless** checks (no display,
-no nvim) and one **real-Neovim** end-to-end round-trip (no mocks, per project
-policy). Everything runs through `nix develop --command` so the GTK toolchain,
-the pinned font, and `WOLF_NVIM_BIN` are present:
+Tests for the seams and the windowed application. They split into **headless**
+checks (no display, no nvim), one **real-Neovim** end-to-end round-trip (no mocks,
+per project policy), and one **opt-in headless-compositor** smoke test that
+launches the real window. Everything runs through `nix develop --command` so the
+GTK toolchain, the pinned font, and `WOLF_NVIM_BIN` are present:
 
 ```sh
 nix develop --command cargo test -p wolf-gnome
 ```
+
+The default run does **not** include the smoke test (it is `#[ignore]`d); see
+[the smoke test section](#smoke_headlessrs--windowed-app-opt-in-real-compositor).
+
+## `grid_size_for` unit tests (in `src/geometry.rs`, headless)
+
+The pure pixel-to-grid geometry is unit-tested **inside its own module** (a
+`#[cfg(test)] mod tests` in [`src/geometry.rs`](../src/geometry.rs)), needing no
+GTK, display, or nvim. A table-driven `grid_size_for_table` covers the typical
+exact-division case (`800×592` with `8×16` cells → `100×37`), flooring of partial
+cells (`17×17` → `2×1`), the min-1 clamp for tiny/zero/negative dims, the
+whole-result collapse to `(1, 1)` for degenerate cell sizes (zero/negative/NaN/
+infinite, including a single-axis NaN), and the upper clamp of `i32::MAX` dims to
+`u16::MAX`. A second test, `grid_size_for_independent_axes`, proves cols and rows
+are computed separately (wide-but-short and narrow-but-tall grids).
 
 ## `gdk_key.rs` — input translation (headless, table-driven)
 
@@ -69,6 +85,35 @@ fed as the already-uppercased keyval *with* the SHIFT mask, exercising the
 shift-glyph contract end-to-end), leaves insert mode with `Escape`, waits for and
 drains flushes, and asserts row 0 contains the word. Requires `WOLF_NVIM_BIN`
 (`common::require_nvim_bin` fails loud if unset).
+
+## `smoke_headless.rs` — windowed app (opt-in, real compositor)
+
+A single `#[test] #[ignore]` (`window_renders_typed_text_under_cage`) that proves
+the whole stack actually draws a window. It is opt-in because it needs a compositor
+and an OCR toolchain a normal `cargo test` will not have. Run it explicitly:
+
+```sh
+nix develop --command cargo test -p wolf-gnome -- --ignored
+```
+
+Mechanism: it locates the built binary via `CARGO_BIN_EXE_wolf-gnome` and runs the
+whole interactive scenario as one `sh -c` string **inside `cage`** (the headless
+wlroots compositor) so that `wtype` and `grim` inherit cage's `WAYLAND_DISPLAY`
+(cage exports it only to its child process tree). The scenario launches the app in
+the background, polls (not a fixed sleep) until the window maps, types `ihello`
+(insert mode + the word) and `Escape` via `wtype`, captures the live window with
+`grim` to a PNG under `XDG_RUNTIME_DIR`, then OCRs it on the host with `tesseract
+… stdout --psm 11` ("sparse text" mode — the default page-segmentation mode returns
+empty on the sparse light-on-dark editor grid) and asserts the lowercased output
+loosely `contains("hello")`. The app is launched with `WOLF_FONT_PT=28` so glyphs
+are large enough to OCR.
+
+Required toolchain + env (all from the flake devShell smoke toolchain): `cage`,
+`wtype`, `grim`, `tesseract` on `PATH`; `WOLF_NVIM_BIN` set; and a set, writable
+`XDG_RUNTIME_DIR`. Per project policy `require_smoke_env` **fails loud** (not a
+silent skip) on any missing precondition, since absence means the smoke toolchain
+was not provisioned. A stale screenshot is removed first so a previous run cannot
+make the test pass.
 
 ## `common/mod.rs`
 

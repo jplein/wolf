@@ -1,6 +1,6 @@
 [package]
 name = "wolf-gnome"
-description = "GTK4/Adwaita front-end for Wolf. Tier-1 scope: the widget-free, headlessly-testable seams (gdk_key input translation + Cairo/Pango paint). The windowed application (ApplicationWindow, DrawingArea, run loop, wake marshalling) is deferred."
+description = "GTK4/Adwaita front-end for Wolf: a single windowed application (adw::ApplicationWindow + DrawingArea) that wires the headlessly-testable seams (gdk_key input translation + Cairo/Pango paint + pure pixel->grid geometry) onto a live WolfCore. Files are opened via Neovim commands (:e); no file dialogs."
 edition.workspace = true
 version.workspace = true
 license.workspace = true
@@ -8,6 +8,13 @@ license.workspace = true
 [lib]
 name = "wolf_gnome"
 path = "src/lib.rs"
+
+# The windowed application binary. Declaring this `[[bin]]` is also what makes
+# Cargo export `CARGO_BIN_EXE_wolf-gnome` to the integration tests (the headless
+# smoke test locates the built binary via that env var).
+[[bin]]
+name = "wolf-gnome"
+path = "src/main.rs"
 
 [dependencies]
 wolf-core = { path = "../wolf-core" }
@@ -20,8 +27,17 @@ wolf-core = { path = "../wolf-core" }
 # 0.22 (mismatched -sys minors fail to link). Deferred (window phase, do NOT add):
 # gtk4 (gtk), libadwaita (adw).
 gdk = { version = "0.11", package = "gdk4" }
+# gtk4 (as `gtk`) and libadwaita (as `adw`) drive the actual window. They belong
+# to the SAME coherent gtk-rs release set as gdk4 0.11 (libadwaita 0.9 depends on
+# gtk4 0.11 / gdk4 0.11 / cairo-pango 0.22). NO version feature on adw (we target
+# the system GTK already present, not a newer pinned ABI).
+gtk = { version = "0.11", package = "gtk4" }
+adw = { version = "0.9", package = "libadwaita" }
 # cairo-rs is renamed to `cairo` and needs the `png` feature for ImageSurface PNG
 # I/O (used by the #[ignore]d golden-regeneration dev-aid test).
 cairo = { version = "0.22", package = "cairo-rs", features = ["png"] }
 pango = "0.22"
 pangocairo = "0.22"
+# Coalescing wake channel: the tokio worker fires a Send+Sync wake closure that
+# pushes onto this channel; the GTK main loop drains it via spawn_future_local.
+async-channel = "2"
