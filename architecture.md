@@ -28,10 +28,20 @@ Responsibilities:
 
 - Spawn and supervise the captive `nvim --embed` process; speak msgpack-RPC to it
   via [`nvim-rs`](https://github.com/KillTheMule/nvim-rs).
-- Attach as a UI (`nvim_ui_attach` with `ext_linegrid`) and handle the entire
-  `redraw` event stream.
-- Maintain the **render-state model** — the in-memory description of what should
-  be on screen (see "The core↔front-end contract").
+- Attach as a UI (`nvim_ui_attach` with `ext_linegrid` + `ext_multigrid` + `rgb`)
+  and handle the entire `redraw` event stream, including the multigrid window
+  events (`grid_resize`/`grid_line`/… carrying a grid id, plus `win_pos`,
+  `win_viewport`, `win_hide`, `win_close`, `grid_destroy`).
+- Maintain the **multigrid render-state model** — the in-memory description of
+  what should be on screen: MULTIPLE cell grids keyed by grid id, with per-window
+  grids and the outer grid (grid 1) holding the command line / messages (see "The
+  core↔front-end contract").
+- Own a **Neovim→shell intent channel**: the captive nvim's split/focus chords
+  and Ex-commands are overridden (in the bundled `init.lua`) to `rpcnotify`
+  `wolf_layout` (and `wolf_active_win`) messages; core parses these into
+  `LayoutIntent`s on a drainable queue (`WolfCore::drain_intents`) and tracks the
+  active window (`Snapshot.active_win`), so the front-end can own the native pane
+  layout.
 - Translate abstract input events (key, mouse, scroll, resize) into Neovim input
   (`nvim_input`, `nvim_input_mouse`) and Ex commands.
 - Own app-level semantics: open/save (delegated to Neovim), recent files, and the
@@ -73,29 +83,39 @@ The UI layer. Each one:
 Rust, using GTK 4 and libadwaita. Consumes `wolf-core` as a **normal Rust crate
 dependency**. Should feel like a GNOME application.
 
-**Phase status.** The windowed application now exists: a single
-`adw::ApplicationWindow` (with an `adw::HeaderBar`) whose content is a
-`gtk::DrawingArea`. The pure seams (`gdk_key`, `paint`, `grid_size_for`), verified
-headlessly without a display, are wired onto a live `WolfCore`: the drawing area
-paints snapshots via Cairo/Pango and overlays a mode-aware cursor (a block in
-normal mode, a thin bar in insert mode, driven by `ModeInfo.shape`), drawn opaque
-with reverse-video colors so it is reliably visible; key
-input flows through a `gtk::EventControllerKey`; resizing maps pixels to a grid
-size and calls `WolfCore::resize`; and the core's wake is marshalled from its tokio
-worker thread onto the GTK main thread (via an `async-channel` drained by
-`glib::spawn_future_local`) to trigger redraws. A built-in **file picker** (opened
-with **Ctrl+Shift+P** or a header-bar Open button) floats over the editor as a
-textbox + fuzzy-matched list, fed by core's streaming `FileSearch` + ranking and
-opening the selected file via the `open(path)` intent (recorded in the MRU); there
-are still no native file dialogs, and saving is from within Neovim. A **file-tree
-sidebar** occupies the left of a `gtk::Paned` (editor on the right): a
-`gtk::ListView` + `gtk::TreeListModel` populated by the **same** `FileSearch`
-mechanism as the picker (a hierarchical projection of that flat file list), where a
-single click opens a file, the top level is expanded by default, and the file
-being edited is highlighted and revealed (ancestors expanded + scrolled into view)
-after both picker and Neovim `:e` navigation via `Snapshot.current_file`. Still
-deferred: native file dialogs, theming, mouse/scroll input, a native command line /
-messages / popup menu, and HiDPI scale handling. See
+**Phase status.** The windowed application now exists: an
+`adw::ApplicationWindow` (with an `adw::HeaderBar`) whose editor area is a
+**native pane view** — a tree of nested `gtk::Paned`s, one `gtk::DrawingArea` per
+Neovim window, driven by a pure `PaneTree` layout — with a bottom **cmdline
+strip** that paints the outer grid (where the command line / messages live under
+`ext_multigrid`). The pure seams (`gdk_key`, `paint`, `grid_size_for`), verified
+headlessly without a display, are wired onto a live `WolfCore`: each pane paints
+its own window grid via Cairo/Pango and the pane owning the cursor's grid overlays
+a mode-aware cursor (a block in normal mode, a thin bar in insert mode, driven by
+`ModeInfo.shape`), drawn opaque with reverse-video colors so it is reliably
+visible; key input flows through a `gtk::EventControllerKey` to nvim's current
+window globally; each pane / divider resize maps pixels to a grid size and calls
+`WolfCore::resize_grid`; on each wake the front-end drains `WolfCore::drain_intents`
+to create/split/close/focus panes and reads `Snapshot.active_win` to mark the
+active pane; and the core's wake is marshalled from its tokio worker thread onto
+the GTK main thread (via an `async-channel` drained by `glib::spawn_future_local`)
+to trigger redraws. Splits (`<C-w>s`/`v`, `:split`/`:vsplit`), close (`<C-w>c`),
+focus moves (`<C-w>h/j/k/l`), and divider drag-to-resize all work. A built-in
+**file picker** (opened with **Ctrl+Shift+P** or a header-bar Open button) floats
+over the editor as a textbox + fuzzy-matched list, fed by core's streaming
+`FileSearch` + ranking and opening the selected file into the active pane via the
+`open(path)` intent (recorded in the MRU); there are still no native file dialogs,
+and saving is from within Neovim. A **file-tree sidebar** occupies the left of a
+`gtk::Paned` (the pane view on the right): a `gtk::ListView` + `gtk::TreeListModel`
+populated by the **same** `FileSearch` mechanism as the picker (a hierarchical
+projection of that flat file list), where a single click opens a file, the top
+level is expanded by default, and the file being edited is highlighted and
+revealed (ancestors expanded + scrolled into view) after both picker and Neovim
+`:e` navigation via `Snapshot.current_file`. Still deferred: native file dialogs,
+theming, mouse/scroll input, a NATIVE command line / messages / popup menu
+(`ext_cmdline` / `ext_messages` / `ext_popupmenu` as Adw widgets — the cmdline
+strip renders the grid-drawn command line in the meantime), floating windows, and
+HiDPI scale handling. See the known-limitations note in
 [`crates/wolf-gnome/README.md`](crates/wolf-gnome/README.md).
 
 #### wolf-macos
@@ -163,15 +183,22 @@ get painted. All highlighting — treesitter, LSP semantic tokens, diagnostics,
 `Visual`/`Search` — is decided inside Neovim and arrives pre-resolved. To change
 or extend highlighting you configure Neovim, never the renderer.
 
-### 7. UI extensions: grid-drawn for v1
+### 7. UI extensions: grid-drawn for v1 (with `ext_multigrid` for native panes)
 
-For v1 we enable only `ext_linegrid`. The command line, messages, and completion
-menu render into the grid, terminal-style. This is the least work, is fully
-functional, and is consistent across platforms.
+For v1 we enable `ext_linegrid` + `ext_multigrid` (+ `rgb`). The command line,
+messages, and completion menu still render into the grid, terminal-style — but
+because `ext_multigrid` moves window content onto per-window grids (`>= 2`), the
+command line / messages now live on the OUTER grid (grid 1). The front-end paints
+each window grid in its own pane and paints grid 1's content in a dedicated
+**cmdline strip** along the bottom of the editor area, so typed `:`/`/` input
+stays visible. This is the least work, is fully functional, and is consistent
+across platforms.
 
 Going native later (`ext_cmdline` + `ext_messages` + `ext_popupmenu`, rendered as
 Adw/AppKit widgets) is an additive change: it touches the front-ends and adds
 events to core's render-state model, but does not change the core architecture.
+`ext_multigrid` is what lets the shell own a native split-pane layout (decision
+below).
 
 ### 8. The captive Neovim is hermetic, pinned, and Markdown-only
 
@@ -212,12 +239,18 @@ The boundary is intentionally narrow and FFI-shaped (decision 1). Two directions
 
 Core maintains a snapshot of everything needed to draw a frame:
 
-- The cell grid (each cell: char(s) + `hl_id`).
+- The cell grids: under `ext_multigrid` a map of grid id → grid (each cell:
+  char(s) + `hl_id`). The outer grid (grid 1) holds the command line / messages;
+  editor window content lives on grids `>= 2`.
+- The per-window layout: grid id → `WinInfo` (window handle, position, size,
+  viewport, hidden flag), learned from `win_pos` / `win_viewport`.
 - The highlight table: `hl_id → {fg, bg, special, bold, italic, underline…}`, plus
   default colors.
-- Cursor: grid position + shape/mode (from cached `mode_info_set`, updated on
-  `mode_change`).
-- Viewport info for the scrollbar (`win_viewport`).
+- Cursor: the grid it lives on + grid position + shape/mode (from cached
+  `mode_info_set`, updated on `mode_change`).
+- Viewport info for the scrollbar (`win_viewport`), per window.
+- The **active window** (`Snapshot.active_win: Option<i64>`), tracked via the
+  `wolf_active_win` notification, so the front-end can mark the active pane.
 - The **current file**: the absolute, canonicalized path of the buffer being
   edited (`Snapshot.current_file: Option<PathBuf>`, `None` for an unnamed buffer).
 
@@ -252,12 +285,26 @@ Things only the platform can do, requested abstractly: "show an open dialog,"
 "the buffer is modified / clean." The front-end fulfills these with native widgets
 and feeds results back in as input.
 
+The **layout intent channel is realized** for split panes. The captive nvim's
+split/focus chords and Ex-commands are overridden (in the bundled `init.lua`) to
+`rpcnotify` a `wolf_layout` message; core parses each into a `LayoutIntent` —
+`Split { orientation, from, win }` or `FocusDir { dir, from }` — and queues it for
+`WolfCore::drain_intents`, which the front-end drains on each wake. The asymmetry
+(decision D4): a SPLIT is performed by nvim (it really creates the window + grid
+and emits `win_pos`) AND reported so the shell learns the orientation and which
+pane to split; a FOCUS move is a PURE intent (nvim does not change focus — the
+shell resolves the neighbour in its own layout and calls `focus_win`); a CLOSE is
+performed by nvim (guarded against closing the last window) and observed via the
+`win_close` redraw event (no intent). The shell owns the GTK `Paned` geometry and
+binds each pane to a Neovim window + its grid, sizing each grid to its pane.
+
 ### Input: events (front-end → core)
 
-`key`, `mouse`, `scroll`, `resize(cols, rows)`, `open(path)`, `save`,
-`save_as(path)`, and theme-color updates. Core translates these into Neovim RPC
-calls. Key events are translated to Neovim notation (`<Esc>`, `<C-w>`, `<S-…>`,
-`<CR>`, modifiers) on the way in.
+`key`, `mouse`, `scroll`, `resize(cols, rows)`, `resize_grid(grid, cols, rows)`
+(per-pane), `focus_win(win)` (click-to-focus / resolved focus moves),
+`open(path)`, `save`, `save_as(path)`, and theme-color updates. Core translates
+these into Neovim RPC calls. Key events are translated to Neovim notation
+(`<Esc>`, `<C-w>`, `<S-…>`, `<CR>`, modifiers) on the way in.
 
 ## Threading and event-loop model
 
@@ -299,3 +346,24 @@ into the `.app`.
 - Whether a shared portable renderer (decision 2) ever earns its keep.
 - macOS Neovim update/pinning workflow (how the bundled build is produced and
   refreshed).
+
+### Split panes — known v1 limitations
+
+The first split-panes cut is deliberately scoped; these are intentional, each with
+a clear future direction (see also
+[`crates/wolf-gnome/README.md`](crates/wolf-gnome/README.md)):
+
+- **Only windows opened via the overridden split commands get a pane.** Panes come
+  from `wolf_layout` `Split` intents, emitted only by the rebound chords /
+  Ex-commands. A window created by a non-overridden path (`:help`, the quickfix /
+  location list, a preview window, `:diffsplit`) still gets a grid + `WinInfo` but
+  no pane, so its content is not shown. *Future:* auto-pane any unbound window
+  grid.
+- **The cmdline strip shows only the outer grid's last row**, so multi-row prompts
+  (`press-ENTER`, `:messages`, a long wrapped `:`-command) are truncated until
+  native `ext_messages` lands.
+- **Focus-direction moves use the tree's idealized split ratios** (`0.5`), not the
+  actual dragged divider positions, so `<C-w>h/j/k/l` can pick a different
+  neighbour than the pixel geometry after a manual drag.
+- **Floating and external windows are ignored** (`win_float_pos` /
+  `win_external_pos` / `msg_set_pos` are dropped), so they do not appear as panes.

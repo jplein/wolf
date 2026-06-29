@@ -89,7 +89,7 @@ fn fixture_snapshot() -> Snapshot {
         },
     );
 
-    snap.grid.set_cell(
+    snap.grid_mut(1).set_cell(
         CONTENT_ROW,
         0,
         Cell {
@@ -97,7 +97,7 @@ fn fixture_snapshot() -> Snapshot {
             hl_id: 0,
         },
     );
-    snap.grid.set_cell(
+    snap.grid_mut(1).set_cell(
         CONTENT_ROW,
         1,
         Cell {
@@ -105,7 +105,7 @@ fn fixture_snapshot() -> Snapshot {
             hl_id: 0,
         },
     );
-    snap.grid.set_cell(
+    snap.grid_mut(1).set_cell(
         CONTENT_ROW,
         GLYPH_CELL_COL,
         Cell {
@@ -115,7 +115,7 @@ fn fixture_snapshot() -> Snapshot {
     );
     // Wide-trailing placeholder: empty text, but still carries a highlight so its
     // background is filled. paint() must skip glyph rendering for empty text.
-    snap.grid.set_cell(
+    snap.grid_mut(1).set_cell(
         CONTENT_ROW,
         EMPTY_CELL_COL,
         Cell {
@@ -152,7 +152,8 @@ fn render_fixture() -> (ImageSurface, CellMetrics) {
     let surface = ImageSurface::create(Format::ARgb32, width, height).expect("render surface");
     let cr = Context::new(&surface).expect("render context");
 
-    paint(&cr, &fixture_snapshot(), &metrics);
+    let snap = fixture_snapshot();
+    paint(&cr, snap.active_grid(), &snap.highlights, &metrics);
 
     // Drop the context before reading pixels: cairo wants the surface free of
     // outstanding references when we borrow its data.

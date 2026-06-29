@@ -110,10 +110,15 @@ impl NvimProcess {
         self.nvim.clone()
     }
 
-    /// Attaches as an `ext_linegrid` UI at `cols * rows`.
+    /// Attaches as an `ext_linegrid` + `ext_multigrid` UI at `cols * rows`.
+    ///
+    /// `ext_multigrid` makes Neovim emit per-window grids (one grid per editor
+    /// window, plus the outer grid 1) and the window-layout events
+    /// (`win_pos`/`win_viewport`/`win_close`/`grid_destroy`).
     pub async fn ui_attach(&self, cols: u16, rows: u16) -> Result<(), NvimError> {
         let opts = vec![
             (Value::from("ext_linegrid"), Value::from(true)),
+            (Value::from("ext_multigrid"), Value::from(true)),
             (Value::from("rgb"), Value::from(true)),
         ];
         let _ = self
@@ -140,6 +145,23 @@ impl NvimProcess {
             .call(
                 "nvim_ui_try_resize",
                 vec![Value::from(cols), Value::from(rows)],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+        Ok(())
+    }
+
+    /// Requests a per-grid resize via `nvim_ui_try_resize_grid(grid, cols, rows)`.
+    ///
+    /// Used for the multigrid path (resizing a single window grid); the
+    /// authoritative size is whatever the resulting `grid_resize` carries.
+    pub async fn try_resize_grid(&self, grid: u64, cols: u16, rows: u16) -> Result<(), NvimError> {
+        let _ = self
+            .nvim
+            .call(
+                "nvim_ui_try_resize_grid",
+                vec![Value::from(grid), Value::from(cols), Value::from(rows)],
             )
             .await
             .map_err(|e| NvimError::Rpc(e.to_string()))?
@@ -180,6 +202,49 @@ impl NvimProcess {
                 "nvim_exec_lua",
                 vec![
                     Value::from("wolf_setup_current_file_tracking(...)"),
+                    Value::Array(vec![Value::from(chan)]),
+                ],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+        Ok(())
+    }
+
+    /// Installs the split-panes layout overrides inside the captive nvim.
+    ///
+    /// Mirrors [`setup_current_file_tracking`](Self::setup_current_file_tracking):
+    /// looks up this RPC channel's id via `nvim_get_api_info`, then calls the
+    /// `_G.wolf_setup_layout` helper (defined in `runtime/nvim/init.lua`) over
+    /// `nvim_exec_lua`, passing the channel id as a Lua vararg. The helper rebinds
+    /// the window split/close/focus chords and the `:split`/`:vsplit`/`:close`
+    /// Ex-commands to `rpcnotify` `wolf_layout` payloads, and registers a
+    /// `WinEnter` autocmd that `rpcnotify`s `wolf_active_win` (emitting once
+    /// immediately).
+    pub async fn setup_layout(&self) -> Result<(), NvimError> {
+        let info = self
+            .nvim
+            .call("nvim_get_api_info", vec![])
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+        let chan = info
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(Value::as_i64)
+            .ok_or_else(|| {
+                NvimError::Rpc(format!(
+                    "nvim_get_api_info returned no channel id: {info:?}"
+                ))
+            })?;
+
+        let _ = self
+            .nvim
+            .call(
+                "nvim_exec_lua",
+                vec![
+                    Value::from("wolf_setup_layout(...)"),
                     Value::Array(vec![Value::from(chan)]),
                 ],
             )

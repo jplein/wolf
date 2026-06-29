@@ -60,9 +60,10 @@ Shared helpers used across the test binaries:
 
 ## Coverage
 
-Forty-four tests total: thirty-four integration tests (eight `tests/*.rs`
+Sixty-eight tests total: forty-eight integration tests (ten `tests/*.rs`
 binaries, all driving a real pinned Neovim and/or real SQLite/filesystem) plus
-ten pure in-module unit tests for the ranking function.
+twenty pure in-module unit tests (ten for the ranking function in `rank.rs`, ten
+for layout-intent parsing in `layout.rs`).
 
 ### File picker (real SQLite / filesystem / git / Neovim — no mocks)
 
@@ -107,6 +108,16 @@ beats a scattered subsequence; word splitting on separators; full-word match top
 the prefix group; deterministic length/lexicographic tie-breaks; and the decisive
 `match_start` (key 5) and `span` (key 6) tie-breaks.
 
+### Layout-intent parsing (pure, in-module)
+
+`layout.rs` has ten table-driven `#[cfg(test)]` unit tests (no fs/Neovim) for
+`LayoutIntent::from_payload`, the `wolf_layout` payload parser: a valid vertical
+and horizontal `split` (preserving `from`/`win`); a valid `focus_dir` and that
+every `dir` string (`left`/`right`/`up`/`down`) maps to the right `FocusDir`; and
+the malformed cases that must all yield `None` — a missing `action`, an unknown
+`action`, a `split` missing `from`/`win`, a `split` with a bad `orientation`, a
+`focus_dir` with a bad `dir`, and a non-map payload (a bare integer).
+
 ### Redraw / input pipeline (real Neovim)
 
 The original fifteen tests cover the redraw → snapshot and input pipelines against
@@ -132,3 +143,41 @@ the real pinned Neovim:
   `grid_scroll` content-shift assertions (both directions).
 - **`key_to_notation` unit asserts** — special keys, function keys, and
   Alt/Meta modifiers (`<A-x>`, `<D-s>`), plus the printable-char shift contract.
+
+### Multigrid foundation (real Neovim)
+
+`redraw_multigrid.rs` (six tests) drives a real nvim attached with
+`ext_multigrid` and asserts the multigrid render model. Because multigrid
+notifications (`win_pos` / grid creation / `grid_destroy`) can arrive across
+several flushes, these tests **poll** with a generous timeout (draining wakes),
+assert on grid/window MAP sizes, MEMBERSHIP, and active-grid behavior — never
+literal `WinInfo.win` handle values or HashMap iteration order:
+
+- attaching creates a window grid (`grids` has grid 1 + a window grid `>= 2`,
+  `windows` has the active window, `active_grid_id() != 1`);
+- a raw `:split<CR>` (real nvim op — no init.lua override in this file) adds a
+  grid + window, the new `win` round-tripping through `grid_for_win`;
+- `grid_line` lands in the active grid only;
+- `:close<CR>` removes the gone grid AND its `windows` entry;
+- `:split` + `<C-w>w` moves `cursor.grid` so `active_grid` follows focus;
+- `resize_grid` changes only the targeted grid (grid 1 unchanged).
+
+### Layout intents + active-window (real Neovim)
+
+`layout_intents.rs` (eight tests) exercises the Neovim→shell intent channel with
+the `init.lua` overrides installed (`setup_layout`). They drain intents / poll the
+snapshot with a timeout and use membership/relative assertions (never literal
+handle values):
+
+- `<C-w>s` performs a real horizontal split AND emits
+  `Split { orientation: Horizontal, .. }` (window count grows; new `win`
+  round-trips through `grid_for_win`);
+- `<C-w>v` → `Split { Vertical, .. }`;
+- typing `:vsplit<CR>` (the fragile `cnoreabbrev` path) → a vertical split intent;
+- `<C-w>l` emits `FocusDir { Right, .. }` but, because focus moves are PURE
+  intents, nvim focus and `active_win` do NOT change (the load-bearing assertion);
+- `focus_win(other)` changes `active_win` and `current_file` follows;
+- `<C-w>c` with multiple windows drops the window count (via `win_close`);
+- `<C-w>c` on the LAST window is a no-op (the Lua guard) and nvim stays alive;
+- a `WinEnter` (split, then `focus_win`) updates `active_win`, always naming a
+  window present in `windows`.

@@ -21,7 +21,7 @@
 //! Underline is rendered (single line). Undercurl and strikethrough are deferred
 //! for Tier 1.
 
-use wolf_core::{ResolvedStyle, Rgb, Snapshot};
+use wolf_core::{Grid, HighlightTable, ResolvedStyle, Rgb};
 
 /// Divisor to convert an 8-bit channel (0–255) to Cairo's 0.0–1.0 range.
 const RGB_MAX: f64 = 255.0;
@@ -35,7 +35,7 @@ pub(crate) const FALLBACK_FG: Rgb = Rgb {
 /// Fallback background when neither the highlight nor the editor defaults set one.
 pub(crate) const FALLBACK_BG: Rgb = Rgb { r: 0, g: 0, b: 0 };
 
-/// Per-cell geometry plus the base font used to paint a [`Snapshot`].
+/// Per-cell geometry plus the base font used to paint a [`Grid`].
 ///
 /// A monospace cell is `cell_w` wide and `cell_h` tall; `baseline` is the text
 /// baseline measured from the cell's top edge. All values are in Cairo device
@@ -80,14 +80,16 @@ impl CellMetrics {
     }
 }
 
-/// Paints `snap` onto the Cairo context `cr` using `metrics`.
+/// Paints `grid` (resolved against `highlights`) onto the Cairo context `cr`
+/// using `metrics`.
+///
+/// Under `ext_multigrid` the front-end paints a single grid at a time (the
+/// active window grid in S1, a per-pane grid in S3), so this takes the grid and
+/// its highlight table directly rather than a whole `Snapshot`.
 ///
 /// Widget-free: `cr` may be backed by an offscreen `ImageSurface` (tests) or a
 /// `DrawingArea` (production). See the module docs for the per-cell algorithm.
-pub fn paint(cr: &cairo::Context, snap: &Snapshot, metrics: &CellMetrics) {
-    let grid = &snap.grid;
-    let highlights = &snap.highlights;
-
+pub fn paint(cr: &cairo::Context, grid: &Grid, highlights: &HighlightTable, metrics: &CellMetrics) {
     for row in 0..grid.rows {
         for col in 0..grid.cols {
             let Some(cell) = grid.cell(row, col) else {

@@ -1,28 +1,36 @@
-//! The windowed `wolf-gnome` application: all GTK4/Adwaita wiring lives here.
+//! The windowed `wolf-gnome` application: all GTK4/Adwaita window wiring lives here.
 //!
-//! [`run`] builds an [`adw::Application`], and on `activate` constructs a single
-//! [`adw::ApplicationWindow`] containing an [`adw::HeaderBar`] and a
-//! [`gtk::DrawingArea`]. The window is backed by a live [`WolfCore`]:
+//! [`run`] builds an [`adw::Application`], and on `activate` constructs an
+//! [`adw::ApplicationWindow`] containing an [`adw::HeaderBar`] over a horizontal
+//! [`gtk::Paned`] of the file-tree sidebar ([`crate::tree_view`]) and the editor
+//! [`gtk::Overlay`]. The overlay's main child is the **native pane view**
+//! ([`crate::pane_view`]) — a tree of nested [`gtk::Paned`]s with one
+//! [`gtk::DrawingArea`] per pane plus a bottom cmdline strip — and its overlay
+//! child is the file picker ([`crate::picker`]). The window is backed by a live
+//! [`WolfCore`]:
 //!
-//! - **Output:** [`WolfCore`] runs Neovim on its own tokio runtime and signals a
-//!   single [`WakeFn`] when a new frame is ready. The wake fires on a tokio worker
-//!   thread, so it cannot touch GTK directly; instead it pushes onto a bounded
-//!   `async-channel` (capacity 1, which coalesces a burst of flushes), and a
-//!   [`glib::spawn_future_local`] task running on the GTK main thread drains it and
-//!   calls [`gtk::DrawingArea::queue_draw`].
-//! - **Paint:** the draw func reads [`WolfCore::read_snapshot`] and hands it to the
-//!   pure [`crate::paint`] seam, then draws a mode-aware cursor (an opaque block
-//!   in normal mode, a thin bar in insert/replace) via the pure [`crate::cursor`]
-//!   helpers, inverting the underlying cell so it stays reliably visible.
-//! - **Input:** a [`gtk::EventControllerKey`] routes keys through the pure
-//!   [`crate::gdk_key`] seam into [`WolfCore::send_input`].
-//! - **Resize:** the drawing area's resize maps pixels to a grid size via the pure
-//!   [`crate::grid_size_for`] seam and calls [`WolfCore::resize`].
+//! - **Output / wake:** [`WolfCore`] runs Neovim on its own tokio runtime and
+//!   signals a single [`WakeFn`] when a new frame is ready. The wake fires on a
+//!   tokio worker thread, so it cannot touch GTK directly; instead it pushes onto a
+//!   bounded `async-channel` (capacity 1, coalescing a burst of flushes), and a
+//!   [`glib::spawn_future_local`] task on the GTK main thread drains it and calls
+//!   `pane_view::PaneHandle::on_render_wake` (per-pane redraw + split/close/focus
+//!   intent consumption) and `tree_view::TreeHandle::on_render_wake`.
+//! - **Paint:** per-pane painting and the mode-aware cursor live in
+//!   [`crate::pane_view`] (which uses the pure [`crate::paint`]/[`crate::cursor`]
+//!   seams); the app installs no draw handler of its own.
+//! - **Input:** a window-level [`gtk::EventControllerKey`] routes keys through the
+//!   pure [`crate::gdk_key`] seam into [`WolfCore::send_input`]; nvim routes them to
+//!   its current window, and the cursor renders in whichever pane owns that grid.
+//! - **Resize:** per-pane and global grid resizing live in [`crate::pane_view`]
+//!   (each pane's `connect_resize` → [`crate::grid_size_for`] → per-grid/global
+//!   resize).
 //! - **Lifecycle:** [`WolfCore`] lives in an `Rc<RefCell<Option<_>>>` on the main
 //!   thread; closing the window takes it out and runs [`WolfCore::shutdown`].
 //!
-//! Files are opened from within Neovim (`:e`); there are no file dialogs. Theming,
-//! mouse/scroll, and a native command line are deferred.
+//! Files are opened from within Neovim (`:e`) or via the picker/tree; there are no
+//! file dialogs. Native command line (`ext_cmdline`/`ext_messages`), theming, and
+//! mouse/scroll are deferred (the cmdline strip paints grid 1 in the meantime).
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -31,12 +39,12 @@ use std::sync::Arc;
 
 use adw::prelude::*;
 use gtk::glib;
-use wolf_core::{CoreConfig, CursorShape, InputEvent, Snapshot, WakeFn, WolfCore};
+use wolf_core::{CoreConfig, InputEvent, WakeFn, WolfCore};
 
+use crate::pane_view;
 use crate::picker::{self, PickerHandle};
-use crate::render::draw_glyph;
 use crate::tree_view::{self, TreeHandle};
-use crate::{cursor, grid_size_for, paint, CellMetrics};
+use crate::CellMetrics;
 
 /// The GApplication id. Adwaita uses it for resource paths, the default window
 /// icon, and single-instance behavior.
@@ -74,9 +82,6 @@ const TREE_PANE_WIDTH: i32 = 250;
 /// a single queued redraw (a dropped "full" send just means a redraw is already
 /// pending).
 const WAKE_CHANNEL_CAP: usize = 1;
-
-/// Divisor to convert an 8-bit color channel (0–255) to Cairo's 0.0–1.0 range.
-const RGB_MAX: f64 = 255.0;
 
 /// Runs the windowed `wolf-gnome` application, returning the process exit code.
 #[must_use]
@@ -148,22 +153,25 @@ fn build_ui(app: &adw::Application) {
     // draw/key/resize/close closures via Rc, and taken out on close.
     let core = Rc::new(RefCell::new(Some(core)));
 
-    // Widgets: header bar over a drawing area in a vertical box.
-    let area = gtk::DrawingArea::builder()
-        .hexpand(true)
-        .vexpand(true)
-        .focusable(true)
-        .build();
+    // The native pane tree (one DrawingArea per pane + a cmdline strip), replacing
+    // the former single editor DrawingArea. Its container is the overlay's main
+    // child; the picker floats over it.
+    let panes = pane_view::build(&core, &metrics);
+    let editor = panes.widget();
+    // The cmdline strip is a focusable widget in the editor region used as the
+    // focus-return target for the picker/tree (so keys keep bubbling to the
+    // window-level controller after they close).
+    let focus_area = panes.cmdline_widget();
 
     // The editor area is the overlay's main child; the picker is added as an
     // overlay child (built below) so it floats over the editor when open.
     let overlay = gtk::Overlay::new();
-    overlay.set_child(Some(&area));
+    overlay.set_child(Some(&editor));
 
-    let picker = picker::build(&overlay, &area, &core);
+    let picker = picker::build(&overlay, &focus_area, &core);
 
     // The file-tree sidebar on the left; the editor (overlay) on the right.
-    let tree = tree_view::build(&core, &area);
+    let tree = tree_view::build(&core, &focus_area);
     let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
     paned.set_start_child(Some(&tree.widget()));
     paned.set_end_child(Some(&overlay));
@@ -195,83 +203,29 @@ fn build_ui(app: &adw::Application) {
         .content(&content)
         .build();
 
-    // Drain the wake channel on the main thread, redrawing on each frame signal and
-    // letting the tree react to a current-file change carried by the same wake.
+    // Drain the wake channel on the main thread. Each signal lets the pane view
+    // react (create/split/close panes, consume layout intents, redraw) and the tree
+    // react to a current-file change carried by the same wake.
     {
-        let area = area.clone();
+        let panes = panes.clone();
         let tree = tree.clone();
         glib::spawn_future_local(async move {
             while wake_rx.recv().await.is_ok() {
-                area.queue_draw();
+                panes.on_render_wake();
                 tree.on_render_wake();
             }
         });
     }
-    // Paint whatever is already there (the initial blank/attached frame).
-    area.queue_draw();
+    // React to whatever is already there (the initial attached frame).
+    panes.on_render_wake();
 
-    wire_draw(&area, &metrics, &core);
     wire_keys(&window, &core, &picker);
-    wire_resize(&area, &metrics, &core);
     wire_close(&window, &core, &picker, &tree);
 
     window.present();
-    // Focus the drawing area so key events have a focused target to bubble from.
-    area.grab_focus();
-}
-
-/// Installs the draw function: paint the snapshot, then draw the cursor.
-fn wire_draw(area: &gtk::DrawingArea, metrics: &Rc<CellMetrics>, core: &Rc<RefCell<Option<WolfCore>>>) {
-    let metrics = metrics.clone();
-    let core = core.clone();
-    area.set_draw_func(move |_area, cr, _width, _height| {
-        let core_ref = core.borrow();
-        let Some(core) = core_ref.as_ref() else {
-            return;
-        };
-        // Keep the read guard's scope short: read, paint, then drop before return.
-        let snap = core.read_snapshot();
-        paint(cr, &snap, &metrics);
-        draw_cursor(cr, &snap, &metrics);
-    });
-}
-
-/// Draws the mode-aware cursor at the snapshot's cursor cell.
-///
-/// The shape follows the current mode's [`CursorShape`] (block in normal mode, a
-/// thin vertical/horizontal bar otherwise). The fill is opaque and contrasting:
-/// [`cursor::cursor_colors`] honors a well-defined cursor highlight or inverts the
-/// underlying cell. For a block cursor the cell's glyph is redrawn in the inverted
-/// color so it reads against the fill; bar cursors leave the glyph untouched.
-fn draw_cursor(cr: &cairo::Context, snap: &Snapshot, metrics: &CellMetrics) {
-    let mode = snap.mode_infos.get(snap.cursor.mode_idx);
-    let shape = mode.map_or(CursorShape::Block, |m| m.shape);
-    let pct = mode.and_then(|m| m.cell_percentage);
-
-    let (fill, glyph) = cursor::cursor_colors(snap);
-
-    let cell_x = snap.cursor.col as f64 * metrics.cell_w;
-    let cell_y = snap.cursor.row as f64 * metrics.cell_h;
-    let (x, y, w, h) = cursor::cursor_rect(shape, cell_x, cell_y, metrics.cell_w, metrics.cell_h, pct);
-
-    cr.set_source_rgb(
-        f64::from(fill.r) / RGB_MAX,
-        f64::from(fill.g) / RGB_MAX,
-        f64::from(fill.b) / RGB_MAX,
-    );
-    cr.rectangle(x, y, w, h);
-    cr.fill().expect("cairo cursor fill failed");
-
-    // A block cursor covers the glyph, so redraw it inverted; a thin bar leaves
-    // the glyph visible and needs no redraw.
-    if shape == CursorShape::Block {
-        if let Some(cell) = snap.grid.cell(snap.cursor.row, snap.cursor.col) {
-            if !cell.text.is_empty() {
-                let style = snap.highlights.resolve(cell.hl_id);
-                draw_glyph(cr, metrics, cell_x, cell_y, &cell.text, glyph, &style);
-            }
-        }
-    }
+    // Focus the cmdline strip so key events have a focused target in the editor
+    // region to bubble from to the window-level key controller.
+    focus_area.grab_focus();
 }
 
 /// Installs the key controller. While the picker is open, keys are left for the
@@ -308,18 +262,6 @@ fn wire_keys(
         }
     });
     window.add_controller(controller);
-}
-
-/// Installs the resize handler: pixels -> grid size -> [`WolfCore::resize`].
-fn wire_resize(area: &gtk::DrawingArea, metrics: &Rc<CellMetrics>, core: &Rc<RefCell<Option<WolfCore>>>) {
-    let metrics = metrics.clone();
-    let core = core.clone();
-    area.connect_resize(move |_area, width, height| {
-        let (cols, rows) = grid_size_for(width, height, metrics.cell_w, metrics.cell_h);
-        if let Some(core) = core.borrow().as_ref() {
-            core.resize(cols, rows);
-        }
-    });
 }
 
 /// Installs the close handler: take the core out (releasing the RefCell borrow in

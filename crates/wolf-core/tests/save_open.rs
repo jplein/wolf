@@ -45,8 +45,9 @@ fn open_existing_markdown() {
     let (core, _waiter, _file) = common::start_core_with_temp_md(HEADING_DOC);
 
     let snap = core.read_snapshot();
+    let grid = snap.active_grid();
 
-    let row0 = snap.grid.row_text(0);
+    let row0 = grid.row_text(0);
     assert!(
         row0.contains("# Title"),
         "row 0 should contain the heading text; got {row0:?}"
@@ -58,14 +59,13 @@ fn open_existing_markdown() {
     // row (row 1) and assert their hl_ids differ.
     let heading_col = first_non_space_col(&row0)
         .expect("heading row should have a non-space char");
-    let heading_cell = snap
-        .grid
+    let heading_cell = grid
         .cell(0, heading_col)
         .expect("expected a heading cell");
 
-    let row1 = snap.grid.row_text(1);
+    let row1 = grid.row_text(1);
     let body_col = first_non_space_col(&row1).expect("body row should have a non-space char");
-    let body_cell = snap.grid.cell(1, body_col).expect("expected a body cell");
+    let body_cell = grid.cell(1, body_col).expect("expected a body cell");
 
     assert_ne!(
         heading_cell.hl_id, body_cell.hl_id,

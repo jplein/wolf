@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use parking_lot::{
     ArcRwLockReadGuard, RawRwLock, RwLock, RwLockReadGuard, RwLockWriteGuard,
@@ -35,6 +35,12 @@ const RED_SHIFT: u32 = 16;
 const GREEN_SHIFT: u32 = 8;
 /// Mask for a single 8-bit color channel.
 const CHANNEL_MASK: u32 = 0xFF;
+
+/// The outer/global grid id. Under `ext_multigrid` grid 1 always exists (Neovim
+/// resizes it; the command line and messages live there), but editor window
+/// content lives on grids `>= 2`. Grid 1 is never painted as window content and
+/// is never the active grid while a window grid exists.
+pub(crate) const OUTER_GRID_ID: u64 = 1;
 
 /// An RGB color, unpacked from Neovim's packed `0xRRGGBB` integer form.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -214,11 +220,26 @@ impl Grid {
         }
     }
 
-    /// Resizes the grid to `cols * rows`, clearing all cells.
+    /// Resizes the grid to `cols * rows`, PRESERVING the content of every cell that
+    /// is within both the old and new bounds. Newly exposed cells are blank.
+    ///
+    /// This matches the Neovim `ui-linegrid` `grid_resize` contract: a resize is not
+    /// a clear (there is a separate `grid_clear` event). Neovim does not re-send
+    /// `grid_line` for rows it considers unchanged after a resize, so a UI that
+    /// cleared on resize would blank surviving content (e.g. the still-open pane
+    /// after a split or close). The overlapping region is therefore copied across.
     pub fn resize(&mut self, cols: usize, rows: usize) {
+        let mut next = vec![Cell::default(); cols * rows];
+        let copy_cols = cols.min(self.cols);
+        let copy_rows = rows.min(self.rows);
+        for row in 0..copy_rows {
+            for col in 0..copy_cols {
+                next[row * cols + col] = self.cells[row * self.cols + col].clone();
+            }
+        }
         self.cols = cols;
         self.rows = rows;
-        self.cells = vec![Cell::default(); cols * rows];
+        self.cells = next;
     }
 
     /// Clears every cell to the default (empty text, hl_id 0).
@@ -351,6 +372,9 @@ pub struct ModeInfo {
 /// The cursor's grid position and current mode index.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Cursor {
+    /// The grid id the cursor currently lives on (the active window grid). Set by
+    /// `grid_cursor_goto`; [`Snapshot::new`] points it at [`OUTER_GRID_ID`].
+    pub grid: u64,
     /// Cursor row (grid coordinate).
     pub row: usize,
     /// Cursor column (grid coordinate).
@@ -372,19 +396,53 @@ pub struct Viewport {
     pub linecount: u64,
 }
 
+/// Per-window layout + viewport info, learned from `win_pos`/`win_viewport`.
+///
+/// Keyed in [`Snapshot::windows`] by the window's grid id. The window-handle
+/// (`win`) is stored as an `i64` — the same form used for `nvim_set_current_win`
+/// / `nvim_win_close` later — decoded from the redraw stream by
+/// [`crate::redraw`] (a `win` arrives either as a plain integer or as a
+/// msgpack-`Ext` wrapping an encoded integer).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WinInfo {
+    /// The grid id this window draws into (`>= 2` for editor windows).
+    pub grid: u64,
+    /// The Neovim window handle, as an `i64` (see the struct docs).
+    pub win: i64,
+    /// Window top edge, in outer-grid rows (from `win_pos`).
+    pub start_row: usize,
+    /// Window left edge, in outer-grid columns (from `win_pos`).
+    pub start_col: usize,
+    /// Window width in columns (from `win_pos`).
+    pub width: usize,
+    /// Window height in rows (from `win_pos`).
+    pub height: usize,
+    /// This window's scroll viewport (from `win_viewport`).
+    pub viewport: Viewport,
+    /// Whether the window is currently hidden (from `win_hide`).
+    pub hidden: bool,
+}
+
 /// A complete, paint-ready frame of render state.
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
-    /// The cell grid.
-    pub grid: Grid,
+    /// All live cell grids, keyed by grid id. Always contains [`OUTER_GRID_ID`]
+    /// (the global/outer grid); editor window content lives on grids `>= 2`.
+    pub grids: HashMap<u64, Grid>,
+    /// Per-window layout + viewport info, keyed by the window's grid id.
+    pub windows: HashMap<u64, WinInfo>,
     /// The highlight table (resolves `hl_id`s).
     pub highlights: HighlightTable,
-    /// The cursor position and mode.
+    /// The cursor position and mode (including the grid it lives on).
     pub cursor: Cursor,
     /// Cached mode descriptors from `mode_info_set`.
     pub mode_infos: Vec<ModeInfo>,
-    /// Viewport info for the scrollbar.
-    pub viewport: Viewport,
+    /// The currently active Neovim window handle, or `None` if not yet known.
+    /// Updated out-of-band from the redraw stream via the `wolf_active_win`
+    /// notification, emitted by the `WolfLayout` `WinEnter` autocmd in
+    /// `runtime/nvim/init.lua` (see [`crate::redraw`]); the front-end uses it to
+    /// mark the active pane.
+    pub active_win: Option<i64>,
     /// Absolute, canonicalized path of the buffer currently being edited in
     /// nvim, or `None` for an unnamed buffer. Updated out-of-band from the
     /// redraw stream via the `wolf_current_file` notification (see
@@ -394,14 +452,87 @@ pub struct Snapshot {
     pub seq: u64,
 }
 
+/// Returns a shared, empty `0x0` grid used as the [`Snapshot::active_grid`]
+/// fallback when no grid is present (so callers never deref a missing grid).
+fn empty_grid() -> &'static Grid {
+    static EMPTY: OnceLock<Grid> = OnceLock::new();
+    EMPTY.get_or_init(|| Grid::new(0, 0))
+}
+
 impl Snapshot {
     /// Creates an empty snapshot sized to `cols * rows`.
+    ///
+    /// Inserts the outer grid ([`OUTER_GRID_ID`]) at `cols * rows` and points the
+    /// cursor at it. The `windows` map starts empty and `active_win` is `None`.
     #[must_use]
     pub fn new(cols: usize, rows: usize) -> Self {
+        let mut grids = HashMap::new();
+        grids.insert(OUTER_GRID_ID, Grid::new(cols, rows));
         Self {
-            grid: Grid::new(cols, rows),
+            grids,
+            cursor: Cursor {
+                grid: OUTER_GRID_ID,
+                ..Cursor::default()
+            },
             ..Self::default()
         }
+    }
+
+    /// Returns the id of the active grid (the cursor's window grid).
+    ///
+    /// Resolution order: the cursor's grid if it exists; else the highest
+    /// non-outer grid id present; else the outer grid if present; else `0`.
+    #[must_use]
+    pub fn active_grid_id(&self) -> u64 {
+        if self.grids.contains_key(&self.cursor.grid) {
+            return self.cursor.grid;
+        }
+        if let Some(&id) = self.grids.keys().filter(|&&id| id != OUTER_GRID_ID).max() {
+            return id;
+        }
+        if self.grids.contains_key(&OUTER_GRID_ID) {
+            return OUTER_GRID_ID;
+        }
+        0
+    }
+
+    /// Returns the active grid (see [`Snapshot::active_grid_id`]), or a shared
+    /// empty `0x0` grid if no grid is present.
+    #[must_use]
+    pub fn active_grid(&self) -> &Grid {
+        self.grids
+            .get(&self.active_grid_id())
+            .unwrap_or_else(|| empty_grid())
+    }
+
+    /// Returns the grid with id `id`, if present.
+    #[must_use]
+    pub fn grid(&self, id: u64) -> Option<&Grid> {
+        self.grids.get(&id)
+    }
+
+    /// Returns a mutable reference to the grid with id `id`, creating an empty
+    /// `0x0` grid (which a subsequent `grid_resize` will size) if it is absent.
+    pub fn grid_mut(&mut self, id: u64) -> &mut Grid {
+        self.grids.entry(id).or_insert_with(|| Grid::new(0, 0))
+    }
+
+    /// Returns the active grid's viewport (the active window's scroll state), or
+    /// the default viewport if the active grid has no associated window.
+    #[must_use]
+    pub fn active_viewport(&self) -> Viewport {
+        self.windows
+            .get(&self.active_grid_id())
+            .map_or_else(Viewport::default, |w| w.viewport)
+    }
+
+    /// Returns the grid id bound to window handle `win`, if any window maps to it.
+    #[must_use]
+    pub fn grid_for_win(&self, win: i64) -> Option<u64> {
+        self.windows
+            .values()
+            .find(|w| w.win == win)
+            .map(|w| w.grid)
     }
 }
 

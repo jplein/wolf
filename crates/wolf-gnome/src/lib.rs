@@ -12,18 +12,26 @@
 //! - [`cursor`]: the pure, GTK-free cursor geometry ([`cursor::cursor_rect`]) and
 //!   mode-aware color logic ([`cursor::cursor_colors`]), unit-tested headlessly.
 //!
-//! The windowed application now exists: [`app::run`] builds a single
-//! `adw::ApplicationWindow` with a header bar and a `gtk::DrawingArea`, attaches a
-//! live [`wolf_core::WolfCore`], paints snapshots via [`paint`], routes keys via
-//! [`gdk_key`], and resizes the grid via [`grid_size_for`]. Files are opened via
-//! Neovim commands (`:e`); there are no file dialogs. Theming, mouse/scroll, and a
-//! native command line remain deferred. The seams above stay free functions so
-//! they remain testable without a display.
+//! The windowed application now exists: [`app::run`] builds an
+//! `adw::ApplicationWindow` with a header bar whose editor area is a **native
+//! pane view** ([`pane_view`]) — a tree of nested `gtk::Paned`s with one
+//! `gtk::DrawingArea` per Neovim window, driven by the pure [`layout`] `PaneTree`
+//! — plus a bottom **cmdline strip** painting the outer grid (where the command
+//! line and messages live under `ext_multigrid`). It attaches a live
+//! [`wolf_core::WolfCore`], paints each pane's grid via [`paint`], routes keys via
+//! [`gdk_key`], consumes layout intents (split / focus / close) on each wake, and
+//! resizes each grid via [`grid_size_for`]. Files are opened via Neovim commands
+//! (`:e`); there are no file dialogs. Theming, mouse/scroll, and a NATIVE command
+//! line (`ext_cmdline` / `ext_messages` as Adw widgets) remain deferred — the
+//! cmdline strip renders the grid-drawn command line instead. The seams above stay
+//! free functions so they remain testable without a display.
 
 pub mod app;
 pub mod cursor;
 pub mod geometry;
 pub mod input;
+pub mod layout;
+pub mod pane_view;
 pub mod picker;
 pub mod render;
 pub mod tree;

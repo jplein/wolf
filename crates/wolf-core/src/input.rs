@@ -153,6 +153,23 @@ pub enum InputEvent {
         /// New row count.
         rows: u16,
     },
+    /// A per-grid resize request (in cells) for a specific window grid.
+    ResizeGrid {
+        /// Target grid id.
+        grid: u64,
+        /// New column count.
+        cols: u16,
+        /// New row count.
+        rows: u16,
+    },
+    /// Focus a specific Neovim window (delegated to `nvim_set_current_win`).
+    ///
+    /// The shell uses this both for click-to-focus and for resolving a
+    /// [`crate::layout::LayoutIntent::FocusDir`] into a concrete window.
+    FocusWin {
+        /// The target Neovim window handle.
+        win: i64,
+    },
     /// Open a file (delegated to Neovim's `edit`).
     Open {
         /// Path to open.
@@ -270,6 +287,25 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
                     "nvim_ui_try_resize",
                     vec![Value::from(*cols), Value::from(*rows)],
                 )
+                .await?;
+            Ok(())
+        }
+        InputEvent::ResizeGrid { grid, cols, rows } => {
+            let _ = nvim
+                .call(
+                    "nvim_ui_try_resize_grid",
+                    vec![Value::from(*grid), Value::from(*cols), Value::from(*rows)],
+                )
+                .await?;
+            Ok(())
+        }
+        InputEvent::FocusWin { win } => {
+            // nvim_set_current_win takes a Window handle. nvim-rs accepts the
+            // plain i64 over generic RPC (confirmed by the focus_win test); the
+            // matching id form is what the redraw stream decodes window handles
+            // into (see `crate::redraw::ext_handle`).
+            let _ = nvim
+                .call("nvim_set_current_win", vec![Value::from(*win)])
                 .await?;
             Ok(())
         }

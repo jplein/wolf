@@ -12,13 +12,15 @@ fn spawn_and_attach() {
 
     let snap = core.read_snapshot();
 
-    // Grid was sized to exactly what we requested in the ui_attach.
+    // Under ext_multigrid the global/outer grid (id 1) is sized to exactly what we
+    // requested in the ui_attach; window grids (>= 2) take the window content area.
+    let global = snap.grid(1).expect("global grid 1 must exist after attach");
     assert_eq!(
-        snap.grid.cols, DEFAULT_COLS as usize,
+        global.cols, DEFAULT_COLS as usize,
         "grid cols should match the requested attach size"
     );
     assert_eq!(
-        snap.grid.rows, DEFAULT_ROWS as usize,
+        global.rows, DEFAULT_ROWS as usize,
         "grid rows should match the requested attach size"
     );
 

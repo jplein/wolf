@@ -7,19 +7,31 @@
 //! **drops the lock**, and only then fires the front-end wake callback. The lock
 //! is never held across an `.await`.
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use nvim_rs::compat::tokio::Compat;
 use nvim_rs::{Handler, Neovim};
-use parking_lot::RwLockWriteGuard;
+use parking_lot::{Mutex, RwLockWriteGuard};
 use rmpv::Value;
 use tokio::process::ChildStdin;
 
+use crate::layout::LayoutIntent;
 use crate::render::{
-    Cell, CursorShape, DefaultColors, HlAttr, ModeInfo, Rgb, SharedSnapshot, Snapshot,
+    Cell, CursorShape, DefaultColors, HlAttr, ModeInfo, Rgb, SharedSnapshot, Snapshot, Viewport,
+    WinInfo,
 };
+
+/// A shared, drainable queue of [`LayoutIntent`]s.
+///
+/// Owned by [`crate::api::WolfCore`] (drained via `drain_intents`) and cloned
+/// into the [`RedrawHandler`], which pushes onto it when a `wolf_layout`
+/// notification arrives. It is a sibling of the render snapshot (NOT part of it):
+/// intents are out-of-band events, not redraw frames, so pushing one does not
+/// bump the snapshot `seq`.
+pub type IntentQueue = Arc<Mutex<VecDeque<LayoutIntent>>>;
 
 /// The front-end wake callback, invoked once per `flush` (after the lock drops).
 ///
@@ -33,18 +45,34 @@ pub type WakeFn = Arc<dyn Fn() + Send + Sync>;
 /// [`RedrawHandler::handle_notify`].
 const CURRENT_FILE_EVENT: &str = "wolf_current_file";
 
+/// Name of the out-of-band notification carrying the active window handle,
+/// emitted by the `WolfLayout` `WinEnter` autocmd in `runtime/nvim/init.lua`.
+/// Routed separately from `redraw` in [`RedrawHandler::handle_notify`].
+const ACTIVE_WIN_EVENT: &str = "wolf_active_win";
+
+/// Name of the out-of-band notification carrying a layout intent payload (a
+/// split or a focus-direction move), emitted by the chord/Ex-command overrides
+/// in `runtime/nvim/init.lua`. Routed separately from `redraw`.
+const LAYOUT_EVENT: &str = "wolf_layout";
+
 /// `nvim-rs` [`Handler`] that applies redraw batches to a [`SharedSnapshot`].
 #[derive(Clone)]
 pub struct RedrawHandler {
     snapshot: SharedSnapshot,
+    intents: IntentQueue,
     wake: WakeFn,
 }
 
 impl RedrawHandler {
-    /// Creates a handler writing into `snapshot` and waking via `wake`.
+    /// Creates a handler writing into `snapshot`, pushing layout intents onto
+    /// `intents`, and waking via `wake`.
     #[must_use]
-    pub fn new(snapshot: SharedSnapshot, wake: WakeFn) -> Self {
-        Self { snapshot, wake }
+    pub fn new(snapshot: SharedSnapshot, intents: IntentQueue, wake: WakeFn) -> Self {
+        Self {
+            snapshot,
+            intents,
+            wake,
+        }
     }
 }
 
@@ -70,6 +98,23 @@ impl Handler for RedrawHandler {
                 // returning, so the wake fires strictly after the lock is
                 // released — same wake-after-unlock invariant as the redraw path.
                 self.apply_current_file(args).await;
+                (self.wake)();
+            }
+            ACTIVE_WIN_EVENT => {
+                // `apply_active_win` acquires and DROPS the write lock before
+                // returning; wake fires after the lock is released (same
+                // wake-after-unlock invariant). This is NOT a redraw frame, so
+                // `seq` is left unchanged.
+                self.apply_active_win(args).await;
+                (self.wake)();
+            }
+            LAYOUT_EVENT => {
+                // A layout intent is out-of-band: parse it, push onto the sibling
+                // intent queue (a brief Mutex, no snapshot lock, never held across
+                // an `.await`), and wake so the front-end drains it. No `seq` bump.
+                if let Some(intent) = args.first().and_then(LayoutIntent::from_payload) {
+                    self.intents.lock().push_back(intent);
+                }
                 (self.wake)();
             }
             _ => {}
@@ -140,21 +185,54 @@ impl RedrawHandler {
         // re-read the snapshot.
         // Lock drops here as `snap` goes out of scope at function return.
     }
+
+    /// Applies a `wolf_active_win` notification: sets the snapshot's `active_win`
+    /// to the reported window handle.
+    ///
+    /// The first argument is `nvim_api_nvim_get_current_win()` from the `WinEnter`
+    /// autocmd. It arrives as a plain integer (a Lua number) or, defensively, as a
+    /// msgpack-`Ext`-wrapped integer; either decodes via [`ext_handle`]. A handle
+    /// we cannot decode leaves `active_win` unchanged.
+    ///
+    /// The write lock is acquired via [`SharedSnapshot::write_async`], is NOT held
+    /// across any `.await`, and is dropped before returning so the caller's wake
+    /// fires after the lock is released. This is NOT a redraw frame, so `seq` is
+    /// left unchanged.
+    async fn apply_active_win(&self, args: Vec<Value>) {
+        let Some(win) = args.first().and_then(ext_handle) else {
+            return;
+        };
+        let mut snap = self.snapshot.write_async().await;
+        snap.active_win = Some(win);
+        // Lock drops here as `snap` goes out of scope at function return.
+    }
 }
 
 /// Applies one redraw event tuple. Returns `true` only for `flush`.
+///
+/// Multigrid routing: `grid_resize`/`grid_clear`/`grid_line`/`grid_scroll`/
+/// `grid_cursor_goto` carry their target grid id in `params[0]`; the window
+/// events (`win_pos`/`win_viewport`/`win_hide`/`win_close`/`grid_destroy`)
+/// carry it likewise. Float and message-grid placement (`win_float_pos`,
+/// `win_external_pos`, `msg_set_pos`) are intentionally ignored: floats and
+/// external windows are not rendered, and the message/command-line content lives
+/// on the outer grid (grid 1), which the front-end paints as a cmdline strip.
 fn apply_event(snap: &mut RwLockWriteGuard<'_, Snapshot>, name: &str, params: Vec<Value>) -> bool {
     match name {
         "grid_resize" => grid_resize(snap, &params),
-        "grid_clear" => snap.grid.clear(),
+        "grid_clear" => grid_clear(snap, &params),
         "grid_line" => grid_line(snap, params),
         "grid_scroll" => grid_scroll(snap, &params),
+        "grid_destroy" => grid_destroy(snap, &params),
         "hl_attr_define" => hl_attr_define(snap, params),
         "default_colors_set" => default_colors_set(snap, &params),
         "mode_info_set" => mode_info_set(snap, params),
         "mode_change" => mode_change(snap, &params),
         "grid_cursor_goto" => grid_cursor_goto(snap, &params),
+        "win_pos" => win_pos(snap, &params),
         "win_viewport" => win_viewport(snap, &params),
+        "win_hide" => win_hide(snap, &params),
+        "win_close" => win_close(snap, &params),
         "flush" => return true,
         _ => {}
     }
@@ -169,27 +247,73 @@ fn as_i64(v: &Value) -> Option<i64> {
     v.as_i64()
 }
 
+/// Decodes a Neovim window/buffer handle, which `nvim-rs` delivers either as a
+/// plain `Value::Integer` or as a `Value::Ext` whose payload is a msgpack-encoded
+/// integer. Returns the handle as an `i64` (the same form used for
+/// `nvim_set_current_win`/`nvim_win_close` later), or `None` if it is neither.
+fn ext_handle(v: &Value) -> Option<i64> {
+    match v {
+        Value::Integer(_) => v.as_i64(),
+        Value::Ext(_type, data) => {
+            let mut bytes: &[u8] = data;
+            rmpv::decode::read_value(&mut bytes)
+                .ok()
+                .and_then(|inner| inner.as_i64())
+        }
+        _ => None,
+    }
+}
+
 fn grid_resize(snap: &mut Snapshot, params: &[Value]) {
     // [grid, width, height]
-    let (Some(width), Some(height)) = (params.get(1).and_then(as_u64), params.get(2).and_then(as_u64))
-    else {
+    let (Some(grid), Some(width), Some(height)) = (
+        params.first().and_then(as_u64),
+        params.get(1).and_then(as_u64),
+        params.get(2).and_then(as_u64),
+    ) else {
         return;
     };
-    snap.grid.resize(width as usize, height as usize);
+    snap.grid_mut(grid).resize(width as usize, height as usize);
+}
+
+fn grid_clear(snap: &mut Snapshot, params: &[Value]) {
+    // [grid]
+    let Some(grid) = params.first().and_then(as_u64) else {
+        return;
+    };
+    // Drop quietly for an unknown grid (avoid materializing a phantom grid).
+    if let Some(g) = snap.grids.get_mut(&grid) {
+        g.clear();
+    }
+}
+
+fn grid_destroy(snap: &mut Snapshot, params: &[Value]) {
+    // [grid]
+    let Some(grid) = params.first().and_then(as_u64) else {
+        return;
+    };
+    snap.grids.remove(&grid);
+    snap.windows.remove(&grid);
 }
 
 fn grid_scroll(snap: &mut Snapshot, params: &[Value]) {
     // [grid, top, bot, left, right, rows, cols]
+    let grid = params.first().and_then(as_u64);
     let top = params.get(1).and_then(as_u64);
     let bot = params.get(2).and_then(as_u64);
     let left = params.get(3).and_then(as_u64);
     let right = params.get(4).and_then(as_u64);
     let rows = params.get(5).and_then(as_i64);
-    let (Some(top), Some(bot), Some(left), Some(right), Some(rows)) = (top, bot, left, right, rows)
+    let (Some(grid), Some(top), Some(bot), Some(left), Some(right), Some(rows)) =
+        (grid, top, bot, left, right, rows)
     else {
         return;
     };
-    snap.grid.scroll(
+    // Drop quietly for an unknown grid (avoid materializing a phantom grid).
+    let Some(g) = snap.grids.get_mut(&grid) else {
+        return;
+    };
+    g.scroll(
         top as usize,
         bot as usize,
         left as usize,
@@ -201,7 +325,9 @@ fn grid_scroll(snap: &mut Snapshot, params: &[Value]) {
 fn grid_line(snap: &mut Snapshot, params: Vec<Value>) {
     // [grid, row, col_start, cells, wrap]
     let mut it = params.into_iter();
-    let _grid = it.next();
+    let Some(grid) = it.next().as_ref().and_then(as_u64) else {
+        return;
+    };
     let Some(row) = it.next().as_ref().and_then(as_u64) else {
         return;
     };
@@ -209,6 +335,11 @@ fn grid_line(snap: &mut Snapshot, params: Vec<Value>) {
         return;
     };
     let Some(Value::Array(cells)) = it.next() else {
+        return;
+    };
+
+    // Drop quietly for an unknown grid (avoid materializing a phantom grid).
+    let Some(g) = snap.grids.get_mut(&grid) else {
         return;
     };
 
@@ -236,7 +367,7 @@ fn grid_line(snap: &mut Snapshot, params: Vec<Value>) {
         // one column. Storing the empty text verbatim satisfies the render spec
         // ("text = '' for the trailing wide cell").
         for _ in 0..repeat {
-            snap.grid.set_cell(
+            g.set_cell(
                 row,
                 col,
                 Cell {
@@ -340,30 +471,85 @@ fn mode_change(snap: &mut Snapshot, params: &[Value]) {
 
 fn grid_cursor_goto(snap: &mut Snapshot, params: &[Value]) {
     // [grid, row, col]
-    let (Some(row), Some(col)) = (params.get(1).and_then(as_u64), params.get(2).and_then(as_u64))
-    else {
+    let (Some(grid), Some(row), Some(col)) = (
+        params.first().and_then(as_u64),
+        params.get(1).and_then(as_u64),
+        params.get(2).and_then(as_u64),
+    ) else {
         return;
     };
+    snap.cursor.grid = grid;
     snap.cursor.row = row as usize;
     snap.cursor.col = col as usize;
 }
 
+fn win_pos(snap: &mut Snapshot, params: &[Value]) {
+    // [grid, win, start_row, start_col, width, height]
+    let Some(grid) = params.first().and_then(as_u64) else {
+        return;
+    };
+    let win = params.get(1).and_then(ext_handle).unwrap_or_default();
+    let start_row = params.get(2).and_then(as_u64).unwrap_or_default() as usize;
+    let start_col = params.get(3).and_then(as_u64).unwrap_or_default() as usize;
+    let width = params.get(4).and_then(as_u64).unwrap_or_default() as usize;
+    let height = params.get(5).and_then(as_u64).unwrap_or_default() as usize;
+
+    let entry = snap.windows.entry(grid).or_insert_with(|| WinInfo {
+        grid,
+        ..WinInfo::default()
+    });
+    entry.grid = grid;
+    entry.win = win;
+    entry.start_row = start_row;
+    entry.start_col = start_col;
+    entry.width = width;
+    entry.height = height;
+    entry.hidden = false;
+}
+
+fn win_hide(snap: &mut Snapshot, params: &[Value]) {
+    // [grid]
+    let Some(grid) = params.first().and_then(as_u64) else {
+        return;
+    };
+    if let Some(win) = snap.windows.get_mut(&grid) {
+        win.hidden = true;
+    }
+}
+
+fn win_close(snap: &mut Snapshot, params: &[Value]) {
+    // [grid]
+    //
+    // Remove BOTH the window entry and its grid. Neovim also emits `grid_destroy`
+    // for the same grid on a window close; removing the grid here too makes the
+    // two paths idempotent so the grid is gone regardless of event ordering.
+    let Some(grid) = params.first().and_then(as_u64) else {
+        return;
+    };
+    snap.windows.remove(&grid);
+    snap.grids.remove(&grid);
+}
+
 fn win_viewport(snap: &mut Snapshot, params: &[Value]) {
     // [grid, win, topline, botline, curline, curcol, line_count, ...]
-    let topline = params.get(2).and_then(as_u64);
-    let botline = params.get(3).and_then(as_u64);
-    let curline = params.get(4).and_then(as_u64);
-    let linecount = params.get(6).and_then(as_u64);
-    if let Some(topline) = topline {
-        snap.viewport.topline = topline;
+    let Some(grid) = params.first().and_then(as_u64) else {
+        return;
+    };
+    let win = params.get(1).and_then(ext_handle).unwrap_or_default();
+    let viewport = Viewport {
+        topline: params.get(2).and_then(as_u64).unwrap_or_default(),
+        botline: params.get(3).and_then(as_u64).unwrap_or_default(),
+        curline: params.get(4).and_then(as_u64).unwrap_or_default(),
+        linecount: params.get(6).and_then(as_u64).unwrap_or_default(),
+    };
+
+    let entry = snap.windows.entry(grid).or_insert_with(|| WinInfo {
+        grid,
+        win,
+        ..WinInfo::default()
+    });
+    if entry.win == 0 {
+        entry.win = win;
     }
-    if let Some(botline) = botline {
-        snap.viewport.botline = botline;
-    }
-    if let Some(curline) = curline {
-        snap.viewport.curline = curline;
-    }
-    if let Some(linecount) = linecount {
-        snap.viewport.linecount = linecount;
-    }
+    entry.viewport = viewport;
 }

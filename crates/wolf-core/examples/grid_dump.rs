@@ -79,14 +79,21 @@ fn main() {
 
     {
         let snap = core.read_snapshot();
-        println!("grid {}x{}, seq={}", snap.grid.cols, snap.grid.rows, snap.seq);
+        let grid = snap.active_grid();
         println!(
-            "cursor row={} col={} mode_idx={}",
-            snap.cursor.row, snap.cursor.col, snap.cursor.mode_idx
+            "active grid {} {}x{}, seq={}",
+            snap.active_grid_id(),
+            grid.cols,
+            grid.rows,
+            snap.seq
+        );
+        println!(
+            "cursor grid={} row={} col={} mode_idx={}",
+            snap.cursor.grid, snap.cursor.row, snap.cursor.col, snap.cursor.mode_idx
         );
         println!("--- grid rows ---");
-        for row in 0..snap.grid.rows {
-            let text = snap.grid.row_text(row);
+        for row in 0..grid.rows {
+            let text = grid.row_text(row);
             if text.trim().is_empty() {
                 continue;
             }
@@ -94,9 +101,9 @@ fn main() {
         }
 
         // Sample the first non-space cell on row 0 and show its resolved colors.
-        let row0 = snap.grid.row_text(0);
+        let row0 = grid.row_text(0);
         if let Some(col) = row0.char_indices().find(|(_, c)| !c.is_whitespace()).map(|(i, _)| i) {
-            if let Some(cell) = snap.grid.cell(0, col) {
+            if let Some(cell) = grid.cell(0, col) {
                 let style = snap.highlights.resolve(cell.hl_id);
                 println!(
                     "sampled cell (0,{col}) text={:?} hl_id={} fg={:?} bg={:?}",

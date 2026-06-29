@@ -67,3 +67,113 @@ function _G.wolf_setup_current_file_tracking(chan)
 	-- Initial emit so the startup buffer is reflected without a buffer switch.
 	vim.rpcnotify(chan, "wolf_current_file", vim.fn.expand("%:p"))
 end
+
+-- Split-panes layout overrides: wolf-core invokes this over RPC after ui_attach
+-- (and after current-file tracking), passing its own RPC channel id. The SHELL
+-- owns the pane layout, so Neovim's split/close/focus chords and the
+-- :split/:vsplit/:close Ex-commands are rebound to report layout INTENTS over
+-- `rpcnotify` rather than (or in addition to) performing the native window op.
+--
+-- Asymmetry (decision D4):
+--   * SPLIT: nvim PERFORMS the real :split/:vsplit (so it creates the window +
+--     grid and emits win_pos) AND reports a wolf_layout{action='split'} intent so
+--     the shell learns the orientation, the origin window, and the new window.
+--   * CLOSE: nvim PERFORMS a guarded nvim_win_close (refusing to close the last
+--     window); the shell observes the removal via the win_close redraw event, so
+--     NO intent is emitted for a close.
+--   * FOCUS move: a PURE intent — nvim does NOT change focus; it only reports
+--     wolf_layout{action='focus_dir'} and the shell drives the focus change.
+--
+-- A WinEnter autocmd reports the active window via wolf_active_win (emitting once
+-- immediately) so core's snapshot tracks the focused pane. BufEnter (current-file
+-- tracking, above) already follows focus, so current_file tracks the active pane.
+function _G.wolf_setup_layout(chan)
+	-- SPLIT: capture the window that is current BEFORE the split, perform the real
+	-- split (the new window becomes current), then report both handles. Orientation
+	-- 'h' = :split (stacked / Horizontal divider), 'v' = :vsplit (side-by-side /
+	-- Vertical divider).
+	local function do_split(orient)
+		local from = vim.api.nvim_get_current_win()
+		vim.cmd(orient == "h" and "split" or "vsplit")
+		local win = vim.api.nvim_get_current_win()
+		vim.rpcnotify(chan, "wolf_layout", {
+			action = "split",
+			orientation = orient,
+			from = from,
+			win = win,
+		})
+	end
+
+	-- CLOSE: guarded against closing the last window in the tab page. No intent.
+	local function do_close()
+		if #vim.api.nvim_tabpage_list_wins(0) > 1 then
+			vim.api.nvim_win_close(0, false)
+		end
+	end
+
+	-- FOCUS: PURE intent. Do NOT change nvim focus here; just report the request.
+	local function do_focus(dir)
+		vim.rpcnotify(chan, "wolf_layout", {
+			action = "focus_dir",
+			dir = dir,
+			from = vim.api.nvim_get_current_win(),
+		})
+	end
+
+	-- Expose the helpers as globals so the cnoreabbrev Ex-command overrides below
+	-- can invoke them from the command line via `lua ...`.
+	_G.wolf_do_split = do_split
+	_G.wolf_do_close = do_close
+	_G.wolf_do_focus = do_focus
+
+	-- Normal-mode window chords. `noremap` (the default) fully replaces the native
+	-- behavior, so a focus chord is genuinely a no-op-on-nvim pure intent.
+	local map = vim.keymap.set
+	local silent = { silent = true }
+	map("n", "<C-w>s", function() do_split("h") end, silent)
+	map("n", "<C-w><C-s>", function() do_split("h") end, silent)
+	map("n", "<C-w>v", function() do_split("v") end, silent)
+	map("n", "<C-w><C-v>", function() do_split("v") end, silent)
+	map("n", "<C-w>c", function() do_close() end, silent)
+	map("n", "<C-w>q", function() do_close() end, silent)
+	map("n", "<C-w>h", function() do_focus("left") end, silent)
+	map("n", "<C-w><Left>", function() do_focus("left") end, silent)
+	map("n", "<C-w>j", function() do_focus("down") end, silent)
+	map("n", "<C-w><Down>", function() do_focus("down") end, silent)
+	map("n", "<C-w>k", function() do_focus("up") end, silent)
+	map("n", "<C-w><Up>", function() do_focus("up") end, silent)
+	map("n", "<C-w>l", function() do_focus("right") end, silent)
+	map("n", "<C-w><Right>", function() do_focus("right") end, silent)
+
+	-- Ex-command overrides via cnoreabbrev. A command-line abbreviation expands
+	-- only a WHOLE word, guarded by getcmdtype()==':' so it never fires inside a
+	-- search or a larger command. This is the fragile path (whole-word only); the
+	-- chords above are the robust primary. :new/:vnew are treated as plain splits.
+	local function abbrev(word, replacement)
+		vim.cmd(string.format(
+			"cnoreabbrev <expr> %s (getcmdtype()==':' && getcmdline()==%q) ? %q : %q",
+			word,
+			word,
+			replacement,
+			word
+		))
+	end
+	abbrev("split", "lua wolf_do_split('h')")
+	abbrev("sp", "lua wolf_do_split('h')")
+	abbrev("vsplit", "lua wolf_do_split('v')")
+	abbrev("vs", "lua wolf_do_split('v')")
+	abbrev("close", "lua wolf_do_close()")
+	abbrev("new", "lua wolf_do_split('h')")
+	abbrev("vnew", "lua wolf_do_split('v')")
+
+	-- Active-window tracking: report the focused window on every WinEnter, and emit
+	-- once immediately so the startup window is reflected.
+	local group = vim.api.nvim_create_augroup("WolfLayout", { clear = true })
+	vim.api.nvim_create_autocmd("WinEnter", {
+		group = group,
+		callback = function()
+			vim.rpcnotify(chan, "wolf_active_win", vim.api.nvim_get_current_win())
+		end,
+	})
+	vim.rpcnotify(chan, "wolf_active_win", vim.api.nvim_get_current_win())
+end

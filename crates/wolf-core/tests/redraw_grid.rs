@@ -7,6 +7,10 @@ mod common;
 use common::{ch, key, FLUSH_TIMEOUT};
 use wolf_core::Key;
 
+/// The outer/global grid id. Under ext_multigrid grid 1 is the global grid that
+/// a global `core.resize(..)` drives; window content lives on grids >= 2.
+const GLOBAL_GRID: u64 = 1;
+
 /// Larger grid used by the resize test so the new dims differ from the default.
 const RESIZE_COLS: u16 = 100;
 const RESIZE_ROWS: u16 = 40;
@@ -61,7 +65,7 @@ fn type_text_appears_in_grid() {
 
     let snap = core.read_snapshot();
 
-    let row0 = snap.grid.row_text(0);
+    let row0 = snap.active_grid().row_text(0);
     assert!(
         row0.trim_start().starts_with("Hello"),
         "row 0 should start with the typed text; got {row0:?}"
@@ -76,7 +80,7 @@ fn type_text_appears_in_grid() {
         .expect("row 0 should contain a non-space character");
 
     let cell = snap
-        .grid
+        .active_grid()
         .cell(0, h_col)
         .expect("expected a cell at the 'H' position");
     let style = snap.highlights.resolve(cell.hl_id);
@@ -103,7 +107,7 @@ fn wide_char_grid_line() {
 
     // Col 0: the wide glyph itself.
     let glyph_cell = snap
-        .grid
+        .active_grid()
         .cell(0, WIDE_GLYPH_COL)
         .expect("expected a cell at the wide glyph column");
     assert_eq!(
@@ -118,7 +122,7 @@ fn wide_char_grid_line() {
     // reconcile this assertion. We additionally assert it is neither the glyph
     // nor the following ASCII, which holds under either convention.
     let trailing_cell = snap
-        .grid
+        .active_grid()
         .cell(0, WIDE_TRAILING_COL)
         .expect("expected a (blank) trailing cell after the wide glyph");
     assert_eq!(
@@ -136,13 +140,13 @@ fn wide_char_grid_line() {
 
     // Cols 2 and 3: the ASCII tail, alignment preserved past the wide glyph.
     let a_cell = snap
-        .grid
+        .active_grid()
         .cell(0, WIDE_ASCII_A_COL)
         .expect("expected a cell for the first ASCII char");
     assert_eq!(a_cell.text, "a", "'a' should render at col 2 after the wide glyph");
 
     let b_cell = snap
-        .grid
+        .active_grid()
         .cell(0, WIDE_ASCII_B_COL)
         .expect("expected a cell for the second ASCII char");
     assert_eq!(b_cell.text, "b", "'b' should render at col 3 after the wide glyph");
@@ -173,16 +177,16 @@ fn grid_line_repeat_expansion() {
 
     // The grid is wide enough (DEFAULT_COLS = 80) to hold the run + trailing char.
     assert!(
-        snap.grid.cols > TRAILING_CHAR_COL,
+        snap.active_grid().cols > TRAILING_CHAR_COL,
         "grid must be wide enough ({} cols) to hold the run and trailing char at col {TRAILING_CHAR_COL}",
-        snap.grid.cols
+        snap.active_grid().cols
     );
 
     // Every sampled column across the run must hold the repeated character: this
     // proves the run was faithfully expanded into individual cells.
     for &c in &SAMPLE_COLS {
         let cell = snap
-            .grid
+            .active_grid()
             .cell(0, c)
             .unwrap_or_else(|| panic!("expected a cell at run column {c}"));
         assert_eq!(
@@ -196,7 +200,7 @@ fn grid_line_repeat_expansion() {
     // length. If repeat expansion advanced columns by 1 instead of by `repeat`,
     // this char would land in the wrong column (or overwrite part of the run).
     let trailing_cell = snap
-        .grid
+        .active_grid()
         .cell(0, TRAILING_CHAR_COL)
         .unwrap_or_else(|| panic!("expected the trailing char's cell at col {TRAILING_CHAR_COL}"));
     assert_eq!(
@@ -208,7 +212,7 @@ fn grid_line_repeat_expansion() {
 
     // The row text prefix must be the full run of identical chars then the
     // trailing char, with no chars before or interleaved.
-    let row0 = snap.grid.row_text(0);
+    let row0 = snap.active_grid().row_text(0);
     let expected_prefix: String = REPEAT_CHAR.to_string().repeat(REPEAT_RUN_LEN);
     assert!(
         row0.starts_with(&expected_prefix),
@@ -232,14 +236,25 @@ fn resize_updates_grid() {
     core.resize(RESIZE_COLS, RESIZE_ROWS);
     waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
+    // NOTE to coder: `core.resize(..)` is a GLOBAL resize (nvim_ui_try_resize),
+    // which under ext_multigrid resizes GRID 1 to exactly these dims. The active
+    // grid is a WINDOW grid (>= 2) whose size is the window's content area
+    // (outer minus status/cmdline rows), so it would NOT equal RESIZE_ROWS
+    // exactly. To keep asserting REAL behavior, this test inspects the global
+    // grid (`snap.grid(GLOBAL_GRID)`), which is what the global resize actually
+    // drives. Per-grid resize of a window grid is covered separately in
+    // `redraw_multigrid.rs::resize_grid_changes_only_that_grid`.
     let snap = core.read_snapshot();
+    let global = snap
+        .grid(GLOBAL_GRID)
+        .expect("global grid must exist after a global resize");
     assert_eq!(
-        snap.grid.cols, RESIZE_COLS as usize,
-        "grid cols should match the resized width (driven by grid_resize)"
+        global.cols, RESIZE_COLS as usize,
+        "global grid cols should match the resized width (driven by grid_resize)"
     );
     assert_eq!(
-        snap.grid.rows, RESIZE_ROWS as usize,
-        "grid rows should match the resized height (driven by grid_resize)"
+        global.rows, RESIZE_ROWS as usize,
+        "global grid rows should match the resized height (driven by grid_resize)"
     );
 
     core.shutdown().expect("shutdown should be Ok");
@@ -265,7 +280,7 @@ fn scroll_shifts_grid_content() {
     let (core, waiter, _file) =
         common::start_core_with_temp_md_sized(&content, SHORT_COLS, SHORT_ROWS);
 
-    let before_row0 = core.read_snapshot().grid.row_text(0);
+    let before_row0 = core.read_snapshot().active_grid().row_text(0);
     let before_num = trailing_line_number(&before_row0)
         .expect("row 0 should start as a numbered 'line N' before scrolling");
 
@@ -274,7 +289,7 @@ fn scroll_shifts_grid_content() {
     core.send_input(common::ctrl(Key::Char('d')));
     waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
-    let after_row0 = core.read_snapshot().grid.row_text(0);
+    let after_row0 = core.read_snapshot().active_grid().row_text(0);
     let after_num = trailing_line_number(&after_row0)
         .expect("row 0 should still be a numbered 'line N' after scrolling");
 
@@ -306,14 +321,14 @@ fn scroll_emits_viewport() {
     let (core, waiter, _file) =
         common::start_core_with_temp_md_sized(&content, SHORT_COLS, SHORT_ROWS);
 
-    let initial_topline = core.read_snapshot().viewport.topline;
+    let initial_topline = core.read_snapshot().active_viewport().topline;
 
     // Scroll down half a screen. Per the InputEvent API, <C-d> moves down.
     waiter.drain();
     core.send_input(common::ctrl(Key::Char('d')));
     waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
-    let new_topline = core.read_snapshot().viewport.topline;
+    let new_topline = core.read_snapshot().active_viewport().topline;
     assert!(
         new_topline > initial_topline,
         "viewport.topline should increase after scrolling down \
@@ -348,7 +363,7 @@ fn scroll_up_shifts_grid_content_down() {
     core.send_input(ch('G'));
     waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
-    let before_row0 = core.read_snapshot().grid.row_text(0);
+    let before_row0 = core.read_snapshot().active_grid().row_text(0);
     let before_num = trailing_line_number(&before_row0).expect(
         "after jumping to end, row 0 should be a numbered 'line N' that is not line 0",
     );
@@ -368,7 +383,7 @@ fn scroll_up_shifts_grid_content_down() {
     core.send_input(common::ctrl(Key::Char('u')));
     waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
-    let after_row0 = core.read_snapshot().grid.row_text(0);
+    let after_row0 = core.read_snapshot().active_grid().row_text(0);
     let after_num = trailing_line_number(&after_row0)
         .expect("after scrolling up, row 0 should still be a numbered 'line N'");
 
@@ -406,7 +421,7 @@ fn viewport_reports_line_count() {
     let (core, _waiter, _file) =
         common::start_core_with_temp_md_sized(&content, SHORT_COLS, SHORT_ROWS);
 
-    let viewport = core.read_snapshot().viewport;
+    let viewport = core.read_snapshot().active_viewport();
 
     assert_eq!(
         viewport.linecount, LINE_COUNT as u64,

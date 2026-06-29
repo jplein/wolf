@@ -9,20 +9,22 @@
 //! is plain calls that core hands to the tokio side to issue RPC. There is one
 //! wake callback, fired on `flush`; no per-event callbacks cross the boundary.
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{self, UnboundedSender};
 
 use crate::files::{self, FileSearch, FileSearchState};
 use crate::input::{self, InputEvent, Nvim};
+use crate::layout::LayoutIntent;
 use crate::mru::{FileEntry, MruError, MruStore};
 use crate::nvim::{self, NvimConfig, NvimError, NvimProcess};
-use crate::redraw::{RedrawHandler, WakeFn};
+use crate::redraw::{IntentQueue, RedrawHandler, WakeFn};
 use crate::render::{OwnedSnapshotReadGuard, SharedSnapshot, Snapshot};
 
 /// How long the input pump waits after the first event of a burst for siblings
@@ -80,6 +82,10 @@ pub struct WolfCore {
     runtime: Runtime,
     nvim: NvimProcess,
     snapshot: SharedSnapshot,
+    /// The drainable layout-intent queue. The redraw handler pushes parsed
+    /// `wolf_layout` intents here; the front-end consumes them via
+    /// [`WolfCore::drain_intents`] on wake.
+    intents: IntentQueue,
     /// Ordered input queue. Every input event is enqueued here and applied by a
     /// single consumer task in FIFO order, so keystrokes never reorder (which
     /// would garble typed text).
@@ -95,7 +101,7 @@ pub struct WolfCore {
 impl WolfCore {
     /// Starts the core: builds a multi-thread tokio runtime, spawns the captive
     /// Neovim, wires `wake` into the redraw handler, and attaches as an
-    /// `ext_linegrid` UI at the configured size.
+    /// `ext_linegrid` + `ext_multigrid` UI at the configured size.
     pub fn start(cfg: CoreConfig, wake: WakeFn) -> Result<Self, CoreError> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -106,7 +112,8 @@ impl WolfCore {
         let cwd = cfg.cwd.clone();
 
         let snapshot = SharedSnapshot::new(cfg.cols as usize, cfg.rows as usize);
-        let handler = RedrawHandler::new(snapshot.clone_handle(), wake);
+        let intents: IntentQueue = Arc::new(Mutex::new(VecDeque::new()));
+        let handler = RedrawHandler::new(snapshot.clone_handle(), intents.clone(), wake);
 
         let nvim_cfg = NvimConfig::from_env(cfg.init_lua, cfg.cols, cfg.rows)
             .map_err(CoreError::Nvim)?;
@@ -115,6 +122,7 @@ impl WolfCore {
             let proc = nvim::spawn(&nvim_cfg, handler).await?;
             proc.ui_attach(cfg.cols, cfg.rows).await?;
             proc.setup_current_file_tracking().await?;
+            proc.setup_layout().await?;
             Ok::<NvimProcess, NvimError>(proc)
         })?;
 
@@ -154,6 +162,7 @@ impl WolfCore {
             runtime,
             nvim,
             snapshot,
+            intents,
             input_tx,
             mru,
             cwd,
@@ -177,6 +186,26 @@ impl WolfCore {
         if self.input_tx.send(event).is_err() {
             tracing::warn!("input dropped: core input pump is gone");
         }
+    }
+
+    /// Drains and returns all pending layout intents (in arrival order).
+    ///
+    /// The front-end calls this on each wake to consume any `wolf_layout` intents
+    /// (splits / focus-direction moves) the redraw handler has pushed since the
+    /// last drain. Returns an empty `Vec` if none are pending.
+    #[must_use]
+    pub fn drain_intents(&self) -> Vec<LayoutIntent> {
+        let mut queue = self.intents.lock();
+        queue.drain(..).collect()
+    }
+
+    /// Focuses a specific Neovim window (e.g. click-to-focus, or after resolving a
+    /// [`LayoutIntent::FocusDir`] into a concrete neighbour window).
+    ///
+    /// Enqueued on the same ordered input channel as keystrokes so it never races
+    /// ahead of or behind pending input; applied via `nvim_set_current_win`.
+    pub fn focus_win(&self, win: i64) {
+        self.send_input(InputEvent::FocusWin { win });
     }
 
     /// Returns the most-recently-opened files (newest first), pruning any whose
@@ -220,6 +249,13 @@ impl WolfCore {
     /// or behind pending keystrokes.
     pub fn resize(&self, cols: u16, rows: u16) {
         self.send_input(InputEvent::Resize { cols, rows });
+    }
+
+    /// Requests a per-grid resize of a single window `grid` (in cells). The
+    /// authoritative size arrives via `grid_resize`. Enqueued on the same ordered
+    /// channel as input so it never races ahead of or behind pending keystrokes.
+    pub fn resize_grid(&self, grid: u64, cols: u16, rows: u16) {
+        self.send_input(InputEvent::ResizeGrid { grid, cols, rows });
     }
 
     /// Cleanly shuts down the captive Neovim and tears down the runtime.

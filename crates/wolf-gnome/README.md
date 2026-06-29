@@ -10,18 +10,28 @@ front-end section and decision 2 on native paint). It consumes
 This crate is a **runnable single-window GTK 4 / libadwaita application**. The
 window is one `adw::ApplicationWindow` (with an `adw::HeaderBar`) whose content is
 a horizontal `gtk::Paned`: a **file-tree sidebar** on the left (see
-[The file-tree sidebar](#the-file-tree-sidebar)) and, on the right, a
-`gtk::DrawingArea` inside a `gtk::Overlay` that also hosts the file picker. There
-are still **no native file dialogs** — but a built-in **file picker** (textbox +
-fuzzy-matched list, see [The file picker](#the-file-picker)) opens files, and
-saving is from within Neovim (`:w`, `:saveas`).
+[The file-tree sidebar](#the-file-tree-sidebar)) and, on the right, a **native
+pane view** inside a `gtk::Overlay` that also hosts the file picker. The pane view
+is a tree of nested `gtk::Paned`s — one `gtk::DrawingArea` per Neovim window,
+driven by a pure `PaneTree` layout — plus a bottom **cmdline strip** that paints
+the outer grid (where the command line and messages live under `ext_multigrid`).
+**Split panes** work: split (`<C-w>s`/`v`, `:split`/`:vsplit`), close (`<C-w>c`),
+focus moves (`<C-w>h/j/k/l`), and divider drag-to-resize, driven by `wolf-core`'s
+layout-intent channel. There are still **no native file dialogs** — but a built-in
+**file picker** (textbox + fuzzy-matched list, see [The file picker](#the-file-picker))
+opens files into the active pane, and saving is from within Neovim (`:w`,
+`:saveas`).
 
 The application is built on top of pure, widget-free **seams** that can also be
 verified *headlessly*, with no display server, no window, and no event loop:
 
 - `gdk_key` — GDK keyval + modifier state → `wolf_core::KeyEvent`.
-- `paint` — render a `wolf_core::Snapshot` onto a Cairo context.
+- `paint` — render one `wolf_core::Grid` (+ its highlight table) onto a Cairo
+  context.
 - `grid_size_for` — pixel size + measured cell size → grid `(cols, rows)`.
+- `PaneTree` (`layout.rs`) — the pure binary pane-layout tree
+  (split/remove/leaves/pane_rects/neighbor), unit-tested headlessly; `pane_view.rs`
+  is the only place that turns it into widgets.
 - `cursor_rect` / `cursor_colors` (`cursor.rs`) — the cursor's shape geometry and
   its reverse-video `(fill, glyph)` color pair, computed without GTK.
 - `is_picker_trigger` (`picker.rs`) — whether a keyval + modifier state is the
@@ -66,24 +76,32 @@ the window and attaches a freshly started `WolfCore`:
   that thread cannot touch GTK, the wake only `try_send`s onto a bounded
   `async-channel` (capacity 1, which coalesces a burst of flushes — a dropped
   "full" send just means a redraw is already pending). A
-  `glib::spawn_future_local` task on the GTK main thread drains the channel and
-  calls `DrawingArea::queue_draw`.
-- **Draw.** The draw func borrows the core, calls `read_snapshot()` (keeping the
-  read guard short), hands the snapshot to the pure `paint` seam, then draws a
-  **mode-aware cursor** at the snapshot's cursor cell. The shape comes from the
-  current mode's `ModeInfo.shape` (a block in normal mode, a thin vertical/
-  horizontal bar in insert/replace), drawn **opaque** via `cursor_rect`. The
-  `(fill, glyph)` colors come from `cursor_colors`, which uses **reverse video**:
-  it honors the mode's cursor highlight only when that yields a visibly distinct
-  pair, otherwise inverts the underlying cell. For a block cursor the cell's glyph
-  is redrawn in the inverted color so it stays readable against the fill; a bar
-  cursor leaves the glyph untouched.
+  `glib::spawn_future_local` task on the GTK main thread drains the channel and, per
+  signal, calls `panes.on_render_wake()` and `tree.on_render_wake()`.
+- **Pane view + draw.** The editor area is the native pane view (`pane_view.rs`).
+  On each wake it creates/splits/closes panes from `WolfCore::drain_intents`,
+  resolves each pane's bound grid via `grid_for_win`, marks the active pane from
+  `Snapshot.active_win` (fallback: the cursor's grid), and queues redraws. Each
+  pane's draw func paints ITS window grid via the pure `paint` seam; the pane that
+  owns the cursor's grid also draws a **mode-aware cursor** at the cursor cell. The
+  shape comes from the current mode's `ModeInfo.shape` (a block in normal mode, a
+  thin vertical/horizontal bar in insert/replace), drawn **opaque** via
+  `cursor_rect`. The `(fill, glyph)` colors come from `cursor_colors`, which uses
+  **reverse video**: it honors the mode's cursor highlight only when that yields a
+  visibly distinct pair, otherwise inverts the underlying cell. For a block cursor
+  the cell's glyph is redrawn in the inverted color; a bar cursor leaves it
+  untouched. The bottom **cmdline strip** paints the outer grid's last row so typed
+  `:`/`/` input stays visible.
 - **Input.** A `gtk::EventControllerKey` on the window routes each key through the
   pure `gdk_key` seam; a `Some` result is sent via `WolfCore::send_input` and the
-  event is consumed (`Propagation::Stop`), a `None` is left to propagate.
-- **Resize.** The drawing area's `connect_resize` maps the pixel allocation to a
-  grid size via the pure `grid_size_for` seam and calls `WolfCore::resize`; the
-  authoritative size comes back via core's `grid_resize`.
+  event is consumed (`Propagation::Stop`), a `None` is left to propagate. Keys
+  reach nvim's current window globally; a `gtk::GestureClick` on a pane calls
+  `WolfCore::focus_win` to focus it.
+- **Resize.** Each pane's `connect_resize` maps its pixel allocation to a grid size
+  via the pure `grid_size_for` seam and calls `WolfCore::resize_grid` for that
+  pane's grid (then resizes the outer grid via `WolfCore::resize`); the
+  authoritative sizes come back via core's `grid_resize`. Dragging a `gtk::Paned`
+  divider drives the same path.
 - **Lifecycle.** `WolfCore` is non-`Send`; it lives only on the main thread in an
   `Rc<RefCell<Option<WolfCore>>>`, shared by the draw/key/resize/close closures.
   Closing the window takes the core out (in its own statement, to release the
@@ -201,10 +219,12 @@ control character.
 ```rust
 pub struct CellMetrics { pub cell_w: f64, pub cell_h: f64, pub baseline: f64, pub font: pango::FontDescription }
 impl CellMetrics { pub fn for_font(cr: &cairo::Context, family: &str, size_pt: f64) -> Self }
-pub fn paint(cr: &cairo::Context, snap: &wolf_core::Snapshot, metrics: &CellMetrics)
+pub fn paint(cr: &cairo::Context, grid: &wolf_core::Grid, highlights: &wolf_core::HighlightTable, metrics: &CellMetrics)
 ```
 
-`paint` is pure and widget-free: it paints onto **any** Cairo surface — an
+`paint` is pure and widget-free: it paints ONE grid (under `ext_multigrid` the
+front-end paints a single window grid at a time, so it takes the `Grid` + its
+`HighlightTable` rather than a whole `Snapshot`) onto **any** Cairo surface — an
 offscreen `ImageSurface` in tests, a `DrawingArea`'s context in production.
 
 `CellMetrics::for_font` measures a monospace cell using `cr` only to obtain a
@@ -263,21 +283,24 @@ via `WOLF_NVIM_BIN` (also exported by the devShell). See
 
 ### The headless smoke test
 
-An **opt-in, `#[ignore]`d** end-to-end test launches the real application under a
-headless Wayland compositor and confirms it actually draws a window a human could
-see. Run it explicitly:
+A suite of **opt-in, `#[ignore]`d** end-to-end tests launches the real application
+under a headless Wayland compositor and confirms it actually draws a window a human
+could see. Run them explicitly:
 
 ```sh
 nix develop --command cargo test -p wolf-gnome -- --ignored
 ```
 
-It requires the flake's smoke toolchain (`cage`, `wtype`, `grim`, `tesseract` on
+They require the flake's smoke toolchain (`cage`, `wtype`, `grim`, `tesseract` on
 `PATH`), a set and writable `XDG_RUNTIME_DIR` (where the Wayland socket lives), and
-`WOLF_NVIM_BIN`. The test runs the whole scenario inside `cage`, types `hello` in
-insert mode via `wtype`, screenshots the live window with `grim`, and OCRs it with
+`WOLF_NVIM_BIN`. Each runs its whole scenario inside `cage`, drives the window with
+`wtype`, screenshots the live window with `grim`, and OCRs it with
 `tesseract --psm 11` ("sparse text" mode, needed for the light-on-dark editor
-grid), asserting the output loosely contains `hello`. Missing preconditions fail
-loud rather than silently skipping. See [`tests/README.md`](tests/README.md).
+grid). The base smoke types `hello` in insert mode and asserts the OCR loosely
+contains it; further smokes cover the file picker, the file-tree sidebar, and the
+four split-pane operations (vertical / horizontal split, focus move, close pane).
+Missing preconditions fail loud rather than silently skipping. See the full list in
+[`tests/README.md`](tests/README.md).
 
 ## gtk-rs versions
 
@@ -298,15 +321,22 @@ GUI denylist.
 
 ## Deferred to later phases
 
-The window and the file picker exist, but the following remain deferred:
+The window, the file picker, the file-tree sidebar, and native split panes exist,
+but the following remain deferred:
 
 - Native file dialogs (open / save / save-as) — opening now goes through the
   built-in file picker; saving is still from within Neovim (`:w`, `:saveas`).
 - Theming (querying the OS theme and pushing it into Neovim).
 - Mouse and scroll input.
-- Native command line / messages / popup menu (currently grid-drawn).
+- A NATIVE command line / messages / popup menu (`ext_cmdline` / `ext_messages` /
+  `ext_popupmenu` as Adw widgets). The grid-drawn command line / messages are
+  shown today in the bottom cmdline strip (which renders only the outer grid's
+  LAST row — multi-row prompts are truncated until `ext_messages`).
 - HiDPI scale handling (the cell-measurement probe is 96-dpi).
 - IME / `IMContext` composition input.
+- Floating windows (`win_float_pos`) and windows opened by non-overridden paths
+  (`:help`, quickfix, preview, `:diffsplit`) — see the split-pane known
+  limitations in [`src/README.md`](src/README.md).
 
 ## Note on the GUI denylist
 

@@ -117,7 +117,7 @@ pub fn cursor_colors(snap: &Snapshot) -> (Rgb, Rgb) {
 
     // Underlying cell colors (the inversion source), computed once and reused as
     // both the inversion result and the visibility reference for the honor path.
-    let (cell_fg, cell_bg) = match snap.grid.cell(snap.cursor.row, snap.cursor.col) {
+    let (cell_fg, cell_bg) = match snap.active_grid().cell(snap.cursor.row, snap.cursor.col) {
         Some(cell) => {
             let style = snap.highlights.resolve(cell.hl_id);
             (
@@ -381,6 +381,11 @@ mod tests {
     const COLS: usize = 4;
     /// Grid rows in the color fixtures.
     const ROWS: usize = 2;
+    /// Grid id used by the fixtures. `Snapshot::new` creates grid 1 and points
+    /// `cursor.grid` at it, so making the fixture cell and cursor both live on
+    /// grid 1 keeps grid 1 the ACTIVE grid (what `cursor_colors` reads via
+    /// `active_grid()` after the S1d migration).
+    const ACTIVE_GRID: u64 = 1;
     /// The cursor cell row used by the fixtures.
     const CURSOR_ROW: usize = 0;
     /// The cursor cell column used by the fixtures.
@@ -435,7 +440,7 @@ mod tests {
                 ..HlAttr::default()
             },
         );
-        snap.grid.set_cell(
+        snap.grid_mut(ACTIVE_GRID).set_cell(
             CURSOR_ROW,
             CURSOR_COL,
             Cell {
@@ -444,6 +449,7 @@ mod tests {
             },
         );
         snap.cursor = Cursor {
+            grid: ACTIVE_GRID,
             row: CURSOR_ROW,
             col: CURSOR_COL,
             mode_idx: 0,

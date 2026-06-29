@@ -3,9 +3,10 @@
 The `wolf-gnome` source modules. Each is a single file (not a subdirectory). The
 crate is **both a library and a binary**: a `[[bin]]` (`main.rs` → `app.rs`) runs
 the windowed application, while the library keeps the pure, widget-free seams
-(`input.rs`, `render.rs`, `geometry.rs`, `cursor.rs`, `tree.rs`) so they stay
-testable without a display. The GTK glue that binds them to live widgets lives in
-`app.rs`, `picker.rs`, and `tree_view.rs`. See the crate [`README.md`](../README.md).
+(`input.rs`, `render.rs`, `geometry.rs`, `cursor.rs`, `tree.rs`, `layout.rs`) so
+they stay testable without a display. The GTK glue that binds them to live widgets
+lives in `app.rs`, `pane_view.rs`, `picker.rs`, and `tree_view.rs`. See the crate
+[`README.md`](../README.md).
 
 ## `main.rs`
 
@@ -16,12 +17,13 @@ opened from within Neovim via `:e`).
 ## `lib.rs`
 
 Crate root. Declares the public modules (`pub mod app;`, `pub mod cursor;`,
-`pub mod geometry;`, `pub mod input;`, `pub mod picker;`, `pub mod render;`,
-`pub mod tree;`, `pub mod tree_view;`) and re-exports the public surface:
-`gdk_key` (from `input`), `paint` + `CellMetrics` (from `render`), `grid_size_for`
-(from `geometry`), and `is_picker_trigger` (from `picker`). The `cursor` module's
-`cursor_rect` / `cursor_colors`, and the `tree` / `tree_view` items, are reached
-via the module path rather than re-exported.
+`pub mod geometry;`, `pub mod input;`, `pub mod layout;`, `pub mod pane_view;`,
+`pub mod picker;`, `pub mod render;`, `pub mod tree;`, `pub mod tree_view;`) and
+re-exports the public surface: `gdk_key` (from `input`), `paint` + `CellMetrics`
+(from `render`), `grid_size_for` (from `geometry`), and `is_picker_trigger` (from
+`picker`). The `cursor` module's `cursor_rect` / `cursor_colors`, the `layout`
+module's `PaneTree` / `PaneLayout`, the `pane_view` items, and the `tree` /
+`tree_view` items are reached via the module path rather than re-exported.
 
 ## `app.rs`
 
@@ -33,38 +35,39 @@ constructs the window and attaches a freshly started `WolfCore`:
   whose content is a vertical `gtk::Box` of an `adw::HeaderBar` over a
   `gtk::Paned` (horizontal). The Paned's **start** child is the file-tree sidebar
   (built by [`tree_view::build`](#tree_viewrs)); its **end** child is the
-  `gtk::Overlay`, whose main child is the focusable `gtk::DrawingArea` and whose
-  overlay child is the file picker ([`picker::build`](#pickerrs), floating over the
-  editor when open). The Paned divider position starts at `TREE_PANE_WIDTH` (250
-  px). The header bar carries an **Open** button (`document-open-symbolic`, tooltip
-  "Open file (Ctrl+Shift+P)") whose click opens the picker. `CoreConfig.cwd` is set
-  from `std::env::current_dir()`. Cell metrics are measured **once** (via a
-  throwaway 1×1 `ImageSurface` probe → `CellMetrics::for_font`) and shared by Rc
-  with the draw and resize closures.
+  `gtk::Overlay`, whose main child is the **native pane view**
+  ([`pane_view::build`](#pane_viewrs) — a tree of nested `gtk::Paned`s + per-pane
+  `DrawingArea`s plus a bottom cmdline strip, replacing the former single editor
+  area) and whose overlay child is the file picker ([`picker::build`](#pickerrs),
+  floating over the editor when open). The Paned divider position starts at
+  `TREE_PANE_WIDTH` (250 px). The header bar carries an **Open** button
+  (`document-open-symbolic`, tooltip "Open file (Ctrl+Shift+P)") whose click opens
+  the picker. `CoreConfig.cwd` is set from `std::env::current_dir()`. Cell metrics
+  are measured **once** (via a throwaway 1×1 `ImageSurface` probe →
+  `CellMetrics::for_font`) and shared by Rc into the pane view.
+- **Picker/tree focus target.** The pane view's **cmdline strip**
+  (`pane_view::PaneHandle::cmdline_widget`) is a focusable widget in the editor
+  region; it is handed to `picker::build` and `tree_view::build` as their
+  focus-return `DrawingArea` so that, after they close, keys keep bubbling to the
+  window-level key controller. The window grabs focus on it after `present()`.
 - **Wake bridge + threading.** A bounded `async-channel` (capacity 1) carries
   wake signals; the `WakeFn` (the only thing that crosses a thread boundary)
   `try_send`s from the tokio worker, and a `glib::spawn_future_local` task on the
-  GTK main thread drains it and, per signal, calls `area.queue_draw()` **and**
+  GTK main thread drains it and, per signal, calls `panes.on_render_wake()`
+  (create/split/close panes, consume layout intents, redraw) **and**
   `tree.on_render_wake()` (so the tree highlights/reveals the current file carried
   by the same render wake). `WolfCore` is started before the window is built; if it
-  fails, the error is logged and no window appears.
-- **Draw func + mode-aware cursor.** Reads `read_snapshot()`, calls the pure
-  `paint` seam, then draws a cursor at the cursor cell. `draw_cursor` is GTK glue
-  only: it takes the shape and `cell_percentage` from
-  `mode_infos[cursor.mode_idx]` (defaulting to `CursorShape::Block`), delegates the
-  rectangle to `cursor::cursor_rect` and the `(fill, glyph)` colors to
-  `cursor::cursor_colors`, and issues an **opaque** Cairo fill (`set_source_rgb`).
-  For a `Block` cursor it then redraws the cell's glyph in the inverted glyph color
-  via `render::draw_glyph` so it stays readable (skipped when the cell is empty or
-  out of grid bounds); `Vertical`/`Horizontal` bars leave the glyph untouched.
+  fails, the error is logged and no window appears. Per-pane painting, the
+  mode-aware cursor, and per-grid/global resize now live in `pane_view.rs` (the app
+  no longer installs a draw/resize handler).
 - **Key controller (+ picker wiring).** A `gtk::EventControllerKey` on the window:
   while the picker is open it `Proceed`s (keys are left for the focused picker
   widgets and never forwarded to nvim/core); otherwise the trigger chord
   (`is_picker_trigger`, Ctrl+Shift+P) opens the picker and consumes the key
   (`Stop`); any other key routes via the pure `gdk_key` seam into
-  `WolfCore::send_input` (`Stop` when handled, else `Proceed`).
-- **Resize.** `connect_resize` → `grid_size_for(width, height, cell_w, cell_h)` →
-  `WolfCore::resize`.
+  `WolfCore::send_input` (`Stop` when handled, else `Proceed`). Keys reach nvim's
+  current window globally; the cursor renders in whichever pane owns the cursor's
+  grid.
 - **Lifecycle / shutdown.** `WolfCore` lives in `Rc<RefCell<Option<WolfCore>>>` on
   the main thread; `connect_close_request` first closes the picker **and** the tree
   (each dropping its `FileSearch` so any in-flight traversal is cancelled) before
@@ -75,10 +78,10 @@ constructs the window and attaches a freshly started `WolfCore`:
 Key constants: `APP_ID` (`org.wolf.Wolf`), `FONT_FAMILY` (`DejaVu Sans Mono`),
 `DEFAULT_FONT_PT` (`14.0`) with the `FONT_PT_ENV` (`WOLF_FONT_PT`) override,
 `INITIAL_COLS`/`INITIAL_ROWS` (80×24), `WINDOW_WIDTH`/`WINDOW_HEIGHT` (1200×640),
-`TREE_PANE_WIDTH` (250), `WAKE_CHANNEL_CAP` (1), and `RGB_MAX` (255.0).
-`WINDOW_WIDTH` was widened from the editor-only default so that, after the tree
-takes `TREE_PANE_WIDTH` on the left, the editor pane keeps roughly its previous
-width (important for the OCR smoke tests).
+`TREE_PANE_WIDTH` (250), and `WAKE_CHANNEL_CAP` (1). `WINDOW_WIDTH` was widened
+from the editor-only default so that, after the tree takes `TREE_PANE_WIDTH` on the
+left, the editor pane keeps roughly its previous width (important for the OCR smoke
+tests).
 
 ## `geometry.rs`
 
@@ -132,8 +135,13 @@ The Cairo/Pango paint seam.
 ```rust
 pub struct CellMetrics { pub cell_w: f64, pub cell_h: f64, pub baseline: f64, pub font: pango::FontDescription }
 impl CellMetrics { pub fn for_font(cr: &cairo::Context, family: &str, size_pt: f64) -> Self }
-pub fn paint(cr: &cairo::Context, snap: &wolf_core::Snapshot, metrics: &CellMetrics)
+pub fn paint(cr: &cairo::Context, grid: &wolf_core::Grid, highlights: &wolf_core::HighlightTable, metrics: &CellMetrics)
 ```
+
+Under `ext_multigrid` the front-end paints a single grid at a time, so `paint`
+takes the `Grid` and its `HighlightTable` directly rather than a whole
+`Snapshot`. `app.rs` passes `snap.active_grid()` + `&snap.highlights` (the active
+window grid in this stage; a per-pane grid later).
 
 - **`CellMetrics` fields** (all in Cairo device units — pixels for an
   `ImageSurface`): `cell_w` advance width, `cell_h` line height, `baseline`
@@ -198,6 +206,130 @@ pub fn cursor_colors(snap: &wolf_core::Snapshot) -> (wolf_core::Rgb, wolf_core::
   `FALLBACK_FG` (white) / `FALLBACK_BG` (black). An out-of-range `mode_idx`, empty
   `mode_infos`, or an out-of-bounds cursor cell all fall through to inversion
   without panicking (via `.get`).
+
+## `layout.rs`
+
+The **pure, GTK-free** binary pane-layout tree (decision D7), unit-tested
+headlessly in its own `#[cfg(test)] mod tests` (mirroring `geometry.rs` /
+`cursor.rs`). It owns every pane-geometry decision reasonable without a display;
+`pane_view.rs` is the only place that turns it into widgets.
+
+```rust
+pub type PaneId = u64;
+pub enum Orientation { Horizontal, Vertical }   // matches wolf_core::SplitOrientation
+pub struct Rect { pub x: f64, pub y: f64, pub w: f64, pub h: f64 }
+pub enum PaneLayout { Leaf(PaneId), Split { orientation, ratio, first, second } }
+pub struct PaneTree { /* private binary tree of leaves/splits */ }
+impl PaneTree {
+    pub fn new(root: PaneId) -> Self
+    pub fn split(&mut self, target: PaneId, new_pane: PaneId, orientation: Orientation)
+    pub fn remove(&mut self, pane: PaneId)
+    pub fn leaves(&self) -> Vec<PaneId>
+    pub fn pane_rects(&self, width: f64, height: f64) -> Vec<(PaneId, Rect)>
+    pub fn neighbor(&self, from: PaneId, dir: wolf_core::FocusDir, width: f64, height: f64) -> Option<PaneId>
+    pub fn layout(&self) -> PaneLayout
+}
+```
+
+- **`Orientation`** matches `wolf_core::SplitOrientation`: a `Horizontal` split
+  STACKS panes top/bottom (divides HEIGHT); a `Vertical` split places them SIDE BY
+  SIDE (divides WIDTH).
+- **`split`** replaces the `target` leaf with an internal node (the chosen
+  orientation, ratio `0.5`) whose children are, in order, the existing `target`
+  (FIRST) and the `new_pane` (SECOND) — so a vertical split keeps `target` on the
+  LEFT, a horizontal split keeps it on TOP. No-op if `target` is not a leaf.
+- **`remove`** removes the leaf and collapses its SIBLING subtree into the parent's
+  slot; removing the last pane is a no-op (the tree is never empty).
+- **`leaves`** / **`pane_rects`** enumerate leaves and their tiling rectangles in a
+  deterministic DFS (child0-before-child1) order; the rects tile the bounds exactly.
+- **`neighbor`** returns the nearest pane in `dir` (from `pane_rects` geometry) that
+  STRICTLY overlaps `from` on the cross axis (Left/Right overlap on Y; Up/Down on
+  X), else `None` (edge / unknown pane). Uses `wolf_core::FocusDir` directly.
+- **`layout`** returns the read-only `PaneLayout` mirror so the widget layer can
+  build nested `gtk::Paned`s without seeing the private `Node`.
+
+Named constants: `DEFAULT_RATIO` (`0.5`), `NEIGHBOR_EPS` (`1e-9`, strict overlap).
+
+## `pane_view.rs`
+
+The **GTK glue** that turns `layout`'s pure `PaneTree` into a live tree of nested
+`gtk::Paned`s + one `gtk::DrawingArea` per pane, plus the ★ S3 **cmdline strip**.
+It mirrors `tree_view.rs` / `picker.rs`: `Rc`/`RefCell`/`Cell` on the GTK main
+thread, a `Weak` upgrade inside every widget closure (no cycles), and short
+snapshot/borrow scopes never held across a `WolfCore` call.
+
+```rust
+pub struct PaneHandle { /* Rc<PaneInner> */ }  // Clone
+pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) -> PaneHandle
+impl PaneHandle {
+    pub fn widget(&self) -> gtk::Widget          // the [pane area | cmdline strip] container
+    pub fn cmdline_widget(&self) -> gtk::DrawingArea  // focus-return target for picker/tree
+    pub fn on_render_wake(&self)
+}
+```
+
+- **Per-pane render.** Each pane binds to a Neovim window (`win`) + its grid (`>=
+  2`, resolved via `win_pos`; pending until then). A pane's draw func paints ITS
+  grid via the pure `paint` seam, and the mode-aware cursor (the `draw_cursor`
+  helper, moved here from `app.rs`) is drawn only in the pane that owns the cursor's
+  grid (`cursor.grid`). Panes NEVER paint grid 1. The active pane carries an
+  `ACTIVE_PANE_CSS` (`wolf-active-pane`) focus-ring `outline` (no layout impact),
+  loaded once into the default display.
+- **Cmdline strip (★ S3).** A one-row `DrawingArea` along the bottom paints grid
+  1's LAST row (the cmdline/`/`-search/messages live there under `ext_multigrid`),
+  translated up so only that row lands in the strip; it also draws the cursor when
+  `cursor.grid == 1`. This restores visibility of typed `:`/`/` input.
+- **Render-wake orchestration.** `on_render_wake` (1) creates the first pane
+  (reusing `FIRST_PANE_ID = 1`, the tree root) when a window grid appears; (2)
+  drains `WolfCore::drain_intents` and applies each — `Split` mutates the tree +
+  binds a new pane (grid resolved now or pending) and makes it active; `FocusDir`
+  resolves the neighbour in the tree and calls `focus_win`; (3) detects closed
+  windows (a bound pane whose grid vanished) and collapses them, never emptying the
+  tree; (4) resolves pending pane grids via `grid_for_win` and sizes them; (5)
+  refreshes the active pane from `active_win` (fallback: the cursor's grid); (6)
+  queues redraws.
+- **Rebuild reuses areas.** `rebuild_pane_area` detaches each pane's `DrawingArea`
+  from its old parent and rebuilds the nested `gtk::Paned` tree from
+  `PaneTree::layout`, REUSING areas by `PaneId` (so bound grids/contents survive).
+  A `Vertical` (side-by-side) split maps to a HORIZONTAL `gtk::Paned`; `Horizontal`
+  (stacked) to a VERTICAL one. Each new paned's divider is set once to `ratio` of
+  its travel (`max-position` notify, one-shot) so neither pane collapses.
+- **Resize.** Each pane `DrawingArea`'s `connect_resize` → `grid_size_for` →
+  `WolfCore::resize_grid` for that pane's grid, then `resize_global` resizes the
+  outer/global grid 1 (`WolfCore::resize`) to the full editor area (so the cmdline
+  spans the width and nvim's overall layout tracks the window). Dragging a paned
+  divider resizes the child areas, which drives the same path.
+- **Click-to-focus.** A `gtk::GestureClick` on each pane area calls
+  `WolfCore::focus_win` for that pane's window and marks it active.
+
+Named constants: `FIRST_PANE_ID` (1), `MIN_WINDOW_GRID` (2), `CMDLINE_GRID_ID`
+(1), `CMDLINE_STRIP_ROWS` (1.0), `ACTIVE_PANE_CSS` (+ its CSS data), `RGB_MAX`
+(255.0).
+
+### Known v1 limitations (split panes)
+
+These are deliberate scope choices for the first split-panes cut, not bugs. Each
+has a clear future direction:
+
+- **Only windows opened via the overridden split commands get a pane.** Panes are
+  created from `wolf_layout` `Split` intents, which only the rebound chords /
+  Ex-commands (`<C-w>s`/`v`, `:split`/`:vsplit`/`:new`/`:vnew`) emit. A window
+  created by a NON-overridden path — `:help`, the quickfix / location list, a
+  preview window, `:diffsplit` — still gets a grid and a `WinInfo` in the snapshot
+  but **no pane**, so its content is not shown (and it can hold stale focus). This
+  follows from the intent-driven design. *Future:* auto-create a pane for any
+  unbound window grid (e.g. an append-split of the active pane).
+- **The cmdline strip shows only the outer grid's LAST row.** Multi-row prompts
+  (the `press-ENTER` prompt, `:messages`, a long `:`-command wrapping) are
+  truncated to their final row until native `ext_messages` lands (deferred per
+  architecture decision 7).
+- **Focus-direction moves use idealized split ratios.** `PaneTree::neighbor`
+  computes neighbours from the tree's nominal `0.5` split ratios, not the actual
+  dragged `gtk::Paned` divider positions, so `<C-w>h/j/k/l` can pick a different
+  neighbour than the pixel geometry would after a manual drag.
+- **Floats and external windows are ignored.** `win_float_pos` /
+  `win_external_pos` (and `msg_set_pos`) are dropped by core, so floating windows
+  and detached UI grids do not appear as panes.
 
 ## `picker.rs`
 

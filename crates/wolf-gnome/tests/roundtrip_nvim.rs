@@ -83,7 +83,8 @@ fn type_word_via_gdk_key_appears_in_grid() {
     std::thread::sleep(SETTLE);
     waiter.drain();
 
-    let row0 = core.read_snapshot().grid.row_text(0);
+    let snap = core.read_snapshot();
+    let row0 = snap.active_grid().row_text(0);
     assert!(
         row0.contains(WORD),
         "row 0 should contain the typed word {WORD:?} (shift contract end-to-end); \

@@ -43,13 +43,13 @@ use std::process::Command;
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the two `#[ignore]` cage smoke tests. Each launches its own `cage`
-/// compositor, and two compositors started concurrently contend for the same
-/// Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both. Under
-/// the default multi-threaded test harness these tests would otherwise run in
-/// parallel, so each acquires this lock for its whole body to force serial
+/// Serializes the eight `#[ignore]` cage smoke tests. Each launches its own
+/// `cage` compositor, and two compositors started concurrently contend for the
+/// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
+/// Under the default multi-threaded test harness these tests would otherwise run
+/// in parallel, so each acquires this lock for its whole body to force serial
 /// execution. Poisoning is recovered from (`into_inner`) so one panicking test
-/// does not cascade into failing the other.
+/// does not cascade into failing the others.
 static CAGE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Font size (points) handed to the app via `WOLF_FONT_PT`. Larger than the
@@ -168,6 +168,193 @@ const TREE_HEADING: &str = "# TREEHEADING";
 /// Lowercased substring OCR must find to prove the tree rendered the file row:
 /// the distinctive filename word (`treenode.md` contains `treenode`).
 const TREE_OCR: &str = "treenode";
+
+// ---------------------------------------------------------------------------
+// Vertical-split smoke (S3): two panes render two different files side by side.
+//
+// This scenario proves the S3 native-panes feature end to end: open file A in the
+// (single) editor pane, trigger a VERTICAL split (`<C-w>v`), open file B in the
+// new pane, and confirm BOTH files' headings render at once — i.e. the shell built
+// a second pane bound to the new nvim window/grid and painted it beside the first.
+//
+// Two distinctly-named markdown files are dropped into the app's temp cwd by the
+// caller (`paneleft.md` => `# PANELEFT`, `paneright.md` => `# PANERIGHT`). The OCR
+// assertion is LOOSE (contains BOTH `paneleft` AND `paneright`).
+//
+// NOTE to coder (the `<C-w>v` chord): the scenario sends the window-command chord
+// as `wtype -M ctrl -k w -m ctrl` (hold Ctrl, tap w, release Ctrl) followed by
+// `wtype -k v`. Verify this against the installed wtype build and against how the
+// init.lua keymap expects the chord (S2 wired <C-w>v -> vsplit). If your wtype
+// needs a single combined invocation (e.g. `wtype -M ctrl -k w -m ctrl -k v`) or a
+// different release sequence, adjust the two chord lines only — the rest of the
+// scenario does not depend on how the chord is delivered.
+//
+// NOTE to coder (OCR width): both files are opened at WOLF_FONT_PT=28 (matching the
+// other smokes). Two panes SIDE BY SIDE halve the per-pane width, so 28pt glyphs in
+// each pane may be too narrow for tesseract to read reliably. If this OCR fails on
+// width alone (headings clipped/illegible) — NOT on a real rendering bug — the
+// coder may launch THIS test with a wider window and/or a smaller WOLF_FONT_PT so
+// both headings fit. Keep the assertion loose (contains).
+//
+// NOTE to coder (cmdline visibility): this relies on the ★ S3 cmdline strip — the
+// typed `:e <file><CR>` Ex-commands live on grid 1, which must be rendered as the
+// bottom command strip for the typed text to take effect/be visible. If `:e` does
+// not open the files, confirm the grid-1 strip + that nvim_input reaches cmdline.
+
+/// Vertical-split smoke: file opened in the FIRST (left) pane.
+const VSPLIT_FILE_LEFT: &str = "paneleft.md";
+
+/// Heading written into [`VSPLIT_FILE_LEFT`]; lowercased it contains
+/// [`VSPLIT_OCR_LEFT`].
+const VSPLIT_HEADING_LEFT: &str = "# PANELEFT";
+
+/// Lowercased substring OCR must find for the LEFT pane's file.
+const VSPLIT_OCR_LEFT: &str = "paneleft";
+
+/// Vertical-split smoke: file opened in the SECOND (right) pane after `<C-w>v`.
+const VSPLIT_FILE_RIGHT: &str = "paneright.md";
+
+/// Heading written into [`VSPLIT_FILE_RIGHT`]; lowercased it contains
+/// [`VSPLIT_OCR_RIGHT`].
+const VSPLIT_HEADING_RIGHT: &str = "# PANERIGHT";
+
+/// Lowercased substring OCR must find for the RIGHT pane's file.
+const VSPLIT_OCR_RIGHT: &str = "paneright";
+
+// ---------------------------------------------------------------------------
+// Horizontal-split smoke (S3): two panes render two different files STACKED.
+//
+// Mirror of the vertical-split smoke, but for a HORIZONTAL split (`<C-w>s`): open
+// file A in the (single) editor pane, trigger a horizontal split, open file B in
+// the new pane, and confirm BOTH headings render at once — i.e. the shell built a
+// second pane bound to the new nvim window/grid and painted it ABOVE/BELOW the
+// first (stacked, sharing the full editor width).
+//
+// Two distinctly-named markdown files are dropped into the app's temp cwd by the
+// caller (`htop.md` => `# HTOPFILE`, `hbot.md` => `# HBOTFILE`). The OCR assertion
+// is LOOSE (contains BOTH `htopfile` AND `hbotfile`).
+//
+// NOTE to coder (the `<C-w>s` chord): the scenario sends the window-command chord
+// as `wtype -M ctrl -k w -m ctrl` (hold Ctrl, tap w, release Ctrl) followed by
+// `wtype -k s`, exactly mirroring the vertical-split smoke's `<C-w>v`. Verify this
+// against the installed wtype build and how the init.lua keymap expects the chord
+// (S2 wired <C-w>s -> horizontal split). Adjust the two chord lines only if needed.
+//
+// NOTE to coder (OCR height): both files are opened at WOLF_FONT_PT=28 (matching
+// the other smokes). Two panes STACKED halve the per-pane HEIGHT, so each pane may
+// be too short for tesseract to read both headings reliably. If this OCR fails on
+// height alone (a heading clipped/illegible) — NOT on a real rendering bug — the
+// coder may launch THIS test with a taller window and/or a smaller WOLF_FONT_PT so
+// both headings fit. Try as-is first; keep the assertion loose (contains).
+
+/// Horizontal-split smoke: file opened in the FIRST (top) pane.
+const HSPLIT_FILE_TOP: &str = "htop.md";
+
+/// Heading written into [`HSPLIT_FILE_TOP`]; lowercased it contains
+/// [`HSPLIT_OCR_TOP`].
+const HSPLIT_HEADING_TOP: &str = "# HTOPFILE";
+
+/// Lowercased substring OCR must find for the TOP pane's file.
+const HSPLIT_OCR_TOP: &str = "htopfile";
+
+/// Horizontal-split smoke: file opened in the SECOND (bottom) pane after `<C-w>s`.
+const HSPLIT_FILE_BOTTOM: &str = "hbot.md";
+
+/// Heading written into [`HSPLIT_FILE_BOTTOM`]; lowercased it contains
+/// [`HSPLIT_OCR_BOTTOM`].
+const HSPLIT_HEADING_BOTTOM: &str = "# HBOTFILE";
+
+/// Lowercased substring OCR must find for the BOTTOM pane's file.
+const HSPLIT_OCR_BOTTOM: &str = "hbotfile";
+
+// ---------------------------------------------------------------------------
+// Focus-move smoke (S3): `<C-w>v` then `<C-w>h` returns focus to the LEFT pane,
+// where a typed marker lands.
+//
+// This scenario exercises the PURE focus-move intent end to end (decision D4):
+// open file A in the (single) editor pane, vertical-split (`<C-w>v`) which leaves
+// focus in the NEW (right) pane, open file B there, then move focus back LEFT with
+// `<C-w>h`. With focus on the left pane we enter insert mode and type a distinctive
+// marker (`iZZLEFT<Esc>`); the marker lands in WHICHEVER pane is focused.
+//
+// Assertions (LOOSE): OCR contains `zzleft` (the insert happened) AND still
+// contains BOTH `focusone` and `focustwo` (the split persisted across the focus
+// move and marker insert).
+//
+// NOTE to coder: this verifies the focus-move PLUMBING end to end (chord ->
+// FocusDir intent -> shell neighbor -> nvim_set_current_win -> keys route to the
+// refocused window). It does NOT pixel-verify WHICH pane received the marker —
+// positional OCR (proving `zzleft` sits in the LEFT pane's column next to
+// `focusone`) is too fragile to assert here. The pure `layout::neighbor` unit
+// tests cover the geometry of which pane is the left neighbor; this smoke proves
+// the wiring fires and the layout survives. If the coder can make a cleaner
+// deterministic per-pane assertion (e.g. distinct unambiguous text only reachable
+// in the left pane), they may strengthen it.
+
+/// Focus-move smoke: file opened in the FIRST (left) pane.
+const FOCUS_FILE_LEFT: &str = "fone.md";
+
+/// Heading written into [`FOCUS_FILE_LEFT`]; lowercased it contains
+/// [`FOCUS_OCR_LEFT`].
+const FOCUS_HEADING_LEFT: &str = "# FOCUSONE";
+
+/// Lowercased substring OCR must find for the LEFT pane's file (split intact).
+const FOCUS_OCR_LEFT: &str = "focusone";
+
+/// Focus-move smoke: file opened in the SECOND (right) pane after `<C-w>v`.
+const FOCUS_FILE_RIGHT: &str = "ftwo.md";
+
+/// Heading written into [`FOCUS_FILE_RIGHT`]; lowercased it contains
+/// [`FOCUS_OCR_RIGHT`].
+const FOCUS_HEADING_RIGHT: &str = "# FOCUSTWO";
+
+/// Lowercased substring OCR must find for the RIGHT pane's file (split intact).
+const FOCUS_OCR_RIGHT: &str = "focustwo";
+
+/// Distinctive marker typed (in insert mode) after focusing back LEFT. Its
+/// lowercased form is [`FOCUS_OCR_MARKER`]. All-uppercase/short to survive OCR.
+const FOCUS_MARKER: &str = "ZZLEFT";
+
+/// Lowercased substring OCR must find to prove the post-`<C-w>h` insert landed in
+/// the focused buffer.
+const FOCUS_OCR_MARKER: &str = "zzleft";
+
+// ---------------------------------------------------------------------------
+// Close-pane smoke (S3): `<C-w>c` closes the focused pane; the survivor reclaims
+// the full editor width.
+//
+// This scenario proves close end to end (decision D4 — close is PERFORMED by nvim
+// and observed by the shell via the `win_close` redraw event, no intent variant):
+// open file A in the (single) editor pane, vertical-split (`<C-w>v`) which focuses
+// the NEW (right) pane, open file B there, then close the focused (right) pane with
+// `<C-w>c`. The right pane disappears and the left (survivor) reclaims the width.
+//
+// Assertions: OCR contains `closekeep` (the survivor renders) and does NOT contain
+// `closegone` (the closed pane is gone).
+//
+// NOTE to coder: if nvim leaves the closed buffer listed elsewhere, or OCR noise
+// makes `closegone` linger in the capture, relax to ONLY asserting `closekeep` is
+// present (survivor renders). Try the stronger NOT-contains assertion first.
+
+/// Close-pane smoke: file opened in the FIRST (left) pane — the SURVIVOR.
+const CLOSE_FILE_KEEP: &str = "ckeep.md";
+
+/// Heading written into [`CLOSE_FILE_KEEP`]; lowercased it contains
+/// [`CLOSE_OCR_KEEP`].
+const CLOSE_HEADING_KEEP: &str = "# CLOSEKEEP";
+
+/// Lowercased substring OCR MUST find: the survivor pane's file.
+const CLOSE_OCR_KEEP: &str = "closekeep";
+
+/// Close-pane smoke: file opened in the SECOND (right) pane — the one CLOSED.
+const CLOSE_FILE_GONE: &str = "cgone.md";
+
+/// Heading written into [`CLOSE_FILE_GONE`]; lowercased it contains
+/// [`CLOSE_OCR_GONE`].
+const CLOSE_HEADING_GONE: &str = "# CLOSEGONE";
+
+/// Lowercased substring OCR must NOT find: the closed pane's file.
+const CLOSE_OCR_GONE: &str = "closegone";
 
 /// External binaries the scenario shells out to. All come from the flake's
 /// smoke toolchain; absence means the devShell was not entered.
@@ -507,6 +694,317 @@ done
 # FileSearch to stream the cwd listing into the sidebar.
 sleep "$SETTLE"
 sleep "$TREE_SETTLE"
+
+# Capture the live window to the output PNG.
+grim "$OUT_PNG"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+/// The VERTICAL-SPLIT scenario, run as a single `sh -c` string INSIDE `cage` (same
+/// structure as [`SCENARIO`]): launch the app, wait for the window to map, open
+/// file A (`:e $VSPLIT_FILE_LEFT<CR>`) in the editor pane, trigger a vertical split
+/// with `<C-w>v`, open file B (`:e $VSPLIT_FILE_RIGHT<CR>`) in the new pane, settle,
+/// and screenshot. Both files live in the cage process's working directory (set via
+/// `Command::current_dir` by the caller) — NOT created from inside this script.
+const VSPLIT_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
+WAIT_TRIES=25
+WAIT_INTERVAL=0.2
+SETTLE=0.5
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the Wayland display to be usable
+# (cheap no-op wtype succeeds only once cage has a mapped surface).
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome vsplit smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw before driving the editor.
+sleep "$SETTLE"
+
+# Open file A in the (single) editor pane via an Ex command. The ':' enters the
+# cmdline (rendered as the S3 bottom strip on grid 1); Return executes the :e.
+wtype -- ":e $VSPLIT_FILE_LEFT"
+wtype -k Return
+
+# Let nvim load file A and redraw before splitting.
+sleep "$SETTLE"
+
+# Trigger a VERTICAL split with the <C-w>v chord (see the NOTE to coder near the
+# VSPLIT_* consts about the exact wtype modifier syntax). The new pane opens to the
+# RIGHT of the current one and initially shows the same buffer (file A).
+wtype -M ctrl -k w -m ctrl
+wtype -k v
+
+# Let the shell build the second pane (bind the new nvim window/grid) and redraw.
+sleep "$SETTLE"
+
+# In the now-focused new (right) pane, replace its buffer with file B.
+wtype -- ":e $VSPLIT_FILE_RIGHT"
+wtype -k Return
+
+# Let nvim load file B and both panes redraw before capturing.
+sleep "$SETTLE"
+
+# Capture the live window to the output PNG.
+grim "$OUT_PNG"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+/// The HORIZONTAL-SPLIT scenario, run as a single `sh -c` string INSIDE `cage`
+/// (same structure as [`VSPLIT_SCENARIO`]): launch the app, wait for the window to
+/// map, open file A (`:e $HSPLIT_FILE_TOP<CR>`) in the editor pane, trigger a
+/// HORIZONTAL split with `<C-w>s`, open file B (`:e $HSPLIT_FILE_BOTTOM<CR>`) in the
+/// new (stacked) pane, settle, and screenshot. Both files live in the cage
+/// process's working directory (set via `Command::current_dir` by the caller).
+const HSPLIT_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
+WAIT_TRIES=25
+WAIT_INTERVAL=0.2
+SETTLE=0.5
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the Wayland display to be usable
+# (cheap no-op wtype succeeds only once cage has a mapped surface).
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome hsplit smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw before driving the editor.
+sleep "$SETTLE"
+
+# Open file A in the (single) editor pane via an Ex command. The ':' enters the
+# cmdline (rendered as the S3 bottom strip on grid 1); Return executes the :e.
+wtype -- ":e $HSPLIT_FILE_TOP"
+wtype -k Return
+
+# Let nvim load file A and redraw before splitting.
+sleep "$SETTLE"
+
+# Trigger a HORIZONTAL split with the <C-w>s chord (see the NOTE to coder near the
+# HSPLIT_* consts about the exact wtype modifier syntax). The new pane stacks
+# below/above the current one and initially shows the same buffer (file A).
+wtype -M ctrl -k w -m ctrl
+wtype -k s
+
+# Let the shell build the second pane (bind the new nvim window/grid) and redraw.
+sleep "$SETTLE"
+
+# In the now-focused new pane, replace its buffer with file B.
+wtype -- ":e $HSPLIT_FILE_BOTTOM"
+wtype -k Return
+
+# Let nvim load file B and both panes redraw before capturing.
+sleep "$SETTLE"
+
+# Capture the live window to the output PNG.
+grim "$OUT_PNG"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+/// The FOCUS-MOVE scenario, run as a single `sh -c` string INSIDE `cage` (same
+/// structure as [`VSPLIT_SCENARIO`]): launch the app, wait for the window to map,
+/// open file A in the editor pane, vertical-split (`<C-w>v`, focus moves to the new
+/// RIGHT pane), open file B there, move focus back LEFT (`<C-w>h`), then type the
+/// marker (`i$FOCUS_MARKER<Esc>`) into the now-focused pane, settle, and screenshot.
+/// Both files live in the cage process's working directory (set by the caller).
+const FOCUS_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
+WAIT_TRIES=25
+WAIT_INTERVAL=0.2
+SETTLE=0.5
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the Wayland display to be usable
+# (cheap no-op wtype succeeds only once cage has a mapped surface).
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome focus smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw before driving the editor.
+sleep "$SETTLE"
+
+# Open file A in the (single) editor pane.
+wtype -- ":e $FOCUS_FILE_LEFT"
+wtype -k Return
+
+# Let nvim load file A and redraw before splitting.
+sleep "$SETTLE"
+
+# Vertical split: the new pane opens to the RIGHT and becomes focused.
+wtype -M ctrl -k w -m ctrl
+wtype -k v
+
+# Let the shell build the second (right) pane and redraw.
+sleep "$SETTLE"
+
+# In the now-focused RIGHT pane, replace its buffer with file B.
+wtype -- ":e $FOCUS_FILE_RIGHT"
+wtype -k Return
+
+# Let nvim load file B and both panes redraw.
+sleep "$SETTLE"
+
+# Move focus BACK to the LEFT pane with the <C-w>h chord (pure FocusDir intent ->
+# shell neighbor -> nvim_set_current_win). See the NOTE to coder near FOCUS_* consts.
+wtype -M ctrl -k w -m ctrl
+wtype -k h
+
+# Let the focus change land (intent drained on wake, focus ring + routing updated).
+sleep "$SETTLE"
+
+# Type the distinctive marker into the now-focused (left) pane's buffer, then leave
+# insert mode. The marker lands in whichever pane is focused.
+wtype -- "i$FOCUS_MARKER"
+wtype -k Escape
+
+# Brief settle between keystroke steps so each is processed in order.
+sleep "$SETTLE"
+
+# Move the cursor OFF the marker's row so its inverted block does not sit atop (and
+# OCR-distort) the asserted marker. After "i$FOCUS_MARKER<Esc>" the block cursor is
+# parked on the marker's LAST char (ZZLEF[T]), which corrupts OCR (reads "zzlef}").
+# As in the working SCENARIO, a normal-mode `o` opens a new line BELOW and enters
+# insert on the now-empty line; Escape then parks the cursor there, leaving
+# "$FOCUS_MARKER" fully unobscured on the previous line so OCR can match the whole
+# word. The empty line left in the LEFT pane's buffer is harmless.
+wtype -- o
+wtype -k Escape
+
+# Let the inserted text redraw before capturing.
+sleep "$SETTLE"
+
+# Capture the live window to the output PNG.
+grim "$OUT_PNG"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+/// The CLOSE-PANE scenario, run as a single `sh -c` string INSIDE `cage` (same
+/// structure as [`VSPLIT_SCENARIO`]): launch the app, wait for the window to map,
+/// open file A in the editor pane, vertical-split (`<C-w>v`, focus moves to the new
+/// RIGHT pane), open file B there, then close the focused (right) pane with
+/// `<C-w>c`, settle, and screenshot. Both files live in the cage process's working
+/// directory (set by the caller).
+const CLOSE_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
+WAIT_TRIES=25
+WAIT_INTERVAL=0.2
+SETTLE=0.5
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the Wayland display to be usable
+# (cheap no-op wtype succeeds only once cage has a mapped surface).
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome close smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw before driving the editor.
+sleep "$SETTLE"
+
+# Open file A (the SURVIVOR) in the (single) editor pane.
+wtype -- ":e $CLOSE_FILE_KEEP"
+wtype -k Return
+
+# Let nvim load file A and redraw before splitting.
+sleep "$SETTLE"
+
+# Vertical split: the new pane opens to the RIGHT and becomes focused.
+wtype -M ctrl -k w -m ctrl
+wtype -k v
+
+# Let the shell build the second (right) pane and redraw.
+sleep "$SETTLE"
+
+# In the now-focused RIGHT pane, open file B (the one we will CLOSE).
+wtype -- ":e $CLOSE_FILE_GONE"
+wtype -k Return
+
+# Let nvim load file B and both panes redraw.
+sleep "$SETTLE"
+
+# Close the focused (right) pane with the <C-w>c chord. nvim performs the close
+# (guarded against the last window); the shell collapses the pane from win_close.
+wtype -M ctrl -k w -m ctrl
+wtype -k c
+
+# Let the close land: the right pane vanishes and the survivor reclaims the width.
+sleep "$SETTLE"
 
 # Capture the live window to the output PNG.
 grim "$OUT_PNG"
@@ -869,6 +1367,401 @@ fn tree_sidebar_shows_files_under_cage() {
         "OCR of the rendered window did not contain {TREE_OCR:?} (loose match). This usually means \
          the tree sidebar did not populate from the cwd FileSearch (or the Paned layout hid/clipped \
          the tree pane). PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+}
+
+#[test]
+#[ignore = "headless-compositor smoke test; run explicitly with --ignored (needs flake smoke toolchain)"]
+fn vertical_split_shows_two_panes_under_cage() {
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
+    // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
+    // directory as its working directory (see `.current_dir` below); the scenario
+    // opens file A in the first pane and file B in the new (split) pane by name.
+    let cwd = make_temp_cwd();
+    let target_left = cwd.join(VSPLIT_FILE_LEFT);
+    let target_right = cwd.join(VSPLIT_FILE_RIGHT);
+    std::fs::write(&target_left, format!("{VSPLIT_HEADING_LEFT}\n"))
+        .unwrap_or_else(|e| panic!("failed to write vsplit left file {}: {e}", target_left.display()));
+    std::fs::write(&target_right, format!("{VSPLIT_HEADING_RIGHT}\n"))
+        .unwrap_or_else(|e| {
+            panic!("failed to write vsplit right file {}: {e}", target_right.display())
+        });
+
+    // Put the screenshot under XDG_RUNTIME_DIR (guaranteed writable) and start from
+    // a clean slate so a stale PNG cannot pass.
+    let out_png = runtime_dir.join("wolf_gnome_vsplit_smoke.png");
+    if out_png.exists() {
+        std::fs::remove_file(&out_png).unwrap_or_else(|e| {
+            panic!(
+                "failed to remove stale screenshot {}: {e}",
+                out_png.display()
+            )
+        });
+    }
+
+    // Run the whole vertical-split scenario inside cage, with the temp dir as the
+    // working directory so the app picks it up as its cwd.
+    let status = Command::new("cage")
+        .arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg(VSPLIT_SCENARIO)
+        .current_dir(&cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("VSPLIT_FILE_LEFT", VSPLIT_FILE_LEFT)
+        .env("VSPLIT_FILE_RIGHT", VSPLIT_FILE_RIGHT)
+        // Large font so the rendered glyphs are legible to tesseract. (See the NOTE
+        // to coder near the VSPLIT_* consts: if two side-by-side panes are too
+        // narrow for 28pt OCR, widen the window or lower the font for THIS test.)
+        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
+        .status()
+        .expect("failed to spawn `cage` for the headless vsplit smoke scenario");
+    assert!(
+        status.success(),
+        "cage vsplit scenario exited unsuccessfully ({status}); the app may have failed to launch, \
+         the window may not have mapped, the <C-w>v split chord may not have fired, the :e commands \
+         may not have loaded, or wtype/grim failed. Screenshot expected at {}.",
+        out_png.display()
+    );
+
+    // The screenshot must exist and be non-empty.
+    let png_meta = std::fs::metadata(&out_png).unwrap_or_else(|e| {
+        panic!(
+            "expected screenshot {} to exist after the cage vsplit scenario, but: {e}",
+            out_png.display()
+        )
+    });
+    assert!(
+        png_meta.len() > 0,
+        "screenshot {} exists but is empty (grim produced no image data)",
+        out_png.display()
+    );
+
+    // OCR the screenshot and assert (loosely) that BOTH files' headings render at
+    // once — proving the vertical split produced a second pane bound to the new
+    // nvim window/grid and painted it beside the first.
+    let ocr_text = ocr_to_lowercase(&out_png);
+    assert!(
+        ocr_text.contains(VSPLIT_OCR_LEFT),
+        "OCR did not contain {VSPLIT_OCR_LEFT:?} (the LEFT pane's file). A miss usually means the \
+         first pane stopped rendering after the split. PNG kept at {} for inspection. OCR output \
+         was:\n{ocr_text}",
+        out_png.display()
+    );
+    assert!(
+        ocr_text.contains(VSPLIT_OCR_RIGHT),
+        "OCR did not contain {VSPLIT_OCR_RIGHT:?} (the RIGHT pane's file). A miss usually means the \
+         <C-w>v split did not create a second pane, or :e did not open file B in it. PNG kept at {} \
+         for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+}
+
+#[test]
+#[ignore = "headless-compositor smoke test; run explicitly with --ignored (needs flake smoke toolchain)"]
+fn horizontal_split_shows_two_panes_under_cage() {
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
+    // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
+    // directory as its working directory (see `.current_dir` below); the scenario
+    // opens file A in the first pane and file B in the new (stacked) pane by name.
+    let cwd = make_temp_cwd();
+    let target_top = cwd.join(HSPLIT_FILE_TOP);
+    let target_bottom = cwd.join(HSPLIT_FILE_BOTTOM);
+    std::fs::write(&target_top, format!("{HSPLIT_HEADING_TOP}\n"))
+        .unwrap_or_else(|e| panic!("failed to write hsplit top file {}: {e}", target_top.display()));
+    std::fs::write(&target_bottom, format!("{HSPLIT_HEADING_BOTTOM}\n")).unwrap_or_else(|e| {
+        panic!(
+            "failed to write hsplit bottom file {}: {e}",
+            target_bottom.display()
+        )
+    });
+
+    // Put the screenshot under XDG_RUNTIME_DIR (guaranteed writable) and start from
+    // a clean slate so a stale PNG cannot pass.
+    let out_png = runtime_dir.join("wolf_gnome_hsplit_smoke.png");
+    if out_png.exists() {
+        std::fs::remove_file(&out_png).unwrap_or_else(|e| {
+            panic!(
+                "failed to remove stale screenshot {}: {e}",
+                out_png.display()
+            )
+        });
+    }
+
+    // Run the whole horizontal-split scenario inside cage, with the temp dir as the
+    // working directory so the app picks it up as its cwd.
+    let status = Command::new("cage")
+        .arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg(HSPLIT_SCENARIO)
+        .current_dir(&cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("HSPLIT_FILE_TOP", HSPLIT_FILE_TOP)
+        .env("HSPLIT_FILE_BOTTOM", HSPLIT_FILE_BOTTOM)
+        // Large font so the rendered glyphs are legible to tesseract. (See the NOTE
+        // to coder near the HSPLIT_* consts: if two stacked panes are too short for
+        // 28pt OCR, make the window taller or lower the font for THIS test.)
+        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
+        .status()
+        .expect("failed to spawn `cage` for the headless hsplit smoke scenario");
+    assert!(
+        status.success(),
+        "cage hsplit scenario exited unsuccessfully ({status}); the app may have failed to launch, \
+         the window may not have mapped, the <C-w>s split chord may not have fired, the :e commands \
+         may not have loaded, or wtype/grim failed. Screenshot expected at {}.",
+        out_png.display()
+    );
+
+    // The screenshot must exist and be non-empty.
+    let png_meta = std::fs::metadata(&out_png).unwrap_or_else(|e| {
+        panic!(
+            "expected screenshot {} to exist after the cage hsplit scenario, but: {e}",
+            out_png.display()
+        )
+    });
+    assert!(
+        png_meta.len() > 0,
+        "screenshot {} exists but is empty (grim produced no image data)",
+        out_png.display()
+    );
+
+    // OCR the screenshot and assert (loosely) that BOTH files' headings render at
+    // once — proving the horizontal split produced a second pane bound to the new
+    // nvim window/grid and painted it stacked with the first.
+    let ocr_text = ocr_to_lowercase(&out_png);
+    assert!(
+        ocr_text.contains(HSPLIT_OCR_TOP),
+        "OCR did not contain {HSPLIT_OCR_TOP:?} (the TOP pane's file). A miss usually means the \
+         first pane stopped rendering after the split. PNG kept at {} for inspection. OCR output \
+         was:\n{ocr_text}",
+        out_png.display()
+    );
+    assert!(
+        ocr_text.contains(HSPLIT_OCR_BOTTOM),
+        "OCR did not contain {HSPLIT_OCR_BOTTOM:?} (the BOTTOM pane's file). A miss usually means \
+         the <C-w>s split did not create a second pane, or :e did not open file B in it. PNG kept \
+         at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+}
+
+#[test]
+#[ignore = "headless-compositor smoke test; run explicitly with --ignored (needs flake smoke toolchain)"]
+fn focus_move_returns_to_first_pane_under_cage() {
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
+    // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
+    // directory as its working directory (see `.current_dir` below).
+    let cwd = make_temp_cwd();
+    let target_left = cwd.join(FOCUS_FILE_LEFT);
+    let target_right = cwd.join(FOCUS_FILE_RIGHT);
+    std::fs::write(&target_left, format!("{FOCUS_HEADING_LEFT}\n"))
+        .unwrap_or_else(|e| panic!("failed to write focus left file {}: {e}", target_left.display()));
+    std::fs::write(&target_right, format!("{FOCUS_HEADING_RIGHT}\n")).unwrap_or_else(|e| {
+        panic!(
+            "failed to write focus right file {}: {e}",
+            target_right.display()
+        )
+    });
+
+    // Put the screenshot under XDG_RUNTIME_DIR (guaranteed writable) and start from
+    // a clean slate so a stale PNG cannot pass.
+    let out_png = runtime_dir.join("wolf_gnome_focus_smoke.png");
+    if out_png.exists() {
+        std::fs::remove_file(&out_png).unwrap_or_else(|e| {
+            panic!(
+                "failed to remove stale screenshot {}: {e}",
+                out_png.display()
+            )
+        });
+    }
+
+    // Run the whole focus-move scenario inside cage, with the temp dir as the
+    // working directory so the app picks it up as its cwd.
+    let status = Command::new("cage")
+        .arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg(FOCUS_SCENARIO)
+        .current_dir(&cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("FOCUS_FILE_LEFT", FOCUS_FILE_LEFT)
+        .env("FOCUS_FILE_RIGHT", FOCUS_FILE_RIGHT)
+        .env("FOCUS_MARKER", FOCUS_MARKER)
+        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
+        .status()
+        .expect("failed to spawn `cage` for the headless focus-move smoke scenario");
+    assert!(
+        status.success(),
+        "cage focus-move scenario exited unsuccessfully ({status}); the app may have failed to \
+         launch, the window may not have mapped, a chord (<C-w>v / <C-w>h) may not have fired, the \
+         :e commands may not have loaded, or wtype/grim failed. Screenshot expected at {}.",
+        out_png.display()
+    );
+
+    // The screenshot must exist and be non-empty.
+    let png_meta = std::fs::metadata(&out_png).unwrap_or_else(|e| {
+        panic!(
+            "expected screenshot {} to exist after the cage focus-move scenario, but: {e}",
+            out_png.display()
+        )
+    });
+    assert!(
+        png_meta.len() > 0,
+        "screenshot {} exists but is empty (grim produced no image data)",
+        out_png.display()
+    );
+
+    // OCR the screenshot. PRIMARY assertions: the marker was inserted (so the
+    // post-<C-w>h insert reached the focused pane) AND the split persisted (both
+    // file headings still render).
+    //
+    // NOTE to coder: this proves the focus-move PLUMBING end to end but does NOT
+    // pixel-verify WHICH pane received the marker (positional OCR is too fragile).
+    // The pure `layout::neighbor` unit tests cover which pane is the left neighbor.
+    let ocr_text = ocr_to_lowercase(&out_png);
+    assert!(
+        ocr_text.contains(FOCUS_OCR_MARKER),
+        "OCR did not contain the inserted marker {FOCUS_OCR_MARKER:?}. A miss usually means the \
+         post-<C-w>h insert did not reach a focused pane (focus-move plumbing broken). PNG kept at \
+         {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+    assert!(
+        ocr_text.contains(FOCUS_OCR_LEFT),
+        "OCR did not contain {FOCUS_OCR_LEFT:?} (the LEFT pane's file). A miss means the split did \
+         not survive the focus move + insert. PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+    assert!(
+        ocr_text.contains(FOCUS_OCR_RIGHT),
+        "OCR did not contain {FOCUS_OCR_RIGHT:?} (the RIGHT pane's file). A miss means the split did \
+         not survive the focus move + insert. PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+}
+
+#[test]
+#[ignore = "headless-compositor smoke test; run explicitly with --ignored (needs flake smoke toolchain)"]
+fn close_pane_leaves_one_under_cage() {
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
+    // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
+    // directory as its working directory (see `.current_dir` below).
+    let cwd = make_temp_cwd();
+    let target_keep = cwd.join(CLOSE_FILE_KEEP);
+    let target_gone = cwd.join(CLOSE_FILE_GONE);
+    std::fs::write(&target_keep, format!("{CLOSE_HEADING_KEEP}\n"))
+        .unwrap_or_else(|e| panic!("failed to write close keep file {}: {e}", target_keep.display()));
+    std::fs::write(&target_gone, format!("{CLOSE_HEADING_GONE}\n"))
+        .unwrap_or_else(|e| panic!("failed to write close gone file {}: {e}", target_gone.display()));
+
+    // Put the screenshot under XDG_RUNTIME_DIR (guaranteed writable) and start from
+    // a clean slate so a stale PNG cannot pass.
+    let out_png = runtime_dir.join("wolf_gnome_close_smoke.png");
+    if out_png.exists() {
+        std::fs::remove_file(&out_png).unwrap_or_else(|e| {
+            panic!(
+                "failed to remove stale screenshot {}: {e}",
+                out_png.display()
+            )
+        });
+    }
+
+    // Run the whole close-pane scenario inside cage, with the temp dir as the
+    // working directory so the app picks it up as its cwd.
+    let status = Command::new("cage")
+        .arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg(CLOSE_SCENARIO)
+        .current_dir(&cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("CLOSE_FILE_KEEP", CLOSE_FILE_KEEP)
+        .env("CLOSE_FILE_GONE", CLOSE_FILE_GONE)
+        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
+        .status()
+        .expect("failed to spawn `cage` for the headless close-pane smoke scenario");
+    assert!(
+        status.success(),
+        "cage close-pane scenario exited unsuccessfully ({status}); the app may have failed to \
+         launch, the window may not have mapped, a chord (<C-w>v / <C-w>c) may not have fired, the \
+         :e commands may not have loaded, or wtype/grim failed. Screenshot expected at {}.",
+        out_png.display()
+    );
+
+    // The screenshot must exist and be non-empty.
+    let png_meta = std::fs::metadata(&out_png).unwrap_or_else(|e| {
+        panic!(
+            "expected screenshot {} to exist after the cage close-pane scenario, but: {e}",
+            out_png.display()
+        )
+    });
+    assert!(
+        png_meta.len() > 0,
+        "screenshot {} exists but is empty (grim produced no image data)",
+        out_png.display()
+    );
+
+    // OCR the screenshot. The survivor (left) pane's file must render, and the
+    // closed (right) pane's file must NOT — proving <C-w>c removed the focused pane
+    // and the survivor reclaimed the width.
+    //
+    // NOTE to coder: if nvim leaves the closed buffer listed elsewhere or OCR noise
+    // makes `closegone` linger, relax to ONLY the `closekeep` present assertion.
+    // Try the stronger NOT-contains first.
+    let ocr_text = ocr_to_lowercase(&out_png);
+    assert!(
+        ocr_text.contains(CLOSE_OCR_KEEP),
+        "OCR did not contain {CLOSE_OCR_KEEP:?} (the survivor pane's file). A miss usually means the \
+         surviving pane stopped rendering after the close. PNG kept at {} for inspection. OCR output \
+         was:\n{ocr_text}",
+        out_png.display()
+    );
+    assert!(
+        !ocr_text.contains(CLOSE_OCR_GONE),
+        "OCR unexpectedly contained {CLOSE_OCR_GONE:?} (the closed pane's file). A hit usually means \
+         <C-w>c did not remove the focused pane. PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
         out_png.display()
     );
 }

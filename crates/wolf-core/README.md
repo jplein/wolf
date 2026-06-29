@@ -2,10 +2,11 @@
 
 The platform-agnostic Rust core of Wolf, a Markdown editor that embeds Neovim as
 its editing engine. Core contains everything Neovim-related and draws no pixels:
-it spawns a hermetic, pinned `nvim --embed`, attaches as an `ext_linegrid` UI,
-folds the entire `redraw` event stream into a render-state snapshot, accepts
-abstract input events, and signals the front-end (via a single wake callback)
-when a new frame is ready.
+it spawns a hermetic, pinned `nvim --embed`, attaches as an `ext_linegrid` +
+`ext_multigrid` UI, folds the entire `redraw` event stream into a multigrid
+render-state snapshot, surfaces a Neovim→shell layout-intent channel (for native
+split panes), accepts abstract input events, and signals the front-end (via a
+single wake callback) when a new frame is ready.
 
 See the workspace docs for context: [`architecture.md`](../../architecture.md)
 (esp. §8 and the core↔front-end contract) and [`build.md`](../../build.md).
@@ -42,17 +43,25 @@ Re-exported from the crate root (`wolf_core::…`):
 
 - `WolfCore::start(cfg: CoreConfig, wake: WakeFn) -> Result<WolfCore, CoreError>`
   — builds a multi-thread tokio runtime, spawns the captive Neovim, wires `wake`
-  into the redraw handler, attaches as an `ext_linegrid` UI, and (after attach)
-  installs current-file tracking so `Snapshot.current_file` follows the active
-  buffer.
+  into the redraw handler, attaches as an `ext_linegrid` + `ext_multigrid` UI, and
+  (after attach) installs current-file tracking (so `Snapshot.current_file`
+  follows the active buffer) and the split-panes layout overrides (so split/focus
+  chords emit `wolf_layout` intents and `wolf_active_win` tracks the active pane).
 - `read_snapshot(&self) -> SnapshotReadGuard` — owned read guard over the current
   render-state `Snapshot` (the front-end holds it for a paint, then drops it).
   `Deref`s to `Snapshot`; its lifetime is independent of `&self`.
 - `send_input(&self, event: InputEvent)` — non-blocking; enqueues the event on an
   ordered FIFO channel applied by a single consumer task. Errors are logged, not
   returned (FFI-shaped fire-and-forget).
-- `resize(&self, cols: u16, rows: u16)` — enqueues an `InputEvent::Resize` on the
-  same ordered channel, so it never races pending keystrokes.
+- `resize(&self, cols: u16, rows: u16)` — enqueues an `InputEvent::Resize` (the
+  outer/global grid) on the same ordered channel, so it never races pending
+  keystrokes.
+- `resize_grid(&self, grid: u64, cols: u16, rows: u16)` — enqueues an
+  `InputEvent::ResizeGrid` (a single per-window grid), same ordered channel.
+- `drain_intents(&self) -> Vec<LayoutIntent>` — consumes the pending `wolf_layout`
+  intents (splits / focus-direction moves) the front-end applies on each wake.
+- `focus_win(&self, win: i64)` — enqueues an `InputEvent::FocusWin` (click-to-focus
+  or a resolved focus move) on the ordered channel.
 - `shutdown(self) -> Result<(), CoreError>` — cleanly quits the captive Neovim
   and tears down the runtime.
 - `mru_recent(&self) -> Vec<FileEntry>` — the most-recently-opened files (newest
@@ -91,22 +100,37 @@ responsible for marshalling onto its UI thread.
 ### Input — the `InputEvent` family (from [`input`](src/input.rs))
 
 `InputEvent` = `Key(KeyEvent) | Mouse(MouseEvent) | Scroll(ScrollEvent) |
-Resize { cols, rows } | Open { path } | Save | SaveAs { path }`. Supporting
-types: `KeyEvent`, `Key`, `MouseEvent`, `MouseButton`, `MouseAction`,
-`ScrollEvent`, `ScrollDirection`.
+Resize { cols, rows } | ResizeGrid { grid, cols, rows } | FocusWin { win } |
+Open { path } | Save | SaveAs { path }`. Supporting types: `KeyEvent`, `Key`,
+`MouseEvent`, `MouseButton`, `MouseAction`, `ScrollEvent`, `ScrollDirection`.
 
 `key_to_notation(&KeyEvent) -> String` translates a key event into Neovim
 notation (`<CR>`, `<Esc>`, `<C-w>`, …). Modifier order is `C-`, `S-`, `A-`, `D-`.
 **Shift contract:** for `Key::Char`, deliver the already-shifted glyph in the
 char and leave `shift = false`; `S-` is emitted only for named keys.
 
+### Layout intents (from [`layout`](src/layout.rs))
+
+`LayoutIntent` = `Split { orientation: SplitOrientation, from: i64, win: i64 } |
+FocusDir { dir: FocusDir, from: i64 }`, with `SplitOrientation`
+(`Horizontal`/`Vertical`) and `FocusDir` (`Left`/`Right`/`Up`/`Down`). These are
+parsed from the captive nvim's `wolf_layout` notifications and consumed via
+`WolfCore::drain_intents`; the shell uses them to own a native split-pane layout.
+A CLOSE has no intent (nvim performs a guarded `nvim_win_close`, observed via the
+`win_close` redraw event).
+
 ### Render state (from [`render`](src/render.rs))
 
-`Snapshot` (grid + highlights + cursor + mode_infos + viewport + current_file +
-seq) plus `Grid`, `Cell`, `HighlightTable`, `HlAttr`, `ResolvedStyle`,
-`DefaultColors`, `Rgb`, `Cursor`, `CursorShape`, `ModeInfo`, `Viewport`, and the
-lock-guarded `SharedSnapshot`. See [`src/README.md`](src/README.md) for per-type
-detail.
+`Snapshot` — the **multigrid** render model: `grids: HashMap<u64, Grid>` (the
+outer grid 1 holds the command line / messages; window content lives on grids
+`>= 2`), `windows: HashMap<u64, WinInfo>` (per-window layout/viewport keyed by
+grid id), `highlights`, `cursor` (with the grid it lives on), `mode_infos`,
+`active_win: Option<i64>` (the active window, via `wolf_active_win`),
+`current_file`, and `seq`. Accessors: `active_grid()`/`active_grid_id()`,
+`grid(id)`/`grid_mut(id)`, `active_viewport()`, `grid_for_win(win)`. Plus `Grid`,
+`Cell`, `HighlightTable`, `HlAttr`, `ResolvedStyle`, `DefaultColors`, `Rgb`,
+`Cursor`, `CursorShape`, `ModeInfo`, `Viewport`, `WinInfo`, and the lock-guarded
+`SharedSnapshot`. See [`src/README.md`](src/README.md) for per-type detail.
 
 `Snapshot.current_file: Option<PathBuf>` is the absolute, canonicalized path of
 the buffer currently being edited in nvim (`None` for an unnamed buffer). It is
@@ -121,8 +145,10 @@ file in its file tree (the GNOME sidebar uses exactly this).
 - **Generic untyped RPC.** All calls go through `Neovim::call` with `rmpv::Value`
   arguments, and the `redraw` stream is consumed as raw `Vec<rmpv::Value>`. This
   insulates core from `nvim-rs` 0.9.2's older typed API vs. Neovim 0.12.
-- **`ext_linegrid` only.** `nvim_ui_attach` is called with `ext_linegrid = true`
-  and `rgb = true`; no other UI extensions in Phase 1.
+- **`ext_linegrid` + `ext_multigrid`.** `nvim_ui_attach` is called with
+  `ext_linegrid = true`, `ext_multigrid = true`, and `rgb = true`; `ext_multigrid`
+  is what gives each Neovim window its own grid so the shell can own a native
+  split-pane layout. `ext_cmdline`/`ext_messages`/`ext_popupmenu` remain deferred.
 - **`WOLF_NVIM_BIN` discovery.** The binary is located *only* via the
   `WOLF_NVIM_BIN` env var (exported by the flake devShell), never `PATH` and
   never `/nix/store` scanning.
@@ -136,6 +162,14 @@ file in its file tree (the GNOME sidebar uses exactly this).
   `BufEnter`/`BufWinEnter`/`BufFilePost` autocmd that `rpcnotify`s
   `wolf_current_file` with `expand('%:p')` (plus one initial emit). The handler
   folds each notification into `Snapshot.current_file` and wakes the front-end.
+- **Split-panes layout overrides.** After current-file tracking, core calls
+  `setup_layout`, which (the same channel-id-via-`nvim_get_api_info` pattern)
+  invokes `_G.wolf_setup_layout(chan)` (in `runtime/nvim/init.lua`). That rebinds
+  the `<C-w>` split/close/focus chords and the `:split`/`:vsplit`/`:close`
+  Ex-commands to `rpcnotify` `wolf_layout` intents, and registers a `WinEnter`
+  autocmd that `rpcnotify`s `wolf_active_win`. The handler parses each
+  `wolf_layout` into a `LayoutIntent` on a drainable queue and folds
+  `wolf_active_win` into `Snapshot.active_win`.
 
 ## The file-search session
 
@@ -185,10 +219,13 @@ See [`tests/README.md`](tests/README.md).
 
 ## Phase 1 scope and what is deferred
 
-In scope: hermetic pinned Neovim, `ext_linegrid` redraw → snapshot, abstract
-input translation, the FFI-shaped surface, and headless verification.
+In scope: hermetic pinned Neovim, `ext_linegrid` + `ext_multigrid` redraw →
+multigrid snapshot, the Neovim→shell layout-intent channel (native split panes),
+abstract input translation, the FFI-shaped surface, and headless verification.
 
 Deferred to later phases: full `wrapNeovim` plugin baking (treesitter grammars,
-`marksman` LSP, formatter), the GTK (`wolf-gnome`) and macOS (`wolf-macos`)
-front-ends, swift-bridge bindings, native cmdline/messages/popupmenu, theming,
-and intents.
+`marksman` LSP, formatter), the macOS (`wolf-macos`) front-end, swift-bridge
+bindings, native cmdline/messages/popupmenu (`ext_cmdline`/`ext_messages`/
+`ext_popupmenu`), theming, and the non-layout intents (open/save dialogs, window
+title). The layout intents (split/focus) and the GTK (`wolf-gnome`) front-end are
+now realized.
