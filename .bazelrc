@@ -1,0 +1,20 @@
+# Wolf macOS Bazel build configuration.
+#
+# Scope: build the platform-agnostic `wolf-core` Rust crate with the host Xcode
+# SDK (apple_support C/link toolchain), rustc from rules_rust, and dependencies
+# from the existing Cargo workspace via crate_universe.
+
+common --enable_bzlmod
+common --enable_platform_specific_config
+
+# Use Bazel C++ toolchain resolution so apple_support's registered cc toolchain
+# is selected on macOS (rather than the legacy crosstool_top path).
+build --incompatible_enable_cc_toolchain_resolution
+
+# macOS-specific config, auto-applied via --enable_platform_specific_config.
+build:macos --apple_platform_type=macos
+build:macos --repo_env=DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+build:macos --apple_generate_dsym=false
+
+# Keep the bzlmod lockfile current as deps resolve.
+common --lockfile_mode=update

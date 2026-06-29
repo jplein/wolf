@@ -35,6 +35,18 @@ toolkit into core's tree, so the denylist above is unchanged (the command and th
 denied-crate list stay exactly as written) and stays clean. The flake also needs
 no change (no system SQLite/libgit2 to provision).
 
+## Building under Bazel (macOS)
+
+On macOS `wolf-core` builds with Bazel (via bazelisk) rather than Cargo; the target label is `//crates/wolf-core:wolf_core`. Its dependencies come from the same `Cargo.toml`/`Cargo.lock` as the Cargo build, consumed through `rules_rust`'s `crate_universe` (with `rules_rust` downloading a pinned `rustc`). The one hard rule above still holds under Bazel: `wolf-gnome` is given no Bazel target, so no GUI toolkit enters `wolf-core`'s Bazel dependency graph. The Bazel-equivalent denylist check is a `bazel query` over the resolved deps:
+
+```sh
+bazel query 'deps(//crates/wolf-core:wolf_core)' | grep -iE \
+  'gtk|gdk|glib|cairo|pango|adwaita|objc|cocoa|core-graphics|winit|wgpu|skia|softbuffer' \
+  || echo clean
+```
+
+See [`build.md`](../../build.md) for the full macOS build and repin workflow.
+
 ## Public API surface
 
 Re-exported from the crate root (`wolf_core::…`):
@@ -149,7 +161,7 @@ file in its file tree (the GNOME sidebar uses exactly this).
   `ext_linegrid = true`, `ext_multigrid = true`, and `rgb = true`; `ext_multigrid`
   is what gives each Neovim window its own grid so the shell can own a native
   split-pane layout. `ext_cmdline`/`ext_messages`/`ext_popupmenu` remain deferred.
-- **`WOLF_NVIM_BIN` discovery.** The binary is located *only* via the
+- **`WOLF_NVIM_BIN` discovery.** The binary is located _only_ via the
   `WOLF_NVIM_BIN` env var (exported by the flake devShell), never `PATH` and
   never `/nix/store` scanning.
 - **Hermetic launch.** `nvim --embed --clean -u runtime/nvim/init.lua -i NONE -n`

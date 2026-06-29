@@ -7,3 +7,9 @@ When looking for APIs or an understanding of how something works, always start w
 If you are making more than a trivial change, always use the /orchestrate skill, to make sure that tests are run and the implementation is verified.
 
 Prefer end-to-end and integration tests over mocks. The purpose of this application is to communicate with a Neovim process, so the tests should actually start a Neovim process and communicate with it.
+
+## Markdown
+
+When editing Markdown files, avoid adding hard line breaks in a single paragraph.
+
+After editing a Markdown file, reformat it using `prettier --write`.

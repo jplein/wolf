@@ -1,0 +1,21 @@
+# Bazel build for the platform-agnostic `wolf-core` crate.
+#
+# Dependencies are pulled from the Cargo workspace via crate_universe
+# (`@crates`). `all_crate_deps` reads this package's Cargo.toml to select the
+# right subset. No GUI toolkit is present in this graph — see the denylist query
+# in build.md. No rust_test/example target in this bootstrap step (tests need a
+# pinned nvim via WOLF_NVIM_BIN, not yet provisioned on macOS).
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "wolf_core",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "wolf_core",
+    edition = "2021",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = all_crate_deps(normal = True),
+)

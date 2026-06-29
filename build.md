@@ -1,20 +1,19 @@
 # Building Wolf
 
-This covers Phase 1: building and testing `wolf-core`, the platform-agnostic
-Rust core. The platform front-ends (`wolf-gnome`, `wolf-macos`) are later phases.
+This covers building and testing `wolf-core`, the platform-agnostic Rust core. On Linux (NixOS) it builds with Cargo under Nix; on macOS it builds with Bazel (via bazelisk) using the host Xcode SDK. The platform front-ends are later phases: the `wolf-gnome` GTK front-end builds with Cargo on Linux, and the `wolf-macos` AppKit front-end (Swift via swift-bridge) is not yet built on either path.
 
-## Prerequisites
+## Building on NixOS (Linux, Cargo)
 
-- **NixOS (Linux).** The dev environment is a NixOS-only `flake.nix` devShell.
+### Prerequisites
+
+- **NixOS (Linux).** The Linux dev environment is the `flake.nix` devShell.
 - **Nix with flakes enabled** (`experimental-features = nix-command flakes`).
 - **[`direnv`](https://direnv.net/) + [`nix-direnv`](https://github.com/nix-community/nix-direnv).**
 
-There are no `darwin` outputs in the flake; macOS work comes in a later phase.
+### Activating the dev environment
 
-## Activating the dev environment
-
-The repo ships an `.envrc` that runs `use flake` (guarded so it is a no-op off
-Linux). Activate it once per checkout:
+The repo ships an `.envrc` that runs `use flake` (on Linux and on macOS).
+Activate it once per checkout:
 
 ```sh
 direnv allow
@@ -35,13 +34,13 @@ tests panic loudly rather than skip.
 Do not use a system `cargo`/`rustc`/`nvim`. The toolchain and the Neovim binary
 are pinned by `flake.nix`; all builds and tests must run inside the devShell.
 
-## Building
+### Building
 
 ```sh
 cargo build        # builds the whole workspace
 ```
 
-## Testing
+### Testing
 
 ```sh
 cargo test         # unit + integration tests for wolf-core
@@ -59,6 +58,43 @@ little text, and dumps the resulting grid:
 ```sh
 cargo run -p wolf-core --example grid_dump
 ```
+
+## Building on macOS (Bazel)
+
+On macOS the canonical build tool for the Rust core is **Bazel**, driven by **bazelisk**, and it builds with the **host Xcode SDK** (not the older SDK shipped inside Nix). This currently builds **only `wolf-core`** — running its tests under Bazel (they need a pinned `nvim` via `WOLF_NVIM_BIN`, not yet provisioned on macOS) and the `wolf-macos` AppKit front-end remain later phases.
+
+### Prerequisites
+
+- **macOS** with **Xcode installed** at `/Applications/Xcode.app`. The Bazel C/link toolchain (apple_support) drives the host Xcode SDK via `DEVELOPER_DIR`, which the dev shell sets to `/Applications/Xcode.app/Contents/Developer`. This matters because `rusqlite`'s `bundled` SQLite is compiled from C via `cc`.
+- **Nix with flakes enabled** and **[`direnv`](https://direnv.net/) + [`nix-direnv`](https://github.com/nix-community/nix-direnv)** (same as Linux).
+
+### Activating the dev environment
+
+The same `.envrc` runs `use flake` on macOS, selecting the Darwin dev shell. Activate it once per checkout:
+
+```sh
+direnv allow
+```
+
+The Darwin shell provides **bazelisk** (exposed as both `bazelisk` and `bazel`) and exports `DEVELOPER_DIR`. It deliberately carries **no** Rust toolchain — `rules_rust` downloads a pinned `rustc`, and the Rust dependencies are resolved from the existing `Cargo.toml`/`Cargo.lock` via `rules_rust`'s `crate_universe`. There is no system `cargo`/`rustc` requirement on macOS.
+
+bazelisk reads the Bazel version pinned in `.bazelversion` and fetches it; the Bazel build itself is configured by `MODULE.bazel` (bzlmod) with committed lockfiles (`MODULE.bazel.lock`, `Cargo.Bazel.lock`).
+
+### Building
+
+```sh
+bazel build //crates/wolf-core:wolf_core
+```
+
+### Repinning Rust dependencies
+
+After changing `wolf-core`'s Cargo dependencies (`Cargo.toml`/`Cargo.lock`), regenerate the `crate_universe` lock by repinning:
+
+```sh
+CARGO_BAZEL_REPIN=1 bazel build //crates/wolf-core:wolf_core
+```
+
+Commit the updated `Cargo.Bazel.lock` (and `MODULE.bazel.lock`). A clean checkout then builds without needing to repin.
 
 ## The one hard rule and how it is enforced
 
@@ -81,6 +117,14 @@ objc objc2 cocoa core-graphics winit wgpu skia-safe softbuffer
 
 If any of these appears in core's tree, the platform boundary has leaked and the
 build is wrong.
+
+The same rule holds under the Bazel build on macOS: `wolf-gnome` is deliberately given no Bazel target, so GTK never enters `wolf-core`'s Bazel dependency graph. Verify it with a `bazel query` over the resolved deps:
+
+```sh
+bazel query 'deps(//crates/wolf-core:wolf_core)' | grep -iE \
+  'gtk|gdk|glib|cairo|pango|adwaita|objc|cocoa|core-graphics|winit|wgpu|skia|softbuffer' \
+  || echo clean
+```
 
 ## Notes
 

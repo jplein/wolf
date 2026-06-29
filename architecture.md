@@ -64,7 +64,7 @@ Responsibilities:
 
 Responsibilities it explicitly does **not** have: deciding what text or colors
 appear (Neovim does), drawing pixels (the front-ends do), or knowing about
-windows, menus, or dialogs (only that it may *request* them via intents).
+windows, menus, or dialogs (only that it may _request_ them via intents).
 
 ### Platform front-ends: wolf-gnome, wolf-macos
 
@@ -166,7 +166,7 @@ msgpack-RPC. No sockets, no shared user Neovim instance.
 
 There is no separate document representation in Wolf. Open is
 `nvim.command("edit <path>")`; save is `"write"` / `"saveas"`. Because Markdown is
-plain text, Neovim's buffer *is* the document model. The grid is a projection of
+plain text, Neovim's buffer _is_ the document model. The grid is a projection of
 the visible viewport, never the whole file.
 
 ### 5. Scrolling belongs to Neovim; the scrollbar is synthesized
@@ -337,10 +337,7 @@ dumb; Neovim re-emits `hl_attr_define` and the grid repaints.
 
 ## Build
 
-See [Building Wolf](build.md). In brief: `wolf-core` + `wolf-gnome` build with
-Cargo under Nix on NixOS; `wolf-macos` builds with Xcode/SwiftPM, linking
-`wolf-core` via swift-bridge-generated bindings, with the pinned Neovim bundled
-into the `.app`.
+See [Building Wolf](build.md). In brief: on Linux (NixOS), `wolf-core` + `wolf-gnome` build with Cargo under Nix. On macOS, the **Rust core** builds with **Bazel** (driven by **bazelisk**), with `rules_rust`/`crate_universe` consuming the same `Cargo.toml`/`Cargo.lock` and `rules_rust` downloading a pinned `rustc`; the C/link toolchain (apple_support) deliberately uses the **host Xcode SDK** rather than the older SDK shipped inside Nix (this matters for the bundled SQLite that `rusqlite` compiles via `cc`). The macOS path currently builds only `wolf-core`. The `wolf-macos` AppKit front-end (Swift via swift-bridge-generated bindings) and bundling the pinned Neovim into the `.app` remain later phases.
 
 ## Deferred / open
 
@@ -360,7 +357,7 @@ a clear future direction (see also
   from `wolf_layout` `Split` intents, emitted only by the rebound chords /
   Ex-commands. A window created by a non-overridden path (`:help`, the quickfix /
   location list, a preview window, `:diffsplit`) still gets a grid + `WinInfo` but
-  no pane, so its content is not shown. *Future:* auto-pane any unbound window
+  no pane, so its content is not shown. _Future:_ auto-pane any unbound window
   grid.
 - **The cmdline strip shows only the outer grid's last row**, so multi-row prompts
   (`press-ENTER`, `:messages`, a long wrapped `:`-command) are truncated until

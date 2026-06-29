@@ -1,18 +1,21 @@
-# NixOS-only dev environment for Wolf.
+# Linux (NixOS) and macOS (Darwin) dev environments for Wolf.
 #
 # Wolf is a Markdown editor that embeds Neovim as its editing engine. This flake
-# provides the development shell used to build and test `wolf-core` on NixOS:
-# a pinned Rust toolchain (via the oxalica rust-overlay) plus a pinned, hermetic
-# Neovim.
+# provides two development shells, selected by host platform:
 #
-# The shell exports `WOLF_NVIM_BIN`, the absolute path to the pinned `nvim`
-# binary. This is the *only* way `wolf-core` and its tests are allowed to locate
-# Neovim: never via the system PATH, never by scanning `/nix/store`.
-#
-# This flake is Linux-only (x86_64-linux, aarch64-linux) and emits no
-# darwin/macOS outputs. It contains NO GUI toolkit packages.
+# - Linux (x86_64-linux, aarch64-linux): the shell used to build and test
+#   `wolf-core` (and the `wolf-gnome` GTK front-end) with Cargo under Nix — a
+#   pinned Rust toolchain (via the oxalica rust-overlay), a pinned hermetic
+#   Neovim, and the GTK/Cairo/Pango GUI toolkit for the front-end's testable
+#   seams. This shell exports `WOLF_NVIM_BIN`, the absolute path to the pinned
+#   `nvim` binary — the *only* way `wolf-core` and its tests are allowed to
+#   locate Neovim: never via the system PATH, never by scanning `/nix/store`.
+# - Darwin (aarch64-darwin, x86_64-darwin): a minimal shell that provides
+#   bazelisk to drive the Bazel build of `wolf-core`, using the host Xcode SDK
+#   for the C/link toolchain (not the older SDK shipped inside Nix). It carries
+#   no Rust toolchain (rules_rust downloads a pinned rustc) and no GUI packages.
 {
-  description = "Wolf — NixOS-only dev environment (Rust toolchain + pinned hermetic Neovim)";
+  description = "Wolf — Linux (NixOS) + macOS dev environment (Rust toolchain + pinned hermetic Neovim; bazelisk on Darwin)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -25,18 +28,50 @@
 
   outputs =
     { nixpkgs, rust-overlay, flake-utils, ... }:
-    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (
+    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin" ] (
       system:
       let
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs { inherit system overlays; };
 
+        isDarwin = pkgs.stdenv.isDarwin;
+
+        # NOTE: `rustToolchain` and the GTK/Neovim packages below are only ever
+        # forced when `linuxShell` is evaluated. On Darwin `devShells.default`
+        # resolves to `darwinShell`, which references none of them, so Nix's
+        # laziness keeps these Linux-only derivations off the Darwin eval path.
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [ "rust-src" "rust-analyzer" "clippy" "rustfmt" ];
         };
-      in
-      {
-        devShells.default = pkgs.mkShell {
+
+        # Darwin dev shell: just enough to drive the Bazel build of `wolf-core`.
+        # Provides bazelisk (which honors `.bazelversion`) and pins the host
+        # Xcode so Bazel's apple_support C/link toolchain uses the system SDK,
+        # not the older SDK shipped inside Nix. Deliberately contains NO Rust
+        # toolchain (rules_rust downloads a pinned rustc) and NO GUI packages.
+        # The nixpkgs `bazelisk` package ships only a `bazelisk` binary. Bazel
+        # workflows (and our verification commands) invoke `bazel`, so expose a
+        # `bazel` -> `bazelisk` shim. bazelisk reads `.bazelversion` and fetches
+        # the version pinned in `.bazelversion` regardless of which name
+        # launched it.
+        bazelShim = pkgs.runCommand "bazel-shim" { } ''
+          mkdir -p "$out/bin"
+          ln -s ${pkgs.bazelisk}/bin/bazelisk "$out/bin/bazel"
+        '';
+
+        darwinShell = pkgs.mkShell {
+          packages = [
+            pkgs.bazelisk
+            bazelShim
+            pkgs.git
+          ];
+
+          shellHook = ''
+            export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+          '';
+        };
+
+        linuxShell = pkgs.mkShell {
           packages = [
             rustToolchain
             pkgs.neovim
@@ -129,6 +164,9 @@
             export WLR_LIBINPUT_NO_DEVICES=1
           '';
         };
+      in
+      {
+        devShells.default = if isDarwin then darwinShell else linuxShell;
       }
     );
 }
