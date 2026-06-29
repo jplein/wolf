@@ -1,0 +1,25 @@
+[package]
+name = "wolf-ffi"
+description = "swift-bridge FFI surface over wolf-core: the staticlib the macOS (AppKit) front-end links, exposing an opaque WolfCore handle, per-frame snapshot, and structured key events to Swift."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lib]
+name = "wolf_ffi"
+# staticlib: the archive the macOS app links via the generated swift-bridge glue.
+# rlib: so the Rust integration test (`tests/bridge_smoke.rs`) can link it.
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+wolf-core = { path = "../wolf-core" }
+swift-bridge = "0.1.59"
+tracing = "0.1"
+# Used only by the standalone `src/bin/gen_bindings.rs` codegen binary (run via
+# `bazel run //crates/wolf-ffi:gen_bindings`). Cargo has no per-binary deps, so it
+# is declared here; the library Bazel target lists its deps explicitly and does
+# NOT pull this in, keeping the staticlib graph clean.
+swift-bridge-build = "0.1.59"
+
+[dev-dependencies]
+tempfile = "3"

@@ -23,9 +23,18 @@ module(
 )
 
 bazel_dep(name = "rules_rust", version = "0.71.2")
-bazel_dep(name = "rules_cc", version = "0.2.15")
+bazel_dep(name = "rules_cc", version = "0.2.17")
 bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "apple_support", version = "2.6.1", repo_name = "build_bazel_apple_support")
+
+# --- Swift / Apple rule sets for the macOS (AppKit) front-end ----------------
+# Highest BCR stable releases that declare Bazel-8 compatibility; their
+# apple_support floor (1.24.2 / 2.2.0) is upgraded by MVS to our pinned 2.6.1
+# (never regressing it), so the host-Xcode host-SDK cc toolchain still resolves.
+# Xcode 26 / Tahoe (macOS 26) SDK is driven by DEVELOPER_DIR (see .bazelrc).
+bazel_dep(name = "rules_swift", version = "3.6.1", repo_name = "build_bazel_rules_swift")
+bazel_dep(name = "rules_apple", version = "4.5.3", repo_name = "build_bazel_rules_apple")
+bazel_dep(name = "rules_xcodeproj", version = "4.1.0")
 
 # --- C/link toolchain from the host Xcode SDK -------------------------------
 # apple_support configures a cc toolchain from the active Xcode (pinned by
@@ -65,6 +74,7 @@ crate.from_cargo(
     manifests = [
         "//:Cargo.toml",
         "//crates/wolf-core:Cargo.toml",
+        "//crates/wolf-ffi:Cargo.toml",
     ],
     supported_platform_triples = [
         "aarch64-apple-darwin",

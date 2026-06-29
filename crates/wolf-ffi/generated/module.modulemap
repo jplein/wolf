@@ -1,0 +1,11 @@
+// Clang module exposing the swift-bridge-generated C interface plus the
+// hand-written wake header to Swift as `import WolfFFI`. Used by the Bazel
+// `swift_interop_hint` on `:wolf_ffi_cc` and by non-Bazel tooling (Xcode /
+// SwiftPM). The module name MUST match the `import WolfFFI` line that
+// `gen_bindings` prepends to the generated Swift sources.
+module WolfFFI {
+    header "SwiftBridgeCore.h"
+    header "wolf-ffi.h"
+    header "wolf_ffi_wake.h"
+    export *
+}

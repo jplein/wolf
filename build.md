@@ -1,6 +1,6 @@
 # Building Wolf
 
-This covers building and testing `wolf-core`, the platform-agnostic Rust core. On Linux (NixOS) it builds with Cargo under Nix; on macOS it builds with Bazel (via bazelisk) using the host Xcode SDK. The platform front-ends are later phases: the `wolf-gnome` GTK front-end builds with Cargo on Linux, and the `wolf-macos` AppKit front-end (Swift via swift-bridge) is not yet built on either path.
+This covers building and testing Wolf. On Linux (NixOS) the `wolf-core` Rust core and the `wolf-gnome` GTK front-end build with Cargo under Nix. On macOS, Bazel (via bazelisk, using the host Xcode SDK) builds the Rust core, the `wolf-ffi` swift-bridge crate, and the `wolf-macos` AppKit `.app` — the macOS app requires macOS Tahoe (26) or newer and Xcode 26+.
 
 ## Building on NixOS (Linux, Cargo)
 
@@ -61,7 +61,7 @@ cargo run -p wolf-core --example grid_dump
 
 ## Building on macOS (Bazel)
 
-On macOS the canonical build tool for the Rust core is **Bazel**, driven by **bazelisk**, and it builds with the **host Xcode SDK** (not the older SDK shipped inside Nix). This currently builds **only `wolf-core`** — running its tests under Bazel (they need a pinned `nvim` via `WOLF_NVIM_BIN`, not yet provisioned on macOS) and the `wolf-macos` AppKit front-end remain later phases.
+On macOS the canonical build tool is **Bazel**, driven by **bazelisk**, and it builds with the **host Xcode SDK** (not the older SDK shipped inside Nix). It builds `wolf-core`, the `wolf-ffi` swift-bridge crate, and the `wolf-macos` AppKit `.app` (see "Building the macOS app" below). Running the nvim-backed tests under Bazel is still gated on a pinned `nvim` via `WOLF_NVIM_BIN`, which is not yet provisioned on the macOS Bazel host.
 
 ### Prerequisites
 
@@ -95,6 +95,52 @@ CARGO_BAZEL_REPIN=1 bazel build //crates/wolf-core:wolf_core
 ```
 
 Commit the updated `Cargo.Bazel.lock` (and `MODULE.bazel.lock`). A clean checkout then builds without needing to repin.
+
+The `wolf-ffi` crate adds the `swift-bridge` / `swift-bridge-build` (0.1.59) Cargo dependencies, so the same `CARGO_BAZEL_REPIN` workflow applies after touching its `Cargo.toml`; repin against either target (e.g. `CARGO_BAZEL_REPIN=1 bazel build //crates/wolf-ffi:wolf_ffi`) and commit the lockfiles.
+
+## Building the macOS app (Bazel)
+
+The macOS app builds entirely under Bazel — **Bazel is authoritative**; the generated Xcode project (below) is for debugging only. This requires macOS Tahoe (26) or newer and Xcode 26+. The resolved rule pins are `rules_swift` 3.6.1, `rules_apple` 4.5.3, and `rules_xcodeproj` 4.1.0 (with `apple_support` held at 2.6.1 so the host-Xcode toolchain still resolves).
+
+### Building the .app
+
+```sh
+bazel build //crates/wolf-macos:Wolf
+```
+
+This produces `Wolf.app`, code-signed, with a minimum OS of 26.0. The app starts the captive Neovim located via `WOLF_NVIM_BIN` (the pinned Neovim is not yet bundled into the `.app`).
+
+### Regenerating the swift-bridge bindings
+
+The Swift + C bindings under `crates/wolf-ffi/generated/` are **committed**. After changing the `#[swift_bridge::bridge]` module in `crates/wolf-ffi/src/lib.rs`, regenerate and commit them:
+
+```sh
+bazel run //crates/wolf-ffi:gen_bindings
+```
+
+`gen_bindings` writes in-tree (it reads `BUILD_WORKSPACE_DIRECTORY`, which only `bazel run` provides — a genrule cannot write into the source tree).
+
+### Generating the Xcode project (debugging only)
+
+```sh
+bazel run //crates/wolf-macos:xcodeproj
+```
+
+The output `.xcodeproj` is **uncommitted** (`.gitignore`d) and exists only for LLDB / IDE debugging. It is never the build of record — Bazel remains authoritative.
+
+### Test targets
+
+```sh
+bazel test //crates/wolf-ffi:frame_pack          # headless, deterministic
+bazel test //crates/wolf-ffi:bridge_smoke        # real nvim; SKIPs without WOLF_NVIM_BIN
+bazel test //crates/wolf-macos:WolfKeyMapTests   # pure Swift key translation
+```
+
+- `//crates/wolf-ffi:frame_pack` builds a `wolf_core::Snapshot` by hand (no nvim) and asserts `FfiFrame`'s color packing, flag bits, reverse-video cursor, and cell accessors. It is deterministic and runs **regardless** of `WOLF_NVIM_BIN`.
+- `//crates/wolf-ffi:bridge_smoke` drives the Rust half of the bridge against a real pinned Neovim (no mocks). Because the macOS Bazel host cannot yet provision `nvim`, it **loudly skips** when `WOLF_NVIM_BIN` is unset (and runs for real on Linux/Cargo devShells).
+- `//crates/wolf-macos:WolfKeyMapTests` is a pure Swift `XCTest` over the AppKit-free `WolfKeyMap` key-translation seam — no `NSEvent`, no window — and runs regardless of `WOLF_NVIM_BIN`.
+
+`WOLF_NVIM_BIN` is not yet provisioned for Bazel-run tests on macOS, so only the nvim-backed `bridge_smoke` is affected (it skips); the headless `frame_pack` and Swift `WolfKeyMapTests` run regardless.
 
 ## The one hard rule and how it is enforced
 

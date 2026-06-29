@@ -66,6 +66,27 @@ Responsibilities it explicitly does **not** have: deciding what text or colors
 appear (Neovim does), drawing pixels (the front-ends do), or knowing about
 windows, menus, or dialogs (only that it may _request_ them via intents).
 
+### wolf-ffi
+
+The swift-bridge boundary crate (Rust). It is the seam between the
+platform-agnostic core and the macOS front-end: it holds the single
+`#[swift_bridge::bridge]` module and the hand-written Rust glue behind it, and
+depends on `wolf-core` as a normal crate. It is built both as a `staticlib` (the
+archive the `.app` links through the generated Swift) and as an `rlib` (so a Rust
+integration test can drive the same surface headlessly, with no Swift present).
+
+swift-bridge is **confined to this crate** — `wolf-core` gains no new dependency
+and stays GUI-free, and the Linux/GTK front-end keeps consuming `wolf-core`
+directly. The bridge surface re-shapes core's API for FFI: a structured
+`FfiKeyEvent` (mapped into a `wolf_core::KeyEvent` in Rust so nvim notation stays
+core's job), an opaque per-frame `FfiFrame` whose cells are resolved against the
+highlight table in Rust (never re-resolved in Swift), and an opaque
+main-thread-only `WolfCoreHandle`. The wake crosses the boundary as a globally
+registered `extern "C"` callback (`wolf_ffi_set_wake`), not an `extern "Swift"`
+symbol, so the headless Rust test still links. The generated Swift + C bindings
+are **committed** under `crates/wolf-ffi/generated/` and refreshed by an explicit
+Bazel codegen target. See [`crates/wolf-ffi/README.md`](crates/wolf-ffi/README.md).
+
 ### Platform front-ends: wolf-gnome, wolf-macos
 
 The UI layer. Each one:
@@ -123,8 +144,53 @@ HiDPI scale handling. See the known-limitations note in
 
 #### wolf-macos
 
-Swift, using AppKit. Consumes `wolf-core` through generated **swift-bridge**
-bindings. Should feel like a macOS application.
+Swift, using AppKit. Consumes `wolf-core` through the generated **swift-bridge**
+surface in [`wolf-ffi`](#wolf-ffi). Should feel like a macOS application.
+
+**Phase status.** The first increment is realized: a **single-window AppKit
+shell**. An `NSApplication` + `AppDelegate` resolves `init_lua` and the cwd,
+starts the core via `wolf_ffi_start`, and builds one `NSWindow` ("Wolf", sized
+from the measured cell metrics × the initial 80×24) whose content view is a
+custom `GridView`. `GridView` is an `NSView` (flipped, so grid row/col map
+directly to points) that paints the **ACTIVE Neovim window grid**: on each
+repaint it reads an `FfiFrame`, fills every cell's background, draws its glyph via
+CoreText/CoreGraphics in the per-cell foreground color (both colors resolved from
+wolf-core's highlight table in Rust), and overlays a **mode-aware reverse-video
+cursor** (a block, horizontal, or vertical bar driven by `cursor_shape`, with the
+fill/glyph colors also resolved in Rust, ported from wolf-gnome's `cursor.rs`).
+Font metrics come from SF Mono with a Menlo fallback (`WOLF_FONT_PT` overridable,
+parity with gnome).
+
+The redraw path mirrors gnome's, realized natively: core fires its wake on a
+tokio worker thread; `WakeBridge` (the registered `extern "C"` callback) hops it
+onto the AppKit main thread with `DispatchQueue.main.async` and sets the view's
+`needsDisplay`, which drives the next `draw(_:)`. Input flows the other way:
+`keyDown(_:)` pulls the `keyCode`/`characters`/`charactersIgnoringModifiers` +
+modifiers off the `NSEvent`, runs them through the **pure, AppKit-free**
+`WolfKeyMap.translate` seam into a structured `FfiKeyEvent`, and calls `send_key`
+— so the Shift contract is honored once, in Rust (`key_to_notation`), exactly as
+on Linux. View resizes map the current bounds to a `(cols, rows)` grid size and
+call `resize`. The captive Neovim is hermetic, located via `WOLF_NVIM_BIN` and
+launched against the repo's `runtime/nvim/init.lua` (the same hermetic mechanism
+as Linux).
+
+A known structural limitation of this increment: the view paints only the
+**active grid**, with no cmdline strip. Entering Neovim's cmdline mode (`:`/`/`)
+moves the cursor onto the outer grid (grid 1), so the whole view swaps to that
+outer grid for the duration — unlike gnome, which keeps the editor panes visible
+and paints the command line in a dedicated bottom strip. A native or strip-based
+cmdline is deferred.
+
+Deferred for macOS (the same list as gnome, plus a couple macOS-specific items):
+native split panes / a multigrid pane tree, the file picker, the file-tree
+sidebar, mouse and scroll input, theming, a native command line / messages /
+popup menu (`ext_cmdline` / `ext_messages` / `ext_popupmenu` as AppKit widgets —
+and, until then, the cmdline strip the gnome shell already has), HiDPI edge
+cases, per-cell glyph **text attributes** (bold/italic/underline/undercurl/
+strikethrough — these are resolved and packed by `wolf-ffi` but NOT yet consumed
+in painting; only per-cell fg/bg + the cursor are painted this increment), and
+bundling the pinned Neovim into the `.app` (it currently locates `nvim` via
+`WOLF_NVIM_BIN`). See [`crates/wolf-macos/README.md`](crates/wolf-macos/README.md).
 
 ## Architectural decisions
 
@@ -234,6 +300,35 @@ runtime/nvim/init.lua` with `-i NONE -n`, pinning `NVIM_APPNAME=wolf` and the
 is **deferred to a later phase**; Phase 1 runs the bare pinned binary with the
 repo's `init.lua` and relies on Neovim's built-in markdown syntax highlighting.
 
+### 9. The macOS UI: AppKit, Swift, Tahoe-only, all-Bazel — locked
+
+The macOS front-end's foundations are fixed (these are load-bearing — do not
+relitigate them casually):
+
+- **Tahoe (macOS 26) and newer only.** `Info.plist`'s `LSMinimumSystemVersion`
+  and the `macos_application` `minimum_os_version` are both `"26.0"`.
+- **AppKit, not SwiftUI.** A custom `NSView` paints the grid (decision 2).
+- **Swift**, built with **Xcode 26+** (Swift features that require Xcode 26 are
+  permitted).
+- **The Bazel build is authoritative.** `rules_swift` + `rules_apple` build the
+  `.app` (code-signed, min OS 26.0). `rules_xcodeproj` can generate an
+  `.xcodeproj` for debugging/LLDB only — it is **uncommitted** (`.gitignore`d) and
+  never the source of truth; Bazel remains the one build.
+- **Rust ↔ Swift via swift-bridge, confined to `wolf-ffi`** (decision 1), with
+  the generated Swift + C bindings **committed** under
+  `crates/wolf-ffi/generated/`.
+- **Key translation lives in Rust.** Swift sends a structured `FfiKeyEvent` over
+  the bridge; `wolf-core::key_to_notation` stays the single source of nvim
+  notation (the Shift contract is honored once, in Rust).
+- **The snapshot is marshalled as an opaque per-frame handle** (`FfiFrame`),
+  resolved against the highlight table in Rust — never re-resolved in Swift.
+
+Resolved Bazel pins (highest BCR releases that declare Bazel-8 compatibility,
+keep `apple_support >= 2.6.1`, and support Xcode 26 / the Tahoe SDK):
+**`rules_swift` 3.6.1, `rules_apple` 4.5.3, `rules_xcodeproj` 4.1.0**, and
+**`swift-bridge` / `swift-bridge-build` 0.1.59** on the Cargo side
+(`apple_support` stays 2.6.1).
+
 ## The core↔front-end contract
 
 The boundary is intentionally narrow and FFI-shaped (decision 1). Two directions:
@@ -337,7 +432,7 @@ dumb; Neovim re-emits `hl_attr_define` and the grid repaints.
 
 ## Build
 
-See [Building Wolf](build.md). In brief: on Linux (NixOS), `wolf-core` + `wolf-gnome` build with Cargo under Nix. On macOS, the **Rust core** builds with **Bazel** (driven by **bazelisk**), with `rules_rust`/`crate_universe` consuming the same `Cargo.toml`/`Cargo.lock` and `rules_rust` downloading a pinned `rustc`; the C/link toolchain (apple_support) deliberately uses the **host Xcode SDK** rather than the older SDK shipped inside Nix (this matters for the bundled SQLite that `rusqlite` compiles via `cc`). The macOS path currently builds only `wolf-core`. The `wolf-macos` AppKit front-end (Swift via swift-bridge-generated bindings) and bundling the pinned Neovim into the `.app` remain later phases.
+See [Building Wolf](build.md). In brief: on Linux (NixOS), `wolf-core` + `wolf-gnome` build with Cargo under Nix. On macOS, the **Rust core** builds with **Bazel** (driven by **bazelisk**), with `rules_rust`/`crate_universe` consuming the same `Cargo.toml`/`Cargo.lock` and `rules_rust` downloading a pinned `rustc`; the C/link toolchain (apple_support) deliberately uses the **host Xcode SDK** rather than the older SDK shipped inside Nix (this matters for the bundled SQLite that `rusqlite` compiles via `cc`). The macOS path now builds `wolf-core`, the `wolf-ffi` swift-bridge crate, **and** the `wolf-macos` AppKit `.app` (`bazel build //crates/wolf-macos:Wolf`) on the Xcode 26 / Tahoe SDK via `rules_swift` + `rules_apple` (with `rules_xcodeproj` for an uncommitted debug project). Bundling the pinned Neovim into the `.app` remains a later phase — the app currently locates `nvim` via `WOLF_NVIM_BIN`.
 
 ## Deferred / open
 

@@ -1,0 +1,64 @@
+# Bazel build for the macOS (AppKit) front-end, `wolf-macos`.
+#
+# Targets:
+#   - wolf_key_map      : the PURE key-translation seam (Foundation + the generated
+#                         FFI glue only, NO AppKit), unit-tested headlessly.
+#   - wolf_macos_lib    : the AppKit application sources (AppKit/CoreText/
+#                         CoreGraphics/Foundation), depending on wolf_key_map and
+#                         the C FFI module.
+#   - Wolf              : the macos_application bundle (minimum_os_version 26.0).
+#   - WolfKeyMapTests   : the swift_test over the pure seam.
+#   - xcodeproj         : an UNCOMMITTED Xcode project for debugging/LLDB only.
+load("@build_bazel_rules_apple//apple:macos.bzl", "macos_application")
+load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library", "swift_test")
+load("@rules_xcodeproj//xcodeproj:defs.bzl", "xcodeproj", "top_level_target")
+
+# The pure key-translation seam. Compiles `KeyMap.swift` together with the
+# swift-bridge-generated Swift glue (which provides `FfiKeyEvent` and the
+# `WolfCoreHandle` / `FfiFrame` wrappers) into one Foundation-only module — NO
+# AppKit — so it is unit-testable without a window. Depends on the C FFI module
+# (`WolfFFI`) for the underlying symbols.
+swift_library(
+    name = "wolf_key_map",
+    srcs = ["Sources/WolfKeyMap/KeyMap.swift"] + ["//crates/wolf-ffi:generated_swift"],
+    module_name = "WolfKeyMap",
+    visibility = ["//visibility:public"],
+    deps = ["//crates/wolf-ffi:wolf_ffi_cc"],
+)
+
+# The AppKit application sources. Gets `FfiKeyEvent` / `WolfCoreHandle` / `FfiFrame`
+# via `import WolfKeyMap`, and the C wake symbol via `import WolfFFI`.
+swift_library(
+    name = "wolf_macos_lib",
+    srcs = glob(["Sources/WolfMacOS/*.swift"]),
+    module_name = "WolfMacOS",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":wolf_key_map",
+        "//crates/wolf-ffi:wolf_ffi_cc",
+    ],
+)
+
+macos_application(
+    name = "Wolf",
+    bundle_id = "org.wolf.WolfMacOS",
+    bundle_name = "Wolf",
+    infoplists = ["Info.plist"],
+    minimum_os_version = "26.0",
+    visibility = ["//visibility:public"],
+    deps = [":wolf_macos_lib"],
+)
+
+swift_test(
+    name = "WolfKeyMapTests",
+    srcs = ["Tests/WolfKeyMapTests/KeyMapTests.swift"],
+    deps = [":wolf_key_map"],
+)
+
+xcodeproj(
+    name = "xcodeproj",
+    project_name = "Wolf",
+    top_level_targets = [
+        top_level_target(":Wolf", target_environments = ["device"]),
+    ],
+)

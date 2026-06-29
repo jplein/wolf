@@ -236,8 +236,10 @@ multigrid snapshot, the Neovim→shell layout-intent channel (native split panes
 abstract input translation, the FFI-shaped surface, and headless verification.
 
 Deferred to later phases: full `wrapNeovim` plugin baking (treesitter grammars,
-`marksman` LSP, formatter), the macOS (`wolf-macos`) front-end, swift-bridge
-bindings, native cmdline/messages/popupmenu (`ext_cmdline`/`ext_messages`/
-`ext_popupmenu`), theming, and the non-layout intents (open/save dialogs, window
-title). The layout intents (split/focus) and the GTK (`wolf-gnome`) front-end are
-now realized.
+`marksman` LSP, formatter), native cmdline/messages/popupmenu (`ext_cmdline`/
+`ext_messages`/`ext_popupmenu`), theming, and the non-layout intents (open/save
+dialogs, window title). The layout intents (split/focus) and the GTK
+(`wolf-gnome`) front-end are realized; the macOS (`wolf-macos`) front-end and its
+swift-bridge bindings (in the `wolf-ffi` crate) are realized as a first increment
+— a single-window AppKit shell over the swift-bridge surface — with native panes,
+the picker, the file tree, and bundled Neovim still to come there.
