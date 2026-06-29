@@ -290,6 +290,9 @@ impl PaneInner {
                 })
                 .collect()
         };
+        // Every entry in `updates` is a pane whose grid transitioned None -> Some
+        // this pass (the filter above requires `p.grid` was None and now resolves).
+        let bound_any = !updates.is_empty();
         for (id, g, w, h) in updates {
             if let Some(p) = self.panes.borrow().get(&id) {
                 p.grid.set(Some(g));
@@ -300,6 +303,14 @@ impl PaneInner {
                     core.resize_grid(g, cols, rows);
                 }
             }
+        }
+        // A pane created while its grid was still pending was skipped by
+        // `build_layout_widget` (None-handling), so its DrawingArea was never
+        // parented into the gtk::Paned tree. Now that the grid is bound, rebuild
+        // so the area is inserted. Only rebuild when something actually changed —
+        // an already-bound pane never re-enters `updates`, so this cannot loop.
+        if bound_any {
+            self.rebuild_pane_area();
         }
     }
 
@@ -378,6 +389,10 @@ impl PaneInner {
             .vexpand(true)
             .focusable(true)
             .build();
+        // A one-cell minimum so that, with `shrink-*-child(false)` on the enclosing
+        // paneds, a child can never be allocated to zero pixels (a starved pane).
+        area.set_content_width(cell_floor(self.metrics.cell_w));
+        area.set_content_height(cell_floor(self.metrics.cell_h));
 
         {
             let weak = Rc::downgrade(self);
@@ -643,7 +658,9 @@ fn draw_cursor(cr: &cairo::Context, snap: &Snapshot, metrics: &CellMetrics) {
 }
 
 /// Recursively builds the GTK widget for a [`PaneLayout`], reusing each leaf's
-/// `DrawingArea` by id. Returns `None` for a leaf whose pane is not (yet) bound.
+/// `DrawingArea` by id. Returns `None` for a leaf whose pane is not (yet) bound. An
+/// n-ary split is rendered as a RIGHT-LEANING chain of binary `gtk::Paned`s (see
+/// [`build_chain`]).
 fn build_layout_widget(
     layout: &PaneLayout,
     panes: &HashMap<PaneId, PaneWidgets>,
@@ -652,9 +669,8 @@ fn build_layout_widget(
         PaneLayout::Leaf(id) => panes.get(id).map(|p| p.area.clone().upcast::<gtk::Widget>()),
         PaneLayout::Split {
             orientation,
-            ratio,
-            first,
-            second,
+            children,
+            weights,
         } => {
             // Orientation::Vertical (side by side) -> a HORIZONTAL gtk::Paned
             // (children left/right); Horizontal (stacked) -> a VERTICAL paned.
@@ -662,35 +678,64 @@ fn build_layout_widget(
                 Orientation::Vertical => gtk::Orientation::Horizontal,
                 Orientation::Horizontal => gtk::Orientation::Vertical,
             };
-            let paned = gtk::Paned::new(gtk_orient);
-            paned.set_hexpand(true);
-            paned.set_vexpand(true);
-            if let Some(w) = build_layout_widget(first, panes) {
-                paned.set_start_child(Some(&w));
-            }
-            if let Some(w) = build_layout_widget(second, panes) {
-                paned.set_end_child(Some(&w));
-            }
-            install_paned_position(&paned, *ratio);
-            Some(paned.upcast::<gtk::Widget>())
+            build_chain(gtk_orient, children, weights, panes)
         }
     }
 }
 
-/// One-shot: sets the paned divider to `ratio` of its travel the first time the
-/// paned is allocated (its `max-position` becomes positive). Without this, two
-/// expanding `DrawingArea`s would default the divider to a degenerate position and
-/// collapse one pane.
+/// Renders the `children` of one n-ary split as a RIGHT-LEANING chain of binary
+/// `gtk::Paned`s: the first child is the `start` child of a paned whose `end` child
+/// is the chain over the remaining children. Each paned's divider is positioned at
+/// the first child's SHARE of the children it spans (so equal thirds give an outer
+/// 1/3 divider over an inner 1/2 divider). Unbound leaves are skipped: a `None`
+/// start collapses to the end chain and vice versa.
+fn build_chain(
+    gtk_orient: gtk::Orientation,
+    children: &[PaneLayout],
+    weights: &[f64],
+    panes: &HashMap<PaneId, PaneWidgets>,
+) -> Option<gtk::Widget> {
+    if children.len() == 1 {
+        return build_layout_widget(&children[0], panes);
+    }
+
+    let start = build_layout_widget(&children[0], panes);
+    let end = build_chain(gtk_orient, &children[1..], &weights[1..], panes);
+
+    let (start, end) = match (start, end) {
+        (Some(start), Some(end)) => (start, end),
+        // One side is entirely unbound: collapse to whichever side has a widget.
+        (start, end) => return start.or(end),
+    };
+
+    // The divider's share = this (first) child's weight over the total weight of
+    // the children THIS paned spans (first + rest).
+    let total: f64 = weights.iter().sum();
+    let ratio = if total > 0.0 { weights[0] / total } else { 0.5 };
+
+    let paned = gtk::Paned::new(gtk_orient);
+    paned.set_hexpand(true);
+    paned.set_vexpand(true);
+    paned.set_shrink_start_child(false);
+    paned.set_shrink_end_child(false);
+    paned.set_start_child(Some(&start));
+    paned.set_end_child(Some(&end));
+    install_paned_position(&paned, ratio);
+    Some(paned.upcast::<gtk::Widget>())
+}
+
+/// Keeps the paned divider at `ratio` of its travel. Re-applies on EVERY
+/// `max-position` notify (not one-shot): the nested multi-pass allocation reports an
+/// intermediate `max-position` before settling, and a window/container resize
+/// changes it again, so re-deriving the position from `ratio` each time converges
+/// correctly and keeps every child a proportional, non-collapsed size. (A user drag
+/// changes `position`, not `max-position`, so it is not fought here; in v1 a drag is
+/// reset to the equal ratio on the next resize.)
 fn install_paned_position(paned: &gtk::Paned, ratio: f64) {
-    let done = Rc::new(Cell::new(false));
     paned.connect_notify_local(Some("max-position"), move |p, _| {
-        if done.get() {
-            return;
-        }
         let max = p.max_position();
         if max > 0 {
             p.set_position(ratio_position(max, ratio));
-            done.set(true);
         }
     });
 }
@@ -701,6 +746,19 @@ fn ratio_position(max: i32, ratio: f64) -> i32 {
     #[allow(
         clippy::cast_possible_truncation,
         reason = "v is clamped to [0, max] and rounded, so the cast is exact and in range"
+    )]
+    {
+        v as i32
+    }
+}
+
+/// Ceils a cell dimension (px) to at least one pixel, as a content-size floor under
+/// a non-shrinking paned child.
+fn cell_floor(cell_px: f64) -> i32 {
+    let v = cell_px.ceil().clamp(1.0, f64::from(i32::MAX));
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "v is clamped to [1, i32::MAX] and ceil'd, so the cast is exact and in range"
     )]
     {
         v as i32

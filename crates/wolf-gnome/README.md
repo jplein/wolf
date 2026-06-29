@@ -29,9 +29,13 @@ verified *headlessly*, with no display server, no window, and no event loop:
 - `paint` — render one `wolf_core::Grid` (+ its highlight table) onto a Cairo
   context.
 - `grid_size_for` — pixel size + measured cell size → grid `(cols, rows)`.
-- `PaneTree` (`layout.rs`) — the pure binary pane-layout tree
-  (split/remove/leaves/pane_rects/neighbor), unit-tested headlessly; `pane_view.rs`
-  is the only place that turns it into widgets.
+- `PaneTree` (`layout.rs`) — the pure **N-ary frame** pane-layout tree
+  (split/remove/leaves/pane_rects/neighbor), matching Neovim's window model: a
+  frame is a leaf or an oriented split of N children with per-child weights; a
+  split in the SAME orientation as its containing frame FLATTENS into an equal-sized
+  sibling row/column, while a PERPENDICULAR split nests, and removing a pane
+  re-equalizes and collapses/merges back to a canonical tree. Unit-tested
+  headlessly; `pane_view.rs` is the only place that turns it into widgets.
 - `cursor_rect` / `cursor_colors` (`cursor.rs`) — the cursor's shape geometry and
   its reverse-video `(fill, glyph)` color pair, computed without GTK.
 - `is_picker_trigger` (`picker.rs`) — whether a keyval + modifier state is the

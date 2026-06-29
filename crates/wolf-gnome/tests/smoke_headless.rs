@@ -43,7 +43,7 @@ use std::process::Command;
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the eight `#[ignore]` cage smoke tests. Each launches its own
+/// Serializes the nine `#[ignore]` cage smoke tests. Each launches its own
 /// `cage` compositor, and two compositors started concurrently contend for the
 /// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
 /// Under the default multi-threaded test harness these tests would otherwise run
@@ -355,6 +355,63 @@ const CLOSE_HEADING_GONE: &str = "# CLOSEGONE";
 
 /// Lowercased substring OCR must NOT find: the closed pane's file.
 const CLOSE_OCR_GONE: &str = "closegone";
+
+// ---------------------------------------------------------------------------
+// Three-pane regression smoke (S3 n-ary frame): three files stay visible at once.
+//
+// This is the regression for the 3-pane bug (architect's N-ARY frame redesign):
+// open file A, vertical-split (`<C-w>v`) and open file B in the new RIGHT pane
+// (A|B), focus back LEFT (`<C-w>h`), then vertical-split AGAIN and open file C in
+// the new sub-pane. Under the n-ary model this flattens into ONE row of three
+// equal columns [A, C, B]; the OLD binary always-nest model collapsed the pre-
+// existing RIGHT pane (B) to ~0 width, blanking file B.
+//
+// Three distinctly-named markdown files are dropped into the app's temp cwd by the
+// caller (`tri_a.md` => `# TRIAONE`, `tri_b.md` => `# TRIBTWO`, `tri_c.md` =>
+// `# TRICTHREE`). The OCR assertion is LOOSE (contains ALL THREE: `triaone` AND
+// `tribtwo` AND `trictthree`). The load-bearing one is `tribtwo` — the right pane
+// B that today's bug blanks.
+//
+// NOTE to coder: this FAILS today (B collapses to ~0 width / gray) and PASSES after
+// the n-ary frame redesign + divider (install_paned_position) fix. The chords
+// (`<C-w>v`, `<C-w>h`) and `:e <file><CR>` exactly mirror the vsplit/focus smokes.
+//
+// NOTE to coder (OCR width): three side-by-side panes split the editor width into
+// thirds, so 28pt glyphs in each ~third-width pane may be too narrow for tesseract
+// to read all three headings. If this OCR fails on WIDTH alone (headings clipped/
+// illegible) — NOT on the real B-collapse bug — the coder may launch THIS test with
+// a wider window and/or a smaller WOLF_FONT_PT so all three headings fit. Keep the
+// assertion loose (contains). Do NOT pre-change app code for this.
+
+/// Three-pane smoke: file opened FIRST (becomes the left pane).
+const TRI_FILE_A: &str = "tri_a.md";
+
+/// Heading written into [`TRI_FILE_A`]; lowercased it contains [`TRI_OCR_A`].
+const TRI_HEADING_A: &str = "# TRIAONE";
+
+/// Lowercased substring OCR must find for the FIRST/left pane's file.
+const TRI_OCR_A: &str = "triaone";
+
+/// Three-pane smoke: file opened in the RIGHT pane after the first `<C-w>v`. This
+/// is the PRE-EXISTING right pane the 3-pane bug blanks (load-bearing assertion).
+const TRI_FILE_B: &str = "tri_b.md";
+
+/// Heading written into [`TRI_FILE_B`]; lowercased it contains [`TRI_OCR_B`].
+const TRI_HEADING_B: &str = "# TRIBTWO";
+
+/// Lowercased substring OCR must find for the RIGHT pane's file (the one the bug
+/// collapses to ~0 width today).
+const TRI_OCR_B: &str = "tribtwo";
+
+/// Three-pane smoke: file opened in the new sub-pane after focusing left and the
+/// second `<C-w>v` (the flat row becomes [A, C, B]).
+const TRI_FILE_C: &str = "tri_c.md";
+
+/// Heading written into [`TRI_FILE_C`]; lowercased it contains [`TRI_OCR_C`].
+const TRI_HEADING_C: &str = "# TRICTHREE";
+
+/// Lowercased substring OCR must find for the third (middle) pane's file.
+const TRI_OCR_C: &str = "tricthree";
 
 /// External binaries the scenario shells out to. All come from the flake's
 /// smoke toolchain; absence means the devShell was not entered.
@@ -1004,6 +1061,104 @@ wtype -M ctrl -k w -m ctrl
 wtype -k c
 
 # Let the close land: the right pane vanishes and the survivor reclaims the width.
+sleep "$SETTLE"
+
+# Capture the live window to the output PNG.
+grim "$OUT_PNG"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+/// The THREE-PANE scenario, run as a single `sh -c` string INSIDE `cage` (same
+/// structure as [`VSPLIT_SCENARIO`]): launch the app, wait for the window to map,
+/// open file A, vertical-split (`<C-w>v`) and open file B in the new RIGHT pane,
+/// focus back LEFT (`<C-w>h`), vertical-split AGAIN and open file C in the new
+/// sub-pane — flattening into one row of three columns [A, C, B] under the n-ary
+/// model. Park the cursor off the text (`o`+Escape) and screenshot. All three
+/// files live in the cage process's working directory (set by the caller).
+const TRISPLIT_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
+WAIT_TRIES=25
+WAIT_INTERVAL=0.2
+SETTLE=0.5
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the Wayland display to be usable
+# (cheap no-op wtype succeeds only once cage has a mapped surface).
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome three-pane smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw before driving the editor.
+sleep "$SETTLE"
+
+# Open file A in the (single) editor pane.
+wtype -- ":e $TRI_FILE_A"
+wtype -k Return
+
+# Let nvim load file A and redraw before splitting.
+sleep "$SETTLE"
+
+# Vertical split: the new pane opens to the RIGHT and becomes focused (A|A).
+wtype -M ctrl -k w -m ctrl
+wtype -k v
+
+# Let the shell build the second (right) pane and redraw.
+sleep "$SETTLE"
+
+# In the now-focused RIGHT pane, open file B (A|B).
+wtype -- ":e $TRI_FILE_B"
+wtype -k Return
+
+# Let nvim load file B and both panes redraw.
+sleep "$SETTLE"
+
+# Move focus BACK to the LEFT pane with the <C-w>h chord.
+wtype -M ctrl -k w -m ctrl
+wtype -k h
+
+# Let the focus change land before the second split.
+sleep "$SETTLE"
+
+# Vertical split the LEFT pane again. Under the n-ary frame model this flattens
+# into one row of three columns; the new sub-pane sits between A and B => [A, C, B].
+wtype -M ctrl -k w -m ctrl
+wtype -k v
+
+# Let the third pane build and all three redraw.
+sleep "$SETTLE"
+
+# In the now-focused new sub-pane, open file C (the middle column).
+wtype -- ":e $TRI_FILE_C"
+wtype -k Return
+
+# Let nvim load file C and all three panes redraw.
+sleep "$SETTLE"
+
+# Park the cursor OFF row 0 (normal-mode `o` then Escape) so its inverted block
+# does not sit atop and OCR-distort the asserted heading text in the focused pane.
+wtype -- o
+wtype -k Escape
+
+# Let the redraw of all three panes land before capturing.
 sleep "$SETTLE"
 
 # Capture the live window to the output PNG.
@@ -1762,6 +1917,112 @@ fn close_pane_leaves_one_under_cage() {
         !ocr_text.contains(CLOSE_OCR_GONE),
         "OCR unexpectedly contained {CLOSE_OCR_GONE:?} (the closed pane's file). A hit usually means \
          <C-w>c did not remove the focused pane. PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+}
+
+#[test]
+#[ignore = "headless-compositor smoke test; run explicitly with --ignored (needs flake smoke toolchain)"]
+fn three_panes_keep_all_files_visible_under_cage() {
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // Create a fresh temp cwd and drop ALL THREE markdown targets into it. The app
+    // reads `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with
+    // this directory as its working directory (see `.current_dir` below).
+    let cwd = make_temp_cwd();
+    let target_a = cwd.join(TRI_FILE_A);
+    let target_b = cwd.join(TRI_FILE_B);
+    let target_c = cwd.join(TRI_FILE_C);
+    std::fs::write(&target_a, format!("{TRI_HEADING_A}\n"))
+        .unwrap_or_else(|e| panic!("failed to write tri file A {}: {e}", target_a.display()));
+    std::fs::write(&target_b, format!("{TRI_HEADING_B}\n"))
+        .unwrap_or_else(|e| panic!("failed to write tri file B {}: {e}", target_b.display()));
+    std::fs::write(&target_c, format!("{TRI_HEADING_C}\n"))
+        .unwrap_or_else(|e| panic!("failed to write tri file C {}: {e}", target_c.display()));
+
+    // Put the screenshot under XDG_RUNTIME_DIR (guaranteed writable) and start from
+    // a clean slate so a stale PNG cannot pass.
+    let out_png = runtime_dir.join("wolf_gnome_trisplit_smoke.png");
+    if out_png.exists() {
+        std::fs::remove_file(&out_png).unwrap_or_else(|e| {
+            panic!(
+                "failed to remove stale screenshot {}: {e}",
+                out_png.display()
+            )
+        });
+    }
+
+    // Run the whole three-pane scenario inside cage, with the temp dir as the
+    // working directory so the app picks it up as its cwd.
+    let status = Command::new("cage")
+        .arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg(TRISPLIT_SCENARIO)
+        .current_dir(&cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("TRI_FILE_A", TRI_FILE_A)
+        .env("TRI_FILE_B", TRI_FILE_B)
+        .env("TRI_FILE_C", TRI_FILE_C)
+        // Large font so the rendered glyphs are legible to tesseract. (See the NOTE
+        // to coder near the TRI_* consts: if three side-by-side panes are too narrow
+        // for 28pt OCR, widen the window or lower the font for THIS test.)
+        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
+        .status()
+        .expect("failed to spawn `cage` for the headless three-pane smoke scenario");
+    assert!(
+        status.success(),
+        "cage three-pane scenario exited unsuccessfully ({status}); the app may have failed to \
+         launch, the window may not have mapped, a chord (<C-w>v / <C-w>h) may not have fired, the \
+         :e commands may not have loaded, or wtype/grim failed. Screenshot expected at {}.",
+        out_png.display()
+    );
+
+    // The screenshot must exist and be non-empty.
+    let png_meta = std::fs::metadata(&out_png).unwrap_or_else(|e| {
+        panic!(
+            "expected screenshot {} to exist after the cage three-pane scenario, but: {e}",
+            out_png.display()
+        )
+    });
+    assert!(
+        png_meta.len() > 0,
+        "screenshot {} exists but is empty (grim produced no image data)",
+        out_png.display()
+    );
+
+    // OCR the screenshot and assert (loosely) that ALL THREE files' headings render
+    // at once — proving the third (same-orientation) split flattened into a row of
+    // three panes WITHOUT collapsing the pre-existing right pane (B). The
+    // load-bearing assertion is `tribtwo`: today's bug blanks the right pane B.
+    let ocr_text = ocr_to_lowercase(&out_png);
+    assert!(
+        ocr_text.contains(TRI_OCR_A),
+        "OCR did not contain {TRI_OCR_A:?} (the FIRST/left pane's file). A miss usually means the \
+         first pane stopped rendering after the splits. PNG kept at {} for inspection. OCR output \
+         was:\n{ocr_text}",
+        out_png.display()
+    );
+    assert!(
+        ocr_text.contains(TRI_OCR_B),
+        "OCR did not contain {TRI_OCR_B:?} (the pre-existing RIGHT pane's file). This is THE 3-pane \
+         regression: the third split must NOT collapse/blank the right pane B. PNG kept at {} for \
+         inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+    assert!(
+        ocr_text.contains(TRI_OCR_C),
+        "OCR did not contain {TRI_OCR_C:?} (the new middle pane's file). A miss usually means the \
+         second <C-w>v did not create a third pane, or :e did not open file C in it. PNG kept at {} \
+         for inspection. OCR output was:\n{ocr_text}",
         out_png.display()
     );
 }

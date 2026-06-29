@@ -2,101 +2,42 @@
 //!
 //! Decision D7 (see `.claude/current-plan.md`) splits the S3 panes feature into a
 //! PURE layout core (this module) and a GTK glue layer (`pane_view.rs`). This
-//! module owns the binary pane-layout TREE and every geometry decision that can be
-//! reasoned about without a display server, a widget, or a live Neovim:
+//! module owns the pane-layout TREE and every geometry decision that can be
+//! reasoned about without a display server, a widget, or a live Neovim.
 //!
-//!   - splitting a pane (replacing a leaf with an internal node of two leaves),
-//!   - removing a pane (collapsing its sibling into the parent's slot),
+//! ## N-ary frame model (matches Neovim's window layout)
+//!
+//! A [`Frame`] is either a leaf (one pane) or an n-ary split: an [`Orientation`]
+//! (a ROW of side-by-side children for [`Orientation::Vertical`], a COLUMN of
+//! stacked children for [`Orientation::Horizontal`]) plus a `Vec` of child frames
+//! and a parallel `Vec` of per-child `weights` (summing to 1) that drive the
+//! divider positions. The invariants are: a split has `>= 2` children;
+//! `weights.len() == children.len()`; and no split sits directly under a
+//! same-orientation split (such nestings are FLATTENED), so each axis is a single
+//! flat row/column.
+//!
+//! The operations this module owns:
+//!
+//!   - splitting a pane — a split whose orientation MATCHES the containing frame
+//!     inserts a FLAT sibling (after the target) and re-equalizes the row/column;
+//!     a PERPENDICULAR split wraps the target leaf in a new two-child sub-frame,
+//!   - removing a pane — drops its slot, then NORMALIZES (flatten same-orientation
+//!     children, collapse a 1-child split into its child, re-equalize),
 //!   - enumerating leaves in a deterministic order,
-//!   - computing each leaf's pixel rectangle within given bounds, and
+//!   - computing each leaf's pixel rectangle within given bounds (cumulative
+//!     normalized weight fractions), and
 //!   - finding the geometric neighbour of a pane in a [`wolf_core::FocusDir`].
 //!
 //! Keeping this GTK-free is exactly what lets it be unit-tested headlessly, the
 //! same way `geometry.rs`, `cursor.rs`, and `tree.rs` keep their decisions pure.
 //! `pane_view.rs` (the GTK glue) is the only place that turns a [`PaneTree`] into
 //! nested `gtk::Paned` widgets and `DrawingArea`s.
-//
-// =============================================================================
-// NOTE to coder: this file was bootstrapped by the test-writer with ONLY the
-// tests below. It WILL NOT COMPILE until you add the items the tests reference,
-// exactly as `geometry.rs`, `cursor.rs`, and `tree.rs` were bootstrapped.
-// Implement the following ABOVE the `#[cfg(test)] mod tests` block (pure, NO GTK;
-// do not change the test module). lib.rs must `pub mod layout;`.
-//
-//   pub type PaneId = u64;
-//     (A newtype would also work, but the tests assume a u64 alias: leaves()
-//     returns Vec<PaneId> compared against vec![1u64, 2u64, ...].)
-//
-//   #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-//   pub enum Orientation { Horizontal, Vertical }
-//     - MATCHES wolf_core::SplitOrientation: Horizontal split = panes STACKED
-//       top/bottom (divides HEIGHT); Vertical split = panes SIDE BY SIDE
-//       left/right (divides WIDTH). (The app maps SplitOrientation -> Orientation.)
-//
-//   #[derive(Debug, Clone, Copy, PartialEq)]
-//   pub struct Rect { pub x: f64, pub y: f64, pub w: f64, pub h: f64 }
-//     - derive Clone + Copy + Debug + PartialEq (the tests copy and compare it).
-//
-//   pub struct PaneTree { ... }   // a binary tree of leaves/internal nodes.
-//
-//   impl PaneTree {
-//     pub fn new(root: PaneId) -> Self
-//       - A single leaf `root`. leaves() == [root]; pane_rects covers the whole
-//         bounds with that one pane.
-//
-//     pub fn split(&mut self, target: PaneId, new_pane: PaneId, orientation: Orientation)
-//       - Replace the `target` LEAF with an internal node (carrying `orientation`,
-//         ratio 0.5) whose two children are, IN ORDER:
-//           child[0] = the existing `target` leaf  (stays FIRST),
-//           child[1] = a new leaf `new_pane`        (goes SECOND/after).
-//       - CONVENTION (pinned by tests): the NEW pane is the SECOND child, so for a
-//         Vertical split the target stays on the LEFT and new_pane is on the RIGHT;
-//         for a Horizontal split the target stays on TOP and new_pane is on the
-//         BOTTOM. If `target` is not a leaf in the tree, leave the behaviour to your
-//         discretion (the tests only split existing leaves).
-//
-//     pub fn remove(&mut self, pane: PaneId)
-//       - Remove the leaf `pane`; its SIBLING collapses into the parent's slot
-//         (the parent internal node is replaced by the sibling subtree). Removing
-//         the root/last remaining pane is a NO-OP (the tree is NEVER empty).
-//
-//     pub fn leaves(&self) -> Vec<PaneId>
-//       - All leaf pane ids in a DETERMINISTIC order: a depth-first, child[0]
-//         before child[1] traversal (i.e. left-to-right / top-to-bottom). The
-//         order must be stable across repeated calls.
-//
-//     pub fn pane_rects(&self, width: f64, height: f64) -> Vec<(PaneId, Rect)>
-//       - Each leaf's rectangle within bounds (0,0,width,height), using each
-//         internal node's orientation + ratio (0.5 by default):
-//           * Vertical split   => divide WIDTH: child[0] gets the LEFT half,
-//             child[1] the RIGHT half (x split at width*ratio).
-//           * Horizontal split => divide HEIGHT: child[0] gets the TOP half,
-//             child[1] the BOTTOM half (y split at height*ratio).
-//       - Order matches leaves() (same DFS). Rects must TILE the bounds exactly:
-//         no overlap, and the union equals the full area.
-//
-//     pub fn neighbor(&self, from: PaneId, dir: wolf_core::FocusDir,
-//                     width: f64, height: f64) -> Option<PaneId>
-//       - Using pane_rects geometry, return the adjacent pane in `dir`: the pane
-//         whose rect is nearest in that direction AND OVERLAPS `from` on the cross
-//         axis (Left/Right overlap on Y; Up/Down overlap on X). Return None at an
-//         edge (no such pane). Overlap should be STRICT (positive overlap, not a
-//         mere shared boundary) so a clean 2x2 grid has unambiguous neighbours —
-//         see `neighbor_nested` below. (NOTE to coder: if you choose a tolerance
-//         instead of strict positive overlap, keep the 2x2 cases unambiguous.)
-//   }
-//
-// NOTE to coder (FocusDir source): the tests use `wolf_core::FocusDir` directly
-// (Left/Right/Up/Down), since the app maps core focus-dir intents straight onto
-// this method. If you decide a LOCAL FocusDir is cleaner, change the `use` in the
-// test module accordingly and flag it — but the plan (D6/D7) reuses the core enum.
-// =============================================================================
 
 use wolf_core::FocusDir;
 
-/// The default split ratio: a fresh split divides its bounds evenly. A user drag
-/// of a `gtk::Paned` divider is the only thing that moves it off `0.5`, and that
-/// is owned by the widget layer, not this pure tree.
+/// The default split weight for a fresh two-child split: each child gets half the
+/// bounds. A user drag of a `gtk::Paned` divider is owned by the widget layer (and
+/// not written back to these weights in v1), not this pure tree.
 const DEFAULT_RATIO: f64 = 0.5;
 
 /// Tolerance for the geometric edge/overlap comparisons in [`PaneTree::neighbor`].
@@ -104,10 +45,6 @@ const DEFAULT_RATIO: f64 = 0.5;
 /// the cross-axis overlap STRICTLY positive (a shared edge does not count) so a
 /// clean 2x2 grid has unambiguous neighbours.
 const NEIGHBOR_EPS: f64 = 1e-9;
-
-/// Placeholder leaf id used transiently while replacing a node in [`remove`]; it
-/// is never observable (it is overwritten in the same statement).
-const PLACEHOLDER_PANE: PaneId = 0;
 
 /// A pane identifier. A plain `u64` alias (not a newtype) so the tree's
 /// `leaves()`/`pane_rects()` results compare directly against literal ids.
@@ -139,33 +76,39 @@ pub struct Rect {
     pub h: f64,
 }
 
-/// One node of the binary pane-layout tree: either a leaf (a single pane) or an
-/// internal split of two child subtrees along an [`Orientation`] at a ratio.
-enum Node {
+/// One node of the n-ary pane-layout tree: either a leaf (a single pane) or a
+/// split of two-or-more child frames along an [`Orientation`], with a parallel
+/// per-child `weights` vector (summing to 1) driving the divider positions.
+///
+/// Invariants (upheld by [`PaneTree`]'s operations): a `Split` has `>= 2` children;
+/// `weights.len() == children.len()`; the weights sum to 1; and no `Split` is a
+/// direct child of a same-orientation `Split` (they are flattened into one row/
+/// column).
+enum Frame {
     /// A single pane, identified by its [`PaneId`].
     Leaf(PaneId),
-    /// An internal split: two children divided along `orientation` at `ratio`.
+    /// An n-ary split: `children` divided along `orientation` by `weights`.
     Split {
-        /// The split axis.
+        /// The split axis (a ROW for `Vertical`, a COLUMN for `Horizontal`).
         orientation: Orientation,
-        /// The fraction (0.0–1.0) of the bounds given to `child0`.
-        ratio: f64,
-        /// The first child (LEFT for vertical, TOP for horizontal).
-        child0: Box<Node>,
-        /// The second child (RIGHT for vertical, BOTTOM for horizontal). A new
-        /// pane from [`PaneTree::split`] always becomes this child.
-        child1: Box<Node>,
+        /// The child frames, in order (LEFT→RIGHT for vertical, TOP→BOTTOM for
+        /// horizontal).
+        children: Vec<Frame>,
+        /// The per-child fraction of the bounds (parallel to `children`, summing
+        /// to 1).
+        weights: Vec<f64>,
     },
 }
 
-/// A binary tree of editor panes.
+/// An n-ary tree of editor panes (Neovim's frame model).
 ///
-/// Leaves are panes; internal nodes are splits. The tree is NEVER empty (it always
-/// has at least its root leaf). See the module docs and the test-contract NOTE
-/// above for the pinned conventions (new pane = second child; Vertical divides
-/// width; DFS child0-before-child1 ordering).
+/// Leaves are panes; internal nodes are flat rows/columns of child frames. The tree
+/// is NEVER empty (it always has at least its root leaf). See the module docs and
+/// the test-contract NOTE above for the pinned conventions (a same-orientation
+/// split inserts a flat sibling AFTER the target; Vertical divides width; DFS
+/// child-order traversal).
 pub struct PaneTree {
-    root: Node,
+    root: Frame,
 }
 
 impl PaneTree {
@@ -173,23 +116,43 @@ impl PaneTree {
     #[must_use]
     pub fn new(root: PaneId) -> Self {
         Self {
-            root: Node::Leaf(root),
+            root: Frame::Leaf(root),
         }
     }
 
-    /// Splits the `target` leaf, inserting `new_pane` as the SECOND child of a new
-    /// internal node carrying `orientation` (at [`DEFAULT_RATIO`]). The `target`
-    /// stays first (LEFT for vertical, TOP for horizontal). No-op if `target` is
-    /// not a leaf in the tree.
+    /// Splits the `target` leaf with `new_pane` along `orientation`.
+    ///
+    /// If the split's `orientation` MATCHES the frame that owns `target`, `new_pane`
+    /// is inserted as a FLAT sibling immediately AFTER `target` and that row/column
+    /// re-equalizes (so a same-orientation re-split yields equal siblings, never a
+    /// growing nest). Otherwise `target` is wrapped in a new two-child sub-frame
+    /// `[target, new_pane]` (NEST), with `target` first (LEFT for vertical, TOP for
+    /// horizontal). The root special case (a single leaf) becomes a two-child split.
+    /// No-op if `target` is not a leaf in the tree.
     pub fn split(&mut self, target: PaneId, new_pane: PaneId, orientation: Orientation) {
-        split_node(&mut self.root, target, new_pane, orientation);
+        if let Frame::Leaf(id) = self.root {
+            if id == target {
+                self.root = Frame::Split {
+                    orientation,
+                    children: vec![Frame::Leaf(target), Frame::Leaf(new_pane)],
+                    weights: vec![DEFAULT_RATIO, DEFAULT_RATIO],
+                };
+            }
+            return;
+        }
+        split_in(&mut self.root, target, new_pane, orientation);
     }
 
-    /// Removes the leaf `pane`, collapsing its sibling subtree into the parent's
-    /// slot. Removing the root/last remaining pane is a no-op (the tree is never
-    /// empty).
+    /// Removes the leaf `pane`, then NORMALIZES the tree (flatten same-orientation
+    /// children, collapse a 1-child split into its child, re-equalize). Removing the
+    /// last remaining pane is a no-op (the tree is never empty).
     pub fn remove(&mut self, pane: PaneId) {
-        remove_node(&mut self.root, pane);
+        if self.leaves().len() <= 1 {
+            return;
+        }
+        if remove_in(&mut self.root, pane) {
+            normalize(&mut self.root);
+        }
     }
 
     /// Returns every leaf pane id in a deterministic DFS order (child0 before
@@ -248,159 +211,229 @@ impl PaneTree {
     }
 
     /// Returns a GTK-free, read-only description of the tree's structure for the
-    /// widget layer to build nested `gtk::Paned`s from (the internal `Node` stays
+    /// widget layer to build nested `gtk::Paned`s from (the internal `Frame` stays
     /// private to this module).
     #[must_use]
     pub fn layout(&self) -> PaneLayout {
-        node_layout(&self.root)
+        frame_layout(&self.root)
     }
 }
 
 /// A read-only mirror of the [`PaneTree`] structure, produced by
-/// [`PaneTree::layout`]. The widget layer (`pane_view.rs`) walks this to build
-/// nested `gtk::Paned`s, reusing each leaf's `DrawingArea` by [`PaneId`].
+/// [`PaneTree::layout`]. The widget layer (`pane_view.rs`) walks this to build a
+/// right-leaning chain of binary `gtk::Paned`s, reusing each leaf's `DrawingArea`
+/// by [`PaneId`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum PaneLayout {
     /// A single pane.
     Leaf(PaneId),
-    /// A split of two child layouts along `orientation` at `ratio`.
+    /// An n-ary split of child layouts along `orientation`, with parallel per-child
+    /// `weights` (summing to 1).
     Split {
         /// The split axis.
         orientation: Orientation,
-        /// The fraction (0.0–1.0) of the bounds given to `first`.
-        ratio: f64,
-        /// The first child (LEFT for vertical, TOP for horizontal).
-        first: Box<PaneLayout>,
-        /// The second child (RIGHT for vertical, BOTTOM for horizontal).
-        second: Box<PaneLayout>,
+        /// The child layouts, in order (LEFT→RIGHT / TOP→BOTTOM).
+        children: Vec<PaneLayout>,
+        /// The per-child fraction of the bounds (parallel to `children`).
+        weights: Vec<f64>,
     },
 }
 
-/// Recursively mirrors `node` into a [`PaneLayout`].
-fn node_layout(node: &Node) -> PaneLayout {
-    match node {
-        Node::Leaf(id) => PaneLayout::Leaf(*id),
-        Node::Split {
+/// Recursively mirrors `frame` into a [`PaneLayout`].
+fn frame_layout(frame: &Frame) -> PaneLayout {
+    match frame {
+        Frame::Leaf(id) => PaneLayout::Leaf(*id),
+        Frame::Split {
             orientation,
-            ratio,
-            child0,
-            child1,
+            children,
+            weights,
         } => PaneLayout::Split {
             orientation: *orientation,
-            ratio: *ratio,
-            first: Box::new(node_layout(child0)),
-            second: Box::new(node_layout(child1)),
+            children: children.iter().map(frame_layout).collect(),
+            weights: weights.clone(),
         },
     }
 }
 
-/// Recursively splits the leaf matching `target` within `node`. Returns `true` if a
-/// matching leaf was found and split.
-fn split_node(node: &mut Node, target: PaneId, new_pane: PaneId, orientation: Orientation) -> bool {
-    match node {
-        Node::Leaf(id) if *id == target => {
-            let existing = Node::Leaf(*id);
-            *node = Node::Split {
-                orientation,
-                ratio: DEFAULT_RATIO,
-                child0: Box::new(existing),
-                child1: Box::new(Node::Leaf(new_pane)),
-            };
-            true
-        }
-        Node::Leaf(_) => false,
-        Node::Split { child0, child1, .. } => {
-            split_node(child0, target, new_pane, orientation)
-                || split_node(child1, target, new_pane, orientation)
-        }
+/// Equalizes `weights` to `1/n` each, where `n = weights.len()`.
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "pane counts are tiny; 1/n is exact enough for divider geometry"
+)]
+fn equalize(weights: &mut [f64]) {
+    let n = weights.len();
+    if n == 0 {
+        return;
+    }
+    let each = 1.0 / n as f64;
+    for w in weights.iter_mut() {
+        *w = each;
     }
 }
 
-/// Recursively removes the leaf `pane`, collapsing the sibling into the parent
-/// slot. Returns `true` if `pane` was found and removed.
-fn remove_node(node: &mut Node, pane: PaneId) -> bool {
-    // Index of the child to KEEP when a DIRECT child of this split is `pane`:
-    // if child0 is the target, keep child1 (index 1), and vice versa.
-    let keep: Option<usize> = match node {
-        Node::Split { child0, child1, .. } => {
-            if matches!(&**child0, Node::Leaf(id) if *id == pane) {
-                Some(1)
-            } else if matches!(&**child1, Node::Leaf(id) if *id == pane) {
-                Some(0)
-            } else {
-                None
-            }
-        }
-        Node::Leaf(_) => None,
+/// Recursively splits the leaf matching `target` within a `Split` `frame`. A
+/// same-orientation split inserts a flat sibling after `target` and re-equalizes; a
+/// perpendicular split wraps `target` in a new two-child sub-frame. Returns `true`
+/// if a matching leaf was found and split.
+fn split_in(frame: &mut Frame, target: PaneId, new_pane: PaneId, orientation: Orientation) -> bool {
+    let Frame::Split {
+        orientation: own,
+        children,
+        weights,
+    } = frame
+    else {
+        return false;
     };
 
-    if let Some(keep) = keep {
-        let old = std::mem::replace(node, Node::Leaf(PLACEHOLDER_PANE));
-        if let Node::Split { child0, child1, .. } = old {
-            *node = if keep == 0 { *child0 } else { *child1 };
+    if let Some(i) = children
+        .iter()
+        .position(|c| matches!(c, Frame::Leaf(id) if *id == target))
+    {
+        if *own == orientation {
+            // FLAT: insert the new pane immediately after the target, re-equalize.
+            children.insert(i + 1, Frame::Leaf(new_pane));
+            weights.insert(i + 1, 0.0);
+            equalize(weights);
+        } else {
+            // NEST: wrap the target leaf in a new perpendicular two-child frame.
+            children[i] = Frame::Split {
+                orientation,
+                children: vec![Frame::Leaf(target), Frame::Leaf(new_pane)],
+                weights: vec![DEFAULT_RATIO, DEFAULT_RATIO],
+            };
         }
         return true;
     }
 
-    match node {
-        Node::Split { child0, child1, .. } => {
-            remove_node(child0, pane) || remove_node(child1, pane)
+    children
+        .iter_mut()
+        .any(|child| split_in(child, target, new_pane, orientation))
+}
+
+/// Recursively removes the leaf `pane` (and its weight) from the `Split` that owns
+/// it. Returns `true` if `pane` was found and removed. Caller normalizes after.
+fn remove_in(frame: &mut Frame, pane: PaneId) -> bool {
+    let Frame::Split {
+        children, weights, ..
+    } = frame
+    else {
+        return false;
+    };
+
+    if let Some(i) = children
+        .iter()
+        .position(|c| matches!(c, Frame::Leaf(id) if *id == pane))
+    {
+        children.remove(i);
+        weights.remove(i);
+        return true;
+    }
+
+    children.iter_mut().any(|child| remove_in(child, pane))
+}
+
+/// Bottom-up normalization after a remove: recurse children first, then FLATTEN any
+/// same-orientation child split into this one (scaling its weights), COLLAPSE a
+/// single remaining child into this frame, else re-EQUALIZE the weights.
+fn normalize(frame: &mut Frame) {
+    let Frame::Split {
+        orientation,
+        children,
+        weights,
+    } = frame
+    else {
+        return;
+    };
+
+    for child in children.iter_mut() {
+        normalize(child);
+    }
+
+    // FLATTEN: splice any same-orientation child's children + scaled weights in.
+    let mut new_children: Vec<Frame> = Vec::with_capacity(children.len());
+    let mut new_weights: Vec<f64> = Vec::with_capacity(weights.len());
+    for (child, w) in children.drain(..).zip(weights.drain(..)) {
+        match child {
+            Frame::Split {
+                orientation: child_orient,
+                children: grandchildren,
+                weights: grand_weights,
+            } if child_orient == *orientation => {
+                for (gc, gw) in grandchildren.into_iter().zip(grand_weights) {
+                    new_children.push(gc);
+                    new_weights.push(gw * w);
+                }
+            }
+            other => {
+                new_children.push(other);
+                new_weights.push(w);
+            }
         }
-        Node::Leaf(_) => false,
+    }
+    *children = new_children;
+    *weights = new_weights;
+
+    // COLLAPSE a 1-child split into its sole child; else re-equalize the row/column.
+    if children.len() == 1 {
+        let only = children.drain(..).next().expect("len checked == 1");
+        *frame = only;
+    } else {
+        equalize(weights);
     }
 }
 
-/// Appends every leaf id under `node` to `out` in DFS (child0-first) order.
-fn collect_leaves(node: &Node, out: &mut Vec<PaneId>) {
-    match node {
-        Node::Leaf(id) => out.push(*id),
-        Node::Split { child0, child1, .. } => {
-            collect_leaves(child0, out);
-            collect_leaves(child1, out);
+/// Appends every leaf id under `frame` to `out` in DFS (child-order) order.
+fn collect_leaves(frame: &Frame, out: &mut Vec<PaneId>) {
+    match frame {
+        Frame::Leaf(id) => out.push(*id),
+        Frame::Split { children, .. } => {
+            for child in children {
+                collect_leaves(child, out);
+            }
         }
     }
 }
 
-/// Appends each leaf's `(id, rect)` under `node` (occupying `rect`) to `out`,
-/// dividing `rect` per each split's orientation + ratio, in DFS order.
-fn collect_rects(node: &Node, rect: Rect, out: &mut Vec<(PaneId, Rect)>) {
-    match node {
-        Node::Leaf(id) => out.push((*id, rect)),
-        Node::Split {
+/// Appends each leaf's `(id, rect)` under `frame` (occupying `rect`) to `out`,
+/// dividing `rect` among the children by cumulative normalized weight fractions
+/// (Vertical divides WIDTH; Horizontal divides HEIGHT), in DFS order.
+fn collect_rects(frame: &Frame, rect: Rect, out: &mut Vec<(PaneId, Rect)>) {
+    match frame {
+        Frame::Leaf(id) => out.push((*id, rect)),
+        Frame::Split {
             orientation,
-            ratio,
-            child0,
-            child1,
-        } => match orientation {
-            Orientation::Vertical => {
-                let split = rect.w * ratio;
-                let r0 = Rect {
-                    w: split,
-                    ..rect
+            children,
+            weights,
+        } => {
+            let total: f64 = weights.iter().sum();
+            let mut offset = 0.0;
+            for (child, w) in children.iter().zip(weights.iter()) {
+                let frac = if total > 0.0 { w / total } else { 0.0 };
+                let child_rect = match orientation {
+                    Orientation::Vertical => {
+                        let cw = rect.w * frac;
+                        let r = Rect {
+                            x: rect.x + offset,
+                            w: cw,
+                            ..rect
+                        };
+                        offset += cw;
+                        r
+                    }
+                    Orientation::Horizontal => {
+                        let ch = rect.h * frac;
+                        let r = Rect {
+                            y: rect.y + offset,
+                            h: ch,
+                            ..rect
+                        };
+                        offset += ch;
+                        r
+                    }
                 };
-                let r1 = Rect {
-                    x: rect.x + split,
-                    w: rect.w - split,
-                    ..rect
-                };
-                collect_rects(child0, r0, out);
-                collect_rects(child1, r1, out);
+                collect_rects(child, child_rect, out);
             }
-            Orientation::Horizontal => {
-                let split = rect.h * ratio;
-                let r0 = Rect {
-                    h: split,
-                    ..rect
-                };
-                let r1 = Rect {
-                    y: rect.y + split,
-                    h: rect.h - split,
-                    ..rect
-                };
-                collect_rects(child0, r0, out);
-                collect_rects(child1, r1, out);
-            }
-        },
+        }
     }
 }
 
@@ -461,6 +494,14 @@ mod tests {
     const HALF_W: f64 = 50.0;
     /// Half the height — a 0.5 Horizontal split boundary.
     const HALF_H: f64 = 20.0;
+    /// One third of the test width — a flat 3-way Vertical split column width
+    /// (and the x of the second column).
+    const THIRD_W: f64 = W / 3.0;
+    /// Two thirds of the test width — the x of the third column in a flat 3-way
+    /// Vertical split.
+    const TWO_THIRD_W: f64 = 2.0 * W / 3.0;
+    /// One quarter of the test width — a flat 4-way Vertical split column width.
+    const QUARTER_W: f64 = W / 4.0;
 
     // --- Float comparison ---------------------------------------------------
 
@@ -587,6 +628,122 @@ mod tests {
     }
 
     // =====================================================================
+    // n-ary FLAT (same-orientation) split behavior
+    //
+    // These pin the n-ary frame model (architect's N-ARY plan): a split whose
+    // orientation MATCHES the containing frame FLATTENS into a flat, equalized
+    // sibling row/column (no nesting); a PERPENDICULAR split still NESTS (as the
+    // existing perpendicular tests above already assert). The flat cases are THE
+    // 3-pane regression: the old binary always-nest model produced nested
+    // 25/25/50 columns, blanking the pre-existing right pane.
+    // =====================================================================
+
+    #[test]
+    fn vsplit_flattens_into_row() {
+        // Start with a row [P1, P2] (Vertical = side by side), then Vertical-split
+        // P1 AGAIN. Because the new split's orientation MATCHES the row, P3 is
+        // inserted as a FLAT sibling AFTER the target P1 (architect's "insert after
+        // target" rule) and the row re-equalizes — NOT a nested sub-split.
+        let mut tree = PaneTree::new(P1);
+        tree.split(P1, P2, Orientation::Vertical);
+        tree.split(P1, P3, Orientation::Vertical);
+
+        // Insert-after-target pins the DFS order to [P1, P3, P2].
+        assert_eq!(
+            tree.leaves(),
+            vec![P1, P3, P2],
+            "same-orientation vsplit inserts the new pane AFTER the target (flat row)"
+        );
+
+        let rects = tree.pane_rects(W, H);
+        assert_eq!(rects.len(), 3, "three flat leaves -> three rects");
+
+        let r1 = rect_for(&rects, P1);
+        let r3 = rect_for(&rects, P3);
+        let r2 = rect_for(&rects, P2);
+
+        // Three equal full-height thirds tiling [0, W] left to right: P1, P3, P2.
+        // THIS is the regression assertion: the old nested model gave 25/25/50.
+        assert_rect(r1, 0.0, 0.0, THIRD_W, H, "P1 left third");
+        assert_rect(r3, THIRD_W, 0.0, THIRD_W, H, "P3 middle third");
+        assert_rect(r2, TWO_THIRD_W, 0.0, THIRD_W, H, "P2 right third");
+
+        // No rect is zero-width (the pre-existing right pane is NOT starved).
+        for (id, r) in &rects {
+            assert!(r.w > EPS, "pane {id} must not be zero-width: {r:?}");
+        }
+
+        // No pairwise overlap.
+        assert!(!rects_overlap(r1, r3), "P1/P3 must not overlap");
+        assert!(!rects_overlap(r3, r2), "P3/P2 must not overlap");
+        assert!(!rects_overlap(r1, r2), "P1/P2 must not overlap");
+
+        // Areas tile the full bounds.
+        let total: f64 = rects.iter().map(|(_, r)| r.w * r.h).sum();
+        assert!(approx(total, W * H), "leaf areas must sum to the full bounds");
+    }
+
+    #[test]
+    fn vsplit_twice_stays_flat_four_equal() {
+        // Repeated same-orientation vsplits of P1 keep the row FLAT (no growing
+        // nesting): four equal-width full-height columns.
+        let mut tree = PaneTree::new(P1);
+        tree.split(P1, P2, Orientation::Vertical);
+        tree.split(P1, P3, Orientation::Vertical);
+        tree.split(P1, P4, Orientation::Vertical);
+
+        let leaves = tree.leaves();
+        assert_eq!(leaves.len(), 4, "four flat leaves after three same-orientation vsplits");
+
+        let rects = tree.pane_rects(W, H);
+        assert_eq!(rects.len(), 4, "four flat leaves -> four rects");
+
+        // Each column is an equal quarter of the width, full height; none zero.
+        for (id, r) in &rects {
+            assert!(approx(r.w, QUARTER_W), "pane {id} must be an equal quarter-width: {r:?}");
+            assert!(approx(r.h, H), "pane {id} must be full-height: {r:?}");
+            assert!(r.w > EPS, "pane {id} must not be zero-width: {r:?}");
+        }
+
+        // Areas tile the full bounds.
+        let total: f64 = rects.iter().map(|(_, r)| r.w * r.h).sum();
+        assert!(approx(total, W * H), "leaf areas must sum to the full bounds");
+    }
+
+    #[test]
+    fn hsplit_of_row_member_nests() {
+        // PERPENDICULAR split still NESTS: row [P1, P2], then HORIZONTAL-split P1.
+        // Horizontal is perpendicular to the Vertical row, so P1 is wrapped in a
+        // stacked sub-frame [P1, P3] occupying the left half; P2 keeps the full-
+        // height right half. (Same shape as `nested_split_rects` via a different
+        // sequence — confirming nest-only-when-perpendicular.)
+        let mut tree = PaneTree::new(P1);
+        tree.split(P1, P2, Orientation::Vertical);
+        tree.split(P1, P3, Orientation::Horizontal);
+
+        let rects = tree.pane_rects(W, H);
+        assert_eq!(rects.len(), 3, "three leaves -> three rects");
+
+        let r1 = rect_for(&rects, P1);
+        let r3 = rect_for(&rects, P3);
+        let r2 = rect_for(&rects, P2);
+
+        assert_rect(r1, 0.0, 0.0, HALF_W, HALF_H, "P1 top-left (nested column)");
+        assert_rect(r3, 0.0, HALF_H, HALF_W, HALF_H, "P3 bottom-left (nested column)");
+        assert_rect(r2, HALF_W, 0.0, HALF_W, H, "P2 full-height right");
+
+        for (id, r) in &rects {
+            assert!(r.w > EPS && r.h > EPS, "pane {id} must not be zero-area: {r:?}");
+        }
+        assert!(!rects_overlap(r1, r2), "P1/P2 must not overlap");
+        assert!(!rects_overlap(r1, r3), "P1/P3 must not overlap");
+        assert!(!rects_overlap(r2, r3), "P2/P3 must not overlap");
+
+        let total: f64 = rects.iter().map(|(_, r)| r.w * r.h).sum();
+        assert!(approx(total, W * H), "leaf areas must sum to the full bounds");
+    }
+
+    // =====================================================================
     // remove / collapse
     // =====================================================================
 
@@ -631,6 +788,94 @@ mod tests {
         let mut tree = PaneTree::new(P1);
         tree.remove(P1);
         assert_eq!(tree.leaves(), vec![P1], "removing the last pane is a no-op");
+    }
+
+    #[test]
+    fn remove_re_equalizes_row() {
+        // Flat row [P1, P3, P2] (see `vsplit_flattens_into_row`); removing the
+        // middle pane P3 leaves a flat [P1, P2] that RE-EQUALIZES to 50/50 — NOT
+        // 25/75 (nvim equalalways).
+        let mut tree = PaneTree::new(P1);
+        tree.split(P1, P2, Orientation::Vertical);
+        tree.split(P1, P3, Orientation::Vertical);
+        tree.remove(P3);
+
+        assert_eq!(tree.leaves(), vec![P1, P2], "removing P3 leaves the flat [P1, P2] row");
+
+        let rects = tree.pane_rects(W, H);
+        assert_eq!(rects.len(), 2, "two leaves -> two rects");
+        assert_rect(rect_for(&rects, P1), 0.0, 0.0, HALF_W, H, "P1 re-equalized left half");
+        assert_rect(rect_for(&rects, P2), HALF_W, 0.0, HALF_W, H, "P2 re-equalized right half");
+    }
+
+    #[test]
+    fn remove_collapses_single_child() {
+        // Row [P1, P2], then a PERPENDICULAR (Horizontal) split of P1 nests a
+        // column [P1, P3] in the left half. Removing P3 leaves the column with a
+        // single child P1, which COLLAPSES into the parent slot; P1 then re-
+        // equalizes with P2 into 50/50 halves.
+        let mut tree = PaneTree::new(P1);
+        tree.split(P1, P2, Orientation::Vertical);
+        tree.split(P1, P3, Orientation::Horizontal);
+        tree.remove(P3);
+
+        assert_eq!(
+            tree.leaves(),
+            vec![P1, P2],
+            "the 1-child column collapses, leaving the flat [P1, P2] row"
+        );
+
+        let rects = tree.pane_rects(W, H);
+        assert_eq!(rects.len(), 2, "two leaves -> two rects");
+        assert_rect(rect_for(&rects, P1), 0.0, 0.0, HALF_W, H, "P1 reclaims+equalizes left half");
+        assert_rect(rect_for(&rects, P2), HALF_W, 0.0, HALF_W, H, "P2 right half");
+    }
+
+    #[test]
+    fn remove_collapses_and_merges_same_orientation() {
+        // The MERGE case (architect's stated sequence):
+        //   new(P1)
+        //   vsplit P1            -> row[P1, P2]
+        //   hsplit P2 (perp)     -> row[P1, col[P2, P3]]
+        //   vsplit P2 (perp to   -> row[P1, col[ row[P2, P4], P3 ]]
+        //     the column)
+        //   remove P3            -> the column drops to a single child row[P2, P4],
+        //                           which COLLAPSES, and because it is the SAME
+        //                           orientation as the root row it MERGES upward:
+        //                           => flat row[P1, P2, P4].
+        //
+        // NOTE to coder: this pins the final shape — a single FLAT row [P1, P2, P4]
+        // of equal thirds. The impl's normalize() must (a) collapse the 1-child
+        // column AND (b) merge the surviving same-orientation row into the parent
+        // (no same-orientation Split may persist nested), then re-equalize.
+        let mut tree = PaneTree::new(P1);
+        tree.split(P1, P2, Orientation::Vertical);
+        tree.split(P2, P3, Orientation::Horizontal);
+        tree.split(P2, P4, Orientation::Vertical);
+        tree.remove(P3);
+
+        assert_eq!(
+            tree.leaves(),
+            vec![P1, P2, P4],
+            "collapse + same-orientation merge yields a flat [P1, P2, P4] row"
+        );
+
+        let rects = tree.pane_rects(W, H);
+        assert_eq!(rects.len(), 3, "three flat leaves -> three rects");
+
+        let r1 = rect_for(&rects, P1);
+        let r2 = rect_for(&rects, P2);
+        let r4 = rect_for(&rects, P4);
+        assert_rect(r1, 0.0, 0.0, THIRD_W, H, "P1 left third");
+        assert_rect(r2, THIRD_W, 0.0, THIRD_W, H, "P2 middle third");
+        assert_rect(r4, TWO_THIRD_W, 0.0, THIRD_W, H, "P4 right third");
+
+        for (id, r) in &rects {
+            assert!(r.w > EPS, "pane {id} must not be zero-width: {r:?}");
+        }
+
+        let total: f64 = rects.iter().map(|(_, r)| r.w * r.h).sum();
+        assert!(approx(total, W * H), "leaf areas must sum to the full bounds");
     }
 
     // =====================================================================
@@ -712,6 +957,21 @@ mod tests {
         let absent: PaneId = 99;
         assert_eq!(tree.neighbor(absent, FocusDir::Left, W, H), None, "unknown pane -> None");
         assert_eq!(tree.neighbor(absent, FocusDir::Right, W, H), None, "unknown pane -> None");
+    }
+
+    #[test]
+    fn neighbor_flat_row_of_three() {
+        // Flat row [P1, P3, P2] (see `vsplit_flattens_into_row`): left-to-right
+        // neighbours chain across the three columns, with None at each edge.
+        let mut tree = PaneTree::new(P1);
+        tree.split(P1, P2, Orientation::Vertical);
+        tree.split(P1, P3, Orientation::Vertical);
+
+        assert_eq!(tree.neighbor(P1, FocusDir::Right, W, H), Some(P3), "P1 right -> P3");
+        assert_eq!(tree.neighbor(P3, FocusDir::Right, W, H), Some(P2), "P3 right -> P2");
+        assert_eq!(tree.neighbor(P2, FocusDir::Right, W, H), None, "P2 is at the right edge");
+        assert_eq!(tree.neighbor(P3, FocusDir::Left, W, H), Some(P1), "P3 left -> P1");
+        assert_eq!(tree.neighbor(P1, FocusDir::Left, W, H), None, "P1 is at the left edge");
     }
 
     // =====================================================================

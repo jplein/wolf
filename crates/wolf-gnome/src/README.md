@@ -209,17 +209,17 @@ pub fn cursor_colors(snap: &wolf_core::Snapshot) -> (wolf_core::Rgb, wolf_core::
 
 ## `layout.rs`
 
-The **pure, GTK-free** binary pane-layout tree (decision D7), unit-tested
-headlessly in its own `#[cfg(test)] mod tests` (mirroring `geometry.rs` /
-`cursor.rs`). It owns every pane-geometry decision reasonable without a display;
+The **pure, GTK-free** N-ARY pane-layout tree (decision D7, Neovim's frame model),
+unit-tested headlessly in its own `#[cfg(test)] mod tests` (mirroring `geometry.rs`
+/ `cursor.rs`). It owns every pane-geometry decision reasonable without a display;
 `pane_view.rs` is the only place that turns it into widgets.
 
 ```rust
 pub type PaneId = u64;
 pub enum Orientation { Horizontal, Vertical }   // matches wolf_core::SplitOrientation
 pub struct Rect { pub x: f64, pub y: f64, pub w: f64, pub h: f64 }
-pub enum PaneLayout { Leaf(PaneId), Split { orientation, ratio, first, second } }
-pub struct PaneTree { /* private binary tree of leaves/splits */ }
+pub enum PaneLayout { Leaf(PaneId), Split { orientation, children: Vec<PaneLayout>, weights: Vec<f64> } }
+pub struct PaneTree { /* private n-ary frame tree of leaves/splits */ }
 impl PaneTree {
     pub fn new(root: PaneId) -> Self
     pub fn split(&mut self, target: PaneId, new_pane: PaneId, orientation: Orientation)
@@ -231,24 +231,40 @@ impl PaneTree {
 }
 ```
 
+- **Frame model.** Internally a `Frame` is either a `Leaf(PaneId)` or an n-ary
+  `Split { orientation, children, weights }` (a flat ROW for `Vertical`, a flat
+  COLUMN for `Horizontal`). Invariants: a split has `>= 2` children; `weights.len()
+  == children.len()` and the weights sum to 1 (they drive divider positions); and
+  no split sits directly under a same-orientation split (each axis is a single flat
+  row/column). `PaneLayout` is the read-only mirror returned by `layout()`.
 - **`Orientation`** matches `wolf_core::SplitOrientation`: a `Horizontal` split
   STACKS panes top/bottom (divides HEIGHT); a `Vertical` split places them SIDE BY
   SIDE (divides WIDTH).
-- **`split`** replaces the `target` leaf with an internal node (the chosen
-  orientation, ratio `0.5`) whose children are, in order, the existing `target`
-  (FIRST) and the `new_pane` (SECOND) — so a vertical split keeps `target` on the
-  LEFT, a horizontal split keeps it on TOP. No-op if `target` is not a leaf.
-- **`remove`** removes the leaf and collapses its SIBLING subtree into the parent's
-  slot; removing the last pane is a no-op (the tree is never empty).
+- **`split`** — a split whose orientation MATCHES the frame that owns `target`
+  inserts `new_pane` as a FLAT sibling immediately AFTER `target` and re-EQUALIZES
+  the row/column (so re-splitting along the same axis yields equal siblings — e.g.
+  a row `[P1, P2]` vsplit on `P1` becomes equal thirds `[P1, P3, P2]`, NOT a nested
+  25/25/50 that blanks `P2`). A PERPENDICULAR split instead NESTS: it wraps `target`
+  in a new two-child sub-frame `[target, new_pane]` (target FIRST: LEFT for vertical,
+  TOP for horizontal). The root single-leaf case becomes a two-child split. No-op if
+  `target` is not a leaf.
+- **`remove`** drops the leaf's slot+weight, then NORMALIZES bottom-up: FLATTEN any
+  same-orientation child split into its parent (scaling weights), COLLAPSE a
+  now-1-child split into its sole child, and re-EQUALIZE remaining siblings (nvim
+  `equalalways`). This subsumes collapse-to-sibling AND same-orientation merge.
+  Removing the last pane is a no-op (the tree is never empty).
 - **`leaves`** / **`pane_rects`** enumerate leaves and their tiling rectangles in a
-  deterministic DFS (child0-before-child1) order; the rects tile the bounds exactly.
+  deterministic DFS (child-order) traversal; `pane_rects` divides each split's bounds
+  by cumulative normalized weight fractions, tiling the bounds exactly (no zero rects
+  for valid weights).
 - **`neighbor`** returns the nearest pane in `dir` (from `pane_rects` geometry) that
   STRICTLY overlaps `from` on the cross axis (Left/Right overlap on Y; Up/Down on
   X), else `None` (edge / unknown pane). Uses `wolf_core::FocusDir` directly.
 - **`layout`** returns the read-only `PaneLayout` mirror so the widget layer can
-  build nested `gtk::Paned`s without seeing the private `Node`.
+  build a chain of `gtk::Paned`s without seeing the private `Frame`.
 
-Named constants: `DEFAULT_RATIO` (`0.5`), `NEIGHBOR_EPS` (`1e-9`, strict overlap).
+Named constants: `DEFAULT_RATIO` (`0.5`, a fresh two-child split's per-child
+weight), `NEIGHBOR_EPS` (`1e-9`, strict overlap).
 
 ## `pane_view.rs`
 
@@ -289,11 +305,21 @@ impl PaneHandle {
   refreshes the active pane from `active_win` (fallback: the cursor's grid); (6)
   queues redraws.
 - **Rebuild reuses areas.** `rebuild_pane_area` detaches each pane's `DrawingArea`
-  from its old parent and rebuilds the nested `gtk::Paned` tree from
-  `PaneTree::layout`, REUSING areas by `PaneId` (so bound grids/contents survive).
-  A `Vertical` (side-by-side) split maps to a HORIZONTAL `gtk::Paned`; `Horizontal`
-  (stacked) to a VERTICAL one. Each new paned's divider is set once to `ratio` of
-  its travel (`max-position` notify, one-shot) so neither pane collapses.
+  from its old parent and rebuilds the widget tree from `PaneTree::layout`, REUSING
+  areas by `PaneId` (so bound grids/contents survive). A `Vertical` (side-by-side)
+  split maps to a HORIZONTAL `gtk::Paned`; `Horizontal` (stacked) to a VERTICAL one.
+  An n-ary split is rendered by `build_chain` as a RIGHT-LEANING chain of binary
+  `gtk::Paned`s (first child = `start`, the rest = a nested chain as `end`); each
+  paned has `set_shrink_start_child(false)`/`set_shrink_end_child(false)` and its
+  divider is positioned at the first child's SHARE of the children that paned spans
+  (so equal thirds give an outer 1/3 over an inner 1/2 — equal columns). Unbound
+  leaves are skipped (a `None` side collapses to the other). Each leaf `DrawingArea`
+  also carries a one-cell `content-width/height` floor so a non-shrinking child can
+  never be allocated to zero pixels. `install_paned_position` re-applies the
+  proportional divider on EVERY `max-position` notify (not one-shot): this converges
+  across the nested multi-pass allocation and re-proportions on resize, so a 3rd
+  same-orientation split no longer starves the pre-existing pane to a blank/gray
+  zero-width strip.
 - **Resize.** Each pane `DrawingArea`'s `connect_resize` → `grid_size_for` →
   `WolfCore::resize_grid` for that pane's grid, then `resize_global` resizes the
   outer/global grid 1 (`WolfCore::resize`) to the full editor area (so the cmdline
@@ -324,9 +350,15 @@ has a clear future direction:
   truncated to their final row until native `ext_messages` lands (deferred per
   architecture decision 7).
 - **Focus-direction moves use idealized split ratios.** `PaneTree::neighbor`
-  computes neighbours from the tree's nominal `0.5` split ratios, not the actual
+  computes neighbours from the tree's nominal EQUAL split weights, not the actual
   dragged `gtk::Paned` divider positions, so `<C-w>h/j/k/l` can pick a different
   neighbour than the pixel geometry would after a manual drag.
+- **Paned drags reset to equal on the next resize (v1).** The frame's per-child
+  `weights` always equalize on split/close, and `install_paned_position` re-derives
+  each divider from those weights on every `max-position` notify. A user drag changes
+  a paned's `position` (not its `max-position`) so it holds until the next
+  window/container resize or split/close, at which point the divider snaps back to
+  the equal ratio. The `weights` make a future drag-writeback straightforward.
 - **Floats and external windows are ignored.** `win_float_pos` /
   `win_external_pos` (and `msg_set_pos`) are dropped by core, so floating windows
   and detached UI grids do not appear as panes.

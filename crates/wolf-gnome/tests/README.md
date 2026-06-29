@@ -2,10 +2,11 @@
 
 Tests for the seams and the windowed application. They split into **headless**
 checks (no display, no nvim), one **real-Neovim** end-to-end round-trip (no mocks,
-per project policy), and eight **opt-in headless-compositor** cage smoke tests
+per project policy), and nine **opt-in headless-compositor** cage smoke tests
 that launch the real window (one window-render smoke, two file-picker smokes, one
-file-tree-sidebar smoke, and four split-pane smokes: vertical split, horizontal
-split, focus move, and close pane). Everything runs through `nix develop --command`
+file-tree-sidebar smoke, and five split-pane smokes: vertical split, horizontal
+split, a three-pane same-orientation split, focus move, and close pane).
+Everything runs through `nix develop --command`
 so the GTK toolchain, the pinned font, and `WOLF_NVIM_BIN` are present:
 
 ```sh
@@ -87,17 +88,28 @@ display, or nvim — `FileEntry`s are synthesized from `display` strings (with
 
 ## `layout.rs` unit tests (in `src/layout.rs`, headless)
 
-The pure binary pane-layout tree (`PaneTree`) is unit-tested **inside its own
-module** (a `#[cfg(test)] mod tests` in [`src/layout.rs`](../src/layout.rs)),
-needing no GTK, display, or nvim — thirteen tests covering:
+The pure **N-ary frame** pane-layout tree (`PaneTree`, matching Neovim's window
+model) is unit-tested **inside its own module** (a `#[cfg(test)] mod tests` in
+[`src/layout.rs`](../src/layout.rs)), needing no GTK, display, or nvim — twenty
+tests covering:
 
 - **construction / split** — `new` is a single leaf; a `Vertical` split yields two
   leaves side by side and a `Horizontal` split stacks them; `pane_rects` tiles the
-  bounds for both; a nested split produces the expected nested rectangles.
-- **remove / collapse** — removing a leaf collapses its sibling (and a sibling
-  *subtree*) into the parent's slot; removing the last pane is a no-op.
+  bounds for both; a perpendicular nested split produces the expected nested
+  rectangles.
+- **flatten vs. nest (the N-ary frame model)** — a split whose orientation MATCHES
+  the containing frame FLATTENS into an equal-sized sibling row/column (a row
+  `[P1, P2]` vsplit on `P1` becomes equal thirds `[P1, P3, P2]`, not a nested
+  25/25/50; repeated same-orientation vsplits stay flat at four equal columns),
+  while a PERPENDICULAR split (an hsplit of a row member) NESTS into a sub-frame.
+- **remove / collapse / re-equalize** — removing a leaf collapses its sibling (and
+  a sibling *subtree*) into the parent's slot; removing a flat-row member
+  re-equalizes the survivors (nvim `equalalways`); a now-1-child split collapses
+  into its sole child; a surviving same-orientation split merges upward into the
+  parent; removing the last pane is a no-op.
 - **neighbor** — basic Left/Right (`Vertical`) and Up/Down (`Horizontal`)
-  neighbours, a nested case, and `None` for an unknown pane.
+  neighbours, a nested 2x2 case, a flat row of three, and `None` for an unknown
+  pane.
 - **ordering** — `leaves` and `pane_rects` enumerate in a stable DFS order.
 
 ## `gdk_key.rs` — input translation (headless, table-driven)
@@ -163,7 +175,7 @@ drains flushes, and asserts row 0 contains the word. Requires `WOLF_NVIM_BIN`
 
 ## `smoke_headless.rs` — windowed app + picker + tree + panes (opt-in, real compositor)
 
-Eight `#[test] #[ignore]`d cage smokes that prove the whole stack actually draws a
+Nine `#[test] #[ignore]`d cage smokes that prove the whole stack actually draws a
 window, drives the file picker, populates the file-tree sidebar, and creates /
 focuses / closes native split panes. They are opt-in because they need a
 compositor and an OCR toolchain a normal `cargo test` will not have. Run them
@@ -176,11 +188,11 @@ nix develop --command cargo test -p wolf-gnome -- --ignored
 **Serialization (`CAGE_LOCK`).** Each test launches its own `cage` compositor, and
 two compositors started concurrently contend for the same Wayland socket under
 `XDG_RUNTIME_DIR` (lockfile error), which would fail both under the default
-parallel harness. So all eight tests acquire a shared `static CAGE_LOCK:
+parallel harness. So all nine tests acquire a shared `static CAGE_LOCK:
 Mutex<()>` for their whole body, forcing serial execution; poisoning is recovered
 from (`into_inner`) so one panicking test does not cascade into the others.
 
-**Mechanism (common to all eight).** Each locates the built binary via
+**Mechanism (common to all nine).** Each locates the built binary via
 `CARGO_BIN_EXE_wolf-gnome` and runs its interactive scenario as one `sh -c` string
 **inside `cage`** (the headless wlroots compositor) so that `wtype` and `grim`
 inherit cage's `WAYLAND_DISPLAY` (cage exports it only to its child process tree).
@@ -228,6 +240,13 @@ removed first so a previous run cannot make a test pass.
   content-preserving regression guard).
 - **`horizontal_split_shows_two_panes_under_cage`** — the same, with `<C-w>s`, so
   the two files render stacked top/bottom.
+- **`three_panes_keep_all_files_visible_under_cage`** — the N-ary flatten
+  regression guard: opens file A, `<C-w>v` + `:e` file B (a side-by-side `A | B`),
+  focuses the left pane (`<C-w>h`), then `<C-w>v` + `:e` file C in it, producing a
+  flat row of THREE equal columns. It asserts the OCR contains ALL THREE headings
+  at once — the load-bearing assertion being the pre-existing RIGHT pane (B), which
+  the old binary always-nest model collapsed/blanked when a same-orientation third
+  split nested into 25/25/50 instead of flattening into equal thirds.
 - **`focus_move_returns_to_first_pane_under_cage`** — vsplits (A left, B right),
   inserts a marker, then `<C-w>h` back to the left pane and inserts again; asserts
   the OCR contains the marker AND both headings (so the focus-move plumbing reached

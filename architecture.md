@@ -88,7 +88,10 @@ dependency**. Should feel like a GNOME application.
 **native pane view** — a tree of nested `gtk::Paned`s, one `gtk::DrawingArea` per
 Neovim window, driven by a pure `PaneTree` layout — with a bottom **cmdline
 strip** that paints the outer grid (where the command line / messages live under
-`ext_multigrid`). The pure seams (`gdk_key`, `paint`, `grid_size_for`), verified
+`ext_multigrid`). The layout is an **N-ary frame model** (matching Neovim): a
+split in the SAME orientation as its containing frame FLATTENS into equal-sized
+siblings (so vsplitting one of two side-by-side panes yields three equal columns,
+not a 25/25/50 nesting), while a PERPENDICULAR split nests. The pure seams (`gdk_key`, `paint`, `grid_size_for`), verified
 headlessly without a display, are wired onto a live `WolfCore`: each pane paints
 its own window grid via Cairo/Pango and the pane owning the cursor's grid overlays
 a mode-aware cursor (a block in normal mode, a thin bar in insert mode, driven by
