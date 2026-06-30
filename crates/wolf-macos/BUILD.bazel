@@ -20,7 +20,10 @@ load("@rules_xcodeproj//xcodeproj:defs.bzl", "xcodeproj", "top_level_target")
 # (`WolfFFI`) for the underlying symbols.
 swift_library(
     name = "wolf_key_map",
-    srcs = ["Sources/WolfKeyMap/KeyMap.swift"] + ["//crates/wolf-ffi:generated_swift"],
+    srcs = [
+        "Sources/WolfKeyMap/KeyMap.swift",
+        "Sources/WolfKeyMap/PickerSeam.swift",
+    ] + ["//crates/wolf-ffi:generated_swift"],
     module_name = "WolfKeyMap",
     visibility = ["//visibility:public"],
     deps = ["//crates/wolf-ffi:wolf_ffi_cc"],
@@ -66,7 +69,10 @@ sh_test(
 
 swift_test(
     name = "WolfKeyMapTests",
-    srcs = ["Tests/WolfKeyMapTests/KeyMapTests.swift"],
+    srcs = [
+        "Tests/WolfKeyMapTests/KeyMapTests.swift",
+        "Tests/WolfKeyMapTests/PickerSeamTests.swift",
+    ],
     deps = [":wolf_key_map"],
 )
 

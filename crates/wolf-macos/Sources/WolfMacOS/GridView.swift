@@ -18,6 +18,12 @@ final class GridView: NSView {
     private let handle: WolfCoreHandle
     private let metrics: CellMetrics
 
+    /// Invoked when the picker trigger chord (Shift+Ctrl+P) is pressed, BEFORE any
+    /// key is translated/forwarded to Neovim. Set by `AppDelegate` to open the
+    /// picker. The chord is deliberately non-conflicting so every Neovim key
+    /// (including `<C-p>`) is preserved.
+    var onPickerTrigger: (() -> Void)?
+
     /// Creates the view bound to a live core `handle` and measured `metrics`.
     init(handle: WolfCoreHandle, metrics: CellMetrics) {
         self.handle = handle
@@ -81,6 +87,20 @@ final class GridView: NSView {
 
     override func keyDown(with event: NSEvent) {
         let flags = event.modifierFlags
+
+        // Picker trigger (Shift+Ctrl+P) is intercepted BEFORE translation so it is
+        // never forwarded to Neovim. While the picker is open its search field is
+        // first responder, so GridView.keyDown stops firing — key suppression is
+        // automatic and no `isOpen` guard is needed here.
+        if PickerSeam.isPickerTrigger(
+            charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
+            ctrl: flags.contains(.control),
+            shift: flags.contains(.shift)
+        ) {
+            onPickerTrigger?()
+            return
+        }
+
         guard
             let ev = WolfKeyMap.translate(
                 keyCode: event.keyCode,

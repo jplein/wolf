@@ -7,4 +7,9 @@
 
 void wolf_ffi_set_wake(void (*wake)(void));
 
+// The picker's file-search wake (see `wolf_ffi_set_filesearch_wake`): Swift's
+// `PickerWakeBridge` registers a thunk that dispatches a picker refresh onto the
+// AppKit main thread. Passing NULL clears it.
+void wolf_ffi_set_filesearch_wake(void (*wake)(void));
+
 #endif /* WOLF_FFI_WAKE_H */

@@ -1,309 +1,304 @@
-# Plan: Bundle pinned Neovim 0.12.3 + init.lua into Wolf.app/Contents/Resources
+# Plan: macOS file picker (wolf-macos)
 
 ## STATUS: COMPLETE ✅
 
-The macOS app now bundles pinned Neovim 0.12.3 (full tree at
-`Contents/Resources/nvim/`, hermetic sha256-pinned Bazel download via the
-`//bazel/nvim` module extension + aspect_bazel_lib `copy_to_directory`) and the
-captive `init.lua` at `Contents/Resources/init.lua`; `AppDelegate` sets
-`WOLF_NVIM_BIN` to the bundled binary (overwrite=0, dev override wins) before
-starting the core — so double-clicking Wolf.app works with no shell env.
-Verification all green (structure + exec bits + codesign --verify --deep --strict
-+ nvim_version_test + bundle_layout_test + regression + denylist; wolf-core
-untouched). Reviewer APPROVED; docs reconciled + prettier. Nothing committed
-(standing rule).
+All three layers implemented, all gates green, reviewer APPROVED WITH NITS (none
+blocking), docs reconciled + prettier'd. Nothing committed (standing rule).
+Remaining: a manual GUI smoke (not headlessly testable) — Shift+Ctrl+P opens the
+panel, filtering/Up-Down/Enter/Esc behave; verify the NSSearchField Esc-closes
+(nit #1). Two cosmetic/inconsequential nits left as-is.
 
-RESOLVED FOLLOW-UP — bridge_smoke hang (FIXED ✅):
-- Root cause (pinpointed via stack-sampling the hung process): the test resolved
-  `runtime/nvim/init.lua` from `env!("CARGO_MANIFEST_DIR")`, an EPHEMERAL Bazel
-  sandbox path absent at runtime → nvim launched `-u <missing init.lua>` →
-  blocked forever on the "Press ENTER" (`wait_return`) prompt → `WolfCore::start`
-  RPC never returned. NOT a sandbox artifact, NOT an FFI/product bug (it
-  reproduced unsandboxed; the app bundles a readable init.lua so was never
-  affected). A secondary off-by-one in the resize assertion (active window grid =
-  UI height − cmdline row under ext_multigrid) also surfaced once it ran.
-- Fix (test+build only; wolf-core/app UNCHANGED): the `bridge_smoke` rust_test
-  now STAGES `//runtime/nvim:init.lua` + `//bazel/nvim:nvim_tree` as runfiles
-  (`data` + `$(rootpath)` env `WOLF_TEST_INIT_LUA`/`WOLF_TEST_NVIM_DIR`), resolved
-  by `common::{init_lua_path,nvim_bin_or_skip}` (explicit `WOLF_NVIM_BIN` still
-  wins for cargo/devShell); the test exports the resolved bin into `WOLF_NVIM_BIN`
-  for wolf-core; runs `tags=["no-sandbox"]`, `size="small"`; resize assertion
-  corrected to width-exact + height∈[ROWS-2,ROWS]. Result: `bazel test
-  //crates/wolf-ffi:bridge_smoke` PASSES (~0.2s), exercising the FULL live
-  round-trip (start→type i,x→grid shows x→resize→shutdown) against the pinned
-  nvim 0.12.3 — hermetically, on every run. The live nvim→FFI round-trip is now
-  COVERED by a passing automated test on the macOS Bazel host. Reviewer APPROVED;
-  stale "hang/unverified" docs corrected + prettier'd. Full regression green;
-  wolf-core `git status` empty.
-- NITs (test-writer, optional): nvim_version_test.sh has the version in two
-  places (EXPECTED_VERSION msg + the grep pattern) — unify to one source;
-  trim the stale `# NOTE to coder:` scaffolding comments from both .sh tests.
-- Forward-looking: the bundled nvim's adhoc/linker signatures will need
-  re-signing under hardened-runtime + Developer ID notarization (deferred).
-- Scratch: `.claude/verify-results.md` holds the verbatim verification evidence.
 
 ## Problem statement
 
-Bundle a pinned Neovim 0.12.3 (full extracted tree) and the captive runtime
-`init.lua` into `Wolf.app/Contents/Resources` at BUILD TIME, downloaded
-hermetically by Bazel, so the macOS app launches the bundled Neovim and no longer
-requires `WOLF_NVIM_BIN` to run — it becomes genuinely double-clickable. Realizes
-the macOS half of architecture.md Decision 8.
+Implement the file picker UI in the `wolf-macos` AppKit application, mirroring the
+existing `wolf-gnome` file picker.
 
-Context: the wolf-macos AppKit app exists (first increment done). wolf-core
-locates nvim ONLY via `WOLF_NVIM_BIN` (`NvimConfig::from_env`); never PATH.
-AppDelegate already resolves init.lua via `WOLF_INIT_LUA` →
-`Bundle.main.path(forResource:"init",ofType:"lua")` → cwd-relative
-`runtime/nvim/init.lua`. All-Bazel build (Bazel 8.7.0; rules_apple 4.5.3,
-rules_swift 3.6.1, rules_xcodeproj 4.1.0, apple_support 2.6.1). App target
-`//crates/wolf-macos:Wolf`.
+**Behavior to mirror (from wolf-gnome `src/picker.rs` + README "The file picker"):**
+- Trigger: **Shift+Control+P** opens a floating panel. (Deliberately
+  non-conflicting — every Neovim key, including `<C-p>`, is preserved.)
+- The panel has a text field that filters files in the current working directory,
+  respecting `.gitignore` (and excluding `.git/` / `.wolf/`), MRU-first ranking,
+  case-insensitive, filename-word strict-prefix preference. Empty query lists all.
+- **Up/Down** navigate the results list (focus stays in the text field so typing
+  keeps working; selection preserved across streaming traversal batches).
+- **Enter** (or clicking a row) opens the selected file via `InputEvent::Open`
+  (MRU auto-recorded by core's input pump); then closes.
+- **Esc** closes the picker. With zero rows, Enter is a no-op.
+- While open, all keys go to the picker and are NOT forwarded to Neovim.
 
-## Verified pins (use exactly these — release confirmed, checksums computed)
+**Constraints (from architecture.md / CLAUDE.md):**
+- Ranking stays in **Rust** (`wolf_core::rank_matches`).
+- Key translation / nvim notation stays in **Rust**.
+- swift-bridge is confined to `wolf-ffi`; generated bindings under
+  `crates/wolf-ffi/generated/` are committed and regenerated via
+  `bazel run //crates/wolf-ffi:gen_bindings`.
+- `wolf-core` must stay GUI-free — no changes expected there (it already has
+  `start_file_search` / `FileSearch` / `FileSearchReadGuard` / `rank_matches` /
+  `InputEvent::Open`).
+- Pure, AppKit-free seams are preferred and unit-tested headlessly (mirror
+  `is_picker_trigger` / `next_selection` / `restored_index` from wolf-gnome).
+- Tests use real Neovim, not mocks.
+- macOS app: AppKit (not SwiftUI), Swift, Tahoe-only, all-Bazel.
 
-- arm64: https://github.com/neovim/neovim/releases/download/v0.12.3/nvim-macos-arm64.tar.gz
-  sha256 `532da1d00e465a660fa01c3d4991333d09c52107dce7df937368545daca0a14e`
-  strip_prefix `nvim-macos-arm64`
-- x86_64: https://github.com/neovim/neovim/releases/download/v0.12.3/nvim-macos-x86_64.tar.gz
-  sha256 `4b40e318eb7073321fa5fc06d7f60c3c0de1d7ea50ffbaa8b04286f5484d294f`
-  strip_prefix `nvim-macos-x86_64`
-- Layout (verified): `nvim-macos-<arch>/{bin/nvim, lib/nvim/parser/*.so (incl.
-  markdown + markdown_inline), share/nvim/runtime/..., share/man/...}`. nvim
-  self-locates runtime+lib relative to the binary path → bundle the WHOLE tree
-  preserving structure + exec bits; launch `…/nvim/bin/nvim`.
+## Relevant existing surface (confirmed by orchestrator)
 
-## Required behavior
+- `wolf-core`: `WolfCore::start_file_search(wake: WakeFn) -> FileSearch`;
+  `FileSearch::read() -> FileSearchReadGuard { entries: Vec<FileEntry>, complete,
+  version }`; `FileEntry { path: PathBuf, display: String }`; `rank_matches(query,
+  &[FileEntry]) -> Vec<Match{index,...}>`; `InputEvent::Open { path }`.
+- `wolf-ffi/src/lib.rs`: single `#[swift_bridge::bridge] mod ffi`. Today exposes
+  `wolf_ffi_start`, `WolfCoreHandle{read_frame,send_key,resize,shutdown}`,
+  `FfiFrame`, `FfiCell`, `FfiColor`, `FfiKeyEvent`. Wake is a SINGLE global
+  registered `extern "C"` callback (`wolf_ffi_set_wake`) → Swift `WakeBridge`
+  marks the editor view `needsDisplay`.
+- `wolf-macos/Sources/WolfKeyMap/KeyMap.swift`: pure `translate(...)` seam (no
+  AppKit). `WolfMacOS/{AppDelegate,GridView,MainWindow,CellMetrics,Cursor,Color,
+  WakeBridge,main}.swift`. GridView.keyDown forwards every translated key to
+  `send_key`.
 
-- Bundle full nvim tree at `Contents/Resources/nvim/` (binary at
-  `Contents/Resources/nvim/bin/nvim`) AND `runtime/nvim/init.lua` at
-  `Contents/Resources/init.lua` (so the existing `Bundle.main.path` resolves it).
-- App sets `WOLF_NVIM_BIN` to the bundled binary BEFORE `wolf_ffi_start`, ONLY IF
-  not already set — `setenv(name, value, /*overwrite=*/0)` so a dev's exported
-  `WOLF_NVIM_BIN` still wins. Double-clicking Wolf.app (no shell env) must start
-  the bundled nvim and show the grid, NOT the failure alert.
+## Three layers of work
 
-## Known risks (architect addresses; coder VERIFIES by building + launching)
+1. **wolf-ffi**: expose a file-search session handle + in-Rust ranking + an
+   `open(path)` input + a picker-specific wake; regenerate committed bindings.
+2. **wolf-macos pure seam**: a Swift trigger predicate (Shift+Ctrl+P) + list-nav
+   helpers (`nextSelection`/`restoredIndex` analogs), headlessly testable (no
+   AppKit), mirroring wolf-gnome's pure picker seams + their table tests.
+3. **wolf-macos UI**: the AppKit floating picker panel (text field + results
+   list) wired into `GridView`/`AppDelegate`, fed by the FFI file search,
+   suppressing key-forwarding to nvim while open.
 
-1. rules_apple resource STRUCTURE PRESERVATION (plain `resources` flattens) —
-   the `nvim/bin/nvim`, `lib/nvim/parser/*.so`, `share/nvim/runtime/**` hierarchy
-   MUST survive into the bundle. Find the exact rules_apple 4.5.3 mechanism;
-   verify by unzipping the .app.
-2. NESTED CODE SIGNING — Mach-O `bin/nvim` + many `.so` inside Resources is
-   nested code; may fail `codesign --verify --deep --strict` or fail to launch
-   under hardened runtime. Verify with codesign; escalate (sign nested code /
-   dev entitlements / relocate) rather than ship an unlaunchable app. Preserve
-   exec bit on bin/nvim + .so.
-3. ARCH SELECTION — wire both arm64 + x86_64 via `select()`; dev host is
-   aarch64-darwin. If Tahoe is Apple-Silicon-only, x86_64 wired-but-untested.
-4. nvim LAUNCH SELF-LOCATION — confirm the bundled binary finds its
-   runtime/parsers from inside the bundle (classic bundling failure).
+## Orchestrator decisions on architect's flagged items (ALL APPROVED)
 
-## Verification (coder MUST run + report verbatim)
+1. **Pure seam in the existing `WolfKeyMap` module** — APPROVED. Add
+   `PickerSeam.swift` to the existing `wolf_key_map` `swift_library` + test in the
+   existing `WolfKeyMapTests` `swift_test`. No new module/targets. Do NOT rename
+   the module.
+2. **New `//crates/wolf-ffi:file_search` `rust_test`** — APPROVED (isolated from
+   `bridge_smoke`, modeled on it: real pinned nvim, `no-sandbox`, staged runfiles).
+3. **`FfiFileSearch { search: Option<FileSearch> }`** — APPROVED (keeps
+   `start_file_search` infallible across the bridge; `ranked` returns empty when
+   `None`, mirroring `read_frame`'s empty-frame fallback).
+4. **In-window overlay `NSView`** for the panel — APPROVED (parity with gnome's
+   `Overlay`; simpler focus than a child `NSPanel`).
 
-- `bazel build //crates/wolf-macos:Wolf`
-- Bundle inspect: `Contents/Resources/nvim/bin/nvim` exists + executable;
-  `lib/nvim/parser/markdown.so` + `share/nvim/runtime` present;
-  `Contents/Resources/init.lua` present.
-- Exec bundled binary: `…/nvim/bin/nvim --version` → v0.12.3, locates runtime.
-- `codesign --verify --deep --strict --verbose=2` on the .app (report; if it
-  fails, report exact error + chosen remedy).
-- End-to-end WITHOUT `WOLF_NVIM_BIN`: confirm the app starts the bundled nvim (at
-  minimum a non-GUI smoke resolving the bundled path the way AppDelegate does and
-  starting wolf-core/nvim against it; GUI-window assertion not headlessly
-  testable — be honest).
-- Prior tests stay green: `//crates/wolf-ffi:frame_pack`,
-  `//crates/wolf-ffi:bridge_smoke` (loud skip ok), `//crates/wolf-macos:WolfKeyMapTests`.
-  wolf-core UNCHANGED (no new dep; GUI denylist clean).
+## APPROVED PLAN
 
-## Testing policy
+### Layer 1 — wolf-ffi (Rust bridge + regenerated bindings)
+- In `crates/wolf-ffi/src/lib.rs`, inside `#[swift_bridge::bridge] mod ffi`:
+  - New opaque `type FfiFileSearch;` with `fn ranked(&self, query: String, max:
+    usize) -> Vec<FfiFileEntry>;`
+  - New opaque `type FfiFileEntry;` with `fn display(&self) -> String;` and
+    `fn path(&self) -> String;` (OPAQUE because swift-bridge emits `Vec<T>` only
+    for opaque T — same reason `FfiCell` is opaque).
+  - Extend `extern "Rust" { type WolfCoreHandle; ... }` with
+    `fn start_file_search(&self) -> FfiFileSearch;` and `fn open(&self, path:
+    String);`.
+- Hand-written glue:
+  - `pub struct FfiFileSearch { search: Option<wolf_core::FileSearch> }`. `ranked`:
+    `let Some(s)=&self.search else { return vec![] };` `let view = s.read();`
+    `rank_matches(&query, &view.entries)` `.into_iter().take(max)` → clone
+    `view.entries[m.index]` into `FfiFileEntry { path, display }`; keep read-guard
+    scope short (drop before return).
+  - `pub struct FfiFileEntry { path: PathBuf, display: String }` with
+    `display()`/`path()` (path via `to_string_lossy().into_owned()`).
+  - `WolfCoreHandle::start_file_search(&self)`: if core present,
+    `core.start_file_search(registered_filesearch_wake())` wrapped in
+    `FfiFileSearch{ search: Some(..) }`; else `Some`→ `None` wrapper.
+  - `WolfCoreHandle::open(&self, path: String)`: `core.send_input(InputEvent::Open
+    { path: PathBuf::from(path) })` (MRU recorded by core's input pump).
+  - Add `FileSearch`, `rank_matches` to the `use wolf_core::{...}` import.
+  - Full `///` docs + `#[must_use]` on accessors (crate denies `missing_docs`
+    outside the bridge block).
+- Second registered wake (Swift-free, mirrors the editor wake exactly):
+  `static FILESEARCH_WAKE_FN: AtomicPtr<()>`; `#[no_mangle] pub extern "C" fn
+  wolf_ffi_set_filesearch_wake(wake: Option<WakeCallback>)`;
+  `fn registered_filesearch_wake() -> WakeFn` (loads FILESEARCH_WAKE_FN; same
+  `# Safety` + transmute shape as `registered_wake`).
+- `crates/wolf-ffi/generated/wolf_ffi_wake.h`: add
+  `void wolf_ffi_set_filesearch_wake(void (*wake)(void));` (hand-written header;
+  covered by existing `glob(["generated/*.h"])`, NO BUILD change for the symbol).
+- Regenerate: `bazel run //crates/wolf-ffi:gen_bindings` → rewrites the 4 committed
+  `generated/{SwiftBridgeCore,wolf-ffi}.{swift,h}` files; re-commit them. NO
+  `CARGO_BAZEL_REPIN` (no new Cargo dep).
+- `crates/wolf-ffi/BUILD.bazel`: add a new `rust_test` `file_search` (copy
+  `bridge_smoke`'s `data`/`env`/`tags=["no-sandbox"]`/`size`/`deps`, reuse
+  `tests/common/mod.rs`).
 
-Prefer real over mocks (actually exec the bundled nvim). Be honest about
-GUI-window untestability. If feasible add a Bazel test (swift_test / sh_test)
-exec-ing the bundled `nvim --version` asserting "0.12.3", and/or asserting the
-bundle contains the expected resource paths.
+### Layer 2 — wolf-macos pure seam (headless, no AppKit)
+- CREATE `crates/wolf-macos/Sources/WolfKeyMap/PickerSeam.swift` — `public enum
+  PickerSeam` namespace (Foundation only):
+  - `isPickerTrigger(charactersIgnoringModifiers: String, ctrl: Bool, shift: Bool)
+    -> Bool` — `ctrl && shift && firstScalar.lowercased == "p"`; ignores alt/meta.
+    Uses `charactersIgnoringModifiers` (layout-independent; with Ctrl held,
+    `characters` is the control scalar).
+  - `nextSelection(current: Int, delta: Int, nRows: Int) -> Int?` — exact port of
+    Rust `next_selection` (clamp(current+delta, 0, nRows-1), nil when nRows<=0).
+  - `restoredIndex(resetToTop: Bool, prev: Int?, newLen: Int) -> Int?` — exact port
+    of Rust `restored_index`.
 
-## Deliverables
+### Layer 3 — wolf-macos AppKit UI
+- CREATE `Sources/WolfMacOS/PickerView.swift` — `final class PickerView: NSView`
+  (layer-backed) added as a top-center overlay subview of the window content view,
+  initially hidden. Holds an `NSSearchField` (top) + `NSTableView` in `NSScrollView`
+  (single column/selection). Conforms to `NSTableViewDataSource`/`Delegate` +
+  `NSControlTextEditingDelegate`. State (main-thread plain props): `search:
+  FfiFileSearch?`, `rowEntries: [FfiFileEntry]`, `lastQuery: String?`, the
+  `WolfCoreHandle`, ref to the `GridView` for focus restore. Constants mirror gnome:
+  `maxRows=200`, width=600, height=400, topMargin=24.
+  - `open()` idempotent: `handle.start_file_search()`, show, clear+focus field
+    (`window?.makeFirstResponder(searchField)`), `lastQuery=nil`, `refresh()`.
+  - `close()` idempotent: `search=nil` (drops→cancels traversal), hide,
+    `window?.makeFirstResponder(gridView)`.
+  - `refresh()` no-op when closed: read `query`; `resetToTop=(lastQuery != query)`;
+    set `lastQuery`; capture `prevSelected` (map `-1`→nil); `search?.ranked(query,
+    UInt(maxRows))` → `rowEntries`; `reloadData()`; select via
+    `PickerSeam.restoredIndex` + scroll visible.
+  - `moveSelection(delta:)` via `PickerSeam.nextSelection` (field keeps focus).
+  - `activateSelection()`: empty→true no-op; else `handle.open(entry.path())` +
+    `close()`.
+  - Delegate `control(_:textView:doCommandBy:)`: `moveUp:`→-1, `moveDown:`→+1,
+    `insertNewline:`→activate, `cancelOperation:`→close (all return true); default
+    false. `controlTextDidChange`→`refresh()`. Table double-click→`activateSelection`.
+- CREATE `Sources/WolfMacOS/PickerWakeBridge.swift` — `enum PickerWakeBridge` with
+  `weak static var registeredPicker: PickerView?` and `install()` registering
+  `wolf_ffi_set_filesearch_wake({ DispatchQueue.main.async {
+  PickerWakeBridge.registeredPicker?.refresh() } })` (stateless `@convention(c)`
+  thunk, mirrors `WakeBridge`). Late wake after close is harmless (refresh no-ops).
+- MODIFY `Sources/WolfMacOS/GridView.swift` — add `var onPickerTrigger: (() ->
+  Void)?`; in `keyDown(_:)` BEFORE translate/send_key, if
+  `PickerSeam.isPickerTrigger(...)` call `onPickerTrigger?()` and `return`. Picker
+  open ⇒ its field is first responder ⇒ GridView.keyDown stops firing (suppression
+  for free; no `isOpen` guard needed). Esc handled by the field delegate.
+- MODIFY `Sources/WolfMacOS/AppDelegate.swift` — `PickerWakeBridge.install()`;
+  build+hold `picker = PickerView(handle:gridView:metrics:)`, add as overlay
+  subview (hidden), `PickerWakeBridge.registeredPicker = picker`,
+  `gridView.onPickerTrigger = { [weak picker] in picker?.open() }`. Optionally
+  `picker?.close()` before `handle.shutdown()` on terminate.
+- MODIFY `crates/wolf-macos/BUILD.bazel` — add `Sources/WolfKeyMap/PickerSeam.swift`
+  to `wolf_key_map` srcs; add the new test file to `WolfKeyMapTests` srcs.
+  (`wolf_macos_lib` globs `Sources/WolfMacOS/*.swift` → new files auto-included.)
 
-- Bazel: module extension + http_archive pins (+ build_file overlay), MODULE.bazel
-  additions, resource-bundling wiring in crates/wolf-macos/BUILD.bazel, updated
-  MODULE.bazel.lock, any //bazel/ helper dir (README.md per repo convention).
-- App: AppDelegate.swift (setenv WOLF_NVIM_BIN bundled path, overwrite=0; keep dev
-  overrides) + bundle init.lua. Minimal, surgical.
-- Docs: architecture.md Decision 8 (macOS bundling REALIZED, nvim 0.12.3; release
-  carries markdown/markdown_inline parsers) + update wolf-macos "no bundled
-  Neovim yet" notes; build.md (download pin, how to bump version + recompute
-  sha256, app no longer needs WOLF_NVIM_BIN); crates/wolf-macos/README.md
-  (bundled nvim + init.lua; double-click works; dev override honored); README.md
-  if relevant. prettier --write all touched Markdown.
+### Tests
+- CREATE `crates/wolf-macos/Tests/WolfKeyMapTests/PickerSeamTests.swift` —
+  table-driven, mirroring picker.rs `#[cfg(test)]` tables for `isPickerTrigger`
+  (incl. Ctrl+Shift+Alt+P→true, wrong-letter→false, missing-modifier→false),
+  `nextSelection` (all 12 cases), `restoredIndex` (all cases). `import XCTest` +
+  `@testable import WolfKeyMap`. Wired into existing `WolfKeyMapTests`.
+- CREATE `crates/wolf-ffi/tests/file_search.rs` — real pinned nvim (stage runfiles
+  like `bridge_smoke`, reuse `tests/common/mod.rs`). Seed a temp cwd with a couple
+  `.md` files; `wolf_ffi_start` there; `start_file_search()`; poll `ranked("", N)`
+  until it streams in the created files; assert displays present, `path()` absolute
+  + `display()` relative; `open(path())` issues without panic and core stays
+  responsive. HONEST: cannot assert exact opened buffer name (no `current_file`
+  accessor on `FfiFrame`, and we are NOT adding one) — assert `ranked` correctness
+  strongly, `open` at the round-trip-survives level.
+- NOT headlessly testable (state honestly, mirroring the existing increment): the
+  AppKit panel rendering, `NSSearchField` first-responder transfer, the
+  `doCommandBy` routing, table selection, the dispatched picker wake reload, and the
+  `keyDown` trigger path. Manual smoke only.
+- Regression gates: `//crates/wolf-ffi:frame_pack`, `:bridge_smoke`,
+  `//crates/wolf-macos:WolfKeyMapTests`, `:bundle_layout_test`. wolf-core UNCHANGED
+  (GUI denylist clean — new glue pulls only `wolf_core` + `std`).
 
-## Out of scope
+### Implementation order (FFI green before AppKit, since UI isn't headlessly testable)
+1. wolf-ffi bridge + glue + second wake → `bazel build //crates/wolf-ffi:wolf_ffi`.
+2. Wake header.
+3. `bazel run //crates/wolf-ffi:gen_bindings`; commit the 4 generated files.
+4. `tests/file_search.rs` + BUILD target → `bazel test //crates/wolf-ffi:file_search`
+   (+ re-run frame_pack, bridge_smoke). GATE before AppKit.
+5. `PickerSeam.swift` + `PickerSeamTests.swift` + BUILD → `bazel test
+   //crates/wolf-macos:WolfKeyMapTests`. GATE.
+6. AppKit: `PickerWakeBridge.swift` → `PickerView.swift` → `GridView.swift` →
+   `AppDelegate.swift` → `bazel build //crates/wolf-macos:Wolf` + `bundle_layout_test`.
+7. Docs reconciliation + manual smoke.
 
-Full wrapNeovim plugin baking beyond the release (marksman, formatter) — deferred;
-notarization / Developer ID signing — dev ad-hoc fine; Linux/gnome bundling —
-unchanged.
-
-## Orchestrator decisions on architect's flagged items
-
-- **APPROVED: add `aspect_bazel_lib` as a new `bazel_dep`** (for
-  `copy_to_directory` → a structure-preserving, signable TreeArtifact). It's a
-  build-time ruleset, NOT a wolf-core dep (GUI-free hard rule unaffected), and
-  consistent with the already-approved all-Bazel toolchain. Coder pins the
-  highest BCR release declaring Bazel-8 compat (architect suggested 2.9.4 —
-  confirm on BCR).
-
-## Architect's plan (APPROVED)
-
-### Approach (decisive picks)
-- **Download:** bzlmod module extension `//bazel/nvim/extensions.bzl` wrapping
-  `http_archive` (from `@bazel_tools//tools/build_defs/repo:http.bzl`) with a
-  `build_file_content` overlay, two repos `nvim_macos_arm64`/`nvim_macos_x86_64`
-  (exact verified pins + strip_prefix). MODULE.bazel.lock regenerated+committed.
-- **Structure preservation:** assemble each arch tree into a TreeArtifact dir
-  named `nvim/` via `@aspect_bazel_lib//lib:copy_to_directory` INSIDE the overlay
-  (repo root already = arch contents, so `out="nvim"` → `nvim/bin/nvim`,
-  `nvim/lib/nvim/parser/*.so`, `nvim/share/nvim/runtime/**`). Feed to
-  `macos_application(resources=...)` → lands at `Contents/Resources/nvim/`.
-  Fallback if `@aspect_bazel_lib` won't resolve in the overlay: move
-  `copy_to_directory` into `//bazel/nvim` with `include_external_repositories` +
-  `root_paths`/`replace_prefixes`.
-- **Arch select:** `//bazel/nvim:nvim_tree` alias `select()`ing arm64/x86_64.
-- **Signing (HIGHEST RISK):** rely on rules_apple ad-hoc bundle sealing; coder
-  MUST verify `codesign -dvv` on the extracted `bin/nvim` + a `.so` and verify a
-  real launch. FALLBACK if invalid/unlaunchable: ad-hoc re-sign the tree
-  (`codesign --force --sign - …` on `bin/nvim` + `lib/nvim/parser/*.so`) BEFORE
-  the app is sealed (never post-build). Secondary: dev entitlement
-  `com.apple.security.cs.disable-library-validation`, or relocate to
-  `Contents/Helpers`. Do NOT ship an unlaunchable app — escalate.
-
-### Files to CREATE
-- `bazel/nvim/extensions.bzl` — module extension + 2 `http_archive` (verified
-  pins) + overlay assembling the `nvim/` TreeArtifact (`copy_to_directory`,
-  preserve exec bits); keep a `filegroup all` for the version test.
-- `bazel/nvim/BUILD.bazel` — `alias nvim_tree` (`select` on `@platforms//cpu`),
-  `sh_test nvim_version_test`.
-- `bazel/nvim/nvim_version_test.sh` — execs assembled `nvim/bin/nvim --version`
-  (assert `NVIM v0.12.3`), asserts executable, asserts `$VIMRUNTIME` resolves
-  INSIDE the tree (self-location). Sandbox-safe (`nvim_tree` as `data`).
-- `bazel/nvim/README.md` — extension/pins/overlay/select/test + how to bump the
-  pin (new URLs → recompute both sha256 → regen MODULE.bazel.lock). prettier.
-- `runtime/nvim/BUILD.bazel` — `exports_files(["init.lua"])` (flat → bundles as
-  `Resources/init.lua`, which `Bundle.main.path(forResource:"init",…)` resolves).
-- `crates/wolf-macos/bundle_layout_test.sh` — over the built `.app`: assert
-  `Contents/Resources/nvim/bin/nvim` (executable), `…/nvim/lib/nvim/parser/
-  markdown.so`, `…/nvim/share/nvim/runtime` (dir), `Contents/Resources/init.lua`.
-
-### Files to MODIFY
-- `MODULE.bazel` — `bazel_dep(aspect_bazel_lib, 2.9.4)` (APPROVED) +
-  `use_extension("//bazel/nvim:extensions.bzl","nvim")` + `use_repo(nvim,
-  "nvim_macos_arm64","nvim_macos_x86_64")`.
-- `MODULE.bazel.lock` — regenerate + commit.
-- `crates/wolf-macos/BUILD.bazel` — `macos_application` gains `resources =
-  ["//bazel/nvim:nvim_tree", "//runtime/nvim:init.lua"]`; add `sh_test
-  bundle_layout_test` (data=[":Wolf"]). Verify rules_apple preserves the `nvim/`
-  prefix by unzipping; fallback `structured_resources`/`apple_resource_group`.
-- `crates/wolf-macos/Sources/WolfMacOS/AppDelegate.swift` — add `nvimBinPath()`
-  (`Bundle.main.resourcePath + "/nvim/bin/nvim"` if `isExecutableFile`); in
-  `startCore()` BEFORE `wolf_ffi_start`, `if let bin = nvimBinPath() {
-  setenv("WOLF_NVIM_BIN", bin, 0) }` (overwrite=0 → dev export wins). `init.lua`
-  resolution UNCHANGED. Optional: soften `presentStartupFailureAndQuit` text.
-- Docs: architecture.md Decision 8 (macOS bundling REALIZED, nvim 0.12.3, release
-  carries markdown/markdown_inline parsers; remove "no bundled Neovim yet");
-  build.md (pin + bump/sha256 steps + app no longer needs WOLF_NVIM_BIN + new
-  test targets); crates/wolf-macos/README.md (bundled nvim+init.lua, double-click
-  works, dev override honored); README.md only if it references macOS nvim
-  location. prettier --write all touched Markdown.
-
-### CONFIRMED unchanged
-- `crates/wolf-core/src/nvim.rs` already reads `WOLF_NVIM_BIN` via
-  `std::env::var` and owns NVIM_APPNAME/XDG isolation in `nvim::spawn` — the app
-  only points WOLF_NVIM_BIN at the binary; no core change, no CARGO_BAZEL_REPIN.
-
-### Tests (real over mocks)
-1. `//bazel/nvim:nvim_version_test` — runs the pinned binary (version +
-   exec-bit + self-location). 2. `//crates/wolf-macos:bundle_layout_test` —
-   built `.app` contains the expected resource paths + exec bit. 3. Regression:
-   `//crates/wolf-ffi:frame_pack`, `//crates/wolf-ffi:bridge_smoke` (loud-skip
-   ok), `//crates/wolf-macos:WolfKeyMapTests`; GUI denylist clean; wolf-core
-   unchanged. NOT headlessly testable (state honestly): GUI window appearing,
-   Finder double-click, `codesign --verify` — coder runs/reports these manually.
-
-### Implementation order
-1. (approval done) → 2. `runtime/nvim/BUILD.bazel` → 3. `bazel/nvim/*` →
-4. MODULE.bazel + regen lock → 5. `bazel test //bazel/nvim:nvim_version_test`
-(fix before touching app) → 6. wire `resources`, build Wolf → 7.
-`bundle_layout_test` + unzip eyeball → 8. codesign + real launch (apply re-sign
-fallback if needed) → 9. AppDelegate.swift, rebuild, Finder-launch w/ empty env
-→ 10. docs + prettier → 11. full regression + denylist.
+### Docs to reconcile afterward
+- `architecture.md` (wolf-macos phase status: picker no longer deferred; update the
+  "Deferred for macOS" list).
+- `crates/wolf-ffi/README.md` (FfiFileSearch/FfiFileEntry, start_file_search/open,
+  the second wake, the file_search test).
+- `crates/wolf-macos/README.md` + `Sources/README.md` (PickerSeam/PickerView/
+  PickerWakeBridge, Shift+Ctrl+P, update Known limitations).
+- prettier --write all touched Markdown.
 
 ## Progress log
-
-- (orchestrator) New increment. Verified the v0.12.3 release + both arch
-  checksums BEFORE planning. Architect produced a decisive plan; orchestrator
-  APPROVED the one flagged item (aspect_bazel_lib new bazel_dep). Architect's
-  first run lost its output to a socket error (read-only, no partial state) and
-  was re-run cleanly. Next: test-writer (the two sh_test scripts).
+- (orchestrator) Wrote problem statement; architect produced the plan above;
+  orchestrator APPROVED all 4 flagged items. Next: test-writer.
 
 ## Tests written (test-writer)
+- `crates/wolf-macos/Tests/WolfKeyMapTests/PickerSeamTests.swift` — table-driven
+  XCTest for `PickerSeam.isPickerTrigger` (9 cases), `nextSelection` (11),
+  `restoredIndex` (7); `@testable import WolfKeyMap`, matches `KeyMapTests.swift`
+  conventions. Coder must add it to the `WolfKeyMapTests` `swift_test` srcs.
+- `crates/wolf-ffi/tests/file_search.rs` — real-nvim integration modeled on
+  `bridge_smoke.rs` (`mod common;` include style, `nvim_bin_or_skip` loud-skip,
+  `tempfile::tempdir` cwd seeded with `alpha.md`/`beta.md`, bounded poll of
+  `ranked("",200)`, asserts displays present + path absolute/under-cwd +
+  `ranked("alpha")` puts alpha first + `open()` round-trip survives + shutdown).
+  Coder must add the `file_search` `rust_test` target to
+  `crates/wolf-ffi/BUILD.bazel`.
+- Test-writer's API assumptions the coder MUST satisfy exactly: method names +
+  arg labels `start_file_search()`, `ranked(query,max)`, `display()`, `path()`,
+  `open(path)`; opaque types named `FfiFileSearch`/`FfiFileEntry`; `ranked("")`
+  returns top-level files with `display()`=bare filename, `path()`=absolute;
+  Swift `PickerSeam` public enum in `WolfKeyMap`, three statics, `Int?` returns,
+  external arg labels `charactersIgnoringModifiers:ctrl:shift:`,
+  `current:delta:nRows:`, `resetToTop:prev:newLen:`.
 
-`bazel/nvim/nvim_version_test.sh` (exec-bit + `NVIM v0.12.3` + VIMRUNTIME-inside-
-tree + markdown.so) and `crates/wolf-macos/bundle_layout_test.sh` (4 bundle
-paths). Both POSIX sh, `set -eu`, robust runfiles resolver (TEST_SRCDIR/
-RUNFILES_DIR/$0.runfiles + find fallback). Coder MUST finalize: the exact
-TreeArtifact + `:Wolf` runfiles paths once targets exist (pin direct path, keep
-find as safety net); confirm whether rules_apple 4.5.3 delivers `:Wolf` as a
-`Wolf.app` dir vs an archive; verify the nvim-0.12 VIMRUNTIME incantation prints
-(fallback `vim.fn.expand('$VIMRUNTIME')`). Coder wires both as `sh_test` with the
-right `data` deps and marks them executable.
+## Implementation + verification result (coder) — ALL GATES GREEN
 
-## Implementation + verification result — BUNDLING GREEN
+Implemented per plan across all 3 layers. Verbatim results:
+1. `bazel build //crates/wolf-ffi:wolf_ffi` — PASS (55 actions).
+2. `bazel run //crates/wolf-ffi:gen_bindings` — PASS; `generated/wolf-ffi.{swift,h}`
+   changed (now expose start_file_search/open/FfiFileSearch.ranked/FfiFileEntry.
+   display/path); SwiftBridgeCore.{swift,h} content-stable (shared runtime, expected);
+   hand-edited `wolf_ffi_wake.h`.
+3. `bazel test //crates/wolf-ffi:file_search` — PASS (`file_search_ranks_and_opens`).
+4. `bazel test //crates/wolf-ffi:frame_pack :bridge_smoke` — PASS (frame_pack 11;
+   bridge_smoke RAN, not skipped — a pinned nvim was available — and passed).
+5. `bazel test //crates/wolf-macos:WolfKeyMapTests` — PASS (14 tests: 11 KeyMap + 3
+   PickerSeam).
+6. `bazel build //crates/wolf-macos:Wolf` — PASS (only benign pre-existing
+   `@retroactive` warnings).
+7. `bazel test //crates/wolf-macos:bundle_layout_test` — PASS.
 
-Prior coder wrote the full implementation (recovered from a socket-dropped run;
-all files on disk + wired). Verification coder (writing to `.claude/
-verify-results.md`) confirmed:
+- wolf-core UNTOUCHED (no git changes, no Cargo/Bazel lock change, no REPIN).
+- GUI denylist clean (only `libc`'s `glibc` path matches the "glib" substring — the
+  documented false positive; no gtk/gdk/cairo/pango/adwaita/cocoa/objc/wgpu/skia).
+- No test changes needed; both test files passed as written.
+- HONEST: the AppKit UI (panel render, first-responder transfer, doCommandBy
+  routing, table selection, dispatched wake reload, keyDown trigger) is compile-only
+  verified (green Wolf build); not headlessly testable — manual smoke required.
+- Files created: wolf-ffi glue in `src/lib.rs`; `PickerSeam.swift`,
+  `PickerWakeBridge.swift`, `PickerView.swift`; modified `GridView.swift`,
+  `AppDelegate.swift`, both BUILD.bazel files, `wolf_ffi_wake.h`, regenerated
+  bindings.
 
-| Step | Result |
-|------|--------|
-| nvim_version_test (pinned 0.12.3, exec bit, VIMRUNTIME inside tree) | PASS |
-| build //crates/wolf-macos:Wolf (delivered as Wolf.zip) | PASS |
-| structure preservation: Contents/Resources/nvim/{bin/nvim(exec),lib/nvim/parser/markdown.so,share/nvim/runtime}, + init.lua | PASS |
-| bundle_layout_test | PASS |
-| signing: nvim Mach-O adhoc/linker-signed; codesign --verify --deep --strict OK | PASS |
-| regression frame_pack + WolfKeyMapTests | PASS |
-| boundary: GUI denylist clean; wolf-core untouched (no REPIN) | PASS |
+## Review result (reviewer) — APPROVED WITH NITS
 
-No fixes needed (test runfiles resolvers + VIMRUNTIME incantation worked as
-written; no signing fallback required — `replace_prefixes` `nvim/` remap held,
-exec bits survived). Implementation matches the plan.
+No blocking defects. Confirmed EXACT gnome parity of all three pure seams
+(`isPickerTrigger`/`nextSelection`/`restoredIndex`) and of the open/close/refresh/
+activate/move flow. FFI glue correct (ranking in Rust, picker-specific wake genuinely
+independent from the editor wake, `open` records MRU via the input pump, `Option`
+infallibility). Threading clean, no retain cycles (weak `registeredPicker`,
+`[weak picker]`, weak `gridView`). Tests non-tautological. wolf-core untouched.
 
-## FINDING: bridge_smoke hangs on the macOS Bazel host (pre-existing, out of scope)
-
-bridge_smoke now RUNS against a real nvim (it skipped before, with no nvim) but
-HANGS/times out — AND it also hangs against the system nvim (same 0.12.3), both
-under `bazel test` sandboxing. So this is a PRE-EXISTING, host-wide issue in the
-bridge's macOS read/wake pump OR the test's blocking poll loop OR the test
-sandbox's handling of the nvim subprocess — NOT caused by the bundling. Net: the
-LIVE nvim→FFI→read_frame round-trip has never executed green on the macOS Bazel
-host (it always skipped). The bundled binary itself works (direct headless
-edit→write→quit proxy succeeded; nvim_version_test proves run + self-location).
-
-ORCHESTRATOR DECISIONS:
-- The bundling increment is COMPLETE + green; do NOT scope-creep it to fix the
-  bridge hang. Proceed to review + docs.
-- Track TWO follow-ups for the USER (separate investigation, surfaced in the
-  completion report; not done now): (1) investigate the bridge_smoke hang —
-  is it the FFI wake/read model on macOS, the test's poll loop, or a Bazel
-  sandbox/subprocess artifact? (run outside the sandbox / with a hard timeout +
-  tracing). This is the real "does the live editor round-trip work on macOS"
-  question. (2) optionally add a Bazel-wired headless `nvim --headless`
-  edit→write→quit smoke for the bundled binary (the proxy the coder ran
-  manually) — nvim_version_test already covers run+self-location, so this is
-  nice-to-have, not required for THIS increment.
+Nits (non-blocking):
+1. **MANUAL-SMOKE ITEM**: the panel uses `NSSearchField`, which has a built-in
+   clear-on-Escape. The code routes `cancelOperation:` through `doCommandBy` and
+   returns `true`, which SHOULD suppress the clear and close the picker — but confirm
+   in manual smoke that the FIRST Esc closes (gnome parity), not just clears.
+2. Cosmetic: `ranked` drops the read guard at scope end (functionally fine) rather
+   than an explicit early `drop(view)`.
+3. Inconsequential: `moveSelection` sees `selectedRow == -1` → 0 vs gnome's default-0
+   (+1→1); unreachable because `refresh()` always pre-selects row 0 when rows exist.
+4. Docs deferred to the docs phase (below) — code now contradicts stale docs.
 
 ## Status
-
 - [x] Architect plan
 - [x] Tests written
-- [x] Implementation + verification (bundling green; bridge_smoke hang tracked)
-- [ ] Tests written
-- [ ] Implementation + tests passing
-- [ ] Review
-- [ ] Docs
+- [x] Implementation + tests passing
+- [x] Review (APPROVED WITH NITS — none blocking)
+- [x] Docs (architecture.md, wolf-ffi README + src/tests READMEs, wolf-macos README
+      + Sources/Tests READMEs; prettier'd via `~/.nix-profile/bin/prettier`)

@@ -19,9 +19,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var window: MainWindow?
     private var handle: WolfCoreHandle?
+    private var picker: PickerView?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         WakeBridge.install()
+        PickerWakeBridge.install()
 
         guard let handle = startCore() else {
             presentStartupFailureAndQuit()
@@ -39,6 +41,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             cols: Self.initialCols,
             rows: Self.initialRows
         )
+
+        // Build the file picker as a hidden top-center overlay over the editor
+        // (the window's content view IS the grid view). Shift+Ctrl+P opens it.
+        let picker = PickerView(handle: handle, gridView: gridView, metrics: metrics)
+        gridView.addSubview(picker)
+        PickerWakeBridge.registeredPicker = picker
+        gridView.onPickerTrigger = { [weak picker] in picker?.open() }
+        self.picker = picker
+
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -50,6 +61,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Close the picker first so its file-search session is dropped (cancelling
+        // any in-flight traversal) before the core is torn down.
+        picker?.close()
+        picker = nil
         handle?.shutdown()
         handle = nil
     }

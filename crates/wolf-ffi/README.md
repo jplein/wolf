@@ -14,7 +14,13 @@ All types are re-exported at the crate root (`wolf_ffi::…`).
   - `read_frame(&self) -> FfiFrame`
   - `send_key(&self, ev: FfiKeyEvent)`
   - `resize(&self, cols: u16, rows: u16)`
+  - `start_file_search(&self) -> FfiFileSearch` — starts a streaming file-search session over the cwd (registering the picker wake) and wraps it as an `FfiFileSearch`. Infallible across the bridge: when no core is present the result simply yields no entries.
+  - `open(&self, path: String)` — issues `InputEvent::Open { path }` to open the file; the MRU is recorded by core's input pump.
   - `shutdown(&self)` — takes the core out and shuts it down (idempotent; infallible across the bridge — any error is logged).
+
+- `FfiFileSearch` — an opaque handle wrapping core's `FileSearch` session (`Option`, so `start_file_search` stays infallible). `ranked(&self, query: String, max: usize) -> Vec<FfiFileEntry>` runs the ranking **in Rust** (`wolf_core::rank_matches` over the current results snapshot) and returns the top-`max` entries; it yields an empty `Vec` when the session is absent. Dropping the handle cancels the background traversal.
+
+- `FfiFileEntry` — opaque; `display() -> String` (the relative display name) and `path() -> String` (the absolute path). Opaque because swift-bridge only emits `Vec<T>` support for opaque `T` — the same reason `FfiCell` is opaque.
 
 - `FfiFrame` — an opaque, owned, paint-ready snapshot of the **active grid**, with every cell already resolved against the highlight table **in Rust** (reusing `HighlightTable::resolve` / `ResolvedStyle` — never re-resolved in Swift). Accessors: `cols`, `rows`, `cursor_row`, `cursor_col`, `cursor_shape` (0 = Block, 1 = Horizontal, 2 = Vertical), `cursor_cell_percentage`, `cursor_visible`, `default_fg`, `default_bg`, `cursor_fill`, `cursor_glyph` (reverse-video cursor colors, ported from wolf-gnome's `cursor.rs`), and `cells() -> Vec<FfiCell>` (one flat, row-major handoff per frame).
 
@@ -39,6 +45,14 @@ void wolf_ffi_set_wake(void (*wake)(void)); // generated/wolf_ffi_wake.h
 ```
 
 Swift's `WakeBridge` registers a `DispatchQueue.main.async { … setNeedsDisplay }` thunk once at startup. The Rust integration test never registers, so the wake is a harmless no-op there and `wolf_ffi_start` links and runs with no Swift runtime present. The wake callback touches no `WolfCore` state, so the only thing that crosses threads is stateless.
+
+There is a **second**, parallel registered wake for the file picker:
+
+```c
+void wolf_ffi_set_filesearch_wake(void (*wake)(void)); // generated/wolf_ffi_wake.h
+```
+
+It is a separate global `extern "C"` callback (its own `registered_filesearch_wake`), fired after each streaming traversal batch of a `start_file_search` session, so the picker can refresh its results independently of editor repaints (Swift's `PickerWakeBridge` registers a dispatch-to-main `PickerView.refresh()` thunk). It is otherwise identical in shape to the editor wake — stateless, no-op when unregistered.
 
 ## Generated bindings
 
@@ -68,7 +82,8 @@ CARGO_BAZEL_REPIN=1 bazel build //crates/wolf-ffi:wolf_ffi   # then commit lockf
 - `:wolf_ffi_cc` — a `cc_library` exposing the generated headers + the wake header as the `WolfFFI` Clang module and linking the archive; consumed by the Swift targets.
 - `:generated_swift` — a filegroup of the generated Swift glue, compiled into `wolf-macos`'s `wolf_key_map` module.
 - `:gen_bindings` — the codegen binary (run via `bazel run`).
-- `:bridge_smoke` — the Rust integration test.
+- `:bridge_smoke` — the Rust integration test for the editor round-trip.
+- `:file_search` — the Rust integration test for the file-search surface (real pinned nvim, modeled on `bridge_smoke`).
 
 ## Testing
 
@@ -76,4 +91,10 @@ CARGO_BAZEL_REPIN=1 bazel build //crates/wolf-ffi:wolf_ffi   # then commit lockf
 
 ```sh
 bazel test //crates/wolf-ffi:bridge_smoke
+```
+
+`tests/file_search.rs` covers the file-search surface against the same real pinned Neovim (modeled on `bridge_smoke`, reusing `tests/common/mod.rs` and the same `data` / `env` / `no-sandbox` runfile staging): it seeds a temp cwd with a couple of files, calls `start_file_search()`, polls `ranked(query, max)` until the traversal streams them in, and asserts the displays are present (`path()` absolute, `display()` relative, ranking honored) and that `open(path())` round-trips without panicking.
+
+```sh
+bazel test //crates/wolf-ffi:file_search
 ```

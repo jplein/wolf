@@ -44,7 +44,8 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 
 use wolf_core::{
-    CoreConfig, CursorShape, InputEvent, Key, KeyEvent, ResolvedStyle, Rgb, WakeFn, WolfCore,
+    rank_matches, CoreConfig, CursorShape, FileSearch, InputEvent, Key, KeyEvent, ResolvedStyle,
+    Rgb, WakeFn, WolfCore,
 };
 
 // Re-export the bridge-defined transparent structs at the crate root so the Rust
@@ -165,6 +166,31 @@ mod ffi {
         fn send_key(&self, ev: FfiKeyEvent);
         fn resize(&self, cols: u16, rows: u16);
         fn shutdown(&self);
+        // Starts a streaming file-search session over the core's cwd, fed by the
+        // registered file-search wake. Infallible: returns an empty-backed handle
+        // when the core is gone (mirroring `read_frame`'s empty-frame fallback).
+        fn start_file_search(&self) -> FfiFileSearch;
+        // Opens `path` (an absolute filesystem path) in Neovim via
+        // `InputEvent::Open`; the core's input pump records the MRU.
+        fn open(&self, path: String);
+    }
+
+    extern "Rust" {
+        type FfiFileSearch;
+
+        // The top `max` ranked entries for `query` against the latest streamed
+        // search snapshot. An empty `query` lists all entries MRU-first. `FfiFileEntry`
+        // is opaque so a `Vec<FfiFileEntry>` is supported (same as `FfiCell`).
+        fn ranked(&self, query: String, max: usize) -> Vec<FfiFileEntry>;
+    }
+
+    extern "Rust" {
+        type FfiFileEntry;
+
+        // The display string (path relative to the search root) shown + ranked.
+        fn display(&self) -> String;
+        // The absolute filesystem path, handed back to `WolfCoreHandle::open`.
+        fn path(&self) -> String;
     }
 
     extern "Rust" {
@@ -248,6 +274,47 @@ fn registered_wake() -> WakeFn {
     })
 }
 
+/// The globally-registered file-search wake callback, or null when none is
+/// registered (the Rust integration-test path). Stored as a raw pointer in an
+/// [`AtomicPtr`], exactly like [`WAKE_FN`] but for the picker's traversal-batch
+/// wakes.
+static FILESEARCH_WAKE_FN: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+
+/// Registers (or, with `None`, clears) the front-end's file-search wake callback.
+///
+/// Swift's `PickerWakeBridge` calls this once at startup with a thunk that does
+/// `DispatchQueue.main.async { … picker.refresh() … }`. A second registered
+/// `extern "C"` callback alongside [`wolf_ffi_set_wake`], declared in the
+/// hand-written `generated/wolf_ffi_wake.h`, so a Rust-only build leaves no
+/// `extern "Swift"` symbol unresolved.
+///
+/// # Safety
+///
+/// `wake`, if `Some`, must be a valid `extern "C" fn()` that is safe to call from
+/// any thread (core fires the wake from its tokio worker thread).
+#[no_mangle]
+pub extern "C" fn wolf_ffi_set_filesearch_wake(wake: Option<WakeCallback>) {
+    let ptr = wake.map_or(std::ptr::null_mut(), |f| f as *mut ());
+    FILESEARCH_WAKE_FN.store(ptr, Ordering::Release);
+}
+
+/// Builds the [`WakeFn`] core invokes on each file-search traversal batch: it
+/// loads the registered file-search callback and calls it, or does nothing if
+/// none is registered. Captures no state, so it is `Send + Sync` as `WakeFn`
+/// requires.
+fn registered_filesearch_wake() -> WakeFn {
+    Arc::new(|| {
+        let ptr = FILESEARCH_WAKE_FN.load(Ordering::Acquire);
+        if !ptr.is_null() {
+            // SAFETY: `ptr` was set from a valid `extern "C" fn()` by
+            // `wolf_ffi_set_filesearch_wake`; a non-null value is always such a
+            // pointer.
+            let f: WakeCallback = unsafe { std::mem::transmute::<*mut (), WakeCallback>(ptr) };
+            f();
+        }
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Opaque handles.
 // ---------------------------------------------------------------------------
@@ -300,6 +367,34 @@ impl WolfCoreHandle {
             if let Err(e) = core.shutdown() {
                 tracing::warn!("wolf-ffi: core shutdown failed: {e}");
             }
+        }
+    }
+
+    /// Starts a streaming file-search session over the core's cwd, fed by the
+    /// registered file-search wake.
+    ///
+    /// Infallible across the bridge: when the core has already been shut down it
+    /// returns an empty-backed [`FfiFileSearch`] (whose [`FfiFileSearch::ranked`]
+    /// yields no entries), mirroring [`read_frame`](WolfCoreHandle::read_frame)'s
+    /// empty-frame fallback.
+    #[must_use]
+    pub fn start_file_search(&self) -> FfiFileSearch {
+        let search = self
+            .core
+            .borrow()
+            .as_ref()
+            .map(|core| core.start_file_search(registered_filesearch_wake()));
+        FfiFileSearch { search }
+    }
+
+    /// Opens `path` (an absolute filesystem path) in Neovim via
+    /// [`InputEvent::Open`]; the core's input pump records the MRU. A no-op once
+    /// the core has been shut down.
+    pub fn open(&self, path: String) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.send_input(InputEvent::Open {
+                path: PathBuf::from(path),
+            });
         }
     }
 }
@@ -374,6 +469,70 @@ impl FfiCell {
     #[must_use]
     pub fn flags(&self) -> u8 {
         self.flags
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FfiFileSearch / FfiFileEntry: the file-picker search surface (opaque to Swift).
+// ---------------------------------------------------------------------------
+
+/// A live file-search session handle (opaque to Swift).
+///
+/// Wraps an `Option<`[`FileSearch`]`>` so [`start_file_search`] stays infallible
+/// across the bridge: `None` means the core was already gone at start, and
+/// [`ranked`](FfiFileSearch::ranked) then yields no entries. Dropping this handle
+/// drops the inner [`FileSearch`], cancelling its background traversal.
+pub struct FfiFileSearch {
+    search: Option<FileSearch>,
+}
+
+impl FfiFileSearch {
+    /// The top `max` ranked entries for `query` against the latest streamed
+    /// search snapshot.
+    ///
+    /// An empty `query` lists all known entries MRU-first; a non-empty `query`
+    /// keeps only case-insensitive subsequence matches, best-first (see
+    /// [`rank_matches`]). The snapshot read guard is held only for the duration of
+    /// the rank + clone and dropped before returning.
+    #[must_use]
+    pub fn ranked(&self, query: String, max: usize) -> Vec<FfiFileEntry> {
+        let Some(search) = &self.search else {
+            return Vec::new();
+        };
+        let view = search.read();
+        let entries: Vec<FfiFileEntry> = rank_matches(&query, &view.entries)
+            .into_iter()
+            .take(max)
+            .map(|m| {
+                let entry = &view.entries[m.index];
+                FfiFileEntry {
+                    path: entry.path.clone(),
+                    display: entry.display.clone(),
+                }
+            })
+            .collect();
+        entries
+    }
+}
+
+/// One ranked file-search result (opaque to Swift, so a `Vec<FfiFileEntry>` is
+/// supported — swift-bridge emits Vec support only for opaque types).
+pub struct FfiFileEntry {
+    path: PathBuf,
+    display: String,
+}
+
+impl FfiFileEntry {
+    /// The display string (the path relative to the search root) shown + ranked.
+    #[must_use]
+    pub fn display(&self) -> String {
+        self.display.clone()
+    }
+
+    /// The absolute filesystem path, handed back to [`WolfCoreHandle::open`].
+    #[must_use]
+    pub fn path(&self) -> String {
+        self.path.to_string_lossy().into_owned()
     }
 }
 

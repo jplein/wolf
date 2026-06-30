@@ -17,6 +17,30 @@ void* __swift_bridge__$Vec_WolfCoreHandle$get_mut(void* vec_ptr, uintptr_t index
 uintptr_t __swift_bridge__$Vec_WolfCoreHandle$len(void* vec_ptr);
 void* __swift_bridge__$Vec_WolfCoreHandle$as_ptr(void* vec_ptr);
 
+typedef struct FfiFileSearch FfiFileSearch;
+void __swift_bridge__$FfiFileSearch$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiFileSearch$new(void);
+void __swift_bridge__$Vec_FfiFileSearch$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiFileSearch$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiFileSearch$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiFileSearch$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiFileSearch$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiFileSearch$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiFileSearch$as_ptr(void* vec_ptr);
+
+typedef struct FfiFileEntry FfiFileEntry;
+void __swift_bridge__$FfiFileEntry$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiFileEntry$new(void);
+void __swift_bridge__$Vec_FfiFileEntry$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiFileEntry$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiFileEntry$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiFileEntry$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiFileEntry$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiFileEntry$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiFileEntry$as_ptr(void* vec_ptr);
+
 typedef struct FfiFrame FfiFrame;
 void __swift_bridge__$FfiFrame$_free(void* self);
 
@@ -46,6 +70,11 @@ void* __swift_bridge__$WolfCoreHandle$read_frame(void* self);
 void __swift_bridge__$WolfCoreHandle$send_key(void* self, struct __swift_bridge__$FfiKeyEvent ev);
 void __swift_bridge__$WolfCoreHandle$resize(void* self, uint16_t cols, uint16_t rows);
 void __swift_bridge__$WolfCoreHandle$shutdown(void* self);
+void* __swift_bridge__$WolfCoreHandle$start_file_search(void* self);
+void __swift_bridge__$WolfCoreHandle$open(void* self, void* path);
+void* __swift_bridge__$FfiFileSearch$ranked(void* self, void* query, uintptr_t max);
+void* __swift_bridge__$FfiFileEntry$display(void* self);
+void* __swift_bridge__$FfiFileEntry$path(void* self);
 uint16_t __swift_bridge__$FfiFrame$cols(void* self);
 uint16_t __swift_bridge__$FfiFrame$rows(void* self);
 uint16_t __swift_bridge__$FfiFrame$cursor_row(void* self);

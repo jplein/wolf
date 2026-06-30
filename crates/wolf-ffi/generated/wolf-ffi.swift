@@ -132,6 +132,14 @@ extension WolfCoreHandleRef {
     public func shutdown() {
         __swift_bridge__$WolfCoreHandle$shutdown(ptr)
     }
+
+    public func start_file_search() -> FfiFileSearch {
+        FfiFileSearch(ptr: __swift_bridge__$WolfCoreHandle$start_file_search(ptr))
+    }
+
+    public func open<GenericIntoRustString: IntoRustString>(_ path: GenericIntoRustString) {
+        __swift_bridge__$WolfCoreHandle$open(ptr, { let rustString = path.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
+    }
 }
 extension WolfCoreHandle: Vectorizable {
     public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
@@ -179,6 +187,170 @@ extension WolfCoreHandle: Vectorizable {
 
     public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
         __swift_bridge__$Vec_WolfCoreHandle$len(vecPtr)
+    }
+}
+
+
+public class FfiFileSearch: FfiFileSearchRefMut {
+    var isOwned: Bool = true
+
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+
+    deinit {
+        if isOwned {
+            __swift_bridge__$FfiFileSearch$_free(ptr)
+        }
+    }
+}
+public class FfiFileSearchRefMut: FfiFileSearchRef {
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+}
+public class FfiFileSearchRef {
+    var ptr: UnsafeMutableRawPointer
+
+    public init(ptr: UnsafeMutableRawPointer) {
+        self.ptr = ptr
+    }
+}
+extension FfiFileSearchRef {
+    public func ranked<GenericIntoRustString: IntoRustString>(_ query: GenericIntoRustString, _ max: UInt) -> RustVec<FfiFileEntry> {
+        RustVec(ptr: __swift_bridge__$FfiFileSearch$ranked(ptr, { let rustString = query.intoRustString(); rustString.isOwned = false; return rustString.ptr }(), max))
+    }
+}
+extension FfiFileSearch: Vectorizable {
+    public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
+        __swift_bridge__$Vec_FfiFileSearch$new()
+    }
+
+    public static func vecOfSelfFree(vecPtr: UnsafeMutableRawPointer) {
+        __swift_bridge__$Vec_FfiFileSearch$drop(vecPtr)
+    }
+
+    public static func vecOfSelfPush(vecPtr: UnsafeMutableRawPointer, value: FfiFileSearch) {
+        __swift_bridge__$Vec_FfiFileSearch$push(vecPtr, {value.isOwned = false; return value.ptr;}())
+    }
+
+    public static func vecOfSelfPop(vecPtr: UnsafeMutableRawPointer) -> Optional<Self> {
+        let pointer = __swift_bridge__$Vec_FfiFileSearch$pop(vecPtr)
+        if pointer == nil {
+            return nil
+        } else {
+            return (FfiFileSearch(ptr: pointer!) as! Self)
+        }
+    }
+
+    public static func vecOfSelfGet(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiFileSearchRef> {
+        let pointer = __swift_bridge__$Vec_FfiFileSearch$get(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiFileSearchRef(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfGetMut(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiFileSearchRefMut> {
+        let pointer = __swift_bridge__$Vec_FfiFileSearch$get_mut(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiFileSearchRefMut(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfAsPtr(vecPtr: UnsafeMutableRawPointer) -> UnsafePointer<FfiFileSearchRef> {
+        UnsafePointer<FfiFileSearchRef>(OpaquePointer(__swift_bridge__$Vec_FfiFileSearch$as_ptr(vecPtr)))
+    }
+
+    public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
+        __swift_bridge__$Vec_FfiFileSearch$len(vecPtr)
+    }
+}
+
+
+public class FfiFileEntry: FfiFileEntryRefMut {
+    var isOwned: Bool = true
+
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+
+    deinit {
+        if isOwned {
+            __swift_bridge__$FfiFileEntry$_free(ptr)
+        }
+    }
+}
+public class FfiFileEntryRefMut: FfiFileEntryRef {
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+}
+public class FfiFileEntryRef {
+    var ptr: UnsafeMutableRawPointer
+
+    public init(ptr: UnsafeMutableRawPointer) {
+        self.ptr = ptr
+    }
+}
+extension FfiFileEntryRef {
+    public func display() -> RustString {
+        RustString(ptr: __swift_bridge__$FfiFileEntry$display(ptr))
+    }
+
+    public func path() -> RustString {
+        RustString(ptr: __swift_bridge__$FfiFileEntry$path(ptr))
+    }
+}
+extension FfiFileEntry: Vectorizable {
+    public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
+        __swift_bridge__$Vec_FfiFileEntry$new()
+    }
+
+    public static func vecOfSelfFree(vecPtr: UnsafeMutableRawPointer) {
+        __swift_bridge__$Vec_FfiFileEntry$drop(vecPtr)
+    }
+
+    public static func vecOfSelfPush(vecPtr: UnsafeMutableRawPointer, value: FfiFileEntry) {
+        __swift_bridge__$Vec_FfiFileEntry$push(vecPtr, {value.isOwned = false; return value.ptr;}())
+    }
+
+    public static func vecOfSelfPop(vecPtr: UnsafeMutableRawPointer) -> Optional<Self> {
+        let pointer = __swift_bridge__$Vec_FfiFileEntry$pop(vecPtr)
+        if pointer == nil {
+            return nil
+        } else {
+            return (FfiFileEntry(ptr: pointer!) as! Self)
+        }
+    }
+
+    public static func vecOfSelfGet(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiFileEntryRef> {
+        let pointer = __swift_bridge__$Vec_FfiFileEntry$get(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiFileEntryRef(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfGetMut(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiFileEntryRefMut> {
+        let pointer = __swift_bridge__$Vec_FfiFileEntry$get_mut(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiFileEntryRefMut(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfAsPtr(vecPtr: UnsafeMutableRawPointer) -> UnsafePointer<FfiFileEntryRef> {
+        UnsafePointer<FfiFileEntryRef>(OpaquePointer(__swift_bridge__$Vec_FfiFileEntry$as_ptr(vecPtr)))
+    }
+
+    public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
+        __swift_bridge__$Vec_FfiFileEntry$len(vecPtr)
     }
 }
 
