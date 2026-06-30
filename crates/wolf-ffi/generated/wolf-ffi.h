@@ -77,10 +77,41 @@ void* __swift_bridge__$Vec_FfiCell$get_mut(void* vec_ptr, uintptr_t index);
 uintptr_t __swift_bridge__$Vec_FfiCell$len(void* vec_ptr);
 void* __swift_bridge__$Vec_FfiCell$as_ptr(void* vec_ptr);
 
+typedef struct FfiLayoutIntent FfiLayoutIntent;
+void __swift_bridge__$FfiLayoutIntent$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiLayoutIntent$new(void);
+void __swift_bridge__$Vec_FfiLayoutIntent$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiLayoutIntent$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiLayoutIntent$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiLayoutIntent$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiLayoutIntent$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiLayoutIntent$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiLayoutIntent$as_ptr(void* vec_ptr);
+
+typedef struct FfiWinInfo FfiWinInfo;
+void __swift_bridge__$FfiWinInfo$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiWinInfo$new(void);
+void __swift_bridge__$Vec_FfiWinInfo$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiWinInfo$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiWinInfo$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiWinInfo$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiWinInfo$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiWinInfo$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiWinInfo$as_ptr(void* vec_ptr);
+
 void* __swift_bridge__$wolf_ffi_start(void* init_lua, void* cwd, uint16_t cols, uint16_t rows);
 void* __swift_bridge__$WolfCoreHandle$read_frame(void* self);
+void* __swift_bridge__$WolfCoreHandle$read_frame_for_grid(void* self, uint64_t grid);
 void __swift_bridge__$WolfCoreHandle$send_key(void* self, struct __swift_bridge__$FfiKeyEvent ev);
 void __swift_bridge__$WolfCoreHandle$resize(void* self, uint16_t cols, uint16_t rows);
+void __swift_bridge__$WolfCoreHandle$resize_grid(void* self, uint64_t grid, uint16_t cols, uint16_t rows);
+void* __swift_bridge__$WolfCoreHandle$drain_intents(void* self);
+void* __swift_bridge__$WolfCoreHandle$windows(void* self);
+uint64_t __swift_bridge__$WolfCoreHandle$grid_for_win(void* self, int64_t win);
+int64_t __swift_bridge__$WolfCoreHandle$active_win(void* self);
+void __swift_bridge__$WolfCoreHandle$focus_win(void* self, int64_t win);
 void __swift_bridge__$WolfCoreHandle$shutdown(void* self);
 void* __swift_bridge__$WolfCoreHandle$start_file_search(void* self);
 void* __swift_bridge__$WolfCoreHandle$start_tree_search(void* self);
@@ -104,6 +135,8 @@ uint16_t __swift_bridge__$FfiFrame$cursor_col(void* self);
 uint8_t __swift_bridge__$FfiFrame$cursor_shape(void* self);
 uint32_t __swift_bridge__$FfiFrame$cursor_cell_percentage(void* self);
 bool __swift_bridge__$FfiFrame$cursor_visible(void* self);
+uint64_t __swift_bridge__$FfiFrame$grid_id(void* self);
+uint64_t __swift_bridge__$FfiFrame$cursor_grid(void* self);
 struct __swift_bridge__$FfiColor __swift_bridge__$FfiFrame$default_fg(void* self);
 struct __swift_bridge__$FfiColor __swift_bridge__$FfiFrame$default_bg(void* self);
 struct __swift_bridge__$FfiColor __swift_bridge__$FfiFrame$cursor_fill(void* self);
@@ -113,5 +146,13 @@ void* __swift_bridge__$FfiCell$text(void* self);
 struct __swift_bridge__$FfiColor __swift_bridge__$FfiCell$fg(void* self);
 struct __swift_bridge__$FfiColor __swift_bridge__$FfiCell$bg(void* self);
 uint8_t __swift_bridge__$FfiCell$flags(void* self);
+uint8_t __swift_bridge__$FfiLayoutIntent$kind(void* self);
+uint8_t __swift_bridge__$FfiLayoutIntent$orientation(void* self);
+uint8_t __swift_bridge__$FfiLayoutIntent$dir(void* self);
+int64_t __swift_bridge__$FfiLayoutIntent$from(void* self);
+int64_t __swift_bridge__$FfiLayoutIntent$win(void* self);
+uint64_t __swift_bridge__$FfiWinInfo$grid(void* self);
+int64_t __swift_bridge__$FfiWinInfo$win(void* self);
+bool __swift_bridge__$FfiWinInfo$hidden(void* self);
 
 

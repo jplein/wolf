@@ -21,14 +21,19 @@ final class MainWindow: NSWindow {
     /// Retains the toolbar delegate (an `NSToolbar`'s `delegate` is weak).
     private let toolbarDelegate: EditorToolbarDelegate
 
-    /// Builds the window around `treeView` (sidebar) and `gridView` (editor),
-    /// sizing the editor pane to `cols` × `rows` cells.
+    /// Builds the window around `treeView` (sidebar) and `paneContainer` (editor),
+    /// sizing the editor pane to `cols` × `rows` cells with the cmdline strip as
+    /// extra height below it.
     convenience init(
-        treeView: FileTreeView, gridView: GridView, metrics: CellMetrics, cols: Int, rows: Int
+        treeView: FileTreeView, paneContainer: PaneContainerView, metrics: CellMetrics,
+        cols: Int, rows: Int
     ) {
-        let splitVC = EditorSplitViewController(treeView: treeView, gridView: gridView)
+        let splitVC = EditorSplitViewController(treeView: treeView, paneContainer: paneContainer)
         let editorWidth = CGFloat(cols) * metrics.cellWidth
-        let editorHeight = CGFloat(rows) * metrics.cellHeight
+        // The editor pane stays exactly cols × rows cells; the one-row cmdline strip
+        // is extra height beneath it (so the 80-col OCR width is preserved).
+        let cmdlineStripHeight = ceil(metrics.cellHeight)
+        let editorHeight = CGFloat(rows) * metrics.cellHeight + cmdlineStripHeight
         let divider = splitVC.splitView.dividerThickness
 
         // An initial content rect; the exact size (with chrome) is set below once
@@ -46,7 +51,7 @@ final class MainWindow: NSWindow {
             editorWidth: editorWidth,
             editorHeight: editorHeight,
             divider: divider,
-            gridView: gridView
+            paneContainer: paneContainer
         )
     }
 
@@ -59,7 +64,7 @@ final class MainWindow: NSWindow {
         editorWidth: CGFloat,
         editorHeight: CGFloat,
         divider: CGFloat,
-        gridView: GridView
+        paneContainer: PaneContainerView
     ) {
         toolbarDelegate = EditorToolbarDelegate(splitView: splitVC.splitView)
 
@@ -101,7 +106,7 @@ final class MainWindow: NSWindow {
         // Pin the divider so the sidebar pane is exactly `treePaneWidth` wide.
         splitVC.pinDivider()
 
-        initialFirstResponder = gridView
+        initialFirstResponder = paneContainer
     }
 }
 

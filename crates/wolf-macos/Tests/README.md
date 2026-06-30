@@ -1,6 +1,6 @@
 # wolf-macos/Tests
 
-The Swift tests for the macOS front-end. The Bazel target is `//crates/wolf-macos:WolfKeyMapTests`; it runs regardless of `WOLF_NVIM_BIN` (it needs no Neovim) and covers both pure seams — the key seam (`KeyMapTests.swift`) and the picker seam (`PickerSeamTests.swift`).
+The Swift tests for the macOS front-end. The Bazel target is `//crates/wolf-macos:WolfKeyMapTests`; it runs regardless of `WOLF_NVIM_BIN` (it needs no Neovim) and covers the three pure seams — the key seam (`KeyMapTests.swift`), the picker seam (`PickerSeamTests.swift`), and the pane-layout seam (`PaneTreeTests.swift`).
 
 ## `WolfKeyMapTests/KeyMapTests.swift`
 
@@ -21,3 +21,7 @@ Pure, headless `XCTest` coverage of the AppKit-free `PickerSeam` helpers (`@test
 - `isPickerTrigger(charactersIgnoringModifiers:ctrl:shift:)` — the **Shift+Control+P** contract (including Ctrl+Shift+Alt+P → `true`, the wrong letter → `false`, and a missing modifier → `false`);
 - `nextSelection(current:delta:nRows:)` — the list-navigation clamp across its cases (including the empty-list `nil`);
 - `restoredIndex(resetToTop:prev:newLen:)` — selection restore across streaming result batches.
+
+## `WolfKeyMapTests/PaneTreeTests.swift`
+
+Pure, headless `XCTest` coverage of the AppKit-free `WolfKeyMap.PaneTree` seam (`@testable import WolfKeyMap`) — a 1:1 port of wolf-gnome's `layout.rs` test suite (same `P1…P4` ids, `W = 100` / `H = 40` bounds, half/third/quarter constants and `approx` / `assertRect` / `rectsOverlap` / `rectFor` helpers). It exercises construction (`new_is_single_leaf`); split + pane rects (vertical / horizontal / nested); the **n-ary flatten** (a same-orientation vsplit flattens a two-pane row into three equal columns, a perpendicular split nests); remove / collapse / merge / re-equalize; `neighbor` resolution (basic, nested, flat row of three, unknown-pane → `nil`); and DFS determinism of `leaves()` / `paneRects()`. A final test pins the **discriminant contract** with `wolf-ffi`: `Orientation.init?(ffi:)` maps `0/1` to `horizontal`/`vertical` and `FocusDir.init?(ffi:)` maps `0/1/2/3` to `left`/`right`/`up`/`down`, so the Swift port stays in lockstep with the Rust `intent_kind` / `orientation` / `focus_dir` modules and the `tests/panes.rs` integration test.

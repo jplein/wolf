@@ -124,12 +124,40 @@ extension WolfCoreHandleRef {
         FfiFrame(ptr: __swift_bridge__$WolfCoreHandle$read_frame(ptr))
     }
 
+    public func read_frame_for_grid(_ grid: UInt64) -> FfiFrame {
+        FfiFrame(ptr: __swift_bridge__$WolfCoreHandle$read_frame_for_grid(ptr, grid))
+    }
+
     public func send_key(_ ev: FfiKeyEvent) {
         __swift_bridge__$WolfCoreHandle$send_key(ptr, ev.intoFfiRepr())
     }
 
     public func resize(_ cols: UInt16, _ rows: UInt16) {
         __swift_bridge__$WolfCoreHandle$resize(ptr, cols, rows)
+    }
+
+    public func resize_grid(_ grid: UInt64, _ cols: UInt16, _ rows: UInt16) {
+        __swift_bridge__$WolfCoreHandle$resize_grid(ptr, grid, cols, rows)
+    }
+
+    public func drain_intents() -> RustVec<FfiLayoutIntent> {
+        RustVec(ptr: __swift_bridge__$WolfCoreHandle$drain_intents(ptr))
+    }
+
+    public func windows() -> RustVec<FfiWinInfo> {
+        RustVec(ptr: __swift_bridge__$WolfCoreHandle$windows(ptr))
+    }
+
+    public func grid_for_win(_ win: Int64) -> UInt64 {
+        __swift_bridge__$WolfCoreHandle$grid_for_win(ptr, win)
+    }
+
+    public func active_win() -> Int64 {
+        __swift_bridge__$WolfCoreHandle$active_win(ptr)
+    }
+
+    public func focus_win(_ win: Int64) {
+        __swift_bridge__$WolfCoreHandle$focus_win(ptr, win)
     }
 
     public func shutdown() {
@@ -524,6 +552,14 @@ extension FfiFrameRef {
         __swift_bridge__$FfiFrame$cursor_visible(ptr)
     }
 
+    public func grid_id() -> UInt64 {
+        __swift_bridge__$FfiFrame$grid_id(ptr)
+    }
+
+    public func cursor_grid() -> UInt64 {
+        __swift_bridge__$FfiFrame$cursor_grid(ptr)
+    }
+
     public func default_fg() -> FfiColor {
         __swift_bridge__$FfiFrame$default_fg(ptr).intoSwiftRepr()
     }
@@ -682,6 +718,190 @@ extension FfiCell: Vectorizable {
 
     public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
         __swift_bridge__$Vec_FfiCell$len(vecPtr)
+    }
+}
+
+
+public class FfiLayoutIntent: FfiLayoutIntentRefMut {
+    var isOwned: Bool = true
+
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+
+    deinit {
+        if isOwned {
+            __swift_bridge__$FfiLayoutIntent$_free(ptr)
+        }
+    }
+}
+public class FfiLayoutIntentRefMut: FfiLayoutIntentRef {
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+}
+public class FfiLayoutIntentRef {
+    var ptr: UnsafeMutableRawPointer
+
+    public init(ptr: UnsafeMutableRawPointer) {
+        self.ptr = ptr
+    }
+}
+extension FfiLayoutIntentRef {
+    public func kind() -> UInt8 {
+        __swift_bridge__$FfiLayoutIntent$kind(ptr)
+    }
+
+    public func orientation() -> UInt8 {
+        __swift_bridge__$FfiLayoutIntent$orientation(ptr)
+    }
+
+    public func dir() -> UInt8 {
+        __swift_bridge__$FfiLayoutIntent$dir(ptr)
+    }
+
+    public func from() -> Int64 {
+        __swift_bridge__$FfiLayoutIntent$from(ptr)
+    }
+
+    public func win() -> Int64 {
+        __swift_bridge__$FfiLayoutIntent$win(ptr)
+    }
+}
+extension FfiLayoutIntent: Vectorizable {
+    public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
+        __swift_bridge__$Vec_FfiLayoutIntent$new()
+    }
+
+    public static func vecOfSelfFree(vecPtr: UnsafeMutableRawPointer) {
+        __swift_bridge__$Vec_FfiLayoutIntent$drop(vecPtr)
+    }
+
+    public static func vecOfSelfPush(vecPtr: UnsafeMutableRawPointer, value: FfiLayoutIntent) {
+        __swift_bridge__$Vec_FfiLayoutIntent$push(vecPtr, {value.isOwned = false; return value.ptr;}())
+    }
+
+    public static func vecOfSelfPop(vecPtr: UnsafeMutableRawPointer) -> Optional<Self> {
+        let pointer = __swift_bridge__$Vec_FfiLayoutIntent$pop(vecPtr)
+        if pointer == nil {
+            return nil
+        } else {
+            return (FfiLayoutIntent(ptr: pointer!) as! Self)
+        }
+    }
+
+    public static func vecOfSelfGet(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiLayoutIntentRef> {
+        let pointer = __swift_bridge__$Vec_FfiLayoutIntent$get(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiLayoutIntentRef(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfGetMut(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiLayoutIntentRefMut> {
+        let pointer = __swift_bridge__$Vec_FfiLayoutIntent$get_mut(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiLayoutIntentRefMut(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfAsPtr(vecPtr: UnsafeMutableRawPointer) -> UnsafePointer<FfiLayoutIntentRef> {
+        UnsafePointer<FfiLayoutIntentRef>(OpaquePointer(__swift_bridge__$Vec_FfiLayoutIntent$as_ptr(vecPtr)))
+    }
+
+    public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
+        __swift_bridge__$Vec_FfiLayoutIntent$len(vecPtr)
+    }
+}
+
+
+public class FfiWinInfo: FfiWinInfoRefMut {
+    var isOwned: Bool = true
+
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+
+    deinit {
+        if isOwned {
+            __swift_bridge__$FfiWinInfo$_free(ptr)
+        }
+    }
+}
+public class FfiWinInfoRefMut: FfiWinInfoRef {
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+}
+public class FfiWinInfoRef {
+    var ptr: UnsafeMutableRawPointer
+
+    public init(ptr: UnsafeMutableRawPointer) {
+        self.ptr = ptr
+    }
+}
+extension FfiWinInfoRef {
+    public func grid() -> UInt64 {
+        __swift_bridge__$FfiWinInfo$grid(ptr)
+    }
+
+    public func win() -> Int64 {
+        __swift_bridge__$FfiWinInfo$win(ptr)
+    }
+
+    public func hidden() -> Bool {
+        __swift_bridge__$FfiWinInfo$hidden(ptr)
+    }
+}
+extension FfiWinInfo: Vectorizable {
+    public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
+        __swift_bridge__$Vec_FfiWinInfo$new()
+    }
+
+    public static func vecOfSelfFree(vecPtr: UnsafeMutableRawPointer) {
+        __swift_bridge__$Vec_FfiWinInfo$drop(vecPtr)
+    }
+
+    public static func vecOfSelfPush(vecPtr: UnsafeMutableRawPointer, value: FfiWinInfo) {
+        __swift_bridge__$Vec_FfiWinInfo$push(vecPtr, {value.isOwned = false; return value.ptr;}())
+    }
+
+    public static func vecOfSelfPop(vecPtr: UnsafeMutableRawPointer) -> Optional<Self> {
+        let pointer = __swift_bridge__$Vec_FfiWinInfo$pop(vecPtr)
+        if pointer == nil {
+            return nil
+        } else {
+            return (FfiWinInfo(ptr: pointer!) as! Self)
+        }
+    }
+
+    public static func vecOfSelfGet(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiWinInfoRef> {
+        let pointer = __swift_bridge__$Vec_FfiWinInfo$get(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiWinInfoRef(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfGetMut(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiWinInfoRefMut> {
+        let pointer = __swift_bridge__$Vec_FfiWinInfo$get_mut(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiWinInfoRefMut(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfAsPtr(vecPtr: UnsafeMutableRawPointer) -> UnsafePointer<FfiWinInfoRef> {
+        UnsafePointer<FfiWinInfoRef>(OpaquePointer(__swift_bridge__$Vec_FfiWinInfo$as_ptr(vecPtr)))
+    }
+
+    public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
+        __swift_bridge__$Vec_FfiWinInfo$len(vecPtr)
     }
 }
 

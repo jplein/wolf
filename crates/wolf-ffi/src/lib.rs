@@ -44,8 +44,8 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 
 use wolf_core::{
-    rank_matches, CoreConfig, CursorShape, FileSearch, InputEvent, Key, KeyEvent, ResolvedStyle,
-    Rgb, WakeFn, WolfCore,
+    rank_matches, CoreConfig, CursorShape, FileSearch, FocusDir, Grid, InputEvent, Key, KeyEvent,
+    LayoutIntent, ResolvedStyle, Rgb, SplitOrientation, WakeFn, WinInfo, WolfCore,
 };
 
 // Re-export the bridge-defined transparent structs at the crate root so the Rust
@@ -118,6 +118,39 @@ mod cursor_shape {
     pub const VERTICAL: u8 = 2;
 }
 
+/// The layout-intent kind discriminants packed into [`FfiLayoutIntent::kind`].
+///
+/// The single source of truth shared with the Swift `PaneTree` port and the
+/// `WolfKeyMapTests` / `tests/panes.rs` discriminant contract (plan §3.1).
+mod intent_kind {
+    /// A window SPLIT was performed by nvim (carries orientation + from + win).
+    pub const SPLIT: u8 = 0;
+    /// A PURE focus-direction move request (carries dir + from).
+    pub const FOCUS_DIR: u8 = 1;
+}
+
+/// The split-orientation discriminants packed into [`FfiLayoutIntent::orientation`],
+/// mirroring the variant order of [`wolf_core::SplitOrientation`].
+mod orientation {
+    /// Panes stacked top/bottom (`:split` / `<C-w>s`).
+    pub const HORIZONTAL: u8 = 0;
+    /// Panes side by side (`:vsplit` / `<C-w>v`).
+    pub const VERTICAL: u8 = 1;
+}
+
+/// The focus-direction discriminants packed into [`FfiLayoutIntent::dir`],
+/// mirroring the variant order of [`wolf_core::FocusDir`].
+mod focus_dir {
+    /// Move focus to the pane on the left.
+    pub const LEFT: u8 = 0;
+    /// Move focus to the pane on the right.
+    pub const RIGHT: u8 = 1;
+    /// Move focus to the pane above.
+    pub const UP: u8 = 2;
+    /// Move focus to the pane below.
+    pub const DOWN: u8 = 3;
+}
+
 // swift-bridge's generated module expands into code that does not satisfy this
 // crate's stricter lints; scope a narrow allow to the bridge module only. The
 // hand-written glue below the module is held to the normal bar.
@@ -163,8 +196,27 @@ mod ffi {
         type WolfCoreHandle;
 
         fn read_frame(&self) -> FfiFrame;
+        // The per-grid paint-ready frame for `grid` (the pane container reads one
+        // per pane, plus grid 1 for the cmdline strip). An absent grid yields an
+        // empty `0x0` frame (Swift treats `cols() == 0` as "grid gone").
+        fn read_frame_for_grid(&self, grid: u64) -> FfiFrame;
         fn send_key(&self, ev: FfiKeyEvent);
         fn resize(&self, cols: u16, rows: u16);
+        // Resizes a single window `grid` (in cells); nvim echoes the authoritative
+        // size back via `grid_resize`.
+        fn resize_grid(&self, grid: u64, cols: u16, rows: u16);
+        // Drains and returns all pending layout intents (splits + focus moves) in
+        // arrival order. `FfiLayoutIntent` is opaque so a `Vec` is supported.
+        fn drain_intents(&self) -> Vec<FfiLayoutIntent>;
+        // All windows nvim currently reports (the Swift side filters live editor
+        // windows). `FfiWinInfo` is opaque so a `Vec` is supported.
+        fn windows(&self) -> Vec<FfiWinInfo>;
+        // The grid id bound to window handle `win`, or 0 if no window maps to it.
+        fn grid_for_win(&self, win: i64) -> u64;
+        // The currently active Neovim window handle, or 0 if not yet known.
+        fn active_win(&self) -> i64;
+        // Focuses a specific Neovim window (click-to-focus / resolved FocusDir).
+        fn focus_win(&self, win: i64);
         fn shutdown(&self);
         // Starts a streaming file-search session over the core's cwd, fed by the
         // registered file-search wake. Infallible: returns an empty-backed handle
@@ -243,6 +295,11 @@ mod ffi {
         fn cursor_shape(&self) -> u8;
         fn cursor_cell_percentage(&self) -> u32;
         fn cursor_visible(&self) -> bool;
+        // The grid id this frame was packed from.
+        fn grid_id(&self) -> u64;
+        // The grid id the cursor currently lives on (at pack time), so a pane can
+        // tell whether the cursor belongs to it even when it is not its own grid.
+        fn cursor_grid(&self) -> u64;
         fn default_fg(&self) -> FfiColor;
         fn default_bg(&self) -> FfiColor;
         // Reverse-video cursor colors (so the cursor is reliably visible). Two
@@ -267,6 +324,35 @@ mod ffi {
         fn bg(&self) -> FfiColor;
         // Packed style flags (bold/italic/underline/undercurl/strikethrough).
         fn flags(&self) -> u8;
+    }
+
+    extern "Rust" {
+        type FfiLayoutIntent;
+
+        // The intent kind (`intent_kind::SPLIT` / `FOCUS_DIR`).
+        fn kind(&self) -> u8;
+        // For a SPLIT: the orientation (`orientation::HORIZONTAL` / `VERTICAL`);
+        // 0 for a FOCUS_DIR.
+        fn orientation(&self) -> u8;
+        // For a FOCUS_DIR: the direction (`focus_dir::LEFT` / `RIGHT` / `UP` /
+        // `DOWN`); 0 for a SPLIT.
+        fn dir(&self) -> u8;
+        // The origin window handle (current before the split / when the chord
+        // fired).
+        fn from(&self) -> i64;
+        // For a SPLIT: the new window handle; 0 for a FOCUS_DIR.
+        fn win(&self) -> i64;
+    }
+
+    extern "Rust" {
+        type FfiWinInfo;
+
+        // The grid id this window draws into (`>= 2` for editor windows).
+        fn grid(&self) -> u64;
+        // The Neovim window handle, as an `i64`.
+        fn win(&self) -> i64;
+        // Whether the window is currently hidden.
+        fn hidden(&self) -> bool;
     }
 }
 
@@ -441,10 +527,97 @@ impl WolfCoreHandle {
         }
     }
 
+    /// Reads the per-grid render-state snapshot for `grid` into an owned
+    /// [`FfiFrame`].
+    ///
+    /// The pane container reads one frame per pane (its bound window grid) plus
+    /// grid 1 for the cmdline strip. An absent grid (e.g. a closed window) yields
+    /// an empty `0x0` frame, which the front-end treats as "grid gone".
+    #[must_use]
+    pub fn read_frame_for_grid(&self, grid: u64) -> FfiFrame {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return FfiFrame::empty();
+        };
+        let snapshot = core.read_snapshot();
+        FfiFrame::from_snapshot_grid(&snapshot, grid)
+    }
+
     /// Requests a grid resize.
     pub fn resize(&self, cols: u16, rows: u16) {
         if let Some(core) = self.core.borrow().as_ref() {
             core.resize(cols, rows);
+        }
+    }
+
+    /// Requests a per-grid resize of a single window `grid` (in cells). A no-op
+    /// once the core has been shut down.
+    pub fn resize_grid(&self, grid: u64, cols: u16, rows: u16) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.resize_grid(grid, cols, rows);
+        }
+    }
+
+    /// Drains and returns all pending layout intents (splits + focus-direction
+    /// moves) in arrival order, each mapped into an opaque [`FfiLayoutIntent`].
+    /// Returns an empty `Vec` when the core is gone.
+    #[must_use]
+    pub fn drain_intents(&self) -> Vec<FfiLayoutIntent> {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return Vec::new();
+        };
+        core.drain_intents()
+            .into_iter()
+            .map(FfiLayoutIntent::from_intent)
+            .collect()
+    }
+
+    /// Returns ALL windows nvim currently reports (the Swift side filters live
+    /// editor windows, mirroring the GNOME reading of `snapshot.windows`). Returns
+    /// an empty `Vec` when the core is gone.
+    #[must_use]
+    pub fn windows(&self) -> Vec<FfiWinInfo> {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return Vec::new();
+        };
+        let snapshot = core.read_snapshot();
+        snapshot
+            .windows
+            .values()
+            .map(FfiWinInfo::from_win_info)
+            .collect()
+    }
+
+    /// Returns the grid id bound to window handle `win`, or 0 if no window maps to
+    /// it (e.g. it was closed) or the core is gone.
+    #[must_use]
+    pub fn grid_for_win(&self, win: i64) -> u64 {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return 0;
+        };
+        core.read_snapshot().grid_for_win(win).unwrap_or(0)
+    }
+
+    /// Returns the currently active Neovim window handle, or 0 if not yet known or
+    /// the core is gone.
+    #[must_use]
+    pub fn active_win(&self) -> i64 {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return 0;
+        };
+        core.read_snapshot().active_win.unwrap_or(0)
+    }
+
+    /// Focuses a specific Neovim window (click-to-focus, or after resolving a
+    /// focus-direction intent into a concrete neighbour). A no-op once the core
+    /// has been shut down.
+    pub fn focus_win(&self, win: i64) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.focus_win(win);
         }
     }
 
@@ -615,6 +788,135 @@ impl FfiCell {
     #[must_use]
     pub fn flags(&self) -> u8 {
         self.flags
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FfiLayoutIntent: a drained layout intent (opaque to Swift).
+// ---------------------------------------------------------------------------
+
+/// One drained layout intent (opaque to Swift, so a `Vec<FfiLayoutIntent>` is
+/// supported — swift-bridge emits Vec support only for opaque types).
+///
+/// Flattens [`wolf_core::LayoutIntent`]'s two variants into a tagged struct: `kind`
+/// discriminates (`intent_kind::SPLIT` / `FOCUS_DIR`); a SPLIT carries
+/// `orientation` + `from` + `win`; a FOCUS_DIR carries `dir` + `from` (the unused
+/// scalar fields are 0).
+pub struct FfiLayoutIntent {
+    kind: u8,
+    orientation: u8,
+    dir: u8,
+    from: i64,
+    win: i64,
+}
+
+impl FfiLayoutIntent {
+    /// The intent kind (`intent_kind::SPLIT` / `FOCUS_DIR`).
+    #[must_use]
+    pub fn kind(&self) -> u8 {
+        self.kind
+    }
+
+    /// For a SPLIT: the orientation (`orientation::HORIZONTAL` / `VERTICAL`); 0 for
+    /// a FOCUS_DIR.
+    #[must_use]
+    pub fn orientation(&self) -> u8 {
+        self.orientation
+    }
+
+    /// For a FOCUS_DIR: the direction (`focus_dir::LEFT` / `RIGHT` / `UP` /
+    /// `DOWN`); 0 for a SPLIT.
+    #[must_use]
+    pub fn dir(&self) -> u8 {
+        self.dir
+    }
+
+    /// The origin window handle (current before the split / when the chord fired).
+    #[must_use]
+    pub fn from(&self) -> i64 {
+        self.from
+    }
+
+    /// For a SPLIT: the new window handle; 0 for a FOCUS_DIR.
+    #[must_use]
+    pub fn win(&self) -> i64 {
+        self.win
+    }
+
+    /// Flattens a [`wolf_core::LayoutIntent`] into the bridge-friendly tagged
+    /// struct, packing the discriminants from the [`intent_kind`] / [`orientation`]
+    /// / [`focus_dir`] modules.
+    fn from_intent(intent: LayoutIntent) -> Self {
+        match intent {
+            LayoutIntent::Split {
+                orientation: o,
+                from,
+                win,
+            } => Self {
+                kind: intent_kind::SPLIT,
+                orientation: match o {
+                    SplitOrientation::Horizontal => orientation::HORIZONTAL,
+                    SplitOrientation::Vertical => orientation::VERTICAL,
+                },
+                dir: 0,
+                from,
+                win,
+            },
+            LayoutIntent::FocusDir { dir, from } => Self {
+                kind: intent_kind::FOCUS_DIR,
+                orientation: 0,
+                dir: match dir {
+                    FocusDir::Left => focus_dir::LEFT,
+                    FocusDir::Right => focus_dir::RIGHT,
+                    FocusDir::Up => focus_dir::UP,
+                    FocusDir::Down => focus_dir::DOWN,
+                },
+                from,
+                win: 0,
+            },
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FfiWinInfo: one window's grid + handle + hidden flag (opaque to Swift).
+// ---------------------------------------------------------------------------
+
+/// One window's `(grid, win, hidden)` triple (opaque to Swift, so a
+/// `Vec<FfiWinInfo>` is supported — swift-bridge emits Vec support only for opaque
+/// types). A projection of [`wolf_core::WinInfo`]'s pane-relevant fields.
+pub struct FfiWinInfo {
+    grid: u64,
+    win: i64,
+    hidden: bool,
+}
+
+impl FfiWinInfo {
+    /// The grid id this window draws into (`>= 2` for editor windows).
+    #[must_use]
+    pub fn grid(&self) -> u64 {
+        self.grid
+    }
+
+    /// The Neovim window handle, as an `i64`.
+    #[must_use]
+    pub fn win(&self) -> i64 {
+        self.win
+    }
+
+    /// Whether the window is currently hidden.
+    #[must_use]
+    pub fn hidden(&self) -> bool {
+        self.hidden
+    }
+
+    /// Projects a [`wolf_core::WinInfo`]'s pane-relevant fields.
+    fn from_win_info(info: &WinInfo) -> Self {
+        Self {
+            grid: info.grid,
+            win: info.win,
+            hidden: info.hidden,
+        }
     }
 }
 
@@ -794,6 +1096,8 @@ pub struct FfiFrame {
     cursor_shape: u8,
     cursor_cell_percentage: u32,
     cursor_visible: bool,
+    grid_id: u64,
+    cursor_grid: u64,
     default_fg: FfiColor,
     default_bg: FfiColor,
     cursor_fill: FfiColor,
@@ -838,10 +1142,23 @@ impl FfiFrame {
         self.cursor_cell_percentage
     }
 
-    /// Whether the cursor lives on the active grid (so it should be drawn).
+    /// Whether the cursor lives on THIS frame's grid (so it should be drawn here).
     #[must_use]
     pub fn cursor_visible(&self) -> bool {
         self.cursor_visible
+    }
+
+    /// The grid id this frame was packed from.
+    #[must_use]
+    pub fn grid_id(&self) -> u64 {
+        self.grid_id
+    }
+
+    /// The grid id the cursor currently lives on (at pack time), so a pane can
+    /// tell whether the cursor belongs to it even when it is not this frame's grid.
+    #[must_use]
+    pub fn cursor_grid(&self) -> u64 {
+        self.cursor_grid
     }
 
     /// The editor default foreground color.
@@ -884,6 +1201,8 @@ impl FfiFrame {
             cursor_shape: cursor_shape::BLOCK,
             cursor_cell_percentage: 0,
             cursor_visible: false,
+            grid_id: 0,
+            cursor_grid: 0,
             default_fg: FfiColor::unset(),
             default_bg: FfiColor::unset(),
             cursor_fill: FfiColor::unset(),
@@ -892,16 +1211,31 @@ impl FfiFrame {
         }
     }
 
-    /// Builds a frame from a render-state snapshot, resolving the active grid's
+    /// Builds a frame from a render-state snapshot's ACTIVE grid, resolving its
     /// cells against the highlight table in Rust.
     ///
-    /// Public so the headless `tests/frame_pack.rs` integration test can drive the
-    /// snapshot-level packing directly (no live `WolfCore`); `read_frame` keeps
-    /// delegating to it.
+    /// Delegates to [`FfiFrame::from_snapshot_grid`] with the snapshot's active
+    /// grid id. Public so the headless `tests/frame_pack.rs` integration test can
+    /// drive the snapshot-level packing directly (no live `WolfCore`); `read_frame`
+    /// keeps delegating to it.
     #[must_use]
     pub fn from_snapshot(snapshot: &wolf_core::Snapshot) -> Self {
-        let active_id = snapshot.active_grid_id();
-        let grid = snapshot.active_grid();
+        Self::from_snapshot_grid(snapshot, snapshot.active_grid_id())
+    }
+
+    /// Builds a frame from a SPECIFIC `grid_id` of a render-state snapshot,
+    /// resolving that grid's cells against the highlight table in Rust.
+    ///
+    /// An absent grid yields [`FfiFrame::empty`] (`cols()`/`rows()` 0 — the
+    /// front-end treats that as "grid gone"). `cursor_visible` is per-grid
+    /// (`snapshot.cursor.grid == grid_id`), and the cursor reverse-video colors are
+    /// computed against the REQUESTED grid's cell under the cursor (irrelevant when
+    /// the cursor is not on this grid).
+    #[must_use]
+    pub fn from_snapshot_grid(snapshot: &wolf_core::Snapshot, grid_id: u64) -> Self {
+        let Some(grid) = snapshot.grid(grid_id) else {
+            return Self::empty();
+        };
         let highlights = &snapshot.highlights;
 
         let mut cells = Vec::with_capacity(grid.cols * grid.rows);
@@ -927,7 +1261,7 @@ impl FfiFrame {
                 (m.shape, m.cell_percentage)
             });
 
-        let (fill, glyph) = cursor_colors(snapshot);
+        let (fill, glyph) = cursor_colors(snapshot, grid);
 
         Self {
             cols: clamp_u16(grid.cols),
@@ -936,7 +1270,9 @@ impl FfiFrame {
             cursor_col: clamp_u16(snapshot.cursor.col),
             cursor_shape: pack_cursor_shape(shape),
             cursor_cell_percentage: cell_percentage.unwrap_or(0),
-            cursor_visible: snapshot.cursor.grid == active_id,
+            cursor_visible: snapshot.cursor.grid == grid_id,
+            grid_id,
+            cursor_grid: snapshot.cursor.grid,
             default_fg: FfiColor::from_opt(highlights.defaults.fg),
             default_bg: FfiColor::from_opt(highlights.defaults.bg),
             cursor_fill: FfiColor::from_rgb(fill),
@@ -1031,10 +1367,14 @@ fn clamp_u16(v: usize) -> u16 {
 
 /// Computes the cursor's `(fill, glyph)` colors (reverse video, honoring a visible
 /// mode cursor highlight), ported from wolf-gnome's `cursor::cursor_colors`.
-fn cursor_colors(snap: &wolf_core::Snapshot) -> (Rgb, Rgb) {
+///
+/// Reads the cell under the cursor from `grid` (the REQUESTED grid being packed),
+/// not the active grid, so a per-pane frame computes the cursor colors against its
+/// own grid (irrelevant when the cursor is not on that grid).
+fn cursor_colors(snap: &wolf_core::Snapshot, grid: &Grid) -> (Rgb, Rgb) {
     let defaults = &snap.highlights.defaults;
 
-    let (cell_fg, cell_bg) = match snap.active_grid().cell(snap.cursor.row, snap.cursor.col) {
+    let (cell_fg, cell_bg) = match grid.cell(snap.cursor.row, snap.cursor.col) {
         Some(cell) => {
             let style = snap.highlights.resolve(cell.hl_id);
             (

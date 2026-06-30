@@ -9,8 +9,8 @@ import WolfFFI
 import WolfKeyMap
 
 /// The application delegate: resolves `init_lua` + cwd, starts the Rust core,
-/// builds the window and `GridView`, registers the view with `WakeBridge`, and
-/// shuts the core down cleanly on terminate.
+/// builds the window and `PaneContainerView`, registers the pane view with
+/// `WakeBridge`, and shuts the core down cleanly on terminate.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Initial grid width in columns.
     private static let initialCols = 80
@@ -34,13 +34,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.handle = handle
 
         let metrics = CellMetrics.measured()
-        let gridView = GridView(handle: handle, metrics: metrics)
-        WakeBridge.registeredView = gridView
+        let paneContainer = PaneContainerView(handle: handle, metrics: metrics)
+        WakeBridge.registeredPaneView = paneContainer
 
         // Build the file-tree sidebar (left pane). It owns its OWN long-lived
         // file-search session via `start_tree_search`; the render wake reveals +
         // bolds the current buffer, the tree wake rebuilds its rows.
-        let tree = FileTreeView(handle: handle, gridView: gridView)
+        let tree = FileTreeView(handle: handle, paneContainer: paneContainer)
         WakeBridge.registeredTree = tree
         TreeWakeBridge.registeredTree = tree
         tree.start()
@@ -48,25 +48,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let window = MainWindow(
             treeView: tree,
-            gridView: gridView,
+            paneContainer: paneContainer,
             metrics: metrics,
             cols: Self.initialCols,
             rows: Self.initialRows
         )
 
         // Build the file picker as a hidden top-center overlay over the editor
-        // (the picker is a subview of the grid view). Shift+Ctrl+P opens it.
-        let picker = PickerView(handle: handle, gridView: gridView)
-        gridView.addSubview(picker)
+        // (the picker is a subview of the pane container). Shift+Ctrl+P opens it.
+        let picker = PickerView(handle: handle, paneContainer: paneContainer)
+        paneContainer.addSubview(picker)
         PickerWakeBridge.registeredPicker = picker
-        gridView.onPickerTrigger = { [weak picker] in picker?.open() }
+        paneContainer.onPickerTrigger = { [weak picker] in picker?.open() }
         self.picker = picker
 
         window.center()
         window.makeKeyAndOrderFront(nil)
-        // Setting the content VC can move first responder; ensure the editor grid
-        // keeps it so launch keystrokes reach Neovim.
-        window.makeFirstResponder(gridView)
+        // Setting the content VC can move first responder; ensure the editor pane
+        // container keeps it so launch keystrokes reach Neovim.
+        window.makeFirstResponder(paneContainer)
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
     }

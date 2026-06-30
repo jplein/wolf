@@ -52,7 +52,7 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
     private static let cellIdentifier = NSUserInterfaceItemIdentifier("TreeCell")
 
     private let handle: WolfCoreHandle
-    private weak var gridView: GridView?
+    private weak var paneContainer: PaneContainerView?
 
     /// The proportional system UI font for rows (the sidebar is chrome, not the
     /// editor grid), with a bold variant for the current buffer's row.
@@ -88,11 +88,11 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
     /// returned ""); retried on each refresh.
     private var pendingReveal: String?
 
-    /// Builds the sidebar bound to a live core `handle` and the editor `gridView`
-    /// (re-focused after a single-click open).
-    init(handle: WolfCoreHandle, gridView: GridView) {
+    /// Builds the sidebar bound to a live core `handle` and the editor
+    /// `paneContainer` (re-focused after a single-click open).
+    init(handle: WolfCoreHandle, paneContainer: PaneContainerView) {
         self.handle = handle
-        self.gridView = gridView
+        self.paneContainer = paneContainer
         super.init(frame: .zero)
         buildSubviews()
     }
@@ -205,8 +205,8 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
             }
         } else {
             handle.open(item.absPath)
-            if let gridView {
-                window?.makeFirstResponder(gridView)
+            if let paneContainer {
+                window?.makeFirstResponder(paneContainer)
             }
         }
     }

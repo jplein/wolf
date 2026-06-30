@@ -11,7 +11,7 @@ import AppKit
 /// `.sidebar` split item wrapping the `FileTreeView` (giving it the standard
 /// translucent, full-height source-list material that extends under the
 /// transparent titlebar) and a trailing content split item wrapping the
-/// `GridView` editor.
+/// `PaneContainerView` editor (the split-panes area + bottom cmdline strip).
 ///
 /// The sidebar item keeps the higher holding priority that
 /// `NSSplitViewItem(sidebarWithViewController:)` assigns by default, so window
@@ -27,12 +27,13 @@ final class EditorSplitViewController: NSSplitViewController {
     /// Maximum width of the sidebar pane, in points.
     static let maxThickness: CGFloat = 420
 
-    /// Builds the split of `treeView` (sidebar) and `gridView` (editor content).
-    init(treeView: FileTreeView, gridView: GridView) {
+    /// Builds the split of `treeView` (sidebar) and `paneContainer` (editor
+    /// content).
+    init(treeView: FileTreeView, paneContainer: PaneContainerView) {
         super.init(nibName: nil, bundle: nil)
 
         let sidebarHost = HostViewController(hostedView: treeView, pinTopToSafeArea: false)
-        let contentHost = HostViewController(hostedView: gridView, pinTopToSafeArea: true)
+        let contentHost = HostViewController(hostedView: paneContainer, pinTopToSafeArea: true)
 
         // `sidebarWithViewController:` gives the `.sidebar` behavior: vibrancy,
         // full-height under the titlebar, collapsibility, and the higher holding

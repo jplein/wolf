@@ -47,7 +47,7 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     private static let cellIdentifier = NSUserInterfaceItemIdentifier("PickerCell")
 
     private let handle: WolfCoreHandle
-    private weak var gridView: GridView?
+    private weak var paneContainer: PaneContainerView?
     /// The proportional system UI font used for the search field + result rows
     /// (the picker is chrome, not the editor grid, so it uses the native UI font
     /// rather than the editor's monospace cell font).
@@ -68,12 +68,13 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     /// Whether the picker is currently open (visible + focused).
     private var isOpen = false
 
-    /// Builds the picker bound to a live core `handle` and the editor `gridView`
-    /// (re-focused on close). The picker uses the proportional system UI font (see
-    /// `font`), not the editor's monospace cell font. Starts hidden.
-    init(handle: WolfCoreHandle, gridView: GridView) {
+    /// Builds the picker bound to a live core `handle` and the editor
+    /// `paneContainer` (re-focused on close). The picker uses the proportional
+    /// system UI font (see `font`), not the editor's monospace cell font. Starts
+    /// hidden.
+    init(handle: WolfCoreHandle, paneContainer: PaneContainerView) {
         self.handle = handle
-        self.gridView = gridView
+        self.paneContainer = paneContainer
         super.init(
             frame: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.panelHeight))
         wantsLayer = true
@@ -127,8 +128,8 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         // Dropping the FileSearch cancels the background traversal.
         search = nil
         isHidden = true
-        if let gridView {
-            window?.makeFirstResponder(gridView)
+        if let paneContainer {
+            window?.makeFirstResponder(paneContainer)
         }
     }
 

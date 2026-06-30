@@ -11,9 +11,16 @@ All types are re-exported at the crate root (`wolf_ffi::…`).
 - `wolf_ffi_start(init_lua: String, cwd: String, cols: u16, rows: u16) -> Option<WolfCoreHandle>` — starts the core against the pinned Neovim. `init_lua` and `cwd` are filesystem **paths** (mirroring `CoreConfig`). Returns `None` (after logging) on error.
 
 - `WolfCoreHandle` — an opaque, **main-thread-only** handle wrapping a `RefCell<Option<WolfCore>>` (`WolfCore` is not `Send`). Methods:
-  - `read_frame(&self) -> FfiFrame`
+  - `read_frame(&self) -> FfiFrame` — the **active** grid's paint-ready frame.
+  - `read_frame_for_grid(&self, grid: u64) -> FfiFrame` — the paint-ready frame for a SPECIFIC grid. The pane container reads one per pane (its bound window grid) plus grid 1 for the cmdline strip. An absent grid (e.g. a closed window) yields an empty `0x0` frame, which the front-end treats as "grid gone".
   - `send_key(&self, ev: FfiKeyEvent)`
   - `resize(&self, cols: u16, rows: u16)`
+  - `resize_grid(&self, grid: u64, cols: u16, rows: u16)` — resizes a single window grid (in cells) on a per-pane resize; nvim echoes the authoritative size back via `grid_resize`. A no-op once the core is shut down.
+  - `drain_intents(&self) -> Vec<FfiLayoutIntent>` — drains all pending layout intents (splits + focus moves) in arrival order, each mapped into an opaque `FfiLayoutIntent`. Empty `Vec` when the core is gone.
+  - `windows(&self) -> Vec<FfiWinInfo>` — ALL windows nvim currently reports (the Swift side filters live editor windows, mirroring the GNOME reading of `snapshot.windows`), each an opaque `FfiWinInfo`. Empty `Vec` when the core is gone.
+  - `grid_for_win(&self, win: i64) -> u64` — the grid id bound to window handle `win`, or `0` if none maps to it (e.g. it was closed) / the core is gone.
+  - `active_win(&self) -> i64` — the currently active Neovim window handle, or `0` if not yet known / the core is gone.
+  - `focus_win(&self, win: i64)` — focuses a specific Neovim window (click-to-focus, or after resolving a focus-direction intent into a concrete neighbour). A no-op once the core is shut down.
   - `start_file_search(&self) -> FfiFileSearch` — starts a streaming file-search session over the cwd (registering the picker wake) and wraps it as an `FfiFileSearch`. Infallible across the bridge: when no core is present the result simply yields no entries.
   - `start_tree_search(&self) -> FfiFileSearch` — starts a **separate**, long-lived streaming file-search session for the file-tree sidebar, registering the **tree** wake (`registered_tree_wake`) instead of the picker wake. Same infallible empty-backed fallback as `start_file_search`. The sidebar owns this session for its whole lifetime, independent of the transient picker session.
   - `current_file(&self) -> String` — the absolute path of the buffer currently being edited (canonicalized by core via the `wolf_current_file` notification), or the empty string for an unnamed buffer / shut-down core. Read on each editor wake to highlight + reveal the sidebar's current file.
@@ -34,7 +41,25 @@ All types are re-exported at the crate root (`wolf_ffi::…`).
 
 - `wolf_ffi_ancestors_to_reveal(rel_path: String) -> Vec<String>` — a free FFI fn (no live session needed) delegating to `wolf_core::tree::ancestors_to_reveal`: the ancestor directory rel-paths from the cwd root down to the node's parent (`"src/main.rs"` → `["src"]`, `"README.md"` → `[]`). swift-bridge emits clean `RustVec<RustString>` Swift glue for the `Vec<String>` return.
 
-- `FfiFrame` — an opaque, owned, paint-ready snapshot of the **active grid**, with every cell already resolved against the highlight table **in Rust** (reusing `HighlightTable::resolve` / `ResolvedStyle` — never re-resolved in Swift). Accessors: `cols`, `rows`, `cursor_row`, `cursor_col`, `cursor_shape` (0 = Block, 1 = Horizontal, 2 = Vertical), `cursor_cell_percentage`, `cursor_visible`, `default_fg`, `default_bg`, `cursor_fill`, `cursor_glyph` (reverse-video cursor colors, ported from wolf-gnome's `cursor.rs`), and `cells() -> Vec<FfiCell>` (one flat, row-major handoff per frame).
+- `FfiFrame` — an opaque, owned, paint-ready snapshot of a single grid (the **active** grid via `read_frame`, or any grid via `read_frame_for_grid`), with every cell already resolved against the highlight table **in Rust** (reusing `HighlightTable::resolve` / `ResolvedStyle` — never re-resolved in Swift). Accessors: `cols`, `rows`, `cursor_row`, `cursor_col`, `cursor_shape` (0 = Block, 1 = Horizontal, 2 = Vertical), `cursor_cell_percentage`, `cursor_visible` (whether the cursor lives on THIS frame's grid — **per-grid**, so only the pane owning the cursor's grid draws it), `grid_id` (the grid this frame was packed from), `cursor_grid` (the grid the cursor currently lives on, so a pane can tell whether the cursor belongs to it even when it is not its own grid), `default_fg`, `default_bg`, `cursor_fill`, `cursor_glyph` (reverse-video cursor colors, ported from wolf-gnome's `cursor.rs` and computed against the REQUESTED grid's cell under the cursor), and `cells() -> Vec<FfiCell>` (one flat, row-major handoff per frame).
+
+- `FfiLayoutIntent` — opaque; one drained layout intent (a flattened `wolf_core::LayoutIntent`). Accessors `kind() -> u8` (`intent_kind::SPLIT` / `FOCUS_DIR`), `orientation() -> u8` (for a SPLIT: `orientation::HORIZONTAL` / `VERTICAL`; 0 otherwise), `dir() -> u8` (for a FOCUS_DIR: `focus_dir::LEFT` / `RIGHT` / `UP` / `DOWN`; 0 otherwise), `from() -> i64` (the origin window handle), and `win() -> i64` (for a SPLIT: the new window handle; 0 otherwise). Opaque because swift-bridge only emits `Vec<T>` support for opaque `T` — the same reason `FfiTreeNode` is opaque.
+
+- `FfiWinInfo` — opaque; a projection of `wolf_core::WinInfo`'s pane-relevant fields. Accessors `grid() -> u64` (the grid this window draws into, `>= 2` for editor windows), `win() -> i64` (the Neovim window handle), and `hidden() -> bool`. Opaque for the same `Vec<T>` reason as `FfiLayoutIntent` / `FfiTreeNode`.
+
+  The discriminants packed into `FfiLayoutIntent` live in the `intent_kind` / `orientation` / `focus_dir` modules and, like the `FfiKeyEvent` `kind` table, are the **single source of truth** shared with the Swift `PaneTree` port (`Orientation.init?(ffi:)` / `FocusDir.init?(ffi:)`) and the `WolfKeyMapTests` / `tests/panes.rs` discriminant contracts. They mirror the variant order of `wolf_core::SplitOrientation` / `wolf_core::FocusDir`:
+
+  | `intent_kind` | 0     | 1         |
+  | ------------- | ----- | --------- |
+  | kind          | SPLIT | FOCUS_DIR |
+
+  | `orientation` | 0          | 1        |
+  | ------------- | ---------- | -------- |
+  | orientation   | Horizontal | Vertical |
+
+  | `focus_dir` | 0    | 1     | 2   | 3    |
+  | ----------- | ---- | ----- | --- | ---- |
+  | dir         | Left | Right | Up  | Down |
 
 - `FfiCell` — opaque; `text()`, `fg()`, `bg()`, `flags()`. (Opaque because swift-bridge does not emit `Vec` support for transparent structs.) Its `text` field is `pub` so the Rust integration test reads it directly.
 
@@ -105,6 +130,7 @@ CARGO_BAZEL_REPIN=1 bazel build //crates/wolf-ffi:wolf_ffi   # then commit lockf
 - `:bridge_smoke` — the Rust integration test for the editor round-trip.
 - `:file_search` — the Rust integration test for the file-search surface (real pinned nvim, modeled on `bridge_smoke`).
 - `:tree_search` — the Rust integration test for the file-tree surface (`start_tree_search` / `children_of` / `rel_path_for` / `FfiTreeNode` accessors / `current_file` / the free `wolf_ffi_ancestors_to_reveal`), real pinned nvim, modeled on `file_search`.
+- `:panes` — the Rust integration test for the split-pane surface (`drain_intents` / `FfiLayoutIntent` / `windows` / `FfiWinInfo` / `grid_for_win` / `active_win` / `focus_win` / `resize_grid` / `read_frame_for_grid`), real pinned nvim, modeled on `tree_search`.
 
 ## Testing
 
@@ -124,4 +150,10 @@ bazel test //crates/wolf-ffi:file_search
 
 ```sh
 bazel test //crates/wolf-ffi:tree_search
+```
+
+`tests/panes.rs` covers the split-pane surface against the same real pinned Neovim (modeled on `tree_search`, reusing `tests/common/mod.rs` and the same `data` / `env` / `no-sandbox` runfile staging). One test (`panes_split_resize_focus_close`) drives a full round-trip: attach → a baseline single editor window (`windows()` with `grid() >= 2`, `active_win()` and `grid_for_win(win)` agreeing) → a `:vsplit` whose `drain_intents()` yields a `kind() == SPLIT` intent (`orientation() == VERTICAL`, `from() ==` the original window, a new distinct `win()`) → two window grids → `resize_grid(newGrid, 40, 20)` settling to the nvim-authoritative `cols() == 40` → `focus_win(originalWin)` reflected in `active_win()` → `:close` leaving ONE window with `grid_for_win(closedWin) == 0` → grid 1 still present (`read_frame_for_grid(1).rows() > 0`) → shutdown. It also guards the discriminant contract (the `intent_kind` / `orientation` values match the Swift `PaneTree` port).
+
+```sh
+bazel test //crates/wolf-ffi:panes
 ```
