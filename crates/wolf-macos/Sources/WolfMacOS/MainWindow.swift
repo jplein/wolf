@@ -1,52 +1,145 @@
 //
 //  MainWindow.swift
-//  The single editor window: a horizontal split of the file-tree sidebar (left)
-//  and the editor grid (right), sized from cell metrics × initial grid size.
+//  The single editor window. Its content is an `EditorSplitViewController`
+//  (an `NSSplitViewController`) with a `.sidebar` source-list split item for the
+//  file-tree sidebar and a content split item for the editor grid, under a
+//  transparent full-size-content-view titlebar + a minimal unified `NSToolbar`
+//  (sidebar toggle + a tracking separator aligned to the divider). The sidebar's
+//  vibrancy extends full-height under the titlebar; the editor pane is pinned
+//  below the titlebar so it keeps its exact `cols` × `rows` cell size.
 //
 
 import AppKit
 
-/// The main "Wolf" window. Its content view is a horizontal `NSSplitView` with the
-/// `FileTreeView` sidebar on the left and the `GridView` editor on the right. The
-/// window's content width is widened by the sidebar pane width + the divider so the
-/// editor keeps its full `cols` × `rows` cell size (and the OCR-checked grid is
-/// undisturbed).
+/// The main "Wolf" window. Its `contentViewController` is an
+/// `EditorSplitViewController`; the window uses a transparent
+/// `.fullSizeContentView` titlebar and a minimal unified toolbar.
 final class MainWindow: NSWindow {
-    /// Fixed width of the file-tree sidebar pane in points.
+    /// Fixed initial width of the file-tree sidebar pane in points.
     static let treePaneWidth: CGFloat = 240
 
-    /// Builds the window around `treeView` (left) and `gridView` (right), sizing the
-    /// editor pane to `cols` × `rows` cells.
+    /// Retains the toolbar delegate (an `NSToolbar`'s `delegate` is weak).
+    private let toolbarDelegate: EditorToolbarDelegate
+
+    /// Builds the window around `treeView` (sidebar) and `gridView` (editor),
+    /// sizing the editor pane to `cols` × `rows` cells.
     convenience init(
         treeView: FileTreeView, gridView: GridView, metrics: CellMetrics, cols: Int, rows: Int
     ) {
-        let splitView = NSSplitView()
-        splitView.isVertical = true
-        splitView.dividerStyle = .thin
-        let divider = splitView.dividerThickness
-
+        let splitVC = EditorSplitViewController(treeView: treeView, gridView: gridView)
         let editorWidth = CGFloat(cols) * metrics.cellWidth
-        let height = CGFloat(rows) * metrics.cellHeight
-        let totalWidth = Self.treePaneWidth + divider + editorWidth
-        let contentRect = NSRect(x: 0, y: 0, width: totalWidth, height: height)
+        let editorHeight = CGFloat(rows) * metrics.cellHeight
+        let divider = splitVC.splitView.dividerThickness
+
+        // An initial content rect; the exact size (with chrome) is set below once
+        // the content VC + toolbar are attached and the titlebar/toolbar height is
+        // known.
+        let contentRect = NSRect(
+            x: 0, y: 0,
+            width: Self.treePaneWidth + divider + editorWidth,
+            height: editorHeight
+        )
 
         self.init(
+            splitVC: splitVC,
             contentRect: contentRect,
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            editorWidth: editorWidth,
+            editorHeight: editorHeight,
+            divider: divider,
+            gridView: gridView
+        )
+    }
+
+    /// Designated initializer: wires the split VC, transparent titlebar, and the
+    /// minimal unified toolbar, then sizes the content so the editor pane keeps its
+    /// exact cell size below the titlebar/toolbar chrome.
+    private init(
+        splitVC: EditorSplitViewController,
+        contentRect: NSRect,
+        editorWidth: CGFloat,
+        editorHeight: CGFloat,
+        divider: CGFloat,
+        gridView: GridView
+    ) {
+        toolbarDelegate = EditorToolbarDelegate(splitView: splitVC.splitView)
+
+        super.init(
+            contentRect: contentRect,
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
+
         title = "Wolf"
+        titleVisibility = .visible
+        titlebarAppearsTransparent = true
 
-        splitView.frame = contentRect
-        treeView.frame = NSRect(x: 0, y: 0, width: Self.treePaneWidth, height: height)
-        gridView.frame = NSRect(x: 0, y: 0, width: editorWidth, height: height)
-        splitView.addArrangedSubview(treeView)
-        splitView.addArrangedSubview(gridView)
-        // Pin the divider so the editor pane is exactly `editorWidth` at startup.
-        splitView.setPosition(Self.treePaneWidth, ofDividerAt: 0)
+        contentViewController = splitVC
 
-        contentView = splitView
-        makeFirstResponder(gridView)
+        // A minimal unified toolbar: the sidebar toggle and a tracking separator
+        // that stays aligned to the split divider. AppKit routes `.toggleSidebar`
+        // up the responder chain to the split VC (no wiring needed here).
+        let toolbar = NSToolbar(identifier: "WolfEditorToolbar")
+        toolbar.delegate = toolbarDelegate
+        toolbar.allowsUserCustomization = false
+        toolbarStyle = .unified
+        self.toolbar = toolbar
+
+        // Size the content so the editor pane is exactly `editorWidth` ×
+        // `editorHeight` BELOW the titlebar/toolbar chrome. `contentLayoutRect` is
+        // the area not obscured by the (now-attached) titlebar + toolbar, so the
+        // chrome height is the difference from the full content height.
+        let fullHeight = contentView?.bounds.height ?? editorHeight
+        let chrome = fullHeight - contentLayoutRect.height
+        setContentSize(
+            NSSize(
+                width: Self.treePaneWidth + divider + editorWidth,
+                height: editorHeight + chrome
+            )
+        )
+
+        // Pin the divider so the sidebar pane is exactly `treePaneWidth` wide.
+        splitVC.pinDivider()
+
+        initialFirstResponder = gridView
+    }
+}
+
+/// Vends the main window's minimal unified toolbar: the sidebar toggle, a tracking
+/// separator aligned to the split divider, and a flexible space. Retained by
+/// `MainWindow` because `NSToolbar.delegate` is weak.
+private final class EditorToolbarDelegate: NSObject, NSToolbarDelegate {
+    private weak var splitView: NSSplitView?
+
+    init(splitView: NSSplitView) {
+        self.splitView = splitView
+    }
+
+    private var identifiers: [NSToolbarItem.Identifier] {
+        [.toggleSidebar, .sidebarTrackingSeparator, .flexibleSpace]
+    }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        identifiers
+    }
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        identifiers
+    }
+
+    func toolbar(
+        _ toolbar: NSToolbar,
+        itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+        willBeInsertedIntoToolbar flag: Bool
+    ) -> NSToolbarItem? {
+        if itemIdentifier == .sidebarTrackingSeparator, let splitView {
+            return NSTrackingSeparatorToolbarItem(
+                identifier: .sidebarTrackingSeparator,
+                splitView: splitView,
+                dividerIndex: 0
+            )
+        }
+        // Let AppKit supply the standard `.toggleSidebar` and `.flexibleSpace`.
+        return nil
     }
 }

@@ -306,10 +306,17 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
         outlineView.delegate = self
         outlineView.target = self
         outlineView.action = #selector(handleClick)
-        outlineView.rowHeight =
-            NSLayoutManager().defaultLineHeight(for: font).rounded(.up)
+        // The standard macOS source-list look: `.sourceList` drives the sidebar
+        // row metrics and selection styling. The enclosing `.sidebar` split item
+        // supplies the vibrancy material, so the outline + scroll view draw a
+        // CLEAR background (no own `NSVisualEffectView` — that would double up the
+        // vibrancy). The synthetic cwd root stays a normal selectable/expandable
+        // row (no `isGroupItem` / group-row styling).
+        outlineView.style = .sourceList
+        outlineView.backgroundColor = .clear
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.drawsBackground = false
         scrollView.documentView = outlineView
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true

@@ -64,6 +64,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         window.center()
         window.makeKeyAndOrderFront(nil)
+        // Setting the content VC can move first responder; ensure the editor grid
+        // keeps it so launch keystrokes reach Neovim.
+        window.makeFirstResponder(gridView)
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
     }

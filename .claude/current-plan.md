@@ -1,5 +1,145 @@
 # Plan: macOS file-tree sidebar
 
+## PHASE 4 (standard macOS source-list sidebar) — STATUS: COMPLETE ✅ (manual smoke pending)
+
+Reviewer APPROVED, zero findings. Geometry traced: chrome cancels the provisional
+height so editor stays exactly 80×24 (window height += chrome AND grid pinned below
+safe area — composes without double-count); width = treePaneWidth+divider+editorWidth
+with divider pinned. holdingPriority left at factory default (editor absorbs resize).
+Toolbar delegate retained (weak .delegate); tracking separator bound to splitView
+dividerIndex 0; toggleSidebar routes up responder chain. Phase 1-2 tree logic
+untouched. Picker still a GridView subview; first responder → GridView on launch +
+after tree click. Docs accurate. Appearance (vibrancy/source-list/full-height/
+toolbar) is MANUAL-SMOKE only (no window server) — eyeball checklist in
+crates/wolf-macos/README.md. Nothing committed (standing rule).
+
+### Implementation result (coder) — BUILDS + TARGETS PASS
+
+Created `EditorSplitViewController.swift` (split VC + `HostViewController` with
+`pinTopToSafeArea` mode; sidebar item via `sidebarWithViewController:`,
+min/max 180/420 consts, holdingPriority left at factory default; content item
+default; `pinDivider()`). Reworked `MainWindow.swift` (added a private designated
+init the convenience init forwards to so the public signature is unchanged;
+`.fullSizeContentView` + transparent titlebar; `contentViewController` = split VC;
+`.unified` toolbar with RETAINED `EditorToolbarDelegate` vending toggleSidebar +
+`NSTrackingSeparatorToolbarItem(... dividerIndex:0)` + flexibleSpace; chrome =
+`contentView.bounds.height - contentLayoutRect.height`, `setContentSize`, then
+`pinDivider()`; `initialFirstResponder = gridView`). `FileTreeView.swift`:
+`.sourceList` style, `drawsBackground=false`, `backgroundColor=.clear`, removed
+explicit rowHeight; logic untouched. `AppDelegate.swift`: added
+`makeFirstResponder(gridView)` after `makeKeyAndOrderFront`. Docs updated
+(architecture.md, wolf-macos README + Sources/README), prettier-clean.
+
+Verbatim: `bazel build //crates/wolf-macos:Wolf` → Build completed successfully.
+wolf_core_lib_test / bridge_smoke / tree_search / WolfKeyMapTests /
+bundle_layout_test → all PASS. No SDK blockers, nothing downgraded. Appearance =
+manual smoke only (no window server).
+
+### Architect plan (authoritative)
+
+Convert the window content to an `NSSplitViewController` set as
+`window.contentViewController`, with a `.sidebar` split item (OS vibrancy +
+full-height) wrapping `FileTreeView` and a content split item wrapping `GridView`,
+under a transparent full-size-content-view titlebar + a minimal unified toolbar.
+macOS-only; no Rust/FFI/core/GNOME change → no new automated tests, NO test-writer.
+
+CREATE `EditorSplitViewController.swift`:
+- `final class EditorSplitViewController: NSSplitViewController`,
+  `init(treeView:gridView:)`. Sidebar item via
+  `NSSplitViewItem(sidebarWithViewController:)` (gives `.sidebar` behavior →
+  vibrancy/full-height/collapse). `canCollapse = true`; `minimumThickness`~180,
+  `maximumThickness`~420 (named `static let` consts). **DO NOT set holdingPriority
+  to .defaultLow** — the sidebar factory already raises it so the EDITOR pane
+  absorbs resizing (forcing low inverts it = regression). Content item via
+  `NSSplitViewItem(viewController:)`, default holdingPriority.
+  `splitViewItems = [sidebar, content]`. Helper to pin divider at
+  `treePaneWidth` (`setPosition(240, ofDividerAt: 0)`).
+- A `final class HostViewController: NSViewController` hosting an `NSView`:
+  sidebar host → `self.view = fileTreeView` (scrollview auto-insets under
+  titlebar); content host → pin `GridView` leading/trailing/bottom to host edges
+  and **top to `view.safeAreaLayoutGuide.topAnchor`** (so editor isn't under the
+  titlebar/toolbar), `translatesAutoresizingMaskIntoConstraints = false`.
+
+REWORK `MainWindow.swift` (keep `treePaneWidth=240`, keep convenience-init
+signature): styleMask add `.fullSizeContentView`; `titlebarAppearsTransparent =
+true`; `title="Wolf"`, `titleVisibility=.visible`; build
+`EditorSplitViewController`, `contentViewController = splitVC`; add minimal
+`NSToolbar` (`toolbarStyle=.unified`, delegate vends `.toggleSidebar`,
+`.sidebarTrackingSeparator` via `NSTrackingSeparatorToolbarItem(... splitView,
+dividerIndex:0)`, `.flexibleSpace`; RETAIN the delegate in a property — toolbar
+.delegate is weak). GEOMETRY: `editorWidth=cols*cellW`, `editorHeight=rows*cellH`;
+`chrome = contentView.bounds.height - contentLayoutRect.height`; `setContentSize(w:
+240+divider+editorWidth, h: editorHeight+chrome)`; then `setPosition(240,
+ofDividerAt:0)`. `initialFirstResponder = gridView`. Remove old plain-NSSplitView
+construction. `.toggleSidebar` routes up the responder chain to the split VC (no
+wiring).
+
+`FileTreeView.swift` (buildSubviews only; reveal/expand/bold/cwd logic UNTOUCHED):
+`outlineView.style = .sourceList`; `scrollView.drawsBackground = false`;
+`outlineView.backgroundColor = .clear`; do NOT wrap in own NSVisualEffectView
+(avoid double vibrancy); REMOVE the explicit `rowHeight` assignment (let
+.sourceList drive metrics); keep custom cell + `labelColor` text (vibrancy-correct)
++ bold-current logic; do NOT add group-row (`isGroupItem`) behavior (synthetic cwd
+root stays a normal selectable/expandable row).
+
+`AppDelegate.swift`: keep ALL existing wiring (wakes, tree.start, picker overlay on
+gridView, teardown order, MainWindow call unchanged); ADD `window.makeFirstResponder(
+gridView)` after `makeKeyAndOrderFront` (setting contentVC can move first
+responder).
+
+UNCHANGED: GridView/PickerView/CellMetrics/wakes/Cursor/Color/KeyMap/PickerSeam.
+GridView resize path still fires (AppKit lays out the content VC's view → Auto
+Layout resizes GridView); picker overlay still pinned to GridView.bounds.
+`wolf_macos_lib` globs `*.swift` → no BUILD edit.
+
+VERIFY (macOS host gate): `//crates/wolf-macos:Wolf` BUILDS (primary gate),
+`//crates/wolf-macos:WolfKeyMapTests`, `//crates/wolf-macos:bundle_layout_test`,
+`//crates/wolf-ffi:bridge_smoke`, `//crates/wolf-ffi:tree_search`,
+`//crates/wolf-core:wolf_core_lib_test` pass. Appearance = MANUAL SMOKE only
+(translucent full-height sidebar under titlebar, source-list selection, toolbar
+toggle + tracking separator aligned to divider, editor still ~80×24, picker
+overlays editor, tree click/reveal/expand + live-cwd work, first responder →
+editor so typing reaches nvim).
+
+DOCS: `architecture.md` (macOS phase status: contentViewController =
+NSSplitViewController with .sidebar source-list item, full-height vibrancy under
+transparent titlebar + minimal toolbar, editor pinned below titlebar keeps
+cols×rows), `crates/wolf-macos/README.md` + `Sources/README.md` (MainWindow,
+new EditorSplitViewController + host VC, FileTreeView .sourceList/clear bg,
+manual-smoke note). prettier. No core/ffi/gnome doc change.
+
+ORDER: EditorSplitViewController → FileTreeView tweaks → MainWindow rework →
+AppDelegate line → build Wolf + targets → docs + prettier → manual smoke.
+
+User wants the file-tree sidebar to have the STANDARD macOS source-list sidebar
+appearance, FULL/canonical scope (user-selected): translucent full-height sidebar
+extending under a transparent title bar, with the OS source-list material — the
+real Finder/Notes/Mail look, the Tahoe-blessed approach via
+`NSSplitViewController` + a `.sidebar` `NSSplitViewItem`.
+
+Current state: `MainWindow` builds a plain `NSSplitView` (isVertical, .thin
+divider) as `contentView`, sidebar `FileTreeView` (NSOutlineView in NSScrollView,
+default opaque bg, NOT `.sourceList` style) left at fixed `treePaneWidth = 240`,
+`GridView` right at `cols×cellWidth`. Picker overlay is a subview of `GridView`
+(floats over editor only). `AppDelegate` builds the window, registers
+WakeBridge/TreeWakeBridge/PickerWakeBridge, makes `GridView` first responder.
+
+Scope/risk: window-architecture change to MainWindow + AppDelegate; must RE-VALIDATE
+GridView geometry/sizing (the editor must keep its initial cols×rows; nvim grid
+size derives from GridView bounds) and the picker overlay placement. macOS-only;
+GNOME untouched. Window/VC glue is not headlessly testable (no window server) —
+manual smoke, like the rest of the UI.
+
+### Phase 4 checklist
+
+- [ ] Architect plan
+- [ ] Implementation + targets pass / Wolf builds
+- [ ] Review
+- [ ] Docs updated
+
+---
+
+
 ## PHASE 3 (soft-wrap) — STATUS: COMPLETE ✅ (Linux test run still outstanding)
 
 Implemented: `runtime/nvim/init.lua` → `opt.wrap = true` + `opt.linebreak = true`
