@@ -593,3 +593,89 @@ fn file_search_root_defaults_to_cfg_cwd_without_cd() {
     drop(search);
     core.shutdown().expect("shutdown should be Ok");
 }
+
+/// (11) The MRU SEED follows nvim's live cwd (the headline regression guard for
+/// the screenshot bug). Start the core in dir A, but `:cd` nvim into dir B, then
+/// open the picker. The seed must come from `<B>/.wolf` and its `display` must be
+/// RELATIVE to B (not an absolute path, and not relative to A). A's MRU must NOT
+/// leak into B's seed (per-project isolation), and the store must physically live
+/// at `<B>/.wolf/mru.sqlite`.
+///
+/// Dirs A and B are built with `temp_cwd` (canonicalized), exactly like the other
+/// `:cd` test, so B's absolute path types cleanly as `:cd` keystrokes and the
+/// relativized `display` strings line up.
+///
+/// NOTE to coder: this asserts the plan's READ-path behavior — `start_file_search`
+/// must seed from `<resolved-root>/.wolf` (resolved-root = nvim's live cwd), so the
+/// seed's `display` relativizes against the SAME dir the traversal lists.
+#[test]
+fn mru_seed_follows_nvim_cd() {
+    let _ = common::require_nvim_bin();
+    let (_dir_a, cwd_a) = temp_cwd();
+    let (_dir_b, cwd_b) = temp_cwd();
+
+    // B holds a NESTED recent file, recorded directly into B's store so it is in
+    // B's MRU before the core ever runs. A holds its own recent file in A's store;
+    // it must NOT appear once nvim is in B (per-project isolation).
+    let recent_b = cwd_b.join("sub").join("recent_b.md");
+    write_file(&recent_b, "b");
+    {
+        let store = MruStore::open(&cwd_b).expect("MruStore::open(B) should succeed");
+        store.record(&recent_b);
+    }
+
+    let recent_a = cwd_a.join("recent_a.md");
+    write_file(&recent_a, "a");
+    {
+        let store = MruStore::open(&cwd_a).expect("MruStore::open(A) should succeed");
+        store.record(&recent_a);
+    }
+
+    // Start nvim in A, retaining the waiter so we can confirm the `:cd` landed.
+    let (core, waiter) = start_core_in_with_waiter(&cwd_a);
+
+    // Drive `:cd <B>` one key at a time, mirroring the `:cd` root-follow test.
+    let path_b = cwd_b.to_str().expect("temp path B should be valid UTF-8");
+    core.send_input(common::ch(':'));
+    common::type_str(&core, "cd ");
+    common::type_str(&core, path_b);
+    core.send_input(common::key(Key::Enter));
+
+    // Wait for nvim to process the `:cd` and flush, so the seed resolves against B.
+    waiter.wait_for_flush(&core, common::FLUSH_TIMEOUT);
+
+    let (wake, wakes) = search_wake();
+    let search = core.start_file_search(wake);
+    let entries = poll_until_complete(&search, &wakes);
+
+    // The MRU entry's display must be RELATIVE to B (the core regression guard):
+    // exactly one entry equals `sub/recent_b.md`, carrying an mru_rank from the seed.
+    let nested = rel(&["sub", "recent_b.md"]);
+    let seeded: Vec<&FileEntry> = entries.iter().filter(|e| e.display == nested).collect();
+    assert_eq!(
+        seeded.len(),
+        1,
+        "the MRU seed must follow nvim's cwd (B) and show RELATIVE to B as {nested:?}; got {:?}",
+        displays(&entries)
+    );
+    assert!(
+        seeded[0].mru_rank.is_some(),
+        "the B-relative entry must carry an mru_rank (Some) — it came from B's MRU seed"
+    );
+
+    // A's MRU must not leak into B's seed.
+    assert!(
+        !displays(&entries).contains("recent_a.md"),
+        "A's MRU must NOT appear in B's seed (per-project isolation); got {:?}",
+        displays(&entries)
+    );
+
+    // The store physically lives at <B>/.wolf/mru.sqlite.
+    assert!(
+        cwd_b.join(".wolf").join("mru.sqlite").exists(),
+        "B's MRU store should live at <B>/.wolf/mru.sqlite"
+    );
+
+    drop(search);
+    core.shutdown().expect("shutdown should be Ok");
+}

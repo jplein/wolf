@@ -68,6 +68,25 @@ function _G.wolf_setup_current_file_tracking(chan)
 	vim.rpcnotify(chan, "wolf_current_file", vim.fn.expand("%:p"))
 end
 
+-- Directory tracking: wolf-core invokes this over RPC after ui_attach (and after
+-- the current-file / layout setups), passing its own RPC channel id. It registers
+-- a DirChanged autocmd (pattern '*', covering :cd/:lcd/:tcd) that notifies core of
+-- the new working directory via wolf_cwd, and emits once immediately so the startup
+-- cwd is reflected without a directory change. Core tracks this in a sibling cell
+-- (not the render snapshot) and uses it to pick the per-cwd MRU store.
+function _G.wolf_setup_dir_tracking(chan)
+	local group = vim.api.nvim_create_augroup("WolfDir", { clear = true })
+	vim.api.nvim_create_autocmd("DirChanged", {
+		group = group,
+		pattern = "*",
+		callback = function()
+			vim.rpcnotify(chan, "wolf_cwd", vim.fn.getcwd())
+		end,
+	})
+	-- Initial emit so the startup cwd is reflected without a :cd.
+	vim.rpcnotify(chan, "wolf_cwd", vim.fn.getcwd())
+end
+
 -- Split-panes layout overrides: wolf-core invokes this over RPC after ui_attach
 -- (and after current-file tracking), passing its own RPC channel id. The SHELL
 -- owns the pane layout, so Neovim's split/close/focus chords and the

@@ -1,280 +1,247 @@
-# Plan: File picker search root follows Neovim's cwd
+# Plan: MRU cache follows Neovim's current directory
 
 ## STATUS: COMPLETE ✅
 
-All layers implemented, 10/10 real-nvim tests green on the macOS Bazel host,
-reviewer APPROVED, docs reconciled (incl. the stale BUILD.bazel comments + tests
-README) and prettier-clean. Nothing committed (standing rule). Net effect: the
-picker now lists files from Neovim's live `getcwd()` — `:cd <dir>` inside the editor
-re-roots the picker — and the captive nvim now starts in `cfg.cwd`. Foundational for
-per-window/per-project cwd.
+Per-cwd MRU implemented; 13/13 real-nvim tests green on the macOS bazel host
+(incl. both headline read + write tests); reviewer APPROVED (no nits needing code
+changes; race/threading/isolation/relativization all confirmed sound); docs verified
+accurate by the reviewer + prettier-clean. Nothing committed (standing rule). Net: the
+picker's MRU entries are now relative to Neovim's live cwd and stored at
+`<nvim-cwd>/.wolf/mru.sqlite`, switching on `:cd`/`:lcd`/`:tcd` for both seeding and
+recording. Outstanding (host limitation): run the Linux `cargo fmt`/`clippy` gate to
+confirm formatting/lints (no cargo on the macOS host; code is rustfmt-clean by inspection).
 
 
 ## Problem statement
 
-The file picker's search root is currently the static `cwd` captured at startup
-(`CoreConfig.cwd` → `WolfCore.cwd`), set by the front-end from the process working
-directory. Under `bazel run //crates/wolf-macos:Wolf` that is the runfiles/bundle
-dir, so the picker lists bundle contents and is hard to evaluate.
+The file picker shows some MRU entries as ABSOLUTE paths (see user screenshot:
+`/Users/jplein/.../runtime/nvim/README.md` etc.) while traversal entries are
+relative. Root cause (the documented Decision-4 limitation, now being RESOLVED):
+the single `WolfCore.mru: MruStore` is opened ONCE at startup `CoreConfig.cwd`
+(the bundle/runfiles dir under `bazel run`), and `MruStore::recent()` relativizes
+stored paths against THAT cwd; files actually under Neovim's live cwd can't be
+relativized against the bundle dir → shown absolute.
 
-**Change:** `WolfCore::start_file_search` must resolve the traversal root by
-querying the captive Neovim's **current working directory** over RPC (live
-`getcwd()`), falling back to the configured `self.cwd` if the query fails or
-returns an unusable path. The picker then follows wherever Neovim is (`:cd`/`:lcd`/
-`:tcd`), which is foundational for future multi-window/multi-project support where
-each window's embedded Neovim owns its own cwd.
+The file-search ROOT already follows Neovim's live `getcwd()` (prior increment).
+Now the MRU store + relativization must follow the same cwd.
 
-## Scope / constraints
+### Requirements
+1. MRU entries' `display` must be **relative to Neovim's current directory**.
+2. When Neovim's cwd changes (`:cd`/`:lcd`/`:tcd`), the MRU cache in use must be
+   `<nvim-cwd>/.wolf/mru.sqlite` — for BOTH:
+   - **seeding** the picker (read, in `start_file_search`), and
+   - **recording** opened files (write, currently in the async input pump's
+     `InputEvent::Open` handling at api.rs:152-157).
 
-- Change is in **wolf-core** only (the search-root resolution inside
-  `start_file_search`). The FFI `start_file_search(&self)` signature is UNCHANGED,
-  so swift-bridge bindings need NO regeneration. Both front-ends (wolf-gnome,
-  wolf-macos) call `start_file_search` and benefit automatically.
-- **wolf-core stays GUI-free** (no new GUI dep).
-- Tests use a **real Neovim** (project policy): start core, `:cd` to a temp dir
-  seeded with known files, `start_file_search`, assert results come from the nvim
-  cwd, NOT the process cwd.
-- **MRU root question (keep tight):** `MruStore::open(&cfg.cwd)` still opens
-  `<cfg.cwd>/.wolf/mru.sqlite`, and the search seeds from `self.mru.recent()`. The
-  headline change is the SEARCH root following nvim's cwd. Architect: note the
-  resulting MRU/seed-vs-root mismatch and recommend the minimal correct handling
-  (e.g. keep MRU as-is for now and document, OR a small adjustment) — but do NOT
-  scope-creep into per-project MRU.
+### Approach (to be detailed by architect)
+Replace the single `WolfCore.mru: MruStore` (opened at cfg.cwd) with per-cwd
+resolution: a per-directory `MruStore` (e.g. a small cache keyed by canonical cwd,
+lazily opened at `<cwd>/.wolf/mru.sqlite`), used for both seeding and recording.
+
+### KEY DESIGN TENSION the architect MUST resolve decisively
+How the WRITE path (recording opens in the tokio input pump) learns nvim's current
+cwd:
+- (A) **Continuous tracking** of nvim's cwd into shared state via a `DirChanged`
+  autocmd → `wolf_cwd`-style notification (aligned with existing `current_file` /
+  `active_win` tracking; avoids an RPC per open; is the multi-window foundation), OR
+- (B) **On-demand resolution** (`block_on(getcwd)`) at each operation.
+Recommend and justify ONE.
+
+## Constraints
+- Change is in **wolf-core** (MRU store mgmt + file-search seed + input-pump record
+  + possibly cwd tracking via init.lua autocmd + redraw handler). **wolf-core stays
+  GUI-free.** The **FFI surface stays unchanged** (no swift-bridge regeneration).
+- Tests use a **real Neovim**: start core, `:cd` to a temp project dir, open a file,
+  reopen the picker, assert the MRU entry appears RELATIVE to nvim's cwd AND that the
+  store lives at `<nvim-cwd>/.wolf/mru.sqlite`.
+- Update existing tests (`crates/wolf-core/tests/{mru.rs, mru_open_records.rs,
+  file_search.rs}`) and docs (the Decision-4 limitation note in `architecture.md` +
+  the wolf-core READMEs is now RESOLVED, not deferred).
 
 ## Relevant code (confirmed by orchestrator)
+- `crates/wolf-core/src/api.rs`: `WolfCore.mru: MruStore` (field), opened at
+  `MruStore::open(&cfg.cwd)` (api.rs:111); cloned into the input pump
+  (`pump_mru = mru.clone()`, api.rs:140) which records opens (api.rs:152-157);
+  `mru_recent()` (api.rs:214); `start_file_search` seeds `FileSearchState::seeded(
+  self.mru.recent())` (api.rs:233) and roots the traversal at `resolve_search_root()`
+  (already follows nvim cwd). `WolfCore` also holds `runtime`, `nvim` (with
+  `nvim.current_dir()` getcwd helper added last increment), and `cwd` (fallback).
+- `crates/wolf-core/src/mru.rs`: `MruStore::open(&cwd)` → `<cwd>/.wolf/mru.sqlite`;
+  `recent()` relativizes `display` against the store's cwd (mru.rs:160-167);
+  `record(path)`. `MruStore` is Arc-backed/cheap to clone.
+- `crates/wolf-core/src/nvim.rs`: `setup_current_file_tracking` / `setup_layout`
+  show the init.lua autocmd → `rpcnotify` → redraw-handler pattern (for option A);
+  `NvimProcess::current_dir()` does no-arg `getcwd` (for option B). Neovim spawns in
+  `cfg.cwd` (set last increment).
+- `runtime/nvim/init.lua`: hosts `wolf_setup_current_file_tracking` /
+  `wolf_setup_layout` helpers (for an option-A `DirChanged` autocmd).
+- `crates/wolf-core/src/redraw.rs`: the `RedrawHandler` routes `wolf_*` notifications
+  into snapshot/state (for option A).
 
-- `crates/wolf-core/src/api.rs`:
-  - `WolfCore.cwd: PathBuf` (field), set from `cfg.cwd` in `start`.
-  - `start_file_search(&self, wake) -> FileSearch` (api.rs:227): roots the
-    traversal at `std::fs::canonicalize(&self.cwd)`, seeds `FileSearchState` from
-    `self.mru.recent()`, spawns `files::spawn_traversal(root, ...)` on
-    `self.runtime`.
-  - `WolfCore` holds `runtime: Runtime` and `nvim: NvimProcess` (`nvim.handle()`
-    gives a cloneable `Neovim` RPC handle). `start`/`shutdown` already use
-    `runtime.block_on`, so a brief blocking RPC from the main thread is an
-    established pattern.
-- `crates/wolf-core/src/nvim.rs`: generic untyped RPC via `nvim.call(method,
-  args)`. Neovim is spawned with NO `.current_dir()` (nvim.rs:302), so it inherits
-  the process cwd unless changed by `:cd`. `NvimProcess::handle()` → `Neovim`.
-  Existing helpers (`setup_current_file_tracking`, `setup_layout`) show the
-  `nvim_exec_lua` / `nvim_call`/`nvim_eval` patterns and error mapping
-  (`NvimError::Rpc`).
-- `crates/wolf-core/src/files.rs`: `spawn_traversal(root, state, cancel, wake,
-  handle)`; the root is the only directory input.
+## Orchestrator approval of architect's flagged items (ALL APPROVED)
 
-## Orchestrator approval of architect's flagged item
-
-**APPROVED — spawn the captive nvim in `cfg.cwd`** (companion change in `nvim.rs`).
-The architect correctly found that nvim is spawned with NO `.current_dir()`, so it
-inherits the PROCESS cwd (the crate dir under `cargo test`, the bundle under `bazel
-run`). Trusting `getcwd()` without this would (a) break all 8 existing
-`file_search.rs` tests and (b) be incoherent. Spawning nvim in `cfg.cwd` makes
-`getcwd()` == `cfg.cwd` at startup (tests pass unchanged) and the picker then
-follows `:cd`. This is the right, contained fix. Proceed.
+1. **Option A (continuous cwd tracking) for the WRITE path** — APPROVED. Decisive
+   justification: the input pump runs ON a tokio runtime worker thread, so
+   `block_on(getcwd)` there would PANIC ("cannot start a runtime from within a
+   runtime") — Option B is technically impossible for the write path. So a
+   `DirChanged` autocmd → `wolf_cwd` notification → shared `TrackedCwd` cell, read
+   synchronously by the pump.
+2. **READ path keeps `block_on(getcwd)` via `resolve_search_root`** — APPROVED. It
+   already resolves the canonical traversal root; reuse it for the MRU seed store so
+   the seed's `display` relativizes against the SAME dir the traversal lists
+   (relativization parity; avoids cell-vs-getcwd skew).
+3. **init.lua `wolf_setup_dir_tracking` + `wolf_cwd` notification** — APPROVED.
+4. **cwd tracked in a sibling `TrackedCwd` cell, NOT the `Snapshot`** — APPROVED (no
+   front-end consumes nvim cwd yet; promoting to Snapshot later is additive).
 
 ## APPROVED PLAN
 
-### Layer A — `crates/wolf-core/src/nvim.rs`
-1. Add `pub cwd: PathBuf` to `NvimConfig`; add a `cwd: PathBuf` param to `from_env`
-   and store it.
-2. In `spawn`, after the `cmd.arg(...).env(...)` chain, add `cmd.current_dir(&cfg.cwd);`
-   so the captive nvim starts in `cfg.cwd` instead of inheriting the process cwd.
-3. Add `pub async fn current_dir(&self) -> Result<PathBuf, NvimError>` on
-   `NvimProcess` (place with the other async RPC helpers): call
-   `nvim_call_function("getcwd", [])` (no-arg getcwd → honors window/tab-local cwd
-   of the current window). Two-layer error map to `NvimError::Rpc` (reuse the
-   variant). Extract via `Value::as_str`; if `None` or empty-after-trim → `Err(Rpc(..))`
-   so the caller's fallback engages; else `Ok(PathBuf::from(s))`.
+### Decision summary
+- Write path: Option A (tracked cell). Read path: keep `resolve_search_root()`
+  (block_on getcwd), reuse its result for the seed store. Both target nvim's live cwd.
+- Per-cwd MruStore cache replaces the single `WolfCore.mru`.
 
-### Layer B — `crates/wolf-core/src/api.rs`
-4. At the `NvimConfig::from_env(...)` call (api.rs:118), pass `cfg.cwd.clone()`.
-5. Add private `fn resolve_search_root(&self) -> PathBuf` (placed AFTER the pub
-   methods): `match self.runtime.block_on(self.nvim.current_dir())`:
-   - `Ok(p)` → `std::fs::canonicalize(&p).unwrap_or(p)` (follow nvim; keep nvim path
-     if canonicalize fails — getcwd success means a real dir).
-   - `Err(_)` → `tracing::warn!` then fall back to today's behavior:
-     `std::fs::canonicalize(&self.cwd).unwrap_or_else(|_| self.cwd.clone())`.
-   Canonicalization retained so the MRU canonical-path dedup invariant
-   (`FileSearchState::seeded`) holds.
-6. In `start_file_search`, replace the `let root = canonicalize(&self.cwd)...` line
-   with `let root = self.resolve_search_root();`. Keep `self.cwd` (it's the fallback
-   + MRU location).
-7. Update doc-comments: `CoreConfig.cwd` (api.rs:44) → "FALLBACK search root + MRU
-   location; live root is nvim's `getcwd()`"; `WolfCore.cwd` field (api.rs:96);
-   `start_file_search` (api.rs:218) → "rooted at nvim's live cwd, falling back to
-   the configured cwd."
+### `runtime/nvim/init.lua`
+- Add `_G.wolf_setup_dir_tracking(chan)`: augroup `WolfDir` (clear=true); a
+  `DirChanged` autocmd (pattern `*`, covers `:cd`/`:lcd`/`:tcd`) that
+  `rpcnotify(chan, "wolf_cwd", vim.fn.getcwd())`; PLUS one immediate emit at setup
+  (setup runs after VimEnter, like the other two helpers).
 
-**Threading:** `start_file_search` is sync on the UI/main thread;
-`runtime.block_on(self.nvim.current_dir())` is the same pattern as `start`/`shutdown`
-— one sub-ms getcwd round-trip, no snapshot-lock/input-pump contact, no deadlock.
+### `crates/wolf-core/src/nvim.rs`
+- Add `pub async fn setup_dir_tracking(&self) -> Result<(), NvimError>` mirroring
+  `setup_current_file_tracking` (get channel id via `nvim_get_api_info`, then
+  `nvim_exec_lua("wolf_setup_dir_tracking(...)", [chan])`).
 
-### Decision 4 — MRU/seed mismatch: LEAVE AS-IS + DOCUMENT (option a)
-The search still seeds from `self.mru.recent()` (rooted at `cfg.cwd`); when nvim's
-cwd differs, seeded MRU entries may be outside the new root and their `display`
-strings are relative to `cfg.cwd`. They still appear (MRU-first). ACCEPTED for this
-change (per-project MRU is out of scope). State it in the `start_file_search` doc +
-README so the reviewer reads it as intentional, NOT a defect. Do NOT filter/re-root
-the MRU now.
+### `crates/wolf-core/src/redraw.rs`
+- `pub type TrackedCwd = Arc<parking_lot::RwLock<Option<PathBuf>>>;` (sibling to
+  `IntentQueue`). `const CWD_EVENT: &str = "wolf_cwd";`. Add `cwd: TrackedCwd` field +
+  `RedrawHandler::new(...)` param. `handle_notify` arm `CWD_EVENT => self.apply_cwd(args)`
+  — NO wake (cwd isn't render state; `:cd` already flushes). `fn apply_cwd(&self, args)`
+  (sync): parse `args.first().and_then(Value::as_str)`; non-empty → store
+  `Some(canonicalize(p).unwrap_or(PathBuf::from(p)))`; empty/missing → leave unchanged.
+  Reads/writes a plain RwLock, never the snapshot lock (clone-out pattern to avoid
+  `significant_drop_in_scrutinee`).
 
-### NOT changed
-`files.rs`, `mru.rs`, `wolf-ffi`, both front-ends — `start_file_search(&self, wake)
--> FileSearch` signature unchanged ⇒ NO swift-bridge regeneration.
+### `crates/wolf-core/src/api.rs`
+- `type MruCache = Arc<Mutex<HashMap<PathBuf, MruStore>>>;` (parking_lot Mutex, keyed
+  by CANONICAL cwd). Free `fn mru_for(cache: &MruCache, cwd: &Path) -> Option<MruStore>`:
+  canonicalize key (same expr as `resolve_search_root`); return cached clone or
+  `MruStore::open(&key)` (insert + clone); on open failure `tracing::warn!` + return
+  `None` (GRACEFUL — never breaks picker/input). Hold the brief lock across the
+  synchronous open (never across `.await`).
+- `WolfCore`: REMOVE `mru: MruStore`; ADD `mru_cache: MruCache` + `tracked_cwd: TrackedCwd`;
+  KEEP `cwd` (fallback). 
+- `start`: remove eager `MruStore::open(&cfg.cwd)?`; create cache + cell; pass
+  `tracked_cwd.clone()` into `RedrawHandler::new`; after `setup_layout().await?` call
+  `proc.setup_dir_tracking().await?`; PRE-WARM `let _ = mru_for(&mru_cache, &cfg.cwd);`
+  (creates `<cfg.cwd>/.wolf` eagerly — preserves the `.wolf`-exists-after-start
+  invariant the tests rely on; graceful so `start` no longer fails with
+  `CoreError::Mru`). Pump: replace `pump_mru` with `pump_mru_cache` + `pump_tracked_cwd`
+  + `pump_fallback_cwd`; record into `mru_for(&cache, &(tracked_cwd.read().clone()
+  .unwrap_or(fallback)))` if `Some`.
+- `mru_recent`: read tracked cwd (fallback `self.cwd`) → `mru_for(...).map(recent)
+  .unwrap_or_default()`.
+- `start_file_search`: keep `let root = self.resolve_search_root();`; seed =
+  `mru_for(&self.mru_cache, &root).map(|s| s.recent()).unwrap_or_default()`; pass `root`
+  to `spawn_traversal`. Replace the Decision-4 limitation doc paragraph with: seed now
+  follows nvim's live cwd, from `<resolved-root>/.wolf`, root-relative displays.
+- Keep the `CoreError::Mru` variant (public API; just no longer produced by `start`).
 
-### Tests (real nvim) — extend `crates/wolf-core/tests/file_search.rs`
-- Regression gates: the 8 existing `file_search.rs` tests (proof the spawn-cwd
-  change works: nvim starts in cfg.cwd ⇒ getcwd()==cfg.cwd ⇒ assertions hold).
-  Also keep `current_file.rs`, `mru.rs`, `mru_open_records.rs`, `spawn.rs` green.
-- NEW test 1 (headline): two temp dirs A,B (canonicalized like `temp_cwd`). Seed B
-  with `alpha.md`/`beta.md`, A with sentinel `only_in_a.md`. Start core with
-  cfg.cwd=A. Drive `:cd <B>` via the SAME keystroke pattern `current_file.rs` uses
-  for `:e` (`send_input(':')`, `type_str("cd ")`, `type_str(<B>)`, `send_input(Enter)`)
-  then `wait_for_flush`. Use ASCII/space-free temp names so the path types literally.
-  Build the core inline (via `common::config_in`/`wake_channel`) to retain the
-  `FlushWaiter`. Then `start_file_search` + `poll_until_complete`; assert displays
-  CONTAIN alpha.md+beta.md and do NOT contain only_in_a.md (rooted at B = nvim cwd).
-- NEW test 2 (no-`:cd` ⇒ root is cfg.cwd): core in A seeded `gamma.md`, no `:cd`,
-  start_file_search, assert gamma.md listed, root is A. Documents the fallback.
-- Do NOT attempt a forced getcwd-RPC-failure test (would need a mock; violates the
-  no-mock policy). The empty/`Err` guard is covered by code review + test 2.
+### Decision: NO new exclusion / NO Snapshot field
+`.wolf/` is already excluded by the traversal (confirmed; tests #1/#4/#6 assert it);
+`MruStore::open` already `create_dir_all`s `<cwd>/.wolf`. cwd lives in `TrackedCwd`, not
+`Snapshot`.
 
-### Docs to reconcile afterward
-`architecture.md` "Output: file-search session"; `crates/wolf-core/README.md`
-(start_file_search bullet, CoreConfig.cwd paragraph, MRU-seed limitation note);
-`crates/wolf-core/src/README.md` (nvim.rs `current_dir` + spawn-cwd; api.rs/files.rs
-root wording). prettier --write all touched Markdown.
+### FFI / front-ends UNCHANGED
+`start_file_search` / `mru_recent` / `CoreConfig` signatures unchanged ⇒ NO swift-bridge
+regeneration. wolf-core stays GUI-free (only std + parking_lot + tracing; all present).
 
-### Implementation order (no breakage at any step)
-1. nvim.rs: NvimConfig.cwd + from_env param + `cmd.current_dir` + `current_dir()`.
-2. api.rs: pass cfg.cwd.clone() to from_env (now existing behavior preserved AND
-   nvim starts in cfg.cwd — regression gate satisfied before the picker trusts
-   getcwd).
-3. api.rs: resolve_search_root + use in start_file_search + doc-comments.
-4. Docs + prettier.
-5. (test-writer) extend file_search.rs with the two new tests.
+### Tests (real nvim)
+- UNCHANGED (must pass): `mru.rs` (MruStore API unchanged); `mru_open_records.rs::
+  open_records_file_in_mru` (no `:cd` ⇒ tracked cwd == cfg.cwd); `file_search.rs` #1–#10
+  (.wolf preserved by pre-warm; cfg.cwd seed store = same sqlite via lazy mru_for).
+- NEW `file_search.rs::mru_seed_follows_nvim_cd` (read/seed, HEADLINE): dirs A,B; in B
+  record nested `B/sub/recent_b.md` into B's store directly; in A record `A/recent_a.md`.
+  Start core in A, `:cd <B>` (keystrokes + wait_for_flush), start_file_search,
+  poll_until_complete. Assert: an entry with `display == rel(["sub","recent_b.md"])`
+  (RELATIVE to B — guards the screenshot bug) with `mru_rank.is_some()`; displays do NOT
+  contain `recent_a.md` (per-project isolation); `B/.wolf/mru.sqlite` exists.
+- NEW `mru_open_records.rs::open_after_cd_records_in_nvim_cwd_mru` (write): build core
+  inline retaining FlushWaiter (pull `common::{ch,key,type_str,wake_channel,config_in}`);
+  start in A, `:cd <B>`, wait; `send_input(InputEvent::Open { B/written.md })`; poll.
+  Assert `mru_recent()` (now B's store) contains `written.md` B-relative; `MruStore::open(
+  &B).recent()` contains it; `MruStore::open(&A).recent()` does NOT (wrote to B's store).
+- Graceful-open-failure left unasserted (hard to force on a real fs; the `None` +
+  `unwrap_or_default` is the guarantee).
 
-### Dependencies / lint
-No new crates; GUI-free rule unaffected; no Cargo/Bazel/flake change. Reuse
-`NvimError::Rpc` (no new variant); private helper after pub methods; `tracing::warn!`
-on the fallback path; no `#[allow]` expected.
+### Docs to reconcile
+`architecture.md` (resolve the Decision-4 limitation note; add `wolf_cwd` to the
+out-of-band tracking enumeration + MRU bullet); `crates/wolf-core/README.md`
+(`mru_recent`/`start_file_search`/`CoreConfig.cwd`; `start` no longer fails on initial
+MRU open); `crates/wolf-core/src/README.md` (api.rs MruCache/mru_for/tracked_cwd; nvim.rs
+setup_dir_tracking; redraw.rs wolf_cwd/CWD_EVENT/apply_cwd/TrackedCwd; mru.rs per-cwd
+note); `runtime/nvim/README.md` (wolf_setup_dir_tracking subsection);
+`crates/wolf-core/tests/README.md` (new tests). prettier --write touched Markdown.
 
-## Progress log
-- (orchestrator) Wrote problem statement; architect produced the plan; orchestrator
-  APPROVED the one flagged item (spawn nvim in cfg.cwd — mandatory + correct).
-  Next: test-writer (extend file_search.rs).
+### Implementation order (compiles at each step)
+1. redraw.rs (TrackedCwd, CWD_EVENT, field+new param, handle_notify arm, apply_cwd).
+2. nvim.rs (setup_dir_tracking).
+3. api.rs (imports, MruCache, mru_for, field swap, start incl. setup_dir_tracking call +
+   pre-warm + pump, mru_recent, start_file_search).
+4. init.lua (wolf_setup_dir_tracking) — needed before tests run.
+5. Docs.
+6. (test-writer) two new tests; then run full wolf-core integration suite (real nvim).
 
-## Tests written (test-writer) — extended `crates/wolf-core/tests/file_search.rs`
-- `start_core_in_with_waiter(cwd) -> (WolfCore, FlushWaiter)` — inline builder
-  mirroring `start_core_in` but retaining the waiter.
-- `file_search_root_follows_nvim_cd` (test 9): core in A, `:cd` to B via keystrokes
-  (`ch(':')`, `type_str("cd ")`, `type_str(path_b)`, `key(Enter)`) + `wait_for_flush`;
-  asserts displays contain alpha.md+beta.md, not only_in_a.md.
-- `file_search_root_defaults_to_cfg_cwd_without_cd` (test 10): core in A seeded
-  gamma.md, no `:cd`; asserts gamma.md listed (depends on nvim spawning in cfg.cwd).
-- Both drive only the PUBLIC surface; existing tests/helpers untouched (only appended;
-  added `Key` to the `use wolf_core::{...}` line).
-- RISK TO WATCH (coder verify): the tests assume `:cd <B><CR>` produces ≥1 redraw
-  flush after the baseline so `wait_for_flush` returns. If `:cd` doesn't reliably
-  flush, the coder must surface it (the flush-wait is the plan's prescribed sync
-  point). Coder must satisfy: `cmd.current_dir(&cfg.cwd)`, `NvimProcess::current_dir()`
-  via getcwd, `resolve_search_root` wired into `start_file_search`.
+### Approval / dependencies
+No new crate, no flake change, no FFI regen. Run `cargo fmt`/`cargo clippy` gate (Linux)
+and the bazel `//crates/wolf-core:file_search` rust_test (macOS host) — note: the write
+test lives in `mru_open_records.rs`, which has NO bazel rust_test target yet (only
+`file_search` does). Coder must wire a bazel rust_test for `mru_open_records` too (mirror
+`file_search`) OR run it via cargo on Linux — orchestrator will decide at coder step.
 
-## Implementation result (coder, round 1) — CODE DONE + COMPILES; TESTS NOT YET RUN
+## Tests written (test-writer)
+- `file_search.rs::mru_seed_follows_nvim_cd` (read/seed headline): A,B dirs; B records
+  nested `sub/recent_b.md`, A records `recent_a.md`; `:cd <B>`; assert one entry
+  `display==rel(["sub","recent_b.md"])` with `mru_rank.is_some()`, no `recent_a.md`,
+  `<B>/.wolf/mru.sqlite` exists. Reuses existing helpers (`start_core_in_with_waiter`,
+  `temp_cwd`, `rel`, `displays`, `poll_until_complete`). `mru_rank` via public field
+  `e.mru_rank: Option<u32>` (matches existing seed test).
+- `mru_open_records.rs::open_after_cd_records_in_nvim_cwd_mru` (write): broadened imports
+  (`InputEvent, Key, MruStore`), replicated local `temp_cwd` + `start_core_in_with_waiter`
+  + `has_display`; `:cd <B>`; `send_input(InputEvent::Open { B/written.md })`; assert
+  `mru_recent()` has `written.md` B-relative, `MruStore::open(&B).recent()` has it,
+  `MruStore::open(&A).recent()` does NOT.
+- Append-only; existing tests untouched; public API only. Both PASS only after the coder
+  lands per-cwd MRU + `wolf_cwd` tracking.
 
-Implemented all of Layer A (nvim.rs: `NvimConfig.cwd`, `from_env` param,
-`cmd.current_dir(&cfg.cwd)`, `current_dir()` getcwd helper) and Layer B (api.rs:
-from_env call, `resolve_search_root`, `start_file_search` uses it, doc-comments;
-Decision-4 MRU note). Docs updated + prettier'd. `start_file_search` signature
-byte-for-byte unchanged; FFI rebuilds; wolf-core GUI-free (no new dep).
+## Implementation result (coder) — ALL TESTS GREEN on the macOS bazel host
 
-Compile gate (what ran here): `bazel build //crates/wolf-core:wolf_core` PASS (recompiled,
-10 files), `bazel build //crates/wolf-ffi:wolf_ffi` PASS (no-op rebuild → signature
-unchanged confirmed).
+Implemented per plan: redraw.rs (`TrackedCwd`/`CWD_EVENT`/`apply_cwd` + field/param,
+no-wake), nvim.rs (`setup_dir_tracking`), api.rs (`MruCache`/`mru_for`/`tracked_cwd`,
+field swap, start incl. setup_dir_tracking call + pre-warm + pump record via tracked
+cwd, mru_recent, start_file_search seed from resolved root), init.lua
+(`wolf_setup_dir_tracking` DirChanged + immediate emit). Wired a NEW bazel
+`mru_open_records` rust_test (copy of `file_search`) so the write test runs here. Docs
+updated + prettier'd.
 
-VERIFICATION GAP: the cargo integration-test gate could NOT run on this aarch64-darwin
-host — no cargo/rustc toolchain, macOS devShell doesn't export WOLF_NVIM_BIN, and there
-is NO bazel rust_test target for wolf-core's integration tests. So the 8 existing + 2
-new `file_search` tests are UNEXECUTED. Coder's code-review belief: test 9's
-`:cd <B><CR>` flush wait should return (cmdline on grid 1 ⇒ ≥1 flush past baseline) and
-assertions should hold — but UNVERIFIED.
+Verbatim:
+- `bazel build //crates/wolf-core:wolf_core` PASS.
+- `bazel test //crates/wolf-core:file_search` → 11 passed, 0 failed (incl. headline
+  `mru_seed_follows_nvim_cd` + the prior 10).
+- `bazel test //crates/wolf-core:mru_open_records` → 2 passed, 0 failed
+  (`open_after_cd_records_in_nvim_cwd_mru` NEW + `open_records_file_in_mru` existing).
+- `bazel query kind(rust_test,...)` → only those two targets exist; `mru.rs`/
+  `current_file.rs` have no bazel target (run via cargo on Linux; unaffected — MruStore
+  API unchanged).
+- `bazel build //crates/wolf-ffi:wolf_ffi` PASS (FFI signatures unchanged, no regen).
 
-## Orchestrator decision: wire a bazel rust_test for wolf-core so the tests RUN here
+`wolf_cwd`/`DirChanged` worked first try (write test passing proves the pump's tracked
+cwd reached B; no wiring fix needed). wolf-core GUI-free (no new dep); `start_file_search`
+/`mru_recent`/`CoreConfig` signatures unchanged; `TrackedCwd`/`MruCache`/`mru_for` internal.
 
-APPROVED scope addition: mirror `//crates/wolf-ffi:bridge_smoke` to add a
-`//crates/wolf-core:file_search` (and reuse for the other wolf-core integration tests
-if cheap) `rust_test` that stages the pinned nvim (`//bazel/nvim:nvim_tree`) +
-`//runtime/nvim:init.lua` as runfiles (`WOLF_TEST_*` env, `tags=["no-sandbox"]`,
-`all_crate_deps(normal_dev=True)`), so the real-nvim file_search tests EXECUTE on the
-macOS bazel host. This is reusable verification infra (the BUILD.bazel comment that
-"tests need a pinned nvim not yet provisioned on macOS" is now resolvable). If
-crate_universe dev-deps for wolf-core aren't wired and this balloons, the coder reports
-back rather than rabbit-holing, and we fall back to Linux-deferred execution.
+CAVEAT (host limitation): cargo fmt/clippy NOT runnable on macOS (no cargo). Coder
+proactively rustfmt-formatted; the LINUX fmt/clippy gate must still confirm. The Lua LSP
+"undefined global vim" diagnostics are a pre-existing whole-file false positive (vim is a
+Neovim runtime global), NOT from this change.
 
-## Coder round 2 — bazel rust_test wired; harness gap blocks execution
-
-Added `//crates/wolf-core:file_search` `rust_test` (stages `//bazel/nvim:nvim_tree` +
-`//runtime/nvim:init.lua`; `deps = [":wolf_core"] + all_crate_deps(normal=True,
-normal_dev=True)` — the `normal=True` is REQUIRED because crate_universe drops a dep
-from the dev map when it's also a normal dep, so `tempfile` was missing with
-`normal_dev=True` alone). NO repin / lockfile / MODULE change needed. All 10 tests are
-discovered + RUN, but all fail at `WolfCore::start` with `Nvim(Spawn(NotFound))`:
-
-ROOT CAUSE (definitive): wolf-core's `tests/common/mod.rs` reads `WOLF_NVIM_BIN`
-LITERALLY (no runfiles resolution) and resolves init.lua from compile-time
-`CARGO_MANIFEST_DIR`. Under Bazel, `$(rootpath)` is runfiles-RELATIVE, and now that nvim
-is spawned with `current_dir(cfg.cwd)` (a temp dir), `Command::new(<relative>)` →
-NotFound. wolf-ffi's `bridge_smoke` works ONLY because ITS harness joins absolute
-`$TEST_SRCDIR` and reads `WOLF_TEST_INIT_LUA`/`WOLF_TEST_NVIM_DIR`. wolf-core's harness
-lacks both. Secondary: even with an absolute nvim bin, `CARGO_MANIFEST_DIR` init.lua is
-absent at runtime under Bazel → "Press ENTER" hang. There is NO BUILD-only fix.
-
-Test 9 flush outcome: NOT REACHED (dies before spawn). 8 existing tests: NOT VALIDATED.
-Also: wolf-core's harness PANICS (vs wolf-ffi's loud-skip) when nvim unresolved, so the
-new target FAILS under `bazel test //...` on macOS until the harness resolves nvim.
-
-## Orchestrator decision: test-writer ports wolf-ffi's runfiles resolution into wolf-core's common
-
-Route to TEST-WRITER (it's test code: `crates/wolf-core/tests/common/mod.rs`). Make the
-harness ADDITIVELY prefer the Bazel-staged absolute paths, mirroring
-`crates/wolf-ffi/tests/common/mod.rs` EXACTLY, WITHOUT breaking the cargo/Linux path
-(an explicit `WOLF_NVIM_BIN` must still win for cargo/devShell). This is the same,
-already-proven pattern — clean port, leaves wolf-core tests runnable on macOS.
-
-## Tests GREEN on the macOS Bazel host (coder round 3)
-
-`bazel test //crates/wolf-core:file_search --test_output=all` → `test result: ok. 10
-passed; 0 failed`. All 8 existing tests pass (proves nvim now spawns in cfg.cwd ⇒
-getcwd()==cfg.cwd at startup). Both new tests pass:
-- `file_search_root_follows_nvim_cd` (TEST 9, headline) — PASS; the `:cd <B><CR>`
-  flush-wait did NOT hang (flagged risk did not materialize). Picker follows nvim's cwd.
-- `file_search_root_defaults_to_cfg_cwd_without_cd` (test 10) — PASS.
-`bazel build //crates/wolf-ffi:wolf_ffi` still succeeds (signature unchanged). No
-implementation bugs surfaced; no test changes needed.
-
-## Review result (reviewer) — APPROVED WITH NITS (none blocking)
-
-Confirmed: fallback chain robust (always returns a valid path, never panics, logs
-the degraded path); threading safe (`block_on(current_dir())` same as start/shutdown,
-no snapshot-lock/input-pump contact, no deadlock); no-arg getcwd semantics correct
-(window/tab-local, always absolute) and right for the multi-window goal; Decision-4
-MRU limitation left as-is + documented (intentional); GUI-free preserved; FFI
-signature byte-for-byte unchanged (no regeneration); change confined to wolf-core +
-the test harness. New tests non-tautological. spawn-in-cfg.cwd present + correctly
-placed (nvim.rs:356).
-
-NITS (docs-only → route to technical-writer / Docs step):
-1. `crates/wolf-core/BUILD.bazel` has 3 STALE comment blocks contradicting reality:
-   lines ~5-7 ("no rust_test... tests need pinned nvim not yet provisioned on macOS"),
-   lines ~29-38 ("KNOWN BLOCKER... tests fail at WolfCore::start"), lines ~56-59
-   ("harness reads WOLF_NVIM_BIN directly / CARGO_MANIFEST_DIR"). All now FALSE — the
-   target exists, the harness was ported, tests are 10/10 GREEN. Remove/rewrite.
-2. `crates/wolf-core/tests/README.md` doesn't mention the new
-   `bazel test //crates/wolf-core:file_search` runfile-staged target nor the two
-   cwd-following tests (9/10). (crate README + src/README already updated by coder.)
-
-## Status
-- [x] Architect plan
-- [x] Tests written
-- [x] Implementation + tests passing (10/10 on macOS bazel host)
-- [x] Review (APPROVED WITH NITS — docs-only)
-- [x] Docs (BUILD.bazel stale comments fixed; tests/README.md updated; coder's
-      architecture.md/README.md/src/README.md edits verified accurate; prettier clean)
+## Status: AWAITING REVIEW

@@ -67,3 +67,32 @@ rust_test(
     # wolf-core's dependency tables), so the test would not see `tempfile`.
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
+
+# Real-nvim integration test for the record-on-open write path
+# (`InputEvent::Open` recorded into the per-cwd MRU store at nvim's live cwd).
+# An EXACT mirror of the `file_search` target above: drives a REAL pinned Neovim
+# (no mocks), stages the captive `init.lua` + the pinned nvim tree as runfiles,
+# reuses `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.
+rust_test(
+    name = "mru_open_records",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/mru_open_records.rs",
+    ],
+    crate_root = "tests/mru_open_records.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)

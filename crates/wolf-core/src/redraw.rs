@@ -33,6 +33,16 @@ use crate::render::{
 /// bump the snapshot `seq`.
 pub type IntentQueue = Arc<Mutex<VecDeque<LayoutIntent>>>;
 
+/// A shared cell holding the captive Neovim's current working directory.
+///
+/// Owned by [`crate::api::WolfCore`] and cloned into the [`RedrawHandler`], which
+/// writes it on each `wolf_cwd` notification (the `WolfDir` `DirChanged` autocmd
+/// in `runtime/nvim/init.lua`). It is a sibling of the render snapshot (NOT part
+/// of it): nvim's cwd is not render state, so updating it does not bump the
+/// snapshot `seq`. The input pump reads it synchronously to pick the per-cwd MRU
+/// store when recording opened files; `None` means "not yet reported".
+pub type TrackedCwd = Arc<parking_lot::RwLock<Option<PathBuf>>>;
+
 /// The front-end wake callback, invoked once per `flush` (after the lock drops).
 ///
 /// May run on a tokio worker thread, hence `Send + Sync`; the front-end is
@@ -55,22 +65,35 @@ const ACTIVE_WIN_EVENT: &str = "wolf_active_win";
 /// in `runtime/nvim/init.lua`. Routed separately from `redraw`.
 const LAYOUT_EVENT: &str = "wolf_layout";
 
+/// Name of the out-of-band notification carrying the captive Neovim's current
+/// working directory (`getcwd()`), emitted by the `WolfDir` `DirChanged` autocmd
+/// in `runtime/nvim/init.lua` (and once immediately at setup). Routed separately
+/// from `redraw` in [`RedrawHandler::handle_notify`] into the [`TrackedCwd`] cell.
+const CWD_EVENT: &str = "wolf_cwd";
+
 /// `nvim-rs` [`Handler`] that applies redraw batches to a [`SharedSnapshot`].
 #[derive(Clone)]
 pub struct RedrawHandler {
     snapshot: SharedSnapshot,
     intents: IntentQueue,
+    cwd: TrackedCwd,
     wake: WakeFn,
 }
 
 impl RedrawHandler {
     /// Creates a handler writing into `snapshot`, pushing layout intents onto
-    /// `intents`, and waking via `wake`.
+    /// `intents`, tracking nvim's cwd into `cwd`, and waking via `wake`.
     #[must_use]
-    pub fn new(snapshot: SharedSnapshot, intents: IntentQueue, wake: WakeFn) -> Self {
+    pub fn new(
+        snapshot: SharedSnapshot,
+        intents: IntentQueue,
+        cwd: TrackedCwd,
+        wake: WakeFn,
+    ) -> Self {
         Self {
             snapshot,
             intents,
+            cwd,
             wake,
         }
     }
@@ -116,6 +139,15 @@ impl Handler for RedrawHandler {
                     self.intents.lock().push_back(intent);
                 }
                 (self.wake)();
+            }
+            CWD_EVENT => {
+                // nvim's cwd is NOT render state, so there is intentionally NO
+                // wake here: the `:cd`/`:lcd`/`:tcd` that triggered this already
+                // produces its own redraw flush (and hence wake) through the
+                // normal `redraw` path. `apply_cwd` only updates the sibling
+                // `TrackedCwd` cell (a brief RwLock, no snapshot lock, no `seq`
+                // bump), which the input pump reads to pick the per-cwd MRU store.
+                self.apply_cwd(args);
             }
             _ => {}
         }
@@ -205,6 +237,30 @@ impl RedrawHandler {
         let mut snap = self.snapshot.write_async().await;
         snap.active_win = Some(win);
         // Lock drops here as `snap` goes out of scope at function return.
+    }
+
+    /// Applies a `wolf_cwd` notification: stores the captive nvim's reported
+    /// working directory in the sibling [`TrackedCwd`] cell.
+    ///
+    /// The first argument is `getcwd()` from the `WolfDir` `DirChanged` autocmd. A
+    /// non-empty value is canonicalized (to match the canonical cwds the MRU cache
+    /// keys on, falling back to the raw path if canonicalization fails) and stored;
+    /// an empty/missing value leaves the tracked cwd unchanged. The canonicalize is
+    /// done BEFORE taking the `RwLock` write guard, so the guard is held only for
+    /// the bare assignment (never across filesystem work) — this also sidesteps
+    /// `clippy::significant_drop_in_scrutinee`. This touches only the cwd cell, not
+    /// the snapshot lock, and does NOT bump `seq` (cwd is not a redraw frame).
+    fn apply_cwd(&self, args: Vec<Value>) {
+        let target: Option<PathBuf> = match args.first().and_then(Value::as_str) {
+            Some(p) if !p.is_empty() => {
+                Some(std::fs::canonicalize(p).unwrap_or_else(|_| PathBuf::from(p)))
+            }
+            // Empty/missing: leave the tracked cwd unchanged.
+            _ => None,
+        };
+        if let Some(target) = target {
+            *self.cwd.write() = Some(target);
+        }
     }
 }
 

@@ -290,6 +290,48 @@ impl NvimProcess {
         Ok(())
     }
 
+    /// Installs the directory-tracking autocmd inside the captive nvim.
+    ///
+    /// Mirrors [`setup_current_file_tracking`](Self::setup_current_file_tracking):
+    /// looks up this RPC channel's id via `nvim_get_api_info`, then calls the
+    /// `_G.wolf_setup_dir_tracking` helper (defined in `runtime/nvim/init.lua`)
+    /// over `nvim_exec_lua`, passing the channel id as a Lua vararg. The helper
+    /// registers a `DirChanged` autocmd (covering `:cd`/`:lcd`/`:tcd`) that
+    /// `rpcnotify`s `wolf_cwd` with `getcwd()`, and emits once immediately so the
+    /// startup cwd is reflected without a directory change.
+    pub async fn setup_dir_tracking(&self) -> Result<(), NvimError> {
+        let info = self
+            .nvim
+            .call("nvim_get_api_info", vec![])
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+        let chan = info
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(Value::as_i64)
+            .ok_or_else(|| {
+                NvimError::Rpc(format!(
+                    "nvim_get_api_info returned no channel id: {info:?}"
+                ))
+            })?;
+
+        let _ = self
+            .nvim
+            .call(
+                "nvim_exec_lua",
+                vec![
+                    Value::from("wolf_setup_dir_tracking(...)"),
+                    Value::Array(vec![Value::from(chan)]),
+                ],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+        Ok(())
+    }
+
     /// Cleanly shuts down: asks nvim to quit, awaits the io loop (bounded), then
     /// ensures the child is reaped.
     ///

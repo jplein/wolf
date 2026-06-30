@@ -9,8 +9,8 @@
 //! is plain calls that core hands to the tokio side to issue RPC. There is one
 //! wake callback, fired on `flush`; no per-event callbacks cross the boundary.
 
-use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,8 +24,46 @@ use crate::input::{self, InputEvent, Nvim};
 use crate::layout::LayoutIntent;
 use crate::mru::{FileEntry, MruError, MruStore};
 use crate::nvim::{self, NvimConfig, NvimError, NvimProcess};
-use crate::redraw::{IntentQueue, RedrawHandler, WakeFn};
+use crate::redraw::{IntentQueue, RedrawHandler, TrackedCwd, WakeFn};
 use crate::render::{OwnedSnapshotReadGuard, SharedSnapshot, Snapshot};
+
+/// A lazily-populated, per-cwd cache of [`MruStore`]s, keyed by CANONICAL cwd.
+///
+/// Replaces the single startup `MruStore`: both the picker seed (read) and the
+/// input pump's record (write) resolve the store for nvim's LIVE cwd through
+/// [`mru_for`], so the MRU follows `:cd`/`:lcd`/`:tcd`. A `parking_lot::Mutex`
+/// guards the map; its critical section spans only the synchronous
+/// [`MruStore::open`] and is never held across an `.await`.
+type MruCache = Arc<Mutex<HashMap<PathBuf, MruStore>>>;
+
+/// Resolves the [`MruStore`] for `cwd`, opening and caching it on first use.
+///
+/// The key is canonicalized with the SAME expression
+/// [`resolve_search_root`](WolfCore::resolve_search_root) uses (canonicalize,
+/// falling back to the raw path), so the seed store and the traversal root line up
+/// and the same canonical cwd maps to a single cached store. On a cache hit a cheap
+/// `Arc`-backed clone is returned; on a miss the store is opened at
+/// `<cwd>/.wolf/mru.sqlite`, inserted, and cloned. An open failure is logged via
+/// `tracing::warn!` and returns `None` (GRACEFUL — a cache hiccup never breaks the
+/// picker seed or the input pump). The brief map `Mutex` is held across the
+/// synchronous open but NEVER across an `.await`.
+fn mru_for(cache: &MruCache, cwd: &Path) -> Option<MruStore> {
+    let key = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let mut map = cache.lock();
+    if let Some(store) = map.get(&key) {
+        return Some(store.clone());
+    }
+    match MruStore::open(&key) {
+        Ok(store) => {
+            map.insert(key, store.clone());
+            Some(store)
+        }
+        Err(e) => {
+            tracing::warn!("failed to open MRU store at {}: {e}", key.display());
+            None
+        }
+    }
+}
 
 /// How long the input pump waits after the first event of a burst for siblings
 /// to enqueue, so a synchronous run of `send_input` calls coalesces into one
@@ -58,6 +96,11 @@ pub enum CoreError {
     #[error(transparent)]
     Nvim(#[from] NvimError),
     /// An error from the MRU cache layer.
+    ///
+    /// Retained as part of the public surface, but `start` no longer produces it:
+    /// the MRU store is now opened lazily per-cwd via [`mru_for`], which is
+    /// graceful (logs + returns `None`) rather than fatal, so a cache hiccup never
+    /// fails startup or the picker.
     #[error(transparent)]
     Mru(#[from] MruError),
 }
@@ -92,9 +135,18 @@ pub struct WolfCore {
     /// single consumer task in FIFO order, so keystrokes never reorder (which
     /// would garble typed text).
     input_tx: UnboundedSender<InputEvent>,
-    /// The most-recently-used file cache. Cloned (cheaply, it is `Arc`-backed)
-    /// into the input pump so opens record into it.
-    mru: MruStore,
+    /// The per-cwd MRU store cache. Both the picker seed (read) and the input
+    /// pump's record (write) resolve the store for nvim's LIVE cwd via [`mru_for`],
+    /// so the MRU follows `:cd`/`:lcd`/`:tcd`. Cloned (cheaply, it is `Arc`-backed)
+    /// into the input pump so opens record into the right per-cwd store.
+    mru_cache: MruCache,
+    /// The captive Neovim's live working directory, tracked out-of-band via the
+    /// `wolf_cwd` notification (the `WolfDir` `DirChanged` autocmd). Read
+    /// synchronously by the input pump to pick the per-cwd MRU store when recording
+    /// an opened file (`block_on(getcwd)` is impossible there — the pump runs on a
+    /// tokio worker thread). `None` until nvim first reports its cwd; the pump then
+    /// falls back to [`cwd`](Self::cwd).
+    tracked_cwd: TrackedCwd,
     /// The configured working directory: the file picker's FALLBACK search root
     /// and the MRU cache location. The live search root is the captive Neovim's
     /// `getcwd()` (see [`WolfCore::start_file_search`]); this path is used only
@@ -112,12 +164,21 @@ impl WolfCore {
             .build()
             .map_err(CoreError::Runtime)?;
 
-        let mru = MruStore::open(&cfg.cwd)?;
         let cwd = cfg.cwd.clone();
+
+        // Per-cwd MRU stores are opened lazily (graceful) instead of one eager
+        // open at cfg.cwd; `tracked_cwd` follows nvim's live cwd out-of-band.
+        let mru_cache: MruCache = Arc::new(Mutex::new(HashMap::new()));
+        let tracked_cwd: TrackedCwd = Arc::new(RwLock::new(None));
 
         let snapshot = SharedSnapshot::new(cfg.cols as usize, cfg.rows as usize);
         let intents: IntentQueue = Arc::new(Mutex::new(VecDeque::new()));
-        let handler = RedrawHandler::new(snapshot.clone_handle(), intents.clone(), wake);
+        let handler = RedrawHandler::new(
+            snapshot.clone_handle(),
+            intents.clone(),
+            tracked_cwd.clone(),
+            wake,
+        );
 
         let nvim_cfg = NvimConfig::from_env(cfg.init_lua, cwd.clone(), cfg.cols, cfg.rows)
             .map_err(CoreError::Nvim)?;
@@ -127,8 +188,14 @@ impl WolfCore {
             proc.ui_attach(cfg.cols, cfg.rows).await?;
             proc.setup_current_file_tracking().await?;
             proc.setup_layout().await?;
+            proc.setup_dir_tracking().await?;
             Ok::<NvimProcess, NvimError>(proc)
         })?;
+
+        // Pre-warm the MRU store for the configured cwd so `<cfg.cwd>/.wolf` exists
+        // right after start (preserving the ".wolf-exists-after-start" invariant the
+        // tests rely on). Graceful: a failed open is logged, not fatal.
+        let _ = mru_for(&mru_cache, &cfg.cwd);
 
         // Spawn the single ordered input consumer. It owns its own RPC handle and
         // applies events strictly in FIFO order, so keystrokes never reorder.
@@ -141,7 +208,9 @@ impl WolfCore {
         // on. A brief settle yield lets a synchronous burst fully enqueue first.
         let (input_tx, mut input_rx) = mpsc::unbounded_channel::<InputEvent>();
         let pump_nvim: Nvim = nvim.handle();
-        let pump_mru = mru.clone();
+        let pump_mru_cache = mru_cache.clone();
+        let pump_tracked_cwd = tracked_cwd.clone();
+        let pump_fallback_cwd = cwd.clone();
         runtime.spawn(async move {
             while let Some(first) = input_rx.recv().await {
                 // Let any siblings enqueued in the same synchronous burst arrive.
@@ -153,10 +222,21 @@ impl WolfCore {
                 }
                 input::apply_batch(&pump_nvim, &batch).await;
 
-                // Record every opened file in the MRU cache (fire-and-forget).
+                // Record every opened file in the per-cwd MRU store for nvim's LIVE
+                // cwd (the tracked cell, falling back to the configured cwd until
+                // nvim first reports). Resolving here, not at startup, makes the
+                // record path follow `:cd`/`:lcd`/`:tcd`. Reading the cell clones
+                // out the path so the brief RwLock guard is not held across the
+                // store resolution. Fire-and-forget; a None store is skipped.
                 for ev in &batch {
                     if let InputEvent::Open { path } = ev {
-                        pump_mru.record(path);
+                        let record_cwd = pump_tracked_cwd
+                            .read()
+                            .clone()
+                            .unwrap_or_else(|| pump_fallback_cwd.clone());
+                        if let Some(store) = mru_for(&pump_mru_cache, &record_cwd) {
+                            store.record(path);
+                        }
                     }
                 }
             }
@@ -168,7 +248,8 @@ impl WolfCore {
             snapshot,
             intents,
             input_tx,
-            mru,
+            mru_cache,
+            tracked_cwd,
             cwd,
         })
     }
@@ -214,9 +295,21 @@ impl WolfCore {
 
     /// Returns the most-recently-opened files (newest first), pruning any whose
     /// backing file no longer exists. See [`MruStore::recent`].
+    ///
+    /// The store is the one for nvim's LIVE cwd (the tracked cell, falling back to
+    /// the configured `cwd` until nvim first reports), so the entries' `display`
+    /// strings relativize against the same directory the picker is rooted at. A
+    /// failed store open is graceful (empty result).
     #[must_use]
     pub fn mru_recent(&self) -> Vec<FileEntry> {
-        self.mru.recent()
+        let cwd = self
+            .tracked_cwd
+            .read()
+            .clone()
+            .unwrap_or_else(|| self.cwd.clone());
+        mru_for(&self.mru_cache, &cwd)
+            .map(|s| s.recent())
+            .unwrap_or_default()
     }
 
     /// Starts a streaming file search rooted at the captive Neovim's live working
@@ -234,17 +327,21 @@ impl WolfCore {
     /// once more when `complete`. Dropping (or [`FileSearch::cancel`]-ing) the
     /// returned handle stops the traversal.
     ///
-    /// NOTE (intentional, documented limitation): the MRU seed is still taken from
-    /// `self.mru.recent()`, which is rooted at the CONFIGURED cwd, not the resolved
-    /// search root. When Neovim's cwd differs from the configured cwd, seeded MRU
-    /// entries may lie outside the search root and their `display` strings are
-    /// relative to the configured cwd. They still appear (MRU-first); per-project
-    /// MRU is out of scope for this change.
+    /// The MRU seed FOLLOWS Neovim's live cwd: it is taken from the per-cwd store
+    /// at `<resolved-root>/.wolf` (the SAME resolved search root the traversal uses,
+    /// via [`mru_for`]), so the seed's `display` strings relativize against exactly
+    /// the directory being listed (root-relative, never absolute, and never relative
+    /// to a stale configured cwd). When nvim is `:cd`'d into a different project, the
+    /// seed comes from that project's store — per-project MRU isolation. A failed
+    /// store open is graceful (empty seed).
     #[must_use]
     pub fn start_file_search(&self, wake: WakeFn) -> FileSearch {
         let root = self.resolve_search_root();
 
-        let state = Arc::new(RwLock::new(FileSearchState::seeded(self.mru.recent())));
+        let seed = mru_for(&self.mru_cache, &root)
+            .map(|s| s.recent())
+            .unwrap_or_default();
+        let state = Arc::new(RwLock::new(FileSearchState::seeded(seed)));
         let cancel = Arc::new(AtomicBool::new(false));
 
         files::spawn_traversal(
