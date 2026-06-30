@@ -490,10 +490,11 @@ impl FfiFileSearch {
     /// The top `max` ranked entries for `query` against the latest streamed
     /// search snapshot.
     ///
-    /// An empty `query` lists all known entries MRU-first; a non-empty `query`
-    /// keeps only case-insensitive subsequence matches, best-first (see
-    /// [`rank_matches`]). The snapshot read guard is held only for the duration of
-    /// the rank + clone and dropped before returning.
+    /// An empty (or all-whitespace) `query` lists all known entries MRU-first; a
+    /// non-empty `query` is tokenized on whitespace into terms and keeps only
+    /// entries where EVERY term is a case-insensitive subsequence (order-
+    /// independent), best-first (see [`rank_matches`]). The snapshot read guard is
+    /// held only for the duration of the rank + clone and dropped before returning.
     #[must_use]
     pub fn ranked(&self, query: String, max: usize) -> Vec<FfiFileEntry> {
         let Some(search) = &self.search else {

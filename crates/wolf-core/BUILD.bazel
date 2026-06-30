@@ -12,6 +12,20 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files(["Cargo.toml"])
 
+# wolf-core's LIBRARY unit tests: the `#[cfg(test)] mod tests` modules inside
+# `src/**` (e.g. rank.rs, layout.rs). These are PURE — no Neovim, no filesystem,
+# no GUI — so they need no runfiles and no `no-sandbox` tag. `crate = ":wolf_core"`
+# recompiles the library with `--test` so its in-module unit tests run. The
+# `normal_dev` deps are included so any dev-only test deps resolve.
+rust_test(
+    name = "wolf_core_lib_test",
+    crate = ":wolf_core",
+    size = "small",
+    edition = "2021",
+    proc_macro_deps = all_crate_deps(proc_macro = True, proc_macro_dev = True),
+    deps = all_crate_deps(normal = True, normal_dev = True),
+)
+
 rust_library(
     name = "wolf_core",
     srcs = glob(["src/**/*.rs"]),

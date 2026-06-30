@@ -83,11 +83,12 @@ const PICKER_QUERY: &str = "picker";
 //
 // Deterministic row order (no MRU yet, so order is purely the rank function):
 // both files are created fresh in the temp cwd, so neither is in the MRU cache —
-// `mru_group`/`mru_rank` tie. With query `pick`, the matched span is the literal
-// prefix `pick` of the single filename word (`pick1` / `pick2` — the filename is
-// split on `.` so the word before the extension is `pick1` / `pick2`). For both:
-//   - prefix_group: `pick` is a strict prefix of the word => tie (0)
-//   - word_index: matched word is the first/only word => tie (0)
+// `mru_group`/`mru_rank` tie. With query `pick`, both `pick1.md` and `pick2.md`
+// score identically: the single path component (`pick1.md` / `pick2.md`) starts
+// with `pick` (+100), the word before the extension (`pick1` / `pick2`) starts
+// with `pick` (+20), and `pick` is a contiguous substring (+4) => 124 each. The
+// later keys also tie, so the lexicographic `display` tiebreak decides:
+//   - score: 124 => tie
 //   - match_start: 0 => tie
 //   - span: `pick` is contiguous, last-first => tie
 //   - display.len: `pick1.md` and `pick2.md` are equal length => tie
