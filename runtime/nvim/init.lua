@@ -41,8 +41,13 @@ opt.laststatus = 0
 -- Forward mouse to Neovim; the front-end translates OS mouse events to input.
 opt.mouse = "a"
 
--- No soft-wrap so test column assertions are deterministic.
-opt.wrap = false
+-- Soft-wrap long lines at WORD BOUNDARIES: Wolf is a Markdown editor, where prose
+-- lines routinely exceed the editor width. `wrap` is also nvim's own default;
+-- `linebreak` makes the wrap fall on spaces/punctuation (`breakat`) instead of
+-- mid-word. Determinism-sensitive rendering tests keep their asserted content
+-- within the grid width, so this does not affect their column assertions.
+opt.wrap = true
+opt.linebreak = true
 
 -- Treat opened files as markdown by default (Wolf is a Markdown editor).
 vim.filetype.add({ extension = { md = "markdown" } })

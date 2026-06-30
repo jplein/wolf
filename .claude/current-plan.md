@@ -1,5 +1,88 @@
 # Plan: macOS file-tree sidebar
 
+## PHASE 3 (soft-wrap) — STATUS: COMPLETE ✅ (Linux test run still outstanding)
+
+Implemented: `runtime/nvim/init.lua` → `opt.wrap = true` + `opt.linebreak = true`
+(word-boundary soft-wrap) with updated comment; `runtime/nvim/README.md` updated
+(dropped the wrap=false/deterministic clause, added a soft-wrap bullet), prettier
+clean. macOS Bazel targets all PASS: bridge_smoke, file_search, tree_search,
+wolf_core_lib_test, WolfKeyMapTests, bundle_layout_test; `//crates/wolf-macos:Wolf`
+builds. OUTSTANDING (Linux/Cargo-only, not runnable on this macOS host): the
+real column-determinism tests `crates/wolf-core/tests/{redraw_grid,save_open}.rs`
+(`cargo test -p wolf-core`) + gnome OCR/paint tests `crates/wolf-gnome/tests/*` —
+static analysis says they pass; Linux run is the authoritative gate. The Lua-LSP
+"undefined global `vim`" warnings are pre-existing/spurious (nvim runtime global),
+unrelated to this change. Nothing committed (standing rule).
+
+### Architect result — no test depends on wrap=false; enable globally (coder-only)
+
+Thorough test-impact analysis: the determinism risk only arises when a single
+logical line EXCEEDS the ~80-col grid AND is asserted positionally. NO such test
+exists — every grid-asserting test (`redraw_grid.rs` incl. the 41-char
+`grid_line_repeat_expansion`, `save_open.rs`, `redraw_multigrid.rs`, gnome
+`smoke_headless.rs`/`roundtrip_nvim.rs`, all FFI tests) keeps content within the
+width or uses loose `contains`/synthetic grids. So Option (a): enable globally, NO
+per-test override, NO test-writer. The old determinism was from the test CONTENT,
+not from wrap=false.
+
+EXACT EDIT — `runtime/nvim/init.lua` replace lines 44-45 (`-- No soft-wrap...` +
+`opt.wrap = false`) with `opt.wrap = true` + `opt.linebreak = true` and a comment
+explaining word-boundary soft-wrap for a Markdown editor (+ note that
+determinism-sensitive tests keep content within grid width).
+
+DOCS — only `runtime/nvim/README.md` line ~20 documents the option: drop the
+"wrap = false so test column assertions are deterministic" clause and add a
+soft-wrap (word boundaries) bullet. prettier --write. No other doc matches the
+editor `wrap` option (other "wrap" hits = wrapNeovim/Nix or the cmdline strip).
+
+VERIFY (macOS Bazel host): `//crates/wolf-ffi:bridge_smoke`,
+`//crates/wolf-ffi:file_search`, `//crates/wolf-ffi:tree_search`,
+`//crates/wolf-core:wolf_core_lib_test`, `//crates/wolf-macos:WolfKeyMapTests`,
+`//crates/wolf-macos:bundle_layout_test`, `//crates/wolf-macos:Wolf` build.
+FLAG (Linux/Cargo-only, NOT runnable here): the real column-determinism tests
+`crates/wolf-core/tests/redraw_grid.rs` + `save_open.rs` (run `cargo test -p
+wolf-core`) and the gnome OCR/paint tests (`crates/wolf-gnome/tests/*`). Static
+analysis says they pass; the Linux run is the authoritative gate — outstanding
+cross-platform verification item.
+
+User report: long lines don't wrap when viewing a file (e.g.
+`crates/wolf-gnome/README.md`). Diagnosis (confirmed): geometry IS passed
+correctly — `GridView.gridSize` (`GridView.swift:47`) maps its own bounds (the
+visible editor pane, right side of the Phase-1 NSSplitView) to `(cols, rows)` and
+calls `handle.resize`. The cause is `runtime/nvim/init.lua:44-45`: `opt.wrap =
+false` ("No soft-wrap so test column assertions are deterministic"). nvim's own
+default is `wrap = true`.
+
+DECISION (user): re-enable soft-wrap at WORD BOUNDARIES → `opt.wrap = true` +
+`opt.linebreak = true`.
+
+Key considerations for the architect:
+- `runtime/nvim/init.lua` is SHARED by both front-ends (gnome + macos) — this
+  change affects both (consistent + desirable for a Markdown editor).
+- It reverses a documented test-determinism choice. The architect MUST identify
+  precisely which tests rely on `wrap = false` (candidates: gnome OCR smoke tests
+  `crates/wolf-gnome/tests/*`, `crates/wolf-ffi/tests/bridge_smoke.rs`, any test
+  asserting text at specific grid rows/cols with long lines) and decide the
+  strategy: (a) enable globally and confirm tests still pass (they may, if they
+  type only short text), or (b) keep `wrap=false` in the affected TEST contexts
+  via a local override (e.g. the test sets `:set nowrap` / `nvim_set_option` at
+  start, or a test-only init) so determinism is preserved WITHOUT forcing the
+  product default off. Prefer the option that keeps the product default
+  (wrap on) while keeping tests deterministic.
+- Update the `init.lua` comment to reflect the new rationale, and any doc that
+  describes the captive nvim's wrap behavior.
+
+### Phase 3 checklist
+
+- [ ] Architect plan
+- [ ] Tests written/adjusted (if needed)
+- [ ] Implementation + tests passing
+- [ ] Review
+- [ ] Docs updated
+
+---
+
+
 ## PHASE 2 (follow-up fixes) — STATUS: COMPLETE ✅
 
 Reviewer APPROVED, zero findings (no BLOCKER/SHOULD-FIX/NIT). Verified: `live_cwd`

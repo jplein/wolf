@@ -17,7 +17,8 @@ What it sets and why:
 - **Hermetic / no on-disk side effects** — `swapfile = false`, `shadafile = "NONE"`, `undofile = false`, `backup = false`, `writebackup = false`. The captive editor must never touch the user's state.
 - **Clean initial grid** — `shortmess += "I"` suppresses the intro message so it does not pollute the first frame.
 - **True color** — `termguicolors = true`, so `hl_attr_define` / `default_colors_set` carry RGB values the front-ends paint directly.
-- **Chrome-free, deterministic grid** — `number = false`, `signcolumn = "no"`, `ruler = false`, `showcmd = false`, `laststatus = 0` (the front-end draws its own chrome); `wrap = false` so test column assertions are deterministic.
+- **Chrome-free, deterministic grid** — `number = false`, `signcolumn = "no"`, `ruler = false`, `showcmd = false`, `laststatus = 0` (the front-end draws its own chrome).
+- **Soft-wrap (word boundaries)** — `wrap = true` with `linebreak = true`, so long Markdown lines wrap at spaces/punctuation rather than running off-screen or breaking mid-word. Determinism-sensitive rendering tests keep their content within the grid width, so column assertions stay stable.
 - **Mouse** — `mouse = "a"`; the front-end translates OS mouse events into core input, which forwards them to Neovim.
 - **Markdown** — `.md` files are mapped to the `markdown` filetype, and `syntax on` enables built-in syntax highlighting so the grid carries varied `hl_id`s.
 
