@@ -92,11 +92,14 @@ fn frame_text(frame: &FfiFrame) -> String {
 
 #[test]
 fn bridge_smoke() {
-    // Loud SKIP (no-op pass) when WOLF_NVIM_BIN is unset; nvim itself is located
-    // from the env inside wolf-core, so we only need to gate on its presence.
-    if common::nvim_bin_or_skip().is_none() {
+    // Loud SKIP (no-op pass) when no pinned nvim is available. Otherwise export the
+    // resolved binary as `WOLF_NVIM_BIN` so wolf-core (which locates nvim only via
+    // that env var) launches it — the resolved path may come from an explicit
+    // `WOLF_NVIM_BIN` (cargo/devShell) or the Bazel-staged tree.
+    let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
-    }
+    };
+    std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
     let init_lua = common::init_lua_path();
     let cwd = common::fresh_cwd();
@@ -176,34 +179,39 @@ fn bridge_smoke() {
     );
 
     // --- Resize: dims update to the new request -----------------------------
+    // `resize` drives the GLOBAL UI size (`nvim_ui_try_resize`). Under
+    // `ext_multigrid` the ACTIVE WINDOW grid (what `read_frame` reports) is the
+    // requested WIDTH exactly, but the requested HEIGHT MINUS the cmdline row(s):
+    // with `laststatus=0` there is no statusline, leaving ~1 cmdline line, so the
+    // window grid is `RESIZE_ROWS - 1` (allow a small tolerance for chrome).
+    const MIN_RESIZE_ROWS: u16 = RESIZE_ROWS - 2;
     handle.resize(RESIZE_COLS, RESIZE_ROWS);
 
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut resized = handle.read_frame();
     while Instant::now() < deadline {
         resized = handle.read_frame();
-        if resized.cols() == RESIZE_COLS && resized.rows() == RESIZE_ROWS {
+        if resized.cols() == RESIZE_COLS && resized.rows() >= MIN_RESIZE_ROWS {
             break;
         }
         sleep(POLL_INTERVAL);
     }
+    let rcols = resized.cols();
+    let rrows = resized.rows();
     assert_eq!(
-        resized.cols(),
-        RESIZE_COLS,
-        "frame cols should update after resize (got {})",
-        resized.cols()
+        rcols, RESIZE_COLS,
+        "active-window grid width should match the requested UI width (got {rcols})"
     );
-    assert_eq!(
-        resized.rows(),
-        RESIZE_ROWS,
-        "frame rows should update after resize (got {})",
-        resized.rows()
+    assert!(
+        (MIN_RESIZE_ROWS..=RESIZE_ROWS).contains(&rrows),
+        "active-window grid height ({rrows}) should be the requested UI height \
+         ({RESIZE_ROWS}) minus the cmdline row(s)"
     );
-    // The cells Vec must stay consistent with the new dims.
+    // The cells Vec must stay consistent with the ACTUAL (post-chrome) dims.
     assert_eq!(
         resized.cells().len(),
-        RESIZE_COLS as usize * RESIZE_ROWS as usize,
-        "cells() should track the resized grid dimensions"
+        rcols as usize * rrows as usize,
+        "cells() should track the resized grid dimensions ({rcols}x{rrows})"
     );
 
     // --- Shutdown: clean teardown -------------------------------------------

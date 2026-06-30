@@ -13,13 +13,28 @@ Verification all green (structure + exec bits + codesign --verify --deep --stric
 untouched). Reviewer APPROVED; docs reconciled + prettier. Nothing committed
 (standing rule).
 
-OPEN FOLLOW-UPS (NOT done; surfaced to user):
-- IMPORTANT: `//crates/wolf-ffi:bridge_smoke` hangs on the macOS Bazel host vs a
-  real nvim (pre-existing, host-wide; reproduces against system nvim too). The
-  live nvim→FFI→read_frame round-trip is therefore not yet verified green on
-  macOS. Needs a focused investigation (FFI wake/read pump on macOS vs the test
-  poll loop vs Bazel-sandbox subprocess handling; try outside the sandbox + hard
-  timeout + tracing).
+RESOLVED FOLLOW-UP — bridge_smoke hang (FIXED ✅):
+- Root cause (pinpointed via stack-sampling the hung process): the test resolved
+  `runtime/nvim/init.lua` from `env!("CARGO_MANIFEST_DIR")`, an EPHEMERAL Bazel
+  sandbox path absent at runtime → nvim launched `-u <missing init.lua>` →
+  blocked forever on the "Press ENTER" (`wait_return`) prompt → `WolfCore::start`
+  RPC never returned. NOT a sandbox artifact, NOT an FFI/product bug (it
+  reproduced unsandboxed; the app bundles a readable init.lua so was never
+  affected). A secondary off-by-one in the resize assertion (active window grid =
+  UI height − cmdline row under ext_multigrid) also surfaced once it ran.
+- Fix (test+build only; wolf-core/app UNCHANGED): the `bridge_smoke` rust_test
+  now STAGES `//runtime/nvim:init.lua` + `//bazel/nvim:nvim_tree` as runfiles
+  (`data` + `$(rootpath)` env `WOLF_TEST_INIT_LUA`/`WOLF_TEST_NVIM_DIR`), resolved
+  by `common::{init_lua_path,nvim_bin_or_skip}` (explicit `WOLF_NVIM_BIN` still
+  wins for cargo/devShell); the test exports the resolved bin into `WOLF_NVIM_BIN`
+  for wolf-core; runs `tags=["no-sandbox"]`, `size="small"`; resize assertion
+  corrected to width-exact + height∈[ROWS-2,ROWS]. Result: `bazel test
+  //crates/wolf-ffi:bridge_smoke` PASSES (~0.2s), exercising the FULL live
+  round-trip (start→type i,x→grid shows x→resize→shutdown) against the pinned
+  nvim 0.12.3 — hermetically, on every run. The live nvim→FFI round-trip is now
+  COVERED by a passing automated test on the macOS Bazel host. Reviewer APPROVED;
+  stale "hang/unverified" docs corrected + prettier'd. Full regression green;
+  wolf-core `git status` empty.
 - NITs (test-writer, optional): nvim_version_test.sh has the version in two
   places (EXPECTED_VERSION msg + the grep pattern) — unify to one source;
   trim the stale `# NOTE to coder:` scaffolding comments from both .sh tests.

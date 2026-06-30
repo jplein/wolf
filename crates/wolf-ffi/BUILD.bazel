@@ -92,10 +92,29 @@ rust_test(
         "tests/common/mod.rs",
     ],
     crate_root = "tests/bridge_smoke.rs",
+    # Spawning a real nvim child (exec + writing its XDG temp dirs) does not work
+    # under the macOS build sandbox, so run this test unsandboxed. `no-sandbox`
+    # (vs `local`) keeps Bazel test-result caching, which is keyed on the staged
+    # nvim/init.lua inputs.
+    tags = ["no-sandbox"],
+    # Bounded by two 10s FLUSH_TIMEOUTs + nvim startup; runs in ~0.2s.
+    size = "small",
     edition = "2021",
-    # The test names `wolf_ffi::{...}` and drives a real nvim when WOLF_NVIM_BIN is
-    # set, loudly skipping otherwise. WOLF_NVIM_BIN is read from the environment at
-    # runtime (not provisioned on the macOS Bazel host).
+    # Drive a REAL pinned Neovim through the bridge (no mocks). The captive
+    # `init.lua` and the pinned nvim tree are staged as runfiles and passed by
+    # runfiles-relative path; `common::{init_lua_path,nvim_bin_or_skip}` resolve
+    # them (an explicit `WOLF_NVIM_BIN` still wins for the cargo/devShell path).
+    # Staging `init.lua` is what fixes the former hang: under Bazel,
+    # `CARGO_MANIFEST_DIR` is an ephemeral sandbox path, so nvim could not read its
+    # init and blocked on a "Press ENTER" prompt forever.
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 

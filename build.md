@@ -12,8 +12,7 @@ This covers building and testing Wolf. On Linux (NixOS) the `wolf-core` Rust cor
 
 ### Activating the dev environment
 
-The repo ships an `.envrc` that runs `use flake` (on Linux and on macOS).
-Activate it once per checkout:
+The repo ships an `.envrc` that runs `use flake` (on Linux and on macOS). Activate it once per checkout:
 
 ```sh
 direnv allow
@@ -21,18 +20,12 @@ direnv allow
 
 This enters the flake devShell, which provides:
 
-- the **pinned Rust toolchain** (stable, with `rust-src`, `rust-analyzer`,
-  `clippy`, `rustfmt`), and
-- a **pinned, hermetic `nvim`** binary, exported as the environment variable
-  **`WOLF_NVIM_BIN`**.
+- the **pinned Rust toolchain** (stable, with `rust-src`, `rust-analyzer`, `clippy`, `rustfmt`), and
+- a **pinned, hermetic `nvim`** binary, exported as the environment variable **`WOLF_NVIM_BIN`**.
 
-`WOLF_NVIM_BIN` is the **only** way core and its tests locate Neovim. Core never
-falls back to `PATH` and never scans `/nix/store`. If the variable is unset or
-empty, `WolfCore::start` fails with `NvimError::BinNotSet` and the integration
-tests panic loudly rather than skip.
+`WOLF_NVIM_BIN` is the **only** way core and its tests locate Neovim. Core never falls back to `PATH` and never scans `/nix/store`. If the variable is unset or empty, `WolfCore::start` fails with `NvimError::BinNotSet` and the integration tests panic loudly rather than skip.
 
-Do not use a system `cargo`/`rustc`/`nvim`. The toolchain and the Neovim binary
-are pinned by `flake.nix`; all builds and tests must run inside the devShell.
+Do not use a system `cargo`/`rustc`/`nvim`. The toolchain and the Neovim binary are pinned by `flake.nix`; all builds and tests must run inside the devShell.
 
 ### Building
 
@@ -46,14 +39,9 @@ cargo build        # builds the whole workspace
 cargo test         # unit + integration tests for wolf-core
 ```
 
-The integration tests spawn the **pinned** Neovim (via `WOLF_NVIM_BIN`) as a
-real child process — there are no mocks, per the project's testing policy. They
-are fully **headless**: `nvim --embed` speaks msgpack-RPC over stdio and needs no
-TTY, so the suite is CI-safe. The tests fail loudly (they do not silently pass)
-if `WOLF_NVIM_BIN` is unset.
+The integration tests spawn the **pinned** Neovim (via `WOLF_NVIM_BIN`) as a real child process — there are no mocks, per the project's testing policy. They are fully **headless**: `nvim --embed` speaks msgpack-RPC over stdio and needs no TTY, so the suite is CI-safe. The tests fail loudly (they do not silently pass) if `WOLF_NVIM_BIN` is unset.
 
-You can also run the headless smoke example, which starts the core, types a
-little text, and dumps the resulting grid:
+You can also run the headless smoke example, which starts the core, types a little text, and dumps the resulting grid:
 
 ```sh
 cargo run -p wolf-core --example grid_dump
@@ -147,23 +135,21 @@ To **bump the pinned Neovim version**:
 bazel test //bazel/nvim:nvim_version_test        # execs the bundled pinned nvim
 bazel test //crates/wolf-macos:bundle_layout_test # asserts the .app resource layout
 bazel test //crates/wolf-ffi:frame_pack          # headless, deterministic
-bazel test //crates/wolf-ffi:bridge_smoke        # real nvim; see the note below
+bazel test //crates/wolf-ffi:bridge_smoke        # real nvim, live round-trip; see the note below
 bazel test //crates/wolf-macos:WolfKeyMapTests   # pure Swift key translation
 ```
 
 - `//bazel/nvim:nvim_version_test` execs the pinned, bundled Neovim tree: it asserts the binary exists and is executable, that `nvim --version` reports `NVIM v0.12.3`, that `VIMRUNTIME` self-locates **inside** the bundled tree, and that the `markdown` treesitter parser ships.
 - `//crates/wolf-macos:bundle_layout_test` inspects the built `.app` and asserts the resource layout: `Contents/Resources/nvim/bin/nvim` (executable), `…/nvim/lib/nvim/parser/markdown.so`, `…/nvim/share/nvim/runtime` (a directory), and `Contents/Resources/init.lua`.
 - `//crates/wolf-ffi:frame_pack` builds a `wolf_core::Snapshot` by hand (no nvim) and asserts `FfiFrame`'s color packing, flag bits, reverse-video cursor, and cell accessors. It is deterministic and runs **regardless** of `WOLF_NVIM_BIN`.
-- `//crates/wolf-ffi:bridge_smoke` drives the Rust half of the bridge against a real pinned Neovim (no mocks). It runs for real on Linux/Cargo devShells. On the macOS Bazel host it currently **hangs** when pointed at a real nvim — including against a separately-installed system nvim 0.12.3 — so it is a **pre-existing, host-wide** issue in the bridge's read/wake pump or the test harness, unrelated to the Neovim bundling and under investigation. It is therefore not yet a passing macOS proxy for the live nvim→FFI round-trip.
+- `//crates/wolf-ffi:bridge_smoke` drives the Rust half of the bridge against a real pinned Neovim (no mocks) and **passes** under `bazel test` on the macOS Bazel host as well as on Linux/Cargo devShells. It exercises the full live round-trip — start, type `i` then `x` and confirm the grid reflects the `x`, resize, shut down — against the bundled/pinned Neovim 0.12.3, so it is the automated proxy for the live nvim→FFI→`read_frame` round-trip on macOS. To make this hermetic, the `rust_test` stages the captive `init.lua` and the pinned Neovim tree (`//bazel/nvim:nvim_tree`) as runfiles (via `data` + `$(rootpath)` env vars `WOLF_TEST_INIT_LUA` / `WOLF_TEST_NVIM_DIR`, resolved by `common::{init_lua_path, nvim_bin_or_skip}`); an explicit `WOLF_NVIM_BIN` still wins for the cargo/devShell path. It runs `tags = ["local"]` (unsandboxed) because spawning a real nvim child does not work under the macOS build sandbox.
 - `//crates/wolf-macos:WolfKeyMapTests` is a pure Swift `XCTest` over the AppKit-free `WolfKeyMap` key-translation seam — no `NSEvent`, no window — and runs regardless of `WOLF_NVIM_BIN`.
 
 ## The one hard rule and how it is enforced
 
 > **`wolf-core` must compile with no GUI toolkit in its dependency tree.**
 
-This is Wolf's analog of a dependency guard. Enforce it by inspecting
-`wolf-core`'s (non-dev) dependency tree and confirming none of the denied crates
-appear:
+This is Wolf's analog of a dependency guard. Enforce it by inspecting `wolf-core`'s (non-dev) dependency tree and confirming none of the denied crates appear:
 
 ```sh
 cargo tree -e no-dev -p wolf-core
@@ -176,8 +162,7 @@ gtk gtk4 glib gdk4 cairo cairo-rs pango libadwaita
 objc objc2 cocoa core-graphics winit wgpu skia-safe softbuffer
 ```
 
-If any of these appears in core's tree, the platform boundary has leaked and the
-build is wrong.
+If any of these appears in core's tree, the platform boundary has leaked and the build is wrong.
 
 The same rule holds under the Bazel build on macOS: `wolf-gnome` is deliberately given no Bazel target, so GTK never enters `wolf-core`'s Bazel dependency graph. Verify it with a `bazel query` over the resolved deps:
 
@@ -189,11 +174,5 @@ bazel query 'deps(//crates/wolf-core:wolf_core)' | grep -iE \
 
 ## Notes
 
-- The captive Neovim is pinned and hermetic from day one (see
-  [architecture.md](architecture.md) §8): on Linux via the flake devShell, on
-  macOS via the Neovim bundled inside the `.app` (above). Either way it runs the
-  pinned binary with the repo's `runtime/nvim/init.lua`.
-- Full `wrapNeovim`-style plugin baking beyond what the macOS release ships — a
-  Markdown LSP such as `marksman` and a formatter — is **deferred to a later
-  phase**. The current build relies on Neovim's markdown syntax highlighting and
-  the `markdown` / `markdown_inline` treesitter parsers the release carries.
+- The captive Neovim is pinned and hermetic from day one (see [architecture.md](architecture.md) §8): on Linux via the flake devShell, on macOS via the Neovim bundled inside the `.app` (above). Either way it runs the pinned binary with the repo's `runtime/nvim/init.lua`.
+- Full `wrapNeovim`-style plugin baking beyond what the macOS release ships — a Markdown LSP such as `marksman` and a formatter — is **deferred to a later phase**. The current build relies on Neovim's markdown syntax highlighting and the `markdown` / `markdown_inline` treesitter parsers the release carries.

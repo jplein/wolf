@@ -1,9 +1,6 @@
 # Architecture
 
-Wolf is a Markdown editor that embeds Neovim as its editing engine. The GUI is a
-**front-end for Neovim**, not an editor in its own right: Neovim owns all editor
-state (buffer, cursor, modes, syntax, undo, file I/O), and Wolf renders what
-Neovim tells it to render and forwards input back.
+Wolf is a Markdown editor that embeds Neovim as its editing engine. The GUI is a **front-end for Neovim**, not an editor in its own right: Neovim owns all editor state (buffer, cursor, modes, syntax, undo, file I/O), and Wolf renders what Neovim tells it to render and forwards input back.
 
 ## Guiding principle
 
@@ -11,346 +8,126 @@ There is one hard rule everything else follows from:
 
 > **`wolf-core` must compile with no GUI toolkit in its dependency tree.**
 
-All the Neovim-specific work — and it is the large majority of the work — lives
-in `wolf-core` and is shared verbatim across platforms. Each platform front-end
-is a thin shell: native window chrome, native file dialogs, a paint backend, and
-OS-event translation. If a type from GTK or AppKit ever appears in core, the
-boundary has leaked.
+All the Neovim-specific work — and it is the large majority of the work — lives in `wolf-core` and is shared verbatim across platforms. Each platform front-end is a thin shell: native window chrome, native file dialogs, a paint backend, and OS-event translation. If a type from GTK or AppKit ever appears in core, the boundary has leaked.
 
 ## Components
 
 ### wolf-core
 
-Platform-agnostic Rust. Contains everything Neovim-related and all app logic that
-is not inherently platform-specific.
+Platform-agnostic Rust. Contains everything Neovim-related and all app logic that is not inherently platform-specific.
 
 Responsibilities:
 
-- Spawn and supervise the captive `nvim --embed` process; speak msgpack-RPC to it
-  via [`nvim-rs`](https://github.com/KillTheMule/nvim-rs).
-- Attach as a UI (`nvim_ui_attach` with `ext_linegrid` + `ext_multigrid` + `rgb`)
-  and handle the entire `redraw` event stream, including the multigrid window
-  events (`grid_resize`/`grid_line`/… carrying a grid id, plus `win_pos`,
-  `win_viewport`, `win_hide`, `win_close`, `grid_destroy`).
-- Maintain the **multigrid render-state model** — the in-memory description of
-  what should be on screen: MULTIPLE cell grids keyed by grid id, with per-window
-  grids and the outer grid (grid 1) holding the command line / messages (see "The
-  core↔front-end contract").
-- Own a **Neovim→shell intent channel**: the captive nvim's split/focus chords
-  and Ex-commands are overridden (in the bundled `init.lua`) to `rpcnotify`
-  `wolf_layout` (and `wolf_active_win`) messages; core parses these into
-  `LayoutIntent`s on a drainable queue (`WolfCore::drain_intents`) and tracks the
-  active window (`Snapshot.active_win`), so the front-end can own the native pane
-  layout.
-- Translate abstract input events (key, mouse, scroll, resize) into Neovim input
-  (`nvim_input`, `nvim_input_mouse`) and Ex commands.
-- Own app-level semantics: open/save (delegated to Neovim), recent files, and the
-  hermetic launch/isolation of the captive Neovim.
-- Maintain a **most-recently-used (MRU) file cache** — a small SQLite database at
-  `<cwd>/.wolf/mru.sqlite` — recording every opened file and pruning entries whose
-  backing file has been deleted. Reads are synchronous (the cache loads instantly).
-- Drive an **asynchronous, streaming file-list traversal** of the working
-  directory (the picker's source): a `FileSearch` session that seeds the MRU
-  synchronously then walks the tree on the tokio runtime (via the `ignore` crate —
-  respecting `.gitignore`, excluding `.git/`/`.wolf/`, including untracked files,
-  plain files and symlinks-to-files only), streaming results to the front-end. A
-  pure ranking function orders results (case-insensitive, MRU-first, with a
-  filename-word strict-prefix preference).
-- Track the **currently-edited file** and expose it on the snapshot
-  (`Snapshot.current_file`), updated via the `wolf_current_file` autocmd
-  notification (see "The core↔front-end contract"), so a front-end can highlight
-  and reveal it (e.g. in a file-tree sidebar) after either picker- or
-  Neovim-driven navigation.
+- Spawn and supervise the captive `nvim --embed` process; speak msgpack-RPC to it via [`nvim-rs`](https://github.com/KillTheMule/nvim-rs).
+- Attach as a UI (`nvim_ui_attach` with `ext_linegrid` + `ext_multigrid` + `rgb`) and handle the entire `redraw` event stream, including the multigrid window events (`grid_resize`/`grid_line`/… carrying a grid id, plus `win_pos`, `win_viewport`, `win_hide`, `win_close`, `grid_destroy`).
+- Maintain the **multigrid render-state model** — the in-memory description of what should be on screen: MULTIPLE cell grids keyed by grid id, with per-window grids and the outer grid (grid 1) holding the command line / messages (see "The core↔front-end contract").
+- Own a **Neovim→shell intent channel**: the captive nvim's split/focus chords and Ex-commands are overridden (in the bundled `init.lua`) to `rpcnotify` `wolf_layout` (and `wolf_active_win`) messages; core parses these into `LayoutIntent`s on a drainable queue (`WolfCore::drain_intents`) and tracks the active window (`Snapshot.active_win`), so the front-end can own the native pane layout.
+- Translate abstract input events (key, mouse, scroll, resize) into Neovim input (`nvim_input`, `nvim_input_mouse`) and Ex commands.
+- Own app-level semantics: open/save (delegated to Neovim), recent files, and the hermetic launch/isolation of the captive Neovim.
+- Maintain a **most-recently-used (MRU) file cache** — a small SQLite database at `<cwd>/.wolf/mru.sqlite` — recording every opened file and pruning entries whose backing file has been deleted. Reads are synchronous (the cache loads instantly).
+- Drive an **asynchronous, streaming file-list traversal** of the working directory (the picker's source): a `FileSearch` session that seeds the MRU synchronously then walks the tree on the tokio runtime (via the `ignore` crate — respecting `.gitignore`, excluding `.git/`/`.wolf/`, including untracked files, plain files and symlinks-to-files only), streaming results to the front-end. A pure ranking function orders results (case-insensitive, MRU-first, with a filename-word strict-prefix preference).
+- Track the **currently-edited file** and expose it on the snapshot (`Snapshot.current_file`), updated via the `wolf_current_file` autocmd notification (see "The core↔front-end contract"), so a front-end can highlight and reveal it (e.g. in a file-tree sidebar) after either picker- or Neovim-driven navigation.
 
-Responsibilities it explicitly does **not** have: deciding what text or colors
-appear (Neovim does), drawing pixels (the front-ends do), or knowing about
-windows, menus, or dialogs (only that it may _request_ them via intents).
+Responsibilities it explicitly does **not** have: deciding what text or colors appear (Neovim does), drawing pixels (the front-ends do), or knowing about windows, menus, or dialogs (only that it may _request_ them via intents).
 
 ### wolf-ffi
 
-The swift-bridge boundary crate (Rust). It is the seam between the
-platform-agnostic core and the macOS front-end: it holds the single
-`#[swift_bridge::bridge]` module and the hand-written Rust glue behind it, and
-depends on `wolf-core` as a normal crate. It is built both as a `staticlib` (the
-archive the `.app` links through the generated Swift) and as an `rlib` (so a Rust
-integration test can drive the same surface headlessly, with no Swift present).
+The swift-bridge boundary crate (Rust). It is the seam between the platform-agnostic core and the macOS front-end: it holds the single `#[swift_bridge::bridge]` module and the hand-written Rust glue behind it, and depends on `wolf-core` as a normal crate. It is built both as a `staticlib` (the archive the `.app` links through the generated Swift) and as an `rlib` (so a Rust integration test can drive the same surface headlessly, with no Swift present).
 
-swift-bridge is **confined to this crate** — `wolf-core` gains no new dependency
-and stays GUI-free, and the Linux/GTK front-end keeps consuming `wolf-core`
-directly. The bridge surface re-shapes core's API for FFI: a structured
-`FfiKeyEvent` (mapped into a `wolf_core::KeyEvent` in Rust so nvim notation stays
-core's job), an opaque per-frame `FfiFrame` whose cells are resolved against the
-highlight table in Rust (never re-resolved in Swift), and an opaque
-main-thread-only `WolfCoreHandle`. The wake crosses the boundary as a globally
-registered `extern "C"` callback (`wolf_ffi_set_wake`), not an `extern "Swift"`
-symbol, so the headless Rust test still links. The generated Swift + C bindings
-are **committed** under `crates/wolf-ffi/generated/` and refreshed by an explicit
-Bazel codegen target. See [`crates/wolf-ffi/README.md`](crates/wolf-ffi/README.md).
+swift-bridge is **confined to this crate** — `wolf-core` gains no new dependency and stays GUI-free, and the Linux/GTK front-end keeps consuming `wolf-core` directly. The bridge surface re-shapes core's API for FFI: a structured `FfiKeyEvent` (mapped into a `wolf_core::KeyEvent` in Rust so nvim notation stays core's job), an opaque per-frame `FfiFrame` whose cells are resolved against the highlight table in Rust (never re-resolved in Swift), and an opaque main-thread-only `WolfCoreHandle`. The wake crosses the boundary as a globally registered `extern "C"` callback (`wolf_ffi_set_wake`), not an `extern "Swift"` symbol, so the headless Rust test still links. The generated Swift + C bindings are **committed** under `crates/wolf-ffi/generated/` and refreshed by an explicit Bazel codegen target. See [`crates/wolf-ffi/README.md`](crates/wolf-ffi/README.md).
 
 ### Platform front-ends: wolf-gnome, wolf-macos
 
 The UI layer. Each one:
 
 - Paints the render-state model produced by core.
-- Provides native window chrome: title bar / header bar / menus, scrolling,
-  file dialogs.
+- Provides native window chrome: title bar / header bar / menus, scrolling, file dialogs.
 - Translates OS input events into core's abstract input events.
-- Queries the OS theme/accent color and pushes it into Neovim's highlight groups
-  (so selection, etc., match the native look — see "Theming").
+- Queries the OS theme/accent color and pushes it into Neovim's highlight groups (so selection, etc., match the native look — see "Theming").
 - Bridges its native event loop to core's async runtime.
 
 #### wolf-gnome
 
-Rust, using GTK 4 and libadwaita. Consumes `wolf-core` as a **normal Rust crate
-dependency**. Should feel like a GNOME application.
+Rust, using GTK 4 and libadwaita. Consumes `wolf-core` as a **normal Rust crate dependency**. Should feel like a GNOME application.
 
-**Phase status.** The windowed application now exists: an
-`adw::ApplicationWindow` (with an `adw::HeaderBar`) whose editor area is a
-**native pane view** — a tree of nested `gtk::Paned`s, one `gtk::DrawingArea` per
-Neovim window, driven by a pure `PaneTree` layout — with a bottom **cmdline
-strip** that paints the outer grid (where the command line / messages live under
-`ext_multigrid`). The layout is an **N-ary frame model** (matching Neovim): a
-split in the SAME orientation as its containing frame FLATTENS into equal-sized
-siblings (so vsplitting one of two side-by-side panes yields three equal columns,
-not a 25/25/50 nesting), while a PERPENDICULAR split nests. The pure seams (`gdk_key`, `paint`, `grid_size_for`), verified
-headlessly without a display, are wired onto a live `WolfCore`: each pane paints
-its own window grid via Cairo/Pango and the pane owning the cursor's grid overlays
-a mode-aware cursor (a block in normal mode, a thin bar in insert mode, driven by
-`ModeInfo.shape`), drawn opaque with reverse-video colors so it is reliably
-visible; key input flows through a `gtk::EventControllerKey` to nvim's current
-window globally; each pane / divider resize maps pixels to a grid size and calls
-`WolfCore::resize_grid`; on each wake the front-end drains `WolfCore::drain_intents`
-to create/split/close/focus panes and reads `Snapshot.active_win` to mark the
-active pane; and the core's wake is marshalled from its tokio worker thread onto
-the GTK main thread (via an `async-channel` drained by `glib::spawn_future_local`)
-to trigger redraws. Splits (`<C-w>s`/`v`, `:split`/`:vsplit`), close (`<C-w>c`),
-focus moves (`<C-w>h/j/k/l`), and divider drag-to-resize all work. A built-in
-**file picker** (opened with **Ctrl+Shift+P** or a header-bar Open button) floats
-over the editor as a textbox + fuzzy-matched list, fed by core's streaming
-`FileSearch` + ranking and opening the selected file into the active pane via the
-`open(path)` intent (recorded in the MRU); there are still no native file dialogs,
-and saving is from within Neovim. A **file-tree sidebar** occupies the left of a
-`gtk::Paned` (the pane view on the right): a `gtk::ListView` + `gtk::TreeListModel`
-populated by the **same** `FileSearch` mechanism as the picker (a hierarchical
-projection of that flat file list), where a single click opens a file, the top
-level is expanded by default, and the file being edited is highlighted and
-revealed (ancestors expanded + scrolled into view) after both picker and Neovim
-`:e` navigation via `Snapshot.current_file`. Still deferred: native file dialogs,
-theming, mouse/scroll input, a NATIVE command line / messages / popup menu
-(`ext_cmdline` / `ext_messages` / `ext_popupmenu` as Adw widgets — the cmdline
-strip renders the grid-drawn command line in the meantime), floating windows, and
-HiDPI scale handling. See the known-limitations note in
-[`crates/wolf-gnome/README.md`](crates/wolf-gnome/README.md).
+**Phase status.** The windowed application now exists: an `adw::ApplicationWindow` (with an `adw::HeaderBar`) whose editor area is a **native pane view** — a tree of nested `gtk::Paned`s, one `gtk::DrawingArea` per Neovim window, driven by a pure `PaneTree` layout — with a bottom **cmdline strip** that paints the outer grid (where the command line / messages live under `ext_multigrid`). The layout is an **N-ary frame model** (matching Neovim): a split in the SAME orientation as its containing frame FLATTENS into equal-sized siblings (so vsplitting one of two side-by-side panes yields three equal columns, not a 25/25/50 nesting), while a PERPENDICULAR split nests. The pure seams (`gdk_key`, `paint`, `grid_size_for`), verified headlessly without a display, are wired onto a live `WolfCore`: each pane paints its own window grid via Cairo/Pango and the pane owning the cursor's grid overlays a mode-aware cursor (a block in normal mode, a thin bar in insert mode, driven by `ModeInfo.shape`), drawn opaque with reverse-video colors so it is reliably visible; key input flows through a `gtk::EventControllerKey` to nvim's current window globally; each pane / divider resize maps pixels to a grid size and calls `WolfCore::resize_grid`; on each wake the front-end drains `WolfCore::drain_intents` to create/split/close/focus panes and reads `Snapshot.active_win` to mark the active pane; and the core's wake is marshalled from its tokio worker thread onto the GTK main thread (via an `async-channel` drained by `glib::spawn_future_local`) to trigger redraws. Splits (`<C-w>s`/`v`, `:split`/`:vsplit`), close (`<C-w>c`), focus moves (`<C-w>h/j/k/l`), and divider drag-to-resize all work. A built-in **file picker** (opened with **Ctrl+Shift+P** or a header-bar Open button) floats over the editor as a textbox + fuzzy-matched list, fed by core's streaming `FileSearch` + ranking and opening the selected file into the active pane via the `open(path)` intent (recorded in the MRU); there are still no native file dialogs, and saving is from within Neovim. A **file-tree sidebar** occupies the left of a `gtk::Paned` (the pane view on the right): a `gtk::ListView` + `gtk::TreeListModel` populated by the **same** `FileSearch` mechanism as the picker (a hierarchical projection of that flat file list), where a single click opens a file, the top level is expanded by default, and the file being edited is highlighted and revealed (ancestors expanded + scrolled into view) after both picker and Neovim `:e` navigation via `Snapshot.current_file`. Still deferred: native file dialogs, theming, mouse/scroll input, a NATIVE command line / messages / popup menu (`ext_cmdline` / `ext_messages` / `ext_popupmenu` as Adw widgets — the cmdline strip renders the grid-drawn command line in the meantime), floating windows, and HiDPI scale handling. See the known-limitations note in [`crates/wolf-gnome/README.md`](crates/wolf-gnome/README.md).
 
 #### wolf-macos
 
-Swift, using AppKit. Consumes `wolf-core` through the generated **swift-bridge**
-surface in [`wolf-ffi`](#wolf-ffi). Should feel like a macOS application.
+Swift, using AppKit. Consumes `wolf-core` through the generated **swift-bridge** surface in [`wolf-ffi`](#wolf-ffi). Should feel like a macOS application.
 
-**Phase status.** The first increment is realized: a **single-window AppKit
-shell**. An `NSApplication` + `AppDelegate` resolves `init_lua` and the cwd,
-starts the core via `wolf_ffi_start`, and builds one `NSWindow` ("Wolf", sized
-from the measured cell metrics × the initial 80×24) whose content view is a
-custom `GridView`. `GridView` is an `NSView` (flipped, so grid row/col map
-directly to points) that paints the **ACTIVE Neovim window grid**: on each
-repaint it reads an `FfiFrame`, fills every cell's background, draws its glyph via
-CoreText/CoreGraphics in the per-cell foreground color (both colors resolved from
-wolf-core's highlight table in Rust), and overlays a **mode-aware reverse-video
-cursor** (a block, horizontal, or vertical bar driven by `cursor_shape`, with the
-fill/glyph colors also resolved in Rust, ported from wolf-gnome's `cursor.rs`).
-Font metrics come from SF Mono with a Menlo fallback (`WOLF_FONT_PT` overridable,
-parity with gnome).
+**Phase status.** The first increment is realized: a **single-window AppKit shell**. An `NSApplication` + `AppDelegate` resolves `init_lua` and the cwd, starts the core via `wolf_ffi_start`, and builds one `NSWindow` ("Wolf", sized from the measured cell metrics × the initial 80×24) whose content view is a custom `GridView`. `GridView` is an `NSView` (flipped, so grid row/col map directly to points) that paints the **ACTIVE Neovim window grid**: on each repaint it reads an `FfiFrame`, fills every cell's background, draws its glyph via CoreText/CoreGraphics in the per-cell foreground color (both colors resolved from wolf-core's highlight table in Rust), and overlays a **mode-aware reverse-video cursor** (a block, horizontal, or vertical bar driven by `cursor_shape`, with the fill/glyph colors also resolved in Rust, ported from wolf-gnome's `cursor.rs`). Font metrics come from SF Mono with a Menlo fallback (`WOLF_FONT_PT` overridable, parity with gnome).
 
-The redraw path mirrors gnome's, realized natively: core fires its wake on a
-tokio worker thread; `WakeBridge` (the registered `extern "C"` callback) hops it
-onto the AppKit main thread with `DispatchQueue.main.async` and sets the view's
-`needsDisplay`, which drives the next `draw(_:)`. Input flows the other way:
-`keyDown(_:)` pulls the `keyCode`/`characters`/`charactersIgnoringModifiers` +
-modifiers off the `NSEvent`, runs them through the **pure, AppKit-free**
-`WolfKeyMap.translate` seam into a structured `FfiKeyEvent`, and calls `send_key`
-— so the Shift contract is honored once, in Rust (`key_to_notation`), exactly as
-on Linux. View resizes map the current bounds to a `(cols, rows)` grid size and
-call `resize`. The captive Neovim is hermetic and **bundled inside the `.app`**: a
-pinned Neovim 0.12.3 tree at `Contents/Resources/nvim/` and the captive `init.lua`
-at `Contents/Resources/init.lua` (decision 8). `AppDelegate` points wolf-core at
-the bundled `nvim/bin/nvim` by setting `WOLF_NVIM_BIN` (only if a developer hasn't
-already exported it) and launches against the bundled `init.lua` (overridable via
-`WOLF_INIT_LUA`) — so a double-clicked `.app` runs with no shell environment.
+The redraw path mirrors gnome's, realized natively: core fires its wake on a tokio worker thread; `WakeBridge` (the registered `extern "C"` callback) hops it onto the AppKit main thread with `DispatchQueue.main.async` and sets the view's `needsDisplay`, which drives the next `draw(_:)`. Input flows the other way: `keyDown(_:)` pulls the `keyCode`/`characters`/`charactersIgnoringModifiers` + modifiers off the `NSEvent`, runs them through the **pure, AppKit-free** `WolfKeyMap.translate` seam into a structured `FfiKeyEvent`, and calls `send_key` — so the Shift contract is honored once, in Rust (`key_to_notation`), exactly as on Linux. View resizes map the current bounds to a `(cols, rows)` grid size and call `resize`. The captive Neovim is hermetic and **bundled inside the `.app`**: a pinned Neovim 0.12.3 tree at `Contents/Resources/nvim/` and the captive `init.lua` at `Contents/Resources/init.lua` (decision 8). `AppDelegate` points wolf-core at the bundled `nvim/bin/nvim` by setting `WOLF_NVIM_BIN` (only if a developer hasn't already exported it) and launches against the bundled `init.lua` (overridable via `WOLF_INIT_LUA`) — so a double-clicked `.app` runs with no shell environment.
 
-A known structural limitation of this increment: the view paints only the
-**active grid**, with no cmdline strip. Entering Neovim's cmdline mode (`:`/`/`)
-moves the cursor onto the outer grid (grid 1), so the whole view swaps to that
-outer grid for the duration — unlike gnome, which keeps the editor panes visible
-and paints the command line in a dedicated bottom strip. A native or strip-based
-cmdline is deferred.
+A known structural limitation of this increment: the view paints only the **active grid**, with no cmdline strip. Entering Neovim's cmdline mode (`:`/`/`) moves the cursor onto the outer grid (grid 1), so the whole view swaps to that outer grid for the duration — unlike gnome, which keeps the editor panes visible and paints the command line in a dedicated bottom strip. A native or strip-based cmdline is deferred.
 
-Deferred for macOS (the same list as gnome, plus a couple macOS-specific items):
-native split panes / a multigrid pane tree, the file picker, the file-tree
-sidebar, mouse and scroll input, theming, a native command line / messages /
-popup menu (`ext_cmdline` / `ext_messages` / `ext_popupmenu` as AppKit widgets —
-and, until then, the cmdline strip the gnome shell already has), HiDPI edge
-cases, per-cell glyph **text attributes** (bold/italic/underline/undercurl/
-strikethrough — these are resolved and packed by `wolf-ffi` but NOT yet consumed
-in painting; only per-cell fg/bg + the cursor are painted this increment). The
-pinned Neovim is now bundled into the `.app` (above), but the live
-nvim→FFI→render round-trip is not yet covered by a passing automated test on the
-macOS Bazel host (the `bridge_smoke` harness hangs host-wide, unrelated to
-bundling — under investigation). See
-[`crates/wolf-macos/README.md`](crates/wolf-macos/README.md).
+Deferred for macOS (the same list as gnome, plus a couple macOS-specific items): native split panes / a multigrid pane tree, the file picker, the file-tree sidebar, mouse and scroll input, theming, a native command line / messages / popup menu (`ext_cmdline` / `ext_messages` / `ext_popupmenu` as AppKit widgets — and, until then, the cmdline strip the gnome shell already has), HiDPI edge cases, per-cell glyph **text attributes** (bold/italic/underline/undercurl/ strikethrough — these are resolved and packed by `wolf-ffi` but NOT yet consumed in painting; only per-cell fg/bg + the cursor are painted this increment). The pinned Neovim is now bundled into the `.app` (above), and the live nvim→FFI→`read_frame` round-trip **is** covered by a passing automated test on the macOS Bazel host: `//crates/wolf-ffi:bridge_smoke` passes under `bazel test`, driving start → type → grid-reflects-the-typed-char → resize → shutdown against the bundled/pinned Neovim. (The GUI window rendering and Finder double-click are still not headlessly asserted.) See [`crates/wolf-macos/README.md`](crates/wolf-macos/README.md).
 
 ## Architectural decisions
 
 ### 1. Core↔front-end boundary: swift-bridge on macOS, direct crate on Linux
 
-Swift cannot import a Rust crate directly, so the macOS side needs a generated
-binding regardless. We use [`swift-bridge`](https://github.com/chinedufn/swift-bridge),
-which produces idiomatic Swift from an annotated bridge module in `wolf-core`.
-Linux/GTK, being Rust, links `wolf-core` directly with no FFI.
+Swift cannot import a Rust crate directly, so the macOS side needs a generated binding regardless. We use [`swift-bridge`](https://github.com/chinedufn/swift-bridge), which produces idiomatic Swift from an annotated bridge module in `wolf-core`. Linux/GTK, being Rust, links `wolf-core` directly with no FFI.
 
-Consequence — and a design constraint: the **front-end-facing API of `wolf-core`
-must be expressible over swift-bridge** (FFI-friendly: plain structs, slices,
-handles, and callbacks — no Rust-only generics or trait objects across the line).
-The GTK front-end consumes that same API directly. This keeps a single
-front-end-facing surface rather than two divergent ones.
+Consequence — and a design constraint: the **front-end-facing API of `wolf-core` must be expressible over swift-bridge** (FFI-friendly: plain structs, slices, handles, and callbacks — no Rust-only generics or trait objects across the line). The GTK front-end consumes that same API directly. This keeps a single front-end-facing surface rather than two divergent ones.
 
-We rejected a uniform C-ABI on both platforms: it would cost Linux its type
-safety and async ergonomics for symmetry we don't need, since the boundary is
-defined once in Rust either way.
+We rejected a uniform C-ABI on both platforms: it would cost Linux its type safety and async ergonomics for symmetry we don't need, since the boundary is defined once in Rust either way.
 
 ### 2. Rendering: native paint per platform
 
-The render-state model is toolkit-agnostic; each front-end paints it natively:
-Cairo/Pango in GTK on Linux, CoreText/CoreGraphics in AppKit on macOS. This gives
-the best native text rendering on each OS. The cell-painting loop is written
-twice, but it is small once the render-state model exists.
+The render-state model is toolkit-agnostic; each front-end paints it natively: Cairo/Pango in GTK on Linux, CoreText/CoreGraphics in AppKit on macOS. This gives the best native text rendering on each OS. The cell-painting loop is written twice, but it is small once the render-state model exists.
 
-We rejected a shared portable canvas (skia/wgpu): it would force surface handles
-(GL/Metal) across the FFI and sacrifice native text quality. The render-state
-model is kept behind a clean interface, so a shared renderer could be introduced
-later without touching core's logic if the duplication ever justifies it.
+We rejected a shared portable canvas (skia/wgpu): it would force surface handles (GL/Metal) across the FFI and sacrifice native text quality. The render-state model is kept behind a clean interface, so a shared renderer could be introduced later without touching core's logic if the duplication ever justifies it.
 
 ### 3. Neovim is embedded as a child process over stdio
 
-Core launches `nvim --embed` and communicates over its stdin/stdout via
-msgpack-RPC. No sockets, no shared user Neovim instance.
+Core launches `nvim --embed` and communicates over its stdin/stdout via msgpack-RPC. No sockets, no shared user Neovim instance.
 
 ### 4. Neovim owns the document model
 
-There is no separate document representation in Wolf. Open is
-`nvim.command("edit <path>")`; save is `"write"` / `"saveas"`. Because Markdown is
-plain text, Neovim's buffer _is_ the document model. The grid is a projection of
-the visible viewport, never the whole file.
+There is no separate document representation in Wolf. Open is `nvim.command("edit <path>")`; save is `"write"` / `"saveas"`. Because Markdown is plain text, Neovim's buffer _is_ the document model. The grid is a projection of the visible viewport, never the whole file.
 
 ### 5. Scrolling belongs to Neovim; the scrollbar is synthesized
 
-The grid is sized to the **visible viewport** only (resized via
-`nvim_ui_try_resize` when the widget resizes). Scroll gestures are forwarded to
-Neovim as input; Neovim scrolls itself and emits `grid_scroll`. A native
-scrollbar's position and range are driven by the `win_viewport` event
-(`topline`/`botline`/`curline`/`linecount`). The editor widget is **not** placed
-in a scrolled-window that owns a tall child.
+The grid is sized to the **visible viewport** only (resized via `nvim_ui_try_resize` when the widget resizes). Scroll gestures are forwarded to Neovim as input; Neovim scrolls itself and emits `grid_scroll`. A native scrollbar's position and range are driven by the `win_viewport` event (`topline`/`botline`/`curline`/`linecount`). The editor widget is **not** placed in a scrolled-window that owns a tall child.
 
 ### 6. Syntax highlighting is whatever Neovim produces
 
-The front-ends are semantically dumb: a cell carries an `hl_id`, which resolves
-(via the `hl_attr_define` / `default_colors_set` table) to RGB + attributes, which
-get painted. All highlighting — treesitter, LSP semantic tokens, diagnostics,
-`Visual`/`Search` — is decided inside Neovim and arrives pre-resolved. To change
-or extend highlighting you configure Neovim, never the renderer.
+The front-ends are semantically dumb: a cell carries an `hl_id`, which resolves (via the `hl_attr_define` / `default_colors_set` table) to RGB + attributes, which get painted. All highlighting — treesitter, LSP semantic tokens, diagnostics, `Visual`/`Search` — is decided inside Neovim and arrives pre-resolved. To change or extend highlighting you configure Neovim, never the renderer.
 
 ### 7. UI extensions: grid-drawn for v1 (with `ext_multigrid` for native panes)
 
-For v1 we enable `ext_linegrid` + `ext_multigrid` (+ `rgb`). The command line,
-messages, and completion menu still render into the grid, terminal-style — but
-because `ext_multigrid` moves window content onto per-window grids (`>= 2`), the
-command line / messages now live on the OUTER grid (grid 1). The front-end paints
-each window grid in its own pane and paints grid 1's content in a dedicated
-**cmdline strip** along the bottom of the editor area, so typed `:`/`/` input
-stays visible. This is the least work, is fully functional, and is consistent
-across platforms.
+For v1 we enable `ext_linegrid` + `ext_multigrid` (+ `rgb`). The command line, messages, and completion menu still render into the grid, terminal-style — but because `ext_multigrid` moves window content onto per-window grids (`>= 2`), the command line / messages now live on the OUTER grid (grid 1). The front-end paints each window grid in its own pane and paints grid 1's content in a dedicated **cmdline strip** along the bottom of the editor area, so typed `:`/`/` input stays visible. This is the least work, is fully functional, and is consistent across platforms.
 
-Going native later (`ext_cmdline` + `ext_messages` + `ext_popupmenu`, rendered as
-Adw/AppKit widgets) is an additive change: it touches the front-ends and adds
-events to core's render-state model, but does not change the core architecture.
-`ext_multigrid` is what lets the shell own a native split-pane layout (decision
-below).
+Going native later (`ext_cmdline` + `ext_messages` + `ext_popupmenu`, rendered as Adw/AppKit widgets) is an additive change: it touches the front-ends and adds events to core's render-state model, but does not change the core architecture. `ext_multigrid` is what lets the shell own a native split-pane layout (decision below).
 
 ### 8. The captive Neovim is hermetic, pinned, and Markdown-only
 
-Wolf ships its own Neovim, tuned for Markdown and nothing else (markdown +
-markdown_inline treesitter grammars, a Markdown LSP such as `marksman`, an
-optional formatter — and nothing else). It must not read the user's
-`~/.config/nvim`, plugins, or shada.
+Wolf ships its own Neovim, tuned for Markdown and nothing else (markdown + markdown_inline treesitter grammars, a Markdown LSP such as `marksman`, an optional formatter — and nothing else). It must not read the user's `~/.config/nvim`, plugins, or shada.
 
-Launch isolation (both platforms): `nvim --embed --clean -u <bundled init.lua>`,
-with `NVIM_APPNAME` and the `XDG_*`/state dirs pinned away from the user's, and
-shada/swap disabled. The `init.lua` lives **in this repo** and is referenced by
-the build, so editor behavior is version-controlled alongside the code that
-depends on it.
+Launch isolation (both platforms): `nvim --embed --clean -u <bundled init.lua>`, with `NVIM_APPNAME` and the `XDG_*`/state dirs pinned away from the user's, and shada/swap disabled. The `init.lua` lives **in this repo** and is referenced by the build, so editor behavior is version-controlled alongside the code that depends on it.
 
 Delivery:
 
-- **Linux (NixOS):** `wrapNeovim` / `neovimUtils.makeNeovimConfig` builds a single
-  wrapped `nvim` with the plugin set baked into the runtimepath and the LSP/
-  formatter binaries on its `PATH` (`makeWrapper --prefix PATH`). The whole closure
-  ships together.
-- **macOS (REALIZED):** the `.app` bundles a pinned Neovim **0.12.3** — the
-  official macOS release tree (`bin/nvim` + `lib/nvim/parser` treesitter parsers,
-  including `markdown` and `markdown_inline`, + `share/nvim/runtime`) — at
-  `Contents/Resources/nvim/`, alongside the captive `init.lua` at
-  `Contents/Resources/init.lua`. Bazel downloads and verifies the release
-  hermetically (sha256-pinned via the `//bazel/nvim` module extension, assembled
-  into a structure-preserving `TreeArtifact` with `aspect_bazel_lib`'s
-  `copy_to_directory`). At launch the GUI points wolf-core at that absolute
-  bundled binary: `AppDelegate` sets `WOLF_NVIM_BIN` to
-  `Contents/Resources/nvim/bin/nvim` **only if it is not already set**
-  (`setenv(..., 0)`, so a developer's exported `WOLF_NVIM_BIN` still wins) before
-  starting the core — never `nvim` from the user's `PATH`. So a double-clicked
-  `.app` runs its own Neovim with no shell environment. (`wrapNeovim`-style full
-  plugin baking beyond what the release ships — a `marksman` LSP, a formatter —
-  remains deferred; see below.)
+- **Linux (NixOS):** `wrapNeovim` / `neovimUtils.makeNeovimConfig` builds a single wrapped `nvim` with the plugin set baked into the runtimepath and the LSP/ formatter binaries on its `PATH` (`makeWrapper --prefix PATH`). The whole closure ships together.
+- **macOS (REALIZED):** the `.app` bundles a pinned Neovim **0.12.3** — the official macOS release tree (`bin/nvim` + `lib/nvim/parser` treesitter parsers, including `markdown` and `markdown_inline`, + `share/nvim/runtime`) — at `Contents/Resources/nvim/`, alongside the captive `init.lua` at `Contents/Resources/init.lua`. Bazel downloads and verifies the release hermetically (sha256-pinned via the `//bazel/nvim` module extension, assembled into a structure-preserving `TreeArtifact` with `aspect_bazel_lib`'s `copy_to_directory`). At launch the GUI points wolf-core at that absolute bundled binary: `AppDelegate` sets `WOLF_NVIM_BIN` to `Contents/Resources/nvim/bin/nvim` **only if it is not already set** (`setenv(..., 0)`, so a developer's exported `WOLF_NVIM_BIN` still wins) before starting the core — never `nvim` from the user's `PATH`. So a double-clicked `.app` runs its own Neovim with no shell environment. (`wrapNeovim`-style full plugin baking beyond what the release ships — a `marksman` LSP, a formatter — remains deferred; see below.)
 
-**Phase status.** The Neovim binary is pinned and hermetic from day one: on
-Linux, via the flake devShell (core locates it only through `WOLF_NVIM_BIN`,
-never `PATH`, never `/nix/store` scanning); on macOS, via the bundled
-`Contents/Resources/nvim/bin/nvim` (above), which `AppDelegate` exports as
-`WOLF_NVIM_BIN` unless overridden. Either way core launches it `--embed --clean
--u runtime/nvim/init.lua` with `-i NONE -n`, pinning `NVIM_APPNAME=wolf` and the
-`XDG_*` dirs under a private temp dir. Full `wrapNeovim` plugin baking beyond what
-the macOS release ships (the `marksman` Markdown LSP, a formatter) is **deferred
-to a later phase**; the current build runs the pinned binary with the repo's
-`init.lua` and the treesitter `markdown`/`markdown_inline` parsers the release
-carries. Bundling is **arm64-tested** on the dev host; the x86_64 tree is wired
-via `select()` but untested.
+**Phase status.** The Neovim binary is pinned and hermetic from day one: on Linux, via the flake devShell (core locates it only through `WOLF_NVIM_BIN`, never `PATH`, never `/nix/store` scanning); on macOS, via the bundled `Contents/Resources/nvim/bin/nvim` (above), which `AppDelegate` exports as `WOLF_NVIM_BIN` unless overridden. Either way core launches it `--embed --clean -u runtime/nvim/init.lua` with `-i NONE -n`, pinning `NVIM_APPNAME=wolf` and the `XDG_*` dirs under a private temp dir. Full `wrapNeovim` plugin baking beyond what the macOS release ships (the `marksman` Markdown LSP, a formatter) is **deferred to a later phase**; the current build runs the pinned binary with the repo's `init.lua` and the treesitter `markdown`/`markdown_inline` parsers the release carries. Bundling is **arm64-tested** on the dev host; the x86_64 tree is wired via `select()` but untested.
 
 ### 9. The macOS UI: AppKit, Swift, Tahoe-only, all-Bazel — locked
 
-The macOS front-end's foundations are fixed (these are load-bearing — do not
-relitigate them casually):
+The macOS front-end's foundations are fixed (these are load-bearing — do not relitigate them casually):
 
-- **Tahoe (macOS 26) and newer only.** `Info.plist`'s `LSMinimumSystemVersion`
-  and the `macos_application` `minimum_os_version` are both `"26.0"`.
+- **Tahoe (macOS 26) and newer only.** `Info.plist`'s `LSMinimumSystemVersion` and the `macos_application` `minimum_os_version` are both `"26.0"`.
 - **AppKit, not SwiftUI.** A custom `NSView` paints the grid (decision 2).
-- **Swift**, built with **Xcode 26+** (Swift features that require Xcode 26 are
-  permitted).
-- **The Bazel build is authoritative.** `rules_swift` + `rules_apple` build the
-  `.app` (code-signed, min OS 26.0). `rules_xcodeproj` can generate an
-  `.xcodeproj` for debugging/LLDB only — it is **uncommitted** (`.gitignore`d) and
-  never the source of truth; Bazel remains the one build.
-- **Rust ↔ Swift via swift-bridge, confined to `wolf-ffi`** (decision 1), with
-  the generated Swift + C bindings **committed** under
-  `crates/wolf-ffi/generated/`.
-- **Key translation lives in Rust.** Swift sends a structured `FfiKeyEvent` over
-  the bridge; `wolf-core::key_to_notation` stays the single source of nvim
-  notation (the Shift contract is honored once, in Rust).
-- **The snapshot is marshalled as an opaque per-frame handle** (`FfiFrame`),
-  resolved against the highlight table in Rust — never re-resolved in Swift.
+- **Swift**, built with **Xcode 26+** (Swift features that require Xcode 26 are permitted).
+- **The Bazel build is authoritative.** `rules_swift` + `rules_apple` build the `.app` (code-signed, min OS 26.0). `rules_xcodeproj` can generate an `.xcodeproj` for debugging/LLDB only — it is **uncommitted** (`.gitignore`d) and never the source of truth; Bazel remains the one build.
+- **Rust ↔ Swift via swift-bridge, confined to `wolf-ffi`** (decision 1), with the generated Swift + C bindings **committed** under `crates/wolf-ffi/generated/`.
+- **Key translation lives in Rust.** Swift sends a structured `FfiKeyEvent` over the bridge; `wolf-core::key_to_notation` stays the single source of nvim notation (the Shift contract is honored once, in Rust).
+- **The snapshot is marshalled as an opaque per-frame handle** (`FfiFrame`), resolved against the highlight table in Rust — never re-resolved in Swift.
 
-Resolved Bazel pins (highest BCR releases that declare Bazel-8 compatibility,
-keep `apple_support >= 2.6.1`, and support Xcode 26 / the Tahoe SDK):
-**`rules_swift` 3.6.1, `rules_apple` 4.5.3, `rules_xcodeproj` 4.1.0**, and
-**`swift-bridge` / `swift-bridge-build` 0.1.59** on the Cargo side
-(`apple_support` stays 2.6.1).
+Resolved Bazel pins (highest BCR releases that declare Bazel-8 compatibility, keep `apple_support >= 2.6.1`, and support Xcode 26 / the Tahoe SDK): **`rules_swift` 3.6.1, `rules_apple` 4.5.3, `rules_xcodeproj` 4.1.0**, and **`swift-bridge` / `swift-bridge-build` 0.1.59** on the Cargo side (`apple_support` stays 2.6.1).
 
 ## The core↔front-end contract
 
@@ -360,98 +137,45 @@ The boundary is intentionally narrow and FFI-shaped (decision 1). Two directions
 
 Core maintains a snapshot of everything needed to draw a frame:
 
-- The cell grids: under `ext_multigrid` a map of grid id → grid (each cell:
-  char(s) + `hl_id`). The outer grid (grid 1) holds the command line / messages;
-  editor window content lives on grids `>= 2`.
-- The per-window layout: grid id → `WinInfo` (window handle, position, size,
-  viewport, hidden flag), learned from `win_pos` / `win_viewport`.
-- The highlight table: `hl_id → {fg, bg, special, bold, italic, underline…}`, plus
-  default colors.
-- Cursor: the grid it lives on + grid position + shape/mode (from cached
-  `mode_info_set`, updated on `mode_change`).
+- The cell grids: under `ext_multigrid` a map of grid id → grid (each cell: char(s) + `hl_id`). The outer grid (grid 1) holds the command line / messages; editor window content lives on grids `>= 2`.
+- The per-window layout: grid id → `WinInfo` (window handle, position, size, viewport, hidden flag), learned from `win_pos` / `win_viewport`.
+- The highlight table: `hl_id → {fg, bg, special, bold, italic, underline…}`, plus default colors.
+- Cursor: the grid it lives on + grid position + shape/mode (from cached `mode_info_set`, updated on `mode_change`).
 - Viewport info for the scrollbar (`win_viewport`), per window.
-- The **active window** (`Snapshot.active_win: Option<i64>`), tracked via the
-  `wolf_active_win` notification, so the front-end can mark the active pane.
-- The **current file**: the absolute, canonicalized path of the buffer being
-  edited (`Snapshot.current_file: Option<PathBuf>`, `None` for an unnamed buffer).
+- The **active window** (`Snapshot.active_win: Option<i64>`), tracked via the `wolf_active_win` notification, so the front-end can mark the active pane.
+- The **current file**: the absolute, canonicalized path of the buffer being edited (`Snapshot.current_file: Option<PathBuf>`, `None` for an unnamed buffer).
 
-Core does not push pixels or per-event callbacks across the boundary. Instead it
-applies `redraw` batches to the snapshot and, on `flush`, signals the front-end
-that a new frame is ready (a "redraw needed" wake — see threading). The front-end
-then reads the current snapshot on its UI thread and paints.
+Core does not push pixels or per-event callbacks across the boundary. Instead it applies `redraw` batches to the snapshot and, on `flush`, signals the front-end that a new frame is ready (a "redraw needed" wake — see threading). The front-end then reads the current snapshot on its UI thread and paints.
 
-The current file is tracked **out-of-band** from the redraw stream: after
-attaching, core installs a `BufEnter`/`BufWinEnter`/`BufFilePost` autocmd (in the
-bundled `init.lua`, set up over RPC with core's channel id) that `rpcnotify`s a
-`wolf_current_file` notification carrying `expand('%:p')`. The handler folds it
-into `Snapshot.current_file` and fires the same wake (it does not advance the
-redraw-frame counter). This is what lets a front-end highlight and reveal the
-active file even when the buffer changed from inside Neovim (e.g. `:e`).
+The current file is tracked **out-of-band** from the redraw stream: after attaching, core installs a `BufEnter`/`BufWinEnter`/`BufFilePost` autocmd (in the bundled `init.lua`, set up over RPC with core's channel id) that `rpcnotify`s a `wolf_current_file` notification carrying `expand('%:p')`. The handler folds it into `Snapshot.current_file` and fires the same wake (it does not advance the redraw-frame counter). This is what lets a front-end highlight and reveal the active file even when the buffer changed from inside Neovim (e.g. `:e`).
 
 ### Output: file-search session (core → front-end)
 
-The file picker reuses the same snapshot+wake shape rather than a bespoke channel.
-`WolfCore::start_file_search(wake)` returns a `FileSearch` handle whose `read()`
-exposes an owned snapshot of the results collected so far (`entries`, `complete`,
-`version`); the MRU seed is present synchronously, and the background traversal
-streams more in, bumping `version` and firing the **same wake callback** after each
-batch. The front-end reads + ranks + repaints exactly as it does for redraws.
-Dropping (or cancelling) the handle stops the traversal. Selection feeds back in as
-an `open(path)` input event (below), which core also records in the MRU.
+The file picker reuses the same snapshot+wake shape rather than a bespoke channel. `WolfCore::start_file_search(wake)` returns a `FileSearch` handle whose `read()` exposes an owned snapshot of the results collected so far (`entries`, `complete`, `version`); the MRU seed is present synchronously, and the background traversal streams more in, bumping `version` and firing the **same wake callback** after each batch. The front-end reads + ranks + repaints exactly as it does for redraws. Dropping (or cancelling) the handle stops the traversal. Selection feeds back in as an `open(path)` input event (below), which core also records in the MRU.
 
 ### Output: intents (core → front-end)
 
-Things only the platform can do, requested abstractly: "show an open dialog,"
-"show a save dialog for an unnamed buffer," "set the window title to X,"
-"the buffer is modified / clean." The front-end fulfills these with native widgets
-and feeds results back in as input.
+Things only the platform can do, requested abstractly: "show an open dialog," "show a save dialog for an unnamed buffer," "set the window title to X," "the buffer is modified / clean." The front-end fulfills these with native widgets and feeds results back in as input.
 
-The **layout intent channel is realized** for split panes. The captive nvim's
-split/focus chords and Ex-commands are overridden (in the bundled `init.lua`) to
-`rpcnotify` a `wolf_layout` message; core parses each into a `LayoutIntent` —
-`Split { orientation, from, win }` or `FocusDir { dir, from }` — and queues it for
-`WolfCore::drain_intents`, which the front-end drains on each wake. The asymmetry
-(decision D4): a SPLIT is performed by nvim (it really creates the window + grid
-and emits `win_pos`) AND reported so the shell learns the orientation and which
-pane to split; a FOCUS move is a PURE intent (nvim does not change focus — the
-shell resolves the neighbour in its own layout and calls `focus_win`); a CLOSE is
-performed by nvim (guarded against closing the last window) and observed via the
-`win_close` redraw event (no intent). The shell owns the GTK `Paned` geometry and
-binds each pane to a Neovim window + its grid, sizing each grid to its pane.
+The **layout intent channel is realized** for split panes. The captive nvim's split/focus chords and Ex-commands are overridden (in the bundled `init.lua`) to `rpcnotify` a `wolf_layout` message; core parses each into a `LayoutIntent` — `Split { orientation, from, win }` or `FocusDir { dir, from }` — and queues it for `WolfCore::drain_intents`, which the front-end drains on each wake. The asymmetry (decision D4): a SPLIT is performed by nvim (it really creates the window + grid and emits `win_pos`) AND reported so the shell learns the orientation and which pane to split; a FOCUS move is a PURE intent (nvim does not change focus — the shell resolves the neighbour in its own layout and calls `focus_win`); a CLOSE is performed by nvim (guarded against closing the last window) and observed via the `win_close` redraw event (no intent). The shell owns the GTK `Paned` geometry and binds each pane to a Neovim window + its grid, sizing each grid to its pane.
 
 ### Input: events (front-end → core)
 
-`key`, `mouse`, `scroll`, `resize(cols, rows)`, `resize_grid(grid, cols, rows)`
-(per-pane), `focus_win(win)` (click-to-focus / resolved focus moves),
-`open(path)`, `save`, `save_as(path)`, and theme-color updates. Core translates
-these into Neovim RPC calls. Key events are translated to Neovim notation
-(`<Esc>`, `<C-w>`, `<S-…>`, `<CR>`, modifiers) on the way in.
+`key`, `mouse`, `scroll`, `resize(cols, rows)`, `resize_grid(grid, cols, rows)` (per-pane), `focus_win(win)` (click-to-focus / resolved focus moves), `open(path)`, `save`, `save_as(path)`, and theme-color updates. Core translates these into Neovim RPC calls. Key events are translated to Neovim notation (`<Esc>`, `<C-w>`, `<S-…>`, `<CR>`, modifiers) on the way in.
 
 ## Threading and event-loop model
 
-`nvim-rs` is async (tokio); the platform UIs run their own event loops (glib on
-Linux, the AppKit/CFRunLoop on macOS). They must not block each other.
+`nvim-rs` is async (tokio); the platform UIs run their own event loops (glib on Linux, the AppKit/CFRunLoop on macOS). They must not block each other.
 
-- Core owns a tokio runtime on its own thread(s). The `nvim-rs` handler receives
-  `redraw` notifications there and updates the render-state snapshot (behind a
-  lock or via an internal channel).
-- On `flush`, core invokes a front-end-registered **wake callback**. The callback
-  is responsible for marshalling onto the UI thread — `glib` idle/channel source
-  on Linux, dispatch-to-main on macOS — and there triggering a paint
-  (`queue_draw` / `setNeedsDisplay`) that reads the snapshot.
-- Input flows the other way as plain calls into core, which hands them to the
-  tokio side to issue RPC.
+- Core owns a tokio runtime on its own thread(s). The `nvim-rs` handler receives `redraw` notifications there and updates the render-state snapshot (behind a lock or via an internal channel).
+- On `flush`, core invokes a front-end-registered **wake callback**. The callback is responsible for marshalling onto the UI thread — `glib` idle/channel source on Linux, dispatch-to-main on macOS — and there triggering a paint (`queue_draw` / `setNeedsDisplay`) that reads the snapshot.
+- Input flows the other way as plain calls into core, which hands them to the tokio side to issue RPC.
 
-The wake mechanism is the one piece each front-end implements; the snapshot and
-the RPC are entirely in core.
+The wake mechanism is the one piece each front-end implements; the snapshot and the RPC are entirely in core.
 
 ## Theming
 
-To make native selection/colors match the OS, the front-end reads the live theme
-(Adwaita named colors / accent on Linux; `NSColor`/appearance on macOS), converts
-to RGB, and pushes it into Neovim's highlight groups via `nvim_set_hl` (e.g.
-`Visual`, default fg/bg). It re-applies on theme/accent change. The renderer stays
-dumb; Neovim re-emits `hl_attr_define` and the grid repaints.
+To make native selection/colors match the OS, the front-end reads the live theme (Adwaita named colors / accent on Linux; `NSColor`/appearance on macOS), converts to RGB, and pushes it into Neovim's highlight groups via `nvim_set_hl` (e.g. `Visual`, default fg/bg). It re-applies on theme/accent change. The renderer stays dumb; Neovim re-emits `hl_attr_define` and the grid repaints.
 
 ## Build
 
@@ -459,30 +183,14 @@ See [Building Wolf](build.md). In brief: on Linux (NixOS), `wolf-core` + `wolf-g
 
 ## Deferred / open
 
-- Native command line, messages, and completion (decision 7) — when, and exactly
-  which Adw/AppKit widgets.
+- Native command line, messages, and completion (decision 7) — when, and exactly which Adw/AppKit widgets.
 - Whether a shared portable renderer (decision 2) ever earns its keep.
-- The `bridge_smoke` test hangs host-wide on the macOS Bazel host (also against a
-  system nvim) — so the live nvim→FFI round-trip is not yet green there; under
-  investigation, unrelated to the Neovim bundling.
 
 ### Split panes — known v1 limitations
 
-The first split-panes cut is deliberately scoped; these are intentional, each with
-a clear future direction (see also
-[`crates/wolf-gnome/README.md`](crates/wolf-gnome/README.md)):
+The first split-panes cut is deliberately scoped; these are intentional, each with a clear future direction (see also [`crates/wolf-gnome/README.md`](crates/wolf-gnome/README.md)):
 
-- **Only windows opened via the overridden split commands get a pane.** Panes come
-  from `wolf_layout` `Split` intents, emitted only by the rebound chords /
-  Ex-commands. A window created by a non-overridden path (`:help`, the quickfix /
-  location list, a preview window, `:diffsplit`) still gets a grid + `WinInfo` but
-  no pane, so its content is not shown. _Future:_ auto-pane any unbound window
-  grid.
-- **The cmdline strip shows only the outer grid's last row**, so multi-row prompts
-  (`press-ENTER`, `:messages`, a long wrapped `:`-command) are truncated until
-  native `ext_messages` lands.
-- **Focus-direction moves use the tree's idealized split ratios** (`0.5`), not the
-  actual dragged divider positions, so `<C-w>h/j/k/l` can pick a different
-  neighbour than the pixel geometry after a manual drag.
-- **Floating and external windows are ignored** (`win_float_pos` /
-  `win_external_pos` / `msg_set_pos` are dropped), so they do not appear as panes.
+- **Only windows opened via the overridden split commands get a pane.** Panes come from `wolf_layout` `Split` intents, emitted only by the rebound chords / Ex-commands. A window created by a non-overridden path (`:help`, the quickfix / location list, a preview window, `:diffsplit`) still gets a grid + `WinInfo` but no pane, so its content is not shown. _Future:_ auto-pane any unbound window grid.
+- **The cmdline strip shows only the outer grid's last row**, so multi-row prompts (`press-ENTER`, `:messages`, a long wrapped `:`-command) are truncated until native `ext_messages` lands.
+- **Focus-direction moves use the tree's idealized split ratios** (`0.5`), not the actual dragged divider positions, so `<C-w>h/j/k/l` can pick a different neighbour than the pixel geometry after a manual drag.
+- **Floating and external windows are ignored** (`win_float_pos` / `win_external_pos` / `msg_set_pos` are dropped), so they do not appear as panes.
