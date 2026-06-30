@@ -44,7 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Build the file picker as a hidden top-center overlay over the editor
         // (the window's content view IS the grid view). Shift+Ctrl+P opens it.
-        let picker = PickerView(handle: handle, gridView: gridView, metrics: metrics)
+        let picker = PickerView(handle: handle, gridView: gridView)
         gridView.addSubview(picker)
         PickerWakeBridge.registeredPicker = picker
         gridView.onPickerTrigger = { [weak picker] in picker?.open() }

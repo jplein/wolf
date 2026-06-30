@@ -48,7 +48,10 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
 
     private let handle: WolfCoreHandle
     private weak var gridView: GridView?
-    private let metrics: CellMetrics
+    /// The proportional system UI font used for the search field + result rows
+    /// (the picker is chrome, not the editor grid, so it uses the native UI font
+    /// rather than the editor's monospace cell font).
+    private let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
 
     private let searchField = NSSearchField()
     private let tableView = NSTableView()
@@ -65,13 +68,12 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     /// Whether the picker is currently open (visible + focused).
     private var isOpen = false
 
-    /// Builds the picker bound to a live core `handle`, the editor `gridView`
-    /// (re-focused on close), and the shared cell `metrics` (its font is reused
-    /// for the field + list for visual parity). Starts hidden.
-    init(handle: WolfCoreHandle, gridView: GridView, metrics: CellMetrics) {
+    /// Builds the picker bound to a live core `handle` and the editor `gridView`
+    /// (re-focused on close). The picker uses the proportional system UI font (see
+    /// `font`), not the editor's monospace cell font. Starts hidden.
+    init(handle: WolfCoreHandle, gridView: GridView) {
         self.handle = handle
         self.gridView = gridView
-        self.metrics = metrics
         super.init(
             frame: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.panelHeight))
         wantsLayer = true
@@ -233,7 +235,7 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     private func buildSubviews() {
         searchField.translatesAutoresizingMaskIntoConstraints = false
         searchField.delegate = self
-        searchField.font = metrics.font
+        searchField.font = font
         searchField.placeholderString = "Open file…"
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("file"))
@@ -248,7 +250,8 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         // Fixed, font-derived row height so the selection highlight matches the
         // (vertically centered) text rather than floating above it.
         tableView.usesAutomaticRowHeights = false
-        tableView.rowHeight = metrics.cellHeight.rounded(.up) + Self.rowVerticalPadding
+        tableView.rowHeight =
+            NSLayoutManager().defaultLineHeight(for: font).rounded(.up) + Self.rowVerticalPadding
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.documentView = tableView
@@ -279,7 +282,7 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
 
         let label = NSTextField(labelWithString: "")
         label.translatesAutoresizingMaskIntoConstraints = false
-        label.font = metrics.font
+        label.font = font
         label.lineBreakMode = .byTruncatingMiddle
         label.drawsBackground = false
         cell.addSubview(label)
