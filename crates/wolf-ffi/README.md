@@ -15,12 +15,23 @@ All types are re-exported at the crate root (`wolf_ffi::…`).
   - `send_key(&self, ev: FfiKeyEvent)`
   - `resize(&self, cols: u16, rows: u16)`
   - `start_file_search(&self) -> FfiFileSearch` — starts a streaming file-search session over the cwd (registering the picker wake) and wraps it as an `FfiFileSearch`. Infallible across the bridge: when no core is present the result simply yields no entries.
+  - `start_tree_search(&self) -> FfiFileSearch` — starts a **separate**, long-lived streaming file-search session for the file-tree sidebar, registering the **tree** wake (`registered_tree_wake`) instead of the picker wake. Same infallible empty-backed fallback as `start_file_search`. The sidebar owns this session for its whole lifetime, independent of the transient picker session.
+  - `current_file(&self) -> String` — the absolute path of the buffer currently being edited (canonicalized by core via the `wolf_current_file` notification), or the empty string for an unnamed buffer / shut-down core. Read on each editor wake to highlight + reveal the sidebar's current file.
   - `open(&self, path: String)` — issues `InputEvent::Open { path }` to open the file; the MRU is recorded by core's input pump.
   - `shutdown(&self)` — takes the core out and shuts it down (idempotent; infallible across the bridge — any error is logged).
 
-- `FfiFileSearch` — an opaque handle wrapping core's `FileSearch` session (`Option`, so `start_file_search` stays infallible). `ranked(&self, query: String, max: usize) -> Vec<FfiFileEntry>` runs the ranking **in Rust** (`wolf_core::rank_matches` over the current results snapshot) and returns the top-`max` entries; it yields an empty `Vec` when the session is absent. Dropping the handle cancels the background traversal.
+- `FfiFileSearch` — an opaque handle wrapping core's `FileSearch` session (`Option`, so `start_file_search` / `start_tree_search` stay infallible). Methods:
+  - `ranked(&self, query: String, max: usize) -> Vec<FfiFileEntry>` runs the ranking **in Rust** (`wolf_core::rank_matches` over the current results snapshot) and returns the top-`max` entries; it yields an empty `Vec` when the session is absent.
+  - `children_of(&self, dir: String) -> Vec<FfiTreeNode>` projects the IMMEDIATE children of `dir` (`""` = the cwd root) from the latest streamed snapshot via `wolf_core::tree::children_of`: directories-first then files, each case-insensitive by name; dotfiles are listed and gitignored files are excluded (both already handled by the streaming traversal). Empty `Vec` when the session is absent.
+  - `rel_path_for(&self, abs: String) -> String` maps an absolute path to its tree-display rel-path via an **exact** entry-path match (`wolf_core::tree::rel_path_for`), or the empty string when no streamed entry matches.
+
+  Dropping the handle cancels the background traversal.
 
 - `FfiFileEntry` — opaque; `display() -> String` (the relative display name) and `path() -> String` (the absolute path). Opaque because swift-bridge only emits `Vec<T>` support for opaque `T` — the same reason `FfiCell` is opaque.
+
+- `FfiTreeNode` — opaque; a flattened `wolf_core::tree::TreeNode`. Accessors: `name() -> String` (the immediate component), `rel_path() -> String` (the full `/`-separated path from the cwd root), `abs_path() -> String` (the absolute path for a file; empty for a directory), and `is_dir() -> bool`. Opaque so a `Vec<FfiTreeNode>` is supported.
+
+- `wolf_ffi_ancestors_to_reveal(rel_path: String) -> Vec<String>` — a free FFI fn (no live session needed) delegating to `wolf_core::tree::ancestors_to_reveal`: the ancestor directory rel-paths from the cwd root down to the node's parent (`"src/main.rs"` → `["src"]`, `"README.md"` → `[]`). swift-bridge emits clean `RustVec<RustString>` Swift glue for the `Vec<String>` return.
 
 - `FfiFrame` — an opaque, owned, paint-ready snapshot of the **active grid**, with every cell already resolved against the highlight table **in Rust** (reusing `HighlightTable::resolve` / `ResolvedStyle` — never re-resolved in Swift). Accessors: `cols`, `rows`, `cursor_row`, `cursor_col`, `cursor_shape` (0 = Block, 1 = Horizontal, 2 = Vertical), `cursor_cell_percentage`, `cursor_visible`, `default_fg`, `default_bg`, `cursor_fill`, `cursor_glyph` (reverse-video cursor colors, ported from wolf-gnome's `cursor.rs`), and `cells() -> Vec<FfiCell>` (one flat, row-major handoff per frame).
 
@@ -54,6 +65,14 @@ void wolf_ffi_set_filesearch_wake(void (*wake)(void)); // generated/wolf_ffi_wak
 
 It is a separate global `extern "C"` callback (its own `registered_filesearch_wake`), fired after each streaming traversal batch of a `start_file_search` session, so the picker can refresh its results independently of editor repaints (Swift's `PickerWakeBridge` registers a dispatch-to-main `PickerView.refresh()` thunk). It is otherwise identical in shape to the editor wake — stateless, no-op when unregistered.
 
+There is a **third** parallel registered wake for the file-tree sidebar:
+
+```c
+void wolf_ffi_set_tree_wake(void (*wake)(void)); // generated/wolf_ffi_wake.h
+```
+
+It is its own global `extern "C"` callback (`registered_tree_wake`), fired after each streaming traversal batch of a `start_tree_search` session, so the sidebar can rebuild its outline rows independently of the picker and editor repaints (Swift's `TreeWakeBridge` registers a dispatch-to-main `FileTreeView.refresh()` thunk). The sidebar's current-file reveal + bold rides the **editor** wake instead (Swift's `WakeBridge` calls `FileTreeView.onRenderWake()` right after `setNeedsDisplay`, reading `current_file()`), because a `current_file` change is delivered on the render wake, not a separate traversal batch. The tree wake is otherwise identical in shape — stateless, no-op when unregistered.
+
 ## Generated bindings
 
 The committed `generated/` tree is the swift-bridge output plus two hand-written files:
@@ -84,6 +103,7 @@ CARGO_BAZEL_REPIN=1 bazel build //crates/wolf-ffi:wolf_ffi   # then commit lockf
 - `:gen_bindings` — the codegen binary (run via `bazel run`).
 - `:bridge_smoke` — the Rust integration test for the editor round-trip.
 - `:file_search` — the Rust integration test for the file-search surface (real pinned nvim, modeled on `bridge_smoke`).
+- `:tree_search` — the Rust integration test for the file-tree surface (`start_tree_search` / `children_of` / `rel_path_for` / `FfiTreeNode` accessors / `current_file` / the free `wolf_ffi_ancestors_to_reveal`), real pinned nvim, modeled on `file_search`.
 
 ## Testing
 
@@ -97,4 +117,10 @@ bazel test //crates/wolf-ffi:bridge_smoke
 
 ```sh
 bazel test //crates/wolf-ffi:file_search
+```
+
+`tests/tree_search.rs` covers the file-tree surface against the same real pinned Neovim (modeled on `file_search`, reusing `tests/common/mod.rs` and the same `data` / `env` / `no-sandbox` runfile staging). It seeds a nested temp cwd (`src/main.rs`, `src/lib.rs`, `docs/intro.md`, `README.md`, a dotfile `.config.md`, and a `.gitignore` + the file it ignores), calls `start_tree_search()`, and polls `children_of("")` until the traversal streams in. It asserts directories-before-files (case-insensitive), the dotfile present, the gitignored file absent; `children_of("src")` yields the two leaf files (`is_dir() == false`, `rel_path()` under `src/`, `abs_path()` absolute under the cwd); `rel_path_for(abs)` maps a streamed entry to its display and an unknown path to `""`; `wolf_ffi_ancestors_to_reveal` returns the ancestor chain; and `open(abs)` round-trips into `current_file()` (canonicalized, robust to the macOS `/var` → `/private/var` symlink) while the core stays responsive.
+
+```sh
+bazel test //crates/wolf-ffi:tree_search
 ```

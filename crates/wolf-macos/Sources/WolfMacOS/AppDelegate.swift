@@ -20,10 +20,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: MainWindow?
     private var handle: WolfCoreHandle?
     private var picker: PickerView?
+    private var tree: FileTreeView?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         WakeBridge.install()
         PickerWakeBridge.install()
+        TreeWakeBridge.install()
 
         guard let handle = startCore() else {
             presentStartupFailureAndQuit()
@@ -35,7 +37,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let gridView = GridView(handle: handle, metrics: metrics)
         WakeBridge.registeredView = gridView
 
+        // Build the file-tree sidebar (left pane). It owns its OWN long-lived
+        // file-search session via `start_tree_search`; the render wake reveals +
+        // bolds the current buffer, the tree wake rebuilds its rows.
+        let tree = FileTreeView(handle: handle, gridView: gridView)
+        WakeBridge.registeredTree = tree
+        TreeWakeBridge.registeredTree = tree
+        tree.start()
+        self.tree = tree
+
         let window = MainWindow(
+            treeView: tree,
             gridView: gridView,
             metrics: metrics,
             cols: Self.initialCols,
@@ -43,7 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         // Build the file picker as a hidden top-center overlay over the editor
-        // (the window's content view IS the grid view). Shift+Ctrl+P opens it.
+        // (the picker is a subview of the grid view). Shift+Ctrl+P opens it.
         let picker = PickerView(handle: handle, gridView: gridView)
         gridView.addSubview(picker)
         PickerWakeBridge.registeredPicker = picker
@@ -61,8 +73,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // Close the picker first so its file-search session is dropped (cancelling
-        // any in-flight traversal) before the core is torn down.
+        // Drop the sidebar's and picker's file-search sessions (cancelling any
+        // in-flight traversals) before the core is torn down.
+        tree?.close()
+        tree = nil
         picker?.close()
         picker = nil
         handle?.shutdown()

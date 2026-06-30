@@ -170,6 +170,13 @@ mod ffi {
         // registered file-search wake. Infallible: returns an empty-backed handle
         // when the core is gone (mirroring `read_frame`'s empty-frame fallback).
         fn start_file_search(&self) -> FfiFileSearch;
+        // Starts a SEPARATE long-lived streaming file-search session for the
+        // file-tree sidebar, fed by the registered TREE wake. Same infallible
+        // empty-backed fallback as `start_file_search`.
+        fn start_tree_search(&self) -> FfiFileSearch;
+        // The absolute path of the buffer currently being edited (canonicalized
+        // by core), or the empty string for an unnamed buffer / shut-down core.
+        fn current_file(&self) -> String;
         // Opens `path` (an absolute filesystem path) in Neovim via
         // `InputEvent::Open`; the core's input pump records the MRU.
         fn open(&self, path: String);
@@ -182,6 +189,14 @@ mod ffi {
         // search snapshot. An empty `query` lists all entries MRU-first. `FfiFileEntry`
         // is opaque so a `Vec<FfiFileEntry>` is supported (same as `FfiCell`).
         fn ranked(&self, query: String, max: usize) -> Vec<FfiFileEntry>;
+        // The IMMEDIATE children of `dir` ("" = the cwd root) projected from the
+        // latest streamed search snapshot: directories-first then files (each
+        // case-insensitive by name). `FfiTreeNode` is opaque so a
+        // `Vec<FfiTreeNode>` is supported.
+        fn children_of(&self, dir: String) -> Vec<FfiTreeNode>;
+        // Maps an absolute path to its tree-display rel-path (EXACT entry-path
+        // match), or the empty string when no streamed entry matches.
+        fn rel_path_for(&self, abs: String) -> String;
     }
 
     extern "Rust" {
@@ -191,6 +206,27 @@ mod ffi {
         fn display(&self) -> String;
         // The absolute filesystem path, handed back to `WolfCoreHandle::open`.
         fn path(&self) -> String;
+    }
+
+    extern "Rust" {
+        type FfiTreeNode;
+
+        // The immediate component name (the last segment of `rel_path`).
+        fn name(&self) -> String;
+        // The full relative, `/`-separated path from the cwd root to this node.
+        fn rel_path(&self) -> String;
+        // The absolute filesystem path for a File node; the empty string for a
+        // Dir node.
+        fn abs_path(&self) -> String;
+        // Whether this node is a directory (vs. a leaf file).
+        fn is_dir(&self) -> bool;
+    }
+
+    extern "Rust" {
+        // The ancestor directory rel-paths of `rel_path`, from the cwd root down
+        // to the node's parent (`"src/main.rs"` -> `["src"]`, `"README.md"` ->
+        // `[]`). A free fn (no session needed) delegating to `wolf_core::tree`.
+        fn wolf_ffi_ancestors_to_reveal(rel_path: String) -> Vec<String>;
     }
 
     extern "Rust" {
@@ -315,6 +351,57 @@ fn registered_filesearch_wake() -> WakeFn {
     })
 }
 
+/// The globally-registered file-TREE wake callback, or null when none is
+/// registered (the Rust integration-test path). Stored as a raw pointer in an
+/// [`AtomicPtr`], a third sibling of [`WAKE_FN`] / [`FILESEARCH_WAKE_FN`] feeding
+/// the sidebar's own long-lived [`FileSearch`] traversal-batch wakes.
+static TREE_WAKE_FN: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+
+/// Registers (or, with `None`, clears) the front-end's file-TREE wake callback.
+///
+/// Swift's `TreeWakeBridge` calls this once at startup with a thunk that does
+/// `DispatchQueue.main.async { … tree.refresh() … }`. A third registered
+/// `extern "C"` callback alongside [`wolf_ffi_set_wake`] and
+/// [`wolf_ffi_set_filesearch_wake`], declared in the hand-written
+/// `generated/wolf_ffi_wake.h`, so a Rust-only build leaves no `extern "Swift"`
+/// symbol unresolved.
+///
+/// # Safety
+///
+/// `wake`, if `Some`, must be a valid `extern "C" fn()` that is safe to call from
+/// any thread (core fires the wake from its tokio worker thread).
+#[no_mangle]
+pub extern "C" fn wolf_ffi_set_tree_wake(wake: Option<WakeCallback>) {
+    let ptr = wake.map_or(std::ptr::null_mut(), |f| f as *mut ());
+    TREE_WAKE_FN.store(ptr, Ordering::Release);
+}
+
+/// Builds the [`WakeFn`] core invokes on each file-tree traversal batch: it loads
+/// the registered tree callback and calls it, or does nothing if none is
+/// registered. Captures no state, so it is `Send + Sync` as `WakeFn` requires.
+fn registered_tree_wake() -> WakeFn {
+    Arc::new(|| {
+        let ptr = TREE_WAKE_FN.load(Ordering::Acquire);
+        if !ptr.is_null() {
+            // SAFETY: `ptr` was set from a valid `extern "C" fn()` by
+            // `wolf_ffi_set_tree_wake`; a non-null value is always such a pointer.
+            let f: WakeCallback = unsafe { std::mem::transmute::<*mut (), WakeCallback>(ptr) };
+            f();
+        }
+    })
+}
+
+/// Returns the ancestor directory rel-paths of `rel_path`, from the cwd root down
+/// to the node's parent (`"src/main.rs"` -> `["src"]`, `"README.md"` -> `[]`).
+///
+/// A free FFI fn (no live session required) delegating to
+/// [`wolf_core::tree::ancestors_to_reveal`]; the sidebar calls it to learn which
+/// ancestor dirs to expand before revealing the current file.
+#[must_use]
+pub fn wolf_ffi_ancestors_to_reveal(rel_path: String) -> Vec<String> {
+    wolf_core::tree::ancestors_to_reveal(&rel_path)
+}
+
 // ---------------------------------------------------------------------------
 // Opaque handles.
 // ---------------------------------------------------------------------------
@@ -385,6 +472,43 @@ impl WolfCoreHandle {
             .as_ref()
             .map(|core| core.start_file_search(registered_filesearch_wake()));
         FfiFileSearch { search }
+    }
+
+    /// Starts a SEPARATE long-lived streaming file-search session for the
+    /// file-tree sidebar, fed by the registered tree wake.
+    ///
+    /// Infallible across the bridge, exactly like
+    /// [`start_file_search`](WolfCoreHandle::start_file_search): when the core has
+    /// already been shut down it returns an empty-backed [`FfiFileSearch`] (whose
+    /// projection methods yield nothing). The sidebar owns this session for its
+    /// whole lifetime, independent of the transient picker session.
+    #[must_use]
+    pub fn start_tree_search(&self) -> FfiFileSearch {
+        let search = self
+            .core
+            .borrow()
+            .as_ref()
+            .map(|core| core.start_file_search(registered_tree_wake()));
+        FfiFileSearch { search }
+    }
+
+    /// The absolute path of the buffer currently being edited (canonicalized by
+    /// core via the `wolf_current_file` notification), or the empty string for an
+    /// unnamed buffer or a shut-down core.
+    ///
+    /// Read on each editor wake by the sidebar to highlight + reveal the current
+    /// file.
+    #[must_use]
+    pub fn current_file(&self) -> String {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return String::new();
+        };
+        let snapshot = core.read_snapshot();
+        snapshot
+            .current_file
+            .as_ref()
+            .map_or_else(String::new, |p| p.to_string_lossy().into_owned())
     }
 
     /// Opens `path` (an absolute filesystem path) in Neovim via
@@ -513,6 +637,103 @@ impl FfiFileSearch {
             })
             .collect();
         entries
+    }
+
+    /// The IMMEDIATE children of `dir` (`""` = the cwd root) projected from the
+    /// latest streamed search snapshot.
+    ///
+    /// Delegates to [`wolf_core::tree::children_of`]: directories-first then
+    /// files, each case-insensitive by name; dotfiles are listed and gitignored
+    /// files are excluded (both already handled by the streaming traversal). The
+    /// snapshot read guard is held only for the projection + map and dropped
+    /// before returning. Yields an empty `Vec` when the session is absent.
+    #[must_use]
+    pub fn children_of(&self, dir: String) -> Vec<FfiTreeNode> {
+        let Some(search) = &self.search else {
+            return Vec::new();
+        };
+        let view = search.read();
+        wolf_core::tree::children_of(&view.entries, &dir)
+            .into_iter()
+            .map(FfiTreeNode::from_node)
+            .collect()
+    }
+
+    /// Maps an absolute path to its tree-display rel-path via an EXACT entry-path
+    /// match (see [`wolf_core::tree::rel_path_for`]), or the empty string when no
+    /// streamed entry matches (or the session is absent).
+    #[must_use]
+    pub fn rel_path_for(&self, abs: String) -> String {
+        let Some(search) = &self.search else {
+            return String::new();
+        };
+        let view = search.read();
+        wolf_core::tree::rel_path_for(&view.entries, std::path::Path::new(&abs))
+            .unwrap_or_default()
+    }
+}
+
+/// One projected tree node (opaque to Swift, so a `Vec<FfiTreeNode>` is supported
+/// — swift-bridge emits Vec support only for opaque types).
+///
+/// Flattens [`wolf_core::tree::TreeNode`]'s two variants into a tagged struct:
+/// `is_dir` discriminates, and `abs_path` is the empty string for a `Dir`.
+pub struct FfiTreeNode {
+    name: String,
+    rel_path: String,
+    abs_path: Option<PathBuf>,
+    is_dir: bool,
+}
+
+impl FfiTreeNode {
+    /// The immediate component name (the last segment of `rel_path`).
+    #[must_use]
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    /// The full relative, `/`-separated path from the cwd root to this node.
+    #[must_use]
+    pub fn rel_path(&self) -> String {
+        self.rel_path.clone()
+    }
+
+    /// The absolute filesystem path for a File node; the empty string for a Dir
+    /// node.
+    #[must_use]
+    pub fn abs_path(&self) -> String {
+        self.abs_path
+            .as_ref()
+            .map_or_else(String::new, |p| p.to_string_lossy().into_owned())
+    }
+
+    /// Whether this node is a directory (vs. a leaf file).
+    #[must_use]
+    pub fn is_dir(&self) -> bool {
+        self.is_dir
+    }
+
+    /// Flattens a [`wolf_core::tree::TreeNode`] into the bridge-friendly tagged
+    /// struct.
+    fn from_node(node: wolf_core::tree::TreeNode) -> Self {
+        match node {
+            wolf_core::tree::TreeNode::Dir { name, rel_path } => Self {
+                name,
+                rel_path,
+                abs_path: None,
+                is_dir: true,
+            },
+            wolf_core::tree::TreeNode::File {
+                name,
+                rel_path,
+                abs_path,
+            } => Self {
+                name,
+                rel_path,
+                abs_path: Some(abs_path),
+                is_dir: false,
+            },
+        }
     }
 }
 

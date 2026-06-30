@@ -2,6 +2,9 @@ import WolfFFI
 public func wolf_ffi_start<GenericIntoRustString: IntoRustString>(_ init_lua: GenericIntoRustString, _ cwd: GenericIntoRustString, _ cols: UInt16, _ rows: UInt16) -> Optional<WolfCoreHandle> {
     { let val = __swift_bridge__$wolf_ffi_start({ let rustString = init_lua.intoRustString(); rustString.isOwned = false; return rustString.ptr }(), { let rustString = cwd.intoRustString(); rustString.isOwned = false; return rustString.ptr }(), cols, rows); if val != nil { return WolfCoreHandle(ptr: val!) } else { return nil } }()
 }
+public func wolf_ffi_ancestors_to_reveal<GenericIntoRustString: IntoRustString>(_ rel_path: GenericIntoRustString) -> RustVec<RustString> {
+    RustVec(ptr: __swift_bridge__$wolf_ffi_ancestors_to_reveal({ let rustString = rel_path.intoRustString(); rustString.isOwned = false; return rustString.ptr }()))
+}
 public struct FfiColor {
     public var rgb: UInt32
     public var set: Bool
@@ -137,6 +140,14 @@ extension WolfCoreHandleRef {
         FfiFileSearch(ptr: __swift_bridge__$WolfCoreHandle$start_file_search(ptr))
     }
 
+    public func start_tree_search() -> FfiFileSearch {
+        FfiFileSearch(ptr: __swift_bridge__$WolfCoreHandle$start_tree_search(ptr))
+    }
+
+    public func current_file() -> RustString {
+        RustString(ptr: __swift_bridge__$WolfCoreHandle$current_file(ptr))
+    }
+
     public func open<GenericIntoRustString: IntoRustString>(_ path: GenericIntoRustString) {
         __swift_bridge__$WolfCoreHandle$open(ptr, { let rustString = path.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
     }
@@ -219,6 +230,14 @@ public class FfiFileSearchRef {
 extension FfiFileSearchRef {
     public func ranked<GenericIntoRustString: IntoRustString>(_ query: GenericIntoRustString, _ max: UInt) -> RustVec<FfiFileEntry> {
         RustVec(ptr: __swift_bridge__$FfiFileSearch$ranked(ptr, { let rustString = query.intoRustString(); rustString.isOwned = false; return rustString.ptr }(), max))
+    }
+
+    public func children_of<GenericIntoRustString: IntoRustString>(_ dir: GenericIntoRustString) -> RustVec<FfiTreeNode> {
+        RustVec(ptr: __swift_bridge__$FfiFileSearch$children_of(ptr, { let rustString = dir.intoRustString(); rustString.isOwned = false; return rustString.ptr }()))
+    }
+
+    public func rel_path_for<GenericIntoRustString: IntoRustString>(_ abs: GenericIntoRustString) -> RustString {
+        RustString(ptr: __swift_bridge__$FfiFileSearch$rel_path_for(ptr, { let rustString = abs.intoRustString(); rustString.isOwned = false; return rustString.ptr }()))
     }
 }
 extension FfiFileSearch: Vectorizable {
@@ -351,6 +370,98 @@ extension FfiFileEntry: Vectorizable {
 
     public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
         __swift_bridge__$Vec_FfiFileEntry$len(vecPtr)
+    }
+}
+
+
+public class FfiTreeNode: FfiTreeNodeRefMut {
+    var isOwned: Bool = true
+
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+
+    deinit {
+        if isOwned {
+            __swift_bridge__$FfiTreeNode$_free(ptr)
+        }
+    }
+}
+public class FfiTreeNodeRefMut: FfiTreeNodeRef {
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+}
+public class FfiTreeNodeRef {
+    var ptr: UnsafeMutableRawPointer
+
+    public init(ptr: UnsafeMutableRawPointer) {
+        self.ptr = ptr
+    }
+}
+extension FfiTreeNodeRef {
+    public func name() -> RustString {
+        RustString(ptr: __swift_bridge__$FfiTreeNode$name(ptr))
+    }
+
+    public func rel_path() -> RustString {
+        RustString(ptr: __swift_bridge__$FfiTreeNode$rel_path(ptr))
+    }
+
+    public func abs_path() -> RustString {
+        RustString(ptr: __swift_bridge__$FfiTreeNode$abs_path(ptr))
+    }
+
+    public func is_dir() -> Bool {
+        __swift_bridge__$FfiTreeNode$is_dir(ptr)
+    }
+}
+extension FfiTreeNode: Vectorizable {
+    public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
+        __swift_bridge__$Vec_FfiTreeNode$new()
+    }
+
+    public static func vecOfSelfFree(vecPtr: UnsafeMutableRawPointer) {
+        __swift_bridge__$Vec_FfiTreeNode$drop(vecPtr)
+    }
+
+    public static func vecOfSelfPush(vecPtr: UnsafeMutableRawPointer, value: FfiTreeNode) {
+        __swift_bridge__$Vec_FfiTreeNode$push(vecPtr, {value.isOwned = false; return value.ptr;}())
+    }
+
+    public static func vecOfSelfPop(vecPtr: UnsafeMutableRawPointer) -> Optional<Self> {
+        let pointer = __swift_bridge__$Vec_FfiTreeNode$pop(vecPtr)
+        if pointer == nil {
+            return nil
+        } else {
+            return (FfiTreeNode(ptr: pointer!) as! Self)
+        }
+    }
+
+    public static func vecOfSelfGet(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiTreeNodeRef> {
+        let pointer = __swift_bridge__$Vec_FfiTreeNode$get(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiTreeNodeRef(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfGetMut(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiTreeNodeRefMut> {
+        let pointer = __swift_bridge__$Vec_FfiTreeNode$get_mut(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiTreeNodeRefMut(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfAsPtr(vecPtr: UnsafeMutableRawPointer) -> UnsafePointer<FfiTreeNodeRef> {
+        UnsafePointer<FfiTreeNodeRef>(OpaquePointer(__swift_bridge__$Vec_FfiTreeNode$as_ptr(vecPtr)))
+    }
+
+    public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
+        __swift_bridge__$Vec_FfiTreeNode$len(vecPtr)
     }
 }
 

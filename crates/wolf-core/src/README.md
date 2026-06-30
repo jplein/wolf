@@ -2,11 +2,11 @@
 
 The `wolf-core` source modules. Each is a single file (not a subdirectory). Data flows: `nvim` spawns the captive Neovim and hands its `redraw` stream to a `redraw::RedrawHandler`, which folds events into the `render` snapshot (and parses the Neovim→shell `wolf_layout` intents into `layout::LayoutIntent`s on a sibling queue); `input` translates abstract events back into RPC; `api` ties it together behind the FFI-shaped `WolfCore`. The file picker adds three more modules: `mru` (the SQLite most-recently-used cache), `files` (the async streaming file-list traversal + the `FileSearch` session), and `rank` (the pure fuzzy-match/ranking function the front-end calls to order results).
 
-Dependency order: `render` → `layout` → `input` → `redraw` → `nvim` → `files` → `mru` → `rank` → `api`. (`layout` is the pure intent types parsed by `redraw`; `files` uses `redraw::WakeFn`; both `mru` and `rank` build on `files::FileEntry` — `FileEntry`'s home is `files.rs`, re-exported from `mru` and the crate root.)
+Dependency order: `render` → `layout` → `input` → `redraw` → `nvim` → `files` → `mru` → `rank` → `tree` → `api`. (`layout` is the pure intent types parsed by `redraw`; `files` uses `redraw::WakeFn`; `mru`, `rank`, and `tree` all build on `files::FileEntry` — `FileEntry`'s home is `files.rs`, re-exported from `mru` and the crate root. `tree` is the pure hierarchical projection of the flat file list, shared by every front-end's file-tree sidebar.)
 
 ## `lib.rs`
 
-Crate root. Declares the public modules (`api`, `files`, `input`, `layout`, `mru`, `nvim`, `rank`, `redraw`, `render`) and re-exports the public surface: `WolfCore`, `CoreConfig`, `CoreError`, `SnapshotReadGuard`; `FileEntry`, `FileSearch`, `FileSearchReadGuard` (from `files`); `FocusDir`, `LayoutIntent`, `SplitOrientation` (from `layout`); `MruStore`, `MruError`, `MRU_LIMIT` (from `mru`); `rank_matches`, `Match`, `MatchKey` (from `rank`); the input types and `key_to_notation`; `WakeFn`; and the render-state types. Documents the one hard rule (no GUI toolkit in the dependency tree).
+Crate root. Declares the public modules (`api`, `files`, `input`, `layout`, `mru`, `nvim`, `rank`, `redraw`, `render`, `tree`) and re-exports the public surface: `WolfCore`, `CoreConfig`, `CoreError`, `SnapshotReadGuard`; `FileEntry`, `FileSearch`, `FileSearchReadGuard` (from `files`); `FocusDir`, `LayoutIntent`, `SplitOrientation` (from `layout`); `MruStore`, `MruError`, `MRU_LIMIT` (from `mru`); `rank_matches`, `Match`, `MatchKey` (from `rank`); `TreeNode`, `children_of`, `ancestors_to_reveal`, `node_rel_path`, `rel_path_for` (from `tree`); the input types and `key_to_notation`; `WakeFn`; and the render-state types. Documents the one hard rule (no GUI toolkit in the dependency tree).
 
 ## `render.rs`
 
@@ -132,6 +132,29 @@ Pure, IO-free fuzzy-match + ranking for the picker — unit-tested headlessly (n
 - `MatchKey` (derived `Ord`, every field "lower = better", declared in priority order): (1) `mru_group` (`0` if in the MRU cache else `1` — **MRU first, LOCKED**), (2) `mru_rank` (`u32::MAX` if not in MRU), (3) `score` wrapped in `core::cmp::Reverse` so a HIGHER score sorts first, (4) `match_start` (smallest first-matched index across the terms), (5) `span` (sum over terms of `last - first`), (6) `len` (`display.chars().count()`), (7) `display` lexicographic.
 
 The per-entry `score` SUMS, across all terms, three bonuses computed over the FULL display: `COMPONENT_START_BONUS` (100) if some path COMPONENT (`display` split on `/ \`) `starts_with` the term, `WORD_START_BONUS` (20) if some WORD (`display` split on `/ \ _ - . space`) `starts_with` the term, and `CONTIGUOUS_BONUS` (4) if the lowercased display `contains` the term as a contiguous substring. The ordering `100 > 20 > 4` makes the single-term tiers strict (component-start beats word-start beats contiguous beats a scattered subsequence at score 0); summing is a soft preference for more/stronger term hits, with determinism guaranteed by the `match_start`/`span`/`len`/`display` tie-breaks. The no-terms path is handled by `rank_empty`. The module has table-driven `#[cfg(test)]` unit tests.
+
+## `tree.rs`
+
+The **pure, toolkit-free** hierarchical projection of the picker's flat file list — a single, FFI-expressible source of truth shared by every front-end (wolf-gnome's `tree.rs` re-exports it; wolf-ffi exposes it over the bridge for wolf-macos). Unit-tested headlessly in its own `#[cfg(test)] mod tests` (mirroring `rank.rs`). The picker's `FileSearch` produces a flat list of `FileEntry` (relative `/`-separated `display`, absolute `path`); this module turns it into the per-directory children a lazy outline/tree view needs, plus the reveal helpers.
+
+```rust
+pub enum TreeNode {
+    Dir  { name: String, rel_path: String },
+    File { name: String, rel_path: String, abs_path: std::path::PathBuf },
+}
+pub fn children_of(entries: &[crate::FileEntry], dir: &str) -> Vec<TreeNode>
+pub fn ancestors_to_reveal(rel_path: &str) -> Vec<String>
+pub fn node_rel_path(node: &TreeNode) -> &str
+pub fn rel_path_for(entries: &[crate::FileEntry], abs: &std::path::Path) -> Option<String>
+```
+
+- `TreeNode` — one immediate child of a directory. `rel_path` is the full relative path from the cwd root (a dir `b` under `a` has `name = "b"`, `rel_path = "a/b"`); a `File`'s `rel_path` equals the originating `FileEntry::display` and its `abs_path` is that entry's `path`.
+- `children_of(entries, dir)` (`#[must_use]`) — the IMMEDIATE children of `dir` (`dir == ""` is the cwd root). Each `display` is split on `/`; the component just after `dir` becomes a `File` (when it is the entry's final component) or a `Dir`. Dir nodes are **deduped** by `rel_path`, and only dirs that (transitively) contain a listed file appear (automatic — dirs are derived from file paths, so no phantom dirs). The result is sorted **directories first, then files**, each group **case-insensitively by `name`** with `rel_path` as a deterministic tie-break. O(n) per call (fine for lazy per-directory expansion).
+- `ancestors_to_reveal(rel_path)` (`#[must_use]`) — the ancestor dir rel-paths from the root down to the file's parent: `"a/b/c.md"` → `["a", "a/b"]`; `"c.md"` → `[]`; `""` → `[]`.
+- `node_rel_path(node)` — the `rel_path` of either variant.
+- `rel_path_for(entries, abs)` (`#[must_use]`) — the current-file → tree-display mapping used by the sidebars' reveal: returns `entry.display.clone()` for the FIRST entry whose `path == abs` **exactly** (a parent-dir prefix does not match), else `None`.
+
+The separator is always `/` (it is `FileEntry::display`'s separator).
 
 ## `api.rs`
 

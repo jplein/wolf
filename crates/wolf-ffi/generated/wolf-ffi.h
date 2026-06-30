@@ -41,6 +41,18 @@ void* __swift_bridge__$Vec_FfiFileEntry$get_mut(void* vec_ptr, uintptr_t index);
 uintptr_t __swift_bridge__$Vec_FfiFileEntry$len(void* vec_ptr);
 void* __swift_bridge__$Vec_FfiFileEntry$as_ptr(void* vec_ptr);
 
+typedef struct FfiTreeNode FfiTreeNode;
+void __swift_bridge__$FfiTreeNode$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiTreeNode$new(void);
+void __swift_bridge__$Vec_FfiTreeNode$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiTreeNode$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiTreeNode$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiTreeNode$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiTreeNode$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiTreeNode$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiTreeNode$as_ptr(void* vec_ptr);
+
 typedef struct FfiFrame FfiFrame;
 void __swift_bridge__$FfiFrame$_free(void* self);
 
@@ -71,10 +83,19 @@ void __swift_bridge__$WolfCoreHandle$send_key(void* self, struct __swift_bridge_
 void __swift_bridge__$WolfCoreHandle$resize(void* self, uint16_t cols, uint16_t rows);
 void __swift_bridge__$WolfCoreHandle$shutdown(void* self);
 void* __swift_bridge__$WolfCoreHandle$start_file_search(void* self);
+void* __swift_bridge__$WolfCoreHandle$start_tree_search(void* self);
+void* __swift_bridge__$WolfCoreHandle$current_file(void* self);
 void __swift_bridge__$WolfCoreHandle$open(void* self, void* path);
 void* __swift_bridge__$FfiFileSearch$ranked(void* self, void* query, uintptr_t max);
+void* __swift_bridge__$FfiFileSearch$children_of(void* self, void* dir);
+void* __swift_bridge__$FfiFileSearch$rel_path_for(void* self, void* abs);
 void* __swift_bridge__$FfiFileEntry$display(void* self);
 void* __swift_bridge__$FfiFileEntry$path(void* self);
+void* __swift_bridge__$FfiTreeNode$name(void* self);
+void* __swift_bridge__$FfiTreeNode$rel_path(void* self);
+void* __swift_bridge__$FfiTreeNode$abs_path(void* self);
+bool __swift_bridge__$FfiTreeNode$is_dir(void* self);
+void* __swift_bridge__$wolf_ffi_ancestors_to_reveal(void* rel_path);
 uint16_t __swift_bridge__$FfiFrame$cols(void* self);
 uint16_t __swift_bridge__$FfiFrame$rows(void* self);
 uint16_t __swift_bridge__$FfiFrame$cursor_row(void* self);

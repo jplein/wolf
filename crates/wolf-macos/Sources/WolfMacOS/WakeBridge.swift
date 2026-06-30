@@ -17,13 +17,20 @@ enum WakeBridge {
     /// alive; set by `AppDelegate` once the `GridView` exists.
     weak static var registeredView: GridView?
 
+    /// The file-tree sidebar nudged on each render wake to reveal + bold the
+    /// current buffer (`current_file` rides the same render wake, not a redraw
+    /// frame). Weak so the bridge never keeps the window alive; set by
+    /// `AppDelegate` once the `FileTreeView` exists.
+    weak static var registeredTree: FileTreeView?
+
     /// Registers the C wake callback with the Rust core. The closure captures no
-    /// state (it only touches the static above), so it converts to a
+    /// state (it only touches the statics above), so it converts to a
     /// `@convention(c)` function pointer.
     static func install() {
         wolf_ffi_set_wake({
             DispatchQueue.main.async {
                 WakeBridge.registeredView?.needsDisplay = true
+                WakeBridge.registeredTree?.onRenderWake()
             }
         })
     }

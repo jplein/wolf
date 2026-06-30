@@ -22,6 +22,8 @@
 //! - [`input`]: abstract input events and their translation to Neovim RPC.
 //! - [`redraw`]: the `redraw` handler that folds events into the snapshot.
 //! - [`nvim`]: spawning/supervising the captive, hermetic Neovim.
+//! - [`tree`]: the pure, toolkit-free hierarchical projection of the flat file
+//!   list into the sidebar's per-directory children (shared by all front-ends).
 //! - [`api`]: the FFI-shaped front-end surface ([`WolfCore`]).
 
 pub mod api;
@@ -33,6 +35,7 @@ pub mod nvim;
 pub mod rank;
 pub mod redraw;
 pub mod render;
+pub mod tree;
 
 pub use api::{CoreConfig, CoreError, SnapshotReadGuard, WolfCore};
 pub use files::{FileEntry, FileSearch, FileSearchReadGuard};
@@ -48,3 +51,4 @@ pub use render::{
     Cell, Cursor, CursorShape, DefaultColors, Grid, HighlightTable, HlAttr, ModeInfo,
     ResolvedStyle, Rgb, SharedSnapshot, Snapshot, Viewport, WinInfo,
 };
+pub use tree::{ancestors_to_reveal, children_of, node_rel_path, rel_path_for, TreeNode};
