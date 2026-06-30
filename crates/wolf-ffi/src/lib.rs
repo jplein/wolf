@@ -177,6 +177,10 @@ mod ffi {
         // The absolute path of the buffer currently being edited (canonicalized
         // by core), or the empty string for an unnamed buffer / shut-down core.
         fn current_file(&self) -> String;
+        // Neovim's LIVE, already-canonicalized working directory (tracks
+        // `:cd`/`DirChanged`), or the empty string until nvim first reports it /
+        // after shutdown.
+        fn cwd(&self) -> String;
         // Opens `path` (an absolute filesystem path) in Neovim via
         // `InputEvent::Open`; the core's input pump records the MRU.
         fn open(&self, path: String);
@@ -508,6 +512,24 @@ impl WolfCoreHandle {
         snapshot
             .current_file
             .as_ref()
+            .map_or_else(String::new, |p| p.to_string_lossy().into_owned())
+    }
+
+    /// Neovim's LIVE, already-canonicalized working directory (tracking
+    /// `:cd`/`DirChanged`), or the empty string until nvim first reports it or
+    /// after the core has been shut down.
+    ///
+    /// Read on each editor render wake by the sidebar to re-root the file tree
+    /// when the cwd changed. Routes through [`WolfCore::live_cwd`] — cwd is NOT in
+    /// the render snapshot, so (unlike [`current_file`](Self::current_file)) it
+    /// must not read `read_snapshot()`.
+    #[must_use]
+    pub fn cwd(&self) -> String {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return String::new();
+        };
+        core.live_cwd()
             .map_or_else(String::new, |p| p.to_string_lossy().into_owned())
     }
 

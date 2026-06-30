@@ -68,6 +68,17 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
     /// across reloads.
     private var itemsByRelPath: [String: TreeItem] = [:]
 
+    /// Neovim's live working directory the tree is currently rooted at (empty
+    /// until nvim first reports it). Compared on each render wake to re-root on
+    /// `:cd`/`DirChanged`.
+    private var cwdPath: String = ""
+    /// The synthetic root node: the cwd ITSELF, shown as a single top-level node
+    /// (its basename), expanded on init. `nil` until the cwd is known.
+    private var rootItem: TreeItem?
+    /// Whether the synthetic root has been auto-expanded once after streaming in
+    /// (VS Code / Snacks model: root expanded, its subdirectories collapsed).
+    private var didInitialExpand = false
+
     /// The absolute path of the current buffer (bolded), or `nil` for none.
     private var currentFileAbs: String?
     /// The last `current_file()` acted on, so `onRenderWake` only reveals on an
@@ -91,10 +102,28 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
         fatalError("FileTreeView is not constructed from a nib")
     }
 
-    /// Starts the long-lived file-tree search and does an initial refresh so the
-    /// MRU seed / top level appears immediately.
+    /// Starts the long-lived file-tree search, roots the tree at nvim's live cwd
+    /// (shown as a single synthetic root node), and does an initial refresh so the
+    /// root / top level appears immediately.
     func start() {
         search = handle.start_tree_search()
+        cwdPath = handle.cwd().toString()
+        rootItem = cwdPath.isEmpty ? nil : makeRoot(cwdPath)
+        refresh()
+    }
+
+    /// Re-roots the tree at a new cwd (`:cd`/`DirChanged`): rebuilds the synthetic
+    /// root, restarts the tree search (dropping the old handle cancels its
+    /// traversal and re-registers the same tree wake), clears the cached items and
+    /// the expand flag, and re-arms a reveal of the current buffer into the NEW
+    /// tree.
+    func reroot(to cwd: String) {
+        cwdPath = cwd
+        rootItem = makeRoot(cwd)
+        search = handle.start_tree_search()
+        itemsByRelPath = [:]
+        didInitialExpand = false
+        pendingReveal = currentFileAbs
         refresh()
     }
 
@@ -104,6 +133,10 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
     func refresh() {
         guard search != nil else { return }
         outlineView.reloadData()
+        if !didInitialExpand, let rootItem, !children(of: rootItem).isEmpty {
+            outlineView.expandItem(rootItem)
+            didInitialExpand = true
+        }
         if let abs = pendingReveal {
             reveal(abs: abs)
         }
@@ -112,6 +145,12 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
     /// Reacts to an editor render wake: if `current_file()` changed, records it,
     /// re-bolds, and reveals the new current buffer.
     func onRenderWake() {
+        // Re-root FIRST so a simultaneous cwd + current-file change reveals into
+        // the NEW tree.
+        let cwd = handle.cwd().toString()
+        if !cwd.isEmpty && cwd != cwdPath {
+            reroot(to: cwd)
+        }
         let current = handle.current_file().toString()
         if current == lastCurrent { return }
         lastCurrent = current
@@ -131,6 +170,11 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
             // Not resolvable yet; leave pendingReveal set for the next refresh.
             pendingReveal = abs
             return
+        }
+
+        // Expand the synthetic cwd root first so its children materialize.
+        if let rootItem {
+            outlineView.expandItem(rootItem)
         }
 
         // Expand ancestors top-down so each child materializes before the next.
@@ -203,12 +247,30 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
 
     // MARK: - Private
 
-    /// Projects the immediate children of `item` ("" root when `nil`) from the
-    /// latest streamed snapshot, reusing cached `TreeItem`s by `relPath` so the
-    /// outline keeps stable identity.
+    /// Builds the synthetic root `TreeItem` for `cwd`: a directory node whose name
+    /// is the cwd's basename, with the sentinel rel-path `""` (so its children are
+    /// `children_of("")`). Kept OUT of `itemsByRelPath`.
+    private func makeRoot(_ cwd: String) -> TreeItem {
+        TreeItem(
+            isDir: true,
+            name: URL(fileURLWithPath: cwd).lastPathComponent,
+            relPath: "",
+            absPath: cwd
+        )
+    }
+
+    /// Projects the immediate children of `item` from the latest streamed
+    /// snapshot. The top level (`nil`) is the single synthetic cwd root; the root
+    /// (rel-path `""`) and deeper directories project `children_of(relPath)`,
+    /// reusing cached `TreeItem`s by `relPath` so the outline keeps stable
+    /// identity. The synthetic root is never cached in `itemsByRelPath`.
     private func children(of item: Any?) -> [TreeItem] {
         guard let search else { return [] }
-        let dir = (item as? TreeItem)?.relPath ?? ""
+        if item == nil {
+            return rootItem.map { [$0] } ?? []
+        }
+        guard let treeItem = item as? TreeItem else { return [] }
+        let dir = treeItem.relPath
         var result: [TreeItem] = []
         for node in search.children_of(dir) {
             let rel = node.rel_path().toString()

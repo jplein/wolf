@@ -148,6 +148,10 @@ extension WolfCoreHandleRef {
         RustString(ptr: __swift_bridge__$WolfCoreHandle$current_file(ptr))
     }
 
+    public func cwd() -> RustString {
+        RustString(ptr: __swift_bridge__$WolfCoreHandle$cwd(ptr))
+    }
+
     public func open<GenericIntoRustString: IntoRustString>(_ path: GenericIntoRustString) {
         __swift_bridge__$WolfCoreHandle$open(ptr, { let rustString = path.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
     }

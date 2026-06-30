@@ -12,6 +12,8 @@
 //!   * `FfiFileSearch::rel_path_for(abs: String) -> String` (empty for no match)
 //!   * free fn `wolf_ffi_ancestors_to_reveal(rel_path: String) -> Vec<String>`
 //!   * `WolfCoreHandle::current_file() -> String` (empty for `None`)
+//!   * `WolfCoreHandle::cwd() -> String` (nvim's live, already-canonicalized
+//!     working directory; empty until nvim first reports it / after shutdown)
 //!
 //! ## SKIP-when-unset policy
 //!
@@ -21,7 +23,9 @@
 //!
 //! ## What this asserts
 //!
-//! A freshly seeded, nested cwd streams its files in; the projected tree lists
+//! A freshly seeded, nested cwd is reported by `cwd()` (polled until non-empty,
+//! then compared canonicalized to the seeded path). The nested cwd streams its
+//! files in; the projected tree lists
 //! directories-before-files (case-insensitive), includes dotfiles, and excludes
 //! `.gitignore`d files. `rel_path_for` maps a streamed entry's absolute path to
 //! its display and yields `""` for an unknown path. `wolf_ffi_ancestors_to_reveal`
@@ -111,6 +115,37 @@ fn tree_search_projects_children_and_reveals_current_file() {
         common::DEFAULT_ROWS,
     )
     .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
+
+    // --- handle.cwd() reports nvim's live, canonical working directory -------
+    // `cwd()` is empty until nvim first reports its directory via the
+    // `wolf_cwd`/DirChanged notification, which arrives slightly AFTER start, so
+    // poll (bounded by the same FLUSH_TIMEOUT/POLL_INTERVAL) until non-empty.
+    // Driving a later `:cd` re-root is deferred to manual smoke (flaky headless).
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    let mut reported_cwd = handle.cwd();
+    while Instant::now() < deadline {
+        reported_cwd = handle.cwd();
+        if !reported_cwd.is_empty() {
+            break;
+        }
+        sleep(POLL_INTERVAL);
+    }
+    assert!(
+        !reported_cwd.is_empty(),
+        "cwd() should report nvim's live working directory within {FLUSH_TIMEOUT:?} \
+         (it stays empty until nvim's first DirChanged/wolf_cwd notification)"
+    );
+    // Robust against the macOS /var -> /private/var symlink, exactly like the
+    // abs_path / current_file comparisons elsewhere in this test: canonicalize
+    // the reported cwd and compare it to the canonical seeded cwd.
+    let canonical_reported = Path::new(&reported_cwd)
+        .canonicalize()
+        .expect("cwd() should report a path that exists on disk");
+    assert_eq!(
+        canonical_reported, canonical_cwd,
+        "cwd() should equal the seeded cwd after nvim settles its directory \
+         (reported={reported_cwd:?}, seeded={canonical_cwd:?})"
+    );
 
     // The tree gets its OWN long-lived `FfiFileSearch` via `start_tree_search()`.
     let tree = handle.start_tree_search();

@@ -312,6 +312,20 @@ impl WolfCore {
             .unwrap_or_default()
     }
 
+    /// The captive Neovim's LIVE working directory, or `None` until nvim first
+    /// reports it.
+    ///
+    /// A cheap, synchronous main-thread read of the SAME `tracked_cwd` cell
+    /// [`mru_recent`](Self::mru_recent) reads (a clone-out of the `RwLock` guard,
+    /// no `getcwd()` RPC). The value is ALREADY canonicalized (the redraw handler
+    /// canonicalizes it in `apply_cwd` before storing), so callers get a clean
+    /// canonical path with no further work. Tracks `:cd`/`:lcd`/`:tcd` via the
+    /// `wolf_cwd`/`DirChanged` notification; `None` until nvim first reports.
+    #[must_use]
+    pub fn live_cwd(&self) -> Option<PathBuf> {
+        self.tracked_cwd.read().clone()
+    }
+
     /// Starts a streaming file search rooted at the captive Neovim's live working
     /// directory (`getcwd()`), falling back to the configured cwd.
     ///

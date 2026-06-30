@@ -85,6 +85,7 @@ void __swift_bridge__$WolfCoreHandle$shutdown(void* self);
 void* __swift_bridge__$WolfCoreHandle$start_file_search(void* self);
 void* __swift_bridge__$WolfCoreHandle$start_tree_search(void* self);
 void* __swift_bridge__$WolfCoreHandle$current_file(void* self);
+void* __swift_bridge__$WolfCoreHandle$cwd(void* self);
 void __swift_bridge__$WolfCoreHandle$open(void* self, void* path);
 void* __swift_bridge__$FfiFileSearch$ranked(void* self, void* query, uintptr_t max);
 void* __swift_bridge__$FfiFileSearch$children_of(void* self, void* dir);
