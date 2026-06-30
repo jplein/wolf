@@ -341,18 +341,43 @@ final class PaneContainerView: NSView {
         ctx.restoreGState()
     }
 
-    /// Paints the outer grid (grid 1)'s LAST row into the bottom cmdline strip.
+    /// Paints the command line / messages into the bottom one-row strip.
+    ///
+    /// Under `ext_multigrid` Neovim renders the command line and messages onto a
+    /// dedicated MESSAGE grid (NOT grid 1), positioned at the bottom of the screen
+    /// via `msg_set_pos` (which the core drops). When the command line is open the
+    /// cursor moves onto that grid, so the message grid is identified as "the grid
+    /// the cursor is on that is neither grid 1 nor a window/pane grid"; its cursor
+    /// row (where the `:`/`/` line lives) is painted into the strip. Otherwise the
+    /// strip paints grid 1's LAST row (persistent messages), as before.
     private func paintCmdlineStrip(_ ctx: CGContext) {
-        let frame = handle.read_frame_for_grid(Self.cmdlineGridId)
-        let rows = Int(frame.rows())
-        guard rows > 0 else { return }
-
         let stripRect = CGRect(x: 0, y: paneAreaHeight, width: bounds.width, height: stripHeight)
+        let cursorGrid = handle.read_frame().cursor_grid()
+        let windowGrids = Set(handle.windows().map { $0.grid() })
+
+        if cursorGrid != Self.cmdlineGridId, !windowGrids.contains(cursorGrid) {
+            // Command-line / message grid: paint the cursor's row (the active line).
+            let frame = handle.read_frame_for_grid(cursorGrid)
+            guard frame.rows() > 0 else { return }
+            paintStripRow(frame, row: Int(frame.cursor_row()), stripRect: stripRect, ctx: ctx)
+        } else {
+            // Grid 1's LAST row (persistent messages while not in cmdline mode).
+            let frame = handle.read_frame_for_grid(Self.cmdlineGridId)
+            let rows = Int(frame.rows())
+            guard rows > 0 else { return }
+            paintStripRow(frame, row: rows - 1, stripRect: stripRect, ctx: ctx)
+        }
+    }
+
+    /// Paints a single `row` of `frame` into `stripRect` (translated so that row
+    /// lands at the strip's top; the rest paints above and is clipped away), plus
+    /// the cursor when it lives on this grid.
+    private func paintStripRow(
+        _ frame: FfiFrame, row: Int, stripRect: CGRect, ctx: CGContext
+    ) {
         ctx.saveGState()
         ctx.clip(to: stripRect)
-        // Place grid 1's LAST row at the strip's top; the rest paints above and is
-        // clipped away.
-        ctx.translateBy(x: 0, y: stripRect.minY - CGFloat(rows - 1) * metrics.cellHeight)
+        ctx.translateBy(x: 0, y: stripRect.minY - CGFloat(row) * metrics.cellHeight)
         paintCells(frame, ctx: ctx)
         if frame.cursor_visible() {
             drawCursor(ctx, frame: frame, cells: frame.cells(), cols: Int(frame.cols()))

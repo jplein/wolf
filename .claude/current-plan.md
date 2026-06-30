@@ -58,6 +58,25 @@ with win handle), `Snapshot.active_win`, `Snapshot.grid_for_win(win)`, per-grid
 - Current FFI: `crates/wolf-ffi/src/lib.rs` (`FfiFrame`, `read_frame`, the wake
   trio), `crates/wolf-ffi/README.md`.
 
+## Status: COMPLETE ✅ — two manual-smoke bugs found + fixed (blank panes, missing cmdline)
+
+### Bug 2: command line not visible (FIXED)
+After the single-view rewrite, panes + content + editing worked but the command line
+didn't show. Diagnosis (via screenshotting the built .app + logging grid contents):
+under `ext_multigrid`, nvim 0.12 renders the command line on a DEDICATED MESSAGE grid
+(grid 3 here), NOT grid 1 — positioned via `msg_set_pos` (which the core drops). The
+cursor moves onto that grid in cmdline mode. The strip only painted grid 1 (always
+empty). Confirmed: typing `:set number` → `cursorGrid=3`, grid 3 row 0 = `':set
+number'`, `windows=[g2]` (grid 3 is not a window). Fix: `paintCmdlineStrip` now paints
+the grid the cursor is on when that grid is neither grid 1 nor a window grid (its
+cursor row) — the message/cmdline grid — falling back to grid 1's last row otherwise.
+Verified live: `:set number incsearch wrap` renders in the bottom strip with the
+cursor. Docs corrected (Sources/README, README, architecture.md cmdline-strip
+descriptions) + prettier. Build + WolfKeyMapTests + panes + bundle_layout_test green.
+No diagnostics left.
+
+---
+
 ## Status: COMPLETE ✅ — manual smoke surfaced a render bug; FIXED by a single-view rewrite
 
 ### Manual smoke found: editor panes blank (regression)
