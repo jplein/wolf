@@ -35,6 +35,12 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     private static let topMargin: CGFloat = 24
     /// Inner padding around the search field + list.
     private static let padding: CGFloat = 8
+    /// Extra vertical padding added to the measured font cell height to form each
+    /// list row's height, so the selection highlight has comfortable breathing room
+    /// around the (vertically centered) text.
+    private static let rowVerticalPadding: CGFloat = 6
+    /// Horizontal inset of a row's label within its cell.
+    private static let cellHorizontalInset: CGFloat = 4
     /// Corner radius of the floating panel.
     private static let cornerRadius: CGFloat = 8
     /// Reuse identifier for the list's text cells.
@@ -189,8 +195,8 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     ) -> NSView? {
         let cell =
             tableView.makeView(withIdentifier: Self.cellIdentifier, owner: self)
-            as? NSTextField ?? makeCell()
-        cell.stringValue = row < rowDisplays.count ? rowDisplays[row] : ""
+            as? NSTableCellView ?? makeCell()
+        cell.textField?.stringValue = row < rowDisplays.count ? rowDisplays[row] : ""
         return cell
     }
 
@@ -239,6 +245,10 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         tableView.delegate = self
         tableView.target = self
         tableView.doubleAction = #selector(handleDoubleClick)
+        // Fixed, font-derived row height so the selection highlight matches the
+        // (vertically centered) text rather than floating above it.
+        tableView.usesAutomaticRowHeights = false
+        tableView.rowHeight = metrics.cellHeight.rounded(.up) + Self.rowVerticalPadding
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.documentView = tableView
@@ -260,13 +270,28 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         ])
     }
 
-    /// Creates a reusable single-line label cell for the results list.
-    private func makeCell() -> NSTextField {
-        let cell = NSTextField(labelWithString: "")
+    /// Creates a reusable list cell: an `NSTableCellView` whose single-line label is
+    /// vertically centered within the row, so the selection highlight (which fills
+    /// the row) is centered around the text.
+    private func makeCell() -> NSTableCellView {
+        let cell = NSTableCellView()
         cell.identifier = Self.cellIdentifier
-        cell.font = metrics.font
-        cell.lineBreakMode = .byTruncatingMiddle
-        cell.drawsBackground = false
+
+        let label = NSTextField(labelWithString: "")
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = metrics.font
+        label.lineBreakMode = .byTruncatingMiddle
+        label.drawsBackground = false
+        cell.addSubview(label)
+        cell.textField = label
+
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(
+                equalTo: cell.leadingAnchor, constant: Self.cellHorizontalInset),
+            label.trailingAnchor.constraint(
+                equalTo: cell.trailingAnchor, constant: -Self.cellHorizontalInset),
+            label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+        ])
         return cell
     }
 
