@@ -170,9 +170,12 @@ modifiers off the `NSEvent`, runs them through the **pure, AppKit-free**
 `WolfKeyMap.translate` seam into a structured `FfiKeyEvent`, and calls `send_key`
 — so the Shift contract is honored once, in Rust (`key_to_notation`), exactly as
 on Linux. View resizes map the current bounds to a `(cols, rows)` grid size and
-call `resize`. The captive Neovim is hermetic, located via `WOLF_NVIM_BIN` and
-launched against the repo's `runtime/nvim/init.lua` (the same hermetic mechanism
-as Linux).
+call `resize`. The captive Neovim is hermetic and **bundled inside the `.app`**: a
+pinned Neovim 0.12.3 tree at `Contents/Resources/nvim/` and the captive `init.lua`
+at `Contents/Resources/init.lua` (decision 8). `AppDelegate` points wolf-core at
+the bundled `nvim/bin/nvim` by setting `WOLF_NVIM_BIN` (only if a developer hasn't
+already exported it) and launches against the bundled `init.lua` (overridable via
+`WOLF_INIT_LUA`) — so a double-clicked `.app` runs with no shell environment.
 
 A known structural limitation of this increment: the view paints only the
 **active grid**, with no cmdline strip. Entering Neovim's cmdline mode (`:`/`/`)
@@ -188,9 +191,12 @@ popup menu (`ext_cmdline` / `ext_messages` / `ext_popupmenu` as AppKit widgets �
 and, until then, the cmdline strip the gnome shell already has), HiDPI edge
 cases, per-cell glyph **text attributes** (bold/italic/underline/undercurl/
 strikethrough — these are resolved and packed by `wolf-ffi` but NOT yet consumed
-in painting; only per-cell fg/bg + the cursor are painted this increment), and
-bundling the pinned Neovim into the `.app` (it currently locates `nvim` via
-`WOLF_NVIM_BIN`). See [`crates/wolf-macos/README.md`](crates/wolf-macos/README.md).
+in painting; only per-cell fg/bg + the cursor are painted this increment). The
+pinned Neovim is now bundled into the `.app` (above), but the live
+nvim→FFI→render round-trip is not yet covered by a passing automated test on the
+macOS Bazel host (the `bridge_smoke` harness hangs host-wide, unrelated to
+bundling — under investigation). See
+[`crates/wolf-macos/README.md`](crates/wolf-macos/README.md).
 
 ## Architectural decisions
 
@@ -288,17 +294,34 @@ Delivery:
   wrapped `nvim` with the plugin set baked into the runtimepath and the LSP/
   formatter binaries on its `PATH` (`makeWrapper --prefix PATH`). The whole closure
   ships together.
-- **macOS:** a pinned Neovim plus its tools is bundled inside the `.app`. The GUI
-  launches that absolute bundled path, never `nvim` from the user's `PATH`.
+- **macOS (REALIZED):** the `.app` bundles a pinned Neovim **0.12.3** — the
+  official macOS release tree (`bin/nvim` + `lib/nvim/parser` treesitter parsers,
+  including `markdown` and `markdown_inline`, + `share/nvim/runtime`) — at
+  `Contents/Resources/nvim/`, alongside the captive `init.lua` at
+  `Contents/Resources/init.lua`. Bazel downloads and verifies the release
+  hermetically (sha256-pinned via the `//bazel/nvim` module extension, assembled
+  into a structure-preserving `TreeArtifact` with `aspect_bazel_lib`'s
+  `copy_to_directory`). At launch the GUI points wolf-core at that absolute
+  bundled binary: `AppDelegate` sets `WOLF_NVIM_BIN` to
+  `Contents/Resources/nvim/bin/nvim` **only if it is not already set**
+  (`setenv(..., 0)`, so a developer's exported `WOLF_NVIM_BIN` still wins) before
+  starting the core — never `nvim` from the user's `PATH`. So a double-clicked
+  `.app` runs its own Neovim with no shell environment. (`wrapNeovim`-style full
+  plugin baking beyond what the release ships — a `marksman` LSP, a formatter —
+  remains deferred; see below.)
 
-**Phase 1 status.** The Neovim binary is pinned and hermetic from day one, via
-the flake devShell: core locates it only through `WOLF_NVIM_BIN` (never `PATH`,
-never `/nix/store` scanning) and launches it `--embed --clean -u
-runtime/nvim/init.lua` with `-i NONE -n`, pinning `NVIM_APPNAME=wolf` and the
-`XDG_*` dirs under a private temp dir. Full `wrapNeovim` plugin baking
-(markdown / markdown_inline treesitter grammars, the `marksman` LSP, a formatter)
-is **deferred to a later phase**; Phase 1 runs the bare pinned binary with the
-repo's `init.lua` and relies on Neovim's built-in markdown syntax highlighting.
+**Phase status.** The Neovim binary is pinned and hermetic from day one: on
+Linux, via the flake devShell (core locates it only through `WOLF_NVIM_BIN`,
+never `PATH`, never `/nix/store` scanning); on macOS, via the bundled
+`Contents/Resources/nvim/bin/nvim` (above), which `AppDelegate` exports as
+`WOLF_NVIM_BIN` unless overridden. Either way core launches it `--embed --clean
+-u runtime/nvim/init.lua` with `-i NONE -n`, pinning `NVIM_APPNAME=wolf` and the
+`XDG_*` dirs under a private temp dir. Full `wrapNeovim` plugin baking beyond what
+the macOS release ships (the `marksman` Markdown LSP, a formatter) is **deferred
+to a later phase**; the current build runs the pinned binary with the repo's
+`init.lua` and the treesitter `markdown`/`markdown_inline` parsers the release
+carries. Bundling is **arm64-tested** on the dev host; the x86_64 tree is wired
+via `select()` but untested.
 
 ### 9. The macOS UI: AppKit, Swift, Tahoe-only, all-Bazel — locked
 
@@ -432,15 +455,16 @@ dumb; Neovim re-emits `hl_attr_define` and the grid repaints.
 
 ## Build
 
-See [Building Wolf](build.md). In brief: on Linux (NixOS), `wolf-core` + `wolf-gnome` build with Cargo under Nix. On macOS, the **Rust core** builds with **Bazel** (driven by **bazelisk**), with `rules_rust`/`crate_universe` consuming the same `Cargo.toml`/`Cargo.lock` and `rules_rust` downloading a pinned `rustc`; the C/link toolchain (apple_support) deliberately uses the **host Xcode SDK** rather than the older SDK shipped inside Nix (this matters for the bundled SQLite that `rusqlite` compiles via `cc`). The macOS path now builds `wolf-core`, the `wolf-ffi` swift-bridge crate, **and** the `wolf-macos` AppKit `.app` (`bazel build //crates/wolf-macos:Wolf`) on the Xcode 26 / Tahoe SDK via `rules_swift` + `rules_apple` (with `rules_xcodeproj` for an uncommitted debug project). Bundling the pinned Neovim into the `.app` remains a later phase — the app currently locates `nvim` via `WOLF_NVIM_BIN`.
+See [Building Wolf](build.md). In brief: on Linux (NixOS), `wolf-core` + `wolf-gnome` build with Cargo under Nix. On macOS, the **Rust core** builds with **Bazel** (driven by **bazelisk**), with `rules_rust`/`crate_universe` consuming the same `Cargo.toml`/`Cargo.lock` and `rules_rust` downloading a pinned `rustc`; the C/link toolchain (apple_support) deliberately uses the **host Xcode SDK** rather than the older SDK shipped inside Nix (this matters for the bundled SQLite that `rusqlite` compiles via `cc`). The macOS path now builds `wolf-core`, the `wolf-ffi` swift-bridge crate, **and** the `wolf-macos` AppKit `.app` (`bazel build //crates/wolf-macos:Wolf`) on the Xcode 26 / Tahoe SDK via `rules_swift` + `rules_apple` (with `rules_xcodeproj` for an uncommitted debug project). The build also **bundles a pinned Neovim 0.12.3** (downloaded hermetically by the `//bazel/nvim` module extension and assembled with `aspect_bazel_lib`'s `copy_to_directory`) plus the captive `init.lua` into `Contents/Resources/`, so the packaged app no longer needs `WOLF_NVIM_BIN` to run (a developer's exported `WOLF_NVIM_BIN` / `WOLF_INIT_LUA` still wins).
 
 ## Deferred / open
 
 - Native command line, messages, and completion (decision 7) — when, and exactly
   which Adw/AppKit widgets.
 - Whether a shared portable renderer (decision 2) ever earns its keep.
-- macOS Neovim update/pinning workflow (how the bundled build is produced and
-  refreshed).
+- The `bridge_smoke` test hangs host-wide on the macOS Bazel host (also against a
+  system nvim) — so the live nvim→FFI round-trip is not yet green there; under
+  investigation, unrelated to the Neovim bundling.
 
 ### Split panes — known v1 limitations
 

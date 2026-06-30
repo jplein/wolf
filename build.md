@@ -61,7 +61,7 @@ cargo run -p wolf-core --example grid_dump
 
 ## Building on macOS (Bazel)
 
-On macOS the canonical build tool is **Bazel**, driven by **bazelisk**, and it builds with the **host Xcode SDK** (not the older SDK shipped inside Nix). It builds `wolf-core`, the `wolf-ffi` swift-bridge crate, and the `wolf-macos` AppKit `.app` (see "Building the macOS app" below). Running the nvim-backed tests under Bazel is still gated on a pinned `nvim` via `WOLF_NVIM_BIN`, which is not yet provisioned on the macOS Bazel host.
+On macOS the canonical build tool is **Bazel**, driven by **bazelisk**, and it builds with the **host Xcode SDK** (not the older SDK shipped inside Nix). It builds `wolf-core`, the `wolf-ffi` swift-bridge crate, and the `wolf-macos` AppKit `.app` (see "Building the macOS app" below). The `.app` bundles its own pinned Neovim 0.12.3 (see "Bundled Neovim (macOS)" below), so the packaged app no longer needs `WOLF_NVIM_BIN` to run.
 
 ### Prerequisites
 
@@ -108,7 +108,7 @@ The macOS app builds entirely under Bazel — **Bazel is authoritative**; the ge
 bazel build //crates/wolf-macos:Wolf
 ```
 
-This produces `Wolf.app`, code-signed, with a minimum OS of 26.0. The app starts the captive Neovim located via `WOLF_NVIM_BIN` (the pinned Neovim is not yet bundled into the `.app`).
+This produces `Wolf.app`, code-signed (dev ad-hoc), with a minimum OS of 26.0. The app bundles its own pinned Neovim 0.12.3 + the captive `init.lua` in `Contents/Resources/` (see "Bundled Neovim (macOS)" below), so double-clicking it works with no shell environment. A developer's exported `WOLF_NVIM_BIN` (and `WOLF_INIT_LUA`) still overrides the bundled binary (and `init.lua`).
 
 ### Regenerating the swift-bridge bindings
 
@@ -128,19 +128,34 @@ bazel run //crates/wolf-macos:xcodeproj
 
 The output `.xcodeproj` is **uncommitted** (`.gitignore`d) and exists only for LLDB / IDE debugging. It is never the build of record — Bazel remains authoritative.
 
+### Bundled Neovim (macOS)
+
+The macOS `.app` ships its own pinned Neovim so it runs with no external Neovim install and no `WOLF_NVIM_BIN`. The pinned version (**0.12.3**) and both per-arch sha256 checksums live in [`bazel/nvim/extensions.bzl`](bazel/nvim/extensions.bzl); the `//bazel/nvim` module extension downloads and verifies the official release tarballs (no system or `PATH` dependency). `//bazel/nvim:nvim_tree` is the arch-selected (`select()` on `@platforms//cpu`), structure-preserving `nvim/` tree — `bin/nvim` + `lib/nvim/parser/*.so` (including the `markdown` / `markdown_inline` treesitter parsers) + `share/nvim/runtime` — that `//crates/wolf-macos:Wolf` bundles into `Contents/Resources/nvim/`. The captive `runtime/nvim/init.lua` is bundled flat at `Contents/Resources/init.lua`. `aspect_bazel_lib` was added as a `bazel_dep` (build-time only — it never enters `wolf-core`'s dependency graph) for `copy_to_directory`, which preserves the tree hierarchy and the executable bits. See [`bazel/nvim/README.md`](bazel/nvim/README.md) for the overlay/select details.
+
+At launch `AppDelegate` sets `WOLF_NVIM_BIN` to the bundled `Contents/Resources/nvim/bin/nvim` **only if it is not already set**, so a developer's exported `WOLF_NVIM_BIN` still wins (likewise `WOLF_INIT_LUA` overrides the bundled `init.lua`). Bundling is **arm64-tested** on the dev host; the x86_64 tree is wired via `select()` but untested. The bundled binary is the **official release build** (ad-hoc / linker-signed Mach-O); the app's `codesign --verify --deep --strict` passes for dev — there is no Developer ID signing or notarization (out of scope).
+
+To **bump the pinned Neovim version**:
+
+1. Change the version in the release URLs in [`bazel/nvim/extensions.bzl`](bazel/nvim/extensions.bzl) (`_VERSION`).
+2. Recompute **both** sha256 checksums — `shasum -a 256 nvim-macos-arm64.tar.gz` and `shasum -a 256 nvim-macos-x86_64.tar.gz` — and update `_ARM64_SHA256` / `_X86_64_SHA256` (and the per-arch archive-root names if the release directory name changes).
+3. Regenerate and commit `MODULE.bazel.lock`.
+4. Re-run `bazel test //bazel/nvim:nvim_version_test` (and update its expected version, which lives in the test script).
+
 ### Test targets
 
 ```sh
+bazel test //bazel/nvim:nvim_version_test        # execs the bundled pinned nvim
+bazel test //crates/wolf-macos:bundle_layout_test # asserts the .app resource layout
 bazel test //crates/wolf-ffi:frame_pack          # headless, deterministic
-bazel test //crates/wolf-ffi:bridge_smoke        # real nvim; SKIPs without WOLF_NVIM_BIN
+bazel test //crates/wolf-ffi:bridge_smoke        # real nvim; see the note below
 bazel test //crates/wolf-macos:WolfKeyMapTests   # pure Swift key translation
 ```
 
+- `//bazel/nvim:nvim_version_test` execs the pinned, bundled Neovim tree: it asserts the binary exists and is executable, that `nvim --version` reports `NVIM v0.12.3`, that `VIMRUNTIME` self-locates **inside** the bundled tree, and that the `markdown` treesitter parser ships.
+- `//crates/wolf-macos:bundle_layout_test` inspects the built `.app` and asserts the resource layout: `Contents/Resources/nvim/bin/nvim` (executable), `…/nvim/lib/nvim/parser/markdown.so`, `…/nvim/share/nvim/runtime` (a directory), and `Contents/Resources/init.lua`.
 - `//crates/wolf-ffi:frame_pack` builds a `wolf_core::Snapshot` by hand (no nvim) and asserts `FfiFrame`'s color packing, flag bits, reverse-video cursor, and cell accessors. It is deterministic and runs **regardless** of `WOLF_NVIM_BIN`.
-- `//crates/wolf-ffi:bridge_smoke` drives the Rust half of the bridge against a real pinned Neovim (no mocks). Because the macOS Bazel host cannot yet provision `nvim`, it **loudly skips** when `WOLF_NVIM_BIN` is unset (and runs for real on Linux/Cargo devShells).
+- `//crates/wolf-ffi:bridge_smoke` drives the Rust half of the bridge against a real pinned Neovim (no mocks). It runs for real on Linux/Cargo devShells. On the macOS Bazel host it currently **hangs** when pointed at a real nvim — including against a separately-installed system nvim 0.12.3 — so it is a **pre-existing, host-wide** issue in the bridge's read/wake pump or the test harness, unrelated to the Neovim bundling and under investigation. It is therefore not yet a passing macOS proxy for the live nvim→FFI round-trip.
 - `//crates/wolf-macos:WolfKeyMapTests` is a pure Swift `XCTest` over the AppKit-free `WolfKeyMap` key-translation seam — no `NSEvent`, no window — and runs regardless of `WOLF_NVIM_BIN`.
-
-`WOLF_NVIM_BIN` is not yet provisioned for Bazel-run tests on macOS, so only the nvim-backed `bridge_smoke` is affected (it skips); the headless `frame_pack` and Swift `WolfKeyMapTests` run regardless.
 
 ## The one hard rule and how it is enforced
 
@@ -175,8 +190,10 @@ bazel query 'deps(//crates/wolf-core:wolf_core)' | grep -iE \
 ## Notes
 
 - The captive Neovim is pinned and hermetic from day one (see
-  [architecture.md](architecture.md) §8). Phase 1 runs the **bare** pinned binary
-  with the repo's `runtime/nvim/init.lua`.
-- Full `wrapNeovim` plugin baking — treesitter grammars (markdown /
-  markdown_inline) and a Markdown LSP such as `marksman` — is **deferred to a
-  later phase**. Phase 1 relies on Neovim's built-in markdown syntax highlighting.
+  [architecture.md](architecture.md) §8): on Linux via the flake devShell, on
+  macOS via the Neovim bundled inside the `.app` (above). Either way it runs the
+  pinned binary with the repo's `runtime/nvim/init.lua`.
+- Full `wrapNeovim`-style plugin baking beyond what the macOS release ships — a
+  Markdown LSP such as `marksman` and a formatter — is **deferred to a later
+  phase**. The current build relies on Neovim's markdown syntax highlighting and
+  the `markdown` / `markdown_inline` treesitter parsers the release carries.

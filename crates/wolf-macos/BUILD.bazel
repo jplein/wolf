@@ -45,8 +45,23 @@ macos_application(
     bundle_name = "Wolf",
     infoplists = ["Info.plist"],
     minimum_os_version = "26.0",
+    # The pinned Neovim 0.12.3 tree (structure-preserving `nvim/` TreeArtifact)
+    # lands at `Contents/Resources/nvim/`; the captive `init.lua` lands flat at
+    # `Contents/Resources/init.lua` (resolved by `Bundle.main.path`).
+    resources = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
     visibility = ["//visibility:public"],
     deps = [":wolf_macos_lib"],
+)
+
+# Inspects the built `.app`: asserts the pinned nvim tree + captive init.lua
+# landed at the expected resource paths with the exec bit preserved.
+sh_test(
+    name = "bundle_layout_test",
+    srcs = ["bundle_layout_test.sh"],
+    data = [":Wolf"],
 )
 
 swift_test(

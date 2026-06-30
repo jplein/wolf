@@ -1,0 +1,9 @@
+# The captive Neovim config consumed by wolf-core (`-u init.lua`).
+#
+# Exported flat so the macOS app can bundle it as `Contents/Resources/init.lua`,
+# where `Bundle.main.path(forResource:"init", ofType:"lua")` resolves it. The
+# in-repo dev path `runtime/nvim/init.lua` is unchanged.
+exports_files(
+    ["init.lua"],
+    visibility = ["//visibility:public"],
+)

@@ -36,6 +36,16 @@ bazel_dep(name = "rules_swift", version = "3.6.1", repo_name = "build_bazel_rule
 bazel_dep(name = "rules_apple", version = "4.5.3", repo_name = "build_bazel_rules_apple")
 bazel_dep(name = "rules_xcodeproj", version = "4.1.0")
 
+# --- Structure-preserving file assembly for bundling --------------------------
+# `copy_to_directory` assembles the extracted Neovim tarball into a single
+# TreeArtifact (`nvim/`) that rules_apple bundles at `Contents/Resources/nvim/`,
+# preserving the directory hierarchy + exec bits (needed for nested code
+# signing). 2.9.4 declares `bazel_compatibility = [">=6.0.0"]` (Bazel 8 OK) and
+# has a lean transitive graph (later 2.x split into bazel_lib/jq.bzl/yq.bzl/...,
+# which would add unnecessary modules for a build-only ruleset). It is a
+# build-time ruleset only; it never enters wolf-core's dependency tree.
+bazel_dep(name = "aspect_bazel_lib", version = "2.9.4")
+
 # --- C/link toolchain from the host Xcode SDK -------------------------------
 # apple_support configures a cc toolchain from the active Xcode (pinned by
 # DEVELOPER_DIR in .bazelrc :macos and the Nix darwin shellHook). With
@@ -82,3 +92,9 @@ crate.from_cargo(
     ],
 )
 use_repo(crate, "crates")
+
+# --- Pinned, hermetic Neovim 0.12.3 release tarballs ------------------------
+# Downloaded + sha256-verified by the //bazel/nvim module extension; assembled
+# into the `nvim/` TreeArtifact bundled into Wolf.app. See bazel/nvim/README.md.
+nvim = use_extension("//bazel/nvim:extensions.bzl", "nvim")
+use_repo(nvim, "nvim_macos_arm64", "nvim_macos_x86_64")

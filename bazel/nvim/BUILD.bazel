@@ -1,0 +1,24 @@
+# Arch-selected, structure-preserving Neovim 0.12.3 TreeArtifact + a smoke test.
+#
+# `nvim_tree` resolves to the assembled `nvim/` directory for the host CPU; the
+# macOS app bundles it at `Contents/Resources/nvim/`. See extensions.bzl and the
+# directory README for the pins and how to bump them.
+
+# The host-arch Neovim tree (a `nvim/` TreeArtifact: bin/nvim, lib/nvim/parser,
+# share/nvim/runtime, ...). Selected on @platforms//cpu.
+alias(
+    name = "nvim_tree",
+    actual = select({
+        "@platforms//cpu:arm64": "@nvim_macos_arm64//:nvim_tree",
+        "@platforms//cpu:x86_64": "@nvim_macos_x86_64//:nvim_tree",
+    }),
+    visibility = ["//visibility:public"],
+)
+
+# Exercises the pinned binary: exists + executable, reports `NVIM v0.12.3`, and
+# self-locates its runtime (VIMRUNTIME) INSIDE the bundled tree.
+sh_test(
+    name = "nvim_version_test",
+    srcs = ["nvim_version_test.sh"],
+    data = [":nvim_tree"],
+)

@@ -46,9 +46,13 @@ via `import WolfKeyMap`.
 ### `Sources/WolfMacOS/` — the AppKit application
 
 - `main.swift` — entry point: `NSApplication.shared`, `.regular` policy, run.
-- `AppDelegate.swift` — resolves `init_lua` + cwd, `wolf_ffi_start`, builds the
-  window + `GridView`, registers the view with `WakeBridge`, terminates after
-  the last window, and `shutdown`s the core on terminate.
+- `AppDelegate.swift` — points wolf-core at the **bundled** Neovim (sets
+  `WOLF_NVIM_BIN` to `Contents/Resources/nvim/bin/nvim` only if a developer hasn't
+  already exported it, via `setenv(..., 0)`), resolves `init_lua` (honoring a
+  `WOLF_INIT_LUA` override, else the bundled `Contents/Resources/init.lua`) + cwd,
+  calls `wolf_ffi_start`, builds the window + `GridView`, registers the view with
+  `WakeBridge`, terminates after the last window, and `shutdown`s the core on
+  terminate.
 - `MainWindow.swift` — the single "Wolf" `NSWindow`, sized from cell metrics ×
   initial cols/rows.
 - `GridView.swift` — the editor `NSView` (`isFlipped`): `draw(_:)` reads a frame
@@ -67,10 +71,17 @@ via `import WolfKeyMap`.
 ## Building
 
 ```sh
-bazel build //crates/wolf-macos:Wolf          # the .app bundle
+bazel build //crates/wolf-macos:Wolf            # the .app bundle (pinned nvim bundled in)
 bazel test  //crates/wolf-macos:WolfKeyMapTests
-bazel run   //crates/wolf-macos:xcodeproj     # generate the (uncommitted) Xcode project
+bazel test  //crates/wolf-macos:bundle_layout_test  # asserts the .app resource layout
+bazel run   //crates/wolf-macos:xcodeproj       # generate the (uncommitted) Xcode project
 ```
+
+The `.app` bundles a pinned Neovim 0.12.3 tree at `Contents/Resources/nvim/` and
+the captive `init.lua` at `Contents/Resources/init.lua` (downloaded hermetically by
+the `//bazel/nvim` module extension — see [`bazel/nvim/README.md`](../../bazel/nvim/README.md)
+and [Building Wolf](../../build.md)), so a double-clicked `.app` runs with no shell
+environment. `bundle_layout_test` asserts that resource layout over the built `.app`.
 
 ## Threading
 
@@ -83,14 +94,20 @@ main thread (it is not `Send`).
 ## Known limitations (this increment)
 
 Single window only; no native command line / messages / popup menu, no panes, no
-file picker / tree, no mouse or scroll input, no theming, and no bundled Neovim
-yet (the app starts the binary located via `WOLF_NVIM_BIN`). The view paints only
-the **active grid** with no cmdline strip, so entering Neovim's cmdline mode
-(`:`/`/`) swaps the whole view to the outer grid (grid 1) until the prompt closes —
-unlike wolf-gnome, which keeps the editor panes visible and paints the command line
-in a dedicated bottom strip. Per-cell glyph **text attributes**
-(bold/italic/underline/undercurl/strikethrough) are resolved and packed by
-`wolf-ffi` but are NOT yet consumed in painting (only per-cell fg/bg + the
-mode-aware cursor are painted this increment). Live `draw(_:)` and `keyDown:` are
-not yet exercised by an automated test (no headless window server); the testable
-logic is isolated in `WolfKeyMap` and the `wolf-ffi` bridge test.
+file picker / tree, no mouse or scroll input, and no theming. The app now **bundles
+its own pinned Neovim 0.12.3** + the captive `init.lua` in `Contents/Resources/`,
+so double-clicking `Wolf.app` works with no shell environment; the `WOLF_NVIM_BIN`
+and `WOLF_INIT_LUA` development overrides are still honored (an exported value
+wins). The view paints only the **active grid** with no cmdline strip, so entering
+Neovim's cmdline mode (`:`/`/`) swaps the whole view to the outer grid (grid 1)
+until the prompt closes — unlike wolf-gnome, which keeps the editor panes visible
+and paints the command line in a dedicated bottom strip. Per-cell glyph **text
+attributes** (bold/italic/underline/undercurl/strikethrough) are resolved and
+packed by `wolf-ffi` but are NOT yet consumed in painting (only per-cell fg/bg +
+the mode-aware cursor are painted this increment). Live `draw(_:)` and `keyDown:`
+are not yet exercised by an automated test (no headless window server); the
+testable logic is isolated in `WolfKeyMap` and the `wolf-ffi` bridge test.
+Separately, the live nvim→FFI round-trip is **not yet covered by a passing
+automated test on the macOS Bazel host**: the `//crates/wolf-ffi:bridge_smoke`
+harness currently hangs there (including against a system nvim 0.12.3) — a
+pre-existing, host-wide issue unrelated to the bundling, under investigation.

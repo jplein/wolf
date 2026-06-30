@@ -56,6 +56,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Starts the Rust core against the bundled `init.lua` and a working dir.
     private func startCore() -> WolfCoreHandle? {
+        // Point wolf-core at the bundled Neovim unless a developer has already
+        // exported `WOLF_NVIM_BIN` (overwrite=0 so the dev override wins). This
+        // is what makes the packaged `.app` double-clickable with no shell env.
+        if let bin = nvimBinPath() {
+            setenv("WOLF_NVIM_BIN", bin, 0)
+        }
         let initLua = initLuaPath()
         let cwd = FileManager.default.currentDirectoryPath
         return wolf_ffi_start(
@@ -64,6 +70,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             UInt16(Self.initialCols),
             UInt16(Self.initialRows)
         )
+    }
+
+    /// Resolves the bundled Neovim binary at `Contents/Resources/nvim/bin/nvim`.
+    /// Returns `nil` (rather than a bogus path) when it is absent or not
+    /// executable, so a developer's `WOLF_NVIM_BIN` export still takes effect.
+    private func nvimBinPath() -> String? {
+        guard let resourcePath = Bundle.main.resourcePath else { return nil }
+        let candidate = resourcePath + "/nvim/bin/nvim"
+        guard FileManager.default.isExecutableFile(atPath: candidate) else {
+            return nil
+        }
+        return candidate
     }
 
     /// Resolves the bundled `runtime/nvim/init.lua` path. Inside a packaged
@@ -86,8 +104,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = "Wolf could not start its editor engine."
         alert.informativeText =
-            "Starting the embedded Neovim failed. Ensure WOLF_NVIM_BIN points at a "
-            + "valid Neovim binary."
+            "Starting the embedded Neovim failed. The app bundles its own Neovim; "
+            + "if you set WOLF_NVIM_BIN, ensure it points at a valid Neovim binary."
         alert.alertStyle = .critical
         alert.runModal()
         NSApp.terminate(nil)
