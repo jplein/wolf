@@ -61,6 +61,9 @@ pub struct NvimConfig {
     pub appname: String,
     /// Root for the isolated `XDG_*` dirs (a private temp dir).
     pub state_root: PathBuf,
+    /// Working directory the captive nvim is launched in (so its `getcwd()`
+    /// starts here rather than inheriting the host process's cwd).
+    pub cwd: PathBuf,
     /// Initial UI column count.
     pub initial_cols: u16,
     /// Initial UI row count.
@@ -71,8 +74,14 @@ pub struct NvimConfig {
 
 impl NvimConfig {
     /// Builds a config from the environment: reads `WOLF_NVIM_BIN` and creates a
-    /// private temp dir to host the isolated `XDG_*` state.
-    pub fn from_env(init_lua: PathBuf, cols: u16, rows: u16) -> Result<Self, NvimError> {
+    /// private temp dir to host the isolated `XDG_*` state. `cwd` is the working
+    /// directory the captive nvim will be launched in (see [`spawn`]).
+    pub fn from_env(
+        init_lua: PathBuf,
+        cwd: PathBuf,
+        cols: u16,
+        rows: u16,
+    ) -> Result<Self, NvimError> {
         let bin = std::env::var("WOLF_NVIM_BIN")
             .ok()
             .filter(|v| !v.trim().is_empty())
@@ -89,6 +98,7 @@ impl NvimConfig {
             init_lua,
             appname: NVIM_APPNAME.to_string(),
             state_root,
+            cwd,
             initial_cols: cols,
             initial_rows: rows,
             _state_guard: std::sync::Arc::new(temp),
@@ -167,6 +177,32 @@ impl NvimProcess {
             .map_err(|e| NvimError::Rpc(e.to_string()))?
             .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
         Ok(())
+    }
+
+    /// Returns the captive nvim's current working directory via `getcwd()`.
+    ///
+    /// Calls `nvim_call_function("getcwd", [])` with NO arguments, so it honors
+    /// the window/tab-local cwd of the current window (`:cd`/`:lcd`/`:tcd`). The
+    /// result is extracted via [`Value::as_str`]; if it is missing or empty after
+    /// trimming, returns [`NvimError::Rpc`] so the caller can fall back to a
+    /// configured directory rather than rooting at an unusable path.
+    pub async fn current_dir(&self) -> Result<PathBuf, NvimError> {
+        let value = self
+            .nvim
+            .call(
+                "nvim_call_function",
+                vec![Value::from("getcwd"), Value::Array(vec![])],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+        match value.as_str() {
+            Some(s) if !s.trim().is_empty() => Ok(PathBuf::from(s)),
+            _ => Err(NvimError::Rpc(format!(
+                "getcwd returned no usable path: {value:?}"
+            ))),
+        }
     }
 
     /// Installs the current-file tracking autocmd inside the captive nvim.
@@ -288,8 +324,10 @@ impl NvimProcess {
 /// Spawns the captive Neovim with the given redraw handler.
 ///
 /// Launches `--embed --clean -u <init.lua> -i NONE -n`, pinning `NVIM_APPNAME`
-/// and the `XDG_*` dirs under `cfg.state_root`. Returns the live process; the
-/// caller then `ui_attach`es.
+/// and the `XDG_*` dirs under `cfg.state_root`, and sets the child's working
+/// directory to `cfg.cwd` (so its `getcwd()` starts there rather than inheriting
+/// the host process's cwd). Returns the live process; the caller then
+/// `ui_attach`es.
 pub async fn spawn(cfg: &NvimConfig, handler: RedrawHandler) -> Result<NvimProcess, NvimError> {
     let config_home = cfg.state_root.join("config");
     let data_home = cfg.state_root.join("data");
@@ -315,6 +353,7 @@ pub async fn spawn(cfg: &NvimConfig, handler: RedrawHandler) -> Result<NvimProce
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    cmd.current_dir(&cfg.cwd);
 
     let (nvim, io_handle, child) = new_child_cmd(&mut cmd, handler)
         .await

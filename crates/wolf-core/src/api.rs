@@ -41,8 +41,10 @@ pub struct CoreConfig {
     pub cols: u16,
     /// Initial grid height in rows.
     pub rows: u16,
-    /// Working directory: the picker's search root and the location of the MRU
-    /// cache (`<cwd>/.wolf/mru.sqlite`).
+    /// Working directory: the FALLBACK search root + the MRU cache location
+    /// (`<cwd>/.wolf/mru.sqlite`). The captive Neovim is also launched here. The
+    /// picker's LIVE search root is the captive Neovim's `getcwd()`; this is used
+    /// only when that query fails or returns an unusable path.
     pub cwd: PathBuf,
 }
 
@@ -93,8 +95,10 @@ pub struct WolfCore {
     /// The most-recently-used file cache. Cloned (cheaply, it is `Arc`-backed)
     /// into the input pump so opens record into it.
     mru: MruStore,
-    /// The configured working directory: the file picker's search root (the
-    /// traversal root is this path, canonicalized).
+    /// The configured working directory: the file picker's FALLBACK search root
+    /// and the MRU cache location. The live search root is the captive Neovim's
+    /// `getcwd()` (see [`WolfCore::start_file_search`]); this path is used only
+    /// when that query fails or returns an unusable path.
     cwd: PathBuf,
 }
 
@@ -115,7 +119,7 @@ impl WolfCore {
         let intents: IntentQueue = Arc::new(Mutex::new(VecDeque::new()));
         let handler = RedrawHandler::new(snapshot.clone_handle(), intents.clone(), wake);
 
-        let nvim_cfg = NvimConfig::from_env(cfg.init_lua, cfg.cols, cfg.rows)
+        let nvim_cfg = NvimConfig::from_env(cfg.init_lua, cwd.clone(), cfg.cols, cfg.rows)
             .map_err(CoreError::Nvim)?;
 
         let nvim = runtime.block_on(async {
@@ -215,7 +219,13 @@ impl WolfCore {
         self.mru.recent()
     }
 
-    /// Starts a streaming file search rooted at the configured cwd.
+    /// Starts a streaming file search rooted at the captive Neovim's live working
+    /// directory (`getcwd()`), falling back to the configured cwd.
+    ///
+    /// The traversal root is resolved via [`resolve_search_root`](Self::resolve_search_root):
+    /// it follows wherever Neovim currently is (`:cd`/`:lcd`/`:tcd`), and only if
+    /// that query fails or returns an unusable path does it fall back to the
+    /// configured `self.cwd`.
     ///
     /// The MRU cache is seeded SYNCHRONOUSLY before returning (so the very first
     /// [`FileSearch::read`] already shows recent files), then the async traversal
@@ -223,12 +233,16 @@ impl WolfCore {
     /// the shared state, bumping `version` and calling `wake` after each batch and
     /// once more when `complete`. Dropping (or [`FileSearch::cancel`]-ing) the
     /// returned handle stops the traversal.
+    ///
+    /// NOTE (intentional, documented limitation): the MRU seed is still taken from
+    /// `self.mru.recent()`, which is rooted at the CONFIGURED cwd, not the resolved
+    /// search root. When Neovim's cwd differs from the configured cwd, seeded MRU
+    /// entries may lie outside the search root and their `display` strings are
+    /// relative to the configured cwd. They still appear (MRU-first); per-project
+    /// MRU is out of scope for this change.
     #[must_use]
     pub fn start_file_search(&self, wake: WakeFn) -> FileSearch {
-        // The traversal root is the cwd canonicalized, matching the canonical
-        // paths the MRU stores so the dedup set lines up; fall back to the cwd
-        // as-is if canonicalization fails.
-        let root = std::fs::canonicalize(&self.cwd).unwrap_or_else(|_| self.cwd.clone());
+        let root = self.resolve_search_root();
 
         let state = Arc::new(RwLock::new(FileSearchState::seeded(self.mru.recent())));
         let cancel = Arc::new(AtomicBool::new(false));
@@ -265,5 +279,26 @@ impl WolfCore {
         } = self;
         runtime.block_on(async move { nvim.shutdown().await })?;
         Ok(())
+    }
+
+    /// Resolves the file-search traversal root: the captive Neovim's live working
+    /// directory (`getcwd()`), falling back to the configured `self.cwd`.
+    ///
+    /// A brief blocking `getcwd()` RPC is issued via `runtime.block_on` (the same
+    /// pattern `start`/`shutdown` use — one sub-ms round-trip). On success the
+    /// returned path is canonicalized (keeping the raw path if canonicalization
+    /// fails — a successful `getcwd()` is a real directory) so it lines up with the
+    /// canonical paths the MRU stores. On failure it logs and falls back to
+    /// canonicalizing `self.cwd`, the configured root.
+    fn resolve_search_root(&self) -> PathBuf {
+        match self.runtime.block_on(self.nvim.current_dir()) {
+            Ok(p) => std::fs::canonicalize(&p).unwrap_or(p),
+            Err(e) => {
+                tracing::warn!(
+                    "getcwd() query failed ({e}); falling back to configured cwd"
+                );
+                std::fs::canonicalize(&self.cwd).unwrap_or_else(|_| self.cwd.clone())
+            }
+        }
     }
 }

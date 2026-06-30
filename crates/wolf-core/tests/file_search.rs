@@ -34,7 +34,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use wolf_core::{FileEntry, FileSearch, MruStore, WakeFn, WolfCore};
+use wolf_core::{FileEntry, FileSearch, Key, MruStore, WakeFn, WolfCore};
 
 /// Upper bound for a single file search to reach `complete`. Generous because it
 /// includes nvim startup amortized across the test plus a full FS/git walk.
@@ -114,6 +114,24 @@ fn start_core_in(cwd: &Path) -> WolfCore {
     // the absolute-threshold initial-flush wait (an advance-based wait would hang).
     waiter.wait_for_initial_flush(&core, common::FLUSH_TIMEOUT);
     core
+}
+
+/// Like [`start_core_in`] but ALSO returns the `FlushWaiter`. `start_core_in`
+/// discards the waiter, but the cwd-following tests must drive a `:cd` via
+/// keystrokes and then wait for nvim to process it (a redraw flush) BEFORE
+/// starting the search, so they need the waiter retained. Built inline from the
+/// same `config_in`/`wake_channel`/`WolfCore::start` parts `start_core_in` uses.
+fn start_core_in_with_waiter(cwd: &Path) -> (WolfCore, common::FlushWaiter) {
+    let (wake, waiter) = common::wake_channel();
+    let core = WolfCore::start(
+        common::config_in(cwd.to_path_buf(), common::DEFAULT_COLS, common::DEFAULT_ROWS),
+        wake,
+    )
+    .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
+    // The attach flush (seq 0 -> 1) already landed during WolfCore::start, so use
+    // the absolute-threshold initial-flush wait (an advance-based wait would hang).
+    waiter.wait_for_initial_flush(&core, common::FLUSH_TIMEOUT);
+    (core, waiter)
 }
 
 /// Polls `search` until its view reports `complete`, waking on `wakes`, then
@@ -487,6 +505,91 @@ fn cancel_stops_streaming() {
     );
 
     drop(wakes);
+    drop(search);
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// (9) The search root FOLLOWS nvim's live cwd: start the core in dir A, but
+/// `:cd` nvim into dir B, then search. Results must be rooted at B (where nvim
+/// now is), NOT at the configured cwd A.
+///
+/// Dirs A and B are created the SAME way as every other test (`temp_cwd`, which
+/// canonicalizes), so the relativized `display` strings line up. Their tempfile
+/// default names are ASCII and space-free, so B's absolute path can be typed
+/// literally as `:cd` keystrokes without `fnameescape`. Both dirs are otherwise
+/// empty, so the MRU seed (rooted at A) is empty and cannot muddy the assertion.
+#[test]
+fn file_search_root_follows_nvim_cd() {
+    let _ = common::require_nvim_bin();
+    let (_dir_a, cwd_a) = temp_cwd();
+    let (_dir_b, cwd_b) = temp_cwd();
+
+    // B holds the files we expect once nvim is there; A holds a sentinel that must
+    // NOT appear, proving the root follows nvim's cwd rather than the config cwd.
+    write_file(&cwd_b.join("alpha.md"), "a");
+    write_file(&cwd_b.join("beta.md"), "b");
+    write_file(&cwd_a.join("only_in_a.md"), "s");
+
+    // Build the core inline with cfg.cwd = A so nvim starts in A, retaining the
+    // FlushWaiter (needed to confirm the `:cd` has been applied before searching).
+    let (core, waiter) = start_core_in_with_waiter(&cwd_a);
+
+    // Drive `:cd <B>` one key at a time, mirroring `current_file.rs`'s `:e` pattern:
+    // ':' enters command-line mode, the path is typed literally, Enter executes.
+    let path_b = cwd_b.to_str().expect("temp path B should be valid UTF-8");
+    core.send_input(common::ch(':'));
+    common::type_str(&core, "cd ");
+    common::type_str(&core, path_b);
+    core.send_input(common::key(Key::Enter));
+
+    // Wait for nvim to process the `:cd` and flush a redraw, so a subsequent
+    // getcwd() is guaranteed to report B before we start the search.
+    waiter.wait_for_flush(&core, common::FLUSH_TIMEOUT);
+
+    let (wake, wakes) = search_wake();
+    let search = core.start_file_search(wake);
+    let entries = poll_until_complete(&search, &wakes);
+    let set = displays(&entries);
+
+    assert!(
+        set.contains("alpha.md"),
+        "search rooted at nvim's cwd (B) should list alpha.md; got {set:?}"
+    );
+    assert!(
+        set.contains("beta.md"),
+        "search rooted at nvim's cwd (B) should list beta.md; got {set:?}"
+    );
+    assert!(
+        !set.contains("only_in_a.md"),
+        "search must follow nvim's live cwd (B), NOT the configured cwd (A); got {set:?}"
+    );
+
+    drop(search);
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// (10) Absent any `:cd`, the search root is the configured cwd: nvim starts in
+/// A (== cfg.cwd) and never moves, so `getcwd() == cfg.cwd` and A's files are
+/// listed. Documents the fallback that the resolved root equals the configured
+/// cwd when nvim has not been moved.
+#[test]
+fn file_search_root_defaults_to_cfg_cwd_without_cd() {
+    let _ = common::require_nvim_bin();
+    let (_dir_a, cwd_a) = temp_cwd();
+
+    write_file(&cwd_a.join("gamma.md"), "g");
+
+    let core = start_core_in(&cwd_a);
+    let (wake, wakes) = search_wake();
+    let search = core.start_file_search(wake);
+    let entries = poll_until_complete(&search, &wakes);
+    let set = displays(&entries);
+
+    assert!(
+        set.contains("gamma.md"),
+        "absent a :cd, the search root is the configured cwd (A); got {set:?}"
+    );
+
     drop(search);
     core.shutdown().expect("shutdown should be Ok");
 }

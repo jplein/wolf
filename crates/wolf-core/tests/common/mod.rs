@@ -1,9 +1,23 @@
 //! Shared helpers for `wolf-core` integration tests.
 //!
-//! These tests drive a REAL, hermetic Neovim process (no mocks), located via the
-//! `WOLF_NVIM_BIN` environment variable that the flake devShell exports. If that
-//! variable is unset we panic loudly rather than silently skip, so CI
-//! misconfiguration surfaces immediately.
+//! These tests drive a REAL, hermetic Neovim process (no mocks). The nvim binary
+//! and the captive `init.lua` are resolved in one of two ways:
+//!
+//! 1. **Cargo / Linux devShell:** the flake devShell exports an explicit,
+//!    ALREADY-ABSOLUTE `WOLF_NVIM_BIN`, and `init.lua` is found relative to
+//!    `CARGO_MANIFEST_DIR`. This path is unchanged and always wins when present.
+//! 2. **Bazel (`bazel test //crates/wolf-core:file_search`):** the `rust_test`
+//!    stages the pinned `//bazel/nvim:nvim_tree` and `//runtime/nvim:init.lua` as
+//!    runfiles and injects RUNFILES-RELATIVE paths via `WOLF_TEST_NVIM_DIR` /
+//!    `WOLF_TEST_INIT_LUA` (and a relative `WOLF_NVIM_BIN`). These are resolved to
+//!    ABSOLUTE paths against `TEST_SRCDIR` / `RUNFILES_DIR` (see [`resolve_runfile`]).
+//!
+//! This mirrors `crates/wolf-ffi/tests/common/mod.rs` (`resolve_runfile`,
+//! `nvim_bin_or_skip`, `init_lua_path`). The one deliberate difference: wolf-ffi
+//! returns `None` so its caller can SKIP, whereas the wolf-core test bodies do not
+//! handle a skip return, so [`require_nvim_bin`] still PANICS as the last resort
+//! when nothing resolves. On both real environments (cargo devShell, Bazel host)
+//! resolution always succeeds, so the panic never fires there.
 //!
 //! Public API surface consumed here mirrors the plan's `src/api` + `src/input`
 //! re-exports. Where a method name is genuinely ambiguous in the plan a
@@ -33,26 +47,136 @@ pub const DEFAULT_ROWS: u16 = 24;
 /// well beyond the expected latency before declaring failure.
 pub const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Panics with a clear, actionable message if `WOLF_NVIM_BIN` is unset or empty.
+/// Resolves a data file/dir the test needs at RUNTIME from a Bazel-injected env
+/// var holding a runfiles-relative path (set via `$(rootpath …)` in the
+/// `rust_test`'s `env`). Under Bazel the file lives in the test's runfiles tree,
+/// whose root differs by Bazel version and (for external repos) carries a repo
+/// segment — so we probe the known bases (`TEST_SRCDIR`, `+ TEST_WORKSPACE`,
+/// `+ _main`, `RUNFILES_DIR`, the cwd) and return the first that exists.
 ///
-/// The whole test suite is meaningless without a real nvim binary, so we fail
-/// loudly instead of skipping. Returns the resolved binary path for convenience.
+/// Returns `None` when the env var is unset (the cargo / Linux-devShell path,
+/// where callers fall back to `CARGO_MANIFEST_DIR` or an explicit `WOLF_NVIM_BIN`)
+/// or when nothing resolves.
+///
+/// This is a byte-for-byte port of `crates/wolf-ffi/tests/common/mod.rs`'s
+/// `resolve_runfile`, so the two harnesses resolve staged runfiles identically.
+fn resolve_runfile(env_key: &str) -> Option<PathBuf> {
+    let rel = std::env::var(env_key).ok().filter(|v| !v.is_empty())?;
+    let relp = PathBuf::from(&rel);
+    if relp.is_absolute() {
+        return relp.exists().then_some(relp);
+    }
+
+    let mut bases: Vec<PathBuf> = Vec::new();
+    if let Ok(srcdir) = std::env::var("TEST_SRCDIR") {
+        if let Ok(wsp) = std::env::var("TEST_WORKSPACE") {
+            bases.push(PathBuf::from(&srcdir).join(&wsp));
+        }
+        bases.push(PathBuf::from(&srcdir).join("_main"));
+        bases.push(PathBuf::from(&srcdir));
+    }
+    if let Ok(rfdir) = std::env::var("RUNFILES_DIR") {
+        bases.push(PathBuf::from(&rfdir).join("_main"));
+        bases.push(PathBuf::from(&rfdir));
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        bases.push(cwd);
+    }
+
+    bases
+        .into_iter()
+        .map(|b| b.join(&relp))
+        .find(|c| c.exists())
+}
+
+/// Resolves a usable pinned-nvim binary as an ABSOLUTE path, mirroring
+/// `crates/wolf-ffi/tests/common/mod.rs`'s `nvim_bin_or_skip` resolution order:
+///
+/// 1. An explicit `WOLF_NVIM_BIN` that is non-empty, ABSOLUTE, and EXISTS — the
+///    cargo / Linux-devShell path. It wins so a developer can point at a specific
+///    nvim. (Unlike wolf-ffi we require absolute-and-existing here: the wolf-core
+///    Bazel `rust_test` injects a RUNFILES-RELATIVE `WOLF_NVIM_BIN`, which would
+///    fail to spawn once nvim is launched with `current_dir(cfg.cwd)`; so a
+///    relative/non-existent value is NOT trusted and we fall through to the staged
+///    tree below.)
+/// 2. The Bazel-staged pinned Neovim tree (`WOLF_TEST_NVIM_DIR` → the
+///    `//bazel/nvim:nvim_tree` runfiles dir), whose binary is `nvim/bin/nvim`
+///    (the `replace_prefixes` inner `nvim/`), with `bin/nvim` as a fallback.
+///
+/// Returns `None` when neither is available. The caller ([`require_nvim_bin`])
+/// turns that into a loud panic, since the wolf-core test bodies do not handle a
+/// skip return; on both real environments resolution always succeeds.
+fn resolve_nvim_bin() -> Option<PathBuf> {
+    if let Ok(v) = std::env::var("WOLF_NVIM_BIN") {
+        let p = PathBuf::from(v.trim());
+        if p.is_absolute() && p.exists() {
+            return Some(p);
+        }
+    }
+
+    if let Some(dir) = resolve_runfile("WOLF_TEST_NVIM_DIR") {
+        // The tree is `nvim_tree/nvim/bin/nvim` (the `replace_prefixes` inner
+        // `nvim/`); accept a flat `bin/nvim` too, defensively.
+        let candidates = [
+            dir.join("nvim").join("bin").join("nvim"),
+            dir.join("bin").join("nvim"),
+        ];
+        if let Some(bin) = candidates.into_iter().find(|b| b.exists()) {
+            return Some(bin);
+        }
+    }
+
+    None
+}
+
+/// Resolves the pinned nvim binary to an ABSOLUTE path and EXPORTS it back into
+/// `WOLF_NVIM_BIN`, then returns it. Panics with a clear, actionable message when
+/// no nvim can be resolved.
+///
+/// wolf-core locates nvim ONLY through the `WOLF_NVIM_BIN` env var (read by
+/// `NvimConfig::from_env`), and the captive nvim is now spawned with
+/// `current_dir(cfg.cwd)` (a temp dir). A relative `WOLF_NVIM_BIN` (as injected by
+/// the Bazel `rust_test`) would therefore resolve against that temp dir and fail
+/// to spawn. So — exactly like `wolf-ffi`'s `bridge_smoke` does with the result of
+/// `nvim_bin_or_skip` — we resolve an absolute path here and `set_var` it so the
+/// core spawns the right binary regardless of cwd. This is idempotent: once set,
+/// subsequent calls take the absolute-and-existing fast path in [`resolve_nvim_bin`].
+///
+/// Returns the resolved binary path for convenience.
 pub fn require_nvim_bin() -> PathBuf {
-    match std::env::var("WOLF_NVIM_BIN") {
-        Ok(v) if !v.trim().is_empty() => PathBuf::from(v),
-        _ => panic!(
-            "WOLF_NVIM_BIN is not set (or empty). These integration tests require a \
-             real, pinned Neovim binary located via WOLF_NVIM_BIN (exported by the \
-             flake devShell). Enter the devShell (`direnv allow`) before running tests. \
+    match resolve_nvim_bin() {
+        Some(bin) => {
+            std::env::set_var("WOLF_NVIM_BIN", &bin);
+            bin
+        }
+        None => panic!(
+            "No pinned Neovim could be resolved. These integration tests require a \
+             real, pinned Neovim binary. Provide one of:\n\
+             - an ABSOLUTE, existing WOLF_NVIM_BIN (exported by the flake devShell; \
+             enter it via `direnv allow`), or\n\
+             - the Bazel-staged tree via WOLF_TEST_NVIM_DIR (run via \
+             `bazel test //crates/wolf-core:file_search`).\n\
              nvim is NOT taken from PATH."
         ),
     }
 }
 
-/// Resolves the path to the in-repo `runtime/nvim/init.lua` from
-/// `CARGO_MANIFEST_DIR` (which points at `crates/wolf-core`), i.e.
+/// Resolves the captive `runtime/nvim/init.lua`.
+///
+/// Prefers the Bazel-staged runfile (`WOLF_TEST_INIT_LUA` → `$(rootpath
+/// //runtime/nvim:init.lua)`, resolved to an ABSOLUTE path); under cargo it falls
+/// back to `CARGO_MANIFEST_DIR` (which points at `crates/wolf-core`), i.e.
 /// `<manifest>/../../runtime/nvim/init.lua`.
+///
+/// This matters: under Bazel, `CARGO_MANIFEST_DIR` is an EPHEMERAL build-sandbox
+/// path that does not exist at test runtime, so launching nvim with `-u <that>`
+/// makes nvim fail to read its init and block on a "Press ENTER" prompt forever
+/// (hanging `WolfCore::start`). Resolving the staged runfile fixes that. Mirrors
+/// `crates/wolf-ffi/tests/common/mod.rs`'s `init_lua_path`.
 pub fn init_lua_path() -> PathBuf {
+    if let Some(p) = resolve_runfile("WOLF_TEST_INIT_LUA") {
+        return p;
+    }
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     PathBuf::from(manifest_dir)
         .join("..")

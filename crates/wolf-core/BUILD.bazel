@@ -3,10 +3,12 @@
 # Dependencies are pulled from the Cargo workspace via crate_universe
 # (`@crates`). `all_crate_deps` reads this package's Cargo.toml to select the
 # right subset. No GUI toolkit is present in this graph — see the denylist query
-# in build.md. No rust_test/example target in this bootstrap step (tests need a
-# pinned nvim via WOLF_NVIM_BIN, not yet provisioned on macOS).
+# in build.md. The `file_search` rust_test below runs the real-nvim file-search
+# integration tests on the macOS Bazel host: it stages the pinned nvim
+# (`//bazel/nvim:nvim_tree`) + the captive `//runtime/nvim:init.lua` as runfiles,
+# mirroring `//crates/wolf-ffi:bridge_smoke`.
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files(["Cargo.toml"])
 
@@ -18,4 +20,50 @@ rust_library(
     proc_macro_deps = all_crate_deps(proc_macro = True),
     visibility = ["//visibility:public"],
     deps = all_crate_deps(normal = True),
+)
+
+# Real-nvim integration test for the file-search search-root behavior
+# (`start_file_search` rooted at nvim's live `getcwd()`). Modeled on
+# `//crates/wolf-ffi:bridge_smoke`: drives a REAL pinned Neovim (no mocks) and
+# stages the captive `init.lua` + the pinned nvim tree as runfiles. Reuses
+# `tests/common/mod.rs` (a `mod common;` src, so it is listed in `srcs`).
+#
+# `tests/common/mod.rs` resolves the staged runfiles to ABSOLUTE paths (mirroring
+# wolf-ffi's harness): `WOLF_TEST_NVIM_DIR` / `WOLF_TEST_INIT_LUA` are joined
+# against `$TEST_SRCDIR` / `$RUNFILES_DIR` before the captive nvim is spawned with
+# `current_dir(&cfg.cwd)`, so the binary and init.lua resolve regardless of cwd.
+# The full file_search suite (10 tests, including the two cwd-following cases)
+# passes here.
+rust_test(
+    name = "file_search",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/file_search.rs",
+    ],
+    crate_root = "tests/file_search.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        # The harness (tests/common/mod.rs) resolves the staged nvim + init.lua to
+        # ABSOLUTE paths from WOLF_TEST_NVIM_DIR / WOLF_TEST_INIT_LUA (the runfiles
+        # dirs). WOLF_NVIM_BIN is also pointed at the binary in the pinned tree, but
+        # the harness trusts it only when it is absolute-and-existing; the relative
+        # value below is ignored in favor of the resolved WOLF_TEST_NVIM_DIR path.
+        # (On the cargo/devShell path an explicit absolute WOLF_NVIM_BIN wins.)
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    # An integration test sees both the crate's normal deps and its dev-deps.
+    # `normal_dev = True` alone is insufficient here: crate_universe omits a dep
+    # from the dev map when it is ALSO a normal dep (tempfile is in both of
+    # wolf-core's dependency tables), so the test would not see `tempfile`.
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
