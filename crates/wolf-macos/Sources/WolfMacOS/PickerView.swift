@@ -72,8 +72,6 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     private static let searchBarHInset: CGFloat = 8
     /// Point size of the magnifier symbol.
     private static let magnifierSize: CGFloat = 18
-    /// Gap between the magnifier and the text field.
-    private static let magnifierToTextGap: CGFloat = 8
     /// Corner radius of the floating panel.
     private static let cornerRadius: CGFloat = 8
     /// Corner radius of the rounded search bar.
@@ -108,12 +106,12 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     /// from the panel), so a row icon at the magnifier's container-inset lines up
     /// with the magnifier.
     private var iconLeadingInset: CGFloat { Self.searchBarHInset }
-    /// Leading inset that aligns a row's title with the typed text: the row's text
-    /// column starts exactly where the search field's text does (just past the
-    /// magnifier). The row icon (see `PickerRowCellView.iconSize`) is sized to fit
-    /// between the leading edge and this column, so it never overlaps the title.
+    /// The shared text column: the leading inset (from the search bar / a row cell's
+    /// leading edge) where BOTH a row's title and the search field's text begin, so
+    /// they align. It sits past the row icon with a gap, so the title has padding to
+    /// the right of the icon; the search field's text is anchored to the same column.
     private var labelLeadingInset: CGFloat {
-        Self.searchBarHInset + Self.magnifierSize + Self.magnifierToTextGap
+        iconLeadingInset + PickerRowCellView.iconSize + PickerRowCellView.iconToTextGap
     }
 
     /// The scroll view's height (the results area); driven to the content height
@@ -410,8 +408,11 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
             magnifierView.centerYAnchor.constraint(equalTo: searchContainer.centerYAnchor),
             magnifierView.widthAnchor.constraint(equalToConstant: Self.magnifierSize),
             magnifierView.heightAnchor.constraint(equalToConstant: Self.magnifierSize),
+            // Anchor the search text to the shared text column so it aligns with a
+            // row's title (which sits past the wider row icon), not just past the
+            // magnifier.
             searchField.leadingAnchor.constraint(
-                equalTo: magnifierView.trailingAnchor, constant: Self.magnifierToTextGap),
+                equalTo: searchContainer.leadingAnchor, constant: labelLeadingInset),
             searchField.trailingAnchor.constraint(
                 equalTo: searchContainer.trailingAnchor, constant: -Self.searchBarHInset),
             searchField.centerYAnchor.constraint(equalTo: searchContainer.centerYAnchor),

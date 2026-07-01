@@ -14,11 +14,11 @@ import AppKit
 
 /// A picker list row: icon on the left, title over subtitle on the right.
 final class PickerRowCellView: NSTableCellView {
-    /// Side length of the (square) medium icon. Sized to fit between the leading
-    /// edge and the title column (which aligns with the search field's text), so the
-    /// icon's left edge lines up with the search magnifier without overlapping the
-    /// title.
-    static let iconSize: CGFloat = 20
+    /// Side length of the (square) medium icon. Its left edge lines up with the
+    /// search magnifier; at this size its right edge reaches just to the title
+    /// column (which aligns with the search field's text), and file-icon images
+    /// carry transparent margins so the glyph stays clear of the title.
+    static let iconSize: CGFloat = 28
     /// Point size of the primary title label.
     static let titleFontSize: CGFloat = 15
     /// Point size of the secondary subtitle label.
@@ -110,14 +110,13 @@ final class PickerRowCellView: NSTableCellView {
         return max(iconSize, textHeight) + verticalPadding
     }
 
-    /// Applies a `PickerRow`: sets the icon, title, and subtitle (an empty
-    /// subtitle hides the subtitle label, removing it from the stack view so the
-    /// title centers vertically; the row height stays constant because the table
-    /// uses a fixed `rowHeight`).
+    /// Applies a `PickerRow`: sets the icon, title, and subtitle. The subtitle label
+    /// is ALWAYS kept in the stack (blank when the subtitle is empty) so it reserves
+    /// its line height and the title's vertical position is the same whether or not
+    /// the row has a subtitle (e.g. a root-level file with no relative path).
     func configure(with row: PickerRow) {
         iconView.image = row.icon
         titleLabel.stringValue = row.title
         subtitleLabel.stringValue = row.subtitle
-        subtitleLabel.isHidden = row.subtitle.isEmpty
     }
 }
