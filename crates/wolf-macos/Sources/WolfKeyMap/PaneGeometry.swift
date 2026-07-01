@@ -5,10 +5,11 @@
 //  Every pixel<->cell mapping in `PaneContainerView` routes through this struct:
 //  pixel->cell (mouse), scroll hit-testing, scrollbar placement, and the paint
 //  offset. It distinguishes the PANE RECT (the whole pane area) from the GRID RECT
-//  (where the Neovim grid is actually drawn). Today they are IDENTICAL
-//  (`gridRect == paneRect`, paint offsets 0); the abstraction READIES a future
-//  "max column width + centered grid" treatment (a narrower, centered gridRect)
-//  WITHOUT implementing it — the cap is deferred (`maxCols` is always passed `nil`).
+//  (where the Neovim grid is actually drawn). When `maxCols` is set and the pane is
+//  wider than that many columns, the grid is CAPPED to `maxCols` cells and CENTERED
+//  horizontally inside the pane (leaving side margins); a narrower pane is
+//  unaffected (`gridRect == paneRect`, paint offsets 0). `maxCols == nil` disables
+//  the cap entirely (grid always fills the pane).
 //
 //  Foundation-only and `Double`-based (not `CGFloat`) so it is headlessly
 //  unit-testable in the `WolfKeyMap` module alongside `PaneTree`. It reuses the
@@ -20,9 +21,9 @@ import Foundation
 /// The per-pane geometry: a Neovim GRID RECT positioned inside a PANE RECT, plus
 /// the derived cell grid dimensions and the pixel<->cell mapping.
 ///
-/// With `maxCols == nil` (the only mode today) the grid fills the whole pane:
-/// `gridRect == paneRect` and both paint offsets are 0. A future centered-narrow
-/// grid would set a smaller, centered `gridRect` (guarded below, currently unused).
+/// With `maxCols == nil`, or a pane no wider than `maxCols` cells, the grid fills
+/// the whole pane: `gridRect == paneRect` and both paint offsets are 0. A wider
+/// pane with a non-nil `maxCols` caps the grid width and centers it horizontally.
 public struct PaneGeometry {
     /// The whole pane area, in device pixels.
     public let paneRect: Rect
@@ -45,17 +46,17 @@ public struct PaneGeometry {
 
     /// Builds the geometry for `paneRect` at the given cell size.
     ///
-    /// `maxCols` is the DEFERRED max-column cap: `nil` (always, today) means the
-    /// grid fills the whole pane. A non-nil `maxCols` would center a narrower
-    /// gridRect — that branch is guarded and currently unexercised (pass `nil`).
+    /// `maxCols` is the max-column cap: `nil` disables it (grid fills the pane). When
+    /// set, a pane wider than `maxCols` cells caps the grid to that width and centers
+    /// it; a narrower pane is unaffected.
     public init(paneRect: Rect, cellWidth: Double, cellHeight: Double, maxCols: Int? = nil) {
         self.paneRect = paneRect
         self.cellWidth = cellWidth
         self.cellHeight = cellHeight
 
-        // Deferred centered-narrow-grid branch: cap the grid width to `maxCols`
-        // cells and center it inside the pane. With `maxCols == nil` (always today)
-        // the grid fills the whole pane, so `gridRect == paneRect`.
+        // Cap the grid width to `maxCols` cells and center it inside the pane. When
+        // `maxCols` is nil or the pane is no wider than the cap, the grid fills the
+        // whole pane, so `gridRect == paneRect` (inset 0).
         if let maxCols, cellWidth > 0 {
             let cappedWidth = min(paneRect.w, Double(maxCols) * cellWidth)
             let inset = max(0, (paneRect.w - cappedWidth) / 2)

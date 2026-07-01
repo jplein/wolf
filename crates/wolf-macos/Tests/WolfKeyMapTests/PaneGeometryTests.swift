@@ -172,4 +172,67 @@ final class PaneGeometryTests: XCTestCase {
         XCTAssertEqual(corner.col, 0, "the pane origin maps to col 0 (got \(corner.col))")
         XCTAssertEqual(corner.row, 0, "the pane origin maps to row 0 (got \(corner.row))")
     }
+
+    // MARK: - maxCols cap + horizontal centering
+
+    /// The hard-coded cap used by `PaneContainerView` (kept in sync here).
+    private let maxCols: Int = 100
+
+    func testMaxColsCentersGridWhenPaneIsWider() {
+        // A pane 1200px wide (150 cols) with maxCols 100 caps the grid to 800px
+        // (100 cols) and CENTERS it: inset = (1200 - 800) / 2 = 200 on each side.
+        let pane = Rect(x: originX, y: originY, w: 1200.0, h: tallH)
+        let geo = PaneGeometry(paneRect: pane, cellWidth: cellW, cellHeight: cellH, maxCols: maxCols)
+
+        XCTAssertEqual(geo.cols, maxCols, "the grid caps at maxCols columns (got \(geo.cols))")
+        XCTAssertEqual(geo.rows, tallRows, "rows are unaffected by the column cap (got \(geo.rows))")
+        assertRectEqual(
+            geo.gridRect,
+            Rect(x: originX + 200.0, y: originY, w: 800.0, h: tallH),
+            "gridRect is the 800px-wide grid centered in the 1200px pane")
+        XCTAssertTrue(approx(geo.paintOffsetX, 200.0), "paintOffsetX centers the grid (got \(geo.paintOffsetX))")
+        XCTAssertTrue(approx(geo.paintOffsetY, 0.0), "no vertical offset (got \(geo.paintOffsetY))")
+    }
+
+    func testMaxColsNoChangeWhenPaneIsNarrower() {
+        // A pane 600px wide (75 cols) is narrower than the 100-col cap, so the grid
+        // fills the whole pane exactly as before: gridRect == paneRect, no offset.
+        let pane = Rect(x: originX, y: originY, w: 600.0, h: tallH)
+        let geo = PaneGeometry(paneRect: pane, cellWidth: cellW, cellHeight: cellH, maxCols: maxCols)
+
+        XCTAssertEqual(geo.cols, 75, "a 600px pane keeps its 75 columns (< cap; got \(geo.cols))")
+        assertRectEqual(geo.gridRect, pane, "gridRect == paneRect when narrower than the cap")
+        XCTAssertTrue(approx(geo.paintOffsetX, 0.0), "no centering offset below the cap (got \(geo.paintOffsetX))")
+    }
+
+    func testMaxColsExactBoundaryHasNoMargin() {
+        // A pane exactly maxCols wide (800px = 100 cols) is not narrowed and not
+        // centered — the boundary is inclusive, no side margins.
+        let pane = Rect(x: 0, y: 0, w: wideW, h: tallH)
+        let geo = PaneGeometry(paneRect: pane, cellWidth: cellW, cellHeight: cellH, maxCols: maxCols)
+
+        XCTAssertEqual(geo.cols, maxCols, "an exactly-cap-wide pane keeps 100 cols")
+        assertRectEqual(geo.gridRect, pane, "no margin at the exact boundary")
+        XCTAssertTrue(approx(geo.paintOffsetX, 0.0), "no offset at the exact boundary (got \(geo.paintOffsetX))")
+    }
+
+    func testCellAtWithCenteredGridClampsMarginsAndMapsInterior() {
+        // Centered grid: pane 1200px wide, 800px grid, inset 200 on each side.
+        let pane = Rect(x: originX, y: originY, w: 1200.0, h: tallH)
+        let geo = PaneGeometry(paneRect: pane, cellWidth: cellW, cellHeight: cellH, maxCols: maxCols)
+        let gridX = originX + 200.0
+
+        // A click in the LEFT margin (inside the pane, left of the grid) clamps to col 0.
+        let left = geo.cellAt(x: originX + 50.0, y: originY + 50.0)
+        XCTAssertEqual(left.col, 0, "a left-margin click clamps to col 0 (got \(left.col))")
+
+        // A click in the RIGHT margin (right of the grid, still in the pane) clamps to the last col.
+        let right = geo.cellAt(x: originX + 1200.0 - 50.0, y: originY + 50.0)
+        XCTAssertEqual(right.col, maxCols - 1, "a right-margin click clamps to col 99 (got \(right.col))")
+
+        // An interior click accounts for the centering offset: gridX + 3.5 cells -> col 3.
+        let interior = geo.cellAt(x: gridX + 3.5 * cellW, y: originY + 2.5 * cellH)
+        XCTAssertEqual(interior.col, 3, "interior x = gridX + 3.5 cells -> col 3 (got \(interior.col))")
+        XCTAssertEqual(interior.row, 2, "interior y = 2.5 cells -> row 2 (got \(interior.row))")
+    }
 }

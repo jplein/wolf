@@ -49,6 +49,11 @@ final class PaneContainerView: NSView {
     /// Scrim opacity laid over an INACTIVE pane (a front-end-only treatment that is
     /// awkward to express inside Neovim itself).
     private static let inactiveDim: CGFloat = 0.28
+    /// Maximum Neovim grid width, in cells. A pane wider than this many columns caps
+    /// its grid at `maxGridCols` and CENTERS it horizontally, leaving side margins
+    /// (painted in the grid's background); a narrower pane is unaffected. All pixel↔
+    /// cell mapping routes through `PaneGeometry`, which owns the cap + centering.
+    private static let maxGridCols = 100
 
     // -- Mouse / scroll FFI discriminants (mirror `wolf-ffi`'s `mod mouse_button`
     //    / `mod mouse_action` / `mod scroll_dir`) ------------------------------
@@ -173,8 +178,9 @@ final class PaneContainerView: NSView {
     }
 
     /// The per-pane GRID-RECT-inside-PANE-RECT geometry for `rect` (the pure seam
-    /// that owns all pixel<->cell mapping). `maxCols: nil` always today — the
-    /// centered-narrow-grid cap is deferred, so `gridRect == rect`.
+    /// that owns all pixel<->cell mapping). The grid width is capped at
+    /// `maxGridCols` and CENTERED when the pane is wider than that; a narrower pane
+    /// keeps `gridRect == rect`.
     private func geometry(for rect: CGRect) -> PaneGeometry {
         PaneGeometry(
             paneRect: Rect(
@@ -182,7 +188,7 @@ final class PaneContainerView: NSView {
                 w: Double(rect.width), h: Double(rect.height)),
             cellWidth: Double(metrics.cellWidth),
             cellHeight: Double(metrics.cellHeight),
-            maxCols: nil)
+            maxCols: Self.maxGridCols)
     }
 
     /// The pane rectangle currently bound to `grid`, if any (used to re-resolve a
@@ -510,13 +516,23 @@ final class PaneContainerView: NSView {
     }
 
     /// Paints one window grid into `rect`, optionally dimming it (an inactive pane).
+    ///
+    /// When the grid is capped narrower than the pane (`maxGridCols`) it is CENTERED
+    /// via the geometry's paint offset; the whole pane is first filled with the
+    /// grid's default background so the side margins blend with the grid, and the
+    /// inactive-dim scrim covers the whole pane (margins included).
     private func paintGrid(_ frame: FfiFrame, into rect: CGRect, dimmed: Bool, ctx: CGContext) {
-        // Translate to the pane's GRID RECT origin (pane origin + the grid's paint
-        // offset, which is 0 today since `gridRect == paneRect`); the clip stays the
-        // whole pane rect.
         let geo = geometry(for: rect)
         ctx.saveGState()
         ctx.clip(to: rect)
+
+        // Fill the whole pane (including the side margins around a centered grid)
+        // with the grid's default background, so the margins are seamless.
+        ctx.setFillColor(WolfColor.cgColor(frame.default_bg(), fallback: WolfColor.fallbackBg))
+        ctx.fill(rect)
+
+        // Paint the (possibly centered) grid at its paint offset.
+        ctx.saveGState()
         ctx.translateBy(
             x: rect.minX + CGFloat(geo.paintOffsetX),
             y: rect.minY + CGFloat(geo.paintOffsetY))
@@ -524,9 +540,12 @@ final class PaneContainerView: NSView {
         if frame.cursor_visible() {
             drawCursor(ctx, frame: frame, cells: frame.cells(), cols: Int(frame.cols()))
         }
+        ctx.restoreGState()
+
+        // Dim the WHOLE pane (margins included) when it is not the active pane.
         if dimmed {
             ctx.setFillColor(CGColor(gray: 0, alpha: Self.inactiveDim))
-            ctx.fill(CGRect(x: 0, y: 0, width: rect.width, height: rect.height))
+            ctx.fill(rect)
         }
         ctx.restoreGState()
     }
