@@ -221,6 +221,34 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
+    "//bazel/lighthouse:extensions.bzl%lighthouse": {
+      "general": {
+        "bzlTransitiveDigest": "YAevrbjl3Y844OElq4diiPUJTL0Qtp6Covn/pXbZpLk=",
+        "usagesDigest": "DW0TZeZs1t2PTCzwDdqy7gO/+i4hYZxj4KwWdggSSmo=",
+        "recordedFileInputs": {},
+        "recordedDirentsInputs": {},
+        "envVariables": {},
+        "generatedRepoSpecs": {
+          "lighthouse": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
+            "attributes": {
+              "urls": [
+                "https://github.com/jplein/lighthouse.nvim/archive/5862a1a78d9f4f38418ccb3aebef275ab927b779.tar.gz"
+              ],
+              "sha256": "af378b8c90a8bb205c01a5590dd8b4e9bb0e0bfdcf7eed8338f55427ff9329d5",
+              "build_file_content": "load(\"@aspect_bazel_lib//lib:copy_to_directory.bzl\", \"copy_to_directory\")\n\npackage(default_visibility = [\"//visibility:public\"])\n\n# The vendored subtrees Wolf ships: colors/ (the colorscheme itself) and LICENSE*\n# (kept for compliance). lighthouse is a COLORSCHEME, so there is NO plugin/, lua/,\n# or doc/ dir. Deliberately EXCLUDE dev-only build/, flake.nix, flake.lock,\n# Makefile, README.md, .gitignore, .prettierrc â no runtime role.\nfilegroup(\n    name = \"runtime_files\",\n    srcs = glob([\n        \"lighthouse.nvim-5862a1a78d9f4f38418ccb3aebef275ab927b779/colors/**\",\n        \"lighthouse.nvim-5862a1a78d9f4f38418ccb3aebef275ab927b779/LICENSE*\",\n    ]),\n)\n\n# Assemble under a single inner `lighthouse/` dir, remapping the archive root via\n# replace_prefixes (NOT http_archive strip_prefix). Output TreeArtifact contains\n# lighthouse/colors/lighthouse.lua and lighthouse/LICENSE*. The inner `lighthouse/`\n# is deliberate: rules_apple strips the bundled TreeArtifact's OWN top-level dir\n# name when copying into Contents/Resources/, so nesting under `lighthouse/` lands\n# it at Contents/Resources/lighthouse/ robustly.\ncopy_to_directory(\n    name = \"lighthouse_tree\",\n    srcs = [\":runtime_files\"],\n    out = \"lighthouse_tree\",\n    replace_prefixes = {\"lighthouse.nvim-5862a1a78d9f4f38418ccb3aebef275ab927b779\": \"lighthouse\"},\n)\n"
+            }
+          }
+        },
+        "recordedRepoMappingEntries": [
+          [
+            "",
+            "bazel_tools",
+            "bazel_tools"
+          ]
+        ]
+      }
+    },
     "//bazel/nvim:extensions.bzl%nvim": {
       "general": {
         "bzlTransitiveDigest": "i/zAEmCdId/41Kbe3WkRvvGYezdEo1VLaZeovdXWFwE=",

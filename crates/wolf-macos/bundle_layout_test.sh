@@ -14,6 +14,7 @@
 #   d. Contents/Resources/init.lua                           exists & is a file
 #   e. Contents/Resources/orlando/plugin/orlando.lua         exists & is a file
 #   f. Contents/Resources/orlando/lua/orlando/init.lua       exists & is a file
+#   g. Contents/Resources/lighthouse/colors/lighthouse.lua   exists & is a file
 #
 # This test only inspects files; it does NOT execute nvim and needs no network.
 #
@@ -153,4 +154,11 @@ ORLANDO_INIT="$RES/orlando/lua/orlando/init.lua"
 [ -f "$ORLANDO_INIT" ] || fail "expected vendored orlando module at $ORLANDO_INIT, but it is missing"
 echo "PASS check (f): $ORLANDO_INIT exists"
 
-echo "PASS: Wolf.app bundles nvim/bin/nvim (executable), the markdown parser, the runtime tree, init.lua, and the vendored orlando plugin"
+# ---------------------------------------------------------------------------
+# (g) Contents/Resources/lighthouse/colors/lighthouse.lua is a regular file.
+# ---------------------------------------------------------------------------
+LIGHTHOUSE_COLORS="$RES/lighthouse/colors/lighthouse.lua"
+[ -f "$LIGHTHOUSE_COLORS" ] || fail "expected vendored lighthouse colorscheme at $LIGHTHOUSE_COLORS, but it is missing"
+echo "PASS check (g): $LIGHTHOUSE_COLORS exists"
+
+echo "PASS: Wolf.app bundles nvim/bin/nvim (executable), the markdown parser, the runtime tree, init.lua, the vendored orlando plugin, and the vendored lighthouse colorscheme"

@@ -124,6 +124,8 @@ At launch `AppDelegate` sets `WOLF_NVIM_BIN` to the bundled `Contents/Resources/
 
 The `.app` now also bundles a **vendored orlando plugin** at `Contents/Resources/orlando/`. The `//bazel/orlando` module extension downloads the sha256-pinned GitHub source tarball (pure Lua, arch-independent — a single repo, no `select()`) and assembles it into a structure-preserving `orlando/` `TreeArtifact`, reusing `aspect_bazel_lib`'s `copy_to_directory` (build-time only — it never enters `wolf-core`'s dependency graph). The captive `runtime/nvim/init.lua` loads it conditionally: it self-locates a sibling `orlando/` dir next to itself and, only when that dir exists, prepends it to `runtimepath` and sources `plugin/orlando.lua`; when it is absent (Linux/cargo, or any test that does not stage it) the block is a strict no-op. Vendoring orlando is **Bazel-only for now** — the Linux path will vendor it separately later. See [`bazel/orlando/README.md`](bazel/orlando/README.md) for the pin and how it is assembled.
 
+The `.app` also bundles a **vendored lighthouse colorscheme** at `Contents/Resources/lighthouse/`. The `//bazel/lighthouse` module extension downloads the sha256-pinned GitHub source tarball (pure Lua, arch-independent — a single repo, no `select()`) and assembles it into a structure-preserving `lighthouse/` `TreeArtifact` the same way. Unlike orlando (a plugin auto-sourced from `plugin/`), lighthouse is a **colorscheme** (`colors/lighthouse.lua`), which is inert on `runtimepath` until it is explicitly selected. The captive `runtime/nvim/init.lua` therefore **activates** it conditionally: it self-locates a sibling `lighthouse/` dir next to itself and, only when that dir exists, prepends it to `runtimepath`, sets `vim.o.background = "dark"`, and runs `vim.cmd.colorscheme("lighthouse")` — **after `syntax on`**, because both `:colorscheme` and `syntax on` clear/redefine highlight groups, so the colorscheme must run last to win; when the dir is absent (Linux/cargo, or any test that does not stage it) the block is a strict no-op. A future change will switch dark/light automatically from the OS appearance preference. Vendoring lighthouse is **Bazel-only for now** — the Linux path will vendor it separately later. See [`bazel/lighthouse/README.md`](bazel/lighthouse/README.md) for the pin and how it is assembled.
+
 To **bump the pinned Neovim version**:
 
 1. Change the version in the release URLs in [`bazel/nvim/extensions.bzl`](bazel/nvim/extensions.bzl) (`_VERSION`).
@@ -138,24 +140,35 @@ To **bump the vendored orlando plugin**:
 3. Regenerate and commit `MODULE.bazel.lock`.
 4. Re-run `bazel test //bazel/orlando:orlando_tree_test`.
 
+To **bump the vendored lighthouse colorscheme**:
+
+1. Update `_COMMIT` in [`bazel/lighthouse/extensions.bzl`](bazel/lighthouse/extensions.bzl) (the archive root name — `lighthouse.nvim-<commit>`, the upstream repo name includes `.nvim` — auto-follows the commit).
+2. Recompute `_SHA256`: `curl -L https://github.com/jplein/lighthouse.nvim/archive/<commit>.tar.gz -o lighthouse.tar.gz && shasum -a 256 lighthouse.tar.gz`.
+3. Regenerate and commit `MODULE.bazel.lock`.
+4. Re-run `bazel test //bazel/lighthouse:lighthouse_tree_test`.
+
 ### Test targets
 
 ```sh
 bazel test //bazel/nvim:nvim_version_test        # execs the bundled pinned nvim
 bazel test //bazel/orlando:orlando_tree_test     # asserts the vendored orlando tree contents
+bazel test //bazel/lighthouse:lighthouse_tree_test # asserts the vendored lighthouse tree contents
 bazel test //crates/wolf-macos:bundle_layout_test # asserts the .app resource layout
 bazel test //crates/wolf-ffi:frame_pack          # headless, deterministic
 bazel test //crates/wolf-ffi:bridge_smoke        # real nvim, live round-trip; see the note below
 bazel test //crates/wolf-ffi:orlando_load        # real nvim, loads the vendored orlando plugin
+bazel test //crates/wolf-ffi:lighthouse_load     # real nvim, activates the vendored lighthouse colorscheme
 bazel test //crates/wolf-macos:WolfKeyMapTests   # pure Swift key translation
 ```
 
 - `//bazel/nvim:nvim_version_test` execs the pinned, bundled Neovim tree: it asserts the binary exists and is executable, that `nvim --version` reports `NVIM v0.12.3`, that `VIMRUNTIME` self-locates **inside** the bundled tree, and that the `markdown` treesitter parser ships.
 - `//bazel/orlando:orlando_tree_test` asserts the assembled orlando tree contents: `plugin/orlando.lua` and `lua/orlando/init.lua` land at the expected paths inside the tree's inner `orlando/` dir.
-- `//crates/wolf-macos:bundle_layout_test` inspects the built `.app` and asserts the resource layout: `Contents/Resources/nvim/bin/nvim` (executable), `…/nvim/lib/nvim/parser/markdown.so`, `…/nvim/share/nvim/runtime` (a directory), `Contents/Resources/init.lua`, and the vendored orlando resource files (`Contents/Resources/orlando/plugin/orlando.lua` and `…/orlando/lua/orlando/init.lua`).
+- `//bazel/lighthouse:lighthouse_tree_test` asserts the assembled lighthouse tree contents: `colors/lighthouse.lua` lands at the expected path inside the tree's inner `lighthouse/` dir.
+- `//crates/wolf-macos:bundle_layout_test` inspects the built `.app` and asserts the resource layout: `Contents/Resources/nvim/bin/nvim` (executable), `…/nvim/lib/nvim/parser/markdown.so`, `…/nvim/share/nvim/runtime` (a directory), `Contents/Resources/init.lua`, the vendored orlando resource files (`Contents/Resources/orlando/plugin/orlando.lua` and `…/orlando/lua/orlando/init.lua`), and the vendored lighthouse colorscheme (`Contents/Resources/lighthouse/colors/lighthouse.lua`).
 - `//crates/wolf-ffi:frame_pack` builds a `wolf_core::Snapshot` by hand (no nvim) and asserts `FfiFrame`'s color packing, flag bits, reverse-video cursor, and cell accessors. It is deterministic and runs **regardless** of `WOLF_NVIM_BIN`.
 - `//crates/wolf-ffi:bridge_smoke` drives the Rust half of the bridge against a real pinned Neovim (no mocks) and **passes** under `bazel test` on the macOS Bazel host as well as on Linux/Cargo devShells. It exercises the full live round-trip — start, type `i` then `x` and confirm the grid reflects the `x`, resize, shut down — against the bundled/pinned Neovim 0.12.3, so it is the automated proxy for the live nvim→FFI→`read_frame` round-trip on macOS. To make this hermetic, the `rust_test` stages the captive `init.lua` and the pinned Neovim tree (`//bazel/nvim:nvim_tree`) as runfiles (via `data` + `$(rootpath)` env vars `WOLF_TEST_INIT_LUA` / `WOLF_TEST_NVIM_DIR`, resolved by `common::{init_lua_path, nvim_bin_or_skip}`); an explicit `WOLF_NVIM_BIN` still wins for the cargo/devShell path. It runs `tags = ["local"]` (unsandboxed) because spawning a real nvim child does not work under the macOS build sandbox.
 - `//crates/wolf-ffi:orlando_load` drives a real pinned Neovim: it stages the vendored orlando tree as a sibling `orlando/` next to a temp `init.lua`, starts the captive editor, and asserts `vim.g.loaded_orlando` is set and `require("orlando")` loads — the automated proof of `init.lua`'s conditional orlando-load branch. It skips loudly when Neovim or the orlando tree is not staged (the cargo / Linux path).
+- `//crates/wolf-ffi:lighthouse_load` drives a real pinned Neovim: it stages the vendored lighthouse tree as a sibling `lighthouse/` next to a temp `init.lua`, starts the captive editor, and asserts the colorscheme is actually active (`vim.g.colors_name == "lighthouse"` and `vim.o.background == "dark"`) — the automated proof of `init.lua`'s conditional lighthouse-activation branch. It skips loudly when Neovim or the lighthouse tree is not staged (the cargo / Linux path).
 - `//crates/wolf-macos:WolfKeyMapTests` is a pure Swift `XCTest` over the AppKit-free `WolfKeyMap` key-translation seam — no `NSEvent`, no window — and runs regardless of `WOLF_NVIM_BIN`.
 
 ## The one hard rule and how it is enforced
@@ -188,4 +201,4 @@ bazel query 'deps(//crates/wolf-core:wolf_core)' | grep -iE \
 ## Notes
 
 - The captive Neovim is pinned and hermetic from day one (see [architecture.md](architecture.md) §8): on Linux via the flake devShell, on macOS via the Neovim bundled inside the `.app` (above). Either way it runs the pinned binary with the repo's `runtime/nvim/init.lua`.
-- The **orlando** plugin is the first vendored plugin (macOS Bazel bundle only; see "Bundled Neovim (macOS)" above). Full `wrapNeovim`-style plugin baking beyond that — a Markdown LSP such as `marksman` and a formatter — is **deferred to a later phase**. The current build relies on Neovim's markdown syntax highlighting and the `markdown` / `markdown_inline` treesitter parsers the release carries.
+- The **orlando** plugin is the first vendored plugin, and the **lighthouse** colorscheme is the second vendored asset — activated (not just sourced) by the captive `init.lua` (both macOS Bazel bundle only; see "Bundled Neovim (macOS)" above). Full `wrapNeovim`-style plugin baking beyond that — a Markdown LSP such as `marksman` and a formatter — is **deferred to a later phase**. The current build relies on Neovim's markdown syntax highlighting and the `markdown` / `markdown_inline` treesitter parsers the release carries.

@@ -106,3 +106,13 @@ use_repo(nvim, "nvim_macos_arm64", "nvim_macos_x86_64")
 # repo `orlando` (no per-arch select). See bazel/orlando/README.md.
 orlando = use_extension("//bazel/orlando:extensions.bzl", "orlando")
 use_repo(orlando, "orlando")
+
+# --- Vendored lighthouse.nvim colorscheme (macOS bundle only) ---------------
+# Downloaded + sha256-verified by the //bazel/lighthouse module extension;
+# assembled into the `lighthouse/` TreeArtifact bundled into Wolf.app at
+# Contents/Resources/lighthouse/. Pure Lua (arch-independent), so there is a
+# SINGLE repo `lighthouse` (no per-arch select). Unlike a plugin, a colorscheme is
+# inert on runtimepath until the captive init.lua activates it. See
+# bazel/lighthouse/README.md.
+lighthouse = use_extension("//bazel/lighthouse:extensions.bzl", "lighthouse")
+use_repo(lighthouse, "lighthouse")

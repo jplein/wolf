@@ -266,6 +266,41 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
+# Real-nvim integration test for the vendored lighthouse colorscheme activation
+# branch in the captive `init.lua`. Modeled on `orlando_load` exactly: drives a
+# REAL pinned Neovim (no mocks), loud-skips when WOLF_NVIM_BIN is unset.
+# Additionally stages the vendored lighthouse colorscheme tree
+# (`//bazel/lighthouse:lighthouse_tree`) and passes its runfiles path via
+# WOLF_TEST_LIGHTHOUSE_DIR; the test reconstructs the bundle layout (init.lua with
+# a sibling `lighthouse/`) in a temp dir and asserts `vim.g.colors_name ==
+# "lighthouse"` / `vim.o.background == "dark"` (the scheme is genuinely ACTIVE, not
+# merely on rtp). SKIPS when the tree is not staged (cargo / Linux path). Reuses
+# `tests/common/mod.rs`.
+rust_test(
+    name = "lighthouse_load",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/lighthouse_load.rs",
+    ],
+    crate_root = "tests/lighthouse_load.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/lighthouse:lighthouse_tree",
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+        "WOLF_TEST_LIGHTHOUSE_DIR": "$(rootpath //bazel/lighthouse:lighthouse_tree)",
+    },
+    deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
+)
+
 # Headless, deterministic packing test: builds a `wolf_core::Snapshot` by hand and
 # asserts `FfiFrame::from_snapshot`'s color packing, flag bits, cursor reverse-video,
 # shape/visibility, and the flat `cells()` grid. Needs no nvim — MUST pass regardless

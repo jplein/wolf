@@ -144,6 +144,22 @@ pub fn orlando_dir_or_none() -> Option<PathBuf> {
     resolve_runfile("WOLF_TEST_ORLANDO_DIR")
 }
 
+/// Resolves the Bazel-staged vendored lighthouse colorscheme tree
+/// (`WOLF_TEST_LIGHTHOUSE_DIR` → `$(rootpath //bazel/lighthouse:lighthouse_tree)`):
+/// the `lighthouse_tree` TreeArtifact whose inner content is `lighthouse/` (i.e.
+/// `<dir>/lighthouse/colors/lighthouse.lua`).
+///
+/// Returns `None` when the env var is unset (the cargo / Linux path, where the
+/// vendored colorscheme is not built at all) or when nothing resolves — so the
+/// `lighthouse_load` test SKIPS gracefully rather than failing. Mirrors the
+/// `*_or_none` / `*_or_skip` convention of the other runfile helpers and reuses
+/// the same [`resolve_runfile`] mechanism as [`init_lua_path`] /
+/// [`nvim_bin_or_skip`].
+#[must_use]
+pub fn lighthouse_dir_or_none() -> Option<PathBuf> {
+    resolve_runfile("WOLF_TEST_LIGHTHOUSE_DIR")
+}
+
 /// Recursively copies the directory tree at `src` into `dst` (creating `dst` and
 /// any parent dirs), preserving the relative layout.
 ///

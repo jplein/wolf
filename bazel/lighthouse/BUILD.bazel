@@ -1,0 +1,23 @@
+# Structure-preserving lighthouse colorscheme TreeArtifact + a smoke test.
+#
+# `lighthouse_tree` resolves to the assembled `lighthouse/` directory; the macOS
+# app bundles it at `Contents/Resources/lighthouse/`, where the captive `init.lua`
+# self-locates it, prepends it to runtimepath, and ACTIVATES it (background=dark +
+# :colorscheme lighthouse). lighthouse is PURE LUA (arch-independent), so there is
+# NO `select()` here (unlike //bazel/nvim). See extensions.bzl and the directory
+# README for the pin and how to bump it.
+
+# The assembled lighthouse tree (a `lighthouse/` TreeArtifact: colors/lighthouse.lua,
+# LICENSE*).
+alias(
+    name = "lighthouse_tree",
+    actual = "@lighthouse//:lighthouse_tree",
+    visibility = ["//visibility:public"],
+)
+
+# Asserts the vendored colorscheme file landed at the expected path inside the tree.
+sh_test(
+    name = "lighthouse_tree_test",
+    srcs = ["lighthouse_tree_test.sh"],
+    data = [":lighthouse_tree"],
+)

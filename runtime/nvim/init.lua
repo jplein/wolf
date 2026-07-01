@@ -82,6 +82,30 @@ if uv and uv.fs_stat(orlando_dir) then
 	vim.cmd.runtime("plugin/orlando.lua")
 end
 
+-- Vendored lighthouse colorscheme (Bazel macOS bundle only).
+--
+-- Like orlando, the macOS .app places a sibling `lighthouse/` tree next to this
+-- init.lua at Contents/Resources/lighthouse/ (bundled by //bazel/lighthouse). On
+-- Linux/cargo it is ABSENT, so this whole block is a strict NO-OP: no runtimepath
+-- change, no colorscheme call, no error. We reuse the already-computed `this_dir`
+-- / `uv` locals from the orlando block above.
+--
+-- Unlike a plugin, a colorscheme on runtimepath does NOTHING on its own: we must
+-- ALSO activate it. When the sibling dir exists we prepend it to runtimepath, set
+-- the dark background, then run `:colorscheme lighthouse` — `:colorscheme` finds
+-- `colors/lighthouse.lua` on rtp itself, so we do NOT need to `runtime()` it.
+-- ORDERING: this MUST come AFTER `vim.cmd("syntax on")` above, because both
+-- `syntax on` and `:colorscheme` clear/redefine highlight groups — activating
+-- last wins. `vim.o.background` is set BEFORE `:colorscheme` so a dual-variant
+-- scheme reads it. (A future change will switch dark/light from the OS appearance
+-- preference; the activation is kept isolated/simple to make that easy.)
+local lighthouse_dir = this_dir .. "/lighthouse"
+if uv and uv.fs_stat(lighthouse_dir) then
+	vim.opt.runtimepath:prepend(lighthouse_dir)
+	vim.o.background = "dark"
+	vim.cmd.colorscheme("lighthouse")
+end
+
 -- Current-file tracking: wolf-core invokes this over RPC after ui_attach,
 -- passing its own RPC channel id. It registers an autocmd that notifies core of
 -- the active buffer's absolute path on every buffer switch / rename, and emits

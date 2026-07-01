@@ -54,10 +54,13 @@ macos_application(
     # The pinned Neovim 0.12.3 tree (structure-preserving `nvim/` TreeArtifact)
     # lands at `Contents/Resources/nvim/`; the vendored orlando plugin tree
     # (structure-preserving `orlando/` TreeArtifact) lands at
-    # `Contents/Resources/orlando/` (loaded by the captive init.lua, not Swift);
-    # the captive `init.lua` lands flat at `Contents/Resources/init.lua`
-    # (resolved by `Bundle.main.path`).
+    # `Contents/Resources/orlando/`; the vendored lighthouse colorscheme tree
+    # (structure-preserving `lighthouse/` TreeArtifact) lands at
+    # `Contents/Resources/lighthouse/` (both loaded/activated by the captive
+    # init.lua, not Swift); the captive `init.lua` lands flat at
+    # `Contents/Resources/init.lua` (resolved by `Bundle.main.path`).
     resources = [
+        "//bazel/lighthouse:lighthouse_tree",
         "//bazel/nvim:nvim_tree",
         "//bazel/orlando:orlando_tree",
         "//runtime/nvim:init.lua",
@@ -69,7 +72,9 @@ macos_application(
 # Inspects the built `.app`: asserts the pinned nvim tree + captive init.lua
 # landed at the expected resource paths with the exec bit preserved, plus the
 # vendored orlando plugin resource files (checks e/f:
-# Contents/Resources/orlando/plugin/orlando.lua and .../lua/orlando/init.lua).
+# Contents/Resources/orlando/plugin/orlando.lua and .../lua/orlando/init.lua) and
+# the vendored lighthouse colorscheme file (check g:
+# Contents/Resources/lighthouse/colors/lighthouse.lua).
 sh_test(
     name = "bundle_layout_test",
     srcs = ["bundle_layout_test.sh"],
