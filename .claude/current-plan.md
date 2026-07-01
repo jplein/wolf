@@ -1,182 +1,128 @@
-# Plan: macOS mouse + scroll + synthetic scrollbars (wolf-macos)
+# Plan: Vendor the "orlando" Neovim plugin into the Wolf macOS Bazel build
 
 ## Problem statement
 
-Make the Neovim editor panes on macOS feel native by adding three input/UI features
-(all currently deferred on BOTH front-ends):
+Add a build step that vendors the Neovim plugin **orlando**
+(https://github.com/jplein/orlando) into the Wolf macOS **Bazel** build, and
+update `runtime/nvim/init.lua` to load it. Bazel-only for now; the Linux/cargo
+path will build it separately later, so `init.lua` must gracefully **skip**
+loading when the vendored plugin is absent.
 
-1. **Full Neovim mouse support** in panes — click positions the cursor, click-drag
-   selects (visual mode), via `nvim_input_mouse`. Today only click-to-focus exists.
-2. **Scroll wheel / trackpad** scrolling up/down within a pane, forwarded to Neovim.
-3. **Synthetic scrollbars** per pane, driven by `win_viewport`
-   (topline/botline/curline/linecount), at the PANE's right edge, following the macOS
-   "Show scroll bars" setting (`NSScroller.preferredScrollerStyle`: `.legacy` = always;
-   `.overlay` = on-scroll then fade; react to
-   `NSScroller.preferredScrollerStyleDidChangeNotification`).
+## Key facts
 
-## Load-bearing decisions (made with the user)
+- **Orlando pin:** commit `c51efff1a2faf9ff90a5334fb18a72901a561cad`
+  - Tarball: https://github.com/jplein/orlando/archive/c51efff1a2faf9ff90a5334fb18a72901a561cad.tar.gz
+  - sha256: `971aa8149a2a71c0075cb0ba1abde68fb8ebf1fc1f067ed185975ed1026eb25a`
+  - archive root dir: `orlando-c51efff1a2faf9ff90a5334fb18a72901a561cad`
+- Orlando is a standard nvim plugin: `plugin/orlando.lua` registers
+  `FileType`/`BufWinEnter` autocmds calling `require("orlando").attach(buf)`;
+  `lua/orlando/{init,config}.lua` + `lua/orlando/features/*.lua`; `doc/`.
+  Activates automatically on markdown buffers; `setup()` optional. Guards on
+  `vim.g.loaded_orlando`.
+- Wolf spawns captive nvim: `nvim --embed --clean -u <init.lua> -i NONE -n`
+  (see `crates/wolf-core/src/nvim.rs`). `--clean` relies on runtimepath for
+  plugin sourcing.
+- Precedent to MIRROR: pinned Neovim tarball fetched by module extension at
+  `bazel/nvim/extensions.bzl` (http_archive + `copy_to_directory` with
+  `replace_prefixes` remapping archive root to inner dir), aliased at
+  `bazel/nvim/BUILD.bazel`, wired in `MODULE.bazel`, bundled by
+  `crates/wolf-macos/BUILD.bazel` `macos_application` resources. rules_apple
+  STRIPS the TreeArtifact's own top-level dir name, so the inner dir must be
+  `orlando` to land at `Contents/Resources/orlando/`.
+- `AppDelegate.swift` resolves init.lua via
+  `Bundle.main.path(forResource:"init", ofType:"lua")` ->
+  `Contents/Resources/init.lua`. Bundled orlando is sibling at
+  `Contents/Resources/orlando/`.
 
-- **Architect for a future "max column width + centered grid" but DEFER the capping.**
-  Introduce a per-pane geometry abstraction with a distinct **GRID RECT** (where the
-  Neovim grid is drawn) inside the **PANE RECT** (today grid rect == pane rect). ALL
-  coordinate mapping — pixel→cell (mouse), scroll, scrollbar placement, paint offset —
-  goes through this geometry so future centering is a clean drop-in. The **SCROLL handler
-  maps from the whole PANE RECT** (not the grid rect), so scrolling with the pointer in
-  the future side margin still scrolls the pane (explicit requirement).
-- **Scrollbar at the PANE's right edge** (out in the right margin once centered).
+## Proposed implementation (subject to architect refinement)
 
-## Key technical findings (verified in code)
+1. `bazel/orlando/extensions.bzl` — module extension: `http_archive` for the
+   pinned tarball; overlay BUILD using `@aspect_bazel_lib//lib:copy_to_directory`
+   to assemble an `orlando_tree` TreeArtifact remapping archive root -> inner
+   `orlando`. Include `plugin/`, `lua/`, `doc/`.
+2. `bazel/orlando/BUILD.bazel` — `alias orlando_tree` (single-arch, no select),
+   public visibility; smoke `sh_test` asserting `plugin/orlando.lua` +
+   `lua/orlando/init.lua` present.
+3. `bazel/orlando/README.md` — pin + bump instructions + inner-dir reasoning.
+4. `MODULE.bazel` — `use_extension` + `use_repo(orlando, "orlando")`.
+5. `crates/wolf-macos/BUILD.bazel` — add `//bazel/orlando:orlando_tree` to
+   `macos_application` resources.
+6. `crates/wolf-macos/bundle_layout_test.sh` — assert
+   `Contents/Resources/orlando/plugin/orlando.lua` + `.../lua/orlando/init.lua`.
+7. `runtime/nvim/init.lua` — compute own dir via `debug.getinfo(1,"S").source`;
+   if sibling `orlando` dir exists (`vim.uv.fs_stat`), prepend to runtimepath and
+   `vim.cmd.runtime("plugin/orlando.lua")`. No-op when absent.
+8. Docs: `build.md`, `runtime/nvim/README.md`, `crates/wolf-macos/README.md`,
+   `architecture.md` as relevant.
 
-- `wolf-core` has `MouseEvent`/`MouseButton`/`MouseAction`, `ScrollEvent`/
-  `ScrollDirection`, `InputEvent::Mouse`/`Scroll`, `apply_mouse`/`apply_scroll`; the
-  captive `runtime/nvim/init.lua` sets `opt.mouse = "a"`. BUT `nvim_input_mouse`
-  HARDCODES `grid = 0` and `MouseEvent`/`ScrollEvent` carry NO grid id. Under our
-  independent multigrid pane layout (front-end owns geometry, NOT nvim's `win_pos`),
-  mouse/scroll MUST target the pane's WINDOW GRID (`boundGrid` >= 2) with GRID-LOCAL
-  row/col → **core change**: add `grid: u64` to `MouseEvent`/`ScrollEvent`, thread it
-  through `apply_mouse`/`apply_scroll`/`nvim_input_mouse`. Safe (never wired to a
-  front-end).
-- `WolfCore::send_input(InputEvent)` is public; `focus_win`/`resize`/`resize_grid` are
-  thin convenience wrappers → add `send_mouse`/`send_scroll` in that style.
-- Viewport per window: `WinInfo.viewport` (`Viewport { topline, botline, curline,
-  linecount }`, render.rs). Scrollbar needs it per grid over the FFI.
-- FFI (`wolf-ffi/src/lib.rs`) exposes `send_key`, `read_frame_for_grid`, `resize`,
-  `resize_grid`, `focus_win`, `drain_intents`, `windows`, `grid_for_win`, `active_win`.
-  ADD: a mouse-send (button/action/mods/grid/row/col) + scroll-send (direction/grid/
-  row/col), and viewport accessors on `FfiFrame` (topline/botline/curline/linecount,
-  from `snapshot.windows[grid].viewport` in `from_snapshot_grid`). Mirror the existing
-  transparent-struct + discriminant-table pattern (like `FfiKeyEvent`); add
-  button/action/direction discriminant tables as the single source of truth shared with
-  Swift. Regenerate committed `generated/`.
-- Swift: `PaneContainerView` is the single flat painting view with `mouseDown`
-  (click-to-focus only). Add the per-pane geometry; `mouseDown`/`mouseDragged`/`mouseUp`
-  → map pane-local point → (grid, row, col) → send press/drag/release (left; keep
-  focus-on-click); `scrollWheel` → map from PANE rect → accumulate `deltaY` into discrete
-  line steps → send scroll up/down; draw synthetic scrollbars at each pane's right edge
-  from the viewport, honoring `NSScroller.preferredScrollerStyle`. Keyboard stays global.
+## Testing (real nvim, no mocks)
 
-## Project policy
+- `bazel build //crates/wolf-macos:Wolf` bundles orlando.
+- `bazel test //crates/wolf-macos:bundle_layout_test` (updated) passes.
+- New `bazel/orlando` smoke test passes.
+- init.lua still works when orlando absent (bridge_smoke path unchanged);
+  consider a test that stages orlando and asserts `vim.g.loaded_orlando`.
 
-- Real-Neovim integration tests over mocks: the new FFI surface (mouse/scroll round-trip +
-  viewport) covered by a `//crates/wolf-ffi:*` test (send a mouse press → cursor moves;
-  scroll → topline changes via viewport accessors). Pure Swift seams (pixel→cell mapping,
-  scroll-delta accumulator) headlessly unit-tested in `WolfKeyMapTests`. AppKit event
-  wiring + scrollbar drawing = compile + manual-smoke only.
-- Update every affected README (wolf-core, wolf-ffi + src, wolf-macos + Sources + Tests,
-  architecture.md — move mouse/scroll/scrollbars out of deferred lists) + prettier.
-- GNOME crate not buildable here; do NOT touch it. The lead verifies live GUI rendering
-  (build + run + screenshot the .app) before sign-off.
+## Orchestrator decisions
 
-## Status: COMPLETE ✅ — all tests green + LIVE-GUI VERIFIED
+- **Integration test (d) IS in scope.** `//crates/wolf-ffi:orlando_load` (real
+  nvim, stages orlando as a sibling of a temp init.lua, asserts
+  `vim.g.loaded_orlando`/`require("orlando")`). Project policy favors real-nvim
+  tests; this is the only automated proof of the new init.lua load branch.
+- Keep `LICENSE*` in the vendored tree for compliance.
 
-### Lead live-GUI verification (real Quartz CGEvents, screenshotted the built .app)
-- MOUSE CLICK positions the cursor: opened README.md (cursor top-left), real
-  `CGEventLeftMouseDown/Up` at a mid-editor point → cursor jumped to the clicked cell. ✅
-  (System Events `click at` did NOT work — it's an AXPress, not a HID event; needed a real
-  Quartz CGEvent, compiled via `xcrun -sdk macosx swiftc` with the Nix SDK env cleared.)
-- SCROLL WHEEL scrolls: opened architecture.md, real `CGEventScrollWheelEvent` (5 line
-  events) → content scrolled from top ("# Architecture") down to the wolf-gnome section. ✅
-- SYNTHETIC SCROLLBAR renders: overlay-style rounded thumb at the pane's right edge,
-  positioned near the top (correct for ~15 lines into a long file), visible during scroll. ✅
-- Scrollbar setting is Automatic → overlay (trackpad); drag-to-select covered by the FFI
-  mouse_scroll test (DRAG/RELEASE) + code review (mouseDragged wiring) — recommend user
-  hands-on drag-select + scroll-direction feel check.
-No diag cruft in repo. Nothing committed (standing rule).
+## Status: COMPLETE ✅
 
-## Status (history): DOCS DONE + prettier + all tests green → LEAD LIVE-GUI VERIFICATION
+- Implementation done, reviewer APPROVED, docs updated + prettier (all 5 md files
+  unchanged = already conformant, proseWrap:never).
+- Final verification: bundle_layout_test, orlando_tree_test, orlando_load,
+  bridge_smoke all PASS. Full suite green earlier (Wolf builds, nvim_version_test,
+  WolfKeyMapTests, frame_pack, core dep-graph guard clean).
+- Docs updated: build.md, runtime/nvim/README.md, crates/wolf-macos/README.md,
+  architecture.md, bazel/orlando/README.md (new). 2 comment NITs fixed.
+- MODULE.bazel.lock regenerated (uncommitted). Nothing committed (standing rule).
 
-### Docs synced (technical-writer) + prettier (lead)
-8 docs updated (wolf-core README + src, wolf-ffi README + src, wolf-macos README + Sources +
-Tests, architecture.md): mouse/scroll grid-targeted, send_mouse/send_scroll, FfiMouseEvent/
-FfiScrollEvent + 3 discriminant tables, FfiFrame viewport accessors (0-based), :mouse_scroll
-target, PaneGeometry/ScrollAccumulator seams, scrollbar style behavior, mouse/scroll out of
-macOS deferred list; GNOME untouched. NIT fixed: the two lib.rs `topline` "1-based" doc
-comments → 0-based. prettier clean (all already conformant). Final sweep: all 9 targets PASS,
-Wolf builds.
+## Status: reviewer APPROVED → technical-writer (docs + 3 comment NITs) next
+
+### Reviewer verdict: APPROVED (no BLOCKER/SHOULD-FIX)
+No-op-when-absent guarantee airtight; orlando_load test genuinely proves the load
+(both vim.g.loaded_orlando + require via sentinel "OK"/"OK"), skips can't false-pass;
+bundling lands at Contents/Resources/orlando/. 3 cosmetic NITs for technical-writer:
+- crates/wolf-macos/BUILD.bazel:69-70 bundle_layout_test header comment omits orlando (e)/(f)
+- crates/wolf-macos/bundle_layout_test.sh:7 top one-line summary omits orlando
+- crates/wolf-ffi/BUILD.bazel:3-11 Targets list omits orlando_load (pre-existing pattern; optional)
 
 
 
-### Review result — APPROVED (no BLOCKER/SHOULD-FIX)
-Core grid-threading + wrappers, FFI discriminants (verified vs wolf_core enum order + Swift
-consts + test consts), FfiMouseEvent/FfiScrollEvent + mappers + FfiFrame viewport, 0-based
-scrollbar math underflow-safe (Double before subtraction, offsetFrac=topline/total, no
-`-1`), Swift seams Foundation-only + clamped, AppKit mouse/scroll/scrollbar wiring correct
-(weak-self fade timer, deinit cleanup, single direction-flip point), tests not weakened,
-no wolf-gnome changes. NIT (→ technical-writer): two `topline` "1-based" doc comments in
-`crates/wolf-ffi/src/lib.rs` (~line 394 bridge decl comment, ~line 1310 FfiFrame::topline
-accessor doc) still contradict the corrected 0-based reality — fix to 0-based.
+### Coder result — ALL TARGETS PASS
+orlando_tree_test PASS; Wolf builds; bundle_layout_test PASS; orlando_load PASS;
+bridge_smoke PASS (absent no-op confirmed); nvim_version_test PASS;
+WolfKeyMapTests PASS; frame_pack PASS. Core dep-graph guard clean (only false
+hit was `glibc` path substring via libc crate — not a GUI toolkit).
+MODULE.bazel.lock regenerated (uncommitted). Coder also created
+`bazel/orlando/README.md` (CLAUDE.md per-dir README rule).
+DOCS (build.md, runtime/nvim/README.md, crates/wolf-macos/README.md,
+architecture.md) NOT yet updated — technical-writer step pending.
 
 
 
-### Final test state
-All pass: wolf_core_lib_test; wolf-ffi {bridge_smoke, file_search, tree_search, panes,
-frame_pack, mouse_scroll}; wolf-macos {WolfKeyMapTests, bundle_layout_test}; Wolf builds.
-`mouse_scroll` PASSES end-to-end — grid-targeted mouse confirmed (exact cursor_row()==5 &&
-cursor_col()==2), topline 0-based baseline, scroll DOWN↑/UP↓. Scrollbar math 0-based +
-underflow-safe; render.rs Viewport doc corrected to 0-based.
-
-## Status (history): code fixes done; ONE more test-content fix (invalid Vimscript) then re-run
-
-### Coder fixes done
-Scrollbar math now 0-based + underflow-safe (Double before any subtraction; offsetFrac =
-topline/total); render.rs Viewport doc corrected to 0-based. All targets PASS except
-mouse_scroll, which now fails EARLIER: the test-writer's `:put =map(range(1,80),
-'printf("%05d", v:val)')` is INVALID under `:put =<expr>` — nvim strips the literal `"` as
-an Ex comment (E115), buffer never fills (linecount stays 1). Coder confirmed the `"` IS
-delivered (FFI path fine); the Vimscript is just wrong in this Ex context.
-→ ORCHESTRATOR DECISION: test-writer applies the coder's Option A (double-quote-free):
-  `:put =map(range(1,80), 'printf(''%05d'', v:val)')` (doubled single-quotes, no `"`; Rust
-  string needs no escaping). Yields 5-char lines so the exact (row5,col2) assertion holds.
-  Then coder re-runs //crates/wolf-ffi:mouse_scroll.
-
-## Status (history): IMPLEMENTED; 2 empirical findings → test-writer fix + coder fix pass
-
-### Implementation result (coder) — all targets pass EXCEPT mouse_scroll (test assertions)
-Core grid-threading + send_mouse/send_scroll; FFI discriminant mods + FfiMouseEvent/
-FfiScrollEvent + send glue + mappers + FfiFrame viewport accessors + from_snapshot_grid
-populate; bindings regenerated (wake.h unchanged); :mouse_scroll target added; Swift
-PaneGeometry + ScrollAccumulator seams + AppKit mouse/scroll/scrollbars wired. Verbatim:
-wolf_core_lib_test, bridge_smoke, file_search, tree_search, panes, frame_pack,
-WolfKeyMapTests, bundle_layout_test → PASS; Wolf builds. mouse_scroll FAILS on test
-assumptions (below). swift-bridge: FfiMouseEvent/FfiScrollEvent pass by value (intoFfiRepr,
-like send_key); viewport accessors plain scalars.
-
-### Empirical findings + ORCHESTRATOR DECISIONS
-1. **`topline` is 0-BASED** (confirmed: after `:1`, topline()==0, linecount()>=80 real).
-   → TEST FIX: baseline `topline()==0` (keep relative DOWN↑/UP↓ asserts).
-   → CODE FIX (coder): scrollbar offset must be 0-based + underflow-safe — the plan's
-     `(topline-1)/total` UNDERFLOWS UInt64 at topline==0 (top of every buffer). Use
-     `Double(topline)/total`; do all viewport subtractions (botline-topline) in a
-     non-underflowing way (convert to Double/Int first).
-   → DOC FIX (coder): `crates/wolf-core/src/render.rs` `Viewport::topline` doc says
-     "1-based" — change to 0-based (and note for technical-writer to check READMEs).
-2. **cursor_col clamps to EOL** because `:put =range(1,80)` lines are 1 char wide.
-   → TEST FIX (do NOT weaken to row-only): use WIDE content (e.g. zero-padded/`printf`
-     or `repeat` lines ≥ ~6 chars) so clicking grid (row 5, col 2) lands a real column and
-     the EXACT `cursor_row()==5 && cursor_col()==2` assertion holds (verifies column
-     targeting). Coder confirmed grid-targeting + row mapping work; col is the open item.
-3. Scroll sign confirmed correct (DOWN↑topline / UP↓topline at the core level).
-
-
-
-### Tests written (test-writer)
-- `crates/wolf-ffi/tests/mouse_scroll.rs` — real-nvim `mouse_scroll_click_drag_and_wheel`
-  (modeled on panes.rs, reuses char_key/enter_key/send_ex_command/live_windows): put 80
-  lines → click(5,2) cursor moves → drag/release(8,4) responsive → scroll DOWN topline↑ →
-  scroll UP topline↓. Exact PRESS assert `cursor_row()==5 && cursor_col()==2` (fallback
-  row-only commented); DRAG/RELEASE loose (no-panic + soft cursor note). Coder adds the
-  `//crates/wolf-ffi:mouse_scroll` BUILD target.
-- `crates/wolf-macos/Tests/WolfKeyMapTests/PaneGeometryTests.swift` (6 cases) +
-  `ScrollAccumulatorTests.swift` (5 cases) — headless; coder adds the seams + wires srcs.
-
-### Coder-verify-empirically (from test-writer)
-- `:put =range(1,80)` landing 80 lines + `linecount()` reflecting it (`:`-cmd path proven by
-  panes.rs; `=range()` chars are the new part).
-- nvim_input_mouse grid-targeting + the row/col base: test assumes FFI row/col (0-based
-  grid-local) == `cursor_row()/cursor_col()`. Plan §9 empirical gate — resolve here.
-- Scroll sign: DOWN↑topline / UP↓topline; if reversed it's a mapper bug, not a test bug.
-
-
+### Test-writer notes (IMPORTANT for coder)
+- NO exec_lua seam exists on `WolfCoreHandle` (verified against wolf-ffi/src/lib.rs
+  + bridge_smoke/panes). `orlando_load.rs` therefore drives a typed
+  `:lua vim.fn.writefile({...}, "<path>")` Ex command via the existing send_key
+  path (like `panes.rs` `send_ex_command`), writing a 2-line sentinel recording
+  `vim.g.loaded_orlando` truthiness + `pcall(require,"orlando")` success, then
+  reads the file back in Rust and asserts both `"OK"`. Do NOT add a new FFI method.
+- Test files written: `bazel/orlando/orlando_tree_test.sh`,
+  `crates/wolf-macos/bundle_layout_test.sh` (checks e/f added, uses `$RES`),
+  `crates/wolf-ffi/tests/common/mod.rs` (`orlando_dir_or_none()` +
+  `copy_dir_recursive()` added), `crates/wolf-ffi/tests/orlando_load.rs`
+  (`orlando_loads_from_sibling_dir`, skips when nvim/tree absent, stages sibling
+  temp layout via tempfile — already a dev-dep).
+- Coder must wire BUILD targets: `//bazel/orlando:orlando_tree_test` sh_test;
+  `//crates/wolf-ffi:orlando_load` rust_test (srcs common/mod.rs + orlando_load.rs,
+  crate_root tests/orlando_load.rs, tags no-sandbox, size small, data +=
+  orlando_tree, env += WOLF_TEST_ORLANDO_DIR = $(rootpath //bazel/orlando:orlando_tree)).
 
 ---
 
@@ -184,206 +130,250 @@ like send_key); viewport accessors plain scalars.
 
 ## 1. Summary
 
-Add mouse (click positions cursor, drag selects, release ends), scroll wheel/trackpad
-up/down, and per-pane synthetic scrollbars (driven by `win_viewport`, at the pane's right
-edge, following `NSScroller.preferredScrollerStyle`) to `PaneContainerView`. Thread a real
-`grid` id through the core mouse/scroll path (today `nvim_input_mouse` hardcodes `grid=0`),
-expose per-grid viewport over the FFI, add a mouse/scroll bridge surface, and add two
-headlessly-tested pure Swift seams (`PaneGeometry`, `ScrollAccumulator`). All pixel↔cell
-mapping routes through a per-pane **GRID RECT inside PANE RECT** abstraction so a future
-max-column-width/centered-grid is a clean drop-in — ARCHITECTED-FOR, NOT IMPLEMENTED (cap
-deferred; `gridRect == paneRect` today). Scroll maps from the whole PANE RECT. Scrollbar at
-the PANE's right edge; thumb-drag deferred (non-interactive v1). (Go-lint guidance from the
-template is N/A — repo is Rust+Swift.)
+Vendor the pure-Lua Neovim plugin **orlando** (pinned by commit) into the Wolf
+macOS Bazel build and load it from the captive `runtime/nvim/init.lua`. A new
+`//bazel/orlando` module extension downloads and sha256-verifies the pinned
+tarball, then assembles `plugin/`, `lua/`, `doc/`, `LICENSE*` into a
+structure-preserving `orlando/` TreeArtifact (mirroring `//bazel/nvim`, but
+arch-independent — no `select()`). `//crates/wolf-macos:Wolf` bundles it at
+`Contents/Resources/orlando/`. `init.lua` gains a self-locating, guarded block
+that prepends a sibling `orlando/` dir to `runtimepath` and sources
+`plugin/orlando.lua` — but only when that dir exists, so it is a total no-op on
+Linux/cargo and in any bridge test that does not stage orlando.
 
-## 2. Core (`wolf-core`)
+## 2. Files to create
 
-### 2.1 `src/input.rs`
-- `MouseEvent`: add `pub grid: u64`. `ScrollEvent`: add `pub grid: u64`.
-- `apply_mouse`: call `nvim_input_mouse(nvim, button, action, &modifier, ev.grid, ev.row,
-  ev.col)`. `apply_scroll`: `nvim_input_mouse(nvim, "wheel", action, "", ev.grid, ev.row,
-  ev.col)` (scroll modifiers stay `""`).
-- `nvim_input_mouse`: add `grid: u64` param between `modifier` and `row`; replace
-  `Value::from(0_u64)` with `Value::from(grid)`. Fix the doc (no longer hardcoded 0).
-- Grep confirms `MouseEvent {`/`ScrollEvent {` only constructed in input.rs struct defs.
-- UNCERTAINTY: `nvim_input_mouse` grid-targeting under ext_multigrid (grid>=2 + grid-local
-  row/col) is intended but never exercised — the FFI test (§6.1) is the empirical gate; if
-  it misbehaves, note in test comments (grid-targeting strongly preferred, no global coords
-  available under our independent layout).
+### 2a. `bazel/orlando/extensions.bzl`
+Mirror `bazel/nvim/extensions.bzl`. Single `http_archive` (pure Lua, arch-independent).
+Constants:
+```starlark
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+_COMMIT = "c51efff1a2faf9ff90a5334fb18a72901a561cad"
+_SHA256 = "971aa8149a2a71c0075cb0ba1abde68fb8ebf1fc1f067ed185975ed1026eb25a"
+_ARCHIVE_ROOT = "orlando-" + _COMMIT
+```
+URL in impl: `"https://github.com/jplein/orlando/archive/{c}.tar.gz".format(c = _COMMIT)`.
+`_BUILD_FILE_TEMPLATE` overlay (placed at extracted repo root; `{archive_root}` =
+`orlando-<commit>`):
+```starlark
+_BUILD_FILE_TEMPLATE = """\
+load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 
-### 2.2 `src/api.rs`
-- Add `pub fn send_mouse(&self, ev: MouseEvent) { self.send_input(InputEvent::Mouse(ev)); }`
-  and `pub fn send_scroll(&self, ev: ScrollEvent) { self.send_input(InputEvent::Scroll(ev));
-  }` near `focus_win`. Add `MouseEvent, ScrollEvent` to the `use crate::input::{...}` import.
+package(default_visibility = ["//visibility:public"])
 
-### 2.3 Viewport — already present
-`snapshot.windows.get(&grid).map(|w| w.viewport)` yields `Viewport{topline,botline,curline,
-linecount}`. No core change for the FFI to read it.
+# The vendored subtrees Wolf ships: plugin/, lua/orlando/**, doc/, and LICENSE*
+# (kept for compliance). Deliberately EXCLUDE test/, flake.nix, flake.lock,
+# .luarc.json, README.md — dev-only, no runtime role.
+filegroup(
+    name = "runtime_files",
+    srcs = glob([
+        "{archive_root}/plugin/**",
+        "{archive_root}/lua/**",
+        "{archive_root}/doc/**",
+        "{archive_root}/LICENSE*",
+    ]),
+)
 
-## 3. FFI (`crates/wolf-ffi/src/lib.rs`)
+# Assemble under a single inner `orlando/` dir, remapping the archive root via
+# replace_prefixes (NOT http_archive strip_prefix). Output TreeArtifact contains
+# orlando/plugin/orlando.lua, orlando/lua/orlando/init.lua, orlando/doc/**, etc.
+# The inner `orlando/` is deliberate: rules_apple strips the bundled
+# TreeArtifact's OWN top-level dir name when copying into Contents/Resources/,
+# so nesting under `orlando/` lands it at Contents/Resources/orlando/ robustly.
+copy_to_directory(
+    name = "orlando_tree",
+    srcs = [":runtime_files"],
+    out = "orlando_tree",
+    replace_prefixes = {{"{archive_root}": "orlando"}},
+)
+"""
+```
+`_build_file(archive_root)` formats it; `_orlando_impl(_module_ctx)` calls
+`http_archive(name="orlando", urls=[...], sha256=_SHA256, build_file_content=_build_file(_ARCHIVE_ROOT))`.
+`orlando = module_extension(implementation=_orlando_impl, doc="Downloads the pinned orlando Neovim plugin tarball (pure Lua, arch-independent).")`.
+Module docstring explains: single repo, replace_prefixes → inner `orlando/`,
+rules_apple strip reasoning, NO arch select, build-only (never in wolf-core graph).
 
-### 3.1 Discriminant modules (single source of truth, beside `mod kind`/`intent_kind`/…)
-`mod mouse_button { LEFT=0, RIGHT=1, MIDDLE=2 }`; `mod mouse_action { PRESS=0, RELEASE=1,
-DRAG=2 }`; `mod scroll_dir { UP=0, DOWN=1, LEFT=2, RIGHT=3 }` (each `pub const NAME: u8 = N;`
-+ `///`). Mirror `wolf_core::MouseButton`/`MouseAction`/`ScrollDirection` variant order.
+### 2b. `bazel/orlando/BUILD.bazel`
+```starlark
+alias(
+    name = "orlando_tree",
+    actual = "@orlando//:orlando_tree",
+    visibility = ["//visibility:public"],
+)
 
-### 3.2 Transparent structs (inside `mod ffi`, like `FfiKeyEvent`)
-`#[swift_bridge(swift_repr="struct")] struct FfiMouseEvent { button: u8, action: u8, grid:
-u64, row: u32, col: u32, ctrl: bool, shift: bool, alt: bool }`; `struct FfiScrollEvent {
-direction: u8, grid: u64, row: u32, col: u32 }`. Add to `WolfCoreHandle` extern block:
-`fn send_mouse(&self, ev: FfiMouseEvent);`, `fn send_scroll(&self, ev: FfiScrollEvent);`.
-Add to `FfiFrame` extern block: `fn topline/botline/curline/linecount(&self) -> u64;`.
-Re-export: `pub use ffi::{FfiColor, FfiKeyEvent, FfiMouseEvent, FfiScrollEvent};`.
+sh_test(
+    name = "orlando_tree_test",
+    srcs = ["orlando_tree_test.sh"],
+    data = [":orlando_tree"],
+)
+```
+Header comment: structure-preserving `orlando/` TreeArtifact bundled at
+Contents/Resources/orlando/; pure Lua so NO arch select.
 
-### 3.3 `FfiFrame` viewport fields
-Add `topline/botline/curline/linecount: u64` fields + `#[must_use]` accessors;
-`empty()` sets all 0; in `from_snapshot_grid` read `let vp = snapshot.windows.get(&grid_id)
-.map(|w| w.viewport).unwrap_or_default();` and populate. `from_snapshot` delegates →
-`read_frame` unchanged; `frame_pack` (no windows) reads 0 (optional new assert
-`topline()==0`).
+### 2c. `bazel/orlando/orlando_tree_test.sh`
+Mirror `nvim_version_test.sh` runfiles-resolution style. `set -eu` + `fail()`.
+Build `RUNFILES_ROOTS` (TEST_SRCDIR, RUNFILES_DIR, $0.runfiles). Locate tree via
+direct candidates then `find -L "$root" -type d -path '*/orlando_tree/orlando'`
+fallback. Assert both regular files exist: `<tree>/plugin/orlando.lua` and
+`<tree>/lua/orlando/init.lua`. Final `echo "PASS: ..."`. Add NOTE-to-coder
+comment to pin the observed direct runfiles path, keeping find as safety net.
 
-### 3.4 Glue + mappers (full docs, `#[must_use]` on accessors)
-`send_mouse`/`send_scroll` impls: map via `mouse_event_from_ffi`/`scroll_event_from_ffi`
-(return `None` on bad discriminant), then `if let Some(core)=self.core.borrow().as_ref()
-{ core.send_mouse(m) }`. Mappers per architect spec (match discriminant consts → core enum,
-`_ => return None`; build `MouseEvent`/`ScrollEvent` with `grid/row/col` + mods). Add
-`use wolf_core::{MouseButton, MouseAction, MouseEvent, ScrollDirection, ScrollEvent}`.
+### 2d. `bazel/orlando/README.md`
+Sections (mirror bazel/nvim/README.md; prettier after): title+one-liner; the pin
+(commit, sha256, archive root); targets (`orlando_tree` alias → `@orlando`, NO
+select; `orlando_tree_test`); how it works (http_archive + overlay, selective
+glob, replace_prefixes→inner orlando + WHY, reuses aspect_bazel_lib build-only,
+never in wolf-core graph); bumping the pin (update `_COMMIT`; recompute sha256 via
+`curl -L .../<commit>.tar.gz -o orlando.tar.gz && shasum -a 256 orlando.tar.gz`;
+archive root auto-follows; regenerate/commit MODULE.bazel.lock; re-run test).
 
-### 3.5 Regenerate
-`bazel run //crates/wolf-ffi:gen_bindings`; commit `generated/wolf-ffi.swift`/`.h`.
-`wolf_ffi_wake.h` MUST stay unchanged (no new wake). swift-bridge transparent-struct-arg is
-proven by `send_key`; fallback = scalar args (not expected).
+## 3. Files to modify
 
-## 4. Swift pure seams (`WolfKeyMap`, Foundation-only, `Double` not `CGFloat`)
+### 3a. `MODULE.bazel` — after the nvim block (~line 100), append:
+```starlark
+# --- Vendored orlando Neovim plugin (macOS bundle only) ---------------------
+# Downloaded + sha256-verified by the //bazel/orlando module extension; assembled
+# into the `orlando/` TreeArtifact bundled into Wolf.app at
+# Contents/Resources/orlando/. Pure Lua (arch-independent), so there is a SINGLE
+# repo `orlando` (no per-arch select). See bazel/orlando/README.md.
+orlando = use_extension("//bazel/orlando:extensions.bzl", "orlando")
+use_repo(orlando, "orlando")
+```
 
-### 4.1 `Sources/WolfKeyMap/PaneGeometry.swift` (new)
-`public struct PaneGeometry` with `paneRect, gridRect: Rect` (reuse `Rect` from
-PaneTree.swift), `cellWidth/cellHeight: Double`, `cols/rows: Int`. `init(paneRect:
-cellWidth: cellHeight: maxCols: Int? = nil)` — `maxCols==nil` ALWAYS today → `gridRect ==
-paneRect`; future cap centers a narrower gridRect (guarded, untested, pass `nil`
-everywhere). `cols = max(1, floor(gridRect.w/cellWidth))`, `rows` likewise. `paintOffsetX/Y
-= gridRect.{x,y} - paneRect.{x,y}` (0 today). `cellAt(x:y:) -> (row, col)` CLAMPED into
-`[0,cols-1]×[0,rows-1]` (margin/edge → nearest edge cell): `col = clamp(floor((x-gridRect.x)
-/cellWidth), 0, cols-1)`, `row` likewise.
+### 3b. `crates/wolf-macos/BUILD.bazel` — in `macos_application(name="Wolf")`:
+Update resources comment to add orlando at Contents/Resources/orlando/. Add
+`"//bazel/orlando:orlando_tree"` to resources (after nvim_tree):
+```starlark
+    resources = [
+        "//bazel/nvim:nvim_tree",
+        "//bazel/orlando:orlando_tree",
+        "//runtime/nvim:init.lua",
+    ],
+```
 
-### 4.2 `Sources/WolfKeyMap/ScrollAccumulator.swift` (new)
-`public struct ScrollAccumulator` with private signed `remainder: Double`. `mutating func
-consume(deltaY: Double, cellHeight: Double) -> Int` (guard cellHeight>0 → 0; `remainder +=
-deltaY`; `while remainder >= cellHeight { steps+=1; remainder-=cellHeight }`; `while
-remainder <= -cellHeight { steps-=1; remainder+=cellHeight }`; return signed steps).
-`mutating func reset()`. Direction-agnostic (signed); AppKit maps sign → direction.
+### 3c. `crates/wolf-macos/bundle_layout_test.sh` — add checks after (d), style-matched:
+```sh
+# (e) Contents/Resources/orlando/plugin/orlando.lua exists.
+ORLANDO_PLUGIN="$RES/orlando/plugin/orlando.lua"
+[ -f "$ORLANDO_PLUGIN" ] || fail "expected vendored orlando plugin at $ORLANDO_PLUGIN, but it is missing"
+echo "PASS check (e): $ORLANDO_PLUGIN exists"
 
-### 4.3 Headless tests (wire into `WolfKeyMapTests` srcs; seams into `wolf_key_map` srcs)
-`PaneGeometryTests.swift`: gridRect==paneRect today + paintOffset 0; cols/rows from cell
-size (800×480 @8×16 → 100×30; sub-cell → 1×1); cellAt interior; cellAt clamps left/top
-margin → (0,0); clamps right/bottom edge → (rows-1,cols-1); clamps with non-zero pane
-origin. `ScrollAccumulatorTests.swift`: whole cell → ±1; sub-cell accumulates (0 then 1);
-remainder carries across calls; sign change reverses (per documented signed-remainder
-values: +1.5h→1 rem+0.5h, then -2h→ rem-1.5h→ -1); zero cellHeight → 0.
+# (f) Contents/Resources/orlando/lua/orlando/init.lua exists.
+ORLANDO_INIT="$RES/orlando/lua/orlando/init.lua"
+[ -f "$ORLANDO_INIT" ] || fail "expected vendored orlando module at $ORLANDO_INIT, but it is missing"
+echo "PASS check (f): $ORLANDO_INIT exists"
+```
+Update header comment block (items e/f) and final PASS line to mention orlando.
+(Verify the exact variable name for the Resources dir in the script — plan says
+`$RES`; coder must match whatever the script actually uses.)
 
-## 5. AppKit wiring (`PaneContainerView.swift`) — compile + manual-smoke
+### 3d. `runtime/nvim/init.lua` — insert AFTER `vim.cmd("syntax on")` (line 62),
+BEFORE `_G.wolf_setup_current_file_tracking` (line 69). Use TABS (match file):
+```lua
+-- Vendored orlando plugin (Bazel macOS bundle only).
+--
+-- The macOS .app places a sibling `orlando/` tree next to this init.lua at
+-- Contents/Resources/orlando/ (bundled by //bazel/orlando). On Linux/cargo it is
+-- ABSENT, so this whole block is a strict NO-OP: no runtimepath change, no error.
+-- We self-locate init.lua's own directory (rather than assume a fixed path), look
+-- for the sibling `orlando/`, and only if it exists prepend it to runtimepath and
+-- deterministically source its plugin file — necessary because `--clean` does not
+-- scan user plugin dirs, so a plain rtp prepend alone would not auto-source it.
+-- orlando itself guards on vim.g.loaded_orlando, so the explicit source is safe.
+-- orlando's wrap_indent also sets wrap/linebreak/breakindent; additive & harmless
+-- with the wrap/linebreak/smoothscroll set above.
+local this_file = debug.getinfo(1, "S").source:sub(2) -- strip the leading '@'
+local this_dir = vim.fn.fnamemodify(this_file, ":p:h")
+local orlando_dir = this_dir .. "/orlando"
+local uv = vim.uv or vim.loop -- vim.uv on nvim 0.12.3; vim.loop fallback
+if uv and uv.fs_stat(orlando_dir) then
+	vim.opt.runtimepath:prepend(orlando_dir)
+	vim.cmd.runtime("plugin/orlando.lua")
+end
+```
 
-### 5.1 Geometry lookup + refactor (no behavior change today)
-Helper `geometry(for rect: CGRect) -> PaneGeometry` (maxCols: nil). `paintGrid`: translate
-by `rect.minX + geo.paintOffsetX, rect.minY + geo.paintOffsetY` (clip stays the pane rect).
-`syncGridSizes`: per-pane target from `geo.cols/geo.rows` (today identical); grid-1/global
-path stays on `gridCells(bounds)`.
+## 4. Tests (real nvim, no mocks) — four layers
 
-### 5.2 Mouse press/drag/release
-State `mouseDragGrid: UInt64?`. Mods from `event.modifierFlags` (ctrl/shift/alt; no meta).
-`mouseDown`: hit-test pane → focus_win+setActive+needsDisplay (keep click-to-focus); `(row,
-col)=geo.cellAt(point)`; `send_mouse(FfiMouseEvent(button:LEFT, action:PRESS, grid, row,
-col, mods))`; `mouseDragGrid=grid`. `mouseDragged`: if set, look up that grid's pane rect,
-map (clamped) → `action:DRAG`. `mouseUp`: if set, map → `action:RELEASE`; clear
-`mouseDragGrid`. (nvim `mouse=a` makes press→drag→release = cursor + visual selection.)
+- (a) `//bazel/orlando:orlando_tree_test` (new, §2c) — tree contents.
+- (b) `//crates/wolf-macos:bundle_layout_test` (modified, §3c) — bundling.
+- (c) `//crates/wolf-ffi:bridge_smoke` (unchanged) — absent-path no-op (stages
+  only init.lua + nvim_tree; proves init.lua still starts cleanly with orlando
+  absent). Coverage only, no change.
+- (d) `//crates/wolf-ffi:orlando_load` (NEW, IN SCOPE) — present-path load.
+  - New `rust_test` in `crates/wolf-ffi/BUILD.bazel` modeled on `bridge_smoke`/
+    `panes` (`tags=["no-sandbox"]`, `size="small"`, reuse `tests/common/mod.rs`),
+    `data` adds `"//bazel/orlando:orlando_tree"`, `env` adds
+    `"WOLF_TEST_ORLANDO_DIR": "$(rootpath //bazel/orlando:orlando_tree)"`
+    alongside existing WOLF_TEST_INIT_LUA / WOLF_TEST_NVIM_DIR.
+  - Add helper to `tests/common/mod.rs`: `orlando_dir_or_none() -> Option<PathBuf>`
+    reusing existing `resolve_runfile("WOLF_TEST_ORLANDO_DIR")` (returns staged
+    `orlando_tree` dir; inner content is `orlando/`).
+  - `tests/orlando_load.rs`: `nvim_bin_or_skip()` guard; because init.lua derives
+    orlando from its OWN sibling dir, stage a sibling layout in a temp dir T: copy
+    staged init.lua → T/init.lua, recursively copy `<orlando_tree>/orlando` →
+    T/orlando. Spawn real captive nvim with init_lua=T/init.lua (WOLF_NVIM_BIN
+    from nvim), ui_attach, `nvim_exec_lua` returning
+    `{ vim.g.loaded_orlando, pcall(require, "orlando") }`; assert loaded; shutdown.
+  - Coder must confirm the exact common/mod.rs helpers available
+    (resolve_runfile, nvim_bin_or_skip, init_lua_path, start/ui_attach/shutdown
+    seam) and mirror how bridge_smoke constructs+starts core.
 
-### 5.3 Scroll
-State `scrollAccumulator = ScrollAccumulator()`, `lastScrollGrid: UInt64?`. `scrollWheel`:
-hit-test from the PANE rect (margin-scroll-ready); if grid != lastScrollGrid → reset accum +
-update. `(row,col)=geo.cellAt(...)`. `let dy = event.hasPreciseScrollingDeltas ?
-Double(event.scrollingDeltaY) : Double(event.scrollingDeltaY)*cellHeight`. `steps =
-accum.consume(dy, cellHeight)`. DIRECTION (verify empirically, single commented flip
-point): natural scroll positive deltaY → viewport UP; `steps>0→UP, steps<0→DOWN`; honor
-`event.isDirectionInvertedFromDevice`. Emit `abs(steps)` `FfiScrollEvent(direction, grid,
-row, col)`. Trigger `scrollbarActivity()`.
+Full target list that must pass:
+`bazel build //crates/wolf-macos:Wolf`; `bazel test //bazel/orlando:orlando_tree_test`;
+`//bazel/nvim:nvim_version_test`; `//crates/wolf-macos:bundle_layout_test`;
+`//crates/wolf-ffi:bridge_smoke`; `//crates/wolf-ffi:orlando_load`;
+`//crates/wolf-macos:WolfKeyMapTests`; `//crates/wolf-ffi:frame_pack`. Plus core
+dep-graph guard clean (`bazel query 'deps(//crates/wolf-core:wolf_core)' | grep -iE 'gtk|...' || echo clean`).
 
-### 5.4 Synthetic scrollbars (custom-drawn in `draw(_:)`, NOT NSScroller subviews)
-Constants: `scrollbarThickness=8, scrollbarInset=2, scrollbarMinThumb=24, trackAlpha=0.12,
-thumbAlpha=0.45, overlayFadeDelay=0.9, overlayFadeDuration=0.4, overlayFadeTick=1/30`.
-State: `scrollerStyle = NSScroller.preferredScrollerStyle`, `lastScrollTime`,
-`scrollbarFadeTimer`. Per pane: track at right edge `CGRect(x: rect.maxX-thickness-inset,
-y: rect.minY+inset, w: thickness, h: rect.height-2inset)`; read `topline/botline/linecount`;
-if `linecount==0` or whole buffer visible → draw nothing; `frac=visible/total` (clamp),
-`thumbH=max(minThumb, track.h*frac)`, `offsetFrac=(topline-1)/total`, `thumbY` clamped;
-rounded thumb (radius thickness/2) at `thumbAlpha*currentAlpha`; `.legacy` also faint track.
-Fade: `.legacy` → alpha 1 always; `.overlay` → 1 while `now-lastScrollTime<fadeDelay` then
-ramp to 0 over fadeDuration. `scrollbarActivity()` sets lastScrollTime + arms repeating tick
-timer (needsDisplay; invalidate at alpha 0) for `.overlay`. Observe
-`NSScroller.preferredScrollerStyleDidChangeNotification` → update style + needsDisplay;
-remove in deinit. Draw after dividers/cmdline strip. Thumb-drag DEFERRED (non-interactive).
+## 5. Docs (prettier --write after; no hard line breaks in paragraphs)
 
-### 5.5 Swift FFI discriminant consts (mirror Rust, `private static let`)
-`mouseButtonLeft=0, mouseActionPress=0/Release=1/Drag=2, scrollDirUp=0/Down=1`.
+- `build.md` "Bundled Neovim (macOS)": add vendored-orlando paragraph
+  (Contents/Resources/orlando/, //bazel/orlando extension, reuses
+  aspect_bazel_lib, init.lua conditionally loads it / no-op when absent,
+  Bazel-only for now); add "bump the vendored orlando plugin" mini-list; add
+  `//bazel/orlando:orlando_tree_test` to Test targets + extend bundle_layout_test
+  bullet.
+- `runtime/nvim/README.md`: add bullet on the conditional orlando load
+  (self-locate sibling, prepend rtp + source plugin/orlando.lua because --clean
+  doesn't scan plugin dirs, no-op when absent; wrap_indent additive). Update
+  "Deferred": plugin baking no longer fully deferred — orlando is first vendored
+  plugin; marksman LSP + formatter remain deferred.
+- `crates/wolf-macos/README.md`: bundle now includes Contents/Resources/orlando/
+  (loaded by init.lua, not Swift); bundle_layout_test now covers orlando.
+- `architecture.md`: §8 macOS bundle bullet + reconcile "plugin baking deferred"
+  — orlando is first vendored plugin via //bazel/orlando; full wrapNeovim baking
+  (marksman, formatter) remains deferred; Bazel-only for now.
 
-### 5.6 Keyboard stays global (`keyDown` unchanged).
+## 6. Implementation order
 
-## 6. Tests
+1. `bazel/orlando/extensions.bzl`
+2. `bazel/orlando/BUILD.bazel`
+3. `bazel/orlando/orlando_tree_test.sh`
+4. `MODULE.bazel` (then `//bazel/orlando:orlando_tree_test` must pass)
+5. `runtime/nvim/init.lua` (bridge_smoke still passes)
+6. `crates/wolf-macos/BUILD.bazel`
+7. `crates/wolf-macos/bundle_layout_test.sh` (build Wolf, run test)
+8. `crates/wolf-ffi` test (d): common/mod.rs helper + orlando_load.rs + BUILD target
+9. Docs + prettier
+10. Regenerate/commit `MODULE.bazel.lock` (any build with `--lockfile_mode=update`)
 
-### 6.1 `crates/wolf-ffi/tests/mouse_scroll.rs` (real nvim, mirror panes.rs)
-`mouse_scroll_click_drag_and_wheel`: (1) start, poll `read_frame().cols()>0`; (2) poll live
-window grid (>=2, not hidden); (3) `:put =range(1,80)` → poll `linecount()>=80`, `:1`/gg →
-`topline()==1`; (4) `send_mouse(LEFT,PRESS,grid,row5,col2)` → poll `cursor_row()==5 &&
-cursor_col()==2` (fallback: row only, documented); (5) DRAG (8,4) + RELEASE (8,4) → assert
-responsive + loosely `cursor_row()==8`; (6) `t0=topline()`, send ~5 `DOWN` → poll
-`topline()>t0`; (7) `t1=topline()`, send `UP` → poll `topline()<t1`; (8) shutdown. Local
-discriminant consts mirroring the Rust mods. `frame_pack` still passes (optional
-`topline()==0` assert).
+## 7. Deps/lint
+No new external Bazel modules (http.bzl + aspect_bazel_lib already present). No new
+Rust crates (reuse all_crate_deps(normal_dev=True) + :wolf_ffi). No Go — Go-lint
+notes N/A. Buildifier-clean Starlark; prettier on markdown; init.lua uses TABS;
+orlando_tree_test.sh POSIX sh with set -eu + fail().
 
-### 6.2 BUILD: add `mouse_scroll` rust_test to `crates/wolf-ffi/BUILD.bazel` mirroring `panes`
-(tags no-sandbox, size small, data nvim_tree+init.lua, env, deps `[":wolf_ffi"]+
-all_crate_deps(normal_dev=True)`, srcs common/mod.rs+mouse_scroll.rs, crate_root).
-
-### 6.3 Swift headless: PaneGeometryTests + ScrollAccumulatorTests (§4.3) into WolfKeyMapTests.
-
-### 6.4 AppKit + scrollbars = compile + manual-smoke. Lead checklist: click positions
-cursor; drag selects (clamps at edges); release clean; scroll up/down (direction per system
-natural-scroll, flip if reversed); smooth trackpad precision; per-pane scrollbar reflects
-position/size; "Show scroll bars: Always" → always visible; "When scrolling" → fade; live
-setting change updates without relaunch; multi-pane targets correct grid + dimming intact.
-
-### 6.5 Targets that must pass: `wolf_core_lib_test`; `wolf-ffi:{bridge_smoke,file_search,
-tree_search,panes,frame_pack,mouse_scroll}`; `wolf-macos:{WolfKeyMapTests,bundle_layout_test,
-Wolf}`.
-
-## 7. Docs (prettier after)
-`wolf-core/src/README.md` (mouse/scroll carry grid; nvim_input_mouse grid-targeted;
-send_mouse/send_scroll). `wolf-ffi/README.md` + `src/README.md` (send_mouse/send_scroll,
-FfiMouseEvent/FfiScrollEvent + discriminant tables, FfiFrame viewport accessors,
-:mouse_scroll target, mappers, from_snapshot_grid viewport). `wolf-macos/README.md` +
-`Sources/README.md` (mouse/scroll/scrollbars; PaneGeometry GRID-RECT-inside-PANE-RECT
-readying max-col-width deferred; ScrollAccumulator; scrollbar style behavior).
-`wolf-macos/Tests/README.md` (the two new test files). `architecture.md` (remove mouse/scroll
-from macOS Deferred → realized; grid-targeted mouse + synthesized scrollbar per decision 5;
-per-pane PaneGeometry readies future max-col-width, deferred; DO NOT change GNOME claims).
-
-## 8. Deps/lint
-No new packages/crates/allowlists. Go-lint config N/A (no Go). Rust: `///` + `#[must_use]`;
-magic numbers in the discriminant mods; new bridge items inside `mod ffi`'s scoped allow;
-glue at normal bar, no unsafe. Swift: `static let` constants; seams Foundation-only/`Double`.
-
-## 9. Order
-core input.rs → core api.rs → ffi lib.rs → regen bindings → ffi test + run (resolve grid +
-scroll sign) → Swift seams + tests → AppKit wiring + scrollbars → build Wolf → docs+prettier
-→ lead live-GUI verification.
-
-## 10. Status checklist
-- [ ] core grid field + threading; send_mouse/send_scroll
-- [ ] ffi discriminant mods + structs + send glue + mappers + re-exports
-- [ ] ffi FfiFrame viewport fields/accessors/from_snapshot_grid/empty
-- [ ] regen + commit generated (wake.h unchanged)
-- [ ] ffi mouse_scroll test + target green (grid + sign resolved)
-- [ ] Swift PaneGeometry + ScrollAccumulator + headless tests green
-- [ ] AppKit geometry refactor + mouse + scroll + scrollbars
-- [ ] Wolf builds; bundle_layout_test green
-- [ ] docs + prettier
-- [ ] lead live-GUI verification
+## 8. Status checklist
+- [ ] bazel/orlando/extensions.bzl
+- [ ] bazel/orlando/BUILD.bazel
+- [ ] bazel/orlando/orlando_tree_test.sh
+- [ ] MODULE.bazel wired; orlando_tree_test passes
+- [ ] runtime/nvim/init.lua guarded load block
+- [ ] crates/wolf-macos/BUILD.bazel resources + comment
+- [ ] crates/wolf-macos/bundle_layout_test.sh checks (e)/(f)
+- [ ] crates/wolf-ffi orlando_load test (common helper + test + BUILD target)
+- [ ] bazel/orlando/README.md
+- [ ] build.md, runtime/nvim/README.md, crates/wolf-macos/README.md, architecture.md + prettier
+- [ ] MODULE.bazel.lock regenerated/committed
+- [ ] all §4 targets pass; core dep-graph guard clean

@@ -22,6 +22,7 @@ What it sets and why:
 - **Smooth scroll** — `smoothscroll = true`, so scrolling (mouse wheel, `<C-e>`/`<C-d>`) moves by SCREEN line rather than jumping past a whole wrapped logical line — pairs with soft-wrap to keep long wrapped Markdown lines from skipping fragments while scrolling.
 - **Mouse** — `mouse = "a"`; the front-end translates OS mouse events into core input, which forwards them to Neovim.
 - **Markdown** — `.md` files are mapped to the `markdown` filetype, and `syntax on` enables built-in syntax highlighting so the grid carries varied `hl_id`s.
+- **Vendored orlando plugin (conditional load)** — `init.lua` self-locates its own directory and looks for a sibling `orlando/` tree. When present — the case in the macOS `.app` bundle, where `//bazel/orlando` lands the plugin at `Contents/Resources/orlando/` next to this `init.lua` — it is prepended to `runtimepath` and `plugin/orlando.lua` is sourced deterministically (necessary because `--clean` does not scan plugin dirs, so a plain `runtimepath` prepend alone would not auto-source it; orlando guards on `vim.g.loaded_orlando`, so the explicit source is safe). When absent (Linux/cargo, and any test that does not stage it) the whole block is a strict no-op — no `runtimepath` change, no error. orlando's markdown `wrap_indent` is **additive** to the wrap / linebreak / smoothscroll settings above (it also sets `wrap` / `linebreak` / `breakindent`), so it is harmless alongside them.
 
 ### Current-file tracking — `_G.wolf_setup_current_file_tracking(chan)`
 
@@ -69,4 +70,4 @@ Core tolerates any malformed `wolf_layout` payload (it parses to `None` and is d
 
 ## Deferred
 
-Treesitter grammars (`markdown` / `markdown_inline`), a Markdown LSP (e.g. `marksman`), and a formatter are **deferred to a later phase** (plugin baking via `wrapNeovim`). Phase 1 relies on Neovim's built-in markdown syntax highlighting, which is enough to exercise the redraw/highlight pipeline and its tests.
+Plugin baking is no longer fully deferred: **orlando** is the first vendored plugin (bundled into the macOS `.app` via `//bazel/orlando`, loaded conditionally as described above). A Markdown LSP (e.g. `marksman`) and a formatter remain **deferred to a later phase** (full plugin baking via `wrapNeovim`). Phase 1 otherwise relies on Neovim's built-in markdown syntax highlighting and the `markdown` / `markdown_inline` treesitter parsers, which is enough to exercise the redraw/highlight pipeline and its tests.

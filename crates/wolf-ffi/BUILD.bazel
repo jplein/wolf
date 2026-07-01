@@ -233,6 +233,39 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
+# Real-nvim integration test for the vendored orlando plugin load branch in the
+# captive `init.lua`. Modeled on `panes` exactly: drives a REAL pinned Neovim (no
+# mocks), loud-skips when WOLF_NVIM_BIN is unset. Additionally stages the vendored
+# orlando plugin tree (`//bazel/orlando:orlando_tree`) and passes its runfiles path
+# via WOLF_TEST_ORLANDO_DIR; the test reconstructs the bundle layout (init.lua with
+# a sibling `orlando/`) in a temp dir and asserts `vim.g.loaded_orlando` /
+# `require("orlando")`. SKIPS when the tree is not staged (cargo / Linux path).
+# Reuses `tests/common/mod.rs`.
+rust_test(
+    name = "orlando_load",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/orlando_load.rs",
+    ],
+    crate_root = "tests/orlando_load.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//bazel/orlando:orlando_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+        "WOLF_TEST_ORLANDO_DIR": "$(rootpath //bazel/orlando:orlando_tree)",
+    },
+    deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
+)
+
 # Headless, deterministic packing test: builds a `wolf_core::Snapshot` by hand and
 # asserts `FfiFrame::from_snapshot`'s color packing, flag bits, cursor reverse-video,
 # shape/visibility, and the flat `cells()` grid. Needs no nvim — MUST pass regardless

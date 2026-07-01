@@ -98,3 +98,11 @@ use_repo(crate, "crates")
 # into the `nvim/` TreeArtifact bundled into Wolf.app. See bazel/nvim/README.md.
 nvim = use_extension("//bazel/nvim:extensions.bzl", "nvim")
 use_repo(nvim, "nvim_macos_arm64", "nvim_macos_x86_64")
+
+# --- Vendored orlando Neovim plugin (macOS bundle only) ---------------------
+# Downloaded + sha256-verified by the //bazel/orlando module extension; assembled
+# into the `orlando/` TreeArtifact bundled into Wolf.app at
+# Contents/Resources/orlando/. Pure Lua (arch-independent), so there is a SINGLE
+# repo `orlando` (no per-arch select). See bazel/orlando/README.md.
+orlando = use_extension("//bazel/orlando:extensions.bzl", "orlando")
+use_repo(orlando, "orlando")

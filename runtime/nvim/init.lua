@@ -61,6 +61,27 @@ vim.filetype.add({ extension = { md = "markdown" } })
 -- hl_ids. Treesitter is deferred; this is the Phase 1 highlight source.
 vim.cmd("syntax on")
 
+-- Vendored orlando plugin (Bazel macOS bundle only).
+--
+-- The macOS .app places a sibling `orlando/` tree next to this init.lua at
+-- Contents/Resources/orlando/ (bundled by //bazel/orlando). On Linux/cargo it is
+-- ABSENT, so this whole block is a strict NO-OP: no runtimepath change, no error.
+-- We self-locate init.lua's own directory (rather than assume a fixed path), look
+-- for the sibling `orlando/`, and only if it exists prepend it to runtimepath and
+-- deterministically source its plugin file — necessary because `--clean` does not
+-- scan user plugin dirs, so a plain rtp prepend alone would not auto-source it.
+-- orlando itself guards on vim.g.loaded_orlando, so the explicit source is safe.
+-- orlando's wrap_indent also sets wrap/linebreak/breakindent; additive & harmless
+-- with the wrap/linebreak/smoothscroll set above.
+local this_file = debug.getinfo(1, "S").source:sub(2) -- strip the leading '@'
+local this_dir = vim.fn.fnamemodify(this_file, ":p:h")
+local orlando_dir = this_dir .. "/orlando"
+local uv = vim.uv or vim.loop -- vim.uv on nvim 0.12.3; vim.loop fallback
+if uv and uv.fs_stat(orlando_dir) then
+	vim.opt.runtimepath:prepend(orlando_dir)
+	vim.cmd.runtime("plugin/orlando.lua")
+end
+
 -- Current-file tracking: wolf-core invokes this over RPC after ui_attach,
 -- passing its own RPC channel id. It registers an autocmd that notifies core of
 -- the active buffer's absolute path on every buffer switch / rename, and emits

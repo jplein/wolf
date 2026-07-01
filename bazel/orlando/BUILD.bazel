@@ -1,0 +1,22 @@
+# Structure-preserving orlando plugin TreeArtifact + a smoke test.
+#
+# `orlando_tree` resolves to the assembled `orlando/` directory; the macOS app
+# bundles it at `Contents/Resources/orlando/`, where the captive `init.lua`
+# self-locates and sources it. orlando is PURE LUA (arch-independent), so there
+# is NO `select()` here (unlike //bazel/nvim). See extensions.bzl and the
+# directory README for the pin and how to bump it.
+
+# The assembled orlando tree (an `orlando/` TreeArtifact: plugin/orlando.lua,
+# lua/orlando/**, doc/**, LICENSE*).
+alias(
+    name = "orlando_tree",
+    actual = "@orlando//:orlando_tree",
+    visibility = ["//visibility:public"],
+)
+
+# Asserts the vendored plugin files landed at the expected paths inside the tree.
+sh_test(
+    name = "orlando_tree_test",
+    srcs = ["orlando_tree_test.sh"],
+    data = [":orlando_tree"],
+)

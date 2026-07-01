@@ -4,13 +4,16 @@
 #
 # sh_test that inspects the built macOS application bundle (target
 # //crates/wolf-macos:Wolf, declared as `data` on the sh_test) and asserts the
-# pinned Neovim tree + captive init.lua landed at the expected resource paths.
+# pinned Neovim tree + captive init.lua + vendored orlando plugin landed at the
+# expected resource paths.
 #
 # It asserts, relative to `Wolf.app/`:
 #   a. Contents/Resources/nvim/bin/nvim                       exists & executable
 #   b. Contents/Resources/nvim/lib/nvim/parser/markdown.so   exists
 #   c. Contents/Resources/nvim/share/nvim/runtime            exists & is a dir
 #   d. Contents/Resources/init.lua                           exists & is a file
+#   e. Contents/Resources/orlando/plugin/orlando.lua         exists & is a file
+#   f. Contents/Resources/orlando/lua/orlando/init.lua       exists & is a file
 #
 # This test only inspects files; it does NOT execute nvim and needs no network.
 #
@@ -136,4 +139,18 @@ INIT_LUA="$RES/init.lua"
 [ -f "$INIT_LUA" ] || fail "expected captive config at $INIT_LUA, but it is missing or not a regular file"
 echo "PASS check (d): $INIT_LUA exists and is a regular file"
 
-echo "PASS: Wolf.app bundles nvim/bin/nvim (executable), the markdown parser, the runtime tree, and init.lua"
+# ---------------------------------------------------------------------------
+# (e) Contents/Resources/orlando/plugin/orlando.lua is a regular file.
+# ---------------------------------------------------------------------------
+ORLANDO_PLUGIN="$RES/orlando/plugin/orlando.lua"
+[ -f "$ORLANDO_PLUGIN" ] || fail "expected vendored orlando plugin at $ORLANDO_PLUGIN, but it is missing"
+echo "PASS check (e): $ORLANDO_PLUGIN exists"
+
+# ---------------------------------------------------------------------------
+# (f) Contents/Resources/orlando/lua/orlando/init.lua is a regular file.
+# ---------------------------------------------------------------------------
+ORLANDO_INIT="$RES/orlando/lua/orlando/init.lua"
+[ -f "$ORLANDO_INIT" ] || fail "expected vendored orlando module at $ORLANDO_INIT, but it is missing"
+echo "PASS check (f): $ORLANDO_INIT exists"
+
+echo "PASS: Wolf.app bundles nvim/bin/nvim (executable), the markdown parser, the runtime tree, init.lua, and the vendored orlando plugin"

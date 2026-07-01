@@ -128,6 +128,50 @@ pub fn init_lua_path() -> PathBuf {
         .join("init.lua")
 }
 
+/// Resolves the Bazel-staged vendored orlando plugin tree
+/// (`WOLF_TEST_ORLANDO_DIR` → `$(rootpath //bazel/orlando:orlando_tree)`): the
+/// `orlando_tree` TreeArtifact whose inner content is `orlando/` (i.e.
+/// `<dir>/orlando/plugin/orlando.lua`).
+///
+/// Returns `None` when the env var is unset (the cargo / Linux path, where the
+/// vendored plugin is not built at all) or when nothing resolves — so the
+/// `orlando_load` test SKIPS gracefully rather than failing. Mirrors the
+/// `*_or_none` / `*_or_skip` convention of the other runfile helpers and reuses
+/// the same [`resolve_runfile`] mechanism as [`init_lua_path`] /
+/// [`nvim_bin_or_skip`].
+#[must_use]
+pub fn orlando_dir_or_none() -> Option<PathBuf> {
+    resolve_runfile("WOLF_TEST_ORLANDO_DIR")
+}
+
+/// Recursively copies the directory tree at `src` into `dst` (creating `dst` and
+/// any parent dirs), preserving the relative layout.
+///
+/// Used by the `orlando_load` test to stage a sibling `orlando/` next to a temp
+/// `init.lua`, because the captive `init.lua` self-locates the plugin relative to
+/// ITS OWN directory. Entries are classified with [`std::fs::metadata`] (which
+/// FOLLOWS symlinks) rather than [`std::fs::DirEntry::file_type`], because under
+/// Bazel the runfiles entries are symlinks into the output tree and would
+/// otherwise be skipped; [`std::fs::copy`] likewise follows the source symlink to
+/// copy the real file content.
+pub fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        // metadata() follows symlinks so a symlinked dir is recursed into and a
+        // symlinked file is copied by content (correct for Bazel runfiles).
+        let meta = std::fs::metadata(&from)?;
+        if meta.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
 /// Monotonic counter to disambiguate temp `cwd`s created within one process.
 static CWD_COUNTER: AtomicU64 = AtomicU64::new(0);
 
