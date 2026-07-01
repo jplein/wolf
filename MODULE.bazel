@@ -116,3 +116,51 @@ use_repo(orlando, "orlando")
 # bazel/lighthouse/README.md.
 lighthouse = use_extension("//bazel/lighthouse:extensions.bzl", "lighthouse")
 use_repo(lighthouse, "lighthouse")
+
+# --- Vendored nvim-treesitter plugin (macOS bundle only) --------------------
+# Downloaded + sha256-verified by the //bazel/nvim-treesitter module extension;
+# assembled into the `nvim-treesitter/` TreeArtifact bundled into Wolf.app at
+# Contents/Resources/nvim-treesitter/. Pinned to the frozen `master` branch (the
+# bundled treesitter queries). Pure Lua (arch-independent), so there is a SINGLE
+# repo `nvim_treesitter` (no per-arch select). This VENDORS the plugin only —
+# highlighting is NOT enabled. See bazel/nvim-treesitter/README.md.
+nvim_treesitter = use_extension("//bazel/nvim-treesitter:extensions.bzl", "nvim_treesitter")
+use_repo(nvim_treesitter, "nvim_treesitter")
+
+# --- Vendored nvim-treesitter-textobjects plugin (macOS bundle only) --------
+# Downloaded + sha256-verified by the //bazel/nvim-treesitter-textobjects module
+# extension; assembled into the `nvim-treesitter-textobjects/` TreeArtifact bundled
+# into Wolf.app at Contents/Resources/nvim-treesitter-textobjects/. Pure Lua
+# (arch-independent), so there is a SINGLE repo `nvim_treesitter_textobjects` (no
+# per-arch select). VENDORS the plugin only — textobjects are NOT enabled. See
+# bazel/nvim-treesitter-textobjects/README.md.
+nvim_treesitter_textobjects = use_extension("//bazel/nvim-treesitter-textobjects:extensions.bzl", "nvim_treesitter_textobjects")
+use_repo(nvim_treesitter_textobjects, "nvim_treesitter_textobjects")
+
+# --- Vendored, host-compiled treesitter parsers (macOS bundle only) ---------
+# Downloaded + sha256-verified + HOST-COMPILED by the //bazel/treesitter-parsers
+# module extension; assembled into the `parsers/` TreeArtifact bundled into
+# Wolf.app at Contents/Resources/parsers/. Each `ts_<lang>` repo compiles a curated
+# grammar's parser.c (+scanner.c) into a signable Mach-O `parser/<lang>.so` via the
+# apple_support host cc toolchain. This VENDORS + SHIPS the parsers only —
+# highlighting is NOT enabled. Kept in sync with the set that actually compiles
+# (drop+LOG; see bazel/treesitter-parsers/README.md). See that README for the pins.
+treesitter_parsers = use_extension("//bazel/treesitter-parsers:extensions.bzl", "treesitter_parsers")
+use_repo(
+    treesitter_parsers,
+    "ts_bash",
+    "ts_c",
+    "ts_cpp",
+    "ts_css",
+    "ts_go",
+    "ts_html",
+    "ts_java",
+    "ts_javascript",
+    "ts_json",
+    "ts_kotlin",
+    "ts_rust",
+    "ts_swift",
+    "ts_toml",
+    "ts_typescript",
+    "ts_yaml",
+)

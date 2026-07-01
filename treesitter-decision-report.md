@@ -39,3 +39,13 @@ The full upstream grammar set was rejected because it is far larger than needed:
 - The Nix change will wrap the pinned Neovim so the curated parsers and their queries are on the captive editor's `runtimepath`.
 
 These are implementation steps deferred to a later change; this report only fixes the strategy above.
+
+## Follow-up: first implementation landed (macOS/Bazel, vendor + bundle only)
+
+A first slice of this strategy has now been implemented **macOS/Bazel-only** and **vendor + bundle only** — it ships the curated parsers and the treesitter plugins in `Wolf.app`, but does **not** yet enable highlighting. Specifics and deviations from the strategy above:
+
+- **Host-compiled, not Nix-built.** On macOS the parsers are compiled from pinned grammar source with the apple_support / Xcode host cc toolchain (`//bazel/treesitter-parsers`), producing signable, relocatable `MH_DYLIB` Mach-O shared objects bundled at `Contents/Resources/parsers/parser/<lang>.so`. This deviates from the report's "built by Nix" wording but preserves every invariant it cares about (hermetic, signed-in-bundle, no runtime fetch/compile, ABI-matched to the pinned Neovim). A nix-built `.so` was explicitly avoided because its `/nix/store` install names are not relocatable inside a signed `.app`. The **Linux/Nix** vendoring path remains deferred (mirroring how orlando/lighthouse were vendored Bazel-only first).
+- **Curated set.** html, javascript, typescript, tsx, css, json, go, rust, c, cpp, yaml, toml, bash, swift, kotlin, java. markdown / markdown_inline are excluded because pinned Neovim 0.12.3 already ships them. Revisions/repos come from the pinned nvim-treesitter `master` `lockfile.json` / `parsers.lua` so parsers stay version-matched to the bundled queries. See [`bazel/treesitter-parsers/README.md`](bazel/treesitter-parsers/README.md).
+- **Plugins vendored.** The nvim-treesitter (frozen `master`, bundled queries) and nvim-treesitter-textobjects plugins are bundled at `Contents/Resources/nvim-treesitter/` and `…/nvim-treesitter-textobjects/` (`//bazel/nvim-treesitter`, `//bazel/nvim-treesitter-textobjects`).
+- **Highlighting still deferred.** `runtime/nvim/init.lua` is deliberately **unchanged**: no runtimepath wiring for the vendored parsers/plugins, no `vim.treesitter.start`, no Markdown injection activation. Lifting the deferral (per the follow-up bullets above) is a separate future change.
+- **ABI proven.** `//crates/wolf-ffi:treesitter_parser_abi` drives a real pinned Neovim 0.12.3, `add`s a compiled parser by path, and parses with it — proving the host-compiled `.so`s are ABI-compatible with the pinned editor before any enablement work begins.

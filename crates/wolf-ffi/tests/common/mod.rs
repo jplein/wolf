@@ -160,6 +160,22 @@ pub fn lighthouse_dir_or_none() -> Option<PathBuf> {
     resolve_runfile("WOLF_TEST_LIGHTHOUSE_DIR")
 }
 
+/// Resolves the Bazel-staged compiled treesitter-parsers tree
+/// (`WOLF_TEST_PARSERS_DIR` → `$(rootpath //bazel/treesitter-parsers:parsers_tree)`):
+/// the `parsers_tree` TreeArtifact whose inner content is `parsers/` (i.e.
+/// `<dir>/parsers/parser/go.so`).
+///
+/// Returns `None` when the env var is unset (the cargo / Linux path, where the
+/// compiled parsers are not built at all) or when nothing resolves — so the
+/// `treesitter_parser_abi` test SKIPS gracefully rather than failing. Mirrors the
+/// `*_or_none` / `*_or_skip` convention of the other runfile helpers and reuses
+/// the same [`resolve_runfile`] mechanism as [`init_lua_path`] /
+/// [`nvim_bin_or_skip`].
+#[must_use]
+pub fn parsers_dir_or_none() -> Option<PathBuf> {
+    resolve_runfile("WOLF_TEST_PARSERS_DIR")
+}
+
 /// Recursively copies the directory tree at `src` into `dst` (creating `dst` and
 /// any parent dirs), preserving the relative layout.
 ///

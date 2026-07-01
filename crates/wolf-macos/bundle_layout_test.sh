@@ -161,4 +161,50 @@ LIGHTHOUSE_COLORS="$RES/lighthouse/colors/lighthouse.lua"
 [ -f "$LIGHTHOUSE_COLORS" ] || fail "expected vendored lighthouse colorscheme at $LIGHTHOUSE_COLORS, but it is missing"
 echo "PASS check (g): $LIGHTHOUSE_COLORS exists"
 
-echo "PASS: Wolf.app bundles nvim/bin/nvim (executable), the markdown parser, the runtime tree, init.lua, the vendored orlando plugin, and the vendored lighthouse colorscheme"
+# ---------------------------------------------------------------------------
+# (h) Contents/Resources/nvim-treesitter carries a bundled markdown query file.
+#     (VENDORED only — highlighting is NOT enabled by this change.)
+# ---------------------------------------------------------------------------
+TS_QUERY=""
+for cand in \
+  "$RES/nvim-treesitter/queries/markdown/injections.scm" \
+  "$RES/nvim-treesitter/queries/markdown/highlights.scm"
+do
+  if [ -f "$cand" ]; then
+    TS_QUERY="$cand"
+    break
+  fi
+done
+[ -n "$TS_QUERY" ] || fail "expected a vendored nvim-treesitter markdown query under $RES/nvim-treesitter/queries/markdown/, but none is present"
+echo "PASS check (h): $TS_QUERY exists"
+
+# ---------------------------------------------------------------------------
+# (i) Contents/Resources/nvim-treesitter-textobjects/lua/nvim-treesitter/textobjects
+#     is a directory. (VENDORED only.)
+# ---------------------------------------------------------------------------
+TO_LUA_DIR="$RES/nvim-treesitter-textobjects/lua/nvim-treesitter/textobjects"
+[ -d "$TO_LUA_DIR" ] || fail "expected vendored textobjects Lua module dir at $TO_LUA_DIR, but it is missing or not a directory"
+echo "PASS check (i): $TO_LUA_DIR exists and is a directory"
+
+# ---------------------------------------------------------------------------
+# (j) Contents/Resources/parsers/parser/<lang>.so — the curated host-compiled
+#     treesitter parsers. HARD: go/rust/typescript/tsx/json non-empty; SOFT-note
+#     swift/kotlin/java (drop+LOG policy). (VENDORED/SHIPPED only — highlighting
+#     is NOT enabled.)
+# ---------------------------------------------------------------------------
+for lang in go rust typescript tsx json; do
+  so="$RES/parsers/parser/$lang.so"
+  [ -f "$so" ] || fail "expected bundled compiled parser at $so, but it is missing"
+  [ -s "$so" ] || fail "bundled compiled parser $so exists but is EMPTY (zero bytes)"
+  echo "PASS check (j:$lang): $so exists and is non-empty"
+done
+for lang in swift kotlin java; do
+  so="$RES/parsers/parser/$lang.so"
+  if [ -f "$so" ] && [ -s "$so" ]; then
+    echo "NOTE: optional bundled parser $so is present and non-empty"
+  else
+    echo "NOTE: optional bundled parser parsers/parser/$lang.so is MISSING or empty (drop+LOG policy — acceptable; see bazel/treesitter-parsers/README.md status table)"
+  fi
+done
+
+echo "PASS: Wolf.app bundles nvim/bin/nvim (executable), the markdown parser, the runtime tree, init.lua, the vendored orlando plugin, the vendored lighthouse colorscheme, the vendored nvim-treesitter + textobjects plugins, and the curated compiled treesitter parsers"

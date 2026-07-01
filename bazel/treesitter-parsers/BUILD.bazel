@@ -1,0 +1,59 @@
+# Structure-preserving compiled-treesitter-parsers TreeArtifact + a smoke test.
+#
+# `parsers_tree` merges the per-grammar host-compiled `parser/<lang>.so` shared
+# objects (each produced by a `ts_<lang>` external-repo overlay; see extensions.bzl)
+# into ONE `parsers/` TreeArtifact; the macOS app bundles it at
+# `Contents/Resources/parsers/`, so the files land at
+# `Contents/Resources/parsers/parser/<lang>.so`. This change VENDORS + SHIPS the
+# compiled parsers only — it does NOT enable treesitter highlighting.
+#
+# The compiled parsers are host (apple_support / Xcode) Mach-O shared objects, so
+# there is no `select()` (the cc toolchain already resolves per host arch). See
+# extensions.bzl and the directory README for pins, the ts_grammar template, how to
+# add a language, and the drop+LOG status table.
+
+load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
+
+# Merge every curated grammar's `parser/<lang>.so` into a single `parsers/`
+# TreeArtifact. `include_external_repositories` makes each `@ts_<lang>//parser/
+# <lang>.so` enter as `parser/<lang>.so` (its path WITHIN the external repo); then
+# `replace_prefixes` remaps the `parser` prefix to `parsers/parser`, so the output
+# is `parsers/parser/<lang>.so`. The inner `parsers/` dir is deliberate: rules_apple
+# strips the bundled TreeArtifact's OWN top-level dir name when copying into
+# Contents/Resources/, so nesting under `parsers/` lands it at
+# Contents/Resources/parsers/ robustly.
+copy_to_directory(
+    name = "parsers_tree",
+    srcs = [
+        "@ts_bash//:bash_parser",
+        "@ts_c//:c_parser",
+        "@ts_cpp//:cpp_parser",
+        "@ts_css//:css_parser",
+        "@ts_go//:go_parser",
+        "@ts_html//:html_parser",
+        "@ts_java//:java_parser",
+        "@ts_javascript//:javascript_parser",
+        "@ts_json//:json_parser",
+        "@ts_kotlin//:kotlin_parser",
+        "@ts_rust//:rust_parser",
+        "@ts_swift//:swift_parser",
+        "@ts_toml//:toml_parser",
+        "@ts_typescript//:tsx_parser",
+        "@ts_typescript//:typescript_parser",
+        "@ts_yaml//:yaml_parser",
+    ],
+    out = "parsers_tree",
+    # Match the bzlmod CANONICAL external-repo names (e.g. `+treesitter_parsers+
+    # ts_go`), not the apparent `ts_go`, so a leading `*` is required.
+    include_external_repositories = ["*ts_*"],
+    replace_prefixes = {"parser": "parsers/parser"},
+    visibility = ["//visibility:public"],
+)
+
+# Asserts the curated compiled parser `.so`s landed non-empty at the expected paths
+# inside the tree (HARD: go/rust/typescript/tsx/json; SOFT: swift/kotlin/java).
+sh_test(
+    name = "parsers_tree_test",
+    srcs = ["parsers_tree_test.sh"],
+    data = [":parsers_tree"],
+)

@@ -57,12 +57,21 @@ macos_application(
     # `Contents/Resources/orlando/`; the vendored lighthouse colorscheme tree
     # (structure-preserving `lighthouse/` TreeArtifact) lands at
     # `Contents/Resources/lighthouse/` (both loaded/activated by the captive
-    # init.lua, not Swift); the captive `init.lua` lands flat at
+    # init.lua, not Swift); the vendored nvim-treesitter + textobjects plugin
+    # trees land at `Contents/Resources/nvim-treesitter/` and
+    # `Contents/Resources/nvim-treesitter-textobjects/`, and the curated
+    # host-compiled treesitter parsers (structure-preserving `parsers/`
+    # TreeArtifact) land at `Contents/Resources/parsers/parser/<lang>.so` — these
+    # three are VENDORED/SHIPPED only; treesitter highlighting is NOT enabled yet
+    # (no init.lua change); the captive `init.lua` lands flat at
     # `Contents/Resources/init.lua` (resolved by `Bundle.main.path`).
     resources = [
         "//bazel/lighthouse:lighthouse_tree",
         "//bazel/nvim:nvim_tree",
+        "//bazel/nvim-treesitter:nvim_treesitter_tree",
+        "//bazel/nvim-treesitter-textobjects:nvim_treesitter_textobjects_tree",
         "//bazel/orlando:orlando_tree",
+        "//bazel/treesitter-parsers:parsers_tree",
         "//runtime/nvim:init.lua",
     ],
     visibility = ["//visibility:public"],
@@ -72,9 +81,14 @@ macos_application(
 # Inspects the built `.app`: asserts the pinned nvim tree + captive init.lua
 # landed at the expected resource paths with the exec bit preserved, plus the
 # vendored orlando plugin resource files (checks e/f:
-# Contents/Resources/orlando/plugin/orlando.lua and .../lua/orlando/init.lua) and
+# Contents/Resources/orlando/plugin/orlando.lua and .../lua/orlando/init.lua),
 # the vendored lighthouse colorscheme file (check g:
-# Contents/Resources/lighthouse/colors/lighthouse.lua).
+# Contents/Resources/lighthouse/colors/lighthouse.lua), the vendored
+# nvim-treesitter markdown query (check h) + textobjects Lua dir (check i), and
+# the curated host-compiled treesitter parsers (check j:
+# Contents/Resources/parsers/parser/<lang>.so, HARD for go/rust/typescript/tsx/
+# json, SOFT for swift/kotlin/java). These three are VENDORED/SHIPPED only —
+# highlighting is NOT enabled.
 sh_test(
     name = "bundle_layout_test",
     srcs = ["bundle_layout_test.sh"],

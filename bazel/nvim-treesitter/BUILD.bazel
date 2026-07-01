@@ -1,0 +1,23 @@
+# Structure-preserving nvim-treesitter plugin TreeArtifact + a smoke test.
+#
+# `nvim_treesitter_tree` resolves to the assembled `nvim-treesitter/` directory;
+# the macOS app bundles it at `Contents/Resources/nvim-treesitter/`. This change
+# VENDORS the plugin (bundled queries + lua modules) only — it does NOT enable
+# treesitter highlighting. nvim-treesitter is PURE LUA (arch-independent), so there
+# is NO `select()` here (unlike //bazel/nvim). See extensions.bzl and the directory
+# README for the pin and how to bump it.
+
+# The assembled nvim-treesitter tree (a `nvim-treesitter/` TreeArtifact:
+# queries/**, lua/nvim-treesitter/**, plugin/**, LICENSE).
+alias(
+    name = "nvim_treesitter_tree",
+    actual = "@nvim_treesitter//:nvim_treesitter_tree",
+    visibility = ["//visibility:public"],
+)
+
+# Asserts the vendored plugin files landed at the expected paths inside the tree.
+sh_test(
+    name = "nvim_treesitter_tree_test",
+    srcs = ["nvim_treesitter_tree_test.sh"],
+    data = [":nvim_treesitter_tree"],
+)

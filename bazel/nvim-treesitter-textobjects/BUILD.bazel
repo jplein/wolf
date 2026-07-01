@@ -1,0 +1,24 @@
+# Structure-preserving nvim-treesitter-textobjects plugin TreeArtifact + a smoke test.
+#
+# `nvim_treesitter_textobjects_tree` resolves to the assembled
+# `nvim-treesitter-textobjects/` directory; the macOS app bundles it at
+# `Contents/Resources/nvim-treesitter-textobjects/`. This change VENDORS the plugin
+# (lua modules + textobjects queries) only — it does NOT enable treesitter
+# textobjects. Pure Lua (arch-independent), so there is NO `select()` here (unlike
+# //bazel/nvim). See extensions.bzl and the directory README for the pin and how to
+# bump it.
+
+# The assembled nvim-treesitter-textobjects tree (a `nvim-treesitter-textobjects/`
+# TreeArtifact: lua/nvim-treesitter/textobjects/**, queries/**, plugin/**, LICENSE).
+alias(
+    name = "nvim_treesitter_textobjects_tree",
+    actual = "@nvim_treesitter_textobjects//:nvim_treesitter_textobjects_tree",
+    visibility = ["//visibility:public"],
+)
+
+# Asserts the vendored plugin files landed at the expected paths inside the tree.
+sh_test(
+    name = "nvim_treesitter_textobjects_tree_test",
+    srcs = ["nvim_treesitter_textobjects_tree_test.sh"],
+    data = [":nvim_treesitter_textobjects_tree"],
+)
