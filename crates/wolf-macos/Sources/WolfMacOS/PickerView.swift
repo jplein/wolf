@@ -28,7 +28,7 @@ import WolfKeyMap
 /// selection, Esc closes. All state is plain main-thread properties (every method
 /// runs on the AppKit main thread).
 final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
-    NSSearchFieldDelegate
+    NSTextFieldDelegate
 {
     /// Maximum ranked rows materialized into the list (mirrors wolf-gnome's
     /// `PICKER_MAX_ROWS`).
@@ -53,21 +53,44 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     private static let rowVerticalPadding: CGFloat = 10
     /// Point size of the (larger) search field font.
     private static let searchFontSize: CGFloat = 20
+    /// The (larger) search field font.
+    private static let searchFont = NSFont.systemFont(ofSize: searchFontSize)
+    /// Vertical breathing room added to the search font's line height to form the
+    /// search bar's height, so ascenders/descenders (e.g. the stem of "p") are
+    /// never clipped. We render the search bar as a plain container (magnifier +
+    /// borderless text field) rather than an `NSSearchField`, because the search
+    /// cell's text rect is capped to the standard control height and clips a large
+    /// font regardless of the field's height.
+    private static let searchFieldVerticalPadding: CGFloat = 14
+    /// The search bar's explicit height: the font's line height plus breathing room.
+    private static var searchFieldHeight: CGFloat {
+        NSLayoutManager().defaultLineHeight(for: searchFont).rounded(.up)
+            + searchFieldVerticalPadding
+    }
+    /// Horizontal inset of the magnifier (and the text field's trailing edge)
+    /// within the search bar.
+    private static let searchBarHInset: CGFloat = 8
+    /// Point size of the magnifier symbol.
+    private static let magnifierSize: CGFloat = 18
+    /// Gap between the magnifier and the text field.
+    private static let magnifierToTextGap: CGFloat = 8
     /// Corner radius of the floating panel.
     private static let cornerRadius: CGFloat = 8
-    /// Fallback leading inset for a row icon when the search-field cell rect is
-    /// unavailable (the magnifier's typical left offset).
-    private static let fallbackIconLeadingInset: CGFloat = 8
-    /// Fallback leading inset for a row's typed-text column when the search-field
-    /// cell rect is unavailable.
-    private static let fallbackSearchTextLeadingInset: CGFloat = 32
+    /// Corner radius of the rounded search bar.
+    private static let searchBarCornerRadius: CGFloat = 8
     /// Reuse identifier for the list's cells.
     private static let cellIdentifier = NSUserInterfaceItemIdentifier("PickerCell")
 
     private let handle: WolfCoreHandle
     private weak var paneContainer: PaneContainerView?
 
-    private let searchField = NSSearchField()
+    /// The rounded search bar: a container holding the magnifier + text field. We
+    /// build it ourselves (rather than an `NSSearchField`) so a large font is never
+    /// clipped and the magnifier/text alignment is under our control.
+    private let searchContainer = NSView()
+    private let magnifierView = NSImageView()
+    /// The borderless text field the user types into (the "search field").
+    private let searchField = NSTextField()
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
 
@@ -80,12 +103,18 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     /// Whether the picker is currently open (visible + focused).
     private var isOpen = false
 
-    /// Leading inset that aligns a row's icon with the search magnifier, computed
-    /// once from the search-field cell rects.
-    private var iconLeadingInset = PickerView.fallbackIconLeadingInset
-    /// Leading inset that aligns a row's title with the typed text (clamped so it
-    /// never overlaps the icon), computed once from the search-field cell rects.
-    private var labelLeadingInset = PickerView.fallbackSearchTextLeadingInset
+    /// Leading inset that aligns a row's icon with the search magnifier. The search
+    /// bar and the row cells share the same leading edge (both inset by `padding`
+    /// from the panel), so a row icon at the magnifier's container-inset lines up
+    /// with the magnifier.
+    private var iconLeadingInset: CGFloat { Self.searchBarHInset }
+    /// Leading inset that aligns a row's title with the typed text: the row's text
+    /// column starts exactly where the search field's text does (just past the
+    /// magnifier). The row icon (see `PickerRowCellView.iconSize`) is sized to fit
+    /// between the leading edge and this column, so it never overlaps the title.
+    private var labelLeadingInset: CGFloat {
+        Self.searchBarHInset + Self.magnifierSize + Self.magnifierToTextGap
+    }
 
     /// The scroll view's height (the results area); driven to the content height
     /// (capped at `maxListHeight`) when rows are shown.
@@ -281,24 +310,22 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
 
     // MARK: - Private
 
-    /// Builds + lays out the search field and results list inside the panel,
-    /// computing the row alignment insets from the search-field cell rects.
+    /// Builds + lays out the search bar (magnifier + borderless text field) and the
+    /// results list inside the panel. The row alignment insets are derived from the
+    /// search-bar layout constants (see `iconLeadingInset` / `labelLeadingInset`).
     private func buildSubviews() {
-        searchField.translatesAutoresizingMaskIntoConstraints = false
-        searchField.delegate = self
-        searchField.font = NSFont.systemFont(ofSize: Self.searchFontSize)
-        searchField.placeholderString = "Open file…"
-        // No focus outline on the search field.
-        searchField.focusRingType = .none
-        (searchField.cell as? NSSearchFieldCell)?.focusRingType = .none
-
-        computeAlignmentInsets()
+        buildSearchBar()
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("file"))
         column.resizingMask = .autoresizingMask
         tableView.addTableColumn(column)
         tableView.headerView = nil
         tableView.allowsMultipleSelection = false
+        // Full-width rows flush with the leading edge (the modern inset style would
+        // indent rows and draw a rounded, inset selection), and no horizontal
+        // intercell inset, so a row's icon lines up with the search magnifier.
+        tableView.style = .plain
+        tableView.intercellSpacing = NSSize(width: 0, height: tableView.intercellSpacing.height)
         tableView.dataSource = self
         tableView.delegate = self
         tableView.target = self
@@ -316,29 +343,79 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
 
-        addSubview(searchField)
+        addSubview(searchContainer)
         addSubview(scrollView)
 
         let pad = Self.padding
         // The results area (`scrollView`) is only present when there are rows: its
         // top/height/bottom constraints are toggled against `emptyBottomConstraint`
-        // by `updateResultsLayout`, so an empty picker is just the search field.
+        // by `updateResultsLayout`, so an empty picker is just the search bar.
         scrollTopConstraint = scrollView.topAnchor.constraint(
-            equalTo: searchField.bottomAnchor, constant: pad)
+            equalTo: searchContainer.bottomAnchor, constant: pad)
         listHeightConstraint = scrollView.heightAnchor.constraint(equalToConstant: 0)
         listBottomConstraint = bottomAnchor.constraint(
             equalTo: scrollView.bottomAnchor, constant: pad)
         emptyBottomConstraint = bottomAnchor.constraint(
-            equalTo: searchField.bottomAnchor, constant: pad)
+            equalTo: searchContainer.bottomAnchor, constant: pad)
 
         NSLayoutConstraint.activate([
-            searchField.topAnchor.constraint(equalTo: topAnchor, constant: pad),
-            searchField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: pad),
-            searchField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -pad),
+            searchContainer.topAnchor.constraint(equalTo: topAnchor, constant: pad),
+            searchContainer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: pad),
+            searchContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -pad),
+            searchContainer.heightAnchor.constraint(equalToConstant: Self.searchFieldHeight),
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: pad),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -pad),
         ])
         updateResultsLayout()
+    }
+
+    /// Builds the rounded search bar: a container whose leading holds the magnifier
+    /// and whose remaining width is a borderless, focus-ring-less `NSTextField`. We
+    /// avoid `NSSearchField` because its text cell clips a large font; here the text
+    /// field sizes to its font and is vertically centered, so nothing is clipped.
+    private func buildSearchBar() {
+        searchContainer.translatesAutoresizingMaskIntoConstraints = false
+        searchContainer.wantsLayer = true
+        searchContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        searchContainer.layer?.cornerRadius = Self.searchBarCornerRadius
+        // No border around the search bar.
+        searchContainer.layer?.borderWidth = 0
+
+        magnifierView.translatesAutoresizingMaskIntoConstraints = false
+        magnifierView.image = NSImage(
+            systemSymbolName: "magnifyingglass", accessibilityDescription: "Search")
+        magnifierView.symbolConfiguration = NSImage.SymbolConfiguration(
+            pointSize: Self.magnifierSize, weight: .regular)
+        magnifierView.contentTintColor = .secondaryLabelColor
+        magnifierView.imageScaling = .scaleProportionallyUpOrDown
+
+        searchField.translatesAutoresizingMaskIntoConstraints = false
+        searchField.delegate = self
+        searchField.font = Self.searchFont
+        searchField.placeholderString = "Open file…"
+        searchField.isBordered = false
+        searchField.isBezeled = false
+        searchField.drawsBackground = false
+        searchField.focusRingType = .none
+        searchField.lineBreakMode = .byTruncatingTail
+        searchField.usesSingleLineMode = true
+        searchField.cell?.isScrollable = true
+
+        searchContainer.addSubview(magnifierView)
+        searchContainer.addSubview(searchField)
+
+        NSLayoutConstraint.activate([
+            magnifierView.leadingAnchor.constraint(
+                equalTo: searchContainer.leadingAnchor, constant: Self.searchBarHInset),
+            magnifierView.centerYAnchor.constraint(equalTo: searchContainer.centerYAnchor),
+            magnifierView.widthAnchor.constraint(equalToConstant: Self.magnifierSize),
+            magnifierView.heightAnchor.constraint(equalToConstant: Self.magnifierSize),
+            searchField.leadingAnchor.constraint(
+                equalTo: magnifierView.trailingAnchor, constant: Self.magnifierToTextGap),
+            searchField.trailingAnchor.constraint(
+                equalTo: searchContainer.trailingAnchor, constant: -Self.searchBarHInset),
+            searchField.centerYAnchor.constraint(equalTo: searchContainer.centerYAnchor),
+        ])
     }
 
     /// Sizes the panel to its content: when there are no rows the panel is just the
@@ -362,29 +439,6 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
             listHeightConstraint.isActive = true
             listBottomConstraint.isActive = true
         }
-    }
-
-    /// Computes `iconLeadingInset` / `labelLeadingInset` once from the search
-    /// field's magnifier + text rects (falling back to constants if the cell cast
-    /// fails), so each row's icon aligns with the magnifier and its title aligns
-    /// with the typed text without overlapping a wide icon.
-    private func computeAlignmentInsets() {
-        let fieldWidth = Self.panelWidth - 2 * Self.padding
-        let fieldHeight = searchField.intrinsicContentSize.height
-        let bounds = NSRect(x: 0, y: 0, width: fieldWidth, height: fieldHeight)
-        searchField.frame = bounds
-
-        let searchTextLeadingInset: CGFloat
-        if let cell = searchField.cell as? NSSearchFieldCell {
-            iconLeadingInset = cell.searchButtonRect(forBounds: bounds).minX
-            searchTextLeadingInset = cell.searchTextRect(forBounds: bounds).minX
-        } else {
-            iconLeadingInset = Self.fallbackIconLeadingInset
-            searchTextLeadingInset = Self.fallbackSearchTextLeadingInset
-        }
-        labelLeadingInset = max(
-            searchTextLeadingInset,
-            iconLeadingInset + PickerRowCellView.iconSize + PickerRowCellView.iconToTextGap)
     }
 
     /// Creates a reusable, file-agnostic row cell configured with the computed

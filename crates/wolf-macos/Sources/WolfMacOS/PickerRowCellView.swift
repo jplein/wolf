@@ -6,20 +6,23 @@
 //  selector: a leading `NSImageView` (the medium icon, aligned with the search
 //  magnifier) and a vertical `NSStackView` of a title label (aligned with the
 //  typed text) over a smaller, dimmer subtitle label. The alignment insets are
-//  computed by `PickerView` from the search-field cell rects and injected via
-//  `init`. AppKit-only, so exercised by manual smoke.
+//  derived by `PickerView` from the search-bar layout and injected via `init`.
+//  AppKit-only, so exercised by manual smoke.
 //
 
 import AppKit
 
 /// A picker list row: icon on the left, title over subtitle on the right.
 final class PickerRowCellView: NSTableCellView {
-    /// Side length of the (square) medium icon.
-    static let iconSize: CGFloat = 28
+    /// Side length of the (square) medium icon. Sized to fit between the leading
+    /// edge and the title column (which aligns with the search field's text), so the
+    /// icon's left edge lines up with the search magnifier without overlapping the
+    /// title.
+    static let iconSize: CGFloat = 20
     /// Point size of the primary title label.
     static let titleFontSize: CGFloat = 15
     /// Point size of the secondary subtitle label.
-    static let subtitleFontSize: CGFloat = 11
+    static let subtitleFontSize: CGFloat = 13
     /// Horizontal gap between the icon and the text column.
     static let iconToTextGap: CGFloat = 8
     /// Vertical gap between the title and subtitle labels.
@@ -39,8 +42,9 @@ final class PickerRowCellView: NSTableCellView {
 
     /// Builds the row's subviews and pins them using the caller-computed alignment
     /// insets: `iconLeadingInset` aligns the icon with the search magnifier and
-    /// `labelLeadingInset` aligns the title with the typed text (already clamped by
-    /// the caller so the text never overlaps the icon).
+    /// `labelLeadingInset` aligns the title with the typed text. The icon is sized
+    /// (`iconSize`) to fit between the leading edge and the title column, so it does
+    /// not overlap the title.
     init(iconLeadingInset: CGFloat, labelLeadingInset: CGFloat) {
         super.init(frame: .zero)
 
