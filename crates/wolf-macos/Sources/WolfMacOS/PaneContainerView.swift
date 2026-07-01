@@ -50,6 +50,39 @@ final class PaneContainerView: NSView {
     /// awkward to express inside Neovim itself).
     private static let inactiveDim: CGFloat = 0.28
 
+    // -- Mouse / scroll FFI discriminants (mirror `wolf-ffi`'s `mod mouse_button`
+    //    / `mod mouse_action` / `mod scroll_dir`) ------------------------------
+    /// `mouse_button::LEFT`.
+    private static let mouseButtonLeft: UInt8 = 0
+    /// `mouse_action::PRESS`.
+    private static let mouseActionPress: UInt8 = 0
+    /// `mouse_action::RELEASE`.
+    private static let mouseActionRelease: UInt8 = 1
+    /// `mouse_action::DRAG`.
+    private static let mouseActionDrag: UInt8 = 2
+    /// `scroll_dir::UP` (decreases the viewport topline).
+    private static let scrollDirUp: UInt8 = 0
+    /// `scroll_dir::DOWN` (increases the viewport topline).
+    private static let scrollDirDown: UInt8 = 1
+
+    // -- Synthetic scrollbar appearance / fade tuning -------------------------
+    /// Scrollbar track/thumb thickness (px).
+    private static let scrollbarThickness: CGFloat = 8
+    /// Inset of the scrollbar from the pane's right/top/bottom edges (px).
+    private static let scrollbarInset: CGFloat = 2
+    /// Minimum thumb length (px) so a tiny viewport fraction stays grabbable-looking.
+    private static let scrollbarMinThumb: CGFloat = 24
+    /// Track opacity (`.legacy` only).
+    private static let scrollbarTrackAlpha: CGFloat = 0.12
+    /// Thumb opacity at full visibility.
+    private static let scrollbarThumbAlpha: CGFloat = 0.45
+    /// How long an `.overlay` scrollbar stays fully visible after a scroll (s).
+    private static let scrollbarOverlayFadeDelay: TimeInterval = 0.9
+    /// How long an `.overlay` scrollbar takes to fade out after the delay (s).
+    private static let scrollbarOverlayFadeDuration: TimeInterval = 0.4
+    /// Repaint cadence while an `.overlay` scrollbar is fading (s).
+    private static let scrollbarOverlayFadeTick: TimeInterval = 1.0 / 30.0
+
     private let handle: WolfCoreHandle
     private let metrics: CellMetrics
 
@@ -61,6 +94,24 @@ final class PaneContainerView: NSView {
     private var nextPaneId: PaneId = PaneContainerView.firstPaneId
     /// The currently active pane (cursor target + the one NOT dimmed), if any.
     private var activePane: PaneId?
+
+    /// The grid a press/drag is targeting, set on `mouseDown` and cleared on
+    /// `mouseUp`, so a drag keeps targeting the pane the press started in even when
+    /// the pointer leaves that pane's rect.
+    private var mouseDragGrid: UInt64?
+
+    /// Accumulates fractional scroll deltas into discrete whole-cell line steps.
+    private var scrollAccumulator = ScrollAccumulator()
+    /// The grid the last scroll targeted; a change resets `scrollAccumulator`.
+    private var lastScrollGrid: UInt64?
+
+    /// The live "Show scroll bars" system setting (`.legacy` = always visible;
+    /// `.overlay` = on-scroll then fade). Updated via the system notification.
+    private var scrollerStyle: NSScroller.Style = NSScroller.preferredScrollerStyle
+    /// When the most recent scroll happened, driving the `.overlay` fade.
+    private var lastScrollTime: Date = .distantPast
+    /// The repeating repaint timer that animates the `.overlay` fade; nil when idle.
+    private var scrollbarFadeTimer: Timer?
 
     /// Invoked when the picker trigger chord (Shift+Ctrl+P) is pressed, BEFORE any
     /// key is translated/forwarded to Neovim. Set by `AppDelegate` to open the
@@ -74,11 +125,24 @@ final class PaneContainerView: NSView {
         self.metrics = metrics
         super.init(frame: .zero)
         wantsLayer = true
+        // Follow the live "Show scroll bars" setting so the synthetic scrollbars
+        // switch between always-on (`.legacy`) and fade-on-scroll (`.overlay`)
+        // without a relaunch.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(scrollerStyleChanged),
+            name: NSScroller.preferredScrollerStyleDidChangeNotification,
+            object: nil)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("PaneContainerView is not constructed from a nib")
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        scrollbarFadeTimer?.invalidate()
     }
 
     /// Top-left origin so grid row/col map directly to (x, y) in points.
@@ -106,6 +170,28 @@ final class PaneContainerView: NSView {
     private func paneRects() -> [(PaneId, CGRect)] {
         tree.paneRects(width: Double(bounds.width), height: Double(paneAreaHeight))
             .map { ($0.0, CGRect(x: $0.1.x, y: $0.1.y, width: $0.1.w, height: $0.1.h)) }
+    }
+
+    /// The per-pane GRID-RECT-inside-PANE-RECT geometry for `rect` (the pure seam
+    /// that owns all pixel<->cell mapping). `maxCols: nil` always today — the
+    /// centered-narrow-grid cap is deferred, so `gridRect == rect`.
+    private func geometry(for rect: CGRect) -> PaneGeometry {
+        PaneGeometry(
+            paneRect: Rect(
+                x: Double(rect.minX), y: Double(rect.minY),
+                w: Double(rect.width), h: Double(rect.height)),
+            cellWidth: Double(metrics.cellWidth),
+            cellHeight: Double(metrics.cellHeight),
+            maxCols: nil)
+    }
+
+    /// The pane rectangle currently bound to `grid`, if any (used to re-resolve a
+    /// drag/scroll target by grid after the press).
+    private func paneRect(forGrid grid: UInt64) -> CGRect? {
+        for (id, rect) in paneRects() where panes[id]?.boundGrid == grid {
+            return rect
+        }
+        return nil
     }
 
     // MARK: - Input
@@ -139,17 +225,112 @@ final class PaneContainerView: NSView {
         handle.send_key(ev)
     }
 
-    /// Click-to-focus: focus the window of the pane under the click.
+    /// Click-to-focus AND position the cursor: focus the window of the pane under
+    /// the click, then send a LEFT/PRESS at the clicked grid cell (under nvim's
+    /// `mouse=a` this positions the cursor; a following drag extends a selection).
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         for (id, rect) in paneRects() where rect.contains(point) {
-            if let win = panes[id]?.win {
-                handle.focus_win(win)
-                setActivePane(id)
-                needsDisplay = true
+            guard let binding = panes[id] else { return }
+            handle.focus_win(binding.win)
+            setActivePane(id)
+            needsDisplay = true
+            if let grid = binding.boundGrid {
+                let cell = geometry(for: rect).cellAt(x: Double(point.x), y: Double(point.y))
+                handle.send_mouse(
+                    mouseEvent(Self.mouseActionPress, grid: grid, cell: cell, event: event))
+                mouseDragGrid = grid
             }
             return
         }
+    }
+
+    /// Extends the press into a drag (visual selection under `mouse=a`), keeping the
+    /// target on the pane the press started in even when the pointer leaves it.
+    override func mouseDragged(with event: NSEvent) {
+        guard let grid = mouseDragGrid, let rect = paneRect(forGrid: grid) else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        let cell = geometry(for: rect).cellAt(x: Double(point.x), y: Double(point.y))
+        handle.send_mouse(mouseEvent(Self.mouseActionDrag, grid: grid, cell: cell, event: event))
+    }
+
+    /// Ends the press/drag (RELEASE), then clears the drag target.
+    override func mouseUp(with event: NSEvent) {
+        guard let grid = mouseDragGrid else { return }
+        if let rect = paneRect(forGrid: grid) {
+            let point = convert(event.locationInWindow, from: nil)
+            let cell = geometry(for: rect).cellAt(x: Double(point.x), y: Double(point.y))
+            handle.send_mouse(
+                mouseEvent(Self.mouseActionRelease, grid: grid, cell: cell, event: event))
+        }
+        mouseDragGrid = nil
+    }
+
+    /// Forwards trackpad / wheel scrolling to the pane under the pointer.
+    ///
+    /// Hit-tests from the whole PANE rect (so scrolling in a future side margin
+    /// still scrolls the pane), accumulates the fractional delta into whole-cell
+    /// line steps, and emits that many discrete scroll events to Neovim.
+    override func scrollWheel(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        var hit: (grid: UInt64, rect: CGRect)?
+        for (id, rect) in paneRects() where rect.contains(point) {
+            if let grid = panes[id]?.boundGrid {
+                hit = (grid, rect)
+            }
+            break
+        }
+        guard let (grid, rect) = hit else { return }
+
+        if grid != lastScrollGrid {
+            scrollAccumulator.reset()
+            lastScrollGrid = grid
+        }
+
+        let cellH = Double(metrics.cellHeight)
+        // Precise (trackpad) deltas are already in points; coarse (mouse-wheel)
+        // deltas are in lines, so scale them by the cell height to share the
+        // whole-cell accumulator.
+        let dy = event.hasPreciseScrollingDeltas
+            ? Double(event.scrollingDeltaY)
+            : Double(event.scrollingDeltaY) * cellH
+        let steps = scrollAccumulator.consume(deltaY: dy, cellHeight: cellH)
+        guard steps != 0 else { return }
+
+        // DIRECTION — the SINGLE flip point. `scrollingDeltaY` ALREADY reflects the
+        // user's "natural scroll" preference (the system flips its sign for us, just
+        // like `NSScrollView` sees), so we use its sign directly. Do NOT additionally
+        // consult `isDirectionInvertedFromDevice` — that double-corrects and inverts
+        // scrolling for natural-scroll users. A positive delta shows earlier content,
+        // i.e. the viewport moves UP. If scrolling ever feels inverted, flip this line.
+        let direction = steps > 0 ? Self.scrollDirUp : Self.scrollDirDown
+
+        let cell = geometry(for: rect).cellAt(x: Double(point.x), y: Double(point.y))
+        for _ in 0..<abs(steps) {
+            handle.send_scroll(
+                FfiScrollEvent(
+                    direction: direction, grid: grid,
+                    row: UInt32(cell.row), col: UInt32(cell.col)))
+        }
+        scrollbarActivity()
+    }
+
+    /// Builds a LEFT-button `FfiMouseEvent` for `action` at grid cell `cell`,
+    /// carrying the event's ctrl/shift/alt modifiers (no meta — nvim has no meta
+    /// mouse modifier).
+    private func mouseEvent(
+        _ action: UInt8, grid: UInt64, cell: (row: Int, col: Int), event: NSEvent
+    ) -> FfiMouseEvent {
+        let flags = event.modifierFlags
+        return FfiMouseEvent(
+            button: Self.mouseButtonLeft,
+            action: action,
+            grid: grid,
+            row: UInt32(cell.row),
+            col: UInt32(cell.col),
+            ctrl: flags.contains(.control),
+            shift: flags.contains(.shift),
+            alt: flags.contains(.option))
     }
 
     // MARK: - Resize
@@ -183,13 +364,15 @@ final class PaneContainerView: NSView {
 
         for (id, rect) in paneRects() {
             guard let grid = panes[id]?.boundGrid else { continue }
-            let target = gridCells(width: rect.width, height: rect.height)
+            // Size from the pane's GRID RECT via `PaneGeometry` (identical to the
+            // pane rect today; the centered-narrow-grid cap is deferred).
+            let geo = geometry(for: rect)
             let frame = handle.read_frame_for_grid(grid)
-            if Int(frame.cols()) != target.cols || Int(frame.rows()) != target.rows {
+            if Int(frame.cols()) != geo.cols || Int(frame.rows()) != geo.rows {
                 handle.resize_grid(
                     grid,
-                    UInt16(truncatingIfNeeded: target.cols),
-                    UInt16(truncatingIfNeeded: target.rows))
+                    UInt16(truncatingIfNeeded: geo.cols),
+                    UInt16(truncatingIfNeeded: geo.rows))
             }
         }
     }
@@ -323,13 +506,20 @@ final class PaneContainerView: NSView {
         }
         drawDividers(rects, ctx: ctx)
         paintCmdlineStrip(ctx)
+        drawScrollbars(rects, ctx: ctx)
     }
 
     /// Paints one window grid into `rect`, optionally dimming it (an inactive pane).
     private func paintGrid(_ frame: FfiFrame, into rect: CGRect, dimmed: Bool, ctx: CGContext) {
+        // Translate to the pane's GRID RECT origin (pane origin + the grid's paint
+        // offset, which is 0 today since `gridRect == paneRect`); the clip stays the
+        // whole pane rect.
+        let geo = geometry(for: rect)
         ctx.saveGState()
         ctx.clip(to: rect)
-        ctx.translateBy(x: rect.minX, y: rect.minY)
+        ctx.translateBy(
+            x: rect.minX + CGFloat(geo.paintOffsetX),
+            y: rect.minY + CGFloat(geo.paintOffsetY))
         paintCells(frame, ctx: ctx)
         if frame.cursor_visible() {
             drawCursor(ctx, frame: frame, cells: frame.cells(), cols: Int(frame.cols()))
@@ -430,6 +620,116 @@ final class PaneContainerView: NSView {
                 ctx.stroke(CGRect(x: rect.minX, y: rect.maxY - 0.5, width: rect.width, height: 0))
             }
         }
+    }
+
+    // MARK: - Synthetic scrollbars
+
+    /// Draws a synthetic, non-interactive scrollbar at each pane's right edge,
+    /// driven by that grid's `win_viewport` (topline/botline/linecount).
+    ///
+    /// Custom-drawn (not `NSScroller` subviews) so it composites cleanly into the
+    /// single flat painting view and sits at the PANE's right edge (out in the future
+    /// side margin once the grid is centered). It follows the system "Show scroll
+    /// bars" setting: `.legacy` is always visible (with a faint track); `.overlay`
+    /// fades in on scroll and out after a delay. Thumb-drag is deferred (v1 is
+    /// position-only).
+    private func drawScrollbars(_ rects: [(PaneId, CGRect)], ctx: CGContext) {
+        let alpha = currentScrollbarAlpha()
+        guard alpha > 0 else { return }
+
+        for (id, rect) in rects {
+            guard let grid = panes[id]?.boundGrid else { continue }
+            let frame = handle.read_frame_for_grid(grid)
+            let linecount = frame.linecount()
+            guard linecount > 0 else { continue }
+
+            // `win_viewport` reports `topline`/`botline` as 0-based buffer line
+            // indices (botline is one-past-last-visible). Convert the UInt64
+            // viewport values to Double BEFORE any subtraction so a
+            // `botline < topline` or `topline == 0` case can never wrap a UInt64.
+            // Skip when nothing is visible or the whole buffer fits (no
+            // scrollbar needed).
+            let total = Double(linecount)
+            let topline = Double(frame.topline())
+            let botline = Double(frame.botline())
+            let visible = max(0, botline - topline)
+            guard visible > 0, visible < total else { continue }
+
+            let inset = Self.scrollbarInset
+            let thickness = Self.scrollbarThickness
+            let track = CGRect(
+                x: rect.maxX - thickness - inset,
+                y: rect.minY + inset,
+                width: thickness,
+                height: rect.height - 2 * inset)
+            guard track.height > 0 else { continue }
+
+            // 0-based: the thumb's top sits at `topline / total` of the track (no
+            // `- 1`), which is 0 at the top of every buffer.
+            let frac = min(1.0, visible / total)
+            let thumbH = max(Self.scrollbarMinThumb, track.height * CGFloat(frac))
+            let offsetFrac = topline / total
+            let maxThumbY = track.maxY - thumbH
+            let rawThumbY = track.minY + CGFloat(offsetFrac) * track.height
+            let thumbY = min(max(rawThumbY, track.minY), max(track.minY, maxThumbY))
+
+            if scrollerStyle == .legacy {
+                ctx.setFillColor(CGColor(gray: 0.5, alpha: Self.scrollbarTrackAlpha * alpha))
+                fillRounded(track, radius: thickness / 2, ctx: ctx)
+            }
+            let thumb = CGRect(x: track.minX, y: thumbY, width: thickness, height: thumbH)
+            ctx.setFillColor(CGColor(gray: 0.5, alpha: Self.scrollbarThumbAlpha * alpha))
+            fillRounded(thumb, radius: thickness / 2, ctx: ctx)
+        }
+    }
+
+    /// Fills `rect` as a rounded rectangle of the given corner `radius`.
+    private func fillRounded(_ rect: CGRect, radius: CGFloat, ctx: CGContext) {
+        let path = CGPath(
+            roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
+        ctx.addPath(path)
+        ctx.fillPath()
+    }
+
+    /// The current scrollbar opacity: 1 always for `.legacy`; for `.overlay`, 1
+    /// while within the fade delay after the last scroll, then ramping to 0 over the
+    /// fade duration.
+    private func currentScrollbarAlpha() -> CGFloat {
+        guard scrollerStyle == .overlay else { return 1.0 }
+        let elapsed = Date().timeIntervalSince(lastScrollTime)
+        if elapsed < Self.scrollbarOverlayFadeDelay {
+            return 1.0
+        }
+        let fade = (elapsed - Self.scrollbarOverlayFadeDelay) / Self.scrollbarOverlayFadeDuration
+        return CGFloat(max(0.0, 1.0 - fade))
+    }
+
+    /// Marks scroll activity (so the `.overlay` scrollbar shows) and arms the fade
+    /// tick timer; a no-op repaint trigger for `.legacy` (always visible).
+    private func scrollbarActivity() {
+        lastScrollTime = Date()
+        needsDisplay = true
+        guard scrollerStyle == .overlay, scrollbarFadeTimer == nil else { return }
+        scrollbarFadeTimer = Timer.scheduledTimer(
+            withTimeInterval: Self.scrollbarOverlayFadeTick, repeats: true
+        ) { [weak self] _ in
+            self?.scrollbarFadeTick()
+        }
+    }
+
+    /// One `.overlay` fade tick: repaint, and stop the timer once fully faded.
+    private func scrollbarFadeTick() {
+        needsDisplay = true
+        if currentScrollbarAlpha() <= 0 {
+            scrollbarFadeTimer?.invalidate()
+            scrollbarFadeTimer = nil
+        }
+    }
+
+    /// Reacts to a live "Show scroll bars" system setting change.
+    @objc private func scrollerStyleChanged() {
+        scrollerStyle = NSScroller.preferredScrollerStyle
+        needsDisplay = true
     }
 
     /// Draws one cell's glyph in `fg` using CoreText at the cell baseline.

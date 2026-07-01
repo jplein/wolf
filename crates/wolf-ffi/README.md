@@ -21,6 +21,8 @@ All types are re-exported at the crate root (`wolf_ffi::…`).
   - `grid_for_win(&self, win: i64) -> u64` — the grid id bound to window handle `win`, or `0` if none maps to it (e.g. it was closed) / the core is gone.
   - `active_win(&self) -> i64` — the currently active Neovim window handle, or `0` if not yet known / the core is gone.
   - `focus_win(&self, win: i64)` — focuses a specific Neovim window (click-to-focus, or after resolving a focus-direction intent into a concrete neighbour). A no-op once the core is shut down.
+  - `send_mouse(&self, ev: FfiMouseEvent)` — forwards a mouse click / drag / release. Rust maps the transparent `FfiMouseEvent` into a `wolf_core::MouseEvent` via `mouse_event_from_ffi` (`None` on a bad `button`/`action` discriminant, then dropped) and calls `WolfCore::send_mouse`, so it targets the pane's window grid with grid-local row/col. A no-op once the core is shut down.
+  - `send_scroll(&self, ev: FfiScrollEvent)` — forwards a scroll-wheel / trackpad event. Rust maps the transparent `FfiScrollEvent` into a `wolf_core::ScrollEvent` via `scroll_event_from_ffi` (`None` on a bad `direction` discriminant) and calls `WolfCore::send_scroll`. A no-op once the core is shut down.
   - `start_file_search(&self) -> FfiFileSearch` — starts a streaming file-search session over the cwd (registering the picker wake) and wraps it as an `FfiFileSearch`. Infallible across the bridge: when no core is present the result simply yields no entries.
   - `start_tree_search(&self) -> FfiFileSearch` — starts a **separate**, long-lived streaming file-search session for the file-tree sidebar, registering the **tree** wake (`registered_tree_wake`) instead of the picker wake. Same infallible empty-backed fallback as `start_file_search`. The sidebar owns this session for its whole lifetime, independent of the transient picker session.
   - `current_file(&self) -> String` — the absolute path of the buffer currently being edited (canonicalized by core via the `wolf_current_file` notification), or the empty string for an unnamed buffer / shut-down core. Read on each editor wake to highlight + reveal the sidebar's current file.
@@ -41,7 +43,7 @@ All types are re-exported at the crate root (`wolf_ffi::…`).
 
 - `wolf_ffi_ancestors_to_reveal(rel_path: String) -> Vec<String>` — a free FFI fn (no live session needed) delegating to `wolf_core::tree::ancestors_to_reveal`: the ancestor directory rel-paths from the cwd root down to the node's parent (`"src/main.rs"` → `["src"]`, `"README.md"` → `[]`). swift-bridge emits clean `RustVec<RustString>` Swift glue for the `Vec<String>` return.
 
-- `FfiFrame` — an opaque, owned, paint-ready snapshot of a single grid (the **active** grid via `read_frame`, or any grid via `read_frame_for_grid`), with every cell already resolved against the highlight table **in Rust** (reusing `HighlightTable::resolve` / `ResolvedStyle` — never re-resolved in Swift). Accessors: `cols`, `rows`, `cursor_row`, `cursor_col`, `cursor_shape` (0 = Block, 1 = Horizontal, 2 = Vertical), `cursor_cell_percentage`, `cursor_visible` (whether the cursor lives on THIS frame's grid — **per-grid**, so only the pane owning the cursor's grid draws it), `grid_id` (the grid this frame was packed from), `cursor_grid` (the grid the cursor currently lives on, so a pane can tell whether the cursor belongs to it even when it is not its own grid), `default_fg`, `default_bg`, `cursor_fill`, `cursor_glyph` (reverse-video cursor colors, ported from wolf-gnome's `cursor.rs` and computed against the REQUESTED grid's cell under the cursor), and `cells() -> Vec<FfiCell>` (one flat, row-major handoff per frame).
+- `FfiFrame` — an opaque, owned, paint-ready snapshot of a single grid (the **active** grid via `read_frame`, or any grid via `read_frame_for_grid`), with every cell already resolved against the highlight table **in Rust** (reusing `HighlightTable::resolve` / `ResolvedStyle` — never re-resolved in Swift). Accessors: `cols`, `rows`, `cursor_row`, `cursor_col`, `cursor_shape` (0 = Block, 1 = Horizontal, 2 = Vertical), `cursor_cell_percentage`, `cursor_visible` (whether the cursor lives on THIS frame's grid — **per-grid**, so only the pane owning the cursor's grid draws it), `grid_id` (the grid this frame was packed from), `cursor_grid` (the grid the cursor currently lives on, so a pane can tell whether the cursor belongs to it even when it is not its own grid), `default_fg`, `default_bg`, `cursor_fill`, `cursor_glyph` (reverse-video cursor colors, ported from wolf-gnome's `cursor.rs` and computed against the REQUESTED grid's cell under the cursor), `cells() -> Vec<FfiCell>` (one flat, row-major handoff per frame), and the four **viewport** accessors that drive the synthetic scrollbar — `topline` (the 0-based first-visible buffer line index, as nvim's `win_viewport` reports), `botline` (one-past-the-last-visible line), `curline` (the 0-based cursor buffer line), and `linecount` (the buffer's total line count). The viewport values are read in `from_snapshot_grid` from `snapshot.windows[grid].viewport` (defaulting to all-zero when the grid has no associated window, e.g. grid 1 or a closed pane).
 
 - `FfiLayoutIntent` — opaque; one drained layout intent (a flattened `wolf_core::LayoutIntent`). Accessors `kind() -> u8` (`intent_kind::SPLIT` / `FOCUS_DIR`), `orientation() -> u8` (for a SPLIT: `orientation::HORIZONTAL` / `VERTICAL`; 0 otherwise), `dir() -> u8` (for a FOCUS_DIR: `focus_dir::LEFT` / `RIGHT` / `UP` / `DOWN`; 0 otherwise), `from() -> i64` (the origin window handle), and `win() -> i64` (for a SPLIT: the new window handle; 0 otherwise). Opaque because swift-bridge only emits `Vec<T>` support for opaque `T` — the same reason `FfiTreeNode` is opaque.
 
@@ -72,6 +74,24 @@ All types are re-exported at the crate root (`wolf_ffi::…`).
   | key | Char | Enter | Esc | Tab | Backspace | Delete | Left | Right | Up | Down | Home | End | PageUp | PageDown | F(fnum) |
 
   These discriminants are the single source of truth shared with the Swift `WolfKeyMap` and the test suites.
+
+- `FfiMouseEvent` — transparent `{ button: u8, action: u8, grid: u64, row: u32, col: u32, ctrl, shift, alt: bool }`. Swift fills it from an `NSEvent` (button/action discriminants + the pane's window grid and grid-local row/col); Rust maps it into a `wolf_core::MouseEvent` via `mouse_event_from_ffi`. `button` mirrors `wolf_core::MouseButton` and `action` mirrors `wolf_core::MouseAction`:
+
+  | `mouse_button` | 0    | 1     | 2      |
+  | -------------- | ---- | ----- | ------ |
+  | button         | LEFT | RIGHT | MIDDLE |
+
+  | `mouse_action` | 0     | 1       | 2    |
+  | -------------- | ----- | ------- | ---- |
+  | action         | PRESS | RELEASE | DRAG |
+
+- `FfiScrollEvent` — transparent `{ direction: u8, grid: u64, row: u32, col: u32 }`. Swift fills it from an accumulated scroll-wheel delta; Rust maps it into a `wolf_core::ScrollEvent` via `scroll_event_from_ffi`. `direction` mirrors `wolf_core::ScrollDirection`:
+
+  | `scroll_dir` | 0   | 1    | 2    | 3     |
+  | ------------ | --- | ---- | ---- | ----- |
+  | direction    | UP  | DOWN | LEFT | RIGHT |
+
+  Like the `FfiKeyEvent` `kind` table, the `mouse_button` / `mouse_action` / `scroll_dir` discriminant modules are the **single source of truth** shared with the Swift `PaneContainerView` consts and the `//crates/wolf-ffi:mouse_scroll` test's local consts, mirroring the variant order of the corresponding `wolf_core` enums.
 
 ## The wake (Swift-free link path)
 
@@ -131,6 +151,7 @@ CARGO_BAZEL_REPIN=1 bazel build //crates/wolf-ffi:wolf_ffi   # then commit lockf
 - `:file_search` — the Rust integration test for the file-search surface (real pinned nvim, modeled on `bridge_smoke`).
 - `:tree_search` — the Rust integration test for the file-tree surface (`start_tree_search` / `children_of` / `rel_path_for` / `FfiTreeNode` accessors / `current_file` / the free `wolf_ffi_ancestors_to_reveal`), real pinned nvim, modeled on `file_search`.
 - `:panes` — the Rust integration test for the split-pane surface (`drain_intents` / `FfiLayoutIntent` / `windows` / `FfiWinInfo` / `grid_for_win` / `active_win` / `focus_win` / `resize_grid` / `read_frame_for_grid`), real pinned nvim, modeled on `tree_search`.
+- `:mouse_scroll` — the Rust integration test for the mouse/scroll + viewport surface (`send_mouse` / `send_scroll` / the `FfiMouseEvent` / `FfiScrollEvent` discriminants / the `FfiFrame` viewport accessors), real pinned nvim, modeled on `panes`.
 
 ## Testing
 
@@ -156,4 +177,10 @@ bazel test //crates/wolf-ffi:tree_search
 
 ```sh
 bazel test //crates/wolf-ffi:panes
+```
+
+`tests/mouse_scroll.rs` covers the mouse/scroll + viewport surface against the same real pinned Neovim (modeled on `panes`, reusing `tests/common/mod.rs` and the same `data` / `env` / `no-sandbox` runfile staging). `mouse_scroll_click_drag_and_wheel` puts 80 wide lines into a live editor grid, then: `send_mouse(LEFT, PRESS, grid, row 5, col 2)` moves the cursor to exactly `cursor_row() == 5 && cursor_col() == 2` (grid-targeted, grid-local coords); a DRAG + RELEASE at `(8, 4)` keeps the core responsive; `send_scroll(DOWN)` raises `topline()` and `send_scroll(UP)` lowers it (0-based `topline` baseline). It also carries local discriminant consts mirroring the Rust `mouse_button` / `mouse_action` / `scroll_dir` mods.
+
+```sh
+bazel test //crates/wolf-ffi:mouse_scroll
 ```

@@ -93,6 +93,100 @@ extension __swift_bridge__$Option$FfiKeyEvent {
         }
     }
 }
+public struct FfiMouseEvent {
+    public var button: UInt8
+    public var action: UInt8
+    public var grid: UInt64
+    public var row: UInt32
+    public var col: UInt32
+    public var ctrl: Bool
+    public var shift: Bool
+    public var alt: Bool
+
+    public init(button: UInt8,action: UInt8,grid: UInt64,row: UInt32,col: UInt32,ctrl: Bool,shift: Bool,alt: Bool) {
+        self.button = button
+        self.action = action
+        self.grid = grid
+        self.row = row
+        self.col = col
+        self.ctrl = ctrl
+        self.shift = shift
+        self.alt = alt
+    }
+
+    @inline(__always)
+    func intoFfiRepr() -> __swift_bridge__$FfiMouseEvent {
+        { let val = self; return __swift_bridge__$FfiMouseEvent(button: val.button, action: val.action, grid: val.grid, row: val.row, col: val.col, ctrl: val.ctrl, shift: val.shift, alt: val.alt); }()
+    }
+}
+extension __swift_bridge__$FfiMouseEvent {
+    @inline(__always)
+    func intoSwiftRepr() -> FfiMouseEvent {
+        { let val = self; return FfiMouseEvent(button: val.button, action: val.action, grid: val.grid, row: val.row, col: val.col, ctrl: val.ctrl, shift: val.shift, alt: val.alt); }()
+    }
+}
+extension __swift_bridge__$Option$FfiMouseEvent {
+    @inline(__always)
+    func intoSwiftRepr() -> Optional<FfiMouseEvent> {
+        if self.is_some {
+            return self.val.intoSwiftRepr()
+        } else {
+            return nil
+        }
+    }
+
+    @inline(__always)
+    static func fromSwiftRepr(_ val: Optional<FfiMouseEvent>) -> __swift_bridge__$Option$FfiMouseEvent {
+        if let v = val {
+            return __swift_bridge__$Option$FfiMouseEvent(is_some: true, val: v.intoFfiRepr())
+        } else {
+            return __swift_bridge__$Option$FfiMouseEvent(is_some: false, val: __swift_bridge__$FfiMouseEvent())
+        }
+    }
+}
+public struct FfiScrollEvent {
+    public var direction: UInt8
+    public var grid: UInt64
+    public var row: UInt32
+    public var col: UInt32
+
+    public init(direction: UInt8,grid: UInt64,row: UInt32,col: UInt32) {
+        self.direction = direction
+        self.grid = grid
+        self.row = row
+        self.col = col
+    }
+
+    @inline(__always)
+    func intoFfiRepr() -> __swift_bridge__$FfiScrollEvent {
+        { let val = self; return __swift_bridge__$FfiScrollEvent(direction: val.direction, grid: val.grid, row: val.row, col: val.col); }()
+    }
+}
+extension __swift_bridge__$FfiScrollEvent {
+    @inline(__always)
+    func intoSwiftRepr() -> FfiScrollEvent {
+        { let val = self; return FfiScrollEvent(direction: val.direction, grid: val.grid, row: val.row, col: val.col); }()
+    }
+}
+extension __swift_bridge__$Option$FfiScrollEvent {
+    @inline(__always)
+    func intoSwiftRepr() -> Optional<FfiScrollEvent> {
+        if self.is_some {
+            return self.val.intoSwiftRepr()
+        } else {
+            return nil
+        }
+    }
+
+    @inline(__always)
+    static func fromSwiftRepr(_ val: Optional<FfiScrollEvent>) -> __swift_bridge__$Option$FfiScrollEvent {
+        if let v = val {
+            return __swift_bridge__$Option$FfiScrollEvent(is_some: true, val: v.intoFfiRepr())
+        } else {
+            return __swift_bridge__$Option$FfiScrollEvent(is_some: false, val: __swift_bridge__$FfiScrollEvent())
+        }
+    }
+}
 
 public class WolfCoreHandle: WolfCoreHandleRefMut {
     var isOwned: Bool = true
@@ -130,6 +224,14 @@ extension WolfCoreHandleRef {
 
     public func send_key(_ ev: FfiKeyEvent) {
         __swift_bridge__$WolfCoreHandle$send_key(ptr, ev.intoFfiRepr())
+    }
+
+    public func send_mouse(_ ev: FfiMouseEvent) {
+        __swift_bridge__$WolfCoreHandle$send_mouse(ptr, ev.intoFfiRepr())
+    }
+
+    public func send_scroll(_ ev: FfiScrollEvent) {
+        __swift_bridge__$WolfCoreHandle$send_scroll(ptr, ev.intoFfiRepr())
     }
 
     public func resize(_ cols: UInt16, _ rows: UInt16) {
@@ -578,6 +680,22 @@ extension FfiFrameRef {
 
     public func cells() -> RustVec<FfiCell> {
         RustVec(ptr: __swift_bridge__$FfiFrame$cells(ptr))
+    }
+
+    public func topline() -> UInt64 {
+        __swift_bridge__$FfiFrame$topline(ptr)
+    }
+
+    public func botline() -> UInt64 {
+        __swift_bridge__$FfiFrame$botline(ptr)
+    }
+
+    public func curline() -> UInt64 {
+        __swift_bridge__$FfiFrame$curline(ptr)
+    }
+
+    public func linecount() -> UInt64 {
+        __swift_bridge__$FfiFrame$linecount(ptr)
     }
 }
 extension FfiFrame: Vectorizable {

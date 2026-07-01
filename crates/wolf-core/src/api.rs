@@ -20,7 +20,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{self, UnboundedSender};
 
 use crate::files::{self, FileSearch, FileSearchState};
-use crate::input::{self, InputEvent, Nvim};
+use crate::input::{self, InputEvent, MouseEvent, Nvim, ScrollEvent};
 use crate::layout::LayoutIntent;
 use crate::mru::{FileEntry, MruError, MruStore};
 use crate::nvim::{self, NvimConfig, NvimError, NvimProcess};
@@ -291,6 +291,24 @@ impl WolfCore {
     /// ahead of or behind pending input; applied via `nvim_set_current_win`.
     pub fn focus_win(&self, win: i64) {
         self.send_input(InputEvent::FocusWin { win });
+    }
+
+    /// Forwards a mouse event (click / drag / release) to Neovim.
+    ///
+    /// Enqueued on the same ordered input channel as keystrokes so it never races
+    /// ahead of or behind pending input; applied via `nvim_input_mouse` targeting
+    /// [`MouseEvent::grid`] with grid-local row/col.
+    pub fn send_mouse(&self, ev: MouseEvent) {
+        self.send_input(InputEvent::Mouse(ev));
+    }
+
+    /// Forwards a scroll-wheel event to Neovim.
+    ///
+    /// Enqueued on the same ordered input channel as keystrokes so it never races
+    /// ahead of or behind pending input; applied via `nvim_input_mouse("wheel", …)`
+    /// targeting [`ScrollEvent::grid`] with grid-local row/col.
+    pub fn send_scroll(&self, ev: ScrollEvent) {
+        self.send_input(InputEvent::Scroll(ev));
     }
 
     /// Returns the most-recently-opened files (newest first), pruning any whose

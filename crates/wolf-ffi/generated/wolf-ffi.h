@@ -5,6 +5,10 @@ typedef struct __swift_bridge__$FfiColor { uint32_t rgb; bool set; } __swift_bri
 typedef struct __swift_bridge__$Option$FfiColor { bool is_some; __swift_bridge__$FfiColor val; } __swift_bridge__$Option$FfiColor;
 typedef struct __swift_bridge__$FfiKeyEvent { uint8_t kind; uint32_t ch; uint8_t fnum; bool ctrl; bool shift; bool alt; bool meta; } __swift_bridge__$FfiKeyEvent;
 typedef struct __swift_bridge__$Option$FfiKeyEvent { bool is_some; __swift_bridge__$FfiKeyEvent val; } __swift_bridge__$Option$FfiKeyEvent;
+typedef struct __swift_bridge__$FfiMouseEvent { uint8_t button; uint8_t action; uint64_t grid; uint32_t row; uint32_t col; bool ctrl; bool shift; bool alt; } __swift_bridge__$FfiMouseEvent;
+typedef struct __swift_bridge__$Option$FfiMouseEvent { bool is_some; __swift_bridge__$FfiMouseEvent val; } __swift_bridge__$Option$FfiMouseEvent;
+typedef struct __swift_bridge__$FfiScrollEvent { uint8_t direction; uint64_t grid; uint32_t row; uint32_t col; } __swift_bridge__$FfiScrollEvent;
+typedef struct __swift_bridge__$Option$FfiScrollEvent { bool is_some; __swift_bridge__$FfiScrollEvent val; } __swift_bridge__$Option$FfiScrollEvent;
 typedef struct WolfCoreHandle WolfCoreHandle;
 void __swift_bridge__$WolfCoreHandle$_free(void* self);
 
@@ -105,6 +109,8 @@ void* __swift_bridge__$wolf_ffi_start(void* init_lua, void* cwd, uint16_t cols, 
 void* __swift_bridge__$WolfCoreHandle$read_frame(void* self);
 void* __swift_bridge__$WolfCoreHandle$read_frame_for_grid(void* self, uint64_t grid);
 void __swift_bridge__$WolfCoreHandle$send_key(void* self, struct __swift_bridge__$FfiKeyEvent ev);
+void __swift_bridge__$WolfCoreHandle$send_mouse(void* self, struct __swift_bridge__$FfiMouseEvent ev);
+void __swift_bridge__$WolfCoreHandle$send_scroll(void* self, struct __swift_bridge__$FfiScrollEvent ev);
 void __swift_bridge__$WolfCoreHandle$resize(void* self, uint16_t cols, uint16_t rows);
 void __swift_bridge__$WolfCoreHandle$resize_grid(void* self, uint64_t grid, uint16_t cols, uint16_t rows);
 void* __swift_bridge__$WolfCoreHandle$drain_intents(void* self);
@@ -142,6 +148,10 @@ struct __swift_bridge__$FfiColor __swift_bridge__$FfiFrame$default_bg(void* self
 struct __swift_bridge__$FfiColor __swift_bridge__$FfiFrame$cursor_fill(void* self);
 struct __swift_bridge__$FfiColor __swift_bridge__$FfiFrame$cursor_glyph(void* self);
 void* __swift_bridge__$FfiFrame$cells(void* self);
+uint64_t __swift_bridge__$FfiFrame$topline(void* self);
+uint64_t __swift_bridge__$FfiFrame$botline(void* self);
+uint64_t __swift_bridge__$FfiFrame$curline(void* self);
+uint64_t __swift_bridge__$FfiFrame$linecount(void* self);
 void* __swift_bridge__$FfiCell$text(void* self);
 struct __swift_bridge__$FfiColor __swift_bridge__$FfiCell$fg(void* self);
 struct __swift_bridge__$FfiColor __swift_bridge__$FfiCell$bg(void* self);

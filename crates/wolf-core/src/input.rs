@@ -101,9 +101,13 @@ pub struct MouseEvent {
     pub button: MouseButton,
     /// Press / release / drag.
     pub action: MouseAction,
-    /// Grid row.
+    /// Target grid id. Under `ext_multigrid` this must be the pane's WINDOW grid
+    /// (`>= 2`) with GRID-LOCAL [`row`](Self::row)/[`col`](Self::col); grid 0 is
+    /// the global/default grid.
+    pub grid: u64,
+    /// Grid row (grid-local under multigrid).
     pub row: u32,
-    /// Grid column.
+    /// Grid column (grid-local under multigrid).
     pub col: u32,
     /// Control modifier.
     pub ctrl: bool,
@@ -131,9 +135,13 @@ pub enum ScrollDirection {
 pub struct ScrollEvent {
     /// Scroll direction.
     pub direction: ScrollDirection,
-    /// Grid row of the pointer.
+    /// Target grid id. Under `ext_multigrid` this must be the pane's WINDOW grid
+    /// (`>= 2`) with GRID-LOCAL [`row`](Self::row)/[`col`](Self::col); grid 0 is
+    /// the global/default grid.
+    pub grid: u64,
+    /// Grid row of the pointer (grid-local under multigrid).
     pub row: u32,
-    /// Grid column of the pointer.
+    /// Grid column of the pointer (grid-local under multigrid).
     pub col: u32,
 }
 
@@ -364,7 +372,7 @@ async fn apply_mouse(nvim: &Nvim, ev: &MouseEvent) -> Result<(), Box<CallError>>
         MouseAction::Drag => "drag",
     };
     let modifier = mouse_modifier(ev.ctrl, ev.shift, ev.alt);
-    nvim_input_mouse(nvim, button, action, &modifier, ev.row, ev.col).await
+    nvim_input_mouse(nvim, button, action, &modifier, ev.grid, ev.row, ev.col).await
 }
 
 async fn apply_scroll(nvim: &Nvim, ev: &ScrollEvent) -> Result<(), Box<CallError>> {
@@ -374,7 +382,7 @@ async fn apply_scroll(nvim: &Nvim, ev: &ScrollEvent) -> Result<(), Box<CallError
         ScrollDirection::Left => "left",
         ScrollDirection::Right => "right",
     };
-    nvim_input_mouse(nvim, "wheel", action, "", ev.row, ev.col).await
+    nvim_input_mouse(nvim, "wheel", action, "", ev.grid, ev.row, ev.col).await
 }
 
 async fn nvim_input_mouse(
@@ -382,11 +390,13 @@ async fn nvim_input_mouse(
     button: &str,
     action: &str,
     modifier: &str,
+    grid: u64,
     row: u32,
     col: u32,
 ) -> Result<(), Box<CallError>> {
-    // nvim_input_mouse(button, action, modifier, grid, row, col); grid 0 = the
-    // global/default grid (ext_linegrid with a single grid).
+    // nvim_input_mouse(button, action, modifier, grid, row, col). `grid` targets a
+    // specific UI grid: 0 is the global/default grid, while under `ext_multigrid` a
+    // window grid (`>= 2`) targets that pane with GRID-LOCAL row/col.
     let _ = nvim
         .call(
             "nvim_input_mouse",
@@ -394,7 +404,7 @@ async fn nvim_input_mouse(
                 Value::from(button),
                 Value::from(action),
                 Value::from(modifier),
-                Value::from(0_u64),
+                Value::from(grid),
                 Value::from(u64::from(row)),
                 Value::from(u64::from(col)),
             ],

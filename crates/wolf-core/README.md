@@ -48,6 +48,8 @@ Re-exported from the crate root (`wolf_core::…`):
 - `resize_grid(&self, grid: u64, cols: u16, rows: u16)` — enqueues an `InputEvent::ResizeGrid` (a single per-window grid), same ordered channel.
 - `drain_intents(&self) -> Vec<LayoutIntent>` — consumes the pending `wolf_layout` intents (splits / focus-direction moves) the front-end applies on each wake.
 - `focus_win(&self, win: i64)` — enqueues an `InputEvent::FocusWin` (click-to-focus or a resolved focus move) on the ordered channel.
+- `send_mouse(&self, ev: MouseEvent)` — enqueues an `InputEvent::Mouse` (click / drag / release) on the ordered channel; applied via `nvim_input_mouse` targeting `MouseEvent::grid` with grid-local row/col.
+- `send_scroll(&self, ev: ScrollEvent)` — enqueues an `InputEvent::Scroll` (wheel / trackpad) on the ordered channel; applied via `nvim_input_mouse("wheel", …)` targeting `ScrollEvent::grid`.
 - `shutdown(self) -> Result<(), CoreError>` — cleanly quits the captive Neovim and tears down the runtime.
 - `mru_recent(&self) -> Vec<FileEntry>` — the most-recently-opened files (newest first), pruning any whose backing file no longer exists. Reads the per-cwd store for the captive Neovim's LIVE cwd (the tracked cell, falling back to the configured `cwd`), so the entries' `display` strings relativize against the same directory the picker is rooted at. See `MruStore::recent`.
 - `start_file_search(&self, wake: WakeFn) -> FileSearch` — starts a streaming file search rooted at the captive Neovim's live working directory (`getcwd()`), falling back to the configured cwd (see "The file-search session" below).
@@ -67,7 +69,7 @@ Re-exported from the crate root (`wolf_core::…`):
 
 ### Input — the `InputEvent` family (from [`input`](src/input.rs))
 
-`InputEvent` = `Key(KeyEvent) | Mouse(MouseEvent) | Scroll(ScrollEvent) | Resize { cols, rows } | ResizeGrid { grid, cols, rows } | FocusWin { win } | Open { path } | Save | SaveAs { path }`. Supporting types: `KeyEvent`, `Key`, `MouseEvent`, `MouseButton`, `MouseAction`, `ScrollEvent`, `ScrollDirection`.
+`InputEvent` = `Key(KeyEvent) | Mouse(MouseEvent) | Scroll(ScrollEvent) | Resize { cols, rows } | ResizeGrid { grid, cols, rows } | FocusWin { win } | Open { path } | Save | SaveAs { path }`. Supporting types: `KeyEvent`, `Key`, `MouseEvent { button, action, grid, row, col, ctrl, shift, alt }`, `MouseButton`, `MouseAction`, `ScrollEvent { direction, grid, row, col }`, `ScrollDirection`. `MouseEvent`/`ScrollEvent` carry a target `grid: u64` with GRID-LOCAL row/col, so under `ext_multigrid` a front-end targets the pane's window grid (`>= 2`) rather than the global grid 0.
 
 `key_to_notation(&KeyEvent) -> String` translates a key event into Neovim notation (`<CR>`, `<Esc>`, `<C-w>`, …). Modifier order is `C-`, `S-`, `A-`, `D-`. **Shift contract:** for `Key::Char`, deliver the already-shifted glyph in the char and leave `shift = false`; `S-` is emitted only for named keys.
 

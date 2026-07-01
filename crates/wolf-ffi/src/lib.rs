@@ -45,7 +45,8 @@ use std::sync::Arc;
 
 use wolf_core::{
     rank_matches, CoreConfig, CursorShape, FileSearch, FocusDir, Grid, InputEvent, Key, KeyEvent,
-    LayoutIntent, ResolvedStyle, Rgb, SplitOrientation, WakeFn, WinInfo, WolfCore,
+    LayoutIntent, MouseAction, MouseButton, MouseEvent, ResolvedStyle, Rgb, ScrollDirection,
+    ScrollEvent, SplitOrientation, WakeFn, WinInfo, WolfCore,
 };
 
 // Re-export the bridge-defined transparent structs at the crate root so the Rust
@@ -53,7 +54,7 @@ use wolf_core::{
 // `wolf_ffi::{FfiColor, FfiKeyEvent}` directly. The opaque `FfiFrame`, `FfiCell`,
 // and `WolfCoreHandle`, plus `wolf_ffi_start`, are already crate-root `pub` items
 // defined below.
-pub use ffi::{FfiColor, FfiKeyEvent};
+pub use ffi::{FfiColor, FfiKeyEvent, FfiMouseEvent, FfiScrollEvent};
 
 /// `FfiKeyEvent.kind` discriminants. These mirror the variant order of
 /// [`wolf_core::Key`] (Char, Enter, Esc, Tab, Backspace, Delete, Left, Right, Up,
@@ -151,6 +152,51 @@ mod focus_dir {
     pub const DOWN: u8 = 3;
 }
 
+/// The mouse-button discriminants packed into [`FfiMouseEvent::button`], mirroring
+/// the variant order of [`wolf_core::MouseButton`].
+///
+/// The single source of truth shared with the Swift `PaneContainerView` ports and
+/// the `tests/mouse_scroll.rs` discriminant contract, consumed by
+/// [`mouse_event_from_ffi`].
+mod mouse_button {
+    /// The left mouse button.
+    pub const LEFT: u8 = 0;
+    /// The right mouse button.
+    pub const RIGHT: u8 = 1;
+    /// The middle mouse button.
+    pub const MIDDLE: u8 = 2;
+}
+
+/// The mouse-action discriminants packed into [`FfiMouseEvent::action`], mirroring
+/// the variant order of [`wolf_core::MouseAction`].
+///
+/// The single source of truth shared with the Swift ports and
+/// `tests/mouse_scroll.rs`, consumed by [`mouse_event_from_ffi`].
+mod mouse_action {
+    /// Button pressed.
+    pub const PRESS: u8 = 0;
+    /// Button released.
+    pub const RELEASE: u8 = 1;
+    /// Pointer dragged with the button held.
+    pub const DRAG: u8 = 2;
+}
+
+/// The scroll-direction discriminants packed into [`FfiScrollEvent::direction`],
+/// mirroring the variant order of [`wolf_core::ScrollDirection`].
+///
+/// The single source of truth shared with the Swift ports and
+/// `tests/mouse_scroll.rs`, consumed by [`scroll_event_from_ffi`].
+mod scroll_dir {
+    /// Scroll up (decreases the viewport `topline`).
+    pub const UP: u8 = 0;
+    /// Scroll down (increases the viewport `topline`).
+    pub const DOWN: u8 = 1;
+    /// Scroll left.
+    pub const LEFT: u8 = 2;
+    /// Scroll right.
+    pub const RIGHT: u8 = 3;
+}
+
 // swift-bridge's generated module expands into code that does not satisfy this
 // crate's stricter lints; scope a narrow allow to the bridge module only. The
 // hand-written glue below the module is held to the normal bar.
@@ -181,6 +227,33 @@ mod ffi {
         meta: bool,
     }
 
+    // A structured mouse event from Swift, mapped in Rust into a
+    // `wolf_core::MouseEvent`. `button`/`action` discriminate via `mod
+    // mouse_button` / `mod mouse_action`; `grid` is the target WINDOW grid (>= 2
+    // under ext_multigrid) and `row`/`col` are GRID-LOCAL.
+    #[swift_bridge(swift_repr = "struct")]
+    struct FfiMouseEvent {
+        button: u8,
+        action: u8,
+        grid: u64,
+        row: u32,
+        col: u32,
+        ctrl: bool,
+        shift: bool,
+        alt: bool,
+    }
+
+    // A structured scroll event from Swift, mapped in Rust into a
+    // `wolf_core::ScrollEvent`. `direction` discriminates via `mod scroll_dir`;
+    // `grid` is the target WINDOW grid and `row`/`col` are GRID-LOCAL.
+    #[swift_bridge(swift_repr = "struct")]
+    struct FfiScrollEvent {
+        direction: u8,
+        grid: u64,
+        row: u32,
+        col: u32,
+    }
+
     extern "Rust" {
         // Starts the core against the pinned Neovim (None on error). `init_lua`
         // and `cwd` are filesystem PATHS.
@@ -201,6 +274,14 @@ mod ffi {
         // empty `0x0` frame (Swift treats `cols() == 0` as "grid gone").
         fn read_frame_for_grid(&self, grid: u64) -> FfiFrame;
         fn send_key(&self, ev: FfiKeyEvent);
+        // Maps a structured mouse event into a `wolf_core::MouseEvent` and forwards
+        // it to Neovim (`nvim_input_mouse` targeting `ev.grid` with grid-local
+        // row/col). A no-op on an unrecognized button/action discriminant.
+        fn send_mouse(&self, ev: FfiMouseEvent);
+        // Maps a structured scroll event into a `wolf_core::ScrollEvent` and
+        // forwards it to Neovim (`nvim_input_mouse("wheel", …)`). A no-op on an
+        // unrecognized direction discriminant.
+        fn send_scroll(&self, ev: FfiScrollEvent);
         fn resize(&self, cols: u16, rows: u16);
         // Resizes a single window `grid` (in cells); nvim echoes the authoritative
         // size back via `grid_resize`.
@@ -310,6 +391,16 @@ mod ffi {
         // The flat, row-major grid of resolved cells (`cols * rows` entries).
         // `FfiCell` is opaque (Vec support is generated for opaque types).
         fn cells(&self) -> Vec<FfiCell>;
+        // The viewport's first visible buffer line (0-based, as nvim's
+        // `win_viewport` reports), for the synthetic scrollbar; 0 when this grid
+        // has no associated window.
+        fn topline(&self) -> u64;
+        // One past the viewport's last visible buffer line; 0 when no window.
+        fn botline(&self) -> u64;
+        // The cursor's buffer line; 0 when no window.
+        fn curline(&self) -> u64;
+        // The buffer's total line count; 0 when no window.
+        fn linecount(&self) -> u64;
     }
 
     extern "Rust" {
@@ -523,6 +614,28 @@ impl WolfCoreHandle {
         if let Some(key) = key_event_from_ffi(&ev) {
             if let Some(core) = self.core.borrow().as_ref() {
                 core.send_input(InputEvent::Key(key));
+            }
+        }
+    }
+
+    /// Maps `ev` into a [`wolf_core::MouseEvent`] and forwards it to Neovim
+    /// (`nvim_input_mouse` targeting `ev.grid` with grid-local row/col). A no-op on
+    /// an unrecognized button/action discriminant or once the core is shut down.
+    pub fn send_mouse(&self, ev: FfiMouseEvent) {
+        if let Some(mouse) = mouse_event_from_ffi(&ev) {
+            if let Some(core) = self.core.borrow().as_ref() {
+                core.send_mouse(mouse);
+            }
+        }
+    }
+
+    /// Maps `ev` into a [`wolf_core::ScrollEvent`] and forwards it to Neovim
+    /// (`nvim_input_mouse("wheel", …)`). A no-op on an unrecognized direction
+    /// discriminant or once the core is shut down.
+    pub fn send_scroll(&self, ev: FfiScrollEvent) {
+        if let Some(scroll) = scroll_event_from_ffi(&ev) {
+            if let Some(core) = self.core.borrow().as_ref() {
+                core.send_scroll(scroll);
             }
         }
     }
@@ -1103,6 +1216,10 @@ pub struct FfiFrame {
     cursor_fill: FfiColor,
     cursor_glyph: FfiColor,
     cells: Vec<FfiCell>,
+    topline: u64,
+    botline: u64,
+    curline: u64,
+    linecount: u64,
 }
 
 impl FfiFrame {
@@ -1191,6 +1308,32 @@ impl FfiFrame {
         self.cells.clone()
     }
 
+    /// The viewport's first visible buffer line (0-based, as nvim's
+    /// `win_viewport` reports; botline is one-past-last-visible), or 0 when this
+    /// grid has no associated window.
+    #[must_use]
+    pub fn topline(&self) -> u64 {
+        self.topline
+    }
+
+    /// One past the viewport's last visible buffer line, or 0 when no window.
+    #[must_use]
+    pub fn botline(&self) -> u64 {
+        self.botline
+    }
+
+    /// The cursor's buffer line, or 0 when no window.
+    #[must_use]
+    pub fn curline(&self) -> u64 {
+        self.curline
+    }
+
+    /// The buffer's total line count, or 0 when no window.
+    #[must_use]
+    pub fn linecount(&self) -> u64 {
+        self.linecount
+    }
+
     /// An empty `0x0` frame (used when the core has already been shut down).
     fn empty() -> Self {
         Self {
@@ -1208,6 +1351,10 @@ impl FfiFrame {
             cursor_fill: FfiColor::unset(),
             cursor_glyph: FfiColor::unset(),
             cells: Vec::new(),
+            topline: 0,
+            botline: 0,
+            curline: 0,
+            linecount: 0,
         }
     }
 
@@ -1263,6 +1410,12 @@ impl FfiFrame {
 
         let (fill, glyph) = cursor_colors(snapshot, grid);
 
+        let vp = snapshot
+            .windows
+            .get(&grid_id)
+            .map(|w| w.viewport)
+            .unwrap_or_default();
+
         Self {
             cols: clamp_u16(grid.cols),
             rows: clamp_u16(grid.rows),
@@ -1278,6 +1431,10 @@ impl FfiFrame {
             cursor_fill: FfiColor::from_rgb(fill),
             cursor_glyph: FfiColor::from_rgb(glyph),
             cells,
+            topline: vp.topline,
+            botline: vp.botline,
+            curline: vp.curline,
+            linecount: vp.linecount,
         }
     }
 }
@@ -1434,5 +1591,59 @@ fn key_event_from_ffi(ev: &FfiKeyEvent) -> Option<KeyEvent> {
         shift: ev.shift,
         alt: ev.alt,
         meta: ev.meta,
+    })
+}
+
+/// Maps an [`FfiMouseEvent`] into a [`wolf_core::MouseEvent`], or `None` if the
+/// `button` or `action` carries an unrecognized discriminant.
+///
+/// The `button` / `action` discriminants are the single source of truth shared
+/// with the Swift `PaneContainerView`; see the [`mouse_button`] / [`mouse_action`]
+/// modules. `grid` / `row` / `col` are forwarded verbatim (grid-local under
+/// `ext_multigrid`).
+fn mouse_event_from_ffi(ev: &FfiMouseEvent) -> Option<MouseEvent> {
+    let button = match ev.button {
+        mouse_button::LEFT => MouseButton::Left,
+        mouse_button::RIGHT => MouseButton::Right,
+        mouse_button::MIDDLE => MouseButton::Middle,
+        _ => return None,
+    };
+    let action = match ev.action {
+        mouse_action::PRESS => MouseAction::Press,
+        mouse_action::RELEASE => MouseAction::Release,
+        mouse_action::DRAG => MouseAction::Drag,
+        _ => return None,
+    };
+    Some(MouseEvent {
+        button,
+        action,
+        grid: ev.grid,
+        row: ev.row,
+        col: ev.col,
+        ctrl: ev.ctrl,
+        shift: ev.shift,
+        alt: ev.alt,
+    })
+}
+
+/// Maps an [`FfiScrollEvent`] into a [`wolf_core::ScrollEvent`], or `None` if the
+/// `direction` carries an unrecognized discriminant.
+///
+/// The `direction` discriminants are the single source of truth shared with the
+/// Swift `PaneContainerView`; see the [`scroll_dir`] module. `grid` / `row` / `col`
+/// are forwarded verbatim (grid-local under `ext_multigrid`).
+fn scroll_event_from_ffi(ev: &FfiScrollEvent) -> Option<ScrollEvent> {
+    let direction = match ev.direction {
+        scroll_dir::UP => ScrollDirection::Up,
+        scroll_dir::DOWN => ScrollDirection::Down,
+        scroll_dir::LEFT => ScrollDirection::Left,
+        scroll_dir::RIGHT => ScrollDirection::Right,
+        _ => return None,
+    };
+    Some(ScrollEvent {
+        direction,
+        grid: ev.grid,
+        row: ev.row,
+        col: ev.col,
     })
 }

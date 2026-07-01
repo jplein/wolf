@@ -386,11 +386,12 @@ pub struct Cursor {
 /// Viewport info for synthesizing a native scrollbar, from `win_viewport`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Viewport {
-    /// First buffer line visible in the window (1-based, as nvim reports).
+    /// First buffer line visible in the window (0-based buffer line index, as
+    /// `win_viewport` reports).
     pub topline: u64,
-    /// One past the last visible buffer line.
+    /// One past the last visible buffer line (0-based, exclusive).
     pub botline: u64,
-    /// The cursor's buffer line.
+    /// The cursor's buffer line (0-based buffer line index).
     pub curline: u64,
     /// Total number of lines in the buffer.
     pub linecount: u64,
