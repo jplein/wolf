@@ -210,4 +210,123 @@ final class PickerSeamTests: XCTestCase {
             XCTAssertEqual(got, c.expected, "case: \(c.desc)")
         }
     }
+
+    // MARK: - shouldShowResults
+
+    /// One `shouldShowResults` table row: (description, query, expected).
+    ///
+    /// macOS-only presentation seam (no Rust/wolf-gnome parity): the picker
+    /// shows no result rows until the user has typed a non-whitespace query.
+    private struct ShouldShowResultsCase {
+        let desc: String
+        let query: String
+        let expected: Bool
+    }
+
+    func testShouldShowResultsTable() {
+        let cases: [ShouldShowResultsCase] = [
+            // --- empty / whitespace-only queries hide results ----------------
+            ShouldShowResultsCase(
+                desc: "empty string => false",
+                query: "", expected: false),
+            ShouldShowResultsCase(
+                desc: "spaces only => false",
+                query: "   ", expected: false),
+            ShouldShowResultsCase(
+                desc: "newline + tab only => false",
+                query: "\n\t", expected: false),
+            // --- non-whitespace queries show results -------------------------
+            ShouldShowResultsCase(
+                desc: "single char => true",
+                query: "a", expected: true),
+            ShouldShowResultsCase(
+                desc: "word => true",
+                query: "foo", expected: true),
+            ShouldShowResultsCase(
+                desc: "word padded with spaces => true",
+                query: " foo ", expected: true),
+        ]
+
+        for c in cases {
+            let got = PickerSeam.shouldShowResults(query: c.query)
+            XCTAssertEqual(got, c.expected, "case: \(c.desc)")
+        }
+    }
+
+    // MARK: - baseName
+
+    /// One `baseName` table row: (description, relativePath, expected).
+    ///
+    /// macOS-only presentation seam (no Rust/wolf-gnome parity): derives the
+    /// primary title (base filename) from a cwd-relative display path via
+    /// `NSString.lastPathComponent`.
+    private struct BaseNameCase {
+        let desc: String
+        let relativePath: String
+        let expected: String
+    }
+
+    func testBaseNameTable() {
+        let cases: [BaseNameCase] = [
+            BaseNameCase(
+                desc: "empty path => empty",
+                relativePath: "", expected: ""),
+            BaseNameCase(
+                desc: "cwd-root file returns itself",
+                relativePath: "README.md", expected: "README.md"),
+            BaseNameCase(
+                desc: "nested path returns last component",
+                relativePath: "src/foo/bar.swift", expected: "bar.swift"),
+            BaseNameCase(
+                desc: "extensionless nested path returns last component",
+                relativePath: "a/b/c", expected: "c"),
+            BaseNameCase(
+                desc: "trailing slash trimmed (lastPathComponent robustness)",
+                relativePath: "dir/", expected: "dir"),
+        ]
+
+        for c in cases {
+            let got = PickerSeam.baseName(fromRelativePath: c.relativePath)
+            XCTAssertEqual(got, c.expected, "case: \(c.desc)")
+        }
+    }
+
+    // MARK: - parentRelativePath
+
+    /// One `parentRelativePath` table row: (description, relativePath,
+    /// expected).
+    ///
+    /// macOS-only presentation seam (no Rust/wolf-gnome parity): derives the
+    /// subtitle (relative parent directory) from a cwd-relative display path via
+    /// `NSString.deletingLastPathComponent`.
+    private struct ParentRelativePathCase {
+        let desc: String
+        let relativePath: String
+        let expected: String
+    }
+
+    func testParentRelativePathTable() {
+        let cases: [ParentRelativePathCase] = [
+            ParentRelativePathCase(
+                desc: "empty path => empty",
+                relativePath: "", expected: ""),
+            ParentRelativePathCase(
+                desc: "cwd-root file has no parent",
+                relativePath: "README.md", expected: ""),
+            ParentRelativePathCase(
+                desc: "single-level parent",
+                relativePath: "a/b.txt", expected: "a"),
+            ParentRelativePathCase(
+                desc: "multi-level parent",
+                relativePath: "src/foo/bar.swift", expected: "src/foo"),
+            ParentRelativePathCase(
+                desc: "extensionless multi-level parent",
+                relativePath: "a/b/c", expected: "a/b"),
+        ]
+
+        for c in cases {
+            let got = PickerSeam.parentRelativePath(fromRelativePath: c.relativePath)
+            XCTAssertEqual(got, c.expected, "case: \(c.desc)")
+        }
+    }
 }

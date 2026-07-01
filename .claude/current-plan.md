@@ -1,140 +1,152 @@
-# Current Plan: Vendor the lighthouse.nvim colorscheme
+# Plan: Redesign the file picker UI (keep it general/reusable)
 
-## Problem statement
+## Feature request
 
-Vendor the `lighthouse.nvim` Neovim **colorscheme** into the Wolf runtime, mirroring
-how the `orlando` plugin is already vendored, and activate its **dark** variant in the
-captive `init.lua`.
+Redesign the macOS file picker (`crates/wolf-macos/Sources/WolfMacOS/PickerView.swift`).
+Reusable for other selectors (e.g. a buffer selector), so keep the row/cell rendering GENERAL.
 
-- Source repo: https://github.com/jplein/lighthouse.nvim
-- Pinned commit: `5862a1a78d9f4f38418ccb3aebef275ab927b779`
-- Tarball: https://github.com/jplein/lighthouse.nvim/archive/5862a1a78d9f4f38418ccb3aebef275ab927b779.tar.gz
-- sha256: `af378b8c90a8bb205c01a5590dd8b4e9bb0e0bfdcf7eed8338f55427ff9329d5`
-- Archive root dir: `lighthouse.nvim-5862a1a78d9f4f38418ccb3aebef275ab927b779`
+1. Larger font in the text entry (search) field.
+2. No focus outline (focus ring) for the text entry field.
+3. Picker starts with NO result entries — just the text field.
+4. Once the user types, entries appear.
+5. Larger entry rows: left = medium Finder icon (aligned with the magnifier); base filename
+   (aligned with the typed text); below it, in a smaller font, the path to the file relative
+   to cwd (see decision on subtitle below).
 
-### KEY DIFFERENCE from orlando
+## Decision: subtitle = relative PARENT directory
 
-lighthouse is a **COLORSCHEME**, not a plugin. Its runtime file is `colors/lighthouse.lua`
-(plus `LICENSE` for compliance). There is **NO** `plugin/` dir. Putting the dir on
-`runtimepath` alone does nothing for a colorscheme — `init.lua` must ALSO activate it.
+The subtitle is the file's relative parent directory (display path minus its last component),
+not the full relative path — the standard fuzzy-finder convention, avoids duplicating the
+filename already shown as the title. One-line reversible (use `entry.display()` directly).
 
-**Requested behavior:** when the vendored lighthouse tree is present (macOS bundle only),
-set `vim.o.background = "dark"` and run `vim.cmd.colorscheme("lighthouse")`. Keep the
-activation isolated/simple because a future change will make dark/light switch
-automatically from the OS appearance preference. When the tree is ABSENT
-(Linux/cargo/tests that don't stage it), the whole block must be a strict no-op
-(no rtp change, no colorscheme call, no error) — exactly like the orlando load block.
+## Files
 
-## Deliverables (mirror the orlando pattern)
+### CREATE `crates/wolf-macos/Sources/WolfMacOS/PickerRow.swift`
+File-agnostic value type:
+```
+struct PickerRow {
+    let icon: NSImage?    // medium icon; Finder icon for files
+    let title: String     // primary line (base filename)
+    let subtitle: String  // secondary line (relative parent dir); may be ""
+    let payload: String   // opaque activation token (abs path for files)
+}
+```
+`payload` is opaque; only `activateSelection()` consumes it. A buffer selector would set
+title = buffer name, subtitle = detail, payload = a buffer id/token.
 
-1. `bazel/lighthouse/extensions.bzl` — module extension, single http_archive repo `lighthouse`,
-   pure Lua (NO select), overlay BUILD globs `colors/**` + `LICENSE*`, assembles via
-   `copy_to_directory` with `replace_prefixes` remapping archive root -> inner `lighthouse/`.
-   Output TreeArtifact `lighthouse_tree`.
-2. `bazel/lighthouse/BUILD.bazel` — alias `lighthouse_tree` -> `@lighthouse//:lighthouse_tree`,
-   plus `sh_test` `lighthouse_tree_test`.
-3. `bazel/lighthouse/lighthouse_tree_test.sh` — asserts `colors/lighthouse.lua` landed at the
-   expected inner path (model on `orlando_tree_test.sh`).
-4. `bazel/lighthouse/README.md` — pin, targets, how it works, how to bump.
-5. `MODULE.bazel` — `use_extension` + `use_repo`; regenerate `MODULE.bazel.lock`.
-6. `crates/wolf-macos/BUILD.bazel` — add `//bazel/lighthouse:lighthouse_tree` to Wolf
-   `macos_application` resources (lands at `Contents/Resources/lighthouse/`). Extend
-   `bundle_layout_test.sh` with a check for `Contents/Resources/lighthouse/colors/lighthouse.lua`.
-7. `runtime/nvim/init.lua` — lighthouse load+activate block modeled on orlando block; strict
-   no-op when absent.
-8. `crates/wolf-ffi` — integration test `lighthouse_load.rs` (real nvim, no mocks) asserting the
-   colorscheme is actually active (`vim.g.colors_name == "lighthouse"`, `vim.o.background == "dark"`).
-   Add `rust_test` target with data `//bazel/lighthouse:lighthouse_tree` + env
-   `WOLF_TEST_LIGHTHOUSE_DIR`. Add `lighthouse_dir_or_none()` helper to `tests/common/mod.rs`.
-9. Update READMEs (`runtime/nvim/README.md`, `bazel/lighthouse/README.md`, any architecture/build
-   docs mentioning orlando). Reformat edited Markdown with `prettier --write`.
+### CREATE `crates/wolf-macos/Sources/WolfMacOS/PickerRowCellView.swift`
+`final class PickerRowCellView: NSTableCellView`, renders any `PickerRow`:
+- `NSImageView` for the icon; two `NSTextField`s (title, subtitle) in a vertical `NSStackView`
+  (`alignment = .leading`, small spacing), vertically centered.
+- `configure(with row: PickerRow)` sets image/title/subtitle.
+- Static layout constants + fonts: `iconSize`, `titleFontSize`, `subtitleFontSize`, `iconToTextGap`.
+- Init takes alignment insets (`iconLeadingInset`, `labelLeadingInset`) computed by PickerView
+  from the search-field cell rects; used as leading-constraint constants.
+- `static func rowHeight(iconSize:titleFont:subtitleFont:verticalPadding:) -> CGFloat`
+  = `max(iconSize, titleLineHeight + subtitleLineHeight + interlineGap) + verticalPadding`
+  via `NSLayoutManager().defaultLineHeight(for:)`.
+- Constraints: imageView leading == cell.leading + iconLeadingInset, centerY, width/height == iconSize;
+  stackView leading == cell.leading + labelLeadingInset, centerY, trailing <= cell.trailing - inset.
+  Labels: `.byTruncatingMiddle`, `drawsBackground = false`.
+- `labelLeadingInset = max(searchTextLeadingInset, iconLeadingInset + iconSize + iconToTextGap)`
+  so text never overlaps a wide medium icon while aligning to the typed-text column.
 
-## Testing policy (CLAUDE.md)
-
-Prefer real end-to-end/integration tests over mocks — `lighthouse_load` MUST start a real Neovim
-and verify the colorscheme is actually active. Run `lighthouse_tree_test`, `bundle_layout_test`,
-the wolf-ffi `lighthouse_load` test, and the existing orlando/nvim tests (no regressions).
-
-## Status
-
-- [x] Architect plan (recorded below)
-- [x] Tests written (lighthouse_tree_test.sh, lighthouse_load.rs, bundle_layout_test.sh check (g))
-- [x] Implementation + tests passing (all new + regression targets PASSED; exec bit on tree_test.sh set)
-- [x] Review — PASS (correctness-critical items confirmed; only remaining item is docs)
-- [x] Docs — runtime/nvim/README.md, crates/wolf-macos/README.md, architecture.md, build.md,
-      bazel/lighthouse/README.md updated + prettier-clean (`proseWrap: never`)
-
-## COMPLETE — all steps done, all tests passing.
-
----
-
-## Architect's detailed plan
-
-### Verified constants (use everywhere)
-- `_COMMIT = "5862a1a78d9f4f38418ccb3aebef275ab927b779"`
-- `_SHA256 = "af378b8c90a8bb205c01a5590dd8b4e9bb0e0bfdcf7eed8338f55427ff9329d5"`
-- **Archive root: `lighthouse.nvim-<commit>`** (upstream repo name includes `.nvim`!). The Bazel repo
-  name, TreeArtifact, inner dir, and bundle path are all the bare token `lighthouse`. Getting
-  `_ARCHIVE_ROOT` wrong (dropping `.nvim`) makes the `copy_to_directory` glob match nothing.
-- Tarball: `https://github.com/jplein/lighthouse.nvim/archive/<commit>.tar.gz`
-- KEEP: `colors/**`, `LICENSE*`. EXCLUDE dev-only: `build/`, `flake.nix`, `flake.lock`, `Makefile`,
-  `README.md`, `.gitignore`, `.prettierrc`. (No `plugin/`, `lua/`, or `doc/` exist.)
-- Colorscheme name registered by `colors/lighthouse.lua` is `lighthouse`.
-
-### Files to CREATE
-- **(Coder)** `bazel/lighthouse/extensions.bzl` — parallel of orlando; `runtime_files` filegroup globs
-  only `colors/**` + `LICENSE*`; `copy_to_directory` named `lighthouse_tree`, `replace_prefixes`
-  remaps archive root -> inner `lighthouse/`. Single `http_archive(name="lighthouse")`, no `select()`.
-- **(Coder)** `bazel/lighthouse/BUILD.bazel` — `alias lighthouse_tree -> @lighthouse//:lighthouse_tree`
-  + `sh_test lighthouse_tree_test`.
-- **(Test-writer)** `bazel/lighthouse/lighthouse_tree_test.sh` — assert `<tree>/lighthouse/colors/lighthouse.lua`
-  is a regular file (hard). Optional soft LICENSE* echo. Keep runfiles multi-candidate + `find -L` fallback.
-- **(Coder)** `bazel/lighthouse/README.md` — pin/targets/how-it-works + an **Activation** note (colorscheme
-  is inert on rtp until `background=dark` + `:colorscheme lighthouse`). `prettier --write`.
-- **(Test-writer)** `crates/wolf-ffi/tests/lighthouse_load.rs` — real nvim; sentinel via
-  `:lua vim.fn.writefile({(vim.g.colors_name=="lighthouse" and "OK" or "NO"),(vim.o.background=="dark" and "OK" or "NO")}, "<path>")`.
-  Two lines, both must be `OK`. Skip guard uses `common::lighthouse_dir_or_none()`. Stage temp bundle:
-  copy init.lua + `copy_dir_recursive(lighthouse_src, T/lighthouse)`; sanity-assert `T/lighthouse/colors/lighthouse.lua`.
-
-### Files to MODIFY
-- **(Coder)** `MODULE.bazel` — append lighthouse `use_extension`/`use_repo` block after orlando (line 108).
-  Regenerate `MODULE.bazel.lock`.
-- **(Coder)** `crates/wolf-macos/BUILD.bazel` — add `"//bazel/lighthouse:lighthouse_tree"` to Wolf
-  `resources`; update comments (54-59, 69-72).
-- **(Test-writer)** `crates/wolf-macos/bundle_layout_test.sh` — new check **(g)**:
-  `$RES/lighthouse/colors/lighthouse.lua` is a file; update header comment + final echo.
-- **(Coder)** `runtime/nvim/init.lua` — lighthouse block **AFTER `syntax on`** (line 62) and after the
-  orlando block (~line 84), reusing existing `this_dir`/`uv` locals (do NOT re-declare). Strict no-op when
-  absent. When present: `runtimepath:prepend`, `vim.o.background="dark"`, `vim.cmd.colorscheme("lighthouse")`.
-  Do NOT `runtime()` the colors file — `:colorscheme` finds it on rtp. Ordering matters: `:colorscheme`
-  redefines highlight groups that a later `syntax on` would clear.
-- **(Coder)** `crates/wolf-ffi/tests/common/mod.rs` — add `lighthouse_dir_or_none()` after
-  `orlando_dir_or_none()` (resolves `WOLF_TEST_LIGHTHOUSE_DIR`).
-- **(Coder)** `crates/wolf-ffi/BUILD.bazel` — new `rust_test lighthouse_load` copying `orlando_load`:
-  srcs `tests/common/mod.rs` + `tests/lighthouse_load.rs`, crate_root the latter, data adds
-  `//bazel/lighthouse:lighthouse_tree`, env adds `WOLF_TEST_LIGHTHOUSE_DIR = $(rootpath ...)`.
-- **(Coder)** Docs: `runtime/nvim/README.md` (new bullet + Deferred note), `build.md` (bump subsection +
-  test targets), `architecture.md` (bundling + phase-status paras), `crates/wolf-macos/README.md`
-  (AppDelegate + Building paras). `prettier --write` all.
-
-### init.lua ordering (correctness)
-`:colorscheme` and `syntax on` both clear/redefine highlight groups. Activation MUST run AFTER
-`vim.cmd("syntax on")` and set `vim.o.background` BEFORE `:colorscheme` (dual-variant scheme reads it).
-`termguicolors` already true.
-
-### Coder verification commands
-```sh
-bazel build //bazel/lighthouse:lighthouse_tree --lockfile_mode=update   # regenerates MODULE.bazel.lock
-bazel test //bazel/lighthouse:lighthouse_tree_test
-bazel test //crates/wolf-macos:bundle_layout_test
-bazel test //crates/wolf-ffi:lighthouse_load
-# regression:
-bazel test //bazel/orlando:orlando_tree_test //crates/wolf-ffi:orlando_load \
-           //crates/wolf-ffi:bridge_smoke //crates/wolf-ffi:panes \
-           //crates/wolf-ffi:file_search //crates/wolf-ffi:tree_search \
-           //crates/wolf-ffi:mouse_scroll //crates/wolf-ffi:frame_pack
+### MODIFY `crates/wolf-macos/Sources/WolfKeyMap/PickerSeam.swift`
+Add three pure, Foundation-only static funcs (documented **macOS-only presentation seams, no
+Rust/wolf-gnome parity**, unlike the existing three trigger/nav/restore ports):
+```
+static func shouldShowResults(query: String) -> Bool
+    // !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+static func baseName(fromRelativePath relativePath: String) -> String
+    // (relativePath as NSString).lastPathComponent
+static func parentRelativePath(fromRelativePath relativePath: String) -> String
+    // (relativePath as NSString).deletingLastPathComponent
 ```
 
-### Note
-Architect flagged that the harness "Project conventions" mention a Go project (`tarjeta`) — NOT applicable
-to this Rust/Swift/Bazel/Lua repo. Ignore Go-specific lint/depguard guidance.
+### MODIFY `crates/wolf-macos/Sources/WolfMacOS/PickerView.swift`
+- State: replace `rowDisplays`/`rowPaths` with `rows: [PickerRow] = []`. Update `numberOfRows`,
+  `moveSelection`, `activateSelection`, `refresh` to use `rows`.
+- Constants: add `searchFontSize` (~20). Row fonts live on `PickerRowCellView`.
+- `buildSubviews()`:
+  - `searchField.font = NSFont.systemFont(ofSize: searchFontSize)`.
+  - Focus ring: `searchField.focusRingType = .none` and
+    `(searchField.cell as? NSSearchFieldCell)?.focusRingType = .none`.
+  - Register `PickerRowCellView` for reuse via `cellIdentifier`.
+  - `tableView.rowHeight = PickerRowCellView.rowHeight(...)` (fixed).
+  - Compute alignment insets once from `NSSearchFieldCell.searchButtonRect(forBounds:)` and
+    `searchTextRect(forBounds:)` (after setting the field's final width): `iconLeadingInset =
+    buttonRect.minX`, `searchTextLeadingInset = textRect.minX`; fallback constants
+    (iconLeadingInset ~8, searchTextLeadingInset ~32) if the cell cast fails.
+- `open()`: remove the forced MRU seed. Start the search + focus the field, but set `rows = []`,
+  `tableView.reloadData()`, `lastQuery = nil`; do NOT produce rows for the empty query.
+- `refresh()`: gate at top after reading `query`:
+  `guard PickerSeam.shouldShowResults(query: query) else { rows = []; lastQuery = query;
+   tableView.reloadData(); return }`. Then map each ranked `FfiFileEntry` -> `PickerRow` at the
+  boundary: `display = entry.display().toString()`, `abs = entry.path().toString()`,
+  `icon = fileIcon(forPath: abs)`, title = `baseName(fromRelativePath: display)`,
+  subtitle = `parentRelativePath(fromRelativePath: display)`, payload = abs.
+  Keep the existing `restoredIndex`/selection logic on `rows.count`.
+- `tableView(_:viewFor:row:)`: dequeue/create `PickerRowCellView`, call `configure(with: rows[row])`.
+- `activateSelection()`: `handle.open(rows[idx].payload)`; keep the zero-row no-op.
+- Remove `makeCell()`.
+- Add private `fileIcon(forPath: String) -> NSImage`: `NSWorkspace.shared.icon(forFile:)` with
+  `.size = NSSize(width: iconSize, height: iconSize)`.
+- NOTE: `display()`/`path()` return `RustString` — call `.toString()` before the seam funcs.
+
+### MODIFY `crates/wolf-macos/Tests/WolfKeyMapTests/PickerSeamTests.swift`
+Table-driven (existing style), the only automated tests here:
+- `testShouldShowResultsTable`: "" -> false; "   " -> false; "\n\t" -> false; "a"/"foo" -> true;
+  " foo " -> true.
+- `testBaseNameTable`: "" -> ""; "README.md" -> "README.md"; "src/foo/bar.swift" -> "bar.swift";
+  "a/b/c" -> "c"; "dir/" -> "dir" (NSString.lastPathComponent robustness).
+- `testParentRelativePathTable`: "" -> ""; "README.md" -> ""; "a/b.txt" -> "a";
+  "src/foo/bar.swift" -> "src/foo"; "a/b/c" -> "a/b".
+
+## Concrete constants
+searchFontSize=20, titleFontSize=15, subtitleFontSize=11 (secondary label color),
+iconSize=28, iconToTextGap=8, cellHorizontalInset=8, interline gap ~2, rowVerticalPadding=10.
+
+## AppKit-only (manual-smoke, not unit-tested)
+PickerRow, PickerRowCellView, icon fetch, search-field font/focus-ring, the NSSearchFieldCell
+rect-based inset computation, and open/refresh/viewFor wiring — all need AppKit/live field editor.
+Only the empty-query gate + filename/parent derivations are pure seams and unit-tested.
+
+## Build
+No BUILD.bazel change — `wolf_macos_lib` globs `Sources/WolfMacOS/*.swift`; seam/tests added to
+listed files. Targets: `//crates/wolf-macos:wolf_macos_lib`, `//crates/wolf-macos:WolfKeyMapTests`.
+(The Go/golangci lint notes in the generic brief do NOT apply — this is Swift + Bazel.)
+
+## Implementation order
+1. PickerSeam funcs. 2. PickerSeamTests. 3. PickerRow.swift. 4. PickerRowCellView.swift.
+5. PickerView.swift rewire. 6. READMEs + `prettier --write`.
+
+## Docs to update (source of truth)
+`crates/wolf-macos/Sources/README.md` (PickerSeam bullet + 3 new funcs flagged macOS-only;
+PickerView bullet; add PickerRow.swift + PickerRowCellView.swift bullets) and
+`crates/wolf-macos/README.md` (PickerSeam list; PickerView bullet; picker eyeball paragraph).
+Reformat Markdown with `prettier --write` after.
+
+## Manual-smoke eyeball checklist
+1. Open: only the search field, no rows; larger font; no focus ring.
+2. Type a char -> rows appear; delete to empty -> rows disappear.
+3. Rows taller: medium Finder icon left, base filename primary, relative parent dir smaller/dimmer below.
+4. Row icon left edge aligns with the magnifier; filename left edge aligns with typed text; subtitle
+   left-aligned under filename.
+5. A cwd-root file shows empty subtitle, row height unchanged.
+6. Up/Down move selection; Enter/double-click open + close; Esc closes; zero rows -> Enter no-op.
+7. Streaming wakes fill rows while a non-empty query is present; selection preserved/clamped.
+
+## Status: COMPLETE
+
+- test-writer: added 3 table-driven tests to PickerSeamTests.swift.
+- coder: implemented all files; build OK, tests PASSED; docs updated + prettier-clean.
+- reviewer: APPROVED — all 6 verification areas PASS; flagged one comment-wording nuance.
+- coder (follow-up): reworded the PickerRowCellView.configure comment; rebuild OK.
+- technical-writer: verified both READMEs accurate + complete + prettier-clean; no changes needed.
+
+- test-writer: added 3 table-driven tests to PickerSeamTests.swift.
+- coder: implemented all files; `bazel build //crates/wolf-macos:wolf_macos_lib` OK,
+  `bazel test //crates/wolf-macos:WolfKeyMapTests` PASSED. Docs updated + prettier-clean.
+- Deviation accepted: reuse via dequeue-or-create (`makeView ?? makeCell`) instead of
+  nib-based `register(_:forIdentifier:)` (which needs a nib; the cell needs injected insets).
+  Functionally equivalent.

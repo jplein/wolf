@@ -53,7 +53,7 @@ final class PaneContainerView: NSView {
     /// its grid at `maxGridCols` and CENTERS it horizontally, leaving side margins
     /// (painted in the grid's background); a narrower pane is unaffected. All pixel↔
     /// cell mapping routes through `PaneGeometry`, which owns the cap + centering.
-    private static let maxGridCols = 100
+    private static let maxGridCols = 90
 
     // -- Mouse / scroll FFI discriminants (mirror `wolf-ffi`'s `mod mouse_button`
     //    / `mod mouse_action` / `mod scroll_dir`) ------------------------------
