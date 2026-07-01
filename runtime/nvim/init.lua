@@ -49,6 +49,11 @@ opt.mouse = "a"
 opt.wrap = true
 opt.linebreak = true
 
+-- With soft-wrap on, `smoothscroll` scrolls by SCREEN line rather than jumping
+-- past an entire wrapped logical line, so mouse-wheel / `<C-e>`/`<C-d>` scrolling
+-- of long wrapped Markdown lines stays smooth and never skips wrapped fragments.
+opt.smoothscroll = true
+
 -- Treat opened files as markdown by default (Wolf is a Markdown editor).
 vim.filetype.add({ extension = { md = "markdown" } })
 

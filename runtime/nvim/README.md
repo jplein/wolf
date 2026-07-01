@@ -19,6 +19,7 @@ What it sets and why:
 - **True color** — `termguicolors = true`, so `hl_attr_define` / `default_colors_set` carry RGB values the front-ends paint directly.
 - **Chrome-free, deterministic grid** — `number = false`, `signcolumn = "no"`, `ruler = false`, `showcmd = false`, `laststatus = 0` (the front-end draws its own chrome).
 - **Soft-wrap (word boundaries)** — `wrap = true` with `linebreak = true`, so long Markdown lines wrap at spaces/punctuation rather than running off-screen or breaking mid-word. Determinism-sensitive rendering tests keep their content within the grid width, so column assertions stay stable.
+- **Smooth scroll** — `smoothscroll = true`, so scrolling (mouse wheel, `<C-e>`/`<C-d>`) moves by SCREEN line rather than jumping past a whole wrapped logical line — pairs with soft-wrap to keep long wrapped Markdown lines from skipping fragments while scrolling.
 - **Mouse** — `mouse = "a"`; the front-end translates OS mouse events into core input, which forwards them to Neovim.
 - **Markdown** — `.md` files are mapped to the `markdown` filetype, and `syntax on` enables built-in syntax highlighting so the grid carries varied `hl_id`s.
 
