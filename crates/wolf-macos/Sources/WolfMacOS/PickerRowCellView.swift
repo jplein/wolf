@@ -4,47 +4,41 @@
 //
 //  Deliberately GENERAL (like `PickerRow`), so the same cell backs any picker /
 //  selector: a leading `NSImageView` (the medium icon, aligned with the search
-//  magnifier) and a vertical `NSStackView` of a title label (aligned with the
-//  typed text) over a smaller, dimmer subtitle label. The alignment insets are
-//  derived by `PickerView` from the search-bar layout and injected via `init`.
-//  AppKit-only, so exercised by manual smoke.
+//  magnifier) and a single title label (aligned with the typed text). The icon's
+//  BOTTOM lines up with the text's baseline. The alignment insets are derived by
+//  `PickerView` from the search-bar layout and injected via `init`. AppKit-only,
+//  so exercised by manual smoke.
 //
 
 import AppKit
 
-/// A picker list row: icon on the left, title over subtitle on the right.
+/// A picker list row: icon on the left, a single line of text on the right.
 final class PickerRowCellView: NSTableCellView {
     /// Side length of the (square) medium icon. Its left edge lines up with the
-    /// search magnifier; at this size its right edge reaches just to the title
-    /// column (which aligns with the search field's text), and file-icon images
-    /// carry transparent margins so the glyph stays clear of the title.
+    /// search magnifier and its bottom with the text baseline.
     static let iconSize: CGFloat = 28
-    /// Point size of the primary title label.
+    /// Point size of the title label.
     static let titleFontSize: CGFloat = 15
-    /// Point size of the secondary subtitle label.
-    static let subtitleFontSize: CGFloat = 13
-    /// Horizontal gap between the icon and the text column.
+    /// Horizontal gap between the icon and the text column (the padding to the
+    /// right of the icon).
     static let iconToTextGap: CGFloat = 8
-    /// Vertical gap between the title and subtitle labels.
-    static let interlineGap: CGFloat = 2
-    /// Trailing inset of the text column within the cell.
+    /// Trailing inset of the text within the cell.
     static let cellHorizontalInset: CGFloat = 8
+    /// How far the text baseline sits ABOVE the icon view's bottom edge, so it
+    /// aligns with the icon glyph's visible bottom (Finder icon images carry a
+    /// small transparent bottom margin below the drawn glyph).
+    static let iconBaselineInset: CGFloat = 3
 
-    /// The primary title font.
+    /// The title font.
     static let titleFont = NSFont.systemFont(ofSize: titleFontSize)
-    /// The secondary subtitle font.
-    static let subtitleFont = NSFont.systemFont(ofSize: subtitleFontSize)
 
     private let iconView = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
-    private let subtitleLabel = NSTextField(labelWithString: "")
-    private let stack = NSStackView()
 
     /// Builds the row's subviews and pins them using the caller-computed alignment
     /// insets: `iconLeadingInset` aligns the icon with the search magnifier and
-    /// `labelLeadingInset` aligns the title with the typed text. The icon is sized
-    /// (`iconSize`) to fit between the leading edge and the title column, so it does
-    /// not overlap the title.
+    /// `labelLeadingInset` aligns the text with the typed text. The icon is
+    /// vertically centered and its BOTTOM is pinned to the text's baseline.
     init(iconLeadingInset: CGFloat, labelLeadingInset: CGFloat) {
         super.init(frame: .zero)
 
@@ -57,20 +51,7 @@ final class PickerRowCellView: NSTableCellView {
         titleLabel.lineBreakMode = .byTruncatingMiddle
         titleLabel.drawsBackground = false
         titleLabel.textColor = .labelColor
-
-        subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
-        subtitleLabel.font = Self.subtitleFont
-        subtitleLabel.lineBreakMode = .byTruncatingMiddle
-        subtitleLabel.drawsBackground = false
-        subtitleLabel.textColor = .secondaryLabelColor
-
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = Self.interlineGap
-        stack.addArrangedSubview(titleLabel)
-        stack.addArrangedSubview(subtitleLabel)
-        addSubview(stack)
+        addSubview(titleLabel)
 
         self.imageView = iconView
         self.textField = titleLabel
@@ -82,11 +63,14 @@ final class PickerRowCellView: NSTableCellView {
             iconView.widthAnchor.constraint(equalToConstant: Self.iconSize),
             iconView.heightAnchor.constraint(equalToConstant: Self.iconSize),
 
-            stack.leadingAnchor.constraint(
+            titleLabel.leadingAnchor.constraint(
                 equalTo: leadingAnchor, constant: labelLeadingInset),
-            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
-            stack.trailingAnchor.constraint(
+            titleLabel.trailingAnchor.constraint(
                 lessThanOrEqualTo: trailingAnchor, constant: -Self.cellHorizontalInset),
+            // The text baseline lines up with the icon glyph's visible bottom
+            // (just above the icon view's bottom edge; see `iconBaselineInset`).
+            titleLabel.firstBaselineAnchor.constraint(
+                equalTo: iconView.bottomAnchor, constant: -Self.iconBaselineInset),
         ])
     }
 
@@ -95,28 +79,21 @@ final class PickerRowCellView: NSTableCellView {
         fatalError("PickerRowCellView is not constructed from a nib")
     }
 
-    /// The fixed row height for the picker list: the taller of the icon and the
-    /// stacked title + subtitle line heights, plus vertical padding.
+    /// The fixed row height for the picker list: the icon (the taller element) plus
+    /// vertical padding, which also leaves room for the text descenders that fall
+    /// below the icon's (baseline-aligned) bottom edge.
     static func rowHeight(
         iconSize: CGFloat,
         titleFont: NSFont,
-        subtitleFont: NSFont,
         verticalPadding: CGFloat
     ) -> CGFloat {
-        let layoutManager = NSLayoutManager()
-        let titleLineHeight = layoutManager.defaultLineHeight(for: titleFont)
-        let subtitleLineHeight = layoutManager.defaultLineHeight(for: subtitleFont)
-        let textHeight = titleLineHeight + subtitleLineHeight + interlineGap
-        return max(iconSize, textHeight) + verticalPadding
+        let titleLineHeight = NSLayoutManager().defaultLineHeight(for: titleFont)
+        return max(iconSize, titleLineHeight) + verticalPadding
     }
 
-    /// Applies a `PickerRow`: sets the icon, title, and subtitle. The subtitle label
-    /// is ALWAYS kept in the stack (blank when the subtitle is empty) so it reserves
-    /// its line height and the title's vertical position is the same whether or not
-    /// the row has a subtitle (e.g. a root-level file with no relative path).
+    /// Applies a `PickerRow`: sets the icon and the single line of text.
     func configure(with row: PickerRow) {
         iconView.image = row.icon
         titleLabel.stringValue = row.title
-        subtitleLabel.stringValue = row.subtitle
     }
 }

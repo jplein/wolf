@@ -62,13 +62,12 @@ public enum PickerSeam {
         return min(prev ?? 0, newLen - 1)
     }
 
-    // MARK: - macOS-only presentation seams (no Rust/wolf-gnome parity)
+    // MARK: - macOS-only presentation seam (no Rust/wolf-gnome parity)
     //
-    // Unlike the three trigger/nav/restore ports above, the following seams have
-    // NO wolf-gnome analog: they back macOS-specific picker presentation choices
-    // (hide results until the user types; split a cwd-relative display path into a
-    // filename title and a parent-directory subtitle). They stay here — pure and
-    // Foundation-only — so they remain headlessly unit-testable.
+    // Unlike the three trigger/nav/restore ports above, the following seam has NO
+    // wolf-gnome analog: it backs a macOS-specific picker presentation choice
+    // (hide results until the user types). It stays here — pure and Foundation-only
+    // — so it remains headlessly unit-testable.
 
     /// Returns `true` iff the picker should show result rows for `query`, i.e.
     /// the query has at least one non-whitespace character. An empty or
@@ -76,19 +75,5 @@ public enum PickerSeam {
     /// search field).
     public static func shouldShowResults(query: String) -> Bool {
         !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    /// Derives a row's primary title — the base filename — from a cwd-relative
-    /// display path, via `NSString.lastPathComponent` (which also trims a trailing
-    /// slash). An empty path yields `""`.
-    public static func baseName(fromRelativePath relativePath: String) -> String {
-        (relativePath as NSString).lastPathComponent
-    }
-
-    /// Derives a row's subtitle — the relative parent directory — from a
-    /// cwd-relative display path, via `NSString.deletingLastPathComponent`. A
-    /// cwd-root file (no parent) and an empty path both yield `""`.
-    public static func parentRelativePath(fromRelativePath relativePath: String) -> String {
-        (relativePath as NSString).deletingLastPathComponent
     }
 }

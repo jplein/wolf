@@ -94,7 +94,7 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
 
     /// The live file-search session while open; `nil` when closed.
     private var search: FfiFileSearch?
-    /// The list rows (icon/title/subtitle/payload), file-agnostic.
+    /// The list rows (icon/title/payload), file-agnostic.
     private var rows: [PickerRow] = []
     /// The query used by the previous `refresh()`, deciding reset-vs-preserve.
     private var lastQuery: String?
@@ -194,8 +194,8 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     ///
     /// An empty or whitespace-only query shows NO rows (per
     /// `PickerSeam.shouldShowResults`). Otherwise each ranked `FfiFileEntry` is
-    /// mapped into a file-agnostic `PickerRow` (title = base filename, subtitle =
-    /// relative parent dir, payload = absolute path, icon = Finder icon). If the
+    /// mapped into a file-agnostic `PickerRow` (title = the full working-directory-
+    /// relative path, payload = absolute path, icon = Finder icon). If the
     /// query is unchanged since the previous refresh (a streaming traversal wake,
     /// not a keystroke) the selection index is PRESERVED across the rebuild
     /// (clamped); when the query changed (typing) or it is the first refresh after
@@ -223,8 +223,8 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
             newRows.append(
                 PickerRow(
                     icon: fileIcon(forPath: abs),
-                    title: PickerSeam.baseName(fromRelativePath: display),
-                    subtitle: PickerSeam.parentRelativePath(fromRelativePath: display),
+                    // The full path relative to the working-directory root.
+                    title: display,
                     payload: abs))
         }
         rows = newRows
@@ -328,12 +328,11 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         tableView.delegate = self
         tableView.target = self
         tableView.doubleAction = #selector(handleDoubleClick)
-        // Fixed row height sized for the icon + stacked title/subtitle.
+        // Fixed row height sized for the icon + single title line.
         tableView.usesAutomaticRowHeights = false
         tableView.rowHeight = PickerRowCellView.rowHeight(
             iconSize: PickerRowCellView.iconSize,
             titleFont: PickerRowCellView.titleFont,
-            subtitleFont: PickerRowCellView.subtitleFont,
             verticalPadding: Self.rowVerticalPadding)
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
