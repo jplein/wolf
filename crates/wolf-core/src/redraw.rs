@@ -414,7 +414,15 @@ fn grid_line(snap: &mut Snapshot, params: Vec<Value>) {
         if let Some(hl) = parts.get(1).and_then(as_u64) {
             current_hl = hl;
         }
-        let repeat = parts.get(2).and_then(as_u64).unwrap_or(1).max(1);
+        // `repeat` counts how many columns the cell occupies, INCLUDING the
+        // first — so an explicit `repeat` of 0 is a zero-width no-op cell.
+        // Neovim really emits those: a trailing `[" ", 0, 0]` clear-to-EOL cell
+        // when there is nothing left to clear. Clamping it up to 1 (as this
+        // once did) writes a spurious default-highlight space ONE column past
+        // the event's real span; Neovim's shadow grid never has that cell, so
+        // it is never repainted and the corruption persists on screen (single
+        // wrong-background cells just past end-of-line).
+        let repeat = parts.get(2).and_then(as_u64).unwrap_or(1);
 
         // Each cell tuple maps to exactly one grid column. Neovim already emits
         // the trailing half of a double-width glyph as its own cell with empty

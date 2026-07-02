@@ -1,6 +1,6 @@
 # wolf-ffi/tests
 
-Integration tests for the `wolf-ffi` bridge surface. They drive the **Rust half** of the swift-bridge boundary directly — no Swift, no AppKit, no window — exactly as the generated Swift glue eventually will. There are three test binaries plus a shared `common/` helper.
+Integration tests for the `wolf-ffi` bridge surface. They drive the **Rust half** of the swift-bridge boundary directly — no Swift, no AppKit, no window — exactly as the generated Swift glue eventually will. Each test is its own binary (see `BUILD.bazel` for the full list; not every binary is documented here yet), sharing the `common/` helper.
 
 ## `frame_pack.rs`
 
@@ -15,6 +15,10 @@ It runs for real on Linux/Cargo devShells and **passes under `bazel test` on the
 ## `file_search.rs`
 
 The real-nvim coverage of the file-picker surface — **no mocks**, modeled on `bridge_smoke.rs` (same `common/` helpers, same `data` / `$(rootpath)` env runfile staging, same `tags = ["local"]` unsandboxed run, same loud-SKIP gate via `nvim_bin_or_skip`). It seeds a temp cwd with a couple of `.md` files, calls `wolf_ffi_start` there, opens a session with `start_file_search()`, and **polls** `ranked("", N)` until the background traversal streams the created files in; it then asserts the displays are present, that `path()` is absolute (under the cwd) while `display()` is the relative name, and that a focused query (e.g. `ranked("alpha")`) ranks the matching file first. Finally it issues `open(path())` and confirms the core survives the round-trip (it cannot assert the exact opened buffer name — `FfiFrame` exposes no `current_file` accessor, and the test does not add one — so `open` is checked at the round-trip-survives level, `ranked` correctness strongly).
+
+## `orlando_bg_stress.rs`
+
+Regression test for the "occasionally cells draw with the wrong background" bug (single default-black cells inside an orlando `OrlandoCodeBlock` gray region, persisting on screen). Root cause: Neovim ends many `grid_line` events with a zero-width clear-to-EOL cell `[" ", hl 0, repeat 0]`, and wolf-core's parser clamped `repeat` with `.max(1)`, writing a spurious default-highlight space one column past the event's real span; Neovim's shadow grid never has that cell, so it is never re-sent and the corruption persists until unrelated churn rewrites it. The test stages the vendored orlando (and lighthouse, when present) trees like `orlando_load`, opens a Markdown document with two fenced code blocks, then drives a seeded-random mix of scrolling, cursor motion, in-block edit+undo, and fence insert/delete churn; after every op it waits for the frame to go idle and asserts (1) every visible row's text equals the corresponding buffer line and (2) every cell of every code-block row shares one background, which must differ from the default bg so the check cannot pass vacuously. This reproduced the corruption deterministically before the fix. Seed and iteration count are overridable via `WOLF_STRESS_SEED` / `WOLF_STRESS_ITERS`.
 
 ## `common/mod.rs`
 
