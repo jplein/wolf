@@ -6,7 +6,25 @@ Dependency order: `render` → `layout` → `input` → `redraw` → `nvim` → 
 
 ## `lib.rs`
 
-Crate root. Declares the public modules (`api`, `files`, `input`, `layout`, `mru`, `nvim`, `rank`, `redraw`, `render`, `tree`) and re-exports the public surface: `WolfCore`, `CoreConfig`, `CoreError`, `SnapshotReadGuard`; `FileEntry`, `FileSearch`, `FileSearchReadGuard` (from `files`); `FocusDir`, `LayoutIntent`, `SplitOrientation` (from `layout`); `MruStore`, `MruError`, `MRU_LIMIT` (from `mru`); `rank_matches`, `Match`, `MatchKey` (from `rank`); `TreeNode`, `children_of`, `ancestors_to_reveal`, `node_rel_path`, `rel_path_for` (from `tree`); the input types and `key_to_notation`; `WakeFn`; and the render-state types. Documents the one hard rule (no GUI toolkit in the dependency tree).
+Crate root. Declares the public modules (`api`, `config`, `files`, `input`, `layout`, `mru`, `nvim`, `rank`, `redraw`, `render`, `tree`) and re-exports the public surface: `WolfCore`, `CoreConfig`, `CoreError`, `SnapshotReadGuard`; `WolfConfig`, `load_or_create`, `preferences_dir`, `default_config` (from `config`); `FileEntry`, `FileSearch`, `FileSearchReadGuard` (from `files`); `FocusDir`, `LayoutIntent`, `SplitOrientation` (from `layout`); `MruStore`, `MruError`, `MRU_LIMIT` (from `mru`); `rank_matches`, `Match`, `MatchKey` (from `rank`); `TreeNode`, `children_of`, `ancestors_to_reveal`, `node_rel_path`, `rel_path_for` (from `tree`); the input types and `key_to_notation`; `WakeFn`; and the render-state types. Documents the one hard rule (no GUI toolkit in the dependency tree).
+
+## `config.rs`
+
+The user-level preferences reader — resolves the platform preferences directory and reads (or creates) the `wolf-config.yaml` file. Standalone (it does not touch `WolfCore`, the snapshot, or nvim) and GUI-toolkit-free; the macOS front-end reaches it over the `wolf-ffi` bridge. Has its own `#[cfg(test)] mod tests`, mirroring `rank.rs`/`tree.rs`.
+
+- `WolfConfig { font_family: String, font_size: f64, line_height: f64 }` — the resolved config. `line_height` is stored as the PERCENTAGE of the font size (`130` = 130%). The on-disk form is a private serde `ConfigFile { config: ConfigSection }`, where `ConfigSection` is `#[serde(rename_all = "kebab-case")]` so it maps to `font-family` / `font-size` / `line-height` under a top-level `config:` key.
+- `preferences_dir() -> Option<PathBuf>` — honors a `WOLF_CONFIG_DIR` env override FIRST (a determinism/test hook); otherwise macOS `dirs::preference_dir()?.join("Wolf")` (`~/Library/Preferences/Wolf`), Linux `dirs::config_dir()?.join("wolf")` (`~/.config/wolf`). Both platform paths resolve in code even though only macOS consumes prefs this increment.
+- `default_config() -> WolfConfig` — font-family `"JetBrains Mono"`, line-height `130`, and a platform-specific font-size via `cfg!(target_os = "macos")` (14 macOS / 10 Linux).
+- `load_or_create(dir: &Path) -> WolfConfig` — **infallible** (defaults-on-error). Reads `<dir>/wolf-config.yaml`: absent → create the parent + write the serialized defaults, return defaults; present + parses → the parsed config; present + malformed / wrong-shape → `tracing::warn!` + defaults, **never clobbering** the user's file (it only writes when the file is absent). This graceful-degradation posture keeps a broken hand-edit from being silently overwritten.
+
+The schema:
+
+```yaml
+config:
+  font-family: "JetBrains Mono"
+  font-size: 14
+  line-height: 130
+```
 
 ## `render.rs`
 

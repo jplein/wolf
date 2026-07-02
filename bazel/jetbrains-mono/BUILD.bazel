@@ -1,0 +1,23 @@
+# Structure-preserving JetBrains Mono font TreeArtifact + a smoke test.
+#
+# `jetbrains_mono_tree` resolves to the assembled `fonts/` TreeArtifact (the four
+# static desktop TTF faces + OFL.txt); the macOS app bundles it at
+# `Contents/Resources/fonts/`, where `FontRegistration.swift` registers the TTFs
+# with CoreText so "JetBrains Mono" resolves. JetBrains Mono is DATA
+# (arch-independent), so there is NO `select()` here (unlike //bazel/nvim). See
+# extensions.bzl and the directory README for the pin and how to bump it.
+
+# The assembled JetBrains Mono tree (a `fonts/` TreeArtifact:
+# JetBrainsMono-{Regular,Italic,Bold,BoldItalic}.ttf + OFL.txt).
+alias(
+    name = "jetbrains_mono_tree",
+    actual = "@jetbrains_mono//:jetbrains_mono_tree",
+    visibility = ["//visibility:public"],
+)
+
+# Asserts the four TTF faces + OFL.txt landed at the expected paths inside the tree.
+sh_test(
+    name = "jetbrains_mono_tree_test",
+    srcs = ["jetbrains_mono_tree_test.sh"],
+    data = [":jetbrains_mono_tree"],
+)

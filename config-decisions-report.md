@@ -71,3 +71,13 @@ A guiding principle is that anything a user edits by hand lives in one file, in 
 - The list of reserved Wolf core bindings and autogroups that are re-asserted after the user layer must be enumerated.
 
 These are implementation steps deferred to later changes; this report only fixes the strategy above.
+
+## Realized (this increment, macOS)
+
+A first slice of the **user declarative layer** (decision 3) is now implemented on macOS, and it diverges from this report's wording in three ways that are intentional and recorded here:
+
+- **Filename and shape.** The declarative file is named **`wolf-config.yaml`** with a top-level **`config:`** key (kebab-case `font-family` / `font-size` / `line-height` beneath it), NOT the `config.yaml` this report referred to. The report explicitly left the concrete format deferred; `wolf-config.yaml` is the resolved name.
+- **Layer and location.** This is the **USER-level** preferences file, read from the platform **preferences directory** (`~/Library/Preferences/Wolf` on macOS, `~/.config/wolf` on Linux) — the "persistent Wolf user-config location" that the follow-up list flagged must be separated from the ephemeral Neovim state directory. It is **NOT** the project `.wolf/` layer (decision 2); the project declarative layer and its merge semantics (decisions 6–7) remain deferred.
+- **Read path.** It is parsed **directly in the Rust core** (the GUI-free `wolf-core` `config` module) and bridged to the GUI over **swift-bridge** (`wolf_ffi_load_config` / `FfiConfig`); it is **NOT** marshaled from Neovim to the app over RPC (decision 5). The Neovim→GUI RPC bridge — and the "both Neovim-level and GUI-level settings in one user file" story (decision 4) — remain deferred. This first slice carries only the GUI-level font levers.
+
+Only the GUI-affecting font levers (family / size / line-height) are realized; the font is also bundled and CoreText-registered so "JetBrains Mono" resolves as the default. The reader is infallible (defaults-on-error) and never overwrites a present-but-malformed user file. Restart-only (decision 11) holds — the config is read once at launch.

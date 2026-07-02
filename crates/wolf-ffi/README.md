@@ -43,6 +43,10 @@ All types are re-exported at the crate root (`wolf_ffi::…`).
 
 - `wolf_ffi_ancestors_to_reveal(rel_path: String) -> Vec<String>` — a free FFI fn (no live session needed) delegating to `wolf_core::tree::ancestors_to_reveal`: the ancestor directory rel-paths from the cwd root down to the node's parent (`"src/main.rs"` → `["src"]`, `"README.md"` → `[]`). swift-bridge emits clean `RustVec<RustString>` Swift glue for the `Vec<String>` return.
 
+- `FfiConfig` — opaque; the resolved user-level preferences (`wolf-config.yaml`). Accessors `font_family() -> String`, `font_size() -> f64`, and `line_height() -> f64` (the line-height PERCENTAGE, `130` = 130%). Opaque because it wraps the Rust `wolf_core::WolfConfig` and hands its `String` field out through accessors (swift-bridge does not marshal a `String` field inside a transparent struct — the same reason `FfiFileEntry` is opaque).
+
+- `wolf_ffi_load_config() -> FfiConfig` — a free FFI fn (no live session, does NOT hang off `WolfCoreHandle` — like `wolf_ffi_ancestors_to_reveal`). It delegates to `wolf_core::preferences_dir().map(load_or_create).unwrap_or_else(default_config)`: resolve the platform preferences dir, load-or-create `wolf-config.yaml` there, and fall back to the built-in defaults when the dir cannot be resolved. Infallible across the bridge. The macOS `AppDelegate` calls it once at launch (after registering the bundled fonts, before measuring the cell metrics) and passes the result into `CellMetrics.measured(config:)`.
+
 - `FfiFrame` — an opaque, owned, paint-ready snapshot of a single grid (the **active** grid via `read_frame`, or any grid via `read_frame_for_grid`), with every cell already resolved against the highlight table **in Rust** (reusing `HighlightTable::resolve` / `ResolvedStyle` — never re-resolved in Swift). Accessors: `cols`, `rows`, `cursor_row`, `cursor_col`, `cursor_shape` (0 = Block, 1 = Horizontal, 2 = Vertical), `cursor_cell_percentage`, `cursor_visible` (whether the cursor lives on THIS frame's grid — **per-grid**, so only the pane owning the cursor's grid draws it), `grid_id` (the grid this frame was packed from), `cursor_grid` (the grid the cursor currently lives on, so a pane can tell whether the cursor belongs to it even when it is not its own grid), `default_fg`, `default_bg`, `cursor_fill`, `cursor_glyph` (reverse-video cursor colors, ported from wolf-gnome's `cursor.rs` and computed against the REQUESTED grid's cell under the cursor), `cells() -> Vec<FfiCell>` (one flat, row-major handoff per frame), and the four **viewport** accessors that drive the synthetic scrollbar — `topline` (the 0-based first-visible buffer line index, as nvim's `win_viewport` reports), `botline` (one-past-the-last-visible line), `curline` (the 0-based cursor buffer line), and `linecount` (the buffer's total line count). The viewport values are read in `from_snapshot_grid` from `snapshot.windows[grid].viewport` (defaulting to all-zero when the grid has no associated window, e.g. grid 1 or a closed pane).
 
 - `FfiLayoutIntent` — opaque; one drained layout intent (a flattened `wolf_core::LayoutIntent`). Accessors `kind() -> u8` (`intent_kind::SPLIT` / `FOCUS_DIR`), `orientation() -> u8` (for a SPLIT: `orientation::HORIZONTAL` / `VERTICAL`; 0 otherwise), `dir() -> u8` (for a FOCUS_DIR: `focus_dir::LEFT` / `RIGHT` / `UP` / `DOWN`; 0 otherwise), `from() -> i64` (the origin window handle), and `win() -> i64` (for a SPLIT: the new window handle; 0 otherwise). Opaque because swift-bridge only emits `Vec<T>` support for opaque `T` — the same reason `FfiTreeNode` is opaque.
@@ -152,6 +156,7 @@ CARGO_BAZEL_REPIN=1 bazel build //crates/wolf-ffi:wolf_ffi   # then commit lockf
 - `:tree_search` — the Rust integration test for the file-tree surface (`start_tree_search` / `children_of` / `rel_path_for` / `FfiTreeNode` accessors / `current_file` / the free `wolf_ffi_ancestors_to_reveal`), real pinned nvim, modeled on `file_search`.
 - `:panes` — the Rust integration test for the split-pane surface (`drain_intents` / `FfiLayoutIntent` / `windows` / `FfiWinInfo` / `grid_for_win` / `active_win` / `focus_win` / `resize_grid` / `read_frame_for_grid`), real pinned nvim, modeled on `tree_search`.
 - `:mouse_scroll` — the Rust integration test for the mouse/scroll + viewport surface (`send_mouse` / `send_scroll` / the `FfiMouseEvent` / `FfiScrollEvent` discriminants / the `FfiFrame` viewport accessors), real pinned nvim, modeled on `panes`.
+- `:config` — the Rust integration test for the config surface (`wolf_ffi_load_config` / `FfiConfig` accessors). **Self-contained**: it points `WOLF_CONFIG_DIR` at a tempdir and needs no nvim staging (no `data` runfiles, no `no-sandbox`/`local` tag), so it runs deterministically regardless of `WOLF_NVIM_BIN`.
 
 ## Testing
 
@@ -183,4 +188,10 @@ bazel test //crates/wolf-ffi:panes
 
 ```sh
 bazel test //crates/wolf-ffi:mouse_scroll
+```
+
+`tests/config.rs` covers the config surface **without** any Neovim (deterministic, self-contained): it points `WOLF_CONFIG_DIR` at a tempdir, writes a known `wolf-config.yaml`, and asserts `wolf_ffi_load_config()` round-trips its `font_family()` / `font_size()` / `line_height()`; a second case asserts an absent file yields the built-in defaults. Because it stages no nvim, the `config` `rust_test` carries no `data` / `env` runfiles and no `no-sandbox`/`local` tag.
+
+```sh
+bazel test //crates/wolf-ffi:config
 ```

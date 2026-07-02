@@ -367,6 +367,25 @@ mod ffi {
     }
 
     extern "Rust" {
+        type FfiConfig;
+
+        // The resolved font family name (e.g. "JetBrains Mono").
+        fn font_family(&self) -> String;
+        // The resolved font size, in points.
+        fn font_size(&self) -> f64;
+        // The resolved line-height, as a percentage of the font size (130 == 130%).
+        fn line_height(&self) -> f64;
+    }
+
+    extern "Rust" {
+        // Loads the resolved user config (reading — or creating with defaults —
+        // `wolf-config.yaml` in the platform prefs dir). A free fn (no live core
+        // needed) delegating to `wolf_core::config`; infallible (defaults on any
+        // error). Standalone, like `wolf_ffi_ancestors_to_reveal`.
+        fn wolf_ffi_load_config() -> FfiConfig;
+    }
+
+    extern "Rust" {
         type FfiFrame;
 
         fn cols(&self) -> u16;
@@ -581,6 +600,61 @@ fn registered_tree_wake() -> WakeFn {
 #[must_use]
 pub fn wolf_ffi_ancestors_to_reveal(rel_path: String) -> Vec<String> {
     wolf_core::tree::ancestors_to_reveal(&rel_path)
+}
+
+// ---------------------------------------------------------------------------
+// FfiConfig: the resolved user configuration (opaque to Swift).
+// ---------------------------------------------------------------------------
+
+/// The resolved user configuration (opaque to Swift; String-in-struct is not
+/// supported for transparent bridge structs, so — like [`FfiFileEntry`] — this is
+/// opaque with scalar/String accessors).
+///
+/// Built by [`wolf_ffi_load_config`] from [`wolf_core::WolfConfig`].
+pub struct FfiConfig {
+    font_family: String,
+    font_size: f64,
+    line_height: f64,
+}
+
+impl FfiConfig {
+    /// The resolved font family name (e.g. `"JetBrains Mono"`).
+    #[must_use]
+    pub fn font_family(&self) -> String {
+        self.font_family.clone()
+    }
+
+    /// The resolved font size, in points.
+    #[must_use]
+    pub fn font_size(&self) -> f64 {
+        self.font_size
+    }
+
+    /// The resolved line-height, as a percentage of the font size (`130.0` == 130%).
+    #[must_use]
+    pub fn line_height(&self) -> f64 {
+        self.line_height
+    }
+}
+
+/// Loads the resolved user configuration, reading — or creating with defaults —
+/// `wolf-config.yaml` in the platform preferences directory.
+///
+/// A free FFI fn (no live core required) delegating to [`wolf_core::config`]:
+/// resolves [`preferences_dir`](wolf_core::preferences_dir) then
+/// [`load_or_create`](wolf_core::load_or_create), falling back to
+/// [`default_config`](wolf_core::default_config) when no preferences directory can
+/// be resolved. Infallible across the bridge.
+#[must_use]
+pub fn wolf_ffi_load_config() -> FfiConfig {
+    let config = wolf_core::preferences_dir()
+        .map(|dir| wolf_core::load_or_create(&dir))
+        .unwrap_or_else(wolf_core::default_config);
+    FfiConfig {
+        font_family: config.font_family,
+        font_size: config.font_size,
+        line_height: config.line_height,
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -388,3 +388,18 @@ rust_test(
         "//crates/wolf-core:wolf_core",
     ],
 )
+
+# Deterministic, headless coverage for the config bridge surface
+# (`wolf_ffi_load_config` + the `FfiConfig` accessors). Spawns NO nvim and needs
+# no network: it drives the bridge purely through `WOLF_CONFIG_DIR` (the
+# determinism hook `preferences_dir()` honors first) pointed at a
+# `tempfile::tempdir()`. Self-contained like `frame_pack` — no `tests/common/`
+# nvim staging and NO `no-sandbox` tag. `tempfile` comes from `[dev-dependencies]`
+# via `all_crate_deps(normal_dev = True)`.
+rust_test(
+    name = "config",
+    srcs = ["tests/config.rs"],
+    crate_root = "tests/config.rs",
+    edition = "2021",
+    deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
+)

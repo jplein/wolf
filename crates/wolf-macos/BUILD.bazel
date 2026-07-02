@@ -21,6 +21,7 @@ load("@rules_xcodeproj//xcodeproj:defs.bzl", "xcodeproj", "top_level_target")
 swift_library(
     name = "wolf_key_map",
     srcs = [
+        "Sources/WolfKeyMap/CellMetricsMath.swift",
         "Sources/WolfKeyMap/KeyMap.swift",
         "Sources/WolfKeyMap/PaneGeometry.swift",
         "Sources/WolfKeyMap/PaneTree.swift",
@@ -63,9 +64,14 @@ macos_application(
     # host-compiled treesitter parsers (structure-preserving `parsers/`
     # TreeArtifact) land at `Contents/Resources/parsers/parser/<lang>.so` — these
     # three are VENDORED/SHIPPED and treesitter highlighting + fenced-code injection
-    # are ENABLED on macOS by the captive init.lua; the captive `init.lua` lands flat at
-    # `Contents/Resources/init.lua` (resolved by `Bundle.main.path`).
+    # are ENABLED on macOS by the captive init.lua; the vendored JetBrains Mono
+    # fonts (structure-preserving `fonts/` TreeArtifact: four TTF faces + OFL.txt)
+    # land at `Contents/Resources/fonts/`, where `FontRegistration.swift` registers
+    # them with CoreText so "JetBrains Mono" resolves as the default grid font; the
+    # captive `init.lua` lands flat at `Contents/Resources/init.lua` (resolved by
+    # `Bundle.main.path`).
     resources = [
+        "//bazel/jetbrains-mono:jetbrains_mono_tree",
         "//bazel/lighthouse:lighthouse_tree",
         "//bazel/nvim:nvim_tree",
         "//bazel/nvim-treesitter:nvim_treesitter_tree",
@@ -98,6 +104,7 @@ sh_test(
 swift_test(
     name = "WolfKeyMapTests",
     srcs = [
+        "Tests/WolfKeyMapTests/CellMetricsMathTests.swift",
         "Tests/WolfKeyMapTests/KeyMapTests.swift",
         "Tests/WolfKeyMapTests/PaneGeometryTests.swift",
         "Tests/WolfKeyMapTests/PaneTreeTests.swift",

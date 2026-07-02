@@ -117,6 +117,16 @@ use_repo(orlando, "orlando")
 lighthouse = use_extension("//bazel/lighthouse:extensions.bzl", "lighthouse")
 use_repo(lighthouse, "lighthouse")
 
+# --- Vendored JetBrains Mono font (macOS bundle only) -----------------------
+# Downloaded + sha256-verified by the //bazel/jetbrains-mono module extension;
+# assembled into the `fonts/` TreeArtifact bundled into Wolf.app at
+# Contents/Resources/fonts/ (four static desktop TTF faces + OFL.txt).
+# FontRegistration.swift registers the TTFs with CoreText so "JetBrains Mono"
+# resolves as the default grid font. DATA (arch-independent), so there is a SINGLE
+# repo `jetbrains_mono` (no per-arch select). See bazel/jetbrains-mono/README.md.
+jetbrains_mono = use_extension("//bazel/jetbrains-mono:extensions.bzl", "jetbrains_mono")
+use_repo(jetbrains_mono, "jetbrains_mono")
+
 # --- Vendored nvim-treesitter plugin (macOS bundle only) --------------------
 # Downloaded + sha256-verified by the //bazel/nvim-treesitter module extension;
 # assembled into the `nvim-treesitter/` TreeArtifact bundled into Wolf.app at

@@ -23,6 +23,8 @@ objc objc2 cocoa core-graphics winit wgpu skia-safe softbuffer
 
 The file picker adds two dependencies — `rusqlite` (with the `bundled` feature, which vendors SQLite via `cc`) for the MRU cache and `ignore` (ripgrep's pure-Rust walker) for the traversal. Both are deliberately GUI-free: they pull **no** GUI toolkit into core's tree, so the denylist above is unchanged (the command and the denied-crate list stay exactly as written) and stays clean. The flake also needs no change (no system SQLite/libgit2 to provision).
 
+The `config` module adds three more dependencies — `serde` (with `derive`) and `serde_yaml` (0.9) for the `wolf-config.yaml` (de)serialization and `dirs` (5) for resolving the platform preferences directory. All three are deliberately GUI-free: they pull **no** GUI toolkit into core's tree, so the denylist above is unchanged (the command and the denied-crate list stay exactly as written) and stays clean.
+
 ## Building under Bazel (macOS)
 
 On macOS `wolf-core` builds with Bazel (via bazelisk) rather than Cargo; the target label is `//crates/wolf-core:wolf_core`. Its dependencies come from the same `Cargo.toml`/`Cargo.lock` as the Cargo build, consumed through `rules_rust`'s `crate_universe` (with `rules_rust` downloading a pinned `rustc`). The one hard rule above still holds under Bazel: `wolf-gnome` is given no Bazel target, so no GUI toolkit enters `wolf-core`'s Bazel dependency graph. The Bazel-equivalent denylist check is a `bazel query` over the resolved deps:
@@ -82,6 +84,24 @@ Re-exported from the crate root (`wolf_core::…`):
 `Snapshot` — the **multigrid** render model: `grids: HashMap<u64, Grid>` (the outer grid 1 holds the command line / messages; window content lives on grids `>= 2`), `windows: HashMap<u64, WinInfo>` (per-window layout/viewport keyed by grid id), `highlights`, `cursor` (with the grid it lives on), `mode_infos`, `active_win: Option<i64>` (the active window, via `wolf_active_win`), `current_file`, and `seq`. Accessors: `active_grid()`/`active_grid_id()`, `grid(id)`/`grid_mut(id)`, `active_viewport()`, `grid_for_win(win)`. Plus `Grid`, `Cell`, `HighlightTable`, `HlAttr`, `ResolvedStyle`, `DefaultColors`, `Rgb`, `Cursor`, `CursorShape`, `ModeInfo`, `Viewport`, `WinInfo`, and the lock-guarded `SharedSnapshot`. See [`src/README.md`](src/README.md) for per-type detail.
 
 `Snapshot.current_file: Option<PathBuf>` is the absolute, canonicalized path of the buffer currently being edited in nvim (`None` for an unnamed buffer). It is updated out-of-band from the redraw stream by the `wolf_current_file` notification (a `BufEnter`/`BufWinEnter`/`BufFilePost` autocmd installed after attach — see "How core embeds Neovim") and the wake fires after each change (it does NOT bump `seq`). The front-end reads it to highlight and reveal the current file in its file tree (the GNOME sidebar uses exactly this).
+
+### User preferences — `config` (from [`config`](src/config.rs))
+
+A GUI-toolkit-free reader for the user-level `wolf-config.yaml` preferences file (font family / size / line-height). It is standalone — it does not hang off `WolfCore` — and is exposed to the macOS front-end over the `wolf-ffi` bridge (`wolf_ffi_load_config` / `FfiConfig`).
+
+- `WolfConfig { font_family: String, font_size: f64, line_height: f64 }` — the resolved configuration. `line_height` is the PERCENTAGE of the font size (`130` = 130%).
+- `preferences_dir() -> Option<PathBuf>` — the platform preferences directory. It honors a `WOLF_CONFIG_DIR` environment override FIRST (a test/determinism hook); otherwise it is `dirs::preference_dir()/"Wolf"` (`~/Library/Preferences/Wolf`) on macOS and `dirs::config_dir()/"wolf"` (`~/.config/wolf`) on Linux. Both platform paths are resolved in code even though only macOS consumes prefs this increment.
+- `default_config() -> WolfConfig` — font-family `"JetBrains Mono"`, line-height `130`, and a platform-specific font-size (14 on macOS, 10 on Linux, via `cfg!`).
+- `load_or_create(dir: &Path) -> WolfConfig` — **infallible** (defaults-on-error). Reads `<dir>/wolf-config.yaml`: when the file is ABSENT it creates the parent and writes the serialized defaults, returning them; when it PARSES it returns the parsed config; when it is present but malformed / the wrong shape it logs a `tracing::warn!` and returns the defaults WITHOUT overwriting the user's file (it only ever writes when the file is absent).
+
+The on-disk schema has a top-level `config:` key with kebab-case fields:
+
+```yaml
+config:
+  font-family: "JetBrains Mono"
+  font-size: 14
+  line-height: 130
+```
 
 ## How core embeds Neovim
 

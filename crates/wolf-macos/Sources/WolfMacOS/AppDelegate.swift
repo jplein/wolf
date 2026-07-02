@@ -33,7 +33,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         self.handle = handle
 
-        let metrics = CellMetrics.measured()
+        // Register the bundled JetBrains Mono TTFs with CoreText, then resolve the
+        // user config, BEFORE measuring — so `CellMetrics` can resolve the
+        // configured family/size/line-height (font registration is log-not-fail).
+        FontRegistration.registerBundledFonts()
+        let config = wolf_ffi_load_config()
+
+        let metrics = CellMetrics.measured(config: config)
         let paneContainer = PaneContainerView(handle: handle, metrics: metrics)
         WakeBridge.registeredPaneView = paneContainer
 

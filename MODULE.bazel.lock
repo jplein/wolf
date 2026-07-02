@@ -221,6 +221,34 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
+    "//bazel/jetbrains-mono:extensions.bzl%jetbrains_mono": {
+      "general": {
+        "bzlTransitiveDigest": "uGUap0wnlrvEqkOZGLtRb5Sf0xVjyY6zuzFuMwa+J/M=",
+        "usagesDigest": "M01uyPMdSjxrBF7q+W4a1HgPJwc3aei+oQ5bjgbTIqE=",
+        "recordedFileInputs": {},
+        "recordedDirentsInputs": {},
+        "envVariables": {},
+        "generatedRepoSpecs": {
+          "jetbrains_mono": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
+            "attributes": {
+              "urls": [
+                "https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip"
+              ],
+              "sha256": "6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf",
+              "build_file_content": "load(\"@aspect_bazel_lib//lib:copy_to_directory.bzl\", \"copy_to_directory\")\n\npackage(default_visibility = [\"//visibility:public\"])\n\n# The vendored files Wolf ships: the four static desktop TTF faces\n# (Regular/Italic/Bold/BoldItalic, from `fonts/ttf/`) plus `OFL.txt` (the SIL Open\n# Font License, kept for compliance). Deliberately EXCLUDE the webfonts, the\n# variable fonts, the \"NL\" (no-ligature) faces, the other weights, and\n# AUTHORS.txt / README-style files â no runtime role in Wolf.\nfilegroup(\n    name = \"runtime_files\",\n    srcs = [\n        \"fonts/ttf/JetBrainsMono-Regular.ttf\",\n        \"fonts/ttf/JetBrainsMono-Italic.ttf\",\n        \"fonts/ttf/JetBrainsMono-Bold.ttf\",\n        \"fonts/ttf/JetBrainsMono-BoldItalic.ttf\",\n        \"OFL.txt\",\n    ],\n)\n\n# Assemble under a single inner `fonts/` dir, remapping the archive layout via\n# replace_prefixes (NOT http_archive strip_prefix). Output TreeArtifact contains\n# fonts/JetBrainsMono-{Regular,Italic,Bold,BoldItalic}.ttf and fonts/OFL.txt. The\n# inner `fonts/` is deliberate: rules_apple strips the bundled TreeArtifact's OWN\n# top-level dir name when copying into Contents/Resources/, so nesting under\n# `fonts/` lands it at Contents/Resources/fonts/ robustly.\ncopy_to_directory(\n    name = \"jetbrains_mono_tree\",\n    srcs = [\":runtime_files\"],\n    out = \"jetbrains_mono_tree\",\n    replace_prefixes = {\n        \"fonts/ttf\": \"fonts\",\n        \"OFL.txt\": \"fonts/OFL.txt\",\n    },\n)\n"
+            }
+          }
+        },
+        "recordedRepoMappingEntries": [
+          [
+            "",
+            "bazel_tools",
+            "bazel_tools"
+          ]
+        ]
+      }
+    },
     "//bazel/lighthouse:extensions.bzl%lighthouse": {
       "general": {
         "bzlTransitiveDigest": "YAevrbjl3Y844OElq4diiPUJTL0Qtp6Covn/pXbZpLk=",

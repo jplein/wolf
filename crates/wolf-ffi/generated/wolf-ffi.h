@@ -57,6 +57,18 @@ void* __swift_bridge__$Vec_FfiTreeNode$get_mut(void* vec_ptr, uintptr_t index);
 uintptr_t __swift_bridge__$Vec_FfiTreeNode$len(void* vec_ptr);
 void* __swift_bridge__$Vec_FfiTreeNode$as_ptr(void* vec_ptr);
 
+typedef struct FfiConfig FfiConfig;
+void __swift_bridge__$FfiConfig$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiConfig$new(void);
+void __swift_bridge__$Vec_FfiConfig$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiConfig$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiConfig$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiConfig$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiConfig$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiConfig$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiConfig$as_ptr(void* vec_ptr);
+
 typedef struct FfiFrame FfiFrame;
 void __swift_bridge__$FfiFrame$_free(void* self);
 
@@ -134,6 +146,10 @@ void* __swift_bridge__$FfiTreeNode$rel_path(void* self);
 void* __swift_bridge__$FfiTreeNode$abs_path(void* self);
 bool __swift_bridge__$FfiTreeNode$is_dir(void* self);
 void* __swift_bridge__$wolf_ffi_ancestors_to_reveal(void* rel_path);
+void* __swift_bridge__$FfiConfig$font_family(void* self);
+double __swift_bridge__$FfiConfig$font_size(void* self);
+double __swift_bridge__$FfiConfig$line_height(void* self);
+void* __swift_bridge__$wolf_ffi_load_config(void);
 uint16_t __swift_bridge__$FfiFrame$cols(void* self);
 uint16_t __swift_bridge__$FfiFrame$rows(void* self);
 uint16_t __swift_bridge__$FfiFrame$cursor_row(void* self);

@@ -25,8 +25,10 @@
 //! - [`tree`]: the pure, toolkit-free hierarchical projection of the flat file
 //!   list into the sidebar's per-directory children (shared by all front-ends).
 //! - [`api`]: the FFI-shaped front-end surface ([`WolfCore`]).
+//! - [`config`]: the GUI-free user-preferences reader ([`WolfConfig`]).
 
 pub mod api;
+pub mod config;
 pub mod files;
 pub mod input;
 pub mod layout;
@@ -38,6 +40,7 @@ pub mod render;
 pub mod tree;
 
 pub use api::{CoreConfig, CoreError, SnapshotReadGuard, WolfCore};
+pub use config::{default_config, load_or_create, preferences_dir, WolfConfig};
 pub use files::{FileEntry, FileSearch, FileSearchReadGuard};
 pub use input::{
     key_to_notation, InputEvent, Key, KeyEvent, MouseAction, MouseButton, MouseEvent,

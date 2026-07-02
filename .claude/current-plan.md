@@ -1,135 +1,186 @@
-# Plan: Enable treesitter highlighting + injections in captive Neovim (macOS)
-
-## Status: COMPLETE
-
-### Technical-writer (done)
-Fixed all 6 reviewer items + stragglers (MODULE.bazel parsers block, wolf-macos BUILD.bazel/bundle_layout_test headers, treesitter-parsers swift note, init.lua syntax-on comment, treesitter_parser_abi.rs doc comment, decision-report problem statement). Reconciled lockfile-source truthfully (parsers = master-era lockfile, not re-synced to main; re-sync noted as future nicety; pairing proven working). All comment/prose only — no logic/assertion/glob changes. Orchestrator ran prettier on all 6 touched markdown files — all clean. Full test suite (run by coder pre-doc-fixes) remains valid since only comments changed.
-
-### Reviewer: behavior/gate/pins/tests all PASS. Doc/impl mismatches (CLAUDE.md = bug) to fix:
-1. HIGH — `runtime/nvim/init.lua` lines 14 + 117-118: "master queries"/"master-branch" → main.
-2. HIGH — `MODULE.bazel` lines 123-126: "frozen master branch" + "highlighting is NOT enabled" → main + enabled-on-macOS.
-3. MED — `bazel/nvim-treesitter/BUILD.bazel` 5-6 ("does NOT enable highlighting" — contradicts its README) → enabled; `crates/wolf-ffi/tests/common/mod.rs` 179 ("master queries") → main.
-4. SUBSTANTIVE (reconcile truthfully) — parser grammar revs were pinned in the ORIGINAL vendoring when nvim-treesitter was MASTER and were NOT re-derived after the main switch. So `bazel/treesitter-parsers/{README.md,extensions.bzl}` saying "master lockfile.json" is TRUE; `build.md` (~133) + `treesitter-decision-report.md` (~48) saying "main lockfile" is the OVERCLAIM (finalize coder over-corrected). FIX build.md/decision-report to state the truth: grammar revisions come from nvim-treesitter's lockfile.json (master-era; parsers not re-synced to main). Add a one-line note that re-deriving parser revs from main's lockfile is a future nicety — the current set is proven working (treesitter_highlight injection + treesitter_parser_abi pass), and tree-sitter grammar ABIs are stable, so the queries(main)⇄parsers(master-era) pairing is fine.
-5. LOW — remaining "does NOT enable highlighting / init.lua not modified / deferred" in treesitter-parsers component (`README.md` 7, `BUILD.bazel` 8, `extensions.bzl` 21 & 196, `parsers_tree_test.sh` 24) and `bazel/nvim-treesitter/nvim_treesitter_tree_test.sh` 18-19 → update to reflect enablement. (textobjects "inert/does NOT enable textobjects" statements stay — still accurate.)
-NOTE: items in `.rs`/`*_test.sh` are COMMENT/header-doc edits only (no assertion/logic changes) — safe for technical-writer.
-
-### Finalize outcome (done)
-Both plugins on main; injection WORKS. `//crates/wolf-ffi:treesitter_highlight` PASSED (line1 highlighter active + line2 go injection both OK). All tree tests, treesitter_parser_abi, orlando/lighthouse_load, bridge_smoke, bundle_layout_test (checks h/i/j; (i) updated to main layout `nvim-treesitter-textobjects/lua/nvim-treesitter-textobjects`), Wolf build — all PASS. No regression (gate no-op confirmed: frame_pack/mouse_scroll/panes/file_search/tree_search unchanged). Lockfile stable. Docs finalized (READMEs, build.md, decision-report, init.lua header) reflecting main + injection ENABLED. Stale textobjects BUILD.bazel comment + nvim-treesitter extensions.bzl master/main self-contradiction fixed. Test hardened (pcall-wrapped parse).
-
-### DECISION REVERSAL: nvim-treesitter master → main (verified by spike)
-master's markdown injections.scm uses `#set-lang-from-info-string!`, whose frozen-master handler targets a pre-0.10 query-match API nvim 0.12.3 removed → `E5108` on every fenced-block redraw (injection broken). SPIKE confirmed **main** fixes it: main's `queries/markdown/injections.scm` is pure core-native capture-based injection (no custom predicate); works from queries-on-rtp ALONE (no :TSInstall, no plugin Lua sourced, NO init.lua change). Both `//crates/wolf-ffi:treesitter_highlight` (line1+line2 OK) and a headless repro pass. User asked for main; adopting it.
-
-Spike pin (IN PLACE, keep): nvim-treesitter main `4916d6592ede8c07973490d9322f187e07dfefac`, sha256 `4e720e38f1a74c07fc8bc9d6264e25ab620df93c6576200f43f2ca0ce5fbdec1`. Overlay remaps `runtime/queries` → `nvim-treesitter/queries` (main moved queries under runtime/); lua/ + plugin/ still present; tree test passes unchanged. MODULE.bazel.lock regenerated.
-
-### init.lua block (coder, DONE — keep): gate + rtp prepends + pcall-wrapped vim.treesitter.start + FileType=markdown autocmd + emit-once. Header comment reworded. NO other behavior changed. Highlighting active; with main, injection now renders.
-
-### REMAINING FINALIZE WORK
-1. Re-pin nvim-treesitter-textobjects master → main (consistency with nvim-treesitter main; textobjects stays INERT — inert branch doesn't affect current behavior but keep both plugins same-branch per the earlier correction's principle). Investigate main textobjects query/lua layout (likely moved to runtime/queries/ too); adjust overlay globs; regen lock. Report layout → route tree-test assertion changes to test-writer.
-2. test-writer: wrap the sentinel `p:parse(true)` in pcall in treesitter_highlight.rs so a FUTURE injection regression surfaces loudly (empty sentinel) instead of masking. + update textobjects tree test if main layout moved.
-3. Finalize docs (README enablement bullet + Deferred; build.md active-in-.app + new test target; decision-report follow-up DONE on macOS) reflecting main + injection ENABLED.
-4. Full verification suite (no regressions — gate property).
-
-### Test-writer output (done)
-Created `crates/wolf-ffi/tests/treesitter_highlight.rs` (fn `markdown_treesitter_highlight_and_go_injection_active`). Modified `crates/wolf-ffi/tests/common/mod.rs` (added `nvim_treesitter_dir_or_none()` → `resolve_runfile("WOLF_TEST_NVIM_TREESITTER_DIR")`). Sentinel Lua uses `highlighter.active[b]~=nil` (line1) + `p:parse(true)` then `p:children()["go"]` with pairs()+`child:lang()=='go'` fallback (line2). Coder must: wire BUILD env/data to match (WOLF_TEST_NVIM_TREESITTER_DIR→//bazel/nvim-treesitter:nvim_treesitter_tree, WOLF_TEST_PARSERS_DIR→//bazel/treesitter-parsers:parsers_tree); ensure init.lua block registers a FileType=markdown autocmd (not just emit-once) so `:e doc.md` lights up; confirm `p:parse(true)` + `:children()` keying for nvim 0.12.3; watch line1=NO = query-loader incompat (flag, don't paper over).
+# Current Plan: Bundle JetBrains Mono + wolf-config.yaml preferences (macOS)
 
 ## Problem statement
 
-Enable treesitter highlighting + fenced-code-block injection in `runtime/nvim/init.lua`,
-using the already-vendored parsers + nvim-treesitter (master) queries. **Scope:
-highlighting + injections ONLY.** Do NOT wire nvim-treesitter-textobjects keymaps
-(stays bundled-but-inert). Follow-up to the completed vendoring change.
+Bundle the JetBrains Mono font (regular, italic, bold, bold italic + OFL license) into
+Wolf, and add plumbing for reading a user preferences file, fully wired on macOS.
 
-## CRITICAL SAFETY PROPERTY (must preserve)
+### Confirmed scope
+- **Front-ends:** macOS only this increment. The shared reader in `wolf-core` must still
+  resolve BOTH platform paths (macOS + Linux) in code, but only macOS bundles the font and
+  consumes prefs now. GNOME/GTK wiring is deferred — do NOT build/test the GTK front-end
+  (NixOS/Cargo-only, unverifiable on this macOS host).
+- **Depth:** FULL wiring — apply font-family, font-size, and line-height end-to-end into the
+  macOS grid rendering (CellMetrics.swift + consumers). Keep `WOLF_FONT_PT` as an override if
+  practical (tests use it), but the config is the new source of the defaults.
+- **Font delivery:** hermetic download + sha256 pin, matching the existing
+  `bazel/orlando` + `bazel/nvim` + `bazel/lighthouse` pattern.
 
-Treesitter enablement MUST be gated on the vendored sibling dirs existing next to
-init.lua (exactly like the orlando/lighthouse blocks at init.lua lines 64-107:
-self-locate `this_dir` via `debug.getinfo`, guard with `uv.fs_stat`). On Linux/cargo
-and in any existing test that does NOT stage the vendored dirs, the block is a STRICT
-NO-OP — treesitter stays off, `syntax on` remains the highlight source, and NO existing
-render/redraw/grid test changes behavior. Only the macOS `.app` bundle (siblings present)
-and NEW tests that stage the dirs see treesitter. Reuse the existing `this_dir`/`uv` locals.
+### Requirements
+1. Bundle JetBrains Mono: 4 TTFs (regular, italic, bold, bold italic) + OFL license.
+2. Preferences reading plumbing:
+   - macOS path: `~/Library/Preferences/Wolf` (preference dir via `dirs`/`directories`).
+   - Linux path: `~/.config/wolf` (config dir via same API).
+   - File `wolf-config.yaml`:
+     ```
+     config:
+       font-family: "<font name>"
+       font-size: <number>
+       line-height: <percentage of font-size>
+     ```
+   - If absent, CREATE with defaults: font-family `"JetBrains Mono"`, font-size 14 (macOS) /
+     10 (Linux), line-height 130%.
 
-## What to implement (init.lua — new conditional block, orlando/lighthouse style)
+### Architecture constraints
+- YAML parse + path resolution + create-with-defaults live in `wolf-core` — must stay
+  GUI-toolkit-free (verify via the cargo tree / bazel query denylist in
+  `crates/wolf-core/README.md`).
+- Expose resolved config to Swift over the `wolf-ffi` swift-bridge surface.
+- Register the bundled TTFs so CoreText resolves "JetBrains Mono".
+- Divergence: `config-decisions-report.md` calls the file `config.yaml`; user's explicit spec
+  is `wolf-config.yaml` with a top-level `config:` key. Follow the user's spec, update docs,
+  flag the divergence.
+- Keep every touched source dir's README.md in sync; reformat edited Markdown with
+  `prettier --write`, no hard line breaks in paragraphs.
 
-- Self-locate sibling dirs: `parsers/` (Contents/Resources/parsers/, has parser/<lang>.so),
-  `nvim-treesitter/` (master queries: queries/<lang>/highlights.scm + queries/markdown/injections.scm),
-  `nvim-treesitter-textobjects/` (present but NOT activated).
-- GATE on the nvim-treesitter queries dir existing. When present: prepend the vendored
-  dirs that exist (parsers/, nvim-treesitter/, textobjects/) to runtimepath. markdown/
-  markdown_inline parsers ship with nvim (don't re-vendor); embedded parsers come from parsers/.
-- FileType=markdown autocmd → `vim.treesitter.start()` (+ emit-once for already-open markdown
-  buffers). Lights markdown highlighting AND routes fenced blocks via nvim-treesitter's
-  markdown injections.scm on rtp.
-- Document interaction with `syntax on` (line 62) + lighthouse (102-107): treesitter layers
-  via its own namespace; keep syntax on as non-treesitter fallback. Verify ordering vs
-  lighthouse; note if lighthouse lacks @capture links (acceptable, colors fall back to default links).
-- Change NO other init.lua behavior.
-- Reword init.lua header comment (lines 13-16) which currently says treesitter is DEFERRED
-  (would become a doc/impl mismatch = bug per CLAUDE.md).
+## Status
+- [x] Architect plan
+- [x] Tests written (config.rs test module, wolf-ffi tests/config.rs, jetbrains_mono_tree_test.sh, bundle_layout_test.sh k–o, CellMetricsMathTests.swift)
+- [x] Implementation done, all targets green (49 wolf-core tests incl. valid-YAML-wrong-shape
+  fallback; wolf-ffi config; jetbrains_mono_tree_test; bundle_layout_test k–o; WolfKeyMapTests;
+  bridge_smoke/frame_pack no-regression; GUI-free denylist clean). Font pin: JetBrains Mono v2.304,
+  sha256 `6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf`, FLAT archive
+  (`fonts/ttf/*.ttf` + root `OFL.txt`). Declined: non-ASCII FFI round-trip (marginal),
+  FontRegistration e2e (headless-untestable, eyeball-only).
+- [x] Review — APPROVED, no CRITICAL/MAJOR/MINOR defects. All 5 areas confirmed correct.
+- [x] Docs updated — new bazel/jetbrains-mono/README.md + 8 docs updated; config-decisions-report
+  gained a "Realized (this increment, macOS)" reconciliation. prettier --write clean (all unchanged).
 
-## Tests (no mocks; real pinned nvim)
-
-- New real-nvim test: stage nvim-treesitter tree + parsers tree (+opt textobjects) as siblings
-  of a temp init.lua (copy real init.lua in — orlando/lighthouse load-test staging pattern),
-  start editor, open markdown buffer with a fenced ```go``` block, assert treesitter is ACTIVE
-  (`vim.treesitter.highlighter.active[buf]` set) AND injection works (injected 'go' langtree
-  present at a pos inside the block — prefer langtree presence over specific hl group names).
-  Skip loudly off-macOS / trees unstaged.
-- BUILD target in crates/wolf-ffi/BUILD.bazel staging //bazel/nvim-treesitter:nvim_treesitter_tree
-  + //bazel/treesitter-parsers:parsers_tree + //runtime/nvim:init.lua (data + $(rootpath) env),
-  tags no-sandbox/local. Add common/mod.rs helper(s) as needed.
-- VERIFY existing tests unchanged (gating property). If any grid assertion shifts → the gate
-  leaked → FIX THE GATE, do not edit existing test expectations without flagging.
-
-## Docs (source of truth; prettier --write)
-
-- runtime/nvim/README.md: new enablement bullet; update Deferred (highlighting now ENABLED on
-  macOS; still deferred = Linux/Nix path + textobjects keymaps + Markdown LSP/formatter).
-- build.md: treesitter now active in .app; add new test target.
-- treesitter-decision-report.md: "Consequences and follow-up" enablement now DONE on macOS;
-  Linux/Nix still deferred.
-
-## Invariants
-
-- wolf-core GUI-free; hermetic (no runtime fetch/compile); init.lua strict no-op off-bundle;
-  no Nix/flake/Linux-vendoring changes.
+## STATUS: COMPLETE
 
 ---
 
 ## Architect's plan
 
-### Confirmed layout facts
-- Parsers rtp prepend = `this_dir .. "/parsers"` (tree lands `parsers/parser/<lang>.so`; nvim resolves `<rtp>/parser/<lang>.so`). Matches treesitter_parser_abi.rs staging.
-- Queries rtp prepend = `this_dir .. "/nvim-treesitter"` (inner `nvim-treesitter/queries/<lang>/{highlights,injections}.scm`).
-- Textobjects = `this_dir .. "/nvim-treesitter-textobjects"` — prepend if present but do NOT source/setup (inert; only ships textobjects.scm which start() never reads).
-- markdown/markdown_inline parsers ship with nvim (don't re-vendor).
-- **GATE**: `uv.fs_stat(this_dir.."/nvim-treesitter")` (queries provider). Inside, prepend parsers/ + textobjects/ each only if it independently fs_stats. Absent gate dir → zero rtp mutation, zero autocmd, no error.
-- **Startup**: lean core only — FileType=markdown autocmd → `vim.treesitter.start(buf)` + emit-once over already-loaded markdown bufs. Do NOT call nvim-treesitter's `.setup{}` (heavy :TSInstall machinery, non-deterministic under --clean; use vendored plugin purely as on-rtp query provider).
-- **syntax on**: leave as-is (non-treesitter fallback; existing tests depend on it; treesitter layers via own namespace). Place new block AFTER lighthouse (line 107). Wrap `vim.treesitter.start` in pcall so query-loader incompat degrades to syntax-on rather than raising.
+### 1. Summary
+New `//bazel/jetbrains-mono` module (clone of orlando/lighthouse) hermetically downloads +
+sha256-pins JetBrains Mono, bundling 4 TTFs (Regular/Italic/Bold/BoldItalic) + OFL.txt at
+`Contents/Resources/fonts/`. New GUI-free `wolf-core` `config` module resolves the platform
+prefs dir, reads/creates `wolf-config.yaml` (`config: { font-family, font-size, line-height }`),
+bridges to Swift over a new `wolf-ffi` surface, and fully wires font-family/size/line-height
+into macOS `CellMetrics`. Linux path resolution implemented in code; GTK not built/tested.
 
-### init.lua edits
-- **A. Header comment (lines 13-16)**: reword — treesitter highlighting+injections now conditionally enabled when vendored nvim-treesitter/ + parsers/ siblings present (macOS .app); strict no-op on Linux/cargo (syntax on remains); LSP/formatter still deferred; textobjects inert.
-- **B. New conditional block after line 107** (before `_G.wolf_setup_current_file_tracking`): REUSE existing `this_dir`/`uv`. Gate on nvim-treesitter dir; prepend nvim-treesitter/ (+ parsers/, textobjects/ if present); local pcall-wrapped `vim.treesitter.start(buf)` helper; `WolfTreesitter` augroup (clear=true) + FileType=markdown autocmd → helper(args.buf); emit-once loop over `nvim_list_bufs()` loaded markdown bufs. Block-leading comment in orlando/lighthouse style. Change NO other behavior.
+### 2. Files to CREATE
+- `bazel/jetbrains-mono/extensions.bzl` — module extension `jetbrains_mono`, single `http_archive`
+  (no `select()`, pure data). Constants `_VERSION="2.304"`,
+  `_URL=".../releases/download/v2.304/JetBrainsMono-2.304.zip"`, `_SHA256=<coder computes live>`.
+  `build_file_content`: filegroup globbing EXACTLY the 4 TTFs (under `fonts/ttf/`) + `OFL.txt`,
+  then `copy_to_directory` `jetbrains_mono_tree` with `replace_prefixes` remapping into inner
+  `fonts/` (rules_apple strips the tree's own top dir → lands at `Contents/Resources/fonts/`).
+  **Coder MUST `unzip -l` to confirm archive root (wrapped vs flat) + exact TTF filenames.**
+- `bazel/jetbrains-mono/BUILD.bazel` — `alias jetbrains_mono_tree`, `sh_test jetbrains_mono_tree_test`.
+- `bazel/jetbrains-mono/jetbrains_mono_tree_test.sh` — runfiles resolver (inner dir `fonts/`);
+  assert 4 TTFs non-empty + OFL.txt present.
+- `bazel/jetbrains-mono/README.md` — clone of orlando README (pin, targets, how-it-works, bump recipe).
+- `crates/wolf-core/src/config.rs`:
+  - `pub struct WolfConfig { pub font_family: String, pub font_size: f64, pub line_height: f64 }`
+  - private serde `ConfigFile { config: ConfigSection }`, `ConfigSection` with
+    `#[serde(rename_all="kebab-case")]` mapping font-family/font-size/line-height.
+  - consts: `CONFIG_FILE_NAME="wolf-config.yaml"`, `DEFAULT_FONT_FAMILY="JetBrains Mono"`,
+    `DEFAULT_LINE_HEIGHT=130.0`, `DEFAULT_FONT_SIZE_MACOS=14.0`, `DEFAULT_FONT_SIZE_LINUX=10.0`.
+  - `pub fn preferences_dir() -> Option<PathBuf>` — honor `WOLF_CONFIG_DIR` env override FIRST
+    (test/determinism hook); else macOS `dirs::preference_dir()?.join("Wolf")`, Linux
+    `dirs::config_dir()?.join("wolf")`.
+  - `pub fn default_config() -> WolfConfig` — font_size via `cfg!(target_os="macos")`.
+  - `pub fn load_or_create(dir: &Path) -> WolfConfig` — INFALLIBLE (defaults-on-error): absent →
+    create parent + write serialized defaults, return defaults; present+parses → parsed;
+    present+malformed → `tracing::warn!` + defaults WITHOUT overwriting the user file.
+- `crates/wolf-ffi/tests/config.rs` — deterministic (no nvim): `WOLF_CONFIG_DIR`→tempdir; known
+  yaml round-trips via `wolf_ffi_load_config()`; absent-file creates defaults.
+- `crates/wolf-macos/Sources/WolfMacOS/FontRegistration.swift` —
+  `enum FontRegistration { static func registerBundledFonts() }` over
+  `Bundle.main.resourcePath+"/fonts"/*.ttf` via `CTFontManagerRegisterFontURLs(.process)`.
+  Logs, never fails, on absent dir (dev/Linux parity). Compile+eyeball only.
+- `crates/wolf-macos/Sources/WolfKeyMap/CellMetricsMath.swift` — Foundation-only pure seam:
+  `CellMetricsMath.cellHeight(fontSize:lineHeightPercent:ascent:descent:leading:) -> Double` and
+  `.baseline(cellHeight:ascent:descent:) -> Double`. Guard `lineHeightPercent<=0` → fall back to
+  `ascent+descent+leading`.
+- `crates/wolf-macos/Tests/WolfKeyMapTests/CellMetricsMathTests.swift` — 130%@14, 100% natural,
+  degenerate guard, baseline recentering.
 
-### New test: crates/wolf-ffi/tests/treesitter_highlight.rs
-Real-nvim, modeled on orlando_load/treesitter_parser_abi. Stages TWO siblings next to temp init.lua: `nvim-treesitter/` (gate+queries) + `parsers/` (go parser). SKIP guards: nvim_bin_or_skip, new `nvim_treesitter_dir_or_none`, `parsers_dir_or_none`. Stage: copy init.lua→T/init.lua; copy nvim-treesitter inner dir (defensive nested-vs-flat: `.join("nvim-treesitter")` if dir else itself)→T/nvim-treesitter; copy parsers inner→T/parsers (assert T/parsers/parser/go.so + T/nvim-treesitter/queries/markdown/injections.scm pre-launch). Write T/doc.md with a fenced ```go``` block (package main). Launch wolf_ffi_start(T/init.lua, T, ...), poll cols()>0, `:e T/doc.md` (triggers FileType markdown → start). Sentinel Lua (2 lines): line1 `vim.treesitter.highlighter.active[b]~=nil` → OK/NO; line2 after `pcall(get_parser,b)` + `p:parse(true)`, `p:children()["go"]~=nil` (fallback: iterate children, `child:lang()=='go'`) → OK/NO. Poll+assert both OK. shutdown.
+### 3. Files to MODIFY
+- `crates/wolf-core/Cargo.toml` — add `serde{derive}`, `serde_yaml="0.9"`, `dirs="5"` (all GUI-free).
+- `crates/wolf-core/src/lib.rs` — `pub mod config;` + re-export
+  `load_or_create, preferences_dir, default_config, WolfConfig`.
+- `crates/wolf-ffi/src/lib.rs` — in the bridge add OPAQUE `type FfiConfig` with
+  `font_family()->String`, `font_size()->f64`, `line_height()->f64`, and free
+  `fn wolf_ffi_load_config() -> FfiConfig` (standalone, like `wolf_ffi_ancestors_to_reveal`;
+  does NOT hang off WolfCoreHandle). Impl calls `preferences_dir().map(load_or_create)
+  .unwrap_or_else(default_config)`. **Regenerate committed bindings via
+  `bazel run //crates/wolf-ffi:gen_bindings` — do NOT hand-edit generated files.**
+- `MODULE.bazel` — `use_extension`/`use_repo` for jetbrains_mono after the lighthouse block.
+- `crates/wolf-macos/BUILD.bazel` — add `//bazel/jetbrains-mono:jetbrains_mono_tree` to Wolf
+  `resources`; add `CellMetricsMath.swift` to `wolf_key_map` srcs +
+  `CellMetricsMathTests.swift` to `WolfKeyMapTests` srcs. (FontRegistration.swift auto-globbed.)
+- `crates/wolf-macos/bundle_layout_test.sh` — checks (k)–(o): 4 TTFs + OFL at
+  `Contents/Resources/fonts/`.
+- `crates/wolf-macos/Sources/WolfMacOS/CellMetrics.swift` — `measured()` → `measured(config: FfiConfig)`:
+  point size = `WOLF_FONT_PT` override else `config.font_size`; font = `config.font_family`
+  (verify `CTFontCopyFamilyName` case-insensitive; Menlo fallback); cellHeight/baseline via
+  `CellMetricsMath`. Update doc comment.
+- `crates/wolf-macos/Sources/WolfMacOS/AppDelegate.swift` — in `applicationDidFinishLaunching`,
+  BEFORE measuring: `FontRegistration.registerBundledFonts()`, `let config = wolf_ffi_load_config()`,
+  `CellMetrics.measured(config: config)`. No other consumer changes (MainWindow/PaneContainerView
+  consume the struct fields unchanged).
 
-### Test harness/build edits
-- common/mod.rs: add `nvim_treesitter_dir_or_none()` → `resolve_runfile("WOLF_TEST_NVIM_TREESITTER_DIR")` (match *_or_none convention).
-- crates/wolf-ffi/BUILD.bazel: `rust_test treesitter_highlight` — srcs [common/mod.rs, tests/treesitter_highlight.rs], crate_root, tags no-sandbox, size small. data: //bazel/nvim:nvim_tree, //bazel/nvim-treesitter:nvim_treesitter_tree, //bazel/treesitter-parsers:parsers_tree, //runtime/nvim:init.lua. env: WOLF_TEST_INIT_LUA, WOLF_TEST_NVIM_DIR, WOLF_TEST_NVIM_TREESITTER_DIR, WOLF_TEST_PARSERS_DIR. deps [":wolf_ffi"]+all_crate_deps(normal_dev=True).
+### 4. Test plan
+- wolf-core `#[cfg(test)] mod tests` (tempfile; runs under cargo + `wolf_core_lib_test`):
+  `creates_file_with_defaults_when_absent`, `parses_existing_file` (asserts not rewritten),
+  `round_trips`, `malformed_file_falls_back_to_defaults`, `missing_field_falls_back_to_defaults`,
+  `defaults_are_platform_specific`, `preferences_dir_honors_env_override` (serialize env-mutating tests).
+- wolf-ffi `tests/config.rs` + new `rust_test` `config` (no nvim staging, no no-sandbox tag):
+  `load_config_round_trips`, `load_config_creates_defaults_when_absent`.
+- `//bazel/jetbrains-mono:jetbrains_mono_tree_test` — 4 TTFs + OFL.
+- `//crates/wolf-macos:bundle_layout_test` — new checks (k)–(o).
+- `//crates/wolf-macos:WolfKeyMapTests` gains `CellMetricsMathTests`.
+- NOT headless-testable (state explicitly): font registration, CTFont family resolution, on-screen
+  rendering → manual-smoke/eyeball. Only `CellMetricsMath` is a pure extracted seam.
+- Do NOT plan any GTK/Linux build or test.
 
-### Docs
-runtime/nvim/README.md (new enablement bullet + Deferred update), build.md (active in .app + new test target), treesitter-decision-report.md (Consequences enablement DONE on macOS, Linux/Nix deferred). prettier --write.
+### 5. Impl order
+1. `bazel/jetbrains-mono/` + MODULE.bazel; verify URL live + sha256 + `unzip -l`; run tree test.
+2. wolf-core config (Cargo.toml → config.rs → lib.rs → in-module tests); `CARGO_BAZEL_REPIN=1`;
+   run `wolf_core_lib_test` + cargo test; re-run cargo tree / bazel query denylist.
+3. wolf-ffi surface + regenerate bindings + `tests/config.rs` + BUILD target.
+4. macOS pure seam `CellMetricsMath` + test + BUILD.
+5. macOS wiring (CellMetrics rewrite, FontRegistration, AppDelegate order, BUILD resources/srcs,
+   bundle_layout_test); build Wolf; run bundle_layout_test.
+6. Docs.
 
-### Impl order
-1. common helper. 2. init.lua header+block. 3. test file. 4. BUILD target. 5. docs+prettier.
+### 6. Docs to update (prettier --write; no hard breaks)
+`crates/wolf-core/README.md` + `src/README.md`, `crates/wolf-ffi/README.md`,
+`crates/wolf-macos/README.md` + `Sources/README.md`, `bazel/jetbrains-mono/README.md` (new),
+`build.md` (bundled fonts + new test targets), `architecture.md` (macOS metrics paragraph +
+FfiConfig), `config-decisions-report.md` (reconcile divergence — see risk 9).
 
-### Existing-test safety (gate property)
-redraw_grid.rs (asserts fg.is_some() — robust), redraw_multigrid.rs, bridge_smoke, other wolf-ffi real-nvim tests, wolf-gnome paint_golden — all stage ONLY nvim_tree + init.lua, NOT the vendored siblings → gate fs_stat absent → strict no-op → assertions unchanged. VERIFY paint_golden BUILD doesn't stage siblings. If ANY grid/golden shifts → gate LEAKED → fix gate, do NOT re-bless expectations without flagging.
-
-### Flagged uncertainties
-1. **Query-loader compat (primary risk)**: nvim-treesitter master queries may use a predicate pinned nvim 0.12.3 rejects → start() raises (pcall degrades in prod; test line1=NO surfaces it loudly). If fires: it's a vendoring-pin decision, flag — don't silently work around.
-2. **Async injection**: `p:parse(true)` forces full parse incl injections before inspecting children.
-3. Defensive nested-vs-flat staging + pre-launch asserts catch mis-staging.
-4. `:children()` keyed by lang name; fallback iterate + `child:lang()`.
-5. Verify paint_golden staging (don't assume).
+### 7. Flagged risks
+1. **sha256 must be computed live (BLOCKING).** Proposed v2.304;
+   `curl -L .../v2.304/JetBrainsMono-2.304.zip -o f.zip && shasum -a 256 f.zip`.
+2. **Archive root layout unverified** — release-asset zip may be wrapped or flat; `unzip -l` and set
+   `replace_prefixes` accordingly (wrong → glob matches nothing).
+3. **TTF filenames** — assumed `JetBrainsMono-{Regular,Italic,Bold,BoldItalic}.ttf` under `fonts/ttf/`;
+   confirm casing.
+4. **`dirs` not `directories`** — `ProjectDirs` yields `org.Wolf.Wolf`, wrong; `dirs::preference_dir()/"Wolf"`
+   + `dirs::config_dir()/"wolf"` match the spec. `dirs`/`dirs-sys`/`option-ext` not yet vendored → repin.
+5. **swift-bridge String-in-struct** — chose opaque FfiConfig + accessors (matches FfiFileEntry).
+6. **line-height semantics** — `cellHeight=round(fontSize*lineHeight/100)`, baseline recentered;
+   guard `<=0`. Localized in CellMetricsMath.
+7. **font-size f64** (spec `<number>`; allows 13.5). serde_yaml parses int 14 into f64 fine.
+8. **Defaults-on-error, never clobber a malformed user file** (graceful-degradation posture).
+9. **config-decisions-report divergence to record:** (a) file named `wolf-config.yaml` w/ top-level
+   `config:` key vs report's `config.yaml`; (b) this is the USER-level file at the platform prefs dir,
+   not the project `.wolf/` layer; (c) read directly in Rust core + bridged over swift-bridge, NOT
+   from Neovim over RPC. All intentional per user spec — record as realized; project layer + nvim-RPC
+   bridge still deferred.
+10. `serde_yaml` in maintenance but stable/GUI-free — acceptable.
+11. `WOLF_CONFIG_DIR` env test hook can race — serialize env-mutating tests.
