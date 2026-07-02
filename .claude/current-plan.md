@@ -1,60 +1,77 @@
-# Current Plan: Bundle JetBrains Mono + wolf-config.yaml preferences (macOS)
+# Current Plan: Bundle iA Writer Mono S (2nd font) + make it the default (macOS)
 
 ## Problem statement
 
-Bundle the JetBrains Mono font (regular, italic, bold, bold italic + OFL license) into
-Wolf, and add plumbing for reading a user preferences file, fully wired on macOS.
+Add a SECOND bundled font — **iA Writer Mono S** — into Wolf alongside the existing JetBrains
+Mono (do NOT remove JetBrains Mono), and make **iA Writer Mono S the new DEFAULT font-family**.
+Direct follow-on to the completed JetBrains Mono bundling + `wolf-config.yaml` work; reuse that
+exact pattern.
 
 ### Confirmed scope
-- **Front-ends:** macOS only this increment. The shared reader in `wolf-core` must still
-  resolve BOTH platform paths (macOS + Linux) in code, but only macOS bundles the font and
-  consumes prefs now. GNOME/GTK wiring is deferred — do NOT build/test the GTK front-end
-  (NixOS/Cargo-only, unverifiable on this macOS host).
-- **Depth:** FULL wiring — apply font-family, font-size, and line-height end-to-end into the
-  macOS grid rendering (CellMetrics.swift + consumers). Keep `WOLF_FONT_PT` as an override if
-  practical (tests use it), but the config is the new source of the defaults.
-- **Font delivery:** hermetic download + sha256 pin, matching the existing
-  `bazel/orlando` + `bazel/nvim` + `bazel/lighthouse` pattern.
+- **macOS only.** GNOME/GTK deferred — do NOT build/test the GTK front-end.
+- **Hermetic download + sha256 pin**, mirroring `bazel/jetbrains-mono` / `bazel/orlando` /
+  `bazel/lighthouse`.
+- **Full wiring:** iA Writer Mono S becomes the default in wolf-core config; bundled TTFs are
+  CoreText-registered so it resolves.
 
 ### Requirements
-1. Bundle JetBrains Mono: 4 TTFs (regular, italic, bold, bold italic) + OFL license.
-2. Preferences reading plumbing:
-   - macOS path: `~/Library/Preferences/Wolf` (preference dir via `dirs`/`directories`).
-   - Linux path: `~/.config/wolf` (config dir via same API).
-   - File `wolf-config.yaml`:
-     ```
-     config:
-       font-family: "<font name>"
-       font-size: <number>
-       line-height: <percentage of font-size>
-     ```
-   - If absent, CREATE with defaults: font-family `"JetBrains Mono"`, font-size 14 (macOS) /
-     10 (Linux), line-height 130%.
+1. New hermetic Bazel module (e.g. `//bazel/ia-writer-mono`) downloading + sha256-pinning the iA
+   Writer fonts; TreeArtifact carries the 4 iA Writer Mono S faces (Regular, Italic, Bold,
+   BoldItalic) + its OFL/SIL license, bundled into `Wolf.app`.
+2. KEEP JetBrains Mono bundled exactly as-is (module, resources entry, bundle_layout_test checks
+   k–o all stay). Add iA ALONGSIDE it.
+3. Land the iA TTFs at `Contents/Resources/fonts/` (SAME dir as JBM) so the existing
+   `FontRegistration.swift` (globs `Contents/Resources/fonts/*.ttf`) auto-registers them with NO
+   Swift change — IF rules_apple allows two TreeArtifacts to merge into that subdir.
+   **BUILD-VERIFY** (`bazel build //crates/wolf-macos:Wolf`). If rules_apple rejects the shared
+   dir, fall back to the lowest-churn alternative (single combined tree, or per-family subdirs +
+   FontRegistration recursion) — architect decides, coder verifies by building.
+4. Flip the wolf-core config DEFAULT font-family from `"JetBrains Mono"` to iA Writer Mono S
+   (`config.rs` `DEFAULT_FONT_FAMILY` ~line 22). The default string MUST be the font's actual
+   CoreText **name-table family name** so `CTFontCreateWithName` resolves it (else CellMetrics
+   silently falls back to Menlo). User wrote "iA Writer Mono S" — coder MUST verify the real
+   family name (inspect the TTF name table / fc-scan / register+CTFontCopyFamilyName) and use
+   whatever actually resolves; if it differs, use the real name and flag it.
 
-### Architecture constraints
-- YAML parse + path resolution + create-with-defaults live in `wolf-core` — must stay
-  GUI-toolkit-free (verify via the cargo tree / bazel query denylist in
-  `crates/wolf-core/README.md`).
-- Expose resolved config to Swift over the `wolf-ffi` swift-bridge surface.
-- Register the bundled TTFs so CoreText resolves "JetBrains Mono".
-- Divergence: `config-decisions-report.md` calls the file `config.yaml`; user's explicit spec
-  is `wolf-config.yaml` with a top-level `config:` key. Follow the user's spec, update docs,
-  flag the divergence.
-- Keep every touched source dir's README.md in sync; reformat edited Markdown with
-  `prettier --write`, no hard line breaks in paragraphs.
+### Architecture / risk notes
+- iA fonts live at github.com/iaolo/iA-Fonts. That repo most likely has NO release assets → pin a
+  **COMMIT SOURCE TARBALL** (`/archive/<commit>.tar.gz`) like `bazel/orlando` (http_archive
+  `strip_prefix` for the wrapping `<repo>-<commit>/` dir), NOT a release-asset zip like
+  jetbrains-mono. Coder verifies live: pick a commit, curl tarball, compute sha256, `tar -tzf` to
+  confirm exact internal paths. **The iA Writer Mono S static TTFs sit under a directory WITH
+  SPACES** (e.g. `iA Writer Mono/Static/…`) — handle spaces in the glob + `replace_prefixes`.
+- Glob ONLY the 4 style TTFs + the license (exclude Duo/Quattro, variable fonts, other weights,
+  webfonts). Confirm the 4 styles exist as separate static TTFs.
+- TreeArtifact inner dir must be `fonts/` (rules_apple strips the tree's own top dir) → files land
+  at `Contents/Resources/fonts/`. `copy_to_directory replace_prefixes` remaps the spaced source
+  path to flat `fonts/<file>.ttf`.
+- Update `config.rs` test expectation `EXPECT_DEFAULT_FONT_FAMILY` (~line 193) + any wolf-ffi
+  config-test default-family expectation to the new default. Malformed/absent/round-trip config
+  semantics unchanged.
+- bundle_layout_test.sh: ADD checks for the 4 iA TTFs + iA license at `Contents/Resources/fonts/`,
+  KEEP the existing JBM checks (k–o). Add a jetbrains-mono-style tree test for the new module.
+- The wolf-ffi FFI surface (`FfiConfig` / `wolf_ffi_load_config`) does NOT change — only the
+  default value flows through. No swift-bridge binding regeneration.
 
 ## Status
 - [x] Architect plan
-- [x] Tests written (config.rs test module, wolf-ffi tests/config.rs, jetbrains_mono_tree_test.sh, bundle_layout_test.sh k–o, CellMetricsMathTests.swift)
-- [x] Implementation done, all targets green (49 wolf-core tests incl. valid-YAML-wrong-shape
-  fallback; wolf-ffi config; jetbrains_mono_tree_test; bundle_layout_test k–o; WolfKeyMapTests;
-  bridge_smoke/frame_pack no-regression; GUI-free denylist clean). Font pin: JetBrains Mono v2.304,
-  sha256 `6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf`, FLAT archive
-  (`fonts/ttf/*.ttf` + root `OFL.txt`). Declined: non-ASCII FFI round-trip (marginal),
-  FontRegistration e2e (headless-untestable, eyeball-only).
-- [x] Review — APPROVED, no CRITICAL/MAJOR/MINOR defects. All 5 areas confirmed correct.
-- [x] Docs updated — new bazel/jetbrains-mono/README.md + 8 docs updated; config-decisions-report
-  gained a "Realized (this increment, macOS)" reconciliation. prettier --write clean (all unchanged).
+- [x] Tests written (ia_writer_mono_tree_test.sh; bundle_layout_test.sh p–t; EXPECT_DEFAULT_FONT_FAMILY
+  flipped to "iA Writer Mono S" in config.rs test module + wolf-ffi/tests/config.rs)
+- [x] Implementation + tests passing. Pin: iA-Fonts commit
+  `f32c04c3058a75d7ce28919ce70fe8800817491b`, sha256
+  `826767eaea4ce43ccb7ca71327a5c63ac31206b99df400699e6744df6104e1b5`. Approach (a) — two trees
+  merge into Contents/Resources/fonts/ (Wolf build SUCCESS, disjoint file sets, zero Swift change).
+  Real CoreText family name VERIFIED = "iA Writer Mono S" (fontTools nameID-1 + live
+  CTFontCreateWithName→CTFontCopyFamilyName, not Menlo). All green:
+  ia_writer_mono_tree_test, bundle_layout_test (a–t), wolf_core_lib_test, wolf-ffi:config.
+  No test-expectation mismatch → no test reroute needed.
+- [x] Review — APPROVED. All 5 areas correct (default strings match byte-for-byte; replace_prefixes
+  produces inner fonts/; JBM still bundled). Minor: 3 stale Swift inline comments to fix in docs pass —
+  FontRegistration.swift L3/L10 ("JetBrains Mono...default grid font"), AppDelegate.swift L36
+  ("Register the bundled JetBrains Mono TTFs"); CellMetrics.swift L85 is a benign example (leave).
+- [x] Docs updated — new bazel/ia-writer-mono/README.md + 8 docs updated (incl. a stale claim fixed in
+  bazel/jetbrains-mono/README.md); 3 stale Swift inline comments reworded (FontRegistration.swift,
+  AppDelegate.swift). prettier --write clean (all 9 unchanged).
 
 ## STATUS: COMPLETE
 
@@ -62,125 +79,85 @@ Wolf, and add plumbing for reading a user preferences file, fully wired on macOS
 
 ## Architect's plan
 
-### 1. Summary
-New `//bazel/jetbrains-mono` module (clone of orlando/lighthouse) hermetically downloads +
-sha256-pins JetBrains Mono, bundling 4 TTFs (Regular/Italic/Bold/BoldItalic) + OFL.txt at
-`Contents/Resources/fonts/`. New GUI-free `wolf-core` `config` module resolves the platform
-prefs dir, reads/creates `wolf-config.yaml` (`config: { font-family, font-size, line-height }`),
-bridges to Swift over a new `wolf-ffi` surface, and fully wires font-family/size/line-height
-into macOS `CellMetrics`. Linux path resolution implemented in code; GTK not built/tested.
+### Verified upstream facts (coder MUST re-confirm live via `tar -tzf`)
+github.com/iaolo/iA-Fonts (master), NO release assets → commit-tarball pin (orlando pattern):
+- Top dirs: `iA Writer Duo/`, `iA Writer Mono/`, `iA Writer Quattro/`.
+- License is PER-FONT-DIR at **`iA Writer Mono/LICENSE.md`** (SIL OFL 1.1) — NOT repo-root.
+- `iA Writer Mono/Static/` has exactly the 4 static faces:
+  `iAWriterMonoS-{Regular,Italic,Bold,BoldItalic}.ttf`.
+- Tentative CoreText family name: **`iA Writer Mono S`** — MUST be verified vs the name table.
 
-### 2. Files to CREATE
-- `bazel/jetbrains-mono/extensions.bzl` — module extension `jetbrains_mono`, single `http_archive`
-  (no `select()`, pure data). Constants `_VERSION="2.304"`,
-  `_URL=".../releases/download/v2.304/JetBrainsMono-2.304.zip"`, `_SHA256=<coder computes live>`.
-  `build_file_content`: filegroup globbing EXACTLY the 4 TTFs (under `fonts/ttf/`) + `OFL.txt`,
-  then `copy_to_directory` `jetbrains_mono_tree` with `replace_prefixes` remapping into inner
-  `fonts/` (rules_apple strips the tree's own top dir → lands at `Contents/Resources/fonts/`).
-  **Coder MUST `unzip -l` to confirm archive root (wrapped vs flat) + exact TTF filenames.**
-- `bazel/jetbrains-mono/BUILD.bazel` — `alias jetbrains_mono_tree`, `sh_test jetbrains_mono_tree_test`.
-- `bazel/jetbrains-mono/jetbrains_mono_tree_test.sh` — runfiles resolver (inner dir `fonts/`);
-  assert 4 TTFs non-empty + OFL.txt present.
-- `bazel/jetbrains-mono/README.md` — clone of orlando README (pin, targets, how-it-works, bump recipe).
-- `crates/wolf-core/src/config.rs`:
-  - `pub struct WolfConfig { pub font_family: String, pub font_size: f64, pub line_height: f64 }`
-  - private serde `ConfigFile { config: ConfigSection }`, `ConfigSection` with
-    `#[serde(rename_all="kebab-case")]` mapping font-family/font-size/line-height.
-  - consts: `CONFIG_FILE_NAME="wolf-config.yaml"`, `DEFAULT_FONT_FAMILY="JetBrains Mono"`,
-    `DEFAULT_LINE_HEIGHT=130.0`, `DEFAULT_FONT_SIZE_MACOS=14.0`, `DEFAULT_FONT_SIZE_LINUX=10.0`.
-  - `pub fn preferences_dir() -> Option<PathBuf>` — honor `WOLF_CONFIG_DIR` env override FIRST
-    (test/determinism hook); else macOS `dirs::preference_dir()?.join("Wolf")`, Linux
-    `dirs::config_dir()?.join("wolf")`.
-  - `pub fn default_config() -> WolfConfig` — font_size via `cfg!(target_os="macos")`.
-  - `pub fn load_or_create(dir: &Path) -> WolfConfig` — INFALLIBLE (defaults-on-error): absent →
-    create parent + write serialized defaults, return defaults; present+parses → parsed;
-    present+malformed → `tracing::warn!` + defaults WITHOUT overwriting the user file.
-- `crates/wolf-ffi/tests/config.rs` — deterministic (no nvim): `WOLF_CONFIG_DIR`→tempdir; known
-  yaml round-trips via `wolf_ffi_load_config()`; absent-file creates defaults.
-- `crates/wolf-macos/Sources/WolfMacOS/FontRegistration.swift` —
-  `enum FontRegistration { static func registerBundledFonts() }` over
-  `Bundle.main.resourcePath+"/fonts"/*.ttf` via `CTFontManagerRegisterFontURLs(.process)`.
-  Logs, never fails, on absent dir (dev/Linux parity). Compile+eyeball only.
-- `crates/wolf-macos/Sources/WolfKeyMap/CellMetricsMath.swift` — Foundation-only pure seam:
-  `CellMetricsMath.cellHeight(fontSize:lineHeightPercent:ascent:descent:leading:) -> Double` and
-  `.baseline(cellHeight:ascent:descent:) -> Double`. Guard `lineHeightPercent<=0` → fall back to
-  `ascent+descent+leading`.
-- `crates/wolf-macos/Tests/WolfKeyMapTests/CellMetricsMathTests.swift` — 130%@14, 100% natural,
-  degenerate guard, baseline recentering.
+### 1. New `//bazel/ia-writer-mono` (mirror bazel/orlando COMMIT-TARBALL, not jetbrains-mono zip)
+- `extensions.bzl`: `http_archive` of `.../iaolo/iA-Fonts/archive/<commit>.tar.gz`,
+  `strip_prefix = "iA-Fonts-<commit>"`, consts `_COMMIT`/`_SHA256` (coder computes live).
+  Overlay: `filegroup runtime_files` with EXPLICIT srcs (not glob — de-risk spaces) =
+  the 4 TTFs `iA Writer Mono/Static/iAWriterMonoS-*.ttf` + `iA Writer Mono/LICENSE.md`;
+  then `copy_to_directory ia_writer_mono_tree` with
+  `replace_prefixes = { "iA Writer Mono/Static": "fonts", "iA Writer Mono/LICENSE.md": "fonts/LICENSE.md" }`
+  → inner `fonts/` (4 TTFs + LICENSE.md). rules_apple strips top dir → Contents/Resources/fonts/.
+- `BUILD.bazel`: `alias ia_writer_mono_tree` + `sh_test ia_writer_mono_tree_test` (data=[:tree]).
+- `ia_writer_mono_tree_test.sh`: clone jetbrains_mono_tree_test.sh; assert inner `fonts/` has
+  4 iA TTFs (a–d) + `LICENSE.md` (e), non-empty.
+- `README.md`: mirror orlando/jetbrains README (pin, spaced-dir note, replace_prefixes, targets,
+  MODULE wiring, bump recipe). Note it SHARES Contents/Resources/fonts/ with JBM.
+- `MODULE.bazel`: `use_extension`/`use_repo` after the jetbrains_mono block; regen MODULE.bazel.lock.
 
-### 3. Files to MODIFY
-- `crates/wolf-core/Cargo.toml` — add `serde{derive}`, `serde_yaml="0.9"`, `dirs="5"` (all GUI-free).
-- `crates/wolf-core/src/lib.rs` — `pub mod config;` + re-export
-  `load_or_create, preferences_dir, default_config, WolfConfig`.
-- `crates/wolf-ffi/src/lib.rs` — in the bridge add OPAQUE `type FfiConfig` with
-  `font_family()->String`, `font_size()->f64`, `line_height()->f64`, and free
-  `fn wolf_ffi_load_config() -> FfiConfig` (standalone, like `wolf_ffi_ancestors_to_reveal`;
-  does NOT hang off WolfCoreHandle). Impl calls `preferences_dir().map(load_or_create)
-  .unwrap_or_else(default_config)`. **Regenerate committed bindings via
-  `bazel run //crates/wolf-ffi:gen_bindings` — do NOT hand-edit generated files.**
-- `MODULE.bazel` — `use_extension`/`use_repo` for jetbrains_mono after the lighthouse block.
-- `crates/wolf-macos/BUILD.bazel` — add `//bazel/jetbrains-mono:jetbrains_mono_tree` to Wolf
-  `resources`; add `CellMetricsMath.swift` to `wolf_key_map` srcs +
-  `CellMetricsMathTests.swift` to `WolfKeyMapTests` srcs. (FontRegistration.swift auto-globbed.)
-- `crates/wolf-macos/bundle_layout_test.sh` — checks (k)–(o): 4 TTFs + OFL at
-  `Contents/Resources/fonts/`.
-- `crates/wolf-macos/Sources/WolfMacOS/CellMetrics.swift` — `measured()` → `measured(config: FfiConfig)`:
-  point size = `WOLF_FONT_PT` override else `config.font_size`; font = `config.font_family`
-  (verify `CTFontCopyFamilyName` case-insensitive; Menlo fallback); cellHeight/baseline via
-  `CellMetricsMath`. Update doc comment.
-- `crates/wolf-macos/Sources/WolfMacOS/AppDelegate.swift` — in `applicationDidFinishLaunching`,
-  BEFORE measuring: `FontRegistration.registerBundledFonts()`, `let config = wolf_ffi_load_config()`,
-  `CellMetrics.measured(config: config)`. No other consumer changes (MainWindow/PaneContainerView
-  consume the struct fields unchanged).
+### 2. CRITICAL LAYOUT DECISION — two trees, one bundle dir (#1 RISK)
+Both `jetbrains_mono_tree` + `ia_writer_mono_tree` (each inner `fonts/`) in Wolf `resources` →
+Contents/Resources/fonts/. Best assessment: MERGES (disjoint file sets: JetBrainsMono-*.ttf+OFL.txt
+vs iAWriterMonoS-*.ttf+LICENSE.md — no path collision). **Coder MUST BUILD-VERIFY**
+`bazel build //crates/wolf-macos:Wolf`.
+- (a) PREFERRED if merge builds: just add 2nd tree to resources; ZERO Swift change (FontRegistration
+  already globs fonts/*.ttf). Ship this.
+- (b) FALLBACK if it errors: single combined tree — new `//bazel/fonts:fonts_tree`
+  `copy_to_directory(srcs=["@jetbrains_mono//:runtime_files","@ia_writer_mono//:runtime_files"],
+  replace_prefixes={"fonts/ttf":"fonts","OFL.txt":"fonts/OFL.txt","iA Writer Mono/Static":"fonts",
+  "iA Writer Mono/LICENSE.md":"fonts/LICENSE.md"})`; replace the 2 font resources with it. Bundle
+  paths + bundle_layout_test + Swift unchanged. (NOTE: coder must add a `runtime_files` filegroup to
+  the JBM overlay if it doesn't already expose one — JBM currently uses a filegroup; confirm.)
+- (c) LAST RESORT: per-family subdirs + FontRegistration recursion (changes JBM layout + k–o paths).
+Recommendation: try (a); fall back to (b).
 
-### 4. Test plan
-- wolf-core `#[cfg(test)] mod tests` (tempfile; runs under cargo + `wolf_core_lib_test`):
-  `creates_file_with_defaults_when_absent`, `parses_existing_file` (asserts not rewritten),
-  `round_trips`, `malformed_file_falls_back_to_defaults`, `missing_field_falls_back_to_defaults`,
-  `defaults_are_platform_specific`, `preferences_dir_honors_env_override` (serialize env-mutating tests).
-- wolf-ffi `tests/config.rs` + new `rust_test` `config` (no nvim staging, no no-sandbox tag):
-  `load_config_round_trips`, `load_config_creates_defaults_when_absent`.
-- `//bazel/jetbrains-mono:jetbrains_mono_tree_test` — 4 TTFs + OFL.
-- `//crates/wolf-macos:bundle_layout_test` — new checks (k)–(o).
-- `//crates/wolf-macos:WolfKeyMapTests` gains `CellMetricsMathTests`.
-- NOT headless-testable (state explicitly): font registration, CTFont family resolution, on-screen
-  rendering → manual-smoke/eyeball. Only `CellMetricsMath` is a pure extracted seam.
-- Do NOT plan any GTK/Linux build or test.
+### 3. Default flip — `crates/wolf-core/src/config.rs`
+- Line 22 `DEFAULT_FONT_FAMILY: "JetBrains Mono"` → verified iA family name (tentative
+  "iA Writer Mono S"). Update field doc (~L39) + default_config doc (~L86).
+- **Coder MUST verify the real name-table family BEFORE editing the string:**
+  `python3 -c "from fontTools.ttLib import TTFont; f=TTFont('iAWriterMonoS-Regular.ttf');
+  [print(r.nameID,r.toUnicode()) for r in f['name'].names if r.nameID in (1,4,6,16)]"`
+  or `fc-scan --format '%{family}\n' <ttf>` or `mdls -name com_apple_ats_name_family <ttf>`,
+  and definitively `CTFontCopyFamilyName` after register. If it differs, use the REAL name + flag.
+- Schema/serialization otherwise unchanged.
+
+### 4. Tests to update/add
+- `config.rs` test module L193 `EXPECT_DEFAULT_FONT_FAMILY` → new default (match L22 exactly).
+  `CUSTOM_FONT_FAMILY = "Fira Code"` stays distinct. Malformed/partial/wrong-shape/never-clobber
+  cases unchanged (assert `== default_config()`).
+- `crates/wolf-ffi/tests/config.rs` L44 `EXPECT_DEFAULT_FONT_FAMILY` → new default.
+- New `//bazel/ia-writer-mono:ia_writer_mono_tree_test` (4 iA TTFs + LICENSE.md).
+- `crates/wolf-macos/bundle_layout_test.sh`: KEEP a–o (incl JBM k–o); ADD p–s (4 iAWriterMonoS-*.ttf
+  non-empty at Contents/Resources/fonts/) + t (`fonts/LICENSE.md` non-empty). Update PASS echo.
+- Eyeball-only: FontRegistration/CellMetrics on-screen resolution — coder MUST build+launch .app and
+  confirm iA family resolves (NOT Menlo fallback).
+- No swift-bridge regeneration (FFI surface unchanged).
 
 ### 5. Impl order
-1. `bazel/jetbrains-mono/` + MODULE.bazel; verify URL live + sha256 + `unzip -l`; run tree test.
-2. wolf-core config (Cargo.toml → config.rs → lib.rs → in-module tests); `CARGO_BAZEL_REPIN=1`;
-   run `wolf_core_lib_test` + cargo test; re-run cargo tree / bazel query denylist.
-3. wolf-ffi surface + regenerate bindings + `tests/config.rs` + BUILD target.
-4. macOS pure seam `CellMetricsMath` + test + BUILD.
-5. macOS wiring (CellMetrics rewrite, FontRegistration, AppDelegate order, BUILD resources/srcs,
-   bundle_layout_test); build Wolf; run bundle_layout_test.
-6. Docs.
+1. Pick commit + sha256; `tar -tzf` confirm paths. 2. Create bazel/ia-writer-mono/. 3. MODULE.bazel
++ regen lock; run tree test. 4. Add tree to Wolf resources; `bazel build //crates/wolf-macos:Wolf`
+(merge verify); fallback (b) if errors. 5. bundle_layout_test p–t; run it. 6. Verify real family
+name. 7. Flip config.rs. 8. Update 2 test expectations; run wolf_core_lib_test + wolf-ffi:config.
+9. Build+launch .app; confirm iA resolves. 10. Docs + prettier.
 
 ### 6. Docs to update (prettier --write; no hard breaks)
-`crates/wolf-core/README.md` + `src/README.md`, `crates/wolf-ffi/README.md`,
-`crates/wolf-macos/README.md` + `Sources/README.md`, `bazel/jetbrains-mono/README.md` (new),
-`build.md` (bundled fonts + new test targets), `architecture.md` (macOS metrics paragraph +
-FfiConfig), `config-decisions-report.md` (reconcile divergence — see risk 9).
+New `bazel/ia-writer-mono/README.md`; `crates/wolf-core/README.md` + `src/README.md` (new default);
+`crates/wolf-macos/README.md` + `Sources/README.md` (TWO fonts, iA is default);
+`build.md` (new module + tree test + bump recipe; both fonts; bundle_layout p–t);
+`architecture.md` (default = iA Writer Mono S, both bundled+registered, Menlo fallback);
+`config-decisions-report.md` "Realized" note (default now iA Writer Mono S).
 
-### 7. Flagged risks
-1. **sha256 must be computed live (BLOCKING).** Proposed v2.304;
-   `curl -L .../v2.304/JetBrainsMono-2.304.zip -o f.zip && shasum -a 256 f.zip`.
-2. **Archive root layout unverified** — release-asset zip may be wrapped or flat; `unzip -l` and set
-   `replace_prefixes` accordingly (wrong → glob matches nothing).
-3. **TTF filenames** — assumed `JetBrainsMono-{Regular,Italic,Bold,BoldItalic}.ttf` under `fonts/ttf/`;
-   confirm casing.
-4. **`dirs` not `directories`** — `ProjectDirs` yields `org.Wolf.Wolf`, wrong; `dirs::preference_dir()/"Wolf"`
-   + `dirs::config_dir()/"wolf"` match the spec. `dirs`/`dirs-sys`/`option-ext` not yet vendored → repin.
-5. **swift-bridge String-in-struct** — chose opaque FfiConfig + accessors (matches FfiFileEntry).
-6. **line-height semantics** — `cellHeight=round(fontSize*lineHeight/100)`, baseline recentered;
-   guard `<=0`. Localized in CellMetricsMath.
-7. **font-size f64** (spec `<number>`; allows 13.5). serde_yaml parses int 14 into f64 fine.
-8. **Defaults-on-error, never clobber a malformed user file** (graceful-degradation posture).
-9. **config-decisions-report divergence to record:** (a) file named `wolf-config.yaml` w/ top-level
-   `config:` key vs report's `config.yaml`; (b) this is the USER-level file at the platform prefs dir,
-   not the project `.wolf/` layer; (c) read directly in Rust core + bridged over swift-bridge, NOT
-   from Neovim over RPC. All intentional per user spec — record as realized; project layer + nvim-RPC
-   bridge still deferred.
-10. `serde_yaml` in maintenance but stable/GUI-free — acceptable.
-11. `WOLF_CONFIG_DIR` env test hook can race — serialize env-mutating tests.
+### 7. Flagged risks (ranked)
+1. **Two trees → one fonts/ dir** — merge vs error; gated by `bazel build Wolf`; fallback (b) ready.
+2. Live commit + sha256 (placeholder) — `tar -tzf` before trusting globs.
+3. Spaces in `iA Writer Mono/Static/` — prefer explicit srcs; verify by building the tree.
+4. Real CoreText family string — tentative; wrong string silently falls back to Menlo (no test
+   catches it, only eyeball) → launch verification MANDATORY.
+5. All 4 static styles ship — confirm at pinned commit.

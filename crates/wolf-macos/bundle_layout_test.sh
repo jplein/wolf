@@ -238,4 +238,35 @@ FONT_LICENSE="$RES/fonts/OFL.txt"
 [ -s "$FONT_LICENSE" ] || fail "bundled font license $FONT_LICENSE exists but is EMPTY (zero bytes)"
 echo "PASS check (o): $FONT_LICENSE exists and is non-empty"
 
-echo "PASS: Wolf.app bundles nvim/bin/nvim (executable), the markdown parser, the runtime tree, init.lua, the vendored orlando plugin, the vendored lighthouse colorscheme, the vendored nvim-treesitter + textobjects plugins, the curated compiled treesitter parsers, and the JetBrains Mono fonts (4 TTFs + OFL.txt)"
+# ---------------------------------------------------------------------------
+# (p)-(s) Contents/Resources/fonts/iAWriterMonoS-<Face>.ttf — the bundled
+#     iA Writer Mono S TTFs (regular/italic/bold/bold-italic). VENDORED and
+#     REGISTERED with CoreText on macOS so "iA Writer Mono S" resolves as the
+#     new default UI/grid font. Shares Contents/Resources/fonts/ with JetBrains
+#     Mono. Each must be a non-empty regular file.
+# ---------------------------------------------------------------------------
+for entry in \
+  "p:iAWriterMonoS-Regular.ttf" \
+  "q:iAWriterMonoS-Italic.ttf" \
+  "r:iAWriterMonoS-Bold.ttf" \
+  "s:iAWriterMonoS-BoldItalic.ttf"
+do
+  label="${entry%%:*}"
+  ttf="${entry#*:}"
+  FONT="$RES/fonts/$ttf"
+  [ -f "$FONT" ] || fail "expected bundled font at $FONT, but it is missing"
+  [ -s "$FONT" ] || fail "bundled font $FONT exists but is EMPTY (zero bytes)"
+  echo "PASS check ($label): $FONT exists and is non-empty"
+done
+
+# ---------------------------------------------------------------------------
+# (t) Contents/Resources/fonts/LICENSE.md — the iA (SIL Open Font License)
+#     shipped with the vendored iA Writer Mono S TTFs (compliance). Named
+#     LICENSE.md, NOT OFL.txt. Non-empty regular file.
+# ---------------------------------------------------------------------------
+IA_FONT_LICENSE="$RES/fonts/LICENSE.md"
+[ -f "$IA_FONT_LICENSE" ] || fail "expected bundled iA font license at $IA_FONT_LICENSE, but it is missing"
+[ -s "$IA_FONT_LICENSE" ] || fail "bundled iA font license $IA_FONT_LICENSE exists but is EMPTY (zero bytes)"
+echo "PASS check (t): $IA_FONT_LICENSE exists and is non-empty"
+
+echo "PASS: Wolf.app bundles nvim/bin/nvim (executable), the markdown parser, the runtime tree, init.lua, the vendored orlando plugin, the vendored lighthouse colorscheme, the vendored nvim-treesitter + textobjects plugins, the curated compiled treesitter parsers, the JetBrains Mono fonts (4 TTFs + OFL.txt), and the iA Writer Mono S fonts (4 TTFs + LICENSE.md)"

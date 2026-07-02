@@ -14,14 +14,14 @@ The user-level preferences reader — resolves the platform preferences director
 
 - `WolfConfig { font_family: String, font_size: f64, line_height: f64 }` — the resolved config. `line_height` is stored as the PERCENTAGE of the font size (`130` = 130%). The on-disk form is a private serde `ConfigFile { config: ConfigSection }`, where `ConfigSection` is `#[serde(rename_all = "kebab-case")]` so it maps to `font-family` / `font-size` / `line-height` under a top-level `config:` key.
 - `preferences_dir() -> Option<PathBuf>` — honors a `WOLF_CONFIG_DIR` env override FIRST (a determinism/test hook); otherwise macOS `dirs::preference_dir()?.join("Wolf")` (`~/Library/Preferences/Wolf`), Linux `dirs::config_dir()?.join("wolf")` (`~/.config/wolf`). Both platform paths resolve in code even though only macOS consumes prefs this increment.
-- `default_config() -> WolfConfig` — font-family `"JetBrains Mono"`, line-height `130`, and a platform-specific font-size via `cfg!(target_os = "macos")` (14 macOS / 10 Linux).
+- `default_config() -> WolfConfig` — font-family `"iA Writer Mono S"`, line-height `130`, and a platform-specific font-size via `cfg!(target_os = "macos")` (14 macOS / 10 Linux).
 - `load_or_create(dir: &Path) -> WolfConfig` — **infallible** (defaults-on-error). Reads `<dir>/wolf-config.yaml`: absent → create the parent + write the serialized defaults, return defaults; present + parses → the parsed config; present + malformed / wrong-shape → `tracing::warn!` + defaults, **never clobbering** the user's file (it only writes when the file is absent). This graceful-degradation posture keeps a broken hand-edit from being silently overwritten.
 
 The schema:
 
 ```yaml
 config:
-  font-family: "JetBrains Mono"
+  font-family: "iA Writer Mono S"
   font-size: 14
   line-height: 130
 ```

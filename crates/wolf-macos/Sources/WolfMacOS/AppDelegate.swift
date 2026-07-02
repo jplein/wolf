@@ -33,9 +33,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         self.handle = handle
 
-        // Register the bundled JetBrains Mono TTFs with CoreText, then resolve the
-        // user config, BEFORE measuring — so `CellMetrics` can resolve the
-        // configured family/size/line-height (font registration is log-not-fail).
+        // Register the bundled font TTFs with CoreText — BOTH families (JetBrains
+        // Mono + iA Writer Mono S, the default), which merge into
+        // Contents/Resources/fonts/ — then resolve the user config, BEFORE
+        // measuring, so `CellMetrics` can resolve the configured
+        // family/size/line-height (font registration is log-not-fail).
         FontRegistration.registerBundledFonts()
         let config = wolf_ffi_load_config()
 

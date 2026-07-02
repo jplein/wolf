@@ -41,7 +41,8 @@ use wolf_ffi::wolf_ffi_load_config;
 const CONFIG_FILE_NAME: &str = "wolf-config.yaml";
 
 /// Platform-independent default font family (see `wolf_core::config`).
-const EXPECT_DEFAULT_FONT_FAMILY: &str = "JetBrains Mono";
+// NOTE: must match wolf_core::config::DEFAULT_FONT_FAMILY (the verified iA Writer Mono S CoreText family name).
+const EXPECT_DEFAULT_FONT_FAMILY: &str = "iA Writer Mono S";
 /// Platform-independent default line-height (percent).
 const EXPECT_DEFAULT_LINE_HEIGHT: f64 = 130.0;
 /// Default font size on macOS (points).

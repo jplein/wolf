@@ -91,14 +91,14 @@ A GUI-toolkit-free reader for the user-level `wolf-config.yaml` preferences file
 
 - `WolfConfig { font_family: String, font_size: f64, line_height: f64 }` — the resolved configuration. `line_height` is the PERCENTAGE of the font size (`130` = 130%).
 - `preferences_dir() -> Option<PathBuf>` — the platform preferences directory. It honors a `WOLF_CONFIG_DIR` environment override FIRST (a test/determinism hook); otherwise it is `dirs::preference_dir()/"Wolf"` (`~/Library/Preferences/Wolf`) on macOS and `dirs::config_dir()/"wolf"` (`~/.config/wolf`) on Linux. Both platform paths are resolved in code even though only macOS consumes prefs this increment.
-- `default_config() -> WolfConfig` — font-family `"JetBrains Mono"`, line-height `130`, and a platform-specific font-size (14 on macOS, 10 on Linux, via `cfg!`).
+- `default_config() -> WolfConfig` — font-family `"iA Writer Mono S"`, line-height `130`, and a platform-specific font-size (14 on macOS, 10 on Linux, via `cfg!`).
 - `load_or_create(dir: &Path) -> WolfConfig` — **infallible** (defaults-on-error). Reads `<dir>/wolf-config.yaml`: when the file is ABSENT it creates the parent and writes the serialized defaults, returning them; when it PARSES it returns the parsed config; when it is present but malformed / the wrong shape it logs a `tracing::warn!` and returns the defaults WITHOUT overwriting the user's file (it only ever writes when the file is absent).
 
 The on-disk schema has a top-level `config:` key with kebab-case fields:
 
 ```yaml
 config:
-  font-family: "JetBrains Mono"
+  font-family: "iA Writer Mono S"
   font-size: 14
   line-height: 130
 ```

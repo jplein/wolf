@@ -369,7 +369,7 @@ mod ffi {
     extern "Rust" {
         type FfiConfig;
 
-        // The resolved font family name (e.g. "JetBrains Mono").
+        // The resolved font family name (e.g. "iA Writer Mono S").
         fn font_family(&self) -> String;
         // The resolved font size, in points.
         fn font_size(&self) -> f64;
@@ -618,7 +618,7 @@ pub struct FfiConfig {
 }
 
 impl FfiConfig {
-    /// The resolved font family name (e.g. `"JetBrains Mono"`).
+    /// The resolved font family name (e.g. `"iA Writer Mono S"`).
     #[must_use]
     pub fn font_family(&self) -> String {
         self.font_family.clone()

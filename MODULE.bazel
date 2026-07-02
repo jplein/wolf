@@ -127,6 +127,18 @@ use_repo(lighthouse, "lighthouse")
 jetbrains_mono = use_extension("//bazel/jetbrains-mono:extensions.bzl", "jetbrains_mono")
 use_repo(jetbrains_mono, "jetbrains_mono")
 
+# --- Vendored iA Writer Mono S font (macOS bundle only) ---------------------
+# Downloaded + sha256-verified by the //bazel/ia-writer-mono module extension;
+# assembled into the `fonts/` TreeArtifact bundled into Wolf.app at
+# Contents/Resources/fonts/ (four static iA Writer Mono S TTF faces + LICENSE.md),
+# the SAME dir as JetBrains Mono. FontRegistration.swift registers the TTFs with
+# CoreText so "iA Writer Mono S" resolves as the DEFAULT grid font. Pinned to a
+# COMMIT source tarball (no release assets upstream). DATA (arch-independent), so
+# there is a SINGLE repo `ia_writer_mono` (no per-arch select). See
+# bazel/ia-writer-mono/README.md.
+ia_writer_mono = use_extension("//bazel/ia-writer-mono:extensions.bzl", "ia_writer_mono")
+use_repo(ia_writer_mono, "ia_writer_mono")
+
 # --- Vendored nvim-treesitter plugin (macOS bundle only) --------------------
 # Downloaded + sha256-verified by the //bazel/nvim-treesitter module extension;
 # assembled into the `nvim-treesitter/` TreeArtifact bundled into Wolf.app at

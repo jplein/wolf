@@ -1,14 +1,17 @@
 //
 //  FontRegistration.swift
-//  Registers the bundled JetBrains Mono TTFs with CoreText (process scope).
+//  Registers the bundled font TTFs with CoreText (process scope). The app bundles
+//  two families in Contents/Resources/fonts/: JetBrains Mono and iA Writer Mono S
+//  (the default grid font).
 //
 
 import CoreText
 import Foundation
 
 /// Registers the vendored fonts shipped at `Contents/Resources/fonts/*.ttf` so
-/// CoreText resolves their families (notably "JetBrains Mono", the default grid
-/// font). Registration is PROCESS-scoped (not installed system-wide) and
+/// CoreText resolves their families — both bundled families, "iA Writer Mono S"
+/// (the default grid font) and "JetBrains Mono". Registration is PROCESS-scoped
+/// (not installed system-wide) and
 /// LOG-NOT-FAIL: a missing fonts dir (developer/`swift run` paths) or an
 /// already-registered face is logged and skipped, never fatal.
 enum FontRegistration {

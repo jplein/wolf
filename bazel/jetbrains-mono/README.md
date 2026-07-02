@@ -2,7 +2,7 @@
 
 Hermetic, pinned **JetBrains Mono** font for bundling into `Wolf.app`.
 
-This package downloads the pinned GitHub release-asset zip for JetBrains Mono (sha256-pinned, fetched by Bazel — no system or PATH dependency), assembles the four static desktop TTF faces (Regular / Italic / Bold / BoldItalic) plus the OFL license into a structure-preserving directory artifact, and exposes it for bundling. `//crates/wolf-macos:Wolf` bundles the result at `Contents/Resources/fonts/`, where `FontRegistration.swift` registers the TTFs with CoreText (`CTFontManagerRegisterFontURLs`) so `"JetBrains Mono"` resolves, and `CellMetrics.swift` measures it as the config-driven default font.
+This package downloads the pinned GitHub release-asset zip for JetBrains Mono (sha256-pinned, fetched by Bazel — no system or PATH dependency), assembles the four static desktop TTF faces (Regular / Italic / Bold / BoldItalic) plus the OFL license into a structure-preserving directory artifact, and exposes it for bundling. `//crates/wolf-macos:Wolf` bundles the result at `Contents/Resources/fonts/` — the SAME directory the `//bazel/ia-writer-mono` tree merges into — where `FontRegistration.swift` registers the TTFs with CoreText (`CTFontManagerRegisterFontURLs`) so `"JetBrains Mono"` resolves in `CellMetrics.swift`. JetBrains Mono is bundled + registered but is **no longer the default** font-family: iA Writer Mono S is now the config default (see [`bazel/ia-writer-mono/README.md`](../ia-writer-mono/README.md)).
 
 ## The pin
 

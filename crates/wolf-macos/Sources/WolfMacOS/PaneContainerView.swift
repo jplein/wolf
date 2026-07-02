@@ -500,6 +500,13 @@ final class PaneContainerView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
 
+        // Render glyphs with plain grayscale antialiasing and NO font smoothing
+        // (stem darkening). macOS font smoothing thickens light-on-dark text, so a
+        // regular weight reads as bold; disabling it keeps the weight accurate and
+        // matches iA Writer / VS Code / Ghostty on dark backgrounds.
+        ctx.setShouldAntialias(true)
+        ctx.setShouldSmoothFonts(false)
+
         // Editor background (covers any not-yet-tiled gaps).
         ctx.setFillColor(WolfColor.fallbackBg)
         ctx.fill(bounds)

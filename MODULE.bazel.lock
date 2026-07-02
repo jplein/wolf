@@ -221,6 +221,34 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
+    "//bazel/ia-writer-mono:extensions.bzl%ia_writer_mono": {
+      "general": {
+        "bzlTransitiveDigest": "/u7tWVaLYGopmCpqTwL7XsZhOkKtMThBdQ6+dhaiSBA=",
+        "usagesDigest": "oZHNcFnSCrZO1qzEtiyW14hpI9XuqjkeOcx+S0YGJyQ=",
+        "recordedFileInputs": {},
+        "recordedDirentsInputs": {},
+        "envVariables": {},
+        "generatedRepoSpecs": {
+          "ia_writer_mono": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
+            "attributes": {
+              "urls": [
+                "https://github.com/iaolo/iA-Fonts/archive/f32c04c3058a75d7ce28919ce70fe8800817491b.tar.gz"
+              ],
+              "sha256": "826767eaea4ce43ccb7ca71327a5c63ac31206b99df400699e6744df6104e1b5",
+              "build_file_content": "load(\"@aspect_bazel_lib//lib:copy_to_directory.bzl\", \"copy_to_directory\")\n\npackage(default_visibility = [\"//visibility:public\"])\n\n# The vendored files Wolf ships: the four static desktop TTF faces of iA Writer\n# Mono S (Regular/Italic/Bold/BoldItalic, from `iA Writer Mono/Static/`) plus\n# `iA Writer Mono/LICENSE.md` (the iA SIL Open Font License, kept for\n# compliance). srcs are listed EXPLICITLY (not glob) to de-risk the SPACES in the\n# `iA Writer Mono` directory name. Deliberately EXCLUDE the variable font, the\n# Duo/Quattro families, and any README/dev files -- no runtime role in Wolf.\nfilegroup(\n    name = \"runtime_files\",\n    srcs = [\n        \"iA-Fonts-f32c04c3058a75d7ce28919ce70fe8800817491b/iA Writer Mono/Static/iAWriterMonoS-Regular.ttf\",\n        \"iA-Fonts-f32c04c3058a75d7ce28919ce70fe8800817491b/iA Writer Mono/Static/iAWriterMonoS-Italic.ttf\",\n        \"iA-Fonts-f32c04c3058a75d7ce28919ce70fe8800817491b/iA Writer Mono/Static/iAWriterMonoS-Bold.ttf\",\n        \"iA-Fonts-f32c04c3058a75d7ce28919ce70fe8800817491b/iA Writer Mono/Static/iAWriterMonoS-BoldItalic.ttf\",\n        \"iA-Fonts-f32c04c3058a75d7ce28919ce70fe8800817491b/iA Writer Mono/LICENSE.md\",\n    ],\n)\n\n# Assemble under a single inner `fonts/` dir, remapping the archive layout via\n# replace_prefixes (NOT http_archive strip_prefix). Output TreeArtifact contains\n# fonts/iAWriterMonoS-{Regular,Italic,Bold,BoldItalic}.ttf and fonts/LICENSE.md.\n# The inner `fonts/` is deliberate and shared with JetBrains Mono: rules_apple\n# strips the bundled TreeArtifact's OWN top-level dir name when copying into\n# Contents/Resources/, so nesting under `fonts/` lands it at\n# Contents/Resources/fonts/ robustly.\ncopy_to_directory(\n    name = \"ia_writer_mono_tree\",\n    srcs = [\":runtime_files\"],\n    out = \"ia_writer_mono_tree\",\n    replace_prefixes = {\n        \"iA-Fonts-f32c04c3058a75d7ce28919ce70fe8800817491b/iA Writer Mono/Static\": \"fonts\",\n        \"iA-Fonts-f32c04c3058a75d7ce28919ce70fe8800817491b/iA Writer Mono/LICENSE.md\": \"fonts/LICENSE.md\",\n    },\n)\n"
+            }
+          }
+        },
+        "recordedRepoMappingEntries": [
+          [
+            "",
+            "bazel_tools",
+            "bazel_tools"
+          ]
+        ]
+      }
+    },
     "//bazel/jetbrains-mono:extensions.bzl%jetbrains_mono": {
       "general": {
         "bzlTransitiveDigest": "uGUap0wnlrvEqkOZGLtRb5Sf0xVjyY6zuzFuMwa+J/M=",

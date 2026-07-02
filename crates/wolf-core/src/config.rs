@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 pub const CONFIG_FILE_NAME: &str = "wolf-config.yaml";
 
 /// The default font family (platform-independent).
-const DEFAULT_FONT_FAMILY: &str = "JetBrains Mono";
+const DEFAULT_FONT_FAMILY: &str = "iA Writer Mono S";
 /// The default line-height, as a percentage of the font size (all platforms).
 const DEFAULT_LINE_HEIGHT: f64 = 130.0;
 /// The default font size in points on macOS.
@@ -35,7 +35,7 @@ const DEFAULT_FONT_SIZE_LINUX: f64 = 10.0;
 /// [`load_or_create`], or produced by [`default_config`] when no file resolves.
 #[derive(Debug, Clone)]
 pub struct WolfConfig {
-    /// The font family name (e.g. `"JetBrains Mono"`).
+    /// The font family name (e.g. `"iA Writer Mono S"`).
     pub font_family: String,
     /// The font size, in points.
     pub font_size: f64,
@@ -83,8 +83,8 @@ pub fn preferences_dir() -> Option<PathBuf> {
     }
 }
 
-/// The built-in defaults: font family `"JetBrains Mono"`, line-height 130%, and a
-/// platform-specific font size (14 pt on macOS, 10 pt elsewhere).
+/// The built-in defaults: font family `"iA Writer Mono S"`, line-height 130%, and
+/// a platform-specific font size (14 pt on macOS, 10 pt elsewhere).
 #[must_use]
 pub fn default_config() -> WolfConfig {
     let font_size = if cfg!(target_os = "macos") {
@@ -190,7 +190,8 @@ mod tests {
     const CONFIG_FILE_NAME: &str = "wolf-config.yaml";
 
     /// The documented default font family (platform-independent).
-    const EXPECT_DEFAULT_FONT_FAMILY: &str = "JetBrains Mono";
+    // NOTE: must match wolf_core::config::DEFAULT_FONT_FAMILY (the verified iA Writer Mono S CoreText family name).
+    const EXPECT_DEFAULT_FONT_FAMILY: &str = "iA Writer Mono S";
     /// The documented default line-height (percent of font size), all platforms.
     const EXPECT_DEFAULT_LINE_HEIGHT: f64 = 130.0;
     /// The documented default font size on macOS (points).

@@ -66,11 +66,15 @@ macos_application(
     # three are VENDORED/SHIPPED and treesitter highlighting + fenced-code injection
     # are ENABLED on macOS by the captive init.lua; the vendored JetBrains Mono
     # fonts (structure-preserving `fonts/` TreeArtifact: four TTF faces + OFL.txt)
-    # land at `Contents/Resources/fonts/`, where `FontRegistration.swift` registers
-    # them with CoreText so "JetBrains Mono" resolves as the default grid font; the
+    # AND the vendored iA Writer Mono S fonts (structure-preserving `fonts/`
+    # TreeArtifact: four TTF faces + LICENSE.md) BOTH merge into the SAME
+    # `Contents/Resources/fonts/` dir (disjoint file sets), where
+    # `FontRegistration.swift` glob-registers every `*.ttf` with CoreText so both
+    # "JetBrains Mono" and the DEFAULT "iA Writer Mono S" resolve as grid fonts; the
     # captive `init.lua` lands flat at `Contents/Resources/init.lua` (resolved by
     # `Bundle.main.path`).
     resources = [
+        "//bazel/ia-writer-mono:ia_writer_mono_tree",
         "//bazel/jetbrains-mono:jetbrains_mono_tree",
         "//bazel/lighthouse:lighthouse_tree",
         "//bazel/nvim:nvim_tree",

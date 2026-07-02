@@ -1,0 +1,25 @@
+# Structure-preserving iA Writer Mono S font TreeArtifact + a smoke test.
+#
+# `ia_writer_mono_tree` resolves to the assembled `fonts/` TreeArtifact (the four
+# static iA Writer Mono S TTF faces + LICENSE.md); the macOS app bundles it at
+# `Contents/Resources/fonts/` (the SAME dir as JetBrains Mono), where
+# `FontRegistration.swift` registers the TTFs with CoreText so "iA Writer Mono S"
+# resolves as the DEFAULT UI/grid font. iA Writer Mono is DATA (arch-independent),
+# so there is NO `select()` here (unlike //bazel/nvim). See extensions.bzl and the
+# directory README for the pin and how to bump it.
+
+# The assembled iA Writer Mono S tree (a `fonts/` TreeArtifact:
+# iAWriterMonoS-{Regular,Italic,Bold,BoldItalic}.ttf + LICENSE.md).
+alias(
+    name = "ia_writer_mono_tree",
+    actual = "@ia_writer_mono//:ia_writer_mono_tree",
+    visibility = ["//visibility:public"],
+)
+
+# Asserts the four TTF faces + LICENSE.md landed at the expected paths inside the
+# tree.
+sh_test(
+    name = "ia_writer_mono_tree_test",
+    srcs = ["ia_writer_mono_tree_test.sh"],
+    data = [":ia_writer_mono_tree"],
+)
