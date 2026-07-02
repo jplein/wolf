@@ -21,11 +21,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var handle: WolfCoreHandle?
     private var picker: PickerView?
     private var tree: FileTreeView?
+    private var statePersistence: StatePersistence?
+
+    /// The first saved window from `state.json`, extracted into plain Swift
+    /// scalars (see `RestoredWindowState`). `nil` when nothing usable was saved.
+    private var restoredWindow: RestoredWindowState?
+
+    /// The scalar facets of one saved window, copied OUT of the bridge's
+    /// `RustVec<FfiWindowState>` immediately (element refs must not outlive the
+    /// vec) into a plain value the delegate can hold across launch.
+    private struct RestoredWindowState {
+        let x: Double
+        let y: Double
+        let width: Double
+        let height: Double
+        let cwd: String
+        let sidebarVisible: Bool
+        let toolbarMode: StateSeam.ToolbarMode?
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         WakeBridge.install()
         PickerWakeBridge.install()
         TreeWakeBridge.install()
+
+        // Read the saved state BEFORE the core starts: the restored cwd decides
+        // where the embedded Neovim launches. Corrupt/absent state is an empty
+        // list (never an error), so this simply stays nil.
+        restoredWindow = Self.firstRestoredWindow(from: wolf_ffi_load_state())
 
         guard let handle = startCore() else {
             presentStartupFailureAndQuit()
@@ -70,13 +93,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         paneContainer.onPickerTrigger = { [weak picker] in picker?.open() }
         self.picker = picker
 
-        window.center()
+        // Restore the saved window frame when it is usable (positive size and
+        // intersecting a live screen), else keep the default centered placement.
+        // Sidebar + toolbar restore also happen BEFORE the window is shown.
+        if let restored = restoredWindow,
+            let frame = StateSeam.restoredWindowFrame(
+                x: restored.x, y: restored.y,
+                width: restored.width, height: restored.height,
+                screenVisibleFrames: NSScreen.screens.map(\.visibleFrame))
+        {
+            window.setFrame(frame, display: false)
+        } else {
+            window.center()
+        }
+        if let restored = restoredWindow {
+            window.sidebarItem.isCollapsed = !restored.sidebarVisible
+            if let mode = restored.toolbarMode {
+                window.toolbar?.displayMode = Self.toolbarDisplayMode(mode)
+            }
+        }
+
         window.makeKeyAndOrderFront(nil)
         // Setting the content VC can move first responder; ensure the editor pane
         // container keeps it so launch keystrokes reach Neovim.
         window.makeFirstResponder(paneContainer)
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
+
+        // Observe geometry/sidebar/toolbar changes, then push one full snapshot
+        // so a fresh run persists its initial layout immediately.
+        let persistence = StatePersistence(
+            handle: handle,
+            window: window,
+            sidebarItem: window.sidebarItem,
+            toolbar: window.toolbar
+        )
+        persistence.install()
+        persistence.pushSnapshot()
+        statePersistence = persistence
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -84,6 +138,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Push the final layout snapshot and drain the state writer BEFORE the
+        // core is torn down (the toolbar-displayMode KVO is best-effort, so the
+        // terminate-time snapshot is the correctness backstop).
+        statePersistence?.pushSnapshot()
+        _ = handle?.state_flush()
+        statePersistence = nil
+
         // Drop the sidebar's and picker's file-search sessions (cancelling any
         // in-flight traversals) before the core is torn down.
         tree?.close()
@@ -94,7 +155,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         handle = nil
     }
 
-    /// Starts the Rust core against the bundled `init.lua` and a working dir.
+    /// Starts the Rust core against the bundled `init.lua` and a working dir
+    /// (the RESTORED cwd from the last run when it is still a directory, else
+    /// the process's current directory).
     private func startCore() -> WolfCoreHandle? {
         // Point wolf-core at the bundled Neovim unless a developer has already
         // exported `WOLF_NVIM_BIN` (overwrite=0 so the dev override wins). This
@@ -103,13 +166,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             setenv("WOLF_NVIM_BIN", bin, 0)
         }
         let initLua = initLuaPath()
-        let cwd = FileManager.default.currentDirectoryPath
+        let cwd = StateSeam.launchCwd(
+            restored: restoredWindow?.cwd ?? "",
+            fallback: FileManager.default.currentDirectoryPath,
+            isDirectory: { path in
+                var isDir: ObjCBool = false
+                return FileManager.default.fileExists(atPath: path, isDirectory: &isDir)
+                    && isDir.boolValue
+            }
+        )
         return wolf_ffi_start(
             initLua,
             cwd,
             UInt16(Self.initialCols),
             UInt16(Self.initialRows)
         )
+    }
+
+    /// Extracts the FIRST saved window from the bridge's restore read into a
+    /// plain `RestoredWindowState`, or `nil` when nothing was saved. An unknown
+    /// toolbar discriminant (a future writer) maps to `nil` — the toolbar is
+    /// then left at its default.
+    private static func firstRestoredWindow(from state: FfiState) -> RestoredWindowState? {
+        let windows = state.windows()
+        guard let w = windows.get(index: 0) else { return nil }
+        let toolbarMode: StateSeam.ToolbarMode? =
+            w.toolbar_mode_set() ? StateSeam.ToolbarMode(rawValue: w.toolbar_mode()) : nil
+        return RestoredWindowState(
+            x: w.x(), y: w.y(),
+            width: w.width(), height: w.height(),
+            cwd: w.cwd().toString(),
+            sidebarVisible: w.sidebar_visible(),
+            toolbarMode: toolbarMode
+        )
+    }
+
+    /// Maps the shared `StateSeam.ToolbarMode` onto AppKit's display mode.
+    private static func toolbarDisplayMode(_ mode: StateSeam.ToolbarMode) -> NSToolbar.DisplayMode
+    {
+        switch mode {
+        case .iconAndText: return .iconAndLabel
+        case .iconOnly: return .iconOnly
+        case .textOnly: return .labelOnly
+        }
     }
 
     /// Resolves the bundled Neovim binary at `Contents/Resources/nvim/bin/nvim`.

@@ -467,3 +467,36 @@ rust_test(
     edition = "2021",
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
+
+# Real-nvim integration test for the state-persistence bridge surface
+# (free `wolf_ffi_load_state` + the `FfiState` / `FfiWindowState` accessors,
+# `WolfCoreHandle::state_set_geometry` / `state_set_sidebar_visible` /
+# `state_set_toolbar_mode` / `state_flush`, and the start-time StateStore
+# attach that persists a `:cd` typed through `send_key`). Modeled on
+# `tree_search` exactly: drives a REAL pinned Neovim (no mocks), loud-skips
+# when WOLF_NVIM_BIN is unset, and stages the captive `init.lua` + pinned nvim
+# tree as runfiles. Reuses `tests/common/mod.rs`. A SINGLE #[test]: it mutates
+# the process-global WOLF_STATE_DIR, which is only safe with one test per
+# binary.
+rust_test(
+    name = "state",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/state.rs",
+    ],
+    crate_root = "tests/state.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
+)

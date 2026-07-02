@@ -24,8 +24,9 @@ use crate::input::{self, InputEvent, MouseEvent, Nvim, ScrollEvent};
 use crate::layout::LayoutIntent;
 use crate::mru::{FileEntry, MruError, MruStore};
 use crate::nvim::{self, NvimConfig, NvimError, NvimProcess};
-use crate::redraw::{IntentQueue, RedrawHandler, TrackedCwd, WakeFn};
+use crate::redraw::{IntentQueue, RedrawHandler, SharedStateStore, TrackedCwd, WakeFn};
 use crate::render::{OwnedSnapshotReadGuard, SharedSnapshot, Snapshot};
+use crate::state::StateStore;
 
 /// A lazily-populated, per-cwd cache of [`MruStore`]s, keyed by CANONICAL cwd.
 ///
@@ -147,6 +148,11 @@ pub struct WolfCore {
     /// tokio worker thread). `None` until nvim first reports its cwd; the pump then
     /// falls back to [`cwd`](Self::cwd).
     tracked_cwd: TrackedCwd,
+    /// The optionally-attached application-state store. Empty at start; filled
+    /// by [`WolfCore::attach_state_store`]. Cloned into the redraw handler, which
+    /// mirrors each `wolf_cwd` notification into the store (window 0) so cwd
+    /// changes persist with no front-end involvement.
+    state_store: SharedStateStore,
     /// The configured working directory: the file picker's FALLBACK search root
     /// and the MRU cache location. The live search root is the captive Neovim's
     /// `getcwd()` (see [`WolfCore::start_file_search`]); this path is used only
@@ -173,10 +179,12 @@ impl WolfCore {
 
         let snapshot = SharedSnapshot::new(cfg.cols as usize, cfg.rows as usize);
         let intents: IntentQueue = Arc::new(Mutex::new(VecDeque::new()));
+        let state_store: SharedStateStore = Arc::new(RwLock::new(None));
         let handler = RedrawHandler::new(
             snapshot.clone_handle(),
             intents.clone(),
             tracked_cwd.clone(),
+            state_store.clone(),
             wake,
         );
 
@@ -250,8 +258,26 @@ impl WolfCore {
             input_tx,
             mru_cache,
             tracked_cwd,
+            state_store,
             cwd,
         })
+    }
+
+    /// Attaches an application-state store: from now on every `wolf_cwd`
+    /// notification (the `WolfDir` `DirChanged` autocmd, covering both UI- and
+    /// `:cd`-initiated changes) is mirrored into `store` as window 0's cwd.
+    ///
+    /// The current [`tracked_cwd`](Self::live_cwd) — if nvim has already
+    /// reported one — is pushed into the store IMMEDIATELY, so the setup-time
+    /// `wolf_cwd` emission that may have raced ahead of this attach is not
+    /// lost. The tracked-cwd read guard is cloned out before the store call
+    /// (no lock held across it).
+    pub fn attach_state_store(&self, store: StateStore) {
+        *self.state_store.write() = Some(store.clone());
+        let cwd = self.tracked_cwd.read().clone();
+        if let Some(cwd) = cwd {
+            store.set_cwd(0, &cwd);
+        }
     }
 
     /// Reads the current render-state snapshot (for painting on the UI thread).

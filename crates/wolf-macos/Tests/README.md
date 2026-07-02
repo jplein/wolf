@@ -1,6 +1,6 @@
 # wolf-macos/Tests
 
-The Swift tests for the macOS front-end. The Bazel target is `//crates/wolf-macos:WolfKeyMapTests`; it runs regardless of `WOLF_NVIM_BIN` (it needs no Neovim) and covers the pure seams — the key seam (`KeyMapTests.swift`), the picker seam (`PickerSeamTests.swift`), the pane-layout seam (`PaneTreeTests.swift`), the per-pane geometry seam (`PaneGeometryTests.swift`), and the scroll-accumulator seam (`ScrollAccumulatorTests.swift`).
+The Swift tests for the macOS front-end. The Bazel target is `//crates/wolf-macos:WolfKeyMapTests`; it runs regardless of `WOLF_NVIM_BIN` (it needs no Neovim) and covers the pure seams — the key seam (`KeyMapTests.swift`), the picker seam (`PickerSeamTests.swift`), the pane-layout seam (`PaneTreeTests.swift`), the per-pane geometry seam (`PaneGeometryTests.swift`), the scroll-accumulator seam (`ScrollAccumulatorTests.swift`), the glyph-style seam (`GlyphStyleTests.swift`), and the state-restore seam (`StateSeamTests.swift`).
 
 ## `WolfKeyMapTests/KeyMapTests.swift`
 
@@ -33,3 +33,13 @@ Pure, headless `XCTest` coverage of the AppKit-free `WolfKeyMap.PaneGeometry` se
 ## `WolfKeyMapTests/ScrollAccumulatorTests.swift`
 
 Pure, headless `XCTest` coverage of the AppKit-free `WolfKeyMap.ScrollAccumulator` seam (`@testable import WolfKeyMap`), the signed pixel→line-step accumulator with a carried remainder. Cases: a whole `±cellHeight` of `deltaY` yields exactly `±1` step; two sub-cell (`0.6h`) nudges yield `0` then `1` (crossing at `1.2h`); the remainder carries across calls (`1.5h` → `1` step + a `0.5h` remainder, then a further `0.5h` completes another step); a sign change reverses (`+1.5h` → `+1` step + `+0.5h` remainder, then `-2h` → remainder `-1.5h` → `-1` step); and a zero (non-positive) `cellHeight` short-circuits to `0` (no divide-by-zero / infinite loop).
+
+## `WolfKeyMapTests/StateSeamTests.swift`
+
+Pure, headless `XCTest` coverage of the AppKit-free `StateSeam` (`WolfKeyMap`) — the state-restore decision seams, table-driven:
+
+- `testToolbarModeDiscriminantTable` — the `ToolbarMode` ↔ discriminant contract in BOTH directions (`0/1/2` ↔ `iconAndText`/`iconOnly`/`textOnly`; unknown discriminants `3` and `99` → `nil`), keeping the Swift port in lockstep with wolf-ffi's `mod toolbar_mode` and the `//crates/wolf-ffi:state` discriminant guard.
+- `testRestoredWindowFrameTable` — `restoredWindowFrame(x:y:width:height:screenVisibleFrames:)` accepts a frame intersecting a screen visible frame and rejects (`nil`) the non-positive width/height "unset" sentinel and a fully-offscreen frame (e.g. a disconnected display).
+- `testLaunchCwdTable` — `launchCwd(restored:fallback:isDirectory:)` picks the restored cwd only when it is non-empty and the injected `isDirectory` check passes (tests pass a set lookup, keeping the seam pure), falling back on an empty or no-longer-a-directory path.
+
+The AppKit save/restore wiring (`StatePersistence.swift`, the `AppDelegate` restore path) stays compile-verified + manual-smoke, per the plan; the bridge surface it drives is covered by the real-nvim `//crates/wolf-ffi:state` test.

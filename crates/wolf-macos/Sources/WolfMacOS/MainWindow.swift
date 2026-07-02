@@ -21,6 +21,16 @@ final class MainWindow: NSWindow {
     /// Retains the toolbar delegate (an `NSToolbar`'s `delegate` is weak).
     private let toolbarDelegate: EditorToolbarDelegate
 
+    /// The content split-view controller, retained so the sidebar split item is
+    /// reachable for state restore/persistence.
+    private let splitViewController: EditorSplitViewController
+
+    /// The sidebar `NSSplitViewItem`, exposed so state restore can set — and
+    /// `StatePersistence` can observe — `isCollapsed`.
+    var sidebarItem: NSSplitViewItem {
+        splitViewController.sidebarItem
+    }
+
     /// Builds the window around `treeView` (sidebar) and `paneContainer` (editor),
     /// sizing the editor pane to `cols` × `rows` cells with the cmdline strip as
     /// extra height below it.
@@ -67,6 +77,7 @@ final class MainWindow: NSWindow {
         paneContainer: PaneContainerView
     ) {
         toolbarDelegate = EditorToolbarDelegate(splitView: splitVC.splitView)
+        splitViewController = splitVC
 
         super.init(
             contentRect: contentRect,
@@ -87,6 +98,9 @@ final class MainWindow: NSWindow {
         let toolbar = NSToolbar(identifier: "WolfEditorToolbar")
         toolbar.delegate = toolbarDelegate
         toolbar.allowsUserCustomization = false
+        // The icon+text / icon-only / text-only context menu on the toolbar;
+        // the chosen mode is persisted per window in state.json.
+        toolbar.allowsDisplayModeCustomization = true
         toolbarStyle = .unified
         self.toolbar = toolbar
 

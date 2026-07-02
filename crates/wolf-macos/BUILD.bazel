@@ -28,6 +28,7 @@ swift_library(
         "Sources/WolfKeyMap/PaneTree.swift",
         "Sources/WolfKeyMap/PickerSeam.swift",
         "Sources/WolfKeyMap/ScrollAccumulator.swift",
+        "Sources/WolfKeyMap/StateSeam.swift",
     ] + ["//crates/wolf-ffi:generated_swift"],
     module_name = "WolfKeyMap",
     visibility = ["//visibility:public"],
@@ -116,6 +117,7 @@ swift_test(
         "Tests/WolfKeyMapTests/PaneTreeTests.swift",
         "Tests/WolfKeyMapTests/PickerSeamTests.swift",
         "Tests/WolfKeyMapTests/ScrollAccumulatorTests.swift",
+        "Tests/WolfKeyMapTests/StateSeamTests.swift",
     ],
     deps = [":wolf_key_map"],
 )

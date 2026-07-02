@@ -42,11 +42,12 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use wolf_core::{
     rank_matches, CoreConfig, CursorShape, FileSearch, FocusDir, Grid, InputEvent, Key, KeyEvent,
     LayoutIntent, MouseAction, MouseButton, MouseEvent, ResolvedStyle, Rgb, ScrollDirection,
-    ScrollEvent, SplitOrientation, WakeFn, WinInfo, WolfCore,
+    ScrollEvent, SplitOrientation, StateStore, ToolbarMode, WakeFn, WinInfo, WindowState, WolfCore,
 };
 
 // Re-export the bridge-defined transparent structs at the crate root so the Rust
@@ -180,6 +181,25 @@ mod mouse_action {
     /// Pointer dragged with the button held.
     pub const DRAG: u8 = 2;
 }
+
+/// The toolbar-display-mode discriminants carried by
+/// [`WolfCoreHandle::state_set_toolbar_mode`] and [`FfiWindowState::toolbar_mode`],
+/// mirroring the variant order of [`wolf_core::ToolbarMode`].
+///
+/// The single source of truth shared with the Swift `StateSeam.ToolbarMode`
+/// port and the `tests/state.rs` discriminant contract.
+mod toolbar_mode {
+    /// Toolbar items show icon + text (`wolf_core::ToolbarMode::IconAndText`).
+    pub const ICON_AND_TEXT: u8 = 0;
+    /// Toolbar items show only their icon (`wolf_core::ToolbarMode::IconOnly`).
+    pub const ICON_ONLY: u8 = 1;
+    /// Toolbar items show only their label (`wolf_core::ToolbarMode::TextOnly`).
+    pub const TEXT_ONLY: u8 = 2;
+}
+
+/// How long [`WolfCoreHandle::state_flush`] (and the shutdown-time flush) blocks
+/// waiting for the state writer thread to drain everything pending.
+const STATE_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The scroll-direction discriminants packed into [`FfiScrollEvent::direction`],
 /// mirroring the variant order of [`wolf_core::ScrollDirection`].
@@ -317,6 +337,23 @@ mod ffi {
         // Opens `path` (an absolute filesystem path) in Neovim via
         // `InputEvent::Open`; the core's input pump records the MRU.
         fn open(&self, path: String);
+        // Records window 0's frame geometry into the live state store (points;
+        // AppKit bottom-left global coords on macOS). A no-op when no store is
+        // attached.
+        fn state_set_geometry(&self, x: f64, y: f64, width: f64, height: f64);
+        // Records window 0's sidebar visibility into the live state store. A
+        // no-op when no store is attached.
+        fn state_set_sidebar_visible(&self, visible: bool);
+        // Records window 0's toolbar display mode: `mode` is a `mod
+        // toolbar_mode` discriminant; `set == false` clears the mode to unset
+        // (the value byte is then ignored); an unrecognized discriminant is a
+        // logged no-op. A no-op when no store is attached.
+        fn state_set_toolbar_mode(&self, mode: u8, set: bool);
+        // Blocks until every pending state mutation has had its disk write
+        // attempted (bounded by an internal ~2s timeout). Returns whether
+        // everything pending was flushed in time (true when no store exists —
+        // there is nothing to flush).
+        fn state_flush(&self) -> bool;
     }
 
     extern "Rust" {
@@ -383,6 +420,45 @@ mod ffi {
         // needed) delegating to `wolf_core::config`; infallible (defaults on any
         // error). Standalone, like `wolf_ffi_ancestors_to_reveal`.
         fn wolf_ffi_load_config() -> FfiConfig;
+    }
+
+    extern "Rust" {
+        type FfiState;
+
+        // The restored per-window entries (empty when nothing was saved).
+        // `FfiWindowState` is opaque so a `Vec` is supported.
+        fn windows(&self) -> Vec<FfiWindowState>;
+    }
+
+    extern "Rust" {
+        type FfiWindowState;
+
+        // The window origin's x coordinate, in points.
+        fn x(&self) -> f64;
+        // The window origin's y coordinate, in points.
+        fn y(&self) -> f64;
+        // The window width, in points (`<= 0` == unset — do not restore).
+        fn width(&self) -> f64;
+        // The window height, in points (`<= 0` == unset — do not restore).
+        fn height(&self) -> f64;
+        // The saved working directory, or "" when never reported.
+        fn cwd(&self) -> String;
+        // Whether the file-tree sidebar was visible.
+        fn sidebar_visible(&self) -> bool;
+        // The saved toolbar display mode as a `mod toolbar_mode` discriminant;
+        // meaningful only when `toolbar_mode_set()` (the `{value, set}` pair
+        // follows the FfiColor precedent).
+        fn toolbar_mode(&self) -> u8;
+        // Whether a toolbar display mode was saved at all.
+        fn toolbar_mode_set(&self) -> bool;
+    }
+
+    extern "Rust" {
+        // Loads the saved application state from the platform state dir (the
+        // pre-start restore read). NEVER creates the file and NEVER opens the
+        // live store; absent/corrupt/unresolvable all yield an empty window
+        // list. A free fn, standalone like `wolf_ffi_load_config`.
+        fn wolf_ffi_load_state() -> FfiState;
     }
 
     extern "Rust" {
@@ -660,6 +736,134 @@ pub fn wolf_ffi_load_config() -> FfiConfig {
 }
 
 // ---------------------------------------------------------------------------
+// FfiState / FfiWindowState: the saved application state (opaque to Swift).
+// ---------------------------------------------------------------------------
+
+/// The saved application state as loaded by [`wolf_ffi_load_state`] (opaque to
+/// Swift). A thin wrapper vending the per-window entries — kept opaque (rather
+/// than returning the `Vec` from the free fn directly) so the bridge stays on
+/// the proven opaque-type-method `Vec` pattern.
+pub struct FfiState {
+    windows: Vec<FfiWindowState>,
+}
+
+impl FfiState {
+    /// The restored per-window entries (empty when nothing was saved).
+    #[must_use]
+    pub fn windows(&self) -> Vec<FfiWindowState> {
+        self.windows.clone()
+    }
+}
+
+/// One saved window's state (opaque to Swift, so a `Vec<FfiWindowState>` is
+/// supported — swift-bridge emits Vec support only for opaque types).
+///
+/// A projection of [`wolf_core::WindowState`] with the optional toolbar mode
+/// flattened into the `{value, set}` accessor pair ([`FfiWindowState::toolbar_mode`]
+/// / [`FfiWindowState::toolbar_mode_set`]), following the [`FfiColor`] precedent.
+#[derive(Clone)]
+pub struct FfiWindowState {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    cwd: String,
+    sidebar_visible: bool,
+    toolbar_mode: u8,
+    toolbar_mode_set: bool,
+}
+
+impl FfiWindowState {
+    /// The window origin's x coordinate, in points.
+    #[must_use]
+    pub fn x(&self) -> f64 {
+        self.x
+    }
+
+    /// The window origin's y coordinate, in points.
+    #[must_use]
+    pub fn y(&self) -> f64 {
+        self.y
+    }
+
+    /// The window width, in points (`<= 0` == unset — do not restore).
+    #[must_use]
+    pub fn width(&self) -> f64 {
+        self.width
+    }
+
+    /// The window height, in points (`<= 0` == unset — do not restore).
+    #[must_use]
+    pub fn height(&self) -> f64 {
+        self.height
+    }
+
+    /// The saved working directory, or `""` when never reported.
+    #[must_use]
+    pub fn cwd(&self) -> String {
+        self.cwd.clone()
+    }
+
+    /// Whether the file-tree sidebar was visible.
+    #[must_use]
+    pub fn sidebar_visible(&self) -> bool {
+        self.sidebar_visible
+    }
+
+    /// The saved toolbar display mode as a [`toolbar_mode`] discriminant;
+    /// meaningful only when [`toolbar_mode_set`](Self::toolbar_mode_set).
+    #[must_use]
+    pub fn toolbar_mode(&self) -> u8 {
+        self.toolbar_mode
+    }
+
+    /// Whether a toolbar display mode was saved at all.
+    #[must_use]
+    pub fn toolbar_mode_set(&self) -> bool {
+        self.toolbar_mode_set
+    }
+
+    /// Projects a [`wolf_core::WindowState`], packing the optional toolbar mode
+    /// into the `{value, set}` pair via the [`toolbar_mode`] discriminants.
+    fn from_window(w: &WindowState) -> Self {
+        let (mode, set) = match w.toolbar_mode {
+            Some(ToolbarMode::IconAndText) => (toolbar_mode::ICON_AND_TEXT, true),
+            Some(ToolbarMode::IconOnly) => (toolbar_mode::ICON_ONLY, true),
+            Some(ToolbarMode::TextOnly) => (toolbar_mode::TEXT_ONLY, true),
+            None => (0, false),
+        };
+        Self {
+            x: w.x,
+            y: w.y,
+            width: w.width,
+            height: w.height,
+            cwd: w.cwd.clone(),
+            sidebar_visible: w.sidebar_visible,
+            toolbar_mode: mode,
+            toolbar_mode_set: set,
+        }
+    }
+}
+
+/// Loads the saved application state from the platform state dir — the
+/// PRE-START restore read the front-end performs before `wolf_ffi_start`.
+///
+/// A free FFI fn delegating to [`wolf_core::state_dir`] +
+/// [`wolf_core::load_state`]: it NEVER creates or modifies the file and NEVER
+/// opens the live store (the handle does that at start). An absent/corrupt
+/// file or an unresolvable state dir all yield an empty window list —
+/// infallible across the bridge, parallel to [`wolf_ffi_load_config`].
+#[must_use]
+pub fn wolf_ffi_load_state() -> FfiState {
+    let state = wolf_core::state_dir()
+        .and_then(|dir| wolf_core::load_state(&dir))
+        .unwrap_or_default();
+    FfiState {
+        windows: state.windows.iter().map(FfiWindowState::from_window).collect(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Opaque handles.
 // ---------------------------------------------------------------------------
 
@@ -671,6 +875,11 @@ pub fn wolf_ffi_load_config() -> FfiConfig {
 /// `self`) while the bridge only ever hands Swift a `&self`.
 pub struct WolfCoreHandle {
     core: RefCell<Option<WolfCore>>,
+    /// The live application-state store, opened at [`wolf_ffi_start`] over
+    /// [`wolf_core::state_dir`] and attached to the core (so cwd changes
+    /// persist core-side). `None` when no state dir could be resolved — every
+    /// `state_*` method is then a no-op.
+    store: Option<StateStore>,
 }
 
 impl WolfCoreHandle {
@@ -816,6 +1025,13 @@ impl WolfCoreHandle {
     /// it via [`WolfCore::shutdown`]; any shutdown error is logged, not returned
     /// (the bridge signature is infallible).
     pub fn shutdown(&self) {
+        // Drain any pending state writes BEFORE the core (and with it the
+        // process's reason to live) goes away; bounded so shutdown never hangs.
+        if let Some(store) = &self.store {
+            if !store.flush(STATE_FLUSH_TIMEOUT) {
+                tracing::warn!("wolf-ffi: state flush timed out during shutdown");
+            }
+        }
         if let Some(core) = self.core.borrow_mut().take() {
             if let Err(e) = core.shutdown() {
                 tracing::warn!("wolf-ffi: core shutdown failed: {e}");
@@ -905,10 +1121,71 @@ impl WolfCoreHandle {
             });
         }
     }
+
+    /// Records window 0's frame geometry into the live state store (points; on
+    /// macOS this is `NSWindow.frame`'s AppKit bottom-left global coords). This
+    /// pass hardcodes window index 0 (single-window front-end); a no-op when no
+    /// store is attached.
+    pub fn state_set_geometry(&self, x: f64, y: f64, width: f64, height: f64) {
+        if let Some(store) = &self.store {
+            store.set_geometry(0, x, y, width, height);
+        }
+    }
+
+    /// Records window 0's sidebar visibility into the live state store. This
+    /// pass hardcodes window index 0; a no-op when no store is attached.
+    pub fn state_set_sidebar_visible(&self, visible: bool) {
+        if let Some(store) = &self.store {
+            store.set_sidebar_visible(0, visible);
+        }
+    }
+
+    /// Records window 0's toolbar display mode into the live state store.
+    ///
+    /// `mode` is a [`toolbar_mode`] discriminant. `set == false` CLEARS the
+    /// mode to unset (the value byte is then ignored); an unrecognized
+    /// discriminant with `set == true` is a logged NO-OP (the stored mode is
+    /// left unchanged, never corrupted). This pass hardcodes window index 0; a
+    /// no-op when no store is attached.
+    pub fn state_set_toolbar_mode(&self, mode: u8, set: bool) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        if !set {
+            store.set_toolbar_mode(0, None);
+            return;
+        }
+        let mode = match mode {
+            toolbar_mode::ICON_AND_TEXT => ToolbarMode::IconAndText,
+            toolbar_mode::ICON_ONLY => ToolbarMode::IconOnly,
+            toolbar_mode::TEXT_ONLY => ToolbarMode::TextOnly,
+            other => {
+                tracing::warn!("wolf-ffi: unrecognized toolbar-mode discriminant {other}; ignored");
+                return;
+            }
+        };
+        store.set_toolbar_mode(0, Some(mode));
+    }
+
+    /// Blocks until every pending state mutation has had its disk write
+    /// attempted, bounded by [`STATE_FLUSH_TIMEOUT`]. Returns whether
+    /// everything pending was flushed in time; `true` when no store is
+    /// attached (there is nothing to flush).
+    pub fn state_flush(&self) -> bool {
+        self.store
+            .as_ref()
+            .is_none_or(|store| store.flush(STATE_FLUSH_TIMEOUT))
+    }
 }
 
 /// Starts the core. `init_lua` and `cwd` are filesystem paths (mirroring
 /// [`CoreConfig`]); returns `None` (after logging) on any startup error.
+///
+/// After a successful start it also opens the live [`StateStore`] over
+/// [`wolf_core::state_dir`] and attaches it to the core (so cwd changes
+/// persist with no further front-end calls), stashing the store in the handle
+/// for the `state_*` setters. An unresolvable state dir only logs — state
+/// persistence is then disabled, never fatal.
 #[must_use]
 pub fn wolf_ffi_start(
     init_lua: String,
@@ -923,9 +1200,25 @@ pub fn wolf_ffi_start(
         cwd: PathBuf::from(cwd),
     };
     match WolfCore::start(cfg, registered_wake()) {
-        Ok(core) => Some(WolfCoreHandle {
-            core: RefCell::new(Some(core)),
-        }),
+        Ok(core) => {
+            let store = match wolf_core::state_dir() {
+                Some(dir) => {
+                    let store = StateStore::open(&dir);
+                    core.attach_state_store(store.clone());
+                    Some(store)
+                }
+                None => {
+                    tracing::warn!(
+                        "wolf-ffi: no state dir resolved; state persistence disabled"
+                    );
+                    None
+                }
+            };
+            Some(WolfCoreHandle {
+                core: RefCell::new(Some(core)),
+                store,
+            })
+        }
         Err(e) => {
             tracing::error!("wolf-ffi: WolfCore::start failed: {e}");
             None

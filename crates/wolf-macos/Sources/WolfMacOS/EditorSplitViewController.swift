@@ -54,6 +54,12 @@ final class EditorSplitViewController: NSSplitViewController {
         fatalError("EditorSplitViewController is not constructed from a nib")
     }
 
+    /// The sidebar `NSSplitViewItem` (the leading split item), exposed so state
+    /// restore can set — and state persistence can observe — `isCollapsed`.
+    var sidebarItem: NSSplitViewItem {
+        splitViewItems[0]
+    }
+
     /// Pins the divider so the sidebar pane is exactly `MainWindow.treePaneWidth`
     /// wide. Called by `MainWindow` after the content size is set.
     func pinDivider() {

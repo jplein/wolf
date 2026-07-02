@@ -110,3 +110,52 @@ rust_test(
     },
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
+
+# Headless coverage for the PUBLIC `state` module surface (`StateStore` /
+# `load_state` / `state_dir`): store round-trip, the silently-ignore matrix,
+# multi-window preservation, the unset-geometry sentinel, concurrent setters,
+# flush/coalescing semantics, and the WOLF_STATE_DIR override. Needs NO nvim and
+# no staged runfiles (everything is driven through explicit tempdirs), so there
+# is no `no-sandbox` tag and no `data`/`env` — the pure analog of
+# `//crates/wolf-ffi:config`. `normal = True` rides alongside `normal_dev` for
+# the same reason as `file_search` above (tempfile lives in BOTH of wolf-core's
+# dependency tables, so crate_universe omits it from the dev map alone).
+rust_test(
+    name = "state_unit",
+    srcs = ["tests/state_unit.rs"],
+    crate_root = "tests/state_unit.rs",
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+# Real-nvim integration test for the save-on-cwd-change flow (state plan §4): a
+# `:cd` typed into the embedded nvim (and the setup-time wolf_cwd emission that
+# the attach-time push covers) must persist into `<state-dir>/state.json`
+# through the attached StateStore. An EXACT mirror of the `mru_open_records`
+# target above: drives a REAL pinned Neovim (no mocks), stages the captive
+# `init.lua` + the pinned nvim tree as runfiles, reuses `tests/common/mod.rs`,
+# and runs unsandboxed so the nvim child can spawn.
+rust_test(
+    name = "state_save",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/state_save.rs",
+    ],
+    crate_root = "tests/state_save.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)

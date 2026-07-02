@@ -1875,6 +1875,7 @@ dependencies = [
  "rmpv",
  "rusqlite",
  "serde",
+ "serde_json",
  "serde_yaml",
  "tempfile",
  "thiserror",

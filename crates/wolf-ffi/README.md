@@ -28,7 +28,13 @@ All types are re-exported at the crate root (`wolf_ffi::…`).
   - `current_file(&self) -> String` — the absolute path of the buffer currently being edited (canonicalized by core via the `wolf_current_file` notification), or the empty string for an unnamed buffer / shut-down core. Read on each editor wake to highlight + reveal the sidebar's current file.
   - `cwd(&self) -> String` — Neovim's LIVE, already-canonicalized working directory (the `wolf_cwd`/`DirChanged`-tracked cell, tracking `:cd`/`:lcd`/`:tcd`), or the empty string until nvim first reports it / after shutdown. Routes through `WolfCore::live_cwd` (a cheap synchronous read — cwd is NOT in the render snapshot, so unlike `current_file` it does not read `read_snapshot()`). Read on each editor wake by the sidebar to re-root the file tree when the cwd changed.
   - `open(&self, path: String)` — issues `InputEvent::Open { path }` to open the file; the MRU is recorded by core's input pump.
-  - `shutdown(&self)` — takes the core out and shuts it down (idempotent; infallible across the bridge — any error is logged).
+  - `state_set_geometry(&self, x, y, width, height: f64)` — records window 0's frame geometry into the live state store (points; AppKit bottom-left global coords on macOS). Like every `state_*` method it hardcodes window index 0 this pass and is a no-op when no store is attached (no state dir resolved at start).
+  - `state_set_sidebar_visible(&self, visible: bool)` — records window 0's sidebar visibility into the live state store.
+  - `state_set_toolbar_mode(&self, mode: u8, set: bool)` — records window 0's toolbar display mode: `mode` is a `toolbar_mode` discriminant (table below); `set == false` CLEARS the mode to unset (the value byte is then ignored, and the on-disk field is omitted); an unrecognized discriminant is a logged no-op (the stored mode is left unchanged, not cleared).
+  - `state_flush(&self) -> bool` — blocks until every pending state mutation has had its disk write attempted (bounded by an internal ~2 s timeout, `STATE_FLUSH_TIMEOUT`). Returns whether everything pending was flushed in time (`true` when no store exists — there is nothing to flush). `shutdown` also performs this flush itself before tearing the core down.
+  - `shutdown(&self)` — flushes the state store (bounded, so shutdown never hangs), then takes the core out and shuts it down (idempotent; infallible across the bridge — any error is logged).
+
+  `wolf_ffi_start`, after a successful core start, opens the live `wolf_core::StateStore` over `wolf_core::state_dir()` and attaches it to the core via `attach_state_store` (so cwd changes persist core-side with no further front-end calls), stashing the store in the handle for the `state_*` methods. An unresolvable state dir only logs — state persistence is then disabled, never fatal.
 
 - `FfiFileSearch` — an opaque handle wrapping core's `FileSearch` session (`Option`, so `start_file_search` / `start_tree_search` stay infallible). Methods:
   - `ranked(&self, query: String, max: usize) -> Vec<FfiFileEntry>` runs the ranking **in Rust** (`wolf_core::rank_matches` over the current results snapshot) and returns the top-`max` entries; it yields an empty `Vec` when the session is absent.
@@ -46,6 +52,18 @@ All types are re-exported at the crate root (`wolf_ffi::…`).
 - `FfiConfig` — opaque; the resolved user-level preferences (`wolf-config.yaml`). Accessors `font_family() -> String`, `font_size() -> f64`, and `line_height() -> f64` (the line-height PERCENTAGE, `130` = 130%). Opaque because it wraps the Rust `wolf_core::WolfConfig` and hands its `String` field out through accessors (swift-bridge does not marshal a `String` field inside a transparent struct — the same reason `FfiFileEntry` is opaque).
 
 - `wolf_ffi_load_config() -> FfiConfig` — a free FFI fn (no live session, does NOT hang off `WolfCoreHandle` — like `wolf_ffi_ancestors_to_reveal`). It delegates to `wolf_core::preferences_dir().map(load_or_create).unwrap_or_else(default_config)`: resolve the platform preferences dir, load-or-create `wolf-config.yaml` there, and fall back to the built-in defaults when the dir cannot be resolved. Infallible across the bridge. The macOS `AppDelegate` calls it once at launch (after registering the bundled fonts, before measuring the cell metrics) and passes the result into `CellMetrics.measured(config:)`.
+
+- `FfiState` — opaque; the saved application state as loaded by `wolf_ffi_load_state`. One method, `windows() -> Vec<FfiWindowState>` — the restored per-window entries (empty when nothing usable was saved). `FfiWindowState` is opaque so the `Vec` is supported.
+
+- `FfiWindowState` — opaque; one saved window's state (a flattened `wolf_core::WindowState`). Accessors: `x()` / `y()` / `width()` / `height()` (points; a non-positive width/height is the "unset" sentinel — do not restore), `cwd() -> String` (`""` when never reported), `sidebar_visible() -> bool`, and the `{value, set}` pair `toolbar_mode() -> u8` / `toolbar_mode_set() -> bool` (following the `FfiColor` precedent — the optional `Option<ToolbarMode>` is flattened, `toolbar_mode()` is meaningful only when `toolbar_mode_set()`).
+
+- `wolf_ffi_load_state() -> FfiState` — a free FFI fn (standalone, like `wolf_ffi_load_config`): the PRE-START restore read the front-end performs before `wolf_ffi_start`. It delegates to `wolf_core::state_dir().and_then(load_state)`: it NEVER creates or modifies the file and NEVER opens the live store (the handle does that at start); an absent/corrupt file or an unresolvable state dir all yield an empty window list — infallible across the bridge.
+
+  The `toolbar_mode` discriminant module is the **single source of truth** shared with the Swift `StateSeam.ToolbarMode` port (raw-valued `UInt8` enum) and the `tests/state.rs` discriminant contract, mirroring the variant order of `wolf_core::ToolbarMode`:
+
+  | `toolbar_mode` | 0           | 1        | 2        |
+  | -------------- | ----------- | -------- | -------- |
+  | mode           | IconAndText | IconOnly | TextOnly |
 
 - `FfiFrame` — an opaque, owned, paint-ready snapshot of a single grid (the **active** grid via `read_frame`, or any grid via `read_frame_for_grid`), with every cell already resolved against the highlight table **in Rust** (reusing `HighlightTable::resolve` / `ResolvedStyle` — never re-resolved in Swift). Accessors: `cols`, `rows`, `cursor_row`, `cursor_col`, `cursor_shape` (0 = Block, 1 = Horizontal, 2 = Vertical), `cursor_cell_percentage`, `cursor_visible` (whether the cursor lives on THIS frame's grid — **per-grid**, so only the pane owning the cursor's grid draws it), `grid_id` (the grid this frame was packed from), `cursor_grid` (the grid the cursor currently lives on, so a pane can tell whether the cursor belongs to it even when it is not its own grid), `default_fg`, `default_bg`, `cursor_fill`, `cursor_glyph` (reverse-video cursor colors, ported from wolf-gnome's `cursor.rs` and computed against the REQUESTED grid's cell under the cursor), `cells() -> Vec<FfiCell>` (one flat, row-major handoff per frame), and the four **viewport** accessors that drive the synthetic scrollbar — `topline` (the 0-based first-visible buffer line index, as nvim's `win_viewport` reports), `botline` (one-past-the-last-visible line), `curline` (the 0-based cursor buffer line), and `linecount` (the buffer's total line count). The viewport values are read in `from_snapshot_grid` from `snapshot.windows[grid].viewport` (defaulting to all-zero when the grid has no associated window, e.g. grid 1 or a closed pane).
 
@@ -157,6 +175,7 @@ CARGO_BAZEL_REPIN=1 bazel build //crates/wolf-ffi:wolf_ffi   # then commit lockf
 - `:panes` — the Rust integration test for the split-pane surface (`drain_intents` / `FfiLayoutIntent` / `windows` / `FfiWinInfo` / `grid_for_win` / `active_win` / `focus_win` / `resize_grid` / `read_frame_for_grid`), real pinned nvim, modeled on `tree_search`.
 - `:mouse_scroll` — the Rust integration test for the mouse/scroll + viewport surface (`send_mouse` / `send_scroll` / the `FfiMouseEvent` / `FfiScrollEvent` discriminants / the `FfiFrame` viewport accessors), real pinned nvim, modeled on `panes`.
 - `:config` — the Rust integration test for the config surface (`wolf_ffi_load_config` / `FfiConfig` accessors). **Self-contained**: it points `WOLF_CONFIG_DIR` at a tempdir and needs no nvim staging (no `data` runfiles, no `no-sandbox`/`local` tag), so it runs deterministically regardless of `WOLF_NVIM_BIN`.
+- `:state` — the Rust integration test for the state-persistence surface (`wolf_ffi_load_state` / `FfiState` / `FfiWindowState`, the `state_set_*` setters, `state_flush`, and the start-time store attach), real pinned nvim, modeled on `tree_search`.
 
 ## Testing
 
@@ -194,4 +213,10 @@ bazel test //crates/wolf-ffi:mouse_scroll
 
 ```sh
 bazel test //crates/wolf-ffi:config
+```
+
+`tests/state.rs` covers the state-persistence surface against the same real pinned Neovim (modeled on `tree_search`, reusing `tests/common/mod.rs` and the same `data` / `env` / `no-sandbox` runfile staging). It is deliberately a SINGLE `#[test]` (`state_bridge_saves_and_restores_all_facets`) because it mutates the process-global `WOLF_STATE_DIR` env var, which is only safe with one test per binary. The flow: point `WOLF_STATE_DIR` at a tempdir; `wolf_ffi_load_state()` on the empty dir yields zero windows (and never creates the file); a corrupt `state.json` also yields zero windows (and is preserved); then `wolf_ffi_start` (which opens + attaches the live store), `state_set_geometry` / `state_set_sidebar_visible` / `state_set_toolbar_mode`, a `:cd` typed through `send_key`, and `state_flush()` — asserting all five persisted facets appear in the pretty-printed `state.json`; `wolf_ffi_load_state()` then round-trips them through the `FfiWindowState` accessors (including the `toolbar_mode` / `toolbar_mode_set` pair). It also guards the FFI behaviors: an unrecognized toolbar discriminant is a no-op (the stored mode is unchanged, not cleared), `(0, false)` clears the mode (the file omits the key), and local consts pin the `toolbar_mode` discriminant table (the `mouse_scroll` pattern).
+
+```sh
+bazel test //crates/wolf-ffi:state
 ```

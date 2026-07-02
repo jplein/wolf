@@ -25,6 +25,8 @@ The file picker adds two dependencies — `rusqlite` (with the `bundled` feature
 
 The `config` module adds three more dependencies — `serde` (with `derive`) and `serde_yaml` (0.9) for the `wolf-config.yaml` (de)serialization and `dirs` (5) for resolving the platform preferences directory. All three are deliberately GUI-free: they pull **no** GUI toolkit into core's tree, so the denylist above is unchanged (the command and the denied-crate list stay exactly as written) and stays clean.
 
+The `state` module adds one more dependency — `serde_json` (1) for the pretty-printed `state.json` (de)serialization (it reuses `serde` and `dirs` from the `config` module). It is likewise deliberately GUI-free, so the denylist above is unchanged and stays clean.
+
 ## Building under Bazel (macOS)
 
 On macOS `wolf-core` builds with Bazel (via bazelisk) rather than Cargo; the target label is `//crates/wolf-core:wolf_core`. Its dependencies come from the same `Cargo.toml`/`Cargo.lock` as the Cargo build, consumed through `rules_rust`'s `crate_universe` (with `rules_rust` downloading a pinned `rustc`). The one hard rule above still holds under Bazel: `wolf-gnome` is given no Bazel target, so no GUI toolkit enters `wolf-core`'s Bazel dependency graph. The Bazel-equivalent denylist check is a `bazel query` over the resolved deps:
@@ -53,6 +55,7 @@ Re-exported from the crate root (`wolf_core::…`):
 - `send_mouse(&self, ev: MouseEvent)` — enqueues an `InputEvent::Mouse` (click / drag / release) on the ordered channel; applied via `nvim_input_mouse` targeting `MouseEvent::grid` with grid-local row/col.
 - `send_scroll(&self, ev: ScrollEvent)` — enqueues an `InputEvent::Scroll` (wheel / trackpad) on the ordered channel; applied via `nvim_input_mouse("wheel", …)` targeting `ScrollEvent::grid`.
 - `shutdown(self) -> Result<(), CoreError>` — cleanly quits the captive Neovim and tears down the runtime.
+- `attach_state_store(&self, store: StateStore)` — attaches an application-state store (see "Application state — `state`" below): from then on every `wolf_cwd` notification (the `DirChanged` autocmd, covering both UI- and `:cd`-initiated changes) is mirrored into the store as window 0's cwd. The current tracked cwd — if nvim has already reported one — is pushed immediately, so the setup-time `wolf_cwd` emission that may have raced ahead of the attach is not lost.
 - `mru_recent(&self) -> Vec<FileEntry>` — the most-recently-opened files (newest first), pruning any whose backing file no longer exists. Reads the per-cwd store for the captive Neovim's LIVE cwd (the tracked cell, falling back to the configured `cwd`), so the entries' `display` strings relativize against the same directory the picker is rooted at. See `MruStore::recent`.
 - `start_file_search(&self, wake: WakeFn) -> FileSearch` — starts a streaming file search rooted at the captive Neovim's live working directory (`getcwd()`), falling back to the configured cwd (see "The file-search session" below).
 
@@ -101,6 +104,40 @@ config:
   font-family: "iA Writer Mono S"
   font-size: 14
   line-height: 130
+```
+
+### Application state — `state` (from [`state`](src/state.rs))
+
+A GUI-toolkit-free persistence layer for per-window application state (window geometry, the embedded Neovim's working directory, sidebar visibility, and the optional macOS toolbar display mode), written to a pretty-printed **`state.json`** in the platform state directory. It is exposed to the macOS front-end over the `wolf-ffi` bridge (`wolf_ffi_load_state` / `FfiState` for the pre-start restore read, `WolfCoreHandle::state_set_*` / `state_flush` for the live store); a future wolf-gnome consumes this same API directly (`state_dir()` + `StateStore::open` + `WolfCore::attach_state_store`, leaving `toolbar_mode` as `None`).
+
+- `WolfState { windows: Vec<WindowState> }` — the whole persisted state: a LIST of windows (future-proof for multi-window; current front-ends populate only index 0).
+- `WindowState { x, y, width, height: f64, cwd: String, sidebar_visible: bool, toolbar_mode: Option<ToolbarMode> }` — one window's state. Geometry is in `f64` points, interpreted by the writing front-end (macOS stores `NSWindow.frame`, AppKit bottom-left global coordinates); a non-positive `width`/`height` is the "unset" sentinel (restore treats the geometry as absent). `cwd` is the absolute canonicalized path nvim reported, or `""` when not yet reported (restore validates it is a non-empty existing directory before use).
+- `ToolbarMode` (`IconAndText` | `IconOnly` | `TextOnly`) — the macOS-only toolbar facet, carried in the shared schema as the OPTIONAL `toolbar_display_mode` field (snake_case strings, omitted when unset) so other front-ends ignore it gracefully. The variant order is the cross-language discriminant contract mirrored by wolf-ffi's `mod toolbar_mode` and the Swift `StateSeam.ToolbarMode`.
+- `state_dir() -> Option<PathBuf>` — the platform state directory, parallel to `preferences_dir()`. It honors a `WOLF_STATE_DIR` environment override FIRST (a test/determinism hook); otherwise it is `dirs::data_dir()/"Wolf"` (`~/Library/Application Support/Wolf`) on macOS and `dirs::state_dir()/"wolf"` (`~/.local/state/wolf`, falling back to `dirs::data_dir()`) on Linux.
+- `load_state(dir: &Path) -> Option<WolfState>` — **infallible and strictly read-only** (the silently-ignore contract): it NEVER creates, rewrites, or deletes the file. An absent file is a silent `None`; ANY other failure — unreadable, unparseable, wrong shape, missing required field, or a `version` other than `1` — logs a `tracing::warn!` and returns `None`, leaving the on-disk bytes untouched (all-or-nothing, matching the `config` precedent). Unknown extra fields are tolerated, so newer writers do not break older readers.
+- `StateStore` — the live, cloneable store handle. `open(dir: &Path)` (explicit directory — the injection seam; production callers pass `state_dir()`) loads the existing file per `load_state` (defaults on `None`) and spawns ONE dedicated writer thread (`wolf-state-writer`) that serializes ALL disk writes: every setter (`set_geometry(idx, x, y, w, h)`, `set_cwd(idx, &Path)`, `set_sidebar_visible(idx, visible)`, `set_toolbar_mode(idx, Option<ToolbarMode>)`) merges into the in-memory `WolfState` under a brief mutex (growing the window list with defaults up to `idx`, skipping unchanged writes) and wakes the writer, which sleeps a short coalesce delay (~100 ms, so a burst of mutations produces one write), then atomically replaces the file via a sibling tmp file + rename — a crash never leaves a partial file. `state()` returns a clone of the in-memory truth; `flush(timeout) -> bool` blocks until every pending mutation has had its write ATTEMPTED (write errors log but still count, so flush cannot hang on a read-only disk). All operations are infallible (log-not-fail). The writer thread exits on its own once every handle is dropped and nothing is pending — a mutation made just before the last drop is still written (no explicit shutdown call is needed).
+
+Concurrency notes: opening the SAME directory twice in one process is unsupported (two writer threads would race on the shared tmp file — attach one store and clone it instead); concurrent Wolf PROCESSES are out of scope — the last writer wins, but each write is atomic so the file is never torn.
+
+The cwd facet is saved by core itself: `WolfCore::attach_state_store` wires the store into the redraw handler, whose `wolf_cwd` fold point (`apply_cwd`) mirrors every directory change into window 0 — so both UI-initiated and `:cd`-initiated changes persist with no front-end involvement. Geometry / sidebar / toolbar changes are pushed by the front-end through the store's setters.
+
+The on-disk schema (`version` is `1`; any other version is silently ignored):
+
+```json
+{
+  "version": 1,
+  "windows": [
+    {
+      "x": 128.0,
+      "y": 64.0,
+      "width": 1180.0,
+      "height": 760.0,
+      "cwd": "/Users/alice/projects/notes",
+      "sidebar_visible": true,
+      "toolbar_display_mode": "icon_and_text"
+    }
+  ]
+}
 ```
 
 ## How core embeds Neovim

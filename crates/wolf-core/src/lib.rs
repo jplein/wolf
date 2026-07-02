@@ -26,6 +26,7 @@
 //!   list into the sidebar's per-directory children (shared by all front-ends).
 //! - [`api`]: the FFI-shaped front-end surface ([`WolfCore`]).
 //! - [`config`]: the GUI-free user-preferences reader ([`WolfConfig`]).
+//! - [`state`]: the GUI-free application-state persistence ([`StateStore`]).
 
 pub mod api;
 pub mod config;
@@ -37,6 +38,7 @@ pub mod nvim;
 pub mod rank;
 pub mod redraw;
 pub mod render;
+pub mod state;
 pub mod tree;
 
 pub use api::{CoreConfig, CoreError, SnapshotReadGuard, WolfCore};
@@ -54,4 +56,5 @@ pub use render::{
     Cell, Cursor, CursorShape, DefaultColors, Grid, HighlightTable, HlAttr, ModeInfo,
     ResolvedStyle, Rgb, SharedSnapshot, Snapshot, Viewport, WinInfo,
 };
+pub use state::{load_state, state_dir, StateStore, ToolbarMode, WindowState, WolfState};
 pub use tree::{ancestors_to_reveal, children_of, node_rel_path, rel_path_for, TreeNode};
