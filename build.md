@@ -204,7 +204,8 @@ bazel test //crates/wolf-ffi:orlando_load        # real nvim, loads the vendored
 bazel test //crates/wolf-ffi:lighthouse_load     # real nvim, activates the vendored lighthouse colorscheme
 bazel test //crates/wolf-ffi:treesitter_parser_abi # real nvim, proves a compiled parser's ABI compat
 bazel test //crates/wolf-ffi:treesitter_highlight # real nvim, markdown highlighter active + go injection
-bazel test //crates/wolf-macos:WolfKeyMapTests   # pure Swift key translation
+bazel test //crates/wolf-ffi:attribute_highlight # real nvim, per-cell attribute flags + special color across the FFI
+bazel test //crates/wolf-macos:WolfKeyMapTests   # pure Swift key translation + glyph-style seam
 ```
 
 - `//bazel/nvim:nvim_version_test` execs the pinned, bundled Neovim tree: it asserts the binary exists and is executable, that `nvim --version` reports `NVIM v0.12.3`, that `VIMRUNTIME` self-locates **inside** the bundled tree, and that the `markdown` treesitter parser ships.
@@ -223,7 +224,8 @@ bazel test //crates/wolf-macos:WolfKeyMapTests   # pure Swift key translation
 - `//crates/wolf-ffi:lighthouse_load` drives a real pinned Neovim: it stages the vendored lighthouse tree as a sibling `lighthouse/` next to a temp `init.lua`, starts the captive editor, and asserts the colorscheme is actually active (`vim.g.colors_name == "lighthouse"` and `vim.o.background == "dark"`) — the automated proof of `init.lua`'s conditional lighthouse-activation branch. It skips loudly when Neovim or the lighthouse tree is not staged (the cargo / Linux path).
 - `//crates/wolf-ffi:treesitter_parser_abi` drives a real pinned Neovim: it stages **only** the compiled `parsers_tree` (not the `nvim-treesitter/` queries sibling), so `init.lua`'s treesitter enablement block is a strict no-op for this test, then `add`s `parser/go.so` by absolute path via `vim.treesitter.language.add` and parses Go source with it, asserting a `source_file` root with no errors — the automated proof that a shipped, host-compiled parser `.so` is ABI-compatible with pinned nvim 0.12.3. It skips loudly when Neovim or the parsers tree is not staged (the cargo / Linux path).
 - `//crates/wolf-ffi:treesitter_highlight` drives a real pinned Neovim with treesitter **enabled**: it stages BOTH the `nvim-treesitter/` queries provider and the `parsers_tree` as siblings of a temp `init.lua`, opens a markdown buffer containing a ` ```go ` fenced block, and asserts (1) the markdown treesitter highlighter is active on the buffer (`vim.treesitter.highlighter.active[buf]` set) AND (2) fenced-code **injection** works — an injected `go` langtree is present inside the block (via `p:parse(true)` then a `go` child langtree). This is the load-bearing proof that main's core-native markdown injections light up embedded code. It skips loudly when Neovim or the trees are not staged (the cargo / Linux path).
-- `//crates/wolf-macos:WolfKeyMapTests` is a pure Swift `XCTest` over the AppKit-free `WolfKeyMap` key-translation seam — no `NSEvent`, no window — and runs regardless of `WOLF_NVIM_BIN`.
+- `//crates/wolf-ffi:attribute_highlight` drives a real pinned Neovim: it defines a highlight group carrying `bold` / `italic` / `underline` + a `special` color, applies it to a known cell (`nvim_set_hl` + `matchadd`), polls for the repaint, and asserts the packed `FfiCell` exposes the matching `flags()` (BOLD | ITALIC | UNDERLINE) AND `special().set` with the expected `rgb` across the FFI boundary — the automated guard that per-cell text attributes and the special color survive resolution and packing. It skips loudly when Neovim is not staged (the cargo / Linux path).
+- `//crates/wolf-macos:WolfKeyMapTests` is a pure Swift `XCTest` over the AppKit-free `WolfKeyMap` seams — the key-translation seam and the `GlyphStyleResolver` glyph-style seam (`GlyphStyleTests`) — with no `NSEvent` and no window, and runs regardless of `WOLF_NVIM_BIN`.
 
 ## The one hard rule and how it is enforced
 

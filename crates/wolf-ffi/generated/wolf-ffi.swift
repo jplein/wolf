@@ -877,6 +877,10 @@ extension FfiCellRef {
         __swift_bridge__$FfiCell$bg(ptr).intoSwiftRepr()
     }
 
+    public func special() -> FfiColor {
+        __swift_bridge__$FfiCell$special(ptr).intoSwiftRepr()
+    }
+
     public func flags() -> UInt8 {
         __swift_bridge__$FfiCell$flags(ptr)
     }

@@ -1,163 +1,132 @@
-# Current Plan: Bundle iA Writer Mono S (2nd font) + make it the default (macOS)
-
-## Problem statement
-
-Add a SECOND bundled font — **iA Writer Mono S** — into Wolf alongside the existing JetBrains
-Mono (do NOT remove JetBrains Mono), and make **iA Writer Mono S the new DEFAULT font-family**.
-Direct follow-on to the completed JetBrains Mono bundling + `wolf-config.yaml` work; reuse that
-exact pattern.
-
-### Confirmed scope
-- **macOS only.** GNOME/GTK deferred — do NOT build/test the GTK front-end.
-- **Hermetic download + sha256 pin**, mirroring `bazel/jetbrains-mono` / `bazel/orlando` /
-  `bazel/lighthouse`.
-- **Full wiring:** iA Writer Mono S becomes the default in wolf-core config; bundled TTFs are
-  CoreText-registered so it resolves.
-
-### Requirements
-1. New hermetic Bazel module (e.g. `//bazel/ia-writer-mono`) downloading + sha256-pinning the iA
-   Writer fonts; TreeArtifact carries the 4 iA Writer Mono S faces (Regular, Italic, Bold,
-   BoldItalic) + its OFL/SIL license, bundled into `Wolf.app`.
-2. KEEP JetBrains Mono bundled exactly as-is (module, resources entry, bundle_layout_test checks
-   k–o all stay). Add iA ALONGSIDE it.
-3. Land the iA TTFs at `Contents/Resources/fonts/` (SAME dir as JBM) so the existing
-   `FontRegistration.swift` (globs `Contents/Resources/fonts/*.ttf`) auto-registers them with NO
-   Swift change — IF rules_apple allows two TreeArtifacts to merge into that subdir.
-   **BUILD-VERIFY** (`bazel build //crates/wolf-macos:Wolf`). If rules_apple rejects the shared
-   dir, fall back to the lowest-churn alternative (single combined tree, or per-family subdirs +
-   FontRegistration recursion) — architect decides, coder verifies by building.
-4. Flip the wolf-core config DEFAULT font-family from `"JetBrains Mono"` to iA Writer Mono S
-   (`config.rs` `DEFAULT_FONT_FAMILY` ~line 22). The default string MUST be the font's actual
-   CoreText **name-table family name** so `CTFontCreateWithName` resolves it (else CellMetrics
-   silently falls back to Menlo). User wrote "iA Writer Mono S" — coder MUST verify the real
-   family name (inspect the TTF name table / fc-scan / register+CTFontCopyFamilyName) and use
-   whatever actually resolves; if it differs, use the real name and flag it.
-
-### Architecture / risk notes
-- iA fonts live at github.com/iaolo/iA-Fonts. That repo most likely has NO release assets → pin a
-  **COMMIT SOURCE TARBALL** (`/archive/<commit>.tar.gz`) like `bazel/orlando` (http_archive
-  `strip_prefix` for the wrapping `<repo>-<commit>/` dir), NOT a release-asset zip like
-  jetbrains-mono. Coder verifies live: pick a commit, curl tarball, compute sha256, `tar -tzf` to
-  confirm exact internal paths. **The iA Writer Mono S static TTFs sit under a directory WITH
-  SPACES** (e.g. `iA Writer Mono/Static/…`) — handle spaces in the glob + `replace_prefixes`.
-- Glob ONLY the 4 style TTFs + the license (exclude Duo/Quattro, variable fonts, other weights,
-  webfonts). Confirm the 4 styles exist as separate static TTFs.
-- TreeArtifact inner dir must be `fonts/` (rules_apple strips the tree's own top dir) → files land
-  at `Contents/Resources/fonts/`. `copy_to_directory replace_prefixes` remaps the spaced source
-  path to flat `fonts/<file>.ttf`.
-- Update `config.rs` test expectation `EXPECT_DEFAULT_FONT_FAMILY` (~line 193) + any wolf-ffi
-  config-test default-family expectation to the new default. Malformed/absent/round-trip config
-  semantics unchanged.
-- bundle_layout_test.sh: ADD checks for the 4 iA TTFs + iA license at `Contents/Resources/fonts/`,
-  KEEP the existing JBM checks (k–o). Add a jetbrains-mono-style tree test for the new module.
-- The wolf-ffi FFI surface (`FfiConfig` / `wolf_ffi_load_config`) does NOT change — only the
-  default value flows through. No swift-bridge binding regeneration.
-
-## Status
-- [x] Architect plan
-- [x] Tests written (ia_writer_mono_tree_test.sh; bundle_layout_test.sh p–t; EXPECT_DEFAULT_FONT_FAMILY
-  flipped to "iA Writer Mono S" in config.rs test module + wolf-ffi/tests/config.rs)
-- [x] Implementation + tests passing. Pin: iA-Fonts commit
-  `f32c04c3058a75d7ce28919ce70fe8800817491b`, sha256
-  `826767eaea4ce43ccb7ca71327a5c63ac31206b99df400699e6744df6104e1b5`. Approach (a) — two trees
-  merge into Contents/Resources/fonts/ (Wolf build SUCCESS, disjoint file sets, zero Swift change).
-  Real CoreText family name VERIFIED = "iA Writer Mono S" (fontTools nameID-1 + live
-  CTFontCreateWithName→CTFontCopyFamilyName, not Menlo). All green:
-  ia_writer_mono_tree_test, bundle_layout_test (a–t), wolf_core_lib_test, wolf-ffi:config.
-  No test-expectation mismatch → no test reroute needed.
-- [x] Review — APPROVED. All 5 areas correct (default strings match byte-for-byte; replace_prefixes
-  produces inner fonts/; JBM still bundled). Minor: 3 stale Swift inline comments to fix in docs pass —
-  FontRegistration.swift L3/L10 ("JetBrains Mono...default grid font"), AppDelegate.swift L36
-  ("Register the bundled JetBrains Mono TTFs"); CellMetrics.swift L85 is a benign example (leave).
-- [x] Docs updated — new bazel/ia-writer-mono/README.md + 8 docs updated (incl. a stale claim fixed in
-  bazel/jetbrains-mono/README.md); 3 stale Swift inline comments reworded (FontRegistration.swift,
-  AppDelegate.swift). prettier --write clean (all 9 unchanged).
+# Plan: Per-cell text-attribute painting in the Wolf macOS front-end
 
 ## STATUS: COMPLETE
 
----
+Docs verified by technical-writer: all coder-updated docs accurate; one straggler fixed
+(`build.md` test-targets list gained `//crates/wolf-ffi:attribute_highlight` + GlyphStyleTests
+note). No stale "attributes not painted" claims remain (GNOME undercurl/strikethrough deferral
+is unrelated + correctly still deferred). `prettier --write build.md` → unchanged.
 
-## Architect's plan
+Remaining for user: manual on-screen smoke (needs window server) — open a lighthouse-styled
+markdown buffer, confirm bold headings/`**bold**` bold, `_italic_` italic, link underline in the
+special (comment-fg) color; optionally eyeball-tune `strikethroughRatio=0.3`.
 
-### Verified upstream facts (coder MUST re-confirm live via `tar -tzf`)
-github.com/iaolo/iA-Fonts (master), NO release assets → commit-tarball pin (orlando pattern):
-- Top dirs: `iA Writer Duo/`, `iA Writer Mono/`, `iA Writer Quattro/`.
-- License is PER-FONT-DIR at **`iA Writer Mono/LICENSE.md`** (SIL OFL 1.1) — NOT repo-root.
-- `iA Writer Mono/Static/` has exactly the 4 static faces:
-  `iAWriterMonoS-{Regular,Italic,Bold,BoldItalic}.ttf`.
-- Tentative CoreText family name: **`iA Writer Mono S`** — MUST be verified vs the name table.
+## DOCS VERIFICATION (review PASSED)
 
-### 1. New `//bazel/ia-writer-mono` (mirror bazel/orlando COMMIT-TARBALL, not jetbrains-mono zip)
-- `extensions.bzl`: `http_archive` of `.../iaolo/iA-Fonts/archive/<commit>.tar.gz`,
-  `strip_prefix = "iA-Fonts-<commit>"`, consts `_COMMIT`/`_SHA256` (coder computes live).
-  Overlay: `filegroup runtime_files` with EXPLICIT srcs (not glob — de-risk spaces) =
-  the 4 TTFs `iA Writer Mono/Static/iAWriterMonoS-*.ttf` + `iA Writer Mono/LICENSE.md`;
-  then `copy_to_directory ia_writer_mono_tree` with
-  `replace_prefixes = { "iA Writer Mono/Static": "fonts", "iA Writer Mono/LICENSE.md": "fonts/LICENSE.md" }`
-  → inner `fonts/` (4 TTFs + LICENSE.md). rules_apple strips top dir → Contents/Resources/fonts/.
-- `BUILD.bazel`: `alias ia_writer_mono_tree` + `sh_test ia_writer_mono_tree_test` (data=[:tree]).
-- `ia_writer_mono_tree_test.sh`: clone jetbrains_mono_tree_test.sh; assert inner `fonts/` has
-  4 iA TTFs (a–d) + `LICENSE.md` (e), non-empty.
-- `README.md`: mirror orlando/jetbrains README (pin, spaced-dir note, replace_prefixes, targets,
-  MODULE wiring, bump recipe). Note it SHARES Contents/Resources/fonts/ with JBM.
-- `MODULE.bazel`: `use_extension`/`use_repo` after the jetbrains_mono block; regen MODULE.bazel.lock.
+### Reviewer verdict: PASS — approved
+All 7 areas correct; flag bits mirror `mod flag` exactly; underline/strikethrough are manual CGContext strokes in the resolved color; `makeVariant` verifies `CTFontGetSymbolicTraits` before accepting a variant; cellWidth from regular face only. Non-blocking: `strikethroughRatio=0.3` may sit slightly high — eyeball during manual smoke.
 
-### 2. CRITICAL LAYOUT DECISION — two trees, one bundle dir (#1 RISK)
-Both `jetbrains_mono_tree` + `ia_writer_mono_tree` (each inner `fonts/`) in Wolf `resources` →
-Contents/Resources/fonts/. Best assessment: MERGES (disjoint file sets: JetBrainsMono-*.ttf+OFL.txt
-vs iAWriterMonoS-*.ttf+LICENSE.md — no path collision). **Coder MUST BUILD-VERIFY**
-`bazel build //crates/wolf-macos:Wolf`.
-- (a) PREFERRED if merge builds: just add 2nd tree to resources; ZERO Swift change (FontRegistration
-  already globs fonts/*.ttf). Ship this.
-- (b) FALLBACK if it errors: single combined tree — new `//bazel/fonts:fonts_tree`
-  `copy_to_directory(srcs=["@jetbrains_mono//:runtime_files","@ia_writer_mono//:runtime_files"],
-  replace_prefixes={"fonts/ttf":"fonts","OFL.txt":"fonts/OFL.txt","iA Writer Mono/Static":"fonts",
-  "iA Writer Mono/LICENSE.md":"fonts/LICENSE.md"})`; replace the 2 font resources with it. Bundle
-  paths + bundle_layout_test + Swift unchanged. (NOTE: coder must add a `runtime_files` filegroup to
-  the JBM overlay if it doesn't already expose one — JBM currently uses a filegroup; confirm.)
-- (c) LAST RESORT: per-family subdirs + FontRegistration recursion (changes JBM layout + k–o paths).
-Recommendation: try (a); fall back to (b).
+### Coder output
+- wolf-ffi: `special` field + `special()` accessor + bridge decl; regenerated committed bindings (`bazel run //crates/wolf-ffi:gen_bindings`; `cell.special()` in generated Swift).
+- wolf-macos: new `Sources/WolfKeyMap/GlyphStyle.swift` (seam + `extension FfiColor: Equatable {}`, no `@retroactive` since same module) wired into `wolf_key_map` srcs; `CellMetrics.swift` 4-face cache + `font(for:)`; `PaneContainerView.swift` resolves style per cell, `drawGlyph(style:)` + manual `CGContext` decoration strokes, cursor uses plain `.regular`.
+- Docs updated + prettier: Sources/README.md, wolf-macos/README.md, wolf-ffi/src/README.md, wolf-ffi/README.md, architecture.md.
+- **Tests (bazel):** frame_pack, attribute_highlight (RAN real nvim), config, bridge_smoke, treesitter_highlight (RAN real nvim), WolfKeyMapTests, bundle_layout_test — ALL PASSED. wolf_ffi / wolf_macos_lib / Wolf build.
+- Only deviation: dropped `@retroactive` (FfiColor same module). No tests flagged wrong.
+- Manual on-screen smoke: left for user (needs window server).
 
-### 3. Default flip — `crates/wolf-core/src/config.rs`
-- Line 22 `DEFAULT_FONT_FAMILY: "JetBrains Mono"` → verified iA family name (tentative
-  "iA Writer Mono S"). Update field doc (~L39) + default_config doc (~L86).
-- **Coder MUST verify the real name-table family BEFORE editing the string:**
-  `python3 -c "from fontTools.ttLib import TTFont; f=TTFont('iAWriterMonoS-Regular.ttf');
-  [print(r.nameID,r.toUnicode()) for r in f['name'].names if r.nameID in (1,4,6,16)]"`
-  or `fc-scan --format '%{family}\n' <ttf>` or `mdls -name com_apple_ats_name_family <ttf>`,
-  and definitively `CTFontCopyFamilyName` after register. If it differs, use the REAL name + flag.
-- Schema/serialization otherwise unchanged.
+### Test-writer output
+- Created: `crates/wolf-ffi/tests/attribute_highlight.rs`, `crates/wolf-macos/Tests/WolfKeyMapTests/GlyphStyleTests.swift`.
+- Modified: `crates/wolf-ffi/tests/frame_pack.rs` (+`special_color_packs_from_resolved_style`), `crates/wolf-ffi/BUILD.bazel` (+`attribute_highlight` target), `crates/wolf-macos/BUILD.bazel` (+GlyphStyleTests src).
+- **Coder note:** `FfiColor` is NOT declared `Equatable` in generated Swift → add `extension FfiColor: Equatable {}` for `GlyphStyle: Equatable` to synthesize. Frame cells read via `frame.cells() -> Vec<FfiCell>`; `FfiCell::text()` returns `String`. `FfiColor` = `{ rgb: UInt32, set: Bool }`.
 
-### 4. Tests to update/add
-- `config.rs` test module L193 `EXPECT_DEFAULT_FONT_FAMILY` → new default (match L22 exactly).
-  `CUSTOM_FONT_FAMILY = "Fira Code"` stays distinct. Malformed/partial/wrong-shape/never-clobber
-  cases unchanged (assert `== default_config()`).
-- `crates/wolf-ffi/tests/config.rs` L44 `EXPECT_DEFAULT_FONT_FAMILY` → new default.
-- New `//bazel/ia-writer-mono:ia_writer_mono_tree_test` (4 iA TTFs + LICENSE.md).
-- `crates/wolf-macos/bundle_layout_test.sh`: KEEP a–o (incl JBM k–o); ADD p–s (4 iAWriterMonoS-*.ttf
-  non-empty at Contents/Resources/fonts/) + t (`fonts/LICENSE.md` non-empty). Update PASS echo.
-- Eyeball-only: FontRegistration/CellMetrics on-screen resolution — coder MUST build+launch .app and
-  confirm iA family resolves (NOT Menlo fallback).
-- No swift-bridge regeneration (FFI surface unchanged).
+## Problem statement
 
-### 5. Impl order
-1. Pick commit + sha256; `tar -tzf` confirm paths. 2. Create bazel/ia-writer-mono/. 3. MODULE.bazel
-+ regen lock; run tree test. 4. Add tree to Wolf resources; `bazel build //crates/wolf-macos:Wolf`
-(merge verify); fallback (b) if errors. 5. bundle_layout_test p–t; run it. 6. Verify real family
-name. 7. Flip config.rs. 8. Update 2 test expectations; run wolf_core_lib_test + wolf-ffi:config.
-9. Build+launch .app; confirm iA resolves. 10. Docs + prettier.
+The Wolf macOS front-end renders Neovim highlight **colors** (fg/bg) but not text
+**attributes** (bold, italic, underline, undercurl, strikethrough) nor the
+**special** (underline) color. As a result, Markdown documents styled by the
+lighthouse colorscheme — which uses attributes (bold headings, bold `**bold**`,
+italic `_italic_`, underlined links in a special color `sp=commentFG`) rather than
+foreground colors for markup — render as plain text, while color-styled content
+(fenced code via treesitter injection, link URLs) renders correctly.
 
-### 6. Docs to update (prettier --write; no hard breaks)
-New `bazel/ia-writer-mono/README.md`; `crates/wolf-core/README.md` + `src/README.md` (new default);
-`crates/wolf-macos/README.md` + `Sources/README.md` (TWO fonts, iA is default);
-`build.md` (new module + tree test + bump recipe; both fonts; bundle_layout p–t);
-`architecture.md` (default = iA Writer Mono S, both bundled+registered, Menlo fallback);
-`config-decisions-report.md` "Realized" note (default now iA Writer Mono S).
+Treesitter is confirmed loading and highlighting correctly; this is purely a
+front-end rendering gap.
 
-### 7. Flagged risks (ranked)
-1. **Two trees → one fonts/ dir** — merge vs error; gated by `bazel build Wolf`; fallback (b) ready.
-2. Live commit + sha256 (placeholder) — `tar -tzf` before trusting globs.
-3. Spaces in `iA Writer Mono/Static/` — prefer explicit srcs; verify by building the tree.
-4. Real CoreText family string — tentative; wrong string silently falls back to Menlo (no test
-   catches it, only eyeball) → launch verification MANDATORY.
-5. All 4 static styles ship — confirm at pinned commit.
+### Verified facts (from investigation)
+- `crates/wolf-core/src/render.rs` — `ResolvedStyle` already resolves
+  bold/italic/underline/undercurl/strikethrough and `special` color.
+- `crates/wolf-ffi/src/lib.rs` — flag constants (~99-108), `pack_flags` (~1565),
+  `FfiCell::flags()` (~974). `FfiCell` struct (~946) carries only `fg`/`bg`/`flags`
+  — **NOT** `special`. `FfiCell` built ~1471.
+- `crates/wolf-macos/Sources/WolfMacOS/PaneContainerView.swift:761-775` —
+  `drawGlyph` paints only `.font: metrics.font` + `.foregroundColor: fg`; never
+  reads `cell.flags()`.
+- Documented deferral: `crates/wolf-macos/Sources/README.md:31`,
+  `crates/wolf-macos/Sources/WolfMacOS/CellMetrics.swift:23-26`.
+- **iA Writer Mono S (the default font) ships real static faces**: Regular, Italic,
+  Bold, BoldItalic (bundled at `Contents/Resources/fonts/iAWriterMonoS-*.ttf`,
+  CoreText family name `iA Writer Mono S`). So bold/italic have true faces available.
+
+## Required changes (from request)
+1. Extend `FfiCell` to carry `special` color (from `ResolvedStyle.special`), exposed
+   via `special() -> FfiColor` mirroring `fg()/bg()`; populate where FfiCell is built.
+2. macOS renderer: thread `cell.flags()` + `cell.special()` into glyph paint:
+   - bold/italic → real iA Writer Mono Bold/Italic/BoldItalic faces via
+     `NSFontDescriptor` symbolic traits; synthesize as fallback; keep advance width stable.
+   - underline + undercurl → underline, colored with special when set else fg.
+   - strikethrough → strikethrough.
+3. Update docs claiming attributes are unpainted (Sources/README.md, CellMetrics.swift,
+   wolf-ffi/src/README.md, others).
+
+## Testing
+- wolf-ffi integration test with a REAL embedded Neovim: define a hl group with
+  bold/italic/underline + special color, apply to text, assert the FfiCell exposes
+  the correct flags AND special color across the FFI boundary. (Primary guard.)
+- Swift: extract attribute/font-variant mapping into a testable seam where practical;
+  smoke-level otherwise (window server needed for full rendering).
+- Run existing treesitter_highlight.rs + related FFI tests for regressions.
+
+## Architecture plan (from architect)
+
+### (A) wolf-ffi changes — all in `crates/wolf-ffi/src/lib.rs`
+- **A1** Add `special: Option<Rgb>` to the `FfiCell` struct (~946-953), next to `fg`/`bg`. Update struct doc (~938-944).
+- **A2** Populate `special: style.special,` where `FfiCell` is built in `FfiFrame::from_snapshot_grid` (~1469-1474). Only construction site.
+- **A3** Add accessor in `impl FfiCell`: `pub fn special(&self) -> FfiColor { FfiColor::from_opt(self.special) }` (mirror `bg()`).
+- **A4** Add `fn special(&self) -> FfiColor;` to the `extern "Rust" { type FfiCell; … }` bridge block (~425-437), with doc mirroring `bg()`.
+- **A5 — REGEN (manual, required):** generated Swift/C bindings under `crates/wolf-ffi/generated/` are COMMITTED, not build-time-generated. After editing the bridge, run `bazel run //crates/wolf-ffi:gen_bindings`, then commit regenerated `generated/wolf-ffi.swift` + `generated/wolf-ffi.h`. Skipping = Swift can't see `cell.special()` → macOS lib won't compile. (`module.modulemap` + `wolf_ffi_wake.h` are hand-written, not overwritten.)
+
+### (B) wolf-macos renderer changes
+- **B1 — testable seam (pure, Foundation-only, in `WolfKeyMap`):** new
+  `crates/wolf-macos/Sources/WolfKeyMap/GlyphStyle.swift` (imports only Foundation; `FfiColor` is in scope there via generated_swift):
+  - `public enum GlyphFace: Equatable { case regular, bold, italic, boldItalic }`
+  - `public struct GlyphStyle: Equatable { face; underline: Bool; underlineColor: FfiColor; strikethrough: Bool; strikethroughColor: FfiColor }`
+  - `public enum GlyphStyleResolver { public static func resolve(flags: UInt8, fg: FfiColor, special: FfiColor) -> GlyphStyle }`
+  - Private flag consts MIRRORING `mod flag` in lib.rs (`bold=1<<0, italic=1<<1, underline=1<<2, undercurl=1<<3, strikethrough=1<<4`) — keep in lock-step (single-source-of-truth discipline).
+  - Logic: face = boldItalic if both bits, else bold, else italic, else regular. underline = underline-bit OR undercurl-bit (undercurl → straight underline this pass). underlineColor = special if special.set else fg. strikethrough = strikethrough-bit. strikethroughColor = fg.
+- **B2 — cache 4 faces in `CellMetrics.swift`:** replace single `let font` with cached variants + `func font(for: GlyphFace) -> CTFont`. In `measured(config:)` derive bold/italic/boldItalic via `CTFontCreateCopyWithSymbolicTraits` (`.traitBold`/`.traitItalic`); private `makeVariant(base, addingTraits:)` returns trait-matched font when CoreText resolves a DISTINCT face, else falls back to base. **Advance-width stability:** compute `cellWidth` from the REGULAR face ONLY; all faces paint into the same slot (grid is fixed-cell). iA Writer Mono S bold/italic are real monospaced faces sharing the regular advance.
+- **B3 — thread into paint path (`PaneContainerView.swift`):**
+  - In `paintCells` (~606-632) where `fg` is pulled (~627) and `drawGlyph` called (~628): `let style = GlyphStyleResolver.resolve(flags: cell.flags(), fg: cell.fg(), special: cell.special())`, pass `style` to `drawGlyph`.
+  - `drawGlyph` (~761-775): add `style: GlyphStyle` param; use `metrics.font(for: style.face)` instead of `metrics.font`.
+  - **Underline/strikethrough = MANUAL `CGContext` strokes** (NOT `.underlineStyle`): `CTLineDraw` draws underline only in the FOREGROUND color and ignores `.underlineColor`/`.strikethroughColor` (AppKit layout attrs). After `CTLineDraw`, stroke a horizontal line in the resolved color: underline at `y + baseline + underlineOffset` in `style.underlineColor`; strikethrough near mid-x-height in `style.strikethroughColor`. Use named `private static let` constants for offsets/thickness. Undercurl = straight underline this pass.
+  - `drawCursor` (~804) also calls `drawGlyph`: pass a plain `.regular` style for the cursor glyph this pass (avoid bold overflow under block cursor).
+
+### (C) Tests
+- **C1** Extend `crates/wolf-ffi/tests/frame_pack.rs` (existing rust_test, no BUILD change): new `special_color_packs_from_resolved_style` mirroring `explicit_highlight_colors_pack_to_set_rgb` (~114-155) — `HlAttr { special: Some(Rgb::from_packed(0x0000FF00)), underline: true, .. }`, set a cell, build frame, assert `cell.special().set == true`, `cell.special().rgb == 0x0000FF00`, `flags() & UNDERLINE != 0`; and UNSET special → `set == false`. Deterministic, no nvim.
+- **C2** New `crates/wolf-ffi/tests/attribute_highlight.rs` + new `rust_test` target in `crates/wolf-ffi/BUILD.bazel` modeled on `bridge_smoke` (~88-119): data/env = `//bazel/nvim:nvim_tree` + `//runtime/nvim:init.lua`, `WOLF_TEST_NVIM_DIR`/`WOLF_TEST_INIT_LUA`, `tags=["no-sandbox"]`, `size="small"`, deps `:wolf_ffi` + dev crates. Reuse `tests/common/mod.rs`. Follow `treesitter_highlight.rs` scaffolding (SKIP-when-unset via `nvim_bin_or_skip()`, `char_key`/`enter_key`/`send_ex_command`, poll `read_frame()` until `cols()>0`). Paint a known hl group via a single `:lua` ex command: `nvim_buf_set_lines` to put `X`, `nvim_set_hl(0,'WolfAttr',{bold=true,italic=true,underline=true,special='#00ff00',fg='#ffffff'})`, `vim.fn.matchadd('WolfAttr','X')`. Poll for repaint, scan `read_frame().cells()` for `text()=="X"`, assert `flags()` has BOLD|ITALIC|UNDERLINE and `special().set && special().rgb==0x0000FF00`. Local flag consts mirroring `mod flag`. Loud SKIP banner when nvim unset.
+- **C3** New `crates/wolf-macos/Tests/WolfKeyMapTests/GlyphStyleTests.swift`, add to `WolfKeyMapTests` swift_test `srcs` (BUILD ~108-119). `@testable import WolfKeyMap`, `import XCTest` (mirror `CellMetricsMathTests.swift`). Assert pure `GlyphStyle`: flags 0 → regular/no decorations; bold→.bold; italic→.italic; both→.boldItalic; underline-bit OR undercurl-bit → underline true; special.set → underlineColor==special else ==fg; strikethrough-bit → strikethrough true, strikethroughColor==fg. Construct `FfiColor` values directly.
+- **C4** Regression run: `frame_pack`, `config`, `bridge_smoke`, `treesitter_highlight`, `attribute_highlight`, `WolfKeyMapTests`.
+
+### (D) Docs to correct (attributes now painted; prettier --write, no hard breaks)
+- `crates/wolf-macos/Sources/WolfMacOS/CellMetrics.swift` doc comment (~22-27).
+- `crates/wolf-macos/Sources/README.md` — CellMetrics bullet (~31) + PaneContainerView bullet (~25).
+- `crates/wolf-ffi/src/README.md` — FfiCell accessors (~13, add `special()`), mod ffi (~9), pack_flags (~21) if they enumerate cell contents.
+- `architecture.md` — "Deferred for macOS" clause (~71) naming text attributes; remove/rewrite. (~148 core hl_id desc stays.)
+- Grep `crates/wolf-macos/README.md` + `build.md` for "not yet"/"deferred"/attribute claims; fix stragglers.
+
+### (E) Build/verify order (bazel; see build.md)
+1. wolf-ffi Rust A1-A4 → `bazel build //crates/wolf-ffi:wolf_ffi`.
+2. Regen A5 → `bazel run //crates/wolf-ffi:gen_bindings`; commit generated.
+3. Rust tests C1,C2 → `bazel test //crates/wolf-ffi:frame_pack //crates/wolf-ffi:attribute_highlight`.
+4. Swift seam B1 + test C3 → `bazel test //crates/wolf-macos:WolfKeyMapTests`.
+5. CellMetrics B2 → `bazel build //crates/wolf-macos:wolf_macos_lib`.
+6. PaneContainerView B3 → build lib, then `bazel build //crates/wolf-macos:Wolf`.
+7. Docs D + prettier.
+8. Full regression (E-list) + manual on-screen smoke of a bold/italic/underlined markdown buffer.
+
+### (F) Ranked risks
+1. **CTLineDraw underline color** — draws in fg, ignores `.underlineColor`. MUST draw decorations as manual CGContext strokes. Verify by smoke.
+2. **swift-bridge regen is manual + forgettable** — generated Swift is committed; run gen_bindings before Swift compiles.
+3. **Advance-width stability** — cellWidth from regular face only; all faces into same slot.
+4. **Painting a known hl group in the FFI test** — `matchadd`+`nvim_set_hl` chosen; fallbacks: extmark/`nvim_buf_add_highlight` or `:syntax match`. Poll for repaint before scanning (FLUSH_TIMEOUT/POLL_INTERVAL pattern).
+5. **Trait-match fallback** — `CTFontCreateCopyWithSymbolicTraits` may return non-distinct face; `makeVariant` must detect + fall back or bold renders as regular. Smoke-only.
+6. **Constants discipline** — named consts for stroke offsets/thickness; keep Swift flag bits in lock-step with `mod flag`. No new external deps.

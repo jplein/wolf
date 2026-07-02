@@ -19,15 +19,35 @@ struct CellMetrics {
     let cellHeight: CGFloat
     /// Baseline offset from the cell top, in points.
     let baseline: CGFloat
-    /// The base CoreText font, used directly for all glyphs. Per-cell text
-    /// attributes (bold/italic/underline/undercurl/strikethrough) are resolved and
-    /// packed by wolf-ffi but are NOT yet consumed in painting: this increment
-    /// paints per-cell fg/bg plus a mode-aware cursor only. Glyph attribute
-    /// rendering (font variants, underlines) is deferred to a future increment.
+    /// The base (regular) CoreText font. Bold/italic/boldItalic variants are
+    /// derived from it and cached alongside; the renderer selects a face per cell
+    /// via `font(for:)`. Per-cell text attributes (bold/italic/underline/
+    /// undercurl/strikethrough) resolved and packed by wolf-ffi ARE now consumed in
+    /// painting: `GlyphStyleResolver` maps a cell's flags to a `GlyphFace` (drawn
+    /// with the matching cached font) plus underline/strikethrough strokes.
     let font: CTFont
+    /// The bold face (falls back to `font` when CoreText resolves no distinct face).
+    let boldFont: CTFont
+    /// The italic face (falls back to `font` when CoreText resolves no distinct face).
+    let italicFont: CTFont
+    /// The bold+italic face (falls back to `font` when no distinct face resolves).
+    let boldItalicFont: CTFont
 
     /// Fallback monospaced family when the configured family cannot be resolved.
     private static let fallbackFamily = "Menlo"
+
+    /// Returns the cached CoreText font for `face`. All faces share the regular
+    /// face's advance width (the grid is fixed-cell), so they paint into the same
+    /// slot; a variant that CoreText could not resolve falls back to the regular
+    /// face.
+    func font(for face: GlyphFace) -> CTFont {
+        switch face {
+        case .regular: return font
+        case .bold: return boldFont
+        case .italic: return italicFont
+        case .boldItalic: return boldItalicFont
+        }
+    }
 
     /// Measures monospace cell metrics for the configured font family at the
     /// configured point size, with line-height-driven cell height + recentered
@@ -41,6 +61,10 @@ struct CellMetrics {
     static func measured(config: FfiConfig) -> CellMetrics {
         let size = pointSize(config: config)
         let font = makeFont(family: config.font_family().toString(), size: size)
+        let boldFont = makeVariant(base: font, size: size, addingTraits: .traitBold)
+        let italicFont = makeVariant(base: font, size: size, addingTraits: .traitItalic)
+        let boldItalicFont = makeVariant(
+            base: font, size: size, addingTraits: [.traitBold, .traitItalic])
 
         let ascent = CTFontGetAscent(font)
         let descent = CTFontGetDescent(font)
@@ -66,8 +90,35 @@ struct CellMetrics {
             cellWidth: advance,
             cellHeight: CGFloat(cellHeight),
             baseline: CGFloat(baseline),
-            font: font
+            font: font,
+            boldFont: boldFont,
+            italicFont: italicFont,
+            boldItalicFont: boldItalicFont
         )
+    }
+
+    /// Derives a variant of `base` with `addingTraits` (bold and/or italic)
+    /// applied via CoreText symbolic traits. Returns the trait-matched font ONLY
+    /// when CoreText resolves a DISTINCT face carrying the requested traits; if the
+    /// copy fails or the resolved face does not actually carry the traits (no such
+    /// face in the family), it falls back to `base` so the glyph still paints (as
+    /// regular) rather than dropping.
+    private static func makeVariant(
+        base: CTFont, size: CGFloat, addingTraits: CTFontSymbolicTraits
+    ) -> CTFont {
+        guard
+            let variant = CTFontCreateCopyWithSymbolicTraits(
+                base, size, nil, addingTraits, addingTraits)
+        else {
+            return base
+        }
+        // Confirm CoreText actually applied the requested traits (a family with no
+        // such face yields a copy WITHOUT them → treat as no distinct face).
+        let resolved = CTFontGetSymbolicTraits(variant)
+        guard resolved.intersection(addingTraits) == addingTraits else {
+            return base
+        }
+        return variant
     }
 
     /// Reads `WOLF_FONT_PT` (a positive number) or returns the config's font size.

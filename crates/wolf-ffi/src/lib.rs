@@ -432,6 +432,8 @@ mod ffi {
         fn fg(&self) -> FfiColor;
         // Resolved background color.
         fn bg(&self) -> FfiColor;
+        // Resolved special (underline) color.
+        fn special(&self) -> FfiColor;
         // Packed style flags (bold/italic/underline/undercurl/strikethrough).
         fn flags(&self) -> u8;
     }
@@ -940,8 +942,9 @@ pub fn wolf_ffi_start(
 /// Opaque across the bridge (so a `Vec<FfiCell>` is supported — swift-bridge does
 /// not emit Vec support for transparent structs). Colors are held as
 /// `Option<Rgb>` (keeping the cell `Clone`); Swift reads them via [`FfiCell::fg`]
-/// / [`FfiCell::bg`], which build an [`FfiColor`] on demand. The `text` field is
-/// `pub` so the Rust integration test can read `cell.text` directly.
+/// / [`FfiCell::bg`] / [`FfiCell::special`], which build an [`FfiColor`] on demand.
+/// The `text` field is `pub` so the Rust integration test can read `cell.text`
+/// directly.
 #[derive(Clone)]
 pub struct FfiCell {
     /// The displayed text (one grapheme cluster), empty for a wide-char trailing
@@ -949,6 +952,7 @@ pub struct FfiCell {
     pub text: String,
     fg: Option<Rgb>,
     bg: Option<Rgb>,
+    special: Option<Rgb>,
     flags: u8,
 }
 
@@ -969,6 +973,12 @@ impl FfiCell {
     #[must_use]
     pub fn bg(&self) -> FfiColor {
         FfiColor::from_opt(self.bg)
+    }
+
+    /// The resolved special (underline) color.
+    #[must_use]
+    pub fn special(&self) -> FfiColor {
+        FfiColor::from_opt(self.special)
     }
 
     /// The packed style flags (bold/italic/underline/undercurl/strikethrough).
@@ -1470,6 +1480,7 @@ impl FfiFrame {
                     text,
                     fg: style.fg,
                     bg: style.bg,
+                    special: style.special,
                     flags: pack_flags(&style),
                 });
             }

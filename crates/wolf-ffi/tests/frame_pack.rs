@@ -155,6 +155,77 @@ fn explicit_highlight_colors_pack_to_set_rgb() {
 }
 
 #[test]
+fn special_color_packs_from_resolved_style() {
+    const SPECIAL: u32 = 0x0000_FF00;
+    const HL: u64 = 1;
+    const PLAIN_HL: u64 = 2;
+
+    // A highlight carrying an explicit `special` (underline) color plus the
+    // underline attribute must surface across the bridge as a SET `FfiColor` with
+    // the exact 0x00RRGGBB packing, and must set the UNDERLINE flag bit — mirroring
+    // how `explicit_highlight_colors_pack_to_set_rgb` proves fg/bg packing.
+    let mut highlights = HighlightTable::new();
+    highlights.define(
+        HL,
+        HlAttr {
+            special: Some(Rgb::from_packed(SPECIAL)),
+            underline: true,
+            ..HlAttr::default()
+        },
+    );
+    // A plain/default highlight sets no special color, so it must pack set=false.
+    highlights.define(PLAIN_HL, HlAttr::default());
+
+    let mut grid = Grid::new(COLS, ROWS);
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            text: "S".to_string(),
+            hl_id: HL,
+        },
+    );
+    grid.set_cell(
+        0,
+        1,
+        Cell {
+            text: "p".to_string(),
+            hl_id: PLAIN_HL,
+        },
+    );
+
+    // Cursor parked off both cells under test so the cursor reverse-video logic
+    // does not touch them.
+    let snap = snapshot(GRID_ID, grid, highlights, cursor_on(GRID_ID, 1, 3), Vec::new());
+    let frame = FfiFrame::from_snapshot(&snap);
+
+    let cells = frame.cells();
+
+    let styled = &cells[0];
+    let special = styled.special();
+    assert!(special.set, "an explicit highlight special color must be set");
+    assert_eq!(
+        special.rgb, SPECIAL,
+        "special should pack to 0x00RRGGBB exactly"
+    );
+    assert!(
+        styled.flags() & UNDERLINE != 0,
+        "the underline attribute must set the UNDERLINE flag bit"
+    );
+
+    let plain = &cells[1];
+    assert!(
+        !plain.special().set,
+        "a highlight with no special color must pack special.set == false"
+    );
+    assert_eq!(
+        plain.special().rgb,
+        0,
+        "an unset special color packs rgb=0"
+    );
+}
+
+#[test]
 fn unset_highlight_yields_unset_colors() {
     // hl_id 0 sets nothing AND the defaults are unset, so `resolve` yields
     // None for fg/bg and the packed FfiColor is set=false (the front-end then

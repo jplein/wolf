@@ -625,7 +625,9 @@ final class PaneContainerView: NSView {
                 let text = cell.text().toString()
                 if !text.isEmpty {
                     let fg = WolfColor.cgColor(cell.fg(), fallback: WolfColor.fallbackFg)
-                    drawGlyph(ctx, text: text, x: x, y: y, fg: fg)
+                    let style = GlyphStyleResolver.resolve(
+                        flags: cell.flags(), fg: cell.fg(), special: cell.special())
+                    drawGlyph(ctx, text: text, x: x, y: y, fg: fg, style: style)
                 }
             }
         }
@@ -758,10 +760,32 @@ final class PaneContainerView: NSView {
         needsDisplay = true
     }
 
-    /// Draws one cell's glyph in `fg` using CoreText at the cell baseline.
-    private func drawGlyph(_ ctx: CGContext, text: String, x: CGFloat, y: CGFloat, fg: CGColor) {
+    /// A plain regular glyph style (no face variant, no decorations) used for the
+    /// glyph redrawn under a block cursor — avoids a bold face overflowing the
+    /// reverse-video cell.
+    private static let cursorGlyphStyle = GlyphStyle(
+        face: .regular, underline: false, underlineColor: FfiColor(rgb: 0, set: false),
+        strikethrough: false, strikethroughColor: FfiColor(rgb: 0, set: false))
+
+    /// Underline stroke offset below the baseline, in points.
+    private static let underlineOffset: CGFloat = 2
+    /// Underline / strikethrough stroke thickness, in points.
+    private static let decorationThickness: CGFloat = 1
+    /// Strikethrough height above the baseline as a fraction of the cell height
+    /// (roughly the x-height midline).
+    private static let strikethroughRatio: CGFloat = 0.3
+
+    /// Draws one cell's glyph in `fg` using CoreText at the cell baseline, in the
+    /// face `style.face` selects, and strokes any underline / strikethrough
+    /// decorations MANUALLY (in `style`'s resolved colors) — `CTLineDraw` paints
+    /// decorations only in the foreground color and ignores AppKit decoration-color
+    /// attributes, so the special (underline) color must be stroked by hand.
+    private func drawGlyph(
+        _ ctx: CGContext, text: String, x: CGFloat, y: CGFloat, fg: CGColor,
+        style: GlyphStyle
+    ) {
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: metrics.font,
+            .font: metrics.font(for: style.face),
             .foregroundColor: fg,
         ]
         let line = CTLineCreateWithAttributedString(
@@ -771,6 +795,37 @@ final class PaneContainerView: NSView {
         ctx.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
         ctx.textPosition = CGPoint(x: x, y: y + metrics.baseline)
         CTLineDraw(line, ctx)
+        ctx.restoreGState()
+
+        drawDecorations(ctx, x: x, y: y, style: style)
+    }
+
+    /// Strokes the underline / strikethrough for one cell as horizontal lines in
+    /// the resolved decoration colors (drawn separately from the glyph because
+    /// CoreText ignores decoration-color attributes).
+    private func drawDecorations(
+        _ ctx: CGContext, x: CGFloat, y: CGFloat, style: GlyphStyle
+    ) {
+        guard style.underline || style.strikethrough else { return }
+        let width = metrics.cellWidth
+        ctx.saveGState()
+        ctx.setLineWidth(Self.decorationThickness)
+        if style.underline {
+            let uy = y + metrics.baseline + Self.underlineOffset
+            ctx.setStrokeColor(
+                WolfColor.cgColor(style.underlineColor, fallback: WolfColor.fallbackFg))
+            ctx.move(to: CGPoint(x: x, y: uy))
+            ctx.addLine(to: CGPoint(x: x + width, y: uy))
+            ctx.strokePath()
+        }
+        if style.strikethrough {
+            let sy = y + metrics.cellHeight * Self.strikethroughRatio
+            ctx.setStrokeColor(
+                WolfColor.cgColor(style.strikethroughColor, fallback: WolfColor.fallbackFg))
+            ctx.move(to: CGPoint(x: x, y: sy))
+            ctx.addLine(to: CGPoint(x: x + width, y: sy))
+            ctx.strokePath()
+        }
         ctx.restoreGState()
     }
 
@@ -805,7 +860,8 @@ final class PaneContainerView: NSView {
                     ctx, text: text,
                     x: CGFloat(col) * metrics.cellWidth,
                     y: CGFloat(row) * metrics.cellHeight,
-                    fg: glyph)
+                    fg: glyph,
+                    style: Self.cursorGlyphStyle)
             }
         }
     }

@@ -171,6 +171,7 @@ uint64_t __swift_bridge__$FfiFrame$linecount(void* self);
 void* __swift_bridge__$FfiCell$text(void* self);
 struct __swift_bridge__$FfiColor __swift_bridge__$FfiCell$fg(void* self);
 struct __swift_bridge__$FfiColor __swift_bridge__$FfiCell$bg(void* self);
+struct __swift_bridge__$FfiColor __swift_bridge__$FfiCell$special(void* self);
 uint8_t __swift_bridge__$FfiCell$flags(void* self);
 uint8_t __swift_bridge__$FfiLayoutIntent$kind(void* self);
 uint8_t __swift_bridge__$FfiLayoutIntent$orientation(void* self);

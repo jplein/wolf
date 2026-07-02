@@ -67,7 +67,7 @@ All types are re-exported at the crate root (`wolf_ffi::…`).
   | ----------- | ---- | ----- | --- | ---- |
   | dir         | Left | Right | Up  | Down |
 
-- `FfiCell` — opaque; `text()`, `fg()`, `bg()`, `flags()`. (Opaque because swift-bridge does not emit `Vec` support for transparent structs.) Its `text` field is `pub` so the Rust integration test reads it directly.
+- `FfiCell` — opaque; `text()`, `fg()`, `bg()`, `special()` (the resolved special / underline color), `flags()`. (Opaque because swift-bridge does not emit `Vec` support for transparent structs.) Its `text` field is `pub` so the Rust integration test reads it directly.
 
 - `FfiColor` — transparent `{ rgb: u32, set: bool }` (a packed `0x00RRGGBB` plus an "is set" flag; `set == false` means a front-end fallback applies).
 
