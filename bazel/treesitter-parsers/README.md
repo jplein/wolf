@@ -4,7 +4,7 @@ Hermetic, pinned, **host-compiled** treesitter parsers for bundling into `Wolf.a
 
 This package downloads sha256-pinned GitHub source tarballs for a curated set of treesitter grammars, **compiles** each grammar's `src/parser.c` (+ optional `src/scanner.c`) into a loadable shared object with the host (apple_support / Xcode) cc toolchain, and assembles them into a structure-preserving directory artifact. `//crates/wolf-macos:Wolf` bundles the result at `Contents/Resources/parsers/`, so each parser lands at `Contents/Resources/parsers/parser/<lang>.so`.
 
-This change **vendors + ships the parsers only** — it does **not** enable treesitter highlighting. The captive `runtime/nvim/init.lua` is **not** modified (no runtimepath wiring, no `vim.treesitter.start`). Enablement, and the Linux/Nix vendoring path, are deferred.
+These parsers are **vendored + shipped and ENABLED on macOS**: the captive `runtime/nvim/init.lua` prepends the sibling `parsers/` + `nvim-treesitter/` trees to `runtimepath` and runs a pcall-wrapped `vim.treesitter.start` on markdown buffers, so markdown highlighting + fenced-code injection are live in the `.app`. On Linux/cargo the init.lua block is a strict no-op (`syntax on` remains). The Linux/Nix vendoring path is still deferred.
 
 ## Why host-compile (not nix-built, not the parsers inside nvim)
 
@@ -14,7 +14,7 @@ The **ABI is proven end-to-end** by `//crates/wolf-ffi:treesitter_parser_abi`, w
 
 ## Provenance of the pins
 
-Grammar **revisions** come from the pinned nvim-treesitter `master` commit's `lockfile.json` (so parsers are version-matched to the vendored queries in [`bazel/nvim-treesitter`](../nvim-treesitter/README.md)); grammar **repo URLs** come from that commit's `lua/nvim-treesitter/parsers.lua`. The single exception is **swift** (see the status table).
+Grammar **revisions** come from the nvim-treesitter `lockfile.json` as pinned during the original vendoring — when the plugin was on `master` (master-era) — and grammar **repo URLs** come from that commit's `lua/nvim-treesitter/parsers.lua`. The single exception is **swift** (see the status table). These parser revisions were **not** re-synced when the vendored plugin later moved to `main` (see [`bazel/nvim-treesitter`](../nvim-treesitter/README.md)): re-deriving them from `main`'s `lockfile.json` for an exact queries⇄parsers version-match is a future nicety. The current pairing is proven working — the `//crates/wolf-ffi:treesitter_highlight` injection test and `//crates/wolf-ffi:treesitter_parser_abi` both pass — and tree-sitter grammar ABIs are stable, so queries-from-`main` with parsers-from-master-era is fine.
 
 ## The `ts_grammar` overlay template
 
@@ -68,7 +68,7 @@ All 16 languages in the curated set compile hermetically at their pinned revisio
 | kotlin | fwcd/tree-sitter-kotlin | — | scanner.c | SHIPPED |  |
 | swift | alex-pinkus/tree-sitter-swift | — | scanner.c | SHIPPED | pinned to the `with-generated-files` branch (committed parser.c) |
 
-**swift note:** swift's `src/parser.c` is generated and **not** committed on the default branch, so it is pinned to the `with-generated-files` branch HEAD (an immutable commit sha) which carries a committed `src/parser.c` + a C `src/scanner.c`. This is a different revision than the nvim-treesitter lockfile (which points at the default branch); acceptable because highlighting is not enabled here — we only need a compilable, ABI-compatible parser to ship.
+**swift note:** swift's `src/parser.c` is generated and **not** committed on the default branch, so it is pinned to the `with-generated-files` branch HEAD (an immutable commit sha) which carries a committed `src/parser.c` + a C `src/scanner.c`. This is a different revision than the nvim-treesitter lockfile (which points at the default branch); acceptable because tree-sitter grammar ABIs are stable and we only need a compilable, ABI-compatible parser to ship (no test asserts swift highlighting).
 
 **markdown / markdown_inline** are deliberately **excluded**: pinned nvim 0.12.3 already ships them at `Contents/Resources/nvim/lib/nvim/parser/`.
 

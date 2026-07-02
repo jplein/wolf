@@ -62,8 +62,8 @@ macos_application(
     # `Contents/Resources/nvim-treesitter-textobjects/`, and the curated
     # host-compiled treesitter parsers (structure-preserving `parsers/`
     # TreeArtifact) land at `Contents/Resources/parsers/parser/<lang>.so` — these
-    # three are VENDORED/SHIPPED only; treesitter highlighting is NOT enabled yet
-    # (no init.lua change); the captive `init.lua` lands flat at
+    # three are VENDORED/SHIPPED and treesitter highlighting + fenced-code injection
+    # are ENABLED on macOS by the captive init.lua; the captive `init.lua` lands flat at
     # `Contents/Resources/init.lua` (resolved by `Bundle.main.path`).
     resources = [
         "//bazel/lighthouse:lighthouse_tree",
@@ -87,8 +87,8 @@ macos_application(
 # nvim-treesitter markdown query (check h) + textobjects Lua dir (check i), and
 # the curated host-compiled treesitter parsers (check j:
 # Contents/Resources/parsers/parser/<lang>.so, HARD for go/rust/typescript/tsx/
-# json, SOFT for swift/kotlin/java). These three are VENDORED/SHIPPED only —
-# highlighting is NOT enabled.
+# json, SOFT for swift/kotlin/java). These three are VENDORED/SHIPPED and
+# treesitter highlighting + fenced-code injection are ENABLED on macOS by init.lua.
 sh_test(
     name = "bundle_layout_test",
     srcs = ["bundle_layout_test.sh"],

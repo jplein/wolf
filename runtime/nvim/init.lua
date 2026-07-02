@@ -10,10 +10,14 @@
 -- settings below make the captive editor deterministic for headless rendering
 -- tests and tuned for editing Markdown.
 --
--- Treesitter grammars (markdown / markdown_inline), a Markdown LSP (e.g.
--- marksman) and a formatter are DEFERRED to a later phase (plugin baking via
--- wrapNeovim). Phase 1 relies on Neovim's built-in markdown syntax highlighting,
--- which is enough for the redraw/highlight pipeline and its tests.
+-- Treesitter markdown highlighting + fenced-code-block injections are
+-- conditionally ENABLED when the vendored `nvim-treesitter/` (main queries) and
+-- `parsers/` siblings are present next to this init.lua (the macOS .app bundle;
+-- see the conditional block below). On Linux/cargo — and any test that does not
+-- stage those siblings — the block is a strict NO-OP and Neovim's built-in
+-- `syntax on` remains the highlight source. A Markdown LSP (e.g. marksman) and a
+-- formatter are still DEFERRED to a later phase; the vendored
+-- nvim-treesitter-textobjects plugin is bundled-but-INERT (no keymaps wired).
 
 local opt = vim.opt
 
@@ -58,7 +62,9 @@ opt.smoothscroll = true
 vim.filetype.add({ extension = { md = "markdown" } })
 
 -- Enable built-in syntax highlighting (markdown) so the grid carries varied
--- hl_ids. Treesitter is deferred; this is the Phase 1 highlight source.
+-- hl_ids. This is the highlight source on Linux/cargo and the fallback when
+-- treesitter is unavailable; the conditional treesitter block below layers over it
+-- (via its own namespace) on the macOS .app.
 vim.cmd("syntax on")
 
 -- Vendored orlando plugin (Bazel macOS bundle only).
@@ -104,6 +110,66 @@ if uv and uv.fs_stat(lighthouse_dir) then
 	vim.opt.runtimepath:prepend(lighthouse_dir)
 	vim.o.background = "dark"
 	vim.cmd.colorscheme("lighthouse")
+end
+
+-- Vendored treesitter highlighting + fenced-code injections (Bazel macOS bundle
+-- only).
+--
+-- Like orlando/lighthouse, the macOS .app places sibling trees next to this
+-- init.lua at Contents/Resources/: `nvim-treesitter/` (the main-branch queries
+-- provider: queries/<lang>/highlights.scm + queries/markdown/injections.scm),
+-- `parsers/` (host-compiled parser/<lang>.so for the embedded fenced languages),
+-- and `nvim-treesitter-textobjects/` (bundled but INERT — no source, no setup, no
+-- keymaps). On Linux/cargo they are ABSENT, so this whole block is a strict NO-OP:
+-- no runtimepath change, no autocmd, no error — `syntax on` above stays the
+-- highlight source. We reuse the already-computed `this_dir` / `uv` locals.
+--
+-- GATE on the queries provider (`nvim-treesitter/`). When present we prepend it to
+-- runtimepath (so `vim.treesitter.start` finds highlights + injections queries),
+-- then prepend `parsers/` (so nvim resolves <rtp>/parser/<lang>.so for embedded
+-- languages) and the inert textobjects tree, each only if it independently exists.
+-- markdown / markdown_inline parsers already ship with nvim, so they are NOT
+-- re-vendored. We do NOT call nvim-treesitter's heavy `.setup{}` (its :TSInstall
+-- machinery is non-deterministic under --clean); the vendored plugin is used purely
+-- as an on-rtp query provider. A FileType=markdown autocmd runs
+-- `vim.treesitter.start` on each markdown buffer (wrapped in pcall so a query-loader
+-- incompatibility degrades to syntax-on rather than raising), which lights markdown
+-- highlighting AND routes fenced blocks through the injections query on rtp.
+local nvim_treesitter_dir = this_dir .. "/nvim-treesitter"
+if uv and uv.fs_stat(nvim_treesitter_dir) then
+	vim.opt.runtimepath:prepend(nvim_treesitter_dir)
+	local parsers_dir = this_dir .. "/parsers"
+	if uv.fs_stat(parsers_dir) then
+		vim.opt.runtimepath:prepend(parsers_dir)
+	end
+	local textobjects_dir = this_dir .. "/nvim-treesitter-textobjects"
+	if uv.fs_stat(textobjects_dir) then
+		vim.opt.runtimepath:prepend(textobjects_dir)
+	end
+
+	-- Start treesitter on a buffer, tolerating a query-loader incompatibility: a
+	-- pcall failure leaves `syntax on` as the highlight source instead of raising.
+	local function wolf_treesitter_start(buf)
+		pcall(vim.treesitter.start, buf)
+	end
+
+	-- FileType=markdown autocmd: lights every markdown buffer as it is opened
+	-- (`:e doc.md`), routing fenced blocks via the injections query on rtp.
+	local group = vim.api.nvim_create_augroup("WolfTreesitter", { clear = true })
+	vim.api.nvim_create_autocmd("FileType", {
+		group = group,
+		pattern = "markdown",
+		callback = function(args)
+			wolf_treesitter_start(args.buf)
+		end,
+	})
+
+	-- Emit-once for any markdown buffer already loaded before the autocmd existed.
+	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+		if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].filetype == "markdown" then
+			wolf_treesitter_start(buf)
+		end
+	end
 end
 
 -- Current-file tracking: wolf-core invokes this over RPC after ui_attach,

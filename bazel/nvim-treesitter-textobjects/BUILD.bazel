@@ -9,7 +9,8 @@
 # bump it.
 
 # The assembled nvim-treesitter-textobjects tree (a `nvim-treesitter-textobjects/`
-# TreeArtifact: lua/nvim-treesitter/textobjects/**, queries/**, plugin/**, LICENSE).
+# TreeArtifact: lua/nvim-treesitter-textobjects/**, queries/**, LICENSE — the `main`
+# branch self-named layout, with no top-level plugin/ loader).
 alias(
     name = "nvim_treesitter_textobjects_tree",
     actual = "@nvim_treesitter_textobjects//:nvim_treesitter_textobjects_tree",

@@ -5,12 +5,16 @@ source tarball for the vendored nvim-treesitter plugin and overlays a BUILD file
 that assembles the extracted tree into a single structure-preserving TreeArtifact
 via `@aspect_bazel_lib//lib:copy_to_directory`.
 
-The pin is on nvim-treesitter's **master** branch — the FROZEN / legacy branch
-that still carries the bundled `queries/` (highlights.scm, injections.scm, ...) and
-the classic `lua/nvim-treesitter/` modules. (Active development moved to the `main`
-branch, which drops the bundled queries; that is NOT what we want here.) The queries
-are shipped for a FUTURE treesitter-highlighting enablement change; this change
-VENDORS the plugin only and does NOT enable highlighting.
+The pin is on nvim-treesitter's **main** branch. This is a decision reversal from
+the original `master` pin: master's `queries/markdown/injections.scm` uses the custom
+`#set-lang-from-info-string!` predicate, whose frozen-master handler targets a
+pre-0.10 query-match API that pinned nvim 0.12.3 removed → `E5108` on every fenced
+redraw (injection broken). main's markdown `injections.scm` is pure core-supported
+capture-based injection (no custom predicate), which works from the queries on
+`runtimepath` alone. On main the queries live under `runtime/queries/` (remapped back
+to `queries/` below); the classic `lua/nvim-treesitter/` modules and the `plugin/`
+loader are still present (bundled but never sourced — the plugin is used purely as an
+on-rtp query provider, no `.setup{}`).
 
 Unlike `//bazel/nvim` (which fetches a per-arch native Neovim release and selects
 on `@platforms//cpu`), nvim-treesitter is PURE LUA and therefore arch-independent:
@@ -18,7 +22,8 @@ there is a SINGLE repo `nvim_treesitter` and NO `select()`.
 
 Crucially, the archive's own top directory (`nvim-treesitter-<commit>/`) is remapped
 to `nvim-treesitter/` (via `copy_to_directory`'s `replace_prefixes`, NOT
-`strip_prefix`), so the assembled TreeArtifact's contents are
+`strip_prefix`), and main's `runtime/queries/` is lifted back to `queries/` by a
+second remap, so the assembled TreeArtifact's contents are
 `nvim-treesitter/queries/**`, `nvim-treesitter/lua/nvim-treesitter/**`,
 `nvim-treesitter/plugin/**`, `nvim-treesitter/LICENSE`. This matters because
 `rules_apple` strips the bundled TreeArtifact's OWN top-level directory name when
@@ -34,10 +39,14 @@ auto-follows the commit), then regenerate `MODULE.bazel.lock`.
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
-# Pinned to a commit on nvim-treesitter's frozen `master` branch (bundled queries).
-_COMMIT = "cf12346a3414fa1b06af75c79faebe7f76df080a"
+# Pinned to a commit on nvim-treesitter's `main` branch (the rewrite). main moved
+# bundled queries under runtime/queries/<lang>/ and its markdown injections.scm uses
+# pure core-supported capture-based injection — the reason for the master→main
+# reversal (master's #set-lang-from-info-string! predicate is incompatible with the
+# query-match API pinned nvim 0.12.3 exposes). See the module docstring above.
+_COMMIT = "4916d6592ede8c07973490d9322f187e07dfefac"
 
-_SHA256 = "b3061a2ab7e4d50b5b703f8ea56f9dd579e3cbb47a4d7aaa68ef331c14b64b20"
+_SHA256 = "4e720e38f1a74c07fc8bc9d6264e25ab620df93c6576200f43f2ca0ce5fbdec1"
 
 _ARCHIVE_ROOT = "nvim-treesitter-" + _COMMIT
 
@@ -51,8 +60,9 @@ load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 
 package(default_visibility = ["//visibility:public"])
 
-# The vendored subtrees Wolf ships: queries/ (bundled treesitter queries — the
-# reason we pin master), lua/ (the plugin modules), plugin/ (the plugin loader),
+# The vendored subtrees Wolf ships: runtime/queries/ (bundled treesitter queries —
+# lifted back to queries/ by the remap below; main's core-native markdown injections
+# are the reason we pin main), lua/ (the plugin modules), plugin/ (the plugin loader),
 # and LICENSE (kept for compliance). Deliberately EXCLUDE dev-only tests/,
 # scripts/, doc/, assets/, the committed parser/ (Wolf compiles its own curated
 # parsers in //bazel/treesitter-parsers), lockfile.json, README.md, Makefile, and
@@ -60,7 +70,7 @@ package(default_visibility = ["//visibility:public"])
 filegroup(
     name = "runtime_files",
     srcs = glob([
-        "{archive_root}/queries/**",
+        "{archive_root}/runtime/queries/**",
         "{archive_root}/lua/**",
         "{archive_root}/plugin/**",
         "{archive_root}/LICENSE*",
@@ -78,7 +88,10 @@ copy_to_directory(
     name = "nvim_treesitter_tree",
     srcs = [":runtime_files"],
     out = "nvim_treesitter_tree",
-    replace_prefixes = {{"{archive_root}": "nvim-treesitter"}},
+    replace_prefixes = {{
+        "{archive_root}/runtime/queries": "nvim-treesitter/queries",
+        "{archive_root}": "nvim-treesitter",
+    }},
 )
 """
 
@@ -97,5 +110,5 @@ def _nvim_treesitter_impl(_module_ctx):
 
 nvim_treesitter = module_extension(
     implementation = _nvim_treesitter_impl,
-    doc = "Downloads the pinned nvim-treesitter plugin tarball (frozen master, bundled queries; pure Lua, arch-independent).",
+    doc = "Downloads the pinned nvim-treesitter plugin tarball (main branch, core-native bundled queries; pure Lua, arch-independent).",
 )

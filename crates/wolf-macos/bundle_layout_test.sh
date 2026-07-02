@@ -163,7 +163,8 @@ echo "PASS check (g): $LIGHTHOUSE_COLORS exists"
 
 # ---------------------------------------------------------------------------
 # (h) Contents/Resources/nvim-treesitter carries a bundled markdown query file.
-#     (VENDORED only — highlighting is NOT enabled by this change.)
+#     (VENDORED and ENABLED on macOS — the captive init.lua lights markdown
+#      highlighting + fenced-code injection from these queries.)
 # ---------------------------------------------------------------------------
 TS_QUERY=""
 for cand in \
@@ -179,18 +180,19 @@ done
 echo "PASS check (h): $TS_QUERY exists"
 
 # ---------------------------------------------------------------------------
-# (i) Contents/Resources/nvim-treesitter-textobjects/lua/nvim-treesitter/textobjects
-#     is a directory. (VENDORED only.)
+# (i) Contents/Resources/nvim-treesitter-textobjects/lua/nvim-treesitter-textobjects
+#     is a directory. (VENDORED-but-INERT — the `main`-branch self-named Lua layout;
+#     master's classic `lua/nvim-treesitter/textobjects` no longer applies.)
 # ---------------------------------------------------------------------------
-TO_LUA_DIR="$RES/nvim-treesitter-textobjects/lua/nvim-treesitter/textobjects"
+TO_LUA_DIR="$RES/nvim-treesitter-textobjects/lua/nvim-treesitter-textobjects"
 [ -d "$TO_LUA_DIR" ] || fail "expected vendored textobjects Lua module dir at $TO_LUA_DIR, but it is missing or not a directory"
 echo "PASS check (i): $TO_LUA_DIR exists and is a directory"
 
 # ---------------------------------------------------------------------------
 # (j) Contents/Resources/parsers/parser/<lang>.so — the curated host-compiled
 #     treesitter parsers. HARD: go/rust/typescript/tsx/json non-empty; SOFT-note
-#     swift/kotlin/java (drop+LOG policy). (VENDORED/SHIPPED only — highlighting
-#     is NOT enabled.)
+#     swift/kotlin/java (drop+LOG policy). (VENDORED/SHIPPED and ENABLED on macOS —
+#     the captive init.lua lights markdown highlighting + fenced-code injection.)
 # ---------------------------------------------------------------------------
 for lang in go rust typescript tsx json; do
   so="$RES/parsers/parser/$lang.so"

@@ -120,10 +120,12 @@ use_repo(lighthouse, "lighthouse")
 # --- Vendored nvim-treesitter plugin (macOS bundle only) --------------------
 # Downloaded + sha256-verified by the //bazel/nvim-treesitter module extension;
 # assembled into the `nvim-treesitter/` TreeArtifact bundled into Wolf.app at
-# Contents/Resources/nvim-treesitter/. Pinned to the frozen `master` branch (the
-# bundled treesitter queries). Pure Lua (arch-independent), so there is a SINGLE
-# repo `nvim_treesitter` (no per-arch select). This VENDORS the plugin only —
-# highlighting is NOT enabled. See bazel/nvim-treesitter/README.md.
+# Contents/Resources/nvim-treesitter/. Pinned to the `main` branch: its markdown
+# injections are core-native / capture-based and work on pinned nvim 0.12.3,
+# unlike master's `#set-lang-from-info-string!` predicate (E5108 on every fenced
+# redraw). Pure Lua (arch-independent), so there is a SINGLE repo `nvim_treesitter`
+# (no per-arch select). Markdown treesitter highlighting + fenced-code injection
+# are ENABLED on macOS via the captive init.lua. See bazel/nvim-treesitter/README.md.
 nvim_treesitter = use_extension("//bazel/nvim-treesitter:extensions.bzl", "nvim_treesitter")
 use_repo(nvim_treesitter, "nvim_treesitter")
 
@@ -142,8 +144,9 @@ use_repo(nvim_treesitter_textobjects, "nvim_treesitter_textobjects")
 # module extension; assembled into the `parsers/` TreeArtifact bundled into
 # Wolf.app at Contents/Resources/parsers/. Each `ts_<lang>` repo compiles a curated
 # grammar's parser.c (+scanner.c) into a signable Mach-O `parser/<lang>.so` via the
-# apple_support host cc toolchain. This VENDORS + SHIPS the parsers only —
-# highlighting is NOT enabled. Kept in sync with the set that actually compiles
+# apple_support host cc toolchain. These parsers are VENDORED + SHIPPED and
+# ENABLED on macOS via the captive init.lua (markdown highlighting + fenced-code
+# injection). Kept in sync with the set that actually compiles
 # (drop+LOG; see bazel/treesitter-parsers/README.md). See that README for the pins.
 treesitter_parsers = use_extension("//bazel/treesitter-parsers:extensions.bzl", "treesitter_parsers")
 use_repo(

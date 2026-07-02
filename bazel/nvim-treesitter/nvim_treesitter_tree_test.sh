@@ -15,8 +15,9 @@
 #       exist)
 #   b. lua/nvim-treesitter               exists & is a directory
 #
-# NOTE: this change VENDORS the plugin only; it does NOT enable treesitter
-# highlighting. The queries are shipped for a future enablement change.
+# NOTE: this plugin is VENDORED and its queries are ENABLED on macOS — the captive
+# init.lua prepends the tree to runtimepath so markdown highlighting + fenced-code
+# injection are live in the .app. This test only checks the assembled tree layout.
 #
 # The tree comes from an http_archive (external repo `@nvim_treesitter`)
 # assembled by `copy_to_directory` with `replace_prefixes` remapping the archive

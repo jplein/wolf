@@ -21,8 +21,10 @@
 #     - if `file` is available, SOFT-note whether each present `.so` reports as
 #       Mach-O (the bundle requires signable host-compiled Mach-O, not nix-built).
 #
-# NOTE: this change VENDORS compiled parsers only; it does NOT enable treesitter
-# highlighting. The parsers are shipped for a future enablement change.
+# NOTE: these compiled parsers are VENDORED, SHIPPED, and ENABLED on macOS — the
+# captive init.lua prepends them to runtimepath so markdown highlighting +
+# fenced-code injection are live in the .app. This test only checks the assembled
+# tree layout.
 #
 # The tree comes from `copy_to_directory` with `replace_prefixes` remapping each
 # grammar's `parser/<lang>.so` under an inner `parsers/` dir. The copy_to_directory

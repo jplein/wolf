@@ -17,9 +17,10 @@ ABI-compatible with pinned nvim's treesitter runtime, and — crucially — be
 signable, RELOCATABLE host-compiled Mach-O. A nix-built `.so` embeds `/nix/store`
 install names and is not relocatable inside a signed `.app`, so we compile from
 source with the apple_support host-Xcode cc toolchain (the same toolchain that
-builds wolf-core's bundled SQLite). This VENDORS + SHIPS the parsers only; it does
-NOT enable highlighting (a separate future change wires runtimepath +
-`vim.treesitter.start`).
+builds wolf-core's bundled SQLite). These parsers are VENDORED + SHIPPED and
+ENABLED on macOS: the captive init.lua prepends them (with the vendored
+nvim-treesitter queries) to runtimepath and runs `vim.treesitter.start` on markdown
+buffers, so markdown highlighting + fenced-code injection are live in the .app.
 
 ## The `ts_grammar` overlay template
 
@@ -40,10 +41,10 @@ rest; the tree/bundle tests HARD-assert only the low-risk core (go, rust,
 typescript, tsx, json).
 
 BUILD-only extension: never enters the `wolf-core` dependency graph. To bump a pin:
-update the grammar's `rev`/`sha256` below (revisions come from the pinned
-nvim-treesitter master `lockfile.json`; repos from its `lua/nvim-treesitter/
-parsers.lua`), RE-VERIFY the scanner extension at the new revision, then regenerate
-`MODULE.bazel.lock`.
+update the grammar's `rev`/`sha256` below (revisions come from the nvim-treesitter
+`lockfile.json` as pinned during the original vendoring — master-era; see the
+directory README — repos from its `lua/nvim-treesitter/parsers.lua`), RE-VERIFY the
+scanner extension at the new revision, then regenerate `MODULE.bazel.lock`.
 """
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
@@ -193,8 +194,9 @@ def _treesitter_parsers_impl(_module_ctx):
         # this pins the `with-generated-files` branch HEAD (an immutable commit sha)
         # which carries a committed src/parser.c + a C src/scanner.c. This is a
         # DIFFERENT revision than the nvim-treesitter lockfile (which points at the
-        # default branch); acceptable because highlighting is NOT enabled here — we
-        # only need a compilable, ABI-compatible parser to ship.
+        # default branch); acceptable because tree-sitter grammar ABIs are stable and
+        # we only need a compilable, ABI-compatible parser to ship (no test asserts
+        # swift highlighting).
         ("ts_swift", "alex-pinkus/tree-sitter-swift", "31d17fe7e818a2048c808b5c6fdc2dc792f4f5b5", "6be61819aca68710dce8a83dae147474d6c2cba37c48a84daa9f442de96f0be8", True),
     ]
     for name, repo, rev, sha256, scanner in root_grammars:

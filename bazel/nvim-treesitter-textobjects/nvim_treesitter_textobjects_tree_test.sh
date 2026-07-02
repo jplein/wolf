@@ -11,7 +11,7 @@
 # nvim-treesitter-textobjects is a pure-Lua plugin carrying textobject queries
 # and Lua modules. It asserts, relative to the tree's inner
 # `nvim-treesitter-textobjects/` dir:
-#   a. lua/nvim-treesitter/textobjects        exists & is a directory
+#   a. lua/nvim-treesitter-textobjects        exists & is a directory
 #   b. a representative queries/**/textobjects.scm exists (found via `find` so
 #      the check is robust across pinned revisions / per-language layouts)
 #
@@ -77,9 +77,9 @@ done
 echo "Located nvim-treesitter-textobjects tree: $TREE"
 
 # ---------------------------------------------------------------------------
-# (a) lua/nvim-treesitter/textobjects is a directory.
+# (a) lua/nvim-treesitter-textobjects is a directory.
 # ---------------------------------------------------------------------------
-LUA_DIR="$TREE/lua/nvim-treesitter/textobjects"
+LUA_DIR="$TREE/lua/nvim-treesitter-textobjects"
 [ -d "$LUA_DIR" ] || fail "expected Lua module directory at $LUA_DIR, but it is missing or not a directory"
 echo "PASS check (a): $LUA_DIR exists and is a directory"
 
@@ -92,4 +92,4 @@ TEXTOBJECTS=$(find -L "$TREE/queries" -type f -name 'textobjects.scm' 2>/dev/nul
 [ -n "$TEXTOBJECTS" ] || fail "expected at least one queries/**/textobjects.scm under $TREE/queries, but none is present"
 echo "PASS check (b): found a textobjects query file: $TEXTOBJECTS"
 
-echo "PASS: nvim-treesitter-textobjects tree bundles lua/nvim-treesitter/textobjects and a textobjects query"
+echo "PASS: nvim-treesitter-textobjects tree bundles lua/nvim-treesitter-textobjects and a textobjects query"

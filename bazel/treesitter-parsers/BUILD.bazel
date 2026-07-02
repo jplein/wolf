@@ -4,8 +4,9 @@
 # objects (each produced by a `ts_<lang>` external-repo overlay; see extensions.bzl)
 # into ONE `parsers/` TreeArtifact; the macOS app bundles it at
 # `Contents/Resources/parsers/`, so the files land at
-# `Contents/Resources/parsers/parser/<lang>.so`. This change VENDORS + SHIPS the
-# compiled parsers only — it does NOT enable treesitter highlighting.
+# `Contents/Resources/parsers/parser/<lang>.so`. These compiled parsers are
+# VENDORED + SHIPPED and ENABLED on macOS: the captive init.lua prepends them to
+# runtimepath so markdown highlighting + fenced-code injection are live in the .app.
 #
 # The compiled parsers are host (apple_support / Xcode) Mach-O shared objects, so
 # there is no `select()` (the cc toolchain already resolves per host arch). See

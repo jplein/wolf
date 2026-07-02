@@ -176,6 +176,22 @@ pub fn parsers_dir_or_none() -> Option<PathBuf> {
     resolve_runfile("WOLF_TEST_PARSERS_DIR")
 }
 
+/// Resolves the Bazel-staged vendored nvim-treesitter (main queries) tree
+/// (`WOLF_TEST_NVIM_TREESITTER_DIR` → `$(rootpath //bazel/nvim-treesitter:nvim_treesitter_tree)`):
+/// the `nvim_treesitter_tree` TreeArtifact whose inner content is `nvim-treesitter/`
+/// (i.e. `<dir>/nvim-treesitter/queries/markdown/injections.scm`).
+///
+/// Returns `None` when the env var is unset (the cargo / Linux path, where the
+/// vendored queries are not built at all) or when nothing resolves — so the
+/// `treesitter_highlight` test SKIPS gracefully rather than failing. Mirrors the
+/// `*_or_none` / `*_or_skip` convention of the other runfile helpers and reuses
+/// the same [`resolve_runfile`] mechanism as [`init_lua_path`] /
+/// [`nvim_bin_or_skip`].
+#[must_use]
+pub fn nvim_treesitter_dir_or_none() -> Option<PathBuf> {
+    resolve_runfile("WOLF_TEST_NVIM_TREESITTER_DIR")
+}
+
 /// Recursively copies the directory tree at `src` into `dst` (creating `dst` and
 /// any parent dirs), preserving the relative layout.
 ///

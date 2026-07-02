@@ -289,7 +289,7 @@
     },
     "//bazel/nvim-treesitter:extensions.bzl%nvim_treesitter": {
       "general": {
-        "bzlTransitiveDigest": "tmxNOfuyqV6ymIVUFohdJ5N4HvU549MxLNbfakC0XjY=",
+        "bzlTransitiveDigest": "jCbOS/msSLUA8PIT247LGg0nqARChJdc87MTHqDoCfg=",
         "usagesDigest": "O0c0hRfrd0AU9ZMZdyOilFyPKcjMUbPBTJnr0eEWrdU=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -299,10 +299,10 @@
             "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
             "attributes": {
               "urls": [
-                "https://github.com/nvim-treesitter/nvim-treesitter/archive/cf12346a3414fa1b06af75c79faebe7f76df080a.tar.gz"
+                "https://github.com/nvim-treesitter/nvim-treesitter/archive/4916d6592ede8c07973490d9322f187e07dfefac.tar.gz"
               ],
-              "sha256": "b3061a2ab7e4d50b5b703f8ea56f9dd579e3cbb47a4d7aaa68ef331c14b64b20",
-              "build_file_content": "load(\"@aspect_bazel_lib//lib:copy_to_directory.bzl\", \"copy_to_directory\")\n\npackage(default_visibility = [\"//visibility:public\"])\n\n# The vendored subtrees Wolf ships: queries/ (bundled treesitter queries â the\n# reason we pin master), lua/ (the plugin modules), plugin/ (the plugin loader),\n# and LICENSE (kept for compliance). Deliberately EXCLUDE dev-only tests/,\n# scripts/, doc/, assets/, the committed parser/ (Wolf compiles its own curated\n# parsers in //bazel/treesitter-parsers), lockfile.json, README.md, Makefile, and\n# dotfiles â no runtime role for a vendored, highlighting-disabled plugin.\nfilegroup(\n    name = \"runtime_files\",\n    srcs = glob([\n        \"nvim-treesitter-cf12346a3414fa1b06af75c79faebe7f76df080a/queries/**\",\n        \"nvim-treesitter-cf12346a3414fa1b06af75c79faebe7f76df080a/lua/**\",\n        \"nvim-treesitter-cf12346a3414fa1b06af75c79faebe7f76df080a/plugin/**\",\n        \"nvim-treesitter-cf12346a3414fa1b06af75c79faebe7f76df080a/LICENSE*\",\n    ]),\n)\n\n# Assemble under a single inner `nvim-treesitter/` dir, remapping the archive root\n# via replace_prefixes (NOT http_archive strip_prefix). Output TreeArtifact\n# contains nvim-treesitter/queries/**, nvim-treesitter/lua/nvim-treesitter/**, etc.\n# The inner `nvim-treesitter/` is deliberate: rules_apple strips the bundled\n# TreeArtifact's OWN top-level dir name when copying into Contents/Resources/, so\n# nesting under `nvim-treesitter/` lands it at Contents/Resources/nvim-treesitter/\n# robustly.\ncopy_to_directory(\n    name = \"nvim_treesitter_tree\",\n    srcs = [\":runtime_files\"],\n    out = \"nvim_treesitter_tree\",\n    replace_prefixes = {\"nvim-treesitter-cf12346a3414fa1b06af75c79faebe7f76df080a\": \"nvim-treesitter\"},\n)\n"
+              "sha256": "4e720e38f1a74c07fc8bc9d6264e25ab620df93c6576200f43f2ca0ce5fbdec1",
+              "build_file_content": "load(\"@aspect_bazel_lib//lib:copy_to_directory.bzl\", \"copy_to_directory\")\n\npackage(default_visibility = [\"//visibility:public\"])\n\n# The vendored subtrees Wolf ships: runtime/queries/ (bundled treesitter queries â\n# lifted back to queries/ by the remap below; main's core-native markdown injections\n# are the reason we pin main), lua/ (the plugin modules), plugin/ (the plugin loader),\n# and LICENSE (kept for compliance). Deliberately EXCLUDE dev-only tests/,\n# scripts/, doc/, assets/, the committed parser/ (Wolf compiles its own curated\n# parsers in //bazel/treesitter-parsers), lockfile.json, README.md, Makefile, and\n# dotfiles â no runtime role for a vendored, highlighting-disabled plugin.\nfilegroup(\n    name = \"runtime_files\",\n    srcs = glob([\n        \"nvim-treesitter-4916d6592ede8c07973490d9322f187e07dfefac/runtime/queries/**\",\n        \"nvim-treesitter-4916d6592ede8c07973490d9322f187e07dfefac/lua/**\",\n        \"nvim-treesitter-4916d6592ede8c07973490d9322f187e07dfefac/plugin/**\",\n        \"nvim-treesitter-4916d6592ede8c07973490d9322f187e07dfefac/LICENSE*\",\n    ]),\n)\n\n# Assemble under a single inner `nvim-treesitter/` dir, remapping the archive root\n# via replace_prefixes (NOT http_archive strip_prefix). Output TreeArtifact\n# contains nvim-treesitter/queries/**, nvim-treesitter/lua/nvim-treesitter/**, etc.\n# The inner `nvim-treesitter/` is deliberate: rules_apple strips the bundled\n# TreeArtifact's OWN top-level dir name when copying into Contents/Resources/, so\n# nesting under `nvim-treesitter/` lands it at Contents/Resources/nvim-treesitter/\n# robustly.\ncopy_to_directory(\n    name = \"nvim_treesitter_tree\",\n    srcs = [\":runtime_files\"],\n    out = \"nvim_treesitter_tree\",\n    replace_prefixes = {\n        \"nvim-treesitter-4916d6592ede8c07973490d9322f187e07dfefac/runtime/queries\": \"nvim-treesitter/queries\",\n        \"nvim-treesitter-4916d6592ede8c07973490d9322f187e07dfefac\": \"nvim-treesitter\",\n    },\n)\n"
             }
           }
         },
@@ -317,7 +317,7 @@
     },
     "//bazel/nvim-treesitter-textobjects:extensions.bzl%nvim_treesitter_textobjects": {
       "general": {
-        "bzlTransitiveDigest": "qsAVuuvgESbmxWaYxzJrsmbzecY3ZmRNbph3F5ihUwM=",
+        "bzlTransitiveDigest": "gKVnT6H3cLCr41Kf/hRLcZ7stTs+YbgXl7YW/x/owpk=",
         "usagesDigest": "anaxYtCkJ/PBtYb2kaLlDMgbxEAEmgD06U6sTqCt8ls=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -327,10 +327,10 @@
             "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
             "attributes": {
               "urls": [
-                "https://github.com/nvim-treesitter/nvim-treesitter-textobjects/archive/5ca4aaa6efdcc59be46b95a3e876300cfead05ef.tar.gz"
+                "https://github.com/nvim-treesitter/nvim-treesitter-textobjects/archive/851e865342e5a4cb1ae23d31caf6e991e1c99f1e.tar.gz"
               ],
-              "sha256": "c38279bbfedd4a1859d5f3ebdb8641201b3140365c197b68d8a9be092ef7b686",
-              "build_file_content": "load(\"@aspect_bazel_lib//lib:copy_to_directory.bzl\", \"copy_to_directory\")\n\npackage(default_visibility = [\"//visibility:public\"])\n\n# The vendored subtrees Wolf ships: lua/ (the plugin modules, classic\n# `lua/nvim-treesitter/textobjects/` layout on master), queries/ (the per-language\n# textobjects.scm queries), plugin/ (the plugin loader â master ships one, unlike\n# the textobjects `main` branch), plus LICENSE (kept for compliance). Deliberately\n# EXCLUDE dev-only tests/, scripts/, autoload/, doc/, README.md, and dotfiles â\n# no runtime role for a vendored plugin.\nfilegroup(\n    name = \"runtime_files\",\n    srcs = glob([\n        \"nvim-treesitter-textobjects-5ca4aaa6efdcc59be46b95a3e876300cfead05ef/lua/**\",\n        \"nvim-treesitter-textobjects-5ca4aaa6efdcc59be46b95a3e876300cfead05ef/queries/**\",\n        \"nvim-treesitter-textobjects-5ca4aaa6efdcc59be46b95a3e876300cfead05ef/plugin/**\",\n        \"nvim-treesitter-textobjects-5ca4aaa6efdcc59be46b95a3e876300cfead05ef/LICENSE*\",\n    ]),\n)\n\n# Assemble under a single inner `nvim-treesitter-textobjects/` dir, remapping the\n# archive root via replace_prefixes (NOT http_archive strip_prefix). The inner dir\n# is deliberate: rules_apple strips the bundled TreeArtifact's OWN top-level dir\n# name when copying into Contents/Resources/, so nesting under\n# `nvim-treesitter-textobjects/` lands it at\n# Contents/Resources/nvim-treesitter-textobjects/ robustly.\ncopy_to_directory(\n    name = \"nvim_treesitter_textobjects_tree\",\n    srcs = [\":runtime_files\"],\n    out = \"nvim_treesitter_textobjects_tree\",\n    replace_prefixes = {\"nvim-treesitter-textobjects-5ca4aaa6efdcc59be46b95a3e876300cfead05ef\": \"nvim-treesitter-textobjects\"},\n)\n"
+              "sha256": "8d5fd6d8f48021f941420053389c0b23ccbe136fb2deacc3872e42492fb8b9fa",
+              "build_file_content": "load(\"@aspect_bazel_lib//lib:copy_to_directory.bzl\", \"copy_to_directory\")\n\npackage(default_visibility = [\"//visibility:public\"])\n\n# The vendored subtrees Wolf ships: lua/ (the plugin modules, self-named\n# `lua/nvim-treesitter-textobjects/` layout on main), queries/ (the per-language\n# textobjects.scm queries, kept at the archive root on main â NOT moved under\n# runtime/ like the sibling nvim-treesitter main), plus LICENSE (kept for\n# compliance). NOTE: main has NO top-level `plugin/` loader (master did). Deliberately\n# EXCLUDE dev-only tests/, scripts/, doc/, README.md, and dotfiles â no runtime role\n# for a vendored, inert plugin.\nfilegroup(\n    name = \"runtime_files\",\n    srcs = glob([\n        \"nvim-treesitter-textobjects-851e865342e5a4cb1ae23d31caf6e991e1c99f1e/lua/**\",\n        \"nvim-treesitter-textobjects-851e865342e5a4cb1ae23d31caf6e991e1c99f1e/queries/**\",\n        \"nvim-treesitter-textobjects-851e865342e5a4cb1ae23d31caf6e991e1c99f1e/LICENSE*\",\n    ]),\n)\n\n# Assemble under a single inner `nvim-treesitter-textobjects/` dir, remapping the\n# archive root via replace_prefixes (NOT http_archive strip_prefix). Queries stay at\n# `queries/` (main did not relocate them under runtime/), so the ONLY remap is the\n# inner-dir one. Output TreeArtifact contains\n# nvim-treesitter-textobjects/lua/nvim-treesitter-textobjects/**,\n# nvim-treesitter-textobjects/queries/<lang>/textobjects.scm, and LICENSE. The inner\n# dir is deliberate: rules_apple strips the bundled TreeArtifact's OWN top-level dir\n# name when copying into Contents/Resources/, so nesting under\n# `nvim-treesitter-textobjects/` lands it at\n# Contents/Resources/nvim-treesitter-textobjects/ robustly.\ncopy_to_directory(\n    name = \"nvim_treesitter_textobjects_tree\",\n    srcs = [\":runtime_files\"],\n    out = \"nvim_treesitter_textobjects_tree\",\n    replace_prefixes = {\"nvim-treesitter-textobjects-851e865342e5a4cb1ae23d31caf6e991e1c99f1e\": \"nvim-treesitter-textobjects\"},\n)\n"
             }
           }
         },
@@ -373,7 +373,7 @@
     },
     "//bazel/treesitter-parsers:extensions.bzl%treesitter_parsers": {
       "general": {
-        "bzlTransitiveDigest": "d2d26HhjjAT/Vg3bKLzM6zbWgS33zAzHuEYWmnYdk60=",
+        "bzlTransitiveDigest": "5yRCpxXcDzjfhOd1arnD0Yx/2IjOeZXuGS5gl87iCJE=",
         "usagesDigest": "1UBYAl5lh4lyV/Ut+PfTuJvPKcXt+aCMphnM6Dxvomw=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

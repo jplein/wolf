@@ -1,9 +1,10 @@
 # Structure-preserving nvim-treesitter plugin TreeArtifact + a smoke test.
 #
 # `nvim_treesitter_tree` resolves to the assembled `nvim-treesitter/` directory;
-# the macOS app bundles it at `Contents/Resources/nvim-treesitter/`. This change
-# VENDORS the plugin (bundled queries + lua modules) only — it does NOT enable
-# treesitter highlighting. nvim-treesitter is PURE LUA (arch-independent), so there
+# the macOS app bundles it at `Contents/Resources/nvim-treesitter/`. This vendors
+# the plugin (bundled queries + lua modules); markdown treesitter highlighting +
+# fenced-code injection ARE enabled on macOS via the captive init.lua (matching the
+# sibling README). nvim-treesitter is PURE LUA (arch-independent), so there
 # is NO `select()` here (unlike //bazel/nvim). See extensions.bzl and the directory
 # README for the pin and how to bump it.
 

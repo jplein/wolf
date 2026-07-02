@@ -13,8 +13,9 @@
 //! and parses a string in-memory. It does NOT call `vim.treesitter.start`, does
 //! NOT wire runtimepath for highlighting, and — CRUCIALLY — uses the REAL captive
 //! `runtime/nvim/init.lua` UNCHANGED (resolved via `common::init_lua_path`). It
-//! stages NO sibling bundle layout and MODIFIES NO init.lua. Enablement is a
-//! separate future change; this test only proves compiled-parser ↔ pinned-nvim
+//! stages NO sibling bundle layout and MODIFIES NO init.lua. Enablement has since
+//! landed on macOS (proven separately by `//crates/wolf-ffi:treesitter_highlight`);
+//! this test's scope is unchanged — it only proves compiled-parser ↔ pinned-nvim
 //! ABI compatibility.
 //!
 //! ## Coder wiring (BUILD.bazel — NOT done here)
