@@ -46,6 +46,15 @@ bazel_dep(name = "rules_xcodeproj", version = "4.1.0")
 # build-time ruleset only; it never enters wolf-core's dependency tree.
 bazel_dep(name = "aspect_bazel_lib", version = "2.9.4")
 
+# --- Build-time single-file copies for the app-icon bundle -------------------
+# `copy_file` re-materializes the committed `Wolf.icon.json` plus the two
+# 1024x1024 icon masters from `resources/icons/` as ONE output-root `Wolf.icon/`
+# Icon Composer bundle for //crates/wolf-macos:Wolf (rules_apple requires every
+# `app_icons` file to resolve to exactly one `*.icon` directory, so source and
+# generated files may not mix). 1.9.0 is the version MVS already resolves
+# transitively, so this direct pin changes no resolved graph.
+bazel_dep(name = "bazel_skylib", version = "1.9.0")
+
 # --- C/link toolchain from the host Xcode SDK -------------------------------
 # apple_support configures a cc toolchain from the active Xcode (pinned by
 # DEVELOPER_DIR in .bazelrc :macos and the Nix darwin shellHook). With

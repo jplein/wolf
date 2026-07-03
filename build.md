@@ -98,6 +98,8 @@ bazel build //crates/wolf-macos:Wolf
 
 This produces `Wolf.app`, code-signed (dev ad-hoc), with a minimum OS of 26.0. The app bundles its own pinned Neovim 0.12.3 + the captive `init.lua` in `Contents/Resources/` (see "Bundled Neovim (macOS)" below), so double-clicking it works with no shell environment. A developer's exported `WOLF_NVIM_BIN` (and `WOLF_INIT_LUA`) still overrides the bundled binary (and `init.lua`).
 
+The app icon comes from an Icon Composer bundle `Wolf.icon/` that is assembled at build time by `bazel_skylib` `copy_file` targets in `crates/wolf-macos/BUILD.bazel`: the committed `crates/wolf-macos/Wolf.icon.json` becomes `Wolf.icon/icon.json`, and the full-bleed 1024×1024 light and dark PNGs are read directly from `resources/icons/` (no committed copies); the three outputs are wired into the `Wolf` target via the `app_icons` attribute. actool (Xcode 26) compiles it into `Contents/Resources/Assets.car` and merges `CFBundleIconName = Wolf` into the Info.plist; on macOS Tahoe the icon switches automatically between the light and dark artwork with the system's icon-appearance setting. With `minimum_os_version = "26.0"` the `.icon` bundle is the only route rules_apple accepts (a legacy `.appiconset` is a hard build failure). To regenerate the artwork, see [`resources/icons/README.md`](resources/icons/README.md).
+
 ### Regenerating the swift-bridge bindings
 
 The Swift + C bindings under `crates/wolf-ffi/generated/` are **committed**. After changing the `#[swift_bridge::bridge]` module in `crates/wolf-ffi/src/lib.rs`, regenerate and commit them:

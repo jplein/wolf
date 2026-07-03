@@ -1,0 +1,10 @@
+# Design-time icon exports consumed by the macOS app-icon bundle assembly
+# (//crates/wolf-macos:Wolf). Only the two 1024x1024 masters are exported;
+# actool derives every icon size per appearance from them.
+exports_files(
+    [
+        "Wolf application icon macOS light/icon-silhouette_512x512@2x.png",
+        "Wolf application icon macos dark/icon-silhouette_512x512@2x.png",
+    ],
+    visibility = ["//crates/wolf-macos:__pkg__"],
+)

@@ -6,9 +6,15 @@
 #   - wolf_macos_lib    : the AppKit application sources (AppKit/CoreText/
 #                         CoreGraphics/Foundation), depending on wolf_key_map and
 #                         the C FFI module.
-#   - Wolf              : the macos_application bundle (minimum_os_version 26.0).
+#   - wolf_icon_*       : copy_file targets assembling the Tahoe `Wolf.icon/`
+#                         app-icon bundle in the output tree from the committed
+#                         `Wolf.icon.json` + the 1024x1024 masters in
+#                         resources/icons/ (no committed PNG duplicates).
+#   - Wolf              : the macos_application bundle (minimum_os_version 26.0),
+#                         incl. the build-time-assembled `Wolf.icon/` bundle.
 #   - WolfKeyMapTests   : the swift_test over the pure seam.
 #   - xcodeproj         : an UNCOMMITTED Xcode project for debugging/LLDB only.
+load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("@build_bazel_rules_apple//apple:macos.bzl", "macos_application")
 load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library", "swift_test")
 load("@rules_xcodeproj//xcodeproj:defs.bzl", "xcodeproj", "top_level_target")
@@ -48,8 +54,53 @@ swift_library(
     ],
 )
 
+# The Icon Composer bundle `Wolf.icon/` is ASSEMBLED AT BUILD TIME in the
+# output tree: the committed, hand-authored `Wolf.icon.json` becomes
+# `Wolf.icon/icon.json`, and the two full-bleed 1024x1024 light/dark masters
+# are copied straight from `resources/icons/` (their single source of truth —
+# no PNG duplicates are committed here). All THREE files must be generated
+# into the same output-root `Wolf.icon/` dir: rules_apple's actool validation
+# requires every `app_icons` file to resolve to exactly ONE `*.icon`
+# directory, and source-tree + bazel-out paths would count as two.
+copy_file(
+    name = "wolf_icon_json",
+    src = "Wolf.icon.json",
+    out = "Wolf.icon/icon.json",
+    # skylib defaults allow_symlink to True for non-executables, but actool
+    # rejects a symlinked icon.json ("must be a regular file") — force copies.
+    allow_symlink = False,
+)
+
+copy_file(
+    name = "wolf_icon_light",
+    src = "//resources/icons:Wolf application icon macOS light/icon-silhouette_512x512@2x.png",
+    out = "Wolf.icon/Assets/wolf-light.png",
+    allow_symlink = False,
+)
+
+copy_file(
+    name = "wolf_icon_dark",
+    src = "//resources/icons:Wolf application icon macos dark/icon-silhouette_512x512@2x.png",
+    out = "Wolf.icon/Assets/wolf-dark.png",
+    allow_symlink = False,
+)
+
 macos_application(
     name = "Wolf",
+    # The build-time-assembled Icon Composer bundle `Wolf.icon/` (icon.json +
+    # full-bleed 1024x1024 light/dark PNGs; see the copy_file targets above —
+    # sources are the committed `Wolf.icon.json` and the masters in
+    # `resources/icons/`). actool (Xcode 26) compiles it into
+    # Contents/Resources/Assets.car and merges CFBundleIconName = "Wolf" into
+    # the Info.plist; macOS Tahoe swaps the light/dark artwork per the
+    # icon-appearance setting. With minimum_os_version 26.0 the `.icon` bundle
+    # is the ONLY route rules_apple accepts (legacy .appiconset is a hard
+    # build failure).
+    app_icons = [
+        ":wolf_icon_json",
+        ":wolf_icon_light",
+        ":wolf_icon_dark",
+    ],
     bundle_id = "org.wolf.WolfMacOS",
     bundle_name = "Wolf",
     infoplists = ["Info.plist"],
