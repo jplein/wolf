@@ -20,8 +20,8 @@ use tokio::process::ChildStdin;
 
 use crate::layout::LayoutIntent;
 use crate::render::{
-    Cell, CursorShape, DefaultColors, HlAttr, ModeInfo, Rgb, SharedSnapshot, Snapshot, Viewport,
-    WinInfo,
+    Cell, CursorShape, DefaultColors, HlAttr, ModeInfo, Rgb, SharedSnapshot, Snapshot,
+    ThemeColors, ThemeGroup, Viewport, WinInfo,
 };
 use crate::state::StateStore;
 
@@ -82,6 +82,15 @@ const LAYOUT_EVENT: &str = "wolf_layout";
 /// in `runtime/nvim/init.lua` (and once immediately at setup). Routed separately
 /// from `redraw` in [`RedrawHandler::handle_notify`] into the [`TrackedCwd`] cell.
 const CWD_EVENT: &str = "wolf_cwd";
+
+/// Name of the out-of-band notification carrying the effective colors of the
+/// optional `WolfCursor` / `WolfTitlebar` app-theme highlight groups, emitted by
+/// the `WolfTheme` `ColorScheme` autocmd in `runtime/nvim/init.lua` (and once
+/// immediately at setup). The payload is FOUR flat integers
+/// (`cursor_fg, cursor_bg, titlebar_fg, titlebar_bg`), each a packed `0xRRGGBB`
+/// color or `-1` for an unset channel. Routed separately from `redraw` in
+/// [`RedrawHandler::handle_notify`] into [`Snapshot::theme`].
+const THEME_EVENT: &str = "wolf_theme";
 
 /// `nvim-rs` [`Handler`] that applies redraw batches to a [`SharedSnapshot`].
 #[derive(Clone)]
@@ -154,6 +163,14 @@ impl Handler for RedrawHandler {
                 if let Some(intent) = args.first().and_then(LayoutIntent::from_payload) {
                     self.intents.lock().push_back(intent);
                 }
+                (self.wake)();
+            }
+            THEME_EVENT => {
+                // `apply_theme` acquires and DROPS the write lock before
+                // returning; wake fires after the lock is released (same
+                // wake-after-unlock invariant). This is NOT a redraw frame, so
+                // `seq` is left unchanged.
+                self.apply_theme(args).await;
                 (self.wake)();
             }
             CWD_EVENT => {
@@ -252,6 +269,49 @@ impl RedrawHandler {
         };
         let mut snap = self.snapshot.write_async().await;
         snap.active_win = Some(win);
+        // Lock drops here as `snap` goes out of scope at function return.
+    }
+
+    /// Applies a `wolf_theme` notification: stores the reported `WolfCursor` /
+    /// `WolfTitlebar` colors in [`Snapshot::theme`].
+    ///
+    /// The payload is four flat integers — `[cursor_fg, cursor_bg, titlebar_fg,
+    /// titlebar_bg]` — each a packed `0xRRGGBB` color or `-1` for an unset
+    /// channel (the `WolfTheme` autocmd in `runtime/nvim/init.lua` sends
+    /// `h.fg or -1` etc.). A value is accepted only when it is a valid 24-bit
+    /// color (`0..=0xFF_FFFF`); anything else — including the `-1` sentinel and
+    /// a missing argument — maps to `None`.
+    ///
+    /// The args are parsed BEFORE the write lock is taken, so the guard is held
+    /// only for the bare assignment. The lock is acquired via
+    /// [`SharedSnapshot::write_async`], is NOT held across any `.await`, and is
+    /// dropped before returning so the caller's wake fires after the lock is
+    /// released. This is NOT a redraw frame, so `seq` is left unchanged.
+    async fn apply_theme(&self, args: Vec<Value>) {
+        /// Maps one flat payload scalar to a color: in-range 24-bit values are
+        /// colors; `-1` (and anything else) means unset.
+        fn channel(v: Option<&Value>) -> Option<Rgb> {
+            let v = v.and_then(Value::as_i64)?;
+            if (0..=0x00FF_FFFF).contains(&v) {
+                Some(Rgb::from_packed(v as u32))
+            } else {
+                None
+            }
+        }
+
+        let theme = ThemeColors {
+            cursor: ThemeGroup {
+                fg: channel(args.first()),
+                bg: channel(args.get(1)),
+            },
+            titlebar: ThemeGroup {
+                fg: channel(args.get(2)),
+                bg: channel(args.get(3)),
+            },
+        };
+
+        let mut snap = self.snapshot.write_async().await;
+        snap.theme = theme;
         // Lock drops here as `snap` goes out of scope at function return.
     }
 

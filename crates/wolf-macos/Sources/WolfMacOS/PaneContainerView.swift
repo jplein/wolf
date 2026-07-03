@@ -123,6 +123,11 @@ final class PaneContainerView: NSView {
     /// picker.
     var onPickerTrigger: (() -> Void)?
 
+    /// The last `WolfTitlebar` background applied to the window, so a render
+    /// wake only touches AppKit when the theme actually changed (`nil` until the
+    /// first wake reads it).
+    private var lastTitlebarTheme: (rgb: UInt32, set: Bool)?
+
     /// Builds the container bound to a live core `handle` and measured `metrics`.
     /// No panes exist until the first window grid appears on a wake.
     init(handle: WolfCoreHandle, metrics: CellMetrics) {
@@ -395,7 +400,21 @@ final class PaneContainerView: NSView {
         resolvePendingGrids()
         updateActivePane()
         syncGridSizes()
+        applyTitlebarTheme()
         needsDisplay = true
+    }
+
+    /// Applies the `WolfTitlebar` theme background to the window when it
+    /// changed since the last wake (cached in `lastTitlebarTheme`, so there is
+    /// no per-wake AppKit churn). The cursor needs no equivalent here: its
+    /// themed colors arrive pre-resolved via `cursor_fill()`/`cursor_glyph()`.
+    private func applyTitlebarTheme() {
+        guard let win = window as? MainWindow else { return }
+        let bg = handle.theme_titlebar_bg()
+        let current = (rgb: bg.rgb, set: bg.set)
+        if let last = lastTitlebarTheme, last == current { return }
+        lastTitlebarTheme = current
+        win.applyTitlebarBackground(rgb: current.rgb, set: current.set)
     }
 
     /// Creates the first pane (reusing `firstPaneId`, the tree root) once a window

@@ -21,6 +21,11 @@ final class MainWindow: NSWindow {
     /// Retains the toolbar delegate (an `NSToolbar`'s `delegate` is weak).
     private let toolbarDelegate: EditorToolbarDelegate
 
+    /// The window's pristine `backgroundColor`, captured on the FIRST themed
+    /// titlebar application so an unset `WolfTitlebar` can restore the exact
+    /// system default. `nil` until a theme color has ever been applied.
+    private var defaultBackgroundColor: NSColor?
+
     /// The content split-view controller, retained so the sidebar split item is
     /// reachable for state restore/persistence.
     private let splitViewController: EditorSplitViewController
@@ -121,6 +126,31 @@ final class MainWindow: NSWindow {
         splitVC.pinDivider()
 
         initialFirstResponder = paneContainer
+    }
+
+    /// Applies (or reverts) the `WolfTitlebar` theme background.
+    ///
+    /// The window uses `.fullSizeContentView` + `titlebarAppearsTransparent`,
+    /// so `backgroundColor` shows through the titlebar over the editor pane
+    /// (the sidebar keeps its own vibrancy material) — setting it is the
+    /// minimal, reversible lever for a themed titlebar. On the first themed
+    /// application the pristine `backgroundColor` is captured; `set == false`
+    /// (group absent or cleared) restores that captured default. Idempotent:
+    /// re-applying the same state is harmless.
+    func applyTitlebarBackground(rgb: UInt32, set: Bool) {
+        if set {
+            if defaultBackgroundColor == nil {
+                defaultBackgroundColor = backgroundColor
+            }
+            backgroundColor = NSColor(
+                srgbRed: CGFloat((rgb >> 16) & 0xFF) / 255,
+                green: CGFloat((rgb >> 8) & 0xFF) / 255,
+                blue: CGFloat(rgb & 0xFF) / 255,
+                alpha: 1
+            )
+        } else if let defaultBackgroundColor {
+            backgroundColor = defaultBackgroundColor
+        }
     }
 }
 

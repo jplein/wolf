@@ -208,6 +208,51 @@ function _G.wolf_setup_dir_tracking(chan)
 	vim.rpcnotify(chan, "wolf_cwd", vim.fn.getcwd())
 end
 
+-- Theme tracking: wolf-core invokes this over RPC after ui_attach (and after
+-- the current-file / layout / dir setups), passing its own RPC channel id. It
+-- registers a ColorScheme autocmd (pattern '*', covering :colorscheme and
+-- :set background=..., which re-sources the active scheme) that notifies core
+-- of the effective WolfCursor / WolfTitlebar highlight-group colors via
+-- wolf_theme, and emits once immediately so the startup colorscheme is
+-- reflected without a theme change. The payload is FOUR flat scalars
+-- (cursor_fg, cursor_bg, titlebar_fg, titlebar_bg), each a packed 0xRRGGBB
+-- color or -1 for an unset channel — flat scalars sidestep the empty-Lua-table
+-- map-vs-array msgpack ambiguity a table payload would have for a cleared
+-- group. Groups are read with link = false so a linked group resolves to its
+-- target's effective attributes; the pcall is defensive (a never-defined name
+-- yields {} anyway, but the pcall costs nothing).
+function _G.wolf_setup_theme_tracking(chan)
+	local function group(name)
+		local ok, h = pcall(vim.api.nvim_get_hl, 0, { name = name, link = false })
+		if not ok or type(h) ~= "table" then
+			return {}
+		end
+		return h
+	end
+
+	local function emit()
+		local cursor = group("WolfCursor")
+		local titlebar = group("WolfTitlebar")
+		vim.rpcnotify(
+			chan,
+			"wolf_theme",
+			cursor.fg or -1,
+			cursor.bg or -1,
+			titlebar.fg or -1,
+			titlebar.bg or -1
+		)
+	end
+
+	local group_id = vim.api.nvim_create_augroup("WolfTheme", { clear = true })
+	vim.api.nvim_create_autocmd("ColorScheme", {
+		group = group_id,
+		pattern = "*",
+		callback = emit,
+	})
+	-- Initial emit so the startup colorscheme is reflected without a change.
+	emit()
+end
+
 -- Split-panes layout overrides: wolf-core invokes this over RPC after ui_attach
 -- (and after current-file tracking), passing its own RPC channel id. The SHELL
 -- owns the pane layout, so Neovim's split/close/focus chords and the

@@ -9,6 +9,12 @@
 //! (`vim.g.colors_name == "lighthouse"`, `vim.o.background == "dark"`), not merely
 //! present on the runtimepath.
 //!
+//! It ALSO proves STARTUP theme pickup: the pinned scheme defines the
+//! `WolfCursor` / `WolfTitlebar` groups, and because activation happens before
+//! core installs the `wolf_theme` tracking helper over RPC, the helper's
+//! emit-once must still surface the themed titlebar (`theme_titlebar_bg()` /
+//! `theme_titlebar_fg()`) and cursor (`cursor_fill()` / `cursor_glyph()`) colors.
+//!
 //! ## Coder wiring (BUILD.bazel — NOT done here)
 //!
 //! This file does NOT touch BUILD files. The coder adds a `//crates/wolf-ffi:lighthouse_load`
@@ -70,6 +76,21 @@ const KIND_ENTER: u8 = 1;
 const EXPECTED_SENTINEL_LINES: usize = 2;
 /// The marker the `:lua` command writes for a satisfied condition.
 const MARK_OK: &str = "OK";
+
+// -- Pinned WolfCursor / WolfTitlebar values (dark variant) --------------------
+//
+// These constants are the literal `guifg`/`guibg` values the vendored lighthouse
+// colorscheme defines for the two Wolf highlight groups at the pinned commit
+// 9da2bba190305b2c8d5d300c254a48c487dd4a1e (dark variant — init.lua sets
+// `background=dark`). If a lighthouse bump changes them, update these pins.
+/// `WolfTitlebar guibg=#1b1b1b` at the pinned commit (dark).
+const LIGHTHOUSE_TITLEBAR_BG: u32 = 0x001B_1B1B;
+/// `WolfTitlebar guifg=#f1f1f1` at the pinned commit (dark).
+const LIGHTHOUSE_TITLEBAR_FG: u32 = 0x00F1_F1F1;
+/// `WolfCursor guibg=#009fce` at the pinned commit (dark) — the cursor FILL.
+const LIGHTHOUSE_CURSOR_FILL: u32 = 0x0000_9FCE;
+/// `WolfCursor guifg=#000000` at the pinned commit (dark) — the cursor GLYPH.
+const LIGHTHOUSE_CURSOR_GLYPH: u32 = 0x0000_0000;
 
 /// Builds a printable-character `FfiKeyEvent` (kind=Char) for `c`, all modifiers
 /// false (the already-resolved glyph rides in `ch`, per the Shift contract).
@@ -232,6 +253,56 @@ fn lighthouse_colorscheme_active_from_sibling_dir() {
         background, MARK_OK,
         "vim.o.background should be \"dark\" after init.lua selects the dark variant \
          (sentinel line 2 = {background:?})"
+    );
+
+    // --- Startup theme pickup: WolfTitlebar / WolfCursor from the scheme ----
+    // lighthouse@9da2bba (dark) defines both Wolf groups (see the pinned
+    // constants above). init.lua activates the colorscheme while nvim boots —
+    // BEFORE core installs the theme-tracking helper over RPC — so this proves
+    // the helper's emit-once picks up a colorscheme activated before setup ran.
+    // The `wolf_theme` notification arrives asynchronously; poll until the
+    // titlebar bg surfaces as set.
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    let mut titlebar_bg = handle.theme_titlebar_bg();
+    while Instant::now() < deadline {
+        titlebar_bg = handle.theme_titlebar_bg();
+        if titlebar_bg.set {
+            break;
+        }
+        sleep(POLL_INTERVAL);
+    }
+    assert!(
+        titlebar_bg.set,
+        "theme_titlebar_bg() should become set at startup from the vendored \
+         lighthouse colorscheme's WolfTitlebar group"
+    );
+    assert_eq!(
+        titlebar_bg.rgb, LIGHTHOUSE_TITLEBAR_BG,
+        "titlebar bg should be lighthouse@9da2bba's dark WolfTitlebar guibg (#1b1b1b)"
+    );
+
+    let titlebar_fg = handle.theme_titlebar_fg();
+    assert!(
+        titlebar_fg.set,
+        "theme_titlebar_fg() should be set once the theme notification landed"
+    );
+    assert_eq!(
+        titlebar_fg.rgb, LIGHTHOUSE_TITLEBAR_FG,
+        "titlebar fg should be lighthouse@9da2bba's dark WolfTitlebar guifg (#f1f1f1)"
+    );
+
+    // The WolfCursor override rides the EXISTING frame accessors (resolved at
+    // frame-pack time from the same snapshot the poll above just observed).
+    let themed_frame = handle.read_frame();
+    assert_eq!(
+        themed_frame.cursor_fill().rgb,
+        LIGHTHOUSE_CURSOR_FILL,
+        "cursor_fill() should be lighthouse@9da2bba's dark WolfCursor guibg (#009fce)"
+    );
+    assert_eq!(
+        themed_frame.cursor_glyph().rgb,
+        LIGHTHOUSE_CURSOR_GLYPH,
+        "cursor_glyph() should be lighthouse@9da2bba's dark WolfCursor guifg (#000000)"
     );
 
     // --- Shutdown: clean teardown -------------------------------------------

@@ -136,6 +136,36 @@ rust_test(
 # target above: drives a REAL pinned Neovim (no mocks), stages the captive
 # `init.lua` + the pinned nvim tree as runfiles, reuses `tests/common/mod.rs`,
 # and runs unsandboxed so the nvim child can spawn.
+# Real-nvim integration test for the WolfCursor / WolfTitlebar theme tracking
+# (`Snapshot.theme` fed by the `wolf_theme` notification: startup emit-once,
+# runtime `:hi` + `:doautocmd ColorScheme`, link resolution, cleared fallback).
+# An EXACT mirror of the `state_save` target below: drives a REAL pinned Neovim
+# (no mocks), stages the captive `init.lua` + the pinned nvim tree as runfiles,
+# reuses `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.
+rust_test(
+    name = "theme",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/theme.rs",
+    ],
+    crate_root = "tests/theme.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
 rust_test(
     name = "state_save",
     srcs = [

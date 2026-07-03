@@ -50,6 +50,18 @@ The helper:
 
 Core stores this in a sibling `TrackedCwd` cell (NOT the render snapshot, and it does NOT bump the snapshot `seq`), since nvim's cwd is not render state — the `:cd` that triggered it already produces its own redraw flush. The channel id is passed as a Lua **vararg** (`...`), never interpolated into the code string.
 
+### Theme tracking — `_G.wolf_setup_theme_tracking(chan)`
+
+A fourth global helper that `wolf-core` invokes over RPC **after** `ui_attach`, current-file tracking, layout setup, and directory tracking, again passing core's own RPC channel id (see [`src/nvim.rs`](../../crates/wolf-core/src/nvim.rs)'s `setup_theme_tracking`). It lets a colorscheme drive two app-level colors via the optional highlight groups **`WolfCursor`** (bg = app cursor fill, fg = glyph color) and **`WolfTitlebar`** (bg = macOS titlebar background; fg carried for future title-text coloring). These groups are never painted on the grid, so the redraw stream never carries them — this notification is the only way core learns them.
+
+The helper:
+
+- creates a `WolfTheme` augroup (`clear = true`, so re-invoking is idempotent);
+- registers a `ColorScheme` autocmd (`pattern = "*"`, covering `:colorscheme` and `:set background=...`, which re-sources the active scheme) whose callback reads both groups via `pcall(vim.api.nvim_get_hl, 0, { name = ..., link = false })` — `link = false` so a linked group resolves to its target's effective attributes — and does `vim.rpcnotify(chan, "wolf_theme", cursor.fg or -1, cursor.bg or -1, titlebar.fg or -1, titlebar.bg or -1)`;
+- emits once immediately (the same `rpcnotify`) so the startup colorscheme is reflected without a theme change.
+
+The payload is **four flat scalars** (each a packed `0xRRGGBB` color or `-1` for an unset channel) rather than a table: an absent/cleared group yields an empty Lua table from `nvim_get_hl`, whose msgpack encoding is ambiguous (map vs. array), so flat scalars with a `-1` sentinel sidestep that entirely (nvim colors are 24-bit, making `-1` unambiguous). Core folds this into `Snapshot.theme` (waking the front-end, no `seq` bump). The pinned lighthouse colorscheme defines both groups. The channel id is passed as a Lua **vararg** (`...`), never interpolated into the code string.
+
 ### Split-panes layout — `_G.wolf_setup_layout(chan)`
 
 A second global helper that `wolf-core` invokes over RPC **after** `ui_attach` and current-file tracking, again passing core's own RPC channel id (see [`src/nvim.rs`](../../crates/wolf-core/src/nvim.rs)'s `setup_layout`). Under the split-panes design the **SHELL owns the pane layout**, so Neovim's split / close / focus chords and the `:split` / `:vsplit` / `:close` Ex-commands are rebound to report layout **intents** over `rpcnotify` rather than (or in addition to) performing the native window op. The GNOME front-end consumes these intents to create, destroy, and focus native panes.

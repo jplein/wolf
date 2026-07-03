@@ -12,10 +12,12 @@ Ordering matters: this activation runs **after** `vim.cmd("syntax on")`, because
 
 ## The pin
 
-- Commit: `5862a1a78d9f4f38418ccb3aebef275ab927b779`
-- Tarball: https://github.com/jplein/lighthouse.nvim/archive/5862a1a78d9f4f38418ccb3aebef275ab927b779.tar.gz
-- sha256: `af378b8c90a8bb205c01a5590dd8b4e9bb0e0bfdcf7eed8338f55427ff9329d5`
-- Archive root dir: `lighthouse.nvim-5862a1a78d9f4f38418ccb3aebef275ab927b779` (the upstream repo name includes `.nvim`)
+- Commit: `9da2bba190305b2c8d5d300c254a48c487dd4a1e`
+- Tarball: https://github.com/jplein/lighthouse.nvim/archive/9da2bba190305b2c8d5d300c254a48c487dd4a1e.tar.gz
+- sha256: `7e3d0bda062b74fa85261107beadeec515cc6e661adc5d1f6457c5f03997967c`
+- Archive root dir: `lighthouse.nvim-9da2bba190305b2c8d5d300c254a48c487dd4a1e` (the upstream repo name includes `.nvim`)
+
+This pin defines the two optional **Wolf app-theme highlight groups** — `WolfCursor` (app cursor fill/glyph) and `WolfTitlebar` (macOS titlebar background) — that core tracks via the `wolf_theme` notification (see `runtime/nvim/README.md`); `//crates/wolf-ffi:lighthouse_load` pins the dark-variant values.
 
 ## Targets
 

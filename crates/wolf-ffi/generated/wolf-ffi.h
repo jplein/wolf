@@ -159,6 +159,8 @@ void* __swift_bridge__$WolfCoreHandle$start_file_search(void* self);
 void* __swift_bridge__$WolfCoreHandle$start_tree_search(void* self);
 void* __swift_bridge__$WolfCoreHandle$current_file(void* self);
 void* __swift_bridge__$WolfCoreHandle$cwd(void* self);
+struct __swift_bridge__$FfiColor __swift_bridge__$WolfCoreHandle$theme_titlebar_bg(void* self);
+struct __swift_bridge__$FfiColor __swift_bridge__$WolfCoreHandle$theme_titlebar_fg(void* self);
 void __swift_bridge__$WolfCoreHandle$open(void* self, void* path);
 void __swift_bridge__$WolfCoreHandle$state_set_geometry(void* self, double x, double y, double width, double height);
 void __swift_bridge__$WolfCoreHandle$state_set_sidebar_visible(void* self, bool visible);

@@ -288,6 +288,14 @@ extension WolfCoreHandleRef {
         RustString(ptr: __swift_bridge__$WolfCoreHandle$cwd(ptr))
     }
 
+    public func theme_titlebar_bg() -> FfiColor {
+        __swift_bridge__$WolfCoreHandle$theme_titlebar_bg(ptr).intoSwiftRepr()
+    }
+
+    public func theme_titlebar_fg() -> FfiColor {
+        __swift_bridge__$WolfCoreHandle$theme_titlebar_fg(ptr).intoSwiftRepr()
+    }
+
     public func open<GenericIntoRustString: IntoRustString>(_ path: GenericIntoRustString) {
         __swift_bridge__$WolfCoreHandle$open(ptr, { let rustString = path.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
     }

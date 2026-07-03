@@ -334,6 +334,14 @@ mod ffi {
         // `:cd`/`DirChanged`), or the empty string until nvim first reports it /
         // after shutdown.
         fn cwd(&self) -> String;
+        // The WolfTitlebar theme group's background color (the macOS titlebar
+        // background), following the `default_fg`/`default_bg` convention:
+        // unset when the group is absent/cleared or the core is gone.
+        fn theme_titlebar_bg(&self) -> FfiColor;
+        // The WolfTitlebar theme group's foreground color (carried for future
+        // title-text coloring; not applied on macOS this pass). Same unset
+        // convention as `theme_titlebar_bg`.
+        fn theme_titlebar_fg(&self) -> FfiColor;
         // Opens `path` (an absolute filesystem path) in Neovim via
         // `InputEvent::Open`; the core's input pump records the MRU.
         fn open(&self, path: String);
@@ -1109,6 +1117,35 @@ impl WolfCoreHandle {
         };
         core.live_cwd()
             .map_or_else(String::new, |p| p.to_string_lossy().into_owned())
+    }
+
+    /// The `WolfTitlebar` theme group's background color (the macOS titlebar
+    /// background), from `Snapshot.theme.titlebar.bg`.
+    ///
+    /// Follows the `default_fg`/`default_bg` unset convention: `set == false`
+    /// when the group is absent or cleared, or once the core has been shut
+    /// down. Read on each render wake by the macOS shell, which applies it to
+    /// (or reverts) `NSWindow.backgroundColor`.
+    #[must_use]
+    pub fn theme_titlebar_bg(&self) -> FfiColor {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return FfiColor::unset();
+        };
+        FfiColor::from_opt(core.read_snapshot().theme.titlebar.bg)
+    }
+
+    /// The `WolfTitlebar` theme group's foreground color, carried across the
+    /// bridge for future title-text coloring (not applied on macOS this pass).
+    ///
+    /// Same unset convention as [`theme_titlebar_bg`](Self::theme_titlebar_bg).
+    #[must_use]
+    pub fn theme_titlebar_fg(&self) -> FfiColor {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return FfiColor::unset();
+        };
+        FfiColor::from_opt(core.read_snapshot().theme.titlebar.fg)
     }
 
     /// Opens `path` (an absolute filesystem path) in Neovim via
@@ -1900,8 +1937,15 @@ fn clamp_u16(v: usize) -> u16 {
     u16::try_from(v).unwrap_or(u16::MAX)
 }
 
-/// Computes the cursor's `(fill, glyph)` colors (reverse video, honoring a visible
-/// mode cursor highlight), ported from wolf-gnome's `cursor::cursor_colors`.
+/// Computes the cursor's `(fill, glyph)` colors (reverse video, honoring the
+/// `WolfCursor` app-theme group first, then a visible mode cursor highlight),
+/// ported from — and kept in lockstep with — wolf-gnome's
+/// `cursor::cursor_colors`.
+///
+/// The `WolfCursor` theme group (`Snapshot.theme.cursor`) is honored FIRST and
+/// unconditionally (an explicit app-level opt-in): a set `theme.cursor.bg`
+/// becomes the fill, with the glyph from `theme.cursor.fg` or — when unset —
+/// the underlying cell's background (the reverse-video glyph).
 ///
 /// Reads the cell under the cursor from `grid` (the REQUESTED grid being packed),
 /// not the active grid, so a per-pane frame computes the cursor colors against its
@@ -1922,6 +1966,13 @@ fn cursor_colors(snap: &wolf_core::Snapshot, grid: &Grid) -> (Rgb, Rgb) {
             defaults.bg.unwrap_or(FALLBACK_BG),
         ),
     };
+
+    // WolfCursor theme override: honored unconditionally (explicit app-level
+    // opt-in, unlike the guarded mode-attr path below). A bg-only group keeps
+    // the reverse-video glyph (the cell's bg).
+    if let Some(bg) = snap.theme.cursor.bg {
+        return (bg, snap.theme.cursor.fg.unwrap_or(cell_bg));
+    }
 
     if let Some(attr_id) = snap
         .mode_infos

@@ -54,7 +54,7 @@ pub use rank::{rank_matches, Match, MatchKey};
 pub use redraw::WakeFn;
 pub use render::{
     Cell, Cursor, CursorShape, DefaultColors, Grid, HighlightTable, HlAttr, ModeInfo,
-    ResolvedStyle, Rgb, SharedSnapshot, Snapshot, Viewport, WinInfo,
+    ResolvedStyle, Rgb, SharedSnapshot, Snapshot, ThemeColors, ThemeGroup, Viewport, WinInfo,
 };
 pub use state::{load_state, state_dir, StateStore, ToolbarMode, WindowState, WolfState};
 pub use tree::{ancestors_to_reveal, children_of, node_rel_path, rel_path_for, TreeNode};

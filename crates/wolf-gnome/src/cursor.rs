@@ -98,9 +98,16 @@ pub fn cursor_rect(
 
 /// Computes the cursor's `(fill, glyph)` colors for `snap`.
 ///
-/// The cursor inverts the underlying cell (reverse video) by default: the fill is
-/// the cell's foreground and the glyph reads in the cell's background, each
-/// falling back to the editor defaults (already merged by
+/// The `WolfCursor` app-theme group ([`Snapshot::theme`]`.cursor`) is honored
+/// FIRST and unconditionally (it is an explicit app-level opt-in): a set
+/// `theme.cursor.bg` becomes the fill, with the glyph from `theme.cursor.fg` or
+/// — when the theme fg is unset — the underlying cell's background (the
+/// reverse-video glyph). This logic is kept in lockstep with wolf-ffi's
+/// `cursor_colors` (its port of this function).
+///
+/// Otherwise the cursor inverts the underlying cell (reverse video) by default:
+/// the fill is the cell's foreground and the glyph reads in the cell's
+/// background, each falling back to the editor defaults (already merged by
 /// [`HighlightTable::resolve`](wolf_core::HighlightTable::resolve)) and finally to
 /// [`FALLBACK_FG`] / [`FALLBACK_BG`]. The cursor cell being out of grid bounds is
 /// handled without panicking (defaults/fallbacks only).
@@ -116,7 +123,8 @@ pub fn cursor_colors(snap: &Snapshot) -> (Rgb, Rgb) {
     let defaults = &snap.highlights.defaults;
 
     // Underlying cell colors (the inversion source), computed once and reused as
-    // both the inversion result and the visibility reference for the honor path.
+    // the inversion result, the visibility reference for the mode-attr honor
+    // path, and the glyph fallback for a bg-only WolfCursor theme.
     let (cell_fg, cell_bg) = match snap.active_grid().cell(snap.cursor.row, snap.cursor.col) {
         Some(cell) => {
             let style = snap.highlights.resolve(cell.hl_id);
@@ -130,6 +138,13 @@ pub fn cursor_colors(snap: &Snapshot) -> (Rgb, Rgb) {
             defaults.bg.unwrap_or(FALLBACK_BG),
         ),
     };
+
+    // WolfCursor theme override: honored unconditionally (explicit app-level
+    // opt-in, unlike the guarded mode-attr path below). A bg-only group keeps
+    // the reverse-video glyph (the cell's bg).
+    if let Some(bg) = snap.theme.cursor.bg {
+        return (bg, snap.theme.cursor.fg.unwrap_or(cell_bg));
+    }
 
     // Honor the mode's cursor highlight only when it is guaranteed visible.
     if let Some(attr_id) = snap
@@ -162,7 +177,7 @@ mod tests {
     use super::*;
 
     use wolf_core::{
-        Cell, Cursor, CursorShape, DefaultColors, HlAttr, ModeInfo, Rgb, Snapshot,
+        Cell, Cursor, CursorShape, DefaultColors, HlAttr, ModeInfo, Rgb, Snapshot, ThemeGroup,
     };
 
     // --- Float comparison --------------------------------------------------
@@ -672,6 +687,97 @@ mod tests {
         assert_ne!(
             fill, CELL_BG,
             "honored fill is distinct from the cell background"
+        );
+    }
+
+    // =====================================================================
+    // cursor_colors — WolfCursor theme override (Snapshot.theme.cursor)
+    // =====================================================================
+    //
+    // The theme branch is the FIRST branch: a `theme.cursor.bg` of `Some(bg)` is
+    // honored UNCONDITIONALLY (WolfCursor is an explicit app-level opt-in,
+    // unlike the mode-attr path with its visibility guard), with
+    // `glyph = theme.cursor.fg.unwrap_or(cell_bg)` (the reverse-video glyph when
+    // the theme fg is unset). A `theme.cursor.bg` of `None` falls through to the
+    // UNCHANGED existing logic, which every test above pins (all of them run
+    // with the default all-`None` theme).
+
+    /// WolfCursor theme foreground (the themed GLYPH color); distinct from every
+    /// other fixture color so theme-vs-mode-vs-invert is unambiguous.
+    const THEME_FG: Rgb = Rgb { r: 5, g: 15, b: 25 };
+    /// WolfCursor theme background (the themed FILL color); distinct from every
+    /// other fixture color.
+    const THEME_BG: Rgb = Rgb { r: 130, g: 140, b: 150 };
+
+    #[test]
+    fn cursor_colors_honors_theme_cursor_fg_and_bg() {
+        let mut snap = base_snapshot(CELL_HL);
+        snap.mode_infos = one_mode(None);
+        snap.theme.cursor = ThemeGroup {
+            fg: Some(THEME_FG),
+            bg: Some(THEME_BG),
+        };
+
+        let (fill, glyph) = cursor_colors(&snap);
+        // Theme honor: fill = WolfCursor bg, glyph = WolfCursor fg.
+        assert_eq!(fill, THEME_BG, "theme: fill should be the WolfCursor bg");
+        assert_eq!(glyph, THEME_FG, "theme: glyph should be the WolfCursor fg");
+        // And NOT the inversion of the underlying cell.
+        assert_ne!(fill, CELL_FG, "the theme override must not invert the cell");
+    }
+
+    #[test]
+    fn cursor_colors_theme_bg_only_uses_cell_bg_as_glyph() {
+        let mut snap = base_snapshot(CELL_HL);
+        snap.mode_infos = one_mode(None);
+        // bg-only WolfCursor: the fill is still honored, and the glyph falls
+        // back to the underlying cell's bg (the reverse-video glyph).
+        snap.theme.cursor = ThemeGroup {
+            fg: None,
+            bg: Some(THEME_BG),
+        };
+
+        let (fill, glyph) = cursor_colors(&snap);
+        assert_eq!(fill, THEME_BG, "bg-only theme: fill = WolfCursor bg");
+        assert_eq!(
+            glyph, CELL_BG,
+            "bg-only theme: glyph falls back to the cell bg (reverse-video glyph)"
+        );
+    }
+
+    #[test]
+    fn cursor_colors_theme_beats_honorable_mode_attr() {
+        // The mode attr here is exactly the honorable setup of
+        // `cursor_colors_honors_mode_attr_with_both_fg_and_bg` (both channels
+        // set, MODE_BG != CELL_BG, MODE_BG != MODE_FG). With the theme ALSO set,
+        // the theme branch runs FIRST and must win over the mode attr.
+        let mut snap = base_snapshot(CELL_HL);
+        snap.highlights.define(
+            MODE_HL,
+            HlAttr {
+                fg: Some(MODE_FG),
+                bg: Some(MODE_BG),
+                ..HlAttr::default()
+            },
+        );
+        snap.mode_infos = one_mode(Some(MODE_HL));
+        snap.theme.cursor = ThemeGroup {
+            fg: Some(THEME_FG),
+            bg: Some(THEME_BG),
+        };
+
+        let (fill, glyph) = cursor_colors(&snap);
+        assert_eq!(
+            fill, THEME_BG,
+            "theme beats mode attr: fill = WolfCursor bg, not the mode bg"
+        );
+        assert_eq!(
+            glyph, THEME_FG,
+            "theme beats mode attr: glyph = WolfCursor fg, not the mode fg"
+        );
+        assert_ne!(
+            fill, MODE_BG,
+            "the mode-cursor bg must not leak through when the theme is set"
         );
     }
 }

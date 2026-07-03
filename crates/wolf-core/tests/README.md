@@ -35,7 +35,7 @@ Shared helpers used across the test binaries:
 
 ## Coverage
 
-Eighty-two tests total: sixty-two integration tests (twelve `tests/*.rs` binaries, driving a real pinned Neovim and/or real SQLite/filesystem — plus the headless `state_unit.rs`, which needs neither) plus twenty pure in-module unit tests (ten for the ranking function in `rank.rs`, ten for layout-intent parsing in `layout.rs`).
+Sixty-eight integration tests across thirteen `tests/*.rs` binaries (driving a real pinned Neovim and/or real SQLite/filesystem — plus the headless `state_unit.rs`, which needs neither), plus the pure in-module `#[cfg(test)]` unit tests (eighteen for the ranking function in `rank.rs`, ten for layout-intent parsing in `layout.rs`, and the `config.rs` / `tree.rs` suites documented in [`src/README.md`](../src/README.md)).
 
 ### File picker (real SQLite / filesystem / git / Neovim — no mocks)
 
@@ -59,9 +59,18 @@ Eighty-two tests total: sixty-two integration tests (twelve `tests/*.rs` binarie
 - a core started with no file open (unnamed buffer) reports `None` (the initial emit's empty `expand('%:p')` maps to `None`);
 - `current_file` follows a buffer switch (open A, then open B → it moves to B).
 
+### Theme tracking (real Neovim)
+
+`theme.rs` (Bazel target `//crates/wolf-core:theme`, four tests) verifies `Snapshot.theme` — the `WolfCursor` / `WolfTitlebar` app-theme colors delivered by the `wolf_theme` notification (`ThemeColors { cursor, titlebar }`, each channel an `Option<Rgb>`) — against a real, hermetic nvim started with the plain repo `init.lua` (no lighthouse staged, so no colorscheme defines the Wolf groups at startup). Like `current_file.rs`, the notification is separate from redraw flushes (it wakes but does not bump `seq`), so the tests **poll** `read_snapshot().theme` with a generous timeout, draining wakes; every `:hi` mutation is followed by an explicit `:doautocmd ColorScheme`, because a plain `:hi` does NOT fire the `ColorScheme` autocmd the tracker rides (only `:colorscheme` / a `:set background=` re-source do):
+
+- startup with no Wolf groups reports the all-`None` default (the helper's emit-once arrived and parsed as unset);
+- a runtime `:hi WolfCursor` / `:hi WolfTitlebar` + `:doautocmd ColorScheme` surfaces the exact packed colors, with any channel the `:hi` left unset staying `None`;
+- a linked group (`:hi link WolfCursor Visual`) resolves to its target's effective attributes (the helper reads with `link = false`);
+- clearing both groups (`:hi clear …` + `:doautocmd ColorScheme`) falls back to all-`None`.
+
 ### Ranking (pure, in-module)
 
-`rank.rs` has ten table-driven `#[cfg(test)]` unit tests (no fs/Neovim): empty query returns all entries MRU-first; case-insensitive matching; subsequence match and non-match exclusion; MRU outranks a stronger non-MRU match; strict-prefix beats a scattered subsequence; word splitting on separators; full-word match tops the prefix group; deterministic length/lexicographic tie-breaks; and the decisive `match_start` (key 5) and `span` (key 6) tie-breaks.
+`rank.rs` has eighteen table-driven `#[cfg(test)]` unit tests (no fs/Neovim): empty query returns all entries MRU-first; case-insensitive matching; subsequence match and non-match exclusion; MRU outranks a stronger non-MRU match; strict-prefix beats a scattered subsequence; word splitting on separators; full-word match tops the prefix group; deterministic length/lexicographic tie-breaks; the decisive `match_start` (key 5) and `span` (key 6) tie-breaks; the multi-term AND-matching cases (space-separated terms are all required, order-independent, and extra whitespace is harmless — an entry missing any term is dropped); and the scoring-tier cases (MRU dominates a stronger non-MRU match, component-start beats scattered, contiguity beats scattered among non-component matches, and more/stronger per-term hits score higher).
 
 ### Layout-intent parsing (pure, in-module)
 

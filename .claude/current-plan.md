@@ -1,175 +1,166 @@
-# Feature: macOS Tahoe app icon with light/dark switching
-
-## FOLLOW-UP (user request, 2026-07-03): assemble Wolf.icon at build time — no committed PNG duplicates
-
-> **STATUS: COMPLETE.** Implemented, reviewed (PASS), reviewer's minor (visibility scoping on resources/icons exports_files) applied and re-verified. Remaining for user: manual smoke + commit (`git add resources/` — includes the new BUILD.bazel — with the staged mv/rm already in the index).
-
-The user wants the two PNGs inside `crates/wolf-macos/Wolf.icon/Assets/` to stop being committed copies; the `.icon` bundle should be assembled at build time directly from `resources/icons/`.
-
-### Design (orchestrator-approved)
-
-- **Constraint discovered in rules_apple validation** (`_verify_icon_dirs` in actool.bzl): all `app_icons` files must resolve to exactly ONE `*.icon` directory. Source files and generated files live under different roots (source tree vs bazel-out), so a mixed bundle (source icon.json + generated PNGs) would count as TWO `Wolf.icon` dirs and fail. Therefore ALL THREE files must be generated into the same output-root `Wolf.icon/` dir.
-- **Label conflict**: a generated file may not share its package-relative path with a source file (same label). So the committed `Wolf.icon/icon.json` must move to a different source path, e.g. `crates/wolf-macos/Wolf.icon.json` (still committed, hand-authored config — only its location changes); a copy_file re-materializes it at `Wolf.icon/icon.json` in the output tree.
-- **Mechanism**: `copy_file` from bazel_skylib. Add `bazel_dep(name = "bazel_skylib", version = "1.9.0")` to MODULE.bazel (1.9.0 is what MVS already resolves transitively — no repin expected; follow the file's comment conventions for dep floors).
-  ```python
-  load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
-  copy_file(name = "wolf_icon_json",  src = "Wolf.icon.json", out = "Wolf.icon/icon.json")
-  copy_file(name = "wolf_icon_light", src = "<label of light 1024 png>", out = "Wolf.icon/Assets/wolf-light.png")
-  copy_file(name = "wolf_icon_dark",  src = "<label of dark 1024 png>",  out = "Wolf.icon/Assets/wolf-dark.png")
-  # Wolf target: app_icons = [":wolf_icon_json", ":wolf_icon_light", ":wolf_icon_dark"]
-  ```
-- **Spaces in source labels**: the source dirs (`resources/icons/Wolf application icon macOS light/` etc.) contain spaces, which Bazel labels may not support. FIRST run a cheap experiment: add `resources/icons/BUILD.bazel` with `exports_files` for the two `icon-silhouette_512x512@2x.png` files and try `bazel query` / the build. If spaces fail (expected), RENAME the four subdirectories to `macos-light/`, `macos-dark/`, `gnome-light/`, `gnome-dark/` (fixes the inconsistent "macOS light"/"macos dark" casing too) and update all doc references + the update recipe.
-- **Cleanup**: delete the committed `crates/wolf-macos/Wolf.icon/Assets/*.png` and the now-source-empty `Wolf.icon/` dir; keep `.DS_Store` insurance if a glob remains anywhere (explicit label list needs none).
-- **Docs**: update `resources/icons/README.md` (recipe becomes: re-export from Figma over the 1024 file, rebuild — no cp step; new dir names if renamed), `crates/wolf-macos/README.md`, the `Wolf` target comment in BUILD.bazel, `build.md` if it mentions committed copies. prettier + no hard line breaks, as before.
-- **Verification**: `bazel build //crates/wolf-macos:Wolf`; `/usr/bin/assetutil --info` on Assets.car must still show `NSAppearanceNameDarkAqua → wolf-dark` and `NSAppearanceNameAqua → wolf-light`; regression `bazel test //crates/wolf-macos:bundle_layout_test //crates/wolf-macos:WolfKeyMapTests`. NO new tests (standing user directive).
-- **Answered user question**: only the two 1024×1024 (`512x512@2x`) PNGs are consumed; actool derives all 7 icon sizes per appearance from the 1024 master. All other sizes in resources/icons are unconsumed by the build.
-
-### Follow-up coder output
-
-- **Spaces in labels WORK on Bazel 8.7.0** (verified empirically: query, direct build, full app build) — no directory renames; `resources/icons/BUILD.bazel` (new) `exports_files` the two 1024 masters with space-containing labels.
-- Moved `Wolf.icon/icon.json` → `crates/wolf-macos/Wolf.icon.json` (git mv); deleted the committed PNG copies (git rm) and the `Wolf.icon/` source dir; MODULE.bazel + `bazel_dep bazel_skylib 1.9.0` (matches MVS resolution, no graph change); three `copy_file` targets assemble the output-root `Wolf.icon/`; `app_icons` is now the explicit three-label list.
-- **Deviation/new research finding:** skylib `copy_file` defaults to `allow_symlink = True` for non-executables, and actool rejects symlinked bundle members (`The "icon.json" entry must be a regular file.`). All three targets need `allow_symlink = False`. The "exactly one *.icon dir" validation never fired.
-- Docs updated (icons README recipe is now re-export + rebuild, no cp; wolf-macos README; build.md; resources README), prettier-clean.
-- Evidence: build green; assetutil shows DarkAqua→wolf-dark, Aqua→wolf-light, 7 derived sizes; CFBundleIconName "Wolf". Regression 2/2 PASSED. `resources/icons/BUILD.bazel` untracked — git add at commit.
-
-## STATUS of original feature: COMPLETE (pending user's manual smoke test + commit)
-
-All phases done: plan → implementation → review (PASS, no blockers). Docs authored by coder per plan §5 and verified by reviewer (separate technical-writer pass skipped as redundant — orchestrator decision). Work is uncommitted on `main`; `resources/` and `crates/wolf-macos/Wolf.icon/` are untracked and must be `git add`ed at commit time. Remaining for user: manual smoke (Dock/Finder icon, System Settings icon-appearance Dark/Light toggle swaps artwork without relaunch; watch for hairline corner slivers on the dark icon — known cosmetic follow-up if seen).
+# Feature: WolfCursor / WolfTitlebar theme integration
 
 ## Status
 
-- [x] Problem statement written
-- [x] Architect plan
-- [x] Implementation (build green; dark variant verified in Assets.car)
-- [x] Review (PASS — icon.json deviation sanctioned; docs accurate; no-test directive honored)
-- [x] Documentation (written by coder, verified by reviewer, prettier-formatted)
+Phase: reviewer (implementation complete, all tests green)
 
-> **User directive (2026-07-02):** Do NOT write tests verifying the application icon is applied to the launched app — that is a manual smoke test. No test-writer pass for this feature; verification is the Bazel build succeeding plus manual smoke instructions.
+## Coder report (summary)
+
+All targets green: `//bazel/lighthouse:lighthouse_tree_test`, `//crates/wolf-core:theme` (new Bazel target, pre-authorized — cargo unavailable on this machine, modeled on `state_save`), `//crates/wolf-ffi:{theme,frame_pack,lighthouse_load,bridge_smoke}`, full `//crates/wolf-core:all` + `//crates/wolf-ffi:all`, `bazel build //crates/wolf-macos:Wolf`, `bundle_layout_test`, `WolfKeyMapTests`, clippy clean. Lighthouse pinned to 9da2bba, `_SHA256 = 7e3d0bda062b74fa85261107beadeec515cc6e661adc5d1f6457c5f03997967c`, MODULE.bazel.lock regenerated. Bindings regenerated (`generated/wolf-ffi.{h,swift}`). Docs updated + prettier run.
+
+Deviations (accepted by orchestrator): new `//crates/wolf-core:theme` Bazel target; wolf-gnome cursor tests verified via a throwaway in-workspace harness (15/15 pass, harness deleted) — full `cargo test -p wolf-gnome` still needs a Linux run (follow-up for user); `setup_theme_tracking` is `pub` mirroring `setup_dir_tracking`; the lighthouse_load README note landed in build.md (wolf-ffi/README.md doesn't document per-test targets).
+
+Orchestrator decisions: no second test-writer pass (Linux gnome run impossible here; out-of-range-payload test not worth the direct-notification plumbing per coder's own assessment).
+
+## Test-writer report
+
+Tests written (NOT yet run — no implementation exists yet):
+
+- NEW `crates/wolf-core/tests/theme.rs` — 4 tests: `startup_theme_is_all_none_without_wolf_groups`, `runtime_hi_change_updates_theme_on_colorscheme_autocmd`, `linked_wolf_cursor_resolves_to_effective_attributes`, `cleared_groups_fall_back_to_all_none`.
+- NEW `crates/wolf-ffi/tests/theme.rs` — 1 test: `theme_titlebar_and_cursor_follow_wolf_groups` (baseline → define → assert → clear → fallback).
+- EXTENDED `crates/wolf-ffi/tests/frame_pack.rs` — 3 deterministic tests: `cursor_fill_glyph_honor_theme_cursor_fg_and_bg`, `cursor_glyph_falls_back_to_cell_bg_when_theme_fg_unset`, `theme_cursor_wins_over_mode_cursor_attr`.
+- EXTENDED `crates/wolf-ffi/tests/lighthouse_load.rs` — polls `theme_titlebar_bg()`, asserts pinned dark-variant values (bg 0x1b1b1b, fg 0xf1f1f1, cursor fill 0x009fce, glyph 0x000000) tied to lighthouse commit 9da2bba.
+- EXTENDED `crates/wolf-gnome/src/cursor.rs` `mod tests` — 3 new tests, existing cases untouched.
+- EXTENDED `crates/wolf-ffi/BUILD.bazel` — new `rust_test` target `theme`.
+
+**Orchestrator decision on the flagged ambiguity**: the `theme` Bazel target must use `tags = ["no-sandbox"]` (the sibling convention for every real-nvim target in that BUILD file), NOT `["local"]` as the plan guessed. Coder: change the tag and drop the divergence comment.
+
+API assumptions the coder must satisfy: `wolf_core` root re-exports `ThemeColors`/`ThemeGroup` (Copy + Debug + Default + PartialEq); `Snapshot.theme` public and covered by `..Snapshot::default()`; handle methods `theme_titlebar_bg()`/`theme_titlebar_fg()` returning `FfiColor { rgb, set }`; theme-honor branch precedes the mode-attr branch in BOTH `cursor_colors` implementations.
 
 ## Problem statement
 
-Wolf.app (the Bazel-built `macos_application` at `//crates/wolf-macos:Wolf`, `minimum_os_version = "26.0"`) currently ships with no app icon. The repo now contains icon artwork under `resources/icons/` in macOS light and dark variants. On macOS Tahoe (26), the app icon must switch automatically between the light and dark artwork when the user changes the icon appearance setting in System Settings. Only macOS is in scope (the GNOME assets are for a future pass).
+Wolf should let a colorscheme control two app-level colors via optional highlight groups that have no effect on the terminal Neovim canvas:
 
-## Research findings (verified — do not re-derive)
+- **WolfCursor** — drives the app cursor color.
+- **WolfTitlebar** — drives the macOS titlebar color.
 
-- **Mechanism**: macOS Tahoe uses Icon Composer `.icon` bundles — a directory named `<Name>.icon` containing `icon.json` plus image assets in an `Assets/` subfolder. actool (Xcode 26) compiles the `.icon` bundle into `Assets.car` and emits `CFBundleIconName` into a partial Info.plist that rules_apple merges automatically. No `.icns` and no `Assets.xcassets` are needed or allowed.
-- **rules_apple 4.5.3** (pinned in MODULE.bazel) supports `.icon` bundles via the `app_icons` attribute of `macos_application` (support added in 4.1.0). Verified in `bazel-wolf/external/rules_apple+/apple/internal/resource_actions/actool.bzl` (`_validate_standard_app_icon_sets`, `_verify_icon_dirs`):
-  - With `minimum_os_version >= 26.0`, legacy `.appiconset` files are a **hard build failure** — the `.icon` bundle is the only supported route.
-  - Requires Xcode 26+ (already a project requirement).
-  - Exactly one `*.icon` directory must be present in `app_icons` (macOS supports no alternate icons).
-  - The icon name passed to actool (`--app-icon`) is derived from the `.icon` directory basename, so `Wolf.icon` → `CFBundleIconName` "Wolf".
-- **icon.json dark-variant format** (confirmed from a real Icon Composer-produced file): a layer swaps its image per appearance via `image-name-specializations`:
+Wolf must read these groups at startup **and** react when the theme changes at runtime (`:set background=...`, `:colorscheme ...`).
 
-  ```json
-  "image-name-specializations" : [
-    { "value" : "wolf-light.png" },
-    { "appearance" : "dark", "value" : "wolf-dark.png" }
-  ]
-  ```
+Fallback behavior when a group is unspecified or cleared:
 
-  Layer images are referenced by bare filename and live in the `Assets/` subfolder of the `.icon` bundle. Other confirmed layer/group keys: `name`, `hidden`, `glass`, `position` (`scale`, `translation-in-points`), group `shadow`/`specular`/`translucency`, top-level `fill` (e.g. `"system-light"`), top-level `supported-platforms` (`{"circles": ["watchOS"], "squares": "shared"}`).
-- **Source artwork** (both 1024×1024 PNG, complete pre-rendered icons with baked-in rounded-rect backgrounds):
-  - Light: `resources/icons/Wolf application icon macOS light/icon-silhouette_512x512@2x.png` — has transparent margins; opaque bbox x:62–961, y:53–961 (rounded rect ~900×900 at origin (62,53), plus a baked drop shadow below it). Must be **cropped to the 900×900 art rect at origin (62,53) and resized to full-bleed 1024×1024**, discarding the baked shadow (Tahoe applies its own shadow and squircle mask; non-full-bleed art would show the fill color around the edges after masking).
-  - Dark: `resources/icons/Wolf application icon macos dark/icon-silhouette_512x512@2x.png` — already full-bleed 1024×1024, use as-is.
-- **Toolchain gotchas**:
-  - The Nix shell exports `SDKROOT` pointing at a Nix apple-sdk-14.4, which breaks ad-hoc `swift` script invocations; use `env -u SDKROOT swift …` for any CoreGraphics-based image preprocessing (a working bbox script pattern exists; `sips` alone cannot do offset crops). The Bazel build itself pins DEVELOPER_DIR via `.bazelrc` and is unaffected.
-  - Verification that the dark variant compiled in: `xcrun assetutil --info <bundle>/Contents/Resources/Assets.car` lists icon entries with dark appearance attributes.
+- Cursor: existing light-or-dark-depending-on-background logic.
+- Titlebar: system titlebar color / current behavior.
 
-## Architect plan (approved)
+## Requirements
+
+1. Detect the two named highlight groups from the live Neovim runtime. Note: the redraw stream's `hl_attr_define` / `default_colors_set` only cover attrs actually rendered on the grid; named-group lookup likely needs either the `hl_group_set` UI event or a `ColorScheme` autocommand notification from `runtime/nvim/init.lua` (the established `wolf_*` notification pattern, e.g. `wolf_cwd`).
+2. React to runtime theme changes, not just startup.
+3. Bump the vendored lighthouse colorscheme to commit `9da2bba190305b2c8d5d300c254a48c487dd4a1e` (defines these groups), per the documented procedure in `build.md` ("To bump the vendored lighthouse colorscheme"): update `_COMMIT` and `_SHA256` in `bazel/lighthouse/extensions.bzl`, re-run `bazel test //bazel/lighthouse:lighthouse_tree_test`.
+4. Wire through the full stack: wolf-core snapshot state → wolf-ffi exposure → wolf-macos (cursor + titlebar) and wolf-gnome (cursor at least; titlebar not applicable → current behavior).
+5. Tests: prefer end-to-end/integration tests that start a real Neovim process (model: `crates/wolf-ffi/tests/lighthouse_load.rs`). Cover startup pickup, runtime theme change, and fallback when groups are absent/cleared.
+6. Documentation: update affected README.md files (docs are source of truth) and build.md if touched.
+
+## Architect plan
 
 ### Summary
 
-Commit an Icon Composer `.icon` bundle at `crates/wolf-macos/Wolf.icon/` (an `icon.json` plus two derived full-bleed 1024×1024 PNGs) and wire it into the `Wolf` `macos_application` target via `app_icons`. actool (Xcode 26, pinned via DEVELOPER_DIR in `.bazelrc`) compiles it into `Contents/Resources/Assets.car` and merges `CFBundleIconName = Wolf` into the Info.plist. No Swift/Rust/test changes; verification is build success + manual smoke.
+Wolf will let a colorscheme drive two app-level colors through the optional highlight groups **WolfCursor** (app cursor fill/glyph) and **WolfTitlebar** (macOS titlebar background, fg reserved for title text later). Because these groups are never painted on the grid, the redraw stream (`hl_attr_define`) never carries them and nvim's `hl_group_set` UI event only reports *builtin* groups — so detection uses the established `wolf_*` rpcnotify pattern: a new `_G.wolf_setup_theme_tracking(chan)` helper in `runtime/nvim/init.lua` (a `ColorScheme` autocmd + emit-once) sends a `wolf_theme` notification that `RedrawHandler` folds into a new `Snapshot.theme`. The cursor override is applied where the existing reverse-video cursor logic already lives in Rust (`wolf-ffi::cursor_colors` and `wolf-gnome::cursor::cursor_colors`), so the Swift cursor renderer needs zero changes; the titlebar color crosses the bridge via two new `WolfCoreHandle` accessors and is applied/reverted on `NSWindow.backgroundColor` in the macOS shell. The vendored lighthouse pin is bumped to `9da2bba190305b2c8d5d300c254a48c487dd4a1e` (verified upstream: it defines both groups with plain `fg`/`bg`, no links). Real-nvim integration tests cover startup pickup, runtime `:hi`/ColorScheme change, and cleared-group fallback; on-screen titlebar color is manual smoke only.
 
-### 1. Asset preparation (one-time; copied PNGs are committed)
+### Design decisions (resolved)
 
-> **User decision (2026-07-03):** NO cropping or shadow removal by us. The user re-exported the light variant from their Figma project; it is **verified in place** (2026-07-03): `resources/icons/Wolf application icon macOS light/icon-silhouette_512x512@2x.png` is 1024×1024, opaque bbox spans the full canvas, no baked shadow. Both light and dark 1024px assets are full-bleed rounded rects with baked corner radius ≈ 202px and transparent corner notches; Tahoe's system squircle (~22% ≈ 225px at 1024) is more rounded, so the art should fully cover the mask — at worst hairline diagonal slivers showing the `fill`, checked in the manual smoke (cosmetic follow-up, not a blocker). Both PNGs are committed as byte-identical copies of the Figma exports.
+**D1 — Detection: a `ColorScheme` autocmd + emit-once (`wolf_theme` rpcnotify).**
 
-- Dark: straight copy — `cp "resources/icons/Wolf application icon macos dark/icon-silhouette_512x512@2x.png" crates/wolf-macos/Wolf.icon/Assets/wolf-dark.png` (note lowercase "macos dark" vs "macOS light").
-- Light: straight copy of the user's re-exported full-bleed 1024×1024 PNG → `crates/wolf-macos/Wolf.icon/Assets/wolf-light.png`. Before copying, verify it is actually full-bleed: `sips -g pixelWidth -g pixelHeight` → 1024×1024, and the opaque bbox spans the full canvas (re-run the alpha-bbox check; expect x:0–1023, y:0–1023 like the dark asset).
-- Both committed assets remain byte-identical to the Figma exports; `resources/icons/README.md` documents that they are straight copies and that any change starts in Figma.
+- `hl_group_set` is not viable: it reports **builtin** highlight groups only (the internal `HLF_*` set), never custom groups like `WolfCursor`. Polling is contrary to the repo's event-driven design.
+- Matches the five existing `wolf_*` notifications (`crates/wolf-core/src/README.md` "Directory tracking" is the closest template, including the emit-once).
+- **Startup ordering is safe**: `init.lua` activates lighthouse while nvim boots; core installs the helper over RPC *after* `ui_attach` (in `WolfCore::start`), and the helper **emits once immediately**, so the startup colorscheme is always reported — same reasoning as `wolf_cwd`.
+- **Runtime changes**: `:colorscheme X` fires `ColorScheme`; `:set background=...` re-sources the active colorscheme (`:h 'background'`), which also fires `ColorScheme`. No `OptionSet` autocmd needed.
+- **Links**: read groups with `vim.api.nvim_get_hl(0, { name = ..., link = false })` so a linked group resolves to effective attributes. Wrap in `pcall` (defensive; a never-defined name yields `{}` on 0.12 but the pcall costs nothing).
+- **Payload shape**: FOUR flat scalars, `vim.rpcnotify(chan, "wolf_theme", cursor_fg, cursor_bg, titlebar_fg, titlebar_bg)`, each `h.fg or -1` / `h.bg or -1`. Flat scalars deliberately sidestep the empty-Lua-table map-vs-array msgpack ambiguity a table payload would have for a cleared group (`hi clear WolfCursor` → `nvim_get_hl` → `{}`). `-1` = unset (nvim colors are 24-bit, so `-1` is unambiguous).
 
-### 2. New file: `crates/wolf-macos/Wolf.icon/icon.json`
+**D2 — State representation and seams.**
 
-Basename `Wolf.icon` → `--app-icon Wolf` → `CFBundleIconName` "Wolf". Exact content:
+- `wolf-core::render`: new `ThemeGroup { fg: Option<Rgb>, bg: Option<Rgb> }` and `ThemeColors { cursor: ThemeGroup, titlebar: ThemeGroup }` (both `Clone, Copy, Debug, Default, PartialEq, Eq`, all-`None` default); new field `Snapshot.theme: ThemeColors`. Theme colors ARE render state (they change what is painted), so they live in the snapshot — unlike `TrackedCwd`.
+- `redraw.rs`: `THEME_EVENT = "wolf_theme"` routed in `handle_notify`; `apply_theme` takes the write lock via `write_async`, stores the parsed `ThemeColors`, does **not** bump `seq` (not a redraw frame — same convention as `current_file`/`active_win`), and the caller fires the wake after the lock drops so front-ends repaint/apply.
+- FFI "unset" convention: reuse the existing transparent `FfiColor { rgb: u32, set: bool }` (`crates/wolf-ffi/src/lib.rs:229`, `FfiColor::from_opt`) — exactly how `default_fg`/`default_bg` already express absence.
+- Bridge surface: two new `WolfCoreHandle` methods, `theme_titlebar_bg() -> FfiColor` and `theme_titlebar_fg() -> FfiColor` (unset when the core is gone). The titlebar is window-level, not per-grid, so it does NOT ride `FfiFrame`. The cursor colors need **no new FFI surface**: the WolfCursor override happens inside the existing `cursor_colors` at frame-pack time, so `FfiFrame::cursor_fill()/cursor_glyph()` carry it automatically.
 
-```json
-{
-  "fill" : "system-light",
-  "groups" : [
-    {
-      "layers" : [
-        {
-          "image-name" : "wolf-light.png",
-          "image-name-specializations" : [
-            { "value" : "wolf-light.png" },
-            { "appearance" : "dark", "value" : "wolf-dark.png" }
-          ],
-          "name" : "artwork",
-          "glass" : false
-        }
-      ],
-      "shadow" : { "kind" : "neutral", "opacity" : 0 },
-      "specular" : false,
-      "translucency" : { "enabled" : false, "value" : 0 }
-    }
-  ],
-  "supported-platforms" : {
-    "circles" : [ "watchOS" ],
-    "squares" : "shared"
-  }
-}
+**D3 — macOS titlebar application: `NSWindow.backgroundColor`, cached-default revert.**
+
+- `MainWindow` uses `.fullSizeContentView` + `titlebarAppearsTransparent = true` (`crates/wolf-macos/Sources/WolfMacOS/MainWindow.swift:91`), so the window background shows through the titlebar over the editor pane while the sidebar keeps its own vibrancy material. Setting `backgroundColor` is the minimal, reversible lever: capture the pristine `backgroundColor` once in `MainWindow`, set the theme color when `set`, restore the captured default when unset.
+- Attribute mapping: **`WolfTitlebar` bg = titlebar background color**. **`WolfTitlebar` fg is carried through the whole stack (core → FFI) but not applied on macOS this pass** — AppKit exposes no public titlebar-text-color API with a system-drawn title; applying it is documented as deferred. GNOME titlebar: not applicable (Adw header bar keeps current behavior).
+- Application point: `PaneContainerView.onRenderWake()` (it already owns the handle and runs on every wake — `PaneContainerView.swift:391`) reads `theme_titlebar_bg()`, compares against a cached `(rgb, set)` pair, and only on change calls a new `MainWindow.applyTitlebarBackground(...)` — no per-wake AppKit churn.
+
+**D4 — Cursor attribute semantics: `WolfCursor` bg = cursor fill, fg = glyph color** (the conventional `Cursor` `guibg`/`guifg` semantics; matches what lighthouse@9da2bba defines: dark = fill `#009fce`, glyph `#000000`). Honor rule, applied as a new **first** branch in both `cursor_colors` implementations:
+
+- If `theme.cursor.bg` is `Some(bg)` → `fill = bg`, `glyph = theme.cursor.fg.unwrap_or(cell_bg)` (the reverse-video glyph when fg is unset). Honored unconditionally — WolfCursor is an explicit app-level opt-in, unlike the mode-`attr_id` path which keeps its visibility guard.
+- If `theme.cursor.bg` is `None` (group absent, cleared, or fg-only) → fall through to the **unchanged** existing logic (mode-attr honor with visibility guard, else invert the cell) — the required fallback.
+
+**D5 — Lighthouse bump** follows build.md "To bump the vendored lighthouse colorscheme" verbatim (see Files below).
+
+### Files to modify (no new source files except tests)
+
+1. **`bazel/lighthouse/extensions.bzl`** — `_COMMIT` → `"9da2bba190305b2c8d5d300c254a48c487dd4a1e"`; `_SHA256` → recompute via `curl -L https://github.com/jplein/lighthouse.nvim/archive/9da2bba190305b2c8d5d300c254a48c487dd4a1e.tar.gz -o lighthouse.tar.gz && shasum -a 256 lighthouse.tar.gz`. Regenerate + commit `MODULE.bazel.lock`; re-run `bazel test //bazel/lighthouse:lighthouse_tree_test`.
+2. **`runtime/nvim/init.lua`** — new global helper `_G.wolf_setup_theme_tracking(chan)` (alongside the other `_G.wolf_setup_*` helpers): defines `emit()` reading both groups via `pcall(vim.api.nvim_get_hl, 0, { name = name, link = false })` (empty table on failure), sending `vim.rpcnotify(chan, "wolf_theme", cursor_fg or -1, cursor_bg or -1, titlebar_fg or -1, titlebar_bg or -1)`; creates augroup `WolfTheme` (`clear = true`), registers a `ColorScheme` autocmd (`pattern = "*"`) calling `emit`, then calls `emit()` once immediately.
+3. **`crates/wolf-core/src/render.rs`** — add `ThemeGroup` and `ThemeColors` (D2), doc-commented; add `pub theme: ThemeColors` to `Snapshot` (near `active_win`/`current_file`). `Snapshot::new` needs no change (`..Self::default()` covers it).
+4. **`crates/wolf-core/src/lib.rs`** — re-export `ThemeColors`, `ThemeGroup` with the other render-state types.
+5. **`crates/wolf-core/src/redraw.rs`** — `const THEME_EVENT: &str = "wolf_theme";` (doc-comment style of `CWD_EVENT`); `handle_notify` new arm `THEME_EVENT => { self.apply_theme(args).await; (self.wake)(); }` (wake after lock drop, like `CURRENT_FILE_EVENT`); new `async fn apply_theme(&self, args: Vec<Value>)`: parse `[cursor_fg, cursor_bg, titlebar_fg, titlebar_bg]` — each via `Value::as_i64`, mapped to `Some(Rgb::from_packed(v as u32))` only when `(0..=0xFF_FFFF).contains(&v)`, else `None` (missing args → `None`); then `write_async`, assign `snap.theme`, no `seq` bump.
+6. **`crates/wolf-core/src/nvim.rs`** — new `pub(crate) async fn setup_theme_tracking(&self) -> Result<(), NvimError>` on `NvimProcess`, one-for-one mirror of `setup_dir_tracking` (`nvim_get_api_info` for the channel id, `nvim_exec_lua` calling `_G.wolf_setup_theme_tracking(...)`).
+7. **`crates/wolf-core/src/api.rs`** — `WolfCore::start`: call `setup_theme_tracking` after `setup_dir_tracking`. No new public API — front-ends read `Snapshot.theme` via `read_snapshot()`.
+8. **`crates/wolf-gnome/src/cursor.rs`** — `cursor_colors(snap)`: insert the D4 theme-honor branch first (after computing `cell_fg`/`cell_bg`, which the bg-only glyph fallback needs): `if let Some(bg) = snap.theme.cursor.bg { return (bg, snap.theme.cursor.fg.unwrap_or(cell_bg)); }`. Update doc comments.
+9. **`crates/wolf-ffi/src/lib.rs`** — `cursor_colors(snap, grid)` (~line 1909): the identical theme-honor branch (keep the two implementations in lockstep; note it in both doc comments). `WolfCoreHandle`: new methods `theme_titlebar_bg(&self) -> FfiColor` / `theme_titlebar_fg(&self) -> FfiColor`, following the `current_file` pattern (`FfiColor::from_opt(core.read_snapshot().theme.titlebar.bg)`, `FfiColor::unset()` when the core is gone). Bridge module (`mod ffi`, `extern "Rust"` block ~line 288): declare the two methods, house comment style.
+10. **`crates/wolf-ffi/generated/*`** — regenerate: `bazel run //crates/wolf-ffi:gen_bindings`, commit.
+11. **`crates/wolf-macos/Sources/WolfMacOS/MainWindow.swift`** — new stored `private var defaultBackgroundColor: NSColor?` and `func applyTitlebarBackground(rgb: UInt32, set: Bool)`: on first themed application capture `backgroundColor`; when `set`, set from packed rgb (sRGB); when `!set`, restore captured default. Idempotent and reversible.
+12. **`crates/wolf-macos/Sources/WolfMacOS/PaneContainerView.swift`** — in `onRenderWake()` (~line 391): read `handle.theme_titlebar_bg()`, compare to cached `lastTitlebarTheme: (rgb: UInt32, set: Bool)?`, on change call `(window as? MainWindow)?.applyTitlebarBackground(...)`. Cursor drawing untouched (colors arrive pre-resolved via `cursor_fill()`/`cursor_glyph()`).
+13. **`crates/wolf-ffi/BUILD.bazel`** — new `rust_test` target `theme` modeled on `panes`/`mouse_scroll` (`srcs = ["tests/common/mod.rs", "tests/theme.rs"]`, `crate_root = "tests/theme.rs"`, same `data`/`env` nvim staging, `tags = ["local"]`).
+
+### Test plan (real nvim; visual application is manual smoke per project policy)
+
+1. **`crates/wolf-core/tests/theme.rs`** (new; modeled on `current_file.rs`). Against a live `WolfCore` reading `read_snapshot().theme`:
+   - Startup with plain repo `init.lua` (no lighthouse staged): after attach, `theme` all-`None` (emit-once arrived, parsed as unset).
+   - `:hi WolfCursor guifg=#112233 guibg=#445566`, `:hi WolfTitlebar guibg=#0a0b0c`, then `:doautocmd ColorScheme`; poll until `theme.cursor == { fg: Some(0x112233), bg: Some(0x445566) }` and `theme.titlebar == { fg: None, bg: Some(0x0a0b0c) }`.
+   - Link resolution: `:hi link WolfCursor Visual` + `:doautocmd ColorScheme` → `theme.cursor.bg` equals Visual's effective bg (assert `is_some()`).
+   - Cleared fallback: `:hi clear WolfCursor` + `:hi clear WolfTitlebar` + `:doautocmd ColorScheme` → back to all-`None`.
+2. **`crates/wolf-ffi/tests/theme.rs`** (new; modeled on `panes.rs`):
+   - Baseline after attach: `theme_titlebar_bg().set == false`, `theme_titlebar_fg().set == false`.
+   - Define both groups (`guifg=#000000 guibg=#009fce` for WolfCursor, `guifg=#f1f1f1 guibg=#101010` for WolfTitlebar) + `:doautocmd ColorScheme`; poll until `theme_titlebar_bg()` is `set` with `rgb == 0x101010`; assert `theme_titlebar_fg().rgb == 0xf1f1f1`; assert `read_frame().cursor_fill().rgb == 0x009fce` and `cursor_glyph().rgb == 0x000000`.
+   - Clear both + `:doautocmd ColorScheme`; poll until `theme_titlebar_bg().set == false`; assert `cursor_fill()` returned to the pre-theme reverse-video baseline.
+3. **`crates/wolf-ffi/tests/frame_pack.rs`** (extend; deterministic, no nvim): hand-built `Snapshot` with `theme.cursor = ThemeGroup { fg: Some(A), bg: Some(B) }` → `cursor_fill == B`, `cursor_glyph == A`; bg-only theme → glyph falls back to cell bg; theme set **and** mode `attr_id` set → theme wins.
+4. **`crates/wolf-ffi/tests/lighthouse_load.rs`** (extend; startup pickup from the real vendored colorscheme): after existing assertions, poll `theme_titlebar_bg()` until set; assert pinned dark-variant values (`titlebar bg 0x1b1b1b`, `titlebar fg 0xf1f1f1`, `cursor_fill() == 0x009fce`, `cursor_glyph() == 0x000000`) with a comment tying constants to commit `9da2bba…`. Proves the emit-once picks up a colorscheme activated *before* the RPC setup ran.
+5. **`crates/wolf-gnome/src/cursor.rs` `mod tests`** (extend, headless): theme fg+bg honored as `(bg, fg)`; theme bg-only → `(bg, cell_bg)`; theme present beats an otherwise-honorable mode attr; theme absent → every existing case unchanged (do not modify existing cases).
+6. **Manual smoke (macOS)**: build the `.app`; titlebar shows lighthouse's `#1b1b1b`; `:hi WolfTitlebar guibg=#803030` + `:doautocmd ColorScheme` recolors live; `:hi clear WolfTitlebar` + `:doautocmd ColorScheme` restores system titlebar; cursor is `#009fce`.
+
+### Documentation updates (same change)
+
+- `architecture.md`: "Theming" section gains the reverse direction (colorscheme → app via `wolf_theme` / `WolfCursor` / `WolfTitlebar`); snapshot contract list gains `Snapshot.theme`; out-of-band notification paragraph counts `wolf_theme` (wakes, no `seq` bump).
+- `crates/wolf-core/src/README.md`: `render.rs` (ThemeGroup/ThemeColors, `Snapshot.theme`), `redraw.rs` (THEME_EVENT + `apply_theme`, flat 4-scalar `-1`-sentinel payload), `nvim.rs` (`setup_theme_tracking`), `api.rs` (start order), `lib.rs` re-exports.
+- `crates/wolf-core/README.md`: snapshot facet enumeration.
+- `runtime/nvim/README.md`: new "Theme tracking — `_G.wolf_setup_theme_tracking(chan)`" section (mirroring dir-tracking: augroup, ColorScheme autocmd, emit-once, `link = false`, `-1` sentinel); note the pinned lighthouse commit defines the two Wolf groups.
+- `crates/wolf-ffi/README.md`: two new handle methods, WolfCursor note on `cursor_fill`/`cursor_glyph`, new `:theme` target, extended `lighthouse_load`.
+- `crates/wolf-gnome/README.md` and `crates/wolf-macos/README.md`: cursor honor / titlebar application + revert (and that `WolfTitlebar.fg` is carried but unapplied on macOS this pass).
+- `build.md`: add `//crates/wolf-ffi:theme` to the test-target list; update `lighthouse_load` description.
+- `bazel/lighthouse/README.md`: update if it names the pinned commit; note the scheme now carries the Wolf groups.
+- Run `prettier --write` on every touched `.md`; no hard line breaks within paragraphs.
+
+### Implementation order
+
+1. Lighthouse pin bump (`extensions.bzl`, `MODULE.bazel.lock`, `lighthouse_tree_test`) — independent.
+2. `wolf-core`: `render.rs` types + `Snapshot.theme` → `lib.rs` re-exports → `redraw.rs` event → `init.lua` helper → `nvim.rs` setup fn → `api.rs` start call.
+3. `wolf-core/tests/theme.rs`.
+4. `wolf-gnome/src/cursor.rs` change + tests.
+5. `wolf-ffi`: `cursor_colors` change, handle methods, bridge declarations → `bazel run //crates/wolf-ffi:gen_bindings` (commit `generated/`) → `frame_pack.rs` additions → `tests/theme.rs` + BUILD target → `lighthouse_load.rs` extension.
+6. `wolf-macos`: `MainWindow.applyTitlebarBackground` → `PaneContainerView.onRenderWake` hookup.
+7. Documentation + prettier.
+
+### Dependencies / lint considerations
+
+- **No new Cargo or Bazel dependencies** — no repin needed; `MODULE.bazel.lock` changes only from the lighthouse sha.
+- Rust: doc comments on every public item, `#[must_use]` on pure accessors, no lock held across `.await` in `apply_theme` (parse args before `write_async`), bounds-checked `u32` cast from the `i64` payload values.
+- Swift: no new pure seam needed; AppKit titlebar glue is compile-verified + manual smoke.
+
+### Verification commands
+
+```sh
+# Linux / cargo devShell
+cargo test -p wolf-core -p wolf-gnome
+cargo test -p wolf-ffi --test frame_pack
+
+# macOS / Bazel
+bazel test //bazel/lighthouse:lighthouse_tree_test
+bazel run  //crates/wolf-ffi:gen_bindings          # then commit generated/
+bazel test //crates/wolf-ffi:frame_pack //crates/wolf-ffi:theme \
+           //crates/wolf-ffi:lighthouse_load //crates/wolf-ffi:bridge_smoke
+bazel build //crates/wolf-macos:Wolf
+bazel test //crates/wolf-macos:bundle_layout_test //crates/wolf-macos:WolfKeyMapTests
 ```
 
-Fallbacks: if actool rejects the redundant top-level `image-name`, drop it and keep only `image-name-specializations`; light corner slivers on the dark icon would be the `fill` value (cosmetic follow-up, not a blocker). Do NOT put any non-asset file (e.g. README) inside `Wolf.icon/` — the glob feeds every file to actool.
-
-### 3. BUILD.bazel change (`crates/wolf-macos/BUILD.bazel`)
-
-On the `Wolf` target, immediately after `name` (buildifier order):
-
-```python
-app_icons = glob(
-    ["Wolf.icon/**"],
-    exclude = ["**/.DS_Store"],
-),
-```
-
-Extend the `Wolf` target's explanatory comment (strong file convention) describing the `Wolf.icon/` bundle → Assets.car + CFBundleIconName, and that with minimum_os_version 26.0 the `.icon` bundle is the only supported route. Optionally extend the header "Targets:" comment. No `Info.plist` change; no `bundle_layout_test.sh` change (user directive).
-
-### 4. Verification
-
-1. `bazel build //crates/wolf-macos:Wolf` (from repo root; `.bazelrc` auto-applies the macos config).
-2. Optional read-only inspection: `plutil -p .../Wolf.app/Contents/Info.plist | grep -i icon` → `CFBundleIconName => "Wolf"`; `xcrun assetutil --info .../Wolf.app/Contents/Resources/Assets.car` → icon entries incl. dark appearance. (App may be delivered as `Wolf.zip` beside bazel-bin output — unzip to temp if so.)
-3. Manual smoke (user): launch the app, check Dock/Finder icon; System Settings → Appearance → toggle icon appearance Dark/Light → icon swaps without relaunch. Stale generic icon = Finder/Dock icon cache.
-4. Optional regression: `bazel test //crates/wolf-macos:bundle_layout_test //crates/wolf-macos:WolfKeyMapTests`.
-
-### 5. Documentation updates
-
-- **New** `resources/icons/README.md`: what each subdirectory holds (macOS light/dark PNG sets; GNOME light/dark PNG+SVG reserved for a future pass, unconsumed); that only the two `icon-silhouette_512x512@2x.png` files are consumed, copied unmodified as `crates/wolf-macos/Wolf.icon/Assets/wolf-{light,dark}.png`; that the assets originate from the user's Figma project (source of truth — any artwork change starts there) and macOS layer images must be full-bleed 1024×1024 with no baked shadow because Tahoe applies its own squircle mask and shadow; the update recipe is re-export from Figma + `cp` + `sips -g` size check.
-- **New** `resources/README.md`: short — design-time assets, currently only `icons/`, macOS app icon is the only build-consumed asset today.
-- **Edit** `crates/wolf-macos/README.md` (bundle-contents paragraph ~line 75): the `.app` also carries the Tahoe app icon from the committed `Wolf.icon/` bundle; source of truth `resources/icons/`; verified by build success + manual smoke only.
-- **Edit** `build.md` ("Building the .app" §, ~line 93): short paragraph on the icon bundle, app_icons wiring, light/dark switching, regeneration pointer.
-- `architecture.md` / top-level `README.md`: checked, no stale claims — no changes required.
-- All Markdown: no hard line breaks within paragraphs; `prettier --write` on every touched file.
-
-### 6. Implementation order
-
-1. Generate assets (§1). 2. Write icon.json (§2). 3. Edit BUILD.bazel (§3). 4. Build; iterate on icon.json only if actool rejects (fallbacks §2). 5. Optional inspection. 6. Docs + prettier. 7. Hand manual smoke checklist to user.
-
-### 7. Dependencies / tooling
-
-None new. Buildifier attribute ordering; keep Wolf.icon/ asset-only; `.DS_Store` glob exclude as insurance.
-
-## Coder output
-
-**Created:** `crates/wolf-macos/Wolf.icon/icon.json`; `crates/wolf-macos/Wolf.icon/Assets/wolf-light.png` + `wolf-dark.png` (byte-identical copies of the 1024px Figma exports, verified via `cmp` + `sips`); `resources/README.md`; `resources/icons/README.md`.
-
-**Modified:** `crates/wolf-macos/BUILD.bazel` (`app_icons` glob + comments); `crates/wolf-macos/README.md` (bundle-contents paragraph); `build.md` ("Building the .app"). `prettier --write` run on all four Markdown files. No test or Swift/Rust changes.
-
-**Deviation (important, now a research finding):** the plan §2 JSON *built* but produced a wrong Assets.car — with the redundant top-level `"image-name"` present, actool **silently ignored** `image-name-specializations` (all IconGroups referenced wolf-light; wolf-dark absent). Dropping the top-level `image-name` (the plan's first fallback) fixed it. The failure mode is silent ignoring, not rejection. Committed icon.json = plan JSON minus that key.
-
-**Evidence:** `bazel build //crates/wolf-macos:Wolf` succeeded. Info.plist: `CFBundleIconFile => "Wolf"`, `CFBundleIconName => "Wolf"`. `assetutil --info` on Assets.car shows `IconGroup appearance=NSAppearanceNameDarkAqua layer0=Wolf_Assets/wolf-dark` and `NSAppearanceNameAqua layer0=Wolf_Assets/wolf-light` (plus Tintable→wolf-light), 7 icon sizes. Note: `xcrun assetutil` fails in the Nix shell; use `/usr/bin/assetutil`.
-
-**Regression:** `//crates/wolf-macos:bundle_layout_test` PASSED, `//crates/wolf-macos:WolfKeyMapTests` PASSED (cached).
-
-**Housekeeping for commit:** `resources/` and `crates/wolf-macos/Wolf.icon/` are currently untracked — `git add` both when committing. buildifier unavailable in this env; attribute order applied manually.
+Key file references: `runtime/nvim/init.lua`, `crates/wolf-core/src/{render.rs,redraw.rs,nvim.rs,api.rs,lib.rs}`, `crates/wolf-gnome/src/cursor.rs`, `crates/wolf-ffi/src/lib.rs` (bridge decls ~lines 288–357 and 464–499; `cursor_colors` ~line 1909; `FfiFrame::from_snapshot_grid` ~line 1759), `crates/wolf-macos/Sources/WolfMacOS/{MainWindow.swift,PaneContainerView.swift,Color.swift,WakeBridge.swift}`, `bazel/lighthouse/extensions.bzl`, `crates/wolf-ffi/tests/{lighthouse_load.rs,frame_pack.rs,panes.rs}`.

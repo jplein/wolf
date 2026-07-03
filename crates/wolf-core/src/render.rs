@@ -424,6 +424,33 @@ pub struct WinInfo {
     pub hidden: bool,
 }
 
+/// The effective colors of one app-level theme highlight group (`WolfCursor` /
+/// `WolfTitlebar`), as reported by the `wolf_theme` notification.
+///
+/// Both channels are `Option` because a colorscheme may leave either unset (or
+/// define no group at all / clear it), in which case the front-end falls back to
+/// its default behavior. The all-`None` default means "group absent".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ThemeGroup {
+    /// Foreground color, if the group sets one.
+    pub fg: Option<Rgb>,
+    /// Background color, if the group sets one.
+    pub bg: Option<Rgb>,
+}
+
+/// The app-level theme colors driven by the optional `WolfCursor` /
+/// `WolfTitlebar` highlight groups (see [`crate::redraw`]'s `wolf_theme`
+/// handling). All-`None` by default; front-ends fall back to their existing
+/// behavior for any unset channel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ThemeColors {
+    /// `WolfCursor`: bg drives the app cursor fill, fg the glyph color.
+    pub cursor: ThemeGroup,
+    /// `WolfTitlebar`: bg drives the macOS titlebar background; fg is carried
+    /// for future title-text coloring.
+    pub titlebar: ThemeGroup,
+}
+
 /// A complete, paint-ready frame of render state.
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
@@ -449,6 +476,13 @@ pub struct Snapshot {
     /// redraw stream via the `wolf_current_file` notification (see
     /// [`crate::redraw`]); defaults to `None`.
     pub current_file: Option<PathBuf>,
+    /// The app-level theme colors from the optional `WolfCursor` /
+    /// `WolfTitlebar` highlight groups. Updated out-of-band from the redraw
+    /// stream via the `wolf_theme` notification (a `ColorScheme` autocmd plus
+    /// an emit-once installed by `runtime/nvim/init.lua`; see
+    /// [`crate::redraw`]); all-`None` by default and whenever a group is
+    /// absent or cleared.
+    pub theme: ThemeColors,
     /// Monotonic frame sequence number, bumped on each `flush`.
     pub seq: u64,
 }

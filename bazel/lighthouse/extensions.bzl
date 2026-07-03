@@ -35,9 +35,9 @@ regenerate `MODULE.bazel.lock`.
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
-_COMMIT = "5862a1a78d9f4f38418ccb3aebef275ab927b779"
+_COMMIT = "9da2bba190305b2c8d5d300c254a48c487dd4a1e"
 
-_SHA256 = "af378b8c90a8bb205c01a5590dd8b4e9bb0e0bfdcf7eed8338f55427ff9329d5"
+_SHA256 = "7e3d0bda062b74fa85261107beadeec515cc6e661adc5d1f6457c5f03997967c"
 
 # The upstream repo name is `lighthouse.nvim`, so the archive's top directory is
 # `lighthouse.nvim-<commit>` (NOT `lighthouse-<commit>`). Getting this wrong makes

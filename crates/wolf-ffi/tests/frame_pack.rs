@@ -46,7 +46,7 @@ use std::collections::HashMap;
 
 use wolf_core::{
     Cell, Cursor, CursorShape, DefaultColors, Grid, HighlightTable, HlAttr, ModeInfo, Rgb,
-    Snapshot,
+    Snapshot, ThemeGroup,
 };
 use wolf_ffi::FfiFrame;
 
@@ -556,6 +556,178 @@ fn cursor_fill_glyph_use_mode_cursor_attr_when_distinct() {
         frame.cursor_glyph().rgb,
         ATTR_FG,
         "glyph should be the mode-cursor fg"
+    );
+}
+
+#[test]
+fn cursor_fill_glyph_honor_theme_cursor_fg_and_bg() {
+    const CELL_FG: u32 = 0x00AA_AAAA;
+    const CELL_BG: u32 = 0x00BB_BBBB;
+    const THEME_FG: u32 = 0x0011_2233;
+    const THEME_BG: u32 = 0x0044_5566;
+    const HL: u64 = 1;
+
+    // `Snapshot.theme.cursor` (the WolfCursor group) with BOTH channels set is
+    // honored unconditionally, overriding the plain reverse video of the cell
+    // under the cursor: fill = theme bg, glyph = theme fg.
+    let mut highlights = HighlightTable::new();
+    highlights.define(
+        HL,
+        HlAttr {
+            fg: Some(Rgb::from_packed(CELL_FG)),
+            bg: Some(Rgb::from_packed(CELL_BG)),
+            ..HlAttr::default()
+        },
+    );
+
+    let mut grid = Grid::new(COLS, ROWS);
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            text: "t".to_string(),
+            hl_id: HL,
+        },
+    );
+
+    let mut snap = snapshot(GRID_ID, grid, highlights, cursor_on(GRID_ID, 0, 0), Vec::new());
+    snap.theme.cursor = ThemeGroup {
+        fg: Some(Rgb::from_packed(THEME_FG)),
+        bg: Some(Rgb::from_packed(THEME_BG)),
+    };
+    let frame = FfiFrame::from_snapshot(&snap);
+
+    let fill = frame.cursor_fill();
+    let glyph = frame.cursor_glyph();
+    assert!(fill.set && glyph.set, "themed cursor colors are always set");
+    assert_eq!(fill.rgb, THEME_BG, "theme: fill = WolfCursor bg");
+    assert_eq!(glyph.rgb, THEME_FG, "theme: glyph = WolfCursor fg");
+    // And NOT the reverse video of the underlying cell.
+    assert_ne!(
+        fill.rgb, CELL_FG,
+        "the theme override must replace the reverse-video fill"
+    );
+}
+
+#[test]
+fn cursor_glyph_falls_back_to_cell_bg_when_theme_fg_unset() {
+    const CELL_FG: u32 = 0x00AA_AAAA;
+    const CELL_BG: u32 = 0x00BB_BBBB;
+    const THEME_BG: u32 = 0x0044_5566;
+    const HL: u64 = 1;
+
+    // A bg-only WolfCursor group is still honored for the FILL, but the glyph
+    // falls back to the cell's bg (the reverse-video glyph), per D4:
+    // glyph = theme.cursor.fg.unwrap_or(cell_bg).
+    let mut highlights = HighlightTable::new();
+    highlights.define(
+        HL,
+        HlAttr {
+            fg: Some(Rgb::from_packed(CELL_FG)),
+            bg: Some(Rgb::from_packed(CELL_BG)),
+            ..HlAttr::default()
+        },
+    );
+
+    let mut grid = Grid::new(COLS, ROWS);
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            text: "t".to_string(),
+            hl_id: HL,
+        },
+    );
+
+    let mut snap = snapshot(GRID_ID, grid, highlights, cursor_on(GRID_ID, 0, 0), Vec::new());
+    snap.theme.cursor = ThemeGroup {
+        fg: None,
+        bg: Some(Rgb::from_packed(THEME_BG)),
+    };
+    let frame = FfiFrame::from_snapshot(&snap);
+
+    assert_eq!(
+        frame.cursor_fill().rgb,
+        THEME_BG,
+        "bg-only theme: fill = WolfCursor bg"
+    );
+    assert_eq!(
+        frame.cursor_glyph().rgb,
+        CELL_BG,
+        "bg-only theme: glyph falls back to the cell bg (reverse-video glyph)"
+    );
+}
+
+#[test]
+fn theme_cursor_wins_over_mode_cursor_attr() {
+    const CELL_FG: u32 = 0x00AA_AAAA;
+    const CELL_BG: u32 = 0x00BB_BBBB;
+    const ATTR_FG: u32 = 0x0001_0203;
+    const ATTR_BG: u32 = 0x000A_0B0C;
+    const THEME_FG: u32 = 0x0011_2233;
+    const THEME_BG: u32 = 0x0044_5566;
+    const CELL_HL: u64 = 1;
+    const CURSOR_HL: u64 = 5;
+
+    // The mode-cursor attr here is exactly the honorable setup of
+    // `cursor_fill_glyph_use_mode_cursor_attr_when_distinct` (both channels set,
+    // bg distinct from the cell bg and from its own fg). With the theme ALSO
+    // set, the theme branch runs FIRST and must win over the mode attr.
+    let mut highlights = HighlightTable::new();
+    highlights.define(
+        CELL_HL,
+        HlAttr {
+            fg: Some(Rgb::from_packed(CELL_FG)),
+            bg: Some(Rgb::from_packed(CELL_BG)),
+            ..HlAttr::default()
+        },
+    );
+    highlights.define(
+        CURSOR_HL,
+        HlAttr {
+            fg: Some(Rgb::from_packed(ATTR_FG)),
+            bg: Some(Rgb::from_packed(ATTR_BG)),
+            ..HlAttr::default()
+        },
+    );
+
+    let mut grid = Grid::new(COLS, ROWS);
+    grid.set_cell(
+        0,
+        0,
+        Cell {
+            text: "t".to_string(),
+            hl_id: CELL_HL,
+        },
+    );
+
+    let mode = ModeInfo {
+        name: "i".to_string(),
+        shape: CursorShape::Vertical,
+        cell_percentage: None,
+        attr_id: Some(CURSOR_HL),
+    };
+    let mut snap = snapshot(GRID_ID, grid, highlights, cursor_on(GRID_ID, 0, 0), vec![mode]);
+    snap.theme.cursor = ThemeGroup {
+        fg: Some(Rgb::from_packed(THEME_FG)),
+        bg: Some(Rgb::from_packed(THEME_BG)),
+    };
+    let frame = FfiFrame::from_snapshot(&snap);
+
+    assert_eq!(
+        frame.cursor_fill().rgb,
+        THEME_BG,
+        "theme beats mode attr: fill = WolfCursor bg, not the mode-cursor bg"
+    );
+    assert_eq!(
+        frame.cursor_glyph().rgb,
+        THEME_FG,
+        "theme beats mode attr: glyph = WolfCursor fg, not the mode-cursor fg"
+    );
+    assert_ne!(
+        frame.cursor_fill().rgb,
+        ATTR_BG,
+        "the mode-cursor bg must not leak through when the theme is set"
     );
 }
 

@@ -197,6 +197,7 @@ impl WolfCore {
             proc.setup_current_file_tracking().await?;
             proc.setup_layout().await?;
             proc.setup_dir_tracking().await?;
+            proc.setup_theme_tracking().await?;
             Ok::<NvimProcess, NvimError>(proc)
         })?;
 
