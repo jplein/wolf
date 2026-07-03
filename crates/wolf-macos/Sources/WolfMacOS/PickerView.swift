@@ -6,7 +6,7 @@
 //  The macOS analog of wolf-gnome's `picker.rs` widget wiring (an `Overlay` over
 //  the editor, a `SearchEntry` + `ListBox` fed by `start_file_search` /
 //  `rank_matches`). The pure decision logic (trigger chord, list navigation,
-//  selection restore, empty-query gating, filename/parent derivation) lives in
+//  selection restore) lives in
 //  the headless `WolfKeyMap.PickerSeam` seam; this file is the AppKit shell that
 //  drives it and is exercised by manual smoke only.
 //
@@ -159,9 +159,9 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         ])
     }
 
-    /// Opens the picker: starts a file search, shows + focuses the field. The
-    /// picker opens with NO result rows (empty query), just the search field.
-    /// Idempotent.
+    /// Opens the picker: starts a file search, shows + focuses the field, and does
+    /// an initial `refresh()` so the empty-query MRU-first result seed appears
+    /// immediately (mirroring wolf-gnome's `PickerInner::open`). Idempotent.
     func open() {
         if isOpen { return }
         search = handle.start_file_search()
@@ -169,11 +169,10 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         isHidden = false
         searchField.stringValue = ""
         window?.makeFirstResponder(searchField)
-        // Empty query -> no rows until the user types.
-        rows = []
+        // Force the first refresh to select the top row, regardless of any stale
+        // selection/query left over from a previous session.
         lastQuery = nil
-        tableView.reloadData()
-        updateResultsLayout()
+        refresh()
     }
 
     /// Closes the picker: drops the file search (cancelling traversal), hides, and
@@ -192,9 +191,9 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     /// Rebuilds the results list for the current query from the latest search
     /// snapshot. No-op when closed.
     ///
-    /// An empty or whitespace-only query shows NO rows (per
-    /// `PickerSeam.shouldShowResults`). Otherwise each ranked `FfiFileEntry` is
-    /// mapped into a file-agnostic `PickerRow` (title = the full working-directory-
+    /// An empty query renders ALL entries MRU-first (the seed shown on open); a
+    /// non-empty query ranks/filters them. Each ranked `FfiFileEntry` is mapped
+    /// into a file-agnostic `PickerRow` (title = the full working-directory-
     /// relative path, payload = absolute path, icon = Finder icon). If the
     /// query is unchanged since the previous refresh (a streaming traversal wake,
     /// not a keystroke) the selection index is PRESERVED across the rebuild
@@ -203,14 +202,6 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     func refresh() {
         guard isOpen, let search else { return }
         let query = searchField.stringValue
-
-        guard PickerSeam.shouldShowResults(query: query) else {
-            rows = []
-            lastQuery = query
-            tableView.reloadData()
-            updateResultsLayout()
-            return
-        }
 
         let resetToTop = (lastQuery != query)
         lastQuery = query

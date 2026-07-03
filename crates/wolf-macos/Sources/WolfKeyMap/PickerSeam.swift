@@ -61,19 +61,4 @@ public enum PickerSeam {
         if resetToTop { return 0 }
         return min(prev ?? 0, newLen - 1)
     }
-
-    // MARK: - macOS-only presentation seam (no Rust/wolf-gnome parity)
-    //
-    // Unlike the three trigger/nav/restore ports above, the following seam has NO
-    // wolf-gnome analog: it backs a macOS-specific picker presentation choice
-    // (hide results until the user types). It stays here — pure and Foundation-only
-    // — so it remains headlessly unit-testable.
-
-    /// Returns `true` iff the picker should show result rows for `query`, i.e.
-    /// the query has at least one non-whitespace character. An empty or
-    /// whitespace-only query hides all results (the picker opens showing just the
-    /// search field).
-    public static func shouldShowResults(query: String) -> Bool {
-        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
 }

@@ -210,46 +210,4 @@ final class PickerSeamTests: XCTestCase {
             XCTAssertEqual(got, c.expected, "case: \(c.desc)")
         }
     }
-
-    // MARK: - shouldShowResults
-
-    /// One `shouldShowResults` table row: (description, query, expected).
-    ///
-    /// macOS-only presentation seam (no Rust/wolf-gnome parity): the picker
-    /// shows no result rows until the user has typed a non-whitespace query.
-    private struct ShouldShowResultsCase {
-        let desc: String
-        let query: String
-        let expected: Bool
-    }
-
-    func testShouldShowResultsTable() {
-        let cases: [ShouldShowResultsCase] = [
-            // --- empty / whitespace-only queries hide results ----------------
-            ShouldShowResultsCase(
-                desc: "empty string => false",
-                query: "", expected: false),
-            ShouldShowResultsCase(
-                desc: "spaces only => false",
-                query: "   ", expected: false),
-            ShouldShowResultsCase(
-                desc: "newline + tab only => false",
-                query: "\n\t", expected: false),
-            // --- non-whitespace queries show results -------------------------
-            ShouldShowResultsCase(
-                desc: "single char => true",
-                query: "a", expected: true),
-            ShouldShowResultsCase(
-                desc: "word => true",
-                query: "foo", expected: true),
-            ShouldShowResultsCase(
-                desc: "word padded with spaces => true",
-                query: " foo ", expected: true),
-        ]
-
-        for c in cases {
-            let got = PickerSeam.shouldShowResults(query: c.query)
-            XCTAssertEqual(got, c.expected, "case: \(c.desc)")
-        }
-    }
 }
