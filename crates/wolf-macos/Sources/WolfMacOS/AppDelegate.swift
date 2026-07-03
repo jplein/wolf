@@ -86,7 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         // Build the file picker as a hidden top-center overlay over the editor
-        // (the picker is a subview of the pane container). Shift+Ctrl+P opens it.
+        // (the picker is a subview of the pane container). Command+O opens it.
         let picker = PickerView(handle: handle, paneContainer: paneContainer)
         paneContainer.addSubview(picker)
         PickerWakeBridge.registeredPicker = picker

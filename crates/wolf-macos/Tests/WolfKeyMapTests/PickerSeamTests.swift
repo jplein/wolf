@@ -9,12 +9,17 @@
 //  NSEvent, NO window, NO AppKit, NO NSView. They are the authoritative parity
 //  reference: every case here mirrors a case from picker.rs.
 //
-//  CONTRACT UNDER TEST (must match wolf-gnome/src/picker.rs exactly):
-//    * PickerSeam.isPickerTrigger(charactersIgnoringModifiers:ctrl:shift:) ->
-//      Bool — true iff `ctrl && shift && firstScalar.lowercased == "p"`. Other
-//      modifiers (alt/meta) are NOT part of the Swift signature, so they are
-//      neither required nor disqualifying; they are simply ignored. An empty
-//      string (no first scalar) is false.
+//  CONTRACT UNDER TEST:
+//    * PickerSeam.isPickerTrigger(charactersIgnoringModifiers:command:) -> Bool
+//      — true iff `command && firstScalar.lowercased == "o"`. This is the macOS
+//      Command+O chord, which INTENTIONALLY diverges from the wolf-gnome
+//      Ctrl+Shift+"p" seam (different letter, single Command modifier): on macOS
+//      the platform convention is Command+O for "open", so this seam does NOT
+//      mirror picker.rs's `is_picker_trigger`. Command does not mangle
+//      `charactersIgnoringModifiers`, so with Command held the field carries "o"
+//      (or "O" if Shift is also down); the predicate matches case-insensitively.
+//      An empty string (no first scalar) is false. The `nextSelection` and
+//      `restoredIndex` seams below remain exact parity ports of picker.rs.
 //    * PickerSeam.nextSelection(current:delta:nRows:) -> Int? — exact port of
 //      Rust `next_selection`: `nRows <= 0 -> nil`, else
 //      `clamp(current + delta, 0, nRows - 1)` (NO wrap; out-of-range/negative
@@ -43,59 +48,47 @@ final class PickerSeamTests: XCTestCase {
     // MARK: - isPickerTrigger
 
     /// One `isPickerTrigger` table row: (description, charactersIgnoringModifiers,
-    /// ctrl, shift, expected).
+    /// command, expected).
     private struct TriggerCase {
         let desc: String
         let chars: String
-        let ctrl: Bool
-        let shift: Bool
+        let command: Bool
         let expected: Bool
     }
 
     func testIsPickerTriggerTable() {
         let cases: [TriggerCase] = [
-            // --- The trigger: Ctrl+Shift held, letter p ----------------------
+            // --- The trigger: Command held, letter o -------------------------
             TriggerCase(
-                desc: "Ctrl+Shift+'p' (lowercase) => true",
-                chars: "p", ctrl: true, shift: true, expected: true),
+                desc: "Command+'o' (lowercase) => true",
+                chars: "o", command: true, expected: true),
             TriggerCase(
-                // With Shift held, charactersIgnoringModifiers carries the
-                // uppercase `P`; the predicate must match case-insensitively.
-                desc: "Ctrl+Shift+'P' (uppercase) => true",
-                chars: "P", ctrl: true, shift: true, expected: true),
+                // With Command+Shift held, charactersIgnoringModifiers carries
+                // the uppercase `O`; the predicate must match case-insensitively.
+                desc: "Command+'O' (uppercase, i.e. Command+Shift+O) => true",
+                chars: "O", command: true, expected: true),
+            // --- Missing the required modifier -------------------------------
             TriggerCase(
-                // The Swift signature does NOT take alt/meta, so the
-                // "extra modifier allowed" case from picker.rs is implicitly
-                // covered: ctrl+shift+'p' is true regardless of alt/meta, which
-                // the signature ignores entirely.
-                desc: "Ctrl+Shift+'p' is true regardless (alt/meta ignored by signature)",
-                chars: "p", ctrl: true, shift: true, expected: true),
-            // --- Missing a required modifier ---------------------------------
+                desc: "plain 'o' (command not held) => false",
+                chars: "o", command: false, expected: false),
+            // --- Right modifier, wrong letter --------------------------------
             TriggerCase(
-                desc: "Ctrl+'p' (no shift) => false",
-                chars: "p", ctrl: true, shift: false, expected: false),
+                // Guards against a stale "p" target from the old Ctrl+Shift+P
+                // chord: the macOS seam matches "o", not "p".
+                desc: "Command+'p' (wrong letter) => false",
+                chars: "p", command: true, expected: false),
             TriggerCase(
-                desc: "Shift+'P' (no ctrl) => false",
-                chars: "P", ctrl: false, shift: true, expected: false),
-            TriggerCase(
-                desc: "plain 'p' (no modifiers) => false",
-                chars: "p", ctrl: false, shift: false, expected: false),
-            // --- Right modifiers, wrong letter -------------------------------
-            TriggerCase(
-                desc: "Ctrl+Shift+'A' (wrong letter) => false",
-                chars: "A", ctrl: true, shift: true, expected: false),
-            TriggerCase(
-                desc: "Ctrl+Shift+'a' (wrong letter, lowercase) => false",
-                chars: "a", ctrl: true, shift: true, expected: false),
+                desc: "Command+'a' (wrong letter, lowercase) => false",
+                chars: "a", command: true, expected: false),
             // --- No first scalar ---------------------------------------------
             TriggerCase(
                 desc: "empty string (no first scalar) => false",
-                chars: "", ctrl: true, shift: true, expected: false),
+                chars: "", command: true, expected: false),
         ]
 
         for c in cases {
             let got = PickerSeam.isPickerTrigger(
-                charactersIgnoringModifiers: c.chars, ctrl: c.ctrl, shift: c.shift)
+                charactersIgnoringModifiers: c.chars, command: c.command)
             XCTAssertEqual(got, c.expected, "case: \(c.desc)")
         }
     }

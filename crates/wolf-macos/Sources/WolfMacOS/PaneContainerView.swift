@@ -118,7 +118,7 @@ final class PaneContainerView: NSView {
     /// The repeating repaint timer that animates the `.overlay` fade; nil when idle.
     private var scrollbarFadeTimer: Timer?
 
-    /// Invoked when the picker trigger chord (Shift+Ctrl+P) is pressed, BEFORE any
+    /// Invoked when the picker trigger chord (Command+O) is pressed, BEFORE any
     /// key is translated/forwarded to Neovim. Set by `AppDelegate` to open the
     /// picker.
     var onPickerTrigger: (() -> Void)?
@@ -210,13 +210,12 @@ final class PaneContainerView: NSView {
     override func keyDown(with event: NSEvent) {
         let flags = event.modifierFlags
 
-        // Picker trigger (Shift+Ctrl+P) is intercepted BEFORE translation so it is
+        // Picker trigger (Command+O) is intercepted BEFORE translation so it is
         // never forwarded to Neovim. While the picker is open its search field is
         // first responder, so this stops firing — suppression is automatic.
         if PickerSeam.isPickerTrigger(
             charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
-            ctrl: flags.contains(.control),
-            shift: flags.contains(.shift)
+            command: flags.contains(.command)
         ) {
             onPickerTrigger?()
             return

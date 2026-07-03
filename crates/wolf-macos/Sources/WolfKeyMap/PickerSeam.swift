@@ -18,25 +18,27 @@ import Foundation
 /// (`enum` with only static members) mirroring `WolfKeyMap`.
 public enum PickerSeam {
     /// Returns `true` iff the keypress is the picker trigger chord
-    /// **Ctrl+Shift+P**.
+    /// **Command+O**.
     ///
-    /// The rule is `ctrl && shift && firstScalar.lowercased == "p"`, matching the
-    /// letter case-insensitively (with Shift held, `charactersIgnoringModifiers`
-    /// carries the uppercase `P`). `charactersIgnoringModifiers` is layout
-    /// independent and, unlike `characters`, is not mangled into a control scalar
-    /// when Ctrl is held. Other modifiers (alt/meta) are not part of the signature
-    /// and so are neither required nor disqualifying. An empty string (no first
-    /// scalar) is `false`. The exact analog of Rust `is_picker_trigger`.
+    /// The rule is `command && firstScalar.lowercased == "o"`, matching the letter
+    /// case-insensitively. `charactersIgnoringModifiers` is layout independent and,
+    /// unlike when Ctrl is held, is NOT mangled into a control scalar when Command
+    /// is held — so it still carries the plain `"o"`/`"O"`. Shift and other
+    /// modifiers (ctrl/alt) are not part of the signature and so are neither
+    /// required nor disqualifying. An empty string (no first scalar) is `false`.
+    ///
+    /// This macOS chord intentionally DIVERGES from the GNOME Ctrl+Shift+P (`"p"`)
+    /// seam it was ported from: Command+O is the idiomatic macOS "open" chord and,
+    /// unlike Ctrl-modified keys, is not a Neovim keybinding.
     public static func isPickerTrigger(
         charactersIgnoringModifiers: String,
-        ctrl: Bool,
-        shift: Bool
+        command: Bool
     ) -> Bool {
-        guard ctrl, shift else { return false }
+        guard command else { return false }
         guard let first = charactersIgnoringModifiers.unicodeScalars.first else {
             return false
         }
-        return String(first).lowercased() == "p"
+        return String(first).lowercased() == "o"
     }
 
     /// Computes the next list selection index after moving by `delta` rows from

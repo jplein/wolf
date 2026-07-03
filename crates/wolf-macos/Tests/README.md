@@ -18,7 +18,7 @@ The test pins the `Kind` discriminants and the `kVK_*` virtual key codes (notabl
 
 Pure, headless `XCTest` coverage of the AppKit-free `PickerSeam` helpers (`@testable import WolfKeyMap`), table-driven to mirror wolf-gnome's picker.rs tables:
 
-- `isPickerTrigger(charactersIgnoringModifiers:ctrl:shift:)` — the **Shift+Control+P** contract (including Ctrl+Shift+Alt+P → `true`, the wrong letter → `false`, and a missing modifier → `false`);
+- `isPickerTrigger(charactersIgnoringModifiers:command:)` — the **Command+O** contract (lowercase and uppercase `"o"` → `true`, command not held → `false`, the wrong letter → `false`, and an empty string → `false`);
 - `nextSelection(current:delta:nRows:)` — the list-navigation clamp across its cases (including the empty-list `nil`);
 - `restoredIndex(resetToTop:prev:newLen:)` — selection restore across streaming result batches.
 
