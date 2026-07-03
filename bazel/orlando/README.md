@@ -6,10 +6,10 @@ This package downloads the pinned GitHub source tarball for the pure-Lua orlando
 
 ## The pin
 
-- Commit: `c51efff1a2faf9ff90a5334fb18a72901a561cad`
-- Tarball: https://github.com/jplein/orlando/archive/c51efff1a2faf9ff90a5334fb18a72901a561cad.tar.gz
-- sha256: `971aa8149a2a71c0075cb0ba1abde68fb8ebf1fc1f067ed185975ed1026eb25a`
-- Archive root dir: `orlando-c51efff1a2faf9ff90a5334fb18a72901a561cad`
+- Commit: `c960cf3e1c24fbdd2e6fb30ab9c8022cdc7b2bf9`
+- Tarball: https://github.com/jplein/orlando/archive/c960cf3e1c24fbdd2e6fb30ab9c8022cdc7b2bf9.tar.gz
+- sha256: `794911361108eb509ab00ec64ed03c229418be32f45ad7a385b6d2d6b057f3c5`
+- Archive root dir: `orlando-c960cf3e1c24fbdd2e6fb30ab9c8022cdc7b2bf9`
 
 ## Targets
 

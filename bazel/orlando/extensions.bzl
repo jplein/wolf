@@ -28,9 +28,9 @@ regenerate `MODULE.bazel.lock`.
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
-_COMMIT = "c51efff1a2faf9ff90a5334fb18a72901a561cad"
+_COMMIT = "c960cf3e1c24fbdd2e6fb30ab9c8022cdc7b2bf9"
 
-_SHA256 = "971aa8149a2a71c0075cb0ba1abde68fb8ebf1fc1f067ed185975ed1026eb25a"
+_SHA256 = "794911361108eb509ab00ec64ed03c229418be32f45ad7a385b6d2d6b057f3c5"
 
 _ARCHIVE_ROOT = "orlando-" + _COMMIT
 

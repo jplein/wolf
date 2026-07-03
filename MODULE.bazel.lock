@@ -401,7 +401,7 @@
     },
     "//bazel/orlando:extensions.bzl%orlando": {
       "general": {
-        "bzlTransitiveDigest": "wxvbKBbw/ePvcaHmPFVGsbRe/iTMaT9XksZrNaKoWVU=",
+        "bzlTransitiveDigest": "/DG7BR4b2uf5LS4u/KXvlUp/c47SffljB1We8THw26g=",
         "usagesDigest": "OfvicQHhfFyGeotTdmYMJNmEbjEta5wb9VFiajXcD88=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -411,10 +411,10 @@
             "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
             "attributes": {
               "urls": [
-                "https://github.com/jplein/orlando/archive/c51efff1a2faf9ff90a5334fb18a72901a561cad.tar.gz"
+                "https://github.com/jplein/orlando/archive/c960cf3e1c24fbdd2e6fb30ab9c8022cdc7b2bf9.tar.gz"
               ],
-              "sha256": "971aa8149a2a71c0075cb0ba1abde68fb8ebf1fc1f067ed185975ed1026eb25a",
-              "build_file_content": "load(\"@aspect_bazel_lib//lib:copy_to_directory.bzl\", \"copy_to_directory\")\n\npackage(default_visibility = [\"//visibility:public\"])\n\n# The vendored subtrees Wolf ships: plugin/, lua/orlando/**, doc/, and LICENSE*\n# (kept for compliance). Deliberately EXCLUDE test/, flake.nix, flake.lock,\n# .luarc.json, README.md â dev-only, no runtime role.\nfilegroup(\n    name = \"runtime_files\",\n    srcs = glob([\n        \"orlando-c51efff1a2faf9ff90a5334fb18a72901a561cad/plugin/**\",\n        \"orlando-c51efff1a2faf9ff90a5334fb18a72901a561cad/lua/**\",\n        \"orlando-c51efff1a2faf9ff90a5334fb18a72901a561cad/doc/**\",\n        \"orlando-c51efff1a2faf9ff90a5334fb18a72901a561cad/LICENSE*\",\n    ]),\n)\n\n# Assemble under a single inner `orlando/` dir, remapping the archive root via\n# replace_prefixes (NOT http_archive strip_prefix). Output TreeArtifact contains\n# orlando/plugin/orlando.lua, orlando/lua/orlando/init.lua, orlando/doc/**, etc.\n# The inner `orlando/` is deliberate: rules_apple strips the bundled\n# TreeArtifact's OWN top-level dir name when copying into Contents/Resources/,\n# so nesting under `orlando/` lands it at Contents/Resources/orlando/ robustly.\ncopy_to_directory(\n    name = \"orlando_tree\",\n    srcs = [\":runtime_files\"],\n    out = \"orlando_tree\",\n    replace_prefixes = {\"orlando-c51efff1a2faf9ff90a5334fb18a72901a561cad\": \"orlando\"},\n)\n"
+              "sha256": "794911361108eb509ab00ec64ed03c229418be32f45ad7a385b6d2d6b057f3c5",
+              "build_file_content": "load(\"@aspect_bazel_lib//lib:copy_to_directory.bzl\", \"copy_to_directory\")\n\npackage(default_visibility = [\"//visibility:public\"])\n\n# The vendored subtrees Wolf ships: plugin/, lua/orlando/**, doc/, and LICENSE*\n# (kept for compliance). Deliberately EXCLUDE test/, flake.nix, flake.lock,\n# .luarc.json, README.md â dev-only, no runtime role.\nfilegroup(\n    name = \"runtime_files\",\n    srcs = glob([\n        \"orlando-c960cf3e1c24fbdd2e6fb30ab9c8022cdc7b2bf9/plugin/**\",\n        \"orlando-c960cf3e1c24fbdd2e6fb30ab9c8022cdc7b2bf9/lua/**\",\n        \"orlando-c960cf3e1c24fbdd2e6fb30ab9c8022cdc7b2bf9/doc/**\",\n        \"orlando-c960cf3e1c24fbdd2e6fb30ab9c8022cdc7b2bf9/LICENSE*\",\n    ]),\n)\n\n# Assemble under a single inner `orlando/` dir, remapping the archive root via\n# replace_prefixes (NOT http_archive strip_prefix). Output TreeArtifact contains\n# orlando/plugin/orlando.lua, orlando/lua/orlando/init.lua, orlando/doc/**, etc.\n# The inner `orlando/` is deliberate: rules_apple strips the bundled\n# TreeArtifact's OWN top-level dir name when copying into Contents/Resources/,\n# so nesting under `orlando/` lands it at Contents/Resources/orlando/ robustly.\ncopy_to_directory(\n    name = \"orlando_tree\",\n    srcs = [\":runtime_files\"],\n    out = \"orlando_tree\",\n    replace_prefixes = {\"orlando-c960cf3e1c24fbdd2e6fb30ab9c8022cdc7b2bf9\": \"orlando\"},\n)\n"
             }
           }
         },
