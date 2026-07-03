@@ -27,7 +27,12 @@
   };
 
   outputs =
-    { nixpkgs, rust-overlay, flake-utils, ... }:
+    {
+      nixpkgs,
+      rust-overlay,
+      flake-utils,
+      ...
+    }:
     flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin" ] (
       system:
       let
@@ -41,7 +46,12 @@
         # resolves to `darwinShell`, which references none of them, so Nix's
         # laziness keeps these Linux-only derivations off the Darwin eval path.
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-          extensions = [ "rust-src" "rust-analyzer" "clippy" "rustfmt" ];
+          extensions = [
+            "rust-src"
+            "rust-analyzer"
+            "clippy"
+            "rustfmt"
+          ];
         };
 
         # Darwin dev shell: just enough to drive the Bazel build of `wolf-core`.
@@ -64,6 +74,7 @@
             pkgs.bazelisk
             bazelShim
             pkgs.git
+            pkgs.starpls
           ];
 
           shellHook = ''
