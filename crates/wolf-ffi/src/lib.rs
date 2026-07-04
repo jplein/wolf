@@ -45,9 +45,10 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use wolf_core::{
-    rank_matches, CoreConfig, CursorShape, FileSearch, FocusDir, Grid, InputEvent, Key, KeyEvent,
-    LayoutIntent, MouseAction, MouseButton, MouseEvent, ResolvedStyle, Rgb, ScrollDirection,
-    ScrollEvent, SplitOrientation, StateStore, ToolbarMode, WakeFn, WinInfo, WindowState, WolfCore,
+    rank_matches, Command, CoreConfig, CursorShape, FileSearch, FocusDir, Grid, InputEvent, Key,
+    KeyEvent, LayoutIntent, MouseAction, MouseButton, MouseEvent, ResolvedStyle, Rgb,
+    ScrollDirection, ScrollEvent, SplitOrientation, StateStore, ToolbarMode, WakeFn, WinInfo,
+    WindowState, WolfCore,
 };
 
 // Re-export the bridge-defined transparent structs at the crate root so the Rust
@@ -129,6 +130,24 @@ mod intent_kind {
     pub const SPLIT: u8 = 0;
     /// A PURE focus-direction move request (carries dir + from).
     pub const FOCUS_DIR: u8 = 1;
+}
+
+/// The command-kind discriminants packed into [`FfiCommand::kind`].
+///
+/// The single source of truth shared with the Swift `CommandKind` port and the
+/// `WolfKeyMapTests` / `tests/commands.rs` discriminant contract (plan §3),
+/// mirroring the variant order of [`wolf_core::Command`].
+mod command_kind {
+    /// Open a new editor window.
+    pub const NEW_WINDOW: u8 = 0;
+    /// Close the focused window.
+    pub const CLOSE_WINDOW: u8 = 1;
+    /// Quit the whole application.
+    pub const QUIT_APPLICATION: u8 = 2;
+    /// Hide the application.
+    pub const HIDE_APPLICATION: u8 = 3;
+    /// Minimize the focused window.
+    pub const MINIMIZE_WINDOW: u8 = 4;
 }
 
 /// The split-orientation discriminants packed into [`FfiLayoutIntent::orientation`],
@@ -315,6 +334,9 @@ mod ffi {
         // Drains and returns all pending layout intents (splits + focus moves) in
         // arrival order. `FfiLayoutIntent` is opaque so a `Vec` is supported.
         fn drain_intents(&self) -> Vec<FfiLayoutIntent>;
+        // Drains and returns all pending user-triggered commands in arrival order.
+        // `FfiCommand` is opaque so a `Vec` is supported.
+        fn drain_commands(&self) -> Vec<FfiCommand>;
         // All windows nvim currently reports (the Swift side filters live editor
         // windows). `FfiWinInfo` is opaque so a `Vec` is supported.
         fn windows(&self) -> Vec<FfiWinInfo>;
@@ -549,6 +571,13 @@ mod ffi {
         fn from(&self) -> i64;
         // For a SPLIT: the new window handle; 0 for a FOCUS_DIR.
         fn win(&self) -> i64;
+    }
+
+    extern "Rust" {
+        type FfiCommand;
+
+        // The command kind (`command_kind::NEW_WINDOW` .. `MINIMIZE_WINDOW`).
+        fn kind(&self) -> u8;
     }
 
     extern "Rust" {
@@ -1032,6 +1061,21 @@ impl WolfCoreHandle {
             .collect()
     }
 
+    /// Drains and returns all pending user-triggered commands in arrival order,
+    /// each mapped into an opaque [`FfiCommand`]. Returns an empty `Vec` when the
+    /// core is gone.
+    #[must_use]
+    pub fn drain_commands(&self) -> Vec<FfiCommand> {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return Vec::new();
+        };
+        core.drain_commands()
+            .into_iter()
+            .map(FfiCommand::from_command)
+            .collect()
+    }
+
     /// Returns ALL windows nvim currently reports (the Swift side filters live
     /// editor windows, mirroring the GNOME reading of `snapshot.windows`). Returns
     /// an empty `Vec` when the core is gone.
@@ -1470,6 +1514,41 @@ impl FfiLayoutIntent {
                 win: 0,
             },
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FfiCommand: one drained user-triggered command (opaque to Swift).
+// ---------------------------------------------------------------------------
+
+/// One drained command (opaque to Swift, so a `Vec<FfiCommand>` is supported —
+/// swift-bridge emits Vec support only for opaque types).
+///
+/// Carries just the [`command_kind`] discriminant of a [`wolf_core::Command`];
+/// the front-end maps it to a native action.
+pub struct FfiCommand {
+    kind: u8,
+}
+
+impl FfiCommand {
+    /// The command kind (`command_kind::NEW_WINDOW` .. `MINIMIZE_WINDOW`).
+    #[must_use]
+    pub fn kind(&self) -> u8 {
+        self.kind
+    }
+
+    /// Packs a [`wolf_core::Command`] into the bridge-friendly discriminant from
+    /// the [`command_kind`] module. The exhaustive match makes a future variant
+    /// reorder/addition a compile error.
+    fn from_command(command: Command) -> Self {
+        let kind = match command {
+            Command::NewWindow => command_kind::NEW_WINDOW,
+            Command::CloseWindow => command_kind::CLOSE_WINDOW,
+            Command::QuitApplication => command_kind::QUIT_APPLICATION,
+            Command::HideApplication => command_kind::HIDE_APPLICATION,
+            Command::MinimizeWindow => command_kind::MINIMIZE_WINDOW,
+        };
+        Self { kind }
     }
 }
 

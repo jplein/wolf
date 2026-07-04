@@ -256,6 +256,10 @@ extension WolfCoreHandleRef {
         RustVec(ptr: __swift_bridge__$WolfCoreHandle$drain_intents(ptr))
     }
 
+    public func drain_commands() -> RustVec<FfiCommand> {
+        RustVec(ptr: __swift_bridge__$WolfCoreHandle$drain_commands(ptr))
+    }
+
     public func windows() -> RustVec<FfiWinInfo> {
         RustVec(ptr: __swift_bridge__$WolfCoreHandle$windows(ptr))
     }
@@ -1250,6 +1254,86 @@ extension FfiLayoutIntent: Vectorizable {
 
     public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
         __swift_bridge__$Vec_FfiLayoutIntent$len(vecPtr)
+    }
+}
+
+
+public class FfiCommand: FfiCommandRefMut {
+    var isOwned: Bool = true
+
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+
+    deinit {
+        if isOwned {
+            __swift_bridge__$FfiCommand$_free(ptr)
+        }
+    }
+}
+public class FfiCommandRefMut: FfiCommandRef {
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+}
+public class FfiCommandRef {
+    var ptr: UnsafeMutableRawPointer
+
+    public init(ptr: UnsafeMutableRawPointer) {
+        self.ptr = ptr
+    }
+}
+extension FfiCommandRef {
+    public func kind() -> UInt8 {
+        __swift_bridge__$FfiCommand$kind(ptr)
+    }
+}
+extension FfiCommand: Vectorizable {
+    public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
+        __swift_bridge__$Vec_FfiCommand$new()
+    }
+
+    public static func vecOfSelfFree(vecPtr: UnsafeMutableRawPointer) {
+        __swift_bridge__$Vec_FfiCommand$drop(vecPtr)
+    }
+
+    public static func vecOfSelfPush(vecPtr: UnsafeMutableRawPointer, value: FfiCommand) {
+        __swift_bridge__$Vec_FfiCommand$push(vecPtr, {value.isOwned = false; return value.ptr;}())
+    }
+
+    public static func vecOfSelfPop(vecPtr: UnsafeMutableRawPointer) -> Optional<Self> {
+        let pointer = __swift_bridge__$Vec_FfiCommand$pop(vecPtr)
+        if pointer == nil {
+            return nil
+        } else {
+            return (FfiCommand(ptr: pointer!) as! Self)
+        }
+    }
+
+    public static func vecOfSelfGet(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiCommandRef> {
+        let pointer = __swift_bridge__$Vec_FfiCommand$get(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiCommandRef(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfGetMut(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiCommandRefMut> {
+        let pointer = __swift_bridge__$Vec_FfiCommand$get_mut(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiCommandRefMut(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfAsPtr(vecPtr: UnsafeMutableRawPointer) -> UnsafePointer<FfiCommandRef> {
+        UnsafePointer<FfiCommandRef>(OpaquePointer(__swift_bridge__$Vec_FfiCommand$as_ptr(vecPtr)))
+    }
+
+    public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
+        __swift_bridge__$Vec_FfiCommand$len(vecPtr)
     }
 }
 

@@ -18,6 +18,7 @@ use rmpv::Value;
 use tokio::process::{ChildStdin, Command};
 use tokio::task::JoinHandle;
 
+use crate::command::COMMAND_SPECS;
 use crate::redraw::RedrawHandler;
 
 /// Application name pinned for the captive nvim, isolating its state dirs.
@@ -367,6 +368,59 @@ impl NvimProcess {
                 vec![
                     Value::from("wolf_setup_theme_tracking(...)"),
                     Value::Array(vec![Value::from(chan)]),
+                ],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+        Ok(())
+    }
+
+    /// Registers the Wolf command faces inside the captive nvim.
+    ///
+    /// Mirrors [`setup_theme_tracking`](Self::setup_theme_tracking): looks up this
+    /// RPC channel's id via `nvim_get_api_info`, then calls the
+    /// `_G.wolf_setup_commands` helper (defined in `runtime/nvim/init.lua`) over
+    /// `nvim_exec_lua`, passing the channel id AND the command list as Lua varargs
+    /// (never interpolated into the code string). The command list is built from
+    /// [`COMMAND_SPECS`] as an array of `[id, ex_command]` string pairs — the
+    /// single source of truth for both faces. The helper seeds `package.loaded['wolf']`
+    /// and, per pair, registers a `require('wolf').<id>()` Lua function and a
+    /// `:<ex_command>` user command, each `rpcnotify`ing `wolf_command '<id>'`.
+    pub async fn setup_commands(&self) -> Result<(), NvimError> {
+        let info = self
+            .nvim
+            .call("nvim_get_api_info", vec![])
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+        let chan = info
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(Value::as_i64)
+            .ok_or_else(|| {
+                NvimError::Rpc(format!(
+                    "nvim_get_api_info returned no channel id: {info:?}"
+                ))
+            })?;
+
+        let commands = Value::Array(
+            COMMAND_SPECS
+                .iter()
+                .map(|spec| {
+                    Value::Array(vec![Value::from(spec.id), Value::from(spec.ex_command)])
+                })
+                .collect(),
+        );
+
+        let _ = self
+            .nvim
+            .call(
+                "nvim_exec_lua",
+                vec![
+                    Value::from("wolf_setup_commands(...)"),
+                    Value::Array(vec![Value::from(chan), commands]),
                 ],
             )
             .await

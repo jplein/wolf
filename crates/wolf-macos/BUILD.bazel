@@ -28,6 +28,7 @@ swift_library(
     name = "wolf_key_map",
     srcs = [
         "Sources/WolfKeyMap/CellMetricsMath.swift",
+        "Sources/WolfKeyMap/CommandSeam.swift",
         "Sources/WolfKeyMap/GlyphStyle.swift",
         "Sources/WolfKeyMap/KeyMap.swift",
         "Sources/WolfKeyMap/PaneGeometry.swift",
@@ -164,6 +165,7 @@ swift_test(
     name = "WolfKeyMapTests",
     srcs = [
         "Tests/WolfKeyMapTests/CellMetricsMathTests.swift",
+        "Tests/WolfKeyMapTests/CommandSeamTests.swift",
         "Tests/WolfKeyMapTests/GlyphStyleTests.swift",
         "Tests/WolfKeyMapTests/KeyMapTests.swift",
         "Tests/WolfKeyMapTests/PaneGeometryTests.swift",

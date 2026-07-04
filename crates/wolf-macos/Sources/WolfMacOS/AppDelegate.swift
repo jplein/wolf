@@ -30,6 +30,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         PickerWakeBridge.install()
         TreeWakeBridge.install()
 
+        // Build the native menu bar (net-new). Every Wolf item funnels through
+        // `handleCommandMenuItem(_:)` → `CommandDispatcher`.
+        AppMenu.install(target: self)
+
         // Register the bundled font TTFs with CoreText, then resolve the user
         // config BEFORE measuring so `CellMetrics` can resolve the configured
         // family/size/line-height. Both are measured ONCE and shared by every
@@ -119,6 +123,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if controller.start() {
             controllers.append(controller)
         }
+    }
+
+    /// The native menu-item command entry point: decodes the item's `tag` (an FFI
+    /// `command_kind` discriminant, set by `AppMenu`) into a `CommandKind` and
+    /// funnels through `CommandDispatcher`, targeting the current key window — the
+    /// SAME dispatcher the nvim-drained command path uses. An unknown tag is
+    /// ignored.
+    @objc func handleCommandMenuItem(_ sender: NSMenuItem) {
+        guard let kind = CommandKind(ffi: UInt8(truncatingIfNeeded: sender.tag)) else { return }
+        let key = NSApp.keyWindow
+        let cwd = controllers.first { $0.owns(key) }?.currentCwd ?? ""
+        CommandDispatcher.dispatch(
+            kind, window: key, coordinator: self, originatingCwd: cwd)
     }
 
     /// Drops `controller` from the collection (called by the controller at

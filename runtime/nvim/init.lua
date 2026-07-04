@@ -362,3 +362,35 @@ function _G.wolf_setup_layout(chan)
 	})
 	vim.rpcnotify(chan, "wolf_active_win", vim.api.nvim_get_current_win())
 end
+
+-- Commands: wolf-core invokes this over RPC after ui_attach (last, after the
+-- current-file / layout / dir / theme setups), passing its own RPC channel id and
+-- the command list. A Command is a no-parameter, no-return user action. Unlike
+-- layout intents, commands are ONLY user-triggered: there is no autocmd and no
+-- emit-on-attach.
+--
+-- `commands` is a list of {id, ex_command} pairs (the canonical registry Rust
+-- passes in from COMMAND_SPECS). For each pair this:
+--   * seeds package.loaded['wolf'][id] = function() rpcnotify(chan,'wolf_command',id) end
+--     so `require('wolf').<id>()` resolves under --clean (require consults
+--     package.loaded first; a plain global would NOT satisfy `require`); and
+--   * creates a :<ex_command> user command (nargs=0, force=true) whose callback
+--     rpcnotifies the same wolf_command channel with the id.
+-- Core folds the id back into a Command via Command::from_id and drains it.
+function _G.wolf_setup_commands(chan, commands)
+	-- Seed the `wolf` module so `require('wolf')` resolves under --clean.
+	local wolf_tbl = package.loaded["wolf"] or {}
+	package.loaded["wolf"] = wolf_tbl
+
+	for _, pair in ipairs(commands) do
+		local id = pair[1]
+		local ex_command = pair[2]
+		local function fire()
+			vim.rpcnotify(chan, "wolf_command", id)
+		end
+		-- Lua face: require('wolf').<id>()
+		wolf_tbl[id] = fire
+		-- Ex-command face: :<ex_command>
+		vim.api.nvim_create_user_command(ex_command, fire, { nargs = 0, force = true })
+	end
+end

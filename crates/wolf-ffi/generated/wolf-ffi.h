@@ -129,6 +129,18 @@ void* __swift_bridge__$Vec_FfiLayoutIntent$get_mut(void* vec_ptr, uintptr_t inde
 uintptr_t __swift_bridge__$Vec_FfiLayoutIntent$len(void* vec_ptr);
 void* __swift_bridge__$Vec_FfiLayoutIntent$as_ptr(void* vec_ptr);
 
+typedef struct FfiCommand FfiCommand;
+void __swift_bridge__$FfiCommand$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiCommand$new(void);
+void __swift_bridge__$Vec_FfiCommand$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiCommand$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiCommand$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiCommand$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiCommand$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiCommand$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiCommand$as_ptr(void* vec_ptr);
+
 typedef struct FfiWinInfo FfiWinInfo;
 void __swift_bridge__$FfiWinInfo$_free(void* self);
 
@@ -151,6 +163,7 @@ void __swift_bridge__$WolfCoreHandle$send_scroll(void* self, struct __swift_brid
 void __swift_bridge__$WolfCoreHandle$resize(void* self, uint16_t cols, uint16_t rows);
 void __swift_bridge__$WolfCoreHandle$resize_grid(void* self, uint64_t grid, uint16_t cols, uint16_t rows);
 void* __swift_bridge__$WolfCoreHandle$drain_intents(void* self);
+void* __swift_bridge__$WolfCoreHandle$drain_commands(void* self);
 void* __swift_bridge__$WolfCoreHandle$windows(void* self);
 uint64_t __swift_bridge__$WolfCoreHandle$grid_for_win(void* self, int64_t win);
 int64_t __swift_bridge__$WolfCoreHandle$active_win(void* self);
@@ -220,6 +233,7 @@ uint8_t __swift_bridge__$FfiLayoutIntent$orientation(void* self);
 uint8_t __swift_bridge__$FfiLayoutIntent$dir(void* self);
 int64_t __swift_bridge__$FfiLayoutIntent$from(void* self);
 int64_t __swift_bridge__$FfiLayoutIntent$win(void* self);
+uint8_t __swift_bridge__$FfiCommand$kind(void* self);
 uint64_t __swift_bridge__$FfiWinInfo$grid(void* self);
 int64_t __swift_bridge__$FfiWinInfo$win(void* self);
 bool __swift_bridge__$FfiWinInfo$hidden(void* self);

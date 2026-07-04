@@ -20,24 +20,9 @@ Return a structured plan that includes:
 
 5. **Implementation order**: The sequence in which the coder should make changes to avoid compilation errors.
 
-6. **Dependencies**: Any new external packages needed, and whether they need to be added to the depguard allow list in `app/.golangci.yml`.
+6. **Dependencies**: Any new external packages needed.
 
-7. **Lint considerations**: Any nolint directives likely needed based on the project's strict golangci-lint config (see notes below).
-
-## Project conventions to follow
-
-- Go module at `app/` (module: `github.com/jplein/tarjeta/app`)
-- CLI entry: `app/cmd/tarjeta/`
-- Key packages: `card`, `review`, `storage/sqlite`, `config`, `exporter/table`
-- TUI uses charmbracelet/bubbletea and charmbracelet/lipgloss
-
-### Lint rules (strict — plan for these)
-- `gochecknoglobals`: Use `//nolint:gochecknoglobals` on each individual `var` line, not the block opener
-- `errcheck`: Always check `fmt.Fprintln` return: `_, _ = fmt.Fprintln(...)`
-- `mnd`: Numbers 5+ need named constants
-- `funcorder`: Unexported methods must come after all exported methods of the same struct
-- `ireturn`: Only `bubbletea.Model` and `storage.Storage` are allowed interface return types
-- `depguard`: New external packages must be added to `app/.golangci.yml` allow list
+7. **Lint considerations**: Any linter ignore directives likely needed.
 
 ## Rules
 

@@ -175,6 +175,21 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     func onRenderWake() {
         paneContainer?.onRenderWake()
         tree?.onRenderWake()
+        drainAndDispatchCommands()
+    }
+
+    /// Drains this window's pending user-triggered commands (`:Wolf<Pascal>` /
+    /// `require('wolf')` calls) and funnels each through `CommandDispatcher`,
+    /// targeting THIS controller's own window/coordinator (so a command triggered
+    /// in window A acts on window A) — the SAME dispatcher the native menu path
+    /// uses. An unknown command kind is skipped.
+    private func drainAndDispatchCommands() {
+        guard let handle else { return }
+        for cmd in handle.drain_commands() {
+            guard let kind = CommandKind(ffi: cmd.kind()) else { continue }
+            CommandDispatcher.dispatch(
+                kind, window: window, coordinator: coordinator, originatingCwd: currentCwd)
+        }
     }
 
     /// Re-pushes this window's layout snapshot (the terminate-time correctness
@@ -183,11 +198,24 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         statePersistence?.pushSnapshot()
     }
 
+    /// This window's LIVE working directory (empty when the core is not running);
+    /// inherited by a new window opened from this one (Cmd-N / drained
+    /// `:WolfNewWindow` / the New Window menu item when this is the key window).
+    var currentCwd: String {
+        handle?.cwd().toString() ?? ""
+    }
+
+    /// Whether `candidate` is this controller's own top-level window (used by the
+    /// coordinator to find the key window's controller).
+    func owns(_ candidate: NSWindow?) -> Bool {
+        window === candidate
+    }
+
     /// Asks the coordinator to open a new window rooted at this window's LIVE
     /// working directory (the coordinator applies the home-dir fallback when it is
     /// empty).
     private func requestNewWindow() {
-        coordinator?.makeNewWindow(originatingCwd: handle?.cwd().toString() ?? "")
+        coordinator?.makeNewWindow(originatingCwd: currentCwd)
     }
 
     // MARK: - NSWindowDelegate

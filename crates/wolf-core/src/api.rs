@@ -19,12 +19,15 @@ use parking_lot::{Mutex, RwLock};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{self, UnboundedSender};
 
+use crate::command::Command;
 use crate::files::{self, FileSearch, FileSearchState};
 use crate::input::{self, InputEvent, MouseEvent, Nvim, ScrollEvent};
 use crate::layout::LayoutIntent;
 use crate::mru::{FileEntry, MruError, MruStore};
 use crate::nvim::{self, NvimConfig, NvimError, NvimProcess};
-use crate::redraw::{IntentQueue, RedrawHandler, SharedStateStore, TrackedCwd, WakeFn};
+use crate::redraw::{
+    CommandQueue, IntentQueue, RedrawHandler, SharedStateStore, TrackedCwd, WakeFn,
+};
 use crate::render::{OwnedSnapshotReadGuard, SharedSnapshot, Snapshot};
 use crate::state::StateStore;
 
@@ -132,6 +135,11 @@ pub struct WolfCore {
     /// `wolf_layout` intents here; the front-end consumes them via
     /// [`WolfCore::drain_intents`] on wake.
     intents: IntentQueue,
+    /// The drainable command queue. The redraw handler pushes user-triggered
+    /// `wolf_command` commands (`:Wolf<Pascal>` Ex-commands / `require('wolf')`
+    /// Lua calls) here; the front-end consumes them via
+    /// [`WolfCore::drain_commands`] on wake.
+    commands: CommandQueue,
     /// Ordered input queue. Every input event is enqueued here and applied by a
     /// single consumer task in FIFO order, so keystrokes never reorder (which
     /// would garble typed text).
@@ -180,10 +188,12 @@ impl WolfCore {
 
         let snapshot = SharedSnapshot::new(cfg.cols as usize, cfg.rows as usize);
         let intents: IntentQueue = Arc::new(Mutex::new(VecDeque::new()));
+        let commands: CommandQueue = Arc::new(Mutex::new(VecDeque::new()));
         let state_store: SharedStateStore = Arc::new(RwLock::new(None));
         let handler = RedrawHandler::new(
             snapshot.clone_handle(),
             intents.clone(),
+            commands.clone(),
             tracked_cwd.clone(),
             state_store.clone(),
             wake,
@@ -199,6 +209,7 @@ impl WolfCore {
             proc.setup_layout().await?;
             proc.setup_dir_tracking().await?;
             proc.setup_theme_tracking().await?;
+            proc.setup_commands().await?;
             Ok::<NvimProcess, NvimError>(proc)
         })?;
 
@@ -257,6 +268,7 @@ impl WolfCore {
             nvim,
             snapshot,
             intents,
+            commands,
             input_tx,
             mru_cache,
             tracked_cwd,
@@ -310,6 +322,20 @@ impl WolfCore {
     #[must_use]
     pub fn drain_intents(&self) -> Vec<LayoutIntent> {
         let mut queue = self.intents.lock();
+        queue.drain(..).collect()
+    }
+
+    /// Drains and returns all pending commands (in arrival order).
+    ///
+    /// The front-end calls this on each wake to consume any user-triggered
+    /// `wolf_command` commands (`:Wolf<Pascal>` Ex-commands / `require('wolf')`
+    /// Lua calls) the redraw handler has pushed since the last drain, mapping each
+    /// to a native action. Returns an empty `Vec` if none are pending — which,
+    /// unlike layout intents, is always the case right after attach (commands are
+    /// user-triggered only; there is no emit-on-attach).
+    #[must_use]
+    pub fn drain_commands(&self) -> Vec<Command> {
+        let mut queue = self.commands.lock();
         queue.drain(..).collect()
     }
 

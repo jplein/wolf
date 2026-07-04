@@ -82,6 +82,17 @@ Bindings the helper installs:
 
 Core tolerates any malformed `wolf_layout` payload (it parses to `None` and is dropped). The channel id is passed as a Lua **vararg**, never interpolated.
 
+### Commands — `_G.wolf_setup_commands(chan, commands)`
+
+The last global helper that `wolf-core` invokes over RPC, **after** `ui_attach`, current-file tracking, layout setup, directory tracking, and theme tracking, passing core's own RPC channel id AND the command list (see [`src/nvim.rs`](../../crates/wolf-core/src/nvim.rs)'s `setup_commands`). A **command** is a no-parameter, no-return user action. Unlike layout intents, commands are **only user-triggered** (there is no autocmd and no emit-on-attach). `commands` is a list of `{id, ex_command}` pairs — the canonical registry Rust passes in from `wolf-core`'s `COMMAND_SPECS` (e.g. `{"close_window", "WolfCloseWindow"}`). ONE canonical snake_case `id` derives both faces.
+
+The helper:
+
+- seeds `package.loaded["wolf"] = wolf_tbl` — **required** so `require("wolf")` resolves under `--clean` (Lua's `require` consults `package.loaded` first; a plain global would NOT satisfy `require`);
+- for each `{id, ex_command}` pair: sets `wolf_tbl[id] = function() vim.rpcnotify(chan, "wolf_command", id) end` (the **Lua face**, `require("wolf").<id>()`) AND calls `vim.api.nvim_create_user_command(ex_command, <same callback>, { nargs = 0, force = true })` (the **Ex-command face**, `:<ex_command>`).
+
+Both faces `rpcnotify` the same `wolf_command` channel with the canonical `id`; core resolves it via `Command::from_id`, folds it onto a drainable queue (no `seq` bump), and wakes the front-end, which maps each command to a native action (on macOS via the NSMenu / `CommandDispatcher`). An unknown id is dropped by core. The captive nvim stays hermetic: only Wolf's own bundled config uses these faces this cut — a user-config keybinding hook is **deferred**. The channel id and command list are passed as Lua **varargs**, never interpolated.
+
 ## Deferred
 
 Plugin baking is no longer fully deferred: **orlando** is the first vendored plugin (bundled into the macOS `.app` via `//bazel/orlando`, loaded conditionally as described above), and **lighthouse** is the second vendored asset — a **colorscheme** (bundled via `//bazel/lighthouse`, activated conditionally as described above). A Markdown LSP (e.g. `marksman`) and a formatter remain **deferred to a later phase** (full plugin baking via `wrapNeovim`). Phase 1 otherwise relies on Neovim's built-in markdown syntax highlighting and the `markdown` / `markdown_inline` treesitter parsers, which is enough to exercise the redraw/highlight pipeline and its tests.

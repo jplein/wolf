@@ -15,6 +15,7 @@
 //! ## Modules
 //!
 //! - [`render`]: the toolkit-agnostic render-state model and shared snapshot.
+//! - [`command`]: the canonical, GUI-free command registry ([`Command`]).
 //! - [`layout`]: the Neovim->shell layout-intent types ([`LayoutIntent`]).
 //! - [`files`]: the async streaming file-list traversal and `FileSearch` session.
 //! - [`mru`]: the most-recently-used file cache (SQLite).
@@ -29,6 +30,7 @@
 //! - [`state`]: the GUI-free application-state persistence ([`StateStore`]).
 
 pub mod api;
+pub mod command;
 pub mod config;
 pub mod files;
 pub mod input;
@@ -42,6 +44,7 @@ pub mod state;
 pub mod tree;
 
 pub use api::{CoreConfig, CoreError, SnapshotReadGuard, WolfCore};
+pub use command::{Command, CommandSpec, MenuGroup, COMMAND_SPECS};
 pub use config::{default_config, load_or_create, preferences_dir, WolfConfig};
 pub use files::{FileEntry, FileSearch, FileSearchReadGuard};
 pub use input::{

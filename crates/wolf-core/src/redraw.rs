@@ -18,6 +18,7 @@ use parking_lot::{Mutex, RwLockWriteGuard};
 use rmpv::Value;
 use tokio::process::ChildStdin;
 
+use crate::command::Command;
 use crate::layout::LayoutIntent;
 use crate::render::{
     Cell, CursorShape, DefaultColors, HlAttr, ModeInfo, Rgb, SharedSnapshot, Snapshot,
@@ -33,6 +34,15 @@ use crate::state::StateStore;
 /// intents are out-of-band events, not redraw frames, so pushing one does not
 /// bump the snapshot `seq`.
 pub type IntentQueue = Arc<Mutex<VecDeque<LayoutIntent>>>;
+
+/// A shared, drainable queue of [`Command`]s.
+///
+/// Owned by [`crate::api::WolfCore`] (drained via `drain_commands`) and cloned
+/// into the [`RedrawHandler`], which pushes onto it when a `wolf_command`
+/// notification arrives. Like [`IntentQueue`] it is a sibling of the render
+/// snapshot (NOT part of it): commands are out-of-band, user-triggered events, so
+/// pushing one does not bump the snapshot `seq`.
+pub type CommandQueue = Arc<Mutex<VecDeque<Command>>>;
 
 /// A shared cell holding the captive Neovim's current working directory.
 ///
@@ -78,6 +88,12 @@ const ACTIVE_WIN_EVENT: &str = "wolf_active_win";
 /// in `runtime/nvim/init.lua`. Routed separately from `redraw`.
 const LAYOUT_EVENT: &str = "wolf_layout";
 
+/// Name of the out-of-band notification carrying a command id (a user-triggered
+/// `:Wolf<Pascal>` Ex-command or `require('wolf').<snake>()` Lua call), emitted by
+/// the command registrations in `runtime/nvim/init.lua`. Routed separately from
+/// `redraw`; folded into the sibling [`CommandQueue`].
+const COMMAND_EVENT: &str = "wolf_command";
+
 /// Name of the out-of-band notification carrying the captive Neovim's current
 /// working directory (`getcwd()`), emitted by the `WolfDir` `DirChanged` autocmd
 /// in `runtime/nvim/init.lua` (and once immediately at setup). Routed separately
@@ -98,6 +114,7 @@ const THEME_EVENT: &str = "wolf_theme";
 pub struct RedrawHandler {
     snapshot: SharedSnapshot,
     intents: IntentQueue,
+    commands: CommandQueue,
     cwd: TrackedCwd,
     state: SharedStateStore,
     wake: WakeFn,
@@ -105,12 +122,14 @@ pub struct RedrawHandler {
 
 impl RedrawHandler {
     /// Creates a handler writing into `snapshot`, pushing layout intents onto
-    /// `intents`, tracking nvim's cwd into `cwd` (and mirroring it into the
-    /// optionally-attached `state` store), and waking via `wake`.
+    /// `intents`, pushing user-triggered commands onto `commands`, tracking nvim's
+    /// cwd into `cwd` (and mirroring it into the optionally-attached `state`
+    /// store), and waking via `wake`.
     #[must_use]
     pub fn new(
         snapshot: SharedSnapshot,
         intents: IntentQueue,
+        commands: CommandQueue,
         cwd: TrackedCwd,
         state: SharedStateStore,
         wake: WakeFn,
@@ -118,6 +137,7 @@ impl RedrawHandler {
         Self {
             snapshot,
             intents,
+            commands,
             cwd,
             state,
             wake,
@@ -163,6 +183,17 @@ impl Handler for RedrawHandler {
                 // an `.await`), and wake so the front-end drains it. No `seq` bump.
                 if let Some(intent) = args.first().and_then(LayoutIntent::from_payload) {
                     self.intents.lock().push_back(intent);
+                }
+                (self.wake)();
+            }
+            COMMAND_EVENT => {
+                // A command is out-of-band and user-triggered: resolve the id to a
+                // `Command`, push onto the sibling command queue (a brief Mutex, no
+                // snapshot lock, never held across an `.await`), and wake so the
+                // front-end drains it. An unknown id is dropped. No `seq` bump.
+                if let Some(command) = args.first().and_then(Value::as_str).and_then(Command::from_id)
+                {
+                    self.commands.lock().push_back(command);
                 }
                 (self.wake)();
             }
