@@ -44,16 +44,17 @@ pub type IntentQueue = Arc<Mutex<VecDeque<LayoutIntent>>>;
 /// store when recording opened files; `None` means "not yet reported".
 pub type TrackedCwd = Arc<parking_lot::RwLock<Option<PathBuf>>>;
 
-/// A shared cell holding the optionally-attached [`StateStore`].
+/// A shared cell holding the optionally-attached [`StateStore`] paired with the
+/// window index (slot in `state.json`'s `windows` list) this core writes into.
 ///
 /// Owned by [`crate::api::WolfCore`] (empty at start; filled by
 /// [`crate::api::WolfCore::attach_state_store`]) and cloned into the
 /// [`RedrawHandler`], which — on each `wolf_cwd` notification, right after
 /// updating the [`TrackedCwd`] cell — pushes the new cwd into the attached
-/// store so BOTH UI-initiated and `:cd`-initiated directory changes persist
-/// with no front-end involvement. A sibling of the render snapshot (NOT part
-/// of it); `None` until a front-end attaches a store.
-pub type SharedStateStore = Arc<parking_lot::RwLock<Option<StateStore>>>;
+/// store at this core's window index so BOTH UI-initiated and `:cd`-initiated
+/// directory changes persist with no front-end involvement. A sibling of the
+/// render snapshot (NOT part of it); `None` until a front-end attaches a store.
+pub type SharedStateStore = Arc<parking_lot::RwLock<Option<(StateStore, usize)>>>;
 
 /// The front-end wake callback, invoked once per `flush` (after the lock drops).
 ///
@@ -328,9 +329,10 @@ impl RedrawHandler {
     /// the snapshot lock, and does NOT bump `seq` (cwd is not a redraw frame).
     ///
     /// The same cwd is then mirrored into the optionally-attached [`StateStore`]
-    /// (window 0), so both UI-initiated and `:cd`-initiated directory changes
-    /// persist. The store is CLONED out of a brief read guard first — no lock is
-    /// held across the store call (which takes its own internal mutex).
+    /// at this core's window index, so both UI-initiated and `:cd`-initiated
+    /// directory changes persist. The store (and its index) is CLONED out of a
+    /// brief read guard first — no lock is held across the store call (which
+    /// takes its own internal mutex).
     fn apply_cwd(&self, args: Vec<Value>) {
         let target: Option<PathBuf> = match args.first().and_then(Value::as_str) {
             Some(p) if !p.is_empty() => {
@@ -342,8 +344,8 @@ impl RedrawHandler {
         if let Some(target) = target {
             *self.cwd.write() = Some(target.clone());
             let store = self.state.read().clone();
-            if let Some(store) = store {
-                store.set_cwd(0, &target);
+            if let Some((store, idx)) = store {
+                store.set_cwd(idx, &target);
             }
         }
     }

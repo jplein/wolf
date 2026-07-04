@@ -392,6 +392,7 @@ fn orlando_code_block_bg_stays_uniform_under_churn() {
         root.to_string_lossy().into_owned(),
         common::DEFAULT_COLS,
         common::DEFAULT_ROWS,
+        0,
     )
     .expect("wolf_ffi_start should return a handle");
 

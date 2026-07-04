@@ -41,7 +41,7 @@ fn cwd_changes_persist_to_state_json() {
     // The state file lives in its OWN tempdir B (the explicit injection seam).
     let state_dir = tempfile::tempdir().expect("failed to create temp state dir");
     let store = StateStore::open(state_dir.path());
-    core.attach_state_store(store);
+    core.attach_state_store(store, 0);
 
     // The setup-time `wolf_cwd` emission may have raced ahead of the attach;
     // the attach-time push of `tracked_cwd` must close that race (risk note 3),

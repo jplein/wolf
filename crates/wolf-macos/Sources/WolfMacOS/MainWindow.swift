@@ -91,6 +91,12 @@ final class MainWindow: NSWindow {
             defer: false
         )
 
+        // ARC owns this window (the `WolfWindowController` holds the strong
+        // reference). AppKit's default `isReleasedWhenClosed == true` would add an
+        // unbalanced release on close, over-releasing the window — the deferred
+        // close-animation dealloc then crashes. Let ARC be the sole owner.
+        isReleasedWhenClosed = false
+
         title = "Wolf"
         titleVisibility = .visible
         titlebarAppearsTransparent = true

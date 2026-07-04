@@ -8,9 +8,10 @@ swift-bridge is confined to this crate. `wolf-core` gains no new dependency and 
 
 All types are re-exported at the crate root (`wolf_ffi::…`).
 
-- `wolf_ffi_start(init_lua: String, cwd: String, cols: u16, rows: u16) -> Option<WolfCoreHandle>` — starts the core against the pinned Neovim. `init_lua` and `cwd` are filesystem **paths** (mirroring `CoreConfig`). Returns `None` (after logging) on error.
+- `wolf_ffi_start(init_lua: String, cwd: String, cols: u16, rows: u16, window_index: u16) -> Option<WolfCoreHandle>` — starts the core against the pinned Neovim. `init_lua` and `cwd` are filesystem **paths** (mirroring `CoreConfig`); `window_index` is the handle's fixed slot in `state.json`'s `windows` list (used by every `state_*` setter and by the attach-time store binding). Returns `None` (after logging) on error. A fresh per-window wake token is minted (see "The wake" below) and captured by the core's `WakeFn` so wakes route back to this window.
 
-- `WolfCoreHandle` — an opaque, **main-thread-only** handle wrapping a `RefCell<Option<WolfCore>>` (`WolfCore` is not `Send`). Methods:
+- `WolfCoreHandle` — an opaque, **main-thread-only** handle wrapping a `RefCell<Option<WolfCore>>` (`WolfCore` is not `Send`). It also carries the process-wide `StateStore` clone, the handle's fixed `window_index`, and its per-window `wake_token`. Methods:
+  - `wake_token(&self) -> u64` — the per-core wake-routing identity token (minted fresh per `wolf_ffi_start`). The front-end registers ONE process-global callback per wake channel and looks this token up (in its `WindowRegistry`) to route each wake to the right window.
   - `read_frame(&self) -> FfiFrame` — the **active** grid's paint-ready frame.
   - `read_frame_for_grid(&self, grid: u64) -> FfiFrame` — the paint-ready frame for a SPECIFIC grid. The pane container reads one per pane (its bound window grid) plus grid 1 for the cmdline strip. An absent grid (e.g. a closed window) yields an empty `0x0` frame, which the front-end treats as "grid gone".
   - `send_key(&self, ev: FfiKeyEvent)`
@@ -30,13 +31,14 @@ All types are re-exported at the crate root (`wolf_ffi::…`).
   - `theme_titlebar_bg(&self) -> FfiColor` — the `WolfTitlebar` theme group's background color (`Snapshot.theme.titlebar.bg`), following the `default_fg`/`default_bg` unset convention: `set == false` when the group is absent or cleared, or once the core is shut down. Read on each render wake by the macOS shell, which applies it to (or reverts it from) `NSWindow.backgroundColor`.
   - `theme_titlebar_fg(&self) -> FfiColor` — the `WolfTitlebar` foreground, carried across the bridge for future title-text coloring (not applied on macOS this pass). Same unset convention as `theme_titlebar_bg`.
   - `open(&self, path: String)` — issues `InputEvent::Open { path }` to open the file; the MRU is recorded by core's input pump.
-  - `state_set_geometry(&self, x, y, width, height: f64)` — records window 0's frame geometry into the live state store (points; AppKit bottom-left global coords on macOS). Like every `state_*` method it hardcodes window index 0 this pass and is a no-op when no store is attached (no state dir resolved at start).
-  - `state_set_sidebar_visible(&self, visible: bool)` — records window 0's sidebar visibility into the live state store.
-  - `state_set_toolbar_mode(&self, mode: u8, set: bool)` — records window 0's toolbar display mode: `mode` is a `toolbar_mode` discriminant (table below); `set == false` CLEARS the mode to unset (the value byte is then ignored, and the on-disk field is omitted); an unrecognized discriminant is a logged no-op (the stored mode is left unchanged, not cleared).
+  - `state_set_geometry(&self, x, y, width, height: f64)` — records THIS window's frame geometry into the live state store (points; AppKit bottom-left global coords on macOS) at the handle's `window_index`. Like every `state_*` method it is a no-op when no store is attached (no state dir resolved at start).
+  - `state_set_sidebar_visible(&self, visible: bool)` — records this window's sidebar visibility into the live state store at the handle's `window_index`.
+  - `state_set_toolbar_mode(&self, mode: u8, set: bool)` — records this window's toolbar display mode at the handle's `window_index`: `mode` is a `toolbar_mode` discriminant (table below); `set == false` CLEARS the mode to unset (the value byte is then ignored, and the on-disk field is omitted); an unrecognized discriminant is a logged no-op (the stored mode is left unchanged, not cleared).
+  - `state_set_window_count(&self, count: u16)` — truncates the persisted `windows` list to `count` entries (ghost cleanup at terminate time). The macOS shell calls it once with `highestLiveIndex + 1` (NOT a dense re-index), so it never drops a still-live higher slot — at the cost that a closed MIDDLE window's now-stale slot below the high-water mark survives (a documented v1 limitation). A no-op when no store is attached.
   - `state_flush(&self) -> bool` — blocks until every pending state mutation has had its disk write attempted (bounded by an internal ~2 s timeout, `STATE_FLUSH_TIMEOUT`). Returns whether everything pending was flushed in time (`true` when no store exists — there is nothing to flush). `shutdown` also performs this flush itself before tearing the core down.
   - `shutdown(&self)` — flushes the state store (bounded, so shutdown never hangs), then takes the core out and shuts it down (idempotent; infallible across the bridge — any error is logged).
 
-  `wolf_ffi_start`, after a successful core start, opens the live `wolf_core::StateStore` over `wolf_core::state_dir()` and attaches it to the core via `attach_state_store` (so cwd changes persist core-side with no further front-end calls), stashing the store in the handle for the `state_*` methods. An unresolvable state dir only logs — state persistence is then disabled, never fatal.
+  `wolf_ffi_start`, after a successful core start, clones the **process-wide** `wolf_core::StateStore` (opened once, lazily, over `wolf_core::state_dir()` in the `SHARED_STORE` `OnceLock` — all windows SHARE one store, since opening the same `state.json` dir twice would race the per-store writer threads) and attaches it to the core via `attach_state_store(store, window_index)` (so cwd changes persist core-side at this window's slot with no further front-end calls), stashing the store + index in the handle for the `state_*` methods. An unresolvable state dir only logs — state persistence is then disabled, never fatal.
 
 - `FfiFileSearch` — an opaque handle wrapping core's `FileSearch` session (`Option`, so `start_file_search` / `start_tree_search` stay infallible). Methods:
   - `ranked(&self, query: String, max: usize) -> Vec<FfiFileEntry>` runs the ranking **in Rust** (`wolf_core::rank_matches` over the current results snapshot) and returns the top-`max` entries; it yields an empty `Vec` when the session is absent.
@@ -122,26 +124,26 @@ All types are re-exported at the crate root (`wolf_ffi::…`).
 `wolf-core` fires a `WakeFn` on each `flush`; the front-end must marshal it onto the AppKit main thread and trigger a repaint. Rather than an `extern "Swift"` symbol — which a Rust-only integration test could never resolve at link time — the wake is a globally **registered** `extern "C"` function pointer:
 
 ```c
-void wolf_ffi_set_wake(void (*wake)(void)); // generated/wolf_ffi_wake.h
+void wolf_ffi_set_wake(void (*wake)(uint64_t token)); // generated/wolf_ffi_wake.h
 ```
 
-Swift's `WakeBridge` registers a `DispatchQueue.main.async { … setNeedsDisplay }` thunk once at startup. The Rust integration test never registers, so the wake is a harmless no-op there and `wolf_ffi_start` links and runs with no Swift runtime present. The wake callback touches no `WolfCore` state, so the only thing that crosses threads is stateless.
+Each callback carries the firing core's per-window wake **token** (a `u64`, minted in `wolf_ffi_start` from the `NEXT_WAKE_TOKEN` counter and captured by the core's `WakeFn` closure), so a SINGLE process-global callback can route each wake to the right window WITHOUT clobbering — the multi-window wake-routing layer. The wake fires on a tokio worker thread and must not touch the `!Send` handle, so identity crosses the boundary as a plain `Send` scalar. Swift's `WakeBridge` registers ONE `DispatchQueue.main.async { WindowRegistry.shared.controller(for: token)?.onRenderWake() }` thunk once at startup (capturing only the global registry, so it stays `@convention(c)`). The Rust integration test registers its own recording callback; the wake is a harmless no-op when unregistered, and `wolf_ffi_start` links and runs with no Swift runtime present.
 
 There is a **second**, parallel registered wake for the file picker:
 
 ```c
-void wolf_ffi_set_filesearch_wake(void (*wake)(void)); // generated/wolf_ffi_wake.h
+void wolf_ffi_set_filesearch_wake(void (*wake)(uint64_t token)); // generated/wolf_ffi_wake.h
 ```
 
-It is a separate global `extern "C"` callback (its own `registered_filesearch_wake`), fired after each streaming traversal batch of a `start_file_search` session, so the picker can refresh its results independently of editor repaints (Swift's `PickerWakeBridge` registers a dispatch-to-main `PickerView.refresh()` thunk). It is otherwise identical in shape to the editor wake — stateless, no-op when unregistered.
+It is a separate global `extern "C"` callback (its own `registered_filesearch_wake(token)`), fired after each streaming traversal batch of a `start_file_search` session, so the picker can refresh its results independently of editor repaints (Swift's `PickerWakeBridge` routes `token` to `WindowRegistry.shared.controller(for: token)?.picker?.refresh()`). It is otherwise identical in shape to the editor wake — token-carrying, no-op when unregistered.
 
 There is a **third** parallel registered wake for the file-tree sidebar:
 
 ```c
-void wolf_ffi_set_tree_wake(void (*wake)(void)); // generated/wolf_ffi_wake.h
+void wolf_ffi_set_tree_wake(void (*wake)(uint64_t token)); // generated/wolf_ffi_wake.h
 ```
 
-It is its own global `extern "C"` callback (`registered_tree_wake`), fired after each streaming traversal batch of a `start_tree_search` session, so the sidebar can rebuild its outline rows independently of the picker and editor repaints (Swift's `TreeWakeBridge` registers a dispatch-to-main `FileTreeView.refresh()` thunk). The sidebar's current-file reveal + bold rides the **editor** wake instead (Swift's `WakeBridge` calls `FileTreeView.onRenderWake()` right after `setNeedsDisplay`, reading `current_file()`), because a `current_file` change is delivered on the render wake, not a separate traversal batch. The tree wake is otherwise identical in shape — stateless, no-op when unregistered.
+It is its own global `extern "C"` callback (`registered_tree_wake(token)`), fired after each streaming traversal batch of a `start_tree_search` session, so the sidebar can rebuild its outline rows independently of the picker and editor repaints (Swift's `TreeWakeBridge` routes `token` to `WindowRegistry.shared.controller(for: token)?.tree?.refresh()`). The sidebar's current-file reveal + bold rides the **editor** wake instead (the controller's `onRenderWake()` calls `FileTreeView.onRenderWake()` right after `setNeedsDisplay`, reading `current_file()`), because a `current_file` change is delivered on the render wake, not a separate traversal batch. The tree wake is otherwise identical in shape — token-carrying, no-op when unregistered.
 
 ## Generated bindings
 
@@ -178,6 +180,7 @@ CARGO_BAZEL_REPIN=1 bazel build //crates/wolf-ffi:wolf_ffi   # then commit lockf
 - `:mouse_scroll` — the Rust integration test for the mouse/scroll + viewport surface (`send_mouse` / `send_scroll` / the `FfiMouseEvent` / `FfiScrollEvent` discriminants / the `FfiFrame` viewport accessors), real pinned nvim, modeled on `panes`.
 - `:config` — the Rust integration test for the config surface (`wolf_ffi_load_config` / `FfiConfig` accessors). **Self-contained**: it points `WOLF_CONFIG_DIR` at a tempdir and needs no nvim staging (no `data` runfiles, no `no-sandbox`/`local` tag), so it runs deterministically regardless of `WOLF_NVIM_BIN`.
 - `:state` — the Rust integration test for the state-persistence surface (`wolf_ffi_load_state` / `FfiState` / `FfiWindowState`, the `state_set_*` setters, `state_flush`, and the start-time store attach), real pinned nvim, modeled on `tree_search`.
+- `:multi_window` — the Rust integration test for the MULTI-WINDOW surface (`wolf_ffi_start`'s trailing `window_index`, `wake_token()`, `state_set_window_count()`, the token-carrying `wolf_ffi_set_wake` ABI, and the shared-store per-index writes), driving TWO real pinned nvim instances, modeled on `state` (single `#[test]`, mutates process-global `WOLF_STATE_DIR` + registers the process-global wake callback).
 - `:theme` — the Rust integration test for the WolfCursor / WolfTitlebar theme surface (`theme_titlebar_bg` / `theme_titlebar_fg`, plus the themed `cursor_fill` / `cursor_glyph` on the existing frame accessors), real pinned nvim, modeled on `panes`.
 
 ## Testing

@@ -123,6 +123,11 @@ final class PaneContainerView: NSView {
     /// picker.
     var onPickerTrigger: (() -> Void)?
 
+    /// Invoked when the new-window chord (Command+N) is pressed, BEFORE any key
+    /// is translated/forwarded to Neovim. Set by the window controller to open a
+    /// new top-level window.
+    var onNewWindow: (() -> Void)?
+
     /// The last `WolfTitlebar` background applied to the window, so a render
     /// wake only touches AppKit when the theme actually changed (`nil` until the
     /// first wake reads it).
@@ -209,6 +214,16 @@ final class PaneContainerView: NSView {
 
     override func keyDown(with event: NSEvent) {
         let flags = event.modifierFlags
+
+        // New-window chord (Command+N) is intercepted BEFORE translation so it is
+        // never forwarded to Neovim.
+        if ShortcutSeam.isNewWindowTrigger(
+            charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
+            command: flags.contains(.command)
+        ) {
+            onNewWindow?()
+            return
+        }
 
         // Picker trigger (Command+O) is intercepted BEFORE translation so it is
         // never forwarded to Neovim. While the picker is open its search field is

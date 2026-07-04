@@ -345,6 +345,22 @@ impl StateStore {
         true
     }
 
+    /// Truncates the `windows` list to `len` entries, dropping any trailing
+    /// (higher-index) slots. Used at terminate time to prune ghost windows left
+    /// by closed windows once the surviving windows have been re-pushed at dense
+    /// indices. A no-op when the list is already `<= len`; otherwise bumps the
+    /// generation and wakes the writer so the shrink reaches disk. The mutex is
+    /// held only for the in-memory truncation, never across serialization or IO.
+    pub fn truncate_windows(&self, len: usize) {
+        let mut cell = self.inner.cell.lock();
+        if cell.state.windows.len() <= len {
+            return;
+        }
+        cell.state.windows.truncate(len);
+        cell.generation += 1;
+        self.inner.cond.notify_all();
+    }
+
     /// The shared setter body: under the cell mutex, grows `windows` with
     /// defaults up to `idx`, applies `apply` (which reports whether the field
     /// actually changed), and — when the list grew or the field changed — bumps

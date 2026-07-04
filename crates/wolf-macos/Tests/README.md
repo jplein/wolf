@@ -1,6 +1,6 @@
 # wolf-macos/Tests
 
-The Swift tests for the macOS front-end. The Bazel target is `//crates/wolf-macos:WolfKeyMapTests`; it runs regardless of `WOLF_NVIM_BIN` (it needs no Neovim) and covers the pure seams — the key seam (`KeyMapTests.swift`), the picker seam (`PickerSeamTests.swift`), the pane-layout seam (`PaneTreeTests.swift`), the per-pane geometry seam (`PaneGeometryTests.swift`), the scroll-accumulator seam (`ScrollAccumulatorTests.swift`), the glyph-style seam (`GlyphStyleTests.swift`), and the state-restore seam (`StateSeamTests.swift`).
+The Swift tests for the macOS front-end. The Bazel target is `//crates/wolf-macos:WolfKeyMapTests`; it runs regardless of `WOLF_NVIM_BIN` (it needs no Neovim) and covers the pure seams — the key seam (`KeyMapTests.swift`), the picker seam (`PickerSeamTests.swift`), the pane-layout seam (`PaneTreeTests.swift`), the per-pane geometry seam (`PaneGeometryTests.swift`), the scroll-accumulator seam (`ScrollAccumulatorTests.swift`), the glyph-style seam (`GlyphStyleTests.swift`), the state-restore seam (`StateSeamTests.swift`), and the multi-window seams (`ShortcutSeamTests.swift`, `WindowIndexSeamTests.swift`).
 
 ## `WolfKeyMapTests/KeyMapTests.swift`
 
@@ -42,4 +42,14 @@ Pure, headless `XCTest` coverage of the AppKit-free `StateSeam` (`WolfKeyMap`) �
 - `testRestoredWindowFrameTable` — `restoredWindowFrame(x:y:width:height:screenVisibleFrames:)` accepts a frame intersecting a screen visible frame and rejects (`nil`) the non-positive width/height "unset" sentinel and a fully-offscreen frame (e.g. a disconnected display).
 - `testLaunchCwdTable` — `launchCwd(restored:fallback:isDirectory:)` picks the restored cwd only when it is non-empty and the injected `isDirectory` check passes (tests pass a set lookup, keeping the seam pure), falling back on an empty or no-longer-a-directory path.
 
-The AppKit save/restore wiring (`StatePersistence.swift`, the `AppDelegate` restore path) stays compile-verified + manual-smoke, per the plan; the bridge surface it drives is covered by the real-nvim `//crates/wolf-ffi:state` test.
+The AppKit save/restore wiring (`StatePersistence.swift`, the `WolfWindowController` restore path) stays compile-verified + manual-smoke, per the plan; the bridge surface it drives is covered by the real-nvim `//crates/wolf-ffi:state` test.
+
+## `WolfKeyMapTests/ShortcutSeamTests.swift`
+
+Pure, headless `XCTest` coverage of the AppKit-free `ShortcutSeam.isNewWindowTrigger(charactersIgnoringModifiers:command:)` seam (`@testable import WolfKeyMap`), the sibling of `PickerSeamTests` for the **Command+N** new-window chord. Table-driven: `Command+"n"` → `true`, `Command+"N"` (Command+Shift+N — `charactersIgnoringModifiers` carries the uppercase glyph, matched case-insensitively) → `true`, plain `"n"` with command not held → `false`, `Command+"o"` (the wrong letter, guarding against colliding with the picker chord) → `false`, and an empty string → `false`.
+
+## `WolfKeyMapTests/WindowIndexSeamTests.swift`
+
+Pure, headless `XCTest` coverage of the AppKit-free `WindowIndexSeam.nextFreeIndex(occupied:)` seam (`@testable import WolfKeyMap`), which picks a new window's `state.json` slot: the smallest non-negative integer NOT in `occupied` (order and duplicates irrelevant). Table-driven: `[]` → `0`, a dense `[0,1,2]` → `3` (append), `[1]` → `0`, hole reuse `[0,2]` → `1` and `[0,1,3]` → `2`, and an unordered `[2,0,1]` → `3`.
+
+The AppKit multi-window glue (`WolfWindowController`, `WindowRegistry`, the token-routed `*WakeBridge` thunks, the `AppDelegate` coordinator collection + `makeNewWindow`, `PaneContainerView.onNewWindow`) stays compile-verified + manual-smoke (no headless window server); the Rust bridge surface it drives (`wolf_ffi_start`'s trailing `window_index`, `wake_token`, the token-carrying wake ABI, the shared-store per-index writes, `state_set_window_count`) is covered by the real-nvim `//crates/wolf-ffi:multi_window` test.

@@ -1,7 +1,8 @@
 //
 //  WakeBridge.swift
-//  Marshals wolf-core's wake (fired on its tokio thread) onto the AppKit main
-//  thread and triggers a repaint — the macOS realization of the
+//  Marshals wolf-core's wake (fired on its tokio thread, carrying the firing
+//  core's per-window token) onto the AppKit main thread and triggers a repaint
+//  of the RIGHT window — the macOS realization of the
 //  wake → dispatch-to-main → setNeedsDisplay path.
 //
 
@@ -9,32 +10,19 @@ import AppKit
 import WolfFFI
 
 /// Bridges wolf-core's redraw wake to AppKit. Core invokes the registered
-/// `extern "C"` wake (see `wolf_ffi_set_wake`) from its worker thread; the thunk
-/// below hops onto the main thread and drives the registered `PaneContainerView`'s
-/// render-wake orchestration (which applies layout intents + redraws every pane and
-/// the cmdline strip), then the file-tree sidebar (analogous to wolf-gnome's
-/// async-channel + `queue_draw`).
+/// `extern "C"` wake (see `wolf_ffi_set_wake`) from its worker thread with its
+/// per-window `token`; the thunk below hops onto the main thread, looks the
+/// token up in `WindowRegistry`, and drives that window's `WolfWindowController`
+/// render-wake orchestration (which applies layout intents + redraws every pane,
+/// the cmdline strip, and the file-tree sidebar).
 enum WakeBridge {
-    /// The pane container driven on each wake (its `onRenderWake()` applies layout
-    /// intents and marks every pane + the cmdline strip for redisplay). Weak so the
-    /// bridge never keeps the window alive; set by `AppDelegate` once the
-    /// `PaneContainerView` exists.
-    weak static var registeredPaneView: PaneContainerView?
-
-    /// The file-tree sidebar nudged on each render wake to reveal + bold the
-    /// current buffer (`current_file` rides the same render wake, not a redraw
-    /// frame). Weak so the bridge never keeps the window alive; set by
-    /// `AppDelegate` once the `FileTreeView` exists.
-    weak static var registeredTree: FileTreeView?
-
-    /// Registers the C wake callback with the Rust core. The closure captures no
-    /// state (it only touches the statics above), so it converts to a
-    /// `@convention(c)` function pointer.
+    /// Registers the C wake callback with the Rust core once at launch. The
+    /// closure captures no state (it only touches the global `WindowRegistry`),
+    /// so it converts to a `@convention(c)` function pointer taking the token.
     static func install() {
-        wolf_ffi_set_wake({
+        wolf_ffi_set_wake({ token in
             DispatchQueue.main.async {
-                WakeBridge.registeredPaneView?.onRenderWake()
-                WakeBridge.registeredTree?.onRenderWake()
+                WindowRegistry.shared.controller(for: token)?.onRenderWake()
             }
         })
     }

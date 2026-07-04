@@ -209,6 +209,7 @@ fn markdown_treesitter_highlight_and_go_injection_active() {
         root.to_string_lossy().into_owned(),
         common::DEFAULT_COLS,
         common::DEFAULT_ROWS,
+        0,
     )
     .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
 

@@ -141,7 +141,8 @@ void* __swift_bridge__$Vec_FfiWinInfo$get_mut(void* vec_ptr, uintptr_t index);
 uintptr_t __swift_bridge__$Vec_FfiWinInfo$len(void* vec_ptr);
 void* __swift_bridge__$Vec_FfiWinInfo$as_ptr(void* vec_ptr);
 
-void* __swift_bridge__$wolf_ffi_start(void* init_lua, void* cwd, uint16_t cols, uint16_t rows);
+void* __swift_bridge__$wolf_ffi_start(void* init_lua, void* cwd, uint16_t cols, uint16_t rows, uint16_t window_index);
+uint64_t __swift_bridge__$WolfCoreHandle$wake_token(void* self);
 void* __swift_bridge__$WolfCoreHandle$read_frame(void* self);
 void* __swift_bridge__$WolfCoreHandle$read_frame_for_grid(void* self, uint64_t grid);
 void __swift_bridge__$WolfCoreHandle$send_key(void* self, struct __swift_bridge__$FfiKeyEvent ev);
@@ -165,6 +166,7 @@ void __swift_bridge__$WolfCoreHandle$open(void* self, void* path);
 void __swift_bridge__$WolfCoreHandle$state_set_geometry(void* self, double x, double y, double width, double height);
 void __swift_bridge__$WolfCoreHandle$state_set_sidebar_visible(void* self, bool visible);
 void __swift_bridge__$WolfCoreHandle$state_set_toolbar_mode(void* self, uint8_t mode, bool set);
+void __swift_bridge__$WolfCoreHandle$state_set_window_count(void* self, uint16_t count);
 bool __swift_bridge__$WolfCoreHandle$state_flush(void* self);
 void* __swift_bridge__$FfiFileSearch$ranked(void* self, void* query, uintptr_t max);
 void* __swift_bridge__$FfiFileSearch$children_of(void* self, void* dir);

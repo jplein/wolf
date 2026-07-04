@@ -148,10 +148,11 @@ pub struct WolfCore {
     /// tokio worker thread). `None` until nvim first reports its cwd; the pump then
     /// falls back to [`cwd`](Self::cwd).
     tracked_cwd: TrackedCwd,
-    /// The optionally-attached application-state store. Empty at start; filled
-    /// by [`WolfCore::attach_state_store`]. Cloned into the redraw handler, which
-    /// mirrors each `wolf_cwd` notification into the store (window 0) so cwd
-    /// changes persist with no front-end involvement.
+    /// The optionally-attached application-state store, paired with this core's
+    /// window index. Empty at start; filled by [`WolfCore::attach_state_store`].
+    /// Cloned into the redraw handler, which mirrors each `wolf_cwd`
+    /// notification into the store at that window index so cwd changes persist
+    /// with no front-end involvement.
     state_store: SharedStateStore,
     /// The configured working directory: the file picker's FALLBACK search root
     /// and the MRU cache location. The live search root is the captive Neovim's
@@ -264,20 +265,21 @@ impl WolfCore {
         })
     }
 
-    /// Attaches an application-state store: from now on every `wolf_cwd`
+    /// Attaches an application-state store bound to `window_index` (this core's
+    /// slot in `state.json`'s `windows` list): from now on every `wolf_cwd`
     /// notification (the `WolfDir` `DirChanged` autocmd, covering both UI- and
-    /// `:cd`-initiated changes) is mirrored into `store` as window 0's cwd.
+    /// `:cd`-initiated changes) is mirrored into `store` as this window's cwd.
     ///
     /// The current [`tracked_cwd`](Self::live_cwd) — if nvim has already
     /// reported one — is pushed into the store IMMEDIATELY, so the setup-time
     /// `wolf_cwd` emission that may have raced ahead of this attach is not
     /// lost. The tracked-cwd read guard is cloned out before the store call
     /// (no lock held across it).
-    pub fn attach_state_store(&self, store: StateStore) {
-        *self.state_store.write() = Some(store.clone());
+    pub fn attach_state_store(&self, store: StateStore, window_index: usize) {
+        *self.state_store.write() = Some((store.clone(), window_index));
         let cwd = self.tracked_cwd.read().clone();
         if let Some(cwd) = cwd {
-            store.set_cwd(0, &cwd);
+            store.set_cwd(window_index, &cwd);
         }
     }
 

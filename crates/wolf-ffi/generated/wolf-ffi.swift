@@ -1,6 +1,6 @@
 import WolfFFI
-public func wolf_ffi_start<GenericIntoRustString: IntoRustString>(_ init_lua: GenericIntoRustString, _ cwd: GenericIntoRustString, _ cols: UInt16, _ rows: UInt16) -> Optional<WolfCoreHandle> {
-    { let val = __swift_bridge__$wolf_ffi_start({ let rustString = init_lua.intoRustString(); rustString.isOwned = false; return rustString.ptr }(), { let rustString = cwd.intoRustString(); rustString.isOwned = false; return rustString.ptr }(), cols, rows); if val != nil { return WolfCoreHandle(ptr: val!) } else { return nil } }()
+public func wolf_ffi_start<GenericIntoRustString: IntoRustString>(_ init_lua: GenericIntoRustString, _ cwd: GenericIntoRustString, _ cols: UInt16, _ rows: UInt16, _ window_index: UInt16) -> Optional<WolfCoreHandle> {
+    { let val = __swift_bridge__$wolf_ffi_start({ let rustString = init_lua.intoRustString(); rustString.isOwned = false; return rustString.ptr }(), { let rustString = cwd.intoRustString(); rustString.isOwned = false; return rustString.ptr }(), cols, rows, window_index); if val != nil { return WolfCoreHandle(ptr: val!) } else { return nil } }()
 }
 public func wolf_ffi_ancestors_to_reveal<GenericIntoRustString: IntoRustString>(_ rel_path: GenericIntoRustString) -> RustVec<RustString> {
     RustVec(ptr: __swift_bridge__$wolf_ffi_ancestors_to_reveal({ let rustString = rel_path.intoRustString(); rustString.isOwned = false; return rustString.ptr }()))
@@ -220,6 +220,10 @@ public class WolfCoreHandleRef {
     }
 }
 extension WolfCoreHandleRef {
+    public func wake_token() -> UInt64 {
+        __swift_bridge__$WolfCoreHandle$wake_token(ptr)
+    }
+
     public func read_frame() -> FfiFrame {
         FfiFrame(ptr: __swift_bridge__$WolfCoreHandle$read_frame(ptr))
     }
@@ -310,6 +314,10 @@ extension WolfCoreHandleRef {
 
     public func state_set_toolbar_mode(_ mode: UInt8, _ set: Bool) {
         __swift_bridge__$WolfCoreHandle$state_set_toolbar_mode(ptr, mode, set)
+    }
+
+    public func state_set_window_count(_ count: UInt16) {
+        __swift_bridge__$WolfCoreHandle$state_set_window_count(ptr, count)
     }
 
     public func state_flush() -> Bool {

@@ -1,6 +1,8 @@
 //
 //  AppDelegate.swift
-//  Wires up the core, window, and grid view; tears down on terminate.
+//  The application coordinator: once-only launch setup (wake bridges, fonts,
+//  config, cell metrics), a collection of per-window controllers, and the Cmd-N
+//  new-window entry point.
 //
 
 import AppKit
@@ -8,129 +10,73 @@ import Foundation
 import WolfFFI
 import WolfKeyMap
 
-/// The application delegate: resolves `init_lua` + cwd, starts the Rust core,
-/// builds the window and `PaneContainerView`, registers the pane view with
-/// `WakeBridge`, and shuts the core down cleanly on terminate.
+/// The application delegate, now a thin COORDINATOR over a collection of
+/// `WolfWindowController`s (one per OS window). It performs the once-only launch
+/// setup, restores one window per saved `state.json` entry, opens new windows on
+/// Cmd-N, and prunes ghost window slots at terminate.
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    /// Initial grid width in columns.
-    private static let initialCols = 80
-    /// Initial grid height in rows.
-    private static let initialRows = 24
+    /// The once-measured shared cell metrics (nil until launch).
+    private var metrics: CellMetrics?
+    /// The once-loaded shared user config (nil until launch).
+    private var config: FfiConfig?
 
-    private var window: MainWindow?
-    private var handle: WolfCoreHandle?
-    private var picker: PickerView?
-    private var tree: FileTreeView?
-    private var statePersistence: StatePersistence?
-
-    /// The first saved window from `state.json`, extracted into plain Swift
-    /// scalars (see `RestoredWindowState`). `nil` when nothing usable was saved.
-    private var restoredWindow: RestoredWindowState?
-
-    /// The scalar facets of one saved window, copied OUT of the bridge's
-    /// `RustVec<FfiWindowState>` immediately (element refs must not outlive the
-    /// vec) into a plain value the delegate can hold across launch.
-    private struct RestoredWindowState {
-        let x: Double
-        let y: Double
-        let width: Double
-        let height: Double
-        let cwd: String
-        let sidebarVisible: Bool
-        let toolbarMode: StateSeam.ToolbarMode?
-    }
+    /// The live per-window controllers, one per open OS window.
+    private var controllers: [WolfWindowController] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Register the three process-global wake callbacks ONCE; each routes by
+        // the firing core's token through `WindowRegistry`.
         WakeBridge.install()
         PickerWakeBridge.install()
         TreeWakeBridge.install()
 
-        // Read the saved state BEFORE the core starts: the restored cwd decides
-        // where the embedded Neovim launches. Corrupt/absent state is an empty
-        // list (never an error), so this simply stays nil.
-        restoredWindow = Self.firstRestoredWindow(from: wolf_ffi_load_state())
-
-        guard let handle = startCore() else {
-            presentStartupFailureAndQuit()
-            return
-        }
-        self.handle = handle
-
-        // Register the bundled font TTFs with CoreText — BOTH families (JetBrains
-        // Mono + iA Writer Mono S, the default), which merge into
-        // Contents/Resources/fonts/ — then resolve the user config, BEFORE
-        // measuring, so `CellMetrics` can resolve the configured
-        // family/size/line-height (font registration is log-not-fail).
+        // Register the bundled font TTFs with CoreText, then resolve the user
+        // config BEFORE measuring so `CellMetrics` can resolve the configured
+        // family/size/line-height. Both are measured ONCE and shared by every
+        // window.
         FontRegistration.registerBundledFonts()
         let config = wolf_ffi_load_config()
-
         let metrics = CellMetrics.measured(config: config)
-        let paneContainer = PaneContainerView(handle: handle, metrics: metrics)
-        WakeBridge.registeredPaneView = paneContainer
+        self.config = config
+        self.metrics = metrics
 
-        // Build the file-tree sidebar (left pane). It owns its OWN long-lived
-        // file-search session via `start_tree_search`; the render wake reveals +
-        // bolds the current buffer, the tree wake rebuilds its rows.
-        let tree = FileTreeView(handle: handle, paneContainer: paneContainer)
-        WakeBridge.registeredTree = tree
-        TreeWakeBridge.registeredTree = tree
-        tree.start()
-        self.tree = tree
+        // Read the saved state BEFORE any core starts: one controller per saved
+        // window (its slot == its list position), else one default at index 0.
+        let restoredWindows = Self.restoredWindows(from: wolf_ffi_load_state())
 
-        let window = MainWindow(
-            treeView: tree,
-            paneContainer: paneContainer,
-            metrics: metrics,
-            cols: Self.initialCols,
-            rows: Self.initialRows
-        )
-
-        // Build the file picker as a hidden top-center overlay over the editor
-        // (the picker is a subview of the pane container). Command+O opens it.
-        let picker = PickerView(handle: handle, paneContainer: paneContainer)
-        paneContainer.addSubview(picker)
-        PickerWakeBridge.registeredPicker = picker
-        paneContainer.onPickerTrigger = { [weak picker] in picker?.open() }
-        self.picker = picker
-
-        // Restore the saved window frame when it is usable (positive size and
-        // intersecting a live screen), else keep the default centered placement.
-        // Sidebar + toolbar restore also happen BEFORE the window is shown.
-        if let restored = restoredWindow,
-            let frame = StateSeam.restoredWindowFrame(
-                x: restored.x, y: restored.y,
-                width: restored.width, height: restored.height,
-                screenVisibleFrames: NSScreen.screens.map(\.visibleFrame))
-        {
-            window.setFrame(frame, display: false)
-        } else {
-            window.center()
-        }
-        if let restored = restoredWindow {
-            window.sidebarItem.isCollapsed = !restored.sidebarVisible
-            if let mode = restored.toolbarMode {
-                window.toolbar?.displayMode = Self.toolbarDisplayMode(mode)
+        if restoredWindows.isEmpty {
+            let cwd = launchCwd(restoredCwd: "")
+            let controller = makeController(windowIndex: 0, launchCwd: cwd, restored: nil)
+            if !controller.start() {
+                presentStartupFailureAndQuit()
+                return
             }
+            controllers.append(controller)
+            return
         }
 
-        window.makeKeyAndOrderFront(nil)
-        // Setting the content VC can move first responder; ensure the editor pane
-        // container keeps it so launch keystrokes reach Neovim.
-        window.makeFirstResponder(paneContainer)
-        NSApp.activate(ignoringOtherApps: true)
-        self.window = window
+        for (index, restored) in restoredWindows.enumerated() {
+            let cwd = launchCwd(restoredCwd: restored.cwd)
+            let controller = makeController(
+                windowIndex: index, launchCwd: cwd, restored: restored)
+            let ok = controller.start()
+            // A fatal startup alert only for the FIRST window; a later window's
+            // core failing simply opens fewer windows.
+            if !ok {
+                if index == 0 {
+                    presentStartupFailureAndQuit()
+                    return
+                }
+                continue
+            }
+            controllers.append(controller)
+        }
 
-        // Observe geometry/sidebar/toolbar changes, then push one full snapshot
-        // so a fresh run persists its initial layout immediately.
-        let persistence = StatePersistence(
-            handle: handle,
-            window: window,
-            sidebarItem: window.sidebarItem,
-            toolbar: window.toolbar
-        )
-        persistence.install()
-        persistence.pushSnapshot()
-        statePersistence = persistence
+        // Every restored core failed after the first (edge case): quit rather
+        // than run windowless.
+        if controllers.isEmpty {
+            presentStartupFailureAndQuit()
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -138,36 +84,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // Push the final layout snapshot and drain the state writer BEFORE the
-        // core is torn down (the toolbar-displayMode KVO is best-effort, so the
-        // terminate-time snapshot is the correctness backstop).
-        statePersistence?.pushSnapshot()
-        _ = handle?.state_flush()
-        statePersistence = nil
+        // Re-push each live window's snapshot at its slot, then prune any ghost
+        // slots left by closed windows above the highest live index (the
+        // documented v1 limitation: a hole left by a closed MIDDLE window
+        // survives until it is reused). Truncating to the highest live index + 1
+        // never drops a live slot (unlike a naive `controllers.count`, which
+        // would truncate a live higher slot when a hole exists).
+        for controller in controllers {
+            controller.pushSnapshot()
+        }
+        if let highest = controllers.map(\.windowIndex).max() {
+            controllers.first?.handle?.state_set_window_count(UInt16(highest + 1))
+        }
 
-        // Drop the sidebar's and picker's file-search sessions (cancelling any
-        // in-flight traversals) before the core is torn down.
-        tree?.close()
-        tree = nil
-        picker?.close()
-        picker = nil
-        handle?.shutdown()
-        handle = nil
+        // Tear down the remaining controllers (backstop for any that did not go
+        // through windowWillClose). Iterate a copy: teardown removes from
+        // `controllers`.
+        for controller in controllers {
+            controller.teardown()
+        }
     }
 
-    /// Starts the Rust core against the bundled `init.lua` and a working dir
-    /// (the RESTORED cwd from the last run when it is still a directory, else
-    /// the process's current directory).
-    private func startCore() -> WolfCoreHandle? {
-        // Point wolf-core at the bundled Neovim unless a developer has already
-        // exported `WOLF_NVIM_BIN` (overwrite=0 so the dev override wins). This
-        // is what makes the packaged `.app` double-clickable with no shell env.
-        if let bin = nvimBinPath() {
-            setenv("WOLF_NVIM_BIN", bin, 0)
+    /// The Cmd-N entry point: opens a new window in the first free `state.json`
+    /// slot, rooted at `originatingCwd` (falling back to the home directory when
+    /// it is empty), with AppKit cascade placement.
+    func makeNewWindow(originatingCwd: String) {
+        // Metrics/config are set at launch before any window opens; bail if not.
+        guard metrics != nil, config != nil else { return }
+        let index = WindowIndexSeam.nextFreeIndex(occupied: controllers.map(\.windowIndex))
+        let cwd = originatingCwd.isEmpty
+            ? FileManager.default.homeDirectoryForCurrentUser.path
+            : originatingCwd
+        let controller = makeController(windowIndex: index, launchCwd: cwd, restored: nil)
+        if controller.start() {
+            controllers.append(controller)
         }
-        let initLua = initLuaPath()
-        let cwd = StateSeam.launchCwd(
-            restored: restoredWindow?.cwd ?? "",
+    }
+
+    /// Drops `controller` from the collection (called by the controller at
+    /// teardown / window close).
+    func removeController(_ controller: WolfWindowController) {
+        controllers.removeAll { $0 === controller }
+    }
+
+    /// Builds a controller wired to this coordinator and the shared metrics/config.
+    private func makeController(
+        windowIndex: Int, launchCwd: String, restored: RestoredWindowState?
+    ) -> WolfWindowController {
+        // `metrics` / `config` are set in `applicationDidFinishLaunching` before
+        // any controller is built.
+        let controller = WolfWindowController(
+            windowIndex: windowIndex,
+            launchCwd: launchCwd,
+            restored: restored,
+            metrics: metrics!,
+            config: config!
+        )
+        controller.coordinator = self
+        return controller
+    }
+
+    /// Picks the embedded Neovim's launch working directory: the restored cwd
+    /// when it still names a directory, else the process's current directory.
+    private func launchCwd(restoredCwd: String) -> String {
+        StateSeam.launchCwd(
+            restored: restoredCwd,
             fallback: FileManager.default.currentDirectoryPath,
             isDirectory: { path in
                 var isDir: ObjCBool = false
@@ -175,67 +156,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     && isDir.boolValue
             }
         )
-        return wolf_ffi_start(
-            initLua,
-            cwd,
-            UInt16(Self.initialCols),
-            UInt16(Self.initialRows)
-        )
     }
 
-    /// Extracts the FIRST saved window from the bridge's restore read into a
-    /// plain `RestoredWindowState`, or `nil` when nothing was saved. An unknown
-    /// toolbar discriminant (a future writer) maps to `nil` — the toolbar is
-    /// then left at its default.
-    private static func firstRestoredWindow(from state: FfiState) -> RestoredWindowState? {
+    /// Extracts EVERY saved window from the bridge's restore read into plain
+    /// `RestoredWindowState` values (element refs must not outlive the vec). An
+    /// unknown toolbar discriminant maps to `nil` (the toolbar keeps its default).
+    private static func restoredWindows(from state: FfiState) -> [RestoredWindowState] {
         let windows = state.windows()
-        guard let w = windows.get(index: 0) else { return nil }
-        let toolbarMode: StateSeam.ToolbarMode? =
-            w.toolbar_mode_set() ? StateSeam.ToolbarMode(rawValue: w.toolbar_mode()) : nil
-        return RestoredWindowState(
-            x: w.x(), y: w.y(),
-            width: w.width(), height: w.height(),
-            cwd: w.cwd().toString(),
-            sidebarVisible: w.sidebar_visible(),
-            toolbarMode: toolbarMode
-        )
-    }
-
-    /// Maps the shared `StateSeam.ToolbarMode` onto AppKit's display mode.
-    private static func toolbarDisplayMode(_ mode: StateSeam.ToolbarMode) -> NSToolbar.DisplayMode
-    {
-        switch mode {
-        case .iconAndText: return .iconAndLabel
-        case .iconOnly: return .iconOnly
-        case .textOnly: return .labelOnly
+        var result: [RestoredWindowState] = []
+        for i in 0..<windows.len() {
+            guard let w = windows.get(index: UInt(i)) else { continue }
+            let toolbarMode: StateSeam.ToolbarMode? =
+                w.toolbar_mode_set() ? StateSeam.ToolbarMode(rawValue: w.toolbar_mode()) : nil
+            result.append(
+                RestoredWindowState(
+                    x: w.x(), y: w.y(),
+                    width: w.width(), height: w.height(),
+                    cwd: w.cwd().toString(),
+                    sidebarVisible: w.sidebar_visible(),
+                    toolbarMode: toolbarMode
+                ))
         }
-    }
-
-    /// Resolves the bundled Neovim binary at `Contents/Resources/nvim/bin/nvim`.
-    /// Returns `nil` (rather than a bogus path) when it is absent or not
-    /// executable, so a developer's `WOLF_NVIM_BIN` export still takes effect.
-    private func nvimBinPath() -> String? {
-        guard let resourcePath = Bundle.main.resourcePath else { return nil }
-        let candidate = resourcePath + "/nvim/bin/nvim"
-        guard FileManager.default.isExecutableFile(atPath: candidate) else {
-            return nil
-        }
-        return candidate
-    }
-
-    /// Resolves the bundled `runtime/nvim/init.lua` path. Inside a packaged
-    /// `.app` it lives in `Contents/Resources`; a `WOLF_INIT_LUA` override is
-    /// honored first (for development).
-    private func initLuaPath() -> String {
-        if let override = ProcessInfo.processInfo.environment["WOLF_INIT_LUA"],
-            !override.isEmpty
-        {
-            return override
-        }
-        if let resource = Bundle.main.path(forResource: "init", ofType: "lua") {
-            return resource
-        }
-        return "runtime/nvim/init.lua"
+        return result
     }
 
     /// Shows a fatal alert when the core fails to start, then terminates.

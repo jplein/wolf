@@ -40,8 +40,8 @@
 
 use std::cell::RefCell;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicPtr, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use wolf_core::{
@@ -276,18 +276,24 @@ mod ffi {
 
     extern "Rust" {
         // Starts the core against the pinned Neovim (None on error). `init_lua`
-        // and `cwd` are filesystem PATHS.
+        // and `cwd` are filesystem PATHS. `window_index` is the slot in
+        // `state.json`'s `windows` list this handle writes into.
         fn wolf_ffi_start(
             init_lua: String,
             cwd: String,
             cols: u16,
             rows: u16,
+            window_index: u16,
         ) -> Option<WolfCoreHandle>;
     }
 
     extern "Rust" {
         type WolfCoreHandle;
 
+        // The per-core wake-routing identity token, minted fresh per
+        // `wolf_ffi_start` and carried as the sole arg of every wake callback so
+        // a process-global callback routes each wake to the right window.
+        fn wake_token(&self) -> u64;
         fn read_frame(&self) -> FfiFrame;
         // The per-grid paint-ready frame for `grid` (the pane container reads one
         // per pane, plus grid 1 for the cmdline strip). An absent grid yields an
@@ -345,18 +351,23 @@ mod ffi {
         // Opens `path` (an absolute filesystem path) in Neovim via
         // `InputEvent::Open`; the core's input pump records the MRU.
         fn open(&self, path: String);
-        // Records window 0's frame geometry into the live state store (points;
-        // AppKit bottom-left global coords on macOS). A no-op when no store is
-        // attached.
+        // Records this window's frame geometry into the live state store
+        // (points; AppKit bottom-left global coords on macOS) at the handle's
+        // `window_index`. A no-op when no store is attached.
         fn state_set_geometry(&self, x: f64, y: f64, width: f64, height: f64);
-        // Records window 0's sidebar visibility into the live state store. A
-        // no-op when no store is attached.
+        // Records this window's sidebar visibility into the live state store at
+        // the handle's `window_index`. A no-op when no store is attached.
         fn state_set_sidebar_visible(&self, visible: bool);
-        // Records window 0's toolbar display mode: `mode` is a `mod
-        // toolbar_mode` discriminant; `set == false` clears the mode to unset
-        // (the value byte is then ignored); an unrecognized discriminant is a
-        // logged no-op. A no-op when no store is attached.
+        // Records this window's toolbar display mode at the handle's
+        // `window_index`: `mode` is a `mod toolbar_mode` discriminant; `set ==
+        // false` clears the mode to unset (the value byte is then ignored); an
+        // unrecognized discriminant is a logged no-op. A no-op when no store is
+        // attached.
         fn state_set_toolbar_mode(&self, mode: u8, set: bool);
+        // Truncates the persisted `windows` list to `count` entries (ghost
+        // cleanup at terminate time, after live windows are re-pushed at dense
+        // indices). A no-op when no store is attached.
+        fn state_set_window_count(&self, count: u16);
         // Blocks until every pending state mutation has had its disk write
         // attempted (bounded by an internal ~2s timeout). Returns whether
         // everything pending was flushed in time (true when no store exists —
@@ -556,8 +567,15 @@ mod ffi {
 // Wake registration (Swift-free; see the crate docs).
 // ---------------------------------------------------------------------------
 
-/// The C ABI of the front-end wake callback.
-type WakeCallback = extern "C" fn();
+/// The C ABI of the front-end wake callback. It carries the firing core's
+/// per-window wake token so a single process-global callback can route each
+/// wake to the right window WITHOUT clobbering.
+type WakeCallback = extern "C" fn(u64);
+
+/// The next wake token to mint. Starts at 1 (0 is reserved as a "no core" /
+/// unset sentinel on the Swift side); [`wolf_ffi_start`] `fetch_add`s one per
+/// core so every live core has a distinct token.
+static NEXT_WAKE_TOKEN: AtomicU64 = AtomicU64::new(1);
 
 /// The globally-registered wake callback, or null when none is registered (the
 /// Rust integration test path). Stored as a raw pointer in an [`AtomicPtr`].
@@ -573,8 +591,8 @@ static WAKE_FN: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 ///
 /// # Safety
 ///
-/// `wake`, if `Some`, must be a valid `extern "C" fn()` that is safe to call from
-/// any thread (core fires the wake from its tokio worker thread).
+/// `wake`, if `Some`, must be a valid `extern "C" fn(u64)` that is safe to call
+/// from any thread (core fires the wake from its tokio worker thread).
 #[no_mangle]
 pub extern "C" fn wolf_ffi_set_wake(wake: Option<WakeCallback>) {
     let ptr = wake.map_or(std::ptr::null_mut(), |f| f as *mut ());
@@ -582,16 +600,17 @@ pub extern "C" fn wolf_ffi_set_wake(wake: Option<WakeCallback>) {
 }
 
 /// Builds the [`WakeFn`] core invokes on flush: it loads the registered callback
-/// and calls it, or does nothing if none is registered. Captures no state, so it
-/// is `Send + Sync` as `WakeFn` requires.
-fn registered_wake() -> WakeFn {
-    Arc::new(|| {
+/// and calls it with this core's `token`, or does nothing if none is registered.
+/// Captures only the `token` (a `u64`), so it is `Send + Sync` as `WakeFn`
+/// requires.
+fn registered_wake(token: u64) -> WakeFn {
+    Arc::new(move || {
         let ptr = WAKE_FN.load(Ordering::Acquire);
         if !ptr.is_null() {
-            // SAFETY: `ptr` was set from a valid `extern "C" fn()` by
+            // SAFETY: `ptr` was set from a valid `extern "C" fn(u64)` by
             // `wolf_ffi_set_wake`; a non-null value is always such a pointer.
             let f: WakeCallback = unsafe { std::mem::transmute::<*mut (), WakeCallback>(ptr) };
-            f();
+            f(token);
         }
     })
 }
@@ -612,8 +631,8 @@ static FILESEARCH_WAKE_FN: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 ///
 /// # Safety
 ///
-/// `wake`, if `Some`, must be a valid `extern "C" fn()` that is safe to call from
-/// any thread (core fires the wake from its tokio worker thread).
+/// `wake`, if `Some`, must be a valid `extern "C" fn(u64)` that is safe to call
+/// from any thread (core fires the wake from its tokio worker thread).
 #[no_mangle]
 pub extern "C" fn wolf_ffi_set_filesearch_wake(wake: Option<WakeCallback>) {
     let ptr = wake.map_or(std::ptr::null_mut(), |f| f as *mut ());
@@ -621,18 +640,18 @@ pub extern "C" fn wolf_ffi_set_filesearch_wake(wake: Option<WakeCallback>) {
 }
 
 /// Builds the [`WakeFn`] core invokes on each file-search traversal batch: it
-/// loads the registered file-search callback and calls it, or does nothing if
-/// none is registered. Captures no state, so it is `Send + Sync` as `WakeFn`
-/// requires.
-fn registered_filesearch_wake() -> WakeFn {
-    Arc::new(|| {
+/// loads the registered file-search callback and calls it with this core's
+/// `token`, or does nothing if none is registered. Captures only the `token` (a
+/// `u64`), so it is `Send + Sync` as `WakeFn` requires.
+fn registered_filesearch_wake(token: u64) -> WakeFn {
+    Arc::new(move || {
         let ptr = FILESEARCH_WAKE_FN.load(Ordering::Acquire);
         if !ptr.is_null() {
-            // SAFETY: `ptr` was set from a valid `extern "C" fn()` by
+            // SAFETY: `ptr` was set from a valid `extern "C" fn(u64)` by
             // `wolf_ffi_set_filesearch_wake`; a non-null value is always such a
             // pointer.
             let f: WakeCallback = unsafe { std::mem::transmute::<*mut (), WakeCallback>(ptr) };
-            f();
+            f(token);
         }
     })
 }
@@ -654,8 +673,8 @@ static TREE_WAKE_FN: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 ///
 /// # Safety
 ///
-/// `wake`, if `Some`, must be a valid `extern "C" fn()` that is safe to call from
-/// any thread (core fires the wake from its tokio worker thread).
+/// `wake`, if `Some`, must be a valid `extern "C" fn(u64)` that is safe to call
+/// from any thread (core fires the wake from its tokio worker thread).
 #[no_mangle]
 pub extern "C" fn wolf_ffi_set_tree_wake(wake: Option<WakeCallback>) {
     let ptr = wake.map_or(std::ptr::null_mut(), |f| f as *mut ());
@@ -663,18 +682,37 @@ pub extern "C" fn wolf_ffi_set_tree_wake(wake: Option<WakeCallback>) {
 }
 
 /// Builds the [`WakeFn`] core invokes on each file-tree traversal batch: it loads
-/// the registered tree callback and calls it, or does nothing if none is
-/// registered. Captures no state, so it is `Send + Sync` as `WakeFn` requires.
-fn registered_tree_wake() -> WakeFn {
-    Arc::new(|| {
+/// the registered tree callback and calls it with this core's `token`, or does
+/// nothing if none is registered. Captures only the `token` (a `u64`), so it is
+/// `Send + Sync` as `WakeFn` requires.
+fn registered_tree_wake(token: u64) -> WakeFn {
+    Arc::new(move || {
         let ptr = TREE_WAKE_FN.load(Ordering::Acquire);
         if !ptr.is_null() {
-            // SAFETY: `ptr` was set from a valid `extern "C" fn()` by
+            // SAFETY: `ptr` was set from a valid `extern "C" fn(u64)` by
             // `wolf_ffi_set_tree_wake`; a non-null value is always such a pointer.
             let f: WakeCallback = unsafe { std::mem::transmute::<*mut (), WakeCallback>(ptr) };
-            f();
+            f(token);
         }
     })
+}
+
+/// The process-wide application-state store, opened once over
+/// [`wolf_core::state_dir`] and cloned into every window's handle.
+///
+/// Opening the same `state.json` directory more than once would race the
+/// per-store writer threads (unsupported), so all windows SHARE one store. The
+/// `Option` is `None` when no state dir could be resolved — state persistence
+/// is then disabled process-wide (logged, never fatal). `OnceLock` makes the
+/// open lazy and single-shot.
+static SHARED_STORE: OnceLock<Option<StateStore>> = OnceLock::new();
+
+/// Returns a clone of the process-wide [`StateStore`], opening it on first use
+/// over [`wolf_core::state_dir`]. `None` when no state dir could be resolved.
+fn shared_store() -> Option<StateStore> {
+    SHARED_STORE
+        .get_or_init(|| wolf_core::state_dir().map(|dir| StateStore::open(&dir)))
+        .clone()
 }
 
 /// Returns the ancestor directory rel-paths of `rel_path`, from the cwd root down
@@ -883,14 +921,29 @@ pub fn wolf_ffi_load_state() -> FfiState {
 /// `self`) while the bridge only ever hands Swift a `&self`.
 pub struct WolfCoreHandle {
     core: RefCell<Option<WolfCore>>,
-    /// The live application-state store, opened at [`wolf_ffi_start`] over
-    /// [`wolf_core::state_dir`] and attached to the core (so cwd changes
-    /// persist core-side). `None` when no state dir could be resolved — every
-    /// `state_*` method is then a no-op.
+    /// The process-wide application-state store (a clone of [`SHARED_STORE`]),
+    /// attached to the core at this handle's [`window_index`](Self::window_index)
+    /// (so cwd changes persist core-side). `None` when no state dir could be
+    /// resolved — every `state_*` method is then a no-op.
     store: Option<StateStore>,
+    /// This handle's slot in `state.json`'s `windows` list; every `state_*`
+    /// setter writes into this index.
+    window_index: usize,
+    /// The per-core wake-routing identity token minted at [`wolf_ffi_start`],
+    /// captured by the core's [`WakeFn`] and carried to the front-end callback.
+    wake_token: u64,
 }
 
 impl WolfCoreHandle {
+    /// The per-core wake-routing identity token (minted fresh per
+    /// [`wolf_ffi_start`]). The front-end registers ONE process-global wake
+    /// callback per channel and looks this token up to route each wake to the
+    /// right window.
+    #[must_use]
+    pub fn wake_token(&self) -> u64 {
+        self.wake_token
+    }
+
     /// Reads the current render-state snapshot into an owned [`FfiFrame`].
     #[must_use]
     pub fn read_frame(&self) -> FfiFrame {
@@ -1060,7 +1113,7 @@ impl WolfCoreHandle {
             .core
             .borrow()
             .as_ref()
-            .map(|core| core.start_file_search(registered_filesearch_wake()));
+            .map(|core| core.start_file_search(registered_filesearch_wake(self.wake_token)));
         FfiFileSearch { search }
     }
 
@@ -1078,7 +1131,7 @@ impl WolfCoreHandle {
             .core
             .borrow()
             .as_ref()
-            .map(|core| core.start_file_search(registered_tree_wake()));
+            .map(|core| core.start_file_search(registered_tree_wake(self.wake_token)));
         FfiFileSearch { search }
     }
 
@@ -1159,37 +1212,38 @@ impl WolfCoreHandle {
         }
     }
 
-    /// Records window 0's frame geometry into the live state store (points; on
-    /// macOS this is `NSWindow.frame`'s AppKit bottom-left global coords). This
-    /// pass hardcodes window index 0 (single-window front-end); a no-op when no
+    /// Records this window's frame geometry into the live state store (points;
+    /// on macOS this is `NSWindow.frame`'s AppKit bottom-left global coords),
+    /// at this handle's [`window_index`](Self::window_index); a no-op when no
     /// store is attached.
     pub fn state_set_geometry(&self, x: f64, y: f64, width: f64, height: f64) {
         if let Some(store) = &self.store {
-            store.set_geometry(0, x, y, width, height);
+            store.set_geometry(self.window_index, x, y, width, height);
         }
     }
 
-    /// Records window 0's sidebar visibility into the live state store. This
-    /// pass hardcodes window index 0; a no-op when no store is attached.
+    /// Records this window's sidebar visibility into the live state store at
+    /// this handle's [`window_index`](Self::window_index); a no-op when no store
+    /// is attached.
     pub fn state_set_sidebar_visible(&self, visible: bool) {
         if let Some(store) = &self.store {
-            store.set_sidebar_visible(0, visible);
+            store.set_sidebar_visible(self.window_index, visible);
         }
     }
 
-    /// Records window 0's toolbar display mode into the live state store.
+    /// Records this window's toolbar display mode into the live state store.
     ///
     /// `mode` is a [`toolbar_mode`] discriminant. `set == false` CLEARS the
     /// mode to unset (the value byte is then ignored); an unrecognized
     /// discriminant with `set == true` is a logged NO-OP (the stored mode is
-    /// left unchanged, never corrupted). This pass hardcodes window index 0; a
-    /// no-op when no store is attached.
+    /// left unchanged, never corrupted). Writes at this handle's
+    /// [`window_index`](Self::window_index); a no-op when no store is attached.
     pub fn state_set_toolbar_mode(&self, mode: u8, set: bool) {
         let Some(store) = &self.store else {
             return;
         };
         if !set {
-            store.set_toolbar_mode(0, None);
+            store.set_toolbar_mode(self.window_index, None);
             return;
         }
         let mode = match mode {
@@ -1201,7 +1255,19 @@ impl WolfCoreHandle {
                 return;
             }
         };
-        store.set_toolbar_mode(0, Some(mode));
+        store.set_toolbar_mode(self.window_index, Some(mode));
+    }
+
+    /// Truncates the persisted `windows` list to `count` entries.
+    ///
+    /// Ghost cleanup for closed windows: the front-end re-pushes its live
+    /// windows at dense indices (0..count) and then calls this once at
+    /// terminate time to drop any higher-index slots left by closed windows. A
+    /// no-op when no store is attached.
+    pub fn state_set_window_count(&self, count: u16) {
+        if let Some(store) = &self.store {
+            store.truncate_windows(count as usize);
+        }
     }
 
     /// Blocks until every pending state mutation has had its disk write
@@ -1216,19 +1282,23 @@ impl WolfCoreHandle {
 }
 
 /// Starts the core. `init_lua` and `cwd` are filesystem paths (mirroring
-/// [`CoreConfig`]); returns `None` (after logging) on any startup error.
+/// [`CoreConfig`]); `window_index` is the slot in `state.json`'s `windows` list
+/// this handle writes into. Returns `None` (after logging) on any startup error.
 ///
-/// After a successful start it also opens the live [`StateStore`] over
-/// [`wolf_core::state_dir`] and attaches it to the core (so cwd changes
-/// persist with no further front-end calls), stashing the store in the handle
-/// for the `state_*` setters. An unresolvable state dir only logs — state
-/// persistence is then disabled, never fatal.
+/// A fresh wake token is minted (via [`NEXT_WAKE_TOKEN`]) and captured by the
+/// core's [`WakeFn`] so wakes route back to THIS window. After a successful
+/// start it clones the process-wide [`SHARED_STORE`] and attaches it to the
+/// core at `window_index` (so cwd changes persist with no further front-end
+/// calls), stashing the store + index in the handle for the `state_*` setters.
+/// An unresolvable state dir only logs — state persistence is then disabled,
+/// never fatal.
 #[must_use]
 pub fn wolf_ffi_start(
     init_lua: String,
     cwd: String,
     cols: u16,
     rows: u16,
+    window_index: u16,
 ) -> Option<WolfCoreHandle> {
     let cfg = CoreConfig {
         init_lua: PathBuf::from(init_lua),
@@ -1236,24 +1306,22 @@ pub fn wolf_ffi_start(
         rows,
         cwd: PathBuf::from(cwd),
     };
-    match WolfCore::start(cfg, registered_wake()) {
+    let window_index = window_index as usize;
+    let wake_token = NEXT_WAKE_TOKEN.fetch_add(1, Ordering::Relaxed);
+    match WolfCore::start(cfg, registered_wake(wake_token)) {
         Ok(core) => {
-            let store = match wolf_core::state_dir() {
-                Some(dir) => {
-                    let store = StateStore::open(&dir);
-                    core.attach_state_store(store.clone());
-                    Some(store)
-                }
-                None => {
-                    tracing::warn!(
-                        "wolf-ffi: no state dir resolved; state persistence disabled"
-                    );
-                    None
-                }
-            };
+            let store = shared_store();
+            match &store {
+                Some(store) => core.attach_state_store(store.clone(), window_index),
+                None => tracing::warn!(
+                    "wolf-ffi: no state dir resolved; state persistence disabled"
+                ),
+            }
             Some(WolfCoreHandle {
                 core: RefCell::new(Some(core)),
                 store,
+                window_index,
+                wake_token,
             })
         }
         Err(e) => {
