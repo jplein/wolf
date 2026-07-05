@@ -44,6 +44,7 @@ swift_library(
         "Sources/WolfKeyMap/TreeChildrenMemo.swift",
         "Sources/WolfKeyMap/TreeRefreshGate.swift",
         "Sources/WolfKeyMap/WindowIndexSeam.swift",
+        "Sources/WolfKeyMap/WindowTitleSeam.swift",
     ] + ["//crates/wolf-ffi:generated_swift"],
     module_name = "WolfKeyMap",
     visibility = ["//visibility:public"],
@@ -187,6 +188,7 @@ swift_test(
         "Tests/WolfKeyMapTests/TreeChildrenMemoTests.swift",
         "Tests/WolfKeyMapTests/TreeRefreshGateTests.swift",
         "Tests/WolfKeyMapTests/WindowIndexSeamTests.swift",
+        "Tests/WolfKeyMapTests/WindowTitleSeamTests.swift",
     ],
     deps = [":wolf_key_map"],
 )

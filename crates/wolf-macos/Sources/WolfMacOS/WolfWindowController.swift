@@ -46,6 +46,11 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     /// (Cmd-N) window.
     private let restored: RestoredWindowState?
 
+    /// The current user's home directory (the SAME value `StateSeam.launchDecision`
+    /// uses), passed to `WindowTitleSeam.title` so the window title abbreviates a
+    /// cwd at/under home to "~"/"~/…".
+    private let homeDir: String
+
     /// Whether this window has a real folder open. `false` for the empty state (a
     /// fresh first run, a Cmd-N window, or a restored window whose saved cwd was
     /// empty/deleted): the sidebar stays hidden, the file tree is not started, and
@@ -128,6 +133,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         self.windowIndex = windowIndex
         self.launchCwd = launchCwd
         self.restored = restored
+        self.homeDir = FileManager.default.homeDirectoryForCurrentUser.path
         self.hasFolder = hasFolder
         self.metrics = metrics
         self.config = config
@@ -296,6 +302,13 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
             }
         }
 
+        // Set the OS window title from BOTH the live cwd and the current
+        // `hasFolder` (which the transition block above may have just flipped).
+        // Set unconditionally each wake — an idempotent assignment correct across
+        // initial show, the empty→folder flip (cwd string may not change), and a
+        // typed `:cd`; NOT gated by the `lastKnownCwd` guard below.
+        updateWindowTitle(cwd: cwd)
+
         // Rebuild the dynamic Window menu (its titles are the windows' full cwd
         // paths) only when THIS window's live cwd actually changed.
         if lastKnownCwd != cwd {
@@ -303,6 +316,13 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
             coordinator?.windowCwdDidChange(self)
         }
         drainAndDispatchCommands()
+    }
+
+    /// Sets the OS window title from the live `cwd`, this window's `hasFolder`, and
+    /// the user's `homeDir` via the pure `WindowTitleSeam` (home-abbreviated to
+    /// "~"/"~/…"; "Wolf" for an empty-state window). Thin AppKit glue.
+    private func updateWindowTitle(cwd: String) {
+        window?.title = WindowTitleSeam.title(cwd: cwd, hasFolder: hasFolder, homeDir: homeDir)
     }
 
     /// Transitions this window from the empty state into an open project: reveals
