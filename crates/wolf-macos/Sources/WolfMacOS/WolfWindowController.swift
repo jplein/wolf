@@ -182,6 +182,18 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
             rows: Self.initialRows
         )
 
+        // The centered "Open folder…" overlay (a subview of the pane container),
+        // visible only in the empty state (`hasFolder == false`). Added FIRST so it
+        // sits at the BOTTOM of the overlay stack: it is a full-bleed opaque overlay,
+        // so the transient picker/palette overlays (added below) must sit ABOVE it —
+        // otherwise opening the command palette in an empty window would render it
+        // behind this overlay, with no visible effect.
+        let emptyState = EmptyStateView()
+        paneContainer.addSubview(emptyState)
+        emptyState.onOpenFolder = { [weak self] in self?.presentOpenFolderDialog() }
+        emptyState.isHidden = hasFolder
+        self.emptyState = emptyState
+
         // The hidden top-center picker overlay (a subview of the pane container).
         let picker = PickerView(handle: handle, paneContainer: paneContainer)
         paneContainer.addSubview(picker)
@@ -195,14 +207,6 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         paneContainer.addSubview(palette)
         palette.onActivate = { [weak self] row in self?.activatePaletteRow(row) }
         self.palette = palette
-
-        // The centered "Open folder…" overlay (a subview of the pane container),
-        // visible only in the empty state (`hasFolder == false`).
-        let emptyState = EmptyStateView()
-        paneContainer.addSubview(emptyState)
-        emptyState.onOpenFolder = { [weak self] in self?.presentOpenFolderDialog() }
-        emptyState.isHidden = hasFolder
-        self.emptyState = emptyState
 
         // Restore the saved frame only for a restored window; a fresh
         // (Cmd-N) window keeps AppKit's cascade placement. The sidebar is set
