@@ -288,6 +288,10 @@ extension WolfCoreHandleRef {
         FfiFileSearch(ptr: __swift_bridge__$WolfCoreHandle$start_tree_search(ptr))
     }
 
+    public func command_palette() -> FfiCommandPalette {
+        FfiCommandPalette(ptr: __swift_bridge__$WolfCoreHandle$command_palette(ptr))
+    }
+
     public func current_file() -> RustString {
         RustString(ptr: __swift_bridge__$WolfCoreHandle$current_file(ptr))
     }
@@ -1350,6 +1354,194 @@ extension FfiCommand: Vectorizable {
 
     public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
         __swift_bridge__$Vec_FfiCommand$len(vecPtr)
+    }
+}
+
+
+public class FfiCommandPalette: FfiCommandPaletteRefMut {
+    var isOwned: Bool = true
+
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+
+    deinit {
+        if isOwned {
+            __swift_bridge__$FfiCommandPalette$_free(ptr)
+        }
+    }
+}
+public class FfiCommandPaletteRefMut: FfiCommandPaletteRef {
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+}
+public class FfiCommandPaletteRef {
+    var ptr: UnsafeMutableRawPointer
+
+    public init(ptr: UnsafeMutableRawPointer) {
+        self.ptr = ptr
+    }
+}
+extension FfiCommandPaletteRef {
+    public func add_window<GenericIntoRustString: IntoRustString>(_ index: UInt16, _ cwd: GenericIntoRustString) {
+        __swift_bridge__$FfiCommandPalette$add_window(ptr, index, { let rustString = cwd.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
+    }
+
+    public func ranked<GenericIntoRustString: IntoRustString>(_ query: GenericIntoRustString, _ max: UInt) -> RustVec<FfiCommandRow> {
+        RustVec(ptr: __swift_bridge__$FfiCommandPalette$ranked(ptr, { let rustString = query.intoRustString(); rustString.isOwned = false; return rustString.ptr }(), max))
+    }
+
+    public func record<GenericIntoRustString: IntoRustString>(_ key: GenericIntoRustString) {
+        __swift_bridge__$FfiCommandPalette$record(ptr, { let rustString = key.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
+    }
+}
+extension FfiCommandPalette: Vectorizable {
+    public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
+        __swift_bridge__$Vec_FfiCommandPalette$new()
+    }
+
+    public static func vecOfSelfFree(vecPtr: UnsafeMutableRawPointer) {
+        __swift_bridge__$Vec_FfiCommandPalette$drop(vecPtr)
+    }
+
+    public static func vecOfSelfPush(vecPtr: UnsafeMutableRawPointer, value: FfiCommandPalette) {
+        __swift_bridge__$Vec_FfiCommandPalette$push(vecPtr, {value.isOwned = false; return value.ptr;}())
+    }
+
+    public static func vecOfSelfPop(vecPtr: UnsafeMutableRawPointer) -> Optional<Self> {
+        let pointer = __swift_bridge__$Vec_FfiCommandPalette$pop(vecPtr)
+        if pointer == nil {
+            return nil
+        } else {
+            return (FfiCommandPalette(ptr: pointer!) as! Self)
+        }
+    }
+
+    public static func vecOfSelfGet(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiCommandPaletteRef> {
+        let pointer = __swift_bridge__$Vec_FfiCommandPalette$get(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiCommandPaletteRef(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfGetMut(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiCommandPaletteRefMut> {
+        let pointer = __swift_bridge__$Vec_FfiCommandPalette$get_mut(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiCommandPaletteRefMut(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfAsPtr(vecPtr: UnsafeMutableRawPointer) -> UnsafePointer<FfiCommandPaletteRef> {
+        UnsafePointer<FfiCommandPaletteRef>(OpaquePointer(__swift_bridge__$Vec_FfiCommandPalette$as_ptr(vecPtr)))
+    }
+
+    public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
+        __swift_bridge__$Vec_FfiCommandPalette$len(vecPtr)
+    }
+}
+
+
+public class FfiCommandRow: FfiCommandRowRefMut {
+    var isOwned: Bool = true
+
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+
+    deinit {
+        if isOwned {
+            __swift_bridge__$FfiCommandRow$_free(ptr)
+        }
+    }
+}
+public class FfiCommandRowRefMut: FfiCommandRowRef {
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+}
+public class FfiCommandRowRef {
+    var ptr: UnsafeMutableRawPointer
+
+    public init(ptr: UnsafeMutableRawPointer) {
+        self.ptr = ptr
+    }
+}
+extension FfiCommandRowRef {
+    public func display() -> RustString {
+        RustString(ptr: __swift_bridge__$FfiCommandRow$display(ptr))
+    }
+
+    public func row_kind() -> UInt8 {
+        __swift_bridge__$FfiCommandRow$row_kind(ptr)
+    }
+
+    public func command_kind() -> UInt8 {
+        __swift_bridge__$FfiCommandRow$command_kind(ptr)
+    }
+
+    public func window_index() -> UInt16 {
+        __swift_bridge__$FfiCommandRow$window_index(ptr)
+    }
+
+    public func path() -> RustString {
+        RustString(ptr: __swift_bridge__$FfiCommandRow$path(ptr))
+    }
+
+    public func mru_key() -> RustString {
+        RustString(ptr: __swift_bridge__$FfiCommandRow$mru_key(ptr))
+    }
+}
+extension FfiCommandRow: Vectorizable {
+    public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
+        __swift_bridge__$Vec_FfiCommandRow$new()
+    }
+
+    public static func vecOfSelfFree(vecPtr: UnsafeMutableRawPointer) {
+        __swift_bridge__$Vec_FfiCommandRow$drop(vecPtr)
+    }
+
+    public static func vecOfSelfPush(vecPtr: UnsafeMutableRawPointer, value: FfiCommandRow) {
+        __swift_bridge__$Vec_FfiCommandRow$push(vecPtr, {value.isOwned = false; return value.ptr;}())
+    }
+
+    public static func vecOfSelfPop(vecPtr: UnsafeMutableRawPointer) -> Optional<Self> {
+        let pointer = __swift_bridge__$Vec_FfiCommandRow$pop(vecPtr)
+        if pointer == nil {
+            return nil
+        } else {
+            return (FfiCommandRow(ptr: pointer!) as! Self)
+        }
+    }
+
+    public static func vecOfSelfGet(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiCommandRowRef> {
+        let pointer = __swift_bridge__$Vec_FfiCommandRow$get(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiCommandRowRef(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfGetMut(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiCommandRowRefMut> {
+        let pointer = __swift_bridge__$Vec_FfiCommandRow$get_mut(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiCommandRowRefMut(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfAsPtr(vecPtr: UnsafeMutableRawPointer) -> UnsafePointer<FfiCommandRowRef> {
+        UnsafePointer<FfiCommandRowRef>(OpaquePointer(__swift_bridge__$Vec_FfiCommandRow$as_ptr(vecPtr)))
+    }
+
+    public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
+        __swift_bridge__$Vec_FfiCommandRow$len(vecPtr)
     }
 }
 

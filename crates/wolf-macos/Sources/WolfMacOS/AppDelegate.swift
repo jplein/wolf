@@ -183,6 +183,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         controllers.first { $0.windowIndex == sender.tag }?.raise()
     }
 
+    /// The OTHER open windows (all live controllers EXCEPT `excluding`), as
+    /// `(windowIndex, currentCwd)` pairs — the command palette's "Switch to Window"
+    /// candidate source. The current window is excluded (it cannot switch to
+    /// itself).
+    func otherWindows(excluding: WolfWindowController) -> [(index: Int, cwd: String)] {
+        controllers
+            .filter { $0 !== excluding }
+            .map { (index: $0.windowIndex, cwd: $0.currentCwd) }
+    }
+
+    /// The first live controller whose `currentCwd` equals `path`, or `nil` when no
+    /// open window is rooted there — used by the palette's "Open Recent Folder"
+    /// action to raise an existing window instead of re-chdiring.
+    func controllerForCwd(_ path: String) -> WolfWindowController? {
+        controllers.first { $0.currentCwd == path }
+    }
+
+    /// Raises the window whose `windowIndex` equals `windowIndex` (the palette's
+    /// "Switch to Window" action). A no-op when no such window is open.
+    func raiseWindow(windowIndex: Int) {
+        controllers.first { $0.windowIndex == windowIndex }?.raise()
+    }
+
     /// `NSMenuDelegate`: rebuilds the Open Recent submenu just before it opens,
     /// reading the recent-dirs MRU from the key window's controller (falling back
     /// to the first controller when no Wolf window is key). Ignores any other menu.

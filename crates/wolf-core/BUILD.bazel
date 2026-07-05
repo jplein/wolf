@@ -148,6 +148,42 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
+# Headless coverage for the PUBLIC `command_mru` module surface
+# (`CommandMru::open`/`disabled`/`record`/`recent` + `COMMAND_MRU_LIMIT`): DB
+# creation at `<dir>/command-mru.sqlite`, newest-first ordering, move-to-top, the
+# 100-entry cap (with prune proven across a re-open), and silent self-heal over
+# garbage/wrong-schema DBs. Needs NO nvim and no staged runfiles (everything is
+# driven through explicit tempdirs constructed directly), so there is no
+# `no-sandbox` tag and no `data`/`env` — the headless analog of `recent_dirs`.
+# `normal = True` rides alongside `normal_dev` for the same reason as the tests
+# above (tempfile lives in BOTH of wolf-core's dependency tables, so
+# crate_universe omits it from the dev map alone).
+rust_test(
+    name = "command_mru",
+    srcs = ["tests/command_mru.rs"],
+    crate_root = "tests/command_mru.rs",
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+# Headless coverage for the PUBLIC command-palette ranking surface
+# (`rank_palette` + `PaletteRow`/`PaletteRowKind`/`PaletteWindow`): CommandPalette
+# exclusion, row kind/command/window_index/path/mru_key/labels, the empty-cwd
+# "Untitled" case, MRU-first floating, static-only fallback, the AND-subsequence
+# query filter, and `max` truncation. `rank_palette` is IO-free (it reuses
+# `rank_matches`), so this needs NO nvim and no staged runfiles — the pure analog
+# of the `rank` in-module tests, kept in a dedicated file to avoid colliding with
+# the coder who creates `src/palette.rs`.
+rust_test(
+    name = "palette_rank",
+    srcs = ["tests/palette_rank.rs"],
+    crate_root = "tests/palette_rank.rs",
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
 # Real-nvim integration test for the save-on-cwd-change flow (state plan §4): a
 # `:cd` typed into the embedded nvim must persist into `<state-dir>/state.json`
 # through the attached StateStore. The passive setup-time `wolf_cwd` emission is

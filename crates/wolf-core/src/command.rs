@@ -26,8 +26,10 @@
 /// `CloseWindow`(1), `QuitApplication`(2), `HideApplication`(3),
 /// `MinimizeWindow`(4), `GoToFile`(5), `OpenFile`(6), `OpenFolder`(7),
 /// `ClosePane`(8), `NewBuffer`(9), `ResetFontSize`(10), `IncreaseFontSize`(11),
-/// `DecreaseFontSize`(12). Adding a command is additive (append a variant + a
-/// [`COMMAND_SPECS`] row); reordering is a breaking change.
+/// `DecreaseFontSize`(12), `CommandPalette`(13). Adding a command is additive
+/// (append a variant + a [`COMMAND_SPECS`] row); reordering is a breaking change.
+/// `CommandPalette` is the palette's own invoking command and is EXCLUDED from the
+/// palette's candidate list (a palette cannot dispatch itself).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     /// Open a new editor window.
@@ -56,6 +58,9 @@ pub enum Command {
     IncreaseFontSize,
     /// Decrease the font size by one point.
     DecreaseFontSize,
+    /// Open the command-palette overlay (its own invoking command; EXCLUDED from
+    /// the palette's candidate list).
+    CommandPalette,
 }
 
 /// The menu group a command belongs to in a native menu bar.
@@ -195,6 +200,13 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         title: "Decrease Font Size",
         menu: MenuGroup::View,
     },
+    CommandSpec {
+        command: Command::CommandPalette,
+        id: "command_palette",
+        ex_command: "WolfCommandPalette",
+        title: "Command Palette…",
+        menu: MenuGroup::View,
+    },
 ];
 
 impl Command {
@@ -215,5 +227,62 @@ impl Command {
             .iter()
             .find(|spec| spec.command == self)
             .expect("every Command variant has a COMMAND_SPECS row")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The total number of registered commands AFTER appending
+    /// `Command::CommandPalette` (discriminant 13). A named constant so the
+    /// magic-number lint stays quiet and the count's meaning is explicit.
+    const EXPECTED_COMMAND_COUNT: usize = 14;
+
+    /// The append-only slice index (== FFI discriminant == `command_kind`) of
+    /// `Command::CommandPalette`: the LAST row of [`COMMAND_SPECS`].
+    const COMMAND_PALETTE_INDEX: usize = 13;
+
+    /// `from_id` resolves the canonical `command_palette` id to the new variant.
+    #[test]
+    fn command_palette_id_round_trips() {
+        assert_eq!(
+            Command::from_id("command_palette"),
+            Some(Command::CommandPalette),
+            "\"command_palette\" must resolve to Command::CommandPalette"
+        );
+    }
+
+    /// The CommandPalette spec pins its id, ex-command, title, and menu group
+    /// (the canonical registry row for the palette command).
+    #[test]
+    fn command_palette_spec_fields() {
+        let spec = Command::CommandPalette.spec();
+        assert_eq!(spec.id, "command_palette", "id");
+        assert_eq!(spec.ex_command, "WolfCommandPalette", "ex_command");
+        assert_eq!(spec.title, "Command Palette…", "title");
+        assert_eq!(spec.menu, MenuGroup::View, "menu group");
+    }
+
+    /// Appending CommandPalette grows the registry to exactly 14 rows.
+    #[test]
+    fn command_specs_has_expected_len() {
+        assert_eq!(
+            COMMAND_SPECS.len(),
+            EXPECTED_COMMAND_COUNT,
+            "COMMAND_SPECS must hold exactly {EXPECTED_COMMAND_COUNT} rows \
+             after appending CommandPalette"
+        );
+    }
+
+    /// Append-discriminant guard: CommandPalette is the LAST row (index 13), so
+    /// the slice index equals its FFI discriminant. Reordering breaks this.
+    #[test]
+    fn command_palette_is_the_last_row() {
+        assert_eq!(
+            COMMAND_SPECS[COMMAND_PALETTE_INDEX].command,
+            Command::CommandPalette,
+            "the row at index {COMMAND_PALETTE_INDEX} must be Command::CommandPalette"
+        );
     }
 }

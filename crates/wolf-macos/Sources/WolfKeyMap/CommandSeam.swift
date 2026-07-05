@@ -19,7 +19,7 @@ import Foundation
 /// variant order: `newWindow == 0`, `closeWindow == 1`, `quitApplication == 2`,
 /// `hideApplication == 3`, `minimizeWindow == 4`, `goToFile == 5`, `openFile == 6`,
 /// `openFolder == 7`, `closePane == 8`, `newBuffer == 9`, `resetFontSize == 10`,
-/// `increaseFontSize == 11`, `decreaseFontSize == 12`.
+/// `increaseFontSize == 11`, `decreaseFontSize == 12`, `commandPalette == 13`.
 public enum CommandKind {
     /// Open a new editor window.
     case newWindow
@@ -47,9 +47,11 @@ public enum CommandKind {
     case increaseFontSize
     /// Decrease the font size by one point.
     case decreaseFontSize
+    /// Open the command-palette overlay.
+    case commandPalette
 
-    /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `12` →
-    /// `.decreaseFontSize`, else `nil`), guarding the contract shared with
+    /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `13` →
+    /// `.commandPalette`, else `nil`), guarding the contract shared with
     /// `wolf-ffi`'s `mod command_kind`.
     public init?(ffi: UInt8) {
         switch ffi {
@@ -66,6 +68,7 @@ public enum CommandKind {
         case 10: self = .resetFontSize
         case 11: self = .increaseFontSize
         case 12: self = .decreaseFontSize
+        case 13: self = .commandPalette
         default: return nil
         }
     }

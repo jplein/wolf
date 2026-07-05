@@ -1,6 +1,6 @@
 # wolf-macos/Tests
 
-The Swift tests for the macOS front-end. The Bazel target is `//crates/wolf-macos:WolfKeyMapTests`; it runs regardless of `WOLF_NVIM_BIN` (it needs no Neovim) and covers the pure seams — the key seam (`KeyMapTests.swift`), the picker seam (`PickerSeamTests.swift`), the pane-layout seam (`PaneTreeTests.swift`), the per-pane geometry seam (`PaneGeometryTests.swift`), the scroll-accumulator seam (`ScrollAccumulatorTests.swift`), the glyph-style seam (`GlyphStyleTests.swift`), the state-restore seam (`StateSeamTests.swift`), the command-decode seam (`CommandSeamTests.swift`), the font-size seam (`FontSizeSeamTests.swift`), and the multi-window seams (`ShortcutSeamTests.swift`, `WindowIndexSeamTests.swift`).
+The Swift tests for the macOS front-end. The Bazel target is `//crates/wolf-macos:WolfKeyMapTests`; it runs regardless of `WOLF_NVIM_BIN` (it needs no Neovim) and covers the pure seams — the key seam (`KeyMapTests.swift`), the picker seam (`PickerSeamTests.swift`), the command-palette seam (`PaletteSeamTests.swift`), the pane-layout seam (`PaneTreeTests.swift`), the per-pane geometry seam (`PaneGeometryTests.swift`), the scroll-accumulator seam (`ScrollAccumulatorTests.swift`), the glyph-style seam (`GlyphStyleTests.swift`), the state-restore seam (`StateSeamTests.swift`), the command-decode seam (`CommandSeamTests.swift`), the font-size seam (`FontSizeSeamTests.swift`), and the multi-window seams (`ShortcutSeamTests.swift`, `WindowIndexSeamTests.swift`).
 
 ## `WolfKeyMapTests/KeyMapTests.swift`
 
@@ -21,6 +21,13 @@ Pure, headless `XCTest` coverage of the AppKit-free `PickerSeam` helpers (`@test
 - `isPickerTrigger(charactersIgnoringModifiers:command:)` — the **Command+O** contract (lowercase and uppercase `"o"` → `true`, command not held → `false`, the wrong letter → `false`, and an empty string → `false`);
 - `nextSelection(current:delta:nRows:)` — the list-navigation clamp across its cases (including the empty-list `nil`);
 - `restoredIndex(resetToTop:prev:newLen:)` — selection restore across streaming result batches.
+
+## `WolfKeyMapTests/PaletteSeamTests.swift`
+
+Pure, headless `XCTest` coverage of the AppKit-free `PaletteSeam` namespace (`@testable import WolfKeyMap`), the command-palette analog of `PickerSeamTests`. Two contracts, table-driven:
+
+- `isPaletteTrigger(charactersIgnoringModifiers:command:)` — the **Command+P** contract (lowercase and uppercase `"p"` with command held → `true`, command not held → `false`, the wrong letter `"o"` (the picker chord) → `false`, and an empty string → `false`). The seam is **dormant / unwired** in the live app (⌘P is a menu key-equivalent that preempts `keyDown`), but the test pins the predicate regardless.
+- `PaletteSeam.PaletteRowKind(ffi:)` — the FFI row-kind discriminant decode (`0` → `.staticCommand`, `1` → `.switchWindow`, `2` → `.openRecent`; out-of-range `3` and `255` → `nil`), keeping the Swift port in lockstep with wolf-ffi's `mod palette_row_kind`.
 
 ## `WolfKeyMapTests/PaneTreeTests.swift`
 
@@ -50,7 +57,7 @@ Pure, headless `XCTest` coverage of the AppKit-free `ShortcutSeam.isNewWindowTri
 
 ## `WolfKeyMapTests/CommandSeamTests.swift`
 
-Pure, headless `XCTest` coverage of the AppKit-free `CommandKind(ffi:)` decode seam (`@testable import WolfKeyMap`), the sibling of `PaneTreeTests`' discriminant-contract test. It pins the `command_kind` contract with `wolf-ffi`: `init?(ffi:)` maps `0..12` to the thirteen cases (`newWindow` … `closePane == 8`, `newBuffer == 9`, `resetFontSize == 10`, `increaseFontSize == 11`, `decreaseFontSize == 12`) and returns `nil` for out-of-range bytes (the boundary is now `13`, plus `255`), so the Swift port stays in lockstep with the Rust `mod command_kind` and the `//crates/wolf-ffi:commands` discriminant guard.
+Pure, headless `XCTest` coverage of the AppKit-free `CommandKind(ffi:)` decode seam (`@testable import WolfKeyMap`), the sibling of `PaneTreeTests`' discriminant-contract test. It pins the `command_kind` contract with `wolf-ffi`: `init?(ffi:)` maps `0..13` to the fourteen cases (`newWindow` … `closePane == 8`, `newBuffer == 9`, `resetFontSize == 10`, `increaseFontSize == 11`, `decreaseFontSize == 12`, `commandPalette == 13`) and returns `nil` for out-of-range bytes (the boundary is now `14`, plus `255`), so the Swift port stays in lockstep with the Rust `mod command_kind` and the `//crates/wolf-ffi:commands` discriminant guard.
 
 ## `WolfKeyMapTests/FontSizeSeamTests.swift`
 

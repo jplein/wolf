@@ -45,10 +45,10 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use wolf_core::{
-    rank_matches, Command, CoreConfig, CursorShape, FileSearch, FocusDir, Grid, InputEvent, Key,
-    KeyEvent, LayoutIntent, MouseAction, MouseButton, MouseEvent, ResolvedStyle, Rgb,
-    ScrollDirection, ScrollEvent, SplitOrientation, StateStore, ToolbarMode, WakeFn, WinInfo,
-    WindowState, WolfCore,
+    rank_matches, rank_palette, Command, CommandMru, CoreConfig, CursorShape, FileSearch, FocusDir,
+    Grid, InputEvent, Key, KeyEvent, LayoutIntent, MouseAction, MouseButton, MouseEvent, PaletteRow,
+    PaletteRowKind, PaletteWindow, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent,
+    SplitOrientation, StateStore, ToolbarMode, WakeFn, WinInfo, WindowState, WolfCore,
 };
 
 // Re-export the bridge-defined transparent structs at the crate root so the Rust
@@ -164,6 +164,21 @@ mod command_kind {
     pub const INCREASE_FONT_SIZE: u8 = 11;
     /// Decrease the font size by one point.
     pub const DECREASE_FONT_SIZE: u8 = 12;
+    /// Open the command-palette overlay (the palette's own invoking command).
+    pub const COMMAND_PALETTE: u8 = 13;
+}
+
+/// The palette-row-kind discriminants packed into [`FfiCommandRow::row_kind`].
+///
+/// The single source of truth shared with the Swift `PaletteSeam.PaletteRowKind`
+/// port, mirroring the variant order of [`wolf_core::PaletteRowKind`].
+mod palette_row_kind {
+    /// A static registry command row (dispatched via the command channel).
+    pub const STATIC: u8 = 0;
+    /// A "Switch to Window" row (raises the window at `window_index`).
+    pub const SWITCH_WINDOW: u8 = 1;
+    /// An "Open Recent Folder" row (opens-or-raises the recent dir at `path`).
+    pub const OPEN_RECENT: u8 = 2;
 }
 
 /// The split-orientation discriminants packed into [`FfiLayoutIntent::orientation`],
@@ -371,6 +386,11 @@ mod ffi {
         // file-tree sidebar, fed by the registered TREE wake. Same infallible
         // empty-backed fallback as `start_file_search`.
         fn start_tree_search(&self) -> FfiFileSearch;
+        // Builds a fresh command-palette session seeded with the core's recent
+        // dirs + command MRU. The front-end feeds each OTHER window via
+        // `add_window`, then calls `ranked`. Infallible: returns an empty-backed
+        // session when the core is gone (mirroring `start_file_search`).
+        fn command_palette(&self) -> FfiCommandPalette;
         // The absolute path of the buffer currently being edited (canonicalized
         // by core), or the empty string for an unnamed buffer / shut-down core.
         fn current_file(&self) -> String;
@@ -607,6 +627,43 @@ mod ffi {
 
         // The command kind (`command_kind::NEW_WINDOW` .. `DECREASE_FONT_SIZE`).
         fn kind(&self) -> u8;
+    }
+
+    extern "Rust" {
+        type FfiCommandPalette;
+
+        // Appends one OTHER open window to the session (the current window is
+        // excluded by the caller). `index` is the front-end window index (the
+        // raise target); `cwd` is the window's working directory (`""` for an
+        // empty-state window, which renders as "Untitled").
+        fn add_window(&self, index: u16, cwd: String);
+        // The top `max` ranked palette rows for `query`. Assembles the static
+        // registry commands (minus CommandPalette) + the added windows + the
+        // recent dirs, ranks MRU-first via `wolf_core::rank_palette`. `FfiCommandRow`
+        // is opaque so a `Vec` is supported.
+        fn ranked(&self, query: String, max: usize) -> Vec<FfiCommandRow>;
+        // Records `key` (a row's `mru_key`) into the global command MRU on
+        // activation, so it floats to the top of a later `ranked("")`.
+        fn record(&self, key: String);
+    }
+
+    extern "Rust" {
+        type FfiCommandRow;
+
+        // The label shown in the palette (and ranked against the query).
+        fn display(&self) -> String;
+        // The row kind (`palette_row_kind::STATIC` / `SWITCH_WINDOW` /
+        // `OPEN_RECENT`).
+        fn row_kind(&self) -> u8;
+        // For a STATIC row: the `command_kind` discriminant to dispatch; 0 for a
+        // dynamic row.
+        fn command_kind(&self) -> u8;
+        // For a SWITCH_WINDOW row: the raise-target window index; 0 otherwise.
+        fn window_index(&self) -> u16;
+        // For an OPEN_RECENT row: the recent-folder path; `""` otherwise.
+        fn path(&self) -> String;
+        // The opaque MRU key handed back to `record` on activation.
+        fn mru_key(&self) -> String;
     }
 
     extern "Rust" {
@@ -1208,6 +1265,30 @@ impl WolfCoreHandle {
         FfiFileSearch { search }
     }
 
+    /// Builds a fresh command-palette session seeded with the core's recent
+    /// directories + the global command MRU.
+    ///
+    /// The front-end feeds each OTHER open window via
+    /// [`FfiCommandPalette::add_window`], then filters per keystroke via
+    /// [`FfiCommandPalette::ranked`]. Infallible across the bridge: when the core
+    /// has already been shut down it returns an empty-backed session (no recent
+    /// dirs and a disabled MRU), mirroring
+    /// [`start_file_search`](WolfCoreHandle::start_file_search)'s empty-frame
+    /// fallback.
+    #[must_use]
+    pub fn command_palette(&self) -> FfiCommandPalette {
+        let borrow = self.core.borrow();
+        let (recent_dirs, command_mru) = borrow.as_ref().map_or_else(
+            || (Vec::new(), CommandMru::disabled()),
+            |core| (core.recent_dirs(), core.command_mru()),
+        );
+        FfiCommandPalette {
+            recent_dirs,
+            windows: RefCell::new(Vec::new()),
+            command_mru,
+        }
+    }
+
     /// The absolute path of the buffer currently being edited (canonicalized by
     /// core via the `wolf_current_file` notification), or the empty string for an
     /// unnamed buffer or a shut-down core.
@@ -1631,8 +1712,147 @@ impl FfiCommand {
             Command::ResetFontSize => command_kind::RESET_FONT_SIZE,
             Command::IncreaseFontSize => command_kind::INCREASE_FONT_SIZE,
             Command::DecreaseFontSize => command_kind::DECREASE_FONT_SIZE,
+            Command::CommandPalette => command_kind::COMMAND_PALETTE,
         };
         Self { kind }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FfiCommandPalette / FfiCommandRow: the command-palette session (opaque to Swift).
+// ---------------------------------------------------------------------------
+
+/// A command-palette session (opaque to Swift).
+///
+/// Assembled at [`WolfCoreHandle::command_palette`] from the core's recent dirs +
+/// global command MRU; the front-end appends each OTHER open window via
+/// [`add_window`](Self::add_window) and filters per keystroke via
+/// [`ranked`](Self::ranked). Like [`WolfCoreHandle`] this is a MAIN-THREAD-ONLY
+/// handle: the `RefCell<Vec<PaletteWindow>>` gives interior mutability for
+/// `add_window` behind the bridge's `&self`, and is only ever touched on the
+/// AppKit main thread.
+pub struct FfiCommandPalette {
+    /// The core's recent directories at construction (the "Open Recent Folder"
+    /// candidate source).
+    recent_dirs: Vec<PathBuf>,
+    /// The OTHER open windows the front-end has appended (the "Switch to Window"
+    /// candidate source).
+    windows: RefCell<Vec<PaletteWindow>>,
+    /// The global command MRU (read for MRU-first ranking; written by
+    /// [`record`](Self::record)).
+    command_mru: CommandMru,
+}
+
+impl FfiCommandPalette {
+    /// Appends one OTHER open window (the current window is excluded by the
+    /// caller): `index` is the raise-target front-end window index; `cwd` is its
+    /// working directory (`""` renders as "Untitled").
+    pub fn add_window(&self, index: u16, cwd: String) {
+        self.windows.borrow_mut().push(PaletteWindow { index, cwd });
+    }
+
+    /// The top `max` ranked palette rows for `query`, each mapped into an opaque
+    /// [`FfiCommandRow`].
+    ///
+    /// Clones the appended window list out of the `RefCell` before delegating to
+    /// [`wolf_core::rank_palette`] (so the borrow is not held across the call),
+    /// which assembles the static registry commands (minus CommandPalette) + the
+    /// windows + the recent dirs and ranks them MRU-first.
+    #[must_use]
+    pub fn ranked(&self, query: String, max: usize) -> Vec<FfiCommandRow> {
+        let windows = self.windows.borrow().clone();
+        let mru_recent = self.command_mru.recent();
+        rank_palette(&self.recent_dirs, &windows, &mru_recent, &query, max)
+            .into_iter()
+            .map(FfiCommandRow::from_row)
+            .collect()
+    }
+
+    /// Records `key` (a row's `mru_key`) into the global command MRU, so it floats
+    /// to the top of a later `ranked("")`.
+    pub fn record(&self, key: String) {
+        self.command_mru.record(&key);
+    }
+}
+
+/// One ranked palette row (opaque to Swift, so a `Vec<FfiCommandRow>` is supported
+/// — swift-bridge emits Vec support only for opaque types).
+///
+/// A projection of [`wolf_core::PaletteRow`]: the kind-specific payload is
+/// flattened into scalar/String accessors (`command_kind` for a static row,
+/// `window_index` for a switch-window row, `path` for an open-recent row; the
+/// unused fields are 0 / `""`).
+pub struct FfiCommandRow {
+    display: String,
+    row_kind: u8,
+    command_kind: u8,
+    window_index: u16,
+    path: String,
+    mru_key: String,
+}
+
+impl FfiCommandRow {
+    /// The label shown in the palette (and ranked against the query).
+    #[must_use]
+    pub fn display(&self) -> String {
+        self.display.clone()
+    }
+
+    /// The row kind (`palette_row_kind::STATIC` / `SWITCH_WINDOW` / `OPEN_RECENT`).
+    #[must_use]
+    pub fn row_kind(&self) -> u8 {
+        self.row_kind
+    }
+
+    /// For a STATIC row: the [`command_kind`] discriminant to dispatch; 0 for a
+    /// dynamic row.
+    #[must_use]
+    pub fn command_kind(&self) -> u8 {
+        self.command_kind
+    }
+
+    /// For a SWITCH_WINDOW row: the raise-target window index; 0 otherwise.
+    #[must_use]
+    pub fn window_index(&self) -> u16 {
+        self.window_index
+    }
+
+    /// For an OPEN_RECENT row: the recent-folder path; `""` otherwise.
+    #[must_use]
+    pub fn path(&self) -> String {
+        self.path.clone()
+    }
+
+    /// The opaque MRU key handed back to [`FfiCommandPalette::record`] on
+    /// activation.
+    #[must_use]
+    pub fn mru_key(&self) -> String {
+        self.mru_key.clone()
+    }
+
+    /// Projects a [`wolf_core::PaletteRow`] into the bridge-friendly flat row,
+    /// packing the discriminants from the [`palette_row_kind`] / [`command_kind`]
+    /// modules (the latter reused via [`FfiCommand::from_command`] for a single
+    /// source of truth). Dynamic rows carry `command_kind == 0` and a `""` path.
+    fn from_row(row: PaletteRow) -> Self {
+        let row_kind = match row.kind {
+            PaletteRowKind::Static => palette_row_kind::STATIC,
+            PaletteRowKind::SwitchWindow => palette_row_kind::SWITCH_WINDOW,
+            PaletteRowKind::OpenRecent => palette_row_kind::OPEN_RECENT,
+        };
+        let command_kind = row.command.map_or(0, |c| FfiCommand::from_command(c).kind());
+        let path = row
+            .path
+            .as_ref()
+            .map_or_else(String::new, |p| p.to_string_lossy().into_owned());
+        Self {
+            display: row.display,
+            row_kind,
+            command_kind,
+            window_index: row.window_index.unwrap_or(0),
+            path,
+            mru_key: row.mru_key,
+        }
     }
 }
 

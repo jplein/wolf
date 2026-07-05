@@ -16,6 +16,8 @@
 //!
 //! - [`render`]: the toolkit-agnostic render-state model and shared snapshot.
 //! - [`command`]: the canonical, GUI-free command registry ([`Command`]).
+//! - [`command_mru`]: the global command-palette MRU cache (SQLite).
+//! - [`palette`]: pure candidate assembly + ranking for the command palette.
 //! - [`layout`]: the Neovim->shell layout-intent types ([`LayoutIntent`]).
 //! - [`files`]: the async streaming file-list traversal and `FileSearch` session.
 //! - [`mru`]: the most-recently-used file cache (SQLite).
@@ -32,12 +34,14 @@
 
 pub mod api;
 pub mod command;
+pub mod command_mru;
 pub mod config;
 pub mod files;
 pub mod input;
 pub mod layout;
 pub mod mru;
 pub mod nvim;
+pub mod palette;
 pub mod rank;
 pub mod recent_dirs;
 pub mod redraw;
@@ -47,6 +51,7 @@ pub mod tree;
 
 pub use api::{CoreConfig, CoreError, SnapshotReadGuard, WolfCore};
 pub use command::{Command, CommandSpec, MenuGroup, COMMAND_SPECS};
+pub use command_mru::{CommandMru, COMMAND_MRU_LIMIT};
 pub use config::{default_config, load_or_create, preferences_dir, WolfConfig};
 pub use files::{FileEntry, FileSearch, FileSearchReadGuard};
 pub use input::{
@@ -55,6 +60,7 @@ pub use input::{
 };
 pub use layout::{FocusDir, LayoutIntent, SplitOrientation};
 pub use mru::{MruError, MruStore, MRU_LIMIT};
+pub use palette::{rank_palette, PaletteRow, PaletteRowKind, PaletteWindow};
 pub use rank::{rank_matches, Match, MatchKey};
 pub use recent_dirs::{RecentDirs, RECENT_DIRS_LIMIT};
 pub use redraw::WakeFn;

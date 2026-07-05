@@ -20,6 +20,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{self, UnboundedSender};
 
 use crate::command::Command;
+use crate::command_mru::CommandMru;
 use crate::files::{self, FileSearch, FileSearchState};
 use crate::input::{self, InputEvent, MouseEvent, Nvim, ScrollEvent};
 use crate::layout::LayoutIntent;
@@ -169,6 +170,13 @@ pub struct WolfCore {
     /// redraw handler, which records each `wolf_cwd` directory change into it. Read
     /// back via [`WolfCore::recent_dirs`].
     recent_dirs: RecentDirs,
+    /// The always-on GLOBAL command-palette MRU (`<state_dir>/command-mru.sqlite`).
+    /// Constructed once at [`WolfCore::start`] from [`state_dir`] (or
+    /// [`CommandMru::disabled`] when it cannot be resolved). Unlike
+    /// [`recent_dirs`](Self::recent_dirs) it is NOT wired into the redraw handler —
+    /// nothing auto-records into it; only an explicit palette activation records via
+    /// the handle handed out by [`WolfCore::command_mru`].
+    command_mru: CommandMru,
     /// The configured working directory: the file picker's FALLBACK search root
     /// and the MRU cache location. The live search root is the captive Neovim's
     /// `getcwd()` (see [`WolfCore::start_file_search`]); this path is used only
@@ -205,6 +213,13 @@ impl WolfCore {
         let recent_dirs = state_dir()
             .map(|d| RecentDirs::open(&d))
             .unwrap_or_else(RecentDirs::disabled);
+
+        // The global command-palette MRU is ALSO always-on, constructed the same
+        // way from state_dir(). Unlike recent_dirs it is NOT cloned into the redraw
+        // handler: nothing auto-records into it (only palette activation does).
+        let command_mru = state_dir()
+            .map(|d| CommandMru::open(&d))
+            .unwrap_or_else(CommandMru::disabled);
 
         let handler = RedrawHandler::new(
             snapshot.clone_handle(),
@@ -291,6 +306,7 @@ impl WolfCore {
             tracked_cwd,
             state_store,
             recent_dirs,
+            command_mru,
             cwd,
         })
     }
@@ -410,6 +426,17 @@ impl WolfCore {
     #[must_use]
     pub fn recent_dirs(&self) -> Vec<PathBuf> {
         self.recent_dirs.recent()
+    }
+
+    /// Returns a clone of the global command-palette MRU handle
+    /// (`<state_dir>/command-mru.sqlite`, or a disabled no-op store).
+    ///
+    /// The clone is cheap (`Arc`-backed). The palette front-end reads
+    /// [`CommandMru::recent`] to float recently-used commands to the top and calls
+    /// [`CommandMru::record`] on activation. Nothing else records into this store.
+    #[must_use]
+    pub fn command_mru(&self) -> CommandMru {
+        self.command_mru.clone()
     }
 
     /// The captive Neovim's LIVE working directory, or `None` until nvim first

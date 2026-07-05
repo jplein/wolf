@@ -22,10 +22,11 @@
 //! NEW_WINDOW = 0, CLOSE_WINDOW = 1, QUIT_APPLICATION = 2, HIDE_APPLICATION = 3,
 //! MINIMIZE_WINDOW = 4, GO_TO_FILE = 5, OPEN_FILE = 6, OPEN_FOLDER = 7,
 //! CLOSE_PANE = 8, NEW_BUFFER = 9, RESET_FONT_SIZE = 10, INCREASE_FONT_SIZE = 11,
-//! DECREASE_FONT_SIZE = 12 (the `wolf_core::Command` variant order). These local
-//! consts MUST match `mod command_kind` in `wolf-ffi/src/lib.rs` and the Swift
-//! `CommandKind` port — exactly how `panes.rs` re-declares `INTENT_KIND_SPLIT`
-//! locally as a contract guard (the guard array below asserts contiguous 0..=12).
+//! DECREASE_FONT_SIZE = 12, COMMAND_PALETTE = 13 (the `wolf_core::Command`
+//! variant order). These local consts MUST match `mod command_kind` in
+//! `wolf-ffi/src/lib.rs` and the Swift `CommandKind` port — exactly how `panes.rs`
+//! re-declares `INTENT_KIND_SPLIT` locally as a contract guard (the guard array
+//! below asserts contiguous 0..=13).
 //!
 //! ## What this asserts
 //!
@@ -91,6 +92,8 @@ const CMD_KIND_RESET_FONT_SIZE: u8 = 10;
 const CMD_KIND_INCREASE_FONT_SIZE: u8 = 11;
 /// `FfiCommand::kind()` for Decrease Font Size.
 const CMD_KIND_DECREASE_FONT_SIZE: u8 = 12;
+/// `FfiCommand::kind()` for Command Palette (the appended discriminant 13).
+const CMD_KIND_COMMAND_PALETTE: u8 = 13;
 
 /// Builds a printable-character `FfiKeyEvent` (kind=Char) for `c`, all modifiers
 /// false (the already-resolved glyph rides in `ch`). Same as `panes.rs`.
@@ -157,8 +160,8 @@ fn commands_drain_close_and_minimize() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // Discriminant-contract guard: the local consts MUST be contiguous 0..=12 in
-    // variant order (mirrors `mod command_kind`). Referencing all thirteen here also
+    // Discriminant-contract guard: the local consts MUST be contiguous 0..=13 in
+    // variant order (mirrors `mod command_kind`). Referencing all fourteen here also
     // keeps them from tripping dead-code lints.
     assert_eq!(
         [
@@ -175,9 +178,10 @@ fn commands_drain_close_and_minimize() {
             CMD_KIND_RESET_FONT_SIZE,
             CMD_KIND_INCREASE_FONT_SIZE,
             CMD_KIND_DECREASE_FONT_SIZE,
+            CMD_KIND_COMMAND_PALETTE,
         ],
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-        "command_kind discriminants must be contiguous 0..=12 in Command variant order"
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+        "command_kind discriminants must be contiguous 0..=13 in Command variant order"
     );
 
     let init_lua = common::init_lua_path();
@@ -237,6 +241,14 @@ fn commands_drain_close_and_minimize() {
     // `:enew` in the target window is absent), so no buffer is created.
     send_ex_command(&handle, ":WolfNewBuffer");
     poll_for_command_kind(&handle, CMD_KIND_NEW_BUFFER, ":WolfNewBuffer");
+
+    // --- 3d. :WolfCommandPalette<CR> -> an FfiCommand with kind() == COMMAND_PALETTE
+    // A pure FFI drain: nothing acts on it here (the front-end that would open the
+    // command-palette overlay is absent), so no overlay is presented. This proves
+    // `:WolfCommandPalette` is auto-registered as a COMMAND_SPECS row and drains the
+    // appended discriminant 13.
+    send_ex_command(&handle, ":WolfCommandPalette");
+    poll_for_command_kind(&handle, CMD_KIND_COMMAND_PALETTE, ":WolfCommandPalette");
 
     // --- 4. Shutdown: clean teardown ----------------------------------------
     handle.shutdown();

@@ -89,6 +89,9 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     /// Accessed by `PickerWakeBridge` (via `WindowRegistry`) to refresh the picker
     /// on file-search wakes.
     private(set) var picker: PickerView?
+    /// The command-palette overlay (⌘P / the View-menu item). No wake bridge — its
+    /// candidates are fixed at open and re-filtered synchronously per keystroke.
+    private(set) var palette: CommandPaletteView?
     /// The centered "Open folder…" overlay, present only while `hasFolder == false`;
     /// hidden by `didOpenFolder()` on the empty-state → open-project transition.
     private var emptyState: EmptyStateView?
@@ -172,6 +175,14 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         paneContainer.addSubview(picker)
         paneContainer.onPickerTrigger = { [weak picker] in picker?.open() }
         self.picker = picker
+
+        // The hidden top-center command-palette overlay (a subview of the pane
+        // container, parallel to the picker). Activation flows back through
+        // `onActivate` to `activatePaletteRow`.
+        let palette = CommandPaletteView(handle: handle, paneContainer: paneContainer)
+        paneContainer.addSubview(palette)
+        palette.onActivate = { [weak self] row in self?.activatePaletteRow(row) }
+        self.palette = palette
 
         // The centered "Open folder…" overlay (a subview of the pane container),
         // visible only in the empty state (`hasFolder == false`).
@@ -304,6 +315,38 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     /// the pane container's own picker trigger.
     func openFilePicker() {
         picker?.open()
+    }
+
+    /// Opens the command-palette overlay (the `Command Palette…` command / ⌘P),
+    /// seeded with the OTHER open windows (from the coordinator, excluding this
+    /// window) plus this window's recent dirs + command MRU (assembled core-side).
+    func openCommandPalette() {
+        let others = coordinator?.otherWindows(excluding: self) ?? []
+        palette?.open(otherWindows: others)
+    }
+
+    /// Performs a chosen palette row's action, dispatched by its kind:
+    /// - `.staticCommand`: decode the FFI `command_kind` and funnel through
+    ///   `CommandDispatcher` (the SAME funnel every other command uses).
+    /// - `.switchWindow`: raise the window at `windowIndex` (a no-op if it closed).
+    /// - `.openRecent`: raise the window already rooted at that folder if one
+    ///   exists, else chdir this window there (matching File > Open Recent).
+    private func activatePaletteRow(_ row: CommandPaletteRow) {
+        switch row.kind {
+        case .staticCommand:
+            guard let kind = CommandKind(ffi: row.commandKind) else { return }
+            CommandDispatcher.dispatch(
+                kind, window: window, coordinator: coordinator, originatingCwd: currentCwd,
+                controller: self)
+        case .switchWindow:
+            coordinator?.raiseWindow(windowIndex: Int(row.windowIndex))
+        case .openRecent:
+            if let existing = coordinator?.controllerForCwd(row.path) {
+                existing.raise()
+            } else {
+                changeDirectory(row.path)
+            }
+        }
     }
 
     /// Presents a native `NSOpenPanel` (files only) as a sheet on this window and,
@@ -459,9 +502,10 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     }
 
     /// Tears this window down: push the final snapshot, drain the state writer,
-    /// drop the sidebar's + picker's file-search sessions, shut the core down,
-    /// unregister from the wake registry, and ask the coordinator to drop this
-    /// controller. Idempotent (windowWillClose + terminate-time backstop).
+    /// drop the sidebar's + picker's file-search sessions and the palette session,
+    /// shut the core down, unregister from the wake registry, and ask the
+    /// coordinator to drop this controller. Idempotent (windowWillClose +
+    /// terminate-time backstop).
     func teardown() {
         guard !isTornDown else { return }
         isTornDown = true
@@ -474,6 +518,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         tree = nil
         picker?.close()
         picker = nil
+        palette?.close()
+        palette = nil
         handle?.shutdown()
         handle = nil
 

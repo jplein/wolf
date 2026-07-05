@@ -58,6 +58,8 @@ enum CommandDispatcher {
             controller?.increaseFontSize()
         case .decreaseFontSize:
             controller?.decreaseFontSize()
+        case .commandPalette:
+            controller?.openCommandPalette()
         }
     }
 }

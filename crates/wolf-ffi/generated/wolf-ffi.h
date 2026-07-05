@@ -141,6 +141,30 @@ void* __swift_bridge__$Vec_FfiCommand$get_mut(void* vec_ptr, uintptr_t index);
 uintptr_t __swift_bridge__$Vec_FfiCommand$len(void* vec_ptr);
 void* __swift_bridge__$Vec_FfiCommand$as_ptr(void* vec_ptr);
 
+typedef struct FfiCommandPalette FfiCommandPalette;
+void __swift_bridge__$FfiCommandPalette$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiCommandPalette$new(void);
+void __swift_bridge__$Vec_FfiCommandPalette$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiCommandPalette$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiCommandPalette$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiCommandPalette$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiCommandPalette$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiCommandPalette$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiCommandPalette$as_ptr(void* vec_ptr);
+
+typedef struct FfiCommandRow FfiCommandRow;
+void __swift_bridge__$FfiCommandRow$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiCommandRow$new(void);
+void __swift_bridge__$Vec_FfiCommandRow$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiCommandRow$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiCommandRow$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiCommandRow$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiCommandRow$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiCommandRow$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiCommandRow$as_ptr(void* vec_ptr);
+
 typedef struct FfiWinInfo FfiWinInfo;
 void __swift_bridge__$FfiWinInfo$_free(void* self);
 
@@ -171,6 +195,7 @@ void __swift_bridge__$WolfCoreHandle$focus_win(void* self, int64_t win);
 void __swift_bridge__$WolfCoreHandle$shutdown(void* self);
 void* __swift_bridge__$WolfCoreHandle$start_file_search(void* self);
 void* __swift_bridge__$WolfCoreHandle$start_tree_search(void* self);
+void* __swift_bridge__$WolfCoreHandle$command_palette(void* self);
 void* __swift_bridge__$WolfCoreHandle$current_file(void* self);
 void* __swift_bridge__$WolfCoreHandle$cwd(void* self);
 void* __swift_bridge__$WolfCoreHandle$recent_dirs(void* self);
@@ -238,6 +263,15 @@ uint8_t __swift_bridge__$FfiLayoutIntent$dir(void* self);
 int64_t __swift_bridge__$FfiLayoutIntent$from(void* self);
 int64_t __swift_bridge__$FfiLayoutIntent$win(void* self);
 uint8_t __swift_bridge__$FfiCommand$kind(void* self);
+void __swift_bridge__$FfiCommandPalette$add_window(void* self, uint16_t index, void* cwd);
+void* __swift_bridge__$FfiCommandPalette$ranked(void* self, void* query, uintptr_t max);
+void __swift_bridge__$FfiCommandPalette$record(void* self, void* key);
+void* __swift_bridge__$FfiCommandRow$display(void* self);
+uint8_t __swift_bridge__$FfiCommandRow$row_kind(void* self);
+uint8_t __swift_bridge__$FfiCommandRow$command_kind(void* self);
+uint16_t __swift_bridge__$FfiCommandRow$window_index(void* self);
+void* __swift_bridge__$FfiCommandRow$path(void* self);
+void* __swift_bridge__$FfiCommandRow$mru_key(void* self);
 uint64_t __swift_bridge__$FfiWinInfo$grid(void* self);
 int64_t __swift_bridge__$FfiWinInfo$win(void* self);
 bool __swift_bridge__$FfiWinInfo$hidden(void* self);

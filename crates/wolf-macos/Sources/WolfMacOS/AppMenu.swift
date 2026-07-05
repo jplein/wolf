@@ -32,6 +32,7 @@ enum AppMenu {
         static let resetFontSize = 10
         static let increaseFontSize = 11
         static let decreaseFontSize = 12
+        static let commandPalette = 13
     }
 
     /// The dynamic submenus `install` hands back to the coordinator: the Window
@@ -127,7 +128,13 @@ enum AppMenu {
     }
 
     /// The View menu (Reset Font Size `⌘0` / Increase Font Size `⌘=` / Decrease
-    /// Font Size `⌘-`). Titles mirror `wolf_core::COMMAND_SPECS`.
+    /// Font Size `⌘-` / a separator / Command Palette… `⌘p` / a separator / Enter
+    /// Full Screen `⌃⌘f`). Titles mirror `wolf_core::COMMAND_SPECS`.
+    ///
+    /// Enter Full Screen is a STANDARD AppKit item (NOT a Wolf command / registry
+    /// entry): its action is `NSWindow.toggleFullScreen(_:)`, routed to the key
+    /// window via a `nil` target, and AppKit owns its validation + Enter/Exit title
+    /// toggle. This is net-new (no fullscreen item existed before); see the READMEs.
     private static func viewMenuItem(target: AppDelegate) -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "View")
@@ -144,6 +151,19 @@ enum AppMenu {
             commandItem(
                 title: "Decrease Font Size", tag: Tag.decreaseFontSize, keyEquivalent: "-",
                 target: target))
+        menu.addItem(.separator())
+        menu.addItem(
+            commandItem(
+                title: "Command Palette…", tag: Tag.commandPalette, keyEquivalent: "p",
+                target: target))
+        menu.addItem(.separator())
+        let fullScreen = NSMenuItem(
+            title: "Enter Full Screen",
+            action: #selector(NSWindow.toggleFullScreen(_:)),
+            keyEquivalent: "f")
+        fullScreen.keyEquivalentModifierMask = [.control, .command]
+        fullScreen.target = nil
+        menu.addItem(fullScreen)
 
         item.submenu = menu
         return item
