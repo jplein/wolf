@@ -20,6 +20,7 @@ use tokio::process::ChildStdin;
 
 use crate::command::Command;
 use crate::layout::LayoutIntent;
+use crate::recent_dirs::RecentDirs;
 use crate::render::{
     Cell, CursorShape, DefaultColors, HlAttr, ModeInfo, Rgb, SharedSnapshot, Snapshot,
     ThemeColors, ThemeGroup, Viewport, WinInfo,
@@ -117,14 +118,16 @@ pub struct RedrawHandler {
     commands: CommandQueue,
     cwd: TrackedCwd,
     state: SharedStateStore,
+    recent_dirs: RecentDirs,
     wake: WakeFn,
 }
 
 impl RedrawHandler {
     /// Creates a handler writing into `snapshot`, pushing layout intents onto
     /// `intents`, pushing user-triggered commands onto `commands`, tracking nvim's
-    /// cwd into `cwd` (and mirroring it into the optionally-attached `state`
-    /// store), and waking via `wake`.
+    /// cwd into `cwd` (mirroring it into the optionally-attached `state` store AND
+    /// recording it into the always-on global `recent_dirs` MRU), and waking via
+    /// `wake`.
     #[must_use]
     pub fn new(
         snapshot: SharedSnapshot,
@@ -132,6 +135,7 @@ impl RedrawHandler {
         commands: CommandQueue,
         cwd: TrackedCwd,
         state: SharedStateStore,
+        recent_dirs: RecentDirs,
         wake: WakeFn,
     ) -> Self {
         Self {
@@ -140,6 +144,7 @@ impl RedrawHandler {
             commands,
             cwd,
             state,
+            recent_dirs,
             wake,
         }
     }
@@ -364,6 +369,21 @@ impl RedrawHandler {
     /// directory changes persist. The store (and its index) is CLONED out of a
     /// brief read guard first — no lock is held across the store call (which
     /// takes its own internal mutex).
+    ///
+    /// Finally the (already-canonical) target is recorded into the always-on
+    /// global [`RecentDirs`] MRU, so every directory the user changes into — via
+    /// the "open folder" command OR a typed `:cd` — is moved-or-added to the top of
+    /// `folder-mru.sqlite`. That record is fire-and-forget (a brief internal mutex,
+    /// self-healing on corruption) and never bumps `seq` or wakes the front-end.
+    ///
+    /// The one-shot INITIAL `wolf_cwd` emit (the startup/launch cwd, before any
+    /// real `:cd`) is flagged with a `true` second arg by `init.lua`. For that
+    /// emit the tracked cwd cell is STILL updated (so `live_cwd` reflects nvim's
+    /// working directory), but BOTH the [`StateStore`] mirror AND the
+    /// [`RecentDirs`] record are skipped: the passive launch cwd is not a
+    /// directory the user opened, so it must not pollute the persisted per-window
+    /// cwd (empty-state windows persist `cwd == ""`) or the recent-dirs MRU. Only
+    /// genuine `DirChanged` events (unflagged) persist + record.
     fn apply_cwd(&self, args: Vec<Value>) {
         let target: Option<PathBuf> = match args.first().and_then(Value::as_str) {
             Some(p) if !p.is_empty() => {
@@ -372,12 +392,19 @@ impl RedrawHandler {
             // Empty/missing: leave the tracked cwd unchanged.
             _ => None,
         };
+        let is_initial = matches!(args.get(1).and_then(Value::as_bool), Some(true));
         if let Some(target) = target {
             *self.cwd.write() = Some(target.clone());
+            // The passive launch/initial cwd is tracked (above) but never mirrored
+            // to the store or recorded in the MRU — only real directory changes are.
+            if is_initial {
+                return;
+            }
             let store = self.state.read().clone();
             if let Some((store, idx)) = store {
                 store.set_cwd(idx, &target);
             }
+            self.recent_dirs.record(&target);
         }
     }
 }

@@ -296,6 +296,10 @@ extension WolfCoreHandleRef {
         RustString(ptr: __swift_bridge__$WolfCoreHandle$cwd(ptr))
     }
 
+    public func recent_dirs() -> RustVec<RustString> {
+        RustVec(ptr: __swift_bridge__$WolfCoreHandle$recent_dirs(ptr))
+    }
+
     public func theme_titlebar_bg() -> FfiColor {
         __swift_bridge__$WolfCoreHandle$theme_titlebar_bg(ptr).intoSwiftRepr()
     }

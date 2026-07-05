@@ -195,6 +195,14 @@ end
 -- the new working directory via wolf_cwd, and emits once immediately so the startup
 -- cwd is reflected without a directory change. Core tracks this in a sibling cell
 -- (not the render snapshot) and uses it to pick the per-cwd MRU store.
+--
+-- The one-shot INITIAL emit carries a distinguishing `true` second arg; the
+-- DirChanged callback carries no second arg (treated as false). Core uses this
+-- flag to TRACK the launch/initial cwd (in its sibling cell) WITHOUT persisting
+-- it to state.json or recording it in the recent-dirs MRU — the passive launch
+-- cwd is not a directory the user opened, so only genuine DirChanged events
+-- (every real :cd/:lcd/:tcd, including the Open-Folder chdir) are persisted and
+-- recorded.
 function _G.wolf_setup_dir_tracking(chan)
 	local group = vim.api.nvim_create_augroup("WolfDir", { clear = true })
 	vim.api.nvim_create_autocmd("DirChanged", {
@@ -204,8 +212,9 @@ function _G.wolf_setup_dir_tracking(chan)
 			vim.rpcnotify(chan, "wolf_cwd", vim.fn.getcwd())
 		end,
 	})
-	-- Initial emit so the startup cwd is reflected without a :cd.
-	vim.rpcnotify(chan, "wolf_cwd", vim.fn.getcwd())
+	-- Initial emit so the startup cwd is reflected without a :cd. Flagged `true`
+	-- so core tracks-but-does-not-persist/record it.
+	vim.rpcnotify(chan, "wolf_cwd", vim.fn.getcwd(), true)
 end
 
 -- Theme tracking: wolf-core invokes this over RPC after ui_attach (and after

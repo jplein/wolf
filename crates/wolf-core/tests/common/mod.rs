@@ -28,7 +28,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use std::io::Write as _;
@@ -219,10 +219,47 @@ pub fn config(cols: u16, rows: u16) -> CoreConfig {
     config_in(fresh_cwd(), cols, rows)
 }
 
+/// Process-global hermetic state dir, created ONCE per test process.
+///
+/// The global recent-directories store is always-on: it reads `state_dir()` and
+/// writes `folder-mru.sqlite` there. Without an override that would be the user's
+/// real `~/Library/Application Support/Wolf`, polluting it (and racing) across the
+/// whole real-nvim suite. We therefore point `WOLF_STATE_DIR` at a fresh temp dir
+/// for the process (see [`ensure_hermetic_state_dir`]).
+///
+/// The `TempDir` guard is stored in the `OnceLock` so it lives for the entire
+/// process: statics are NOT dropped at process exit, so the directory is never
+/// auto-deleted out from under a running core.
+static HERMETIC_STATE_DIR: OnceLock<tempfile::TempDir> = OnceLock::new();
+
+/// Exports a process-global temp `WOLF_STATE_DIR` **only if it is unset**, so the
+/// always-on recent-directories store writes into a throwaway dir instead of the
+/// user's real state dir.
+///
+/// Set-if-absent: a test that sets its own `WOLF_STATE_DIR` first (e.g. the
+/// recent-dirs real-nvim test, which needs to inspect the physical DB) is never
+/// clobbered. The value is stable for the process, so there is no cross-test race.
+fn ensure_hermetic_state_dir() {
+    if std::env::var_os("WOLF_STATE_DIR").is_some() {
+        return;
+    }
+    let dir = HERMETIC_STATE_DIR
+        .get_or_init(|| tempfile::tempdir().expect("failed to create hermetic state dir"));
+    // Re-check under the (effectively) initialized value: another thread may have
+    // set WOLF_STATE_DIR between the check above and here; set-if-absent is fine
+    // because the process-global value is stable regardless of which we pick.
+    if std::env::var_os("WOLF_STATE_DIR").is_none() {
+        std::env::set_var("WOLF_STATE_DIR", dir.path());
+    }
+}
+
 /// Like [`config`] but with an explicit `cwd`, for tests that must control where
 /// the MRU cache (`<cwd>/.wolf/mru.sqlite`) lives so they can inspect it.
 pub fn config_in(cwd: PathBuf, cols: u16, rows: u16) -> CoreConfig {
     require_nvim_bin();
+    // Keep the always-on recent-directories store off the user's real state dir
+    // (set-if-absent, so a test's own WOLF_STATE_DIR wins).
+    ensure_hermetic_state_dir();
     CoreConfig {
         init_lua: init_lua_path(),
         cols,

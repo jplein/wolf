@@ -58,15 +58,36 @@ public enum StateSeam {
         return frame
     }
 
-    /// Picks the embedded Neovim's launch working directory: the `restored`
-    /// cwd only when it is non-empty AND `isDirectory(restored)` (it may have
-    /// been deleted — or replaced by a plain file — since the last run);
-    /// otherwise `fallback`. The injected closure keeps the seam pure (the
-    /// caller passes a FileManager-backed check; tests pass a set lookup).
-    public static func launchCwd(
-        restored: String, fallback: String, isDirectory: (String) -> Bool
-    ) -> String {
-        guard !restored.isEmpty, isDirectory(restored) else { return fallback }
-        return restored
+    /// The launch decision for one window: whether it opens a real folder or the
+    /// "no folder open" empty state.
+    ///
+    /// - `.folder(cwd:)` — a restored (or freshly chosen) directory to open, with
+    ///   the sidebar + file tree rooted there.
+    /// - `.emptyState(nvimCwd:)` — no folder is open: the UI shows the centered
+    ///   "Open folder…" button with the sidebar hidden, while the embedded Neovim
+    ///   still launches at `nvimCwd` (a benign real directory — home) because it
+    ///   always needs a working directory. This passive launch cwd is deliberately
+    ///   never persisted or recorded in the recent-dirs MRU.
+    public enum LaunchDecision: Equatable {
+        /// No folder is open; nvim launches at `nvimCwd` (home) for the empty state.
+        case emptyState(nvimCwd: String)
+        /// A real folder is open at `cwd`.
+        case folder(cwd: String)
+    }
+
+    /// Decides how a window launches: reopen the `restored` folder only when it is
+    /// non-empty AND `isDirectory(restored)` (it may have been deleted — or
+    /// replaced by a plain file — since the last run); otherwise the empty state,
+    /// with nvim launched at `home`. This NEVER returns the process working
+    /// directory (the old `launchCwd` fallback that polluted the recent-dirs MRU).
+    /// The injected closure keeps the seam pure (the caller passes a
+    /// FileManager-backed check; tests pass a set lookup).
+    public static func launchDecision(
+        restored: String, home: String, isDirectory: (String) -> Bool
+    ) -> LaunchDecision {
+        guard !restored.isEmpty, isDirectory(restored) else {
+            return .emptyState(nvimCwd: home)
+        }
+        return .folder(cwd: restored)
     }
 }

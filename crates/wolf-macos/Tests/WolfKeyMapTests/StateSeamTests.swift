@@ -20,10 +20,15 @@
 //      sentinel, plan §1) and nil when the rect intersects NO screen visible
 //      frame (never restore a window fully offscreen); otherwise the rect
 //      CGRect(x:y:width:height).
-//    * StateSeam.launchCwd(restored:fallback:isDirectory:) -> String —
-//      `restored` only when it is non-empty AND `isDirectory(restored)`;
-//      otherwise `fallback`. The injected closure keeps the seam pure (no
-//      FileManager in tests).
+//    * StateSeam.launchDecision(restored:home:isDirectory:) -> LaunchDecision —
+//      the empty-state launch decision (launch-behavior plan). `restored == ""`
+//      OR `restored` is not a directory (deleted / plain file) => the
+//      "no folder open" empty state, with nvim launched at `home`:
+//      `.emptyState(nvimCwd: home)`. A valid restored directory => reopen it:
+//      `.folder(cwd: restored)`. It NEVER returns the process working directory
+//      (the old `launchCwd` fallback that polluted the recent-dirs MRU). The
+//      injected `isDirectory` closure keeps the seam pure (no FileManager in
+//      tests).
 //
 //  NOTE to coder: this test references the pure `WolfKeyMap.StateSeam` enum the
 //  coder will add in `Sources/WolfKeyMap/StateSeam.swift` (and list in the
@@ -161,51 +166,74 @@ final class StateSeamTests: XCTestCase {
         }
     }
 
-    // MARK: - launchCwd
+    // MARK: - launchDecision
 
-    /// One `launchCwd` table row: (description, restored, fallback, the set of
-    /// paths the injected `isDirectory` closure reports as directories,
-    /// expected result).
-    private struct CwdCase {
+    /// One `launchDecision` table row: (description, restored cwd, the set of
+    /// paths the injected `isDirectory` closure reports as directories, expected
+    /// decision). `home` and `processCwd` are shared across the table below.
+    private struct DecisionCase {
         let desc: String
         let restored: String
-        let fallback: String
         let directories: Set<String>
-        let expected: String
+        let expected: StateSeam.LaunchDecision
     }
 
-    func testLaunchCwdTable() {
+    func testLaunchDecisionTable() {
         let restoredDir = "/Users/alice/projects/notes"
-        let fallbackDir = "/Users/alice"
-        let cases: [CwdCase] = [
-            CwdCase(
-                desc: "non-empty restored that IS a directory => restored",
-                restored: restoredDir, fallback: fallbackDir,
-                directories: [restoredDir, fallbackDir],
-                expected: restoredDir),
-            CwdCase(
-                desc: "empty restored (never reported) => fallback",
-                restored: "", fallback: fallbackDir,
-                directories: [fallbackDir],
-                expected: fallbackDir),
-            CwdCase(
-                desc: "restored no longer a directory (deleted since) => fallback",
-                restored: restoredDir, fallback: fallbackDir,
-                directories: [fallbackDir],
-                expected: fallbackDir),
-            CwdCase(
-                desc: "restored exists but is a plain FILE (not a dir) => fallback",
-                restored: "/Users/alice/notes.md", fallback: fallbackDir,
-                directories: [fallbackDir],
-                expected: fallbackDir),
+        let home = "/Users/alice"
+        // A stand-in for `FileManager.default.currentDirectoryPath` (e.g. a
+        // `bazel run` sandbox temp dir). The seam must NEVER return this — that
+        // was the old `launchCwd` fallback that polluted the recent-dirs MRU.
+        // It is deliberately NOT in any `directories` set, so even if a caller
+        // mistakenly treated it as valid it could not leak through.
+        let processCwd = "/private/var/tmp/bazel-sandbox/execroot/cwd"
+
+        let cases: [DecisionCase] = [
+            DecisionCase(
+                desc: "valid restored directory => reopen that folder",
+                restored: restoredDir,
+                directories: [restoredDir, home],
+                expected: .folder(cwd: restoredDir)),
+            DecisionCase(
+                desc: "empty restored (fresh / no prior session) => empty state at home",
+                restored: "",
+                directories: [home],
+                expected: .emptyState(nvimCwd: home)),
+            DecisionCase(
+                desc: "restored no longer a directory (deleted since) => empty state at home",
+                restored: restoredDir,
+                directories: [home],
+                expected: .emptyState(nvimCwd: home)),
+            DecisionCase(
+                desc: "restored is a plain FILE (not a dir) => empty state at home",
+                restored: "/Users/alice/notes.md",
+                directories: [home],
+                expected: .emptyState(nvimCwd: home)),
+            DecisionCase(
+                desc: "restored is a non-existent path => empty state at home",
+                restored: "/Users/alice/gone",
+                directories: [home],
+                expected: .emptyState(nvimCwd: home)),
         ]
 
         for c in cases {
-            let got = StateSeam.launchCwd(
+            let got = StateSeam.launchDecision(
                 restored: c.restored,
-                fallback: c.fallback,
+                home: home,
                 isDirectory: { c.directories.contains($0) })
             XCTAssertEqual(got, c.expected, "case: \(c.desc)")
+
+            // The key regression guard: whatever the decision, its associated
+            // directory is NEVER the process working directory. The empty-state
+            // branch must use `home`; the folder branch must use the restored dir.
+            let resultDir: String
+            switch got {
+            case .emptyState(let nvimCwd): resultDir = nvimCwd
+            case .folder(let cwd): resultDir = cwd
+            }
+            XCTAssertNotEqual(
+                resultDir, processCwd,
+                "launchDecision must NEVER return the process cwd, case: \(c.desc)")
         }
     }
 }

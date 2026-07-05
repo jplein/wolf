@@ -34,22 +34,32 @@ enum AppMenu {
         static let decreaseFontSize = 12
     }
 
+    /// The dynamic submenus `install` hands back to the coordinator: the Window
+    /// submenu (rebuilt with the per-window list) and the Open Recent submenu
+    /// (rebuilt lazily via `NSMenuDelegate.menuNeedsUpdate` from the recent-dirs
+    /// MRU).
+    struct InstalledMenus {
+        let window: NSMenu
+        let openRecent: NSMenu
+    }
+
     /// Installs the standard four-menu bar (App / File / View / Window) onto
     /// `NSApp.mainMenu`, wiring every Wolf item to `target`'s
-    /// `handleCommandMenuItem(_:)`. Returns the Window submenu `NSMenu` so the
-    /// coordinator can rebuild its dynamic per-window list.
-    static func install(target: AppDelegate) -> NSMenu {
+    /// `handleCommandMenuItem(_:)`. Returns the Window and Open Recent submenus so
+    /// the coordinator can rebuild their dynamic lists.
+    static func install(target: AppDelegate) -> InstalledMenus {
         let mainMenu = NSMenu()
 
         mainMenu.addItem(appMenuItem(target: target))
-        mainMenu.addItem(fileMenuItem(target: target))
+        let openRecent = NSMenu(title: "Open Recent")
+        mainMenu.addItem(fileMenuItem(target: target, openRecent: openRecent))
         mainMenu.addItem(viewMenuItem(target: target))
         let windowItem = windowMenuItem(target: target)
         mainMenu.addItem(windowItem)
 
         NSApp.mainMenu = mainMenu
         // Force-unwrap: `windowMenuItem` always sets a submenu.
-        return windowItem.submenu!
+        return InstalledMenus(window: windowItem.submenu!, openRecent: openRecent)
     }
 
     /// The application menu (About / Hide `h` / Quit `q`).
@@ -80,7 +90,7 @@ enum AppMenu {
     ///
     /// The item titles mirror `wolf_core::COMMAND_SPECS` (the canonical registry);
     /// the ellipsis characters are single U+2026, matching those specs.
-    private static func fileMenuItem(target: AppDelegate) -> NSMenuItem {
+    private static func fileMenuItem(target: AppDelegate, openRecent: NSMenu) -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "File")
 
@@ -102,6 +112,7 @@ enum AppMenu {
             commandItem(
                 title: "Open Folder…", tag: Tag.openFolder, keyEquivalent: "o",
                 target: target, modifiers: [.command, .shift]))
+        menu.addItem(openRecentItem(submenu: openRecent))
         menu.addItem(.separator())
         menu.addItem(
             commandItem(
@@ -175,6 +186,48 @@ enum AppMenu {
             windowItem.target = target
             windowItem.tag = controller.windowIndex
             menu.addItem(windowItem)
+        }
+    }
+
+    /// The File > Open Recent parent item: a plain (no-action) item carrying the
+    /// dynamic `submenu`, seeded with the disabled placeholder so it is never
+    /// empty before the first `menuNeedsUpdate` rebuild.
+    private static func openRecentItem(submenu: NSMenu) -> NSMenuItem {
+        let item = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
+        submenu.addItem(placeholderItem())
+        item.submenu = submenu
+        return item
+    }
+
+    /// The disabled "No Recent Folders" placeholder shown when the recent-dirs
+    /// MRU is empty (standard macOS empty-state; `action: nil` auto-disables).
+    private static func placeholderItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "No Recent Folders", action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
+    }
+
+    /// Rebuilds the dynamic Open Recent `menu` from the recent-directories MRU
+    /// (newest-first). Empty -> a single disabled "No Recent Folders" placeholder;
+    /// otherwise one item per path, titled with the full path, whose action
+    /// (`AppDelegate.openRecentMenuItem(_:)`) chdirs the key window, carrying the
+    /// list index in its `tag`. Called from `menuNeedsUpdate` at menu-open time.
+    static func rebuildOpenRecentMenu(
+        _ menu: NSMenu, recentDirs: [String], target: AppDelegate
+    ) {
+        menu.removeAllItems()
+        if recentDirs.isEmpty {
+            menu.addItem(placeholderItem())
+            return
+        }
+        for (index, path) in recentDirs.enumerated() {
+            let item = NSMenuItem(
+                title: path,
+                action: #selector(AppDelegate.openRecentMenuItem(_:)),
+                keyEquivalent: "")
+            item.target = target
+            item.tag = index
+            menu.addItem(item)
         }
     }
 

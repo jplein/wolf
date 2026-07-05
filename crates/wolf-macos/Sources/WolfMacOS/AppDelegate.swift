@@ -14,7 +14,7 @@ import WolfKeyMap
 /// `WolfWindowController`s (one per OS window). It performs the once-only launch
 /// setup, restores one window per saved `state.json` entry, opens new windows on
 /// Cmd-N, and prunes ghost window slots at terminate.
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
     /// The once-measured shared cell metrics (nil until launch).
     private var metrics: CellMetrics?
     /// The once-loaded shared user config (nil until launch).
@@ -27,6 +27,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// dynamic per-window list on window open/close/cwd-change. `nil` until launch.
     private var windowMenu: NSMenu?
 
+    /// The File > Open Recent submenu (returned by `AppMenu.install`), rebuilt
+    /// lazily in `menuNeedsUpdate` from the recent-dirs MRU. `nil` until launch.
+    private var openRecentMenu: NSMenu?
+
+    /// The recent-dirs list backing the current Open Recent submenu, captured in
+    /// `menuNeedsUpdate` so `openRecentMenuItem(_:)` can resolve `tag` -> path.
+    private var recentDirs: [String] = []
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Register the three process-global wake callbacks ONCE; each routes by
         // the firing core's token through `WindowRegistry`.
@@ -35,9 +43,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         TreeWakeBridge.install()
 
         // Build the native menu bar (net-new). Every Wolf item funnels through
-        // `handleCommandMenuItem(_:)` → `CommandDispatcher`. Keep the Window
-        // submenu so its dynamic per-window list can be rebuilt.
-        windowMenu = AppMenu.install(target: self)
+        // `handleCommandMenuItem(_:)` → `CommandDispatcher`. Keep the Window and
+        // Open Recent submenus so their dynamic lists can be rebuilt; the Open
+        // Recent submenu rebuilds lazily via `menuNeedsUpdate`.
+        let menus = AppMenu.install(target: self)
+        windowMenu = menus.window
+        openRecentMenu = menus.openRecent
+        openRecentMenu?.delegate = self
 
         // Register the bundled font TTFs with CoreText, then resolve the user
         // config BEFORE measuring so `CellMetrics` can resolve the configured
@@ -54,8 +66,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let restoredWindows = Self.restoredWindows(from: wolf_ffi_load_state())
 
         if restoredWindows.isEmpty {
-            let cwd = launchCwd(restoredCwd: "")
-            let controller = makeController(windowIndex: 0, launchCwd: cwd, restored: nil)
+            // Fresh first run: always the empty state (no folder), nvim at home.
+            let (cwd, hasFolder) = Self.dir(launchDecision(restoredCwd: ""))
+            let controller = makeController(
+                windowIndex: 0, launchCwd: cwd, restored: nil, hasFolder: hasFolder)
             if !controller.start() {
                 presentStartupFailureAndQuit()
                 return
@@ -66,9 +80,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
 
         for (index, restored) in restoredWindows.enumerated() {
-            let cwd = launchCwd(restoredCwd: restored.cwd)
+            let (cwd, hasFolder) = Self.dir(launchDecision(restoredCwd: restored.cwd))
             let controller = makeController(
-                windowIndex: index, launchCwd: cwd, restored: restored)
+                windowIndex: index, launchCwd: cwd, restored: restored, hasFolder: hasFolder)
             let ok = controller.start()
             // A fatal startup alert only for the FIRST window; a later window's
             // core failing simply opens fewer windows.
@@ -118,16 +132,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     /// The Cmd-N entry point: opens a new window in the first free `state.json`
-    /// slot, rooted at `originatingCwd` (falling back to the home directory when
-    /// it is empty), with AppKit cascade placement.
-    func makeNewWindow(originatingCwd: String) {
+    /// slot. Cmd-N ALWAYS opens the empty state (no folder), regardless of the
+    /// originating window's cwd — nvim launches at home, the sidebar is hidden, and
+    /// the centered "Open folder…" overlay is shown. `originatingCwd` is ignored
+    /// (kept as a label for the shared dispatcher call site).
+    func makeNewWindow(originatingCwd _: String) {
         // Metrics/config are set at launch before any window opens; bail if not.
         guard metrics != nil, config != nil else { return }
         let index = WindowIndexSeam.nextFreeIndex(occupied: controllers.map(\.windowIndex))
-        let cwd = originatingCwd.isEmpty
-            ? FileManager.default.homeDirectoryForCurrentUser.path
-            : originatingCwd
-        let controller = makeController(windowIndex: index, launchCwd: cwd, restored: nil)
+        let (cwd, hasFolder) = Self.dir(launchDecision(restoredCwd: ""))
+        let controller = makeController(
+            windowIndex: index, launchCwd: cwd, restored: nil, hasFolder: hasFolder)
         if controller.start() {
             controllers.append(controller)
             rebuildWindowMenu()
@@ -168,6 +183,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         controllers.first { $0.windowIndex == sender.tag }?.raise()
     }
 
+    /// `NSMenuDelegate`: rebuilds the Open Recent submenu just before it opens,
+    /// reading the recent-dirs MRU from the key window's controller (falling back
+    /// to the first controller when no Wolf window is key). Ignores any other menu.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === openRecentMenu else { return }
+        let source = controllers.first { $0.owns(NSApp.keyWindow) } ?? controllers.first
+        recentDirs = source?.recentDirs() ?? []
+        AppMenu.rebuildOpenRecentMenu(menu, recentDirs: recentDirs, target: self)
+    }
+
+    /// The dynamic Open Recent item action: changes the key window's Neovim
+    /// working directory to the recent dir at the item's `tag` (an index into the
+    /// `recentDirs` snapshot captured in `menuNeedsUpdate`). Out-of-range tags are
+    /// ignored.
+    @objc func openRecentMenuItem(_ sender: NSMenuItem) {
+        guard sender.tag >= 0, sender.tag < recentDirs.count else { return }
+        let path = recentDirs[sender.tag]
+        let target = controllers.first { $0.owns(NSApp.keyWindow) } ?? controllers.first
+        target?.changeDirectory(path)
+    }
+
     /// Notified by a controller when its live cwd changed (its Window-menu title
     /// is the full cwd path), rebuilding the dynamic Window menu.
     func windowCwdDidChange(_ controller: WolfWindowController) {
@@ -189,7 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// Builds a controller wired to this coordinator and the shared metrics/config.
     private func makeController(
-        windowIndex: Int, launchCwd: String, restored: RestoredWindowState?
+        windowIndex: Int, launchCwd: String, restored: RestoredWindowState?, hasFolder: Bool
     ) -> WolfWindowController {
         // `metrics` / `config` are set in `applicationDidFinishLaunching` before
         // any controller is built.
@@ -197,6 +233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             windowIndex: windowIndex,
             launchCwd: launchCwd,
             restored: restored,
+            hasFolder: hasFolder,
             metrics: metrics!,
             config: config!
         )
@@ -204,12 +241,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return controller
     }
 
-    /// Picks the embedded Neovim's launch working directory: the restored cwd
-    /// when it still names a directory, else the process's current directory.
-    private func launchCwd(restoredCwd: String) -> String {
-        StateSeam.launchCwd(
+    /// Maps a `LaunchDecision` to the controller's `(launchCwd, hasFolder)`: a
+    /// `.folder` opens that directory (`hasFolder = true`); an `.emptyState`
+    /// launches nvim at home with no folder (`hasFolder = false`).
+    private static func dir(_ decision: StateSeam.LaunchDecision) -> (cwd: String, hasFolder: Bool) {
+        switch decision {
+        case .folder(let cwd): return (cwd, true)
+        case .emptyState(let nvimCwd): return (nvimCwd, false)
+        }
+    }
+
+    /// Decides how a window launches from its restored cwd: reopen the folder when
+    /// `restoredCwd` still names a directory, else the "no folder open" empty state
+    /// with nvim launched at home. NEVER the process working directory (the old
+    /// `launchCwd` fallback that polluted the recent-dirs MRU).
+    private func launchDecision(restoredCwd: String) -> StateSeam.LaunchDecision {
+        StateSeam.launchDecision(
             restored: restoredCwd,
-            fallback: FileManager.default.currentDirectoryPath,
+            home: FileManager.default.homeDirectoryForCurrentUser.path,
             isDirectory: { path in
                 var isDir: ObjCBool = false
                 return FileManager.default.fileExists(atPath: path, isDirectory: &isDir)

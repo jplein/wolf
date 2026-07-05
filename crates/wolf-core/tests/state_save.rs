@@ -1,8 +1,10 @@
 //! Real-nvim end-to-end test of the save-on-cwd-change flow (plan §4): with a
-//! `StateStore` attached to a live `WolfCore`, the core itself must persist
-//! nvim's working directory into `<state-dir>/state.json` — both the setup-time
-//! `wolf_cwd` emission (covered by the attach-time push of `tracked_cwd`, risk
-//! note 3) and a later `:cd` typed through the normal input path.
+//! `StateStore` attached to a live `WolfCore`, a GENUINE `:cd` typed through the
+//! normal input path must persist nvim's new working directory into
+//! `<state-dir>/state.json`. The passive launch/initial `wolf_cwd` emit is NOT
+//! persisted (it updates the tracked-cwd cell only) — the empty-until-`:cd`
+//! guarantee is covered by `tests/empty_state_cwd.rs`; this test focuses purely
+//! on a real cwd CHANGE landing on disk.
 //!
 //! This drives a REAL, hermetic Neovim process (no mocks) and requires
 //! `WOLF_NVIM_BIN` (the shared harness fails loudly if it is unset). Modeled on
@@ -33,8 +35,11 @@ fn cwd_changes_persist_to_state_json() {
     // Fail loud if the real nvim binary is missing.
     let _ = common::require_nvim_bin();
 
-    // Start nvim in tempdir A, retaining the waiter so we can confirm the `:cd`
-    // keystrokes were processed before polling for their persisted effect.
+    // Start nvim in tempdir A (the launch cwd), retaining the waiter so we can
+    // confirm the `:cd` keystrokes were processed before polling for their
+    // persisted effect. Launch cwd A is deliberately never asserted on disk: the
+    // passive startup emit is not persisted, so window 0's cwd stays `""` until a
+    // real `:cd` below.
     let (_dir_a, cwd_a) = temp_cwd();
     let (core, waiter) = start_core_in_with_waiter(&cwd_a);
 
@@ -42,11 +47,6 @@ fn cwd_changes_persist_to_state_json() {
     let state_dir = tempfile::tempdir().expect("failed to create temp state dir");
     let store = StateStore::open(state_dir.path());
     core.attach_state_store(store, 0);
-
-    // The setup-time `wolf_cwd` emission may have raced ahead of the attach;
-    // the attach-time push of `tracked_cwd` must close that race (risk note 3),
-    // so window 0's cwd settles to A without any further input.
-    wait_for_state_cwd(state_dir.path(), &cwd_a);
 
     // Drive `:cd <C>` one key at a time through the same input path the front
     // ends use, mirroring mru_open_records' `:cd` sequence.

@@ -47,6 +47,13 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     /// (Cmd-N) window.
     private let restored: RestoredWindowState?
 
+    /// Whether this window has a real folder open. `false` for the empty state (a
+    /// fresh first run, a Cmd-N window, or a restored window whose saved cwd was
+    /// empty/deleted): the sidebar stays hidden, the file tree is not started, and
+    /// the centered "Open folder…" overlay is shown until a folder opens. Flipped
+    /// to `true` (once) by `didOpenFolder()`.
+    private var hasFolder: Bool
+
     /// This window's cell metrics — seeded from the shared, once-measured launch
     /// metrics and RE-MEASURED per-window on a font-size change (View menu). A
     /// `var` so `setPointSize` can swap it.
@@ -82,6 +89,9 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     /// Accessed by `PickerWakeBridge` (via `WindowRegistry`) to refresh the picker
     /// on file-search wakes.
     private(set) var picker: PickerView?
+    /// The centered "Open folder…" overlay, present only while `hasFolder == false`;
+    /// hidden by `didOpenFolder()` on the empty-state → open-project transition.
+    private var emptyState: EmptyStateView?
     private var statePersistence: StatePersistence?
 
     /// Guards `teardown()` against running twice (windowWillClose + the
@@ -93,16 +103,25 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     /// (its menu title is the full cwd path). `nil` until the first wake reads one.
     private var lastKnownCwd: String?
 
+    /// The FIRST non-empty raw `handle.cwd()` observed on a render wake — the
+    /// baseline launch cwd (nvim reports `home` for an empty-state window). Used
+    /// ONLY while `hasFolder == false` to detect an nvim-initiated `:cd` away from
+    /// the launch dir, which flips the window into a folder (see `onRenderWake`).
+    /// `nil` until the first non-empty cwd is observed.
+    private var initialCwd: String?
+
     init(
         windowIndex: Int,
         launchCwd: String,
         restored: RestoredWindowState?,
+        hasFolder: Bool,
         metrics: CellMetrics,
         config: FfiConfig
     ) {
         self.windowIndex = windowIndex
         self.launchCwd = launchCwd
         self.restored = restored
+        self.hasFolder = hasFolder
         self.metrics = metrics
         self.config = config
         // The passed-in shared metrics were already measured at this size, so seed
@@ -131,9 +150,13 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
 
         // The file-tree sidebar (left pane) owns its OWN long-lived file-search
         // session; the render wake reveals/bolds the current buffer, the tree
-        // wake rebuilds its rows.
+        // wake rebuilds its rows. It is only STARTED for a window that has a
+        // folder — an empty-state window must not scan `home`; the tree starts
+        // (reroots) when a folder later opens (see `didOpenFolder` / `onRenderWake`).
         let tree = FileTreeView(handle: handle, paneContainer: paneContainer)
-        tree.start()
+        if hasFolder {
+            tree.start()
+        }
         self.tree = tree
 
         let window = MainWindow(
@@ -150,8 +173,17 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         paneContainer.onPickerTrigger = { [weak picker] in picker?.open() }
         self.picker = picker
 
-        // Restore the saved frame/sidebar/toolbar only for a restored window;
-        // a fresh (Cmd-N) window keeps AppKit's cascade placement.
+        // The centered "Open folder…" overlay (a subview of the pane container),
+        // visible only in the empty state (`hasFolder == false`).
+        let emptyState = EmptyStateView()
+        paneContainer.addSubview(emptyState)
+        emptyState.onOpenFolder = { [weak self] in self?.presentOpenFolderDialog() }
+        emptyState.isHidden = hasFolder
+        self.emptyState = emptyState
+
+        // Restore the saved frame/toolbar only for a restored window; a fresh
+        // (Cmd-N) window keeps AppKit's cascade placement. The sidebar is set
+        // below, gated on `hasFolder`.
         if let restored {
             if let frame = StateSeam.restoredWindowFrame(
                 x: restored.x, y: restored.y,
@@ -162,10 +194,19 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
             } else {
                 window.center()
             }
-            window.sidebarItem.isCollapsed = !restored.sidebarVisible
             if let mode = restored.toolbarMode {
                 window.toolbar?.displayMode = Self.toolbarDisplayMode(mode)
             }
+        }
+
+        // Sidebar visibility: an empty-state window (no folder) ALWAYS hides the
+        // sidebar (ignoring any stored `sidebar_visible`); a restored FOLDER window
+        // honors its stored `sidebar_visible`; a fresh folder keeps the default
+        // (visible). `didOpenFolder()` reveals it on the empty → open transition.
+        if !hasFolder {
+            window.sidebarItem.isCollapsed = true
+        } else if let restored {
+            window.sidebarItem.isCollapsed = !restored.sidebarVisible
         }
 
         window.delegate = self
@@ -195,15 +236,51 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     /// and the cmdline strip, then reveal/bold the current buffer in the sidebar.
     func onRenderWake() {
         paneContainer?.onRenderWake()
-        tree?.onRenderWake()
+        // The tree is driven only for a window that has a folder — an empty-state
+        // window never scans/reroots (TreeWakeBridge already no-ops while its
+        // search is nil). `didOpenFolder()` flips `hasFolder`, so the FIRST wake
+        // after a folder opens reroots the tree at the opened folder.
+        if hasFolder {
+            tree?.onRenderWake()
+        }
+
+        let cwd = handle?.cwd().toString() ?? ""
+
+        // Detect an nvim-initiated `:cd` out of the empty state: baseline the first
+        // non-empty observed cwd (nvim reports `home` for an empty-state window),
+        // then transition when a later non-empty cwd differs from that baseline.
+        // The Open Folder button / Open Recent transition optimistically instead
+        // (see `didOpenFolder`); this covers a typed `:cd`. A typed `:cd` to the
+        // SAME launch dir won't transition (no cwd change) — the button is the
+        // intended path and always transitions.
+        if !hasFolder, !cwd.isEmpty {
+            if let baseline = initialCwd {
+                if cwd != baseline {
+                    didOpenFolder()
+                }
+            } else {
+                initialCwd = cwd
+            }
+        }
+
         // Rebuild the dynamic Window menu (its titles are the windows' full cwd
         // paths) only when THIS window's live cwd actually changed.
-        let cwd = handle?.cwd().toString() ?? ""
         if lastKnownCwd != cwd {
             lastKnownCwd = cwd
             coordinator?.windowCwdDidChange(self)
         }
         drainAndDispatchCommands()
+    }
+
+    /// Transitions this window from the empty state into an open project: reveals
+    /// the sidebar, hides the "Open folder…" overlay, and lets the file tree start
+    /// (reroot at the opened folder on the next render wake). Idempotent — the
+    /// second caller (both transition paths may fire) is a no-op.
+    private func didOpenFolder() {
+        guard !hasFolder else { return }
+        hasFolder = true
+        emptyState?.isHidden = true
+        window?.sidebarItem.isCollapsed = false
     }
 
     /// Drains this window's pending user-triggered commands (`:Wolf<Pascal>` /
@@ -265,8 +342,33 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             self?.handle?.chdir(url.path)
+            // Optimistically transition out of the empty state (the button is the
+            // intended path and always transitions, even to the launch dir).
+            self?.didOpenFolder()
             self?.refocusEditor()
         }
+    }
+
+    /// The GLOBAL recent-directories MRU (newest-first), read from this window's
+    /// core handle to build the File > Open Recent submenu. Returns `[]` when the
+    /// handle is gone (before `start()` / after `teardown()`).
+    func recentDirs() -> [String] {
+        guard let handle else { return [] }
+        var result: [String] = []
+        for path in handle.recent_dirs() {
+            result.append(path.as_str().toString())
+        }
+        return result
+    }
+
+    /// The File > Open Recent action: changes this window's Neovim working
+    /// directory to `path` (`handle.chdir`) then returns first responder to the
+    /// editor pane. Same effect as Open Folder, without a panel.
+    func changeDirectory(_ path: String) {
+        handle?.chdir(path)
+        // Open Recent also transitions out of the empty state optimistically.
+        didOpenFolder()
+        refocusEditor()
     }
 
     /// Closes this window's current split, i.e. the pane (`:close`). On the last

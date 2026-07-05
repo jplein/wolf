@@ -198,6 +198,54 @@ fn round_trip_through_store_and_load() {
 }
 
 // =========================================================================
+// Empty-cwd ("no folder open") sentinel round-trip
+// =========================================================================
+
+#[test]
+fn empty_cwd_round_trips_through_store_and_load() {
+    // The launch-behavior change makes `cwd == ""` the "no folder open" sentinel
+    // for empty-state windows. It must survive the real serde path: an empty
+    // string serializes into `state.json` verbatim and loads back as `""`, with
+    // every OTHER field intact. A front-end reports geometry/sidebar/toolbar for
+    // an empty-state window while its cwd stays at the `""` default.
+    let dir = tempdir().expect("create temp state dir");
+
+    let store = StateStore::open(dir.path());
+    store.set_geometry(0, GEO_X, GEO_Y, GEO_WIDTH, GEO_HEIGHT);
+    store.set_sidebar_visible(0, false);
+    store.set_toolbar_mode(0, Some(ToolbarMode::IconOnly));
+    // cwd is deliberately never set: it stays at the `""` default (the sentinel).
+    assert!(
+        store.flush(FLUSH_TIMEOUT),
+        "flush after mutations should complete within {FLUSH_TIMEOUT:?}"
+    );
+
+    let loaded = load_state(dir.path()).expect("load_state should parse the file the store wrote");
+    assert_eq!(loaded.windows.len(), 1, "one window mutated -> one entry");
+    let w = &loaded.windows[0];
+    assert_eq!(w.cwd, "", "an empty cwd must load back as the empty sentinel");
+    // Every other field survives alongside the empty cwd.
+    assert_eq!(w.x, GEO_X, "loaded x survives alongside the empty cwd");
+    assert_eq!(w.y, GEO_Y, "loaded y survives alongside the empty cwd");
+    assert_eq!(w.width, GEO_WIDTH, "loaded width survives alongside the empty cwd");
+    assert_eq!(w.height, GEO_HEIGHT, "loaded height survives alongside the empty cwd");
+    assert!(!w.sidebar_visible, "loaded sidebar_visible survives alongside the empty cwd");
+    assert_eq!(
+        w.toolbar_mode,
+        Some(ToolbarMode::IconOnly),
+        "loaded toolbar_mode survives alongside the empty cwd"
+    );
+
+    // The empty string is written literally, not omitted: `cwd` is a required
+    // field (no skip_serializing_if), so the on-disk form carries `"cwd": ""`.
+    let text = read(&dir.path().join(STATE_FILE_NAME));
+    assert!(
+        text.contains("\"cwd\": \"\""),
+        "an empty cwd must serialize as `\"cwd\": \"\"`, got:\n{text}"
+    );
+}
+
+// =========================================================================
 // Unset-geometry sentinel + toolbar omission
 // =========================================================================
 

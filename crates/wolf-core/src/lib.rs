@@ -19,6 +19,7 @@
 //! - [`layout`]: the Neovim->shell layout-intent types ([`LayoutIntent`]).
 //! - [`files`]: the async streaming file-list traversal and `FileSearch` session.
 //! - [`mru`]: the most-recently-used file cache (SQLite).
+//! - [`recent_dirs`]: the global recent-directories MRU cache (SQLite).
 //! - [`rank`]: pure fuzzy-match + ranking for the file picker.
 //! - [`input`]: abstract input events and their translation to Neovim RPC.
 //! - [`redraw`]: the `redraw` handler that folds events into the snapshot.
@@ -38,6 +39,7 @@ pub mod layout;
 pub mod mru;
 pub mod nvim;
 pub mod rank;
+pub mod recent_dirs;
 pub mod redraw;
 pub mod render;
 pub mod state;
@@ -54,6 +56,7 @@ pub use input::{
 pub use layout::{FocusDir, LayoutIntent, SplitOrientation};
 pub use mru::{MruError, MruStore, MRU_LIMIT};
 pub use rank::{rank_matches, Match, MatchKey};
+pub use recent_dirs::{RecentDirs, RECENT_DIRS_LIMIT};
 pub use redraw::WakeFn;
 pub use render::{
     Cell, Cursor, CursorShape, DefaultColors, Grid, HighlightTable, HlAttr, ModeInfo,

@@ -25,11 +25,12 @@ use crate::input::{self, InputEvent, MouseEvent, Nvim, ScrollEvent};
 use crate::layout::LayoutIntent;
 use crate::mru::{FileEntry, MruError, MruStore};
 use crate::nvim::{self, NvimConfig, NvimError, NvimProcess};
+use crate::recent_dirs::RecentDirs;
 use crate::redraw::{
     CommandQueue, IntentQueue, RedrawHandler, SharedStateStore, TrackedCwd, WakeFn,
 };
 use crate::render::{OwnedSnapshotReadGuard, SharedSnapshot, Snapshot};
-use crate::state::StateStore;
+use crate::state::{state_dir, StateStore};
 
 /// A lazily-populated, per-cwd cache of [`MruStore`]s, keyed by CANONICAL cwd.
 ///
@@ -162,6 +163,12 @@ pub struct WolfCore {
     /// notification into the store at that window index so cwd changes persist
     /// with no front-end involvement.
     state_store: SharedStateStore,
+    /// The always-on GLOBAL recent-directories MRU (`<state_dir>/folder-mru.sqlite`).
+    /// Constructed once at [`WolfCore::start`] from [`state_dir`] (or
+    /// [`RecentDirs::disabled`] when it cannot be resolved) and cloned into the
+    /// redraw handler, which records each `wolf_cwd` directory change into it. Read
+    /// back via [`WolfCore::recent_dirs`].
+    recent_dirs: RecentDirs,
     /// The configured working directory: the file picker's FALLBACK search root
     /// and the MRU cache location. The live search root is the captive Neovim's
     /// `getcwd()` (see [`WolfCore::start_file_search`]); this path is used only
@@ -190,12 +197,22 @@ impl WolfCore {
         let intents: IntentQueue = Arc::new(Mutex::new(VecDeque::new()));
         let commands: CommandQueue = Arc::new(Mutex::new(VecDeque::new()));
         let state_store: SharedStateStore = Arc::new(RwLock::new(None));
+
+        // The global recent-directories MRU is ALWAYS-ON (not attached/opt-in like
+        // the StateStore): construct it once from state_dir(), or a no-op disabled
+        // store when that cannot be resolved. Cloned into the redraw handler, which
+        // records each cwd change into it.
+        let recent_dirs = state_dir()
+            .map(|d| RecentDirs::open(&d))
+            .unwrap_or_else(RecentDirs::disabled);
+
         let handler = RedrawHandler::new(
             snapshot.clone_handle(),
             intents.clone(),
             commands.clone(),
             tracked_cwd.clone(),
             state_store.clone(),
+            recent_dirs.clone(),
             wake,
         );
 
@@ -273,26 +290,24 @@ impl WolfCore {
             mru_cache,
             tracked_cwd,
             state_store,
+            recent_dirs,
             cwd,
         })
     }
 
     /// Attaches an application-state store bound to `window_index` (this core's
-    /// slot in `state.json`'s `windows` list): from now on every `wolf_cwd`
-    /// notification (the `WolfDir` `DirChanged` autocmd, covering both UI- and
-    /// `:cd`-initiated changes) is mirrored into `store` as this window's cwd.
+    /// slot in `state.json`'s `windows` list): from now on every genuine
+    /// `DirChanged` `wolf_cwd` notification (a real `:cd`/`:lcd`/`:tcd`, including
+    /// the Open-Folder chdir) is mirrored into `store` as this window's cwd.
     ///
-    /// The current [`tracked_cwd`](Self::live_cwd) — if nvim has already
-    /// reported one — is pushed into the store IMMEDIATELY, so the setup-time
-    /// `wolf_cwd` emission that may have raced ahead of this attach is not
-    /// lost. The tracked-cwd read guard is cloned out before the store call
-    /// (no lock held across it).
+    /// The passive launch/initial cwd is DELIBERATELY never persisted: the
+    /// setup-time `wolf_cwd` emit is flagged and skipped by
+    /// [`apply_cwd`](crate::redraw), and no tracked-cwd is pushed here on attach.
+    /// So a fresh empty-state window persists `cwd == ""`; a real `:cd` persists
+    /// via `apply_cwd`; and a restored window's cwd comes from
+    /// [`StateStore::open`]'s disk load — not from this attach.
     pub fn attach_state_store(&self, store: StateStore, window_index: usize) {
-        *self.state_store.write() = Some((store.clone(), window_index));
-        let cwd = self.tracked_cwd.read().clone();
-        if let Some(cwd) = cwd {
-            store.set_cwd(window_index, &cwd);
-        }
+        *self.state_store.write() = Some((store, window_index));
     }
 
     /// Reads the current render-state snapshot (for painting on the UI thread).
@@ -383,6 +398,18 @@ impl WolfCore {
         mru_for(&self.mru_cache, &cwd)
             .map(|s| s.recent())
             .unwrap_or_default()
+    }
+
+    /// Returns the global recent directories (newest first), capped at
+    /// [`crate::RECENT_DIRS_LIMIT`]. See [`RecentDirs::recent`].
+    ///
+    /// These are the directories the captive Neovim has changed into (via the
+    /// "open folder" command or a typed `:cd`), recorded from the `wolf_cwd`
+    /// notification into the always-on `<state_dir>/folder-mru.sqlite`. Returns an
+    /// empty `Vec` when the store is disabled or unreadable.
+    #[must_use]
+    pub fn recent_dirs(&self) -> Vec<PathBuf> {
+        self.recent_dirs.recent()
     }
 
     /// The captive Neovim's LIVE working directory, or `None` until nvim first

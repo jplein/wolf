@@ -45,10 +45,12 @@ A third global helper that `wolf-core` invokes over RPC **after** `ui_attach`, c
 The helper:
 
 - creates a `WolfDir` augroup (`clear = true`, so re-invoking is idempotent);
-- registers a `DirChanged` autocmd (`pattern = "*"`, covering `:cd` / `:lcd` / `:tcd`) whose callback does `vim.rpcnotify(chan, "wolf_cwd", vim.fn.getcwd())` — i.e. notifies core of the new working directory on every directory change;
-- emits once immediately (the same `rpcnotify`) so the startup cwd is reflected without a `:cd`.
+- registers a `DirChanged` autocmd (`pattern = "*"`, covering `:cd` / `:lcd` / `:tcd`) whose callback does `vim.rpcnotify(chan, "wolf_cwd", vim.fn.getcwd())` (no second arg) — i.e. notifies core of the new working directory on every directory change;
+- emits once immediately with a distinguishing `true` second arg (`vim.rpcnotify(chan, "wolf_cwd", vim.fn.getcwd(), true)`) so the startup cwd is reflected without a `:cd`.
 
 Core stores this in a sibling `TrackedCwd` cell (NOT the render snapshot, and it does NOT bump the snapshot `seq`), since nvim's cwd is not render state — the `:cd` that triggered it already produces its own redraw flush. The channel id is passed as a Lua **vararg** (`...`), never interpolated into the code string.
+
+The `true` flag on the one-shot INITIAL emit marks it as the passive launch/startup cwd. Core still TRACKS it (updating the `TrackedCwd` cell so `live_cwd` reflects nvim's working directory) but does NOT persist it to `state.json` or record it in the recent-dirs MRU — the launch cwd is not a directory the user opened. Only genuine `DirChanged` events (unflagged — every real `:cd` / `:lcd` / `:tcd`, including the Open-Folder chdir) are mirrored to the per-window state store and recorded in the MRU.
 
 ### Theme tracking — `_G.wolf_setup_theme_tracking(chan)`
 

@@ -376,6 +376,49 @@ fn state_bridge_saves_and_restores_all_facets() {
     // --- 10. Shutdown: clean teardown (shutdown itself flushes the store) ----
     handle.shutdown();
 
+    // --- 11. Empty-cwd ("no folder open") sentinel round-trips through FFI ----
+    // The launch-behavior change persists `cwd == ""` for empty-state windows.
+    // With the core shut down the store's writer is stopped, so state.json is
+    // stable: overwrite it with a version-1 window whose cwd is empty and confirm
+    // `wolf_ffi_load_state()` surfaces `cwd() == ""` UNCHANGED (the sentinel is
+    // pure data — it must pass through the accessor without substitution). Written
+    // as a raw JSON string because serde_json is not a wolf-ffi dev-dependency
+    // (same reason the corrupt fixture above is a literal).
+    const EMPTY_CWD_STATE_JSON: &str = r#"{
+  "version": 1,
+  "windows": [
+    {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 0.0,
+      "height": 0.0,
+      "cwd": "",
+      "sidebar_visible": false
+    }
+  ]
+}
+"#;
+    std::fs::write(&state_path, EMPTY_CWD_STATE_JSON)
+        .expect("failed to seed the empty-cwd state.json");
+    let empty_cwd = wolf_ffi_load_state();
+    let empty_windows = empty_cwd.windows();
+    assert_eq!(
+        empty_windows.len(),
+        1,
+        "the empty-cwd fixture must load back as exactly one window"
+    );
+    assert_eq!(
+        empty_windows[0].cwd(),
+        "",
+        "an empty cwd (the no-folder sentinel) must round-trip through \
+         wolf_ffi_load_state() as \"\", got {:?}",
+        empty_windows[0].cwd()
+    );
+    assert!(
+        !empty_windows[0].sidebar_visible(),
+        "the seeded sidebar_visible=false must survive alongside the empty cwd"
+    );
+
     std::env::remove_var("WOLF_STATE_DIR");
     drop(cd_dir);
     drop(tmp_cwd);

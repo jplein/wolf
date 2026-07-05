@@ -378,6 +378,10 @@ mod ffi {
         // `:cd`/`DirChanged`), or the empty string until nvim first reports it /
         // after shutdown.
         fn cwd(&self) -> String;
+        // The GLOBAL recent-directories MRU, newest-first (capped at 20), as
+        // owned Strings; an empty `Vec` when the store is disabled/unreadable or
+        // the core is gone. Drives the File > Open Recent submenu.
+        fn recent_dirs(&self) -> Vec<String>;
         // The WolfTitlebar theme group's background color (the macOS titlebar
         // background), following the `default_fg`/`default_bg` convention:
         // unset when the group is absent/cleared or the core is gone.
@@ -1239,6 +1243,25 @@ impl WolfCoreHandle {
         };
         core.live_cwd()
             .map_or_else(String::new, |p| p.to_string_lossy().into_owned())
+    }
+
+    /// The GLOBAL recent-directories MRU, newest-first (capped at 20), as owned
+    /// Strings; an empty `Vec` when the store is disabled/unreadable or the core
+    /// has been shut down.
+    ///
+    /// Delegates to [`WolfCore::recent_dirs`], mapping each `PathBuf` via
+    /// `to_string_lossy().into_owned()`. Read lazily at Open-Recent-menu open
+    /// time by the macOS shell to build the File > Open Recent submenu.
+    #[must_use]
+    pub fn recent_dirs(&self) -> Vec<String> {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return Vec::new();
+        };
+        core.recent_dirs()
+            .into_iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect()
     }
 
     /// The `WolfTitlebar` theme group's background color (the macOS titlebar
