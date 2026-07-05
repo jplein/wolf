@@ -96,6 +96,11 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     /// hidden by `didOpenFolder()` on the empty-state → open-project transition.
     private var emptyState: EmptyStateView?
     private var statePersistence: StatePersistence?
+    /// KVO on the sidebar split item's `isCollapsed`, relaying visibility into the
+    /// file tree's refresh gate so it defers/catches-up its outline work. A second
+    /// observer alongside `StatePersistence`'s (which persists disk state); this one
+    /// keeps the tree's gating out of that focused concern. Invalidated in teardown.
+    private var sidebarVisibilityObservation: NSKeyValueObservation?
 
     /// Guards `teardown()` against running twice (windowWillClose + the
     /// terminate-time backstop).
@@ -156,10 +161,12 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         // wake rebuilds its rows. It is only STARTED for a window that has a
         // folder — an empty-state window must not scan `home`; the tree starts
         // (reroots) when a folder later opens (see `didOpenFolder` / `onRenderWake`).
+        // The `start()` (whose first `refresh()` may `reloadData`) is deferred to
+        // the END of this method, AFTER the sidebar's real initial `isCollapsed` has
+        // seeded the refresh gate (via the `.initial` KVO below) — so a restored,
+        // COLLAPSED sidebar defers its first outline work instead of reloading while
+        // hidden.
         let tree = FileTreeView(handle: handle, paneContainer: paneContainer)
-        if hasFolder {
-            tree.start()
-        }
         self.tree = tree
 
         let window = MainWindow(
@@ -239,6 +246,26 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         persistence.install()
         persistence.pushSnapshot()
         statePersistence = persistence
+
+        // Relay the sidebar's collapse state into the file tree's refresh gate so
+        // outline work is deferred while hidden and caught up on reappear. `.initial`
+        // seeds the tree with the current visibility immediately.
+        sidebarVisibilityObservation = window.sidebarItem.observe(
+            \.isCollapsed, options: [.initial, .new]
+        ) { [weak self] item, _ in
+            self?.tree?.setSidebarVisible(!item.isCollapsed)
+        }
+
+        // Start the file tree LAST — only for a window that has a folder — now that
+        // the refresh gate has been seeded with the sidebar's real initial
+        // visibility (the `.initial` KVO above fired synchronously on install). A
+        // VISIBLE sidebar does its first refresh + initial root-expand normally; a
+        // restored COLLAPSED sidebar defers, then runs exactly one catch-up refresh
+        // when it is first shown. An empty-state window never scans `home`; the tree
+        // starts (reroots) when a folder later opens (see `didOpenFolder`).
+        if hasFolder {
+            tree.start()
+        }
 
         return true
     }
@@ -513,6 +540,9 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         statePersistence?.pushSnapshot()
         _ = handle?.state_flush()
         statePersistence = nil
+
+        sidebarVisibilityObservation?.invalidate()
+        sidebarVisibilityObservation = nil
 
         tree?.close()
         tree = nil

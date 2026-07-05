@@ -54,72 +54,163 @@ pub enum TreeNode {
 /// with `rel_path` as a deterministic tie-break.
 #[must_use]
 pub fn children_of(entries: &[crate::FileEntry], dir: &str) -> Vec<TreeNode> {
-    let mut nodes: Vec<TreeNode> = Vec::new();
+    TreeIndex::build(entries).children_of(dir).to_vec()
+}
 
-    for entry in entries {
-        let display = entry.display.as_str();
+/// The projection ordering for two sibling [`TreeNode`]s: directories first,
+/// then case-insensitively by `name` (via `to_ascii_lowercase`), with `rel_path`
+/// as a deterministic tie-break.
+fn node_cmp(a: &TreeNode, b: &TreeNode) -> std::cmp::Ordering {
+    let a_is_dir = matches!(a, TreeNode::Dir { .. });
+    let b_is_dir = matches!(b, TreeNode::Dir { .. });
+    // Directories first.
+    b_is_dir.cmp(&a_is_dir).then_with(|| {
+        let (a_name, a_rel) = node_name_rel(a);
+        let (b_name, b_rel) = node_name_rel(b);
+        a_name
+            .to_ascii_lowercase()
+            .cmp(&b_name.to_ascii_lowercase())
+            .then_with(|| a_rel.cmp(b_rel))
+    })
+}
 
-        // Determine `rest`: the portion of `display` below `dir`, and `comp0`,
-        // the first component of `rest`.
-        let rest = if dir.is_empty() {
-            display
-        } else {
-            let prefix = format!("{dir}/");
-            match display.strip_prefix(&prefix) {
-                Some(r) => r,
-                None => continue,
+/// A per-snapshot index from a directory's rel-path to its IMMEDIATE children,
+/// built in a single pass over the flat [`crate::FileEntry`] list.
+///
+/// This is the O(children) counterpart of the free [`children_of`]: instead of
+/// re-scanning the entire flat list (and doing a linear dedup) on every
+/// per-directory query, [`build`](TreeIndex::build) walks the list once, grouping
+/// each entry's ancestor directories and leaf file under the correct parent, then
+/// sorts each per-directory `Vec` once with [`node_cmp`]. A later lookup is a hash
+/// probe returning a borrowed slice, so AppKit's per-child callback storm hits
+/// memory, not a full rescan.
+///
+/// The projection semantics are IDENTICAL to the free `children_of`: directories
+/// first, then files, each group case-insensitively by `name` with `rel_path` as a
+/// tie-break; directory nodes deduped by `rel_path` (many files may imply one
+/// dir); files as leaves; `dir == ""` == the cwd root.
+pub struct TreeIndex {
+    children: std::collections::HashMap<String, Vec<TreeNode>>,
+}
+
+impl TreeIndex {
+    /// Builds the index in a single pass over the flat entry slice.
+    #[must_use]
+    pub fn build(entries: &[crate::FileEntry]) -> TreeIndex {
+        use std::collections::{HashMap, HashSet};
+
+        let mut children: HashMap<String, Vec<TreeNode>> = HashMap::new();
+        // Per-parent set of already-seen child rel-paths, so dir dedup is O(1)
+        // rather than a linear `.any()` scan.
+        let mut seen: HashMap<String, HashSet<String>> = HashMap::new();
+
+        for entry in entries {
+            let display = entry.display.as_str();
+            if display.is_empty() {
+                continue;
             }
-        };
-        if rest.is_empty() {
-            continue;
+
+            let components: Vec<&str> = display.split('/').collect();
+            let k = components.len() - 1;
+            for i in 0..=k {
+                // Skip empty components (mirrors the `rest.is_empty()` guard of
+                // the original single-scan projection).
+                if components[i].is_empty() {
+                    continue;
+                }
+                let parent = components[..i].join("/");
+                let child_rel = components[..=i].join("/");
+
+                let seen_here = seen.entry(parent.clone()).or_default();
+                if !seen_here.insert(child_rel.clone()) {
+                    continue;
+                }
+
+                let node = if i == k {
+                    TreeNode::File {
+                        name: components[i].to_string(),
+                        rel_path: child_rel,
+                        abs_path: entry.path.clone(),
+                    }
+                } else {
+                    TreeNode::Dir {
+                        name: components[i].to_string(),
+                        rel_path: child_rel,
+                    }
+                };
+                children.entry(parent).or_default().push(node);
+            }
         }
 
-        let (comp0, tail) = match rest.split_once('/') {
-            Some((head, tail)) => (head, Some(tail)),
-            None => (rest, None),
-        };
+        for nodes in children.values_mut() {
+            nodes.sort_by(node_cmp);
+        }
 
-        let child_rel = if dir.is_empty() {
-            comp0.to_string()
-        } else {
-            format!("{dir}/{comp0}")
-        };
+        TreeIndex { children }
+    }
 
-        let node = if tail.is_none() {
-            // `comp0` is the entry's final component => a file.
-            TreeNode::File {
-                name: comp0.to_string(),
-                rel_path: child_rel,
-                abs_path: entry.path.clone(),
-            }
-        } else {
-            // More components follow => an intermediate directory.
-            TreeNode::Dir {
-                name: comp0.to_string(),
-                rel_path: child_rel,
-            }
-        };
+    /// The IMMEDIATE children of `dir` (`""` == the cwd root) as a borrowed slice,
+    /// or the empty slice for an unknown directory.
+    #[must_use]
+    pub fn children_of(&self, dir: &str) -> &[TreeNode] {
+        self.children.get(dir).map_or(&[][..], Vec::as_slice)
+    }
+}
 
-        if !nodes.iter().any(|n| node_rel_path(n) == node_rel_path(&node)) {
-            nodes.push(node);
+/// A version-keyed cache of a single [`TreeIndex`], so the front-end rebuilds the
+/// per-directory index only when the underlying file-search snapshot advances.
+///
+/// [`index_for`](TreeIndexCache::index_for) rebuilds (bumping
+/// [`build_count`](TreeIndexCache::build_count)) only when the cached index is
+/// absent or its recorded version differs from the requested one; otherwise it
+/// returns the cached borrow untouched. This keeps AppKit's numberOfChildren /
+/// child:index callback storm — many `children_of` calls per reload at a single
+/// snapshot version — down to ONE index build per snapshot.
+pub struct TreeIndexCache {
+    cached: Option<(u64, TreeIndex)>,
+    build_count: u64,
+}
+
+impl TreeIndexCache {
+    /// A fresh, empty cache (nothing built yet).
+    #[must_use]
+    pub fn new() -> TreeIndexCache {
+        TreeIndexCache {
+            cached: None,
+            build_count: 0,
         }
     }
 
-    nodes.sort_by(|a, b| {
-        let a_is_dir = matches!(a, TreeNode::Dir { .. });
-        let b_is_dir = matches!(b, TreeNode::Dir { .. });
-        // Directories first.
-        b_is_dir.cmp(&a_is_dir).then_with(|| {
-            let (a_name, a_rel) = node_name_rel(a);
-            let (b_name, b_rel) = node_name_rel(b);
-            a_name
-                .to_ascii_lowercase()
-                .cmp(&b_name.to_ascii_lowercase())
-                .then_with(|| a_rel.cmp(b_rel))
-        })
-    });
+    /// Returns the [`TreeIndex`] for `version`, rebuilding it from `entries` (and
+    /// bumping [`build_count`](Self::build_count)) ONLY when the cache is empty or
+    /// holds a different version. A repeated call at the same version returns the
+    /// cached borrow with no rebuild.
+    pub fn index_for(&mut self, version: u64, entries: &[crate::FileEntry]) -> &TreeIndex {
+        // Do the stale check and (re)insert as separate statements before the
+        // final borrow, to avoid borrow-checker / significant-drop friction.
+        let stale = match &self.cached {
+            Some((cached_version, _)) => *cached_version != version,
+            None => true,
+        };
+        if stale {
+            self.cached = Some((version, TreeIndex::build(entries)));
+            self.build_count += 1;
+        }
+        &self.cached.as_ref().unwrap().1
+    }
 
-    nodes
+    /// How many times an index has actually been (re)built — one per distinct
+    /// snapshot version seen. Repeated same-version lookups do not bump this.
+    #[must_use]
+    pub fn build_count(&self) -> u64 {
+        self.build_count
+    }
+}
+
+impl Default for TreeIndexCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Returns the ancestor directory rel-paths of `rel_path`, from the cwd root
@@ -447,5 +538,240 @@ mod tests {
         assert_eq!(children_of(&entries, ""), Vec::new());
         assert_eq!(children_of(&entries, "a"), Vec::new());
         assert_eq!(ancestors_to_reveal(""), Vec::<String>::new());
+    }
+
+    // =====================================================================
+    // TreeIndex / TreeIndexCache (T1)
+    //
+    // The per-snapshot index re-implements the SAME projection as the free
+    // `children_of`, but as an O(children) borrowed-slice lookup. These tests
+    // reuse the `fe`/`abs`/`dir`/`file` helpers above and pin that the index's
+    // `children_of` returns the SAME hand-built vecs (compared as slices,
+    // since `TreeIndex::children_of` yields `&[TreeNode]`), plus the cache's
+    // build-once-per-version behavior.
+    // =====================================================================
+
+    #[test]
+    fn tree_index_equivalence_all_cases() {
+        // The multi-dir entry set used by
+        // `children_of_root_lists_top_level_dirs_first_then_files`, plus a deep
+        // nested chain so we can also probe intermediate dirs.
+        let entries = [
+            fe("readme.md"),
+            fe("src/main.rs"),
+            fe("src/lib.rs"),
+            fe("Cargo.toml"),
+            fe("docs/intro.md"),
+            fe("a/b/c.md"),
+        ];
+
+        let index = TreeIndex::build(&entries);
+
+        // Root: dirs first (case-insensitive: "a" < "docs" < "src"), then files
+        // ("Cargo.toml" -> 'c' < 'r' <- "readme.md").
+        assert_eq!(
+            index.children_of(""),
+            &[
+                dir("a"),
+                dir("docs"),
+                dir("src"),
+                file("Cargo.toml"),
+                file("readme.md"),
+            ][..]
+        );
+
+        // "src": two leaf files, case-insensitive ("lib.rs" < "main.rs").
+        assert_eq!(
+            index.children_of("src"),
+            &[file("src/lib.rs"), file("src/main.rs")][..]
+        );
+
+        // "docs": a single leaf file.
+        assert_eq!(index.children_of("docs"), &[file("docs/intro.md")][..]);
+
+        // Deep chain: "a" -> dir "a/b"; "a/b" -> file "a/b/c.md".
+        assert_eq!(index.children_of("a"), &[dir("a/b")][..]);
+        assert_eq!(index.children_of("a/b"), &[file("a/b/c.md")][..]);
+    }
+
+    #[test]
+    fn tree_index_dedupes_dirs() {
+        let entries = [fe("a/x.md"), fe("a/y.md"), fe("a/z.md")];
+
+        let index = TreeIndex::build(&entries);
+
+        // The dir "a" appears exactly once at root despite three files under it.
+        assert_eq!(index.children_of(""), &[dir("a")][..]);
+
+        // Under "a", all three files, sorted (already case-insensitive ascending).
+        assert_eq!(
+            index.children_of("a"),
+            &[file("a/x.md"), file("a/y.md"), file("a/z.md")][..]
+        );
+    }
+
+    #[test]
+    fn tree_index_dirs_first_case_insensitive_tiebreak() {
+        // Mirrors `dirs_sort_before_files_case_insensitive` against the index.
+        let entries = [
+            fe("Zeta.md"),
+            fe("alpha/x.md"),
+            fe("Beta.md"),
+            fe("gamma/y.md"),
+        ];
+
+        let index = TreeIndex::build(&entries);
+
+        // Dirs FIRST, case-insensitive ("alpha" < "gamma"), then files
+        // case-insensitive ("Beta" < "Zeta") — case must NOT reorder these.
+        assert_eq!(
+            index.children_of(""),
+            &[
+                dir("alpha"),
+                dir("gamma"),
+                file("Beta.md"),
+                file("Zeta.md"),
+            ][..]
+        );
+    }
+
+    #[test]
+    fn tree_index_deep_surfaces_intermediate_dir() {
+        // Mirrors `children_of_deep_surfaces_intermediate_dir`.
+        let entries = [fe("a/b/c.md")];
+
+        let index = TreeIndex::build(&entries);
+
+        assert_eq!(index.children_of(""), &[dir("a")][..]);
+        assert_eq!(index.children_of("a"), &[dir("a/b")][..]);
+        assert_eq!(index.children_of("a/b"), &[file("a/b/c.md")][..]);
+    }
+
+    #[test]
+    fn tree_index_root_and_unknown_dir_empty() {
+        let entries: [FileEntry; 0] = [];
+
+        let index = TreeIndex::build(&entries);
+
+        // Empty entries: root and any unknown dir both yield empty slices.
+        assert_eq!(index.children_of(""), &[][..]);
+        assert_eq!(index.children_of("a"), &[][..]);
+    }
+
+    #[test]
+    fn tree_index_large_shape() {
+        // Synthesize DIR_COUNT * FILE_COUNT entries across many dirs, build the
+        // index ONCE, and assert per-dir child counts + dirs-first ordering on a
+        // sampled dir. Correctness only — NO wall-clock/timing assertion.
+        const DIR_COUNT: usize = 50;
+        const FILE_COUNT: usize = 50;
+        const SAMPLE_DIR: usize = 7;
+
+        let mut entries: Vec<FileEntry> = Vec::with_capacity(DIR_COUNT * FILE_COUNT);
+        for i in 0..DIR_COUNT {
+            for j in 0..FILE_COUNT {
+                entries.push(fe(&format!("dir{i}/file{j}.rs")));
+            }
+        }
+
+        let index = TreeIndex::build(&entries);
+
+        // Root has exactly DIR_COUNT dir nodes (one per `dir{i}`), all dirs.
+        let root = index.children_of("");
+        assert_eq!(
+            root.len(),
+            DIR_COUNT,
+            "root should surface exactly {DIR_COUNT} deduped dirs"
+        );
+        assert!(
+            root.iter().all(|n| matches!(n, TreeNode::Dir { .. })),
+            "every root child is an intermediate dir"
+        );
+
+        // Each `dir{i}` has exactly FILE_COUNT leaf files.
+        for i in 0..DIR_COUNT {
+            let children = index.children_of(&format!("dir{i}"));
+            assert_eq!(
+                children.len(),
+                FILE_COUNT,
+                "dir{i} should have exactly {FILE_COUNT} files"
+            );
+        }
+
+        // Dirs-first ordering holds for a sampled dir's children: they are all
+        // files (leaves), so none is a Dir, and they are sorted case-insensitively
+        // by name with rel_path tie-break (matching `node_cmp`). Check the sampled
+        // dir's files equal the hand-built, sorted expectation.
+        let mut expected: Vec<TreeNode> = (0..FILE_COUNT)
+            .map(|j| file(&format!("dir{SAMPLE_DIR}/file{j}.rs")))
+            .collect();
+        expected.sort_by(|a, b| {
+            let (a_name, a_rel) = match a {
+                TreeNode::Dir { name, rel_path } | TreeNode::File { name, rel_path, .. } => {
+                    (name, rel_path)
+                }
+            };
+            let (b_name, b_rel) = match b {
+                TreeNode::Dir { name, rel_path } | TreeNode::File { name, rel_path, .. } => {
+                    (name, rel_path)
+                }
+            };
+            a_name
+                .to_ascii_lowercase()
+                .cmp(&b_name.to_ascii_lowercase())
+                .then_with(|| a_rel.cmp(b_rel))
+        });
+        assert_eq!(
+            index.children_of(&format!("dir{SAMPLE_DIR}")),
+            &expected[..],
+            "sampled dir's children must be dirs-first (none here) then \
+             case-insensitively sorted"
+        );
+    }
+
+    #[test]
+    fn tree_index_cache_builds_once_per_version() {
+        let entries = [
+            fe("src/main.rs"),
+            fe("src/lib.rs"),
+            fe("docs/intro.md"),
+        ];
+
+        let mut cache = TreeIndexCache::new();
+
+        // First build at version 1.
+        {
+            let index = cache.index_for(1, &entries);
+            assert_eq!(
+                index.children_of("src"),
+                &[file("src/lib.rs"), file("src/main.rs")][..]
+            );
+        }
+        assert_eq!(cache.build_count(), 1, "first index_for builds once");
+
+        // Same version: served from cache, no rebuild.
+        {
+            let index = cache.index_for(1, &entries);
+            assert_eq!(
+                index.children_of("src"),
+                &[file("src/lib.rs"), file("src/main.rs")][..]
+            );
+        }
+        assert_eq!(
+            cache.build_count(),
+            1,
+            "repeated index_for at the same version must NOT rebuild"
+        );
+
+        // New version: rebuild, bump the build count.
+        {
+            let index = cache.index_for(2, &entries);
+            assert_eq!(index.children_of("docs"), &[file("docs/intro.md")][..]);
+        }
+        assert_eq!(
+            cache.build_count(),
+            2,
+            "a new version must rebuild exactly once"
+        );
     }
 }

@@ -1,220 +1,188 @@
-# Plan: File-picker filtering performance fix
+# Plan: Fix high-CPU / main-thread-blocking file-tree projection (large repos)
+
+## Status: COMPLETE ✅ — all layers implemented, reviewed, tested, documented
+
+## Docs: verified accurate by technical-writer (coder's first-pass docs already matched the implementation; no edits needed). READMEs cover TreeIndex/TreeIndexCache, FfiFileSearch cache + version(), and the two WolfKeyMap seams + FileTreeView/WolfWindowController wiring.
+
+## Non-blocking #1 FIXED
+Coder reordered `WolfWindowController.start()`: `tree.start()` now runs AFTER the `sidebarVisibilityObservation` KVO (`.initial`) install, so the gate is seeded with real sidebar visibility before the first `refresh()`. A restored-collapsed window now defers its first refresh (no wasted reload while hidden) and catches up once on show. `bazel build //crates/wolf-macos:Wolf` PASS; `WolfKeyMapTests` PASS. Initially-visible + catch-up-on-show behavior preserved (didInitialExpand still fires on first visible refresh).
+Coder's suggested extra gate test DECLINED — invariant already covered by existing T5 `testHiddenDefersAndVisibleCatchesUpOnce`.
+
+## Reviewer verdict: APPROVED, no blocking issues. Two non-blocking notes:
+1. Launch-time un-gated reload for a restored-hidden folder window: `start()`→`refresh()` runs before the gate's visibility is seeded from `isCollapsed`. Bounded (only MRU seed present; traversal streams later via gated wakes → does NOT reproduce the peg). FIXING — seed gate visibility before start().
+2. Degenerate path inputs (leading/double slash) in TreeIndex::build: cannot occur, matches original behavior, not a regression. ACCEPTED as-is, no action.
+
+## Round 1 results
+- Coder implemented all three layers; ALL tests pass:
+  - `//crates/wolf-core:wolf_core_lib_test` PASS (T1)
+  - `//crates/wolf-ffi:tree_search` PASS (T2, real Neovim), `//crates/wolf-ffi:bridge_smoke` PASS
+  - `//crates/wolf-macos:WolfKeyMapTests` PASS (T4/T5)
+  - `//crates/wolf-macos:Wolf` (full signed app bundle) PASS; clippy clean.
+- swift-bridge regenerated via `bazel run //crates/wolf-ffi:gen_bindings`.
+- No functional divergence from plan; snapshot fields `view.version`/`view.entries` and `window.sidebarItem`/`self.tree` matched.
+
+## Orchestrator decisions on coder's test recommendations
+1. **Add FFI `version()` accessor coverage** to `tree_search.rs` — ACCEPTED (cheap, real-nvim, guards new bridge surface). Routing to test-writer.
+2. **Gate+version Swift integration test requiring a refresh() extraction** — DECLINED (out of scope; gate logic already unit-covered by TreeRefreshGateTests; refactor-for-test adds risk for marginal gain).
+
+## Tests written (test-writer)
+- `crates/wolf-core/src/tree.rs` — appended T1 (7 tests) to `#[cfg(test)] mod tests`.
+- `crates/wolf-ffi/tests/tree_search.rs` — extended with T2 (two-call equality; all existing assertions kept).
+- `crates/wolf-macos/Tests/WolfKeyMapTests/TreeChildrenMemoTests.swift` — NEW (T4, 4 tests).
+- `crates/wolf-macos/Tests/WolfKeyMapTests/TreeRefreshGateTests.swift` — NEW (T5, 4 tests).
+- `crates/wolf-macos/BUILD.bazel` — added the two new Swift test files to `WolfKeyMapTests` srcs (explicit list, not a glob).
+- T2 references `wolf_ffi::FfiTreeNode` (crate-root struct) — coder must keep that path valid.
 
 ## Problem statement
 
-Opening a large repo (e.g. ~/Git/NixOS/nixpkgs, ~91,600 files) in the file picker:
-the picker opens quickly, but filtering burns a lot of CPU. The UI is NOT the
-bottleneck (already capped at `maxRows=200`, `NSTableView` is virtualized). Four
-compounding costs were identified:
+Opening a large repo (e.g. `~/Git/NixOS/nixpkgs`, ~100k+ files) pegs and blocks the
+macOS front-end's main thread, freezing all windows — even before the file picker is
+opened, and even with the sidebar hidden.
 
-1. **Un-coalesced streaming wakes.** `files.rs` traversal fires `wake()` every
-   `TRAVERSAL_BATCH=256` files (~358 wakes for nixpkgs). `PickerWakeBridge.swift`
-   handles each with a bare `DispatchQueue.main.async { refresh() }` — no debounce.
-   Each `refresh()` re-ranks the entire accumulated list → ~16M entry-scorings
-   during initial load. FIX: coalesce/debounce `refresh()` (~16–33ms) so batches
-   collapse instead of one full re-rank per batch.
+### Root cause (proven by a live `sample` — 100% of main-thread samples in this stack)
 
-2. **Full sort + clone in `rank_matches`** (`crates/wolf-core/src/rank.rs`): does a
-   full O(M log M) sort of all matches and clones `display` into every `MatchKey`,
-   just to `take(200)`. FIX: bounded top-N select (bounded heap / select_nth), only
-   clone `display` for survivors.
+```
+nvim render wake
+ → WolfWindowController.onRenderWake
+  → FileTreeView.onRenderWake
+   → refresh() → reloadData()/reveal()
+    → NSOutlineView asks for children
+     → FileTreeView.children(of:)
+      → FFI FfiFileSearch.children_of
+       → wolf_core::tree::children_of   (hot loop: node_rel_path / String::as_str)
+```
 
-3. **Per-entry allocation in `score_entry`**: allocates a lowercased String + two
-   Vecs (components, words) per entry per keystroke (~275k allocations per scan
-   over nixpkgs). FIX: reusable scratch buffers / allocation-free ci matching.
+Three compounding cost multipliers:
 
-4. **Empty-query path (`rank_empty`)**: sorts all 91,600 entries (cloning every
-   display) just to show 200 MRU-first. The order is only `(mru_group, mru_rank,
-   index)`. FIX: special-case — emit MRU entries then first `(200 - mru_count)`
-   non-MRU in original order, no full sort.
+- **Layer 1 (Swift):** `FileTreeView.children(of:)` (FileTreeView.swift:267) is recomputed
+  once PER CHILD — AppKit calls `numberOfChildrenOfItem` then `child:index:` per child
+  (FileTreeView.swift:221-227), each re-invoking `children_of(dir)` from scratch (no memo)
+  → ~O(K^2 * N) per directory.
+- **Layer 2 (Rust):** `wolf_core::tree::children_of` (tree.rs:56) scans the ENTIRE flat
+  FileEntry list per directory AND uses a linear `nodes.iter().any()` dedup (tree.rs:103)
+  → O(N*M) per call.
+- **Layer 3 (redundant work):** Full reload/reveal on every render wake; and the outline
+  work runs even when the sidebar is collapsed/hidden (why hiding the sidebar did NOT help).
+
+## Requested fix — all three layers
+
+1. **Swift:** Memoize `children(of:)` per `relPath`, invalidated on new snapshot / before
+   reloadData, so `children_of` is called at most once per directory per reload. Preserve
+   stable-identity behavior (`itemsByRelPath` reuse) and synthetic-root handling.
+2. **Rust:** Make `children_of` cheap — build a per-snapshot index
+   (`HashMap<dir_rel_path, Vec<TreeNode>>`) so per-directory lookup is O(children); at
+   minimum replace linear dedup with a `HashSet`. Keep public API/semantics (dirs-first,
+   case-insensitive name sort with rel_path tie-break, dir dedup, files as leaves), keep it
+   toolkit-free/pure. Extend tests; mind the FFI boundary (`FfiFileSearch::children_of`).
+3. **Redundant work:** (a) Avoid redundant full reloads when nothing structural changed.
+   (b) Skip outline/children work while the sidebar is collapsed/hidden; re-run a deferred
+   refresh/reveal when it becomes visible again.
 
 ## Constraints
 
-- Do NOT change match semantics / ranking order. All existing tests in
-  `crates/wolf-core/tests` and `rank.rs` unit tests must still pass.
-- `rank_matches(query, entries) -> Vec<Match>` returns ALL matches best-first
-  today; FFI `FfiFileSearch::ranked` (`crates/wolf-ffi/src/lib.rs`) calls
-  `rank_matches(...).take(max)`. Architect decides: add a bounded variant
-  (e.g. `rank_matches_top_n`) used by the FFI while keeping `rank_matches` intact,
-  or thread a limit through. Keep existing behavior/tests green.
-- Prefer end-to-end/integration tests starting a real traversal (see
-  `crates/wolf-ffi/tests/file_search.rs`); add a large-tree test.
-- Update relevant README.md files (rank.rs → `crates/wolf-core/src/README.md`;
-  files.rs; wolf-macos picker) per documentation-is-source-of-truth. After editing
-  Markdown, run `prettier --write`.
+- Documentation is source of truth (CLAUDE.md). Update READMEs to match new behavior.
+- Prefer real-Neovim integration tests over mocks.
+- Bazel build system. Align with prior commit b28c594 (PickerRefreshCoalescer, rank bounding).
+- Acceptance signal: opening nixpkgs no longer pegs/blocks the main thread; projection no
+  longer O(N) per AppKit child callback.
 
-## Status: COMPLETE
+## Key files
 
-Implemented, reviewed (APPROVED, no BLOCKER), documented, prettier-clean, all tests
-green. Docs updated across 5 READMEs (wolf-core src/tests, wolf-ffi src/tests,
-wolf-macos); prettier --write reports all unchanged (already conform).
+- `crates/wolf-core/src/tree.rs`
+- `crates/wolf-core/src/README.md`
+- `crates/wolf-ffi/src/lib.rs`
+- `crates/wolf-macos/Sources/WolfMacOS/FileTreeView.swift`
+- `crates/wolf-macos/Sources/WolfMacOS/EditorSplitViewController.swift`
+- `crates/wolf-macos/README.md`
 
-### Reviewer (agent a946f24ce9460bd5d): APPROVED, no BLOCKER.
-Equivalence invariant + empty fast path + allocation-free score_entry all verified
-correct. Only outstanding: docs (already assigned to technical-writer). NIT:
-cancelPending() only clears the flag (armed timer still fires, but refresh() is a
-no-op when closed) — acceptable, documented.
+## Orchestrator decisions on architect's flagged risks
 
-### Coder results (agent a6a258c843275d8d4)
-All 4 fixes implemented per plan. Tests run via bazelisk on macOS (no cargo in env):
-- `//crates/wolf-core:wolf_core_lib_test` + `:rank_bounded` → PASSED
-- `//crates/wolf-core:file_search` → PASSED (real nvim)
-- `//crates/wolf-ffi:file_search` → PASSED, 2 tests incl. new `file_search_bounds_large_tree`
-- `//crates/wolf-macos:WolfKeyMapTests` → PASSED (incl. PickerRefreshCoalescerTests)
-- lib builds clean.
-Deviation: reflowed the wolf-ffi `use` block to stay ≤100 cols (import grew). Could
-not run cargo fmt/clippy (no cargo in env); rustc builds warning-clean.
-BUILD collision handled correctly: coder added only the LIBRARY src.
-OUTSTANDING: docs (plan step 8) NOT done — for technical-writer.
+1. **Keep the free `children_of` re-implemented via `TreeIndex` (one source of truth).** ACCEPTED — hot macOS path uses the cached `TreeIndexCache`; wolf-gnome can adopt the cache later if it shows the same storm.
+2. **`version()` returns 0 for absent session.** ACCEPTED — live `version` starts at 1, so the first refresh always reloads. Safe.
+3. **Two KVO observers on `sidebarItem.isCollapsed`** (existing persistence one + new tree relay). ACCEPTED — keeps `StatePersistence` focused on disk state.
+4. **`rel_path_for` left O(N).** ACCEPTED — called once per reveal (rare), out of the hot path. Out of scope.
+5. **Reveal while version unchanged still runs (skips reloadData).** ACCEPTED — outline structure unchanged; only selection/scroll move; children served from the still-valid memo.
 
-### Tests written (test-writer, agent a036aa539654c4479)
-- CREATED `crates/wolf-core/tests/rank_bounded.rs` (7a) + `rank_bounded` rust_test in
-  `crates/wolf-core/BUILD.bazel`.
-- EDITED `crates/wolf-ffi/tests/file_search.rs` (added `file_search_bounds_large_tree`).
-- CREATED `crates/wolf-macos/Tests/WolfKeyMapTests/PickerRefreshCoalescerTests.swift`
-  (7d) + added ONLY the TEST src to `WolfKeyMapTests` srcs in
-  `crates/wolf-macos/BUILD.bazel`.
+## Architect's plan
 
-### ⚠ BUILD collision to honor (coder):
-The test-writer ALREADY added `"Tests/WolfKeyMapTests/PickerRefreshCoalescerTests.swift"`
-to the `WolfKeyMapTests` swift_test `srcs`. The coder must add the LIBRARY src line
-`"Sources/WolfKeyMap/PickerRefreshCoalescer.swift"` to the `WolfKeyMap` swift_library
-`srcs`, but MUST NOT re-add the test src line (avoid duplicate-label error).
+### Overview
+Make per-directory child projection cheap at all three layers:
+- **Layer 2 (Rust core):** single per-snapshot `TreeIndex` (`HashMap<dir, Vec<TreeNode>>`) + version-keyed `TreeIndexCache`, replacing the full-flat-list scan + linear dedup per call. Free `children_of` re-implemented via the index (semantics preserved). FFI `FfiFileSearch::children_of` routes through the cached index; new `FfiFileSearch::version()` accessor.
+- **Layer 1 (Swift):** `TreeChildrenMemo` seam caches `[TreeItem]` per dir so AppKit's numberOfChildren/child:index callback storm hits memory, not the FFI. Invalidated on refresh-reload and reroot. `itemsByRelPath` still provides stable identity.
+- **Layer 3 (redundant work):** `TreeRefreshGate` seam — visibility gate (defer all work while sidebar collapsed; one catch-up refresh on reappear) + version gate (reloadData only when snapshot version advanced). Sidebar visibility observed via KVO on `sidebarItem.isCollapsed` in WolfWindowController, relayed to `FileTreeView.setSidebarVisible(_:)`.
 
----
+### Implementation order
+1. `wolf-core/src/tree.rs`: add `node_cmp`, `TreeIndex` (`build`, `children_of`), `TreeIndexCache` (`index_for(version, entries)`, `build_count`); re-implement free `children_of` via `TreeIndex`.
+2. `wolf-core/src/lib.rs`: re-export `TreeIndex`, `TreeIndexCache`; update doc comment.
+3. wolf-core unit tests for `TreeIndex` / `TreeIndexCache` (T1).
+4. `wolf-ffi/src/lib.rs`: add `tree_cache: RefCell<TreeIndexCache>` field + set it in BOTH constructors (`start_file_search`, `start_tree_search`); route `children_of` through the cache (`view = search.read()`, `cache.index_for(view.version, &view.entries)`); add `version()` method + bridge declaration.
+5. Regenerate committed swift-bridge bindings (`bazel run //crates/wolf-ffi:gen_bindings`); commit `generated/wolf-ffi.swift` + headers.
+6. New WolfKeyMap seams `TreeChildrenMemo.swift`, `TreeRefreshGate.swift`; add both to `wolf_key_map` srcs in `crates/wolf-macos/BUILD.bazel`.
+7. WolfKeyMap seam tests (T4/T5); add to `WolfKeyMapTests` srcs.
+8. `FileTreeView.swift`: memo wiring (`projectChildren`, rewritten `children(of:)`, weak-self memo), gate wiring (rewritten `refresh()`, new `setSidebarVisible`, `reroot` invalidation + `resetReloadTracking`).
+9. `WolfWindowController.swift`: sidebar visibility KVO relay (`sidebarVisibilityObservation`, `.observe(\.isCollapsed, options: [.initial, .new])`), teardown invalidation.
+10. Docs (READMEs) + prettier.
 
-# Implementation Plan (from architect)
+### Key semantics to PRESERVE
+- Projection: dirs-first, case-insensitive name sort, `rel_path` tie-break, dir dedup (one dir node per many files), files as leaves, `dir==""` == cwd root.
+- Swift stable identity: memo holds the SAME `TreeItem` instances; `itemsByRelPath` reuse intact; synthetic root (`nil` → rootItem, not in `itemsByRelPath`, not memoized).
+- `TreeChildrenMemo.project` closure must capture `self` weakly (FileTreeView owns memo owns closure → retain cycle otherwise).
 
-## Summary
+### Detailed Rust surface
+- `TreeIndex { children: HashMap<String, Vec<TreeNode>> }`; `build(entries: &[FileEntry]) -> TreeIndex` (single pass, HashSet dedup per parent, sort each vec via `node_cmp`); `children_of(&self, dir: &str) -> &[TreeNode]` (empty slice for unknown dir).
+- `TreeIndexCache { cached: Option<(u64, TreeIndex)>, build_count: u64 }`; `new()`/`Default`; `index_for(&mut self, version: u64, entries) -> &TreeIndex` (rebuild + bump build_count only when version differs); `build_count(&self) -> u64`.
+- Free `children_of(entries, dir) -> Vec<TreeNode>` = `TreeIndex::build(entries).children_of(dir).to_vec()`. Existing in-module tests STAY.
+- `#[must_use]` on `build_count`, `TreeIndex::children_of`, `TreeIndex::build`, `version()`.
 
-Four fixes, picker-only. Keep `rank_matches` public API + all existing tests 100%
-intact. Out of scope: `palette.rs`/`rank_palette` (tiny candidate set), `files.rs`
-(TRAVERSAL_BATCH stays 256), sidebar tree wake.
+### Detailed FFI surface
+- `FfiFileSearch` gains `tree_cache: RefCell<TreeIndexCache>` (RefCell already used in the file). Both constructors init `TreeIndexCache::new()`.
+- `children_of(&self, dir: String) -> Vec<FfiTreeNode>` unchanged signature, body routes through cache.
+- New `version(&self) -> u64` in the `extern "Rust"` bridge block; impl `self.search.as_ref().map_or(0, |s| s.read().version)`.
 
-Key files:
-- `crates/wolf-core/src/rank.rs` — fixes #2, #3, #4
-- `crates/wolf-core/src/lib.rs` — re-export `rank_matches_top_n`
-- `crates/wolf-ffi/src/lib.rs` — `FfiFileSearch::ranked` switch (~line 1930)
-- `crates/wolf-macos/Sources/WolfKeyMap/PickerRefreshCoalescer.swift` (NEW) +
-  `PickerView.swift` + `PickerWakeBridge.swift` — fix #1
+### Detailed Swift surface
+- `TreeChildrenMemo<Item>` (Foundation-only): `init(project:)`, `children(ofDir:) -> [Item]` (compute-once-per-dir), `invalidate()`.
+- `TreeRefreshGate` (Foundation-only): `init(isVisible:)`, `requestRefresh() -> Bool` (false+defer when hidden), `setVisible(_:) -> Bool` (true iff hidden→visible with deferred work), `shouldReload(version:) -> Bool` (true iff version != lastReloaded, records it), `resetReloadTracking()`.
+- `FileTreeView`: `projectChildren(dir:)` extracted from old `children(of:)` loop; `children(of:)` → `nil` returns rootItem, else `childrenMemo.children(ofDir: relPath)`; `refresh()` gated (requestRefresh → shouldReload(version) → invalidate+reloadData → pending reveal); `setSidebarVisible(_:)` runs catch-up refresh; `reroot` resets tracking + invalidates memo.
+- `WolfWindowController`: KVO on `window.sidebarItem.isCollapsed` with `.initial`, relays `!isCollapsed` to `tree?.setSidebarVisible(...)`; invalidated in teardown.
 
-## Fix #2 — Bounded top-N ranking
+### Tests to write
+**T1 — `wolf-core/src/tree.rs` in-module (rides `//crates/wolf-core:wolf_core_lib_test`, no BUILD change):**
+- `tree_index_equivalence_all_cases` — index vs hand-built expected for `""`, `"src"`, `"docs"`, deep `a`, `a/b`.
+- `tree_index_dedupes_dirs` — one `dir("a")` at root, three files under `a` sorted.
+- `tree_index_dirs_first_case_insensitive_tiebreak` — mirrors `dirs_sort_before_files_case_insensitive`.
+- `tree_index_deep_surfaces_intermediate_dir` — mirrors deep case.
+- `tree_index_root_and_unknown_dir_empty` — empty entries → empty slices.
+- `tree_index_large_shape` — thousands of synthetic entries; build once; assert per-dir counts + dirs-first on a sampled dir. Correctness only, NO wall-clock.
+- `tree_index_cache_builds_once_per_version` — `index_for(1,..)` twice → build_count==1; `index_for(2,..)` → build_count==2; results correct each time. (Headless proof of once-per-snapshot.)
 
-Add `pub fn rank_matches_top_n(query: &str, entries: &[FileEntry], n: usize) -> Vec<Match>`.
-- Must return EXACTLY `rank_matches(query, entries).into_iter().take(n).collect()`
-  for ALL inputs. `rank_matches`/`rank_empty` unchanged.
-- Effective order is `(MatchKey, index)` ascending (rank_matches uses a STABLE
-  sort and MatchKey lacks index, so index is the implicit final tiebreak). Bounded
-  path MUST use `index` as final tiebreak.
-- Algorithm: private borrowed key `struct KeyRef<'a>` mirroring MatchKey field order
-  (mru_group, mru_rank, score:Reverse<u32>, match_start, span, len, display:&'a str,
-  index:usize). Derive PartialOrd+Ord+PartialEq+Eq+Copy+Clone+Debug. index makes it a
-  TOTAL order → final `sort_unstable` is deterministic.
-  - `BinaryHeap<KeyRef>` max-heap cap n (peek = current WORST). For each matching
-    entry: if len<n push; else if cand < peek, pop+push. Drain → `into_vec()` →
-    `sort_unstable()` ascending → map to owned `Match` cloning `display` ONLY for
-    the ≤n survivors.
-  - n==0 → early `Vec::new()`. terms.is_empty() → delegate to empty fast path.
-  - O(M log n), ≤n display clones.
-- Add `PartialEq, Eq` to `Match`'s derive (additive) so tests can `assert_eq!`.
+**T2 — `wolf-ffi/tests/tree_search.rs` (existing `tree_search` target, real hermetic Neovim):**
+- Add: two consecutive `tree.children_of("src")` calls (no snapshot change) return equal name/rel_path/is_dir vectors.
+- Keep all existing assertions (dirs-first, dotfiles, gitignored excluded, `rel_path_for`, ancestors, open round-trip).
+- Do NOT try to observe build count across the bridge (proven headlessly in T1).
 
-## Fix #3 — Allocation-free `score_entry`
+**T4 — `crates/wolf-macos/Tests/WolfKeyMapTests/TreeChildrenMemoTests.swift` (add to `WolfKeyMapTests` srcs):**
+- `testRepeatedLookupsForOneDirProjectOnce` — inject counting `project`; N lookups of one dir → projectCount==1, arrays equal.
+- `testDistinctDirsProjectPerDir` — two dirs → projectCount==2.
+- `testInvalidateForcesRecompute` — lookup, invalidate, lookup same → projectCount==2, results equal.
+- `testResultsMatchDirectProjection` — memo output equals direct `project` call.
 
-No lowercased String, no component/word Vecs, no scratch buffers. ASCII-only folding
-preserved (never Unicode). Preserve bonuses 100/20/4, separators, match_start/span.
-- `subsequence_span_ci(term, display)`: walk `display.chars().enumerate()`, compare
-  `qc == hc.to_ascii_lowercase()` (term already lowercased). Same (first,last) char
-  indices, None if term not consumed.
-- `ci_starts_with(hay, needle)` and `ci_contains(hay, needle)`: ASCII-folded char
-  comparison, no alloc. Parity with old `component.starts_with`/`display_lower.contains`.
-- Body: for each term, subsequence_span_ci (AND-drop on None); component/word bonuses
-  via `display.split(SEP).filter(non-empty).any(|c| ci_starts_with(c, term))`;
-  contiguous via `ci_contains`. Both rank_matches and rank_matches_top_n call this
-  same refactored score_entry.
-- Regression guard = EXISTING in-module rank.rs tests (do NOT modify them).
+**T5 — `crates/wolf-macos/Tests/WolfKeyMapTests/TreeRefreshGateTests.swift` (add to `WolfKeyMapTests` srcs):**
+- `testHiddenDefersAndVisibleCatchesUpOnce` — hidden: requestRefresh false repeatedly; setVisible(true) true once; second setVisible(true) false.
+- `testVisibleRequestProceeds` — visible: requestRefresh true; setVisible(true) unchanged false.
+- `testShouldReloadGatesOnVersion` — shouldReload(1) true, (1) false, (2) true; after resetReloadTracking, (2) true again.
+- `testHiddenNeverReloadsUntilVisible` — hidden never advances reload tracking; after catch-up, requestRefresh+shouldReload reloads.
 
-## Fix #4 — Empty-query fast path
+### Docs to update
+- `crates/wolf-core/src/README.md` — `## tree.rs`: document `TreeIndex` + `TreeIndexCache`; update `children_of` bullet (now via index, O(children) lookup, HashSet dedup, no O(N) per-call scan). `## lib.rs` re-export list: add `TreeIndex`, `TreeIndexCache`.
+- `crates/wolf-ffi/` docs (module `//!` and/or README): `FfiFileSearch` caches `TreeIndexCache`; `children_of` served from per-snapshot index; document `version()`.
+- `crates/wolf-macos/README.md` — `FileTreeView.swift` entry: per-dir memo + visibility/version gate; add entries for the two new WolfKeyMap seams.
+- Reformat every edited Markdown with `prettier --write`; no hard line breaks in paragraphs.
 
-Private `fn rank_empty_top_n(entries, n) -> Vec<Match>`, called when terms empty.
-No global sort. Partition in index order into `mru` (mru_rank.is_some()) and `nonmru`
-(index order already). Stable-sort `mru` by `mru_rank` asc. Concat mru++nonmru,
-take(n), build Match with same MatchKey rank_empty would (score Reverse(0),
-match_start MAX, span 0, len chars().count(), display clone). MRU set is small
-(MRU_LIMIT=50). ≤n clones.
+### Bazel / swift-bridge wiring the coder must not forget
+- `fn version(&self)` REQUIRES `bazel run //crates/wolf-ffi:gen_bindings` + commit regenerated `generated/wolf-ffi.swift` (+ headers). `children_of` change is Rust-internal, no codegen.
+- `crates/wolf-macos/BUILD.bazel`: add `TreeChildrenMemo.swift`, `TreeRefreshGate.swift` to `wolf_key_map` srcs; add the two test files to `WolfKeyMapTests` srcs.
+- No new wolf-core/wolf-ffi BUILD targets. Only `std::collections::{HashMap, HashSet}`.
 
-## Fix #1 — Swift debounce/coalescing
-
-New `crates/wolf-macos/Sources/WolfKeyMap/PickerRefreshCoalescer.swift` (Foundation
-only, headless-testable seam):
-- `public static let refreshInterval: TimeInterval = 0.033` (~30fps).
-- init(schedule: (@escaping ()->Void)->Void, perform: ()->Void). `var scheduled=false`.
-- `request()`: if scheduled return (coalesce); else scheduled=true, schedule
-  { scheduled=false; perform() }. Optional `cancelPending()`.
-- Guarantees: burst collapses to one trailing fire; fire clears flag so a later wake
-  reschedules (final/complete wake never dropped); fire reads latest snapshot.
-- `PickerView.swift`: add lazy `refreshCoalescer` (schedule via
-  `DispatchQueue.main.asyncAfter`); add `func scheduleRefresh() { refreshCoalescer.request() }`.
-  Keystrokes (`controlTextDidChange`) + `open()` keep calling `refresh()` DIRECTLY
-  (immediate). `close()` may `cancelPending()`.
-- `PickerWakeBridge.swift`: change thunk to `picker?.scheduleRefresh()` (still inside
-  DispatchQueue.main.async).
-
-## FFI change
-
-`crates/wolf-ffi/src/lib.rs`: import `rank_matches_top_n` (replace `rank_matches`,
-keep `rank_palette`); `FfiFileSearch::ranked` uses
-`rank_matches_top_n(&query, &view.entries, max).into_iter()` (drop redundant `.take`).
-Update doc comment reference.
-
-## Tests
-
-- **7a (NEW `crates/wolf-core/tests/rank_bounded.rs`, headless, own BUILD target
-  mirroring palette_rank):** central property `rank_matches_top_n(q,&e,n) ==
-  rank_matches(q,&e).into_iter().take(n).collect()` via `assert_eq!`. Cases: empty +
-  all-whitespace query (MRU-mixed set); single term; multi-term AND; order-independent;
-  no-match; tie group straddling n (many "a*.md" for "a"); MRU weak-beats-strong;
-  n>match count; n==0; n==1; large synthetic 5–10k in-memory set n=200; one non-ASCII
-  display+query char (ASCII-fold parity).
-- **7b (fix #3 guard):** EXISTING in-module rank.rs tests stay green; no new dupes there.
-- **7c (extend `crates/wolf-ffi/tests/file_search.rs`, real nvim+fs):** temp cwd with
-  ~5,000 files (~500 sharing `alphaNNNN.md` + one `alpha.md`); poll ranked("",200)
-  until streamed; assert ranked("alpha",200) returns exactly 200 rows, `alpha.md`
-  first, every display contains a-l-p-h-a subsequence. Follow SKIP-when-unset +
-  poll pattern; tempfile::tempdir(). Lower to ~2,000 if slow.
-- **7d (NEW `crates/wolf-macos/Tests/WolfKeyMapTests/PickerRefreshCoalescerTests.swift`,
-  XCTest, follow PickerSeamTests):** inject capturing `schedule` + counting `perform`.
-  Cases: N rapid request()→one fire→perform once; after fire, request() reschedules+
-  fires again; single request fires once; refreshInterval in 16–33ms band.
-- No mocks for traversal (real temp dirs / in-memory data).
-
-## BUILD wiring
-
-- `crates/wolf-core/BUILD.bazel`: add `rust_test` `rank_bounded` copying headless
-  `palette_rank` target (no data/env/nvim).
-- `crates/wolf-macos/BUILD.bazel`: WolfKeyMap lib srcs += PickerRefreshCoalescer.swift;
-  WolfKeyMapTests srcs += PickerRefreshCoalescerTests.swift (explicit lists,
-  alphabetical). WolfMacOS is globbed (no change). file_search target already lists
-  the file.
-
-## Docs (prettier --write after each; no hard breaks mid-paragraph)
-
-- `crates/wolf-core/src/README.md`: rank.rs section — rank_matches_top_n, empty-query
-  fast path, allocation-free ci scoring; lib.rs re-export list += rank_matches_top_n.
-- `crates/wolf-core/tests/README.md`: new rank_bounded bullet; extend file_search
-  picker bullet; update aggregate counts.
-- `crates/wolf-macos/README.md`: PickerRefreshCoalescer seam; PickerWakeBridge now
-  scheduleRefresh (coalesced) while keystrokes immediate.
-
-## Implementation order
-
-1. rank.rs allocation-free score_entry (#3). 2. rank.rs Match Eq + KeyRef +
-rank_matches_top_n + rank_empty_top_n (#2,#4). 3. lib.rs re-export. 4. wolf-ffi
-ranked switch. 5. Swift coalescer + wiring. 6. BUILD updates. 7. tests. 8. docs+prettier.
-
-## Lint notes
-
-KeyRef: derive both PartialOrd+Ord (clippy::derive_ord_xor_partial_ord) + Copy.
-rank_matches_top_n `#[must_use]`. Avoid clippy::comparison_chain in heap loop
-(keep len<n / peek branches distinct). No new #[allow].
-
-Architect agent id: a13ced4d31d81e21a
+### Lint notes
+- `TreeIndexCache::index_for`: do stale-check + insert as separate statements before returning `&self.cached...` (avoid borrow friction / `significant_drop_in_scrutinee`).
+- `TreeChildrenMemo.project` closure `[weak self]` (retain-cycle avoidance).

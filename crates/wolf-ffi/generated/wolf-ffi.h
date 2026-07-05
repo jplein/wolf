@@ -213,6 +213,7 @@ bool __swift_bridge__$WolfCoreHandle$state_flush(void* self);
 void* __swift_bridge__$FfiFileSearch$ranked(void* self, void* query, uintptr_t max);
 void* __swift_bridge__$FfiFileSearch$children_of(void* self, void* dir);
 void* __swift_bridge__$FfiFileSearch$rel_path_for(void* self, void* abs);
+uint64_t __swift_bridge__$FfiFileSearch$version(void* self);
 void* __swift_bridge__$FfiFileEntry$display(void* self);
 void* __swift_bridge__$FfiFileEntry$path(void* self);
 void* __swift_bridge__$FfiTreeNode$name(void* self);

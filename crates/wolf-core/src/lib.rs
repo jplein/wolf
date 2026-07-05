@@ -69,4 +69,7 @@ pub use render::{
     ResolvedStyle, Rgb, SharedSnapshot, Snapshot, ThemeColors, ThemeGroup, Viewport, WinInfo,
 };
 pub use state::{load_state, state_dir, StateStore, ToolbarMode, WindowState, WolfState};
-pub use tree::{ancestors_to_reveal, children_of, node_rel_path, rel_path_for, TreeNode};
+pub use tree::{
+    ancestors_to_reveal, children_of, node_rel_path, rel_path_for, TreeIndex, TreeIndexCache,
+    TreeNode,
+};

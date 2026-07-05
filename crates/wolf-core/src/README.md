@@ -6,7 +6,7 @@ Dependency order: `render` → `layout` → `state` → `input` → `redraw` →
 
 ## `lib.rs`
 
-Crate root. Declares the public modules (`api`, `command`, `command_mru`, `config`, `files`, `input`, `layout`, `mru`, `nvim`, `palette`, `rank`, `recent_dirs`, `redraw`, `render`, `state`, `tree`) and re-exports the public surface: `WolfCore`, `CoreConfig`, `CoreError`, `SnapshotReadGuard`; `Command`, `CommandSpec`, `MenuGroup`, `COMMAND_SPECS` (from `command`); `CommandMru`, `COMMAND_MRU_LIMIT` (from `command_mru`); `WolfConfig`, `load_or_create`, `preferences_dir`, `default_config` (from `config`); `FileEntry`, `FileSearch`, `FileSearchReadGuard` (from `files`); `FocusDir`, `LayoutIntent`, `SplitOrientation` (from `layout`); `MruStore`, `MruError`, `MRU_LIMIT` (from `mru`); `rank_palette`, `PaletteRow`, `PaletteRowKind`, `PaletteWindow` (from `palette`); `rank_matches`, `rank_matches_top_n`, `Match`, `MatchKey` (from `rank`); `RecentDirs`, `RECENT_DIRS_LIMIT` (from `recent_dirs`); `load_state`, `state_dir`, `StateStore`, `ToolbarMode`, `WindowState`, `WolfState` (from `state`); `TreeNode`, `children_of`, `ancestors_to_reveal`, `node_rel_path`, `rel_path_for` (from `tree`); the input types and `key_to_notation`; `WakeFn`; and the render-state types. Documents the one hard rule (no GUI toolkit in the dependency tree).
+Crate root. Declares the public modules (`api`, `command`, `command_mru`, `config`, `files`, `input`, `layout`, `mru`, `nvim`, `palette`, `rank`, `recent_dirs`, `redraw`, `render`, `state`, `tree`) and re-exports the public surface: `WolfCore`, `CoreConfig`, `CoreError`, `SnapshotReadGuard`; `Command`, `CommandSpec`, `MenuGroup`, `COMMAND_SPECS` (from `command`); `CommandMru`, `COMMAND_MRU_LIMIT` (from `command_mru`); `WolfConfig`, `load_or_create`, `preferences_dir`, `default_config` (from `config`); `FileEntry`, `FileSearch`, `FileSearchReadGuard` (from `files`); `FocusDir`, `LayoutIntent`, `SplitOrientation` (from `layout`); `MruStore`, `MruError`, `MRU_LIMIT` (from `mru`); `rank_palette`, `PaletteRow`, `PaletteRowKind`, `PaletteWindow` (from `palette`); `rank_matches`, `rank_matches_top_n`, `Match`, `MatchKey` (from `rank`); `RecentDirs`, `RECENT_DIRS_LIMIT` (from `recent_dirs`); `load_state`, `state_dir`, `StateStore`, `ToolbarMode`, `WindowState`, `WolfState` (from `state`); `TreeNode`, `TreeIndex`, `TreeIndexCache`, `children_of`, `ancestors_to_reveal`, `node_rel_path`, `rel_path_for` (from `tree`); the input types and `key_to_notation`; `WakeFn`; and the render-state types. Documents the one hard rule (no GUI toolkit in the dependency tree).
 
 ## `config.rs`
 
@@ -233,6 +233,16 @@ pub enum TreeNode {
     Dir  { name: String, rel_path: String },
     File { name: String, rel_path: String, abs_path: std::path::PathBuf },
 }
+pub struct TreeIndex { /* HashMap<dir_rel_path, Vec<TreeNode>> */ }
+impl TreeIndex {
+    pub fn build(entries: &[crate::FileEntry]) -> TreeIndex
+    pub fn children_of(&self, dir: &str) -> &[TreeNode]
+}
+pub struct TreeIndexCache { /* Option<(version, TreeIndex)> + build_count */ }
+impl TreeIndexCache {
+    pub fn index_for(&mut self, version: u64, entries: &[crate::FileEntry]) -> &TreeIndex
+    pub fn build_count(&self) -> u64
+}
 pub fn children_of(entries: &[crate::FileEntry], dir: &str) -> Vec<TreeNode>
 pub fn ancestors_to_reveal(rel_path: &str) -> Vec<String>
 pub fn node_rel_path(node: &TreeNode) -> &str
@@ -240,7 +250,9 @@ pub fn rel_path_for(entries: &[crate::FileEntry], abs: &std::path::Path) -> Opti
 ```
 
 - `TreeNode` — one immediate child of a directory. `rel_path` is the full relative path from the cwd root (a dir `b` under `a` has `name = "b"`, `rel_path = "a/b"`); a `File`'s `rel_path` equals the originating `FileEntry::display` and its `abs_path` is that entry's `path`.
-- `children_of(entries, dir)` (`#[must_use]`) — the IMMEDIATE children of `dir` (`dir == ""` is the cwd root). Each `display` is split on `/`; the component just after `dir` becomes a `File` (when it is the entry's final component) or a `Dir`. Dir nodes are **deduped** by `rel_path`, and only dirs that (transitively) contain a listed file appear (automatic — dirs are derived from file paths, so no phantom dirs). The result is sorted **directories first, then files**, each group **case-insensitively by `name`** with `rel_path` as a deterministic tie-break. O(n) per call (fine for lazy per-directory expansion).
+- `TreeIndex` (`build` / `children_of` both `#[must_use]`) — a per-snapshot index from a directory's rel-path to its immediate children, built in a **single pass** over the flat entry list (`build`). Each entry's ancestor directories and leaf file are grouped under their parent, dir dedup uses a `HashSet` (no linear `.any()` scan), and each per-directory `Vec` is sorted once. `children_of(dir)` is then an **O(children)** borrowed-slice hash probe (empty slice for an unknown dir), with identical projection semantics to the free `children_of`. This is what keeps a lazy outline's per-child callback storm off a full-list rescan.
+- `TreeIndexCache` (`build_count` `#[must_use]`) — a version-keyed cache of one `TreeIndex`. `index_for(version, entries)` rebuilds (bumping `build_count`) only when the cache is empty or holds a different version, else returns the cached borrow untouched — so many `children_of` calls at one snapshot version cost a single index build. `new()` / `Default`.
+- `children_of(entries, dir)` (`#[must_use]`) — the IMMEDIATE children of `dir` (`dir == ""` is the cwd root), now implemented as `TreeIndex::build(entries).children_of(dir).to_vec()` (one source of truth). Each `display` is split on `/`; the component just after `dir` becomes a `File` (when it is the entry's final component) or a `Dir`. Dir nodes are **deduped** by `rel_path`, and only dirs that (transitively) contain a listed file appear (automatic — dirs are derived from file paths, so no phantom dirs). The result is sorted **directories first, then files**, each group **case-insensitively by `name`** with `rel_path` as a deterministic tie-break. The free fn builds a throwaway index per call; hot per-directory paths should cache a `TreeIndex` (via `TreeIndexCache`) instead.
 - `ancestors_to_reveal(rel_path)` (`#[must_use]`) — the ancestor dir rel-paths from the root down to the file's parent: `"a/b/c.md"` → `["a", "a/b"]`; `"c.md"` → `[]`; `""` → `[]`.
 - `node_rel_path(node)` — the `rel_path` of either variant.
 - `rel_path_for(entries, abs)` (`#[must_use]`) — the current-file → tree-display mapping used by the sidebars' reveal: returns `entry.display.clone()` for the FIRST entry whose `path == abs` **exactly** (a parent-dir prefix does not match), else `None`.

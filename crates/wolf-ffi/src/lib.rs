@@ -461,6 +461,9 @@ mod ffi {
         // Maps an absolute path to its tree-display rel-path (EXACT entry-path
         // match), or the empty string when no streamed entry matches.
         fn rel_path_for(&self, abs: String) -> String;
+        // The current file-search snapshot version (0 when no session backs this
+        // handle). The sidebar reloads its outline only when this advances.
+        fn version(&self) -> u64;
     }
 
     extern "Rust" {
@@ -1244,7 +1247,10 @@ impl WolfCoreHandle {
             .borrow()
             .as_ref()
             .map(|core| core.start_file_search(registered_filesearch_wake(self.wake_token)));
-        FfiFileSearch { search }
+        FfiFileSearch {
+            search,
+            tree_cache: RefCell::new(wolf_core::tree::TreeIndexCache::new()),
+        }
     }
 
     /// Starts a SEPARATE long-lived streaming file-search session for the
@@ -1262,7 +1268,10 @@ impl WolfCoreHandle {
             .borrow()
             .as_ref()
             .map(|core| core.start_file_search(registered_tree_wake(self.wake_token)));
-        FfiFileSearch { search }
+        FfiFileSearch {
+            search,
+            tree_cache: RefCell::new(wolf_core::tree::TreeIndexCache::new()),
+        }
     }
 
     /// Builds a fresh command-palette session seeded with the core's recent
@@ -1910,6 +1919,11 @@ impl FfiWinInfo {
 /// drops the inner [`FileSearch`], cancelling its background traversal.
 pub struct FfiFileSearch {
     search: Option<FileSearch>,
+    /// A version-keyed cache of the per-directory [`TreeIndex`], so AppKit's
+    /// numberOfChildren / child:index callback storm — many `children_of` calls
+    /// per reload at a single snapshot version — rebuilds the index at most once
+    /// per snapshot instead of re-scanning the flat entry list per call.
+    tree_cache: RefCell<wolf_core::tree::TreeIndexCache>,
 }
 
 impl FfiFileSearch {
@@ -1944,21 +1958,37 @@ impl FfiFileSearch {
     /// The IMMEDIATE children of `dir` (`""` = the cwd root) projected from the
     /// latest streamed search snapshot.
     ///
-    /// Delegates to [`wolf_core::tree::children_of`]: directories-first then
-    /// files, each case-insensitive by name; dotfiles are listed and gitignored
-    /// files are excluded (both already handled by the streaming traversal). The
-    /// snapshot read guard is held only for the projection + map and dropped
-    /// before returning. Yields an empty `Vec` when the session is absent.
+    /// Served from a per-snapshot [`wolf_core::tree::TreeIndex`] cached by
+    /// [`TreeIndexCache`](wolf_core::tree::TreeIndexCache) keyed on the search
+    /// snapshot's `version`: the index is rebuilt at most once per snapshot, and a
+    /// per-directory lookup is then an O(children) borrowed-slice probe. Projection
+    /// semantics are unchanged: directories-first then files, each case-insensitive
+    /// by name; dotfiles are listed and gitignored files are excluded (both already
+    /// handled by the streaming traversal). Yields an empty `Vec` when the session
+    /// is absent.
     #[must_use]
     pub fn children_of(&self, dir: String) -> Vec<FfiTreeNode> {
         let Some(search) = &self.search else {
             return Vec::new();
         };
         let view = search.read();
-        wolf_core::tree::children_of(&view.entries, &dir)
-            .into_iter()
+        let mut cache = self.tree_cache.borrow_mut();
+        let index = cache.index_for(view.version, &view.entries);
+        index
+            .children_of(&dir)
+            .iter()
+            .cloned()
             .map(FfiTreeNode::from_node)
             .collect()
+    }
+
+    /// The current file-search snapshot version, or 0 when no session is backing
+    /// this handle. Live snapshots start at `version = 1`, so 0 uniquely marks an
+    /// absent session; the front-end's refresh gate reloads only when this
+    /// advances.
+    #[must_use]
+    pub fn version(&self) -> u64 {
+        self.search.as_ref().map_or(0, |s| s.read().version)
     }
 
     /// Maps an absolute path to its tree-display rel-path via an EXACT entry-path

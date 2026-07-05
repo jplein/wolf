@@ -170,6 +170,16 @@ fn tree_search_projects_children_and_reveals_current_file() {
         sleep(POLL_INTERVAL);
     }
 
+    // --- version() has advanced past its initial state after streaming --------
+    // The live snapshot's `version` starts at 1 and is non-decreasing as batches
+    // stream in; now that entries have streamed, it must be > 0. Capture it here
+    // (as the crate's `u64`) so a later read can prove non-decreasing behavior.
+    let v1: u64 = tree.version();
+    assert!(
+        v1 > 0,
+        "version() should be > 0 after entries have streamed in (got {v1})"
+    );
+
     // Directories come BEFORE files, case-insensitively by name. Collect the
     // directory names in order and the file names in order, then assert the
     // dirs all precede the files and each group is correctly ordered.
@@ -262,6 +272,48 @@ fn tree_search_projects_children_and_reveals_current_file() {
              cwd={canonical_cwd:?})"
         );
     }
+
+    // --- children_of("src") is stable across repeated calls -----------------
+    // With no intervening snapshot change, the cached-index path must return
+    // identical results across calls. Call twice more and assert equality by
+    // (name, rel_path, is_dir) for each node. This is behavioral sanity for the
+    // per-snapshot cached index (the build-count proof is headless, in T1).
+    let src_children_again_a = tree.children_of(DIR_SRC.to_string());
+    let src_children_again_b = tree.children_of(DIR_SRC.to_string());
+    let project = |nodes: &[wolf_ffi::FfiTreeNode]| -> Vec<(String, String, bool)> {
+        nodes
+            .iter()
+            .map(|n| (n.name(), n.rel_path(), n.is_dir()))
+            .collect()
+    };
+    assert_eq!(
+        project(&src_children_again_a),
+        project(&src_children_again_b),
+        "two consecutive children_of(\"src\") calls with no snapshot change must \
+         return identical (name, rel_path, is_dir) tuples"
+    );
+    // And they must still match the original streamed children snapshot.
+    assert_eq!(
+        project(&src_children_again_a),
+        project(&src_children),
+        "repeated children_of(\"src\") must equal the first snapshot's children"
+    );
+
+    // --- version() is non-decreasing across calls with no reset --------------
+    // After further reads/settling since `v1`, the snapshot version must never go
+    // backwards.
+    let v2: u64 = tree.version();
+    assert!(
+        v2 >= v1,
+        "version() must be non-decreasing after more streaming/settling \
+         (v1={v1}, later={v2})"
+    );
+    // And two consecutive reads with no intervening reset stay non-decreasing.
+    let v3: u64 = tree.version();
+    assert!(
+        v3 >= v2,
+        "two consecutive version() reads must be non-decreasing (v2={v2}, v3={v3})"
+    );
 
     // --- rel_path_for(abs) maps a streamed entry to its display -------------
     // Use the abs_path of a streamed `src/main.rs` node: it IS that entry's path,

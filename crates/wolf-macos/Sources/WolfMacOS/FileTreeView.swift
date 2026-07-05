@@ -67,6 +67,16 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
     /// One `TreeItem` per `relPath`, giving NSOutlineView stable item identity
     /// across reloads.
     private var itemsByRelPath: [String: TreeItem] = [:]
+    /// Per-directory memo of projected children, so AppKit's numberOfChildren /
+    /// child:index callback storm calls `projectChildren` (and the FFI
+    /// `children_of`) at most ONCE per directory per reload. Built after
+    /// `buildSubviews`; invalidated on reload and reroot. `itemsByRelPath` still
+    /// provides stable identity — the memo caches the SAME `TreeItem` instances.
+    private var childrenMemo: TreeChildrenMemo<TreeItem>!
+    /// The visibility + version gate: defers all refresh work while the sidebar is
+    /// collapsed (one catch-up on reappear) and reloads the outline only when the
+    /// snapshot version has advanced.
+    private let refreshGate = TreeRefreshGate(isVisible: true)
 
     /// Neovim's live working directory the tree is currently rooted at (empty
     /// until nvim first reports it). Compared on each render wake to re-root on
@@ -95,6 +105,11 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
         self.paneContainer = paneContainer
         super.init(frame: .zero)
         buildSubviews()
+        // Weak self: FileTreeView owns the memo, which owns this closure; a strong
+        // capture would form a retain cycle.
+        childrenMemo = TreeChildrenMemo { [weak self] dir in
+            self?.projectChildren(dir: dir) ?? []
+        }
     }
 
     @available(*, unavailable)
@@ -122,6 +137,8 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
         rootItem = makeRoot(cwd)
         search = handle.start_tree_search()
         itemsByRelPath = [:]
+        childrenMemo.invalidate()
+        refreshGate.resetReloadTracking()
         didInitialExpand = false
         pendingReveal = currentFileAbs
         refresh()
@@ -130,15 +147,35 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
     /// Reloads the outline from the latest streamed snapshot (preserving expansion
     /// + selection by item identity), then retries any pending reveal. No-op once
     /// closed.
+    ///
+    /// Gated on two axes: the visibility gate skips all work (deferring a catch-up)
+    /// while the sidebar is collapsed, and the version gate reloads the outline only
+    /// when the snapshot version has advanced since the last reload — but a pending
+    /// reveal is always retried (outline structure unchanged; only selection/scroll
+    /// move, children served from the still-valid memo).
     func refresh() {
         guard search != nil else { return }
-        outlineView.reloadData()
-        if !didInitialExpand, let rootItem, !children(of: rootItem).isEmpty {
-            outlineView.expandItem(rootItem)
-            didInitialExpand = true
+        guard refreshGate.requestRefresh() else { return }
+        let version = search?.version() ?? 0
+        if refreshGate.shouldReload(version: version) {
+            childrenMemo.invalidate()
+            outlineView.reloadData()
+            if !didInitialExpand, let rootItem, !children(of: rootItem).isEmpty {
+                outlineView.expandItem(rootItem)
+                didInitialExpand = true
+            }
         }
         if let abs = pendingReveal {
             reveal(abs: abs)
+        }
+    }
+
+    /// Relays the sidebar's visibility (from the enclosing split item's
+    /// `isCollapsed` KVO). Becoming visible with a refresh deferred while hidden
+    /// runs exactly one catch-up refresh.
+    func setSidebarVisible(_ visible: Bool) {
+        if refreshGate.setVisible(visible) {
+            refresh()
         }
     }
 
@@ -265,12 +302,19 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
     /// reusing cached `TreeItem`s by `relPath` so the outline keeps stable
     /// identity. The synthetic root is never cached in `itemsByRelPath`.
     private func children(of item: Any?) -> [TreeItem] {
-        guard let search else { return [] }
         if item == nil {
+            // The synthetic root is not memoized (it is not a real dir projection).
             return rootItem.map { [$0] } ?? []
         }
         guard let treeItem = item as? TreeItem else { return [] }
-        let dir = treeItem.relPath
+        return childrenMemo.children(ofDir: treeItem.relPath)
+    }
+
+    /// Projects the immediate children of directory `dir` from the latest streamed
+    /// snapshot, reusing cached `TreeItem`s by `relPath` so the outline keeps stable
+    /// identity. Invoked (at most once per `dir` per reload) by `childrenMemo`.
+    private func projectChildren(dir: String) -> [TreeItem] {
+        guard let search else { return [] }
         var result: [TreeItem] = []
         for node in search.children_of(dir) {
             let rel = node.rel_path().toString()

@@ -435,6 +435,10 @@ extension FfiFileSearchRef {
     public func rel_path_for<GenericIntoRustString: IntoRustString>(_ abs: GenericIntoRustString) -> RustString {
         RustString(ptr: __swift_bridge__$FfiFileSearch$rel_path_for(ptr, { let rustString = abs.intoRustString(); rustString.isOwned = false; return rustString.ptr }()))
     }
+
+    public func version() -> UInt64 {
+        __swift_bridge__$FfiFileSearch$version(ptr)
+    }
 }
 extension FfiFileSearch: Vectorizable {
     public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
