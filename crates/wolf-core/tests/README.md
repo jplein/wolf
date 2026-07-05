@@ -35,7 +35,7 @@ Shared helpers used across the test binaries:
 
 ## Coverage
 
-Eighty-two integration tests across sixteen `tests/*.rs` binaries (driving a real pinned Neovim and/or real SQLite/filesystem — plus the headless `state_unit.rs` and `recent_dirs.rs`, which need neither), plus the pure in-module `#[cfg(test)]` unit tests (eighteen for the ranking function in `rank.rs`, ten for layout-intent parsing in `layout.rs`, and the `config.rs` / `tree.rs` suites documented in [`src/README.md`](../src/README.md)).
+One hundred nine integration tests across twenty `tests/*.rs` binaries (driving a real pinned Neovim and/or real SQLite/filesystem — plus the fully headless `state_unit.rs`, `recent_dirs.rs`, `command_mru.rs`, `palette_rank.rs`, and `rank_bounded.rs`, which need neither Neovim nor a filesystem), plus the pure in-module `#[cfg(test)]` unit tests (eighteen for the ranking function in `rank.rs`, ten for layout-intent parsing in `layout.rs`, and the `config.rs` / `tree.rs` suites documented in [`src/README.md`](../src/README.md)).
 
 ### File picker (real SQLite / filesystem / git / Neovim — no mocks)
 
@@ -76,6 +76,10 @@ Eighty-two integration tests across sixteen `tests/*.rs` binaries (driving a rea
 ### Ranking (pure, in-module)
 
 `rank.rs` has eighteen table-driven `#[cfg(test)]` unit tests (no fs/Neovim): empty query returns all entries MRU-first; case-insensitive matching; subsequence match and non-match exclusion; MRU outranks a stronger non-MRU match; strict-prefix beats a scattered subsequence; word splitting on separators; full-word match tops the prefix group; deterministic length/lexicographic tie-breaks; the decisive `match_start` (key 5) and `span` (key 6) tie-breaks; the multi-term AND-matching cases (space-separated terms are all required, order-independent, and extra whitespace is harmless — an entry missing any term is dropped); and the scoring-tier cases (MRU dominates a stronger non-MRU match, component-start beats scattered, contiguity beats scattered among non-component matches, and more/stronger per-term hits score higher).
+
+### Bounded ranking equivalence (headless)
+
+`rank_bounded.rs` (Bazel target `//crates/wolf-core:rank_bounded`, nine tests, NO nvim / fs / GUI — the pure analog of `palette_rank.rs`) is the headless equivalence guard for the picker's BOUNDED top-N ranking. Its one property, asserted structurally with `assert_eq!` across every case, is that `rank_matches_top_n(query, &entries, n)` equals `rank_matches(query, &entries).into_iter().take(n).collect()` for all inputs — never re-deriving the expected order by hand, so the bounded heap's `index` final-tiebreak is pinned to the unbounded stable-sort `take(n)`. Cases span the empty and all-whitespace query (MRU-mixed set), a single term, multi-term AND, order-independence, no-match, a scoring tie group straddling the `n` boundary, an MRU entry weakly beating a stronger non-MRU match, `n` larger than the match count, `n == 0`, `n == 1`, a large synthetic in-memory set at `n = 200`, and an ASCII-fold parity check with a non-ASCII display/query char.
 
 ### Layout-intent parsing (pure, in-module)
 

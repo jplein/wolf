@@ -61,7 +61,7 @@ pub use input::{
 pub use layout::{FocusDir, LayoutIntent, SplitOrientation};
 pub use mru::{MruError, MruStore, MRU_LIMIT};
 pub use palette::{rank_palette, PaletteRow, PaletteRowKind, PaletteWindow};
-pub use rank::{rank_matches, Match, MatchKey};
+pub use rank::{rank_matches, rank_matches_top_n, Match, MatchKey};
 pub use recent_dirs::{RecentDirs, RECENT_DIRS_LIMIT};
 pub use redraw::WakeFn;
 pub use render::{

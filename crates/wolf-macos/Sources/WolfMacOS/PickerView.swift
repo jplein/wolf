@@ -101,6 +101,17 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     /// Whether the picker is currently open (visible + focused).
     private var isOpen = false
 
+    /// Coalesces streaming traversal wakes into at most one `refresh()` per frame
+    /// (~30fps) so a large load's many batch wakes don't each re-rank the whole
+    /// accumulated list. Keystrokes and `open()` still call `refresh()` directly
+    /// (immediate); only the background wake path goes through here.
+    private lazy var refreshCoalescer = PickerRefreshCoalescer(
+        schedule: { work in
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + PickerRefreshCoalescer.refreshInterval, execute: work)
+        },
+        perform: { [weak self] in self?.refresh() })
+
     /// Leading inset that aligns a row's icon with the search magnifier. The search
     /// bar and the row cells share the same leading edge (both inset by `padding`
     /// from the panel), so a row icon at the magnifier's container-inset lines up
@@ -180,6 +191,7 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     func close() {
         if !isOpen { return }
         isOpen = false
+        refreshCoalescer.cancelPending()
         // Dropping the FileSearch cancels the background traversal.
         search = nil
         isHidden = true
@@ -228,6 +240,13 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
             tableView.selectRowIndexes(IndexSet(integer: idx), byExtendingSelection: false)
             tableView.scrollRowToVisible(idx)
         }
+    }
+
+    /// Requests a COALESCED refresh for a streaming traversal wake (see
+    /// `refreshCoalescer`): a burst of batch wakes during a large load collapses to
+    /// at most one `refresh()` per frame instead of one full re-rank per batch.
+    func scheduleRefresh() {
+        refreshCoalescer.request()
     }
 
     /// Moves the list selection by `delta` rows (clamped, no wrap), leaving focus

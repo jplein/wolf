@@ -13,6 +13,16 @@
 //! each [`Match`] carries the `index` into the input `entries` slice (callers
 //! map results back by index, never by inspecting `MatchKey` internals).
 //!
+//! [`rank_matches_top_n`] is the BOUNDED companion the picker FFI uses: it
+//! returns EXACTLY `rank_matches(query, entries).into_iter().take(n).collect()`
+//! for all inputs, but selects the top `n` with an `O(M log n)` bounded max-heap
+//! and clones each surviving `display` only `≤ n` times (never once per entry).
+//! The empty / all-whitespace query takes a fast path that emits the MRU entries
+//! then the first non-MRU entries in original order WITHOUT a global sort, and
+//! the per-entry scoring ([`score_entry`]) is ALLOCATION-FREE (no lowercased
+//! `String`, no component/word `Vec`s) — it folds ASCII case in place while
+//! walking each candidate.
+//!
 //! ### Tokenization (fzf/Telescope semantics)
 //!
 //! The query is split on WHITESPACE into TERMS; each term is ASCII-lowercased
@@ -57,6 +67,8 @@
 //!     6. `len`: `display.chars().count()`
 //!     7. `display` lexicographic
 
+use std::collections::BinaryHeap;
+
 use crate::files::FileEntry;
 
 /// Characters that separate "words" within the display: forward/back slash,
@@ -83,7 +95,7 @@ const CONTIGUOUS_BONUS: u32 = 4;
 
 /// A ranked picker result: the `index` into the input `entries` slice plus the
 /// opaque sort [`MatchKey`] that produced its position.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Match {
     /// Index into the `entries` slice passed to [`rank_matches`].
     pub index: usize,
@@ -158,6 +170,99 @@ pub fn rank_matches(query: &str, entries: &[FileEntry]) -> Vec<Match> {
     matches
 }
 
+/// A borrowed sort key mirroring [`MatchKey`]'s field order, plus the original
+/// `index` as a final total-order tiebreak.
+///
+/// It borrows `display` (no clone) so the bounded selection in
+/// [`rank_matches_top_n`] can compare candidates without allocating; `display`
+/// is only cloned into an owned [`MatchKey`] for the `≤ n` survivors. Adding
+/// `index` makes the order TOTAL, so the final `sort_unstable` is deterministic
+/// and matches the STABLE sort in [`rank_matches`] (whose `MatchKey` lacks
+/// `index`, making the original insertion order the implicit final tiebreak).
+/// (Both `PartialOrd` and `Ord` are derived to satisfy
+/// `clippy::derive_ord_xor_partial_ord`.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct KeyRef<'a> {
+    mru_group: u8,
+    mru_rank: u32,
+    score: core::cmp::Reverse<u32>,
+    match_start: usize,
+    span: usize,
+    len: usize,
+    display: &'a str,
+    index: usize,
+}
+
+/// Ranks `entries` for `query`, returning at most the top `n` matches best-first
+/// — EXACTLY `rank_matches(query, entries).into_iter().take(n).collect()`.
+///
+/// This is the bounded companion to [`rank_matches`] used by the picker FFI. It
+/// selects the top `n` with an `O(M log n)` bounded max-heap (keyed by the
+/// borrowed [`KeyRef`], so no `display` is cloned during selection) and clones a
+/// `display` into an owned [`MatchKey`] only for the `≤ n` survivors. An EMPTY /
+/// all-whitespace query delegates to the MRU-first fast path (`rank_empty_top_n`)
+/// which avoids a global sort; `n == 0` returns an empty `Vec` immediately.
+#[must_use]
+pub fn rank_matches_top_n(query: &str, entries: &[FileEntry], n: usize) -> Vec<Match> {
+    let terms: Vec<String> = query
+        .split_whitespace()
+        .map(|t| t.to_ascii_lowercase())
+        .collect();
+
+    if terms.is_empty() {
+        return rank_empty_top_n(entries, n);
+    }
+    if n == 0 {
+        return Vec::new();
+    }
+
+    // Max-heap capped at `n`: `peek()` is the current WORST kept candidate, so a
+    // new candidate need only be compared against it to decide eviction.
+    let mut heap: BinaryHeap<KeyRef> = BinaryHeap::with_capacity(n);
+
+    for (index, entry) in entries.iter().enumerate() {
+        let Some((score, match_start, span)) = score_entry(&terms, &entry.display) else {
+            continue;
+        };
+
+        let cand = KeyRef {
+            mru_group: mru_group(entry),
+            mru_rank: entry.mru_rank.unwrap_or(u32::MAX),
+            score: core::cmp::Reverse(score),
+            match_start,
+            span,
+            len: entry.display.chars().count(),
+            display: &entry.display,
+            index,
+        };
+
+        if heap.len() < n {
+            heap.push(cand);
+        } else if cand < *heap.peek().unwrap() {
+            heap.pop();
+            heap.push(cand);
+        }
+    }
+
+    let mut keys = heap.into_vec();
+    keys.sort_unstable();
+
+    keys.into_iter()
+        .map(|k| Match {
+            index: k.index,
+            key: MatchKey {
+                mru_group: k.mru_group,
+                mru_rank: k.mru_rank,
+                score: k.score,
+                match_start: k.match_start,
+                span: k.span,
+                len: k.len,
+                display: entries[k.index].display.clone(),
+            },
+        })
+        .collect()
+}
+
 /// EMPTY / all-whitespace query path: every entry, ordered by
 /// `(mru_group, mru_rank, index)` so MRU entries come first (ascending rank) and
 /// non-MRU entries keep their stable original order.
@@ -189,23 +294,72 @@ fn rank_empty(entries: &[FileEntry]) -> Vec<Match> {
     matches
 }
 
+/// Bounded EMPTY / all-whitespace query path: the same MRU-first order as
+/// [`rank_empty`] truncated to `n`, but WITHOUT sorting the whole set.
+///
+/// The order is only `(mru_group, mru_rank, index)`, so we partition in index
+/// order into `mru` (has an `mru_rank`) and `nonmru` (already in index order),
+/// stable-sort the small `mru` set by `mru_rank`, then take the first `n` of
+/// `mru ++ nonmru`. The MRU set is bounded by `MRU_LIMIT`, so this is `O(M)` plus
+/// a tiny sort, with at most `n` `display` clones.
+fn rank_empty_top_n(entries: &[FileEntry], n: usize) -> Vec<Match> {
+    if n == 0 {
+        return Vec::new();
+    }
+
+    let mut mru: Vec<usize> = Vec::new();
+    let mut nonmru: Vec<usize> = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        if entry.mru_rank.is_some() {
+            mru.push(index);
+        } else {
+            nonmru.push(index);
+        }
+    }
+    // Stable sort keeps the index order among any equal `mru_rank`s, matching
+    // `rank_empty`'s `(mru_rank, index)` ordering for the MRU group.
+    mru.sort_by_key(|&i| entries[i].mru_rank.unwrap_or(u32::MAX));
+
+    mru.into_iter()
+        .chain(nonmru)
+        .take(n)
+        .map(|index| {
+            let entry = &entries[index];
+            Match {
+                index,
+                key: MatchKey {
+                    mru_group: mru_group(entry),
+                    mru_rank: entry.mru_rank.unwrap_or(u32::MAX),
+                    score: core::cmp::Reverse(0),
+                    match_start: usize::MAX,
+                    span: 0,
+                    len: entry.display.chars().count(),
+                    display: entry.display.clone(),
+                },
+            }
+        })
+        .collect()
+}
+
 /// `0` if the entry is in the MRU cache, else `1`.
 fn mru_group(entry: &FileEntry) -> u8 {
     u8::from(entry.mru_rank.is_none())
 }
 
-/// Walks `query` through `haystack` as an in-order subsequence (both already
-/// lowercased). Returns the `(first, last)` haystack char indices of the first
-/// and last matched chars, or `None` if not all query chars are consumed.
-fn subsequence_span(query: &str, haystack: &str) -> Option<(usize, usize)> {
-    let mut chars = query.chars();
+/// Walks the already-lowercased `term` through `display` as an in-order
+/// case-insensitive subsequence, folding ASCII case of each `display` char in
+/// place (never allocating a lowercased copy). Returns the `(first, last)`
+/// `display` char indices of the first and last matched chars, or `None` if not
+/// all `term` chars are consumed.
+fn subsequence_span_ci(term: &str, display: &str) -> Option<(usize, usize)> {
+    let mut chars = term.chars();
     let mut needle = chars.next();
     let mut first: Option<usize> = None;
     let mut last = 0usize;
 
-    for (idx, hc) in haystack.chars().enumerate() {
+    for (idx, hc) in display.chars().enumerate() {
         match needle {
-            Some(qc) if qc == hc => {
+            Some(qc) if qc == hc.to_ascii_lowercase() => {
                 if first.is_none() {
                     first = Some(idx);
                 }
@@ -222,6 +376,30 @@ fn subsequence_span(query: &str, haystack: &str) -> Option<(usize, usize)> {
     first.map(|f| (f, last))
 }
 
+/// Whether `hay` starts with the already-lowercased `needle`, comparing ASCII
+/// case-folded chars with no allocation (parity with `hay_lower.starts_with`).
+fn ci_starts_with(hay: &str, needle: &str) -> bool {
+    let mut hc = hay.chars();
+    for nc in needle.chars() {
+        match hc.next() {
+            Some(h) if h.to_ascii_lowercase() == nc => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Whether `hay` contains the already-lowercased `needle` as a contiguous
+/// substring, comparing ASCII case-folded chars with no allocation (parity with
+/// `hay_lower.contains`).
+fn ci_contains(hay: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    hay.char_indices()
+        .any(|(i, _)| ci_starts_with(&hay[i..], needle))
+}
+
 /// Scores `display` against the already-lowercased `terms` (logical AND).
 ///
 /// Returns `None` as soon as any term is not a ci subsequence of `display`
@@ -229,34 +407,35 @@ fn subsequence_span(query: &str, haystack: &str) -> Option<(usize, usize)> {
 /// SUMS the per-term component/word/contiguity bonuses, `match_start` is the
 /// smallest first-matched index across the terms, and `span` is the sum of each
 /// term's matched span.
+///
+/// This is ALLOCATION-FREE: case is folded ASCII-only in place (never Unicode)
+/// and components/words are compared as split iterators, so no lowercased
+/// `String` and no component/word `Vec`s are built per entry.
 fn score_entry(terms: &[String], display: &str) -> Option<(u32, usize, usize)> {
-    let display_lower = display.to_ascii_lowercase();
-
-    let components: Vec<&str> = display_lower
-        .split(COMPONENT_SEPARATORS)
-        .filter(|c| !c.is_empty())
-        .collect();
-    let words: Vec<&str> = display_lower
-        .split(WORD_SEPARATORS)
-        .filter(|w| !w.is_empty())
-        .collect();
-
     let mut score = 0u32;
     let mut match_start = usize::MAX;
     let mut span = 0usize;
 
     for term in terms {
-        let (first, last) = subsequence_span(term, &display_lower)?;
+        let (first, last) = subsequence_span_ci(term, display)?;
         match_start = match_start.min(first);
         span += last - first;
 
-        if components.iter().any(|c| c.starts_with(term.as_str())) {
+        if display
+            .split(COMPONENT_SEPARATORS)
+            .filter(|c| !c.is_empty())
+            .any(|c| ci_starts_with(c, term))
+        {
             score += COMPONENT_START_BONUS;
         }
-        if words.iter().any(|w| w.starts_with(term.as_str())) {
+        if display
+            .split(WORD_SEPARATORS)
+            .filter(|w| !w.is_empty())
+            .any(|w| ci_starts_with(w, term))
+        {
             score += WORD_START_BONUS;
         }
-        if display_lower.contains(term.as_str()) {
+        if ci_contains(display, term) {
             score += CONTIGUOUS_BONUS;
         }
     }

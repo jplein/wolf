@@ -45,9 +45,9 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use wolf_core::{
-    rank_matches, rank_palette, Command, CommandMru, CoreConfig, CursorShape, FileSearch, FocusDir,
-    Grid, InputEvent, Key, KeyEvent, LayoutIntent, MouseAction, MouseButton, MouseEvent, PaletteRow,
-    PaletteRowKind, PaletteWindow, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent,
+    rank_matches_top_n, rank_palette, Command, CommandMru, CoreConfig, CursorShape, FileSearch,
+    FocusDir, Grid, InputEvent, Key, KeyEvent, LayoutIntent, MouseAction, MouseButton, MouseEvent,
+    PaletteRow, PaletteRowKind, PaletteWindow, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent,
     SplitOrientation, StateStore, ToolbarMode, WakeFn, WinInfo, WindowState, WolfCore,
 };
 
@@ -1919,17 +1919,17 @@ impl FfiFileSearch {
     /// An empty (or all-whitespace) `query` lists all known entries MRU-first; a
     /// non-empty `query` is tokenized on whitespace into terms and keeps only
     /// entries where EVERY term is a case-insensitive subsequence (order-
-    /// independent), best-first (see [`rank_matches`]). The snapshot read guard is
-    /// held only for the duration of the rank + clone and dropped before returning.
+    /// independent), best-first (see [`rank_matches_top_n`]). The snapshot read
+    /// guard is held only for the duration of the rank + clone and dropped before
+    /// returning.
     #[must_use]
     pub fn ranked(&self, query: String, max: usize) -> Vec<FfiFileEntry> {
         let Some(search) = &self.search else {
             return Vec::new();
         };
         let view = search.read();
-        let entries: Vec<FfiFileEntry> = rank_matches(&query, &view.entries)
+        let entries: Vec<FfiFileEntry> = rank_matches_top_n(&query, &view.entries, max)
             .into_iter()
-            .take(max)
             .map(|m| {
                 let entry = &view.entries[m.index];
                 FfiFileEntry {

@@ -13,7 +13,10 @@ import WolfFFI
 /// worker thread on each traversal batch with its per-window `token`; the thunk
 /// below hops onto the main thread, looks the token up in `WindowRegistry`, and
 /// asks that window's `PickerView` to re-rank/redraw. A late wake after the
-/// picker has closed is harmless — `refresh()` is a no-op when closed.
+/// picker has closed is harmless — `refresh()` is a no-op when closed. The wake
+/// asks for a COALESCED refresh (`scheduleRefresh()`) so a large load's many
+/// batch wakes collapse to at most one re-rank per frame; keystrokes still
+/// refresh immediately.
 enum PickerWakeBridge {
     /// Registers the C file-search wake callback with the Rust core once at
     /// launch. The closure captures no state (it only touches the global
@@ -22,7 +25,7 @@ enum PickerWakeBridge {
     static func install() {
         wolf_ffi_set_filesearch_wake({ token in
             DispatchQueue.main.async {
-                WindowRegistry.shared.controller(for: token)?.picker?.refresh()
+                WindowRegistry.shared.controller(for: token)?.picker?.scheduleRefresh()
             }
         })
     }

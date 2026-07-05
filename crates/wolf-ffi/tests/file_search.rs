@@ -53,6 +53,35 @@ const MAX_RESULTS: usize = 200;
 const FILE_ALPHA: &str = "alpha.md";
 const FILE_BETA: &str = "beta.md";
 
+/// Number of nested package directories seeded for the large-tree bounding test.
+const LARGE_DIR_COUNT: usize = 50;
+
+/// Files placed under each package dir's `src/` in the large-tree test.
+const LARGE_FILES_PER_DIR: usize = 100;
+
+/// Of `LARGE_FILES_PER_DIR`, how many are `alphaNNNN.md` (matchable by "alpha").
+/// Across `LARGE_DIR_COUNT` dirs this is `LARGE_DIR_COUNT * LARGE_ALPHA_PER_DIR`
+/// = 500 alpha files, plus the root `alpha.md` — comfortably more than
+/// `MAX_RESULTS`, so bounding to `MAX_RESULTS` rows is observable.
+const LARGE_ALPHA_PER_DIR: usize = 10;
+
+/// Returns true iff `needle` is an ASCII-case-insensitive SUBSEQUENCE of
+/// `haystack` (the same match relation `rank_matches` uses to keep an entry).
+fn is_ci_subsequence(needle: &str, haystack: &str) -> bool {
+    let mut hay = haystack.chars();
+    for nc in needle.chars() {
+        let target = nc.to_ascii_lowercase();
+        loop {
+            match hay.next() {
+                Some(hc) if hc.to_ascii_lowercase() == target => break,
+                Some(_) => {}
+                None => return false,
+            }
+        }
+    }
+    true
+}
+
 #[test]
 fn file_search_ranks_and_opens() {
     // Loud SKIP (no-op pass) when no pinned nvim is available, exactly like
@@ -207,6 +236,118 @@ fn file_search_ranks_and_opens() {
 
     // Explicitly clean up the temp cwd (and its `.wolf/` MRU cache) now that the
     // session is fully torn down.
+    drop(search);
+    drop(tmp);
+}
+
+/// A LARGE, real-traversal check that `ranked` BOUNDS its output to `max` rows
+/// even when far more than `max` entries match the query (the picker
+/// performance-fix contract).
+///
+/// Seeds a temp cwd with a big nested tree (`LARGE_DIR_COUNT` package dirs, each
+/// with `LARGE_FILES_PER_DIR` files under `src/`), of which
+/// `LARGE_DIR_COUNT * LARGE_ALPHA_PER_DIR` = 500 carry a matchable `alphaNNNN.md`
+/// name, plus one exact-best `alpha.md` at the root (501 total "alpha" matches,
+/// well above `MAX_RESULTS`). No mocks — a genuine background traversal streams
+/// the files in. Asserts:
+///   * `ranked("alpha", MAX_RESULTS)` returns EXACTLY `MAX_RESULTS` rows (bounded,
+///     even though > `MAX_RESULTS` match), and
+///   * the root `alpha.md` (match_start 0, top score) ranks FIRST, and
+///   * every returned display contains an `a-l-p-h-a` subsequence (all survivors
+///     are genuine matches).
+///
+/// Follows the same SKIP-when-unset + poll-until-streamed machinery as
+/// `file_search_ranks_and_opens`.
+#[test]
+fn file_search_bounds_large_tree() {
+    let Some(nvim_bin) = common::nvim_bin_or_skip() else {
+        return;
+    };
+    std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
+
+    let init_lua = common::init_lua_path();
+
+    // Seed a fresh temp cwd with a large nested tree.
+    let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
+
+    // The exact-best match lives at the root: "alpha.md" has match_start 0 and a
+    // component/word-start + contiguous score, so it must outrank the nested
+    // "alphaNNNN.md" files (whose "alpha" begins deeper in the display).
+    std::fs::write(tmp.path().join(FILE_ALPHA), "# alpha\n").expect("failed to seed root alpha.md");
+
+    let mut alpha_seq = 0usize;
+    for dir_idx in 0..LARGE_DIR_COUNT {
+        let src_dir = tmp.path().join(format!("pkg{dir_idx:03}")).join("src");
+        std::fs::create_dir_all(&src_dir).expect("failed to create nested src dir");
+        for file_idx in 0..LARGE_FILES_PER_DIR {
+            if file_idx < LARGE_ALPHA_PER_DIR {
+                // A matchable "alpha" file.
+                let name = format!("alpha{alpha_seq:04}.md");
+                std::fs::write(src_dir.join(&name), "x\n").expect("failed to seed alpha file");
+                alpha_seq += 1;
+            } else {
+                // Filler that does NOT contain an a-l-p-h-a subsequence.
+                let name = format!("file{file_idx:04}.txt");
+                std::fs::write(src_dir.join(&name), "x\n").expect("failed to seed filler file");
+            }
+        }
+    }
+
+    let handle = wolf_ffi_start(
+        init_lua.to_string_lossy().into_owned(),
+        tmp.path().to_string_lossy().into_owned(),
+        common::DEFAULT_COLS,
+        common::DEFAULT_ROWS,
+        0,
+    )
+    .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
+
+    let search = handle.start_file_search();
+
+    // Poll until enough of the tree has streamed in that "alpha" fills the whole
+    // bounded window AND the root alpha.md (the best match) is present and first.
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    let mut filtered: Vec<String> = Vec::new();
+    while Instant::now() < deadline {
+        filtered = search
+            .ranked("alpha".to_string(), MAX_RESULTS)
+            .iter()
+            .map(|e| e.display())
+            .collect();
+        let full_window = filtered.len() >= MAX_RESULTS;
+        let best_first = filtered.first().map(String::as_str) == Some(FILE_ALPHA);
+        if full_window && best_first {
+            break;
+        }
+        sleep(POLL_INTERVAL);
+    }
+
+    // Bounding: exactly MAX_RESULTS rows even though 501 files match "alpha".
+    assert_eq!(
+        filtered.len(),
+        MAX_RESULTS,
+        "ranked(\"alpha\", {MAX_RESULTS}) must be BOUNDED to exactly {MAX_RESULTS} rows \
+         even though more than {MAX_RESULTS} files match (got {})",
+        filtered.len()
+    );
+
+    // The exact-best root alpha.md ranks first.
+    assert_eq!(
+        filtered.first().map(String::as_str),
+        Some(FILE_ALPHA),
+        "ranked(\"alpha\") must rank the root {FILE_ALPHA:?} first (got {:?})",
+        filtered.first()
+    );
+
+    // Every returned display is a genuine a-l-p-h-a subsequence match.
+    for display in &filtered {
+        assert!(
+            is_ci_subsequence("alpha", display),
+            "every bounded result must contain an a-l-p-h-a subsequence, but {display:?} does not"
+        );
+    }
+
+    handle.shutdown();
     drop(search);
     drop(tmp);
 }

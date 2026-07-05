@@ -184,6 +184,24 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
+# Headless equivalence coverage for the BOUNDED top-N picker ranking
+# (`rank_matches_top_n` vs `rank_matches().take(n)`): empty/all-whitespace fast
+# path, single/multi-term AND, order-independence, no-match, tie groups that
+# straddle `n` (including identical displays that exercise the `index`
+# tiebreak), MRU-first dominance, edge `n` (0/1/over-count), a large synthetic
+# in-memory set at n=200, and ASCII-fold parity with a non-ASCII char.
+# `rank_matches_top_n` is IO-free (same `score_entry` as `rank_matches`), so this
+# needs NO nvim and no staged runfiles — the pure analog of `palette_rank`, kept
+# in a dedicated file to avoid colliding with the coder who edits `src/rank.rs`.
+rust_test(
+    name = "rank_bounded",
+    srcs = ["tests/rank_bounded.rs"],
+    crate_root = "tests/rank_bounded.rs",
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
 # Real-nvim integration test for the save-on-cwd-change flow (state plan §4): a
 # `:cd` typed into the embedded nvim must persist into `<state-dir>/state.json`
 # through the attached StateStore. The passive setup-time `wolf_cwd` emission is
