@@ -133,9 +133,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func handleCommandMenuItem(_ sender: NSMenuItem) {
         guard let kind = CommandKind(ffi: UInt8(truncatingIfNeeded: sender.tag)) else { return }
         let key = NSApp.keyWindow
-        let cwd = controllers.first { $0.owns(key) }?.currentCwd ?? ""
+        let target = controllers.first { $0.owns(key) }
+        let cwd = target?.currentCwd ?? ""
         CommandDispatcher.dispatch(
-            kind, window: key, coordinator: self, originatingCwd: cwd)
+            kind, window: key, coordinator: self, originatingCwd: cwd, controller: target)
     }
 
     /// Drops `controller` from the collection (called by the controller at

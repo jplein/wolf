@@ -23,9 +23,13 @@ enum CommandDispatcher {
     /// directory, inherited by `.newWindow` so a drained `:WolfNewWindow` / the New
     /// Window menu item root the new window at the same place Cmd-N does (empty
     /// falls back to the home dir in `makeNewWindow`). It is ignored by the other
-    /// four commands.
+    /// commands. `controller` is the command's target window controller (the menu
+    /// path finds the key window's controller; the nvim-drained path passes the
+    /// originating controller itself), through which the file commands reach that
+    /// window's picker / core handle; `nil` when no controller owns the window.
     static func dispatch(
-        _ kind: CommandKind, window: NSWindow?, coordinator: AppDelegate?, originatingCwd: String
+        _ kind: CommandKind, window: NSWindow?, coordinator: AppDelegate?, originatingCwd: String,
+        controller: WolfWindowController?
     ) {
         switch kind {
         case .newWindow:
@@ -38,6 +42,14 @@ enum CommandDispatcher {
             NSApp.hide(nil)
         case .minimizeWindow:
             window?.miniaturize(nil)
+        case .goToFile:
+            controller?.openFilePicker()
+        case .openFile:
+            controller?.presentOpenFileDialog()
+        case .openFolder:
+            controller?.presentOpenFolderDialog()
+        case .closeFile:
+            controller?.closeCurrentBuffer()
         }
     }
 }

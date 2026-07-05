@@ -183,6 +183,14 @@ fn ex_and_lua_faces_emit_commands() {
         "require('wolf').new_window() must enqueue Command::NewWindow; got {commands:?}"
     );
 
+    // --- Ex-command face: `:WolfCloseFile<CR>` -> Command::CloseFile ------------
+    ex_command(&core, "WolfCloseFile");
+    let commands = drain_until_command(&core, FLUSH_TIMEOUT, "CloseFile from :WolfCloseFile");
+    assert!(
+        commands.contains(&Command::CloseFile),
+        ":WolfCloseFile must enqueue Command::CloseFile; got {commands:?}"
+    );
+
     core.shutdown().expect("shutdown should be Ok");
 }
 
@@ -263,6 +271,10 @@ fn command_specs_menu_groups_match_macos_convention() {
         (Command::QuitApplication, MenuGroup::App),
         (Command::HideApplication, MenuGroup::App),
         (Command::MinimizeWindow, MenuGroup::Window),
+        (Command::GoToFile, MenuGroup::File),
+        (Command::OpenFile, MenuGroup::File),
+        (Command::OpenFolder, MenuGroup::File),
+        (Command::CloseFile, MenuGroup::File),
     ];
     for (command, menu) in expected {
         assert_eq!(

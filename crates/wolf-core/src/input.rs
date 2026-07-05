@@ -190,6 +190,13 @@ pub enum InputEvent {
         /// Destination path.
         path: PathBuf,
     },
+    /// Change Neovim's global working directory (delegated to `:cd`).
+    Chdir {
+        /// The directory to change to.
+        path: PathBuf,
+    },
+    /// Close (delete) the current buffer (delegated to `:bdelete`).
+    CloseBuffer,
 }
 
 /// Translates a [`KeyEvent`] into Neovim keystroke notation.
@@ -324,6 +331,8 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
         InputEvent::SaveAs { path } => {
             command(nvim, &format!("saveas {}", fnameescape(path))).await
         }
+        InputEvent::Chdir { path } => command(nvim, &format!("cd {}", fnameescape(path))).await,
+        InputEvent::CloseBuffer => command(nvim, "bdelete").await,
     }
 }
 

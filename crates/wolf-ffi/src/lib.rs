@@ -148,6 +148,14 @@ mod command_kind {
     pub const HIDE_APPLICATION: u8 = 3;
     /// Minimize the focused window.
     pub const MINIMIZE_WINDOW: u8 = 4;
+    /// Open the file-picker overlay to jump to a file.
+    pub const GO_TO_FILE: u8 = 5;
+    /// Open a native dialog to open a file anywhere.
+    pub const OPEN_FILE: u8 = 6;
+    /// Open a native dialog to change the working directory to a folder.
+    pub const OPEN_FOLDER: u8 = 7;
+    /// Close (delete) the current buffer.
+    pub const CLOSE_FILE: u8 = 8;
 }
 
 /// The split-orientation discriminants packed into [`FfiLayoutIntent::orientation`],
@@ -373,6 +381,12 @@ mod ffi {
         // Opens `path` (an absolute filesystem path) in Neovim via
         // `InputEvent::Open`; the core's input pump records the MRU.
         fn open(&self, path: String);
+        // Changes Neovim's global working directory to `path` (an absolute
+        // filesystem path) via `InputEvent::Chdir` (`:cd`).
+        fn chdir(&self, path: String);
+        // Closes (deletes) the current buffer via `InputEvent::CloseBuffer`
+        // (`:bdelete`).
+        fn close_buffer(&self);
         // Records this window's frame geometry into the live state store
         // (points; AppKit bottom-left global coords on macOS) at the handle's
         // `window_index`. A no-op when no store is attached.
@@ -576,7 +590,7 @@ mod ffi {
     extern "Rust" {
         type FfiCommand;
 
-        // The command kind (`command_kind::NEW_WINDOW` .. `MINIMIZE_WINDOW`).
+        // The command kind (`command_kind::NEW_WINDOW` .. `CLOSE_FILE`).
         fn kind(&self) -> u8;
     }
 
@@ -1256,6 +1270,25 @@ impl WolfCoreHandle {
         }
     }
 
+    /// Changes Neovim's global working directory to `path` (an absolute
+    /// filesystem path) via [`InputEvent::Chdir`] (`:cd`). A no-op once the core
+    /// has been shut down.
+    pub fn chdir(&self, path: String) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.send_input(InputEvent::Chdir {
+                path: PathBuf::from(path),
+            });
+        }
+    }
+
+    /// Closes (deletes) the current buffer via [`InputEvent::CloseBuffer`]
+    /// (`:bdelete`). A no-op once the core has been shut down.
+    pub fn close_buffer(&self) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.send_input(InputEvent::CloseBuffer);
+        }
+    }
+
     /// Records this window's frame geometry into the live state store (points;
     /// on macOS this is `NSWindow.frame`'s AppKit bottom-left global coords),
     /// at this handle's [`window_index`](Self::window_index); a no-op when no
@@ -1531,7 +1564,7 @@ pub struct FfiCommand {
 }
 
 impl FfiCommand {
-    /// The command kind (`command_kind::NEW_WINDOW` .. `MINIMIZE_WINDOW`).
+    /// The command kind (`command_kind::NEW_WINDOW` .. `CLOSE_FILE`).
     #[must_use]
     pub fn kind(&self) -> u8 {
         self.kind
@@ -1547,6 +1580,10 @@ impl FfiCommand {
             Command::QuitApplication => command_kind::QUIT_APPLICATION,
             Command::HideApplication => command_kind::HIDE_APPLICATION,
             Command::MinimizeWindow => command_kind::MINIMIZE_WINDOW,
+            Command::GoToFile => command_kind::GO_TO_FILE,
+            Command::OpenFile => command_kind::OPEN_FILE,
+            Command::OpenFolder => command_kind::OPEN_FOLDER,
+            Command::CloseFile => command_kind::CLOSE_FILE,
         };
         Self { kind }
     }

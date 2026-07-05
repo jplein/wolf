@@ -11,7 +11,8 @@
 //  DISCRIMINANT CONTRACT UNDER TEST (must match `mod command_kind` in
 //  `wolf-ffi/src/lib.rs` and the `wolf_core::Command` variant order, plan §3):
 //    newWindow = 0, closeWindow = 1, quitApplication = 2, hideApplication = 3,
-//    minimizeWindow = 4. Any out-of-range discriminant decodes to `nil`.
+//    minimizeWindow = 4, goToFile = 5, openFile = 6, openFolder = 7,
+//    closeFile = 8. Any out-of-range discriminant decodes to `nil`.
 //
 //  NOTE to coder: this references the pure `WolfKeyMap.CommandKind` enum the coder
 //  adds in `Sources/WolfKeyMap/CommandSeam.swift` (Foundation only, no AppKit),
@@ -36,12 +37,16 @@ final class CommandSeamTests: XCTestCase {
             CommandKind(ffi: 3), .hideApplication, "ffi 3 -> .hideApplication")
         XCTAssertEqual(
             CommandKind(ffi: 4), .minimizeWindow, "ffi 4 -> .minimizeWindow")
+        XCTAssertEqual(CommandKind(ffi: 5), .goToFile, "ffi 5 -> .goToFile")
+        XCTAssertEqual(CommandKind(ffi: 6), .openFile, "ffi 6 -> .openFile")
+        XCTAssertEqual(CommandKind(ffi: 7), .openFolder, "ffi 7 -> .openFolder")
+        XCTAssertEqual(CommandKind(ffi: 8), .closeFile, "ffi 8 -> .closeFile")
     }
 
     // MARK: - out-of-range discriminants decode to nil
 
     func testCommandKindOutOfRangeIsNil() {
-        XCTAssertNil(CommandKind(ffi: 5), "the first out-of-range discriminant -> nil")
+        XCTAssertNil(CommandKind(ffi: 9), "the first out-of-range discriminant -> nil")
         XCTAssertNil(CommandKind(ffi: 255), "a far out-of-range discriminant -> nil")
     }
 }

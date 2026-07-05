@@ -20,10 +20,11 @@
 //! ## Discriminant contract (plan §3, mirrors `mod command_kind`)
 //!
 //! NEW_WINDOW = 0, CLOSE_WINDOW = 1, QUIT_APPLICATION = 2, HIDE_APPLICATION = 3,
-//! MINIMIZE_WINDOW = 4 (the `wolf_core::Command` variant order). These local consts
+//! MINIMIZE_WINDOW = 4, GO_TO_FILE = 5, OPEN_FILE = 6, OPEN_FOLDER = 7,
+//! CLOSE_FILE = 8 (the `wolf_core::Command` variant order). These local consts
 //! MUST match `mod command_kind` in `wolf-ffi/src/lib.rs` and the Swift
 //! `CommandKind` port — exactly how `panes.rs` re-declares `INTENT_KIND_SPLIT`
-//! locally as a contract guard.
+//! locally as a contract guard (the guard array below asserts contiguous 0..8).
 //!
 //! ## What this asserts
 //!
@@ -73,6 +74,14 @@ const CMD_KIND_QUIT_APPLICATION: u8 = 2;
 const CMD_KIND_HIDE_APPLICATION: u8 = 3;
 /// `FfiCommand::kind()` for Minimize Window.
 const CMD_KIND_MINIMIZE_WINDOW: u8 = 4;
+/// `FfiCommand::kind()` for Go to File.
+const CMD_KIND_GO_TO_FILE: u8 = 5;
+/// `FfiCommand::kind()` for Open File.
+const CMD_KIND_OPEN_FILE: u8 = 6;
+/// `FfiCommand::kind()` for Open Folder.
+const CMD_KIND_OPEN_FOLDER: u8 = 7;
+/// `FfiCommand::kind()` for Close File.
+const CMD_KIND_CLOSE_FILE: u8 = 8;
 
 /// Builds a printable-character `FfiKeyEvent` (kind=Char) for `c`, all modifiers
 /// false (the already-resolved glyph rides in `ch`). Same as `panes.rs`.
@@ -139,8 +148,8 @@ fn commands_drain_close_and_minimize() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // Discriminant-contract guard: the local consts MUST be contiguous 0..4 in
-    // variant order (mirrors `mod command_kind`). Referencing all five here also
+    // Discriminant-contract guard: the local consts MUST be contiguous 0..8 in
+    // variant order (mirrors `mod command_kind`). Referencing all nine here also
     // keeps them from tripping dead-code lints.
     assert_eq!(
         [
@@ -149,9 +158,13 @@ fn commands_drain_close_and_minimize() {
             CMD_KIND_QUIT_APPLICATION,
             CMD_KIND_HIDE_APPLICATION,
             CMD_KIND_MINIMIZE_WINDOW,
+            CMD_KIND_GO_TO_FILE,
+            CMD_KIND_OPEN_FILE,
+            CMD_KIND_OPEN_FOLDER,
+            CMD_KIND_CLOSE_FILE,
         ],
-        [0, 1, 2, 3, 4],
-        "command_kind discriminants must be contiguous 0..4 in Command variant order"
+        [0, 1, 2, 3, 4, 5, 6, 7, 8],
+        "command_kind discriminants must be contiguous 0..8 in Command variant order"
     );
 
     let init_lua = common::init_lua_path();
@@ -199,6 +212,12 @@ fn commands_drain_close_and_minimize() {
     // --- 3. :WolfMinimizeWindow<CR> -> an FfiCommand with kind() == MINIMIZE_WINDOW
     send_ex_command(&handle, ":WolfMinimizeWindow");
     poll_for_command_kind(&handle, CMD_KIND_MINIMIZE_WINDOW, ":WolfMinimizeWindow");
+
+    // --- 3b. :WolfGoToFile<CR> -> an FfiCommand with kind() == GO_TO_FILE -----
+    // A pure FFI drain: nothing acts on it (the front-end that would open the
+    // file picker is absent), so no overlay is presented here.
+    send_ex_command(&handle, ":WolfGoToFile");
+    poll_for_command_kind(&handle, CMD_KIND_GO_TO_FILE, ":WolfGoToFile");
 
     // --- 4. Shutdown: clean teardown ----------------------------------------
     handle.shutdown();

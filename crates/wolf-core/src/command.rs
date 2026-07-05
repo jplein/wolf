@@ -24,7 +24,8 @@
 /// The variant ORDER is the discriminant contract shared with `wolf-ffi`'s
 /// `command_kind` module and the Swift `CommandKind` port: `NewWindow`(0),
 /// `CloseWindow`(1), `QuitApplication`(2), `HideApplication`(3),
-/// `MinimizeWindow`(4). Adding a command is additive (append a variant + a
+/// `MinimizeWindow`(4), `GoToFile`(5), `OpenFile`(6), `OpenFolder`(7),
+/// `CloseFile`(8). Adding a command is additive (append a variant + a
 /// [`COMMAND_SPECS`] row); reordering is a breaking change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
@@ -38,6 +39,14 @@ pub enum Command {
     HideApplication,
     /// Minimize the focused window.
     MinimizeWindow,
+    /// Open the file-picker overlay to jump to a file.
+    GoToFile,
+    /// Open a native dialog to open a file anywhere.
+    OpenFile,
+    /// Open a native dialog to change the working directory to a folder.
+    OpenFolder,
+    /// Close (delete) the current buffer.
+    CloseFile,
 }
 
 /// The menu group a command belongs to in a native menu bar.
@@ -118,6 +127,34 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         ex_command: "WolfMinimizeWindow",
         title: "Minimize",
         menu: MenuGroup::Window,
+    },
+    CommandSpec {
+        command: Command::GoToFile,
+        id: "go_to_file",
+        ex_command: "WolfGoToFile",
+        title: "Go to File…",
+        menu: MenuGroup::File,
+    },
+    CommandSpec {
+        command: Command::OpenFile,
+        id: "open_file",
+        ex_command: "WolfOpenFile",
+        title: "Open File…",
+        menu: MenuGroup::File,
+    },
+    CommandSpec {
+        command: Command::OpenFolder,
+        id: "open_folder",
+        ex_command: "WolfOpenFolder",
+        title: "Open Folder…",
+        menu: MenuGroup::File,
+    },
+    CommandSpec {
+        command: Command::CloseFile,
+        id: "close_file",
+        ex_command: "WolfCloseFile",
+        title: "Close File",
+        menu: MenuGroup::File,
     },
 ];
 

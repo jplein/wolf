@@ -188,7 +188,69 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         for cmd in handle.drain_commands() {
             guard let kind = CommandKind(ffi: cmd.kind()) else { continue }
             CommandDispatcher.dispatch(
-                kind, window: window, coordinator: coordinator, originatingCwd: currentCwd)
+                kind, window: window, coordinator: coordinator, originatingCwd: currentCwd,
+                controller: self)
+        }
+    }
+
+    // MARK: - File commands
+
+    /// Opens the file-picker overlay (the `Go to File…` command / Cmd-O), mirroring
+    /// the pane container's own picker trigger.
+    func openFilePicker() {
+        picker?.open()
+    }
+
+    /// Presents a native `NSOpenPanel` (files only) as a sheet on this window and,
+    /// on confirmation, opens the chosen file in this window's Neovim (`handle.open`)
+    /// then returns first responder to the editor pane.
+    func presentOpenFileDialog() {
+        guard let window else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        let cwd = currentCwd
+        if !cwd.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: cwd)
+        }
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            self?.handle?.open(url.path)
+            self?.refocusEditor()
+        }
+    }
+
+    /// Presents a native `NSOpenPanel` (directories only) as a sheet on this window
+    /// and, on confirmation, changes this window's Neovim working directory to the
+    /// chosen folder (`handle.chdir`) then returns first responder to the editor pane.
+    func presentOpenFolderDialog() {
+        guard let window else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        let cwd = currentCwd
+        if !cwd.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: cwd)
+        }
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            self?.handle?.chdir(url.path)
+            self?.refocusEditor()
+        }
+    }
+
+    /// Closes (deletes) this window's current Neovim buffer (`:bdelete`).
+    func closeCurrentBuffer() {
+        handle?.close_buffer()
+    }
+
+    /// Returns first responder to the editor pane container so keystrokes reach
+    /// Neovim after a sheet or overlay dismisses.
+    private func refocusEditor() {
+        if let paneContainer {
+            window?.makeFirstResponder(paneContainer)
         }
     }
 
