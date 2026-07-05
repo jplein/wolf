@@ -70,6 +70,23 @@ final class PaneContainerView: NSView {
     /// `scroll_dir::DOWN` (increases the viewport topline).
     private static let scrollDirDown: UInt8 = 1
 
+    // -- Per-pane statusbar tuning --------------------------------------------
+    /// Vertical padding above the first and below the last statusbar line (px).
+    private static let statusbarVerticalPadding: Double = 3
+    /// Gap between the primary (filename) and secondary (path) statusbar lines (px).
+    private static let statusbarLineGap: Double = 1
+    /// Floor for the secondary (path) statusbar font size (px), so a tiny grid
+    /// font still leaves the path legible.
+    private static let statusbarMinSecondaryFontSize: Double = 9
+    /// The secondary (path) statusbar font size as a fraction of the primary size.
+    private static let statusbarSecondaryFontScale: Double = 0.8
+    /// Right-edge inset for the statusbar text (px), so a long path truncates
+    /// before the pane's right edge / scrollbar.
+    private static let statusbarTextTrailingInset: CGFloat = 8
+    /// The secondary (path) statusbar text alpha when derived from the themed
+    /// titlebar foreground (else `secondaryLabelColor` is used directly).
+    private static let statusbarSecondaryThemedAlpha: CGFloat = 0.7
+
     // -- Synthetic scrollbar appearance / fade tuning -------------------------
     /// Scrollbar track/thumb thickness (px).
     private static let scrollbarThickness: CGFloat = 8
@@ -207,6 +224,44 @@ final class PaneContainerView: NSView {
         return nil
     }
 
+    /// The primary (filename) statusbar font size — the grid's base point size.
+    private var statusbarPrimaryFontSize: Double { Double(CTFontGetSize(metrics.font)) }
+
+    /// The secondary (path) statusbar font size — a fraction of the primary size,
+    /// floored so it stays legible.
+    private var statusbarSecondaryFontSize: Double {
+        max(Self.statusbarMinSecondaryFontSize, statusbarPrimaryFontSize * Self.statusbarSecondaryFontScale)
+    }
+
+    /// The pure vertical layout of the statusbar strip (line tops/heights + total
+    /// height), from the current metrics-derived font sizes.
+    private var statusbarLayout: StatusbarLayout {
+        StatusbarLayout(
+            primaryFontSize: statusbarPrimaryFontSize,
+            secondaryFontSize: statusbarSecondaryFontSize,
+            verticalPadding: Self.statusbarVerticalPadding,
+            lineGap: Self.statusbarLineGap)
+    }
+
+    /// The height (px) of the per-pane statusbar strip reserved at the top of every
+    /// pane; the grid gets the remaining pane height below it.
+    private var statusbarHeight: CGFloat { CGFloat(statusbarLayout.height) }
+
+    /// The statusbar strip rectangle at the TOP of pane `rect` (full pane width,
+    /// `statusbarHeight` tall).
+    private func statusbarRect(ofPane rect: CGRect) -> CGRect {
+        CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: statusbarHeight)
+    }
+
+    /// The GRID rectangle inside pane `rect`: the pane minus the top statusbar
+    /// strip (all pixel<->cell mapping and grid painting route through this, so the
+    /// grid never draws under the strip).
+    private func gridRect(ofPane rect: CGRect) -> CGRect {
+        CGRect(
+            x: rect.minX, y: rect.minY + statusbarHeight,
+            width: rect.width, height: max(0, rect.height - statusbarHeight))
+    }
+
     /// The number of live panes (`PaneTree` leaf count); 1 for a single unsplit
     /// window. Read by the window controller to disable the Close command on the
     /// last split.
@@ -263,7 +318,8 @@ final class PaneContainerView: NSView {
             setActivePane(id)
             needsDisplay = true
             if let grid = binding.boundGrid {
-                let cell = geometry(for: rect).cellAt(x: Double(point.x), y: Double(point.y))
+                let cell = geometry(for: gridRect(ofPane: rect)).cellAt(
+                    x: Double(point.x), y: Double(point.y))
                 handle.send_mouse(
                     mouseEvent(Self.mouseActionPress, grid: grid, cell: cell, event: event))
                 mouseDragGrid = grid
@@ -277,7 +333,7 @@ final class PaneContainerView: NSView {
     override func mouseDragged(with event: NSEvent) {
         guard let grid = mouseDragGrid, let rect = paneRect(forGrid: grid) else { return }
         let point = convert(event.locationInWindow, from: nil)
-        let cell = geometry(for: rect).cellAt(x: Double(point.x), y: Double(point.y))
+        let cell = geometry(for: gridRect(ofPane: rect)).cellAt(x: Double(point.x), y: Double(point.y))
         handle.send_mouse(mouseEvent(Self.mouseActionDrag, grid: grid, cell: cell, event: event))
     }
 
@@ -286,7 +342,8 @@ final class PaneContainerView: NSView {
         guard let grid = mouseDragGrid else { return }
         if let rect = paneRect(forGrid: grid) {
             let point = convert(event.locationInWindow, from: nil)
-            let cell = geometry(for: rect).cellAt(x: Double(point.x), y: Double(point.y))
+            let cell = geometry(for: gridRect(ofPane: rect)).cellAt(
+                x: Double(point.x), y: Double(point.y))
             handle.send_mouse(
                 mouseEvent(Self.mouseActionRelease, grid: grid, cell: cell, event: event))
         }
@@ -332,7 +389,7 @@ final class PaneContainerView: NSView {
         // i.e. the viewport moves UP. If scrolling ever feels inverted, flip this line.
         let direction = steps > 0 ? Self.scrollDirUp : Self.scrollDirDown
 
-        let cell = geometry(for: rect).cellAt(x: Double(point.x), y: Double(point.y))
+        let cell = geometry(for: gridRect(ofPane: rect)).cellAt(x: Double(point.x), y: Double(point.y))
         for _ in 0..<abs(steps) {
             handle.send_scroll(
                 FfiScrollEvent(
@@ -391,9 +448,10 @@ final class PaneContainerView: NSView {
 
         for (id, rect) in paneRects() {
             guard let grid = panes[id]?.boundGrid else { continue }
-            // Size from the pane's GRID RECT via `PaneGeometry` (identical to the
-            // pane rect today; the centered-narrow-grid cap is deferred).
-            let geo = geometry(for: rect)
+            // Size from the pane's GRID RECT (the pane minus the top statusbar
+            // strip) via `PaneGeometry`, so nvim sees the REDUCED rows the grid
+            // actually paints into.
+            let geo = geometry(for: gridRect(ofPane: rect))
             let frame = handle.read_frame_for_grid(grid)
             if Int(frame.cols()) != geo.cols || Int(frame.rows()) != geo.rows {
                 handle.resize_grid(
@@ -549,27 +607,46 @@ final class PaneContainerView: NSView {
         let rects = paneRects()
         for (id, rect) in rects {
             guard let grid = panes[id]?.boundGrid else { continue }
-            let frame = handle.read_frame_for_grid(grid)
-            paintGrid(frame, into: rect, dimmed: id != activePane, ctx: ctx)
+            paintPane(grid: grid, paneRect: rect, dimmed: id != activePane, ctx: ctx)
         }
         drawDividers(rects, ctx: ctx)
         paintCmdlineStrip(ctx)
         drawScrollbars(rects, ctx: ctx)
     }
 
-    /// Paints one window grid into `rect`, optionally dimming it (an inactive pane).
+    /// Paints one whole pane: the top statusbar strip, then the window grid below
+    /// it, then (for an inactive pane) an inactive-dim scrim over the WHOLE pane
+    /// (statusbar + grid + any side margins), so the strip dims with its pane.
+    private func paintPane(grid: UInt64, paneRect: CGRect, dimmed: Bool, ctx: CGContext) {
+        ctx.saveGState()
+        ctx.clip(to: paneRect)
+
+        paintStatusbar(into: statusbarRect(ofPane: paneRect), grid: grid, paneRect: paneRect, ctx: ctx)
+
+        let frame = handle.read_frame_for_grid(grid)
+        paintGrid(frame, into: gridRect(ofPane: paneRect), ctx: ctx)
+
+        if dimmed {
+            ctx.setFillColor(CGColor(gray: 0, alpha: Self.inactiveDim))
+            ctx.fill(paneRect)
+        }
+        ctx.restoreGState()
+    }
+
+    /// Paints one window grid into the GRID rect `rect` (the pane minus its top
+    /// statusbar strip).
     ///
-    /// When the grid is capped narrower than the pane (`maxGridCols`) it is CENTERED
-    /// via the geometry's paint offset; the whole pane is first filled with the
-    /// grid's default background so the side margins blend with the grid, and the
-    /// inactive-dim scrim covers the whole pane (margins included).
-    private func paintGrid(_ frame: FfiFrame, into rect: CGRect, dimmed: Bool, ctx: CGContext) {
+    /// When the grid is capped narrower than the rect (`maxGridCols`) it is CENTERED
+    /// via the geometry's paint offset; the whole grid rect is first filled with the
+    /// grid's default background so the side margins blend with the grid. The
+    /// inactive-dim scrim is applied by `paintPane` over the whole pane, not here.
+    private func paintGrid(_ frame: FfiFrame, into rect: CGRect, ctx: CGContext) {
         let geo = geometry(for: rect)
         ctx.saveGState()
         ctx.clip(to: rect)
 
-        // Fill the whole pane (including the side margins around a centered grid)
-        // with the grid's default background, so the margins are seamless.
+        // Fill the whole grid rect (including the side margins around a centered
+        // grid) with the grid's default background, so the margins are seamless.
         ctx.setFillColor(WolfColor.cgColor(frame.default_bg(), fallback: WolfColor.fallbackBg))
         ctx.fill(rect)
 
@@ -583,13 +660,88 @@ final class PaneContainerView: NSView {
             drawCursor(ctx, frame: frame, cells: frame.cells(), cols: Int(frame.cols()))
         }
         ctx.restoreGState()
-
-        // Dim the WHOLE pane (margins included) when it is not the active pane.
-        if dimmed {
-            ctx.setFillColor(CGColor(gray: 0, alpha: Self.inactiveDim))
-            ctx.fill(rect)
-        }
         ctx.restoreGState()
+    }
+
+    /// Paints the per-pane statusbar strip: a titlebar-matched background, the
+    /// pane's base filename (primary line), and its display path (secondary line).
+    ///
+    /// The background matches the macOS titlebar: the window's own
+    /// `backgroundColor` (kept in sync with the `WolfTitlebar` theme by
+    /// `MainWindow.applyTitlebarBackground`), falling back to the themed titlebar
+    /// bg / editor fallback when there is no window. Text is left-aligned with the
+    /// grid's text left edge (respecting `PaneGeometry.paintOffsetX`) and truncated
+    /// with a tail ellipsis. An unnamed buffer shows `[No Name]` with no path line.
+    private func paintStatusbar(into strip: CGRect, grid: UInt64, paneRect: CGRect, ctx: CGContext) {
+        ctx.saveGState()
+        ctx.clip(to: strip)
+
+        // Background: the window's (themed) titlebar background when available,
+        // else the themed titlebar bg, else the editor fallback.
+        let bgColor: CGColor
+        if let mainWindow = window as? MainWindow {
+            bgColor = mainWindow.backgroundColor.cgColor
+        } else {
+            bgColor = WolfColor.cgColor(handle.theme_titlebar_bg(), fallback: WolfColor.fallbackBg)
+        }
+        ctx.setFillColor(bgColor)
+        ctx.fill(strip)
+
+        // Text left aligns with the grid's text left edge.
+        let geo = geometry(for: gridRect(ofPane: paneRect))
+        let textLeft = paneRect.minX + CGFloat(geo.paintOffsetX)
+        let textWidth = max(0, strip.maxX - textLeft - Self.statusbarTextTrailingInset)
+
+        let layout = statusbarLayout
+        let status = handle.pane_status_for_grid(grid)
+        let filename = status.filename().toString()
+        let displayPath = status.display_path().toString()
+
+        // Colors: the themed titlebar fg when set (secondary derived at a lower
+        // alpha), else AppKit's label / secondary-label system colors.
+        let titlebarFg = handle.theme_titlebar_fg()
+        let primaryColor: NSColor
+        let secondaryColor: NSColor
+        if titlebarFg.set {
+            let themed = NSColor(cgColor: WolfColor.cgColor(packed: titlebarFg.rgb)) ?? .labelColor
+            primaryColor = themed
+            secondaryColor = themed.withAlphaComponent(Self.statusbarSecondaryThemedAlpha)
+        } else {
+            primaryColor = .labelColor
+            secondaryColor = .secondaryLabelColor
+        }
+
+        let primaryRect = CGRect(
+            x: textLeft, y: strip.minY + CGFloat(layout.primaryLineTop),
+            width: textWidth, height: CGFloat(layout.primaryLineHeight))
+        drawStatusbarText(
+            filename, in: primaryRect,
+            font: .systemFont(ofSize: CGFloat(statusbarPrimaryFontSize)), color: primaryColor)
+
+        if !displayPath.isEmpty {
+            let secondaryRect = CGRect(
+                x: textLeft, y: strip.minY + CGFloat(layout.secondaryLineTop),
+                width: textWidth, height: CGFloat(layout.secondaryLineHeight))
+            drawStatusbarText(
+                displayPath, in: secondaryRect,
+                font: .systemFont(ofSize: CGFloat(statusbarSecondaryFontSize)), color: secondaryColor)
+        }
+
+        ctx.restoreGState()
+    }
+
+    /// Draws one line of statusbar `text` clipped to `rect`, tail-truncated in
+    /// `font`/`color` (the view is flipped, so the top-left NSString draw is
+    /// upright).
+    private func drawStatusbarText(_ text: String, in rect: CGRect, font: NSFont, color: NSColor) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: color,
+            .paragraphStyle: paragraph,
+        ]
+        (text as NSString).draw(in: rect, withAttributes: attrs)
     }
 
     /// Paints the command line / messages into the bottom one-row strip.
@@ -718,13 +870,16 @@ final class PaneContainerView: NSView {
             let visible = max(0, botline - topline)
             guard visible > 0, visible < total else { continue }
 
+            // The scrollbar track spans the GRID rect (the pane minus its top
+            // statusbar strip), so the thumb never rides up over the strip.
+            let gRect = gridRect(ofPane: rect)
             let inset = Self.scrollbarInset
             let thickness = Self.scrollbarThickness
             let track = CGRect(
-                x: rect.maxX - thickness - inset,
-                y: rect.minY + inset,
+                x: gRect.maxX - thickness - inset,
+                y: gRect.minY + inset,
                 width: thickness,
-                height: rect.height - 2 * inset)
+                height: gRect.height - 2 * inset)
             guard track.height > 0 else { continue }
 
             // 0-based: the thumb's top sits at `topline / total` of the track (no

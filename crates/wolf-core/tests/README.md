@@ -35,7 +35,7 @@ Shared helpers used across the test binaries:
 
 ## Coverage
 
-One hundred nine integration tests across twenty `tests/*.rs` binaries (driving a real pinned Neovim and/or real SQLite/filesystem — plus the fully headless `state_unit.rs`, `recent_dirs.rs`, `command_mru.rs`, `palette_rank.rs`, and `rank_bounded.rs`, which need neither Neovim nor a filesystem), plus the pure in-module `#[cfg(test)]` unit tests (eighteen for the ranking function in `rank.rs`, ten for layout-intent parsing in `layout.rs`, and the `config.rs` / `tree.rs` suites documented in [`src/README.md`](../src/README.md)).
+Integration tests across the `tests/*.rs` binaries (driving a real pinned Neovim and/or real SQLite/filesystem — plus the fully headless `state_unit.rs`, `recent_dirs.rs`, `command_mru.rs`, `palette_rank.rs`, `rank_bounded.rs`, and `pane_status_unit.rs`, which need neither Neovim nor a filesystem), plus the pure in-module `#[cfg(test)]` unit tests (eighteen for the ranking function in `rank.rs`, ten for layout-intent parsing in `layout.rs`, and the `config.rs` / `tree.rs` suites documented in [`src/README.md`](../src/README.md)).
 
 ### File picker (real SQLite / filesystem / git / Neovim — no mocks)
 
@@ -63,6 +63,19 @@ One hundred nine integration tests across twenty `tests/*.rs` binaries (driving 
 - opening a file by **typing `:e <path><CR>`** as keystrokes (not via `Open`) also sets it — exercising the autocmd reveal path for nvim-driven buffer changes;
 - a core started with no file open (unnamed buffer) reports `None` (the initial emit's empty `expand('%:p')` maps to `None`);
 - `current_file` follows a buffer switch (open A, then open B → it moves to B).
+
+### Per-pane buffer tracking (real Neovim)
+
+`pane_buffers.rs` (Bazel target `//crates/wolf-core:pane_buffers`, four tests) verifies the per-pane statusbar CORE surface: `Snapshot.buffers` (the per-window buffer-path map fed by the `wolf_buffers` notification) and `WolfCore::pane_status(grid)` (which joins grid → window → buffer path and formats it via the pure `pane_status`). Like `current_file.rs`, the notification is separate from redraw flushes, so the tests **poll** `pane_status(grid)` / `read_snapshot().windows` with a generous timeout, draining wakes, and set an explicit temp `cwd` (opening files INSIDE it) so the cwd-relative `display_path` is deterministic (canonicalizing both sides, since macOS `/var`/`/tmp` are symlinks):
+
+- opening a file nested under cwd reports its base name as `filename` and the cwd-relative remainder as `display_path`;
+- after a `:vsplit` + `:e` of a DIFFERENT file B in the new window, the two window grids report DISTINCT filenames (proving the map is per-WINDOW, not global);
+- an unnamed startup buffer reports `[No Name]` with an empty `display_path` (it is absent from the map);
+- closing one split drops THAT window's grid from `windows`, and the survivor keeps reporting its own file.
+
+### Pure per-pane statusbar strings (headless)
+
+`pane_status_unit.rs` (Bazel target `//crates/wolf-core:pane_status_unit`, nine tests, NO nvim / fs / GUI — the pure analog of `palette_rank.rs`) exercises the IO-free `pane_status` display-string function directly: the empty→`([No Name], "")` case, cwd-relative remainder (nested + direct), the `~`/home-relative and path==home cases, the absolute passthrough, the path==cwd edge (must NOT emit an empty relative string), cwd-over-home precedence, and the `cwd=None,home=None` absolute passthrough.
 
 ### Theme tracking (real Neovim)
 

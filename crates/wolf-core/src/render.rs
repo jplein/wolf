@@ -476,6 +476,15 @@ pub struct Snapshot {
     /// redraw stream via the `wolf_current_file` notification (see
     /// [`crate::redraw`]); defaults to `None`.
     pub current_file: Option<PathBuf>,
+    /// Per-window buffer paths, keyed by the Neovim WINDOW handle (`WinInfo.win`,
+    /// an `i64`), each an absolute canonicalized buffer path. Unnamed windows are
+    /// ABSENT from the map. Updated out-of-band from the redraw stream via the
+    /// `wolf_buffers` notification (see [`crate::redraw`]): the whole map is
+    /// WHOLESALE-REPLACED on each emit, so stale/closed windows vanish. Because it
+    /// is not a redraw frame, updating it does NOT bump `seq`; the front-end joins
+    /// a grid → window → buffer path via [`crate::api::WolfCore::pane_status`].
+    /// Defaults to empty.
+    pub buffers: HashMap<i64, PathBuf>,
     /// The app-level theme colors from the optional `WolfCursor` /
     /// `WolfTitlebar` highlight groups. Updated out-of-band from the redraw
     /// stream via the `wolf_theme` notification (a `ColorScheme` autocmd plus

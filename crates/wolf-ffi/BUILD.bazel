@@ -204,6 +204,34 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
+# Real-nvim integration test for the per-pane statusbar bridge surface
+# (`pane_status_for_grid` + the opaque `FfiPaneStatus::filename()`/`display_path()`
+# accessors). Modeled on `panes` exactly: drives a REAL pinned Neovim (no mocks),
+# loud-skips when WOLF_NVIM_BIN is unset, and stages the captive `init.lua` + pinned
+# nvim tree as runfiles. Reuses `tests/common/mod.rs`.
+rust_test(
+    name = "pane_status",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/pane_status.rs",
+    ],
+    crate_root = "tests/pane_status.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
+)
+
 # Real-nvim integration test for the COMMAND CHANNEL bridge surface
 # (`drain_commands` + the opaque `FfiCommand::kind()`, guarding the `command_kind`
 # discriminant contract). Modeled on `panes` exactly: drives a REAL pinned Neovim

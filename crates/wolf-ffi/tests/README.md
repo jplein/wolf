@@ -30,6 +30,10 @@ The real-nvim coverage of the `close_pane()` handle method (`:close`) — **no m
 bazel test //crates/wolf-ffi:close_pane
 ```
 
+## `pane_status.rs`
+
+The real-nvim coverage of the per-pane statusbar bridge surface (Bazel target `//crates/wolf-ffi:pane_status`) — **no mocks**, modeled on `panes.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate via `nvim_bin_or_skip`). It seeds a fresh temp cwd with `alpha.md` / `beta.md`, calls `wolf_ffi_start` there, polls `read_frame()` until attached and `windows()` down to one editor grid, then `:e alpha.md` and polls `pane_status_for_grid(grid).filename()` until it reports `alpha.md` with a non-empty `display_path()`. After a `:vsplit` (polling `windows()` to two grids) and `:e beta.md` in the new window, it polls until the two window grids report DISTINCT filenames (`alpha.md` vs `beta.md`), proving the status is per-WINDOW rather than a single global value.
+
 ## `state.rs`
 
 The real-nvim coverage of the state-persistence bridge surface (Bazel target `//crates/wolf-ffi:state`) — **no mocks**, modeled on `tree_search.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate). It is deliberately a **single `#[test]`** (`state_bridge_saves_and_restores_all_facets`) because it mutates the process-global `WOLF_STATE_DIR` env var (the `state_dir()` determinism hook) — one test per binary makes that safe. The flow: with `WOLF_STATE_DIR` pointed at a tempdir, `wolf_ffi_load_state()` on the empty dir yields zero windows (and the file is never created); a hand-written corrupt `state.json` also yields zero windows (silently ignored, bytes preserved); then `wolf_ffi_start` (which opens and attaches the live store), `state_set_geometry` / `state_set_sidebar_visible`, a `:cd` typed through `send_key`, and `state_flush()` — followed by substring assertions that the persisted facets (geometry, sidebar visibility, and the cwd) landed in the pretty-printed `state.json`, and a `wolf_ffi_load_state()` round-trip through the `FfiWindowState` accessors.

@@ -1,6 +1,6 @@
 # wolf-macos/Tests
 
-The Swift tests for the macOS front-end. The Bazel target is `//crates/wolf-macos:WolfKeyMapTests`; it runs regardless of `WOLF_NVIM_BIN` (it needs no Neovim) and covers the pure seams — the key seam (`KeyMapTests.swift`), the picker seam (`PickerSeamTests.swift`), the command-palette seam (`PaletteSeamTests.swift`), the pane-layout seam (`PaneTreeTests.swift`), the per-pane geometry seam (`PaneGeometryTests.swift`), the scroll-accumulator seam (`ScrollAccumulatorTests.swift`), the glyph-style seam (`GlyphStyleTests.swift`), the state-restore seam (`StateSeamTests.swift`), the command-decode seam (`CommandSeamTests.swift`), the font-size seam (`FontSizeSeamTests.swift`), and the multi-window seams (`ShortcutSeamTests.swift`, `WindowIndexSeamTests.swift`).
+The Swift tests for the macOS front-end. The Bazel target is `//crates/wolf-macos:WolfKeyMapTests`; it runs regardless of `WOLF_NVIM_BIN` (it needs no Neovim) and covers the pure seams — the key seam (`KeyMapTests.swift`), the picker seam (`PickerSeamTests.swift`), the command-palette seam (`PaletteSeamTests.swift`), the pane-layout seam (`PaneTreeTests.swift`), the per-pane geometry seam (`PaneGeometryTests.swift`), the scroll-accumulator seam (`ScrollAccumulatorTests.swift`), the glyph-style seam (`GlyphStyleTests.swift`), the state-restore seam (`StateSeamTests.swift`), the command-decode seam (`CommandSeamTests.swift`), the font-size seam (`FontSizeSeamTests.swift`), the per-pane statusbar layout seam (`StatusbarLayoutTests.swift`), and the multi-window seams (`ShortcutSeamTests.swift`, `WindowIndexSeamTests.swift`).
 
 ## `WolfKeyMapTests/KeyMapTests.swift`
 
@@ -49,6 +49,10 @@ Pure, headless `XCTest` coverage of the AppKit-free `StateSeam` (`WolfKeyMap`) �
 - `testLaunchDecisionTable` — `launchDecision(restored:home:isDirectory:)` returns `.folder(restored)` only when the restored cwd is non-empty and the injected `isDirectory` check passes (tests pass a set lookup, keeping the seam pure), and `.emptyState(home)` on an empty, deleted, or plain-file path — asserting it NEVER returns the process working directory.
 
 The AppKit save/restore wiring (`StatePersistence.swift`, the `WolfWindowController` restore path) stays compile-verified + manual-smoke, per the plan; the bridge surface it drives is covered by the real-nvim `//crates/wolf-ffi:state` test.
+
+## `WolfKeyMapTests/StatusbarLayoutTests.swift`
+
+Pure, headless `XCTest` coverage of the AppKit-/CoreText-free `WolfKeyMap.StatusbarLayout` seam (`@testable import WolfKeyMap`) — the per-pane statusbar's vertical-layout math. It pins the line factor at `1.25` (`ceil(fontSize * 1.25)`): one EXACT assertion checks the representative inputs (primary 13, secondary 10, padding 3, gap 1) collapse to `primaryLineHeight == 17`, `secondaryLineHeight == 13`, `primaryLineTop == 3`, `secondaryLineTop == 21`, `height == 37`; a second cross-checks the full arithmetic against the pinned formula over several inputs; and the structural invariants (heights strictly positive, `primaryLineTop == verticalPadding`, `secondaryLineTop > primaryLineTop`, `primaryLineTop + primaryLineHeight + lineGap == secondaryLineTop`, `height >= secondaryLineTop + secondaryLineHeight`) plus the zero-padding and small-font (1pt → `ceil(1.25) == 2`) edges hold. The on-screen bg fill / NSString drawing / truncation in `PaneContainerView.paintStatusbar` stays compile-verified + manual-smoke.
 
 ## `WolfKeyMapTests/ShortcutSeamTests.swift`
 

@@ -18,6 +18,7 @@
 //! - [`command`]: the canonical, GUI-free command registry ([`Command`]).
 //! - [`command_mru`]: the global command-palette MRU cache (SQLite).
 //! - [`palette`]: pure candidate assembly + ranking for the command palette.
+//! - [`pane_status`]: pure display-string math for the per-pane statusbar.
 //! - [`layout`]: the Neovim->shell layout-intent types ([`LayoutIntent`]).
 //! - [`files`]: the async streaming file-list traversal and `FileSearch` session.
 //! - [`mru`]: the most-recently-used file cache (SQLite).
@@ -42,6 +43,7 @@ pub mod layout;
 pub mod mru;
 pub mod nvim;
 pub mod palette;
+pub mod pane_status;
 pub mod rank;
 pub mod recent_dirs;
 pub mod redraw;
@@ -61,6 +63,7 @@ pub use input::{
 pub use layout::{FocusDir, LayoutIntent, SplitOrientation};
 pub use mru::{MruError, MruStore, MRU_LIMIT};
 pub use palette::{rank_palette, PaletteRow, PaletteRowKind, PaletteWindow};
+pub use pane_status::{pane_status, PaneStatus, NO_NAME};
 pub use rank::{rank_matches, rank_matches_top_n, Match, MatchKey};
 pub use recent_dirs::{RecentDirs, RECENT_DIRS_LIMIT};
 pub use redraw::WakeFn;

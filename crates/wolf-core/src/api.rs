@@ -12,7 +12,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use parking_lot::{Mutex, RwLock};
@@ -184,6 +184,21 @@ pub struct WolfCore {
     cwd: PathBuf,
 }
 
+/// The process's canonicalized home directory, resolved at most once.
+///
+/// Mirrors [`crate::pane_status::pane_status`]'s expectation of a canonical home
+/// so `strip_prefix` lines up with the canonical buffer path: takes
+/// [`dirs::home_dir`], then [`std::fs::canonicalize`] with a graceful fallback to
+/// the raw (uncanonicalized) home path when canonicalize fails, and `None` when
+/// there is no home directory. Home is immutable for the process lifetime, so the
+/// result (including the `realpath` syscall) is cached in a `OnceLock` rather than
+/// recomputed on every per-pane repaint.
+fn canonical_home() -> Option<&'static Path> {
+    static HOME: OnceLock<Option<PathBuf>> = OnceLock::new();
+    HOME.get_or_init(|| dirs::home_dir().map(|h| std::fs::canonicalize(&h).unwrap_or(h)))
+        .as_deref()
+}
+
 impl WolfCore {
     /// Starts the core: builds a multi-thread tokio runtime, spawns the captive
     /// Neovim, wires `wake` into the redraw handler, and attaches as an
@@ -238,6 +253,7 @@ impl WolfCore {
             let proc = nvim::spawn(&nvim_cfg, handler).await?;
             proc.ui_attach(cfg.cols, cfg.rows).await?;
             proc.setup_current_file_tracking().await?;
+            proc.setup_buffer_tracking().await?;
             proc.setup_layout().await?;
             proc.setup_dir_tracking().await?;
             proc.setup_theme_tracking().await?;
@@ -451,6 +467,36 @@ impl WolfCore {
     #[must_use]
     pub fn live_cwd(&self) -> Option<PathBuf> {
         self.tracked_cwd.read().clone()
+    }
+
+    /// Computes the per-pane statusbar strings for the window drawing into `grid`.
+    ///
+    /// Joins `grid` → [`WinInfo::win`](crate::render::WinInfo) → the per-window
+    /// buffer path in [`Snapshot::buffers`](crate::render::Snapshot::buffers), then
+    /// formats it via the pure [`crate::pane_status`] over the live cwd
+    /// ([`live_cwd`](Self::live_cwd)) and the user's home directory. A window with
+    /// no matching entry (an unnamed buffer, or a grid with no window) yields an
+    /// empty buffer path, which the pure function maps to
+    /// [`NO_NAME`](crate::pane_status::NO_NAME) with an empty display path.
+    ///
+    /// The snapshot read guard is DROPPED before reading `live_cwd` (which takes
+    /// its own lock), mirroring [`mru_recent`](Self::mru_recent). The cwd is
+    /// already canonical; the home directory is canonicalized here (falling back to
+    /// the raw path) so `strip_prefix` lines up with the canonical buffer path.
+    #[must_use]
+    pub fn pane_status(&self, grid: u64) -> crate::pane_status::PaneStatus {
+        let buf: String = {
+            let snap = self.read_snapshot();
+            snap.windows
+                .get(&grid)
+                .and_then(|w| snap.buffers.get(&w.win))
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default()
+            // Read guard drops here, before `live_cwd()` takes its own lock.
+        };
+
+        let cwd = self.live_cwd();
+        crate::pane_status::pane_status(&buf, cwd.as_deref(), canonical_home())
     }
 
     /// Starts a streaming file search rooted at the captive Neovim's live working

@@ -38,6 +38,18 @@ The helper:
 
 An **unnamed buffer** yields an empty string from `expand("%:p")`, which core maps to "no current file" (`Snapshot.current_file = None`). Core canonicalizes any non-empty path before storing it. The channel id is passed as a Lua **vararg** (`...`) from the `nvim_exec_lua` call, never interpolated into the code string.
 
+### Per-window buffer tracking — `_G.wolf_setup_buffer_tracking(chan)`
+
+A global helper that `wolf-core` invokes over RPC **after** `ui_attach` and current-file tracking, passing core's own RPC channel id (see [`src/nvim.rs`](../../crates/wolf-core/src/nvim.rs)'s `setup_buffer_tracking`). Where current-file tracking reports a single GLOBAL active-buffer path, this reports the buffer path shown in EVERY window of the current tabpage, so the macOS front-end can draw a **per-pane statusbar** keyed by window handle.
+
+The helper:
+
+- creates a `WolfBuffers` augroup (`clear = true`, so re-invoking is idempotent);
+- registers a `BufEnter` / `BufWinEnter` / `BufFilePost` / `WinEnter` / `WinNew` / `WinClosed` autocmd whose callback iterates `nvim_list_wins()` and builds a list of `{ win, nvim_buf_get_name(buf) }` pairs (via `nvim_win_get_buf(win)`), then does `vim.rpcnotify(chan, "wolf_buffers", list)`;
+- emits once immediately so the startup window layout is reflected without a change.
+
+Core folds the payload into the sibling `Snapshot.buffers` map (win handle → canonicalized buffer path), WHOLESALE-REPLACING it on each emit so stale/closed windows drop out (it does NOT bump `seq`; it wakes the front-end). An **unnamed buffer** yields an empty string from `nvim_buf_get_name`, which core SKIPS — an absent window reports `[No Name]` with an empty path. `WinClosed` fires while the closing window is still listed by `nvim_list_wins()`, but re-emitting the full current set is still correct: the survivor set replaces the previous one wholesale. The channel id is passed as a Lua **vararg** (`...`), never interpolated into the code string.
+
 ### Directory tracking — `_G.wolf_setup_dir_tracking(chan)`
 
 A third global helper that `wolf-core` invokes over RPC **after** `ui_attach`, current-file tracking, and layout setup, again passing core's own RPC channel id (see [`src/nvim.rs`](../../crates/wolf-core/src/nvim.rs)'s `setup_dir_tracking`). It lets core follow Neovim's live working directory so the file picker's MRU cache resolves to the right per-project store (`<nvim-cwd>/.wolf/mru.sqlite`) for BOTH seeding the picker and recording opened files.

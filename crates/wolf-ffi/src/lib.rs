@@ -47,8 +47,8 @@ use std::time::Duration;
 use wolf_core::{
     rank_matches_top_n, rank_palette, Command, CommandMru, CoreConfig, CursorShape, FileSearch,
     FocusDir, Grid, InputEvent, Key, KeyEvent, LayoutIntent, MouseAction, MouseButton, MouseEvent,
-    PaletteRow, PaletteRowKind, PaletteWindow, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent,
-    SplitOrientation, StateStore, WakeFn, WinInfo, WindowState, WolfCore,
+    PaletteRow, PaletteRowKind, PaletteWindow, PaneStatus, ResolvedStyle, Rgb, ScrollDirection,
+    ScrollEvent, SplitOrientation, StateStore, WakeFn, WinInfo, WindowState, WolfCore,
 };
 
 // Re-export the bridge-defined transparent structs at the crate root so the Rust
@@ -395,6 +395,12 @@ mod ffi {
         // title-text coloring; not applied on macOS this pass). Same unset
         // convention as `theme_titlebar_bg`.
         fn theme_titlebar_fg(&self) -> FfiColor;
+        // The per-pane statusbar strings for the window drawing into `grid`
+        // (base filename + display path). `FfiPaneStatus` is opaque so its
+        // Strings are read back via accessor methods. An unnamed buffer / grid
+        // with no window / shut-down core yields the `[No Name]` filename with
+        // an empty display path.
+        fn pane_status_for_grid(&self, grid: u64) -> FfiPaneStatus;
         // Opens `path` (an absolute filesystem path) in Neovim via
         // `InputEvent::Open`; the core's input pump records the MRU.
         fn open(&self, path: String);
@@ -651,6 +657,17 @@ mod ffi {
         fn win(&self) -> i64;
         // Whether the window is currently hidden.
         fn hidden(&self) -> bool;
+    }
+
+    extern "Rust" {
+        type FfiPaneStatus;
+
+        // The base filename shown in the pane's statusbar (or `[No Name]` for an
+        // unnamed buffer).
+        fn filename(&self) -> String;
+        // The path shown beneath the filename (cwd-relative, `~`-prefixed, or
+        // absolute; empty for an unnamed buffer).
+        fn display_path(&self) -> String;
     }
 }
 
@@ -1331,6 +1348,21 @@ impl WolfCoreHandle {
         FfiColor::from_opt(core.read_snapshot().theme.titlebar.fg)
     }
 
+    /// The per-pane statusbar strings for the window drawing into `grid`.
+    ///
+    /// Delegates to [`wolf_core::WolfCore::pane_status`], which joins `grid` →
+    /// window → buffer path and formats it over nvim's live cwd + the user's
+    /// home. Returns the `[No Name]` filename with an empty display path when the
+    /// core is gone (mirroring the empty-status convention for unnamed buffers).
+    #[must_use]
+    pub fn pane_status_for_grid(&self, grid: u64) -> FfiPaneStatus {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return FfiPaneStatus::empty();
+        };
+        FfiPaneStatus::from_pane_status(core.pane_status(grid))
+    }
+
     /// Opens `path` (an absolute filesystem path) in Neovim via
     /// [`InputEvent::Open`]; the core's input pump records the MRU. A no-op once
     /// the core has been shut down.
@@ -1824,6 +1856,51 @@ impl FfiWinInfo {
             grid: info.grid,
             win: info.win,
             hidden: info.hidden,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FfiPaneStatus: one pane's statusbar strings (opaque to Swift).
+// ---------------------------------------------------------------------------
+
+/// One pane's statusbar strings — the base `filename` and the `display_path`
+/// beneath it (opaque to Swift, so its Strings are read back via accessor
+/// methods). A projection of [`wolf_core::PaneStatus`].
+pub struct FfiPaneStatus {
+    filename: String,
+    display_path: String,
+}
+
+impl FfiPaneStatus {
+    /// The base filename shown in the pane's statusbar (or `[No Name]` for an
+    /// unnamed buffer).
+    #[must_use]
+    pub fn filename(&self) -> String {
+        self.filename.clone()
+    }
+
+    /// The path shown beneath the filename (cwd-relative, `~`-prefixed, or
+    /// absolute; empty for an unnamed buffer).
+    #[must_use]
+    pub fn display_path(&self) -> String {
+        self.display_path.clone()
+    }
+
+    /// The empty-status fallback (`[No Name]` filename, empty display path), used
+    /// when the core has been shut down.
+    fn empty() -> Self {
+        Self::from_pane_status(PaneStatus {
+            filename: wolf_core::NO_NAME.to_string(),
+            display_path: String::new(),
+        })
+    }
+
+    /// Projects a [`wolf_core::PaneStatus`] into the opaque bridge type.
+    fn from_pane_status(status: PaneStatus) -> Self {
+        Self {
+            filename: status.filename,
+            display_path: status.display_path,
         }
     }
 }

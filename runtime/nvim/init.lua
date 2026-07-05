@@ -189,6 +189,40 @@ function _G.wolf_setup_current_file_tracking(chan)
 	vim.rpcnotify(chan, "wolf_current_file", vim.fn.expand("%:p"))
 end
 
+-- Per-window buffer tracking: wolf-core invokes this over RPC after ui_attach (and
+-- right after the current-file setup), passing its own RPC channel id. It registers
+-- autocmds that notify core, via wolf_buffers, of the buffer path shown in EVERY
+-- window of the current tabpage -- a list of { win, nvim_buf_get_name(buf) } pairs
+-- -- so the front-end can render a per-pane statusbar keyed by window handle. It
+-- emits once immediately so the startup layout is reflected without a change.
+--
+-- The whole current window set is re-emitted on each autocmd; core WHOLESALE-
+-- REPLACES its per-window map, so stale/closed windows drop out. WinClosed fires
+-- while the closing window is still listed by nvim_list_wins(), but re-emitting the
+-- full current set is still correct: the survivor set replaces the previous one.
+-- An unnamed buffer yields an empty string from nvim_buf_get_name, which core skips
+-- (absent from the map -> the pane reports "[No Name]").
+function _G.wolf_setup_buffer_tracking(chan)
+	local group = vim.api.nvim_create_augroup("WolfBuffers", { clear = true })
+	local function emit()
+		local list = {}
+		for _, win in ipairs(vim.api.nvim_list_wins()) do
+			local buf = vim.api.nvim_win_get_buf(win)
+			list[#list + 1] = { win, vim.api.nvim_buf_get_name(buf) }
+		end
+		vim.rpcnotify(chan, "wolf_buffers", list)
+	end
+	vim.api.nvim_create_autocmd(
+		{ "BufEnter", "BufWinEnter", "BufFilePost", "WinEnter", "WinNew", "WinClosed" },
+		{
+			group = group,
+			callback = emit,
+		}
+	)
+	-- Initial emit so the startup window layout is reflected without a change.
+	emit()
+end
+
 -- Directory tracking: wolf-core invokes this over RPC after ui_attach (and after
 -- the current-file / layout setups), passing its own RPC channel id. It registers
 -- a DirChanged autocmd (pattern '*', covering :cd/:lcd/:tcd) that notifies core of

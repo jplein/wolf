@@ -7,7 +7,7 @@
 //! **drops the lock**, and only then fires the front-end wake callback. The lock
 //! is never held across an `.await`.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -78,6 +78,14 @@ pub type WakeFn = Arc<dyn Fn() + Send + Sync>;
 /// `runtime/nvim/init.lua`. Routed separately from `redraw` in
 /// [`RedrawHandler::handle_notify`].
 const CURRENT_FILE_EVENT: &str = "wolf_current_file";
+
+/// Name of the out-of-band notification carrying the per-window buffer paths,
+/// emitted by the `WolfBuffers` autocmds in `runtime/nvim/init.lua` (and once
+/// immediately at setup). The payload is a single msgpack array of
+/// `[win_id, buf_path]` pairs for ALL windows in the current tabpage; core
+/// WHOLESALE-REPLACES [`Snapshot::buffers`] with the reported set. Routed
+/// separately from `redraw` in [`RedrawHandler::handle_notify`].
+const BUFFERS_EVENT: &str = "wolf_buffers";
 
 /// Name of the out-of-band notification carrying the active window handle,
 /// emitted by the `WolfLayout` `WinEnter` autocmd in `runtime/nvim/init.lua`.
@@ -172,6 +180,15 @@ impl Handler for RedrawHandler {
                 // returning, so the wake fires strictly after the lock is
                 // released — same wake-after-unlock invariant as the redraw path.
                 self.apply_current_file(args).await;
+                (self.wake)();
+            }
+            BUFFERS_EVENT => {
+                // `apply_buffers` builds the new map BEFORE taking the write
+                // guard, then assigns it and DROPS the lock before returning; the
+                // wake fires strictly after the lock is released (same
+                // wake-after-unlock invariant). This is NOT a redraw frame, so
+                // `seq` is left unchanged.
+                self.apply_buffers(args).await;
                 (self.wake)();
             }
             ACTIVE_WIN_EVENT => {
@@ -285,6 +302,51 @@ impl RedrawHandler {
         // counter, advanced only on `flush`) is intentionally left unchanged. The
         // caller still fires the wake after this lock drops so the front-end can
         // re-read the snapshot.
+        // Lock drops here as `snap` goes out of scope at function return.
+    }
+
+    /// Applies a `wolf_buffers` notification: WHOLESALE-REPLACES the snapshot's
+    /// per-window buffer map ([`Snapshot::buffers`]) with the reported set.
+    ///
+    /// The single argument is a msgpack array of `[win_id, buf_path]` pairs for
+    /// ALL windows in the current tabpage. Each `win_id` decodes via
+    /// [`ext_handle`] (a plain integer, or defensively a msgpack-`Ext`-wrapped
+    /// integer); each `buf_path` is `nvim_buf_get_name(buf)` — absolute for a file
+    /// buffer, empty for an unnamed one. Empty paths are SKIPPED (unnamed windows
+    /// are absent from the map); non-empty paths are canonicalized (to match the
+    /// canonical cwds/paths the rest of core keys on), falling back to the raw
+    /// path if canonicalization fails.
+    ///
+    /// The new map is built in full BEFORE the write guard is taken (so no
+    /// filesystem work happens under the lock, sidestepping
+    /// `clippy::significant_drop_in_scrutinee`), then assigned wholesale. The lock
+    /// is acquired via [`SharedSnapshot::write_async`], is NOT held across any
+    /// `.await`, and is dropped before returning so the caller's wake fires after
+    /// the lock is released. This is NOT a redraw frame, so `seq` is left
+    /// unchanged; the wholesale replacement drops any stale/closed windows.
+    async fn apply_buffers(&self, args: Vec<Value>) {
+        let mut map: HashMap<i64, PathBuf> = HashMap::new();
+        if let Some(pairs) = args.first().and_then(Value::as_array) {
+            for pair in pairs {
+                let Some(pair) = pair.as_array() else { continue };
+                let Some(win) = pair.first().and_then(ext_handle) else {
+                    continue;
+                };
+                let Some(path) = pair.get(1).and_then(Value::as_str) else {
+                    continue;
+                };
+                if path.is_empty() {
+                    continue;
+                }
+                let canon = std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
+                map.insert(win, canon);
+            }
+        }
+
+        let mut snap = self.snapshot.write_async().await;
+        snap.buffers = map;
+        // A buffers change is NOT a redraw frame, so `seq` is intentionally left
+        // unchanged. The caller fires the wake after this lock drops.
         // Lock drops here as `snap` goes out of scope at function return.
     }
 

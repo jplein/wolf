@@ -211,6 +211,52 @@ rust_test(
 # pinned Neovim (no mocks), stages the captive `init.lua` + the pinned nvim tree
 # as runfiles, reuses `tests/common/mod.rs`, and runs unsandboxed so the nvim
 # child can spawn.
+# Headless coverage for the PURE per-pane statusbar display-string function
+# (`pane_status` + `PaneStatus` + `NO_NAME`): the empty/[No Name] case, cwd-relative
+# remainder (nested + direct), the `~`/home-relative and path==home cases, the
+# absolute passthrough, the path==cwd edge, and cwd-over-home precedence.
+# `pane_status` is IO-free string/path math, so this needs NO nvim and no staged
+# runfiles — the pure analog of `palette_rank`, kept in a dedicated file to avoid
+# colliding with the coder who creates `src/pane_status.rs`.
+rust_test(
+    name = "pane_status_unit",
+    srcs = ["tests/pane_status_unit.rs"],
+    crate_root = "tests/pane_status_unit.rs",
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+# Real-nvim integration test for the per-pane statusbar CORE surface: the snapshot's
+# per-window buffer map (`Snapshot.buffers`) fed by the `wolf_buffers` notification,
+# and `WolfCore::pane_status(grid)` joining grid -> window -> buffer path. An EXACT
+# mirror of the `theme` target above: drives a REAL pinned Neovim (no mocks), stages
+# the captive `init.lua` + the pinned nvim tree as runfiles, reuses
+# `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.
+rust_test(
+    name = "pane_buffers",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/pane_buffers.rs",
+    ],
+    crate_root = "tests/pane_buffers.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
 # Real-nvim integration test for the WolfCursor / WolfTitlebar theme tracking
 # (`Snapshot.theme` fed by the `wolf_theme` notification: startup emit-once,
 # runtime `:hi` + `:doautocmd ColorScheme`, link resolution, cleared fallback).
