@@ -59,7 +59,19 @@ struct CellMetrics {
     /// height and baseline come from the pure `CellMetricsMath` seam using
     /// `config.line_height` (a percentage of the point size).
     static func measured(config: FfiConfig) -> CellMetrics {
-        let size = pointSize(config: config)
+        measured(config: config, pointSize: defaultPointSize(config: config))
+    }
+
+    /// Measures monospace cell metrics for the configured font family at an
+    /// EXPLICIT `pointSize` (the per-window View-menu font-size relayout path),
+    /// with line-height-driven cell height + recentered baseline.
+    ///
+    /// Identical to [`measured(config:)`](measured(config:)) except the point size
+    /// is passed in rather than resolved from `WOLF_FONT_PT` / `config.font_size`,
+    /// so `WolfWindowController` can re-measure at a stepped size while keeping the
+    /// configured family + line-height.
+    static func measured(config: FfiConfig, pointSize: CGFloat) -> CellMetrics {
+        let size = pointSize
         let font = makeFont(family: config.font_family().toString(), size: size)
         let boldFont = makeVariant(base: font, size: size, addingTraits: .traitBold)
         let italicFont = makeVariant(base: font, size: size, addingTraits: .traitItalic)
@@ -122,7 +134,11 @@ struct CellMetrics {
     }
 
     /// Reads `WOLF_FONT_PT` (a positive number) or returns the config's font size.
-    private static func pointSize(config: FfiConfig) -> CGFloat {
+    ///
+    /// The per-window font-size default (also the Reset target), so
+    /// `WolfWindowController` seeds its `defaultPointSize` from the SAME resolution
+    /// the shared launch metrics used.
+    static func defaultPointSize(config: FfiConfig) -> CGFloat {
         if let raw = ProcessInfo.processInfo.environment["WOLF_FONT_PT"],
             let value = Double(raw), value > 0
         {

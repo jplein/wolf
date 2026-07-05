@@ -89,7 +89,9 @@ final class PaneContainerView: NSView {
     private static let scrollbarOverlayFadeTick: TimeInterval = 1.0 / 30.0
 
     private let handle: WolfCoreHandle
-    private let metrics: CellMetrics
+    /// The cell geometry driving all pixel↔cell mapping and painting. A `var` so a
+    /// per-window font-size change can re-measure and reflow via `applyMetrics`.
+    private var metrics: CellMetrics
 
     /// The pure pane-layout tree (split/remove/neighbour geometry).
     private let tree = PaneTree(root: PaneContainerView.firstPaneId)
@@ -122,11 +124,6 @@ final class PaneContainerView: NSView {
     /// key is translated/forwarded to Neovim. Set by `AppDelegate` to open the
     /// picker.
     var onPickerTrigger: (() -> Void)?
-
-    /// Invoked when the new-window chord (Command+N) is pressed, BEFORE any key
-    /// is translated/forwarded to Neovim. Set by the window controller to open a
-    /// new top-level window.
-    var onNewWindow: (() -> Void)?
 
     /// The last `WolfTitlebar` background applied to the window, so a render
     /// wake only touches AppKit when the theme actually changed (`nil` until the
@@ -210,20 +207,25 @@ final class PaneContainerView: NSView {
         return nil
     }
 
+    /// The number of live panes (`PaneTree` leaf count); 1 for a single unsplit
+    /// window. Read by the window controller to disable the Close command on the
+    /// last split.
+    var paneCount: Int { tree.leaves().count }
+
+    /// Re-measures against `newMetrics` (a per-window font-size change): swaps the
+    /// cell geometry, re-syncs every grid's cell size to the new metrics, and
+    /// repaints. The OS window frame is deliberately UNCHANGED — the grid reflows
+    /// its cols/rows to fit.
+    func applyMetrics(_ newMetrics: CellMetrics) {
+        metrics = newMetrics
+        syncGridSizes()
+        needsDisplay = true
+    }
+
     // MARK: - Input
 
     override func keyDown(with event: NSEvent) {
         let flags = event.modifierFlags
-
-        // New-window chord (Command+N) is intercepted BEFORE translation so it is
-        // never forwarded to Neovim.
-        if ShortcutSeam.isNewWindowTrigger(
-            charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
-            command: flags.contains(.command)
-        ) {
-            onNewWindow?()
-            return
-        }
 
         // Picker trigger (Command+O) is intercepted BEFORE translation so it is
         // never forwarded to Neovim. While the picker is open its search field is

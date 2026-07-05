@@ -12,7 +12,9 @@
 //  `wolf-ffi/src/lib.rs` and the `wolf_core::Command` variant order, plan §3):
 //    newWindow = 0, closeWindow = 1, quitApplication = 2, hideApplication = 3,
 //    minimizeWindow = 4, goToFile = 5, openFile = 6, openFolder = 7,
-//    closeFile = 8. Any out-of-range discriminant decodes to `nil`.
+//    closePane = 8, newBuffer = 9, resetFontSize = 10, increaseFontSize = 11,
+//    decreaseFontSize = 12 (the range 0..12). Any out-of-range discriminant
+//    decodes to `nil`.
 //
 //  NOTE to coder: this references the pure `WolfKeyMap.CommandKind` enum the coder
 //  adds in `Sources/WolfKeyMap/CommandSeam.swift` (Foundation only, no AppKit),
@@ -40,13 +42,20 @@ final class CommandSeamTests: XCTestCase {
         XCTAssertEqual(CommandKind(ffi: 5), .goToFile, "ffi 5 -> .goToFile")
         XCTAssertEqual(CommandKind(ffi: 6), .openFile, "ffi 6 -> .openFile")
         XCTAssertEqual(CommandKind(ffi: 7), .openFolder, "ffi 7 -> .openFolder")
-        XCTAssertEqual(CommandKind(ffi: 8), .closeFile, "ffi 8 -> .closeFile")
+        XCTAssertEqual(CommandKind(ffi: 8), .closePane, "ffi 8 -> .closePane")
+        XCTAssertEqual(CommandKind(ffi: 9), .newBuffer, "ffi 9 -> .newBuffer")
+        XCTAssertEqual(
+            CommandKind(ffi: 10), .resetFontSize, "ffi 10 -> .resetFontSize")
+        XCTAssertEqual(
+            CommandKind(ffi: 11), .increaseFontSize, "ffi 11 -> .increaseFontSize")
+        XCTAssertEqual(
+            CommandKind(ffi: 12), .decreaseFontSize, "ffi 12 -> .decreaseFontSize")
     }
 
     // MARK: - out-of-range discriminants decode to nil
 
     func testCommandKindOutOfRangeIsNil() {
-        XCTAssertNil(CommandKind(ffi: 9), "the first out-of-range discriminant -> nil")
+        XCTAssertNil(CommandKind(ffi: 13), "the first out-of-range discriminant -> nil")
         XCTAssertNil(CommandKind(ffi: 255), "a far out-of-range discriminant -> nil")
     }
 }

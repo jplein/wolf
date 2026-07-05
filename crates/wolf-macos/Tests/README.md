@@ -1,6 +1,6 @@
 # wolf-macos/Tests
 
-The Swift tests for the macOS front-end. The Bazel target is `//crates/wolf-macos:WolfKeyMapTests`; it runs regardless of `WOLF_NVIM_BIN` (it needs no Neovim) and covers the pure seams — the key seam (`KeyMapTests.swift`), the picker seam (`PickerSeamTests.swift`), the pane-layout seam (`PaneTreeTests.swift`), the per-pane geometry seam (`PaneGeometryTests.swift`), the scroll-accumulator seam (`ScrollAccumulatorTests.swift`), the glyph-style seam (`GlyphStyleTests.swift`), the state-restore seam (`StateSeamTests.swift`), and the multi-window seams (`ShortcutSeamTests.swift`, `WindowIndexSeamTests.swift`).
+The Swift tests for the macOS front-end. The Bazel target is `//crates/wolf-macos:WolfKeyMapTests`; it runs regardless of `WOLF_NVIM_BIN` (it needs no Neovim) and covers the pure seams — the key seam (`KeyMapTests.swift`), the picker seam (`PickerSeamTests.swift`), the pane-layout seam (`PaneTreeTests.swift`), the per-pane geometry seam (`PaneGeometryTests.swift`), the scroll-accumulator seam (`ScrollAccumulatorTests.swift`), the glyph-style seam (`GlyphStyleTests.swift`), the state-restore seam (`StateSeamTests.swift`), the command-decode seam (`CommandSeamTests.swift`), the font-size seam (`FontSizeSeamTests.swift`), and the multi-window seams (`ShortcutSeamTests.swift`, `WindowIndexSeamTests.swift`).
 
 ## `WolfKeyMapTests/KeyMapTests.swift`
 
@@ -46,10 +46,18 @@ The AppKit save/restore wiring (`StatePersistence.swift`, the `WolfWindowControl
 
 ## `WolfKeyMapTests/ShortcutSeamTests.swift`
 
-Pure, headless `XCTest` coverage of the AppKit-free `ShortcutSeam.isNewWindowTrigger(charactersIgnoringModifiers:command:)` seam (`@testable import WolfKeyMap`), the sibling of `PickerSeamTests` for the **Command+N** new-window chord. Table-driven: `Command+"n"` → `true`, `Command+"N"` (Command+Shift+N — `charactersIgnoringModifiers` carries the uppercase glyph, matched case-insensitively) → `true`, plain `"n"` with command not held → `false`, `Command+"o"` (the wrong letter, guarding against colliding with the picker chord) → `false`, and an empty string → `false`.
+Pure, headless `XCTest` coverage of the AppKit-free `ShortcutSeam.isNewWindowTrigger(charactersIgnoringModifiers:command:)` seam (`@testable import WolfKeyMap`), the sibling of `PickerSeamTests` for the **Command+N** new-window chord. Table-driven: `Command+"n"` → `true`, `Command+"N"` (Command+Shift+N — `charactersIgnoringModifiers` carries the uppercase glyph, matched case-insensitively) → `true`, plain `"n"` with command not held → `false`, `Command+"o"` (the wrong letter, guarding against colliding with the picker chord) → `false`, and an empty string → `false`. (The seam is now **dormant / unwired** in the live app — New Window moved to the menu's ⇧⌘N — but the test is kept so the pure seam stays green.)
+
+## `WolfKeyMapTests/CommandSeamTests.swift`
+
+Pure, headless `XCTest` coverage of the AppKit-free `CommandKind(ffi:)` decode seam (`@testable import WolfKeyMap`), the sibling of `PaneTreeTests`' discriminant-contract test. It pins the `command_kind` contract with `wolf-ffi`: `init?(ffi:)` maps `0..12` to the thirteen cases (`newWindow` … `closePane == 8`, `newBuffer == 9`, `resetFontSize == 10`, `increaseFontSize == 11`, `decreaseFontSize == 12`) and returns `nil` for out-of-range bytes (the boundary is now `13`, plus `255`), so the Swift port stays in lockstep with the Rust `mod command_kind` and the `//crates/wolf-ffi:commands` discriminant guard.
+
+## `WolfKeyMapTests/FontSizeSeamTests.swift`
+
+Pure, headless `XCTest` coverage of the AppKit-free `FontSizeSeam` step+clamp seam (`@testable import WolfKeyMap`) backing the View font-size commands. Table-driven (asserting with an accuracy epsilon, since the API is `Double -> Double` with `minPointSize` / `maxPointSize` / `step` as `Double`): `increased`/`decreased` step by ±1, in-range values pass through, and the clamps hold at the `6` / `72` bounds (`71 → 72`, `72 → 72`, `7 → 6`, `6 → 6`).
 
 ## `WolfKeyMapTests/WindowIndexSeamTests.swift`
 
 Pure, headless `XCTest` coverage of the AppKit-free `WindowIndexSeam.nextFreeIndex(occupied:)` seam (`@testable import WolfKeyMap`), which picks a new window's `state.json` slot: the smallest non-negative integer NOT in `occupied` (order and duplicates irrelevant). Table-driven: `[]` → `0`, a dense `[0,1,2]` → `3` (append), `[1]` → `0`, hole reuse `[0,2]` → `1` and `[0,1,3]` → `2`, and an unordered `[2,0,1]` → `3`.
 
-The AppKit multi-window glue (`WolfWindowController`, `WindowRegistry`, the token-routed `*WakeBridge` thunks, the `AppDelegate` coordinator collection + `makeNewWindow`, `PaneContainerView.onNewWindow`) stays compile-verified + manual-smoke (no headless window server); the Rust bridge surface it drives (`wolf_ffi_start`'s trailing `window_index`, `wake_token`, the token-carrying wake ABI, the shared-store per-index writes, `state_set_window_count`) is covered by the real-nvim `//crates/wolf-ffi:multi_window` test.
+The AppKit multi-window glue (`WolfWindowController`, `WindowRegistry`, the token-routed `*WakeBridge` thunks, the `AppDelegate` coordinator collection + `makeNewWindow`) stays compile-verified + manual-smoke (no headless window server); the Rust bridge surface it drives (`wolf_ffi_start`'s trailing `window_index`, `wake_token`, the token-carrying wake ABI, the shared-store per-index writes, `state_set_window_count`) is covered by the real-nvim `//crates/wolf-ffi:multi_window` test.

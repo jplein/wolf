@@ -25,7 +25,8 @@
 /// `command_kind` module and the Swift `CommandKind` port: `NewWindow`(0),
 /// `CloseWindow`(1), `QuitApplication`(2), `HideApplication`(3),
 /// `MinimizeWindow`(4), `GoToFile`(5), `OpenFile`(6), `OpenFolder`(7),
-/// `CloseFile`(8). Adding a command is additive (append a variant + a
+/// `ClosePane`(8), `NewBuffer`(9), `ResetFontSize`(10), `IncreaseFontSize`(11),
+/// `DecreaseFontSize`(12). Adding a command is additive (append a variant + a
 /// [`COMMAND_SPECS`] row); reordering is a breaking change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
@@ -45,8 +46,16 @@ pub enum Command {
     OpenFile,
     /// Open a native dialog to change the working directory to a folder.
     OpenFolder,
-    /// Close (delete) the current buffer.
-    CloseFile,
+    /// Close the current split (the pane), not the buffer.
+    ClosePane,
+    /// Open a new empty buffer in the current window.
+    NewBuffer,
+    /// Reset the font size to the configured default.
+    ResetFontSize,
+    /// Increase the font size by one point.
+    IncreaseFontSize,
+    /// Decrease the font size by one point.
+    DecreaseFontSize,
 }
 
 /// The menu group a command belongs to in a native menu bar.
@@ -60,6 +69,8 @@ pub enum MenuGroup {
     App,
     /// The File menu (New Window / …).
     File,
+    /// The View menu (font-size commands / …).
+    View,
     /// The Window menu (Close Window / Minimize / …).
     Window,
 }
@@ -150,11 +161,39 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         menu: MenuGroup::File,
     },
     CommandSpec {
-        command: Command::CloseFile,
-        id: "close_file",
-        ex_command: "WolfCloseFile",
-        title: "Close File",
+        command: Command::ClosePane,
+        id: "close_pane",
+        ex_command: "WolfClosePane",
+        title: "Close",
         menu: MenuGroup::File,
+    },
+    CommandSpec {
+        command: Command::NewBuffer,
+        id: "new_buffer",
+        ex_command: "WolfNewBuffer",
+        title: "New",
+        menu: MenuGroup::File,
+    },
+    CommandSpec {
+        command: Command::ResetFontSize,
+        id: "reset_font_size",
+        ex_command: "WolfResetFontSize",
+        title: "Reset Font Size",
+        menu: MenuGroup::View,
+    },
+    CommandSpec {
+        command: Command::IncreaseFontSize,
+        id: "increase_font_size",
+        ex_command: "WolfIncreaseFontSize",
+        title: "Increase Font Size",
+        menu: MenuGroup::View,
+    },
+    CommandSpec {
+        command: Command::DecreaseFontSize,
+        id: "decrease_font_size",
+        ex_command: "WolfDecreaseFontSize",
+        title: "Decrease Font Size",
+        menu: MenuGroup::View,
     },
 ];
 

@@ -1,128 +1,273 @@
-# Plan: Four new File-menu commands (macOS)
+# Plan: macOS menu/command changes (New, View font-size, dynamic Window menu, Close→:close)
 
 ## Status: COMPLETE
 
-Docs updated (wolf-core/src, wolf-ffi, wolf-macos, wolf-macos/Sources READMEs + architecture.md decision 10) and prettier-clean (all unchanged by prettier). Stale "Discriminant contract" header comment in wolf-ffi/tests/commands.rs fixed to 0..8. Final state: all tests pass, `bazel build //crates/wolf-macos:Wolf` succeeds, `generated/wolf_ffi_wake.h` unchanged (empty diff). Not committed (per workflow).
+All 5 requirements implemented, reviewed (code APPROVED), documented, and prettier-clean
+(all 8 edited Markdown files unchanged by prettier). Tests pass: `//crates/wolf-core/...`,
+`//crates/wolf-ffi:{commands,file_actions,close_pane,bridge_smoke}`,
+`//crates/wolf-macos:WolfKeyMapTests`; `bazel build //crates/wolf-macos:Wolf` succeeds;
+`generated/wolf_ffi_wake.h` unchanged. Not committed (per workflow). Orchestrator decision
+recorded: `ShortcutSeam`/`ShortcutSeamTests` kept as a now-dormant pure seam (docs note it
+is unwired).
 
----
-
-## Status history: REVIEWER APPROVED — dispatching technical-writer
-
-### Reviewer verdict: APPROVED
-
-Discriminant contract consistent 5/6/7/8 across all layers; ⌘W/⇧⌘W swap + ⇧⌘O correct (lowercase keyEquiv + explicit mask); NSOpenPanel sheet closures leak-free ([weak self]); all exhaustive matches complete; wolf_ffi_wake.h unchanged. One NON-BLOCKING cosmetic note: the header doc block of `crates/wolf-ffi/tests/commands.rs` (~lines 20-26 "Discriminant contract") still enumerates only 0..4 — stale; the consts + 0..8 guard below it are correct. Route this comment fix to the technical-writer.
+### Reviewer verdict: code APPROVED (all 9 points pass); docs must be synced
+Code is correct/complete/conformant across all four contract layers + AppKit glue.
+Discriminants 0..7 unchanged, 8 renamed in place, 9..12 appended; input path, bridge,
+Cmd-N routing, View/font, dynamic Window menu, Close validation, leak checks all verified.
+BLOCKING = stale source-of-truth READMEs (see technical-writer task list below).
 
 ### Coder report
+Implemented all of wolf-core / wolf-ffi / WolfKeyMap / WolfMacOS per plan. Regenerated
+FFI bindings — `generated/wolf_ffi_wake.h` UNCHANGED (only wolf-ffi.h/.swift changed for
+the close_buffer→close_pane rename + new_buffer add). Tests: `//crates/wolf-core/...`
+7 pass; `//crates/wolf-ffi:commands :file_actions :close_pane :bridge_smoke` 4/4 pass;
+`//crates/wolf-macos:WolfKeyMapTests` pass (incl. new FontSizeSeamTests + updated
+CommandSeamTests); `bazel build //crates/wolf-macos:Wolf` succeeds. No test files touched.
+DECISION (orchestrator): keep `ShortcutSeam.swift` + `ShortcutSeamTests` as a now-dormant
+pure seam (its Cmd-N keyDown interception was removed); technical-writer to note it's
+currently unwired. SourceKit "No such module" diagnostics are IDE-only false positives.
 
-Implemented all of A–E per plan. Tests: `bazel test //crates/wolf-core/...` (7 pass), `//crates/wolf-ffi:commands //crates/wolf-ffi:file_actions //crates/wolf-ffi:bridge_smoke` (3/3 pass), `//crates/wolf-macos:WolfKeyMapTests` (pass), `bazel build //crates/wolf-macos:Wolf` (success). `gen_bindings` ran; `generated/wolf_ffi_wake.h` diff EMPTY (unchanged). Added `file_actions` rust_test target (tempfile via all_crate_deps normal_dev). Test files were pre-existing/plan-conformant; coder did not touch them. No README edits (technical-writer's job). SourceKit "No such module"/"Cannot find AppDelegate" diagnostics are IDE-only false positives (Bazel-built modules not resolved outside the Bazel graph) — the passing `bazel build` is authoritative.
-
-## Architect's detailed plan (authoritative)
-
-### wolf-core
-
-- `command.rs`: append `Command` variants `GoToFile`(5), `OpenFile`(6), `OpenFolder`(7), `CloseFile`(8); append 4 `COMMAND_SPECS` rows (all `MenuGroup::File`), exact titles: `"Go to File…"`, `"Open File…"`, `"Open Folder…"`, `"Close File"` (ellipsis = single U+2026 for the 3 dialog/picker commands; none on Close File). ids/ex: `go_to_file`/`WolfGoToFile`, `open_file`/`WolfOpenFile`, `open_folder`/`WolfOpenFolder`, `close_file`/`WolfCloseFile`. Update enum discriminant doc.
-- `input.rs`: add `InputEvent::Chdir { path: PathBuf }` and `InputEvent::CloseBuffer` (derive unaffected). `apply()` arms: `Chdir` → `command(nvim, &format!("cd {}", fnameescape(path)))`; `CloseBuffer` → `command(nvim, "bdelete")`. Decisions: GLOBAL `cd` (not lcd/tcd); non-bang `:bdelete` (protects unsaved edits, no last-buffer guard — nvim makes a fresh `[No Name]`, current_file → "").
-
-### wolf-ffi (`crates/wolf-ffi/src/lib.rs`)
-
-- `mod command_kind`: add `GO_TO_FILE=5, OPEN_FILE=6, OPEN_FOLDER=7, CLOSE_FILE=8`.
-- `FfiCommand::from_command`: add 4 arms; update kind() doc + bridge comment `.. CLOSE_FILE`.
-- Bridge `extern "Rust"` (next to `open`): add `fn chdir(&self, path: String);` and `fn close_buffer(&self);`.
-- `impl WolfCoreHandle` (next to `open`): `chdir` → `send_input(InputEvent::Chdir{path: PathBuf::from(path)})`; `close_buffer` → `send_input(InputEvent::CloseBuffer)`. Modeled on `open`.
-- **Run `bazel run //crates/wolf-ffi:gen_bindings`** and commit regenerated `generated/wolf-ffi.swift` + `wolf-ffi.h`; `generated/wolf_ffi_wake.h` MUST stay unchanged.
-
-### Swift seam (`WolfKeyMap/CommandSeam.swift`)
-
-- Add cases `goToFile/openFile/openFolder/closeFile`; `init?(ffi:)` arms `5..8`; update docs (0..8 → cases, else nil).
-
-### macOS AppKit
-
-- `CommandDispatcher.swift`: new signature adds `controller: WolfWindowController?`; arms: `.goToFile→controller?.openFilePicker()`, `.openFile→presentOpenFileDialog()`, `.openFolder→presentOpenFolderDialog()`, `.closeFile→closeCurrentBuffer()`.
-- `WolfWindowController.swift`: thread `controller: self` into drainAndDispatchCommands dispatch. Add methods (all touched members are same-type private props, no visibility change): `openFilePicker()`→picker?.open(); `presentOpenFileDialog()`→NSOpenPanel (files, no dirs, no multi, directoryURL=currentCwd when non-empty, beginSheetModal(for: window), on .OK → handle.open(url.path) + refocusEditor()); `presentOpenFolderDialog()` → same but dirs-only → handle.chdir(url.path)+refocus; `closeCurrentBuffer()`→handle?.close_buffer(); private `refocusEditor()`→window?.makeFirstResponder(paneContainer). `[weak self]` in sheet closures.
-- `AppDelegate.handleCommandMenuItem`: find `target = controllers.first { $0.owns(key) }`, pass `controller: target` (+ cwd = target?.currentCwd ?? "").
-- `AppMenu.swift`: Tag consts 5..8; extend `commandItem` with `modifiers: NSEvent.ModifierFlags = .command` setting `keyEquivalentModifierMask`. Rebuild File menu in required order + separators: New Window(n) / sep / Go to File…(o) / Open File…("") / Open Folder…(o,[.command,.shift]) / sep / Close File(w) / Close Window(w,[.command,.shift]). ⇧⌘ = lowercase keyEquiv + explicit mask (NOT capital letter).
-
-### Tests (real nvim, no mocks)
-
-- `wolf-core/tests/commands.rs`: extend `command_specs_menu_groups_match_macos_convention` with the 4 new File rows. (Other pure tests already loop all specs.) Optional: one new-command drain in `ex_and_lua_faces_emit_commands`.
-- `wolf-ffi/tests/commands.rs`: add local consts CMD*KIND*\* 5..8; extend contract-guard array to 0..8; add one `:WolfGoToFile` → kind()==5 drain.
-- NEW `wolf-ffi/tests/file_actions.rs` (sibling; model on state.rs + commands.rs, reuse common/mod.rs): chdir → poll cwd() canonicalized == target; open a file → poll current_file() == file, then close_buffer() → poll current_file() == "". shutdown(). Loud-SKIP when no nvim.
-- `CommandSeamTests.swift`: add ffi 5..8 → cases; change out-of-range boundary to 9 (and keep 255) → nil; update header comment 0..8.
-- AppKit glue (NSOpenPanel/menu/dispatcher) stays compile-verified + manual-smoke.
-
-### BUILD
-
-- `crates/wolf-ffi/BUILD.bazel`: add `rust_test` `file_actions` (copy of `commands`, srcs = common/mod.rs + file_actions.rs, crate_root file_actions.rs, no-sandbox, nvim+init.lua data/env).
-- wolf-macos BUILD: NO change (globs Sources/WolfMacOS/\*.swift; CommandSeam/CommandSeamTests already in explicit srcs). wolf-core BUILD: NO change.
-
-### Implementation order
-
-A wolf-core (command.rs+input.rs) → B wolf-ffi Rust + gen_bindings → C CommandSeam.swift → D AppKit group (CommandDispatcher→WolfWindowController→AppDelegate→AppMenu) → E tests → F docs.
-
-### Docs (prettier --write each)
-
-- `wolf-core/src/README.md` (Command list + InputEvent Chdir/CloseBuffer)
-- `wolf-ffi/README.md` (chdir/close_buffer methods, command_kind table to 8, :file_actions target, wake.h unchanged)
-- `wolf-macos/README.md` (AppMenu items+shortcuts, CommandDispatcher controller param+arms, WolfWindowController methods, command eyeball checklist +4)
-- `wolf-macos/Sources/README.md` (CommandSeam/CommandDispatcher/WolfWindowController/AppMenu/AppDelegate bullets)
-- `architecture.md` decision 10: stale "5 items"/"5-item" wording → nine commands + File additions.
-
-### Lint
-
-- `///` docs on new command_kind consts + InputEvent variants. Reference all 4 new wolf-ffi test consts in the guard array (dead_code). `[weak self]` in sheet closures.
-
-### Verification
-
-- `bazel run //crates/wolf-ffi:gen_bindings` (+ `git status` confirm wolf_ffi_wake.h unchanged)
-- `bazel test //crates/wolf-core/...`
-- `bazel test //crates/wolf-ffi:commands //crates/wolf-ffi:file_actions //crates/wolf-ffi:bridge_smoke`
-- `bazel test //crates/wolf-macos:WolfKeyMapTests`
-- `bazel build //crates/wolf-macos:Wolf`
+### Test-writer report
+Created: `WolfKeyMapTests/FontSizeSeamTests.swift`, `wolf-ffi/tests/close_pane.rs`.
+Modified: `wolf-core/tests/commands.rs`, `wolf-ffi/tests/commands.rs`,
+`wolf-ffi/tests/file_actions.rs` (test fn now `file_actions_chdir_and_new_buffer`),
+`WolfKeyMapTests/CommandSeamTests.swift`, `wolf-ffi/BUILD.bazel` (new `close_pane`
+rust_test), `wolf-macos/BUILD.bazel` (FontSizeSeam.swift + FontSizeSeamTests.swift srcs).
+Notes: FontSizeSeam API MUST be `Double -> Double` with `minPointSize/maxPointSize/step`
+as `Double` (tests assert with accuracy eps). `close_pane.rs` types `:vsplit` to set up
+but calls `handle.close_pane()` directly (RPC, not typed). SourceKit "No such module
+XCTest" is an IDE-only false positive (Bazel build authoritative).
 
 ## Problem statement
 
-Add four new user commands to the macOS File menu, following the EXISTING command architecture (already shipped in a prior increment):
+Implement a set of macOS menu/command changes for Wolf. The command architecture is a
+fixed `wolf_core::Command` enum + `COMMAND_SPECS` registry
+(`crates/wolf-core/src/command.rs`) whose variant order is a discriminant contract
+shared with wolf-ffi's `command_kind` module (`crates/wolf-ffi/src/lib.rs`) and the
+Swift `CommandKind` port (`crates/wolf-macos/Sources/WolfKeyMap/CommandSeam.swift`).
+Adding a command = append a `Command` variant + a `COMMAND_SPECS` row + an FFI
+discriminant + a Swift `CommandKind` case + a `CommandDispatcher` action; `init.lua` is
+fed `COMMAND_SPECS` over FFI so the `:Wolf*` Ex-command and `require('wolf').*()` Lua
+faces register automatically. The native menu is hardcoded in `AppMenu.swift`; every
+item carries its `command_kind` byte in `NSMenuItem.tag`. **Reordering existing
+`Command` variants is BREAKING — only APPEND new variants (new discriminants).** Current
+discriminants: NewWindow(0), CloseWindow(1), QuitApplication(2), HideApplication(3),
+MinimizeWindow(4), GoToFile(5), OpenFile(6), OpenFolder(7), CloseFile(8).
 
-`wolf_core::Command` / `COMMAND_SPECS` → `wolf-ffi` `command_kind` → Swift `CommandKind` / `CommandDispatcher` → `AppMenu`.
+## Requirements
 
-### The four commands (all `MenuGroup::File`)
+1. **File > New (`:enew`)** — NEW command, Cmd-N. New empty buffer in the CURRENT
+   window. New Command variant (suggested id `new_buffer`/`WolfNewBuffer`/title "New"/
+   `MenuGroup::File`), FFI discriminant, Swift CommandKind, dispatcher action, and a core
+   input path (InputEvent + FFI handle method) running `:enew`. All three faces act on
+   the right window (menu → key window; nvim-drained → typed window).
 
-1. **Go to file** (`go_to_file` / `WolfGoToFile`): opens the existing file picker overlay (`PickerView`). macOS shortcut **⌘O**.
-2. **Open file** (`open_file` / `WolfOpenFile`): native `NSOpenPanel` to choose a file anywhere, then opens it in this window's Neovim (`handle.open`). No shortcut.
-3. **Open folder** (`open_folder` / `WolfOpenFolder`): native `NSOpenPanel` (directories), then updates Neovim's working directory to the chosen folder (`:cd`). Shortcut **⇧⌘O**.
-4. **Close file** (`close_file` / `WolfCloseFile`): tells Neovim to delete the current buffer (`:bdelete`). Shortcut **⌘W**.
+2. **New Window** — remap shortcut Cmd-N → Shift-Cmd-N (AppMenu only: lowercase "n" +
+   `[.command, .shift]`). Command/item otherwise unchanged.
 
-### Desired File menu order + shortcuts
+3. **View menu (NEW top-level menu)** — three NEW commands, PER-WINDOW + EPHEMERAL (not
+   persisted; a fresh/Cmd-N window starts at config default):
+   - Reset font size (Cmd-0) → config default.
+   - Increase font size (Cmd-=) → +1pt, clamp max (~72).
+   - Decrease font size (Cmd--) → -1pt, clamp min (~6).
+   New `MenuGroup::View`, new Command variants, FFI discriminants, Swift CommandKind,
+   dispatcher actions. Each WolfWindowController owns its OWN font size + CellMetrics
+   (today measured once in AppDelegate and shared). Action re-measures CellMetrics at the
+   new size and reflows: keep OS window frame, grid cols/rows reflow, re-sync grid sizes
+   to nvim, repaint. Acts on the right window.
 
-- New window (⌘N) [keep existing item + shortcut]
-- separator
-- Go to file (⌘O)
-- Open file (no shortcut)
-- Open folder (⇧⌘O)
-- separator
-- Close file (⌘W)
-- Close window (⇧⌘W) [moved from ⌘W to ⇧⌘W]
+4. **Window menu** — Minimize (Cmd-M, unchanged), separator, then a DYNAMIC list: one
+   item per open window, titled with that window's FULL cwd path; clicking raises/
+   activates that window (makeKeyAndOrderFront + activate). NOT in COMMAND_SPECS —
+   native dynamic items built by AppDelegate, rebuilt on window open/close/cwd-change.
 
-## Key implementation notes (from initial investigation)
+5. **Close command** — currently `Command::CloseFile` (menu "Close File", Cmd-W) runs
+   `:bdelete` via `InputEvent::CloseBuffer`. CHANGE to run `C-w c` / `:close` (close the
+   split, NOT the buffer). Rename label to "Close". No last-split fallback (matches
+   Neovim E444). Menu item shown DISABLED when it's the last split (NSMenuItem
+   validation driven by the key window's pane count / PaneTree leaf count > 1). Architect
+   decides whether to rename id/ex_command (`close_file`/`WolfCloseFile` →
+   e.g. `close_pane`/`WolfClosePane`). Change `InputEvent::CloseBuffer`'s action from
+   `bdelete` to `close` (or add a distinct event). Close Window (Shift-Cmd-W) UNCHANGED.
 
-- Discriminants are an ordered contract shared across `wolf_core::Command`, `wolf-ffi mod command_kind`, `FfiCommand::from_command`, and Swift `CommandKind`. Reordering is breaking; **APPEND** new variants after `MinimizeWindow`: `5=GoToFile, 6=OpenFile, 7=OpenFolder, 8=CloseFile`. AppMenu order is independent of discriminant order.
-- Add rows to `COMMAND_SPECS` (`crates/wolf-core/src/command.rs`) in variant order (slice index == discriminant); all four are `MenuGroup::File`.
-- Ex-command/Lua faces auto-register from `COMMAND_SPECS` via `runtime/nvim/init.lua` (data-driven) — no init.lua change needed.
-- Two new native-facing Neovim actions on `WolfCoreHandle`: a chdir (`:cd <path>`, for Open folder) and a close-buffer (`:bdelete`, for Close file). Add `InputEvent` variants (`Chdir { path }`, `CloseBuffer`) in `crates/wolf-core/src/input.rs` with `apply()` arms using the existing `command()` / `fnameescape()` helpers, and expose `handle.chdir(path)` / `handle.close_buffer()` over the FFI bridge (`crates/wolf-ffi/src/lib.rs`), then regenerate bindings via `bazel run //crates/wolf-ffi:gen_bindings`.
-- Go to file / Open file need NO new core action: Go to file opens the existing `PickerView`; Open file uses the existing `handle.open(path)`.
-- Swift `CommandDispatcher.dispatch` needs the originating `WolfWindowController` to reach its picker/handle for the four new commands. Thread a `controller: WolfWindowController?` param through both call sites (`AppDelegate.handleCommandMenuItem` finds it via `controllers.first { $0.owns(key) }`; `WolfWindowController.drainAndDispatchCommands` passes `self`). Add controller methods: `openFilePicker()` (picker?.open()), `presentOpenFileDialog()` (NSOpenPanel files → handle.open + refocus paneContainer), `presentOpenFolderDialog()` (NSOpenPanel dirs → handle.chdir + refocus), `closeCurrentBuffer()` (handle.close_buffer()). NSOpenPanels start at `currentCwd`, `beginSheetModal` on the window.
-- Update Swift `CommandKind` (`WolfKeyMap/CommandSeam.swift`) with the four new cases + `init?(ffi:)` arms 5..8.
-- Update `AppMenu.swift`: add Tag constants, extend `commandItem` to accept a `keyEquivalentModifierMask` (default `.command`) so ⇧⌘O and ⇧⌘W work, and rebuild the File menu in the order above with separators. Change Close Window → ⇧⌘W.
+## Clarified decisions (from user)
 
-## Tests (real Neovim, no mocks)
+- New → Cmd-N; New Window → Shift-Cmd-N.
+- Close on last split: NO fallback; show the menu item DISABLED on the last split.
+- View font-size commands are per-window and ephemeral (not persisted).
 
-- `crates/wolf-core/tests/commands.rs`: menu-group expectations (4 new File commands), round-trip already loops over all specs.
-- New/extended real-nvim integration test for the new `chdir` / `close_buffer` FFI methods (start nvim, chdir, assert `cwd()` changed; close_buffer and assert buffer count / current_file).
-- `crates/wolf-macos/Tests/WolfKeyMapTests/CommandSeamTests.swift`: new discriminants (5..8 → cases; out-of-range → nil).
+## Constraints
 
-## Docs to update (source of truth; prettier --write after editing)
+- Documentation is source of truth: update every affected README
+  (`crates/wolf-core/src/README.md`, `crates/wolf-ffi/src/README.md`,
+  `crates/wolf-macos/README.md`, `crates/wolf-macos/Sources/README.md`, crate-level
+  READMEs, and `architecture.md` if it enumerates commands/menus). Reformat edited
+  Markdown with `prettier --write`; no hard line breaks within paragraphs.
+- Prefer real-nvim end-to-end/integration tests (wolf-ffi tests start a real Neovim).
+  New commands' core behavior (`:enew` creating a new buffer, `:close` closing a split)
+  covered by real-nvim tests. Pure Swift seam (CommandSeam discriminant contract)
+  headlessly tested by WolfKeyMapTests.
+- AppKit glue (AppMenu, CommandDispatcher, per-window font relayout, dynamic Window menu,
+  menu validation) is compile-verified + manual-smoke only; the pure decode (CommandSeam)
+  and core/FFI surface MUST have tests.
+- Builds: `bazel build //crates/wolf-macos:Wolf`,
+  `bazel test //crates/wolf-macos:WolfKeyMapTests`, wolf-ffi real-nvim tests. Rust core
+  builds with Bazel (bazelisk) on macOS. Regenerate FFI bindings via
+  `bazel run //crates/wolf-ffi:gen_bindings`; `generated/wolf_ffi_wake.h` must stay
+  unchanged unless the wake ABI changes.
 
-- `crates/wolf-core/src/README.md` (command list, new InputEvent variants)
-- `crates/wolf-ffi/README.md` (new handle methods, command_kind list, note bindings regenerated)
-- `crates/wolf-macos/README.md` + `Sources/README.md` (CommandKind cases, CommandDispatcher/AppMenu/WolfWindowController new behavior, command eyeball checklist + shortcuts)
-- `architecture.md` if the command list / menu is enumerated there.
+## Final menu layout (target)
+
+- **File**: New (Cmd-N) / New Window (Shift-Cmd-N) / sep / Go to File (Cmd-O) / Open
+  File / Open Folder (Shift-Cmd-O) / sep / Close (Cmd-W) / Close Window (Shift-Cmd-W).
+- **View**: Reset font size (Cmd-0) / Increase font size (Cmd-=) / Decrease font size
+  (Cmd--).
+- **Window**: Minimize (Cmd-M) / sep / [dynamic window list].
+
+## Architect plan (authoritative)
+
+### Discriminant contract (final, APPEND-ONLY)
+
+`wolf_core::Command` order == `command_kind` u8 == Swift `CommandKind`:
+NewWindow(0), CloseWindow(1), QuitApplication(2), HideApplication(3), MinimizeWindow(4),
+GoToFile(5), OpenFile(6), OpenFolder(7), **ClosePane(8, renamed in-place from CloseFile)**,
+**NewBuffer(9)**, **ResetFontSize(10)**, **IncreaseFontSize(11)**, **DecreaseFontSize(12)**.
+`MenuGroup` gains a `View` variant (not FFI-numbered; append after `Window`).
+
+### Files to CREATE
+
+- `crates/wolf-macos/Sources/WolfKeyMap/FontSizeSeam.swift` — pure Foundation namespace
+  `public enum FontSizeSeam`: `minPointSize=6`, `maxPointSize=72`, `step=1`,
+  `clamped(_:)`, `increased(_:)=clamped(current+step)`, `decreased(_:)=clamped(current-step)`.
+  Reset is NOT in the seam (controller resets to its stored default).
+- `crates/wolf-macos/Tests/WolfKeyMapTests/FontSizeSeamTests.swift` — step ±1, clamp at
+  6/72, in-range pass-through, 71→72, 72→72, 7→6, 6→6.
+- `crates/wolf-ffi/tests/close_pane.rs` — real-nvim (model on `panes.rs`, reuse
+  `tests/common/mod.rs`, loud-skip w/o `WOLF_NVIM_BIN`): start → 1 grid → `:vsplit` →
+  `windows()` live editor grids == 2 → `handle.close_pane()` → poll `windows()` == 1.
+  Use the FFI method directly (nvim_command bypasses init.lua interactive overrides).
+
+### wolf-core
+
+- `command.rs`: rename `CloseFile`→`ClosePane` (stays pos 8); append `NewBuffer`,
+  `ResetFontSize`, `IncreaseFontSize`, `DecreaseFontSize` (9–12); add `MenuGroup::View`;
+  update doc comments. `COMMAND_SPECS`: pos-8 row →
+  `{ClosePane, "close_pane", "WolfClosePane", "Close", File}`; append
+  `{NewBuffer,"new_buffer","WolfNewBuffer","New",File}`,
+  `{ResetFontSize,"reset_font_size","WolfResetFontSize","Reset Font Size",View}`,
+  `{IncreaseFontSize,"increase_font_size","WolfIncreaseFontSize","Increase Font Size",View}`,
+  `{DecreaseFontSize,"decrease_font_size","WolfDecreaseFontSize","Decrease Font Size",View}`.
+- `input.rs`: rename `CloseBuffer`→`ClosePane` (doc `:close`); append `NewBuffer`
+  (doc `:enew`). `apply()`: `ClosePane => command(nvim,"close")`,
+  `NewBuffer => command(nvim,"enew")`.
+- No other core files (api.rs/lib.rs re-exports carry new variants automatically).
+
+### wolf-ffi (`crates/wolf-ffi/src/lib.rs`)
+
+- `mod command_kind`: rename `CLOSE_FILE`→`CLOSE_PANE` (=8); add `NEW_BUFFER=9`,
+  `RESET_FONT_SIZE=10`, `INCREASE_FONT_SIZE=11`, `DECREASE_FONT_SIZE=12`; update doc range.
+- `FfiCommand::from_command`: rename CloseFile arm→ClosePane; add 4 arms. Keep the match
+  EXHAUSTIVE (no wildcard).
+- `extern "Rust"` bridge: rename `close_buffer`→`close_pane`; add `new_buffer`
+  (update comments `:close`/`:enew`).
+- `impl WolfCoreHandle`: rename `close_buffer`→`close_pane` (send `InputEvent::ClosePane`);
+  add `new_buffer` (send `InputEvent::NewBuffer`). Font/View commands need NO FFI handle
+  method (only their discriminants cross for the drained face).
+- Regenerate: `bazel run //crates/wolf-ffi:gen_bindings`; `generated/wolf-ffi.swift`
+  reflects the rename + added fn; `generated/wolf_ffi_wake.h` MUST stay unchanged.
+
+### Swift WolfKeyMap
+
+- `CommandSeam.swift`: rename `.closeFile`→`.closePane`; add `.newBuffer`,
+  `.resetFontSize`, `.increaseFontSize`, `.decreaseFontSize`; `init?(ffi:)`
+  `8→.closePane`, `9..12→new cases`, default nil. Update header doc.
+
+### Swift WolfMacOS (AppKit glue — `srcs=glob`, no BUILD change for WolfMacOS)
+
+- `AppMenu.swift`: `Tag` rename `closeFile`→`closePane`(8) + `newBuffer=9`,
+  `resetFontSize=10`, `increaseFontSize=11`, `decreaseFontSize=12`. `install(target:)`
+  returns the Window `NSMenu` and inserts a View menu between File and Window. File menu:
+  prepend "New" (newBuffer, "n", .command); "New Window" → modifiers `[.command,.shift]`
+  (keyEquiv "n"); "Close File"→"Close" (closePane, "w", .command). View menu: Reset Font
+  Size ("0"), Increase Font Size ("="), Decrease Font Size ("-"), all .command. New
+  `static rebuildWindowMenu(_:controllers:target:)`: removeAllItems → Minimize("m") +
+  separator → one item per controller titled `currentCwd` (fallback "Wolf"),
+  action `#selector(AppDelegate.raiseWindowMenuItem(_:))`, target, `tag=windowIndex`.
+- `CommandDispatcher.swift`: rename `.closeFile`→`.closePane`→`controller?.closePane()`;
+  add `.newBuffer→newBuffer()`, `.resetFontSize→resetFontSize()`,
+  `.increaseFontSize→increaseFontSize()`, `.decreaseFontSize→decreaseFontSize()`.
+- `AppDelegate.swift`: store `windowMenu` from `install`; call `rebuildWindowMenu()` at
+  startup, in `makeNewWindow`, in `removeController`; `@objc raiseWindowMenuItem(_:)`
+  finds `controllers.first{ $0.windowIndex==sender.tag }`→`raise()`; add
+  `windowCwdDidChange(_:)`→rebuild; implement `validateMenuItem(_:)` — true except for the
+  `.closePane` command item, which is `(keyWindow controller?.paneCount ?? 0) > 1`.
+- `WolfWindowController.swift`: `metrics` → `var`; add `defaultPointSize` +
+  `currentPointSize` (seed from `CellMetrics.defaultPointSize(config:)`, no re-measure at
+  start); rename `closeCurrentBuffer`→`closePane()`→`handle?.close_pane()`; add
+  `newBuffer()`→`handle?.new_buffer()`; add `resetFontSize/increaseFontSize/
+  decreaseFontSize` → `setPointSize(...)`; `setPointSize(_:)` guards change, re-measures
+  `CellMetrics.measured(config:pointSize:)`, `paneContainer?.applyMetrics(metrics)`, NO
+  `setFrame`; add `raise()`; add `paneCount`; add `lastKnownCwd` + cwd-change hook in
+  `onRenderWake()` → `coordinator?.windowCwdDidChange(self)` only on real change. Cleanup:
+  remove the `onNewWindow`/`requestNewWindow()` wiring (Cmd-N now = New).
+- `CellMetrics.swift`: add `static measured(config:pointSize:)`; keep `measured(config:)`
+  delegating with `defaultPointSize(config:)`; rename private `pointSize(config:)`→
+  internal `static defaultPointSize(config:)` (honors `WOLF_FONT_PT` else `config.font_size`).
+  Reset target = this seed (honors `WOLF_FONT_PT`).
+- `PaneContainerView.swift`: `metrics`→`var`; add
+  `applyMetrics(_:)`{metrics=…; syncGridSizes(); needsDisplay=true}; add
+  `paneCount { tree.leaves().count }`. Cleanup: remove `onNewWindow` +
+  `ShortcutSeam.isNewWindowTrigger` interception in `keyDown` (menu key-equivalents
+  preempt keyDown; leaving it would wrongly open a window on Cmd-N).
+- `MainWindow.swift`: NO change (metrics consumed only at init for initial content size;
+  font changes deliberately keep the OS frame).
+
+### Tests to MODIFY
+
+- `wolf-core/tests/commands.rs`: rename CloseFile→ClosePane steps; menu-group test →
+  `(ClosePane,File)`, append `(NewBuffer,File)`, `(ResetFontSize,View)`,
+  `(IncreaseFontSize,View)`, `(DecreaseFontSize,View)`; generic round-trip tests unchanged.
+- `wolf-ffi/tests/commands.rs`: rename `CMD_KIND_CLOSE_FILE`→`_CLOSE_PANE`(8); add
+  `_NEW_BUFFER=9`, `_RESET_FONT_SIZE=10`, `_INCREASE_FONT_SIZE=11`,
+  `_DECREASE_FONT_SIZE=12`; extend contract guard to contiguous `0..=12`; optional new drains.
+- `wolf-ffi/tests/file_actions.rs`: repoint the `close_buffer`/`:bdelete` step to
+  `handle.new_buffer()`/`:enew` (same "current_file becomes empty" assertion); update prose.
+  The `:close` split-drop coverage lives in the new `close_pane.rs`.
+- `WolfKeyMapTests/CommandSeamTests.swift`: `8→.closePane`, add `9..12`; move out-of-range
+  boundary from 9 to 13 (keep 255→nil).
+
+### BUILD
+
+- `crates/wolf-ffi/BUILD.bazel`: add `rust_test` `close_pane` (copy `commands`/`panes`
+  target: no-sandbox, nvim+init.lua data/env, all_crate_deps(normal_dev=True),
+  srcs=[tests/close_pane.rs, tests/common/mod.rs], crate_root=tests/close_pane.rs).
+- `crates/wolf-macos/BUILD.bazel`: add `Sources/WolfKeyMap/FontSizeSeam.swift` to the
+  WolfKeyMap `swift_library` srcs; add `Tests/WolfKeyMapTests/FontSizeSeamTests.swift` to
+  `WolfKeyMapTests` srcs. WolfMacOS glob unchanged.
+- `runtime/nvim/init.lua`: NO change (command registration is data-driven from COMMAND_SPECS).
+
+### Implementation order
+
+1. wolf-core (command.rs + input.rs) + wolf-core tests. 2. wolf-ffi src.
+3. gen_bindings (confirm wake.h unchanged). 4. wolf-ffi tests + BUILD (close_pane).
+5. WolfKeyMap (CommandSeam + FontSizeSeam) + BUILD + tests. 6. WolfMacOS glue
+(CellMetrics→PaneContainerView→WolfWindowController→CommandDispatcher→AppMenu→AppDelegate).
+7. Docs + prettier. 8. Builds/tests.
+
+### Docs to update (then `prettier --write`)
+
+`wolf-core/src/README.md`, `wolf-core/README.md` (if it enumerates), `wolf-ffi/src/README.md`,
+`wolf-ffi/README.md` (if it names close_buffer), `wolf-macos/README.md`,
+`wolf-macos/Sources/README.md`, `wolf-ffi/tests/README.md`, `wolf-macos/Tests/README.md`,
+`architecture.md` (if it enumerates commands/menus).
+
+### Key risks / decisions
+
+- Cmd-N routing: menu key-equivalents preempt `keyDown`; remove the legacy ShortcutSeam
+  Cmd-N interception so plain Cmd-N = `:enew`, not new window.
+- Close: rename keeps discriminant 8; `:close` errors harmlessly (E444) on last split, and
+  the menu item is additionally disabled via `validateMenuItem`. Pre-release id/ex_command
+  rename to `WolfClosePane` is intentional.
+- Font size is front-end-only: no core/FFI/state.json; per-window size+metrics; reset
+  target = launch seed (honors `WOLF_FONT_PT`).
+- Keep `FfiCommand::from_command` exhaustive (no catch-all).

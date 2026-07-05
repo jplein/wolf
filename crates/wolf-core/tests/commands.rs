@@ -183,12 +183,20 @@ fn ex_and_lua_faces_emit_commands() {
         "require('wolf').new_window() must enqueue Command::NewWindow; got {commands:?}"
     );
 
-    // --- Ex-command face: `:WolfCloseFile<CR>` -> Command::CloseFile ------------
-    ex_command(&core, "WolfCloseFile");
-    let commands = drain_until_command(&core, FLUSH_TIMEOUT, "CloseFile from :WolfCloseFile");
+    // --- Ex-command face: `:WolfClosePane<CR>` -> Command::ClosePane ------------
+    ex_command(&core, "WolfClosePane");
+    let commands = drain_until_command(&core, FLUSH_TIMEOUT, "ClosePane from :WolfClosePane");
     assert!(
-        commands.contains(&Command::CloseFile),
-        ":WolfCloseFile must enqueue Command::CloseFile; got {commands:?}"
+        commands.contains(&Command::ClosePane),
+        ":WolfClosePane must enqueue Command::ClosePane; got {commands:?}"
+    );
+
+    // --- Ex-command face: `:WolfNewBuffer<CR>` -> Command::NewBuffer ------------
+    ex_command(&core, "WolfNewBuffer");
+    let commands = drain_until_command(&core, FLUSH_TIMEOUT, "NewBuffer from :WolfNewBuffer");
+    assert!(
+        commands.contains(&Command::NewBuffer),
+        ":WolfNewBuffer must enqueue Command::NewBuffer; got {commands:?}"
     );
 
     core.shutdown().expect("shutdown should be Ok");
@@ -261,8 +269,10 @@ fn command_specs_ex_commands_start_with_wolf() {
 
 /// Pins each command's `menu` group to the intended macOS menu-bar convention,
 /// so the grouping (unused by the current hardcoded macOS menu) cannot silently
-/// regress: `NewWindow`/`CloseWindow` live under File, `QuitApplication`/
-/// `HideApplication` under App, and `MinimizeWindow` under Window.
+/// regress: `NewWindow`/`CloseWindow`/`ClosePane`/`NewBuffer` live under File,
+/// `QuitApplication`/`HideApplication` under App, `MinimizeWindow` under Window,
+/// and the font-size commands (`ResetFontSize`/`IncreaseFontSize`/
+/// `DecreaseFontSize`) under View.
 #[test]
 fn command_specs_menu_groups_match_macos_convention() {
     let expected = [
@@ -274,7 +284,11 @@ fn command_specs_menu_groups_match_macos_convention() {
         (Command::GoToFile, MenuGroup::File),
         (Command::OpenFile, MenuGroup::File),
         (Command::OpenFolder, MenuGroup::File),
-        (Command::CloseFile, MenuGroup::File),
+        (Command::ClosePane, MenuGroup::File),
+        (Command::NewBuffer, MenuGroup::File),
+        (Command::ResetFontSize, MenuGroup::View),
+        (Command::IncreaseFontSize, MenuGroup::View),
+        (Command::DecreaseFontSize, MenuGroup::View),
     ];
     for (command, menu) in expected {
         assert_eq!(

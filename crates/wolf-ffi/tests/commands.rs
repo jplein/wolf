@@ -21,10 +21,11 @@
 //!
 //! NEW_WINDOW = 0, CLOSE_WINDOW = 1, QUIT_APPLICATION = 2, HIDE_APPLICATION = 3,
 //! MINIMIZE_WINDOW = 4, GO_TO_FILE = 5, OPEN_FILE = 6, OPEN_FOLDER = 7,
-//! CLOSE_FILE = 8 (the `wolf_core::Command` variant order). These local consts
-//! MUST match `mod command_kind` in `wolf-ffi/src/lib.rs` and the Swift
+//! CLOSE_PANE = 8, NEW_BUFFER = 9, RESET_FONT_SIZE = 10, INCREASE_FONT_SIZE = 11,
+//! DECREASE_FONT_SIZE = 12 (the `wolf_core::Command` variant order). These local
+//! consts MUST match `mod command_kind` in `wolf-ffi/src/lib.rs` and the Swift
 //! `CommandKind` port — exactly how `panes.rs` re-declares `INTENT_KIND_SPLIT`
-//! locally as a contract guard (the guard array below asserts contiguous 0..8).
+//! locally as a contract guard (the guard array below asserts contiguous 0..=12).
 //!
 //! ## What this asserts
 //!
@@ -80,8 +81,16 @@ const CMD_KIND_GO_TO_FILE: u8 = 5;
 const CMD_KIND_OPEN_FILE: u8 = 6;
 /// `FfiCommand::kind()` for Open Folder.
 const CMD_KIND_OPEN_FOLDER: u8 = 7;
-/// `FfiCommand::kind()` for Close File.
-const CMD_KIND_CLOSE_FILE: u8 = 8;
+/// `FfiCommand::kind()` for Close (the current split; renamed from Close File).
+const CMD_KIND_CLOSE_PANE: u8 = 8;
+/// `FfiCommand::kind()` for New (a new empty buffer, `:enew`).
+const CMD_KIND_NEW_BUFFER: u8 = 9;
+/// `FfiCommand::kind()` for Reset Font Size.
+const CMD_KIND_RESET_FONT_SIZE: u8 = 10;
+/// `FfiCommand::kind()` for Increase Font Size.
+const CMD_KIND_INCREASE_FONT_SIZE: u8 = 11;
+/// `FfiCommand::kind()` for Decrease Font Size.
+const CMD_KIND_DECREASE_FONT_SIZE: u8 = 12;
 
 /// Builds a printable-character `FfiKeyEvent` (kind=Char) for `c`, all modifiers
 /// false (the already-resolved glyph rides in `ch`). Same as `panes.rs`.
@@ -148,8 +157,8 @@ fn commands_drain_close_and_minimize() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // Discriminant-contract guard: the local consts MUST be contiguous 0..8 in
-    // variant order (mirrors `mod command_kind`). Referencing all nine here also
+    // Discriminant-contract guard: the local consts MUST be contiguous 0..=12 in
+    // variant order (mirrors `mod command_kind`). Referencing all thirteen here also
     // keeps them from tripping dead-code lints.
     assert_eq!(
         [
@@ -161,10 +170,14 @@ fn commands_drain_close_and_minimize() {
             CMD_KIND_GO_TO_FILE,
             CMD_KIND_OPEN_FILE,
             CMD_KIND_OPEN_FOLDER,
-            CMD_KIND_CLOSE_FILE,
+            CMD_KIND_CLOSE_PANE,
+            CMD_KIND_NEW_BUFFER,
+            CMD_KIND_RESET_FONT_SIZE,
+            CMD_KIND_INCREASE_FONT_SIZE,
+            CMD_KIND_DECREASE_FONT_SIZE,
         ],
-        [0, 1, 2, 3, 4, 5, 6, 7, 8],
-        "command_kind discriminants must be contiguous 0..8 in Command variant order"
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "command_kind discriminants must be contiguous 0..=12 in Command variant order"
     );
 
     let init_lua = common::init_lua_path();
@@ -218,6 +231,12 @@ fn commands_drain_close_and_minimize() {
     // file picker is absent), so no overlay is presented here.
     send_ex_command(&handle, ":WolfGoToFile");
     poll_for_command_kind(&handle, CMD_KIND_GO_TO_FILE, ":WolfGoToFile");
+
+    // --- 3c. :WolfNewBuffer<CR> -> an FfiCommand with kind() == NEW_BUFFER ----
+    // A pure FFI drain: nothing acts on it here (the front-end that would run
+    // `:enew` in the target window is absent), so no buffer is created.
+    send_ex_command(&handle, ":WolfNewBuffer");
+    poll_for_command_kind(&handle, CMD_KIND_NEW_BUFFER, ":WolfNewBuffer");
 
     // --- 4. Shutdown: clean teardown ----------------------------------------
     handle.shutdown();

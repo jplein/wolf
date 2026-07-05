@@ -47,11 +47,23 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     /// (Cmd-N) window.
     private let restored: RestoredWindowState?
 
-    /// The shared, once-measured cell metrics (measured by the coordinator).
-    private let metrics: CellMetrics
+    /// This window's cell metrics — seeded from the shared, once-measured launch
+    /// metrics and RE-MEASURED per-window on a font-size change (View menu). A
+    /// `var` so `setPointSize` can swap it.
+    private var metrics: CellMetrics
 
     /// The shared, once-loaded user config (measured/loaded by the coordinator).
     private let config: FfiConfig
+
+    /// The launch/default font size (the Reset target), resolved from the SAME
+    /// `WOLF_FONT_PT`/`config.font_size` path the shared launch metrics used, so a
+    /// Reset returns to exactly the size the window opened at.
+    private let defaultPointSize: CGFloat
+
+    /// This window's CURRENT font size (ephemeral, per-window). Starts at
+    /// `defaultPointSize`; Increase/Decrease step it, Reset returns it to the
+    /// default.
+    private var currentPointSize: CGFloat
 
     /// The coordinator, asked to open new windows and to drop this controller at
     /// teardown. Weak so the collection owns the lifetime.
@@ -76,6 +88,11 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     /// terminate-time backstop).
     private var isTornDown = false
 
+    /// The last live cwd observed on a render wake, so the dynamic Window menu is
+    /// rebuilt (via the coordinator) ONLY when this window's cwd actually changes
+    /// (its menu title is the full cwd path). `nil` until the first wake reads one.
+    private var lastKnownCwd: String?
+
     init(
         windowIndex: Int,
         launchCwd: String,
@@ -88,6 +105,11 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         self.restored = restored
         self.metrics = metrics
         self.config = config
+        // The passed-in shared metrics were already measured at this size, so seed
+        // the default/current from the same resolution WITHOUT re-measuring.
+        let seed = CellMetrics.defaultPointSize(config: config)
+        self.defaultPointSize = seed
+        self.currentPointSize = seed
         super.init()
     }
 
@@ -126,7 +148,6 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         let picker = PickerView(handle: handle, paneContainer: paneContainer)
         paneContainer.addSubview(picker)
         paneContainer.onPickerTrigger = { [weak picker] in picker?.open() }
-        paneContainer.onNewWindow = { [weak self] in self?.requestNewWindow() }
         self.picker = picker
 
         // Restore the saved frame/sidebar/toolbar only for a restored window;
@@ -175,6 +196,13 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     func onRenderWake() {
         paneContainer?.onRenderWake()
         tree?.onRenderWake()
+        // Rebuild the dynamic Window menu (its titles are the windows' full cwd
+        // paths) only when THIS window's live cwd actually changed.
+        let cwd = handle?.cwd().toString() ?? ""
+        if lastKnownCwd != cwd {
+            lastKnownCwd = cwd
+            coordinator?.windowCwdDidChange(self)
+        }
         drainAndDispatchCommands()
     }
 
@@ -241,9 +269,46 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Closes (deletes) this window's current Neovim buffer (`:bdelete`).
-    func closeCurrentBuffer() {
-        handle?.close_buffer()
+    /// Closes this window's current split, i.e. the pane (`:close`). On the last
+    /// split `:close` errors harmlessly (E444); the menu item is additionally
+    /// disabled there via `AppDelegate.validateMenuItem`.
+    func closePane() {
+        handle?.close_pane()
+    }
+
+    /// Opens a new empty buffer in this window's current Neovim window (`:enew`).
+    func newBuffer() {
+        handle?.new_buffer()
+    }
+
+    // MARK: - View (font size) commands
+
+    /// Resets this window's font size to its launch default (the View-menu Reset
+    /// command / Cmd-0).
+    func resetFontSize() {
+        setPointSize(defaultPointSize)
+    }
+
+    /// Increases this window's font size by one point, clamped at the max (the
+    /// View-menu Increase command / Cmd-=).
+    func increaseFontSize() {
+        setPointSize(CGFloat(FontSizeSeam.increased(Double(currentPointSize))))
+    }
+
+    /// Decreases this window's font size by one point, clamped at the min (the
+    /// View-menu Decrease command / Cmd--).
+    func decreaseFontSize() {
+        setPointSize(CGFloat(FontSizeSeam.decreased(Double(currentPointSize))))
+    }
+
+    /// Re-measures this window's `CellMetrics` at `size` and reflows the grid,
+    /// keeping the OS window frame unchanged (the grid's cols/rows reflow to fit).
+    /// A no-op when `size` equals the current size (e.g. already at a clamp bound).
+    private func setPointSize(_ size: CGFloat) {
+        guard size != currentPointSize else { return }
+        currentPointSize = size
+        metrics = CellMetrics.measured(config: config, pointSize: size)
+        paneContainer?.applyMetrics(metrics)
     }
 
     /// Returns first responder to the editor pane container so keystrokes reach
@@ -273,11 +338,16 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         window === candidate
     }
 
-    /// Asks the coordinator to open a new window rooted at this window's LIVE
-    /// working directory (the coordinator applies the home-dir fallback when it is
-    /// empty).
-    private func requestNewWindow() {
-        coordinator?.makeNewWindow(originatingCwd: currentCwd)
+    /// This window's live pane count (`PaneTree` leaf count); 1 for an unsplit
+    /// window. Read by the coordinator's menu validation to disable the Close
+    /// command on the last split.
+    var paneCount: Int { paneContainer?.paneCount ?? 1 }
+
+    /// Raises and activates this window (the Window-menu dynamic list item's
+    /// action, routed by the coordinator from the item's `windowIndex` tag).
+    func raise() {
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     // MARK: - NSWindowDelegate

@@ -16,6 +16,18 @@ It runs for real on Linux/Cargo devShells and **passes under `bazel test` on the
 
 The real-nvim coverage of the file-picker surface — **no mocks**, modeled on `bridge_smoke.rs` (same `common/` helpers, same `data` / `$(rootpath)` env runfile staging, same `tags = ["no-sandbox"]` unsandboxed run, same loud-SKIP gate via `nvim_bin_or_skip`). It seeds a temp cwd with a couple of `.md` files, calls `wolf_ffi_start` there, opens a session with `start_file_search()`, and **polls** `ranked("", N)` until the background traversal streams the created files in; it then asserts the displays are present, that `path()` is absolute (under the cwd) while `display()` is the relative name, and that a focused query (e.g. `ranked("alpha")`) ranks the matching file first. Finally it issues `open(path())` and confirms the core survives the round-trip (it cannot assert the exact opened buffer name — `FfiFrame` exposes no `current_file` accessor, and the test does not add one — so `open` is checked at the round-trip-survives level, `ranked` correctness strongly).
 
+## `file_actions.rs`
+
+The real-nvim coverage of the file-action handle methods (`file_actions_chdir_and_new_buffer`) — **no mocks**, modeled on `commands.rs` (same `common/` helpers, same `data` / `$(rootpath)` env runfile staging, same `tags = ["no-sandbox"]` unsandboxed run, same loud-SKIP gate, plus `tempfile`). After attach it `chdir`s to a fresh temp directory and polls `cwd()` until it equals the canonicalized target, then `open`s a seeded file (polling `current_file()` until it matches) and `new_buffer()`s (`:enew`), polling `current_file()` back to the empty string, before `shutdown()`. (This test formerly exercised `close_buffer()`/`:bdelete`; the `:close` split-drop path moved to `close_pane.rs`.)
+
+## `close_pane.rs`
+
+The real-nvim coverage of the `close_pane()` handle method (`:close`) — **no mocks**, modeled on `panes.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate). After attach it types `:vsplit` to reach two live editor grids (`windows()`), then calls `handle.close_pane()` **directly over RPC** (which bypasses init.lua's interactive `:close` override — `nvim_command` is not the typed Ex-command), and polls `windows()` back to a single live grid.
+
+```sh
+bazel test //crates/wolf-ffi:close_pane
+```
+
 ## `state.rs`
 
 The real-nvim coverage of the state-persistence bridge surface (Bazel target `//crates/wolf-ffi:state`) — **no mocks**, modeled on `tree_search.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate). It is deliberately a **single `#[test]`** (`state_bridge_saves_and_restores_all_facets`) because it mutates the process-global `WOLF_STATE_DIR` env var (the `state_dir()` determinism hook) — one test per binary makes that safe. The flow: with `WOLF_STATE_DIR` pointed at a tempdir, `wolf_ffi_load_state()` on the empty dir yields zero windows (and the file is never created); a hand-written corrupt `state.json` also yields zero windows (silently ignored, bytes preserved); then `wolf_ffi_start` (which opens and attaches the live store), `state_set_geometry` / `state_set_sidebar_visible` / `state_set_toolbar_mode`, a `:cd` typed through `send_key`, and `state_flush()` — followed by substring assertions that all five facets landed in the pretty-printed `state.json`, and a `wolf_ffi_load_state()` round-trip through the `FfiWindowState` accessors (including `toolbar_mode()` / `toolbar_mode_set()`). It also pins the FFI behaviors: an unrecognized toolbar discriminant (99) is a no-op, `(0, false)` clears the mode so the file omits the key, and local consts guard the `toolbar_mode` discriminant table (the `mouse_scroll.rs` pattern).

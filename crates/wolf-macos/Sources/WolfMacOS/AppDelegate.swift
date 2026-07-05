@@ -14,7 +14,7 @@ import WolfKeyMap
 /// `WolfWindowController`s (one per OS window). It performs the once-only launch
 /// setup, restores one window per saved `state.json` entry, opens new windows on
 /// Cmd-N, and prunes ghost window slots at terminate.
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// The once-measured shared cell metrics (nil until launch).
     private var metrics: CellMetrics?
     /// The once-loaded shared user config (nil until launch).
@@ -22,6 +22,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// The live per-window controllers, one per open OS window.
     private var controllers: [WolfWindowController] = []
+
+    /// The Window submenu (returned by `AppMenu.install`), rebuilt with the
+    /// dynamic per-window list on window open/close/cwd-change. `nil` until launch.
+    private var windowMenu: NSMenu?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Register the three process-global wake callbacks ONCE; each routes by
@@ -31,8 +35,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         TreeWakeBridge.install()
 
         // Build the native menu bar (net-new). Every Wolf item funnels through
-        // `handleCommandMenuItem(_:)` → `CommandDispatcher`.
-        AppMenu.install(target: self)
+        // `handleCommandMenuItem(_:)` → `CommandDispatcher`. Keep the Window
+        // submenu so its dynamic per-window list can be rebuilt.
+        windowMenu = AppMenu.install(target: self)
 
         // Register the bundled font TTFs with CoreText, then resolve the user
         // config BEFORE measuring so `CellMetrics` can resolve the configured
@@ -56,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             controllers.append(controller)
+            rebuildWindowMenu()
             return
         }
 
@@ -80,7 +86,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // than run windowless.
         if controllers.isEmpty {
             presentStartupFailureAndQuit()
+            return
         }
+        rebuildWindowMenu()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -122,6 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let controller = makeController(windowIndex: index, launchCwd: cwd, restored: nil)
         if controller.start() {
             controllers.append(controller)
+            rebuildWindowMenu()
         }
     }
 
@@ -140,9 +149,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Drops `controller` from the collection (called by the controller at
-    /// teardown / window close).
+    /// teardown / window close), then rebuilds the dynamic Window menu.
     func removeController(_ controller: WolfWindowController) {
         controllers.removeAll { $0 === controller }
+        rebuildWindowMenu()
+    }
+
+    /// Rebuilds the dynamic Window-menu per-window list from the live controllers.
+    /// A no-op before the menu is installed at launch.
+    private func rebuildWindowMenu() {
+        guard let windowMenu else { return }
+        AppMenu.rebuildWindowMenu(windowMenu, controllers: controllers, target: self)
+    }
+
+    /// The dynamic Window-menu item action: raises the window whose `windowIndex`
+    /// equals the item's `tag`.
+    @objc func raiseWindowMenuItem(_ sender: NSMenuItem) {
+        controllers.first { $0.windowIndex == sender.tag }?.raise()
+    }
+
+    /// Notified by a controller when its live cwd changed (its Window-menu title
+    /// is the full cwd path), rebuilding the dynamic Window menu.
+    func windowCwdDidChange(_ controller: WolfWindowController) {
+        rebuildWindowMenu()
+    }
+
+    /// Menu validation: disables the Close (`.closePane`) command when the key
+    /// window is on its LAST split (`:close` would error, E444). Every other item
+    /// stays enabled.
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(handleCommandMenuItem(_:)),
+            CommandKind(ffi: UInt8(truncatingIfNeeded: item.tag)) == .closePane
+        {
+            let keyController = controllers.first { $0.owns(NSApp.keyWindow) }
+            return (keyController?.paneCount ?? 0) > 1
+        }
+        return true
     }
 
     /// Builds a controller wired to this coordinator and the shared metrics/config.

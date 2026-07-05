@@ -48,8 +48,16 @@ enum CommandDispatcher {
             controller?.presentOpenFileDialog()
         case .openFolder:
             controller?.presentOpenFolderDialog()
-        case .closeFile:
-            controller?.closeCurrentBuffer()
+        case .closePane:
+            controller?.closePane()
+        case .newBuffer:
+            controller?.newBuffer()
+        case .resetFontSize:
+            controller?.resetFontSize()
+        case .increaseFontSize:
+            controller?.increaseFontSize()
+        case .decreaseFontSize:
+            controller?.decreaseFontSize()
         }
     }
 }

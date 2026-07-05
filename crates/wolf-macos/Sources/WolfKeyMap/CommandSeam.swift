@@ -18,7 +18,8 @@ import Foundation
 /// The cases align with `wolf-ffi`'s `mod command_kind` and the `wolf_core::Command`
 /// variant order: `newWindow == 0`, `closeWindow == 1`, `quitApplication == 2`,
 /// `hideApplication == 3`, `minimizeWindow == 4`, `goToFile == 5`, `openFile == 6`,
-/// `openFolder == 7`, `closeFile == 8`.
+/// `openFolder == 7`, `closePane == 8`, `newBuffer == 9`, `resetFontSize == 10`,
+/// `increaseFontSize == 11`, `decreaseFontSize == 12`.
 public enum CommandKind {
     /// Open a new editor window.
     case newWindow
@@ -36,11 +37,19 @@ public enum CommandKind {
     case openFile
     /// Open a native dialog to change the working directory to a folder.
     case openFolder
-    /// Close (delete) the current buffer.
-    case closeFile
+    /// Close the current split (the pane), not the buffer.
+    case closePane
+    /// Open a new empty buffer in the current window.
+    case newBuffer
+    /// Reset the font size to the configured default.
+    case resetFontSize
+    /// Increase the font size by one point.
+    case increaseFontSize
+    /// Decrease the font size by one point.
+    case decreaseFontSize
 
-    /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `8` →
-    /// `.closeFile`, else `nil`), guarding the contract shared with
+    /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `12` →
+    /// `.decreaseFontSize`, else `nil`), guarding the contract shared with
     /// `wolf-ffi`'s `mod command_kind`.
     public init?(ffi: UInt8) {
         switch ffi {
@@ -52,7 +61,11 @@ public enum CommandKind {
         case 5: self = .goToFile
         case 6: self = .openFile
         case 7: self = .openFolder
-        case 8: self = .closeFile
+        case 8: self = .closePane
+        case 9: self = .newBuffer
+        case 10: self = .resetFontSize
+        case 11: self = .increaseFontSize
+        case 12: self = .decreaseFontSize
         default: return nil
         }
     }

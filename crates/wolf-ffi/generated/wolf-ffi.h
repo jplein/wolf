@@ -177,7 +177,8 @@ struct __swift_bridge__$FfiColor __swift_bridge__$WolfCoreHandle$theme_titlebar_
 struct __swift_bridge__$FfiColor __swift_bridge__$WolfCoreHandle$theme_titlebar_fg(void* self);
 void __swift_bridge__$WolfCoreHandle$open(void* self, void* path);
 void __swift_bridge__$WolfCoreHandle$chdir(void* self, void* path);
-void __swift_bridge__$WolfCoreHandle$close_buffer(void* self);
+void __swift_bridge__$WolfCoreHandle$close_pane(void* self);
+void __swift_bridge__$WolfCoreHandle$new_buffer(void* self);
 void __swift_bridge__$WolfCoreHandle$state_set_geometry(void* self, double x, double y, double width, double height);
 void __swift_bridge__$WolfCoreHandle$state_set_sidebar_visible(void* self, bool visible);
 void __swift_bridge__$WolfCoreHandle$state_set_toolbar_mode(void* self, uint8_t mode, bool set);

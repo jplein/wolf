@@ -27,20 +27,29 @@ enum AppMenu {
         static let goToFile = 5
         static let openFile = 6
         static let openFolder = 7
-        static let closeFile = 8
+        static let closePane = 8
+        static let newBuffer = 9
+        static let resetFontSize = 10
+        static let increaseFontSize = 11
+        static let decreaseFontSize = 12
     }
 
-    /// Installs the standard three-menu bar (App / File / Window) onto
+    /// Installs the standard four-menu bar (App / File / View / Window) onto
     /// `NSApp.mainMenu`, wiring every Wolf item to `target`'s
-    /// `handleCommandMenuItem(_:)`.
-    static func install(target: AppDelegate) {
+    /// `handleCommandMenuItem(_:)`. Returns the Window submenu `NSMenu` so the
+    /// coordinator can rebuild its dynamic per-window list.
+    static func install(target: AppDelegate) -> NSMenu {
         let mainMenu = NSMenu()
 
         mainMenu.addItem(appMenuItem(target: target))
         mainMenu.addItem(fileMenuItem(target: target))
-        mainMenu.addItem(windowMenuItem(target: target))
+        mainMenu.addItem(viewMenuItem(target: target))
+        let windowItem = windowMenuItem(target: target)
+        mainMenu.addItem(windowItem)
 
         NSApp.mainMenu = mainMenu
+        // Force-unwrap: `windowMenuItem` always sets a submenu.
+        return windowItem.submenu!
     }
 
     /// The application menu (About / Hide `h` / Quit `q`).
@@ -66,8 +75,8 @@ enum AppMenu {
         return item
     }
 
-    /// The File menu (New Window `n` / Go to File `o` / Open File / Open Folder
-    /// `⇧⌘o` / Close File `w` / Close Window `⇧⌘w`).
+    /// The File menu (New `⌘n` / New Window `⇧⌘n` / Go to File `⌘o` / Open File /
+    /// Open Folder `⇧⌘o` / Close `⌘w` / Close Window `⇧⌘w`).
     ///
     /// The item titles mirror `wolf_core::COMMAND_SPECS` (the canonical registry);
     /// the ellipsis characters are single U+2026, matching those specs.
@@ -77,7 +86,11 @@ enum AppMenu {
 
         menu.addItem(
             commandItem(
-                title: "New Window", tag: Tag.newWindow, keyEquivalent: "n", target: target))
+                title: "New", tag: Tag.newBuffer, keyEquivalent: "n", target: target))
+        menu.addItem(
+            commandItem(
+                title: "New Window", tag: Tag.newWindow, keyEquivalent: "n",
+                target: target, modifiers: [.command, .shift]))
         menu.addItem(.separator())
         menu.addItem(
             commandItem(
@@ -92,7 +105,7 @@ enum AppMenu {
         menu.addItem(.separator())
         menu.addItem(
             commandItem(
-                title: "Close File", tag: Tag.closeFile, keyEquivalent: "w", target: target))
+                title: "Close", tag: Tag.closePane, keyEquivalent: "w", target: target))
         menu.addItem(
             commandItem(
                 title: "Close Window", tag: Tag.closeWindow, keyEquivalent: "w",
@@ -102,7 +115,31 @@ enum AppMenu {
         return item
     }
 
-    /// The Window menu (Minimize `m`).
+    /// The View menu (Reset Font Size `⌘0` / Increase Font Size `⌘=` / Decrease
+    /// Font Size `⌘-`). Titles mirror `wolf_core::COMMAND_SPECS`.
+    private static func viewMenuItem(target: AppDelegate) -> NSMenuItem {
+        let item = NSMenuItem()
+        let menu = NSMenu(title: "View")
+
+        menu.addItem(
+            commandItem(
+                title: "Reset Font Size", tag: Tag.resetFontSize, keyEquivalent: "0",
+                target: target))
+        menu.addItem(
+            commandItem(
+                title: "Increase Font Size", tag: Tag.increaseFontSize, keyEquivalent: "=",
+                target: target))
+        menu.addItem(
+            commandItem(
+                title: "Decrease Font Size", tag: Tag.decreaseFontSize, keyEquivalent: "-",
+                target: target))
+
+        item.submenu = menu
+        return item
+    }
+
+    /// The Window menu (Minimize `m`, a separator, then the dynamic per-window
+    /// list built by `rebuildWindowMenu`).
     private static func windowMenuItem(target: AppDelegate) -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "Window")
@@ -113,6 +150,32 @@ enum AppMenu {
 
         item.submenu = menu
         return item
+    }
+
+    /// Rebuilds the dynamic Window `menu`: Minimize (`⌘m`), a separator, then one
+    /// item per open window titled with that window's full cwd path (fallback
+    /// "Wolf"). Each dynamic item's action raises its window
+    /// (`AppDelegate.raiseWindowMenuItem(_:)`), carrying the window's
+    /// `windowIndex` in its `tag`. Called by the coordinator on window
+    /// open/close/cwd-change.
+    static func rebuildWindowMenu(
+        _ menu: NSMenu, controllers: [WolfWindowController], target: AppDelegate
+    ) {
+        menu.removeAllItems()
+        menu.addItem(
+            commandItem(
+                title: "Minimize", tag: Tag.minimizeWindow, keyEquivalent: "m", target: target))
+        menu.addItem(.separator())
+        for controller in controllers {
+            let cwd = controller.currentCwd
+            let windowItem = NSMenuItem(
+                title: cwd.isEmpty ? "Wolf" : cwd,
+                action: #selector(AppDelegate.raiseWindowMenuItem(_:)),
+                keyEquivalent: "")
+            windowItem.target = target
+            windowItem.tag = controller.windowIndex
+            menu.addItem(windowItem)
+        }
     }
 
     /// Builds a Wolf command menu item: its `tag` carries the FFI discriminant, its

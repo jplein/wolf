@@ -154,8 +154,16 @@ mod command_kind {
     pub const OPEN_FILE: u8 = 6;
     /// Open a native dialog to change the working directory to a folder.
     pub const OPEN_FOLDER: u8 = 7;
-    /// Close (delete) the current buffer.
-    pub const CLOSE_FILE: u8 = 8;
+    /// Close the current split (the pane), not the buffer.
+    pub const CLOSE_PANE: u8 = 8;
+    /// Open a new empty buffer in the current window.
+    pub const NEW_BUFFER: u8 = 9;
+    /// Reset the font size to the configured default.
+    pub const RESET_FONT_SIZE: u8 = 10;
+    /// Increase the font size by one point.
+    pub const INCREASE_FONT_SIZE: u8 = 11;
+    /// Decrease the font size by one point.
+    pub const DECREASE_FONT_SIZE: u8 = 12;
 }
 
 /// The split-orientation discriminants packed into [`FfiLayoutIntent::orientation`],
@@ -384,9 +392,12 @@ mod ffi {
         // Changes Neovim's global working directory to `path` (an absolute
         // filesystem path) via `InputEvent::Chdir` (`:cd`).
         fn chdir(&self, path: String);
-        // Closes (deletes) the current buffer via `InputEvent::CloseBuffer`
-        // (`:bdelete`).
-        fn close_buffer(&self);
+        // Closes the current split (the pane) via `InputEvent::ClosePane`
+        // (`:close`).
+        fn close_pane(&self);
+        // Opens a new empty buffer in the current window via
+        // `InputEvent::NewBuffer` (`:enew`).
+        fn new_buffer(&self);
         // Records this window's frame geometry into the live state store
         // (points; AppKit bottom-left global coords on macOS) at the handle's
         // `window_index`. A no-op when no store is attached.
@@ -590,7 +601,7 @@ mod ffi {
     extern "Rust" {
         type FfiCommand;
 
-        // The command kind (`command_kind::NEW_WINDOW` .. `CLOSE_FILE`).
+        // The command kind (`command_kind::NEW_WINDOW` .. `DECREASE_FONT_SIZE`).
         fn kind(&self) -> u8;
     }
 
@@ -1281,11 +1292,20 @@ impl WolfCoreHandle {
         }
     }
 
-    /// Closes (deletes) the current buffer via [`InputEvent::CloseBuffer`]
-    /// (`:bdelete`). A no-op once the core has been shut down.
-    pub fn close_buffer(&self) {
+    /// Closes the current split (the pane) via [`InputEvent::ClosePane`]
+    /// (`:close`). A no-op once the core has been shut down.
+    pub fn close_pane(&self) {
         if let Some(core) = self.core.borrow().as_ref() {
-            core.send_input(InputEvent::CloseBuffer);
+            core.send_input(InputEvent::ClosePane);
+        }
+    }
+
+    /// Opens a new empty buffer in the current window via
+    /// [`InputEvent::NewBuffer`] (`:enew`). A no-op once the core has been shut
+    /// down.
+    pub fn new_buffer(&self) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.send_input(InputEvent::NewBuffer);
         }
     }
 
@@ -1564,7 +1584,7 @@ pub struct FfiCommand {
 }
 
 impl FfiCommand {
-    /// The command kind (`command_kind::NEW_WINDOW` .. `CLOSE_FILE`).
+    /// The command kind (`command_kind::NEW_WINDOW` .. `DECREASE_FONT_SIZE`).
     #[must_use]
     pub fn kind(&self) -> u8 {
         self.kind
@@ -1583,7 +1603,11 @@ impl FfiCommand {
             Command::GoToFile => command_kind::GO_TO_FILE,
             Command::OpenFile => command_kind::OPEN_FILE,
             Command::OpenFolder => command_kind::OPEN_FOLDER,
-            Command::CloseFile => command_kind::CLOSE_FILE,
+            Command::ClosePane => command_kind::CLOSE_PANE,
+            Command::NewBuffer => command_kind::NEW_BUFFER,
+            Command::ResetFontSize => command_kind::RESET_FONT_SIZE,
+            Command::IncreaseFontSize => command_kind::INCREASE_FONT_SIZE,
+            Command::DecreaseFontSize => command_kind::DECREASE_FONT_SIZE,
         };
         Self { kind }
     }

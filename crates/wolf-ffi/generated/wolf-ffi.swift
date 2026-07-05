@@ -312,8 +312,12 @@ extension WolfCoreHandleRef {
         __swift_bridge__$WolfCoreHandle$chdir(ptr, { let rustString = path.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
     }
 
-    public func close_buffer() {
-        __swift_bridge__$WolfCoreHandle$close_buffer(ptr)
+    public func close_pane() {
+        __swift_bridge__$WolfCoreHandle$close_pane(ptr)
+    }
+
+    public func new_buffer() {
+        __swift_bridge__$WolfCoreHandle$new_buffer(ptr)
     }
 
     public func state_set_geometry(_ x: Double, _ y: Double, _ width: Double, _ height: Double) {

@@ -195,8 +195,10 @@ pub enum InputEvent {
         /// The directory to change to.
         path: PathBuf,
     },
-    /// Close (delete) the current buffer (delegated to `:bdelete`).
-    CloseBuffer,
+    /// Close the current split, i.e. the pane (delegated to `:close`).
+    ClosePane,
+    /// Open a new empty buffer in the current window (delegated to `:enew`).
+    NewBuffer,
 }
 
 /// Translates a [`KeyEvent`] into Neovim keystroke notation.
@@ -332,7 +334,8 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
             command(nvim, &format!("saveas {}", fnameescape(path))).await
         }
         InputEvent::Chdir { path } => command(nvim, &format!("cd {}", fnameescape(path))).await,
-        InputEvent::CloseBuffer => command(nvim, "bdelete").await,
+        InputEvent::ClosePane => command(nvim, "close").await,
+        InputEvent::NewBuffer => command(nvim, "enew").await,
     }
 }
 
