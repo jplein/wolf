@@ -44,9 +44,10 @@ final class TreeItem {
 /// projection.
 ///
 /// Holds a long-lived `FfiFileSearch` (started via `start_tree_search`) for its
-/// whole lifetime; the registered tree wake calls `refresh()` on each traversal
-/// batch, and the editor render wake calls `onRenderWake()` to reveal + bold the
-/// current buffer. All state is plain main-thread properties.
+/// whole lifetime; the registered tree wake calls `scheduleRefresh()` on each
+/// traversal batch (COALESCED to at most one `refresh()` per frame), and the
+/// editor render wake calls `onRenderWake()` to reveal + bold the current buffer.
+/// All state is plain main-thread properties.
 final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate {
     /// Reuse identifier for the outline's text cells.
     private static let cellIdentifier = NSUserInterfaceItemIdentifier("TreeCell")
@@ -77,6 +78,18 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
     /// collapsed (one catch-up on reappear) and reloads the outline only when the
     /// snapshot version has advanced.
     private let refreshGate = TreeRefreshGate(isVisible: true)
+
+    /// Coalesces streaming tree-traversal wakes into at most one `refresh()` per
+    /// frame (~30fps) so a large load's many batch wakes don't each re-do the O(N)
+    /// reload/rebuild. Keystroke/open, `onRenderWake()`, and `setSidebarVisible()`
+    /// still call `refresh()` directly (immediate); only the background traversal
+    /// wake path goes through here.
+    private lazy var refreshCoalescer = PickerRefreshCoalescer(
+        schedule: { work in
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + PickerRefreshCoalescer.refreshInterval, execute: work)
+        },
+        perform: { [weak self] in self?.refresh() })
 
     /// Neovim's live working directory the tree is currently rooted at (empty
     /// until nvim first reports it). Compared on each render wake to re-root on
@@ -131,8 +144,11 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
     /// root, restarts the tree search (dropping the old handle cancels its
     /// traversal and re-registers the same tree wake), clears the cached items and
     /// the expand flag, and re-arms a reveal of the current buffer into the NEW
-    /// tree.
+    /// tree. Cancels any pending coalesced refresh FIRST: reroot rebuilds the
+    /// outline wholesale, so a stale pending fire against the OLD tree must not
+    /// run (this method does its own final `refresh()`).
     func reroot(to cwd: String) {
+        refreshCoalescer.cancelPending()
         cwdPath = cwd
         rootItem = makeRoot(cwd)
         search = handle.start_tree_search()
@@ -168,6 +184,15 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
         if let abs = pendingReveal {
             reveal(abs: abs)
         }
+    }
+
+    /// Requests a COALESCED refresh: a burst of streaming tree-traversal wakes
+    /// collapses to at most one trailing `refresh()` per frame. Called by
+    /// `TreeWakeBridge` on each traversal batch (the O(N) reload path); the
+    /// immediate paths (`start()`, `onRenderWake()`, `setSidebarVisible()`,
+    /// `reroot(to:)`) still call `refresh()` directly.
+    func scheduleRefresh() {
+        refreshCoalescer.request()
     }
 
     /// Relays the sidebar's visibility (from the enclosing split item's
@@ -248,8 +273,11 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
         }
     }
 
-    /// Drops the file-tree search, cancelling the background traversal.
+    /// Drops the file-tree search, cancelling the background traversal, and
+    /// cancels any pending coalesced refresh (a late armed fire then finds the
+    /// search `nil` and no-ops).
     func close() {
+        refreshCoalescer.cancelPending()
         search = nil
     }
 

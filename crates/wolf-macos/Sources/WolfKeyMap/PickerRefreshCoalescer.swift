@@ -1,13 +1,17 @@
 //
 //  PickerRefreshCoalescer.swift
-//  A pure, headless debounce/coalescing seam for the file picker's streaming
-//  refreshes (plan Fix #1).
+//  A pure, headless debounce/coalescing seam SHARED by BOTH the file picker and
+//  the file-tree sidebar for their streaming refreshes (plan Fix #1). The name is
+//  historical (it was introduced for the picker), but the seam is generic — the
+//  file tree reuses it verbatim because both stream a large traversal and would
+//  otherwise re-do O(N) work per batch.
 //
-//  During a large traversal the file-search wake fires many times (once per
-//  batch), and each bare `refresh()` re-ranks the whole accumulated list. This
-//  seam collapses a BURST of `request()` calls into a SINGLE trailing
-//  `perform()`, while still guaranteeing that a later wake reschedules — so the
-//  final, complete snapshot is never dropped.
+//  During a large traversal the file-search / tree-traversal wake fires many
+//  times (once per batch), and each bare `refresh()` re-ranks (picker) or
+//  reloads/rebuilds (tree) the whole accumulated snapshot. This seam collapses a
+//  BURST of `request()` calls into a SINGLE trailing `perform()`, while still
+//  guaranteeing that a later wake reschedules — so the final, complete snapshot
+//  is never dropped.
 //
 //  It is toolkit-free (Foundation only): the caller injects `schedule` (which in
 //  production arms a `DispatchQueue.main.asyncAfter` timer) and `perform` (the
@@ -18,6 +22,11 @@
 import Foundation
 
 /// Coalesces a burst of `request()` calls into one trailing `perform()`.
+///
+/// Shared by BOTH the file picker (`PickerView`) and the file-tree sidebar
+/// (`FileTreeView`): the name is historical, but the seam is generic (its
+/// `schedule` / `perform` collaborators are injected), so both streaming
+/// traversals reuse it to avoid re-doing O(N) work on every batch wake.
 ///
 /// The first `request()` while nothing is pending marks a fire as scheduled and
 /// asks `schedule` to run the fire after the debounce window; subsequent
