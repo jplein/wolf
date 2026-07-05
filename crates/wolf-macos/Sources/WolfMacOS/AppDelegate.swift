@@ -291,22 +291,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     /// Extracts EVERY saved window from the bridge's restore read into plain
-    /// `RestoredWindowState` values (element refs must not outlive the vec). An
-    /// unknown toolbar discriminant maps to `nil` (the toolbar keeps its default).
+    /// `RestoredWindowState` values (element refs must not outlive the vec).
     private static func restoredWindows(from state: FfiState) -> [RestoredWindowState] {
         let windows = state.windows()
         var result: [RestoredWindowState] = []
         for i in 0..<windows.len() {
             guard let w = windows.get(index: UInt(i)) else { continue }
-            let toolbarMode: StateSeam.ToolbarMode? =
-                w.toolbar_mode_set() ? StateSeam.ToolbarMode(rawValue: w.toolbar_mode()) : nil
             result.append(
                 RestoredWindowState(
                     x: w.x(), y: w.y(),
                     width: w.width(), height: w.height(),
                     cwd: w.cwd().toString(),
-                    sidebarVisible: w.sidebar_visible(),
-                    toolbarMode: toolbarMode
+                    sidebarVisible: w.sidebar_visible()
                 ))
         }
         return result

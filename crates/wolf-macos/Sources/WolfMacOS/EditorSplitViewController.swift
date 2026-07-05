@@ -17,7 +17,7 @@ import AppKit
 /// `NSSplitViewItem(sidebarWithViewController:)` assigns by default, so window
 /// resizing is absorbed by the EDITOR pane (the sidebar stays put). The editor
 /// pane is pinned below the safe area in its host, so the transparent
-/// titlebar/toolbar never obscures the grid.
+/// titlebar never obscures the grid.
 ///
 /// The window/VC/appearance glue is not headlessly testable (no window server);
 /// it is compile-verified + manual-smoke only.
@@ -77,7 +77,7 @@ final class EditorSplitViewController: NSSplitViewController {
 /// - CONTENT (`pinTopToSafeArea == true`): the hosted view is added to a plain
 ///   container and pinned leading/trailing/bottom to the container edges, with its
 ///   TOP pinned to the container's `safeAreaLayoutGuide.topAnchor`, so the editor
-///   grid is not obscured by the transparent titlebar/toolbar.
+///   grid is not obscured by the transparent titlebar.
 final class HostViewController: NSViewController {
     private let hostedView: NSView
     private let pinTopToSafeArea: Bool

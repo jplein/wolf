@@ -1,5 +1,5 @@
 //! Headless coverage for the PUBLIC surface of `wolf_core::state` (plan §2 +
-//! test plan §6.1): `StateStore`, `load_state`, `state_dir`, `ToolbarMode`, and
+//! test plan §6.1): `StateStore`, `load_state`, `state_dir`, and
 //! the `WolfState`/`WindowState` value types re-exported at the crate root.
 //!
 //! ## Why this lives in `tests/` rather than `src/state.rs`'s `#[cfg(test)]`
@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use tempfile::tempdir;
 use wolf_core::state::STATE_FILE_NAME;
-use wolf_core::{load_state, state_dir, StateStore, ToolbarMode};
+use wolf_core::{load_state, state_dir, StateStore};
 
 /// Generous upper bound for `StateStore::flush` in tests: well beyond the
 /// planned ~100ms write-coalesce delay, so a timeout always means a real bug.
@@ -109,8 +109,8 @@ fn paths_equal(a: &Path, b: &Path) -> bool {
 }
 
 /// A hand-written, VALID version-1 two-window file: window 0 with `WIN0_CWD`,
-/// window 1 fully populated (incl. `toolbar_display_mode`) with the `WIN1_*`
-/// values. Every per-window required field is present.
+/// window 1 fully populated with the `WIN1_*` values. Every per-window required
+/// field is present.
 fn two_window_fixture() -> String {
     format!(
         r#"{{
@@ -130,8 +130,7 @@ fn two_window_fixture() -> String {
       "width": {WIN1_WIDTH},
       "height": {WIN1_HEIGHT},
       "cwd": "{WIN1_CWD}",
-      "sidebar_visible": false,
-      "toolbar_display_mode": "text_only"
+      "sidebar_visible": false
     }}
   ]
 }}
@@ -153,7 +152,6 @@ fn round_trip_through_store_and_load() {
     store.set_geometry(0, GEO_X, GEO_Y, GEO_WIDTH, GEO_HEIGHT);
     store.set_cwd(0, &cwd);
     store.set_sidebar_visible(0, false);
-    store.set_toolbar_mode(0, Some(ToolbarMode::IconOnly));
     assert!(
         store.flush(FLUSH_TIMEOUT),
         "flush after mutations should complete within {FLUSH_TIMEOUT:?}"
@@ -178,11 +176,6 @@ fn round_trip_through_store_and_load() {
         cwd.display()
     );
     assert!(!w.sidebar_visible, "loaded sidebar_visible");
-    assert_eq!(
-        w.toolbar_mode,
-        Some(ToolbarMode::IconOnly),
-        "loaded toolbar_mode"
-    );
 
     // The on-disk form is PRETTY-PRINTED JSON with a version-1 header:
     // serde_json::to_string_pretty indents nested lines with two spaces.
@@ -206,14 +199,13 @@ fn empty_cwd_round_trips_through_store_and_load() {
     // The launch-behavior change makes `cwd == ""` the "no folder open" sentinel
     // for empty-state windows. It must survive the real serde path: an empty
     // string serializes into `state.json` verbatim and loads back as `""`, with
-    // every OTHER field intact. A front-end reports geometry/sidebar/toolbar for
+    // every OTHER field intact. A front-end reports geometry/sidebar for
     // an empty-state window while its cwd stays at the `""` default.
     let dir = tempdir().expect("create temp state dir");
 
     let store = StateStore::open(dir.path());
     store.set_geometry(0, GEO_X, GEO_Y, GEO_WIDTH, GEO_HEIGHT);
     store.set_sidebar_visible(0, false);
-    store.set_toolbar_mode(0, Some(ToolbarMode::IconOnly));
     // cwd is deliberately never set: it stays at the `""` default (the sentinel).
     assert!(
         store.flush(FLUSH_TIMEOUT),
@@ -230,11 +222,6 @@ fn empty_cwd_round_trips_through_store_and_load() {
     assert_eq!(w.width, GEO_WIDTH, "loaded width survives alongside the empty cwd");
     assert_eq!(w.height, GEO_HEIGHT, "loaded height survives alongside the empty cwd");
     assert!(!w.sidebar_visible, "loaded sidebar_visible survives alongside the empty cwd");
-    assert_eq!(
-        w.toolbar_mode,
-        Some(ToolbarMode::IconOnly),
-        "loaded toolbar_mode survives alongside the empty cwd"
-    );
 
     // The empty string is written literally, not omitted: `cwd` is a required
     // field (no skip_serializing_if), so the on-disk form carries `"cwd": ""`.
@@ -246,11 +233,11 @@ fn empty_cwd_round_trips_through_store_and_load() {
 }
 
 // =========================================================================
-// Unset-geometry sentinel + toolbar omission
+// Unset-geometry sentinel
 // =========================================================================
 
 #[test]
-fn set_cwd_alone_writes_zero_geometry_and_omits_toolbar() {
+fn set_cwd_alone_writes_zero_geometry() {
     let dir = tempdir().expect("create temp state dir");
     let cwd_dir = tempdir().expect("create temp cwd dir");
     let cwd = std::fs::canonicalize(cwd_dir.path()).expect("canonicalize temp cwd");
@@ -268,15 +255,20 @@ fn set_cwd_alone_writes_zero_geometry_and_omits_toolbar() {
     assert_eq!(w.y, 0.0, "unset y sentinel");
     assert_eq!(w.width, 0.0, "unset width sentinel");
     assert_eq!(w.height, 0.0, "unset height sentinel");
-    // The remaining defaults: sidebar visible, no toolbar mode.
+    // The remaining default: sidebar visible.
     assert!(w.sidebar_visible, "default sidebar_visible is true");
-    assert_eq!(w.toolbar_mode, None, "default toolbar_mode is None");
 
-    // `toolbar_display_mode` is OMITTED (skip_serializing_if) when unset.
+    // The cwd we pushed is present in the pretty-printed file.
     let text = read(&dir.path().join(STATE_FILE_NAME));
     assert!(
-        !text.contains("toolbar_display_mode"),
-        "an unset toolbar mode must be omitted from the file, got:\n{text}"
+        paths_equal(Path::new(&w.cwd), &cwd),
+        "loaded cwd {:?} should equal the set cwd {}",
+        w.cwd,
+        cwd.display()
+    );
+    assert!(
+        text.contains("\"version\": 1"),
+        "state.json must carry a `\"version\": 1` header, got:\n{text}"
     );
 }
 
@@ -412,6 +404,68 @@ fn unknown_extra_fields_still_parse() {
 }
 
 // =========================================================================
+// Backward compat: a legacy `toolbar_display_mode` key is a tolerated unknown
+// =========================================================================
+
+#[test]
+fn legacy_toolbar_display_mode_key_is_ignored() {
+    let dir = tempdir().expect("create temp state dir");
+    let path = dir.path().join(STATE_FILE_NAME);
+    // A state.json written by an OLDER wolf that still carried the (now removed)
+    // `toolbar_display_mode` facet. The current schema has no such field, so it
+    // must be treated as an ordinary unknown key (no `deny_unknown_fields`) and
+    // every OTHER window field must survive verbatim.
+    let contents = format!(
+        r#"{{
+  "version": 1,
+  "windows": [
+    {{
+      "x": {GEO_X},
+      "y": {GEO_Y},
+      "width": {GEO_WIDTH},
+      "height": {GEO_HEIGHT},
+      "cwd": "{WIN0_CWD}",
+      "sidebar_visible": false,
+      "toolbar_display_mode": "icon_only"
+    }}
+  ]
+}}
+"#
+    );
+    write(&path, &contents);
+
+    let loaded = load_state(dir.path())
+        .expect("a legacy toolbar_display_mode key must be tolerated, not treated as corruption");
+    assert_eq!(loaded.windows.len(), 1, "window count survives the legacy key");
+    let w = &loaded.windows[0];
+    assert_eq!(w.x, GEO_X, "x survives alongside the legacy key");
+    assert_eq!(w.y, GEO_Y, "y survives alongside the legacy key");
+    assert_eq!(w.width, GEO_WIDTH, "width survives alongside the legacy key");
+    assert_eq!(w.height, GEO_HEIGHT, "height survives alongside the legacy key");
+    assert_eq!(w.cwd, WIN0_CWD, "cwd survives alongside the legacy key");
+    assert!(!w.sidebar_visible, "sidebar_visible survives alongside the legacy key");
+
+    // Round-trip: opening the store over the legacy file and rewriting through a
+    // normal setter drops the now-unknown key entirely (the current schema has no
+    // field that serializes it).
+    let store = StateStore::open(dir.path());
+    store.set_geometry(0, NEW_X, NEW_Y, NEW_WIDTH, NEW_HEIGHT);
+    assert!(store.flush(FLUSH_TIMEOUT), "flush should complete");
+    let text = read(&path);
+    assert!(
+        !text.contains("toolbar_display_mode"),
+        "rewriting the store must not re-emit the legacy toolbar_display_mode key, got:\n{text}"
+    );
+
+    // The rewrite preserved the other facets while updating geometry.
+    let reloaded = load_state(dir.path()).expect("rewritten file should parse");
+    let rw = &reloaded.windows[0];
+    assert_eq!(rw.x, NEW_X, "geometry updated by the rewrite");
+    assert_eq!(rw.cwd, WIN0_CWD, "cwd preserved across the rewrite");
+    assert!(!rw.sidebar_visible, "sidebar_visible preserved across the rewrite");
+}
+
+// =========================================================================
 // Multi-window preservation
 // =========================================================================
 
@@ -436,7 +490,6 @@ fn rewriting_window_zero_preserves_window_one() {
     assert_eq!(w0.height, NEW_HEIGHT, "window 0 height updated");
     assert_eq!(w0.cwd, WIN0_CWD, "window 0 cwd untouched");
     assert!(w0.sidebar_visible, "window 0 sidebar untouched");
-    assert_eq!(w0.toolbar_mode, None, "window 0 toolbar untouched");
 
     // Window 1: EVERY field survives verbatim.
     let w1 = &loaded.windows[1];
@@ -446,11 +499,6 @@ fn rewriting_window_zero_preserves_window_one() {
     assert_eq!(w1.height, WIN1_HEIGHT, "window 1 height verbatim");
     assert_eq!(w1.cwd, WIN1_CWD, "window 1 cwd verbatim");
     assert!(!w1.sidebar_visible, "window 1 sidebar verbatim");
-    assert_eq!(
-        w1.toolbar_mode,
-        Some(ToolbarMode::TextOnly),
-        "window 1 toolbar verbatim"
-    );
 }
 
 #[test]
@@ -502,7 +550,6 @@ fn set_cwd_beyond_len_grows_the_list_with_defaults() {
     assert_eq!(gap.height, 0.0, "gap window default height (unset sentinel)");
     assert_eq!(gap.cwd, "", "gap window default cwd is empty");
     assert!(gap.sidebar_visible, "gap window default sidebar is visible");
-    assert_eq!(gap.toolbar_mode, None, "gap window default toolbar is None");
 
     // The target entry got the cwd, with everything else defaulted.
     let target = &loaded.windows[GROWN_INDEX];
@@ -540,12 +587,6 @@ fn concurrent_setters_produce_a_clean_file_and_no_tmp_residue() {
                     store.set_geometry(0, v, v, v + 1.0, v + 1.0);
                     store.set_cwd(0, &cwd);
                     store.set_sidebar_visible(0, i % 2 == 0);
-                    let mode = if i % 2 == 0 {
-                        Some(ToolbarMode::IconAndText)
-                    } else {
-                        Some(ToolbarMode::TextOnly)
-                    };
-                    store.set_toolbar_mode(0, mode);
                 }
             })
         })

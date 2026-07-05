@@ -4,13 +4,10 @@
 //!   * free fn `wolf_ffi_load_state() -> FfiState` (pre-start restore read;
 //!     `state_dir().and_then(load_state)` defaulting to an empty window list)
 //!   * `FfiState::windows() -> Vec<FfiWindowState>` with the accessors
-//!     `x()/y()/width()/height() -> f64`, `cwd() -> String`,
-//!     `sidebar_visible() -> bool`, and the `{value, set}` pair
-//!     `toolbar_mode() -> u8` / `toolbar_mode_set() -> bool` (FfiColor precedent)
+//!     `x()/y()/width()/height() -> f64`, `cwd() -> String`, and
+//!     `sidebar_visible() -> bool`
 //!   * `WolfCoreHandle::state_set_geometry(x, y, width, height)`,
-//!     `state_set_sidebar_visible(visible)`,
-//!     `state_set_toolbar_mode(mode: u8, set: bool)` (unrecognized discriminant
-//!     -> logged no-op; `set == false` -> clears to None), and `state_flush()`
+//!     `state_set_sidebar_visible(visible)`, and `state_flush()`
 //!   * the `wolf_ffi_start` glue: the handle opens the `StateStore` at
 //!     `state_dir()` and attaches it to the core, so a `:cd` typed through
 //!     `send_key` persists with no explicit front-end call
@@ -66,22 +63,6 @@ const STATE_FILE_NAME: &str = "state.json";
 const KIND_CHAR: u8 = 0;
 /// The Enter / Return key (executes the typed Ex command).
 const KIND_ENTER: u8 = 1;
-
-// -- Toolbar-mode discriminants -------------------------------------------------
-//
-// These MIRROR the Rust `mod toolbar_mode` in `crates/wolf-ffi/src/lib.rs`, which
-// the coder adds as the SINGLE SOURCE OF TRUTH (shared with the Swift
-// `StateSeam.ToolbarMode` port). They follow the `wolf_core::ToolbarMode` variant
-// order — the same local-consts contract-guard pattern as `mouse_scroll.rs`.
-/// `toolbar_mode::ICON_AND_TEXT` — serde name `"icon_and_text"`.
-const TOOLBAR_MODE_ICON_AND_TEXT: u8 = 0;
-/// `toolbar_mode::ICON_ONLY` — serde name `"icon_only"`.
-const TOOLBAR_MODE_ICON_ONLY: u8 = 1;
-/// `toolbar_mode::TEXT_ONLY` — serde name `"text_only"`.
-const TOOLBAR_MODE_TEXT_ONLY: u8 = 2;
-/// An out-of-table discriminant: `state_set_toolbar_mode` must treat it as a
-/// logged NO-OP (never a panic, never a corrupt write).
-const TOOLBAR_MODE_INVALID: u8 = 99;
 
 // -- Distinctive geometry facets (chosen so each pretty-printed float substring
 //    is unambiguous in state.json) ------------------------------------------------
@@ -215,7 +196,6 @@ fn state_bridge_saves_and_restores_all_facets() {
     // --- 4. Push the front-end facets over the bridge ------------------------
     handle.state_set_geometry(GEO_X, GEO_Y, GEO_WIDTH, GEO_HEIGHT);
     handle.state_set_sidebar_visible(false);
-    handle.state_set_toolbar_mode(TOOLBAR_MODE_ICON_ONLY, true);
 
     // --- 5. `:cd <C>` through the normal key path; the CORE saves the cwd ----
     let cd_dir = tempfile::tempdir().expect("failed to create temp :cd target dir");
@@ -297,10 +277,6 @@ fn state_bridge_saves_and_restores_all_facets() {
         text.contains("\"sidebar_visible\": false"),
         "state.json should hold the pushed sidebar visibility, got:\n{text}"
     );
-    assert!(
-        text.contains("\"toolbar_display_mode\": \"icon_only\""),
-        "discriminant {TOOLBAR_MODE_ICON_ONLY} must serialize as \"icon_only\", got:\n{text}"
-    );
 
     // --- 7. wolf_ffi_load_state() round-trips through the accessors ----------
     let restored = wolf_ffi_load_state();
@@ -315,15 +291,6 @@ fn state_bridge_saves_and_restores_all_facets() {
     assert_eq!(w.width(), GEO_WIDTH, "restored width");
     assert_eq!(w.height(), GEO_HEIGHT, "restored height");
     assert!(!w.sidebar_visible(), "restored sidebar_visible");
-    assert!(
-        w.toolbar_mode_set(),
-        "toolbar_mode_set() must be true after a toolbar push"
-    );
-    assert_eq!(
-        w.toolbar_mode(),
-        TOOLBAR_MODE_ICON_ONLY,
-        "restored toolbar_mode discriminant"
-    );
     let restored_cwd = w.cwd();
     let canonical_restored = Path::new(&restored_cwd)
         .canonicalize()
@@ -333,50 +300,10 @@ fn state_bridge_saves_and_restores_all_facets() {
         "restored cwd should equal the :cd target (restored={restored_cwd:?})"
     );
 
-    // --- 8. An UNRECOGNIZED discriminant is a logged no-op -------------------
-    handle.state_set_toolbar_mode(TOOLBAR_MODE_INVALID, true);
-    let _ = handle.state_flush();
-    let after_invalid = read_state(state_dir.path());
-    assert!(
-        after_invalid.contains("\"toolbar_display_mode\": \"icon_only\""),
-        "an unrecognized toolbar discriminant ({TOOLBAR_MODE_INVALID}) must be a \
-         no-op (mode stays icon_only), got:\n{after_invalid}"
-    );
-
-    // --- 9. TEXT_ONLY pins the second discriminant, set=false clears ---------
-    handle.state_set_toolbar_mode(TOOLBAR_MODE_TEXT_ONLY, true);
-    let _ = handle.state_flush();
-    let after_text = read_state(state_dir.path());
-    assert!(
-        after_text.contains("\"toolbar_display_mode\": \"text_only\""),
-        "discriminant {TOOLBAR_MODE_TEXT_ONLY} must serialize as \"text_only\", got:\n{after_text}"
-    );
-    let reread = wolf_ffi_load_state();
-    assert_eq!(
-        reread.windows()[0].toolbar_mode(),
-        TOOLBAR_MODE_TEXT_ONLY,
-        "text_only must load back as discriminant {TOOLBAR_MODE_TEXT_ONLY}"
-    );
-
-    // `set == false` clears the mode to None regardless of the value byte
-    // (ICON_AND_TEXT here doubles as usage of the first table entry).
-    handle.state_set_toolbar_mode(TOOLBAR_MODE_ICON_AND_TEXT, false);
-    let _ = handle.state_flush();
-    let cleared_text = read_state(state_dir.path());
-    assert!(
-        !cleared_text.contains("toolbar_display_mode"),
-        "set=false must clear toolbar_display_mode from the file, got:\n{cleared_text}"
-    );
-    let cleared = wolf_ffi_load_state();
-    assert!(
-        !cleared.windows()[0].toolbar_mode_set(),
-        "toolbar_mode_set() must be false after clearing with set=false"
-    );
-
-    // --- 10. Shutdown: clean teardown (shutdown itself flushes the store) ----
+    // --- 8. Shutdown: clean teardown (shutdown itself flushes the store) -----
     handle.shutdown();
 
-    // --- 11. Empty-cwd ("no folder open") sentinel round-trips through FFI ----
+    // --- 9. Empty-cwd ("no folder open") sentinel round-trips through FFI -----
     // The launch-behavior change persists `cwd == ""` for empty-state windows.
     // With the core shut down the store's writer is stopped, so state.json is
     // stable: overwrite it with a version-1 window whose cwd is empty and confirm

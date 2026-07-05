@@ -586,7 +586,7 @@ rust_test(
 # Real-nvim integration test for the state-persistence bridge surface
 # (free `wolf_ffi_load_state` + the `FfiState` / `FfiWindowState` accessors,
 # `WolfCoreHandle::state_set_geometry` / `state_set_sidebar_visible` /
-# `state_set_toolbar_mode` / `state_flush`, and the start-time StateStore
+# `state_flush`, and the start-time StateStore
 # attach that persists a `:cd` typed through `send_key`). Modeled on
 # `tree_search` exactly: drives a REAL pinned Neovim (no mocks), loud-skips
 # when WOLF_NVIM_BIN is unset, and stages the captive `init.lua` + pinned nvim

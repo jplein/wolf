@@ -45,7 +45,6 @@ Pure, headless `XCTest` coverage of the AppKit-free `WolfKeyMap.ScrollAccumulato
 
 Pure, headless `XCTest` coverage of the AppKit-free `StateSeam` (`WolfKeyMap`) — the state-restore decision seams, table-driven:
 
-- `testToolbarModeDiscriminantTable` — the `ToolbarMode` ↔ discriminant contract in BOTH directions (`0/1/2` ↔ `iconAndText`/`iconOnly`/`textOnly`; unknown discriminants `3` and `99` → `nil`), keeping the Swift port in lockstep with wolf-ffi's `mod toolbar_mode` and the `//crates/wolf-ffi:state` discriminant guard.
 - `testRestoredWindowFrameTable` — `restoredWindowFrame(x:y:width:height:screenVisibleFrames:)` accepts a frame intersecting a screen visible frame and rejects (`nil`) the non-positive width/height "unset" sentinel and a fully-offscreen frame (e.g. a disconnected display).
 - `testLaunchDecisionTable` — `launchDecision(restored:home:isDirectory:)` returns `.folder(restored)` only when the restored cwd is non-empty and the injected `isDirectory` check passes (tests pass a set lookup, keeping the seam pure), and `.emptyState(home)` on an empty, deleted, or plain-file path — asserting it NEVER returns the process working directory.
 

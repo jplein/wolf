@@ -336,10 +336,6 @@ extension WolfCoreHandleRef {
         __swift_bridge__$WolfCoreHandle$state_set_sidebar_visible(ptr, visible)
     }
 
-    public func state_set_toolbar_mode(_ mode: UInt8, _ set: Bool) {
-        __swift_bridge__$WolfCoreHandle$state_set_toolbar_mode(ptr, mode, set)
-    }
-
     public func state_set_window_count(_ count: UInt16) {
         __swift_bridge__$WolfCoreHandle$state_set_window_count(ptr, count)
     }
@@ -882,14 +878,6 @@ extension FfiWindowStateRef {
 
     public func sidebar_visible() -> Bool {
         __swift_bridge__$FfiWindowState$sidebar_visible(ptr)
-    }
-
-    public func toolbar_mode() -> UInt8 {
-        __swift_bridge__$FfiWindowState$toolbar_mode(ptr)
-    }
-
-    public func toolbar_mode_set() -> Bool {
-        __swift_bridge__$FfiWindowState$toolbar_mode_set(ptr)
     }
 }
 extension FfiWindowState: Vectorizable {

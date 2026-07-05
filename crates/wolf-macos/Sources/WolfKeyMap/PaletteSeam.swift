@@ -25,9 +25,9 @@ public enum PaletteSeam {
     /// The FFI palette-row-kind discriminant, decoded from `wolf-ffi`'s
     /// `mod palette_row_kind` (STATIC=0, SWITCH_WINDOW=1, OPEN_RECENT=2).
     ///
-    /// Structurally the sibling of `StateSeam.ToolbarMode` / `CommandKind(ffi:)`:
-    /// a `UInt8`-backed enum with a guarded `init?(ffi:)` that returns `nil` for
-    /// any out-of-range discriminant.
+    /// Structurally the sibling of `CommandKind(ffi:)`: a `UInt8`-backed enum
+    /// with a guarded `init?(ffi:)` that returns `nil` for any out-of-range
+    /// discriminant.
     public enum PaletteRowKind: UInt8 {
         /// A static registry command row (dispatched via the command channel).
         case staticCommand = 0

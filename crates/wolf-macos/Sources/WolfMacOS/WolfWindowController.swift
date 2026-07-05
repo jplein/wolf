@@ -14,7 +14,7 @@ import WolfKeyMap
 /// The scalar facets of one saved window, copied OUT of the bridge's
 /// `RustVec<FfiWindowState>` immediately (element refs must not outlive the vec)
 /// into a plain value that survives launch. Shared by the coordinator (which
-/// reads `state.json`) and the controller (which restores frame/sidebar/toolbar).
+/// reads `state.json`) and the controller (which restores frame/sidebar).
 struct RestoredWindowState {
     let x: Double
     let y: Double
@@ -22,7 +22,6 @@ struct RestoredWindowState {
     let height: Double
     let cwd: String
     let sidebarVisible: Bool
-    let toolbarMode: StateSeam.ToolbarMode?
 }
 
 /// Owns and drives a single top-level window and its embedded Neovim. Created by
@@ -43,7 +42,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     /// coordinator).
     private let launchCwd: String
 
-    /// The saved facets to restore (frame/sidebar/toolbar), or `nil` for a fresh
+    /// The saved facets to restore (frame/sidebar), or `nil` for a fresh
     /// (Cmd-N) window.
     private let restored: RestoredWindowState?
 
@@ -199,7 +198,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         emptyState.isHidden = hasFolder
         self.emptyState = emptyState
 
-        // Restore the saved frame/toolbar only for a restored window; a fresh
+        // Restore the saved frame only for a restored window; a fresh
         // (Cmd-N) window keeps AppKit's cascade placement. The sidebar is set
         // below, gated on `hasFolder`.
         if let restored {
@@ -211,9 +210,6 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
                 window.setFrame(frame, display: false)
             } else {
                 window.center()
-            }
-            if let mode = restored.toolbarMode {
-                window.toolbar?.displayMode = Self.toolbarDisplayMode(mode)
             }
         }
 
@@ -235,13 +231,12 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
 
-        // Observe geometry/sidebar/toolbar changes, then push one full snapshot so
+        // Observe geometry/sidebar changes, then push one full snapshot so
         // this window persists its initial layout immediately.
         let persistence = StatePersistence(
             handle: handle,
             window: window,
-            sidebarItem: window.sidebarItem,
-            toolbar: window.toolbar
+            sidebarItem: window.sidebarItem
         )
         persistence.install()
         persistence.pushSnapshot()
@@ -492,7 +487,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     }
 
     /// Re-pushes this window's layout snapshot (the terminate-time correctness
-    /// backstop for the best-effort toolbar KVO).
+    /// backstop for the best-effort sidebar KVO).
     func pushSnapshot() {
         statePersistence?.pushSnapshot()
     }
@@ -585,15 +580,6 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
             UInt16(Self.initialRows),
             UInt16(windowIndex)
         )
-    }
-
-    /// Maps the shared `StateSeam.ToolbarMode` onto AppKit's display mode.
-    private static func toolbarDisplayMode(_ mode: StateSeam.ToolbarMode) -> NSToolbar.DisplayMode {
-        switch mode {
-        case .iconAndText: return .iconAndLabel
-        case .iconOnly: return .iconOnly
-        case .textOnly: return .labelOnly
-        }
     }
 
     /// Resolves the bundled Neovim binary at `Contents/Resources/nvim/bin/nvim`,

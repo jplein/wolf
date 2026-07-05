@@ -48,7 +48,7 @@ use wolf_core::{
     rank_matches_top_n, rank_palette, Command, CommandMru, CoreConfig, CursorShape, FileSearch,
     FocusDir, Grid, InputEvent, Key, KeyEvent, LayoutIntent, MouseAction, MouseButton, MouseEvent,
     PaletteRow, PaletteRowKind, PaletteWindow, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent,
-    SplitOrientation, StateStore, ToolbarMode, WakeFn, WinInfo, WindowState, WolfCore,
+    SplitOrientation, StateStore, WakeFn, WinInfo, WindowState, WolfCore,
 };
 
 // Re-export the bridge-defined transparent structs at the crate root so the Rust
@@ -230,21 +230,6 @@ mod mouse_action {
     pub const RELEASE: u8 = 1;
     /// Pointer dragged with the button held.
     pub const DRAG: u8 = 2;
-}
-
-/// The toolbar-display-mode discriminants carried by
-/// [`WolfCoreHandle::state_set_toolbar_mode`] and [`FfiWindowState::toolbar_mode`],
-/// mirroring the variant order of [`wolf_core::ToolbarMode`].
-///
-/// The single source of truth shared with the Swift `StateSeam.ToolbarMode`
-/// port and the `tests/state.rs` discriminant contract.
-mod toolbar_mode {
-    /// Toolbar items show icon + text (`wolf_core::ToolbarMode::IconAndText`).
-    pub const ICON_AND_TEXT: u8 = 0;
-    /// Toolbar items show only their icon (`wolf_core::ToolbarMode::IconOnly`).
-    pub const ICON_ONLY: u8 = 1;
-    /// Toolbar items show only their label (`wolf_core::ToolbarMode::TextOnly`).
-    pub const TEXT_ONLY: u8 = 2;
 }
 
 /// How long [`WolfCoreHandle::state_flush`] (and the shutdown-time flush) blocks
@@ -429,12 +414,6 @@ mod ffi {
         // Records this window's sidebar visibility into the live state store at
         // the handle's `window_index`. A no-op when no store is attached.
         fn state_set_sidebar_visible(&self, visible: bool);
-        // Records this window's toolbar display mode at the handle's
-        // `window_index`: `mode` is a `mod toolbar_mode` discriminant; `set ==
-        // false` clears the mode to unset (the value byte is then ignored); an
-        // unrecognized discriminant is a logged no-op. A no-op when no store is
-        // attached.
-        fn state_set_toolbar_mode(&self, mode: u8, set: bool);
         // Truncates the persisted `windows` list to `count` entries (ghost
         // cleanup at terminate time, after live windows are re-pushed at dense
         // indices). A no-op when no store is attached.
@@ -538,12 +517,6 @@ mod ffi {
         fn cwd(&self) -> String;
         // Whether the file-tree sidebar was visible.
         fn sidebar_visible(&self) -> bool;
-        // The saved toolbar display mode as a `mod toolbar_mode` discriminant;
-        // meaningful only when `toolbar_mode_set()` (the `{value, set}` pair
-        // follows the FfiColor precedent).
-        fn toolbar_mode(&self) -> u8;
-        // Whether a toolbar display mode was saved at all.
-        fn toolbar_mode_set(&self) -> bool;
     }
 
     extern "Rust" {
@@ -922,9 +895,8 @@ impl FfiState {
 /// One saved window's state (opaque to Swift, so a `Vec<FfiWindowState>` is
 /// supported — swift-bridge emits Vec support only for opaque types).
 ///
-/// A projection of [`wolf_core::WindowState`] with the optional toolbar mode
-/// flattened into the `{value, set}` accessor pair ([`FfiWindowState::toolbar_mode`]
-/// / [`FfiWindowState::toolbar_mode_set`]), following the [`FfiColor`] precedent.
+/// A projection of [`wolf_core::WindowState`] exposing the saved geometry, cwd,
+/// and sidebar visibility through per-field accessors.
 #[derive(Clone)]
 pub struct FfiWindowState {
     x: f64,
@@ -933,8 +905,6 @@ pub struct FfiWindowState {
     height: f64,
     cwd: String,
     sidebar_visible: bool,
-    toolbar_mode: u8,
-    toolbar_mode_set: bool,
 }
 
 impl FfiWindowState {
@@ -974,28 +944,8 @@ impl FfiWindowState {
         self.sidebar_visible
     }
 
-    /// The saved toolbar display mode as a [`toolbar_mode`] discriminant;
-    /// meaningful only when [`toolbar_mode_set`](Self::toolbar_mode_set).
-    #[must_use]
-    pub fn toolbar_mode(&self) -> u8 {
-        self.toolbar_mode
-    }
-
-    /// Whether a toolbar display mode was saved at all.
-    #[must_use]
-    pub fn toolbar_mode_set(&self) -> bool {
-        self.toolbar_mode_set
-    }
-
-    /// Projects a [`wolf_core::WindowState`], packing the optional toolbar mode
-    /// into the `{value, set}` pair via the [`toolbar_mode`] discriminants.
+    /// Projects a [`wolf_core::WindowState`] into its FFI accessor form.
     fn from_window(w: &WindowState) -> Self {
-        let (mode, set) = match w.toolbar_mode {
-            Some(ToolbarMode::IconAndText) => (toolbar_mode::ICON_AND_TEXT, true),
-            Some(ToolbarMode::IconOnly) => (toolbar_mode::ICON_ONLY, true),
-            Some(ToolbarMode::TextOnly) => (toolbar_mode::TEXT_ONLY, true),
-            None => (0, false),
-        };
         Self {
             x: w.x,
             y: w.y,
@@ -1003,8 +953,6 @@ impl FfiWindowState {
             height: w.height,
             cwd: w.cwd.clone(),
             sidebar_visible: w.sidebar_visible,
-            toolbar_mode: mode,
-            toolbar_mode_set: set,
         }
     }
 }
@@ -1439,33 +1387,6 @@ impl WolfCoreHandle {
         if let Some(store) = &self.store {
             store.set_sidebar_visible(self.window_index, visible);
         }
-    }
-
-    /// Records this window's toolbar display mode into the live state store.
-    ///
-    /// `mode` is a [`toolbar_mode`] discriminant. `set == false` CLEARS the
-    /// mode to unset (the value byte is then ignored); an unrecognized
-    /// discriminant with `set == true` is a logged NO-OP (the stored mode is
-    /// left unchanged, never corrupted). Writes at this handle's
-    /// [`window_index`](Self::window_index); a no-op when no store is attached.
-    pub fn state_set_toolbar_mode(&self, mode: u8, set: bool) {
-        let Some(store) = &self.store else {
-            return;
-        };
-        if !set {
-            store.set_toolbar_mode(self.window_index, None);
-            return;
-        }
-        let mode = match mode {
-            toolbar_mode::ICON_AND_TEXT => ToolbarMode::IconAndText,
-            toolbar_mode::ICON_ONLY => ToolbarMode::IconOnly,
-            toolbar_mode::TEXT_ONLY => ToolbarMode::TextOnly,
-            other => {
-                tracing::warn!("wolf-ffi: unrecognized toolbar-mode discriminant {other}; ignored");
-                return;
-            }
-        };
-        store.set_toolbar_mode(self.window_index, Some(mode));
     }
 
     /// Truncates the persisted `windows` list to `count` entries.

@@ -8,13 +8,6 @@
 //  types (CGRect) only, exactly like PaneGeometry.
 //
 //  CONTRACT UNDER TEST (the signatures the implementation must satisfy):
-//    * StateSeam.ToolbarMode — a UInt8-raw enum mirroring wolf-ffi's
-//      `mod toolbar_mode` discriminant table EXACTLY (the single source of
-//      truth, in wolf_core::ToolbarMode variant order):
-//        .iconAndText = 0, .iconOnly = 1, .textOnly = 2
-//      Both directions of the discriminant mapping ride on RawRepresentable:
-//      `ToolbarMode(rawValue:)` (discriminant -> case; nil for an unknown
-//      discriminant) and `.rawValue` (case -> discriminant).
 //    * StateSeam.restoredWindowFrame(x:y:width:height:screenVisibleFrames:)
 //      -> CGRect? — nil when width or height is non-positive (the "unset"
 //      sentinel, plan §1) and nil when the rect intersects NO screen visible
@@ -33,10 +26,7 @@
 //  NOTE to coder: this test references the pure `WolfKeyMap.StateSeam` enum the
 //  coder will add in `Sources/WolfKeyMap/StateSeam.swift` (and list in the
 //  `wolf_key_map` srcs in BUILD.bazel). The signatures asserted above are the
-//  contract the implementation must satisfy; if the discriminant mapping is
-//  spelled differently (e.g. static funcs instead of a raw enum), adapt these
-//  call sites — the 0/1/2 table itself is NOT negotiable (it must mirror
-//  wolf-ffi's `mod toolbar_mode`).
+//  contract the implementation must satisfy.
 //
 
 import CoreGraphics
@@ -50,37 +40,6 @@ private let kMainScreen = CGRect(x: 0, y: 0, width: 1920, height: 1055)
 private let kSecondScreen = CGRect(x: 1920, y: 0, width: 1440, height: 900)
 
 final class StateSeamTests: XCTestCase {
-
-    // MARK: - ToolbarMode discriminants
-
-    /// One discriminant-mapping table row: (description, discriminant,
-    /// expected case; nil == unknown discriminant).
-    private struct ModeCase {
-        let desc: String
-        let discriminant: UInt8
-        let expected: StateSeam.ToolbarMode?
-    }
-
-    func testToolbarModeDiscriminantTable() {
-        // MUST mirror wolf-ffi's `mod toolbar_mode` (ICON_AND_TEXT = 0,
-        // ICON_ONLY = 1, TEXT_ONLY = 2) — the cross-language contract guard.
-        let cases: [ModeCase] = [
-            ModeCase(desc: "0 => iconAndText", discriminant: 0, expected: .iconAndText),
-            ModeCase(desc: "1 => iconOnly", discriminant: 1, expected: .iconOnly),
-            ModeCase(desc: "2 => textOnly", discriminant: 2, expected: .textOnly),
-            ModeCase(desc: "3 (out of table) => nil", discriminant: 3, expected: nil),
-            ModeCase(desc: "99 (out of table) => nil", discriminant: 99, expected: nil),
-        ]
-        for c in cases {
-            let got = StateSeam.ToolbarMode(rawValue: c.discriminant)
-            XCTAssertEqual(got, c.expected, "case: \(c.desc)")
-        }
-
-        // The reverse direction: case -> discriminant.
-        XCTAssertEqual(StateSeam.ToolbarMode.iconAndText.rawValue, 0, "iconAndText => 0")
-        XCTAssertEqual(StateSeam.ToolbarMode.iconOnly.rawValue, 1, "iconOnly => 1")
-        XCTAssertEqual(StateSeam.ToolbarMode.textOnly.rawValue, 2, "textOnly => 2")
-    }
 
     // MARK: - restoredWindowFrame
 

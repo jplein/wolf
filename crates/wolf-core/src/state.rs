@@ -3,9 +3,8 @@
 //! This is the GUI-toolkit-free state module: it resolves the per-platform
 //! application-state directory (macOS `~/Library/Application Support/Wolf`,
 //! Linux `~/.local/state/wolf`), reads a pretty-printed `state.json` holding a
-//! LIST of per-window entries (geometry, cwd, sidebar visibility, optional
-//! toolbar display mode), and writes it back through a single dedicated writer
-//! thread.
+//! LIST of per-window entries (geometry, cwd, sidebar visibility), and writes
+//! it back through a single dedicated writer thread.
 //!
 //! ## Loading (infallible, silently-ignore)
 //!
@@ -54,25 +53,6 @@ const WRITE_COALESCE_DELAY: Duration = Duration::from_millis(100);
 /// then exits). Purely a cleanup path — mutations wake it immediately.
 const WRITER_IDLE_POLL: Duration = Duration::from_millis(500);
 
-/// The macOS toolbar display mode (icon + text / icon only / text only).
-///
-/// A macOS-only facet carried in the shared schema as an OPTIONAL per-window
-/// field (`toolbar_display_mode`, omitted when unset) so other front-ends
-/// (GNOME) can ignore it gracefully. Serialized in snake_case
-/// (`"icon_and_text"` / `"icon_only"` / `"text_only"`); the variant ORDER is
-/// the cross-language discriminant contract mirrored by wolf-ffi's
-/// `mod toolbar_mode` and the Swift `StateSeam.ToolbarMode`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolbarMode {
-    /// Toolbar items show their icon with the label beneath it.
-    IconAndText,
-    /// Toolbar items show only their icon.
-    IconOnly,
-    /// Toolbar items show only their text label.
-    TextOnly,
-}
-
 /// One window's persisted state.
 ///
 /// Geometry is in `f64` points, interpreted by the WRITING front-end (macOS
@@ -95,14 +75,6 @@ pub struct WindowState {
     pub cwd: String,
     /// Whether the file-tree sidebar is visible (defaults to `true`).
     pub sidebar_visible: bool,
-    /// The macOS toolbar display mode; `None` (omitted on disk) when unset or
-    /// on front-ends without the concept (GNOME).
-    #[serde(
-        rename = "toolbar_display_mode",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub toolbar_mode: Option<ToolbarMode>,
 }
 
 impl Default for WindowState {
@@ -114,7 +86,6 @@ impl Default for WindowState {
             height: 0.0,
             cwd: String::new(),
             sidebar_visible: true,
-            toolbar_mode: None,
         }
     }
 }
@@ -312,17 +283,6 @@ impl StateStore {
         self.mutate(idx, |w| {
             let changed = w.sidebar_visible != visible;
             w.sidebar_visible = visible;
-            changed
-        });
-    }
-
-    /// Records window `idx`'s toolbar display mode (`None` clears it — the
-    /// on-disk field is then omitted). Grows the window list with defaults up
-    /// to `idx`.
-    pub fn set_toolbar_mode(&self, idx: usize, mode: Option<ToolbarMode>) {
-        self.mutate(idx, |w| {
-            let changed = w.toolbar_mode != mode;
-            w.toolbar_mode = mode;
             changed
         });
     }

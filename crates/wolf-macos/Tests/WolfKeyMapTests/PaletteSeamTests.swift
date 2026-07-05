@@ -21,8 +21,7 @@
 //    * PaletteSeam.PaletteRowKind(ffi:) — decodes the FFI row-kind discriminant
 //      (`0` -> .staticCommand, `1` -> .switchWindow, `2` -> .openRecent, else nil),
 //      mirroring `wolf-ffi`'s `mod palette_row_kind` (STATIC=0, SWITCH_WINDOW=1,
-//      OPEN_RECENT=2). Structurally the sibling of `StateSeam.ToolbarMode` /
-//      `CommandKind(ffi:)`.
+//      OPEN_RECENT=2). Structurally the sibling of `CommandKind(ffi:)`.
 //
 //  NOTE to coder: this references the pure `WolfKeyMap.PaletteSeam` enum (with a
 //  nested `PaletteRowKind: UInt8` + guarded `init?(ffi:)`) the coder will add in

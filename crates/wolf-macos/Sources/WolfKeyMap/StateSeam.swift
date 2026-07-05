@@ -19,24 +19,6 @@ import Foundation
 /// The pure decision functions backing macOS state restore. A namespace
 /// (`enum` with only static members) mirroring `PickerSeam`.
 public enum StateSeam {
-    /// The toolbar display mode, raw-valued on the wolf-ffi `mod toolbar_mode`
-    /// discriminant table (the cross-language single source of truth, in
-    /// `wolf_core::ToolbarMode` variant order): `iconAndText = 0`,
-    /// `iconOnly = 1`, `textOnly = 2`.
-    ///
-    /// Both directions of the mapping ride on `RawRepresentable`:
-    /// `ToolbarMode(rawValue:)` maps a discriminant to a case (`nil` for an
-    /// unknown discriminant — restore then leaves the toolbar at its default),
-    /// and `.rawValue` maps a case back for the save path.
-    public enum ToolbarMode: UInt8 {
-        /// Toolbar items show their icon with the label beneath it.
-        case iconAndText = 0
-        /// Toolbar items show only their icon.
-        case iconOnly = 1
-        /// Toolbar items show only their text label.
-        case textOnly = 2
-    }
-
     /// Validates a saved window frame for restore. Returns the frame
     /// `CGRect(x:y:width:height)` when it is usable, or `nil` when the saved
     /// geometry should be IGNORED (the caller then falls back to the default

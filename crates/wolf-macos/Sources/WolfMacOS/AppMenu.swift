@@ -127,17 +127,29 @@ enum AppMenu {
         return item
     }
 
-    /// The View menu (Reset Font Size `⌘0` / Increase Font Size `⌘=` / Decrease
-    /// Font Size `⌘-` / a separator / Command Palette… `⌘p` / a separator / Enter
-    /// Full Screen `⌃⌘f`). Titles mirror `wolf_core::COMMAND_SPECS`.
+    /// The View menu (Toggle Sidebar `⌃⌘s` / a separator / Reset Font Size `⌘0` /
+    /// Increase Font Size `⌘=` / Decrease Font Size `⌘-` / a separator / Command
+    /// Palette… `⌘p` / a separator / Enter Full Screen `⌃⌘f`). The font-size and
+    /// palette titles mirror `wolf_core::COMMAND_SPECS`.
     ///
-    /// Enter Full Screen is a STANDARD AppKit item (NOT a Wolf command / registry
-    /// entry): its action is `NSWindow.toggleFullScreen(_:)`, routed to the key
-    /// window via a `nil` target, and AppKit owns its validation + Enter/Exit title
-    /// toggle. This is net-new (no fullscreen item existed before); see the READMEs.
+    /// Toggle Sidebar and Enter Full Screen are STANDARD AppKit items (NOT Wolf
+    /// commands / registry entries): their actions are
+    /// `NSSplitViewController.toggleSidebar(_:)` and `NSWindow.toggleFullScreen(_:)`,
+    /// routed via a `nil` target up the responder chain (to the split VC / key
+    /// window), and AppKit owns their validation. This is net-new (no such items
+    /// existed before); see the READMEs.
     private static func viewMenuItem(target: AppDelegate) -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "View")
+
+        let toggleSidebar = NSMenuItem(
+            title: "Toggle Sidebar",
+            action: #selector(NSSplitViewController.toggleSidebar(_:)),
+            keyEquivalent: "s")
+        toggleSidebar.keyEquivalentModifierMask = [.control, .command]
+        toggleSidebar.target = nil
+        menu.addItem(toggleSidebar)
+        menu.addItem(.separator())
 
         menu.addItem(
             commandItem(
