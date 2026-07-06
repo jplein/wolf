@@ -9,6 +9,7 @@
 //
 
 import AppKit
+import WolfKeyMap
 
 /// The main "Wolf" window. Its `contentViewController` is an
 /// `EditorSplitViewController`; the window uses a transparent
@@ -40,11 +41,16 @@ final class MainWindow: NSWindow {
         cols: Int, rows: Int
     ) {
         let splitVC = EditorSplitViewController(treeView: treeView, paneContainer: paneContainer)
-        let editorWidth = CGFloat(cols) * metrics.cellWidth
-        // The editor pane stays exactly cols × rows cells; the one-row cmdline strip
-        // is extra height beneath it (so the 80-col OCR width is preserved).
+        // The editor content is inset by a uniform 20pt margin on all four sides
+        // (`EditorInset.padding`), so the initial content must grow by 2*padding in
+        // each dimension to keep the pane area at exactly cols × rows cells (the
+        // 80-col OCR width is preserved) inside that margin.
+        let padding = CGFloat(EditorInset.padding)
+        let editorWidth = CGFloat(cols) * metrics.cellWidth + 2 * padding
+        // The pane area stays exactly cols × rows cells; the one-row cmdline strip is
+        // extra height beneath it, and the 20pt margin surrounds the whole region.
         let cmdlineStripHeight = ceil(metrics.cellHeight)
-        let editorHeight = CGFloat(rows) * metrics.cellHeight + cmdlineStripHeight
+        let editorHeight = CGFloat(rows) * metrics.cellHeight + cmdlineStripHeight + 2 * padding
         let divider = splitVC.splitView.dividerThickness
 
         // An initial content rect; the exact size (with chrome) is set below once

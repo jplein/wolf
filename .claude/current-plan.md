@@ -1,141 +1,211 @@
-# Feature: Window titlebar reflects cwd (home → ~), "Wolf" for empty window
+# Plan: 20pt padding on all four sides of the editor text grid (wolf-macos)
 
 ## Problem statement
 
-Change the Wolf macOS window title from the hardcoded literal `"Wolf"` to the
-window's live cwd, home-abbreviated (e.g. `~/Git/jplein/wolf`, or exactly `~`
-when at home). Empty-state windows (no folder open, `hasFolder == false`)
-continue to show `"Wolf"`. Title logic goes into a new pure, Foundation-only,
-unit-testable seam in `WolfKeyMap`; the `window.title` assignment is thin AppKit
-glue applied from `WolfWindowController.onRenderWake()`.
+Add 20pt of padding on all four sides of the editor text grid in the macOS
+front-end (`wolf-macos`), matching the macOS-standard leading inset of the native
+titlebar text after the sidebar.
 
-## Status: COMPLETE ✅ — implemented, tested (WolfKeyMapTests PASS, 15 rows), reviewed (code APPROVED), docs synced + prettier-clean
+The editor content region (panes + per-pane statusbar strips + bottom cmdline
+strip) should be inset by a uniform 20pt margin from the content view's edges on
+all four sides. The margin is painted in the editor background.
 
-### Final outcome
-- New pure seam `WindowTitleSeam.title(cwd:hasFolder:homeDir:)` in `wolf_key_map`; wired into
-  `WolfWindowController.onRenderWake()` (unconditional per-wake `window?.title` set, home from
-  `FileManager.default.homeDirectoryForCurrentUser.path`); `MainWindow.swift:94` kept as the
-  initial "Wolf" placeholder.
-- Tests: `//crates/wolf-macos:WolfKeyMapTests` PASS (15 table rows incl. component-boundary
-  safety, trailing-slash normalization, root edge, empty-home/empty-cwd fallbacks).
-  `wolf_macos_lib` builds (compile-verifies the controller change).
-- Reviewer: code + tests APPROVED (no correctness bugs); only blocker was missing docs.
-- Docs: `Sources/README.md` (count 17→18, WindowTitleSeam bullet, MainWindow + WolfWindowController
-  entries), `Tests/README.md` (seam enumeration + WindowTitleSeamTests subsection),
-  `README.md` (seam inventory + compile list + controller/window entries) — all updated,
-  `prettier --write` clean.
-- REMAINING (not automatable): manual GUI smoke on a window server — launch the app, confirm the
-  titlebar shows the home-abbreviated cwd (e.g. `~/Git/jplein/wolf`), `~` at home, an unchanged
-  absolute path outside home, and "Wolf" for an empty (no-folder) window; `:cd` updates it live.
+### Constraints
 
----
+- Preserve the exact initial `cols × rows` grid: `MainWindow`'s initial
+  content-size math must grow by `2 * padding` in both width and height, so the
+  OCR-checked initial grid (e.g. 80 cols) is undisturbed.
+- Padding value chosen by the user: **20pt**.
 
-## 1. New pure seam
+### Touchpoints (from initial investigation)
 
-### Create `crates/wolf-macos/Sources/WolfKeyMap/WindowTitleSeam.swift`
-Namespace mirroring `WindowIndexSeam`/`StatusbarLayout` (header comment,
-`import Foundation`, `public enum` with static members only).
+- `PaneContainerView.swift` — pane layout, `paneAreaHeight`, `paneRects`, cmdline
+  strip position, mouse/scroll hit-testing, `syncGridSizes`, bounds background
+  fill.
+- `MainWindow.swift` — initial content-size math.
 
-- Type: `public enum WindowTitleSeam`
-- Func: `public static func title(cwd: String, hasFolder: Bool, homeDir: String) -> String`
+### Preference
 
-Semantics (document + enforce):
-1. `hasFolder == false` -> `"Wolf"`.
-2. Normalize cwd: strip trailing `/` down to a non-empty remainder; keep bare `/` intact.
-3. Normalized cwd empty -> `"Wolf"` (safe fallback; folder window should never have empty cwd).
-4. Normalize `homeDir` the same way. Empty normalized home -> return normalized cwd unchanged (no `~`).
-5. Normalized `cwd == normalized homeDir` -> `"~"`.
-6. cwd under home on a COMPONENT BOUNDARY — `cwd.hasPrefix(homeDir)` AND the char one past
-   the prefix is `/` -> `"~" + cwd.dropFirst(homeDir.count)` (yields `"~/" + remainder`).
-   Because home is trailing-slash-normalized and boundary char must be `/`, `/Users/jane`
-   does NOT match `/Users/janet`.
-7. Otherwise -> normalized cwd unchanged.
+Factor the inset arithmetic into a pure, headlessly-testable `WolfKeyMap` seam
+(Foundation-only, `Double`-based) so it gets `XCTest` coverage like the other
+seams (`PaneGeometry`, `StatusbarLayout`, etc.).
 
-## 2. Call site: `crates/wolf-macos/Sources/WolfMacOS/WolfWindowController.swift`
-- Add `private let homeDir: String`, set in `init(...)` to
-  `FileManager.default.homeDirectoryForCurrentUser.path` (matches
-  `AppDelegate.swift:284`, same home value used by `StateSeam.launchDecision`).
-- Add `private func updateWindowTitle(cwd: String)` doing
-  `window?.title = WindowTitleSeam.title(cwd: cwd, hasFolder: hasFolder, homeDir: homeDir)`.
-- In `onRenderWake()`: after the `if !hasFolder, !cwd.isEmpty { ... }` transition block
-  (after ~line 297, so `hasFolder` reflects any `didOpenFolder()` flip) and NOT gated by
-  the `lastKnownCwd != cwd` guard, call `updateWindowTitle(cwd: cwd)` UNCONDITIONALLY each
-  wake. Rationale: title depends on BOTH cwd and hasFolder; an unconditional idempotent set
-  is provably correct across initial show, empty→folder flip, and typed `:cd`. Do NOT fold
-  it inside the `lastKnownCwd` guard (a hasFolder flip with unchanged cwd string would miss).
-- `window` is `private var window: MainWindow?` — assign via `window?.title`.
+## Status
 
-## 3. `crates/wolf-macos/Sources/WolfMacOS/MainWindow.swift`
-- KEEP `title = "Wolf"` at line 94 as the initial placeholder (shown until the first render
-  wake sets the real title). No code change required (optional comment note only).
+- [x] Architect plan
+- [x] Tests written — `Tests/WolfKeyMapTests/EditorInsetTests.swift` (+ BUILD.bazel test src)
+- [x] Implementation + tests passing — WolfKeyMapTests PASS; wolf_key_map, wolf_macos_lib, Wolf all build
+- [x] Review — APPROVED; dead `paneAreaHeight` property removed per reviewer note (rebuilt, passes)
+- [x] Documentation — Sources/Tests/README.md all updated; `prettier --write` clean (no changes needed)
 
-## 4. BUILD wiring: `crates/wolf-macos/BUILD.bazel`
-Both `wolf_key_map.srcs` (~lines 29-47) and `WolfKeyMapTests.srcs` (~lines 172-190) are
-EXPLICIT lists (no glob), so add manually, alphabetically:
-- `"Sources/WolfKeyMap/WindowTitleSeam.swift"` (after `WindowIndexSeam.swift`).
-- `"Tests/WolfKeyMapTests/WindowTitleSeamTests.swift"` (after `WindowIndexSeamTests.swift`).
+## COMPLETE ✅
 
-## 5. Tests
-Pure seam only; the `window.title` assignment is AppKit glue = compile + manual smoke
-(consistent with repo conventions). No integration/e2e / real-nvim test warranted.
+All steps done. Headless `//crates/wolf-macos:WolfKeyMapTests` PASS; `wolf_key_map`,
+`wolf_macos_lib`, and the `Wolf` app bundle all build. Reviewer APPROVED. Docs synced +
+prettier-clean. REMAINING (not automatable): manual GUI smoke on a window server — launch
+the app and confirm the 20pt margin appears on all four sides of the editor grid, the
+cmdline strip + statusbar text align at `x = padding`, mouse/scroll hit-testing lands on
+the right cells, and the initial window still opens at the exact `cols × rows` grid.
 
-### Create `crates/wolf-macos/Tests/WolfKeyMapTests/WindowTitleSeamTests.swift`
-Table-driven `XCTestCase`, `@testable import WolfKeyMap`, mirroring `WindowIndexSeamTests`
-(`struct Case { desc; cwd; hasFolder; homeDir; expected }`). Cover:
-- `hasFolder == false` -> `"Wolf"` (with non-empty AND empty cwd).
-- Folder, `cwd == homeDir` -> `"~"`.
-- Folder, `cwd == homeDir + "/"` -> `"~"`.
-- Folder, cwd under home (`/Users/jane/Git/jplein/wolf`, home `/Users/jane`) -> `"~/Git/jplein/wolf"`.
-- Folder, home trailing slash (`/Users/jane/`), cwd `/Users/jane/x` -> `"~/x"`.
-- Boundary: home `/Users/jane`, cwd `/Users/janet` -> `"/Users/janet"` (NOT `~t`).
-- Boundary: home `/Users/jane`, cwd `/Users/janet/x` -> unchanged.
-- Folder, cwd not under home (`/tmp/project`) -> `"/tmp/project"`.
-- Folder, cwd trailing slash not under home (`/tmp/project/`) -> `"/tmp/project"`.
-- Folder, empty cwd -> `"Wolf"`.
-- Folder, empty homeDir, cwd `/Users/jane/x` -> `/Users/jane/x` unchanged.
-- Root edge: folder, cwd `/`, home `/Users/jane` -> `"/"`.
+### Coder's optional test suggestions (deferred unless reviewer flags a gap)
+- `padding == 0` no-op case (originX/Y == 0, contentWidth == containerWidth).
+- `stripHeight == contentHeight` boundary → paneAreaHeight == 0.
+Rationale for deferral: plan §6 already covers the clamps + representative geometry.
 
-## 6. Docs to update (source of truth; `prettier --write`, no mid-paragraph hard breaks)
-- `crates/wolf-macos/Sources/README.md`:
-  - WolfKeyMap count "Seventeen ... files" (line ~6) -> "Eighteen".
-  - Add `WindowTitleSeam.swift` bullet near `WindowIndexSeam` (line ~14): enum, Foundation-only,
-    `title(cwd:hasFolder:homeDir:)` semantics + tested by `WindowTitleSeamTests`.
-  - `MainWindow.swift` entry (line ~35): `title = "Wolf"` is only the initial placeholder,
-    overridden per render wake by `WolfWindowController` to the home-abbreviated live cwd
-    (or "Wolf" for an empty-state window).
-  - `WolfWindowController.swift` entry (line ~33): `onRenderWake()` also sets `window.title`
-    from `WindowTitleSeam.title(...)` (home from `FileManager...homeDirectoryForCurrentUser.path`)
-    each wake, following the live cwd and the empty→folder transition.
-- `crates/wolf-macos/Tests/README.md`:
-  - Intro seam enumeration (line ~3): add the window-title seam.
-  - Add a `## WolfKeyMapTests/WindowTitleSeamTests.swift` subsection (mirror `WindowIndexSeamTests`).
-- `crates/wolf-macos/README.md`:
-  - Read first; add `WindowTitleSeam` to any seam list/inventory; correct any "title is Wolf"
-    statement; bump a seam count if it states one.
+### Note on SourceKit diagnostics (false positives)
+`Cannot find type 'Rect'`, `No such module 'WolfFFI'/'WolfKeyMap'`, `No such module 'XCTest'`
+are SourceKit-without-Bazel artifacts; the authoritative `bazelisk build`/`test` all pass.
 
-## 7. Implementation order (never un-buildable)
-1. Create `WindowTitleSeam.swift`.
-2. Add it to `wolf_key_map.srcs` in BUILD.bazel.
-3. Modify `WolfWindowController.swift` (homeDir prop + init + `updateWindowTitle` + onRenderWake call).
-4. Leave `MainWindow.swift` as-is.
-5. Create `WindowTitleSeamTests.swift`.
-6. Add test file to `WolfKeyMapTests.srcs` in BUILD.bazel.
-7. Update docs + `prettier --write`.
+## Architect plan
 
-## Files
-Create:
-- `crates/wolf-macos/Sources/WolfKeyMap/WindowTitleSeam.swift`
-- `crates/wolf-macos/Tests/WolfKeyMapTests/WindowTitleSeamTests.swift`
-Modify:
-- `crates/wolf-macos/Sources/WolfMacOS/WolfWindowController.swift`
-- `crates/wolf-macos/BUILD.bazel`
-- `crates/wolf-macos/Sources/README.md`
-- `crates/wolf-macos/Tests/README.md`
-- `crates/wolf-macos/README.md`
+### 1. New pure seam — `Sources/WolfKeyMap/EditorInset.swift`
 
-## Deps / lint
-None. Foundation-only seam. Keep seam AppKit-free so it stays in `wolf_key_map`.
+`import Foundation` only, `Double`-based, reuses `public struct Rect` from
+`PaneTree.swift`. Header comment in the `PaneGeometry.swift` / `StatusbarLayout.swift`
+style; doc-comment every public member; no AppKit/CoreGraphics, no force-unwraps.
 
-## Test target to run
-`bazelisk test //crates/wolf-macos:WolfKeyMapTests` (plus a `wolf_macos_lib`/app build to
-compile-verify the WolfWindowController change).
+```
+public struct EditorInset {
+    public static let padding: Double = 20   // single source of truth (points)
+
+    // Echoed inputs
+    public let containerWidth: Double
+    public let containerHeight: Double
+    public let padding: Double
+    public let stripHeight: Double
+
+    // Derived outputs
+    public let originX: Double          // = padding
+    public let originY: Double          // = padding
+    public let contentWidth: Double     // = max(0, containerWidth  - 2*padding)
+    public let contentHeight: Double    // = max(0, containerHeight - 2*padding)
+    public let paneAreaWidth: Double    // = contentWidth
+    public let paneAreaHeight: Double   // = max(0, contentHeight - stripHeight)
+    public let cmdlineStripRect: Rect   // VIEW coords, offset by padding
+    public let backgroundRect: Rect     // = Rect(0, 0, containerWidth, containerHeight)
+
+    public init(containerWidth: Double, containerHeight: Double,
+                padding: Double, stripHeight: Double)
+}
+```
+
+Semantics in `init`:
+- `originX = padding`, `originY = padding`.
+- `contentWidth = max(0, containerWidth - 2*padding)`, `contentHeight = max(0, containerHeight - 2*padding)` (clamp non-negative).
+- `paneAreaWidth = contentWidth`.
+- `paneAreaHeight = max(0, contentHeight - stripHeight)` (clamp non-negative).
+- `cmdlineStripRect = Rect(x: originX, y: originY + paneAreaHeight, w: contentWidth, h: stripHeight)` — VIEW coords.
+- `backgroundRect = Rect(x: 0, y: 0, w: containerWidth, h: containerHeight)`.
+
+### 2. `PaneContainerView.swift` changes
+
+- New helper in the Geometry section:
+  ```
+  private func editorInset() -> EditorInset {
+      EditorInset(containerWidth: Double(bounds.width),
+                  containerHeight: Double(bounds.height),
+                  padding: EditorInset.padding,
+                  stripHeight: Double(stripHeight))
+  }
+  ```
+- `paneAreaHeight` → `CGFloat(editorInset().paneAreaHeight)`.
+- `paneRects()` — build inset once; OFFSET each pane rect by `(originX, originY)` and
+  size the layout from `paneAreaWidth`/`paneAreaHeight`:
+  ```
+  let inset = editorInset()
+  return tree.paneRects(width: inset.paneAreaWidth, height: inset.paneAreaHeight)
+      .map { ($0.0, CGRect(x: $0.1.x + inset.originX, y: $0.1.y + inset.originY,
+                           width: $0.1.w, height: $0.1.h)) }
+  ```
+  All downstream consumers (`geometry(for:)`, `gridRect(ofPane:)`, `statusbarRect(ofPane:)`,
+  mouse handlers, `paneRect(forGrid:)`, `drawScrollbars`) already operate on these offset
+  rects — do NOT double-offset there.
+- `applyFocus(dir:from:)` — pass `inset.paneAreaWidth`/`inset.paneAreaHeight` to
+  `tree.neighbor(...)` (dims must match `paneRects()`).
+- `syncGridSizes()` — keep `bounds > 0` guard; derive grid 1 from the inset CONTENT area:
+  ```
+  let inset = editorInset()
+  let global = gridCells(width: CGFloat(inset.contentWidth), height: CGFloat(inset.contentHeight))
+  ```
+  Per-pane loop unchanged.
+- `paintCmdlineStrip(_:)` — use `editorInset().cmdlineStripRect` for `stripRect`.
+- `paintStripRow(...)` — **critical**: change x-translate from `0` to `stripRect.minX`
+  so the cmdline row + cursor start at `x = padding` and align with the offset pane grids.
+- `drawDividers(_:ctx:)` — compare against content-region edges, not bounds:
+  `areaW = CGFloat(inset.originX + inset.paneAreaWidth)`,
+  `areaH = CGFloat(inset.originY + inset.paneAreaHeight)`.
+- `draw(_:)` — keep filling `bounds` with `WolfColor.fallbackBg` (paints the margins in
+  editor bg). No change required.
+
+### 3. `MainWindow.swift` changes
+
+In the convenience initializer (lines 43-47): fold padding into `editorWidth`/`editorHeight`.
+- `let padding = CGFloat(EditorInset.padding)`.
+- `editorWidth = CGFloat(cols) * metrics.cellWidth + 2 * padding`.
+- `cmdlineStripHeight = ceil(metrics.cellHeight)` (unchanged).
+- `editorHeight = CGFloat(rows) * metrics.cellHeight + cmdlineStripHeight + 2 * padding`.
+Designated initializer needs NO structural change (values flow through). Update the
+explanatory comments to note the padding is included so the pane area stays exactly
+`cols × rows` inside the 20pt inset.
+
+### 4. Padding constant source of truth
+
+`EditorInset.padding` (`static let = 20`), consumed by both `PaneContainerView` and
+`MainWindow`.
+
+### 5. BUILD.bazel (both explicit, alphabetical)
+
+- `wolf_key_map.srcs`: insert `"Sources/WolfKeyMap/EditorInset.swift",` between
+  `CommandSeam.swift` and `FontSizeSeam.swift`.
+- `WolfKeyMapTests.srcs`: insert `"Tests/WolfKeyMapTests/EditorInsetTests.swift",`
+  between `CommandSeamTests.swift` and `FontSizeSeamTests.swift`.
+
+### 6. Test plan — `Tests/WolfKeyMapTests/EditorInsetTests.swift`
+
+`@testable import WolfKeyMap`, `import XCTest`. Mirror `PaneGeometryTests`/`StatusbarLayoutTests`
+(header comment, `eps`/`approx` + `assertRectEqual`). Cases:
+- Exact: container `840 × 640`, padding `20`, strip `16` → `originX/Y == 20`,
+  `contentWidth == 800`, `contentHeight == 600`, `paneAreaWidth == 800`,
+  `paneAreaHeight == 584`, `cmdlineStripRect == Rect(20, 604, 800, 16)`,
+  `backgroundRect == Rect(0, 0, 840, 640)`.
+- `XCTAssertEqual(EditorInset.padding, 20)`.
+- Structural invariants (second case, e.g. `1000 × 700`, strip `18`):
+  `contentWidth + 2*padding == containerWidth`; `contentHeight + 2*padding == containerHeight`;
+  `paneAreaHeight + stripHeight == contentHeight`; `cmdlineStripRect.y == originY + paneAreaHeight`;
+  `cmdlineStripRect.w == contentWidth`; `cmdlineStripRect.h == stripHeight`; origins == padding.
+- Edge: container `30 × 30`, padding `20` → content `0 × 0`, paneArea `0 × 0`, strip.w `0` (no negatives).
+- Edge: container exactly `40 × 40` → content `0 × 0`.
+- Edge: strip taller than content — container `48 × 44` (content h `4`), strip `16` → `paneAreaHeight == 0`.
+
+`PaneContainerView`/`MainWindow` are window-server-bound AppKit glue — compile + manual
+smoke only; all headless coverage lands on `EditorInset`.
+
+### 7. Implementation order (never breaks the build)
+
+1. Create `EditorInset.swift` + add to `wolf_key_map.srcs`; build `//crates/wolf-macos:wolf_key_map`.
+2. Create `EditorInsetTests.swift` + add to `WolfKeyMapTests.srcs`; run `//crates/wolf-macos:WolfKeyMapTests`.
+3. Modify `PaneContainerView.swift` (helper + edits); build `//crates/wolf-macos:wolf_macos_lib`.
+4. Modify `MainWindow.swift`; build `//crates/wolf-macos:wolf_macos_lib`.
+5. Update docs + `prettier --write`.
+
+### 8. Docs to update
+
+- `Sources/README.md` — line 5 "Eighteen" → "Nineteen"; add `EditorInset.swift` bullet;
+  amend `PaneContainerView.swift` + `MainWindow.swift` bullets (20pt margin, consumes
+  `EditorInset`, MainWindow grows initial content by `2*padding`).
+- `Tests/README.md` — line 3 intro list add the editor-inset seam; add
+  `## WolfKeyMapTests/EditorInsetTests.swift` section.
+- `README.md` — add `EditorInset` seam paragraph; add to the `wolf_key_map` compile
+  enumeration (line ~61); update `MainWindow.swift` (line ~71) + `PaneContainerView.swift`
+  (line ~74) bullets.
+
+### 9. Test targets
+
+- `bazelisk test //crates/wolf-macos:WolfKeyMapTests`
+- `bazelisk build //crates/wolf-macos:wolf_macos_lib` (compile-verify glue).
+
+### Key correctness notes
+
+- `paintStripRow` x-translate must become `stripRect.minX` (else cmdline clipped/misaligned).
+- Do NOT double-offset in per-pane geometry helpers/hit-testers — `paneRects()` already offsets.
+- `drawDividers` compares against `originX + paneAreaWidth` / `originY + paneAreaHeight`.

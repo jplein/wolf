@@ -185,8 +185,17 @@ final class PaneContainerView: NSView {
     /// One-row cmdline-strip height (the bottom of the view).
     private var stripHeight: CGFloat { ceil(metrics.cellHeight) }
 
-    /// The pane area (everything above the cmdline strip).
-    private var paneAreaHeight: CGFloat { max(0, bounds.height - stripHeight) }
+    /// The uniform-20pt-margin arithmetic for the current `bounds`: the padded
+    /// content origin, the pane-area/content dimensions, and the cmdline-strip +
+    /// background rects (the pure `WolfKeyMap.EditorInset` seam). All pane rects and
+    /// the cmdline strip are offset by `EditorInset.padding` on every side.
+    private func editorInset() -> EditorInset {
+        EditorInset(
+            containerWidth: Double(bounds.width),
+            containerHeight: Double(bounds.height),
+            padding: EditorInset.padding,
+            stripHeight: Double(stripHeight))
+    }
 
     /// Maps a pixel size to a grid `(cols, rows)`, each at least 1.
     private func gridCells(width: CGFloat, height: CGFloat) -> (cols: Int, rows: Int) {
@@ -194,11 +203,22 @@ final class PaneContainerView: NSView {
     }
 
     /// The current pane rectangles from the pure layout, in this view's (flipped)
-    /// coordinates: the pane area occupies the top `paneAreaHeight`, the strip the
-    /// bottom `stripHeight`.
+    /// coordinates, OFFSET by the 20pt editor inset: the pane area occupies the
+    /// content region (top `EditorInset.paneAreaHeight` inside the inset), the cmdline strip the
+    /// bottom `stripHeight` inside the inset. Downstream consumers (`geometry(for:)`,
+    /// `gridRect(ofPane:)`, `statusbarRect(ofPane:)`, mouse handlers) operate on these
+    /// already-offset rects, so they must NOT re-apply the inset.
     private func paneRects() -> [(PaneId, CGRect)] {
-        tree.paneRects(width: Double(bounds.width), height: Double(paneAreaHeight))
-            .map { ($0.0, CGRect(x: $0.1.x, y: $0.1.y, width: $0.1.w, height: $0.1.h)) }
+        let inset = editorInset()
+        return tree.paneRects(width: inset.paneAreaWidth, height: inset.paneAreaHeight)
+            .map {
+                (
+                    $0.0,
+                    CGRect(
+                        x: $0.1.x + inset.originX, y: $0.1.y + inset.originY,
+                        width: $0.1.w, height: $0.1.h)
+                )
+            }
     }
 
     /// The per-pane GRID-RECT-inside-PANE-RECT geometry for `rect` (the pure seam
@@ -438,7 +458,11 @@ final class PaneContainerView: NSView {
     private func syncGridSizes() {
         guard bounds.width > 0, bounds.height > 0 else { return }
 
-        let global = gridCells(width: bounds.width, height: bounds.height)
+        // Grid 1 (the outer/global grid) covers the inset CONTENT area, not the whole
+        // view, so the 20pt margin is excluded from its cols/rows.
+        let inset = editorInset()
+        let global = gridCells(
+            width: CGFloat(inset.contentWidth), height: CGFloat(inset.contentHeight))
         let outer = handle.read_frame_for_grid(Self.cmdlineGridId)
         if Int(outer.cols()) != global.cols || Int(outer.rows()) != global.rows {
             handle.resize(
@@ -534,8 +558,11 @@ final class PaneContainerView: NSView {
     /// (fallback: active pane) in `dir`, then `focus_win` its window.
     private func applyFocus(dir: FocusDir, from: Int64) {
         guard let origin = paneForWin(from) ?? activePane else { return }
+        // Neighbour geometry must match `paneRects()`, which lays out inside the
+        // inset pane area — use the same inset dims (not the whole bounds).
+        let inset = editorInset()
         let target = tree.neighbor(
-            origin, dir, width: Double(bounds.width), height: Double(paneAreaHeight))
+            origin, dir, width: inset.paneAreaWidth, height: inset.paneAreaHeight)
         guard let target, let win = panes[target]?.win else { return }
         handle.focus_win(win)
     }
@@ -600,8 +627,14 @@ final class PaneContainerView: NSView {
         ctx.setShouldAntialias(true)
         ctx.setShouldSmoothFonts(false)
 
-        // Editor background (covers any not-yet-tiled gaps).
-        ctx.setFillColor(WolfColor.fallbackBg)
+        // Editor background (the 20pt margins + any not-yet-tiled gaps). Use the
+        // live grid default background (grid 1) so the margin matches the text
+        // area exactly, rather than the static fallback (which reads darker under
+        // a themed background).
+        let editorBg = WolfColor.cgColor(
+            handle.read_frame_for_grid(Self.cmdlineGridId).default_bg(),
+            fallback: WolfColor.fallbackBg)
+        ctx.setFillColor(editorBg)
         ctx.fill(bounds)
 
         let rects = paneRects()
@@ -754,7 +787,10 @@ final class PaneContainerView: NSView {
     /// row (where the `:`/`/` line lives) is painted into the strip. Otherwise the
     /// strip paints grid 1's LAST row (persistent messages), as before.
     private func paintCmdlineStrip(_ ctx: CGContext) {
-        let stripRect = CGRect(x: 0, y: paneAreaHeight, width: bounds.width, height: stripHeight)
+        // The cmdline strip sits inside the 20pt inset, along the bottom of the
+        // content region (offset by padding on the left, right, and bottom).
+        let r = editorInset().cmdlineStripRect
+        let stripRect = CGRect(x: r.x, y: r.y, width: r.w, height: r.h)
         let cursorGrid = handle.read_frame().cursor_grid()
         let windowGrids = Set(handle.windows().map { $0.grid() })
 
@@ -780,7 +816,10 @@ final class PaneContainerView: NSView {
     ) {
         ctx.saveGState()
         ctx.clip(to: stripRect)
-        ctx.translateBy(x: 0, y: stripRect.minY - CGFloat(row) * metrics.cellHeight)
+        // Translate by the strip's left edge (the 20pt inset origin), so the cmdline
+        // row + cursor start at x = padding and align with the offset pane grids.
+        ctx.translateBy(
+            x: stripRect.minX, y: stripRect.minY - CGFloat(row) * metrics.cellHeight)
         paintCells(frame, ctx: ctx)
         if frame.cursor_visible() {
             drawCursor(ctx, frame: frame, cells: frame.cells(), cols: Int(frame.cols()))
@@ -823,8 +862,12 @@ final class PaneContainerView: NSView {
     /// Strokes a thin separator between adjacent panes (along each pane rect's
     /// interior right/bottom edge).
     private func drawDividers(_ rects: [(PaneId, CGRect)], ctx: CGContext) {
-        let areaW = bounds.width
-        let areaH = paneAreaHeight
+        // Compare against the inset content-region edges (the pane area's right/bottom
+        // inside the 20pt margin), not the whole view bounds, so the outermost panes'
+        // edges aren't mistaken for interior dividers.
+        let inset = editorInset()
+        let areaW = CGFloat(inset.originX + inset.paneAreaWidth)
+        let areaH = CGFloat(inset.originY + inset.paneAreaHeight)
         ctx.setStrokeColor(NSColor.separatorColor.cgColor)
         ctx.setLineWidth(1)
         for (_, rect) in rects {
