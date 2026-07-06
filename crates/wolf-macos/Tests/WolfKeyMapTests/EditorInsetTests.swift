@@ -2,39 +2,39 @@
 //  EditorInsetTests.swift
 //  Pure, headless unit tests for the AppKit-free `WolfKeyMap.EditorInset`.
 //
-//  These exercise the uniform-20pt-margin arithmetic seam the coder adds in
-//  `Sources/WolfKeyMap/EditorInset.swift` (plan §1, §6). Like `PaneGeometryTests`
-//  and `StatusbarLayoutTests`, they import ONLY Foundation-level test machinery
-//  (no AppKit / CoreGraphics, no live window) and stay in the headless
+//  These exercise the reshaped PER-PANE text-grid-inset arithmetic seam the coder
+//  reshapes in `Sources/WolfKeyMap/EditorInset.swift` (plan §1, §6). Like
+//  `PaneGeometryTests` and `StatusbarLayoutTests`, they import ONLY Foundation-level
+//  test machinery (no AppKit / CoreGraphics, no live window) and stay in the headless
 //  `WolfKeyMap` module. `PaneContainerView` / `MainWindow` are window-server-bound
-//  AppKit glue and are compile + manual-smoke only; all headless coverage lands
-//  here. They reuse the `eps` / `approx` + `assertRectEqual` style from
+//  AppKit glue and are compile + manual-smoke only; all headless coverage lands here.
+//  They reuse the `eps` / `approx` + `assertRectEqual` style from
 //  `PaneGeometryTests.swift`.
 //
 //  ## CONTRACT UNDER TEST (the API the coder must honor, plan §1)
 //
 //    public struct EditorInset {
 //        public static let padding: Double = 20   // single source of truth (points)
-//        public let containerWidth, containerHeight, padding, stripHeight: Double
-//        public let originX: Double          // = padding
-//        public let originY: Double          // = padding
-//        public let contentWidth: Double     // = max(0, containerWidth  - 2*padding)
-//        public let contentHeight: Double    // = max(0, containerHeight - 2*padding)
-//        public let paneAreaWidth: Double    // = contentWidth
-//        public let paneAreaHeight: Double   // = max(0, contentHeight - stripHeight)
-//        public let cmdlineStripRect: Rect   // VIEW coords: (originX, originY+paneAreaHeight, contentWidth, stripHeight)
-//        public let backgroundRect: Rect     // = Rect(0, 0, containerWidth, containerHeight)
-//        public init(containerWidth: Double, containerHeight: Double,
-//                    padding: Double, stripHeight: Double)
+//        public let paneWidth, paneHeight, statusbarHeight, padding: Double  // echoed inputs
+//        public let gridRect: Rect        // PANE-LOCAL (origin at pane top-left):
+//                                         //   x = padding
+//                                         //   y = statusbarHeight + padding
+//                                         //   w = max(0, paneWidth  - 2*padding)
+//                                         //   h = max(0, paneHeight - statusbarHeight - 2*padding)
+//        public let textLeftInset: Double // == padding (statusbar/cmdline text h-padding)
+//        public init(paneWidth: Double, paneHeight: Double,
+//                    statusbarHeight: Double, padding: Double)
 //    }
 //
-//  `Rect` is the EXISTING value type from `PaneTree.swift` (`Rect(x:y:w:h:)`,
-//  `Double` fields). Both `contentWidth/Height` and `paneAreaHeight` CLAMP to a
-//  non-negative floor (max(0, ...)) so a container smaller than the padding (or a
-//  strip taller than the content) never produces negative geometry. One EXACT
-//  case pins the representative numbers; a second case pins the STRUCTURAL
-//  invariants (additive relationships, origins == padding); the remaining cases
-//  pin the clamp edges.
+//  The padding is now a PER-PANE inset around each pane's text grid rather than a
+//  uniform OUTER margin around the whole editor: the grid is inset by `padding` on
+//  the left/right, and by `statusbarHeight + padding` on top / `padding` on the
+//  bottom. `Rect` is the EXISTING value type from `PaneTree.swift` (`Rect(x:y:w:h:)`,
+//  `Double` fields). Only `gridRect.w` / `gridRect.h` CLAMP to a non-negative floor
+//  (max(0, ...)); the `x` / `y` origins are FIXED offsets and are NOT clamped. One
+//  EXACT case pins the representative numbers; a second case pins the STRUCTURAL
+//  invariants (additive relationships, origins == padding); the remaining cases pin
+//  the width / height clamp edges.
 //
 
 import XCTest
@@ -76,114 +76,113 @@ final class EditorInsetTests: XCTestCase {
 
     // MARK: - Exact case pinned to the representative numbers (plan §6)
 
-    func testExactGeometryForRepresentativeContainer() {
-        // container 840 x 640, padding 20, strip 16:
-        //   originX = originY   = 20
-        //   contentWidth        = 840 - 2*20 = 800
-        //   contentHeight       = 640 - 2*20 = 600
-        //   paneAreaWidth       = 800
-        //   paneAreaHeight      = 600 - 16   = 584
-        //   cmdlineStripRect    = Rect(20, 20 + 584, 800, 16) = Rect(20, 604, 800, 16)
-        //   backgroundRect      = Rect(0, 0, 840, 640)
+    func testExactGridRectForRepresentativePane() {
+        // pane 840 x 600, statusbar 40, padding 20:
+        //   gridRect.x = padding                                = 20
+        //   gridRect.y = statusbarHeight + padding              = 40 + 20  = 60
+        //   gridRect.w = max(0, 840 - 2*20)                     = 800
+        //   gridRect.h = max(0, 600 - 40 - 2*20)                = 520
+        //   textLeftInset = padding                             = 20
         let inset = EditorInset(
-            containerWidth: 840, containerHeight: 640, padding: 20, stripHeight: 16)
+            paneWidth: 840, paneHeight: 600, statusbarHeight: 40, padding: 20)
 
-        XCTAssertEqual(inset.originX, 20.0, accuracy: eps, "originX == padding == 20")
-        XCTAssertEqual(inset.originY, 20.0, accuracy: eps, "originY == padding == 20")
-        XCTAssertEqual(inset.contentWidth, 800.0, accuracy: eps, "840 - 2*20 == 800")
-        XCTAssertEqual(inset.contentHeight, 600.0, accuracy: eps, "640 - 2*20 == 600")
-        XCTAssertEqual(inset.paneAreaWidth, 800.0, accuracy: eps, "paneAreaWidth == contentWidth == 800")
-        XCTAssertEqual(inset.paneAreaHeight, 584.0, accuracy: eps, "600 - 16 == 584")
         assertRectEqual(
-            inset.cmdlineStripRect,
-            Rect(x: 20, y: 604, w: 800, h: 16),
-            "cmdlineStripRect == Rect(20, 604, 800, 16)")
-        assertRectEqual(
-            inset.backgroundRect,
-            Rect(x: 0, y: 0, w: 840, h: 640),
-            "backgroundRect == Rect(0, 0, 840, 640)")
+            inset.gridRect,
+            Rect(x: 20, y: 60, w: 800, h: 520),
+            "gridRect == Rect(20, 60, 800, 520)")
+        XCTAssertEqual(
+            inset.textLeftInset, 20.0, accuracy: eps, "textLeftInset == padding == 20")
     }
 
     // MARK: - Padding constant pinned
 
     func testPaddingConstantIsTwenty() {
-        XCTAssertEqual(EditorInset.padding, pinnedPadding, "EditorInset.padding is pinned at 20pt")
+        XCTAssertEqual(
+            EditorInset.padding, pinnedPadding, accuracy: eps,
+            "EditorInset.padding is pinned at 20pt")
     }
 
     // MARK: - Structural invariants (independent of the exact numbers)
 
     func testStructuralInvariants() {
-        // A second, different container (1000 x 700, padding 20, strip 18): assert the
+        // A second, different pane (1000 x 700, statusbar 37, padding 20): assert the
         // additive relationships hold rather than re-deriving each field.
         let padding: Double = 20
-        let stripHeight: Double = 18
-        let containerWidth: Double = 1000
-        let containerHeight: Double = 700
+        let statusbarHeight: Double = 37
+        let paneWidth: Double = 1000
+        let paneHeight: Double = 700
         let inset = EditorInset(
-            containerWidth: containerWidth, containerHeight: containerHeight,
-            padding: padding, stripHeight: stripHeight)
+            paneWidth: paneWidth, paneHeight: paneHeight,
+            statusbarHeight: statusbarHeight, padding: padding)
 
         XCTAssertEqual(
-            inset.contentWidth + 2 * padding, containerWidth, accuracy: eps,
-            "contentWidth + 2*padding == containerWidth")
+            inset.gridRect.x, padding, accuracy: eps,
+            "gridRect.x == padding")
         XCTAssertEqual(
-            inset.contentHeight + 2 * padding, containerHeight, accuracy: eps,
-            "contentHeight + 2*padding == containerHeight")
+            inset.gridRect.y, statusbarHeight + padding, accuracy: eps,
+            "gridRect.y == statusbarHeight + padding")
         XCTAssertEqual(
-            inset.paneAreaHeight + stripHeight, inset.contentHeight, accuracy: eps,
-            "paneAreaHeight + stripHeight == contentHeight")
+            inset.gridRect.w, paneWidth - 2 * padding, accuracy: eps,
+            "gridRect.w == paneWidth - 2*padding")
         XCTAssertEqual(
-            inset.paneAreaWidth, inset.contentWidth, accuracy: eps,
-            "paneAreaWidth == contentWidth")
+            inset.gridRect.h, paneHeight - statusbarHeight - 2 * padding, accuracy: eps,
+            "gridRect.h == paneHeight - statusbarHeight - 2*padding")
         XCTAssertEqual(
-            inset.cmdlineStripRect.y, inset.originY + inset.paneAreaHeight, accuracy: eps,
-            "cmdlineStripRect.y == originY + paneAreaHeight")
+            inset.gridRect.w + 2 * padding, paneWidth, accuracy: eps,
+            "gridRect.w + 2*padding == paneWidth")
         XCTAssertEqual(
-            inset.cmdlineStripRect.w, inset.contentWidth, accuracy: eps,
-            "cmdlineStripRect.w == contentWidth")
+            inset.gridRect.y + inset.gridRect.h + padding, paneHeight, accuracy: eps,
+            "gridRect.y + gridRect.h + padding == paneHeight")
         XCTAssertEqual(
-            inset.cmdlineStripRect.h, stripHeight, accuracy: eps,
-            "cmdlineStripRect.h == stripHeight")
-        XCTAssertEqual(inset.originX, padding, accuracy: eps, "originX == padding")
-        XCTAssertEqual(inset.originY, padding, accuracy: eps, "originY == padding")
+            inset.textLeftInset, padding, accuracy: eps,
+            "textLeftInset == padding")
+        XCTAssertEqual(
+            inset.textLeftInset, inset.gridRect.x, accuracy: eps,
+            "textLeftInset == gridRect.x")
     }
 
-    // MARK: - Edge: container smaller than 2*padding clamps to zero (no negatives)
+    // MARK: - Edge: a pane narrower than 2*padding clamps grid width to zero
 
-    func testContainerSmallerThanPaddingClampsToZero() {
-        // container 30 x 30, padding 20: 30 - 2*20 == -10, clamped to 0 on every axis.
+    func testNarrowPaneClampsGridWidthToZero() {
+        // pane 30 x 600, statusbar 40, padding 20: 30 - 2*20 == -10, clamped to 0.
         let inset = EditorInset(
-            containerWidth: 30, containerHeight: 30, padding: 20, stripHeight: 16)
+            paneWidth: 30, paneHeight: 600, statusbarHeight: 40, padding: 20)
 
-        XCTAssertEqual(inset.contentWidth, 0.0, accuracy: eps, "contentWidth clamps to 0 (never negative)")
-        XCTAssertEqual(inset.contentHeight, 0.0, accuracy: eps, "contentHeight clamps to 0 (never negative)")
-        XCTAssertEqual(inset.paneAreaWidth, 0.0, accuracy: eps, "paneAreaWidth clamps to 0")
-        XCTAssertEqual(inset.paneAreaHeight, 0.0, accuracy: eps, "paneAreaHeight clamps to 0")
-        XCTAssertEqual(inset.cmdlineStripRect.w, 0.0, accuracy: eps, "cmdlineStripRect.w clamps to 0")
-    }
-
-    // MARK: - Edge: container exactly 2*padding yields zero content
-
-    func testContainerExactlyTwicePaddingYieldsZeroContent() {
-        // container 40 x 40, padding 20: 40 - 2*20 == 0 exactly (boundary, not negative).
-        let inset = EditorInset(
-            containerWidth: 40, containerHeight: 40, padding: 20, stripHeight: 16)
-
-        XCTAssertEqual(inset.contentWidth, 0.0, accuracy: eps, "40 - 2*20 == 0 content width")
-        XCTAssertEqual(inset.contentHeight, 0.0, accuracy: eps, "40 - 2*20 == 0 content height")
-    }
-
-    // MARK: - Edge: strip taller than content height clamps paneAreaHeight to zero
-
-    func testStripTallerThanContentClampsPaneAreaHeight() {
-        // container 48 x 44, padding 20: content height == 44 - 2*20 == 4; strip 16 is
-        // taller, so paneAreaHeight = max(0, 4 - 16) clamps to 0 (never negative).
-        let inset = EditorInset(
-            containerWidth: 48, containerHeight: 44, padding: 20, stripHeight: 16)
-
-        XCTAssertEqual(inset.contentHeight, 4.0, accuracy: eps, "44 - 2*20 == 4 content height")
         XCTAssertEqual(
-            inset.paneAreaHeight, 0.0, accuracy: eps,
-            "a strip taller than the content clamps paneAreaHeight to 0")
+            inset.gridRect.w, 0.0, accuracy: eps,
+            "gridRect.w clamps to 0 (never negative)")
+        XCTAssertGreaterThanOrEqual(
+            inset.gridRect.w, 0.0, "gridRect.w is never negative")
+    }
+
+    // MARK: - Edge: a pane shorter than statusbar + 2*padding clamps grid height to zero
+
+    func testShortPaneClampsGridHeightToZero() {
+        // pane 840 x 60, statusbar 40, padding 20: 60 - 40 - 2*20 == -20, clamped to 0.
+        let inset = EditorInset(
+            paneWidth: 840, paneHeight: 60, statusbarHeight: 40, padding: 20)
+
+        XCTAssertEqual(
+            inset.gridRect.h, 0.0, accuracy: eps,
+            "gridRect.h clamps to 0 (never negative)")
+        XCTAssertGreaterThanOrEqual(
+            inset.gridRect.h, 0.0, "gridRect.h is never negative")
+    }
+
+    // MARK: - Edge: statusbar taller than the pane clamps height, y stays unclamped
+
+    func testStatusbarTallerThanPaneClampsGridHeightToZero() {
+        // pane 840 x 50, statusbar 80, padding 20: 50 - 80 - 2*20 == -70, height clamps
+        // to 0. The y origin is a FIXED offset (statusbarHeight + padding == 100) and is
+        // NOT clamped even though it exceeds the pane height.
+        let inset = EditorInset(
+            paneWidth: 840, paneHeight: 50, statusbarHeight: 80, padding: 20)
+
+        XCTAssertEqual(
+            inset.gridRect.h, 0.0, accuracy: eps,
+            "gridRect.h clamps to 0 when the statusbar is taller than the pane")
+        XCTAssertEqual(
+            inset.gridRect.y, 100.0, accuracy: eps,
+            "gridRect.y == statusbarHeight + padding == 100 (unclamped offset)")
     }
 }

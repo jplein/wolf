@@ -1,211 +1,169 @@
-# Plan: 20pt padding on all four sides of the editor text grid (wolf-macos)
+# Plan: Move editor padding to a per-pane text-grid inset (wolf-macos)
 
 ## Problem statement
 
-Add 20pt of padding on all four sides of the editor text grid in the macOS
-front-end (`wolf-macos`), matching the macOS-standard leading inset of the native
-titlebar text after the sidebar.
+Currently the 20pt padding is a uniform OUTER margin around the whole editor
+content region (the `EditorInset` seam offsets every pane by `(padding, padding)`
+and shrinks the content area). Change it so the padding is a PER-PANE inset around
+each pane's text grid instead.
 
-The editor content region (panes + per-pane statusbar strips + bottom cmdline
-strip) should be inset by a uniform 20pt margin from the content view's edges on
-all four sides. The margin is painted in the editor background.
+### Desired layout (per pane)
 
-### Constraints
+```
++--------------------------------
+| <h padding> filename            <- statusbar strip: TOP FLUSH, text h-padded
+| <h padding> path/to/filename    <- statusbar secondary line
+| <h padding><vertical padding>   <- vertical gap after statusbar
+| <h padding> text text text      <- grid text, inset on all 4 sides
+```
 
-- Preserve the exact initial `cols × rows` grid: `MainWindow`'s initial
-  content-size math must grow by `2 * padding` in both width and height, so the
-  OCR-checked initial grid (e.g. 80 cols) is undisturbed.
-- Padding value chosen by the user: **20pt**.
+- Statusbar strip: flush with the TOP of its pane (no top margin), full pane
+  width, `statusbarHeight` tall — as it was before the outer-margin change.
+- Statusbar TEXT: horizontal padding (left-aligned with the grid text left edge).
+- Below the statusbar: a vertical padding gap, then the grid.
+- Grid (text area): inset by `padding` on ALL FOUR sides within the pane
+  (left/right = padding; top = statusbarHeight + padding; bottom = padding).
+- Cmdline strip text: horizontally indented by `padding` to align with grid text.
+- Padding stays 20pt (`EditorInset.padding`); one value for h and v.
 
-### Touchpoints (from initial investigation)
+### Constraints / notes
 
-- `PaneContainerView.swift` — pane layout, `paneAreaHeight`, `paneRects`, cmdline
-  strip position, mouse/scroll hit-testing, `syncGridSizes`, bounds background
-  fill.
-- `MainWindow.swift` — initial content-size math.
-
-### Preference
-
-Factor the inset arithmetic into a pure, headlessly-testable `WolfKeyMap` seam
-(Foundation-only, `Double`-based) so it gets `XCTest` coverage like the other
-seams (`PaneGeometry`, `StatusbarLayout`, etc.).
+- `MainWindow` needs NO dimensional change: the initial content already grows by
+  `2*padding` in each dimension; that space now feeds the per-pane inset instead
+  of the outer margin (the grid ends up the same size). Only comments change.
+- `PaneContainerView`/`MainWindow` are AppKit glue (compile + manual-smoke only);
+  headless test coverage lands on the reshaped `EditorInset` seam.
 
 ## Status
 
 - [x] Architect plan
-- [x] Tests written — `Tests/WolfKeyMapTests/EditorInsetTests.swift` (+ BUILD.bazel test src)
-- [x] Implementation + tests passing — WolfKeyMapTests PASS; wolf_key_map, wolf_macos_lib, Wolf all build
-- [x] Review — APPROVED; dead `paneAreaHeight` property removed per reviewer note (rebuilt, passes)
+- [x] Tests written — `EditorInsetTests.swift` rewritten for the per-pane API
+- [x] Implementation + tests passing — WolfKeyMapTests PASS; wolf_macos_lib + Wolf build
+- [x] Review — APPROVED, no correctness issues (alignment, single-inset, hit-test consistency all verified)
 - [x] Documentation — Sources/Tests/README.md all updated; `prettier --write` clean (no changes needed)
 
 ## COMPLETE ✅
 
-All steps done. Headless `//crates/wolf-macos:WolfKeyMapTests` PASS; `wolf_key_map`,
-`wolf_macos_lib`, and the `Wolf` app bundle all build. Reviewer APPROVED. Docs synced +
-prettier-clean. REMAINING (not automatable): manual GUI smoke on a window server — launch
-the app and confirm the 20pt margin appears on all four sides of the editor grid, the
-cmdline strip + statusbar text align at `x = padding`, mouse/scroll hit-testing lands on
-the right cells, and the initial window still opens at the exact `cols × rows` grid.
-
-### Coder's optional test suggestions (deferred unless reviewer flags a gap)
-- `padding == 0` no-op case (originX/Y == 0, contentWidth == containerWidth).
-- `stripHeight == contentHeight` boundary → paneAreaHeight == 0.
-Rationale for deferral: plan §6 already covers the clamps + representative geometry.
-
-### Note on SourceKit diagnostics (false positives)
-`Cannot find type 'Rect'`, `No such module 'WolfFFI'/'WolfKeyMap'`, `No such module 'XCTest'`
-are SourceKit-without-Bazel artifacts; the authoritative `bazelisk build`/`test` all pass.
+Padding moved from an outer margin to a per-pane text-grid inset. `EditorInset` seam
+reshaped (per-pane `gridRect` + `textLeftInset`); `PaneContainerView` reverted to
+full-bounds consumers with the inset applied only in `gridRect(ofPane:)`; statusbar
+top-flush with horizontally-padded text aligned to the grid; cmdline text indented;
+`MainWindow` dims unchanged (comments only). WolfKeyMapTests PASS; `wolf_macos_lib` +
+`Wolf` build; reviewer APPROVED; docs synced + prettier-clean. REMAINING (not
+automatable): manual GUI smoke — launch the app and confirm each pane's statusbar is
+flush at the top with indented text, the grid has padding on all four sides with a
+vertical gap after the statusbar, the cmdline text aligns with the grid text, and the
+initial window still opens at the exact cols×rows.
 
 ## Architect plan
 
-### 1. New pure seam — `Sources/WolfKeyMap/EditorInset.swift`
+### 1. Reshape `EditorInset.swift` (per-pane grid inset)
 
-`import Foundation` only, `Double`-based, reuses `public struct Rect` from
-`PaneTree.swift`. Header comment in the `PaneGeometry.swift` / `StatusbarLayout.swift`
-style; doc-comment every public member; no AppKit/CoreGraphics, no force-unwraps.
+Replace the whole type. New public API (Foundation-only, `Double`, reuses `Rect`,
+doc comment every member):
+- Keep `public static let padding: Double = 20`.
+- `public init(paneWidth: Double, paneHeight: Double, statusbarHeight: Double, padding: Double)`.
+- Echoed stored inputs: `paneWidth`, `paneHeight`, `statusbarHeight`, `padding`.
+- `public let gridRect: Rect` — PANE-LOCAL (origin at pane top-left):
+  `x = padding`, `y = statusbarHeight + padding`,
+  `w = max(0, paneWidth - 2*padding)`, `h = max(0, paneHeight - statusbarHeight - 2*padding)`.
+  Only `w`/`h` clamp; `x`/`y` are fixed offsets (not clamped).
+- `public let textLeftInset: Double` (`== padding`) — statusbar/cmdline text h-padding.
+- Rewrite the header + struct doc comments. REMOVE all old members
+  (containerWidth/Height, stripHeight, originX/Y, contentWidth/Height,
+  paneAreaWidth/Height, cmdlineStripRect, backgroundRect).
 
-```
-public struct EditorInset {
-    public static let padding: Double = 20   // single source of truth (points)
+### 2. `PaneContainerView.swift` — method by method
 
-    // Echoed inputs
-    public let containerWidth: Double
-    public let containerHeight: Double
-    public let padding: Double
-    public let stripHeight: Double
-
-    // Derived outputs
-    public let originX: Double          // = padding
-    public let originY: Double          // = padding
-    public let contentWidth: Double     // = max(0, containerWidth  - 2*padding)
-    public let contentHeight: Double    // = max(0, containerHeight - 2*padding)
-    public let paneAreaWidth: Double    // = contentWidth
-    public let paneAreaHeight: Double   // = max(0, contentHeight - stripHeight)
-    public let cmdlineStripRect: Rect   // VIEW coords, offset by padding
-    public let backgroundRect: Rect     // = Rect(0, 0, containerWidth, containerHeight)
-
-    public init(containerWidth: Double, containerHeight: Double,
-                padding: Double, stripHeight: Double)
-}
-```
-
-Semantics in `init`:
-- `originX = padding`, `originY = padding`.
-- `contentWidth = max(0, containerWidth - 2*padding)`, `contentHeight = max(0, containerHeight - 2*padding)` (clamp non-negative).
-- `paneAreaWidth = contentWidth`.
-- `paneAreaHeight = max(0, contentHeight - stripHeight)` (clamp non-negative).
-- `cmdlineStripRect = Rect(x: originX, y: originY + paneAreaHeight, w: contentWidth, h: stripHeight)` — VIEW coords.
-- `backgroundRect = Rect(x: 0, y: 0, w: containerWidth, h: containerHeight)`.
-
-### 2. `PaneContainerView.swift` changes
-
-- New helper in the Geometry section:
+- REMOVE the container-level `editorInset()` helper.
+- REMOVE the `statusbarTextTrailingInset` constant (role replaced by grid-right alignment).
+- ADD back `private var paneAreaHeight: CGFloat { max(0, bounds.height - stripHeight) }`.
+- `paneRects()` → full bounds, (0,0)-origin, NO offset:
+  `tree.paneRects(width: bounds.width, height: paneAreaHeight)` mapped straight to CGRect.
+  Update doc comment (drop "offset by inset"; inset now applied in `gridRect(ofPane:)`).
+- `gridRect(ofPane rect:)` → inset via the reshaped seam:
   ```
-  private func editorInset() -> EditorInset {
-      EditorInset(containerWidth: Double(bounds.width),
-                  containerHeight: Double(bounds.height),
-                  padding: EditorInset.padding,
-                  stripHeight: Double(stripHeight))
-  }
+  let inset = EditorInset(paneWidth: Double(rect.width), paneHeight: Double(rect.height),
+                          statusbarHeight: Double(statusbarHeight), padding: EditorInset.padding)
+  return CGRect(x: rect.minX + inset.gridRect.x, y: rect.minY + inset.gridRect.y,
+                width: inset.gridRect.w, height: inset.gridRect.h)
   ```
-- `paneAreaHeight` → `CGFloat(editorInset().paneAreaHeight)`.
-- `paneRects()` — build inset once; OFFSET each pane rect by `(originX, originY)` and
-  size the layout from `paneAreaWidth`/`paneAreaHeight`:
+- `statusbarRect(ofPane:)` UNCHANGED (top-flush, full width).
+- `paintStatusbar` → align text with grid text left/right (use local `gRect` to avoid
+  collision with the `grid: UInt64` param):
   ```
-  let inset = editorInset()
-  return tree.paneRects(width: inset.paneAreaWidth, height: inset.paneAreaHeight)
-      .map { ($0.0, CGRect(x: $0.1.x + inset.originX, y: $0.1.y + inset.originY,
-                           width: $0.1.w, height: $0.1.h)) }
+  let gRect = gridRect(ofPane: paneRect)
+  let geo = geometry(for: gRect)
+  let textLeft = gRect.minX + CGFloat(geo.paintOffsetX)
+  let textWidth = max(0, gRect.maxX - textLeft)
   ```
-  All downstream consumers (`geometry(for:)`, `gridRect(ofPane:)`, `statusbarRect(ofPane:)`,
-  mouse handlers, `paneRect(forGrid:)`, `drawScrollbars`) already operate on these offset
-  rects — do NOT double-offset there.
-- `applyFocus(dir:from:)` — pass `inset.paneAreaWidth`/`inset.paneAreaHeight` to
-  `tree.neighbor(...)` (dims must match `paneRects()`).
-- `syncGridSizes()` — keep `bounds > 0` guard; derive grid 1 from the inset CONTENT area:
-  ```
-  let inset = editorInset()
-  let global = gridCells(width: CGFloat(inset.contentWidth), height: CGFloat(inset.contentHeight))
-  ```
-  Per-pane loop unchanged.
-- `paintCmdlineStrip(_:)` — use `editorInset().cmdlineStripRect` for `stripRect`.
-- `paintStripRow(...)` — **critical**: change x-translate from `0` to `stripRect.minX`
-  so the cmdline row + cursor start at `x = padding` and align with the offset pane grids.
-- `drawDividers(_:ctx:)` — compare against content-region edges, not bounds:
-  `areaW = CGFloat(inset.originX + inset.paneAreaWidth)`,
-  `areaH = CGFloat(inset.originY + inset.paneAreaHeight)`.
-- `draw(_:)` — keep filling `bounds` with `WolfColor.fallbackBg` (paints the margins in
-  editor bg). No change required.
+  Strip bg still fills full strip width; primary/secondary `y` origins unchanged.
+- `paintStripRow` (cmdline) → x-translate by `CGFloat(EditorInset.padding)` instead of
+  `stripRect.minX` (stripRect is back at x=0), so cmdline text aligns with grid text.
+- `paintCmdlineStrip` → `stripRect = CGRect(x: 0, y: paneAreaHeight, width: bounds.width, height: stripHeight)`.
+- `drawDividers` → `areaW = bounds.width`, `areaH = paneAreaHeight`.
+- `applyFocus` → `tree.neighbor(origin, dir, width: Double(bounds.width), height: Double(paneAreaHeight))`.
+- `syncGridSizes` grid 1 → `gridCells(width: bounds.width, height: bounds.height)`.
+  Per-pane loop UNCHANGED (routes through `gridRect(ofPane:)`).
+- `draw(_:)` UNCHANGED (fills `bounds` with live grid default_bg / fallbackBg — now
+  paints the per-pane padding regions). Update only the inline comment.
+- Mouse/scroll + `drawScrollbars` — NO change beyond reverted `paneRects` (they route
+  through `geometry(for: gridRect(ofPane: rect))`; padding points clamp to nearest edge cell).
 
-### 3. `MainWindow.swift` changes
+### 3. `MainWindow.swift` — comments only (NO dimensional change)
 
-In the convenience initializer (lines 43-47): fold padding into `editorWidth`/`editorHeight`.
-- `let padding = CGFloat(EditorInset.padding)`.
-- `editorWidth = CGFloat(cols) * metrics.cellWidth + 2 * padding`.
-- `cmdlineStripHeight = ceil(metrics.cellHeight)` (unchanged).
-- `editorHeight = CGFloat(rows) * metrics.cellHeight + cmdlineStripHeight + 2 * padding`.
-Designated initializer needs NO structural change (values flow through). Update the
-explanatory comments to note the padding is included so the pane area stays exactly
-`cols × rows` inside the 20pt inset.
+`editorWidth = cols*cellWidth + 2*padding`, `editorHeight = rows*cellHeight + cmdlineStripHeight + 2*padding`
+stay as-is. Verified identity: new grid height `= paneHeight - statusbarHeight - 2*padding
+= rows*cellHeight - statusbarHeight` == today's; width → `cols*cellWidth`. Update the
+comments (lines ~45-47, ~50-53) to say the `2*padding` now reserves the PER-PANE inset.
 
-### 4. Padding constant source of truth
+### 4. Padding constant
 
-`EditorInset.padding` (`static let = 20`), consumed by both `PaneContainerView` and
-`MainWindow`.
+Still `EditorInset.padding`, consumed by `gridRect(ofPane:)`, `paintStripRow`, `MainWindow`.
 
-### 5. BUILD.bazel (both explicit, alphabetical)
+### 5. BUILD.bazel
 
-- `wolf_key_map.srcs`: insert `"Sources/WolfKeyMap/EditorInset.swift",` between
-  `CommandSeam.swift` and `FontSizeSeam.swift`.
-- `WolfKeyMapTests.srcs`: insert `"Tests/WolfKeyMapTests/EditorInsetTests.swift",`
-  between `CommandSeamTests.swift` and `FontSizeSeamTests.swift`.
+No source-list change — both files already listed; reshape/rewrite in place.
 
-### 6. Test plan — `Tests/WolfKeyMapTests/EditorInsetTests.swift`
+### 6. Tests — rewrite `EditorInsetTests.swift`
 
-`@testable import WolfKeyMap`, `import XCTest`. Mirror `PaneGeometryTests`/`StatusbarLayoutTests`
-(header comment, `eps`/`approx` + `assertRectEqual`). Cases:
-- Exact: container `840 × 640`, padding `20`, strip `16` → `originX/Y == 20`,
-  `contentWidth == 800`, `contentHeight == 600`, `paneAreaWidth == 800`,
-  `paneAreaHeight == 584`, `cmdlineStripRect == Rect(20, 604, 800, 16)`,
-  `backgroundRect == Rect(0, 0, 840, 640)`.
-- `XCTAssertEqual(EditorInset.padding, 20)`.
-- Structural invariants (second case, e.g. `1000 × 700`, strip `18`):
-  `contentWidth + 2*padding == containerWidth`; `contentHeight + 2*padding == containerHeight`;
-  `paneAreaHeight + stripHeight == contentHeight`; `cmdlineStripRect.y == originY + paneAreaHeight`;
-  `cmdlineStripRect.w == contentWidth`; `cmdlineStripRect.h == stripHeight`; origins == padding.
-- Edge: container `30 × 30`, padding `20` → content `0 × 0`, paneArea `0 × 0`, strip.w `0` (no negatives).
-- Edge: container exactly `40 × 40` → content `0 × 0`.
-- Edge: strip taller than content — container `48 × 44` (content h `4`), strip `16` → `paneAreaHeight == 0`.
+Keep `eps`(1e-9)/`approx`/`assertRectEqual` + `@testable import WolfKeyMap`. Rewrite
+the contract comment. Cases:
+- Exact: `EditorInset(paneWidth: 840, paneHeight: 600, statusbarHeight: 40, padding: 20)`
+  → `gridRect == Rect(x: 20, y: 60, w: 800, h: 520)`, `textLeftInset == 20`.
+- `XCTAssertEqual(EditorInset.padding, 20, accuracy: eps)`.
+- Structural invariants (2nd pane 1000×700, statusbar 37, padding 20):
+  `gridRect.x == padding`; `gridRect.y == statusbarHeight + padding`;
+  `gridRect.w == paneWidth - 2*padding`; `gridRect.h == paneHeight - statusbarHeight - 2*padding`;
+  `gridRect.w + 2*padding == paneWidth`; `gridRect.y + gridRect.h + padding == paneHeight`;
+  `textLeftInset == padding == gridRect.x`.
+- Narrow pane (30×600, sb 40) → `gridRect.w == 0`.
+- Short pane (840×60, sb 40) → `gridRect.h == 0`.
+- Statusbar taller than pane (840×50, sb 80) → `gridRect.h == 0` (`gridRect.y == 100` ok).
 
-`PaneContainerView`/`MainWindow` are window-server-bound AppKit glue — compile + manual
-smoke only; all headless coverage lands on `EditorInset`.
+### 7. Docs (rewrite, then `prettier --write`)
 
-### 7. Implementation order (never breaks the build)
+- `Sources/README.md`: line 25 EditorInset bullet → per-pane API; line 41 PaneContainerView
+  bullet → statusbar flush top + h-padded text, grid inset all 4 sides, cmdline text
+  indented, full-bounds consumers, `draw` paints per-pane padding; line 37 MainWindow
+  bullet → 2*padding reserves per-pane inset. "Nineteen ... files" count UNCHANGED.
+- `Tests/README.md`: lines 81-83 EditorInsetTests section → new cases; adjust the intro
+  "uniform-20pt-margin" wording.
+- `README.md`: line 61 EditorInset bullet; line 73 MainWindow bullet; line 76
+  PaneContainerView bullet — same reshape.
 
-1. Create `EditorInset.swift` + add to `wolf_key_map.srcs`; build `//crates/wolf-macos:wolf_key_map`.
-2. Create `EditorInsetTests.swift` + add to `WolfKeyMapTests.srcs`; run `//crates/wolf-macos:WolfKeyMapTests`.
-3. Modify `PaneContainerView.swift` (helper + edits); build `//crates/wolf-macos:wolf_macos_lib`.
-4. Modify `MainWindow.swift`; build `//crates/wolf-macos:wolf_macos_lib`.
-5. Update docs + `prettier --write`.
+### 8. Implementation order (build green only after seam + consumers agree)
 
-### 8. Docs to update
+1. Reshape `EditorInset.swift`. 2. Update `PaneContainerView.swift` (all edits). 3.
+`MainWindow.swift` comments. 4. Rewrite `EditorInsetTests.swift`. 5. Docs + prettier.
+6. Run Bazel targets.
 
-- `Sources/README.md` — line 5 "Eighteen" → "Nineteen"; add `EditorInset.swift` bullet;
-  amend `PaneContainerView.swift` + `MainWindow.swift` bullets (20pt margin, consumes
-  `EditorInset`, MainWindow grows initial content by `2*padding`).
-- `Tests/README.md` — line 3 intro list add the editor-inset seam; add
-  `## WolfKeyMapTests/EditorInsetTests.swift` section.
-- `README.md` — add `EditorInset` seam paragraph; add to the `wolf_key_map` compile
-  enumeration (line ~61); update `MainWindow.swift` (line ~71) + `PaneContainerView.swift`
-  (line ~74) bullets.
+### 9. Bazel targets
 
-### 9. Test targets
+`bazelisk test //crates/wolf-macos:WolfKeyMapTests`;
+`bazelisk build //crates/wolf-macos:wolf_macos_lib` (+ optionally `:Wolf`).
 
-- `bazelisk test //crates/wolf-macos:WolfKeyMapTests`
-- `bazelisk build //crates/wolf-macos:wolf_macos_lib` (compile-verify glue).
-
-### Key correctness notes
-
-- `paintStripRow` x-translate must become `stripRect.minX` (else cmdline clipped/misaligned).
-- Do NOT double-offset in per-pane geometry helpers/hit-testers — `paneRects()` already offsets.
-- `drawDividers` compares against `originX + paneAreaWidth` / `originY + paneAreaHeight`.
+### Load-bearing details
+- `stripHeight == cmdlineStripHeight == ceil(cellHeight)` in both files — the identity relies on it.
+- `paintStatusbar` must base `textLeft` on the INSET `gRect.minX` (+ paintOffsetX), not `paneRect.minX`.
+- `paintStripRow` must use `EditorInset.padding` (stripRect.minX is now 0).
