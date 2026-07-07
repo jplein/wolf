@@ -86,6 +86,17 @@ Integration tests across the `tests/*.rs` binaries (driving a real pinned Neovim
 - a linked group (`:hi link WolfCursor Visual`) resolves to its target's effective attributes (the helper reads with `link = false`);
 - clearing both groups (`:hi clear …` + `:doautocmd ColorScheme`) falls back to all-`None`.
 
+### Copy / paste + visual mode (real Neovim)
+
+`copy_paste.rs` (Bazel target `//crates/wolf-core:copy_paste`, four tests) verifies the Edit-menu copy/paste surface against a real, hermetic nvim, reusing `start_core_with_temp_md` and polling `is_visual_mode()` across a few flushes (a stray startup-tail redraw can satisfy a single `wait_for_flush` before the mode_change lands):
+
+- `is_visual_mode_tracks_v_bar_and_ctrl_v` — a freshly opened buffer is normal mode (`is_visual_mode() == false`); each of `v`, `V`, and `<C-v>` reports visual, and `<Esc>` returns to normal;
+- `copy_visual_selection_yields_the_selected_text` — `gg0` then `v e` selects the fixture's distinctive first word, and `WolfCore::copy_visual_selection()` returns `Some(text)` containing it (pinned to nvim's visual-`y` unnamed-register semantics, synchronous);
+- `copy_outside_visual_mode_is_none` — in normal mode `copy_visual_selection()` returns `None` (the mode guard that also prevents a `y` operator-hang);
+- `paste_inserts_text_into_the_active_grid` — `WolfCore::paste("WOLFPASTE")` into an empty buffer surfaces the text on row 0 of the active grid (via `nvim_paste`).
+
+The `command.rs` unit tests (`copy`/`paste` `from_id` round-trips, spec-field pins, and the append-only `COMMAND_SPECS[14] == Copy` / `[15] == Paste` index guards, `EXPECTED_COMMAND_COUNT == 16`) are the pure in-module coverage of the registry additions (documented in [`src/README.md`](../src/README.md)).
+
 ### Ranking (pure, in-module)
 
 `rank.rs` has eighteen table-driven `#[cfg(test)]` unit tests (no fs/Neovim): empty query returns all entries MRU-first; case-insensitive matching; subsequence match and non-match exclusion; MRU outranks a stronger non-MRU match; strict-prefix beats a scattered subsequence; word splitting on separators; full-word match tops the prefix group; deterministic length/lexicographic tie-breaks; the decisive `match_start` (key 5) and `span` (key 6) tie-breaks; the multi-term AND-matching cases (space-separated terms are all required, order-independent, and extra whitespace is harmless — an entry missing any term is dropped); and the scoring-tier cases (MRU dominates a stronger non-MRU match, component-start beats scattered, contiguity beats scattered among non-component matches, and more/stronger per-term hits score higher).

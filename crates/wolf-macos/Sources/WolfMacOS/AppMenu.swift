@@ -33,6 +33,8 @@ enum AppMenu {
         static let increaseFontSize = 11
         static let decreaseFontSize = 12
         static let commandPalette = 13
+        static let copy = 14
+        static let paste = 15
     }
 
     /// The dynamic submenus `install` hands back to the coordinator: the Window
@@ -44,8 +46,8 @@ enum AppMenu {
         let openRecent: NSMenu
     }
 
-    /// Installs the standard four-menu bar (App / File / View / Window) onto
-    /// `NSApp.mainMenu`, wiring every Wolf item to `target`'s
+    /// Installs the standard five-menu bar (App / File / Edit / View / Window)
+    /// onto `NSApp.mainMenu`, wiring every Wolf item to `target`'s
     /// `handleCommandMenuItem(_:)`. Returns the Window and Open Recent submenus so
     /// the coordinator can rebuild their dynamic lists.
     static func install(target: AppDelegate) -> InstalledMenus {
@@ -54,6 +56,7 @@ enum AppMenu {
         mainMenu.addItem(appMenuItem(target: target))
         let openRecent = NSMenu(title: "Open Recent")
         mainMenu.addItem(fileMenuItem(target: target, openRecent: openRecent))
+        mainMenu.addItem(editMenuItem(target: target))
         mainMenu.addItem(viewMenuItem(target: target))
         let windowItem = windowMenuItem(target: target)
         mainMenu.addItem(windowItem)
@@ -122,6 +125,24 @@ enum AppMenu {
             commandItem(
                 title: "Close Window", tag: Tag.closeWindow, keyEquivalent: "w",
                 target: target, modifiers: [.command, .shift]))
+
+        item.submenu = menu
+        return item
+    }
+
+    /// The Edit menu (Copy `⌘c` / Paste `⌘v`). Both titles mirror
+    /// `wolf_core::COMMAND_SPECS`. Copy is enabled only in visual mode (gated by
+    /// `AppDelegate.validateMenuItem`); Paste is always enabled.
+    private static func editMenuItem(target: AppDelegate) -> NSMenuItem {
+        let item = NSMenuItem()
+        let menu = NSMenu(title: "Edit")
+
+        menu.addItem(
+            commandItem(
+                title: "Copy", tag: Tag.copy, keyEquivalent: "c", target: target))
+        menu.addItem(
+            commandItem(
+                title: "Paste", tag: Tag.paste, keyEquivalent: "v", target: target))
 
         item.submenu = menu
         return item

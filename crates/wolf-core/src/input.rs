@@ -199,6 +199,11 @@ pub enum InputEvent {
     ClosePane,
     /// Open a new empty buffer in the current window (delegated to `:enew`).
     NewBuffer,
+    /// Paste text into the active document (delegated to `nvim_paste`).
+    Paste {
+        /// The text to paste.
+        text: String,
+    },
 }
 
 /// Translates a [`KeyEvent`] into Neovim keystroke notation.
@@ -336,6 +341,7 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
         InputEvent::Chdir { path } => command(nvim, &format!("cd {}", fnameescape(path))).await,
         InputEvent::ClosePane => command(nvim, "close").await,
         InputEvent::NewBuffer => command(nvim, "enew").await,
+        InputEvent::Paste { text } => nvim_paste(nvim, text).await,
     }
 }
 
@@ -364,6 +370,21 @@ fn fnameescape(path: &Path) -> String {
 /// translation is never duplicated.
 async fn nvim_input(nvim: &Nvim, notation: String) -> Result<(), Box<CallError>> {
     let _ = nvim.call("nvim_input", vec![Value::from(notation)]).await?;
+    Ok(())
+}
+
+/// Pastes text into the active document via `nvim_paste`.
+///
+/// `nvim_paste(data, crlf, phase)` with `crlf = true` (translate CRLF) and
+/// `phase = -1` (a single, non-streamed paste) inserts correctly in normal,
+/// insert, visual, and cmdline modes — no mode branching needed.
+async fn nvim_paste(nvim: &Nvim, text: &str) -> Result<(), Box<CallError>> {
+    let _ = nvim
+        .call(
+            "nvim_paste",
+            vec![Value::from(text), Value::from(true), Value::from(-1i64)],
+        )
+        .await?;
     Ok(())
 }
 

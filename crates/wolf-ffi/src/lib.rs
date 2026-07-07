@@ -166,6 +166,10 @@ mod command_kind {
     pub const DECREASE_FONT_SIZE: u8 = 12;
     /// Open the command-palette overlay (the palette's own invoking command).
     pub const COMMAND_PALETTE: u8 = 13;
+    /// Copy the visual-mode selection to the system clipboard.
+    pub const COPY: u8 = 14;
+    /// Paste from the system clipboard into the active document.
+    pub const PASTE: u8 = 15;
 }
 
 /// The palette-row-kind discriminants packed into [`FfiCommandRow::row_kind`].
@@ -413,6 +417,17 @@ mod ffi {
         // Opens a new empty buffer in the current window via
         // `InputEvent::NewBuffer` (`:enew`).
         fn new_buffer(&self);
+        // The current visual-mode selection yanked to text (blocks briefly on
+        // the captive nvim), or the empty string when not in visual mode / the
+        // selection is empty / the core is gone. The front-end writes it to
+        // `NSPasteboard` only when non-empty.
+        fn copy_selection(&self) -> String;
+        // Pastes `text` into the active document via `InputEvent::Paste`
+        // (`nvim_paste`). A no-op when the core is gone.
+        fn paste(&self, text: String);
+        // Whether the active document is in Neovim visual mode (`v`/`V`/`<C-v>`).
+        // Gates the Edit > Copy menu item. False when the core is gone.
+        fn is_visual_mode(&self) -> bool;
         // Records this window's frame geometry into the live state store
         // (points; AppKit bottom-left global coords on macOS) at the handle's
         // `window_index`. A no-op when no store is attached.
@@ -607,7 +622,7 @@ mod ffi {
     extern "Rust" {
         type FfiCommand;
 
-        // The command kind (`command_kind::NEW_WINDOW` .. `DECREASE_FONT_SIZE`).
+        // The command kind (`command_kind::NEW_WINDOW` .. `PASTE`).
         fn kind(&self) -> u8;
     }
 
@@ -1402,6 +1417,37 @@ impl WolfCoreHandle {
         }
     }
 
+    /// The current visual-mode selection yanked to text, or the empty string
+    /// when not in visual mode / the selection is empty / the core is gone.
+    /// Blocks briefly on the captive nvim (see
+    /// [`WolfCore::copy_visual_selection`]).
+    #[must_use]
+    pub fn copy_selection(&self) -> String {
+        self.core
+            .borrow()
+            .as_ref()
+            .and_then(WolfCore::copy_visual_selection)
+            .unwrap_or_default()
+    }
+
+    /// Pastes `text` into the active document via [`InputEvent::Paste`]
+    /// (`nvim_paste`). A no-op once the core has been shut down.
+    pub fn paste(&self, text: String) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.paste(text);
+        }
+    }
+
+    /// Whether the active document is in Neovim visual mode. Gates the Edit >
+    /// Copy menu item. False once the core has been shut down.
+    #[must_use]
+    pub fn is_visual_mode(&self) -> bool {
+        self.core
+            .borrow()
+            .as_ref()
+            .is_some_and(|c| c.read_snapshot().is_visual_mode())
+    }
+
     /// Records this window's frame geometry into the live state store (points;
     /// on macOS this is `NSWindow.frame`'s AppKit bottom-left global coords),
     /// at this handle's [`window_index`](Self::window_index); a no-op when no
@@ -1650,7 +1696,7 @@ pub struct FfiCommand {
 }
 
 impl FfiCommand {
-    /// The command kind (`command_kind::NEW_WINDOW` .. `DECREASE_FONT_SIZE`).
+    /// The command kind (`command_kind::NEW_WINDOW` .. `PASTE`).
     #[must_use]
     pub fn kind(&self) -> u8 {
         self.kind
@@ -1675,6 +1721,8 @@ impl FfiCommand {
             Command::IncreaseFontSize => command_kind::INCREASE_FONT_SIZE,
             Command::DecreaseFontSize => command_kind::DECREASE_FONT_SIZE,
             Command::CommandPalette => command_kind::COMMAND_PALETTE,
+            Command::Copy => command_kind::COPY,
+            Command::Paste => command_kind::PASTE,
         };
         Self { kind }
     }

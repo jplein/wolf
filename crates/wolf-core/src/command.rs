@@ -26,7 +26,7 @@
 /// `CloseWindow`(1), `QuitApplication`(2), `HideApplication`(3),
 /// `MinimizeWindow`(4), `GoToFile`(5), `OpenFile`(6), `OpenFolder`(7),
 /// `ClosePane`(8), `NewBuffer`(9), `ResetFontSize`(10), `IncreaseFontSize`(11),
-/// `DecreaseFontSize`(12), `CommandPalette`(13). Adding a command is additive
+/// `DecreaseFontSize`(12), `CommandPalette`(13), `Copy`(14), `Paste`(15). Adding a command is additive
 /// (append a variant + a [`COMMAND_SPECS`] row); reordering is a breaking change.
 /// `CommandPalette` is the palette's own invoking command and is EXCLUDED from the
 /// palette's candidate list (a palette cannot dispatch itself).
@@ -61,6 +61,10 @@ pub enum Command {
     /// Open the command-palette overlay (its own invoking command; EXCLUDED from
     /// the palette's candidate list).
     CommandPalette,
+    /// Copy the visual-mode selection to the system clipboard.
+    Copy,
+    /// Paste from the system clipboard into the active document.
+    Paste,
 }
 
 /// The menu group a command belongs to in a native menu bar.
@@ -78,6 +82,8 @@ pub enum MenuGroup {
     View,
     /// The Window menu (Close Window / Minimize / …).
     Window,
+    /// The Edit menu (Copy / Paste / …).
+    Edit,
 }
 
 /// The canonical metadata for one [`Command`]: its enum value, its canonical
@@ -207,6 +213,20 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         title: "Command Palette…",
         menu: MenuGroup::View,
     },
+    CommandSpec {
+        command: Command::Copy,
+        id: "copy",
+        ex_command: "WolfCopy",
+        title: "Copy",
+        menu: MenuGroup::Edit,
+    },
+    CommandSpec {
+        command: Command::Paste,
+        id: "paste",
+        ex_command: "WolfPaste",
+        title: "Paste",
+        menu: MenuGroup::Edit,
+    },
 ];
 
 impl Command {
@@ -235,13 +255,23 @@ mod tests {
     use super::*;
 
     /// The total number of registered commands AFTER appending
-    /// `Command::CommandPalette` (discriminant 13). A named constant so the
-    /// magic-number lint stays quiet and the count's meaning is explicit.
-    const EXPECTED_COMMAND_COUNT: usize = 14;
+    /// `Command::Copy` (discriminant 14) and `Command::Paste` (discriminant 15)
+    /// past `Command::CommandPalette` (13). A named constant so the magic-number
+    /// lint stays quiet and the count's meaning is explicit.
+    const EXPECTED_COMMAND_COUNT: usize = 16;
 
     /// The append-only slice index (== FFI discriminant == `command_kind`) of
-    /// `Command::CommandPalette`: the LAST row of [`COMMAND_SPECS`].
+    /// `Command::CommandPalette`.
     const COMMAND_PALETTE_INDEX: usize = 13;
+
+    /// The append-only slice index (== FFI discriminant == `command_kind`) of
+    /// `Command::Copy`: the appended discriminant 14.
+    const COPY_INDEX: usize = 14;
+
+    /// The append-only slice index (== FFI discriminant == `command_kind`) of
+    /// `Command::Paste`: the appended discriminant 15 and LAST row of
+    /// [`COMMAND_SPECS`].
+    const PASTE_INDEX: usize = 15;
 
     /// `from_id` resolves the canonical `command_palette` id to the new variant.
     #[test]
@@ -264,25 +294,89 @@ mod tests {
         assert_eq!(spec.menu, MenuGroup::View, "menu group");
     }
 
-    /// Appending CommandPalette grows the registry to exactly 14 rows.
+    /// Appending Copy and Paste grows the registry to exactly 16 rows.
     #[test]
     fn command_specs_has_expected_len() {
         assert_eq!(
             COMMAND_SPECS.len(),
             EXPECTED_COMMAND_COUNT,
             "COMMAND_SPECS must hold exactly {EXPECTED_COMMAND_COUNT} rows \
-             after appending CommandPalette"
+             after appending Copy and Paste"
         );
     }
 
-    /// Append-discriminant guard: CommandPalette is the LAST row (index 13), so
-    /// the slice index equals its FFI discriminant. Reordering breaks this.
+    /// Append-discriminant guard: CommandPalette is at index 13, so the slice
+    /// index equals its FFI discriminant. Reordering breaks this.
     #[test]
-    fn command_palette_is_the_last_row() {
+    fn command_palette_is_at_index_13() {
         assert_eq!(
             COMMAND_SPECS[COMMAND_PALETTE_INDEX].command,
             Command::CommandPalette,
             "the row at index {COMMAND_PALETTE_INDEX} must be Command::CommandPalette"
+        );
+    }
+
+    /// `from_id` resolves the canonical `copy` id to the new variant.
+    #[test]
+    fn copy_id_round_trips() {
+        assert_eq!(
+            Command::from_id("copy"),
+            Some(Command::Copy),
+            "\"copy\" must resolve to Command::Copy"
+        );
+    }
+
+    /// `from_id` resolves the canonical `paste` id to the new variant.
+    #[test]
+    fn paste_id_round_trips() {
+        assert_eq!(
+            Command::from_id("paste"),
+            Some(Command::Paste),
+            "\"paste\" must resolve to Command::Paste"
+        );
+    }
+
+    /// The Copy spec pins its id, ex-command, title, and (new) Edit menu group
+    /// (the canonical registry row for the copy command).
+    #[test]
+    fn copy_spec_fields() {
+        let spec = Command::Copy.spec();
+        assert_eq!(spec.id, "copy", "id");
+        assert_eq!(spec.ex_command, "WolfCopy", "ex_command");
+        assert_eq!(spec.title, "Copy", "title");
+        assert_eq!(spec.menu, MenuGroup::Edit, "menu group");
+    }
+
+    /// The Paste spec pins its id, ex-command, title, and (new) Edit menu group
+    /// (the canonical registry row for the paste command).
+    #[test]
+    fn paste_spec_fields() {
+        let spec = Command::Paste.spec();
+        assert_eq!(spec.id, "paste", "id");
+        assert_eq!(spec.ex_command, "WolfPaste", "ex_command");
+        assert_eq!(spec.title, "Paste", "title");
+        assert_eq!(spec.menu, MenuGroup::Edit, "menu group");
+    }
+
+    /// Append-discriminant guard: Copy is the row at index 14, so the slice
+    /// index equals its FFI discriminant. Reordering breaks this.
+    #[test]
+    fn copy_is_at_index_14() {
+        assert_eq!(
+            COMMAND_SPECS[COPY_INDEX].command,
+            Command::Copy,
+            "the row at index {COPY_INDEX} must be Command::Copy"
+        );
+    }
+
+    /// Append-discriminant guard: Paste is the LAST row (index 15), so the slice
+    /// index equals its FFI discriminant. Reordering breaks this.
+    #[test]
+    fn paste_is_the_last_row() {
+        assert_eq!(
+            COMMAND_SPECS[PASTE_INDEX].command,
+            Command::Paste,
+            "the row at index {PASTE_INDEX} must be Command::Paste"
         );
     }
 }

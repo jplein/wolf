@@ -60,6 +60,10 @@ enum CommandDispatcher {
             controller?.decreaseFontSize()
         case .commandPalette:
             controller?.openCommandPalette()
+        case .copy:
+            controller?.copy()
+        case .paste:
+            controller?.paste()
         }
     }
 }

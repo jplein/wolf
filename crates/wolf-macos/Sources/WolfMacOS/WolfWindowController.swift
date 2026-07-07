@@ -472,6 +472,27 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         handle?.new_buffer()
     }
 
+    // MARK: - Edit commands
+
+    /// Copies the current visual-mode selection to the system clipboard. Yanks
+    /// the selection out of the captive Neovim (blocking briefly) and, only when
+    /// the returned text is non-empty, writes it to `NSPasteboard.general`. A
+    /// no-op outside visual mode (the Edit > Copy item is additionally disabled
+    /// there via `AppDelegate.validateMenuItem`).
+    func copy() {
+        guard let text = handle?.copy_selection().toString(), !text.isEmpty else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    /// Pastes the system clipboard's string into the active document via
+    /// `nvim_paste`. A no-op when the clipboard holds no string.
+    func paste() {
+        guard let text = NSPasteboard.general.string(forType: .string) else { return }
+        handle?.paste(text)
+    }
+
     // MARK: - View (font size) commands
 
     /// Resets this window's font size to its launch default (the View-menu Reset
@@ -533,6 +554,11 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     /// window. Read by the coordinator's menu validation to disable the Close
     /// command on the last split.
     var paneCount: Int { paneContainer?.paneCount ?? 1 }
+
+    /// Whether this window's active document is in Neovim visual mode
+    /// (`v`/`V`/`<C-v>`). Read by the coordinator's menu validation to enable
+    /// the Edit > Copy command only when there is a selection to copy.
+    var isVisualMode: Bool { handle?.is_visual_mode() ?? false }
 
     /// Raises and activates this window (the Window-menu dynamic list item's
     /// action, routed by the coordinator from the item's `windowIndex` tag).

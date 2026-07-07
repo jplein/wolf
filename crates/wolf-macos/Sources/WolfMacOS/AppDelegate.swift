@@ -234,16 +234,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     /// Menu validation: disables the Close (`.closePane`) command when the key
-    /// window is on its LAST split (`:close` would error, E444). Every other item
-    /// stays enabled.
+    /// window is on its LAST split (`:close` would error, E444), and disables the
+    /// Copy (`.copy`) command unless the key window is in visual mode (there is
+    /// no selection to copy otherwise). Every other item stays enabled.
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        if item.action == #selector(handleCommandMenuItem(_:)),
-            CommandKind(ffi: UInt8(truncatingIfNeeded: item.tag)) == .closePane
-        {
-            let keyController = controllers.first { $0.owns(NSApp.keyWindow) }
+        guard item.action == #selector(handleCommandMenuItem(_:)) else { return true }
+        let kind = CommandKind(ffi: UInt8(truncatingIfNeeded: item.tag))
+        let keyController = controllers.first { $0.owns(NSApp.keyWindow) }
+        switch kind {
+        case .closePane:
             return (keyController?.paneCount ?? 0) > 1
+        case .copy:
+            return keyController?.isVisualMode ?? false
+        default:
+            return true
         }
-        return true
     }
 
     /// Builds a controller wired to this coordinator and the shared metrics/config.

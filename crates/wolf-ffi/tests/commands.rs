@@ -22,11 +22,11 @@
 //! NEW_WINDOW = 0, CLOSE_WINDOW = 1, QUIT_APPLICATION = 2, HIDE_APPLICATION = 3,
 //! MINIMIZE_WINDOW = 4, GO_TO_FILE = 5, OPEN_FILE = 6, OPEN_FOLDER = 7,
 //! CLOSE_PANE = 8, NEW_BUFFER = 9, RESET_FONT_SIZE = 10, INCREASE_FONT_SIZE = 11,
-//! DECREASE_FONT_SIZE = 12, COMMAND_PALETTE = 13 (the `wolf_core::Command`
-//! variant order). These local consts MUST match `mod command_kind` in
-//! `wolf-ffi/src/lib.rs` and the Swift `CommandKind` port — exactly how `panes.rs`
-//! re-declares `INTENT_KIND_SPLIT` locally as a contract guard (the guard array
-//! below asserts contiguous 0..=13).
+//! DECREASE_FONT_SIZE = 12, COMMAND_PALETTE = 13, COPY = 14, PASTE = 15 (the
+//! `wolf_core::Command` variant order). These local consts MUST match `mod
+//! command_kind` in `wolf-ffi/src/lib.rs` and the Swift `CommandKind` port —
+//! exactly how `panes.rs` re-declares `INTENT_KIND_SPLIT` locally as a contract
+//! guard (the guard array below asserts contiguous 0..=15).
 //!
 //! ## What this asserts
 //!
@@ -92,8 +92,12 @@ const CMD_KIND_RESET_FONT_SIZE: u8 = 10;
 const CMD_KIND_INCREASE_FONT_SIZE: u8 = 11;
 /// `FfiCommand::kind()` for Decrease Font Size.
 const CMD_KIND_DECREASE_FONT_SIZE: u8 = 12;
-/// `FfiCommand::kind()` for Command Palette (the appended discriminant 13).
+/// `FfiCommand::kind()` for Command Palette (discriminant 13).
 const CMD_KIND_COMMAND_PALETTE: u8 = 13;
+/// `FfiCommand::kind()` for Copy (the appended discriminant 14, Edit menu).
+const CMD_KIND_COPY: u8 = 14;
+/// `FfiCommand::kind()` for Paste (the appended discriminant 15, Edit menu).
+const CMD_KIND_PASTE: u8 = 15;
 
 /// Builds a printable-character `FfiKeyEvent` (kind=Char) for `c`, all modifiers
 /// false (the already-resolved glyph rides in `ch`). Same as `panes.rs`.
@@ -160,8 +164,8 @@ fn commands_drain_close_and_minimize() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // Discriminant-contract guard: the local consts MUST be contiguous 0..=13 in
-    // variant order (mirrors `mod command_kind`). Referencing all fourteen here also
+    // Discriminant-contract guard: the local consts MUST be contiguous 0..=15 in
+    // variant order (mirrors `mod command_kind`). Referencing all sixteen here also
     // keeps them from tripping dead-code lints.
     assert_eq!(
         [
@@ -179,9 +183,11 @@ fn commands_drain_close_and_minimize() {
             CMD_KIND_INCREASE_FONT_SIZE,
             CMD_KIND_DECREASE_FONT_SIZE,
             CMD_KIND_COMMAND_PALETTE,
+            CMD_KIND_COPY,
+            CMD_KIND_PASTE,
         ],
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
-        "command_kind discriminants must be contiguous 0..=13 in Command variant order"
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        "command_kind discriminants must be contiguous 0..=15 in Command variant order"
     );
 
     let init_lua = common::init_lua_path();
@@ -249,6 +255,20 @@ fn commands_drain_close_and_minimize() {
     // appended discriminant 13.
     send_ex_command(&handle, ":WolfCommandPalette");
     poll_for_command_kind(&handle, CMD_KIND_COMMAND_PALETTE, ":WolfCommandPalette");
+
+    // --- 3e. :WolfCopy<CR> -> an FfiCommand with kind() == COPY ---------------
+    // A pure FFI drain: nothing acts on it here (the front-end that would write the
+    // yanked selection to NSPasteboard is absent). This proves `:WolfCopy` is
+    // auto-registered as a COMMAND_SPECS row and drains the appended discriminant 14.
+    send_ex_command(&handle, ":WolfCopy");
+    poll_for_command_kind(&handle, CMD_KIND_COPY, ":WolfCopy");
+
+    // --- 3f. :WolfPaste<CR> -> an FfiCommand with kind() == PASTE -------------
+    // A pure FFI drain: nothing acts on it here (the front-end that would read
+    // NSPasteboard and call `paste` is absent). This proves `:WolfPaste` is
+    // auto-registered as a COMMAND_SPECS row and drains the appended discriminant 15.
+    send_ex_command(&handle, ":WolfPaste");
+    poll_for_command_kind(&handle, CMD_KIND_PASTE, ":WolfPaste");
 
     // --- 4. Shutdown: clean teardown ----------------------------------------
     handle.shutdown();

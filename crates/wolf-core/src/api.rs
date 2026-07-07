@@ -361,6 +361,32 @@ impl WolfCore {
         }
     }
 
+    /// Copies the current visual-mode selection to text, or `None` if there is
+    /// nothing to copy.
+    ///
+    /// Blocks briefly on the captive nvim to yank the selection (see
+    /// [`crate::nvim::NvimProcess::yank_visual_selection`]) via `runtime.block_on`
+    /// (same pattern as [`resolve_search_root`](Self::resolve_search_root)). An
+    /// RPC error, a `None` result (not in visual mode), or an empty selection all
+    /// map to `None`, so the front-end only writes real text to the clipboard.
+    #[must_use]
+    pub fn copy_visual_selection(&self) -> Option<String> {
+        match self.runtime.block_on(self.nvim.yank_visual_selection()) {
+            Ok(Some(text)) if !text.is_empty() => Some(text),
+            Ok(_) => None,
+            Err(e) => {
+                tracing::warn!("copy_visual_selection failed: {e}");
+                None
+            }
+        }
+    }
+
+    /// Pastes `text` into the active document (fire-and-forget via
+    /// [`InputEvent::Paste`]).
+    pub fn paste(&self, text: String) {
+        self.send_input(InputEvent::Paste { text });
+    }
+
     /// Drains and returns all pending layout intents (in arrival order).
     ///
     /// The front-end calls this on each wake to consume any `wolf_layout` intents

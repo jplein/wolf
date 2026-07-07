@@ -206,6 +206,40 @@ impl NvimProcess {
         }
     }
 
+    /// Yanks the current visual-mode selection and returns its text.
+    ///
+    /// Runs ONE mode-guarded static Lua snippet via `nvim_exec_lua` (no string
+    /// interpolation, so no injection hazard). The snippet returns `nil` unless
+    /// the current mode is one of visual (`v`), visual-line (`V`), or
+    /// visual-block (`<C-v>` = `"\22"`); otherwise it performs a synchronous
+    /// yank (`nvim_feedkeys('y', 'nx', false)` — `x` drains typeahead so the
+    /// yank completes before the call returns) and returns the unnamed register
+    /// (`getreg('"')`), matching vim's visual-`y` semantics.
+    ///
+    /// The mode guard prevents a `y` operator-pending hang if this is invoked
+    /// outside visual mode. `as_str` → `Some`, `Nil`/absent → `None`.
+    pub async fn yank_visual_selection(&self) -> Result<Option<String>, NvimError> {
+        const YANK_LUA: &str = "\
+            local mode = vim.api.nvim_get_mode().mode\n\
+            if mode ~= 'v' and mode ~= 'V' and mode ~= '\\22' then\n\
+                return vim.NIL\n\
+            end\n\
+            vim.api.nvim_feedkeys('y', 'nx', false)\n\
+            return vim.fn.getreg('\"')";
+
+        let value = self
+            .nvim
+            .call(
+                "nvim_exec_lua",
+                vec![Value::from(YANK_LUA), Value::Array(vec![])],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+        Ok(value.as_str().map(ToString::to_string))
+    }
+
     /// Installs the current-file tracking autocmd inside the captive nvim.
     ///
     /// Looks up this RPC channel's id via `nvim_get_api_info` (which returns

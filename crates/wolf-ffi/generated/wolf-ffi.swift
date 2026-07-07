@@ -332,6 +332,18 @@ extension WolfCoreHandleRef {
         __swift_bridge__$WolfCoreHandle$new_buffer(ptr)
     }
 
+    public func copy_selection() -> RustString {
+        RustString(ptr: __swift_bridge__$WolfCoreHandle$copy_selection(ptr))
+    }
+
+    public func paste<GenericIntoRustString: IntoRustString>(_ text: GenericIntoRustString) {
+        __swift_bridge__$WolfCoreHandle$paste(ptr, { let rustString = text.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
+    }
+
+    public func is_visual_mode() -> Bool {
+        __swift_bridge__$WolfCoreHandle$is_visual_mode(ptr)
+    }
+
     public func state_set_geometry(_ x: Double, _ y: Double, _ width: Double, _ height: Double) {
         __swift_bridge__$WolfCoreHandle$state_set_geometry(ptr, x, y, width, height)
     }

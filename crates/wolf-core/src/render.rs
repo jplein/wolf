@@ -540,6 +540,19 @@ impl Snapshot {
         0
     }
 
+    /// Returns `true` when the current cursor mode is Neovim visual mode.
+    ///
+    /// Resolves `mode_infos[cursor.mode_idx]` and matches `name == "visual"`.
+    /// Neovim reports a single `"visual"` cursor-mode-info for all of `v` / `V`
+    /// / `<C-v>` (charwise/linewise/blockwise); this deliberately excludes
+    /// `"visual_select"` (select mode).
+    #[must_use]
+    pub fn is_visual_mode(&self) -> bool {
+        self.mode_infos
+            .get(self.cursor.mode_idx)
+            .is_some_and(|mode| mode.name == "visual")
+    }
+
     /// Returns the active grid (see [`Snapshot::active_grid_id`]), or a shared
     /// empty `0x0` grid if no grid is present.
     #[must_use]
