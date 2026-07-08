@@ -17,6 +17,7 @@
 //! - [`render`]: the toolkit-agnostic render-state model and shared snapshot.
 //! - [`command`]: the canonical, GUI-free command registry ([`Command`]).
 //! - [`command_mru`]: the global command-palette MRU cache (SQLite).
+//! - [`buffer_picker`]: pure candidate assembly + ranking for the buffer picker.
 //! - [`palette`]: pure candidate assembly + ranking for the command palette.
 //! - [`pane_status`]: pure display-string math for the per-pane statusbar.
 //! - [`layout`]: the Neovim->shell layout-intent types ([`LayoutIntent`]).
@@ -34,6 +35,7 @@
 //! - [`state`]: the GUI-free application-state persistence ([`StateStore`]).
 
 pub mod api;
+pub mod buffer_picker;
 pub mod command;
 pub mod command_mru;
 pub mod config;
@@ -52,6 +54,7 @@ pub mod state;
 pub mod tree;
 
 pub use api::{CoreConfig, CoreError, SnapshotReadGuard, WolfCore};
+pub use buffer_picker::{rank_buffers, BufInfo, BufferRow};
 pub use command::{Command, CommandSpec, MenuGroup, COMMAND_SPECS};
 pub use command_mru::{CommandMru, COMMAND_MRU_LIMIT};
 pub use config::{default_config, load_or_create, preferences_dir, WolfConfig};

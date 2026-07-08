@@ -38,6 +38,14 @@ The real-nvim coverage of the copy/paste + visual-mode handle surface (`is_visua
 bazel test //crates/wolf-ffi:copy_paste
 ```
 
+## `buffer_picker.rs`
+
+The real-nvim coverage of the buffer-picker session + view round-trip (Bazel target `//crates/wolf-ffi:buffer_picker`) — **no mocks**, modeled on `command_palette.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate, same `read_frame` live-grid polling). A single `#[test]` (`buffer_picker_lists_switches_and_restores_view`): it seeds a temp cwd with a few `.md` files, opens buffers A then B a strict second apart (a `sleep(1100ms)` straddled by `wait_for_active_filename` before/after, so B gets a later `lastused` second than A — `getbufinfo().lastused` has 1-second resolution, and equal `lastused` correctly tie-breaks by `bufnr` ASC per the headless `buffer_rank` spec), plus a `:badd` buffer C that is listed-but-unloaded (proving `list_buffers` filters by `buflisted`, not loadedness) and an unlisted buffer that must NOT appear. It asserts `buffer_picker().ranked("", N)` lists the `buflisted` buffers MRU-first (B before A before C), switches the active pane via `switch_buffer(bufnr)` (observing the change through `FfiFrame`), and checks the per-`(winid, bufnr)` VIEW round-trip: scroll buffer A (capture `topline() > 0`), switch to B, switch back to A, and assert the topline is RESTORED; a buffer the pane never showed opens at the top (`topline() == 0`).
+
+```sh
+bazel test //crates/wolf-ffi:buffer_picker
+```
+
 ## `pane_status.rs`
 
 The real-nvim coverage of the per-pane statusbar bridge surface (Bazel target `//crates/wolf-ffi:pane_status`) — **no mocks**, modeled on `panes.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate via `nvim_bin_or_skip`). It seeds a fresh temp cwd with `alpha.md` / `beta.md`, calls `wolf_ffi_start` there, polls `read_frame()` until attached and `windows()` down to one editor grid, then `:e alpha.md` and polls `pane_status_for_grid(grid).filename()` until it reports `alpha.md` with a non-empty `display_path()`. After a `:vsplit` (polling `windows()` to two grids) and `:e beta.md` in the new window, it polls until the two window grids report DISTINCT filenames (`alpha.md` vs `beta.md`), proving the status is per-WINDOW rather than a single global value.

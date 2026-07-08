@@ -35,7 +35,7 @@ Shared helpers used across the test binaries:
 
 ## Coverage
 
-Integration tests across the `tests/*.rs` binaries (driving a real pinned Neovim and/or real SQLite/filesystem — plus the fully headless `state_unit.rs`, `recent_dirs.rs`, `command_mru.rs`, `palette_rank.rs`, `rank_bounded.rs`, and `pane_status_unit.rs`, which need neither Neovim nor a filesystem), plus the pure in-module `#[cfg(test)]` unit tests (eighteen for the ranking function in `rank.rs`, ten for layout-intent parsing in `layout.rs`, and the `config.rs` / `tree.rs` suites documented in [`src/README.md`](../src/README.md)).
+Integration tests across the `tests/*.rs` binaries (driving a real pinned Neovim and/or real SQLite/filesystem — plus the fully headless `state_unit.rs`, `recent_dirs.rs`, `command_mru.rs`, `palette_rank.rs`, `buffer_rank.rs`, `rank_bounded.rs`, and `pane_status_unit.rs`, which need neither Neovim nor a filesystem), plus the pure in-module `#[cfg(test)]` unit tests (eighteen for the ranking function in `rank.rs`, ten for layout-intent parsing in `layout.rs`, and the `config.rs` / `tree.rs` suites documented in [`src/README.md`](../src/README.md)).
 
 ### File picker (real SQLite / filesystem / git / Neovim — no mocks)
 
@@ -95,7 +95,7 @@ Integration tests across the `tests/*.rs` binaries (driving a real pinned Neovim
 - `copy_outside_visual_mode_is_none` — in normal mode `copy_visual_selection()` returns `None` (the mode guard that also prevents a `y` operator-hang);
 - `paste_inserts_text_into_the_active_grid` — `WolfCore::paste("WOLFPASTE")` into an empty buffer surfaces the text on row 0 of the active grid (via `nvim_paste`).
 
-The `command.rs` unit tests (`copy`/`paste` `from_id` round-trips, spec-field pins, and the append-only `COMMAND_SPECS[14] == Copy` / `[15] == Paste` index guards, `EXPECTED_COMMAND_COUNT == 16`) are the pure in-module coverage of the registry additions (documented in [`src/README.md`](../src/README.md)).
+The `command.rs` unit tests (`copy`/`paste`/`buffer_picker` `from_id` round-trips, spec-field pins, and the append-only `COMMAND_SPECS[14] == Copy` / fixed-index `[15] == Paste` / last-row `[16] == BufferPicker` index guards, `EXPECTED_COMMAND_COUNT == 17`) are the pure in-module coverage of the registry additions (documented in [`src/README.md`](../src/README.md)).
 
 ### Ranking (pure, in-module)
 
@@ -104,6 +104,10 @@ The `command.rs` unit tests (`copy`/`paste` `from_id` round-trips, spec-field pi
 ### Bounded ranking equivalence (headless)
 
 `rank_bounded.rs` (Bazel target `//crates/wolf-core:rank_bounded`, nine tests, NO nvim / fs / GUI — the pure analog of `palette_rank.rs`) is the headless equivalence guard for the picker's BOUNDED top-N ranking. Its one property, asserted structurally with `assert_eq!` across every case, is that `rank_matches_top_n(query, &entries, n)` equals `rank_matches(query, &entries).into_iter().take(n).collect()` for all inputs — never re-deriving the expected order by hand, so the bounded heap's `index` final-tiebreak is pinned to the unbounded stable-sort `take(n)`. Cases span the empty and all-whitespace query (MRU-mixed set), a single term, multi-term AND, order-independence, no-match, a scoring tie group straddling the `n` boundary, an MRU entry weakly beating a stronger non-MRU match, `n` larger than the match count, `n == 0`, `n == 1`, a large synthetic in-memory set at `n = 200`, and an ASCII-fold parity check with a non-ASCII display/query char.
+
+### Buffer ranking (headless)
+
+`buffer_rank.rs` (Bazel target `//crates/wolf-core:buffer_rank`, five tests, NO nvim / fs / GUI — the pure analog of `palette_rank.rs`) exercises the IO-free `rank_buffers` directly: an empty query lists all buffers MRU-first (`lastused` DESC, current buffer at index 0); a fuzzy query filters + keeps the MRU-first order among matches; the display projection covers the cwd-relative, absolute-fallback, and `[No Name]` cases; the result truncates to `max`; and equal `lastused` values tie-break by `bufnr` ASCending (the invariant the FFI test's 1-second-resolution timing must respect).
 
 ### Layout-intent parsing (pure, in-module)
 

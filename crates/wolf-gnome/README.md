@@ -151,6 +151,7 @@ The window, the file picker, the file-tree sidebar, and native split panes exist
 - HiDPI scale handling (the cell-measurement probe is 96-dpi).
 - IME / `IMContext` composition input.
 - Floating windows (`win_float_pos`) and windows opened by non-overridden paths (`:help`, quickfix, preview, `:diffsplit`) — see the split-pane known limitations in [`src/README.md`](src/README.md).
+- A GTK **buffer-picker** overlay (parity with the macOS `BufferPickerView`, ⌘E). Deferred like the command-palette overlay: `wolf-gnome` still gets the `Command::BufferPicker` drain and the pure `wolf_core::rank_buffers` / `WolfCore::list_buffers` / `switch_buffer` API for free (it consumes `wolf-core` directly), but no GTK overlay is wired this change.
 
 ## Note on the GUI denylist
 

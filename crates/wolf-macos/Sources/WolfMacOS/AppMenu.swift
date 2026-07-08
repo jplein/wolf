@@ -35,6 +35,7 @@ enum AppMenu {
         static let commandPalette = 13
         static let copy = 14
         static let paste = 15
+        static let bufferPicker = 16
     }
 
     /// The dynamic submenus `install` hands back to the coordinator: the Window
@@ -188,6 +189,10 @@ enum AppMenu {
         menu.addItem(
             commandItem(
                 title: "Command Palette…", tag: Tag.commandPalette, keyEquivalent: "p",
+                target: target))
+        menu.addItem(
+            commandItem(
+                title: "Buffer Picker…", tag: Tag.bufferPicker, keyEquivalent: "e",
                 target: target))
         menu.addItem(.separator())
         let fullScreen = NSMenuItem(

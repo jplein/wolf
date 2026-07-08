@@ -107,6 +107,19 @@ The helper:
 
 Both faces `rpcnotify` the same `wolf_command` channel with the canonical `id`; core resolves it via `Command::from_id`, folds it onto a drainable queue (no `seq` bump), and wakes the front-end, which maps each command to a native action (on macOS via the NSMenu / `CommandDispatcher`). An unknown id is dropped by core. The captive nvim stays hermetic: only Wolf's own bundled config uses these faces this cut — a user-config keybinding hook is **deferred**. The channel id and command list are passed as Lua **varargs**, never interpolated.
 
+### Buffer-picker view tracking — `_G.wolf_setup_view_tracking()`
+
+The FINAL global helper `wolf-core` invokes over RPC, **after** command registration (see [`src/nvim.rs`](../../crates/wolf-core/src/nvim.rs)'s `setup_view_tracking`). It backs the buffer picker's **per-pane scroll/cursor restoration**, and it is a deliberate ASYMMETRY with every helper above: it takes **NO channel id** and emits **NO `rpcnotify`** — it maintains an in-nvim view cache and defines the switch helper that reads it, so **no view/scroll payload ever crosses the FFI boundary** and core stays view-agnostic (it is NOT an out-of-band notification into the snapshot).
+
+The helper holds an upvalue `local view_cache = {}` keyed `view_cache[win][buf] = winsaveview()` (a per-`(winid, bufnr)` cache — each pane remembers its OWN scroll of a shared buffer), and:
+
+- creates a `WolfView` augroup (`clear = true`, so re-invoking is idempotent);
+- registers a `BufLeave` / `WinLeave` autocmd that captures the view of the pane/buffer being LEFT: `win = nvim_get_current_win()`, `buf = nvim_win_get_buf(win)`, `view_cache[win][buf] = vim.fn.winsaveview()`;
+- registers a `WinClosed` autocmd that PRUNES a closed window's whole cache (`view_cache[tonumber(ev.match)] = nil`, keyed on the closing window id);
+- defines `_G.wolf_switch_buffer(win, buf)` (closing over `view_cache`), the helper `wolf-core`'s `InputEvent::SwitchBuffer` invokes via `nvim_exec_lua("wolf_switch_buffer(...)", [win, bufnr])`.
+
+`_G.wolf_switch_buffer(win, buf)` does a **window-scoped** `nvim_win_set_buf(win, buf)` (NOT `:edit` — so it does not disturb `current_file` / the file-MRU or re-read from disk), then restores the pane's view keyed on `(win, buf)`: if `view_cache[win][buf]` exists it `nvim_win_call`s `winrestview(cached)`, ELSE it forces the top of the buffer (`winrestview{ lnum = 1, col = 0, topline = 1, leftcol = 0 }`). There is **NO per-`bufnr` fallback**: a buffer seen only in OTHER panes opens at the top, never borrowing another pane's scroll. The whole body is wrapped in `pcall`, so a stale `bufnr` degrades to a no-op. The macOS `BufferPickerView` activation reaches this through `WolfCoreHandle::switch_buffer(bufnr)` (which resolves the active window live).
+
 ## Deferred
 
 Plugin baking is no longer fully deferred: **orlando** is the first vendored plugin (bundled into the macOS `.app` via `//bazel/orlando`, loaded conditionally as described above), and **lighthouse** is the second vendored asset — a **colorscheme** (bundled via `//bazel/lighthouse`, activated conditionally as described above). A Markdown LSP (e.g. `marksman`) and a formatter remain **deferred to a later phase** (full plugin baking via `wrapNeovim`). Phase 1 otherwise relies on Neovim's built-in markdown syntax highlighting and the `markdown` / `markdown_inline` treesitter parsers, which is enough to exercise the redraw/highlight pipeline and its tests.

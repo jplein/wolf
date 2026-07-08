@@ -26,7 +26,8 @@
 /// `CloseWindow`(1), `QuitApplication`(2), `HideApplication`(3),
 /// `MinimizeWindow`(4), `GoToFile`(5), `OpenFile`(6), `OpenFolder`(7),
 /// `ClosePane`(8), `NewBuffer`(9), `ResetFontSize`(10), `IncreaseFontSize`(11),
-/// `DecreaseFontSize`(12), `CommandPalette`(13), `Copy`(14), `Paste`(15). Adding a command is additive
+/// `DecreaseFontSize`(12), `CommandPalette`(13), `Copy`(14), `Paste`(15),
+/// `BufferPicker`(16). Adding a command is additive
 /// (append a variant + a [`COMMAND_SPECS`] row); reordering is a breaking change.
 /// `CommandPalette` is the palette's own invoking command and is EXCLUDED from the
 /// palette's candidate list (a palette cannot dispatch itself).
@@ -65,6 +66,8 @@ pub enum Command {
     Copy,
     /// Paste from the system clipboard into the active document.
     Paste,
+    /// Open the buffer-picker overlay to fuzzy-switch among open buffers.
+    BufferPicker,
 }
 
 /// The menu group a command belongs to in a native menu bar.
@@ -227,6 +230,13 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         title: "Paste",
         menu: MenuGroup::Edit,
     },
+    CommandSpec {
+        command: Command::BufferPicker,
+        id: "buffer_picker",
+        ex_command: "WolfBufferPicker",
+        title: "Buffer Picker…",
+        menu: MenuGroup::View,
+    },
 ];
 
 impl Command {
@@ -255,10 +265,10 @@ mod tests {
     use super::*;
 
     /// The total number of registered commands AFTER appending
-    /// `Command::Copy` (discriminant 14) and `Command::Paste` (discriminant 15)
-    /// past `Command::CommandPalette` (13). A named constant so the magic-number
-    /// lint stays quiet and the count's meaning is explicit.
-    const EXPECTED_COMMAND_COUNT: usize = 16;
+    /// `Command::Copy` (14), `Command::Paste` (15), and `Command::BufferPicker`
+    /// (discriminant 16) past `Command::CommandPalette` (13). A named constant so
+    /// the magic-number lint stays quiet and the count's meaning is explicit.
+    const EXPECTED_COMMAND_COUNT: usize = 17;
 
     /// The append-only slice index (== FFI discriminant == `command_kind`) of
     /// `Command::CommandPalette`.
@@ -269,9 +279,14 @@ mod tests {
     const COPY_INDEX: usize = 14;
 
     /// The append-only slice index (== FFI discriminant == `command_kind`) of
-    /// `Command::Paste`: the appended discriminant 15 and LAST row of
-    /// [`COMMAND_SPECS`].
+    /// `Command::Paste`: the appended discriminant 15. No longer the last row
+    /// after `BufferPicker` is appended at 16.
     const PASTE_INDEX: usize = 15;
+
+    /// The append-only slice index (== FFI discriminant == `command_kind`) of
+    /// `Command::BufferPicker`: the appended discriminant 16 and LAST row of
+    /// [`COMMAND_SPECS`].
+    const BUFFER_PICKER_INDEX: usize = 16;
 
     /// `from_id` resolves the canonical `command_palette` id to the new variant.
     #[test]
@@ -294,14 +309,15 @@ mod tests {
         assert_eq!(spec.menu, MenuGroup::View, "menu group");
     }
 
-    /// Appending Copy and Paste grows the registry to exactly 16 rows.
+    /// Appending Copy, Paste, and BufferPicker grows the registry to exactly 17
+    /// rows.
     #[test]
     fn command_specs_has_expected_len() {
         assert_eq!(
             COMMAND_SPECS.len(),
             EXPECTED_COMMAND_COUNT,
             "COMMAND_SPECS must hold exactly {EXPECTED_COMMAND_COUNT} rows \
-             after appending Copy and Paste"
+             after appending Copy, Paste, and BufferPicker"
         );
     }
 
@@ -369,14 +385,52 @@ mod tests {
         );
     }
 
-    /// Append-discriminant guard: Paste is the LAST row (index 15), so the slice
-    /// index equals its FFI discriminant. Reordering breaks this.
+    /// Append-discriminant guard: Paste stays at fixed index 15 (no longer the
+    /// last row after BufferPicker is appended at 16), so the slice index still
+    /// equals its FFI discriminant. Reordering breaks this.
     #[test]
-    fn paste_is_the_last_row() {
+    fn paste_is_at_index_15() {
         assert_eq!(
             COMMAND_SPECS[PASTE_INDEX].command,
             Command::Paste,
             "the row at index {PASTE_INDEX} must be Command::Paste"
+        );
+    }
+
+    /// `from_id` resolves the canonical `buffer_picker` id to the new variant.
+    #[test]
+    fn buffer_picker_id_round_trips() {
+        assert_eq!(
+            Command::from_id("buffer_picker"),
+            Some(Command::BufferPicker),
+            "\"buffer_picker\" must resolve to Command::BufferPicker"
+        );
+    }
+
+    /// The BufferPicker spec pins its id, ex-command, title, and View menu group
+    /// (the canonical registry row for the buffer-picker command).
+    #[test]
+    fn buffer_picker_spec_fields() {
+        let spec = Command::BufferPicker.spec();
+        assert_eq!(spec.id, "buffer_picker", "id");
+        assert_eq!(spec.ex_command, "WolfBufferPicker", "ex_command");
+        assert_eq!(spec.title, "Buffer Picker…", "title");
+        assert_eq!(spec.menu, MenuGroup::View, "menu group");
+    }
+
+    /// Append-discriminant guard: BufferPicker is the LAST row (index 16), so the
+    /// slice index equals its FFI discriminant. Reordering breaks this.
+    #[test]
+    fn buffer_picker_is_the_last_row() {
+        assert_eq!(
+            COMMAND_SPECS[BUFFER_PICKER_INDEX].command,
+            Command::BufferPicker,
+            "the row at index {BUFFER_PICKER_INDEX} must be Command::BufferPicker"
+        );
+        assert_eq!(
+            BUFFER_PICKER_INDEX,
+            COMMAND_SPECS.len() - 1,
+            "BufferPicker must be the FINAL row of COMMAND_SPECS"
         );
     }
 }

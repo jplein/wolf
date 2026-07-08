@@ -64,6 +64,8 @@ enum CommandDispatcher {
             controller?.copy()
         case .paste:
             controller?.paste()
+        case .bufferPicker:
+            controller?.openBufferPicker()
         }
     }
 }

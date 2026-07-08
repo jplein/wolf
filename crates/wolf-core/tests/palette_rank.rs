@@ -32,8 +32,10 @@ use wolf_core::{rank_palette, Command, PaletteRow, PaletteRowKind, PaletteWindow
 
 /// The number of STATIC rows the palette assembles: every `COMMAND_SPECS` row
 /// EXCEPT `Command::CommandPalette` (which is excluded from its own list). With
-/// 16 registered commands (Copy/Paste appended at 14/15) that is 15 static rows.
-const STATIC_COMMAND_COUNT: usize = 15;
+/// 17 registered commands (Copy/Paste/BufferPicker appended at 14/15/16) that is
+/// 16 static rows — BufferPicker is a NEW palette static row (only CommandPalette
+/// is excluded).
+const STATIC_COMMAND_COUNT: usize = 16;
 
 /// A `max` large enough to never truncate the assembled candidate set in tests
 /// that assert on membership rather than truncation.
@@ -88,6 +90,15 @@ fn command_palette_is_excluded_and_static_rows_present() {
     assert_eq!(
         static_rows, STATIC_COMMAND_COUNT,
         "exactly {STATIC_COMMAND_COUNT} static rows (all commands but CommandPalette)"
+    );
+
+    // BufferPicker (the appended discriminant 16) is a REACHABLE palette static
+    // row: it is NOT the palette's own invoking command, so it must be present.
+    let buffer_picker = row_for_command(&rows, Command::BufferPicker)
+        .expect("BufferPicker must appear as a palette static row");
+    assert_eq!(
+        buffer_picker.display, "Buffer Picker…",
+        "the BufferPicker static row's display is its registry title"
     );
 }
 

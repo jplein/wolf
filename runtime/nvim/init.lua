@@ -437,3 +437,55 @@ function _G.wolf_setup_commands(chan, commands)
 		vim.api.nvim_create_user_command(ex_command, fire, { nargs = 0, force = true })
 	end
 end
+
+-- Per-pane view tracking for the buffer picker: wolf-core invokes this over RPC
+-- after the command setup. Unlike the other setups it takes NO channel id and
+-- emits NO rpcnotify — it only maintains an in-nvim (winid, bufnr) -> winsaveview
+-- cache and defines the wolf_switch_buffer helper that reads it, so no
+-- view/scroll payload ever crosses the FFI boundary. The cache is an upvalue so
+-- wolf_switch_buffer closes over it.
+function _G.wolf_setup_view_tracking()
+	local view_cache = {}
+
+	local group = vim.api.nvim_create_augroup("WolfView", { clear = true })
+
+	-- Capture the view of the pane/buffer being LEFT, keyed by (win, buf).
+	vim.api.nvim_create_autocmd({ "BufLeave", "WinLeave" }, {
+		group = group,
+		callback = function()
+			local win = vim.api.nvim_get_current_win()
+			local buf = vim.api.nvim_win_get_buf(win)
+			view_cache[win] = view_cache[win] or {}
+			view_cache[win][buf] = vim.fn.winsaveview()
+		end,
+	})
+
+	-- Prune a window's cache when it closes (ev.match is the closing window id).
+	vim.api.nvim_create_autocmd("WinClosed", {
+		group = group,
+		callback = function(ev)
+			view_cache[tonumber(ev.match)] = nil
+		end,
+	})
+
+	-- Switch window `win` to buffer `buf` (window-scoped, NOT :edit), then restore
+	-- that pane's saved view for that buffer; if the pane never showed the buffer,
+	-- force the top of the buffer. Keyed on (win, buf) so each pane remembers its
+	-- OWN scroll of a shared buffer, and never borrows another pane's scroll.
+	-- Wrapped in pcall so a stale bufnr degrades to a no-op.
+	function _G.wolf_switch_buffer(win, buf)
+		pcall(function()
+			vim.api.nvim_win_set_buf(win, buf)
+			if view_cache[win] and view_cache[win][buf] then
+				local view = view_cache[win][buf]
+				vim.api.nvim_win_call(win, function()
+					vim.fn.winrestview(view)
+				end)
+			else
+				vim.api.nvim_win_call(win, function()
+					vim.fn.winrestview({ lnum = 1, col = 0, topline = 1, leftcol = 0 })
+				end)
+			end
+		end)
+	end
+end

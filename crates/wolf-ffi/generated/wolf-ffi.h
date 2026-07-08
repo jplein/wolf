@@ -165,6 +165,30 @@ void* __swift_bridge__$Vec_FfiCommandRow$get_mut(void* vec_ptr, uintptr_t index)
 uintptr_t __swift_bridge__$Vec_FfiCommandRow$len(void* vec_ptr);
 void* __swift_bridge__$Vec_FfiCommandRow$as_ptr(void* vec_ptr);
 
+typedef struct FfiBufferPicker FfiBufferPicker;
+void __swift_bridge__$FfiBufferPicker$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiBufferPicker$new(void);
+void __swift_bridge__$Vec_FfiBufferPicker$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiBufferPicker$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiBufferPicker$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiBufferPicker$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiBufferPicker$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiBufferPicker$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiBufferPicker$as_ptr(void* vec_ptr);
+
+typedef struct FfiBufferRow FfiBufferRow;
+void __swift_bridge__$FfiBufferRow$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiBufferRow$new(void);
+void __swift_bridge__$Vec_FfiBufferRow$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiBufferRow$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiBufferRow$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiBufferRow$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiBufferRow$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiBufferRow$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiBufferRow$as_ptr(void* vec_ptr);
+
 typedef struct FfiWinInfo FfiWinInfo;
 void __swift_bridge__$FfiWinInfo$_free(void* self);
 
@@ -220,6 +244,8 @@ void __swift_bridge__$WolfCoreHandle$close_pane(void* self);
 void __swift_bridge__$WolfCoreHandle$new_buffer(void* self);
 void* __swift_bridge__$WolfCoreHandle$copy_selection(void* self);
 void __swift_bridge__$WolfCoreHandle$paste(void* self, void* text);
+void* __swift_bridge__$WolfCoreHandle$buffer_picker(void* self);
+void __swift_bridge__$WolfCoreHandle$switch_buffer(void* self, int64_t bufnr);
 bool __swift_bridge__$WolfCoreHandle$is_visual_mode(void* self);
 void __swift_bridge__$WolfCoreHandle$state_set_geometry(void* self, double x, double y, double width, double height);
 void __swift_bridge__$WolfCoreHandle$state_set_sidebar_visible(void* self, bool visible);
@@ -286,6 +312,10 @@ uint8_t __swift_bridge__$FfiCommandRow$command_kind(void* self);
 uint16_t __swift_bridge__$FfiCommandRow$window_index(void* self);
 void* __swift_bridge__$FfiCommandRow$path(void* self);
 void* __swift_bridge__$FfiCommandRow$mru_key(void* self);
+void* __swift_bridge__$FfiBufferPicker$ranked(void* self, void* query, uintptr_t max);
+int64_t __swift_bridge__$FfiBufferRow$bufnr(void* self);
+void* __swift_bridge__$FfiBufferRow$display(void* self);
+bool __swift_bridge__$FfiBufferRow$modified(void* self);
 uint64_t __swift_bridge__$FfiWinInfo$grid(void* self);
 int64_t __swift_bridge__$FfiWinInfo$win(void* self);
 bool __swift_bridge__$FfiWinInfo$hidden(void* self);

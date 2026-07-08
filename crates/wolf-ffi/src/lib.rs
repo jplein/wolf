@@ -45,10 +45,11 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use wolf_core::{
-    rank_matches_top_n, rank_palette, Command, CommandMru, CoreConfig, CursorShape, FileSearch,
-    FocusDir, Grid, InputEvent, Key, KeyEvent, LayoutIntent, MouseAction, MouseButton, MouseEvent,
-    PaletteRow, PaletteRowKind, PaletteWindow, PaneStatus, ResolvedStyle, Rgb, ScrollDirection,
-    ScrollEvent, SplitOrientation, StateStore, WakeFn, WinInfo, WindowState, WolfCore,
+    rank_buffers, rank_matches_top_n, rank_palette, BufInfo, BufferRow, Command, CommandMru,
+    CoreConfig, CursorShape, FileSearch, FocusDir, Grid, InputEvent, Key, KeyEvent, LayoutIntent,
+    MouseAction, MouseButton, MouseEvent, PaletteRow, PaletteRowKind, PaletteWindow, PaneStatus,
+    ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SplitOrientation, StateStore, WakeFn,
+    WinInfo, WindowState, WolfCore,
 };
 
 // Re-export the bridge-defined transparent structs at the crate root so the Rust
@@ -170,6 +171,8 @@ mod command_kind {
     pub const COPY: u8 = 14;
     /// Paste from the system clipboard into the active document.
     pub const PASTE: u8 = 15;
+    /// Open the buffer-picker overlay to fuzzy-switch among open buffers.
+    pub const BUFFER_PICKER: u8 = 16;
 }
 
 /// The palette-row-kind discriminants packed into [`FfiCommandRow::row_kind`].
@@ -425,6 +428,16 @@ mod ffi {
         // Pastes `text` into the active document via `InputEvent::Paste`
         // (`nvim_paste`). A no-op when the core is gone.
         fn paste(&self, text: String);
+        // Builds a fresh buffer-picker session seeded from a blocking snapshot of
+        // the core's listed buffers plus the live cwd. The front-end filters per
+        // keystroke via `ranked`. Infallible: returns an empty-backed session when
+        // the core is gone (mirroring `command_palette`).
+        fn buffer_picker(&self) -> FfiBufferPicker;
+        // Switches the ACTIVE window to buffer `bufnr` via `InputEvent::SwitchBuffer`
+        // (window-scoped `nvim_win_set_buf` + per-pane view restore). Resolves the
+        // active window live from the snapshot. A no-op when the core is gone or no
+        // active window is known.
+        fn switch_buffer(&self, bufnr: i64);
         // Whether the active document is in Neovim visual mode (`v`/`V`/`<C-v>`).
         // Gates the Edit > Copy menu item. False when the core is gone.
         fn is_visual_mode(&self) -> bool;
@@ -622,7 +635,7 @@ mod ffi {
     extern "Rust" {
         type FfiCommand;
 
-        // The command kind (`command_kind::NEW_WINDOW` .. `PASTE`).
+        // The command kind (`command_kind::NEW_WINDOW` .. `BUFFER_PICKER`).
         fn kind(&self) -> u8;
     }
 
@@ -661,6 +674,30 @@ mod ffi {
         fn path(&self) -> String;
         // The opaque MRU key handed back to `record` on activation.
         fn mru_key(&self) -> String;
+    }
+
+    extern "Rust" {
+        type FfiBufferPicker;
+
+        // The top `max` ranked buffer rows for `query`, MRU-ordered
+        // (lastused-DESC) among matches via `wolf_core::rank_buffers` over the
+        // snapshot taken at `buffer_picker()`. An empty `query` lists all buffers
+        // MRU-first (current buffer at row 0). `FfiBufferRow` is opaque so a `Vec`
+        // is supported.
+        fn ranked(&self, query: String, max: usize) -> Vec<FfiBufferRow>;
+    }
+
+    extern "Rust" {
+        type FfiBufferRow;
+
+        // The Neovim buffer handle to switch to (passed to
+        // `WolfCoreHandle::switch_buffer`).
+        fn bufnr(&self) -> i64;
+        // The cwd-relative (or absolute / `[No Name]`) display label, also the
+        // string ranked against the query.
+        fn display(&self) -> String;
+        // Whether the buffer has unsaved modifications (for the row chrome).
+        fn modified(&self) -> bool;
     }
 
     extern "Rust" {
@@ -1438,6 +1475,37 @@ impl WolfCoreHandle {
         }
     }
 
+    /// Builds a fresh buffer-picker session seeded from a blocking snapshot of the
+    /// core's listed buffers plus the live cwd.
+    ///
+    /// The front-end filters per keystroke via [`FfiBufferPicker::ranked`].
+    /// Infallible across the bridge: when the core has already been shut down it
+    /// returns an empty-backed session (no buffers, no cwd), mirroring
+    /// [`command_palette`](WolfCoreHandle::command_palette)'s empty fallback.
+    #[must_use]
+    pub fn buffer_picker(&self) -> FfiBufferPicker {
+        let borrow = self.core.borrow();
+        let (buffers, cwd) = borrow.as_ref().map_or_else(
+            || (Vec::new(), None),
+            |core| (core.list_buffers(), core.live_cwd()),
+        );
+        FfiBufferPicker { buffers, cwd }
+    }
+
+    /// Switches the ACTIVE window to buffer `bufnr` via [`InputEvent::SwitchBuffer`]
+    /// (window-scoped `nvim_win_set_buf` + per-pane view restore).
+    ///
+    /// Resolves the active window live from the snapshot; a no-op when the core is
+    /// gone or no active window is known (handle 0).
+    pub fn switch_buffer(&self, bufnr: i64) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            let win = core.read_snapshot().active_win.unwrap_or(0);
+            if win != 0 {
+                core.switch_buffer(win, bufnr);
+            }
+        }
+    }
+
     /// Whether the active document is in Neovim visual mode. Gates the Edit >
     /// Copy menu item. False once the core has been shut down.
     #[must_use]
@@ -1723,6 +1791,7 @@ impl FfiCommand {
             Command::CommandPalette => command_kind::COMMAND_PALETTE,
             Command::Copy => command_kind::COPY,
             Command::Paste => command_kind::PASTE,
+            Command::BufferPicker => command_kind::BUFFER_PICKER,
         };
         Self { kind }
     }
@@ -1862,6 +1931,81 @@ impl FfiCommandRow {
             window_index: row.window_index.unwrap_or(0),
             path,
             mru_key: row.mru_key,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FfiBufferPicker / FfiBufferRow: the buffer-picker session (opaque to Swift).
+// ---------------------------------------------------------------------------
+
+/// A buffer-picker session (opaque to Swift).
+///
+/// Assembled at [`WolfCoreHandle::buffer_picker`] from a blocking snapshot of the
+/// core's listed buffers plus the live cwd; the front-end filters per keystroke
+/// via [`ranked`](Self::ranked). Like [`WolfCoreHandle`] this is a
+/// MAIN-THREAD-ONLY handle. Unlike the command palette it takes no per-keystroke
+/// window feed and no MRU write-back — the candidate set is fixed at construction.
+pub struct FfiBufferPicker {
+    /// The listed buffers snapshotted at construction (the candidate source).
+    buffers: Vec<BufInfo>,
+    /// The live cwd at construction (used to relativize each buffer's display).
+    cwd: Option<PathBuf>,
+}
+
+impl FfiBufferPicker {
+    /// The top `max` ranked buffer rows for `query`, each mapped into an opaque
+    /// [`FfiBufferRow`].
+    ///
+    /// Delegates to [`wolf_core::rank_buffers`], which MRU-orders the buffers
+    /// (lastused-DESC) and ranks them best-first for the query.
+    #[must_use]
+    pub fn ranked(&self, query: String, max: usize) -> Vec<FfiBufferRow> {
+        rank_buffers(&self.buffers, self.cwd.as_deref(), &query, max)
+            .into_iter()
+            .map(FfiBufferRow::from_row)
+            .collect()
+    }
+}
+
+/// One ranked buffer row (opaque to Swift, so a `Vec<FfiBufferRow>` is supported
+/// — swift-bridge emits Vec support only for opaque types).
+///
+/// A projection of [`wolf_core::BufferRow`]: the buffer handle, its display label,
+/// and its modified flag flattened into scalar/String accessors.
+pub struct FfiBufferRow {
+    bufnr: i64,
+    display: String,
+    modified: bool,
+}
+
+impl FfiBufferRow {
+    /// The Neovim buffer handle to switch to (passed to
+    /// [`WolfCoreHandle::switch_buffer`]).
+    #[must_use]
+    pub fn bufnr(&self) -> i64 {
+        self.bufnr
+    }
+
+    /// The cwd-relative (or absolute / `[No Name]`) display label, also the string
+    /// ranked against the query.
+    #[must_use]
+    pub fn display(&self) -> String {
+        self.display.clone()
+    }
+
+    /// Whether the buffer has unsaved modifications (for the row chrome).
+    #[must_use]
+    pub fn modified(&self) -> bool {
+        self.modified
+    }
+
+    /// Projects a [`wolf_core::BufferRow`] into the bridge-friendly flat row.
+    fn from_row(row: BufferRow) -> Self {
+        Self {
+            bufnr: row.bufnr,
+            display: row.display,
+            modified: row.modified,
         }
     }
 }

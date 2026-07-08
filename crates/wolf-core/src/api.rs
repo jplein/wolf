@@ -19,6 +19,7 @@ use parking_lot::{Mutex, RwLock};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{self, UnboundedSender};
 
+use crate::buffer_picker::BufInfo;
 use crate::command::Command;
 use crate::command_mru::CommandMru;
 use crate::files::{self, FileSearch, FileSearchState};
@@ -258,6 +259,7 @@ impl WolfCore {
             proc.setup_dir_tracking().await?;
             proc.setup_theme_tracking().await?;
             proc.setup_commands().await?;
+            proc.setup_view_tracking().await?;
             Ok::<NvimProcess, NvimError>(proc)
         })?;
 
@@ -385,6 +387,36 @@ impl WolfCore {
     /// [`InputEvent::Paste`]).
     pub fn paste(&self, text: String) {
         self.send_input(InputEvent::Paste { text });
+    }
+
+    /// Snapshots the captive nvim's listed buffers (for seeding the buffer picker).
+    ///
+    /// Blocks briefly on the captive nvim to query `getbufinfo({'buflisted': 1})`
+    /// (see [`crate::nvim::NvimProcess::list_buffers`]) via `runtime.block_on`, the
+    /// same blocking pattern [`copy_visual_selection`](Self::copy_visual_selection)
+    /// and [`resolve_search_root`](Self::resolve_search_root) use. An RPC error is
+    /// logged and yields an empty list (the picker just shows no candidates rather
+    /// than failing).
+    #[must_use]
+    pub fn list_buffers(&self) -> Vec<BufInfo> {
+        match self.runtime.block_on(self.nvim.list_buffers()) {
+            Ok(buffers) => buffers,
+            Err(e) => {
+                tracing::warn!("list_buffers failed: {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    /// Switches window `win` to buffer `bufnr` (fire-and-forget via
+    /// [`InputEvent::SwitchBuffer`]).
+    ///
+    /// Enqueued on the same ordered input channel as keystrokes so it never races
+    /// ahead of or behind pending input; applied via the init.lua
+    /// `wolf_switch_buffer` helper (window-scoped `nvim_win_set_buf` + per-pane
+    /// view restoration).
+    pub fn switch_buffer(&self, win: i64, bufnr: i64) {
+        self.send_input(InputEvent::SwitchBuffer { win, bufnr });
     }
 
     /// Drains and returns all pending layout intents (in arrival order).

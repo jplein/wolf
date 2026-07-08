@@ -22,11 +22,11 @@
 //! NEW_WINDOW = 0, CLOSE_WINDOW = 1, QUIT_APPLICATION = 2, HIDE_APPLICATION = 3,
 //! MINIMIZE_WINDOW = 4, GO_TO_FILE = 5, OPEN_FILE = 6, OPEN_FOLDER = 7,
 //! CLOSE_PANE = 8, NEW_BUFFER = 9, RESET_FONT_SIZE = 10, INCREASE_FONT_SIZE = 11,
-//! DECREASE_FONT_SIZE = 12, COMMAND_PALETTE = 13, COPY = 14, PASTE = 15 (the
-//! `wolf_core::Command` variant order). These local consts MUST match `mod
-//! command_kind` in `wolf-ffi/src/lib.rs` and the Swift `CommandKind` port —
-//! exactly how `panes.rs` re-declares `INTENT_KIND_SPLIT` locally as a contract
-//! guard (the guard array below asserts contiguous 0..=15).
+//! DECREASE_FONT_SIZE = 12, COMMAND_PALETTE = 13, COPY = 14, PASTE = 15,
+//! BUFFER_PICKER = 16 (the `wolf_core::Command` variant order). These local consts
+//! MUST match `mod command_kind` in `wolf-ffi/src/lib.rs` and the Swift
+//! `CommandKind` port — exactly how `panes.rs` re-declares `INTENT_KIND_SPLIT`
+//! locally as a contract guard (the guard array below asserts contiguous 0..=16).
 //!
 //! ## What this asserts
 //!
@@ -98,6 +98,8 @@ const CMD_KIND_COMMAND_PALETTE: u8 = 13;
 const CMD_KIND_COPY: u8 = 14;
 /// `FfiCommand::kind()` for Paste (the appended discriminant 15, Edit menu).
 const CMD_KIND_PASTE: u8 = 15;
+/// `FfiCommand::kind()` for Buffer Picker (the appended discriminant 16, View menu).
+const CMD_KIND_BUFFER_PICKER: u8 = 16;
 
 /// Builds a printable-character `FfiKeyEvent` (kind=Char) for `c`, all modifiers
 /// false (the already-resolved glyph rides in `ch`). Same as `panes.rs`.
@@ -164,9 +166,9 @@ fn commands_drain_close_and_minimize() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // Discriminant-contract guard: the local consts MUST be contiguous 0..=15 in
-    // variant order (mirrors `mod command_kind`). Referencing all sixteen here also
-    // keeps them from tripping dead-code lints.
+    // Discriminant-contract guard: the local consts MUST be contiguous 0..=16 in
+    // variant order (mirrors `mod command_kind`). Referencing all seventeen here
+    // also keeps them from tripping dead-code lints.
     assert_eq!(
         [
             CMD_KIND_NEW_WINDOW,
@@ -185,9 +187,10 @@ fn commands_drain_close_and_minimize() {
             CMD_KIND_COMMAND_PALETTE,
             CMD_KIND_COPY,
             CMD_KIND_PASTE,
+            CMD_KIND_BUFFER_PICKER,
         ],
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-        "command_kind discriminants must be contiguous 0..=15 in Command variant order"
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+        "command_kind discriminants must be contiguous 0..=16 in Command variant order"
     );
 
     let init_lua = common::init_lua_path();
@@ -269,6 +272,14 @@ fn commands_drain_close_and_minimize() {
     // auto-registered as a COMMAND_SPECS row and drains the appended discriminant 15.
     send_ex_command(&handle, ":WolfPaste");
     poll_for_command_kind(&handle, CMD_KIND_PASTE, ":WolfPaste");
+
+    // --- 3g. :WolfBufferPicker<CR> -> an FfiCommand with kind() == BUFFER_PICKER
+    // A pure FFI drain: nothing acts on it here (the front-end that would open the
+    // buffer-picker overlay is absent), so no overlay is presented. This proves
+    // `:WolfBufferPicker` is auto-registered as a COMMAND_SPECS row and drains the
+    // appended discriminant 16.
+    send_ex_command(&handle, ":WolfBufferPicker");
+    poll_for_command_kind(&handle, CMD_KIND_BUFFER_PICKER, ":WolfBufferPicker");
 
     // --- 4. Shutdown: clean teardown ----------------------------------------
     handle.shutdown();

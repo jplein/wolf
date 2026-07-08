@@ -214,6 +214,22 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
+# Headless coverage for the PUBLIC buffer-picker ranking surface (`rank_buffers` +
+# `BufInfo`/`BufferRow`): MRU ordering (current buffer at index 0), tie-break by
+# bufnr ascending, the AND-subsequence query filter keeping MRU-first order,
+# cwd-relative/absolute/[No Name] display strings, and `max` truncation.
+# `rank_buffers` is IO-free (it reuses `rank_matches`), so this needs NO nvim and
+# no staged runfiles — the pure analog of `palette_rank`, kept in a dedicated file
+# to avoid colliding with the coder who creates `src/buffer_picker.rs`.
+rust_test(
+    name = "buffer_rank",
+    srcs = ["tests/buffer_rank.rs"],
+    crate_root = "tests/buffer_rank.rs",
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
 # Headless equivalence coverage for the BOUNDED top-N picker ranking
 # (`rank_matches_top_n` vs `rank_matches().take(n)`): empty/all-whitespace fast
 # path, single/multi-term AND, order-independence, no-match, tie groups that

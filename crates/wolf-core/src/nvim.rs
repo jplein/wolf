@@ -18,6 +18,7 @@ use rmpv::Value;
 use tokio::process::{ChildStdin, Command};
 use tokio::task::JoinHandle;
 
+use crate::buffer_picker::BufInfo;
 use crate::command::COMMAND_SPECS;
 use crate::redraw::RedrawHandler;
 
@@ -204,6 +205,98 @@ impl NvimProcess {
                 "getcwd returned no usable path: {value:?}"
             ))),
         }
+    }
+
+    /// Queries the captive nvim for its listed buffers, newest-used first-agnostic.
+    ///
+    /// Calls `nvim_call_function("getbufinfo", [ {buflisted=1} ])` — the single
+    /// argument is an array holding ONE map `{"buflisted": 1}`, so only
+    /// `buflisted` buffers are returned (regardless of whether they are loaded,
+    /// e.g. a `:badd` buffer appears with `lastused` possibly 0). The result is an
+    /// array of maps; each is decoded into a [`BufInfo`] by reading `bufnr` (i64),
+    /// `name` (str), `lastused` (i64), and `changed` (i64 → `modified = changed !=
+    /// 0`). Malformed entries (missing `bufnr`) are skipped defensively. The caller
+    /// MRU-orders + ranks these via [`crate::buffer_picker::rank_buffers`].
+    pub async fn list_buffers(&self) -> Result<Vec<BufInfo>, NvimError> {
+        let opts = Value::Map(vec![(Value::from("buflisted"), Value::from(1))]);
+        let value = self
+            .nvim
+            .call(
+                "nvim_call_function",
+                vec![Value::from("getbufinfo"), Value::Array(vec![opts])],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+        let Some(entries) = value.as_array() else {
+            return Err(NvimError::Rpc(format!(
+                "getbufinfo did not return an array: {value:?}"
+            )));
+        };
+
+        let mut buffers = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let Value::Map(fields) = entry else { continue };
+            let mut bufnr: Option<i64> = None;
+            let mut name = String::new();
+            let mut lastused: i64 = 0;
+            let mut changed: i64 = 0;
+            for (k, v) in fields {
+                let Some(key) = k.as_str() else { continue };
+                match key {
+                    "bufnr" => bufnr = v.as_i64(),
+                    "name" => {
+                        if let Some(s) = v.as_str() {
+                            name = s.to_string();
+                        }
+                    }
+                    "lastused" => {
+                        if let Some(n) = v.as_i64() {
+                            lastused = n;
+                        }
+                    }
+                    "changed" => {
+                        if let Some(n) = v.as_i64() {
+                            changed = n;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let Some(bufnr) = bufnr else { continue };
+            buffers.push(BufInfo {
+                bufnr,
+                name,
+                lastused,
+                modified: changed != 0,
+            });
+        }
+        Ok(buffers)
+    }
+
+    /// Installs the per-pane view-tracking autocmds inside the captive nvim.
+    ///
+    /// Unlike the other `setup_*` helpers, this passes NO channel id: the
+    /// `_G.wolf_setup_view_tracking` helper (defined in `runtime/nvim/init.lua`)
+    /// emits no `rpcnotify` — it only maintains an in-nvim `(winid, bufnr) ->
+    /// winsaveview()` cache (via `BufLeave`/`WinLeave`/`WinClosed` autocmds) and
+    /// defines the `_G.wolf_switch_buffer` helper that reads it. So this is a bare
+    /// `nvim_exec_lua("wolf_setup_view_tracking()", [])` with no payload.
+    pub async fn setup_view_tracking(&self) -> Result<(), NvimError> {
+        let _ = self
+            .nvim
+            .call(
+                "nvim_exec_lua",
+                vec![
+                    Value::from("wolf_setup_view_tracking()"),
+                    Value::Array(vec![]),
+                ],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+        Ok(())
     }
 
     /// Yanks the current visual-mode selection and returns its text.

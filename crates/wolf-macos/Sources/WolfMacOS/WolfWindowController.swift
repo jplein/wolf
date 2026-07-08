@@ -96,6 +96,10 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     /// The command-palette overlay (⌘P / the View-menu item). No wake bridge — its
     /// candidates are fixed at open and re-filtered synchronously per keystroke.
     private(set) var palette: CommandPaletteView?
+    /// The buffer-picker overlay (⌘E / the View-menu item). No wake bridge — its
+    /// candidates are snapshotted at open and re-filtered synchronously per
+    /// keystroke.
+    private(set) var bufferPicker: BufferPickerView?
     /// The centered "Open folder…" overlay, present only while `hasFolder == false`;
     /// hidden by `didOpenFolder()` on the empty-state → open-project transition.
     private var emptyState: EmptyStateView?
@@ -207,6 +211,14 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         paneContainer.addSubview(palette)
         palette.onActivate = { [weak self] row in self?.activatePaletteRow(row) }
         self.palette = palette
+
+        // The hidden top-center buffer-picker overlay (a subview of the pane
+        // container, parallel to the palette). Activation flows back through
+        // `onActivate` to switch the active pane's buffer.
+        let bufferPicker = BufferPickerView(handle: handle, paneContainer: paneContainer)
+        paneContainer.addSubview(bufferPicker)
+        bufferPicker.onActivate = { [weak self] row in self?.activateBufferRow(row) }
+        self.bufferPicker = bufferPicker
 
         // Restore the saved frame only for a restored window; a fresh
         // (Cmd-N) window keeps AppKit's cascade placement. The sidebar is set
@@ -369,6 +381,19 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     func openCommandPalette() {
         let others = coordinator?.otherWindows(excluding: self) ?? []
         palette?.open(otherWindows: others)
+    }
+
+    /// Opens the buffer-picker overlay (the `Buffer Picker…` command / ⌘E),
+    /// snapshotting this window's listed buffers (assembled core-side).
+    func openBufferPicker() {
+        bufferPicker?.open()
+    }
+
+    /// Switches the active pane to the chosen row's buffer via
+    /// `WolfCoreHandle.switch_buffer` (window-scoped; the active window is resolved
+    /// core-side).
+    private func activateBufferRow(_ row: BufferPickerRow) {
+        handle?.switch_buffer(row.bufnr)
     }
 
     /// Performs a chosen palette row's action, dispatched by its kind:
@@ -595,6 +620,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         picker = nil
         palette?.close()
         palette = nil
+        bufferPicker?.close()
+        bufferPicker = nil
         handle?.shutdown()
         handle = nil
 

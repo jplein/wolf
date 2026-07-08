@@ -204,6 +204,15 @@ pub enum InputEvent {
         /// The text to paste.
         text: String,
     },
+    /// Switch a window to a buffer (delegated to the init.lua
+    /// `wolf_switch_buffer` helper, which does a window-scoped
+    /// `nvim_win_set_buf` plus per-pane view restoration).
+    SwitchBuffer {
+        /// The target Neovim window handle.
+        win: i64,
+        /// The buffer handle to switch that window to.
+        bufnr: i64,
+    },
 }
 
 /// Translates a [`KeyEvent`] into Neovim keystroke notation.
@@ -342,6 +351,7 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
         InputEvent::ClosePane => command(nvim, "close").await,
         InputEvent::NewBuffer => command(nvim, "enew").await,
         InputEvent::Paste { text } => nvim_paste(nvim, text).await,
+        InputEvent::SwitchBuffer { win, bufnr } => switch_buffer(nvim, *win, *bufnr).await,
     }
 }
 
@@ -390,6 +400,23 @@ async fn nvim_paste(nvim: &Nvim, text: &str) -> Result<(), Box<CallError>> {
 
 async fn command(nvim: &Nvim, cmd: &str) -> Result<(), Box<CallError>> {
     let _ = nvim.call("nvim_command", vec![Value::from(cmd)]).await?;
+    Ok(())
+}
+
+/// Switches window `win` to buffer `bufnr` via the init.lua `wolf_switch_buffer`
+/// helper (a window-scoped `nvim_win_set_buf` plus per-pane view restoration),
+/// invoked over `nvim_exec_lua` so the set-buffer and the view restore happen
+/// atomically in one Lua call.
+async fn switch_buffer(nvim: &Nvim, win: i64, bufnr: i64) -> Result<(), Box<CallError>> {
+    let _ = nvim
+        .call(
+            "nvim_exec_lua",
+            vec![
+                Value::from("wolf_switch_buffer(...)"),
+                Value::Array(vec![Value::from(win), Value::from(bufnr)]),
+            ],
+        )
+        .await?;
     Ok(())
 }
 
