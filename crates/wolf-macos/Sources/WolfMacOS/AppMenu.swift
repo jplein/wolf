@@ -36,6 +36,7 @@ enum AppMenu {
         static let copy = 14
         static let paste = 15
         static let bufferPicker = 16
+        static let closeTab = 17
     }
 
     /// The dynamic submenus `install` hands back to the coordinator: the Window
@@ -91,7 +92,7 @@ enum AppMenu {
     }
 
     /// The File menu (New `⌘n` / New Window `⇧⌘n` / Go to File `⌘o` / Open File /
-    /// Open Folder `⇧⌘o` / Close `⌘w` / Close Window `⇧⌘w`).
+    /// Open Folder `⇧⌘o` / Close Tab `⌘w` / Close / Close Window `⇧⌘w`).
     ///
     /// The item titles mirror `wolf_core::COMMAND_SPECS` (the canonical registry);
     /// the ellipsis characters are single U+2026, matching those specs.
@@ -121,7 +122,12 @@ enum AppMenu {
         menu.addItem(.separator())
         menu.addItem(
             commandItem(
-                title: "Close", tag: Tag.closePane, keyEquivalent: "w", target: target))
+                title: "Close Tab", tag: Tag.closeTab, keyEquivalent: "w", target: target))
+        // Close Pane keeps its `<C-w>c` chord but loses its ⌘W key-equivalent
+        // (moved to Close Tab); it is still reachable via the menu + the chord.
+        menu.addItem(
+            commandItem(
+                title: "Close", tag: Tag.closePane, keyEquivalent: "", target: target))
         menu.addItem(
             commandItem(
                 title: "Close Window", tag: Tag.closeWindow, keyEquivalent: "w",

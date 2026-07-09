@@ -260,6 +260,9 @@ impl WolfCore {
             proc.setup_theme_tracking().await?;
             proc.setup_commands().await?;
             proc.setup_view_tracking().await?;
+            // AFTER setup_view_tracking so `_G.wolf_switch_buffer` exists when
+            // `wolf_close_tab` (defined inside wolf_setup_tabs) closes over it.
+            proc.setup_tabs().await?;
             Ok::<NvimProcess, NvimError>(proc)
         })?;
 
@@ -555,6 +558,71 @@ impl WolfCore {
 
         let cwd = self.live_cwd();
         crate::pane_status::pane_status(&buf, cwd.as_deref(), canonical_home())
+    }
+
+    /// Computes the per-pane tab strip for the window drawing into `grid`.
+    ///
+    /// Joins `grid` → [`WinInfo::win`](crate::render::WinInfo) → the per-window
+    /// [`PaneTabs`](crate::render::PaneTabs) in
+    /// [`Snapshot::tabs`](crate::render::Snapshot::tabs), then formats each tab's
+    /// path via the pure [`crate::tab_label::tab_labels`] over the live cwd
+    /// ([`live_cwd`](Self::live_cwd)) and the user's home directory. A tab is
+    /// marked `active` when its `bufnr` equals the pane's active buffer handle. A
+    /// grid with no window (or no tabs) yields an empty list.
+    ///
+    /// The snapshot read guard is DROPPED before reading `live_cwd` (which takes
+    /// its own lock), mirroring [`pane_status`](Self::pane_status).
+    #[must_use]
+    pub fn pane_tabs(&self, grid: u64) -> Vec<crate::tab_label::TabLabel> {
+        // Snapshot the pane's tabs (bufnr, path string, modified) + active bufnr
+        // under the read guard, then drop it before `live_cwd()`.
+        let (entries, active): (Vec<(i64, String, bool)>, Option<i64>) = {
+            let snap = self.read_snapshot();
+            let tabs = snap
+                .windows
+                .get(&grid)
+                .and_then(|w| snap.tabs.get(&w.win));
+            match tabs {
+                Some(t) => (
+                    t.order
+                        .iter()
+                        .map(|e| {
+                            (e.bufnr, e.path.to_string_lossy().into_owned(), e.modified)
+                        })
+                        .collect(),
+                    t.active,
+                ),
+                None => (Vec::new(), None),
+            }
+            // Read guard drops here, before `live_cwd()` takes its own lock.
+        };
+
+        let cwd = self.live_cwd();
+        let paths: Vec<String> = entries.iter().map(|(_, p, _)| p.clone()).collect();
+        let displays =
+            crate::tab_label::tab_labels(&paths, cwd.as_deref(), canonical_home());
+
+        entries
+            .into_iter()
+            .zip(displays)
+            .map(|((bufnr, _, modified), display)| crate::tab_label::TabLabel {
+                bufnr,
+                display,
+                active: active == Some(bufnr),
+                modified,
+            })
+            .collect()
+    }
+
+    /// Closes window `win`'s tab for buffer `bufnr` (fire-and-forget via
+    /// [`InputEvent::CloseTab`]).
+    ///
+    /// Enqueued on the same ordered input channel as keystrokes so it never races
+    /// ahead of or behind pending input; applied via the init.lua `wolf_close_tab`
+    /// helper (which removes the tab, activates a neighbor / closes the pane as
+    /// needed, and deletes the buffer when it was its last tab anywhere).
+    pub fn close_tab(&self, win: i64, bufnr: i64) {
+        self.send_input(InputEvent::CloseTab { win, bufnr });
     }
 
     /// Starts a streaming file search rooted at the captive Neovim's live working

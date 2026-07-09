@@ -95,7 +95,7 @@ Integration tests across the `tests/*.rs` binaries (driving a real pinned Neovim
 - `copy_outside_visual_mode_is_none` — in normal mode `copy_visual_selection()` returns `None` (the mode guard that also prevents a `y` operator-hang);
 - `paste_inserts_text_into_the_active_grid` — `WolfCore::paste("WOLFPASTE")` into an empty buffer surfaces the text on row 0 of the active grid (via `nvim_paste`).
 
-The `command.rs` unit tests (`copy`/`paste`/`buffer_picker` `from_id` round-trips, spec-field pins, and the append-only `COMMAND_SPECS[14] == Copy` / fixed-index `[15] == Paste` / last-row `[16] == BufferPicker` index guards, `EXPECTED_COMMAND_COUNT == 17`) are the pure in-module coverage of the registry additions (documented in [`src/README.md`](../src/README.md)).
+The `command.rs` unit tests (`copy`/`paste`/`buffer_picker`/`close_tab` `from_id` round-trips, spec-field pins, and the append-only `COMMAND_SPECS[14] == Copy` / fixed-index `[15] == Paste` / `[16] == BufferPicker` / last-row `[17] == CloseTab` index guards, `EXPECTED_COMMAND_COUNT == 18`) are the pure in-module coverage of the registry additions (documented in [`src/README.md`](../src/README.md)).
 
 ### Ranking (pure, in-module)
 

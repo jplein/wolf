@@ -213,6 +213,16 @@ pub enum InputEvent {
         /// The buffer handle to switch that window to.
         bufnr: i64,
     },
+    /// Close a pane tab (delegated to the init.lua `wolf_close_tab` helper, which
+    /// removes the buffer's tab from window `win`, activates a neighbor / closes
+    /// the pane as needed, and deletes the buffer when it was its last tab
+    /// anywhere).
+    CloseTab {
+        /// The Neovim window handle owning the tab.
+        win: i64,
+        /// The buffer handle whose tab to close.
+        bufnr: i64,
+    },
 }
 
 /// Translates a [`KeyEvent`] into Neovim keystroke notation.
@@ -352,6 +362,7 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
         InputEvent::NewBuffer => command(nvim, "enew").await,
         InputEvent::Paste { text } => nvim_paste(nvim, text).await,
         InputEvent::SwitchBuffer { win, bufnr } => switch_buffer(nvim, *win, *bufnr).await,
+        InputEvent::CloseTab { win, bufnr } => close_tab(nvim, *win, *bufnr).await,
     }
 }
 
@@ -413,6 +424,24 @@ async fn switch_buffer(nvim: &Nvim, win: i64, bufnr: i64) -> Result<(), Box<Call
             "nvim_exec_lua",
             vec![
                 Value::from("wolf_switch_buffer(...)"),
+                Value::Array(vec![Value::from(win), Value::from(bufnr)]),
+            ],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Closes window `win`'s tab for buffer `bufnr` via the init.lua `wolf_close_tab`
+/// helper (which removes the tab, activates a neighbor / closes the pane as
+/// needed, and deletes the buffer when it was its last tab anywhere), invoked
+/// over `nvim_exec_lua` so the whole tab-close algorithm runs atomically in one
+/// Lua call.
+async fn close_tab(nvim: &Nvim, win: i64, bufnr: i64) -> Result<(), Box<CallError>> {
+    let _ = nvim
+        .call(
+            "nvim_exec_lua",
+            vec![
+                Value::from("wolf_close_tab(...)"),
                 Value::Array(vec![Value::from(win), Value::from(bufnr)]),
             ],
         )

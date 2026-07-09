@@ -189,6 +189,18 @@ void* __swift_bridge__$Vec_FfiBufferRow$get_mut(void* vec_ptr, uintptr_t index);
 uintptr_t __swift_bridge__$Vec_FfiBufferRow$len(void* vec_ptr);
 void* __swift_bridge__$Vec_FfiBufferRow$as_ptr(void* vec_ptr);
 
+typedef struct FfiTab FfiTab;
+void __swift_bridge__$FfiTab$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiTab$new(void);
+void __swift_bridge__$Vec_FfiTab$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiTab$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiTab$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiTab$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiTab$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiTab$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiTab$as_ptr(void* vec_ptr);
+
 typedef struct FfiWinInfo FfiWinInfo;
 void __swift_bridge__$FfiWinInfo$_free(void* self);
 
@@ -246,6 +258,9 @@ void* __swift_bridge__$WolfCoreHandle$copy_selection(void* self);
 void __swift_bridge__$WolfCoreHandle$paste(void* self, void* text);
 void* __swift_bridge__$WolfCoreHandle$buffer_picker(void* self);
 void __swift_bridge__$WolfCoreHandle$switch_buffer(void* self, int64_t bufnr);
+void* __swift_bridge__$WolfCoreHandle$pane_tabs_for_grid(void* self, uint64_t grid);
+void __swift_bridge__$WolfCoreHandle$close_tab(void* self, int64_t win, int64_t bufnr);
+void __swift_bridge__$WolfCoreHandle$switch_tab(void* self, int64_t win, int64_t bufnr);
 bool __swift_bridge__$WolfCoreHandle$is_visual_mode(void* self);
 void __swift_bridge__$WolfCoreHandle$state_set_geometry(void* self, double x, double y, double width, double height);
 void __swift_bridge__$WolfCoreHandle$state_set_sidebar_visible(void* self, bool visible);
@@ -316,6 +331,10 @@ void* __swift_bridge__$FfiBufferPicker$ranked(void* self, void* query, uintptr_t
 int64_t __swift_bridge__$FfiBufferRow$bufnr(void* self);
 void* __swift_bridge__$FfiBufferRow$display(void* self);
 bool __swift_bridge__$FfiBufferRow$modified(void* self);
+int64_t __swift_bridge__$FfiTab$bufnr(void* self);
+void* __swift_bridge__$FfiTab$display(void* self);
+bool __swift_bridge__$FfiTab$active(void* self);
+bool __swift_bridge__$FfiTab$modified(void* self);
 uint64_t __swift_bridge__$FfiWinInfo$grid(void* self);
 int64_t __swift_bridge__$FfiWinInfo$win(void* self);
 bool __swift_bridge__$FfiWinInfo$hidden(void* self);

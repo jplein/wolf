@@ -20,6 +20,7 @@
 //! - [`buffer_picker`]: pure candidate assembly + ranking for the buffer picker.
 //! - [`palette`]: pure candidate assembly + ranking for the command palette.
 //! - [`pane_status`]: pure display-string math for the per-pane statusbar.
+//! - [`tab_label`]: pure per-pane tab-label disambiguation ([`tab_labels`]).
 //! - [`layout`]: the Neovim->shell layout-intent types ([`LayoutIntent`]).
 //! - [`files`]: the async streaming file-list traversal and `FileSearch` session.
 //! - [`mru`]: the most-recently-used file cache (SQLite).
@@ -51,6 +52,7 @@ pub mod recent_dirs;
 pub mod redraw;
 pub mod render;
 pub mod state;
+pub mod tab_label;
 pub mod tree;
 
 pub use api::{CoreConfig, CoreError, SnapshotReadGuard, WolfCore};
@@ -71,10 +73,12 @@ pub use rank::{rank_matches, rank_matches_top_n, Match, MatchKey};
 pub use recent_dirs::{RecentDirs, RECENT_DIRS_LIMIT};
 pub use redraw::WakeFn;
 pub use render::{
-    Cell, Cursor, CursorShape, DefaultColors, Grid, HighlightTable, HlAttr, ModeInfo,
-    ResolvedStyle, Rgb, SharedSnapshot, Snapshot, ThemeColors, ThemeGroup, Viewport, WinInfo,
+    Cell, Cursor, CursorShape, DefaultColors, Grid, HighlightTable, HlAttr, ModeInfo, PaneTabs,
+    ResolvedStyle, Rgb, SharedSnapshot, Snapshot, TabEntry, ThemeColors, ThemeGroup, Viewport,
+    WinInfo,
 };
 pub use state::{load_state, state_dir, StateStore, WindowState, WolfState};
+pub use tab_label::{tab_labels, TabLabel};
 pub use tree::{
     ancestors_to_reveal, children_of, node_rel_path, rel_path_for, TreeIndex, TreeIndexCache,
     TreeNode,

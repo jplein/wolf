@@ -20,7 +20,7 @@ import Foundation
 /// `hideApplication == 3`, `minimizeWindow == 4`, `goToFile == 5`, `openFile == 6`,
 /// `openFolder == 7`, `closePane == 8`, `newBuffer == 9`, `resetFontSize == 10`,
 /// `increaseFontSize == 11`, `decreaseFontSize == 12`, `commandPalette == 13`,
-/// `copy == 14`, `paste == 15`, `bufferPicker == 16`.
+/// `copy == 14`, `paste == 15`, `bufferPicker == 16`, `closeTab == 17`.
 public enum CommandKind {
     /// Open a new editor window.
     case newWindow
@@ -56,10 +56,12 @@ public enum CommandKind {
     case paste
     /// Open the buffer-picker overlay to fuzzy-switch among open buffers.
     case bufferPicker
+    /// Close the active pane tab.
+    case closeTab
 
-    /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `16` →
-    /// `.bufferPicker`, else `nil`), guarding the contract shared with
-    /// `wolf-ffi`'s `mod command_kind`.
+    /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `17` →
+    /// `.closeTab`, else `nil`), guarding the contract shared with `wolf-ffi`'s
+    /// `mod command_kind`.
     public init?(ffi: UInt8) {
         switch ffi {
         case 0: self = .newWindow
@@ -79,6 +81,7 @@ public enum CommandKind {
         case 14: self = .copy
         case 15: self = .paste
         case 16: self = .bufferPicker
+        case 17: self = .closeTab
         default: return nil
         }
     }

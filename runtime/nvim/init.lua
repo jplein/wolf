@@ -489,3 +489,172 @@ function _G.wolf_setup_view_tracking()
 		end)
 	end
 end
+
+-- Per-pane tab tracking: wolf-core invokes this over RPC after the view-tracking
+-- setup (so _G.wolf_switch_buffer already exists), passing its own RPC channel id.
+-- It maintains an in-nvim per-window ACCUMULATING tab list (win -> ordered array of
+-- bufnr) and notifies core, via wolf_tabs, of every window's tab row. Each window's
+-- payload is { win, { { bufnr, name, modified }, ... }, active_bufnr }: an ordered,
+-- append-to-the-right list of the buffers the window has shown, plus the window's
+-- current (active) buffer. It emits once immediately so the startup layout is
+-- reflected, and defines the _G.wolf_close_tab helper (which closes over the same
+-- win_tabs upvalue and emit).
+--
+-- The whole current window set is re-emitted on each autocmd; core WHOLESALE-
+-- REPLACES its per-window tab map, so stale/closed windows drop out. An unnamed
+-- buffer STILL gets a tab (empty name); invalid bufnrs are skipped.
+function _G.wolf_setup_tabs(chan)
+	-- win -> ordered array of bufnr (the accumulating tab order for that window).
+	local win_tabs = {}
+
+	-- Append the window's current buffer to its tab list if not already present.
+	local function note(win)
+		local ok, buf = pcall(vim.api.nvim_win_get_buf, win)
+		if not ok then
+			return
+		end
+		local order = win_tabs[win]
+		if not order then
+			order = {}
+			win_tabs[win] = order
+		end
+		for _, b in ipairs(order) do
+			if b == buf then
+				return
+			end
+		end
+		order[#order + 1] = buf
+	end
+
+	-- Wholesale emit: for every live window, its tab list (skipping invalid
+	-- bufnrs) plus its active buffer.
+	local function emit()
+		-- First, note the current buffer of every live window so a freshly
+		-- entered/created window/buffer gets a tab before we serialize.
+		for _, win in ipairs(vim.api.nvim_list_wins()) do
+			note(win)
+		end
+
+		local list = {}
+		for _, win in ipairs(vim.api.nvim_list_wins()) do
+			local order = win_tabs[win] or {}
+			local tabs = {}
+			for _, buf in ipairs(order) do
+				if vim.api.nvim_buf_is_valid(buf) then
+					local name = vim.api.nvim_buf_get_name(buf)
+					local modified = vim.bo[buf].modified
+					tabs[#tabs + 1] = { buf, name, modified }
+				end
+			end
+			local active = vim.api.nvim_win_get_buf(win)
+			list[#list + 1] = { win, tabs, active }
+		end
+		vim.rpcnotify(chan, "wolf_tabs", list)
+	end
+
+	local group = vim.api.nvim_create_augroup("WolfTabs", { clear = true })
+	vim.api.nvim_create_autocmd(
+		{ "BufEnter", "BufWinEnter", "BufFilePost", "WinEnter", "WinNew" },
+		{
+			group = group,
+			callback = emit,
+		}
+	)
+	-- A closing window drops its tab list, then we re-emit the survivor set.
+	vim.api.nvim_create_autocmd("WinClosed", {
+		group = group,
+		callback = function(ev)
+			win_tabs[tonumber(ev.match)] = nil
+			emit()
+		end,
+	})
+	-- A deleted buffer is removed from every window's tab list, then re-emit.
+	vim.api.nvim_create_autocmd("BufDelete", {
+		group = group,
+		callback = function(ev)
+			local deleted = tonumber(ev.buf)
+			for _, order in pairs(win_tabs) do
+				for i = #order, 1, -1 do
+					if order[i] == deleted then
+						table.remove(order, i)
+					end
+				end
+			end
+			emit()
+		end,
+	})
+
+	-- Close window `win`'s tab for buffer `bufnr`. Wrapped in pcall so a stale
+	-- win/buf degrades to a no-op. Decision #5: closing the ONLY tab of the ONLY
+	-- pane is a COMPLETE no-op (there is nowhere to go).
+	function _G.wolf_close_tab(win, bufnr)
+		pcall(function()
+			local order = win_tabs[win]
+			if not order then
+				return
+			end
+			-- Find the tab index for bufnr.
+			local idx = nil
+			for i, b in ipairs(order) do
+				if b == bufnr then
+					idx = i
+					break
+				end
+			end
+			if not idx then
+				return
+			end
+
+			-- Decision #5 TOP GUARD: the pane's last tab AND the last window ->
+			-- complete no-op (keep the tab, the buffer, and the window).
+			if #order == 1 and #vim.api.nvim_tabpage_list_wins(0) == 1 then
+				return
+			end
+
+			local was_active = vim.api.nvim_win_get_buf(win) == bufnr
+
+			table.remove(order, idx)
+
+			-- If the closed tab was active and tabs remain, activate the RIGHT
+			-- neighbor (now at `idx`) else the LEFT neighbor (`idx - 1`).
+			if was_active and #order > 0 then
+				local neighbor = order[idx] or order[idx - 1]
+				if neighbor then
+					_G.wolf_switch_buffer(win, neighbor)
+				end
+			end
+
+			-- If that was the pane's last tab (and NOT the last window), close the
+			-- pane and drop its tab list.
+			if #order == 0 then
+				if #vim.api.nvim_tabpage_list_wins(0) > 1 then
+					pcall(vim.api.nvim_win_close, win, false)
+				end
+				win_tabs[win] = nil
+			end
+
+			-- Orphan scan: delete the buffer only when it is no longer tabbed in
+			-- ANY window (its last reference anywhere is gone).
+			local orphaned = true
+			for _, o in pairs(win_tabs) do
+				for _, b in ipairs(o) do
+					if b == bufnr then
+						orphaned = false
+						break
+					end
+				end
+				if not orphaned then
+					break
+				end
+			end
+			if orphaned then
+				pcall(vim.api.nvim_buf_delete, bufnr, { force = false })
+			end
+
+			emit()
+		end)
+	end
+
+	-- Initial emit so the startup window layout is reflected without a change.
+	emit()
+end

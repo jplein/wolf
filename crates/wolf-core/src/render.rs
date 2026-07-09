@@ -438,6 +438,39 @@ pub struct ThemeGroup {
     pub bg: Option<Rgb>,
 }
 
+/// One tab in a pane's tab strip: the buffer it shows, that buffer's absolute
+/// canonicalized path (empty [`PathBuf`] for an unnamed buffer), and whether the
+/// buffer has unsaved modifications.
+///
+/// Populated out-of-band from the redraw stream via the `wolf_tabs` notification
+/// (see [`crate::redraw`]); the front-end joins a grid → window → its
+/// [`PaneTabs`] and formats each entry's `path` via [`crate::tab_label`].
+#[derive(Clone, Debug, Default)]
+pub struct TabEntry {
+    /// The Neovim buffer handle this tab shows.
+    pub bufnr: i64,
+    /// The buffer's absolute, canonicalized path, or an empty [`PathBuf`] for an
+    /// unnamed buffer (which still gets a tab).
+    pub path: PathBuf,
+    /// Whether the buffer has unsaved modifications.
+    pub modified: bool,
+}
+
+/// One pane's ordered, accumulating tab strip: the tabs in open order plus the
+/// pane's currently active buffer handle (the active tab).
+///
+/// Keyed in [`Snapshot::tabs`] by the Neovim WINDOW handle (`WinInfo.win`, an
+/// `i64`). Wholesale-replaced on each `wolf_tabs` emit (see [`crate::redraw`]),
+/// so stale/closed windows vanish. `active` is `None` when the pane's current
+/// buffer is not (yet) tracked.
+#[derive(Clone, Debug, Default)]
+pub struct PaneTabs {
+    /// The tabs in open (append-to-the-right) order.
+    pub order: Vec<TabEntry>,
+    /// The pane's currently active buffer handle (the active tab), if known.
+    pub active: Option<i64>,
+}
+
 /// The app-level theme colors driven by the optional `WolfCursor` /
 /// `WolfTitlebar` highlight groups (see [`crate::redraw`]'s `wolf_theme`
 /// handling). All-`None` by default; front-ends fall back to their existing
@@ -485,6 +518,15 @@ pub struct Snapshot {
     /// a grid → window → buffer path via [`crate::api::WolfCore::pane_status`].
     /// Defaults to empty.
     pub buffers: HashMap<i64, PathBuf>,
+    /// Per-window tab strips, keyed by the Neovim WINDOW handle (`WinInfo.win`,
+    /// an `i64`). Each [`PaneTabs`] is an ordered, accumulating list of tabs (one
+    /// per buffer shown in that window) plus the pane's active buffer handle.
+    /// Updated out-of-band from the redraw stream via the `wolf_tabs`
+    /// notification (see [`crate::redraw`]): the whole map is WHOLESALE-REPLACED
+    /// on each emit, so stale/closed windows vanish. Because it is not a redraw
+    /// frame, updating it does NOT bump `seq`; the front-end joins a grid →
+    /// window → tabs via [`crate::api::WolfCore::pane_tabs`]. Defaults to empty.
+    pub tabs: HashMap<i64, PaneTabs>,
     /// The app-level theme colors from the optional `WolfCursor` /
     /// `WolfTitlebar` highlight groups. Updated out-of-band from the redraw
     /// stream via the `wolf_theme` notification (a `ColorScheme` autocmd plus

@@ -100,6 +100,8 @@ const CMD_KIND_COPY: u8 = 14;
 const CMD_KIND_PASTE: u8 = 15;
 /// `FfiCommand::kind()` for Buffer Picker (the appended discriminant 16, View menu).
 const CMD_KIND_BUFFER_PICKER: u8 = 16;
+/// `FfiCommand::kind()` for Close Tab (the appended discriminant 17, File menu).
+const CMD_KIND_CLOSE_TAB: u8 = 17;
 
 /// Builds a printable-character `FfiKeyEvent` (kind=Char) for `c`, all modifiers
 /// false (the already-resolved glyph rides in `ch`). Same as `panes.rs`.
@@ -166,8 +168,8 @@ fn commands_drain_close_and_minimize() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // Discriminant-contract guard: the local consts MUST be contiguous 0..=16 in
-    // variant order (mirrors `mod command_kind`). Referencing all seventeen here
+    // Discriminant-contract guard: the local consts MUST be contiguous 0..=17 in
+    // variant order (mirrors `mod command_kind`). Referencing all eighteen here
     // also keeps them from tripping dead-code lints.
     assert_eq!(
         [
@@ -188,9 +190,10 @@ fn commands_drain_close_and_minimize() {
             CMD_KIND_COPY,
             CMD_KIND_PASTE,
             CMD_KIND_BUFFER_PICKER,
+            CMD_KIND_CLOSE_TAB,
         ],
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-        "command_kind discriminants must be contiguous 0..=16 in Command variant order"
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+        "command_kind discriminants must be contiguous 0..=17 in Command variant order"
     );
 
     let init_lua = common::init_lua_path();
@@ -280,6 +283,14 @@ fn commands_drain_close_and_minimize() {
     // appended discriminant 16.
     send_ex_command(&handle, ":WolfBufferPicker");
     poll_for_command_kind(&handle, CMD_KIND_BUFFER_PICKER, ":WolfBufferPicker");
+
+    // --- 3h. :WolfCloseTab<CR> -> an FfiCommand with kind() == CLOSE_TAB ------
+    // A pure FFI drain: nothing acts on it here (the front-end that would resolve
+    // the active pane's active tab and call `close_tab(win, bufnr)` is absent), so
+    // no tab or pane is closed. This proves `:WolfCloseTab` is auto-registered as a
+    // COMMAND_SPECS row and drains the appended discriminant 17.
+    send_ex_command(&handle, ":WolfCloseTab");
+    poll_for_command_kind(&handle, CMD_KIND_CLOSE_TAB, ":WolfCloseTab");
 
     // --- 4. Shutdown: clean teardown ----------------------------------------
     handle.shutdown();

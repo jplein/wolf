@@ -48,8 +48,8 @@ use wolf_core::{
     rank_buffers, rank_matches_top_n, rank_palette, BufInfo, BufferRow, Command, CommandMru,
     CoreConfig, CursorShape, FileSearch, FocusDir, Grid, InputEvent, Key, KeyEvent, LayoutIntent,
     MouseAction, MouseButton, MouseEvent, PaletteRow, PaletteRowKind, PaletteWindow, PaneStatus,
-    ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SplitOrientation, StateStore, WakeFn,
-    WinInfo, WindowState, WolfCore,
+    ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SplitOrientation, StateStore, TabLabel,
+    WakeFn, WinInfo, WindowState, WolfCore,
 };
 
 // Re-export the bridge-defined transparent structs at the crate root so the Rust
@@ -173,6 +173,8 @@ mod command_kind {
     pub const PASTE: u8 = 15;
     /// Open the buffer-picker overlay to fuzzy-switch among open buffers.
     pub const BUFFER_PICKER: u8 = 16;
+    /// Close the active pane tab.
+    pub const CLOSE_TAB: u8 = 17;
 }
 
 /// The palette-row-kind discriminants packed into [`FfiCommandRow::row_kind`].
@@ -438,6 +440,19 @@ mod ffi {
         // active window live from the snapshot. A no-op when the core is gone or no
         // active window is known.
         fn switch_buffer(&self, bufnr: i64);
+        // The per-pane tab strip for the window drawing into `grid` (bufnr +
+        // disambiguated display + active/modified flags). `FfiTab` is opaque so a
+        // `Vec` is supported. An empty `Vec` when the grid has no window/tabs or
+        // the core is gone.
+        fn pane_tabs_for_grid(&self, grid: u64) -> Vec<FfiTab>;
+        // Closes window `win`'s tab for buffer `bufnr` via `InputEvent::CloseTab`
+        // (the init.lua `wolf_close_tab` helper). A no-op when the core is gone.
+        fn close_tab(&self, win: i64, bufnr: i64);
+        // Switches window `win` (WIN-EXPLICIT) to buffer `bufnr` via
+        // `InputEvent::SwitchBuffer` (window-scoped `nvim_win_set_buf` + per-pane
+        // view restore). Unlike `switch_buffer(bufnr)` it does NOT resolve the
+        // active window. A no-op when the core is gone.
+        fn switch_tab(&self, win: i64, bufnr: i64);
         // Whether the active document is in Neovim visual mode (`v`/`V`/`<C-v>`).
         // Gates the Edit > Copy menu item. False when the core is gone.
         fn is_visual_mode(&self) -> bool;
@@ -635,7 +650,7 @@ mod ffi {
     extern "Rust" {
         type FfiCommand;
 
-        // The command kind (`command_kind::NEW_WINDOW` .. `BUFFER_PICKER`).
+        // The command kind (`command_kind::NEW_WINDOW` .. `CLOSE_TAB`).
         fn kind(&self) -> u8;
     }
 
@@ -697,6 +712,20 @@ mod ffi {
         // string ranked against the query.
         fn display(&self) -> String;
         // Whether the buffer has unsaved modifications (for the row chrome).
+        fn modified(&self) -> bool;
+    }
+
+    extern "Rust" {
+        type FfiTab;
+
+        // The Neovim buffer handle this tab shows (passed to `close_tab` /
+        // `switch_tab`).
+        fn bufnr(&self) -> i64;
+        // The disambiguated display label for the tab.
+        fn display(&self) -> String;
+        // Whether this tab is the pane's active tab.
+        fn active(&self) -> bool;
+        // Whether the buffer has unsaved modifications (for the tab chrome).
         fn modified(&self) -> bool;
     }
 
@@ -1506,6 +1535,44 @@ impl WolfCoreHandle {
         }
     }
 
+    /// The per-pane tab strip for the window drawing into `grid`, each mapped
+    /// into an opaque [`FfiTab`].
+    ///
+    /// Delegates to [`wolf_core::WolfCore::pane_tabs`], which joins `grid` →
+    /// window → its tabs and formats each via [`wolf_core::tab_labels`]. Returns
+    /// an empty `Vec` when the grid has no window/tabs or the core is gone.
+    #[must_use]
+    pub fn pane_tabs_for_grid(&self, grid: u64) -> Vec<FfiTab> {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return Vec::new();
+        };
+        core.pane_tabs(grid).into_iter().map(FfiTab::from_label).collect()
+    }
+
+    /// Closes window `win`'s tab for buffer `bufnr` via [`InputEvent::CloseTab`]
+    /// (the init.lua `wolf_close_tab` helper). A no-op once the core has been shut
+    /// down.
+    pub fn close_tab(&self, win: i64, bufnr: i64) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.close_tab(win, bufnr);
+        }
+    }
+
+    /// Switches window `win` (WIN-EXPLICIT) to buffer `bufnr` via
+    /// [`InputEvent::SwitchBuffer`] (window-scoped `nvim_win_set_buf` + per-pane
+    /// view restore).
+    ///
+    /// Unlike [`switch_buffer`](Self::switch_buffer) it does NOT resolve the
+    /// active window; the caller passes the target window explicitly (so an X on a
+    /// tab in a non-active pane targets the right pane). A no-op once the core has
+    /// been shut down.
+    pub fn switch_tab(&self, win: i64, bufnr: i64) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.switch_buffer(win, bufnr);
+        }
+    }
+
     /// Whether the active document is in Neovim visual mode. Gates the Edit >
     /// Copy menu item. False once the core has been shut down.
     #[must_use]
@@ -1764,7 +1831,7 @@ pub struct FfiCommand {
 }
 
 impl FfiCommand {
-    /// The command kind (`command_kind::NEW_WINDOW` .. `PASTE`).
+    /// The command kind (`command_kind::NEW_WINDOW` .. `CLOSE_TAB`).
     #[must_use]
     pub fn kind(&self) -> u8 {
         self.kind
@@ -1792,6 +1859,7 @@ impl FfiCommand {
             Command::Copy => command_kind::COPY,
             Command::Paste => command_kind::PASTE,
             Command::BufferPicker => command_kind::BUFFER_PICKER,
+            Command::CloseTab => command_kind::CLOSE_TAB,
         };
         Self { kind }
     }
@@ -2006,6 +2074,60 @@ impl FfiBufferRow {
             bufnr: row.bufnr,
             display: row.display,
             modified: row.modified,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FfiTab: one pane tab (opaque to Swift).
+// ---------------------------------------------------------------------------
+
+/// One pane tab (opaque to Swift, so a `Vec<FfiTab>` is supported — swift-bridge
+/// emits Vec support only for opaque types).
+///
+/// A projection of [`wolf_core::TabLabel`]: the buffer handle, the disambiguated
+/// display label, and the active/modified flags flattened into scalar/String
+/// accessors.
+pub struct FfiTab {
+    bufnr: i64,
+    display: String,
+    active: bool,
+    modified: bool,
+}
+
+impl FfiTab {
+    /// The Neovim buffer handle this tab shows (passed to
+    /// [`WolfCoreHandle::close_tab`] / [`WolfCoreHandle::switch_tab`]).
+    #[must_use]
+    pub fn bufnr(&self) -> i64 {
+        self.bufnr
+    }
+
+    /// The disambiguated display label for the tab.
+    #[must_use]
+    pub fn display(&self) -> String {
+        self.display.clone()
+    }
+
+    /// Whether this tab is the pane's active tab.
+    #[must_use]
+    pub fn active(&self) -> bool {
+        self.active
+    }
+
+    /// Whether the buffer has unsaved modifications (for the tab chrome).
+    #[must_use]
+    pub fn modified(&self) -> bool {
+        self.modified
+    }
+
+    /// Projects a [`wolf_core::TabLabel`] into the bridge-friendly flat tab.
+    fn from_label(label: TabLabel) -> Self {
+        Self {
+            bufnr: label.bufnr,
+            display: label.display,
+            active: label.active,
+            modified: label.modified,
         }
     }
 }

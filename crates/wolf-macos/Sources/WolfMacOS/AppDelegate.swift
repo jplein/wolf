@@ -244,6 +244,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         switch kind {
         case .closePane:
             return (keyController?.paneCount ?? 0) > 1
+        case .closeTab:
+            // Disable only at the last-pane-last-tab, where the core-side helper
+            // is a complete no-op (Decision #5). Otherwise Close Tab is enabled.
+            return !((keyController?.paneCount ?? 0) <= 1 && (keyController?.activeTabCount ?? 0) <= 1)
         case .copy:
             return keyController?.isVisualMode ?? false
         default:

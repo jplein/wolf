@@ -73,8 +73,6 @@ final class PaneContainerView: NSView {
     // -- Per-pane statusbar tuning --------------------------------------------
     /// Vertical padding above the first and below the last statusbar line (px).
     private static let statusbarVerticalPadding: Double = 3
-    /// Gap between the primary (filename) and secondary (path) statusbar lines (px).
-    private static let statusbarLineGap: Double = 1
     /// Floor for the secondary (path) statusbar font size (px), so a tiny grid
     /// font still leaves the path legible.
     private static let statusbarMinSecondaryFontSize: Double = 9
@@ -83,6 +81,23 @@ final class PaneContainerView: NSView {
     /// The secondary (path) statusbar text alpha when derived from the themed
     /// titlebar foreground (else `secondaryLabelColor` is used directly).
     private static let statusbarSecondaryThemedAlpha: CGFloat = 0.7
+
+    // -- Per-pane tab-strip tuning --------------------------------------------
+    /// Fixed per-tab width (px); the last tab clamps to the remaining strip width.
+    private static let tabWidth: Double = 180
+    /// The close (X) glyph hit-square side (px), flush to each tab's trailing edge.
+    private static let tabCloseSize: Double = 12
+    /// Left inset of a tab's label text from the tab's leading edge (px).
+    private static let tabTextInset: CGFloat = 8
+    /// Extra right inset of a tab's label from the close glyph so text never runs
+    /// under the X (px).
+    private static let tabLabelRightInset: CGFloat = 4
+    /// Fill alpha for the ACTIVE tab (a subtle highlight over the strip bg).
+    private static let tabActiveFillAlpha: CGFloat = 0.16
+    /// Fill alpha for a HOVERED (non-active) tab.
+    private static let tabHoverFillAlpha: CGFloat = 0.10
+    /// Text alpha for an INACTIVE (non-active) tab label.
+    private static let tabInactiveTextAlpha: CGFloat = 0.6
 
     // -- Synthetic scrollbar appearance / fade tuning -------------------------
     /// Scrollbar track/thumb thickness (px).
@@ -120,6 +135,11 @@ final class PaneContainerView: NSView {
     /// `mouseUp`, so a drag keeps targeting the pane the press started in even when
     /// the pointer leaves that pane's rect.
     private var mouseDragGrid: UInt64?
+
+    /// The tab currently under the pointer (its pane + tab index), or `nil` when
+    /// no tab is hovered. Drives the hover fill + the X-on-hover treatment (the X
+    /// is painted only on the hovered tab). Updated by `mouseMoved`/`mouseExited`.
+    private var hoveredTab: (pane: PaneId, index: Int)?
 
     /// Accumulates fractional scroll deltas into discrete whole-cell line steps.
     private var scrollAccumulator = ScrollAccumulator()
@@ -234,24 +254,35 @@ final class PaneContainerView: NSView {
         max(Self.statusbarMinSecondaryFontSize, statusbarPrimaryFontSize * Self.statusbarSecondaryFontScale)
     }
 
-    /// The pure vertical layout of the statusbar strip (line tops/heights + total
-    /// height), from the current metrics-derived font sizes.
-    private var statusbarLayout: StatusbarLayout {
-        StatusbarLayout(
-            primaryFontSize: statusbarPrimaryFontSize,
-            secondaryFontSize: statusbarSecondaryFontSize,
-            verticalPadding: Self.statusbarVerticalPadding,
-            lineGap: Self.statusbarLineGap)
+    /// The tab-row height (px): one primary-font line plus padding above and below.
+    private var tabRowHeight: Double {
+        (statusbarPrimaryFontSize * 1.25).rounded(.up) + 2 * Self.statusbarVerticalPadding
     }
 
-    /// The height (px) of the per-pane statusbar strip reserved at the top of every
-    /// pane; the grid gets the remaining pane height below it.
-    private var statusbarHeight: CGFloat { CGFloat(statusbarLayout.height) }
+    /// The secondary (active tab's path) line height (px): one secondary-font line
+    /// plus padding beneath it.
+    private var tabSecondaryLineHeight: Double {
+        (statusbarSecondaryFontSize * 1.25).rounded(.up) + Self.statusbarVerticalPadding
+    }
 
-    /// The statusbar strip rectangle at the TOP of pane `rect` (full pane width,
-    /// `statusbarHeight` tall).
-    private func statusbarRect(ofPane rect: CGRect) -> CGRect {
-        CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: statusbarHeight)
+    /// The pure tab-strip geometry for a `width`-wide strip holding `tabCount`
+    /// tabs (tab rects, per-tab close rects, secondary line, total height).
+    private func tabStrip(width: Double, tabCount: Int) -> TabStripLayout {
+        TabStripLayout(
+            stripWidth: width, tabCount: tabCount, tabWidth: Self.tabWidth,
+            tabHeight: tabRowHeight, closeSize: Self.tabCloseSize,
+            secondaryLineHeight: tabSecondaryLineHeight)
+    }
+
+    /// The height (px) of the per-pane tab strip reserved at the top of every
+    /// pane (tab row + secondary path line); the grid gets the remaining pane
+    /// height below it. Independent of tab count / width.
+    private var tabStripHeight: CGFloat { CGFloat(tabRowHeight + tabSecondaryLineHeight) }
+
+    /// The tab-strip rectangle at the TOP of pane `rect` (full pane width,
+    /// `tabStripHeight` tall).
+    private func tabStripRect(ofPane rect: CGRect) -> CGRect {
+        CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: tabStripHeight)
     }
 
     /// The GRID rectangle inside pane `rect`: the pane inset by `EditorInset.padding`
@@ -262,7 +293,7 @@ final class PaneContainerView: NSView {
     private func gridRect(ofPane rect: CGRect) -> CGRect {
         let inset = EditorInset(
             paneWidth: Double(rect.width), paneHeight: Double(rect.height),
-            statusbarHeight: Double(statusbarHeight), padding: EditorInset.padding)
+            statusbarHeight: Double(tabStripHeight), padding: EditorInset.padding)
         return CGRect(
             x: rect.minX + inset.gridRect.x, y: rect.minY + inset.gridRect.y,
             width: inset.gridRect.w, height: inset.gridRect.h)
@@ -320,6 +351,29 @@ final class PaneContainerView: NSView {
         let point = convert(event.locationInWindow, from: nil)
         for (id, rect) in paneRects() where rect.contains(point) {
             guard let binding = panes[id] else { return }
+
+            // Tab-strip clicks: a click in the top strip hit-tests the tabs. An X
+            // closes that tab (win-explicit); a tab body focuses the pane and
+            // switches it to that buffer. Neither forwards a grid mouse press.
+            if let grid = binding.boundGrid,
+                let hit = tabStripHit(grid: grid, paneRect: rect, point: point)
+            {
+                switch hit.hit {
+                case .close(let i):
+                    if let bufnr = hit.bufnr(at: i) {
+                        handle.close_tab(binding.win, bufnr)
+                    }
+                case .tab(let i):
+                    if let bufnr = hit.bufnr(at: i) {
+                        handle.focus_win(binding.win)
+                        setActivePane(id)
+                        handle.switch_tab(binding.win, bufnr)
+                    }
+                }
+                needsDisplay = true
+                return
+            }
+
             handle.focus_win(binding.win)
             setActivePane(id)
             needsDisplay = true
@@ -332,6 +386,83 @@ final class PaneContainerView: NSView {
             }
             return
         }
+    }
+
+    /// The result of a tab-strip hit test: the hit target plus the tab list it was
+    /// resolved against (so the caller can read the hit tab's bufnr).
+    private struct TabStripHit {
+        let hit: TabStripLayout.Hit
+        let tabs: RustVec<FfiTab>
+        /// The buffer handle of the tab at index `i`, or `nil` if out of range.
+        func bufnr(at i: Int) -> Int64? {
+            guard i >= 0, i < Int(tabs.len()), let tab = tabs.get(index: UInt(i)) else {
+                return nil
+            }
+            return tab.bufnr()
+        }
+    }
+
+    /// Hit-tests the tab strip at the top of pane `paneRect` (bound to `grid`) for
+    /// `point` (this view's coordinates), returning the tab/close hit or `nil` when
+    /// the point is not on a tab. Only points inside the strip rect are considered.
+    private func tabStripHit(grid: UInt64, paneRect: CGRect, point: CGPoint) -> TabStripHit? {
+        let strip = tabStripRect(ofPane: paneRect)
+        guard strip.contains(point) else { return nil }
+        let tabs = handle.pane_tabs_for_grid(grid)
+        let layout = tabStrip(width: Double(strip.width), tabCount: Int(tabs.len()))
+        guard
+            let hit = layout.hit(
+                x: Double(point.x - strip.minX), y: Double(point.y - strip.minY))
+        else { return nil }
+        return TabStripHit(hit: hit, tabs: tabs)
+    }
+
+    /// Installs a single tracking area over the whole view so `mouseMoved` /
+    /// `mouseExited` fire for the tab-strip hover treatment (X-on-hover).
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas {
+            removeTrackingArea(area)
+        }
+        addTrackingArea(
+            NSTrackingArea(
+                rect: bounds,
+                options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                owner: self, userInfo: nil))
+    }
+
+    /// Tracks the tab under the pointer so the tab strip can fill the hovered tab
+    /// and draw its close X. Repaints only when the hovered tab actually changes.
+    override func mouseMoved(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let next = hoveredTabAt(point)
+        if hoveredTab?.pane != next?.pane || hoveredTab?.index != next?.index {
+            hoveredTab = next
+            needsDisplay = true
+        }
+    }
+
+    /// Clears the hovered tab when the pointer leaves the view.
+    override func mouseExited(with event: NSEvent) {
+        if hoveredTab != nil {
+            hoveredTab = nil
+            needsDisplay = true
+        }
+    }
+
+    /// The tab (pane id + tab index) under `point`, or `nil` when the point is not
+    /// on a tab in any pane's strip.
+    private func hoveredTabAt(_ point: CGPoint) -> (pane: PaneId, index: Int)? {
+        for (id, rect) in paneRects() where rect.contains(point) {
+            guard let grid = panes[id]?.boundGrid,
+                let hit = tabStripHit(grid: grid, paneRect: rect, point: point)
+            else { return nil }
+            switch hit.hit {
+            case .tab(let i), .close(let i):
+                return (id, i)
+            }
+        }
+        return nil
     }
 
     /// Extends the press into a drag (visual selection under `mouse=a`), keeping the
@@ -623,21 +754,23 @@ final class PaneContainerView: NSView {
         let rects = paneRects()
         for (id, rect) in rects {
             guard let grid = panes[id]?.boundGrid else { continue }
-            paintPane(grid: grid, paneRect: rect, dimmed: id != activePane, ctx: ctx)
+            paintPane(pane: id, grid: grid, paneRect: rect, dimmed: id != activePane, ctx: ctx)
         }
         drawDividers(rects, ctx: ctx)
         paintCmdlineStrip(ctx)
         drawScrollbars(rects, ctx: ctx)
     }
 
-    /// Paints one whole pane: the top statusbar strip, then the window grid below
-    /// it, then (for an inactive pane) an inactive-dim scrim over the WHOLE pane
-    /// (statusbar + grid + any side margins), so the strip dims with its pane.
-    private func paintPane(grid: UInt64, paneRect: CGRect, dimmed: Bool, ctx: CGContext) {
+    /// Paints one whole pane: the top tab strip, then the window grid below it,
+    /// then (for an inactive pane) an inactive-dim scrim over the WHOLE pane (tab
+    /// strip + grid + any side margins), so the strip dims with its pane.
+    private func paintPane(pane: PaneId, grid: UInt64, paneRect: CGRect, dimmed: Bool, ctx: CGContext) {
         ctx.saveGState()
         ctx.clip(to: paneRect)
 
-        paintStatusbar(into: statusbarRect(ofPane: paneRect), grid: grid, paneRect: paneRect, ctx: ctx)
+        paintTabStrip(
+            pane: pane, into: tabStripRect(ofPane: paneRect), grid: grid, paneRect: paneRect,
+            ctx: ctx)
 
         let frame = handle.read_frame_for_grid(grid)
         paintGrid(frame, into: gridRect(ofPane: paneRect), ctx: ctx)
@@ -679,16 +812,20 @@ final class PaneContainerView: NSView {
         ctx.restoreGState()
     }
 
-    /// Paints the per-pane statusbar strip: a titlebar-matched background, the
-    /// pane's base filename (primary line), and its display path (secondary line).
+    /// Paints the per-pane tab strip: a titlebar-matched background, one tab per
+    /// buffer the pane has shown (active highlighted, inactive dimmed, the hovered
+    /// tab given a fill and its close X), and — beneath the tab row — the active
+    /// tab's display path as a secondary line.
     ///
     /// The background matches the macOS titlebar: the window's own
     /// `backgroundColor` (kept in sync with the `WolfTitlebar` theme by
     /// `MainWindow.applyTitlebarBackground`), falling back to the themed titlebar
-    /// bg / editor fallback when there is no window. Text is left-aligned with the
-    /// grid's text left edge (respecting `PaneGeometry.paintOffsetX`) and truncated
-    /// with a tail ellipsis. An unnamed buffer shows `[No Name]` with no path line.
-    private func paintStatusbar(into strip: CGRect, grid: UInt64, paneRect: CGRect, ctx: CGContext) {
+    /// bg / editor fallback when there is no window. Tab geometry comes from the
+    /// pure `WolfKeyMap.TabStripLayout`; the secondary path comes from
+    /// `pane_status_for_grid`. The X is drawn only on the hovered tab.
+    private func paintTabStrip(
+        pane: PaneId, into strip: CGRect, grid: UInt64, paneRect: CGRect, ctx: CGContext
+    ) {
         ctx.saveGState()
         ctx.clip(to: strip)
 
@@ -703,49 +840,98 @@ final class PaneContainerView: NSView {
         ctx.setFillColor(bgColor)
         ctx.fill(strip)
 
-        // Text left- and right-aligns with the grid's text edges: base it on the
-        // INSET grid rect (not the full pane rect), so the statusbar text sits inside
-        // the per-pane padding, flush with the grid text.
-        let gRect = gridRect(ofPane: paneRect)
-        let geo = geometry(for: gRect)
-        let textLeft = gRect.minX + CGFloat(geo.paintOffsetX)
-        let textWidth = max(0, gRect.maxX - textLeft)
-
-        let layout = statusbarLayout
-        let status = handle.pane_status_for_grid(grid)
-        let filename = status.filename().toString()
-        let displayPath = status.display_path().toString()
-
-        // Colors: the themed titlebar fg when set (secondary derived at a lower
-        // alpha), else AppKit's label / secondary-label system colors.
+        // Colors: the themed titlebar fg when set (dimmed for inactive tabs / the
+        // secondary line), else AppKit's label / secondary-label system colors.
         let titlebarFg = handle.theme_titlebar_fg()
-        let primaryColor: NSColor
+        let baseColor: NSColor
         let secondaryColor: NSColor
         if titlebarFg.set {
             let themed = NSColor(cgColor: WolfColor.cgColor(packed: titlebarFg.rgb)) ?? .labelColor
-            primaryColor = themed
+            baseColor = themed
             secondaryColor = themed.withAlphaComponent(Self.statusbarSecondaryThemedAlpha)
         } else {
-            primaryColor = .labelColor
+            baseColor = .labelColor
             secondaryColor = .secondaryLabelColor
         }
 
-        let primaryRect = CGRect(
-            x: textLeft, y: strip.minY + CGFloat(layout.primaryLineTop),
-            width: textWidth, height: CGFloat(layout.primaryLineHeight))
-        drawStatusbarText(
-            filename, in: primaryRect,
-            font: .systemFont(ofSize: CGFloat(statusbarPrimaryFontSize)), color: primaryColor)
+        let tabs = handle.pane_tabs_for_grid(grid)
+        let count = Int(tabs.len())
+        let layout = tabStrip(width: Double(strip.width), tabCount: count)
+        let tabFont = NSFont.systemFont(ofSize: CGFloat(statusbarPrimaryFontSize))
 
-        if !displayPath.isEmpty {
-            let secondaryRect = CGRect(
-                x: textLeft, y: strip.minY + CGFloat(layout.secondaryLineTop),
-                width: textWidth, height: CGFloat(layout.secondaryLineHeight))
+        var activePath = ""
+        for i in 0..<count {
+            guard let tab = tabs.get(index: UInt(i)), i < layout.tabRects.count else { continue }
+            let tabRect = paneLocalRect(layout.tabRects[i], in: strip)
+            guard tabRect.width > 0 else { continue }
+            let isActive = tab.active()
+            let isHovered = hoveredTab?.pane == pane && hoveredTab?.index == i
+
+            // Active highlight / hover fill.
+            if isActive {
+                ctx.setFillColor(CGColor(gray: 1, alpha: Self.tabActiveFillAlpha))
+                ctx.fill(tabRect)
+            } else if isHovered {
+                ctx.setFillColor(CGColor(gray: 1, alpha: Self.tabHoverFillAlpha))
+                ctx.fill(tabRect)
+            }
+
+            // Label text (inactive tabs dimmed), tail-truncated, clearing the X.
+            let label = tab.display().toString() + (tab.modified() ? " •" : "")
+            let color = isActive ? baseColor : baseColor.withAlphaComponent(Self.tabInactiveTextAlpha)
+            let textLeft = tabRect.minX + Self.tabTextInset
+            let textRight = tabRect.maxX - CGFloat(Self.tabCloseSize) - Self.tabLabelRightInset
+            let textRect = CGRect(
+                x: textLeft, y: tabRect.minY,
+                width: max(0, textRight - textLeft), height: tabRect.height)
+            drawStatusbarText(label, in: textRect, font: tabFont, color: color)
+
+            // The close X is drawn ONLY on the hovered tab.
+            if isHovered, i < layout.closeRects.count {
+                drawCloseGlyph(paneLocalRect(layout.closeRects[i], in: strip), color: color, ctx: ctx)
+            }
+
+            if isActive {
+                activePath = handle.pane_status_for_grid(grid).display_path().toString()
+            }
+        }
+
+        // Secondary line: the active tab's display path, aligned with the tab text.
+        if !activePath.isEmpty {
+            let secRect = paneLocalRect(layout.secondaryLineRect, in: strip)
+            let textRect = CGRect(
+                x: secRect.minX + Self.tabTextInset, y: secRect.minY,
+                width: max(0, secRect.width - Self.tabTextInset), height: secRect.height)
             drawStatusbarText(
-                displayPath, in: secondaryRect,
+                activePath, in: textRect,
                 font: .systemFont(ofSize: CGFloat(statusbarSecondaryFontSize)), color: secondaryColor)
         }
 
+        ctx.restoreGState()
+    }
+
+    /// Maps a strip-local `WolfKeyMap.Rect` into this view's coordinates by
+    /// offsetting it to the strip's origin.
+    private func paneLocalRect(_ r: Rect, in strip: CGRect) -> CGRect {
+        CGRect(x: strip.minX + CGFloat(r.x), y: strip.minY + CGFloat(r.y), width: CGFloat(r.w), height: CGFloat(r.h))
+    }
+
+    /// Draws a small close (X) glyph centered in `rect` in `color`.
+    private func drawCloseGlyph(_ rect: CGRect, color: NSColor, ctx: CGContext) {
+        let inset: CGFloat = 3
+        let x0 = rect.minX + inset
+        let x1 = rect.maxX - inset
+        let y0 = rect.minY + inset
+        let y1 = rect.maxY - inset
+        ctx.saveGState()
+        ctx.setStrokeColor(color.cgColor)
+        ctx.setLineWidth(1.5)
+        ctx.setLineCap(.round)
+        ctx.move(to: CGPoint(x: x0, y: y0))
+        ctx.addLine(to: CGPoint(x: x1, y: y1))
+        ctx.move(to: CGPoint(x: x1, y: y0))
+        ctx.addLine(to: CGPoint(x: x0, y: y1))
+        ctx.strokePath()
         ctx.restoreGState()
     }
 

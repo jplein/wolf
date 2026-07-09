@@ -22,8 +22,8 @@ use crate::command::Command;
 use crate::layout::LayoutIntent;
 use crate::recent_dirs::RecentDirs;
 use crate::render::{
-    Cell, CursorShape, DefaultColors, HlAttr, ModeInfo, Rgb, SharedSnapshot, Snapshot,
-    ThemeColors, ThemeGroup, Viewport, WinInfo,
+    Cell, CursorShape, DefaultColors, HlAttr, ModeInfo, PaneTabs, Rgb, SharedSnapshot, Snapshot,
+    TabEntry, ThemeColors, ThemeGroup, Viewport, WinInfo,
 };
 use crate::state::StateStore;
 
@@ -86,6 +86,15 @@ const CURRENT_FILE_EVENT: &str = "wolf_current_file";
 /// WHOLESALE-REPLACES [`Snapshot::buffers`] with the reported set. Routed
 /// separately from `redraw` in [`RedrawHandler::handle_notify`].
 const BUFFERS_EVENT: &str = "wolf_buffers";
+
+/// Name of the out-of-band notification carrying the per-window tab strips,
+/// emitted by the `WolfTabs` autocmds in `runtime/nvim/init.lua` (and once
+/// immediately at setup). The payload is a single msgpack array of
+/// `[win, [[bufnr, name, modified], ...], active_bufnr]` triples for ALL windows
+/// in the current tabpage; core WHOLESALE-REPLACES [`Snapshot::tabs`] with the
+/// reported set. Routed separately from `redraw` in
+/// [`RedrawHandler::handle_notify`].
+const TABS_EVENT: &str = "wolf_tabs";
 
 /// Name of the out-of-band notification carrying the active window handle,
 /// emitted by the `WolfLayout` `WinEnter` autocmd in `runtime/nvim/init.lua`.
@@ -189,6 +198,15 @@ impl Handler for RedrawHandler {
                 // wake-after-unlock invariant). This is NOT a redraw frame, so
                 // `seq` is left unchanged.
                 self.apply_buffers(args).await;
+                (self.wake)();
+            }
+            TABS_EVENT => {
+                // `apply_tabs` builds the new map BEFORE taking the write guard,
+                // then assigns it and DROPS the lock before returning; the wake
+                // fires strictly after the lock is released (same
+                // wake-after-unlock invariant). This is NOT a redraw frame, so
+                // `seq` is left unchanged.
+                self.apply_tabs(args).await;
                 (self.wake)();
             }
             ACTIVE_WIN_EVENT => {
@@ -346,6 +364,74 @@ impl RedrawHandler {
         let mut snap = self.snapshot.write_async().await;
         snap.buffers = map;
         // A buffers change is NOT a redraw frame, so `seq` is intentionally left
+        // unchanged. The caller fires the wake after this lock drops.
+        // Lock drops here as `snap` goes out of scope at function return.
+    }
+
+    /// Applies a `wolf_tabs` notification: WHOLESALE-REPLACES the snapshot's
+    /// per-window tab map ([`Snapshot::tabs`]) with the reported set.
+    ///
+    /// The single argument is a msgpack array of
+    /// `[win, [[bufnr, name, modified], ...], active_bufnr]` triples for ALL
+    /// windows in the current tabpage. Each `win` decodes via [`ext_handle`];
+    /// each per-tab `name` is `nvim_buf_get_name(buf)` — absolute for a file
+    /// buffer, empty for an unnamed one. Unlike [`apply_buffers`], an empty
+    /// name is KEPT (an unnamed buffer still gets a tab, with an empty
+    /// [`PathBuf`]); non-empty paths are canonicalized (to match the canonical
+    /// paths the rest of core keys on), falling back to the raw path if
+    /// canonicalization fails.
+    ///
+    /// The new map is built in full BEFORE the write guard is taken (so no
+    /// filesystem work happens under the lock), then assigned wholesale. The lock
+    /// is acquired via [`SharedSnapshot::write_async`], is NOT held across any
+    /// `.await`, and is dropped before returning so the caller's wake fires after
+    /// the lock is released. This is NOT a redraw frame, so `seq` is left
+    /// unchanged; the wholesale replacement drops any stale/closed windows.
+    async fn apply_tabs(&self, args: Vec<Value>) {
+        let mut map: HashMap<i64, PaneTabs> = HashMap::new();
+        if let Some(windows) = args.first().and_then(Value::as_array) {
+            for entry in windows {
+                let Some(entry) = entry.as_array() else {
+                    continue;
+                };
+                let Some(win) = entry.first().and_then(ext_handle) else {
+                    continue;
+                };
+                let tabs = entry.get(1).and_then(Value::as_array);
+                let active = entry.get(2).and_then(ext_handle);
+
+                let mut order: Vec<TabEntry> = Vec::new();
+                if let Some(tabs) = tabs {
+                    for tab in tabs {
+                        let Some(tab) = tab.as_array() else { continue };
+                        let Some(bufnr) = tab.first().and_then(ext_handle) else {
+                            continue;
+                        };
+                        let name = tab.get(1).and_then(Value::as_str).unwrap_or("");
+                        let modified =
+                            matches!(tab.get(2).and_then(Value::as_bool), Some(true));
+                        // Keep unnamed/empty-path entries as tabs with an empty
+                        // PathBuf; canonicalize non-empty paths.
+                        let path = if name.is_empty() {
+                            PathBuf::new()
+                        } else {
+                            std::fs::canonicalize(name).unwrap_or_else(|_| PathBuf::from(name))
+                        };
+                        order.push(TabEntry {
+                            bufnr,
+                            path,
+                            modified,
+                        });
+                    }
+                }
+
+                map.insert(win, PaneTabs { order, active });
+            }
+        }
+
+        let mut snap = self.snapshot.write_async().await;
+        snap.tabs = map;
+        // A tabs change is NOT a redraw frame, so `seq` is intentionally left
         // unchanged. The caller fires the wake after this lock drops.
         // Lock drops here as `snap` goes out of scope at function return.
     }

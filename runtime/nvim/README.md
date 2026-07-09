@@ -120,6 +120,29 @@ The helper holds an upvalue `local view_cache = {}` keyed `view_cache[win][buf] 
 
 `_G.wolf_switch_buffer(win, buf)` does a **window-scoped** `nvim_win_set_buf(win, buf)` (NOT `:edit` — so it does not disturb `current_file` / the file-MRU or re-read from disk), then restores the pane's view keyed on `(win, buf)`: if `view_cache[win][buf]` exists it `nvim_win_call`s `winrestview(cached)`, ELSE it forces the top of the buffer (`winrestview{ lnum = 1, col = 0, topline = 1, leftcol = 0 }`). There is **NO per-`bufnr` fallback**: a buffer seen only in OTHER panes opens at the top, never borrowing another pane's scroll. The whole body is wrapped in `pcall`, so a stale `bufnr` degrades to a no-op. The macOS `BufferPickerView` activation reaches this through `WolfCoreHandle::switch_buffer(bufnr)` (which resolves the active window live).
 
+### Per-pane tab tracking — `_G.wolf_setup_tabs(chan)`
+
+A global helper that `wolf-core` invokes over RPC **after** the buffer-picker view tracking (so `_G.wolf_switch_buffer` already exists when `_G.wolf_close_tab` closes over it), passing core's own RPC channel id (see [`src/nvim.rs`](../../crates/wolf-core/src/nvim.rs)'s `setup_tabs`). Where per-window buffer tracking reports the SINGLE buffer currently shown in each window, this reports an ordered, ACCUMULATING per-window tab row — one tab per buffer that window has shown — plus the window's active buffer, so the macOS front-end can draw a **per-pane tab strip**.
+
+The helper holds an upvalue `local win_tabs = {}` keyed `win_tabs[win] = { bufnr, … }` (each an APPEND-TO-THE-RIGHT list of the buffers that window has shown), and:
+
+- a private `note(win)` appends the window's current buffer to its list if not already present (so a re-visited buffer keeps its original position);
+- a private `emit()` first `note`s the current buffer of every live window, then wholesale-notifies `wolf_tabs` = a per-window list `{ win, { { bufnr, name, modified }, … }, active_bufnr }` — `name` is `nvim_buf_get_name(buf)` (empty for an unnamed buffer, which STILL gets a tab), `modified` is `vim.bo[buf].modified`, `active_bufnr` is `nvim_win_get_buf(win)`; invalid bufnrs are skipped;
+- creates a `WolfTabs` augroup (`clear = true`) with a `BufEnter`/`BufWinEnter`/`BufFilePost`/`WinEnter`/`WinNew` autocmd → `emit`, a `WinClosed` autocmd that drops `win_tabs[match]` then re-emits, and a `BufDelete` autocmd that removes the deleted bufnr from EVERY window's list then re-emits;
+- emits once immediately so the startup window layout is reflected.
+
+Core WHOLESALE-REPLACES its per-window tab map (`Snapshot.tabs`) on each emit, so stale/closed windows drop out (no `seq` bump; the front-end is woken). The channel id is passed as a Lua **vararg** (`...`), never interpolated.
+
+The helper also defines `_G.wolf_close_tab(win, bufnr)` (closing over the same `win_tabs` upvalue and `emit`), the helper `wolf-core`'s `InputEvent::CloseTab` invokes via `nvim_exec_lua("wolf_close_tab(...)", [win, bufnr])`. The whole body is wrapped in `pcall`, so a stale `win`/`bufnr` degrades to a no-op. Its algorithm:
+
+1. locate `bufnr`'s tab index in `win_tabs[win]`; a missing window or absent bufnr is a no-op;
+2. **Decision #5 TOP GUARD** — when it is the pane's LAST tab (`#order == 1`) AND the LAST window (`#nvim_tabpage_list_wins(0) == 1`), return immediately as a COMPLETE no-op: the tab, the buffer, and the window are all left intact (there is nowhere to go — the last pane cannot close, so closing its last tab is meaningless);
+3. record `was_active = nvim_win_get_buf(win) == bufnr`, then `table.remove` the tab;
+4. if it was active and tabs remain, activate the RIGHT neighbor (now at `idx`) else the LEFT neighbor (`idx - 1`) via `_G.wolf_switch_buffer(win, neighbor)` (so the pane's view is restored);
+5. if that was the pane's last tab (and NOT the last window), close the pane — a guarded `nvim_win_close(win, false)` only when `#nvim_tabpage_list_wins(0) > 1` — and drop `win_tabs[win]`;
+6. **orphan scan** — delete the buffer (`pcall(nvim_buf_delete, bufnr, { force = false })`) ONLY when it is no longer tabbed in ANY window; a modified buffer silently survives (`force = false`) and reappears on the next emit, so unsaved work is never lost;
+7. `emit()`.
+
 ## Deferred
 
 Plugin baking is no longer fully deferred: **orlando** is the first vendored plugin (bundled into the macOS `.app` via `//bazel/orlando`, loaded conditionally as described above), and **lighthouse** is the second vendored asset — a **colorscheme** (bundled via `//bazel/lighthouse`, activated conditionally as described above). A Markdown LSP (e.g. `marksman`) and a formatter remain **deferred to a later phase** (full plugin baking via `wrapNeovim`). Phase 1 otherwise relies on Neovim's built-in markdown syntax highlighting and the `markdown` / `markdown_inline` treesitter parsers, which is enough to exercise the redraw/highlight pipeline and its tests.

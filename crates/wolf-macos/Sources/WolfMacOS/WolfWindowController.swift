@@ -497,6 +497,30 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         handle?.new_buffer()
     }
 
+    /// Closes the active pane's active tab (the `Close Tab` command / ⌘W).
+    ///
+    /// Resolves the active window → its grid → its tab strip, finds the active
+    /// tab, and closes it via `handle.close_tab(win, bufnr)`. A no-op when the
+    /// core is gone, there is no active window, or the active pane has no active
+    /// tab. On the last-tab-of-the-last-pane the core-side helper is a complete
+    /// no-op (Decision #5); the menu item is additionally disabled there via
+    /// `AppDelegate.validateMenuItem`.
+    func closeTab() {
+        guard let handle else { return }
+        let win = handle.active_win()
+        guard win != 0 else { return }
+        let grid = handle.grid_for_win(win)
+        guard grid != 0 else { return }
+        let tabs = handle.pane_tabs_for_grid(grid)
+        for i in 0..<tabs.len() {
+            guard let tab = tabs.get(index: UInt(i)) else { continue }
+            if tab.active() {
+                handle.close_tab(win, tab.bufnr())
+                return
+            }
+        }
+    }
+
     // MARK: - Edit commands
 
     /// Copies the current visual-mode selection to the system clipboard. Yanks
@@ -579,6 +603,19 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     /// window. Read by the coordinator's menu validation to disable the Close
     /// command on the last split.
     var paneCount: Int { paneContainer?.paneCount ?? 1 }
+
+    /// The number of tabs in this window's ACTIVE pane (its active Neovim
+    /// window's tab strip); 0 when the core is gone or no active window/grid is
+    /// known. Read by the coordinator's menu validation to disable the Close Tab
+    /// command at the last-pane-last-tab (where it would be a no-op).
+    var activeTabCount: Int {
+        guard let handle else { return 0 }
+        let win = handle.active_win()
+        guard win != 0 else { return 0 }
+        let grid = handle.grid_for_win(win)
+        guard grid != 0 else { return 0 }
+        return Int(handle.pane_tabs_for_grid(grid).len())
+    }
 
     /// Whether this window's active document is in Neovim visual mode
     /// (`v`/`V`/`<C-v>`). Read by the coordinator's menu validation to enable
