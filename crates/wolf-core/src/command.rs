@@ -27,7 +27,7 @@
 /// `MinimizeWindow`(4), `GoToFile`(5), `OpenFile`(6), `OpenFolder`(7),
 /// `ClosePane`(8), `NewBuffer`(9), `ResetFontSize`(10), `IncreaseFontSize`(11),
 /// `DecreaseFontSize`(12), `CommandPalette`(13), `Copy`(14), `Paste`(15),
-/// `BufferPicker`(16). Adding a command is additive
+/// `BufferPicker`(16), `NewTab`(17). Adding a command is additive
 /// (append a variant + a [`COMMAND_SPECS`] row); reordering is a breaking change.
 /// `CommandPalette` is the palette's own invoking command and is EXCLUDED from the
 /// palette's candidate list (a palette cannot dispatch itself).
@@ -68,6 +68,9 @@ pub enum Command {
     Paste,
     /// Open the buffer-picker overlay to fuzzy-switch among open buffers.
     BufferPicker,
+    /// Open a new tab in the current window (a new captive Neovim in the same
+    /// directory).
+    NewTab,
 }
 
 /// The menu group a command belongs to in a native menu bar.
@@ -237,6 +240,13 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         title: "Buffer Picker…",
         menu: MenuGroup::View,
     },
+    CommandSpec {
+        command: Command::NewTab,
+        id: "new_tab",
+        ex_command: "WolfNewTab",
+        title: "New Tab",
+        menu: MenuGroup::File,
+    },
 ];
 
 impl Command {
@@ -265,10 +275,11 @@ mod tests {
     use super::*;
 
     /// The total number of registered commands AFTER appending
-    /// `Command::Copy` (14), `Command::Paste` (15), and `Command::BufferPicker`
-    /// (discriminant 16) past `Command::CommandPalette` (13). A named constant so
-    /// the magic-number lint stays quiet and the count's meaning is explicit.
-    const EXPECTED_COMMAND_COUNT: usize = 17;
+    /// `Command::Copy` (14), `Command::Paste` (15), `Command::BufferPicker`
+    /// (16), and `Command::NewTab` (discriminant 17) past
+    /// `Command::CommandPalette` (13). A named constant so the magic-number lint
+    /// stays quiet and the count's meaning is explicit.
+    const EXPECTED_COMMAND_COUNT: usize = 18;
 
     /// The append-only slice index (== FFI discriminant == `command_kind`) of
     /// `Command::CommandPalette`.
@@ -284,9 +295,14 @@ mod tests {
     const PASTE_INDEX: usize = 15;
 
     /// The append-only slice index (== FFI discriminant == `command_kind`) of
-    /// `Command::BufferPicker`: the appended discriminant 16 and LAST row of
-    /// [`COMMAND_SPECS`].
+    /// `Command::BufferPicker`: the appended discriminant 16. No longer the last
+    /// row after `NewTab` is appended at 17.
     const BUFFER_PICKER_INDEX: usize = 16;
+
+    /// The append-only slice index (== FFI discriminant == `command_kind`) of
+    /// `Command::NewTab`: the appended discriminant 17 and LAST row of
+    /// [`COMMAND_SPECS`].
+    const NEW_TAB_INDEX: usize = 17;
 
     /// `from_id` resolves the canonical `command_palette` id to the new variant.
     #[test]
@@ -418,19 +434,52 @@ mod tests {
         assert_eq!(spec.menu, MenuGroup::View, "menu group");
     }
 
-    /// Append-discriminant guard: BufferPicker is the LAST row (index 16), so the
-    /// slice index equals its FFI discriminant. Reordering breaks this.
+    /// Append-discriminant guard: BufferPicker stays at fixed index 16 (no longer
+    /// the last row after NewTab is appended at 17), so the slice index still
+    /// equals its FFI discriminant. Reordering breaks this.
     #[test]
-    fn buffer_picker_is_the_last_row() {
+    fn buffer_picker_is_at_index_16() {
         assert_eq!(
             COMMAND_SPECS[BUFFER_PICKER_INDEX].command,
             Command::BufferPicker,
             "the row at index {BUFFER_PICKER_INDEX} must be Command::BufferPicker"
         );
+    }
+
+    /// `from_id` resolves the canonical `new_tab` id to the new variant.
+    #[test]
+    fn new_tab_id_round_trips() {
         assert_eq!(
-            BUFFER_PICKER_INDEX,
+            Command::from_id("new_tab"),
+            Some(Command::NewTab),
+            "\"new_tab\" must resolve to Command::NewTab"
+        );
+    }
+
+    /// The NewTab spec pins its id, ex-command, title, and File menu group (the
+    /// canonical registry row for the new-tab command).
+    #[test]
+    fn new_tab_spec_fields() {
+        let spec = Command::NewTab.spec();
+        assert_eq!(spec.id, "new_tab", "id");
+        assert_eq!(spec.ex_command, "WolfNewTab", "ex_command");
+        assert_eq!(spec.title, "New Tab", "title");
+        assert_eq!(spec.menu, MenuGroup::File, "menu group");
+    }
+
+    /// Append-discriminant guard: NewTab is the LAST row (index 17), so the slice
+    /// index equals its FFI discriminant. Reordering breaks this.
+    #[test]
+    fn new_tab_is_the_last_row() {
+        assert_eq!(
+            COMMAND_SPECS[NEW_TAB_INDEX].command,
+            Command::NewTab,
+            "the row at index {NEW_TAB_INDEX} must be Command::NewTab"
+        );
+        assert_eq!(
+            NEW_TAB_INDEX,
             COMMAND_SPECS.len() - 1,
-            "BufferPicker must be the FINAL row of COMMAND_SPECS"
+            "NewTab must be the FINAL row of COMMAND_SPECS"
         );
     }
 }

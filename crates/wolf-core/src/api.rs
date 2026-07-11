@@ -28,11 +28,9 @@ use crate::layout::LayoutIntent;
 use crate::mru::{FileEntry, MruError, MruStore};
 use crate::nvim::{self, NvimConfig, NvimError, NvimProcess};
 use crate::recent_dirs::RecentDirs;
-use crate::redraw::{
-    CommandQueue, IntentQueue, RedrawHandler, SharedStateStore, TrackedCwd, WakeFn,
-};
+use crate::redraw::{CommandQueue, IntentQueue, RedrawHandler, TrackedCwd, WakeFn};
 use crate::render::{OwnedSnapshotReadGuard, SharedSnapshot, Snapshot};
-use crate::state::{state_dir, StateStore};
+use crate::state::state_dir;
 
 /// A lazily-populated, per-cwd cache of [`MruStore`]s, keyed by CANONICAL cwd.
 ///
@@ -159,12 +157,6 @@ pub struct WolfCore {
     /// tokio worker thread). `None` until nvim first reports its cwd; the pump then
     /// falls back to [`cwd`](Self::cwd).
     tracked_cwd: TrackedCwd,
-    /// The optionally-attached application-state store, paired with this core's
-    /// window index. Empty at start; filled by [`WolfCore::attach_state_store`].
-    /// Cloned into the redraw handler, which mirrors each `wolf_cwd`
-    /// notification into the store at that window index so cwd changes persist
-    /// with no front-end involvement.
-    state_store: SharedStateStore,
     /// The always-on GLOBAL recent-directories MRU (`<state_dir>/folder-mru.sqlite`).
     /// Constructed once at [`WolfCore::start`] from [`state_dir`] (or
     /// [`RecentDirs::disabled`] when it cannot be resolved) and cloned into the
@@ -220,12 +212,10 @@ impl WolfCore {
         let snapshot = SharedSnapshot::new(cfg.cols as usize, cfg.rows as usize);
         let intents: IntentQueue = Arc::new(Mutex::new(VecDeque::new()));
         let commands: CommandQueue = Arc::new(Mutex::new(VecDeque::new()));
-        let state_store: SharedStateStore = Arc::new(RwLock::new(None));
 
-        // The global recent-directories MRU is ALWAYS-ON (not attached/opt-in like
-        // the StateStore): construct it once from state_dir(), or a no-op disabled
-        // store when that cannot be resolved. Cloned into the redraw handler, which
-        // records each cwd change into it.
+        // The global recent-directories MRU is ALWAYS-ON: construct it once from
+        // state_dir(), or a no-op disabled store when that cannot be resolved.
+        // Cloned into the redraw handler, which records each cwd change into it.
         let recent_dirs = state_dir()
             .map(|d| RecentDirs::open(&d))
             .unwrap_or_else(RecentDirs::disabled);
@@ -242,7 +232,6 @@ impl WolfCore {
             intents.clone(),
             commands.clone(),
             tracked_cwd.clone(),
-            state_store.clone(),
             recent_dirs.clone(),
             wake,
         );
@@ -322,26 +311,10 @@ impl WolfCore {
             input_tx,
             mru_cache,
             tracked_cwd,
-            state_store,
             recent_dirs,
             command_mru,
             cwd,
         })
-    }
-
-    /// Attaches an application-state store bound to `window_index` (this core's
-    /// slot in `state.json`'s `windows` list): from now on every genuine
-    /// `DirChanged` `wolf_cwd` notification (a real `:cd`/`:lcd`/`:tcd`, including
-    /// the Open-Folder chdir) is mirrored into `store` as this window's cwd.
-    ///
-    /// The passive launch/initial cwd is DELIBERATELY never persisted: the
-    /// setup-time `wolf_cwd` emit is flagged and skipped by
-    /// [`apply_cwd`](crate::redraw), and no tracked-cwd is pushed here on attach.
-    /// So a fresh empty-state window persists `cwd == ""`; a real `:cd` persists
-    /// via `apply_cwd`; and a restored window's cwd comes from
-    /// [`StateStore::open`]'s disk load — not from this attach.
-    pub fn attach_state_store(&self, store: StateStore, window_index: usize) {
-        *self.state_store.write() = Some((store, window_index));
     }
 
     /// Reads the current render-state snapshot (for painting on the UI thread).

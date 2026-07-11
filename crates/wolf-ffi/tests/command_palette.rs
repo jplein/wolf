@@ -167,7 +167,6 @@ fn command_palette_ranks_static_dynamic_and_mru_rows() {
         tmp_cwd.path().to_string_lossy().into_owned(),
         common::DEFAULT_COLS,
         common::DEFAULT_ROWS,
-        0,
     )
     .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
 

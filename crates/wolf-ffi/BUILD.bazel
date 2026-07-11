@@ -639,36 +639,23 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the state-persistence bridge surface
-# (free `wolf_ffi_load_state` + the `FfiState` / `FfiWindowState` accessors,
-# `WolfCoreHandle::state_set_geometry` / `state_set_sidebar_visible` /
-# `state_flush`, and the start-time StateStore
-# attach that persists a `:cd` typed through `send_key`). Modeled on
-# `tree_search` exactly: drives a REAL pinned Neovim (no mocks), loud-skips
-# when WOLF_NVIM_BIN is unset, and stages the captive `init.lua` + pinned nvim
-# tree as runfiles. Reuses `tests/common/mod.rs`. A SINGLE #[test]: it mutates
-# the process-global WOLF_STATE_DIR, which is only safe with one test per
-# binary.
+# Headless round-trip test for the TREE-shaped state-persistence bridge surface
+# (the `wolf_ffi_state_snapshot_begin` / `_add_window` / `_add_tab` / `_commit`
+# builder free-fns + `wolf_ffi_state_flush`, read back through
+# `wolf_ffi_load_state` + the `FfiState` / `FfiWindowState.tabs()` / `FfiTabState`
+# accessors, plus old-format rejection). The snapshot builder is PURE Rust over
+# the shared StateStore (OD1: the core no longer mirrors cwd), so this spawns NO
+# nvim — it drives the bridge purely through `WOLF_STATE_DIR` pointed at a
+# `tempfile::tempdir()`, exactly like the `config` target (no `tests/common/`
+# staging and NO `no-sandbox` tag). A SINGLE #[test]: it mutates the
+# process-global WOLF_STATE_DIR and opens the process-wide SHARED_STORE, which is
+# only safe with one test per binary.
 rust_test(
     name = "state",
-    srcs = [
-        "tests/common/mod.rs",
-        "tests/state.rs",
-    ],
+    srcs = ["tests/state.rs"],
     crate_root = "tests/state.rs",
-    # Spawning a real nvim child does not work under the macOS build sandbox, so
-    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
-    tags = ["no-sandbox"],
     size = "small",
     edition = "2021",
-    data = [
-        "//bazel/nvim:nvim_tree",
-        "//runtime/nvim:init.lua",
-    ],
-    env = {
-        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
-        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
-    },
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
@@ -765,15 +752,17 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the MULTI-WINDOW bridge surface
-# (`wolf_ffi_start`'s trailing `window_index`, `WolfCoreHandle::wake_token` /
-# `state_set_window_count`, the token-carrying `wolf_ffi_set_wake` ABI, and the
-# shared StateStore per-index writes). Modeled on `state` exactly: drives TWO
-# REAL pinned Neovim instances (no mocks), loud-skips when WOLF_NVIM_BIN is
-# unset, and stages the captive `init.lua` + pinned nvim tree as runfiles. Reuses
-# `tests/common/mod.rs`. A SINGLE #[test]: it mutates the process-global
-# WOLF_STATE_DIR and registers the process-global wake callback, which is only
-# safe with one test per binary.
+# Real-nvim integration test for the MULTI-CORE wake-routing bridge surface
+# (`WolfCoreHandle::wake_token` + the token-carrying `wolf_ffi_set_wake` ABI +
+# independent per-core snapshots). The former per-index state section
+# (`state_set_geometry` / `state_set_sidebar_visible` / `state_set_window_count`
+# + `wolf_ffi_start`'s trailing `window_index`) was removed with the
+# per-window-tabs change; the tree snapshot round-trip is covered headlessly by
+# the `state` target. Drives TWO REAL pinned Neovim instances (no mocks),
+# loud-skips when WOLF_NVIM_BIN is unset, and stages the captive `init.lua` +
+# pinned nvim tree as runfiles. Reuses `tests/common/mod.rs`. A SINGLE #[test]: it
+# mutates the process-global WOLF_STATE_DIR and registers the process-global wake
+# callback, which is only safe with one test per binary.
 rust_test(
     name = "multi_window",
     srcs = [

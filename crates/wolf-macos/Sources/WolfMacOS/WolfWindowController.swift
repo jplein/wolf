@@ -11,17 +11,24 @@ import Foundation
 import WolfFFI
 import WolfKeyMap
 
-/// The scalar facets of one saved window, copied OUT of the bridge's
-/// `RustVec<FfiWindowState>` immediately (element refs must not outlive the vec)
-/// into a plain value that survives launch. Shared by the coordinator (which
-/// reads `state.json`) and the controller (which restores frame/sidebar).
-struct RestoredWindowState {
+/// The scalar facets of one saved TAB, copied OUT of the bridge's
+/// `RustVec<FfiTabState>` immediately (element refs must not outlive the vec)
+/// into a plain value that survives launch. Each tab is its own captive Neovim.
+struct RestoredTabState {
+    let cwd: String
+    let sidebarVisible: Bool
+}
+
+/// One saved WINDOW GROUP: its geometry (points; AppKit bottom-left) plus its
+/// ordered tabs. Copied OUT of the bridge's `RustVec<FfiWindowState>` at launch.
+/// The coordinator restores each group by starting the FIRST tab's controller,
+/// anchoring the window frame, then `addTabbedWindow`-ing the rest.
+struct RestoredWindowGroup {
     let x: Double
     let y: Double
     let width: Double
     let height: Double
-    let cwd: String
-    let sidebarVisible: Bool
+    let tabs: [RestoredTabState]
 }
 
 /// Owns and drives a single top-level window and its embedded Neovim. Created by
@@ -34,29 +41,31 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     /// Initial grid height in rows.
     private static let initialRows = 24
 
-    /// This window's fixed slot in `state.json`'s `windows` list (assigned by the
-    /// coordinator; passed into `wolf_ffi_start` and every `state_*` setter).
-    let windowIndex: Int
+    /// This tab's monotonic identity (assigned by the coordinator; used as the
+    /// Window-menu item tag and the `raiseWindow`/`otherWindows` key). Distinct
+    /// from any `state.json` slot — persistence is now whole-tree, not per-index.
+    let tabId: Int
 
     /// The embedded Neovim's launch working directory (already resolved by the
     /// coordinator).
     private let launchCwd: String
 
-    /// The saved facets to restore (frame/sidebar), or `nil` for a fresh
-    /// (Cmd-N) window.
-    private let restored: RestoredWindowState?
+    /// The saved facets to restore (cwd already applied to `launchCwd`; the
+    /// sidebar visibility is applied in `start()`), or `nil` for a fresh
+    /// (Cmd-N / new-tab) window.
+    private let restoredTab: RestoredTabState?
 
-    /// The current user's home directory (the SAME value `StateSeam.launchDecision`
-    /// uses), passed to `WindowTitleSeam.title` so the window title abbreviates a
-    /// cwd at/under home to "~"/"~/…".
-    private let homeDir: String
+    /// The validated window frame to anchor this window at (only the FIRST tab of
+    /// a restored group carries one); `nil` for a joining tab or a fresh window,
+    /// which keeps AppKit's cascade placement.
+    private let anchorFrame: CGRect?
 
     /// Whether this window has a real folder open. `false` for the empty state (a
     /// fresh first run, a Cmd-N window, or a restored window whose saved cwd was
     /// empty/deleted): the sidebar stays hidden, the file tree is not started, and
     /// the centered "Open folder…" overlay is shown until a folder opens. Flipped
-    /// to `true` (once) by `didOpenFolder()`.
-    private var hasFolder: Bool
+    /// to `true` (once) by `didOpenFolder()`. Exposed so a new tab inherits it.
+    private(set) var hasFolder: Bool
 
     /// This window's cell metrics — seeded from the shared, once-measured launch
     /// metrics and RE-MEASURED per-window on a font-size change (View menu). A
@@ -127,17 +136,18 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     private var initialCwd: String?
 
     init(
-        windowIndex: Int,
+        tabId: Int,
         launchCwd: String,
-        restored: RestoredWindowState?,
+        restoredTab: RestoredTabState?,
+        anchorFrame: CGRect?,
         hasFolder: Bool,
         metrics: CellMetrics,
         config: FfiConfig
     ) {
-        self.windowIndex = windowIndex
+        self.tabId = tabId
         self.launchCwd = launchCwd
-        self.restored = restored
-        self.homeDir = FileManager.default.homeDirectoryForCurrentUser.path
+        self.restoredTab = restoredTab
+        self.anchorFrame = anchorFrame
         self.hasFolder = hasFolder
         self.metrics = metrics
         self.config = config
@@ -220,29 +230,22 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         bufferPicker.onActivate = { [weak self] row in self?.activateBufferRow(row) }
         self.bufferPicker = bufferPicker
 
-        // Restore the saved frame only for a restored window; a fresh
-        // (Cmd-N) window keeps AppKit's cascade placement. The sidebar is set
-        // below, gated on `hasFolder`.
-        if let restored {
-            if let frame = StateSeam.restoredWindowFrame(
-                x: restored.x, y: restored.y,
-                width: restored.width, height: restored.height,
-                screenVisibleFrames: NSScreen.screens.map(\.visibleFrame))
-            {
-                window.setFrame(frame, display: false)
-            } else {
-                window.center()
-            }
+        // Anchor the saved window frame only for the FIRST tab of a restored
+        // group (the coordinator validated it via `StateSeam.restoredWindowFrame`
+        // and passes it here); a joining tab or a fresh window keeps AppKit's
+        // cascade placement.
+        if let anchorFrame {
+            window.setFrame(anchorFrame, display: false)
         }
 
         // Sidebar visibility: an empty-state window (no folder) ALWAYS hides the
-        // sidebar (ignoring any stored `sidebar_visible`); a restored FOLDER window
+        // sidebar (ignoring any stored `sidebar_visible`); a restored FOLDER tab
         // honors its stored `sidebar_visible`; a fresh folder keeps the default
         // (visible). `didOpenFolder()` reveals it on the empty → open transition.
         if !hasFolder {
             window.sidebarItem.isCollapsed = true
-        } else if let restored {
-            window.sidebarItem.isCollapsed = !restored.sidebarVisible
+        } else if let restoredTab {
+            window.sidebarItem.isCollapsed = !restoredTab.sidebarVisible
         }
 
         window.delegate = self
@@ -253,15 +256,16 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
 
-        // Observe geometry/sidebar changes, then push one full snapshot so
-        // this window persists its initial layout immediately.
+        // Observe geometry / sidebar / tab-group changes; each schedules a
+        // coalesced whole-tree snapshot on the coordinator (which walks every
+        // live window/tab). The coordinator also schedules one right after this
+        // window is added, so the initial layout persists.
         let persistence = StatePersistence(
-            handle: handle,
             window: window,
-            sidebarItem: window.sidebarItem
+            sidebarItem: window.sidebarItem,
+            onChange: { [weak self] in self?.coordinator?.scheduleStateSnapshot() }
         )
         persistence.install()
-        persistence.pushSnapshot()
         statePersistence = persistence
 
         // Relay the sidebar's collapse state into the file tree's refresh gate so
@@ -318,27 +322,23 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
             }
         }
 
-        // Set the OS window title from BOTH the live cwd and the current
-        // `hasFolder` (which the transition block above may have just flipped).
-        // Set unconditionally each wake — an idempotent assignment correct across
-        // initial show, the empty→folder flip (cwd string may not change), and a
-        // typed `:cd`; NOT gated by the `lastKnownCwd` guard below.
-        updateWindowTitle(cwd: cwd)
+        // Refresh the tab titles for this window's whole tab group from each
+        // tab's active buffer basename (with minimal disambiguation on a
+        // collision) via the coordinator. Set unconditionally each wake — the
+        // active buffer / current_file may change with no cwd change.
+        if let window {
+            coordinator?.refreshTabTitles(forGroupOf: window)
+        }
 
         // Rebuild the dynamic Window menu (its titles are the windows' full cwd
-        // paths) only when THIS window's live cwd actually changed.
+        // paths) only when THIS window's live cwd actually changed, and persist
+        // the tree (a `:cd` changes a tab's saved cwd).
         if lastKnownCwd != cwd {
             lastKnownCwd = cwd
             coordinator?.windowCwdDidChange(self)
+            coordinator?.scheduleStateSnapshot()
         }
         drainAndDispatchCommands()
-    }
-
-    /// Sets the OS window title from the live `cwd`, this window's `hasFolder`, and
-    /// the user's `homeDir` via the pure `WindowTitleSeam` (home-abbreviated to
-    /// "~"/"~/…"; "Wolf" for an empty-state window). Thin AppKit glue.
-    private func updateWindowTitle(cwd: String) {
-        window?.title = WindowTitleSeam.title(cwd: cwd, hasFolder: hasFolder, homeDir: homeDir)
     }
 
     /// Transitions this window from the empty state into an open project: reveals
@@ -350,6 +350,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         hasFolder = true
         emptyState?.isHidden = true
         window?.sidebarItem.isCollapsed = false
+        // The empty→folder transition changes this tab's persisted cwd + sidebar.
+        coordinator?.scheduleStateSnapshot()
     }
 
     /// Drains this window's pending user-triggered commands (`:Wolf<Pascal>` /
@@ -410,7 +412,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
                 kind, window: window, coordinator: coordinator, originatingCwd: currentCwd,
                 controller: self)
         case .switchWindow:
-            coordinator?.raiseWindow(windowIndex: Int(row.windowIndex))
+            coordinator?.raiseWindow(tabId: Int(row.windowIndex))
         case .openRecent:
             if let existing = coordinator?.controllerForCwd(row.path) {
                 existing.raise()
@@ -556,17 +558,31 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Re-pushes this window's layout snapshot (the terminate-time correctness
-    /// backstop for the best-effort sidebar KVO).
-    func pushSnapshot() {
-        statePersistence?.pushSnapshot()
-    }
-
     /// This window's LIVE working directory (empty when the core is not running);
-    /// inherited by a new window opened from this one (Cmd-N / drained
-    /// `:WolfNewWindow` / the New Window menu item when this is the key window).
+    /// inherited by a new window/tab opened from this one (Cmd-N / ⌘T / drained
+    /// `:WolfNewWindow` / `:WolfNewTab`).
     var currentCwd: String {
         handle?.cwd().toString() ?? ""
+    }
+
+    /// Whether this tab's file-tree sidebar is currently visible (its persisted
+    /// `sidebar_visible`). `false` before the window is built / after teardown.
+    var sidebarVisible: Bool {
+        guard let window else { return false }
+        return !window.sidebarItem.isCollapsed
+    }
+
+    /// The absolute path of this tab's active buffer (canonicalized by core), or
+    /// the empty string for an unnamed buffer / a shut-down core. Read by the
+    /// coordinator to compute the tab-bar titles via `TabTitleSeam`.
+    var activeBufferPath: String {
+        handle?.current_file().toString() ?? ""
+    }
+
+    /// This tab's top-level NSWindow (for tab grouping + the snapshot walk), or
+    /// `nil` before the window is built / after teardown.
+    var nsWindow: NSWindow? {
+        window
     }
 
     /// Whether `candidate` is this controller's own top-level window (used by the
@@ -607,8 +623,11 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         guard !isTornDown else { return }
         isTornDown = true
 
-        statePersistence?.pushSnapshot()
-        _ = handle?.state_flush()
+        // This tab is going away; persist the remaining tree. Scheduling BEFORE
+        // the deferred `removeController` is fine — the coalesced snapshot fires
+        // after this controller is dropped, so the walk sees the surviving tabs.
+        coordinator?.scheduleStateSnapshot()
+
         statePersistence = nil
 
         sidebarVisibilityObservation?.invalidate()
@@ -643,7 +662,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     // MARK: - Core start helpers
 
     /// Starts the Rust core against the bundled `init.lua` at this window's
-    /// resolved `launchCwd` and fixed `windowIndex`.
+    /// resolved `launchCwd`.
     private func startCore() -> WolfCoreHandle? {
         // Point wolf-core at the bundled Neovim unless a developer has already
         // exported `WOLF_NVIM_BIN` (overwrite=0 so the dev override wins).
@@ -654,8 +673,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
             initLuaPath(),
             launchCwd,
             UInt16(Self.initialCols),
-            UInt16(Self.initialRows),
-            UInt16(windowIndex)
+            UInt16(Self.initialRows)
         )
     }
 

@@ -32,10 +32,10 @@ use wolf_core::{rank_palette, Command, PaletteRow, PaletteRowKind, PaletteWindow
 
 /// The number of STATIC rows the palette assembles: every `COMMAND_SPECS` row
 /// EXCEPT `Command::CommandPalette` (which is excluded from its own list). With
-/// 17 registered commands (Copy/Paste/BufferPicker appended at 14/15/16) that is
-/// 16 static rows — BufferPicker is a NEW palette static row (only CommandPalette
-/// is excluded).
-const STATIC_COMMAND_COUNT: usize = 16;
+/// 18 registered commands (Copy/Paste/BufferPicker/NewTab appended at 14/15/16/17)
+/// that is 17 static rows — NewTab is a NEW palette static row (OD4: the palette
+/// iterates ALL specs except CommandPalette).
+const STATIC_COMMAND_COUNT: usize = 17;
 
 /// A `max` large enough to never truncate the assembled candidate set in tests
 /// that assert on membership rather than truncation.
@@ -99,6 +99,16 @@ fn command_palette_is_excluded_and_static_rows_present() {
     assert_eq!(
         buffer_picker.display, "Buffer Picker…",
         "the BufferPicker static row's display is its registry title"
+    );
+
+    // NewTab (the appended discriminant 17) is likewise a REACHABLE palette static
+    // row: it is NOT the palette's own invoking command, so it must be present
+    // (OD4). Its display is the registry title "New Tab".
+    let new_tab = row_for_command(&rows, Command::NewTab)
+        .expect("NewTab must appear as a palette static row");
+    assert_eq!(
+        new_tab.display, "New Tab",
+        "the NewTab static row's display is its registry title"
     );
 }
 

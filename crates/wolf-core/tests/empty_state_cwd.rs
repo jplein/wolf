@@ -1,18 +1,27 @@
-//! Real-nvim end-to-end test of the EMPTY-STATE launch contract (launch-behavior
-//! plan §2 + §3): the captive Neovim's launch/initial working directory must NOT
-//! be persisted into `state.json`. The one-shot startup `wolf_cwd` emit updates
-//! the tracked-cwd cell ONLY — it neither records into the recent-dirs MRU nor
-//! mirrors into the attached `StateStore`; and `attach_state_store` no longer
-//! pushes the tracked cwd on attach. So an empty-state window persists `cwd == ""`
-//! (the "no folder open" sentinel), NOT the process/launch dir. A genuine later
-//! `:cd` (a real `DirChanged`) still records + persists as before.
+//! Real-nvim end-to-end test of the EMPTY-STATE launch contract, TRIMMED to its
+//! recent-directories (folder-MRU) hygiene assertions ONLY (plan OD1).
+//!
+//! With the per-window-tabs change, `wolf-core` no longer mirrors cwd into a
+//! `StateStore` (`attach_state_store` + the `redraw.rs::apply_cwd` store-mirror
+//! are removed; cwd is read from each controller at snapshot time by the
+//! front-end). So the former assertions that the launch cwd is/ isn't persisted
+//! into `state.json` are GONE — that path no longer exists.
+//!
+//! What REMAINS observable core-side is the folder-MRU hygiene: the captive
+//! nvim's one-shot startup `wolf_cwd` emit updates the tracked-cwd cell ONLY —
+//! it must NOT record the launch/initial directory into the recent-dirs MRU
+//! (`<state-dir>/folder-mru.sqlite`). A genuine later `:cd` (a real
+//! `DirChanged`) still records into the MRU as before. `apply_cwd` keeps its
+//! `recent_dirs.record` + tracked-cwd write; only the StateStore mirror was
+//! dropped.
 //!
 //! This drives a REAL, hermetic Neovim process (no mocks) and requires
 //! `WOLF_NVIM_BIN` (the shared harness fails loudly if it is unset). Modeled
-//! CLOSELY on `tests/state_save.rs`, reusing `tests/common/mod.rs`.
+//! CLOSELY on `tests/recent_dirs_records.rs`, reusing `tests/common/mod.rs`.
 //!
-//! Like `state_save.rs`, the state dir is an explicit tempdir passed to
-//! `StateStore::open`, so `WOLF_STATE_DIR` is never touched here.
+//! The always-on recent-dirs store reads `state_dir()`, so this test sets
+//! `WOLF_STATE_DIR` to a fresh tempdir BEFORE starting the core and inspects the
+//! physical `folder-mru.sqlite` under that dir.
 
 mod common;
 
@@ -20,84 +29,45 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use wolf_core::{load_state, Key, StateStore, WolfCore};
+use wolf_core::{Key, RecentDirs, WolfCore};
 
-/// The cwd/geometry saves ride the async `wolf_cwd` notification plus the store's
-/// ~100ms write-coalesce delay, so the file trails the visible redraw flush.
-/// Poll rather than guess a sleep. Mirrors `state_save.rs`'s poll budget.
-const STATE_POLL_TIMEOUT: Duration = Duration::from_secs(10);
-/// Poll cadence while waiting for `state.json` / `live_cwd()` to settle.
-const STATE_POLL_INTERVAL: Duration = Duration::from_millis(50);
-/// Generous flush bound for the attached `StateStore` (well beyond the ~100ms
-/// coalesce delay), so a timeout always means a real bug.
-const STORE_FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
-
-// -- Distinctive window-0 geometry the "front-end" pushes so window 0 EXISTS in
-//    state.json even though nothing writes its cwd (named per the mnd rule). ----
-/// Pushed window-0 x.
-const GEO_X: f64 = 120.0;
-/// Pushed window-0 y.
-const GEO_Y: f64 = 64.0;
-/// Pushed window-0 width.
-const GEO_WIDTH: f64 = 1100.0;
-/// Pushed window-0 height.
-const GEO_HEIGHT: f64 = 720.0;
+/// The cwd record rides the async `wolf_cwd` notification through `apply_cwd`, so
+/// the recorded row trails the visible redraw flush slightly. Poll rather than
+/// guess a sleep. Mirrors `recent_dirs_records.rs`'s poll budget.
+const RECENT_POLL_TIMEOUT: Duration = Duration::from_secs(10);
+/// Poll cadence while waiting for the recent-dirs MRU to reflect a `:cd`.
+const RECENT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[test]
-fn launch_cwd_is_not_persisted_but_real_cd_is() {
+fn launch_cwd_is_not_recorded_but_real_cd_is() {
     // Fail loud if the real nvim binary is missing.
     let _ = common::require_nvim_bin();
 
-    // Start nvim in tempdir X (the launch/initial cwd), retaining the waiter so
-    // we can confirm the `:cd` keystrokes were processed before polling.
+    // The always-on recent-dirs store reads state_dir(); pin it to a fresh
+    // tempdir BEFORE starting the core so folder-mru.sqlite lands somewhere we can
+    // inspect (and never in the user's real state dir). Keep the guard alive.
+    let state_dir = tempfile::tempdir().expect("failed to create temp state dir");
+    std::env::set_var("WOLF_STATE_DIR", state_dir.path());
+
+    // Start nvim in tempdir X (the launch/initial cwd), retaining the waiter so we
+    // can confirm the `:cd` keystrokes were processed before polling.
     let (_dir_x, cwd_x) = temp_cwd();
     let (core, waiter) = start_core_in_with_waiter(&cwd_x);
 
-    // The state file lives in its OWN tempdir (the explicit injection seam). Keep
-    // a clone so this test can play the front-end: push geometry and force a
-    // flush. Both handles share one inner store, exactly like the real FFI glue.
-    let state_dir = tempfile::tempdir().expect("failed to create temp state dir");
-    let store = StateStore::open(state_dir.path());
-    let front_end = store.clone();
-    core.attach_state_store(store, 0);
-
-    // The front-end reports window geometry; this is what CREATES window 0 in
-    // state.json. Crucially, it does NOT touch cwd — so window 0's cwd stays at
-    // its default `""` UNLESS something erroneously persists the launch cwd.
-    front_end.set_geometry(0, GEO_X, GEO_Y, GEO_WIDTH, GEO_HEIGHT);
-
-    // Wait until the captive nvim's startup emit has been PROCESSED (tracked cwd
-    // == X). This closes the false-pass race: only after the initial emit is
-    // known-handled can we be sure that a regression (initial emit mirrored into
-    // the store, or attach pushing the tracked cwd) would already have written X.
-    wait_for_live_cwd(&core, &cwd_x);
-
-    // Force the pending geometry write out, then assert the PERSISTED window 0.
+    // MRU-hygiene regression guard: the launch/initial cwd X is deliberately NOT
+    // recorded into the recent-dirs MRU. The captive nvim's child-workdir launch
+    // fires the one-shot startup `wolf_cwd` emit, which updates the tracked-cwd
+    // cell ONLY (flagged as the initial emit and skipped by `apply_cwd`'s record
+    // path). Against a fresh, hermetic WOLF_STATE_DIR, the MRU must be EMPTY
+    // before any `:cd` (and must not contain X).
+    let before_any_cd = core.recent_dirs();
     assert!(
-        front_end.flush(STORE_FLUSH_TIMEOUT),
-        "state store flush after the geometry push should complete within {STORE_FLUSH_TIMEOUT:?}"
-    );
-    let persisted = load_state(state_dir.path())
-        .expect("state.json should exist after the geometry push");
-    assert_eq!(
-        persisted.windows.len(),
-        1,
-        "the front-end geometry push must have created exactly window 0, got {:?}",
-        persisted.windows
-    );
-    let w0 = &persisted.windows[0];
-    assert_eq!(w0.x, GEO_X, "window 0 geometry x should be persisted");
-    assert_eq!(w0.width, GEO_WIDTH, "window 0 geometry width should be persisted");
-    // THE load-bearing assertion: the launch/initial cwd X was NOT persisted.
-    assert_eq!(
-        w0.cwd, "",
-        "an empty-state window must persist cwd == \"\" (the no-folder sentinel); \
-         the launch cwd {} must NOT be written, got {:?}",
-        cwd_x.display(),
-        w0.cwd
+        before_any_cd.is_empty(),
+        "the launch cwd must NOT be recorded into the recent-dirs MRU; \
+         expected an empty MRU before any `:cd`, got {before_any_cd:?}"
     );
 
-    // Now a GENUINE user `:cd <Y>` (a real DirChanged) MUST record + persist,
+    // Now a GENUINE user `:cd <Y>` (a real DirChanged) MUST record into the MRU,
     // proving the suppression is scoped to the one-shot startup emit only.
     let (_dir_y, cwd_y) = temp_cwd();
     let path_y = cwd_y.to_str().expect("temp path Y should be valid UTF-8");
@@ -106,63 +76,54 @@ fn launch_cwd_is_not_persisted_but_real_cd_is() {
     common::type_str(&core, path_y);
     core.send_input(common::key(Key::Enter));
 
-    // Wait for nvim to process the `:cd` and flush, then poll the file until the
-    // DirChanged -> wolf_cwd -> apply_cwd -> StateStore hook has persisted Y.
+    // Wait for nvim to process the `:cd` and flush, then poll both read paths: the
+    // launch cwd X is NEVER recorded, so the FIRST recorded entry — rank 0 — must
+    // be the user-typed Y.
     waiter.wait_for_flush(&core, common::FLUSH_TIMEOUT);
-    wait_for_state_cwd(state_dir.path(), &cwd_y);
+    wait_for_recent_top(&core, state_dir.path(), &cwd_y);
+
+    // By the time Y has landed, the setup-time initial emit has definitively been
+    // processed; X must still be absent from the MRU (never recorded at all).
+    let after_cd_y = core.recent_dirs();
+    assert!(
+        !after_cd_y.iter().any(|p| paths_equal(p, &cwd_x)),
+        "the launch cwd X must never appear in the recent-dirs MRU, got {after_cd_y:?}"
+    );
 
     core.shutdown().expect("shutdown should be Ok");
+    std::env::remove_var("WOLF_STATE_DIR");
 }
 
-/// Polls `core.live_cwd()` until it equals `want` (canonicalize-compared), or
-/// panics after a timeout. Proves the captive nvim's startup `wolf_cwd` emit has
-/// been processed into the tracked-cwd cell.
-fn wait_for_live_cwd(core: &WolfCore, want: &Path) {
-    let deadline = Instant::now() + STATE_POLL_TIMEOUT;
+/// Polls until `want` is the NEWEST (rank 0) entry via BOTH read paths, asserting
+/// they agree: `core.recent_dirs()` (the in-process accessor) AND a fresh
+/// `RecentDirs::open(state_dir).recent()` (the physical on-disk row). Panics after
+/// a timeout with the last-seen values. Mirrors `recent_dirs_records.rs`.
+fn wait_for_recent_top(core: &WolfCore, state_dir: &Path, want: &Path) {
+    let deadline = Instant::now() + RECENT_POLL_TIMEOUT;
     loop {
-        if let Some(cwd) = core.live_cwd() {
-            if paths_equal(&cwd, want) {
-                return;
-            }
-        }
-        if Instant::now() >= deadline {
-            panic!(
-                "timed out after {STATE_POLL_TIMEOUT:?} waiting for live_cwd() to become {} \
-                 (last seen: {:?})",
-                want.display(),
-                core.live_cwd()
-            );
-        }
-        std::thread::sleep(STATE_POLL_INTERVAL);
-    }
-}
+        let via_core = core.recent_dirs();
+        let via_disk = RecentDirs::open(state_dir).recent();
 
-/// Polls `load_state(state_dir)` until window 0's cwd equals `want` (compared
-/// canonicalized, robust to the macOS `/var` -> `/private/var` symlink), or
-/// panics after a timeout with the last-seen value. Mirrors
-/// `state_save.rs::wait_for_state_cwd`.
-fn wait_for_state_cwd(state_dir: &Path, want: &Path) {
-    let deadline = Instant::now() + STATE_POLL_TIMEOUT;
-    loop {
-        let cwd = load_state(state_dir)
-            .and_then(|s| s.windows.first().map(|w| w.cwd.clone()))
-            .unwrap_or_default();
-        if !cwd.is_empty() && paths_equal(Path::new(&cwd), want) {
+        let core_top = via_core.first().is_some_and(|p| paths_equal(p, want));
+        let disk_top = via_disk.first().is_some_and(|p| paths_equal(p, want));
+        if core_top && disk_top {
             return;
         }
+
         if Instant::now() >= deadline {
             panic!(
-                "timed out after {STATE_POLL_TIMEOUT:?} waiting for state.json window 0 \
-                 cwd to become {} (last seen: {cwd:?})",
+                "timed out after {RECENT_POLL_TIMEOUT:?} waiting for {} to be rank 0 \
+                 of the recent-dirs MRU; core.recent_dirs() = {via_core:?}, \
+                 on-disk recent() = {via_disk:?}",
                 want.display()
             );
         }
-        std::thread::sleep(STATE_POLL_INTERVAL);
+        std::thread::sleep(RECENT_POLL_INTERVAL);
     }
 }
 
 /// Compares two paths by their canonical form when resolvable, else raw
-/// equality. Mirrors `state_save.rs::paths_equal`.
+/// equality. Mirrors `recent_dirs_records.rs::paths_equal`.
 fn paths_equal(a: &Path, b: &Path) -> bool {
     match (fs::canonicalize(a), fs::canonicalize(b)) {
         (Ok(ca), Ok(cb)) => ca == cb,
@@ -172,7 +133,7 @@ fn paths_equal(a: &Path, b: &Path) -> bool {
 
 /// Creates a fresh temp dir to serve as a core `cwd`, returning both the guard
 /// (kept alive by the caller) and the CANONICAL path. Mirrors
-/// `state_save.rs::temp_cwd`.
+/// `recent_dirs_records.rs::temp_cwd`.
 fn temp_cwd() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("failed to create tempdir");
     let cwd = fs::canonicalize(dir.path()).expect("failed to canonicalize temp cwd");
@@ -180,7 +141,7 @@ fn temp_cwd() -> (tempfile::TempDir, PathBuf) {
 }
 
 /// Starts a `WolfCore` rooted at `cwd` and returns it together with the
-/// `FlushWaiter`. Replicated from `state_save.rs`.
+/// `FlushWaiter`. Replicated from `recent_dirs_records.rs`.
 fn start_core_in_with_waiter(cwd: &Path) -> (WolfCore, common::FlushWaiter) {
     let (wake, waiter) = common::wake_channel();
     let core = WolfCore::start(

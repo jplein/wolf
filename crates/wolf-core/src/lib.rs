@@ -74,7 +74,7 @@ pub use render::{
     Cell, Cursor, CursorShape, DefaultColors, Grid, HighlightTable, HlAttr, ModeInfo,
     ResolvedStyle, Rgb, SharedSnapshot, Snapshot, ThemeColors, ThemeGroup, Viewport, WinInfo,
 };
-pub use state::{load_state, state_dir, StateStore, WindowState, WolfState};
+pub use state::{load_state, state_dir, StateStore, TabState, WindowState, WolfState};
 pub use tree::{
     ancestors_to_reveal, children_of, node_rel_path, rel_path_for, TreeIndex, TreeIndexCache,
     TreeNode,

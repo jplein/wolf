@@ -66,6 +66,8 @@ enum CommandDispatcher {
             controller?.paste()
         case .bufferPicker:
             controller?.openBufferPicker()
+        case .newTab:
+            controller.map { coordinator?.makeNewTab(from: $0) }
         }
     }
 }

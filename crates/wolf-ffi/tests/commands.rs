@@ -23,10 +23,10 @@
 //! MINIMIZE_WINDOW = 4, GO_TO_FILE = 5, OPEN_FILE = 6, OPEN_FOLDER = 7,
 //! CLOSE_PANE = 8, NEW_BUFFER = 9, RESET_FONT_SIZE = 10, INCREASE_FONT_SIZE = 11,
 //! DECREASE_FONT_SIZE = 12, COMMAND_PALETTE = 13, COPY = 14, PASTE = 15,
-//! BUFFER_PICKER = 16 (the `wolf_core::Command` variant order). These local consts
-//! MUST match `mod command_kind` in `wolf-ffi/src/lib.rs` and the Swift
-//! `CommandKind` port — exactly how `panes.rs` re-declares `INTENT_KIND_SPLIT`
-//! locally as a contract guard (the guard array below asserts contiguous 0..=16).
+//! BUFFER_PICKER = 16, NEW_TAB = 17 (the `wolf_core::Command` variant order). These
+//! local consts MUST match `mod command_kind` in `wolf-ffi/src/lib.rs` and the
+//! Swift `CommandKind` port — exactly how `panes.rs` re-declares `INTENT_KIND_SPLIT`
+//! locally as a contract guard (the guard array below asserts contiguous 0..=17).
 //!
 //! ## What this asserts
 //!
@@ -100,6 +100,8 @@ const CMD_KIND_COPY: u8 = 14;
 const CMD_KIND_PASTE: u8 = 15;
 /// `FfiCommand::kind()` for Buffer Picker (the appended discriminant 16, View menu).
 const CMD_KIND_BUFFER_PICKER: u8 = 16;
+/// `FfiCommand::kind()` for New Tab (the appended discriminant 17, File menu).
+const CMD_KIND_NEW_TAB: u8 = 17;
 
 /// Builds a printable-character `FfiKeyEvent` (kind=Char) for `c`, all modifiers
 /// false (the already-resolved glyph rides in `ch`). Same as `panes.rs`.
@@ -166,8 +168,8 @@ fn commands_drain_close_and_minimize() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // Discriminant-contract guard: the local consts MUST be contiguous 0..=16 in
-    // variant order (mirrors `mod command_kind`). Referencing all seventeen here
+    // Discriminant-contract guard: the local consts MUST be contiguous 0..=17 in
+    // variant order (mirrors `mod command_kind`). Referencing all eighteen here
     // also keeps them from tripping dead-code lints.
     assert_eq!(
         [
@@ -188,9 +190,10 @@ fn commands_drain_close_and_minimize() {
             CMD_KIND_COPY,
             CMD_KIND_PASTE,
             CMD_KIND_BUFFER_PICKER,
+            CMD_KIND_NEW_TAB,
         ],
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-        "command_kind discriminants must be contiguous 0..=16 in Command variant order"
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+        "command_kind discriminants must be contiguous 0..=17 in Command variant order"
     );
 
     let init_lua = common::init_lua_path();
@@ -200,12 +203,13 @@ fn commands_drain_close_and_minimize() {
     let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
 
     // Argument order mirrors the sibling tests exactly: (init_lua, cwd, cols, rows).
+    // `wolf_ffi_start` no longer takes a trailing `window_index` (state moved to
+    // the coordinator-owned snapshot builder).
     let handle = wolf_ffi_start(
         init_lua.to_string_lossy().into_owned(),
         tmp.path().to_string_lossy().into_owned(),
         common::DEFAULT_COLS,
         common::DEFAULT_ROWS,
-        0,
     )
     .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
 
@@ -280,6 +284,14 @@ fn commands_drain_close_and_minimize() {
     // appended discriminant 16.
     send_ex_command(&handle, ":WolfBufferPicker");
     poll_for_command_kind(&handle, CMD_KIND_BUFFER_PICKER, ":WolfBufferPicker");
+
+    // --- 3h. :WolfNewTab<CR> -> an FfiCommand with kind() == NEW_TAB ----------
+    // A pure FFI drain: nothing acts on it here (the front-end that would open a
+    // new native tab is absent), so no tab is created. This proves `:WolfNewTab`
+    // is auto-registered as a COMMAND_SPECS row and drains the appended
+    // discriminant 17.
+    send_ex_command(&handle, ":WolfNewTab");
+    poll_for_command_kind(&handle, CMD_KIND_NEW_TAB, ":WolfNewTab");
 
     // --- 4. Shutdown: clean teardown ----------------------------------------
     handle.shutdown();

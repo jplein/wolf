@@ -1,176 +1,230 @@
-# Current Plan: Buffer Picker
+# Current Plan: Per-window tabs (native Tahoe tab bar)
 
 ## Status: COMPLETE ✅
 
-### Docs (DONE)
-Technical-writer synced 12 Markdown files: architecture.md, wolf-core README + src/README + tests/README, wolf-ffi README + src/README + tests/README, wolf-macos Sources/README + README + Tests/README, runtime/nvim/README.md, wolf-gnome README (deferred-parity note). Orchestrator ran `prettier --write` on all 12 → all clean/unchanged (one-line-per-paragraph convention held). Tech-writer agent id: ad5350bd1346ec9e8.
+## Technical-writer + finalization
+Docs verified/synced against the real implementation: `wolf-ffi/README.md` (command_kind table
+→ NewTab=17, `:commands` 0..=17), `wolf-macos/Sources/README.md` (WolfKeyMap count 19→18),
+`wolf-macos/Tests/README.md` (CommandSeamTests 0..17 / boundary 18; `:state` headless),
+`architecture.md` (group-by-group restore, coordinator-owned whole-tree snapshot, StatePersistence
+trigger-only, cwd read live, terminate `wolf_ffi_state_flush`, palette count 17),
+`wolf-core/tests/README.md` (state_unit tree API, state_save retired, command count 18), `build.md`
+(dropped the deleted `state_save` target line). Reviewer nit fixed: the two stale
+`crates/wolf-core/BUILD.bazel` comments no longer reference the retired `state_save` target.
+Orchestrator ran `prettier --write` on all touched Markdown → clean (only `wolf-ffi/README.md`
+reflowed). No README still describes a removed symbol (WindowTitleSeam/WindowIndexSeam/state_set_*/
+window_index/attach_state_store/old flat state.json). Technical-writer agent id: ab07cd5189f5cec07.
 
-### FINAL: buffer picker DELIVERED. All tests green, review approved, docs synced + prettier-clean.
-Manual GUI smoke remaining (not automatable): launch Wolf, ⌘E opens the buffer picker, row 2 preselected, bare Enter switches to the alternate buffer, and per-pane scroll position is restored on return (top-of-buffer for a buffer never shown in that pane).
+## Outstanding (not blockers, surfaced to user)
+- Manual GUI smoke (needs a window server — cannot be automated): ⌘T opens a tab inheriting cwd;
+  native "+" opens a tab; tear-off → standalone window; drag-merge re-groups; reorder persists;
+  each tab label = active-buffer basename with disambiguation; restore reopens groups with correct
+  geometry + per-tab sidebar; terminate writes the tree; old flat state.json is clobbered.
+- Pre-existing `//crates/wolf-ffi:buffer_picker` 1s-`lastused` timing flake (unrelated to tabs;
+  passes on rerun) — recommend a separate de-flake pass.
 
-### Reviewer: APPROVED
-All 10 invariants PASS, zero defects (blocker/should-fix/nit). Append-only contract in lockstep; rank_buffers correct (lastused DESC, bufnr ASC tie-break, stable); window-scoped switch not :edit; view cache (win,buf)-keyed w/ top-of-buffer fallback + WinClosed prune + no rpcnotify; active_win resolved live; no wake; buflisted filter; GUI-free; row-2 preselect + ⌘E; FfiBufferRow at crate root. Reviewer agent id: a5542d07909bba9e0.
+## Reviewer verdict: APPROVED
+All 15 invariants verified (state tree / no-serde-default / set_snapshot no-churn / api-redraw /
+append-only lockstep / ffi surface / TabTitleSeam untitled-excluded + terminating growth loop /
+snapshot walker dedupe + solo-group / makeNewTab / tabId replaces windowIndex / coalesced
+snapshot triggers + terminate flush / titles + WindowTitleSeam removed / weak-self KVO no cycles).
+wolf-gnome UNAFFECTED (no StateStore/WolfState use; no exhaustive Command match). No blockers.
+**Nit (→ technical-writer):** `crates/wolf-core/BUILD.bazel` lines ~309 and ~404 have stale
+comments calling `theme`/`recent_dirs_records` "an EXACT mirror of the `state_save` target",
+which was retired — re-point them at a surviving sibling. Reviewer agent id: af84c107daf61a13b.
 
-### ALL TARGETS GREEN
-wolf_core_lib_test, buffer_rank, palette_rank, buffer_picker (PASS 5/5 real nvim, 0 variance), commands, command_palette, bridge_smoke, WolfKeyMapTests, Wolf app build — all PASS. Denylist clean. Bindings regenerated (wolf_ffi_wake.h byte-identical). await-before-gap fix made the FFI test deterministic.
-### REMAINING: reviewer gate, then technical-writer (docs §9 NOT yet done — deferred to end as designed).
+## Coder results
+Implemented all 17 steps. `bazel test //crates/wolf-core/... //crates/wolf-ffi/...` = 39/40
+PASS; the single FAIL (`//crates/wolf-ffi:buffer_picker`) is a PRE-EXISTING 1s-`lastused`
+timing flake unrelated to this feature (passed 3/3 on `--runs_per_test=3`; our changes don't
+touch it). `bazel build //crates/wolf-macos:Wolf` PASS (all AppKit tab wiring compiles).
+`WolfKeyMapTests` (incl. new `TabTitleSeamTests` + updated `CommandSeamTests`) PASS. Bindings
+regenerated via `bazel run //crates/wolf-ffi:gen_bindings`; `wolf_ffi_wake.h` byte-identical.
+wolf-core GUI-free denylist clean. `handle.current_file()` confirmed present (no rename).
+swift-bridge handled `Vec<FfiTabState>` + `String` free-fn args with no limitation. Coder also
+pre-updated the docs (technical-writer will verify). NEW file `Sources/WolfMacOS/TabGroupObserver.swift`.
 
-### FFI test timing — round 2 (coder re-diagnosed w/ CLI repro)
-The sleep alone was ineffective: `send_ex_command` is fire-and-forget through the async coalescing input pump, so `:e A` didn't settle before the sleep — A+B still tied in the same lastused second → ranker correctly returns [A,B,C]. Impl CONFIRMED correct (5 headless ranking tests green; CLI repro shows B wins when A settles a full second earlier). Fix routed to test-writer: straddle the `sleep(1100)` with `wait_for_active_filename(&handle,"buffer_a.md")` (before) and `wait_for_active_filename(&handle,"buffer_b.md")` (after) — helper already in file. Keep the sleep. No assertion changes.
+**Orchestrator decision:** the `buffer_picker` flake is pre-existing + out of scope for this
+feature → NOT routing a test-writer pass for it; surface to user as separate cleanup. The
+post-coder SourceKit diagnostics (missing WolfFFI/WolfKeyMap modules, unresolved AppDelegate/
+TabGroupObserver) are false positives (Bazel-only resolution); `bazel build //crates/wolf-macos:Wolf`
+passing is authoritative. Coder agent id: a6a9b329bfb29df37.
 
-### Test-timing fix (DONE by test-writer)
-- `crates/wolf-ffi/tests/buffer_picker.rs`: added `sleep(Duration::from_millis(1100))` between `:e A` and `:e B` (so B gets a strictly-later lastused second); fixed the unused-mut warning in `wait_for_ranked`. No other assertions touched. → coder re-running to confirm `//crates/wolf-ffi:buffer_picker` green.
+## Test-writer results + orchestrator reconciliation of its flags
 
-### Coder output (DONE, all impl green)
-- All source files implemented per plan (command.rs, buffer_picker.rs, lib.rs, input.rs, nvim.rs, api.rs, init.lua, wolf-ffi lib.rs, generated/ regenerated, all Swift, BUILD targets).
-- Test results: ALL PASS except `//crates/wolf-ffi:buffer_picker` (real nvim RAN — nvim present).
-- Denylist clean; Wolf app builds; generated bindings regenerated (wolf_ffi_wake.h byte-identical).
-- Buflisted assumption CONFIRMED: `:badd` buffer C appears, unlisted Z excluded. Good.
+Test files written/rewritten: `state_unit.rs` (tree), `palette_rank.rs` (16→17 + NewTab row),
+`command.rs` inline (count 18, NEW_TAB_INDEX=17, buffer_picker fixed at 16), `state.rs`
+(ffi builder round-trip, headless — nvim deps dropped), `commands.rs` (0..=17 + `:WolfNewTab`
+drain), `multi_window.rs` (wake-token only), `TabTitleSeamTests.swift` (new), `CommandSeamTests`
+(ffi:17→.newTab, out-of-range 18). Blanked-to-stub (coder must `git rm`): `state_save.rs`,
+`WindowTitleSeamTests.swift`, `WindowIndexSeamTests.swift`. Trimmed `empty_state_cwd.rs` to
+recent-dirs only. **Dropped the `window_index` arg from `wolf_ffi_start` in 21 ffi test files**
+(all call sites) — tests now expect the 4-arg `wolf_ffi_start(init_lua, cwd, cols, rows)`.
 
-### ORCHESTRATOR DECISION on the one failure (test bug, NOT impl bug)
-`buffer_picker_lists_switches_and_restores_view` fails on the MRU-ordering assertion (expects buffer_b at index 0, gets [A,B,C]). Root cause: `getbufinfo().lastused` has 1-SECOND resolution; test does `:e A` then `:e B` in the same second → A and B TIE. Locked tie-break = bufnr ASCENDING (per plan §4 + the PASSING headless test `equal_lastused_breaks_tie_by_bufnr_ascending`), so [A,B,C] is CORRECT. The FFI test's expectation contradicts the headless spec. → FIX IS IN THE TEST. Routed to test-writer:
-  1. Insert a >1s gap (e.g. sleep 1100ms) between the `:e {A}` and `:e {B}` send_ex_command calls so B gets a strictly-later lastused second.
-  2. Fix the `unused_assignments`/unused-`mut` warning at buffer_picker.rs:161 (`let mut rows = ranked_snapshot(handle);` overwritten before read).
-Everything else in the FFI test (buflisted filter, A-before-C, switch, view round-trip, top-of-buffer) is correct and must stay.
-- Coder agent id: a168c12065ba9405e ; test-writer agent id: aa01f90f0ca533173
-- Docs (plan §9) deferred to technical-writer step (end of pipeline), as designed.
+Reconciliation of the test-writer's flags (BINDING for the coder):
+- **TW1/TW2 — `TabTitleSeam` "untitled" handling: CONFIRMED.** Only `""` / `[No Name]` /
+  unnamed → `"untitled"`; a real path always keeps its basename (a bare distinct `"file.md"`
+  stays `"file.md"`). **`"untitled"` entries are EXCLUDED from the collision/disambiguation
+  pass** — two unnamed tabs both stay `"untitled"` (paths can't disambiguate the pathless).
+  Coder implements exactly this.
+- **TW3 — `empty_state_cwd.rs`: ACCEPT the trimmed version as-is** (valid recent-dirs behavior;
+  a slight overlap with `recent_dirs_records.rs` is harmless — do NOT retire it).
+- **TW4 — 21-file `wolf_ffi_start` arity update: APPROVED** (necessary; all test files).
+- **TW5 — coder wiring the tests depend on:** add `Sources/WolfKeyMap/TabTitleSeam.swift` to the
+  `wolf_key_map` library `srcs`; remove `WindowIndexSeam.swift` + `WindowTitleSeam.swift` from it
+  and DELETE those two source files; `git rm` the four blanked files
+  (`state_save.rs`, `WindowTitleSeamTests.swift`, `WindowIndexSeamTests.swift` + the retired
+  `state_save` stanza already removed).
+- The `XCTest` SourceKit diagnostics are false positives (Bazel-only test bundle); ignore.
 
-### Test-writer output (DONE)
-- NEW `crates/wolf-core/tests/buffer_rank.rs` (5 headless tests for rank_buffers).
-- NEW `crates/wolf-ffi/tests/buffer_picker.rs` (1 real-nvim test: filtering/MRU/switch/view-roundtrip/top-of-buffer).
-- MOD `crates/wolf-core/src/command.rs` inline tests: count 16→17, BUFFER_PICKER_INDEX=16, buffer_picker guards, `paste_is_the_last_row`→`paste_is_at_index_15`.
-- MOD `crates/wolf-core/tests/palette_rank.rs`: STATIC_COMMAND_COUNT 15→16 + BufferPicker static-row assertion.
-- MOD `crates/wolf-ffi/tests/commands.rs`: CMD_KIND_BUFFER_PICKER=16, guard 0..=16, :WolfBufferPicker drain.
-- MOD `CommandSeamTests.swift`: (ffi:16)==.bufferPicker, out-of-range→17.
-- Coder MUST add BUILD targets: `//crates/wolf-core:buffer_rank` (copy palette_rank stanza), `//crates/wolf-ffi:buffer_picker` (copy command_palette stanza w/ no-sandbox + nvim data/env).
-- Test assumptions baked in (coder must match): `BufInfo`/`BufferRow` derive Debug(+Clone for BufInfo), public fields; `rank_buffers` re-exported at crate root; empty name→`NO_NAME`; FfiBufferRow re-exported at wolf_ffi root; `buffer_picker()` snapshots list at construction (fresh session sees new buffers); `switch_buffer` resolves active_win live.
-- FLAG: FFI test uses `:badd` for the never-displayed listed buffer C — assumes `list_buffers` filters by buflisted (NOT loaded). Coder: confirm getbufinfo({buflisted:1}) returns badd'd buffers; if C doesn't appear, adjust test w/ test-writer.
-- Test-writer agent id: aa01f90f0ca533173
+Test-writer agent id: a0412790b8d5d2af1
 
-## Problem Statement
+## Orchestrator decisions on the architect's open questions (BINDING)
 
-Add a **buffer picker** to Wolf, parallel to the existing file picker (`FileSearch`) and command palette (`FfiCommandPalette`). It lets the user fuzzy-switch among open buffers, MRU-ordered, with per-pane view (scroll/cursor) restoration.
+- **OD1 — Approve removing core-side cwd persistence.** With the whole-tree snapshot
+  model, cwd is read from each controller at snapshot time; `attach_state_store` and the
+  `redraw.rs::apply_cwd` StateStore mirror are removed. The writer thread / coalescing /
+  atomic-rename stay intact — only the *source* of the tree changes (front-end snapshot
+  vs core mirror). Consequently: **retire** `crates/wolf-core/tests/state_save.rs`;
+  **trim** `crates/wolf-core/tests/empty_state_cwd.rs` to its recent-dirs assertions only.
+- **OD2 — Approve deleting `WindowTitleSeam` AND `WindowIndexSeam`** (both dead) and their
+  tests. The OS window/tab title now derives from the active buffer via `TabTitleSeam`
+  (`"untitled"` for an empty-state tab). A single-tab window's titlebar therefore shows
+  the active buffer basename instead of the home-abbreviated cwd — consistent with the
+  spec ("tab title = active buffer basename"). Monotonic `tabId` replaces `WindowIndexSeam`.
+- **OD3 — Keep the `//crates/wolf-ffi:state` target name** (no rename to `state_roundtrip`);
+  rewrite its sources in place.
+- **OD4 — NewTab IS a command-palette row** (palette iterates all specs except
+  CommandPalette): `palette_rank.rs` `STATIC_COMMAND_COUNT` 16→17.
+- **OD5 — `TabTitleSeam` format = `"<basename> — <minimal trailing parent segments>"`**
+  (em dash U+2014), only on colliding labels; empty/unnamed → `"untitled"`. Approved.
+- **OD6 — `newWindowForTab(_:)` lives on `AppDelegate`** (NSApp→delegate forwarding for the
+  native "+"); the explicit ⌘T menu item routes through `handleCommandMenuItem → .newTab`.
+  If smoke shows the "+" doesn't reach the delegate, add a `MainWindow` override as fallback.
 
-### Locked design spec (from the user)
+None of these require re-consulting the user — they are correct consequences of the
+locked decisions.
 
-1. **Shape:** palette-shaped session — bounded candidate set fixed at open, synchronous re-filter per keystroke, **NO wake**. NOT file-picker-shaped (no streaming traversal). One structural difference from the command palette: candidates come from Neovim via a single **blocking RPC query** at open (precedent: `copy_visual_selection` is blocking; `start_file_search` blocks on `getcwd()`).
+## Problem statement
 
-2. **Candidates + MRU ordering** (in wolf-core, pure & headlessly testable):
-   - Blocking query `getbufinfo({'buflisted': 1})` -> `Vec<BufInfo { bufnr, name, lastused, modified }>`. **buflisted buffers ONLY.**
-   - Sort by `lastused` desc for MRU order.
-   - New pure module `buffer_picker.rs` with `rank_buffers`, near-clone of `palette.rs::rank_palette`: project each buffer to a `FileEntry` (display = cwd-relative path, `mru_rank` = index in lastused-sorted order), rank via the SAME `rank_matches`. Unit-test headlessly like `rank_palette`.
+Add per-window tabs to the macOS app (`wolf-macos`), using the native macOS Tahoe
+titlebar tab bar (`NSWindowTabGroup`), like Finder/Safari.
 
-3. **List UX:** current buffer at row 1 (highest lastused); **row 2 pre-selected** so a bare `<CR>` switches to the most-recently-used OTHER buffer (telescope-style, ~ `Ctrl-^`).
+### Locked decisions (from the user)
 
-4. **Display string:** cwd-relative path.
+- Each tab = its own `WolfWindowController` + its own captive Neovim core + its own
+  buffer list, splits, scroll, sidebar, cwd. New tab ≈ new window in the same directory.
+- Tear-off into a new window and dragging a tab onto another window are ALLOWED (native
+  default; no suppression work). Drag-to-reorder is native/free.
+- Tab title = active buffer's basename (not full path), with minimal disambiguation when
+  basenames collide across tabs in the same window (e.g. two `README.md`).
+- `state.json` becomes a TREE: `windows[]` each with geometry (x,y,width,height) +
+  `tabs[]`, each tab `{ cwd, sidebar_visible }`. NO migration path: unparseable in the
+  new format → ignore and clobber on exit (version stays 1; missing `tabs` naturally
+  fails deserialization).
+- New Tab is a FULL Wolf command (`command_kind == 17`, after `bufferPicker == 16`):
+  `COMMAND_SPECS` entry (`:WolfNewTab` / `require('wolf').new_tab()`), FFI discriminant,
+  `CommandSeam.CommandKind.newTab`, `CommandDispatcher .newTab` branch, `AppMenu` ⌘T item
+  routed through `handleCommandMenuItem`. Keep New Window at ⇧⌘N.
 
-5. **Activation path:**
-   - `picker.activate(bufnr)` -> core `InputEvent::SwitchBuffer { win: active_win(), bufnr }` on the ordered input channel -> RPC calls new init.lua function `wolf_switch_buffer(win, bufnr)`.
-   - Switch is `nvim_win_set_buf(win, bufnr)` — a **window-scoped** buffer switch, NOT `:edit` (must not disturb `current_file` / file-MRU semantics or re-read from disk).
+### Constraints (CLAUDE.md)
 
-6. **View restoration** (held ENTIRELY in init.lua, NOT in wolf-core — core stays view-agnostic, no winsaveview payload crosses the FFI):
-   - New init.lua helper `wolf_setup_view_tracking(chan)` registers a `BufLeave`/`WinLeave` autocmd storing `view_cache[win][buf] = vim.fn.winsaveview()` (captures the view of the pane/buffer being LEFT).
-   - `wolf_switch_buffer(win, buf)`: `nvim_win_set_buf(win, buf)`, then if `view_cache[win][buf]` exists -> `nvim_win_call(win, winrestview(cached))`; ELSE force top of buffer (line 1 / topline 1). Key is `(winid, bufnr)` — each pane remembers its OWN scroll of a shared buffer. **NO per-bufnr fallback:** a buffer previously seen only in OTHER panes opens at the top, never borrowing another pane's scroll.
-
-7. **Wiring / where things land** (mirror existing sessions):
-   - `init.lua`: `wolf_setup_view_tracking` + `wolf_switch_buffer` (siblings to `wolf_setup_buffer_tracking` / `wolf_setup_layout`). wolf-core `nvim.rs` invokes the view-tracking setup after the other setups, same channel-id-via-`nvim_get_api_info` pattern.
-   - wolf-core `nvim.rs`: blocking `list_buffers()` query (mirrors `getcwd()`).
-   - wolf-core `buffer_picker.rs`: pure `rank_buffers` + `BufferRow` (mirrors `palette.rs`).
-   - wolf-core `input.rs`: `InputEvent::SwitchBuffer { win, bufnr }`, applied via the new `wolf_switch_buffer` RPC.
-   - wolf-core `command.rs`: append `BufferPicker` to `COMMAND_SPECS` as **discriminant 16** (APPEND-ONLY contract), id `buffer_picker`, `:WolfBufferPicker`, View menu group — reachable from native menu AND command palette.
-   - wolf-ffi: `FfiBufferPicker` session (`buffer_picker()` seeded from the blocking `list_buffers` query; `ranked(query, max) -> Vec<FfiBufferRow>`; `activate(bufnr)`) — NO wake, exactly like `FfiCommandPalette`. Extend the `command_kind` discriminant table with `BUFFER_PICKER=16`.
-   - wolf-macos: overlay reusing `CommandPaletteView`/picker chrome; menu item + key equivalent; dispatch through `CommandDispatcher`.
-   - wolf-gnome: parity overlay (or note deferred parity as the palette does); gets the command for free via `drain_commands`.
-
-8. **Tests:** prefer end-to-end / integration with REAL nvim (per CLAUDE.md). Headless unit tests for pure `rank_buffers`. Real-nvim wolf-ffi integration test (e.g. `//crates/wolf-ffi:buffer_picker`) covering: list ordering by lastused, buflisted-only filtering, switch via `nvim_win_set_buf`, and the `(winid,bufnr)` view round-trip (winsaveview captured on leave, winrestview on return; top-of-buffer when the pane never showed that buffer).
-
-9. **Docs:** README/architecture docs are source of truth — update `architecture.md`, `crates/wolf-core/README.md`, `crates/wolf-ffi/README.md`, `crates/wolf-macos/README.md`, `runtime/nvim/README.md`; reformat touched Markdown with `prettier --write` (no hard line breaks inside paragraphs).
-
-### Constraint reminders
+- Documentation is the source of truth: keep every touched directory's README in sync;
+  treat any doc/impl divergence as a bug.
+- Prefer end-to-end/integration tests with a REAL Neovim process over mocks.
+- Reformat edited Markdown with `prettier --write`; no hard line breaks within a paragraph.
 - `wolf-core` must compile with NO GUI toolkit in its dependency tree.
-- APPEND-ONLY discriminant contract for `Command` / `command_kind` (currently `0..=15`; `BufferPicker` = 16).
-- User wants to REVIEW the architect plan before any code lands.
+- APPEND-ONLY discriminant contract for `Command` / `command_kind` (currently `0..=16`;
+  `NewTab` = 17).
 
-## Progress Log
-- Problem statement written; invoked architect.
-- Architect plan complete (below). 6 open decisions surfaced to user.
+## Orchestrator's handoff summary (5 phases — architect to expand/verify)
+
+- **Phase 1 — wolf-core `state.rs`:** tree types `TabState`/`WindowState{geom,tabs}`/`WolfState`;
+  `StateStore::set_snapshot` replaces granular setters; old-format rejection; unit tests.
+- **Phase 2 — wolf-ffi:** load side `FfiTabState` + `FfiWindowState.tabs()`; write side free-fn
+  snapshot builder over `SHARED_STORE` + Mutex scratch; remove per-index setters + `window_index`
+  (grep-verified state-only); `NewTab` discriminant (17); round-trip integration test.
+- **Phase 3 — Swift seam `TabTitleSeam`:** basename + minimal disambiguation; headless tests.
+- **Phase 4 — AppKit:** `NSWindowTabGroup` grouping (explicit `addTabbedWindow`, native "+" via
+  `newWindowForTab`); `CommandSeam`/`CommandDispatcher` `.newTab`; coordinator-owned whole-tree
+  snapshot walking live tab groups; tab titles from `current_file()` via `TabTitleSeam`.
+- **Phase 5 — Docs & tests:** READMEs (wolf-core/src, wolf-ffi/src, wolf-macos + Sources) +
+  architecture.md; prettier; real-nvim integration + headless seam tests; NSWindow grouping
+  compile + manual-smoke.
+
+## Progress log
+
+- (init) Problem statement written; invoked architect.
+- Architect plan complete (below); orchestrator decisions OD1–OD6 recorded above. Invoking test-writer.
 
 ---
 
-# Architect Plan: Buffer Picker
+# Architect Plan (authoritative — all agents implement against this + the OD1–OD6 rulings)
 
-## 1. Summary
-Add a **buffer picker**: a palette-shaped session (candidates fixed at open, synchronous re-filter, **no wake**) listing `buflisted` buffers MRU-ordered by `getbufinfo().lastused`, fuzzy-ranked with the same `rank_matches` the palette uses, displayed as cwd-relative paths, row-2 preselected. Activating switches the buffer in the active pane via `nvim_win_set_buf` (window-scoped, not `:edit`) then restores that pane's saved view for that buffer. The `(winid,bufnr)->winsaveview()` cache lives entirely in `init.lua`; core stays view-agnostic; no view payload crosses the FFI. `BufferPicker` appended to the registry as discriminant **16**. Pure `rank_buffers` headlessly unit-tested; FFI + view round-trip covered by a new real-nvim integration test.
+## Grep findings & confirmed decisions
+- `window_index` is used ONLY for state in wolf-core (`attach_state_store` → `apply_cwd` `set_cwd`) and wolf-ffi (`wolf_ffi_start` param → `attach_state_store` + `WolfCoreHandle.window_index`, read only by `state_set_geometry`/`state_set_sidebar_visible`). Once state moves to the snapshot builder it is fully dead in both crates → REMOVE (from `wolf_ffi_start`, `WolfCoreHandle`, `attach_state_store`, `SharedStateStore`). In wolf-macos it becomes monotonic `tabId`.
+- NewTab IS a palette row (palette iterates all specs except CommandPalette) → `palette_rank.rs` count 16→17.
+- TabTitleSeam format: `"<basename> — <minimal trailing parent segments>"` (em dash), colliding labels only; empty/`[No Name]`/unnamed → `"untitled"`.
+- Source conflicts flagged: (a) `state_save.rs` + `empty_state_cwd.rs` assert the core-side cwd mirror → retire/trim (see OD1); (b) wolf-ffi `state.rs` + `multi_window.rs` drive the per-index setters → rewrite/trim; (c) `redraw.rs::apply_cwd` keeps `recent_dirs.record` + tracked-cwd, drops only the StateStore mirror.
 
-## 2. APPEND-ONLY discriminant contract (`BufferPicker = 16`)
-Keep in lockstep (all append-only):
-1. `crates/wolf-core/src/command.rs`: enum `Command` append `BufferPicker` after `Paste`; doc list `…Copy(14),Paste(15),BufferPicker(16)`; `COMMAND_SPECS` append row; tests `EXPECTED_COMMAND_COUNT` 16→17, add `BUFFER_PICKER_INDEX=16`, add round-trip/spec/last-row guards, change `paste_is_the_last_row`→fixed-index `paste_is_at_index_15`.
-2. `crates/wolf-ffi/src/lib.rs`: `command_kind::BUFFER_PICKER=16`; `FfiCommand::from_command` append arm; doc range `..BUFFER_PICKER`.
-3. `CommandSeam.swift`: `enum CommandKind` append `.bufferPicker`; `init?(ffi:)` `case 16`; doc `..bufferPicker==16`.
-4. `CommandDispatcher.swift`: `case .bufferPicker: controller?.openBufferPicker()`.
-5. `AppMenu.swift`: `Tag.bufferPicker=16`; View-menu `commandItem` (key equiv — DECISION §13.1).
-6. `crates/wolf-ffi/tests/commands.rs`: `CMD_KIND_BUFFER_PICKER=16`; guard array `0..=16`; `:WolfBufferPicker` drain step.
-7. `CommandSeamTests.swift`: add `(ffi:16)==.bufferPicker`; out-of-range 16→17.
-8. Regenerate + commit `crates/wolf-ffi/generated/` (new `buffer_picker()`, `switch_buffer()`, opaque `FfiBufferPicker`/`FfiBufferRow`). `wolf_ffi_wake.h` UNCHANGED (no new wake).
+## Phase 1 — wolf-core `src/state.rs`
+- Types: `TabState { cwd: String, sidebar_visible: bool }` (derive Clone/Debug/PartialEq/Serde/Default: cwd "", sidebar true). `WindowState { x,y,width,height: f64, tabs: Vec<TabState> }` (Clone/Debug/PartialEq/Serde/Default; **NO `#[serde(default)]` on `tabs`**). `WolfState { windows: Vec<WindowState> }` add PartialEq. `StateFile { version: u64=1, windows }`.
+- `StateStore`: REMOVE `set_geometry`/`set_cwd`/`set_sidebar_visible`/`truncate_windows`/`mutate`. ADD `set_snapshot(&self, next: WolfState)`: compare on `&next` first; if `cell.state == next` return (no gen bump); else swap + `generation += 1` + `notify_all`. KEEP `open`/`state`/`flush`/writer thread/`writer_loop`/`write_state_file`/coalescing UNCHANGED.
+- Doc-comments updated to describe the tree. `lib.rs` export `TabState`.
 
-## 3. init.lua (`runtime/nvim/init.lua`)
-Append after `wolf_setup_commands` (~L423-439).
-- `_G.wolf_setup_view_tracking()` — takes NO channel id (emits no rpcnotify; document this asymmetry). Holds upvalue `local view_cache = {}` keyed `view_cache[win][buf]=winsaveview()`. `BufLeave`/`WinLeave` autocmd (augroup `WolfView`, clear=true) captures the pane/buffer being LEFT: `win=nvim_get_current_win()`, `buf=nvim_win_get_buf(win)`, store `winsaveview()`. `WinClosed` autocmd prunes `view_cache[tonumber(args.match)]=nil` (DECISION §13.3 — recommend include). Defines `_G.wolf_switch_buffer` inside so it closes over `view_cache`.
-- `_G.wolf_switch_buffer(win, buf)` — `nvim_win_set_buf(win,buf)` (window-scoped, no `:edit`); then keyed on `(win,buf)`: if cached → `nvim_win_call(win, ()->winrestview(cached))`; else force top `winrestview({lnum=1,col=0,topline=1,leftcol=0})`. NO per-bufnr fallback. Wrap in `pcall` (stale bufnr degrades to no-op).
-- Reachability: `wolf_switch_buffer` MUST be a reachable `_G` global — `InputEvent::SwitchBuffer` applies via `nvim_exec_lua("wolf_switch_buffer(...)",[win,bufnr])` (set_buf + restore atomic in one Lua call, avoids race).
-- Ordering: core invokes `setup_view_tracking()` AFTER `setup_commands()` (last).
+## Phase 1b — wolf-core `api.rs` + `redraw.rs`
+- `api.rs`: remove `attach_state_store`, the `state_store: SharedStateStore` field + construction + clone into `RedrawHandler::new`; keep `state_dir` (recent-dirs/command-mru).
+- `redraw.rs`: delete `SharedStateStore` alias + `state` field + ctor param; in `apply_cwd` delete the store-mirror block, KEEP `*self.cwd.write()=Some(target)`, the `is_initial` early-return, and `recent_dirs.record(&target)`. Update doc.
 
-## 4. wolf-core
-- `nvim.rs`: blocking `list_buffers() -> Result<Vec<BufInfo>,NvimError>` (mirror `current_dir` ~L190-207): RPC `nvim_call_function("getbufinfo",[{buflisted=1}])`; decode array-of-maps → `bufnr`(i64),`name`(String),`lastused`(i64),`modified=changed!=0`; skip malformed. Also `setup_view_tracking() -> Result<(),NvimError>` (mirror `setup_commands`, no channel payload): `nvim_exec_lua("wolf_setup_view_tracking()",[])`.
-- `buffer_picker.rs` (NEW pure, GUI-free): `BufInfo{bufnr,name,lastused,modified}`; `BufferRow{bufnr,display,modified}`; `#[must_use] pub fn rank_buffers(buffers:&[BufInfo], cwd:Option<&Path>, query:&str, max:usize) -> Vec<BufferRow>`. Sort copy by `lastused` DESC (stable, tie-break bufnr) → current buffer at index 0 (INCLUDED); project each to `FileEntry{path:empty, display:relative_display(name,cwd), mru_rank:try_from(i)}`; `rank_matches(query,&entries).take(max).map(→row)`. Private `relative_display`: empty name→`[No Name]` (reuse `pane_status::NO_NAME`); under cwd→relative remainder; else absolute (no `~` fold — DECISION §13.6). Reimplement the 2-line strip locally (don't import pane_status privates).
-- `input.rs`: `InputEvent::SwitchBuffer{win:i64,bufnr:i64}` + apply arm → `switch_buffer(nvim,*win,*bufnr).await` helper doing `nvim_exec_lua("wolf_switch_buffer(...)",[win,bufnr])`. Routes through ordered pump (no race w/ pending keys).
-- `command.rs`: `COMMAND_SPECS` row `{BufferPicker, id:"buffer_picker", ex:"WolfBufferPicker", title:"Buffer Picker…", menu:View}`.
-- `api.rs`: attach step after `setup_commands` → `proc.setup_view_tracking().await?`; blocking `#[must_use] list_buffers()->Vec<BufInfo>` (warn+empty on err); `switch_buffer(win,bufnr)` → `send_input(SwitchBuffer{…})`.
-- `lib.rs`: `pub mod buffer_picker;` + re-export `{rank_buffers,BufInfo,BufferRow}`.
-- GUI-free denylist unaffected; NO new deps.
+## Phase 2 — wolf-core `command.rs`
+- `Command`: append `NewTab` (variant 17); update doc list. `COMMAND_SPECS`: append `{ NewTab, id:"new_tab", ex:"WolfNewTab", title:"New Tab", menu: File }`.
+- In-module tests: `EXPECTED_COMMAND_COUNT` 17→18; `NEW_TAB_INDEX=17`; add id round-trip / spec-fields / last-row guards; change `buffer_picker_is_the_last_row` → fixed-index guard (`COMMAND_SPECS[16]==BufferPicker`).
 
-## 5. wolf-ffi (`crates/wolf-ffi/src/lib.rs`)
-- `mod ffi`: on `WolfCoreHandle` add `fn buffer_picker(&self) -> FfiBufferPicker;` and `fn switch_buffer(&self, bufnr: i64);`. New opaque `type FfiBufferPicker { fn ranked(&self, query:String, max:usize) -> Vec<FfiBufferRow>; }` and `type FfiBufferRow { fn bufnr()->i64; fn display()->String; fn modified()->bool; }`.
-- Glue: `buffer_picker` (mirror `command_palette` ~L1268): seed `FfiBufferPicker{buffers:core.list_buffers(), cwd:core.live_cwd()}`. `ranked` (mirror ~L1771): `rank_buffers(&buffers,cwd.as_deref(),&query,max).map(FfiBufferRow::from_row)`. NO wake, NO add_window.
-- **Activation on the HANDLE (not session)**: `WolfCoreHandle::switch_buffer(bufnr)` reads snapshot `active_win()` live; if nonzero → `core.switch_buffer(active_win,bufnr)`. Mirrors file picker `open(path)`. (DECISION §13.5 — documented refinement of spec's "picker.activate".)
-- Re-export imports `{BufInfo,BufferRow,rank_buffers}`. Regenerate + commit `generated/`.
+## Phase 2 — wolf-ffi `src/lib.rs` (+ regenerate `generated/`)
+- command_kind: `NEW_TAB=17`; `from_command` arm `Command::NewTab => NEW_TAB`; `kind()` doc range → `…NEW_TAB`.
+- Load side: NEW opaque `FfiTabState { cwd()->String, sidebar_visible()->bool }` (`from_tab(&TabState)`); `FfiWindowState` DROPS `cwd()`/`sidebar_visible()`, ADDS `tabs()->Vec<FfiTabState>` (+ field), `from_window` maps tabs; keep x/y/w/h. `wolf_ffi_load_state` shape unchanged.
+- Write side — free-fns over `SHARED_STORE` + `static SCRATCH: OnceLock<Mutex<WolfState>>` (helper `scratch()`; `.lock().expect("state scratch mutex poisoned")`):
+  - `wolf_ffi_state_snapshot_begin()` → `windows.clear()`
+  - `wolf_ffi_state_snapshot_add_window(x,y,width,height)` → push window w/ empty tabs
+  - `wolf_ffi_state_snapshot_add_tab(cwd: String, sidebar_visible: bool)` → push onto `windows.last_mut()` (defensive no-op if none)
+  - `wolf_ffi_state_snapshot_commit()` → clone scratch, `shared_store().map(|s| s.set_snapshot(state))`
+  - `wolf_ffi_state_flush() -> bool` → `shared_store().map_or(true, |s| s.flush(STATE_FLUSH_TIMEOUT))`
+- REMOVE handle `state_set_geometry`/`state_set_sidebar_visible`/`state_set_window_count`/`state_flush` (+ bridge decls); remove `store`/`window_index` fields, `attach_state_store` call, and the `window_index: u16` param of `wolf_ffi_start` → `wolf_ffi_start(init_lua, cwd, cols, rows)`. `shutdown` keeps a best-effort flush via `shared_store()`. `#[must_use]` + docs on the new outside-bridge items.
+- Regenerate `generated/SwiftBridgeCore.swift`, `wolf-ffi.swift`, `wolf-ffi.h` (wake.h unchanged).
 
-## 6. wolf-macos (compile-verified + manual-smoke, per overlay policy)
-- `CommandSeam.swift`/`CommandDispatcher.swift`/`AppMenu.swift` per §2.
-- `AppMenu`: View-menu `Buffer Picker…` item, key equiv = DECISION §13.1 (recommend ⌘E).
-- NEW `BufferPickerView.swift` (mirror `CommandPaletteView`): `session=handle.buffer_picker()` on open; `refresh()`→`session.ranked(query,max)`; reuse `PickerRow`/`PickerSeam` chrome; **row-2 preselect** on initial empty-query open (`select min(1,count-1)`); `activateSelection()`→`handle.switch_buffer(bufnr)` + close (NO MRU record). No wake bridge.
-- `WolfWindowController.swift`: `bufferPicker` property beside `palette`; construct beside palette; `func openBufferPicker(){ bufferPicker?.open() }`.
+## Phase 3 — Swift `WolfKeyMap/TabTitleSeam.swift` (Foundation-only, headless)
+`public enum TabTitleSeam { public static func labels(activeBufferPaths: [String]) -> [String] }` — 1:1 order-preserving; basename; empty/`[No Name]`/unnamed → `"untitled"`; colliding basenames extended with minimal trailing parent segments as `"<base> — <segs>"` growing until the collision set is distinct.
 
-## 7. wolf-gnome
-DEFER parity (matches palette precedent). Gets `Command::BufferPicker` drain + `rank_buffers`/`list_buffers`/`switch_buffer` for free; no GTK overlay this change. Note in gnome README known-limitations. (DECISION §13.2 — confirm defer.)
+## Phase 4 — wolf-macos AppKit
+- `CommandSeam.swift`: append `.newTab`; `init?(ffi:)` `case 17`; range doc `0..17`.
+- `CommandDispatcher.swift`: `.newTab` → `controller.map { coordinator?.makeNewTab(from: $0) }`.
+- `MainWindow.swift`: shared `tabbingIdentifier = "com.wolf.editor"`; `tabbingMode` default `.automatic`.
+- `AppDelegate.swift` (coordinator): flat `controllers` kept for routing/wake/menu; REMOVE `windowIndex` slot, add monotonic `nextTabId`/`tabId` (used for Window-menu tags, `raiseWindow(tabId:)`, `otherWindows`, `raiseWindowMenuItem`). `makeController` takes `tabId:` not `windowIndex:`. `makeNewWindow` = standalone empty-state (unchanged placement). NEW `makeNewTab(from key:)` inherits `key.currentCwd`+`key.hasFolder`, `start()`, `key.window.addTabbedWindow(new.window, ordered:.above)` + select, append/`rebuildWindowMenu`/`scheduleStateSnapshot`. `@objc newWindowForTab(_:)` → key controller → `makeNewTab`. Restore GROUP-BY-GROUP: per `WindowState` start each `TabState`'s controller, set FIRST tab frame via `StateSeam.restoredWindowFrame`, `addTabbedWindow` the rest, set each tab's sidebar per `TabState.sidebar_visible` (empty-state hides). `restoredWindows`→`restoredGroups(from:) -> [[RestoredTabState]]` + per-group geometry. `applicationWillTerminate` → `snapshotNow()` + `wolf_ffi_state_flush()` then teardown. ADD `scheduleStateSnapshot()` (coalesced ~150ms) + `snapshotNow()` (walker §7.7) + `refreshTabTitles(forGroupOf:)`.
+- Snapshot walker `snapshotNow()`: iterate controllers→windows; group by `window.tabGroup` (nil ⇒ solo group); order via `tabGroup.windows`; map window→controller via `owns(_:)`; geometry from `tabGroup.selectedWindow?.frame ?? first.frame`; per tab `currentCwd`+`sidebarVisible`; drive `begin`/`add_window`/`add_tab…`/`commit`.
+- `WolfWindowController.swift`: `windowIndex`→`tabId`; `startCore()` calls shortened `wolf_ffi_start`; DELETE `updateWindowTitle`/`WindowTitleSeam` use — `onRenderWake` calls `coordinator?.refreshTabTitles(forGroupOf: window)`. Keep empty→folder transition + `lastKnownCwd`/`windowCwdDidChange`; call `scheduleStateSnapshot()` on cwd change, `didOpenFolder`, sidebar toggle, and `teardown` (before deferred `removeController`). Remove `handle?.state_flush()`. Expose `sidebarVisible`, `activeBufferPath` (`handle?.current_file().toString() ?? ""`), and the NSWindow for grouping.
+- `StatePersistence.swift`: repurpose to snapshot triggers — no `WolfCoreHandle`/`state_set_*`; observers (move/end-live-resize/discrete-resize/sidebar KVO) call injected `onChange` (=`coordinator.scheduleStateSnapshot`). Add tab-group KVO on `window.tabGroup?.windows` + `.selectedWindow` (re-attached when membership changes; optional `TabGroupObserver.swift`). Coalesced timer absorbs the KVO storm.
+- `AppMenu.swift`: `Tag.newTab=17`; File menu New Tab `⌘T` (after New Window ⇧⌘N); Window-menu item `tag = controller.tabId`.
+- DELETE `WolfKeyMap/WindowTitleSeam.swift` + `WolfKeyMap/WindowIndexSeam.swift` (OD2).
 
-## 8. Tests (prefer real-nvim)
-- **8a** `crates/wolf-core/tests/buffer_rank.rs` (NEW, headless, mirror `palette_rank.rs`): MRU ordering (current buf idx0); fuzzy filter MRU-first; cwd-relative/absolute/`[No Name]` display; truncation; tie-break by bufnr. BUILD `//crates/wolf-core:buffer_rank`.
-- **8b** `command.rs` inline (via `wolf_core_lib_test`): count→17, buffer_picker guards, Paste fixed-index-15.
-- **8c** `crates/wolf-ffi/tests/buffer_picker.rs` (NEW, real-nvim, mirror `command_palette.rs`/`panes.rs`, SKIP if no `WOLF_NVIM_BIN`): buflisted-only filtering; lastused MRU ordering; `switch_buffer` switches active pane (observe via `pane_status_for_grid`/`read_frame_for_grid`/RPC `nvim_win_get_buf`); **(winid,bufnr) VIEW ROUND-TRIP** — scroll pane on buf A (capture `FfiFrame::topline()` t_scrolled>0), switch to B, switch back to A, assert restored topline==t_scrolled; **TOP-OF-BUFFER** when never shown in pane (topline==0). Observe via `FfiFrame::topline()` through `read_frame_for_grid(grid_for_win(active_win()))` (DECISION §13.4). BUILD `//crates/wolf-ffi:buffer_picker` (mirror `command_palette` stanza).
-- **8d** `tests/commands.rs`: guard `0..=16` + `:WolfBufferPicker` drain.
-- **8e** `CommandSeamTests.swift`: `(ffi:16)==.bufferPicker`, out-of-range→17.
-- **REGRESSION** `tests/palette_rank.rs`: `STATIC_COMMAND_COUNT` 15→16 (BufferPicker is a new palette static row — only CommandPalette is excluded; 17 specs → 16 static rows). Update count assertions.
-- Targets: `//crates/wolf-core:wolf_core_lib_test`, `:buffer_rank`(NEW), `:palette_rank`; `//crates/wolf-ffi:commands`, `:buffer_picker`(NEW), `:command_palette`; macOS WolfKeyMapTests (`CommandSeamTests`,`PaletteSeamTests`). Cargo: `cargo test -p wolf-core`, `-p wolf-ffi`.
+## Append-only discriminant lockstep (all together)
+1. `Command::NewTab`(17) 2. COMMAND_SPECS row 3. command.rs tests (count 18, NEW_TAB_INDEX=17, last-row) 4. ffi `command_kind::NEW_TAB=17`+arm+doc 5. regenerate generated/ 6. `CommandKind.newTab`+case 17+doc 7. `CommandDispatcher .newTab` 8. `AppMenu.Tag.newTab=17`+⌘T 9. `CommandSeamTests (ffi:17)==.newTab`, out-of-range→18 10. `commands.rs` guard `0..=17`+`CMD_KIND_NEW_TAB=17`+`:WolfNewTab` drain 11. `palette_rank.rs` STATIC_COMMAND_COUNT 16→17.
 
-## 9. Docs (then `prettier --write`, no hard breaks)
-`architecture.md` (§10 discriminants 0..16 + BufferPicker; wolf-ffi ¶ command_kind table `…PASTE=15/BUFFER_PICKER=16` + FfiBufferPicker session desc; macOS Phase status menu inventory + BufferPickerView; contract "Output: commands" + init.lua note that view tracking crosses NO FFI payload; wolf-core responsibilities bullet). `crates/wolf-core/README.md`+`src/README.md` (buffer_picker module, list_buffers/switch_buffer, InputEvent::SwitchBuffer, Command::BufferPicker). `crates/wolf-ffi/README.md`+`src/README.md` (FfiBufferPicker/FfiBufferRow, buffer_picker/switch_buffer, command_kind=16). `crates/wolf-macos/Sources/README.md` (BufferPickerView, openBufferPicker, seam additions, chosen key). `runtime/nvim/README.md` (wolf_setup_view_tracking lifecycle + wolf_switch_buffer, emits no rpcnotify). tests READMEs (new targets).
+## Tests & Bazel targets
+- `//crates/wolf-core:state_unit` — REWRITE: tree round-trip via StateFile; old-format rejection; unchanged-snapshot skips gen bump (behavioral assertion); snapshot replaces prior; version=1/absent/corrupt→None.
+- `//crates/wolf-core:palette_rank` — count 16→17. `command.rs` inline (via `wolf_core_lib_test`) count 18.
+- RETIRE `//crates/wolf-core:state_save` (delete stanza+file); TRIM `//crates/wolf-core:empty_state_cwd` to recent-dirs only.
+- `//crates/wolf-ffi:state` (keep name — OD3) — REWRITE: drive builder free-fns → `wolf_ffi_load_state` round-trip (2 windows/3 tabs; geometry + per-tab cwd/sidebar/order) + old-format rejection (flat file → `windows()` empty). Builder half needs no nvim.
+- `//crates/wolf-ffi:commands` — guard `0..=17` + `:WolfNewTab` drain. `//crates/wolf-ffi:multi_window` — drop state-setter section, keep wake-token identity.
+- `WolfKeyMapTests`: ADD `TabTitleSeamTests` (distinct pass-through; two README collide→`README.md — <parent>`; three-way equal-immediate-parent→two segments; empty/`[No Name]`/unnamed→`untitled`; order/1:1; mixed). UPDATE `CommandSeamTests`. DELETE `WindowTitleSeamTests` + `WindowIndexSeamTests` from the source set (update BUILD/SwiftPM srcs).
+- NSWindow tab grouping = compile + manual-smoke (window server). Smoke checklist: ⌘T inherits cwd; native "+"; tear-off standalone; drag-merge re-groups; reorder persists; label=active-buffer basename+disambiguation; restore reopens groups w/ geometry+per-tab sidebar; terminate writes tree.
 
-## 10. Implementation order
-1. command.rs (+tests). 2. buffer_picker.rs + lib.rs. 3. input.rs. 4. nvim.rs (list_buffers + setup_view_tracking). 5. api.rs (accessors + attach step). 6. init.lua. 7. wolf-ffi lib.rs. 8. regenerate generated/. 9. Swift: CommandSeam→CommandDispatcher→WolfWindowController→BufferPickerView(NEW)→AppMenu. 10. Tests + BUILD targets + palette_rank count. 11. Docs + prettier.
+## Implementation order
+1. core state.rs (+lib export) → api.rs/redraw.rs → command.rs. 2. core tests. 3. ffi lib.rs → regenerate generated/. 4. ffi tests. 5. Swift WolfKeyMap (CommandSeam, TabTitleSeam; delete WindowTitle/WindowIndex seams; tests). 6. Swift WolfMacOS (MainWindow, WolfWindowController, StatePersistence, AppDelegate, CommandDispatcher, AppMenu). 7. smoke + docs.
 
-## 11. Dependencies
-NONE (new crates or Swift packages).
+## Docs (Phase 5)
+`architecture.md` (state tree/`set_snapshot`/`attach_state_store` removed/cwd read per-snapshot; ffi FfiTabState + builder free-fns + removed setters + `window_index` + shortened `wolf_ffi_start` + NEW_TAB=17; macOS NSWindowTabGroup model + ⌘T/`:WolfNewTab` + coordinator snapshot ownership + TabTitleSeam + tear-off/merge native; discriminant table →`BufferPicker=16/NewTab=17`, "eighteen commands 0..17"; window↔tab model + new state contract). `crates/wolf-core/src/README.md` + `README.md` (state tree, set_snapshot, granular setters + attach_state_store removed, Command::NewTab, TabState/WolfState surface). `crates/wolf-ffi/src/README.md` + `README.md` (FfiTabState, FfiWindowState.tabs, builder free-fns, removed handle setters, window_index removal + shortened wolf_ffi_start, NEW_TAB=17). `crates/wolf-macos/README.md` + `Sources/README.md` (TabTitleSeam, tab grouping + shared tabbingIdentifier, coordinator snapshot ownership, :WolfNewTab/⌘T, CommandSeam/CommandDispatcher/AppMenu deltas, WindowTitleSeam/WindowIndexSeam removal, optional TabGroupObserver). `crates/wolf-ffi/tests/README.md` + `crates/wolf-macos/Tests/README.md` (rewritten state/commands/multi_window targets, new TabTitleSeamTests, removed seam tests, retired state_save / trimmed empty_state_cwd). `prettier --write` all edited md; no hard breaks in a paragraph.
 
-## 12. Lint
-`#[must_use]` on rank_buffers + FFI accessors; module/item docs (crate denies missing_docs); `u32::try_from(i).ok()` for mru_rank (mirror palette). Exhaustive `from_command` match self-guards. No new allow directives.
+## Risks
+NSWindowTabGroup KVO reliability (mitigated by coalesced timer + snapshot-on-open/close backstop; fallback `didBecomeKey` + periodic); `newWindowForTab:` delegate routing (fallback MainWindow override); tab-title transient `"untitled"` before first cwd/current_file wake (acceptable); restore anchor when a group's first tab core fails (anchor next started tab; all-fail drops group).
 
-## 13. DECISIONS (RESOLVED — provisional, user was away; all reversible)
-1. **macOS key equivalent** = **⌘E** (architect recommendation; ⌘P/⌘O taken). PROVISIONAL — reconfirm w/ user.
-2. **wolf-gnome parity** = **DEFER** (palette precedent). PROVISIONAL — reconfirm w/ user.
-3. **WinClosed view_cache prune** = **INCLUDE** (accepted).
-4. **View-round-trip test observable** = **`FfiFrame::topline()`** (accepted).
-5. **activate placement** = **`WolfCoreHandle::switch_buffer(bufnr)`** handle method, live active_win (accepted).
-6. **`~`-home display abbreviation** = **NO for v1** (cwd-relative + absolute fallback only) (accepted).
-
-Architect agent id: adaabc9db42141489
+Architect agent id: a0bd6c2fcac5ac00b

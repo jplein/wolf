@@ -36,6 +36,7 @@ enum AppMenu {
         static let copy = 14
         static let paste = 15
         static let bufferPicker = 16
+        static let newTab = 17
     }
 
     /// The dynamic submenus `install` hands back to the coordinator: the Window
@@ -90,8 +91,8 @@ enum AppMenu {
         return item
     }
 
-    /// The File menu (New `⌘n` / New Window `⇧⌘n` / Go to File `⌘o` / Open File /
-    /// Open Folder `⇧⌘o` / Close `⌘w` / Close Window `⇧⌘w`).
+    /// The File menu (New `⌘n` / New Window `⇧⌘n` / New Tab `⌘t` / Go to File `⌘o`
+    /// / Open File / Open Folder `⇧⌘o` / Close `⌘w` / Close Window `⇧⌘w`).
     ///
     /// The item titles mirror `wolf_core::COMMAND_SPECS` (the canonical registry);
     /// the ellipsis characters are single U+2026, matching those specs.
@@ -106,6 +107,9 @@ enum AppMenu {
             commandItem(
                 title: "New Window", tag: Tag.newWindow, keyEquivalent: "n",
                 target: target, modifiers: [.command, .shift]))
+        menu.addItem(
+            commandItem(
+                title: "New Tab", tag: Tag.newTab, keyEquivalent: "t", target: target))
         menu.addItem(.separator())
         menu.addItem(
             commandItem(
@@ -242,7 +246,7 @@ enum AppMenu {
                 action: #selector(AppDelegate.raiseWindowMenuItem(_:)),
                 keyEquivalent: "")
             windowItem.target = target
-            windowItem.tag = controller.windowIndex
+            windowItem.tag = controller.tabId
             menu.addItem(windowItem)
         }
     }

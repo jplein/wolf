@@ -3,8 +3,9 @@
 //! This is the GUI-toolkit-free state module: it resolves the per-platform
 //! application-state directory (macOS `~/Library/Application Support/Wolf`,
 //! Linux `~/.local/state/wolf`), reads a pretty-printed `state.json` holding a
-//! LIST of per-window entries (geometry, cwd, sidebar visibility), and writes
-//! it back through a single dedicated writer thread.
+//! TREE of windows — each window carries geometry plus a LIST of tabs, and each
+//! tab carries its own working directory + sidebar visibility — and writes it
+//! back through a single dedicated writer thread.
 //!
 //! ## Loading (infallible, silently-ignore)
 //!
@@ -17,13 +18,17 @@
 //!
 //! ## Writing (coalescing, latest-wins, atomic)
 //!
-//! A [`StateStore`] merges every mutation into an in-memory [`WolfState`]
-//! under a mutex and bumps a generation counter; a dedicated writer thread
-//! (named `wolf-state-writer`) sleeps a short coalesce delay, clones the
-//! LATEST state, serializes with `serde_json::to_string_pretty`, writes a
-//! sibling tmp file, and renames it over `state.json` — so a crash never
-//! leaves a partial file and rapid mutation bursts produce one write.
-//! [`StateStore::flush`] blocks until everything pending has been attempted.
+//! A [`StateStore`] holds the in-memory [`WolfState`] tree under a mutex and a
+//! generation counter; the front-end submits the WHOLE tree at once via
+//! [`StateStore::set_snapshot`], which swaps it in and bumps the generation
+//! ONLY when the submitted tree differs from the current one (an identical
+//! snapshot is a no-op, so a KVO echo storm produces no disk churn). A
+//! dedicated writer thread (named `wolf-state-writer`) sleeps a short coalesce
+//! delay, clones the LATEST state, serializes with
+//! `serde_json::to_string_pretty`, writes a sibling tmp file, and renames it
+//! over `state.json` — so a crash never leaves a partial file and rapid
+//! snapshot bursts produce one write. [`StateStore::flush`] blocks until
+//! everything pending has been attempted.
 //!
 //! Concurrent Wolf PROCESSES are out of scope: the last writer wins (each
 //! write is still atomic, so the file is never torn).
@@ -53,15 +58,40 @@ const WRITE_COALESCE_DELAY: Duration = Duration::from_millis(100);
 /// then exits). Purely a cleanup path — mutations wake it immediately.
 const WRITER_IDLE_POLL: Duration = Duration::from_millis(500);
 
-/// One window's persisted state.
+/// One tab's persisted state (a tab is its own captive Neovim: buffers, splits,
+/// scroll, sidebar, and working directory).
+///
+/// `cwd` is the absolute canonicalized path nvim reported, or `""` when it has
+/// not been reported yet (a fresh empty-state tab); restore validates it is a
+/// non-empty, existing directory before use. `sidebar_visible` records whether
+/// the file-tree sidebar was showing (defaults to `true`).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TabState {
+    /// The embedded Neovim's working directory (`""` == not yet reported).
+    pub cwd: String,
+    /// Whether the file-tree sidebar is visible (defaults to `true`).
+    pub sidebar_visible: bool,
+}
+
+impl Default for TabState {
+    fn default() -> Self {
+        Self {
+            cwd: String::new(),
+            sidebar_visible: true,
+        }
+    }
+}
+
+/// One window's persisted state: geometry plus its ordered list of tabs.
 ///
 /// Geometry is in `f64` points, interpreted by the WRITING front-end (macOS
 /// stores `NSWindow.frame`: AppKit bottom-left global coordinates). A
 /// non-positive `width`/`height` is the "unset" sentinel — restore treats the
-/// geometry as absent. `cwd` is the absolute canonicalized path nvim reported,
-/// or `""` when it has not been reported yet; restore validates it is a
-/// non-empty, existing directory before use.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+/// geometry as absent. `tabs` is the window's tab bar, in tab order; there is
+/// NO `#[serde(default)]` on it, so an OLD flat (pre-tabs) file that carries a
+/// window-level `cwd`/`sidebar_visible` and no `tabs` fails deserialization and
+/// is silently ignored (no migration path).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct WindowState {
     /// The window origin's x coordinate, in points.
     pub x: f64,
@@ -71,34 +101,19 @@ pub struct WindowState {
     pub width: f64,
     /// The window height, in points (`<= 0` == unset).
     pub height: f64,
-    /// The embedded Neovim's working directory (`""` == not yet reported).
-    pub cwd: String,
-    /// Whether the file-tree sidebar is visible (defaults to `true`).
-    pub sidebar_visible: bool,
+    /// The window's tabs, in tab order (each its own captive Neovim).
+    pub tabs: Vec<TabState>,
 }
 
-impl Default for WindowState {
-    fn default() -> Self {
-        Self {
-            x: 0.0,
-            y: 0.0,
-            width: 0.0,
-            height: 0.0,
-            cwd: String::new(),
-            sidebar_visible: true,
-        }
-    }
-}
-
-/// The whole persisted application state: a LIST of windows (future-proof for
-/// multi-window; the current front-ends only populate index 0).
-#[derive(Clone, Debug, Default)]
+/// The whole persisted application state: a TREE of windows, each with geometry
+/// and its own list of tabs.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct WolfState {
     /// The per-window entries, in window order.
     pub windows: Vec<WindowState>,
 }
 
-/// The on-disk file shape: a `version` header wrapping the window list.
+/// The on-disk file shape: a `version` header wrapping the window tree.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct StateFile {
     version: u64,
@@ -205,11 +220,12 @@ struct StoreInner {
 /// Opened over an explicit directory (the injection seam — production callers
 /// pass [`state_dir`]), it loads the existing `state.json` (defaults on any
 /// failure, per [`load_state`]) and spawns one dedicated writer thread that
-/// serializes ALL disk writes: every setter merges into the in-memory
-/// [`WolfState`] under a brief mutex and wakes the writer, which coalesces,
-/// serializes, and atomically replaces the file. All operations are infallible
-/// (log-not-fail); clones share the same store. The writer thread exits on its
-/// own once every handle is dropped and nothing is pending.
+/// serializes ALL disk writes: [`set_snapshot`](StateStore::set_snapshot) swaps
+/// the whole in-memory [`WolfState`] tree under a brief mutex (when it changed)
+/// and wakes the writer, which coalesces, serializes, and atomically replaces
+/// the file. All operations are infallible (log-not-fail); clones share the
+/// same store. The writer thread exits on its own once every handle is dropped
+/// and nothing is pending.
 #[derive(Clone)]
 pub struct StateStore {
     inner: Arc<StoreInner>,
@@ -253,38 +269,24 @@ impl StateStore {
         self.inner.cell.lock().state.clone()
     }
 
-    /// Records window `idx`'s frame geometry (points; the writing front-end's
-    /// coordinate convention). Grows the window list with defaults up to `idx`.
-    pub fn set_geometry(&self, idx: usize, x: f64, y: f64, width: f64, height: f64) {
-        self.mutate(idx, |w| {
-            let changed = (w.x, w.y, w.width, w.height) != (x, y, width, height);
-            w.x = x;
-            w.y = y;
-            w.width = width;
-            w.height = height;
-            changed
-        });
-    }
-
-    /// Records window `idx`'s working directory (stored lossily as a UTF-8
-    /// string). Grows the window list with defaults up to `idx`.
-    pub fn set_cwd(&self, idx: usize, cwd: &Path) {
-        let cwd = cwd.to_string_lossy().into_owned();
-        self.mutate(idx, |w| {
-            let changed = w.cwd != cwd;
-            w.cwd = cwd;
-            changed
-        });
-    }
-
-    /// Records window `idx`'s sidebar visibility. Grows the window list with
-    /// defaults up to `idx`.
-    pub fn set_sidebar_visible(&self, idx: usize, visible: bool) {
-        self.mutate(idx, |w| {
-            let changed = w.sidebar_visible != visible;
-            w.sidebar_visible = visible;
-            changed
-        });
+    /// Replaces the whole in-memory tree with `next` — the front-end walks its
+    /// live windows/tabs and submits the ENTIRE tree at once.
+    ///
+    /// Compares `next` against the current tree FIRST: an identical snapshot is
+    /// a no-op (the generation is NOT bumped and the writer never re-fires), so
+    /// a redundant re-submit — e.g. the KVO/observer storm the coordinator's
+    /// coalesced timer already absorbs — causes no disk churn. When it differs,
+    /// the tree is swapped in, the generation is bumped, and the writer is woken.
+    /// The mutex is held only for the compare-and-swap, never across
+    /// serialization or IO.
+    pub fn set_snapshot(&self, next: WolfState) {
+        let mut cell = self.inner.cell.lock();
+        if cell.state == next {
+            return;
+        }
+        cell.state = next;
+        cell.generation += 1;
+        self.inner.cond.notify_all();
     }
 
     /// Blocks until every mutation made so far has had its disk write ATTEMPTED
@@ -305,43 +307,6 @@ impl StateStore {
         true
     }
 
-    /// Truncates the `windows` list to `len` entries, dropping any trailing
-    /// (higher-index) slots. Used at terminate time to prune ghost windows left
-    /// by closed windows once the surviving windows have been re-pushed at dense
-    /// indices. A no-op when the list is already `<= len`; otherwise bumps the
-    /// generation and wakes the writer so the shrink reaches disk. The mutex is
-    /// held only for the in-memory truncation, never across serialization or IO.
-    pub fn truncate_windows(&self, len: usize) {
-        let mut cell = self.inner.cell.lock();
-        if cell.state.windows.len() <= len {
-            return;
-        }
-        cell.state.windows.truncate(len);
-        cell.generation += 1;
-        self.inner.cond.notify_all();
-    }
-
-    /// The shared setter body: under the cell mutex, grows `windows` with
-    /// defaults up to `idx`, applies `apply` (which reports whether the field
-    /// actually changed), and — when the list grew or the field changed — bumps
-    /// the generation and wakes the writer. Unchanged writes are skipped so
-    /// repeated identical pushes (e.g. KVO echoes) cause no disk churn. The
-    /// mutex is held only for the in-memory merge, never across serialization
-    /// or IO.
-    fn mutate(&self, idx: usize, apply: impl FnOnce(&mut WindowState) -> bool) {
-        let mut cell = self.inner.cell.lock();
-        let grew = cell.state.windows.len() <= idx;
-        if grew {
-            cell.state
-                .windows
-                .resize_with(idx + 1, WindowState::default);
-        }
-        let changed = apply(&mut cell.state.windows[idx]);
-        if grew || changed {
-            cell.generation += 1;
-            self.inner.cond.notify_all();
-        }
-    }
 }
 
 /// The dedicated writer-thread body (`wolf-state-writer`).

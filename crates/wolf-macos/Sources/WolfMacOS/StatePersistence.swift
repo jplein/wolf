@@ -1,42 +1,43 @@
 //
 //  StatePersistence.swift
-//  Pushes window geometry / sidebar visibility into the core's state store
-//  (over the wolf-ffi `state_set_*` bridge) whenever they change, so
-//  `state.json` tracks the live UI. Owned by `AppDelegate`.
+//  Observes ONE window's geometry / sidebar / tab-group changes and fires a
+//  coalesced whole-tree state snapshot on the coordinator whenever any of them
+//  change, so `state.json` tracks the live UI. Owned by a `WolfWindowController`.
 //
-//  This is WRITE-ONLY glue: it performs NO file IO itself (the store's writer
-//  thread in wolf-core owns the file) and no restore (AppDelegate applies the
-//  restored state before the window is shown). The embedded Neovim's cwd is
-//  persisted core-side (the `wolf_cwd` hook) with no involvement here.
+//  This is TRIGGER-ONLY glue: it performs NO file IO and no `state_set_*` calls
+//  (those per-index bridge setters are gone). Persistence is now a whole-tree
+//  snapshot the coordinator walks (`AppDelegate.snapshotNow`); this object's job
+//  is only to notice this window changed and ask for a (coalesced) re-snapshot.
 //
 
 import AppKit
-import WolfKeyMap
 
-/// Observes the main window's geometry and the sidebar's collapsed state,
-/// pushing each change over the `state_set_*` bridge methods; `pushSnapshot()`
-/// pushes both facets at once (called once after launch and from
-/// `applicationWillTerminate`, backstopping any observation that did not fire).
+/// Observes a window's geometry, its sidebar's collapsed state, and its tab
+/// group's membership/selection, calling the injected `onChange` on each change
+/// (the coordinator's coalesced `scheduleStateSnapshot`).
 final class StatePersistence: NSObject {
-    private let handle: WolfCoreHandle
     private weak var window: NSWindow?
     private weak var sidebarItem: NSSplitViewItem?
+    private let onChange: () -> Void
 
     /// The NotificationCenter observation tokens (removed on deinit).
     private var notificationObservers: [NSObjectProtocol] = []
     /// The KVO observation of the sidebar split item's `isCollapsed`.
     private var sidebarObservation: NSKeyValueObservation?
+    /// The tab-group membership/selection observer (best-effort; the coalesced
+    /// snapshot backstops any KVO it misses).
+    private var tabGroupObserver: TabGroupObserver?
 
-    /// Builds the persistence glue over the launched UI. All UI references are
-    /// weak: the delegate owns their lifetimes, this object only observes.
+    /// Builds the trigger glue over the launched UI. All UI references are weak:
+    /// the controller owns their lifetimes, this object only observes.
     init(
-        handle: WolfCoreHandle,
         window: NSWindow,
-        sidebarItem: NSSplitViewItem
+        sidebarItem: NSSplitViewItem,
+        onChange: @escaping () -> Void
     ) {
-        self.handle = handle
         self.window = window
         self.sidebarItem = sidebarItem
+        self.onChange = onChange
         super.init()
     }
 
@@ -46,25 +47,26 @@ final class StatePersistence: NSObject {
             center.removeObserver(observer)
         }
         sidebarObservation?.invalidate()
+        tabGroupObserver?.invalidate()
     }
 
     /// Installs the observers: window move, end-of-live-resize, non-live resize
-    /// (zoom / programmatic setFrame), and sidebar `isCollapsed` KVO (the
-    /// terminate-time `pushSnapshot()` is the correctness backstop).
+    /// (zoom / programmatic setFrame), sidebar `isCollapsed` KVO, and tab-group
+    /// membership/selection (tear-off / merge / reorder / tab switch).
     func install() {
         let center = NotificationCenter.default
         notificationObservers.append(
             center.addObserver(
                 forName: NSWindow.didMoveNotification, object: window, queue: .main
             ) { [weak self] _ in
-                self?.pushGeometry()
+                self?.onChange()
             }
         )
         notificationObservers.append(
             center.addObserver(
                 forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main
             ) { [weak self] _ in
-                self?.pushGeometry()
+                self?.onChange()
             }
         )
         notificationObservers.append(
@@ -73,40 +75,21 @@ final class StatePersistence: NSObject {
             ) { [weak self] _ in
                 // Live-resize spams didResize per frame; skip those (the
                 // end-of-live-resize notification above catches the final size)
-                // and push only discrete resizes (zoom, programmatic setFrame).
+                // and fire only on discrete resizes (zoom, programmatic setFrame).
                 guard let self, let window = self.window, !window.inLiveResize else {
                     return
                 }
-                self.pushGeometry()
+                self.onChange()
             }
         )
         sidebarObservation = sidebarItem?.observe(\.isCollapsed, options: [.new]) {
             [weak self] _, _ in
-            self?.pushSidebar()
+            self?.onChange()
         }
-    }
-
-    /// Pushes ALL persisted facets (geometry + sidebar visibility) in one go.
-    /// Called once right after the window is shown at launch (so a fresh run
-    /// persists its initial layout) and from `applicationWillTerminate` (the
-    /// backstop for any missed observation).
-    func pushSnapshot() {
-        pushGeometry()
-        pushSidebar()
-    }
-
-    /// Pushes the window's current frame (AppKit bottom-left global points).
-    private func pushGeometry() {
-        guard let window else { return }
-        let frame = window.frame
-        handle.state_set_geometry(
-            frame.origin.x, frame.origin.y, frame.size.width, frame.size.height
-        )
-    }
-
-    /// Pushes the sidebar's current visibility (the inverse of `isCollapsed`).
-    private func pushSidebar() {
-        guard let sidebarItem else { return }
-        handle.state_set_sidebar_visible(!sidebarItem.isCollapsed)
+        if let window {
+            let observer = TabGroupObserver(window: window, onChange: onChange)
+            observer.install()
+            tabGroupObserver = observer
+        }
     }
 }

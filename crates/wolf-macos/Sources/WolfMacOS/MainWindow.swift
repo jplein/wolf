@@ -103,6 +103,12 @@ final class MainWindow: NSWindow {
         titleVisibility = .visible
         titlebarAppearsTransparent = true
 
+        // A shared tabbing identifier lets every Wolf window merge into the same
+        // native Tahoe tab group (Finder/Safari-style): the "+" button, ⌘T, and
+        // drag-to-merge all target this identity. `tabbingMode` stays the default
+        // (`.automatic`) so the OS shows the tab bar once a window has ≥ 2 tabs.
+        tabbingIdentifier = "com.wolf.editor"
+
         contentViewController = splitVC
 
         // Size the content so the editor pane is exactly `editorWidth` ×

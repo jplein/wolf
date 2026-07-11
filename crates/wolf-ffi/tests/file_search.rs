@@ -118,7 +118,6 @@ fn file_search_ranks_and_opens() {
         tmp.path().to_string_lossy().into_owned(),
         common::DEFAULT_COLS,
         common::DEFAULT_ROWS,
-        0,
     )
     .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
 
@@ -298,7 +297,6 @@ fn file_search_bounds_large_tree() {
         tmp.path().to_string_lossy().into_owned(),
         common::DEFAULT_COLS,
         common::DEFAULT_ROWS,
-        0,
     )
     .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
 

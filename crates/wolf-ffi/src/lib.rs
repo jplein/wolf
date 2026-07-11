@@ -41,15 +41,15 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use wolf_core::{
     rank_buffers, rank_matches_top_n, rank_palette, BufInfo, BufferRow, Command, CommandMru,
     CoreConfig, CursorShape, FileSearch, FocusDir, Grid, InputEvent, Key, KeyEvent, LayoutIntent,
     MouseAction, MouseButton, MouseEvent, PaletteRow, PaletteRowKind, PaletteWindow, PaneStatus,
-    ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SplitOrientation, StateStore, WakeFn,
-    WinInfo, WindowState, WolfCore,
+    ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SplitOrientation, StateStore, TabState,
+    WakeFn, WinInfo, WindowState, WolfCore, WolfState,
 };
 
 // Re-export the bridge-defined transparent structs at the crate root so the Rust
@@ -173,6 +173,8 @@ mod command_kind {
     pub const PASTE: u8 = 15;
     /// Open the buffer-picker overlay to fuzzy-switch among open buffers.
     pub const BUFFER_PICKER: u8 = 16;
+    /// Open a new tab in the current window.
+    pub const NEW_TAB: u8 = 17;
 }
 
 /// The palette-row-kind discriminants packed into [`FfiCommandRow::row_kind`].
@@ -239,7 +241,7 @@ mod mouse_action {
     pub const DRAG: u8 = 2;
 }
 
-/// How long [`WolfCoreHandle::state_flush`] (and the shutdown-time flush) blocks
+/// How long [`wolf_ffi_state_flush`] (and the shutdown-time flush) blocks
 /// waiting for the state writer thread to drain everything pending.
 const STATE_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -318,14 +320,12 @@ mod ffi {
 
     extern "Rust" {
         // Starts the core against the pinned Neovim (None on error). `init_lua`
-        // and `cwd` are filesystem PATHS. `window_index` is the slot in
-        // `state.json`'s `windows` list this handle writes into.
+        // and `cwd` are filesystem PATHS.
         fn wolf_ffi_start(
             init_lua: String,
             cwd: String,
             cols: u16,
             rows: u16,
-            window_index: u16,
         ) -> Option<WolfCoreHandle>;
     }
 
@@ -441,22 +441,6 @@ mod ffi {
         // Whether the active document is in Neovim visual mode (`v`/`V`/`<C-v>`).
         // Gates the Edit > Copy menu item. False when the core is gone.
         fn is_visual_mode(&self) -> bool;
-        // Records this window's frame geometry into the live state store
-        // (points; AppKit bottom-left global coords on macOS) at the handle's
-        // `window_index`. A no-op when no store is attached.
-        fn state_set_geometry(&self, x: f64, y: f64, width: f64, height: f64);
-        // Records this window's sidebar visibility into the live state store at
-        // the handle's `window_index`. A no-op when no store is attached.
-        fn state_set_sidebar_visible(&self, visible: bool);
-        // Truncates the persisted `windows` list to `count` entries (ghost
-        // cleanup at terminate time, after live windows are re-pushed at dense
-        // indices). A no-op when no store is attached.
-        fn state_set_window_count(&self, count: u16);
-        // Blocks until every pending state mutation has had its disk write
-        // attempted (bounded by an internal ~2s timeout). Returns whether
-        // everything pending was flushed in time (true when no store exists —
-        // there is nothing to flush).
-        fn state_flush(&self) -> bool;
     }
 
     extern "Rust" {
@@ -547,9 +531,17 @@ mod ffi {
         fn width(&self) -> f64;
         // The window height, in points (`<= 0` == unset — do not restore).
         fn height(&self) -> f64;
-        // The saved working directory, or "" when never reported.
+        // The window's saved tabs, in tab order. `FfiTabState` is opaque so a
+        // `Vec` is supported.
+        fn tabs(&self) -> Vec<FfiTabState>;
+    }
+
+    extern "Rust" {
+        type FfiTabState;
+
+        // The tab's saved working directory, or "" when never reported.
         fn cwd(&self) -> String;
-        // Whether the file-tree sidebar was visible.
+        // Whether the tab's file-tree sidebar was visible.
         fn sidebar_visible(&self) -> bool;
     }
 
@@ -559,6 +551,23 @@ mod ffi {
         // live store; absent/corrupt/unresolvable all yield an empty window
         // list. A free fn, standalone like `wolf_ffi_load_config`.
         fn wolf_ffi_load_state() -> FfiState;
+
+        // Clears the write-side scratch tree, starting a fresh whole-tree
+        // snapshot the coordinator builds up window-by-window / tab-by-tab.
+        fn wolf_ffi_state_snapshot_begin();
+        // Pushes a window with the given geometry (points) and an empty tab list
+        // onto the scratch tree. Subsequent `add_tab` calls attach to it.
+        fn wolf_ffi_state_snapshot_add_window(x: f64, y: f64, width: f64, height: f64);
+        // Pushes a tab (its cwd + sidebar visibility) onto the most recently
+        // added window. A defensive no-op when no window has been added yet.
+        fn wolf_ffi_state_snapshot_add_tab(cwd: String, sidebar_visible: bool);
+        // Commits the scratch tree into the shared state store (a whole-tree
+        // `set_snapshot`); an identical tree is a no-op there.
+        fn wolf_ffi_state_snapshot_commit();
+        // Blocks until every pending state write has been attempted (bounded by
+        // an internal ~2s timeout). Returns whether everything pending flushed in
+        // time (true when no store exists — there is nothing to flush).
+        fn wolf_ffi_state_flush() -> bool;
     }
 
     extern "Rust" {
@@ -635,7 +644,7 @@ mod ffi {
     extern "Rust" {
         type FfiCommand;
 
-        // The command kind (`command_kind::NEW_WINDOW` .. `BUFFER_PICKER`).
+        // The command kind (`command_kind::NEW_WINDOW` .. `NEW_TAB`).
         fn kind(&self) -> u8;
     }
 
@@ -964,16 +973,15 @@ impl FfiState {
 /// One saved window's state (opaque to Swift, so a `Vec<FfiWindowState>` is
 /// supported — swift-bridge emits Vec support only for opaque types).
 ///
-/// A projection of [`wolf_core::WindowState`] exposing the saved geometry, cwd,
-/// and sidebar visibility through per-field accessors.
+/// A projection of [`wolf_core::WindowState`] exposing the saved geometry plus
+/// the window's tabs through per-field accessors.
 #[derive(Clone)]
 pub struct FfiWindowState {
     x: f64,
     y: f64,
     width: f64,
     height: f64,
-    cwd: String,
-    sidebar_visible: bool,
+    tabs: Vec<FfiTabState>,
 }
 
 impl FfiWindowState {
@@ -1001,16 +1009,10 @@ impl FfiWindowState {
         self.height
     }
 
-    /// The saved working directory, or `""` when never reported.
+    /// The window's saved tabs, in tab order.
     #[must_use]
-    pub fn cwd(&self) -> String {
-        self.cwd.clone()
-    }
-
-    /// Whether the file-tree sidebar was visible.
-    #[must_use]
-    pub fn sidebar_visible(&self) -> bool {
-        self.sidebar_visible
+    pub fn tabs(&self) -> Vec<FfiTabState> {
+        self.tabs.clone()
     }
 
     /// Projects a [`wolf_core::WindowState`] into its FFI accessor form.
@@ -1020,8 +1022,40 @@ impl FfiWindowState {
             y: w.y,
             width: w.width,
             height: w.height,
-            cwd: w.cwd.clone(),
-            sidebar_visible: w.sidebar_visible,
+            tabs: w.tabs.iter().map(FfiTabState::from_tab).collect(),
+        }
+    }
+}
+
+/// One saved tab's state (opaque to Swift, so a `Vec<FfiTabState>` is supported
+/// — swift-bridge emits Vec support only for opaque types).
+///
+/// A projection of [`wolf_core::TabState`] exposing the saved working directory
+/// and sidebar visibility through per-field accessors.
+#[derive(Clone)]
+pub struct FfiTabState {
+    cwd: String,
+    sidebar_visible: bool,
+}
+
+impl FfiTabState {
+    /// The saved working directory, or `""` when never reported.
+    #[must_use]
+    pub fn cwd(&self) -> String {
+        self.cwd.clone()
+    }
+
+    /// Whether the tab's file-tree sidebar was visible.
+    #[must_use]
+    pub fn sidebar_visible(&self) -> bool {
+        self.sidebar_visible
+    }
+
+    /// Projects a [`wolf_core::TabState`] into its FFI accessor form.
+    fn from_tab(t: &TabState) -> Self {
+        Self {
+            cwd: t.cwd.clone(),
+            sidebar_visible: t.sidebar_visible,
         }
     }
 }
@@ -1045,6 +1079,92 @@ pub fn wolf_ffi_load_state() -> FfiState {
 }
 
 // ---------------------------------------------------------------------------
+// Write-side snapshot builder (free fns over the shared store + a scratch tree).
+// ---------------------------------------------------------------------------
+
+/// The write-side scratch tree the coordinator builds up window-by-window /
+/// tab-by-tab before committing it whole. A process-wide `Mutex` (the builder is
+/// only ever driven from the AppKit main thread, but the lock keeps the free fns
+/// sound regardless), lazily initialized by [`scratch`].
+static SCRATCH: OnceLock<Mutex<WolfState>> = OnceLock::new();
+
+/// Returns the process-wide scratch-tree mutex, initializing it empty on first
+/// use.
+fn scratch() -> &'static Mutex<WolfState> {
+    SCRATCH.get_or_init(|| Mutex::new(WolfState::default()))
+}
+
+/// Clears the write-side scratch tree, starting a fresh whole-tree snapshot.
+///
+/// The coordinator calls this, then one
+/// [`wolf_ffi_state_snapshot_add_window`] per live window (each followed by its
+/// tabs' [`wolf_ffi_state_snapshot_add_tab`] calls), then
+/// [`wolf_ffi_state_snapshot_commit`].
+pub fn wolf_ffi_state_snapshot_begin() {
+    scratch()
+        .lock()
+        .expect("state scratch mutex poisoned")
+        .windows
+        .clear();
+}
+
+/// Pushes a window with the given geometry (points; AppKit bottom-left global
+/// coords on macOS) and an EMPTY tab list onto the scratch tree.
+///
+/// Subsequent [`wolf_ffi_state_snapshot_add_tab`] calls attach their tabs to
+/// this window (the most recently added one).
+pub fn wolf_ffi_state_snapshot_add_window(x: f64, y: f64, width: f64, height: f64) {
+    scratch()
+        .lock()
+        .expect("state scratch mutex poisoned")
+        .windows
+        .push(WindowState {
+            x,
+            y,
+            width,
+            height,
+            tabs: Vec::new(),
+        });
+}
+
+/// Pushes a tab (its `cwd` + `sidebar_visible`) onto the most recently added
+/// window. A defensive no-op when no window has been added yet.
+pub fn wolf_ffi_state_snapshot_add_tab(cwd: String, sidebar_visible: bool) {
+    if let Some(window) = scratch()
+        .lock()
+        .expect("state scratch mutex poisoned")
+        .windows
+        .last_mut()
+    {
+        window.tabs.push(TabState {
+            cwd,
+            sidebar_visible,
+        });
+    }
+}
+
+/// Commits the scratch tree into the process-wide state store via a whole-tree
+/// [`StateStore::set_snapshot`] (an identical tree is a no-op there, so a
+/// redundant snapshot causes no disk churn). A no-op when no state dir resolved.
+pub fn wolf_ffi_state_snapshot_commit() {
+    let state = scratch()
+        .lock()
+        .expect("state scratch mutex poisoned")
+        .clone();
+    if let Some(store) = shared_store() {
+        store.set_snapshot(state);
+    }
+}
+
+/// Blocks until every pending state write has had its disk write attempted
+/// (bounded by [`STATE_FLUSH_TIMEOUT`]). Returns whether everything pending was
+/// flushed in time; `true` when no store exists (there is nothing to flush).
+#[must_use]
+pub fn wolf_ffi_state_flush() -> bool {
+    shared_store().map_or(true, |store| store.flush(STATE_FLUSH_TIMEOUT))
+}
+
+// ---------------------------------------------------------------------------
 // Opaque handles.
 // ---------------------------------------------------------------------------
 
@@ -1056,14 +1176,6 @@ pub fn wolf_ffi_load_state() -> FfiState {
 /// `self`) while the bridge only ever hands Swift a `&self`.
 pub struct WolfCoreHandle {
     core: RefCell<Option<WolfCore>>,
-    /// The process-wide application-state store (a clone of [`SHARED_STORE`]),
-    /// attached to the core at this handle's [`window_index`](Self::window_index)
-    /// (so cwd changes persist core-side). `None` when no state dir could be
-    /// resolved — every `state_*` method is then a no-op.
-    store: Option<StateStore>,
-    /// This handle's slot in `state.json`'s `windows` list; every `state_*`
-    /// setter writes into this index.
-    window_index: usize,
     /// The per-core wake-routing identity token minted at [`wolf_ffi_start`],
     /// captured by the core's [`WakeFn`] and carried to the front-end callback.
     wake_token: u64,
@@ -1238,7 +1350,7 @@ impl WolfCoreHandle {
     pub fn shutdown(&self) {
         // Drain any pending state writes BEFORE the core (and with it the
         // process's reason to live) goes away; bounded so shutdown never hangs.
-        if let Some(store) = &self.store {
+        if let Some(store) = shared_store() {
             if !store.flush(STATE_FLUSH_TIMEOUT) {
                 tracing::warn!("wolf-ffi: state flush timed out during shutdown");
             }
@@ -1515,67 +1627,22 @@ impl WolfCoreHandle {
             .as_ref()
             .is_some_and(|c| c.read_snapshot().is_visual_mode())
     }
-
-    /// Records this window's frame geometry into the live state store (points;
-    /// on macOS this is `NSWindow.frame`'s AppKit bottom-left global coords),
-    /// at this handle's [`window_index`](Self::window_index); a no-op when no
-    /// store is attached.
-    pub fn state_set_geometry(&self, x: f64, y: f64, width: f64, height: f64) {
-        if let Some(store) = &self.store {
-            store.set_geometry(self.window_index, x, y, width, height);
-        }
-    }
-
-    /// Records this window's sidebar visibility into the live state store at
-    /// this handle's [`window_index`](Self::window_index); a no-op when no store
-    /// is attached.
-    pub fn state_set_sidebar_visible(&self, visible: bool) {
-        if let Some(store) = &self.store {
-            store.set_sidebar_visible(self.window_index, visible);
-        }
-    }
-
-    /// Truncates the persisted `windows` list to `count` entries.
-    ///
-    /// Ghost cleanup for closed windows: the front-end re-pushes its live
-    /// windows at dense indices (0..count) and then calls this once at
-    /// terminate time to drop any higher-index slots left by closed windows. A
-    /// no-op when no store is attached.
-    pub fn state_set_window_count(&self, count: u16) {
-        if let Some(store) = &self.store {
-            store.truncate_windows(count as usize);
-        }
-    }
-
-    /// Blocks until every pending state mutation has had its disk write
-    /// attempted, bounded by [`STATE_FLUSH_TIMEOUT`]. Returns whether
-    /// everything pending was flushed in time; `true` when no store is
-    /// attached (there is nothing to flush).
-    pub fn state_flush(&self) -> bool {
-        self.store
-            .as_ref()
-            .is_none_or(|store| store.flush(STATE_FLUSH_TIMEOUT))
-    }
 }
 
 /// Starts the core. `init_lua` and `cwd` are filesystem paths (mirroring
-/// [`CoreConfig`]); `window_index` is the slot in `state.json`'s `windows` list
-/// this handle writes into. Returns `None` (after logging) on any startup error.
+/// [`CoreConfig`]). Returns `None` (after logging) on any startup error.
 ///
 /// A fresh wake token is minted (via [`NEXT_WAKE_TOKEN`]) and captured by the
-/// core's [`WakeFn`] so wakes route back to THIS window. After a successful
-/// start it clones the process-wide [`SHARED_STORE`] and attaches it to the
-/// core at `window_index` (so cwd changes persist with no further front-end
-/// calls), stashing the store + index in the handle for the `state_*` setters.
-/// An unresolvable state dir only logs — state persistence is then disabled,
-/// never fatal.
+/// core's [`WakeFn`] so wakes route back to THIS window. State persistence is no
+/// longer wired per-core: the coordinator walks the whole window/tab tree and
+/// commits it via the write-side snapshot builder free fns (see
+/// [`wolf_ffi_state_snapshot_begin`]).
 #[must_use]
 pub fn wolf_ffi_start(
     init_lua: String,
     cwd: String,
     cols: u16,
     rows: u16,
-    window_index: u16,
 ) -> Option<WolfCoreHandle> {
     let cfg = CoreConfig {
         init_lua: PathBuf::from(init_lua),
@@ -1583,24 +1650,12 @@ pub fn wolf_ffi_start(
         rows,
         cwd: PathBuf::from(cwd),
     };
-    let window_index = window_index as usize;
     let wake_token = NEXT_WAKE_TOKEN.fetch_add(1, Ordering::Relaxed);
     match WolfCore::start(cfg, registered_wake(wake_token)) {
-        Ok(core) => {
-            let store = shared_store();
-            match &store {
-                Some(store) => core.attach_state_store(store.clone(), window_index),
-                None => tracing::warn!(
-                    "wolf-ffi: no state dir resolved; state persistence disabled"
-                ),
-            }
-            Some(WolfCoreHandle {
-                core: RefCell::new(Some(core)),
-                store,
-                window_index,
-                wake_token,
-            })
-        }
+        Ok(core) => Some(WolfCoreHandle {
+            core: RefCell::new(Some(core)),
+            wake_token,
+        }),
         Err(e) => {
             tracing::error!("wolf-ffi: WolfCore::start failed: {e}");
             None
@@ -1764,7 +1819,7 @@ pub struct FfiCommand {
 }
 
 impl FfiCommand {
-    /// The command kind (`command_kind::NEW_WINDOW` .. `PASTE`).
+    /// The command kind (`command_kind::NEW_WINDOW` .. `NEW_TAB`).
     #[must_use]
     pub fn kind(&self) -> u8 {
         self.kind
@@ -1792,6 +1847,7 @@ impl FfiCommand {
             Command::Copy => command_kind::COPY,
             Command::Paste => command_kind::PASTE,
             Command::BufferPicker => command_kind::BUFFER_PICKER,
+            Command::NewTab => command_kind::NEW_TAB,
         };
         Self { kind }
     }

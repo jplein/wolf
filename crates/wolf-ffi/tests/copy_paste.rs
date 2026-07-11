@@ -135,7 +135,6 @@ fn copy_selection_and_paste_round_trip() {
         tmp.path().to_string_lossy().into_owned(),
         common::DEFAULT_COLS,
         common::DEFAULT_ROWS,
-        0,
     )
     .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
 

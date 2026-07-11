@@ -79,7 +79,6 @@ fn file_actions_chdir_and_new_buffer() {
         tmp_cwd.path().to_string_lossy().into_owned(),
         common::DEFAULT_COLS,
         common::DEFAULT_ROWS,
-        0,
     )
     .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
 
