@@ -1,293 +1,206 @@
-# Current Plan: Tabs per pane (macOS-first)
-
-## Status: COMPLETE ✅
-
-Docs synced (technical-writer a2a7a0f0b26c5d4f0) across 11 Markdown files
-(architecture.md + wolf-core/wolf-ffi/wolf-macos READMEs & sub-READMEs +
-runtime/nvim/README) with the tab model, `wolf_tabs`/`wolf_close_tab`, CloseTab=17,
-FfiTab/pane_tabs_for_grid/close_tab/switch_tab, and the macOS tab strip. Orchestrator
-ran `prettier --write` on all 11 -> all unchanged/clean. Pre-existing unrelated
-PaneGeometry maxCols nil-vs-90 discrepancy left untouched (out of scope).
-
-Manual GUI smoke remaining (not automatable): launch Wolf, open several buffers in a
-pane and confirm tabs accrue left->right with the active one highlighted; click a tab
-to switch; hover to reveal the X and click it to close (buffer survives if tabbed in
-another pane, deleted if last); ⌘W closes the active tab and closes the pane on the
-last tab; ⌘W disabled on the last pane's last tab; the strip replaces the old
-statusbar and dims with an inactive pane.
-
-## Status history: technical-writer (docs)
-
-### Fix pass COMPLETE (test-writer a70d52eef75b5d7e2, coder ae978edb74bcc7cad)
-BLOCKER #1 fixed (build_ladder single-segment guard `basename_idx <= dir_start ->
-vec![display]`), pinned by new tests `home_exact_path_is_tilde` +
-`home_exact_path_coexists_with_home_child`. NIT #3 fixed (sub-closeSize tabs get a
-zero-area close rect, unhittable; TabStripLayoutTests unchanged/passing). NIT #4 fixed
-(`vim.bo[buf].modified`). Decision #5 buffer-preservation pinned in tabs.rs 5b. ALL
-GREEN: wolf_core_lib_test (tab_label 10 + command 18), tabs (3x stable), commands,
-WolfKeyMapTests, regressions (buffer_picker/panes/pane_status/bridge_smoke), full Wolf
-app build. Denylist clean. No FFI surface change in the fix pass -> no rebinding.
-Declined coder's optional NIT#3 hit-routing assertion (low value). Review satisfied.
-
-## Status history: fix pass
-
-### Reviewer verdict (agent aa45ddaeb1e55033a): CHANGES-REQUIRED
-
-All 15 invariants + discriminant lockstep verified conformant. Findings:
-- **BLOCKER #1** `crates/wolf-core/src/tab_label.rs:142` — `build_ladder` panics on a
-  home-exact path (`pane_status` display == bare `"~"` -> `segs[1..0]` slice panic).
-  Reachable via `:e ~`; panics inside `pane_tabs_for_grid` on the synchronous Swift
-  paint path -> unwind across FFI -> app abort. Invariant 11 gap. Fix: guard
-  single-segment case in `build_ladder` (when `basename_idx <= dir_start` /
-  `segs.len()==1`, return `vec![display]`).
-- **SHOULD-FIX #2** `crates/wolf-ffi/tests/tabs.rs:486-499` — Decision #5 case 5b
-  asserts only window-count; the X affordance bypasses the menu disable, so the
-  top-guard's buffer/tab preservation is user-reachable and must be pinned. Add:
-  surviving tab count==1, tab still `life_z.md`, buffer still listed. (= PIN IT.)
-- **NIT #3** `TabStripLayout.swift:63-64,76-79` — zero-width overflow tab's close rect
-  placed before its origin can capture clicks (close-before-tab hit order). Skip close
-  rects for tabs narrower than `closeSize`.
-- **NIT #4** `init.lua:545` — deprecated `nvim_buf_get_option(buf,"modified")`; use
-  `vim.bo[buf].modified`.
-Open questions: (A) two [No Name] tabs identical -> reviewer concurs DECLINE.
-(B) pin buffer-preservation -> reviewer concurs PIN IT (X bypasses menu gate).
-
-### Fix routing
-- test-writer: (a) tab_label.rs home-exact-path test `labels(&["/home/user"],
-  Some(home), Some(home)) -> ["~"]`; (b) tabs.rs 5b buffer-preservation assertions.
-- coder: BLOCKER #1 guard + NIT #3 + NIT #4; re-run full suite.
-
-## Status history: reviewer
-
-### Coder result (agent a0b5cb2210cc055b6): ALL TESTS GREEN
-
-wolf_core_lib_test (tab_label 9 + command 18), //crates/wolf-ffi:tabs (real-nvim, 3x
-stable), commands (guard 0..=17 + :WolfCloseTab->17), WolfKeyMapTests (TabStripLayout
-+ CommandSeam thru 17), regressions (buffer_picker/panes/pane_status/bridge_smoke/
-frame_pack/close_pane/copy_paste), wolf_ffi + wolf_macos_lib + full Wolf app build.
-Denylist clean. Bindings regenerated; wolf_ffi_wake.h byte-identical. Also wired
-TabStripLayout.swift/Tests into crates/wolf-macos/BUILD.bazel. Env fix: refreshed
-stale Xcode-locator Bazel repos (26.5->26.6), not a code change.
-
-### Coder test recommendations — orchestrator decisions
-1. Docs (plan §6) NOT done -> route to technical-writer (step 8). ACCEPTED (planned).
-2. Two unnamed [No Name] tabs render identically (matches pane_status) -> DECLINE
-   pinning; acceptable v1.
-3. Decision #5 buffer-preservation not asserted (Lua top-guard implements it) -> PIN
-   IT. Route a targeted test-writer addition (batched with any reviewer findings).
-
-### Diagnostics after coder: IDE/SourceKit noise only (no Bazel context) — vim global,
-Rect/AppDelegate/WolfKeyMap module resolution. Bazel builds + WolfKeyMapTests + app
-build all pass, so not real. Ignored.
-
-## Status history: coder
-
-User confirmed decision #3: no close-time prompt, keep the buffer (autosave coming
-later). All four resolved open questions stand.
-
-### Decision #5 (last-tab-of-last-pane) — RESOLVED
-
-`wolf_close_tab(win, bufnr)` must be a COMPLETE NO-OP when it is the pane's last tab
-AND the last window: guard at the TOP — if `#order == 1` (last tab in pane) and
-`#nvim_tabpage_list_wins(0) == 1` (last window), return immediately WITHOUT removing
-the tab, deleting the buffer, or closing the window. This keeps the tab, the buffer,
-and the window intact (there is nowhere to go — you cannot close the last pane, so
-closing its last tab is meaningless). The macOS menu additionally disables ⌘W in
-this state (`paneCount<=1 && activeTabCount<=1`). The existing `tabs.rs` 5b test
-asserts window-count-unchanged (passes under this semantics); buffer-preservation in
-this exact case is a defensible-but-unpinned invariant (menu-disabled anyway) — may
-strengthen later if the reviewer wants it.
-
-### Test files written (test-writer, agent a50905bbbc937f30f)
-
-- `crates/wolf-core/src/tab_label.rs` — NEW file, currently ONLY the `#[cfg(test)]
-  mod tests` block + header banner (inert until coder adds the production body +
-  lib.rs wiring). Coder MUST add `TabLabel`/`tab_labels` ABOVE the test module.
-- `crates/wolf-core/src/command.rs` — count 17->18, relaxed buffer_picker index test,
-  added close_tab tests.
-- `crates/wolf-ffi/tests/tabs.rs` — NEW real-nvim: accumulation/isolation, preserve/
-  delete/pane-lifecycle, left-neighbor+delete, right-neighbor view round-trip
-  (flaky-flagged).
-- `crates/wolf-ffi/tests/commands.rs` — guard array -> 0..=17 + :WolfCloseTab drain.
-- `crates/wolf-macos/Tests/WolfKeyMapTests/TabStripLayoutTests.swift` — NEW pure seam.
-- `crates/wolf-macos/Tests/WolfKeyMapTests/CommandSeamTests.swift` — through 17.
-
-### Contracts the coder MUST honor (pinned by the tests)
-
-- `TabLabel { bufnr: i64, display: String, active: bool, modified: bool }`.
-- `tab_labels(&[String], Option<&Path>, Option<&Path>) -> Vec<String>`; disambiguation
-  = MINIMAL parent-suffix of the path's pane_status display, expanded one parent at a
-  time until unique, else full pane_status precedence (cwd-relative / `~` / absolute).
-  Empty path -> `pane_status::NO_NAME`.
-- `TabStripLayout.init(stripWidth:tabCount:tabWidth:tabHeight:closeSize:secondaryLineHeight:)`,
-  `hit(x:y:) -> Hit?` with nested `enum Hit: Equatable { case tab(Int); case close(Int) }`;
-  close rect flush to each tab's trailing edge, no extra padding param.
-- FFI: `pane_tabs_for_grid(grid) -> Vec<FfiTab>` with `bufnr()/display()/active()/
-  modified()`; `close_tab(win, bufnr)`; `switch_tab(win, bufnr)`.
-- Build wiring: `pub mod tab_label;` + re-export in lib.rs; `//crates/wolf-ffi:tabs`
-  rust_test in BUILD.bazel (copy buffer_picker stanza).
+# Plan: Fix the file-picker / Command-T hang — COMPLETE ✅
 
 ## Problem statement
 
-Add per-pane tabs. Each pane (Neovim window) shows an ordered, accumulating row of
-tabs, one per buffer shown in that pane. The active tab tracks the pane's current
-buffer.
+The AppKit main thread freezes for ~23s when opening the "Go to File" picker.
+Diagnosed by symbolicating `~/Dustbin/hang-report.md` against the built binary
+(UUID matches).
 
-### Requirements
+Frozen main-thread stack:
 
-1. Switching buffers by ANY means (link, `:e`, buffer picker, file picker) updates
-   the active tab for the pane.
-2. If a pane has no tab for the current buffer, append a tab to the RIGHT.
-3. Closing a tab does NOT delete the buffer unless it's the last tab for that buffer
-   ACROSS ALL PANES.
+```
+AppDelegate.handleCommandMenuItem
+  -> CommandDispatcher.dispatch
+    -> WolfWindowController.openFilePicker()
+      -> PickerView.open()
+        -> WolfCoreHandle.start_file_search()
+          -> WolfCore::resolve_search_root()          (crates/wolf-core/src/api.rs:703)
+            -> tokio Runtime::block_on(nvim.current_dir())   <-- blocks main thread, no timeout
+              -> parked in condvar 22+s (Neovim not answering the getcwd RPC)
+```
 
-### Locked decisions
+All tokio workers are parked; the IO driver is parked in `mio::poll` waiting for
+bytes from Neovim — so the Rust side correctly sent the `getcwd()` request and is
+waiting. Neovim was momentarily unresponsive, and because the RPC runs as a
+synchronous `block_on` on the main thread with **no timeout**, the whole UI
+freezes until Neovim recovers.
 
-- macOS front-end only this pass; core/init.lua/wolf-ffi model built
-  platform-agnostically (wolf-gnome gets the model, no strip yet).
-- Tab strip REPLACES the per-pane statusbar (tab row + active tab's path as a
-  secondary line).
-- ⌘W → new append-only `Command::CloseTab` (17). Closes active tab; last tab in pane
-  falls through to closing the pane. Keep `ClosePane` (8) + `<C-w>c`. Menu validation
-  disables ⌘W only at last-pane-last-tab. X-on-hover per tab.
-- Click a tab to switch (win-explicit); on closing the active tab, activate RIGHT
-  else LEFT neighbor.
+## Root cause
 
-### Resolved open questions (orchestrator decisions)
+`WolfCore::resolve_search_root` is the only hot-path call that does a blocking
+`getcwd()` RPC on the AppKit main thread. It runs on every "Go to File" picker
+open. The core already tracks Neovim's live cwd out-of-band (the
+`wolf_cwd`/`DirChanged` notification -> `tracked_cwd`, already canonicalized),
+exposed synchronously as `WolfCore::live_cwd()`. Sibling methods
+(`mru_recent`, `pane_status`, `pane_tabs`) all read `tracked_cwd` precisely to
+avoid a main-thread `getcwd` block. `resolve_search_root` is the odd one out.
 
-1. **Payload shape:** wholesale all-windows array `[[win, [[bufnr,name,modified],...],
-   active_bufnr], ...]` (mirrors `wolf_buffers`, gets pruning for free). ADOPTED.
-2. **Close Pane's ⌘W:** Close Pane keeps its `<C-w>c` chord, loses its menu
-   key-equivalent (blank). ACCEPTED (consistent with locked decision).
-3. **Modified buffer on last-tab close:** `nvim_buf_delete{force=false}` silently
-   keeps a modified buffer (tab reappears on next emit). ACCEPTED for v1 (never lose
-   unsaved work).
-4. **Switch naming:** add a distinct win-explicit `switch_tab(win, bufnr)`; leave the
-   buffer picker's no-arg `switch_buffer(bufnr)` untouched. ADOPTED.
+## Fixes
+
+### Primary — remove the blocking RPC from resolve_search_root
+Change `resolve_search_root` to read the tracked live cwd instead of doing a
+blocking `getcwd()` RPC:
+
+```rust
+self.live_cwd()
+    .unwrap_or_else(|| std::fs::canonicalize(&self.cwd).unwrap_or_else(|_| self.cwd.clone()))
+```
+
+Same fallback (configured cwd, canonicalized) it uses today on RPC error.
+Keep `NvimProcess::current_dir()` as-is (tests may use it); just stop calling it
+here.
+
+### Secondary — timeout hardening (defense-in-depth)
+`WolfCore::copy_visual_selection` and `WolfCore::list_buffers` use the same
+`block_on`-on-main-thread pattern but genuinely need live nvim data. Wrap each
+`block_on` future in a bounded `tokio::time::timeout` (mirror the precedent in
+`crates/wolf-core/src/nvim.rs::shutdown`, named `Duration` consts). On timeout,
+`tracing::warn` and return the same graceful empty/None each already returns on
+error. Short timeout (~1-2s) with a named, documented const.
+
+## Constraints
+
+- Docs are source of truth (CLAUDE.md). Update `crates/wolf-core/src/README.md`
+  and the doc comments on `resolve_search_root`, `copy_visual_selection`,
+  `list_buffers`, `start_file_search` so they no longer claim a blocking getcwd
+  RPC. Reformat edited Markdown with `prettier --write`.
+- Prefer real Neovim integration tests (no mocks). Existing tests
+  `file_search_root_follows_nvim_cd` and `file_search_root_defaults_to_cfg_cwd_without_cd`
+  must still pass.
+- macOS build/test via Bazel: `bazel test //crates/wolf-core:file_search`.
+
+## Status
+
+- [x] Architect plan
+- [x] Coder pass 1 — surfaced a test-synchronization issue; orchestrator decision below
+- [x] Test-writer: update sync in file_search.rs (wait_for_live_cwd helper)
+- [x] Coder pass 2: pure live_cwd() + all tests green
+- [x] Review — APPROVED with 2 minor SHOULD-FIX stale field-doc comments
+- [x] Docs — fixed both stale field docs; grep sweep confirmed nothing else stale
+
+## Reviewer verdict: Approved with minor notes
+Primary + secondary fixes correct; timeout built inside runtime (no reactor
+panic); nested Result matches exhaustive with warn on both error+timeout arms;
+test re-sync honest (assertions unchanged, bounded poll can't hang). Two stale
+struct-field doc comments still describe the old blocking getcwd query:
+- api.rs:105-106 CoreConfig.cwd — "picker's LIVE search root is getcwd()... used
+  only when that query fails" → reword to tracked-cwd / used until nvim reports.
+- api.rs:196-198 WolfCore.cwd — same stale framing → same reword.
+
+## Pass 2 result (all green)
+- api.rs: resolve_search_root is now pure non-blocking live_cwd() read (helper
+  deleted); NVIM_QUERY_TIMEOUT + timeout-wrapping of copy_visual_selection /
+  list_buffers kept; docs reworded.
+- nvim.rs: current_dir() doc-only update (no caller, no dead-code warning).
+- READMEs updated + prettier.
+- file_search: PASS (all 3 named tests). copy_paste: PASS. wolf_core_lib_test:
+  PASS. clippy: clean. Pre-existing palette_rank failure (16 vs 17) out of scope.
+
+## ORCHESTRATOR DECISION (after coder pass 1)
+
+Coder pass 1 found: the plan's pure-`live_cwd()` `resolve_search_root` breaks
+`file_search_root_follows_nvim_cd` and `mru_seed_follows_nvim_cd`, because the
+old `block_on(getcwd)` doubled as a **synchronization barrier** — `wolf_cwd` is a
+FIFO notification delivered before the `getcwd` response, so blocking on `getcwd`
+guaranteed `tracked_cwd` was applied by the time it returned. `wait_for_flush`
+alone is too weak: it can return on a redraw flush that lands before the io_loop
+applies `wolf_cwd`.
+
+DECISION: adopt the TRUE non-blocking fix (pure `live_cwd()`, zero main-thread
+RPC) and update the TEST synchronization, rather than the coder's conservative
+bounded-2s-RPC mitigation. Rationale: (1) the user's complaint is UI freezing —
+a 2s freeze on every picker open in a degraded nvim state is still a freeze;
+(2) `tracked_cwd` is the established house pattern (mru_recent/pane_status/
+pane_tabs); (3) in production the test race is impossible (a user cannot change
+cwd and open the picker within the notification round-trip), so updating the test
+sync is honest, not papering over a defect.
+
+Required changes for pass 2:
+- **api.rs `resolve_search_root`**: make it the pure non-blocking form
+  `self.live_cwd().unwrap_or_else(|| std::fs::canonicalize(&self.cwd).unwrap_or_else(|_| self.cwd.clone()))`.
+  Remove the bounded-getcwd-RPC + `search_root_fallback` helper from pass 1
+  (inline into the one expression). Update its doc comment + `start_file_search`
+  doc + READMEs to say "reads the tracked live cwd, NO blocking RPC".
+- **KEEP** pass 1's `NVIM_QUERY_TIMEOUT` const and the timeout-wrapping of
+  `copy_visual_selection` and `list_buffers` (those genuinely need live RPC; the
+  `block_on(async { timeout(...).await })` form is correct).
+- **file_search.rs tests** (`file_search_root_follows_nvim_cd`,
+  `mru_seed_follows_nvim_cd`): replace the sole `wait_for_flush` barrier with an
+  explicit poll that awaits `core.live_cwd()` reflecting `cwd_b` (bounded by
+  FLUSH_TIMEOUT) BEFORE calling `start_file_search`. This synchronizes on the
+  actual contract (nvim's cwd change has propagated to the tracked cell). The
+  assertions (search lists B's files, not A's sentinel) are unchanged.
+
+Out of scope (pre-existing, flag to user): `//crates/wolf-core:palette_rank`
+fails on the clean tree (expects 16 static rows, branch has 17 after adding
+CloseTab) — unrelated to this hang fix.
 
 ---
 
-## Architect's plan (adopted)
+## Architect's plan (VERIFIED against code)
 
-### 1. runtime/nvim/init.lua
+Implementation order (each step compiles independently):
 
-- New `_G.wolf_setup_tabs(chan)` (after `wolf_setup_view_tracking`, ~line 491),
-  modeled on `wolf_setup_buffer_tracking` (205-224) + `wolf_setup_view_tracking`
-  (447-491).
-  - Upvalue `win_tabs = {}` (`win` -> ordered array of `bufnr`).
-  - `note(win)`: append the window's current buffer to its list if absent.
-  - `emit()`: wholesale all-windows notify `wolf_tabs` = per-window
-    `[win, [[bufnr, name, modified], ...], active_bufnr]`; skip invalid bufnrs;
-    unnamed buffers still get a tab (empty name).
-  - Augroup `WolfTabs`: `{BufEnter,BufWinEnter,BufFilePost,WinEnter,WinNew}` -> emit;
-    `WinClosed` -> drop `win_tabs[match]` then emit; `BufDelete` -> remove bufnr from
-    every list then emit. Initial emit.
-- `_G.wolf_close_tab(win, bufnr)` (closes over `win_tabs`, `emit`), pcall-wrapped:
-  1. find idx in `win_tabs[win]`; not found -> no-op.
-  2. `was_active = nvim_win_get_buf(win) == bufnr`.
-  3. `table.remove(order, idx)`.
-  4. if `was_active` and `#order>0`: neighbor = `order[idx]` (right) else `order[idx-1]`
-     (left); `wolf_switch_buffer(win, neighbor)` (reuse view restore).
-  5. if `#order==0`: guarded pane close `if #nvim_tabpage_list_wins(0) > 1 then
-     nvim_win_close(win, false) end`; `win_tabs[win] = nil`.
-  6. orphan scan: if `bufnr` in NO `win_tabs[*]`, `pcall(nvim_buf_delete, bufnr,
-     {force=false})`.
-  7. `emit()`.
-- Core wiring: `NvimProcess::setup_tabs` in nvim.rs (copy `setup_buffer_tracking`
-  388-419); invoke in `WolfCore::start` AFTER `setup_view_tracking` (api.rs:262) so
-  `wolf_switch_buffer` exists.
+1. **api.rs — add const** near `INPUT_COALESCE_DELAY` (~line 76):
+   `NVIM_QUERY_TIMEOUT: Duration = Duration::from_secs(2)` with a doc comment
+   explaining it bounds the two remaining main-thread `block_on` nvim queries
+   (`copy_visual_selection`, `list_buffers`), referencing the `nvim::shutdown`
+   timeout precedent. `Duration` already imported (line 16).
 
-### 2. wolf-core
+2. **api.rs — rewrite `resolve_search_root`** (lines 703-713). New body:
+   ```rust
+   self.live_cwd()
+       .unwrap_or_else(|| std::fs::canonicalize(&self.cwd).unwrap_or_else(|_| self.cwd.clone()))
+   ```
+   No longer touches `self.runtime`/`self.nvim`. Signature stays
+   `fn resolve_search_root(&self) -> PathBuf`. Rewrite its doc comment (694-702):
+   resolves from the tracked live cwd (`live_cwd()`, already canonical), NO
+   blocking RPC, falls back to canonicalizing `self.cwd`; mirrors
+   `mru_recent`/`pane_status`.
 
-- New pure module `src/tab_label.rs` (precedent buffer_picker.rs):
-  `TabLabel { bufnr, display, active, modified }`; `tab_labels(paths, cwd, home) ->
-  Vec<String>` with basename base case + same-basename disambiguation (prepend parent
-  dirs until unique; fall back to pane_status-style cwd-relative/`~`/absolute).
-  Re-export from lib.rs.
-- `render.rs`: `Snapshot.tabs: HashMap<i64, PaneTabs>`; `TabEntry { bufnr, path,
-  modified }`; `PaneTabs { order: Vec<TabEntry>, active: Option<i64> }`. Wholesale
-  replaced, no seq bump. Re-export.
-- `redraw.rs`: `TABS_EVENT = "wolf_tabs"`; `apply_tabs` mirrors `apply_buffers`
-  (327-351): build map before write guard, canonicalize non-empty paths, keep
-  unnamed entries, wake without seq bump.
-- `api.rs`: `WolfCore::pane_tabs(grid) -> Vec<TabLabel>` (join grid->win->tabs, drop
-  guard before `live_cwd()`, format via `tab_labels`, mark active). `WolfCore::close_tab(win,
-  bufnr) -> send_input(CloseTab)`.
-- `input.rs`: `InputEvent::CloseTab { win, bufnr }`; apply arm -> `close_tab(nvim,
-  win, bufnr)` invoking `wolf_close_tab` (copy `switch_buffer` 410-421).
-- `command.rs`: append `Command::CloseTab` (17); COMMAND_SPECS row (id `close_tab`,
-  ex `WolfCloseTab`, title `Close Tab`, menu `File`). Tests: `EXPECTED_COMMAND_COUNT`
-  17->18; relax `buffer_picker_is_the_last_row` (now index 16); add
-  `close_tab_is_the_last_row` + id/spec round-trip tests.
+3. **api.rs — wrap `copy_visual_selection`** (378-387) in
+   `tokio::time::timeout(NVIM_QUERY_TIMEOUT, …)`. Nested match on
+   `Result<Result<Option<String>, NvimError>, Elapsed>`:
+   - `Ok(Ok(Some(text)))` && `!text.is_empty()` → `Some(text)`
+   - `Ok(Ok(_))` → `None`
+   - `Ok(Err(e))` → `tracing::warn!("copy_visual_selection failed: {e}")`; `None`
+   - `Err(_elapsed)` → `tracing::warn!("copy_visual_selection timed out after {NVIM_QUERY_TIMEOUT:?}")`; `None`
+   Update doc comment (369-376): drop "same pattern as resolve_search_root
+   blocking"; note bounded by `NVIM_QUERY_TIMEOUT`.
 
-### 3. wolf-ffi (src/lib.rs)
+4. **api.rs — wrap `list_buffers`** (404-412). Nested match on
+   `Result<Result<Vec<BufInfo>, NvimError>, Elapsed>`:
+   - `Ok(Ok(buffers))` → `buffers`
+   - `Ok(Err(e))` → `tracing::warn!("list_buffers failed: {e}")`; `Vec::new()`
+   - `Err(_elapsed)` → `tracing::warn!("list_buffers timed out after {NVIM_QUERY_TIMEOUT:?}")`; `Vec::new()`
+   Update doc comment (395-402): drop the resolve_search_root cross-ref; note
+   bounded by `NVIM_QUERY_TIMEOUT`.
 
-- `mod command_kind`: `CLOSE_TAB: u8 = 17`; add `Command::CloseTab =>
-  command_kind::CLOSE_TAB` to exhaustive `from_command`.
-- `FfiTab` opaque (mirror FfiBufferRow/FfiPaneStatus): `bufnr/display/active/modified`;
-  `WolfCoreHandle::pane_tabs_for_grid(grid) -> Vec<FfiTab>`.
-- Handle methods `close_tab(win, bufnr)` -> `core.close_tab`; `switch_tab(win, bufnr)`
-  -> `core.switch_buffer(win, bufnr)` (win-explicit — see risks).
-- Regenerate committed bindings via `bazel run //crates/wolf-ffi:gen_bindings`
-  (rewrites generated/wolf-ffi.swift + .h).
-- BUILD.bazel: add `//crates/wolf-ffi:tabs` rust_test (copy buffer_picker stanza
-  745-766).
+5. **api.rs — `start_file_search` doc comment** (628-649): reword so root is
+   resolved from tracked live cwd (`live_cwd()`/`tracked_cwd` via
+   `wolf_cwd`/`DirChanged`), not a live `getcwd()` RPC. Keep MRU-seed wording.
 
-### 4. wolf-macos
+6. **nvim.rs — `current_dir()` doc comment** (184-190) ONLY (no code change):
+   note it is retained on the public `NvimProcess` surface but no longer used by
+   `resolve_search_root` (which now reads the tracked cwd). It stays `pub`, no
+   dead-code warning, no test calls it.
 
-- New pure seam `Sources/WolfKeyMap/TabStripLayout.swift` (Foundation-only, precedent
-  StatusbarLayout.swift): stripHeight, tabRects, closeRects (X hit rects),
-  secondaryLineRect, `hit(point) -> .tab(i)|.close(i)|nil`. Tests
-  `TabStripLayoutTests.swift`.
-- `PaneContainerView.swift`: statusbar strip -> tab strip backed by TabStripLayout;
-  replace `paintStatusbar` with `paintTabStrip` reading `pane_tabs_for_grid` (active
-  highlight, inactive dim, hover fill, X-on-hover, secondary path via
-  `pane_status_for_grid`); `mouseDown` hit-tests X (`close_tab(win, bufnr)`) vs tab
-  (`focus_win(win)` + `switch_tab(win, bufnr)`); hovered-tab tracking via
-  NSTrackingArea; keep pane-dim scrim.
-- `AppMenu.swift`: `Tag.closeTab = 17`; add Close Tab item ⌘W; MOVE ⌘W off Close Pane
-  (blank equivalent).
-- `CommandSeam.swift`: `CommandKind.closeTab` + `case 17`. Update CommandSeamTests.
-- `CommandDispatcher.swift`: `.closeTab -> controller?.closeTab()`.
-- `WolfWindowController.swift`: `closeTab()` (resolve active_win -> grid_for_win ->
-  pane_tabs_for_grid -> active tab -> `close_tab(win, bufnr)`); `activeTabCount`
-  computed.
-- `AppDelegate.swift` validateMenuItem: `.closeTab -> !(paneCount<=1 &&
-  activeTabCount<=1)`.
+7. **README updates**: `crates/wolf-core/src/README.md` (lines ~148-150, ~299)
+   and `crates/wolf-core/README.md` (lines ~58, ~68, ~69, ~72). Reflect:
+   resolve_search_root reads tracked live cwd (no RPC); copy/list bounded by
+   NVIM_QUERY_TIMEOUT; behavioral contract (follows `:cd`, falls back to cfg cwd)
+   unchanged. Then `prettier --write` both; preserve one-long-line-per-bullet
+   style, no hard breaks mid-paragraph.
 
-### 5. Tests (real nvim preferred)
+**Testing:** No test files created/modified. Existing tests stay green because
+they `wait_for_flush` after `:cd`, by which point `apply_cwd` has written the
+canonical cwd into `tracked_cwd`, so `live_cwd()` returns exactly what
+`getcwd()` did. Timeout branches not deterministically testable without a
+fault-injection seam — rely on existing happy-path coverage (copy_paste,
+buffer_rank).
 
-- Pure: `tab_label.rs` tests (unique, disambiguation, fallbacks, [No Name]);
-  `command.rs` count/order tests.
-- `crates/wolf-ffi/tests/tabs.rs` (model buffer_picker.rs + panes.rs for the split):
-  (1) accumulation order across `:e`; (2) per-pane isolation with `:vsplit`;
-  (3) CloseTab preserve-when-tabbed-elsewhere + right-else-left neighbor;
-  (4) CloseTab delete-when-last; (5) last-tab-closes-pane + E444 no-op; (6) neighbor
-  view round-trip.
-- `TabStripLayoutTests.swift`; `CommandSeamTests.swift` -> 17;
-  `crates/wolf-ffi/tests/commands.rs` guard array -> 0..=17 + `:WolfCloseTab` drain.
-
-### 6. Docs
-
-architecture.md (lines ~34, 43, 65, 156, 173, 180), wolf-core README + src/README,
-wolf-ffi README, wolf-macos README + Sources/README, runtime/nvim/README.
-prettier --write after each.
-
-### 7. Order / risks
-
-- Order: core (render->tab_label->redraw->input->api->command->nvim) -> init.lua ->
-  wolf-ffi (+ regenerate) -> wolf-macos -> docs.
-- Discriminant touchpoints move together 16->17: core Command + SPECS + count tests;
-  ffi command_kind + exhaustive from_command; ffi commands.rs guard 0..=17; macOS
-  CommandKind + AppMenu.Tag + CommandSeamTests.
-- CloseTab is win+bufnr EXPLICIT (X can target an inactive tab in a non-active pane);
-  front-end resolves active tab for the ⌘W path.
-- Tab-click needs win-explicit `switch_tab` — the FFI `switch_buffer(bufnr)` resolves
-  active_win live, which would switch the wrong pane; `focus_win` first doesn't help
-  (active_win updates async).
-- Last-pane-last-tab guarded 3 ways: Lua win-count guard, pcall'd buf_delete, menu
-  validation.
-- `wolf_tabs` is additive/independent of `wolf_buffers`/`current_file`; active tab
-  always == pane current buffer.
-
-Architect agent id: a7fd9bf4f6f1ba469.
+**Bazel commands:**
+- `bazel build //crates/wolf-core:wolf_core`
+- `bazel test //crates/wolf-core:file_search`
+- `bazel test //crates/wolf-core:copy_paste`
+- `bazel test //crates/wolf-core:wolf_core_lib_test`

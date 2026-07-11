@@ -188,6 +188,12 @@ impl NvimProcess {
     /// result is extracted via [`Value::as_str`]; if it is missing or empty after
     /// trimming, returns [`NvimError::Rpc`] so the caller can fall back to a
     /// configured directory rather than rooting at an unusable path.
+    ///
+    /// Retained on the public `NvimProcess` surface but no longer used by
+    /// `WolfCore::resolve_search_root`, which now reads the tracked live cwd (a
+    /// synchronous, non-blocking read) rather than a blocking `getcwd()` RPC.
+    /// Available for direct RPC callers/tests that need an authoritative,
+    /// on-demand `getcwd()` round-trip.
     pub async fn current_dir(&self) -> Result<PathBuf, NvimError> {
         let value = self
             .nvim

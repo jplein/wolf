@@ -44,6 +44,10 @@ const SEARCH_TIMEOUT: Duration = Duration::from_secs(10);
 /// progress even if a wake is missed/coalesced).
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
+/// Short sleep between polls of `live_cwd()` while waiting for a `:cd` to
+/// propagate into the tracked cwd cell (see [`wait_for_live_cwd`]).
+const CWD_POLL_INTERVAL: Duration = Duration::from_millis(5);
+
 /// Settle window used by the cancel test: time to let any in-flight batch land,
 /// and the window over which we assert the version has stopped advancing.
 const CANCEL_SETTLE: Duration = Duration::from_millis(500);
@@ -117,10 +121,13 @@ fn start_core_in(cwd: &Path) -> WolfCore {
 }
 
 /// Like [`start_core_in`] but ALSO returns the `FlushWaiter`. `start_core_in`
-/// discards the waiter, but the cwd-following tests must drive a `:cd` via
-/// keystrokes and then wait for nvim to process it (a redraw flush) BEFORE
-/// starting the search, so they need the waiter retained. Built inline from the
-/// same `config_in`/`wake_channel`/`WolfCore::start` parts `start_core_in` uses.
+/// discards the waiter; the cwd-following tests drive a `:cd` via keystrokes and
+/// must confirm it propagated BEFORE searching. They now synchronize on
+/// [`wait_for_live_cwd`] (the tracked cwd that `resolve_search_root` reads) rather
+/// than a redraw flush, so the returned waiter is currently unused — it is kept on
+/// this helper's surface for symmetry with `start_core_in` and any future caller
+/// that needs a flush barrier. Built inline from the same
+/// `config_in`/`wake_channel`/`WolfCore::start` parts `start_core_in` uses.
 fn start_core_in_with_waiter(cwd: &Path) -> (WolfCore, common::FlushWaiter) {
     let (wake, waiter) = common::wake_channel();
     let core = WolfCore::start(
@@ -151,6 +158,32 @@ fn poll_until_complete(search: &FileSearch, wakes: &Receiver<()>) -> Vec<FileEnt
         // Bounded wait: a wake nudges us promptly; the timeout guarantees we
         // re-check even if a wake was coalesced/missed.
         let _ = wakes.recv_timeout(POLL_INTERVAL);
+    }
+}
+
+/// Polls `core.live_cwd()` until it reflects `expected`, bounded by `timeout`.
+///
+/// This synchronizes on the actual contract that `start_file_search` now relies
+/// on: `resolve_search_root` reads the tracked live cwd (`live_cwd()`), which the
+/// io_loop updates when it processes the `wolf_cwd`/`DirChanged` notification.
+/// A `wait_for_flush` barrier is too weak — a redraw flush can land BEFORE the
+/// io_loop applies `wolf_cwd`, leaving `live_cwd()` reporting the stale startup
+/// cwd. Both `expected` (from `temp_cwd`) and the stored value are canonicalized,
+/// so a direct equality compare matches. Panics on timeout.
+fn wait_for_live_cwd(core: &WolfCore, expected: &Path, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if core.live_cwd().as_deref() == Some(expected) {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out after {timeout:?} waiting for live_cwd to reflect B \
+                 (cd did not propagate); live_cwd = {:?}, expected = {expected:?}",
+                core.live_cwd()
+            );
+        }
+        std::thread::sleep(CWD_POLL_INTERVAL);
     }
 }
 
@@ -530,9 +563,10 @@ fn file_search_root_follows_nvim_cd() {
     write_file(&cwd_b.join("beta.md"), "b");
     write_file(&cwd_a.join("only_in_a.md"), "s");
 
-    // Build the core inline with cfg.cwd = A so nvim starts in A, retaining the
-    // FlushWaiter (needed to confirm the `:cd` has been applied before searching).
-    let (core, waiter) = start_core_in_with_waiter(&cwd_a);
+    // Build the core inline with cfg.cwd = A so nvim starts in A. The FlushWaiter
+    // is retained but unused: the `:cd` barrier below polls `live_cwd()` (the cwd
+    // that `resolve_search_root` actually reads) rather than a redraw flush.
+    let (core, _waiter) = start_core_in_with_waiter(&cwd_a);
 
     // Drive `:cd <B>` one key at a time, mirroring `current_file.rs`'s `:e` pattern:
     // ':' enters command-line mode, the path is typed literally, Enter executes.
@@ -542,9 +576,11 @@ fn file_search_root_follows_nvim_cd() {
     common::type_str(&core, path_b);
     core.send_input(common::key(Key::Enter));
 
-    // Wait for nvim to process the `:cd` and flush a redraw, so a subsequent
-    // getcwd() is guaranteed to report B before we start the search.
-    waiter.wait_for_flush(&core, common::FLUSH_TIMEOUT);
+    // Wait until the core's tracked live cwd (`live_cwd()`) reflects B before
+    // searching. `resolve_search_root` now reads the tracked cwd rather than doing
+    // a live getcwd() RPC, so we must synchronize on the notification (`wolf_cwd`/
+    // `DirChanged`) having been applied — a redraw flush alone can land before it.
+    wait_for_live_cwd(&core, &cwd_b, common::FLUSH_TIMEOUT);
 
     let (wake, wakes) = search_wake();
     let search = core.start_file_search(wake);
@@ -631,8 +667,9 @@ fn mru_seed_follows_nvim_cd() {
         store.record(&recent_a);
     }
 
-    // Start nvim in A, retaining the waiter so we can confirm the `:cd` landed.
-    let (core, waiter) = start_core_in_with_waiter(&cwd_a);
+    // Start nvim in A. The waiter is retained but unused: the `:cd` barrier below
+    // polls `live_cwd()` (what the seed's `resolve_search_root` reads), not a flush.
+    let (core, _waiter) = start_core_in_with_waiter(&cwd_a);
 
     // Drive `:cd <B>` one key at a time, mirroring the `:cd` root-follow test.
     let path_b = cwd_b.to_str().expect("temp path B should be valid UTF-8");
@@ -641,8 +678,11 @@ fn mru_seed_follows_nvim_cd() {
     common::type_str(&core, path_b);
     core.send_input(common::key(Key::Enter));
 
-    // Wait for nvim to process the `:cd` and flush, so the seed resolves against B.
-    waiter.wait_for_flush(&core, common::FLUSH_TIMEOUT);
+    // Wait until the core's tracked live cwd (`live_cwd()`) reflects B before
+    // opening the picker, so the seed resolves against B. `start_file_search` now
+    // reads the tracked cwd (updated by the `wolf_cwd`/`DirChanged` notification),
+    // not a live getcwd() RPC, so a redraw flush alone is too weak a barrier.
+    wait_for_live_cwd(&core, &cwd_b, common::FLUSH_TIMEOUT);
 
     let (wake, wakes) = search_wake();
     let search = core.start_file_search(wake);

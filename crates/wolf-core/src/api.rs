@@ -77,6 +77,20 @@ fn mru_for(cache: &MruCache, cwd: &Path) -> Option<MruStore> {
 /// applied batch (one RPC for fused keys, hence one redraw flush).
 const INPUT_COALESCE_DELAY: Duration = Duration::from_millis(8);
 
+/// Upper bound on the two remaining main-thread `block_on` nvim queries
+/// ([`WolfCore::copy_visual_selection`] and [`WolfCore::list_buffers`]).
+///
+/// These genuinely need live nvim data (a synchronous return value), so they
+/// cannot be served from the out-of-band tracked cwd the way `resolve_search_root`
+/// now is. Each `block_on`s a live nvim RPC on the calling (AppKit main) thread;
+/// to keep a momentarily unresponsive Neovim from freezing the UI indefinitely
+/// (the original hang: an unbounded `getcwd()` `block_on` parked the main thread
+/// ~23s), each future is wrapped in a `tokio::time::timeout` bounded by this const
+/// (mirrors the `Duration`-const timeout precedent in
+/// [`crate::nvim::NvimProcess::shutdown`]). On expiry the query logs and returns
+/// the same graceful empty/`None` it returns on an RPC error.
+const NVIM_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Configuration to start a [`WolfCore`].
 #[derive(Clone, Debug)]
 pub struct CoreConfig {
@@ -88,8 +102,10 @@ pub struct CoreConfig {
     pub rows: u16,
     /// Working directory: the FALLBACK search root + the MRU cache location
     /// (`<cwd>/.wolf/mru.sqlite`). The captive Neovim is also launched here. The
-    /// picker's LIVE search root is the captive Neovim's `getcwd()`; this is used
-    /// only when that query fails or returns an unusable path.
+    /// picker's LIVE search root is the captive Neovim's tracked working directory
+    /// ([`WolfCore::live_cwd`], updated out-of-band by the `wolf_cwd`/`DirChanged`
+    /// notification); this configured path is used only until Neovim first reports
+    /// its cwd (there is no longer a live `getcwd()` query that can fail).
     pub cwd: PathBuf,
 }
 
@@ -179,9 +195,11 @@ pub struct WolfCore {
     /// the handle handed out by [`WolfCore::command_mru`].
     command_mru: CommandMru,
     /// The configured working directory: the file picker's FALLBACK search root
-    /// and the MRU cache location. The live search root is the captive Neovim's
-    /// `getcwd()` (see [`WolfCore::start_file_search`]); this path is used only
-    /// when that query fails or returns an unusable path.
+    /// and the MRU cache location. The live search root comes from the tracked live
+    /// cwd ([`live_cwd`](Self::live_cwd), updated out-of-band by the
+    /// `wolf_cwd`/`DirChanged` notification; see [`WolfCore::start_file_search`]);
+    /// this configured path is the fallback used only until Neovim first reports its
+    /// cwd (there is no longer a live `getcwd()` query that can fail).
     cwd: PathBuf,
 }
 
@@ -370,17 +388,24 @@ impl WolfCore {
     /// nothing to copy.
     ///
     /// Blocks briefly on the captive nvim to yank the selection (see
-    /// [`crate::nvim::NvimProcess::yank_visual_selection`]) via `runtime.block_on`
-    /// (same pattern as [`resolve_search_root`](Self::resolve_search_root)). An
-    /// RPC error, a `None` result (not in visual mode), or an empty selection all
-    /// map to `None`, so the front-end only writes real text to the clipboard.
+    /// [`crate::nvim::NvimProcess::yank_visual_selection`]) via `runtime.block_on`,
+    /// bounded by [`NVIM_QUERY_TIMEOUT`] so an unresponsive Neovim cannot freeze
+    /// the main thread. An RPC error, a timeout, a `None` result (not in visual
+    /// mode), or an empty selection all map to `None`, so the front-end only writes
+    /// real text to the clipboard.
     #[must_use]
     pub fn copy_visual_selection(&self) -> Option<String> {
-        match self.runtime.block_on(self.nvim.yank_visual_selection()) {
-            Ok(Some(text)) if !text.is_empty() => Some(text),
-            Ok(_) => None,
-            Err(e) => {
+        match self.runtime.block_on(async {
+            tokio::time::timeout(NVIM_QUERY_TIMEOUT, self.nvim.yank_visual_selection()).await
+        }) {
+            Ok(Ok(Some(text))) if !text.is_empty() => Some(text),
+            Ok(Ok(_)) => None,
+            Ok(Err(e)) => {
                 tracing::warn!("copy_visual_selection failed: {e}");
+                None
+            }
+            Err(_elapsed) => {
+                tracing::warn!("copy_visual_selection timed out after {NVIM_QUERY_TIMEOUT:?}");
                 None
             }
         }
@@ -395,17 +420,22 @@ impl WolfCore {
     /// Snapshots the captive nvim's listed buffers (for seeding the buffer picker).
     ///
     /// Blocks briefly on the captive nvim to query `getbufinfo({'buflisted': 1})`
-    /// (see [`crate::nvim::NvimProcess::list_buffers`]) via `runtime.block_on`, the
-    /// same blocking pattern [`copy_visual_selection`](Self::copy_visual_selection)
-    /// and [`resolve_search_root`](Self::resolve_search_root) use. An RPC error is
-    /// logged and yields an empty list (the picker just shows no candidates rather
-    /// than failing).
+    /// (see [`crate::nvim::NvimProcess::list_buffers`]) via `runtime.block_on`,
+    /// bounded by [`NVIM_QUERY_TIMEOUT`] so an unresponsive Neovim cannot freeze
+    /// the main thread. An RPC error or a timeout is logged and yields an empty
+    /// list (the picker just shows no candidates rather than failing).
     #[must_use]
     pub fn list_buffers(&self) -> Vec<BufInfo> {
-        match self.runtime.block_on(self.nvim.list_buffers()) {
-            Ok(buffers) => buffers,
-            Err(e) => {
+        match self.runtime.block_on(async {
+            tokio::time::timeout(NVIM_QUERY_TIMEOUT, self.nvim.list_buffers()).await
+        }) {
+            Ok(Ok(buffers)) => buffers,
+            Ok(Err(e)) => {
                 tracing::warn!("list_buffers failed: {e}");
+                Vec::new()
+            }
+            Err(_elapsed) => {
+                tracing::warn!("list_buffers timed out after {NVIM_QUERY_TIMEOUT:?}");
                 Vec::new()
             }
         }
@@ -626,12 +656,14 @@ impl WolfCore {
     }
 
     /// Starts a streaming file search rooted at the captive Neovim's live working
-    /// directory (`getcwd()`), falling back to the configured cwd.
+    /// directory, falling back to the configured cwd.
     ///
-    /// The traversal root is resolved via [`resolve_search_root`](Self::resolve_search_root):
-    /// it follows wherever Neovim currently is (`:cd`/`:lcd`/`:tcd`), and only if
-    /// that query fails or returns an unusable path does it fall back to the
-    /// configured `self.cwd`.
+    /// The traversal root is resolved via [`resolve_search_root`](Self::resolve_search_root),
+    /// a cheap synchronous read of the tracked live cwd ([`live_cwd`](Self::live_cwd)/
+    /// `tracked_cwd`, kept current out-of-band by the `wolf_cwd`/`DirChanged`
+    /// notification) — NO live `getcwd()` RPC. It still follows wherever Neovim
+    /// currently is (`:cd`/`:lcd`/`:tcd`), and only until nvim first reports its
+    /// cwd (or if it never does) does it fall back to the configured `self.cwd`.
     ///
     /// The MRU cache is seeded SYNCHRONOUSLY before returning (so the very first
     /// [`FileSearch::read`] already shows recent files), then the async traversal
@@ -692,23 +724,22 @@ impl WolfCore {
     }
 
     /// Resolves the file-search traversal root: the captive Neovim's live working
-    /// directory (`getcwd()`), falling back to the configured `self.cwd`.
+    /// directory, falling back to the configured `self.cwd`.
     ///
-    /// A brief blocking `getcwd()` RPC is issued via `runtime.block_on` (the same
-    /// pattern `start`/`shutdown` use — one sub-ms round-trip). On success the
-    /// returned path is canonicalized (keeping the raw path if canonicalization
-    /// fails — a successful `getcwd()` is a real directory) so it lines up with the
-    /// canonical paths the MRU stores. On failure it logs and falls back to
-    /// canonicalizing `self.cwd`, the configured root.
+    /// A cheap, synchronous main-thread read of the tracked live cwd via
+    /// [`live_cwd`](Self::live_cwd) — NO blocking `getcwd()` RPC (which is why an
+    /// unresponsive Neovim can no longer freeze the AppKit main thread here; the
+    /// original hang parked the UI ~23s on an unbounded `getcwd()` `block_on`). The
+    /// tracked cwd is kept current out-of-band by the `wolf_cwd`/`DirChanged`
+    /// notification (so it still follows `:cd`/`:lcd`/`:tcd`) and is ALREADY
+    /// canonicalized by the redraw handler, so it lines up with the canonical paths
+    /// the MRU stores. Until nvim first reports its cwd (or if it never does), this
+    /// falls back to canonicalizing `self.cwd`, the configured root (keeping the raw
+    /// path if canonicalization fails). Mirrors [`mru_recent`](Self::mru_recent),
+    /// [`pane_status`](Self::pane_status), and [`pane_tabs`](Self::pane_tabs), which
+    /// read the same tracked cell to avoid a main-thread `getcwd` block.
     fn resolve_search_root(&self) -> PathBuf {
-        match self.runtime.block_on(self.nvim.current_dir()) {
-            Ok(p) => std::fs::canonicalize(&p).unwrap_or(p),
-            Err(e) => {
-                tracing::warn!(
-                    "getcwd() query failed ({e}); falling back to configured cwd"
-                );
-                std::fs::canonicalize(&self.cwd).unwrap_or_else(|_| self.cwd.clone())
-            }
-        }
+        self.live_cwd()
+            .unwrap_or_else(|| std::fs::canonicalize(&self.cwd).unwrap_or_else(|_| self.cwd.clone()))
     }
 }
