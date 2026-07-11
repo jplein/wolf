@@ -240,7 +240,7 @@ enum AppMenu {
                 title: "Minimize", tag: Tag.minimizeWindow, keyEquivalent: "m", target: target))
         menu.addItem(.separator())
         for controller in controllers {
-            let cwd = controller.currentCwd
+            let cwd = controller.persistedCwd
             let windowItem = NSMenuItem(
                 title: cwd.isEmpty ? "Wolf" : cwd,
                 action: #selector(AppDelegate.raiseWindowMenuItem(_:)),

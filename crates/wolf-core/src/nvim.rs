@@ -275,6 +275,156 @@ impl NvimProcess {
         Ok(buffers)
     }
 
+    /// Creates a new nvim TABPAGE (optionally rooted at `cwd` via `:tcd`) and
+    /// returns its stable HANDLE.
+    ///
+    /// Calls the `_G.wolf_create_tabpage` helper (defined in
+    /// `runtime/nvim/init.lua`) over `nvim_exec_lua`, passing `cwd` as a Lua
+    /// vararg (never interpolated). The helper runs `tabnew`, `:tcd` when `cwd`
+    /// is non-empty, and returns `nvim_get_current_tabpage()`. The handle is
+    /// decoded via [`crate::redraw::ext_handle`] (a plain integer, or defensively
+    /// a msgpack-`Ext`-wrapped integer).
+    pub async fn create_tabpage(&self, cwd: &str) -> Result<i64, NvimError> {
+        let value = self
+            .nvim
+            .call(
+                "nvim_exec_lua",
+                vec![
+                    Value::from("return wolf_create_tabpage(...)"),
+                    Value::Array(vec![Value::from(cwd)]),
+                ],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+        crate::redraw::ext_handle(&value)
+            .ok_or_else(|| NvimError::Rpc(format!("wolf_create_tabpage returned no handle: {value:?}")))
+    }
+
+    /// Returns the tab-local working directory of tabpage `handle` via the
+    /// `_G.wolf_tab_cwd` helper.
+    ///
+    /// The helper maps the STABLE handle to its (renumbering) tabpage NUMBER and
+    /// returns `getcwd(-1, <number>)` (the tab-scoped cwd, falling back to the
+    /// global cwd for a tabpage that was never `:tcd`'d). Authoritative for a
+    /// NON-current view's cwd. The result is read via [`Value::as_str`]; a
+    /// missing/empty path yields [`NvimError::Rpc`] (e.g. a closed handle).
+    pub async fn tab_cwd(&self, handle: i64) -> Result<PathBuf, NvimError> {
+        let value = self
+            .nvim
+            .call(
+                "nvim_exec_lua",
+                vec![
+                    Value::from("return wolf_tab_cwd(...)"),
+                    Value::Array(vec![Value::from(handle)]),
+                ],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+        match value.as_str() {
+            Some(s) if !s.trim().is_empty() => Ok(PathBuf::from(s)),
+            _ => Err(NvimError::Rpc(format!(
+                "wolf_tab_cwd returned no usable path: {value:?}"
+            ))),
+        }
+    }
+
+    /// Returns the current tabpage's stable HANDLE via `nvim_get_current_tabpage`.
+    ///
+    /// The authoritative bind-time value (the first-view bind reads it right after
+    /// attach); decoded via [`crate::redraw::ext_handle`].
+    pub async fn current_tabpage(&self) -> Result<i64, NvimError> {
+        let value = self
+            .nvim
+            .call("nvim_get_current_tabpage", vec![])
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+        crate::redraw::ext_handle(&value).ok_or_else(|| {
+            NvimError::Rpc(format!("nvim_get_current_tabpage returned no handle: {value:?}"))
+        })
+    }
+
+    /// Makes tabpage `handle` current via `nvim_set_current_tabpage`.
+    pub async fn set_current_tabpage(&self, handle: i64) -> Result<(), NvimError> {
+        let _ = self
+            .nvim
+            .call("nvim_set_current_tabpage", vec![Value::from(handle)])
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+        Ok(())
+    }
+
+    /// Closes tabpage `handle` via the `_G.wolf_close_tabpage` helper.
+    ///
+    /// The helper resolves the STABLE handle to its tabpage NUMBER and runs
+    /// `<n>tabclose` inside a `pcall` (a last-tabpage `E784` is swallowed).
+    pub async fn close_tabpage(&self, handle: i64) -> Result<(), NvimError> {
+        let _ = self
+            .nvim
+            .call(
+                "nvim_exec_lua",
+                vec![
+                    Value::from("wolf_close_tabpage(...)"),
+                    Value::Array(vec![Value::from(handle)]),
+                ],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+        Ok(())
+    }
+
+    /// Installs the tabpage tracking + nav/creation lockout inside the captive
+    /// nvim.
+    ///
+    /// Mirrors [`setup_dir_tracking`](Self::setup_dir_tracking): looks up this RPC
+    /// channel's id via `nvim_get_api_info`, then calls the `_G.wolf_setup_tabs`
+    /// helper (defined in `runtime/nvim/init.lua`) over `nvim_exec_lua`, passing
+    /// the channel id as a Lua vararg. The helper registers `TabEnter` /
+    /// `TabNewEntered` autocmds that `rpcnotify` `wolf_tabpage` with
+    /// `nvim_get_current_tabpage()` (emitting once immediately), locks out the
+    /// nvim-internal tabpage navigation/creation chords + typed `:tab*` Ex-
+    /// commands, and defines the `wolf_create_tabpage` / `wolf_close_tabpage` /
+    /// `wolf_tab_cwd` helpers.
+    pub async fn setup_tabs(&self) -> Result<(), NvimError> {
+        let info = self
+            .nvim
+            .call("nvim_get_api_info", vec![])
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+        let chan = info
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(Value::as_i64)
+            .ok_or_else(|| {
+                NvimError::Rpc(format!(
+                    "nvim_get_api_info returned no channel id: {info:?}"
+                ))
+            })?;
+
+        let _ = self
+            .nvim
+            .call(
+                "nvim_exec_lua",
+                vec![
+                    Value::from("wolf_setup_tabs(...)"),
+                    Value::Array(vec![Value::from(chan)]),
+                ],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+        Ok(())
+    }
+
     /// Installs the per-pane view-tracking autocmds inside the captive nvim.
     ///
     /// Unlike the other `setup_*` helpers, this passes NO channel id: the

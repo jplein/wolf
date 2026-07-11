@@ -107,6 +107,19 @@ final class PaneContainerView: NSView {
     /// per-window font-size change can re-measure and reflow via `applyMetrics`.
     private var metrics: CellMetrics
 
+    /// This view's bound nvim TABPAGE handle (the project/tabpage-per-view bind).
+    /// Under the shared-nvim model a wake fires per PROJECT, but this container
+    /// must only consume a refocus rebind once the snapshot reflects THIS view's
+    /// tabpage — the `handle.active_tabpage() == controllerTabpageHandle` gate.
+    private let controllerTabpageHandle: Int64
+
+    /// Set by the window controller (`windowDidBecomeKey`) after it drives its
+    /// project's `set_current_tabpage`: the next wake whose snapshot reflects this
+    /// view's tabpage re-derives every pane's grid binding (nvim churns grid ids
+    /// across a tabpage switch while WINDOW handles stay stable — OD2), then clears
+    /// the flag. See `onRenderWake`.
+    private var pendingRefocusRebind = false
+
     /// The pure pane-layout tree (split/remove/neighbour geometry).
     private let tree = PaneTree(root: PaneContainerView.firstPaneId)
     /// The per-pane bindings, keyed by `PaneId`.
@@ -144,12 +157,18 @@ final class PaneContainerView: NSView {
     /// first wake reads it).
     private var lastTitlebarTheme: (rgb: UInt32, set: Bool)?
 
-    /// Builds the container bound to a live core `handle` and measured `metrics`.
-    /// No panes exist until the first window grid appears on a wake.
-    init(handle: WolfCoreHandle, metrics: CellMetrics) {
+    /// Builds the container bound to a live core `handle`, measured `metrics`, and
+    /// the view's `tabpageHandle` (the project/tabpage-per-view bind used to gate
+    /// the refocus rebind). No panes exist until the first window grid appears on a
+    /// wake.
+    init(handle: WolfCoreHandle, metrics: CellMetrics, tabpageHandle: Int64) {
         self.handle = handle
         self.metrics = metrics
+        self.controllerTabpageHandle = tabpageHandle
         super.init(frame: .zero)
+        // Layer-back so a VISIBLE non-key window (two side-by-side windows of the
+        // SAME project) keeps its last-painted layer while it is not the current
+        // view (the project drives wakes only to `currentView`).
         wantsLayer = true
         // Follow the live "Show scroll bars" setting so the synthetic scrollbars
         // switch between always-on (`.legacy`) and fade-on-scroll (`.overlay`)
@@ -472,10 +491,41 @@ final class PaneContainerView: NSView {
 
     // MARK: - Render-wake orchestration
 
+    /// Marks that this view just became the current view of its project (its
+    /// tabpage was made current). The next wake whose snapshot reflects THIS
+    /// view's tabpage consumes a one-shot grid rebind in `onRenderWake`.
+    func markRefocusRebind() {
+        pendingRefocusRebind = true
+    }
+
     /// Orchestrates a render wake (port of `PaneInner::on_render_wake`): ensure a
     /// first pane exists, apply layout intents, collapse closed panes, resolve
     /// pending grids, refresh the active pane, sync grid sizes, then redraw.
+    ///
+    /// REFOCUS REBIND (OD2): when this view just became its project's current view
+    /// (`markRefocusRebind`), nvim has switched to this view's tabpage — churning
+    /// grid ids while keeping WINDOW handles stable. The pane→grid bindings from
+    /// before the switch are stale. Consume the rebind ONLY once the snapshot
+    /// reflects this tabpage (`active_tabpage()` gate), then re-derive every pane's
+    /// grid via `grid_for_win` on the PRESERVED `PaneTree` (no geometry rebuild).
+    /// `detectCloses()` is SKIPPED on this pass — the just-vacated tabpage's grids
+    /// are gone from the snapshot and would wrongly prune live panes; the next
+    /// normal pass reconciles any real closes.
     func onRenderWake() {
+        if pendingRefocusRebind {
+            guard handle.active_tabpage() == controllerTabpageHandle else { return }
+            pendingRefocusRebind = false
+            // A view that was materialized but never yet current has no panes; make
+            // its first pane bind to the now-current tabpage's window.
+            ensureInitialPane()
+            rebindStaleGrids()
+            updateActivePane()
+            syncGridSizes()
+            applyTitlebarTheme()
+            needsDisplay = true
+            return
+        }
+
         ensureInitialPane()
         applyIntents()
         detectCloses()
@@ -484,6 +534,16 @@ final class PaneContainerView: NSView {
         syncGridSizes()
         applyTitlebarTheme()
         needsDisplay = true
+    }
+
+    /// Nulls EVERY pane's bound grid, then re-resolves each via `grid_for_win` on
+    /// its (stable) window handle. The `PaneTree` topology is untouched, so a
+    /// multi-pane layout restores by rebinding grids alone (OD2).
+    private func rebindStaleGrids() {
+        for id in panes.keys {
+            panes[id]?.boundGrid = nil
+        }
+        resolvePendingGrids()
     }
 
     /// Applies the `WolfTitlebar` theme background to the window when it

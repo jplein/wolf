@@ -149,3 +149,15 @@ The original fifteen tests cover the redraw → snapshot and input pipelines aga
 - `<C-w>c` with multiple windows drops the window count (via `win_close`);
 - `<C-w>c` on the LAST window is a no-op (the Lua guard) and nvim stays alive;
 - a `WinEnter` (split, then `focus_win`) updates `active_win`, always naming a window present in `windows`.
+
+### Tabpage lifecycle (real Neovim)
+
+`tabpages.rs` (Bazel target `//crates/wolf-core:tabpages`, seven tests) drives the project/tabpage-per-view surface against a real pinned nvim: the new `WolfCore` tabpage methods (`create_tabpage` / `cwd_for_tabpage` / `current_tabpage` / `set_current_tabpage` / `close_tabpage`) and the new `Snapshot.current_tabpage` field. Because a tabpage switch churns GRID ids (nvim destroys/recreates grids) while WINDOW handles stay STABLE, the tests assert on window-HANDLE membership + `grid_for_win` round-trips (never literal grid ids / HashMap order) and POLL with a generous timeout (draining wakes), canonicalizing both sides of every cwd compare:
+
+- `create_tabpage_adds_window_and_updates_current_tabpage` — `create_tabpage` adds a fresh window grid and moves `Snapshot.current_tabpage` to the new handle;
+- `switch_back_makes_second_tabpage_grids_vanish` — `set_current_tabpage` back to T1 makes T2's grids vanish and T1's reappear (the current-tabpage-only `windows` contract);
+- `window_handles_survive_a_tabpage_switch` — the **OD2 keystone**: `:vsplit` on T1, switch to T2 and back, and the SAME W1/W2 handles reappear with fresh grids that `grid_for_win` re-resolves (if this fails, OD2's refocus-rebind design does not hold);
+- `per_tabpage_cwd_including_non_current` — `:tcd dirA` on T1, create T2 rooted at dirB, and `cwd_for_tabpage(T1) == dirA` / `cwd_for_tabpage(T2) == dirB` INCLUDING while T2 is NON-current (the non-current-view read);
+- `buffer_list_is_shared_across_tabpages` — `:e a.md` on T1, `:e b.md` on T2, and `list_buffers()` returns BOTH regardless of the current tabpage (one shared buffer list per project);
+- `stable_handle_survives_tabpage_renumber` — create T2/T3, close T2, and T3's HANDLE is unchanged (its tabpage NUMBER shifted) so `cwd_for_tabpage(T3)` still works;
+- `win_hide_removes_window_but_keeps_grid_on_tabpage_switch` — the **OD7/OD8 focused pin**: on a tabpage switch nvim emits `win_hide` (not `win_close`/`grid_destroy`) for the leaving tabpage's windows, so `redraw.rs`'s handler REMOVES the window from `Snapshot.windows` (`grid_for_win(W1)` → `None`, W1 absent from the window handles) but KEEPS its grid in `Snapshot.grids` (nvim reuses it on the way back).

@@ -420,7 +420,14 @@ pub struct WinInfo {
     pub height: usize,
     /// This window's scroll viewport (from `win_viewport`).
     pub viewport: Viewport,
-    /// Whether the window is currently hidden (from `win_hide`).
+    /// Historically "whether the window is hidden (from `win_hide`)", but now
+    /// effectively ALWAYS `false` and unused (OD8). On a `win_hide` (most notably
+    /// a tabpage switch, which hides every window of the leaving tabpage) the
+    /// handler REMOVES the window from `Snapshot.windows` entirely rather than
+    /// flagging it here, so `windows`/`grid_for_win` reflect only the current
+    /// tabpage. The field is retained only to avoid churning the FFI + Swift
+    /// surface (`FfiWinInfo::hidden()` / the `!w.hidden()` filters still compile
+    /// and behave correctly, since a live window is never hidden).
     pub hidden: bool,
 }
 
@@ -471,6 +478,15 @@ pub struct Snapshot {
     /// `runtime/nvim/init.lua` (see [`crate::redraw`]); the front-end uses it to
     /// mark the active pane.
     pub active_win: Option<i64>,
+    /// The current Neovim TABPAGE handle (as an `i64`), or `0` when not yet
+    /// known. Updated out-of-band from the redraw stream via the `wolf_tabpage`
+    /// notification, emitted by the `wolf_setup_tabs` `TabEnter`/`TabNewEntered`
+    /// autocmds in `runtime/nvim/init.lua` (see [`crate::redraw`]). Because it is
+    /// not a redraw frame, updating it does NOT bump `seq`. The macOS front-end
+    /// uses it as the cheap "is my tabpage current" refocus-rebind gate (mirrors
+    /// `active_win`); the authoritative bind-time value is
+    /// [`crate::api::WolfCore::current_tabpage`].
+    pub current_tabpage: i64,
     /// Absolute, canonicalized path of the buffer currently being edited in
     /// nvim, or `None` for an unnamed buffer. Updated out-of-band from the
     /// redraw stream via the `wolf_current_file` notification (see

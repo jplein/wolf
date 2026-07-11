@@ -107,9 +107,27 @@ The helper:
 
 Both faces `rpcnotify` the same `wolf_command` channel with the canonical `id`; core resolves it via `Command::from_id`, folds it onto a drainable queue (no `seq` bump), and wakes the front-end, which maps each command to a native action (on macOS via the NSMenu / `CommandDispatcher`). An unknown id is dropped by core. The captive nvim stays hermetic: only Wolf's own bundled config uses these faces this cut — a user-config keybinding hook is **deferred**. The channel id and command list are passed as Lua **varargs**, never interpolated.
 
+### Tabpage tracking + lifecycle — `_G.wolf_setup_tabs(chan)` and the tabpage helpers
+
+Realizing the **project/tabpage-per-view** model (one captive Neovim = one PROJECT, shared by N front-end views, each view bound to one nvim **TABPAGE**), `init.lua` defines module-level tabpage helpers plus a setup helper `wolf-core` invokes over RPC **after** command registration, passing core's own RPC channel id (see [`src/nvim.rs`](../../crates/wolf-core/src/nvim.rs)'s `setup_tabs`). Wolf owns ALL tabpage lifecycle (create / close / switch) from the front-end.
+
+`_G.wolf_setup_tabs(chan)`:
+
+- creates a `WolfTabs` augroup (`clear = true`) with a `TabEnter` / `TabNewEntered` autocmd that `rpcnotify`s `wolf_tabpage` with `nvim_get_current_tabpage()`, plus one initial emit — so core's `Snapshot.current_tabpage` tracks the current tabpage (the cheap refocus gate the macOS front-end polls);
+- **locks out (OD4)** the nvim-internal tabpage NAVIGATION chords by `vim.keymap.set`-ing `gt` / `gT` / `<C-w>gt` / `<C-w>gT` / `<C-PageUp>` / `<C-PageDown>` → `<Nop>` (a user switching a tabpage out from under a view would desync the front-end-authoritative current view);
+- **best-effort intercepts** the typed tabpage CREATION / mutation Ex-commands `:tabnew` / `:tabnext` / `:tabprevious` / `:tabonly` / `:tabclose` / `:tabmove` via `cnoreabbrev <expr>` (guarded by `getcmdtype() == ':'` and a WHOLE-WORD `getcmdline()` match, expanding to an empty command line so `<CR>` is a no-op) — a user-typed `:tabnew` would create an ORPHAN tabpage no view is bound to. The per-view cwd commands `:tcd` / `:tcd!` / `:lcd` / `:cd` are DELIBERATELY NOT caught: they are different WORDS from the `:tab*` commands, so the whole-word abbrevs never fire on them (`:tcd` is how each view sets its own cwd).
+
+The module-level helpers (defined regardless of setup ordering) that `wolf-core`'s tabpage methods drive over `nvim_exec_lua`:
+
+- `_G.wolf_create_tabpage(cwd)` — `tabnew`, then `:tcd fnameescape(cwd)` when `cwd` is non-empty (an empty/nil `cwd` leaves the new tab at the global cwd — the empty-state view), returning the new tabpage's STABLE handle (`nvim_get_current_tabpage()`).
+- `_G.wolf_close_tabpage(handle)` — resolves the STABLE handle to its CURRENT tabpage NUMBER (numbers renumber as tabs open/close) and runs `<n>tabclose` inside a `pcall`, swallowing a last-tabpage `E784` (the front-end never closes the LAST view — the project shuts the whole nvim down instead); a stale/invalid handle degrades to a no-op via the guarding `pcall`.
+- `_G.wolf_tab_cwd(handle)` — the AUTHORITATIVE non-current-view cwd read: maps the stable handle to its NUMBER and returns `getcwd(-1, n)` (the tab-local cwd, falling back to the global cwd for a tab never `:tcd`'d); a stale/invalid handle returns `""` (core maps that to "no cwd").
+
+**Residual v1 limitations (accepted, per OD4):** the lockout is best-effort — obscure typed variants / user-defined command abbreviations of the `:tab*` commands (or scripted `nvim_*` tabpage calls) are NOT caught, so a determined user could still create/switch/close a tabpage out from under the front-end. `:tcd`/`:lcd`/`:cd` are intentionally left open. The channel id is passed as a Lua **vararg**, never interpolated.
+
 ### Buffer-picker view tracking — `_G.wolf_setup_view_tracking()`
 
-The FINAL global helper `wolf-core` invokes over RPC, **after** command registration (see [`src/nvim.rs`](../../crates/wolf-core/src/nvim.rs)'s `setup_view_tracking`). It backs the buffer picker's **per-pane scroll/cursor restoration**, and it is a deliberate ASYMMETRY with every helper above: it takes **NO channel id** and emits **NO `rpcnotify`** — it maintains an in-nvim view cache and defines the switch helper that reads it, so **no view/scroll payload ever crosses the FFI boundary** and core stays view-agnostic (it is NOT an out-of-band notification into the snapshot).
+The FINAL global helper `wolf-core` invokes over RPC, **after** command registration and tabpage setup (see [`src/nvim.rs`](../../crates/wolf-core/src/nvim.rs)'s `setup_view_tracking`). It backs the buffer picker's **per-pane scroll/cursor restoration**, and it is a deliberate ASYMMETRY with every helper above: it takes **NO channel id** and emits **NO `rpcnotify`** — it maintains an in-nvim view cache and defines the switch helper that reads it, so **no view/scroll payload ever crosses the FFI boundary** and core stays view-agnostic (it is NOT an out-of-band notification into the snapshot).
 
 The helper holds an upvalue `local view_cache = {}` keyed `view_cache[win][buf] = winsaveview()` (a per-`(winid, bufnr)` cache — each pane remembers its OWN scroll of a shared buffer), and:
 

@@ -438,6 +438,105 @@ function _G.wolf_setup_commands(chan, commands)
 	end
 end
 
+-- Tabpage helpers: module-level globals wolf-core invokes over `nvim_exec_lua`
+-- to realize the project/tabpage-per-view model (one nvim TABPAGE per front-end
+-- view). Defined at module level so they exist regardless of setup ordering.
+
+-- Create a new tabpage, optionally rooting it at `cwd` via `:tcd` (the tab-local
+-- cwd -- each view owns its own working directory), and return its STABLE handle
+-- (nvim_get_current_tabpage()). An empty/nil cwd leaves the new tab at the global
+-- cwd (the empty-state view). The path is fnameescape'd for the command line.
+function _G.wolf_create_tabpage(cwd)
+	vim.cmd("tabnew")
+	if cwd ~= nil and cwd ~= "" then
+		vim.cmd("tcd " .. vim.fn.fnameescape(cwd))
+	end
+	return vim.api.nvim_get_current_tabpage()
+end
+
+-- Close the tabpage named by its STABLE handle. Tabpage NUMBERS renumber as tabs
+-- open/close, so we resolve the handle to its CURRENT number and run `<n>tabclose`
+-- inside a pcall: this swallows a last-tabpage E784 (the front-end never closes
+-- the last view -- the Project shuts the whole nvim down instead). A stale/invalid
+-- handle also degrades to a no-op via the guarding pcall.
+function _G.wolf_close_tabpage(handle)
+	local ok, n = pcall(vim.api.nvim_tabpage_get_number, handle)
+	if not ok or n == nil then
+		return
+	end
+	pcall(vim.cmd, n .. "tabclose")
+end
+
+-- Return the tab-local working directory of the tabpage named by its STABLE
+-- handle (authoritative for a NON-current view's cwd). Maps the stable handle to
+-- its current NUMBER (which getcwd(-1, n) needs) and returns getcwd(-1, n), which
+-- falls back to the global cwd for a tab that was never `:tcd`'d. A stale/invalid
+-- handle returns "" (core maps that to "no cwd").
+function _G.wolf_tab_cwd(handle)
+	local ok, n = pcall(vim.api.nvim_tabpage_get_number, handle)
+	if not ok or n == nil then
+		return ""
+	end
+	local ok2, dir = pcall(vim.fn.getcwd, -1, n)
+	if not ok2 or type(dir) ~= "string" then
+		return ""
+	end
+	return dir
+end
+
+-- Tabpage tracking + navigation/creation lockout: wolf-core invokes this over RPC
+-- after the command setup, passing its own RPC channel id. It notifies core of the
+-- current tabpage handle via wolf_tabpage on every TabEnter/TabNewEntered (emitting
+-- once immediately), so core's snapshot tracks the current tabpage (the cheap
+-- refocus gate the front-end uses).
+--
+-- LOCKOUT (OD4): Wolf owns ALL tabpage lifecycle (create/close/switch), so the
+-- nvim-internal tabpage navigation/creation chords are mapped to <Nop> and the
+-- typed :tab* Ex-commands are best-effort intercepted. A user-typed :tabnew would
+-- create an ORPHAN tabpage no view is bound to; :tabnext/:tabonly/:tabclose would
+-- switch/close a tabpage out from under a view and desync the front-end-authoritative
+-- current view. The per-view cwd command :tcd is DELIBERATELY not locked out (it is
+-- a different word from the :tab* commands, so the whole-word abbrevs never catch
+-- :tcd/:tcd!/:lcd/:cd). Residual gaps (obscure typed variants / abbreviations) are
+-- an accepted v1 limitation (documented).
+function _G.wolf_setup_tabs(chan)
+	local group = vim.api.nvim_create_augroup("WolfTabs", { clear = true })
+	vim.api.nvim_create_autocmd({ "TabEnter", "TabNewEntered" }, {
+		group = group,
+		callback = function()
+			vim.rpcnotify(chan, "wolf_tabpage", vim.api.nvim_get_current_tabpage())
+		end,
+	})
+	-- Initial emit so the startup tabpage is reflected without a switch.
+	vim.rpcnotify(chan, "wolf_tabpage", vim.api.nvim_get_current_tabpage())
+
+	-- Lock out the nvim-internal tabpage navigation/creation chords. `noremap`
+	-- (the default) fully replaces the native behavior.
+	local map = vim.keymap.set
+	local silent = { silent = true }
+	for _, lhs in ipairs({ "gt", "gT", "<C-w>gt", "<C-w>gT", "<C-PageUp>", "<C-PageDown>" }) do
+		map("n", lhs, "<Nop>", silent)
+	end
+
+	-- Best-effort intercept of the typed tabpage Ex-commands via cnoreabbrev: a
+	-- command-line abbreviation expands only a WHOLE word, guarded by
+	-- getcmdtype()==':' so it never fires inside a search or a larger command, and
+	-- it expands to an EMPTY command line (a no-op on <CR>). Whole-word matching is
+	-- why :tcd/:tcd!/:lcd/:cd are NOT caught -- they are different words.
+	local function lock(word)
+		vim.cmd(string.format(
+			"cnoreabbrev <expr> %s (getcmdtype()==':' && getcmdline()==%q) ? %q : %q",
+			word,
+			word,
+			"",
+			word
+		))
+	end
+	for _, w in ipairs({ "tabnew", "tabnext", "tabprevious", "tabonly", "tabclose", "tabmove" }) do
+		lock(w)
+	end
+end
+
 -- Per-pane view tracking for the buffer picker: wolf-core invokes this over RPC
 -- after the command setup. Unlike the other setups it takes NO channel id and
 -- emits NO rpcnotify — it only maintains an in-nvim (winid, bufnr) -> winsaveview

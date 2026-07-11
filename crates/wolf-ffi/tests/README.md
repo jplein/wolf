@@ -46,6 +46,14 @@ The real-nvim coverage of the buffer-picker session + view round-trip (Bazel tar
 bazel test //crates/wolf-ffi:buffer_picker
 ```
 
+## `tabpages.rs`
+
+The real-nvim coverage of the TABPAGE bridge surface (Bazel target `//crates/wolf-ffi:tabpages`) — the per-project/tabpage-per-view handle methods the macOS front-end drives (`current_tabpage` / `create_tabpage` / `active_tabpage` / `set_current_tabpage` / `cwd_for_tabpage` / `close_tabpage`) — **no mocks**, modeled on `panes.rs` / `close_pane.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate, same `read_frame()` / `windows()` live-grid polling). A single `#[test]` (`tabpage_lifecycle_over_the_bridge`, mutating the process-global `WOLF_STATE_DIR` for shutdown-flush hygiene): attach → `current_tabpage()` is a nonzero first-view bind T1 that `active_tabpage()` also reports → `create_tabpage(dirB)` yields a distinct T2 that becomes current with a FRESH window and a non-empty per-grid frame → `set_current_tabpage(t1)` rebinds w1 to a live grid. The **grid re-bind keystone (OD2)**: `:vsplit` on T1 (two windows), switch to T2 and back, and assert each window handle re-resolves via `grid_for_win` to a live, paintable grid. Then `cwd_for_tabpage(t2)` returns dirB while T2 is NON-current; `close_tabpage(t2)` keeps the core alive (T1 still readable) while T2's handle goes invalid; finally `shutdown()` and confirm the handle calls return neutral values (`active_tabpage()` / `current_tabpage()` == 0, `read_frame().cols()` == 0, `cwd_for_tabpage()` empty).
+
+```sh
+bazel test //crates/wolf-ffi:tabpages
+```
+
 ## `pane_status.rs`
 
 The real-nvim coverage of the per-pane statusbar bridge surface (Bazel target `//crates/wolf-ffi:pane_status`) — **no mocks**, modeled on `panes.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate via `nvim_bin_or_skip`). It seeds a fresh temp cwd with `alpha.md` / `beta.md`, calls `wolf_ffi_start` there, polls `read_frame()` until attached and `windows()` down to one editor grid, then `:e alpha.md` and polls `pane_status_for_grid(grid).filename()` until it reports `alpha.md` with a non-empty `display_path()`. After a `:vsplit` (polling `windows()` to two grids) and `:e beta.md` in the new window, it polls until the two window grids report DISTINCT filenames (`alpha.md` vs `beta.md`), proving the status is per-WINDOW rather than a single global value.

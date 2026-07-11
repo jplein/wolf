@@ -367,6 +367,29 @@ mod ffi {
         fn grid_for_win(&self, win: i64) -> u64;
         // The currently active Neovim window handle, or 0 if not yet known.
         fn active_win(&self) -> i64;
+        // Creates a new nvim TABPAGE (a new view of this PROJECT), optionally
+        // rooted at `cwd` via `:tcd` (empty string = no `:tcd`), and returns its
+        // stable HANDLE. Blocks briefly on the captive nvim. 0 when the core is
+        // gone (the caller then drops the would-be view).
+        fn create_tabpage(&self, cwd: String) -> i64;
+        // The current tabpage's stable HANDLE via a blocking RPC (the first-view
+        // bind). 0 when the core is gone.
+        fn current_tabpage(&self) -> i64;
+        // The CHEAP `Snapshot.current_tabpage` refocus gate (updated out-of-band
+        // via `wolf_tabpage`), read from the snapshot with no RPC. 0 when the core
+        // is gone / not yet known.
+        fn active_tabpage(&self) -> i64;
+        // A tabpage's tab-local `:tcd` cwd (canonicalized), authoritative for a
+        // NON-current view. Blocks briefly on the captive nvim. Empty when the
+        // core is gone or the handle is invalid (e.g. a closed tabpage).
+        fn cwd_for_tabpage(&self, tab: i64) -> String;
+        // Makes tabpage `tab` current (the front-end drives every tabpage switch
+        // when a view becomes key). A no-op when the core is gone.
+        fn set_current_tabpage(&self, tab: i64);
+        // Closes tabpage `tab` (a non-last view close; the shared nvim stays alive
+        // until its LAST view closes — the front-end shuts the core down then). A
+        // no-op when the core is gone.
+        fn close_tabpage(&self, tab: i64);
         // Focuses a specific Neovim window (click-to-focus / resolved FocusDir).
         fn focus_win(&self, win: i64);
         fn shutdown(&self);
@@ -411,8 +434,9 @@ mod ffi {
         // Opens `path` (an absolute filesystem path) in Neovim via
         // `InputEvent::Open`; the core's input pump records the MRU.
         fn open(&self, path: String);
-        // Changes Neovim's global working directory to `path` (an absolute
-        // filesystem path) via `InputEvent::Chdir` (`:cd`).
+        // Changes the current VIEW's working directory to `path` (an absolute
+        // filesystem path) via `InputEvent::Chdir` (`:tcd`, the tab-local cwd —
+        // each view/tabpage owns its own working directory).
         fn chdir(&self, path: String);
         // Closes the current split (the pane) via `InputEvent::ClosePane`
         // (`:close`).
@@ -1333,6 +1357,84 @@ impl WolfCoreHandle {
         core.read_snapshot().active_win.unwrap_or(0)
     }
 
+    /// Creates a new nvim TABPAGE (a new view of this PROJECT), optionally rooted
+    /// at `cwd` via `:tcd` (an empty string means no `:tcd` — the empty-state
+    /// view), and returns its stable HANDLE.
+    ///
+    /// Blocks briefly on the captive nvim (via [`WolfCore::create_tabpage`]).
+    /// Returns 0 when the core has been shut down, so the caller drops the
+    /// would-be view.
+    #[must_use]
+    pub fn create_tabpage(&self, cwd: String) -> i64 {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return 0;
+        };
+        let path = (!cwd.is_empty()).then(|| PathBuf::from(cwd));
+        core.create_tabpage(path.as_deref())
+    }
+
+    /// The current tabpage's stable HANDLE via a blocking RPC (the first-view
+    /// bind). 0 when the core has been shut down.
+    ///
+    /// Contrast [`active_tabpage`](Self::active_tabpage), the cheap snapshot gate.
+    #[must_use]
+    pub fn current_tabpage(&self) -> i64 {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return 0;
+        };
+        core.current_tabpage()
+    }
+
+    /// The CHEAP `Snapshot.current_tabpage` refocus gate (updated out-of-band via
+    /// the `wolf_tabpage` notification), read from the snapshot with NO RPC. 0
+    /// when the core has been shut down or the tabpage is not yet known.
+    ///
+    /// Mirrors [`active_win`](Self::active_win): a cheap `read_snapshot()` read
+    /// the front-end polls to decide whether its tabpage is current (the refocus
+    /// rebind barrier), vs the authoritative bind-time
+    /// [`current_tabpage`](Self::current_tabpage) RPC.
+    #[must_use]
+    pub fn active_tabpage(&self) -> i64 {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return 0;
+        };
+        core.read_snapshot().current_tabpage
+    }
+
+    /// A tabpage's tab-local `:tcd` cwd (canonicalized), AUTHORITATIVE for a
+    /// NON-current view's cwd. Blocks briefly on the captive nvim (via
+    /// [`WolfCore::cwd_for_tabpage`]). Empty when the core has been shut down or
+    /// the handle is invalid (e.g. a closed tabpage).
+    #[must_use]
+    pub fn cwd_for_tabpage(&self, tab: i64) -> String {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return String::new();
+        };
+        core.cwd_for_tabpage(tab)
+            .map_or_else(String::new, |p| p.to_string_lossy().into_owned())
+    }
+
+    /// Makes tabpage `tab` current (the front-end drives every tabpage switch when
+    /// a view becomes key). A no-op once the core has been shut down.
+    pub fn set_current_tabpage(&self, tab: i64) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.set_current_tabpage(tab);
+        }
+    }
+
+    /// Closes tabpage `tab` (a non-last view close; the shared nvim stays alive
+    /// until its LAST view closes — the front-end shuts the core down then
+    /// instead). A no-op once the core has been shut down.
+    pub fn close_tabpage(&self, tab: i64) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.close_tabpage(tab);
+        }
+    }
+
     /// Focuses a specific Neovim window (click-to-focus, or after resolving a
     /// focus-direction intent into a concrete neighbour). A no-op once the core
     /// has been shut down.
@@ -1538,8 +1640,9 @@ impl WolfCoreHandle {
         }
     }
 
-    /// Changes Neovim's global working directory to `path` (an absolute
-    /// filesystem path) via [`InputEvent::Chdir`] (`:cd`). A no-op once the core
+    /// Changes the current VIEW's working directory to `path` (an absolute
+    /// filesystem path) via [`InputEvent::Chdir`] (`:tcd`, the tab-local cwd —
+    /// each view/tabpage owns its own working directory). A no-op once the core
     /// has been shut down.
     pub fn chdir(&self, path: String) {
         if let Some(core) = self.core.borrow().as_ref() {

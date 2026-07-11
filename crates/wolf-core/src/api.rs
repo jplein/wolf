@@ -248,6 +248,7 @@ impl WolfCore {
             proc.setup_dir_tracking().await?;
             proc.setup_theme_tracking().await?;
             proc.setup_commands().await?;
+            proc.setup_tabs().await?;
             proc.setup_view_tracking().await?;
             Ok::<NvimProcess, NvimError>(proc)
         })?;
@@ -379,6 +380,87 @@ impl WolfCore {
                 Vec::new()
             }
         }
+    }
+
+    /// Creates a new nvim TABPAGE (optionally rooted at `cwd` via `:tcd`) and
+    /// returns its stable HANDLE (`0` on error).
+    ///
+    /// Blocks briefly on the captive nvim (`runtime.block_on`, the same pattern
+    /// [`list_buffers`](Self::list_buffers) uses) to run the `wolf_create_tabpage`
+    /// helper. The macOS front-end calls this to add a view (a new tabpage) to a
+    /// project's shared nvim. An RPC error is logged and returns `0` so the caller
+    /// can drop the would-be view.
+    #[must_use]
+    pub fn create_tabpage(&self, cwd: Option<&Path>) -> i64 {
+        let cwd = cwd.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+        match self.runtime.block_on(self.nvim.create_tabpage(&cwd)) {
+            Ok(handle) => handle,
+            Err(e) => {
+                tracing::warn!("create_tabpage failed: {e}");
+                0
+            }
+        }
+    }
+
+    /// Returns the CANONICALIZED tab-local working directory of tabpage `handle`,
+    /// or `None` on error / a closed handle.
+    ///
+    /// Blocks briefly on the captive nvim (`runtime.block_on`) to run the
+    /// `wolf_tab_cwd` helper (`getcwd(-1, <number>)`), then canonicalizes the
+    /// result (keeping the raw path if canonicalization fails — a live tabpage's
+    /// cwd is a real directory). This is AUTHORITATIVE for a NON-current view's
+    /// cwd, the gap that [`live_cwd`](Self::live_cwd) (current view only) cannot
+    /// cover. Contrast the two tiers: [`Snapshot::current_tabpage`] is a cheap
+    /// live gate via [`read_snapshot`](Self::read_snapshot), while this and
+    /// [`current_tabpage`](Self::current_tabpage) are authoritative bind-/read-time
+    /// RPCs (mirroring `live_cwd` cell vs [`resolve_search_root`](Self::resolve_search_root)
+    /// RPC).
+    #[must_use]
+    pub fn cwd_for_tabpage(&self, handle: i64) -> Option<PathBuf> {
+        match self.runtime.block_on(self.nvim.tab_cwd(handle)) {
+            Ok(p) => Some(std::fs::canonicalize(&p).unwrap_or(p)),
+            Err(e) => {
+                tracing::warn!("cwd_for_tabpage({handle}) failed: {e}");
+                None
+            }
+        }
+    }
+
+    /// Returns the current tabpage's stable HANDLE (`0` on error) — the
+    /// authoritative first-view bind.
+    ///
+    /// Blocks briefly on the captive nvim (`runtime.block_on`) via
+    /// `nvim_get_current_tabpage`. Contrast [`Snapshot::current_tabpage`] (the
+    /// cheap live gate, updated out-of-band via `wolf_tabpage`): this is the
+    /// authoritative value read at bind time.
+    #[must_use]
+    pub fn current_tabpage(&self) -> i64 {
+        match self.runtime.block_on(self.nvim.current_tabpage()) {
+            Ok(handle) => handle,
+            Err(e) => {
+                tracing::warn!("current_tabpage failed: {e}");
+                0
+            }
+        }
+    }
+
+    /// Makes tabpage `handle` current (fire-and-forget via
+    /// [`InputEvent::SetTabpage`]).
+    ///
+    /// Enqueued on the same ordered input channel as keystrokes so it never races
+    /// ahead of or behind pending input; applied via `nvim_set_current_tabpage`.
+    pub fn set_current_tabpage(&self, handle: i64) {
+        self.send_input(InputEvent::SetTabpage { handle });
+    }
+
+    /// Closes tabpage `handle` (fire-and-forget via [`InputEvent::CloseTabpage`]).
+    ///
+    /// Enqueued on the same ordered input channel as keystrokes so it never races
+    /// ahead of or behind pending input; applied via the init.lua
+    /// `wolf_close_tabpage` helper (`<n>tabclose` under `pcall`). Used for a
+    /// non-last view close; the front-end shuts the core down for the last view.
+    pub fn close_tabpage(&self, handle: i64) {
+        self.send_input(InputEvent::CloseTabpage { handle });
     }
 
     /// Switches window `win` to buffer `bufnr` (fire-and-forget via

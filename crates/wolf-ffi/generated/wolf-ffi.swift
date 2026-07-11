@@ -287,6 +287,30 @@ extension WolfCoreHandleRef {
         __swift_bridge__$WolfCoreHandle$active_win(ptr)
     }
 
+    public func create_tabpage<GenericIntoRustString: IntoRustString>(_ cwd: GenericIntoRustString) -> Int64 {
+        __swift_bridge__$WolfCoreHandle$create_tabpage(ptr, { let rustString = cwd.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
+    }
+
+    public func current_tabpage() -> Int64 {
+        __swift_bridge__$WolfCoreHandle$current_tabpage(ptr)
+    }
+
+    public func active_tabpage() -> Int64 {
+        __swift_bridge__$WolfCoreHandle$active_tabpage(ptr)
+    }
+
+    public func cwd_for_tabpage(_ tab: Int64) -> RustString {
+        RustString(ptr: __swift_bridge__$WolfCoreHandle$cwd_for_tabpage(ptr, tab))
+    }
+
+    public func set_current_tabpage(_ tab: Int64) {
+        __swift_bridge__$WolfCoreHandle$set_current_tabpage(ptr, tab)
+    }
+
+    public func close_tabpage(_ tab: Int64) {
+        __swift_bridge__$WolfCoreHandle$close_tabpage(ptr, tab)
+    }
+
     public func focus_win(_ win: Int64) {
         __swift_bridge__$WolfCoreHandle$focus_win(ptr, win)
     }

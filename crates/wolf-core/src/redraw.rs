@@ -79,6 +79,14 @@ const BUFFERS_EVENT: &str = "wolf_buffers";
 /// Routed separately from `redraw` in [`RedrawHandler::handle_notify`].
 const ACTIVE_WIN_EVENT: &str = "wolf_active_win";
 
+/// Name of the out-of-band notification carrying the current TABPAGE handle,
+/// emitted by the `wolf_setup_tabs` `TabEnter`/`TabNewEntered` autocmds in
+/// `runtime/nvim/init.lua` (and once immediately at setup). Routed separately
+/// from `redraw` in [`RedrawHandler::handle_notify`] into
+/// [`Snapshot::current_tabpage`]. The front-end uses it as the cheap refocus
+/// gate (mirrors [`ACTIVE_WIN_EVENT`]).
+const TABPAGE_EVENT: &str = "wolf_tabpage";
+
 /// Name of the out-of-band notification carrying a layout intent payload (a
 /// split or a focus-direction move), emitted by the chord/Ex-command overrides
 /// in `runtime/nvim/init.lua`. Routed separately from `redraw`.
@@ -180,6 +188,14 @@ impl Handler for RedrawHandler {
                 // wake-after-unlock invariant). This is NOT a redraw frame, so
                 // `seq` is left unchanged.
                 self.apply_active_win(args).await;
+                (self.wake)();
+            }
+            TABPAGE_EVENT => {
+                // `apply_tabpage` acquires and DROPS the write lock before
+                // returning; wake fires after the lock is released (same
+                // wake-after-unlock invariant). This is NOT a redraw frame, so
+                // `seq` is left unchanged.
+                self.apply_tabpage(args).await;
                 (self.wake)();
             }
             LAYOUT_EVENT => {
@@ -354,6 +370,28 @@ impl RedrawHandler {
         // Lock drops here as `snap` goes out of scope at function return.
     }
 
+    /// Applies a `wolf_tabpage` notification: stores the reported current
+    /// TABPAGE handle in [`Snapshot::current_tabpage`].
+    ///
+    /// The first argument is `nvim_get_current_tabpage()` from the `TabEnter` /
+    /// `TabNewEntered` autocmd (plus one initial emit at setup). It arrives as a
+    /// plain integer or, defensively, as a msgpack-`Ext`-wrapped integer; either
+    /// decodes via [`ext_handle`]. A handle we cannot decode leaves
+    /// `current_tabpage` unchanged.
+    ///
+    /// The write lock is acquired via [`SharedSnapshot::write_async`], is NOT
+    /// held across any `.await`, and is dropped before returning so the caller's
+    /// wake fires after the lock is released. This is NOT a redraw frame, so
+    /// `seq` is left unchanged.
+    async fn apply_tabpage(&self, args: Vec<Value>) {
+        let Some(tabpage) = args.first().and_then(ext_handle) else {
+            return;
+        };
+        let mut snap = self.snapshot.write_async().await;
+        snap.current_tabpage = tabpage;
+        // Lock drops here as `snap` goes out of scope at function return.
+    }
+
     /// Applies a `wolf_theme` notification: stores the reported `WolfCursor` /
     /// `WolfTitlebar` colors in [`Snapshot::theme`].
     ///
@@ -489,7 +527,7 @@ fn as_i64(v: &Value) -> Option<i64> {
 /// plain `Value::Integer` or as a `Value::Ext` whose payload is a msgpack-encoded
 /// integer. Returns the handle as an `i64` (the same form used for
 /// `nvim_set_current_win`/`nvim_win_close` later), or `None` if it is neither.
-fn ext_handle(v: &Value) -> Option<i64> {
+pub(crate) fn ext_handle(v: &Value) -> Option<i64> {
     match v {
         Value::Integer(_) => v.as_i64(),
         Value::Ext(_type, data) => {
@@ -755,12 +793,21 @@ fn win_pos(snap: &mut Snapshot, params: &[Value]) {
 
 fn win_hide(snap: &mut Snapshot, params: &[Value]) {
     // [grid]
+    //
+    // A window is hidden when it stops being displayed — most importantly, when
+    // its TABPAGE is no longer current (Neovim emits `win_hide` for every window
+    // of the tabpage being left on a tabpage switch, and re-emits `win_pos` for
+    // them on the way back; it does NOT `win_close`/`grid_destroy` them). Remove
+    // the WINDOW entry so `Snapshot.windows` (and therefore
+    // [`Snapshot::grid_for_win`]) reflects ONLY the current tabpage's windows —
+    // the project/tabpage-per-view contract the front-end's refocus rebind relies
+    // on. The GRID is intentionally KEPT (Neovim reuses the same grid id when the
+    // window is shown again, and may re-`win_pos` without re-`grid_resize`ing), so
+    // a rebound window always resolves to a live, paintable grid.
     let Some(grid) = params.first().and_then(as_u64) else {
         return;
     };
-    if let Some(win) = snap.windows.get_mut(&grid) {
-        win.hidden = true;
-    }
+    snap.windows.remove(&grid);
 }
 
 fn win_close(snap: &mut Snapshot, params: &[Value]) {

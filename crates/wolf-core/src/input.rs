@@ -190,10 +190,39 @@ pub enum InputEvent {
         /// Destination path.
         path: PathBuf,
     },
-    /// Change Neovim's global working directory (delegated to `:cd`).
+    /// Change the current view's working directory (delegated to `:tcd`, the
+    /// tab-local cwd).
+    ///
+    /// Under the project/tabpage-per-view model each view is bound to one nvim
+    /// TABPAGE and owns its own cwd, realized as that tabpage's `:tcd`. A global
+    /// `:cd` would move EVERY view of the shared nvim; `:tcd` scopes the change
+    /// to the current tabpage (the focused view). `:tcd` still fires
+    /// `DirChanged`, so the `wolf_cwd` tracking + `getcwd()`/MRU/picker rooting
+    /// remain correct for the focused view.
     Chdir {
         /// The directory to change to.
         path: PathBuf,
+    },
+    /// Make a specific nvim TABPAGE current (delegated to
+    /// `nvim_set_current_tabpage`).
+    ///
+    /// The macOS front-end drives every tabpage switch when a view becomes key,
+    /// so nvim renders that view's tabpage. Enqueued on the ordered input channel
+    /// so it never races ahead of or behind pending input.
+    SetTabpage {
+        /// The target nvim tabpage handle.
+        handle: i64,
+    },
+    /// Close a specific nvim TABPAGE (delegated to the init.lua
+    /// `wolf_close_tabpage` helper, which resolves the stable handle to its
+    /// current tabpage NUMBER and runs `<n>tabclose`).
+    ///
+    /// Used when a non-last view closes; the shared nvim stays alive until its
+    /// final view closes (the front-end shuts the core down then instead). The
+    /// helper `pcall`s the close so a last-tabpage `E784` is swallowed.
+    CloseTabpage {
+        /// The nvim tabpage handle to close.
+        handle: i64,
     },
     /// Close the current split, i.e. the pane (delegated to `:close`).
     ClosePane,
@@ -347,12 +376,45 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
         InputEvent::SaveAs { path } => {
             command(nvim, &format!("saveas {}", fnameescape(path))).await
         }
-        InputEvent::Chdir { path } => command(nvim, &format!("cd {}", fnameescape(path))).await,
+        InputEvent::Chdir { path } => command(nvim, &format!("tcd {}", fnameescape(path))).await,
+        InputEvent::SetTabpage { handle } => set_current_tabpage(nvim, *handle).await,
+        InputEvent::CloseTabpage { handle } => close_tabpage(nvim, *handle).await,
         InputEvent::ClosePane => command(nvim, "close").await,
         InputEvent::NewBuffer => command(nvim, "enew").await,
         InputEvent::Paste { text } => nvim_paste(nvim, text).await,
         InputEvent::SwitchBuffer { win, bufnr } => switch_buffer(nvim, *win, *bufnr).await,
     }
+}
+
+/// Makes tabpage `handle` current via `nvim_set_current_tabpage`.
+///
+/// nvim-rs accepts the plain `i64` tabpage handle over generic RPC (same form
+/// the redraw stream decodes tabpage handles into; see
+/// [`crate::redraw::apply_tabpage`]).
+async fn set_current_tabpage(nvim: &Nvim, handle: i64) -> Result<(), Box<CallError>> {
+    let _ = nvim
+        .call("nvim_set_current_tabpage", vec![Value::from(handle)])
+        .await?;
+    Ok(())
+}
+
+/// Closes tabpage `handle` via the init.lua `wolf_close_tabpage` helper.
+///
+/// The helper resolves the STABLE handle to its (renumbering) tabpage NUMBER and
+/// runs `<n>tabclose` inside a `pcall`, so a last-tabpage `E784` is swallowed
+/// (the front-end never closes the last view — the Project shuts the core down
+/// instead).
+async fn close_tabpage(nvim: &Nvim, handle: i64) -> Result<(), Box<CallError>> {
+    let _ = nvim
+        .call(
+            "nvim_exec_lua",
+            vec![
+                Value::from("wolf_close_tabpage(...)"),
+                Value::Array(vec![Value::from(handle)]),
+            ],
+        )
+        .await?;
+    Ok(())
 }
 
 /// Escapes a path for use as an Ex-command argument, mirroring Vim's

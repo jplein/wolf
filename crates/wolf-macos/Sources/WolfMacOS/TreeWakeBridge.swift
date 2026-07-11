@@ -26,7 +26,7 @@ enum TreeWakeBridge {
     static func install() {
         wolf_ffi_set_tree_wake({ token in
             DispatchQueue.main.async {
-                WindowRegistry.shared.controller(for: token)?.tree?.scheduleRefresh()
+                WindowRegistry.shared.project(for: token)?.onTreeWake()
             }
         })
     }

@@ -22,7 +22,7 @@ enum WakeBridge {
     static func install() {
         wolf_ffi_set_wake({ token in
             DispatchQueue.main.async {
-                WindowRegistry.shared.controller(for: token)?.onRenderWake()
+                WindowRegistry.shared.project(for: token)?.onWake()
             }
         })
     }

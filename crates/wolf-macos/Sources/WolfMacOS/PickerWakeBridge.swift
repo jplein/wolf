@@ -25,7 +25,7 @@ enum PickerWakeBridge {
     static func install() {
         wolf_ffi_set_filesearch_wake({ token in
             DispatchQueue.main.async {
-                WindowRegistry.shared.controller(for: token)?.picker?.scheduleRefresh()
+                WindowRegistry.shared.project(for: token)?.onPickerWake()
             }
         })
     }
