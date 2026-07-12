@@ -312,6 +312,47 @@ fn container_collapses_interior_line_markers_before_its_opening_tag() {
 }
 
 #[test]
+fn latex_math_renders_mathml_with_inlined_fonts() {
+    // The no-Neovim primary automated proof for tasks 1 & 2: a doc with BOTH inline
+    // `$...$` and display `$$...$$` LaTeX math must render inline MathML (block mode
+    // for the display math), and inline BOTH the Inter and the Latin Modern Math
+    // fonts as self-contained base64 data URIs. Assertions key off the STABLE
+    // contracts (`<math`, `display="block"`, the family names, `data:font/woff2`),
+    // NOT exact MathML byte sequences.
+    let source = "Inline $e=mc^2$ here.\n\n$$\\int_0^1 x\\,dx$$\n";
+    let html = render_html(source, PreviewTheme::Default);
+
+    assert!(
+        html.contains("<math"),
+        "the LaTeX math must render a <math> element: {html}"
+    );
+    assert!(
+        html.contains("</math>"),
+        "the LaTeX math must close its <math> element: {html}"
+    );
+    assert!(
+        html.contains("display=\"block\""),
+        "the display `$$...$$` math must render `display=\"block\"`: {html}"
+    );
+    assert!(
+        html.contains("@font-face"),
+        "the document must inline an @font-face rule: {html}"
+    );
+    assert!(
+        html.contains("Inter"),
+        "the document must inline the `Inter` body font: {html}"
+    );
+    assert!(
+        html.contains("data:font/woff2"),
+        "fonts must be inlined as base64 data:font/woff2 URIs: {html}"
+    );
+    assert!(
+        html.contains("Latin Modern Math"),
+        "the document must bundle + pin the `Latin Modern Math` font: {html}"
+    );
+}
+
+#[test]
 fn theme_css_default_is_non_empty() {
     assert!(
         !theme_css(PreviewTheme::Default).is_empty(),

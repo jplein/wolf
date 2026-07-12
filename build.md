@@ -86,6 +86,8 @@ Commit the updated `Cargo.Bazel.lock` (and `MODULE.bazel.lock`). A clean checkou
 
 The `wolf-ffi` crate adds the `swift-bridge` / `swift-bridge-build` (0.1.59) Cargo dependencies, so the same `CARGO_BAZEL_REPIN` workflow applies after touching its `Cargo.toml`; repin against either target (e.g. `CARGO_BAZEL_REPIN=1 bazel build //crates/wolf-ffi:wolf_ffi`) and commit the lockfiles.
 
+The `wolf-core` `markdown` module's LaTeX-math render adds `pulldown-latex` (`0.7`) — added via the same `CARGO_BAZEL_REPIN` workflow above (regen `Cargo.lock`, repin against `//crates/wolf-core:wolf_core`, commit `Cargo.Bazel.lock` / `MODULE.bazel.lock`). It is pure Rust and pulls only `bumpalo` into core's tree, so the GUI-toolkit denylist re-check (below / [`crates/wolf-core/README.md`](crates/wolf-core/README.md)) still passes. The same module also bundles two woff2 fonts as single-line base64 sidecars that it `include_str!`s at compile time, so `//crates/wolf-core:wolf_core`'s `compile_data` glob is extended to `glob(["src/markdown/**/*.css", "src/markdown/assets/*.b64"])` — the `assets/*.b64` sidecars must be visible to rustc (the raw woff2 / license texts are provenance-only and are not compiled in). See [`crates/wolf-core/src/markdown/README.md`](crates/wolf-core/src/markdown/README.md) and [`preview-math-and-fonts-decisions.md`](preview-math-and-fonts-decisions.md).
+
 ## Building the macOS app (Bazel)
 
 The macOS app builds entirely under Bazel — **Bazel is authoritative**; the generated Xcode project (below) is for debugging only. This requires macOS Tahoe (26) or newer and Xcode 26+. The resolved rule pins are `rules_swift` 3.6.1, `rules_apple` 4.5.3, and `rules_xcodeproj` 4.1.0 (with `apple_support` held at 2.6.1 so the host-Xcode toolchain still resolves).

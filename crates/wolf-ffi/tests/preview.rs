@@ -683,6 +683,90 @@ fn preview_reuse_falls_back_to_active_when_no_other_preview() {
 }
 
 #[test]
+fn render_preview_renders_latex_math_and_inlines_fonts() {
+    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    let Some(nvim_bin) = common::nvim_bin_or_skip() else {
+        return;
+    };
+    std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
+
+    let init_lua = common::init_lua_path();
+
+    // A fresh temp cwd holding a markdown file with BOTH inline `$...$` and display
+    // `$$...$$` LaTeX math. Kept alive until after `shutdown()`.
+    let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
+    std::fs::write(
+        tmp.path().join("math.md"),
+        "# Math\n\n$e=mc^2$\n\n$$\\int_0^1 x\\,dx$$\n",
+    )
+    .expect("failed to write math.md");
+
+    let handle = wolf_ffi_start(
+        init_lua.to_string_lossy().into_owned(),
+        tmp.path().to_string_lossy().into_owned(),
+        common::DEFAULT_COLS,
+        common::DEFAULT_ROWS,
+    )
+    .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
+
+    // --- 1. Attach; open math.md as the source and split-right preview it -----
+    wait_for_attach(&handle);
+    send_ex_command(&handle, ":e math.md");
+    wait_for_markdown_active(&handle, true, "after :e math.md");
+
+    let preview_bufnr = handle.open_preview("split_right".to_string());
+    assert!(
+        preview_bufnr > 0,
+        "open_preview(\"split_right\") on a markdown buffer must return a valid \
+         preview bufnr (> 0), got {preview_bufnr}"
+    );
+    wait_for_window_count(&handle, TWO_PANES, "after split-right preview");
+
+    // --- 2. previews() surfaces one row for math.md --------------------------
+    let previews = wait_for_previews(&handle, "one math.md preview", |p| {
+        p.iter().any(|row| row.source_name() == "math.md")
+    });
+    let math_bufnr = previews
+        .iter()
+        .find(|row| row.source_name() == "math.md")
+        .expect("a preview row for math.md must exist")
+        .source_bufnr();
+    assert!(
+        math_bufnr > 0,
+        "the preview row must carry math.md's real source bufnr (> 0), got {math_bufnr}"
+    );
+
+    // --- 3. render_preview() carries the MathML + inlined fonts through nvim ---
+    // Proves the LaTeX->MathML + inlined Inter/Latin Modern Math fonts survive the
+    // real nvim -> render_preview FFI round-trip, not just the pure unit tests.
+    // Assertions key off the STABLE contracts, NOT exact MathML byte sequences.
+    let html = handle.render_preview(math_bufnr);
+    assert!(
+        html.contains("<math"),
+        "render_preview must render the LaTeX math as a <math> element: {html}"
+    );
+    assert!(
+        html.contains("display=\"block\""),
+        "render_preview must render the display `$$...$$` math as `display=\"block\"`: {html}"
+    );
+    assert!(
+        html.contains("@font-face"),
+        "render_preview must inline an @font-face rule: {html}"
+    );
+    assert!(
+        html.contains("Inter"),
+        "render_preview must inline the `Inter` body font: {html}"
+    );
+    assert!(
+        html.contains("Latin Modern Math"),
+        "render_preview must bundle + pin the `Latin Modern Math` font: {html}"
+    );
+
+    handle.shutdown();
+    drop(tmp);
+}
+
+#[test]
 fn preview_file_repoints_pane_to_linked_file() {
     // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {

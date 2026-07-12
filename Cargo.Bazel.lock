@@ -1,5 +1,5 @@
 {
-  "checksum": "758e6858cfe8a3b4e9df7b68127aed044b34daf1a29a9d9dbc46a70372856e45",
+  "checksum": "4e8168f446e399a062c74a88d3218379b364921fb331f77f85e9fca20ae20c4a",
   "crates": {
     "ahash 0.8.12": {
       "name": "ahash",
@@ -484,6 +484,52 @@
         },
         "edition": "2021",
         "version": "1.12.3"
+      },
+      "license": "MIT OR Apache-2.0",
+      "license_ids": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "license_file": "LICENSE-APACHE"
+    },
+    "bumpalo 3.20.3": {
+      "name": "bumpalo",
+      "version": "3.20.3",
+      "package_url": "https://github.com/fitzgen/bumpalo",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/bumpalo/3.20.3/download",
+          "sha256": "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "bumpalo",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "bumpalo",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "crate_features": {
+          "common": [
+            "collections",
+            "default"
+          ],
+          "selects": {}
+        },
+        "edition": "2021",
+        "version": "3.20.3"
       },
       "license": "MIT OR Apache-2.0",
       "license_ids": [
@@ -6928,6 +6974,53 @@
       ],
       "license_file": "LICENSE"
     },
+    "pulldown-latex 0.7.1": {
+      "name": "pulldown-latex",
+      "version": "0.7.1",
+      "package_url": "https://github.com/Carlosted/pulldown-latex",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/pulldown-latex/0.7.1/download",
+          "sha256": "3b8bc0583825170e3f560701d966dc2f0e3a16946da371e37d30d3ad7207fb7e"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "pulldown_latex",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "pulldown_latex",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "deps": {
+          "common": [
+            {
+              "id": "bumpalo 3.20.3",
+              "target": "bumpalo"
+            }
+          ],
+          "selects": {}
+        },
+        "edition": "2021",
+        "version": "0.7.1"
+      },
+      "license": "MIT",
+      "license_ids": [
+        "MIT"
+      ],
+      "license_file": "LICENSE"
+    },
     "quote 1.0.45": {
       "name": "quote",
       "version": "1.0.45",
@@ -12425,6 +12518,10 @@
               "target": "pulldown_cmark"
             },
             {
+              "id": "pulldown-latex 0.7.1",
+              "target": "pulldown_latex"
+            },
+            {
               "id": "rmpv 1.3.1",
               "target": "rmpv"
             },
@@ -12910,6 +13007,7 @@
     "pangocairo 0.22.0",
     "parking_lot 0.12.5",
     "pulldown-cmark 0.12.2",
+    "pulldown-latex 0.7.1",
     "rmpv 1.3.1",
     "rusqlite 0.31.0",
     "serde 1.0.228",

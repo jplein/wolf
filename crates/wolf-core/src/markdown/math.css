@@ -1,0 +1,163 @@
+/* MathML styling for pulldown-latex output.
+ *
+ * Adapted from pulldown-latex's styles.css (MIT, carloskiki/pulldown-latex). This
+ * file is include_str!'d into the rendered HTML document by crate::markdown (AFTER
+ * base.css, alongside the inlined @font-face rules). It is NOT a Markdown doc and
+ * is not prettier-formatted.
+ *
+ * Three changes were made vs. the upstream styles.css:
+ *   1. All @font-face rules are dropped. The upstream lmroman text faces and the
+ *      Latin Modern Math face used relative url('font/...') paths that do not
+ *      resolve in the inlined preview document; crate::markdown supplies the math
+ *      font itself via an inlined base64 data: URI @font-face (MATH_FONT_FACE),
+ *      and the upstream mtext font rule is dropped with the faces it referenced.
+ *   2. The MathML @namespace m prefix is removed and every m|... selector is
+ *      rewritten to its plain element/class form (WebKit / WebKitGTK render the
+ *      un-namespaced math DOM pulldown-latex emits).
+ *   3. A final pin (math, math star -> "Latin Modern Math") is appended so all
+ *      math content resolves to the bundled Latin Modern Math font, never a
+ *      host-installed one.
+ *
+ * NOTE: this file must never contain the literal open-tag sequence for a math
+ * element, so downstream tests that scan the document for the first such tag find
+ * the rendered body, not this comment.
+ */
+
+math {
+  font-family: "Latin Modern Math";
+}
+
+mtd {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+mo.small {
+  font-size: 70%;
+}
+
+merror > mtext {
+  font-family: monospace;
+  white-space-collapse: preserve;
+  display: block;
+  text-align: left;
+}
+
+mtable {
+  border-color: currentColor;
+  border-spacing: 0;
+  border-collapse: collapse;
+}
+
+mtr:last-child > mtd:empty:only-child {
+  display: none;
+}
+
+mtr:last-child:has(> mtd:empty)::after {
+  display: none;
+}
+
+mtable.menv-alignlike > mtr > mtd:nth-child(odd),
+mtable.menv-cells-right > mtr > mtd,
+mtable.menv-multline > mtr > mtd:last-child,
+mtd.cell-right {
+  text-align: right;
+  text-align: -webkit-right;
+  text-align: -moz-right;
+}
+
+mtable.menv-alignlike > mtr > mtd:nth-child(even),
+mtable.menv-cells-left > mtr > mtd,
+mtable.menv-multline > mtr > mtd:first-child,
+mtd.cell-left {
+  text-align: left;
+}
+
+mtable.menv-multline > mtr > mtd {
+  width: 100%;
+}
+
+mtable.menv-align > mtr > mtd:nth-child(2n + 3) {
+  padding-left: 1em;
+}
+
+mtable.menv-cases > mtr > mtd:first-child {
+  padding-right: 1em;
+}
+
+mtable.menv-arraylike > mtr > mtd {
+  padding-left: 0.4em;
+  padding-right: 0.4em;
+}
+
+mtable.menv-matrix > mtr > mtd:first-child {
+  padding-left: 0;
+}
+
+mtable.menv-matrix > mtr > mtd:last-child {
+  padding-right: 0;
+}
+
+mtable.menv-with-eqn > mtr:not(:has(> mtd.menv-nonumber)) {
+  counter-increment: eq-number;
+}
+
+mtable.menv-with-eqn > mtr:not(:has(> mtd.menv-nonumber))::after {
+  position: absolute;
+  right: 0;
+  padding: 0 0.4em;
+  content: "(" counter(eq-number) ")";
+}
+
+mo.mop-negated {
+  background: linear-gradient(
+    to top left,
+    rgba(0, 0, 0, 0) 0%,
+    rgba(0, 0, 0, 0) calc(50% - 0.8px),
+    rgba(0, 0, 0, 1) 50%,
+    rgba(0, 0, 0, 0) calc(50% + 0.8px),
+    rgba(0, 0, 0, 0) 100%
+  );
+}
+
+mtd.menv-left-solid {
+  border-left: 0.06em solid;
+}
+
+mtd.menv-right-solid {
+  border-right: 0.06em solid;
+}
+
+mtd.menv-left-dashed {
+  border-left: 0.06em dashed;
+}
+
+mtd.menv-right-dashed {
+  border-right: 0.06em dashed;
+}
+
+mtr.menv-hline {
+  border-top: 0.06em solid;
+}
+
+mtr.menv-hdashline {
+  border-top: 0.06em dashed;
+}
+
+mtr.menv-hline > mtd.menv-nonumber:only-child,
+mtr.menv-hdashline:empty > mtd.menv-nonumber:only-child {
+  padding-top: 0.1em;
+  padding-bottom: 0;
+}
+
+mtd.menv-border-only:empty {
+  width: 0.1em;
+  padding: 0;
+  margin: 0;
+}
+
+/* Pin all MathML to the bundled Latin Modern Math font (never a host font). */
+math,
+math * {
+  font-family: "Latin Modern Math", math;
+}

@@ -29,9 +29,10 @@ rust_test(
 rust_library(
     name = "wolf_core",
     srcs = glob(["src/**/*.rs"]),
-    # The markdown module include_str!'s its base + theme CSS (src/markdown/*.css),
-    # so those files must be available to rustc at compile time.
-    compile_data = glob(["src/markdown/**/*.css"]),
+    # The markdown module include_str!'s its base + theme CSS (src/markdown/*.css)
+    # and the single-line base64 font sidecars (src/markdown/assets/*.b64), so those
+    # files must be available to rustc at compile time.
+    compile_data = glob(["src/markdown/**/*.css", "src/markdown/assets/*.b64"]),
     crate_name = "wolf_core",
     edition = "2021",
     proc_macro_deps = all_crate_deps(proc_macro = True),

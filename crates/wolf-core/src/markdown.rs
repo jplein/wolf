@@ -61,6 +61,11 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use pulldown_cmark::{html, Event, Options, Parser, Tag, TagEnd};
+use pulldown_latex::{
+    config::{DisplayMode, RenderConfig},
+    mathml::push_mathml,
+    Parser as LatexParser, Storage,
+};
 
 /// The column stride for the per-100-column markers: for any hard line whose
 /// character length is `>= MARKER_COLUMN_STRIDE`, an extra marker is emitted at
@@ -73,6 +78,37 @@ pub const MARKER_COLUMN_STRIDE: usize = 100;
 /// marker rule plus baseline layout). Embedded BEFORE the selected theme's CSS in
 /// the rendered document. See `markdown/base.css`.
 const BASE_CSS: &str = include_str!("markdown/base.css");
+
+/// The Inter variable-weight `@font-face`, inlined as a base64 `data:font/woff2`
+/// URI so the preview body font never depends on a host-installed font. ONE face
+/// spans the full `100 900` weight range (the variable roman woff2 from
+/// rsms/inter, SIL OFL 1.1). The single-line base64 lives in the committed
+/// `assets/inter-variable.woff2.b64` sidecar (see `markdown/assets`); `concat!`
+/// wraps it in the rule at compile time with zero runtime encoding.
+const INTER_FONT_FACE: &str = concat!(
+    "@font-face{font-family:'Inter';font-weight:100 900;font-style:normal;\
+     font-display:swap;src:url('data:font/woff2;base64,",
+    include_str!("markdown/assets/inter-variable.woff2.b64"),
+    "') format('woff2')}"
+);
+
+/// The Latin Modern Math `@font-face`, inlined as a base64 `data:font/woff2` URI so
+/// the MathML output is pinned to a bundled math font (carrying an OpenType `MATH`
+/// table) rather than a host-installed one. The woff2 (GUST GFL) ships with
+/// pulldown-latex and matches its `styles.css` family name; the single-line base64
+/// lives in the committed `assets/latinmodern-math.woff2.b64` sidecar. `MATH_CSS`
+/// pins all `<math>` content to this family.
+const MATH_FONT_FACE: &str = concat!(
+    "@font-face{font-family:'Latin Modern Math';src:url('data:font/woff2;base64,",
+    include_str!("markdown/assets/latinmodern-math.woff2.b64"),
+    "') format('woff2')}"
+);
+
+/// The MathML styling for pulldown-latex's `<math>` output, adapted from its
+/// `styles.css` (@font-face rules dropped, `m|…` namespaced selectors rewritten to
+/// plain elements, and a final `Latin Modern Math` font pin appended). Embedded
+/// AFTER [`BASE_CSS`] in the rendered document. See `markdown/math.css`.
+const MATH_CSS: &str = include_str!("markdown/math.css");
 
 /// The available preview HTML/CSS themes.
 ///
@@ -116,17 +152,25 @@ pub fn render_html(source: &str, theme: PreviewTheme) -> String {
     // O5: honor explicit `{#custom-id}` heading attributes; the auto-slug pipeline
     // only assigns an id when the heading declares none.
     options.insert(Options::ENABLE_HEADING_ATTRIBUTES);
+    // Task 1: yield `Event::InlineMath` / `Event::DisplayMath` for `$…$` / `$$…$$`
+    // LaTeX so `MathRenderer` can convert them to inline MathML.
+    options.insert(Options::ENABLE_MATH);
 
     let slugs = heading_slugs(source, options);
     let offset_iter = Parser::new_ext(source, options).into_offset_iter();
     let with_ids = HeadingIdAssigner::new(offset_iter, slugs);
-    let injector = MarkerInjector::new(with_ids, markers);
+    // MathRenderer sits BEFORE MarkerInjector: it replaces each math event with an
+    // `InlineHtml` MathML span, which `is_block_start` never matches, so no marker
+    // is ever injected inside a `<math>` element.
+    let with_math = MathRenderer::new(with_ids);
+    let injector = MarkerInjector::new(with_math, markers);
 
     let mut body = String::new();
     html::push_html(&mut body, injector);
 
     format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><style>{BASE_CSS}{theme}</style>\
+        "<!doctype html><html><head><meta charset=\"utf-8\">\
+         <style>{INTER_FONT_FACE}{MATH_FONT_FACE}{BASE_CSS}{MATH_CSS}{theme}</style>\
          </head><body class=\"wolf-markdown\">{body}</body></html>",
         theme = theme_css(theme),
     )
@@ -353,6 +397,78 @@ where
             self.next_heading += 1;
         }
         Some((event, range))
+    }
+}
+
+/// Renders one LaTeX fragment to a MathML string via [`pulldown_latex`], in the
+/// given [`DisplayMode`] (`Block` yields `<math display="block">`, `Inline` yields
+/// `<math display="inline">`). Returns `Some(mathml)` on success, or `None` if the
+/// renderer reports an I/O error (unreachable for the in-memory `String` writer,
+/// but handled explicitly — never unwrapped — so a caller can degrade gracefully).
+///
+/// Note: malformed LaTeX does NOT surface here as `None`; pulldown-latex renders it
+/// into an inline `<merror>` element and still returns `Ok`, so it degrades to a
+/// visible error inside the MathML rather than a panic.
+fn render_math(latex: &str, mode: DisplayMode) -> Option<String> {
+    let storage = Storage::new();
+    let parser = LatexParser::new(latex, &storage);
+    let config = RenderConfig {
+        display_mode: mode,
+        ..RenderConfig::default()
+    };
+    let mut out = String::new();
+    match push_mathml(&mut out, parser, config) {
+        Ok(()) => Some(out),
+        Err(_) => None,
+    }
+}
+
+/// An iterator adapter over [`pulldown_cmark::OffsetIter`] that converts each
+/// `$…$` inline-math and `$$…$$` display-math event (yielded once
+/// [`Options::ENABLE_MATH`] is on) into an inline MathML span, preserving the
+/// `(Event, Range)` shape [`MarkerInjector`] downstream expects.
+///
+/// Both inline and display math become an [`Event::InlineHtml`] carrying the
+/// rendered `<math>` markup: math events are emitted at INLINE positions, so a
+/// block-level replacement would corrupt paragraph nesting, and `InlineHtml`
+/// passes through the HTML writer verbatim (never double-escaped). Display math
+/// uses [`DisplayMode::Block`] (so its `<math>` carries `display="block"`), inline
+/// math [`DisplayMode::Inline`]. If [`render_math`] reports failure the fragment
+/// degrades to a plain [`Event::Text`] of its original `$…$` source — never a
+/// panic. All non-math events pass through with their source range intact.
+struct MathRenderer<I> {
+    inner: I,
+}
+
+impl<'a, I> MathRenderer<I>
+where
+    I: Iterator<Item = (Event<'a>, Range<usize>)>,
+{
+    fn new(inner: I) -> Self {
+        Self { inner }
+    }
+}
+
+impl<'a, I> Iterator for MathRenderer<I>
+where
+    I: Iterator<Item = (Event<'a>, Range<usize>)>,
+{
+    type Item = (Event<'a>, Range<usize>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (event, range) = self.inner.next()?;
+        let rebuilt = match event {
+            Event::InlineMath(latex) => match render_math(&latex, DisplayMode::Inline) {
+                Some(mathml) => Event::InlineHtml(mathml.into()),
+                None => Event::Text(format!("${latex}$").into()),
+            },
+            Event::DisplayMath(latex) => match render_math(&latex, DisplayMode::Block) {
+                Some(mathml) => Event::InlineHtml(mathml.into()),
+                None => Event::Text(format!("$${latex}$$").into()),
+            },
+            other => other,
+        };
+        Some((rebuilt, range))
     }
 }
 
@@ -648,6 +764,133 @@ mod tests {
         assert!(
             html.contains(r#"id="wl-1-0""#),
             "the source marker must still be present alongside the heading id: {html}"
+        );
+    }
+
+    /// Inline `$...$` LaTeX math is rendered to inline MathML (`<math`…`</math>`),
+    /// and the raw `$e=mc^2$` source literal no longer appears in the output.
+    /// Assertions key off the STABLE MathML contract (`<math`/`</math>`), not the
+    /// exact markup pulldown-latex emits.
+    #[test]
+    fn inline_math_renders_mathml() {
+        let html = render_html("$e=mc^2$\n", PreviewTheme::Default);
+        assert!(
+            html.contains("<math"),
+            "inline math must render a <math> element: {html}"
+        );
+        assert!(
+            html.contains("</math>"),
+            "inline math must close its <math> element: {html}"
+        );
+        assert!(
+            !html.contains("$e=mc^2$"),
+            "the raw `$e=mc^2$` LaTeX literal must not survive into the output: {html}"
+        );
+    }
+
+    /// Display `$$...$$` math renders a BLOCK-mode `<math display="block">` element.
+    #[test]
+    fn display_math_is_block() {
+        let html = render_html("$$\\int_0^1 x\\,dx$$\n", PreviewTheme::Default);
+        assert!(
+            html.contains("display=\"block\""),
+            "display math must render `display=\"block\"` on its <math> element: {html}"
+        );
+    }
+
+    /// The generated MathML passes through as RAW HTML — a literal `<math`, not the
+    /// escaped `&lt;math` — proving the math events are emitted verbatim and not
+    /// double-escaped by the HTML writer.
+    #[test]
+    fn math_not_double_escaped() {
+        let html = render_html("$e=mc^2$\n", PreviewTheme::Default);
+        assert!(
+            html.contains("<math"),
+            "the MathML must appear as raw HTML (`<math`), not escaped: {html}"
+        );
+        assert!(
+            !html.contains("&lt;math"),
+            "the MathML must NOT be double-escaped into `&lt;math`: {html}"
+        );
+    }
+
+    /// The Inter variable `@font-face` is inlined as a base64 `data:` woff2 URI, with
+    /// the `100 900` variable weight range, so preview rendering never depends on a
+    /// host-installed font.
+    #[test]
+    fn inter_font_face_present() {
+        let html = render_html("# Title\n", PreviewTheme::Default);
+        assert!(
+            html.contains("@font-face"),
+            "the document must inline an @font-face rule: {html}"
+        );
+        assert!(
+            html.contains("Inter"),
+            "the inlined font stack must include the `Inter` family: {html}"
+        );
+        assert!(
+            html.contains("100 900"),
+            "the Inter @font-face must declare the `100 900` variable weight range: {html}"
+        );
+        assert!(
+            html.contains("data:font/woff2;base64,"),
+            "the Inter font must be inlined as a base64 data:font/woff2 URI: {html}"
+        );
+    }
+
+    /// The bundled Latin Modern Math font is inlined as a base64 `data:` woff2 URI so
+    /// MathML rendering is pinned to a bundled math font (no host-installed font).
+    #[test]
+    fn math_font_present() {
+        let html = render_html("$e=mc^2$\n", PreviewTheme::Default);
+        assert!(
+            html.contains("Latin Modern Math"),
+            "the document must pin MathML to the bundled `Latin Modern Math` font: {html}"
+        );
+        assert!(
+            html.contains("data:font/woff2;base64,"),
+            "the math font must be inlined as a base64 data:font/woff2 URI: {html}"
+        );
+    }
+
+    /// Malformed LaTeX (here, a `\frac` missing its second argument) degrades
+    /// gracefully: `pulldown-latex` does not error but renders a `<merror>` MathML
+    /// node, so `render_html` must NOT panic and must still emit a valid full
+    /// document containing a `<math` element.
+    #[test]
+    fn malformed_latex_degrades_without_panic() {
+        let html = render_html("$\\frac{1}$\n", PreviewTheme::Default);
+        assert!(
+            html.to_ascii_lowercase().contains("<!doctype html"),
+            "malformed math must still yield a valid full document: {html}"
+        );
+        assert!(
+            html.contains(r#"class="wolf-markdown""#),
+            "malformed math must still yield the wolf-markdown body wrapper: {html}"
+        );
+        assert!(
+            html.contains("<math"),
+            "malformed math must still render a MathML `<math` element: {html}"
+        );
+    }
+
+    /// A source marker (`wolf-src`) is never injected INSIDE a `<math>` element,
+    /// which would corrupt the MathML. Checked robustly by scanning the substring
+    /// between the first `<math` and the following `</math>` for any `wolf-src` span.
+    #[test]
+    fn marker_not_inside_math() {
+        let html = render_html("$x=1$ and text\n", PreviewTheme::Default);
+        let math_start = html
+            .find("<math")
+            .unwrap_or_else(|| panic!("missing <math> element in: {html}"));
+        let after_start = &html[math_start..];
+        let math_end = after_start
+            .find("</math>")
+            .unwrap_or_else(|| panic!("missing </math> close in: {html}"));
+        let math_span = &after_start[..math_end];
+        assert!(
+            !math_span.contains("wolf-src"),
+            "no `wolf-src` marker span may appear inside the <math> element: {math_span}"
         );
     }
 }
