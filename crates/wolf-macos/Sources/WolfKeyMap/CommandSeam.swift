@@ -20,7 +20,8 @@ import Foundation
 /// `hideApplication == 3`, `minimizeWindow == 4`, `goToFile == 5`, `openFile == 6`,
 /// `openFolder == 7`, `closePane == 8`, `newBuffer == 9`, `resetFontSize == 10`,
 /// `increaseFontSize == 11`, `decreaseFontSize == 12`, `commandPalette == 13`,
-/// `copy == 14`, `paste == 15`, `bufferPicker == 16`, `newTab == 17`.
+/// `copy == 14`, `paste == 15`, `bufferPicker == 16`, `newTab == 17`,
+/// `preview == 18`, `edit == 19`.
 public enum CommandKind {
     /// Open a new editor window.
     case newWindow
@@ -60,9 +61,11 @@ public enum CommandKind {
     case newTab
     /// Render the active Markdown buffer as HTML in a preview pane.
     case preview
+    /// Navigate from a preview pane back to its source file (inverse of preview).
+    case edit
 
-    /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `18` →
-    /// `.preview`, else `nil`), guarding the contract shared with
+    /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `19` →
+    /// `.edit`, else `nil`), guarding the contract shared with
     /// `wolf-ffi`'s `mod command_kind`.
     public init?(ffi: UInt8) {
         switch ffi {
@@ -85,6 +88,7 @@ public enum CommandKind {
         case 16: self = .bufferPicker
         case 17: self = .newTab
         case 18: self = .preview
+        case 19: self = .edit
         default: return nil
         }
     }

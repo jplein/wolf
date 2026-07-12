@@ -350,6 +350,37 @@ impl NvimProcess {
         Ok(value.as_i64().unwrap_or_default())
     }
 
+    /// Navigates from the active PREVIEW pane back to its source file and returns
+    /// the source buffer's number (`0` when the active buffer is not a preview).
+    ///
+    /// Runs the `_G.wolf_edit_source` helper (defined in `runtime/nvim/init.lua`)
+    /// over `nvim_exec_lua`, passing `mode` as a Lua vararg (never interpolated).
+    /// `mode` is `"split_left"` (single-pane placement: capture the original
+    /// window, `wolf_do_split('v')`, bind the source into the original so the
+    /// editor lands LEFT and the preview stays RIGHT), `"active"` (replace the
+    /// preview in the current window with the source), or `"reuse_editor_pane"`
+    /// (exactly two panes with the OTHER pane an editor: bind the source into that
+    /// other window and focus it; falls back to the current window when none) — see
+    /// [`crate::api::WolfCore::edit_source`]. The helper no-ops (returns `0`) unless
+    /// the active buffer carries `b:wolf_preview_source`, else binds its source
+    /// buffer and returns that source bufnr, decoded via [`Value::as_i64`].
+    pub async fn edit_source(&self, mode: &str) -> Result<i64, NvimError> {
+        let value = self
+            .nvim
+            .call(
+                "nvim_exec_lua",
+                vec![
+                    Value::from("return wolf_edit_source(...)"),
+                    Value::Array(vec![Value::from(mode)]),
+                ],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+        Ok(value.as_i64().unwrap_or_default())
+    }
+
     /// Repoints the preview window `win` at the Markdown file at absolute `path`,
     /// replacing that pane's current preview with a preview of the linked file, and
     /// returns the linked file's SOURCE bufnr.

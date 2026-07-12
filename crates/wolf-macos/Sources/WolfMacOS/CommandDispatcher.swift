@@ -70,6 +70,8 @@ enum CommandDispatcher {
             controller.map { coordinator?.makeNewTab(from: $0) }
         case .preview:
             controller?.openPreview()
+        case .edit:
+            controller?.editSource()
         }
     }
 }

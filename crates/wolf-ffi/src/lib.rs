@@ -177,6 +177,8 @@ mod command_kind {
     pub const NEW_TAB: u8 = 17;
     /// Render the active Markdown buffer as HTML in a preview pane.
     pub const PREVIEW: u8 = 18;
+    /// Navigate from a preview pane back to its source file (inverse of preview).
+    pub const EDIT: u8 = 19;
 }
 
 /// The palette-row-kind discriminants packed into [`FfiCommandRow::row_kind`].
@@ -471,6 +473,18 @@ mod ffi {
         // "markdown"`). Gates the View > Preview menu item + palette row. False
         // when the core is gone.
         fn is_markdown_active(&self) -> bool;
+        // Whether the active buffer is a PREVIEW buffer (`current_is_preview`,
+        // i.e. it carries `b:wolf_preview_source`). Gates the View > Edit Source
+        // menu item. False when the core is gone.
+        fn is_preview_active(&self) -> bool;
+        // Navigates from the active PREVIEW pane back to its source file and
+        // returns the source buffer's number. `mode` is "split_left" (single-pane:
+        // new editor pane to the left, preview stays right), "active" (replace the
+        // active preview's buffer with the source), or "reuse_editor_pane"
+        // (two panes, other is an editor: bind source into it and focus it). Blocks
+        // briefly on the captive nvim. Returns 0 when the active buffer is not a
+        // preview, on error, or when the core is gone.
+        fn edit_source(&self, mode: String) -> i64;
         // Opens (or reuses) the Markdown preview pane for the active source buffer
         // and returns the preview scratch buffer's number. `mode` is
         // "split_right" (single-pane: new pane to the right) or "active"
@@ -718,7 +732,7 @@ mod ffi {
     extern "Rust" {
         type FfiCommand;
 
-        // The command kind (`command_kind::NEW_WINDOW` .. `NEW_TAB`).
+        // The command kind (`command_kind::NEW_WINDOW` .. `EDIT`).
         fn kind(&self) -> u8;
     }
 
@@ -1791,6 +1805,33 @@ impl WolfCoreHandle {
             .is_some_and(|c| c.read_snapshot().is_markdown_active())
     }
 
+    /// Whether the active buffer is a PREVIEW buffer (`current_is_preview`). Gates
+    /// the View > Edit Source menu item. False once the core has been shut down.
+    #[must_use]
+    pub fn is_preview_active(&self) -> bool {
+        self.core
+            .borrow()
+            .as_ref()
+            .is_some_and(|c| c.read_snapshot().is_preview_active())
+    }
+
+    /// Navigates from the active PREVIEW pane back to its source file and returns the
+    /// source buffer's number.
+    ///
+    /// `mode` is `"split_left"` (single-pane placement), `"active"` (replace the
+    /// active preview's buffer), or `"reuse_editor_pane"` (bind into the other
+    /// editor pane and focus it) — chosen by the front-end via
+    /// `EditSeam.placementMode`. Blocks briefly on the captive nvim. Returns `0`
+    /// when the active buffer is not a preview, on error, or once the core has been
+    /// shut down.
+    #[must_use]
+    pub fn edit_source(&self, mode: String) -> i64 {
+        self.core
+            .borrow()
+            .as_ref()
+            .map_or(0, |c| c.edit_source(&mode))
+    }
+
     /// Opens (or reuses) the Markdown preview pane for the active source buffer and
     /// returns the preview scratch buffer's number.
     ///
@@ -2048,7 +2089,7 @@ pub struct FfiCommand {
 }
 
 impl FfiCommand {
-    /// The command kind (`command_kind::NEW_WINDOW` .. `NEW_TAB`).
+    /// The command kind (`command_kind::NEW_WINDOW` .. `EDIT`).
     #[must_use]
     pub fn kind(&self) -> u8 {
         self.kind
@@ -2078,6 +2119,7 @@ impl FfiCommand {
             Command::BufferPicker => command_kind::BUFFER_PICKER,
             Command::NewTab => command_kind::NEW_TAB,
             Command::Preview => command_kind::PREVIEW,
+            Command::Edit => command_kind::EDIT,
         };
         Self { kind }
     }

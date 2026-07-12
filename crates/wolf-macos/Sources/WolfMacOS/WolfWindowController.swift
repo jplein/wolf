@@ -666,6 +666,11 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     /// a Markdown buffer.
     var isMarkdownActive: Bool { handle?.is_markdown_active() ?? false }
 
+    /// Whether this window's active pane is a PREVIEW pane. Read by the
+    /// coordinator's menu validation to enable the View > Edit Source command only
+    /// from a preview pane.
+    var isPreviewActive: Bool { handle?.is_preview_active() ?? false }
+
     /// Opens (or reuses) the Markdown preview pane for the active source buffer.
     ///
     /// The placement mode is chosen from this window's live pane/preview state via
@@ -684,6 +689,28 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
             activePaneIsPreview: inputs.activePaneIsPreview,
             otherPreviewPaneCount: inputs.otherPreviewPaneCount)
         _ = handle.open_preview(mode)
+        paneContainer.onRenderWake()
+    }
+
+    /// Navigates from the active PREVIEW pane back to its source file (the inverse
+    /// of `openPreview`).
+    ///
+    /// The placement mode is chosen from this window's live pane/preview state via
+    /// the pure `EditSeam.placementMode` (three modes: single pane → new editor pane
+    /// to the LEFT, preview stays right; two panes whose OTHER pane is an editor →
+    /// bind the source into THAT editor pane and focus it; every other case → replace
+    /// the active preview pane), then handed to core's `edit_source(mode)`. The
+    /// front-end learns the new pane + updated snapshot on the next wake (via
+    /// `previews()` / the current-file notification), so no synchronous window handle
+    /// is needed here; a repaint is requested so the editor surfaces promptly.
+    func editSource() {
+        guard let handle, let paneContainer else { return }
+        let inputs = paneContainer.editPlacementInputs()
+        let mode = EditSeam.placementMode(
+            paneCount: inputs.paneCount,
+            activePaneIsPreview: inputs.activePaneIsPreview,
+            otherEditorPaneCount: inputs.otherEditorPaneCount)
+        _ = handle.edit_source(mode)
         paneContainer.onRenderWake()
     }
 

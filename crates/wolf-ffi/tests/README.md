@@ -54,6 +54,14 @@ The real-nvim coverage of the Markdown-preview bridge surface (Bazel target `//c
 bazel test //crates/wolf-ffi:preview
 ```
 
+## `edit.rs`
+
+The real-nvim coverage of the Edit-command bridge surface (Bazel target `//crates/wolf-ffi:edit`) — the `is_preview_active()` gate and the `edit_source(mode)` mechanism (`split_left` / `reuse_editor_pane` / `active` + the reuse fallback + the not-a-preview negative) — **no mocks**, modeled on `preview.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate, same `read_frame()` / `windows()` / `previews()` live polling). It seeds a temp cwd with `alpha.md` + `notes.txt` and asserts: `is_preview_active()` is false on the `alpha.md` source buffer and flips true after `open_preview` + focusing the preview window; `edit_source("split_left")` from a single preview pane grows the editor grids (a new pane), binds the source into a non-preview window, leaves ONE preview, and returns alpha's source bufnr; `edit_source("reuse_editor_pane")` (with a second, non-preview editor pane present) binds the source into + focuses that OTHER editor window with no new pane; `edit_source("active")` replaces the active preview's buffer; the reuse fallback (no other editor → binds the active window, no new pane); and the negative case (not a preview → returns `0`, nothing changes); finally `shutdown()` yields neutral values.
+
+```sh
+bazel test //crates/wolf-ffi:edit
+```
+
 ## `tabpages.rs`
 
 The real-nvim coverage of the TABPAGE bridge surface (Bazel target `//crates/wolf-ffi:tabpages`) — the per-project/tabpage-per-view handle methods the macOS front-end drives (`current_tabpage` / `create_tabpage` / `active_tabpage` / `set_current_tabpage` / `cwd_for_tabpage` / `close_tabpage`) — **no mocks**, modeled on `panes.rs` / `close_pane.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate, same `read_frame()` / `windows()` live-grid polling). A single `#[test]` (`tabpage_lifecycle_over_the_bridge`, mutating the process-global `WOLF_STATE_DIR` for shutdown-flush hygiene): attach → `current_tabpage()` is a nonzero first-view bind T1 that `active_tabpage()` also reports → `create_tabpage(dirB)` yields a distinct T2 that becomes current with a FRESH window and a non-empty per-grid frame → `set_current_tabpage(t1)` rebinds w1 to a live grid. The **grid re-bind keystone (OD2)**: `:vsplit` on T1 (two windows), switch to T2 and back, and assert each window handle re-resolves via `grid_for_win` to a live, paintable grid. Then `cwd_for_tabpage(t2)` returns dirB while T2 is NON-current; `close_tabpage(t2)` keeps the core alive (T1 still readable) while T2's handle goes invalid; finally `shutdown()` and confirm the handle calls return neutral values (`active_tabpage()` / `current_tabpage()` == 0, `read_frame().cols()` == 0, `cwd_for_tabpage()` empty).

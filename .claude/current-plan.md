@@ -1,151 +1,110 @@
-# Current Plan: Markdown Preview — LaTeX Math + Inter Font (tasks 1 & 2)
-
-## Status: COMPLETE — implemented, tested (97 lib + integration + real-nvim all green), reviewed (APPROVED), docs written + prettier'd. Assets untracked → need `git add`.
+# Plan: Edit command (inverse of Preview) — task 3
 
 ## Problem statement
 
-Implement `markdown-tasks.md` tasks 1 and 2 together in the Wolf preview pipeline.
-Both depend on outside assets that must be vendored into the repo and inlined into
-the generated preview HTML — no network access at preview time.
+Implement task 3 in `markdown-tasks.md`:
 
-### Settled design decisions (NOT to be relitigated)
+> Edit command - like the inverse of preview. Only has an effect in a Preview pane. If the active pane is a preview pane and the other pane is an editor pane, edit the file in the other pane; otherwise, open it in the same pane as the preview. If the preview pane is the only pane, open the editor in a new pane on the left side.
 
-- Rendering stays a pure, self-contained `&str -> String` transform in
-  `crates/wolf-core/src/markdown.rs` (`render_html`), inlining everything into the
-  single `<style>` block. Both front-ends (wolf-macos WebKit, wolf-gnome WebKitGTK)
-  load the same HTML string unchanged.
-- **Task 2 (Inter font):** vendor the Inter VARIABLE woff2 (one file, weights
-  100–900 + italic via `font-weight: 100 900`) under `crates/wolf-core/src/markdown/`.
-  Embed with `include_bytes!`, emit ONE `@font-face` as a base64 `data:` URI, and put
-  `Inter` at the FRONT of the `body.wolf-markdown` font stack in `base.css`, keeping
-  the existing `-apple-system`/system fallback behind it.
-- **Task 1 (LaTeX math):** enable `pulldown_cmark::Options::ENABLE_MATH` in
-  `render_html` so the parser yields `Event::InlineMath` / `Event::DisplayMath`
-  carrying the LaTeX. Convert that LaTeX to MathML in pure Rust (evaluate
-  `pulldown-latex` first; fall back to another pure-Rust LaTeX->MathML crate if
-  needed) and embed the MathML inline. WebKit (macOS Tahoe 26+) and WebKitGTK
-  (GNOME 50+) render MathML Core natively.
-- Bundle ONE math font carrying an OpenType `MATH` table (e.g. STIX Two Math or
-  Latin Modern Math) as a woff2, vendored alongside Inter, embedded as a base64
-  `data:` URI in a `@font-face`, and PIN the MathML output to it via CSS so
-  rendering does not depend on a host-installed math font. Also inline any small CSS
-  the chosen math crate requires.
-- Asset delivery is inline `data:` URIs only — NO custom URL scheme handler, NO
-  front-end glue.
+## Status
+- [x] Architect plan
+- [x] Tests written (command.rs, render.rs, wolf-ffi/tests/edit.rs + BUILD target, commands.rs, EditSeamTests.swift + BUILD)
+- [x] Implementation + tests pass (wolf-core lib, wolf-ffi:edit 6/6, :commands, :preview, :bridge_smoke, WolfKeyMapTests 155/0, macOS lib builds; FFI bindings regenerated)
+- [x] Review — APPROVED, no blockers
+- [x] Docs — decisions doc created; architecture.md + all crate READMEs + markdown-tasks.md (task 3 DONE) updated; prettier verified clean
 
-### Constraints (CLAUDE.md)
+## COMPLETE
 
-- Documentation is source of truth. Add a README for the
-  `crates/wolf-core/src/markdown/` assets directory (vendored fonts + math-rendering
-  path + licenses: Inter = OFL, math font license). Update affected READMEs.
-- Prefer real end-to-end/integration tests over mocks. Add a real-Neovim
-  integration test (spirit of `crates/wolf-ffi/tests/preview.rs`): buffer with inline
-  `$...$` and a `$$...$$` block → pull rendered HTML → assert MathML present + block
-  rendered + Inter `@font-face` + bundled math font present. Add wolf-core unit tests
-  to `markdown.rs`: math→MathML, `@font-face`/`Inter` default emitted, markers +
-  heading-slug behavior intact.
-- Keep the marker/anchor scheme and heading-slug pipeline intact.
-- Write a short decision note at repo root (mirroring
-  `preview-code-block-syntax-highlighting-decisions.md`): MathML-over-KaTeX, the
-  bundle-and-pin-a-math-font rationale, inline-data-URI delivery.
+---
 
-## Plan (from architect)
+# Architect plan
 
-### Dependencies
-- Add `pulldown-latex = "0.7"` to `crates/wolf-core/Cargo.toml` (after line 16). Pure-Rust
-  LaTeX→MathML (MIT), MathML Core, ships a matching Latin Modern Math woff2 + `styles.css`.
-  Chosen over stale `latex2mathml`.
-- NO base64 crate: commit woff2 pre-encoded as single-line base64 sidecars, pull in via
-  `include_str!` + `concat!` (zero runtime encode).
-- Bazel: deps vendored via `crate_universe` (MODULE.bazel:87-103 → Cargo.Bazel.lock). After
-  editing Cargo.toml: regenerate `Cargo.lock`, then `CARGO_BAZEL_REPIN=1 bazel build
-  //crates/wolf-core:wolf_core`, commit `Cargo.lock`/`Cargo.Bazel.lock`/`MODULE.bazel.lock`.
-  CODER MUST VERIFY repin succeeds and denylist check (`cargo tree` / build.md:252-256) passes.
+## 1. Summary
 
-### Vendored assets — new dir `crates/wolf-core/src/markdown/assets/`
-Commit raw woff2 (provenance) + single-line `.b64` sidecar (used by code) + license each:
-- `inter-variable.woff2` (+ `.woff2.b64` + `inter-OFL.txt`) — Inter roman variable, SIL OFL 1.1,
-  from rsms/inter releases `web/InterVariable.woff2`.
-- `latinmodern-math.woff2` (+ `.woff2.b64` + `latinmodern-math-GUST-FONT-LICENSE.txt`) — GUST GFL,
-  from pulldown-latex repo `font/latinmodern-math.woff2` (matches its `styles.css` family). Do NOT
-  vendor the lmroman text faces (design: ONE math font).
-- `.b64` MUST be single-line (`base64 -i f.woff2 | tr -d '\n' > f.woff2.b64`), else data URI breaks.
-- Coder fetches binaries (architect/agents cannot). Record actual byte sizes in the assets README.
-- ~1.0–1.3 MB added to each HTML doc; acceptable (renders debounced, one trailing render/burst).
+Add a new user command, **Edit** (`id = "edit"`, `:WolfEdit`, `require('wolf').edit()`), the inverse of **Preview**. Effective only when the active pane is a **preview pane** (buffer carrying `b:wolf_preview_source`). Navigates to that preview's SOURCE file using one of three placement modes chosen by a pure front-end seam, mirroring Preview:
 
-### `crates/wolf-core/src/markdown.rs` changes
-- §4.1 imports: add `pulldown_latex::{Parser as LatexParser, Storage, mathml::push_mathml,
-  config::{RenderConfig, DisplayMode}}` — CODER VERIFY exact paths vs docs.rs 0.7.1.
-- §4.2 new const CSS near `BASE_CSS` (line 75), all const via `concat!`+`include_str!`:
-  - `INTER_FONT_FACE`: `@font-face{font-family:'Inter';font-weight:100 900;font-style:normal;
-    font-display:swap;src:url('data:font/woff2;base64,<b64>') format('woff2')}`.
-  - `MATH_FONT_FACE`: `@font-face{font-family:'Latin Modern Math';src:url('data:font/woff2;base64,<b64>')
-    format('woff2')}`.
-  - `MATH_CSS`: NON-font rules from pulldown-latex `styles.css` with: (1) drop lmroman `@font-face` +
-    `mtext` font rule; (2) rewrite namespaced `m|math` selectors to plain `math`; (3) append pin
-    `math, math * { font-family: "Latin Modern Math", math; }`.
-- §4.3 `render_html`: add `options.insert(Options::ENABLE_MATH);` (line 111-119).
-- §4.4 new adapter `MathRenderer<I>` (near HeadingIdAssigner ~305), preserves `(Event, Range)`:
-  - `Event::InlineMath(cow)` → `(Event::InlineHtml(mathml.into()), range)`, `DisplayMode::Inline`.
-  - `Event::DisplayMath(cow)` → `(Event::InlineHtml(mathml.into()), range)`, `DisplayMode::Block`
-    (Block gives `display="block"` on `<math>`).
-  - USE `Event::InlineHtml` for BOTH (load-bearing: math events are emitted at inline positions; block
-    HTML would corrupt paragraph nesting; InlineHtml passes through verbatim, not double-escaped).
-  - Helper: `Storage::new()` + `LatexParser::new(latex, &storage)` + `push_mathml(&mut out, p, cfg)`.
-    On `Err`, gracefully fall back to `Event::Text(format!("${latex}$"))` — NEVER unwrap.
-- §4.5 chain order: `offset_iter → HeadingIdAssigner → MathRenderer → MarkerInjector → push_html`.
-  MathRenderer before MarkerInjector; replacements are `InlineHtml` (not block Start), so
-  `is_block_start` returns false and no marker is injected inside math. Do NOT add math to
-  `is_block_start`.
-- §4.6 embed CSS in the `format!` (128-132): `<style>` = `{INTER_FONT_FACE}{MATH_FONT_FACE}{BASE_CSS}
-  {MATH_CSS}{theme}`.
+- **`split_left`** — preview pane is the only pane: open the source editor in a NEW pane on the LEFT (preview stays right).
+- **`reuse_editor_pane`** — exactly two panes, active is preview, OTHER pane is editor (non-preview): edit source in that other pane and focus it.
+- **`active`** — every other case: replace the preview in the active pane with the source editor.
 
-### `crates/wolf-core/src/markdown/base.css` (lines 43-44)
-- Prepend `"Inter",` to `body.wolf-markdown` font-family, keep the full system fallback behind it.
-  (CSS asset, not Markdown — no prettier.)
+Edit is appended as discriminant **19** everywhere (append-only; Preview stays 18).
 
-### `crates/wolf-core/BUILD.bazel` (compile_data ~line 34)
-- Extend glob to include the b64 sidecars: `glob(["src/markdown/**/*.css", "src/markdown/assets/*.b64"])`
-  (they are `include_str!`'d). Raw woff2/licenses are provenance-only, not needed by rustc.
+## 2. Design decisions (also → decisions doc)
 
-### Tests (test-writer)
-- §7.1 unit tests in `markdown.rs` mod tests (after line 653), via `render_html`:
-  `inline_math_renders_mathml` (`<math`/`</math>`, source not visible); `display_math_is_block`
-  (`display="block"`); `math_not_double_escaped` (literal `<math`, not `&lt;math`);
-  `inter_font_face_present` (`@font-face`, `Inter`, `100 900`, `data:font/woff2;base64,`);
-  `math_font_present` (`Latin Modern Math`, 2nd data URI, math font pin); `marker_not_inside_math`
-  (no `wolf-src` span between `<math` and `</math>`). Existing 528-652 tests must still pass.
-- §7.2 wolf-core integration `crates/wolf-core/tests/markdown_render.rs` (no nvim, primary CI proof):
-  render `$e=mc^2$` inline + `$$\int_0^1 x\,dx$$` block → assert `<math`, `</math>`, `display="block"`,
-  Inter `@font-face` + data URI, `Latin Modern Math` + data URI. (Has Bazel target already.)
-- §7.3 real-Neovim `crates/wolf-ffi/tests/preview.rs` — ONE `#[test]` matching existing harness
-  (`nvim_bin_or_skip`, `wolf_ffi_start`, `wait_for_attach`, `open_preview("split_right")`,
-  `render_preview`): fixture `math.md` with inline + display math → assert HTML has `<math`,
-  `display="block"`, Inter `@font-face`, `Latin Modern Math`.
-- Edge cases: malformed LaTeX (`$\frac{1}$`) degrades to visible text, no panic; no-math doc renders
-  identically (marker/heading tests hold).
+**D1 — Menu placement + naming.** View menu (with Preview), NOT the Copy/Paste Edit NSMenu. DISPLAY label **"Edit Source"** for menu item + palette row. Registry `CommandSpec.title = "Edit Source"`, `id = "edit"`, `ex_command = "WolfEdit"`, `menu = MenuGroup::View`. No key equivalent. Enabled only when active pane is a preview pane (gated in `validateMenuItem` via `isPreviewActive`). Palette row NOT gated (mirrors Preview); Lua no-ops (returns 0) off a preview pane.
 
-### Decision note + docs
-- NEW `preview-math-and-fonts-decisions.md` at repo root (mirror the syntax-highlighting note):
-  Decisions 1 MathML-via-pulldown-latex, 2 Inter one-file/one-face at front of stack, 3 Latin Modern
-  Math bundled+pinned, 4 inline data URIs only / no scheme handler / no base64 crate; licenses +
-  provenance; rationale/consequences. prettier --write after.
-- NEW `crates/wolf-core/src/markdown/README.md` — base.css/themes/assets, each woff2 filename +
-  upstream URL + license + single-line-b64 note + that MATH_CSS is adapted from pulldown-latex styles.css.
-- UPDATE `crates/wolf-core/src/README.md` markdown.rs section (98-106): ENABLE_MATH, MathRenderer,
-  inlined fonts + math CSS, pulldown-latex dep.
-- UPDATE `crates/wolf-core/README.md` (if it lists pipeline/deps); `build.md` (new .b64 compile_data,
-  repin+denylist); mark `markdown-tasks.md` tasks 1-2 done. prettier --write all touched Markdown.
+**D2 — `is_preview_active` semantics.** Mirror `is_markdown_active` (reads `Snapshot.current_filetype`). Extend `wolf_current_file` notification with THIRD boolean arg `is_preview`; add `Snapshot.current_is_preview: bool` fed by it; `Snapshot::is_preview_active()` / `WolfCore::is_preview_active()` read it. Cheap synchronous read (no blocking RPC on menu validation). Fallback (only if extending proves troublesome): blocking `is_preview_active()` RPC reading `vim.b[…].wolf_preview_source ~= nil`. PREFER the snapshot-field mirror.
 
-### Implementation order
-1. Vendor font/license/b64 files. 2. Add dep + regen Cargo.lock + Bazel repin + denylist. 3. BUILD.bazel
-compile_data. 4. CSS consts + base.css. 5. MathRenderer + render helper (graceful fallback). 6. Enable
-ENABLE_MATH + wire chain + embed CSS. 7. Tests. 8. Decision note + READMEs + prettier.
+**D3 — `wolf_edit_source(mode)` Lua semantics.** Gate: read `b:wolf_preview_source` / `b:wolf_preview_source_bufnr` off the CURRENT buffer; return `0` if not a preview. Binding: prefer `nvim_win_set_buf(win, source_bufnr)` when bufnr valid (window-scoped, no disk re-read, no MRU churn — like `wolf_switch_buffer`); else focus the target window + `:edit fnameescape(source_path)`. No MRU recording. After bind, fire `wolf_emit_previews()` + `wolf_emit_current_file()` (idempotent). Return `source_bufnr`.
+- `split_left`: `orig = nvim_get_current_win()`, `wolf_do_split("v")`, `edit_into(orig)`, `nvim_set_current_win(orig)`. (PaneTree inserts new pane AFTER target → new window is RIGHT, orig is LEFT → editor left, preview right.)
+- `reuse_editor_pane`: scan `nvim_tabpage_list_wins(0)` for first non-current window whose buffer has `b:wolf_preview_source == nil`; `target = that or cur`; `edit_into(target)`, `nvim_set_current_win(target)`.
+- `active`: `edit_into(0)` (current), replacing the preview.
 
-### Coder MUST-VERIFY flags
-- Exact pulldown-latex 0.7.1 module paths + `push_mathml`/`Parser::new`/`RenderConfig` signatures.
-- A lone `$$…$$` wrapping on pulldown-cmark 0.12 (InlineHtml is safe either way).
-- Bazel repin success + denylist pass; single-line b64; actual font byte sizes.
-- No `#[allow]` in markdown.rs; handle `push_mathml` `Err` explicitly (no unwrap).
+**D4 — Front-end wake.** `editSource()` calls `paneContainer.onRenderWake()` after, mirroring `openPreview()`.
 
-## Status: architect plan recorded → invoking test-writer
+**D5 — No new layout intent for split_left.** Reuses `wolf_do_split("v")` → existing `wolf_layout` SPLIT intent → existing `applySplit`. LEFT placement owned by binding source into the ORIGINAL (`from`) window. No Swift intent-kind change.
+
+## 3. Files to CREATE
+- `crates/wolf-macos/Sources/WolfKeyMap/EditSeam.swift` — pure Foundation seam, `EditSeam.placementMode(paneCount:activePaneIsPreview:otherEditorPaneCount:) -> String` (`split_left` when paneCount<=1; `reuse_editor_pane` when paneCount==2 && activePaneIsPreview && otherEditorPaneCount==1; else `active`). Default `activePaneIsPreview = true`.
+- `preview-edit-command-decisions.md` (repo root) — capture D1–D5, append-only=19 rule, modes+Lua bindings, is_preview_active mechanism (+RPC fallback noted), no-MRU/bind-by-bufnr, "Edit Source" naming. prettier --write.
+- Test files (test-writer): `crates/wolf-ffi/tests/edit.rs`, `crates/wolf-macos/Tests/WolfKeyMapTests/EditSeamTests.swift`.
+
+## 4. Files to MODIFY
+
+### wolf-core
+- **`command.rs`**: append `Edit` variant after `Preview`; append `COMMAND_SPECS` row `{ Edit, "edit", "WolfEdit", "Edit Source", MenuGroup::View }`; update enum doc discriminant list (add `Edit(19)`). Tests: `EXPECTED_COMMAND_COUNT` 19→20; add `EDIT_INDEX=19`; rewrite `preview_is_the_last_row` → `preview_is_at_index_18` (drop "final row" clause); add `edit_id_round_trips`, `edit_spec_fields`, `edit_is_the_last_row`; update count-test message + PREVIEW_INDEX doc.
+- **`render.rs`**: add `pub current_is_preview: bool` to `Snapshot` (derives Default→false); add `pub fn is_preview_active(&self) -> bool { self.current_is_preview }` near `is_markdown_active` (~619); add unit test (false default, true when set).
+- **`redraw.rs`** `apply_current_file` (~328): read arg 2 `args.get(2).and_then(Value::as_bool).unwrap_or(false)` → `snap.current_is_preview`; update doc.
+- **`nvim.rs`**: add `pub async fn edit_source(&self, mode: &str) -> Result<i64, NvimError>` mirroring `open_preview` (~336): `nvim_exec_lua "return wolf_edit_source(...)"`, `Value::Array([mode])`, decode `as_i64().unwrap_or_default()`.
+- **`api.rs`**: add `pub fn edit_source(&self, mode: &str) -> i64` (mirror `open_preview` ~423, 0 on error); add `pub fn is_preview_active(&self) -> bool { self.read_snapshot().is_preview_active() }` (mirror `is_markdown_active` ~462).
+
+### runtime
+- **`init.lua`**: in `wolf_setup_current_file_tracking` emit (~191) send 3rd bool arg (preview branch `("", "", true)`, normal `(path, filetype, false)`); update comment. Add `function _G.wolf_edit_source(mode)` near `wolf_open_preview` (~674) per D3, with an `edit_into(win)` local helper (prefer bufnr, else set-current-win+`:edit`). Doc block mirroring `wolf_open_preview`.
+
+### wolf-ffi
+- **`src/lib.rs`**: `mod command_kind` (~179) add `pub const EDIT: u8 = 19;`; bridge decls add `fn is_preview_active(&self) -> bool;` + `fn edit_source(&self, mode: String) -> i64;` (~473); `impl WolfCoreHandle` add both methods (~1787); `FfiCommand::from_command` match (~2080) add `Command::Edit => command_kind::EDIT,`; update module doc discriminant contract.
+- **Regenerate committed bindings**: `bazel run //crates/wolf-ffi:gen_bindings` (writes `generated/wolf-ffi.swift`/`.h` in-tree); commit them. Do NOT hand-edit `generated/`.
+
+### wolf-macos (Swift)
+- **`CommandSeam.swift`**: `enum CommandKind` add `case edit` after `.preview`; `init?(ffi:)` add `case 19: self = .edit`; update docs.
+- **`PaneContainerView.swift`**: add `struct EditPlacementInputs { paneCount; activePaneIsPreview; otherEditorPaneCount }` (~40); add `func editPlacementInputs()` (~375) like `previewPlacementInputs` but `otherEditorPaneCount = panes.values.filter { !previewWins.contains($0.win) && $0.win != activeWin }.count`.
+- **`WolfWindowController.swift`**: add `var isPreviewActive: Bool { handle?.is_preview_active() ?? false }` (~667); add `func editSource()` (~679): `editPlacementInputs()` → `EditSeam.placementMode(...)` → `handle.edit_source(mode)` → `paneContainer.onRenderWake()`.
+- **`CommandDispatcher.swift`**: add `case .edit: controller?.editSource()` after `case .preview` (exhaustive switch).
+- **`AppMenu.swift`**: `Tag` enum add `static let edit = 19`; add View-menu item after Preview `commandItem(title: "Edit Source", tag: Tag.edit, keyEquivalent: "", target: target)`.
+- **`AppDelegate.swift`** `validateMenuItem` (~491): add `case .edit: return keyController?.isPreviewActive ?? false`; update doc.
+
+## 5. Test plan
+- **wolf-core unit** (`command.rs`/`render.rs`): registry count=20; Edit id round-trips; Edit spec fields; Edit last row; Preview at 18 (not last); `is_preview_active` false default / true when set.
+- **wolf-ffi real-nvim `tests/edit.rs`** (model `tests/preview.rs`, reuse `tests/common/mod.rs`, loud SKIP w/o nvim): is_preview_active gate (false on md buffer; true after open_preview+focus preview); `split_left` from single preview pane → new pane, source in a non-preview window, one preview remains, returned bufnr==source; `reuse_editor_pane` → source bound into OTHER editor window + focused, no new pane; `active` → active preview window now shows source; reuse fallback (no other editor → binds active, no new pane); negative (not a preview → returns 0, nothing changes); shutdown neutrality; prefer basename matching + `wait_for_*` polling helpers. Add `//crates/wolf-ffi:edit` rust_test target to BUILD.bazel (copy `:preview` stanza).
+- **wolf-ffi `tests/commands.rs`**: add `const CMD_KIND_EDIT: u8 = 19;`, extend contiguity guard to `0..=19`, update header comment, add `:WolfEdit` drain assertion after `:WolfPreview`.
+- **Swift `EditSeamTests.swift`** (model `PreviewSeamTests` placement part): single/zero pane→`split_left`; 2 panes active-preview+1 editor→`reuse_editor_pane`; 2 panes active-preview+no editor→`active`; 2 panes active-not-preview→`active`; 3 panes→`active`.
+
+## 6. Implementation order (avoid compile breaks)
+1. `command.rs` variant+row+tests. 2. `render.rs`. 3. `redraw.rs`. 4. `nvim.rs`. 5. `api.rs`. 6. `wolf-ffi/src/lib.rs` (all arms — exhaustive matches break until done) → `bazel run //crates/wolf-ffi:gen_bindings` → commit generated/. 7. `init.lua`. 8. Swift `CommandSeam` `.edit` + new `EditSeam.swift`. 9. Swift `WolfMacOS` glue (PaneContainerView, WolfWindowController, CommandDispatcher exhaustive, AppMenu, AppDelegate). 10. Tests. 11. Docs.
+
+## 7. Dependencies
+None.
+
+## 8. Documentation updates
+- **`architecture.md`**: `command_kind` list (~43) add `EDIT=19`; mention `is_preview_active()`/`edit_source(mode)`; macOS menu list (~65) add "Edit Source (View menu, no key equiv, preview-pane only)"; palette prose (~71) "18 OTHER"→"19 OTHER".
+- **`crates/wolf-core/src/README.md`**: add `current_is_preview` to Snapshot fields; note `is_preview_active()`; Command registry incl Edit(19).
+- **`crates/wolf-ffi/README.md`** + **`src/README.md`**: add `edit_source`/`is_preview_active`/`command_kind::EDIT=19`.
+- **`crates/wolf-macos/README.md`**: mention `EditSeam` + View > Edit Source item.
+- **`markdown-tasks.md`**: mark task 3 DONE + link `preview-edit-command-decisions.md`. prettier --write all touched Markdown.
+
+## 9. Build / regen / test commands
+- `bazel run //crates/wolf-ffi:gen_bindings` (then commit generated/).
+- `cargo test -p wolf-core` (or Bazel rust_test).
+- `bazel test //crates/wolf-ffi:edit //crates/wolf-ffi:commands //crates/wolf-ffi:preview //crates/wolf-ffi:bridge_smoke`.
+- Swift seam: `bazel test //crates/wolf-macos:WolfKeyMapTests` (confirm target name; add EditSeamTests.swift to srcs).
+- Build the macOS app/library to compile-verify AppKit glue.
+
+## 10. Lint
+- Use named consts (`EDIT_INDEX`, `EXPECTED_COMMAND_COUNT`) — no inline 19/20. No new `#[allow]`. `#[must_use]` on the handle methods where their Preview mirrors are.
+
+## 11. Coder MUST-VERIFY
+- init.lua split-left: PaneTree inserts new leaf AFTER target → binding source into `orig` (`from`) window = editor LEFT, preview RIGHT. Don't rely on `:leftabove`/`splitright` (front-end owns geometry; `splitright` unset). Manual-smoke the reconcile.
+- FFI codegen target `//crates/wolf-ffi:gen_bindings` (bazel run, in-tree write). Verify regenerated Swift/.h has `edit_source`/`is_preview_active` and `command_kind` byte-stable except additive.
+- `is_markdown_active` reads `Snapshot.current_filetype` via `wolf_current_file`; mirror adds `current_is_preview` via same notification's 3rd arg. Verify `rmpv::Value::as_bool()` decoder; missing arg → false.
+- Exhaustive matches: `FfiCommand::from_command` (Rust) + `CommandDispatcher.dispatch` (Swift) break until arms added; `CommandKind.init?(ffi:)` non-exhaustive (`default: nil`).
+- No hardcoded palette count test in `palette.rs` (candidates derived dynamically) — only architecture.md prose changes.

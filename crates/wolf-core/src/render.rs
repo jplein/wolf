@@ -534,6 +534,14 @@ pub struct Snapshot {
     /// bump `seq`. Drives [`Snapshot::is_markdown_active`], the Preview command's
     /// enable gate. Defaults to empty.
     pub current_filetype: String,
+    /// Whether the buffer currently being edited in nvim is a PREVIEW buffer (it
+    /// carries `b:wolf_preview_source`). Updated out-of-band from the redraw stream
+    /// via the `wolf_current_file` notification (a 3rd boolean argument added to the
+    /// existing current-file autocmd emit; see [`crate::redraw`]). Because it is not
+    /// a redraw frame, updating it does NOT bump `seq`. Drives
+    /// [`Snapshot::is_preview_active`], the Edit command's enable gate. Defaults to
+    /// `false`.
+    pub current_is_preview: bool,
     /// Per-preview-window source info, keyed by the preview WINDOW handle (an
     /// `i64`). Updated out-of-band from the redraw stream via the `wolf_preview`
     /// notification (see [`crate::redraw`]): the whole map is WHOLESALE-REPLACED on
@@ -620,6 +628,18 @@ impl Snapshot {
         self.current_filetype == "markdown"
     }
 
+    /// Returns `true` when the buffer currently being edited is a PREVIEW buffer.
+    ///
+    /// Resolves `current_is_preview` (mirrors [`is_markdown_active`]'s "resolve one
+    /// field" shape). This is the enable gate for the Edit command (front-end
+    /// `validateMenuItem`).
+    ///
+    /// [`is_markdown_active`]: Snapshot::is_markdown_active
+    #[must_use]
+    pub fn is_preview_active(&self) -> bool {
+        self.current_is_preview
+    }
+
     /// Returns the active grid (see [`Snapshot::active_grid_id`]), or a shared
     /// empty `0x0` grid if no grid is present.
     #[must_use]
@@ -692,6 +712,24 @@ mod tests {
         assert!(
             !snap.is_markdown_active(),
             "a non-markdown filetype must report markdown inactive"
+        );
+    }
+
+    /// `is_preview_active()` is `true` IFF `current_is_preview` is set (mirrors
+    /// `is_markdown_active`'s "resolve one field" shape). A fresh snapshot has
+    /// `current_is_preview == false` (not a preview); setting it flips it on.
+    #[test]
+    fn is_preview_active_true_only_when_current_is_preview_set() {
+        let mut snap = Snapshot::new(TEST_COLS, TEST_ROWS);
+        assert!(
+            !snap.is_preview_active(),
+            "a fresh snapshot has current_is_preview == false and is not a preview"
+        );
+
+        snap.current_is_preview = true;
+        assert!(
+            snap.is_preview_active(),
+            "current_is_preview == true must report a preview active"
         );
     }
 }

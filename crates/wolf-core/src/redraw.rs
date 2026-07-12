@@ -322,6 +322,10 @@ impl RedrawHandler {
     /// string (unknown filetype), which drives [`Snapshot::is_markdown_active`] to
     /// `false`.
     ///
+    /// The (new) third argument is a boolean: whether the active buffer is a PREVIEW
+    /// buffer (it carries `b:wolf_preview_source`). A missing 3rd arg maps to
+    /// `false`, which drives [`Snapshot::is_preview_active`] to `false`.
+    ///
     /// The write lock is acquired via [`SharedSnapshot::write_async`] and is NOT
     /// held across any `.await`; it is dropped before returning so the caller's
     /// wake fires after the lock is released.
@@ -337,10 +341,12 @@ impl RedrawHandler {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
+        let is_preview = args.get(2).and_then(Value::as_bool).unwrap_or(false);
 
         let mut snap = self.snapshot.write_async().await;
         snap.current_file = target;
         snap.current_filetype = filetype;
+        snap.current_is_preview = is_preview;
         // A current_file change is NOT a redraw frame, so `seq` (the redraw-frame
         // counter, advanced only on `flush`) is intentionally left unchanged. The
         // caller still fires the wake after this lock drops so the front-end can

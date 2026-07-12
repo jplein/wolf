@@ -430,6 +430,32 @@ impl WolfCore {
         }
     }
 
+    /// Navigates from the active PREVIEW pane back to its source file and returns
+    /// the source buffer's number (`0` on error or when the active buffer is not a
+    /// preview pane).
+    ///
+    /// Blocks briefly on the captive nvim (`runtime.block_on`) to run the
+    /// `wolf_edit_source` helper (see [`crate::nvim::NvimProcess::edit_source`]).
+    /// `mode` is chosen by the front-end via `EditSeam.placementMode`:
+    /// `"split_left"` (single pane → new editor pane on the LEFT, preview stays
+    /// right), `"active"` (replace the active preview's buffer with the source), or
+    /// `"reuse_editor_pane"` (exactly two panes with the OTHER pane an editor → bind
+    /// the source into that OTHER editor window and focus it; falls back to
+    /// `"active"` when none). The front-end learns the new pane + updated snapshot on
+    /// the next wake (via the `wolf_preview` / `wolf_current_file` notifications), so
+    /// no synchronous window handle is needed. An RPC error is logged and returns
+    /// `0`.
+    #[must_use]
+    pub fn edit_source(&self, mode: &str) -> i64 {
+        match self.runtime.block_on(self.nvim.edit_source(mode)) {
+            Ok(bufnr) => bufnr,
+            Err(e) => {
+                tracing::warn!("edit_source({mode}) failed: {e}");
+                0
+            }
+        }
+    }
+
     /// Repoints the preview window `win` at the Markdown file at absolute `path`
     /// (a linked file the user clicked in the preview), replacing that pane's preview
     /// with the linked file's, and returns the linked file's SOURCE bufnr.
@@ -461,6 +487,16 @@ impl WolfCore {
     #[must_use]
     pub fn is_markdown_active(&self) -> bool {
         self.read_snapshot().is_markdown_active()
+    }
+
+    /// Returns whether the buffer currently being edited is a PREVIEW buffer.
+    ///
+    /// A cheap, synchronous main-thread read of [`Snapshot::is_preview_active`]
+    /// (`current_is_preview`, fed out-of-band via `wolf_current_file`'s 3rd arg).
+    /// The front-end gates the Edit command on this (mirrors `is_markdown_active`).
+    #[must_use]
+    pub fn is_preview_active(&self) -> bool {
+        self.read_snapshot().is_preview_active()
     }
 
     /// Creates a new nvim TABPAGE (optionally rooted at `cwd` via `:tcd`) and

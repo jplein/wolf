@@ -23,10 +23,11 @@
 //! MINIMIZE_WINDOW = 4, GO_TO_FILE = 5, OPEN_FILE = 6, OPEN_FOLDER = 7,
 //! CLOSE_PANE = 8, NEW_BUFFER = 9, RESET_FONT_SIZE = 10, INCREASE_FONT_SIZE = 11,
 //! DECREASE_FONT_SIZE = 12, COMMAND_PALETTE = 13, COPY = 14, PASTE = 15,
-//! BUFFER_PICKER = 16, NEW_TAB = 17 (the `wolf_core::Command` variant order). These
-//! local consts MUST match `mod command_kind` in `wolf-ffi/src/lib.rs` and the
-//! Swift `CommandKind` port — exactly how `panes.rs` re-declares `INTENT_KIND_SPLIT`
-//! locally as a contract guard (the guard array below asserts contiguous 0..=17).
+//! BUFFER_PICKER = 16, NEW_TAB = 17, PREVIEW = 18, EDIT = 19 (the
+//! `wolf_core::Command` variant order). These local consts MUST match
+//! `mod command_kind` in `wolf-ffi/src/lib.rs` and the Swift `CommandKind` port —
+//! exactly how `panes.rs` re-declares `INTENT_KIND_SPLIT` locally as a contract
+//! guard (the guard array below asserts contiguous 0..=19).
 //!
 //! ## What this asserts
 //!
@@ -104,6 +105,9 @@ const CMD_KIND_BUFFER_PICKER: u8 = 16;
 const CMD_KIND_NEW_TAB: u8 = 17;
 /// `FfiCommand::kind()` for Preview (the appended discriminant 18, View menu).
 const CMD_KIND_PREVIEW: u8 = 18;
+/// `FfiCommand::kind()` for Edit Source (the appended discriminant 19, View menu;
+/// the inverse of Preview).
+const CMD_KIND_EDIT: u8 = 19;
 
 /// Builds a printable-character `FfiKeyEvent` (kind=Char) for `c`, all modifiers
 /// false (the already-resolved glyph rides in `ch`). Same as `panes.rs`.
@@ -170,8 +174,8 @@ fn commands_drain_close_and_minimize() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // Discriminant-contract guard: the local consts MUST be contiguous 0..=18 in
-    // variant order (mirrors `mod command_kind`). Referencing all nineteen here
+    // Discriminant-contract guard: the local consts MUST be contiguous 0..=19 in
+    // variant order (mirrors `mod command_kind`). Referencing all twenty here
     // also keeps them from tripping dead-code lints.
     assert_eq!(
         [
@@ -194,9 +198,10 @@ fn commands_drain_close_and_minimize() {
             CMD_KIND_BUFFER_PICKER,
             CMD_KIND_NEW_TAB,
             CMD_KIND_PREVIEW,
+            CMD_KIND_EDIT,
         ],
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18],
-        "command_kind discriminants must be contiguous 0..=18 in Command variant order"
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+        "command_kind discriminants must be contiguous 0..=19 in Command variant order"
     );
 
     let init_lua = common::init_lua_path();
@@ -304,6 +309,15 @@ fn commands_drain_close_and_minimize() {
     // the "is markdown" gating lives in the front-end menu/palette, not here.)
     send_ex_command(&handle, ":WolfPreview");
     poll_for_command_kind(&handle, CMD_KIND_PREVIEW, ":WolfPreview");
+
+    // --- 3j. :WolfEdit<CR> -> an FfiCommand with kind() == EDIT ---------------
+    // A pure FFI drain: nothing acts on it here (the front-end that would edit the
+    // preview's source file / place the editor pane is absent), so no pane moves.
+    // This proves `:WolfEdit` is auto-registered as a COMMAND_SPECS row and drains
+    // the appended discriminant 19. (The command channel itself is unconditional;
+    // the "is preview" gating lives in the front-end menu, not here.)
+    send_ex_command(&handle, ":WolfEdit");
+    poll_for_command_kind(&handle, CMD_KIND_EDIT, ":WolfEdit");
 
     // --- 4. Shutdown: clean teardown ----------------------------------------
     handle.shutdown();

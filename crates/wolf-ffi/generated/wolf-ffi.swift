@@ -395,6 +395,14 @@ extension WolfCoreHandleRef {
         __swift_bridge__$WolfCoreHandle$is_markdown_active(ptr)
     }
 
+    public func is_preview_active() -> Bool {
+        __swift_bridge__$WolfCoreHandle$is_preview_active(ptr)
+    }
+
+    public func edit_source<GenericIntoRustString: IntoRustString>(_ mode: GenericIntoRustString) -> Int64 {
+        __swift_bridge__$WolfCoreHandle$edit_source(ptr, { let rustString = mode.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
+    }
+
     public func open_preview<GenericIntoRustString: IntoRustString>(_ mode: GenericIntoRustString) -> Int64 {
         __swift_bridge__$WolfCoreHandle$open_preview(ptr, { let rustString = mode.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
     }

@@ -495,6 +495,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             return keyController?.isVisualMode ?? false
         case .preview:
             return keyController?.isMarkdownActive ?? false
+        case .edit:
+            return keyController?.isPreviewActive ?? false
         default:
             return true
         }

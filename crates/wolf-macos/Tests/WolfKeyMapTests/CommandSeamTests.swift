@@ -14,8 +14,8 @@
 //    minimizeWindow = 4, goToFile = 5, openFile = 6, openFolder = 7,
 //    closePane = 8, newBuffer = 9, resetFontSize = 10, increaseFontSize = 11,
 //    decreaseFontSize = 12, commandPalette = 13, copy = 14, paste = 15,
-//    bufferPicker = 16, newTab = 17, preview = 18 (the range 0..18). Any
-//    out-of-range discriminant decodes to `nil`.
+//    bufferPicker = 16, newTab = 17, preview = 18, edit = 19 (the range 0..19).
+//    Any out-of-range discriminant decodes to `nil`.
 //
 //  NOTE to coder: this references the pure `WolfKeyMap.CommandKind` enum the coder
 //  adds in `Sources/WolfKeyMap/CommandSeam.swift` (Foundation only, no AppKit),
@@ -59,12 +59,13 @@ final class CommandSeamTests: XCTestCase {
             CommandKind(ffi: 16), .bufferPicker, "ffi 16 -> .bufferPicker")
         XCTAssertEqual(CommandKind(ffi: 17), .newTab, "ffi 17 -> .newTab")
         XCTAssertEqual(CommandKind(ffi: 18), .preview, "ffi 18 -> .preview")
+        XCTAssertEqual(CommandKind(ffi: 19), .edit, "ffi 19 -> .edit")
     }
 
     // MARK: - out-of-range discriminants decode to nil
 
     func testCommandKindOutOfRangeIsNil() {
-        XCTAssertNil(CommandKind(ffi: 19), "the first out-of-range discriminant -> nil")
+        XCTAssertNil(CommandKind(ffi: 20), "the first out-of-range discriminant -> nil")
         XCTAssertNil(CommandKind(ffi: 255), "a far out-of-range discriminant -> nil")
     }
 }

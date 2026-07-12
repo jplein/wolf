@@ -38,6 +38,7 @@ enum AppMenu {
         static let bufferPicker = 16
         static let newTab = 17
         static let preview = 18
+        static let edit = 19
     }
 
     /// The dynamic submenus `install` hands back to the coordinator: the Window
@@ -205,6 +206,11 @@ enum AppMenu {
         menu.addItem(
             commandItem(
                 title: "Preview", tag: Tag.preview, keyEquivalent: "", target: target))
+        // View > Edit Source: the inverse of Preview, enabled only from a preview
+        // pane (gated in AppDelegate.validateMenuItem). NO key equivalent.
+        menu.addItem(
+            commandItem(
+                title: "Edit Source", tag: Tag.edit, keyEquivalent: "", target: target))
         menu.addItem(.separator())
         let fullScreen = NSMenuItem(
             title: "Enter Full Screen",
