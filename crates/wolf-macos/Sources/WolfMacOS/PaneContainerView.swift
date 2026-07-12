@@ -8,7 +8,7 @@
 //  a Neovim window + grid, and on each `draw(_:)` computes every pane's rectangle
 //  via `PaneTree.paneRects` and paints that pane's window grid into its rect — so
 //  each pane is drawn INDEPENDENTLY of Neovim, leaving room for front-end-only
-//  per-pane treatments (e.g. dimming inactive panes). A one-row cmdline strip along
+//  per-pane treatments (e.g. the active pane's bold statusbar filename). A one-row cmdline strip along
 //  the bottom paints the outer grid (grid 1). This view is the editor area's first
 //  responder and the single global key sink (keys go to nvim's current window).
 //
@@ -46,9 +46,6 @@ final class PaneContainerView: NSView {
     private static let intentKindSplit: UInt8 = 0
     /// `FfiLayoutIntent.kind()` for a focus-direction move (mirrors `wolf-ffi`).
     private static let intentKindFocusDir: UInt8 = 1
-    /// Scrim opacity laid over an INACTIVE pane (a front-end-only treatment that is
-    /// awkward to express inside Neovim itself).
-    private static let inactiveDim: CGFloat = 0.28
     /// Maximum Neovim grid width, in cells. A pane wider than this many columns caps
     /// its grid at `maxGridCols` and CENTERS it horizontally, leaving side margins
     /// (painted in the grid's background); a narrower pane is unaffected. All pixel↔
@@ -83,6 +80,13 @@ final class PaneContainerView: NSView {
     /// The secondary (path) statusbar text alpha when derived from the themed
     /// titlebar foreground (else `secondaryLabelColor` is used directly).
     private static let statusbarSecondaryThemedAlpha: CGFloat = 0.7
+    /// The statusbar text alpha applied to an INACTIVE pane's filename + path (a
+    /// front-end-only treatment that is awkward to express inside Neovim itself):
+    /// the active pane's filename is bold at full strength, an inactive pane's is
+    /// regular-weight and dimmed. Multiplies the themed alpha for the secondary
+    /// line; for the non-themed case the inactive pane falls back to the
+    /// system `secondaryLabelColor` / `tertiaryLabelColor` instead.
+    private static let statusbarInactiveAlpha: CGFloat = 0.5
 
     // -- Synthetic scrollbar appearance / fade tuning -------------------------
     /// Scrollbar track/thumb thickness (px).
@@ -126,7 +130,8 @@ final class PaneContainerView: NSView {
     private var panes: [PaneId: PaneBinding] = [:]
     /// The next pane id to allocate (starts at `firstPaneId`).
     private var nextPaneId: PaneId = PaneContainerView.firstPaneId
-    /// The currently active pane (cursor target + the one NOT dimmed), if any.
+    /// The currently active pane (cursor target + the one whose statusbar filename
+    /// is bold at full strength), if any.
     private var activePane: PaneId?
 
     /// The grid a press/drag is targeting, set on `mouseDown` and cleared on
@@ -683,7 +688,7 @@ final class PaneContainerView: NSView {
         let rects = paneRects()
         for (id, rect) in rects {
             guard let grid = panes[id]?.boundGrid else { continue }
-            paintPane(grid: grid, paneRect: rect, dimmed: id != activePane, ctx: ctx)
+            paintPane(grid: grid, paneRect: rect, active: id == activePane, ctx: ctx)
         }
         drawDividers(rects, ctx: ctx)
         paintCmdlineStrip(ctx)
@@ -691,21 +696,20 @@ final class PaneContainerView: NSView {
     }
 
     /// Paints one whole pane: the top statusbar strip, then the window grid below
-    /// it, then (for an inactive pane) an inactive-dim scrim over the WHOLE pane
-    /// (statusbar + grid + any side margins), so the strip dims with its pane.
-    private func paintPane(grid: UInt64, paneRect: CGRect, dimmed: Bool, ctx: CGContext) {
+    /// it. The pane body is painted the SAME whether active or not — the only
+    /// active/inactive treatment is in the statusbar text (bold + full-strength
+    /// filename on the active pane, regular-weight + dimmed on an inactive one).
+    private func paintPane(grid: UInt64, paneRect: CGRect, active: Bool, ctx: CGContext) {
         ctx.saveGState()
         ctx.clip(to: paneRect)
 
-        paintStatusbar(into: statusbarRect(ofPane: paneRect), grid: grid, paneRect: paneRect, ctx: ctx)
+        paintStatusbar(
+            into: statusbarRect(ofPane: paneRect), grid: grid, paneRect: paneRect,
+            active: active, ctx: ctx)
 
         let frame = handle.read_frame_for_grid(grid)
         paintGrid(frame, into: gridRect(ofPane: paneRect), ctx: ctx)
 
-        if dimmed {
-            ctx.setFillColor(CGColor(gray: 0, alpha: Self.inactiveDim))
-            ctx.fill(paneRect)
-        }
         ctx.restoreGState()
     }
 
@@ -714,8 +718,7 @@ final class PaneContainerView: NSView {
     ///
     /// When the grid is capped narrower than the rect (`maxGridCols`) it is CENTERED
     /// via the geometry's paint offset; the whole grid rect is first filled with the
-    /// grid's default background so the side margins blend with the grid. The
-    /// inactive-dim scrim is applied by `paintPane` over the whole pane, not here.
+    /// grid's default background so the side margins blend with the grid.
     private func paintGrid(_ frame: FfiFrame, into rect: CGRect, ctx: CGContext) {
         let geo = geometry(for: rect)
         ctx.saveGState()
@@ -748,7 +751,9 @@ final class PaneContainerView: NSView {
     /// bg / editor fallback when there is no window. Text is left-aligned with the
     /// grid's text left edge (respecting `PaneGeometry.paintOffsetX`) and truncated
     /// with a tail ellipsis. An unnamed buffer shows `[No Name]` with no path line.
-    private func paintStatusbar(into strip: CGRect, grid: UInt64, paneRect: CGRect, ctx: CGContext) {
+    private func paintStatusbar(
+        into strip: CGRect, grid: UInt64, paneRect: CGRect, active: Bool, ctx: CGContext
+    ) {
         ctx.saveGState()
         ctx.clip(to: strip)
 
@@ -777,25 +782,35 @@ final class PaneContainerView: NSView {
         let displayPath = status.display_path().toString()
 
         // Colors: the themed titlebar fg when set (secondary derived at a lower
-        // alpha), else AppKit's label / secondary-label system colors.
+        // alpha), else AppKit's label / secondary-label system colors. An INACTIVE
+        // pane dims BOTH lines — the themed alphas are scaled by
+        // `statusbarInactiveAlpha`, the non-themed case steps down one system
+        // label tier (label → secondary, secondary → tertiary).
         let titlebarFg = handle.theme_titlebar_fg()
         let primaryColor: NSColor
         let secondaryColor: NSColor
         if titlebarFg.set {
             let themed = NSColor(cgColor: WolfColor.cgColor(packed: titlebarFg.rgb)) ?? .labelColor
-            primaryColor = themed
-            secondaryColor = themed.withAlphaComponent(Self.statusbarSecondaryThemedAlpha)
+            let primaryAlpha: CGFloat = active ? 1 : Self.statusbarInactiveAlpha
+            let secondaryAlpha =
+                Self.statusbarSecondaryThemedAlpha * (active ? 1 : Self.statusbarInactiveAlpha)
+            primaryColor = themed.withAlphaComponent(primaryAlpha)
+            secondaryColor = themed.withAlphaComponent(secondaryAlpha)
         } else {
-            primaryColor = .labelColor
-            secondaryColor = .secondaryLabelColor
+            primaryColor = active ? .labelColor : .secondaryLabelColor
+            secondaryColor = active ? .secondaryLabelColor : .tertiaryLabelColor
         }
+
+        // The active pane's filename is BOLD; an inactive pane's is regular weight.
+        let primaryFont: NSFont =
+            active
+            ? .boldSystemFont(ofSize: CGFloat(statusbarPrimaryFontSize))
+            : .systemFont(ofSize: CGFloat(statusbarPrimaryFontSize))
 
         let primaryRect = CGRect(
             x: textLeft, y: strip.minY + CGFloat(layout.primaryLineTop),
             width: textWidth, height: CGFloat(layout.primaryLineHeight))
-        drawStatusbarText(
-            filename, in: primaryRect,
-            font: .systemFont(ofSize: CGFloat(statusbarPrimaryFontSize)), color: primaryColor)
+        drawStatusbarText(filename, in: primaryRect, font: primaryFont, color: primaryColor)
 
         if !displayPath.isEmpty {
             let secondaryRect = CGRect(
@@ -1161,7 +1176,7 @@ final class PaneContainerView: NSView {
         panes.first(where: { $0.value.win == win })?.key
     }
 
-    /// Sets the active pane (the one NOT dimmed) and requests a redraw.
+    /// Sets the active pane (the one with the bold statusbar filename) and requests a redraw.
     private func setActivePane(_ pane: PaneId?) {
         if activePane != pane {
             activePane = pane
