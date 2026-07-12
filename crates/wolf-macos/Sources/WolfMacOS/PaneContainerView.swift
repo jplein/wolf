@@ -158,6 +158,20 @@ final class PaneContainerView: NSView {
     /// an equal tick) OR its tick advanced (or on first bind) — the OD6
     /// live-on-change gate, plus the reused-preview-pane fix.
     private var lastPreviewLoads: [Int64: PreviewSeam.PreviewLoad] = [:]
+    /// The `WKNavigationDelegate` for each preview web view — retained here because a
+    /// web view holds its `navigationDelegate` WEAKLY. Each routes a clicked link
+    /// (`.linkActivated`) through `PreviewLinkSeam.classify` back into this container
+    /// (held weakly by the delegate — no retain cycle).
+    private var previewNavDelegates: [Int64: PreviewNavigationDelegate] = [:]
+    /// The absolute source path currently previewed in each preview window, captured
+    /// from `FfiPreview.source_path()` in `reloadDirtyPreviews`. Used as the
+    /// `loadHTMLString` `baseURL` (so relative links resolve) and as the same-file
+    /// comparison basis in `PreviewLinkSeam.classify`.
+    private var previewSourcePaths: [Int64: String] = [:]
+    /// A fragment id awaiting the next `didFinish` load for each preview window: set
+    /// when `previewFile` repoints a pane at a cross-file `other.md#anchor` link, then
+    /// scrolled-to (and cleared) once that file's HTML has loaded.
+    private var pendingPreviewFragments: [Int64: String] = [:]
     /// The source basename of each preview pane, keyed by the pane's bound GRID,
     /// rebuilt every wake by `syncPreviewWebViews`. Consulted by `paintStatusbar`
     /// (to show `Preview: <name>`) and `drawScrollbars` (to suppress the synthetic
@@ -683,8 +697,12 @@ final class PaneContainerView: NSView {
     private func reloadDirtyPreviews() {
         var current: [Int64: PreviewSeam.PreviewLoad] = [:]
         for preview in handle.previews() {
-            current[preview.win()] = PreviewSeam.PreviewLoad(
+            let win = preview.win()
+            current[win] = PreviewSeam.PreviewLoad(
                 sourceBufnr: preview.source_bufnr(), sourceTick: preview.source_tick())
+            // Track the abs source path so a clicked link resolves relative targets
+            // (baseURL) and classifies same-vs-cross file (PreviewLinkSeam).
+            previewSourcePaths[win] = preview.source_path().toString()
         }
         let needing = PreviewSeam.winsNeedingReload(current: current, loaded: lastPreviewLoads)
         for win in needing {
@@ -693,7 +711,12 @@ final class PaneContainerView: NSView {
             guard let web = previewWebViews[win], let load = current[win] else { continue }
             lastPreviewLoads[win] = load
             let html = handle.render_preview(load.sourceBufnr).toString()
-            web.loadHTMLString(html, baseURL: nil)
+            // A `file://` baseURL from the win's source path lets relative links (and
+            // #fragments) resolve against the real file location; unknown → nil
+            // (unchanged OD/O4 behavior — no local-subresource loading is added).
+            let path = previewSourcePaths[win] ?? ""
+            let base = path.isEmpty ? nil : URL(fileURLWithPath: path)
+            web.loadHTMLString(html, baseURL: base)
         }
     }
 
@@ -703,6 +726,12 @@ final class PaneContainerView: NSView {
         if let existing = previewWebViews[win] { return existing }
         let web = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
         previewWebViews[win] = web
+        // Route clicked links (`.linkActivated`) through PreviewLinkSeam. The web
+        // view holds `navigationDelegate` weakly, so retain the delegate here; the
+        // delegate holds this container weakly (no cycle).
+        let delegate = PreviewNavigationDelegate(win: win, container: self)
+        web.navigationDelegate = delegate
+        previewNavDelegates[win] = delegate
         addSubview(web)
         return web
     }
@@ -739,6 +768,59 @@ final class PaneContainerView: NSView {
         previewDimOverlays[win]?.removeFromSuperview()
         previewDimOverlays[win] = nil
         lastPreviewLoads[win] = nil
+        previewNavDelegates[win] = nil
+        previewSourcePaths[win] = nil
+        pendingPreviewFragments[win] = nil
+    }
+
+    // -- Preview link handling (called by PreviewNavigationDelegate) ----------
+
+    /// The absolute source path currently previewed in `win`, for
+    /// `PreviewLinkSeam.classify`'s same-vs-cross-file comparison. Falls back to a
+    /// live `handle.previews()` scan when the cache has no entry yet.
+    func previewSourcePath(forWin win: Int64) -> String {
+        if let path = previewSourcePaths[win] { return path }
+        for preview in handle.previews() where preview.win() == win {
+            return preview.source_path().toString()
+        }
+        return ""
+    }
+
+    /// Scrolls the preview web view for `win` to the `#fragment` anchor (the
+    /// same-file `[x](#anchor)` case, and the post-load scroll of a cross-file
+    /// `other.md#anchor`). Runs the pure `PreviewLinkSeam.scrollIntoViewJS`.
+    func scrollPreview(win: Int64, toFragment fragment: String) {
+        previewWebViews[win]?.evaluateJavaScript(
+            PreviewLinkSeam.scrollIntoViewJS(fragmentId: fragment), completionHandler: nil)
+    }
+
+    /// Repoints the preview `win` at the linked file `path` (a clicked `file://`
+    /// link). Asks core to `preview_file`; on success (`src > 0`) stashes any
+    /// `fragment` to scroll after the reload and requests a coalesced reload. On `0`
+    /// applies O3: an existing-but-non-previewable file is handed to the OS default
+    /// app (`NSWorkspace.open`); a missing file is a no-op.
+    func previewFile(win: Int64, path: String, fragment: String?) {
+        let src = handle.preview_file(win, path)
+        if src == 0 {
+            // O3: not previewable. If the file exists, let the OS default app open
+            // it; if it is missing, do nothing (keep the preview view-only).
+            if FileManager.default.fileExists(atPath: path) {
+                NSWorkspace.shared.open(URL(fileURLWithPath: path))
+            }
+            return
+        }
+        if let fragment {
+            pendingPreviewFragments[win] = fragment
+        }
+        previewReloadCoalescer.request()
+    }
+
+    /// A preview web view finished loading: if a fragment was queued for `win` (a
+    /// cross-file `other.md#anchor` navigation), scroll to it now and clear it.
+    func previewDidFinishLoad(win: Int64) {
+        guard let fragment = pendingPreviewFragments.removeValue(forKey: win) else { return }
+        previewWebViews[win]?.evaluateJavaScript(
+            PreviewLinkSeam.scrollIntoViewJS(fragmentId: fragment), completionHandler: nil)
     }
 
     /// Nulls EVERY pane's bound grid, then re-resolves each via `grid_for_win` on

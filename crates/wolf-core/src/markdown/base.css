@@ -57,6 +57,7 @@ body.wolf-markdown h6 {
   margin-bottom: 0.5em;
   font-weight: 600;
   line-height: 1.25;
+  scroll-margin-top: 2rem;
 }
 
 body.wolf-markdown h1 {

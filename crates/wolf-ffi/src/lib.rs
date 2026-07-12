@@ -482,6 +482,14 @@ mod ffi {
         // document the front-end web view loads. Blocks briefly on the captive
         // nvim. Returns the empty string on error / when the core is gone.
         fn render_preview(&self, source_bufnr: i64) -> String;
+        // Repoints the preview window `win` at the Markdown file at absolute
+        // `path` (a linked file the user clicked in the preview), replacing that
+        // pane's preview with the linked file's. Blocks briefly on the captive
+        // nvim. Returns the linked file's SOURCE bufnr (> 0) on success; 0 when
+        // `path` is empty, unreadable, or not Markdown, on error, or when the core
+        // is gone. `path` is ABSOLUTE (no relative resolution). On 0 the front-end
+        // applies its own O3 fallback.
+        fn preview_file(&self, win: i64, path: String) -> i64;
         // A snapshot of the open preview panes: one `FfiPreview` per window
         // showing a preview scratch buffer, each joined to its source's live
         // changedtick. `FfiPreview` is opaque so a `Vec<FfiPreview>` is supported.
@@ -1806,6 +1814,22 @@ impl WolfCoreHandle {
             .borrow()
             .as_ref()
             .map_or_else(String::new, |c| c.render_preview(source_bufnr))
+    }
+
+    /// Repoints the preview window `win` at the Markdown file at absolute `path`
+    /// (a linked file the user clicked in the preview), replacing that pane's preview
+    /// with the linked file's, and returns the linked file's SOURCE bufnr.
+    ///
+    /// Blocks briefly on the captive nvim. Returns the linked file's source bufnr
+    /// (`> 0`) on success; `0` when `path` is empty, unreadable, or not Markdown, on
+    /// error, or once the core has been shut down. `path` is ABSOLUTE (no relative
+    /// resolution). On `0` the front-end applies its own O3 fallback.
+    #[must_use]
+    pub fn preview_file(&self, win: i64, path: String) -> i64 {
+        self.core
+            .borrow()
+            .as_ref()
+            .map_or(0, |c| c.preview_file(win, &path))
     }
 
     /// A snapshot of the open preview panes: one [`FfiPreview`] per window showing a

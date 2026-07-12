@@ -430,6 +430,28 @@ impl WolfCore {
         }
     }
 
+    /// Repoints the preview window `win` at the Markdown file at absolute `path`
+    /// (a linked file the user clicked in the preview), replacing that pane's preview
+    /// with the linked file's, and returns the linked file's SOURCE bufnr.
+    ///
+    /// Blocks briefly on the captive nvim (`runtime.block_on`) to run the
+    /// `wolf_preview_file` helper (see [`crate::nvim::NvimProcess::preview_file`]).
+    /// `path` is ABSOLUTE — resolved by the front-end from WebKit's `file://` URL;
+    /// no relative resolution happens here. Returns the linked file's source bufnr
+    /// (`> 0`) on success; `0` when `path` is empty, unreadable, or not Markdown, or
+    /// on RPC error (logged). The front-end applies its own O3 fallback on `0` (hand
+    /// an existing-but-non-previewable file to the OS default app; no-op if missing).
+    #[must_use]
+    pub fn preview_file(&self, win: i64, path: &str) -> i64 {
+        match self.runtime.block_on(self.nvim.preview_file(win, path)) {
+            Ok(bufnr) => bufnr,
+            Err(e) => {
+                tracing::warn!("preview_file({win}, {path}) failed: {e}");
+                0
+            }
+        }
+    }
+
     /// Returns whether the buffer currently being edited is a Markdown file.
     ///
     /// A cheap, synchronous main-thread read of [`Snapshot::is_markdown_active`]

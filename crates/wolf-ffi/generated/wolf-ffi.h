@@ -280,6 +280,7 @@ bool __swift_bridge__$WolfCoreHandle$is_visual_mode(void* self);
 bool __swift_bridge__$WolfCoreHandle$is_markdown_active(void* self);
 int64_t __swift_bridge__$WolfCoreHandle$open_preview(void* self, void* mode);
 void* __swift_bridge__$WolfCoreHandle$render_preview(void* self, int64_t source_bufnr);
+int64_t __swift_bridge__$WolfCoreHandle$preview_file(void* self, int64_t win, void* path);
 void* __swift_bridge__$WolfCoreHandle$previews(void* self);
 int64_t __swift_bridge__$FfiPreview$win(void* self);
 int64_t __swift_bridge__$FfiPreview$source_bufnr(void* self);

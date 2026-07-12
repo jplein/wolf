@@ -403,6 +403,10 @@ extension WolfCoreHandleRef {
         RustString(ptr: __swift_bridge__$WolfCoreHandle$render_preview(ptr, source_bufnr))
     }
 
+    public func preview_file<GenericIntoRustString: IntoRustString>(_ win: Int64, _ path: GenericIntoRustString) -> Int64 {
+        __swift_bridge__$WolfCoreHandle$preview_file(ptr, win, { let rustString = path.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
+    }
+
     public func previews() -> RustVec<FfiPreview> {
         RustVec(ptr: __swift_bridge__$WolfCoreHandle$previews(ptr))
     }

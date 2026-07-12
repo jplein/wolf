@@ -57,9 +57,10 @@
 //! None of that is implemented here; this module only guarantees the markers are
 //! present in the emitted HTML from day one.
 
+use std::collections::HashMap;
 use std::ops::Range;
 
-use pulldown_cmark::{html, Event, Options, Parser, Tag};
+use pulldown_cmark::{html, Event, Options, Parser, Tag, TagEnd};
 
 /// The column stride for the per-100-column markers: for any hard line whose
 /// character length is `>= MARKER_COLUMN_STRIDE`, an extra marker is emitted at
@@ -112,9 +113,14 @@ pub fn render_html(source: &str, theme: PreviewTheme) -> String {
     options.insert(Options::ENABLE_FOOTNOTES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TASKLISTS);
+    // O5: honor explicit `{#custom-id}` heading attributes; the auto-slug pipeline
+    // only assigns an id when the heading declares none.
+    options.insert(Options::ENABLE_HEADING_ATTRIBUTES);
 
+    let slugs = heading_slugs(source, options);
     let offset_iter = Parser::new_ext(source, options).into_offset_iter();
-    let injector = MarkerInjector::new(offset_iter, markers);
+    let with_ids = HeadingIdAssigner::new(offset_iter, slugs);
+    let injector = MarkerInjector::new(with_ids, markers);
 
     let mut body = String::new();
     html::push_html(&mut body, injector);
@@ -175,6 +181,179 @@ fn desired_markers(source: &str) -> Vec<(usize, u32, u32)> {
         line_start += line.len() + 1;
     }
     markers
+}
+
+/// Converts accumulated heading text into a GitHub-style, Unicode-preserving URL
+/// slug, deduplicating against the shared `seen` map so ids are unique in document
+/// order. This is the source-of-truth implementation of §SLUG.
+///
+/// Algorithm (EXACT):
+/// 1. Lowercase the whole string via [`str::to_lowercase`] (full Unicode — so
+///    `"Café Ω"` lowercases to `"café ω"`, not just ASCII).
+/// 2. Walk char-by-char with NO hyphen collapsing:
+///    - [`char::is_alphanumeric`] (Unicode-aware) → push the char,
+///    - `'-'` → push `'-'` (an existing hyphen is preserved verbatim),
+///    - [`char::is_whitespace`] → push `'-'`,
+///    - anything else (punctuation/symbols) → drop it.
+///    Because whitespace maps 1:1 to a hyphen and nothing is collapsed,
+///    `"C++ & Rust"` → `"c--rust"` and `"foo  bar"` → `"foo--bar"`.
+/// 3. If the result is empty after stripping, fall back to the base `"section"`.
+/// 4. Deduplicate against `seen` (a shared `base -> count` map, threaded across
+///    every heading in document order): if `base` is unseen, use `base` and record
+///    count `1`; otherwise the id is `"{base}-{n}"` where `n` is the current count,
+///    and the count is incremented. Explicit `{#custom}` ids (see [`heading_slugs`])
+///    are also registered in the same map, so a later auto-slug that would collide
+///    with an explicit id suffixes around it. The rare literal `"{base}-{n}"`
+///    heading-text collision (e.g. an actual `"foo-1"` heading clashing with the
+///    dedup of a second `"foo"`) is documented and accepted (O2).
+fn slugify(text: &str, seen: &mut HashMap<String, u32>) -> String {
+    let lowered = text.to_lowercase();
+    let mut base = String::with_capacity(lowered.len());
+    for c in lowered.chars() {
+        if c.is_alphanumeric() {
+            base.push(c);
+        } else if c == '-' {
+            base.push('-');
+        } else if c.is_whitespace() {
+            base.push('-');
+        }
+        // else: drop punctuation/symbols.
+    }
+    if base.is_empty() {
+        base = "section".to_string();
+    }
+
+    dedup(base, seen)
+}
+
+/// Deduplicates `base` against the shared `seen` map (§SLUG step 4): an unseen
+/// `base` is used as-is (count → 1); a seen `base` becomes `"{base}-{n}"` for the
+/// current count `n` (count → n+1). Shared by [`slugify`] and the explicit-id
+/// registration in [`heading_slugs`].
+fn dedup(base: String, seen: &mut HashMap<String, u32>) -> String {
+    match seen.get(&base).copied() {
+        None => {
+            seen.insert(base.clone(), 1);
+            base
+        }
+        Some(n) => {
+            seen.insert(base.clone(), n + 1);
+            format!("{base}-{n}")
+        }
+    }
+}
+
+/// Computes, in document order, the auto-slug id for every heading in `source`.
+///
+/// One entry per heading: `Some(slug)` when the heading declares no explicit id
+/// (an auto-slug must be assigned), or `None` when the heading already carries an
+/// explicit `{#custom}` id (nothing to assign — but the explicit id is still
+/// REGISTERED in the shared `seen` map so later auto-slugs suffix around it).
+///
+/// This runs a FRESH parse of `source` (O6: the extra pre-pass is accepted — renders
+/// are debounced). The accumulated heading text for auto-slugs is the in-order
+/// concatenation of every [`Event::Text`] and [`Event::Code`] between the heading's
+/// `Start` and `End`, matching §SLUG.
+fn heading_slugs(source: &str, options: Options) -> Vec<Option<String>> {
+    let mut seen: HashMap<String, u32> = HashMap::new();
+    let mut slugs: Vec<Option<String>> = Vec::new();
+    let mut in_heading = false;
+    let mut explicit = false;
+    let mut acc = String::new();
+
+    for event in Parser::new_ext(source, options) {
+        match event {
+            Event::Start(Tag::Heading { id, .. }) => {
+                in_heading = true;
+                acc.clear();
+                if let Some(id) = id {
+                    // Explicit id: register it (verbatim) so later auto-slugs
+                    // dedup around it, and mark this heading as needing no slug.
+                    explicit = true;
+                    let _ = dedup(id.to_string(), &mut seen);
+                } else {
+                    explicit = false;
+                }
+            }
+            Event::End(TagEnd::Heading(_)) if in_heading => {
+                if explicit {
+                    slugs.push(None);
+                } else {
+                    slugs.push(Some(slugify(&acc, &mut seen)));
+                }
+                in_heading = false;
+            }
+            Event::Text(t) | Event::Code(t) if in_heading && !explicit => {
+                acc.push_str(&t);
+            }
+            _ => {}
+        }
+    }
+
+    slugs
+}
+
+/// An iterator adapter over [`pulldown_cmark::OffsetIter`] that rewrites each
+/// heading `Start` tag with no explicit id to carry its auto-slug id from
+/// [`heading_slugs`] (computed in the same document order).
+///
+/// `next_heading` advances on EVERY heading `Start` (both explicit-id and
+/// auto-id headings), so it stays aligned with the one-entry-per-heading `slugs`
+/// vector. A heading that already carries an explicit id (its slot is `None`) is
+/// passed through untouched. All non-heading events pass through with their source
+/// range intact, so [`MarkerInjector`] downstream still sees `(Event, Range)`.
+struct HeadingIdAssigner<I> {
+    inner: I,
+    /// Per-heading auto-slug (document order); see [`heading_slugs`].
+    slugs: Vec<Option<String>>,
+    /// Index of the next heading `Start` to be seen.
+    next_heading: usize,
+}
+
+impl<'a, I> HeadingIdAssigner<I>
+where
+    I: Iterator<Item = (Event<'a>, Range<usize>)>,
+{
+    fn new(inner: I, slugs: Vec<Option<String>>) -> Self {
+        Self {
+            inner,
+            slugs,
+            next_heading: 0,
+        }
+    }
+}
+
+impl<'a, I> Iterator for HeadingIdAssigner<I>
+where
+    I: Iterator<Item = (Event<'a>, Range<usize>)>,
+{
+    type Item = (Event<'a>, Range<usize>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (event, range) = self.inner.next()?;
+        if let Event::Start(Tag::Heading {
+            level,
+            id: None,
+            classes,
+            attrs,
+        }) = event
+        {
+            let slug = self.slugs.get(self.next_heading).cloned().flatten();
+            self.next_heading += 1;
+            let rebuilt = Event::Start(Tag::Heading {
+                level,
+                id: slug.map(Into::into),
+                classes,
+                attrs,
+            });
+            return Some((rebuilt, range));
+        }
+        if matches!(event, Event::Start(Tag::Heading { .. })) {
+            // Explicit-id heading: still advance to keep alignment with `slugs`.
+            self.next_heading += 1;
+        }
+        Some((event, range))
+    }
 }
 
 /// Returns whether `event` is a block-level `Start` tag — the only injection
@@ -287,6 +466,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     /// `desired_markers` emits one column-zero marker per hard line, in ascending
@@ -352,5 +533,121 @@ mod tests {
         assert!(html.contains(r#"class="wolf-markdown""#));
         assert!(html.contains("<h1"));
         assert!(html.contains(r#"id="wl-1-0""#));
+    }
+
+    /// A fresh, empty dedup map, so each `slugify` case starts from a clean
+    /// `seen` count (except the dedup test, which threads one map across calls).
+    fn fresh_seen() -> HashMap<String, u32> {
+        HashMap::new()
+    }
+
+    /// The common case: lowercase and space→hyphen (§SLUG steps 1-2).
+    #[test]
+    fn slugify_basic() {
+        let mut seen = fresh_seen();
+        assert_eq!(slugify("Hello World", &mut seen), "hello-world");
+    }
+
+    /// Punctuation is DROPPED (not hyphenated); whitespace becomes a hyphen and
+    /// is NOT collapsed, so `"Foo, Bar!"` → `"foo-bar"` and `"C++ & Rust"` →
+    /// `"c--rust"` (the comma/`+`/`&`/`!` drop, the surrounding spaces stay).
+    #[test]
+    fn slugify_drops_punctuation() {
+        let mut seen = fresh_seen();
+        assert_eq!(slugify("Foo, Bar!", &mut seen), "foo-bar");
+
+        let mut seen = fresh_seen();
+        assert_eq!(slugify("C++ & Rust", &mut seen), "c--rust");
+    }
+
+    /// An existing hyphen in the source text is preserved verbatim (§SLUG: `'-'`
+    /// → push `'-'`), never doubled or collapsed.
+    #[test]
+    fn slugify_keeps_existing_hyphens() {
+        let mut seen = fresh_seen();
+        assert_eq!(slugify("multi-word title", &mut seen), "multi-word-title");
+    }
+
+    /// Code-span text participates in the slug (the accumulator includes
+    /// `Event::Code`), so the accumulated `"foo"` slugs to `"foo"`.
+    #[test]
+    fn slugify_code_span() {
+        let mut seen = fresh_seen();
+        assert_eq!(slugify("foo", &mut seen), "foo");
+    }
+
+    /// Unicode is RETAINED and lowercased (full Unicode `to_lowercase`), so
+    /// `"Café Ω"` → `"café-ω"` (O2 accepts Unicode-preserving slugs).
+    #[test]
+    fn slugify_unicode() {
+        let mut seen = fresh_seen();
+        assert_eq!(slugify("Café Ω", &mut seen), "café-ω");
+    }
+
+    /// A heading that strips to nothing (all punctuation) falls back to the base
+    /// `"section"` (§SLUG step 3).
+    #[test]
+    fn slugify_empty_after_strip() {
+        let mut seen = fresh_seen();
+        assert_eq!(slugify("!!!", &mut seen), "section");
+    }
+
+    /// Duplicate headings dedup against the SHARED `seen` map in document order:
+    /// the first `"Intro"` → `"intro"`, the second → `"intro-1"`, the third →
+    /// `"intro-2"` (§SLUG step 4).
+    #[test]
+    fn slugify_dedup() {
+        let mut seen = fresh_seen();
+        assert_eq!(slugify("Intro", &mut seen), "intro");
+        assert_eq!(slugify("Intro", &mut seen), "intro-1");
+        assert_eq!(slugify("Intro", &mut seen), "intro-2");
+    }
+
+    /// `render_html` emits a computed slug `id` on the heading (with
+    /// `ENABLE_HEADING_ATTRIBUTES` on and the auto-slug pipeline wired in).
+    #[test]
+    fn render_html_heading_has_id() {
+        let html = render_html("# Alpha Heading\n", PreviewTheme::Default);
+        assert!(
+            html.contains(r#"id="alpha-heading""#),
+            "a heading must carry its computed slug id: {html}"
+        );
+    }
+
+    /// An explicit `{#custom}` id is honored verbatim (O5); it is also REGISTERED
+    /// in `seen`, so a later auto-slug that would collide suffixes around it
+    /// (`"# Custom"` → `id="custom-1"`).
+    #[test]
+    fn render_html_explicit_heading_id() {
+        let html = render_html("# Title {#custom}\n", PreviewTheme::Default);
+        assert!(
+            html.contains(r#"id="custom""#),
+            "an explicit {{#custom}} id must be honored verbatim: {html}"
+        );
+
+        let html = render_html("# Title {#custom}\n\n# Custom\n", PreviewTheme::Default);
+        assert!(
+            html.contains(r#"id="custom""#),
+            "the explicit id stays verbatim: {html}"
+        );
+        assert!(
+            html.contains(r#"id="custom-1""#),
+            "the later auto-slug colliding with the explicit id must suffix to custom-1: {html}"
+        );
+    }
+
+    /// The heading-slug id and the invisible `wl-{L}-{C}` source marker coexist:
+    /// adding heading ids must not displace the marker injector's spans.
+    #[test]
+    fn render_html_marker_still_present() {
+        let html = render_html("# Alpha Heading\n", PreviewTheme::Default);
+        assert!(
+            html.contains(r#"id="alpha-heading""#),
+            "the heading slug id must be present: {html}"
+        );
+        assert!(
+            html.contains(r#"id="wl-1-0""#),
+            "the source marker must still be present alongside the heading id: {html}"
+        );
     }
 }

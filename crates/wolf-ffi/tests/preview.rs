@@ -317,6 +317,13 @@ fn preview_gates_opens_lists_and_live_updates() {
         html.contains(r#"id="wl-1-0""#),
         "render_preview must carry the first hard line's `wl-1-0` anchor: {html}"
     );
+    // The heading slug id ships through the nvim -> render_preview path (proves the
+    // `HeadingIdAssigner` output survives the FFI round-trip, not just the pure
+    // `render_html` unit tests). `# Alpha Heading` slugs to `alpha-heading`.
+    assert!(
+        html.contains(r#"id="alpha-heading""#),
+        "render_preview must carry the heading slug id from the nvim path: {html}"
+    );
 
     // --- 6. Live-update: editing the source advances the preview's tick -------
     // Focus the SOURCE pane (the split left the preview pane active), capture the
@@ -493,8 +500,15 @@ fn preview_reuses_the_other_preview_pane() {
         active_before,
         "reuse must NOT change the active window (the source pane stays focused)",
     );
-    assert!(
-        handle.is_markdown_active(),
+    // The reuse rebind does a background-window `nvim_win_set_buf`, after which
+    // `wolf_emit_current_file` re-asserts the ACTIVE (source) buffer's filetype
+    // asynchronously via the redraw/notification path. Reading
+    // `is_markdown_active()` synchronously here races that emit, so poll (bounded
+    // by FLUSH_TIMEOUT, the same convention as the other `wait_for_*` helpers)
+    // until it settles to true — the active source pane still shows markdown.
+    wait_for_markdown_active(
+        &handle,
+        true,
         "the active (source) pane still shows a markdown buffer after the reuse rebind",
     );
 
@@ -571,5 +585,149 @@ fn preview_reuse_falls_back_to_active_when_no_other_preview() {
     );
 
     handle.shutdown();
+    drop(tmp);
+}
+
+#[test]
+fn preview_file_repoints_pane_to_linked_file() {
+    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    let Some(nvim_bin) = common::nvim_bin_or_skip() else {
+        return;
+    };
+    std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
+
+    let init_lua = common::init_lua_path();
+
+    // A fresh temp cwd holding alpha.md (which LINKS to beta.md at an anchor), the
+    // linked beta.md, and a plain-text file (the non-markdown `preview_file` gate
+    // case). Kept alive until after `shutdown()`.
+    let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
+    std::fs::write(
+        tmp.path().join("alpha.md"),
+        "# Alpha Heading\n\n[to beta](beta.md#beta-heading)\n",
+    )
+    .expect("failed to write alpha.md");
+    std::fs::write(
+        tmp.path().join("beta.md"),
+        "# Beta Heading\n\nAnother paragraph.\n",
+    )
+    .expect("failed to write beta.md");
+    std::fs::write(tmp.path().join("notes.txt"), "plain text notes\n")
+        .expect("failed to write notes.txt");
+
+    // Absolute paths (as WebKit would resolve a `file://` link; Lua does NO
+    // relative resolution). `tmp.path()` is already absolute.
+    let beta_path = tmp
+        .path()
+        .join("beta.md")
+        .to_string_lossy()
+        .into_owned();
+    let txt_path = tmp
+        .path()
+        .join("notes.txt")
+        .to_string_lossy()
+        .into_owned();
+
+    let handle = wolf_ffi_start(
+        init_lua.to_string_lossy().into_owned(),
+        tmp.path().to_string_lossy().into_owned(),
+        common::DEFAULT_COLS,
+        common::DEFAULT_ROWS,
+    )
+    .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
+
+    // --- 1. Attach; open alpha.md as the source and split-right preview it ----
+    wait_for_attach(&handle);
+    send_ex_command(&handle, ":e alpha.md");
+    wait_for_markdown_active(&handle, true, "after :e alpha.md");
+
+    let alpha_preview_bufnr = handle.open_preview("split_right".to_string());
+    assert!(
+        alpha_preview_bufnr > 0,
+        "open_preview(\"split_right\") on a markdown buffer must return a valid \
+         preview bufnr (> 0), got {alpha_preview_bufnr}"
+    );
+    wait_for_window_count(&handle, TWO_PANES, "after split-right preview");
+    let previews = wait_for_previews(&handle, "one alpha.md preview", |p| {
+        p.iter().any(|row| row.source_name() == "alpha.md")
+    });
+    let preview_win = previews
+        .iter()
+        .find(|row| row.source_name() == "alpha.md")
+        .expect("a preview row for alpha.md must exist")
+        .win();
+    assert!(
+        preview_win > 0,
+        "the alpha.md preview must carry a real preview WINDOW handle (> 0), got {preview_win}"
+    );
+
+    // --- 2. preview_file repoints that preview WINDOW at beta.md --------------
+    // Returns beta.md's SOURCE bufnr (> 0); it must NOT open a new pane.
+    let beta_bufnr = handle.preview_file(preview_win, beta_path.clone());
+    assert!(
+        beta_bufnr > 0,
+        "preview_file(win, <abs beta.md>) must return beta.md's source bufnr (> 0), got {beta_bufnr}"
+    );
+
+    // The preview row for THIS window now reports beta.md (a re-emit replaces the
+    // snapshot), and the live window count is unchanged (view-only repoint).
+    wait_for_previews(
+        &handle,
+        "the preview window now previews beta.md",
+        |p| {
+            p.iter()
+                .any(|row| row.win() == preview_win && row.source_name() == "beta.md")
+        },
+    );
+    assert_eq!(
+        live_window_count(&handle),
+        TWO_PANES,
+        "preview_file must NOT create a new pane (still two live windows)",
+    );
+
+    // --- 3. render_preview(beta) carries beta's heading text + slug id --------
+    let html = handle.render_preview(beta_bufnr);
+    assert!(
+        html.contains("Beta Heading"),
+        "render_preview(beta) must contain the linked file's heading text: {html}"
+    );
+    assert!(
+        html.contains(r#"id="beta-heading""#),
+        "render_preview(beta) must carry beta's heading slug id: {html}"
+    );
+
+    // --- 4. Negative: a non-markdown link returns 0 and changes nothing -------
+    let before = handle.previews();
+    let non_md = handle.preview_file(preview_win, txt_path.clone());
+    assert_eq!(
+        non_md, 0,
+        "preview_file(win, <abs .txt>) must return the neutral 0 (non-markdown gate)"
+    );
+    // The preview window still previews beta.md (the failed call left it alone).
+    let after = handle.previews();
+    assert!(
+        after
+            .iter()
+            .any(|row| row.win() == preview_win && row.source_name() == "beta.md"),
+        "a rejected non-markdown preview_file must leave the previews() snapshot unchanged: \
+         before {:?} after {:?}",
+        before
+            .iter()
+            .map(|r| (r.win(), r.source_name()))
+            .collect::<Vec<_>>(),
+        after
+            .iter()
+            .map(|r| (r.win(), r.source_name()))
+            .collect::<Vec<_>>(),
+    );
+
+    // --- 5. Shutdown: preview_file returns the neutral 0 ---------------------
+    handle.shutdown();
+    assert_eq!(
+        handle.preview_file(preview_win, beta_path.clone()),
+        0,
+        "after shutdown preview_file() must be the neutral 0"
+    );
+
     drop(tmp);
 }

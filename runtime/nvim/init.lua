@@ -637,13 +637,13 @@ _G.wolf_preview_bufs = _G.wolf_preview_bufs or {}
 -- (its source's bufnr). Being buflisted, it surfaces in the buffer picker as
 -- "Preview: <basename>" with no front-end injection; the path-based trackers skip
 -- it via b:wolf_preview_source.
-function _G.wolf_open_preview(mode)
-	if vim.bo.filetype ~= "markdown" then
-		return 0
-	end
-	local source_buf = vim.api.nvim_get_current_buf()
-	local source_path = vim.api.nvim_buf_get_name(source_buf)
-
+-- Creates (or reuses, via the _G.wolf_preview_bufs map) the preview scratch
+-- buffer for `source_buf` (whose abs path is `source_path`) and returns its
+-- bufnr. Factored out of wolf_open_preview so wolf_preview_file can create the
+-- same kind of preview buffer for a file the user navigated to via a link. The
+-- preview buffer is a listed + scratch (nofile) + nomodifiable buffer named
+-- "Preview: <basename>" carrying b:wolf_preview_source / b:wolf_preview_source_bufnr.
+function _G.wolf_ensure_preview_buf(source_buf, source_path)
 	local preview_buf = _G.wolf_preview_bufs[source_buf]
 	if not preview_buf or not vim.api.nvim_buf_is_valid(preview_buf) then
 		-- listed = true (surfaces in the picker), scratch = true (nofile /
@@ -667,6 +667,17 @@ function _G.wolf_open_preview(mode)
 		vim.bo[preview_buf].modifiable = false
 		_G.wolf_preview_bufs[source_buf] = preview_buf
 	end
+	return preview_buf
+end
+
+function _G.wolf_open_preview(mode)
+	if vim.bo.filetype ~= "markdown" then
+		return 0
+	end
+	local source_buf = vim.api.nvim_get_current_buf()
+	local source_path = vim.api.nvim_buf_get_name(source_buf)
+
+	local preview_buf = _G.wolf_ensure_preview_buf(source_buf, source_path)
 
 	if mode == "split_right" then
 		-- Single-pane placement: split a new pane to the right, then bind the
@@ -711,6 +722,62 @@ function _G.wolf_open_preview(mode)
 		_G.wolf_emit_current_file()
 	end
 	return preview_buf
+end
+
+-- Repoints the preview window `win` at the Markdown file `path` (an ABSOLUTE
+-- path, resolved by the front-end from a clicked file:// link), replacing that
+-- pane's current preview with a preview of the linked file. wolf-core calls this
+-- over nvim_exec_lua from WolfCore::preview_file.
+--
+-- Returns the linked file's SOURCE bufnr (> 0) on success; 0 when `path` is
+-- empty, unreadable, or not Markdown. On 0 the front-end leaves the pane as-is
+-- (and applies its own O3 fallback for a real-but-non-previewable file).
+--
+-- Contract: this does NO relative-path resolution -- `path` is already absolute.
+function _G.wolf_preview_file(win, path)
+	if path == nil or path == "" then
+		return 0
+	end
+	if vim.fn.filereadable(path) == 0 then
+		return 0
+	end
+
+	local source_buf = vim.fn.bufadd(path)
+	vim.fn.bufload(source_buf)
+
+	-- Markdown gate: honor an already-set filetype, else ask vim.filetype.match
+	-- (by buffer + filename) and set it; a non-markdown file yields 0.
+	if vim.bo[source_buf].filetype ~= "markdown" then
+		local ft = vim.filetype.match({ buf = source_buf, filename = path })
+		if ft == "markdown" then
+			vim.bo[source_buf].filetype = "markdown"
+		else
+			return 0
+		end
+	end
+
+	local source_path = vim.api.nvim_buf_get_name(source_buf)
+	local preview_buf = _G.wolf_ensure_preview_buf(source_buf, source_path)
+
+	-- Bind the preview into the requested window, falling back to the current
+	-- window when `win` is missing/zero/invalid.
+	if win and win ~= 0 and vim.api.nvim_win_is_valid(win) then
+		vim.api.nvim_win_set_buf(win, preview_buf)
+	else
+		vim.api.nvim_win_set_buf(0, preview_buf)
+	end
+
+	-- Re-emit so the front-end learns the pane now previews the linked file (a
+	-- background-window bind fires no window event) and re-asserts the active
+	-- source pane's filetype. Both are idempotent.
+	if _G.wolf_emit_previews then
+		_G.wolf_emit_previews()
+	end
+	if _G.wolf_emit_current_file then
+		_G.wolf_emit_current_file()
+	end
+
+	return source_buf
 end
 
 -- Preview tracking + dirty signal: wolf-core invokes this over RPC after ui_attach

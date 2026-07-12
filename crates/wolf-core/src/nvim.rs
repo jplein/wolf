@@ -350,6 +350,40 @@ impl NvimProcess {
         Ok(value.as_i64().unwrap_or_default())
     }
 
+    /// Repoints the preview window `win` at the Markdown file at absolute `path`,
+    /// replacing that pane's current preview with a preview of the linked file, and
+    /// returns the linked file's SOURCE bufnr.
+    ///
+    /// Runs the `_G.wolf_preview_file` helper (defined in `runtime/nvim/init.lua`)
+    /// over `nvim_exec_lua`, passing `win` and `path` as Lua varargs (never
+    /// interpolated). The helper `bufadd`+`bufload`s `path`, gates it through
+    /// `vim.filetype.match` (setting `filetype=markdown` when it matches), creates or
+    /// reuses that source's preview scratch buffer via `_G.wolf_ensure_preview_buf`,
+    /// binds it into `win` (falling back to the current window when `win` is
+    /// missing/zero/invalid), and re-emits the previews / current-file snapshots.
+    ///
+    /// Returns the linked file's source bufnr (`> 0`) on success; `0` when `path` is
+    /// empty, unreadable, or not Markdown (decoded via [`Value::as_i64`]). `path` is
+    /// ABSOLUTE — the helper does NO relative resolution. RPC failure maps to
+    /// [`NvimError::Rpc`]; the caller
+    /// ([`crate::api::WolfCore::preview_file`]) maps that to `0`.
+    pub async fn preview_file(&self, win: i64, path: &str) -> Result<i64, NvimError> {
+        let value = self
+            .nvim
+            .call(
+                "nvim_exec_lua",
+                vec![
+                    Value::from("return wolf_preview_file(...)"),
+                    Value::Array(vec![Value::from(win), Value::from(path)]),
+                ],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+        Ok(value.as_i64().unwrap_or_default())
+    }
+
     /// Installs the preview tracking + dirty-signal autocmds inside the captive
     /// nvim.
     ///
