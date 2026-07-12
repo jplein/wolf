@@ -109,21 +109,20 @@ fn snapshot_builder_round_trips_the_whole_tree() {
 
     // Force the coalesced writer out, then poll the load side until the tree lands.
     let deadline = Instant::now() + FLUSH_TIMEOUT;
-    let mut restored = wolf_ffi_load_state();
-    loop {
+    let restored = loop {
         assert!(
             wolf_ffi_state_flush(),
             "wolf_ffi_state_flush() must complete (true) within {FLUSH_TIMEOUT:?}"
         );
-        restored = wolf_ffi_load_state();
+        let restored = wolf_ffi_load_state();
         if restored.windows().len() == TWO_WINDOWS {
-            break;
+            break restored;
         }
         if Instant::now() >= deadline {
-            break;
+            break restored;
         }
         sleep(POLL_INTERVAL);
-    }
+    };
 
     // --- 3. Assert the whole tree round-trips through the accessors ----------
     let windows = restored.windows();

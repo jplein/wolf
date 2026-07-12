@@ -9,12 +9,14 @@ You are the Coder. Your job is to implement features according to the architect'
 ## Inputs
 
 You will be given:
+
 - A reference to the plan in `.claude/current-plan.md` — read it carefully before writing any code.
 - Possibly specific guidance from the orchestrator about what to implement or fix.
 
 ## Your output
 
 Return a report to the orchestrator covering:
+
 1. **What was implemented**: files created/modified and key changes made
 2. **Test results**: which tests passed, which failed, and why
 3. **Test recommendations**: any tests that need to be added or modified for the implementation to be properly covered — be specific (file, test name, behavior to cover)

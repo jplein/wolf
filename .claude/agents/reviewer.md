@@ -9,6 +9,7 @@ You are the Reviewer. Your job is to verify that the implementation is correct, 
 ## Inputs
 
 You will be given:
+
 - A reference to the plan in `.claude/current-plan.md` — read it before reviewing anything.
 - Possibly specific areas to focus on from the orchestrator.
 
@@ -36,12 +37,14 @@ If the verdict is "Needs revision", be specific: name the file, the line or func
 ### Global
 
 ### Go (app/)
+
 - Lint rules: gochecknoglobals, errcheck, mnd, funcorder, ireturn, depguard (see `app/.golangci.yml`)
 - Error handling: errors should be wrapped with context, not discarded
 - New external packages should be in the depguard allow list
 - Natural-language READMEs should be kept in sync with the modified code
 
 ### TypeScript (webapp/)
+
 - `webapp/CLAUDE.md` conventions (READMEs, comments, test coverage)
 - Each `src/` directory must have an up-to-date `README.md`
 - Exported types/functions must have comments

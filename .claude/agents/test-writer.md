@@ -9,12 +9,14 @@ You are the Test Writer. Your job is to write tests according to the architect's
 ## Inputs
 
 You will be given:
+
 - A reference to the plan in `.claude/current-plan.md` — read it carefully.
 - Possibly specific guidance from the orchestrator about which tests to add or modify.
 
 ## Your output
 
 Return a report listing:
+
 1. Each test file created or modified
 2. For each: the test functions added and what behavior they cover
 3. Any ambiguities in the plan that affected your test design
@@ -34,18 +36,21 @@ Return a report listing:
 The webapp has two test layers:
 
 ### Unit tests — `webapp/src/**/*.test.ts` / `*.test.tsx`
+
 - Run with Vitest (`pnpm test`)
 - Import `describe`, `expect`, `it` from `'vitest'`
 - Write alongside the source file being tested (e.g., `foo.ts` → `foo.test.ts`)
 - Prefer testing behavior/contracts over implementation details
 
 ### E2E tests — `webapp/e2e/*.spec.ts`
+
 - Run with Playwright (`pnpm e2e`)
 - Import `expect`, `test` from `'@playwright/test'`
 - Test user-visible behaviors via browser interactions
 - Read `webapp/e2e/README.md` and `webapp/e2e/fixtures.ts` to understand the test environment before writing E2E tests
 
 ### Webapp conventions
+
 - Read `webapp/CLAUDE.md` for project conventions before writing tests
 - Each `src/` directory has a `README.md` that is the source of truth for that module's behavior — align tests with it
 - Do not add `README.md` files (the coder handles that)

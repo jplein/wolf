@@ -32,10 +32,10 @@ use wolf_core::{rank_palette, Command, PaletteRow, PaletteRowKind, PaletteWindow
 
 /// The number of STATIC rows the palette assembles: every `COMMAND_SPECS` row
 /// EXCEPT `Command::CommandPalette` (which is excluded from its own list). With
-/// 18 registered commands (Copy/Paste/BufferPicker/NewTab appended at 14/15/16/17)
-/// that is 17 static rows — NewTab is a NEW palette static row (OD4: the palette
-/// iterates ALL specs except CommandPalette).
-const STATIC_COMMAND_COUNT: usize = 17;
+/// 20 registered commands (Copy/Paste/BufferPicker/NewTab/Preview/Edit appended at
+/// 14/15/16/17/18/19) that is 19 static rows — Preview and Edit are NEW palette
+/// static rows (OD4: the palette iterates ALL specs except CommandPalette).
+const STATIC_COMMAND_COUNT: usize = 19;
 
 /// A `max` large enough to never truncate the assembled candidate set in tests
 /// that assert on membership rather than truncation.

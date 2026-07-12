@@ -109,6 +109,7 @@ exit=0
 **Result: PARTIAL — bundled nvim PROVEN to really start + take keys + shut down; bridge_smoke harness hangs HOST-WIDE (not bundling-related).**
 
 ### 6a. bridge_smoke against BUNDLED nvim (sandbox) — TIMEOUT (300s)
+
 ```
 BUNDLED=/tmp/wolf_inspect/Wolf.app/Contents/Resources/nvim/bin/nvim
 running 1 test
@@ -116,24 +117,30 @@ test bridge_smoke has been running for over 60 seconds
 -- Test timed out at ... --
 //crates/wolf-ffi:bridge_smoke   TIMEOUT in 300.1s
 ```
+
 It RAN (did NOT skip): WOLF_NVIM_BIN was set, so `wolf_ffi_start` was invoked against the real bundled nvim — but the harness blocked.
 
 ### 6b. bridge_smoke against BUNDLED nvim, NO sandbox (`--strategy=TestRunner=local`) — TIMEOUT (120s)
+
 Same hang without the sandbox, so it is NOT a sandbox file-access problem.
 
 ### 6c. CONTROL: bridge_smoke against the system nix nvim (also NVIM v0.12.3) — TIMEOUT (90s)
+
 ```
 === nix nvim version === NVIM v0.12.3
 running 1 test
 test bridge_smoke has been running for over 60 seconds
 //crates/wolf-ffi:bridge_smoke   TIMEOUT in 90.0s
 ```
+
 **KEY FINDING:** bridge_smoke hangs with a KNOWN-GOOD, system-installed nvim 0.12.3 too. So the hang is a PRE-EXISTING bridge_smoke/host issue (its read/wake pump never completes on this macOS Bazel host), INDEPENDENT of the bundling work. The plan itself marks bridge_smoke "(loud-skip ok)" on macOS. I did NOT modify the test.
 
 ### 6d. Cannot use wolf-core cargo integration tests as a proxy
-wolf-core's real-nvim integration tests (tests/*.rs) are NOT Bazel-wired, and `cargo` is not provisioned even inside the nix devShell (all-Bazel; Rust via rules_rust). So bridge_smoke is the only Bazel real-nvim test, and it cannot complete on this host regardless of binary.
+
+wolf-core's real-nvim integration tests (tests/\*.rs) are NOT Bazel-wired, and `cargo` is not provisioned even inside the nix devShell (all-Bazel; Rust via rules_rust). So bridge_smoke is the only Bazel real-nvim test, and it cannot complete on this host regardless of binary.
 
 ### 6e. DIRECT honest proxy: drive the BUNDLED nvim headlessly (start -> insert keys -> write -> quit) — PASS
+
 ```
 BUNDLED .../Wolf.app/Contents/Resources/nvim/bin/nvim --headless -u NONE -i NONE -n \
   -c 'normal! ihello from bundled nvim' -c 'write! /tmp/wolf_bundled_edit.txt' -c 'qa!'
@@ -141,6 +148,7 @@ exit=0
 --- file content ---
 hello from bundled nvim
 ```
+
 The bundled binary really starts, enters insert mode, processes typed keys, writes a buffer, and shuts down cleanly (exit 0) using its bundled runtime. Combined with Step 1 (self-locates VIMRUNTIME inside the tree), this is real evidence the bundled nvim launches and works.
 
 **Honesty:** The GUI window appearing on Finder double-click is NOT headlessly assertable — not faked. bridge_smoke is the intended proxy but is non-functional on this macOS Bazel host for ALL nvim binaries (pre-existing); flagging to orchestrator.
@@ -150,6 +158,7 @@ The bundled binary really starts, enters insert mode, processes typed keys, writ
 ## Step 7: Regression — `bazel test //crates/wolf-ffi:frame_pack //crates/wolf-macos:WolfKeyMapTests --test_output=errors`
 
 **Result: PASS** (both green)
+
 ```
 //crates/wolf-ffi:frame_pack          (cached) PASSED in 0.4s
 //crates/wolf-macos:WolfKeyMapTests   (cached) PASSED in 0.4s
@@ -161,13 +170,17 @@ Executed 0 out of 2 tests: 2 tests pass.
 ## Step 8: Boundary — GUI denylist + wolf-core untouched
 
 ### 8a. `bazel query 'deps(//crates/wolf-core:wolf_core)' | grep -iE 'gtk|...'`
+
 Raw grep matched only `@@rules_rust++crate+crates__libc-0.2.186//:src/new/glibc/...` paths — i.e. the `glib` substring inside the `libc` crate's vendored GNU-C-Library (`glibc`) source file paths, NOT the GLib GUI library. Re-running with those excluded:
+
 ```
 clean (no GUI deps; all prior matches were libc glibc-source paths)
 ```
+
 **Result: PASS — denylist clean.**
 
 ### 8b. `git diff --stat crates/wolf-core`
+
 Empty output → **wolf-core UNTOUCHED** (no source change, no new dep, no CARGO_BAZEL_REPIN needed). **PASS.**
 
 ---
@@ -175,7 +188,7 @@ Empty output → **wolf-core UNTOUCHED** (no source change, no new dep, no CARGO
 ## Summary table (steps 1-8)
 
 | Step | What | Result |
-|------|------|--------|
+| --- | --- | --- |
 | 1 | nvim_version_test (pinned 0.12.3, exec bit, self-locate VIMRUNTIME, markdown.so) | PASS |
 | 2 | build //crates/wolf-macos:Wolf (delivered as Wolf.zip) | PASS |
 | 3 | structure preservation (RISK #1): nvim/ prefix + exec bits + init.lua | PASS |

@@ -9,6 +9,7 @@ You are the Technical Writer. Your job is to verify that the documentation is up
 ## Inputs
 
 You will be given:
+
 - A reference to the plan in `.claude/current-plan.md` — read it before doing anything else.
 - A list of changed files
 
