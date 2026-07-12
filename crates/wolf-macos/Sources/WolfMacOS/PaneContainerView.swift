@@ -33,6 +33,16 @@ private struct PaneBinding {
     var boundGrid: UInt64?
 }
 
+/// The scalar inputs `PreviewSeam.placementMode` reads to choose a preview
+/// placement, gathered from a `PaneContainerView`'s live pane/preview state.
+/// Internal (not `private`) so `WolfWindowController.openPreview()` — in a sibling
+/// file of the same module — can feed it through the pure seam.
+struct PreviewPlacementInputs {
+    let paneCount: Int
+    let activePaneIsPreview: Bool
+    let otherPreviewPaneCount: Int
+}
+
 /// The split-panes editor container: a single painting view.
 final class PaneContainerView: NSView {
     /// The id of the first (root) pane: the `PaneTree` is constructed with this as
@@ -142,10 +152,12 @@ final class PaneContainerView: NSView {
     /// dimmed by `paintPane`'s CGContext fill, since the web view is a real subview
     /// painted on top), added only while the pane is not active.
     private var previewDimOverlays: [Int64: NSView] = [:]
-    /// The source `changedtick` each preview window's web view was last loaded at,
-    /// so a reload (`render_preview` + `loadHTMLString`) fires only when the source
-    /// advanced (or on first bind) — the OD6 live-on-change gate.
-    private var lastPreviewTicks: [Int64: UInt64] = [:]
+    /// The `(sourceBufnr, sourceTick)` each preview window's web view was last loaded
+    /// at, so a reload (`render_preview` + `loadHTMLString`) fires when the window's
+    /// bound source BUFFER changed (a reused preview pane switching sources, even at
+    /// an equal tick) OR its tick advanced (or on first bind) — the OD6
+    /// live-on-change gate, plus the reused-preview-pane fix.
+    private var lastPreviewLoads: [Int64: PreviewSeam.PreviewLoad] = [:]
     /// The source basename of each preview pane, keyed by the pane's bound GRID,
     /// rebuilt every wake by `syncPreviewWebViews`. Consulted by `paintStatusbar`
     /// (to show `Preview: <name>`) and `drawScrollbars` (to suppress the synthetic
@@ -155,8 +167,9 @@ final class PaneContainerView: NSView {
     /// so a fast-typing burst — which fires many render wakes, each advancing the
     /// source `changedtick` — yields ONE trailing main-thread `render_preview`
     /// round-trip per ~30fps window rather than one per wake (OD6 / OD12). The
-    /// per-window source-tick gate (`lastPreviewTicks`) stays the redundant-reload
-    /// guard (same tick → still no reload); the coalescer bounds the RATE of the
+    /// per-window load gate (`lastPreviewLoads`, keyed by win → last-loaded
+    /// `(sourceBufnr, sourceTick)`) stays the redundant-reload guard (same source
+    /// buffer AND tick → still no reload); the coalescer bounds the RATE of the
     /// actual RPC + reload.
     private lazy var previewReloadCoalescer = PickerRefreshCoalescer(
         schedule: { work in
@@ -327,6 +340,32 @@ final class PaneContainerView: NSView {
     /// window. Read by the window controller to disable the Close command on the
     /// last split.
     var paneCount: Int { tree.leaves().count }
+
+    /// The scalar inputs `PreviewSeam.placementMode` needs to choose a preview
+    /// placement, read from this container's live pane/preview state (no new state):
+    /// the live pane count, whether the ACTIVE pane is itself a preview, and how
+    /// many OTHER panes are previews. See `previewPlacementInputs()`.
+    func previewPlacementInputs() -> PreviewPlacementInputs {
+        // The set of window handles currently showing a preview. `previews()`
+        // yields borrowed `FfiPreviewRef`s valid only for the loop body, so each
+        // `win()` scalar is copied out INSIDE the iteration (mirror the caution in
+        // `syncPreviewWebViews`).
+        var previewWins = Set<Int64>()
+        for preview in handle.previews() {
+            previewWins.insert(preview.win())
+        }
+
+        let activeWin = activePane.flatMap { panes[$0]?.win }
+        let activePaneIsPreview = activeWin.map(previewWins.contains) ?? false
+        let otherPreviewPaneCount = panes.values.filter { binding in
+            previewWins.contains(binding.win) && binding.win != activeWin
+        }.count
+
+        return PreviewPlacementInputs(
+            paneCount: tree.leaves().count,
+            activePaneIsPreview: activePaneIsPreview,
+            otherPreviewPaneCount: otherPreviewPaneCount)
+    }
 
     /// Re-measures against `newMetrics` (a per-window font-size change): swaps the
     /// cell geometry, re-syncs every grid's cell size to the new metrics, and
@@ -589,6 +628,7 @@ final class PaneContainerView: NSView {
     private func syncPreviewWebViews() {
         previewNamesByGrid.removeAll(keepingCapacity: true)
         var liveWins = Set<Int64>()
+        var current: [Int64: PreviewSeam.PreviewLoad] = [:]
         let rects = paneRects()
 
         // `previews()` yields borrowed `FfiPreviewRef`s valid only for the loop
@@ -603,21 +643,28 @@ final class PaneContainerView: NSView {
             liveWins.insert(win)
             previewNamesByGrid[grid] = preview.source_name().toString()
 
+            // Copy the borrowed ref's scalars out into a `PreviewLoad`; only wins that
+            // passed the pane/grid guard land in `current`, preserving the "only
+            // previews with a bound pane arm the coalescer" behavior.
+            current[win] = PreviewSeam.PreviewLoad(
+                sourceBufnr: preview.source_bufnr(), sourceTick: preview.source_tick())
+
             let gRect = gridRect(ofPane: entry.1)
             let web = ensurePreviewWebView(for: win)
             web.frame = gRect
             web.isHidden = false
 
-            // Only the cheap AppKit layout runs per wake; the BLOCKING reload is
-            // debounced. Requesting when the tick differs (a new source, or an
-            // advanced changedtick) coalesces a keystroke burst into one trailing
-            // reload. `lastPreviewTicks` is updated in the coalesced `perform`, not
-            // here, so the "did the tick advance" test survives the debounce.
-            if lastPreviewTicks[win] != preview.source_tick() {
-                previewReloadCoalescer.request()
-            }
-
             applyPreviewDim(win: win, over: gRect, dimmed: entry.0 != activePane)
+        }
+
+        // Only the cheap AppKit layout ran per wake above; the BLOCKING reload is
+        // debounced. Requesting when any win's bound source buffer changed (a reused
+        // preview pane switching sources, even at an equal tick) or its tick advanced
+        // coalesces a keystroke burst into one trailing reload. `lastPreviewLoads` is
+        // updated in the coalesced `perform`, not here, so the gate survives the
+        // debounce.
+        if !PreviewSeam.winsNeedingReload(current: current, loaded: lastPreviewLoads).isEmpty {
+            previewReloadCoalescer.request()
         }
 
         for win in Array(previewWebViews.keys) where !liveWins.contains(win) {
@@ -627,18 +674,25 @@ final class PaneContainerView: NSView {
 
     /// The coalesced preview-reload pass (the `previewReloadCoalescer`'s `perform`,
     /// run once per debounce window on the main thread). Re-reads the core's
-    /// `previews()` and, for each preview whose hosted web view still exists and
-    /// whose source `changedtick` advanced past `lastPreviewTicks`, does the one
+    /// `previews()` into a win → `PreviewLoad` map, then for each window whose bound
+    /// source BUFFER changed or whose `sourceTick` advanced past `lastPreviewLoads`
+    /// (via `winsNeedingReload`) and whose hosted web view still exists, does the one
     /// blocking `render_preview` round-trip and reloads the web view. The per-window
-    /// tick gate here is the redundant-reload guard; the coalescer bounds the rate.
+    /// bufnr-or-tick gate here is the redundant-reload guard; the coalescer bounds
+    /// the rate.
     private func reloadDirtyPreviews() {
+        var current: [Int64: PreviewSeam.PreviewLoad] = [:]
         for preview in handle.previews() {
-            let win = preview.win()
-            guard let web = previewWebViews[win] else { continue }
-            let tick = preview.source_tick()
-            guard lastPreviewTicks[win] != tick else { continue }
-            lastPreviewTicks[win] = tick
-            let html = handle.render_preview(preview.source_bufnr()).toString()
+            current[preview.win()] = PreviewSeam.PreviewLoad(
+                sourceBufnr: preview.source_bufnr(), sourceTick: preview.source_tick())
+        }
+        let needing = PreviewSeam.winsNeedingReload(current: current, loaded: lastPreviewLoads)
+        for win in needing {
+            // Skip a preview whose web view does not exist yet WITHOUT updating the
+            // map, so the next sync re-requests once the web view exists.
+            guard let web = previewWebViews[win], let load = current[win] else { continue }
+            lastPreviewLoads[win] = load
+            let html = handle.render_preview(load.sourceBufnr).toString()
             web.loadHTMLString(html, baseURL: nil)
         }
     }
@@ -677,14 +731,14 @@ final class PaneContainerView: NSView {
         }
     }
 
-    /// Tears down the hosted web view + dim overlay + last-tick entry for window
+    /// Tears down the hosted web view + dim overlay + last-load entry for window
     /// `win` (it is no longer a preview, or its pane closed).
     private func removePreviewWebView(_ win: Int64) {
         previewWebViews[win]?.removeFromSuperview()
         previewWebViews[win] = nil
         previewDimOverlays[win]?.removeFromSuperview()
         previewDimOverlays[win] = nil
-        lastPreviewTicks[win] = nil
+        lastPreviewLoads[win] = nil
     }
 
     /// Nulls EVERY pane's bound grid, then re-resolves each via `grid_for_win` on

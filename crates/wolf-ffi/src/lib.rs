@@ -2320,6 +2320,7 @@ impl FfiWinInfo {
 /// its source buffer's live `changedtick`: the preview WINDOW handle, the SOURCE
 /// Markdown buffer's number + absolute path (+ basename for the pane statusbar),
 /// and the tick the front-end reloads the web view on.
+#[derive(Debug)]
 pub struct FfiPreview {
     win: i64,
     source_bufnr: i64,

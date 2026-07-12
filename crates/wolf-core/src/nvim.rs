@@ -324,8 +324,12 @@ impl NvimProcess {
     /// Runs the `_G.wolf_open_preview` helper (defined in `runtime/nvim/init.lua`)
     /// over `nvim_exec_lua`, passing `mode` as a Lua vararg (never interpolated).
     /// `mode` is `"split_right"` (single-pane placement: reuse `wolf_do_split('v')`
-    /// then `nvim_win_set_buf(0, previewbuf)`) or `"active"` (multi-pane: just
-    /// `nvim_win_set_buf(0, previewbuf)`) — see [`crate::api::WolfCore::open_preview`].
+    /// then `nvim_win_set_buf(0, previewbuf)`), `"active"` (multi-pane: just
+    /// `nvim_win_set_buf(0, previewbuf)`), or `"reuse_preview_pane"` (exactly two
+    /// panes with the OTHER pane already a preview: scan the current tabpage for the
+    /// other window carrying `b:wolf_preview_source` and bind into it, leaving the
+    /// current window untouched; falls back to the `"active"` current-window bind
+    /// when none) — see [`crate::api::WolfCore::open_preview`].
     /// The helper no-ops (returns `0`) unless `&filetype == "markdown"`, else
     /// creates-or-reuses the per-source scratch buffer and returns its bufnr,
     /// decoded via [`Value::as_i64`].

@@ -196,6 +196,11 @@ function _G.wolf_setup_current_file_tracking(chan)
 			vim.rpcnotify(chan, "wolf_current_file", vim.fn.expand("%:p"), vim.bo.filetype)
 		end
 	end
+	-- Expose the emit closure so wolf_open_preview can re-assert the active buffer's
+	-- filetype after a reuse bind: a BACKGROUND nvim_win_set_buf into the other
+	-- (preview) window fires BufWinEnter with the preview scratch as the current
+	-- buffer, which would otherwise leave is_markdown_active stuck false.
+	_G.wolf_emit_current_file = emit
 	vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter", "BufFilePost", "FileType" }, {
 		group = group,
 		callback = emit,
@@ -619,6 +624,10 @@ _G.wolf_preview_bufs = _G.wolf_preview_bufs or {}
 --   * "split_right": single-pane placement -- reuse wolf_do_split('v') (which
 --     emits a wolf_layout Vertical Split intent so the shell creates+binds the new
 --     pane) then bind the preview buffer into the new (current) window.
+--   * "reuse_preview_pane": two-pane placement whose OTHER pane already shows a
+--     preview -- bind the preview buffer into that OTHER window (located by its
+--     b:wolf_preview_source marker) WITHOUT changing the current window, falling
+--     back to the current window when no other preview window is found.
 --   * "active": multi-pane placement -- just bind the preview buffer into the
 --     current window (nvim_win_set_buf), replacing its content.
 -- No-op (returns 0) unless the active buffer's filetype is markdown (the same gate
@@ -660,9 +669,47 @@ function _G.wolf_open_preview(mode)
 	end
 
 	if mode == "split_right" then
+		-- Single-pane placement: split a new pane to the right, then bind the
+		-- preview into it (the new split is the current window).
 		wolf_do_split("v")
+		vim.api.nvim_win_set_buf(0, preview_buf)
+	elseif mode == "reuse_preview_pane" then
+		-- Two-pane placement whose OTHER pane already previews: bind into that
+		-- OTHER preview window (found by its b:wolf_preview_source marker) WITHOUT
+		-- changing the current window. Falls back to the current window when no
+		-- other preview window is found (defensive; the seam already gates this).
+		local cur = vim.api.nvim_get_current_win()
+		local target = nil
+		for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+			if win ~= cur then
+				local src = vim.b[vim.api.nvim_win_get_buf(win)].wolf_preview_source
+				if src ~= nil and src ~= "" then
+					target = win
+					break
+				end
+			end
+		end
+		vim.api.nvim_win_set_buf(target or cur, preview_buf)
+	else
+		-- "active" (and any unknown mode): replace the current window's buffer.
+		vim.api.nvim_win_set_buf(0, preview_buf)
 	end
-	vim.api.nvim_win_set_buf(0, preview_buf)
+
+	-- A background-window nvim_win_set_buf (the reuse path) does not fire
+	-- BufWinEnter, so the front-end would never learn the new bind; nudge it to
+	-- re-emit the previews snapshot. Done for ALL modes (the emit is idempotent --
+	-- the handler wholesale-replaces its previews snapshot).
+	if _G.wolf_emit_previews then
+		_G.wolf_emit_previews()
+	end
+	-- Re-assert the active buffer's filetype: a reuse bind's BACKGROUND
+	-- nvim_win_set_buf fires BufWinEnter with the preview scratch as the current
+	-- buffer, which would leave is_markdown_active stuck false for the (still
+	-- markdown) active source pane. Unconditional for all modes -- symmetric and
+	-- idempotent (the current-file emit wholesale-replaces the tracked filetype).
+	if _G.wolf_emit_current_file then
+		_G.wolf_emit_current_file()
+	end
 	return preview_buf
 end
 
@@ -695,6 +742,10 @@ function _G.wolf_setup_preview(chan)
 		end
 		vim.rpcnotify(chan, "wolf_preview", list)
 	end
+
+	-- Expose the emit closure (it closes over `chan`) so wolf_open_preview can
+	-- re-emit after a background-window bind that fires no window event.
+	_G.wolf_emit_previews = emit_previews
 
 	vim.api.nvim_create_autocmd(
 		{ "WinEnter", "BufWinEnter", "WinNew", "WinClosed", "BufWinLeave" },

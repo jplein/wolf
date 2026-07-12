@@ -195,6 +195,29 @@ fn tick_for_source(previews: &[FfiPreview], bufnr: i64) -> Option<u64> {
         .map(FfiPreview::source_tick)
 }
 
+/// Blocks (bounded by [`FLUSH_TIMEOUT`]) until the core's `current_file()` ends
+/// with `suffix` (a BASENAME match, robust to absolute-vs-cwd-relative display and
+/// to `/var`↔`/private/var` symlinking), deterministically confirming that file is
+/// the ACTIVE buffer. Unlike `is_markdown_active` — which stays true across a
+/// markdown→markdown `:e` and so cannot witness the switch — this only flips once
+/// the `wolf_current_file` notification for the new buffer has landed. Panics with
+/// `suffix` on timeout.
+fn wait_for_current_file(handle: &wolf_ffi::WolfCoreHandle, suffix: &str) {
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    let mut current = handle.current_file();
+    while Instant::now() < deadline {
+        current = handle.current_file();
+        if current.ends_with(suffix) {
+            return;
+        }
+        sleep(POLL_INTERVAL);
+    }
+    panic!(
+        "timed out after {FLUSH_TIMEOUT:?} waiting for current_file() to end with \
+         {suffix} (got {current})"
+    );
+}
+
 /// Cycles editor windows with `:wincmd w` until the active window reports a
 /// markdown buffer (`is_markdown_active()`), so a subsequent edit lands on the
 /// SOURCE pane rather than the (non-markdown) preview scratch pane. With exactly
@@ -353,5 +376,200 @@ fn preview_gates_opens_lists_and_live_updates() {
         "after shutdown open_preview() must be the neutral 0"
     );
 
+    drop(tmp);
+}
+
+/// Seeds a fresh temp cwd with `alpha.md` AND `beta.md` (both real Markdown), the
+/// two source files the reuse/fallback tests edit. Returns the live `TempDir` (kept
+/// alive until after `shutdown()`) so its `.wolf/` MRU cache outlives the core.
+fn seed_two_markdown_files() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
+    std::fs::write(
+        tmp.path().join("alpha.md"),
+        "# Alpha Heading\n\nSome paragraph text.\n",
+    )
+    .expect("failed to write alpha.md");
+    std::fs::write(
+        tmp.path().join("beta.md"),
+        "# Beta Heading\n\nAnother paragraph.\n",
+    )
+    .expect("failed to write beta.md");
+    tmp
+}
+
+#[test]
+fn preview_reuses_the_other_preview_pane() {
+    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    let Some(nvim_bin) = common::nvim_bin_or_skip() else {
+        return;
+    };
+    std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
+
+    let init_lua = common::init_lua_path();
+    let tmp = seed_two_markdown_files();
+
+    let handle = wolf_ffi_start(
+        init_lua.to_string_lossy().into_owned(),
+        tmp.path().to_string_lossy().into_owned(),
+        common::DEFAULT_COLS,
+        common::DEFAULT_ROWS,
+    )
+    .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
+
+    // --- 1. Attach; open alpha.md as the source ------------------------------
+    wait_for_attach(&handle);
+    send_ex_command(&handle, ":e alpha.md");
+    wait_for_markdown_active(&handle, true, "after :e alpha.md");
+
+    // --- 2. Split-right preview: two panes, right previews alpha.md ----------
+    let alpha_preview_bufnr = handle.open_preview("split_right".to_string());
+    assert!(
+        alpha_preview_bufnr > 0,
+        "open_preview(\"split_right\") on a markdown buffer must return a valid \
+         preview bufnr (> 0), got {alpha_preview_bufnr}"
+    );
+    wait_for_window_count(&handle, TWO_PANES, "after split-right preview");
+    let previews = wait_for_previews(&handle, "one alpha.md preview", |p| {
+        p.iter().any(|row| row.source_name() == "alpha.md")
+    });
+    let preview_win = previews
+        .iter()
+        .find(|row| row.source_name() == "alpha.md")
+        .expect("a preview row for alpha.md must exist")
+        .win();
+    assert!(
+        preview_win > 0,
+        "the alpha.md preview must carry a real preview WINDOW handle (> 0), got {preview_win}"
+    );
+
+    // --- 3. Focus the SOURCE pane and edit beta.md there ---------------------
+    // The split left the preview pane active; cycle back to the markdown source
+    // pane, then :e beta.md IN THAT source window (not the preview pane).
+    focus_markdown_source(&handle);
+    let active_before = handle.active_win();
+    send_ex_command(&handle, ":e beta.md");
+    // is_markdown_active is ALREADY true (the pane still shows alpha.md, also
+    // markdown), so it cannot witness this markdown→markdown switch. Wait on
+    // current_file() instead so beta.md is genuinely the ACTIVE buffer before the
+    // blocking reuse call reads the current source.
+    wait_for_current_file(&handle, "beta.md");
+
+    // --- 4. Reuse placement: bind beta's preview into the OTHER preview pane --
+    let beta_preview_bufnr = handle.open_preview("reuse_preview_pane".to_string());
+    assert!(
+        beta_preview_bufnr > 0,
+        "open_preview(\"reuse_preview_pane\") on a markdown buffer must return a \
+         valid preview bufnr (> 0), got {beta_preview_bufnr}"
+    );
+
+    // --- 5. Assert: beta reused the SAME preview window; nothing else moved ---
+    // The deterministic emit at the end of wolf_open_preview replaces the whole
+    // previews snapshot, so wait for exactly one row: beta.md at `preview_win`.
+    let previews = wait_for_previews(
+        &handle,
+        "the sole preview row is beta.md bound into the reused preview window",
+        |p| {
+            p.len() == 1
+                && p.iter()
+                    .any(|row| row.source_name() == "beta.md" && row.win() == preview_win)
+        },
+    );
+    assert_eq!(
+        previews.len(),
+        1,
+        "reuse must WHOLESALE-replace the preview: exactly one row (beta.md), got {previews:?}",
+    );
+    assert!(
+        !previews.iter().any(|row| row.source_name() == "alpha.md"),
+        "alpha.md's preview row must be gone after the reuse rebind: {previews:?}",
+    );
+    assert_eq!(
+        live_window_count(&handle),
+        TWO_PANES,
+        "reuse must NOT create a new pane (still two live windows)",
+    );
+    assert_eq!(
+        handle.active_win(),
+        active_before,
+        "reuse must NOT change the active window (the source pane stays focused)",
+    );
+    assert!(
+        handle.is_markdown_active(),
+        "the active (source) pane still shows a markdown buffer after the reuse rebind",
+    );
+
+    handle.shutdown();
+    drop(tmp);
+}
+
+#[test]
+fn preview_reuse_falls_back_to_active_when_no_other_preview() {
+    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    let Some(nvim_bin) = common::nvim_bin_or_skip() else {
+        return;
+    };
+    std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
+
+    let init_lua = common::init_lua_path();
+    let tmp = seed_two_markdown_files();
+
+    let handle = wolf_ffi_start(
+        init_lua.to_string_lossy().into_owned(),
+        tmp.path().to_string_lossy().into_owned(),
+        common::DEFAULT_COLS,
+        common::DEFAULT_ROWS,
+    )
+    .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
+
+    // --- 1. Attach; open alpha.md as the source ------------------------------
+    wait_for_attach(&handle);
+    send_ex_command(&handle, ":e alpha.md");
+    wait_for_markdown_active(&handle, true, "after :e alpha.md");
+
+    // --- 2. Make a second EDITOR pane (no previews) via :vsplit --------------
+    // Both panes now show the SAME markdown buffer; neither is a preview pane.
+    send_ex_command(&handle, ":vsplit");
+    wait_for_window_count(&handle, TWO_PANES, "after :vsplit into a second editor pane");
+    focus_markdown_source(&handle);
+    assert!(
+        handle.previews().is_empty(),
+        "no preview windows should exist before the fallback open_preview: {:?}",
+        handle.previews(),
+    );
+    let active_before = handle.active_win();
+
+    // --- 3. Reuse placement with NO other preview -> fall back to active -----
+    // wolf_open_preview finds no OTHER window carrying b:wolf_preview_source, so the
+    // Lua fallback binds into the CURRENT (active) window.
+    let preview_bufnr = handle.open_preview("reuse_preview_pane".to_string());
+    assert!(
+        preview_bufnr > 0,
+        "open_preview(\"reuse_preview_pane\") on a markdown buffer must return a \
+         valid preview bufnr (> 0), got {preview_bufnr}"
+    );
+
+    // --- 4. Assert: exactly one preview, bound into the ACTIVE window --------
+    let previews = wait_for_previews(
+        &handle,
+        "one preview row bound into the active (fallback) window",
+        |p| p.len() == 1 && p.iter().any(|row| row.win() == active_before),
+    );
+    assert_eq!(
+        previews.len(),
+        1,
+        "the fallback must produce exactly one preview row, got {previews:?}",
+    );
+    assert_eq!(
+        previews[0].win(),
+        active_before,
+        "with no OTHER preview window the fallback binds into the ACTIVE window",
+    );
+    assert_eq!(
+        live_window_count(&handle),
+        TWO_PANES,
+        "the fallback must NOT create a new pane (still two live windows)",
+    );
+
+    handle.shutdown();
     drop(tmp);
 }

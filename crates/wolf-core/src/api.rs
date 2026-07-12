@@ -410,9 +410,12 @@ impl WolfCore {
     ///
     /// Blocks briefly on the captive nvim (`runtime.block_on`) to run the
     /// `wolf_open_preview` helper (see [`crate::nvim::NvimProcess::open_preview`]).
-    /// `mode` is chosen by the front-end from the pane count via
-    /// `PreviewSeam.placementMode`: `"split_right"` (single pane → new pane on the
-    /// right) or `"active"` (multi pane → replace the active pane's buffer). The
+    /// `mode` is chosen by the front-end via `PreviewSeam.placementMode`:
+    /// `"split_right"` (single pane → new pane on the right), `"active"` (multi
+    /// pane → replace the active pane's buffer), or `"reuse_preview_pane"` (exactly
+    /// two panes with the OTHER pane already a preview → bind into that OTHER preview
+    /// window, leaving the active editor untouched; falls back to `"active"` when
+    /// none). The
     /// front-end learns the new pane + the source↔preview mapping on the next wake
     /// (via the `wolf_preview` notification), so no synchronous window handle is
     /// needed. An RPC error is logged and returns `0`.

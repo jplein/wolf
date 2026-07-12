@@ -668,17 +668,23 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
 
     /// Opens (or reuses) the Markdown preview pane for the active source buffer.
     ///
-    /// The placement mode is chosen from this window's live pane count via the pure
-    /// `PreviewSeam.placementMode` (single pane → new pane to the right; multi pane
-    /// → replace the active pane), then handed to core's `open_preview(mode)`. The
-    /// front-end learns the new pane + the source↔preview mapping on the next wake
-    /// (via `previews()`), so no synchronous window handle is needed here; a repaint
-    /// is requested so the web view surfaces promptly.
+    /// The placement mode is chosen from this window's live pane/preview state via
+    /// the pure `PreviewSeam.placementMode` (three modes: single pane → new pane to
+    /// the right; two panes whose OTHER pane already previews → reuse THAT preview
+    /// pane rather than clobbering the active editor; every other multi-pane case →
+    /// replace the active pane), then handed to core's `open_preview(mode)`. The
+    /// front-end learns the new/reused pane + the source↔preview mapping on the next
+    /// wake (via `previews()`), so no synchronous window handle is needed here; a
+    /// repaint is requested so the web view surfaces promptly.
     func openPreview() {
-        guard let handle else { return }
-        let mode = PreviewSeam.placementMode(paneCount: paneCount)
+        guard let handle, let paneContainer else { return }
+        let inputs = paneContainer.previewPlacementInputs()
+        let mode = PreviewSeam.placementMode(
+            paneCount: inputs.paneCount,
+            activePaneIsPreview: inputs.activePaneIsPreview,
+            otherPreviewPaneCount: inputs.otherPreviewPaneCount)
         _ = handle.open_preview(mode)
-        paneContainer?.onRenderWake()
+        paneContainer.onRenderWake()
     }
 
     /// Raises and activates this window (the Window-menu dynamic list item's
