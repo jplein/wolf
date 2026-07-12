@@ -59,6 +59,12 @@ final class CompletionPopupView: NSView {
     /// The per-row height (cell height plus a little padding), in points.
     var rowHeight: CGFloat { ceil(metrics.cellHeight) + Self.rowExtraHeight }
 
+    /// The leading inset (points) from the popup's left edge to where each row's
+    /// text is actually drawn. The container subtracts this from the cmdline byte
+    /// anchor so the item text column aligns vertically with the completed word in
+    /// the command line, not the popup's border.
+    var leadingTextInset: CGFloat { Self.rowPadding }
+
     /// The number of rows actually shown (capped at `maxVisibleRows`).
     var visibleRowCount: Int { min(words.count, Self.maxVisibleRows) }
 

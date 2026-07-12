@@ -616,8 +616,10 @@ final class PaneContainerView: NSView {
         if pumVisible {
             let popupHeight = completionPopupView.preferredHeight
             let popupWidth = min(completionPopupView.preferredWidth, bounds.width)
-            let anchorX = pumAnchorX(pum: pum, cmdline: cmdline)
-            let x = min(anchorX, max(0, bounds.width - popupWidth))
+            // Shift the box left by its own text inset so the item text column lands
+            // on the completed word's glyph in the command line, not the box border.
+            let anchorX = pumAnchorX(pum: pum, cmdline: cmdline) - completionPopupView.leadingTextInset
+            let x = max(0, min(anchorX, max(0, bounds.width - popupWidth)))
             completionPopupView.frame = CGRect(
                 x: x, y: max(0, cmdlineTop - popupHeight), width: popupWidth, height: popupHeight)
         }
