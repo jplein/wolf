@@ -470,9 +470,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     /// Menu validation: disables the Close (`.closePane`) command when the key
-    /// window is on its LAST split (`:close` would error, E444), and disables the
+    /// window is on its LAST split (`:close` would error, E444), disables the
     /// Copy (`.copy`) command unless the key window is in visual mode (there is
-    /// no selection to copy otherwise). Every other item stays enabled.
+    /// no selection to copy otherwise), and disables the Preview (`.preview`)
+    /// command unless the key window's active buffer is Markdown. Every other item
+    /// stays enabled.
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         guard item.action == #selector(handleCommandMenuItem(_:)) else { return true }
         let kind = CommandKind(ffi: UInt8(truncatingIfNeeded: item.tag))
@@ -482,6 +484,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             return (keyController?.paneCount ?? 0) > 1
         case .copy:
             return keyController?.isVisualMode ?? false
+        case .preview:
+            return keyController?.isMarkdownActive ?? false
         default:
             return true
         }

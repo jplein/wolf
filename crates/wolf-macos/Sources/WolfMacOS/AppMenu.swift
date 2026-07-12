@@ -37,6 +37,7 @@ enum AppMenu {
         static let paste = 15
         static let bufferPicker = 16
         static let newTab = 17
+        static let preview = 18
     }
 
     /// The dynamic submenus `install` hands back to the coordinator: the Window
@@ -198,6 +199,12 @@ enum AppMenu {
             commandItem(
                 title: "Buffer Picker…", tag: Tag.bufferPicker, keyEquivalent: "e",
                 target: target))
+        // View > Preview: enabled only on a Markdown buffer (gated in
+        // AppDelegate.validateMenuItem). NO key equivalent this cut (OD2 — ⌘P is
+        // the Command Palette; a shortcut can be assigned later).
+        menu.addItem(
+            commandItem(
+                title: "Preview", tag: Tag.preview, keyEquivalent: "", target: target))
         menu.addItem(.separator())
         let fullScreen = NSMenuItem(
             title: "Enter Full Screen",

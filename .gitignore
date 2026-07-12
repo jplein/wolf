@@ -13,3 +13,5 @@ target/
 Wolf.xcodeproj
 
 .DS_Store
+
+.worktrees

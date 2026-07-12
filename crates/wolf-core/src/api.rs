@@ -250,6 +250,7 @@ impl WolfCore {
             proc.setup_commands().await?;
             proc.setup_tabs().await?;
             proc.setup_view_tracking().await?;
+            proc.setup_preview().await?;
             Ok::<NvimProcess, NvimError>(proc)
         })?;
 
@@ -380,6 +381,61 @@ impl WolfCore {
                 Vec::new()
             }
         }
+    }
+
+    /// Renders the Markdown SOURCE buffer `source_bufnr` to a themed HTML preview
+    /// document (empty string on error).
+    ///
+    /// Blocks briefly on the captive nvim (`runtime.block_on`, the same pattern
+    /// [`list_buffers`](Self::list_buffers) uses) to read the buffer lines and
+    /// render them via [`crate::markdown::render_html`] (see
+    /// [`crate::nvim::NvimProcess::render_preview`]). An RPC error (e.g. a
+    /// closed/unloaded buffer, or after shutdown) is logged and yields an empty
+    /// string, which the front-end web view loads as a blank document rather than
+    /// failing.
+    #[must_use]
+    pub fn render_preview(&self, source_bufnr: i64) -> String {
+        match self.runtime.block_on(self.nvim.render_preview(source_bufnr)) {
+            Ok(html) => html,
+            Err(e) => {
+                tracing::warn!("render_preview({source_bufnr}) failed: {e}");
+                String::new()
+            }
+        }
+    }
+
+    /// Opens (or reuses) the Markdown preview pane for the active source buffer and
+    /// returns the preview scratch buffer's number (`0` on error or when the active
+    /// buffer is not Markdown).
+    ///
+    /// Blocks briefly on the captive nvim (`runtime.block_on`) to run the
+    /// `wolf_open_preview` helper (see [`crate::nvim::NvimProcess::open_preview`]).
+    /// `mode` is chosen by the front-end from the pane count via
+    /// `PreviewSeam.placementMode`: `"split_right"` (single pane → new pane on the
+    /// right) or `"active"` (multi pane → replace the active pane's buffer). The
+    /// front-end learns the new pane + the source↔preview mapping on the next wake
+    /// (via the `wolf_preview` notification), so no synchronous window handle is
+    /// needed. An RPC error is logged and returns `0`.
+    #[must_use]
+    pub fn open_preview(&self, mode: &str) -> i64 {
+        match self.runtime.block_on(self.nvim.open_preview(mode)) {
+            Ok(bufnr) => bufnr,
+            Err(e) => {
+                tracing::warn!("open_preview({mode}) failed: {e}");
+                0
+            }
+        }
+    }
+
+    /// Returns whether the buffer currently being edited is a Markdown file.
+    ///
+    /// A cheap, synchronous main-thread read of [`Snapshot::is_markdown_active`]
+    /// (`current_filetype == "markdown"`, fed out-of-band via `wolf_current_file`).
+    /// The front-end gates the Preview command on this (the Copy/visual-mode
+    /// precedent).
+    #[must_use]
+    pub fn is_markdown_active(&self) -> bool {
+        self.read_snapshot().is_markdown_active()
     }
 
     /// Creates a new nvim TABPAGE (optionally rooted at `cwd` via `:tcd`) and

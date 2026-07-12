@@ -48,8 +48,8 @@ use wolf_core::{
     rank_buffers, rank_matches_top_n, rank_palette, BufInfo, BufferRow, Command, CommandMru,
     CoreConfig, CursorShape, FileSearch, FocusDir, Grid, InputEvent, Key, KeyEvent, LayoutIntent,
     MouseAction, MouseButton, MouseEvent, PaletteRow, PaletteRowKind, PaletteWindow, PaneStatus,
-    ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SplitOrientation, StateStore, TabState,
-    WakeFn, WinInfo, WindowState, WolfCore, WolfState,
+    PreviewInfo, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SplitOrientation, StateStore,
+    TabState, WakeFn, WinInfo, WindowState, WolfCore, WolfState,
 };
 
 // Re-export the bridge-defined transparent structs at the crate root so the Rust
@@ -175,6 +175,8 @@ mod command_kind {
     pub const BUFFER_PICKER: u8 = 16;
     /// Open a new tab in the current window.
     pub const NEW_TAB: u8 = 17;
+    /// Render the active Markdown buffer as HTML in a preview pane.
+    pub const PREVIEW: u8 = 18;
 }
 
 /// The palette-row-kind discriminants packed into [`FfiCommandRow::row_kind`].
@@ -465,6 +467,42 @@ mod ffi {
         // Whether the active document is in Neovim visual mode (`v`/`V`/`<C-v>`).
         // Gates the Edit > Copy menu item. False when the core is gone.
         fn is_visual_mode(&self) -> bool;
+        // Whether the active buffer is a Markdown file (`current_filetype ==
+        // "markdown"`). Gates the View > Preview menu item + palette row. False
+        // when the core is gone.
+        fn is_markdown_active(&self) -> bool;
+        // Opens (or reuses) the Markdown preview pane for the active source buffer
+        // and returns the preview scratch buffer's number. `mode` is
+        // "split_right" (single-pane: new pane to the right) or "active"
+        // (multi-pane: replace the active pane's buffer). Blocks briefly on the
+        // captive nvim. Returns 0 when the active buffer is not Markdown, on error,
+        // or when the core is gone.
+        fn open_preview(&self, mode: String) -> i64;
+        // Renders the Markdown SOURCE buffer `source_bufnr` to a themed HTML
+        // document the front-end web view loads. Blocks briefly on the captive
+        // nvim. Returns the empty string on error / when the core is gone.
+        fn render_preview(&self, source_bufnr: i64) -> String;
+        // A snapshot of the open preview panes: one `FfiPreview` per window
+        // showing a preview scratch buffer, each joined to its source's live
+        // changedtick. `FfiPreview` is opaque so a `Vec<FfiPreview>` is supported.
+        // Empty when the core is gone.
+        fn previews(&self) -> Vec<FfiPreview>;
+    }
+
+    extern "Rust" {
+        type FfiPreview;
+
+        // The preview WINDOW handle (the pane showing the web view).
+        fn win(&self) -> i64;
+        // The SOURCE Markdown buffer's number (passed to `render_preview`).
+        fn source_bufnr(&self) -> i64;
+        // The source file's BASENAME (e.g. "alpha.md"), for the pane statusbar.
+        fn source_name(&self) -> String;
+        // The source file's absolute path.
+        fn source_path(&self) -> String;
+        // The source buffer's current `changedtick`; the front-end reloads the web
+        // view when this advances (0 until the first `wolf_markdown_dirty`).
+        fn source_tick(&self) -> u64;
     }
 
     extern "Rust" {
@@ -1730,6 +1768,65 @@ impl WolfCoreHandle {
             .as_ref()
             .is_some_and(|c| c.read_snapshot().is_visual_mode())
     }
+
+    /// Whether the active buffer is a Markdown file. Gates the View > Preview menu
+    /// item + palette row. False once the core has been shut down.
+    #[must_use]
+    pub fn is_markdown_active(&self) -> bool {
+        self.core
+            .borrow()
+            .as_ref()
+            .is_some_and(|c| c.read_snapshot().is_markdown_active())
+    }
+
+    /// Opens (or reuses) the Markdown preview pane for the active source buffer and
+    /// returns the preview scratch buffer's number.
+    ///
+    /// `mode` is `"split_right"` (single-pane placement) or `"active"` (multi-pane
+    /// placement) — chosen by the front-end from the pane count via
+    /// `PreviewSeam.placementMode`. Blocks briefly on the captive nvim. Returns `0`
+    /// when the active buffer is not Markdown, on error, or once the core has been
+    /// shut down.
+    #[must_use]
+    pub fn open_preview(&self, mode: String) -> i64 {
+        self.core
+            .borrow()
+            .as_ref()
+            .map_or(0, |c| c.open_preview(&mode))
+    }
+
+    /// Renders the Markdown SOURCE buffer `source_bufnr` to a themed HTML document
+    /// the front-end web view loads.
+    ///
+    /// Blocks briefly on the captive nvim. Returns the empty string on error or
+    /// once the core has been shut down.
+    #[must_use]
+    pub fn render_preview(&self, source_bufnr: i64) -> String {
+        self.core
+            .borrow()
+            .as_ref()
+            .map_or_else(String::new, |c| c.render_preview(source_bufnr))
+    }
+
+    /// A snapshot of the open preview panes: one [`FfiPreview`] per window showing a
+    /// preview scratch buffer, each joined to its source buffer's live
+    /// `changedtick` (from `Snapshot::markdown_ticks`, `0` until the first
+    /// `wolf_markdown_dirty`). Empty once the core has been shut down.
+    #[must_use]
+    pub fn previews(&self) -> Vec<FfiPreview> {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return Vec::new();
+        };
+        let snap = core.read_snapshot();
+        snap.previews
+            .iter()
+            .map(|(&win, info)| {
+                let source_tick = snap.markdown_ticks.get(&info.source_bufnr).copied().unwrap_or(0);
+                FfiPreview::from_preview(win, info, source_tick)
+            })
+            .collect()
+    }
 }
 
 /// Starts the core. `init_lua` and `cwd` are filesystem paths (mirroring
@@ -1951,6 +2048,7 @@ impl FfiCommand {
             Command::Paste => command_kind::PASTE,
             Command::BufferPicker => command_kind::BUFFER_PICKER,
             Command::NewTab => command_kind::NEW_TAB,
+            Command::Preview => command_kind::PREVIEW,
         };
         Self { kind }
     }
@@ -2207,6 +2305,78 @@ impl FfiWinInfo {
             grid: info.grid,
             win: info.win,
             hidden: info.hidden,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FfiPreview: one open preview pane's window + source + tick (opaque to Swift).
+// ---------------------------------------------------------------------------
+
+/// One open preview pane (opaque to Swift, so a `Vec<FfiPreview>` is supported —
+/// swift-bridge emits Vec support only for opaque types).
+///
+/// A projection of one [`wolf_core::render::Snapshot::previews`] entry joined to
+/// its source buffer's live `changedtick`: the preview WINDOW handle, the SOURCE
+/// Markdown buffer's number + absolute path (+ basename for the pane statusbar),
+/// and the tick the front-end reloads the web view on.
+pub struct FfiPreview {
+    win: i64,
+    source_bufnr: i64,
+    source_path: String,
+    source_name: String,
+    source_tick: u64,
+}
+
+impl FfiPreview {
+    /// The preview WINDOW handle (the pane the front-end overlays a web view on).
+    #[must_use]
+    pub fn win(&self) -> i64 {
+        self.win
+    }
+
+    /// The SOURCE Markdown buffer's number (passed back to
+    /// [`WolfCoreHandle::render_preview`]).
+    #[must_use]
+    pub fn source_bufnr(&self) -> i64 {
+        self.source_bufnr
+    }
+
+    /// The source file's BASENAME (e.g. `"alpha.md"`), for the `Preview: <name>`
+    /// pane statusbar.
+    #[must_use]
+    pub fn source_name(&self) -> String {
+        self.source_name.clone()
+    }
+
+    /// The source file's absolute path.
+    #[must_use]
+    pub fn source_path(&self) -> String {
+        self.source_path.clone()
+    }
+
+    /// The source buffer's current `changedtick` (`0` until the first
+    /// `wolf_markdown_dirty`); the front-end reloads the web view when it advances.
+    #[must_use]
+    pub fn source_tick(&self) -> u64 {
+        self.source_tick
+    }
+
+    /// Projects one [`PreviewInfo`] (keyed by the preview window `win`) plus its
+    /// joined `source_tick` into the bridge-friendly flat row. The basename is
+    /// derived from `source_path`'s final component (empty for a pathless source).
+    fn from_preview(win: i64, info: &PreviewInfo, source_tick: u64) -> Self {
+        let source_name = info
+            .source_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        Self {
+            win,
+            source_bufnr: info.source_bufnr,
+            source_path: info.source_path.to_string_lossy().into_owned(),
+            source_name,
+            source_tick,
         }
     }
 }

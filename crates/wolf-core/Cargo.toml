@@ -13,6 +13,7 @@ path = "src/lib.rs"
 nvim-rs = { version = "0.9.2", default-features = false, features = ["use_tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "process", "sync", "time"] }
 rmpv = "1.3"
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 parking_lot = { version = "0.12", features = ["arc_lock"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 ignore = "0.4"

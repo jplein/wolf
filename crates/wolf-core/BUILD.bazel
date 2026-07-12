@@ -29,6 +29,9 @@ rust_test(
 rust_library(
     name = "wolf_core",
     srcs = glob(["src/**/*.rs"]),
+    # The markdown module include_str!'s its base + theme CSS (src/markdown/*.css),
+    # so those files must be available to rustc at compile time.
+    compile_data = glob(["src/markdown/**/*.css"]),
     crate_name = "wolf_core",
     edition = "2021",
     proc_macro_deps = all_crate_deps(proc_macro = True),
@@ -257,6 +260,22 @@ rust_test(
 # pinned Neovim (no mocks), stages the captive `init.lua` + the pinned nvim tree
 # as runfiles, reuses `tests/common/mod.rs`, and runs unsandboxed so the nvim
 # child can spawn.
+# Headless coverage for the PUBLIC Markdown-preview render surface
+# (`render_html` / `PreviewTheme` / `theme_css`): the themed-document wrapper, the
+# per-line `wl-{L}-0` anchors, the per-100-column `wl-{L}-100` marker, source
+# order, the heading-marker-immediately-before-its-tag placement, and that no
+# marker span lands inside a fenced code block. `render_html` is a pure `&str` ->
+# `String` transform (no nvim, no filesystem), so this needs NO staged runfiles —
+# the pure analog of `pane_status_unit`.
+rust_test(
+    name = "markdown_render",
+    srcs = ["tests/markdown_render.rs"],
+    crate_root = "tests/markdown_render.rs",
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
 # Headless coverage for the PURE per-pane statusbar display-string function
 # (`pane_status` + `PaneStatus` + `NO_NAME`): the empty/[No Name] case, cwd-relative
 # remainder (nested + direct), the `~`/home-relative and path==home cases, the

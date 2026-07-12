@@ -21,6 +21,8 @@
 //! - [`palette`]: pure candidate assembly + ranking for the command palette.
 //! - [`pane_status`]: pure display-string math for the per-pane statusbar.
 //! - [`layout`]: the Neovim->shell layout-intent types ([`LayoutIntent`]).
+//! - [`markdown`]: pure, GUI-free Markdown -> themed-HTML rendering for the
+//!   preview pane (with forward-compatible per-line / per-100-column markers).
 //! - [`files`]: the async streaming file-list traversal and `FileSearch` session.
 //! - [`mru`]: the most-recently-used file cache (SQLite).
 //! - [`recent_dirs`]: the global recent-directories MRU cache (SQLite).
@@ -42,6 +44,7 @@ pub mod config;
 pub mod files;
 pub mod input;
 pub mod layout;
+pub mod markdown;
 pub mod mru;
 pub mod nvim;
 pub mod palette;
@@ -64,6 +67,7 @@ pub use input::{
     ScrollDirection, ScrollEvent,
 };
 pub use layout::{FocusDir, LayoutIntent, SplitOrientation};
+pub use markdown::{render_html, theme_css, PreviewTheme, MARKER_COLUMN_STRIDE};
 pub use mru::{MruError, MruStore, MRU_LIMIT};
 pub use palette::{rank_palette, PaletteRow, PaletteRowKind, PaletteWindow};
 pub use pane_status::{pane_status, PaneStatus, NO_NAME};
@@ -71,7 +75,7 @@ pub use rank::{rank_matches, rank_matches_top_n, Match, MatchKey};
 pub use recent_dirs::{RecentDirs, RECENT_DIRS_LIMIT};
 pub use redraw::WakeFn;
 pub use render::{
-    Cell, Cursor, CursorShape, DefaultColors, Grid, HighlightTable, HlAttr, ModeInfo,
+    Cell, Cursor, CursorShape, DefaultColors, Grid, HighlightTable, HlAttr, ModeInfo, PreviewInfo,
     ResolvedStyle, Rgb, SharedSnapshot, Snapshot, ThemeColors, ThemeGroup, Viewport, WinInfo,
 };
 pub use state::{load_state, state_dir, StateStore, TabState, WindowState, WolfState};

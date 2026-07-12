@@ -1,5 +1,5 @@
 {
-  "checksum": "1817b30fecbae9090cbfee1aac7a401a03bbc052ea69b38a4ff489616166b9ec",
+  "checksum": "758e6858cfe8a3b4e9df7b68127aed044b34daf1a29a9d9dbc46a70372856e45",
   "crates": {
     "ahash 0.8.12": {
       "name": "ahash",
@@ -6797,6 +6797,137 @@
       ],
       "license_file": "LICENSE-APACHE"
     },
+    "pulldown-cmark 0.12.2": {
+      "name": "pulldown-cmark",
+      "version": "0.12.2",
+      "package_url": "https://github.com/raphlinus/pulldown-cmark",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/pulldown-cmark/0.12.2/download",
+          "sha256": "f86ba2052aebccc42cbbb3ed234b8b13ce76f75c3551a303cb2bcffcff12bb14"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "pulldown_cmark",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        },
+        {
+          "BuildScript": {
+            "crate_name": "build_script_build",
+            "crate_root": "build.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "pulldown_cmark",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "crate_features": {
+          "common": [
+            "html",
+            "pulldown-cmark-escape"
+          ],
+          "selects": {}
+        },
+        "deps": {
+          "common": [
+            {
+              "id": "bitflags 2.13.0",
+              "target": "bitflags"
+            },
+            {
+              "id": "memchr 2.8.2",
+              "target": "memchr"
+            },
+            {
+              "id": "pulldown-cmark 0.12.2",
+              "target": "build_script_build"
+            },
+            {
+              "id": "pulldown-cmark-escape 0.11.0",
+              "target": "pulldown_cmark_escape"
+            },
+            {
+              "id": "unicase 2.9.0",
+              "target": "unicase"
+            }
+          ],
+          "selects": {}
+        },
+        "edition": "2021",
+        "version": "0.12.2"
+      },
+      "build_script_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "compile_data_glob_excludes": [
+          "**/*.rs"
+        ],
+        "data_glob": [
+          "**"
+        ]
+      },
+      "license": "MIT",
+      "license_ids": [
+        "MIT"
+      ],
+      "license_file": "LICENSE"
+    },
+    "pulldown-cmark-escape 0.11.0": {
+      "name": "pulldown-cmark-escape",
+      "version": "0.11.0",
+      "package_url": "https://github.com/raphlinus/pulldown-cmark",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/pulldown-cmark-escape/0.11.0/download",
+          "sha256": "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "pulldown_cmark_escape",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "pulldown_cmark_escape",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "edition": "2021",
+        "version": "0.11.0"
+      },
+      "license": "MIT",
+      "license_ids": [
+        "MIT"
+      ],
+      "license_file": "LICENSE"
+    },
     "quote 1.0.45": {
       "name": "quote",
       "version": "1.0.45",
@@ -10092,6 +10223,45 @@
       ],
       "license_file": "LICENSE"
     },
+    "unicase 2.9.0": {
+      "name": "unicase",
+      "version": "2.9.0",
+      "package_url": "https://github.com/seanmonstar/unicase",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/unicase/2.9.0/download",
+          "sha256": "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "unicase",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "unicase",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "edition": "2018",
+        "version": "2.9.0"
+      },
+      "license": "MIT OR Apache-2.0",
+      "license_ids": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "license_file": "LICENSE-APACHE"
+    },
     "unicode-ident 1.0.24": {
       "name": "unicode-ident",
       "version": "1.0.24",
@@ -12251,6 +12421,10 @@
               "target": "parking_lot"
             },
             {
+              "id": "pulldown-cmark 0.12.2",
+              "target": "pulldown_cmark"
+            },
+            {
               "id": "rmpv 1.3.1",
               "target": "rmpv"
             },
@@ -12735,6 +12909,7 @@
     "pango 0.22.6",
     "pangocairo 0.22.0",
     "parking_lot 0.12.5",
+    "pulldown-cmark 0.12.2",
     "rmpv 1.3.1",
     "rusqlite 0.31.0",
     "serde 1.0.228",

@@ -390,6 +390,22 @@ extension WolfCoreHandleRef {
     public func is_visual_mode() -> Bool {
         __swift_bridge__$WolfCoreHandle$is_visual_mode(ptr)
     }
+
+    public func is_markdown_active() -> Bool {
+        __swift_bridge__$WolfCoreHandle$is_markdown_active(ptr)
+    }
+
+    public func open_preview<GenericIntoRustString: IntoRustString>(_ mode: GenericIntoRustString) -> Int64 {
+        __swift_bridge__$WolfCoreHandle$open_preview(ptr, { let rustString = mode.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
+    }
+
+    public func render_preview(_ source_bufnr: Int64) -> RustString {
+        RustString(ptr: __swift_bridge__$WolfCoreHandle$render_preview(ptr, source_bufnr))
+    }
+
+    public func previews() -> RustVec<FfiPreview> {
+        RustVec(ptr: __swift_bridge__$WolfCoreHandle$previews(ptr))
+    }
 }
 extension WolfCoreHandle: Vectorizable {
     public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
@@ -437,6 +453,102 @@ extension WolfCoreHandle: Vectorizable {
 
     public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
         __swift_bridge__$Vec_WolfCoreHandle$len(vecPtr)
+    }
+}
+
+
+public class FfiPreview: FfiPreviewRefMut {
+    var isOwned: Bool = true
+
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+
+    deinit {
+        if isOwned {
+            __swift_bridge__$FfiPreview$_free(ptr)
+        }
+    }
+}
+public class FfiPreviewRefMut: FfiPreviewRef {
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+}
+public class FfiPreviewRef {
+    var ptr: UnsafeMutableRawPointer
+
+    public init(ptr: UnsafeMutableRawPointer) {
+        self.ptr = ptr
+    }
+}
+extension FfiPreviewRef {
+    public func win() -> Int64 {
+        __swift_bridge__$FfiPreview$win(ptr)
+    }
+
+    public func source_bufnr() -> Int64 {
+        __swift_bridge__$FfiPreview$source_bufnr(ptr)
+    }
+
+    public func source_name() -> RustString {
+        RustString(ptr: __swift_bridge__$FfiPreview$source_name(ptr))
+    }
+
+    public func source_path() -> RustString {
+        RustString(ptr: __swift_bridge__$FfiPreview$source_path(ptr))
+    }
+
+    public func source_tick() -> UInt64 {
+        __swift_bridge__$FfiPreview$source_tick(ptr)
+    }
+}
+extension FfiPreview: Vectorizable {
+    public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
+        __swift_bridge__$Vec_FfiPreview$new()
+    }
+
+    public static func vecOfSelfFree(vecPtr: UnsafeMutableRawPointer) {
+        __swift_bridge__$Vec_FfiPreview$drop(vecPtr)
+    }
+
+    public static func vecOfSelfPush(vecPtr: UnsafeMutableRawPointer, value: FfiPreview) {
+        __swift_bridge__$Vec_FfiPreview$push(vecPtr, {value.isOwned = false; return value.ptr;}())
+    }
+
+    public static func vecOfSelfPop(vecPtr: UnsafeMutableRawPointer) -> Optional<Self> {
+        let pointer = __swift_bridge__$Vec_FfiPreview$pop(vecPtr)
+        if pointer == nil {
+            return nil
+        } else {
+            return (FfiPreview(ptr: pointer!) as! Self)
+        }
+    }
+
+    public static func vecOfSelfGet(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiPreviewRef> {
+        let pointer = __swift_bridge__$Vec_FfiPreview$get(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiPreviewRef(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfGetMut(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiPreviewRefMut> {
+        let pointer = __swift_bridge__$Vec_FfiPreview$get_mut(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiPreviewRefMut(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfAsPtr(vecPtr: UnsafeMutableRawPointer) -> UnsafePointer<FfiPreviewRef> {
+        UnsafePointer<FfiPreviewRef>(OpaquePointer(__swift_bridge__$Vec_FfiPreview$as_ptr(vecPtr)))
+    }
+
+    public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
+        __swift_bridge__$Vec_FfiPreview$len(vecPtr)
     }
 }
 

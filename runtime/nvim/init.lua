@@ -174,19 +174,34 @@ end
 
 -- Current-file tracking: wolf-core invokes this over RPC after ui_attach,
 -- passing its own RPC channel id. It registers an autocmd that notifies core of
--- the active buffer's absolute path on every buffer switch / rename, and emits
--- once immediately so the startup buffer is reflected. An unnamed buffer yields
--- an empty string from expand('%:p'), which core maps to "no current file".
+-- the active buffer's absolute path AND its filetype on every buffer switch /
+-- rename / FileType detection, and emits once immediately so the startup buffer
+-- is reflected. An unnamed buffer yields an empty string from expand('%:p'),
+-- which core maps to "no current file". The filetype (2nd arg, vim.bo.filetype)
+-- drives core's Snapshot.is_markdown_active (the Preview command's enable gate);
+-- FileType is in the event list so the filetype tracks the active buffer even
+-- when detection happens after the buffer switch.
+--
+-- Preview scratch buffers (carrying b:wolf_preview_source) are SKIPPED: focusing
+-- one emits an EMPTY path and EMPTY filetype, so core never sees the "Preview:
+-- <name>" scratch name as a real current file and never reports markdown-active
+-- for the (non-markdown) preview pane.
 function _G.wolf_setup_current_file_tracking(chan)
 	local group = vim.api.nvim_create_augroup("WolfCurrentFile", { clear = true })
-	vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter", "BufFilePost" }, {
+	local function emit()
+		local buf = vim.api.nvim_get_current_buf()
+		if vim.b[buf].wolf_preview_source ~= nil then
+			vim.rpcnotify(chan, "wolf_current_file", "", "")
+		else
+			vim.rpcnotify(chan, "wolf_current_file", vim.fn.expand("%:p"), vim.bo.filetype)
+		end
+	end
+	vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter", "BufFilePost", "FileType" }, {
 		group = group,
-		callback = function()
-			vim.rpcnotify(chan, "wolf_current_file", vim.fn.expand("%:p"))
-		end,
+		callback = emit,
 	})
 	-- Initial emit so the startup buffer is reflected without a buffer switch.
-	vim.rpcnotify(chan, "wolf_current_file", vim.fn.expand("%:p"))
+	emit()
 end
 
 -- Per-window buffer tracking: wolf-core invokes this over RPC after ui_attach (and
@@ -208,7 +223,12 @@ function _G.wolf_setup_buffer_tracking(chan)
 		local list = {}
 		for _, win in ipairs(vim.api.nvim_list_wins()) do
 			local buf = vim.api.nvim_win_get_buf(win)
-			list[#list + 1] = { win, vim.api.nvim_buf_get_name(buf) }
+			-- Skip preview scratch panes (b:wolf_preview_source): the front-end
+			-- overlays a web view and paints its own "Preview: <name>" statusbar, so
+			-- core must not track the bogus scratch name as a real per-window path.
+			if vim.b[buf].wolf_preview_source == nil then
+				list[#list + 1] = { win, vim.api.nvim_buf_get_name(buf) }
+			end
 		end
 		vim.rpcnotify(chan, "wolf_buffers", list)
 	end
@@ -587,4 +607,117 @@ function _G.wolf_setup_view_tracking()
 			end
 		end)
 	end
+end
+
+-- Per-source preview scratch-buffer map (source bufnr -> preview bufnr), a global
+-- so wolf_open_preview reuses one preview buffer per source across invocations.
+_G.wolf_preview_bufs = _G.wolf_preview_bufs or {}
+
+-- Opens (or reuses) the Markdown preview pane for the ACTIVE source buffer and
+-- returns the preview scratch buffer's number. wolf-core calls this over
+-- nvim_exec_lua from WolfCore::open_preview, passing `mode`:
+--   * "split_right": single-pane placement -- reuse wolf_do_split('v') (which
+--     emits a wolf_layout Vertical Split intent so the shell creates+binds the new
+--     pane) then bind the preview buffer into the new (current) window.
+--   * "active": multi-pane placement -- just bind the preview buffer into the
+--     current window (nvim_win_set_buf), replacing its content.
+-- No-op (returns 0) unless the active buffer's filetype is markdown (the same gate
+-- as the Preview command). The preview pane is a real nvim buffer (OD1 = Design S):
+-- a listed + nofile + nomodifiable scratch buffer named "Preview: <basename>"
+-- carrying b:wolf_preview_source (its source's abs path) and b:wolf_preview_source_bufnr
+-- (its source's bufnr). Being buflisted, it surfaces in the buffer picker as
+-- "Preview: <basename>" with no front-end injection; the path-based trackers skip
+-- it via b:wolf_preview_source.
+function _G.wolf_open_preview(mode)
+	if vim.bo.filetype ~= "markdown" then
+		return 0
+	end
+	local source_buf = vim.api.nvim_get_current_buf()
+	local source_path = vim.api.nvim_buf_get_name(source_buf)
+
+	local preview_buf = _G.wolf_preview_bufs[source_buf]
+	if not preview_buf or not vim.api.nvim_buf_is_valid(preview_buf) then
+		-- listed = true (surfaces in the picker), scratch = true (nofile /
+		-- bufhidden=hide / noswapfile defaults).
+		preview_buf = vim.api.nvim_create_buf(true, true)
+		local basename = vim.fn.fnamemodify(source_path, ":t")
+		-- Name the buffer "Preview: <basename>" so it surfaces in the picker with
+		-- that label (OD1). nvim_buf_set_name raises E95 when that name is already
+		-- taken by ANOTHER buffer (two sources sharing a basename, e.g. two
+		-- README.md); the reuse map above already short-circuits a re-preview of the
+		-- SAME source, so a collision here is only a DIFFERENT source. On collision
+		-- fall back to a bufnr-disambiguated name so the second preview still opens
+		-- (rather than open_preview returning 0). The common, non-colliding case
+		-- keeps the exact "Preview: <basename>" name the picker row asserts on.
+		local wanted = "Preview: " .. basename
+		if not pcall(vim.api.nvim_buf_set_name, preview_buf, wanted) then
+			pcall(vim.api.nvim_buf_set_name, preview_buf, wanted .. " (" .. source_buf .. ")")
+		end
+		vim.b[preview_buf].wolf_preview_source = source_path
+		vim.b[preview_buf].wolf_preview_source_bufnr = source_buf
+		vim.bo[preview_buf].modifiable = false
+		_G.wolf_preview_bufs[source_buf] = preview_buf
+	end
+
+	if mode == "split_right" then
+		wolf_do_split("v")
+	end
+	vim.api.nvim_win_set_buf(0, preview_buf)
+	return preview_buf
+end
+
+-- Preview tracking + dirty signal: wolf-core invokes this over RPC after ui_attach
+-- (last, after view tracking), passing its own RPC channel id. It registers the
+-- WolfPreview augroup:
+--   * a window-scan (WinEnter/BufWinEnter/WinNew/WinClosed/BufWinLeave) that
+--     rpcnotifies wolf_preview with a list of { preview_win, source_bufnr,
+--     source_abs_path } triples -- one per window showing a b:wolf_preview_source
+--     scratch buffer -- so the front-end learns which pane previews what source
+--     (and, via the source bufnr, joins the live changedtick). Emits once
+--     immediately so an already-open preview is reflected.
+--   * markdown-guarded TextChanged/TextChangedI/BufWritePost autocmds that
+--     rpcnotify wolf_markdown_dirty with { source_bufnr, changedtick } so the
+--     front-end pulls fresh HTML on the next wake (OD6 live-on-change). The
+--     changedtick advances on any buffer change, so a keystroke burst that the
+--     shell debounces yields one reload.
+function _G.wolf_setup_preview(chan)
+	local group = vim.api.nvim_create_augroup("WolfPreview", { clear = true })
+
+	local function emit_previews()
+		local list = {}
+		for _, win in ipairs(vim.api.nvim_list_wins()) do
+			local buf = vim.api.nvim_win_get_buf(win)
+			local src = vim.b[buf].wolf_preview_source
+			if src ~= nil and src ~= "" then
+				local source_bufnr = vim.b[buf].wolf_preview_source_bufnr or -1
+				list[#list + 1] = { win, source_bufnr, src }
+			end
+		end
+		vim.rpcnotify(chan, "wolf_preview", list)
+	end
+
+	vim.api.nvim_create_autocmd(
+		{ "WinEnter", "BufWinEnter", "WinNew", "WinClosed", "BufWinLeave" },
+		{
+			group = group,
+			callback = emit_previews,
+		}
+	)
+
+	vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "BufWritePost" }, {
+		group = group,
+		callback = function(ev)
+			if vim.bo[ev.buf].filetype == "markdown" then
+				vim.rpcnotify(
+					chan,
+					"wolf_markdown_dirty",
+					ev.buf,
+					vim.api.nvim_buf_get_changedtick(ev.buf)
+				)
+			end
+		end,
+	})
+
+	-- Initial emit so an already-open preview is reflected without a window event.
+	emit_previews()
 end

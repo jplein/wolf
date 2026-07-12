@@ -28,15 +28,15 @@ What it sets and why:
 
 ### Current-file tracking — `_G.wolf_setup_current_file_tracking(chan)`
 
-`init.lua` defines a global helper that `wolf-core` invokes over RPC **after** `ui_attach`, passing core's own RPC channel id (see [`src/nvim.rs`](../../crates/wolf-core/src/nvim.rs)'s `setup_current_file_tracking`). It is the front-end's only way to learn the active buffer's path, which the GNOME file-tree sidebar uses to highlight and reveal the current file (including after a Neovim-driven `:e`).
+`init.lua` defines a global helper that `wolf-core` invokes over RPC **after** `ui_attach`, passing core's own RPC channel id (see [`src/nvim.rs`](../../crates/wolf-core/src/nvim.rs)'s `setup_current_file_tracking`). It is the front-end's only way to learn the active buffer's path, which the GNOME file-tree sidebar uses to highlight and reveal the current file (including after a Neovim-driven `:e`), plus the active buffer's **filetype**, which drives `Snapshot.is_markdown_active()` (the Preview command's enable gate).
 
 The helper:
 
 - creates a `WolfCurrentFile` augroup (`clear = true`, so re-invoking is idempotent);
-- registers a `BufEnter` / `BufWinEnter` / `BufFilePost` autocmd whose callback does `vim.rpcnotify(chan, "wolf_current_file", vim.fn.expand("%:p"))` — i.e. notifies core of the active buffer's absolute path on every buffer switch / rename;
+- registers a `BufEnter` / `BufWinEnter` / `BufFilePost` / `FileType` autocmd whose callback does `vim.rpcnotify(chan, "wolf_current_file", vim.fn.expand("%:p"), vim.bo.filetype)` — i.e. notifies core of the active buffer's absolute path AND its filetype on every buffer switch / rename / FileType detection (`FileType` is in the event list so the filetype tracks the active buffer even when detection lands after the buffer switch);
 - emits once immediately (the same `rpcnotify`) so the startup buffer is reflected without waiting for a buffer switch.
 
-An **unnamed buffer** yields an empty string from `expand("%:p")`, which core maps to "no current file" (`Snapshot.current_file = None`). Core canonicalizes any non-empty path before storing it. The channel id is passed as a Lua **vararg** (`...`) from the `nvim_exec_lua` call, never interpolated into the code string.
+An **unnamed buffer** yields an empty string from `expand("%:p")`, which core maps to "no current file" (`Snapshot.current_file = None`). Core canonicalizes any non-empty path before storing it, and folds the second arg into `Snapshot.current_filetype`. A **preview scratch buffer** (carrying `b:wolf_preview_source`, below) is **SKIPPED**: the callback short-circuits to `vim.rpcnotify(chan, "wolf_current_file", "", "")` for it, so core never sees the `Preview: <name>` scratch name as a real current file and never reports markdown-active for the (non-markdown) preview pane. The channel id is passed as a Lua **vararg** (`...`) from the `nvim_exec_lua` call, never interpolated into the code string.
 
 ### Per-window buffer tracking — `_G.wolf_setup_buffer_tracking(chan)`
 
@@ -45,10 +45,10 @@ A global helper that `wolf-core` invokes over RPC **after** `ui_attach` and curr
 The helper:
 
 - creates a `WolfBuffers` augroup (`clear = true`, so re-invoking is idempotent);
-- registers a `BufEnter` / `BufWinEnter` / `BufFilePost` / `WinEnter` / `WinNew` / `WinClosed` autocmd whose callback iterates `nvim_list_wins()` and builds a list of `{ win, nvim_buf_get_name(buf) }` pairs (via `nvim_win_get_buf(win)`), then does `vim.rpcnotify(chan, "wolf_buffers", list)`;
+- registers a `BufEnter` / `BufWinEnter` / `BufFilePost` / `WinEnter` / `WinNew` / `WinClosed` autocmd whose callback iterates `nvim_list_wins()` and builds a list of `{ win, nvim_buf_get_name(buf) }` pairs (via `nvim_win_get_buf(win)`), SKIPPING any window whose buffer carries `b:wolf_preview_source` (below), then does `vim.rpcnotify(chan, "wolf_buffers", list)`;
 - emits once immediately so the startup window layout is reflected without a change.
 
-Core folds the payload into the sibling `Snapshot.buffers` map (win handle → canonicalized buffer path), WHOLESALE-REPLACING it on each emit so stale/closed windows drop out (it does NOT bump `seq`; it wakes the front-end). An **unnamed buffer** yields an empty string from `nvim_buf_get_name`, which core SKIPS — an absent window reports `[No Name]` with an empty path. `WinClosed` fires while the closing window is still listed by `nvim_list_wins()`, but re-emitting the full current set is still correct: the survivor set replaces the previous one wholesale. The channel id is passed as a Lua **vararg** (`...`), never interpolated into the code string.
+Core folds the payload into the sibling `Snapshot.buffers` map (win handle → canonicalized buffer path), WHOLESALE-REPLACING it on each emit so stale/closed windows drop out (it does NOT bump `seq`; it wakes the front-end). An **unnamed buffer** yields an empty string from `nvim_buf_get_name`, which core SKIPS — an absent window reports `[No Name]` with an empty path. A **preview scratch pane** (`b:wolf_preview_source`) is likewise omitted from the list, so core never tracks the bogus scratch name as a real per-window path — the front-end overlays a web view and paints its own `Preview: <name>` statusbar for it. `WinClosed` fires while the closing window is still listed by `nvim_list_wins()`, but re-emitting the full current set is still correct: the survivor set replaces the previous one wholesale. The channel id is passed as a Lua **vararg** (`...`), never interpolated into the code string.
 
 ### Directory tracking — `_G.wolf_setup_dir_tracking(chan)`
 
@@ -137,6 +137,25 @@ The helper holds an upvalue `local view_cache = {}` keyed `view_cache[win][buf] 
 - defines `_G.wolf_switch_buffer(win, buf)` (closing over `view_cache`), the helper `wolf-core`'s `InputEvent::SwitchBuffer` invokes via `nvim_exec_lua("wolf_switch_buffer(...)", [win, bufnr])`.
 
 `_G.wolf_switch_buffer(win, buf)` does a **window-scoped** `nvim_win_set_buf(win, buf)` (NOT `:edit` — so it does not disturb `current_file` / the file-MRU or re-read from disk), then restores the pane's view keyed on `(win, buf)`: if `view_cache[win][buf]` exists it `nvim_win_call`s `winrestview(cached)`, ELSE it forces the top of the buffer (`winrestview{ lnum = 1, col = 0, topline = 1, leftcol = 0 }`). There is **NO per-`bufnr` fallback**: a buffer seen only in OTHER panes opens at the top, never borrowing another pane's scroll. The whole body is wrapped in `pcall`, so a stale `bufnr` degrades to a no-op. The macOS `BufferPickerView` activation reaches this through `WolfCoreHandle::switch_buffer(bufnr)` (which resolves the active window live).
+
+### Markdown preview — `_G.wolf_open_preview(mode)` and `_G.wolf_setup_preview(chan)`
+
+Realizing the **live-updating Markdown preview** (OD1 = Design S: a preview pane is a real nvim scratch buffer, not a synthetic front-end pseudo-pane), `init.lua` defines a module-level open helper `wolf-core`'s `open_preview` drives over `nvim_exec_lua`, plus a setup helper `wolf-core` invokes over RPC **LAST** (after `wolf_setup_view_tracking`), passing core's own RPC channel id (see [`src/nvim.rs`](../../crates/wolf-core/src/nvim.rs)'s `render_preview` / `open_preview` / `setup_preview`).
+
+**`_G.wolf_open_preview(mode)`** opens (or reuses) the preview pane for the ACTIVE source buffer and returns the preview scratch buffer's number:
+
+- **Markdown gate** — a no-op returning `0` unless `vim.bo.filetype == "markdown"` (the same signal that gates `Snapshot.is_markdown_active()`), so a non-markdown active buffer never opens a preview.
+- **Create-or-reuse scratch buffer** — an upvalue map `_G.wolf_preview_bufs[source_buf] = preview_buf` (keyed by the SOURCE buffer number) makes re-invoking on the same source REUSE its preview buffer. On a miss (or a since-invalidated buffer) it creates one via `nvim_create_buf(true, true)` — `listed = true` (so it surfaces in the buffer picker for free) and `scratch = true` (which supplies the `buftype = nofile` / `bufhidden = hide` / `swapfile = false` defaults) — and sets `vim.bo[preview_buf].modifiable = false` explicitly.
+- **Naming (`Preview: <basename>`) with E95 fallback** — the buffer is named `Preview: <basename>` (`basename = fnamemodify(source_path, ":t")`) via `pcall(vim.api.nvim_buf_set_name, ...)`; `nvim_buf_set_name` raises **E95** when that name is already taken by ANOTHER buffer (two DIFFERENT sources sharing a basename — the reuse map already short-circuits a re-preview of the SAME source), so on the `pcall` failure it falls back to a disambiguated `Preview: <basename> (<source_bufnr>)`. The non-colliding common case keeps the exact `Preview: <basename>` name the buffer-picker row asserts on.
+- **Buffer vars** — `b:wolf_preview_source` = the source's ABSOLUTE path (`nvim_buf_get_name(source_buf)`), and `b:wolf_preview_source_bufnr` = the source's bufnr. These are what the path-based trackers SKIP (current-file / buffer tracking, above) and what `wolf_setup_preview`'s window-scan reads.
+- **Placement** — for `mode == "split_right"` it first `wolf_do_split("v")` (reusing the layout helper's Vertical-split intent path, so the shell creates + binds a new pane on the RIGHT) then `nvim_win_set_buf(0, preview_buf)`; for `"active"` it just `nvim_win_set_buf(0, preview_buf)` (replacing the current window's content). It returns `preview_buf` either way.
+
+**`_G.wolf_setup_preview(chan)`** installs the `WolfPreview` augroup (`clear = true`, so re-invoking is idempotent):
+
+- a window-scan on `WinEnter` / `BufWinEnter` / `WinNew` / `WinClosed` / `BufWinLeave` whose callback iterates `nvim_list_wins()`, and for each window whose buffer carries a non-empty `b:wolf_preview_source` builds a `{ win, source_bufnr, source_path }` triple (`source_bufnr` from `b:wolf_preview_source_bufnr or -1`), then does `vim.rpcnotify(chan, "wolf_preview", list)` — one triple per open preview window. Core WHOLESALE-REPLACES `Snapshot.previews` (keyed by the preview WINDOW handle) so closed preview windows drop out. It emits once immediately so an already-open preview is reflected without a window event.
+- markdown-guarded `TextChanged` / `TextChangedI` / `BufWritePost` autocmds whose callback, only when `vim.bo[ev.buf].filetype == "markdown"`, does `vim.rpcnotify(chan, "wolf_markdown_dirty", ev.buf, vim.api.nvim_buf_get_changedtick(ev.buf))` — the `[source_bufnr, changedtick]` live-update signal. Core upserts the tick into `Snapshot.markdown_ticks`; the front-end joins a preview's `source_bufnr` to its tick to decide when to re-pull rendered HTML (via the blocking `WolfCore::render_preview`, debounced through `PickerRefreshCoalescer`).
+
+Neither notification bumps `seq`; both wake the front-end. The rendered HTML itself is produced CORE-side by the GUI-free `wolf_core::markdown` module — `init.lua` never renders Markdown, only names the scratch buffer and reports the source + dirty tick. The channel id is passed as a Lua **vararg** (`...`), never interpolated into the code string, consistent with the other `wolf_setup_*` helpers.
 
 ## Deferred
 

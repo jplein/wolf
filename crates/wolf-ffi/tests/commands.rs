@@ -102,6 +102,8 @@ const CMD_KIND_PASTE: u8 = 15;
 const CMD_KIND_BUFFER_PICKER: u8 = 16;
 /// `FfiCommand::kind()` for New Tab (the appended discriminant 17, File menu).
 const CMD_KIND_NEW_TAB: u8 = 17;
+/// `FfiCommand::kind()` for Preview (the appended discriminant 18, View menu).
+const CMD_KIND_PREVIEW: u8 = 18;
 
 /// Builds a printable-character `FfiKeyEvent` (kind=Char) for `c`, all modifiers
 /// false (the already-resolved glyph rides in `ch`). Same as `panes.rs`.
@@ -168,8 +170,8 @@ fn commands_drain_close_and_minimize() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // Discriminant-contract guard: the local consts MUST be contiguous 0..=17 in
-    // variant order (mirrors `mod command_kind`). Referencing all eighteen here
+    // Discriminant-contract guard: the local consts MUST be contiguous 0..=18 in
+    // variant order (mirrors `mod command_kind`). Referencing all nineteen here
     // also keeps them from tripping dead-code lints.
     assert_eq!(
         [
@@ -191,9 +193,10 @@ fn commands_drain_close_and_minimize() {
             CMD_KIND_PASTE,
             CMD_KIND_BUFFER_PICKER,
             CMD_KIND_NEW_TAB,
+            CMD_KIND_PREVIEW,
         ],
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
-        "command_kind discriminants must be contiguous 0..=17 in Command variant order"
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18],
+        "command_kind discriminants must be contiguous 0..=18 in Command variant order"
     );
 
     let init_lua = common::init_lua_path();
@@ -292,6 +295,15 @@ fn commands_drain_close_and_minimize() {
     // discriminant 17.
     send_ex_command(&handle, ":WolfNewTab");
     poll_for_command_kind(&handle, CMD_KIND_NEW_TAB, ":WolfNewTab");
+
+    // --- 3i. :WolfPreview<CR> -> an FfiCommand with kind() == PREVIEW ---------
+    // A pure FFI drain: nothing acts on it here (the front-end that would open the
+    // markdown preview pane / web view is absent), so no preview is opened. This
+    // proves `:WolfPreview` is auto-registered as a COMMAND_SPECS row and drains
+    // the appended discriminant 18. (The command channel itself is unconditional;
+    // the "is markdown" gating lives in the front-end menu/palette, not here.)
+    send_ex_command(&handle, ":WolfPreview");
+    poll_for_command_kind(&handle, CMD_KIND_PREVIEW, ":WolfPreview");
 
     // --- 4. Shutdown: clean teardown ----------------------------------------
     handle.shutdown();

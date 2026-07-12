@@ -22,7 +22,7 @@ use crate::command::Command;
 use crate::layout::LayoutIntent;
 use crate::recent_dirs::RecentDirs;
 use crate::render::{
-    Cell, CursorShape, DefaultColors, HlAttr, ModeInfo, Rgb, SharedSnapshot, Snapshot,
+    Cell, CursorShape, DefaultColors, HlAttr, ModeInfo, PreviewInfo, Rgb, SharedSnapshot, Snapshot,
     ThemeColors, ThemeGroup, Viewport, WinInfo,
 };
 
@@ -112,6 +112,22 @@ const CWD_EVENT: &str = "wolf_cwd";
 /// color or `-1` for an unset channel. Routed separately from `redraw` in
 /// [`RedrawHandler::handle_notify`] into [`Snapshot::theme`].
 const THEME_EVENT: &str = "wolf_theme";
+
+/// Name of the out-of-band notification carrying the set of preview windows and
+/// their source Markdown buffers, emitted by the `WolfPreview` window-scan
+/// autocmd in `runtime/nvim/init.lua` (and once immediately at setup). The payload
+/// is a single msgpack array of `[preview_win, source_bufnr, source_abs_path]`
+/// triples; core WHOLESALE-REPLACES [`Snapshot::previews`] with the reported set.
+/// Routed separately from `redraw` in [`RedrawHandler::handle_notify`].
+const PREVIEW_EVENT: &str = "wolf_preview";
+
+/// Name of the out-of-band notification carrying a `[source_bufnr, changedtick]`
+/// pair for a Markdown source buffer that changed, emitted by the
+/// `TextChanged`/`TextChangedI`/`BufWritePost` autocmds in
+/// `runtime/nvim/init.lua`. Core UPSERTS the tick into
+/// [`Snapshot::markdown_ticks`]. Routed separately from `redraw` in
+/// [`RedrawHandler::handle_notify`].
+const MARKDOWN_DIRTY_EVENT: &str = "wolf_markdown_dirty";
 
 /// `nvim-rs` [`Handler`] that applies redraw batches to a [`SharedSnapshot`].
 #[derive(Clone)]
@@ -226,6 +242,23 @@ impl Handler for RedrawHandler {
                 self.apply_theme(args).await;
                 (self.wake)();
             }
+            PREVIEW_EVENT => {
+                // `apply_previews` builds the new map BEFORE taking the write
+                // guard, then assigns it wholesale and DROPS the lock before
+                // returning; the wake fires strictly after the lock is released
+                // (same wake-after-unlock invariant). This is NOT a redraw frame,
+                // so `seq` is left unchanged.
+                self.apply_previews(args).await;
+                (self.wake)();
+            }
+            MARKDOWN_DIRTY_EVENT => {
+                // `apply_markdown_dirty` acquires and DROPS the write lock before
+                // returning; wake fires after the lock is released (same
+                // wake-after-unlock invariant). This is NOT a redraw frame, so
+                // `seq` is left unchanged.
+                self.apply_markdown_dirty(args).await;
+                (self.wake)();
+            }
             CWD_EVENT => {
                 // nvim's cwd is NOT render state, so there is intentionally NO
                 // wake here: the `:cd`/`:lcd`/`:tcd` that triggered this already
@@ -276,13 +309,18 @@ impl RedrawHandler {
     }
 
     /// Applies a `wolf_current_file` notification: sets the snapshot's
-    /// `current_file` to the canonicalized active-buffer path, or `None` for an
-    /// unnamed buffer (empty/absent argument).
+    /// `current_file` to the canonicalized active-buffer path (or `None` for an
+    /// unnamed buffer) and its `current_filetype` to the reported `vim.bo.filetype`
+    /// (or empty).
     ///
     /// The first argument is `expand('%:p')`. An empty string (unnamed buffer)
     /// maps to `None`; otherwise the path is canonicalized to match the
     /// canonical paths the file picker emits, falling back to the raw path if
-    /// canonicalization fails (e.g. the file no longer exists).
+    /// canonicalization fails (e.g. the file no longer exists). The (new) second
+    /// argument is `vim.bo.filetype`; the autocmd now also fires on `FileType` so
+    /// the filetype tracks the active buffer. A missing 2nd arg maps to the empty
+    /// string (unknown filetype), which drives [`Snapshot::is_markdown_active`] to
+    /// `false`.
     ///
     /// The write lock is acquired via [`SharedSnapshot::write_async`] and is NOT
     /// held across any `.await`; it is dropped before returning so the caller's
@@ -294,13 +332,95 @@ impl RedrawHandler {
             }
             _ => None,
         };
+        let filetype = args
+            .get(1)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
 
         let mut snap = self.snapshot.write_async().await;
         snap.current_file = target;
+        snap.current_filetype = filetype;
         // A current_file change is NOT a redraw frame, so `seq` (the redraw-frame
         // counter, advanced only on `flush`) is intentionally left unchanged. The
         // caller still fires the wake after this lock drops so the front-end can
         // re-read the snapshot.
+        // Lock drops here as `snap` goes out of scope at function return.
+    }
+
+    /// Applies a `wolf_preview` notification: WHOLESALE-REPLACES the snapshot's
+    /// per-preview-window source map ([`Snapshot::previews`]) with the reported
+    /// set.
+    ///
+    /// The single argument is a msgpack array of
+    /// `[preview_win, source_bufnr, source_abs_path]` triples, one per window
+    /// showing a `b:wolf_preview_source` scratch buffer. Each `preview_win` /
+    /// `source_bufnr` decodes via [`ext_handle`] (a plain integer, or defensively a
+    /// msgpack-`Ext`-wrapped integer); each `source_abs_path` is the absolute path
+    /// of the source Markdown file. A triple missing either handle is SKIPPED.
+    ///
+    /// The new map is built in full BEFORE the write guard is taken, then assigned
+    /// wholesale. The lock is acquired via [`SharedSnapshot::write_async`], is NOT
+    /// held across any `.await`, and is dropped before returning so the caller's
+    /// wake fires after the lock is released. This is NOT a redraw frame, so `seq`
+    /// is left unchanged; the wholesale replacement drops any closed preview
+    /// windows.
+    async fn apply_previews(&self, args: Vec<Value>) {
+        let mut map: HashMap<i64, PreviewInfo> = HashMap::new();
+        if let Some(triples) = args.first().and_then(Value::as_array) {
+            for triple in triples {
+                let Some(triple) = triple.as_array() else {
+                    continue;
+                };
+                let Some(win) = triple.first().and_then(ext_handle) else {
+                    continue;
+                };
+                let Some(source_bufnr) = triple.get(1).and_then(ext_handle) else {
+                    continue;
+                };
+                let source_path = triple
+                    .get(2)
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_default();
+                map.insert(
+                    win,
+                    PreviewInfo {
+                        source_bufnr,
+                        source_path,
+                    },
+                );
+            }
+        }
+
+        let mut snap = self.snapshot.write_async().await;
+        snap.previews = map;
+        // A previews change is NOT a redraw frame, so `seq` is intentionally left
+        // unchanged. The caller fires the wake after this lock drops.
+        // Lock drops here as `snap` goes out of scope at function return.
+    }
+
+    /// Applies a `wolf_markdown_dirty` notification: UPSERTS the reported
+    /// `[source_bufnr, changedtick]` into [`Snapshot::markdown_ticks`].
+    ///
+    /// The payload is a source buffer number (decoded via [`ext_handle`]) and its
+    /// current `changedtick` (a `u64`). A payload missing either is dropped. The
+    /// front-end joins a preview's `source_bufnr` to its tick to decide when to
+    /// re-pull rendered HTML.
+    ///
+    /// The write lock is acquired via [`SharedSnapshot::write_async`], is NOT held
+    /// across any `.await`, and is dropped before returning so the caller's wake
+    /// fires after the lock is released. This is NOT a redraw frame, so `seq` is
+    /// left unchanged.
+    async fn apply_markdown_dirty(&self, args: Vec<Value>) {
+        let Some(bufnr) = args.first().and_then(ext_handle) else {
+            return;
+        };
+        let Some(tick) = args.get(1).and_then(as_u64) else {
+            return;
+        };
+        let mut snap = self.snapshot.write_async().await;
+        snap.markdown_ticks.insert(bufnr, tick);
         // Lock drops here as `snap` goes out of scope at function return.
     }
 

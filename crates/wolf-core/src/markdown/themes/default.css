@@ -1,0 +1,60 @@
+/* The single shipped preview theme: PreviewTheme::Default (a dark theme).
+ *
+ * This file is include_str!'d into the rendered HTML document (AFTER base.css)
+ * by crate::markdown::theme_css. It is a FIXED theme — NOT wired to the live
+ * nvim colorscheme (OD5); wiring the preview to the app theme is a designed-for-
+ * later extension. It is NOT a Markdown doc and is not prettier-formatted.
+ *
+ * It layers colors onto the structural rules base.css already established, so it
+ * intentionally only sets color/background/border-color properties.
+ */
+
+body.wolf-markdown {
+  color: #d4d4d4;
+  background-color: #1e1e1e;
+}
+
+body.wolf-markdown h1,
+body.wolf-markdown h2,
+body.wolf-markdown h3,
+body.wolf-markdown h4,
+body.wolf-markdown h5,
+body.wolf-markdown h6 {
+  color: #ffffff;
+}
+
+body.wolf-markdown h1,
+body.wolf-markdown h2 {
+  border-bottom-color: #3a3a3a;
+}
+
+body.wolf-markdown a {
+  color: #4ea1ff;
+}
+
+body.wolf-markdown code {
+  background-color: #2b2b2b;
+  color: #e6e6e6;
+}
+
+body.wolf-markdown pre {
+  background-color: #161616;
+}
+
+body.wolf-markdown blockquote {
+  color: #a8a8a8;
+  border-left-color: #3a3a3a;
+}
+
+body.wolf-markdown th,
+body.wolf-markdown td {
+  border-color: #3a3a3a;
+}
+
+body.wolf-markdown th {
+  background-color: #262626;
+}
+
+body.wolf-markdown hr {
+  background-color: #3a3a3a;
+}

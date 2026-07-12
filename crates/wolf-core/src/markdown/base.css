@@ -1,0 +1,140 @@
+/* Structural + marker CSS shared by every preview theme.
+ *
+ * This file is include_str!'d into the rendered HTML document (BEFORE the
+ * selected theme's CSS) by crate::markdown. It is NOT a Markdown doc and is not
+ * prettier-formatted. It owns two things:
+ *
+ *  1. The invisible position-marker rule (.wolf-src): a zero-size inline anchor
+ *     the deferred scroll-sync JS will getElementById by its `wl-{line}-{col}`
+ *     id. It must take NO layout space and never affect the rendered body, so it
+ *     is an inline element clamped to zero width/height with hidden overflow.
+ *
+ *  2. Baseline structural layout (margins, code/table/blockquote framing) that a
+ *     theme layers colors on top of.
+ */
+
+/* Invisible per-line / per-100-column source markers. Zero-size, no layout
+ * impact, never selectable — purely an anchor target for a future cursor-follow
+ * scroll. */
+.wolf-src {
+  display: inline;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  font-size: 0;
+  line-height: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+html {
+  box-sizing: border-box;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: inherit;
+}
+
+body.wolf-markdown {
+  margin: 0;
+  padding: 2rem 2.5rem;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial,
+    sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  word-wrap: break-word;
+}
+
+body.wolf-markdown h1,
+body.wolf-markdown h2,
+body.wolf-markdown h3,
+body.wolf-markdown h4,
+body.wolf-markdown h5,
+body.wolf-markdown h6 {
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+body.wolf-markdown h1 {
+  font-size: 2em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid;
+}
+
+body.wolf-markdown h2 {
+  font-size: 1.5em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid;
+}
+
+body.wolf-markdown p {
+  margin-top: 0;
+  margin-bottom: 1em;
+}
+
+body.wolf-markdown a {
+  text-decoration: none;
+}
+
+body.wolf-markdown a:hover {
+  text-decoration: underline;
+}
+
+body.wolf-markdown code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.9em;
+  padding: 0.2em 0.4em;
+  border-radius: 6px;
+}
+
+body.wolf-markdown pre {
+  padding: 1em;
+  overflow: auto;
+  border-radius: 6px;
+  line-height: 1.45;
+}
+
+body.wolf-markdown pre code {
+  padding: 0;
+  font-size: 0.9em;
+  background: transparent;
+}
+
+body.wolf-markdown blockquote {
+  margin: 0 0 1em;
+  padding: 0 1em;
+  border-left: 0.25em solid;
+}
+
+body.wolf-markdown table {
+  border-collapse: collapse;
+  margin-bottom: 1em;
+}
+
+body.wolf-markdown th,
+body.wolf-markdown td {
+  padding: 0.4em 0.8em;
+  border: 1px solid;
+}
+
+body.wolf-markdown img {
+  max-width: 100%;
+}
+
+body.wolf-markdown hr {
+  height: 1px;
+  border: 0;
+  margin: 1.5em 0;
+}
+
+body.wolf-markdown ul,
+body.wolf-markdown ol {
+  margin-top: 0;
+  margin-bottom: 1em;
+  padding-left: 2em;
+}

@@ -458,6 +458,24 @@ pub struct ThemeColors {
     pub titlebar: ThemeGroup,
 }
 
+/// Where a preview pane's source Markdown lives, learned from the `wolf_preview`
+/// notification.
+///
+/// A preview pane is backed by a real Neovim scratch buffer named
+/// `Preview: <basename>` carrying `b:wolf_preview_source` (OD1 = Design S). The
+/// `wolf_preview` autocmd scans windows for that buffer variable and reports, per
+/// preview window (keyed in [`Snapshot::previews`] by the preview WINDOW handle),
+/// the SOURCE buffer's number and absolute path so the front-end can pull rendered
+/// HTML via [`crate::api::WolfCore::render_preview`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PreviewInfo {
+    /// The Neovim buffer number of the SOURCE Markdown buffer (NOT the scratch
+    /// preview buffer). Keys into [`Snapshot::markdown_ticks`] for the live tick.
+    pub source_bufnr: i64,
+    /// Absolute path of the source Markdown file.
+    pub source_path: PathBuf,
+}
+
 /// A complete, paint-ready frame of render state.
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
@@ -508,6 +526,27 @@ pub struct Snapshot {
     /// [`crate::redraw`]); all-`None` by default and whenever a group is
     /// absent or cleared.
     pub theme: ThemeColors,
+    /// The filetype (`vim.bo.filetype`) of the buffer currently being edited in
+    /// nvim, or the empty string when unknown. Updated out-of-band from the redraw
+    /// stream via the `wolf_current_file` notification (a 2nd argument added to the
+    /// existing current-file autocmd, which now also fires on `FileType`; see
+    /// [`crate::redraw`]). Because it is not a redraw frame, updating it does NOT
+    /// bump `seq`. Drives [`Snapshot::is_markdown_active`], the Preview command's
+    /// enable gate. Defaults to empty.
+    pub current_filetype: String,
+    /// Per-preview-window source info, keyed by the preview WINDOW handle (an
+    /// `i64`). Updated out-of-band from the redraw stream via the `wolf_preview`
+    /// notification (see [`crate::redraw`]): the whole map is WHOLESALE-REPLACED on
+    /// each emit, so closed preview windows vanish. Because it is not a redraw
+    /// frame, updating it does NOT bump `seq`. Defaults to empty.
+    pub previews: HashMap<i64, PreviewInfo>,
+    /// Per-source-buffer `changedtick`, keyed by the SOURCE Markdown buffer number
+    /// (an `i64`). Updated out-of-band from the redraw stream via the
+    /// `wolf_markdown_dirty` notification (see [`crate::redraw`]): each emit upserts
+    /// one `[bufnr, tick]` entry. The front-end joins a preview's `source_bufnr` to
+    /// its tick to decide when to re-pull rendered HTML. Because it is not a redraw
+    /// frame, updating it does NOT bump `seq`. Defaults to empty.
+    pub markdown_ticks: HashMap<i64, u64>,
     /// Monotonic frame sequence number, bumped on each `flush`.
     pub seq: u64,
 }
@@ -569,6 +608,18 @@ impl Snapshot {
             .is_some_and(|mode| mode.name == "visual")
     }
 
+    /// Returns `true` when the buffer currently being edited is a Markdown file.
+    ///
+    /// Resolves `current_filetype == "markdown"` (mirrors [`is_visual_mode`]'s
+    /// "resolve one field, match a string" shape). This is the enable gate for the
+    /// Preview command (front-end `validateMenuItem` / the palette row).
+    ///
+    /// [`is_visual_mode`]: Snapshot::is_visual_mode
+    #[must_use]
+    pub fn is_markdown_active(&self) -> bool {
+        self.current_filetype == "markdown"
+    }
+
     /// Returns the active grid (see [`Snapshot::active_grid_id`]), or a shared
     /// empty `0x0` grid if no grid is present.
     #[must_use]
@@ -606,6 +657,42 @@ impl Snapshot {
             .values()
             .find(|w| w.win == win)
             .map(|w| w.grid)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A grid width used to construct a fresh [`Snapshot`] under test. Any positive
+    /// size works; `is_markdown_active` does not depend on grid dimensions.
+    const TEST_COLS: usize = 80;
+    /// A grid height used to construct a fresh [`Snapshot`] under test.
+    const TEST_ROWS: usize = 24;
+
+    /// `is_markdown_active()` is `true` IFF `current_filetype == "markdown"`
+    /// (mirrors `is_visual_mode`'s "resolve one field, match a string" shape). A
+    /// fresh snapshot has an empty filetype (not markdown); setting it to
+    /// `"markdown"` flips it on; any other filetype flips it off again.
+    #[test]
+    fn is_markdown_active_true_only_for_markdown_filetype() {
+        let mut snap = Snapshot::new(TEST_COLS, TEST_ROWS);
+        assert!(
+            !snap.is_markdown_active(),
+            "a fresh snapshot has an empty filetype and is not markdown"
+        );
+
+        snap.current_filetype = "markdown".to_string();
+        assert!(
+            snap.is_markdown_active(),
+            "current_filetype == \"markdown\" must report markdown active"
+        );
+
+        snap.current_filetype = "rust".to_string();
+        assert!(
+            !snap.is_markdown_active(),
+            "a non-markdown filetype must report markdown inactive"
+        );
     }
 }
 

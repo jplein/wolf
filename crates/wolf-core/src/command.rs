@@ -27,7 +27,7 @@
 /// `MinimizeWindow`(4), `GoToFile`(5), `OpenFile`(6), `OpenFolder`(7),
 /// `ClosePane`(8), `NewBuffer`(9), `ResetFontSize`(10), `IncreaseFontSize`(11),
 /// `DecreaseFontSize`(12), `CommandPalette`(13), `Copy`(14), `Paste`(15),
-/// `BufferPicker`(16), `NewTab`(17). Adding a command is additive
+/// `BufferPicker`(16), `NewTab`(17), `Preview`(18). Adding a command is additive
 /// (append a variant + a [`COMMAND_SPECS`] row); reordering is a breaking change.
 /// `CommandPalette` is the palette's own invoking command and is EXCLUDED from the
 /// palette's candidate list (a palette cannot dispatch itself).
@@ -71,6 +71,9 @@ pub enum Command {
     /// Open a new tab in the current window (a new captive Neovim in the same
     /// directory).
     NewTab,
+    /// Render the active Markdown buffer as HTML and show it in a preview pane
+    /// (only available when the active buffer is a Markdown file).
+    Preview,
 }
 
 /// The menu group a command belongs to in a native menu bar.
@@ -247,6 +250,13 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         title: "New Tab",
         menu: MenuGroup::File,
     },
+    CommandSpec {
+        command: Command::Preview,
+        id: "preview",
+        ex_command: "WolfPreview",
+        title: "Preview",
+        menu: MenuGroup::View,
+    },
 ];
 
 impl Command {
@@ -276,10 +286,10 @@ mod tests {
 
     /// The total number of registered commands AFTER appending
     /// `Command::Copy` (14), `Command::Paste` (15), `Command::BufferPicker`
-    /// (16), and `Command::NewTab` (discriminant 17) past
-    /// `Command::CommandPalette` (13). A named constant so the magic-number lint
-    /// stays quiet and the count's meaning is explicit.
-    const EXPECTED_COMMAND_COUNT: usize = 18;
+    /// (16), `Command::NewTab` (17), and `Command::Preview` (discriminant 18)
+    /// past `Command::CommandPalette` (13). A named constant so the magic-number
+    /// lint stays quiet and the count's meaning is explicit.
+    const EXPECTED_COMMAND_COUNT: usize = 19;
 
     /// The append-only slice index (== FFI discriminant == `command_kind`) of
     /// `Command::CommandPalette`.
@@ -300,9 +310,14 @@ mod tests {
     const BUFFER_PICKER_INDEX: usize = 16;
 
     /// The append-only slice index (== FFI discriminant == `command_kind`) of
-    /// `Command::NewTab`: the appended discriminant 17 and LAST row of
-    /// [`COMMAND_SPECS`].
+    /// `Command::NewTab`: the appended discriminant 17. No longer the last row
+    /// after `Preview` is appended at 18.
     const NEW_TAB_INDEX: usize = 17;
+
+    /// The append-only slice index (== FFI discriminant == `command_kind`) of
+    /// `Command::Preview`: the appended discriminant 18 and LAST row of
+    /// [`COMMAND_SPECS`].
+    const PREVIEW_INDEX: usize = 18;
 
     /// `from_id` resolves the canonical `command_palette` id to the new variant.
     #[test]
@@ -325,15 +340,15 @@ mod tests {
         assert_eq!(spec.menu, MenuGroup::View, "menu group");
     }
 
-    /// Appending Copy, Paste, and BufferPicker grows the registry to exactly 17
-    /// rows.
+    /// Appending Copy, Paste, BufferPicker, NewTab, and Preview grows the registry
+    /// to exactly 19 rows.
     #[test]
     fn command_specs_has_expected_len() {
         assert_eq!(
             COMMAND_SPECS.len(),
             EXPECTED_COMMAND_COUNT,
             "COMMAND_SPECS must hold exactly {EXPECTED_COMMAND_COUNT} rows \
-             after appending Copy, Paste, and BufferPicker"
+             after appending Copy, Paste, BufferPicker, NewTab, and Preview"
         );
     }
 
@@ -467,19 +482,52 @@ mod tests {
         assert_eq!(spec.menu, MenuGroup::File, "menu group");
     }
 
-    /// Append-discriminant guard: NewTab is the LAST row (index 17), so the slice
-    /// index equals its FFI discriminant. Reordering breaks this.
+    /// Append-discriminant guard: NewTab stays at fixed index 17 (no longer the
+    /// last row after Preview is appended at 18), so the slice index still equals
+    /// its FFI discriminant. Reordering breaks this.
     #[test]
-    fn new_tab_is_the_last_row() {
+    fn new_tab_is_at_index_17() {
         assert_eq!(
             COMMAND_SPECS[NEW_TAB_INDEX].command,
             Command::NewTab,
             "the row at index {NEW_TAB_INDEX} must be Command::NewTab"
         );
+    }
+
+    /// `from_id` resolves the canonical `preview` id to the new variant.
+    #[test]
+    fn preview_id_round_trips() {
         assert_eq!(
-            NEW_TAB_INDEX,
+            Command::from_id("preview"),
+            Some(Command::Preview),
+            "\"preview\" must resolve to Command::Preview"
+        );
+    }
+
+    /// The Preview spec pins its id, ex-command, title, and View menu group (the
+    /// canonical registry row for the preview command).
+    #[test]
+    fn preview_spec_fields() {
+        let spec = Command::Preview.spec();
+        assert_eq!(spec.id, "preview", "id");
+        assert_eq!(spec.ex_command, "WolfPreview", "ex_command");
+        assert_eq!(spec.title, "Preview", "title");
+        assert_eq!(spec.menu, MenuGroup::View, "menu group");
+    }
+
+    /// Append-discriminant guard: Preview is the LAST row (index 18), so the slice
+    /// index equals its FFI discriminant. Reordering breaks this.
+    #[test]
+    fn preview_is_the_last_row() {
+        assert_eq!(
+            COMMAND_SPECS[PREVIEW_INDEX].command,
+            Command::Preview,
+            "the row at index {PREVIEW_INDEX} must be Command::Preview"
+        );
+        assert_eq!(
+            PREVIEW_INDEX,
             COMMAND_SPECS.len() - 1,
-            "NewTab must be the FINAL row of COMMAND_SPECS"
+            "Preview must be the FINAL row of COMMAND_SPECS"
         );
     }
 }

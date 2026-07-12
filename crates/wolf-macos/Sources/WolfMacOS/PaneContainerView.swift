@@ -22,6 +22,7 @@
 import AppKit
 import CoreGraphics
 import CoreText
+import WebKit
 import WolfFFI
 import WolfKeyMap
 
@@ -128,6 +129,41 @@ final class PaneContainerView: NSView {
     private var nextPaneId: PaneId = PaneContainerView.firstPaneId
     /// The currently active pane (cursor target + the one NOT dimmed), if any.
     private var activePane: PaneId?
+
+    // -- Markdown-preview web-view hosting ------------------------------------
+    // A preview pane is a SECOND pane content kind (requirement 2): the blank
+    // scratch grid paints underneath (occluded, cheap) while a real `WKWebView`
+    // subview shows core-rendered HTML over the pane's grid rect. These maps are
+    // keyed by the preview WINDOW handle (`FfiPreview.win()`), the stable identity
+    // that survives grid-id churn.
+    /// The hosted `WKWebView`s, one per preview window.
+    private var previewWebViews: [Int64: WKWebView] = [:]
+    /// The inactive-dim scrim over each preview web view (a preview pane can't be
+    /// dimmed by `paintPane`'s CGContext fill, since the web view is a real subview
+    /// painted on top), added only while the pane is not active.
+    private var previewDimOverlays: [Int64: NSView] = [:]
+    /// The source `changedtick` each preview window's web view was last loaded at,
+    /// so a reload (`render_preview` + `loadHTMLString`) fires only when the source
+    /// advanced (or on first bind) — the OD6 live-on-change gate.
+    private var lastPreviewTicks: [Int64: UInt64] = [:]
+    /// The source basename of each preview pane, keyed by the pane's bound GRID,
+    /// rebuilt every wake by `syncPreviewWebViews`. Consulted by `paintStatusbar`
+    /// (to show `Preview: <name>`) and `drawScrollbars` (to suppress the synthetic
+    /// scrollbar over a web-view pane).
+    private var previewNamesByGrid: [UInt64: String] = [:]
+    /// Debounces the BLOCKING preview reload (`render_preview` + `loadHTMLString`)
+    /// so a fast-typing burst — which fires many render wakes, each advancing the
+    /// source `changedtick` — yields ONE trailing main-thread `render_preview`
+    /// round-trip per ~30fps window rather than one per wake (OD6 / OD12). The
+    /// per-window source-tick gate (`lastPreviewTicks`) stays the redundant-reload
+    /// guard (same tick → still no reload); the coalescer bounds the RATE of the
+    /// actual RPC + reload.
+    private lazy var previewReloadCoalescer = PickerRefreshCoalescer(
+        schedule: { work in
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + PickerRefreshCoalescer.refreshInterval, execute: work)
+        },
+        perform: { [weak self] in self?.reloadDirtyPreviews() })
 
     /// The grid a press/drag is targeting, set on `mouseDown` and cleared on
     /// `mouseUp`, so a drag keeps targeting the pane the press started in even when
@@ -522,6 +558,7 @@ final class PaneContainerView: NSView {
             updateActivePane()
             syncGridSizes()
             applyTitlebarTheme()
+            syncPreviewWebViews()
             needsDisplay = true
             return
         }
@@ -533,7 +570,121 @@ final class PaneContainerView: NSView {
         updateActivePane()
         syncGridSizes()
         applyTitlebarTheme()
+        syncPreviewWebViews()
         needsDisplay = true
+    }
+
+    /// Reconciles the hosted Markdown-preview `WKWebView`s with the core's current
+    /// `previews()` snapshot (requirement 2 / OD1 = Design S).
+    ///
+    /// For every pane bound to a preview WINDOW (a window showing a
+    /// `b:wolf_preview_source` scratch buffer), ensure a `WKWebView` framed to the
+    /// pane's GRID rect, and reload it from `render_preview(source_bufnr)` whenever
+    /// the source's `changedtick` advanced (the OD6 live-on-change gate; a keystroke
+    /// burst is already coalesced into one tick-advancing wake). A dim overlay is
+    /// applied when the pane is not active. The pane's grid is recorded in
+    /// `previewNamesByGrid` so `paintStatusbar` shows `Preview: <name>` and
+    /// `drawScrollbars` suppresses the synthetic scrollbar. Web views + overlays for
+    /// windows that are no longer previews (or closed) are removed.
+    private func syncPreviewWebViews() {
+        previewNamesByGrid.removeAll(keepingCapacity: true)
+        var liveWins = Set<Int64>()
+        let rects = paneRects()
+
+        // `previews()` yields borrowed `FfiPreviewRef`s valid only for the loop
+        // body, so each preview is fully consumed inside its own iteration (the pane
+        // is found by its stable window handle; scalars/strings are copied out).
+        for preview in handle.previews() {
+            let win = preview.win()
+            guard
+                let entry = rects.first(where: { panes[$0.0]?.win == win }),
+                let grid = panes[entry.0]?.boundGrid
+            else { continue }
+            liveWins.insert(win)
+            previewNamesByGrid[grid] = preview.source_name().toString()
+
+            let gRect = gridRect(ofPane: entry.1)
+            let web = ensurePreviewWebView(for: win)
+            web.frame = gRect
+            web.isHidden = false
+
+            // Only the cheap AppKit layout runs per wake; the BLOCKING reload is
+            // debounced. Requesting when the tick differs (a new source, or an
+            // advanced changedtick) coalesces a keystroke burst into one trailing
+            // reload. `lastPreviewTicks` is updated in the coalesced `perform`, not
+            // here, so the "did the tick advance" test survives the debounce.
+            if lastPreviewTicks[win] != preview.source_tick() {
+                previewReloadCoalescer.request()
+            }
+
+            applyPreviewDim(win: win, over: gRect, dimmed: entry.0 != activePane)
+        }
+
+        for win in Array(previewWebViews.keys) where !liveWins.contains(win) {
+            removePreviewWebView(win)
+        }
+    }
+
+    /// The coalesced preview-reload pass (the `previewReloadCoalescer`'s `perform`,
+    /// run once per debounce window on the main thread). Re-reads the core's
+    /// `previews()` and, for each preview whose hosted web view still exists and
+    /// whose source `changedtick` advanced past `lastPreviewTicks`, does the one
+    /// blocking `render_preview` round-trip and reloads the web view. The per-window
+    /// tick gate here is the redundant-reload guard; the coalescer bounds the rate.
+    private func reloadDirtyPreviews() {
+        for preview in handle.previews() {
+            let win = preview.win()
+            guard let web = previewWebViews[win] else { continue }
+            let tick = preview.source_tick()
+            guard lastPreviewTicks[win] != tick else { continue }
+            lastPreviewTicks[win] = tick
+            let html = handle.render_preview(preview.source_bufnr()).toString()
+            web.loadHTMLString(html, baseURL: nil)
+        }
+    }
+
+    /// Returns the preview `WKWebView` for window `win`, creating and adding it as a
+    /// subview on first use.
+    private func ensurePreviewWebView(for win: Int64) -> WKWebView {
+        if let existing = previewWebViews[win] { return existing }
+        let web = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        previewWebViews[win] = web
+        addSubview(web)
+        return web
+    }
+
+    /// Applies (or hides) the inactive-dim scrim over the preview web view for
+    /// window `win`, kept above the web view in the subview order.
+    private func applyPreviewDim(win: Int64, over rect: CGRect, dimmed: Bool) {
+        guard dimmed else {
+            previewDimOverlays[win]?.isHidden = true
+            return
+        }
+        let overlay: NSView
+        if let existing = previewDimOverlays[win] {
+            overlay = existing
+        } else {
+            overlay = NSView(frame: rect)
+            overlay.wantsLayer = true
+            overlay.layer?.backgroundColor = CGColor(gray: 0, alpha: Self.inactiveDim)
+            previewDimOverlays[win] = overlay
+            addSubview(overlay)
+        }
+        overlay.frame = rect
+        overlay.isHidden = false
+        if let web = previewWebViews[win] {
+            addSubview(overlay, positioned: .above, relativeTo: web)
+        }
+    }
+
+    /// Tears down the hosted web view + dim overlay + last-tick entry for window
+    /// `win` (it is no longer a preview, or its pane closed).
+    private func removePreviewWebView(_ win: Int64) {
+        previewWebViews[win]?.removeFromSuperview()
+        previewWebViews[win] = nil
+        previewDimOverlays[win]?.removeFromSuperview()
+        previewDimOverlays[win] = nil
+        lastPreviewTicks[win] = nil
     }
 
     /// Nulls EVERY pane's bound grid, then re-resolves each via `grid_for_win` on
@@ -772,9 +923,19 @@ final class PaneContainerView: NSView {
         let textWidth = max(0, gRect.maxX - textLeft)
 
         let layout = statusbarLayout
-        let status = handle.pane_status_for_grid(grid)
-        let filename = status.filename().toString()
-        let displayPath = status.display_path().toString()
+        // A preview pane's scratch buffer is SKIPPED by the path-based trackers, so
+        // its pane_status is "[No Name]"; override it with `Preview: <basename>`
+        // (from the core's previews() snapshot) and no path line.
+        let filename: String
+        let displayPath: String
+        if let name = previewNamesByGrid[grid] {
+            filename = "Preview: \(name)"
+            displayPath = ""
+        } else {
+            let status = handle.pane_status_for_grid(grid)
+            filename = status.filename().toString()
+            displayPath = status.display_path().toString()
+        }
 
         // Colors: the themed titlebar fg when set (secondary derived at a lower
         // alpha), else AppKit's label / secondary-label system colors.
@@ -945,6 +1106,9 @@ final class PaneContainerView: NSView {
 
         for (id, rect) in rects {
             guard let grid = panes[id]?.boundGrid else { continue }
+            // A preview pane hosts a WKWebView (with its own scrolling), so suppress
+            // the synthetic scrollbar over it.
+            if previewNamesByGrid[grid] != nil { continue }
             let frame = handle.read_frame_for_grid(grid)
             let linecount = frame.linecount()
             guard linecount > 0 else { continue }

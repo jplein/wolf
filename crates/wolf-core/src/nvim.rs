@@ -275,6 +275,123 @@ impl NvimProcess {
         Ok(buffers)
     }
 
+    /// Renders the Markdown SOURCE buffer `source_bufnr` to a themed HTML preview
+    /// document.
+    ///
+    /// Blocks on `nvim_buf_get_lines(source_bufnr, 0, -1, false)` to read the whole
+    /// buffer, joins the lines with `\n`, and renders via
+    /// [`crate::markdown::render_html`] with the fixed [`crate::markdown::PreviewTheme::Default`]
+    /// (OD5). An RPC error (e.g. an unloaded/closed buffer) is propagated as
+    /// [`NvimError::Rpc`]; the caller ([`crate::api::WolfCore::render_preview`])
+    /// maps that to an empty string.
+    pub async fn render_preview(&self, source_bufnr: i64) -> Result<String, NvimError> {
+        let value = self
+            .nvim
+            .call(
+                "nvim_buf_get_lines",
+                vec![
+                    Value::from(source_bufnr),
+                    Value::from(0),
+                    Value::from(-1),
+                    Value::from(false),
+                ],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+        let Some(lines) = value.as_array() else {
+            return Err(NvimError::Rpc(format!(
+                "nvim_buf_get_lines did not return an array: {value:?}"
+            )));
+        };
+        let source = lines
+            .iter()
+            .map(|l| l.as_str().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        Ok(crate::markdown::render_html(
+            &source,
+            crate::markdown::PreviewTheme::Default,
+        ))
+    }
+
+    /// Opens (or reuses) the Markdown preview pane for the active source buffer and
+    /// returns the preview scratch buffer's number (`0` when the active buffer is
+    /// not Markdown).
+    ///
+    /// Runs the `_G.wolf_open_preview` helper (defined in `runtime/nvim/init.lua`)
+    /// over `nvim_exec_lua`, passing `mode` as a Lua vararg (never interpolated).
+    /// `mode` is `"split_right"` (single-pane placement: reuse `wolf_do_split('v')`
+    /// then `nvim_win_set_buf(0, previewbuf)`) or `"active"` (multi-pane: just
+    /// `nvim_win_set_buf(0, previewbuf)`) — see [`crate::api::WolfCore::open_preview`].
+    /// The helper no-ops (returns `0`) unless `&filetype == "markdown"`, else
+    /// creates-or-reuses the per-source scratch buffer and returns its bufnr,
+    /// decoded via [`Value::as_i64`].
+    pub async fn open_preview(&self, mode: &str) -> Result<i64, NvimError> {
+        let value = self
+            .nvim
+            .call(
+                "nvim_exec_lua",
+                vec![
+                    Value::from("return wolf_open_preview(...)"),
+                    Value::Array(vec![Value::from(mode)]),
+                ],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+        Ok(value.as_i64().unwrap_or_default())
+    }
+
+    /// Installs the preview tracking + dirty-signal autocmds inside the captive
+    /// nvim.
+    ///
+    /// Mirrors [`setup_buffer_tracking`](Self::setup_buffer_tracking): looks up this
+    /// RPC channel's id via `nvim_get_api_info`, then calls the
+    /// `_G.wolf_setup_preview` helper (defined in `runtime/nvim/init.lua`) over
+    /// `nvim_exec_lua`, passing the channel id as a Lua vararg. The helper registers
+    /// the `WolfPreview` augroup: a `WinEnter`/`BufWinEnter`/`WinNew`/`WinClosed`/
+    /// `BufWinLeave` window-scan that `rpcnotify`s `wolf_preview` with
+    /// `[preview_win, source_bufnr, source_abs_path]` triples (emitting once
+    /// immediately), plus markdown-guarded `TextChanged`/`TextChangedI`/
+    /// `BufWritePost` autocmds that `rpcnotify` `wolf_markdown_dirty` with
+    /// `[source_bufnr, changedtick]`.
+    pub async fn setup_preview(&self) -> Result<(), NvimError> {
+        let info = self
+            .nvim
+            .call("nvim_get_api_info", vec![])
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+        let chan = info
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(Value::as_i64)
+            .ok_or_else(|| {
+                NvimError::Rpc(format!(
+                    "nvim_get_api_info returned no channel id: {info:?}"
+                ))
+            })?;
+
+        let _ = self
+            .nvim
+            .call(
+                "nvim_exec_lua",
+                vec![
+                    Value::from("wolf_setup_preview(...)"),
+                    Value::Array(vec![Value::from(chan)]),
+                ],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+        Ok(())
+    }
+
     /// Creates a new nvim TABPAGE (optionally rooted at `cwd` via `:tcd`) and
     /// returns its stable HANDLE.
     ///
@@ -490,8 +607,16 @@ impl NvimProcess {
     /// helper (defined in `runtime/nvim/init.lua`) over `nvim_exec_lua`, passing
     /// the channel id as a Lua vararg (`...`) rather than interpolating it into
     /// the code string, so there is no injection/formatting hazard. The helper
-    /// registers a `BufEnter`/`BufWinEnter`/`BufFilePost` autocmd that
-    /// `rpcnotify`s `wolf_current_file` and emits once immediately.
+    /// registers a `BufEnter`/`BufWinEnter`/`BufFilePost`/`FileType` autocmd that
+    /// `rpcnotify`s `wolf_current_file` with TWO args — the active buffer's
+    /// absolute path (`expand('%:p')`) AND its filetype (`vim.bo.filetype`, which
+    /// drives [`crate::render::Snapshot::is_markdown_active`]) — and emits once
+    /// immediately. `FileType` is in the event set so the filetype tracks the
+    /// active buffer even when detection lands after the buffer switch. A preview
+    /// scratch buffer (carrying `b:wolf_preview_source`) is SKIPPED: it emits an
+    /// EMPTY path and EMPTY filetype, so core never sees the `Preview: <name>`
+    /// scratch name as a real current file and never reports markdown-active for
+    /// the (non-markdown) preview pane.
     pub async fn setup_current_file_tracking(&self) -> Result<(), NvimError> {
         let info = self
             .nvim

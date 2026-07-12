@@ -58,9 +58,11 @@ public enum CommandKind {
     case bufferPicker
     /// Open a new tab in the current window.
     case newTab
+    /// Render the active Markdown buffer as HTML in a preview pane.
+    case preview
 
-    /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `17` →
-    /// `.newTab`, else `nil`), guarding the contract shared with
+    /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `18` →
+    /// `.preview`, else `nil`), guarding the contract shared with
     /// `wolf-ffi`'s `mod command_kind`.
     public init?(ffi: UInt8) {
         switch ffi {
@@ -82,6 +84,7 @@ public enum CommandKind {
         case 15: self = .paste
         case 16: self = .bufferPicker
         case 17: self = .newTab
+        case 18: self = .preview
         default: return nil
         }
     }

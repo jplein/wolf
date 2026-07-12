@@ -21,6 +21,18 @@ void* __swift_bridge__$Vec_WolfCoreHandle$get_mut(void* vec_ptr, uintptr_t index
 uintptr_t __swift_bridge__$Vec_WolfCoreHandle$len(void* vec_ptr);
 void* __swift_bridge__$Vec_WolfCoreHandle$as_ptr(void* vec_ptr);
 
+typedef struct FfiPreview FfiPreview;
+void __swift_bridge__$FfiPreview$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiPreview$new(void);
+void __swift_bridge__$Vec_FfiPreview$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiPreview$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiPreview$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiPreview$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiPreview$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiPreview$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiPreview$as_ptr(void* vec_ptr);
+
 typedef struct FfiFileSearch FfiFileSearch;
 void __swift_bridge__$FfiFileSearch$_free(void* self);
 
@@ -265,6 +277,15 @@ void __swift_bridge__$WolfCoreHandle$paste(void* self, void* text);
 void* __swift_bridge__$WolfCoreHandle$buffer_picker(void* self);
 void __swift_bridge__$WolfCoreHandle$switch_buffer(void* self, int64_t bufnr);
 bool __swift_bridge__$WolfCoreHandle$is_visual_mode(void* self);
+bool __swift_bridge__$WolfCoreHandle$is_markdown_active(void* self);
+int64_t __swift_bridge__$WolfCoreHandle$open_preview(void* self, void* mode);
+void* __swift_bridge__$WolfCoreHandle$render_preview(void* self, int64_t source_bufnr);
+void* __swift_bridge__$WolfCoreHandle$previews(void* self);
+int64_t __swift_bridge__$FfiPreview$win(void* self);
+int64_t __swift_bridge__$FfiPreview$source_bufnr(void* self);
+void* __swift_bridge__$FfiPreview$source_name(void* self);
+void* __swift_bridge__$FfiPreview$source_path(void* self);
+uint64_t __swift_bridge__$FfiPreview$source_tick(void* self);
 void* __swift_bridge__$FfiFileSearch$ranked(void* self, void* query, uintptr_t max);
 void* __swift_bridge__$FfiFileSearch$children_of(void* self, void* dir);
 void* __swift_bridge__$FfiFileSearch$rel_path_for(void* self, void* abs);

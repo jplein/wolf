@@ -639,6 +639,26 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     /// the Edit > Copy command only when there is a selection to copy.
     var isVisualMode: Bool { handle?.is_visual_mode() ?? false }
 
+    /// Whether this window's active buffer is a Markdown file. Read by the
+    /// coordinator's menu validation to enable the View > Preview command only on
+    /// a Markdown buffer.
+    var isMarkdownActive: Bool { handle?.is_markdown_active() ?? false }
+
+    /// Opens (or reuses) the Markdown preview pane for the active source buffer.
+    ///
+    /// The placement mode is chosen from this window's live pane count via the pure
+    /// `PreviewSeam.placementMode` (single pane → new pane to the right; multi pane
+    /// → replace the active pane), then handed to core's `open_preview(mode)`. The
+    /// front-end learns the new pane + the source↔preview mapping on the next wake
+    /// (via `previews()`), so no synchronous window handle is needed here; a repaint
+    /// is requested so the web view surfaces promptly.
+    func openPreview() {
+        guard let handle else { return }
+        let mode = PreviewSeam.placementMode(paneCount: paneCount)
+        _ = handle.open_preview(mode)
+        paneContainer?.onRenderWake()
+    }
+
     /// Raises and activates this window (the Window-menu dynamic list item's
     /// action, routed by the coordinator from the item's `windowIndex` tag).
     func raise() {
