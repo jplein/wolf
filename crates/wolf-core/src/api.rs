@@ -693,6 +693,19 @@ impl WolfCore {
         crate::pane_status::pane_status(&buf, cwd.as_deref(), canonical_home())
     }
 
+    /// Formats `abs_path` into the cwd/home-relative display path shown on a
+    /// pane's secondary statusbar line, reusing the pure
+    /// [`crate::pane_status::pane_status`] over the live cwd
+    /// ([`live_cwd`](Self::live_cwd)) and the user's home directory. This is the
+    /// display path only (the [`PaneStatus::display_path`](crate::pane_status::PaneStatus)
+    /// field); the filename is derived separately by the caller. An empty
+    /// `abs_path` yields an empty display path.
+    #[must_use]
+    pub fn display_path(&self, abs_path: &str) -> String {
+        crate::pane_status::pane_status(abs_path, self.live_cwd().as_deref(), canonical_home())
+            .display_path
+    }
+
     /// Starts a streaming file search rooted at the captive Neovim's live working
     /// directory (`getcwd()`), falling back to the configured cwd.
     ///

@@ -286,6 +286,7 @@ int64_t __swift_bridge__$FfiPreview$win(void* self);
 int64_t __swift_bridge__$FfiPreview$source_bufnr(void* self);
 void* __swift_bridge__$FfiPreview$source_name(void* self);
 void* __swift_bridge__$FfiPreview$source_path(void* self);
+void* __swift_bridge__$FfiPreview$source_display_path(void* self);
 uint64_t __swift_bridge__$FfiPreview$source_tick(void* self);
 void* __swift_bridge__$FfiFileSearch$ranked(void* self, void* query, uintptr_t max);
 void* __swift_bridge__$FfiFileSearch$children_of(void* self, void* dir);

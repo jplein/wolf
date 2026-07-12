@@ -339,6 +339,22 @@ fn preview_gates_opens_lists_and_live_updates() {
         tick_for_source(p, alpha_bufnr).is_some_and(|t| t > initial_tick)
     });
 
+    // --- 6b. The preview row exposes the source's cwd-relative display path ---
+    // `source_display_path()` feeds the preview pane's SECONDARY statusbar line
+    // (CHANGE 3), mirroring editor panes. The fixture lives at the cwd ROOT, so the
+    // display path ends with the bare basename. Use `ends_with`, NOT exact equality:
+    // the source path is uncanonicalized while live_cwd is canonical, so a
+    // `/var`<->`/private/var` mismatch can leave `source_display_path()` absolute.
+    let alpha_display = alpha_row.source_display_path();
+    assert!(
+        !alpha_display.is_empty(),
+        "the preview row must expose a non-empty source_display_path(), got {alpha_display:?}"
+    );
+    assert!(
+        alpha_display.ends_with("alpha.md"),
+        "source_display_path() must end with the source file path (alpha.md), got {alpha_display}"
+    );
+
     // --- 7. Buffer picker lists the preview as `Preview: alpha.md` -----------
     // A fresh picker snapshots list_buffers(); the buflisted scratch buffer shows
     // up with its `Preview: <basename>` name (OD1) with NO front-end injection.
@@ -402,6 +418,84 @@ fn seed_two_markdown_files() -> tempfile::TempDir {
     )
     .expect("failed to write beta.md");
     tmp
+}
+
+#[test]
+fn preview_picker_shows_cwd_relative_path_for_subdir_source() {
+    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    let Some(nvim_bin) = common::nvim_bin_or_skip() else {
+        return;
+    };
+    std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
+
+    let init_lua = common::init_lua_path();
+
+    // Seed the markdown source in a SUBDIRECTORY of the cwd. The picker names the
+    // preview scratch buffer with the cwd-relative path (`:.` -> `docs/alpha.md`),
+    // which is distinct from the bare basename (`:t` -> `alpha.md`) the old naming
+    // produced — this is the ONLY test that witnesses the `:.` change (CHANGE 1).
+    let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
+    let docs_dir = tmp.path().join("docs");
+    std::fs::create_dir(&docs_dir).expect("failed to create docs subdir");
+    std::fs::write(
+        docs_dir.join("alpha.md"),
+        "# Alpha Heading\n\nSome paragraph text.\n",
+    )
+    .expect("failed to write docs/alpha.md");
+
+    let handle = wolf_ffi_start(
+        init_lua.to_string_lossy().into_owned(),
+        tmp.path().to_string_lossy().into_owned(),
+        common::DEFAULT_COLS,
+        common::DEFAULT_ROWS,
+    )
+    .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
+
+    // --- 1. Attach; open docs/alpha.md (in the subdir) as the source ---------
+    wait_for_attach(&handle);
+    send_ex_command(&handle, ":e docs/alpha.md");
+    wait_for_markdown_active(&handle, true, "after :e docs/alpha.md");
+
+    // --- 2. Split-right preview: previews() surfaces one row for alpha.md -----
+    let preview_bufnr = handle.open_preview("split_right".to_string());
+    assert!(
+        preview_bufnr > 0,
+        "open_preview(\"split_right\") on a markdown buffer must return a valid \
+         preview bufnr (> 0), got {preview_bufnr}"
+    );
+    wait_for_window_count(&handle, TWO_PANES, "after split-right preview");
+    // `source_name()` is the BASENAME, so the row is found by `alpha.md` regardless
+    // of the subdirectory it lives in.
+    let previews = wait_for_previews(&handle, "one docs/alpha.md preview", |p| {
+        p.iter().any(|row| row.source_name() == "alpha.md")
+    });
+    let alpha_row = previews
+        .iter()
+        .find(|row| row.source_name() == "alpha.md")
+        .expect("a preview row for docs/alpha.md must exist");
+
+    // --- 3. The preview row's display path is the cwd-relative subdir path ----
+    // `ends_with` (not exact equality): uncanonicalized source path vs canonical
+    // live_cwd can leave this absolute on a `/var`<->`/private/var` mismatch.
+    let display = alpha_row.source_display_path();
+    assert!(
+        display.ends_with("docs/alpha.md"),
+        "source_display_path() must be the cwd-relative subdir path docs/alpha.md, got {display}"
+    );
+
+    // --- 4. The picker names the scratch buffer with the cwd-relative path -----
+    // `:.` yields `Preview: docs/alpha.md`; the old `:t` would have yielded the bare
+    // `Preview: alpha.md`. This distinguishes the new naming from the old.
+    let rows = handle.buffer_picker().ranked(String::new(), RANKED_MAX);
+    assert!(
+        rows.iter()
+            .any(|r| r.display().starts_with("Preview: docs/alpha.md")),
+        "the buffer picker must include a `Preview: docs/alpha.md` row: {:?}",
+        rows.iter().map(|r| r.display()).collect::<Vec<_>>()
+    );
+
+    handle.shutdown();
+    drop(tmp);
 }
 
 #[test]

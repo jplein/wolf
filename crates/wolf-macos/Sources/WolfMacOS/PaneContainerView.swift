@@ -163,6 +163,14 @@ final class PaneContainerView: NSView {
     /// (`.linkActivated`) through `PreviewLinkSeam.classify` back into this container
     /// (held weakly by the delegate — no retain cycle).
     private var previewNavDelegates: [Int64: PreviewNavigationDelegate] = [:]
+    /// The click-to-focus script-message handler for each preview web view —
+    /// retained here because `WKUserContentController` holds its handlers STRONGLY
+    /// (so the proxy holds the container only WEAKLY, breaking the retain cycle).
+    /// A click anywhere in the preview's `WKWebView` (which swallows AppKit mouse
+    /// events, so the container's `mouseDown` never fires there) posts through the
+    /// injected `PreviewSeam.clickFocusJS` user script to this proxy, which calls
+    /// `focusPreviewPane(win:)`.
+    private var previewFocusHandlers: [Int64: PreviewClickFocusHandler] = [:]
     /// The absolute source path currently previewed in each preview window, captured
     /// from `FfiPreview.source_path()` in `reloadDirtyPreviews`. Used as the
     /// `loadHTMLString` `baseURL` (so relative links resolve) and as the same-file
@@ -177,6 +185,11 @@ final class PaneContainerView: NSView {
     /// (to show `Preview: <name>`) and `drawScrollbars` (to suppress the synthetic
     /// scrollbar over a web-view pane).
     private var previewNamesByGrid: [UInt64: String] = [:]
+    /// The cwd/home-relative source display path of each preview pane, keyed by the
+    /// pane's bound GRID, rebuilt every wake by `syncPreviewWebViews` from
+    /// `FfiPreview.source_display_path()`. Consulted by `paintStatusbar` to show the
+    /// path on the preview pane's secondary statusbar line (mirroring editor panes).
+    private var previewDisplayPathsByGrid: [UInt64: String] = [:]
     /// Debounces the BLOCKING preview reload (`render_preview` + `loadHTMLString`)
     /// so a fast-typing burst — which fires many render wakes, each advancing the
     /// source `changedtick` — yields ONE trailing main-thread `render_preview`
@@ -641,6 +654,7 @@ final class PaneContainerView: NSView {
     /// windows that are no longer previews (or closed) are removed.
     private func syncPreviewWebViews() {
         previewNamesByGrid.removeAll(keepingCapacity: true)
+        previewDisplayPathsByGrid.removeAll(keepingCapacity: true)
         var liveWins = Set<Int64>()
         var current: [Int64: PreviewSeam.PreviewLoad] = [:]
         let rects = paneRects()
@@ -656,6 +670,7 @@ final class PaneContainerView: NSView {
             else { continue }
             liveWins.insert(win)
             previewNamesByGrid[grid] = preview.source_name().toString()
+            previewDisplayPathsByGrid[grid] = preview.source_display_path().toString()
 
             // Copy the borrowed ref's scalars out into a `PreviewLoad`; only wins that
             // passed the pane/grid guard land in `current`, preserving the "only
@@ -724,7 +739,27 @@ final class PaneContainerView: NSView {
     /// subview on first use.
     private func ensurePreviewWebView(for win: Int64) -> WKWebView {
         if let existing = previewWebViews[win] { return existing }
-        let web = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+
+        // Build the configuration up front so the click-to-focus user script +
+        // message handler are installed before the web view exists. The preview
+        // `WKWebView` swallows AppKit mouse events, so the container's `mouseDown`
+        // never fires over it; the injected capture-phase `mousedown` listener
+        // (`PreviewSeam.clickFocusJS`) posts to the `PreviewClickFocusHandler`
+        // registered under `PreviewSeam.clickFocusHandlerName`, which focuses the
+        // pane. The controller retains the proxy STRONGLY, so the proxy holds this
+        // container WEAKLY (no retain cycle); the proxy is also retained here for
+        // explicit removal in `removePreviewWebView`.
+        let config = WKWebViewConfiguration()
+        let proxy = PreviewClickFocusHandler(win: win, container: self)
+        previewFocusHandlers[win] = proxy
+        config.userContentController.add(proxy, name: PreviewSeam.clickFocusHandlerName)
+        config.userContentController.addUserScript(
+            WKUserScript(
+                source: PreviewSeam.clickFocusJS(),
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true))
+
+        let web = WKWebView(frame: .zero, configuration: config)
         previewWebViews[win] = web
         // Route clicked links (`.linkActivated`) through PreviewLinkSeam. The web
         // view holds `navigationDelegate` weakly, so retain the delegate here; the
@@ -734,6 +769,18 @@ final class PaneContainerView: NSView {
         previewNavDelegates[win] = delegate
         addSubview(web)
         return web
+    }
+
+    /// Focuses the preview pane bound to window `win` (invoked by that pane's
+    /// `PreviewClickFocusHandler` when the user clicks anywhere in the preview web
+    /// view, which swallows AppKit clicks so the container's `mouseDown` never
+    /// fires there). Mirrors `mouseDown`'s focus path — `handle.focus_win` +
+    /// `setActivePane` — WITHOUT synthesizing a mouse event.
+    func focusPreviewPane(win: Int64) {
+        guard let id = paneForWin(win) else { return }
+        handle.focus_win(win)
+        setActivePane(id)
+        needsDisplay = true
     }
 
     /// Applies (or hides) the inactive-dim scrim over the preview web view for
@@ -763,12 +810,19 @@ final class PaneContainerView: NSView {
     /// Tears down the hosted web view + dim overlay + last-load entry for window
     /// `win` (it is no longer a preview, or its pane closed).
     private func removePreviewWebView(_ win: Int64) {
+        // Remove the click-to-focus script-message handler on the STILL-LIVE web
+        // view's content controller before dropping it, so the controller releases
+        // its strong ref to the proxy (and the injected script is torn down with the
+        // web view).
+        previewWebViews[win]?.configuration.userContentController
+            .removeScriptMessageHandler(forName: PreviewSeam.clickFocusHandlerName)
         previewWebViews[win]?.removeFromSuperview()
         previewWebViews[win] = nil
         previewDimOverlays[win]?.removeFromSuperview()
         previewDimOverlays[win] = nil
         lastPreviewLoads[win] = nil
         previewNavDelegates[win] = nil
+        previewFocusHandlers[win] = nil
         previewSourcePaths[win] = nil
         pendingPreviewFragments[win] = nil
     }
@@ -1061,12 +1115,15 @@ final class PaneContainerView: NSView {
         let layout = statusbarLayout
         // A preview pane's scratch buffer is SKIPPED by the path-based trackers, so
         // its pane_status is "[No Name]"; override it with `Preview: <basename>`
-        // (from the core's previews() snapshot) and no path line.
+        // (from the core's previews() snapshot) and the source's cwd/home-relative
+        // display path on the secondary line.
         let filename: String
         let displayPath: String
         if let name = previewNamesByGrid[grid] {
             filename = "Preview: \(name)"
-            displayPath = ""
+            // Show the source's cwd/home-relative path on the secondary line,
+            // mirroring editor panes (empty → no path line via the guard below).
+            displayPath = previewDisplayPathsByGrid[grid] ?? ""
         } else {
             let status = handle.pane_status_for_grid(grid)
             filename = status.filename().toString()

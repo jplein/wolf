@@ -267,4 +267,27 @@ final class PreviewSeamTests: XCTestCase {
             Set<Int64>(),
             "no current previews means nothing to reload regardless of prior loads")
     }
+
+    // MARK: - clickFocus: the message-handler name is the pane-focus channel
+
+    func testClickFocusHandlerName() {
+        XCTAssertEqual(
+            PreviewSeam.clickFocusHandlerName, "wolfPaneFocus",
+            "the click-to-focus message handler must be named `wolfPaneFocus`")
+    }
+
+    // MARK: - clickFocus: the injected JS is a capture-phase mousedown that posts to the handler
+
+    func testClickFocusJSCaptureMousedownPostsToHandler() {
+        let js = PreviewSeam.clickFocusJS()
+        XCTAssertTrue(
+            js.contains("mousedown"),
+            "the click-to-focus JS must listen for `mousedown`: \(js)")
+        XCTAssertTrue(
+            js.contains("true"),
+            "the listener must register in the CAPTURE phase (the `true` argument): \(js)")
+        XCTAssertTrue(
+            js.contains("window.webkit.messageHandlers.wolfPaneFocus"),
+            "the JS must post to the `wolfPaneFocus` script message handler: \(js)")
+    }
 }

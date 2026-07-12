@@ -508,6 +508,10 @@ mod ffi {
         fn source_name(&self) -> String;
         // The source file's absolute path.
         fn source_path(&self) -> String;
+        // The source file's cwd/home-relative DISPLAY path (e.g.
+        // "crates/wolf-macos/README.md"), for the preview pane's secondary
+        // statusbar line.
+        fn source_display_path(&self) -> String;
         // The source buffer's current `changedtick`; the front-end reloads the web
         // view when this advances (0 until the first `wolf_markdown_dirty`).
         fn source_tick(&self) -> u64;
@@ -1847,7 +1851,8 @@ impl WolfCoreHandle {
             .iter()
             .map(|(&win, info)| {
                 let source_tick = snap.markdown_ticks.get(&info.source_bufnr).copied().unwrap_or(0);
-                FfiPreview::from_preview(win, info, source_tick)
+                let source_display_path = core.display_path(&info.source_path.to_string_lossy());
+                FfiPreview::from_preview(win, info, source_tick, source_display_path)
             })
             .collect()
     }
@@ -2350,6 +2355,7 @@ pub struct FfiPreview {
     source_bufnr: i64,
     source_path: String,
     source_name: String,
+    source_display_path: String,
     source_tick: u64,
 }
 
@@ -2380,6 +2386,16 @@ impl FfiPreview {
         self.source_path.clone()
     }
 
+    /// The source file's cwd/home-relative DISPLAY path (e.g.
+    /// `"crates/wolf-macos/README.md"`), for the preview pane's secondary
+    /// statusbar line. Computed in [`WolfCoreHandle::previews`] via
+    /// [`WolfCore::display_path`](wolf_core::WolfCore::display_path); empty for a
+    /// pathless source.
+    #[must_use]
+    pub fn source_display_path(&self) -> String {
+        self.source_display_path.clone()
+    }
+
     /// The source buffer's current `changedtick` (`0` until the first
     /// `wolf_markdown_dirty`); the front-end reloads the web view when it advances.
     #[must_use]
@@ -2388,9 +2404,16 @@ impl FfiPreview {
     }
 
     /// Projects one [`PreviewInfo`] (keyed by the preview window `win`) plus its
-    /// joined `source_tick` into the bridge-friendly flat row. The basename is
-    /// derived from `source_path`'s final component (empty for a pathless source).
-    fn from_preview(win: i64, info: &PreviewInfo, source_tick: u64) -> Self {
+    /// joined `source_tick` and its cwd/home-relative `source_display_path` (computed
+    /// by the caller via [`WolfCore::display_path`](wolf_core::WolfCore::display_path))
+    /// into the bridge-friendly flat row. The basename is derived from `source_path`'s
+    /// final component (empty for a pathless source).
+    fn from_preview(
+        win: i64,
+        info: &PreviewInfo,
+        source_tick: u64,
+        source_display_path: String,
+    ) -> Self {
         let source_name = info
             .source_path
             .file_name()
@@ -2401,6 +2424,7 @@ impl FfiPreview {
             source_bufnr: info.source_bufnr,
             source_path: info.source_path.to_string_lossy().into_owned(),
             source_name,
+            source_display_path,
             source_tick,
         }
     }

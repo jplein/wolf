@@ -90,4 +90,32 @@ public enum PreviewSeam {
             .filter { win, load in loaded[win] != load }
             .map(\.key)
     }
+
+    /// The `WKScriptMessageHandler` name a preview pane's click-to-focus user
+    /// script posts to. The AppKit side registers a `PreviewClickFocusHandler`
+    /// under this name on the web view's `WKUserContentController`; the injected
+    /// script (see `clickFocusJS`) posts to
+    /// `window.webkit.messageHandlers.<name>`.
+    public static let clickFocusHandlerName = "wolfPaneFocus"
+
+    /// The document-start JavaScript that makes a click ANYWHERE in a preview
+    /// pane focus that pane. Because the hosting `WKWebView` swallows AppKit
+    /// mouse events, the container's `mouseDown` never fires over the preview, so
+    /// this self-invoking listener registers a CAPTURE-phase `mousedown` handler
+    /// (the literal `true` third argument to `addEventListener`) that posts to
+    /// `window.webkit.messageHandlers.<handlerName>` — routed to the pane's
+    /// `PreviewClickFocusHandler`, which focuses the pane. Capture phase ensures
+    /// the notification fires even when inner elements stop propagation.
+    ///
+    /// - Parameter handlerName: The message-handler name to post to; defaults to
+    ///   `clickFocusHandlerName`.
+    public static func clickFocusJS(handlerName: String = clickFocusHandlerName) -> String {
+        """
+        (function () {
+          document.addEventListener('mousedown', function () {
+            window.webkit.messageHandlers.\(handlerName).postMessage(1);
+          }, true);
+        })();
+        """
+    }
 }

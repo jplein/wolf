@@ -632,33 +632,34 @@ _G.wolf_preview_bufs = _G.wolf_preview_bufs or {}
 --     current window (nvim_win_set_buf), replacing its content.
 -- No-op (returns 0) unless the active buffer's filetype is markdown (the same gate
 -- as the Preview command). The preview pane is a real nvim buffer (OD1 = Design S):
--- a listed + nofile + nomodifiable scratch buffer named "Preview: <basename>"
+-- a listed + nofile + nomodifiable scratch buffer named "Preview: <cwd-relative path>"
 -- carrying b:wolf_preview_source (its source's abs path) and b:wolf_preview_source_bufnr
 -- (its source's bufnr). Being buflisted, it surfaces in the buffer picker as
--- "Preview: <basename>" with no front-end injection; the path-based trackers skip
+-- "Preview: <cwd-relative path>" with no front-end injection; the path-based trackers skip
 -- it via b:wolf_preview_source.
 -- Creates (or reuses, via the _G.wolf_preview_bufs map) the preview scratch
 -- buffer for `source_buf` (whose abs path is `source_path`) and returns its
 -- bufnr. Factored out of wolf_open_preview so wolf_preview_file can create the
 -- same kind of preview buffer for a file the user navigated to via a link. The
 -- preview buffer is a listed + scratch (nofile) + nomodifiable buffer named
--- "Preview: <basename>" carrying b:wolf_preview_source / b:wolf_preview_source_bufnr.
+-- "Preview: <cwd-relative path>" carrying b:wolf_preview_source / b:wolf_preview_source_bufnr.
 function _G.wolf_ensure_preview_buf(source_buf, source_path)
 	local preview_buf = _G.wolf_preview_bufs[source_buf]
 	if not preview_buf or not vim.api.nvim_buf_is_valid(preview_buf) then
 		-- listed = true (surfaces in the picker), scratch = true (nofile /
 		-- bufhidden=hide / noswapfile defaults).
 		preview_buf = vim.api.nvim_create_buf(true, true)
-		local basename = vim.fn.fnamemodify(source_path, ":t")
-		-- Name the buffer "Preview: <basename>" so it surfaces in the picker with
-		-- that label (OD1). nvim_buf_set_name raises E95 when that name is already
-		-- taken by ANOTHER buffer (two sources sharing a basename, e.g. two
-		-- README.md); the reuse map above already short-circuits a re-preview of the
-		-- SAME source, so a collision here is only a DIFFERENT source. On collision
-		-- fall back to a bufnr-disambiguated name so the second preview still opens
-		-- (rather than open_preview returning 0). The common, non-colliding case
-		-- keeps the exact "Preview: <basename>" name the picker row asserts on.
-		local wanted = "Preview: " .. basename
+		local rel = vim.fn.fnamemodify(source_path, ":.")
+		-- Name the buffer "Preview: <cwd-relative path>" so it surfaces in the picker
+		-- with that label (OD1). nvim_buf_set_name raises E95 when that name is
+		-- already taken by ANOTHER buffer (two sources sharing a cwd-relative path,
+		-- e.g. two README.md at the same relative location); the reuse map above
+		-- already short-circuits a re-preview of the SAME source, so a collision here
+		-- is only a DIFFERENT source. On collision fall back to a bufnr-disambiguated
+		-- name so the second preview still opens (rather than open_preview returning
+		-- 0). The common, non-colliding case keeps the exact "Preview: <cwd-relative
+		-- path>" name the picker row asserts on.
+		local wanted = "Preview: " .. rel
 		if not pcall(vim.api.nvim_buf_set_name, preview_buf, wanted) then
 			pcall(vim.api.nvim_buf_set_name, preview_buf, wanted .. " (" .. source_buf .. ")")
 		end

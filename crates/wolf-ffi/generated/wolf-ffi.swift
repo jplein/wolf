@@ -503,6 +503,10 @@ extension FfiPreviewRef {
         RustString(ptr: __swift_bridge__$FfiPreview$source_path(ptr))
     }
 
+    public func source_display_path() -> RustString {
+        RustString(ptr: __swift_bridge__$FfiPreview$source_display_path(ptr))
+    }
+
     public func source_tick() -> UInt64 {
         __swift_bridge__$FfiPreview$source_tick(ptr)
     }
