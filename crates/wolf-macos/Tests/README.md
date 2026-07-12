@@ -60,7 +60,7 @@ Pure, headless `XCTest` coverage of the AppKit-free `ShortcutSeam.isNewWindowTri
 
 ## `WolfKeyMapTests/CommandSeamTests.swift`
 
-Pure, headless `XCTest` coverage of the AppKit-free `CommandKind(ffi:)` decode seam (`@testable import WolfKeyMap`), the sibling of `PaneTreeTests`' discriminant-contract test. It pins the `command_kind` contract with `wolf-ffi`: `init?(ffi:)` maps `0..17` to the eighteen cases (`newWindow` … `closePane == 8`, `newBuffer == 9`, `resetFontSize == 10`, `increaseFontSize == 11`, `decreaseFontSize == 12`, `commandPalette == 13`, `copy == 14`, `paste == 15`, `bufferPicker == 16`, `newTab == 17`) and returns `nil` for out-of-range bytes (the boundary is now `18`, plus `255`), so the Swift port stays in lockstep with the Rust `mod command_kind` and the `//crates/wolf-ffi:commands` discriminant guard.
+Pure, headless `XCTest` coverage of the AppKit-free `CommandKind(ffi:)` decode seam (`@testable import WolfKeyMap`), the sibling of `PaneTreeTests`' discriminant-contract test. It pins the `command_kind` contract with `wolf-ffi`: `init?(ffi:)` maps `0..18` to the nineteen cases (`newWindow` … `closePane == 8`, `newBuffer == 9`, `resetFontSize == 10`, `increaseFontSize == 11`, `decreaseFontSize == 12`, `commandPalette == 13`, `copy == 14`, `paste == 15`, `bufferPicker == 16`, `newTab == 17`, `terminal == 18`) and returns `nil` for out-of-range bytes (the boundary is now `19`, plus `255`), so the Swift port stays in lockstep with the Rust `mod command_kind` and the `//crates/wolf-ffi:commands` discriminant guard.
 
 ## `WolfKeyMapTests/FontSizeSeamTests.swift`
 

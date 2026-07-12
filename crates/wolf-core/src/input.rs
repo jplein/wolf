@@ -242,6 +242,10 @@ pub enum InputEvent {
         /// The buffer handle to switch that window to.
         bufnr: i64,
     },
+    /// Toggle the per-project terminal drawer (delegated to the init.lua
+    /// `wolf_toggle_terminal` helper, which opens/hides a bottom `:terminal`
+    /// split and recreates the shared terminal buffer if it is gone).
+    ToggleTerminal,
 }
 
 /// Translates a [`KeyEvent`] into Neovim keystroke notation.
@@ -383,6 +387,7 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
         InputEvent::NewBuffer => command(nvim, "enew").await,
         InputEvent::Paste { text } => nvim_paste(nvim, text).await,
         InputEvent::SwitchBuffer { win, bufnr } => switch_buffer(nvim, *win, *bufnr).await,
+        InputEvent::ToggleTerminal => toggle_terminal(nvim).await,
     }
 }
 
@@ -476,6 +481,23 @@ async fn switch_buffer(nvim: &Nvim, win: i64, bufnr: i64) -> Result<(), Box<Call
             vec![
                 Value::from("wolf_switch_buffer(...)"),
                 Value::Array(vec![Value::from(win), Value::from(bufnr)]),
+            ],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Toggles the per-project terminal drawer via the init.lua
+/// `wolf_toggle_terminal` helper, invoked over `nvim_exec_lua`. The helper
+/// opens a bottom `:terminal` split in the current tabpage, or hides that
+/// window if it is already showing the shared terminal buffer (which persists).
+async fn toggle_terminal(nvim: &Nvim) -> Result<(), Box<CallError>> {
+    let _ = nvim
+        .call(
+            "nvim_exec_lua",
+            vec![
+                Value::from("wolf_toggle_terminal()"),
+                Value::Array(vec![]),
             ],
         )
         .await?;

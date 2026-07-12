@@ -371,6 +371,10 @@ extension WolfCoreHandleRef {
         __swift_bridge__$WolfCoreHandle$new_buffer(ptr)
     }
 
+    public func toggle_terminal() {
+        __swift_bridge__$WolfCoreHandle$toggle_terminal(ptr)
+    }
+
     public func copy_selection() -> RustString {
         RustString(ptr: __swift_bridge__$WolfCoreHandle$copy_selection(ptr))
     }

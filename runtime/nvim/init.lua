@@ -467,6 +467,48 @@ function _G.wolf_close_tabpage(handle)
 	pcall(vim.cmd, n .. "tabclose")
 end
 
+-- Toggle the per-project terminal drawer. The terminal BUFFER is a single shared
+-- buffer for this nvim instance (tagged b:wolf_terminal); the drawer WINDOW is
+-- per-tabpage. Hiding closes the window only -- the terminal buffer/job persist
+-- (VS Code behavior). Recreated on demand if the user exited the shell.
+function _G.wolf_toggle_terminal()
+	-- 1. Find the tagged terminal buffer (buffers are global to the nvim).
+	local termbuf = nil
+	for _, b in ipairs(vim.api.nvim_list_bufs()) do
+		if
+			vim.api.nvim_buf_is_valid(b)
+			and vim.b[b].wolf_terminal
+			and vim.bo[b].buftype == "terminal"
+		then
+			termbuf = b
+			break
+		end
+	end
+
+	-- 2. If a window in the CURRENT tabpage shows it, hide (close) that window.
+	--    Closing the window keeps the terminal buffer + job alive.
+	if termbuf then
+		for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+			if vim.api.nvim_win_get_buf(w) == termbuf then
+				vim.api.nvim_win_close(w, false)
+				return
+			end
+		end
+	end
+
+	-- 3. Otherwise open a bottom split ~1/3 tall showing the terminal
+	--    (creating + tagging a fresh one if it is gone).
+	local height = math.max(1, math.floor(vim.o.lines / 3))
+	vim.cmd("botright " .. height .. "split")
+	if termbuf and vim.api.nvim_buf_is_valid(termbuf) then
+		vim.api.nvim_win_set_buf(0, termbuf)
+	else
+		vim.cmd("terminal")
+		vim.b.wolf_terminal = true
+	end
+	vim.cmd("startinsert")
+end
+
 -- Return the tab-local working directory of the tabpage named by its STABLE
 -- handle (authoritative for a NON-current view's cwd). Maps the stable handle to
 -- its current NUMBER (which getcwd(-1, n) needs) and returns getcwd(-1, n), which

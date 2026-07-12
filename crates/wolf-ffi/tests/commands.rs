@@ -23,10 +23,11 @@
 //! MINIMIZE_WINDOW = 4, GO_TO_FILE = 5, OPEN_FILE = 6, OPEN_FOLDER = 7,
 //! CLOSE_PANE = 8, NEW_BUFFER = 9, RESET_FONT_SIZE = 10, INCREASE_FONT_SIZE = 11,
 //! DECREASE_FONT_SIZE = 12, COMMAND_PALETTE = 13, COPY = 14, PASTE = 15,
-//! BUFFER_PICKER = 16, NEW_TAB = 17 (the `wolf_core::Command` variant order). These
-//! local consts MUST match `mod command_kind` in `wolf-ffi/src/lib.rs` and the
-//! Swift `CommandKind` port — exactly how `panes.rs` re-declares `INTENT_KIND_SPLIT`
-//! locally as a contract guard (the guard array below asserts contiguous 0..=17).
+//! BUFFER_PICKER = 16, NEW_TAB = 17, TERMINAL = 18 (the `wolf_core::Command`
+//! variant order). These local consts MUST match `mod command_kind` in
+//! `wolf-ffi/src/lib.rs` and the Swift `CommandKind` port — exactly how `panes.rs`
+//! re-declares `INTENT_KIND_SPLIT` locally as a contract guard (the guard array
+//! below asserts contiguous 0..=18).
 //!
 //! ## What this asserts
 //!
@@ -102,6 +103,8 @@ const CMD_KIND_PASTE: u8 = 15;
 const CMD_KIND_BUFFER_PICKER: u8 = 16;
 /// `FfiCommand::kind()` for New Tab (the appended discriminant 17, File menu).
 const CMD_KIND_NEW_TAB: u8 = 17;
+/// `FfiCommand::kind()` for Terminal (the appended discriminant 18, View menu).
+const CMD_KIND_TERMINAL: u8 = 18;
 
 /// Builds a printable-character `FfiKeyEvent` (kind=Char) for `c`, all modifiers
 /// false (the already-resolved glyph rides in `ch`). Same as `panes.rs`.
@@ -168,8 +171,8 @@ fn commands_drain_close_and_minimize() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // Discriminant-contract guard: the local consts MUST be contiguous 0..=17 in
-    // variant order (mirrors `mod command_kind`). Referencing all eighteen here
+    // Discriminant-contract guard: the local consts MUST be contiguous 0..=18 in
+    // variant order (mirrors `mod command_kind`). Referencing all nineteen here
     // also keeps them from tripping dead-code lints.
     assert_eq!(
         [
@@ -191,9 +194,10 @@ fn commands_drain_close_and_minimize() {
             CMD_KIND_PASTE,
             CMD_KIND_BUFFER_PICKER,
             CMD_KIND_NEW_TAB,
+            CMD_KIND_TERMINAL,
         ],
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
-        "command_kind discriminants must be contiguous 0..=17 in Command variant order"
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18],
+        "command_kind discriminants must be contiguous 0..=18 in Command variant order"
     );
 
     let init_lua = common::init_lua_path();
@@ -292,6 +296,14 @@ fn commands_drain_close_and_minimize() {
     // discriminant 17.
     send_ex_command(&handle, ":WolfNewTab");
     poll_for_command_kind(&handle, CMD_KIND_NEW_TAB, ":WolfNewTab");
+
+    // --- 3i. :WolfTerminal<CR> -> an FfiCommand with kind() == TERMINAL -------
+    // A pure FFI drain: nothing acts on it here (the front-end that would call
+    // `toggle_terminal` is absent), so no terminal drawer is toggled. This proves
+    // `:WolfTerminal` is auto-registered as a COMMAND_SPECS row and drains the
+    // appended discriminant 18.
+    send_ex_command(&handle, ":WolfTerminal");
+    poll_for_command_kind(&handle, CMD_KIND_TERMINAL, ":WolfTerminal");
 
     // --- 4. Shutdown: clean teardown ----------------------------------------
     handle.shutdown();

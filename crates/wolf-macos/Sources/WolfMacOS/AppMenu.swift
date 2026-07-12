@@ -37,6 +37,7 @@ enum AppMenu {
         static let paste = 15
         static let bufferPicker = 16
         static let newTab = 17
+        static let terminal = 18
     }
 
     /// The dynamic submenus `install` hands back to the coordinator: the Window
@@ -155,8 +156,9 @@ enum AppMenu {
 
     /// The View menu (Toggle Sidebar `⌃⌘s` / a separator / Reset Font Size `⌘0` /
     /// Increase Font Size `⌘=` / Decrease Font Size `⌘-` / a separator / Command
-    /// Palette… `⌘p` / a separator / Enter Full Screen `⌃⌘f`). The font-size and
-    /// palette titles mirror `wolf_core::COMMAND_SPECS`.
+    /// Palette… `⌘p` / Buffer Picker… `⌘e` / Terminal `` ⌃` `` / a separator /
+    /// Enter Full Screen `⌃⌘f`). The font-size, palette, buffer-picker, and
+    /// terminal titles mirror `wolf_core::COMMAND_SPECS`.
     ///
     /// Toggle Sidebar and Enter Full Screen are STANDARD AppKit items (NOT Wolf
     /// commands / registry entries): their actions are
@@ -198,6 +200,10 @@ enum AppMenu {
             commandItem(
                 title: "Buffer Picker…", tag: Tag.bufferPicker, keyEquivalent: "e",
                 target: target))
+        menu.addItem(
+            commandItem(
+                title: "Terminal", tag: Tag.terminal, keyEquivalent: "`",
+                target: target, modifiers: .control))
         menu.addItem(.separator())
         let fullScreen = NSMenuItem(
             title: "Enter Full Screen",

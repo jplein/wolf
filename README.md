@@ -15,3 +15,4 @@ Wolf is a Markdown editor based on [Neovim](https://github.com/neovim/neovim).
 ## Architecture
 
 - See [Architecture](architecture.md).
+- See [Command lifecycle](command-lifecycle.md) for where a command is configured and how it reaches Neovim.

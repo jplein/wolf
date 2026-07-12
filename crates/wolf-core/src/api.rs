@@ -474,6 +474,17 @@ impl WolfCore {
         self.send_input(InputEvent::SwitchBuffer { win, bufnr });
     }
 
+    /// Toggles the per-project terminal drawer (fire-and-forget via
+    /// [`InputEvent::ToggleTerminal`]).
+    ///
+    /// Enqueued on the same ordered input channel as keystrokes; applied via the
+    /// init.lua `wolf_toggle_terminal` helper, which opens a bottom `:terminal`
+    /// split in the current tabpage or hides it if already open (the shared
+    /// terminal buffer/job persists across toggles).
+    pub fn toggle_terminal(&self) {
+        self.send_input(InputEvent::ToggleTerminal);
+    }
+
     /// Drains and returns all pending layout intents (in arrival order).
     ///
     /// The front-end calls this on each wake to consume any `wolf_layout` intents

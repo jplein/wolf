@@ -175,6 +175,8 @@ mod command_kind {
     pub const BUFFER_PICKER: u8 = 16;
     /// Open a new tab in the current window.
     pub const NEW_TAB: u8 = 17;
+    /// Toggle the per-project terminal drawer (a bottom `:terminal` split).
+    pub const TERMINAL: u8 = 18;
 }
 
 /// The palette-row-kind discriminants packed into [`FfiCommandRow::row_kind`].
@@ -444,6 +446,9 @@ mod ffi {
         // Opens a new empty buffer in the current window via
         // `InputEvent::NewBuffer` (`:enew`).
         fn new_buffer(&self);
+        // Toggles the per-project terminal drawer via
+        // `InputEvent::ToggleTerminal` (the `wolf_toggle_terminal` Lua helper).
+        fn toggle_terminal(&self);
         // The current visual-mode selection yanked to text (blocks briefly on
         // the captive nvim), or the empty string when not in visual mode / the
         // selection is empty / the core is gone. The front-end writes it to
@@ -668,7 +673,7 @@ mod ffi {
     extern "Rust" {
         type FfiCommand;
 
-        // The command kind (`command_kind::NEW_WINDOW` .. `NEW_TAB`).
+        // The command kind (`command_kind::NEW_WINDOW` .. `TERMINAL`).
         fn kind(&self) -> u8;
     }
 
@@ -1669,6 +1674,14 @@ impl WolfCoreHandle {
         }
     }
 
+    /// Toggles the per-project terminal drawer via [`InputEvent::ToggleTerminal`]
+    /// (the `wolf_toggle_terminal` Lua helper). A no-op once the core is gone.
+    pub fn toggle_terminal(&self) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.send_input(InputEvent::ToggleTerminal);
+        }
+    }
+
     /// The current visual-mode selection yanked to text, or the empty string
     /// when not in visual mode / the selection is empty / the core is gone.
     /// Blocks briefly on the captive nvim (see
@@ -1922,7 +1935,7 @@ pub struct FfiCommand {
 }
 
 impl FfiCommand {
-    /// The command kind (`command_kind::NEW_WINDOW` .. `NEW_TAB`).
+    /// The command kind (`command_kind::NEW_WINDOW` .. `TERMINAL`).
     #[must_use]
     pub fn kind(&self) -> u8 {
         self.kind
@@ -1951,6 +1964,7 @@ impl FfiCommand {
             Command::Paste => command_kind::PASTE,
             Command::BufferPicker => command_kind::BUFFER_PICKER,
             Command::NewTab => command_kind::NEW_TAB,
+            Command::Terminal => command_kind::TERMINAL,
         };
         Self { kind }
     }

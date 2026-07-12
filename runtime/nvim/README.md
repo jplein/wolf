@@ -138,6 +138,21 @@ The helper holds an upvalue `local view_cache = {}` keyed `view_cache[win][buf] 
 
 `_G.wolf_switch_buffer(win, buf)` does a **window-scoped** `nvim_win_set_buf(win, buf)` (NOT `:edit` — so it does not disturb `current_file` / the file-MRU or re-read from disk), then restores the pane's view keyed on `(win, buf)`: if `view_cache[win][buf]` exists it `nvim_win_call`s `winrestview(cached)`, ELSE it forces the top of the buffer (`winrestview{ lnum = 1, col = 0, topline = 1, leftcol = 0 }`). There is **NO per-`bufnr` fallback**: a buffer seen only in OTHER panes opens at the top, never borrowing another pane's scroll. The whole body is wrapped in `pcall`, so a stale `bufnr` degrades to a no-op. The macOS `BufferPickerView` activation reaches this through `WolfCoreHandle::switch_buffer(bufnr)` (which resolves the active window live).
 
+### Terminal drawer — `_G.wolf_toggle_terminal()`
+
+A module-level global (defined regardless of setup ordering, alongside `wolf_create_tabpage` / `wolf_close_tabpage`) that backs the **Terminal** command (id `terminal`, `:WolfTerminal`, `` ⌃` ``). Like the tabpage helpers it takes **NO channel id** and emits **NO `rpcnotify`**: `wolf-core`'s `InputEvent::ToggleTerminal` invokes it over `nvim_exec_lua("wolf_toggle_terminal()", [])` (no args), and it changes editor state directly rather than reporting an intent.
+
+It realizes a **per-project terminal BUFFER + per-tabpage drawer WINDOW** model (see [architecture.md](../../architecture.md) §10). Because a Neovim buffer is GLOBAL to the nvim while a window belongs to a tabpage:
+
+- the terminal BUFFER is a single shared buffer for the whole nvim instance (= one PROJECT), identified by the buffer-local var `b:wolf_terminal` AND `buftype == 'terminal'` (both required, so a stale tagged non-terminal buffer never matches);
+- the drawer WINDOW is per-tabpage — toggling in one tabpage never touches another's window, though invoking Terminal from a second tabpage opens a second window onto the SAME shared buffer.
+
+The toggle logic:
+
+1. **Find** the tagged terminal buffer by scanning `nvim_list_bufs()` for a valid buffer with `vim.b[b].wolf_terminal` and `vim.bo[b].buftype == "terminal"`.
+2. **Hide (persist)** — if a window in the CURRENT tabpage (`nvim_tabpage_list_wins(0)`) shows that buffer, close it with `nvim_win_close(w, false)` and return. `force = false` is safe: a terminal buffer is never `'modified'`, and the drawer is never the sole window, so this cannot hit "can't close last window". Closing the WINDOW keeps the terminal buffer + shell job alive (VS Code behavior — a hidden terminal is not killed).
+3. **Open / recreate** — otherwise open a full-width bottom split ~1/3 tall (`vim.cmd("botright " .. height .. "split")`, `height = math.max(1, math.floor(vim.o.lines / 3))`, the `math.max(1, …)` guarding a 0-height terminal on a tiny screen). If the shared buffer still exists, show it (`nvim_win_set_buf(0, termbuf)`); if it is gone (the user `:q`'d / exited the shell), create a fresh one with `vim.cmd("terminal")` and tag it `vim.b.wolf_terminal = true`. Finally `startinsert` focuses the terminal in insert mode (VS Code style); on a hide, `nvim_win_close` returns focus to the editor automatically.
+
 ## Deferred
 
 Plugin baking is no longer fully deferred: **orlando** is the first vendored plugin (bundled into the macOS `.app` via `//bazel/orlando`, loaded conditionally as described above), and **lighthouse** is the second vendored asset — a **colorscheme** (bundled via `//bazel/lighthouse`, activated conditionally as described above). A Markdown LSP (e.g. `marksman`) and a formatter remain **deferred to a later phase** (full plugin baking via `wrapNeovim`). Phase 1 otherwise relies on Neovim's built-in markdown syntax highlighting and the `markdown` / `markdown_inline` treesitter parsers, which is enough to exercise the redraw/highlight pipeline and its tests.

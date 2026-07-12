@@ -20,7 +20,8 @@ import Foundation
 /// `hideApplication == 3`, `minimizeWindow == 4`, `goToFile == 5`, `openFile == 6`,
 /// `openFolder == 7`, `closePane == 8`, `newBuffer == 9`, `resetFontSize == 10`,
 /// `increaseFontSize == 11`, `decreaseFontSize == 12`, `commandPalette == 13`,
-/// `copy == 14`, `paste == 15`, `bufferPicker == 16`, `newTab == 17`.
+/// `copy == 14`, `paste == 15`, `bufferPicker == 16`, `newTab == 17`,
+/// `terminal == 18`.
 public enum CommandKind {
     /// Open a new editor window.
     case newWindow
@@ -58,9 +59,11 @@ public enum CommandKind {
     case bufferPicker
     /// Open a new tab in the current window.
     case newTab
+    /// Toggle the per-project terminal drawer.
+    case terminal
 
-    /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `17` →
-    /// `.newTab`, else `nil`), guarding the contract shared with
+    /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `18` →
+    /// `.terminal`, else `nil`), guarding the contract shared with
     /// `wolf-ffi`'s `mod command_kind`.
     public init?(ffi: UInt8) {
         switch ffi {
@@ -82,6 +85,7 @@ public enum CommandKind {
         case 15: self = .paste
         case 16: self = .bufferPicker
         case 17: self = .newTab
+        case 18: self = .terminal
         default: return nil
         }
     }
