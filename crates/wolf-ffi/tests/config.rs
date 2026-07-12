@@ -57,6 +57,14 @@ const CUSTOM_FONT_SIZE: i64 = 16;
 /// A distinct, non-default line-height for the round-trip case.
 const CUSTOM_LINE_HEIGHT: i64 = 150;
 
+// -- Appearance discriminants (mirror `wolf-ffi/src/lib.rs` `mod appearance`) ---
+/// `appearance: auto` -> `FfiConfig::appearance()` discriminant (the default).
+const APPEARANCE_AUTO: u8 = 0;
+/// `appearance: dark` -> `FfiConfig::appearance()` discriminant.
+const APPEARANCE_DARK: u8 = 1;
+/// `appearance: light` -> `FfiConfig::appearance()` discriminant.
+const APPEARANCE_LIGHT: u8 = 2;
+
 /// Serializes the `WOLF_CONFIG_DIR`-mutating tests. `wolf_ffi_load_config()` reads
 /// this process-global var via `preferences_dir()`; since cargo runs the tests in
 /// this file concurrently within a single process, both cases hold this lock for
@@ -140,5 +148,62 @@ fn load_config_creates_defaults_when_absent() {
     assert!(
         path.exists(),
         "loading with an absent file must create {CONFIG_FILE_NAME} with defaults"
+    );
+}
+
+#[test]
+fn appearance_discriminant_round_trips() {
+    let _guard = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+
+    // Each present-and-valid `appearance` value must surface as its `mod appearance`
+    // discriminant over the bridge (OD-a: `appearance() -> u8`).
+    let present_cases = [
+        ("dark", APPEARANCE_DARK),
+        ("light", APPEARANCE_LIGHT),
+        ("auto", APPEARANCE_AUTO),
+    ];
+    for (value, want) in present_cases {
+        let dir = tempdir().expect("create temp dir");
+        let yaml = format!(
+            "config:\n  font-family: \"{CUSTOM_FONT_FAMILY}\"\n  font-size: {CUSTOM_FONT_SIZE}\n  \
+             line-height: {CUSTOM_LINE_HEIGHT}\n  appearance: {value}\n",
+        );
+        write(&dir.path().join(CONFIG_FILE_NAME), &yaml);
+
+        std::env::set_var("WOLF_CONFIG_DIR", dir.path());
+        let config = wolf_ffi_load_config();
+        std::env::remove_var("WOLF_CONFIG_DIR");
+
+        assert_eq!(
+            config.appearance(),
+            want,
+            "`appearance: {value}` must surface as discriminant {want} over the bridge"
+        );
+    }
+
+    // Back-compat: a config with NO `appearance` key (only the required font fields)
+    // must parse successfully and default to `auto` (0), NOT fall back to defaults.
+    let dir = tempdir().expect("create temp dir");
+    let yaml = format!(
+        "config:\n  font-family: \"{CUSTOM_FONT_FAMILY}\"\n  font-size: {CUSTOM_FONT_SIZE}\n  \
+         line-height: {CUSTOM_LINE_HEIGHT}\n",
+    );
+    write(&dir.path().join(CONFIG_FILE_NAME), &yaml);
+
+    std::env::set_var("WOLF_CONFIG_DIR", dir.path());
+    let config = wolf_ffi_load_config();
+    std::env::remove_var("WOLF_CONFIG_DIR");
+
+    assert_eq!(
+        config.appearance(),
+        APPEARANCE_AUTO,
+        "an absent `appearance` key must surface as auto (0) over the bridge (back-compat)"
+    );
+    // The custom font fields must survive too — proving the section parsed rather
+    // than falling back to the full defaults.
+    assert_eq!(
+        config.font_family(),
+        CUSTOM_FONT_FAMILY,
+        "back-compat: font-family preserved when appearance is absent"
     );
 }

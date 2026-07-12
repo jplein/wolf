@@ -27,6 +27,32 @@ const DEFAULT_FONT_SIZE_MACOS: f64 = 14.0;
 /// The default font size in points on Linux.
 const DEFAULT_FONT_SIZE_LINUX: f64 = 10.0;
 
+/// The app appearance mode: whether to follow the OS or force dark/light.
+///
+/// A GUI-toolkit-free value type surfaced to the front-end. `Auto` means the app
+/// tracks the macOS system dark/light setting live; `Dark`/`Light` force that
+/// appearance regardless of the OS. Serialized as kebab-case (`auto`/`dark`/
+/// `light`) in `wolf-config.yaml`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Appearance {
+    /// Follow the macOS system appearance, switching live when the OS changes.
+    Auto,
+    /// Force dark mode regardless of the OS setting.
+    Dark,
+    /// Force light mode regardless of the OS setting.
+    Light,
+}
+
+/// The built-in default appearance: follow the OS (`auto`).
+const DEFAULT_APPEARANCE: Appearance = Appearance::Auto;
+
+/// The default appearance, used as the `#[serde(default)]` for the on-disk
+/// `appearance` field so a config that predates the key parses to `Auto`.
+fn default_appearance() -> Appearance {
+    DEFAULT_APPEARANCE
+}
+
 /// The resolved user configuration surfaced to the front-end.
 ///
 /// A GUI-toolkit-free value type: `font_family` is a CoreText/Pango family name,
@@ -41,6 +67,8 @@ pub struct WolfConfig {
     pub font_size: f64,
     /// The line-height, as a percentage of the font size (e.g. `130.0` == 130%).
     pub line_height: f64,
+    /// The app appearance mode (`auto`/`dark`/`light`); defaults to `auto`.
+    pub appearance: Appearance,
 }
 
 /// The on-disk file shape: a single top-level `config:` key wrapping the section.
@@ -59,6 +87,10 @@ struct ConfigSection {
     font_family: String,
     font_size: f64,
     line_height: f64,
+    /// Back-compat: a config file predating this key parses to `Auto` rather than
+    /// failing the whole section (unlike the required font fields).
+    #[serde(default = "default_appearance")]
+    appearance: Appearance,
 }
 
 /// Resolves the per-platform preferences directory that holds `wolf-config.yaml`.
@@ -96,6 +128,7 @@ pub fn default_config() -> WolfConfig {
         font_family: DEFAULT_FONT_FAMILY.to_string(),
         font_size,
         line_height: DEFAULT_LINE_HEIGHT,
+        appearance: DEFAULT_APPEARANCE,
     }
 }
 
@@ -119,6 +152,7 @@ pub fn load_or_create(dir: &Path) -> WolfConfig {
                 font_family: file.config.font_family,
                 font_size: file.config.font_size,
                 line_height: file.config.line_height,
+                appearance: file.config.appearance,
             },
             Err(e) => {
                 tracing::warn!(
@@ -161,6 +195,7 @@ fn write_defaults(path: &Path, config: &WolfConfig) {
             font_family: config.font_family.clone(),
             font_size: config.font_size,
             line_height: config.line_height,
+            appearance: config.appearance,
         },
     };
     match serde_yaml::to_string(&file) {
@@ -232,6 +267,9 @@ mod tests {
             actual.line_height, expected.line_height,
             "{ctx}: line_height"
         );
+        // `Appearance` derives `PartialEq`/`Debug` (plan §3.1), so compare it
+        // directly. `default_config()` yields `Appearance::Auto`.
+        assert_eq!(actual.appearance, expected.appearance, "{ctx}: appearance");
     }
 
     /// Reads a file to a `String`, panicking with context on failure (errcheck).
@@ -279,6 +317,10 @@ mod tests {
         assert!(
             text.contains("line-height:"),
             "written YAML must use kebab-case `line-height:`, got:\n{text}"
+        );
+        assert!(
+            text.contains("appearance:"),
+            "written YAML must serialize the `appearance:` field, got:\n{text}"
         );
 
         // Re-reading the file the module just wrote parses back to the same values.
@@ -389,6 +431,166 @@ mod tests {
             wrong_shape,
             "load_or_create must NOT overwrite a valid-YAML wrong-shape config file"
         );
+    }
+
+    // =====================================================================
+    // appearance — new config key (auto/dark/light, default auto)
+    // =====================================================================
+
+    /// Formats a full, well-formed `config:` section (all three required font
+    /// fields, with the CUSTOM non-default values) plus an `appearance:` line
+    /// holding `value`. Used by the appearance parse/round-trip cases so a pass
+    /// cannot be faked by the defaults.
+    fn config_yaml_with_appearance(value: &str) -> String {
+        format!(
+            "config:\n  font-family: \"{CUSTOM_FONT_FAMILY}\"\n  font-size: {}\n  \
+             line-height: {}\n  appearance: {value}\n",
+            CUSTOM_FONT_SIZE as i64, CUSTOM_LINE_HEIGHT as i64,
+        )
+    }
+
+    #[test]
+    fn default_appearance_is_auto() {
+        assert_eq!(
+            default_config().appearance,
+            Appearance::Auto,
+            "the built-in default appearance must be Auto"
+        );
+    }
+
+    #[test]
+    fn parses_appearance_values() {
+        // Each valid enum string maps to its DISTINCT variant, and the font fields
+        // parse alongside it (so we know the whole section deserialized, not a
+        // defaults fallback).
+        let cases = [
+            ("auto", Appearance::Auto),
+            ("dark", Appearance::Dark),
+            ("light", Appearance::Light),
+        ];
+        for (value, want) in cases {
+            let dir = tempdir().expect("create temp dir");
+            let path = dir.path().join(CONFIG_FILE_NAME);
+            write(&path, &config_yaml_with_appearance(value));
+
+            let cfg = load_or_create(dir.path());
+            assert_eq!(
+                cfg.appearance, want,
+                "`appearance: {value}` must parse to {want:?}"
+            );
+            // The font fields must survive alongside the appearance field.
+            assert_eq!(
+                cfg.font_family, CUSTOM_FONT_FAMILY,
+                "`appearance: {value}` case: font_family preserved"
+            );
+            assert_eq!(
+                cfg.font_size, CUSTOM_FONT_SIZE,
+                "`appearance: {value}` case: font_size preserved"
+            );
+            assert_eq!(
+                cfg.line_height, CUSTOM_LINE_HEIGHT,
+                "`appearance: {value}` case: line_height preserved"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_appearance_defaults_to_auto() {
+        // Back-compat: a config with all the required font fields but NO
+        // `appearance` key must parse SUCCESSFULLY (via `#[serde(default)]`), NOT
+        // fall back to the full defaults. So appearance is Auto AND the custom font
+        // fields are preserved (distinguishing this from the whole-file fallback of
+        // `missing_field_falls_back_to_defaults`, which drops a REQUIRED font field).
+        let dir = tempdir().expect("create temp dir");
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        let yaml = format!(
+            "config:\n  font-family: \"{CUSTOM_FONT_FAMILY}\"\n  font-size: {}\n  \
+             line-height: {}\n",
+            CUSTOM_FONT_SIZE as i64, CUSTOM_LINE_HEIGHT as i64,
+        );
+        write(&path, &yaml);
+
+        let cfg = load_or_create(dir.path());
+        assert_eq!(
+            cfg.appearance,
+            Appearance::Auto,
+            "a config with no `appearance` key must default to Auto (back-compat)"
+        );
+        // The custom font fields must be preserved — proving the section parsed
+        // rather than falling back to defaults.
+        assert_eq!(
+            cfg.font_family, CUSTOM_FONT_FAMILY,
+            "back-compat: font_family preserved when appearance is absent"
+        );
+        assert_eq!(
+            cfg.font_size, CUSTOM_FONT_SIZE,
+            "back-compat: font_size preserved when appearance is absent"
+        );
+        assert_eq!(
+            cfg.line_height, CUSTOM_LINE_HEIGHT,
+            "back-compat: line_height preserved when appearance is absent"
+        );
+    }
+
+    #[test]
+    fn invalid_appearance_falls_back_to_defaults() {
+        // An out-of-range appearance value (`purple`) fails the enum, so the whole
+        // section fails to deserialize and the load falls back to the defaults
+        // (OD-b: whole-file fallback), leaving the user's file untouched — the same
+        // contract as the wrong-shape case above.
+        let dir = tempdir().expect("create temp dir");
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        let invalid = config_yaml_with_appearance("purple");
+        write(&path, &invalid);
+
+        let cfg = load_or_create(dir.path());
+        assert_config_eq(&cfg, &default_config(), "invalid appearance -> defaults");
+
+        // The user's (invalid) file must be preserved byte-for-byte, never rewritten.
+        assert_eq!(
+            read(&path),
+            invalid,
+            "load_or_create must NOT overwrite a config with an invalid appearance value"
+        );
+    }
+
+    #[test]
+    fn appearance_round_trips() {
+        // 1. An absent file is created with the defaults: the written YAML carries
+        //    the `appearance:` key and re-reads to Auto.
+        let dir = tempdir().expect("create temp dir");
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        let created = load_or_create(dir.path());
+        assert_eq!(
+            created.appearance,
+            Appearance::Auto,
+            "defaults-created config must have appearance Auto"
+        );
+        assert!(
+            read(&path).contains("appearance:"),
+            "the defaults-written YAML must serialize the `appearance:` key"
+        );
+        let reread = load_or_create(dir.path());
+        assert_eq!(
+            reread.appearance,
+            Appearance::Auto,
+            "re-reading the written defaults must round-trip appearance to Auto"
+        );
+
+        // 2. Hand-written non-default values (`dark`, `light`) round-trip through the
+        //    loader to their matching variants.
+        for (value, want) in [("dark", Appearance::Dark), ("light", Appearance::Light)] {
+            let vdir = tempdir().expect("create temp dir");
+            write(
+                &vdir.path().join(CONFIG_FILE_NAME),
+                &config_yaml_with_appearance(value),
+            );
+            let cfg = load_or_create(vdir.path());
+            assert_eq!(
+                cfg.appearance, want,
+                "hand-written `appearance: {value}` must load as {want:?}"
+            );
+        }
     }
 
     // =====================================================================

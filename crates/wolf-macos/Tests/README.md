@@ -1,6 +1,6 @@
 # wolf-macos/Tests
 
-The Swift tests for the macOS front-end. The Bazel target is `//crates/wolf-macos:WolfKeyMapTests`; it runs regardless of `WOLF_NVIM_BIN` (it needs no Neovim) and covers the pure seams — the key seam (`KeyMapTests.swift`), the picker seam (`PickerSeamTests.swift`), the command-palette seam (`PaletteSeamTests.swift`), the pane-layout seam (`PaneTreeTests.swift`), the per-pane geometry seam (`PaneGeometryTests.swift`), the scroll-accumulator seam (`ScrollAccumulatorTests.swift`), the glyph-style seam (`GlyphStyleTests.swift`), the state-restore seam (`StateSeamTests.swift`), the command-decode seam (`CommandSeamTests.swift`), the font-size seam (`FontSizeSeamTests.swift`), the per-pane statusbar layout seam (`StatusbarLayoutTests.swift`), the new-window trigger seam (`ShortcutSeamTests.swift`), the tab-title seam (`TabTitleSeamTests.swift`), the editor-inset seam (`EditorInsetTests.swift`), and the group-by-cwd restore seam (`RestoreSeamTests.swift`).
+The Swift tests for the macOS front-end. The Bazel target is `//crates/wolf-macos:WolfKeyMapTests`; it runs regardless of `WOLF_NVIM_BIN` (it needs no Neovim) and covers the pure seams — the key seam (`KeyMapTests.swift`), the picker seam (`PickerSeamTests.swift`), the command-palette seam (`PaletteSeamTests.swift`), the pane-layout seam (`PaneTreeTests.swift`), the per-pane geometry seam (`PaneGeometryTests.swift`), the scroll-accumulator seam (`ScrollAccumulatorTests.swift`), the glyph-style seam (`GlyphStyleTests.swift`), the state-restore seam (`StateSeamTests.swift`), the command-decode seam (`CommandSeamTests.swift`), the font-size seam (`FontSizeSeamTests.swift`), the per-pane statusbar layout seam (`StatusbarLayoutTests.swift`), the new-window trigger seam (`ShortcutSeamTests.swift`), the tab-title seam (`TabTitleSeamTests.swift`), the editor-inset seam (`EditorInsetTests.swift`), the group-by-cwd restore seam (`RestoreSeamTests.swift`), and the appearance-decode seam (`AppearanceSeamTests.swift`).
 
 ## `WolfKeyMapTests/KeyMapTests.swift`
 
@@ -61,6 +61,10 @@ Pure, headless `XCTest` coverage of the AppKit-free `ShortcutSeam.isNewWindowTri
 ## `WolfKeyMapTests/CommandSeamTests.swift`
 
 Pure, headless `XCTest` coverage of the AppKit-free `CommandKind(ffi:)` decode seam (`@testable import WolfKeyMap`), the sibling of `PaneTreeTests`' discriminant-contract test. It pins the `command_kind` contract with `wolf-ffi`: `init?(ffi:)` maps `0..17` to the eighteen cases (`newWindow` … `closePane == 8`, `newBuffer == 9`, `resetFontSize == 10`, `increaseFontSize == 11`, `decreaseFontSize == 12`, `commandPalette == 13`, `copy == 14`, `paste == 15`, `bufferPicker == 16`, `newTab == 17`) and returns `nil` for out-of-range bytes (the boundary is now `18`, plus `255`), so the Swift port stays in lockstep with the Rust `mod command_kind` and the `//crates/wolf-ffi:commands` discriminant guard.
+
+## `WolfKeyMapTests/AppearanceSeamTests.swift`
+
+Pure, headless `XCTest` coverage of the AppKit-free `AppearanceMode` decode seam (`@testable import WolfKeyMap`), the sibling of `CommandSeamTests`' discriminant-contract test. It pins the `appearance` contract with `wolf-ffi`: the raw values (`auto == 0`, `dark == 1`, `light == 2`), the `init?(rawValue:)` round-trip (`0`/`1`/`2` → the matching case), and out-of-range decode (`3` and `255` → `nil`), so the Swift port stays in lockstep with the Rust `mod appearance` and `wolf_core::config::Appearance` (plan OD-a). `AppDelegate` reads `FfiConfig.appearance()` and maps it via `AppearanceMode(rawValue:)`; the NSApp appearance forcing + `effectiveAppearance` KVO it drives are macOS-runtime-specific and stay manual-smoke.
 
 ## `WolfKeyMapTests/FontSizeSeamTests.swift`
 

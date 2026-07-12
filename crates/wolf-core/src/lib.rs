@@ -57,7 +57,7 @@ pub use api::{CoreConfig, CoreError, SnapshotReadGuard, WolfCore};
 pub use buffer_picker::{rank_buffers, BufInfo, BufferRow};
 pub use command::{Command, CommandSpec, MenuGroup, COMMAND_SPECS};
 pub use command_mru::{CommandMru, COMMAND_MRU_LIMIT};
-pub use config::{default_config, load_or_create, preferences_dir, WolfConfig};
+pub use config::{default_config, load_or_create, preferences_dir, Appearance, WolfConfig};
 pub use files::{FileEntry, FileSearch, FileSearchReadGuard};
 pub use input::{
     key_to_notation, InputEvent, Key, KeyEvent, MouseAction, MouseButton, MouseEvent,

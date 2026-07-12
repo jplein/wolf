@@ -117,6 +117,13 @@ final class Project {
         handle.set_current_tabpage(view.tabpageHandle)
     }
 
+    /// Pushes the resolved appearance to this project's nvim (`:set background=`).
+    /// `dark: true` selects dark, `false` light. Called by `AppDelegate` at launch,
+    /// live in `auto` mode when the OS toggles, and after each new project starts.
+    func setBackground(dark: Bool) {
+        handle.set_background(dark)
+    }
+
     /// Closes `view`'s tabpage (a non-last view close). Skips the RPC when `view`
     /// is the LAST view — the last view's `detach` shuts the whole core down
     /// instead (closing the last tabpage would be a no-op E784 anyway).

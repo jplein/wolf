@@ -103,8 +103,9 @@ end
 -- ORDERING: this MUST come AFTER `vim.cmd("syntax on")` above, because both
 -- `syntax on` and `:colorscheme` clear/redefine highlight groups — activating
 -- last wins. `vim.o.background` is set BEFORE `:colorscheme` so a dual-variant
--- scheme reads it. (A future change will switch dark/light from the OS appearance
--- preference; the activation is kept isolated/simple to make that easy.)
+-- scheme reads it. The front-end now pushes the resolved appearance at launch —
+-- and live, in `auto` mode, when the OS toggles — via `:set background=…`; this
+-- hardcoded value is only the pre-push fallback for the initial paint.
 local lighthouse_dir = this_dir .. "/lighthouse"
 if uv and uv.fs_stat(lighthouse_dir) then
 	vim.opt.runtimepath:prepend(lighthouse_dir)

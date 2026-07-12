@@ -363,6 +363,10 @@ extension WolfCoreHandleRef {
         __swift_bridge__$WolfCoreHandle$chdir(ptr, { let rustString = path.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
     }
 
+    public func set_background(_ dark: Bool) {
+        __swift_bridge__$WolfCoreHandle$set_background(ptr, dark)
+    }
+
     public func close_pane() {
         __swift_bridge__$WolfCoreHandle$close_pane(ptr)
     }
@@ -745,6 +749,10 @@ extension FfiConfigRef {
 
     public func line_height() -> Double {
         __swift_bridge__$FfiConfig$line_height(ptr)
+    }
+
+    public func appearance() -> UInt8 {
+        __swift_bridge__$FfiConfig$appearance(ptr)
     }
 }
 extension FfiConfig: Vectorizable {
