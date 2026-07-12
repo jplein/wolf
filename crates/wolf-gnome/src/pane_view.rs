@@ -41,7 +41,7 @@ use adw::prelude::*;
 use wolf_core::{CursorShape, LayoutIntent, Snapshot, SplitOrientation, WolfCore};
 
 use crate::layout::{Orientation, PaneId, PaneLayout, PaneTree};
-use crate::render::draw_glyph;
+use crate::render::{draw_glyph, FALLBACK_BG, FALLBACK_FG};
 use crate::{cursor, grid_size_for, paint, CellMetrics};
 
 /// The id of the first (root) pane. The [`PaneTree`] is constructed with this as
@@ -52,12 +52,11 @@ const FIRST_PANE_ID: PaneId = 1;
 /// grid (cmdline + messages); window content lives on grids `>= 2`.
 const MIN_WINDOW_GRID: u64 = 2;
 
-/// The outer/global grid id whose last row carries the command line, painted in the
-/// cmdline strip. (Mirrors `wolf_core`'s private `OUTER_GRID_ID`.)
-const CMDLINE_GRID_ID: u64 = 1;
-
 /// Height of the cmdline strip, in grid rows.
 const CMDLINE_STRIP_ROWS: f64 = 1.0;
+
+/// Width of the command-line caret, in pixels.
+const CMDLINE_CARET_WIDTH: f64 = 2.0;
 
 /// CSS class applied to the active pane's `DrawingArea` to draw a focus ring.
 const ACTIVE_PANE_CSS: &str = "wolf-active-pane";
@@ -495,27 +494,68 @@ impl PaneInner {
         }
     }
 
-    /// Paints the cmdline strip: grid 1's LAST row, translated up so only that row
-    /// lands in the one-row strip; plus the cursor when it lives on grid 1.
-    fn draw_cmdline(&self, cr: &cairo::Context) {
+    /// Paints the native command-line / message strip (OD4 minimal-but-correct).
+    ///
+    /// Under `ext_messages` (which implicitly enables `ext_cmdline` and sets
+    /// `cmdheight=0`) the outer grid 1 empties, so this paints from the folded
+    /// [`Snapshot::cmdline`] / [`Snapshot::toast`] rather than grid 1's last row:
+    /// when a command line is active, `firstc` + the flattened cmdline text with a
+    /// caret at the byte position `pos`; otherwise the LAST toast line (so the
+    /// emptied strip never shows blank). The Adw completion popup + the multi-line
+    /// scrollable toast are deferred (OD4).
+    fn draw_cmdline(&self, cr: &cairo::Context, width: f64) {
         let core_ref = self.core.borrow();
         let Some(core) = core_ref.as_ref() else {
             return;
         };
         let snap = core.read_snapshot();
-        let Some(grid1) = snap.grid(CMDLINE_GRID_ID) else {
-            return;
-        };
-        if grid1.rows == 0 {
-            return;
-        }
-        // Translate up so grid 1's last row lands at the strip's top; the rest of
-        // the grid is painted above the visible area and clipped away.
-        let last = grid1.rows - 1;
-        cr.translate(0.0, -(last as f64) * self.metrics.cell_h);
-        paint(cr, grid1, &snap.highlights, &self.metrics);
-        if snap.cursor.grid == CMDLINE_GRID_ID {
-            draw_cursor(cr, &snap, &self.metrics);
+        let metrics = &self.metrics;
+
+        // Default colors for the strip (grid 1 is empty under `cmdheight=0`).
+        let style = snap.highlights.resolve(0);
+        let fg = style.fg.unwrap_or(FALLBACK_FG);
+        let bg = style.bg.unwrap_or(FALLBACK_BG);
+
+        // Background band so the emptied grid 1 never shows blank/stale.
+        cr.set_source_rgb(
+            f64::from(bg.r) / RGB_MAX,
+            f64::from(bg.g) / RGB_MAX,
+            f64::from(bg.b) / RGB_MAX,
+        );
+        cr.rectangle(0.0, 0.0, width, metrics.cell_h);
+        cr.fill().expect("cairo cmdline background fill failed");
+
+        if snap.cmdline.active {
+            // `firstc` + the flattened command-line text on the strip's single row.
+            let text = snap.cmdline.text();
+            let line = format!("{}{}", snap.cmdline.firstc, text);
+            if !line.is_empty() {
+                draw_glyph(cr, metrics, 0.0, 0.0, &line, fg, &style);
+            }
+            // Caret at the byte offset `pos` (snapped to a char boundary), placed
+            // after the `firstc` prefix. Column-approximate (single-width cells).
+            let mut byte = snap.cmdline.pos.min(text.len());
+            while byte > 0 && !text.is_char_boundary(byte) {
+                byte -= 1;
+            }
+            let caret_cols = snap.cmdline.firstc.chars().count() + text[..byte].chars().count();
+            let caret_x = caret_cols as f64 * metrics.cell_w;
+            cr.set_source_rgb(
+                f64::from(fg.r) / RGB_MAX,
+                f64::from(fg.g) / RGB_MAX,
+                f64::from(fg.b) / RGB_MAX,
+            );
+            cr.rectangle(caret_x, 0.0, CMDLINE_CARET_WIDTH, metrics.cell_h);
+            cr.fill().expect("cairo cmdline caret fill failed");
+        } else if snap.toast.visible {
+            // Inactive: paint the LAST toast line so the strip is not blank (the
+            // multi-line scrollable toast is deferred — OD4).
+            if let Some(last_line) = snap.toast.lines().last() {
+                let text: String = last_line.iter().map(|c| c.text.as_str()).collect();
+                if !text.is_empty() {
+                    draw_glyph(cr, metrics, 0.0, 0.0, &text, fg, &style);
+                }
+            }
         }
     }
 
@@ -613,9 +653,9 @@ pub fn build(
 
     {
         let weak = Rc::downgrade(&inner);
-        cmdline_area.set_draw_func(move |_area, cr, _w, _h| {
+        cmdline_area.set_draw_func(move |_area, cr, w, _h| {
             if let Some(inner) = weak.upgrade() {
-                inner.draw_cmdline(cr);
+                inner.draw_cmdline(cr, f64::from(w));
             }
         });
     }

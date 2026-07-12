@@ -1,5 +1,7 @@
 # Command-line completions: decision report
 
+> **Outcome / what shipped (2026-07).** This report's hybrid recommendation (`ext_cmdline` signal + `getcompletion()` for the list + a picker-style overlay for the menu) was **SUPERSEDED**. What shipped instead is **Option C — fully native, Tab-triggered**: Wolf attaches with `ext_cmdline` + `ext_popupmenu` (via `ext_messages`, which implicitly enables `ext_cmdline` and sets `cmdheight=0`) and lets Neovim own the completion match state + Tab-cycling. There is **no `getcompletion()` call and no `cmdline_completions` core/FFI method**; the captive `init.lua` sets `wildoptions+=pum` so cmdline completion presents as a native vertical popup. Core folds `cmdline_show`/`_pos`/`_hide` into `Snapshot.cmdline`, `popupmenu_show`/`_select`/`_hide` into `Snapshot.pum`, and the front-ends paint the command line at the BOTTOM with the completion popup anchored directly above it (NOT a top-of-window field). The menu is Tab-triggered (Neovim's own completion), not type-ahead on every keystroke — the type-ahead UX in this report's mockup was NOT implemented. This report is retained for its background analysis of Mechanisms A/B; the **Decision** and **Design** sections below are superseded by Option C. This work ALSO added **`ext_messages`** for the message toast (Feature 2 — `msg_show` / `msg_clear` / `msg_history_show` folded into `Snapshot.toast`), which this report did not cover. See `architecture.md` decision 7 and `crates/wolf-core/src/README.md` for the as-built design.
+
 ## Goal
 
 Give Wolf a live, as-you-type completion menu for Neovim's command line, matching this flow:
@@ -44,7 +46,9 @@ The mockup shows the menu appearing the instant the user types `:e ` — before 
 
 To get the live behavior, _something_ has to call completion on every keystroke. `getcompletion()` is exactly that something: it lets us compute the list ourselves whenever the command-line text changes, independent of Neovim's Tab trigger.
 
-## Decision
+## Decision (SUPERSEDED — see "Outcome / what shipped" above)
+
+> This hybrid was NOT adopted. Option C (fully native, Tab-triggered `ext_popupmenu`, no `getcompletion()`) shipped instead. The following is the original recommendation, kept for the record.
 
 **Adopt a hybrid: `ext_cmdline` for the command-line signal, `getcompletion()` for the list, and the existing picker-style native overlay for the menu.**
 
@@ -56,7 +60,9 @@ We explicitly do **not** adopt the pure `ext_popupmenu` wildmenu as the v1 mecha
 
 We do **not** enable `ext_popupmenu` in this phase. `ext_cmdline` is additive to the existing `ext_linegrid` + `ext_multigrid` attach and does not disturb the grid-drawn editor content; the popupmenu flag would redirect Neovim's own completion UI and is unnecessary because we drive the menu ourselves.
 
-## Design
+## Design (SUPERSEDED — Option C shipped, see "Outcome / what shipped" above)
+
+> The design below describes the hybrid that was NOT built (no `cmdline_completions` query, a top-of-window field, per-keystroke type-ahead). The as-built design is the native `Snapshot.cmdline` / `Snapshot.pum` fold with a bottom command line + an anchored Tab-triggered popup. Kept for the record.
 
 ### 1. Core: a completions query (`wolf-core`)
 

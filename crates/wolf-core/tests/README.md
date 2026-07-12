@@ -35,7 +35,7 @@ Shared helpers used across the test binaries:
 
 ## Coverage
 
-Integration tests across the `tests/*.rs` binaries (driving a real pinned Neovim and/or real SQLite/filesystem — plus the fully headless `state_unit.rs`, `recent_dirs.rs`, `command_mru.rs`, `palette_rank.rs`, `buffer_rank.rs`, `rank_bounded.rs`, and `pane_status_unit.rs`, which need neither Neovim nor a filesystem), plus the pure in-module `#[cfg(test)]` unit tests (eighteen for the ranking function in `rank.rs`, ten for layout-intent parsing in `layout.rs`, and the `config.rs` / `tree.rs` suites documented in [`src/README.md`](../src/README.md)).
+Integration tests across the `tests/*.rs` binaries (driving a real pinned Neovim and/or real SQLite/filesystem — plus the fully headless `state_unit.rs`, `recent_dirs.rs`, `command_mru.rs`, `palette_rank.rs`, `buffer_rank.rs`, `rank_bounded.rs`, and `pane_status_unit.rs`, which need neither Neovim nor a filesystem), plus the pure in-module `#[cfg(test)]` unit tests (eighteen for the ranking function in `rank.rs`, ten for layout-intent parsing in `layout.rs`, the three `redraw::tests::msg_show_*` fold-unit tests for the `msg_show` append / replace_last / id-match branches — which run under the crate's LIB unit-test target `//crates/wolf-core:wolf_core_lib_test`, not a `tests/*.rs` binary — and the `config.rs` / `tree.rs` suites documented in [`src/README.md`](../src/README.md)).
 
 ### File picker (real SQLite / filesystem / git / Neovim — no mocks)
 
@@ -161,3 +161,11 @@ The original fifteen tests cover the redraw → snapshot and input pipelines aga
 - `buffer_list_is_shared_across_tabpages` — `:e a.md` on T1, `:e b.md` on T2, and `list_buffers()` returns BOTH regardless of the current tabpage (one shared buffer list per project);
 - `stable_handle_survives_tabpage_renumber` — create T2/T3, close T2, and T3's HANDLE is unchanged (its tabpage NUMBER shifted) so `cwd_for_tabpage(T3)` still works;
 - `win_hide_removes_window_but_keeps_grid_on_tabpage_switch` — the **OD7/OD8 focused pin**: on a tabpage switch nvim emits `win_hide` (not `win_close`/`grid_destroy`) for the leaving tabpage's windows, so `redraw.rs`'s handler REMOVES the window from `Snapshot.windows` (`grid_for_win(W1)` → `None`, W1 absent from the window handles) but KEEPS its grid in `Snapshot.grids` (nvim reuses it on the way back).
+
+### Native command line + completion popup (real Neovim)
+
+`cmdline_pum.rs` (Bazel target `//crates/wolf-core:cmdline_pum`) drives the `ext_cmdline` + `ext_popupmenu` folds against a real pinned nvim in a temp cwd seeded with `File A.md` / `File B.md` / `Something else.md` (a local `start_core_in(cwd)` helper pins nvim's cwd). It types `:` then `e Fi` and polls `Snapshot.cmdline` (active, firstc `:`, `text() == "e Fi"`), presses `Tab` and polls `Snapshot.pum` (visible, items containing the `File *` entries), and asserts the command line clears on `<Esc>` (pum hidden). `cmdline_pos_is_a_byte_offset` types `:eé` and asserts `cmdline.pos == 3` (the caret contract is a BYTE offset, not a char count — a multi-byte char pins it).
+
+### Message toast (real Neovim)
+
+`messages.rs` (Bazel target `//crates/wolf-core:messages`) drives the `ext_messages` folds against a real pinned nvim: a multi-line `nvim_echo(..., { kind = "list_cmd" })` populates `Snapshot.toast` (`toast.visible`, `toast.lines()` carrying the content, `toast.kind() == "list_cmd"`); `:messages` populates the toast from `msg_history_show`; sending a key clears the toast (the input-pump dismiss); `consecutive_messages_do_not_accumulate` shows only the latest (the 2nd `:` is itself a dismissing key per OD8); a search's `search_count` message is suppressed (a tolerant negative assertion); and `confirm_prompt_is_not_dismissed_by_input` drives a real `:call confirm(...)` and asserts a passing input does NOT clear the `confirm`-kind toast (the `!is_prompt()` gate in `api.rs`, OD8).

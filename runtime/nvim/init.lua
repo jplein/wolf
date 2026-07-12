@@ -45,6 +45,12 @@ opt.laststatus = 0
 -- Forward mouse to Neovim; the front-end translates OS mouse events to input.
 opt.mouse = "a"
 
+-- Present command-line completion as a vertical popup (`popupmenu_show`) rather
+-- than the horizontal wildmenu, so the native `ext_popupmenu` completion popup
+-- anchors above the command line (Wolf attaches with `ext_popupmenu` +
+-- `ext_messages`; the latter implicitly enables `ext_cmdline` + `cmdheight=0`).
+opt.wildoptions:append("pum")
+
 -- Soft-wrap long lines at WORD BOUNDARIES: Wolf is a Markdown editor, where prose
 -- lines routinely exceed the editor width. `wrap` is also nvim's own default;
 -- `linebreak` makes the wrap fall on spaces/punctuation (`breakat`) instead of

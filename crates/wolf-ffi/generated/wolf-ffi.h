@@ -225,6 +225,78 @@ void* __swift_bridge__$Vec_FfiPaneStatus$get_mut(void* vec_ptr, uintptr_t index)
 uintptr_t __swift_bridge__$Vec_FfiPaneStatus$len(void* vec_ptr);
 void* __swift_bridge__$Vec_FfiPaneStatus$as_ptr(void* vec_ptr);
 
+typedef struct FfiCmdline FfiCmdline;
+void __swift_bridge__$FfiCmdline$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiCmdline$new(void);
+void __swift_bridge__$Vec_FfiCmdline$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiCmdline$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiCmdline$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiCmdline$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiCmdline$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiCmdline$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiCmdline$as_ptr(void* vec_ptr);
+
+typedef struct FfiPum FfiPum;
+void __swift_bridge__$FfiPum$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiPum$new(void);
+void __swift_bridge__$Vec_FfiPum$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiPum$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiPum$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiPum$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiPum$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiPum$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiPum$as_ptr(void* vec_ptr);
+
+typedef struct FfiPumItem FfiPumItem;
+void __swift_bridge__$FfiPumItem$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiPumItem$new(void);
+void __swift_bridge__$Vec_FfiPumItem$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiPumItem$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiPumItem$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiPumItem$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiPumItem$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiPumItem$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiPumItem$as_ptr(void* vec_ptr);
+
+typedef struct FfiToast FfiToast;
+void __swift_bridge__$FfiToast$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiToast$new(void);
+void __swift_bridge__$Vec_FfiToast$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiToast$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiToast$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiToast$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiToast$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiToast$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiToast$as_ptr(void* vec_ptr);
+
+typedef struct FfiToastLine FfiToastLine;
+void __swift_bridge__$FfiToastLine$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiToastLine$new(void);
+void __swift_bridge__$Vec_FfiToastLine$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiToastLine$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiToastLine$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiToastLine$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiToastLine$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiToastLine$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiToastLine$as_ptr(void* vec_ptr);
+
+typedef struct FfiToastChunk FfiToastChunk;
+void __swift_bridge__$FfiToastChunk$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiToastChunk$new(void);
+void __swift_bridge__$Vec_FfiToastChunk$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiToastChunk$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiToastChunk$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiToastChunk$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiToastChunk$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiToastChunk$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiToastChunk$as_ptr(void* vec_ptr);
+
 void* __swift_bridge__$wolf_ffi_start(void* init_lua, void* cwd, uint16_t cols, uint16_t rows);
 uint64_t __swift_bridge__$WolfCoreHandle$wake_token(void* self);
 void* __swift_bridge__$WolfCoreHandle$read_frame(void* self);
@@ -265,6 +337,9 @@ void __swift_bridge__$WolfCoreHandle$paste(void* self, void* text);
 void* __swift_bridge__$WolfCoreHandle$buffer_picker(void* self);
 void __swift_bridge__$WolfCoreHandle$switch_buffer(void* self, int64_t bufnr);
 bool __swift_bridge__$WolfCoreHandle$is_visual_mode(void* self);
+void* __swift_bridge__$WolfCoreHandle$cmdline(void* self);
+void* __swift_bridge__$WolfCoreHandle$pum(void* self);
+void* __swift_bridge__$WolfCoreHandle$toast(void* self);
 void* __swift_bridge__$FfiFileSearch$ranked(void* self, void* query, uintptr_t max);
 void* __swift_bridge__$FfiFileSearch$children_of(void* self, void* dir);
 void* __swift_bridge__$FfiFileSearch$rel_path_for(void* self, void* abs);
@@ -341,5 +416,31 @@ int64_t __swift_bridge__$FfiWinInfo$win(void* self);
 bool __swift_bridge__$FfiWinInfo$hidden(void* self);
 void* __swift_bridge__$FfiPaneStatus$filename(void* self);
 void* __swift_bridge__$FfiPaneStatus$display_path(void* self);
+bool __swift_bridge__$FfiCmdline$active(void* self);
+void* __swift_bridge__$FfiCmdline$firstc(void* self);
+void* __swift_bridge__$FfiCmdline$prompt(void* self);
+void* __swift_bridge__$FfiCmdline$text(void* self);
+uint32_t __swift_bridge__$FfiCmdline$pos(void* self);
+uint32_t __swift_bridge__$FfiCmdline$indent(void* self);
+uint32_t __swift_bridge__$FfiCmdline$level(void* self);
+bool __swift_bridge__$FfiPum$visible(void* self);
+int64_t __swift_bridge__$FfiPum$selected(void* self);
+int64_t __swift_bridge__$FfiPum$anchor_grid(void* self);
+int64_t __swift_bridge__$FfiPum$anchor_row(void* self);
+int64_t __swift_bridge__$FfiPum$anchor_col(void* self);
+void* __swift_bridge__$FfiPum$items(void* self);
+void* __swift_bridge__$FfiPumItem$word(void* self);
+void* __swift_bridge__$FfiPumItem$kind(void* self);
+void* __swift_bridge__$FfiPumItem$menu(void* self);
+void* __swift_bridge__$FfiPumItem$info(void* self);
+bool __swift_bridge__$FfiToast$visible(void* self);
+void* __swift_bridge__$FfiToast$kind(void* self);
+void* __swift_bridge__$FfiToast$lines(void* self);
+void* __swift_bridge__$FfiToastLine$chunks(void* self);
+void* __swift_bridge__$FfiToastChunk$text(void* self);
+struct __swift_bridge__$FfiColor __swift_bridge__$FfiToastChunk$fg(void* self);
+struct __swift_bridge__$FfiColor __swift_bridge__$FfiToastChunk$bg(void* self);
+struct __swift_bridge__$FfiColor __swift_bridge__$FfiToastChunk$special(void* self);
+uint8_t __swift_bridge__$FfiToastChunk$flags(void* self);
 
 

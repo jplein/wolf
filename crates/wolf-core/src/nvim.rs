@@ -122,15 +122,28 @@ impl NvimProcess {
         self.nvim.clone()
     }
 
-    /// Attaches as an `ext_linegrid` + `ext_multigrid` UI at `cols * rows`.
+    /// Attaches as an `ext_linegrid` + `ext_multigrid` + `ext_popupmenu` +
+    /// `ext_messages` UI at `cols * rows`.
     ///
     /// `ext_multigrid` makes Neovim emit per-window grids (one grid per editor
     /// window, plus the outer grid 1) and the window-layout events
     /// (`win_pos`/`win_viewport`/`win_close`/`grid_destroy`).
+    ///
+    /// `ext_popupmenu` routes the completion popup off the grid into
+    /// `popupmenu_show`/`popupmenu_select`/`popupmenu_hide`. `ext_messages`
+    /// routes messages off the grid into `msg_show`/`msg_clear`/
+    /// `msg_history_show`; it IMPLICITLY enables `ext_cmdline` (the native command
+    /// line, `cmdline_show`/`cmdline_pos`/`cmdline_hide`) and forces `cmdheight=0`
+    /// — so the outer grid 1 empties (no grid-painted cmdline strip) and the
+    /// front-ends paint the command line / messages natively from
+    /// [`Snapshot::cmdline`](crate::render::Snapshot::cmdline) /
+    /// [`Snapshot::toast`](crate::render::Snapshot::toast).
     pub async fn ui_attach(&self, cols: u16, rows: u16) -> Result<(), NvimError> {
         let opts = vec![
             (Value::from("ext_linegrid"), Value::from(true)),
             (Value::from("ext_multigrid"), Value::from(true)),
+            (Value::from("ext_popupmenu"), Value::from(true)),
+            (Value::from("ext_messages"), Value::from(true)),
             (Value::from("rgb"), Value::from(true)),
         ];
         let _ = self
