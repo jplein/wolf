@@ -82,6 +82,11 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     private let handle: WolfCoreHandle
     private weak var paneContainer: PaneContainerView?
 
+    /// The panel host that presents/dismisses/refits this picker's floating child
+    /// window (set by `WolfWindowController` after construction). Weak — the host is
+    /// strong-held by the controller and owns this view (its panel's `contentView`).
+    weak var host: PickerPanelHosting?
+
     /// The rounded search bar: a container holding the magnifier + text field. We
     /// build it ourselves (rather than an `NSSearchField`) so a large font is never
     /// clipped and the magnifier/text alignment is under our control.
@@ -149,25 +154,12 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         layer?.borderWidth = 1
         layer?.borderColor = NSColor.separatorColor.cgColor
         translatesAutoresizingMaskIntoConstraints = false
-        isHidden = true
         buildSubviews()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("PickerView is not constructed from a nib")
-    }
-
-    /// Pins the panel top-center within its superview (the editor content view) at
-    /// a fixed WIDTH; the height is content-driven (see `updateResultsLayout`).
-    override func viewDidMoveToSuperview() {
-        super.viewDidMoveToSuperview()
-        guard let superview else { return }
-        NSLayoutConstraint.activate([
-            centerXAnchor.constraint(equalTo: superview.centerXAnchor),
-            topAnchor.constraint(equalTo: superview.topAnchor, constant: Self.topMargin),
-            widthAnchor.constraint(equalToConstant: Self.panelWidth),
-        ])
     }
 
     /// Opens the picker: starts a file search, shows + focuses the field, and does
@@ -177,8 +169,10 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         if isOpen { return }
         search = handle.start_file_search()
         isOpen = true
-        isHidden = false
         searchField.stringValue = ""
+        // Present the panel FIRST so `self.window` is the now-key panel, then focus
+        // the search field within it.
+        host?.presentPanel()
         window?.makeFirstResponder(searchField)
         // Force the first refresh to select the top row, regardless of any stale
         // selection/query left over from a previous session.
@@ -186,18 +180,18 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
         refresh()
     }
 
-    /// Closes the picker: drops the file search (cancelling traversal), hides, and
-    /// returns focus to the editor. Idempotent.
+    /// Closes the picker: drops the file search (cancelling traversal), orders its
+    /// panel out, and returns focus to the editor. Idempotent.
     func close() {
         if !isOpen { return }
+        // Tear down state BEFORE dismissing the panel: `orderOut` inside
+        // `dismissPanel` can re-enter `windowDidResignKey → close()`; the `isOpen`
+        // guard above makes that re-entry a no-op.
         isOpen = false
         refreshCoalescer.cancelPending()
         // Dropping the FileSearch cancels the background traversal.
         search = nil
-        isHidden = true
-        if let paneContainer {
-            window?.makeFirstResponder(paneContainer)
-        }
+        host?.dismissPanel()
     }
 
     /// Rebuilds the results list for the current query from the latest search
@@ -449,6 +443,9 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
             listHeightConstraint.isActive = true
             listBottomConstraint.isActive = true
         }
+        // Grow/shrink the hosting panel with the results list (capped by
+        // `maxListHeight`).
+        host?.refitPanel()
     }
 
     /// Creates a reusable, file-agnostic row cell configured with the computed

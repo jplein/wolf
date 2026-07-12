@@ -87,6 +87,11 @@ final class CommandPaletteView: NSView, NSTableViewDataSource, NSTableViewDelega
     private let handle: WolfCoreHandle
     private weak var paneContainer: PaneContainerView?
 
+    /// The panel host that presents/dismisses/refits this palette's floating child
+    /// window (set by `WolfWindowController` after construction). Weak — the host is
+    /// strong-held by the controller and owns this view (its panel's `contentView`).
+    weak var host: PickerPanelHosting?
+
     /// The rounded search bar: a container holding the magnifier + text field.
     private let searchContainer = NSView()
     private let magnifierView = NSImageView()
@@ -140,25 +145,12 @@ final class CommandPaletteView: NSView, NSTableViewDataSource, NSTableViewDelega
         layer?.borderWidth = 1
         layer?.borderColor = NSColor.separatorColor.cgColor
         translatesAutoresizingMaskIntoConstraints = false
-        isHidden = true
         buildSubviews()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("CommandPaletteView is not constructed from a nib")
-    }
-
-    /// Pins the panel top-center within its superview at a fixed WIDTH; the height
-    /// is content-driven (see `updateResultsLayout`).
-    override func viewDidMoveToSuperview() {
-        super.viewDidMoveToSuperview()
-        guard let superview else { return }
-        NSLayoutConstraint.activate([
-            centerXAnchor.constraint(equalTo: superview.centerXAnchor),
-            topAnchor.constraint(equalTo: superview.topAnchor, constant: Self.topMargin),
-            widthAnchor.constraint(equalToConstant: Self.panelWidth),
-        ])
     }
 
     /// Opens the palette: creates a fresh session seeded with the core's recent
@@ -176,24 +168,26 @@ final class CommandPaletteView: NSView, NSTableViewDataSource, NSTableViewDelega
         }
         self.session = session
         isOpen = true
-        isHidden = false
         searchField.stringValue = ""
+        // Present the panel FIRST so `self.window` is the now-key panel, then focus
+        // the search field within it.
+        host?.presentPanel()
         window?.makeFirstResponder(searchField)
         // Force the first refresh to select the top row.
         lastQuery = nil
         refresh()
     }
 
-    /// Closes the palette: drops the session, hides, and returns focus to the
-    /// editor. Idempotent.
+    /// Closes the palette: drops the session, orders its panel out, and returns
+    /// focus to the editor. Idempotent.
     func close() {
         if !isOpen { return }
+        // Tear down state BEFORE dismissing the panel: `orderOut` inside
+        // `dismissPanel` can re-enter `windowDidResignKey → close()`; the `isOpen`
+        // guard above makes that re-entry a no-op.
         isOpen = false
         session = nil
-        isHidden = true
-        if let paneContainer {
-            window?.makeFirstResponder(paneContainer)
-        }
+        host?.dismissPanel()
     }
 
     /// Rebuilds the results list for the current query from the session's ranker.
@@ -422,6 +416,9 @@ final class CommandPaletteView: NSView, NSTableViewDataSource, NSTableViewDelega
             listHeightConstraint.isActive = true
             listBottomConstraint.isActive = true
         }
+        // Grow/shrink the hosting panel with the results list (capped by
+        // `maxListHeight`).
+        host?.refitPanel()
     }
 
     /// Creates a reusable, file-agnostic row cell configured with the computed

@@ -55,6 +55,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// `menuNeedsUpdate` so `openRecentMenuItem(_:)` can resolve `tag` -> path.
     private var recentDirs: [String] = []
 
+    /// The key window as far as owning-controller lookups are concerned. While a
+    /// picker panel is key, `NSApp.keyWindow` is the borderless child panel (which no
+    /// controller owns); the panel is a child window of its `MainWindow`, so resolve
+    /// to that parent. Otherwise it is the key window itself.
+    private var effectiveKeyWindow: NSWindow? {
+        let key = NSApp.keyWindow
+        return key?.parent ?? key
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Register the three process-global wake callbacks ONCE; each routes by
         // the firing core's token through `WindowRegistry`.
@@ -308,7 +317,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The native tab bar's "+" button forwards here (NSApp → delegate). Opens a
     /// new tab in the key window's group, falling back to the first controller.
     @objc func newWindowForTab(_ sender: Any?) {
-        let key = controllers.first { $0.owns(NSApp.keyWindow) } ?? controllers.first
+        let key = controllers.first { $0.owns(effectiveKeyWindow) } ?? controllers.first
         guard let key else { return }
         makeNewTab(from: key)
     }
@@ -320,7 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// ignored.
     @objc func handleCommandMenuItem(_ sender: NSMenuItem) {
         guard let kind = CommandKind(ffi: UInt8(truncatingIfNeeded: sender.tag)) else { return }
-        let key = NSApp.keyWindow
+        let key = effectiveKeyWindow
         let target = controllers.first { $0.owns(key) }
         let cwd = target?.currentCwd ?? ""
         CommandDispatcher.dispatch(
@@ -447,7 +456,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// to the first controller when no Wolf window is key). Ignores any other menu.
     func menuNeedsUpdate(_ menu: NSMenu) {
         guard menu === openRecentMenu else { return }
-        let source = controllers.first { $0.owns(NSApp.keyWindow) } ?? controllers.first
+        let source = controllers.first { $0.owns(effectiveKeyWindow) } ?? controllers.first
         recentDirs = source?.recentDirs() ?? []
         AppMenu.rebuildOpenRecentMenu(menu, recentDirs: recentDirs, target: self)
     }
@@ -459,7 +468,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     @objc func openRecentMenuItem(_ sender: NSMenuItem) {
         guard sender.tag >= 0, sender.tag < recentDirs.count else { return }
         let path = recentDirs[sender.tag]
-        let target = controllers.first { $0.owns(NSApp.keyWindow) } ?? controllers.first
+        let target = controllers.first { $0.owns(effectiveKeyWindow) } ?? controllers.first
         target?.changeDirectory(path)
     }
 
@@ -478,7 +487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         guard item.action == #selector(handleCommandMenuItem(_:)) else { return true }
         let kind = CommandKind(ffi: UInt8(truncatingIfNeeded: item.tag))
-        let keyController = controllers.first { $0.owns(NSApp.keyWindow) }
+        let keyController = controllers.first { $0.owns(effectiveKeyWindow) }
         switch kind {
         case .closePane:
             return (keyController?.paneCount ?? 0) > 1

@@ -117,6 +117,12 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     /// candidates are snapshotted at open and re-filtered synchronously per
     /// keystroke.
     private(set) var bufferPicker: BufferPickerView?
+    /// The panel hosts owning each picker's borderless child window (strong; the
+    /// panel owns its picker view as `contentView`). Nulled in `teardown()` after
+    /// each picker's `close()` dismisses its panel.
+    private var pickerHost: PickerPanelHost?
+    private var paletteHost: PickerPanelHost?
+    private var bufferPickerHost: PickerPanelHost?
     /// The centered "Open folder…" overlay, present only while `hasFolder == false`;
     /// hidden by `didOpenFolder()` on the empty-state → open-project transition.
     private var emptyState: EmptyStateView?
@@ -224,25 +230,41 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         emptyState.isHidden = hasFolder
         self.emptyState = emptyState
 
-        // The hidden top-center picker overlay (a subview of the pane container).
+        // The top-center picker, hosted in its OWN borderless non-activating child
+        // panel composited IN FRONT of this window (so it renders above the preview
+        // `WKWebView`) — not a pane-container subview. The host is strong-held here;
+        // the view is the panel's `contentView`, dismissed on resign-key via a WEAK
+        // capture.
         let picker = PickerView(handle: handle, paneContainer: paneContainer)
-        paneContainer.addSubview(picker)
+        let pickerHost = PickerPanelHost(
+            parentWindow: window, paneContainer: paneContainer, contentView: picker,
+            onResignKey: { [weak picker] in picker?.close() })
+        picker.host = pickerHost
+        self.pickerHost = pickerHost
         paneContainer.onPickerTrigger = { [weak picker] in picker?.open() }
         self.picker = picker
 
-        // The hidden top-center command-palette overlay (a subview of the pane
-        // container, parallel to the picker). Activation flows back through
-        // `onActivate` to `activatePaletteRow`.
+        // The command-palette overlay, hosted in its own child panel (parallel to
+        // the picker). Activation flows back through `onActivate` to
+        // `activatePaletteRow`.
         let palette = CommandPaletteView(handle: handle, paneContainer: paneContainer)
-        paneContainer.addSubview(palette)
+        let paletteHost = PickerPanelHost(
+            parentWindow: window, paneContainer: paneContainer, contentView: palette,
+            onResignKey: { [weak palette] in palette?.close() })
+        palette.host = paletteHost
+        self.paletteHost = paletteHost
         palette.onActivate = { [weak self] row in self?.activatePaletteRow(row) }
         self.palette = palette
 
-        // The hidden top-center buffer-picker overlay (a subview of the pane
-        // container, parallel to the palette). Activation flows back through
-        // `onActivate` to switch the active pane's buffer.
+        // The buffer-picker overlay, hosted in its own child panel (parallel to the
+        // palette). Activation flows back through `onActivate` to switch the active
+        // pane's buffer.
         let bufferPicker = BufferPickerView(handle: handle, paneContainer: paneContainer)
-        paneContainer.addSubview(bufferPicker)
+        let bufferPickerHost = PickerPanelHost(
+            parentWindow: window, paneContainer: paneContainer, contentView: bufferPicker,
+            onResignKey: { [weak bufferPicker] in bufferPicker?.close() })
+        bufferPicker.host = bufferPickerHost
+        self.bufferPickerHost = bufferPickerHost
         bufferPicker.onActivate = { [weak self] row in self?.activateBufferRow(row) }
         self.bufferPicker = bufferPicker
 
@@ -712,6 +734,11 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
         palette = nil
         bufferPicker?.close()
         bufferPicker = nil
+        // Each `close()` above already dismissed its panel (removing the child
+        // window); drop the hosts so no dangling panel survives.
+        pickerHost = nil
+        paletteHost = nil
+        bufferPickerHost = nil
 
         // Close this view's tabpage (a no-op when it is the LAST view — `detach`
         // then shuts the whole core down), then detach. Order matters: `closeTabpage`
