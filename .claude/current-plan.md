@@ -1,6 +1,253 @@
 # Plan: Terminal Drawer + Command-Lifecycle README
 
-## Status: COMPLETE ✅
+## Status: FIX COMPLETE ✅ (pending user manual smoke-test of the rendered drawer)
+
+## Fix finalization
+Technical-writer updated all 8 docs (wolf-core/wolf-ffi src READMEs, runtime/nvim README, wolf-macos
+Sources/Tests READMEs, wolf-ffi tests README, command-lifecycle.md, architecture.md); orchestrator ran
+`prettier --write` → all 8 already conformant. Fix is code-complete, reviewer-APPROVED (FD6 nit
+declined as out-of-scope), 43/43 core+ffi tests green + WolfKeyMapTests + real-nvim terminal.rs intent
+assertion + app builds. Manual smoke-test of the RENDERED drawer + `<C-w>j/k` navigation is the only
+remaining verification (AppKit layer, no headless coverage) — handed to the user.
+
+## Fix progress log
+- Architect base plan + navigation addendum complete; FD1–FD5 recorded. Test-writer wrote layout.rs
+  parse tests, terminal.rs DrawerOpen intent assertion (confirmed `drain_intents`/`kind()`/`win()`
+  exist), DrawerLayoutTests + DrawerFocusSeamTests, BUILD.bazel srcs. Two contact points pinned:
+  `drawerUpTarget(lastEditorPane:leaves:rects:)` labeled; `drawerRect` height == drawerHeight.
+- Coder complete + FULLY GREEN. Implemented base (DrawerOpen intent end-to-end, DrawerLayout seam,
+  PaneContainerView drawer render) + navigation (DrawerFocusSeam, applyFocus bridge, lastEditorPane,
+  init.lua t-mode maps + WolfTerminalInsert autocmd). Tests: `wolf_core_lib_test` PASS (layout parse
+  tests live here — no separate layout_intents target), `//crates/wolf-ffi:terminal` PASS (real nvim,
+  intent assertion exercised), `WolfKeyMapTests` PASS (both new seam tests), `//crates/wolf-ffi:all` +
+  `//crates/wolf-core:all` 43/43 PASS, `//crates/wolf-macos:Wolf` builds. `wolf_ffi_wake.h`
+  byte-identical AND entire `generated/` tree unchanged (only a discriminant const + from_intent arm →
+  no bridge surface change; nothing to commit there). No `PaneTree.swift` change. Coder micro-note:
+  drawer-origin `.up` computes leaf rects with `editorHeight` not `paneAreaHeight` — identical target
+  (bottomMostLeaf is scale-invariant) and consistent with paneRects. Coder agent id: abc79d587dbe6ce1e.
+- Coder recs: (1) applyFocus/applyDrawerOpen/detectCloses drawer branch are AppKit-only → manual-smoke
+  is the only coverage for the rendered layer (matches plan). (2) Docs are technical-writer's pass.
+- Invoking reviewer.
+- Reviewer verdict: APPROVED WITH MINOR NOTES. Base fix + navigation bridge correct and conformant;
+  invisible-drawer root cause resolved; lifecycle/focus-bridge edge cases handled; `PaneTree.swift`
+  untouched; intent_kind append-only; `generated/` confirmed unchanged. One nit (drawer whose
+  boundGrid never resolves before its window closes leaves `drawerPaneId` set) is a pre-existing race
+  shared with editor panes → **FD6: DECLINE, out of scope** (consistent, negligible). Only outstanding:
+  technical-writer docs. Reviewer agent id: aa5d0b7099c1751f5.
+- Invoking technical-writer (fix-cycle docs).
+
+## FIX CYCLE: terminal drawer opens but is not visible
+
+### Bug report (from the user)
+Running Terminal opens a terminal buffer (reachable from the buffer list) but it is NOT visible.
+It IS the active buffer — typing goes into it; switching the visible pane's buffer to the terminal
+via the buffer picker reveals the previously-typed text filling the canvas.
+
+### Root cause (orchestrator-confirmed against the code)
+In Wolf the SHELL (front-end) owns the pane layout, not Neovim. The macOS `PaneContainerView` creates
+a visible pane ONLY when it drains a `wolf_layout` **Split intent** (emitted by `wolf_setup_layout`'s
+`do_split`: it performs the split AND `rpcnotify`s `{action='split', orientation, from, win}`; the
+front-end then adds a pane to its `PaneTree` and binds it to the new window's grid — layout.rs
+`LayoutIntent::Split`; PaneContainerView.swift:595 `tree.split(...)`).
+
+Our `wolf_toggle_terminal()` calls `vim.cmd("botright split")` DIRECTLY. That creates the real nvim
+window + terminal buffer (so it becomes current, captures keystrokes, and `windows().len()` grows —
+why the headless ffi test passed), but emits NO layout intent. So the front-end's `PaneTree` never
+learns the pane exists → its grid is never painted → the prior editor pane keeps filling the canvas.
+The headless test could not catch this (§5.4 territory: real rendering needs the AppKit front-end).
+
+### User decision (chosen this cycle): BOTTOM SPLIT PANE VIA INTENTS
+Make the drawer a real front-end pane by going through the layout-intent system, rendered as a
+FULL-WIDTH bottom pane at ~1/3 height with DRAWER semantics (excluded from focus-dir navigation and
+from close-pane; toggled by the Terminal command; buffer persists on hide). NOT a plain 50/50 peer
+split of the focused pane. (Rejected alternative: a dedicated sidebar-like bottom region outside the
+PaneTree — truer VS Code drawer but a much larger front-end build.)
+
+### Design constraints for the architect
+- The normal Split intent splits the `from` (focused) pane; a drawer must instead be a FULL-WIDTH
+  child at the ROOT bottom regardless of which editor pane is focused, at a fixed ~1/3 weight. So a
+  plain reuse of `do_split("h")` is insufficient — likely need a new intent flavor/flag (e.g.
+  `action='drawer_open'` or a `drawer: true` field) plus PaneTree/PaneContainerView support for a
+  drawer pane (root-bottom placement, fixed weight, non-navigable, removable on `win_close` without
+  disturbing the editor subtree).
+- The toggle helper needs the RPC channel to emit the intent (currently `wolf_toggle_terminal()` is
+  argless). Resolve how it obtains `chan` (a `wolf_setup_terminal(chan)` storing a module global, or
+  folding into `wolf_setup_layout`, or reusing the layout channel) — mirror existing setup patterns.
+- Keep: per-project terminal BUFFER (tag `b:wolf_terminal` + `buftype=='terminal'`), per-tabpage
+  drawer WINDOW, persist-on-hide (buffer/job survive `win_close`), recreate-if-gone.
+- Hide path: closing the drawer window emits `win_close`; the front-end must remove the drawer pane
+  (its existing close-observation path) and NOT leave a dangling PaneTree node.
+- This is real front-end work → cannot be fully covered by the headless ffi test. Plan compile +
+  targeted unit tests (PaneTree drawer placement/weight/removal is headlessly testable in
+  `WolfKeyMapTests`) + a manual-smoke checklist for the actual rendered drawer.
+
+### User refinement (this cycle): drawer is KEYBOARD-NAVIGABLE
+`<C-w>j` from a bottom-edge editor pane focuses the terminal drawer; `<C-w>k` from the drawer focuses
+the editor — INCLUDING from terminal-insert mode (a terminal-mode mapping intercepts it). Drawer stays
+OUT of the pure `PaneTree` (no wolf-gnome parity break); navigation is done via explicit focus-dir
+bridging in the front-end. Drawer is excluded from `<C-w>h/l` (full-width; nothing beside it), included
+for `j/k` only. This EXTENDS the architect plan below (see "Navigation addendum").
+
+### Orchestrator rulings on the architect's open questions (BINDING)
+- **FD1 — ACCEPT R1**: Close-Pane while the drawer is focused closes (hides) the drawer; buffer
+  persists. Hide-equivalent, no data loss. Acceptable v1; document.
+- **FD2 — ACCEPT R2**: A split fired from within the drawer is dropped front-end-side (`applySplit`
+  guard); the orphan nvim window is low-risk. Document as a limitation.
+- **FD3 — ACCEPT R3**: Fixed ~1/3 drawer weight, no divider-drag resize (matches the editor tree's
+  equal-weight v1 limitation).
+- **FD4 — ACCEPT R4**: `pickInitialWindow` pre-existing-drawer edge left as-is (unreachable in the
+  normal flow).
+- **FD5 — CONFIRM R5**: `intent_kind::DRAWER_OPEN = 2` is append-only/last; never reorder.
+
+### Fix architecture plan (architect — authoritative for the fix cycle)
+
+**Approach:** New append-only `LayoutIntent::DrawerOpen { win }` flows Lua → `redraw.rs` (no change) →
+IntentQueue → FFI `FfiLayoutIntent` (reuse existing `win`/`kind` fields — NO struct/method/wake-header
+change; add `intent_kind::DRAWER_OPEN = 2`) → Swift `PaneContainerView`, which renders the drawer as a
+FULL-WIDTH root-bottom pane at fixed ~1/3 weight, held in `panes` but OUTSIDE the pure `PaneTree`
+(preserves PaneTree.swift's 1:1 parity with wolf-gnome). Navigation addendum (below) makes it
+keyboard-navigable via focus bridging. Buffer/persist/recreate + `b:wolf_terminal` identity unchanged.
+
+**2. Intent (new `LayoutIntent::DrawerOpen { win }`, chosen over a Split flag):**
+- `crates/wolf-core/src/layout.rs`: add variant `DrawerOpen { win: i64 }` (after `FocusDir`) + doc; add
+  `from_payload` arm `"drawer_open" => DrawerOpen { win: get("win")&handle_i64 }`; update doc blocks
+  (module ~10-16 drawer asymmetry: PERFORM+report on open, guarded win_close on hide; from_payload
+  ~74-78 third action).
+- `redraw.rs` / `api.rs`: NO change (LAYOUT_EVENT arm + drain_intents are generic).
+- `crates/wolf-ffi/src/lib.rs`: `mod intent_kind` append `pub const DRAWER_OPEN: u8 = 2;`; update
+  `FfiLayoutIntent` doc/bridge comments (~655-671, 1841-1854); `from_intent` (~1892) arm
+  `DrawerOpen { win } => Self { kind: DRAWER_OPEN, orientation: 0, dir: 0, from: 0, win }`. NO new
+  bridged field/method. Regenerate bindings; verify `wolf_ffi_wake.h` byte-identical.
+
+**3. Lua (`runtime/nvim/init.lua`):** Channel via the EXISTING layout channel — in `wolf_setup_layout`
+(alongside `_G.wolf_do_split` etc., ~line 353) expose `_G.wolf_emit_drawer = function(win)
+vim.rpcnotify(chan, "wolf_layout", { action = "drawer_open", win = win }) end`. In
+`wolf_toggle_terminal` open path (after `botright <height>split` + set/create+tag the terminal buffer):
+`local w = vim.api.nvim_get_current_win()`; `if _G.wolf_emit_drawer then _G.wolf_emit_drawer(w) end`;
+then `startinsert`. Hide path UNCHANGED (`nvim_win_close(w, false)` → front-end observes `win_close`;
+no intent). Buffer-find (tag + `buftype=='terminal'`) and recreate-if-gone UNCHANGED.
+
+**4. New pure seam `crates/wolf-macos/Sources/WolfKeyMap/DrawerLayout.swift`** (Foundation-only, like
+`EditorInset`/`PaneGeometry`): `init(paneAreaHeight, hasDrawer, weight)`; `editorHeight = hasDrawer ?
+max(0, paneAreaHeight - drawerHeight) : paneAreaHeight`; `drawerHeight = hasDrawer ?
+(paneAreaHeight*weight).rounded() : 0`; `drawerRect(width) -> Rect?` full-width strip at `y=editorHeight`;
+`static let defaultWeight = 1.0/3.0`.
+
+**5. `PaneContainerView.swift` wiring:** drawer binding kept in `panes` but its id NOT in `tree` (so
+excluded from `leaves`/`neighbor`/`split`/`paneCount` for free). New state: `private var drawerPaneId:
+PaneId?`; `private static let intentKindDrawerOpen: UInt8 = 2`.
+- `applyIntents()` (~573): add `case intentKindDrawerOpen: applyDrawerOpen(win: intent.win())`.
+- new `applyDrawerOpen(win:)`: idempotent (`paneForWin(win)!=nil` or `drawerPaneId!=nil` → return);
+  else `id = allocPaneId(); drawerPaneId = id; panes[id] = PaneBinding(win, grid_for_win(win)?);
+  setActivePane(id)`. Does NOT touch `tree`.
+- `paneRects()` (~217): `dl = DrawerLayout(paneAreaHeight, hasDrawer: drawerPaneId != nil,
+  weight: defaultWeight)`; tile the tree over `dl.editorHeight`; append `(drawerPaneId, dl.drawerRect)`
+  if present. Every consumer (draw/mouse/scroll/syncGridSizes/scrollbars/dividers/paneRect(forGrid:))
+  goes through paneRects → drawer paints/hit-tests/sizes for free.
+- `detectCloses()` (~615): FIRST, if `drawerPaneId` bound-grid not in liveGrids → remove from `panes`,
+  clear `drawerPaneId`, reassign active if needed — WITHOUT the `leaves().count<=1` guard and WITHOUT
+  `tree.remove`. THEN the existing editor-close loop, skipping the drawer id.
+- `applySplit()` (~591): after resolving `target`, `guard target != drawerPaneId else { return }`.
+- `applyFocus()` (~603): editor height must be drawer-aware (see Navigation addendum for the full
+  focus bridging). `syncGridSizes`/`draw`/`rebindStaleGrids`/`ensureInitialPane`: no change (rebind
+  works via stable win handle; drawer rebinds across tabpage switch like any pane).
+- Per-tabpage inherent: `PaneContainerView`/`drawerPaneId` are per-view; `Project` fans wake only to
+  `currentView` → the DrawerOpen intent is drained by the right view; toggling tab B is independent.
+
+**6. Focus (base):** open → `startinsert` → `WinEnter`→`wolf_active_win=drawerWin` →
+`updateActivePane` marks drawer active/undimmed. Hide → `win_close` returns focus to editor. (Extended
+by Navigation addendum.)
+
+**7. Tests:** layout.rs parse unit tests (`from_payload_valid_drawer_open`,
+`from_payload_drawer_missing_win_is_none`); extend real-nvim `crates/wolf-ffi/tests/terminal.rs` to
+poll `drain_intents()` for `kind()==2 (DRAWER_OPEN)` with `win()!=0` after open (intents accumulate as
+no front-end drains them); new `DrawerLayoutTests.swift` (no-drawer → full editor height + nil rect;
+with-drawer → drawerHeight≈round(h/3), editorHeight=h-drawerHeight, full-width bottom rect; tiny-height
+non-negative) + BUILD.bazel srcs entry. Manual-smoke checklist for the rendered drawer (open shows
+bottom ~1/3; type paints; hide removes; buffer persists; reopen same session; recreate after exit;
+multi-tab). Swift intent-kind has no WolfKeyMap contract test (AppKit-only) → rely on compile switch +
+the real round-trip.
+
+**8. Docs:** `runtime/nvim/README.md`, `crates/wolf-core/src/README.md` (layout.rs/new intent),
+`crates/wolf-ffi/src/README.md` (`intent_kind::DRAWER_OPEN`), `crates/wolf-macos/Sources/README.md`
+(DrawerLayout + PaneContainerView drawer), `crates/wolf-ffi/tests/README.md`, `command-lifecycle.md`
+(Terminal now emits a layout intent), `architecture.md` (drawer = intent-driven non-tree pane).
+`prettier --write` all.
+
+**9. Order:** layout.rs → wolf-ffi (const+from_intent+regen bindings) → init.lua → DrawerLayout.swift →
+DrawerLayoutTests → PaneContainerView → terminal.rs intent assertion → docs. **10.** No new deps; FFI
+additive; doc comments on additions.
+
+### Navigation addendum (architect — makes the drawer keyboard-navigable; extends the fix plan)
+
+Verified facts: `applyFocus(dir:from:)` at `PaneContainerView.swift:603-611` resolves origin
+`paneForWin(from) ?? activePane`, calls `tree.neighbor(...)`, and on hit `handle.focus_win(win)` — the
+ONLY focus path. `focus_win` → `InputEvent::FocusWin` → `nvim_set_current_win`, which pulls nvim OUT of
+the terminal window (auto-leaves terminal-insert). `paneForWin(drawerWin)` returns `drawerPaneId` (drawer
+is in `panes`), but `tree.neighbor(drawerPaneId,…)` is always nil (not a tree leaf) → must intercept the
+drawer-origin case BEFORE `tree.neighbor`. No existing "last active editor pane" field. `_G.wolf_do_focus`
+/ `do_focus` (init.lua:343-355) emit `focus_dir` with `from=nvim_get_current_win()`; normal-mode maps at
+367-374.
+
+**1. New pure seam `crates/wolf-macos/Sources/WolfKeyMap/DrawerFocusSeam.swift`** (Foundation-only; keeps
+`PaneTree` a faithful wolf-gnome port):
+- `static func bottomMostLeaf(_ rects: [(PaneId, Rect)]) -> PaneId?` — leaf with greatest `y+h`
+  (top-left origin → larger y = lower), tie-break smallest `x` then `PaneId`; nil on empty.
+- `static func drawerUpTarget(lastEditorPane:leaves:rects:) -> PaneId?` — `lastEditorPane` if non-nil AND
+  in `leaves`; else `bottomMostLeaf(rects)`.
+
+**2. `PaneContainerView`:**
+- Add `private var lastEditorPane: PaneId?` near `activePane` (~130). Update ONLY in `setActivePane(_:)`
+  (~1165): set `lastEditorPane = pane` only when `pane != nil && pane != drawerPaneId &&
+  tree.leaves().contains(pane!)` (do NOT overwrite when the drawer becomes active). All focus changes
+  funnel through `setActivePane`, so one edit covers all.
+- Rewrite `applyFocus(dir:from:)` (601-611): resolve origin (unchanged). THEN:
+  - Drawer-origin (`origin == drawerPaneId`): `dir==.up` → `target =
+    DrawerFocusSeam.drawerUpTarget(lastEditorPane, tree.leaves(), tree.paneRects(width:Double(bounds.width),
+    height:Double(paneAreaHeight)))`; `guard let target, let win = panes[target]?.win`; `focus_win(win)`.
+    `.down/.left/.right` → no-op. Return.
+  - Editor-origin: `target = tree.neighbor(origin, dir, width, height)` (unchanged). If hit →
+    `focus_win(panes[target].win)`. ELSE if `dir==.down && drawerPaneId != nil` →
+    `focus_win(panes[drawerPaneId!].win)` (bottom-edge into drawer). Else no-op.
+  - Only calls `focus_win`; let `updateActivePane` reconcile `activePane` next wake (no `setActivePane`
+    here). Rects MUST use the same width/paneAreaHeight as the neighbour call.
+
+**3. `runtime/nvim/init.lua` `wolf_setup_layout`:**
+- Normal mode: NO new map (terminal-NORMAL `<C-w>k` already emits `focus_dir` from the drawer window).
+- Add GLOBAL terminal-mode maps after line 374 (reuse `map`/`silent`/`do_focus`):
+  `map("t","<C-w>h",function() do_focus("left") end, silent)` and likewise `j→down`, `k→up`, `l→right`.
+  A `t`-mode function/`<cmd>` RHS fires WITHOUT leaving terminal mode or forwarding to the shell; `from`
+  = the drawer window. TRADEOFF (document): this shadows the shell's `<C-w>` word-erase — accepted per
+  the user's request.
+- §2c re-entry: add augroup `WolfTerminalInsert` (clear) with an autocmd on `{"WinEnter","BufWinEnter"}`:
+  `if vim.b.wolf_terminal and vim.bo.buftype=="terminal" then vim.cmd("startinsert") end` — auto-enter
+  terminal-insert when focusing INTO the drawer via `<C-w>j` (VS Code parity). Does NOT yank back from a
+  deliberate `<C-\><C-n>` (same window, no WinEnter). Droppable with no other change if undesired.
+
+**4. Lifecycle confirmations:** `<C-w>k` moves focus only (no win_close → drawer stays open; editor
+un-dims via `updateActivePane` + `paintPane dimmed: id != activePane` at 686). `<C-w>j` back re-enters
+insert via §2c. Drawer out-of-tree → leaving it never triggers `detectCloses` editor pruning.
+
+**5. Tests:** new `DrawerFocusSeamTests.swift` (WolfKeyMapTests): `bottomMostLeaf` single/vertical-2/2×2
++ empty; `drawerUpTarget` returns MRU when in leaves, falls back when nil or stale. The `applyFocus` glue
+is AppKit → manual-smoke (see 4b in addendum: `<C-w>j` editor→terminal; `<C-w>k` terminal→editor from
+BOTH insert & normal; drawer stays open; 2×2 top-pane `<C-w>j` goes to pane below not drawer; `h/l` in
+drawer no-op; re-entry lands in insert). Optional `terminal.rs`: send `<C-w>k` and observe a `focus_dir`
+intent surfaces — ONLY if an ergonomic layout-intent accessor already exists on `WolfCoreHandle`
+(check `panes.rs`); do NOT add FFI surface just for the test.
+
+**6. Docs delta:** `runtime/nvim/README.md` (t-mode maps + shadow tradeoff + WolfTerminalInsert autocmd);
+`crates/wolf-macos/Sources/README.md` (applyFocus drawer bridging, `lastEditorPane`, `DrawerFocusSeam`);
+`crates/wolf-macos/Tests/README.md` (`DrawerFocusSeamTests`); `architecture.md` (one sentence: editor↔drawer
+focus is a front-end bridge over `focus_dir`, drawer excluded from `PaneTree`).
+
+**7. Order (navigation):** DrawerFocusSeam.swift + tests → `lastEditorPane`/`setActivePane` → rewrite
+`applyFocus` → init.lua t-maps + autocmd → docs. No new deps/lint directives. Navigation architect
+follow-up agent id: a6ac30da3c68cbdd2.
+
+---
+
+## (previous cycle, COMPLETE) Terminal command + command-lifecycle README
 
 ## Finalization
 

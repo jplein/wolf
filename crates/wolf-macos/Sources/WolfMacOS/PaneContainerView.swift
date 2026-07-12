@@ -46,6 +46,8 @@ final class PaneContainerView: NSView {
     private static let intentKindSplit: UInt8 = 0
     /// `FfiLayoutIntent.kind()` for a focus-direction move (mirrors `wolf-ffi`).
     private static let intentKindFocusDir: UInt8 = 1
+    /// `FfiLayoutIntent.kind()` for a terminal-DRAWER open (mirrors `wolf-ffi`).
+    private static let intentKindDrawerOpen: UInt8 = 2
     /// Scrim opacity laid over an INACTIVE pane (a front-end-only treatment that is
     /// awkward to express inside Neovim itself).
     private static let inactiveDim: CGFloat = 0.28
@@ -128,6 +130,16 @@ final class PaneContainerView: NSView {
     private var nextPaneId: PaneId = PaneContainerView.firstPaneId
     /// The currently active pane (cursor target + the one NOT dimmed), if any.
     private var activePane: PaneId?
+    /// The terminal-drawer pane, if open. Held in `panes` (so it paints /
+    /// hit-tests / sizes via `paneRects()`) but deliberately NOT in `tree` — it is a
+    /// full-width, root-bottom pane rendered OUTSIDE the pure `PaneTree` (preserving
+    /// its 1:1 parity with wolf-gnome). Bound on a `DrawerOpen` intent; cleared when
+    /// its window closes.
+    private var drawerPaneId: PaneId?
+    /// The most-recently-active EDITOR pane (a live tree leaf, never the drawer).
+    /// The `<C-w>k` (drawer -> up) bridge targets this when it is still a leaf; it is
+    /// updated only in `setActivePane`.
+    private var lastEditorPane: PaneId?
 
     /// The grid a press/drag is targeting, set on `mouseDown` and cleared on
     /// `mouseUp`, so a drag keeps targeting the pane the press started in even when
@@ -214,11 +226,24 @@ final class PaneContainerView: NSView {
     /// the top `paneAreaHeight`, the cmdline strip the bottom `stripHeight`. The
     /// per-pane 20pt inset is NOT applied here — it is applied around each pane's grid
     /// in `gridRect(ofPane:)`, so these rects are the full pane rectangles.
+    ///
+    /// When the terminal drawer is open the editor tree tiles over the reduced
+    /// `DrawerLayout.editorHeight` and the full-width drawer strip is appended below
+    /// it (`DrawerLayout.drawerRect`). The drawer pane lives OUTSIDE `tree`, so it is
+    /// appended here rather than produced by `tree.paneRects`.
     private func paneRects() -> [(PaneId, CGRect)] {
-        tree.paneRects(width: Double(bounds.width), height: Double(paneAreaHeight))
+        let dl = DrawerLayout(
+            paneAreaHeight: Double(paneAreaHeight),
+            hasDrawer: drawerPaneId != nil,
+            weight: DrawerLayout.defaultWeight)
+        var rects = tree.paneRects(width: Double(bounds.width), height: dl.editorHeight)
             .map {
                 ($0.0, CGRect(x: $0.1.x, y: $0.1.y, width: $0.1.w, height: $0.1.h))
             }
+        if let drawer = drawerPaneId, let r = dl.drawerRect(width: Double(bounds.width)) {
+            rects.append((drawer, CGRect(x: r.x, y: r.y, width: r.w, height: r.h)))
+        }
+        return rects
     }
 
     /// The per-pane GRID-RECT-inside-PANE-RECT geometry for `rect` (the pure seam
@@ -579,6 +604,8 @@ final class PaneContainerView: NSView {
             case Self.intentKindFocusDir:
                 guard let dir = FocusDir(ffi: intent.dir()) else { continue }
                 applyFocus(dir: dir, from: intent.from())
+            case Self.intentKindDrawerOpen:
+                applyDrawerOpen(win: intent.win())
             default:
                 continue
             }
@@ -591,6 +618,9 @@ final class PaneContainerView: NSView {
     private func applySplit(orientation: Orientation, from: Int64, win: Int64) {
         if paneForWin(win) != nil { return }
         guard let target = paneForWin(from) ?? activePane else { return }
+        // A split fired from within the drawer is dropped front-end-side (FD2): the
+        // drawer is not a tree leaf, so it cannot host an editor split.
+        guard target != drawerPaneId else { return }
         let newId = allocPaneId()
         tree.split(target, newId, orientation)
         let grid = handle.grid_for_win(win)
@@ -598,16 +628,56 @@ final class PaneContainerView: NSView {
         setActivePane(newId)
     }
 
-    /// Applies a focus-direction intent: resolve the neighbour of the `from` pane
-    /// (fallback: active pane) in `dir`, then `focus_win` its window.
+    /// Applies a terminal-drawer open intent: bind a new pane to the drawer `win`
+    /// and record it in `drawerPaneId` (NOT in `tree` — the drawer is rendered as a
+    /// full-width, root-bottom pane outside the pure tree). Idempotent: a no-op once
+    /// a drawer is bound or a pane already follows `win`.
+    private func applyDrawerOpen(win: Int64) {
+        if drawerPaneId != nil || paneForWin(win) != nil { return }
+        let id = allocPaneId()
+        drawerPaneId = id
+        let grid = handle.grid_for_win(win)
+        panes[id] = PaneBinding(win: win, boundGrid: grid == 0 ? nil : grid)
+        setActivePane(id)
+    }
+
+    /// Applies a focus-direction intent, bridging editor <-> drawer since the drawer
+    /// lives outside `tree`.
+    ///
+    /// - From the DRAWER: `.up` bridges to an editor pane via
+    ///   `DrawerFocusSeam.drawerUpTarget` (the MRU editor leaf, else the bottom-most
+    ///   leaf); the other directions are no-ops (the drawer is full-width).
+    /// - From an EDITOR pane: resolve the `tree.neighbor`; on a nil neighbour going
+    ///   `.down` into an open drawer, focus the drawer (bottom-edge bridge).
+    ///
+    /// Only `focus_win` is called — `updateActivePane` reconciles `activePane` on the
+    /// next wake. The neighbour geometry MUST match `paneRects()`.
     private func applyFocus(dir: FocusDir, from: Int64) {
         guard let origin = paneForWin(from) ?? activePane else { return }
-        // Neighbour geometry must match `paneRects()`, which lays out over the full
-        // view width and the pane area above the cmdline strip.
-        let target = tree.neighbor(
-            origin, dir, width: Double(bounds.width), height: Double(paneAreaHeight))
-        guard let target, let win = panes[target]?.win else { return }
-        handle.focus_win(win)
+        let width = Double(bounds.width)
+        let height = Double(paneAreaHeight)
+
+        if origin == drawerPaneId {
+            guard dir == .up else { return }
+            let dl = DrawerLayout(
+                paneAreaHeight: height, hasDrawer: true, weight: DrawerLayout.defaultWeight)
+            let rects = tree.paneRects(width: width, height: dl.editorHeight)
+            guard
+                let target = DrawerFocusSeam.drawerUpTarget(
+                    lastEditorPane: lastEditorPane, leaves: tree.leaves(), rects: rects),
+                let win = panes[target]?.win
+            else { return }
+            handle.focus_win(win)
+            return
+        }
+
+        if let target = tree.neighbor(origin, dir, width: width, height: height),
+            let win = panes[target]?.win
+        {
+            handle.focus_win(win)
+        } else if dir == .down, let drawer = drawerPaneId, let win = panes[drawer]?.win {
+            handle.focus_win(win)
+        }
     }
 
     /// Detects panes whose bound grid has vanished (a window close) and collapses
@@ -620,7 +690,17 @@ final class PaneContainerView: NSView {
         }
         if closed.isEmpty { return }
 
-        for id in closed {
+        // The drawer lives OUTSIDE the tree: when its grid dies (a `win_close` hide)
+        // remove it from `panes` and clear `drawerPaneId` WITHOUT the last-leaf guard
+        // or `tree.remove` (it is not a tree leaf).
+        var closedDrawer: PaneId?
+        if let drawer = drawerPaneId, closed.contains(drawer) {
+            closedDrawer = drawer
+            panes.removeValue(forKey: drawer)
+            drawerPaneId = nil
+        }
+
+        for id in closed where id != closedDrawer {
             // Never empty the tree (nvim guards last-window close, but be safe).
             if tree.leaves().count <= 1 { break }
             tree.remove(id)
@@ -1162,7 +1242,14 @@ final class PaneContainerView: NSView {
     }
 
     /// Sets the active pane (the one NOT dimmed) and requests a redraw.
+    ///
+    /// Also records the most-recently-active EDITOR pane (a live tree leaf, never the
+    /// drawer) into `lastEditorPane`, which the `<C-w>k` drawer -> up bridge targets.
+    /// All focus changes funnel through here, so this one update covers them.
     private func setActivePane(_ pane: PaneId?) {
+        if let pane, pane != drawerPaneId, tree.leaves().contains(pane) {
+            lastEditorPane = pane
+        }
         if activePane != pane {
             activePane = pane
             needsDisplay = true

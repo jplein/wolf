@@ -27,6 +27,15 @@
 //! rather than `:WolfTerminal` — the Ex-command would only enqueue an `FfiCommand`
 //! with no front-end dispatcher present to call the method back.
 //!
+//! ## Drawer-open layout intent (fix cycle 2/7)
+//!
+//! The open path additionally emits a `LayoutIntent::DrawerOpen { win }` (surfaced as
+//! `FfiLayoutIntent { kind: intent_kind::DRAWER_OPEN = 2, win }`) so the front-end can
+//! render the drawer as a root-bottom pane. Because nothing drains intents here they
+//! accumulate; step 2b polls `drain_intents()` for `kind() == 2` with `win() != 0`.
+//! The `intent_kind::DRAWER_OPEN` const, the `from_intent` arm, and `init.lua`'s
+//! `wolf_emit_drawer` do NOT exist yet - the coder lands them (by design).
+//!
 //! ## Terminal detection (OD7)
 //!
 //! Terminal buffers are `buflisted`, so they surface in the buffer-picker snapshot;
@@ -68,6 +77,16 @@ const RANKED_MAX: usize = 100;
 /// The Neovim naming convention prefix for a terminal buffer's name (`term://…`),
 /// used to detect the drawer buffer in the picker snapshot (OD7).
 const TERM_PREFIX: &str = "term://";
+
+/// `FfiLayoutIntent::kind()` for a DRAWER_OPEN intent — the append-only third
+/// layout-intent discriminant (mirrors `wolf-ffi/src/lib.rs` `mod intent_kind`,
+/// after `SPLIT = 0` / `FOCUS_DIR = 1`; fix plan §2 / FD5). The `wolf_toggle_terminal`
+/// open path emits this so the front-end renders the drawer as a root-bottom pane.
+///
+/// NOTE (coder): `intent_kind::DRAWER_OPEN = 2` + the `FfiLayoutIntent::from_intent`
+/// arm + `init.lua`'s `wolf_emit_drawer` do NOT exist yet — this assertion only
+/// passes once they land (by design).
+const INTENT_KIND_DRAWER_OPEN: u8 = 2;
 
 // -- FfiKeyEvent.kind discriminants (mirror `wolf-ffi/src/lib.rs` `mod kind`) --
 /// A printable character (`ch` carries the Unicode scalar).
@@ -230,7 +249,38 @@ fn terminal_toggle_persists_and_recreates() {
     let first = opened[0];
     assert_ne!(first, 0, "the opened terminal buffer must have a nonzero bufnr");
 
+    // --- 2b. Open emits a DRAWER_OPEN layout intent naming the drawer window -----
+    // The Lua open path calls `wolf_emit_drawer(win)` -> `rpcnotify(chan,
+    // "wolf_layout", {action="drawer_open", win})` -> `LayoutIntent::DrawerOpen` ->
+    // `FfiLayoutIntent { kind: DRAWER_OPEN, win }`. NO front-end drains intents in
+    // this headless test, so they ACCUMULATE across `drain_intents()` polls and are
+    // observable (mirrors `panes.rs`'s SPLIT-intent accumulation). `drain_intents()`
+    // DRAINS, so keep the last DRAWER_OPEN win we see across iterations.
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    let mut drawer_win: Option<i64> = None;
+    while Instant::now() < deadline {
+        for intent in handle.drain_intents() {
+            if intent.kind() == INTENT_KIND_DRAWER_OPEN {
+                drawer_win = Some(intent.win());
+            }
+        }
+        if drawer_win.is_some() {
+            break;
+        }
+        sleep(POLL_INTERVAL);
+    }
+    let drawer_win =
+        drawer_win.expect("open should emit a DRAWER_OPEN layout intent within the timeout");
+    assert_ne!(
+        drawer_win, 0,
+        "the DRAWER_OPEN intent's win() should be a nonzero drawer window handle"
+    );
+
     // --- 3. Hide (persist): toggle_terminal() closes the window, buffer survives --
+    // The hide path (`nvim_win_close(w, false)`) emits NO layout intent — the
+    // front-end removes the drawer pane by observing the `win_close` redraw event
+    // (the same close-observation path editor panes use), so there is nothing to
+    // drain here.
     // The window count returns to base, but the tagged terminal buffer (bufnr ==
     // first) is STILL listed — closing the window keeps the buffer + job alive.
     handle.toggle_terminal();

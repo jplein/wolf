@@ -29,6 +29,8 @@ swift_library(
     srcs = [
         "Sources/WolfKeyMap/CellMetricsMath.swift",
         "Sources/WolfKeyMap/CommandSeam.swift",
+        "Sources/WolfKeyMap/DrawerFocusSeam.swift",
+        "Sources/WolfKeyMap/DrawerLayout.swift",
         "Sources/WolfKeyMap/EditorInset.swift",
         "Sources/WolfKeyMap/FontSizeSeam.swift",
         "Sources/WolfKeyMap/GlyphStyle.swift",
@@ -174,6 +176,8 @@ swift_test(
     srcs = [
         "Tests/WolfKeyMapTests/CellMetricsMathTests.swift",
         "Tests/WolfKeyMapTests/CommandSeamTests.swift",
+        "Tests/WolfKeyMapTests/DrawerFocusSeamTests.swift",
+        "Tests/WolfKeyMapTests/DrawerLayoutTests.swift",
         "Tests/WolfKeyMapTests/EditorInsetTests.swift",
         "Tests/WolfKeyMapTests/FontSizeSeamTests.swift",
         "Tests/WolfKeyMapTests/GlyphStyleTests.swift",
