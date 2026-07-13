@@ -19,6 +19,22 @@ load("@build_bazel_rules_apple//apple:macos.bzl", "macos_application")
 load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library", "swift_test")
 load("@rules_xcodeproj//xcodeproj:defs.bzl", "xcodeproj", "top_level_target")
 
+# All hand-written Swift sources for this package, enumerated HERE because Bazel
+# forbids cross-package globbing (the //tools/lint swift-format check/fix cannot
+# glob into this package). This deliberately covers only WolfKeyMap / WolfMacOS
+# Sources and WolfKeyMapTests — it EXCLUDES the machine-generated swift-bridge
+# bindings under //crates/wolf-ffi:generated (crates/wolf-ffi/generated/*.swift),
+# which are not ours to format.
+filegroup(
+    name = "swift_format_srcs",
+    srcs = glob([
+        "Sources/WolfKeyMap/*.swift",
+        "Sources/WolfMacOS/*.swift",
+        "Tests/WolfKeyMapTests/*.swift",
+    ]),
+    visibility = ["//tools/lint:__pkg__"],
+)
+
 # The pure key-translation seam. Compiles `KeyMap.swift` together with the
 # swift-bridge-generated Swift glue (which provides `FfiKeyEvent` and the
 # `WolfCoreHandle` / `FfiFrame` wrappers) into one Foundation-only module — NO

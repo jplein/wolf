@@ -1,0 +1,140 @@
+# Advisory lint/format targets for the macOS host: clippy + rustfmt (Rust, via
+# the rules_rust downloaded 1.85.0 toolchain) and swift-format (the host Xcode
+# binary, resolved via `xcrun --find swift-format`).
+#
+# ADVISORY / NON-GATING: EVERY target here is tagged "manual" so no wildcard
+# build/test (e.g. `bazel test //crates/...`) ever sweeps it in. The pre-existing
+# default suite stays exactly 47/47. Existing lint violations are EXPECTED and
+# out of scope; a CHECK target's job is to RUN, not to report zero findings.
+#
+# Modes per tool:
+#   CHECK (bazel test) — reports/fails on violations.
+#   FIX   (bazel run)  — rewrites files in place under $BUILD_WORKSPACE_DIRECTORY.
+#
+# clippy's `-Dwarnings` (fail on lints) is behind `--config=lint` in .bazelrc so
+# the DEFAULT build/test path is byte-for-byte unchanged; the clippy CHECK may
+# need `bazel test --config=lint //tools/lint:clippy` to actually FAIL on lints.
+load("@rules_rust//rust:defs.bzl", "rust_clippy", "rustfmt_test")
+load(":clippy_fix.bzl", "clippy_fix", "fix_all")
+
+package(default_visibility = ["//visibility:public"])
+
+# ---------------------------------------------------------------------------
+# clippy
+# ---------------------------------------------------------------------------
+
+# clippy CHECK per crate: `rust_clippy` runs clippy as a BUILD action over the
+# named Rust targets. Building these (as data of `:clippy`) runs clippy.
+rust_clippy(
+    name = "clippy_core",
+    testonly = True,
+    tags = ["manual"],
+    deps = ["//crates/wolf-core:wolf_core"],
+)
+
+rust_clippy(
+    name = "clippy_ffi",
+    testonly = True,
+    tags = ["manual"],
+    deps = ["//crates/wolf-ffi:wolf_ffi"],
+)
+
+# clippy CHECK aggregate: a trivial sh_test whose `data` are the rust_clippy
+# targets. Bazel must BUILD them (running clippy) to stage runfiles, so a clippy
+# failure fails this test. `bazel test //tools/lint:clippy`.
+sh_test(
+    name = "clippy",
+    srcs = ["clippy_gate.sh"],
+    data = [
+        ":clippy_core",
+        ":clippy_ffi",
+    ],
+    tags = ["manual"],
+)
+
+# clippy FIX: `cargo clippy --fix` via the staged toolchain (custom rule).
+clippy_fix(
+    name = "clippy.fix",
+    tags = ["manual"],
+)
+
+# ---------------------------------------------------------------------------
+# rustfmt
+# ---------------------------------------------------------------------------
+
+# rustfmt CHECK per crate: `rustfmt --check` over the crate's sources.
+rustfmt_test(
+    name = "rustfmt_core",
+    tags = ["manual"],
+    targets = ["//crates/wolf-core:wolf_core"],
+)
+
+rustfmt_test(
+    name = "rustfmt_ffi",
+    tags = ["manual"],
+    targets = ["//crates/wolf-ffi:wolf_ffi"],
+)
+
+# rustfmt CHECK aggregate: `bazel test //tools/lint:rustfmt`.
+test_suite(
+    name = "rustfmt",
+    tags = ["manual"],
+    tests = [
+        ":rustfmt_core",
+        ":rustfmt_ffi",
+    ],
+)
+
+# rustfmt FIX: the rules_rust rustfmt writer. `bazel run //tools/lint:rustfmt.fix`.
+alias(
+    name = "rustfmt.fix",
+    actual = "@rules_rust//:rustfmt",
+    tags = ["manual"],
+)
+
+# ---------------------------------------------------------------------------
+# swift-format (host Xcode binary)
+# ---------------------------------------------------------------------------
+
+# swift-format CHECK: `swift-format lint --strict` over the enumerated wolf-macos
+# Swift sources. `no-sandbox` because the binary is host Xcode, not a hermetic
+# input. `bazel test //tools/lint:swift_format`.
+sh_test(
+    name = "swift_format",
+    srcs = ["swift_format_check.sh"],
+    args = ["$(rootpaths //crates/wolf-macos:swift_format_srcs)"],
+    data = ["//crates/wolf-macos:swift_format_srcs"],
+    tags = [
+        "manual",
+        "no-sandbox",
+    ],
+)
+
+# swift-format FIX: `swift-format format -i` in place. `bazel run //tools/lint:swift_format.fix`.
+sh_binary(
+    name = "swift_format.fix",
+    srcs = ["swift_format_fix.sh"],
+    tags = ["manual"],
+)
+
+# ---------------------------------------------------------------------------
+# Aggregates
+# ---------------------------------------------------------------------------
+
+# ALL checks: `bazel test //tools/lint:check`.
+test_suite(
+    name = "check",
+    tags = ["manual"],
+    tests = [
+        ":clippy",
+        ":rustfmt_core",
+        ":rustfmt_ffi",
+        ":swift_format",
+    ],
+)
+
+# ALL fixes: `bazel run //tools/lint:fix` (cargo fmt + cargo clippy --fix + swift-format).
+fix_all(
+    name = "fix",
+    tags = ["manual"],
+)

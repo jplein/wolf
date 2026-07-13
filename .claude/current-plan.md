@@ -1,124 +1,145 @@
-# Plan: Edit command (inverse of Preview) — task 3
+# Plan: Bazel lint targets (clippy, rustfmt, swift-format) for macOS host
 
 ## Problem statement
 
-Implement task 3 in `markdown-tasks.md`:
+Add Bazel targets that let developers run three linters/formatters on the macOS host:
 
-> Edit command - like the inverse of preview. Only has an effect in a Preview pane. If the active pane is a preview pane and the other pane is an editor pane, edit the file in the other pane; otherwise, open it in the same pane as the preview. If the preview pane is the only pane, open the editor in a new pane on the left side.
+1. **clippy** (Rust)
+2. **rustfmt** (Rust)
+3. **swift-format** (Swift — the host Xcode 26 binary, NOT SwiftLint, NOT vendored)
+
+The Darwin devShell ships no standalone Rust toolchain, so clippy/rustfmt must use the toolchain that `rules_rust` downloads. swift-format is the host Xcode binary at `XcodeDefault.xctoolchain/usr/bin/swift-format` (v6.3.0, resolvable via `xcrun --find swift-format`).
+
+## Requirements (decided)
+
+- **Three tools**: clippy, rustfmt, swift-format.
+- **Two modes per tool**:
+  1. a CHECK target that reports/fails on violations (`bazel test` or `bazel build`);
+  2. an AUTOFIX target that rewrites files in place (`bazel run`). clippy `--fix` is limited to machine-applicable suggestions; rustfmt and swift-format fully autoformat.
+- **Advisory, not gating**: check targets MUST NOT be swept into the existing default suite. `bazel test //crates/wolf-core/... //crates/wolf-ffi/... //crates/wolf-macos/...` is green (47/47) and must stay exactly that. Tag lint checks `manual` and/or place them in a dedicated package (e.g. `//tools/lint`) so wildcards skip them. Existing lint violations are EXPECTED and out of scope to fix now.
+- **Aggregate entry points**: one command to run all checks, one to run all fixes; documented in `build.md`.
+- **Docs are source of truth** (CLAUDE.md): update `build.md` and relevant READMEs.
+
+## Environment facts
+
+- MODULE.bazel: rules_rust 0.71.2 (rust toolchain 1.85.0, edition 2021, downloaded), rules_swift 3.6.1, rules_apple 4.5.3, apple_support 2.6.1. crate_universe repo = `@crates`.
+- Rust crates: `//crates/wolf-core`, `//crates/wolf-ffi` (rust_library/rust_test).
+- Swift: `//crates/wolf-macos` (rules_swift swift_library + swift_test; WolfKeyMap/WolfMacOS Sources).
+- swift-format has no Bazel ruleset here — likely a genrule/sh_binary wrapper around the xcrun/toolchain swift-format binary.
+- rules_rust supports clippy (rust_clippy rule / clippy aspect) and rustfmt (rustfmt_test / rustfmt aspect / `@rules_rust//tools/rustfmt` writer).
+
+## Verification
+
+The targets actually work on this macOS host:
+
+- each CHECK target runs (`bazel build`/`test`) without Bazel/config errors;
+- each FIX runner runs (`bazel run`) without Bazel/config errors;
+- the pre-existing `bazel test //crates/...` suite stays green (47/47).
+
+Because these are build-tooling targets (not app code), "tests" = demonstrating the targets execute correctly on the host, not new Rust/Swift unit tests.
+
+## Architect's implementation plan
+
+All targets live in a new `//tools/lint` package, every target `tags = ["manual"]` so wildcard build/test never sweeps them. clippy/rustfmt use the rules_rust downloaded 1.85.0 toolchain; swift-format is the host Xcode binary via `xcrun --find swift-format`.
+
+### Target layout (all in `//tools/lint`, all `manual`)
+
+| Purpose | Target | Rule | Invocation |
+| --- | --- | --- | --- |
+| clippy check | `:clippy` | `sh_test` (body `exit 0`) whose `data=[:clippy_core,:clippy_ffi]` | `bazel test //tools/lint:clippy` |
+| clippy check (core) | `:clippy_core` | `rust_clippy` (deps = wolf-core rust targets) | built as data of `:clippy` |
+| clippy check (ffi) | `:clippy_ffi` | `rust_clippy` (deps = wolf-ffi rust targets) | built as data of `:clippy` |
+| clippy fix | `:clippy.fix` | `clippy_fix` custom rule (`clippy_fix.bzl`) | `bazel run //tools/lint:clippy.fix` |
+| rustfmt check | `:rustfmt` | `test_suite` over `:rustfmt_core` + `:rustfmt_ffi` | `bazel test //tools/lint:rustfmt` |
+| rustfmt check (core/ffi) | `:rustfmt_core`, `:rustfmt_ffi` | `rustfmt_test` | via the suite |
+| rustfmt fix | `:rustfmt.fix` | `alias` → `@rules_rust//:rustfmt` | `bazel run //tools/lint:rustfmt.fix` |
+| swift-format check | `:swift_format` | `sh_test` (`no-sandbox`) | `bazel test //tools/lint:swift_format` |
+| swift-format fix | `:swift_format.fix` | `sh_binary` | `bazel run //tools/lint:swift_format.fix` |
+| ALL checks | `:check` | `test_suite` (`:clippy`,`:rustfmt_core`,`:rustfmt_ffi`,`:swift_format`) | `bazel test //tools/lint:check` |
+| ALL fixes | `:fix` | `sh_binary` running all three fixers inline | `bazel run //tools/lint:fix` |
+
+Rationale: making each check TEST-shaped lets one `bazel test //tools/lint:check` run everything. clippy has no native test, so `:clippy` is a trivial `sh_test` whose `data` deps are `rust_clippy` targets — Bazel must build them (running clippy) to stage runfiles, so a clippy failure fails the test.
+
+### Approach per tool (chosen / rejected)
+
+- **clippy CHECK** = `rust_clippy` rule from `@rules_rust//rust:defs.bzl` (rejected: clippy aspect — too easy to sweep into wildcards). **clippy FIX** = custom `clippy_fix` Starlark rule resolving `@rules_rust//rust:toolchain_type`, staging the toolchain's cargo/clippy_driver/rustc/rust_std as runfiles, launcher runs `cargo clippy --fix --allow-dirty --allow-staged --workspace` in `$BUILD_WORKSPACE_DIRECTORY` (rejected: plain `sh_binary` assuming cargo on PATH — devShell has none). NOTE: clippy --fix uses cargo → crates.io (network) + Xcode cc; non-hermetic dev convenience. **Simpler fallback allowed** if the custom rule fights back: any launcher that reaches the toolchain cargo is acceptable — bar is "runs without Bazel/config error."
+- **rustfmt CHECK** = `rustfmt_test` rule (rejected: rustfmt aspect). **rustfmt FIX** = `alias` → `@rules_rust//:rustfmt` writer.
+- **swift-format CHECK** = `sh_test` running `swift_format_check.sh`: `SF=$(xcrun --find swift-format); "$SF" lint --strict <files>`; tags `["manual","no-sandbox"]` (host binary, not a sandbox input). **swift-format FIX** = `sh_binary` running `swift_format_fix.sh`: `swift-format format -i --parallel` over `$BUILD_WORKSPACE_DIRECTORY/crates/wolf-macos/{Sources,Tests}/**/*.swift`. EXCLUDE `crates/wolf-ffi/generated/*.swift` (machine-generated bindings).
+
+### Files to CREATE
+
+- `tools/lint/BUILD.bazel` — all targets above.
+- `tools/lint/clippy_fix.bzl` — `clippy_fix` executable rule (toolchain-resolving).
+- `tools/lint/clippy_gate.sh` — `#!/usr/bin/env bash` + `exit 0` (forces clippy data deps to build).
+- `tools/lint/swift_format_check.sh` — xcrun-resolve + `lint --strict`, loud fail if not found.
+- `tools/lint/swift_format_fix.sh` — xcrun-resolve + `format -i --parallel` in workspace.
+- `tools/lint/fix_all.sh` — rustfmt writer, then clippy --fix, then swift fix; all vs `$BUILD_WORKSPACE_DIRECTORY`.
+- `tools/lint/README.md` — required by CLAUDE.md; documents every target, check/fix, advisory policy, caveats.
+- (Optional, recommended) `.rustfmt.toml` — pins rustfmt so Bazel + local `cargo fmt` agree. `clippy.toml` optional. `.swift-format` NOT added (defaults). If config files add friction, SHIP WITHOUT them.
+
+### Files to MODIFY
+
+- `crates/wolf-macos/BUILD.bazel` — add `filegroup` `swift_format_srcs` (the Swift files under `Sources/WolfKeyMap`, `Sources/WolfMacOS`, `Tests/WolfKeyMapTests`; NOT the wolf-ffi generated Swift), visible to `//tools/lint`. Cross-package globbing is not allowed, so this filegroup MUST live here and be referenced by label.
+- `.bazelrc` — add `--config=lint` carrying `--@rules_rust//rust/settings:clippy_flags=-Dwarnings` (make clippy fail on lints) scoped so the DEFAULT build/test path is byte-for-byte unchanged. If config files committed, also the `clippy_toml`/`rustfmt_toml` setting labels + root `exports_files`.
+- `BUILD.bazel` (root) — `exports_files` for any committed config referenced by `//:` label.
+- `MODULE.bazel` — EXPECTED NO CHANGE (`rust.toolchain(versions=["1.85.0"])` + `register_toolchains("@rust_toolchains//:all")` already provide rustfmt/clippy). FALLBACK only if `bazel run @rules_rust//:rustfmt` errors "no rustfmt toolchain": add `rustfmt_version` to `rust.toolchain`.
+- `build.md` — new "Linting and formatting (macOS)" section (6 cmds + 2 aggregates, advisory note, toolchain/host-binary notes, clippy-fix cargo/network caveat).
+- `crates/wolf-macos/README.md` — one-line pointer to swift-format targets + generated exclusion.
+
+### Developer commands (for build.md)
+
+- clippy check `bazel test //tools/lint:clippy` · fix `bazel run //tools/lint:clippy.fix`
+- rustfmt check `bazel test //tools/lint:rustfmt` · fix `bazel run //tools/lint:rustfmt.fix`
+- swift check `bazel test //tools/lint:swift_format` · fix `bazel run //tools/lint:swift_format.fix`
+- ALL checks `bazel test //tools/lint:check` · ALL fixes `bazel run //tools/lint:fix`
+
+### VERIFICATION checklist (coder runs on macOS host)
+
+1. `bazel test //tools/lint:clippy` — runs via downloaded toolchain (pass/fail OK; must not error on config/toolchain).
+2. `bazel run //tools/lint:clippy.fix` — resolves toolchain cargo, executes without Bazel/config error.
+3. `bazel test //tools/lint:rustfmt` — runs `rustfmt --check` on both crates.
+4. `bazel run //tools/lint:rustfmt.fix` — runs the writer.
+5. `bazel test //tools/lint:swift_format` — finds swift-format via xcrun, lints (no-sandbox).
+6. `bazel run //tools/lint:swift_format.fix` — formats in place under `BUILD_WORKSPACE_DIRECTORY`.
+7. `bazel test //tools/lint:check` — expands to all checks.
+8. `bazel run //tools/lint:fix` — runs all three fixers.
+9. `bazel test //crates/wolf-core/... //crates/wolf-ffi/... //crates/wolf-macos/...` — still 47/47 green.
+10. `bazel query 'tests(//crates/wolf-core/... + //crates/wolf-ffi/... + //crates/wolf-macos/...)'` — NO `//tools/lint` target appears.
+
+IMPORTANT for advisory policy: because existing code likely HAS violations, the CHECK targets (2/3/5/7 and the clippy/rustfmt/swift checks) may legitimately REPORT FAILURES. That is ACCEPTED. The pass bar for each check target is "it RUNS on the host without a Bazel/config/toolchain error" — NOT "it reports zero violations." Only checklist item 9 (default suite 47/47) and item 10 (exclusion) are hard green gates. Capture and report the actual violation output for later cleanup.
+
+### Risks (rules_rust 0.71.2)
+
+- clippy `--fix` non-hermetic (cargo/crates.io/cc) — dev convenience only.
+- Confirm rustfmt toolchain auto-registers; fallback = add `rustfmt_version`.
+- clippy fails on lints only with `-Dwarnings`; keep `capture_clippy_output` FALSE.
+- Confirm swift-format subcommands are `lint` / `format -i` on v6.3.0; `xcrun --find` resolves.
+- `swift_format_srcs` filegroup must live in wolf-macos pkg (no cross-pkg glob); exclude generated Swift.
 
 ## Status
 
 - [x] Architect plan
-- [x] Tests written (command.rs, render.rs, wolf-ffi/tests/edit.rs + BUILD target, commands.rs, EditSeamTests.swift + BUILD)
-- [x] Implementation + tests pass (wolf-core lib, wolf-ffi:edit 6/6, :commands, :preview, :bridge_smoke, WolfKeyMapTests 155/0, macOS lib builds; FFI bindings regenerated)
-- [x] Review — APPROVED, no blockers
-- [x] Docs — decisions doc created; architecture.md + all crate READMEs + markdown-tasks.md (task 3 DONE) updated; prettier verified clean
+- [x] Implementation
+- [x] Verification (10/10 ran; hard gates 9 & 10 green; checks run w/o config/toolchain error)
+- [x] Review (PASS, no blockers; all 5 deviations accepted incl. .bazelignore)
+- [x] Docs (build.md + tools/lint/README.md swift lint-vs-format nuance added; prettier clean)
 
-## COMPLETE
+## Coder outcome + deviations (for reviewer)
 
----
+Implemented `//tools/lint` per plan. Verification: item 9 (default suite 47/47) ✓, item 10 (0 lint targets in default wildcards) ✓, swift check PASSES (0 findings), clippy/rustfmt checks RUN and report existing violations (advisory-accepted). Fix runners all execute; their rewrites were reverted to keep the tree clean.
 
-# Architect plan
+Deviations needing reviewer judgment:
 
-## 1. Summary
+1. **Added `.bazelignore` (`.direnv`)** — the rustfmt writer internally evaluates `//...` which hits the `.direnv/flake-inputs` symlink gotcha; `.bazelignore` is the canonical nix+direnv fix. Repo-wide effect on `//...`, but default suite stays green and explicit `//crates/...` patterns unaffected. Scope-acceptable?
+2. **`:fix` uses custom `fix_all` rule** (not plain sh_binary) — devShell has no cargo/rustfmt on PATH; toolchain's bare `rustfmt` aborts (driver hash mismatch), so it stages `@rules_rust//rust/rustfmt:toolchain_type` too. Allowed by plan.
+3. **Rust fixers scoped `-p wolf-core -p wolf-ffi`** (not `--workspace`) — wolf-gnome (GTK) doesn't build on macOS.
+4. **swift-format resolution hardened** — Bazel scrubbed-env made `xcrun --find` fail; check script falls back to `xcode-select -p` / canonical Xcode path.
+5. **`--config=lint` retained but redundant** — `rust_clippy` already denies warnings by default.
 
-Add a new user command, **Edit** (`id = "edit"`, `:WolfEdit`, `require('wolf').edit()`), the inverse of **Preview**. Effective only when the active pane is a **preview pane** (buffer carrying `b:wolf_preview_source`). Navigates to that preview's SOURCE file using one of three placement modes chosen by a pure front-end seam, mirroring Preview:
+Semantic nuance to confirm acceptable: swift `lint --strict` (check) reports 0, but `format -i` (fix) would restyle 75/76 files — lint mode enforces a subset of format. Documented; no committed `.swift-format` config (defaults).
 
-- **`split_left`** — preview pane is the only pane: open the source editor in a NEW pane on the LEFT (preview stays right).
-- **`reuse_editor_pane`** — exactly two panes, active is preview, OTHER pane is editor (non-preview): edit source in that other pane and focus it.
-- **`active`** — every other case: replace the preview in the active pane with the source editor.
+Existing-violation volume (follow-up cleanup, OUT OF SCOPE now): clippy — 1 real library error `crates/wolf-ffi/src/lib.rs:1252` (`unnecessary_map_or`) + many `doc_lazy_continuation` in tests; rustfmt — 45 files; swift-format — 0 lint but 75 files differ under `format`.
 
-Edit is appended as discriminant **19** everywhere (append-only; Preview stays 18).
+## Orchestrator notes
 
-## 2. Design decisions (also → decisions doc)
-
-**D1 — Menu placement + naming.** View menu (with Preview), NOT the Copy/Paste Edit NSMenu. DISPLAY label **"Edit Source"** for menu item + palette row. Registry `CommandSpec.title = "Edit Source"`, `id = "edit"`, `ex_command = "WolfEdit"`, `menu = MenuGroup::View`. No key equivalent. Enabled only when active pane is a preview pane (gated in `validateMenuItem` via `isPreviewActive`). Palette row NOT gated (mirrors Preview); Lua no-ops (returns 0) off a preview pane.
-
-**D2 — `is_preview_active` semantics.** Mirror `is_markdown_active` (reads `Snapshot.current_filetype`). Extend `wolf_current_file` notification with THIRD boolean arg `is_preview`; add `Snapshot.current_is_preview: bool` fed by it; `Snapshot::is_preview_active()` / `WolfCore::is_preview_active()` read it. Cheap synchronous read (no blocking RPC on menu validation). Fallback (only if extending proves troublesome): blocking `is_preview_active()` RPC reading `vim.b[…].wolf_preview_source ~= nil`. PREFER the snapshot-field mirror.
-
-**D3 — `wolf_edit_source(mode)` Lua semantics.** Gate: read `b:wolf_preview_source` / `b:wolf_preview_source_bufnr` off the CURRENT buffer; return `0` if not a preview. Binding: prefer `nvim_win_set_buf(win, source_bufnr)` when bufnr valid (window-scoped, no disk re-read, no MRU churn — like `wolf_switch_buffer`); else focus the target window + `:edit fnameescape(source_path)`. No MRU recording. After bind, fire `wolf_emit_previews()` + `wolf_emit_current_file()` (idempotent). Return `source_bufnr`.
-
-- `split_left`: `orig = nvim_get_current_win()`, `wolf_do_split("v")`, `edit_into(orig)`, `nvim_set_current_win(orig)`. (PaneTree inserts new pane AFTER target → new window is RIGHT, orig is LEFT → editor left, preview right.)
-- `reuse_editor_pane`: scan `nvim_tabpage_list_wins(0)` for first non-current window whose buffer has `b:wolf_preview_source == nil`; `target = that or cur`; `edit_into(target)`, `nvim_set_current_win(target)`.
-- `active`: `edit_into(0)` (current), replacing the preview.
-
-**D4 — Front-end wake.** `editSource()` calls `paneContainer.onRenderWake()` after, mirroring `openPreview()`.
-
-**D5 — No new layout intent for split_left.** Reuses `wolf_do_split("v")` → existing `wolf_layout` SPLIT intent → existing `applySplit`. LEFT placement owned by binding source into the ORIGINAL (`from`) window. No Swift intent-kind change.
-
-## 3. Files to CREATE
-
-- `crates/wolf-macos/Sources/WolfKeyMap/EditSeam.swift` — pure Foundation seam, `EditSeam.placementMode(paneCount:activePaneIsPreview:otherEditorPaneCount:) -> String` (`split_left` when paneCount<=1; `reuse_editor_pane` when paneCount==2 && activePaneIsPreview && otherEditorPaneCount==1; else `active`). Default `activePaneIsPreview = true`.
-- `preview-edit-command-decisions.md` (repo root) — capture D1–D5, append-only=19 rule, modes+Lua bindings, is_preview_active mechanism (+RPC fallback noted), no-MRU/bind-by-bufnr, "Edit Source" naming. prettier --write.
-- Test files (test-writer): `crates/wolf-ffi/tests/edit.rs`, `crates/wolf-macos/Tests/WolfKeyMapTests/EditSeamTests.swift`.
-
-## 4. Files to MODIFY
-
-### wolf-core
-
-- **`command.rs`**: append `Edit` variant after `Preview`; append `COMMAND_SPECS` row `{ Edit, "edit", "WolfEdit", "Edit Source", MenuGroup::View }`; update enum doc discriminant list (add `Edit(19)`). Tests: `EXPECTED_COMMAND_COUNT` 19→20; add `EDIT_INDEX=19`; rewrite `preview_is_the_last_row` → `preview_is_at_index_18` (drop "final row" clause); add `edit_id_round_trips`, `edit_spec_fields`, `edit_is_the_last_row`; update count-test message + PREVIEW_INDEX doc.
-- **`render.rs`**: add `pub current_is_preview: bool` to `Snapshot` (derives Default→false); add `pub fn is_preview_active(&self) -> bool { self.current_is_preview }` near `is_markdown_active` (~619); add unit test (false default, true when set).
-- **`redraw.rs`** `apply_current_file` (~328): read arg 2 `args.get(2).and_then(Value::as_bool).unwrap_or(false)` → `snap.current_is_preview`; update doc.
-- **`nvim.rs`**: add `pub async fn edit_source(&self, mode: &str) -> Result<i64, NvimError>` mirroring `open_preview` (~336): `nvim_exec_lua "return wolf_edit_source(...)"`, `Value::Array([mode])`, decode `as_i64().unwrap_or_default()`.
-- **`api.rs`**: add `pub fn edit_source(&self, mode: &str) -> i64` (mirror `open_preview` ~423, 0 on error); add `pub fn is_preview_active(&self) -> bool { self.read_snapshot().is_preview_active() }` (mirror `is_markdown_active` ~462).
-
-### runtime
-
-- **`init.lua`**: in `wolf_setup_current_file_tracking` emit (~191) send 3rd bool arg (preview branch `("", "", true)`, normal `(path, filetype, false)`); update comment. Add `function _G.wolf_edit_source(mode)` near `wolf_open_preview` (~674) per D3, with an `edit_into(win)` local helper (prefer bufnr, else set-current-win+`:edit`). Doc block mirroring `wolf_open_preview`.
-
-### wolf-ffi
-
-- **`src/lib.rs`**: `mod command_kind` (~179) add `pub const EDIT: u8 = 19;`; bridge decls add `fn is_preview_active(&self) -> bool;` + `fn edit_source(&self, mode: String) -> i64;` (~473); `impl WolfCoreHandle` add both methods (~1787); `FfiCommand::from_command` match (~2080) add `Command::Edit => command_kind::EDIT,`; update module doc discriminant contract.
-- **Regenerate committed bindings**: `bazel run //crates/wolf-ffi:gen_bindings` (writes `generated/wolf-ffi.swift`/`.h` in-tree); commit them. Do NOT hand-edit `generated/`.
-
-### wolf-macos (Swift)
-
-- **`CommandSeam.swift`**: `enum CommandKind` add `case edit` after `.preview`; `init?(ffi:)` add `case 19: self = .edit`; update docs.
-- **`PaneContainerView.swift`**: add `struct EditPlacementInputs { paneCount; activePaneIsPreview; otherEditorPaneCount }` (~40); add `func editPlacementInputs()` (~375) like `previewPlacementInputs` but `otherEditorPaneCount = panes.values.filter { !previewWins.contains($0.win) && $0.win != activeWin }.count`.
-- **`WolfWindowController.swift`**: add `var isPreviewActive: Bool { handle?.is_preview_active() ?? false }` (~667); add `func editSource()` (~679): `editPlacementInputs()` → `EditSeam.placementMode(...)` → `handle.edit_source(mode)` → `paneContainer.onRenderWake()`.
-- **`CommandDispatcher.swift`**: add `case .edit: controller?.editSource()` after `case .preview` (exhaustive switch).
-- **`AppMenu.swift`**: `Tag` enum add `static let edit = 19`; add View-menu item after Preview `commandItem(title: "Edit Source", tag: Tag.edit, keyEquivalent: "", target: target)`.
-- **`AppDelegate.swift`** `validateMenuItem` (~491): add `case .edit: return keyController?.isPreviewActive ?? false`; update doc.
-
-## 5. Test plan
-
-- **wolf-core unit** (`command.rs`/`render.rs`): registry count=20; Edit id round-trips; Edit spec fields; Edit last row; Preview at 18 (not last); `is_preview_active` false default / true when set.
-- **wolf-ffi real-nvim `tests/edit.rs`** (model `tests/preview.rs`, reuse `tests/common/mod.rs`, loud SKIP w/o nvim): is*preview_active gate (false on md buffer; true after open_preview+focus preview); `split_left` from single preview pane → new pane, source in a non-preview window, one preview remains, returned bufnr==source; `reuse_editor_pane` → source bound into OTHER editor window + focused, no new pane; `active` → active preview window now shows source; reuse fallback (no other editor → binds active, no new pane); negative (not a preview → returns 0, nothing changes); shutdown neutrality; prefer basename matching + `wait_for*\*`polling helpers. Add`//crates/wolf-ffi:edit`rust_test target to BUILD.bazel (copy`:preview` stanza).
-- **wolf-ffi `tests/commands.rs`**: add `const CMD_KIND_EDIT: u8 = 19;`, extend contiguity guard to `0..=19`, update header comment, add `:WolfEdit` drain assertion after `:WolfPreview`.
-- **Swift `EditSeamTests.swift`** (model `PreviewSeamTests` placement part): single/zero pane→`split_left`; 2 panes active-preview+1 editor→`reuse_editor_pane`; 2 panes active-preview+no editor→`active`; 2 panes active-not-preview→`active`; 3 panes→`active`.
-
-## 6. Implementation order (avoid compile breaks)
-
-1. `command.rs` variant+row+tests. 2. `render.rs`. 3. `redraw.rs`. 4. `nvim.rs`. 5. `api.rs`. 6. `wolf-ffi/src/lib.rs` (all arms — exhaustive matches break until done) → `bazel run //crates/wolf-ffi:gen_bindings` → commit generated/. 7. `init.lua`. 8. Swift `CommandSeam` `.edit` + new `EditSeam.swift`. 9. Swift `WolfMacOS` glue (PaneContainerView, WolfWindowController, CommandDispatcher exhaustive, AppMenu, AppDelegate). 10. Tests. 11. Docs.
-
-## 7. Dependencies
-
-None.
-
-## 8. Documentation updates
-
-- **`architecture.md`**: `command_kind` list (~43) add `EDIT=19`; mention `is_preview_active()`/`edit_source(mode)`; macOS menu list (~65) add "Edit Source (View menu, no key equiv, preview-pane only)"; palette prose (~71) "18 OTHER"→"19 OTHER".
-- **`crates/wolf-core/src/README.md`**: add `current_is_preview` to Snapshot fields; note `is_preview_active()`; Command registry incl Edit(19).
-- **`crates/wolf-ffi/README.md`** + **`src/README.md`**: add `edit_source`/`is_preview_active`/`command_kind::EDIT=19`.
-- **`crates/wolf-macos/README.md`**: mention `EditSeam` + View > Edit Source item.
-- **`markdown-tasks.md`**: mark task 3 DONE + link `preview-edit-command-decisions.md`. prettier --write all touched Markdown.
-
-## 9. Build / regen / test commands
-
-- `bazel run //crates/wolf-ffi:gen_bindings` (then commit generated/).
-- `cargo test -p wolf-core` (or Bazel rust_test).
-- `bazel test //crates/wolf-ffi:edit //crates/wolf-ffi:commands //crates/wolf-ffi:preview //crates/wolf-ffi:bridge_smoke`.
-- Swift seam: `bazel test //crates/wolf-macos:WolfKeyMapTests` (confirm target name; add EditSeamTests.swift to srcs).
-- Build the macOS app/library to compile-verify AppKit glue.
-
-## 10. Lint
-
-- Use named consts (`EDIT_INDEX`, `EXPECTED_COMMAND_COUNT`) — no inline 19/20. No new `#[allow]`. `#[must_use]` on the handle methods where their Preview mirrors are.
-
-## 11. Coder MUST-VERIFY
-
-- init.lua split-left: PaneTree inserts new leaf AFTER target → binding source into `orig` (`from`) window = editor LEFT, preview RIGHT. Don't rely on `:leftabove`/`splitright` (front-end owns geometry; `splitright` unset). Manual-smoke the reconcile.
-- FFI codegen target `//crates/wolf-ffi:gen_bindings` (bazel run, in-tree write). Verify regenerated Swift/.h has `edit_source`/`is_preview_active` and `command_kind` byte-stable except additive.
-- `is_markdown_active` reads `Snapshot.current_filetype` via `wolf_current_file`; mirror adds `current_is_preview` via same notification's 3rd arg. Verify `rmpv::Value::as_bool()` decoder; missing arg → false.
-- Exhaustive matches: `FfiCommand::from_command` (Rust) + `CommandDispatcher.dispatch` (Swift) break until arms added; `CommandKind.init?(ffi:)` non-exhaustive (`default: nil`).
-- No hardcoded palette count test in `palette.rs` (candidates derived dynamically) — only architecture.md prose changes.
+- **Test-writer step SKIPPED (explicit decision):** the plan creates NO Rust/Swift unit tests — the committed `.sh` scripts ARE the check-test bodies and are implementation artifacts (coder's job), and verification is running the Bazel targets on the host. There is nothing for the test-writer to author. Proceeding architect → coder → reviewer → technical-writer.

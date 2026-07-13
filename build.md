@@ -241,6 +241,28 @@ bazel test //crates/wolf-macos:WolfKeyMapTests   # pure Swift key translation + 
 - `//crates/wolf-ffi:attribute_highlight` drives a real pinned Neovim: it defines a highlight group carrying `bold` / `italic` / `underline` + a `special` color, applies it to a known cell (`nvim_set_hl` + `matchadd`), polls for the repaint, and asserts the packed `FfiCell` exposes the matching `flags()` (BOLD | ITALIC | UNDERLINE) AND `special().set` with the expected `rgb` across the FFI boundary — the automated guard that per-cell text attributes and the special color survive resolution and packing. It skips loudly when Neovim is not staged (the cargo / Linux path).
 - `//crates/wolf-macos:WolfKeyMapTests` is a pure Swift `XCTest` over the AppKit-free `WolfKeyMap` seams — the key-translation seam, the `GlyphStyleResolver` glyph-style seam (`GlyphStyleTests`), and the `StateSeam` state-restore seam (`StateSeamTests`: offscreen/unset window-frame rejection, and the launch-cwd fallback) — with no `NSEvent` and no window, and runs regardless of `WOLF_NVIM_BIN`.
 
+## Linting and formatting (macOS)
+
+Advisory (non-gating) lint/format targets live in `//tools/lint` and run on the macOS Bazel host: **clippy** and **rustfmt** for Rust (via the rules_rust downloaded 1.85.0 toolchain — the devShell has no standalone cargo/rustc) and **swift-format** for Swift (the host Xcode 26 binary, resolved via `xcrun --find swift-format`).
+
+These targets are **advisory**: every one is tagged `manual`, so `bazel test //crates/...` never sweeps them in and the default suite stays exactly 47/47. They are NOT run in CI gating here; existing violations are expected. A CHECK target "passing" means "the linter ran"; it may still report findings (which fail the target). See [`tools/lint/README.md`](tools/lint/README.md).
+
+Each tool has a CHECK (report/fail on violations via `bazel test`) and a FIX (rewrite in place via `bazel run`):
+
+| Tool | Check | Fix |
+| --- | --- | --- |
+| clippy | `bazel test //tools/lint:clippy` | `bazel run //tools/lint:clippy.fix` |
+| rustfmt | `bazel test //tools/lint:rustfmt` | `bazel run //tools/lint:rustfmt.fix` |
+| swift-format | `bazel test //tools/lint:swift_format` | `bazel run //tools/lint:swift_format.fix` |
+| **all** | `bazel test //tools/lint:check` | `bazel run //tools/lint:fix` |
+
+Notes and caveats:
+
+- **clippy fail-on-lint is opt-in.** The clippy CHECK reports findings by default; to make `-Dwarnings` the hard rule add `--config=lint`: `bazel test --config=lint //tools/lint:clippy`. `--config=lint` (in `.bazelrc`) is DELIBERATELY not default so the standard build/test path is byte-for-byte unchanged.
+- **clippy `--fix` is non-hermetic.** `bazel run //tools/lint:clippy.fix` shells out to `cargo clippy --fix`, which resolves crates from crates.io (network) and links via the host Xcode cc toolchain. It is a dev convenience, scoped to `-p wolf-core -p wolf-ffi` (wolf-gnome's GTK stack does not build on macOS).
+- **rustfmt** uses the separate rules_rust rustfmt toolchain. `//tools/lint:rustfmt.fix` is the rules_rust writer; it internally evaluates `//...`, which is why the repo carries a `.bazelignore` entry for `.direnv` (the nix+direnv symlink tree would otherwise break the `//...` query).
+- **swift-format** covers only the hand-written `wolf-macos` Swift (Sources/WolfKeyMap, Sources/WolfMacOS, Tests/WolfKeyMapTests, enumerated via the `//crates/wolf-macos:swift_format_srcs` filegroup). It EXCLUDES the machine-generated swift-bridge bindings under `crates/wolf-ffi/generated/`. Its check `sh_test` is tagged `no-sandbox` because the binary is host Xcode, not a hermetic input. Note that check and fix enforce different things: `:swift_format` (lint) checks only swift-format's lint-category rules, while `:swift_format.fix` (format) additionally restyles whitespace and indentation, so a passing check does not mean the fixer would leave the files unchanged.
+
 ## The one hard rule and how it is enforced
 
 > **`wolf-core` must compile with no GUI toolkit in its dependency tree.**
