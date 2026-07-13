@@ -68,10 +68,6 @@ final class PaneContainerView: NSView {
   private static let intentKindSplit: UInt8 = 0
   /// `FfiLayoutIntent.kind()` for a focus-direction move (mirrors `wolf-ffi`).
   private static let intentKindFocusDir: UInt8 = 1
-  /// Scrim opacity laid over an INACTIVE preview pane's web view (a front-end-only
-  /// treatment that is awkward to express inside Neovim itself). Applied by
-  /// `applyPreviewDim`; grid panes are no longer dimmed.
-  private static let inactiveDim: CGFloat = 0.28
   /// Maximum Neovim grid width, in cells. A pane wider than this many columns caps
   /// its grid at `maxGridCols` and CENTERS it horizontally, leaving side margins
   /// (painted in the grid's background); a narrower pane is unaffected. All pixel↔
@@ -168,10 +164,6 @@ final class PaneContainerView: NSView {
   // that survives grid-id churn.
   /// The hosted `WKWebView`s, one per preview window.
   private var previewWebViews: [Int64: WKWebView] = [:]
-  /// The inactive-dim scrim over each preview web view (a preview pane can't be
-  /// dimmed by `paintPane`'s CGContext fill, since the web view is a real subview
-  /// painted on top), added only while the pane is not active.
-  private var previewDimOverlays: [Int64: NSView] = [:]
   /// The `(sourceBufnr, sourceTick)` each preview window's web view was last loaded
   /// at, so a reload (`render_preview` + `loadHTMLString`) fires when the window's
   /// bound source BUFFER changed (a reused preview pane switching sources, even at
@@ -811,10 +803,9 @@ final class PaneContainerView: NSView {
   /// `b:wolf_preview_source` scratch buffer), ensure a `WKWebView` framed to the
   /// pane's GRID rect, and reload it from `render_preview(source_bufnr)` whenever
   /// the source's `changedtick` advanced (the OD6 live-on-change gate; a keystroke
-  /// burst is already coalesced into one tick-advancing wake). A dim overlay is
-  /// applied when the pane is not active. The pane's grid is recorded in
-  /// `previewNamesByGrid` so `paintStatusbar` shows `Preview: <name>` and
-  /// `drawScrollbars` suppresses the synthetic scrollbar. Web views + overlays for
+  /// burst is already coalesced into one tick-advancing wake). The pane's grid is
+  /// recorded in `previewNamesByGrid` so `paintStatusbar` shows `Preview: <name>`
+  /// and `drawScrollbars` suppresses the synthetic scrollbar. Web views for
   /// windows that are no longer previews (or closed) are removed.
   private func syncPreviewWebViews() {
     previewNamesByGrid.removeAll(keepingCapacity: true)
@@ -846,8 +837,6 @@ final class PaneContainerView: NSView {
       let web = ensurePreviewWebView(for: win)
       web.frame = gRect
       web.isHidden = false
-
-      applyPreviewDim(win: win, over: gRect, dimmed: entry.0 != activePane)
     }
 
     // Only the cheap AppKit layout ran per wake above; the BLOCKING reload is
@@ -947,31 +936,7 @@ final class PaneContainerView: NSView {
     needsDisplay = true
   }
 
-  /// Applies (or hides) the inactive-dim scrim over the preview web view for
-  /// window `win`, kept above the web view in the subview order.
-  private func applyPreviewDim(win: Int64, over rect: CGRect, dimmed: Bool) {
-    guard dimmed else {
-      previewDimOverlays[win]?.isHidden = true
-      return
-    }
-    let overlay: NSView
-    if let existing = previewDimOverlays[win] {
-      overlay = existing
-    } else {
-      overlay = NSView(frame: rect)
-      overlay.wantsLayer = true
-      overlay.layer?.backgroundColor = CGColor(gray: 0, alpha: Self.inactiveDim)
-      previewDimOverlays[win] = overlay
-      addSubview(overlay)
-    }
-    overlay.frame = rect
-    overlay.isHidden = false
-    if let web = previewWebViews[win] {
-      addSubview(overlay, positioned: .above, relativeTo: web)
-    }
-  }
-
-  /// Tears down the hosted web view + dim overlay + last-load entry for window
+  /// Tears down the hosted web view + last-load entry for window
   /// `win` (it is no longer a preview, or its pane closed).
   private func removePreviewWebView(_ win: Int64) {
     // Remove the click-to-focus script-message handler on the STILL-LIVE web
@@ -982,8 +947,6 @@ final class PaneContainerView: NSView {
       .removeScriptMessageHandler(forName: PreviewSeam.clickFocusHandlerName)
     previewWebViews[win]?.removeFromSuperview()
     previewWebViews[win] = nil
-    previewDimOverlays[win]?.removeFromSuperview()
-    previewDimOverlays[win] = nil
     lastPreviewLoads[win] = nil
     previewNavDelegates[win] = nil
     previewFocusHandlers[win] = nil
