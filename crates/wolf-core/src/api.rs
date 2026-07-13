@@ -380,6 +380,17 @@ impl WolfCore {
         self.send_input(InputEvent::Paste { text });
     }
 
+    /// Sets the global `background` option (fire-and-forget via
+    /// [`InputEvent::SetBackground`]).
+    ///
+    /// `dark: true` selects `background=dark`, `false` selects `background=light`.
+    /// The macOS front-end calls this with the resolved appearance at launch and,
+    /// in `auto` mode, live when the OS toggles. Enqueued on the ordered input
+    /// channel, so it applies in FIFO order relative to pending keystrokes.
+    pub fn set_background(&self, dark: bool) {
+        self.send_input(InputEvent::SetBackground { dark });
+    }
+
     /// Snapshots the captive nvim's listed buffers (for seeding the buffer picker).
     ///
     /// Blocks briefly on the captive nvim to query `getbufinfo({'buflisted': 1})`

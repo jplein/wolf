@@ -45,12 +45,12 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use wolf_core::{
-    rank_buffers, rank_matches_top_n, rank_palette, BufInfo, BufferRow, Cmdline, Command,
-    CommandMru, CoreConfig, CursorShape, FileSearch, FocusDir, Grid, HighlightTable, InputEvent,
-    Key, KeyEvent, LayoutIntent, MouseAction, MouseButton, MouseEvent, PaletteRow, PaletteRowKind,
-    PaletteWindow, PaneStatus, PreviewInfo, Pum, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent,
-    SplitOrientation, StateStore, TabState, Toast, WakeFn, WinInfo, WindowState, WolfCore,
-    WolfState,
+    rank_buffers, rank_matches_top_n, rank_palette, Appearance, BufInfo, BufferRow, Cmdline,
+    Command, CommandMru, CoreConfig, CursorShape, FileSearch, FocusDir, Grid, HighlightTable,
+    InputEvent, Key, KeyEvent, LayoutIntent, MouseAction, MouseButton, MouseEvent, PaletteRow,
+    PaletteRowKind, PaletteWindow, PaneStatus, PreviewInfo, Pum, ResolvedStyle, Rgb,
+    ScrollDirection, ScrollEvent, SplitOrientation, StateStore, TabState, Toast, WakeFn, WinInfo,
+    WindowState, WolfCore, WolfState,
 };
 
 // Re-export the bridge-defined transparent structs at the crate root so the Rust
@@ -121,6 +121,21 @@ mod cursor_shape {
     pub const HORIZONTAL: u8 = 1;
     /// A vertical bar cursor.
     pub const VERTICAL: u8 = 2;
+}
+
+/// The appearance-mode discriminants packed into [`FfiConfig`]'s `appearance`,
+/// mirroring [`wolf_core::Appearance`].
+///
+/// The single source of truth shared with the Swift `AppearanceMode` port (a
+/// `UInt8` raw-value enum in `WolfKeyMap`) and the `AppearanceSeamTests`
+/// discriminant contract (plan OD-a).
+mod appearance {
+    /// Follow the macOS system appearance (`auto`).
+    pub const AUTO: u8 = 0;
+    /// Force dark mode (`dark`).
+    pub const DARK: u8 = 1;
+    /// Force light mode (`light`).
+    pub const LIGHT: u8 = 2;
 }
 
 /// The layout-intent kind discriminants packed into [`FfiLayoutIntent::kind`].
@@ -443,6 +458,11 @@ mod ffi {
         // filesystem path) via `InputEvent::Chdir` (`:tcd`, the tab-local cwd —
         // each view/tabpage owns its own working directory).
         fn chdir(&self, path: String);
+        // Sets the global `background` option via `InputEvent::SetBackground`
+        // (`:set background=dark|light`). `dark: true` selects dark, `false`
+        // light. The macOS front-end pushes the resolved appearance at launch and
+        // live in `auto` mode. A no-op when the core is gone.
+        fn set_background(&self, dark: bool);
         // Closes the current split (the pane) via `InputEvent::ClosePane`
         // (`:close`).
         fn close_pane(&self);
@@ -603,6 +623,9 @@ mod ffi {
         fn font_size(&self) -> f64;
         // The resolved line-height, as a percentage of the font size (130 == 130%).
         fn line_height(&self) -> f64;
+        // The resolved appearance mode as a discriminant (see the `appearance`
+        // module: AUTO=0, DARK=1, LIGHT=2). Swift maps it via `AppearanceMode`.
+        fn appearance(&self) -> u8;
     }
 
     extern "Rust" {
@@ -1094,6 +1117,7 @@ pub struct FfiConfig {
     font_family: String,
     font_size: f64,
     line_height: f64,
+    appearance: u8,
 }
 
 impl FfiConfig {
@@ -1114,6 +1138,13 @@ impl FfiConfig {
     pub fn line_height(&self) -> f64 {
         self.line_height
     }
+
+    /// The resolved appearance mode as a discriminant (`appearance::AUTO` /
+    /// `DARK` / `LIGHT`). Swift maps it via the `AppearanceMode` raw-value enum.
+    #[must_use]
+    pub fn appearance(&self) -> u8 {
+        self.appearance
+    }
 }
 
 /// Loads the resolved user configuration, reading — or creating with defaults —
@@ -1129,10 +1160,16 @@ pub fn wolf_ffi_load_config() -> FfiConfig {
     let config = wolf_core::preferences_dir()
         .map(|dir| wolf_core::load_or_create(&dir))
         .unwrap_or_else(wolf_core::default_config);
+    let appearance = match config.appearance {
+        Appearance::Auto => appearance::AUTO,
+        Appearance::Dark => appearance::DARK,
+        Appearance::Light => appearance::LIGHT,
+    };
     FfiConfig {
         font_family: config.font_family,
         font_size: config.font_size,
         line_height: config.line_height,
+        appearance,
     }
 }
 
@@ -1815,6 +1852,17 @@ impl WolfCoreHandle {
             core.send_input(InputEvent::Chdir {
                 path: PathBuf::from(path),
             });
+        }
+    }
+
+    /// Sets the global `background` option via [`WolfCore::set_background`]
+    /// (`:set background=dark|light`). `dark: true` selects dark, `false` light.
+    /// The macOS front-end pushes the resolved appearance at launch and, in
+    /// `auto` mode, live when the OS toggles. A no-op once the core has been shut
+    /// down.
+    pub fn set_background(&self, dark: bool) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.set_background(dark);
         }
     }
 

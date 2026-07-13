@@ -62,6 +62,14 @@ The real-nvim coverage of the Edit-command bridge surface (Bazel target `//crate
 bazel test //crates/wolf-ffi:edit
 ```
 
+## `appearance.rs`
+
+The real-nvim coverage of the `set_background(dark:)` handle method over the bridge (Bazel target `//crates/wolf-ffi:appearance`) — **no mocks**, modeled on `file_actions.rs` / `close_pane.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate). After `wolf_ffi_start`, it flips nvim's global `&background` via `handle.set_background(false)` / `set_background(true)`, observing the change indirectly through the `WolfCursor` marker technique: a marker `guibg` chosen by the live `&background`, read back through `FfiFrame::cursor_fill()` (the bridge exposes no `&background` accessor). It relies on the input-channel FIFO ordering so the `SetBackground` event applies before the marker keystrokes. The headless discriminant half — that `wolf_ffi_load_config().appearance()` round-trips `appearance: dark|light|auto` → `1`/`2`/`0` (and an absent key → `0`) — is covered by `config.rs` (the `:config` target).
+
+```sh
+bazel test //crates/wolf-ffi:appearance
+```
+
 ## `tabpages.rs`
 
 The real-nvim coverage of the TABPAGE bridge surface (Bazel target `//crates/wolf-ffi:tabpages`) — the per-project/tabpage-per-view handle methods the macOS front-end drives (`current_tabpage` / `create_tabpage` / `active_tabpage` / `set_current_tabpage` / `cwd_for_tabpage` / `close_tabpage`) — **no mocks**, modeled on `panes.rs` / `close_pane.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate, same `read_frame()` / `windows()` live-grid polling). A single `#[test]` (`tabpage_lifecycle_over_the_bridge`, mutating the process-global `WOLF_STATE_DIR` for shutdown-flush hygiene): attach → `current_tabpage()` is a nonzero first-view bind T1 that `active_tabpage()` also reports → `create_tabpage(dirB)` yields a distinct T2 that becomes current with a FRESH window and a non-empty per-grid frame → `set_current_tabpage(t1)` rebinds w1 to a live grid. The **grid re-bind keystone (OD2)**: `:vsplit` on T1 (two windows), switch to T2 and back, and assert each window handle re-resolves via `grid_for_win` to a live, paintable grid. Then `cwd_for_tabpage(t2)` returns dirB while T2 is NON-current; `close_tabpage(t2)` keeps the core alive (T1 still readable) while T2's handle goes invalid; finally `shutdown()` and confirm the handle calls return neutral values (`active_tabpage()` / `current_tabpage()` == 0, `read_frame().cols()` == 0, `cwd_for_tabpage()` empty).

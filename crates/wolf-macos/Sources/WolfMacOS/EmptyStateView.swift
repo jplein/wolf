@@ -36,7 +36,9 @@ final class EmptyStateView: NSView {
     super.init(frame: .zero)
     translatesAutoresizingMaskIntoConstraints = false
     wantsLayer = true
-    layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+    // Assign the frozen CGColor layer background resolved against the current
+    // appearance (re-applied on runtime appearance changes below).
+    applyChromeColors()
 
     openButton.translatesAutoresizingMaskIntoConstraints = false
     openButton.title = Self.buttonTitle
@@ -64,6 +66,27 @@ final class EmptyStateView: NSView {
       openButton.centerXAnchor.constraint(equalTo: superview.centerXAnchor),
       openButton.centerYAnchor.constraint(equalTo: superview.centerYAnchor),
     ])
+  }
+
+  /// Re-applies the layer background when the effective appearance changes at
+  /// runtime (the OS switches dark↔light in `auto` mode, or a forced appearance
+  /// propagates from `NSApp.appearance`). Layer CGColors do NOT auto-adapt, so the
+  /// background is re-resolved here; the centered button is a stock `NSButton`
+  /// whose dynamic colors AppKit re-resolves itself, so no manual redraw is needed.
+  override func viewDidChangeEffectiveAppearance() {
+    super.viewDidChangeEffectiveAppearance()
+    applyChromeColors()
+  }
+
+  /// Assigns the overlay's layer background from the dynamic system
+  /// `windowBackgroundColor`, resolved against this view's CURRENT effective
+  /// appearance. A bare `NSColor.windowBackgroundColor.cgColor` resolves against
+  /// whatever appearance is globally current (often stale during an appearance
+  /// change), so the conversion runs inside `performAsCurrentDrawingAppearance`.
+  private func applyChromeColors() {
+    effectiveAppearance.performAsCurrentDrawingAppearance {
+      layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+    }
   }
 
   /// The button action: forwards to the controller's Open Folder path.

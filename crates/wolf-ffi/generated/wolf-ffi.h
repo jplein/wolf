@@ -342,6 +342,7 @@ struct __swift_bridge__$FfiColor __swift_bridge__$WolfCoreHandle$theme_titlebar_
 void* __swift_bridge__$WolfCoreHandle$pane_status_for_grid(void* self, uint64_t grid);
 void __swift_bridge__$WolfCoreHandle$open(void* self, void* path);
 void __swift_bridge__$WolfCoreHandle$chdir(void* self, void* path);
+void __swift_bridge__$WolfCoreHandle$set_background(void* self, bool dark);
 void __swift_bridge__$WolfCoreHandle$close_pane(void* self);
 void __swift_bridge__$WolfCoreHandle$new_buffer(void* self);
 void* __swift_bridge__$WolfCoreHandle$copy_selection(void* self);
@@ -379,6 +380,7 @@ void* __swift_bridge__$wolf_ffi_ancestors_to_reveal(void* rel_path);
 void* __swift_bridge__$FfiConfig$font_family(void* self);
 double __swift_bridge__$FfiConfig$font_size(void* self);
 double __swift_bridge__$FfiConfig$line_height(void* self);
+uint8_t __swift_bridge__$FfiConfig$appearance(void* self);
 void* __swift_bridge__$wolf_ffi_load_config(void);
 void* __swift_bridge__$FfiState$windows(void* self);
 double __swift_bridge__$FfiWindowState$x(void* self);

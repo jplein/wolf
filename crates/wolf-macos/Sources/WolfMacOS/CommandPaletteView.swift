@@ -140,12 +140,38 @@ final class CommandPaletteView: NSView, NSTableViewDataSource, NSTableViewDelega
     super.init(
       frame: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.panelHeight))
     wantsLayer = true
-    layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
     layer?.cornerRadius = Self.cornerRadius
     layer?.borderWidth = 1
-    layer?.borderColor = NSColor.separatorColor.cgColor
     translatesAutoresizingMaskIntoConstraints = false
     buildSubviews()
+    // Assign the frozen CGColor layer chrome AFTER the search bar is built (so
+    // `searchContainer.layer` exists), resolved against the current appearance.
+    applyChromeColors()
+  }
+
+  /// Re-applies the layer chrome colors when the effective appearance changes at
+  /// runtime (the OS switches dark↔light in `auto` mode, or a forced appearance
+  /// propagates from `NSApp.appearance`). Layer CGColors do NOT auto-adapt, so
+  /// they are re-resolved here; the search field + its container are marked for
+  /// redraw so the typed text / placeholder re-resolve their dynamic colors too.
+  override func viewDidChangeEffectiveAppearance() {
+    super.viewDidChangeEffectiveAppearance()
+    applyChromeColors()
+    searchField.needsDisplay = true
+    searchContainer.needsDisplay = true
+  }
+
+  /// Assigns the panel + search-bar layer chrome (background, border) from the
+  /// dynamic system NSColors, resolved against this view's CURRENT effective
+  /// appearance. A bare `NSColor.windowBackgroundColor.cgColor` resolves against
+  /// whatever appearance is globally current (often stale during an appearance
+  /// change), so the conversions run inside `performAsCurrentDrawingAppearance`.
+  private func applyChromeColors() {
+    effectiveAppearance.performAsCurrentDrawingAppearance {
+      layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+      layer?.borderColor = NSColor.separatorColor.cgColor
+      searchContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+    }
   }
 
   @available(*, unavailable)
@@ -357,7 +383,8 @@ final class CommandPaletteView: NSView, NSTableViewDataSource, NSTableViewDelega
   private func buildSearchBar() {
     searchContainer.translatesAutoresizingMaskIntoConstraints = false
     searchContainer.wantsLayer = true
-    searchContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+    // The search-bar background is assigned in `applyChromeColors()` (frozen
+    // CGColor re-resolved on appearance changes).
     searchContainer.layer?.cornerRadius = Self.searchBarCornerRadius
     searchContainer.layer?.borderWidth = 0
 

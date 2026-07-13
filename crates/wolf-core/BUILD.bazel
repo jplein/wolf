@@ -384,6 +384,37 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
+# Real-nvim integration test for `WolfCore::set_background(dark)` -> `:set
+# background=…` (the appearance plan §3.4 / §5.2): the captive nvim's global
+# `&background` must flip light/dark, observed INDIRECTLY through the `wolf_theme`
+# snapshot channel (a `WolfCursor guibg` marker chosen by the live `&background`).
+# An EXACT mirror of the `theme` target above: drives a REAL pinned Neovim (no
+# mocks), stages the captive `init.lua` + the pinned nvim tree as runfiles, reuses
+# `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.
+rust_test(
+    name = "appearance",
+    srcs = [
+        "tests/appearance.rs",
+        "tests/common/mod.rs",
+    ],
+    crate_root = "tests/appearance.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
 # Real-nvim integration test for the NATIVE command-line + completion-popup surface
 # (feature plan §3/§4): `:` then `e Fi` populates `Snapshot.cmdline`, `<Tab>`
 # populates `Snapshot.pum` with the `Fi`-prefixed files, and `<Esc>` tears both

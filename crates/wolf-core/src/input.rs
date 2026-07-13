@@ -242,6 +242,17 @@ pub enum InputEvent {
         /// The buffer handle to switch that window to.
         bufnr: i64,
     },
+    /// Set the global `background` option (delegated to `:set background=…`).
+    ///
+    /// The macOS front-end pushes the resolved appearance at launch and, in
+    /// `auto` mode, live when the OS toggles. `:set background=…` re-sources the
+    /// colorscheme, which re-fires the existing `ColorScheme` → `wolf_theme`
+    /// path, so the grid + titlebar follow automatically. Enqueued on the ordered
+    /// input channel so it never races ahead of or behind pending input.
+    SetBackground {
+        /// `true` selects `background=dark`, `false` selects `background=light`.
+        dark: bool,
+    },
 }
 
 impl InputEvent {
@@ -399,6 +410,14 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
         InputEvent::NewBuffer => command(nvim, "enew").await,
         InputEvent::Paste { text } => nvim_paste(nvim, text).await,
         InputEvent::SwitchBuffer { win, bufnr } => switch_buffer(nvim, *win, *bufnr).await,
+        InputEvent::SetBackground { dark } => {
+            let cmd = if *dark {
+                "set background=dark"
+            } else {
+                "set background=light"
+            };
+            command(nvim, cmd).await
+        }
     }
 }
 

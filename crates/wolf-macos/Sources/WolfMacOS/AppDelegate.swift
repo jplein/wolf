@@ -22,6 +22,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// The once-loaded shared user config (nil until launch).
   private var config: FfiConfig?
 
+  /// The resolved appearance as a boolean (`true` == dark), computed by
+  /// `applyResolvedAppearance()` from the config's `appearance` mode. In `auto`
+  /// mode this tracks the live OS appearance; in `dark`/`light` it is fixed.
+  /// Every project's nvim is driven to this via `setBackground`.
+  private var resolvedDark: Bool = true
+
+  /// The `NSApp.effectiveAppearance` KVO token, installed ONLY in `auto` mode so
+  /// an OS dark/light toggle re-resolves + re-pushes live. Must be stored — an
+  /// `NSKeyValueObservation` invalidates itself when deallocated.
+  private var appearanceObservation: NSKeyValueObservation?
+
   /// The live per-VIEW controllers (each bound to one nvim tabpage of a shared
   /// project). One OS window per controller; several controllers may belong to
   /// one native tab group AND/OR one project.
@@ -90,6 +101,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     self.config = config
     self.metrics = metrics
 
+    // Resolve the configured appearance BEFORE any project starts: force
+    // dark/light (also setting the app chrome via `NSApp.appearance`), or in
+    // `auto` mode follow — and observe — the live OS appearance. Every project
+    // materialized below is then pushed the resolved value.
+    applyResolvedAppearance()
+
     // Read the saved state BEFORE any core starts: one WINDOW GROUP per saved
     // window, each with its ordered tabs. A fresh run restores nothing → one
     // default empty-state window with a single tab (its own fresh project).
@@ -140,6 +157,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     for projectPlan in plan.projects {
       guard let project = Project.start(launchCwd: projectPlan.launchCwd, coordinator: self)
       else { continue }
+      // Push the resolved appearance to the fresh core so its first paint
+      // uses the right background (the config value is restart-only).
+      project.setBackground(dark: resolvedDark)
 
       var built = 0
       var boundFirst = false
@@ -213,6 +233,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     guard let project = Project.start(launchCwd: homeDir(), coordinator: self) else {
       return nil
     }
+    // Push the resolved appearance to the fresh core so its first paint uses
+    // the right background (the config value is restart-only).
+    project.setBackground(dark: resolvedDark)
     let tabpage = project.bindFirstTabpage()
     let controller = makeController(
       tabId: mintTabId(), project: project, tabpageHandle: tabpage, restoredTab: nil,
@@ -229,6 +252,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// The user's home directory path (the empty-state launch cwd).
   private func homeDir() -> String {
     FileManager.default.homeDirectoryForCurrentUser.path
+  }
+
+  // MARK: - Appearance (OS dark/light resolution + observation)
+
+  /// Resolves the configured appearance to `resolvedDark` and applies it to the
+  /// app chrome, then pushes it to every live project. In `auto` mode it clears
+  /// any forced `NSApp.appearance` (following the system), reads the effective
+  /// appearance, and installs the OS-toggle observer; in `dark`/`light` it forces
+  /// `NSApp.appearance` (OD-e: the whole app, not just the grid) and removes the
+  /// observer. An unknown discriminant falls back to `auto`.
+  private func applyResolvedAppearance() {
+    let raw = config?.appearance() ?? AppearanceMode.auto.rawValue
+    switch AppearanceMode(rawValue: raw) ?? .auto {
+    case .auto:
+      NSApp.appearance = nil
+      resolvedDark =
+        NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+      installAppearanceObserverIfNeeded()
+    case .dark:
+      NSApp.appearance = NSAppearance(named: .darkAqua)
+      resolvedDark = true
+      removeAppearanceObserver()
+    case .light:
+      NSApp.appearance = NSAppearance(named: .aqua)
+      resolvedDark = false
+      removeAppearanceObserver()
+    }
+    pushAppearanceToAllProjects()
+  }
+
+  /// Installs the `NSApp.effectiveAppearance` KVO observer (auto mode only), if
+  /// not already installed. The token is STORED (`appearanceObservation`) — an
+  /// `NSKeyValueObservation` invalidates itself once deallocated.
+  private func installAppearanceObserverIfNeeded() {
+    guard appearanceObservation == nil else { return }
+    appearanceObservation = NSApp.observe(\.effectiveAppearance, options: [.new]) {
+      [weak self] _, _ in
+      self?.systemAppearanceChanged()
+    }
+  }
+
+  /// Tears down the appearance observer (fixed dark/light modes, or app teardown).
+  private func removeAppearanceObserver() {
+    appearanceObservation?.invalidate()
+    appearanceObservation = nil
+  }
+
+  /// The `auto`-mode observer callback: re-resolves the live OS appearance and,
+  /// when it actually changed, re-pushes it to every project. No debounce (OD-c):
+  /// the KVO fires once per real OS toggle and re-applying an unchanged background
+  /// is a harmless no-op.
+  private func systemAppearanceChanged() {
+    let nowDark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+    guard nowDark != resolvedDark else { return }
+    resolvedDark = nowDark
+    pushAppearanceToAllProjects()
+  }
+
+  /// Fans the resolved appearance out to every live project's nvim (`:set
+  /// background=…`). A no-op before any project exists (e.g. the launch call).
+  private func pushAppearanceToAllProjects() {
+    for project in projects {
+      project.setBackground(dark: resolvedDark)
+    }
   }
 
   /// A FileManager-backed `isDirectory` check for `RestoreSeam`/`StateSeam`.
@@ -252,6 +339,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   }
 
   func applicationWillTerminate(_ notification: Notification) {
+    // Stop observing the OS appearance before teardown.
+    removeAppearanceObserver()
+
     // Walk the whole live window/tab tree and commit it SYNCHRONOUSLY (any
     // coalesced snapshot may not have fired yet), then block briefly on the
     // state writer so `state.json` is on disk before teardown.

@@ -43,6 +43,7 @@ filegroup(
 swift_library(
     name = "wolf_key_map",
     srcs = [
+        "Sources/WolfKeyMap/AppearanceSeam.swift",
         "Sources/WolfKeyMap/CellMetricsMath.swift",
         "Sources/WolfKeyMap/CommandSeam.swift",
         "Sources/WolfKeyMap/EditSeam.swift",
@@ -192,6 +193,7 @@ sh_test(
 swift_test(
     name = "WolfKeyMapTests",
     srcs = [
+        "Tests/WolfKeyMapTests/AppearanceSeamTests.swift",
         "Tests/WolfKeyMapTests/CellMetricsMathTests.swift",
         "Tests/WolfKeyMapTests/CommandSeamTests.swift",
         "Tests/WolfKeyMapTests/EditSeamTests.swift",

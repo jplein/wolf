@@ -85,6 +85,10 @@ Integration tests across the `tests/*.rs` binaries (driving a real pinned Neovim
 - a linked group (`:hi link WolfCursor Visual`) resolves to its target's effective attributes (the helper reads with `link = false`);
 - clearing both groups (`:hi clear …` + `:doautocmd ColorScheme`) falls back to all-`None`.
 
+### Appearance / background (real Neovim)
+
+`appearance.rs` (Bazel target `//crates/wolf-core:appearance`, modeled on `theme.rs`) verifies `WolfCore::set_background` flips nvim's global `&background` against a real, hermetic nvim. Because core exposes no public `nvim_eval` / `get_option_value`, the test observes `&background` INDIRECTLY via a marker technique: it sets `WolfCursor guibg` to a marker color chosen by the live `&background` (`:execute 'hi WolfCursor guibg=' .. (&background ==# 'light' ? '#11ff11' : '#ff1111')`), fires `:doautocmd ColorScheme`, and reads back `Snapshot.theme.cursor.bg`. The initial observed state is `dark` (init.lua's `vim.o.background = "dark"` pre-push fallback); `set_background(false)` polls until the marker reflects `light`, and `set_background(true)` polls back to `dark`. It relies on the input-channel FIFO ordering (the `SetBackground` event applies before the marker keystrokes) — the same ordered pump the keystroke tests use.
+
 ### Copy / paste + visual mode (real Neovim)
 
 `copy_paste.rs` (Bazel target `//crates/wolf-core:copy_paste`, four tests) verifies the Edit-menu copy/paste surface against a real, hermetic nvim, reusing `start_core_with_temp_md` and polling `is_visual_mode()` across a few flushes (a stray startup-tail redraw can satisfy a single `wait_for_flush` before the mode_change lands):
