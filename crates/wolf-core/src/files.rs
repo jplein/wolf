@@ -116,10 +116,7 @@ pub struct FileSearch {
 impl FileSearch {
     /// Assembles a [`FileSearch`] from its shared state and cancel flag (the
     /// traversal having already been spawned against the same handles).
-    pub(crate) fn from_parts(
-        state: Arc<RwLock<FileSearchState>>,
-        cancel: Arc<AtomicBool>,
-    ) -> Self {
+    pub(crate) fn from_parts(state: Arc<RwLock<FileSearchState>>, cancel: Arc<AtomicBool>) -> Self {
         Self { state, cancel }
     }
 
@@ -225,11 +222,7 @@ pub(crate) fn spawn_traversal(
 /// Appends `batch` (draining it) to the shared state, bumps `version`, and (when
 /// `complete`) marks the search finished. The write lock is held only for this
 /// short, IO-free critical section and never across a wake.
-fn append_batch(
-    state: &Arc<RwLock<FileSearchState>>,
-    batch: &mut Vec<FileEntry>,
-    complete: bool,
-) {
+fn append_batch(state: &Arc<RwLock<FileSearchState>>, batch: &mut Vec<FileEntry>, complete: bool) {
     let mut guard = state.write();
     guard.entries.append(batch);
     guard.version += 1;
@@ -266,7 +259,9 @@ fn is_listable_file(path: &Path) -> bool {
         true
     } else if file_type.is_symlink() {
         // `metadata` follows the link; keep only if it resolves to a plain file.
-        std::fs::metadata(path).map(|m| m.is_file()).unwrap_or(false)
+        std::fs::metadata(path)
+            .map(|m| m.is_file())
+            .unwrap_or(false)
     } else {
         false
     }

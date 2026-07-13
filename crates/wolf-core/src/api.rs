@@ -395,7 +395,10 @@ impl WolfCore {
     /// failing.
     #[must_use]
     pub fn render_preview(&self, source_bufnr: i64) -> String {
-        match self.runtime.block_on(self.nvim.render_preview(source_bufnr)) {
+        match self
+            .runtime
+            .block_on(self.nvim.render_preview(source_bufnr))
+        {
             Ok(html) => html,
             Err(e) => {
                 tracing::warn!("render_preview({source_bufnr}) failed: {e}");
@@ -509,7 +512,9 @@ impl WolfCore {
     /// can drop the would-be view.
     #[must_use]
     pub fn create_tabpage(&self, cwd: Option<&Path>) -> i64 {
-        let cwd = cwd.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+        let cwd = cwd
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
         match self.runtime.block_on(self.nvim.create_tabpage(&cwd)) {
             Ok(handle) => handle,
             Err(e) => {
@@ -801,9 +806,7 @@ impl WolfCore {
 
     /// Cleanly shuts down the captive Neovim and tears down the runtime.
     pub fn shutdown(self) -> Result<(), CoreError> {
-        let WolfCore {
-            runtime, nvim, ..
-        } = self;
+        let WolfCore { runtime, nvim, .. } = self;
         runtime.block_on(async move { nvim.shutdown().await })?;
         Ok(())
     }
@@ -821,9 +824,7 @@ impl WolfCore {
         match self.runtime.block_on(self.nvim.current_dir()) {
             Ok(p) => std::fs::canonicalize(&p).unwrap_or(p),
             Err(e) => {
-                tracing::warn!(
-                    "getcwd() query failed ({e}); falling back to configured cwd"
-                );
+                tracing::warn!("getcwd() query failed ({e}); falling back to configured cwd");
                 std::fs::canonicalize(&self.cwd).unwrap_or_else(|_| self.cwd.clone())
             }
         }

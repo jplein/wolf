@@ -146,7 +146,11 @@ fn query_narrows_and_keeps_mru_first() {
         "among matches, the more-recently-used lib.rs must rank ahead of main.rs \
          (lib@{p_lib}, main@{p_main})"
     );
-    assert_eq!(rows.len(), 2, "exactly the two '.rs' buffers survive: {rows:?}");
+    assert_eq!(
+        rows.len(),
+        2,
+        "exactly the two '.rs' buffers survive: {rows:?}"
+    );
 }
 
 /// (d) Display strings: a name UNDER cwd -> the relative remainder; a name

@@ -16,14 +16,14 @@ import WolfFFI
 /// render-wake orchestration (which applies layout intents + redraws every pane,
 /// the cmdline strip, and the file-tree sidebar).
 enum WakeBridge {
-    /// Registers the C wake callback with the Rust core once at launch. The
-    /// closure captures no state (it only touches the global `WindowRegistry`),
-    /// so it converts to a `@convention(c)` function pointer taking the token.
-    static func install() {
-        wolf_ffi_set_wake({ token in
-            DispatchQueue.main.async {
-                WindowRegistry.shared.project(for: token)?.onWake()
-            }
-        })
-    }
+  /// Registers the C wake callback with the Rust core once at launch. The
+  /// closure captures no state (it only touches the global `WindowRegistry`),
+  /// so it converts to a `@convention(c)` function pointer taking the token.
+  static func install() {
+    wolf_ffi_set_wake({ token in
+      DispatchQueue.main.async {
+        WindowRegistry.shared.project(for: token)?.onWake()
+      }
+    })
+  }
 }

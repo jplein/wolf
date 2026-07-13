@@ -306,7 +306,6 @@ impl StateStore {
         }
         true
     }
-
 }
 
 /// The dedicated writer-thread body (`wolf-state-writer`).
@@ -323,20 +322,14 @@ fn writer_loop(inner: &Arc<StoreInner>) {
         {
             let mut cell = inner.cell.lock();
             while cell.generation <= cell.written {
-                let timed_out = inner
-                    .cond
-                    .wait_for(&mut cell, WRITER_IDLE_POLL)
-                    .timed_out();
+                let timed_out = inner.cond.wait_for(&mut cell, WRITER_IDLE_POLL).timed_out();
                 // The writer's own Arc is the only one left: every StateStore
                 // handle is gone, nothing is pending, so exit. The pending
                 // check (`generation <= written`) must be re-read here: a last
                 // handle can mutate and drop between the wait timing out and
                 // the lock being reacquired, and that mutation must still be
                 // written.
-                if timed_out
-                    && Arc::strong_count(inner) == 1
-                    && cell.generation <= cell.written
-                {
+                if timed_out && Arc::strong_count(inner) == 1 && cell.generation <= cell.written {
                     return;
                 }
             }

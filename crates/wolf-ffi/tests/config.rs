@@ -74,8 +74,7 @@ fn expected_default_font_size() -> f64 {
 
 /// Writes `contents` to `path`, panicking with context on failure (errcheck).
 fn write(path: &Path, contents: &str) {
-    std::fs::write(path, contents)
-        .unwrap_or_else(|e| panic!("writing {}: {e}", path.display()));
+    std::fs::write(path, contents).unwrap_or_else(|e| panic!("writing {}: {e}", path.display()));
 }
 
 #[test]

@@ -285,11 +285,7 @@ fn rank_empty(entries: &[FileEntry]) -> Vec<Match> {
         .collect();
 
     matches.sort_by(|a, b| {
-        (a.key.mru_group, a.key.mru_rank, a.index).cmp(&(
-            b.key.mru_group,
-            b.key.mru_rank,
-            b.index,
-        ))
+        (a.key.mru_group, a.key.mru_rank, a.index).cmp(&(b.key.mru_group, b.key.mru_rank, b.index))
     });
     matches
 }
@@ -477,10 +473,10 @@ mod tests {
     #[test]
     fn empty_query_returns_all_mru_first() {
         let entries = [
-            entry("b.md", None),     // 0: non-MRU
-            entry("c.md", Some(1)),  // 1: MRU rank 1
-            entry("a.md", Some(0)),  // 2: MRU rank 0 (most recent)
-            entry("d.md", None),     // 3: non-MRU
+            entry("b.md", None),    // 0: non-MRU
+            entry("c.md", Some(1)), // 1: MRU rank 1
+            entry("a.md", Some(0)), // 2: MRU rank 0 (most recent)
+            entry("d.md", None),    // 3: non-MRU
         ];
 
         let got = rank_matches("", &entries);
@@ -496,13 +492,23 @@ mod tests {
         // "readme" matches both differently-cased displays.
         let entries = [entry("README.md", None), entry("Readme.md", None)];
         let got = rank_matches("readme", &entries);
-        assert!(position_of(&got, 0).is_some(), "README.md should match 'readme'");
-        assert!(position_of(&got, 1).is_some(), "Readme.md should match 'readme'");
+        assert!(
+            position_of(&got, 0).is_some(),
+            "README.md should match 'readme'"
+        );
+        assert!(
+            position_of(&got, 1).is_some(),
+            "Readme.md should match 'readme'"
+        );
 
         // An uppercase query matches a lowercase display as a subsequence.
         let entries = [entry("readme.md", None)];
         let got = rank_matches("RDM", &entries);
-        assert_eq!(indices(&got), vec![0], "'RDM' should ci-subsequence-match readme.md");
+        assert_eq!(
+            indices(&got),
+            vec![0],
+            "'RDM' should ci-subsequence-match readme.md"
+        );
     }
 
     /// A subsequence (non-contiguous) query matches; an entry with no subsequence
@@ -532,8 +538,8 @@ mod tests {
     #[test]
     fn mru_outranks_better_non_mru_match() {
         let entries = [
-            entry("main.rs", None),          // 0: non-MRU, "ma" -> 124
-            entry("docs/manual.md", Some(0)),// 1: MRU rank 0, "ma" -> 124
+            entry("main.rs", None),           // 0: non-MRU, "ma" -> 124
+            entry("docs/manual.md", Some(0)), // 1: MRU rank 0, "ma" -> 124
         ];
 
         let got = rank_matches("ma", &entries);
@@ -613,13 +619,17 @@ mod tests {
     #[test]
     fn full_word_match_ranks_top_of_prefix_group() {
         let entries = [
-            entry("main.rs", None),         // 0: 124, len 7
-            entry("maintenance.md", None),  // 1: 124, len 15
+            entry("main.rs", None),        // 0: 124, len 7
+            entry("maintenance.md", None), // 1: 124, len 15
         ];
 
         let got = rank_matches("main", &entries);
 
-        assert_eq!(indices(&got), vec![0, 1], "main.rs should rank before maintenance.md");
+        assert_eq!(
+            indices(&got),
+            vec![0, 1],
+            "main.rs should rank before maintenance.md"
+        );
     }
 
     /// Deterministic tie-breaks: entries otherwise equal under keys 1-6 are
@@ -801,7 +811,7 @@ mod tests {
     #[test]
     fn mru_dominates_stronger_non_mru() {
         let entries = [
-            entry("wolf/core.md", None),   // 0: non-MRU, perfect component start (124)
+            entry("wolf/core.md", None), // 0: non-MRU, perfect component start (124)
             entry("xwxoxlxf.md", Some(0)), // 1: MRU, weak scattered match (0)
         ];
 
@@ -825,7 +835,7 @@ mod tests {
     #[test]
     fn component_start_beats_scattered() {
         let entries = [
-            entry("wxoxlxf.md", None),             // 0: scattered (0)
+            entry("wxoxlxf.md", None),               // 0: scattered (0)
             entry("crates/wolf-core/main.rs", None), // 1: component start (124)
         ];
 

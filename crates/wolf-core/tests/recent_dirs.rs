@@ -109,7 +109,11 @@ fn re_recording_moves_to_front_without_duplicating() {
     store.record(&a);
 
     let recent = store.recent();
-    assert_eq!(recent.len(), 3, "re-record must upsert, not add a duplicate");
+    assert_eq!(
+        recent.len(),
+        3,
+        "re-record must upsert, not add a duplicate"
+    );
 
     // a jumps to front; the rest keep their relative order behind it: c, then b.
     assert!(

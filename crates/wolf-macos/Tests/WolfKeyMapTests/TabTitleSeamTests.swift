@@ -33,98 +33,98 @@ import XCTest
 
 final class TabTitleSeamTests: XCTestCase {
 
-    /// The unnamed/empty sentinel label.
-    private let untitled = "untitled"
+  /// The unnamed/empty sentinel label.
+  private let untitled = "untitled"
 
-    /// Builds a disambiguated label with the LOCKED format: basename, a space, an
-    /// EM DASH (U+2014), a space, then the trailing parent segments. Constructing
-    /// it from the explicit scalar guarantees the exact code point under test.
-    private func labeled(_ base: String, _ parents: String) -> String {
-        "\(base) \u{2014} \(parents)"
-    }
+  /// Builds a disambiguated label with the LOCKED format: basename, a space, an
+  /// EM DASH (U+2014), a space, then the trailing parent segments. Constructing
+  /// it from the explicit scalar guarantees the exact code point under test.
+  private func labeled(_ base: String, _ parents: String) -> String {
+    "\(base) \u{2014} \(parents)"
+  }
 
-    // MARK: - distinct basenames pass through unchanged
+  // MARK: - distinct basenames pass through unchanged
 
-    func testAllDistinctBasenamesPassThrough() {
-        let input = ["/a/b/alpha.md", "/c/d/beta.txt", "/e/gamma.rs"]
-        let expected = ["alpha.md", "beta.txt", "gamma.rs"]
-        XCTAssertEqual(
-            TabTitleSeam.labels(activeBufferPaths: input), expected,
-            "distinct basenames must be left as bare basenames, order + count preserved")
-    }
+  func testAllDistinctBasenamesPassThrough() {
+    let input = ["/a/b/alpha.md", "/c/d/beta.txt", "/e/gamma.rs"]
+    let expected = ["alpha.md", "beta.txt", "gamma.rs"]
+    XCTAssertEqual(
+      TabTitleSeam.labels(activeBufferPaths: input), expected,
+      "distinct basenames must be left as bare basenames, order + count preserved")
+  }
 
-    // MARK: - two colliding basenames disambiguate with ONE parent segment
+  // MARK: - two colliding basenames disambiguate with ONE parent segment
 
-    func testTwoWayCollisionUsesOneParentSegment() {
-        let input = ["/Users/jane/wolf/README.md", "/Users/jane/docs/README.md"]
-        let expected = [labeled("README.md", "wolf"), labeled("README.md", "docs")]
-        XCTAssertEqual(
-            TabTitleSeam.labels(activeBufferPaths: input), expected,
-            "two same-basename tabs must each extend to their (distinct) immediate parent")
-    }
+  func testTwoWayCollisionUsesOneParentSegment() {
+    let input = ["/Users/jane/wolf/README.md", "/Users/jane/docs/README.md"]
+    let expected = [labeled("README.md", "wolf"), labeled("README.md", "docs")]
+    XCTAssertEqual(
+      TabTitleSeam.labels(activeBufferPaths: input), expected,
+      "two same-basename tabs must each extend to their (distinct) immediate parent")
+  }
 
-    // MARK: - three-way collision whose immediate parents ALSO collide
+  // MARK: - three-way collision whose immediate parents ALSO collide
 
-    func testThreeWayCollisionExtendsToTwoSegments() {
-        // The immediate parent ("shared") is identical for all three, so ONE
-        // segment does not disambiguate — the seam must grow to TWO trailing
-        // segments, which are then all distinct.
-        let input = ["/root/a/shared/x.md", "/root/b/shared/x.md", "/root/c/shared/x.md"]
-        let expected = [
-            labeled("x.md", "a/shared"),
-            labeled("x.md", "b/shared"),
-            labeled("x.md", "c/shared"),
-        ]
-        XCTAssertEqual(
-            TabTitleSeam.labels(activeBufferPaths: input), expected,
-            "a collision whose immediate parents also collide must extend to two segments")
+  func testThreeWayCollisionExtendsToTwoSegments() {
+    // The immediate parent ("shared") is identical for all three, so ONE
+    // segment does not disambiguate — the seam must grow to TWO trailing
+    // segments, which are then all distinct.
+    let input = ["/root/a/shared/x.md", "/root/b/shared/x.md", "/root/c/shared/x.md"]
+    let expected = [
+      labeled("x.md", "a/shared"),
+      labeled("x.md", "b/shared"),
+      labeled("x.md", "c/shared"),
+    ]
+    XCTAssertEqual(
+      TabTitleSeam.labels(activeBufferPaths: input), expected,
+      "a collision whose immediate parents also collide must extend to two segments")
 
-        // Belt-and-suspenders: every produced label is distinct.
-        let produced = TabTitleSeam.labels(activeBufferPaths: input)
-        XCTAssertEqual(
-            Set(produced).count, produced.count,
-            "the disambiguated labels must all be distinct")
-    }
+    // Belt-and-suspenders: every produced label is distinct.
+    let produced = TabTitleSeam.labels(activeBufferPaths: input)
+    XCTAssertEqual(
+      Set(produced).count, produced.count,
+      "the disambiguated labels must all be distinct")
+  }
 
-    // MARK: - empty / unnamed => "untitled"; a bare distinct filename => basename
+  // MARK: - empty / unnamed => "untitled"; a bare distinct filename => basename
 
-    func testEmptyAndUnnamedAreUntitledAndBareFileKeepsBasename() {
-        // "" and "[No Name]" are the unnamed sentinels => "untitled". They both map
-        // to "untitled" WITHOUT being path-disambiguated (there is no meaningful
-        // path). A normal distinct path keeps its basename.
-        let input = ["", "[No Name]", "/x/dir/notes.md"]
-        let expected = [untitled, untitled, "notes.md"]
-        XCTAssertEqual(
-            TabTitleSeam.labels(activeBufferPaths: input), expected,
-            "empty and [No Name] map to \"untitled\"; a distinct path keeps its basename")
+  func testEmptyAndUnnamedAreUntitledAndBareFileKeepsBasename() {
+    // "" and "[No Name]" are the unnamed sentinels => "untitled". They both map
+    // to "untitled" WITHOUT being path-disambiguated (there is no meaningful
+    // path). A normal distinct path keeps its basename.
+    let input = ["", "[No Name]", "/x/dir/notes.md"]
+    let expected = [untitled, untitled, "notes.md"]
+    XCTAssertEqual(
+      TabTitleSeam.labels(activeBufferPaths: input), expected,
+      "empty and [No Name] map to \"untitled\"; a distinct path keeps its basename")
 
-        // A bare filename with NO slash is a NAMED buffer: when distinct it keeps
-        // its basename (it is not "unnamed").
-        let bare = ["/a/b/other.md", "file.md"]
-        XCTAssertEqual(
-            TabTitleSeam.labels(activeBufferPaths: bare), ["other.md", "file.md"],
-            "a bare distinct filename with no parent keeps its basename")
-    }
+    // A bare filename with NO slash is a NAMED buffer: when distinct it keeps
+    // its basename (it is not "unnamed").
+    let bare = ["/a/b/other.md", "file.md"]
+    XCTAssertEqual(
+      TabTitleSeam.labels(activeBufferPaths: bare), ["other.md", "file.md"],
+      "a bare distinct filename with no parent keeps its basename")
+  }
 
-    // MARK: - 1:1 order preservation on a mixed (some colliding, some not) input
+  // MARK: - 1:1 order preservation on a mixed (some colliding, some not) input
 
-    func testOrderPreservedOnMixedInput() {
-        let input = [
-            "/x/README.md",  // collides with the other README.md
-            "/proj/main.swift",  // distinct
-            "/y/README.md",  // collides with the first README.md
-            "/q/util.rs",  // distinct
-        ]
-        let expected = [
-            labeled("README.md", "x"),
-            "main.swift",
-            labeled("README.md", "y"),
-            "util.rs",
-        ]
-        let produced = TabTitleSeam.labels(activeBufferPaths: input)
-        XCTAssertEqual(produced.count, input.count, "labels are 1:1 with the input")
-        XCTAssertEqual(
-            produced, expected,
-            "mixed colliding/non-colliding tabs keep input order with per-tab labels")
-    }
+  func testOrderPreservedOnMixedInput() {
+    let input = [
+      "/x/README.md",  // collides with the other README.md
+      "/proj/main.swift",  // distinct
+      "/y/README.md",  // collides with the first README.md
+      "/q/util.rs",  // distinct
+    ]
+    let expected = [
+      labeled("README.md", "x"),
+      "main.swift",
+      labeled("README.md", "y"),
+      "util.rs",
+    ]
+    let produced = TabTitleSeam.labels(activeBufferPaths: input)
+    XCTAssertEqual(produced.count, input.count, "labels are 1:1 with the input")
+    XCTAssertEqual(
+      produced, expected,
+      "mixed colliding/non-colliding tabs keep input order with per-tab labels")
+  }
 }

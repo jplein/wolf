@@ -209,7 +209,10 @@ fn panes_split_resize_focus_close() {
 
     // active_win() is nonzero and equals the only window.
     let active = handle.active_win();
-    assert_ne!(active, 0, "active_win() should be nonzero with a live window");
+    assert_ne!(
+        active, 0,
+        "active_win() should be nonzero with a live window"
+    );
     assert_eq!(
         active, original_win,
         "active_win() should equal the only window (active={active}, win={original_win})"
@@ -259,7 +262,10 @@ fn panes_split_resize_focus_close() {
         "the SPLIT intent's from() should be the original window \
          (from={split_from}, original={original_win})"
     );
-    assert_ne!(new_win, 0, "the SPLIT intent's win() should be a nonzero new handle");
+    assert_ne!(
+        new_win, 0,
+        "the SPLIT intent's win() should be a nonzero new handle"
+    );
     assert_ne!(
         new_win, original_win,
         "the SPLIT intent's win() should be DISTINCT from the original window"
@@ -287,7 +293,10 @@ fn panes_split_resize_focus_close() {
 
     // grid_for_win(newWin) is nonzero and distinct from the original grid.
     let new_grid = handle.grid_for_win(new_win);
-    assert_ne!(new_grid, 0, "grid_for_win(new_win) should be a nonzero grid");
+    assert_ne!(
+        new_grid, 0,
+        "grid_for_win(new_win) should be a nonzero grid"
+    );
     assert_ne!(
         new_grid, original_grid,
         "the new window's grid should be DISTINCT from the original grid \

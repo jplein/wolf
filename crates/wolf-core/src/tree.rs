@@ -339,7 +339,12 @@ mod tests {
 
         // Dirs FIRST (case-insensitive name: "docs" < "src"), then files
         // (case-insensitive: "Cargo.toml" -> 'c' < 'r' <- "readme.md").
-        let want = vec![dir("docs"), dir("src"), file("Cargo.toml"), file("readme.md")];
+        let want = vec![
+            dir("docs"),
+            dir("src"),
+            file("Cargo.toml"),
+            file("readme.md"),
+        ];
         assert_eq!(got, want);
     }
 
@@ -363,7 +368,11 @@ mod tests {
         // Pin the abs_path convention explicitly on a File node.
         match &got[0] {
             TreeNode::File { abs_path, .. } => {
-                assert_eq!(*abs_path, abs("src/lib.rs"), "File abs_path == /root/{{display}}");
+                assert_eq!(
+                    *abs_path,
+                    abs("src/lib.rs"),
+                    "File abs_path == /root/{{display}}"
+                );
             }
             other => panic!("expected a File node, got {other:?}"),
         }
@@ -405,7 +414,8 @@ mod tests {
 
         // Defensive: there is no Dir node whose rel_path is "b".
         assert!(
-            !got.iter().any(|n| matches!(n, TreeNode::Dir { rel_path, .. } if rel_path == "b")),
+            !got.iter()
+                .any(|n| matches!(n, TreeNode::Dir { rel_path, .. } if rel_path == "b")),
             "a top-level file must not surface a same-named dir"
         );
     }
@@ -423,12 +433,7 @@ mod tests {
 
         // Dirs FIRST, case-insensitive ("alpha" < "gamma"), then files
         // case-insensitive ("Beta" < "Zeta") — case must NOT reorder these.
-        let want = vec![
-            dir("alpha"),
-            dir("gamma"),
-            file("Beta.md"),
-            file("Zeta.md"),
-        ];
+        let want = vec![dir("alpha"), dir("gamma"), file("Beta.md"), file("Zeta.md")];
         assert_eq!(got, want);
     }
 
@@ -458,11 +463,7 @@ mod tests {
             },
             Case {
                 rel_path: "x/y/z/f.md",
-                expected: vec![
-                    "x".to_string(),
-                    "x/y".to_string(),
-                    "x/y/z".to_string(),
-                ],
+                expected: vec!["x".to_string(), "x/y".to_string(), "x/y/z".to_string()],
             },
         ];
 
@@ -626,12 +627,7 @@ mod tests {
         // case-insensitive ("Beta" < "Zeta") — case must NOT reorder these.
         assert_eq!(
             index.children_of(""),
-            &[
-                dir("alpha"),
-                dir("gamma"),
-                file("Beta.md"),
-                file("Zeta.md"),
-            ][..]
+            &[dir("alpha"), dir("gamma"), file("Beta.md"), file("Zeta.md"),][..]
         );
     }
 
@@ -731,11 +727,7 @@ mod tests {
 
     #[test]
     fn tree_index_cache_builds_once_per_version() {
-        let entries = [
-            fe("src/main.rs"),
-            fe("src/lib.rs"),
-            fe("docs/intro.md"),
-        ];
+        let entries = [fe("src/main.rs"), fe("src/lib.rs"), fe("docs/intro.md")];
 
         let mut cache = TreeIndexCache::new();
 

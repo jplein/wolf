@@ -217,7 +217,9 @@ fn split_windows_report_distinct_filenames() {
     std::fs::write(&file_b, DOC).expect("failed to write beta.md");
 
     let (core, waiter) = start_core_in(cwd.clone());
-    core.send_input(InputEvent::Open { path: file_a.clone() });
+    core.send_input(InputEvent::Open {
+        path: file_a.clone(),
+    });
 
     let grid = wait_for_active_window_grid(&core, &waiter);
     poll_pane_status(
@@ -287,7 +289,9 @@ fn closing_split_drops_that_window_survivor_keeps_file() {
     std::fs::write(&file_b, DOC).expect("failed to write beta.md");
 
     let (core, waiter) = start_core_in(cwd.clone());
-    core.send_input(InputEvent::Open { path: file_a.clone() });
+    core.send_input(InputEvent::Open {
+        path: file_a.clone(),
+    });
 
     let grid = wait_for_active_window_grid(&core, &waiter);
     poll_pane_status(

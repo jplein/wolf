@@ -33,9 +33,7 @@ use std::time::{Duration, Instant};
 
 use std::io::Write as _;
 
-use wolf_core::{
-    CoreConfig, InputEvent, Key, KeyEvent, WakeFn, WolfCore,
-};
+use wolf_core::{CoreConfig, InputEvent, Key, KeyEvent, WakeFn, WolfCore};
 
 /// Default grid width used by most tests, in columns.
 pub const DEFAULT_COLS: u16 = 80;
@@ -397,9 +395,7 @@ pub fn temp_md_path() -> (tempfile::TempDir, PathBuf) {
 /// `content`, and waits for the first flush so the grid reflects the open file.
 ///
 /// Returns the live core, its flush waiter, and the temp file (kept alive).
-pub fn start_core_with_temp_md(
-    content: &str,
-) -> (WolfCore, FlushWaiter, tempfile::NamedTempFile) {
+pub fn start_core_with_temp_md(content: &str) -> (WolfCore, FlushWaiter, tempfile::NamedTempFile) {
     start_core_with_temp_md_sized(content, DEFAULT_COLS, DEFAULT_ROWS)
 }
 

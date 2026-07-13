@@ -41,7 +41,10 @@ fn status(buf: &str, cwd: Option<&str>, home: Option<&str>) -> PaneStatus {
 fn empty_buf_path_is_no_name_with_empty_display() {
     let s = status("", Some("/a/b"), Some("/Users/u"));
     assert_eq!(s.filename, NO_NAME, "empty buf_path -> filename is NO_NAME");
-    assert_eq!(s.display_path, "", "empty buf_path -> display_path is empty");
+    assert_eq!(
+        s.display_path, "",
+        "empty buf_path -> display_path is empty"
+    );
 }
 
 /// A file NESTED under cwd shows its base name and the cwd-RELATIVE remainder.
@@ -73,7 +76,10 @@ fn under_home_not_cwd_uses_tilde_prefix() {
 #[test]
 fn path_equal_home_is_bare_tilde() {
     let s = status("/Users/u", Some("/tmp/p"), Some("/Users/u"));
-    assert_eq!(s.filename, "u", "filename is home's basename when path == home");
+    assert_eq!(
+        s.filename, "u",
+        "filename is home's basename when path == home"
+    );
     assert_eq!(s.display_path, "~", "path == home collapses to a bare ~");
 }
 
@@ -106,7 +112,11 @@ fn path_equal_cwd_is_not_empty_relative() {
 /// `~`) because the cwd branch wins.
 #[test]
 fn cwd_wins_over_home_when_both_apply() {
-    let s = status("/Users/u/proj/a.md", Some("/Users/u/proj"), Some("/Users/u"));
+    let s = status(
+        "/Users/u/proj/a.md",
+        Some("/Users/u/proj"),
+        Some("/Users/u"),
+    );
     assert_eq!(s.filename, "a.md");
     assert_eq!(
         s.display_path, "a.md",
@@ -120,5 +130,8 @@ fn no_cwd_no_home_is_absolute_passthrough() {
     let buf = "/x/y/z.md";
     let s = status(buf, None, None);
     assert_eq!(s.filename, "z.md");
-    assert_eq!(s.display_path, buf, "cwd=None,home=None -> absolute passthrough");
+    assert_eq!(
+        s.display_path, buf,
+        "cwd=None,home=None -> absolute passthrough"
+    );
 }

@@ -1162,7 +1162,11 @@ pub fn wolf_ffi_load_state() -> FfiState {
         .and_then(|dir| wolf_core::load_state(&dir))
         .unwrap_or_default();
     FfiState {
-        windows: state.windows.iter().map(FfiWindowState::from_window).collect(),
+        windows: state
+            .windows
+            .iter()
+            .map(FfiWindowState::from_window)
+            .collect(),
     }
 }
 
@@ -1249,7 +1253,7 @@ pub fn wolf_ffi_state_snapshot_commit() {
 /// flushed in time; `true` when no store exists (there is nothing to flush).
 #[must_use]
 pub fn wolf_ffi_state_flush() -> bool {
-    shared_store().map_or(true, |store| store.flush(STATE_FLUSH_TIMEOUT))
+    shared_store().is_none_or(|store| store.flush(STATE_FLUSH_TIMEOUT))
 }
 
 // ---------------------------------------------------------------------------
@@ -1891,7 +1895,11 @@ impl WolfCoreHandle {
         snap.previews
             .iter()
             .map(|(&win, info)| {
-                let source_tick = snap.markdown_ticks.get(&info.source_bufnr).copied().unwrap_or(0);
+                let source_tick = snap
+                    .markdown_ticks
+                    .get(&info.source_bufnr)
+                    .copied()
+                    .unwrap_or(0);
                 let source_display_path = core.display_path(&info.source_path.to_string_lossy());
                 FfiPreview::from_preview(win, info, source_tick, source_display_path)
             })
@@ -2247,7 +2255,9 @@ impl FfiCommandRow {
             PaletteRowKind::SwitchWindow => palette_row_kind::SWITCH_WINDOW,
             PaletteRowKind::OpenRecent => palette_row_kind::OPEN_RECENT,
         };
-        let command_kind = row.command.map_or(0, |c| FfiCommand::from_command(c).kind());
+        let command_kind = row
+            .command
+            .map_or(0, |c| FfiCommand::from_command(c).kind());
         let path = row
             .path
             .as_ref()
@@ -2610,8 +2620,7 @@ impl FfiFileSearch {
             return String::new();
         };
         let view = search.read();
-        wolf_core::tree::rel_path_for(&view.entries, std::path::Path::new(&abs))
-            .unwrap_or_default()
+        wolf_core::tree::rel_path_for(&view.entries, std::path::Path::new(&abs)).unwrap_or_default()
     }
 }
 

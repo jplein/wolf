@@ -236,8 +236,7 @@ mod tests {
 
     /// Reads a file to a `String`, panicking with context on failure (errcheck).
     fn read(path: &Path) -> String {
-        std::fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
     }
 
     /// Writes `contents` to `path`, panicking with context on failure (errcheck).
@@ -254,7 +253,10 @@ mod tests {
     fn creates_file_with_defaults_when_absent() {
         let dir = tempdir().expect("create temp dir");
         let path = dir.path().join(CONFIG_FILE_NAME);
-        assert!(!path.exists(), "precondition: config file must not exist yet");
+        assert!(
+            !path.exists(),
+            "precondition: config file must not exist yet"
+        );
 
         // Absent -> returns the platform defaults AND writes the file.
         let created = load_or_create(dir.path());

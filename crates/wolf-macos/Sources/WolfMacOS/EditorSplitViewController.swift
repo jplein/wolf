@@ -22,49 +22,49 @@ import AppKit
 /// The window/VC/appearance glue is not headlessly testable (no window server);
 /// it is compile-verified + manual-smoke only.
 final class EditorSplitViewController: NSSplitViewController {
-    /// Minimum width of the sidebar pane, in points.
-    static let minThickness: CGFloat = 180
-    /// Maximum width of the sidebar pane, in points.
-    static let maxThickness: CGFloat = 420
+  /// Minimum width of the sidebar pane, in points.
+  static let minThickness: CGFloat = 180
+  /// Maximum width of the sidebar pane, in points.
+  static let maxThickness: CGFloat = 420
 
-    /// Builds the split of `treeView` (sidebar) and `paneContainer` (editor
-    /// content).
-    init(treeView: FileTreeView, paneContainer: PaneContainerView) {
-        super.init(nibName: nil, bundle: nil)
+  /// Builds the split of `treeView` (sidebar) and `paneContainer` (editor
+  /// content).
+  init(treeView: FileTreeView, paneContainer: PaneContainerView) {
+    super.init(nibName: nil, bundle: nil)
 
-        let sidebarHost = HostViewController(hostedView: treeView, pinTopToSafeArea: false)
-        let contentHost = HostViewController(hostedView: paneContainer, pinTopToSafeArea: true)
+    let sidebarHost = HostViewController(hostedView: treeView, pinTopToSafeArea: false)
+    let contentHost = HostViewController(hostedView: paneContainer, pinTopToSafeArea: true)
 
-        // `sidebarWithViewController:` gives the `.sidebar` behavior: vibrancy,
-        // full-height under the titlebar, collapsibility, and the higher holding
-        // priority that makes the editor pane absorb resizing. DO NOT lower the
-        // holding priority here — that would invert the resize behavior.
-        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarHost)
-        sidebarItem.canCollapse = true
-        sidebarItem.minimumThickness = Self.minThickness
-        sidebarItem.maximumThickness = Self.maxThickness
+    // `sidebarWithViewController:` gives the `.sidebar` behavior: vibrancy,
+    // full-height under the titlebar, collapsibility, and the higher holding
+    // priority that makes the editor pane absorb resizing. DO NOT lower the
+    // holding priority here — that would invert the resize behavior.
+    let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarHost)
+    sidebarItem.canCollapse = true
+    sidebarItem.minimumThickness = Self.minThickness
+    sidebarItem.maximumThickness = Self.maxThickness
 
-        let contentItem = NSSplitViewItem(viewController: contentHost)
+    let contentItem = NSSplitViewItem(viewController: contentHost)
 
-        splitViewItems = [sidebarItem, contentItem]
-    }
+    splitViewItems = [sidebarItem, contentItem]
+  }
 
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("EditorSplitViewController is not constructed from a nib")
-    }
+  @available(*, unavailable)
+  required init?(coder: NSCoder) {
+    fatalError("EditorSplitViewController is not constructed from a nib")
+  }
 
-    /// The sidebar `NSSplitViewItem` (the leading split item), exposed so state
-    /// restore can set — and state persistence can observe — `isCollapsed`.
-    var sidebarItem: NSSplitViewItem {
-        splitViewItems[0]
-    }
+  /// The sidebar `NSSplitViewItem` (the leading split item), exposed so state
+  /// restore can set — and state persistence can observe — `isCollapsed`.
+  var sidebarItem: NSSplitViewItem {
+    splitViewItems[0]
+  }
 
-    /// Pins the divider so the sidebar pane is exactly `MainWindow.treePaneWidth`
-    /// wide. Called by `MainWindow` after the content size is set.
-    func pinDivider() {
-        splitView.setPosition(MainWindow.treePaneWidth, ofDividerAt: 0)
-    }
+  /// Pins the divider so the sidebar pane is exactly `MainWindow.treePaneWidth`
+  /// wide. Called by `MainWindow` after the content size is set.
+  func pinDivider() {
+    splitView.setPosition(MainWindow.treePaneWidth, ofDividerAt: 0)
+  }
 }
 
 /// A minimal `NSViewController` that hosts a single pre-built `NSView` inside the
@@ -79,39 +79,39 @@ final class EditorSplitViewController: NSSplitViewController {
 ///   TOP pinned to the container's `safeAreaLayoutGuide.topAnchor`, so the editor
 ///   grid is not obscured by the transparent titlebar.
 final class HostViewController: NSViewController {
-    private let hostedView: NSView
-    private let pinTopToSafeArea: Bool
+  private let hostedView: NSView
+  private let pinTopToSafeArea: Bool
 
-    /// Builds a host for `hostedView`; `pinTopToSafeArea` selects the CONTENT
-    /// hosting mode (vs. the SIDEBAR mode that adopts the view directly).
-    init(hostedView: NSView, pinTopToSafeArea: Bool) {
-        self.hostedView = hostedView
-        self.pinTopToSafeArea = pinTopToSafeArea
-        super.init(nibName: nil, bundle: nil)
+  /// Builds a host for `hostedView`; `pinTopToSafeArea` selects the CONTENT
+  /// hosting mode (vs. the SIDEBAR mode that adopts the view directly).
+  init(hostedView: NSView, pinTopToSafeArea: Bool) {
+    self.hostedView = hostedView
+    self.pinTopToSafeArea = pinTopToSafeArea
+    super.init(nibName: nil, bundle: nil)
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) {
+    fatalError("HostViewController is not constructed from a nib")
+  }
+
+  override func loadView() {
+    guard pinTopToSafeArea else {
+      // SIDEBAR mode: adopt the hosted view directly.
+      view = hostedView
+      return
     }
 
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("HostViewController is not constructed from a nib")
-    }
-
-    override func loadView() {
-        guard pinTopToSafeArea else {
-            // SIDEBAR mode: adopt the hosted view directly.
-            view = hostedView
-            return
-        }
-
-        // CONTENT mode: pin the hosted view below the safe area.
-        let container = NSView()
-        hostedView.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(hostedView)
-        NSLayoutConstraint.activate([
-            hostedView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            hostedView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            hostedView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            hostedView.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
-        ])
-        view = container
-    }
+    // CONTENT mode: pin the hosted view below the safe area.
+    let container = NSView()
+    hostedView.translatesAutoresizingMaskIntoConstraints = false
+    container.addSubview(hostedView)
+    NSLayoutConstraint.activate([
+      hostedView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+      hostedView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+      hostedView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+      hostedView.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
+    ])
+    view = container
+  }
 }

@@ -147,7 +147,10 @@ fn wait_for_markdown_active(handle: &wolf_ffi::WolfCoreHandle, target: bool, des
         }
         sleep(POLL_INTERVAL);
     }
-    assert_eq!(got, target, "is_markdown_active() should be {target} ({desc})");
+    assert_eq!(
+        got, target,
+        "is_markdown_active() should be {target} ({desc})"
+    );
 }
 
 /// Blocks until `handle.is_preview_active()` equals `target`, then asserts it. The
@@ -164,7 +167,10 @@ fn wait_for_preview_active(handle: &wolf_ffi::WolfCoreHandle, target: bool, desc
         }
         sleep(POLL_INTERVAL);
     }
-    assert_eq!(got, target, "is_preview_active() should be {target} ({desc})");
+    assert_eq!(
+        got, target,
+        "is_preview_active() should be {target} ({desc})"
+    );
 }
 
 /// Blocks until exactly `n` live editor window grids exist, then asserts it.
@@ -283,7 +289,11 @@ fn collapse_to_single_preview_pane(handle: &wolf_ffi::WolfCoreHandle) -> i64 {
     // the source editor window, leaving JUST the preview pane.
     focus_preview(handle);
     send_ex_command(handle, ":only");
-    wait_for_window_count(handle, ONE_PANE, "after :only collapses to the sole preview pane");
+    wait_for_window_count(
+        handle,
+        ONE_PANE,
+        "after :only collapses to the sole preview pane",
+    );
 
     let previews = wait_for_previews(handle, "the sole preview row is alpha.md", |p| {
         p.len() == 1 && p.iter().any(|row| row.source_name() == "alpha.md")
@@ -309,7 +319,11 @@ fn edit_gates_on_preview_pane_and_neutralizes_on_shutdown() {
     // --- 1. A plain markdown buffer is NOT a preview -------------------------
     send_ex_command(&handle, ":e alpha.md");
     wait_for_markdown_active(&handle, true, "after :e alpha.md");
-    wait_for_preview_active(&handle, false, "a plain markdown editor pane is not a preview");
+    wait_for_preview_active(
+        &handle,
+        false,
+        "a plain markdown editor pane is not a preview",
+    );
 
     // --- 2. After split-right preview + focusing it, the active pane IS a preview
     let preview_bufnr = handle.open_preview("split_right".to_string());
@@ -320,7 +334,11 @@ fn edit_gates_on_preview_pane_and_neutralizes_on_shutdown() {
     );
     wait_for_window_count(&handle, TWO_PANES, "after split-right preview");
     focus_preview(&handle);
-    wait_for_preview_active(&handle, true, "the focused preview pane reports is_preview_active");
+    wait_for_preview_active(
+        &handle,
+        true,
+        "the focused preview pane reports is_preview_active",
+    );
 
     // --- 3. edit_source("active") replaces the focused preview with its source;
     // the async wolf_current_file notification (3rd arg = is_preview) must flip
@@ -378,10 +396,16 @@ fn edit_split_left_opens_source_in_a_new_pane() {
     );
 
     // --- 3. Assert: one new pane, one surviving preview, source in a non-preview
-    wait_for_window_count(&handle, TWO_PANES, "split_left grows the layout by one pane");
-    let previews = wait_for_previews(&handle, "exactly one preview remains after split_left", |p| {
-        p.len() == 1
-    });
+    wait_for_window_count(
+        &handle,
+        TWO_PANES,
+        "split_left grows the layout by one pane",
+    );
+    let previews = wait_for_previews(
+        &handle,
+        "exactly one preview remains after split_left",
+        |p| p.len() == 1,
+    );
     let preview_win = previews[0].win();
     let source_win = handle.active_win();
     assert_ne!(
@@ -500,9 +524,11 @@ fn edit_active_replaces_the_preview_with_the_source() {
 
     // --- 3. Assert: the previously-preview window now shows the source -------
     // The only preview was in `preview_win`; replacing it leaves previews() empty.
-    wait_for_previews(&handle, "the replaced preview no longer lists a preview row", |p| {
-        p.is_empty()
-    });
+    wait_for_previews(
+        &handle,
+        "the replaced preview no longer lists a preview row",
+        |p| p.is_empty(),
+    );
     assert_eq!(
         handle.active_win(),
         preview_win,
@@ -545,9 +571,11 @@ fn edit_reuse_falls_back_to_active_when_no_other_editor() {
     );
 
     // --- 3. Assert: source bound into the active window; no new pane ---------
-    wait_for_previews(&handle, "the sole preview is replaced by its source (fallback)", |p| {
-        p.is_empty()
-    });
+    wait_for_previews(
+        &handle,
+        "the sole preview is replaced by its source (fallback)",
+        |p| p.is_empty(),
+    );
     assert_eq!(
         handle.active_win(),
         active_before,
@@ -577,13 +605,21 @@ fn edit_source_is_a_noop_off_a_preview_pane() {
     // --- 1. A plain markdown editor pane (NOT a preview) --------------------
     send_ex_command(&handle, ":e alpha.md");
     wait_for_markdown_active(&handle, true, "after :e alpha.md");
-    wait_for_preview_active(&handle, false, "a plain markdown editor pane is not a preview");
+    wait_for_preview_active(
+        &handle,
+        false,
+        "a plain markdown editor pane is not a preview",
+    );
 
     let windows_before = live_window_count(&handle);
     assert!(
         handle.previews().is_empty(),
         "no preview windows should exist before the negative edit_source: {:?}",
-        handle.previews().iter().map(FfiPreview::win).collect::<Vec<_>>(),
+        handle
+            .previews()
+            .iter()
+            .map(FfiPreview::win)
+            .collect::<Vec<_>>(),
     );
 
     // --- 2. edit_source off a preview pane returns 0 and changes nothing -----
@@ -600,7 +636,11 @@ fn edit_source_is_a_noop_off_a_preview_pane() {
     assert!(
         handle.previews().is_empty(),
         "a rejected edit_source must leave previews() empty: {:?}",
-        handle.previews().iter().map(FfiPreview::win).collect::<Vec<_>>(),
+        handle
+            .previews()
+            .iter()
+            .map(FfiPreview::win)
+            .collect::<Vec<_>>(),
     );
 
     handle.shutdown();

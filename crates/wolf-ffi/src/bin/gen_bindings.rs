@@ -59,7 +59,10 @@ fn main() {
     // the committed headers; prepend an `import` of the C interop module (named in
     // `generated/module.modulemap`) so those symbols are in scope when the Swift
     // sources compile as their own module.
-    for name in ["SwiftBridgeCore.swift", format!("{CRATE_NAME}.swift").as_str()] {
+    for name in [
+        "SwiftBridgeCore.swift",
+        format!("{CRATE_NAME}.swift").as_str(),
+    ] {
         let path = out_dir.join(name);
         let body = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("failed to read {path:?}: {e}"));

@@ -34,41 +34,41 @@ import Foundation
 /// FIRST clears the scheduled flag (so a later `request()` can reschedule) and
 /// THEN calls `perform`, which reads the latest snapshot.
 public final class PickerRefreshCoalescer {
-    /// The debounce window (~30fps). A burst of wakes within this window collapses
-    /// to a single trailing refresh.
-    public static let refreshInterval: TimeInterval = 0.033
+  /// The debounce window (~30fps). A burst of wakes within this window collapses
+  /// to a single trailing refresh.
+  public static let refreshInterval: TimeInterval = 0.033
 
-    /// Arms the trailing fire after the debounce window (production: a
-    /// `DispatchQueue.main.asyncAfter`). Receives the fire closure to run.
-    private let schedule: (@escaping () -> Void) -> Void
-    /// The work to run once per coalesced burst.
-    private let perform: () -> Void
-    /// Whether a fire is already armed; further `request()`s coalesce into it.
-    private var scheduled = false
+  /// Arms the trailing fire after the debounce window (production: a
+  /// `DispatchQueue.main.asyncAfter`). Receives the fire closure to run.
+  private let schedule: (@escaping () -> Void) -> Void
+  /// The work to run once per coalesced burst.
+  private let perform: () -> Void
+  /// Whether a fire is already armed; further `request()`s coalesce into it.
+  private var scheduled = false
 
-    /// Builds the coalescer with its two injected collaborators.
-    public init(
-        schedule: @escaping (@escaping () -> Void) -> Void, perform: @escaping () -> Void
-    ) {
-        self.schedule = schedule
-        self.perform = perform
+  /// Builds the coalescer with its two injected collaborators.
+  public init(
+    schedule: @escaping (@escaping () -> Void) -> Void, perform: @escaping () -> Void
+  ) {
+    self.schedule = schedule
+    self.perform = perform
+  }
+
+  /// Requests a refresh. If a fire is already armed, coalesces (does nothing);
+  /// otherwise arms a trailing fire that clears the flag and performs the work.
+  public func request() {
+    if scheduled { return }
+    scheduled = true
+    schedule { [weak self] in
+      self?.scheduled = false
+      self?.perform()
     }
+  }
 
-    /// Requests a refresh. If a fire is already armed, coalesces (does nothing);
-    /// otherwise arms a trailing fire that clears the flag and performs the work.
-    public func request() {
-        if scheduled { return }
-        scheduled = true
-        schedule { [weak self] in
-            self?.scheduled = false
-            self?.perform()
-        }
-    }
-
-    /// Clears the scheduled flag so a pending (already-armed) fire is treated as
-    /// cancelled — the next `request()` re-arms. (The armed closure itself still
-    /// runs; clearing the flag makes it a no-op-relevant reschedule point.)
-    public func cancelPending() {
-        scheduled = false
-    }
+  /// Clears the scheduled flag so a pending (already-armed) fire is treated as
+  /// cancelled — the next `request()` re-arms. (The armed closure itself still
+  /// runs; clearing the flag makes it a no-op-relevant reschedule point.)
+  public func cancelPending() {
+    scheduled = false
+  }
 }

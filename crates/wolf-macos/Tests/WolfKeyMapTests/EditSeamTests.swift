@@ -48,59 +48,59 @@ import XCTest
 
 final class EditSeamTests: XCTestCase {
 
-    // MARK: - a single (preview) pane opens the source in a new pane to the left
+  // MARK: - a single (preview) pane opens the source in a new pane to the left
 
-    func testSinglePaneSplitsLeft() {
-        XCTAssertEqual(
-            EditSeam.placementMode(paneCount: 1), "split_left",
-            "a single-pane (preview-only) window opens the source in a new pane to the LEFT")
-    }
+  func testSinglePaneSplitsLeft() {
+    XCTAssertEqual(
+      EditSeam.placementMode(paneCount: 1), "split_left",
+      "a single-pane (preview-only) window opens the source in a new pane to the LEFT")
+  }
 
-    // MARK: - a degenerate/empty count is treated as single-pane (split left)
+  // MARK: - a degenerate/empty count is treated as single-pane (split left)
 
-    func testZeroPaneCountSplitsLeft() {
-        XCTAssertEqual(
-            EditSeam.placementMode(paneCount: 0), "split_left",
-            "an empty pane count (<= 1) falls to the split-left branch")
-    }
+  func testZeroPaneCountSplitsLeft() {
+    XCTAssertEqual(
+      EditSeam.placementMode(paneCount: 0), "split_left",
+      "an empty pane count (<= 1) falls to the split-left branch")
+  }
 
-    // MARK: - two panes, active is preview, the OTHER pane is an editor -> reuse it
+  // MARK: - two panes, active is preview, the OTHER pane is an editor -> reuse it
 
-    func testTwoPanesOtherEditorReusesEditorPane() {
-        XCTAssertEqual(
-            EditSeam.placementMode(
-                paneCount: 2, activePaneIsPreview: true, otherEditorPaneCount: 1),
-            "reuse_editor_pane",
-            "two panes with a preview active and the OTHER pane an editor reuses that editor pane")
-    }
+  func testTwoPanesOtherEditorReusesEditorPane() {
+    XCTAssertEqual(
+      EditSeam.placementMode(
+        paneCount: 2, activePaneIsPreview: true, otherEditorPaneCount: 1),
+      "reuse_editor_pane",
+      "two panes with a preview active and the OTHER pane an editor reuses that editor pane")
+  }
 
-    // MARK: - two panes, active is preview, but no OTHER editor -> active
+  // MARK: - two panes, active is preview, but no OTHER editor -> active
 
-    func testTwoPanesNoOtherEditorUsesActivePane() {
-        XCTAssertEqual(
-            EditSeam.placementMode(
-                paneCount: 2, activePaneIsPreview: true, otherEditorPaneCount: 0),
-            "active",
-            "two panes with no OTHER editor pane fall to the active-pane branch")
-    }
+  func testTwoPanesNoOtherEditorUsesActivePane() {
+    XCTAssertEqual(
+      EditSeam.placementMode(
+        paneCount: 2, activePaneIsPreview: true, otherEditorPaneCount: 0),
+      "active",
+      "two panes with no OTHER editor pane fall to the active-pane branch")
+  }
 
-    // MARK: - defensive: the active pane is not itself a preview -> active
+  // MARK: - defensive: the active pane is not itself a preview -> active
 
-    func testTwoPanesActiveNotPreviewUsesActivePane() {
-        XCTAssertEqual(
-            EditSeam.placementMode(
-                paneCount: 2, activePaneIsPreview: false, otherEditorPaneCount: 1),
-            "active",
-            "when the active pane is not itself a preview the reuse branch is skipped (active)")
-    }
+  func testTwoPanesActiveNotPreviewUsesActivePane() {
+    XCTAssertEqual(
+      EditSeam.placementMode(
+        paneCount: 2, activePaneIsPreview: false, otherEditorPaneCount: 1),
+      "active",
+      "when the active pane is not itself a preview the reuse branch is skipped (active)")
+  }
 
-    // MARK: - scope: three panes stay on the active pane even with an editor present
+  // MARK: - scope: three panes stay on the active pane even with an editor present
 
-    func testThreePanesWithEditorUsesActivePane() {
-        XCTAssertEqual(
-            EditSeam.placementMode(
-                paneCount: 3, activePaneIsPreview: true, otherEditorPaneCount: 1),
-            "active",
-            "the reuse branch is scoped to exactly two panes; 3+ panes stay active")
-    }
+  func testThreePanesWithEditorUsesActivePane() {
+    XCTAssertEqual(
+      EditSeam.placementMode(
+        paneCount: 3, activePaneIsPreview: true, otherEditorPaneCount: 1),
+      "active",
+      "the reuse branch is scoped to exactly two panes; 3+ panes stay active")
+  }
 }

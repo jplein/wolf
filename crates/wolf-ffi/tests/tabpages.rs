@@ -178,9 +178,14 @@ fn tabpage_lifecycle_over_the_bridge() {
     });
 
     let t1 = handle.current_tabpage();
-    assert_ne!(t1, NEUTRAL, "current_tabpage() should be a nonzero first-view bind");
+    assert_ne!(
+        t1, NEUTRAL,
+        "current_tabpage() should be a nonzero first-view bind"
+    );
     // active_tabpage() (the cheap snapshot gate) should also report T1 after attach.
-    poll("active_tabpage() to report T1", || handle.active_tabpage() == t1);
+    poll("active_tabpage() to report T1", || {
+        handle.active_tabpage() == t1
+    });
     let w1 = live_windows(&handle)[0].1;
 
     // --- 2. create_tabpage(dirB) -> new tabpage current ----------------------
@@ -195,7 +200,9 @@ fn tabpage_lifecycle_over_the_bridge() {
 
     // active_tabpage() moves to T2 and a FRESH window (distinct from w1) appears
     // and reads a non-empty per-grid frame.
-    poll("active_tabpage() to become T2", || handle.active_tabpage() == t2);
+    poll("active_tabpage() to become T2", || {
+        handle.active_tabpage() == t2
+    });
     poll("a fresh live window on T2 (distinct from w1)", || {
         let live = live_windows(&handle);
         live.len() == ONE_WINDOW
@@ -225,11 +232,14 @@ fn tabpage_lifecycle_over_the_bridge() {
     let split_wins: Vec<i64> = live_windows(&handle).iter().map(|(_, w)| *w).collect();
 
     handle.set_current_tabpage(t2);
-    poll("active_tabpage() to become T2 again", || handle.active_tabpage() == t2);
-    handle.set_current_tabpage(t1);
-    poll("active_tabpage() to return to T1 with two windows again", || {
-        handle.active_tabpage() == t1 && live_windows(&handle).len() == TWO_WINDOWS
+    poll("active_tabpage() to become T2 again", || {
+        handle.active_tabpage() == t2
     });
+    handle.set_current_tabpage(t1);
+    poll(
+        "active_tabpage() to return to T1 with two windows again",
+        || handle.active_tabpage() == t1 && live_windows(&handle).len() == TWO_WINDOWS,
+    );
 
     for win in &split_wins {
         let grid = handle.grid_for_win(*win);
@@ -262,9 +272,10 @@ fn tabpage_lifecycle_over_the_bridge() {
     // Two tabpages exist (T1, T2). Close the (non-current) T2: the core stays alive
     // and T2's handle goes invalid (cwd_for_tabpage(T2) -> "").
     handle.close_tabpage(t2);
-    poll("T2's handle to become invalid after close_tabpage(T2)", || {
-        handle.cwd_for_tabpage(t2).is_empty()
-    });
+    poll(
+        "T2's handle to become invalid after close_tabpage(T2)",
+        || handle.cwd_for_tabpage(t2).is_empty(),
+    );
     // The core is still alive: T1 is still readable.
     assert_ne!(
         handle.current_tabpage(),

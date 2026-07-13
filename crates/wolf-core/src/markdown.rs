@@ -212,10 +212,7 @@ fn desired_markers(source: &str) -> Vec<(usize, u32, u32)> {
         let char_len = line.chars().count();
         let mut col = MARKER_COLUMN_STRIDE;
         while col < char_len {
-            let byte_in_line = line
-                .char_indices()
-                .nth(col)
-                .map_or(line.len(), |(b, _)| b);
+            let byte_in_line = line.char_indices().nth(col).map_or(line.len(), |(b, _)| b);
             markers.push((line_start + byte_in_line, line_no, col as u32));
             col += MARKER_COLUMN_STRIDE;
         }
@@ -239,6 +236,7 @@ fn desired_markers(source: &str) -> Vec<(usize, u32, u32)> {
 ///    - `'-'` → push `'-'` (an existing hyphen is preserved verbatim),
 ///    - [`char::is_whitespace`] → push `'-'`,
 ///    - anything else (punctuation/symbols) → drop it.
+///
 ///    Because whitespace maps 1:1 to a hyphen and nothing is collapsed,
 ///    `"C++ & Rust"` → `"c--rust"` and `"foo  bar"` → `"foo--bar"`.
 /// 3. If the result is empty after stripping, fall back to the base `"section"`.
@@ -256,9 +254,8 @@ fn slugify(text: &str, seen: &mut HashMap<String, u32>) -> String {
     for c in lowered.chars() {
         if c.is_alphanumeric() {
             base.push(c);
-        } else if c == '-' {
-            base.push('-');
-        } else if c.is_whitespace() {
+        } else if c == '-' || c.is_whitespace() {
+            // An existing hyphen is preserved verbatim; whitespace maps to '-'.
             base.push('-');
         }
         // else: drop punctuation/symbols.
@@ -611,14 +608,18 @@ mod tests {
         let at_stride = "a".repeat(MARKER_COLUMN_STRIDE);
         let markers = desired_markers(&at_stride);
         assert!(
-            !markers.iter().any(|(_, _, c)| *c as usize == MARKER_COLUMN_STRIDE),
+            !markers
+                .iter()
+                .any(|(_, _, c)| *c as usize == MARKER_COLUMN_STRIDE),
             "a line of exactly {MARKER_COLUMN_STRIDE} chars earns no -100 marker"
         );
 
         let past_stride = "a".repeat(MARKER_COLUMN_STRIDE + 1);
         let markers = desired_markers(&past_stride);
         assert!(
-            markers.iter().any(|(_, _, c)| *c as usize == MARKER_COLUMN_STRIDE),
+            markers
+                .iter()
+                .any(|(_, _, c)| *c as usize == MARKER_COLUMN_STRIDE),
             "a line longer than {MARKER_COLUMN_STRIDE} chars earns a -100 marker"
         );
     }

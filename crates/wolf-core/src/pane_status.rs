@@ -52,9 +52,10 @@ pub fn pane_status(buf_path: &str, cwd: Option<&Path>, home: Option<&Path>) -> P
 
     let path = Path::new(buf_path);
 
-    let filename = path
-        .file_name()
-        .map_or_else(|| buf_path.to_string(), |n| n.to_string_lossy().into_owned());
+    let filename = path.file_name().map_or_else(
+        || buf_path.to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
 
     let display_path = cwd_relative(path, cwd)
         .or_else(|| home_relative(path, home))

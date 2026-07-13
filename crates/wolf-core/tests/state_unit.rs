@@ -285,7 +285,11 @@ fn unchanged_snapshot_skips_a_rewrite() {
         "re-submitting an unchanged snapshot must NOT rewrite state.json (mtime moved)"
     );
     // The in-memory tree is still the same value.
-    assert_eq!(store.state(), tree, "state() unchanged after the no-op snapshot");
+    assert_eq!(
+        store.state(),
+        tree,
+        "state() unchanged after the no-op snapshot"
+    );
 }
 
 // =========================================================================
@@ -306,7 +310,11 @@ fn later_snapshot_replaces_prior_tree() {
     assert!(store.flush(FLUSH_TIMEOUT), "second flush should complete");
 
     // The in-memory state is the REPLACEMENT, not a merge of the two.
-    assert_eq!(store.state(), second, "state() must equal the replacement tree");
+    assert_eq!(
+        store.state(),
+        second,
+        "state() must equal the replacement tree"
+    );
 
     // The on-disk file parses back to exactly the replacement tree.
     let loaded = load_state(dir.path()).expect("rewritten file should parse");
@@ -314,7 +322,11 @@ fn later_snapshot_replaces_prior_tree() {
         loaded, second,
         "the on-disk tree must be fully REPLACED by the second snapshot (no window 1 residue)"
     );
-    assert_eq!(loaded.windows.len(), 1, "only the replacement's single window remains");
+    assert_eq!(
+        loaded.windows.len(),
+        1,
+        "only the replacement's single window remains"
+    );
 }
 
 // =========================================================================
@@ -331,7 +343,10 @@ fn absent_file_loads_none_and_open_yields_defaults() {
         load_state(dir.path()).is_none(),
         "absent file must load as None"
     );
-    assert!(!path.exists(), "load_state must NEVER create the state file");
+    assert!(
+        !path.exists(),
+        "load_state must NEVER create the state file"
+    );
 
     let store = StateStore::open(dir.path());
     assert!(

@@ -142,9 +142,15 @@ fn snapshot_builder_round_trips_the_whole_tree() {
     let w0_tabs = w0.tabs();
     assert_eq!(w0_tabs.len(), W0_TABS, "window 0 tab count");
     assert_eq!(w0_tabs[0].cwd(), W0_TAB0_CWD, "window 0 tab 0 cwd");
-    assert!(w0_tabs[0].sidebar_visible(), "window 0 tab 0 sidebar_visible");
+    assert!(
+        w0_tabs[0].sidebar_visible(),
+        "window 0 tab 0 sidebar_visible"
+    );
     assert_eq!(w0_tabs[1].cwd(), W0_TAB1_CWD, "window 0 tab 1 cwd");
-    assert!(!w0_tabs[1].sidebar_visible(), "window 0 tab 1 sidebar_visible");
+    assert!(
+        !w0_tabs[1].sidebar_visible(),
+        "window 0 tab 1 sidebar_visible"
+    );
 
     // Window 1: geometry + a single tab.
     let w1 = &windows[1];
@@ -155,7 +161,10 @@ fn snapshot_builder_round_trips_the_whole_tree() {
     let w1_tabs = w1.tabs();
     assert_eq!(w1_tabs.len(), W1_TABS, "window 1 tab count");
     assert_eq!(w1_tabs[0].cwd(), W1_TAB0_CWD, "window 1 tab 0 cwd");
-    assert!(!w1_tabs[0].sidebar_visible(), "window 1 tab 0 sidebar_visible");
+    assert!(
+        !w1_tabs[0].sidebar_visible(),
+        "window 1 tab 0 sidebar_visible"
+    );
 
     // The on-disk form is pretty-printed version-1 JSON.
     let text = std::fs::read_to_string(&state_path).expect("state.json should exist after commit");

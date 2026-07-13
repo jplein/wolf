@@ -196,7 +196,10 @@ fn wait_for_active_topline(handle: &wolf_ffi::WolfCoreHandle, target: u64, desc:
         }
         sleep(POLL_INTERVAL);
     }
-    assert_eq!(topline, target, "active topline should be {target} ({desc})");
+    assert_eq!(
+        topline, target,
+        "active topline should be {target} ({desc})"
+    );
 }
 
 #[test]
@@ -290,7 +293,8 @@ fn buffer_picker_lists_switches_and_restores_view() {
     // the current/most-recent and sorts to index 0; A sorts ahead of C (never
     // visited).
     assert!(
-        rows.first().is_some_and(|r| r.display().ends_with("buffer_b.md")),
+        rows.first()
+            .is_some_and(|r| r.display().ends_with("buffer_b.md")),
         "the most-recently-used listed buffer (buffer_b.md) must sort to index 0: {:?}",
         rows.iter().map(FfiBufferRow::display).collect::<Vec<_>>()
     );

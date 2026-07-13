@@ -34,108 +34,108 @@ import XCTest
 
 final class PickerRefreshCoalescerTests: XCTestCase {
 
-    /// Number of rapid `request()` calls in the burst (a named constant rather
-    /// than a bare literal, mirroring the seam tests' `kNRows` convention).
-    private let kBurstCount = 5
+  /// Number of rapid `request()` calls in the burst (a named constant rather
+  /// than a bare literal, mirroring the seam tests' `kNRows` convention).
+  private let kBurstCount = 5
 
-    /// A burst of N rapid `request()` calls arms EXACTLY ONE trailing fire, and
-    /// invoking that captured fire runs `perform` EXACTLY ONCE (coalescing +
-    /// trailing fire).
-    func testBurstCoalescesToSingleTrailingFire() {
-        var pending: (() -> Void)?
-        var scheduleCount = 0
-        var performCount = 0
+  /// A burst of N rapid `request()` calls arms EXACTLY ONE trailing fire, and
+  /// invoking that captured fire runs `perform` EXACTLY ONCE (coalescing +
+  /// trailing fire).
+  func testBurstCoalescesToSingleTrailingFire() {
+    var pending: (() -> Void)?
+    var scheduleCount = 0
+    var performCount = 0
 
-        let coalescer = PickerRefreshCoalescer(
-            schedule: { work in
-                scheduleCount += 1
-                pending = work
-            },
-            perform: { performCount += 1 })
+    let coalescer = PickerRefreshCoalescer(
+      schedule: { work in
+        scheduleCount += 1
+        pending = work
+      },
+      perform: { performCount += 1 })
 
-        for _ in 0..<kBurstCount {
-            coalescer.request()
-        }
-
-        // The whole burst armed a SINGLE fire; nothing has performed yet.
-        XCTAssertEqual(
-            scheduleCount, 1,
-            "a burst of \(kBurstCount) requests must schedule exactly one trailing fire")
-        XCTAssertEqual(
-            performCount, 0,
-            "perform must not run until the scheduled fire is invoked")
-
-        // The trailing fire runs perform exactly once for the whole burst.
-        pending?()
-        XCTAssertEqual(
-            performCount, 1,
-            "the coalesced burst must perform exactly once when the fire runs")
+    for _ in 0..<kBurstCount {
+      coalescer.request()
     }
 
-    /// After a fire CLEARS the scheduled flag, a further `request()` schedules and
-    /// fires AGAIN — the final/complete wake is never permanently dropped.
-    func testRequestAfterFireReschedulesAndFiresAgain() {
-        var pending: (() -> Void)?
-        var scheduleCount = 0
-        var performCount = 0
+    // The whole burst armed a SINGLE fire; nothing has performed yet.
+    XCTAssertEqual(
+      scheduleCount, 1,
+      "a burst of \(kBurstCount) requests must schedule exactly one trailing fire")
+    XCTAssertEqual(
+      performCount, 0,
+      "perform must not run until the scheduled fire is invoked")
 
-        let coalescer = PickerRefreshCoalescer(
-            schedule: { work in
-                scheduleCount += 1
-                pending = work
-            },
-            perform: { performCount += 1 })
+    // The trailing fire runs perform exactly once for the whole burst.
+    pending?()
+    XCTAssertEqual(
+      performCount, 1,
+      "the coalesced burst must perform exactly once when the fire runs")
+  }
 
-        // First burst -> one schedule, then fire clears the flag.
-        for _ in 0..<kBurstCount {
-            coalescer.request()
-        }
-        pending?()
-        XCTAssertEqual(scheduleCount, 1, "first burst schedules once")
-        XCTAssertEqual(performCount, 1, "first fire performs once")
+  /// After a fire CLEARS the scheduled flag, a further `request()` schedules and
+  /// fires AGAIN — the final/complete wake is never permanently dropped.
+  func testRequestAfterFireReschedulesAndFiresAgain() {
+    var pending: (() -> Void)?
+    var scheduleCount = 0
+    var performCount = 0
 
-        // A later wake after the flag cleared must reschedule and fire again.
-        coalescer.request()
-        XCTAssertEqual(
-            scheduleCount, 2,
-            "a request after the fire cleared the flag must schedule again")
-        pending?()
-        XCTAssertEqual(
-            performCount, 2,
-            "the rescheduled request must perform again (final wake not dropped)")
+    let coalescer = PickerRefreshCoalescer(
+      schedule: { work in
+        scheduleCount += 1
+        pending = work
+      },
+      perform: { performCount += 1 })
+
+    // First burst -> one schedule, then fire clears the flag.
+    for _ in 0..<kBurstCount {
+      coalescer.request()
     }
+    pending?()
+    XCTAssertEqual(scheduleCount, 1, "first burst schedules once")
+    XCTAssertEqual(performCount, 1, "first fire performs once")
 
-    /// A single `request()` with no burst schedules once and fires exactly once.
-    func testSingleRequestFiresOnce() {
-        var pending: (() -> Void)?
-        var scheduleCount = 0
-        var performCount = 0
+    // A later wake after the flag cleared must reschedule and fire again.
+    coalescer.request()
+    XCTAssertEqual(
+      scheduleCount, 2,
+      "a request after the fire cleared the flag must schedule again")
+    pending?()
+    XCTAssertEqual(
+      performCount, 2,
+      "the rescheduled request must perform again (final wake not dropped)")
+  }
 
-        let coalescer = PickerRefreshCoalescer(
-            schedule: { work in
-                scheduleCount += 1
-                pending = work
-            },
-            perform: { performCount += 1 })
+  /// A single `request()` with no burst schedules once and fires exactly once.
+  func testSingleRequestFiresOnce() {
+    var pending: (() -> Void)?
+    var scheduleCount = 0
+    var performCount = 0
 
-        coalescer.request()
-        XCTAssertEqual(scheduleCount, 1, "a single request schedules exactly one fire")
-        XCTAssertEqual(performCount, 0, "perform waits for the fire")
+    let coalescer = PickerRefreshCoalescer(
+      schedule: { work in
+        scheduleCount += 1
+        pending = work
+      },
+      perform: { performCount += 1 })
 
-        pending?()
-        XCTAssertEqual(performCount, 1, "a single request performs exactly once")
-    }
+    coalescer.request()
+    XCTAssertEqual(scheduleCount, 1, "a single request schedules exactly one fire")
+    XCTAssertEqual(performCount, 0, "perform waits for the fire")
 
-    /// The debounce window is in the ~30–60fps band (16–33 ms). The plan sets it
-    /// to 0.033 s; this pins it can't drift outside a sane range.
-    func testRefreshIntervalIsInFrameBand() {
-        let lowerBound: TimeInterval = 0.016
-        let upperBound: TimeInterval = 0.033
-        XCTAssertGreaterThanOrEqual(
-            PickerRefreshCoalescer.refreshInterval, lowerBound,
-            "refreshInterval must be at least \(lowerBound)s (<= ~60fps)")
-        XCTAssertLessThanOrEqual(
-            PickerRefreshCoalescer.refreshInterval, upperBound,
-            "refreshInterval must be at most \(upperBound)s (>= ~30fps)")
-    }
+    pending?()
+    XCTAssertEqual(performCount, 1, "a single request performs exactly once")
+  }
+
+  /// The debounce window is in the ~30–60fps band (16–33 ms). The plan sets it
+  /// to 0.033 s; this pins it can't drift outside a sane range.
+  func testRefreshIntervalIsInFrameBand() {
+    let lowerBound: TimeInterval = 0.016
+    let upperBound: TimeInterval = 0.033
+    XCTAssertGreaterThanOrEqual(
+      PickerRefreshCoalescer.refreshInterval, lowerBound,
+      "refreshInterval must be at least \(lowerBound)s (<= ~60fps)")
+    XCTAssertLessThanOrEqual(
+      PickerRefreshCoalescer.refreshInterval, upperBound,
+      "refreshInterval must be at most \(upperBound)s (>= ~30fps)")
+  }
 }

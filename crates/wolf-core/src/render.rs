@@ -17,9 +17,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
-use parking_lot::{
-    ArcRwLockReadGuard, RawRwLock, RwLock, RwLockReadGuard, RwLockWriteGuard,
-};
+use parking_lot::{ArcRwLockReadGuard, RawRwLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 /// An owned read guard over the shared snapshot.
 ///
@@ -673,10 +671,7 @@ impl Snapshot {
     /// Returns the grid id bound to window handle `win`, if any window maps to it.
     #[must_use]
     pub fn grid_for_win(&self, win: i64) -> Option<u64> {
-        self.windows
-            .values()
-            .find(|w| w.win == win)
-            .map(|w| w.grid)
+        self.windows.values().find(|w| w.win == win).map(|w| w.grid)
     }
 }
 

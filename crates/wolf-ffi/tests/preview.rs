@@ -151,7 +151,10 @@ fn wait_for_markdown_active(handle: &wolf_ffi::WolfCoreHandle, target: bool, des
         }
         sleep(POLL_INTERVAL);
     }
-    assert_eq!(got, target, "is_markdown_active() should be {target} ({desc})");
+    assert_eq!(
+        got, target,
+        "is_markdown_active() should be {target} ({desc})"
+    );
 }
 
 /// Blocks until exactly `n` live editor window grids exist, then asserts it.
@@ -637,7 +640,11 @@ fn preview_reuse_falls_back_to_active_when_no_other_preview() {
     // --- 2. Make a second EDITOR pane (no previews) via :vsplit --------------
     // Both panes now show the SAME markdown buffer; neither is a preview pane.
     send_ex_command(&handle, ":vsplit");
-    wait_for_window_count(&handle, TWO_PANES, "after :vsplit into a second editor pane");
+    wait_for_window_count(
+        &handle,
+        TWO_PANES,
+        "after :vsplit into a second editor pane",
+    );
     focus_markdown_source(&handle);
     assert!(
         handle.previews().is_empty(),
@@ -795,16 +802,8 @@ fn preview_file_repoints_pane_to_linked_file() {
 
     // Absolute paths (as WebKit would resolve a `file://` link; Lua does NO
     // relative resolution). `tmp.path()` is already absolute.
-    let beta_path = tmp
-        .path()
-        .join("beta.md")
-        .to_string_lossy()
-        .into_owned();
-    let txt_path = tmp
-        .path()
-        .join("notes.txt")
-        .to_string_lossy()
-        .into_owned();
+    let beta_path = tmp.path().join("beta.md").to_string_lossy().into_owned();
+    let txt_path = tmp.path().join("notes.txt").to_string_lossy().into_owned();
 
     let handle = wolf_ffi_start(
         init_lua.to_string_lossy().into_owned(),
@@ -849,14 +848,10 @@ fn preview_file_repoints_pane_to_linked_file() {
 
     // The preview row for THIS window now reports beta.md (a re-emit replaces the
     // snapshot), and the live window count is unchanged (view-only repoint).
-    wait_for_previews(
-        &handle,
-        "the preview window now previews beta.md",
-        |p| {
-            p.iter()
-                .any(|row| row.win() == preview_win && row.source_name() == "beta.md")
-        },
-    );
+    wait_for_previews(&handle, "the preview window now previews beta.md", |p| {
+        p.iter()
+            .any(|row| row.win() == preview_win && row.source_name() == "beta.md")
+    });
     assert_eq!(
         live_window_count(&handle),
         TWO_PANES,

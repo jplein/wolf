@@ -169,12 +169,7 @@ impl RedrawHandler {
 impl Handler for RedrawHandler {
     type Writer = Compat<ChildStdin>;
 
-    async fn handle_notify(
-        &self,
-        name: String,
-        args: Vec<Value>,
-        _neovim: Neovim<Self::Writer>,
-    ) {
+    async fn handle_notify(&self, name: String, args: Vec<Value>, _neovim: Neovim<Self::Writer>) {
         match name.as_str() {
             "redraw" => {
                 let fired = self.apply_redraw(args).await;
@@ -228,7 +223,10 @@ impl Handler for RedrawHandler {
                 // `Command`, push onto the sibling command queue (a brief Mutex, no
                 // snapshot lock, never held across an `.await`), and wake so the
                 // front-end drains it. An unknown id is dropped. No `seq` bump.
-                if let Some(command) = args.first().and_then(Value::as_str).and_then(Command::from_id)
+                if let Some(command) = args
+                    .first()
+                    .and_then(Value::as_str)
+                    .and_then(Command::from_id)
                 {
                     self.commands.lock().push_back(command);
                 }
@@ -290,7 +288,9 @@ impl RedrawHandler {
             let Some(Value::String(name)) = it.next() else {
                 continue;
             };
-            let Some(name) = name.into_str() else { continue };
+            let Some(name) = name.into_str() else {
+                continue;
+            };
 
             // The remaining items are one-or-more argument tuples, each an array.
             for call in it {
@@ -453,7 +453,9 @@ impl RedrawHandler {
         let mut map: HashMap<i64, PathBuf> = HashMap::new();
         if let Some(pairs) = args.first().and_then(Value::as_array) {
             for pair in pairs {
-                let Some(pair) = pair.as_array() else { continue };
+                let Some(pair) = pair.as_array() else {
+                    continue;
+                };
                 let Some(win) = pair.first().and_then(ext_handle) else {
                     continue;
                 };

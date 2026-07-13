@@ -105,7 +105,11 @@ fn search_wake() -> (WakeFn, Receiver<()>) {
 fn start_core_in(cwd: &Path) -> WolfCore {
     let (wake, waiter) = common::wake_channel();
     let core = WolfCore::start(
-        common::config_in(cwd.to_path_buf(), common::DEFAULT_COLS, common::DEFAULT_ROWS),
+        common::config_in(
+            cwd.to_path_buf(),
+            common::DEFAULT_COLS,
+            common::DEFAULT_ROWS,
+        ),
         wake,
     )
     .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
@@ -124,7 +128,11 @@ fn start_core_in(cwd: &Path) -> WolfCore {
 fn start_core_in_with_waiter(cwd: &Path) -> (WolfCore, common::FlushWaiter) {
     let (wake, waiter) = common::wake_channel();
     let core = WolfCore::start(
-        common::config_in(cwd.to_path_buf(), common::DEFAULT_COLS, common::DEFAULT_ROWS),
+        common::config_in(
+            cwd.to_path_buf(),
+            common::DEFAULT_COLS,
+            common::DEFAULT_ROWS,
+        ),
         wake,
     )
     .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
@@ -198,7 +206,10 @@ fn non_repo_lists_plain_files_and_dotfiles_but_no_dirs() {
     let entries = poll_until_complete(&search, &wakes);
     let set = displays(&entries);
 
-    assert!(set.contains("a.md"), "plain file should be listed; got {set:?}");
+    assert!(
+        set.contains("a.md"),
+        "plain file should be listed; got {set:?}"
+    );
     assert!(
         set.contains(".hidden.md"),
         "dotfiles should be listed (only .gitignore filters); got {set:?}"
@@ -248,7 +259,10 @@ fn symlinks_only_to_plain_files_are_included() {
     let entries = poll_until_complete(&search, &wakes);
     let set = displays(&entries);
 
-    assert!(set.contains("target.md"), "the real target should be listed; got {set:?}");
+    assert!(
+        set.contains("target.md"),
+        "the real target should be listed; got {set:?}"
+    );
     assert!(
         set.contains("link_to_file"),
         "a symlink targeting a plain file must be included; got {set:?}"
@@ -320,7 +334,10 @@ fn git_repo_respects_gitignore_and_excludes_git_dir() {
     let entries = poll_until_complete(&search, &wakes);
     let set = displays(&entries);
 
-    assert!(set.contains("tracked.md"), "tracked file should be listed; got {set:?}");
+    assert!(
+        set.contains("tracked.md"),
+        "tracked file should be listed; got {set:?}"
+    );
     assert!(
         set.contains("untracked.md"),
         "untracked-but-not-ignored file should be listed; got {set:?}"
@@ -403,7 +420,10 @@ fn wolf_cache_dir_is_excluded() {
     let entries = poll_until_complete(&search, &wakes);
     let set = displays(&entries);
 
-    assert!(set.contains("real.md"), "the real file should be listed; got {set:?}");
+    assert!(
+        set.contains("real.md"),
+        "the real file should be listed; got {set:?}"
+    );
     assert!(
         !any_under(&entries, ".wolf"),
         "no entry under .wolf/ may appear; got {set:?}"
@@ -438,13 +458,19 @@ fn mru_seed_is_synchronous_and_not_duplicated() {
     // finished yet), the MRU entry must already be present with an mru_rank.
     {
         let view = search.read();
-        let seeded: Vec<&FileEntry> =
-            view.entries.iter().filter(|e| e.display == "seeded.md").collect();
+        let seeded: Vec<&FileEntry> = view
+            .entries
+            .iter()
+            .filter(|e| e.display == "seeded.md")
+            .collect();
         assert_eq!(
             seeded.len(),
             1,
             "the MRU seed must be present synchronously right after start; entries={:?}",
-            view.entries.iter().map(|e| e.display.clone()).collect::<Vec<_>>()
+            view.entries
+                .iter()
+                .map(|e| e.display.clone())
+                .collect::<Vec<_>>()
         );
         assert!(
             seeded[0].mru_rank.is_some(),
@@ -454,7 +480,10 @@ fn mru_seed_is_synchronous_and_not_duplicated() {
 
     let entries = poll_until_complete(&search, &wakes);
 
-    let seeded: Vec<&FileEntry> = entries.iter().filter(|e| e.display == "seeded.md").collect();
+    let seeded: Vec<&FileEntry> = entries
+        .iter()
+        .filter(|e| e.display == "seeded.md")
+        .collect();
     assert_eq!(
         seeded.len(),
         1,

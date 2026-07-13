@@ -99,10 +99,8 @@ fn file_search_ranks_and_opens() {
     // keep `tmp` alive until after `shutdown()` so the core's `<cwd>/.wolf/` MRU
     // cache outlives the session, then drop it explicitly at the end.
     let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
-    std::fs::write(tmp.path().join(FILE_ALPHA), "# alpha\n")
-        .expect("failed to seed alpha.md");
-    std::fs::write(tmp.path().join(FILE_BETA), "# beta\n")
-        .expect("failed to seed beta.md");
+    std::fs::write(tmp.path().join(FILE_ALPHA), "# alpha\n").expect("failed to seed alpha.md");
+    std::fs::write(tmp.path().join(FILE_BETA), "# beta\n").expect("failed to seed beta.md");
 
     // Canonicalize the cwd for path assertions: on macOS the temp dir under
     // `/var/folders/...` canonicalizes to `/private/var/folders/...`, and
@@ -134,8 +132,8 @@ fn file_search_ranks_and_opens() {
             .iter()
             .map(|e| e.display())
             .collect();
-        let both_present = displays.iter().any(|d| d == FILE_ALPHA)
-            && displays.iter().any(|d| d == FILE_BETA);
+        let both_present =
+            displays.iter().any(|d| d == FILE_ALPHA) && displays.iter().any(|d| d == FILE_BETA);
         if both_present {
             break;
         }

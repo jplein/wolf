@@ -48,12 +48,7 @@ const DOC: &str = "# Commands\nbody\n";
 /// Polls `core`'s snapshot until `pred` holds, draining wakes each iteration, or
 /// panics after [`FLUSH_TIMEOUT`]. `desc` describes the awaited condition.
 /// (Port of `layout_intents.rs`'s `poll_until`.)
-fn poll_until(
-    core: &WolfCore,
-    waiter: &FlushWaiter,
-    desc: &str,
-    pred: impl Fn(&Snapshot) -> bool,
-) {
+fn poll_until(core: &WolfCore, waiter: &FlushWaiter, desc: &str, pred: impl Fn(&Snapshot) -> bool) {
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     loop {
         {
@@ -164,8 +159,11 @@ fn ex_and_lua_faces_emit_commands() {
 
     // --- Ex-command face: `:WolfHideApplication<CR>` -> Command::HideApplication -
     ex_command(&core, "WolfHideApplication");
-    let commands =
-        drain_until_command(&core, FLUSH_TIMEOUT, "HideApplication from :WolfHideApplication");
+    let commands = drain_until_command(
+        &core,
+        FLUSH_TIMEOUT,
+        "HideApplication from :WolfHideApplication",
+    );
     assert!(
         commands.contains(&Command::HideApplication),
         ":WolfHideApplication must enqueue Command::HideApplication; got {commands:?}"

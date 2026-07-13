@@ -267,10 +267,7 @@ fn mouse_scroll_click_drag_and_wheel() {
     // through `send_key`, no shell escaping and no Rust escaping (there is no `"`).
     // The per-grid `linecount()` accessor should still settle to >= 80 (80 put lines
     // + the empty first line).
-    send_ex_command(
-        &handle,
-        ":put =map(range(1,80), 'printf(''%05d'', v:val)')",
-    );
+    send_ex_command(&handle, ":put =map(range(1,80), 'printf(''%05d'', v:val)')");
 
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut filled = handle.read_frame_for_grid(grid);
@@ -311,7 +308,8 @@ fn mouse_scroll_click_drag_and_wheel() {
     // --- 4. Mouse PRESS positions the cursor --------------------------------
     // Read the live grid dimensions and clamp the fixture cell into bounds.
     let grid_frame = handle.read_frame_for_grid(grid);
-    let (press_row, press_col) = clamp_cell(grid_frame.rows(), grid_frame.cols(), PRESS_ROW, PRESS_COL);
+    let (press_row, press_col) =
+        clamp_cell(grid_frame.rows(), grid_frame.cols(), PRESS_ROW, PRESS_COL);
     handle.send_mouse(mouse_event(MOUSE_ACTION_PRESS, grid, press_row, press_col));
 
     let deadline = Instant::now() + FLUSH_TIMEOUT;

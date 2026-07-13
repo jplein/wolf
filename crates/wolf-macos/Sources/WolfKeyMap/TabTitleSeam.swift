@@ -27,77 +27,79 @@ import Foundation
 /// Computes the per-tab titles for the tabs in one window from their active
 /// buffer paths (see the file header for the exact contract).
 public enum TabTitleSeam {
-    /// The label for an unnamed / empty tab.
-    private static let untitled = "untitled"
+  /// The label for an unnamed / empty tab.
+  private static let untitled = "untitled"
 
-    /// The disambiguation separator: a space, an EM DASH (U+2014), a space.
-    private static let separator = " \u{2014} "
+  /// The disambiguation separator: a space, an EM DASH (U+2014), a space.
+  private static let separator = " \u{2014} "
 
-    /// The unnamed-buffer sentinel Neovim reports for a scratch/`:enew` buffer.
-    private static let noNameSentinel = "[No Name]"
+  /// The unnamed-buffer sentinel Neovim reports for a scratch/`:enew` buffer.
+  private static let noNameSentinel = "[No Name]"
 
-    /// Maps each active buffer path to its tab label, order-preserving.
-    public static func labels(activeBufferPaths: [String]) -> [String] {
-        // Parse every input into either "unnamed" or a named path split into its
-        // "/"-separated segments (root-first; the last segment is the basename).
-        let segmentsPerIndex: [[String]?] = activeBufferPaths.map { raw in
-            if raw.isEmpty || raw == noNameSentinel {
-                return nil
-            }
-            let segs = raw.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-            return segs.isEmpty ? nil : segs
-        }
-
-        // Group the NAMED indices by basename; unnamed indices are excluded from
-        // the disambiguation pass entirely.
-        var indicesByBasename: [String: [Int]] = [:]
-        for (i, segs) in segmentsPerIndex.enumerated() {
-            guard let segs, let basename = segs.last else { continue }
-            indicesByBasename[basename, default: []].append(i)
-        }
-
-        var result = [String](repeating: untitled, count: activeBufferPaths.count)
-
-        for (basename, indices) in indicesByBasename {
-            if indices.count == 1 {
-                result[indices[0]] = basename
-                continue
-            }
-            for (idx, label) in disambiguated(basename: basename, indices: indices, segmentsPerIndex: segmentsPerIndex) {
-                result[idx] = label
-            }
-        }
-
-        return result
+  /// Maps each active buffer path to its tab label, order-preserving.
+  public static func labels(activeBufferPaths: [String]) -> [String] {
+    // Parse every input into either "unnamed" or a named path split into its
+    // "/"-separated segments (root-first; the last segment is the basename).
+    let segmentsPerIndex: [[String]?] = activeBufferPaths.map { raw in
+      if raw.isEmpty || raw == noNameSentinel {
+        return nil
+      }
+      let segs = raw.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+      return segs.isEmpty ? nil : segs
     }
 
-    /// Disambiguates a colliding basename group by growing the trailing parent
-    /// segments minimally until the labels are all distinct (or paths run out).
-    private static func disambiguated(
-        basename: String,
-        indices: [Int],
-        segmentsPerIndex: [[String]?]
-    ) -> [Int: String] {
-        // The deepest member's parent count bounds how far we can grow.
-        let maxParents = indices.map { (segmentsPerIndex[$0]?.count ?? 1) - 1 }.max() ?? 0
-
-        var take = 1
-        var labels: [Int: String] = [:]
-        while true {
-            labels.removeAll(keepingCapacity: true)
-            for idx in indices {
-                let segs = segmentsPerIndex[idx] ?? []
-                let parents = segs.dropLast()
-                let trailing = parents.suffix(min(take, parents.count))
-                let parentStr = trailing.joined(separator: "/")
-                labels[idx] = parentStr.isEmpty ? basename : basename + separator + parentStr
-            }
-            let values = Array(labels.values)
-            if Set(values).count == values.count || take >= maxParents {
-                break
-            }
-            take += 1
-        }
-        return labels
+    // Group the NAMED indices by basename; unnamed indices are excluded from
+    // the disambiguation pass entirely.
+    var indicesByBasename: [String: [Int]] = [:]
+    for (i, segs) in segmentsPerIndex.enumerated() {
+      guard let segs, let basename = segs.last else { continue }
+      indicesByBasename[basename, default: []].append(i)
     }
+
+    var result = [String](repeating: untitled, count: activeBufferPaths.count)
+
+    for (basename, indices) in indicesByBasename {
+      if indices.count == 1 {
+        result[indices[0]] = basename
+        continue
+      }
+      for (idx, label) in disambiguated(
+        basename: basename, indices: indices, segmentsPerIndex: segmentsPerIndex)
+      {
+        result[idx] = label
+      }
+    }
+
+    return result
+  }
+
+  /// Disambiguates a colliding basename group by growing the trailing parent
+  /// segments minimally until the labels are all distinct (or paths run out).
+  private static func disambiguated(
+    basename: String,
+    indices: [Int],
+    segmentsPerIndex: [[String]?]
+  ) -> [Int: String] {
+    // The deepest member's parent count bounds how far we can grow.
+    let maxParents = indices.map { (segmentsPerIndex[$0]?.count ?? 1) - 1 }.max() ?? 0
+
+    var take = 1
+    var labels: [Int: String] = [:]
+    while true {
+      labels.removeAll(keepingCapacity: true)
+      for idx in indices {
+        let segs = segmentsPerIndex[idx] ?? []
+        let parents = segs.dropLast()
+        let trailing = parents.suffix(min(take, parents.count))
+        let parentStr = trailing.joined(separator: "/")
+        labels[idx] = parentStr.isEmpty ? basename : basename + separator + parentStr
+      }
+      let values = Array(labels.values)
+      if Set(values).count == values.count || take >= maxParents {
+        break
+      }
+      take += 1
+    }
+    return labels
+  }
 }

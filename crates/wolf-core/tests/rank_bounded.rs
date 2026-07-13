@@ -92,13 +92,13 @@ fn assert_over_ns(query: &str, entries: &[FileEntry], ns: &[usize]) {
 /// meaningfully ordered.
 fn mru_mixed_set() -> Vec<FileEntry> {
     vec![
-        entry("crates/wolf-core/src/rank.rs", None), // 0
+        entry("crates/wolf-core/src/rank.rs", None),     // 0
         entry("crates/wolf-core/src/files.rs", Some(2)), // 1: MRU
-        entry("crates/wolf-macos/main.swift", None), // 2
-        entry("README.md", Some(0)),                 // 3: MRU (most recent)
-        entry("docs/manual.md", Some(1)),            // 4: MRU
-        entry("src/main.rs", None),                  // 5
-        entry("core/wolf-stuff.md", None),           // 6
+        entry("crates/wolf-macos/main.swift", None),     // 2
+        entry("README.md", Some(0)),                     // 3: MRU (most recent)
+        entry("docs/manual.md", Some(1)),                // 4: MRU
+        entry("src/main.rs", None),                      // 5
+        entry("core/wolf-stuff.md", None),               // 6
     ]
 }
 
@@ -226,8 +226,8 @@ fn large_synthetic_set_equivalence_at_scale() {
 #[test]
 fn non_ascii_char_fold_parity() {
     let entries = vec![
-        entry("café/RÉSUMÉ.md", None),  // 0: non-ASCII in display
-        entry("cafe/plain.md", None),   // 1: ASCII-only near-neighbor
+        entry("café/RÉSUMÉ.md", None),   // 0: non-ASCII in display
+        entry("cafe/plain.md", None),    // 1: ASCII-only near-neighbor
         entry("notes/CAFÉ.md", Some(0)), // 2: non-ASCII + MRU
     ];
     let ns = [0, 1, 2, 3, 10];

@@ -19,15 +19,15 @@ import WolfFFI
 /// path (`onRenderWake()`) still refreshes immediately. A late wake after the
 /// tree has closed is harmless — `refresh()` is a no-op when closed.
 enum TreeWakeBridge {
-    /// Registers the C file-tree wake callback with the Rust core once at launch.
-    /// The closure captures no state (it only touches the global
-    /// `WindowRegistry`), so it converts to a `@convention(c)` function pointer
-    /// taking the token.
-    static func install() {
-        wolf_ffi_set_tree_wake({ token in
-            DispatchQueue.main.async {
-                WindowRegistry.shared.project(for: token)?.onTreeWake()
-            }
-        })
-    }
+  /// Registers the C file-tree wake callback with the Rust core once at launch.
+  /// The closure captures no state (it only touches the global
+  /// `WindowRegistry`), so it converts to a `@convention(c)` function pointer
+  /// taking the token.
+  static func install() {
+    wolf_ffi_set_tree_wake({ token in
+      DispatchQueue.main.async {
+        WindowRegistry.shared.project(for: token)?.onTreeWake()
+      }
+    })
+  }
 }

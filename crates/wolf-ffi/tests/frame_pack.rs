@@ -138,7 +138,13 @@ fn explicit_highlight_colors_pack_to_set_rgb() {
         },
     );
 
-    let snap = snapshot(GRID_ID, grid, highlights, cursor_on(GRID_ID, 1, 1), Vec::new());
+    let snap = snapshot(
+        GRID_ID,
+        grid,
+        highlights,
+        cursor_on(GRID_ID, 1, 1),
+        Vec::new(),
+    );
     let frame = FfiFrame::from_snapshot(&snap);
 
     let cells = frame.cells();
@@ -196,14 +202,23 @@ fn special_color_packs_from_resolved_style() {
 
     // Cursor parked off both cells under test so the cursor reverse-video logic
     // does not touch them.
-    let snap = snapshot(GRID_ID, grid, highlights, cursor_on(GRID_ID, 1, 3), Vec::new());
+    let snap = snapshot(
+        GRID_ID,
+        grid,
+        highlights,
+        cursor_on(GRID_ID, 1, 3),
+        Vec::new(),
+    );
     let frame = FfiFrame::from_snapshot(&snap);
 
     let cells = frame.cells();
 
     let styled = &cells[0];
     let special = styled.special();
-    assert!(special.set, "an explicit highlight special color must be set");
+    assert!(
+        special.set,
+        "an explicit highlight special color must be set"
+    );
     assert_eq!(
         special.rgb, SPECIAL,
         "special should pack to 0x00RRGGBB exactly"
@@ -218,11 +233,7 @@ fn special_color_packs_from_resolved_style() {
         !plain.special().set,
         "a highlight with no special color must pack special.set == false"
     );
-    assert_eq!(
-        plain.special().rgb,
-        0,
-        "an unset special color packs rgb=0"
-    );
+    assert_eq!(plain.special().rgb, 0, "an unset special color packs rgb=0");
 }
 
 #[test]
@@ -243,18 +254,30 @@ fn unset_highlight_yields_unset_colors() {
         },
     );
 
-    let snap = snapshot(GRID_ID, grid, highlights, cursor_on(GRID_ID, 1, 1), Vec::new());
+    let snap = snapshot(
+        GRID_ID,
+        grid,
+        highlights,
+        cursor_on(GRID_ID, 1, 1),
+        Vec::new(),
+    );
     let frame = FfiFrame::from_snapshot(&snap);
 
     let cells = frame.cells();
     let cell = &cells[0];
 
     let fg = cell.fg();
-    assert!(!fg.set, "unset fg (no highlight, no defaults) must be set=false");
+    assert!(
+        !fg.set,
+        "unset fg (no highlight, no defaults) must be set=false"
+    );
     assert_eq!(fg.rgb, 0, "an unset color packs rgb=0");
 
     let bg = cell.bg();
-    assert!(!bg.set, "unset bg (no highlight, no defaults) must be set=false");
+    assert!(
+        !bg.set,
+        "unset bg (no highlight, no defaults) must be set=false"
+    );
     assert_eq!(bg.rgb, 0, "an unset color packs rgb=0");
 }
 
@@ -327,7 +350,13 @@ fn attribute_flags_pack_exact_bits() {
         );
     }
 
-    let snap = snapshot(GRID_ID, grid, highlights, cursor_on(GRID_ID, 0, 0), Vec::new());
+    let snap = snapshot(
+        GRID_ID,
+        grid,
+        highlights,
+        cursor_on(GRID_ID, 0, 0),
+        Vec::new(),
+    );
     let frame = FfiFrame::from_snapshot(&snap);
 
     let cells = frame.cells();
@@ -373,7 +402,13 @@ fn reverse_video_is_resolved_once_not_double_applied() {
 
     // Cursor parked away from (0,0) so the cursor reverse-video logic does not
     // touch the cell under test.
-    let snap = snapshot(GRID_ID, grid, highlights, cursor_on(GRID_ID, 1, 1), Vec::new());
+    let snap = snapshot(
+        GRID_ID,
+        grid,
+        highlights,
+        cursor_on(GRID_ID, 1, 1),
+        Vec::new(),
+    );
     let frame = FfiFrame::from_snapshot(&snap);
 
     let cells = frame.cells();
@@ -488,12 +523,21 @@ fn cursor_fill_glyph_are_reverse_video_of_the_cell() {
         },
     );
 
-    let snap = snapshot(GRID_ID, grid, highlights, cursor_on(GRID_ID, 0, 0), Vec::new());
+    let snap = snapshot(
+        GRID_ID,
+        grid,
+        highlights,
+        cursor_on(GRID_ID, 0, 0),
+        Vec::new(),
+    );
     let frame = FfiFrame::from_snapshot(&snap);
 
     let fill = frame.cursor_fill();
     let glyph = frame.cursor_glyph();
-    assert!(fill.set && glyph.set, "cursor colors are always set (reverse video)");
+    assert!(
+        fill.set && glyph.set,
+        "cursor colors are always set (reverse video)"
+    );
     assert_eq!(fill.rgb, CELL_FG, "fill = cell fg (reverse video)");
     assert_eq!(glyph.rgb, CELL_BG, "glyph = cell bg (reverse video)");
 }
@@ -544,7 +588,13 @@ fn cursor_fill_glyph_use_mode_cursor_attr_when_distinct() {
         cell_percentage: None,
         attr_id: Some(CURSOR_HL),
     };
-    let snap = snapshot(GRID_ID, grid, highlights, cursor_on(GRID_ID, 0, 0), vec![mode]);
+    let snap = snapshot(
+        GRID_ID,
+        grid,
+        highlights,
+        cursor_on(GRID_ID, 0, 0),
+        vec![mode],
+    );
     let frame = FfiFrame::from_snapshot(&snap);
 
     assert_eq!(
@@ -590,7 +640,13 @@ fn cursor_fill_glyph_honor_theme_cursor_fg_and_bg() {
         },
     );
 
-    let mut snap = snapshot(GRID_ID, grid, highlights, cursor_on(GRID_ID, 0, 0), Vec::new());
+    let mut snap = snapshot(
+        GRID_ID,
+        grid,
+        highlights,
+        cursor_on(GRID_ID, 0, 0),
+        Vec::new(),
+    );
     snap.theme.cursor = ThemeGroup {
         fg: Some(Rgb::from_packed(THEME_FG)),
         bg: Some(Rgb::from_packed(THEME_BG)),
@@ -639,7 +695,13 @@ fn cursor_glyph_falls_back_to_cell_bg_when_theme_fg_unset() {
         },
     );
 
-    let mut snap = snapshot(GRID_ID, grid, highlights, cursor_on(GRID_ID, 0, 0), Vec::new());
+    let mut snap = snapshot(
+        GRID_ID,
+        grid,
+        highlights,
+        cursor_on(GRID_ID, 0, 0),
+        Vec::new(),
+    );
     snap.theme.cursor = ThemeGroup {
         fg: None,
         bg: Some(Rgb::from_packed(THEME_BG)),
@@ -707,7 +769,13 @@ fn theme_cursor_wins_over_mode_cursor_attr() {
         cell_percentage: None,
         attr_id: Some(CURSOR_HL),
     };
-    let mut snap = snapshot(GRID_ID, grid, highlights, cursor_on(GRID_ID, 0, 0), vec![mode]);
+    let mut snap = snapshot(
+        GRID_ID,
+        grid,
+        highlights,
+        cursor_on(GRID_ID, 0, 0),
+        vec![mode],
+    );
     snap.theme.cursor = ThemeGroup {
         fg: Some(Rgb::from_packed(THEME_FG)),
         bg: Some(Rgb::from_packed(THEME_BG)),
@@ -744,15 +812,27 @@ fn default_fg_bg_packed_from_snapshot_defaults() {
     });
 
     let grid = Grid::new(COLS, ROWS);
-    let snap = snapshot(GRID_ID, grid, highlights, cursor_on(GRID_ID, 0, 0), Vec::new());
+    let snap = snapshot(
+        GRID_ID,
+        grid,
+        highlights,
+        cursor_on(GRID_ID, 0, 0),
+        Vec::new(),
+    );
     let frame = FfiFrame::from_snapshot(&snap);
 
     let dfg = frame.default_fg();
-    assert!(dfg.set, "default fg should be set when the snapshot sets it");
+    assert!(
+        dfg.set,
+        "default fg should be set when the snapshot sets it"
+    );
     assert_eq!(dfg.rgb, DEF_FG);
 
     let dbg = frame.default_bg();
-    assert!(dbg.set, "default bg should be set when the snapshot sets it");
+    assert!(
+        dbg.set,
+        "default bg should be set when the snapshot sets it"
+    );
     assert_eq!(dbg.rgb, DEF_BG);
 }
 
@@ -760,7 +840,13 @@ fn default_fg_bg_packed_from_snapshot_defaults() {
 fn default_fg_bg_unset_when_snapshot_has_no_defaults() {
     let highlights = HighlightTable::new();
     let grid = Grid::new(COLS, ROWS);
-    let snap = snapshot(GRID_ID, grid, highlights, cursor_on(GRID_ID, 0, 0), Vec::new());
+    let snap = snapshot(
+        GRID_ID,
+        grid,
+        highlights,
+        cursor_on(GRID_ID, 0, 0),
+        Vec::new(),
+    );
     let frame = FfiFrame::from_snapshot(&snap);
 
     assert!(!frame.default_fg().set, "absent default fg packs set=false");
@@ -787,7 +873,13 @@ fn frame_dims_and_cell_count_match_grid() {
         },
     );
 
-    let snap = snapshot(GRID_ID, grid, highlights, cursor_on(GRID_ID, 0, 0), Vec::new());
+    let snap = snapshot(
+        GRID_ID,
+        grid,
+        highlights,
+        cursor_on(GRID_ID, 0, 0),
+        Vec::new(),
+    );
     let frame = FfiFrame::from_snapshot(&snap);
 
     assert_eq!(frame.cols(), u16::try_from(COLS).expect("cols fit u16"));

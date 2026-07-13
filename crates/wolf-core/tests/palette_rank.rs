@@ -118,8 +118,7 @@ fn command_palette_is_excluded_and_static_rows_present() {
 fn static_row_fields_are_correct() {
     let rows = rank_palette(&[], &[], &[], "", A_LARGE_MAX);
 
-    let row = row_for_command(&rows, Command::NewWindow)
-        .expect("NewWindow must have a static row");
+    let row = row_for_command(&rows, Command::NewWindow).expect("NewWindow must have a static row");
     assert_eq!(row.kind, PaletteRowKind::Static, "kind");
     assert_eq!(row.display, "New Window", "display == registry title");
     assert_eq!(row.mru_key, "new_window", "mru_key == registry id");
@@ -160,7 +159,10 @@ fn open_recent_row_fields_are_correct() {
     assert_eq!(row.display, "Open Recent Folder: /home/proj", "display");
     assert_eq!(row.mru_key, "open_recent:/home/proj", "mru_key");
     assert_eq!(row.path, Some(PathBuf::from("/home/proj")), "path carried");
-    assert_eq!(row.window_index, None, "open-recent row has no window index");
+    assert_eq!(
+        row.window_index, None,
+        "open-recent row has no window index"
+    );
     assert_eq!(row.command, None, "open-recent row has no static command");
 }
 
@@ -205,8 +207,8 @@ fn mru_recent_floats_a_row_first() {
 
     let rows = rank_palette(&[], &[], &mru, "in", A_LARGE_MAX);
 
-    let p_mru = pos_of_command(&rows, Command::MinimizeWindow)
-        .expect("Minimize must match query 'in'");
+    let p_mru =
+        pos_of_command(&rows, Command::MinimizeWindow).expect("Minimize must match query 'in'");
     let p_strong = pos_of_command(&rows, Command::IncreaseFontSize)
         .expect("Increase Font Size must match query 'in'");
     assert!(

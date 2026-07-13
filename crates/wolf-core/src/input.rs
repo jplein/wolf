@@ -369,9 +369,7 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
                 .await?;
             Ok(())
         }
-        InputEvent::Open { path } => {
-            command(nvim, &format!("edit {}", fnameescape(path))).await
-        }
+        InputEvent::Open { path } => command(nvim, &format!("edit {}", fnameescape(path))).await,
         InputEvent::Save => command(nvim, "write").await,
         InputEvent::SaveAs { path } => {
             command(nvim, &format!("saveas {}", fnameescape(path))).await

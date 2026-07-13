@@ -227,10 +227,7 @@ mod tests {
             ]);
             assert_eq!(
                 LayoutIntent::from_payload(&payload),
-                Some(LayoutIntent::FocusDir {
-                    dir: want,
-                    from: 9,
-                }),
+                Some(LayoutIntent::FocusDir { dir: want, from: 9 }),
                 "dir {dir_str:?} should map to {want:?}"
             );
         }

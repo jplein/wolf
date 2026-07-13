@@ -87,7 +87,11 @@ fn temp_cwd() -> (tempfile::TempDir, PathBuf) {
 fn start_core_in_with_waiter(cwd: &Path) -> (WolfCore, common::FlushWaiter) {
     let (wake, waiter) = common::wake_channel();
     let core = WolfCore::start(
-        common::config_in(cwd.to_path_buf(), common::DEFAULT_COLS, common::DEFAULT_ROWS),
+        common::config_in(
+            cwd.to_path_buf(),
+            common::DEFAULT_COLS,
+            common::DEFAULT_ROWS,
+        ),
         wake,
     )
     .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
@@ -158,7 +162,10 @@ fn open_after_cd_records_in_nvim_cwd_mru() {
     // The pump wrote to B's store, NOT A's.
     let store_a = MruStore::open(&cwd_a).expect("MruStore::open(A) should succeed");
     assert!(
-        !store_a.recent().iter().any(|e| paths_equal(&e.path, &written)),
+        !store_a
+            .recent()
+            .iter()
+            .any(|e| paths_equal(&e.path, &written)),
         "the open must be recorded in B's store, NOT A's; A's store leaked it"
     );
 

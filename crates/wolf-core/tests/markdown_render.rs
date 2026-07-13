@@ -73,7 +73,10 @@ fn render_html_wraps_body_in_a_themed_document() {
     );
 
     // The rendered Markdown body itself.
-    assert!(html.contains("<h1"), "`# Title` must render an <h1>: {html}");
+    assert!(
+        html.contains("<h1"),
+        "`# Title` must render an <h1>: {html}"
+    );
     assert!(html.contains("<p>"), "`Hello` must render a <p>: {html}");
     assert!(
         html.contains("Title") && html.contains("Hello"),

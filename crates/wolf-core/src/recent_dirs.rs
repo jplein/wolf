@@ -96,10 +96,11 @@ impl RecentDirs {
         let stored = path.to_string_lossy().into_owned();
         let limit = i64::try_from(RECENT_DIRS_LIMIT).unwrap_or(i64::MAX);
         let _ = self.with_conn(|conn| {
-            let seq: i64 =
-                conn.query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM recent_dirs", [], |row| {
-                    row.get(0)
-                })?;
+            let seq: i64 = conn.query_row(
+                "SELECT COALESCE(MAX(seq), 0) + 1 FROM recent_dirs",
+                [],
+                |row| row.get(0),
+            )?;
             conn.execute(
                 "INSERT INTO recent_dirs (path, seq) VALUES (?1, ?2) \
                  ON CONFLICT(path) DO UPDATE SET seq = excluded.seq",

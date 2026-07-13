@@ -101,10 +101,11 @@ impl CommandMru {
     pub fn record(&self, key: &str) {
         let limit = i64::try_from(COMMAND_MRU_LIMIT).unwrap_or(i64::MAX);
         let _ = self.with_conn(|conn| {
-            let seq: i64 =
-                conn.query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM command_mru", [], |row| {
-                    row.get(0)
-                })?;
+            let seq: i64 = conn.query_row(
+                "SELECT COALESCE(MAX(seq), 0) + 1 FROM command_mru",
+                [],
+                |row| row.get(0),
+            )?;
             conn.execute(
                 "INSERT INTO command_mru (key, seq) VALUES (?1, ?2) \
                  ON CONFLICT(key) DO UPDATE SET seq = excluded.seq",

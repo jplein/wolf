@@ -88,16 +88,12 @@ fn tree_search_projects_children_and_reveals_current_file() {
     std::fs::write(tmp.path().join(FILE_MAIN), "fn main() {}\n")
         .expect("failed to seed src/main.rs");
     std::fs::write(tmp.path().join(FILE_LIB), "// lib\n").expect("failed to seed src/lib.rs");
-    std::fs::write(tmp.path().join(FILE_INTRO), "# intro\n")
-        .expect("failed to seed docs/intro.md");
-    std::fs::write(tmp.path().join(FILE_README), "# readme\n")
-        .expect("failed to seed README.md");
-    std::fs::write(tmp.path().join(FILE_DOTFILE), "dotfile\n")
-        .expect("failed to seed .config.md");
+    std::fs::write(tmp.path().join(FILE_INTRO), "# intro\n").expect("failed to seed docs/intro.md");
+    std::fs::write(tmp.path().join(FILE_README), "# readme\n").expect("failed to seed README.md");
+    std::fs::write(tmp.path().join(FILE_DOTFILE), "dotfile\n").expect("failed to seed .config.md");
     std::fs::write(tmp.path().join(".gitignore"), format!("{FILE_IGNORED}\n"))
         .expect("failed to seed .gitignore");
-    std::fs::write(tmp.path().join(FILE_IGNORED), "ignored\n")
-        .expect("failed to seed ignored.md");
+    std::fs::write(tmp.path().join(FILE_IGNORED), "ignored\n").expect("failed to seed ignored.md");
 
     // Canonicalize the cwd for path assertions: on macOS the temp dir under
     // `/var/folders/...` canonicalizes to `/private/var/folders/...`, and
@@ -158,9 +154,7 @@ fn tree_search_projects_children_and_reveals_current_file() {
     let mut top = tree.children_of(String::new());
     while Instant::now() < deadline {
         top = tree.children_of(String::new());
-        let dirs_present = top
-            .iter()
-            .any(|n| n.is_dir() && n.name() == DIR_SRC)
+        let dirs_present = top.iter().any(|n| n.is_dir() && n.name() == DIR_SRC)
             && top.iter().any(|n| n.is_dir() && n.name() == DIR_DOCS);
         let readme_present = top.iter().any(|n| !n.is_dir() && n.name() == FILE_README);
         if dirs_present && readme_present {
@@ -208,7 +202,9 @@ fn tree_search_projects_children_and_reveals_current_file() {
             last_dir < first_file,
             "every directory must sort before every file (last_dir={last_dir}, \
              first_file={first_file}, nodes={:?})",
-            top.iter().map(|n| (n.name(), n.is_dir())).collect::<Vec<_>>()
+            top.iter()
+                .map(|n| (n.name(), n.is_dir()))
+                .collect::<Vec<_>>()
         );
     }
 

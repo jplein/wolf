@@ -16,28 +16,28 @@ import Foundation
 /// `Project.start()`, lookup inside the dispatched-to-main wake, removal at last-
 /// view shutdown), no lock is needed.
 final class WindowRegistry {
-    /// The shared, main-thread-only registry.
-    static let shared = WindowRegistry()
+  /// The shared, main-thread-only registry.
+  static let shared = WindowRegistry()
 
-    /// Token → project. The project unregisters itself when its last view closes,
-    /// so an entry never outlives its captive Neovim.
-    private var projects: [UInt64: Project] = [:]
+  /// Token → project. The project unregisters itself when its last view closes,
+  /// so an entry never outlives its captive Neovim.
+  private var projects: [UInt64: Project] = [:]
 
-    private init() {}
+  private init() {}
 
-    /// Registers `project` under its core's wake `token`. Main thread only.
-    func register(_ project: Project, token: UInt64) {
-        projects[token] = project
-    }
+  /// Registers `project` under its core's wake `token`. Main thread only.
+  func register(_ project: Project, token: UInt64) {
+    projects[token] = project
+  }
 
-    /// Removes the project registered under `token` (idempotent). Main thread only.
-    func unregister(token: UInt64) {
-        projects.removeValue(forKey: token)
-    }
+  /// Removes the project registered under `token` (idempotent). Main thread only.
+  func unregister(token: UInt64) {
+    projects.removeValue(forKey: token)
+  }
 
-    /// The project registered under `token`, or `nil` when none is (a late wake
-    /// after the project's last view closed). Main thread only.
-    func project(for token: UInt64) -> Project? {
-        projects[token]
-    }
+  /// The project registered under `token`, or `nil` when none is (a late wake
+  /// after the project's last view closed). Main thread only.
+  func project(for token: UInt64) -> Project? {
+    projects[token]
+  }
 }

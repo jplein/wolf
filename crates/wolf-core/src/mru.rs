@@ -173,9 +173,7 @@ impl MruStore {
 
         let candidates: Vec<String> = {
             let mut stmt = conn
-                .prepare(
-                    "SELECT path FROM mru ORDER BY opened_at DESC, rowid DESC LIMIT ?1",
-                )
+                .prepare("SELECT path FROM mru ORDER BY opened_at DESC, rowid DESC LIMIT ?1")
                 .map_err(MruError::Query)?;
             let limit = i64::try_from(MRU_LIMIT).unwrap_or(i64::MAX);
             let rows = stmt

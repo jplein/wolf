@@ -36,7 +36,9 @@ const QUIT_GRACE: Duration = Duration::from_secs(2);
 #[derive(Debug, thiserror::Error)]
 pub enum NvimError {
     /// `WOLF_NVIM_BIN` was unset or empty.
-    #[error("WOLF_NVIM_BIN is not set; the pinned nvim binary must be provided by the flake devShell")]
+    #[error(
+        "WOLF_NVIM_BIN is not set; the pinned nvim binary must be provided by the flake devShell"
+    )]
     BinNotSet,
     /// Failed to create the isolated state directories.
     #[error("failed to set up isolated nvim state dir: {0}")]
@@ -137,11 +139,7 @@ impl NvimProcess {
             .nvim
             .call(
                 "nvim_ui_attach",
-                vec![
-                    Value::from(cols),
-                    Value::from(rows),
-                    Value::Map(opts),
-                ],
+                vec![Value::from(cols), Value::from(rows), Value::Map(opts)],
             )
             .await
             .map_err(|e| NvimError::Attach(e.to_string()))?
@@ -484,8 +482,9 @@ impl NvimProcess {
             .map_err(|e| NvimError::Rpc(e.to_string()))?
             .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
 
-        crate::redraw::ext_handle(&value)
-            .ok_or_else(|| NvimError::Rpc(format!("wolf_create_tabpage returned no handle: {value:?}")))
+        crate::redraw::ext_handle(&value).ok_or_else(|| {
+            NvimError::Rpc(format!("wolf_create_tabpage returned no handle: {value:?}"))
+        })
     }
 
     /// Returns the tab-local working directory of tabpage `handle` via the
@@ -531,7 +530,9 @@ impl NvimProcess {
             .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
 
         crate::redraw::ext_handle(&value).ok_or_else(|| {
-            NvimError::Rpc(format!("nvim_get_current_tabpage returned no handle: {value:?}"))
+            NvimError::Rpc(format!(
+                "nvim_get_current_tabpage returned no handle: {value:?}"
+            ))
         })
     }
 
@@ -922,9 +923,7 @@ impl NvimProcess {
         let commands = Value::Array(
             COMMAND_SPECS
                 .iter()
-                .map(|spec| {
-                    Value::Array(vec![Value::from(spec.id), Value::from(spec.ex_command)])
-                })
+                .map(|spec| Value::Array(vec![Value::from(spec.id), Value::from(spec.ex_command)]))
                 .collect(),
         );
 
