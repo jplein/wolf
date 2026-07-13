@@ -244,6 +244,18 @@ final class PaneContainerView: NSView {
   /// first wake reads it).
   private var lastTitlebarTheme: (rgb: UInt32, set: Bool)?
 
+  // -- Native command-line / completion / toast overlays (OD9) --------------
+  //    Dedicated `NSView` subviews pinned to the bottom of the editor area and
+  //    shown only while active, rather than a permanently-reserved band, so the
+  //    editor grid keeps its full cols×rows when nothing is showing
+  //    (`cmdheight=0` spirit). They replace the old grid-painted cmdline strip.
+  /// The native command line (`ext_cmdline`).
+  private let cmdlineView: CmdlineView
+  /// The completion popup (`ext_popupmenu`), rendered above the command line.
+  private let completionPopupView: CompletionPopupView
+  /// The message toast (`ext_messages`), pinned bottom-left.
+  private let toastView: ToastView
+
   /// Builds the container bound to a live core `handle`, measured `metrics`, and
   /// the view's `tabpageHandle` (the project/tabpage-per-view bind used to gate
   /// the refocus rebind). No panes exist until the first window grid appears on a
@@ -252,11 +264,19 @@ final class PaneContainerView: NSView {
     self.handle = handle
     self.metrics = metrics
     self.controllerTabpageHandle = tabpageHandle
+    self.cmdlineView = CmdlineView(metrics: metrics)
+    self.completionPopupView = CompletionPopupView(metrics: metrics)
+    self.toastView = ToastView(metrics: metrics)
     super.init(frame: .zero)
     // Layer-back so a VISIBLE non-key window (two side-by-side windows of the
     // SAME project) keeps its last-painted layer while it is not the current
     // view (the project drives wakes only to `currentView`).
     wantsLayer = true
+    // The bottom overlays composite ON TOP of the flat pane painting; the
+    // completion popup is added LAST so it sits above the command line.
+    addSubview(toastView)
+    addSubview(cmdlineView)
+    addSubview(completionPopupView)
     // Follow the live "Show scroll bars" setting so the synthetic scrollbars
     // switch between always-on (`.legacy`) and fade-on-scroll (`.overlay`)
     // without a relaunch.
@@ -285,11 +305,12 @@ final class PaneContainerView: NSView {
 
   // MARK: - Geometry
 
-  /// One-row cmdline-strip height (the bottom of the view).
-  private var stripHeight: CGFloat { ceil(metrics.cellHeight) }
-
-  /// The height of the pane area (the whole view minus the bottom cmdline strip).
-  private var paneAreaHeight: CGFloat { max(0, bounds.height - stripHeight) }
+  /// The height of the pane area. Under OD9 the native command line + toast are
+  /// OVERLAY subviews shown only while active (not a permanently-reserved band),
+  /// so the pane area — and hence each pane grid — occupies the FULL view height
+  /// (matching Neovim's `cmdheight=0`). The overlays composite over the bottom of
+  /// this area when they appear.
+  private var paneAreaHeight: CGFloat { bounds.height }
 
   /// Maps a pixel size to a grid `(cols, rows)`, each at least 1.
   private func gridCells(width: CGFloat, height: CGFloat) -> (cols: Int, rows: Int) {
@@ -297,10 +318,11 @@ final class PaneContainerView: NSView {
   }
 
   /// The current pane rectangles from the pure layout, in this view's (flipped)
-  /// coordinates, spanning the FULL bounds (origin `(0, 0)`): the pane area occupies
-  /// the top `paneAreaHeight`, the cmdline strip the bottom `stripHeight`. The
-  /// per-pane 20pt inset is NOT applied here — it is applied around each pane's grid
-  /// in `gridRect(ofPane:)`, so these rects are the full pane rectangles.
+  /// coordinates, spanning the FULL bounds (origin `(0, 0)`): the panes tile the
+  /// whole `paneAreaHeight` (the full view height under OD9; the command line /
+  /// toast are bottom overlays that composite over it). The per-pane 20pt inset is
+  /// NOT applied here — it is applied around each pane's grid in `gridRect(ofPane:)`,
+  /// so these rects are the full pane rectangles.
   private func paneRects() -> [(PaneId, CGRect)] {
     tree.paneRects(width: Double(bounds.width), height: Double(paneAreaHeight))
       .map {
@@ -440,7 +462,11 @@ final class PaneContainerView: NSView {
   /// its cols/rows to fit.
   func applyMetrics(_ newMetrics: CellMetrics) {
     metrics = newMetrics
+    cmdlineView.applyMetrics(newMetrics)
+    completionPopupView.applyMetrics(newMetrics)
+    toastView.applyMetrics(newMetrics)
     syncGridSizes()
+    refreshOverlays()
     needsDisplay = true
   }
 
@@ -524,6 +550,22 @@ final class PaneContainerView: NSView {
   /// line steps, and emits that many discrete scroll events to Neovim.
   override func scrollWheel(with event: NSEvent) {
     let point = convert(event.locationInWindow, from: nil)
+
+    // Scroll-over-toast exemption (OD8): a wheel gesture WHILE HOVERING the
+    // visible toast scrolls the TOAST and is NOT forwarded to Neovim — so no
+    // `Scroll` input reaches core and the toast is not dismissed. Every other
+    // scroll (over the editor) falls through to the pane forwarding below, which
+    // DOES send a `Scroll` and therefore dismisses the toast.
+    if !toastView.isHidden, toastView.frame.contains(point) {
+      let cellH = CGFloat(metrics.cellHeight)
+      let dy =
+        event.hasPreciseScrollingDeltas
+        ? CGFloat(event.scrollingDeltaY)
+        : CGFloat(event.scrollingDeltaY) * cellH
+      toastView.scrollBy(deltaY: dy)
+      return
+    }
+
     var hit: (grid: UInt64, rect: CGRect)?
     for (id, rect) in paneRects() where rect.contains(point) {
       if let grid = panes[id]?.boundGrid {
@@ -590,12 +632,14 @@ final class PaneContainerView: NSView {
   override func setFrameSize(_ newSize: NSSize) {
     super.setFrameSize(newSize)
     syncGridSizes()
+    refreshOverlays()
     needsDisplay = true
   }
 
   override func viewDidEndLiveResize() {
     super.viewDidEndLiveResize()
     syncGridSizes()
+    refreshOverlays()
     needsDisplay = true
   }
 
@@ -606,8 +650,10 @@ final class PaneContainerView: NSView {
   private func syncGridSizes() {
     guard bounds.width > 0, bounds.height > 0 else { return }
 
-    // Grid 1 (the outer/global grid) covers the whole view (cmdline + messages);
-    // the per-pane padding is applied around each pane's grid, not here.
+    // Grid 1 (the outer/global grid) covers the whole view. Under `ext_messages`
+    // it empties (`cmdheight=0`) and the command line / messages render via the
+    // native overlays, but keeping it view-sized is harmless and preserves its
+    // default-bg used for the editor padding fill.
     let global = gridCells(width: bounds.width, height: bounds.height)
     let outer = handle.read_frame_for_grid(Self.cmdlineGridId)
     if Int(outer.cols()) != global.cols || Int(outer.rows()) != global.rows {
@@ -666,6 +712,7 @@ final class PaneContainerView: NSView {
       syncGridSizes()
       applyTitlebarTheme()
       syncPreviewWebViews()
+      refreshOverlays()
       needsDisplay = true
       return
     }
@@ -678,7 +725,74 @@ final class PaneContainerView: NSView {
     syncGridSizes()
     applyTitlebarTheme()
     syncPreviewWebViews()
+    refreshOverlays()
     needsDisplay = true
+  }
+
+  /// Refreshes the three bottom overlays from the live snapshot and lays them
+  /// out (OD9 — overlay when active). Reads `handle.cmdline()` / `handle.pum()` /
+  /// `handle.toast()` (the toast's chunk colors are already resolved in Rust),
+  /// updates each subview, then positions the visible ones along the bottom of
+  /// the editor area: the command line spans the bottom row, the completion popup
+  /// sits directly above it anchored at the cmdline byte column, and the toast is
+  /// pinned bottom-left (above the command line when it is active).
+  private func refreshOverlays() {
+    let outer = handle.read_frame_for_grid(Self.cmdlineGridId)
+    let defaultFg = WolfColor.cgColor(outer.default_fg(), fallback: WolfColor.fallbackFg)
+    let defaultBg = WolfColor.cgColor(outer.default_bg(), fallback: WolfColor.fallbackBg)
+
+    let cmdline = handle.cmdline()
+    let pum = handle.pum()
+    let cmdlineActive = cmdlineView.update(cmdline, defaultFg: defaultFg, defaultBg: defaultBg)
+    let pumVisible = completionPopupView.update(pum)
+    let toastVisible = toastView.update(handle.toast(), defaultBg: defaultBg)
+
+    guard bounds.width > 0, bounds.height > 0 else { return }
+
+    // Command line: the bottom row, full width.
+    let cmdlineHeight = cmdlineView.preferredHeight
+    if cmdlineActive {
+      cmdlineView.frame = CGRect(
+        x: 0, y: bounds.height - cmdlineHeight, width: bounds.width, height: cmdlineHeight)
+    }
+    let cmdlineTop = cmdlineActive ? bounds.height - cmdlineHeight : bounds.height
+
+    // Completion popup: directly ABOVE the command line, anchored at the byte
+    // column when it is cmdline-anchored (`anchor_grid == -1`).
+    if pumVisible {
+      let popupHeight = completionPopupView.preferredHeight
+      let popupWidth = min(completionPopupView.preferredWidth, bounds.width)
+      // Shift the box left by its own text inset so the item text column lands
+      // on the completed word's glyph in the command line, not the box border.
+      let anchorX = pumAnchorX(pum: pum, cmdline: cmdline) - completionPopupView.leadingTextInset
+      let x = max(0, min(anchorX, max(0, bounds.width - popupWidth)))
+      completionPopupView.frame = CGRect(
+        x: x, y: max(0, cmdlineTop - popupHeight), width: popupWidth, height: popupHeight)
+    }
+
+    // Toast: bottom-left, above the command line when it is active.
+    if toastVisible {
+      let toastHeight = toastView.preferredHeight
+      let toastWidth = min(toastView.preferredWidth, bounds.width)
+      toastView.frame = CGRect(
+        x: 0, y: max(0, cmdlineTop - toastHeight), width: toastWidth, height: toastHeight)
+    }
+  }
+
+  /// The x origin (points) for the completion popup: for a cmdline-anchored popup
+  /// (`anchor_grid == -1`) it is the per-pane padding plus the rendered width of
+  /// the `firstc` + the cmdline text up to the popup's byte column; otherwise it
+  /// falls back to the padding (a window-grid-anchored popup is placed above the
+  /// command line at the left edge in v1).
+  private func pumAnchorX(pum: FfiPum, cmdline: FfiCmdline) -> CGFloat {
+    let padding = CGFloat(EditorInset.padding)
+    guard pum.anchor_grid() == -1 else { return padding }
+    let col = Int(pum.anchor_col())
+    let prefix =
+      cmdline.firstc().toString()
+      + CmdlineView.bytePrefix(of: cmdline.text().toString(), byteCount: col)
+    let attrs: [NSAttributedString.Key: Any] = [.font: overlayFont(metrics: metrics)]
+    return padding + (prefix as NSString).size(withAttributes: attrs).width
   }
 
   /// Reconciles the hosted Markdown-preview `WKWebView`s with the core's current
@@ -1068,7 +1182,9 @@ final class PaneContainerView: NSView {
       paintPane(grid: grid, paneRect: rect, dimmed: id != activePane, ctx: ctx)
     }
     drawDividers(rects, ctx: ctx)
-    paintCmdlineStrip(ctx)
+    // The command line / completion popup / toast are dedicated overlay
+    // subviews (they paint themselves on top of this flat view); nothing is
+    // painted for them here.
     drawScrollbars(rects, ctx: ctx)
   }
 
@@ -1216,59 +1332,6 @@ final class PaneContainerView: NSView {
       .paragraphStyle: paragraph,
     ]
     (text as NSString).draw(in: rect, withAttributes: attrs)
-  }
-
-  /// Paints the command line / messages into the bottom one-row strip.
-  ///
-  /// Under `ext_multigrid` Neovim renders the command line and messages onto a
-  /// dedicated MESSAGE grid (NOT grid 1), positioned at the bottom of the screen
-  /// via `msg_set_pos` (which the core drops). When the command line is open the
-  /// cursor moves onto that grid, so the message grid is identified as "the grid
-  /// the cursor is on that is neither grid 1 nor a window/pane grid"; its cursor
-  /// row (where the `:`/`/` line lives) is painted into the strip. Otherwise the
-  /// strip paints grid 1's LAST row (persistent messages), as before.
-  private func paintCmdlineStrip(_ ctx: CGContext) {
-    // The cmdline strip spans the full view width along the bottom (below the
-    // pane area); its text is horizontally indented by the per-pane padding in
-    // `paintStripRow` so it aligns with the grid text.
-    let stripRect = CGRect(
-      x: 0, y: paneAreaHeight, width: bounds.width, height: stripHeight)
-    let cursorGrid = handle.read_frame().cursor_grid()
-    let windowGrids = Set(handle.windows().map { $0.grid() })
-
-    if cursorGrid != Self.cmdlineGridId, !windowGrids.contains(cursorGrid) {
-      // Command-line / message grid: paint the cursor's row (the active line).
-      let frame = handle.read_frame_for_grid(cursorGrid)
-      guard frame.rows() > 0 else { return }
-      paintStripRow(frame, row: Int(frame.cursor_row()), stripRect: stripRect, ctx: ctx)
-    } else {
-      // Grid 1's LAST row (persistent messages while not in cmdline mode).
-      let frame = handle.read_frame_for_grid(Self.cmdlineGridId)
-      let rows = Int(frame.rows())
-      guard rows > 0 else { return }
-      paintStripRow(frame, row: rows - 1, stripRect: stripRect, ctx: ctx)
-    }
-  }
-
-  /// Paints a single `row` of `frame` into `stripRect` (translated so that row
-  /// lands at the strip's top; the rest paints above and is clipped away), plus
-  /// the cursor when it lives on this grid.
-  private func paintStripRow(
-    _ frame: FfiFrame, row: Int, stripRect: CGRect, ctx: CGContext
-  ) {
-    ctx.saveGState()
-    ctx.clip(to: stripRect)
-    // Translate by the per-pane padding (the strip spans the full width from
-    // x = 0), so the cmdline row + cursor start at x = padding and align with the
-    // grid text.
-    ctx.translateBy(
-      x: CGFloat(EditorInset.padding),
-      y: stripRect.minY - CGFloat(row) * metrics.cellHeight)
-    paintCells(frame, ctx: ctx)
-    if frame.cursor_visible() {
-      drawCursor(ctx, frame: frame, cells: frame.cells(), cols: Int(frame.cols()))
-    }
-    ctx.restoreGState()
   }
 
   /// Paints all cells of `frame` at grid-local coordinates (the caller has already

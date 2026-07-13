@@ -75,8 +75,9 @@ pub use rank::{rank_matches, rank_matches_top_n, Match, MatchKey};
 pub use recent_dirs::{RecentDirs, RECENT_DIRS_LIMIT};
 pub use redraw::WakeFn;
 pub use render::{
-    Cell, Cursor, CursorShape, DefaultColors, Grid, HighlightTable, HlAttr, ModeInfo, PreviewInfo,
-    ResolvedStyle, Rgb, SharedSnapshot, Snapshot, ThemeColors, ThemeGroup, Viewport, WinInfo,
+    Cell, Cmdline, CmdlineChunk, Cursor, CursorShape, DefaultColors, Grid, HighlightTable, HlAttr,
+    Message, ModeInfo, PreviewInfo, Pum, PumItem, ResolvedStyle, Rgb, SharedSnapshot, Snapshot,
+    ThemeColors, ThemeGroup, Toast, ToastChunk, Viewport, WinInfo,
 };
 pub use state::{load_state, state_dir, StateStore, TabState, WindowState, WolfState};
 pub use tree::{

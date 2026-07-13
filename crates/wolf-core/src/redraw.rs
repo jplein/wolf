@@ -22,8 +22,9 @@ use crate::command::Command;
 use crate::layout::LayoutIntent;
 use crate::recent_dirs::RecentDirs;
 use crate::render::{
-    Cell, CursorShape, DefaultColors, HlAttr, ModeInfo, PreviewInfo, Rgb, SharedSnapshot, Snapshot,
-    ThemeColors, ThemeGroup, Viewport, WinInfo,
+    Cell, Cmdline, CmdlineChunk, CursorShape, DefaultColors, HlAttr, Message, ModeInfo,
+    PreviewInfo, Pum, PumItem, Rgb, SharedSnapshot, Snapshot, ThemeColors, ThemeGroup, ToastChunk,
+    Viewport, WinInfo,
 };
 
 /// A shared, drainable queue of [`LayoutIntent`]s.
@@ -617,10 +618,22 @@ impl RedrawHandler {
 /// Multigrid routing: `grid_resize`/`grid_clear`/`grid_line`/`grid_scroll`/
 /// `grid_cursor_goto` carry their target grid id in `params[0]`; the window
 /// events (`win_pos`/`win_viewport`/`win_hide`/`win_close`/`grid_destroy`)
-/// carry it likewise. Float and message-grid placement (`win_float_pos`,
-/// `win_external_pos`, `msg_set_pos`) are intentionally ignored: floats and
-/// external windows are not rendered, and the message/command-line content lives
-/// on the outer grid (grid 1), which the front-end paints as a cmdline strip.
+/// carry it likewise.
+///
+/// The `ext_cmdline` / `ext_popupmenu` / `ext_messages` protocols are folded into
+/// [`Snapshot::cmdline`] / [`Snapshot::pum`] / [`Snapshot::toast`]:
+/// `cmdline_show`/`cmdline_pos`/`cmdline_hide`, `popupmenu_show`/
+/// `popupmenu_select`/`popupmenu_hide`, `msg_show`/`msg_clear`/
+/// `msg_history_show`.
+///
+/// Intentionally ignored (like `win_float_pos` — the surface is not rendered, or
+/// the info is redundant under the current option set):
+/// `win_float_pos` / `win_external_pos` / `msg_set_pos` (floats/external windows
+/// are not rendered; message placement is handled natively);
+/// `cmdline_special_char` (OD6 — the `?`/`^R` insert-hint char, v1 limitation);
+/// `cmdline_block_show` / `cmdline_block_append` / `cmdline_block_hide` (OD5 —
+/// interactive `:function` blocks, v1 limitation); `msg_showmode` /
+/// `msg_showcmd` (showcmd off) / `msg_ruler` (ruler off).
 fn apply_event(snap: &mut RwLockWriteGuard<'_, Snapshot>, name: &str, params: Vec<Value>) -> bool {
     match name {
         "grid_resize" => grid_resize(snap, &params),
@@ -637,6 +650,15 @@ fn apply_event(snap: &mut RwLockWriteGuard<'_, Snapshot>, name: &str, params: Ve
         "win_viewport" => win_viewport(snap, &params),
         "win_hide" => win_hide(snap, &params),
         "win_close" => win_close(snap, &params),
+        "cmdline_show" => cmdline_show(snap, &params),
+        "cmdline_pos" => cmdline_pos(snap, &params),
+        "cmdline_hide" => cmdline_hide(snap),
+        "popupmenu_show" => popupmenu_show(snap, &params),
+        "popupmenu_select" => popupmenu_select(snap, &params),
+        "popupmenu_hide" => popupmenu_hide(snap),
+        "msg_show" => msg_show(snap, params),
+        "msg_clear" => msg_clear(snap),
+        "msg_history_show" => msg_history_show(snap, params),
         "flush" => return true,
         _ => {}
     }
@@ -973,4 +995,439 @@ fn win_viewport(snap: &mut Snapshot, params: &[Value]) {
         entry.win = win;
     }
     entry.viewport = viewport;
+}
+
+/// Parses a redraw "content" value — a list of styled `[attr, text, ...]` tuples
+/// — into `(text, attr_id)` pairs, tolerating BOTH chunk forms:
+///
+/// * `msg_show` / `msg_history_show`: `[attr_id, text_chunk, hl_id]` — `attr_id`
+///   (elem[0]) is an integer highlight-attr id (resolved against the
+///   [`HighlightTable`](crate::render::HighlightTable) like a cell).
+/// * `cmdline_show`: `[attrs, text]` — elem[0] may be an ATTRS-DICT (a map)
+///   rather than an int; in that case the attr id defaults to 0.
+///
+/// So elem[0] is read via [`Value::as_u64`] with a `0` fallback (covering the
+/// map form), and elem[1] is the text. Tuples with no text are skipped.
+fn parse_content_chunks(content: &Value) -> Vec<(String, u64)> {
+    let Some(chunks) = content.as_array() else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(chunks.len());
+    for chunk in chunks {
+        let Some(parts) = chunk.as_array() else {
+            continue;
+        };
+        // elem[0]: attr id as an int; a map (cmdline attrs-dict form) → 0.
+        let attr_id = parts.first().and_then(Value::as_u64).unwrap_or(0);
+        // elem[1]: the text.
+        let Some(text) = parts.get(1).and_then(Value::as_str) else {
+            continue;
+        };
+        out.push((text.to_string(), attr_id));
+    }
+    out
+}
+
+/// Splits parsed `(text, attr_id)` chunks into visual lines, breaking each
+/// chunk's text on `"\n"` (a message may embed newlines, e.g. multi-line
+/// `nvim_echo`). Returns one `Vec<ToastChunk>` per line. An empty chunk list
+/// yields no lines.
+fn split_content_into_lines(chunks: Vec<(String, u64)>) -> Vec<Vec<ToastChunk>> {
+    if chunks.is_empty() {
+        return Vec::new();
+    }
+    let mut lines: Vec<Vec<ToastChunk>> = vec![Vec::new()];
+    for (text, attr_id) in chunks {
+        for (i, seg) in text.split('\n').enumerate() {
+            if i > 0 {
+                lines.push(Vec::new());
+            }
+            if !seg.is_empty() {
+                if let Some(last) = lines.last_mut() {
+                    last.push(ToastChunk {
+                        text: seg.to_string(),
+                        attr_id,
+                    });
+                }
+            }
+        }
+    }
+    lines
+}
+
+/// Appends `lines` to the LAST message in `messages`, fusing the first appended
+/// line onto the message's last line (`:echon` semantics). Returns `false` when
+/// there is no message to append to (the caller then pushes a fresh message).
+fn append_lines_to_last(messages: &mut [Message], lines: Vec<Vec<ToastChunk>>) -> bool {
+    let Some(last) = messages.last_mut() else {
+        return false;
+    };
+    let mut it = lines.into_iter();
+    if let Some(first) = it.next() {
+        if let Some(last_line) = last.lines.last_mut() {
+            last_line.extend(first);
+        } else {
+            last.lines.push(first);
+        }
+    }
+    for line in it {
+        last.lines.push(line);
+    }
+    true
+}
+
+fn cmdline_show(snap: &mut Snapshot, params: &[Value]) {
+    // [content, pos, firstc, prompt, indent, level]
+    let content = params
+        .first()
+        .map(parse_content_chunks)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(text, attr_id)| CmdlineChunk { text, attr_id })
+        .collect();
+    let pos = params.get(1).and_then(as_u64).unwrap_or(0) as usize;
+    let firstc = params
+        .get(2)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let prompt = params
+        .get(3)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let indent = params.get(4).and_then(as_u64).unwrap_or(0) as usize;
+    let level = params.get(5).and_then(as_u64).unwrap_or(0) as u32;
+
+    snap.cmdline = Cmdline {
+        active: true,
+        firstc,
+        prompt,
+        content,
+        pos,
+        indent,
+        level,
+    };
+}
+
+fn cmdline_pos(snap: &mut Snapshot, params: &[Value]) {
+    // [pos, level]
+    if let Some(pos) = params.first().and_then(as_u64) {
+        snap.cmdline.pos = pos as usize;
+    }
+    if let Some(level) = params.get(1).and_then(as_u64) {
+        snap.cmdline.level = level as u32;
+    }
+}
+
+fn cmdline_hide(snap: &mut Snapshot) {
+    // [level, abort] — the (possibly nested) command line closed. v1 collapses
+    // any recursion level to the single surface, so any hide clears it.
+    snap.cmdline = Cmdline::default();
+}
+
+fn popupmenu_show(snap: &mut Snapshot, params: &[Value]) {
+    // [items, selected, row, col, grid]; item [word, kind, menu, info]
+    let items = params
+        .first()
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| {
+                    let parts = item.as_array()?;
+                    let field = |i: usize| {
+                        parts
+                            .get(i)
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string()
+                    };
+                    Some(PumItem {
+                        word: field(0),
+                        kind: field(1),
+                        menu: field(2),
+                        info: field(3),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // `selected` is -1 for "no selection"; `grid` is -1 when anchored to the
+    // command line — both need signed decoding.
+    let selected = params.get(1).and_then(as_i64).unwrap_or(-1);
+    let row = params.get(2).and_then(as_i64).unwrap_or(0);
+    let col = params.get(3).and_then(as_i64).unwrap_or(0);
+    let grid = params.get(4).and_then(as_i64).unwrap_or(0);
+
+    snap.pum = Pum {
+        visible: true,
+        items,
+        selected,
+        row,
+        col,
+        grid,
+    };
+}
+
+fn popupmenu_select(snap: &mut Snapshot, params: &[Value]) {
+    // [selected]
+    if let Some(selected) = params.first().and_then(as_i64) {
+        snap.pum.selected = selected;
+    }
+}
+
+fn popupmenu_hide(snap: &mut Snapshot) {
+    // []
+    snap.pum = Pum::default();
+}
+
+fn msg_show(snap: &mut Snapshot, params: Vec<Value>) {
+    // [kind, content, replace_last, history, append, id, trigger]
+    let kind = params
+        .first()
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+
+    // 1. `search_count` (`[1/3]`) is suppressed entirely.
+    if kind == "search_count" {
+        return;
+    }
+
+    let chunks = params.get(1).map(parse_content_chunks).unwrap_or_default();
+    let text_empty = chunks.iter().all(|(t, _)| t.is_empty());
+
+    // 2. an `empty` message with no content clears the toast.
+    if kind == "empty" && text_empty {
+        snap.clear_toast();
+        return;
+    }
+
+    let replace_last = params.get(2).and_then(Value::as_bool).unwrap_or(false);
+    let append = params.get(4).and_then(Value::as_bool).unwrap_or(false);
+    // OD7: integer id only; a string/absent id is treated as 0 (no replace-by-id).
+    let id = params.get(5).and_then(Value::as_i64).unwrap_or(0);
+
+    let lines = split_content_into_lines(chunks);
+
+    // 3/4. append onto the current message (`:echon`).
+    if append && append_lines_to_last(&mut snap.toast.messages, lines.clone()) {
+        snap.toast.visible = true;
+        return;
+    }
+
+    // 5. replace the last message in place.
+    if replace_last {
+        if let Some(last) = snap.toast.messages.last_mut() {
+            *last = Message { kind, id, lines };
+            snap.toast.visible = true;
+            return;
+        }
+    }
+
+    // 6. replace an existing message sharing this (non-zero) id.
+    if id != 0 {
+        if let Some(existing) = snap.toast.messages.iter_mut().find(|m| m.id == id) {
+            *existing = Message { kind, id, lines };
+            snap.toast.visible = true;
+            return;
+        }
+    }
+
+    // 7. push a fresh message.
+    snap.toast.messages.push(Message { kind, id, lines });
+    snap.toast.visible = true;
+}
+
+fn msg_clear(snap: &mut Snapshot) {
+    // []
+    snap.clear_toast();
+}
+
+fn msg_history_show(snap: &mut Snapshot, params: Vec<Value>) {
+    // [entries, prev_cmd]; entry [kind, content, append]
+    let Some(entries) = params.first().and_then(Value::as_array) else {
+        return;
+    };
+
+    let mut messages: Vec<Message> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let Some(parts) = entry.as_array() else {
+            continue;
+        };
+        let kind = parts
+            .first()
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let chunks = parts.get(1).map(parse_content_chunks).unwrap_or_default();
+        let append = parts.get(2).and_then(Value::as_bool).unwrap_or(false);
+        let lines = split_content_into_lines(chunks);
+
+        if append && append_lines_to_last(&mut messages, lines.clone()) {
+            continue;
+        }
+        messages.push(Message { kind, id: 0, lines });
+    }
+
+    snap.toast.messages = messages;
+    snap.toast.visible = true;
+}
+
+#[cfg(test)]
+mod tests {
+    //! Direct unit tests for the `msg_show` fold's less-observable branches
+    //! (steps 4–6 of the fold in [`msg_show`]): `append`, `replace_last`, and
+    //! id-match replacement. These cannot be uniquely triggered by real-nvim
+    //! keystrokes (a single keystroke that produces a same-frame `replace_last`
+    //! / `append` / id-match is not drivable headlessly), so they are exercised
+    //! deterministically by feeding synthetic `msg_show`-shaped params straight
+    //! through the fold. The real-nvim `tests/messages.rs` covers the observable
+    //! push + clear-on-input paths.
+
+    use super::*;
+
+    /// A message id used to pin id-match replacement (a named constant per the
+    /// `mnd` lint's "no magic number >= 5" rule).
+    const ID_TARGET: i64 = 42;
+    /// A second, distinct message id that must be left untouched by an id-match
+    /// replacement of [`ID_TARGET`].
+    const ID_OTHER: i64 = 7;
+
+    /// Builds a `msg_show` `content` value: one styled chunk `[attr_id, text,
+    /// hl_id]` (the exact tuple order the fold parses via
+    /// [`parse_content_chunks`]).
+    fn content_one(text: &str) -> Value {
+        Value::Array(vec![Value::Array(vec![
+            Value::from(0u64),
+            Value::from(text),
+            Value::from(0u64),
+        ])])
+    }
+
+    /// Builds `msg_show` params in the exact tuple order the coder implemented:
+    /// `[kind, content, replace_last, history, append, id, trigger]`.
+    fn msg_show_params(
+        kind: &str,
+        text: &str,
+        replace_last: bool,
+        append: bool,
+        id: i64,
+    ) -> Vec<Value> {
+        vec![
+            Value::from(kind),
+            content_one(text),
+            Value::from(replace_last),
+            Value::from(false), // history (ignored by the fold)
+            Value::from(append),
+            Value::from(id),
+            Value::from(false), // trigger (unused)
+        ]
+    }
+
+    /// Flattens a message's lines into one newline-joined string of its chunk
+    /// texts, for content assertions.
+    fn message_text(msg: &Message) -> String {
+        msg.lines
+            .iter()
+            .map(|line| line.iter().map(|c| c.text.as_str()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Fold step 4: `append == true` fuses the new content onto the LAST line of
+    /// the last message rather than starting a new message (`:echon` semantics).
+    #[test]
+    fn msg_show_append_fuses_onto_last_line() {
+        let mut snap = Snapshot::default();
+        msg_show(
+            &mut snap,
+            msg_show_params("echomsg", "hello", false, false, 0),
+        );
+        msg_show(
+            &mut snap,
+            msg_show_params("echomsg", " world", false, true, 0),
+        );
+
+        assert_eq!(
+            snap.toast.messages.len(),
+            1,
+            "append must fuse onto the existing message, not start a new one"
+        );
+        let msg = &snap.toast.messages[0];
+        assert_eq!(
+            msg.lines.len(),
+            1,
+            "the appended chunk fuses onto the last line (no new line)"
+        );
+        assert_eq!(message_text(msg), "hello world");
+        assert!(snap.toast.visible, "an append keeps the toast visible");
+    }
+
+    /// Fold step 5: `replace_last == true` replaces the last message in place —
+    /// the message count is unchanged and the content is the new text.
+    #[test]
+    fn msg_show_replace_last_updates_in_place() {
+        let mut snap = Snapshot::default();
+        msg_show(
+            &mut snap,
+            msg_show_params("echomsg", "first", false, false, 0),
+        );
+        msg_show(
+            &mut snap,
+            msg_show_params("echomsg", "second", true, false, 0),
+        );
+
+        assert_eq!(
+            snap.toast.messages.len(),
+            1,
+            "replace_last must replace in place, not append"
+        );
+        assert_eq!(message_text(&snap.toast.messages[0]), "second");
+        assert!(snap.toast.visible, "a replace keeps the toast visible");
+    }
+
+    /// Fold step 6: a new message whose integer `id` matches a visible message
+    /// replaces THAT message (and leaves the others untouched).
+    #[test]
+    fn msg_show_matching_id_replaces_that_message() {
+        let mut snap = Snapshot::default();
+        msg_show(
+            &mut snap,
+            msg_show_params("echomsg", "orig", false, false, ID_TARGET),
+        );
+        msg_show(
+            &mut snap,
+            msg_show_params("echomsg", "other", false, false, ID_OTHER),
+        );
+        // A fresh message re-using ID_TARGET replaces the first message in place.
+        msg_show(
+            &mut snap,
+            msg_show_params("echomsg", "updated", false, false, ID_TARGET),
+        );
+
+        assert_eq!(
+            snap.toast.messages.len(),
+            2,
+            "an id-match must replace the matching message, not append"
+        );
+        let text_for = |id: i64| {
+            snap.toast
+                .messages
+                .iter()
+                .find(|m| m.id == id)
+                .map(message_text)
+        };
+        assert_eq!(
+            text_for(ID_TARGET).as_deref(),
+            Some("updated"),
+            "the message sharing the id is replaced"
+        );
+        assert_eq!(
+            text_for(ID_OTHER).as_deref(),
+            Some("other"),
+            "the non-matching message is left untouched"
+        );
+        assert!(snap.toast.visible, "an id-match keeps the toast visible");
+    }
 }

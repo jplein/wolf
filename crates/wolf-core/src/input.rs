@@ -244,6 +244,24 @@ pub enum InputEvent {
     },
 }
 
+impl InputEvent {
+    /// Whether this event is a deliberate user action that should DISMISS a
+    /// showing message toast (OD8): a [`Key`](InputEvent::Key),
+    /// [`Mouse`](InputEvent::Mouse), or [`Scroll`](InputEvent::Scroll).
+    ///
+    /// A scroll IS dismissing here; the scroll-over-toast exemption is realized
+    /// entirely in the front-end (it simply never forwards that wheel gesture, so
+    /// no `Scroll` reaches core). Resize / focus / open / tabpage events are NOT
+    /// user-facing input and never dismiss.
+    #[must_use]
+    pub fn is_toast_dismissing(&self) -> bool {
+        matches!(
+            self,
+            InputEvent::Key(_) | InputEvent::Mouse(_) | InputEvent::Scroll(_)
+        )
+    }
+}
+
 /// Translates a [`KeyEvent`] into Neovim keystroke notation.
 ///
 /// Modifier order is `C-`, `S-`, `A-`, `D-` (Ctrl, Shift, Alt, Meta). Special

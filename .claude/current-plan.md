@@ -1,145 +1,197 @@
-# Plan: Bazel lint targets (clippy, rustfmt, swift-format) for macOS host
+# Merge `feat/command-line-ui` into `main`
 
 ## Problem statement
 
-Add Bazel targets that let developers run three linters/formatters on the macOS host:
+We are merging the `feat/command-line-ui` worktree branch into `main`. `main`
+already contains `feat/markdown-preview` (merged previously). The merge is in
+progress in the working tree (`git merge --no-commit --no-ff feat/command-line-ui`)
+and has 13 conflicted files. The two branches are almost entirely **additive**
+relative to each other:
 
-1. **clippy** (Rust)
-2. **rustfmt** (Rust)
-3. **swift-format** (Swift — the host Xcode 26 binary, NOT SwiftLint, NOT vendored)
+- **main / HEAD** brought the Markdown **preview** feature: `PreviewInfo`,
+  `Snapshot.previews`, `Snapshot.markdown_ticks`, `current_filetype`,
+  `current_is_preview`, and the FFI surface (`open_preview`, `edit_source`,
+  `render_preview`, `preview_file`, `previews`, `FfiPreview`,
+  `is_markdown_active`, `is_preview_active`).
+- **feat/command-line-ui** brings the native **command line / completion popup /
+  message toast** (`ext_cmdline` / `ext_popupmenu` / `ext_messages`): `Cmdline`,
+  `CmdlineChunk`, `Pum`, `PumItem`, `Message`, `ToastChunk`, `Toast`,
+  `Snapshot.cmdline` / `.pum` / `.toast`, the FFI `cmdline()` / `pum()` /
+  `toast()` methods and their `FfiCmdline`/`FfiPum`/`FfiToast` opaque types, plus
+  new Swift views `CmdlineView.swift`, `CompletionPopupView.swift`,
+  `ToastView.swift` and the tests `cmdline_pum.rs`, `messages.rs`, `cmdline_ui.rs`.
 
-The Darwin devShell ships no standalone Rust toolchain, so clippy/rustfmt must use the toolchain that `rules_rust` downloads. swift-format is the host Xcode binary at `XcodeDefault.xctoolchain/usr/bin/swift-format` (v6.3.0, resolvable via `xcrun --find swift-format`).
+**Because the two feature sets touch the same import lists, the same `Snapshot`
+struct, the same FFI `extern` block, and the same `PaneContainerView`, they
+collide — but almost every collision is resolved by KEEPING BOTH SIDES.** No
+semantic content from either branch may be dropped.
 
-## Requirements (decided)
+## Goal
 
-- **Three tools**: clippy, rustfmt, swift-format.
-- **Two modes per tool**:
-  1. a CHECK target that reports/fails on violations (`bazel test` or `bazel build`);
-  2. an AUTOFIX target that rewrites files in place (`bazel run`). clippy `--fix` is limited to machine-applicable suggestions; rustfmt and swift-format fully autoformat.
-- **Advisory, not gating**: check targets MUST NOT be swept into the existing default suite. `bazel test //crates/wolf-core/... //crates/wolf-ffi/... //crates/wolf-macos/...` is green (47/47) and must stay exactly that. Tag lint checks `manual` and/or place them in a dedicated package (e.g. `//tools/lint`) so wildcards skip them. Existing lint violations are EXPECTED and out of scope to fix now.
-- **Aggregate entry points**: one command to run all checks, one to run all fixes; documented in `build.md`.
-- **Docs are source of truth** (CLAUDE.md): update `build.md` and relevant READMEs.
+Resolve all 13 conflicts keeping both feature sets intact, regenerate the
+swift-bridge FFI bindings, get the full Bazel test suite and all linters green,
+commit the merge, and mark `feat/command-line-ui` done in
+`worktree-merge-tasks.md`.
 
-## Environment facts
+## Conflicted files & resolution strategy
 
-- MODULE.bazel: rules_rust 0.71.2 (rust toolchain 1.85.0, edition 2021, downloaded), rules_swift 3.6.1, rules_apple 4.5.3, apple_support 2.6.1. crate_universe repo = `@crates`.
-- Rust crates: `//crates/wolf-core`, `//crates/wolf-ffi` (rust_library/rust_test).
-- Swift: `//crates/wolf-macos` (rules_swift swift_library + swift_test; WolfKeyMap/WolfMacOS Sources).
-- swift-format has no Bazel ruleset here — likely a genrule/sh_binary wrapper around the xcrun/toolchain swift-format binary.
-- rules_rust supports clippy (rust_clippy rule / clippy aspect) and rustfmt (rustfmt_test / rustfmt aspect / `@rules_rust//tools/rustfmt` writer).
+### A. Additive Rust conflicts — KEEP BOTH SIDES (union)
+1. `crates/wolf-core/src/lib.rs` (1 hunk) — re-export list. Produce the
+   alphabetical **union** of both `pub use` lists (HEAD adds `PreviewInfo`; feat
+   adds `Cmdline, CmdlineChunk, Message, Pum, PumItem, Toast, ToastChunk`).
+2. `crates/wolf-core/src/redraw.rs` (1 hunk) — `use` import list. Union of both.
+3. `crates/wolf-core/src/render.rs` (2 hunks) — (a) new struct type defs: keep
+   HEAD `PreviewInfo` AND feat `CmdlineChunk`/`Cmdline`/`PumItem`/`Pum`/
+   `ToastChunk`/`Message`/`Toast`; (b) `Snapshot` fields: keep HEAD
+   `current_filetype`/`current_is_preview`/`previews`/`markdown_ticks` AND feat
+   `cmdline`/`pum`/`toast`.
+4. `crates/wolf-ffi/src/lib.rs` (3 hunks) — (a) import union; (b) `extern "Rust"`
+   fn decls: keep both blocks; (c) impl methods: keep both. Watch for the shared
+   trailing braces so the union is syntactically valid.
+
+### B. Generated FFI — REGENERATE (do not hand-merge)
+5. `crates/wolf-ffi/generated/wolf-ffi.h`
+6. `crates/wolf-ffi/generated/wolf-ffi.swift`
+   Resolve `src/lib.rs` first, then regenerate via
+   `bazel run //crates/wolf-ffi:gen_bindings` (the tests document this exact
+   flow), which overwrites the conflicted files with the correct union output.
+   These are EXCLUDED from swift-format.
+
+### C. Hard conflict — PaneContainerView.swift
+7. `crates/wolf-macos/Sources/WolfMacOS/PaneContainerView.swift` (2 hunks).
+   `feat` reindented the whole file to **4-space**; `main`/HEAD is canonical
+   **2-space** (default swift-format, no `.swift-format` file in repo). Do NOT
+   accept the 4-space side. **Base = HEAD (2-space, includes preview code); port
+   in feat's command-line/completion/toast additions, reindented to 2-space.**
+   Whitespace-insensitive semantic delta saved at
+   `scratchpad/panecontainer-semantic.diff` (625 lines) — the real additions are
+   the three overlay subviews (`cmdlineView`, `completionPopupView`,
+   `toastView`): their stored-property decls, `init` construction +
+   `addSubview`, layout, and per-wake sync logic. Architect must enumerate every
+   feat-only region to port. After porting, `swift-format` must pass.
+
+### D. Documentation conflicts — KEEP BOTH, integrate prose
+8. `architecture.md` (1 hunk)
+9. `crates/wolf-core/src/README.md` (4 hunks)
+10. `crates/wolf-core/tests/README.md` (1 hunk)
+11. `crates/wolf-ffi/src/README.md` (1 hunk)
+12. `crates/wolf-macos/README.md` (2 hunks)
+13. `crates/wolf-macos/Sources/README.md` (2 hunks)
+    Integrate both branches' documentation additions. Reformat each with
+    `prettier --write` after resolving (per CLAUDE.md).
+
+### E. Orchestrator-owned
+- `.claude/current-plan.md` — this file (conflict already superseded).
 
 ## Verification
+- `bazel test //...` (the suite starts real nvim processes — integration tests).
+- All linters/formatters: clippy, rustfmt, swift-format (advisory Bazel targets
+  added in recent commits), prettier for Markdown.
+- No content from either branch dropped; both preview AND cmdline/pum/toast
+  features fully present.
 
-The targets actually work on this macOS host:
+## Notes on team usage
+- **test-writer: SKIPPED.** The merge already carries its own tests
+  (`cmdline_pum.rs`, `messages.rs`, `cmdline_ui.rs` from feat + preview tests
+  from main). No new tests are authored for a merge; verification is running the
+  union of both suites. Revisit only if the coder finds a genuine coverage gap
+  created by the resolution itself.
 
-- each CHECK target runs (`bazel build`/`test`) without Bazel/config errors;
-- each FIX runner runs (`bazel run`) without Bazel/config errors;
-- the pre-existing `bazel test //crates/...` suite stays green (47/47).
+## Status log
+- [done] Architect produced detailed per-hunk resolution spec (below).
+- [done] Coder resolved all 13 conflicts, regenerated FFI bindings. `bazel test //...` = 58/58 PASS; `bazel test //tools/lint:check` = all 4 PASS (clippy, rustfmt_core, rustfmt_ffi, swift_format). Swift sanity greps confirmed. Coder decisions: WolfKeyMap README count set to actual tree union (23); reverted pre-existing rustfmt drift in unrelated test files (out of merge scope). Orchestrator declined the optional new "coexistence" test (merges author no new tests; both feature sets independently covered & green).
+- [done] Reviewer APPROVED — all 6 areas PASS, no content dropped from either branch, all shared-brace closures correct, Swift 2-space with both feature sets coexisting.
+- [done] Technical writer verified all READMEs + architecture.md match the merged implementation; no doc changes needed.
+- [in progress] Orchestrator committing merge + marking worktree done.
 
-Because these are build-tooling targets (not app code), "tests" = demonstrating the targets execute correctly on the host, not new Rust/Swift unit tests.
+---
 
-## Architect's implementation plan
+# DETAILED RESOLUTION SPEC (from architect — follow literally)
 
-All targets live in a new `//tools/lint` package, every target `tags = ["manual"]` so wildcard build/test never sweeps them. clippy/rustfmt use the rules_rust downloaded 1.85.0 toolchain; swift-format is the host Xcode binary via `xcrun --find swift-format`.
+## A. Additive Rust conflicts — exact merged text
 
-### Target layout (all in `//tools/lint`, all `manual`)
+### 1. `crates/wolf-core/src/lib.rs` (1 hunk) — `pub use render::{…}` union:
+```rust
+pub use render::{
+    Cell, Cmdline, CmdlineChunk, Cursor, CursorShape, DefaultColors, Grid, HighlightTable, HlAttr,
+    Message, ModeInfo, PreviewInfo, Pum, PumItem, ResolvedStyle, Rgb, SharedSnapshot, Snapshot,
+    ThemeColors, ThemeGroup, Toast, ToastChunk, Viewport, WinInfo,
+};
+```
 
-| Purpose | Target | Rule | Invocation |
-| --- | --- | --- | --- |
-| clippy check | `:clippy` | `sh_test` (body `exit 0`) whose `data=[:clippy_core,:clippy_ffi]` | `bazel test //tools/lint:clippy` |
-| clippy check (core) | `:clippy_core` | `rust_clippy` (deps = wolf-core rust targets) | built as data of `:clippy` |
-| clippy check (ffi) | `:clippy_ffi` | `rust_clippy` (deps = wolf-ffi rust targets) | built as data of `:clippy` |
-| clippy fix | `:clippy.fix` | `clippy_fix` custom rule (`clippy_fix.bzl`) | `bazel run //tools/lint:clippy.fix` |
-| rustfmt check | `:rustfmt` | `test_suite` over `:rustfmt_core` + `:rustfmt_ffi` | `bazel test //tools/lint:rustfmt` |
-| rustfmt check (core/ffi) | `:rustfmt_core`, `:rustfmt_ffi` | `rustfmt_test` | via the suite |
-| rustfmt fix | `:rustfmt.fix` | `alias` → `@rules_rust//:rustfmt` | `bazel run //tools/lint:rustfmt.fix` |
-| swift-format check | `:swift_format` | `sh_test` (`no-sandbox`) | `bazel test //tools/lint:swift_format` |
-| swift-format fix | `:swift_format.fix` | `sh_binary` | `bazel run //tools/lint:swift_format.fix` |
-| ALL checks | `:check` | `test_suite` (`:clippy`,`:rustfmt_core`,`:rustfmt_ffi`,`:swift_format`) | `bazel test //tools/lint:check` |
-| ALL fixes | `:fix` | `sh_binary` running all three fixers inline | `bazel run //tools/lint:fix` |
+### 2. `crates/wolf-core/src/redraw.rs` (1 hunk) — `use crate::render::{…}` union (note: has `ToastChunk` but NOT `Toast`; keeps `PreviewInfo`):
+```rust
+use crate::render::{
+    Cell, Cmdline, CmdlineChunk, CursorShape, DefaultColors, HlAttr, Message, ModeInfo, PreviewInfo,
+    Pum, PumItem, Rgb, SharedSnapshot, Snapshot, ThemeColors, ThemeGroup, ToastChunk, Viewport,
+    WinInfo,
+};
+```
 
-Rationale: making each check TEST-shaped lets one `bazel test //tools/lint:check` run everything. clippy has no native test, so `:clippy` is a trivial `sh_test` whose `data` deps are `rust_clippy` targets — Bazel must build them (running clippy) to stage runfiles, so a clippy failure fails the test.
+### 3. `crates/wolf-core/src/render.rs` (2 hunks) — both "keep both, HEAD then feat", both with SHARED CLOSING BRACE:
+- **Hunk 1 (~459–630):** Keep HEAD `PreviewInfo` struct block (~460–475) and ADD a `}` after `pub source_path: PathBuf,` to close it. Blank line. Then keep feat's whole block (~477–628: `CmdlineChunk`, `Cmdline`+impl, `PumItem`, `Pum`, `ToastChunk`, `Message`, `Toast`+impl). The existing single `}` (~630) now closes feat's `impl Toast`. Delete the 3 markers.
+- **Hunk 2 (~682–724):** `Snapshot` fields. Keep HEAD's four (`current_filetype`, `current_is_preview`, `previews`, `markdown_ticks`) then feat's three (`cmdline`, `pum`, `toast`), then existing `pub seq`. Delete markers only. No shared-brace issue.
 
-### Approach per tool (chosen / rejected)
+### 4. `crates/wolf-ffi/src/lib.rs` (3 hunks):
+- **Hunk 1 (~47–62) import union:**
+```rust
+use wolf_core::{
+    rank_buffers, rank_matches_top_n, rank_palette, BufInfo, BufferRow, Cmdline, Command,
+    CommandMru, CoreConfig, CursorShape, FileSearch, FocusDir, Grid, HighlightTable, InputEvent,
+    Key, KeyEvent, LayoutIntent, MouseAction, MouseButton, MouseEvent, PaletteRow, PaletteRowKind,
+    PaletteWindow, PaneStatus, PreviewInfo, Pum, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent,
+    SplitOrientation, StateStore, TabState, Toast, WakeFn, WinInfo, WindowState, WolfCore,
+    WolfState,
+};
+```
+- **Hunk 2 (~481–556) extern decls, SHARED BRACE:** Inside the FIRST (main-handle) extern block, after `fn is_visual_mode(&self) -> bool;`, keep HEAD's 7 decls (`is_markdown_active`, `is_preview_active`, `edit_source`, `open_preview`, `render_preview`, `preview_file`, `previews`), THEN add feat's 3 decls (`cmdline`, `pum`, `toast`) — feat's 3 must be MOVED UP into the main block — then close main block with the `}` (~522). Then keep HEAD's new `extern "Rust" { type FfiPreview; … }` block (~524–541); the `}` (~556) closes it. Delete 3 markers.
+- **Hunk 3 (~1911–2060) impl methods, SHARED BRACE:** Keep HEAD's 7 methods (~1912–2016) and ADD a `}` after `previews()`'s `.collect()`. Then keep feat's 3 methods (`cmdline`, `pum`, `toast`, ~2018–2059). Line ~2061 `}` closes feat's `toast()`; ~2062 `}` closes the `impl`. Delete markers.
+- Rest of ffi lib.rs merged cleanly (FfiPreview struct, FfiCmdline/FfiPum/FfiToast opaque types) — no action.
 
-- **clippy CHECK** = `rust_clippy` rule from `@rules_rust//rust:defs.bzl` (rejected: clippy aspect — too easy to sweep into wildcards). **clippy FIX** = custom `clippy_fix` Starlark rule resolving `@rules_rust//rust:toolchain_type`, staging the toolchain's cargo/clippy_driver/rustc/rust_std as runfiles, launcher runs `cargo clippy --fix --allow-dirty --allow-staged --workspace` in `$BUILD_WORKSPACE_DIRECTORY` (rejected: plain `sh_binary` assuming cargo on PATH — devShell has none). NOTE: clippy --fix uses cargo → crates.io (network) + Xcode cc; non-hermetic dev convenience. **Simpler fallback allowed** if the custom rule fights back: any launcher that reaches the toolchain cargo is acceptable — bar is "runs without Bazel/config error."
-- **rustfmt CHECK** = `rustfmt_test` rule (rejected: rustfmt aspect). **rustfmt FIX** = `alias` → `@rules_rust//:rustfmt` writer.
-- **swift-format CHECK** = `sh_test` running `swift_format_check.sh`: `SF=$(xcrun --find swift-format); "$SF" lint --strict <files>`; tags `["manual","no-sandbox"]` (host binary, not a sandbox input). **swift-format FIX** = `sh_binary` running `swift_format_fix.sh`: `swift-format format -i --parallel` over `$BUILD_WORKSPACE_DIRECTORY/crates/wolf-macos/{Sources,Tests}/**/*.swift`. EXCLUDE `crates/wolf-ffi/generated/*.swift` (machine-generated bindings).
+## B. Generated FFI — REGENERATE (files 5 & 6):
+Do NOT hand-merge `crates/wolf-ffi/generated/wolf-ffi.h` and `.swift`. After src/lib.rs resolves & compiles, run `bazel run //crates/wolf-ffi:gen_bindings` — overwrites both, clears their conflict markers. Excluded from swift-format.
 
-### Files to CREATE
+## C. `PaneContainerView.swift` — reconstruct, don't pick sides
+feat reindented whole file 4-space; HEAD is canonical 2-space. Procedure:
+1. `git show HEAD:crates/wolf-macos/Sources/WolfMacOS/PaneContainerView.swift > <path>` — clean compiling 2-space file with all preview code.
+2. Port feat's additions (below), reindented 4→2. Use feat's side in the ORIGINAL conflicted file (between `=======` and `>>>>>>>`, ~lines 398–439 and ~522–1261) as authoritative for exact bodies. Semantic diff at `scratchpad/panecontainer-semantic.diff`.
+3. Run swift-format fix at end.
 
-- `tools/lint/BUILD.bazel` — all targets above.
-- `tools/lint/clippy_fix.bzl` — `clippy_fix` executable rule (toolchain-resolving).
-- `tools/lint/clippy_gate.sh` — `#!/usr/bin/env bash` + `exit 0` (forces clippy data deps to build).
-- `tools/lint/swift_format_check.sh` — xcrun-resolve + `lint --strict`, loud fail if not found.
-- `tools/lint/swift_format_fix.sh` — xcrun-resolve + `format -i --parallel` in workspace.
-- `tools/lint/fix_all.sh` — rustfmt writer, then clippy --fix, then swift fix; all vs `$BUILD_WORKSPACE_DIRECTORY`.
-- `tools/lint/README.md` — required by CLAUDE.md; documents every target, check/fix, advisory policy, caveats.
-- (Optional, recommended) `.rustfmt.toml` — pins rustfmt so Bazel + local `cargo fmt` agree. `clippy.toml` optional. `.swift-format` NOT added (defaults). If config files add friction, SHIP WITHOUT them.
+**C.1 feat-only ADDITIONS (locate by HEAD anchor):**
+1. Three stored props after `lastTitlebarTheme`, before init: OD9 comment + `private let cmdlineView: CmdlineView`, `private let completionPopupView: CompletionPopupView`, `private let toastView: ToastView`.
+2. In `init(handle:metrics:tabpageHandle:)`, after `self.controllerTabpageHandle = tabpageHandle` before `super.init`: `self.cmdlineView = CmdlineView(metrics: metrics)`, `self.completionPopupView = CompletionPopupView(metrics: metrics)`, `self.toastView = ToastView(metrics: metrics)`.
+3. Same init, after `wantsLayer = true` before NotificationCenter observer: feat comment + `addSubview(toastView)`, `addSubview(cmdlineView)`, `addSubview(completionPopupView)` (order matters, popup last).
+4. In `applyMetrics(_:)` after metric applied to panes: `cmdlineView.applyMetrics(newMetrics)`, `completionPopupView.applyMetrics(newMetrics)`, `toastView.applyMetrics(newMetrics)`, then `refreshOverlays()`.
+5. In `scrollWheel(with:)` after `point` computed, before pane-forward loop: feat's `if !toastView.isHidden, toastView.frame.contains(point) { … toastView.scrollBy(deltaY:) ; return }` (OD8).
+6. New `private func refreshOverlays()` (reads `handle.read_frame_for_grid(Self.cmdlineGridId)`, resolves default fg/bg, then `handle.cmdline()`/`pum()`/`toast()`, updates the 3 views, lays them out along bottom). Place near HEAD's `syncPreviewWebViews()`.
+7. New `private func pumAnchorX(pum: FfiPum, cmdline: FfiCmdline) -> CGFloat` helper.
+8. In `draw(_:)` where HEAD calls `paintCmdlineStrip(ctx)`: replace with feat's 3-line comment.
 
-### Files to MODIFY
+**C.2 feat MODIFICATIONS/REMOVALS (adopt feat — OD9 supersedes HEAD grid strip):**
+9. REMOVE `stripHeight` computed prop; change `paneAreaHeight` from `max(0, bounds.height - stripHeight)` to `bounds.height`. Grep: zero `stripHeight` refs after.
+10. REMOVE `paintCmdlineStrip(ctx)` call in `draw(_:)` (→ comment from #8).
+11. REMOVE methods `paintCmdlineStrip(_:)` and `paintStripRow(_:row:stripRect:ctx:)` entirely.
+12. Add `refreshOverlays()` after EACH `syncPreviewWebViews()` call (HEAD calls it at 2 sites: active-pane refresh + end of `onRenderWake`). Also honor 2 pure-add `refreshOverlays()` sites in resize/wake-refresh path (semantic diff 592a491, 598a498).
+13. Doc-comment prose: adopt feat's wording for `paneRects()` doc (drop "cmdline strip … stripHeight" clause) and the grid-1 sizing comment ("under ext_messages it empties / cmdheight=0").
 
-- `crates/wolf-macos/BUILD.bazel` — add `filegroup` `swift_format_srcs` (the Swift files under `Sources/WolfKeyMap`, `Sources/WolfMacOS`, `Tests/WolfKeyMapTests`; NOT the wolf-ffi generated Swift), visible to `//tools/lint`. Cross-package globbing is not allowed, so this filegroup MUST live here and be referenced by label.
-- `.bazelrc` — add `--config=lint` carrying `--@rules_rust//rust/settings:clippy_flags=-Dwarnings` (make clippy fail on lints) scoped so the DEFAULT build/test path is byte-for-byte unchanged. If config files committed, also the `clippy_toml`/`rustfmt_toml` setting labels + root `exports_files`.
-- `BUILD.bazel` (root) — `exports_files` for any committed config referenced by `//:` label.
-- `MODULE.bazel` — EXPECTED NO CHANGE (`rust.toolchain(versions=["1.85.0"])` + `register_toolchains("@rust_toolchains//:all")` already provide rustfmt/clippy). FALLBACK only if `bazel run @rules_rust//:rustfmt` errors "no rustfmt toolchain": add `rustfmt_version` to `rust.toolchain`.
-- `build.md` — new "Linting and formatting (macOS)" section (6 cmds + 2 aggregates, advisory note, toolchain/host-binary notes, clippy-fix cargo/network caveat).
-- `crates/wolf-macos/README.md` — one-line pointer to swift-format targets + generated exclusion.
+**C.3 HEAD-only KEEP (already present from pristine HEAD — confirm survive):** `PreviewPlacementInputs`/`EditPlacementInputs` structs + `previewPlacementInputs()`/`editPlacementInputs()`; preview maps (`previewWebViews`, `previewDimOverlays`, `lastPreviewLoads`, `previewNavDelegates`, `previewFocusHandlers`, `previewSourcePaths`, `pendingPreviewFragments`, `previewNamesByGrid`, `previewDisplayPathsByGrid`, `previewReloadCoalescer`); methods `syncPreviewWebViews`, `reloadDirtyPreviews`, `ensurePreviewWebView`, `focusPreviewPane`, `applyPreviewDim`, `removePreviewWebView`, `previewSourcePath`, `scrollPreview`, `previewFile`, `previewDidFinishLoad`; the `Preview: <name>` statusbar override; drawScrollbars web-view suppression (`if previewNamesByGrid[grid] != nil { continue }`); `import WebKit`. The 3 feat view files (`CmdlineView`/`CompletionPopupView`/`ToastView`.swift) already exist — just confirm compile.
 
-### Developer commands (for build.md)
+## D. Documentation conflicts (keep both prose; `prettier --write` each after):
+- **8. `architecture.md` (~65–69) DIVERGENT:** base = feat's paragraph (has 3-overlay + scroll-over-toast wording); re-insert HEAD's Preview + Edit Source menu items after the Buffer Picker `⌘E` entry.
+- **9. `crates/wolf-core/src/README.md` (4 hunks) MIXED:** H1(~59–67) keep HEAD `PreviewInfo` bullet + feat 3 bullets; merge the two `Snapshot {…}` signature lines into one union in struct order (`… theme, current_filetype, current_is_preview, previews, markdown_ticks, cmdline, pum, toast, seq }`). H2(~75–86) keep HEAD's 4 field bullets + feat's cmdline/pum/toast bullet; merge divergent `seq` bullet (out-of-band preview updates DON'T bump seq; cmdline/pum/toast fold IS in redraw batch so DOES) and merge Accessors bullet (`is_markdown_active`/`is_preview_active` + feat `clear_toast()`). H3(~189–193) NvimProcess: adopt feat `ui_attach` (adds ext_popupmenu+ext_messages+cmdheight=0) but re-insert HEAD's `setup_preview()` + `render_preview/open_preview/edit_source/preview_file`. H4(~348–352) api.rs: base HEAD paragraph + insert feat's toast-clear-on-input (OD8) sentence.
+- **10. `crates/wolf-core/tests/README.md` (~38–42):** additive union — HEAD preview/markdown test files + feat `cmdline_pum.rs`/`messages.rs`/`cmdline_ui.rs`.
+- **11. `crates/wolf-ffi/src/README.md` (~9–17) DIVERGENT:** opaque types = HEAD `FfiPreview` + feat `FfiCmdline`/`FfiPum`/`FfiPumItem`/`FfiToast`/`FfiToastLine`/`FfiToastChunk`; `read_frame_for_grid` adopt feat wording (grid 1 default fg/bg overlays paint against); WolfCoreHandle methods union (HEAD preview methods + feat `cmdline()`/`pum()`/`toast()`).
+- **12. `crates/wolf-macos/README.md` (2 hunks) DIVERGENT largest:** both hunks (~87–92, ~129–133) — base = feat (OD9 overlay reality) + re-insert HEAD preview prose (live Markdown preview View>Preview, preview-pane statusbar/click-to-focus `PreviewClickFocusHandler`/`PreviewSeam.clickFocusJS`, Edit-command paragraph). Command-palette count: union = HEAD's higher count with Preview+Edit Source listed. Drop HEAD's stale "bottom cmdline strip" sentences in favor of feat overlay sentences.
+- **13. `crates/wolf-macos/Sources/README.md` (2 hunks ~7–11, ~51–62):** likely pure-add module entries — HEAD `PreviewClickFocusHandler`/`PreviewNavigationDelegate` + feat `CmdlineView`/`CompletionPopupView`/`ToastView`. If enclosing sentence edited both sides, merge like README above.
 
-- clippy check `bazel test //tools/lint:clippy` · fix `bazel run //tools/lint:clippy.fix`
-- rustfmt check `bazel test //tools/lint:rustfmt` · fix `bazel run //tools/lint:rustfmt.fix`
-- swift check `bazel test //tools/lint:swift_format` · fix `bazel run //tools/lint:swift_format.fix`
-- ALL checks `bazel test //tools/lint:check` · ALL fixes `bazel run //tools/lint:fix`
+## E. Implementation order (avoid compile breakage):
+1. render.rs → 2. lib.rs re-exports + redraw.rs imports → 3. build/test core → 4. ffi/src/lib.rs (3 hunks) → 5. `bazel run //crates/wolf-ffi:gen_bindings` (resolves files 5–6) → 6. PaneContainerView.swift → 7. 6 doc files + `prettier --write` each → 8. formatters/linters → full test suite.
 
-### VERIFICATION checklist (coder runs on macOS host)
+## F. Verification commands:
+- `bazel run //crates/wolf-ffi:gen_bindings`
+- `bazel test //...` (real-nvim integration; includes `//crates/wolf-ffi:cmdline_ui`, core `cmdline_pum`/`messages`, preview `:preview`/`:edit`)
+- Linters (all `manual`/tagged): rustfmt `bazel test //tools/lint:rustfmt` / fix `:rustfmt.fix`; clippy `bazel test //tools/lint:clippy` (hard-fail `--config=lint`) / fix `:clippy.fix`; swift-format `bazel test //tools/lint:swift_format` / fix `:swift_format.fix`; all checks `bazel test //tools/lint:check`; all fixes `bazel run //tools/lint:fix`.
+- `prettier --write` each resolved doc.
+- Swift sanity greps: `stripHeight` & `paintCmdlineStrip` GONE; `refreshOverlays`/`cmdlineView`/`completionPopupView`/`toastView`/`syncPreviewWebViews` PRESENT.
 
-1. `bazel test //tools/lint:clippy` — runs via downloaded toolchain (pass/fail OK; must not error on config/toolchain).
-2. `bazel run //tools/lint:clippy.fix` — resolves toolchain cargo, executes without Bazel/config error.
-3. `bazel test //tools/lint:rustfmt` — runs `rustfmt --check` on both crates.
-4. `bazel run //tools/lint:rustfmt.fix` — runs the writer.
-5. `bazel test //tools/lint:swift_format` — finds swift-format via xcrun, lints (no-sandbox).
-6. `bazel run //tools/lint:swift_format.fix` — formats in place under `BUILD_WORKSPACE_DIRECTORY`.
-7. `bazel test //tools/lint:check` — expands to all checks.
-8. `bazel run //tools/lint:fix` — runs all three fixers.
-9. `bazel test //crates/wolf-core/... //crates/wolf-ffi/... //crates/wolf-macos/...` — still 47/47 green.
-10. `bazel query 'tests(//crates/wolf-core/... + //crates/wolf-ffi/... + //crates/wolf-macos/...)'` — NO `//tools/lint` target appears.
-
-IMPORTANT for advisory policy: because existing code likely HAS violations, the CHECK targets (2/3/5/7 and the clippy/rustfmt/swift checks) may legitimately REPORT FAILURES. That is ACCEPTED. The pass bar for each check target is "it RUNS on the host without a Bazel/config/toolchain error" — NOT "it reports zero violations." Only checklist item 9 (default suite 47/47) and item 10 (exclusion) are hard green gates. Capture and report the actual violation output for later cleanup.
-
-### Risks (rules_rust 0.71.2)
-
-- clippy `--fix` non-hermetic (cargo/crates.io/cc) — dev convenience only.
-- Confirm rustfmt toolchain auto-registers; fallback = add `rustfmt_version`.
-- clippy fails on lints only with `-Dwarnings`; keep `capture_clippy_output` FALSE.
-- Confirm swift-format subcommands are `lint` / `format -i` on v6.3.0; `xcrun --find` resolves.
-- `swift_format_srcs` filegroup must live in wolf-macos pkg (no cross-pkg glob); exclude generated Swift.
-
-## Status
-
-- [x] Architect plan
-- [x] Implementation
-- [x] Verification (10/10 ran; hard gates 9 & 10 green; checks run w/o config/toolchain error)
-- [x] Review (PASS, no blockers; all 5 deviations accepted incl. .bazelignore)
-- [x] Docs (build.md + tools/lint/README.md swift lint-vs-format nuance added; prettier clean)
-
-## Coder outcome + deviations (for reviewer)
-
-Implemented `//tools/lint` per plan. Verification: item 9 (default suite 47/47) ✓, item 10 (0 lint targets in default wildcards) ✓, swift check PASSES (0 findings), clippy/rustfmt checks RUN and report existing violations (advisory-accepted). Fix runners all execute; their rewrites were reverted to keep the tree clean.
-
-Deviations needing reviewer judgment:
-
-1. **Added `.bazelignore` (`.direnv`)** — the rustfmt writer internally evaluates `//...` which hits the `.direnv/flake-inputs` symlink gotcha; `.bazelignore` is the canonical nix+direnv fix. Repo-wide effect on `//...`, but default suite stays green and explicit `//crates/...` patterns unaffected. Scope-acceptable?
-2. **`:fix` uses custom `fix_all` rule** (not plain sh_binary) — devShell has no cargo/rustfmt on PATH; toolchain's bare `rustfmt` aborts (driver hash mismatch), so it stages `@rules_rust//rust/rustfmt:toolchain_type` too. Allowed by plan.
-3. **Rust fixers scoped `-p wolf-core -p wolf-ffi`** (not `--workspace`) — wolf-gnome (GTK) doesn't build on macOS.
-4. **swift-format resolution hardened** — Bazel scrubbed-env made `xcrun --find` fail; check script falls back to `xcode-select -p` / canonical Xcode path.
-5. **`--config=lint` retained but redundant** — `rust_clippy` already denies warnings by default.
-
-Semantic nuance to confirm acceptable: swift `lint --strict` (check) reports 0, but `format -i` (fix) would restyle 75/76 files — lint mode enforces a subset of format. Documented; no committed `.swift-format` config (defaults).
-
-Existing-violation volume (follow-up cleanup, OUT OF SCOPE now): clippy — 1 real library error `crates/wolf-ffi/src/lib.rs:1252` (`unnecessary_map_or`) + many `doc_lazy_continuation` in tests; rustfmt — 45 files; swift-format — 0 lint but 75 files differ under `format`.
-
-## Orchestrator notes
-
-- **Test-writer step SKIPPED (explicit decision):** the plan creates NO Rust/Swift unit tests — the committed `.sh` scripts ARE the check-test bodies and are implementation artifacts (coder's job), and verification is running the Bazel targets on the host. There is nothing for the test-writer to author. Proceeding architect → coder → reviewer → technical-writer.
+## G. No new external packages. No new lint directives to author (all unioned symbols are used by one branch).

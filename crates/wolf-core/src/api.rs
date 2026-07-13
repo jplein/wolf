@@ -273,6 +273,7 @@ impl WolfCore {
         let pump_mru_cache = mru_cache.clone();
         let pump_tracked_cwd = tracked_cwd.clone();
         let pump_fallback_cwd = cwd.clone();
+        let pump_snapshot = snapshot.clone_handle();
         runtime.spawn(async move {
             while let Some(first) = input_rx.recv().await {
                 // Let any siblings enqueued in the same synchronous burst arrive.
@@ -282,6 +283,21 @@ impl WolfCore {
                 while let Ok(ev) = input_rx.try_recv() {
                     batch.push(ev);
                 }
+
+                // Toast-clear-on-input (OD8): if this batch carries any dismissing
+                // input (Key/Mouse/Scroll) and the toast is not a real prompt,
+                // clear it BEFORE applying — so a fresh `msg_show` produced by that
+                // same input repopulates the toast afterward. The write guard is
+                // taken cooperatively and dropped immediately, never across the
+                // apply `.await`.
+                if batch.iter().any(InputEvent::is_toast_dismissing) {
+                    let mut snap = pump_snapshot.write_async().await;
+                    if !snap.toast.is_prompt() {
+                        snap.clear_toast();
+                    }
+                    drop(snap);
+                }
+
                 input::apply_batch(&pump_nvim, &batch).await;
 
                 // Record every opened file in the per-cwd MRU store for nvim's LIVE

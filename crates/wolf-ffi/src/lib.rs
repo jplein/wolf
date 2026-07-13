@@ -45,11 +45,12 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use wolf_core::{
-    rank_buffers, rank_matches_top_n, rank_palette, BufInfo, BufferRow, Command, CommandMru,
-    CoreConfig, CursorShape, FileSearch, FocusDir, Grid, InputEvent, Key, KeyEvent, LayoutIntent,
-    MouseAction, MouseButton, MouseEvent, PaletteRow, PaletteRowKind, PaletteWindow, PaneStatus,
-    PreviewInfo, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SplitOrientation, StateStore,
-    TabState, WakeFn, WinInfo, WindowState, WolfCore, WolfState,
+    rank_buffers, rank_matches_top_n, rank_palette, BufInfo, BufferRow, Cmdline, Command,
+    CommandMru, CoreConfig, CursorShape, FileSearch, FocusDir, Grid, HighlightTable, InputEvent,
+    Key, KeyEvent, LayoutIntent, MouseAction, MouseButton, MouseEvent, PaletteRow, PaletteRowKind,
+    PaletteWindow, PaneStatus, PreviewInfo, Pum, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent,
+    SplitOrientation, StateStore, TabState, Toast, WakeFn, WinInfo, WindowState, WolfCore,
+    WolfState,
 };
 
 // Re-export the bridge-defined transparent structs at the crate root so the Rust
@@ -509,6 +510,18 @@ mod ffi {
         // changedtick. `FfiPreview` is opaque so a `Vec<FfiPreview>` is supported.
         // Empty when the core is gone.
         fn previews(&self) -> Vec<FfiPreview>;
+        // The native command line (`ext_cmdline`) as an opaque `FfiCmdline`
+        // (active / firstc / prompt / text / pos / indent / level). An inactive
+        // cmdline (or a shut-down core) yields an inactive value.
+        fn cmdline(&self) -> FfiCmdline;
+        // The completion popup (`ext_popupmenu`) as an opaque `FfiPum`
+        // (visible / selected / anchor + items). Hidden when the core is gone.
+        fn pum(&self) -> FfiPum;
+        // The message toast (`ext_messages`) as an opaque `FfiToast`
+        // (visible / kind / lines). Its chunk colors are RESOLVED in Rust against
+        // the same highlight table the frame uses (like `FfiCell`). Empty/hidden
+        // when the core is gone.
+        fn toast(&self) -> FfiToast;
     }
 
     extern "Rust" {
@@ -817,6 +830,91 @@ mod ffi {
         // The path shown beneath the filename (cwd-relative, `~`-prefixed, or
         // absolute; empty for an unnamed buffer).
         fn display_path(&self) -> String;
+    }
+
+    extern "Rust" {
+        type FfiCmdline;
+
+        // Whether a command line is currently showing.
+        fn active(&self) -> bool;
+        // The first character of the command line (`:` / `/` / `?`), or "".
+        fn firstc(&self) -> String;
+        // The prompt string for an input prompt (`input()`), or "".
+        fn prompt(&self) -> String;
+        // The command-line text (the content chunks flattened; without firstc).
+        fn text(&self) -> String;
+        // The cursor position, as a BYTE offset into `text`.
+        fn pos(&self) -> u32;
+        // The indent (from a continued `:function` block); usually 0.
+        fn indent(&self) -> u32;
+        // The command-line recursion level (1 for a top-level command line).
+        fn level(&self) -> u32;
+    }
+
+    extern "Rust" {
+        type FfiPum;
+
+        // Whether the completion popup is currently showing.
+        fn visible(&self) -> bool;
+        // The selected item index, or -1 for none.
+        fn selected(&self) -> i64;
+        // The anchor grid (-1 = anchored to the command line).
+        fn anchor_grid(&self) -> i64;
+        // The anchor row.
+        fn anchor_row(&self) -> i64;
+        // The anchor column (a BYTE offset into the cmdline text when
+        // `anchor_grid == -1`).
+        fn anchor_col(&self) -> i64;
+        // The completion items. `FfiPumItem` is opaque so a `Vec` is supported.
+        fn items(&self) -> Vec<FfiPumItem>;
+    }
+
+    extern "Rust" {
+        type FfiPumItem;
+
+        // The completion word (the primary label shown + inserted).
+        fn word(&self) -> String;
+        // The single-letter kind hint (`f`, `v`, ...), or "".
+        fn kind(&self) -> String;
+        // Extra menu text, or "".
+        fn menu(&self) -> String;
+        // Documentation / preview text, or "".
+        fn info(&self) -> String;
+    }
+
+    extern "Rust" {
+        type FfiToast;
+
+        // Whether the toast is currently showing.
+        fn visible(&self) -> bool;
+        // The last message's kind (`emsg`, `echomsg`, `list_cmd`, ...), or "".
+        fn kind(&self) -> String;
+        // Every message's lines flattened in order. `FfiToastLine` is opaque so a
+        // `Vec` is supported.
+        fn lines(&self) -> Vec<FfiToastLine>;
+    }
+
+    extern "Rust" {
+        type FfiToastLine;
+
+        // The styled chunks of this line. `FfiToastChunk` is opaque so a `Vec` is
+        // supported.
+        fn chunks(&self) -> Vec<FfiToastChunk>;
+    }
+
+    extern "Rust" {
+        type FfiToastChunk;
+
+        // The chunk's text.
+        fn text(&self) -> String;
+        // The foreground color, RESOLVED in Rust against the highlight table.
+        fn fg(&self) -> FfiColor;
+        // The background color, RESOLVED in Rust against the highlight table.
+        fn bg(&self) -> FfiColor;
+        // The special (underline) color, RESOLVED in Rust.
+        fn special(&self) -> FfiColor;
+        // Packed style flags (bold/italic/underline/undercurl/strikethrough).
+        fn flags(&self) -> u8;
     }
 }
 
@@ -1905,6 +2003,50 @@ impl WolfCoreHandle {
             })
             .collect()
     }
+
+    /// The native command line (`ext_cmdline`) as an opaque [`FfiCmdline`].
+    ///
+    /// Projects [`Snapshot::cmdline`](wolf_core::Snapshot::cmdline). An inactive
+    /// command line — or a shut-down core — yields the inactive default (the
+    /// front-end paints nothing / falls back to the last toast line).
+    #[must_use]
+    pub fn cmdline(&self) -> FfiCmdline {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return FfiCmdline::empty();
+        };
+        FfiCmdline::from_cmdline(&core.read_snapshot().cmdline)
+    }
+
+    /// The completion popup (`ext_popupmenu`) as an opaque [`FfiPum`].
+    ///
+    /// Projects [`Snapshot::pum`](wolf_core::Snapshot::pum). A hidden popup — or
+    /// a shut-down core — yields the hidden default.
+    #[must_use]
+    pub fn pum(&self) -> FfiPum {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return FfiPum::empty();
+        };
+        FfiPum::from_pum(&core.read_snapshot().pum)
+    }
+
+    /// The message toast (`ext_messages`) as an opaque [`FfiToast`].
+    ///
+    /// Projects [`Snapshot::toast`](wolf_core::Snapshot::toast), RESOLVING each
+    /// chunk's colors in Rust against the SAME highlight table the frame uses
+    /// (like [`FfiCell`]) — message color is load-bearing and must never be
+    /// re-resolved in Swift. An empty toast — or a shut-down core — yields the
+    /// hidden default.
+    #[must_use]
+    pub fn toast(&self) -> FfiToast {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return FfiToast::empty();
+        };
+        let snapshot = core.read_snapshot();
+        FfiToast::from_toast(&snapshot.toast, &snapshot.highlights)
+    }
 }
 
 /// Starts the core. `init_lua` and `cwd` are filesystem paths (mirroring
@@ -2528,6 +2670,370 @@ impl FfiPaneStatus {
 }
 
 // ---------------------------------------------------------------------------
+// FfiCmdline: the native command line (opaque to Swift).
+// ---------------------------------------------------------------------------
+
+/// The native command line (`ext_cmdline`), opaque to Swift.
+///
+/// A projection of [`wolf_core::Cmdline`] with its content chunks already
+/// flattened to a single [`text`](FfiCmdline::text) String (OD1 — the cmdline is
+/// flattened across the FFI; only the toast keeps styled chunks). The front-end
+/// paints `firstc` + `text` with the caret at `pos` when `active`.
+pub struct FfiCmdline {
+    active: bool,
+    firstc: String,
+    prompt: String,
+    text: String,
+    pos: u32,
+    indent: u32,
+    level: u32,
+}
+
+impl FfiCmdline {
+    /// Whether a command line is currently showing.
+    #[must_use]
+    pub fn active(&self) -> bool {
+        self.active
+    }
+
+    /// The first character of the command line (`:` / `/` / `?`), or `""`.
+    #[must_use]
+    pub fn firstc(&self) -> String {
+        self.firstc.clone()
+    }
+
+    /// The prompt string for an input prompt (`input()`), or `""`.
+    #[must_use]
+    pub fn prompt(&self) -> String {
+        self.prompt.clone()
+    }
+
+    /// The command-line text (content chunks flattened; without the `firstc`).
+    #[must_use]
+    pub fn text(&self) -> String {
+        self.text.clone()
+    }
+
+    /// The cursor position, as a BYTE offset into [`text`](Self::text).
+    #[must_use]
+    pub fn pos(&self) -> u32 {
+        self.pos
+    }
+
+    /// The indent (from a continued `:function` block); usually 0.
+    #[must_use]
+    pub fn indent(&self) -> u32 {
+        self.indent
+    }
+
+    /// The command-line recursion level (1 for a top-level command line).
+    #[must_use]
+    pub fn level(&self) -> u32 {
+        self.level
+    }
+
+    /// The inactive default, used when no command line shows or the core is gone.
+    fn empty() -> Self {
+        Self {
+            active: false,
+            firstc: String::new(),
+            prompt: String::new(),
+            text: String::new(),
+            pos: 0,
+            indent: 0,
+            level: 0,
+        }
+    }
+
+    /// Projects a [`wolf_core::Cmdline`] into the opaque bridge type, flattening
+    /// its content chunks to a single text String.
+    fn from_cmdline(cmdline: &Cmdline) -> Self {
+        Self {
+            active: cmdline.active,
+            firstc: cmdline.firstc.clone(),
+            prompt: cmdline.prompt.clone(),
+            text: cmdline.text(),
+            pos: clamp_u32(cmdline.pos),
+            indent: clamp_u32(cmdline.indent),
+            level: cmdline.level,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FfiPum / FfiPumItem: the completion popup (opaque to Swift).
+// ---------------------------------------------------------------------------
+
+/// The completion popup (`ext_popupmenu`), opaque to Swift.
+///
+/// A projection of [`wolf_core::Pum`]. When `anchor_grid == -1` the popup is
+/// anchored to the command line and `anchor_col` is a BYTE offset into the
+/// cmdline text (OD2 — the front-end shows `word` primarily with `kind` as a
+/// small trailing hint).
+pub struct FfiPum {
+    visible: bool,
+    selected: i64,
+    anchor_grid: i64,
+    anchor_row: i64,
+    anchor_col: i64,
+    items: Vec<FfiPumItem>,
+}
+
+impl FfiPum {
+    /// Whether the completion popup is currently showing.
+    #[must_use]
+    pub fn visible(&self) -> bool {
+        self.visible
+    }
+
+    /// The selected item index, or `-1` for none.
+    #[must_use]
+    pub fn selected(&self) -> i64 {
+        self.selected
+    }
+
+    /// The anchor grid (`-1` = anchored to the command line).
+    #[must_use]
+    pub fn anchor_grid(&self) -> i64 {
+        self.anchor_grid
+    }
+
+    /// The anchor row.
+    #[must_use]
+    pub fn anchor_row(&self) -> i64 {
+        self.anchor_row
+    }
+
+    /// The anchor column (a BYTE offset into the cmdline text when
+    /// `anchor_grid == -1`).
+    #[must_use]
+    pub fn anchor_col(&self) -> i64 {
+        self.anchor_col
+    }
+
+    /// The completion items.
+    #[must_use]
+    pub fn items(&self) -> Vec<FfiPumItem> {
+        self.items.clone()
+    }
+
+    /// The hidden default, used when the popup is hidden or the core is gone.
+    fn empty() -> Self {
+        Self {
+            visible: false,
+            selected: -1,
+            anchor_grid: 0,
+            anchor_row: 0,
+            anchor_col: 0,
+            items: Vec::new(),
+        }
+    }
+
+    /// Projects a [`wolf_core::Pum`] into the opaque bridge type.
+    fn from_pum(pum: &Pum) -> Self {
+        Self {
+            visible: pum.visible,
+            selected: pum.selected,
+            anchor_grid: pum.grid,
+            anchor_row: pum.row,
+            anchor_col: pum.col,
+            items: pum.items.iter().map(FfiPumItem::from_item).collect(),
+        }
+    }
+}
+
+/// One completion-popup item (opaque to Swift, so a `Vec<FfiPumItem>` is
+/// supported — swift-bridge emits Vec support only for opaque types).
+///
+/// A projection of [`wolf_core::PumItem`].
+#[derive(Clone)]
+pub struct FfiPumItem {
+    word: String,
+    kind: String,
+    menu: String,
+    info: String,
+}
+
+impl FfiPumItem {
+    /// The completion word (the primary label shown + inserted).
+    #[must_use]
+    pub fn word(&self) -> String {
+        self.word.clone()
+    }
+
+    /// The single-letter kind hint (`f`, `v`, ...), or `""`.
+    #[must_use]
+    pub fn kind(&self) -> String {
+        self.kind.clone()
+    }
+
+    /// Extra menu text, or `""`.
+    #[must_use]
+    pub fn menu(&self) -> String {
+        self.menu.clone()
+    }
+
+    /// Documentation / preview text, or `""`.
+    #[must_use]
+    pub fn info(&self) -> String {
+        self.info.clone()
+    }
+
+    /// Projects a [`wolf_core::PumItem`] into the opaque bridge type.
+    fn from_item(item: &wolf_core::PumItem) -> Self {
+        Self {
+            word: item.word.clone(),
+            kind: item.kind.clone(),
+            menu: item.menu.clone(),
+            info: item.info.clone(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FfiToast / FfiToastLine / FfiToastChunk: the message toast (opaque to Swift).
+// ---------------------------------------------------------------------------
+
+/// The message toast (`ext_messages`), opaque to Swift.
+///
+/// A projection of [`wolf_core::Toast`]. Each chunk's colors are RESOLVED in
+/// Rust against the highlight table at pack time (OD1 — message color is
+/// load-bearing and must never be re-resolved in Swift).
+pub struct FfiToast {
+    visible: bool,
+    kind: String,
+    lines: Vec<FfiToastLine>,
+}
+
+impl FfiToast {
+    /// Whether the toast is currently showing.
+    #[must_use]
+    pub fn visible(&self) -> bool {
+        self.visible
+    }
+
+    /// The last message's kind (`emsg`, `echomsg`, `list_cmd`, ...), or `""`.
+    #[must_use]
+    pub fn kind(&self) -> String {
+        self.kind.clone()
+    }
+
+    /// Every message's lines flattened in order.
+    #[must_use]
+    pub fn lines(&self) -> Vec<FfiToastLine> {
+        self.lines.clone()
+    }
+
+    /// The hidden default, used when the toast is empty or the core is gone.
+    fn empty() -> Self {
+        Self {
+            visible: false,
+            kind: String::new(),
+            lines: Vec::new(),
+        }
+    }
+
+    /// Projects a [`wolf_core::Toast`] into the opaque bridge type, resolving
+    /// each chunk's colors against `highlights` (the SAME table the frame uses).
+    fn from_toast(toast: &Toast, highlights: &HighlightTable) -> Self {
+        let lines = toast
+            .lines()
+            .iter()
+            .map(|line| FfiToastLine::from_line(line, highlights))
+            .collect();
+        Self {
+            visible: toast.visible,
+            kind: toast.kind(),
+            lines,
+        }
+    }
+}
+
+/// One toast line (opaque to Swift, so a `Vec<FfiToastLine>` is supported —
+/// swift-bridge emits Vec support only for opaque types).
+#[derive(Clone)]
+pub struct FfiToastLine {
+    chunks: Vec<FfiToastChunk>,
+}
+
+impl FfiToastLine {
+    /// The styled chunks of this line.
+    #[must_use]
+    pub fn chunks(&self) -> Vec<FfiToastChunk> {
+        self.chunks.clone()
+    }
+
+    /// Builds a line from a slice of [`wolf_core::ToastChunk`]s, resolving each
+    /// chunk's colors against `highlights`.
+    fn from_line(line: &[wolf_core::ToastChunk], highlights: &HighlightTable) -> Self {
+        Self {
+            chunks: line
+                .iter()
+                .map(|c| FfiToastChunk::from_chunk(c, highlights))
+                .collect(),
+        }
+    }
+}
+
+/// One styled toast chunk (opaque to Swift, so a `Vec<FfiToastChunk>` is
+/// supported). Its colors are RESOLVED in Rust against the highlight table (like
+/// [`FfiCell`]); Swift reads them via [`fg`](Self::fg) / [`bg`](Self::bg) /
+/// [`special`](Self::special).
+#[derive(Clone)]
+pub struct FfiToastChunk {
+    text: String,
+    fg: Option<Rgb>,
+    bg: Option<Rgb>,
+    special: Option<Rgb>,
+    flags: u8,
+}
+
+impl FfiToastChunk {
+    /// The chunk's text.
+    #[must_use]
+    pub fn text(&self) -> String {
+        self.text.clone()
+    }
+
+    /// The resolved foreground color.
+    #[must_use]
+    pub fn fg(&self) -> FfiColor {
+        FfiColor::from_opt(self.fg)
+    }
+
+    /// The resolved background color.
+    #[must_use]
+    pub fn bg(&self) -> FfiColor {
+        FfiColor::from_opt(self.bg)
+    }
+
+    /// The resolved special (underline) color.
+    #[must_use]
+    pub fn special(&self) -> FfiColor {
+        FfiColor::from_opt(self.special)
+    }
+
+    /// The packed style flags (bold/italic/underline/undercurl/strikethrough).
+    #[must_use]
+    pub fn flags(&self) -> u8 {
+        self.flags
+    }
+
+    /// Projects a [`wolf_core::ToastChunk`] into the opaque bridge type,
+    /// resolving its `attr_id` against `highlights` (like a cell).
+    fn from_chunk(chunk: &wolf_core::ToastChunk, highlights: &HighlightTable) -> Self {
+        let style = highlights.resolve(chunk.attr_id);
+        Self {
+            text: chunk.text.clone(),
+            fg: style.fg,
+            bg: style.bg,
+            special: style.special,
+            flags: pack_flags(&style),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // FfiFileSearch / FfiFileEntry: the file-picker search surface (opaque to Swift).
 // ---------------------------------------------------------------------------
 
@@ -3035,6 +3541,12 @@ fn pack_cursor_shape(shape: CursorShape) -> u8 {
 /// Clamps a `usize` grid dimension/coordinate into the `u16` the bridge uses.
 fn clamp_u16(v: usize) -> u16 {
     u16::try_from(v).unwrap_or(u16::MAX)
+}
+
+/// Clamps a `usize` to a `u32` (saturating at `u32::MAX`), for the command-line
+/// byte-offset / indent / recursion-level scalars crossing the bridge.
+fn clamp_u32(v: usize) -> u32 {
+    u32::try_from(v).unwrap_or(u32::MAX)
 }
 
 /// Computes the cursor's `(fill, glyph)` colors (reverse video, honoring the

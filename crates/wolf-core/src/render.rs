@@ -474,6 +474,158 @@ pub struct PreviewInfo {
     pub source_path: PathBuf,
 }
 
+/// One styled run of command-line text, from a `cmdline_show` content tuple.
+///
+/// Neovim reports the command-line content as a list of `[attr, text]` tuples;
+/// each becomes a `CmdlineChunk`. `attr_id` is the highlight id to resolve
+/// against the [`HighlightTable`] (the front-ends flatten to plain text over the
+/// FFI — see [`Cmdline::text`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CmdlineChunk {
+    /// The chunk's text.
+    pub text: String,
+    /// The highlight id for this chunk (0 = default).
+    pub attr_id: u64,
+}
+
+/// The native command line, folded from `cmdline_show` / `cmdline_pos` /
+/// `cmdline_hide` (the `ext_cmdline` protocol).
+///
+/// `active` is `true` between a `cmdline_show` and its `cmdline_hide`. The
+/// front-ends paint `firstc` + [`text`](Self::text) with the caret at `pos`
+/// (a BYTE offset into the concatenated content).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Cmdline {
+    /// Whether a command line is currently showing.
+    pub active: bool,
+    /// The first character of the command line (`:` / `/` / `?`), or empty.
+    pub firstc: String,
+    /// The prompt string for an input prompt (`input()`), or empty.
+    pub prompt: String,
+    /// The styled content of the command line.
+    pub content: Vec<CmdlineChunk>,
+    /// The cursor position, as a BYTE offset into [`text`](Self::text).
+    pub pos: usize,
+    /// The indent (from a continued `:function` block); usually 0.
+    pub indent: usize,
+    /// The command-line recursion level (1 for a top-level command line).
+    pub level: u32,
+}
+
+impl Cmdline {
+    /// Returns the concatenated text of every content chunk (the command-line
+    /// text without the `firstc` prefix).
+    #[must_use]
+    pub fn text(&self) -> String {
+        self.content.iter().map(|c| c.text.as_str()).collect()
+    }
+}
+
+/// One completion-popup item, from a `popupmenu_show` item tuple
+/// `[word, kind, menu, info]`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PumItem {
+    /// The completion word (the primary label shown + inserted).
+    pub word: String,
+    /// The single-letter kind hint (`f`, `v`, ...), or empty.
+    pub kind: String,
+    /// Extra menu text, or empty.
+    pub menu: String,
+    /// Documentation/preview text, or empty.
+    pub info: String,
+}
+
+/// The completion popup, folded from `popupmenu_show` / `popupmenu_select` /
+/// `popupmenu_hide` (the `ext_popupmenu` protocol).
+///
+/// When `grid == -1` the popup is anchored to the command line and `col` is a
+/// BYTE offset into the cmdline text; otherwise `grid`/`row`/`col` locate it on
+/// an editor window grid.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Pum {
+    /// Whether the popup is currently showing.
+    pub visible: bool,
+    /// The completion items.
+    pub items: Vec<PumItem>,
+    /// The selected item index, or `-1` for none.
+    pub selected: i64,
+    /// The anchor row.
+    pub row: i64,
+    /// The anchor column (a BYTE offset into the cmdline text when
+    /// `grid == -1`).
+    pub col: i64,
+    /// The anchor grid (`-1` = anchored to the command line).
+    pub grid: i64,
+}
+
+/// One styled run of message text, from a `msg_show` / `msg_history_show`
+/// content tuple `[attr_id, text, hl_id]`.
+///
+/// Unlike [`CmdlineChunk`], the toast keeps its styling across the FFI (message
+/// color is load-bearing — error red, warnings, list highlights); `attr_id` is
+/// resolved against the [`HighlightTable`] at pack time in Rust (like a cell).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ToastChunk {
+    /// The chunk's text.
+    pub text: String,
+    /// The highlight id for this chunk (0 = default).
+    pub attr_id: u64,
+}
+
+/// One message in the toast, folded from a single `msg_show` (or one
+/// `msg_history_show` entry).
+///
+/// A message spans one or more visual `lines` (content split on `"\n"`); each
+/// line is a run of [`ToastChunk`]s.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Message {
+    /// The message kind (`emsg`, `echomsg`, `list_cmd`, ...), or empty.
+    pub kind: String,
+    /// The message id (0 when none / a non-integer id, per OD7).
+    pub id: i64,
+    /// The message's lines; each is a run of styled chunks.
+    pub lines: Vec<Vec<ToastChunk>>,
+}
+
+/// The message toast, folded from `msg_show` / `msg_clear` /
+/// `msg_history_show` (the `ext_messages` protocol).
+///
+/// Multiple `messages` accumulate in order (e.g. `:messages` history); the
+/// front-ends render them bottom-left, dismissing on the next input (OD8).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Toast {
+    /// Whether the toast is currently showing.
+    pub visible: bool,
+    /// The messages, in arrival/history order.
+    pub messages: Vec<Message>,
+}
+
+impl Toast {
+    /// Returns every message's lines flattened in order (an owned copy).
+    #[must_use]
+    pub fn lines(&self) -> Vec<Vec<ToastChunk>> {
+        self.messages
+            .iter()
+            .flat_map(|m| m.lines.iter().cloned())
+            .collect()
+    }
+
+    /// Returns the last message's kind, or `""` when there are no messages.
+    #[must_use]
+    pub fn kind(&self) -> String {
+        self.messages
+            .last()
+            .map_or_else(String::new, |m| m.kind.clone())
+    }
+
+    /// Returns `true` when the toast is a real prompt that must NOT be dismissed
+    /// by a passing input (the last message's kind is `"confirm"`).
+    #[must_use]
+    pub fn is_prompt(&self) -> bool {
+        self.messages.last().is_some_and(|m| m.kind == "confirm")
+    }
+}
+
 /// A complete, paint-ready frame of render state.
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
@@ -553,6 +705,17 @@ pub struct Snapshot {
     /// its tick to decide when to re-pull rendered HTML. Because it is not a redraw
     /// frame, updating it does NOT bump `seq`. Defaults to empty.
     pub markdown_ticks: HashMap<i64, u64>,
+    /// The native command line (`ext_cmdline`), folded from `cmdline_show` /
+    /// `cmdline_pos` / `cmdline_hide` (see [`crate::redraw`]). Inactive by
+    /// default; the front-ends paint it at the bottom of the editor area.
+    pub cmdline: Cmdline,
+    /// The completion popup (`ext_popupmenu`), folded from `popupmenu_show` /
+    /// `popupmenu_select` / `popupmenu_hide`. Hidden by default.
+    pub pum: Pum,
+    /// The message toast (`ext_messages`), folded from `msg_show` /
+    /// `msg_clear` / `msg_history_show`. Empty by default; cleared on the next
+    /// dismissing input (Key/Mouse/Scroll — OD8) unless it is a prompt.
+    pub toast: Toast,
     /// Monotonic frame sequence number, bumped on each `flush`.
     pub seq: u64,
 }
@@ -666,6 +829,16 @@ impl Snapshot {
         self.windows
             .get(&self.active_grid_id())
             .map_or_else(Viewport::default, |w| w.viewport)
+    }
+
+    /// Clears the message toast (empties its messages and hides it).
+    ///
+    /// Called from the input pump on the next dismissing input (Key/Mouse/Scroll
+    /// — OD8), gated by `!toast.is_prompt()`. This is NOT a redraw frame, so
+    /// callers do not bump `seq`.
+    pub fn clear_toast(&mut self) {
+        self.toast.messages.clear();
+        self.toast.visible = false;
     }
 
     /// Returns the grid id bound to window handle `win`, if any window maps to it.
