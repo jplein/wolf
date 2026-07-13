@@ -112,13 +112,17 @@ const MATH_CSS: &str = include_str!("markdown/math.css");
 
 /// The available preview HTML/CSS themes.
 ///
-/// One variant ships this cut ([`PreviewTheme::Default`], a fixed dark theme —
-/// OD5). The enum + [`theme_css`] + `include_str!`'d CSS files are structured so
-/// more themes and a config-driven selector can drop in later; selection is a
-/// hardcoded `PreviewTheme::Default` at the call site for now.
+/// One variant ships this cut ([`PreviewTheme::Default`], the default theme whose
+/// CSS carries a dark palette plus a `prefers-color-scheme: light` palette so it
+/// follows the app's resolved dark/light appearance — but is NOT wired to the live
+/// nvim colorscheme (OD5)). The enum + [`theme_css`] + `include_str!`'d CSS files
+/// are structured so more themes and a config-driven selector can drop in later;
+/// selection is a hardcoded `PreviewTheme::Default` at the call site for now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum PreviewTheme {
-    /// The default (dark) preview theme.
+    /// The default preview theme. Its CSS ships a dark palette plus a
+    /// `prefers-color-scheme: light` variant, so it follows the app's resolved
+    /// dark/light appearance.
     #[default]
     Default,
 }

@@ -11,7 +11,7 @@ The structural + marker CSS shared by every preview theme, embedded BEFORE the s
 
 ## `themes/default.css`
 
-The one shipped preview theme (`PreviewTheme::Default`, a fixed dark theme), embedded AFTER `base.css`. The `PreviewTheme` enum + `theme_css` + this `include_str!`'d file are structured so more themes and a config-driven selector can drop in later; for now selection is a hardcoded `PreviewTheme::Default`.
+The one shipped preview theme (`PreviewTheme::Default`), embedded AFTER `base.css`. Its CSS declares `color-scheme: light dark;` and carries a dark default palette plus a `@media (prefers-color-scheme: light)` block (light background `#f4f4f4`), so the preview follows the app's resolved dark/light appearance automatically (the web view inherits `NSApp.effectiveAppearance`) with no FFI change — while still NOT being wired to the live nvim colorscheme. The `PreviewTheme` enum + `theme_css` + this `include_str!`'d file are structured so more themes and a config-driven selector can drop in later; for now selection is a hardcoded `PreviewTheme::Default`.
 
 ## `math.css`
 

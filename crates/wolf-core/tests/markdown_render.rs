@@ -362,3 +362,37 @@ fn theme_css_default_is_non_empty() {
         "the shipped Default theme must return non-empty CSS"
     );
 }
+
+#[test]
+fn default_theme_carries_dark_and_light_palettes() {
+    // The Default theme keeps its DARK values as the unconditional default and adds
+    // a `@media (prefers-color-scheme: light)` block so the preview follows the app's
+    // resolved appearance. The rendered document must embed BOTH palettes plus the
+    // `color-scheme: light dark` declaration that makes the web view honor them.
+    let html = render_html("# Title\n\ntext", PreviewTheme::Default);
+
+    assert!(
+        html.contains("#1b1b1b"),
+        "the dark background `#1b1b1b` must remain the unconditional default: {html}"
+    );
+    assert!(
+        html.contains("prefers-color-scheme: light"),
+        "the theme must include a `prefers-color-scheme: light` media query: {html}"
+    );
+    assert!(
+        html.contains("#f4f4f4"),
+        "the light media query must set the light-mode background `#f4f4f4`: {html}"
+    );
+    assert!(
+        html.contains("color-scheme: light dark"),
+        "the theme must declare `color-scheme: light dark` so both schemes are honored: {html}"
+    );
+    assert!(
+        html.contains("#0969da"),
+        "the light media query must mirror the light-mode link color `#0969da`: {html}"
+    );
+    assert!(
+        html.contains("#111111"),
+        "the light media query must mirror the light-mode heading color `#111111`: {html}"
+    );
+}
