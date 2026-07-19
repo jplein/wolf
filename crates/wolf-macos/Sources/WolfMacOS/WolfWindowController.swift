@@ -337,6 +337,9 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
   /// Drives this window's render wake: apply layout intents + redraw every pane
   /// and the cmdline strip, then reveal/bold the current buffer in the sidebar.
   func onRenderWake() {
+    let frameStart = FrameMetrics.begin()
+    defer { FrameMetrics.end(.controllerWake, frameStart) }
+
     // Cache this view's active-buffer path FIRST (OD6): tab titles read the
     // cached value per wake, so a non-current view keeps its last-known title.
     cachedActiveBufferPath = handle?.current_file().toString() ?? cachedActiveBufferPath

@@ -134,6 +134,8 @@ final class Project {
 
   /// Fans a render wake out to the current view (others hold their last paint).
   func onWake() {
+    // Exactly one core wake through `WakeBridge`, independent of view count.
+    FrameMetrics.noteWake()
     currentView?.onRenderWake()
   }
 

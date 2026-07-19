@@ -498,6 +498,9 @@ final class PaneContainerView: NSView {
         meta: flags.contains(.command)
       )
     else { return }
+    // Counted here, after the picker-trigger return and the translate guard, so
+    // it reflects only keys actually delivered to Neovim.
+    FrameMetrics.noteKeystroke()
     handle.send_key(ev)
   }
 
@@ -702,6 +705,9 @@ final class PaneContainerView: NSView {
   /// are gone from the snapshot and would wrongly prune live panes; the next
   /// normal pass reconciles any real closes.
   func onRenderWake() {
+    let frameStart = FrameMetrics.begin()
+    defer { FrameMetrics.end(.containerWake, frameStart) }
+
     if pendingRefocusRebind {
       guard handle.active_tabpage() == controllerTabpageHandle else { return }
       pendingRefocusRebind = false
@@ -863,6 +869,9 @@ final class PaneContainerView: NSView {
   /// bufnr-or-tick gate here is the redundant-reload guard; the coalescer bounds
   /// the rate.
   private func reloadDirtyPreviews() {
+    let reloadStart = FrameMetrics.begin()
+    defer { FrameMetrics.end(.previewReload, reloadStart) }
+
     var current: [Int64: PreviewSeam.PreviewLoad] = [:]
     for preview in handle.previews() {
       let win = preview.win()
@@ -878,13 +887,22 @@ final class PaneContainerView: NSView {
       // map, so the next sync re-requests once the web view exists.
       guard let web = previewWebViews[win], let load = current[win] else { continue }
       lastPreviewLoads[win] = load
+      // One sample per preview (explicit start/stop, not `defer`). Deliberately
+      // includes the `.toString()` bridge copy — part of the FFI round-trip cost.
+      let renderStart = FrameMetrics.begin()
       let html = handle.render_preview(load.sourceBufnr).toString()
+      FrameMetrics.end(.previewRender, renderStart)
       // A `file://` baseURL from the win's source path lets relative links (and
       // #fragments) resolve against the real file location; unknown → nil
       // (unchanged OD/O4 behavior — no local-subresource loading is added).
       let path = previewSourcePaths[win] ?? ""
       let base = path.isEmpty ? nil : URL(fileURLWithPath: path)
+      // LIMITATION: this measures ONLY the synchronous `loadHTMLString` call.
+      // The WebKit parse / layout / paint it schedules happens asynchronously,
+      // off this call stack, and is NOT included in the `prev.html` bucket.
+      let htmlStart = FrameMetrics.begin()
       web.loadHTMLString(html, baseURL: base)
+      FrameMetrics.end(.previewLoadHTML, htmlStart)
     }
   }
 
@@ -1129,6 +1147,11 @@ final class PaneContainerView: NSView {
   // MARK: - Painting
 
   override func draw(_ dirtyRect: NSRect) {
+    // Placed BEFORE the context guard so a no-context early return is still
+    // counted; a near-zero sample is itself informative.
+    let frameStart = FrameMetrics.begin()
+    defer { FrameMetrics.end(.draw, frameStart) }
+
     guard let ctx = NSGraphicsContext.current?.cgContext else { return }
 
     // Render glyphs with plain grayscale antialiasing and NO font smoothing

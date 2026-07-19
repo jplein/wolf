@@ -76,6 +76,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   }
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    // Arm the frame-time instrumentation FIRST. This forces the once-only
+    // `FrameMetrics.enabled` evaluation here rather than mid-frame, and is a
+    // no-op unless WOLF_FRAME_STATS is set. See FrameMetrics.swift.
+    FrameMetrics.start()
+
     // Register the three process-global wake callbacks ONCE; each routes by
     // the firing core's token through `WindowRegistry`.
     WakeBridge.install()
@@ -339,6 +344,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   }
 
   func applicationWillTerminate(_ notification: Notification) {
+    // Flush the final partial frame-stats interval. Best-effort: this does not
+    // run on a force-quit. No-op unless WOLF_FRAME_STATS is set.
+    FrameMetrics.emit()
+
     // Stop observing the OS appearance before teardown.
     removeAppearanceObserver()
 

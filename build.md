@@ -120,6 +120,53 @@ bazel run //crates/wolf-macos:xcodeproj
 
 The output `.xcodeproj` is **uncommitted** (`.gitignore`d) and exists only for LLDB / IDE debugging. It is never the build of record — Bazel remains authoritative.
 
+### Frame-time instrumentation (macOS)
+
+The macOS front-end carries an **off-by-default, dev-only** frame-time instrumentation surface for measuring where main-thread time goes on the keystroke-to-pixel path. It changes no render behavior; with the flag unset the entire cost at each instrumented call site is one `Bool` test. Three environment variables control it:
+
+- **`WOLF_FRAME_STATS`** (default: unset) — enables instrumentation when set, trimmed and compared case-insensitively, to `1`, `true`, `yes` or `on`. Anything else — including `0`, `false` and an empty value — leaves it off.
+- **`WOLF_FRAME_STATS_INTERVAL`** (default: `5`) — the report period in seconds (a `Double`). Absent, unparseable or non-positive values fall back to 5.
+- **`WOLF_FRAME_STATS_FILE`** (default: unset) — when set, each report is ALSO appended to this path (the file is created if absent). A file that cannot be opened degrades silently to stderr-only.
+
+Reports are periodic AGGREGATES, not per-frame lines (per-frame logging at 30+ fps is unreadable and the I/O would itself distort the measurement). Each interval is reset after it is emitted, so consecutive reports are directly comparable; an interval in which nothing at all was recorded emits nothing, so an idle app is silent. A final partial interval is flushed best-effort from `applicationWillTerminate` (not guaranteed on a force-quit). Every line is prefixed `wolf-frame-stats ` for `grep`, and the columns are fixed-width so two runs align under `diff`:
+
+```
+wolf-frame-stats enabled interval=2.0s
+wolf-frame-stats #1  window=2.0s
+wolf-frame-stats bucket        count     mean      p50      p95      max
+wolf-frame-stats ctrl.wake        18     4.02     3.66     6.40     6.40
+wolf-frame-stats cont.wake        18     3.96     3.65     5.55     5.55
+wolf-frame-stats draw              3    19.55    24.48    32.72    32.72
+wolf-frame-stats keys=0 wakes=18 wakes/key=n/a
+```
+
+That is real captured output from a short launch-and-idle session run with `WOLF_FRAME_STATS_INTERVAL=2` and no preview pane open, which is why the `prev.*` buckets are absent (a bucket with no samples in the interval is omitted), no count carries a truncation marker, and `wakes/key` reads `n/a` (it renders `n/a` whenever no keystrokes were recorded, rather than dividing by zero). The `wolf-frame-stats enabled interval=<n>s` line is the one-shot run header written when instrumentation initializes; the numbered `#<n>  window=<n>s` line opens each subsequent periodic report.
+
+All timings are milliseconds to two decimals. The buckets are `ctrl.wake` (`WolfWindowController.onRenderWake()`), `cont.wake` (`PaneContainerView.onRenderWake()`), `draw` (a full repaint), `prev.reload` (the whole preview refresh pass), `prev.render` (one `render_preview` FFI round-trip, including the `toString()` bridge copy) and `prev.html` (one `loadHTMLString` call). A `*` after the count means that bucket exceeded the 4096-sample percentile window, so its count/mean/max are still exact but its p50/p95 cover only the most recent 4096 samples. Two caveats worth knowing before drawing conclusions: **`prev.html` measures only the SYNCHRONOUS `loadHTMLString` call**, not the asynchronous WebKit parse / layout / paint it queues (which happens off that call stack), so a small `prev.html` does not mean the reload was cheap; and **`wakes/key` is an UPPER BOUND**, a plain counter ratio rather than real attribution — wakes from mouse, scroll, resize, `:cd` and out-of-band core notifications inflate it, so it is only meaningful for a session in which you do nothing but type.
+
+**Double-clicking `Wolf.app` shows you nothing.** A bundled AppKit app launched from the Finder is started by `launchd`, so it inherits `launchd`'s stderr, which never reaches any terminal — and it does not inherit your shell's environment either, so `WOLF_FRAME_STATS` would not even be set. There are two working paths.
+
+The recommended one for development is to run the bundle's inner executable directly, which inherits your terminal's stderr and environment while `Bundle.main` still resolves to the `.app` (so the bundled Neovim, fonts and `init.lua` load normally):
+
+```sh
+bazel build //crates/wolf-macos:Wolf
+WOLF_FRAME_STATS=1 ./bazel-bin/crates/wolf-macos/Wolf_archive-root/Wolf.app/Contents/MacOS/Wolf
+```
+
+Note the `Wolf_archive-root/` path component: `macos_application` delivers `:Wolf` as `bazel-bin/crates/wolf-macos/Wolf.zip` plus the unzipped bundle under `Wolf_archive-root/`. There is no `bazel-bin/crates/wolf-macos/Wolf.app`.
+
+(`bazel run //crates/wolf-macos:Wolf` also launches the app, but its stderr plumbing through the rules_apple runner is less predictable.)
+
+If you need to profile a normally double-clicked app, or want a persistent log to `diff` between runs, point it at a file and tail that instead:
+
+```sh
+WOLF_FRAME_STATS=1 WOLF_FRAME_STATS_FILE=/tmp/wolf-frame-stats.txt \
+  ./bazel-bin/crates/wolf-macos/Wolf_archive-root/Wolf.app/Contents/MacOS/Wolf &
+tail -f /tmp/wolf-frame-stats.txt
+```
+
+The pure aggregation logic (bucketing, percentiles, the exact report layout, env parsing) lives in the headless, unit-tested `WolfKeyMap.FrameStats` seam; the process-global glue (the once-only enable check, the clock reads, the report timer, the writes) lives in `WolfMacOS/FrameMetrics.swift`. See [`crates/wolf-macos/Sources/README.md`](crates/wolf-macos/Sources/README.md).
+
 ### Bundled Neovim (macOS)
 
 The macOS `.app` ships its own pinned Neovim so it runs with no external Neovim install and no `WOLF_NVIM_BIN`. The pinned version (**0.12.3**) and both per-arch sha256 checksums live in [`bazel/nvim/extensions.bzl`](bazel/nvim/extensions.bzl); the `//bazel/nvim` module extension downloads and verifies the official release tarballs (no system or `PATH` dependency). `//bazel/nvim:nvim_tree` is the arch-selected (`select()` on `@platforms//cpu`), structure-preserving `nvim/` tree — `bin/nvim` + `lib/nvim/parser/*.so` (including the `markdown` / `markdown_inline` treesitter parsers) + `share/nvim/runtime` — that `//crates/wolf-macos:Wolf` bundles into `Contents/Resources/nvim/`. The captive `runtime/nvim/init.lua` is bundled flat at `Contents/Resources/init.lua`. `aspect_bazel_lib` was added as a `bazel_dep` (build-time only — it never enters `wolf-core`'s dependency graph) for `copy_to_directory`, which preserves the tree hierarchy and the executable bits. See [`bazel/nvim/README.md`](bazel/nvim/README.md) for the overlay/select details.
@@ -214,7 +261,7 @@ bazel test //crates/wolf-ffi:lighthouse_load     # real nvim, activates the vend
 bazel test //crates/wolf-ffi:treesitter_parser_abi # real nvim, proves a compiled parser's ABI compat
 bazel test //crates/wolf-ffi:treesitter_highlight # real nvim, markdown highlighter active + go injection
 bazel test //crates/wolf-ffi:attribute_highlight # real nvim, per-cell attribute flags + special color across the FFI
-bazel test //crates/wolf-macos:WolfKeyMapTests   # pure Swift key translation + glyph-style seam
+bazel test //crates/wolf-macos:WolfKeyMapTests   # pure Swift key translation + glyph-style + frame-stats seams
 ```
 
 - `//bazel/nvim:nvim_version_test` execs the pinned, bundled Neovim tree: it asserts the binary exists and is executable, that `nvim --version` reports `NVIM v0.12.3`, that `VIMRUNTIME` self-locates **inside** the bundled tree, and that the `markdown` treesitter parser ships.
@@ -239,7 +286,7 @@ bazel test //crates/wolf-macos:WolfKeyMapTests   # pure Swift key translation + 
 - `//crates/wolf-ffi:treesitter_parser_abi` drives a real pinned Neovim: it stages **only** the compiled `parsers_tree` (not the `nvim-treesitter/` queries sibling), so `init.lua`'s treesitter enablement block is a strict no-op for this test, then `add`s `parser/go.so` by absolute path via `vim.treesitter.language.add` and parses Go source with it, asserting a `source_file` root with no errors — the automated proof that a shipped, host-compiled parser `.so` is ABI-compatible with pinned nvim 0.12.3. It skips loudly when Neovim or the parsers tree is not staged (the cargo / Linux path).
 - `//crates/wolf-ffi:treesitter_highlight` drives a real pinned Neovim with treesitter **enabled**: it stages BOTH the `nvim-treesitter/` queries provider and the `parsers_tree` as siblings of a temp `init.lua`, opens a markdown buffer containing a ` ```go ` fenced block, and asserts (1) the markdown treesitter highlighter is active on the buffer (`vim.treesitter.highlighter.active[buf]` set) AND (2) fenced-code **injection** works — an injected `go` langtree is present inside the block (via `p:parse(true)` then a `go` child langtree). This is the load-bearing proof that main's core-native markdown injections light up embedded code. It skips loudly when Neovim or the trees are not staged (the cargo / Linux path).
 - `//crates/wolf-ffi:attribute_highlight` drives a real pinned Neovim: it defines a highlight group carrying `bold` / `italic` / `underline` + a `special` color, applies it to a known cell (`nvim_set_hl` + `matchadd`), polls for the repaint, and asserts the packed `FfiCell` exposes the matching `flags()` (BOLD | ITALIC | UNDERLINE) AND `special().set` with the expected `rgb` across the FFI boundary — the automated guard that per-cell text attributes and the special color survive resolution and packing. It skips loudly when Neovim is not staged (the cargo / Linux path).
-- `//crates/wolf-macos:WolfKeyMapTests` is a pure Swift `XCTest` over the AppKit-free `WolfKeyMap` seams — the key-translation seam, the `GlyphStyleResolver` glyph-style seam (`GlyphStyleTests`), and the `StateSeam` state-restore seam (`StateSeamTests`: offscreen/unset window-frame rejection, and the launch-cwd fallback) — with no `NSEvent` and no window, and runs regardless of `WOLF_NVIM_BIN`.
+- `//crates/wolf-macos:WolfKeyMapTests` is a pure Swift `XCTest` over the AppKit-free `WolfKeyMap` seams — the key-translation seam, the `GlyphStyleResolver` glyph-style seam (`GlyphStyleTests`), and the `StateSeam` state-restore seam (`StateSeamTests`: offscreen/unset window-frame rejection, and the launch-cwd fallback), and the `FrameStats` frame-time aggregation seam (`FrameStatsTests`: the bucket discriminants + labels, the `WOLF_FRAME_STATS` / `WOLF_FRAME_STATS_INTERVAL` env parsing, the truncating integer mean, nearest-rank percentiles, the 4096-sample ring bound + truncation marker, the wakes/keystrokes ratio, `reset()`, the saturating delta, and a byte-exact assertion on the fixed-width report table that is what makes two runs `diff`-able) — with no `NSEvent` and no window, and runs regardless of `WOLF_NVIM_BIN`. The `FrameMetrics` glue that the frame-stats seam feeds (the timer, the stderr/file emission) is window-server-bound and stays manual-smoke; see "Frame-time instrumentation (macOS)" above.
 
 ## Linting and formatting (macOS)
 
