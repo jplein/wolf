@@ -1,9 +1,19 @@
 //! Integration test for `wolf-core`'s PUBLIC Markdown-preview render surface
 //! (plan §"Core: Markdown→HTML rendering module" + the "Pure Rust unit" test
 //! bullet). It exercises ONLY the re-exported public API — `wolf_core::render_html`,
-//! `wolf_core::PreviewTheme`, and `wolf_core::theme_css` — NOT any private const
-//! (`MARKER_COLUMN_STRIDE`, `desired_markers`, `MarkerInjector`, …). Behavior, not
-//! implementation, is asserted: a `>= 100`-character line yields a per-100-column
+//! `wolf_core::PreviewTheme`, and `wolf_core::theme_css` — NOT the module's internals
+//! (`desired_markers`, `MarkerInjector`, …), which remain private.
+//!
+//! Note that `MARKER_COLUMN_STRIDE` IS public (re-exported from `lib.rs`), but this
+//! file deliberately does not import it: the stride is re-declared locally as a
+//! pinned literal (see [`COLUMN_STRIDE`] below) so the assertions check the rendered
+//! behavior against an independently stated expectation rather than tautologically
+//! comparing the implementation to itself. Changing the source const must therefore
+//! FAIL this test, not silently move the goalposts with it. `const BASELINE: i32 = 24`
+//! further down follows the same principle.
+//!
+//! Behavior, not implementation, is asserted: a `>= 100`-character line yields a
+//! per-100-column
 //! marker `id="wl-{L}-100"`, a shorter line does not, every hard line yields a
 //! `wl-{L}-0` anchor, and none of these markers land inside a fenced code block.
 //!
@@ -29,20 +39,26 @@
 //! This is a PURE render test: no Neovim, no filesystem, no wake — it needs no
 //! `WOLF_NVIM_BIN` and never skips.
 
+use std::collections::HashMap;
+
 use wolf_core::{render_html, theme_css, PreviewTheme};
 
 /// The per-line/per-100-column marker id substring for hard line `line` (1-based)
 /// and 0-based character column `col`, per the plan's `id="wl-{L}-{C}"` anchor
 /// scheme. Behavior is asserted via this id substring so the test never depends on
-/// the private `MARKER_COLUMN_STRIDE`, `marker_span`, or attribute order.
+/// the source `MARKER_COLUMN_STRIDE`, the private marker-injection internals, or
+/// attribute order.
 // per plan: the anchor id format is `wl-{L}-{C}` with double-quoted `id="…"`.
 fn marker_id(line: u32, col: u32) -> String {
     format!("id=\"wl-{line}-{col}\"")
 }
 
 /// The per-100-column stride the plan mandates (`MARKER_COLUMN_STRIDE = 100`),
-/// re-declared LOCALLY as a behavioral constant (the source const is private). A
-/// line of exactly this many characters is the first that earns a `-100` marker.
+/// re-declared LOCALLY as a behavioral constant. The source const is public and
+/// could be imported, but pinning the literal here keeps the assertion independent
+/// of the implementation: if the source stride changes, this test must fail rather
+/// than quietly track it. A line of exactly this many characters is the first that
+/// earns a `-100` marker.
 const COLUMN_STRIDE: u32 = 100;
 
 /// A paragraph line long enough (>= [`COLUMN_STRIDE`], < `2 * COLUMN_STRIDE`) to
@@ -394,5 +410,1730 @@ fn default_theme_carries_dark_and_light_palettes() {
     assert!(
         html.contains("#111111"),
         "the light media query must mirror the light-mode heading color `#111111`: {html}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Baseline-grid assertions (plan §6). `base.css` is `include_str!`'d verbatim
+// into the rendered document, so these tests audit the SHIPPED stylesheet
+// through the public `render_html` surface — no private const, no new file.
+// ---------------------------------------------------------------------------
+
+/// The baseline unit, re-declared LOCALLY as a behavioral constant: every
+/// vertical dimension in `base.css` must be `0` or a whole multiple of this.
+const BASELINE: i32 = 24;
+
+/// The width of every border that has to be compensated out of an adjacent
+/// padding or absorbed into an explicit height (`th`/`td` `border`, `hr`'s
+/// `border-top`). Named so the compensation arithmetic in the failure messages
+/// reads as arithmetic.
+const BORDER: i32 = 1;
+
+/// `(selector, font-size px, line-height px)` for the six heading levels
+/// (plan §2). h3–h6 are the levels that today fall through to UA defaults; the
+/// whole point of pinning them here is that the fix cannot silently regress.
+const HEADING_SCALE: &[(&str, i32, i32)] = &[
+    ("h1", 32, 48),
+    ("h2", 24, 48),
+    ("h3", 20, 24),
+    ("h4", 18, 24),
+    ("h5", 16, 24),
+    ("h6", 14, 24),
+];
+
+/// Every selector in `base.css` that carries a vertical dimension, swept by
+/// [`every_vertical_dimension_is_on_the_baseline_grid`].
+///
+/// # What is deliberately NOT swept, and why
+///
+/// The omissions below are as much a part of the audit as the inclusions. None
+/// of them belongs on this list, and — importantly — none belongs in
+/// [`COMPENSATION_ALLOWLIST`] either: allowlisting `code`'s `2px`, for example,
+/// would make the sweep report success no matter what later happened to that
+/// rule, converting a real audit into a rubber stamp. A comment is the honest
+/// record.
+///
+/// - **`code` and `pre code`** — `code` sets `padding: 2px 4px`, which is
+///   off-grid and CORRECT. Per plan §3.4 an inline box's vertical padding
+///   paints its background but does NOT grow the line box, so those 2px are
+///   layout-neutral: they cannot move a baseline. Sweeping `code` would flag a
+///   value the grid does not care about; allowlisting it would then stop the
+///   sweep from ever noticing if `code` later grew a genuinely vertical
+///   dimension. `pre code` (`padding: 0`) is asserted directly by
+///   [`pre_sits_on_the_baseline_grid`] for its `font-size: inherit` instead.
+/// - **`img`** — `height: auto` is the accepted intrinsic-height drift (plan
+///   §3.4 / the header's DOCUMENTED RESIDUALS). It is unparseable as px by
+///   construction, and there is no CSS-only way to snap it. Sweeping it would
+///   fail permanently for a drift the design accepts.
+/// - **`a` / `a:hover`** — `text-decoration` only. No vertical dimension.
+/// - **`.wolf-src`** — deliberately ZERO height. Its `line-height: 0` and
+///   `font-size: 0` are load-bearing (the body's LENGTH line-height would
+///   otherwise inherit a hard 24px into every marker and inject visible blank
+///   lines), so 0 here is a correct value the sweep would trivially pass. The
+///   rule is explicitly out of scope for this change; do not touch it.
+/// - **`html` and `*` / `*::before` / `*::after`** — `box-sizing` only. No
+///   vertical dimensions at all, though the inherited `border-box` is what lets
+///   `hr` absorb its rule into an explicit height.
+const GRID_SELECTORS: &[&str] = &[
+    "body.wolf-markdown",
+    "body.wolf-markdown > *:not(.wolf-src):not(*:not(.wolf-src) ~ *)",
+    "body.wolf-markdown > *:last-child",
+    // The GENERAL last-block rule, the symmetric twin of the general
+    // first-block entry above. Trivially on-grid today (`margin-bottom: 0`), so
+    // it catches no arithmetic — it is listed because both general edge rules
+    // are new, are spelled in a way that invites "simplification" back to
+    // `:first-child`/`:last-child`, and because the sweep's non-empty assertion
+    // makes SILENT DELETION of the rule fail loudly here.
+    "body.wolf-markdown > *:not(.wolf-src):not(:has(~ *:not(.wolf-src)))",
+    "p",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "pre",
+    "blockquote",
+    "table",
+    "th, td",
+    "hr",
+    "ul, ol",
+    "li > ul, li > ol",
+];
+
+/// The vertical longhand properties the sweep checks directly.
+const VERTICAL_LONGHANDS: &[&str] = &[
+    "margin-top",
+    "margin-bottom",
+    "padding-top",
+    "padding-bottom",
+    "line-height",
+    "height",
+    "scroll-margin-top",
+];
+
+/// The ONLY vertical values in `base.css` allowed to be off the 24px grid:
+/// `(selector, property, value)`. Each entry names the border it compensates.
+/// Adding a value here is the documented way to introduce a compensated
+/// dimension — and it forces the author to say which border it pays for.
+const COMPENSATION_ALLOWLIST: &[(&str, &str, i32)] = &[
+    // Compensate the `th, td { border: 1px }` collapsed row border:
+    // 12 + 24 (line-height) + 11 + 1 = 48 = 2 baselines of row pitch. The 12/11
+    // asymmetry exists because 47 is odd; it is imperceptible.
+    ("th, td", "padding-top", 12),
+    ("th, td", "padding-bottom", 11),
+    // Compensates the table's OWN bottom outer border, which has no next row to
+    // share with: a collapsed-border table is 48N + 1 tall, so 23 + 1 = 24
+    // brings the whole table to 48N + 24 = exactly 2N+1 baselines.
+    ("table", "margin-bottom", 23),
+];
+
+/// Slices the document's embedded stylesheet out of the `<style>` block.
+///
+/// # Why a crude parser is legitimate here
+///
+/// [`style_block`], [`rule_decls`] and [`px`] are NOT a CSS parser. They are
+/// valid only because `base.css` is hand-written, flat, and non-nested: every
+/// rule is `selector-list { prop: value; … }` at the top level, and it is
+/// `include_str!`'d into the document byte-for-byte, so what these helpers read
+/// is exactly what ships.
+///
+/// The one construct that defeats them is `@media`, which exists ONLY in
+/// `themes/default.css` (the `prefers-color-scheme: light` block, emitted
+/// AFTER `base.css`). Inside it the brace scan desynchronizes, so:
+///
+/// - every `base.css` rule is still read correctly (it all precedes the
+///   `@media`), and
+/// - the `hr` theme assertions in
+///   [`hr_occupies_whole_baselines_and_is_painted_by_its_border`] must use
+///   plain substring checks against the whole document, NOT [`rule_decls`].
+///
+/// Do not grow these helpers into a general CSS parser; if a future stylesheet
+/// needs nesting, the tests should assert on something else instead.
+fn style_block(html: &str) -> &str {
+    let open = html
+        .find("<style>")
+        .unwrap_or_else(|| panic!("the rendered document must embed a <style> block: {html}"));
+    let start = open + "<style>".len();
+    let end = html[start..]
+        .find("</style>")
+        .unwrap_or_else(|| panic!("the <style> block must be closed: {html}"));
+    &html[start..start + end]
+}
+
+/// Removes `/* … */` comments. `base.css` carries a long header comment that
+/// tabulates the scale and the compensation arithmetic — it contains braces,
+/// colons and semicolons, so it MUST be stripped before any brace scanning.
+fn strip_comments(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut rest = css;
+    while let Some(start) = rest.find("/*") {
+        out.push_str(&rest[..start]);
+        match rest[start + 2..].find("*/") {
+            Some(end) => rest = &rest[start + 2 + end + 2..],
+            None => return out,
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Collapses all runs of whitespace to a single space and trims.
+fn normalize_ws(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// True when a rule's comma-separated selector `entry` addresses the element
+/// named by the query `part`.
+///
+/// `base.css` writes its rules descendant-scoped (`body.wolf-markdown h1`),
+/// while the plan's tables name bare elements (`h1`), so an entry matches when
+/// it equals the query OR ends with ` {query}` after a purely-descendant
+/// ancestor prefix. The "purely descendant" guard is what keeps the query `ul`
+/// from wrongly matching `body.wolf-markdown li > ul` — the discarded prefix
+/// would contain a `>` combinator.
+fn selector_entry_matches(entry: &str, part: &str) -> bool {
+    if entry == part {
+        return true;
+    }
+    let Some(prefix) = entry.strip_suffix(part) else {
+        return false;
+    };
+    prefix.ends_with(' ') && !prefix.contains(['>', '+', '~'])
+}
+
+/// The declarations that apply to `selector`, merged across every matching rule
+/// in document order (later declarations win, as the cascade resolves them at
+/// equal specificity). Merging matters: `h1`'s `scroll-margin-top` lives on the
+/// shared `h1, h2, … h6` rule while its `font-size` lives on the per-level rule.
+///
+/// `selector` may itself be a comma-separated list (`"th, td"`, `"ul, ol"`); a
+/// rule matches when ANY of its entries matches ANY query part.
+///
+/// See [`style_block`] for why this crude scan is valid and where it is not.
+fn rule_decls(css: &str, selector: &str) -> HashMap<String, String> {
+    let css = strip_comments(css);
+    let queries: Vec<String> = selector
+        .split(',')
+        .map(normalize_ws)
+        .filter(|q| !q.is_empty())
+        .collect();
+
+    let mut decls = HashMap::new();
+    let mut rest = css.as_str();
+    while let Some(open) = rest.find('{') {
+        let selectors = &rest[..open];
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else { break };
+        let body = &after[..close];
+        rest = &after[close + 1..];
+
+        let matched = selectors.split(',').map(normalize_ws).any(|entry| {
+            queries
+                .iter()
+                .any(|part| selector_entry_matches(&entry, part))
+        });
+        if !matched {
+            continue;
+        }
+        for decl in body.split(';') {
+            let Some((prop, value)) = decl.split_once(':') else {
+                continue;
+            };
+            let prop = normalize_ws(prop).to_ascii_lowercase();
+            let value = normalize_ws(value);
+            if !prop.is_empty() && !value.is_empty() {
+                decls.insert(prop, value);
+            }
+        }
+    }
+    decls
+}
+
+/// Parses `"Npx"` (or the unitless `"0"`) into whole pixels.
+///
+/// Returns `i32`, deliberately NOT `f64`: a FRACTIONAL pixel anywhere in this
+/// stylesheet is itself a grid violation (it cannot be a whole multiple of 24),
+/// so `"9.6px"` must return `None` and fail loudly rather than round silently.
+fn px(value: &str) -> Option<i32> {
+    let value = value.trim();
+    if value == "0" {
+        return Some(0);
+    }
+    value.strip_suffix("px")?.trim().parse::<i32>().ok()
+}
+
+/// The top and bottom components of a `margin`/`padding` shorthand, per the CSS
+/// 1/2/3/4-value expansion rules.
+fn shorthand_block_edges(value: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = value.split_whitespace().collect();
+    match parts.len() {
+        1 => Some((parts[0].to_string(), parts[0].to_string())),
+        2 | 3 | 4 => Some((
+            parts[0].to_string(),
+            if parts.len() == 2 {
+                parts[0].to_string()
+            } else {
+                parts[2].to_string()
+            },
+        )),
+        _ => None,
+    }
+}
+
+/// Renders a document whose body exercises every styled element, and returns it
+/// together with its `<style>` block. The Markdown source is irrelevant to the
+/// CSS assertions (the stylesheet is embedded unconditionally) but keeps these
+/// tests reading as end-to-end render tests rather than file reads.
+fn rendered_stylesheet() -> String {
+    let source = "# H1\n\ntext\n\n## H2\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n---\n";
+    let html = render_html(source, PreviewTheme::Default);
+    style_block(&html).to_string()
+}
+
+#[test]
+fn baseline_unit_is_declared() {
+    // The grid's single documented token. Literal px are used everywhere else
+    // (so the sweep test can actually check the numbers), but the unit itself
+    // must be declared and discoverable.
+    let html = render_html("# Title\n\ntext", PreviewTheme::Default);
+
+    assert!(
+        html.contains("--wolf-baseline: 24px"),
+        "the stylesheet must declare the grid unit `--wolf-baseline: 24px` on \
+         body.wolf-markdown: {html}"
+    );
+}
+
+#[test]
+fn body_line_height_is_a_length_not_a_ratio() {
+    let css = rendered_stylesheet();
+    let decls = rule_decls(&css, "body.wolf-markdown");
+
+    let line_height = decls
+        .get("line-height")
+        .unwrap_or_else(|| panic!("body.wolf-markdown must declare line-height: {decls:?}"));
+
+    // THE most load-bearing declaration in the grid, and the one most likely to
+    // be "cleaned up" back into a ratio by a future editor.
+    assert!(
+        line_height.ends_with("px"),
+        "body.wolf-markdown must set `line-height` as a LENGTH (`24px`), not a \
+         unitless ratio — found `{line_height}`. A unitless ratio re-multiplies \
+         against each DESCENDANT's own font-size, so inline <code> at 0.875em, \
+         <small>, and superscripts would each produce a different line box and \
+         fall off the {BASELINE}px grid. A length inherits as the COMPUTED \
+         {BASELINE}px regardless of descendant font-size: {decls:?}"
+    );
+    assert_eq!(
+        line_height, "24px",
+        "body.wolf-markdown line-height must be exactly one baseline \
+         ({BASELINE}px): {decls:?}"
+    );
+    assert_eq!(
+        decls.get("font-size").map(String::as_str),
+        Some("16px"),
+        "body.wolf-markdown font-size must be 16px (16 x 1.5 = {BASELINE}px \
+         leading): {decls:?}"
+    );
+    assert_eq!(
+        decls.get("padding").map(String::as_str),
+        Some("0"),
+        "body padding must be exactly `0`: the preview body is deliberately \
+         FLUSH to the pane's edges, and any inset belongs to the preview pane \
+         chrome rather than to the document. `0` is trivially on-grid, so the \
+         sweep can never object to it — which is precisely why this assertion \
+         exists: it pins the explicit zero so a \"comfortable\" padding cannot \
+         be silently reintroduced. Note that removing the declaration entirely \
+         would also read as `0` in the browser (the UA default) but would lose \
+         the record that flush edges are a decision, not an omission: {decls:?}"
+    );
+}
+
+#[test]
+fn headings_declare_explicit_font_size_and_line_height() {
+    let css = rendered_stylesheet();
+
+    for &(selector, font_size, line_height) in HEADING_SCALE {
+        let decls = rule_decls(&css, selector);
+
+        let declared_size = decls.get("font-size").unwrap_or_else(|| {
+            panic!(
+                "`{selector}` must declare an explicit font-size — h3..h6 must \
+                 NOT fall through to UA defaults (18.7/16/13.3/10.7px, where h5 \
+                 equals body text and h6 is illegibly smaller): {decls:?}"
+            )
+        });
+        assert_eq!(
+            px(declared_size),
+            Some(font_size),
+            "`{selector}` font-size must be {font_size}px per the type scale, \
+             found `{declared_size}`: {decls:?}"
+        );
+
+        let declared_leading = decls.get("line-height").unwrap_or_else(|| {
+            panic!(
+                "`{selector}` must declare an explicit line-height on the grid — \
+                 inheriting the body's {BASELINE}px is only correct for the \
+                 levels whose scale says {BASELINE}px, and must be stated, not \
+                 assumed: {decls:?}"
+            )
+        });
+        let parsed = px(declared_leading).unwrap_or_else(|| {
+            panic!(
+                "`{selector}` line-height must be whole pixels, found \
+                 `{declared_leading}` (a fractional px cannot sit on the grid): \
+                 {decls:?}"
+            )
+        });
+        assert_eq!(
+            parsed, line_height,
+            "`{selector}` line-height must be {line_height}px per the type \
+             scale: {decls:?}"
+        );
+        assert_eq!(
+            parsed % BASELINE,
+            0,
+            "`{selector}` line-height {parsed}px is not a whole multiple of the \
+             {BASELINE}px baseline: {decls:?}"
+        );
+    }
+}
+
+#[test]
+fn headings_reserve_anchor_scroll_clearance() {
+    // The shared `h1, h2, … h6` rule's `scroll-margin-top`. The grid sweep sees
+    // this property (it is in VERTICAL_LONGHANDS) and so would catch an off-grid
+    // value — but it is blind to the declaration being DELETED outright, which
+    // is the regression this test exists to make impossible.
+    const ANCHOR_CLEARANCE: i32 = 2 * BASELINE;
+
+    let css = rendered_stylesheet();
+
+    for &(selector, _, _) in HEADING_SCALE {
+        // `rule_decls` merges across matching rules, so the shared rule's
+        // declaration is visible from every per-level query.
+        let decls = rule_decls(&css, selector);
+
+        let declared = decls.get("scroll-margin-top").unwrap_or_else(|| {
+            panic!(
+                "`{selector}` must declare `scroll-margin-top` (it lives on the \
+                 shared `h1, h2, … h6` rule, alongside `font-weight`). It \
+                 reserves {ANCHOR_CLEARANCE}px = 2 baselines of clearance above \
+                 a heading scrolled into view by an in-document anchor link. The \
+                 body has NO padding — it is deliberately flush to the pane \
+                 edges — so this is the ONLY thing keeping a jumped-to heading \
+                 off the pane's top edge; without it, clicking an anchor jams \
+                 the target heading's cap-height flat against the top pixel of \
+                 the preview. Deleting the declaration is invisible to every \
+                 other assertion here, including the grid sweep, which can only \
+                 check a value that exists: {decls:?}"
+            )
+        });
+        let parsed = px(declared).unwrap_or_else(|| {
+            panic!(
+                "`{selector}` `scroll-margin-top` must be whole integer pixels, \
+                 found `{declared}`: {decls:?}"
+            )
+        });
+        assert_eq!(
+            parsed, ANCHOR_CLEARANCE,
+            "`{selector}` `scroll-margin-top` must be {ANCHOR_CLEARANCE}px \
+             (2 baselines of clearance for anchor-link navigation), found \
+             {parsed}px. The body has no padding, so this declaration alone \
+             prevents an anchor-scrolled heading from sitting flush against the \
+             pane's top edge. Any replacement value must ALSO be a whole \
+             multiple of the {BASELINE}px baseline to stay on-grid — the sweep \
+             enforces that much, but only this test pins the amount of \
+             clearance: {decls:?}"
+        );
+    }
+}
+
+#[test]
+fn heading_bottom_rule_is_gone_from_base_and_theme() {
+    // h1/h2 no longer carry a section rule. Both halves of the deletion matter,
+    // and the theme half is the one the `hr` bug taught us to check: a
+    // `border-bottom-color` left behind in `themes/default.css` would paint
+    // nothing today (there is no border to color) and would therefore sit there
+    // silently until someone re-adds a border and gets a surprise.
+    let css = rendered_stylesheet();
+
+    for &(selector, font_size, _) in HEADING_SCALE
+        .iter()
+        .filter(|&&(selector, _, _)| matches!(selector, "h1" | "h2"))
+    {
+        let decls = rule_decls(&css, selector);
+
+        // Sanity: `rule_decls` merges every matching rule, so a non-empty map
+        // proves nothing — the shared `h1, h2, … h6` rule and the theme's
+        // `h1…h6 { color }` rule would keep it populated even if the per-level
+        // `body.wolf-markdown {selector}` rule vanished entirely. Assert a
+        // declaration ONLY that per-level rule supplies (`font-size`; the shared
+        // rule carries font-weight/scroll-margin-top, the theme only color), so
+        // the two absence assertions below are about a rule that is genuinely
+        // still being parsed rather than vacuously true of a lost rule.
+        assert_eq!(
+            decls.get("font-size").and_then(|v| px(v)),
+            Some(font_size),
+            "`{selector}` must still declare its own `font-size: {font_size}px` \
+             from the per-level rule in base.css. Without this the two \
+             `border-bottom`/`padding-bottom` absence checks below would pass \
+             trivially if that rule were lost or renamed, since the merged map \
+             stays non-empty from the shared heading rule and the theme's color \
+             rule alone: {decls:?}"
+        );
+
+        assert_eq!(
+            decls.get("border-bottom"),
+            None,
+            "`{selector}` must NOT declare a `border-bottom` — the section rule \
+             under h1/h2 was deliberately removed. Reintroducing one is not a \
+             one-line change: a bare {BORDER}px border on a 48px content box \
+             makes the heading 49px tall and pushes everything below it off the \
+             {BASELINE}px grid, so it also requires re-adding the 23px \
+             `padding-bottom` compensation (23 + {BORDER} = {BASELINE}) AND a \
+             matching COMPENSATION_ALLOWLIST entry naming the border it pays \
+             for: {decls:?}"
+        );
+        assert_eq!(
+            decls.get("padding-bottom"),
+            None,
+            "`{selector}` must NOT declare a `padding-bottom` at all. The 23px \
+             that used to live here existed ONLY to compensate the {BORDER}px \
+             `border-bottom`; with the border gone the padding has nothing to \
+             pay for, and even an explicit `0` is noise (the UA default is \
+             already 0, and h3..h6 declare no padding either) that the grid \
+             sweep would then have to parse: {decls:?}"
+        );
+    }
+
+    // The theme half. Substring checks against the WHOLE document, not
+    // `rule_decls`: the light palette lives inside the one `@media
+    // (prefers-color-scheme: light)` block, which the crude parser deliberately
+    // cannot address (see `style_block`). One check covers BOTH palettes.
+    //
+    // Note for future authors: this is a substring check over the whole emitted
+    // document, and base.css's header comment ships inside that document. So
+    // merely MENTIONING `border-bottom-color` in CSS prose will fail this test,
+    // not just declaring it. That is deliberate — a comment describing a border
+    // color is a strong hint someone is about to re-add one — but if you trip it
+    // from a comment, the fix is to reword the comment, not to loosen the check.
+    let html = render_html("# Title\n\n## Section\n", PreviewTheme::Default);
+    assert!(
+        !html.contains("border-bottom-color"),
+        "no `border-bottom-color` may survive anywhere in the emitted \
+         stylesheets — base.css no longer gives h1/h2 a bottom border, so any \
+         remaining color declaration paints nothing. That is exactly what makes \
+         it dangerous: it is invisible today and becomes a loaded gun for \
+         whoever next adds a border. This single check covers BOTH the dark \
+         palette and the `prefers-color-scheme: light` block: {html}"
+    );
+}
+
+#[test]
+fn blockquote_keeps_its_indent_without_a_border() {
+    // The border-left is gone; the padding that used to sit BESIDE it is now the
+    // only thing marking a quote off from the surrounding text.
+    let css = rendered_stylesheet();
+    let decls = rule_decls(&css, "blockquote");
+
+    assert_eq!(
+        decls.get("padding").map(String::as_str),
+        Some("0 24px"),
+        "`blockquote` padding must be `0 24px`. The horizontal {BASELINE}px IS \
+         the indent — with the `border-left` removed and the body itself flush \
+         to the pane edges, this padding is the ONLY thing holding a quote in \
+         from the edge, so shrinking it to 0 erases the quote's last structural \
+         cue. The VERTICAL `0` is separately load-bearing: it is why blockquote \
+         needs no border compensation at all, since border-box height = content \
+         height = a sum of on-grid child boxes: {decls:?}"
+    );
+    assert_eq!(
+        decls.get("margin").map(String::as_str),
+        Some("0 0 24px"),
+        "`blockquote` margin must be `0 0 24px` — one baseline below, zero \
+         above: {decls:?}"
+    );
+    assert_eq!(
+        decls.get("border-left"),
+        None,
+        "`blockquote` must NOT declare a `border-left`; the quote is marked by \
+         its {BASELINE}px indent (plus the theme's dimmer text color) alone: \
+         {decls:?}"
+    );
+
+    // Theme half, same argument as `heading_bottom_rule_is_gone_from_base_and_theme`:
+    // substring over the whole document so the one check covers both palettes.
+    let html = render_html("> quoted\n", PreviewTheme::Default);
+    assert!(
+        !html.contains("border-left-color"),
+        "no `border-left-color` may survive anywhere in the emitted stylesheets \
+         — base.css no longer gives blockquote a left border, so the color \
+         declaration paints nothing and merely lies in wait for the next person \
+         to add one. Covers both the dark palette and the \
+         `prefers-color-scheme: light` block: {html}"
+    );
+}
+
+#[test]
+fn hr_occupies_whole_baselines_and_is_painted_by_its_border() {
+    let css = rendered_stylesheet();
+    let decls = rule_decls(&css, "hr");
+
+    // base.css structure: the rule is absorbed into an explicit border-box
+    // height, so the hr's total footprint is 24 (box) + 24 (margin-top) = 2B.
+    assert_eq!(
+        decls.get("height").map(String::as_str),
+        Some("24px"),
+        "`hr` must have an explicit {BASELINE}px height — with the inherited \
+         `box-sizing: border-box` this ABSORBS its {BORDER}px rule structurally. \
+         A 1px-tall hr plus margins totals 49px and margins alone cannot fix it \
+         (an hr before an h2 collapses to 48 and re-exposes the 1px): {decls:?}"
+    );
+    let border_top = decls
+        .get("border-top")
+        .unwrap_or_else(|| panic!("`hr` must draw its rule with `border-top`: {decls:?}"));
+    assert!(
+        border_top.contains("1px"),
+        "`hr` must draw a {BORDER}px `border-top` (color from the theme), \
+         found `{border_top}`: {decls:?}"
+    );
+    assert_eq!(
+        decls.get("margin").map(String::as_str),
+        Some("24px 0 0"),
+        "`hr` margin must be `24px 0 0`: one baseline above, ZERO below — the \
+         {BASELINE}px box already supplies the clear space beneath the rule, so \
+         total = {BASELINE} + {BASELINE} = 48px = 2 baselines: {decls:?}"
+    );
+    assert_eq!(
+        decls.get("background").map(String::as_str),
+        Some("transparent"),
+        "`hr` background must be `transparent` in base.css — the box is now \
+         {BASELINE}px tall, so ANY background paints a solid {BASELINE}px bar \
+         instead of a hairline: {decls:?}"
+    );
+
+    // The important half: the theme guard. `themes/default.css` is emitted
+    // AFTER base.css, so a leftover `hr { background-color: … }` WINS the
+    // cascade and paints the 24px box as a solid bar — the highest-consequence
+    // regression in this change. Substring checks, not `rule_decls`: the light
+    // palette lives inside the one `@media` block, which the crude parser
+    // cannot address (see `style_block`).
+    let html = render_html("---\n", PreviewTheme::Default);
+    assert!(
+        html.contains("border-top-color: #3a3a3a"),
+        "the DARK theme must color the hr via `border-top-color: #3a3a3a`, not \
+         `background-color`. base.css is emitted BEFORE the theme, so a leftover \
+         `hr {{ background-color }}` wins the cascade and paints the hr's {BASELINE}px \
+         grid box as a SOLID BAR instead of a hairline: {html}"
+    );
+    assert!(
+        html.contains("border-top-color: #d0d0d0"),
+        "the LIGHT (`prefers-color-scheme: light`) theme must color the hr via \
+         `border-top-color: #d0d0d0`, not `background-color` — otherwise the hr \
+         renders as a solid {BASELINE}px bar in light mode only: {html}"
+    );
+}
+
+#[test]
+fn table_cells_land_two_baselines_per_row() {
+    const CELL_PADDING_TOP: i32 = 12;
+    const CELL_PADDING_BOTTOM: i32 = 11;
+    const CELL_LINE_HEIGHT: i32 = 24;
+    const ROW_PITCH: i32 = 48;
+    const TABLE_MARGIN_BOTTOM: i32 = 23;
+
+    let css = rendered_stylesheet();
+    let cells = rule_decls(&css, "th, td");
+
+    assert_eq!(
+        cells.get("padding").map(String::as_str),
+        Some("12px 16px 11px"),
+        "`th, td` padding must be `12px 16px 11px`. The 12/11 asymmetry is NOT a \
+         typo: with `border-collapse: collapse` adjacent rows SHARE one {BORDER}px \
+         border, so the row pitch is {CELL_PADDING_TOP} + {CELL_LINE_HEIGHT} \
+         (line-height) + {CELL_PADDING_BOTTOM} + {BORDER} = {ROW_PITCH}px = 2 \
+         baselines. 47 is odd, so the padding cannot be split evenly; the 1px \
+         asymmetry is imperceptible. (16px horizontal is not grid-constrained.): \
+         {cells:?}"
+    );
+    let border = cells
+        .get("border")
+        .unwrap_or_else(|| panic!("`th, td` must declare a border: {cells:?}"));
+    assert!(
+        border.contains("1px"),
+        "`th, td` border must be {BORDER}px — the 12/11 padding compensates \
+         exactly one shared collapsed border. Found `{border}`: {cells:?}"
+    );
+    assert_eq!(
+        CELL_PADDING_TOP + CELL_LINE_HEIGHT + CELL_PADDING_BOTTOM + BORDER,
+        ROW_PITCH,
+        "row-pitch arithmetic: {CELL_PADDING_TOP} + {CELL_LINE_HEIGHT} + \
+         {CELL_PADDING_BOTTOM} + {BORDER} must equal {ROW_PITCH} (2 baselines)"
+    );
+
+    let table = rule_decls(&css, "table");
+    assert_eq!(
+        table.get("border-collapse").map(String::as_str),
+        Some("collapse"),
+        "`table` must set `border-collapse: collapse` — the whole 2-baseline row \
+         pitch depends on adjacent rows SHARING one border: {table:?}"
+    );
+    assert_eq!(
+        table.get("margin").map(String::as_str),
+        Some("0 0 23px"),
+        "`table` margin-bottom must be {TABLE_MARGIN_BOTTOM}px, not {BASELINE}px \
+         — this looks like a typo and is not. A collapsed-border table of N rows \
+         has N+1 horizontal lines, so its height is 47N + (N+1) = 48N + {BORDER}: \
+         the trailing {BORDER}px is the table's OWN bottom outer border, which \
+         has no next row to share with. {TABLE_MARGIN_BOTTOM} + {BORDER} = \
+         {BASELINE} brings the total to 48N + {BASELINE} = exactly 2N+1 \
+         baselines. Documented residual: whenever the table is immediately \
+         followed by a block whose margin-top EXCEEDS {TABLE_MARGIN_BOTTOM}px — \
+         every heading (h1/h2/h3 at 48px, h4/h5/h6 at {BASELINE}px) and `hr` \
+         ({BASELINE}px) — the {TABLE_MARGIN_BOTTOM}px collapses away against the \
+         larger value and re-exposes the {BORDER}px; that error is constant, not \
+         accumulating: {table:?}"
+    );
+}
+
+#[test]
+fn pre_sits_on_the_baseline_grid() {
+    let css = rendered_stylesheet();
+    let decls = rule_decls(&css, "pre");
+
+    assert_eq!(
+        decls.get("line-height").map(String::as_str),
+        Some("24px"),
+        "`pre` line-height must be one baseline ({BASELINE}px) so code lines \
+         share the body baseline exactly. The only tighter grid-legal value is \
+         12px, which is smaller than the 14px code font — lines would overlap: \
+         {decls:?}"
+    );
+    assert_eq!(
+        decls.get("padding").map(String::as_str),
+        Some("24px"),
+        "`pre` padding must be one baseline on every side, so the block totals \
+         {BASELINE} + {BASELINE}n + {BASELINE} = {BASELINE}(n+2) — always a whole \
+         multiple, with ZERO compensation needed (a `pre` has no border): \
+         {decls:?}"
+    );
+    assert_eq!(
+        decls.get("margin").map(String::as_str),
+        Some("0 0 24px"),
+        "`pre` margin must be `0 0 24px`: {decls:?}"
+    );
+
+    // Regression guard for the 0.81em compounding bug: `code` set 0.9em and
+    // `pre code` ALSO set 0.9em, so code inside a <pre> rendered at 0.81em.
+    // The size is now set once, on `pre`.
+    let pre_code = rule_decls(&css, "pre code");
+    assert_eq!(
+        pre_code.get("font-size").map(String::as_str),
+        Some("inherit"),
+        "`pre code` font-size must be `inherit`, NOT a second em-relative value \
+         — `code` already sets an em-relative size, so any relative value here \
+         COMPOUNDS (0.9em x 0.9em = 0.81em). The size is set once, on `pre`: \
+         {pre_code:?}"
+    );
+    assert_eq!(
+        decls.get("font-size").map(String::as_str),
+        Some("14px"),
+        "`pre` must set the code font-size once, in absolute px: {decls:?}"
+    );
+}
+
+#[test]
+fn blockquote_last_child_margin_is_zeroed() {
+    // One of the three rules that exist ONLY to prevent a specific layout bug,
+    // and the only one the rest of the suite does not reach:
+    //   - `pre code { font-size: inherit }` is guarded by
+    //     `pre_sits_on_the_baseline_grid`;
+    //   - `li > ul, li > ol { margin-bottom: 0 }` is incidentally guarded by the
+    //     sweep, which asserts that every GRID_SELECTORS rule is non-empty;
+    //   - this one has no guard at all and can currently be deleted silently.
+    //
+    // What deleting it would cause: a blockquote's last child (typically a <p>,
+    // which carries `margin: 0 0 24px`) keeps its bottom margin, and because
+    // blockquote has NO vertical padding, that margin has nothing to collapse
+    // through — the quote renders 24px TALLER than its content. That is still
+    // on-grid, so the sweep would never notice, but it is visually lopsided
+    // against the quote's 0 top padding: air below the text, none above.
+    let css = rendered_stylesheet();
+    let decls = rule_decls(&css, "blockquote > :last-child");
+
+    assert!(
+        !decls.is_empty(),
+        "base.css must keep the `blockquote > :last-child` rule. Without it a \
+         blockquote is one baseline taller than its content (its last <p> keeps \
+         `margin-bottom: 24px`, and blockquote's 0 vertical padding gives that \
+         margin nothing to collapse through) — on-grid, but lopsided against the \
+         quote's 0 top padding"
+    );
+    assert_eq!(
+        decls.get("margin-bottom").and_then(|v| px(v)),
+        Some(0),
+        "`blockquote > :last-child` must zero `margin-bottom`; any other value \
+         re-introduces the trailing gap this rule exists to remove: {decls:?}"
+    );
+}
+
+#[test]
+fn stylesheets_are_emitted_in_base_then_math_then_theme_order() {
+    // Emission order is load-bearing, not cosmetic: the three stylesheets share
+    // one <style> block at equal specificity, so on any conflicting property the
+    // LAST one wins. Plan §10 flags this as a MEDIUM risk for math.css (which is
+    // vendored and must not be edited — it wins over base.css on anything it
+    // touches), and the `hr` theme guard in
+    // `hr_occupies_whole_baselines_and_is_painted_by_its_border` proves the same
+    // ordering for the theme: base.css sets `background: transparent` on a 24px
+    // hr box, and only because the theme comes AFTER can it repaint that box —
+    // which is exactly why the theme must use `border-top-color` and not
+    // `background-color`. Reorder these and the grid's compensation rules start
+    // losing cascades silently, with no other test noticing.
+    //
+    // Markers are chosen to be stable and unique to one file: `--wolf-baseline`
+    // is base.css's documented grid token (and is separately asserted by
+    // `baseline_unit_is_declared`); `menv-cases` is a vendored pulldown-latex
+    // class name in math.css that this repo does not author; `color-scheme:
+    // light dark` is the theme declaration `default_theme_carries_dark_and_light_palettes`
+    // already pins. None can be edited away without failing another test first.
+    let source = "# Title\n\nInline $e=mc^2$ and a rule.\n\n---\n";
+    let html = render_html(source, PreviewTheme::Default);
+
+    let base = html.find("--wolf-baseline").unwrap_or_else(|| {
+        panic!("expected base.css's `--wolf-baseline` token in the rendered document")
+    });
+    let math = html
+        .find("menv-cases")
+        .unwrap_or_else(|| panic!("expected math.css's vendored `menv-cases` selector"));
+    let theme = html.find("color-scheme: light dark").unwrap_or_else(|| {
+        panic!("expected themes/default.css's `color-scheme: light dark` declaration")
+    });
+
+    assert!(
+        base < math,
+        "base.css (at {base}) must be emitted BEFORE math.css (at {math}) — \
+         math.css is vendored and DELIBERATELY wins on the properties it sets \
+         inside <math>, which is the accepted display-MathML drift. Flipping \
+         this would let base.css's grid silently override vendored math layout"
+    );
+    assert!(
+        math < theme,
+        "math.css (at {math}) must be emitted BEFORE the theme (at {theme}) so \
+         theme colors win over any color math.css sets"
+    );
+    assert!(
+        base < theme,
+        "base.css (at {base}) must be emitted BEFORE the theme (at {theme}): the \
+         theme layers color onto base.css's structural rules and MUST win. This \
+         is why the theme paints `hr` with `border-top-color` rather than \
+         `background-color` — after base.css gave it a 24px grid box, a theme \
+         `background-color` would win the cascade and paint a solid bar"
+    );
+}
+
+#[test]
+fn every_vertical_dimension_is_on_the_baseline_grid() {
+    // The sweep. Over every styled selector, every vertical dimension must be
+    // 0 or a whole multiple of 24px — except the three documented compensations.
+    // Any NEW off-grid vertical value anywhere in base.css fails here, and any
+    // new compensated value forces its author to add an allowlist entry naming
+    // the border it pays for.
+    let css = rendered_stylesheet();
+    let mut violations: Vec<String> = Vec::new();
+
+    for &selector in GRID_SELECTORS {
+        let decls = rule_decls(&css, selector);
+        assert!(
+            !decls.is_empty(),
+            "the sweep expects `{selector}` to be a styled rule in base.css; \
+             either the rule was removed (update GRID_SELECTORS) or its selector \
+             text changed shape in a way the crude parser cannot address"
+        );
+
+        // (effective vertical property, declared value) pairs: the longhands as
+        // written, plus the block edges expanded out of any shorthand.
+        let mut checks: Vec<(String, String)> = Vec::new();
+        for &prop in VERTICAL_LONGHANDS {
+            if let Some(value) = decls.get(prop) {
+                checks.push((prop.to_string(), value.clone()));
+            }
+        }
+        for shorthand in ["margin", "padding"] {
+            let Some(value) = decls.get(shorthand) else {
+                continue;
+            };
+            let Some((top, bottom)) = shorthand_block_edges(value) else {
+                violations.push(format!(
+                    "`{selector}` has an unparseable `{shorthand}: {value}` \
+                     shorthand; the sweep cannot verify its block edges"
+                ));
+                continue;
+            };
+            checks.push((format!("{shorthand}-top"), top));
+            checks.push((format!("{shorthand}-bottom"), bottom));
+        }
+
+        for (prop, value) in checks {
+            let Some(parsed) = px(&value) else {
+                violations.push(format!(
+                    "`{selector}` `{prop}: {value}` is not a whole number of \
+                     pixels. Every vertical dimension must be written as literal \
+                     integer px (not em, rem, %, or calc()): a fractional or \
+                     relative length cannot be verified against the {BASELINE}px \
+                     grid, and rem in particular resolves against a root \
+                     font-size this document never sets"
+                ));
+                continue;
+            };
+
+            let allowed = COMPENSATION_ALLOWLIST
+                .iter()
+                .any(|&(s, p, v)| s == selector && p == prop && v == parsed);
+            if allowed || parsed % BASELINE == 0 {
+                continue;
+            }
+
+            violations.push(format!(
+                "`{selector}` `{prop}: {value}` is {parsed}px — neither 0, nor a \
+                 whole multiple of the {BASELINE}px baseline ({parsed} % \
+                 {BASELINE} = {}), nor a documented compensation. If this value \
+                 exists to compensate a border, add it to \
+                 COMPENSATION_ALLOWLIST with a comment naming the border it \
+                 compensates and showing that <value> + <border width> is a \
+                 whole multiple of {BASELINE}; otherwise put it back on the grid",
+                parsed % BASELINE
+            ));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "{} vertical dimension(s) are off the {BASELINE}px baseline grid:\n  - {}",
+        violations.len(),
+        violations.join("\n  - ")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Edge-reset assertions: the RENDERED structure, not the declaration text.
+//
+// Every test above audits `base.css` as TEXT. That is structurally unable to
+// catch the class of bug where a declaration exists, is spelled correctly, and
+// still applies to the wrong element — which is exactly what the NAIVE spelling
+// of the two edge rules does:
+//
+//   body.wolf-markdown > *:first-child { margin-top: 0 }
+//   body.wolf-markdown > *:last-child  { margin-bottom: 0 }
+//
+// The scroll-sync `MarkerInjector` flushes its `<span class="wolf-src">` anchors
+// as raw HTML BEFORE each block's opening tag, and the `wl-1-0` anchor has byte
+// offset 0 — so the body's actual first child is an ANCHOR, not the first block:
+//
+//   <body class="wolf-markdown"><span class="wolf-src" id="wl-1-0" …></span><h1 …>
+//
+// `:first-child` would therefore match a span that has no margin to zero,
+// leaving the <h1> with its full 48px margin-top. The body has NO padding, so
+// that margin resolves one of two ways, and it does not matter which: either it
+// collapses out through the body's top edge (the body satisfies every condition
+// for parent-child collapsing — no border-top, no padding-top, no clearance, no
+// BFC), displacing the whole document 48px down; or, if the leading anchor's
+// anonymous block box blocks the collapse-through, the 48px sits INSIDE the body
+// between the anchor and the <h1>. Both outcomes put the opening heading 48px
+// below the top edge and defeat flush-to-edge. (The escaped-margin case is
+// positional, NOT a color gap: neither base.css nor the theme sets a background
+// on `html`, so the body's background propagates to the canvas and paints the
+// displaced region.) `base.css` consequently spells the opening-block rule as
+//
+//   body.wolf-markdown > *:not(.wolf-src):not(*:not(.wolf-src) ~ *)
+//
+// — "not an anchor, and no non-anchor sibling precedes it" — which skips a
+// leading anchor run of ANY length. Symmetrically, `flush_before(usize::MAX)`
+// emits trailing anchors AFTER the last block, so `:last-child` matches an
+// anchor too. Note 48 is 2 baselines: the grid invariant SURVIVES, so the sweep
+// cannot see this either.
+//
+// These tests therefore pin the OUTCOME — "the declaration that must reach the
+// opening/closing block actually wins on that block" — by parsing the emitted
+// body into its child list and resolving the cascade against it. They are
+// deliberately agnostic about HOW that is achieved: any selector shape that
+// skips the anchors passes, and so would a change that stopped emitting a
+// leading anchor at all.
+// ---------------------------------------------------------------------------
+
+/// A direct element child of `<body class="wolf-markdown">`.
+#[derive(Debug, Clone)]
+struct BodyChild {
+    tag: String,
+    classes: Vec<String>,
+}
+
+impl BodyChild {
+    /// True for the scroll-sync `<span class="wolf-src">` anchors — the elements
+    /// that displace `:first-child` / `:last-child` off the real content.
+    fn is_anchor(&self) -> bool {
+        self.classes.iter().any(|c| c == "wolf-src")
+    }
+}
+
+/// Elements that never open a subtree, so the depth scan in [`body_children`]
+/// must not push for them. Only `hr`/`img`/`br` can occur in rendered Markdown;
+/// the rest are listed for safety.
+const VOID_TAGS: &[&str] = &["hr", "img", "br", "meta", "link", "input", "source"];
+
+/// The `class` attribute of a start tag, split on whitespace.
+fn tag_classes(tag_text: &str) -> Vec<String> {
+    let Some(at) = tag_text.find("class=\"") else {
+        return Vec::new();
+    };
+    let rest = &tag_text[at + "class=\"".len()..];
+    let Some(end) = rest.find('"') else {
+        return Vec::new();
+    };
+    rest[..end].split_whitespace().map(str::to_string).collect()
+}
+
+/// The direct element children of the rendered `<body>`, in document order.
+///
+/// # Why a crude scanner is legitimate here
+///
+/// Same argument as [`style_block`]: this is not an HTML parser. It is a depth
+/// counter over `<`…`>` runs, valid because the fixtures below are deliberately
+/// plain Markdown (headings and paragraphs) whose rendered attribute values
+/// contain no `>`, and because the only thing being extracted is the TOP-LEVEL
+/// child sequence — tag name and classes. Do not feed it tables, MathML, or raw
+/// HTML blocks; assert on something else instead.
+fn body_children(html: &str) -> Vec<BodyChild> {
+    let open = html
+        .find("<body")
+        .unwrap_or_else(|| panic!("the rendered document must contain a <body>: {html}"));
+    let open_end = html[open..]
+        .find('>')
+        .unwrap_or_else(|| panic!("the <body> start tag must be closed: {html}"));
+    let start = open + open_end + 1;
+    let end = html[start..]
+        .find("</body>")
+        .unwrap_or_else(|| panic!("the <body> must be closed: {html}"));
+
+    let mut children = Vec::new();
+    let mut depth = 0usize;
+    let mut rest = &html[start..start + end];
+    while let Some(lt) = rest.find('<') {
+        let after = &rest[lt..];
+        let Some(gt) = after.find('>') else { break };
+        let tag_text = &after[..=gt];
+        rest = &after[gt + 1..];
+
+        if tag_text.starts_with("</") {
+            depth = depth.saturating_sub(1);
+            continue;
+        }
+        if tag_text.starts_with("<!") {
+            continue;
+        }
+        let tag: String = tag_text[1..]
+            .chars()
+            .take_while(char::is_ascii_alphanumeric)
+            .collect::<String>()
+            .to_ascii_lowercase();
+        if tag.is_empty() {
+            continue;
+        }
+        if depth == 0 {
+            children.push(BodyChild {
+                tag: tag.clone(),
+                classes: tag_classes(tag_text),
+            });
+        }
+        if !tag_text.ends_with("/>") && !VOID_TAGS.contains(&tag.as_str()) {
+            depth += 1;
+        }
+    }
+    children
+}
+
+/// A one-line summary of the body's child list, for failure messages.
+fn describe(children: &[BodyChild]) -> String {
+    children
+        .iter()
+        .map(|c| {
+            if c.is_anchor() {
+                format!("<{} class=wolf-src>", c.tag)
+            } else {
+                format!("<{}>", c.tag)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A stand-in for whitespace INSIDE a functional argument. Tokenization below
+/// splits on whitespace, so an argument that contains any (`:not(*:not(.wolf-src)
+/// ~ *)`) would be torn into several tokens. Substituting a character that is
+/// not `char::is_whitespace` keeps the argument one token; it is restored to a
+/// plain space the moment tokenization is done, so every consumer downstream
+/// sees the argument's real internal structure.
+const ARG_SPACE: char = '\u{1}';
+
+/// Splits a selector into `(combinator, compound)` steps, left to right. The
+/// first step's combinator is `'\0'`; a descendant combinator is `' '`.
+///
+/// Combinator characters inside `:not(…)` / `:has(…)` are left alone, and so is
+/// whitespace inside them: it round-trips through [`ARG_SPACE`] so the argument
+/// survives as ONE token WITHOUT losing its structure. A functional argument may
+/// therefore itself be a complex selector — `:not(*:not(.wolf-src) ~ *)` — and
+/// [`complex_matches`] evaluates it. Descendant and `>` combinators inside an
+/// argument are still not modelable against the flat body-child list, but they
+/// are now DETECTED (the whitespace is still there to see) and reported as
+/// unsupported rather than silently misread as a single compound.
+fn selector_steps(entry: &str) -> Vec<(char, String)> {
+    let mut spaced = String::with_capacity(entry.len() * 2);
+    let mut depth = 0usize;
+    for ch in entry.chars() {
+        match ch {
+            '(' => {
+                depth += 1;
+                spaced.push(ch);
+            }
+            ')' => {
+                depth = depth.saturating_sub(1);
+                spaced.push(ch);
+            }
+            _ if ch.is_whitespace() && depth > 0 => spaced.push(ARG_SPACE),
+            '>' | '+' | '~' if depth == 0 => {
+                spaced.push(' ');
+                spaced.push(ch);
+                spaced.push(' ');
+            }
+            _ => spaced.push(ch),
+        }
+    }
+
+    let mut steps: Vec<(char, String)> = Vec::new();
+    let mut pending = '\0';
+    for token in spaced.split_whitespace() {
+        match token {
+            ">" => pending = '>',
+            "+" => pending = '+',
+            "~" => pending = '~',
+            compound => {
+                let combinator = if steps.is_empty() {
+                    '\0'
+                } else if pending == '\0' {
+                    ' '
+                } else {
+                    pending
+                };
+                steps.push((combinator, compound.replace(ARG_SPACE, " ")));
+                pending = '\0';
+            }
+        }
+    }
+    steps
+}
+
+/// Splits a compound selector (`.wolf-src:first-child`) into its simple
+/// selectors (`[".wolf-src", ":first-child"]`), respecting `(…)` nesting.
+fn simple_selectors(compound: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0usize;
+    for ch in compound.chars() {
+        if depth == 0 && matches!(ch, '.' | ':' | '#') && !current.is_empty() {
+            parts.push(std::mem::take(&mut current));
+        }
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        current.push(ch);
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    parts
+}
+
+/// The argument of a functional pseudo-class (`:not(X)` -> `X`).
+///
+/// Paren-BALANCED, so a nested functional argument yields the whole inner
+/// selector: `:not(*:not(.wolf-src) ~ *)` -> `*:not(.wolf-src) ~ *`. (A naive
+/// `strip_suffix(')')` on the inner text stops at the wrong paren and fails
+/// outright whenever the argument does not END in its own `)`.) As before, the
+/// closing paren must be the part's last character; anything trailing it is
+/// syntax this helper does not describe, so it returns `None`.
+fn functional_arg(part: &str) -> Option<&str> {
+    let open = part.find('(')?;
+    let mut depth = 0usize;
+    for (offset, ch) in part[open..].char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    if open + offset + 1 != part.len() {
+                        return None;
+                    }
+                    return Some(part[open + 1..open + offset].trim());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Whether the compound selector matches `children[idx]`.
+///
+/// `None` means "this test's matcher does not understand the syntax" — reported
+/// loudly in the failure message rather than silently treated as a match, so an
+/// unfamiliar-but-correct fix produces an actionable message instead of a false
+/// pass or an inscrutable false failure.
+///
+/// `:not()` takes a COMPLEX selector (Selectors 4), so its argument is handed to
+/// [`complex_matches`], not back to this function: `:not(*:not(.wolf-src) ~ *)`
+/// means "has no non-anchor sibling before it". `:has()` still accepts only a
+/// relative `+`/`~` compound.
+fn compound_matches(compound: &str, children: &[BodyChild], idx: usize) -> Option<bool> {
+    let child = children.get(idx)?;
+    for part in simple_selectors(compound) {
+        let matched = match part.as_str() {
+            "*" => true,
+            _ if part.starts_with('.') => child.classes.iter().any(|c| c == &part[1..]),
+            ":first-child" => idx == 0,
+            ":last-child" => idx + 1 == children.len(),
+            _ if part.starts_with(":not(") => {
+                let inner = functional_arg(&part)?;
+                !complex_matches(inner, children, idx)?
+            }
+            _ if part.starts_with(":has(") => {
+                let inner = functional_arg(&part)?;
+                match inner.chars().next()? {
+                    // `:has(+ X)` — the very next sibling.
+                    '+' => {
+                        let inner = inner[1..].trim();
+                        idx + 1 < children.len() && compound_matches(inner, children, idx + 1)?
+                    }
+                    // `:has(~ X)` — any following sibling.
+                    '~' => {
+                        let inner = inner[1..].trim();
+                        let mut any = false;
+                        for j in idx + 1..children.len() {
+                            any |= compound_matches(inner, children, j)?;
+                        }
+                        any
+                    }
+                    // A descendant / child argument: this matcher models only the
+                    // flat body-child list, so it cannot answer.
+                    _ => return None,
+                }
+            }
+            _ if part.starts_with(':') || part.starts_with('#') => return None,
+            tag => child.tag == tag.to_ascii_lowercase(),
+        };
+        if !matched {
+            return Some(false);
+        }
+    }
+    Some(true)
+}
+
+/// Whether a chain of sibling-combinator steps (rightmost last) matches
+/// `children[idx]`.
+fn sibling_chain_matches(
+    steps: &[(char, String)],
+    children: &[BodyChild],
+    idx: usize,
+) -> Option<bool> {
+    let (combinator, compound) = steps.last()?;
+    if !compound_matches(compound, children, idx)? {
+        return Some(false);
+    }
+    let head = &steps[..steps.len() - 1];
+    if head.is_empty() {
+        return Some(true);
+    }
+    match combinator {
+        '+' => {
+            if idx == 0 {
+                return Some(false);
+            }
+            sibling_chain_matches(head, children, idx - 1)
+        }
+        '~' => {
+            let mut any = false;
+            for j in 0..idx {
+                any |= sibling_chain_matches(head, children, j)?;
+            }
+            Some(any)
+        }
+        _ => Some(false),
+    }
+}
+
+/// Whether a COMPLEX selector — one or more compounds joined by combinators —
+/// matches `children[idx]`, evaluated against the flat body-child list.
+///
+/// This is what makes a general first-block selector modelable. CSS has no
+/// preceding-sibling combinator and `:has()` only looks forward, so "the first
+/// block that is not a scroll-sync anchor" can only be spelled as a negation
+/// over the elements BEFORE it:
+///
+/// ```css
+/// body.wolf-markdown > *:not(.wolf-src):not(*:not(.wolf-src) ~ *)
+/// ```
+///
+/// The inner `*:not(.wolf-src) ~ *` is a complex selector — a compound, a `~`,
+/// and another compound — which [`compound_matches`] cannot represent. Routing
+/// it here lets the negation resolve to "no non-anchor sibling precedes me",
+/// which holds for the opening block whatever the LENGTH of the leading anchor
+/// run (`.wolf-src:first-child + *` only ever covers a run of exactly one).
+///
+/// `None` — not `Some(false)` — for anything unmodelable, preserving the design
+/// property that unevaluated syntax is COLLECTED and named in the failure
+/// message rather than quietly counted as a non-match:
+///
+/// - a `>` or descendant combinator, which leaves the body-child list entirely;
+/// - a leading (relative) combinator such as `:not(~ .wolf-src)`, which has no
+///   subject inside this list to anchor against.
+fn complex_matches(selector: &str, children: &[BodyChild], idx: usize) -> Option<bool> {
+    let selector = selector.trim();
+    if selector.starts_with(['+', '~', '>']) {
+        return None;
+    }
+    let steps = selector_steps(selector);
+    if steps.is_empty() {
+        return Some(false);
+    }
+    if steps.len() == 1 {
+        return compound_matches(&steps[0].1, children, idx);
+    }
+    if steps[1..].iter().any(|(c, _)| !matches!(c, '+' | '~')) {
+        return None;
+    }
+    sibling_chain_matches(&steps, children, idx)
+}
+
+/// Whether one comma-separated selector entry matches the body child at `idx`.
+///
+/// `None` means unsupported syntax (see [`compound_matches`]).
+fn selector_matches_body_child(entry: &str, children: &[BodyChild], idx: usize) -> Option<bool> {
+    let steps = selector_steps(entry);
+    if steps.is_empty() {
+        return Some(false);
+    }
+    if steps.len() == 1 {
+        return compound_matches(&steps[0].1, children, idx);
+    }
+    // Everything in base.css that can reach a body child is body-scoped.
+    if steps[0].1 != "body.wolf-markdown" {
+        return Some(false);
+    }
+    // The first hop must land ON a body child (child or descendant combinator);
+    // any further `>`/descendant hop lands on a DESCENDANT of a body child, which
+    // is never the element under test.
+    if !matches!(steps[1].0, '>' | ' ') {
+        return Some(false);
+    }
+    if steps[2..].iter().any(|(c, _)| !matches!(c, '+' | '~')) {
+        return Some(false);
+    }
+    sibling_chain_matches(&steps[1..], children, idx)
+}
+
+/// CSS specificity as `(ids, classes, types)`; `:not()`/`:has()` contribute
+/// their argument's specificity.
+fn specificity(entry: &str) -> (u32, u32, u32) {
+    let mut acc = (0, 0, 0);
+    for (_, compound) in selector_steps(entry) {
+        for part in simple_selectors(&compound) {
+            add_specificity(&part, &mut acc);
+        }
+    }
+    acc
+}
+
+fn add_specificity(part: &str, acc: &mut (u32, u32, u32)) {
+    if part == "*" {
+        return;
+    }
+    if part.starts_with('#') {
+        acc.0 += 1;
+    } else if part.starts_with('.') {
+        acc.1 += 1;
+    } else if part.starts_with(':') {
+        if let Some(inner) = functional_arg(part) {
+            let inner = inner.trim_start_matches(|c| matches!(c, '+' | '~' | '>' | ' '));
+            let (a, b, c) = specificity(inner);
+            acc.0 += a;
+            acc.1 += b;
+            acc.2 += c;
+        } else if part.starts_with("::") {
+            acc.2 += 1;
+        } else {
+            acc.1 += 1;
+        }
+    } else {
+        acc.2 += 1;
+    }
+}
+
+/// Every top-level rule as `(selector list, declarations)`, in document order.
+///
+/// Truncated at the first `@media` for the reason given on [`style_block`]: the
+/// brace scan desynchronizes inside it, and everything these tests care about
+/// (all of `base.css`) precedes it.
+fn stylesheet_rules(css: &str) -> Vec<(String, HashMap<String, String>)> {
+    let css = strip_comments(css);
+    let scan = match css.find("@media") {
+        Some(at) => &css[..at],
+        None => css.as_str(),
+    };
+
+    let mut rules = Vec::new();
+    let mut rest = scan;
+    while let Some(open) = rest.find('{') {
+        let selectors = normalize_ws(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else { break };
+        let body = &after[..close];
+        rest = &after[close + 1..];
+
+        let mut decls = HashMap::new();
+        for decl in body.split(';') {
+            let Some((prop, value)) = decl.split_once(':') else {
+                continue;
+            };
+            let prop = normalize_ws(prop).to_ascii_lowercase();
+            let value = normalize_ws(value);
+            if !prop.is_empty() && !value.is_empty() {
+                decls.insert(prop, value);
+            }
+        }
+        rules.push((selectors, decls));
+    }
+    rules
+}
+
+/// The vertical margin edge a rule declares, whether written as a longhand or
+/// as the corresponding edge of a `margin` shorthand. (No rule in `base.css`
+/// writes both; if one ever does, the longhand is taken.)
+fn declared_margin_edge(decls: &HashMap<String, String>, top: bool) -> Option<String> {
+    let longhand = if top { "margin-top" } else { "margin-bottom" };
+    if let Some(value) = decls.get(longhand) {
+        return Some(value.clone());
+    }
+    let (t, b) = shorthand_block_edges(decls.get("margin")?)?;
+    Some(if top { t } else { b })
+}
+
+/// The declaration that WINS `margin-top` (or `margin-bottom`) on
+/// `children[idx]`: highest specificity, last rule breaking ties — which is the
+/// whole cascade at equal origin/importance, since no `!important` exists in
+/// this stylesheet.
+///
+/// Returns the winner as `(selector list, value)` plus any selector entries the
+/// matcher could not evaluate, so a failure can say so out loud.
+fn winning_margin(
+    css: &str,
+    children: &[BodyChild],
+    idx: usize,
+    top: bool,
+) -> (Option<(String, String)>, Vec<String>) {
+    let mut unsupported = Vec::new();
+    let mut winner: Option<((u32, u32, u32), usize, String, String)> = None;
+
+    for (order, (selectors, decls)) in stylesheet_rules(css).into_iter().enumerate() {
+        let Some(value) = declared_margin_edge(&decls, top) else {
+            continue;
+        };
+        let mut best: Option<(u32, u32, u32)> = None;
+        for entry in selectors.split(',').map(normalize_ws) {
+            if entry.is_empty() {
+                continue;
+            }
+            match selector_matches_body_child(&entry, children, idx) {
+                Some(true) => {
+                    let spec = specificity(&entry);
+                    if best.is_none_or(|b| spec > b) {
+                        best = Some(spec);
+                    }
+                }
+                Some(false) => {}
+                None => unsupported.push(entry),
+            }
+        }
+        let Some(spec) = best else { continue };
+        let candidate = (spec, order, selectors, value);
+        if winner
+            .as_ref()
+            .is_none_or(|(s, o, _, _)| (spec, order) > (*s, *o))
+        {
+            winner = Some(candidate);
+        }
+    }
+
+    (
+        winner.map(|(_, _, selectors, value)| (selectors, value)),
+        unsupported,
+    )
+}
+
+/// A rendering note for the failure messages below: which anchors displace the
+/// edge, spelled out from the actual child list.
+fn anchor_note(children: &[BodyChild], idx: usize, leading: bool) -> String {
+    let displacing = if leading {
+        children[..idx].iter().filter(|c| c.is_anchor()).count()
+    } else {
+        children[idx + 1..].iter().filter(|c| c.is_anchor()).count()
+    };
+    let edge = if leading { "before" } else { "after" };
+    format!(
+        "{displacing} `wolf-src` scroll-sync anchor(s) sit {edge} it in the \
+         rendered body [{}]",
+        describe(children)
+    )
+}
+
+#[test]
+fn first_child_margin_reset_reaches_the_opening_heading() {
+    // A document that OPENS with a heading — the exact case the opening-block
+    // rule, `> *:not(.wolf-src):not(*:not(.wolf-src) ~ *) { margin-top: 0 }`,
+    // exists for.
+    let html = render_html("# Title\n\nBody text.\n", PreviewTheme::Default);
+    let children = body_children(&html);
+    assert!(
+        !children.is_empty(),
+        "the rendered body must have element children: {html}"
+    );
+
+    let idx = children
+        .iter()
+        .position(|c| !c.is_anchor())
+        .unwrap_or_else(|| panic!("the body must contain a content block: {html}"));
+    assert_eq!(
+        children[idx].tag,
+        "h1",
+        "fixture sanity: the first content block must be the <h1>, found \
+         [{}]",
+        describe(&children)
+    );
+
+    let css = style_block(&html).to_string();
+    let (winner, unsupported) = winning_margin(&css, &children, idx, true);
+
+    let (selector, value) = winner.unwrap_or_else(|| {
+        panic!(
+            "NO rule sets a `margin-top` on the document's opening <h1>, so it \
+             cannot even be inspected — {}. Unevaluated selectors: {unsupported:?}",
+            anchor_note(&children, idx, true)
+        )
+    });
+    assert_eq!(
+        px(&value),
+        Some(0),
+        "the opening <h1>'s winning `margin-top` is `{value}` (from `{selector}`), \
+         but it MUST resolve to 0.\n\n\
+         Why: the body has NO padding — it is deliberately flush to the pane's \
+         edges — so an unreset 48px `margin-top` on the opening block resolves \
+         one of two ways. Either it collapses out through the body's top edge \
+         (the body has no border-top, no padding-top, no clearance and \
+         establishes no BFC, so parent-child collapsing applies) and displaces \
+         the WHOLE document 48px down; or, if the leading anchor's anonymous \
+         block box blocks the collapse-through, the 48px sits inside the body \
+         between that box and the heading. Which one it is depends on the \
+         anonymous container's inherited strut and is engine-dependent — and it \
+         does not matter, because BOTH put the opening heading 48px below the \
+         top edge and defeat flush-to-edge. (In the collapse-out case there is \
+         no visible COLOR gap: neither base.css nor the theme sets a background \
+         on `html`, so the body's background propagates to the canvas and paints \
+         the escaped margin. The symptom is purely positional.) That is \
+         what `body.wolf-markdown > *:not(.wolf-src):not(*:not(.wolf-src) ~ *) \
+         {{ margin-top: 0 }}` is for — but {}. That selector reads \"not an \
+         anchor, and no non-anchor sibling precedes it\", so it deliberately \
+         SKIPS a leading anchor run of any length and lands on the first REAL \
+         block. If this fails, the rule has either been narrowed back to \
+         something structural — `:first-child` matches the first element child \
+         whatever it is, so it lands on an anchor span that has no margin to \
+         zero — or it has lost the cascade to a later/more specific \
+         `margin-top`. Note 48px is still a multiple of {BASELINE}, so the grid \
+         sweep passes and only this test can see the bug.\n\n\
+         The fix belongs in the SELECTOR — it must reach the first non-anchor \
+         block — and must NOT touch the `.wolf-src` rule itself, whose \
+         `font-size: 0` / `line-height: 0` is load-bearing for scroll-sync.\n\n\
+         Unevaluated selectors (extend this test's matcher if the fix is \
+         spelled with syntax it does not model): {unsupported:?}",
+        anchor_note(&children, idx, true)
+    );
+}
+
+/// The shortest leading anchor run this fixture must produce to be testing
+/// anything: a run of ONE is already covered by the test above, and would still
+/// be covered by a narrow `.wolf-src:first-child + *` selector — the shape
+/// `base.css` deliberately does NOT use.
+const MIN_LEADING_ANCHORS: usize = 2;
+
+#[test]
+fn first_child_margin_reset_survives_a_multi_anchor_leading_run() {
+    // The same outcome as the test above, but with a leading anchor run LONGER
+    // THAN ONE. Leading blank lines advance the first block's source line past
+    // 0, so the renderer flushes a marker per skipped line before the opening
+    // <h1>. (A heading past 100 columns is the other trigger.) Nothing about
+    // this is exotic — a document that opens with a blank line is ordinary — so
+    // the reset must hold for a run of ANY length, not just one.
+    let html = render_html("\n\n# Title\n\nBody.\n", PreviewTheme::Default);
+    let children = body_children(&html);
+
+    let idx = children
+        .iter()
+        .position(|c| !c.is_anchor())
+        .unwrap_or_else(|| panic!("the body must contain a content block: {html}"));
+    assert_eq!(
+        children[idx].tag,
+        "h1",
+        "fixture sanity: the first content block must be the <h1>, found [{}]",
+        describe(&children)
+    );
+    assert!(
+        idx >= MIN_LEADING_ANCHORS,
+        "fixture sanity: this test only means something if MORE THAN ONE anchor \
+         precedes the opening block, and this source produced {idx}: [{}].\n\n\
+         If marker emission changed so leading blank lines no longer stack \
+         anchors, pick another source that does stack them (a heading longer \
+         than 100 columns) rather than weakening this assertion — the point is \
+         to cover leading runs of arbitrary length.",
+        describe(&children)
+    );
+
+    let css = style_block(&html).to_string();
+    let (winner, unsupported) = winning_margin(&css, &children, idx, true);
+
+    let (selector, value) = winner.unwrap_or_else(|| {
+        panic!(
+            "NO rule sets a `margin-top` on the document's opening <h1> — {}. \
+             Unevaluated selectors: {unsupported:?}",
+            anchor_note(&children, idx, true)
+        )
+    });
+    assert_eq!(
+        px(&value),
+        Some(0),
+        "the opening <h1>'s winning `margin-top` is `{value}` (from `{selector}`), \
+         but it MUST resolve to 0 — {}.\n\n\
+         This is the SAME 48px displacement as \
+         `first_child_margin_reset_reaches_the_opening_heading`, re-exposed by a \
+         LONGER leading anchor run. A NARROW selector of the form\n\n    \
+         body.wolf-markdown > .wolf-src:first-child + *\n\n\
+         reaches the block after exactly ONE anchor and stops there, which is \
+         why `base.css` does not use it. The general form it uses instead has to \
+         negate over everything before the block, because CSS has no \
+         preceding-sibling combinator and `:has()` only looks forward:\n\n    \
+         body.wolf-markdown > *:not(.wolf-src):not(*:not(.wolf-src) ~ *)\n\n\
+         — \"not an anchor, and no non-anchor sibling precedes it\". Any shape \
+         with that meaning passes; so would no longer emitting leading anchors. \
+         Do NOT touch the `.wolf-src` rule.\n\n\
+         Unevaluated selectors: {unsupported:?}",
+        anchor_note(&children, idx, true)
+    );
+}
+
+#[test]
+fn last_child_margin_reset_reaches_the_closing_block() {
+    // A TRAILING NEWLINE is the common case, and it is what puts a trailing
+    // `wolf-src` anchor after the final block: the last hard line's marker has
+    // nowhere left to attach, so `flush_before(usize::MAX)` emits it after the
+    // closing tag.
+    let html = render_html("# Title\n\nLast paragraph.\n", PreviewTheme::Default);
+    let children = body_children(&html);
+    assert!(
+        !children.is_empty(),
+        "the rendered body must have element children: {html}"
+    );
+
+    let idx = children
+        .iter()
+        .rposition(|c| !c.is_anchor())
+        .unwrap_or_else(|| panic!("the body must contain a content block: {html}"));
+    assert_eq!(
+        children[idx].tag,
+        "p",
+        "fixture sanity: the last content block must be the <p>, found [{}]",
+        describe(&children)
+    );
+
+    let css = style_block(&html).to_string();
+    let (winner, unsupported) = winning_margin(&css, &children, idx, false);
+
+    let (selector, value) = winner.unwrap_or_else(|| {
+        panic!(
+            "NO rule sets a `margin-bottom` on the document's final block — {}. \
+             Unevaluated selectors: {unsupported:?}",
+            anchor_note(&children, idx, false)
+        )
+    });
+    assert_eq!(
+        px(&value),
+        Some(0),
+        "the final block's winning `margin-bottom` is `{value}` (from \
+         `{selector}`), but it MUST resolve to 0 — {}.\n\n\
+         This reset exists so the document does not end with a stray baseline \
+         of margin below the last line of content, at the pane's bottom edge. \
+         The rule that CARRIES \
+         that invariant for the common case — a source ending in a newline, as \
+         this fixture does — is the general form:\n\n    \
+         body.wolf-markdown > *:not(.wolf-src):not(:has(~ *:not(.wolf-src)))\n\n\
+         — \"not an anchor, and no non-anchor sibling follows it\". It has to \
+         negate over everything after the block because the bare structural \
+         spelling is INERT here: `:last-child` matches the last ELEMENT child, \
+         which is the zero-size scroll-sync anchor that \
+         `flush_before(usize::MAX)` emits after the closing tag, and that \
+         anchor has no margin to zero — so the real last block keeps its \
+         margin.\n\n\
+         `base.css` DOES also ship the naive `body.wolf-markdown > *:last-child` \
+         ahead of the general rule, but only as a partial FALLBACK: it is \
+         correct just for sources that do not end in a newline, where no \
+         trailing anchor exists. It is not the rule under test here.\n\n\
+         Any selector shape meaning \"last non-anchor child\" passes. Do NOT \
+         change the `.wolf-src` rule (its `font-size: 0` / `line-height: 0` is \
+         load-bearing) and do NOT change marker emission.\n\n\
+         Unevaluated selectors (extend this test's matcher if the fix is \
+         spelled with syntax it does not model): {unsupported:?}",
+        anchor_note(&children, idx, false)
+    );
+}
+
+#[test]
+fn scroll_sync_anchors_stay_zero_sized() {
+    // The guard that makes the two tests above safe to fix. The cheapest-looking
+    // way to stop the anchors from displacing `:first-child` is to change the
+    // `.wolf-src` rule — and it does not even work (`:first-child` is structural,
+    // so `display: none` would not help), while `font-size: 0` / `line-height: 0`
+    // are load-bearing: the body sets `line-height` as a LENGTH, so without the
+    // explicit zero every marker would inherit a hard 24px line box and inject a
+    // visible blank line before every block in the document.
+    let css = rendered_stylesheet();
+    let decls = rule_decls(&css, ".wolf-src");
+
+    assert_eq!(
+        decls.get("font-size").and_then(|v| px(v)),
+        Some(0),
+        "`.wolf-src` must keep `font-size: 0`: {decls:?}"
+    );
+    assert_eq!(
+        decls.get("line-height").and_then(|v| px(v)),
+        Some(0),
+        "`.wolf-src` must keep `line-height: 0`. The body declares its \
+         line-height as a LENGTH ({BASELINE}px), which inherits as a COMPUTED \
+         length — so a marker span without its own explicit 0 would get a full \
+         {BASELINE}px line box and inject a visible blank line before every \
+         block: {decls:?}"
+    );
+    assert_eq!(
+        decls.get("height").and_then(|v| px(v)),
+        Some(0),
+        "`.wolf-src` must keep `height: 0`: {decls:?}"
     );
 }

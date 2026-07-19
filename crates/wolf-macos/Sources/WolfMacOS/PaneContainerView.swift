@@ -816,6 +816,14 @@ final class PaneContainerView: NSView {
   /// the `firstc` + the cmdline text up to the popup's byte column; otherwise it
   /// falls back to the padding (a window-grid-anchored popup is placed above the
   /// command line at the left edge in v1).
+  ///
+  /// The BARE `EditorInset.padding` is correct here and must NOT acquire a
+  /// `PaneGeometry.paintOffsetX` term by analogy with `paintStatusbar`: the popup is
+  /// positioned in the container view's own `bounds` against the CMDLINE — a
+  /// bottom-spanning overlay across the whole view, not inside any pane — so there
+  /// is no pane rect, grid rect or centering offset in scope. It already agrees with
+  /// `CmdlineView`, which uses the same bare padding; adding an offset would BREAK
+  /// that agreement rather than fix one.
   private func pumAnchorX(pum: FfiPum, cmdline: FfiCmdline) -> CGFloat {
     let padding = CGFloat(EditorInset.padding)
     guard pum.anchor_grid() == -1 else { return padding }
@@ -838,6 +846,33 @@ final class PaneContainerView: NSView {
   /// recorded in `previewNamesByGrid` so `paintStatusbar` shows `Preview: <name>`
   /// and `drawScrollbars` suppresses the synthetic scrollbar. Web views for
   /// windows that are no longer previews (or closed) are removed.
+  ///
+  /// `web.frame = gRect` uses the UNCENTERED `gridRect(ofPane:)` — no
+  /// `PaneGeometry.paintOffsetX` — and this is what `paintStatusbar`'s `.preview`
+  /// span mirrors: the preview statusbar's left edge is `gridRect(ofPane:).minX`
+  /// BECAUSE that is the webview's frame origin (and the preview CSS is flush).
+  /// The two must change together.
+  ///
+  /// ATOMICITY, LOAD-BEARING: this one function both rebuilds `previewNamesByGrid`
+  /// (cleared and repopulated below) and sets the webview frames, in the SAME pass,
+  /// and it runs BEFORE `needsDisplay = true` at the wake site — AppKit's `draw(_:)`
+  /// runs later in the run loop, never synchronously inside the wake. So every
+  /// painted frame sees a map and a webview SET written together: a pane can never
+  /// be drawn with `.preview` alignment while it has no webview. Do NOT move the map
+  /// rebuild out of this function, do NOT reorder the call after
+  /// `needsDisplay = true`, and do NOT convert the `removeAll`-then-rebuild pattern
+  /// to an incremental update.
+  ///
+  /// The guarantee covers the map and the webview set, NOT frame freshness. Repaints
+  /// that do not run through a wake — `setFrameSize` and `applyMetrics`, which both
+  /// set `needsDisplay = true` without calling this function — recompute the
+  /// statusbar span from LIVE geometry on every `draw(_:)` while `web.frame` still
+  /// holds the previous `gridRect`. So the statusbar is never stale; only the
+  /// webview frame lags. `applyMetrics` is the sharper case: a font-size change
+  /// moves both `cellWidth` (hence `cap` and `paintOffsetX`) and `statusbarHeight`
+  /// (hence the grid rect's y/h) immediately while the webview stays put. Both
+  /// converge on the next wake via `syncGridSizes` → `handle.resize`. This lag is
+  /// pre-existing and orthogonal to the alignment fix above.
   private func syncPreviewWebViews() {
     previewNamesByGrid.removeAll(keepingCapacity: true)
     previewDisplayPathsByGrid.removeAll(keepingCapacity: true)
@@ -1357,9 +1392,27 @@ final class PaneContainerView: NSView {
   /// The background matches the macOS titlebar: the window's own
   /// `backgroundColor` (kept in sync with the `WolfTitlebar` theme by
   /// `MainWindow.applyTitlebarBackground`), falling back to the themed titlebar
-  /// bg / editor fallback when there is no window. Text is left-aligned with the
-  /// grid's text left edge (respecting `PaneGeometry.paintOffsetX`) and truncated
-  /// with a tail ellipsis. An unnamed buffer shows `[No Name]` with no path line.
+  /// bg / editor fallback when there is no window.
+  ///
+  /// The text span comes from `WolfKeyMap.StatusbarTextSpan`, which aligns the text
+  /// with the pane's CONTENT — and the two kinds of content start at different x
+  /// origins:
+  ///
+  /// - EDITOR panes: the grid is painted at `gRect.minX + PaneGeometry.paintOffsetX`
+  ///   (the 90-column centering inset), so the text is indented by the same offset
+  ///   and its right edge stays at `gRect.maxX`. This is bit-identical to the
+  ///   pre-existing behavior.
+  /// - PREVIEW panes: `syncPreviewWebViews` frames the `WKWebView` to the UNCENTERED
+  ///   `gridRect(ofPane:)` and the preview CSS is flush, so the text spans the whole
+  ///   `gRect` and BOTH its edges land on the webview frame. `paintOffsetX` is
+  ///   deliberately ignored here. Both consumers derive from the SAME
+  ///   `gridRect(ofPane:)` call and must change together: if the preview webview is
+  ///   ever centered, this must revert to the editor semantics.
+  ///
+  /// The kind comes from `previewNamesByGrid` (looked up ONCE, and reused for the
+  /// filename/path override below) — the same predicate `drawScrollbars` uses.
+  /// Text is truncated with a tail ellipsis; an unnamed buffer shows `[No Name]`
+  /// with no path line.
   private func paintStatusbar(
     into strip: CGRect, grid: UInt64, paneRect: CGRect, active: Bool, ctx: CGContext
   ) {
@@ -1377,13 +1430,23 @@ final class PaneContainerView: NSView {
     ctx.setFillColor(bgColor)
     ctx.fill(strip)
 
-    // Text left- and right-aligns with the grid's text edges: base it on the
-    // INSET grid rect (not the full pane rect), so the statusbar text sits inside
-    // the per-pane padding, flush with the grid text.
+    // ONE preview lookup for the whole function: it decides both the text span's
+    // pane kind (below) and the filename/path source (further down), so "is this a
+    // preview" has a single source of truth per paint.
+    let previewName = previewNamesByGrid[grid]
+
+    // The text span is based on the INSET grid rect (not the full pane rect), so
+    // the statusbar text sits inside the per-pane padding, flush with the pane's
+    // CONTENT — which differs by kind: an editor's grid is painted at
+    // `paintOffsetX`, a preview's webview is framed to the uncentered `gRect`.
+    // `StatusbarTextSpan` owns that arithmetic.
     let gRect = gridRect(ofPane: paneRect)
     let geo = geometry(for: gRect)
-    let textLeft = gRect.minX + CGFloat(geo.paintOffsetX)
-    let textWidth = max(0, gRect.maxX - textLeft)
+    let span = StatusbarTextSpan(
+      gridLeft: Double(gRect.minX), gridWidth: Double(gRect.width),
+      paintOffsetX: geo.paintOffsetX, kind: previewName != nil ? .preview : .editor)
+    let textLeft = CGFloat(span.left)
+    let textWidth = CGFloat(span.width)
 
     let layout = statusbarLayout
     // A preview pane's scratch buffer is SKIPPED by the path-based trackers, so
@@ -1392,7 +1455,7 @@ final class PaneContainerView: NSView {
     // display path on the secondary line.
     let filename: String
     let displayPath: String
-    if let name = previewNamesByGrid[grid] {
+    if let name = previewName {
       filename = "Preview: \(name)"
       // Show the source's cwd/home-relative path on the secondary line,
       // mirroring editor panes (empty → no path line via the guard below).

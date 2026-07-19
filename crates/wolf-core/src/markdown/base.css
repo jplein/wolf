@@ -2,15 +2,183 @@
  *
  * This file is include_str!'d into the rendered HTML document (BEFORE the
  * selected theme's CSS) by crate::markdown. It is NOT a Markdown doc and is not
- * prettier-formatted. It owns two things:
+ * prettier-formatted. It owns three things:
  *
  *  1. The invisible position-marker rule (.wolf-src): a zero-size inline anchor
  *     the deferred scroll-sync JS will getElementById by its `wl-{line}-{col}`
  *     id. It must take NO layout space and never affect the rendered body, so it
  *     is an inline element clamped to zero width/height with hidden overflow.
+ *     Its `font-size: 0` and `line-height: 0` are load-bearing: because the body
+ *     now sets line-height as a LENGTH (see 3 below), a marker that lost its own
+ *     `line-height: 0` would inherit a hard 24px and inject visible blank lines
+ *     throughout the document. Do not touch this rule.
  *
- *  2. Baseline structural layout (margins, code/table/blockquote framing) that a
- *     theme layers colors on top of.
+ *  2. Structural layout (margins, code/table/blockquote framing) that a theme
+ *     layers colors on top of.
+ *
+ *  3. A 24px BASELINE GRID governing every vertical dimension in the file.
+ *
+ * ---------------------------------------------------------------------------
+ * THE BASELINE GRID
+ * ---------------------------------------------------------------------------
+ *
+ * Unit: 24px (16px body text x 1.5), declared once as the documented token
+ * `--wolf-baseline: 24px` on body.wolf-markdown. Written B below.
+ *
+ * INVARIANT
+ *
+ *   Every element's vertical margin is 0 or a whole multiple of 24px, AND every
+ *   element's border-box height (content + padding + border) is a whole
+ *   multiple of 24px.
+ *
+ * This invariant is closed under margin collapsing: collapsing takes max(a, b),
+ * and the max of two multiples of 24 is a multiple of 24. That is why border
+ * compensation always folds the border into PADDING or an explicit HEIGHT --
+ * never into a margin.
+ *
+ * line-height IS A LENGTH, NOT A RATIO
+ *
+ * body.wolf-markdown sets `line-height: 24px`, deliberately not a unitless
+ * `1.5`. A unitless number re-multiplies against each DESCENDANT's own
+ * font-size, so inline <code> at 0.875em, <small>, and superscripts would each
+ * produce a different line box and fall off the grid. A length inherits as the
+ * COMPUTED 24px regardless of descendant font-size. The cost is that any
+ * element wanting different leading must say so explicitly: only h1/h2 (48px)
+ * and pre (24px, stated anyway) do.
+ *
+ * THE TYPE SCALE
+ *
+ *   element  font-size  line-height     margin-top   margin-bottom
+ *   body/p   16px       24px  (1B)      p: 0         p: 24px (1B)
+ *   h1       32px       48px  (2B)      48px (2B)    24px (1B)
+ *   h2       24px       48px  (2B)      48px (2B)    24px (1B)
+ *   h3       20px       24px  (1B)      48px (2B)    0
+ *   h4       18px       24px  (1B)      24px (1B)    0
+ *   h5       16px       24px  (1B)      24px (1B)    0
+ *   h6       14px       24px  (1B)      24px (1B)    0
+ *
+ * h1/h2 preserve today's rendered sizes exactly (2em / 1.5em of 16px), so this
+ * is not also a visual resize of the two most-seen headings. h3-h6 previously
+ * fell through to UA defaults (18.7 / 16 / 13.3 / 10.7px, where h5 equalled
+ * body text and h6 was illegibly small); the 20/18/16/14 ramp is smooth and
+ * bottoms out legibly, with h6 distinguished by weight 600 rather than by being
+ * tiny. h2 takes 48px leading because the only other grid-legal value at a 24px
+ * font is 24px (ratio 1.0), where wrapped lines nearly touch.
+ *
+ * Every heading has strictly more space above than below (48>24, 48>0, 24>0).
+ * h3-h6 with margin-bottom 0 hug the content they introduce. Collapsing does
+ * the section spacing for free: p{margin-bottom:24px} against
+ * h2{margin-top:48px} collapses to max(24,48) = 48 = 2B.
+ *
+ * BORDER COMPENSATION
+ *
+ * hr -- an explicit 24px border-box height absorbs the rule structurally, and
+ * the rule is drawn as border-top (colored by the theme via border-top-color,
+ * NOT background-color: the box is 24px tall, so any background would paint a
+ * solid bar instead of a hairline). Total = 24 (margin-top) + 24 (box) + 0
+ * (margin-bottom) = 48px = 2B. Margins alone could not fix the old
+ * 1px-height hr: an hr before an h2 collapses to 48 and re-exposes the 1px.
+ *
+ * table th/td -- with border-collapse:collapse adjacent rows SHARE one border,
+ * so an N-row table has N+1 horizontal lines. Row pitch:
+ *
+ *   12 (padding-top) + 24 (line-height) + 11 (padding-bottom) + 1 (shared
+ *   border) = 48px = 2B
+ *
+ * 47 is odd, so the padding cannot be split evenly; the 12/11 asymmetry is
+ * imperceptible. The whole table is 47N + (N+1) = 48N + 1; the trailing 1px is
+ * the table's own bottom outer border, which has no next row to share with, so
+ * table{margin-bottom:23px} brings the total to 48N + 24 = exactly 2N+1
+ * baselines.
+ *
+ * No compensation is needed for blockquote (it has no border on any edge and
+ * its vertical padding is 0, so its border-box height is just the sum of its
+ * on-grid children), pre (no border), or inline code (vertical padding on an
+ * inline box paints background but does not grow the line box).
+ *
+ * EDGE RULES (and why their selectors are not just :first-child/:last-child)
+ *
+ * The first block must have margin-top 0 and the last block margin-bottom 0.
+ * The body has no padding, so an unreset 48px margin-top on the opening block
+ * goes one of two ways. Either it collapses out through the body's top edge --
+ * parent-child collapsing is unblocked with no border-top, no padding-top, no
+ * clearance and no BFC -- displacing the whole document 48px; note this is a
+ * POSITIONAL symptom only, not a visible color gap, because neither this file
+ * nor any theme sets a background on `html`, so per CSS background propagation
+ * the body's background paints the entire canvas including the escaped margin.
+ * Or, if a leading .wolf-src anchor's anonymous block box blocks the
+ * collapse-through, the 48px instead sits INSIDE the body between that
+ * anonymous box and the heading. Which way it resolves depends on whether that
+ * anonymous box is self-collapsing (a function of the anonymous container's
+ * inherited 24px strut, not the span's own line-height: 0) -- engine-dependent
+ * territory, and it does not matter: both outcomes put the opening heading 48px
+ * down and defeat the flush-to-edge body. A mirrored argument covers the last
+ * block. 48 is still a multiple of 24, so the GRID SWEEP CANNOT SEE THIS BUG --
+ * only the DOM-level edge tests can. The obvious spelling --
+ * `body.wolf-markdown > *:first-child` / `:last-child` -- is INERT here: the
+ * scroll-sync .wolf-src anchors are real elements in the body, flushed before
+ * the first block's opening tag and (for any source ending in a newline) after
+ * the last block's closing tag. Those structural pseudo-classes therefore land
+ * on a zero-size anchor that has no margin to zero, and the real block keeps
+ * its margin. So the rules must SKIP the anchors:
+ *
+ *   first: `> *:not(.wolf-src):not(*:not(.wolf-src) ~ *)`
+ *          -- not an anchor, and no non-anchor sibling precedes it
+ *   last:  `> *:not(.wolf-src):not(:has(~ *:not(.wolf-src)))`
+ *          -- not an anchor, and no non-anchor sibling follows it
+ *
+ * The naive `> *:last-child` ALSO ships, ahead of the general last-block rule.
+ * It is not an alternative that was chosen over the general form: it is a
+ * harmless partial fallback that happens to be correct for the one case where
+ * the source does not end in a newline (no trailing anchor, so :last-child is
+ * the real block). The general rule below it covers every case, including that
+ * one. Both are present; neither is redundant enough to be worth removing.
+ *
+ * Both non-naive forms are UNBOUNDED in the length of the anchor run they skip: the
+ * first-block rule quantifies over "any earlier non-anchor sibling" via a
+ * sibling combinator inside :not(), the last-block rule over "any later
+ * non-anchor sibling" via :has(). Neither caps the run at one. Each lives in
+ * its OWN rule because both are Selectors 4 (complex :not() argument, :has()):
+ * an engine missing either must drop just that rule, not invalidate a shared
+ * selector list.
+ *
+ * Do not "simplify" these back to the bare structural form, and do not try to
+ * fix it from the .wolf-src side instead: :first-child is structural, so no
+ * display/size change on the anchor would help, and its font-size/line-height 0
+ * are load-bearing (see 1 above).
+ *
+ * DOCUMENTED RESIDUALS
+ *
+ *  - A table immediately followed by any block whose margin-top exceeds 23px
+ *    collapses the table's 23px against that larger margin, re-exposing the 1px.
+ *    That is every heading (h1-h3 at 48px, h4-h6 at 24px) and hr (24px). The
+ *    error is constant, not accumulating.
+ *  - Images and display MathML are ACCEPTED drift: their intrinsic heights are
+ *    not grid-quantized and there is no CSS-only way to snap them. No JS
+ *    re-snapping is used anywhere in this document.
+ *
+ * HORIZONTAL DIMENSIONS ARE NOT GRID-CONSTRAINED
+ *
+ * The grid is vertical only. The 32px list indent, the 16px cell padding and
+ * the 24px blockquote inset are chosen for looks, not for the grid. Do not
+ * "fix" them to multiples of 24. The body itself is flush to the pane edges by
+ * design (padding: 0); any inset belongs to the preview pane chrome.
+ *
+ * LITERAL PX, NOT calc(var(--wolf-baseline) * n)
+ *
+ * `--wolf-baseline` is declared as the documented token, but every other value
+ * in this file is a literal integer px. Reasons: the grid audit test asserts
+ * that values are whole multiples of 24, which it can do against `48px` but not
+ * against a calc() expression (there it could only string-match syntax, proving
+ * nothing about the number); the compensated values 23/12/11 are not clean
+ * multiples anyway and would become calc(... - 1px), hiding the compensation;
+ * and calc() buys no configurability today, since there is a single PreviewTheme
+ * and no user config surface. THIS HEADER is the single source of truth for the
+ * arithmetic -- do not add per-declaration comments restating it.
+ *
+ * Everything is px rather than rem/em on purpose: rem resolves against a root
+ * font-size this document never sets, so a WebKit minimum-font-size preference
+ * or OS text scaling could silently detune the grid.
  */
 
 /* Invisible per-line / per-100-column source markers. Zero-size, no layout
@@ -38,13 +206,47 @@ html {
 }
 
 body.wolf-markdown {
+  --wolf-baseline: 24px;
   margin: 0;
-  padding: 2rem 2.5rem;
+  /* Flush to the pane edges on purpose: any inset belongs to the preview pane
+   * chrome, not to the document. */
+  padding: 0;
   font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica,
     Arial, sans-serif;
   font-size: 16px;
-  line-height: 1.6;
+  line-height: 24px;
   word-wrap: break-word;
+}
+
+/* The document's FIRST real block. `:first-child` alone is not enough: the
+ * scroll-sync markers are emitted before the first block's opening tag, so the
+ * body's first element child is usually a .wolf-src span, which has no margin to
+ * zero -- leaving the opening heading's 48px margin-top in play against a body
+ * that has no padding to absorb it. Reads as "not an anchor, and has no
+ * non-anchor sibling before it",
+ * which is unbounded in the leading anchor run's length. See EDGE RULES.
+ *
+ * Kept in its OWN rule: the complex `:not()` argument is Selectors 4, so an
+ * engine without it must drop only this rule rather than invalidate a whole
+ * selector list. */
+body.wolf-markdown > *:not(.wolf-src):not(*:not(.wolf-src) ~ *) {
+  margin-top: 0;
+}
+
+/* PARTIAL FALLBACK for the last real block. This only does the job when the
+ * source does NOT end in a newline; otherwise `:last-child` lands on the
+ * trailing marker span that flush_before(usize::MAX) emits, which has no margin
+ * to zero. The general rule below handles both cases and is what actually
+ * carries the invariant; this one is kept because it is cheap, Selectors 3, and
+ * correct whenever it matches. See EDGE RULES. */
+body.wolf-markdown > *:last-child {
+  margin-bottom: 0;
+}
+
+/* Kept in its OWN rule: an engine without :has() must drop only this rule, not
+ * invalidate the whole selector list above. */
+body.wolf-markdown > *:not(.wolf-src):not(:has(~ *:not(.wolf-src))) {
+  margin-bottom: 0;
 }
 
 body.wolf-markdown h1,
@@ -53,28 +255,54 @@ body.wolf-markdown h3,
 body.wolf-markdown h4,
 body.wolf-markdown h5,
 body.wolf-markdown h6 {
-  margin-top: 1.5em;
-  margin-bottom: 0.5em;
   font-weight: 600;
-  line-height: 1.25;
-  scroll-margin-top: 2rem;
+  scroll-margin-top: 48px;
 }
 
 body.wolf-markdown h1 {
-  font-size: 2em;
-  padding-bottom: 0.3em;
-  border-bottom: 1px solid;
+  font-size: 32px;
+  line-height: 48px;
+  margin-top: 48px;
+  margin-bottom: 24px;
 }
 
 body.wolf-markdown h2 {
-  font-size: 1.5em;
-  padding-bottom: 0.3em;
-  border-bottom: 1px solid;
+  font-size: 24px;
+  line-height: 48px;
+  margin-top: 48px;
+  margin-bottom: 24px;
+}
+
+body.wolf-markdown h3 {
+  font-size: 20px;
+  line-height: 24px;
+  margin-top: 48px;
+  margin-bottom: 0;
+}
+
+body.wolf-markdown h4 {
+  font-size: 18px;
+  line-height: 24px;
+  margin-top: 24px;
+  margin-bottom: 0;
+}
+
+body.wolf-markdown h5 {
+  font-size: 16px;
+  line-height: 24px;
+  margin-top: 24px;
+  margin-bottom: 0;
+}
+
+body.wolf-markdown h6 {
+  font-size: 14px;
+  line-height: 24px;
+  margin-top: 24px;
+  margin-bottom: 0;
 }
 
 body.wolf-markdown p {
-  margin-top: 0;
-  margin-bottom: 1em;
+  margin: 0 0 24px;
 }
 
 body.wolf-markdown a {
@@ -88,54 +316,68 @@ body.wolf-markdown a:hover {
 body.wolf-markdown code {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
-  font-size: 0.9em;
-  padding: 0.2em 0.4em;
+  font-size: 0.875em;
+  padding: 2px 4px;
   border-radius: 6px;
 }
 
 body.wolf-markdown pre {
-  padding: 1em;
+  font-size: 14px;
+  line-height: 24px;
+  padding: 24px;
+  margin: 0 0 24px;
   overflow: auto;
   border-radius: 6px;
-  line-height: 1.45;
 }
 
 body.wolf-markdown pre code {
   padding: 0;
-  font-size: 0.9em;
+  font-size: inherit;
   background: transparent;
 }
 
 body.wolf-markdown blockquote {
-  margin: 0 0 1em;
-  padding: 0 1em;
-  border-left: 0.25em solid;
+  margin: 0 0 24px;
+  padding: 0 24px;
+}
+
+body.wolf-markdown blockquote > :last-child {
+  margin-bottom: 0;
 }
 
 body.wolf-markdown table {
   border-collapse: collapse;
-  margin-bottom: 1em;
+  /* 23px, not 24: a collapsed-border table is 48N + 1 tall, and this pays off
+   * that trailing 1px. See BORDER COMPENSATION in the header. */
+  margin: 0 0 23px;
 }
 
 body.wolf-markdown th,
 body.wolf-markdown td {
-  padding: 0.4em 0.8em;
+  padding: 12px 16px 11px;
   border: 1px solid;
 }
 
 body.wolf-markdown img {
   max-width: 100%;
+  height: auto;
 }
 
 body.wolf-markdown hr {
-  height: 1px;
+  height: 24px;
+  margin: 24px 0 0;
   border: 0;
-  margin: 1.5em 0;
+  border-top: 1px solid;
+  background: transparent;
 }
 
 body.wolf-markdown ul,
 body.wolf-markdown ol {
-  margin-top: 0;
-  margin-bottom: 1em;
-  padding-left: 2em;
+  margin: 0 0 24px;
+  padding-left: 32px;
+}
+
+body.wolf-markdown li > ul,
+body.wolf-markdown li > ol {
+  margin-bottom: 0;
 }

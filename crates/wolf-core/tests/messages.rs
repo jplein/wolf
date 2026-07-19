@@ -182,10 +182,14 @@ fn toast_clears_on_next_input() {
     let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
 
     send_ex(&core, &format!("echomsg \"{MARKER}\""));
-    poll_until(&waiter, "the message to become visible before dismissing", || {
-        let snap = core.read_snapshot();
-        snap.toast.visible && toast_text(&core).contains(MARKER)
-    });
+    poll_until(
+        &waiter,
+        "the message to become visible before dismissing",
+        || {
+            let snap = core.read_snapshot();
+            snap.toast.visible && toast_text(&core).contains(MARKER)
+        },
+    );
 
     // A movement key is a dismissing `Key` input; the input pump clears the toast
     // before applying it (and nothing new repopulates), so `visible` goes false.
@@ -277,7 +281,10 @@ fn confirm_prompt_is_not_dismissed_by_input() {
     );
     {
         let snap = core.read_snapshot();
-        assert!(snap.toast.is_prompt(), "the confirm dialog should be a prompt toast");
+        assert!(
+            snap.toast.is_prompt(),
+            "the confirm dialog should be a prompt toast"
+        );
         assert_eq!(
             snap.toast.kind(),
             CONFIRM_KIND,

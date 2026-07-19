@@ -10,6 +10,12 @@
  *
  * It layers colors onto the structural rules base.css already established, so it
  * intentionally only sets color/background/border-color properties.
+ *
+ * One consequence of base.css's 24px baseline grid: `hr` is painted via
+ * `border-top-color`, NOT `background-color`. base.css gives the rule an
+ * explicit 24px grid height (so the 1px line is absorbed structurally), and this
+ * file is emitted AFTER base.css — a `background-color` here would win the
+ * cascade and fill that 24px box with a solid bar instead of a hairline.
  */
 
 body.wolf-markdown {
@@ -27,11 +33,6 @@ body.wolf-markdown h6 {
   color: #ffffff;
 }
 
-body.wolf-markdown h1,
-body.wolf-markdown h2 {
-  border-bottom-color: #3a3a3a;
-}
-
 body.wolf-markdown a {
   color: #4ea1ff;
 }
@@ -47,7 +48,6 @@ body.wolf-markdown pre {
 
 body.wolf-markdown blockquote {
   color: #a8a8a8;
-  border-left-color: #3a3a3a;
 }
 
 body.wolf-markdown th,
@@ -60,7 +60,7 @@ body.wolf-markdown th {
 }
 
 body.wolf-markdown hr {
-  background-color: #3a3a3a;
+  border-top-color: #3a3a3a;
 }
 
 @media (prefers-color-scheme: light) {
@@ -78,11 +78,6 @@ body.wolf-markdown hr {
     color: #111111;
   }
 
-  body.wolf-markdown h1,
-  body.wolf-markdown h2 {
-    border-bottom-color: #d0d0d0;
-  }
-
   body.wolf-markdown a {
     color: #0969da;
   }
@@ -98,7 +93,6 @@ body.wolf-markdown hr {
 
   body.wolf-markdown blockquote {
     color: #656565;
-    border-left-color: #d0d0d0;
   }
 
   body.wolf-markdown th,
@@ -111,6 +105,6 @@ body.wolf-markdown hr {
   }
 
   body.wolf-markdown hr {
-    background-color: #d0d0d0;
+    border-top-color: #d0d0d0;
   }
 }

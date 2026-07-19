@@ -1,266 +1,235 @@
-# Plan: Make `//crates/wolf-macos:WolfRelease` runnable
+# Plan: Align statusbar left edge with preview content
+
+## Status: COMPLETE (pending visual confirmation)
+
+- `WolfKeyMapTests` passes cold (`--nocache_test_results`): 171 tests, 0 failures, including exactly 13 `StatusbarTextSpanTests`. All `//crates/wolf-macos/...` targets build and pass; `swift_format` clean. Rust side unregressed (`markdown_render`, `wolf_core_lib_test` both pass).
+- Reviewer: **Approved**, editor branch verified algebraically identical. Two notes raised, both closed.
+
+### Corrections to this plan's own text
+
+**§2's claim "during a live resize both are stale together" is WRONG**, and the doc comment written from it overclaimed. The reviewer verified: the statusbar span is recomputed from live geometry on every `draw(_:)`, so it is _never_ stale — only the webview _frame_ lags. `setFrameSize` (~633-637) and `applyMetrics` (~464-471) both repaint without calling `syncPreviewWebViews`. `applyMetrics` is the sharper case: a font-size change moves `cellWidth` (hence `cap` and `paintOffsetX`) _and_ `statusbarHeight` (hence grid rect y/h) at once, shifting the statusbar immediately while the webview stays put; it converges via `syncGridSizes` → `handle.resize` → wake.
+
+The guarantee that DOES hold, and is what the shipped doc comment now says: the pane-kind map and the webview set are written together in one `syncPreviewWebViews` pass, so a pane is never drawn with `.preview` alignment when it has no webview. The frame lag is pre-existing and orthogonal.
+
+### Other deltas from the plan
+
+1. **13 tests, not 12.** Added `testEditorSpanEqualsTheLegacyExpressionAcrossTheCapThreshold` — a sweep asserting the `.editor` span equals the longhand legacy expression at 10 widths × 2 `gridLeft` values, straddling the cap in both directions. Case 2 alone pinned only a single point, and "editor panes stay bit-identical" is the top risk.
+2. **The wide test cases were unrealistic.** They paired `gridWidth = 1400` with a hard-coded `paintOffsetX = 250`, but the real value is 340 — the `expectedPaintOffsetX` helper existed to model that and was only used by two cases. Now derived. Cases 4 and 5 also gained `offset > 0` guards, since the central assertion in case 5 (`editor.left - preview.left == paintOffsetX`) passes vacuously at zero.
+3. **`w` used in both branches**, not the plan's raw `gridWidth` for `.editor`. Reviewer confirmed value-identical for _every_ input, not just negatives.
+4. **Two pre-existing undocumented seams closed.** `Sources/README.md` said "Twenty-four files" — true before this change, but `TreeChildrenMemo.swift` and `TreeRefreshGate.swift` had no bullets at all, so the corrected count of 25 disagreed with a 23-entry list. Both now documented; sweep confirms 25 files ↔ 25 bullets.
+
+### Confirmed as planned
+
+- **Right edge fixed for free** — `.preview` spans the whole grid rect, so `textRight == gRect.maxX == web.frame.maxX`. No extra work.
+- **`pumAnchorX` is NOT the same defect** — view-wide cmdline overlay, no pane/grid rect in scope, already self-consistent with `CmdlineView`. Left alone, with a doc sentence so nobody "fixes" it by analogy.
+- **GNOME front-end** has zero statusbar code (grepped `statusbar|status_bar|statusline`). **Rust core** unchanged — strings only, no geometry crosses the FFI.
+
+### Outstanding — rests on visual review
+
+That the preview statusbar's left edge lands on the rendered content's left edge **on screen** spans `paintStatusbar`, `syncPreviewWebViews`, and `base.css`'s flush padding. No unit test pins it. **Only observable on a pane wider than 90 cells** — in a typical vertical split each pane is under the cap, `paintOffsetX == 0`, and the two kinds coincide, so a reviewer testing in a split will see no difference at all.
+
+### Noted, not acted on
+
+- SourceKit reports "No such module" for `XCTest`/`WolfFFI` in the editor. Confirmed artifacts: the worktree has no `compile_commands.json`, `buildServer.json`, `.bsp/`, or `.xcodeproj`, so SourceKit falls back to standalone parsing. Both files are Bazel-compiled sources (verified by `bazel query`) and both targets build clean.
+- The two new files are **untracked** and need `git add` before commit.
+- `WolfMacOS/`'s 33-bullet README list was not audited against its directory; only `WolfKeyMap/` was swept.
 
 ## Problem statement
 
-`bazel run //crates/wolf-macos:WolfRelease` fails:
+On a Markdown preview pane wider than 90 cells, the statusbar's left edge does not line up with the preview content's left edge — it sits where editor text _would_ be.
 
+`paintStatusbar` (`crates/wolf-macos/Sources/WolfMacOS/PaneContainerView.swift` ~1219) computes the text origin as `gRect.minX + geo.paintOffsetX` — correct for editor panes, whose grid is painted at that same offset (`paintGrid` ~1198-1201). But `syncPreviewWebViews` (~836-838) frames the preview `WKWebView` to the **uncentered** `gridRect`, and the preview CSS is flush (`body.wolf-markdown { margin: 0; padding: 0 }`, a recent intentional change).
+
+`paintOffsetX` is the centering inset applied when a pane exceeds `maxGridCols = 90` cells. So on a wide preview pane the statusbar text is indented relative to its own content by an amount that grows with pane width.
+
+## Fix direction (fixed, do not revisit)
+
+Align the **statusbar** to the **preview content**: for preview panes, do not add `paintOffsetX`, so the text lands at `gRect.minX`, matching the webview frame. **Do NOT center the webview instead** — that caps preview line length and is a different change than requested. **Editor panes must be bit-identical.**
+
+---
+
+# Architect's plan
+
+## 1. The extracted seam
+
+**New file: `crates/wolf-macos/Sources/WolfKeyMap/StatusbarTextSpan.swift`**
+
+```swift
+import Foundation
+
+public enum PaneContentKind {
+  case editor
+  case preview
+}
+
+public struct StatusbarTextSpan {
+  public let left: Double
+  public let width: Double
+
+  public init(gridLeft: Double, gridWidth: Double, paintOffsetX: Double, kind: PaneContentKind)
+}
 ```
-ERROR: Cannot run target //crates/wolf-macos:WolfRelease: Not executable
-```
 
-The target was deliberately made build-only in the previous pass (commit `8ba033c`). The
-user has asked for it to be runnable. That decision is reversed — implement it.
+`Double`-based, Foundation-only (no `CGFloat`/CoreGraphics), matching `EditorInset` / `PaneGeometry` / `StatusbarLayout`. Scalars rather than a `Rect` — the caller holds a `CGRect` and needs `CGFloat` back, so two scalars keep the conversion to two casts each way.
 
-## Background: why it was build-only, and what still holds
+**Placement rejections:**
 
-The original rationale (recorded in `release.bzl`'s module docstring, `build.md`, and
-`crates/wolf-macos/README.md`): `build.md` already warned that
-`bazel run //crates/wolf-macos:Wolf` has less predictable stderr plumbing through the
-rules_apple runner, and the optimized bundle is the binary people run with
-`WOLF_FRAME_STATS=1` while reading stderr. A run target with unreliable stderr defeats that
-purpose.
+- **`StatusbarLayout`** — its init takes _font sizes_; this takes _rect scalars + pane kind_. No shared input. It is documented in three places (file header, `Sources/README.md:23`, `Tests/README.md:53`) as specifically the **vertical** math; widening it invalidates all three descriptions of an otherwise stable seam.
+- **`EditorInset`** — deliberately **pane-local** (its `gridRect` origin is the pane's top-left) and knows nothing about the 90-column cap or centering. Feeding `paintOffsetX` in would make it depend on a concept it correctly does not model. `textLeftInset` (`== padding`) is the _pane-local_ left inset and stays exactly as-is.
+- **`PaneGeometry`** — models the grid, not the statusbar; has no notion of content kind and should not acquire one.
 
-**That concern is still valid but it is not a reason to block `bazel run` — it is a reason
-to keep BOTH paths documented:**
+One-type-per-file with its own `Sources/README.md` bullet is the established convention (`PickerPanelSeam`, `EditorInset`, `StatusbarLayout`).
 
-- `bazel run //crates/wolf-macos:WolfRelease` — the convenient way to launch the app.
-- direct exec of `"$APP/Contents/MacOS/Wolf"` via the `cquery` recipe — the reliable way to
-  take a frame-stats measurement, because it inherits the terminal's stdio and environment.
+### Arithmetic
 
-The docs must NOT present `bazel run` as the way to capture frame stats.
+Let `w = max(0, gridWidth)` and `offset = min(max(0, paintOffsetX), w)` — the clamp handles a negative `paintOffsetX` (impossible today, defensive) and an offset larger than the grid, so `width` never goes negative and `left` never passes the grid's right edge.
 
-## Scope
+- `.editor`: `left = gridLeft + offset`, `width = max(0, gridWidth - offset)`
+- `.preview`: `left = gridLeft`, `width = w`
 
-### 1. Make the rule executable — `crates/wolf-macos/release.bzl`
+The editor branch reproduces today's expression **exactly** (`gRect.maxX - (gRect.minX + offset) == gridWidth - offset`), so editor panes are bit-identical. Only the clamp is new, and it is a no-op for every real input.
 
-Current state: `_opt_bundle_impl` returns a single
-`DefaultInfo(files = ..., runfiles = dep[DefaultInfo].default_runfiles)`, no `executable`.
-`ctx.attr.bundle` is a LIST even for this 1:1 transition on Bazel 8.7.0 (observed; the
-existing code uses `[0]` with a comment recording the error text).
+### Call-site rewrite (paintStatusbar, replacing 1236-1242, merging with 1249-1260)
 
-The architect must determine and specify:
+1. Hoist a **single** preview lookup above the geometry block: `let previewName = previewNamesByGrid[grid]`.
+2. Fetch `gRect` and `geo` as today, then construct `StatusbarTextSpan(gridLeft: Double(gRect.minX), gridWidth: Double(gRect.width), paintOffsetX: geo.paintOffsetX, kind: previewName != nil ? .preview : .editor)`; derive `textLeft = CGFloat(span.left)`, `textWidth = CGFloat(span.width)`.
+3. Change the filename branch at 1251 from `if let name = previewNamesByGrid[grid]` to `if let name = previewName` — one lookup, one source of truth for "is this a preview".
 
-- **How to forward an executable that another rule produced.** Bazel requires
-  `DefaultInfo.executable` to be an artifact this rule generates, so the dep's runner
-  cannot simply be handed through. The standard mechanism is
-  `ctx.actions.symlink(output = ctx.actions.declare_file(ctx.label.name), target_file =
-  <dep executable>, is_executable = True)`. Confirm this is right for a
-  transitioned dep and specify it exactly.
-- **Runfiles — the part most likely to break.** rules_apple's `macos_application` runner is
-  a generated script that locates the bundle through its runfiles. A symlinked copy must
-  still resolve them. Specify exactly what to merge (the dep's `default_runfiles`, plus
-  whatever the symlink itself needs) and in what order. **This is the failure mode to guard
-  against: a runner that launches but cannot find its `.app`, or launches a stale/other
-  bundle.**
-- Whether `executable = True` on the `rule()` is required in addition to setting
-  `DefaultInfo.executable`, and whether the declared file name may collide with anything.
-- Whether the transitioned dep's executable is the OPT one. **This is load-bearing: a
-  runner symlinked from the wrong configuration would silently launch the `-Onone` app,
-  which is precisely the class of bug this whole target exists to prevent.** Specify how to
-  verify it empirically, not by reasoning.
+`primaryRect` / `secondaryRect` (1288-1296) unchanged; they already consume `textLeft`/`textWidth`.
 
-### 2. Documentation corrections — every place the old rationale is recorded
+## 2. Pane kind: reuse `previewNamesByGrid`
 
-All of these currently state the target is deliberately non-executable and must be corrected
-or they become lies (CLAUDE.md: docs are source of truth):
+**Recommendation: reuse the existing lookup.** Do not thread a new parameter or store a kind on `PaneBinding`.
 
-- `crates/wolf-macos/release.bzl` — module docstring. It also contains a "do not
-  re-litigate" note about non-executability; rewrite it to record the new decision AND
-  preserve the stderr caveat as a reason to prefer direct exec for measurement.
-- `build.md` — the release-build section and the frame-time instrumentation section. Add
-  `bazel run` as the launch path; keep the `cquery` + direct-exec recipe as the measurement
-  path, and say plainly why they differ.
-- `crates/wolf-macos/README.md` — the `release.bzl` / `opt_bundle` paragraph.
-- `crates/wolf-macos/BUILD.bazel` — the `WolfRelease` target comment, if it mentions
-  non-executability.
+- `paintStatusbar` already reads that map two lines below the geometry it must affect, and `drawScrollbars` (~1390) already uses exactly this predicate for exactly this purpose. A third mechanism for the same fact is a divergence risk.
+- It is the only live record of preview-ness in scope at paint time. Deriving kind from `PaneBinding` would require re-querying `handle.previews()` during `draw(_:)` — an FFI call in the paint path, which nothing else does.
 
-## Constraints
+### Ordering hazard — assessed, NOT a problem
 
-- Do NOT change any application code (Swift/Rust). Build rule + docs only.
-- Do NOT alter `:Wolf`, `bundle_layout_test`, or `xcodeproj`.
-- Keep `tags = ["manual"]` — the rebuild-the-whole-graph-twice cost is unchanged and the
-  reason for `manual` is unrelated to executability.
-- Do not touch `MODULE.bazel` or either lockfile.
-- **Verify by actually running `bazel run //crates/wolf-macos:WolfRelease`**, not by graph
-  inspection. It must launch the OPTIMIZED app.
+`syncPreviewWebViews()` runs at `onRenderWake` (~728, and ~715 on the refocus-rebind path) and is the **same function** that both rebuilds `previewNamesByGrid` (~811, 827) and sets `web.frame = gRect` (~838). `needsDisplay = true` follows at ~730; AppKit's `draw(_:)` runs later in the run loop, never synchronously inside `onRenderWake`. So on any frame after a wake, the map and the webview frames were written **atomically in the same pass**.
 
-## Success criteria
+The other `needsDisplay = true` sites (471, 513, 637, 644, 936, 1463, 1474, 1484, 1611) repaint without rebuilding the map — but they also do not move the webview (`setFrameSize` ~633 calls only `syncGridSizes` + `refreshOverlays`). During a live resize both are stale together and converge on the wake `syncGridSizes` provokes. Pre-existing lag; this change neither creates nor worsens it.
 
-`bazel run //crates/wolf-macos:WolfRelease` launches the optimized Wolf. The launched binary
-is demonstrably the opt one (~8.26 MB, vs ~25.4 MB for fastbuild). `bazel build` on the
-target still works, `:Wolf` is unaffected, and the docs describe both the run path and the
-measurement path without implying `bazel run` is suitable for frame-stats capture.
+**Failure mode if it were wrong** (recorded so a future reader recognizes it): a single-frame flash where a just-opened preview's statusbar is still indented while the HTML is flush. It does not occur. **The coder must not move the `previewNamesByGrid` rebuild out of `syncPreviewWebViews`, and must not reorder `syncPreviewWebViews()` after `needsDisplay = true`** — that atomicity is load-bearing and belongs in the doc comment.
 
-## Architect's plan (APPROVED — implement exactly this)
+## 3. Geometry, independently derived
 
-### RESEARCH: what rules_apple 4.5.3 actually does (this corrects the original rationale)
+`pad = EditorInset.padding = 20`, `cap = 90 * cellWidth`. `gridRect(ofPane:)` → `gRect.minX = P.minX + 20`, `gRect.width = max(0, P.width - 40)`. `geometry(for: gRect)` passes `gRect` as `paneRect`, so `paintOffsetX = max(0, (gRect.width - min(gRect.width, cap)) / 2)`.
 
-`macos_application` DOES return a real executable: `apple/internal/macos_rules.bzl` declares
-`outputs.executable(...)`, calls `run_support.register_macos_executable(...)`, and returns
-`DefaultInfo(executable = executable, files = ..., runfiles = ctx.runfiles(files = [archive], ...))`.
+| case | gRect.width | paintOffsetX | editor textLeft | preview textLeft | textWidth |
+| --- | --- | --- | --- | --- | --- |
+| narrow (< 90 cells) | `< cap` | 0 | `P.minX + 20` | `P.minX + 20` | `gRect.width` |
+| wide (> 90 cells) | `> cap` | `(gRect.width - cap)/2` | `P.minX + 20 + offset` | `P.minX + 20` | editor `gRect.width - offset`; preview `gRect.width` |
 
-The runner is `apple/internal/templates/macos.template.sh` with exactly two substitutions
-(`run_support.bzl`): `%app_name%` -> `Wolf`, `%app_path%` -> `archive.short_path` =
-`crates/wolf-macos/Wolf.zip`. What it does:
+**Preview matches the webview exactly:** `web.frame = gridRect(ofPane:)` so `web.frame.minX == gRect.minX == P.minX + 20`, and the CSS is flush. Preview `textLeft == web.frame.minX`. Confirmed.
 
-1. if `%app_path%` is a dir use it; else `mktemp -d "${TMPDIR:-/tmp}/bazel_temp.XXXXXX"`,
-   `trap 'rm -rf "${TEMP_DIR}"' EXIT`, `unzip -qq '%app_path%' -d "${TEMP_DIR}"`
-2. read `CFBundleExecutable` from `Info.plist` via `/usr/libexec/PlistBuddy`
-3. invoke `"${APP_DIR}/Contents/MacOS/${BUNDLE_EXECUTABLE}" "$@"` — **NOT `open`**, and
-   deliberately not `exec` (so the cleanup trap still fires)
+**Right edge — fixed for free.** For previews `textWidth = gRect.width` gives `textRight == gRect.maxX == web.frame.maxX`. `.preview` simply spans the whole grid rect and **both** edges land on the webview frame. No extra work needed.
 
-**Three consequences the plan hinges on:**
+For **editors**, `textRight` remains `gRect.maxX` — i.e. `paintOffsetX` past the centered grid's right column. This is a **pre-existing** asymmetry, invisible in practice (it only widens the tail-truncation budget of a long path on a wide pane). **Out of scope — do not "fix" it**; changing it would alter editor truncation behavior, contradicting "editor panes completely unaffected". The `.editor` branch deliberately preserves it.
 
-- **`%app_path%` is a bare CWD-relative runfiles path with NO `rlocation`/`RUNFILES_DIR`
-  logic.** It resolves only because `bazel run` sets CWD to the runfiles root of the target
-  being run. So **OUR** rule's runfiles must contain the zip at short_path
-  `crates/wolf-macos/Wolf.zip`. The runfiles merge is load-bearing.
-- **stdio and environment ARE inherited** — direct child, inherited fds.
-  `WOLF_FRAME_STATS=1 bazel run //crates/wolf-macos:WolfRelease` works and stderr reaches
-  the terminal. **The original "unpredictable stderr plumbing" rationale for making this
-  build-only was weaker than assumed — it was inherited from build.md's pre-existing
-  warning, not verified against the template.**
-- **The app that runs is a fresh unzip into `$TMPDIR/bazel_temp.XXXXXX`, deleted on exit** —
-  NOT the signed `.app` the `cquery` recipe resolves. This is the real, concrete reason
-  direct exec remains the measurement path.
+## 4. The strip itself does not change
 
-### `release.bzl` — the only build-logic change
+`statusbarRect(ofPane:)` (~384) spans the full pane width and is unchanged; the background fill (`ctx.fill(strip)` ~1234) must keep covering the whole pane width for both kinds. Only the **text** is inset. No edit to `statusbarRect`, no edit to the fill.
 
-`_opt_bundle_impl`: keep `bundle = ctx.attr.bundle[0]` and its comment verbatim (the
-list-indexing observation is still true and load-bearing). Then:
+## 5. Test plan
 
-1. **Use `ctx.outputs.executable` as the symlink output, NOT
-   `ctx.actions.declare_file(ctx.label.name)`.** With `executable = True` Bazel PREDECLARES
-   an output named `ctx.label.name` and exposes it as `ctx.outputs.executable`; a
-   `declare_file("WolfRelease")` on top of that is a duplicate declaration and fails analysis.
-   `ctx.actions.symlink(output = ctx.outputs.executable,
-   target_file = bundle[DefaultInfo].files_to_run.executable, is_executable = True)`.
-   `files_to_run.executable` is the canonical way to read another target's executable
-   artifact; a transition changes only WHICH configured target `bundle[0]` is, not the
-   provider surface. Add a `progress_message`.
-2. Runfiles = union of `bundle[DefaultInfo].default_runfiles` (**the essential one — carries
-   the OPT `Wolf.zip` at exactly the short_path baked into the runner as `%app_path%`**),
-   `bundle[DefaultInfo].data_runfiles` (merged defensively; identical today since
-   `macos_application` sets only `runfiles=`, but survives an upstream change), and
-   `ctx.runfiles(files = [ctx.outputs.executable])` (belt-and-braces — Bazel adds it
-   automatically for an executable rule; comment saying so). Order is irrelevant
-   (`Runfiles.merge` is a union keyed by runfiles path) and there is no collision.
-3. Return `DefaultInfo(files = bundle[DefaultInfo].files, runfiles = <merged>,
-   executable = ctx.outputs.executable)`.
+**Approach confirmed.** Swift unit tests over a pure `WolfKeyMap` seam is right here; CLAUDE.md's "start a real Neovim process" preference does not bite because no Neovim state participates — pane kind arrives as an enum, the rest is rect arithmetic. Mirrors `StatusbarLayoutTests` / `PaneGeometryTests` / `EditorInsetTests`. The extraction exists _precisely so_ there is something testable.
 
-**Do NOT try to forward `bundle[DefaultInfo].files_to_run`** — `DefaultInfo` accepts no such
-parameter; Bazel synthesizes `FilesToRunProvider` from `executable`.
+**File:** `crates/wolf-macos/Tests/WolfKeyMapTests/StatusbarTextSpanTests.swift` **Target:** the Bazel `swift_test` named `WolfKeyMapTests` in `crates/wolf-macos/BUILD.bazel` (~193). `srcs` lists are **explicit, not globbed**, for both the library (~45) and the test (~195) — both need an entry. There is no SwiftPM `Package.swift`; Bazel only.
 
-`opt_bundle = rule(...)`: add **`executable = True`** — REQUIRED, not optional. Setting
-`DefaultInfo.executable` from a non-executable rule is an analysis error, and `bazel run`
-dispatches on the rule's executable-ness. Leave `attrs`, the transition, and the absence of
-`_allowlist_function_transition` untouched. Update the rule's `doc` to say it is runnable.
+Follow sibling style: file header stating the contract, `eps: Double = 1e-9`, helper constructors.
 
-**Module docstring:** keep the transition/forwarding/undeclared-sibling/`bazel-bin`
-paragraphs; amend "WHAT IT FORWARDS" to include the executable symlink + the dep's runfiles.
-**Replace the "DELIBERATELY NOT EXECUTABLE (do not re-litigate)" paragraph entirely** with the
-reversed decision AND why the old objection was weaker than assumed (the runner does not
-`open`; env/stdio are inherited). Record what remains true: temp-unzip copy at a per-launch
-changing path, re-unzip每 launch, output interleaved with Bazel's client output. Record that
-`%app_path%` is CWD-relative so the runfiles merge must not be dropped, and that
-`--nobuild_runfile_links` / `--enable_runfiles=false` breaks it.
+Cases:
 
-### Docs
+1. **Editor, narrow** (`paintOffsetX == 0`) — `left == gridLeft`, `width == gridWidth`.
+2. **Editor, wide** (`gridWidth = 1400`, `paintOffsetX = 250`) — `left == gridLeft + 250`, `width == 1150`; assert `left + width == gridLeft + gridWidth` (pins that the editor right edge is preserved, not silently changed).
+3. **Preview, narrow** — identical to case 1. Pins that the fix is a no-op below the cap.
+4. **Preview, wide** — `left == gridLeft` (ignores `paintOffsetX`), `width == gridWidth`; assert `left + width == gridLeft + gridWidth`.
+5. **Kind-difference invariant** — same wide inputs: `editor.left - preview.left == paintOffsetX`; same narrow inputs: both `left` and `width` equal. **This is the assertion that most directly encodes the bug.**
+6. **Non-zero `gridLeft`** — `20` and `512` (a right-hand split), both kinds: `left` is absolute, never pane-local.
+7. **Zero-width pane** — `gridWidth == 0`, `paintOffsetX == 0`, both kinds: `width == 0`, `left == gridLeft`, no negative output.
+8. **Pane narrower than the padding** — `gridWidth == 0` (what `EditorInset` clamps a sub-`2*padding` pane to) with `gridLeft` beyond the pane's right edge: `width == 0`, no negative. Comment that `EditorInset` produces the clamped 0.
+9. **`paintOffsetX` larger than the grid** — `gridWidth = 100`, `paintOffsetX = 400`: editor `width == 0` and `left == gridLeft + 100` (never past the right edge); preview unaffected.
+10. **Negative `paintOffsetX`** (defensive) — clamps to 0; editor equals the narrow case.
+11. **Exact boundary** — `gridWidth == 90 * cellWidth` exactly → `paintOffsetX == 0`, both kinds identical. Pins continuity across the cap threshold.
+12. **Universal invariants helper** (mirroring `assertInvariants` in `StatusbarLayoutTests`) over every case: `width >= 0`, `left >= gridLeft`, `left + width <= gridLeft + max(0, gridWidth)`.
 
-- **`build.md:113`** — replace the "deliberately build-only" sentence: `bazel run` launches
-  the optimized app and is the convenient way to do so; it inherits environment and stderr
-  (the runner invokes the inner binary directly, it does not `open` the bundle). But it runs
-  a TEMPORARY unzipped copy under `$TMPDIR`, recreated per launch, deleted on exit, at a
-  path that differs every run — so for frame-stats capture, and anything caring about the
-  bundle's on-disk identity (TCC prompts, saved state), prefer the direct
-  `"$APP/Contents/MacOS/Wolf"` exec. Note `manual` does not prevent `bazel run` on an
-  explicit label.
-- **`build.md:209`** — keep the `bazel run //crates/wolf-macos:Wolf` stderr caveat framing
-  but DROP the "that is also why WolfRelease is deliberately build-only" clause. New text:
-  `bazel run //crates/wolf-macos:WolfRelease` also launches the app and DOES pass
-  `WOLF_FRAME_STATS` through, but the recommended capture path is preferred because it
-  exercises the exact on-disk signed bundle at a stable path, skips a per-launch unzip of
-  the whole bundle into `$TMPDIR`, and keeps the app's stderr unmixed with Bazel's client output.
-- **`build.md` ~194-198** — "There are two working paths" now promises two but there are
-  genuinely three: direct exec (recommended), `bazel run` (works, caveats), and
-  `WOLF_FRAME_STATS_FILE` for a double-clicked app. Adjust the framing minimally.
-- **`crates/wolf-macos/README.md` ~109** — add
-  `bazel run //crates/wolf-macos:WolfRelease   # launch the optimized .app` to the block.
-- **`crates/wolf-macos/README.md:118`** — rewrite the "non-executable by design" sentence:
-  the rule IS executable, symlinking the transitioned `macos_application` runner into its own
-  output and forwarding the dep's runfiles, which is how that runner locates `Wolf.zip`
-  (CWD-relative runfiles path -> unzip to temp -> invoke `Contents/MacOS/Wolf` directly,
-  inheriting env and stdio). Keep a clause that direct exec remains the measurement path and
-  why. Keep the rest (Apple providers, undeclared sibling, generic rule name).
-- **`BUILD.bazel`** — header comment line ~15-17: append "Runnable with `bazel run`." Target
-  comment: one sentence that `bazel run` launches it and `manual` affects only wildcard
-  expansion, not explicit `run`/`build`. The comment does NOT currently claim
-  non-executability, so no correction needed beyond these additions.
+### What this CANNOT test
 
-### Verification (manual protocol — no automated test is viable; a GUI-launching `sh_test` is not)
+That the statusbar origin and the _live_ `WKWebView` frame coincide on screen is an integration property spanning `paintStatusbar`, `syncPreviewWebViews`, and the CSS's zero left padding. No unit test can pin it. Mitigations, in order of value:
 
-1. `bazel build //crates/wolf-macos:WolfRelease` succeeds, still reports `Wolf.zip`.
-2. **Symlink points into OPT (static):**
-   `bazel aquery --output=text 'mnemonic("ExecutableSymlink", //crates/wolf-macos:WolfRelease)'`
-   — the action's INPUT path must contain `-opt-`; output is `.../WolfRelease`. A
-   `-fastbuild-` input is the bug.
-   **CORRECTED FROM THE ORIGINAL PLAN:** the mnemonic is `ExecutableSymlink`, NOT `Symlink`
-   — Bazel uses the former when `is_executable = True`, and `Symlink` matches ZERO actions.
-   Also expected, not a bug: the action's OWN configuration reads `darwin_arm64-fastbuild`
-   (the top-level target's config); only its INPUT crosses into opt.
-3. **Runfiles carry the OPT zip (static — the wrong-bundle guard):** resolve
-   `.../WolfRelease.runfiles/_main/crates/wolf-macos/Wolf.zip` with `ls -lL`/`readlink`; the
-   resolved path must contain `-opt-`. Confirm exactly ONE `Wolf.zip` in the tree.
-4. **The LAUNCHED binary is optimized (dynamic — load-bearing, do NOT accept reasoning):**
-   `bazel run`, then while up, `ps -axo pid,comm | grep bazel_temp` to get the running path
-   under `$TMPDIR/bazel_temp.*/Wolf.app/Contents/MacOS/Wolf`; `stat -f%z` it. Must be
-   ~**8.26 MB**, NOT ~**25.4 MB**. Corroborate with
-   `WOLF_FRAME_STATS=1 WOLF_FRAME_STATS_INTERVAL=2 bazel run ...`: `ctrl.wake` ~0.5 ms and
-   `prev.render` ~6 ms, not 4.85/25.6. **The byte size is the proof; frame stats corroborate.**
-5. **Env/stdio:** confirm `wolf-frame-stats enabled interval=2.0s` and subsequent reports
-   actually appear on the terminal under `bazel run`. **This determines the final doc
-   wording — if it does NOT appear, adjust the docs rather than suppress the finding.**
-6. **No regression:** `bazel build //crates/wolf-macos:Wolf` and
-   `bazel test //crates/wolf-macos:bundle_layout_test //crates/wolf-macos:WolfKeyMapTests`
-   pass; wildcard still does not sweep in `WolfRelease`.
+- **Pin the shared expression, not the two consumers.** Both derive from the _same_ `gridRect(ofPane:)` call. State this in **both** doc comments: the preview statusbar's left edge is `gridRect(ofPane:).minX` **because** that is the webview's frame origin, and the two must change together.
+- A Rust-side assertion that `base.css` keeps `margin: 0; padding: 0` would pin the CSS half. Check whether `crates/wolf-core` already has such a test; if not, **do not add one** — separate concern, low value.
+- The remainder rests on visual review: open a preview in a window wider than 90 columns, confirm the statusbar filename's left edge sits on the first heading's left edge.
 
-**Failure symptoms to recognize:**
+**Do not attempt an AppKit/XCTest UI test** — no such harness exists here and adding one is disproportionate.
 
-- *Runner launches but cannot find the `.app`* → aborts almost immediately with an `unzip`
-  error naming `crates/wolf-macos/Wolf.zip`, or a PlistBuddy failure on a missing
-  `Info.plist`; no window. Cause: runfiles dropped, or `--nobuild_runfile_links` /
-  `--enable_runfiles=false`.
-- *Runner launches the WRONG bundle* → **the app comes up NORMALLY**, which is exactly why
-  this must be caught by measurement not by eyeballing. Tell: running binary ~25.4 MB and
-  `ctrl.wake` ~4.85 ms. Cause: symlink from a non-transitioned target, or two `Wolf.zip`s
-  colliding in one runfiles tree.
+## 6. `pumAnchorX` — leave it, it is NOT the same defect
 
-### Risks
+`pumAnchorX` (~788) returns `EditorInset.padding + <rendered prefix width>`, no `paintOffsetX`, no pane rect.
 
-- **Wrong-bundle silence** — highest severity: a misconfigured symlink launches a perfectly
-  working `-Onone` app. Mitigated ONLY by the empirical checks above actually being run.
-- **Runfiles-dependent runner** — no `rlocation` fallback; `--nobuild_runfile_links`,
-  `--enable_runfiles=false`, or invoking the symlink from `bazel-out` with a different CWD
-  all break it. One sentence in the docstring.
-- **No second copy staged at build time** — the runfiles tree holds a SYMLINK to `Wolf.zip`,
-  and the zip was already in the forwarded runfiles before this change, so build-time/on-disk
-  footprint is unchanged. The new cost is at RUNTIME: every `bazel run` unzips the whole
-  bundle (bundled Neovim, 16 treesitter parsers, two font families, `Assets.car`) into
-  `$TMPDIR` and deletes it on exit. Noticeably slower launch than direct exec. Document; not
-  a blocker.
-- **Bundle identity churn** — a new temp path each launch means macOS treats it as a
-  different app for TCC prompts, saved window state, signature-identity-sensitive behavior.
-  Another reason measurement stays direct-exec.
-- **`manual` unchanged** — suppresses wildcard expansion only; explicit `run`/`build`
-  unaffected. Executability does not alter caching (one extra, essentially free `Symlink`
-  action).
-- **Downstream** — nothing depends on `:WolfRelease` (`bundle_layout_test` and `xcodeproj`
-  both point at `:Wolf`), so adding `FilesToRunProvider` cannot perturb a consumer.
+1. **Different coordinate space and anchor.** The popup is positioned in the container view's own `bounds` (~769-771) against the **cmdline**, a bottom-spanning overlay across the whole view — not inside any pane. There is no pane rect, grid rect, or `paintOffsetX` in scope; bare `EditorInset.padding` is correct for a view-wide overlay.
+2. **Already self-consistent.** The popup aligns to the cmdline text, and `CmdlineView` uses the same bare padding. Adding a centering offset would _break_ that agreement, not fix one.
 
-## Status
+**Leave it and note it.** Add one sentence to its doc comment recording _why_ bare padding is right there, so the next reader doesn't "fix" it by analogy.
 
-- [x] architect plan
-- [ ] implementation
-- [ ] verify: `bazel run` launches the OPT app
-- [ ] docs
-- [ ] review
+## 7. File-by-file
+
+### Create
+
+1. `Sources/WolfKeyMap/StatusbarTextSpan.swift` — per §1. House-style header: what it is, why it is a headless seam, that `.preview` deliberately ignores `paintOffsetX` because the webview is framed to the uncentered grid rect, and that only `width` clamps.
+2. `Tests/WolfKeyMapTests/StatusbarTextSpanTests.swift` — per §5.
+
+### Modify
+
+3. **`crates/wolf-macos/BUILD.bazel`** — add the source to `wolf_key_map` `srcs` (~45) and the test to `WolfKeyMapTests` `srcs` (~195), both alphabetically after the `StatusbarLayout*` entries. Verify the comment block at ~25-33 globs `Tests/WolfKeyMapTests/*.swift` (no change expected there) and that no other explicit list exists.
+4. **`PaneContainerView.swift`** — the call-site rewrite (§1); `paintStatusbar` doc comment (~1216-1218) currently says text is "left-aligned with the grid's text left edge (respecting `PaneGeometry.paintOffsetX`)" → rewrite to state both kinds; `syncPreviewWebViews` doc comment (~799-809) → add that `web.frame = gRect` (uncentered) is what `.preview` mirrors and that rebuilding the map in the same pass keeps them consistent within a frame; `pumAnchorX` doc comment (~783-787) → the §6 sentence. **No change** to `statusbarRect`, `gridRect(ofPane:)`, `geometry(for:)`, `paintGrid`, `drawScrollbars`.
+5. **`crates/wolf-macos/Sources/README.md`** — new `StatusbarTextSpan.swift` bullet after `StatusbarLayout.swift` (~23) in the dense house style (type, `PaneContentKind`, init signature, both branches' arithmetic, the clamp, why preview ignores `paintOffsetX`); update the `StatusbarLayout.swift` bullet to say **vertical** and cross-reference the horizontal sibling; update the `EditorInset.swift` bullet (~29) to clarify `textLeftInset` is the _pane-local_ left padding and that the statusbar's absolute origin additionally depends on pane kind and the centering offset via `StatusbarTextSpan`; update the `PaneContainerView` bullet (~48) where it describes `paintStatusbar`. **Update the module-count phrase at ~6** ("Twenty-four deliberately AppKit-free files" → twenty-five) — **verify the count against the actual directory first**; if already stale, fix it to the true count rather than incrementing.
+6. **`crates/wolf-macos/Tests/README.md`** — add a `StatusbarTextSpanTests` entry alongside `StatusbarLayoutTests` (~53) and `EditorInsetTests` (~95, 101), matching that file's structure. Update any test-count figure.
+7. **`architecture.md`** — **read ~30-90 first.** Line 85 describes preview as "a SECOND kind of pane content: a web view." If that section enumerates consequences of the two-kinds split, add statusbar horizontal alignment (alongside the noted scrollbar suppression). If it is a one-line mention with no consequence list, **leave it alone — do not pad it.** Line 34 unaffected; no Rust change.
+
+### Confirmed NOT changed
+
+- **`crates/wolf-gnome`** — grepped case-insensitively for `statusbar|status_bar|statusline`: **zero matches**. Confirmed out of scope.
+- **`crates/wolf-core/src/pane_status.rs`** — strings only, no geometry crosses the FFI. Confirmed unchanged.
+- **`crates/wolf-core/src/markdown/base.css`** — the flush padding is what this fix aligns _to_. Unchanged. **Never prettier it.**
+
+**No new dependencies.** `StatusbarTextSpan.swift` imports only `Foundation`; the test imports `XCTest` + `@testable import WolfKeyMap`, like its siblings.
+
+## 8. Implementation order
+
+1. Create `StatusbarTextSpan.swift` (compiles standalone against Foundation).
+2. Add to `wolf_key_map` `srcs`; build the library alone to confirm it compiles before anything consumes it.
+3. Create the test file, add to `WolfKeyMapTests` `srcs`, run the target — the seam is now pinned independently of the view.
+4. Rewrite the `paintStatusbar` call site. Build the app target.
+5. Doc comments in `PaneContainerView.swift`.
+6. READMEs + `architecture.md` if warranted, then `prettier --write` on **only** the Markdown files.
+
+Steps 1-3 cannot break the app; step 4 is the only behavioral change and lands after the seam is proven.
+
+## 9. Lint
+
+No ignore directives expected. Watch: swift-format line length (~100 cols, 2-space indent) — the `StatusbarTextSpan(...)` construction will wrap, follow surrounding style. Buildifier — keep both `srcs` lists sorted. Doc-comment coverage — every `public` member in `WolfKeyMap` carries `///`, so `PaneContentKind`, each case, the struct, `left`, `width`, and `init` all need one. Prettier on Markdown only.
+
+## 10. Risks
+
+- **Editor panes regressing** — lowest probability, highest impact. Mitigated structurally (the `.editor` branch is algebraically identical) and by test case 2 asserting `left + width == gridLeft + gridWidth`. **The coder must not "simplify" the editor branch to also drop `paintOffsetX`.**
+- **Exactly 90 cells.** At `gridWidth == 90*cw`, `inset = max(0, 0/2) = 0` → both kinds identical. `paintOffsetX` is **continuous** across the threshold, so no jump or flicker as a window is dragged across it — the gap widens continuously from zero. Pinned by case 11.
+- **A pane changing kind.** Editor→preview: the map insert and the webview frame happen in the same pass, then a redraw; the first frame showing the webview is the first frame using `.preview`. Preview→closed: the map is fully cleared (`removeAll` ~811) and rebuilt at the top of every sync, and `removePreviewWebView` runs in the same pass (~852-854), so stale `.preview` alignment cannot outlive the webview. **The `removeAll`-then-rebuild pattern is what makes this safe — do not convert it to an incremental update.**
+- **Multi-pane splits.** `gridLeft` is absolute; the seam only adds to it. Case 6 covers a non-zero `gridLeft`. Note: in a vertical split each pane is typically **narrower than 90 cells**, so `paintOffsetX == 0` and the kinds coincide — **the bug and the fix are both only observable on wide panes**; a reviewer testing in a split may see no difference. Say so in the manual-smoke note.
+- **Cmdline / pum.** Untouched; `pumAnchorX` shares no state with `paintStatusbar`. Risk is a reviewer applying the new branch by analogy — pre-empted by the §6 doc comment.
+- **Scrollbars.** `drawScrollbars` keeps its own lookup and its own `gridRect` call; the hoisted `previewName` local is scoped to `paintStatusbar`. No change.
+- **Preview webview sync.** Untouched in code. The only new coupling is documentary: `web.frame = gRect` is now load-bearing for the statusbar too. If someone later centers the preview webview (the rejected alternative), they must flip the statusbar back to `.editor` semantics — which is exactly what the cross-referencing doc comments exist to catch.
+- **Live-resize lag.** During a live resize, `setFrameSize` repaints without re-framing the webview, so the two can visibly disagree mid-drag until the wake lands. **Pre-existing** and orthogonal; do not fix here. If it becomes distracting once alignment is noticeable, the follow-up is calling `syncPreviewWebViews()` from `setFrameSize` — a separate change with its own performance question.
+
+---
+
+## Workflow log
+
+- [x] Problem statement written
+- [x] Architect plan
+- [x] Tests written (13)
+- [x] Implementation + tests passing (cold run, 171 total)
+- [x] Review (approved; two notes closed)
+- [x] Documentation
+- [ ] Visual confirmation — needs a preview pane wider than 90 cells

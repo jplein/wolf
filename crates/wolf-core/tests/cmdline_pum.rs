@@ -93,7 +93,11 @@ fn poll_until(waiter: &FlushWaiter, desc: &str, mut pred: impl FnMut() -> bool) 
 fn start_core_in(cwd: &Path) -> (WolfCore, FlushWaiter) {
     let (wake, waiter) = wake_channel();
     let core = WolfCore::start(
-        common::config_in(cwd.to_path_buf(), common::DEFAULT_COLS, common::DEFAULT_ROWS),
+        common::config_in(
+            cwd.to_path_buf(),
+            common::DEFAULT_COLS,
+            common::DEFAULT_ROWS,
+        ),
         wake,
     )
     .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
@@ -146,7 +150,10 @@ fn cmdline_completion_popup_lifecycle() {
 
     {
         let snap = core.read_snapshot();
-        assert!(snap.cmdline.active, "cmdline should be active while typing `:e Fi`");
+        assert!(
+            snap.cmdline.active,
+            "cmdline should be active while typing `:e Fi`"
+        );
         assert_eq!(
             snap.cmdline.firstc, EX_FIRSTC,
             "cmdline firstc should be the Ex `:` prefix"
@@ -231,7 +238,10 @@ fn cmdline_completion_popup_lifecycle() {
 
     {
         let snap = core.read_snapshot();
-        assert!(!snap.cmdline.active, "cmdline should be inactive after <Esc>");
+        assert!(
+            !snap.cmdline.active,
+            "cmdline should be inactive after <Esc>"
+        );
         assert!(!snap.pum.visible, "pum should be hidden after <Esc>");
     }
 
