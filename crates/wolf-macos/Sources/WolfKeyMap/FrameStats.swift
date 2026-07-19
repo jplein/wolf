@@ -26,6 +26,11 @@ import Foundation
 /// The raw values are the STORAGE INDICES into `FrameStats`'s per-bucket
 /// accumulator array, so they must stay dense and ascending from zero: this is
 /// what keeps the hot path free of dictionary hashing and string allocation.
+///
+/// `drawPaneEditor` and `drawPanePreview` partition the per-pane paint work
+/// inside a single `draw`, so their counts are per-pane-per-frame and their sum
+/// is bounded above by `draw`'s total, not equal to it (`draw` also covers the
+/// background fill, dividers and scrollbars).
 public enum FrameStatsBucket: Int, CaseIterable {
   /// `WolfWindowController.onRenderWake()` — the whole per-wake controller pass.
   case controllerWake = 0
@@ -39,6 +44,11 @@ public enum FrameStatsBucket: Int, CaseIterable {
   case previewRender = 4
   /// One synchronous `loadHTMLString` call (NOT the async WebKit work it queues).
   case previewLoadHTML = 5
+  /// One `PaneContainerView.paintPane` call for an ORDINARY editor pane.
+  case drawPaneEditor = 6
+  /// One `PaneContainerView.paintPane` call for a PREVIEW pane, i.e. one whose
+  /// grid is a Markdown-preview scratch buffer sitting under a `WKWebView`.
+  case drawPanePreview = 7
 
   /// The short, fixed-width-table-friendly name used only at report time.
   public var label: String {
@@ -49,6 +59,8 @@ public enum FrameStatsBucket: Int, CaseIterable {
     case .previewReload: return "prev.reload"
     case .previewRender: return "prev.render"
     case .previewLoadHTML: return "prev.html"
+    case .drawPaneEditor: return "draw.pane"
+    case .drawPanePreview: return "draw.prev"
     }
   }
 }

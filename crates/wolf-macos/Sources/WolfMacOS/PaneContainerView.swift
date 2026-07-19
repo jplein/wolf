@@ -157,11 +157,23 @@ final class PaneContainerView: NSView {
   private var activePane: PaneId?
 
   // -- Markdown-preview web-view hosting ------------------------------------
-  // A preview pane is a SECOND pane content kind (requirement 2): the blank
-  // scratch grid paints underneath (occluded, cheap) while a real `WKWebView`
-  // subview shows core-rendered HTML over the pane's grid rect. These maps are
-  // keyed by the preview WINDOW handle (`FfiPreview.win()`), the stable identity
-  // that survives grid-id churn.
+  // A preview pane is a SECOND pane content kind (requirement 2): a real
+  // `WKWebView` subview shows core-rendered HTML over the pane's grid rect,
+  // backed by a blank nvim scratch grid. That scratch grid is NOT painted while
+  // the web view fully, opaquely covers it — see `PaneOcclusion` and the
+  // `paintsGrid` parameter of `paintPane`.
+  //
+  // This used to read "the blank scratch grid paints underneath (occluded,
+  // cheap)". It was never cheap, and that wrong assumption is what hid the cost
+  // for so long: nvim's blank cells hold a literal `" "`, not `""`, so every
+  // "blank" cell still ran a full `CTLineCreateWithAttributedString` +
+  // `CTLineDraw` (plus a per-cell Rust `String` clone across the FFI). Measured
+  // with `WOLF_FRAME_STATS=1`, the blank preview grid (`draw.prev`) cost 22 ms
+  // per frame — essentially identical to the text-full editor grid
+  // (`draw.pane`, also 22 ms) — together nearly all of the ~46 ms `draw`.
+  //
+  // These maps are keyed by the preview WINDOW handle (`FfiPreview.win()`), the
+  // stable identity that survives grid-id churn.
   /// The hosted `WKWebView`s, one per preview window.
   private var previewWebViews: [Int64: WKWebView] = [:]
   /// The `(sourceBufnr, sourceTick)` each preview window's web view was last loaded
@@ -192,6 +204,19 @@ final class PaneContainerView: NSView {
   /// when `previewFile` repoints a pane at a cross-file `other.md#anchor` link, then
   /// scrolled-to (and cleared) once that file's HTML has loaded.
   private var pendingPreviewFragments: [Int64: String] = [:]
+  /// The preview windows whose web view has EVER finished loading a document —
+  /// the `hasLoadedContent` input to `PaneOcclusion.isFullyOccluded`. A web view
+  /// that exists but has loaded nothing is blank/white, so its pane's grid must
+  /// still paint underneath.
+  ///
+  /// Set on the first `didFinish` for a window and deliberately NOT cleared on a
+  /// subsequent reload: WebKit keeps displaying the PREVIOUS document while the
+  /// next one loads, so the pane stays opaquely covered throughout. Clearing it
+  /// per reload would resume painting the scratch grid under an
+  /// already-opaque web view on every keystroke — pure paint/unpaint flicker.
+  /// It IS cleared in `removePreviewWebView`, which is what makes a closed
+  /// preview restore painting immediately.
+  private var previewLoadedWins: Set<Int64> = []
   /// The source basename of each preview pane, keyed by the pane's bound GRID,
   /// rebuilt every wake by `syncPreviewWebViews`. Consulted by `paintStatusbar`
   /// (to show `Preview: <name>`) and `drawScrollbars` (to suppress the synthetic
@@ -970,6 +995,34 @@ final class PaneContainerView: NSView {
     previewFocusHandlers[win] = nil
     previewSourcePaths[win] = nil
     pendingPreviewFragments[win] = nil
+    // Dropping this is what restores grid painting IMMEDIATELY when a preview
+    // closes: with no web view and no loaded-content flag, `previewOccluder`
+    // returns nil and `isFullyOccluded` is `false` on the very next frame.
+    previewLoadedWins.remove(win)
+  }
+
+  /// Samples the live preview web view for `win` into the headless
+  /// `OccluderGeometry` the pure `PaneOcclusion` seam consumes, or `nil` when no
+  /// web view exists for that window yet (the documented "web view does not exist
+  /// yet" path — that pane's grid must paint).
+  private func previewOccluder(forWin win: Int64) -> OccluderGeometry? {
+    guard let web = previewWebViews[win] else { return nil }
+    return OccluderGeometry(
+      frame: rect(from: web.frame),
+      // `isHiddenOrHasHiddenAncestor`, NOT the bare `isHidden`: a visible web
+      // view inside a hidden ancestor covers nothing.
+      isHidden: web.isHiddenOrHasHiddenAncestor,
+      isAttached: web.superview === self && web.window != nil,
+      alpha: Double(web.alphaValue),
+      hasLoadedContent: previewLoadedWins.contains(win))
+  }
+
+  /// Converts a `CGRect` into the pure seam's `WolfKeyMap.Rect` (the inverse of
+  /// the mapping `paneRects()` does inline).
+  private func rect(from cgRect: CGRect) -> Rect {
+    Rect(
+      x: Double(cgRect.origin.x), y: Double(cgRect.origin.y),
+      w: Double(cgRect.width), h: Double(cgRect.height))
   }
 
   // -- Preview link handling (called by PreviewNavigationDelegate) ----------
@@ -1014,9 +1067,15 @@ final class PaneContainerView: NSView {
     previewReloadCoalescer.request()
   }
 
-  /// A preview web view finished loading: if a fragment was queued for `win` (a
-  /// cross-file `other.md#anchor` navigation), scroll to it now and clear it.
+  /// A preview web view finished loading: mark the window as having loaded
+  /// content (so its pane's grid may be skipped as occluded), then, if a fragment
+  /// was queued for `win` (a cross-file `other.md#anchor` navigation), scroll to
+  /// it now and clear it.
   func previewDidFinishLoad(win: Int64) {
+    // FIRST — the fragment guard below returns early in the common (no pending
+    // fragment) case, which is every ordinary reload.
+    previewLoadedWins.insert(win)
+
     guard let fragment = pendingPreviewFragments.removeValue(forKey: win) else { return }
     previewWebViews[win]?.evaluateJavaScript(
       PreviewLinkSeam.scrollIntoViewJS(fragmentId: fragment), completionHandler: nil)
@@ -1172,9 +1231,27 @@ final class PaneContainerView: NSView {
     ctx.fill(bounds)
 
     let rects = paneRects()
-    for (id, rect) in rects {
-      guard let grid = panes[id]?.boundGrid else { continue }
-      paintPane(grid: grid, paneRect: rect, active: id == activePane, ctx: ctx)
+    for (id, paneRect) in rects {
+      guard let binding = panes[id], let grid = binding.boundGrid else { continue }
+      // Skip the grid paint (and its FFI frame read) when an opaque, loaded
+      // preview web view fully covers this pane's grid rect — those pixels are
+      // never visible. The containment test has tolerance 0.0 against the SAME
+      // `gridRect(ofPane:)` expression `syncPreviewWebViews` assigns to the web
+      // view, so any out-of-sync geometry (live resize, split, pre-close) fails
+      // containment and the grid paints. The statusbar strip is OUTSIDE
+      // `gridRect` and always paints.
+      let occluded = PaneOcclusion.isFullyOccluded(
+        gridRect: rect(from: gridRect(ofPane: paneRect)),
+        by: previewOccluder(forWin: binding.win))
+      // Explicit begin/end rather than `defer` so the sample covers exactly the
+      // `paintPane` call and nothing else in the loop body (mirrors the
+      // `previewRender` call site).
+      let paneStart = FrameMetrics.begin()
+      paintPane(
+        grid: grid, paneRect: paneRect, active: id == activePane, paintsGrid: !occluded,
+        ctx: ctx)
+      FrameMetrics.end(
+        previewNamesByGrid[grid] != nil ? .drawPanePreview : .drawPaneEditor, paneStart)
     }
     drawDividers(rects, ctx: ctx)
     // The command line / completion popup / toast are dedicated overlay
@@ -1187,13 +1264,31 @@ final class PaneContainerView: NSView {
   /// it. The pane body is painted the SAME whether active or not — the only
   /// active/inactive treatment is in the statusbar text (bold + full-strength
   /// filename on the active pane, regular-weight + dimmed on an inactive one).
-  private func paintPane(grid: UInt64, paneRect: CGRect, active: Bool, ctx: CGContext) {
+  ///
+  /// `paintsGrid == false` means the grid rect is fully occluded by an opaque
+  /// preview web view: the statusbar still paints (it sits OUTSIDE the grid rect
+  /// and is never covered), but the grid is skipped entirely.
+  private func paintPane(
+    grid: UInt64, paneRect: CGRect, active: Bool, paintsGrid: Bool, ctx: CGContext
+  ) {
     ctx.saveGState()
     ctx.clip(to: paneRect)
 
     paintStatusbar(
       into: statusbarRect(ofPane: paneRect), grid: grid, paneRect: paneRect,
       active: active, ctx: ctx)
+
+    // Return BEFORE `read_frame_for_grid`: the FFI frame read (a whole cell
+    // vector across the bridge, one Rust String clone per cell) is a material
+    // part of the saving, so it must NOT be hoisted above this branch.
+    //
+    // This also skips `drawCursor`, which is only reachable from `paintGrid`.
+    // That is CORRECT and not an oversight: an occluded pane is a preview pane,
+    // and its cursor is already invisible under the opaque web view.
+    guard paintsGrid else {
+      ctx.restoreGState()
+      return
+    }
 
     let frame = handle.read_frame_for_grid(grid)
     paintGrid(frame, into: gridRect(ofPane: paneRect), ctx: ctx)

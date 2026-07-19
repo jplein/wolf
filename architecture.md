@@ -98,6 +98,8 @@ We rejected a uniform C-ABI on both platforms: it would cost Linux its type safe
 
 The render-state model is toolkit-agnostic; each front-end paints it natively: Cairo/Pango in GTK on Linux, CoreText/CoreGraphics in AppKit on macOS. This gives the best native text rendering on each OS. The cell-painting loop is written twice, but it is small once the render-state model exists.
 
+A corollary: **what to paint is a front-end decision, not part of the core↔front-end contract.** Core always publishes the full render state for every grid; a front-end may decline to paint any of it. macOS exercises this — a pane whose text grid is fully covered by an opaque Markdown-preview `WKWebView` paints no grid and does not even read that grid's frame across the FFI (`WolfKeyMap.PaneOcclusion`; see [`crates/wolf-macos/README.md`](crates/wolf-macos/README.md)). Core is unaware, the render state is unchanged, and GTK does nothing analogous. Such skips must be provably invisible: the macOS one uses zero-tolerance containment against the very rectangle the web view was framed from, so any out-of-sync geometry falls back to painting.
+
 We rejected a shared portable canvas (skia/wgpu): it would force surface handles (GL/Metal) across the FFI and sacrifice native text quality. The render-state model is kept behind a clean interface, so a shared renderer could be introduced later without touching core's logic if the duplication ever justifies it.
 
 ### 3. Neovim is embedded as a child process over stdio

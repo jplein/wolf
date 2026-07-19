@@ -22,6 +22,8 @@
 //        case previewReload  = 3   // label "prev.reload"
 //        case previewRender  = 4   // label "prev.render"
 //        case previewLoadHTML = 5  // label "prev.html"
+//        case drawPaneEditor  = 6  // label "draw.pane"
+//        case drawPanePreview = 7  // label "draw.prev"
 //        public var label: String { ... }
 //    }
 //
@@ -120,6 +122,8 @@ final class FrameStatsTests: XCTestCase {
       (.previewReload, 3, "prev.reload"),
       (.previewRender, 4, "prev.render"),
       (.previewLoadHTML, 5, "prev.html"),
+      (.drawPaneEditor, 6, "draw.pane"),
+      (.drawPanePreview, 7, "draw.prev"),
     ]
     for (bucket, raw, label) in cases {
       XCTAssertEqual(bucket.rawValue, raw, "\(label): rawValue == \(raw)")

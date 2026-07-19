@@ -21,7 +21,11 @@
 //
 //      bazel build //crates/wolf-macos:Wolf
 //      WOLF_FRAME_STATS=1 \
-//        ./bazel-bin/crates/wolf-macos/Wolf.app/Contents/MacOS/Wolf
+//        ./bazel-bin/crates/wolf-macos/Wolf_archive-root/Wolf.app/Contents/MacOS/Wolf
+//
+//  NOTE the `Wolf_archive-root` component: `macos_application` emits `Wolf.zip`
+//  plus the unzipped bundle beneath it. `bazel-bin/crates/wolf-macos/Wolf.app`
+//  does NOT exist.
 //
 //  Or set `WOLF_FRAME_STATS_FILE=/tmp/wolf-frame-stats.txt` and `tail -f` it.
 //  `WOLF_FRAME_STATS_INTERVAL` sets the report period in seconds (default 5).

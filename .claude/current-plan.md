@@ -1,439 +1,378 @@
-# Plan: Frame-time instrumentation for the wolf-macos render path
+# Plan: Stop painting pane grids occluded by preview web views
 
 ## Problem statement
 
-Typing latency in Wolf is noticeably worse than Neovim in a terminal, especially
-on slower Macs. It also reproduces on a fast Mac when a Markdown preview pane is
-open. Before changing any render behavior we need numbers, so we can tell which
-costs actually dominate and whether later fixes land.
+Wolf's typing latency is far worse than terminal Neovim. Frame-time instrumentation
+(landed in the previous pass, see "Instrumentation" below) shows `PaneContainerView.draw`
+is the dominant main-thread cost in every configuration measured. This pass targets one
+specific, cheap hypothesis about why `draw` gets dramatically worse when a Markdown
+preview is open.
 
-## Investigation findings (already established, do NOT re-derive)
+## Measured data (real captures, this machine — a FAST Mac)
 
-Traced the keystroke-to-pixel path. Confirmed hot spots, in leverage order:
+Large file (`~/Git/jplein/Notepad/commonplace-book.md`), typing near the top.
+Steady-state 5 s windows, from `test-1-no-preview` and `test-2-with-preview` in the repo root.
 
-1. `PaneContainerView.reloadDirtyPreviews()`
-   (`crates/wolf-macos/Sources/WolfMacOS/PaneContainerView.swift:876`) runs on the
-   MAIN THREAD and per dirty preview does `handle.render_preview(bufnr)` — a
-   `runtime.block_on` RPC (`crates/wolf-core/src/api.rs:424`) that reads the whole
-   buffer and re-renders the entire document through `pulldown-cmark` — followed by
-   `web.loadHTMLString(...)`, a full WKWebView document reload. Debounced to ~33 ms
-   by `PickerRefreshCoalescer.refreshInterval`
-   (`Sources/WolfKeyMap/PickerRefreshCoalescer.swift:39`). Suspected cause of the
-   stall reproducible even on a fast Mac.
-2. Per-cell CoreText shaping every frame: `drawGlyph`
-   (`PaneContainerView.swift:1508-1525`) builds a fresh attributes dict,
-   `NSAttributedString`, and `CTLineCreateWithAttributedString` per non-empty cell.
-   No glyph cache, no run coalescing.
-3. Cell vector deep-cloned ~3x per frame: `from_snapshot_grid`
-   (`crates/wolf-ffi/src/lib.rs:3456`, a `String` alloc per cell), `cells()`
-   (`:3376`, clones the whole vector), and again in `drawCursor`
-   (`PaneContainerView.swift:1204`). `read_frame_for_grid` is called 5-6x per wake.
-4. No dirty-rect tracking: `draw(_ dirtyRect:)` ignores `dirtyRect` and repaints
-   every pane, divider and scrollbar (`PaneContainerView.swift:730, 1131`).
-5. Every wake is a full uncoalesced main-thread pass (`WakeBridge.swift:23`);
-   out-of-band notifications each fire their own wake, so one keystroke can cause
-   several full passes.
-6. Fixed unconditional `tokio::time::sleep(8ms)` per input batch
-   (`INPUT_COALESCE_DELAY`, `crates/wolf-core/src/api.rs:280`). Real latency, but
-   machine-INDEPENDENT, so it does not explain the slower-Mac gap. Out of scope.
+| metric              | no preview            | with preview          |
+| ------------------- | --------------------- | --------------------- |
+| `draw`              | 77 x 26.2 ms = 2002 ms | 56 x 47.6 ms = 2663 ms |
+| `prev.reload`       | —                     | 31 x 30.8 ms = 956 ms  |
+| `prev.render`       | —                     | 31 x 28.4 ms = 880 ms  |
+| `prev.html`         | —                     | 31 x 2.4 ms = 74 ms    |
+| wakes               | 135 x 4.2 ms = 560 ms  | 159 x 4.8 ms = 768 ms  |
+| **main-thread busy** | **~2.6 s / 5 s (51%)** | **~4.4 s / 5 s (88%)** |
+| per keystroke       | ~55 ms                | ~81 ms                |
+| wakes/key           | ~2.9–3.35             | ~2.7–2.9              |
 
-## Scope of THIS change: instrumentation ONLY
+`draw` is 78% of busy time without a preview and 61% with one. Nothing else is close.
 
-Do NOT change render behavior. Do NOT fix any of the above. Add measurement only.
+### Corrections to earlier conclusions (both were WRONG — do not reuse them)
 
-### Required measurements
+1. **Wake amplification is REAL.** An earlier 22-keystroke smoke capture showed
+   `wakes/key = 1.00` and this was wrongly recorded as falsifying the hypothesis. Both
+   real captures show **~2.9**. The sample was too small to conclude from.
+2. **`loadHTMLString` is NOT the preview problem.** `prev.html` is only **2.4 ms**. The
+   previously-planned "replace `loadHTMLString` with incremental DOM patching" work is
+   **CANCELLED** — it would buy ~2 ms. The preview cost is `prev.render` (28 ms), the
+   `block_on` RPC + whole-document `pulldown-cmark` render.
 
-- Wall-clock duration of `PaneContainerView.onRenderWake()`
-- Wall-clock duration of `PaneContainerView.draw(_:)`
-- Wall-clock duration of `reloadDirtyPreviews()`, ideally split into the
-  `render_preview` FFI round-trip vs the `loadHTMLString` reload
-- Count of wakes per keystroke (attribute wakes to the input that caused them, or
-  at minimum a wake counter alongside a keystroke counter)
+## THE HYPOTHESIS TO TEST IN THIS PASS
 
-### Constraints
+`draw` nearly DOUBLES when a preview opens: **26.2 ms -> 47.6 ms** — even though the
+editor pane becomes NARROWER and should therefore paint FEWER cells.
 
-- Off by default; enabled by a debug flag / env var. When disabled the cost must be
-  negligible — no formatting, no allocation on the hot path.
-- Output readable from the terminal for before/after comparison. Prefer periodic
-  aggregates (count, mean, p50, p95, max) over per-frame log spam — per-frame lines
-  at 30+ fps are unreadable and themselves distort the measurement.
-- Must not hold the snapshot lock, nor add main-thread work when enabled beyond a
-  monotonic clock read and an integer accumulate.
-- Follow existing repo conventions for seams/testability (the Swift `*Seam` pattern
-  used throughout `Sources/WolfKeyMap`) so the aggregation logic is unit-testable
-  without a running app.
+**Primary hypothesis (occlusion):** `PaneContainerView.draw` paints every pane's grid,
+including the preview pane's nvim scratch-buffer grid, which is then entirely hidden
+behind the `WKWebView` stacked on top of that pane's rect. That is ~20 ms per frame spent
+rasterizing cells no user can ever see.
 
-## Success criteria
+**Secondary hypothesis (compositing): FALSIFIED — the claim below was factually wrong.**
 
-With the flag enabled, typing in a buffer with a preview pane open produces terminal
-output showing where main-thread time goes, sufficient to compare against a later run
-after the preview fix.
+~~`PaneContainerView` is the only view in the tree that never sets `wantsLayer`/`isOpaque`.~~
+**`PaneContainerView.init:275` ALREADY sets `wantsLayer = true`**, with an explanatory
+comment. Independently, `FrameMetrics.end(.draw, ...)` is a `defer` inside `drawRect`
+(`:1152-1153`), so the `draw` bucket measures ONLY the drawing callback body — layer
+compositing against the `WKWebView`'s layer happens later in the CA commit and window
+server, entirely outside the measured span, and therefore cannot inflate the `draw` mean.
+`isOpaque` is still not overridden (defaults `false`), but it is NOT the cause; do not
+bundle it into this pass.
 
-## Architect's detailed plan (APPROVED — implement exactly this)
+**Third hypothesis (cost moved to the editor pane): PARTIALLY TRUE, and it repairs a
+false premise above.** `maxGridCols = 90` (`:75`) caps and centers the grid, so on a wide
+window the editor pane is ALREADY at the cap; splitting for the preview halves its pixel
+width but its column count lands just under the cap. **The editor pane does not get
+cheaper.** A second, similarly-sized grid then appears → predicted ~2x = ~52 ms vs
+measured 47.6 ms. Good fit, accounts for essentially the whole delta.
 
-### Files to CREATE
+**The `draw` count drop (77 -> 56 per 5 s) is NOT more invalidation.** Every path sets
+`needsDisplay = true` and AppKit coalesces to at most one display pass per run-loop
+iteration; at 88% busy instead of 51%, more wakes fold into each pass. Fewer draws of
+unchanged cost. So the honest headline is the PRODUCT: total `draw` time went
+2002 ms -> 2663 ms (+33%), not +82%.
 
-**`crates/wolf-macos/Sources/WolfKeyMap/FrameStats.swift`** — pure, Foundation-only,
-AppKit-free. The testable seam.
+## Scope of THIS pass
 
-- `public enum FrameStatsBucket: Int, CaseIterable` — fixed bucket set so storage is
-  array-indexed by `rawValue` (no dict hashing, no string alloc on the hot path):
-  `controllerWake = 0` (`"ctrl.wake"`), `containerWake = 1` (`"cont.wake"`),
-  `draw = 2` (`"draw"`), `previewReload = 3` (`"prev.reload"`),
-  `previewRender = 4` (`"prev.render"`), `previewLoadHTML = 5` (`"prev.html"`).
-  Each case exposes `public var label: String` used only at report time.
-- `public struct FrameStats` — value type, no locks, **documented main-thread-only**
-  (enforcement lives in the `WolfMacOS` facade so this type stays pure/testable).
-  - Storage: fixed-length array of per-bucket accumulators, each
-    `count: Int`, `sumNanos: UInt64`, `maxNanos: UInt64`, bounded ring buffer
-    `samples: [UInt64]` + `writeIndex: Int` + `wrapped: Bool`.
-  - `public static let sampleCapacity = 4096` — per-bucket retained-sample bound.
-    Total memory ~200 KB regardless of session length. count/sum/max stay EXACT and
-    unbounded; only percentiles are windowed.
-  - `record(_:nanos:)` — O(1), no allocation after init (reserve capacity up front).
-  - `recordKeystroke()` / `recordWake()` — integer counters.
-  - `BucketSummary` — bucket, count, meanNanos, p50Nanos, p95Nanos, maxNanos,
-    `truncated: Bool` (true when `count > sampleCapacity`).
-  - `Report` — index, elapsedSeconds, buckets (non-empty only), keystrokes, wakes,
-    `wakesPerKeystroke: Double?` (nil when keystrokes == 0).
-  - `summarize(index:elapsedSeconds:)` — copies each ring's live slice, sorts the
-    COPY, exact percentiles over the window. Sorting only at report time, never per frame.
-  - `percentile(_ sorted: [UInt64], _ p: Double) -> UInt64` — pinned algorithm:
-    **nearest-rank**, `index = clamp(Int(ceil(p * Double(n))) - 1, 0, n - 1)`,
-    returns `0` for empty input.
-  - `reset()` — zeroes counts/sums/maxes/ring state, keeps allocated arrays, so each
-    report covers only its own interval and consecutive reports are comparable.
-  - `format(_ report: Report) -> String` — pure String in/out, exact output pinnable
-    by test (see reporting format below).
-  - `isEnabled(env: [String: String]) -> Bool` — `WOLF_FRAME_STATS` present and,
-    case-insensitively trimmed, one of `1`/`true`/`yes`/`on`. Absent/empty/`0`/
-    `false`/anything else → false.
-  - `reportInterval(env:) -> TimeInterval` — parses `WOLF_FRAME_STATS_INTERVAL`
-    (seconds, Double), default `5.0`; non-positive/unparseable → default.
+1. **Verify the hypothesis** using the existing instrumentation, cheaply and explicitly.
+2. **If occlusion is confirmed:** skip painting grid content for any pane fully covered by
+   an opaque preview web view.
+3. **Re-measure** and record the before/after `draw` numbers.
 
-**`crates/wolf-macos/Sources/WolfMacOS/FrameMetrics.swift`** — thin process-global glue
-(`Foundation` + `Dispatch` + `import WolfKeyMap`).
+Deliberately NOT in this pass (all still queued, in priority order):
 
-- `static let enabled: Bool` — initialized ONCE from
-  `FrameStats.isEnabled(env: ProcessInfo.processInfo.environment)`. Swift `static let`
-  is lazily init'd exactly once via `swift_once`; NO per-frame `ProcessInfo` lookup.
-  `AppDelegate` touches it at launch so the one-time init never lands mid-frame.
-- `private static var stats = FrameStats()` — main thread only.
-- `@inline(__always) static func begin() -> UInt64` —
-  `enabled ? DispatchTime.now().uptimeNanoseconds : 0`.
-- `@inline(__always) static func end(_ bucket:_ start:)` — `guard enabled else { return }`,
-  clock read, **saturating** subtraction, `stats.record`. Disabled path is a single
-  `Bool` test in each of begin/end — no formatting, no allocation.
-- `noteKeystroke()` / `noteWake()` — same `guard enabled` shape.
-- `start()` — no-op when disabled; else records `intervalStartNanos` and installs a
-  repeating `Timer` on the main run loop in **`.common` mode** (so reports keep firing
-  during tracking/scroll run-loop modes) calling `emit()`.
-- `emit()` — no-op when disabled or when all buckets and both counters are zero (idle
-  app is silent). Else build Report → `format` → write → `stats.reset()` → re-baseline.
-- `write(_:)` — one `FileHandle.standardError.write(Data(text.utf8))` per report;
-  additionally appends to `WOLF_FRAME_STATS_FILE` when set (opened once, cached
-  `FileHandle`, seek-to-end; open failure degrades silently to stderr-only).
-- `#if DEBUG` only: `dispatchPrecondition(condition: .onQueue(.main))` in
-  `end`/`noteKeystroke`/`noteWake`. Compiled out of release.
+- glyph run coalescing / glyph cache / `drawGlyph` rework, and the redundant
+  `read_frame_for_grid` calls + triple cell-vector clone (this is the real fix for the
+  26 ms no-preview floor — the NEXT pass)
+- moving `prev.render` off the main thread (third)
+- wake amplification, ~2.9 wakes/key at ~4.8 ms each (fourth)
+- dirty-rect tracking in `draw`
+- anything in Rust (`wolf-core` / `wolf-ffi`). No Rust changes; no FFI surface changes.
 
-**`crates/wolf-macos/Tests/WolfKeyMapTests/FrameStatsTests.swift`** — see test plan.
+## Correctness constraints (this pass DOES change render behavior)
 
-### Files to MODIFY
+Unlike the instrumentation pass, skipping paint work is a real behavior change. It must be
+correct in every case, not just the common one:
 
-`WolfWindowController.swift` — `onRenderWake()` (:339): `let t = FrameMetrics.begin()`
-as FIRST statement + `defer { FrameMetrics.end(.controllerWake, t) }`. `defer` is the
-mechanism throughout: survives early returns without restructuring control flow.
+- Only skip when the web view genuinely, fully covers the pane's grid rect AND is opaque.
+  A partially-covering or transparent web view must still paint underneath.
+- A preview pane whose `WKWebView` does not exist yet (`previewWebViews[win] == nil`, the
+  documented "web view does not exist yet" path in `reloadDirtyPreviews`) must still paint.
+- A web view that exists but has not yet loaded content (blank/white) must not produce a
+  visibly empty or garbage pane.
+- Hidden / zero-size / detached web views must not count as occluding.
+- Pane geometry changes (split, resize, close, preview close) must restore painting
+  immediately — no stale "occluded" state surviving the web view's removal.
+- Cursor, scrollbars, dividers and overlays must be unaffected except where they are
+  themselves genuinely occluded.
 
-**Wake-boundary decision:** instrument BOTH controller and container. The per-wake
-`current_file()` (:342), `cwd()` (:353) and `refreshTabTitles` (:377) are real
-main-thread work — including two FFI round-trips — outside the container. Separate
-buckets nest cleanly; the difference between the two means isolates controller-only
-overhead, answering "is the container the whole story?" without a second run.
+## Instrumentation available (from the previous pass — already landed)
 
-`PaneContainerView.swift`:
+Env-gated, off by default. `WOLF_FRAME_STATS=1`, `WOLF_FRAME_STATS_INTERVAL=<seconds>`,
+`WOLF_FRAME_STATS_FILE=<path>`. Buckets: `ctrl.wake`, `cont.wake`, `draw`, `prev.reload`,
+`prev.render`, `prev.html`, plus `keys` / `wakes` / `wakes/key`.
 
-- `onRenderWake()` (:704): begin + `defer` → `.containerWake`, at the top, BEFORE the
-  `pendingRefocusRebind` branch so the early-return path is measured.
-- `draw(_ dirtyRect:)` (:1131): same → `.draw`, placed BEFORE the `guard let ctx` so a
-  no-context early return is still counted (a near-zero sample is itself informative).
-- `reloadDirtyPreviews()` (:865): same → `.previewReload`.
-- Inside the `for win in needing` loop use EXPLICIT start/stop (not `defer` — these are
-  mid-loop statements and we want one sample per preview, not per function call):
-  - around `handle.render_preview(...).toString()` (:881) → `.previewRender`.
-    Deliberately includes the `.toString()` bridge copy — part of the FFI round-trip cost.
-  - around `web.loadHTMLString(html, baseURL: base)` (:887) → `.previewLoadHTML`.
-    **Add a code comment** noting this measures only the SYNCHRONOUS call, not the async
-    WebKit parse/layout/paint that follows off this call stack. Document this limitation.
-- `keyDown(with:)` (:476): `FrameMetrics.noteKeystroke()` immediately BEFORE
-  `handle.send_key(ev)` (:501) — after the picker-trigger early return and the
-  `WolfKeyMap.translate` guard, so it counts only keys actually delivered to Neovim.
+Seam: `crates/wolf-macos/Sources/WolfKeyMap/FrameStats.swift` (pure, unit-tested).
+Glue: `crates/wolf-macos/Sources/WolfMacOS/FrameMetrics.swift`.
 
-`Project.swift` — `onWake()` (:136): `FrameMetrics.noteWake()` before
-`currentView?.onRenderWake()`.
-
-**Wakes-per-keystroke decision:** simple counter-ratio, NOT real attribution. Wakes
-counted at `Project.onWake` (exactly one per core wake through `WakeBridge`, independent
-of view count), keystrokes at `keyDown`, reported as a ratio. **Stated limitation:**
-wakes from non-key sources (mouse, scroll, resize, out-of-band core notifications, `:cd`,
-autocmds) inflate it, so it is an UPPER BOUND, valid only for a session where the user
-does nothing but type. True attribution (a generation/seq stamp threaded through
-wolf-core and the wake ABI) is a cross-language change beyond an instrumentation-only
-pass — not justified; revisit only if the ratio proves ambiguous.
-
-`AppDelegate.swift` — `applicationDidFinishLaunching`: call `FrameMetrics.start()`
-(forces the one-time `enabled` eval, arms the timer, writes a one-line run header).
-`applicationWillTerminate` (add if absent): `FrameMetrics.emit()` to flush the final
-partial interval. Best-effort — not guaranteed on force-quit.
-
-`crates/wolf-macos/BUILD.bazel`:
-
-- add `"Sources/WolfKeyMap/FrameStats.swift"` to `swift_library(name = "wolf_key_map").srcs`
-  (explicitly enumerated, not globbed)
-- add `"Tests/WolfKeyMapTests/FrameStatsTests.swift"` to `swift_test(name = "WolfKeyMapTests").srcs`
-- NO change for `Sources/WolfMacOS/FrameMetrics.swift` — `wolf_macos_lib` globs
-  `Sources/WolfMacOS/*.swift`. NO change to the `swift_format_srcs` filegroup.
-
-### Reporting format
-
-Repeating main-run-loop `Timer` at `WOLF_FRAME_STATS_INTERVAL` (default 5 s) + a final
-flush from `applicationWillTerminate`. Interval-scoped and reset after each emit.
-Zero-sample intervals emit nothing. Explicitly NOT per-frame lines (unreadable at 30+ fps
-and the I/O would distort the measurement).
+Run it (NOTE the `Wolf_archive-root` path — `bazel-bin/crates/wolf-macos/Wolf.app` does
+NOT exist; `macos_application` emits `Wolf.zip` plus the unzipped bundle under
+`Wolf_archive-root/`):
 
 ```
-wolf-frame-stats #3  window=5.0s
-wolf-frame-stats bucket        count     mean      p50      p95      max
-wolf-frame-stats ctrl.wake       142    3.11     2.40     9.80    41.20
-wolf-frame-stats cont.wake       142    2.85     2.20     9.10    39.70
-wolf-frame-stats draw            138    4.02     3.60    11.40    22.90
-wolf-frame-stats prev.reload      15   31.70    28.10    62.30    71.50
-wolf-frame-stats prev.render      15   24.90    22.00    51.80    60.10
-wolf-frame-stats prev.html        15    5.10     4.80     9.20    10.40
-wolf-frame-stats keys=48 wakes=142 wakes/key=2.96
-```
-
-Milliseconds, two decimals. `*` suffix on `count` marks a truncated (windowed-percentile)
-bucket. Fixed column widths so `diff` between runs aligns. Every line prefixed for `grep`.
-
-**Where:** `FileHandle.standardError`, one write per report. NOT `NSLog` (timestamps and
-prefixes every line, mangling the fixed-width table and duplicating into the unified log)
-and NOT `tracing` (Rust-side; this is Swift with no logging dep today).
-
-**How the developer sees it:** `Wolf.app` is a bundled AppKit app, so a double-clicked
-app's stderr is inherited from `launchd` and never reaches a terminal. Two documented paths:
-
-1. Recommended for development — run the bundle's inner executable directly after
-   `bazel build //crates/wolf-macos:Wolf`:
-   `WOLF_FRAME_STATS=1 ./bazel-bin/crates/wolf-macos/Wolf.app/Contents/MacOS/Wolf`
-   Inherits the terminal's stderr; `Bundle.main` still resolves to the `.app` so bundled
-   Neovim/fonts/init.lua load normally. (`bazel run` works for launching but its stderr
-   plumbing through the rules_apple runner is less predictable.)
-2. For a double-clicked app — set `WOLF_FRAME_STATS_FILE=/tmp/wolf-frame-stats.txt` and
-   `tail -f` it.
-
-### Clock
-
-`DispatchTime.now().uptimeNanoseconds` — backed by `mach_absolute_time` scaled by the
-timebase: monotonic (unaffected by wall-clock/NTP adjustments), cheap (commpage/rdtsc-class,
-tens of ns, no syscall on Apple silicon), allocation-free, already integer nanoseconds so
-the hot path is one read + one `UInt64` subtraction with NO `Duration` construction. Does
-not advance during sleep, which is correct for frame timing.
-
-Rejected: `ContinuousClock` (returns `Duration`, needs per-sample conversion arithmetic,
-ticks through sleep); `Date`/`CFAbsoluteTimeGetCurrent` (wall-clock, NOT monotonic —
-disqualified); raw `mach_absolute_time` (same source but requires manual
-`mach_timebase_info` handling `DispatchTime` already does).
-
-### Test plan
-
-Pure headless `XCTest`, `@testable import WolfKeyMap`, matching the table-driven style of
-existing `PaneGeometryTests` / `StatusbarLayoutTests`. No Neovim, no window, no AppKit.
-
-1. **Env parsing** — `isEnabled`: absent → false; `""` → false; `1`/`true`/`TRUE`/`Yes`/`on`
-   → true; `0`/`false`/`maybe` → false. `reportInterval`: absent → 5.0; `"2.5"` → 2.5;
-   `"0"`/`"-1"`/`"abc"` → 5.0.
-2. **Basic accumulation** — known sequence into one bucket; assert count, meanNanos
-   (integer-division semantics pinned exactly), maxNanos.
-3. **Percentile math** — pinned nearest-rank: empty → 0; single element → that element for
-   p50 and p95; `1...100` → p50 = 50, p95 = 95, max = 100; two- and three-element inputs
-   pinning the exact rounding boundary; an all-equal input.
-4. **Bucket isolation** — recording `.draw` leaves `.previewRender` empty; `summarize`
-   omits zero-count buckets.
-5. **Ring bound + truncation** — record `sampleCapacity + 100`; assert count exact and
-   unbounded, maxNanos exact (tracked outside the ring), `truncated == true`, percentiles
-   reflect only the LAST `sampleCapacity` samples (feed a distinguishable pattern — small
-   values first, large last — so a wrong window is detectable), and the retained array
-   length never exceeds `sampleCapacity`.
-6. **Ratio math** — keystrokes == 0 → nil (divide-by-zero edge); 30/10 → 3.0; 0/5 → 0.0.
-7. **`reset()`** — all zeroed, `summarize` yields empty bucket list, a subsequent `record`
-   starts a fresh window (no pre-reset leakage into post-reset percentiles).
-8. **Format stability / diffability** — fixed Report → assert `format` produces an EXACT
-   expected string: fixed column widths, deterministic bucket ordering (by `rawValue`, not
-   dictionary iteration order), the `wolf-frame-stats` prefix on every line, truncation
-   marker present when truncated. This test is what guarantees two runs are `diff`-able.
-9. **Saturating delta** — if the delta helper is exposed, an end-stamp earlier than the
-   start-stamp yields 0, not a `UInt64` underflow.
-
-**Cannot be unit-tested** (record as compile-verified + manual-smoke in `Tests/README.md`,
-consistent with how `PreviewSeamTests` / `StateSeamTests` document their glue): the
-instrumentation call sites, `FrameMetrics`'s once-only static init, `Timer` scheduling,
-stderr/file emission, `dispatchPrecondition`. These need a running app with a window
-server; the repo has no macOS UI test target and creating one is out of scope. The repo's
-"prefer real integration tests over mocks" rule targets the Neovim boundary and is
-satisfied by the existing real-nvim `wolf-ffi` suite — this change adds no FFI surface.
-
-No existing test is modified other than the `BUILD.bazel` srcs list.
-
-### Dependencies
-
-NONE. Foundation + Dispatch only, both already available. No new `bazel_dep`, no
-`CARGO_BAZEL_REPIN`, no lockfile regeneration.
-
-### Implementation order
-
-1. `FrameStats.swift` (compiles alone) → 2. BUILD srcs → 3. tests + BUILD test srcs, run
-`bazel test //crates/wolf-macos:WolfKeyMapTests` green BEFORE any call site exists →
-4. `FrameMetrics.swift` → 5. `AppDelegate` start/flush → 6. call sites in order:
-`Project.swift` → `WolfWindowController.swift` → `PaneContainerView.swift` →
-7. `bazel build //crates/wolf-macos:Wolf` + `bazel test //crates/wolf-macos:WolfKeyMapTests
-//crates/wolf-macos:bundle_layout_test` → 8. docs + prettier → 9. optional advisory
-`bazel test //tools/lint:swift_format`.
-
-### Lint
-
-`//tools/lint:swift_format` is advisory and tagged `manual` so it will not gate this, but
-write to pass it: no force-unwraps or IUOs (`NeverForceUnwrap`,
-`NeverUseImplicitlyUnwrappedOptionals`), lowerCamelCase, explicit `public` on the seam API,
-doc comments on every public declaration. No `// swift-format-ignore` directives expected;
-if the line-length rule fires on the fixed-width format construction, break the expression
-across lines rather than adding an ignore. Per `build.md` the swift-format check and fix
-enforce different rule sets, so a `:swift_format.fix` diff is not a failure.
-
-### Documentation to update (docs are source of truth in this repo)
-
-- `crates/wolf-macos/Sources/README.md` — `FrameStats` (WolfKeyMap) and `FrameMetrics`
-  (WolfMacOS): bucket set, env vars, main-thread-only invariant, sample bound, and the
-  `loadHTMLString`-is-synchronous-only caveat.
-- `crates/wolf-macos/Tests/README.md` — `FrameStatsTests.swift` section in the existing
-  per-file style.
-- `build.md` — "Frame-time instrumentation (macOS)" subsection under the macOS app section:
-  the three env vars and the exact terminal invocation. Extend the existing
-  `//crates/wolf-macos:WolfKeyMapTests` bullet to mention the frame-stats seam.
-- `crates/wolf-macos/README.md` — one paragraph on the instrumentation surface.
-- `prettier --write` every touched Markdown file; no hard wraps inside paragraphs.
-
-### Explicitly NOT changing
-
-All six investigated hot spots stay exactly as they are. This pass does NOT: move
-`reloadDirtyPreviews`/`render_preview` off the main thread, make it incremental, or replace
-`loadHTMLString`; change `PickerRefreshCoalescer.refreshInterval` (33 ms) or the preview
-debounce policy; add a glyph cache/run coalescing or touch `drawGlyph`/`paintCells`; reduce
-the cell-vector clones or the 5–6 `read_frame_for_grid` calls per wake; introduce
-dirty-rect tracking (`dirtyRect` remains ignored); coalesce wakes in `WakeBridge`; touch
-`INPUT_COALESCE_DELAY` or anything in `wolf-core`/`wolf-ffi`. **No Rust is modified at
-all**, no FFI surface added, so no binding regeneration and no `CARGO_BAZEL_REPIN`.
-
-Flag OFF: the only deltas are two `Bool` tests per instrumented call and one lazily-init'd
-static. Flag ON: per sample, one monotonic clock read, one integer subtraction, a handful
-of integer accumulates and one array-slot write — no locks, no snapshot lock held, no
-formatting or allocation outside the once-per-interval report.
-
-## Contract amendments from the test-writer (BINDING — implement to match the tests)
-
-The tests are written and pin the API. Where these conflict with the architect's plan
-above, **these win** — the coder implements to match the tests, not the other way around.
-
-**The plan's sample report block was internally inconsistent** — its header row and data
-rows disagree by one column of padding. Header-consistent layout was chosen and pinned:
-`bucket` left-14, `count` right-5, then four right-9 fields. Load-bearing pinned line:
-
-```
-wolf-frame-stats ctrl.wake      142*     3.11     2.40     9.80    41.20
-```
-
-**Formatting decisions pinned by the tests:**
-
-- `wakesPerKeystroke == nil` renders as `wakes/key=n/a`
-- every line, including the last, ends in `\n`
-- `elapsedSeconds` formats with ONE decimal (`window=5.0s`); ms values with TWO
-- the truncation marker is a `*` appended to the count INSIDE the 5-wide right-aligned field
-- a counters-only report still emits the header and column rows (only `FrameMetrics.emit()`
-  suppresses fully-idle intervals — that is glue, not `format`)
-
-**API surface the tests require (plan named the behavior but not the signature):**
-
-- `FrameStats.retainedSampleCount(_ bucket:) -> Int` — non-mutating; needed to assert the
-  ring never exceeds `sampleCapacity` without reaching into private state
-- `FrameStats.delta(start:end:) -> UInt64` — saturating subtraction, pinned as a STATIC on
-  `FrameStats` (not `FrameMetrics`, which is untestable); `FrameMetrics.end` calls it
-- `BucketSummary` and `Report` need PUBLIC MEMBERWISE INITS in the argument order listed in
-  the architect's plan, so format-test fixtures can be constructed
-- static: `format`, `percentile`, `isEnabled`, `reportInterval`, `delta`
-- mutating: `record`, `recordKeystroke`, `recordWake`, `reset`
-- non-mutating: `summarize`, `retainedSampleCount`
-
-**Truncation boundary:** plan said `truncated` is true when `count > sampleCapacity`
-(strictly greater). Pinned: `count == sampleCapacity` → `truncated == false`, since at
-exactly capacity the window is lossless.
-
-**Test file also adds** `testBucketRawValuesAndLabels`, pinning the `FrameStatsBucket`
-rawValue→label contract, since the rawValues are the storage indices.
-
-## CORRECTION to the architect's plan
-
-The dev invocation path given above (and copied into `build.md`) was WRONG.
-`macos_application` emits `Wolf.zip` plus an unzipped bundle under `Wolf_archive-root/`;
-there is no `bazel-bin/crates/wolf-macos/Wolf.app`. The working path, verified by
-actually launching it:
-
-```
+bazel build //crates/wolf-macos:Wolf
 WOLF_FRAME_STATS=1 ./bazel-bin/crates/wolf-macos/Wolf_archive-root/Wolf.app/Contents/MacOS/Wolf
 ```
 
-`build.md` is corrected. `.claude/verify-results.md` from the earlier Neovim-bundling
-change had already recorded this ("an archive, NOT an unzipped Wolf.app dir") — the plan
-contradicted an existing verified record.
+## Success criteria
 
-## FIRST MEASUREMENTS (captured, real output)
+`draw` with a preview open drops materially from its 47.6 ms mean, toward (or below) the
+26 ms no-preview figure, with no visual regression in the preview or editor panes. If the
+occlusion hypothesis is disproven, that is a perfectly good outcome — record what the
+evidence actually showed and stop, rather than optimizing on a wrong theory.
 
-Launch-and-type session, no preview open, `WOLF_FRAME_STATS_INTERVAL=2`:
+## Architect's plan (APPROVED — note the STAGED GATE at phase A step 4)
 
-```
-wolf-frame-stats #3  window=2.0s
-wolf-frame-stats bucket        count     mean      p50      p95      max
-wolf-frame-stats ctrl.wake        22     5.46     4.96     8.83     9.11
-wolf-frame-stats cont.wake        22     5.42     4.93     8.78     9.06
-wolf-frame-stats draw             22    28.50    27.65    36.91    37.49
-wolf-frame-stats keys=22 wakes=22 wakes/key=1.00
-```
+### Why occlusion is strongly supported (from code reading)
 
-**This reprioritizes the follow-up work. Three findings:**
+- `draw` (`:1149`) loops `paneRects()` and calls `paintPane` for EVERY pane with a bound
+  grid. No preview check. `paintPane` (`:1190`) calls `handle.read_frame_for_grid(grid)`
+  (whole cell-vector across the FFI) then `paintGrid` (`:1210`) → fill, `paintCells`,
+  `drawCursor`. `syncGridSizes` (`:654`) resizes the preview pane's grid to FULL geometry
+  — it is a full-size grid, not a stub.
+- `syncPreviewWebViews` (`:816`) sets `web.frame = gridRect(ofPane: entry.1)` — the
+  IDENTICAL expression `paintGrid` is handed. Coverage is exact, not approximate.
+  `web.isHidden = false` each wake. The rendered doc sets an opaque
+  `body.wolf-markdown` background (`#1b1b1b` dark / `#f4f4f4` light) which per CSS
+  propagates to the viewport canvas → opaque over its whole frame once loaded.
+- **The scratch grid is NOT cheap.** `paintCells` (`:1344`) does `setFillColor` + `fill`
+  for EVERY cell unconditionally; only the glyph is conditional. Blank cells are not
+  empty — `grid_line` stores nvim's literal `" "` (`wolf-core/src/redraw.rs:780-813`);
+  only wide-char trailing placeholders and never-painted cells are `""`
+  (`wolf-core/src/render.rs:187-198`). So a blank cell has `text == " "` → non-empty →
+  `drawGlyph` runs → `CTLineCreateWithAttributedString` + `CTLineDraw` per cell, plus
+  `FfiCell::text()`'s `self.text.clone()` Rust String alloc per cell
+  (`wolf-ffi/src/lib.rs:2160`). A blank preview grid costs nearly what a full one does.
+- Residual uncertainty (the reason to MEASURE, not assume): `Grid::clear()` resets cells
+  to `Cell::default()` (empty text), so between a `grid_clear` and the following
+  `grid_line` a grid IS cheap. Steady state should re-send `grid_line`, but confirm.
 
-1. **`draw` dominates: ~28 ms mean, ~37 ms p95, on a FAST Mac with NO preview open.**
-   That alone caps the frame rate near 35 fps and puts ~28 ms of latency behind every
-   keystroke. It is roughly 5x the entire wake pass. Hypothesis #2 (per-cell CoreText
-   shaping in `drawGlyph`) + #3 (triple cell-vector clone) are the prime suspects and are
-   now the TOP priority — ahead of the preview work.
-2. **`wakes/key = 1.00` — there is NO wake amplification.** Hypothesis #5 (uncoalesced
-   wakes, several per keystroke) is FALSIFIED for the plain-typing case. Wake coalescing
-   is NOT worth doing. Drop it.
-3. **`ctrl.wake` (5.46) ≈ `cont.wake` (5.42) — the controller adds ~0.04 ms.** The
-   architect's reason for instrumenting both is answered: the container is essentially the
-   whole wake cost, and the controller's `current_file()`/`cwd()`/`refreshTabTitles` FFI
-   round-trips are NOT a problem. Do not optimize the controller.
+The statusbar strip is OUTSIDE `gridRect` and is NOT covered — only the grid paint may be
+skipped.
 
-Preview buckets (`prev.*`) did not appear because no preview was open in this session.
-A preview-open capture is still needed to size hypothesis #1.
+### PHASE A — verification (land this FIRST, then STOP)
+
+Add two buckets to `FrameStatsBucket`, dense/ascending raw values:
+`drawPaneEditor = 6` label `"draw.pane"`, `drawPanePreview = 7` label `"draw.prev"`.
+In `draw`'s pane loop, explicit `begin`/`end` around `paintPane` (not `defer`, mirroring
+the `previewRender` site), selecting `.drawPanePreview` when `previewNamesByGrid[grid] != nil`
+else `.drawPaneEditor`. Keep these buckets PERMANENTLY — they are the before/after
+evidence here and the instrument for the next (glyph) pass.
+
+`FrameStatsTests.swift` pins bucket discriminants/labels and asserts `allCases.count`
+against the pinned list (~:110-134) — add the two rows and update the enum recap comment
+(~:19-25). The `format` ordering tests (~:598-630) iterate `allCases` and need no edit.
+
+**GATE — decision rule after measuring, before writing any fix:**
+
+- `draw.prev` mean >~ 15 ms with a preview open → occlusion CONFIRMED, proceed to phase B.
+- `draw.prev` mean <~ 5 ms → occlusion DISPROVEN. Record the numbers, STOP, hand the pass
+  to the glyph work. **Do not build the fix.**
+- In between → report both buckets plus the editor pane's column count and re-decide.
+
+### PHASE B — the fix (ONLY if the gate confirms)
+
+**CREATE `Sources/WolfKeyMap/PaneOcclusion.swift`** — pure, Foundation-only, reuses `Rect`
+from `PaneTree.swift` as `EditorInset.swift`/`PickerPanelSeam.swift` do.
+
+- `public struct OccluderGeometry` — `frame: Rect`, `isHidden: Bool`, `isAttached: Bool`,
+  `alpha: Double`, `hasLoadedContent: Bool`, public memberwise init (matching the
+  `FrameStats.BucketSummary` convention so tests build fixtures directly).
+- `public enum PaneOcclusion` with
+  `static func isFullyOccluded(gridRect: Rect, by occluder: OccluderGeometry?) -> Bool`.
+
+ALL rules must hold or the result is `false` (i.e. PAINT):
+
+1. `occluder != nil` — "web view does not exist yet" (`previewWebViews[win] == nil`)
+2. `hasLoadedContent` — exists but has not loaded content yet
+3. `isAttached` — detached
+4. `!isHidden` — hidden / hidden ancestor
+5. `alpha >= 1.0` — transparent
+6. `frame.w > 0 && frame.h > 0` — zero-size
+7. `gridRect.w > 0 && gridRect.h > 0` — degenerate grid rect reported NOT occluded
+   (conservative; nothing to save anyway)
+8. Strict containment, **tolerance 0.0**: `frame.x <= gridRect.x`, `frame.y <= gridRect.y`,
+   `frame.maxX >= gridRect.maxX`, `frame.maxY >= gridRect.maxY`
+
+Zero tolerance is correct and SAFE because `syncPreviewWebViews` assigns the web view's
+frame from the SAME `gridRect(ofPane:)` expression — values are bit-identical when in
+sync, and when OUT of sync (mid-live-resize, post-split, pre-close) containment fails and
+the grid paints. That satisfies "geometry changes restore painting immediately"
+STRUCTURALLY rather than by bookkeeping. Document that partial coverage returns `false`.
+
+**MODIFY `PaneContainerView.swift`:**
+
+- Add `private var previewLoadedWins: Set<Int64> = []` beside the other per-window preview
+  maps. Documented: set when a web view first reports `didFinish`; deliberately NOT
+  cleared on a subsequent reload, because WebKit keeps displaying the previous document
+  while the next loads — clearing it would cause paint/unpaint flicker.
+- `previewDidFinishLoad(win:)` — insert `win` FIRST; the existing
+  `guard let fragment = ... else { return }` returns early.
+- `removePreviewWebView(_:)` — remove `win` alongside the other per-window teardown. This
+  is the "preview close restores painting immediately" guarantee.
+- `private func previewOccluder(forWin:) -> OccluderGeometry?` — `nil` when
+  `previewWebViews[win] == nil`; else built from the live view:
+  `isHidden: web.isHiddenOrHasHiddenAncestor` (preferred over bare `isHidden`),
+  `isAttached: web.superview === self && web.window != nil`,
+  `alpha: Double(web.alphaValue)`, `hasLoadedContent: previewLoadedWins.contains(win)`.
+- `paintPane(grid:paneRect:active:paintsGrid:ctx:)` — when `paintsGrid == false`, paint the
+  statusbar as today then `return` WITHOUT `handle.read_frame_for_grid(grid)` and without
+  `paintGrid`. **Skipping the FFI frame read is a material part of the saving — do not
+  hoist it above the branch.**
+- In `draw`'s pane loop pass `paintsGrid: !occluded`. Requires reading the full
+  `PaneBinding` (for `win`), not just `boundGrid`. Add a small private `CGRect` →
+  `WolfKeyMap.Rect` helper (none exists; `paneRects()` does the inverse inline).
+- Leave `drawDividers`, `drawScrollbars`, `refreshOverlays` and the `ctx.fill(bounds)`
+  editor-background fill COMPLETELY unchanged. `drawScrollbars` already suppresses the
+  synthetic scrollbar over preview panes via an independent `previewNamesByGrid` check —
+  do NOT couple it to occlusion.
+- `drawCursor` is only reachable from `paintGrid`, so it is skipped for an occluded pane.
+  That is CORRECT — a preview pane's cursor is already invisible under the web view — but
+  state it in a code comment so a reviewer does not flag it.
+
+### Tests
+
+`PaneOcclusionTests.swift`, one case per correctness constraint, all asserting `false`
+(paint) unless stated: exact-equality containment → TRUE; strictly-larger container →
+TRUE; `nil` occluder; `hasLoadedContent == false`; `isAttached == false`; `isHidden`;
+alpha 0.0/0.5/0.999 → false and 1.0 → true; zero width, zero height, zero-by-zero;
+partial coverage short on left/right/top/bottom and inset on all four sides (x5);
+off-by-a-hair `maxX` short by 0.5 (pins tolerance 0.0); occluder entirely elsewhere;
+degenerate `gridRect`; and flag-interaction cases proving the rules AND rather than
+short-circuiting on geometry alone.
+
+**No macOS UI test target exists** (`BUILD.bazel` has only `WolfKeyMapTests` +
+`bundle_layout_test.sh`). Compile-verified + manual-smoke only: `previewOccluder`'s live
+`WKWebView` reads, the `previewLoadedWins` lifecycle (first load, reload, `previewFile`
+repoint, pane close), and the `paintPane` branch.
+
+**Manual smoke checklist (reviewer must confirm no visual regression):** 1. preview
+renders, statusbar reads `Preview: <name>`, no synthetic scrollbar. 2. typing updates it
+live. 3. **live-resize with a preview open** — grid must repaint under the web view while
+frames are out of sync; a brief flash of scratch grid at the seam is acceptable, a BLACK
+or GARBAGE region is a bug. 4. split / close pane / close preview repaints immediately.
+5. two preview panes. 6. cross-file link repoint stays occluded. 7. Cmd-+/Cmd-- font size.
+8. tab away and back (`markRefocusRebind`). 9. system light/dark toggle.
+
+### BUILD.bazel
+
+`wolf_key_map.srcs` += `Sources/WolfKeyMap/PaneOcclusion.swift` (alphabetical, between
+`PaneGeometry.swift` and `PaneTree.swift`); `WolfKeyMapTests.srcs` +=
+`Tests/WolfKeyMapTests/PaneOcclusionTests.swift`. No change to `wolf_macos_lib` (globs) or
+`swift_format_srcs` (globs).
+
+### Docs
+
+`Sources/README.md` (PaneOcclusion bullet + file-count phrase + FrameStats "six buckets"
+→ eight, enumerating what the two new ones measure); `crates/wolf-macos/README.md`
+(occlusion behavior; **fix the stale "the blank scratch grid paints underneath (occluded,
+cheap)" claim — it was never cheap**); `Tests/README.md` (PaneOcclusionTests);
+**`PaneContainerView.swift:159-166` header comment — the same "(occluded, cheap)" claim.
+This is the documentation bug that seeded the whole problem.** Also correct the wrong
+bundle path in `FrameMetrics.swift`'s header comment (`:23-24`). `prettier --write` all.
+
+### Success criteria
+
+`draw.prev` mean drops to near zero; `draw` mean falls from 47.6 ms toward ~26 ms; total
+`draw` time in a 5 s window falls from ~2663 ms toward ~1470 ms. **Report BOTH the mean and
+the count x mean product** — the count is load-dependent (see the coalescing note above) so
+the mean alone is misleading. The remaining ~26 ms floor is expected and is the NEXT pass's
+target, not this one's failure.
+
+### Explicitly NOT changing
+
+Glyph run coalescing / glyph cache / `drawGlyph` / `paintCells` rework (incl. the per-cell
+`CTLine` and per-cell Rust String clone) — next pass. The redundant `read_frame_for_grid`
+calls and triple cell clone (beyond the one call skipped as a side effect here). Moving
+`prev.render` off the main thread. Wake amplification. Dirty-rect tracking. **Any Rust**
+(`wolf-core`, `wolf-ffi`, FFI surface, `markdown.rs`, preview CSS). `loadHTMLString` →
+incremental DOM (cancelled; 2.4 ms). **`isOpaque`** — not the cause, and bundling an
+unmeasured change into a measured pass would contaminate the before/after; queue separately.
+Preview web-view z-order vs overlays. `drawScrollbars`' existing preview suppression.
+
+## GATE RESULT: OCCLUSION CONFIRMED — phase B is unlocked
+
+Capture: `test-3-with-preview-after-phase-a` (repo root). Steady-state windows #3-#6,
+same file/position/window size as `test-2-with-preview`.
+
+| bucket               | mean         | count        |
+| -------------------- | ------------ | ------------ |
+| `draw`               | 45.6–46.0 ms | 47–56        |
+| `draw.pane` (editor) | 22.1–22.3 ms | == draw count |
+| `draw.prev` (preview)| **22.0–22.2 ms** | == draw count |
+
+- `draw.prev` = **22 ms**, far above the >~15 ms confirm threshold. Occlusion CONFIRMED.
+- `draw.prev` ≈ `draw.pane` — the blank preview scratch grid costs the SAME as the
+  text-full editor grid, exactly as predicted from the `" "`-not-`""` cell analysis.
+- The two panes sum to ~44.2 ms of the ~45.8 ms `draw`; background fill + dividers +
+  scrollbars are only ~1.6 ms. The pane loop is essentially all of `draw`.
+- Both counts equal the `draw` count in steady state → every draw paints both panes.
+
+**The instrument validated itself:** window #1, before the preview was opened, shows
+`draw.pane` with NO `draw.prev` bucket. Bucket selection is correct, not inverted or stuck.
+
+**Projected saving:** `draw` 45.8 -> ~23.8 ms (-48%). Per 5 s window,
+56 x 45.6 = 2554 ms -> 56 x 23.8 = 1333 ms, i.e. **~1.2 s per 5 s reclaimed, ~25% of the
+entire main thread**, plus one fewer `read_frame_for_grid` per frame. With-preview busy
+should fall from ~88% toward ~64%.
 
 ## Status
 
 - [x] architect plan
-- [x] tests — `Tests/WolfKeyMapTests/FrameStatsTests.swift` + BUILD srcs (21 cases)
-- [x] implementation — `FrameStats.swift`, `FrameMetrics.swift`, 5 call sites, BUILD
-- [x] review — approved, no blocking findings; EPIPE + idle-ordering fixes applied
-- [x] docs — `Sources/README.md`, `Tests/README.md`, `build.md`, `wolf-macos/README.md`
-- [x] smoke test — app launches, reports emit to stderr, numbers captured above
-- Tests: `WolfKeyMapTests` 179 pass / 0 fail, `bundle_layout_test` pass,
-  `bazel build //crates/wolf-macos:Wolf` succeeds, `//tools/lint:swift_format` passes.
+- [x] PHASE A: buckets + per-pane timing (tests green, swift_format clean)
+- [x] PHASE A: MEASURE + evaluate gate — **CONFIRMED, proceed to phase B**
+- [x] PHASE B: tests — `PaneOcclusionTests.swift` (all 8 rules + interaction matrix)
+- [x] PHASE B: implementation — `PaneOcclusion.swift`, `previewLoadedWins`,
+      `previewOccluder`, `paintPane(paintsGrid:)`, `draw` pane loop
+- [x] review — APPROVED, no blocking findings
+- [x] docs — `Sources/README.md`, `README.md`, `Tests/README.md`, `architecture.md`,
+      and the seed bug: `PaneContainerView.swift:161` "(occluded, cheap)" corrected
+- [ ] **re-measure and record before/after** ← ONLY REMAINING STEP
 
-## Status: COMPLETE (instrumentation only — no render behavior changed, no Rust touched)
+### Review notes worth keeping
+
+- **Worst case (a permanently blank pane) is structurally unreachable.** `previewOccluder`
+  short-circuits on `previewWebViews[win] == nil` BEFORE consulting `previewLoadedWins`, so
+  a stale set entry alone can never suppress a paint. `removePreviewWebView` is the SOLE
+  removal path for a web view (only call site `syncPreviewWebViews:871-873`) and clears the
+  set, so a reused `win` handle always gets a fresh `hasLoadedContent: false`.
+- **Cross-file repoint (`previewFile`) is correct** — it never touches `previewLoadedWins`,
+  so the win stays in the set while the new document loads. Right, not a hazard: WebKit
+  keeps the previous document composited until the next commits, so the view stays opaque.
+  Clearing it would cause exactly the flicker the header comment warns about.
+- **The plan's zero-tolerance argument was stated too strongly and is now corrected in
+  `PaneOcclusion.swift`'s header.** "Out of sync -> containment fails -> paints" is NOT
+  universal: if a pane SHRINKS and `draw` runs before `syncPreviewWebViews`, the stale
+  LARGER frame still contains the smaller `gridRect`, so the paint IS skipped. Still safe,
+  but the real invariant is **"the web view covers the skipped region"**, not "the frames
+  are in sync". A future reader over-trusting the sync argument could introduce a real bug.
+- **Frame perturbation is the silent failure mode.** `autoresizingMask` is `.none` and
+  `NSView` does not backing-align frames unless opted in, so this should not happen — but
+  **if re-measurement does NOT show `draw.prev` collapsing toward zero, frame perturbation
+  is the first suspect.** The failure is silent (optimization disabled), not visual.
+- Verified: no Rust changed (`git status crates/wolf-core crates/wolf-ffi` clean); FFI
+  `read_frame_for_grid` genuinely below the `guard paintsGrid`, not hoisted; phase-A timing
+  still brackets exactly `paintPane`, so numbers stay comparable to the gate.
+- Tests: `WolfKeyMapTests` PASS, `bundle_layout_test` PASS, `//tools/lint:swift_format`
+  PASS, `bazel build //crates/wolf-macos:Wolf` succeeds.
+
+### Manual smoke checklist (NOT yet run — needs a human at the app)
+
+1. preview renders; statusbar reads `Preview: <name>`; no synthetic scrollbar over it
+2. typing in the source updates the preview live
+3. **live-resize the window with a preview open** — brief flash of scratch grid at the seam
+   is acceptable; a BLACK or GARBAGE region is a bug
+4. split / close a pane / close the preview — pane underneath repaints immediately
+5. two preview panes open at once
+6. cross-file link repoint stays occluded
+7. Cmd-+ / Cmd-- font size change with a preview open
+8. tab away and back (`markRefocusRebind` path)
+9. system light/dark toggle with a preview open
