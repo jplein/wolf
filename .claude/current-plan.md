@@ -1,339 +1,215 @@
-# Plan: Baseline grid for Markdown preview CSS
+# Plan: Three CSS tweaks on top of the baseline grid
 
 ## Status: COMPLETE (pending manual visual QA)
 
-- 26 tests pass in `//crates/wolf-core:markdown_render`; `wolf_core_lib_test`, clippy, and rustfmt (including the test file) all green.
-- Reviewer: **Approved**. First pass returned "Needs revision" on two blocking items, both since fixed.
-- Docs: all four stale READMEs rewritten; prettier confirms conformant.
+- 28 tests pass in `//crates/wolf-core:markdown_render` (cold run, `--nocache_test_results`); `wolf_core_lib_test`, clippy, and rustfmt (including the test file) all green.
+- Reviewer: **Approved**, arithmetic independently re-derived. Two minor notes raised and both closed.
+- Docs: four READMEs updated; prettier confirms conformant.
 
-### Implementation deltas from the plan as written
+### Deltas from the plan as written
 
-1. **The `:first-child`/`:last-child` edge rules from §2 were inert as specified.** `MarkerInjector` emits `wolf-src` anchor spans as the body's first and last element children, so the naive pseudo-classes matched an anchor, not the first real block — a document opening with `# Title` rendered at 96px from the top instead of 48px. base.css now ships general anchor-skipping forms, each in its own rule so an engine lacking complex `:not()` or `:has()` drops only that rule rather than invalidating a shared comma list:
-   - first: `body.wolf-markdown > *:not(.wolf-src):not(*:not(.wolf-src) ~ *)`
-   - last: `body.wolf-markdown > *:not(.wolf-src):not(:has(~ *:not(.wolf-src)))`
-   - The naive `> *:last-child` survives as a documented partial fallback (correct only when the source lacks a trailing newline). The naive `> *:first-child` was removed.
-   Both general forms are unbounded in anchor-run length. An intermediate bounded fix (`.wolf-src:first-child + *`) handled only a one-anchor run and was replaced.
+1. **28 tests, not the projected 27.** `headings_reserve_anchor_scroll_clearance` was added after the plan: §3 made `scroll-margin-top: 48px` load-bearing (the sole thing keeping an anchor-jumped heading off the pane's top edge) and nothing pinned it — the sweep only checks values that *exist*, so outright deletion was invisible.
+2. **`heading_bottom_rule_is_gone_from_base_and_theme`'s guard was strengthened** after review. `!decls.is_empty()` was insufficient: `rule_decls` merges the shared `h1..h6` rule and the theme's `color` rule, so the map stays non-empty even if the per-level rule vanished — the exact case the guard claimed to exclude. Now asserts `font-size` from `HEADING_SCALE`.
+3. **`markdown/README.md` omitted the third edge rule.** base.css ships the naive `> *:last-child` as a partial fallback alongside the two general selectors; the README documented only two. Pre-existing divergence from the earlier grid work, now closed.
+4. **One base.css inline comment outside §7's listed ranges** asserted the heading's margin sits "ON TOP of the body's 48px padding" — made false by `padding: 0`. Corrected.
 
-2. **The table residual's trigger is broader than §3.3 stated.** Not "a table followed by a heading" — it is any following block whose `margin-top` exceeds 23px: every heading (h1–h3 at 48px, h4–h6 at 24px) **and `hr`** (24px). A following paragraph, list, `pre`, or blockquote (margin-top 0) is exact. Corrected in base.css, the test message, and the README.
+### Verified traps (both were live)
 
-3. **Test count is 26, not the ~8 §6 projected** — 12 pre-existing + 10 grid + 4 edge-rule/anchor tests.
+- **Stale allowlist:** `COMPENSATION_ALLOWLIST` confirmed by reading to hold exactly three entries. A leftover `("h1", "padding-bottom", 23)` would have silently rubber-stamped a future off-grid value.
+- **Theme cascade:** zero `border-bottom-color` / `border-left-color` remain in either palette block; `th`/`td` and `hr` colors survive. The coder confirmed the theme deletions alone were invisible to the suite — had the color declarations been left behind, nothing would have failed today.
 
-4. **`markdown.rs:145`** carried pre-existing doc drift (`<style>{BASE_CSS}{theme_css}</style>` vs. the five-part `format!`); corrected while the file was open. Likewise `tests/README.md`'s stale `MARKER_COLUMN_STRIDE` privacy claim and the test file's own header repeating it — the const is now `pub`.
+### Design consequences — implemented as requested, flagged for the user
 
-### Outstanding — not verifiable by any automated test here (plan §7)
+- **Blockquotes lose their only structural marker.** Sole remaining cue is the theme's dimmer text color plus a 24px indent that is *smaller* than the 32px list indent, against a now-flush body edge.
+- **h1/h2 lose 24px of air below** (72px → 48px box) on top of losing the rule, so sections read tighter.
+- **Flush-to-edge text** touches the pane's left/right pixel and the first line touches the top; on a wide pane nothing constrains line length. `pre` fares best (its own 24px padding).
 
-Manual visual QA has NOT been performed. Highest-consequence item: **confirm `hr` renders as a hairline, not a solid 24px bar** (the theme guard test covers the cascade, but not the rendered result). Also: the fixed 24px line-height now inherits into `<math>` where a unitless 1.6 previously scaled, so a tall display equation may clip or overlap — pre-approved escape hatch is `body.wolf-markdown math { line-height: normal }` in **base.css**, never in math.css. Plus optical quality, real margin-collapse adjacencies, and the collapsed-border table arithmetic in WebKit.
+### Outstanding
 
-### Noted, deliberately not acted on (out of scope)
+Manual visual QA still not performed — same as the grid work. The tests pin declared values, not rendered geometry.
 
-- `tools/lint` does not cover `crates/*/tests/` — no clippy or rustfmt in CI over the entire tests tree. The test file is currently clean (verified manually), but nothing keeps it that way.
-- No `.prettierignore` exists; the "don't prettier `markdown/*.css`" rule is convention only, so `prettier --write .` or format-on-save would reformat `base.css`.
+### Noted, not acted on
+
+- Nothing pins `scroll-margin-top`'s *effect*, only its declared value.
+- The whole-document `!html.contains("border-bottom-color")` checks also trip on those literal strings appearing in base.css header-comment prose (the comment ships in the rendered document). Deliberate; a warning comment was added at the `border-bottom-color` site but not the `border-left-color` one.
+- `tools/lint` still does not cover `crates/*/tests/`; no `.prettierignore` exists.
 
 ## Problem statement
 
-The Markdown preview stylesheet (`crates/wolf-core/src/markdown/base.css`) uses an em-based vertical rhythm that does not snap to any consistent grid. Rewrite it so every vertical dimension sits on a CSS-only baseline grid.
+Three requested changes to `crates/wolf-core/src/markdown/base.css`, layered on the completed 24px baseline grid:
 
-## Agreed design constraints (from the user)
+1. **Remove the bottom border from h1 and h2.**
+2. **Keep blockquote's left indent, remove its `border-left`.**
+3. **Remove the padding around the body** (`padding: 48px 40px` on `body.wolf-markdown`).
 
-- **Baseline unit: 24px** (16px / 1.5). Define `--wolf-baseline: 24px` on `body.wolf-markdown`.
-- Every vertical dimension must be a whole multiple of the unit. Replace the em-based rhythm.
-- h1–h6 all need explicit `font-size` AND `line-height` on grid multiples. h3–h6 currently fall through to UA defaults — fix that discontinuity.
-- Borders that add height must be compensated by subtracting the border width from adjacent padding.
-- `pre`/code: `line-height` and padding on grid multiples.
-- **Accept drift** from images and display MathML. NO JS re-snapping. CSS-only.
-- Do NOT touch `.wolf-src` scroll-sync anchor rules.
-- Do NOT change colors. `themes/default.css` out of scope **except where a border-width interacts with the grid** (this carve-out is invoked — see `hr`, §4.3).
+Not isolated deletions — each collides with a grid, cascade, or margin-collapse invariant.
 
-## Repo requirements (CLAUDE.md)
+## Grid invariants still in force
 
-- `crates/wolf-core/src/markdown/README.md` must document the grid and its unit.
-- `prettier --write` any edited Markdown; no hard line breaks within a paragraph. Do NOT prettier any `.css` under `markdown/`.
-- Prefer real integration tests over mocks. Existing tests must pass.
-- Verify `crates/wolf-core/BUILD.bazel` `compile_data` globs (build.md:89).
+- Unit **24px**, `--wolf-baseline: 24px`. Invariant: every vertical margin is 0 or a multiple of 24, every border-box height a multiple of 24. Closed under margin collapsing.
+- `line-height: 24px` is a **length**, not a ratio. Do not reintroduce a ratio.
+- Scale: h1 32/48, h2 24/48, h3 20/24, h4 18/24, h5 16/24, h6 14/24. Heading margins h1/h2 48/24, h3 48/0, h4–h6 24/0.
+- Literal px, not `calc()`. Horizontal dimensions deliberately not grid-constrained.
+- Surviving compensations: `hr` absorbs 1px into a 24px border-box height; cells `12px 16px 11px` for a 48px collapsed row; `table { margin: 0 0 23px }`.
+- Do NOT touch `.wolf-src` or `math.css`.
 
 ---
 
 # Architect's plan
 
-## 1. The governing invariant (goes in the base.css header comment)
+## 1. Exact replacement values
 
-> **Every element's vertical margin is 0 or a whole multiple of 24px, AND every element's border-box height (content + padding + border) is a whole multiple of 24px.**
+### h1 / h2 (base.css ~253–269)
 
-Closed under margin collapsing: collapsing takes `max(a, b)`, and the max of two multiples of 24 is a multiple of 24. This is why compensation always folds the border into *padding* or an *explicit height* — never into a margin.
+Delete BOTH `padding-bottom: 23px;` and `border-bottom: 1px solid;` from each rule. **Do not write `padding-bottom: 0`** — h3–h6 declare no padding either, the UA default is already 0, and an explicit zero is noise the sweep must then parse.
 
-Two supporting decisions:
-
-**(a) `body.wolf-markdown` sets `line-height: 24px` — a LENGTH, not a unitless number.** Most load-bearing decision in the rewrite. A unitless `1.5` re-multiplies against each descendant's own `font-size`, so inline `<code>` at `0.875em`, `<small>`, or superscripts would each yield a different line box and break the grid. A length inherits as the *computed* 24px regardless of descendant font-size. Cost: elements needing different leading must say so — only `h1`/`h2` (48px) and `pre` (24px, set anyway).
-
-**(b) `box-sizing: border-box` is already inherited globally** (existing `html`/`*` rules — keep verbatim). This lets `hr` absorb its rule into an explicit `height`. No effect on `h1`/`h2`/`td`, which have no explicit height and must be compensated by hand.
-
-## 2. The type scale (B = 24px)
-
-| Element | font-size | line-height | arithmetic | margin-top | margin-bottom |
-| --- | --- | --- | --- | --- | --- |
-| body / `p` | 16px | 24px | 24 = 1×24 → 1B | `p`: 0 | `p`: 24px (1B) |
-| `h1` | 32px | 48px | 48 = 2×24 → 2B (ratio 1.5) | 48px (2B) | 24px (1B) |
-| `h2` | 24px | 48px | 48 = 2×24 → 2B (ratio 2.0) | 48px (2B) | 24px (1B) |
-| `h3` | 20px | 24px | 24 = 1×24 → 1B (ratio 1.2) | 48px (2B) | 0 |
-| `h4` | 18px | 24px | 24 = 1×24 → 1B (ratio 1.33) | 24px (1B) | 0 |
-| `h5` | 16px | 24px | 24 = 1×24 → 1B (ratio 1.5) | 24px (1B) | 0 |
-| `h6` | 14px | 24px | 24 = 1×24 → 1B (ratio 1.71) | 24px (1B) | 0 |
-
-**Why these sizes.** `h1: 32px` / `h2: 24px` preserve today's rendered sizes exactly (`2em`/`1.5em` of 16px) so this is not also a visual resize of the two most-seen headings. h3–h6 today are UA defaults — 18.7 / 16 / 13.3 / 10.7px, where h5 equals body text and h6 is illegibly smaller. The `20/18/16/14` ramp is smooth and bottoms out legibly; h6 is distinguished by weight 600, not by being tiny.
-
-**Why h2 is 24px/48px (ratio 2.0).** The only grid-legal alternatives at 24px font are 24px (ratio 1.0 — wrapped lines nearly touch, descenders collide with the border) or 48px. 48px reads as deliberate air around a section rule.
-
-**Why the margin pattern reads correctly.** Every heading has strictly more space above than below (48>24, 48>0, 24>0). h3–h6 with `margin-bottom: 0` *hug* the content they introduce — correct proximity signal. h1/h2 keep 24px below because they carry a rule that needs to breathe. Top-margin step (2B for section-level h1–h3, 1B for h4–h6) maps to hierarchical weight.
-
-**Margin collapsing helps:** `p{margin-bottom:24px}` + `h2{margin-top:48px}` collapses to `max(24,48)=48` — clean 2B section gap with no `+` selector special-casing.
-
-**Edge rules (new, required):**
-- `body.wolf-markdown > *:first-child { margin-top: 0 }` — else a doc opening with `# Title` gets 48px padding PLUS 48px margin (margins don't collapse through padding) = 96px gap.
-- `body.wolf-markdown > *:last-child { margin-bottom: 0 }`.
-
-## 3. Border compensation
-
-### 3.1 h1 / h2 bottom border
-
-Target: the padding+rule band occupies exactly 1B. `24 − 1 = 23px` padding.
-
-| | before | after |
+| | h1 | h2 |
 | --- | --- | --- |
-| h1 content | 1.25×32 = 40px | 48px |
-| h1 padding-bottom | 0.3em = 9.6px | **23px** |
-| border-bottom | 1px | 1px |
-| **h1 total** | 50.6px (2.1B) | 48+23+1 = **72px = 3B** ✓ |
-| h2 content | 1.25×24 = 30px | 48px |
-| h2 padding-bottom | 0.3em = 7.2px | **23px** |
-| **h2 total** | 38.2px (1.6B) | 48+23+1 = **72px = 3B** ✓ |
+| content (line-height) | 48 = 2B | 48 = 2B |
+| padding-bottom | 0 | 0 |
+| border-bottom | 0 | 0 |
+| **border-box height** | **48 = 2B ✓** | **48 = 2B ✓** |
+| margin-top | 48 = 2B ✓ | 48 = 2B ✓ |
+| margin-bottom | 24 = 1B ✓ | 24 = 1B ✓ |
+| full footprint | 120 = 5B ✓ | 120 = 5B ✓ |
 
-Both reach 72px from different font sizes — intentional; a section rule occupies a consistent 3B band regardless of level.
+`margin-bottom: 24px` **stays** — do not zero it to match h3–h6. The type-scale table never mentioned padding, so it needs no edit.
 
-### 3.2 `hr` — the one change that reaches into themes/default.css
+### blockquote (~334–338)
 
-Current: `height:1px; border:0; margin:1.5em 0`, rule painted by the theme's `background-color`. Total = 24+1+24 = **49px**, uncompensated, and margins alone can't fix it (an `hr` before an `h2` collapses to 48 and re-exposes the 1px).
+Delete `border-left: 4px solid;` **only**. `margin: 0 0 24px` and `padding: 0 24px` unchanged. Vertical padding is 0 and no border remains on any edge, so border-box height = content height = a sum of on-grid child boxes. ✓
 
-Fix: explicit **24px height, rule drawn as `border-top`**. With inherited `border-box` + explicit height, the 1px is absorbed structurally.
+### body.wolf-markdown (~205)
 
-| | before | after |
-| --- | --- | --- |
-| height | 1px | **24px** (border-box) |
-| rule drawn by | `background-color` (theme) | **`border-top: 1px solid`** (color from theme) |
-| background | painted bar | `transparent` (base.css) |
-| margin | `24px 0` | **`24px 0 0`** |
-| **total** | 24+1+24 = 49px ✗ | 24 + 24 + 0 = **48px = 2B** ✓ |
+`padding: 48px 40px` → **`padding: 0;`** — keep an explicit declaration rather than deleting the line. Flush-to-edge is a deliberate, contested decision, not an absence of one; an explicit `0` gives the test something positive to pin so nobody silently restores an inset. `px("0")` → `Some(0)`, `0 % 24 == 0`, and `shorthand_block_edges("0")` expands cleanly. Add a one-line comment that flush edges are intentional and any inset belongs to the preview pane chrome.
 
-The rule sits at the top edge of the 24px box — one baseline below the preceding block, one baseline of clear space beneath.
+## 2. Blockquote indent: keep 24px
 
-**This requires the paired theme edit.** `themes/default.css` must change `hr { background-color: <c> }` → `border-top-color: <c>` in BOTH the dark block and the `@media (prefers-color-scheme: light)` block, preserving `#3a3a3a` and `#d0d0d0` verbatim. It is a color-property *move*, not a color change. Emitted after base.css, so a leftover `background-color` wins the cascade and paints a solid 24px bar.
+Leave `padding: 0 24px` exactly as is. The padding **is** the indent; 24px is already the documented "24px blockquote inset" in both base.css's header and markdown/README.md, so 24px causes zero doc churn while 28px would introduce a number matching nothing else in the stylesheet.
 
-### 3.3 Table th / td
+## 3. `scroll-margin-top: 48px` — keep the value, change the rationale
 
-`border-collapse: collapse` → adjacent rows share one border; an N-row table has N+1 horizontal lines. Target 2B = 48px per row.
+The old rationale ("equals the body's top padding") is gone, but the property is now **more** load-bearing: with `padding: 0` there is nothing else keeping an anchor-scrolled heading off the pane's top edge. Without it, clicking an in-document anchor jams the target heading's cap-height flat against the top pixel. 48px = 2B stays on-grid and is swept by `VERTICAL_LONGHANDS`.
 
-| | before | after |
-| --- | --- | --- |
-| line-height | 25.6px | 24px |
-| padding-top | 0.4em = 6.4px | **12px** |
-| padding-bottom | 0.4em = 6.4px | **11px** |
-| content+padding | 38.4px | 12+24+11 = **47px** |
-| shared border | 1px | 1px |
-| **row pitch** | ~39.4px (1.6B) | **48px = 2B** ✓ |
+New rationale for the docs: "2 baselines of clearance above a heading scrolled into view by an anchor link. The body itself has no padding, so this is the only thing keeping a jumped-to heading off the pane's top edge."
 
-Whole table = `47N + (N+1)` = **48N + 1**. The trailing 1px is the table's own bottom outer border with no row to share with; absorb it in `table { margin: 0 0 23px }` → `48N + 24` = exactly `2N+1` baselines ✓. The 12/11 asymmetry is imperceptible.
+## 4. The `:first-child` reset — still required, new rationale
 
-**Documented residual:** a table immediately followed by a heading collapses 23px against 48px → 48, re-exposing the 1px. Constant, non-accumulating. Note in the header and README.
+**Keep both edge rules exactly as spelled.** Walk the behavior with `padding: 0`:
 
-### 3.4 No compensation needed
+**Does the margin collapse out through the body's top edge?** Parent–child collapsing requires no `border-top`, no `padding-top`, no clearance, no BFC. With `padding: 0` and no border, `body.wolf-markdown` satisfies all of them. So if the opening heading were the body's first in-flow child, its 48px `margin-top` would collapse with the body's zero top margin and be placed **outside** the body's border box.
 
-- `blockquote`: `border-left` is horizontal. Vertical padding 0, so height is entirely its children's.
-- `pre`: no border.
-- inline `code`: an inline box's vertical padding paints background but does not grow the line box. Layout-neutral.
+**Does it escape the body background?** Formally yes — but **there is no visible color gap** and the docs must not claim one. Neither base.css nor the theme sets a background on `html`, so the root is transparent and per CSS background propagation the **body's** background paints the entire canvas. `#1b1b1b` / `#f4f4f4` covers the escaped margin. The symptom is purely positional: the whole document is displaced 48px down. The root element's margins never collapse, so it propagates no further.
 
-## 4. Decisions
+**Do the `.wolf-src` anchors block the collapse?** This is the subtlety, and it cuts against intuition. The body's first element child is a zero-size **inline** span, not a block. Inline content at the top of a block container is wrapped in an **anonymous block box**, and that box — not the `<h1>` — is the first in-flow block-level child. Whether the h1's margin reaches the body's top edge then depends on whether that anonymous box is self-collapsing, which depends on the *anonymous container's* inherited strut (24px from the body), not the span's own `line-height: 0`. That is engine-dependent territory.
 
-### 4.1 Literal px, NOT `calc(var(--wolf-baseline) * n)`
+**It does not matter which way it resolves, and the coder must not try to reason it out.** Both outcomes are wrong without the reset:
+- collapse-through → the body box is displaced 48px, heading 48px from the top;
+- no collapse-through → the 48px sits inside the body between the anonymous box and the h1, heading again 48px from the top.
 
-Declare `--wolf-baseline: 24px` once on `body.wolf-markdown`; write literal px everywhere else. Because:
+**New rationale for base.css EDGE RULES and markdown/README.md.** The old wording ("a block's own margin does NOT collapse through the body's padding, so the first block would sit 48 + 48 = 96px down") is now false in **both its premise and its number**. Replace with: the body has no padding, so an unreset 48px `margin-top` on the opening block either collapses out through the body's top edge (displacing the whole document 48px — the body's background propagates to the canvas, so this reads as position, not a color gap) or, if a leading anchor's anonymous block box blocks the collapse, sits inside the body between them. Either way the opening heading is 48px down and flush-to-edge is defeated. **48px is still a multiple of 24, so the grid sweep still cannot see this bug** — only the DOM-level edge tests can. Mirrored argument covers the last-block rule.
 
-1. **Auditability.** The sweep test (§6.9) asserts values are multiples of 24. It can do that against `48px`. Against `calc(var(--wolf-baseline) * 2)` it could only string-match syntax — proving nothing about the number while being more brittle. Literals make the grid machine-checkable; `calc()` makes it un-checkable.
-2. **Compensated values aren't clean multiples anyway** — `23px`/`12px`/`11px` would become `calc(var(--wolf-baseline) - 1px)`, mixing idioms and making the compensation harder to see.
-3. **Verbosity/bytes.** 32 chars vs 4, ×~25 declarations, in a file embedded verbatim into every re-render.
-4. **Buys no configurability today.** One `PreviewTheme` variant, no user config surface. Nothing can override it.
+Do NOT simplify any edge rule to bare `:first-child`/`:last-child`; anchor-skipping is unchanged in purpose.
 
-Mitigation: a **required header comment tabulating the full scale + compensation arithmetic**, plus the `--wolf-baseline` declaration as the documented token. Do NOT add per-declaration `/* 2B */` comments — the header table is the single source of truth.
+## 5. Theme audit (themes/default.css) — complete
 
-### 4.2 `pre` line-height: **24px**
+**Dark block:**
+- **Lines 36–39** — the whole rule `h1, h2 { border-bottom-color: #3a3a3a }`. Delete the **entire rule**; it has no other declaration and would be left empty.
+- **Line 56** — `border-left-color: #3a3a3a` inside the blockquote rule (54–57). Delete **this declaration only**; the rule keeps `color: #a8a8a8`.
 
-Reject 12px outright: at a 14px code font, 12px leading is less than the font size — lines would overlap. 12px is the only tighter grid-legal value, so there is no viable tighter option.
+**`@media (prefers-color-scheme: light)` block:**
+- **Lines 87–90** — the whole rule `h1, h2 { border-bottom-color: #d0d0d0 }`. Delete entirely.
+- **Line 107** — `border-left-color: #d0d0d0` inside the light blockquote rule (105–108). Declaration only; keeps `color: #656565`.
 
-`pre { font-size: 14px; line-height: 24px; padding: 24px; margin: 0 0 24px }`, `pre code { font-size: inherit }`. Total = `24 + 24n + 24` = `24(n+2)` — always a multiple, **zero compensation** (no border). Code lines share the body baseline exactly.
+**Confirmed unaffected — do not touch:** `th, td { border-color }` (59–62 / 110–113, load-bearing for the 2B row pitch); `hr { border-top-color }` (68–70 / 119–121, asserted by an existing test); `code`/`pre` (background/color only); the `h1…h6 { color }` rules (27–34 / 78–85) — h1/h2 must keep matching a non-empty theme rule. Header comment (1–19) discusses only `hr`; **no header edit needed**, and "only sets color/background/border-color" stays true.
 
-**Bug to fix while here:** `code` sets `font-size: 0.9em` and `pre code` *also* sets `0.9em`, compounding to `0.81em` inside `<pre>`. Set size once on `pre`, use `inherit` on `pre code`. Keep inline `code { font-size: 0.875em }` relative so inline code in an h1 scales — harmless, since line-height is an inherited length.
+**Hex safety:** `#3a3a3a` and `#d0d0d0` each remain in use (th/td, hr), so the hr test's substring assertions still pass. `default_theme_carries_dark_and_light_palettes` asserts only `#1b1b1b`, `#f4f4f4`, `#0969da`, `#111111`, `color-scheme: light dark` — all untouched.
 
-### 4.3 Body padding `2rem 2.5rem` → **`48px 40px`** (must change)
+## 6. Test changes (markdown_render.rs)
 
-`2rem` = 32px = 1.33×24 — off-grid, and it shifts the whole document before the first block. `48px` = 2B (24px would feel cramped for a preview pane). Horizontal `40px` is `2.5rem` unchanged — **horizontal dimensions are deliberately NOT grid-constrained**; say so in the header so nobody "fixes" it later.
+### 6.1 Value change
+`body_line_height_is_a_length_not_a_ratio` (~743–748): expected padding `Some("48px 40px")` → `Some("0")`. Rewrite the message: the body is deliberately flush to the pane edges; `0` is trivially on-grid; the assertion exists so a "comfortable" padding is not silently reintroduced. line-height / font-size / length-not-ratio assertions unchanged.
 
-`rem`→`px` also removes a real hazard: `rem` resolves against a root font-size this document never sets, so a WebKit minimum-font-size preference or OS text scaling could silently detune the grid. Every value in the rewritten file should be px.
+### 6.2 DELETE outright
+`heading_border_is_compensated_into_padding` (~801–845). Its premise disappears entirely. Do not adapt it into a negative assertion in place — write the two focused replacements below.
 
-`scroll-margin-top` on h1–h6: `2rem` → **`48px`**, keeping it equal to the body top padding (its original intent) and on-grid. Two READMEs state `2rem` and must be updated.
+### 6.3 ADD two
+Both follow the `hr_occupies_whole_baselines_and_is_painted_by_its_border` pattern: base.css structure via `rule_decls`, theme half via plain substring checks against the whole document (the light palette is inside the one `@media`, which the crude parser deliberately cannot address).
 
-## 5. File-by-file changes
+- **`heading_bottom_rule_is_gone_from_base_and_theme`** — for h1 and h2, the merged `rule_decls` map contains neither `border-bottom` nor `padding-bottom`; and the document contains no `border-bottom-color` substring anywhere (covers **both** palette blocks in one check — exactly the dead-theme-declaration hazard the `hr` bug taught). Message: reintroducing a bottom rule requires re-adding the 23px compensation *and* an allowlist entry, since a bare 1px border on a 48px content box makes the heading 49px tall.
+- **`blockquote_keeps_its_indent_without_a_border`** — blockquote's merged decls have `padding == "0 24px"` and `margin == "0 0 24px"` and no `border-left` key; document contains no `border-left-color` substring. Message: the 24px padding **is** the indent (the only thing holding the quote in from the flush body edge), and its vertical `0` is why blockquote needs no border compensation.
 
-### 5.1 `base.css` — rewrite
+Net count: **26 → 27**.
 
-**Header comment:** replace the 2-item "It owns two things" block with a 3-item version adding the 24px baseline grid: the unit and `--wolf-baseline` token; that `line-height` is a LENGTH not a ratio, and why; the invariant from §1; the scale table from §2; the compensation arithmetic from §3 with both documented residuals (table-then-heading 1px; images/display MathML); that horizontal dimensions are NOT grid-constrained; the literal-px-over-calc rationale.
+### 6.4 COMPENSATION_ALLOWLIST — remove two entries
+Delete `("h1", "padding-bottom", 23)` and `("h2", "padding-bottom", 23)` **together with their explanatory comments** (~519–522). Keep the three table/cell entries.
 
-**Rules** (keep `.wolf-src`, `html`, `*`/`::before`/`::after` **byte-for-byte unchanged**):
+**Not bookkeeping.** The sweep checks `s == selector && p == prop && v == parsed`, so a leftover h1 entry would silently wave through any future `h1 { padding-bottom: 23px }` — with no border to compensate, a plain 1px-per-heading grid violation and exactly the drift the sweep exists to catch. The allowlist's design is "an entry forces its author to name the border it pays for"; an entry naming a border that no longer exists inverts that into a rubber stamp.
 
-- `body.wolf-markdown` — `margin:0; padding:48px 40px; --wolf-baseline:24px; font-size:16px; line-height:24px`; font stack unchanged; `word-wrap:break-word`.
-- `body.wolf-markdown > *:first-child { margin-top: 0 }` (new)
-- `body.wolf-markdown > *:last-child { margin-bottom: 0 }` (new)
-- `h1..h6` shared — `font-weight:600; scroll-margin-top:48px`. **Remove** margin-top/margin-bottom/line-height from the shared rule.
-- Six per-level rules with §2 values. h1/h2 additionally `padding-bottom:23px; border-bottom:1px solid`.
-- `p { margin: 0 0 24px }`
-- `a` / `a:hover` — unchanged
-- `code` — font stack unchanged; `font-size:0.875em; padding:2px 4px; border-radius:6px`
-- `pre` — `font-size:14px; line-height:24px; padding:24px; margin:0 0 24px; overflow:auto; border-radius:6px`
-- `pre code` — `padding:0; font-size:inherit; background:transparent`
-- `blockquote` — `margin:0 0 24px; padding:0 24px; border-left:4px solid`
-- `blockquote > :last-child { margin-bottom: 0 }` (new — else the quote is 24px taller than its content, on-grid but lopsided against the 0 top padding)
-- `table { border-collapse:collapse; margin:0 0 23px }` — **comment the 23px inline**; it looks like a typo
-- `th, td { padding:12px 16px 11px; border:1px solid }`
-- `img { max-width:100%; height:auto }`
-- `hr { height:24px; margin:24px 0 0; border:0; border-top:1px solid; background:transparent }`
-- `ul, ol { margin:0 0 24px; padding-left:32px }`
-- `li > ul, li > ol { margin-bottom: 0 }` (new — else a nested list injects a phantom 24px inside its parent item)
+### 6.5 GRID_SELECTORS — no change
+Verify every entry still resolves non-empty: `body.wolf-markdown` (still has `--wolf-baseline`, margin, `padding: 0`, fonts, line-height, word-wrap + theme colors); `h1`/`h2` (font-size, line-height, margins, shared scroll-margin-top/font-weight, theme color); `blockquote` (margin, padding, theme color). **Add and remove nothing.**
 
-### 5.2 `themes/default.css` — two paired edits (only in-scope theme change)
+### 6.6 BODY_PADDING_TOP — delete the constant
+Delete `const BODY_PADDING_TOP: i32 = 48;` (~1229) and its doc comment. Redefining it to `0` leaves a constant named for a padding that no longer exists, and both uses are in failure messages being rewritten anyway.
 
-In **both** the dark block and the `@media (prefers-color-scheme: light)` block: `hr { background-color: <c> }` → `border-top-color: <c>`, values preserved exactly (`#3a3a3a`, `#d0d0d0`). Nothing else.
+- `first_child_margin_reset_reaches_the_opening_heading` message (~1800–1824): rewrite the "Why" paragraph per §4. Keep the closing observation, corrected: 48px is still a multiple of 24, so the sweep passes and only this test sees the bug. Preserve the selector guidance and the "do NOT touch `.wolf-src`" warning verbatim.
+- `first_child_margin_reset_survives_a_multi_anchor_leading_run` message (~1875–1894): same substitution; "the SAME `{BODY_PADDING_TOP}` + 48 = 96px gap" → "the SAME 48px displacement". `MIN_LEADING_ANCHORS` sanity check and narrow-selector explanation unchanged.
 
-Update the header comment: "only sets color/background/border-color" stays true (`border-top-color` is a border-color property), but add a sentence noting `hr` paints via `border-top-color` because base.css gives it an explicit 24px grid height that a background would fill.
+### 6.7 Comment/message text now false
+- `BORDER` const doc (~427–429): "(h1/h2 `border-bottom`, th/td `border`)" → cite only th/td (and hr). Const stays; still used.
+- Edge-reset section banner (~1188–1224): contains "96px" and "margins do not collapse through padding" — rewrite both per §4. The anchor displacement explanation, selector shapes, and "pins the OUTCOME" framing are unchanged.
+- Sweep comment (~1108): "except the five documented compensations" → three.
+- `last_child_margin_reset_reaches_the_closing_block` (~1936–1938): "below the body's own bottom padding" → "below the last line of content, at the pane's bottom edge".
+- `blockquote_last_child_margin_is_zeroed` (~1015–1048): **no change** — its reasoning is about vertical padding only and stays true.
 
-**Must land in the same commit as the base.css `hr` change.**
+## 7. Docs
 
-### 5.3 `markdown/README.md`
+### base.css header (authoritative spec)
+- ~66–67: "descenders collide with the rule beneath" now false. Keep the surviving half of the h2 justification (at ratio 1.0 wrapped lines nearly touch), drop the rule clause.
+- ~74–84 BORDER COMPENSATION: delete the entire h1/h2 paragraph and its 72px = 3B arithmetic. Keep `hr` and `table th/td` verbatim.
+- ~104–106: blockquote no longer has a border at all, so the "horizontal-only" phrasing is stale. `pre`/inline `code` clauses stand.
+- ~108–118 EDGE RULES opening: replace the "does NOT collapse through the body's padding … 96px" argument with §4. Everything from "The obvious spelling … is INERT here" onward is **unchanged**.
+- ~155–159 HORIZONTAL DIMENSIONS: drop "the body's 40px side padding"; keep 32px list indent, 16px cell padding, 24px blockquote inset. Add that the body is flush by design.
+- ~167 "the compensated values 23/12/11" still accurate (table 23, cells 12/11). No change.
+- ~25–47 (unit, invariant, length-not-ratio) and the scale table ~51–58: **unchanged**.
 
-Rewrite the `## base.css` "Baseline layout" bullet into a proper subsection stating: the 24px unit and `--wolf-baseline`; that line-height is a length not a ratio, and why; the invariant; the full scale table from §2 (deliberately duplicated so the doc reads without opening the CSS); the compensation arithmetic including both residuals; that horizontal dimensions are not grid-constrained; the literal-px rationale. Update `scroll-margin-top: 2rem` → `48px`.
+### markdown/README.md
+L10 scroll-margin-top rationale → §3. L33 descenders clause. L35 delete the h1/h2 compensation sentence, keep hr/cells/table, rewrite the blockquote "horizontal-only" clause. L37 edge-rules opening → §4. L41 remove "The body's 40px side padding", note flush body. L39/43/47/49 unchanged.
 
-Add to `## themes/default.css`: one sentence that `hr` is colored via `border-top-color` because base.css gives it an explicit grid height.
+### crates/wolf-core/README.md
+L133 "(2 baselines, matching the body's top padding)" → "(2 baselines of clearance; the body itself has no padding, so this is the only thing keeping a jumped-to heading off the top edge)".
 
-### 5.4 `markdown.rs` — doc comments only, no code
+### crates/wolf-core/src/README.md
+L111 same phrase, same replacement.
 
-`BASE_CSS` const doc (~77-80) says "the `.wolf-src` marker rule plus baseline layout". "Baseline layout" currently means "starting/default layout" and now **collides with the typographic sense** — resolve the ambiguity at every occurrence: "…plus the 24px-baseline-grid structural layout (see `markdown/base.css` and `markdown/README.md`)". Verify no other doc comment mentions `1.6`, `em`, or `2rem`.
+### crates/wolf-core/tests/README.md
+L117 "26 tests" → 27. L119 four corrections: (a) padding `48px 40px` → `0`; (b) delete the `heading_border_is_compensated_into_padding` sentence, describe the two replacements; (c) "five compensated values" → three (cells 12/11, table 23); (d) the "96px instead of 48px" edge-rule framing → 48px-instead-of-flush.
 
-### 5.5 `crates/wolf-core/README.md` — lines 126, 133
+`prettier --write` every edited `.md`. **Never** prettier `.css` under `src/markdown/`.
 
-L126 "baseline layout" → name the 24px baseline grid. L133 `scroll-margin-top: 2rem` → `48px` (2 baselines, matching the body top padding).
+## 8. Implementation order
 
-### 5.6 `crates/wolf-core/src/README.md` — line 111
+1. **themes/default.css** — the four deletions. Alone this is visually a no-op (borders still exist, uncolored → fall back to `currentColor`); no test asserts those colors.
+2. **base.css declarations** — the four edits. Suite now fails in exactly the expected places. Note the allowlist entries go *inert* rather than failing — eyeball that the sweep is green for the right reason.
+3. **markdown_render.rs** — §6 in full. Suite green.
+4. **base.css header comment** — §7.
+5. **The four Markdown docs**, then `prettier --write`.
 
-Same two edits.
+## 9. Dependencies / lint
 
-### 5.7 `crates/wolf-core/tests/README.md` — line 117
-
-Says "ten tests"; it is actually 12 (count drifted). Correct to the new total and describe the baseline-grid assertions.
-
-### 5.8 `BUILD.bazel` — **verify only, no edit**
-
-`compile_data = glob(["src/markdown/**/*.css", ...])` already covers both edited files; no CSS file added/renamed/removed. The `markdown_render` target picks up new `#[test]` fns automatically.
-
-**No new files. No new dependencies.**
-
-## 6. Test plan
-
-All in existing `crates/wolf-core/tests/markdown_render.rs`, following the established `default_theme_carries_dark_and_light_palettes` pattern of asserting on embedded CSS. No new file, no new Bazel target.
-
-### 6.1 Helpers (private to the test file)
-
-`base.css` is `include_str!`'d verbatim, so the document contains it byte-for-byte and a crude parser is reliable:
-- `fn style_block(html: &str) -> &str` — slices between `<style>` and `</style>`
-- `fn rule_decls<'a>(css: &'a str, selector: &str) -> HashMap<String, String>` — finds the rule whose selector list contains `selector` as a whole comma-separated entry; splits body on `;`, each declaration on the first `:`, trimming/collapsing whitespace
-- `fn px(value: &str) -> Option<i32>` — parses `Npx`. **Return i32, not f64** (see §8 lints)
-
-Doc-comment the helpers: this parser is valid only because the CSS is hand-written, flat, and non-nested. The only `@media` lives in `themes/default.css` — the `hr` theme assertions (§6.6) must use plain substring checks, not `rule_decls`.
-
-### 6.2 `baseline_unit_is_declared`
-Document contains `--wolf-baseline: 24px`.
-
-### 6.3 `body_line_height_is_a_length_not_a_ratio`
-`body.wolf-markdown` has `font-size == "16px"`, `line-height == "24px"`, `padding == "48px 40px"`. Explicitly assert line-height **ends in `px`**, with a failure message explaining why a unitless ratio breaks inherited grid alignment — the invariant most likely to be silently regressed.
-
-### 6.4 `headings_declare_explicit_font_size_and_line_height`
-Table-driven over `[(h1,32,48),(h2,24,48),(h3,20,24),(h4,18,24),(h5,16,24),(h6,14,24)]`. Each per-level rule declares **both** properties at exact px, and line-height % 24 == 0. Pins the scale and the h3–h6 UA-default fix.
-
-### 6.5 `heading_border_is_compensated_into_padding`
-h1 and h2: `padding-bottom == "23px"`, `border-bottom` contains `1px`, assert `23 + 1 == 24`. Failure message shows the arithmetic.
-
-### 6.6 `hr_occupies_whole_baselines_and_is_painted_by_its_border`
-- base.css `hr`: `height == "24px"`, `border-top` contains `1px`, `margin == "24px 0 0"`, `background` is `transparent`.
-- **Theme guard (the important half):** document contains `border-top-color: #3a3a3a` AND `border-top-color: #d0d0d0`. Catches the failure where base.css is updated but the theme still paints a 24px solid bar. Failure message must name that mode.
-
-### 6.7 `table_cells_land_two_baselines_per_row`
-`th, td`: `padding == "12px 16px 11px"`, `border` contains `1px`; assert `12+24+11+1 == 48`. Plus `table` `margin == "0 0 23px"` with a message citing the `48N+1` collapsed-border arithmetic — the value looks like a typo and needs a self-explaining test.
-
-### 6.8 `pre_sits_on_the_baseline_grid`
-`pre`: `line-height == "24px"`, `padding == "24px"`, `margin == "0 0 24px"`. Plus `pre code` has `font-size: inherit` — regression guard for the 0.81em compounding bug.
-
-### 6.9 `every_vertical_dimension_is_on_the_baseline_grid` — the sweep test
-
-**The centerpiece.** Over a fixed list of styled selectors (`body.wolf-markdown`, `p`, `h1`…`h6`, `pre`, `blockquote`, `table`, `th, td`, `hr`, `ul, ol`, `li > ul, li > ol`, the `:first-child`/`:last-child` rules), for every vertical property (`margin-top/bottom`, `padding-top/bottom`, `line-height`, `height`, `scroll-margin-top`, plus top/bottom components of shorthand `margin`/`padding`), assert the px value is 0 or `v % 24 == 0` — **except** an explicit documented allowlist:
-
-```
-(h1, padding-bottom, 23), (h2, padding-bottom, 23),
-(th/td, padding-top, 12), (th/td, padding-bottom, 11),
-(table, margin-bottom, 23)
-```
-
-Each entry carries a comment naming the border it compensates. Value: **any new off-grid vertical value anywhere in the file fails the build**, and any new compensated value forces the author to state which border it compensates. A genuine grid audit, not a substring smoke test.
-
-### 6.10 Regression
-All 12 existing tests pass unchanged. `default_theme_carries_dark_and_light_palettes` survives the `hr` edit: it asserts `#1b1b1b`, `#f4f4f4`, `#0969da`, `#111111`, `prefers-color-scheme: light`, `color-scheme: light dark` — none live in the `hr` rule, and `#3a3a3a`/`#d0d0d0` remain present elsewhere (h1/h2 border-bottom-color, blockquote, cells). **Do not modify this test.**
-
-## 7. NOT verifiable by automated test — rests on human visual review
-
-1. **Whether text baselines actually land on the grid in WebKit.** The tests prove *declared* values, not rendered geometry: half-leading distribution, Inter's ascent/descent metrics, subpixel rounding at fractional device scale, WebKit line-box rounding. A 24px line box does not guarantee the baseline within it sits where a 24px overlay expects.
-2. **Whether the collapsed-border table arithmetic holds in practice** (`48N+1` depends on WebKit's collapsed-border resolution). Verify with a real 3+ row table.
-3. **Optical quality** — whether 48px above an h1 reads sensibly, whether h2 at 24/48 looks airy vs broken, whether h3–h6 hug correctly, whether 24px leading on 14px code reads well. Pure judgement.
-4. **Margin-collapse across every real adjacency** (list→heading, blockquote→hr, table→heading, nested list tails).
-5. **The accepted drift** from images and display MathML — unmeasurable here by construction.
-6. **Inter fallback** — if the inlined face fails to load, fallback metrics change the visual result while every declaration stays identical.
-
-**Recommended manual QA:** render a scratch doc exercising h1–h6, two paragraphs between each, `hr`, a 3-row table, a fenced code block, a blockquote with two paragraphs, a nested list, an image, and inline + display math; overlay a 24px repeating-linear-gradient via the web inspector. Confirm specifically: **(a) the `hr` is a hairline, not a 24px bar** — highest-consequence failure mode; (b) the first heading is not double-spaced from the top; (c) code blocks don't shift the grid below them.
-
-## 8. Lint notes
-
-- **Parse to integer px.** `px()` returns `Option<i32>`, not `f64` — avoids `clippy::float_cmp` on `v % 24 == 0`, and a fractional px anywhere in the file is *itself* a grid violation that should fail loudly rather than round silently.
-- Prefer deleting an unused helper over `#[allow(dead_code)]`. No `#[allow(...)]` should be needed; if one seems necessary the helper is doing too much.
-- Keep table-driven fixtures as slice-of-tuple constants so rustfmt formats them predictably.
-- No CSS linter runs here and `markdown/*.css` is excluded from prettier — add no stylelint-style comments; nothing reads them.
-
-## 9. Implementation order
-
-1. `base.css` header comment (the spec the file implements — write it first to prevent drift)
-2. `base.css` body + edge rules
-3. `base.css` headings (shared rule trimmed, then six per-level rules with compensation)
-4. `base.css` flow content (`p`, `code`, `pre`, `pre code`, `blockquote`, lists, `img`)
-5. **`base.css` `hr` AND `themes/default.css` `hr` together, in one step** — separating them leaves the preview visibly broken
-6. `base.css` table
-7. Test helpers, then targeted tests, then the sweep test last (depends on the selector list being settled)
-8. Run `//crates/wolf-core:markdown_render` and `//crates/wolf-core:wolf_core_lib_test` — green before any docs
-9. `markdown.rs` doc comments
-10. README updates, then `prettier --write` each edited `.md`. **Never** prettier a `.css` under `markdown/`
-11. Verify `BUILD.bazel` compile_data (read-only)
-12. Manual visual review per §7
+None. No new files, no BUILD.bazel change (`compile_data` already globs `src/markdown/**/*.css`). No new Rust items beyond two `#[test]` fns matching existing shapes. `BODY_PADDING_TOP`'s deletion removes the constant with both uses, so no `dead_code` warning. `BORDER` remains used. No `#[allow(...)]` needed.
 
 ## 10. Risks
 
-- **`themes/default.css` `hr` (HIGH, mitigated).** base.css is emitted *before* the theme, so a leftover `background-color` wins the cascade and paints the 24px `hr` box as a solid bar. Highest-consequence regression. Mitigated by the paired edit (step 5), the theme guard test (§6.6), and QA item (a).
-- **`themes/default.css` everything else (LOW).** Sets only color/background-color/border-*-color/color-scheme — none affect layout. h1/h2 and cell borders still work because base.css declares `1px solid`; the theme only supplies color. No theme selector loses its structural counterpart.
-- **`math.css` (MEDIUM — DO NOT EDIT).** Emitted *after* base.css, so it wins on conflicting properties. Its em-relative vertical paddings (L108, L150) and fractional `border-top: 0.06em` (L139/143) are inside `<math>` — exactly the accepted display-MathML drift. Leave them. **The real risk:** body now inherits a *fixed* 24px line-height into `<math>`, so a tall display equation may overflow its 24px line box and clip or overlap, where the old unitless 1.6 at least scaled with math font-size. Watch in QA. **Pre-approved escape hatch if it bites: a single rule in `base.css` — NOT math.css — `body.wolf-markdown math { line-height: normal }`**, reintroducing already-accepted math drift without touching the vendored file. Do not improvise inside math.css.
-- **`.wolf-src` anchors (LOW).** Its `font-size: 0` and `line-height: 0` must survive verbatim. The length-based body line-height *strengthens* this, **but only because `.wolf-src` sets `line-height: 0` explicitly** — if that declaration were ever dropped, markers would inherit a hard 24px and inject visible blank lines throughout. Do not touch the rule; keep the existing header warning. Existing marker tests cover placement, not the zero-height property.
-- **Margin-collapse assumptions (MEDIUM).** The design leans on adjacent-sibling collapsing taking the max. Collapsing is suppressed by non-`visible` `overflow`, floats, and flex/grid containers. `pre` sets `overflow: auto`, establishing a BFC — so `pre`'s own margins don't collapse with its children's, which is fine and desirable. No other rule introduces a BFC. Confirm in QA that a `pre` between two paragraphs advances the grid correctly.
-- **`rem`→`px` (LOW; this change removes risk).** Today's rem values resolve against an unset root font-size, a dependency on webview text-scaling that could detune the grid invisibly.
-- **README drift (LOW but certain).** Four Markdown files repeat base.css facts (`scroll-margin-top: 2rem` in two, "baseline layout" in three). Per CLAUDE.md a doc/implementation mismatch is a bug — §5.5/§5.6 are not optional polish.
+1. **Flush-to-edge readability — largest, and intentional.** Body text, tables, and headings touch the left/right pixel of the pane; the first line touches the top. On a wide pane it also removes the last constraint on line length. `pre` fares best (its own 24px padding). User explicitly asked; implement. Note it in the CSS so the next reader knows it is a decision, not an omission.
+2. **Blockquotes lose their only structural marker.** After the border deletion the sole cue is the theme's dimmer text color plus a 24px indent *smaller* than the 32px list indent — a quote reads as a slightly-under-indented grey paragraph, and against a flush body edge the indent alone carries all the meaning. Real legibility regression. **Flagging only; no action without the user's word.**
+3. **Headings lose their section rule.** h1/h2 become distinguishable from h3 only by size and leading. The 72px → 48px shrink also removes 24px of air *below* every h1/h2, so sections read noticeably tighter even though `margin-bottom` is untouched.
+4. **The stale-allowlist trap (§6.4)** — highest-consequence way to get this wrong; fails silently and permanently.
+5. **The theme cascade trap (§5)** — leaving the color declarations is harmless *today* (a color on a non-existent border paints nothing), which is what makes it dangerous: a loaded gun for whoever next adds a border. Same failure mode as the `hr` bug. The two new substring checks are what make it catchable.
+6. **Crude parser `@media` truncation.** `stylesheet_rules` truncates at the first `@media`; deleting a whole rule from the light block does not change brace balance in a way the helpers observe. No parser change needed. **Do not add any `@media` to base.css** — that would break every base.css assertion at once.
+7. **math.css untouched and unaffected** — styles `<math>` internals only, sets no body padding or h1/h2/blockquote borders. Vendored; do not edit.
+8. **`.wolf-src` untouched.** Guarded by `scroll_sync_anchors_stay_zero_sized`. Per §4, if collapse behavior looks surprising in the browser, the fix is still never on the anchor side.
+9. **`table { margin: 0 0 23px }` residual unchanged** — re-exposes 1px whenever the next block's `margin-top` exceeds 23px. This change touches no `margin-top`, so the documented residual stays correct. No edit.
 
 ---
 
@@ -341,8 +217,8 @@ All 12 existing tests pass unchanged. `default_theme_carries_dark_and_light_pale
 
 - [x] Problem statement written
 - [x] Architect plan
-- [x] Tests written
-- [x] Implementation + tests passing (26/26)
-- [x] Review (approved, second pass)
+- [x] Tests updated
+- [x] Implementation + tests passing (28/28, cold run)
+- [x] Review (approved; two notes closed)
 - [x] Documentation
 - [ ] Manual visual QA — see "Outstanding" above

@@ -424,8 +424,9 @@ fn default_theme_carries_dark_and_light_palettes() {
 const BASELINE: i32 = 24;
 
 /// The width of every border that has to be compensated out of an adjacent
-/// padding (h1/h2 `border-bottom`, `th`/`td` `border`). Named so the
-/// compensation arithmetic in the failure messages reads as arithmetic.
+/// padding or absorbed into an explicit height (`th`/`td` `border`, `hr`'s
+/// `border-top`). Named so the compensation arithmetic in the failure messages
+/// reads as arithmetic.
 const BORDER: i32 = 1;
 
 /// `(selector, font-size px, line-height px)` for the six heading levels
@@ -516,11 +517,6 @@ const VERTICAL_LONGHANDS: &[&str] = &[
 /// Adding a value here is the documented way to introduce a compensated
 /// dimension — and it forces the author to say which border it pays for.
 const COMPENSATION_ALLOWLIST: &[(&str, &str, i32)] = &[
-    // Compensates `h1 { border-bottom: 1px }`: 23 + 1 = 24 = 1 baseline, so the
-    // padding+rule band under the heading is exactly one baseline tall.
-    ("h1", "padding-bottom", 23),
-    // Compensates `h2 { border-bottom: 1px }`: 23 + 1 = 24 = 1 baseline.
-    ("h2", "padding-bottom", 23),
     // Compensate the `th, td { border: 1px }` collapsed row border:
     // 12 + 24 (line-height) + 11 + 1 = 48 = 2 baselines of row pitch. The 12/11
     // asymmetry exists because 47 is odd; it is imperceptible.
@@ -742,9 +738,15 @@ fn body_line_height_is_a_length_not_a_ratio() {
     );
     assert_eq!(
         decls.get("padding").map(String::as_str),
-        Some("48px 40px"),
-        "body padding must be `48px 40px`: 48px vertical is 2 baselines, while \
-         the 40px horizontal is deliberately NOT grid-constrained: {decls:?}"
+        Some("0"),
+        "body padding must be exactly `0`: the preview body is deliberately \
+         FLUSH to the pane's edges, and any inset belongs to the preview pane \
+         chrome rather than to the document. `0` is trivially on-grid, so the \
+         sweep can never object to it — which is precisely why this assertion \
+         exists: it pins the explicit zero so a \"comfortable\" padding cannot \
+         be silently reintroduced. Note that removing the declaration entirely \
+         would also read as `0` in the browser (the UA default) but would lose \
+         the record that flush edges are a decision, not an omission: {decls:?}"
     );
 }
 
@@ -799,49 +801,179 @@ fn headings_declare_explicit_font_size_and_line_height() {
 }
 
 #[test]
-fn heading_border_is_compensated_into_padding() {
-    const COMPENSATED_PADDING: i32 = 23;
+fn headings_reserve_anchor_scroll_clearance() {
+    // The shared `h1, h2, … h6` rule's `scroll-margin-top`. The grid sweep sees
+    // this property (it is in VERTICAL_LONGHANDS) and so would catch an off-grid
+    // value — but it is blind to the declaration being DELETED outright, which
+    // is the regression this test exists to make impossible.
+    const ANCHOR_CLEARANCE: i32 = 2 * BASELINE;
+
     let css = rendered_stylesheet();
 
-    for selector in ["h1", "h2"] {
+    for &(selector, _, _) in HEADING_SCALE {
+        // `rule_decls` merges across matching rules, so the shared rule's
+        // declaration is visible from every per-level query.
         let decls = rule_decls(&css, selector);
 
-        let padding = decls
-            .get("padding-bottom")
-            .unwrap_or_else(|| panic!("`{selector}` must declare padding-bottom: {decls:?}"));
-        assert_eq!(
-            px(padding),
-            Some(COMPENSATED_PADDING),
-            "`{selector}` padding-bottom must be {COMPENSATED_PADDING}px, not \
-             {BASELINE}px — this looks like a typo and is not. `{selector}` \
-             carries a {BORDER}px `border-bottom`, and border-box height is \
-             padding + border, so the padding+rule band is \
-             {COMPENSATED_PADDING} + {BORDER} = {BASELINE}px = exactly one \
-             baseline. Using {BASELINE}px here would make it {BASELINE}+{BORDER} \
-             and push everything below off the grid. Found `{padding}`: {decls:?}"
-        );
-
-        let border = decls.get("border-bottom").unwrap_or_else(|| {
+        let declared = decls.get("scroll-margin-top").unwrap_or_else(|| {
             panic!(
-                "`{selector}` must declare a `border-bottom` (the theme supplies \
-                 only its color): {decls:?}"
+                "`{selector}` must declare `scroll-margin-top` (it lives on the \
+                 shared `h1, h2, … h6` rule, alongside `font-weight`). It \
+                 reserves {ANCHOR_CLEARANCE}px = 2 baselines of clearance above \
+                 a heading scrolled into view by an in-document anchor link. The \
+                 body has NO padding — it is deliberately flush to the pane \
+                 edges — so this is the ONLY thing keeping a jumped-to heading \
+                 off the pane's top edge; without it, clicking an anchor jams \
+                 the target heading's cap-height flat against the top pixel of \
+                 the preview. Deleting the declaration is invisible to every \
+                 other assertion here, including the grid sweep, which can only \
+                 check a value that exists: {decls:?}"
             )
         });
-        assert!(
-            border.contains("1px"),
-            "`{selector}` border-bottom must be {BORDER}px — the \
-             {COMPENSATED_PADDING}px padding compensates exactly {BORDER}px. \
-             Found `{border}`: {decls:?}"
+        let parsed = px(declared).unwrap_or_else(|| {
+            panic!(
+                "`{selector}` `scroll-margin-top` must be whole integer pixels, \
+                 found `{declared}`: {decls:?}"
+            )
+        });
+        assert_eq!(
+            parsed, ANCHOR_CLEARANCE,
+            "`{selector}` `scroll-margin-top` must be {ANCHOR_CLEARANCE}px \
+             (2 baselines of clearance for anchor-link navigation), found \
+             {parsed}px. The body has no padding, so this declaration alone \
+             prevents an anchor-scrolled heading from sitting flush against the \
+             pane's top edge. Any replacement value must ALSO be a whole \
+             multiple of the {BASELINE}px baseline to stay on-grid — the sweep \
+             enforces that much, but only this test pins the amount of \
+             clearance: {decls:?}"
+        );
+    }
+}
+
+#[test]
+fn heading_bottom_rule_is_gone_from_base_and_theme() {
+    // h1/h2 no longer carry a section rule. Both halves of the deletion matter,
+    // and the theme half is the one the `hr` bug taught us to check: a
+    // `border-bottom-color` left behind in `themes/default.css` would paint
+    // nothing today (there is no border to color) and would therefore sit there
+    // silently until someone re-adds a border and gets a surprise.
+    let css = rendered_stylesheet();
+
+    for &(selector, font_size, _) in HEADING_SCALE
+        .iter()
+        .filter(|&&(selector, _, _)| matches!(selector, "h1" | "h2"))
+    {
+        let decls = rule_decls(&css, selector);
+
+        // Sanity: `rule_decls` merges every matching rule, so a non-empty map
+        // proves nothing — the shared `h1, h2, … h6` rule and the theme's
+        // `h1…h6 { color }` rule would keep it populated even if the per-level
+        // `body.wolf-markdown {selector}` rule vanished entirely. Assert a
+        // declaration ONLY that per-level rule supplies (`font-size`; the shared
+        // rule carries font-weight/scroll-margin-top, the theme only color), so
+        // the two absence assertions below are about a rule that is genuinely
+        // still being parsed rather than vacuously true of a lost rule.
+        assert_eq!(
+            decls.get("font-size").and_then(|v| px(v)),
+            Some(font_size),
+            "`{selector}` must still declare its own `font-size: {font_size}px` \
+             from the per-level rule in base.css. Without this the two \
+             `border-bottom`/`padding-bottom` absence checks below would pass \
+             trivially if that rule were lost or renamed, since the merged map \
+             stays non-empty from the shared heading rule and the theme's color \
+             rule alone: {decls:?}"
         );
 
         assert_eq!(
-            COMPENSATED_PADDING + BORDER,
-            BASELINE,
-            "compensation arithmetic for `{selector}`: padding-bottom \
-             ({COMPENSATED_PADDING}) + border-bottom ({BORDER}) must equal one \
-             baseline ({BASELINE})"
+            decls.get("border-bottom"),
+            None,
+            "`{selector}` must NOT declare a `border-bottom` — the section rule \
+             under h1/h2 was deliberately removed. Reintroducing one is not a \
+             one-line change: a bare {BORDER}px border on a 48px content box \
+             makes the heading 49px tall and pushes everything below it off the \
+             {BASELINE}px grid, so it also requires re-adding the 23px \
+             `padding-bottom` compensation (23 + {BORDER} = {BASELINE}) AND a \
+             matching COMPENSATION_ALLOWLIST entry naming the border it pays \
+             for: {decls:?}"
+        );
+        assert_eq!(
+            decls.get("padding-bottom"),
+            None,
+            "`{selector}` must NOT declare a `padding-bottom` at all. The 23px \
+             that used to live here existed ONLY to compensate the {BORDER}px \
+             `border-bottom`; with the border gone the padding has nothing to \
+             pay for, and even an explicit `0` is noise (the UA default is \
+             already 0, and h3..h6 declare no padding either) that the grid \
+             sweep would then have to parse: {decls:?}"
         );
     }
+
+    // The theme half. Substring checks against the WHOLE document, not
+    // `rule_decls`: the light palette lives inside the one `@media
+    // (prefers-color-scheme: light)` block, which the crude parser deliberately
+    // cannot address (see `style_block`). One check covers BOTH palettes.
+    //
+    // Note for future authors: this is a substring check over the whole emitted
+    // document, and base.css's header comment ships inside that document. So
+    // merely MENTIONING `border-bottom-color` in CSS prose will fail this test,
+    // not just declaring it. That is deliberate — a comment describing a border
+    // color is a strong hint someone is about to re-add one — but if you trip it
+    // from a comment, the fix is to reword the comment, not to loosen the check.
+    let html = render_html("# Title\n\n## Section\n", PreviewTheme::Default);
+    assert!(
+        !html.contains("border-bottom-color"),
+        "no `border-bottom-color` may survive anywhere in the emitted \
+         stylesheets — base.css no longer gives h1/h2 a bottom border, so any \
+         remaining color declaration paints nothing. That is exactly what makes \
+         it dangerous: it is invisible today and becomes a loaded gun for \
+         whoever next adds a border. This single check covers BOTH the dark \
+         palette and the `prefers-color-scheme: light` block: {html}"
+    );
+}
+
+#[test]
+fn blockquote_keeps_its_indent_without_a_border() {
+    // The border-left is gone; the padding that used to sit BESIDE it is now the
+    // only thing marking a quote off from the surrounding text.
+    let css = rendered_stylesheet();
+    let decls = rule_decls(&css, "blockquote");
+
+    assert_eq!(
+        decls.get("padding").map(String::as_str),
+        Some("0 24px"),
+        "`blockquote` padding must be `0 24px`. The horizontal {BASELINE}px IS \
+         the indent — with the `border-left` removed and the body itself flush \
+         to the pane edges, this padding is the ONLY thing holding a quote in \
+         from the edge, so shrinking it to 0 erases the quote's last structural \
+         cue. The VERTICAL `0` is separately load-bearing: it is why blockquote \
+         needs no border compensation at all, since border-box height = content \
+         height = a sum of on-grid child boxes: {decls:?}"
+    );
+    assert_eq!(
+        decls.get("margin").map(String::as_str),
+        Some("0 0 24px"),
+        "`blockquote` margin must be `0 0 24px` — one baseline below, zero \
+         above: {decls:?}"
+    );
+    assert_eq!(
+        decls.get("border-left"),
+        None,
+        "`blockquote` must NOT declare a `border-left`; the quote is marked by \
+         its {BASELINE}px indent (plus the theme's dimmer text color) alone: \
+         {decls:?}"
+    );
+
+    // Theme half, same argument as `heading_bottom_rule_is_gone_from_base_and_theme`:
+    // substring over the whole document so the one check covers both palettes.
+    let html = render_html("> quoted\n", PreviewTheme::Default);
+    assert!(
+        !html.contains("border-left-color"),
+        "no `border-left-color` may survive anywhere in the emitted stylesheets \
+         — base.css no longer gives blockquote a left border, so the color \
+         declaration paints nothing and merely lies in wait for the next person \
+         to add one. Covers both the dark palette and the \
+         `prefers-color-scheme: light` block: {html}"
+    );
 }
 
 #[test]
@@ -1105,7 +1237,7 @@ fn stylesheets_are_emitted_in_base_then_math_then_theme_order() {
 #[test]
 fn every_vertical_dimension_is_on_the_baseline_grid() {
     // The sweep. Over every styled selector, every vertical dimension must be
-    // 0 or a whole multiple of 24px — except the five documented compensations.
+    // 0 or a whole multiple of 24px — except the three documented compensations.
     // Any NEW off-grid vertical value anywhere in base.css fails here, and any
     // new compensated value forces its author to add an allowlist entry naming
     // the border it pays for.
@@ -1203,16 +1335,24 @@ fn every_vertical_dimension_is_on_the_baseline_grid() {
 //   <body class="wolf-markdown"><span class="wolf-src" id="wl-1-0" …></span><h1 …>
 //
 // `:first-child` would therefore match a span that has no margin to zero,
-// leaving the <h1> with its 48px margin-top ON TOP of the body's 48px
-// padding-top (margins do not collapse through padding) = 96px. `base.css`
-// consequently spells the opening-block rule as
+// leaving the <h1> with its full 48px margin-top. The body has NO padding, so
+// that margin resolves one of two ways, and it does not matter which: either it
+// collapses out through the body's top edge (the body satisfies every condition
+// for parent-child collapsing — no border-top, no padding-top, no clearance, no
+// BFC), displacing the whole document 48px down; or, if the leading anchor's
+// anonymous block box blocks the collapse-through, the 48px sits INSIDE the body
+// between the anchor and the <h1>. Both outcomes put the opening heading 48px
+// below the top edge and defeat flush-to-edge. (The escaped-margin case is
+// positional, NOT a color gap: neither base.css nor the theme sets a background
+// on `html`, so the body's background propagates to the canvas and paints the
+// displaced region.) `base.css` consequently spells the opening-block rule as
 //
 //   body.wolf-markdown > *:not(.wolf-src):not(*:not(.wolf-src) ~ *)
 //
 // — "not an anchor, and no non-anchor sibling precedes it" — which skips a
 // leading anchor run of ANY length. Symmetrically, `flush_before(usize::MAX)`
 // emits trailing anchors AFTER the last block, so `:last-child` matches an
-// anchor too. Note 96 is 4 baselines: the grid invariant SURVIVES, so the sweep
+// anchor too. Note 48 is 2 baselines: the grid invariant SURVIVES, so the sweep
 // cannot see this either.
 //
 // These tests therefore pin the OUTCOME — "the declaration that must reach the
@@ -1222,11 +1362,6 @@ fn every_vertical_dimension_is_on_the_baseline_grid() {
 // skips the anchors passes, and so would a change that stopped emitting a
 // leading anchor at all.
 // ---------------------------------------------------------------------------
-
-/// The body's `padding-top`, re-declared locally: without a working
-/// opening-block reset an opening `# Title` gets this PLUS `h1`'s own
-/// `margin-top` (margins do not collapse through padding).
-const BODY_PADDING_TOP: i32 = 48;
 
 /// A direct element child of `<body class="wolf-markdown">`.
 #[derive(Debug, Clone)]
@@ -1802,9 +1937,20 @@ fn first_child_margin_reset_reaches_the_opening_heading() {
         Some(0),
         "the opening <h1>'s winning `margin-top` is `{value}` (from `{selector}`), \
          but it MUST resolve to 0.\n\n\
-         Why: the body has `padding-top: {BODY_PADDING_TOP}px`, and margins do \
-         NOT collapse through padding, so a non-zero heading margin ADDS to it \
-         ({BODY_PADDING_TOP} + 48 = 96px of dead air above the title). That is \
+         Why: the body has NO padding — it is deliberately flush to the pane's \
+         edges — so an unreset 48px `margin-top` on the opening block resolves \
+         one of two ways. Either it collapses out through the body's top edge \
+         (the body has no border-top, no padding-top, no clearance and \
+         establishes no BFC, so parent-child collapsing applies) and displaces \
+         the WHOLE document 48px down; or, if the leading anchor's anonymous \
+         block box blocks the collapse-through, the 48px sits inside the body \
+         between that box and the heading. Which one it is depends on the \
+         anonymous container's inherited strut and is engine-dependent — and it \
+         does not matter, because BOTH put the opening heading 48px below the \
+         top edge and defeat flush-to-edge. (In the collapse-out case there is \
+         no visible COLOR gap: neither base.css nor the theme sets a background \
+         on `html`, so the body's background propagates to the canvas and paints \
+         the escaped margin. The symptom is purely positional.) That is \
          what `body.wolf-markdown > *:not(.wolf-src):not(*:not(.wolf-src) ~ *) \
          {{ margin-top: 0 }}` is for — but {}. That selector reads \"not an \
          anchor, and no non-anchor sibling precedes it\", so it deliberately \
@@ -1813,8 +1959,8 @@ fn first_child_margin_reset_reaches_the_opening_heading() {
          something structural — `:first-child` matches the first element child \
          whatever it is, so it lands on an anchor span that has no margin to \
          zero — or it has lost the cascade to a later/more specific \
-         `margin-top`. Note 96px is 4 baselines, so the grid sweep passes and \
-         only this test can see the bug.\n\n\
+         `margin-top`. Note 48px is still a multiple of {BASELINE}, so the grid \
+         sweep passes and only this test can see the bug.\n\n\
          The fix belongs in the SELECTOR — it must reach the first non-anchor \
          block — and must NOT touch the `.wolf-src` rule itself, whose \
          `font-size: 0` / `line-height: 0` is load-bearing for scroll-sync.\n\n\
@@ -1877,7 +2023,7 @@ fn first_child_margin_reset_survives_a_multi_anchor_leading_run() {
         Some(0),
         "the opening <h1>'s winning `margin-top` is `{value}` (from `{selector}`), \
          but it MUST resolve to 0 — {}.\n\n\
-         This is the SAME {BODY_PADDING_TOP} + 48 = 96px gap as \
+         This is the SAME 48px displacement as \
          `first_child_margin_reset_reaches_the_opening_heading`, re-exposed by a \
          LONGER leading anchor run. A NARROW selector of the form\n\n    \
          body.wolf-markdown > .wolf-src:first-child + *\n\n\
@@ -1934,7 +2080,8 @@ fn last_child_margin_reset_reaches_the_closing_block() {
         "the final block's winning `margin-bottom` is `{value}` (from \
          `{selector}`), but it MUST resolve to 0 — {}.\n\n\
          This reset exists so the document does not end with a stray baseline \
-         of margin below the body's own bottom padding. The rule that CARRIES \
+         of margin below the last line of content, at the pane's bottom edge. \
+         The rule that CARRIES \
          that invariant for the common case — a source ending in a newline, as \
          this fixture does — is the general form:\n\n    \
          body.wolf-markdown > *:not(.wolf-src):not(:has(~ *:not(.wolf-src)))\n\n\

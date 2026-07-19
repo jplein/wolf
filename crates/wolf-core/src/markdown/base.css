@@ -63,8 +63,7 @@
  * body text and h6 was illegibly small); the 20/18/16/14 ramp is smooth and
  * bottoms out legibly, with h6 distinguished by weight 600 rather than by being
  * tiny. h2 takes 48px leading because the only other grid-legal value at a 24px
- * font is 24px (ratio 1.0), where wrapped lines nearly touch and descenders
- * collide with the rule beneath.
+ * font is 24px (ratio 1.0), where wrapped lines nearly touch.
  *
  * Every heading has strictly more space above than below (48>24, 48>0, 24>0).
  * h3-h6 with margin-bottom 0 hug the content they introduce. Collapsing does
@@ -72,15 +71,6 @@
  * h2{margin-top:48px} collapses to max(24,48) = 48 = 2B.
  *
  * BORDER COMPENSATION
- *
- * h1 / h2 bottom rule -- the padding+rule band must occupy exactly 1B, so the
- * padding is 24 - 1 = 23px:
- *
- *   h1: 48 (content) + 23 (padding) + 1 (border) = 72px = 3B
- *   h2: 48 (content) + 23 (padding) + 1 (border) = 72px = 3B
- *
- * Both reach 72px from different font sizes -- intentional: a section rule
- * occupies a consistent 3B band regardless of level.
  *
  * hr -- an explicit 24px border-box height absorbs the rule structurally, and
  * the rule is drawn as border-top (colored by the theme via border-top-color,
@@ -101,15 +91,30 @@
  * table{margin-bottom:23px} brings the total to 48N + 24 = exactly 2N+1
  * baselines.
  *
- * No compensation is needed for blockquote (its border is horizontal-only and
- * its vertical padding is 0), pre (no border), or inline code (vertical padding
- * on an inline box paints background but does not grow the line box).
+ * No compensation is needed for blockquote (it has no border on any edge and
+ * its vertical padding is 0, so its border-box height is just the sum of its
+ * on-grid children), pre (no border), or inline code (vertical padding on an
+ * inline box paints background but does not grow the line box).
  *
  * EDGE RULES (and why their selectors are not just :first-child/:last-child)
  *
- * A block's own margin does NOT collapse through the body's padding, so the
- * first block must have margin-top 0 (else an opening `# Title` sits 48 + 48 =
- * 96px down) and the last block margin-bottom 0. The obvious spelling --
+ * The first block must have margin-top 0 and the last block margin-bottom 0.
+ * The body has no padding, so an unreset 48px margin-top on the opening block
+ * goes one of two ways. Either it collapses out through the body's top edge --
+ * parent-child collapsing is unblocked with no border-top, no padding-top, no
+ * clearance and no BFC -- displacing the whole document 48px; note this is a
+ * POSITIONAL symptom only, not a visible color gap, because neither this file
+ * nor any theme sets a background on `html`, so per CSS background propagation
+ * the body's background paints the entire canvas including the escaped margin.
+ * Or, if a leading .wolf-src anchor's anonymous block box blocks the
+ * collapse-through, the 48px instead sits INSIDE the body between that
+ * anonymous box and the heading. Which way it resolves depends on whether that
+ * anonymous box is self-collapsing (a function of the anonymous container's
+ * inherited 24px strut, not the span's own line-height: 0) -- engine-dependent
+ * territory, and it does not matter: both outcomes put the opening heading 48px
+ * down and defeat the flush-to-edge body. A mirrored argument covers the last
+ * block. 48 is still a multiple of 24, so the GRID SWEEP CANNOT SEE THIS BUG --
+ * only the DOM-level edge tests can. The obvious spelling --
  * `body.wolf-markdown > *:first-child` / `:last-child` -- is INERT here: the
  * scroll-sync .wolf-src anchors are real elements in the body, flushed before
  * the first block's opening tag and (for any source ending in a newline) after
@@ -154,9 +159,10 @@
  *
  * HORIZONTAL DIMENSIONS ARE NOT GRID-CONSTRAINED
  *
- * The grid is vertical only. The body's 40px side padding, the 32px list
- * indent, the 16px cell padding and the 24px blockquote inset are chosen for
- * looks, not for the grid. Do not "fix" them to multiples of 24.
+ * The grid is vertical only. The 32px list indent, the 16px cell padding and
+ * the 24px blockquote inset are chosen for looks, not for the grid. Do not
+ * "fix" them to multiples of 24. The body itself is flush to the pane edges by
+ * design (padding: 0); any inset belongs to the preview pane chrome.
  *
  * LITERAL PX, NOT calc(var(--wolf-baseline) * n)
  *
@@ -202,7 +208,9 @@ html {
 body.wolf-markdown {
   --wolf-baseline: 24px;
   margin: 0;
-  padding: 48px 40px;
+  /* Flush to the pane edges on purpose: any inset belongs to the preview pane
+   * chrome, not to the document. */
+  padding: 0;
   font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica,
     Arial, sans-serif;
   font-size: 16px;
@@ -212,9 +220,10 @@ body.wolf-markdown {
 
 /* The document's FIRST real block. `:first-child` alone is not enough: the
  * scroll-sync markers are emitted before the first block's opening tag, so the
- * body's first element child is usually a .wolf-src span (which has no margin to
- * zero) and the opening heading keeps its 48px margin ON TOP of the body's 48px
- * padding. Reads as "not an anchor, and has no non-anchor sibling before it",
+ * body's first element child is usually a .wolf-src span, which has no margin to
+ * zero -- leaving the opening heading's 48px margin-top in play against a body
+ * that has no padding to absorb it. Reads as "not an anchor, and has no
+ * non-anchor sibling before it",
  * which is unbounded in the leading anchor run's length. See EDGE RULES.
  *
  * Kept in its OWN rule: the complex `:not()` argument is Selectors 4, so an
@@ -255,8 +264,6 @@ body.wolf-markdown h1 {
   line-height: 48px;
   margin-top: 48px;
   margin-bottom: 24px;
-  padding-bottom: 23px;
-  border-bottom: 1px solid;
 }
 
 body.wolf-markdown h2 {
@@ -264,8 +271,6 @@ body.wolf-markdown h2 {
   line-height: 48px;
   margin-top: 48px;
   margin-bottom: 24px;
-  padding-bottom: 23px;
-  border-bottom: 1px solid;
 }
 
 body.wolf-markdown h3 {
@@ -334,7 +339,6 @@ body.wolf-markdown pre code {
 body.wolf-markdown blockquote {
   margin: 0 0 24px;
   padding: 0 24px;
-  border-left: 4px solid;
 }
 
 body.wolf-markdown blockquote > :last-child {

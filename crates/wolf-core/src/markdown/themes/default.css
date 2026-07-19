@@ -33,11 +33,6 @@ body.wolf-markdown h6 {
   color: #ffffff;
 }
 
-body.wolf-markdown h1,
-body.wolf-markdown h2 {
-  border-bottom-color: #3a3a3a;
-}
-
 body.wolf-markdown a {
   color: #4ea1ff;
 }
@@ -53,7 +48,6 @@ body.wolf-markdown pre {
 
 body.wolf-markdown blockquote {
   color: #a8a8a8;
-  border-left-color: #3a3a3a;
 }
 
 body.wolf-markdown th,
@@ -84,11 +78,6 @@ body.wolf-markdown hr {
     color: #111111;
   }
 
-  body.wolf-markdown h1,
-  body.wolf-markdown h2 {
-    border-bottom-color: #d0d0d0;
-  }
-
   body.wolf-markdown a {
     color: #0969da;
   }
@@ -104,7 +93,6 @@ body.wolf-markdown hr {
 
   body.wolf-markdown blockquote {
     color: #656565;
-    border-left-color: #d0d0d0;
   }
 
   body.wolf-markdown th,
