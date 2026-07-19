@@ -16,12 +16,15 @@
 //  plus one array-slot write. No locks are taken and the snapshot lock is never
 //  held; all state is main-thread-only.
 //
-//  Usage from a terminal (a double-clicked bundle inherits launchd's stderr and
-//  you will see nothing):
+//  Run it from a terminal — a double-clicked bundle inherits launchd's stderr
+//  and you will see nothing. For the build + capture recipe see `build.md`,
+//  section "Frame-time instrumentation (macOS)"; it is not duplicated here
+//  because a copy in a source comment is exactly what drifted before.
 //
-//      bazel build //crates/wolf-macos:Wolf
-//      WOLF_FRAME_STATS=1 \
-//        ./bazel-bin/crates/wolf-macos/Wolf_archive-root/Wolf.app/Contents/MacOS/Wolf
+//  WARNING: measure `//crates/wolf-macos:WolfRelease`. Measuring the plain
+//  `//crates/wolf-macos:Wolf` target measures a `-Onone` build, and those
+//  numbers must never inform a decision. Resolve the bundle path with
+//  `bazel cquery --output=files`, never from `bazel-bin` — see `build.md`.
 //
 //  NOTE the `Wolf_archive-root` component: `macos_application` emits `Wolf.zip`
 //  plus the unzipped bundle beneath it. `bazel-bin/crates/wolf-macos/Wolf.app`

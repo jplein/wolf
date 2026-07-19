@@ -12,12 +12,16 @@
 #                         resources/icons/ (no committed PNG duplicates).
 #   - Wolf              : the macos_application bundle (minimum_os_version 26.0),
 #                         incl. the build-time-assembled `Wolf.icon/` bundle.
+#   - WolfRelease       : the SAME bundle as Wolf, but with the whole graph
+#                         (Swift AND Rust) built at `-c opt` via an outgoing-edge
+#                         transition. Tagged `manual`. Build this for real use.
 #   - WolfKeyMapTests   : the swift_test over the pure seam.
 #   - xcodeproj         : an UNCOMMITTED Xcode project for debugging/LLDB only.
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("@build_bazel_rules_apple//apple:macos.bzl", "macos_application")
 load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library", "swift_test")
 load("@rules_xcodeproj//xcodeproj:defs.bzl", "xcodeproj", "top_level_target")
+load("//crates/wolf-macos:release.bzl", "opt_bundle")
 
 # All hand-written Swift sources for this package, enumerated HERE because Bazel
 # forbids cross-package globbing (the //tools/lint swift-format check/fix cannot
@@ -173,6 +177,32 @@ macos_application(
     ],
     visibility = ["//visibility:public"],
     deps = [":wolf_macos_lib"],
+)
+
+# The OPTIMIZED build of the exact same bundle: `opt_bundle` applies a Starlark
+# outgoing-edge transition setting compilation_mode = opt on the `:Wolf` edge, so
+# the entire subgraph (both Swift modules, all Rust crates, the treesitter
+# parsers) is rebuilt at `-c opt` without `-c opt` on the command line. Build
+# THIS for real use, for installing, and for any performance measurement.
+#
+# `:Wolf` itself is UNCHANGED: it remains the fast-iteration development build
+# (fastbuild, Swift `-Onone`, Rust unoptimized) and is what every test target and
+# the xcodeproj build against.
+#
+# `manual` is deliberate, not boilerplate: without it every `bazel build //...`
+# would silently rebuild the ENTIRE Rust + Swift + treesitter graph a second time
+# at `-c opt`. `//tools/lint` targets use `manual` for the same reason. Explicit
+# `bazel build //crates/wolf-macos:WolfRelease` still works normally.
+#
+# The resulting `.app` path MUST come from
+# `bazel cquery --output=files //crates/wolf-macos:WolfRelease` (see
+# release.bzl and build.md) and NEVER from `bazel-bin/...`, which points at the
+# fastbuild top-level config and will be missing or a stale `-Onone` bundle.
+opt_bundle(
+    name = "WolfRelease",
+    bundle = ":Wolf",
+    tags = ["manual"],
+    visibility = ["//visibility:public"],
 )
 
 # Inspects the built `.app`: asserts the pinned nvim tree + captive init.lua

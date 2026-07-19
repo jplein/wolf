@@ -1,323 +1,397 @@
-# Plan: Reduce `draw.pane` — the per-pane paint floor
+# Plan: `//crates/wolf-macos:WolfRelease` + document the optimized build
 
 ## Problem statement
 
-After the occlusion fix (committed, `cd0230b`), `draw.pane` is the single largest
-main-thread cost in Wolf and the floor under EVERY configuration, preview or not. It is
-20.4 ms to paint one pane. Terminal Neovim's whole keystroke-to-pixel path is single-digit ms.
+**`build.md` documents only `bazel build //crates/wolf-macos:Wolf`, which compiles Swift at
+`-Onone` and Rust unoptimized.** There is no optimized build documented anywhere in the
+repo. This is the single largest performance defect found in the whole typing-latency
+investigation — larger than any code fix we made — and per `CLAUDE.md` ("if the
+documentation and the implementation differ, that's a bug") a doc that presents a debug
+build as *the* build is itself the bug.
 
-## Where we are (measured, this machine — a FAST Mac)
+## Evidence (measured, this machine)
 
-Steady state, large file (`~/Git/jplein/Notepad/commonplace-book.md`), typing near the top.
-Captures `test-1`..`test-4` in the repo root are the full record.
+Same capture protocol, steady-state window #5. `test-5-with-preview` (default build) vs
+`test-7-with-opt-param` (`-c opt`), both in the repo root:
 
-| bucket        | before occlusion fix | after (current) |
-| ------------- | -------------------- | --------------- |
-| `draw`        | 45.6–46.0 ms         | 22.1–22.3 ms    |
-| `draw.pane`   | 22.1–22.3 ms         | **20.4–20.5 ms** |
-| `draw.prev`   | 22.0–22.2 ms         | 0.13 ms (fixed) |
-| `prev.reload` | 28.7–29.4 ms         | 28.2–28.7 ms    |
-| `prev.render` | 26.4–27.1 ms         | 25.8–26.3 ms    |
-| `ctrl.wake`   | 4.71–4.77 ms         | 4.81–4.88 ms    |
+| bucket        | default (`-Onone`) | `-c opt` (`-O`) | change |
+| ------------- | ------------------ | --------------- | ------ |
+| `ctrl.wake`   | 4.85 ms            | **0.51 ms**     | -89%   |
+| `prev.render` | 25.63 ms           | **6.17 ms**     | -76%   |
+| `draw`        | 21.87 ms           | 14.64 ms        | -33%   |
+| `pane.glyphs` | 18.96 ms           | 14.00 ms        | -26%   |
+| `pane.read`   | 0.67 ms            | 0.07 ms         | -90%   |
+| `prev.html`   | 2.23 ms            | 2.31 ms         | ~0%    |
 
-Current main-thread budget per 5 s window (with preview open):
+- **Main-thread busy 73% -> 34%. Per keystroke ~70 ms -> ~36 ms.** User reports typing
+  "feels very fluid" on the optimized build.
+- `prev.render` -76% is the **Rust** side (`pulldown-cmark`) — Rust was unoptimized too,
+  not just Swift.
+- `prev.html` unchanged is a control: WebKit is a system framework, always optimized, so it
+  had nothing to gain. CoreText is likewise why `pane.glyphs` improved least.
 
-| source                                    | time / 5 s | share |
-| ----------------------------------------- | ---------- | ----- |
-| `draw` (almost entirely `draw.pane`)      | 1703 ms    | 47%   |
-| `prev.reload` (of which `prev.render` 1127 ms) | 1233 ms | 34%   |
-| wakes                                     | 723 ms     | 20%   |
+Verified with `bazel aquery`: default (fastbuild) passes `-Onone`; `-c opt` passes `-O`/`-Os`.
 
-Total busy ~73%. Per keystroke ~70 ms. Frame rate ~15.4 fps.
+## Scope
 
-**Read products, not means.** `draw` COUNT rose 56 -> 77 after the occlusion fix, because a
-less-busy main thread lets AppKit coalesce fewer display passes. Freed capacity is partly
-reinvested as more frequent redraws and preview reloads rather than idle. Always report
-count x mean alongside the mean.
+### 1. New target `//crates/wolf-macos:WolfRelease`
 
-## THE QUESTION THIS PASS MUST ANSWER FIRST
+A named target producing the optimized app WITHOUT requiring `-c opt` on the command line,
+so the shippable build is a first-class thing you can ask for by name.
 
-`draw.pane` = 20.4 ms for ONE pane. It is the sum of at least four different things, and
-they have COMPLETELY DIFFERENT fixes. The split is unknown and must be measured before any
-optimization is written.
+`macos_application` does not change compilation mode on its own, and an `alias` cannot —
+compilation mode is a configuration, not an attribute. This needs a **Starlark
+outgoing-edge transition** setting `//command_line_option:compilation_mode` to `"opt"`,
+applied to a thin rule wrapping the existing `:Wolf` target.
 
-1. **`handle.read_frame_for_grid(grid)` — FFI marshalling.**
-   `from_snapshot_grid` (`crates/wolf-ffi/src/lib.rs:3456`) allocates `cols*rows` `FfiCell`s
-   each with a `cell.text.clone()` (a Rust `String` heap alloc PER CELL). `cells()`
-   (`:3375`) then does `self.cells.clone()` — a SECOND full deep clone. `drawCursor`
-   (`PaneContainerView.swift`) calls `frame.cells()` again — a THIRD.
-   → If this dominates, the fix is in **Rust/FFI** (return a borrowed view, or a flat
-   packed buffer, instead of cloning `String`s per cell).
-2. **`paintCells` — CoreText.** Per cell: `ctx.setFillColor` + `ctx.fill`, then for any
-   non-empty cell a fresh `[NSAttributedString.Key: Any]` dict, a fresh
-   `NSAttributedString`, and a fresh `CTLineCreateWithAttributedString` + `CTLineDraw`. No
-   glyph cache, no run coalescing, no batched `CGContextShowGlyphsAtPositions`.
-   Remember: blank cells hold nvim's literal `" "`, NOT `""`, so they are NOT skipped —
-   this is what made the preview scratch grid cost a full 22 ms.
-   → If this dominates, the fix is entirely in **Swift** (glyph cache + run coalescing).
-3. **Swift-side per-cell `String` bridging** — `cell.text().toString()` allocates a Swift
-   `String` per cell per frame.
-4. **The statusbar paint** — known small (~0.13 ms, from the occluded-pane measurement,
-   which is statusbar-only).
+The architect must determine and specify:
 
-**Do not guess the ratio.** The last pass nearly optimized `loadHTMLString`, which turned
-out to be 2.4 ms; only measurement caught it. The same discipline applies here.
+- the exact transition + wrapper rule (a `transition(implementation, inputs, outputs)` with
+  `outputs = ["//command_line_option:compilation_mode"]`, plus a rule with `cfg = <transition>`
+  on its dep, and any allowlist handling the Bazel version requires)
+- whether it belongs inline in `crates/wolf-macos/BUILD.bazel` or in a new `.bzl` (prefer a
+  `.bzl` — BUILD files should not carry rule definitions; check repo convention first)
+- how the output is surfaced. `macos_application` yields `Wolf.zip` plus the unzipped bundle
+  under `Wolf_archive-root/`. **The wrapper must forward a usable `DefaultInfo` so the
+  bundle is actually reachable at a predictable path** — the part most likely to be fiddly,
+  and it must be verified by building and running the result, not assumed.
+- the resulting on-disk path, so `build.md` can document it exactly. NOTE the `bazel-bin`
+  symlink retargets to whichever config was built last, so a `bazel-bin/...` path is
+  FRAGILE when both configs exist. Prefer `bazel cquery --output=files` or an explicit
+  `bazel-out/darwin_arm64-opt-.../` path, and say which is robust.
 
-## Approach: same staged gate that worked last time
+### 2. `build.md` corrections
 
-### PHASE A — measure the split
+- Document `//crates/wolf-macos:WolfRelease` as the way to build the app you actually run
+  and install, with the exact on-disk path to the bundle.
+- State plainly that the plain `:Wolf` target is a **development** build at `-Onone` and is
+  substantially slower, with the measured numbers above as justification.
+- Document the test caveat: **`bazel test -c opt //crates/wolf-macos:WolfKeyMapTests` FAILS
+  to build** — `@testable import` requires `-enable-testing`, which rules_swift only sets in
+  non-opt compilation modes (error: `module 'WolfKeyMap' was not compiled for testing`).
+  This is expected and standard: **test in the default config, ship the optimized build.**
+  Do not present it as a defect to fix.
+- Update the frame-time instrumentation section: its invocation should use the release
+  bundle path, and it should note that measuring the default build measures `-Onone`.
 
-Add sub-buckets to the existing `FrameStats` seam (it is already there, allocation-free,
-env-gated, and unit-tested) splitting `draw.pane` into at minimum:
+### 3. Other docs
 
-- the `read_frame_for_grid` FFI call
-- `paintCells`
-- `drawCursor`
-- the statusbar paint
-
-Then re-capture under the SAME protocol and report count x mean for each.
-
-**GATE — decide the fix from the evidence, not from this plan's suspicions:**
-
-- FFI marshalling >~50% of `draw.pane` → the primary fix is in Rust/FFI. This would be the
-  first Rust change in this whole effort; scope it separately.
-- CoreText >~50% → the primary fix is a Swift glyph cache + run coalescing.
-- Roughly even → fix both, cheaper one first, re-measuring between so each is attributable.
-
-### PHASE B — the fix, conditional on phase A
-
-Not specified here on purpose. The architect specifies it AFTER the gate result is in.
+Check `crates/wolf-macos/README.md` and `architecture.md` for build-command claims that are
+now incomplete. Use judgment on `architecture.md` — a build-configuration fact may or may
+not rise to architecture.
 
 ## Constraints
 
-- Preserve the phase-A/occlusion instrumentation exactly as-is — `draw`, `draw.pane`,
-  `draw.prev` must stay comparable to `test-1`..`test-4`.
-- Any new bucket must keep raw values dense/ascending and update the pinned test list in
-  `FrameStatsTests.swift`.
-- Sub-bucket timing must not itself distort the measurement: `draw.pane` is 20 ms and a
-  clock read is tens of ns, but per-CELL timing would be fatal. Time PHASES, never cells.
-- Disabled path stays free (one `swift_once` load + a branch).
+- Do NOT change any application code. Build target + documentation only.
+- Do not alter the existing `:Wolf` target's behavior — other targets/tests depend on it,
+  and the fastbuild path must stay the fast-iteration build.
+- The new target must actually build AND the resulting app must launch. Verify by running
+  it, not by inspecting the graph.
+- `prettier --write` every Markdown file touched; no hard line breaks within a paragraph.
 
 ## Explicitly NOT in this pass
 
-- Moving `prev.render` off the main thread (now 34% of budget and the clear NEXT pass after
-  this one — it rose in relative importance once `draw` halved).
-- Wake amplification (~2.9 wakes/key at ~4.8 ms).
-- Dirty-rect tracking in `draw`.
-- `INPUT_COALESCE_DELAY` (8 ms, machine-independent).
-- `isOpaque` (still not the cause of anything measured).
+- The glyph work (`pane.glyphs`, now 97% of `draw.pane` at ~4.4 us/cell under `-O`). The
+  ablation probe for it is preserved on branch `probe/glyph-cost-diagnostic` (commit
+  `0295ab6`, THROWAWAY, must never merge).
+- Moving `prev.render` off the main thread — now only 6.17 ms under `-O`, much less
+  valuable than when it was 25.6 ms.
+- Wake amplification — `ctrl.wake` is now 0.51 ms, so ~2.9 wakes/key is ~1.5 ms. Noise.
+- Dirty-rect tracking, `INPUT_COALESCE_DELAY`, `isOpaque`.
+- Any Rust source change.
 
 ## Success criteria
 
-Phase A: a trustworthy split of the 20.4 ms with count x mean per sub-bucket, sufficient to
-pick the fix without guessing. A surprising result is a GOOD outcome.
+`bazel build //crates/wolf-macos:WolfRelease` produces an optimized bundle that launches and
+behaves identically to the `-c opt` build already measured in `test-7-with-opt-param`.
+`build.md` tells a reader unambiguously which target to build for real use and which for
+development, and why it matters.
 
-Phase B: `draw.pane` materially below 20.4 ms with no visual regression. Terminal-parity is
-not the bar for one pass; a large, verified reduction is.
+## Architect's plan (APPROVED — implement exactly this)
 
-## Architect's PHASE A plan (APPROVED — implement exactly this)
+### Versions / allowlist — SETTLED
 
-### Findings that drive the design (verified in code, do NOT re-derive)
+`.bazelversion` = Bazel **8.7.0**; rules_swift 3.6.1, rules_apple 4.5.3, apple_support
+2.6.1, rules_rust 0.71.2. **`_allowlist_function_transition` is NOT required on Bazel 8**
+(requirement removed upstream, bazelbuild/bazel#19233). **Do not add it** — it pins a
+dependency on a legacy allowlist a future Bazel drops. Only if analysis errors with an
+allowlist message (it should not) add it, commented as a version-specific workaround.
 
-Call chain per pane: `draw` (`:1208`) -> `paintPane` (`:1271`) -> `paintStatusbar` (`:1337`),
-then `read_frame_for_grid` (`:1293`), then `paintGrid` (`:1305`) -> `paintCells` (`:1439`)
-and `drawCursor` (`:1676`).
+### Where the Starlark lives — `crates/wolf-macos/release.bzl`
 
-**FIVE deep copies of the cell data, located precisely:**
+Repo convention: every `.bzl` is co-located with the package that consumes it
+(`bazel/<topic>/extensions.bzl`; `tools/lint/clippy_fix.bzl` is the direct precedent for a
+custom RULE — a `.bzl` in the consuming package, module docstring, `load()`ed from that
+package's BUILD). Follow it exactly. No rule definitions inline in BUILD.bazel.
 
-| # | where | cost |
-|---|-------|------|
-| A | `FfiFrame::from_snapshot_grid` (`wolf-ffi/src/lib.rs:3450`), `cell.text.clone()` `:3460` | `cols*rows` Rust String allocs, inside `read_frame_for_grid`. `core.read_snapshot()` is only a `read_arc()` guard (`wolf-core/src/api.rs:340`) — cheap. |
-| B | `let cells = frame.cells()` at `PaneContainerView.swift:1442`, INSIDE `paintCells` -> `self.cells.clone()` (`lib.rs:3375`) | a second full `cols*rows` String alloc set |
-| C | `frame.cells()` passed as an **ARGUMENT at the call site** `:1322` inside `paintGrid` | a third full clone — for a function that reads at most ONE cell |
-| D | `cell.text()` at `:1458`/`:1698` -> `FfiCell::text` = `self.text.clone()` (`lib.rs:2160`), then `.toString()` | per cell: one Rust String alloc + one Swift String alloc |
-| E | **`RustVec<FfiCell>` teardown** — nobody had named this. `cells` is a function-local; ARC release drops `cols*rows` `FfiCell`s = one `free` per cell, after the loop, before `paintCells` returns. |
+### Output surfacing — THE FIDDLY PART
 
-Also per cell inside the glyph loop: `WolfColor.cgColor(cell.bg(), ...)` at `:1454`
-allocates a `CGColor`. And because blank cells carry `" "`, `!text.isEmpty` is true for
-essentially EVERY cell, so `drawGlyph` (`:1625`, `CTLineCreateWithAttributedString` +
-`CTLineDraw`, no cache) runs `cols*rows` times.
+rules_apple 4.5.3 `apple/internal/outputs.bzl`: `_root_path_from_archive` derives the
+archive-root path by STRING MANIPULATION (`paths.replace_extension(archive.path,
+"_archive-root")`), and `_archive()` only calls `declare_directory` when experimental
+tree-artifact outputs are enabled. This repo does NOT enable that
+(`--define=apple.experimental.tree_artifact_outputs` appears nowhere in `.bazelrc`).
 
-**Consequences:** clone B is eager on the FIRST statement of `paintCells`, so a naive
-`paintCells` bucket conflates marshalling with CoreText — the exact confusion to avoid.
-**Clone C is evaluated at the CALL SITE, not inside `drawCursor` — a `defer` inside
-`drawCursor` would MISS it entirely.** Teardown E is only capturable as a difference.
+**Therefore `Wolf_archive-root/Wolf.app` is NOT a Bazel artifact.** It is an UNDECLARED
+side-effect directory the bundling/signing action leaves behind. Consequences:
 
-### The six new buckets (dense, ascending from `drawPanePreview = 7`)
+- The wrapper **cannot** forward the `.app` in `DefaultInfo`. There is nothing to forward.
+  Any plan saying "forward the bundle TreeArtifact" is wrong for this configuration.
+- Forward the dep's `DefaultInfo.files` (the opt-configured `Wolf.zip`). The `.app` sits on
+  disk as its sibling at `<zip path minus .zip>_archive-root/Wolf.app`, in the OPT output dir.
+- Return `DefaultInfo(files = dep[DefaultInfo].files, runfiles = dep[DefaultInfo].default_runfiles)`.
+- **Do NOT** set `executable =`. **Do NOT** forward `AppleBundleInfo` /
+  `MacosApplicationBundleInfo` / `AppleExecutableBinaryInfo` — nothing consumes them
+  (`bundle_layout_test` and `xcodeproj` depend on `:Wolf` directly), and forwarding Apple
+  providers from a non-Apple rule invites rules_apple to treat `WolfRelease` as an
+  embeddable bundle: added risk, zero benefit.
 
-| raw | case | label | measures |
-|-----|------|-------|----------|
-| 8  | `paneFrameRead` | `pane.read`   | `handle.read_frame_for_grid(grid)` — snapshot lock + clone A + `FfiFrame` construction |
-| 9  | `paneCells`     | `pane.cells`  | the whole `paintCells(frame, ctx:)` call — **PARENT** of 10/11, and the only bucket containing teardown E |
-| 10 | `paneCellsVec`  | `pane.vec`    | just `let cells = frame.cells()` — clone B in isolation |
-| 11 | `paneGlyphLoop` | `pane.glyphs` | just the `for row`/`for col` double loop — bg `CGColor` + fill, per-cell text bridge D, `GlyphStyleResolver.resolve`, `drawGlyph` |
-| 12 | `paneCursor`    | `pane.cursor` | the `drawCursor(...)` call expression in `paintGrid`, INCLUDING its `frame.cells()` argument — clone C + cursor fill + at most one glyph |
-| 13 | `paneStatusbar` | `pane.status` | the `paintStatusbar(...)` call in `paintPane` |
+Residual fragility to DOCUMENT not fix: because the dir is undeclared, Bazel does not track
+it; on an action-cache hit only `Wolf.zip` is restored. No remote cache is configured so in
+practice it is always materialized. Recovery is one line: unzip / `ditto -x -k` the zip.
 
-`pane.vec` is the single most important bucket — without it `pane.cells` mixes a full deep
-clone with all CoreText work. `pane.cells` exists solely to attribute teardown E without
-relying on undefined `defer`-vs-ARC ordering. Longest label is 11 chars, inside the pinned
-left-14 field, so `format` layout and the byte-exact tests are unaffected.
+FALLBACK, only if verification shows the dir is not reliably present under opt: a second
+action expanding the zip into a DECLARED `declare_directory("Wolf.app")` via `ditto -x -k`
+(preserves exec bits/symlinks/xattrs where plain `unzip` may not). Costs a full extra copy
+of a large bundle every rebuild. **Do not implement speculatively.**
 
-**DISJOINTNESS CONTRACT (document in the enum doc comment):**
-`{pane.read, pane.cells, pane.cursor, pane.status}` are mutually disjoint, summing to at
-most `draw.pane + draw.prev`. `{pane.vec, pane.glyphs}` partition the INTERIOR of
-`pane.cells`, with a remainder. **The six do NOT sum to `draw.pane`; summing all six
-double-counts.**
+### THE PATH PROBLEM — `bazel-bin` is WRONG for this target
 
-### Timer placement (all in `PaneContainerView.swift`) — explicit begin/end everywhere
+`bazel-bin` symlinks the bin dir of the **top-level target configuration**. Building
+`//crates/wolf-macos:WolfRelease` analyzes the top-level target in the **default
+(fastbuild)** config — the transition applies to its dependency edge, i.e. BELOW it. So
+`bazel-bin/crates/wolf-macos/Wolf_archive-root/Wolf.app` is either ABSENT or — far worse —
+**a stale fastbuild `-Onone` bundle from an earlier `:Wolf` build.** That is silently
+measuring the wrong binary: exactly the failure mode that already bit this project.
+**`build.md` must NEVER print a `bazel-bin/...` path for `WolfRelease`.**
 
-Rule as before: `defer` for whole functions with early returns, explicit for statements.
+**Do not hardcode the opt output-dir name.** Under Bazel 7+'s default
+`diff_against_baseline` naming, a Starlark transition may append an `-ST-<hash>` fragment;
+whether it is `darwin_arm64-opt` or `darwin_arm64-opt-ST-<hash>` must be OBSERVED, not
+predicted. Record the observed value during verification but document the COMMAND, since
+the hash is not a stable contract.
 
-- **`pane.status`** — `paintPane`, around the `paintStatusbar(...)` call `:1277-1279`.
-- **`pane.read`** — `paintPane`, around exactly `let frame = handle.read_frame_for_grid(grid)`
-  `:1293`. Must sit **BELOW the `guard paintsGrid` at `:1288`** so an occluded pane records
-  no `pane.read` sample — preserves occlusion semantics and makes the count identities below
-  meaningful.
-- **`pane.cells`** — `paintGrid`, around the `paintCells(frame, ctx: ctx)` call `:1320`.
-  At the call site, NOT `defer` inside `paintCells`: `defer` order relative to ARC release
-  of function locals is **unspecified** by Swift; a call-site pair is guaranteed to enclose
-  the release of `cells`.
-- **`pane.vec`** — inside `paintCells`, around exactly `let cells = frame.cells()` `:1442`.
-- **`pane.glyphs`** — inside `paintCells`, begin immediately before `for row in 0..<rows`
-  `:1446`, end immediately after the outer loop's closing brace `:1466`. **NOT `defer`** —
-  a `defer` registered before the loop fires at function exit and would swallow part of the
-  teardown, destroying the separation `pane.cells` exists to expose.
-- **`pane.cursor`** — `paintGrid`, begin immediately BEFORE the whole
-  `drawCursor(ctx, frame:, cells: frame.cells(), cols:)` statement `:1322` (inside the
-  `if frame.cursor_visible()` block), end immediately after. **The `begin()` MUST precede
-  argument evaluation, because that is where clone C happens. A `defer` inside `drawCursor`
-  would be WRONG and must not be used — it would report near-zero and silently hide a full
-  deep clone. This is the most error-prone placement in the plan; add a comment at the site
-  saying so.**
+Documented recipe for `build.md`:
 
-No timers inside any loop body. No changes to `drawGlyph`, `drawDecorations`,
-`drawStatusbarText`, `drawDividers`, `drawScrollbars`.
+```sh
+bazel build //crates/wolf-macos:WolfRelease
+ZIP=$(bazel cquery --output=files //crates/wolf-macos:WolfRelease 2>/dev/null)
+APP="${ZIP%.zip}_archive-root/Wolf.app"
+```
 
-### What `pane.glyphs` actually measures — READ THIS BEFORE INTERPRETING THE GATE
+`cquery --output=files` is reliable **because the wrapper forwards the dep's
+`DefaultInfo.files`** — configuration-aware, unlike the `bazel-bin` symlink. `cquery` prints
+progress to stderr (hence `2>/dev/null`); verify the captured value is a single clean path.
+The `bazel build` "Target up-to-date:" line prints the same path as an eyeball cross-check.
 
-A clean split of the per-cell string bridging from CoreText is **NOT possible** without
-per-cell timing, which is rejected (below). `pane.glyphs` is a composite, per cell, of:
-`cell.bg()` + `WolfColor.cgColor` (a `CGColor` alloc); `setFillColor` + `fill`;
-`cell.text()` (Rust String clone); `.toString()` (Swift String alloc);
-`flags()`/`fg()`/`special()` + `GlyphStyleResolver.resolve`; and `drawGlyph` (attributes
-dict + `NSAttributedString` + `CTLine` + `CTLineDraw`).
+### Runnable? — NO. Build-only, deliberately.
 
-**Read `pane.glyphs` as "per-cell Swift-side work", NOT as "CoreText".**
+Technically doable (symlink a launcher, `executable = True`, forward runfiles), but it lands
+on the path `build.md:158` already warns about: `bazel run //crates/wolf-macos:Wolf` has
+less predictable stderr plumbing through the rules_apple runner. **Decisive here, because
+the entire point of this bundle is that it is the binary people run with `WOLF_FRAME_STATS=1`
+and read stderr from.** A run target whose stderr is unreliable defeats its own purpose. It
+would also stage a second copy of a large bundle in runfiles — another place "which .app am
+I running" can go wrong. Record this decision + rationale as a comment in `release.bzl` so
+it is not re-litigated.
 
-If the gate lands here, phase B's FIRST action is a **discriminating probe, not a fix**: a
-throwaway local build stubbing out `drawGlyph` (or the `cell.text()` bridge) and
-re-measuring under the identical protocol. One A/B measurement, costs nothing, and is far
-cheaper than building a glyph cache and discovering the bridging was the real cost.
+### `release.bzl` contents
 
-### Measurement-distortion analysis
+Module docstring (style of `tools/lint/clippy_fix.bzl`): why a transition is needed at all
+(compilation mode is a CONFIGURATION, not an attribute — `alias` cannot do this); that the
+wrapper forwards only `DefaultInfo`; that the `.app` is an UNDECLARED sibling of the zip;
+that `bazel-bin` is NOT the right place to look; that the rule is deliberately non-executable.
 
-12 added clock reads per pane per frame (10 without a cursor; an occluded pane adds only 2).
-A two-pane frame goes ~6 -> ~28 reads. At tens of ns per `DispatchTime.now()`, that is
-~0.3 us against a 20,400 us region — **~0.0015%**, well below existing run-to-run variance.
-**None is per-cell or per-row.**
+1. `_opt_transition_impl(settings, attr)` → `{"//command_line_option:compilation_mode": "opt"}`
+2. `_opt_transition = transition(implementation = ..., inputs = [], outputs = ["//command_line_option:compilation_mode"])`
+   — `inputs = []` because the new value is unconditional. NO allowlist attr.
+3. `_opt_bundle_impl(ctx)` — single `DefaultInfo` forwarding `files` + `default_runfiles`.
+   **CODER NOTE:** for a non-split (1:1) transition `ctx.attr.<dep>` is a plain `Target`;
+   Bazel makes it a LIST only for 1:2+ split transitions. Write the plain-`Target` form; if
+   analysis fails with a list error, index `[0]` and comment which applies. Do not guess —
+   the error is immediate and unambiguous.
+4. `opt_bundle = rule(...)`: one attr `bundle` =
+   `attr.label(mandatory = True, cfg = _opt_transition, providers = [DefaultInfo])`;
+   NO `executable = True`; NO `toolchains`. Keep the rule name GENERIC (`opt_bundle`), not
+   Wolf-specific, so it could move to `bazel/` later without a rename.
 
-REJECTED: per-cell timing (~6,400 reads/frame, ~0.6% — but the fatal objection is not clock
-cost, it is that two `DispatchTime.now()` calls in the innermost loop act as **optimization
-barriers**, inhibit inlining of `WolfColor.cgColor`/`GlyphStyleResolver.resolve`, and change
-the very quantity under measurement). Also rejected: per-row timing (same barrier, less
-benefit); accumulate-into-a-local (still needs the per-cell reads and the barrier).
+### `crates/wolf-macos/BUILD.bazel`
 
-### GATE — with `T(b) = count(b) x mean(b)` (PRODUCTS, not means) and `D = T(draw.pane)`
+`load("//crates/wolf-macos:release.bzl", "opt_bundle")` with the existing loads (17-20).
+Extend the file-header target-list comment (1-16) with a `WolfRelease` entry. Add the target
+right AFTER the `macos_application(name = "Wolf", ...)` block (after ~176), before
+`bundle_layout_test`: `name = "WolfRelease"`, `bundle = ":Wolf"`,
+`visibility = ["//visibility:public"]` (mirrors `:Wolf`), and **`tags = ["manual"]`**.
 
-- **Teardown** `= T(pane.cells) - T(pane.vec) - T(pane.glyphs)`
-- **FFI marshalling** `M = T(pane.read) + T(pane.vec) + Teardown + T(pane.cursor)`
-- **Per-cell Swift work** `C = T(pane.glyphs)`
-- **Statusbar** `S = T(pane.status)`
+**Why `manual` (deliberate, not boilerplate):** without it, `bazel build //...` sweeps
+`WolfRelease` in and rebuilds the ENTIRE Rust + Swift + treesitter graph a second time at
+`-c opt` on every wildcard build — a large, silent, recurring cost on a command people run
+casually. The repo already uses `manual` for exactly this on every `//tools/lint` target
+(`build.md:295`), so it is idiomatic here. `WolfRelease` is not a test, so the default
+test-suite count is unaffected. Explicit `bazel build //crates/wolf-macos:WolfRelease` still
+works normally. Add a comment covering: what it is, that `:Wolf` is unchanged and remains
+the fast-iteration dev build, why `manual`, and that the path must come from `cquery` and
+NEVER from `bazel-bin`.
 
-Decision rule:
+### `build.md` restructure
 
-- `M / D >= 0.50` → primary fix is **Rust/FFI** (borrowed view or flat packed buffer instead
-  of per-cell String clones). First Rust change in this effort; scope separately.
-- `C / D >= 0.50` → primary fix is **Swift**, but run the discriminating probe FIRST to
-  choose between a glyph cache + run coalescing vs eliminating the per-cell bridge.
-- Neither >= 0.50 → fix both, cheaper first, re-measuring between so each is attributable.
-- `S / D > 0.10` → the statusbar was mis-assumed cheap; re-plan before proceeding.
+**§"Building the .app" (~95-103)** → two labeled subsections, RELEASE FIRST (it is the
+answer to "how do I build Wolf"):
 
-**VALIDITY CHECKS — must pass BEFORE the gate is applied. If any fails the split is not
-trustworthy and must be explained first:**
+- **"Building the .app for real use (optimized)"** — leads with the `WolfRelease` build.
+  Same bundle as `:Wolf` but the whole graph (Swift AND Rust) at `-c opt`, without `-c opt`
+  on the command line, via an outgoing-edge transition in `crates/wolf-macos/release.bzl`.
+  Give the `cquery` recipe verbatim. **State in its own sentence that `bazel-bin/...` is not
+  a valid path for this target**, and why (top-level config is fastbuild → missing or stale
+  `-Onone`). Note the `manual` tag and that the first build is a full second-config rebuild.
+- **"Building the .app for development"** — keep `:Wolf` and everything at 100-103 (icon,
+  bundled nvim, signing, min OS), but state up front this is a DEVELOPMENT build at
+  `-Onone` with Rust unoptimized, that it is the fast-iteration build and what every test
+  target builds against, and that it is SUBSTANTIALLY slower at runtime — reproduce the
+  measured table. **Include the two controls, they are what make it credible rather than
+  anecdotal:** `prev.html` flat because WebKit is a system framework and always optimized;
+  `pane.glyphs` improves least because CoreText likewise. Note `prev.render` -76% is the
+  RUST side (`pulldown-cmark`) — Rust was unoptimized too, not just Swift.
 
-1. `count(pane.read) == count(pane.cells) == count(pane.vec) == count(pane.glyphs) == count(draw.pane)`.
-   A `pane.read` count EXCEEDING `draw.pane` means a preview pane painted its grid (web view
-   not yet loaded/opaque) and the sub-buckets are contaminated by a second pane.
-2. `count(pane.status) == count(draw.pane) + count(draw.prev)` — sub-buckets record for both
-   editor and preview panes, and only the statusbar runs on an occluded pane.
-3. `count(pane.cursor) <= count(draw.pane)` — `drawCursor` runs only when `cursor_visible()`.
-4. `T(pane.read) + T(pane.cells) + T(pane.cursor) + T(pane.status) <= T(draw.pane) + T(draw.prev)`,
-   residual (background fill, clip/save/restore, `gridRect`/`geometry`) under ~1 ms/frame.
-   A large residual invalidates the split.
-5. `T(pane.vec) + T(pane.glyphs) <= T(pane.cells)`, and Teardown >= 0.
+**§"Test targets" (~239-265)** — add, worded as expected-and-standard, NOT as a defect and
+NOT as a TODO:
 
-Capture as `test-5`, same protocol: `~/Git/jplein/Notepad/commonplace-book.md`, typing near
-the top, preview open, steady state. Also record `draw`, `draw.pane`, `draw.prev`,
-`prev.reload`, `prev.render`, `ctrl.wake`, `keys`/`wakes`/`wakes/key` unchanged for
-comparability with `test-1`..`test-4`.
+> Tests run in the **default** configuration, not `-c opt`.
+> `bazel test -c opt //crates/wolf-macos:WolfKeyMapTests` fails to build: `@testable import`
+> requires `-enable-testing`, which rules_swift only passes in non-opt compilation modes
+> (`module 'WolfKeyMap' was not compiled for testing`). This is the standard, intended
+> arrangement across the Swift ecosystem — **test in the default config, ship the optimized
+> build** — not something to work around.
 
-### Tests (`FrameStatsTests.swift`)
+**§"Frame-time instrumentation (macOS)" (147-168)** — (1) replace the recommended
+invocation (151-154) and the log-to-file variant (162-166) with the release-bundle form via
+the `cquery`-derived `$APP`. (2) Add a prominent note: **measuring the default `:Wolf` build
+measures `-Onone`** — those numbers are not what users experience and are not comparable to
+anything captured under `-c opt`; any capture meant to inform a decision must come from
+`WolfRelease`. (3) Rewrite the `Wolf_archive-root/` explanation at 156 to apply to BOTH
+targets: an unzipped sibling of `Wolf.zip` in the same output dir as THAT target's zip, not
+a declared Bazel output; no `Wolf.app` at either config's package root; unzip if missing.
+Keep the 158 parenthetical about `bazel run` stderr and extend it: this is also why
+`WolfRelease` is deliberately build-only.
 
-MODIFY: `testBucketRawValuesAndLabels` gains six rows (`.paneFrameRead, 8, "pane.read"` …
-`.paneStatusbar, 13, "pane.status"`); the derived `allCases.count == cases.count` and
-`allCases.map(\.rawValue) == Array(0..<count)` assertions then re-pin density for 14 buckets
-automatically. Update the file-header `CONTRACT UNDER TEST` block (lines 18-28).
+### `crates/wolf-macos/README.md`
 
-ADD: `testBucketLabelsAreUniqueAndFitTheReportColumn` — every label unique across `allCases`
-(a copy-paste duplicate in the `switch` would silently produce two identical report rows,
-and would also fool `testFormattedBucketRowsAreInRawValueOrder`'s substring scan) and every
-label <= 13 chars so the left-14 field always leaves a separating space.
-`testEveryBucketRoundTripsThroughRecordAndSummarize` — one distinct sample per bucket across
-all 14, assert `summarize` returns 14 rows with expected values; catches an off-by-one if
-accumulator sizing ever stops deriving from `allCases`.
+§"Building" (106-113): add the `WolfRelease` line FIRST in the code block
+(`# the OPTIMIZED (-c opt) .app — build this for real use`), annotate `:Wolf` as the
+development / `-Onone` build, and point at `build.md` for the measured penalty and the
+`cquery` recipe (do NOT duplicate the numbers — one source of truth). **CLAUDE.md
+compliance:** this directory's README must describe its components, and `release.bzl` is a
+new component — add a short paragraph on the `opt_bundle` rule and its transition (what it
+does, forwards only `DefaultInfo`, non-executable by design, `.app` is an undeclared sibling).
 
-UNCHANGED and should pass without edits: `testEveryFormattedLineCarriesTheGrepPrefix`
-(derived from `allCases.count`), `testFormattedBucketRowsAreInRawValueOrder`,
-`testFormatProducesTheExactPinnedTable`, `testFormatEmitsHeaderAndFooterWithNoBuckets`
-(fixed fixtures with explicit bucket lists).
+### `architecture.md`
 
-Known gaps (window-server-bound, per `Tests/README.md:109`): an occluded pane recording
-`pane.status` only; `pane.cursor` absent on a pane not holding the cursor; a 0x0 frame giving
-near-zero `pane.glyphs` with non-zero `pane.read`. **The count identities during the manual
-capture are the actual acceptance check for this pass.**
+ONE sentence, minimal. §"Build" (~244) currently names only
+`bazel build //crates/wolf-macos:Wolf`; name both targets (`:Wolf` development,
+`:WolfRelease` optimized build-for-real-use) pointing at `build.md`. Judgment stated plainly:
+which compilation mode a target uses is a build-configuration detail that does not belong in
+architecture — BUT architecture.md currently names a specific build command, and leaving it
+naming only the debug target reproduces the original documentation bug in a second file. Fix
+the naming; do NOT import the performance table or the transition mechanics.
 
-### No BUILD.bazel changes, no new files, no Rust, no dependencies
+### NOT modified
 
-`wolf_key_map` lists `FrameStats.swift` explicitly (`BUILD.bazel:52`); `wolf_macos_lib`
-globs `Sources/WolfMacOS/*.swift` (`:82`). Nothing added or removed. `wolf-ffi/src/lib.rs`
-is READ-ONLY this pass — timing `read_frame_for_grid` from Swift captures clone A in full.
+`bundle_layout_test.sh` / its `sh_test` — unchanged, still `data = [":Wolf"]`. A release
+variant would force a full opt build into the default test sweep for zero added coverage:
+bundle LAYOUT is configuration-independent (same `resources` attr, same rules_apple partials).
+Verify the layout once manually against the opt bundle instead. `//tools/lint/**` — no change;
+`swift_format_srcs` is `.swift` only; `rustfmt.fix` evaluates `//...` internally so it will
+LOAD `release.bzl` (must be load-clean) but will not BUILD `WolfRelease`, and `manual` keeps
+it out regardless. `.bazelrc` — **do NOT add a `--config=release`**; the whole point is a
+named target rather than a flag to remember. Nothing under `crates/wolf-core`,
+`crates/wolf-ffi`, or `crates/wolf-macos/Sources` — no application code changes.
 
-### Docs
+### Verification protocol (verify by BUILDING AND LAUNCHING, not graph inspection)
 
-`crates/wolf-macos/README.md:121` ("the eight buckets" -> fourteen, list the six, state the
-nesting/disjointness contract, the `pane.status`-counts-occluded-panes-too asymmetry, the
-`pane.glyphs`-is-not-CoreText-alone caveat, and that teardown is a derived difference);
-`Tests/README.md:107` (bucket-discriminant list + the two new tests);
-`Sources/README.md:32` (FrameStats bucket set); `build.md` only if it enumerates buckets.
-`prettier --write` all.
+**No new Bazel test target.** Any `sh_test` with `data = [":WolfRelease"]` forces a full opt
+build; tagged `manual` it never runs, untagged it doubles every sweep. Neither is worth it.
 
-### Explicitly NOT changing
+1. `bazel build //crates/wolf-macos:WolfRelease` completes. Resolve the plain-`Target`-vs-list
+   question here if the first form errors.
+2. **The load-bearing check:** `bazel aquery --output=text 'mnemonic("SwiftCompile",
+   //crates/wolf-macos:WolfRelease)'` shows `-O` (NOT `-Onone`); Rust actions show an
+   optimizing `-C opt-level`. Cross-check the same aquery on `//crates/wolf-macos:Wolf` still
+   shows `-Onone`. Necessary precondition, NOT a substitute for 4-6.
+3. Path recipe resolves: single clean path, `$APP` exists and is a directory, config component
+   is an `-opt-` one. **Record the literal observed directory name** (including any
+   `-ST-<hash>`). Independently confirm the NEGATIVE:
+   `bazel-bin/crates/wolf-macos/Wolf_archive-root/Wolf.app` is absent or demonstrably the
+   fastbuild bundle — `build.md` will make this claim, so it must be observed.
+4. `codesign --verify --deep --strict` passes on the opt `.app`. Spot-check the layout
+   `bundle_layout_test` asserts: `Contents/Resources/nvim/bin/nvim` executable, `init.lua`,
+   `fonts/`, `parsers/parser/go.so`.
+5. Launches and works: run `"$APP/Contents/MacOS/Wolf"` directly — window appears, typing
+   reaches nvim, sidebar and preview work, quits cleanly. Record honestly as a manual smoke.
+6. **Genuinely optimized (the success criterion):** `WOLF_FRAME_STATS=1` steady-state capture
+   under the `test-7-with-opt-param` protocol; buckets land near the `-c opt` column
+   (`ctrl.wake` ~0.5 ms, `prev.render` ~6 ms, `draw` ~15 ms), NOT the `-Onone` column. This
+   closes the loop — proves `WolfRelease` reproduces the measured `-c opt` build.
+7. No regression: `bazel build //crates/wolf-macos:Wolf` still succeeds, fastbuild outputs
+   untouched, `WolfKeyMapTests` + `bundle_layout_test` still pass.
+8. Wildcard hygiene: `bazel build //crates/wolf-macos:all` does NOT pull in `WolfRelease`.
 
-No render behavior — not one pixel. No `paintCells`/`paintGrid` refactor: **the architect
-looked specifically for whether the FFI/CoreText split forced one and it does not** — every
-boundary already falls on an existing statement boundary. The tempting restructure (scoping
-`cells` in a nested block to capture teardown directly) is **REJECTED** because ARC release
-points are not guaranteed at a lexical brace, and a restructure that looks behavior-preserving
-but shifts a deallocation is exactly what corrupts a measurement pass. No Rust/FFI changes.
-No changes to `FrameStats` storage/percentile/format/reset/env parsing (so `test-1`..`test-4`
-stay diff-comparable). No `FrameMetrics.swift` change. Not in this pass: `prev.render`
-threading, wake amplification, dirty rects, `INPUT_COALESCE_DELAY`, `isOpaque`.
+Edge cases: building `WolfRelease` and `Wolf` in the SAME invocation (both configs coexist —
+no output collision, no action conflict); building `WolfRelease` WITH `-c opt` on the command
+line (transition is a no-op — still works, no third output dir); after `bazel clean` + rebuild
+the archive-root dir is present (if ever not, that triggers the fallback — escalate, do not
+paper over).
+
+### Risks
+
+**HIGH — first-build cost (certain).** The transition rebuilds the ENTIRE graph in a second
+config: all crate_universe Rust deps (tokio, rusqlite with bundled SQLite through `cc`,
+pulldown-cmark, pulldown-latex), `wolf-core`, `wolf-ffi`, both Swift modules, 16 host-compiled
+treesitter parsers, actool, code signing. External repo-rule outputs (downloaded nvim/font/
+plugin tarballs) are NOT reconfigured (repo rules are config-independent) but the
+`copy_to_directory` targets assembling them ARE build targets and re-run at opt, re-copying
+the ~100 MB nvim tree. Expect roughly one additional clean app build (several minutes) and
+roughly double on-disk output footprint. Incremental rebuilds within either config unaffected.
+`manual` is what keeps this opt-in.
+
+**HIGH — the stale-`bazel-bin` trap** (already bit this project once). Mitigation is
+documentation discipline: give the `cquery` recipe AND state the negative claim explicitly.
+If the docs print a `bazel-bin` path, someone WILL profile a stale `-Onone` bundle and reach
+a wrong conclusion — precisely the class of bug this change exists to eliminate.
+
+**MEDIUM — undeclared archive-root dir.** Pre-existing (already applies to `:Wolf`), not
+introduced here; mitigated by the one-line unzip note.
+
+**LOW —** `:Wolf` untouched (separate output dir, fastbuild cache preserved;
+`bundle_layout_test`/`xcodeproj` depend on it directly). rules_apple applies its own
+platform/cpu transitions BELOW `macos_application` while ours applies ABOVE — they compose
+normally; step 2 catches it immediately if wrong. `rules_xcodeproj` lists only
+`top_level_target(":Wolf")` and has historically been sensitive to custom transitions — a
+further reason NOT to add `WolfRelease` to `top_level_targets`. `//tools/lint` `rustfmt.fix`
+loads `release.bzl` so it must be parse-clean (caught at step 1). Opt-only compile failures
+are essentially retired — this exact configuration already built successfully via `-c opt`,
+which is where the measurements came from.
+
+### Dependencies: NONE
+
+No new `bazel_dep`, no module extension, no `MODULE.bazel` change, therefore **no
+`MODULE.bazel.lock` regeneration and no `CARGO_BAZEL_REPIN`**. `transition()` and
+`rule(cfg = ...)` are core Bazel Starlark. **If the implementation touches `MODULE.bazel` or
+either lockfile, something has gone wrong — stop and reconsider.**
+
+### Lint
+
+buildifier is not wired into this repo (`//tools/lint` = clippy, rustfmt, swift-format only),
+so no Starlark-lint suppressions needed — but write `release.bzl` buildifier-clean anyway
+(module docstring first, `def`s before `rule()`, underscore-prefixed privates, canonical
+`rule()` arg order), matching `clippy_fix.bzl`. **No `# buildifier: disable=` directives
+anticipated** — the one plausible candidate, unused params on `_opt_transition_impl(settings,
+attr)`, is a Bazel-mandated signature and buildifier does not flag unused function params.
+Do not add one preemptively. `.bzl` is not prettier-covered; only the Markdown is.
 
 ## Status
 
 - [x] architect plan
-- [ ] PHASE A: sub-bucket instrumentation
-- [ ] PHASE A: measure + evaluate gate
-- [ ] PHASE B: architect specifies fix from evidence
-- [ ] PHASE B: tests
-- [ ] PHASE B: implementation
-- [ ] review
+- [ ] implementation
+- [ ] verify: build + launch + confirm optimized
 - [ ] docs
-- [ ] re-measure and record before/after
+- [ ] review

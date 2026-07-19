@@ -106,11 +106,16 @@ The Bazel `wolf_key_map` module compiles `KeyMap.swift`, `PickerSeam.swift`, `Pi
 ## Building
 
 ```sh
-bazel build //crates/wolf-macos:Wolf            # the .app bundle (pinned nvim bundled in)
+bazel build //crates/wolf-macos:WolfRelease     # the OPTIMIZED (-c opt) .app — build this for real use
+bazel build //crates/wolf-macos:Wolf            # the DEVELOPMENT .app bundle, -Onone (pinned nvim bundled in)
 bazel test  //crates/wolf-macos:WolfKeyMapTests  # the pure WolfKeyMap seams (key, picker, pane, state, command, frame-stats, …)
 bazel test  //crates/wolf-macos:bundle_layout_test  # asserts the .app resource layout
 bazel run   //crates/wolf-macos:xcodeproj       # generate the (uncommitted) Xcode project
 ```
+
+`:Wolf` is the fast-iteration DEVELOPMENT build (fastbuild, Swift `-Onone`, Rust unoptimized) and is what the test targets and the Xcode project build against; it is substantially slower at runtime. `:WolfRelease` is the one to build for real use, for installing, and for any performance measurement. Its `.app` path must be resolved from `bazel cquery --output=files //crates/wolf-macos:WolfRelease`, never from `bazel-bin`. See [Building Wolf](../../build.md) for the measured penalty and the exact `cquery` recipe.
+
+`release.bzl` defines the **`opt_bundle`** rule that `:WolfRelease` instantiates. Compilation mode is a CONFIGURATION rather than an attribute, so no `alias` or `macos_application` wiring can change it; `opt_bundle` therefore applies a Starlark **outgoing-edge transition** to its single `bundle` dep, setting `//command_line_option:compilation_mode` to `opt` so the entire subgraph below it (both Swift modules, all Rust crates, the treesitter parsers) is rebuilt optimized without `-c opt` on the command line. It forwards only `DefaultInfo` (the opt-configured `Wolf.zip` plus default runfiles) — deliberately NOT `AppleBundleInfo` / `MacosApplicationBundleInfo` / `AppleExecutableBinaryInfo`, since nothing consumes them here and forwarding Apple providers from a non-Apple rule invites rules_apple to treat the target as an embeddable bundle. The `.app` itself is not a Bazel artifact at all: without `--define=apple.experimental.tree_artifact_outputs` (this repo does not set it) rules_apple leaves `Wolf_archive-root/Wolf.app` on disk as an undeclared sibling of the zip. The rule is non-executable by design — the bundle exists to be launched directly with `WOLF_FRAME_STATS=1` and read stderr from, which the rules_apple runner does not do reliably. The rule name is kept generic so it could move to `bazel/` later without a rename.
 
 **Formatting the Swift sources:** the advisory `swift-format` targets in [`//tools/lint`](../../tools/lint/README.md) cover this package's hand-written Swift (`Sources/WolfKeyMap`, `Sources/WolfMacOS`, `Tests/WolfKeyMapTests`, enumerated by the `:swift_format_srcs` filegroup here) and EXCLUDE the machine-generated swift-bridge bindings under [`crates/wolf-ffi/generated/`](../wolf-ffi): `bazel test //tools/lint:swift_format` (check) / `bazel run //tools/lint:swift_format.fix` (format in place).
 

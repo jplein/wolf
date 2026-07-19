@@ -92,13 +92,60 @@ The `wolf-core` `markdown` module's LaTeX-math render adds `pulldown-latex` (`0.
 
 The macOS app builds entirely under Bazel — **Bazel is authoritative**; the generated Xcode project (below) is for debugging only. This requires macOS Tahoe (26) or newer and Xcode 26+. The resolved rule pins are `rules_swift` 3.6.1, `rules_apple` 4.5.3, and `rules_xcodeproj` 4.1.0 (with `apple_support` held at 2.6.1 so the host-Xcode toolchain still resolves).
 
-### Building the .app
+### Building the .app for real use (optimized)
+
+```sh
+bazel build //crates/wolf-macos:WolfRelease
+ZIP=$(bazel cquery --output=files //crates/wolf-macos:WolfRelease 2>/dev/null)
+APP="${ZIP%.zip}_archive-root/Wolf.app"
+```
+
+`//crates/wolf-macos:WolfRelease` produces the SAME bundle as `:Wolf`, but with the whole graph — Swift AND Rust, plus the treesitter parsers — built at `-c opt`, without `-c opt` ever appearing on the command line. It does this with a Starlark outgoing-edge transition (`opt_bundle` in [`crates/wolf-macos/release.bzl`](crates/wolf-macos/release.bzl)) that sets `//command_line_option:compilation_mode` to `opt` on its dependency edge to `:Wolf`. **This is the target to build for real use, for installing, and for any performance measurement.**
+
+**`bazel-bin/...` is not a valid path for `WolfRelease`.** `bazel-bin` symlinks the bin dir of the TOP-LEVEL target configuration, and the top-level target here is analyzed in the default (fastbuild) config — the transition applies BELOW it, on the dep edge. After building `WolfRelease`, `bazel-bin` points at a plain `darwin_arm64-fastbuild/bin` with no `crates/wolf-macos/Wolf_archive-root/Wolf.app` under it at all. The trap is the sequence: build `WolfRelease`, later build `:Wolf`, then run the habitual `./bazel-bin/crates/wolf-macos/Wolf_archive-root/Wolf.app/...` path — which now exists again and silently hands you the `-Onone` bundle while you believe you are running the optimized one. Resolve the path from `cquery`, which is configuration-aware, every time.
+
+The `cquery` recipe resolves to a path under an `-opt-` output directory, e.g. `bazel-out/darwin_arm64-opt-macos-arm64-min26.0-ST-<hash>/bin/crates/wolf-macos/Wolf.zip`, with the bundle at `${ZIP%.zip}_archive-root/Wolf.app`. Do not hardcode that directory name: the `-macos-arm64-min26.0` and `-ST-<hash>` fragments come from rules_apple's own platform transition below `macos_application` (the fastbuild config carries the identical `-ST-` hash — only the `fastbuild`/`opt` component differs), and the hash is not a stable contract. Document and use the COMMAND, not the literal path.
+
+A quick sanity check that you really got the optimized build: the main binary at `$APP/Contents/MacOS/Wolf` is about **8.26 MB** optimized versus **25.4 MB** for fastbuild — roughly 3× smaller.
+
+`WolfRelease` is tagged **`manual`**, so `bazel build //...` and `bazel build //crates/wolf-macos:all` never sweep it in. Without that tag every wildcard build would silently rebuild the entire Rust + Swift + treesitter graph a second time at `-c opt`; `//tools/lint` uses `manual` for the same reason. The consequence is that the FIRST `WolfRelease` build is a full rebuild in a second configuration (all the Rust crates, both Swift modules, the 16 host-compiled treesitter parsers, actool, code signing) — expect roughly one extra clean app build, and roughly double the on-disk output footprint. Incremental rebuilds within either configuration are unaffected, and the two configs coexist without collision — though building BOTH targets in a single invocation leaves `bazel-bin` pointing at whichever configuration Bazel resolves for the top-level targets, which is one more reason to take the path from the `cquery` recipe rather than from the symlink.
+
+`WolfRelease` is deliberately **build-only**, not `bazel run`-nable: the whole point of this bundle is that it is the one you launch with `WOLF_FRAME_STATS=1` and read stderr from, and the rules_apple runner's stderr plumbing is less predictable (see "Frame-time instrumentation" below). Launch `"$APP/Contents/MacOS/Wolf"` directly.
+
+Because the `.app` directory is an undeclared side-effect of the bundling action rather than a declared Bazel output (see below), an action-cache hit restores only `Wolf.zip`. In practice it is always materialized because no remote cache is configured here, so the bundling action always executes locally and leaves the directory behind; if the directory is ever missing, `ditto -x -k "$ZIP" "${ZIP%.zip}_archive-root"` recreates it.
+
+To verify manually that the transition is still applying — nothing automated guards it:
+
+```sh
+bazel aquery --output=text 'mnemonic("SwiftCompile", deps(//crates/wolf-macos:WolfRelease))'
+```
+
+The `deps()` wrapper is required: `mnemonic("SwiftCompile", //crates/wolf-macos:WolfRelease)` returns ZERO actions, because the wrapper rule owns no actions of its own. Read the result with care — aquery reports every CONFIGURED instance of a label, so once `WolfRelease` has been built, the same query over `deps(//crates/wolf-macos:Wolf)` shows BOTH `-Onone` and `-O` actions. Attribute each action to its configuration before concluding anything.
+
+### Building the .app for development
 
 ```sh
 bazel build //crates/wolf-macos:Wolf
 ```
 
-This produces `Wolf.app`, code-signed (dev ad-hoc), with a minimum OS of 26.0. The app bundles its own pinned Neovim 0.12.3 + the captive `init.lua` in `Contents/Resources/` (see "Bundled Neovim (macOS)" below), so double-clicking it works with no shell environment. A developer's exported `WOLF_NVIM_BIN` (and `WOLF_INIT_LUA`) still overrides the bundled binary (and `init.lua`).
+This is the **development** build: fastbuild, Swift at `-Onone`, Rust unoptimized. It is the fast-iteration build and what every test target and the generated Xcode project build against — but it is SUBSTANTIALLY slower at runtime than `WolfRelease`, and its timings are not what users experience.
+
+How much slower, measured on the dev host with the same capture protocol (steady-state window, typing only):
+
+| bucket        | default (`-Onone`) | `-c opt` (`-O`) | change |
+| ------------- | ------------------ | --------------- | ------ |
+| `ctrl.wake`   | 4.85 ms            | **0.51 ms**     | -89%   |
+| `prev.render` | 25.63 ms           | **6.17 ms**     | -76%   |
+| `draw`        | 21.87 ms           | 14.64 ms        | -33%   |
+| `pane.glyphs` | 18.96 ms           | 14.00 ms        | -26%   |
+| `pane.read`   | 0.67 ms            | 0.07 ms         | -90%   |
+| `prev.html`   | 2.23 ms            | 2.31 ms         | ~0%    |
+
+Main-thread busy went from 73% to 34%; per keystroke, roughly 70 ms to roughly 36 ms.
+
+Two buckets act as controls and are what make this credible rather than anecdotal. **`prev.html` is flat** because it is a `loadHTMLString` call into WebKit — a system framework, always already optimized, so it had nothing to gain. **`pane.glyphs` improves least** for the same reason: its cost is dominated by CoreText. And note that `prev.render` at −76% is the **Rust** side (`pulldown-cmark`) — the transition is not a Swift-only story; Rust was unoptimized in the default build too.
+
+Both targets produce `Wolf.app`, code-signed (dev ad-hoc), with a minimum OS of 26.0. The app bundles its own pinned Neovim 0.12.3 + the captive `init.lua` in `Contents/Resources/` (see "Bundled Neovim (macOS)" below), so double-clicking it works with no shell environment. A developer's exported `WOLF_NVIM_BIN` (and `WOLF_INIT_LUA`) still overrides the bundled binary (and `init.lua`).
 
 The app icon comes from an Icon Composer bundle `Wolf.icon/` that is assembled at build time by `bazel_skylib` `copy_file` targets in `crates/wolf-macos/BUILD.bazel`: the committed `crates/wolf-macos/Wolf.icon.json` becomes `Wolf.icon/icon.json`, and the full-bleed 1024×1024 light and dark PNGs are read directly from `resources/icons/` (no committed copies); the three outputs are wired into the `Wolf` target via the `app_icons` attribute. actool (Xcode 26) compiles it into `Contents/Resources/Assets.car` and merges `CFBundleIconName = Wolf` into the Info.plist; on macOS Tahoe the icon switches automatically between the light and dark artwork with the system's icon-appearance setting. With `minimum_os_version = "26.0"` the `.icon` bundle is the only route rules_apple accepts (a legacy `.appiconset` is a hard build failure). To regenerate the artwork, see [`resources/icons/README.md`](resources/icons/README.md).
 
@@ -146,22 +193,26 @@ All timings are milliseconds to two decimals. The buckets are `ctrl.wake` (`Wolf
 
 **Double-clicking `Wolf.app` shows you nothing.** A bundled AppKit app launched from the Finder is started by `launchd`, so it inherits `launchd`'s stderr, which never reaches any terminal — and it does not inherit your shell's environment either, so `WOLF_FRAME_STATS` would not even be set. There are two working paths.
 
-The recommended one for development is to run the bundle's inner executable directly, which inherits your terminal's stderr and environment while `Bundle.main` still resolves to the `.app` (so the bundled Neovim, fonts and `init.lua` load normally):
+**Measure the release bundle, not the development build.** Measuring `//crates/wolf-macos:Wolf` measures `-Onone` Swift and unoptimized Rust: those numbers are not what users experience, and they are not comparable to anything captured under `-c opt` (see the table in "Building the .app for development" above — several buckets differ by 3–10×). Any capture meant to inform a decision must come from `WolfRelease`.
+
+The recommended path is to run the bundle's inner executable directly, which inherits your terminal's stderr and environment while `Bundle.main` still resolves to the `.app` (so the bundled Neovim, fonts and `init.lua` load normally):
 
 ```sh
-bazel build //crates/wolf-macos:Wolf
-WOLF_FRAME_STATS=1 ./bazel-bin/crates/wolf-macos/Wolf_archive-root/Wolf.app/Contents/MacOS/Wolf
+bazel build //crates/wolf-macos:WolfRelease
+ZIP=$(bazel cquery --output=files //crates/wolf-macos:WolfRelease 2>/dev/null)
+APP="${ZIP%.zip}_archive-root/Wolf.app"
+WOLF_FRAME_STATS=1 "$APP/Contents/MacOS/Wolf"
 ```
 
-Note the `Wolf_archive-root/` path component: `macos_application` delivers `:Wolf` as `bazel-bin/crates/wolf-macos/Wolf.zip` plus the unzipped bundle under `Wolf_archive-root/`. There is no `bazel-bin/crates/wolf-macos/Wolf.app`.
+Note the `Wolf_archive-root/` path component. For BOTH targets, `macos_application`'s declared output is `Wolf.zip`; the unzipped bundle under `<zip name minus .zip>_archive-root/` is an undeclared sibling the bundling/signing action leaves on disk in the SAME output directory as that target's zip. It is not a declared Bazel output, and there is no `Wolf.app` at either configuration's package root. If it is ever missing, `ditto -x -k "$ZIP" "${ZIP%.zip}_archive-root"` recreates it. For `:Wolf` the sibling lives under `bazel-bin/crates/wolf-macos/`; for `WolfRelease` it lives under the `-opt-` output dir that `cquery` prints — never under `bazel-bin`.
 
-(`bazel run //crates/wolf-macos:Wolf` also launches the app, but its stderr plumbing through the rules_apple runner is less predictable.)
+(`bazel run //crates/wolf-macos:Wolf` also launches the app, but its stderr plumbing through the rules_apple runner is less predictable. That is also why `WolfRelease` is deliberately build-only: a bundle whose entire purpose is to be launched with `WOLF_FRAME_STATS=1` and read stderr from must not be run through a runner with unreliable stderr.)
 
 If you need to profile a normally double-clicked app, or want a persistent log to `diff` between runs, point it at a file and tail that instead:
 
 ```sh
 WOLF_FRAME_STATS=1 WOLF_FRAME_STATS_FILE=/tmp/wolf-frame-stats.txt \
-  ./bazel-bin/crates/wolf-macos/Wolf_archive-root/Wolf.app/Contents/MacOS/Wolf &
+  "$APP/Contents/MacOS/Wolf" &
 tail -f /tmp/wolf-frame-stats.txt
 ```
 
@@ -263,6 +314,8 @@ bazel test //crates/wolf-ffi:treesitter_highlight # real nvim, markdown highligh
 bazel test //crates/wolf-ffi:attribute_highlight # real nvim, per-cell attribute flags + special color across the FFI
 bazel test //crates/wolf-macos:WolfKeyMapTests   # pure Swift key translation + glyph-style + frame-stats seams
 ```
+
+Tests run in the **default** configuration, not `-c opt`. `bazel test -c opt //crates/wolf-macos:WolfKeyMapTests` fails to build: `@testable import` requires `-enable-testing`, which rules_swift only passes in non-opt compilation modes (`module 'WolfKeyMap' was not compiled for testing`). This is the standard, intended arrangement across the Swift ecosystem — **test in the default config, ship the optimized build** — not something to work around. `//crates/wolf-macos:bundle_layout_test` likewise runs against `:Wolf`: bundle LAYOUT is configuration-independent (same `resources` attribute, same rules_apple partials), so a release variant would add a full opt build to every test sweep for no added coverage.
 
 - `//bazel/nvim:nvim_version_test` execs the pinned, bundled Neovim tree: it asserts the binary exists and is executable, that `nvim --version` reports `NVIM v0.12.3`, that `VIMRUNTIME` self-locates **inside** the bundled tree, and that the `markdown` treesitter parser ships.
 - `//bazel/orlando:orlando_tree_test` asserts the assembled orlando tree contents: `plugin/orlando.lua` and `lua/orlando/init.lua` land at the expected paths inside the tree's inner `orlando/` dir.
