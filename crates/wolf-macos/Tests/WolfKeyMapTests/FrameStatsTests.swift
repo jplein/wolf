@@ -24,8 +24,21 @@
 //        case previewLoadHTML = 5  // label "prev.html"
 //        case drawPaneEditor  = 6  // label "draw.pane"
 //        case drawPanePreview = 7  // label "draw.prev"
+//        case paneFrameRead   = 8  // label "pane.read"
+//        case paneCells       = 9  // label "pane.cells"
+//        case paneCellsVec    = 10 // label "pane.vec"
+//        case paneGlyphLoop   = 11 // label "pane.glyphs"
+//        case paneCursor      = 12 // label "pane.cursor"
+//        case paneStatusbar   = 13 // label "pane.status"
 //        public var label: String { ... }
 //    }
+//
+//  The six `pane.*` buckets split `draw.pane` into its phases. They are NOT a
+//  partition: `{pane.read, pane.cells, pane.cursor, pane.status}` are mutually
+//  disjoint, while `{pane.vec, pane.glyphs}` partition the INTERIOR of
+//  `pane.cells` (with a remainder). Summing all six double-counts. That nesting
+//  contract is a call-site property and is verified during the manual capture,
+//  not here — these tests pin only the discriminants, labels, and aggregation.
 //
 //    public struct FrameStats {
 //        public static let sampleCapacity: Int  // 4096
@@ -124,6 +137,12 @@ final class FrameStatsTests: XCTestCase {
       (.previewLoadHTML, 5, "prev.html"),
       (.drawPaneEditor, 6, "draw.pane"),
       (.drawPanePreview, 7, "draw.prev"),
+      (.paneFrameRead, 8, "pane.read"),
+      (.paneCells, 9, "pane.cells"),
+      (.paneCellsVec, 10, "pane.vec"),
+      (.paneGlyphLoop, 11, "pane.glyphs"),
+      (.paneCursor, 12, "pane.cursor"),
+      (.paneStatusbar, 13, "pane.status"),
     ]
     for (bucket, raw, label) in cases {
       XCTAssertEqual(bucket.rawValue, raw, "\(label): rawValue == \(raw)")
@@ -135,6 +154,48 @@ final class FrameStatsTests: XCTestCase {
     XCTAssertEqual(
       FrameStatsBucket.allCases.map { $0.rawValue }, Array(0..<cases.count),
       "allCases is in ascending rawValue order with no gaps (it indexes the storage array)")
+  }
+
+  func testBucketLabelsAreUniqueAndFitTheReportColumn() {
+    // WHY UNIQUENESS: `label` is a hand-written `switch`. A copy-paste duplicate
+    // (two cases returning "pane.cells", say) would compile, and would silently
+    // emit two identical report rows that no other test rejects. Worse, it would
+    // FOOL `testFormattedBucketRowsAreInRawValueOrder`: that test's scan is
+    // forward-only, so the second, duplicated label would simply re-match the
+    // first row's text and the ordering assertion would pass while the report was
+    // in fact ambiguous. This test is the guard for exactly that hole.
+    //
+    // NOTE: uniqueness is the strongest check available here — a blanket
+    // "no label is a substring of another" assertion is NOT possible, because
+    // "draw" is legitimately a substring of "draw.pane" and "draw.prev". The
+    // forward-only scan tolerates that only because "draw" has the LOWER raw
+    // value and so is matched first. None of the six new `pane.*` labels is a
+    // substring of any other label (`pane.cells` and `pane.cursor` merely share
+    // the "pane.c" prefix; neither contains the other), so the scan stays sound.
+    //
+    // WHY THE WIDTH: `format` left-aligns the label in a width-14 field. A label
+    // of 14+ chars would consume the whole field and butt directly against the
+    // right-aligned count column, breaking the byte-exact table layout.
+    let maxLabelWidth = 13
+
+    var seen: [String: FrameStatsBucket] = [:]
+    for bucket in FrameStatsBucket.allCases {
+      let label = bucket.label
+      XCTAssertFalse(label.isEmpty, "raw \(bucket.rawValue): the label is non-empty")
+      if let prior = seen[label] {
+        XCTFail(
+          "duplicate label \"\(label)\": raw \(prior.rawValue) and raw \(bucket.rawValue) "
+            + "would emit two identical report rows")
+      }
+      seen[label] = bucket
+      XCTAssertLessThanOrEqual(
+        label.count, maxLabelWidth,
+        "\"\(label)\" is \(label.count) chars; the left-\(maxLabelWidth + 1) field needs at "
+          + "least one trailing space to separate it from the count column")
+    }
+    XCTAssertEqual(
+      seen.count, FrameStatsBucket.allCases.count,
+      "every bucket has its own distinct label")
   }
 
   // MARK: - 1. Env parsing
@@ -305,6 +366,45 @@ final class FrameStatsTests: XCTestCase {
     XCTAssertEqual(render.maxNanos, 30 * nsPerMs, ".previewRender max is its own")
     XCTAssertEqual(html.count, 1, ".previewLoadHTML saw 1 sample")
     XCTAssertEqual(html.maxNanos, 4 * nsPerMs, ".previewLoadHTML max is its own")
+  }
+
+  func testEveryBucketRoundTripsThroughRecordAndSummarize() {
+    // Every bucket, one DISTINCT sample each, so a mis-sized accumulator shows up
+    // as a missing row or a value landing in the wrong bucket rather than as a
+    // silently-equal duplicate. This is the tripwire for an off-by-one if the
+    // storage ever stops deriving its size from `allCases.count` (a hard-coded
+    // "8" would trap or drop the six new pane sub-buckets).
+    var stats = FrameStats()
+    var expected: [FrameStatsBucket: UInt64] = [:]
+    for bucket in FrameStatsBucket.allCases {
+      let nanos = UInt64(bucket.rawValue + 1) * nsPerMs
+      stats.record(bucket, nanos: nanos)
+      expected[bucket] = nanos
+    }
+
+    let report = stats.summarize(index: 1, elapsedSeconds: 5.0)
+    XCTAssertEqual(
+      report.buckets.count, FrameStatsBucket.allCases.count,
+      "one sample in every bucket produces exactly one row per bucket")
+
+    for bucket in FrameStatsBucket.allCases {
+      guard let want = expected[bucket] else {
+        return XCTFail("\(bucket.label): the fixture recorded a sample for every bucket")
+      }
+      guard let summary = report.buckets.first(where: { $0.bucket == bucket }) else {
+        return XCTFail("\(bucket.label) (raw \(bucket.rawValue)) is missing from the report")
+      }
+      XCTAssertEqual(summary.count, 1, "\(bucket.label): exactly one sample")
+      XCTAssertEqual(summary.meanNanos, want, "\(bucket.label): mean is its own sample")
+      XCTAssertEqual(summary.p50Nanos, want, "\(bucket.label): p50 is its own sample")
+      XCTAssertEqual(summary.p95Nanos, want, "\(bucket.label): p95 is its own sample")
+      XCTAssertEqual(
+        summary.maxNanos, want,
+        "\(bucket.label): max is its own sample (no cross-bucket bleed)")
+      XCTAssertFalse(summary.truncated, "\(bucket.label): one sample is not truncated")
+      XCTAssertEqual(
+        stats.retainedSampleCount(bucket), 1, "\(bucket.label): the ring holds its one sample")
+    }
   }
 
   // MARK: - 5. Ring bound + truncation

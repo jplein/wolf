@@ -1268,15 +1268,21 @@ final class PaneContainerView: NSView {
   /// `paintsGrid == false` means the grid rect is fully occluded by an opaque
   /// preview web view: the statusbar still paints (it sits OUTSIDE the grid rect
   /// and is never covered), but the grid is skipped entirely.
+  ///
+  /// Sub-buckets recorded here: `pane.status` (the statusbar strip, recorded even
+  /// for an occluded pane) and `pane.read` (the `read_frame_for_grid` FFI call,
+  /// deliberately BELOW the `paintsGrid` guard so an occluded pane records none).
   private func paintPane(
     grid: UInt64, paneRect: CGRect, active: Bool, paintsGrid: Bool, ctx: CGContext
   ) {
     ctx.saveGState()
     ctx.clip(to: paneRect)
 
+    let statusbarStart = FrameMetrics.begin()
     paintStatusbar(
       into: statusbarRect(ofPane: paneRect), grid: grid, paneRect: paneRect,
       active: active, ctx: ctx)
+    FrameMetrics.end(.paneStatusbar, statusbarStart)
 
     // Return BEFORE `read_frame_for_grid`: the FFI frame read (a whole cell
     // vector across the bridge, one Rust String clone per cell) is a material
@@ -1290,7 +1296,13 @@ final class PaneContainerView: NSView {
       return
     }
 
+    // `pane.read` sits BELOW the `paintsGrid` guard on purpose: an occluded pane
+    // must record NO sample, which is what preserves the occlusion semantics and
+    // makes `count(pane.read) == count(draw.pane)` a meaningful check.
+    let frameReadStart = FrameMetrics.begin()
     let frame = handle.read_frame_for_grid(grid)
+    FrameMetrics.end(.paneFrameRead, frameReadStart)
+
     paintGrid(frame, into: gridRect(ofPane: paneRect), ctx: ctx)
 
     ctx.restoreGState()
@@ -1317,9 +1329,23 @@ final class PaneContainerView: NSView {
     ctx.translateBy(
       x: rect.minX + CGFloat(geo.paintOffsetX),
       y: rect.minY + CGFloat(geo.paintOffsetY))
+    // `pane.cells` is timed at the CALL SITE, not with a `defer` inside
+    // `paintCells`: `defer` ordering relative to the ARC release of a function's
+    // locals is UNSPECIFIED in Swift, and this bucket exists precisely to capture
+    // the `RustVec<FfiCell>` teardown that happens at that release.
+    let cellsStart = FrameMetrics.begin()
     paintCells(frame, ctx: ctx)
+    FrameMetrics.end(.paneCells, cellsStart)
+
     if frame.cursor_visible() {
+      // MOST ERROR-PRONE PLACEMENT IN THIS INSTRUMENTATION: `begin()` MUST precede
+      // the whole `drawCursor(...)` statement INCLUDING its arguments, because the
+      // `frame.cells()` argument is a full deep clone of the cell vector, evaluated
+      // here at the call site. A `defer` inside `drawCursor` would start the clock
+      // AFTER that clone, report near-zero, and silently hide it.
+      let cursorStart = FrameMetrics.begin()
       drawCursor(ctx, frame: frame, cells: frame.cells(), cols: Int(frame.cols()))
+      FrameMetrics.end(.paneCursor, cursorStart)
     }
     ctx.restoreGState()
     ctx.restoreGState()
@@ -1436,13 +1462,24 @@ final class PaneContainerView: NSView {
 
   /// Paints all cells of `frame` at grid-local coordinates (the caller has already
   /// translated/clipped the context to the target rect).
+  ///
+  /// Records two sub-buckets: `pane.vec` (the `frame.cells()` deep clone alone)
+  /// and `pane.glyphs` (the double loop alone). Both are nested INSIDE the
+  /// caller's `pane.cells` bucket and do not account for all of it — the
+  /// difference is the `RustVec<FfiCell>` teardown at ARC release.
   private func paintCells(_ frame: FfiFrame, ctx: CGContext) {
     let cols = Int(frame.cols())
     let rows = Int(frame.rows())
+    let cellsVecStart = FrameMetrics.begin()
     let cells = frame.cells()
+    FrameMetrics.end(.paneCellsVec, cellsVecStart)
     let cellW = metrics.cellWidth
     let cellH = metrics.cellHeight
 
+    // NOT a `defer`: a `defer` registered here would fire at function exit and
+    // swallow part of the teardown, destroying the very separation `pane.cells`
+    // exists to expose. No timer goes inside a loop body.
+    let glyphLoopStart = FrameMetrics.begin()
     for row in 0..<rows {
       for col in 0..<cols {
         let index = row * cols + col
@@ -1464,6 +1501,7 @@ final class PaneContainerView: NSView {
         }
       }
     }
+    FrameMetrics.end(.paneGlyphLoop, glyphLoopStart)
   }
 
   /// Strokes a thin separator between adjacent panes (along each pane rect's

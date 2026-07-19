@@ -1,378 +1,323 @@
-# Plan: Stop painting pane grids occluded by preview web views
+# Plan: Reduce `draw.pane` — the per-pane paint floor
 
 ## Problem statement
 
-Wolf's typing latency is far worse than terminal Neovim. Frame-time instrumentation
-(landed in the previous pass, see "Instrumentation" below) shows `PaneContainerView.draw`
-is the dominant main-thread cost in every configuration measured. This pass targets one
-specific, cheap hypothesis about why `draw` gets dramatically worse when a Markdown
-preview is open.
+After the occlusion fix (committed, `cd0230b`), `draw.pane` is the single largest
+main-thread cost in Wolf and the floor under EVERY configuration, preview or not. It is
+20.4 ms to paint one pane. Terminal Neovim's whole keystroke-to-pixel path is single-digit ms.
 
-## Measured data (real captures, this machine — a FAST Mac)
+## Where we are (measured, this machine — a FAST Mac)
 
-Large file (`~/Git/jplein/Notepad/commonplace-book.md`), typing near the top.
-Steady-state 5 s windows, from `test-1-no-preview` and `test-2-with-preview` in the repo root.
+Steady state, large file (`~/Git/jplein/Notepad/commonplace-book.md`), typing near the top.
+Captures `test-1`..`test-4` in the repo root are the full record.
 
-| metric              | no preview            | with preview          |
-| ------------------- | --------------------- | --------------------- |
-| `draw`              | 77 x 26.2 ms = 2002 ms | 56 x 47.6 ms = 2663 ms |
-| `prev.reload`       | —                     | 31 x 30.8 ms = 956 ms  |
-| `prev.render`       | —                     | 31 x 28.4 ms = 880 ms  |
-| `prev.html`         | —                     | 31 x 2.4 ms = 74 ms    |
-| wakes               | 135 x 4.2 ms = 560 ms  | 159 x 4.8 ms = 768 ms  |
-| **main-thread busy** | **~2.6 s / 5 s (51%)** | **~4.4 s / 5 s (88%)** |
-| per keystroke       | ~55 ms                | ~81 ms                |
-| wakes/key           | ~2.9–3.35             | ~2.7–2.9              |
+| bucket        | before occlusion fix | after (current) |
+| ------------- | -------------------- | --------------- |
+| `draw`        | 45.6–46.0 ms         | 22.1–22.3 ms    |
+| `draw.pane`   | 22.1–22.3 ms         | **20.4–20.5 ms** |
+| `draw.prev`   | 22.0–22.2 ms         | 0.13 ms (fixed) |
+| `prev.reload` | 28.7–29.4 ms         | 28.2–28.7 ms    |
+| `prev.render` | 26.4–27.1 ms         | 25.8–26.3 ms    |
+| `ctrl.wake`   | 4.71–4.77 ms         | 4.81–4.88 ms    |
 
-`draw` is 78% of busy time without a preview and 61% with one. Nothing else is close.
+Current main-thread budget per 5 s window (with preview open):
 
-### Corrections to earlier conclusions (both were WRONG — do not reuse them)
+| source                                    | time / 5 s | share |
+| ----------------------------------------- | ---------- | ----- |
+| `draw` (almost entirely `draw.pane`)      | 1703 ms    | 47%   |
+| `prev.reload` (of which `prev.render` 1127 ms) | 1233 ms | 34%   |
+| wakes                                     | 723 ms     | 20%   |
 
-1. **Wake amplification is REAL.** An earlier 22-keystroke smoke capture showed
-   `wakes/key = 1.00` and this was wrongly recorded as falsifying the hypothesis. Both
-   real captures show **~2.9**. The sample was too small to conclude from.
-2. **`loadHTMLString` is NOT the preview problem.** `prev.html` is only **2.4 ms**. The
-   previously-planned "replace `loadHTMLString` with incremental DOM patching" work is
-   **CANCELLED** — it would buy ~2 ms. The preview cost is `prev.render` (28 ms), the
-   `block_on` RPC + whole-document `pulldown-cmark` render.
+Total busy ~73%. Per keystroke ~70 ms. Frame rate ~15.4 fps.
 
-## THE HYPOTHESIS TO TEST IN THIS PASS
+**Read products, not means.** `draw` COUNT rose 56 -> 77 after the occlusion fix, because a
+less-busy main thread lets AppKit coalesce fewer display passes. Freed capacity is partly
+reinvested as more frequent redraws and preview reloads rather than idle. Always report
+count x mean alongside the mean.
 
-`draw` nearly DOUBLES when a preview opens: **26.2 ms -> 47.6 ms** — even though the
-editor pane becomes NARROWER and should therefore paint FEWER cells.
+## THE QUESTION THIS PASS MUST ANSWER FIRST
 
-**Primary hypothesis (occlusion):** `PaneContainerView.draw` paints every pane's grid,
-including the preview pane's nvim scratch-buffer grid, which is then entirely hidden
-behind the `WKWebView` stacked on top of that pane's rect. That is ~20 ms per frame spent
-rasterizing cells no user can ever see.
+`draw.pane` = 20.4 ms for ONE pane. It is the sum of at least four different things, and
+they have COMPLETELY DIFFERENT fixes. The split is unknown and must be measured before any
+optimization is written.
 
-**Secondary hypothesis (compositing): FALSIFIED — the claim below was factually wrong.**
+1. **`handle.read_frame_for_grid(grid)` — FFI marshalling.**
+   `from_snapshot_grid` (`crates/wolf-ffi/src/lib.rs:3456`) allocates `cols*rows` `FfiCell`s
+   each with a `cell.text.clone()` (a Rust `String` heap alloc PER CELL). `cells()`
+   (`:3375`) then does `self.cells.clone()` — a SECOND full deep clone. `drawCursor`
+   (`PaneContainerView.swift`) calls `frame.cells()` again — a THIRD.
+   → If this dominates, the fix is in **Rust/FFI** (return a borrowed view, or a flat
+   packed buffer, instead of cloning `String`s per cell).
+2. **`paintCells` — CoreText.** Per cell: `ctx.setFillColor` + `ctx.fill`, then for any
+   non-empty cell a fresh `[NSAttributedString.Key: Any]` dict, a fresh
+   `NSAttributedString`, and a fresh `CTLineCreateWithAttributedString` + `CTLineDraw`. No
+   glyph cache, no run coalescing, no batched `CGContextShowGlyphsAtPositions`.
+   Remember: blank cells hold nvim's literal `" "`, NOT `""`, so they are NOT skipped —
+   this is what made the preview scratch grid cost a full 22 ms.
+   → If this dominates, the fix is entirely in **Swift** (glyph cache + run coalescing).
+3. **Swift-side per-cell `String` bridging** — `cell.text().toString()` allocates a Swift
+   `String` per cell per frame.
+4. **The statusbar paint** — known small (~0.13 ms, from the occluded-pane measurement,
+   which is statusbar-only).
 
-~~`PaneContainerView` is the only view in the tree that never sets `wantsLayer`/`isOpaque`.~~
-**`PaneContainerView.init:275` ALREADY sets `wantsLayer = true`**, with an explanatory
-comment. Independently, `FrameMetrics.end(.draw, ...)` is a `defer` inside `drawRect`
-(`:1152-1153`), so the `draw` bucket measures ONLY the drawing callback body — layer
-compositing against the `WKWebView`'s layer happens later in the CA commit and window
-server, entirely outside the measured span, and therefore cannot inflate the `draw` mean.
-`isOpaque` is still not overridden (defaults `false`), but it is NOT the cause; do not
-bundle it into this pass.
+**Do not guess the ratio.** The last pass nearly optimized `loadHTMLString`, which turned
+out to be 2.4 ms; only measurement caught it. The same discipline applies here.
 
-**Third hypothesis (cost moved to the editor pane): PARTIALLY TRUE, and it repairs a
-false premise above.** `maxGridCols = 90` (`:75`) caps and centers the grid, so on a wide
-window the editor pane is ALREADY at the cap; splitting for the preview halves its pixel
-width but its column count lands just under the cap. **The editor pane does not get
-cheaper.** A second, similarly-sized grid then appears → predicted ~2x = ~52 ms vs
-measured 47.6 ms. Good fit, accounts for essentially the whole delta.
+## Approach: same staged gate that worked last time
 
-**The `draw` count drop (77 -> 56 per 5 s) is NOT more invalidation.** Every path sets
-`needsDisplay = true` and AppKit coalesces to at most one display pass per run-loop
-iteration; at 88% busy instead of 51%, more wakes fold into each pass. Fewer draws of
-unchanged cost. So the honest headline is the PRODUCT: total `draw` time went
-2002 ms -> 2663 ms (+33%), not +82%.
+### PHASE A — measure the split
 
-## Scope of THIS pass
+Add sub-buckets to the existing `FrameStats` seam (it is already there, allocation-free,
+env-gated, and unit-tested) splitting `draw.pane` into at minimum:
 
-1. **Verify the hypothesis** using the existing instrumentation, cheaply and explicitly.
-2. **If occlusion is confirmed:** skip painting grid content for any pane fully covered by
-   an opaque preview web view.
-3. **Re-measure** and record the before/after `draw` numbers.
+- the `read_frame_for_grid` FFI call
+- `paintCells`
+- `drawCursor`
+- the statusbar paint
 
-Deliberately NOT in this pass (all still queued, in priority order):
+Then re-capture under the SAME protocol and report count x mean for each.
 
-- glyph run coalescing / glyph cache / `drawGlyph` rework, and the redundant
-  `read_frame_for_grid` calls + triple cell-vector clone (this is the real fix for the
-  26 ms no-preview floor — the NEXT pass)
-- moving `prev.render` off the main thread (third)
-- wake amplification, ~2.9 wakes/key at ~4.8 ms each (fourth)
-- dirty-rect tracking in `draw`
-- anything in Rust (`wolf-core` / `wolf-ffi`). No Rust changes; no FFI surface changes.
+**GATE — decide the fix from the evidence, not from this plan's suspicions:**
 
-## Correctness constraints (this pass DOES change render behavior)
+- FFI marshalling >~50% of `draw.pane` → the primary fix is in Rust/FFI. This would be the
+  first Rust change in this whole effort; scope it separately.
+- CoreText >~50% → the primary fix is a Swift glyph cache + run coalescing.
+- Roughly even → fix both, cheaper one first, re-measuring between so each is attributable.
 
-Unlike the instrumentation pass, skipping paint work is a real behavior change. It must be
-correct in every case, not just the common one:
+### PHASE B — the fix, conditional on phase A
 
-- Only skip when the web view genuinely, fully covers the pane's grid rect AND is opaque.
-  A partially-covering or transparent web view must still paint underneath.
-- A preview pane whose `WKWebView` does not exist yet (`previewWebViews[win] == nil`, the
-  documented "web view does not exist yet" path in `reloadDirtyPreviews`) must still paint.
-- A web view that exists but has not yet loaded content (blank/white) must not produce a
-  visibly empty or garbage pane.
-- Hidden / zero-size / detached web views must not count as occluding.
-- Pane geometry changes (split, resize, close, preview close) must restore painting
-  immediately — no stale "occluded" state surviving the web view's removal.
-- Cursor, scrollbars, dividers and overlays must be unaffected except where they are
-  themselves genuinely occluded.
+Not specified here on purpose. The architect specifies it AFTER the gate result is in.
 
-## Instrumentation available (from the previous pass — already landed)
+## Constraints
 
-Env-gated, off by default. `WOLF_FRAME_STATS=1`, `WOLF_FRAME_STATS_INTERVAL=<seconds>`,
-`WOLF_FRAME_STATS_FILE=<path>`. Buckets: `ctrl.wake`, `cont.wake`, `draw`, `prev.reload`,
-`prev.render`, `prev.html`, plus `keys` / `wakes` / `wakes/key`.
+- Preserve the phase-A/occlusion instrumentation exactly as-is — `draw`, `draw.pane`,
+  `draw.prev` must stay comparable to `test-1`..`test-4`.
+- Any new bucket must keep raw values dense/ascending and update the pinned test list in
+  `FrameStatsTests.swift`.
+- Sub-bucket timing must not itself distort the measurement: `draw.pane` is 20 ms and a
+  clock read is tens of ns, but per-CELL timing would be fatal. Time PHASES, never cells.
+- Disabled path stays free (one `swift_once` load + a branch).
 
-Seam: `crates/wolf-macos/Sources/WolfKeyMap/FrameStats.swift` (pure, unit-tested).
-Glue: `crates/wolf-macos/Sources/WolfMacOS/FrameMetrics.swift`.
+## Explicitly NOT in this pass
 
-Run it (NOTE the `Wolf_archive-root` path — `bazel-bin/crates/wolf-macos/Wolf.app` does
-NOT exist; `macos_application` emits `Wolf.zip` plus the unzipped bundle under
-`Wolf_archive-root/`):
-
-```
-bazel build //crates/wolf-macos:Wolf
-WOLF_FRAME_STATS=1 ./bazel-bin/crates/wolf-macos/Wolf_archive-root/Wolf.app/Contents/MacOS/Wolf
-```
+- Moving `prev.render` off the main thread (now 34% of budget and the clear NEXT pass after
+  this one — it rose in relative importance once `draw` halved).
+- Wake amplification (~2.9 wakes/key at ~4.8 ms).
+- Dirty-rect tracking in `draw`.
+- `INPUT_COALESCE_DELAY` (8 ms, machine-independent).
+- `isOpaque` (still not the cause of anything measured).
 
 ## Success criteria
 
-`draw` with a preview open drops materially from its 47.6 ms mean, toward (or below) the
-26 ms no-preview figure, with no visual regression in the preview or editor panes. If the
-occlusion hypothesis is disproven, that is a perfectly good outcome — record what the
-evidence actually showed and stop, rather than optimizing on a wrong theory.
+Phase A: a trustworthy split of the 20.4 ms with count x mean per sub-bucket, sufficient to
+pick the fix without guessing. A surprising result is a GOOD outcome.
 
-## Architect's plan (APPROVED — note the STAGED GATE at phase A step 4)
+Phase B: `draw.pane` materially below 20.4 ms with no visual regression. Terminal-parity is
+not the bar for one pass; a large, verified reduction is.
 
-### Why occlusion is strongly supported (from code reading)
+## Architect's PHASE A plan (APPROVED — implement exactly this)
 
-- `draw` (`:1149`) loops `paneRects()` and calls `paintPane` for EVERY pane with a bound
-  grid. No preview check. `paintPane` (`:1190`) calls `handle.read_frame_for_grid(grid)`
-  (whole cell-vector across the FFI) then `paintGrid` (`:1210`) → fill, `paintCells`,
-  `drawCursor`. `syncGridSizes` (`:654`) resizes the preview pane's grid to FULL geometry
-  — it is a full-size grid, not a stub.
-- `syncPreviewWebViews` (`:816`) sets `web.frame = gridRect(ofPane: entry.1)` — the
-  IDENTICAL expression `paintGrid` is handed. Coverage is exact, not approximate.
-  `web.isHidden = false` each wake. The rendered doc sets an opaque
-  `body.wolf-markdown` background (`#1b1b1b` dark / `#f4f4f4` light) which per CSS
-  propagates to the viewport canvas → opaque over its whole frame once loaded.
-- **The scratch grid is NOT cheap.** `paintCells` (`:1344`) does `setFillColor` + `fill`
-  for EVERY cell unconditionally; only the glyph is conditional. Blank cells are not
-  empty — `grid_line` stores nvim's literal `" "` (`wolf-core/src/redraw.rs:780-813`);
-  only wide-char trailing placeholders and never-painted cells are `""`
-  (`wolf-core/src/render.rs:187-198`). So a blank cell has `text == " "` → non-empty →
-  `drawGlyph` runs → `CTLineCreateWithAttributedString` + `CTLineDraw` per cell, plus
-  `FfiCell::text()`'s `self.text.clone()` Rust String alloc per cell
-  (`wolf-ffi/src/lib.rs:2160`). A blank preview grid costs nearly what a full one does.
-- Residual uncertainty (the reason to MEASURE, not assume): `Grid::clear()` resets cells
-  to `Cell::default()` (empty text), so between a `grid_clear` and the following
-  `grid_line` a grid IS cheap. Steady state should re-send `grid_line`, but confirm.
+### Findings that drive the design (verified in code, do NOT re-derive)
 
-The statusbar strip is OUTSIDE `gridRect` and is NOT covered — only the grid paint may be
-skipped.
+Call chain per pane: `draw` (`:1208`) -> `paintPane` (`:1271`) -> `paintStatusbar` (`:1337`),
+then `read_frame_for_grid` (`:1293`), then `paintGrid` (`:1305`) -> `paintCells` (`:1439`)
+and `drawCursor` (`:1676`).
 
-### PHASE A — verification (land this FIRST, then STOP)
+**FIVE deep copies of the cell data, located precisely:**
 
-Add two buckets to `FrameStatsBucket`, dense/ascending raw values:
-`drawPaneEditor = 6` label `"draw.pane"`, `drawPanePreview = 7` label `"draw.prev"`.
-In `draw`'s pane loop, explicit `begin`/`end` around `paintPane` (not `defer`, mirroring
-the `previewRender` site), selecting `.drawPanePreview` when `previewNamesByGrid[grid] != nil`
-else `.drawPaneEditor`. Keep these buckets PERMANENTLY — they are the before/after
-evidence here and the instrument for the next (glyph) pass.
+| # | where | cost |
+|---|-------|------|
+| A | `FfiFrame::from_snapshot_grid` (`wolf-ffi/src/lib.rs:3450`), `cell.text.clone()` `:3460` | `cols*rows` Rust String allocs, inside `read_frame_for_grid`. `core.read_snapshot()` is only a `read_arc()` guard (`wolf-core/src/api.rs:340`) — cheap. |
+| B | `let cells = frame.cells()` at `PaneContainerView.swift:1442`, INSIDE `paintCells` -> `self.cells.clone()` (`lib.rs:3375`) | a second full `cols*rows` String alloc set |
+| C | `frame.cells()` passed as an **ARGUMENT at the call site** `:1322` inside `paintGrid` | a third full clone — for a function that reads at most ONE cell |
+| D | `cell.text()` at `:1458`/`:1698` -> `FfiCell::text` = `self.text.clone()` (`lib.rs:2160`), then `.toString()` | per cell: one Rust String alloc + one Swift String alloc |
+| E | **`RustVec<FfiCell>` teardown** — nobody had named this. `cells` is a function-local; ARC release drops `cols*rows` `FfiCell`s = one `free` per cell, after the loop, before `paintCells` returns. |
 
-`FrameStatsTests.swift` pins bucket discriminants/labels and asserts `allCases.count`
-against the pinned list (~:110-134) — add the two rows and update the enum recap comment
-(~:19-25). The `format` ordering tests (~:598-630) iterate `allCases` and need no edit.
+Also per cell inside the glyph loop: `WolfColor.cgColor(cell.bg(), ...)` at `:1454`
+allocates a `CGColor`. And because blank cells carry `" "`, `!text.isEmpty` is true for
+essentially EVERY cell, so `drawGlyph` (`:1625`, `CTLineCreateWithAttributedString` +
+`CTLineDraw`, no cache) runs `cols*rows` times.
 
-**GATE — decision rule after measuring, before writing any fix:**
+**Consequences:** clone B is eager on the FIRST statement of `paintCells`, so a naive
+`paintCells` bucket conflates marshalling with CoreText — the exact confusion to avoid.
+**Clone C is evaluated at the CALL SITE, not inside `drawCursor` — a `defer` inside
+`drawCursor` would MISS it entirely.** Teardown E is only capturable as a difference.
 
-- `draw.prev` mean >~ 15 ms with a preview open → occlusion CONFIRMED, proceed to phase B.
-- `draw.prev` mean <~ 5 ms → occlusion DISPROVEN. Record the numbers, STOP, hand the pass
-  to the glyph work. **Do not build the fix.**
-- In between → report both buckets plus the editor pane's column count and re-decide.
+### The six new buckets (dense, ascending from `drawPanePreview = 7`)
 
-### PHASE B — the fix (ONLY if the gate confirms)
+| raw | case | label | measures |
+|-----|------|-------|----------|
+| 8  | `paneFrameRead` | `pane.read`   | `handle.read_frame_for_grid(grid)` — snapshot lock + clone A + `FfiFrame` construction |
+| 9  | `paneCells`     | `pane.cells`  | the whole `paintCells(frame, ctx:)` call — **PARENT** of 10/11, and the only bucket containing teardown E |
+| 10 | `paneCellsVec`  | `pane.vec`    | just `let cells = frame.cells()` — clone B in isolation |
+| 11 | `paneGlyphLoop` | `pane.glyphs` | just the `for row`/`for col` double loop — bg `CGColor` + fill, per-cell text bridge D, `GlyphStyleResolver.resolve`, `drawGlyph` |
+| 12 | `paneCursor`    | `pane.cursor` | the `drawCursor(...)` call expression in `paintGrid`, INCLUDING its `frame.cells()` argument — clone C + cursor fill + at most one glyph |
+| 13 | `paneStatusbar` | `pane.status` | the `paintStatusbar(...)` call in `paintPane` |
 
-**CREATE `Sources/WolfKeyMap/PaneOcclusion.swift`** — pure, Foundation-only, reuses `Rect`
-from `PaneTree.swift` as `EditorInset.swift`/`PickerPanelSeam.swift` do.
+`pane.vec` is the single most important bucket — without it `pane.cells` mixes a full deep
+clone with all CoreText work. `pane.cells` exists solely to attribute teardown E without
+relying on undefined `defer`-vs-ARC ordering. Longest label is 11 chars, inside the pinned
+left-14 field, so `format` layout and the byte-exact tests are unaffected.
 
-- `public struct OccluderGeometry` — `frame: Rect`, `isHidden: Bool`, `isAttached: Bool`,
-  `alpha: Double`, `hasLoadedContent: Bool`, public memberwise init (matching the
-  `FrameStats.BucketSummary` convention so tests build fixtures directly).
-- `public enum PaneOcclusion` with
-  `static func isFullyOccluded(gridRect: Rect, by occluder: OccluderGeometry?) -> Bool`.
+**DISJOINTNESS CONTRACT (document in the enum doc comment):**
+`{pane.read, pane.cells, pane.cursor, pane.status}` are mutually disjoint, summing to at
+most `draw.pane + draw.prev`. `{pane.vec, pane.glyphs}` partition the INTERIOR of
+`pane.cells`, with a remainder. **The six do NOT sum to `draw.pane`; summing all six
+double-counts.**
 
-ALL rules must hold or the result is `false` (i.e. PAINT):
+### Timer placement (all in `PaneContainerView.swift`) — explicit begin/end everywhere
 
-1. `occluder != nil` — "web view does not exist yet" (`previewWebViews[win] == nil`)
-2. `hasLoadedContent` — exists but has not loaded content yet
-3. `isAttached` — detached
-4. `!isHidden` — hidden / hidden ancestor
-5. `alpha >= 1.0` — transparent
-6. `frame.w > 0 && frame.h > 0` — zero-size
-7. `gridRect.w > 0 && gridRect.h > 0` — degenerate grid rect reported NOT occluded
-   (conservative; nothing to save anyway)
-8. Strict containment, **tolerance 0.0**: `frame.x <= gridRect.x`, `frame.y <= gridRect.y`,
-   `frame.maxX >= gridRect.maxX`, `frame.maxY >= gridRect.maxY`
+Rule as before: `defer` for whole functions with early returns, explicit for statements.
 
-Zero tolerance is correct and SAFE because `syncPreviewWebViews` assigns the web view's
-frame from the SAME `gridRect(ofPane:)` expression — values are bit-identical when in
-sync, and when OUT of sync (mid-live-resize, post-split, pre-close) containment fails and
-the grid paints. That satisfies "geometry changes restore painting immediately"
-STRUCTURALLY rather than by bookkeeping. Document that partial coverage returns `false`.
+- **`pane.status`** — `paintPane`, around the `paintStatusbar(...)` call `:1277-1279`.
+- **`pane.read`** — `paintPane`, around exactly `let frame = handle.read_frame_for_grid(grid)`
+  `:1293`. Must sit **BELOW the `guard paintsGrid` at `:1288`** so an occluded pane records
+  no `pane.read` sample — preserves occlusion semantics and makes the count identities below
+  meaningful.
+- **`pane.cells`** — `paintGrid`, around the `paintCells(frame, ctx: ctx)` call `:1320`.
+  At the call site, NOT `defer` inside `paintCells`: `defer` order relative to ARC release
+  of function locals is **unspecified** by Swift; a call-site pair is guaranteed to enclose
+  the release of `cells`.
+- **`pane.vec`** — inside `paintCells`, around exactly `let cells = frame.cells()` `:1442`.
+- **`pane.glyphs`** — inside `paintCells`, begin immediately before `for row in 0..<rows`
+  `:1446`, end immediately after the outer loop's closing brace `:1466`. **NOT `defer`** —
+  a `defer` registered before the loop fires at function exit and would swallow part of the
+  teardown, destroying the separation `pane.cells` exists to expose.
+- **`pane.cursor`** — `paintGrid`, begin immediately BEFORE the whole
+  `drawCursor(ctx, frame:, cells: frame.cells(), cols:)` statement `:1322` (inside the
+  `if frame.cursor_visible()` block), end immediately after. **The `begin()` MUST precede
+  argument evaluation, because that is where clone C happens. A `defer` inside `drawCursor`
+  would be WRONG and must not be used — it would report near-zero and silently hide a full
+  deep clone. This is the most error-prone placement in the plan; add a comment at the site
+  saying so.**
 
-**MODIFY `PaneContainerView.swift`:**
+No timers inside any loop body. No changes to `drawGlyph`, `drawDecorations`,
+`drawStatusbarText`, `drawDividers`, `drawScrollbars`.
 
-- Add `private var previewLoadedWins: Set<Int64> = []` beside the other per-window preview
-  maps. Documented: set when a web view first reports `didFinish`; deliberately NOT
-  cleared on a subsequent reload, because WebKit keeps displaying the previous document
-  while the next loads — clearing it would cause paint/unpaint flicker.
-- `previewDidFinishLoad(win:)` — insert `win` FIRST; the existing
-  `guard let fragment = ... else { return }` returns early.
-- `removePreviewWebView(_:)` — remove `win` alongside the other per-window teardown. This
-  is the "preview close restores painting immediately" guarantee.
-- `private func previewOccluder(forWin:) -> OccluderGeometry?` — `nil` when
-  `previewWebViews[win] == nil`; else built from the live view:
-  `isHidden: web.isHiddenOrHasHiddenAncestor` (preferred over bare `isHidden`),
-  `isAttached: web.superview === self && web.window != nil`,
-  `alpha: Double(web.alphaValue)`, `hasLoadedContent: previewLoadedWins.contains(win)`.
-- `paintPane(grid:paneRect:active:paintsGrid:ctx:)` — when `paintsGrid == false`, paint the
-  statusbar as today then `return` WITHOUT `handle.read_frame_for_grid(grid)` and without
-  `paintGrid`. **Skipping the FFI frame read is a material part of the saving — do not
-  hoist it above the branch.**
-- In `draw`'s pane loop pass `paintsGrid: !occluded`. Requires reading the full
-  `PaneBinding` (for `win`), not just `boundGrid`. Add a small private `CGRect` →
-  `WolfKeyMap.Rect` helper (none exists; `paneRects()` does the inverse inline).
-- Leave `drawDividers`, `drawScrollbars`, `refreshOverlays` and the `ctx.fill(bounds)`
-  editor-background fill COMPLETELY unchanged. `drawScrollbars` already suppresses the
-  synthetic scrollbar over preview panes via an independent `previewNamesByGrid` check —
-  do NOT couple it to occlusion.
-- `drawCursor` is only reachable from `paintGrid`, so it is skipped for an occluded pane.
-  That is CORRECT — a preview pane's cursor is already invisible under the web view — but
-  state it in a code comment so a reviewer does not flag it.
+### What `pane.glyphs` actually measures — READ THIS BEFORE INTERPRETING THE GATE
 
-### Tests
+A clean split of the per-cell string bridging from CoreText is **NOT possible** without
+per-cell timing, which is rejected (below). `pane.glyphs` is a composite, per cell, of:
+`cell.bg()` + `WolfColor.cgColor` (a `CGColor` alloc); `setFillColor` + `fill`;
+`cell.text()` (Rust String clone); `.toString()` (Swift String alloc);
+`flags()`/`fg()`/`special()` + `GlyphStyleResolver.resolve`; and `drawGlyph` (attributes
+dict + `NSAttributedString` + `CTLine` + `CTLineDraw`).
 
-`PaneOcclusionTests.swift`, one case per correctness constraint, all asserting `false`
-(paint) unless stated: exact-equality containment → TRUE; strictly-larger container →
-TRUE; `nil` occluder; `hasLoadedContent == false`; `isAttached == false`; `isHidden`;
-alpha 0.0/0.5/0.999 → false and 1.0 → true; zero width, zero height, zero-by-zero;
-partial coverage short on left/right/top/bottom and inset on all four sides (x5);
-off-by-a-hair `maxX` short by 0.5 (pins tolerance 0.0); occluder entirely elsewhere;
-degenerate `gridRect`; and flag-interaction cases proving the rules AND rather than
-short-circuiting on geometry alone.
+**Read `pane.glyphs` as "per-cell Swift-side work", NOT as "CoreText".**
 
-**No macOS UI test target exists** (`BUILD.bazel` has only `WolfKeyMapTests` +
-`bundle_layout_test.sh`). Compile-verified + manual-smoke only: `previewOccluder`'s live
-`WKWebView` reads, the `previewLoadedWins` lifecycle (first load, reload, `previewFile`
-repoint, pane close), and the `paintPane` branch.
+If the gate lands here, phase B's FIRST action is a **discriminating probe, not a fix**: a
+throwaway local build stubbing out `drawGlyph` (or the `cell.text()` bridge) and
+re-measuring under the identical protocol. One A/B measurement, costs nothing, and is far
+cheaper than building a glyph cache and discovering the bridging was the real cost.
 
-**Manual smoke checklist (reviewer must confirm no visual regression):** 1. preview
-renders, statusbar reads `Preview: <name>`, no synthetic scrollbar. 2. typing updates it
-live. 3. **live-resize with a preview open** — grid must repaint under the web view while
-frames are out of sync; a brief flash of scratch grid at the seam is acceptable, a BLACK
-or GARBAGE region is a bug. 4. split / close pane / close preview repaints immediately.
-5. two preview panes. 6. cross-file link repoint stays occluded. 7. Cmd-+/Cmd-- font size.
-8. tab away and back (`markRefocusRebind`). 9. system light/dark toggle.
+### Measurement-distortion analysis
 
-### BUILD.bazel
+12 added clock reads per pane per frame (10 without a cursor; an occluded pane adds only 2).
+A two-pane frame goes ~6 -> ~28 reads. At tens of ns per `DispatchTime.now()`, that is
+~0.3 us against a 20,400 us region — **~0.0015%**, well below existing run-to-run variance.
+**None is per-cell or per-row.**
 
-`wolf_key_map.srcs` += `Sources/WolfKeyMap/PaneOcclusion.swift` (alphabetical, between
-`PaneGeometry.swift` and `PaneTree.swift`); `WolfKeyMapTests.srcs` +=
-`Tests/WolfKeyMapTests/PaneOcclusionTests.swift`. No change to `wolf_macos_lib` (globs) or
-`swift_format_srcs` (globs).
+REJECTED: per-cell timing (~6,400 reads/frame, ~0.6% — but the fatal objection is not clock
+cost, it is that two `DispatchTime.now()` calls in the innermost loop act as **optimization
+barriers**, inhibit inlining of `WolfColor.cgColor`/`GlyphStyleResolver.resolve`, and change
+the very quantity under measurement). Also rejected: per-row timing (same barrier, less
+benefit); accumulate-into-a-local (still needs the per-cell reads and the barrier).
+
+### GATE — with `T(b) = count(b) x mean(b)` (PRODUCTS, not means) and `D = T(draw.pane)`
+
+- **Teardown** `= T(pane.cells) - T(pane.vec) - T(pane.glyphs)`
+- **FFI marshalling** `M = T(pane.read) + T(pane.vec) + Teardown + T(pane.cursor)`
+- **Per-cell Swift work** `C = T(pane.glyphs)`
+- **Statusbar** `S = T(pane.status)`
+
+Decision rule:
+
+- `M / D >= 0.50` → primary fix is **Rust/FFI** (borrowed view or flat packed buffer instead
+  of per-cell String clones). First Rust change in this effort; scope separately.
+- `C / D >= 0.50` → primary fix is **Swift**, but run the discriminating probe FIRST to
+  choose between a glyph cache + run coalescing vs eliminating the per-cell bridge.
+- Neither >= 0.50 → fix both, cheaper first, re-measuring between so each is attributable.
+- `S / D > 0.10` → the statusbar was mis-assumed cheap; re-plan before proceeding.
+
+**VALIDITY CHECKS — must pass BEFORE the gate is applied. If any fails the split is not
+trustworthy and must be explained first:**
+
+1. `count(pane.read) == count(pane.cells) == count(pane.vec) == count(pane.glyphs) == count(draw.pane)`.
+   A `pane.read` count EXCEEDING `draw.pane` means a preview pane painted its grid (web view
+   not yet loaded/opaque) and the sub-buckets are contaminated by a second pane.
+2. `count(pane.status) == count(draw.pane) + count(draw.prev)` — sub-buckets record for both
+   editor and preview panes, and only the statusbar runs on an occluded pane.
+3. `count(pane.cursor) <= count(draw.pane)` — `drawCursor` runs only when `cursor_visible()`.
+4. `T(pane.read) + T(pane.cells) + T(pane.cursor) + T(pane.status) <= T(draw.pane) + T(draw.prev)`,
+   residual (background fill, clip/save/restore, `gridRect`/`geometry`) under ~1 ms/frame.
+   A large residual invalidates the split.
+5. `T(pane.vec) + T(pane.glyphs) <= T(pane.cells)`, and Teardown >= 0.
+
+Capture as `test-5`, same protocol: `~/Git/jplein/Notepad/commonplace-book.md`, typing near
+the top, preview open, steady state. Also record `draw`, `draw.pane`, `draw.prev`,
+`prev.reload`, `prev.render`, `ctrl.wake`, `keys`/`wakes`/`wakes/key` unchanged for
+comparability with `test-1`..`test-4`.
+
+### Tests (`FrameStatsTests.swift`)
+
+MODIFY: `testBucketRawValuesAndLabels` gains six rows (`.paneFrameRead, 8, "pane.read"` …
+`.paneStatusbar, 13, "pane.status"`); the derived `allCases.count == cases.count` and
+`allCases.map(\.rawValue) == Array(0..<count)` assertions then re-pin density for 14 buckets
+automatically. Update the file-header `CONTRACT UNDER TEST` block (lines 18-28).
+
+ADD: `testBucketLabelsAreUniqueAndFitTheReportColumn` — every label unique across `allCases`
+(a copy-paste duplicate in the `switch` would silently produce two identical report rows,
+and would also fool `testFormattedBucketRowsAreInRawValueOrder`'s substring scan) and every
+label <= 13 chars so the left-14 field always leaves a separating space.
+`testEveryBucketRoundTripsThroughRecordAndSummarize` — one distinct sample per bucket across
+all 14, assert `summarize` returns 14 rows with expected values; catches an off-by-one if
+accumulator sizing ever stops deriving from `allCases`.
+
+UNCHANGED and should pass without edits: `testEveryFormattedLineCarriesTheGrepPrefix`
+(derived from `allCases.count`), `testFormattedBucketRowsAreInRawValueOrder`,
+`testFormatProducesTheExactPinnedTable`, `testFormatEmitsHeaderAndFooterWithNoBuckets`
+(fixed fixtures with explicit bucket lists).
+
+Known gaps (window-server-bound, per `Tests/README.md:109`): an occluded pane recording
+`pane.status` only; `pane.cursor` absent on a pane not holding the cursor; a 0x0 frame giving
+near-zero `pane.glyphs` with non-zero `pane.read`. **The count identities during the manual
+capture are the actual acceptance check for this pass.**
+
+### No BUILD.bazel changes, no new files, no Rust, no dependencies
+
+`wolf_key_map` lists `FrameStats.swift` explicitly (`BUILD.bazel:52`); `wolf_macos_lib`
+globs `Sources/WolfMacOS/*.swift` (`:82`). Nothing added or removed. `wolf-ffi/src/lib.rs`
+is READ-ONLY this pass — timing `read_frame_for_grid` from Swift captures clone A in full.
 
 ### Docs
 
-`Sources/README.md` (PaneOcclusion bullet + file-count phrase + FrameStats "six buckets"
-→ eight, enumerating what the two new ones measure); `crates/wolf-macos/README.md`
-(occlusion behavior; **fix the stale "the blank scratch grid paints underneath (occluded,
-cheap)" claim — it was never cheap**); `Tests/README.md` (PaneOcclusionTests);
-**`PaneContainerView.swift:159-166` header comment — the same "(occluded, cheap)" claim.
-This is the documentation bug that seeded the whole problem.** Also correct the wrong
-bundle path in `FrameMetrics.swift`'s header comment (`:23-24`). `prettier --write` all.
-
-### Success criteria
-
-`draw.prev` mean drops to near zero; `draw` mean falls from 47.6 ms toward ~26 ms; total
-`draw` time in a 5 s window falls from ~2663 ms toward ~1470 ms. **Report BOTH the mean and
-the count x mean product** — the count is load-dependent (see the coalescing note above) so
-the mean alone is misleading. The remaining ~26 ms floor is expected and is the NEXT pass's
-target, not this one's failure.
+`crates/wolf-macos/README.md:121` ("the eight buckets" -> fourteen, list the six, state the
+nesting/disjointness contract, the `pane.status`-counts-occluded-panes-too asymmetry, the
+`pane.glyphs`-is-not-CoreText-alone caveat, and that teardown is a derived difference);
+`Tests/README.md:107` (bucket-discriminant list + the two new tests);
+`Sources/README.md:32` (FrameStats bucket set); `build.md` only if it enumerates buckets.
+`prettier --write` all.
 
 ### Explicitly NOT changing
 
-Glyph run coalescing / glyph cache / `drawGlyph` / `paintCells` rework (incl. the per-cell
-`CTLine` and per-cell Rust String clone) — next pass. The redundant `read_frame_for_grid`
-calls and triple cell clone (beyond the one call skipped as a side effect here). Moving
-`prev.render` off the main thread. Wake amplification. Dirty-rect tracking. **Any Rust**
-(`wolf-core`, `wolf-ffi`, FFI surface, `markdown.rs`, preview CSS). `loadHTMLString` →
-incremental DOM (cancelled; 2.4 ms). **`isOpaque`** — not the cause, and bundling an
-unmeasured change into a measured pass would contaminate the before/after; queue separately.
-Preview web-view z-order vs overlays. `drawScrollbars`' existing preview suppression.
-
-## GATE RESULT: OCCLUSION CONFIRMED — phase B is unlocked
-
-Capture: `test-3-with-preview-after-phase-a` (repo root). Steady-state windows #3-#6,
-same file/position/window size as `test-2-with-preview`.
-
-| bucket               | mean         | count        |
-| -------------------- | ------------ | ------------ |
-| `draw`               | 45.6–46.0 ms | 47–56        |
-| `draw.pane` (editor) | 22.1–22.3 ms | == draw count |
-| `draw.prev` (preview)| **22.0–22.2 ms** | == draw count |
-
-- `draw.prev` = **22 ms**, far above the >~15 ms confirm threshold. Occlusion CONFIRMED.
-- `draw.prev` ≈ `draw.pane` — the blank preview scratch grid costs the SAME as the
-  text-full editor grid, exactly as predicted from the `" "`-not-`""` cell analysis.
-- The two panes sum to ~44.2 ms of the ~45.8 ms `draw`; background fill + dividers +
-  scrollbars are only ~1.6 ms. The pane loop is essentially all of `draw`.
-- Both counts equal the `draw` count in steady state → every draw paints both panes.
-
-**The instrument validated itself:** window #1, before the preview was opened, shows
-`draw.pane` with NO `draw.prev` bucket. Bucket selection is correct, not inverted or stuck.
-
-**Projected saving:** `draw` 45.8 -> ~23.8 ms (-48%). Per 5 s window,
-56 x 45.6 = 2554 ms -> 56 x 23.8 = 1333 ms, i.e. **~1.2 s per 5 s reclaimed, ~25% of the
-entire main thread**, plus one fewer `read_frame_for_grid` per frame. With-preview busy
-should fall from ~88% toward ~64%.
+No render behavior — not one pixel. No `paintCells`/`paintGrid` refactor: **the architect
+looked specifically for whether the FFI/CoreText split forced one and it does not** — every
+boundary already falls on an existing statement boundary. The tempting restructure (scoping
+`cells` in a nested block to capture teardown directly) is **REJECTED** because ARC release
+points are not guaranteed at a lexical brace, and a restructure that looks behavior-preserving
+but shifts a deallocation is exactly what corrupts a measurement pass. No Rust/FFI changes.
+No changes to `FrameStats` storage/percentile/format/reset/env parsing (so `test-1`..`test-4`
+stay diff-comparable). No `FrameMetrics.swift` change. Not in this pass: `prev.render`
+threading, wake amplification, dirty rects, `INPUT_COALESCE_DELAY`, `isOpaque`.
 
 ## Status
 
 - [x] architect plan
-- [x] PHASE A: buckets + per-pane timing (tests green, swift_format clean)
-- [x] PHASE A: MEASURE + evaluate gate — **CONFIRMED, proceed to phase B**
-- [x] PHASE B: tests — `PaneOcclusionTests.swift` (all 8 rules + interaction matrix)
-- [x] PHASE B: implementation — `PaneOcclusion.swift`, `previewLoadedWins`,
-      `previewOccluder`, `paintPane(paintsGrid:)`, `draw` pane loop
-- [x] review — APPROVED, no blocking findings
-- [x] docs — `Sources/README.md`, `README.md`, `Tests/README.md`, `architecture.md`,
-      and the seed bug: `PaneContainerView.swift:161` "(occluded, cheap)" corrected
-- [ ] **re-measure and record before/after** ← ONLY REMAINING STEP
-
-### Review notes worth keeping
-
-- **Worst case (a permanently blank pane) is structurally unreachable.** `previewOccluder`
-  short-circuits on `previewWebViews[win] == nil` BEFORE consulting `previewLoadedWins`, so
-  a stale set entry alone can never suppress a paint. `removePreviewWebView` is the SOLE
-  removal path for a web view (only call site `syncPreviewWebViews:871-873`) and clears the
-  set, so a reused `win` handle always gets a fresh `hasLoadedContent: false`.
-- **Cross-file repoint (`previewFile`) is correct** — it never touches `previewLoadedWins`,
-  so the win stays in the set while the new document loads. Right, not a hazard: WebKit
-  keeps the previous document composited until the next commits, so the view stays opaque.
-  Clearing it would cause exactly the flicker the header comment warns about.
-- **The plan's zero-tolerance argument was stated too strongly and is now corrected in
-  `PaneOcclusion.swift`'s header.** "Out of sync -> containment fails -> paints" is NOT
-  universal: if a pane SHRINKS and `draw` runs before `syncPreviewWebViews`, the stale
-  LARGER frame still contains the smaller `gridRect`, so the paint IS skipped. Still safe,
-  but the real invariant is **"the web view covers the skipped region"**, not "the frames
-  are in sync". A future reader over-trusting the sync argument could introduce a real bug.
-- **Frame perturbation is the silent failure mode.** `autoresizingMask` is `.none` and
-  `NSView` does not backing-align frames unless opted in, so this should not happen — but
-  **if re-measurement does NOT show `draw.prev` collapsing toward zero, frame perturbation
-  is the first suspect.** The failure is silent (optimization disabled), not visual.
-- Verified: no Rust changed (`git status crates/wolf-core crates/wolf-ffi` clean); FFI
-  `read_frame_for_grid` genuinely below the `guard paintsGrid`, not hoisted; phase-A timing
-  still brackets exactly `paintPane`, so numbers stay comparable to the gate.
-- Tests: `WolfKeyMapTests` PASS, `bundle_layout_test` PASS, `//tools/lint:swift_format`
-  PASS, `bazel build //crates/wolf-macos:Wolf` succeeds.
-
-### Manual smoke checklist (NOT yet run — needs a human at the app)
-
-1. preview renders; statusbar reads `Preview: <name>`; no synthetic scrollbar over it
-2. typing in the source updates the preview live
-3. **live-resize the window with a preview open** — brief flash of scratch grid at the seam
-   is acceptable; a BLACK or GARBAGE region is a bug
-4. split / close a pane / close the preview — pane underneath repaints immediately
-5. two preview panes open at once
-6. cross-file link repoint stays occluded
-7. Cmd-+ / Cmd-- font size change with a preview open
-8. tab away and back (`markRefocusRebind` path)
-9. system light/dark toggle with a preview open
+- [ ] PHASE A: sub-bucket instrumentation
+- [ ] PHASE A: measure + evaluate gate
+- [ ] PHASE B: architect specifies fix from evidence
+- [ ] PHASE B: tests
+- [ ] PHASE B: implementation
+- [ ] review
+- [ ] docs
+- [ ] re-measure and record before/after

@@ -31,6 +31,35 @@ import Foundation
 /// inside a single `draw`, so their counts are per-pane-per-frame and their sum
 /// is bounded above by `draw`'s total, not equal to it (`draw` also covers the
 /// background fill, dividers and scrollbars).
+///
+/// ## DISJOINTNESS CONTRACT for the six `pane.*` sub-buckets
+///
+/// The six `pane.*` buckets split one `paintPane` into its phases. They are NOT
+/// a partition, and this is the single most important thing to know before
+/// reading a report:
+///
+/// * `{pane.read, pane.cells, pane.cursor, pane.status}` are MUTUALLY DISJOINT.
+///   Their sum is bounded above by `draw.pane + draw.prev`, with a small
+///   residual for the background fill, clip/save/restore and geometry work.
+/// * `{pane.vec, pane.glyphs}` partition the INTERIOR of `pane.cells`, WITH A
+///   REMAINDER. That remainder is the `RustVec<FfiCell>` teardown — the ARC
+///   release of `cols*rows` `FfiCell`s after the glyph loop — and is only
+///   obtainable as the derived difference
+///   `T(pane.cells) - T(pane.vec) - T(pane.glyphs)`.
+/// * **The six do NOT sum to `draw.pane`. Summing all six DOUBLE-COUNTS**, because
+///   `pane.vec` and `pane.glyphs` are both nested inside `pane.cells`.
+///
+/// ASYMMETRY WORTH REMEMBERING: `pane.status` is recorded for OCCLUDED panes
+/// too (the statusbar sits outside the grid rect and always paints), whereas
+/// `pane.read` is not — its timer sits below the `paintsGrid` guard, so an
+/// occluded pane records no `pane.read` sample. So
+/// `count(pane.status) == count(draw.pane) + count(draw.prev)` while
+/// `count(pane.read) == count(draw.pane)`.
+///
+/// Also: `pane.glyphs` is NOT "CoreText time". It is a composite of ALL per-cell
+/// Swift-side work — the `CGColor` alloc, the fill, the per-cell Rust+Swift
+/// `String` bridge, style resolution AND the `CTLine` draw. Read it as
+/// "per-cell Swift-side work".
 public enum FrameStatsBucket: Int, CaseIterable {
   /// `WolfWindowController.onRenderWake()` — the whole per-wake controller pass.
   case controllerWake = 0
@@ -49,6 +78,26 @@ public enum FrameStatsBucket: Int, CaseIterable {
   /// One `PaneContainerView.paintPane` call for a PREVIEW pane, i.e. one whose
   /// grid is a Markdown-preview scratch buffer sitting under a `WKWebView`.
   case drawPanePreview = 7
+  /// `handle.read_frame_for_grid(grid)` — the snapshot read lock, the per-cell
+  /// Rust `String` clone in `FfiFrame::from_snapshot_grid`, and the `FfiFrame`
+  /// construction. Recorded only when the pane actually paints its grid.
+  case paneFrameRead = 8
+  /// The WHOLE `paintCells(_:ctx:)` call, measured at its CALL SITE. Parent of
+  /// `paneCellsVec` and `paneGlyphLoop`, and the only bucket that contains the
+  /// `RustVec<FfiCell>` teardown.
+  case paneCells = 9
+  /// Just `let cells = frame.cells()` — a second full deep clone of the cell
+  /// vector, in isolation.
+  case paneCellsVec = 10
+  /// Just the `for row` / `for col` double loop inside `paintCells`: per cell,
+  /// the bg `CGColor` + fill, the text bridge, style resolution and `drawGlyph`.
+  case paneGlyphLoop = 11
+  /// The `drawCursor(...)` call expression in `paintGrid`, INCLUDING evaluation
+  /// of its `frame.cells()` argument (a third full deep clone).
+  case paneCursor = 12
+  /// The `paintStatusbar(...)` call in `paintPane`. Recorded for occluded panes
+  /// too, since the statusbar paints regardless.
+  case paneStatusbar = 13
 
   /// The short, fixed-width-table-friendly name used only at report time.
   public var label: String {
@@ -61,6 +110,12 @@ public enum FrameStatsBucket: Int, CaseIterable {
     case .previewLoadHTML: return "prev.html"
     case .drawPaneEditor: return "draw.pane"
     case .drawPanePreview: return "draw.prev"
+    case .paneFrameRead: return "pane.read"
+    case .paneCells: return "pane.cells"
+    case .paneCellsVec: return "pane.vec"
+    case .paneGlyphLoop: return "pane.glyphs"
+    case .paneCursor: return "pane.cursor"
+    case .paneStatusbar: return "pane.status"
     }
   }
 }
