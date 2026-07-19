@@ -1,215 +1,221 @@
-# Plan: Three CSS tweaks on top of the baseline grid
+# Plan: Align statusbar left edge with preview content
 
-## Status: COMPLETE (pending manual visual QA)
+## Status: COMPLETE (pending visual confirmation)
 
-- 28 tests pass in `//crates/wolf-core:markdown_render` (cold run, `--nocache_test_results`); `wolf_core_lib_test`, clippy, and rustfmt (including the test file) all green.
-- Reviewer: **Approved**, arithmetic independently re-derived. Two minor notes raised and both closed.
-- Docs: four READMEs updated; prettier confirms conformant.
+- `WolfKeyMapTests` passes cold (`--nocache_test_results`): 171 tests, 0 failures, including exactly 13 `StatusbarTextSpanTests`. All `//crates/wolf-macos/...` targets build and pass; `swift_format` clean. Rust side unregressed (`markdown_render`, `wolf_core_lib_test` both pass).
+- Reviewer: **Approved**, editor branch verified algebraically identical. Two notes raised, both closed.
 
-### Deltas from the plan as written
+### Corrections to this plan's own text
 
-1. **28 tests, not the projected 27.** `headings_reserve_anchor_scroll_clearance` was added after the plan: §3 made `scroll-margin-top: 48px` load-bearing (the sole thing keeping an anchor-jumped heading off the pane's top edge) and nothing pinned it — the sweep only checks values that *exist*, so outright deletion was invisible.
-2. **`heading_bottom_rule_is_gone_from_base_and_theme`'s guard was strengthened** after review. `!decls.is_empty()` was insufficient: `rule_decls` merges the shared `h1..h6` rule and the theme's `color` rule, so the map stays non-empty even if the per-level rule vanished — the exact case the guard claimed to exclude. Now asserts `font-size` from `HEADING_SCALE`.
-3. **`markdown/README.md` omitted the third edge rule.** base.css ships the naive `> *:last-child` as a partial fallback alongside the two general selectors; the README documented only two. Pre-existing divergence from the earlier grid work, now closed.
-4. **One base.css inline comment outside §7's listed ranges** asserted the heading's margin sits "ON TOP of the body's 48px padding" — made false by `padding: 0`. Corrected.
+**§2's claim "during a live resize both are stale together" is WRONG**, and the doc comment written from it overclaimed. The reviewer verified: the statusbar span is recomputed from live geometry on every `draw(_:)`, so it is *never* stale — only the webview *frame* lags. `setFrameSize` (~633-637) and `applyMetrics` (~464-471) both repaint without calling `syncPreviewWebViews`. `applyMetrics` is the sharper case: a font-size change moves `cellWidth` (hence `cap` and `paintOffsetX`) *and* `statusbarHeight` (hence grid rect y/h) at once, shifting the statusbar immediately while the webview stays put; it converges via `syncGridSizes` → `handle.resize` → wake.
 
-### Verified traps (both were live)
+The guarantee that DOES hold, and is what the shipped doc comment now says: the pane-kind map and the webview set are written together in one `syncPreviewWebViews` pass, so a pane is never drawn with `.preview` alignment when it has no webview. The frame lag is pre-existing and orthogonal.
 
-- **Stale allowlist:** `COMPENSATION_ALLOWLIST` confirmed by reading to hold exactly three entries. A leftover `("h1", "padding-bottom", 23)` would have silently rubber-stamped a future off-grid value.
-- **Theme cascade:** zero `border-bottom-color` / `border-left-color` remain in either palette block; `th`/`td` and `hr` colors survive. The coder confirmed the theme deletions alone were invisible to the suite — had the color declarations been left behind, nothing would have failed today.
+### Other deltas from the plan
 
-### Design consequences — implemented as requested, flagged for the user
+1. **13 tests, not 12.** Added `testEditorSpanEqualsTheLegacyExpressionAcrossTheCapThreshold` — a sweep asserting the `.editor` span equals the longhand legacy expression at 10 widths × 2 `gridLeft` values, straddling the cap in both directions. Case 2 alone pinned only a single point, and "editor panes stay bit-identical" is the top risk.
+2. **The wide test cases were unrealistic.** They paired `gridWidth = 1400` with a hard-coded `paintOffsetX = 250`, but the real value is 340 — the `expectedPaintOffsetX` helper existed to model that and was only used by two cases. Now derived. Cases 4 and 5 also gained `offset > 0` guards, since the central assertion in case 5 (`editor.left - preview.left == paintOffsetX`) passes vacuously at zero.
+3. **`w` used in both branches**, not the plan's raw `gridWidth` for `.editor`. Reviewer confirmed value-identical for *every* input, not just negatives.
+4. **Two pre-existing undocumented seams closed.** `Sources/README.md` said "Twenty-four files" — true before this change, but `TreeChildrenMemo.swift` and `TreeRefreshGate.swift` had no bullets at all, so the corrected count of 25 disagreed with a 23-entry list. Both now documented; sweep confirms 25 files ↔ 25 bullets.
 
-- **Blockquotes lose their only structural marker.** Sole remaining cue is the theme's dimmer text color plus a 24px indent that is *smaller* than the 32px list indent, against a now-flush body edge.
-- **h1/h2 lose 24px of air below** (72px → 48px box) on top of losing the rule, so sections read tighter.
-- **Flush-to-edge text** touches the pane's left/right pixel and the first line touches the top; on a wide pane nothing constrains line length. `pre` fares best (its own 24px padding).
+### Confirmed as planned
 
-### Outstanding
+- **Right edge fixed for free** — `.preview` spans the whole grid rect, so `textRight == gRect.maxX == web.frame.maxX`. No extra work.
+- **`pumAnchorX` is NOT the same defect** — view-wide cmdline overlay, no pane/grid rect in scope, already self-consistent with `CmdlineView`. Left alone, with a doc sentence so nobody "fixes" it by analogy.
+- **GNOME front-end** has zero statusbar code (grepped `statusbar|status_bar|statusline`). **Rust core** unchanged — strings only, no geometry crosses the FFI.
 
-Manual visual QA still not performed — same as the grid work. The tests pin declared values, not rendered geometry.
+### Outstanding — rests on visual review
+
+That the preview statusbar's left edge lands on the rendered content's left edge **on screen** spans `paintStatusbar`, `syncPreviewWebViews`, and `base.css`'s flush padding. No unit test pins it. **Only observable on a pane wider than 90 cells** — in a typical vertical split each pane is under the cap, `paintOffsetX == 0`, and the two kinds coincide, so a reviewer testing in a split will see no difference at all.
 
 ### Noted, not acted on
 
-- Nothing pins `scroll-margin-top`'s *effect*, only its declared value.
-- The whole-document `!html.contains("border-bottom-color")` checks also trip on those literal strings appearing in base.css header-comment prose (the comment ships in the rendered document). Deliberate; a warning comment was added at the `border-bottom-color` site but not the `border-left-color` one.
-- `tools/lint` still does not cover `crates/*/tests/`; no `.prettierignore` exists.
+- SourceKit reports "No such module" for `XCTest`/`WolfFFI` in the editor. Confirmed artifacts: the worktree has no `compile_commands.json`, `buildServer.json`, `.bsp/`, or `.xcodeproj`, so SourceKit falls back to standalone parsing. Both files are Bazel-compiled sources (verified by `bazel query`) and both targets build clean.
+- The two new files are **untracked** and need `git add` before commit.
+- `WolfMacOS/`'s 33-bullet README list was not audited against its directory; only `WolfKeyMap/` was swept.
 
 ## Problem statement
 
-Three requested changes to `crates/wolf-core/src/markdown/base.css`, layered on the completed 24px baseline grid:
+On a Markdown preview pane wider than 90 cells, the statusbar's left edge does not line up with the preview content's left edge — it sits where editor text *would* be.
 
-1. **Remove the bottom border from h1 and h2.**
-2. **Keep blockquote's left indent, remove its `border-left`.**
-3. **Remove the padding around the body** (`padding: 48px 40px` on `body.wolf-markdown`).
+`paintStatusbar` (`crates/wolf-macos/Sources/WolfMacOS/PaneContainerView.swift` ~1219) computes the text origin as `gRect.minX + geo.paintOffsetX` — correct for editor panes, whose grid is painted at that same offset (`paintGrid` ~1198-1201). But `syncPreviewWebViews` (~836-838) frames the preview `WKWebView` to the **uncentered** `gridRect`, and the preview CSS is flush (`body.wolf-markdown { margin: 0; padding: 0 }`, a recent intentional change).
 
-Not isolated deletions — each collides with a grid, cascade, or margin-collapse invariant.
+`paintOffsetX` is the centering inset applied when a pane exceeds `maxGridCols = 90` cells. So on a wide preview pane the statusbar text is indented relative to its own content by an amount that grows with pane width.
 
-## Grid invariants still in force
+## Fix direction (fixed, do not revisit)
 
-- Unit **24px**, `--wolf-baseline: 24px`. Invariant: every vertical margin is 0 or a multiple of 24, every border-box height a multiple of 24. Closed under margin collapsing.
-- `line-height: 24px` is a **length**, not a ratio. Do not reintroduce a ratio.
-- Scale: h1 32/48, h2 24/48, h3 20/24, h4 18/24, h5 16/24, h6 14/24. Heading margins h1/h2 48/24, h3 48/0, h4–h6 24/0.
-- Literal px, not `calc()`. Horizontal dimensions deliberately not grid-constrained.
-- Surviving compensations: `hr` absorbs 1px into a 24px border-box height; cells `12px 16px 11px` for a 48px collapsed row; `table { margin: 0 0 23px }`.
-- Do NOT touch `.wolf-src` or `math.css`.
+Align the **statusbar** to the **preview content**: for preview panes, do not add `paintOffsetX`, so the text lands at `gRect.minX`, matching the webview frame. **Do NOT center the webview instead** — that caps preview line length and is a different change than requested. **Editor panes must be bit-identical.**
 
 ---
 
 # Architect's plan
 
-## 1. Exact replacement values
+## 1. The extracted seam
 
-### h1 / h2 (base.css ~253–269)
+**New file: `crates/wolf-macos/Sources/WolfKeyMap/StatusbarTextSpan.swift`**
 
-Delete BOTH `padding-bottom: 23px;` and `border-bottom: 1px solid;` from each rule. **Do not write `padding-bottom: 0`** — h3–h6 declare no padding either, the UA default is already 0, and an explicit zero is noise the sweep must then parse.
+```swift
+import Foundation
 
-| | h1 | h2 |
-| --- | --- | --- |
-| content (line-height) | 48 = 2B | 48 = 2B |
-| padding-bottom | 0 | 0 |
-| border-bottom | 0 | 0 |
-| **border-box height** | **48 = 2B ✓** | **48 = 2B ✓** |
-| margin-top | 48 = 2B ✓ | 48 = 2B ✓ |
-| margin-bottom | 24 = 1B ✓ | 24 = 1B ✓ |
-| full footprint | 120 = 5B ✓ | 120 = 5B ✓ |
+public enum PaneContentKind {
+  case editor
+  case preview
+}
 
-`margin-bottom: 24px` **stays** — do not zero it to match h3–h6. The type-scale table never mentioned padding, so it needs no edit.
+public struct StatusbarTextSpan {
+  public let left: Double
+  public let width: Double
 
-### blockquote (~334–338)
+  public init(gridLeft: Double, gridWidth: Double, paintOffsetX: Double, kind: PaneContentKind)
+}
+```
 
-Delete `border-left: 4px solid;` **only**. `margin: 0 0 24px` and `padding: 0 24px` unchanged. Vertical padding is 0 and no border remains on any edge, so border-box height = content height = a sum of on-grid child boxes. ✓
+`Double`-based, Foundation-only (no `CGFloat`/CoreGraphics), matching `EditorInset` / `PaneGeometry` / `StatusbarLayout`. Scalars rather than a `Rect` — the caller holds a `CGRect` and needs `CGFloat` back, so two scalars keep the conversion to two casts each way.
 
-### body.wolf-markdown (~205)
+**Placement rejections:**
+- **`StatusbarLayout`** — its init takes *font sizes*; this takes *rect scalars + pane kind*. No shared input. It is documented in three places (file header, `Sources/README.md:23`, `Tests/README.md:53`) as specifically the **vertical** math; widening it invalidates all three descriptions of an otherwise stable seam.
+- **`EditorInset`** — deliberately **pane-local** (its `gridRect` origin is the pane's top-left) and knows nothing about the 90-column cap or centering. Feeding `paintOffsetX` in would make it depend on a concept it correctly does not model. `textLeftInset` (`== padding`) is the *pane-local* left inset and stays exactly as-is.
+- **`PaneGeometry`** — models the grid, not the statusbar; has no notion of content kind and should not acquire one.
 
-`padding: 48px 40px` → **`padding: 0;`** — keep an explicit declaration rather than deleting the line. Flush-to-edge is a deliberate, contested decision, not an absence of one; an explicit `0` gives the test something positive to pin so nobody silently restores an inset. `px("0")` → `Some(0)`, `0 % 24 == 0`, and `shorthand_block_edges("0")` expands cleanly. Add a one-line comment that flush edges are intentional and any inset belongs to the preview pane chrome.
+One-type-per-file with its own `Sources/README.md` bullet is the established convention (`PickerPanelSeam`, `EditorInset`, `StatusbarLayout`).
 
-## 2. Blockquote indent: keep 24px
+### Arithmetic
 
-Leave `padding: 0 24px` exactly as is. The padding **is** the indent; 24px is already the documented "24px blockquote inset" in both base.css's header and markdown/README.md, so 24px causes zero doc churn while 28px would introduce a number matching nothing else in the stylesheet.
+Let `w = max(0, gridWidth)` and `offset = min(max(0, paintOffsetX), w)` — the clamp handles a negative `paintOffsetX` (impossible today, defensive) and an offset larger than the grid, so `width` never goes negative and `left` never passes the grid's right edge.
 
-## 3. `scroll-margin-top: 48px` — keep the value, change the rationale
+- `.editor`: `left = gridLeft + offset`, `width = max(0, gridWidth - offset)`
+- `.preview`: `left = gridLeft`, `width = w`
 
-The old rationale ("equals the body's top padding") is gone, but the property is now **more** load-bearing: with `padding: 0` there is nothing else keeping an anchor-scrolled heading off the pane's top edge. Without it, clicking an in-document anchor jams the target heading's cap-height flat against the top pixel. 48px = 2B stays on-grid and is swept by `VERTICAL_LONGHANDS`.
+The editor branch reproduces today's expression **exactly** (`gRect.maxX - (gRect.minX + offset) == gridWidth - offset`), so editor panes are bit-identical. Only the clamp is new, and it is a no-op for every real input.
 
-New rationale for the docs: "2 baselines of clearance above a heading scrolled into view by an anchor link. The body itself has no padding, so this is the only thing keeping a jumped-to heading off the pane's top edge."
+### Call-site rewrite (paintStatusbar, replacing 1236-1242, merging with 1249-1260)
 
-## 4. The `:first-child` reset — still required, new rationale
+1. Hoist a **single** preview lookup above the geometry block: `let previewName = previewNamesByGrid[grid]`.
+2. Fetch `gRect` and `geo` as today, then construct `StatusbarTextSpan(gridLeft: Double(gRect.minX), gridWidth: Double(gRect.width), paintOffsetX: geo.paintOffsetX, kind: previewName != nil ? .preview : .editor)`; derive `textLeft = CGFloat(span.left)`, `textWidth = CGFloat(span.width)`.
+3. Change the filename branch at 1251 from `if let name = previewNamesByGrid[grid]` to `if let name = previewName` — one lookup, one source of truth for "is this a preview".
 
-**Keep both edge rules exactly as spelled.** Walk the behavior with `padding: 0`:
+`primaryRect` / `secondaryRect` (1288-1296) unchanged; they already consume `textLeft`/`textWidth`.
 
-**Does the margin collapse out through the body's top edge?** Parent–child collapsing requires no `border-top`, no `padding-top`, no clearance, no BFC. With `padding: 0` and no border, `body.wolf-markdown` satisfies all of them. So if the opening heading were the body's first in-flow child, its 48px `margin-top` would collapse with the body's zero top margin and be placed **outside** the body's border box.
+## 2. Pane kind: reuse `previewNamesByGrid`
 
-**Does it escape the body background?** Formally yes — but **there is no visible color gap** and the docs must not claim one. Neither base.css nor the theme sets a background on `html`, so the root is transparent and per CSS background propagation the **body's** background paints the entire canvas. `#1b1b1b` / `#f4f4f4` covers the escaped margin. The symptom is purely positional: the whole document is displaced 48px down. The root element's margins never collapse, so it propagates no further.
+**Recommendation: reuse the existing lookup.** Do not thread a new parameter or store a kind on `PaneBinding`.
 
-**Do the `.wolf-src` anchors block the collapse?** This is the subtlety, and it cuts against intuition. The body's first element child is a zero-size **inline** span, not a block. Inline content at the top of a block container is wrapped in an **anonymous block box**, and that box — not the `<h1>` — is the first in-flow block-level child. Whether the h1's margin reaches the body's top edge then depends on whether that anonymous box is self-collapsing, which depends on the *anonymous container's* inherited strut (24px from the body), not the span's own `line-height: 0`. That is engine-dependent territory.
+- `paintStatusbar` already reads that map two lines below the geometry it must affect, and `drawScrollbars` (~1390) already uses exactly this predicate for exactly this purpose. A third mechanism for the same fact is a divergence risk.
+- It is the only live record of preview-ness in scope at paint time. Deriving kind from `PaneBinding` would require re-querying `handle.previews()` during `draw(_:)` — an FFI call in the paint path, which nothing else does.
 
-**It does not matter which way it resolves, and the coder must not try to reason it out.** Both outcomes are wrong without the reset:
-- collapse-through → the body box is displaced 48px, heading 48px from the top;
-- no collapse-through → the 48px sits inside the body between the anonymous box and the h1, heading again 48px from the top.
+### Ordering hazard — assessed, NOT a problem
 
-**New rationale for base.css EDGE RULES and markdown/README.md.** The old wording ("a block's own margin does NOT collapse through the body's padding, so the first block would sit 48 + 48 = 96px down") is now false in **both its premise and its number**. Replace with: the body has no padding, so an unreset 48px `margin-top` on the opening block either collapses out through the body's top edge (displacing the whole document 48px — the body's background propagates to the canvas, so this reads as position, not a color gap) or, if a leading anchor's anonymous block box blocks the collapse, sits inside the body between them. Either way the opening heading is 48px down and flush-to-edge is defeated. **48px is still a multiple of 24, so the grid sweep still cannot see this bug** — only the DOM-level edge tests can. Mirrored argument covers the last-block rule.
+`syncPreviewWebViews()` runs at `onRenderWake` (~728, and ~715 on the refocus-rebind path) and is the **same function** that both rebuilds `previewNamesByGrid` (~811, 827) and sets `web.frame = gRect` (~838). `needsDisplay = true` follows at ~730; AppKit's `draw(_:)` runs later in the run loop, never synchronously inside `onRenderWake`. So on any frame after a wake, the map and the webview frames were written **atomically in the same pass**.
 
-Do NOT simplify any edge rule to bare `:first-child`/`:last-child`; anchor-skipping is unchanged in purpose.
+The other `needsDisplay = true` sites (471, 513, 637, 644, 936, 1463, 1474, 1484, 1611) repaint without rebuilding the map — but they also do not move the webview (`setFrameSize` ~633 calls only `syncGridSizes` + `refreshOverlays`). During a live resize both are stale together and converge on the wake `syncGridSizes` provokes. Pre-existing lag; this change neither creates nor worsens it.
 
-## 5. Theme audit (themes/default.css) — complete
+**Failure mode if it were wrong** (recorded so a future reader recognizes it): a single-frame flash where a just-opened preview's statusbar is still indented while the HTML is flush. It does not occur. **The coder must not move the `previewNamesByGrid` rebuild out of `syncPreviewWebViews`, and must not reorder `syncPreviewWebViews()` after `needsDisplay = true`** — that atomicity is load-bearing and belongs in the doc comment.
 
-**Dark block:**
-- **Lines 36–39** — the whole rule `h1, h2 { border-bottom-color: #3a3a3a }`. Delete the **entire rule**; it has no other declaration and would be left empty.
-- **Line 56** — `border-left-color: #3a3a3a` inside the blockquote rule (54–57). Delete **this declaration only**; the rule keeps `color: #a8a8a8`.
+## 3. Geometry, independently derived
 
-**`@media (prefers-color-scheme: light)` block:**
-- **Lines 87–90** — the whole rule `h1, h2 { border-bottom-color: #d0d0d0 }`. Delete entirely.
-- **Line 107** — `border-left-color: #d0d0d0` inside the light blockquote rule (105–108). Declaration only; keeps `color: #656565`.
+`pad = EditorInset.padding = 20`, `cap = 90 * cellWidth`. `gridRect(ofPane:)` → `gRect.minX = P.minX + 20`, `gRect.width = max(0, P.width - 40)`. `geometry(for: gRect)` passes `gRect` as `paneRect`, so `paintOffsetX = max(0, (gRect.width - min(gRect.width, cap)) / 2)`.
 
-**Confirmed unaffected — do not touch:** `th, td { border-color }` (59–62 / 110–113, load-bearing for the 2B row pitch); `hr { border-top-color }` (68–70 / 119–121, asserted by an existing test); `code`/`pre` (background/color only); the `h1…h6 { color }` rules (27–34 / 78–85) — h1/h2 must keep matching a non-empty theme rule. Header comment (1–19) discusses only `hr`; **no header edit needed**, and "only sets color/background/border-color" stays true.
+| case | gRect.width | paintOffsetX | editor textLeft | preview textLeft | textWidth |
+| --- | --- | --- | --- | --- | --- |
+| narrow (< 90 cells) | `< cap` | 0 | `P.minX + 20` | `P.minX + 20` | `gRect.width` |
+| wide (> 90 cells) | `> cap` | `(gRect.width - cap)/2` | `P.minX + 20 + offset` | `P.minX + 20` | editor `gRect.width - offset`; preview `gRect.width` |
 
-**Hex safety:** `#3a3a3a` and `#d0d0d0` each remain in use (th/td, hr), so the hr test's substring assertions still pass. `default_theme_carries_dark_and_light_palettes` asserts only `#1b1b1b`, `#f4f4f4`, `#0969da`, `#111111`, `color-scheme: light dark` — all untouched.
+**Preview matches the webview exactly:** `web.frame = gridRect(ofPane:)` so `web.frame.minX == gRect.minX == P.minX + 20`, and the CSS is flush. Preview `textLeft == web.frame.minX`. Confirmed.
 
-## 6. Test changes (markdown_render.rs)
+**Right edge — fixed for free.** For previews `textWidth = gRect.width` gives `textRight == gRect.maxX == web.frame.maxX`. `.preview` simply spans the whole grid rect and **both** edges land on the webview frame. No extra work needed.
 
-### 6.1 Value change
-`body_line_height_is_a_length_not_a_ratio` (~743–748): expected padding `Some("48px 40px")` → `Some("0")`. Rewrite the message: the body is deliberately flush to the pane edges; `0` is trivially on-grid; the assertion exists so a "comfortable" padding is not silently reintroduced. line-height / font-size / length-not-ratio assertions unchanged.
+For **editors**, `textRight` remains `gRect.maxX` — i.e. `paintOffsetX` past the centered grid's right column. This is a **pre-existing** asymmetry, invisible in practice (it only widens the tail-truncation budget of a long path on a wide pane). **Out of scope — do not "fix" it**; changing it would alter editor truncation behavior, contradicting "editor panes completely unaffected". The `.editor` branch deliberately preserves it.
 
-### 6.2 DELETE outright
-`heading_border_is_compensated_into_padding` (~801–845). Its premise disappears entirely. Do not adapt it into a negative assertion in place — write the two focused replacements below.
+## 4. The strip itself does not change
 
-### 6.3 ADD two
-Both follow the `hr_occupies_whole_baselines_and_is_painted_by_its_border` pattern: base.css structure via `rule_decls`, theme half via plain substring checks against the whole document (the light palette is inside the one `@media`, which the crude parser deliberately cannot address).
+`statusbarRect(ofPane:)` (~384) spans the full pane width and is unchanged; the background fill (`ctx.fill(strip)` ~1234) must keep covering the whole pane width for both kinds. Only the **text** is inset. No edit to `statusbarRect`, no edit to the fill.
 
-- **`heading_bottom_rule_is_gone_from_base_and_theme`** — for h1 and h2, the merged `rule_decls` map contains neither `border-bottom` nor `padding-bottom`; and the document contains no `border-bottom-color` substring anywhere (covers **both** palette blocks in one check — exactly the dead-theme-declaration hazard the `hr` bug taught). Message: reintroducing a bottom rule requires re-adding the 23px compensation *and* an allowlist entry, since a bare 1px border on a 48px content box makes the heading 49px tall.
-- **`blockquote_keeps_its_indent_without_a_border`** — blockquote's merged decls have `padding == "0 24px"` and `margin == "0 0 24px"` and no `border-left` key; document contains no `border-left-color` substring. Message: the 24px padding **is** the indent (the only thing holding the quote in from the flush body edge), and its vertical `0` is why blockquote needs no border compensation.
+## 5. Test plan
 
-Net count: **26 → 27**.
+**Approach confirmed.** Swift unit tests over a pure `WolfKeyMap` seam is right here; CLAUDE.md's "start a real Neovim process" preference does not bite because no Neovim state participates — pane kind arrives as an enum, the rest is rect arithmetic. Mirrors `StatusbarLayoutTests` / `PaneGeometryTests` / `EditorInsetTests`. The extraction exists *precisely so* there is something testable.
 
-### 6.4 COMPENSATION_ALLOWLIST — remove two entries
-Delete `("h1", "padding-bottom", 23)` and `("h2", "padding-bottom", 23)` **together with their explanatory comments** (~519–522). Keep the three table/cell entries.
+**File:** `crates/wolf-macos/Tests/WolfKeyMapTests/StatusbarTextSpanTests.swift`
+**Target:** the Bazel `swift_test` named `WolfKeyMapTests` in `crates/wolf-macos/BUILD.bazel` (~193). `srcs` lists are **explicit, not globbed**, for both the library (~45) and the test (~195) — both need an entry. There is no SwiftPM `Package.swift`; Bazel only.
 
-**Not bookkeeping.** The sweep checks `s == selector && p == prop && v == parsed`, so a leftover h1 entry would silently wave through any future `h1 { padding-bottom: 23px }` — with no border to compensate, a plain 1px-per-heading grid violation and exactly the drift the sweep exists to catch. The allowlist's design is "an entry forces its author to name the border it pays for"; an entry naming a border that no longer exists inverts that into a rubber stamp.
+Follow sibling style: file header stating the contract, `eps: Double = 1e-9`, helper constructors.
 
-### 6.5 GRID_SELECTORS — no change
-Verify every entry still resolves non-empty: `body.wolf-markdown` (still has `--wolf-baseline`, margin, `padding: 0`, fonts, line-height, word-wrap + theme colors); `h1`/`h2` (font-size, line-height, margins, shared scroll-margin-top/font-weight, theme color); `blockquote` (margin, padding, theme color). **Add and remove nothing.**
+Cases:
+1. **Editor, narrow** (`paintOffsetX == 0`) — `left == gridLeft`, `width == gridWidth`.
+2. **Editor, wide** (`gridWidth = 1400`, `paintOffsetX = 250`) — `left == gridLeft + 250`, `width == 1150`; assert `left + width == gridLeft + gridWidth` (pins that the editor right edge is preserved, not silently changed).
+3. **Preview, narrow** — identical to case 1. Pins that the fix is a no-op below the cap.
+4. **Preview, wide** — `left == gridLeft` (ignores `paintOffsetX`), `width == gridWidth`; assert `left + width == gridLeft + gridWidth`.
+5. **Kind-difference invariant** — same wide inputs: `editor.left - preview.left == paintOffsetX`; same narrow inputs: both `left` and `width` equal. **This is the assertion that most directly encodes the bug.**
+6. **Non-zero `gridLeft`** — `20` and `512` (a right-hand split), both kinds: `left` is absolute, never pane-local.
+7. **Zero-width pane** — `gridWidth == 0`, `paintOffsetX == 0`, both kinds: `width == 0`, `left == gridLeft`, no negative output.
+8. **Pane narrower than the padding** — `gridWidth == 0` (what `EditorInset` clamps a sub-`2*padding` pane to) with `gridLeft` beyond the pane's right edge: `width == 0`, no negative. Comment that `EditorInset` produces the clamped 0.
+9. **`paintOffsetX` larger than the grid** — `gridWidth = 100`, `paintOffsetX = 400`: editor `width == 0` and `left == gridLeft + 100` (never past the right edge); preview unaffected.
+10. **Negative `paintOffsetX`** (defensive) — clamps to 0; editor equals the narrow case.
+11. **Exact boundary** — `gridWidth == 90 * cellWidth` exactly → `paintOffsetX == 0`, both kinds identical. Pins continuity across the cap threshold.
+12. **Universal invariants helper** (mirroring `assertInvariants` in `StatusbarLayoutTests`) over every case: `width >= 0`, `left >= gridLeft`, `left + width <= gridLeft + max(0, gridWidth)`.
 
-### 6.6 BODY_PADDING_TOP — delete the constant
-Delete `const BODY_PADDING_TOP: i32 = 48;` (~1229) and its doc comment. Redefining it to `0` leaves a constant named for a padding that no longer exists, and both uses are in failure messages being rewritten anyway.
+### What this CANNOT test
 
-- `first_child_margin_reset_reaches_the_opening_heading` message (~1800–1824): rewrite the "Why" paragraph per §4. Keep the closing observation, corrected: 48px is still a multiple of 24, so the sweep passes and only this test sees the bug. Preserve the selector guidance and the "do NOT touch `.wolf-src`" warning verbatim.
-- `first_child_margin_reset_survives_a_multi_anchor_leading_run` message (~1875–1894): same substitution; "the SAME `{BODY_PADDING_TOP}` + 48 = 96px gap" → "the SAME 48px displacement". `MIN_LEADING_ANCHORS` sanity check and narrow-selector explanation unchanged.
+That the statusbar origin and the *live* `WKWebView` frame coincide on screen is an integration property spanning `paintStatusbar`, `syncPreviewWebViews`, and the CSS's zero left padding. No unit test can pin it. Mitigations, in order of value:
+- **Pin the shared expression, not the two consumers.** Both derive from the *same* `gridRect(ofPane:)` call. State this in **both** doc comments: the preview statusbar's left edge is `gridRect(ofPane:).minX` **because** that is the webview's frame origin, and the two must change together.
+- A Rust-side assertion that `base.css` keeps `margin: 0; padding: 0` would pin the CSS half. Check whether `crates/wolf-core` already has such a test; if not, **do not add one** — separate concern, low value.
+- The remainder rests on visual review: open a preview in a window wider than 90 columns, confirm the statusbar filename's left edge sits on the first heading's left edge.
 
-### 6.7 Comment/message text now false
-- `BORDER` const doc (~427–429): "(h1/h2 `border-bottom`, th/td `border`)" → cite only th/td (and hr). Const stays; still used.
-- Edge-reset section banner (~1188–1224): contains "96px" and "margins do not collapse through padding" — rewrite both per §4. The anchor displacement explanation, selector shapes, and "pins the OUTCOME" framing are unchanged.
-- Sweep comment (~1108): "except the five documented compensations" → three.
-- `last_child_margin_reset_reaches_the_closing_block` (~1936–1938): "below the body's own bottom padding" → "below the last line of content, at the pane's bottom edge".
-- `blockquote_last_child_margin_is_zeroed` (~1015–1048): **no change** — its reasoning is about vertical padding only and stays true.
+**Do not attempt an AppKit/XCTest UI test** — no such harness exists here and adding one is disproportionate.
 
-## 7. Docs
+## 6. `pumAnchorX` — leave it, it is NOT the same defect
 
-### base.css header (authoritative spec)
-- ~66–67: "descenders collide with the rule beneath" now false. Keep the surviving half of the h2 justification (at ratio 1.0 wrapped lines nearly touch), drop the rule clause.
-- ~74–84 BORDER COMPENSATION: delete the entire h1/h2 paragraph and its 72px = 3B arithmetic. Keep `hr` and `table th/td` verbatim.
-- ~104–106: blockquote no longer has a border at all, so the "horizontal-only" phrasing is stale. `pre`/inline `code` clauses stand.
-- ~108–118 EDGE RULES opening: replace the "does NOT collapse through the body's padding … 96px" argument with §4. Everything from "The obvious spelling … is INERT here" onward is **unchanged**.
-- ~155–159 HORIZONTAL DIMENSIONS: drop "the body's 40px side padding"; keep 32px list indent, 16px cell padding, 24px blockquote inset. Add that the body is flush by design.
-- ~167 "the compensated values 23/12/11" still accurate (table 23, cells 12/11). No change.
-- ~25–47 (unit, invariant, length-not-ratio) and the scale table ~51–58: **unchanged**.
+`pumAnchorX` (~788) returns `EditorInset.padding + <rendered prefix width>`, no `paintOffsetX`, no pane rect.
 
-### markdown/README.md
-L10 scroll-margin-top rationale → §3. L33 descenders clause. L35 delete the h1/h2 compensation sentence, keep hr/cells/table, rewrite the blockquote "horizontal-only" clause. L37 edge-rules opening → §4. L41 remove "The body's 40px side padding", note flush body. L39/43/47/49 unchanged.
+1. **Different coordinate space and anchor.** The popup is positioned in the container view's own `bounds` (~769-771) against the **cmdline**, a bottom-spanning overlay across the whole view — not inside any pane. There is no pane rect, grid rect, or `paintOffsetX` in scope; bare `EditorInset.padding` is correct for a view-wide overlay.
+2. **Already self-consistent.** The popup aligns to the cmdline text, and `CmdlineView` uses the same bare padding. Adding a centering offset would *break* that agreement, not fix one.
 
-### crates/wolf-core/README.md
-L133 "(2 baselines, matching the body's top padding)" → "(2 baselines of clearance; the body itself has no padding, so this is the only thing keeping a jumped-to heading off the top edge)".
+**Leave it and note it.** Add one sentence to its doc comment recording *why* bare padding is right there, so the next reader doesn't "fix" it by analogy.
 
-### crates/wolf-core/src/README.md
-L111 same phrase, same replacement.
+## 7. File-by-file
 
-### crates/wolf-core/tests/README.md
-L117 "26 tests" → 27. L119 four corrections: (a) padding `48px 40px` → `0`; (b) delete the `heading_border_is_compensated_into_padding` sentence, describe the two replacements; (c) "five compensated values" → three (cells 12/11, table 23); (d) the "96px instead of 48px" edge-rule framing → 48px-instead-of-flush.
+### Create
+1. `Sources/WolfKeyMap/StatusbarTextSpan.swift` — per §1. House-style header: what it is, why it is a headless seam, that `.preview` deliberately ignores `paintOffsetX` because the webview is framed to the uncentered grid rect, and that only `width` clamps.
+2. `Tests/WolfKeyMapTests/StatusbarTextSpanTests.swift` — per §5.
 
-`prettier --write` every edited `.md`. **Never** prettier `.css` under `src/markdown/`.
+### Modify
+3. **`crates/wolf-macos/BUILD.bazel`** — add the source to `wolf_key_map` `srcs` (~45) and the test to `WolfKeyMapTests` `srcs` (~195), both alphabetically after the `StatusbarLayout*` entries. Verify the comment block at ~25-33 globs `Tests/WolfKeyMapTests/*.swift` (no change expected there) and that no other explicit list exists.
+4. **`PaneContainerView.swift`** — the call-site rewrite (§1); `paintStatusbar` doc comment (~1216-1218) currently says text is "left-aligned with the grid's text left edge (respecting `PaneGeometry.paintOffsetX`)" → rewrite to state both kinds; `syncPreviewWebViews` doc comment (~799-809) → add that `web.frame = gRect` (uncentered) is what `.preview` mirrors and that rebuilding the map in the same pass keeps them consistent within a frame; `pumAnchorX` doc comment (~783-787) → the §6 sentence. **No change** to `statusbarRect`, `gridRect(ofPane:)`, `geometry(for:)`, `paintGrid`, `drawScrollbars`.
+5. **`crates/wolf-macos/Sources/README.md`** — new `StatusbarTextSpan.swift` bullet after `StatusbarLayout.swift` (~23) in the dense house style (type, `PaneContentKind`, init signature, both branches' arithmetic, the clamp, why preview ignores `paintOffsetX`); update the `StatusbarLayout.swift` bullet to say **vertical** and cross-reference the horizontal sibling; update the `EditorInset.swift` bullet (~29) to clarify `textLeftInset` is the *pane-local* left padding and that the statusbar's absolute origin additionally depends on pane kind and the centering offset via `StatusbarTextSpan`; update the `PaneContainerView` bullet (~48) where it describes `paintStatusbar`. **Update the module-count phrase at ~6** ("Twenty-four deliberately AppKit-free files" → twenty-five) — **verify the count against the actual directory first**; if already stale, fix it to the true count rather than incrementing.
+6. **`crates/wolf-macos/Tests/README.md`** — add a `StatusbarTextSpanTests` entry alongside `StatusbarLayoutTests` (~53) and `EditorInsetTests` (~95, 101), matching that file's structure. Update any test-count figure.
+7. **`architecture.md`** — **read ~30-90 first.** Line 85 describes preview as "a SECOND kind of pane content: a web view." If that section enumerates consequences of the two-kinds split, add statusbar horizontal alignment (alongside the noted scrollbar suppression). If it is a one-line mention with no consequence list, **leave it alone — do not pad it.** Line 34 unaffected; no Rust change.
+
+### Confirmed NOT changed
+- **`crates/wolf-gnome`** — grepped case-insensitively for `statusbar|status_bar|statusline`: **zero matches**. Confirmed out of scope.
+- **`crates/wolf-core/src/pane_status.rs`** — strings only, no geometry crosses the FFI. Confirmed unchanged.
+- **`crates/wolf-core/src/markdown/base.css`** — the flush padding is what this fix aligns *to*. Unchanged. **Never prettier it.**
+
+**No new dependencies.** `StatusbarTextSpan.swift` imports only `Foundation`; the test imports `XCTest` + `@testable import WolfKeyMap`, like its siblings.
 
 ## 8. Implementation order
 
-1. **themes/default.css** — the four deletions. Alone this is visually a no-op (borders still exist, uncolored → fall back to `currentColor`); no test asserts those colors.
-2. **base.css declarations** — the four edits. Suite now fails in exactly the expected places. Note the allowlist entries go *inert* rather than failing — eyeball that the sweep is green for the right reason.
-3. **markdown_render.rs** — §6 in full. Suite green.
-4. **base.css header comment** — §7.
-5. **The four Markdown docs**, then `prettier --write`.
+1. Create `StatusbarTextSpan.swift` (compiles standalone against Foundation).
+2. Add to `wolf_key_map` `srcs`; build the library alone to confirm it compiles before anything consumes it.
+3. Create the test file, add to `WolfKeyMapTests` `srcs`, run the target — the seam is now pinned independently of the view.
+4. Rewrite the `paintStatusbar` call site. Build the app target.
+5. Doc comments in `PaneContainerView.swift`.
+6. READMEs + `architecture.md` if warranted, then `prettier --write` on **only** the Markdown files.
 
-## 9. Dependencies / lint
+Steps 1-3 cannot break the app; step 4 is the only behavioral change and lands after the seam is proven.
 
-None. No new files, no BUILD.bazel change (`compile_data` already globs `src/markdown/**/*.css`). No new Rust items beyond two `#[test]` fns matching existing shapes. `BODY_PADDING_TOP`'s deletion removes the constant with both uses, so no `dead_code` warning. `BORDER` remains used. No `#[allow(...)]` needed.
+## 9. Lint
+
+No ignore directives expected. Watch: swift-format line length (~100 cols, 2-space indent) — the `StatusbarTextSpan(...)` construction will wrap, follow surrounding style. Buildifier — keep both `srcs` lists sorted. Doc-comment coverage — every `public` member in `WolfKeyMap` carries `///`, so `PaneContentKind`, each case, the struct, `left`, `width`, and `init` all need one. Prettier on Markdown only.
 
 ## 10. Risks
 
-1. **Flush-to-edge readability — largest, and intentional.** Body text, tables, and headings touch the left/right pixel of the pane; the first line touches the top. On a wide pane it also removes the last constraint on line length. `pre` fares best (its own 24px padding). User explicitly asked; implement. Note it in the CSS so the next reader knows it is a decision, not an omission.
-2. **Blockquotes lose their only structural marker.** After the border deletion the sole cue is the theme's dimmer text color plus a 24px indent *smaller* than the 32px list indent — a quote reads as a slightly-under-indented grey paragraph, and against a flush body edge the indent alone carries all the meaning. Real legibility regression. **Flagging only; no action without the user's word.**
-3. **Headings lose their section rule.** h1/h2 become distinguishable from h3 only by size and leading. The 72px → 48px shrink also removes 24px of air *below* every h1/h2, so sections read noticeably tighter even though `margin-bottom` is untouched.
-4. **The stale-allowlist trap (§6.4)** — highest-consequence way to get this wrong; fails silently and permanently.
-5. **The theme cascade trap (§5)** — leaving the color declarations is harmless *today* (a color on a non-existent border paints nothing), which is what makes it dangerous: a loaded gun for whoever next adds a border. Same failure mode as the `hr` bug. The two new substring checks are what make it catchable.
-6. **Crude parser `@media` truncation.** `stylesheet_rules` truncates at the first `@media`; deleting a whole rule from the light block does not change brace balance in a way the helpers observe. No parser change needed. **Do not add any `@media` to base.css** — that would break every base.css assertion at once.
-7. **math.css untouched and unaffected** — styles `<math>` internals only, sets no body padding or h1/h2/blockquote borders. Vendored; do not edit.
-8. **`.wolf-src` untouched.** Guarded by `scroll_sync_anchors_stay_zero_sized`. Per §4, if collapse behavior looks surprising in the browser, the fix is still never on the anchor side.
-9. **`table { margin: 0 0 23px }` residual unchanged** — re-exposes 1px whenever the next block's `margin-top` exceeds 23px. This change touches no `margin-top`, so the documented residual stays correct. No edit.
+- **Editor panes regressing** — lowest probability, highest impact. Mitigated structurally (the `.editor` branch is algebraically identical) and by test case 2 asserting `left + width == gridLeft + gridWidth`. **The coder must not "simplify" the editor branch to also drop `paintOffsetX`.**
+- **Exactly 90 cells.** At `gridWidth == 90*cw`, `inset = max(0, 0/2) = 0` → both kinds identical. `paintOffsetX` is **continuous** across the threshold, so no jump or flicker as a window is dragged across it — the gap widens continuously from zero. Pinned by case 11.
+- **A pane changing kind.** Editor→preview: the map insert and the webview frame happen in the same pass, then a redraw; the first frame showing the webview is the first frame using `.preview`. Preview→closed: the map is fully cleared (`removeAll` ~811) and rebuilt at the top of every sync, and `removePreviewWebView` runs in the same pass (~852-854), so stale `.preview` alignment cannot outlive the webview. **The `removeAll`-then-rebuild pattern is what makes this safe — do not convert it to an incremental update.**
+- **Multi-pane splits.** `gridLeft` is absolute; the seam only adds to it. Case 6 covers a non-zero `gridLeft`. Note: in a vertical split each pane is typically **narrower than 90 cells**, so `paintOffsetX == 0` and the kinds coincide — **the bug and the fix are both only observable on wide panes**; a reviewer testing in a split may see no difference. Say so in the manual-smoke note.
+- **Cmdline / pum.** Untouched; `pumAnchorX` shares no state with `paintStatusbar`. Risk is a reviewer applying the new branch by analogy — pre-empted by the §6 doc comment.
+- **Scrollbars.** `drawScrollbars` keeps its own lookup and its own `gridRect` call; the hoisted `previewName` local is scoped to `paintStatusbar`. No change.
+- **Preview webview sync.** Untouched in code. The only new coupling is documentary: `web.frame = gRect` is now load-bearing for the statusbar too. If someone later centers the preview webview (the rejected alternative), they must flip the statusbar back to `.editor` semantics — which is exactly what the cross-referencing doc comments exist to catch.
+- **Live-resize lag.** During a live resize, `setFrameSize` repaints without re-framing the webview, so the two can visibly disagree mid-drag until the wake lands. **Pre-existing** and orthogonal; do not fix here. If it becomes distracting once alignment is noticeable, the follow-up is calling `syncPreviewWebViews()` from `setFrameSize` — a separate change with its own performance question.
 
 ---
 
@@ -217,8 +223,8 @@ None. No new files, no BUILD.bazel change (`compile_data` already globs `src/mar
 
 - [x] Problem statement written
 - [x] Architect plan
-- [x] Tests updated
-- [x] Implementation + tests passing (28/28, cold run)
+- [x] Tests written (13)
+- [x] Implementation + tests passing (cold run, 171 total)
 - [x] Review (approved; two notes closed)
 - [x] Documentation
-- [ ] Manual visual QA — see "Outstanding" above
+- [ ] Visual confirmation — needs a preview pane wider than 90 cells
