@@ -16,7 +16,10 @@ an OUTGOING-EDGE transition to its `bundle` dep, setting
 it (both Swift modules, all Rust crates, the treesitter parsers) is rebuilt
 optimized without `-c opt` ever appearing on the command line.
 
-WHAT IT FORWARDS: only `DefaultInfo`. Deliberately NOT `AppleBundleInfo` /
+WHAT IT FORWARDS: only `DefaultInfo` — the transitioned dep's `files` (the opt
+`Wolf.zip`), an EXECUTABLE that is a symlink to the transitioned
+`macos_application`'s own runner, and the dep's RUNFILES (which is how that
+runner finds the zip; see below). Deliberately NOT `AppleBundleInfo` /
 `MacosApplicationBundleInfo` / `AppleExecutableBinaryInfo` — nothing consumes
 them (`bundle_layout_test` and `xcodeproj` depend on `:Wolf` directly), and
 forwarding Apple providers out of a non-Apple rule invites rules_apple to treat
@@ -41,14 +44,60 @@ Resolve the path from the configuration-aware
 `bazel cquery --output=files //crates/wolf-macos:WolfRelease` instead, NEVER from
 `bazel-bin`.
 
-DELIBERATELY NOT EXECUTABLE (do not re-litigate). Making this `bazel run`-nable
-is technically possible, but build.md already documents that
-`bazel run //crates/wolf-macos:Wolf` has less predictable stderr plumbing through
-the rules_apple runner. That is decisive here: the entire point of this bundle is
-that it is the one people launch with `WOLF_FRAME_STATS=1` and read STDERR from.
-A run target whose stderr is unreliable defeats its own purpose. It would also
-stage a second copy of a large bundle into runfiles — one more place for "which
-.app am I actually running" to go wrong. Launch the bundle directly instead.
+RUNNABLE (this reverses an earlier decision, and the reversal is the correct
+one). This target was previously build-only on the theory that the rules_apple
+runner's stderr plumbing was unreliable, which would defeat the purpose of the
+one bundle people launch with `WOLF_FRAME_STATS=1`. That objection was WEAKER
+THAN ASSUMED and did not survive contact with the evidence: it was inherited
+from a general warning in build.md, never verified against the template.
+`macos.template.sh` invokes `"${APP_DIR}/Contents/MacOS/${BUNDLE_EXECUTABLE}"`
+as a DIRECT CHILD — it does not `open` the bundle — so environment and stdio are
+inherited. Verified empirically: `WOLF_FRAME_STATS=1 bazel run` prints
+`wolf-frame-stats enabled interval=...` and its subsequent reports to the
+terminal.
+
+WHAT REMAINS TRUE, and why direct exec is still the MEASUREMENT path: the runner
+`unzip`s the bundle into a fresh `mktemp -d "${TMPDIR:-/tmp}/bazel_temp.XXXXXX"`
+and deletes it on exit, so (a) the app that runs is a TEMPORARY COPY, not the
+signed `.app` the `cquery` recipe resolves, (b) its path CHANGES EVERY LAUNCH,
+which macOS treats as a different app for TCC prompts and saved window state,
+(c) every launch re-unzips the WHOLE bundle (bundled Neovim, 16 treesitter
+parsers, two font families, `Assets.car`), making it noticeably slower than a
+direct exec, and (d) the app's output interleaves with Bazel's own client
+output. For frame-stats capture, run `"$APP/Contents/MacOS/Wolf"` directly.
+
+THE RUNFILES MERGE IS LOAD-BEARING — DO NOT DROP IT. `run_support.bzl`
+substitutes `%app_path%` with `archive.short_path` (`crates/wolf-macos/Wolf.zip`),
+a bare CWD-RELATIVE runfiles path with NO `rlocation` / `RUNFILES_DIR` logic. It
+resolves only because `bazel run` sets CWD to the runfiles root of the target
+being run, so OUR rule's runfiles must carry the zip at exactly that short_path.
+Consequently `--nobuild_runfile_links` and `--enable_runfiles=false` BREAK this
+target (symptom: an `unzip` error naming `crates/wolf-macos/Wolf.zip`, or a
+PlistBuddy failure on a missing `Info.plist`, and no window).
+
+VERIFYING THE TRANSITION STILL APPLIES. Nothing automated guards this, and the
+failure mode is SILENT: a misconfigured symlink launches a perfectly working
+`-Onone` app, so it cannot be caught by eyeballing. Two checks, both verified
+empirically:
+
+1. STATIC.
+   `bazel aquery --output=text 'mnemonic("ExecutableSymlink", //crates/wolf-macos:WolfRelease)'`
+   — the action's INPUT path must contain `-opt-`. A `-fastbuild-` input is the
+   bug. NOTE the action's OWN configuration reads `darwin_arm64-fastbuild`: that
+   is the TOP-LEVEL target's config, and only its input crosses into opt. This is
+   expected, not a bug, and is easy to misdiagnose. NOTE also the mnemonic is
+   `ExecutableSymlink`, not `Symlink` — Bazel uses the former when
+   `is_executable = True`, and `Symlink` matches zero actions.
+
+2. DYNAMIC (the conclusive one). While the app is running under `bazel run`, find
+   the process under `$TMPDIR/bazel_temp.*/Wolf.app/Contents/MacOS/Wolf` and check
+   its size: ~8.26 MB (8,255,984 bytes observed) optimized, vs ~25.4 MB
+   (25,384,256 bytes) fastbuild. The ~3x difference is unambiguous.
+
+Frame-stats values are NOT usable corroboration for an idle app: reports are
+activity-gated (`FrameMetrics.swift` guards on `recordedAnything`), so with no
+typing the buckets the transition would affect never appear. The byte size is the
+proof.
 """
 
 def _opt_transition_impl(_settings, _attr):
@@ -70,14 +119,42 @@ def _opt_bundle_impl(ctx):
     # "got Provider for sequence index, want int".) `[0]` is safe precisely
     # because the transition is 1:1 — it always returns exactly one dict.
     bundle = ctx.attr.bundle[0]
+
+    # With `executable = True` Bazel PREDECLARES an output named `ctx.label.name`
+    # and exposes it as `ctx.outputs.executable`. Declaring it again via
+    # `ctx.actions.declare_file(ctx.label.name)` is a duplicate declaration and
+    # fails analysis, so the symlink must be written to the predeclared output.
+    ctx.actions.symlink(
+        output = ctx.outputs.executable,
+        target_file = bundle[DefaultInfo].files_to_run.executable,
+        is_executable = True,
+        progress_message = "Linking optimized runner for %{label}",
+    )
+
+    runfiles = bundle[DefaultInfo].default_runfiles.merge_all([
+        # Identical to `default_runfiles` today (`macos_application` sets only
+        # `runfiles=`), merged defensively so an upstream change cannot silently
+        # drop the zip the runner needs.
+        bundle[DefaultInfo].data_runfiles,
+        # Belt-and-braces: Bazel adds the executable to an executable rule's
+        # runfiles automatically.
+        ctx.runfiles(files = [ctx.outputs.executable]),
+    ])
+
     return [DefaultInfo(
         files = bundle[DefaultInfo].files,
-        runfiles = bundle[DefaultInfo].default_runfiles,
+        runfiles = runfiles,
+        executable = ctx.outputs.executable,
     )]
 
 opt_bundle = rule(
     implementation = _opt_bundle_impl,
-    doc = "Builds an Apple bundle target at `-c opt` without `-c opt` on the command line.",
+    executable = True,
+    doc = (
+        "Builds an Apple bundle target at `-c opt` without `-c opt` on the " +
+        "command line. Runnable: `bazel run` launches the optimized bundle " +
+        "via the transitioned dep's runner."
+    ),
     attrs = {
         "bundle": attr.label(
             doc = "The bundle target to rebuild in the optimized configuration.",

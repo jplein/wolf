@@ -15,6 +15,7 @@
 #   - WolfRelease       : the SAME bundle as Wolf, but with the whole graph
 #                         (Swift AND Rust) built at `-c opt` via an outgoing-edge
 #                         transition. Tagged `manual`. Build this for real use.
+#                         Runnable with `bazel run`.
 #   - WolfKeyMapTests   : the swift_test over the pure seam.
 #   - xcodeproj         : an UNCOMMITTED Xcode project for debugging/LLDB only.
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
@@ -193,6 +194,10 @@ macos_application(
 # would silently rebuild the ENTIRE Rust + Swift + treesitter graph a second time
 # at `-c opt`. `//tools/lint` targets use `manual` for the same reason. Explicit
 # `bazel build //crates/wolf-macos:WolfRelease` still works normally.
+#
+# The target is also executable: `bazel run //crates/wolf-macos:WolfRelease`
+# launches the optimized app (`manual` affects only wildcard expansion, never an
+# explicit `run` or `build` on the label).
 #
 # The resulting `.app` path MUST come from
 # `bazel cquery --output=files //crates/wolf-macos:WolfRelease` (see

@@ -1,397 +1,266 @@
-# Plan: `//crates/wolf-macos:WolfRelease` + document the optimized build
+# Plan: Make `//crates/wolf-macos:WolfRelease` runnable
 
 ## Problem statement
 
-**`build.md` documents only `bazel build //crates/wolf-macos:Wolf`, which compiles Swift at
-`-Onone` and Rust unoptimized.** There is no optimized build documented anywhere in the
-repo. This is the single largest performance defect found in the whole typing-latency
-investigation — larger than any code fix we made — and per `CLAUDE.md` ("if the
-documentation and the implementation differ, that's a bug") a doc that presents a debug
-build as *the* build is itself the bug.
+`bazel run //crates/wolf-macos:WolfRelease` fails:
 
-## Evidence (measured, this machine)
+```
+ERROR: Cannot run target //crates/wolf-macos:WolfRelease: Not executable
+```
 
-Same capture protocol, steady-state window #5. `test-5-with-preview` (default build) vs
-`test-7-with-opt-param` (`-c opt`), both in the repo root:
+The target was deliberately made build-only in the previous pass (commit `8ba033c`). The
+user has asked for it to be runnable. That decision is reversed — implement it.
 
-| bucket        | default (`-Onone`) | `-c opt` (`-O`) | change |
-| ------------- | ------------------ | --------------- | ------ |
-| `ctrl.wake`   | 4.85 ms            | **0.51 ms**     | -89%   |
-| `prev.render` | 25.63 ms           | **6.17 ms**     | -76%   |
-| `draw`        | 21.87 ms           | 14.64 ms        | -33%   |
-| `pane.glyphs` | 18.96 ms           | 14.00 ms        | -26%   |
-| `pane.read`   | 0.67 ms            | 0.07 ms         | -90%   |
-| `prev.html`   | 2.23 ms            | 2.31 ms         | ~0%    |
+## Background: why it was build-only, and what still holds
 
-- **Main-thread busy 73% -> 34%. Per keystroke ~70 ms -> ~36 ms.** User reports typing
-  "feels very fluid" on the optimized build.
-- `prev.render` -76% is the **Rust** side (`pulldown-cmark`) — Rust was unoptimized too,
-  not just Swift.
-- `prev.html` unchanged is a control: WebKit is a system framework, always optimized, so it
-  had nothing to gain. CoreText is likewise why `pane.glyphs` improved least.
+The original rationale (recorded in `release.bzl`'s module docstring, `build.md`, and
+`crates/wolf-macos/README.md`): `build.md` already warned that
+`bazel run //crates/wolf-macos:Wolf` has less predictable stderr plumbing through the
+rules_apple runner, and the optimized bundle is the binary people run with
+`WOLF_FRAME_STATS=1` while reading stderr. A run target with unreliable stderr defeats that
+purpose.
 
-Verified with `bazel aquery`: default (fastbuild) passes `-Onone`; `-c opt` passes `-O`/`-Os`.
+**That concern is still valid but it is not a reason to block `bazel run` — it is a reason
+to keep BOTH paths documented:**
+
+- `bazel run //crates/wolf-macos:WolfRelease` — the convenient way to launch the app.
+- direct exec of `"$APP/Contents/MacOS/Wolf"` via the `cquery` recipe — the reliable way to
+  take a frame-stats measurement, because it inherits the terminal's stdio and environment.
+
+The docs must NOT present `bazel run` as the way to capture frame stats.
 
 ## Scope
 
-### 1. New target `//crates/wolf-macos:WolfRelease`
+### 1. Make the rule executable — `crates/wolf-macos/release.bzl`
 
-A named target producing the optimized app WITHOUT requiring `-c opt` on the command line,
-so the shippable build is a first-class thing you can ask for by name.
-
-`macos_application` does not change compilation mode on its own, and an `alias` cannot —
-compilation mode is a configuration, not an attribute. This needs a **Starlark
-outgoing-edge transition** setting `//command_line_option:compilation_mode` to `"opt"`,
-applied to a thin rule wrapping the existing `:Wolf` target.
+Current state: `_opt_bundle_impl` returns a single
+`DefaultInfo(files = ..., runfiles = dep[DefaultInfo].default_runfiles)`, no `executable`.
+`ctx.attr.bundle` is a LIST even for this 1:1 transition on Bazel 8.7.0 (observed; the
+existing code uses `[0]` with a comment recording the error text).
 
 The architect must determine and specify:
 
-- the exact transition + wrapper rule (a `transition(implementation, inputs, outputs)` with
-  `outputs = ["//command_line_option:compilation_mode"]`, plus a rule with `cfg = <transition>`
-  on its dep, and any allowlist handling the Bazel version requires)
-- whether it belongs inline in `crates/wolf-macos/BUILD.bazel` or in a new `.bzl` (prefer a
-  `.bzl` — BUILD files should not carry rule definitions; check repo convention first)
-- how the output is surfaced. `macos_application` yields `Wolf.zip` plus the unzipped bundle
-  under `Wolf_archive-root/`. **The wrapper must forward a usable `DefaultInfo` so the
-  bundle is actually reachable at a predictable path** — the part most likely to be fiddly,
-  and it must be verified by building and running the result, not assumed.
-- the resulting on-disk path, so `build.md` can document it exactly. NOTE the `bazel-bin`
-  symlink retargets to whichever config was built last, so a `bazel-bin/...` path is
-  FRAGILE when both configs exist. Prefer `bazel cquery --output=files` or an explicit
-  `bazel-out/darwin_arm64-opt-.../` path, and say which is robust.
+- **How to forward an executable that another rule produced.** Bazel requires
+  `DefaultInfo.executable` to be an artifact this rule generates, so the dep's runner
+  cannot simply be handed through. The standard mechanism is
+  `ctx.actions.symlink(output = ctx.actions.declare_file(ctx.label.name), target_file =
+  <dep executable>, is_executable = True)`. Confirm this is right for a
+  transitioned dep and specify it exactly.
+- **Runfiles — the part most likely to break.** rules_apple's `macos_application` runner is
+  a generated script that locates the bundle through its runfiles. A symlinked copy must
+  still resolve them. Specify exactly what to merge (the dep's `default_runfiles`, plus
+  whatever the symlink itself needs) and in what order. **This is the failure mode to guard
+  against: a runner that launches but cannot find its `.app`, or launches a stale/other
+  bundle.**
+- Whether `executable = True` on the `rule()` is required in addition to setting
+  `DefaultInfo.executable`, and whether the declared file name may collide with anything.
+- Whether the transitioned dep's executable is the OPT one. **This is load-bearing: a
+  runner symlinked from the wrong configuration would silently launch the `-Onone` app,
+  which is precisely the class of bug this whole target exists to prevent.** Specify how to
+  verify it empirically, not by reasoning.
 
-### 2. `build.md` corrections
+### 2. Documentation corrections — every place the old rationale is recorded
 
-- Document `//crates/wolf-macos:WolfRelease` as the way to build the app you actually run
-  and install, with the exact on-disk path to the bundle.
-- State plainly that the plain `:Wolf` target is a **development** build at `-Onone` and is
-  substantially slower, with the measured numbers above as justification.
-- Document the test caveat: **`bazel test -c opt //crates/wolf-macos:WolfKeyMapTests` FAILS
-  to build** — `@testable import` requires `-enable-testing`, which rules_swift only sets in
-  non-opt compilation modes (error: `module 'WolfKeyMap' was not compiled for testing`).
-  This is expected and standard: **test in the default config, ship the optimized build.**
-  Do not present it as a defect to fix.
-- Update the frame-time instrumentation section: its invocation should use the release
-  bundle path, and it should note that measuring the default build measures `-Onone`.
+All of these currently state the target is deliberately non-executable and must be corrected
+or they become lies (CLAUDE.md: docs are source of truth):
 
-### 3. Other docs
-
-Check `crates/wolf-macos/README.md` and `architecture.md` for build-command claims that are
-now incomplete. Use judgment on `architecture.md` — a build-configuration fact may or may
-not rise to architecture.
+- `crates/wolf-macos/release.bzl` — module docstring. It also contains a "do not
+  re-litigate" note about non-executability; rewrite it to record the new decision AND
+  preserve the stderr caveat as a reason to prefer direct exec for measurement.
+- `build.md` — the release-build section and the frame-time instrumentation section. Add
+  `bazel run` as the launch path; keep the `cquery` + direct-exec recipe as the measurement
+  path, and say plainly why they differ.
+- `crates/wolf-macos/README.md` — the `release.bzl` / `opt_bundle` paragraph.
+- `crates/wolf-macos/BUILD.bazel` — the `WolfRelease` target comment, if it mentions
+  non-executability.
 
 ## Constraints
 
-- Do NOT change any application code. Build target + documentation only.
-- Do not alter the existing `:Wolf` target's behavior — other targets/tests depend on it,
-  and the fastbuild path must stay the fast-iteration build.
-- The new target must actually build AND the resulting app must launch. Verify by running
-  it, not by inspecting the graph.
-- `prettier --write` every Markdown file touched; no hard line breaks within a paragraph.
-
-## Explicitly NOT in this pass
-
-- The glyph work (`pane.glyphs`, now 97% of `draw.pane` at ~4.4 us/cell under `-O`). The
-  ablation probe for it is preserved on branch `probe/glyph-cost-diagnostic` (commit
-  `0295ab6`, THROWAWAY, must never merge).
-- Moving `prev.render` off the main thread — now only 6.17 ms under `-O`, much less
-  valuable than when it was 25.6 ms.
-- Wake amplification — `ctrl.wake` is now 0.51 ms, so ~2.9 wakes/key is ~1.5 ms. Noise.
-- Dirty-rect tracking, `INPUT_COALESCE_DELAY`, `isOpaque`.
-- Any Rust source change.
+- Do NOT change any application code (Swift/Rust). Build rule + docs only.
+- Do NOT alter `:Wolf`, `bundle_layout_test`, or `xcodeproj`.
+- Keep `tags = ["manual"]` — the rebuild-the-whole-graph-twice cost is unchanged and the
+  reason for `manual` is unrelated to executability.
+- Do not touch `MODULE.bazel` or either lockfile.
+- **Verify by actually running `bazel run //crates/wolf-macos:WolfRelease`**, not by graph
+  inspection. It must launch the OPTIMIZED app.
 
 ## Success criteria
 
-`bazel build //crates/wolf-macos:WolfRelease` produces an optimized bundle that launches and
-behaves identically to the `-c opt` build already measured in `test-7-with-opt-param`.
-`build.md` tells a reader unambiguously which target to build for real use and which for
-development, and why it matters.
+`bazel run //crates/wolf-macos:WolfRelease` launches the optimized Wolf. The launched binary
+is demonstrably the opt one (~8.26 MB, vs ~25.4 MB for fastbuild). `bazel build` on the
+target still works, `:Wolf` is unaffected, and the docs describe both the run path and the
+measurement path without implying `bazel run` is suitable for frame-stats capture.
 
 ## Architect's plan (APPROVED — implement exactly this)
 
-### Versions / allowlist — SETTLED
+### RESEARCH: what rules_apple 4.5.3 actually does (this corrects the original rationale)
 
-`.bazelversion` = Bazel **8.7.0**; rules_swift 3.6.1, rules_apple 4.5.3, apple_support
-2.6.1, rules_rust 0.71.2. **`_allowlist_function_transition` is NOT required on Bazel 8**
-(requirement removed upstream, bazelbuild/bazel#19233). **Do not add it** — it pins a
-dependency on a legacy allowlist a future Bazel drops. Only if analysis errors with an
-allowlist message (it should not) add it, commented as a version-specific workaround.
+`macos_application` DOES return a real executable: `apple/internal/macos_rules.bzl` declares
+`outputs.executable(...)`, calls `run_support.register_macos_executable(...)`, and returns
+`DefaultInfo(executable = executable, files = ..., runfiles = ctx.runfiles(files = [archive], ...))`.
 
-### Where the Starlark lives — `crates/wolf-macos/release.bzl`
+The runner is `apple/internal/templates/macos.template.sh` with exactly two substitutions
+(`run_support.bzl`): `%app_name%` -> `Wolf`, `%app_path%` -> `archive.short_path` =
+`crates/wolf-macos/Wolf.zip`. What it does:
 
-Repo convention: every `.bzl` is co-located with the package that consumes it
-(`bazel/<topic>/extensions.bzl`; `tools/lint/clippy_fix.bzl` is the direct precedent for a
-custom RULE — a `.bzl` in the consuming package, module docstring, `load()`ed from that
-package's BUILD). Follow it exactly. No rule definitions inline in BUILD.bazel.
+1. if `%app_path%` is a dir use it; else `mktemp -d "${TMPDIR:-/tmp}/bazel_temp.XXXXXX"`,
+   `trap 'rm -rf "${TEMP_DIR}"' EXIT`, `unzip -qq '%app_path%' -d "${TEMP_DIR}"`
+2. read `CFBundleExecutable` from `Info.plist` via `/usr/libexec/PlistBuddy`
+3. invoke `"${APP_DIR}/Contents/MacOS/${BUNDLE_EXECUTABLE}" "$@"` — **NOT `open`**, and
+   deliberately not `exec` (so the cleanup trap still fires)
 
-### Output surfacing — THE FIDDLY PART
+**Three consequences the plan hinges on:**
 
-rules_apple 4.5.3 `apple/internal/outputs.bzl`: `_root_path_from_archive` derives the
-archive-root path by STRING MANIPULATION (`paths.replace_extension(archive.path,
-"_archive-root")`), and `_archive()` only calls `declare_directory` when experimental
-tree-artifact outputs are enabled. This repo does NOT enable that
-(`--define=apple.experimental.tree_artifact_outputs` appears nowhere in `.bazelrc`).
+- **`%app_path%` is a bare CWD-relative runfiles path with NO `rlocation`/`RUNFILES_DIR`
+  logic.** It resolves only because `bazel run` sets CWD to the runfiles root of the target
+  being run. So **OUR** rule's runfiles must contain the zip at short_path
+  `crates/wolf-macos/Wolf.zip`. The runfiles merge is load-bearing.
+- **stdio and environment ARE inherited** — direct child, inherited fds.
+  `WOLF_FRAME_STATS=1 bazel run //crates/wolf-macos:WolfRelease` works and stderr reaches
+  the terminal. **The original "unpredictable stderr plumbing" rationale for making this
+  build-only was weaker than assumed — it was inherited from build.md's pre-existing
+  warning, not verified against the template.**
+- **The app that runs is a fresh unzip into `$TMPDIR/bazel_temp.XXXXXX`, deleted on exit** —
+  NOT the signed `.app` the `cquery` recipe resolves. This is the real, concrete reason
+  direct exec remains the measurement path.
 
-**Therefore `Wolf_archive-root/Wolf.app` is NOT a Bazel artifact.** It is an UNDECLARED
-side-effect directory the bundling/signing action leaves behind. Consequences:
+### `release.bzl` — the only build-logic change
 
-- The wrapper **cannot** forward the `.app` in `DefaultInfo`. There is nothing to forward.
-  Any plan saying "forward the bundle TreeArtifact" is wrong for this configuration.
-- Forward the dep's `DefaultInfo.files` (the opt-configured `Wolf.zip`). The `.app` sits on
-  disk as its sibling at `<zip path minus .zip>_archive-root/Wolf.app`, in the OPT output dir.
-- Return `DefaultInfo(files = dep[DefaultInfo].files, runfiles = dep[DefaultInfo].default_runfiles)`.
-- **Do NOT** set `executable =`. **Do NOT** forward `AppleBundleInfo` /
-  `MacosApplicationBundleInfo` / `AppleExecutableBinaryInfo` — nothing consumes them
-  (`bundle_layout_test` and `xcodeproj` depend on `:Wolf` directly), and forwarding Apple
-  providers from a non-Apple rule invites rules_apple to treat `WolfRelease` as an
-  embeddable bundle: added risk, zero benefit.
+`_opt_bundle_impl`: keep `bundle = ctx.attr.bundle[0]` and its comment verbatim (the
+list-indexing observation is still true and load-bearing). Then:
 
-Residual fragility to DOCUMENT not fix: because the dir is undeclared, Bazel does not track
-it; on an action-cache hit only `Wolf.zip` is restored. No remote cache is configured so in
-practice it is always materialized. Recovery is one line: unzip / `ditto -x -k` the zip.
+1. **Use `ctx.outputs.executable` as the symlink output, NOT
+   `ctx.actions.declare_file(ctx.label.name)`.** With `executable = True` Bazel PREDECLARES
+   an output named `ctx.label.name` and exposes it as `ctx.outputs.executable`; a
+   `declare_file("WolfRelease")` on top of that is a duplicate declaration and fails analysis.
+   `ctx.actions.symlink(output = ctx.outputs.executable,
+   target_file = bundle[DefaultInfo].files_to_run.executable, is_executable = True)`.
+   `files_to_run.executable` is the canonical way to read another target's executable
+   artifact; a transition changes only WHICH configured target `bundle[0]` is, not the
+   provider surface. Add a `progress_message`.
+2. Runfiles = union of `bundle[DefaultInfo].default_runfiles` (**the essential one — carries
+   the OPT `Wolf.zip` at exactly the short_path baked into the runner as `%app_path%`**),
+   `bundle[DefaultInfo].data_runfiles` (merged defensively; identical today since
+   `macos_application` sets only `runfiles=`, but survives an upstream change), and
+   `ctx.runfiles(files = [ctx.outputs.executable])` (belt-and-braces — Bazel adds it
+   automatically for an executable rule; comment saying so). Order is irrelevant
+   (`Runfiles.merge` is a union keyed by runfiles path) and there is no collision.
+3. Return `DefaultInfo(files = bundle[DefaultInfo].files, runfiles = <merged>,
+   executable = ctx.outputs.executable)`.
 
-FALLBACK, only if verification shows the dir is not reliably present under opt: a second
-action expanding the zip into a DECLARED `declare_directory("Wolf.app")` via `ditto -x -k`
-(preserves exec bits/symlinks/xattrs where plain `unzip` may not). Costs a full extra copy
-of a large bundle every rebuild. **Do not implement speculatively.**
+**Do NOT try to forward `bundle[DefaultInfo].files_to_run`** — `DefaultInfo` accepts no such
+parameter; Bazel synthesizes `FilesToRunProvider` from `executable`.
 
-### THE PATH PROBLEM — `bazel-bin` is WRONG for this target
+`opt_bundle = rule(...)`: add **`executable = True`** — REQUIRED, not optional. Setting
+`DefaultInfo.executable` from a non-executable rule is an analysis error, and `bazel run`
+dispatches on the rule's executable-ness. Leave `attrs`, the transition, and the absence of
+`_allowlist_function_transition` untouched. Update the rule's `doc` to say it is runnable.
 
-`bazel-bin` symlinks the bin dir of the **top-level target configuration**. Building
-`//crates/wolf-macos:WolfRelease` analyzes the top-level target in the **default
-(fastbuild)** config — the transition applies to its dependency edge, i.e. BELOW it. So
-`bazel-bin/crates/wolf-macos/Wolf_archive-root/Wolf.app` is either ABSENT or — far worse —
-**a stale fastbuild `-Onone` bundle from an earlier `:Wolf` build.** That is silently
-measuring the wrong binary: exactly the failure mode that already bit this project.
-**`build.md` must NEVER print a `bazel-bin/...` path for `WolfRelease`.**
+**Module docstring:** keep the transition/forwarding/undeclared-sibling/`bazel-bin`
+paragraphs; amend "WHAT IT FORWARDS" to include the executable symlink + the dep's runfiles.
+**Replace the "DELIBERATELY NOT EXECUTABLE (do not re-litigate)" paragraph entirely** with the
+reversed decision AND why the old objection was weaker than assumed (the runner does not
+`open`; env/stdio are inherited). Record what remains true: temp-unzip copy at a per-launch
+changing path, re-unzip每 launch, output interleaved with Bazel's client output. Record that
+`%app_path%` is CWD-relative so the runfiles merge must not be dropped, and that
+`--nobuild_runfile_links` / `--enable_runfiles=false` breaks it.
 
-**Do not hardcode the opt output-dir name.** Under Bazel 7+'s default
-`diff_against_baseline` naming, a Starlark transition may append an `-ST-<hash>` fragment;
-whether it is `darwin_arm64-opt` or `darwin_arm64-opt-ST-<hash>` must be OBSERVED, not
-predicted. Record the observed value during verification but document the COMMAND, since
-the hash is not a stable contract.
+### Docs
 
-Documented recipe for `build.md`:
+- **`build.md:113`** — replace the "deliberately build-only" sentence: `bazel run` launches
+  the optimized app and is the convenient way to do so; it inherits environment and stderr
+  (the runner invokes the inner binary directly, it does not `open` the bundle). But it runs
+  a TEMPORARY unzipped copy under `$TMPDIR`, recreated per launch, deleted on exit, at a
+  path that differs every run — so for frame-stats capture, and anything caring about the
+  bundle's on-disk identity (TCC prompts, saved state), prefer the direct
+  `"$APP/Contents/MacOS/Wolf"` exec. Note `manual` does not prevent `bazel run` on an
+  explicit label.
+- **`build.md:209`** — keep the `bazel run //crates/wolf-macos:Wolf` stderr caveat framing
+  but DROP the "that is also why WolfRelease is deliberately build-only" clause. New text:
+  `bazel run //crates/wolf-macos:WolfRelease` also launches the app and DOES pass
+  `WOLF_FRAME_STATS` through, but the recommended capture path is preferred because it
+  exercises the exact on-disk signed bundle at a stable path, skips a per-launch unzip of
+  the whole bundle into `$TMPDIR`, and keeps the app's stderr unmixed with Bazel's client output.
+- **`build.md` ~194-198** — "There are two working paths" now promises two but there are
+  genuinely three: direct exec (recommended), `bazel run` (works, caveats), and
+  `WOLF_FRAME_STATS_FILE` for a double-clicked app. Adjust the framing minimally.
+- **`crates/wolf-macos/README.md` ~109** — add
+  `bazel run //crates/wolf-macos:WolfRelease   # launch the optimized .app` to the block.
+- **`crates/wolf-macos/README.md:118`** — rewrite the "non-executable by design" sentence:
+  the rule IS executable, symlinking the transitioned `macos_application` runner into its own
+  output and forwarding the dep's runfiles, which is how that runner locates `Wolf.zip`
+  (CWD-relative runfiles path -> unzip to temp -> invoke `Contents/MacOS/Wolf` directly,
+  inheriting env and stdio). Keep a clause that direct exec remains the measurement path and
+  why. Keep the rest (Apple providers, undeclared sibling, generic rule name).
+- **`BUILD.bazel`** — header comment line ~15-17: append "Runnable with `bazel run`." Target
+  comment: one sentence that `bazel run` launches it and `manual` affects only wildcard
+  expansion, not explicit `run`/`build`. The comment does NOT currently claim
+  non-executability, so no correction needed beyond these additions.
 
-```sh
-bazel build //crates/wolf-macos:WolfRelease
-ZIP=$(bazel cquery --output=files //crates/wolf-macos:WolfRelease 2>/dev/null)
-APP="${ZIP%.zip}_archive-root/Wolf.app"
-```
+### Verification (manual protocol — no automated test is viable; a GUI-launching `sh_test` is not)
 
-`cquery --output=files` is reliable **because the wrapper forwards the dep's
-`DefaultInfo.files`** — configuration-aware, unlike the `bazel-bin` symlink. `cquery` prints
-progress to stderr (hence `2>/dev/null`); verify the captured value is a single clean path.
-The `bazel build` "Target up-to-date:" line prints the same path as an eyeball cross-check.
+1. `bazel build //crates/wolf-macos:WolfRelease` succeeds, still reports `Wolf.zip`.
+2. **Symlink points into OPT (static):**
+   `bazel aquery --output=text 'mnemonic("ExecutableSymlink", //crates/wolf-macos:WolfRelease)'`
+   — the action's INPUT path must contain `-opt-`; output is `.../WolfRelease`. A
+   `-fastbuild-` input is the bug.
+   **CORRECTED FROM THE ORIGINAL PLAN:** the mnemonic is `ExecutableSymlink`, NOT `Symlink`
+   — Bazel uses the former when `is_executable = True`, and `Symlink` matches ZERO actions.
+   Also expected, not a bug: the action's OWN configuration reads `darwin_arm64-fastbuild`
+   (the top-level target's config); only its INPUT crosses into opt.
+3. **Runfiles carry the OPT zip (static — the wrong-bundle guard):** resolve
+   `.../WolfRelease.runfiles/_main/crates/wolf-macos/Wolf.zip` with `ls -lL`/`readlink`; the
+   resolved path must contain `-opt-`. Confirm exactly ONE `Wolf.zip` in the tree.
+4. **The LAUNCHED binary is optimized (dynamic — load-bearing, do NOT accept reasoning):**
+   `bazel run`, then while up, `ps -axo pid,comm | grep bazel_temp` to get the running path
+   under `$TMPDIR/bazel_temp.*/Wolf.app/Contents/MacOS/Wolf`; `stat -f%z` it. Must be
+   ~**8.26 MB**, NOT ~**25.4 MB**. Corroborate with
+   `WOLF_FRAME_STATS=1 WOLF_FRAME_STATS_INTERVAL=2 bazel run ...`: `ctrl.wake` ~0.5 ms and
+   `prev.render` ~6 ms, not 4.85/25.6. **The byte size is the proof; frame stats corroborate.**
+5. **Env/stdio:** confirm `wolf-frame-stats enabled interval=2.0s` and subsequent reports
+   actually appear on the terminal under `bazel run`. **This determines the final doc
+   wording — if it does NOT appear, adjust the docs rather than suppress the finding.**
+6. **No regression:** `bazel build //crates/wolf-macos:Wolf` and
+   `bazel test //crates/wolf-macos:bundle_layout_test //crates/wolf-macos:WolfKeyMapTests`
+   pass; wildcard still does not sweep in `WolfRelease`.
 
-### Runnable? — NO. Build-only, deliberately.
+**Failure symptoms to recognize:**
 
-Technically doable (symlink a launcher, `executable = True`, forward runfiles), but it lands
-on the path `build.md:158` already warns about: `bazel run //crates/wolf-macos:Wolf` has
-less predictable stderr plumbing through the rules_apple runner. **Decisive here, because
-the entire point of this bundle is that it is the binary people run with `WOLF_FRAME_STATS=1`
-and read stderr from.** A run target whose stderr is unreliable defeats its own purpose. It
-would also stage a second copy of a large bundle in runfiles — another place "which .app am
-I running" can go wrong. Record this decision + rationale as a comment in `release.bzl` so
-it is not re-litigated.
-
-### `release.bzl` contents
-
-Module docstring (style of `tools/lint/clippy_fix.bzl`): why a transition is needed at all
-(compilation mode is a CONFIGURATION, not an attribute — `alias` cannot do this); that the
-wrapper forwards only `DefaultInfo`; that the `.app` is an UNDECLARED sibling of the zip;
-that `bazel-bin` is NOT the right place to look; that the rule is deliberately non-executable.
-
-1. `_opt_transition_impl(settings, attr)` → `{"//command_line_option:compilation_mode": "opt"}`
-2. `_opt_transition = transition(implementation = ..., inputs = [], outputs = ["//command_line_option:compilation_mode"])`
-   — `inputs = []` because the new value is unconditional. NO allowlist attr.
-3. `_opt_bundle_impl(ctx)` — single `DefaultInfo` forwarding `files` + `default_runfiles`.
-   **CODER NOTE:** for a non-split (1:1) transition `ctx.attr.<dep>` is a plain `Target`;
-   Bazel makes it a LIST only for 1:2+ split transitions. Write the plain-`Target` form; if
-   analysis fails with a list error, index `[0]` and comment which applies. Do not guess —
-   the error is immediate and unambiguous.
-4. `opt_bundle = rule(...)`: one attr `bundle` =
-   `attr.label(mandatory = True, cfg = _opt_transition, providers = [DefaultInfo])`;
-   NO `executable = True`; NO `toolchains`. Keep the rule name GENERIC (`opt_bundle`), not
-   Wolf-specific, so it could move to `bazel/` later without a rename.
-
-### `crates/wolf-macos/BUILD.bazel`
-
-`load("//crates/wolf-macos:release.bzl", "opt_bundle")` with the existing loads (17-20).
-Extend the file-header target-list comment (1-16) with a `WolfRelease` entry. Add the target
-right AFTER the `macos_application(name = "Wolf", ...)` block (after ~176), before
-`bundle_layout_test`: `name = "WolfRelease"`, `bundle = ":Wolf"`,
-`visibility = ["//visibility:public"]` (mirrors `:Wolf`), and **`tags = ["manual"]`**.
-
-**Why `manual` (deliberate, not boilerplate):** without it, `bazel build //...` sweeps
-`WolfRelease` in and rebuilds the ENTIRE Rust + Swift + treesitter graph a second time at
-`-c opt` on every wildcard build — a large, silent, recurring cost on a command people run
-casually. The repo already uses `manual` for exactly this on every `//tools/lint` target
-(`build.md:295`), so it is idiomatic here. `WolfRelease` is not a test, so the default
-test-suite count is unaffected. Explicit `bazel build //crates/wolf-macos:WolfRelease` still
-works normally. Add a comment covering: what it is, that `:Wolf` is unchanged and remains
-the fast-iteration dev build, why `manual`, and that the path must come from `cquery` and
-NEVER from `bazel-bin`.
-
-### `build.md` restructure
-
-**§"Building the .app" (~95-103)** → two labeled subsections, RELEASE FIRST (it is the
-answer to "how do I build Wolf"):
-
-- **"Building the .app for real use (optimized)"** — leads with the `WolfRelease` build.
-  Same bundle as `:Wolf` but the whole graph (Swift AND Rust) at `-c opt`, without `-c opt`
-  on the command line, via an outgoing-edge transition in `crates/wolf-macos/release.bzl`.
-  Give the `cquery` recipe verbatim. **State in its own sentence that `bazel-bin/...` is not
-  a valid path for this target**, and why (top-level config is fastbuild → missing or stale
-  `-Onone`). Note the `manual` tag and that the first build is a full second-config rebuild.
-- **"Building the .app for development"** — keep `:Wolf` and everything at 100-103 (icon,
-  bundled nvim, signing, min OS), but state up front this is a DEVELOPMENT build at
-  `-Onone` with Rust unoptimized, that it is the fast-iteration build and what every test
-  target builds against, and that it is SUBSTANTIALLY slower at runtime — reproduce the
-  measured table. **Include the two controls, they are what make it credible rather than
-  anecdotal:** `prev.html` flat because WebKit is a system framework and always optimized;
-  `pane.glyphs` improves least because CoreText likewise. Note `prev.render` -76% is the
-  RUST side (`pulldown-cmark`) — Rust was unoptimized too, not just Swift.
-
-**§"Test targets" (~239-265)** — add, worded as expected-and-standard, NOT as a defect and
-NOT as a TODO:
-
-> Tests run in the **default** configuration, not `-c opt`.
-> `bazel test -c opt //crates/wolf-macos:WolfKeyMapTests` fails to build: `@testable import`
-> requires `-enable-testing`, which rules_swift only passes in non-opt compilation modes
-> (`module 'WolfKeyMap' was not compiled for testing`). This is the standard, intended
-> arrangement across the Swift ecosystem — **test in the default config, ship the optimized
-> build** — not something to work around.
-
-**§"Frame-time instrumentation (macOS)" (147-168)** — (1) replace the recommended
-invocation (151-154) and the log-to-file variant (162-166) with the release-bundle form via
-the `cquery`-derived `$APP`. (2) Add a prominent note: **measuring the default `:Wolf` build
-measures `-Onone`** — those numbers are not what users experience and are not comparable to
-anything captured under `-c opt`; any capture meant to inform a decision must come from
-`WolfRelease`. (3) Rewrite the `Wolf_archive-root/` explanation at 156 to apply to BOTH
-targets: an unzipped sibling of `Wolf.zip` in the same output dir as THAT target's zip, not
-a declared Bazel output; no `Wolf.app` at either config's package root; unzip if missing.
-Keep the 158 parenthetical about `bazel run` stderr and extend it: this is also why
-`WolfRelease` is deliberately build-only.
-
-### `crates/wolf-macos/README.md`
-
-§"Building" (106-113): add the `WolfRelease` line FIRST in the code block
-(`# the OPTIMIZED (-c opt) .app — build this for real use`), annotate `:Wolf` as the
-development / `-Onone` build, and point at `build.md` for the measured penalty and the
-`cquery` recipe (do NOT duplicate the numbers — one source of truth). **CLAUDE.md
-compliance:** this directory's README must describe its components, and `release.bzl` is a
-new component — add a short paragraph on the `opt_bundle` rule and its transition (what it
-does, forwards only `DefaultInfo`, non-executable by design, `.app` is an undeclared sibling).
-
-### `architecture.md`
-
-ONE sentence, minimal. §"Build" (~244) currently names only
-`bazel build //crates/wolf-macos:Wolf`; name both targets (`:Wolf` development,
-`:WolfRelease` optimized build-for-real-use) pointing at `build.md`. Judgment stated plainly:
-which compilation mode a target uses is a build-configuration detail that does not belong in
-architecture — BUT architecture.md currently names a specific build command, and leaving it
-naming only the debug target reproduces the original documentation bug in a second file. Fix
-the naming; do NOT import the performance table or the transition mechanics.
-
-### NOT modified
-
-`bundle_layout_test.sh` / its `sh_test` — unchanged, still `data = [":Wolf"]`. A release
-variant would force a full opt build into the default test sweep for zero added coverage:
-bundle LAYOUT is configuration-independent (same `resources` attr, same rules_apple partials).
-Verify the layout once manually against the opt bundle instead. `//tools/lint/**` — no change;
-`swift_format_srcs` is `.swift` only; `rustfmt.fix` evaluates `//...` internally so it will
-LOAD `release.bzl` (must be load-clean) but will not BUILD `WolfRelease`, and `manual` keeps
-it out regardless. `.bazelrc` — **do NOT add a `--config=release`**; the whole point is a
-named target rather than a flag to remember. Nothing under `crates/wolf-core`,
-`crates/wolf-ffi`, or `crates/wolf-macos/Sources` — no application code changes.
-
-### Verification protocol (verify by BUILDING AND LAUNCHING, not graph inspection)
-
-**No new Bazel test target.** Any `sh_test` with `data = [":WolfRelease"]` forces a full opt
-build; tagged `manual` it never runs, untagged it doubles every sweep. Neither is worth it.
-
-1. `bazel build //crates/wolf-macos:WolfRelease` completes. Resolve the plain-`Target`-vs-list
-   question here if the first form errors.
-2. **The load-bearing check:** `bazel aquery --output=text 'mnemonic("SwiftCompile",
-   //crates/wolf-macos:WolfRelease)'` shows `-O` (NOT `-Onone`); Rust actions show an
-   optimizing `-C opt-level`. Cross-check the same aquery on `//crates/wolf-macos:Wolf` still
-   shows `-Onone`. Necessary precondition, NOT a substitute for 4-6.
-3. Path recipe resolves: single clean path, `$APP` exists and is a directory, config component
-   is an `-opt-` one. **Record the literal observed directory name** (including any
-   `-ST-<hash>`). Independently confirm the NEGATIVE:
-   `bazel-bin/crates/wolf-macos/Wolf_archive-root/Wolf.app` is absent or demonstrably the
-   fastbuild bundle — `build.md` will make this claim, so it must be observed.
-4. `codesign --verify --deep --strict` passes on the opt `.app`. Spot-check the layout
-   `bundle_layout_test` asserts: `Contents/Resources/nvim/bin/nvim` executable, `init.lua`,
-   `fonts/`, `parsers/parser/go.so`.
-5. Launches and works: run `"$APP/Contents/MacOS/Wolf"` directly — window appears, typing
-   reaches nvim, sidebar and preview work, quits cleanly. Record honestly as a manual smoke.
-6. **Genuinely optimized (the success criterion):** `WOLF_FRAME_STATS=1` steady-state capture
-   under the `test-7-with-opt-param` protocol; buckets land near the `-c opt` column
-   (`ctrl.wake` ~0.5 ms, `prev.render` ~6 ms, `draw` ~15 ms), NOT the `-Onone` column. This
-   closes the loop — proves `WolfRelease` reproduces the measured `-c opt` build.
-7. No regression: `bazel build //crates/wolf-macos:Wolf` still succeeds, fastbuild outputs
-   untouched, `WolfKeyMapTests` + `bundle_layout_test` still pass.
-8. Wildcard hygiene: `bazel build //crates/wolf-macos:all` does NOT pull in `WolfRelease`.
-
-Edge cases: building `WolfRelease` and `Wolf` in the SAME invocation (both configs coexist —
-no output collision, no action conflict); building `WolfRelease` WITH `-c opt` on the command
-line (transition is a no-op — still works, no third output dir); after `bazel clean` + rebuild
-the archive-root dir is present (if ever not, that triggers the fallback — escalate, do not
-paper over).
+- *Runner launches but cannot find the `.app`* → aborts almost immediately with an `unzip`
+  error naming `crates/wolf-macos/Wolf.zip`, or a PlistBuddy failure on a missing
+  `Info.plist`; no window. Cause: runfiles dropped, or `--nobuild_runfile_links` /
+  `--enable_runfiles=false`.
+- *Runner launches the WRONG bundle* → **the app comes up NORMALLY**, which is exactly why
+  this must be caught by measurement not by eyeballing. Tell: running binary ~25.4 MB and
+  `ctrl.wake` ~4.85 ms. Cause: symlink from a non-transitioned target, or two `Wolf.zip`s
+  colliding in one runfiles tree.
 
 ### Risks
 
-**HIGH — first-build cost (certain).** The transition rebuilds the ENTIRE graph in a second
-config: all crate_universe Rust deps (tokio, rusqlite with bundled SQLite through `cc`,
-pulldown-cmark, pulldown-latex), `wolf-core`, `wolf-ffi`, both Swift modules, 16 host-compiled
-treesitter parsers, actool, code signing. External repo-rule outputs (downloaded nvim/font/
-plugin tarballs) are NOT reconfigured (repo rules are config-independent) but the
-`copy_to_directory` targets assembling them ARE build targets and re-run at opt, re-copying
-the ~100 MB nvim tree. Expect roughly one additional clean app build (several minutes) and
-roughly double on-disk output footprint. Incremental rebuilds within either config unaffected.
-`manual` is what keeps this opt-in.
-
-**HIGH — the stale-`bazel-bin` trap** (already bit this project once). Mitigation is
-documentation discipline: give the `cquery` recipe AND state the negative claim explicitly.
-If the docs print a `bazel-bin` path, someone WILL profile a stale `-Onone` bundle and reach
-a wrong conclusion — precisely the class of bug this change exists to eliminate.
-
-**MEDIUM — undeclared archive-root dir.** Pre-existing (already applies to `:Wolf`), not
-introduced here; mitigated by the one-line unzip note.
-
-**LOW —** `:Wolf` untouched (separate output dir, fastbuild cache preserved;
-`bundle_layout_test`/`xcodeproj` depend on it directly). rules_apple applies its own
-platform/cpu transitions BELOW `macos_application` while ours applies ABOVE — they compose
-normally; step 2 catches it immediately if wrong. `rules_xcodeproj` lists only
-`top_level_target(":Wolf")` and has historically been sensitive to custom transitions — a
-further reason NOT to add `WolfRelease` to `top_level_targets`. `//tools/lint` `rustfmt.fix`
-loads `release.bzl` so it must be parse-clean (caught at step 1). Opt-only compile failures
-are essentially retired — this exact configuration already built successfully via `-c opt`,
-which is where the measurements came from.
-
-### Dependencies: NONE
-
-No new `bazel_dep`, no module extension, no `MODULE.bazel` change, therefore **no
-`MODULE.bazel.lock` regeneration and no `CARGO_BAZEL_REPIN`**. `transition()` and
-`rule(cfg = ...)` are core Bazel Starlark. **If the implementation touches `MODULE.bazel` or
-either lockfile, something has gone wrong — stop and reconsider.**
-
-### Lint
-
-buildifier is not wired into this repo (`//tools/lint` = clippy, rustfmt, swift-format only),
-so no Starlark-lint suppressions needed — but write `release.bzl` buildifier-clean anyway
-(module docstring first, `def`s before `rule()`, underscore-prefixed privates, canonical
-`rule()` arg order), matching `clippy_fix.bzl`. **No `# buildifier: disable=` directives
-anticipated** — the one plausible candidate, unused params on `_opt_transition_impl(settings,
-attr)`, is a Bazel-mandated signature and buildifier does not flag unused function params.
-Do not add one preemptively. `.bzl` is not prettier-covered; only the Markdown is.
+- **Wrong-bundle silence** — highest severity: a misconfigured symlink launches a perfectly
+  working `-Onone` app. Mitigated ONLY by the empirical checks above actually being run.
+- **Runfiles-dependent runner** — no `rlocation` fallback; `--nobuild_runfile_links`,
+  `--enable_runfiles=false`, or invoking the symlink from `bazel-out` with a different CWD
+  all break it. One sentence in the docstring.
+- **No second copy staged at build time** — the runfiles tree holds a SYMLINK to `Wolf.zip`,
+  and the zip was already in the forwarded runfiles before this change, so build-time/on-disk
+  footprint is unchanged. The new cost is at RUNTIME: every `bazel run` unzips the whole
+  bundle (bundled Neovim, 16 treesitter parsers, two font families, `Assets.car`) into
+  `$TMPDIR` and deletes it on exit. Noticeably slower launch than direct exec. Document; not
+  a blocker.
+- **Bundle identity churn** — a new temp path each launch means macOS treats it as a
+  different app for TCC prompts, saved window state, signature-identity-sensitive behavior.
+  Another reason measurement stays direct-exec.
+- **`manual` unchanged** — suppresses wildcard expansion only; explicit `run`/`build`
+  unaffected. Executability does not alter caching (one extra, essentially free `Symlink`
+  action).
+- **Downstream** — nothing depends on `:WolfRelease` (`bundle_layout_test` and `xcodeproj`
+  both point at `:Wolf`), so adding `FilesToRunProvider` cannot perturb a consumer.
 
 ## Status
 
 - [x] architect plan
 - [ ] implementation
-- [ ] verify: build + launch + confirm optimized
+- [ ] verify: `bazel run` launches the OPT app
 - [ ] docs
 - [ ] review
