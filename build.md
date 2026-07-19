@@ -345,7 +345,7 @@ Tests run in the **default** configuration, not `-c opt`. `bazel test -c opt //c
 
 Advisory (non-gating) lint/format targets live in `//tools/lint` and run on the macOS Bazel host: **clippy** and **rustfmt** for Rust (via the rules_rust downloaded 1.85.0 toolchain — the devShell has no standalone cargo/rustc) and **swift-format** for Swift (the host Xcode 26 binary, resolved via `xcrun --find swift-format`).
 
-These targets are **advisory**: every one is tagged `manual`, so `bazel test //crates/...` never sweeps them in and the default suite stays exactly 47/47. They are NOT run in CI gating here; existing violations are expected. A CHECK target "passing" means "the linter ran"; it may still report findings (which fail the target). See [`tools/lint/README.md`](tools/lint/README.md).
+These targets are **advisory**: every one is tagged `manual`, so `bazel test //crates/...` never sweeps them in and the default suite stays exactly 53/53. They are NOT run in CI gating here; existing violations are expected. A CHECK target "passing" means "the linter ran"; it may still report findings (which fail the target). See [`tools/lint/README.md`](tools/lint/README.md).
 
 Each tool has a CHECK (report/fail on violations via `bazel test`) and a FIX (rewrite in place via `bazel run`):
 

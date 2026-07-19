@@ -32,10 +32,21 @@ use wolf_core::{rank_palette, Command, PaletteRow, PaletteRowKind, PaletteWindow
 
 /// The number of STATIC rows the palette assembles: every `COMMAND_SPECS` row
 /// EXCEPT `Command::CommandPalette` (which is excluded from its own list). With
-/// 20 registered commands (Copy/Paste/BufferPicker/NewTab/Preview/Edit appended at
-/// 14/15/16/17/18/19) that is 19 static rows — Preview and Edit are NEW palette
-/// static rows (OD4: the palette iterates ALL specs except CommandPalette).
-const STATIC_COMMAND_COUNT: usize = 19;
+/// 21 registered commands (Copy/Paste/BufferPicker/NewTab/Preview/Edit/Terminal
+/// appended at 14/15/16/17/18/19/20) that is 20 static rows: exactly
+/// `COMMAND_SPECS.len() - 1`.
+///
+/// The `- 1` is NOT arithmetic coincidence — it holds because `rank_palette`
+/// (`src/palette.rs`) iterates `for spec in COMMAND_SPECS` with exactly ONE
+/// `continue`, guarded by `spec.command == Command::CommandPalette`. There is no
+/// other filter: no `MenuGroup` gating, no "is a Markdown buffer active" check, no
+/// dedup. So every spec but the palette's own invoking command contributes one
+/// static row.
+///
+/// Preview, Edit and Terminal are all NEW palette static rows (OD4: unlike the
+/// macOS menu items, which gate Preview/Edit Source on the active buffer/pane, the
+/// palette does not gate any spec — it lists them all).
+const STATIC_COMMAND_COUNT: usize = 20;
 
 /// A `max` large enough to never truncate the assembled candidate set in tests
 /// that assert on membership rather than truncation.

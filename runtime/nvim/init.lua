@@ -382,11 +382,24 @@ function _G.wolf_setup_layout(chan)
 		})
 	end
 
+	-- DRAWER OPEN: report the newly created terminal-drawer window. Unlike a split
+	-- this carries no `from`/`orientation` -- the front-end renders the drawer as a
+	-- full-width, root-bottom pane held OUTSIDE its pure PaneTree. Reached from
+	-- `wolf_toggle_terminal` (a module-level global) once the layout channel is set.
+	local function emit_drawer(win)
+		vim.rpcnotify(chan, "wolf_layout", {
+			action = "drawer_open",
+			win = win,
+		})
+	end
+
 	-- Expose the helpers as globals so the cnoreabbrev Ex-command overrides below
-	-- can invoke them from the command line via `lua ...`.
+	-- can invoke them from the command line via `lua ...` (and so `wolf_toggle_terminal`
+	-- can emit the drawer intent over this setup's layout channel).
 	_G.wolf_do_split = do_split
 	_G.wolf_do_close = do_close
 	_G.wolf_do_focus = do_focus
+	_G.wolf_emit_drawer = emit_drawer
 
 	-- Normal-mode window chords. `noremap` (the default) fully replaces the native
 	-- behavior, so a focus chord is genuinely a no-op-on-nvim pure intent.
@@ -406,6 +419,32 @@ function _G.wolf_setup_layout(chan)
 	map("n", "<C-w><Up>", function() do_focus("up") end, silent)
 	map("n", "<C-w>l", function() do_focus("right") end, silent)
 	map("n", "<C-w><Right>", function() do_focus("right") end, silent)
+
+	-- Terminal-mode window chords so the drawer is keyboard-navigable WITHOUT first
+	-- leaving terminal-insert. A `t`-mode function RHS fires the pure focus intent
+	-- (`from` = the drawer window) without forwarding `<C-w>` to the shell. TRADEOFF:
+	-- this shadows the shell's `<C-w>` word-erase inside the terminal -- accepted per
+	-- the user's request. `<C-w>k` bridges drawer -> editor; the others are handled
+	-- front-end-side (drawer is full-width, so h/l are no-ops there).
+	map("t", "<C-w>h", function() do_focus("left") end, silent)
+	map("t", "<C-w>j", function() do_focus("down") end, silent)
+	map("t", "<C-w>k", function() do_focus("up") end, silent)
+	map("t", "<C-w>l", function() do_focus("right") end, silent)
+
+	-- Re-entry: auto-enter terminal-insert when focus lands IN the drawer (via
+	-- `<C-w>j` from the editor, which drives `nvim_set_current_win` and fires
+	-- WinEnter). Matched on the drawer's identity (`b:wolf_terminal` +
+	-- `buftype == 'terminal'`) so it never yanks back from a deliberate
+	-- `<C-\><C-n>` (same window, no WinEnter). VS Code parity.
+	local terminsert = vim.api.nvim_create_augroup("WolfTerminalInsert", { clear = true })
+	vim.api.nvim_create_autocmd({ "WinEnter", "BufWinEnter" }, {
+		group = terminsert,
+		callback = function()
+			if vim.b.wolf_terminal and vim.bo.buftype == "terminal" then
+				vim.cmd("startinsert")
+			end
+		end,
+	})
 
 	-- Ex-command overrides via cnoreabbrev. A command-line abbreviation expands
 	-- only a WHOLE word, guarded by getcmdtype()==':' so it never fires inside a
@@ -499,6 +538,56 @@ function _G.wolf_close_tabpage(handle)
 		return
 	end
 	pcall(vim.cmd, n .. "tabclose")
+end
+
+-- Toggle the per-project terminal drawer. The terminal BUFFER is a single shared
+-- buffer for this nvim instance (tagged b:wolf_terminal); the drawer WINDOW is
+-- per-tabpage. Hiding closes the window only -- the terminal buffer/job persist
+-- (VS Code behavior). Recreated on demand if the user exited the shell.
+function _G.wolf_toggle_terminal()
+	-- 1. Find the tagged terminal buffer (buffers are global to the nvim).
+	local termbuf = nil
+	for _, b in ipairs(vim.api.nvim_list_bufs()) do
+		if
+			vim.api.nvim_buf_is_valid(b)
+			and vim.b[b].wolf_terminal
+			and vim.bo[b].buftype == "terminal"
+		then
+			termbuf = b
+			break
+		end
+	end
+
+	-- 2. If a window in the CURRENT tabpage shows it, hide (close) that window.
+	--    Closing the window keeps the terminal buffer + job alive.
+	if termbuf then
+		for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+			if vim.api.nvim_win_get_buf(w) == termbuf then
+				vim.api.nvim_win_close(w, false)
+				return
+			end
+		end
+	end
+
+	-- 3. Otherwise open a bottom split ~1/3 tall showing the terminal
+	--    (creating + tagging a fresh one if it is gone).
+	local height = math.max(1, math.floor(vim.o.lines / 3))
+	vim.cmd("botright " .. height .. "split")
+	if termbuf and vim.api.nvim_buf_is_valid(termbuf) then
+		vim.api.nvim_win_set_buf(0, termbuf)
+	else
+		vim.cmd("terminal")
+		vim.b.wolf_terminal = true
+	end
+	-- Report the new drawer window so the front-end renders it as a full-width
+	-- root-bottom pane (it lives OUTSIDE the pure PaneTree). `botright split`
+	-- performs the real window op; this intent is what makes it VISIBLE. Guarded
+	-- because the emitter only exists once `wolf_setup_layout` has run.
+	local w = vim.api.nvim_get_current_win()
+	if _G.wolf_emit_drawer then
+		_G.wolf_emit_drawer(w)
+	end
+	vim.cmd("startinsert")
 end
 
 -- Return the tab-local working directory of the tabpage named by its STABLE

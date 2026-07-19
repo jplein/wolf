@@ -14,8 +14,8 @@
 //    minimizeWindow = 4, goToFile = 5, openFile = 6, openFolder = 7,
 //    closePane = 8, newBuffer = 9, resetFontSize = 10, increaseFontSize = 11,
 //    decreaseFontSize = 12, commandPalette = 13, copy = 14, paste = 15,
-//    bufferPicker = 16, newTab = 17, preview = 18, edit = 19 (the range 0..19).
-//    Any out-of-range discriminant decodes to `nil`.
+//    bufferPicker = 16, newTab = 17, preview = 18, edit = 19, terminal = 20 (the
+//    range 0..20). Any out-of-range discriminant decodes to `nil`.
 //
 //  NOTE to coder: this references the pure `WolfKeyMap.CommandKind` enum the coder
 //  adds in `Sources/WolfKeyMap/CommandSeam.swift` (Foundation only, no AppKit),
@@ -60,12 +60,17 @@ final class CommandSeamTests: XCTestCase {
     XCTAssertEqual(CommandKind(ffi: 17), .newTab, "ffi 17 -> .newTab")
     XCTAssertEqual(CommandKind(ffi: 18), .preview, "ffi 18 -> .preview")
     XCTAssertEqual(CommandKind(ffi: 19), .edit, "ffi 19 -> .edit")
+    XCTAssertEqual(CommandKind(ffi: 20), .terminal, "ffi 20 -> .terminal")
   }
 
   // MARK: - out-of-range discriminants decode to nil
 
+  // The first out-of-range probe tracks the registry's high-water mark: it was 20
+  // while `edit` was the last case, and moves to 21 now that `terminal` claims 20.
+  // Appending a command WITHOUT bumping this probe turns the new case's decode into
+  // a silent nil assertion, so it must be updated in lockstep with the enum.
   func testCommandKindOutOfRangeIsNil() {
-    XCTAssertNil(CommandKind(ffi: 20), "the first out-of-range discriminant -> nil")
+    XCTAssertNil(CommandKind(ffi: 21), "the first out-of-range discriminant -> nil")
     XCTAssertNil(CommandKind(ffi: 255), "a far out-of-range discriminant -> nil")
   }
 }

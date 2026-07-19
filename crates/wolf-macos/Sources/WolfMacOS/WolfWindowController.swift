@@ -549,6 +549,11 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     handle?.new_buffer()
   }
 
+  /// Toggles this window's per-project terminal drawer (`:WolfTerminal`).
+  func toggleTerminal() {
+    handle?.toggle_terminal()
+  }
+
   // MARK: - Edit commands
 
   /// Copies the current visual-mode selection to the system clipboard. Yanks

@@ -1,235 +1,347 @@
-# Plan: Align statusbar left edge with preview content
+# Plan: Merge feat/terminal-drawer into main
 
-## Status: COMPLETE (pending visual confirmation)
+## Status: COMPLETE — merged and verified
 
-- `WolfKeyMapTests` passes cold (`--nocache_test_results`): 171 tests, 0 failures, including exactly 13 `StatusbarTextSpanTests`. All `//crates/wolf-macos/...` targets build and pass; `swift_format` clean. Rust side unregressed (`markdown_render`, `wolf_core_lib_test` both pass).
-- Reviewer: **Approved**, editor branch verified algebraically identical. Two notes raised, both closed.
+**Final verification (cold, `--nocache_test_results`): 57/57 tests pass. `//tools/lint:check` 4/4. `//crates/wolf-macos:Wolf` builds.** `WolfKeyMapTests` = 220 Swift cases, 0 failures, including the new `DrawerFocusSeamTests` (8), `DrawerLayoutTests` (5), `CommandSeamTests` (2).
 
-### Corrections to this plan's own text
+### Deltas from this plan, discovered during execution
 
-**§2's claim "during a live resize both are stale together" is WRONG**, and the doc comment written from it overclaimed. The reviewer verified: the statusbar span is recomputed from live geometry on every `draw(_:)`, so it is _never_ stale — only the webview _frame_ lags. `setFrameSize` (~633-637) and `applyMetrics` (~464-471) both repaint without calling `syncPreviewWebViews`. `applyMetrics` is the sharper case: a font-size change moves `cellWidth` (hence `cap` and `paintOffsetX`) _and_ `statusbarHeight` (hence grid rect y/h) at once, shifting the statusbar immediately while the webview stays put; it converges via `syncGridSizes` → `handle.resize` → wake.
+1. **§19's new test could not be written as specified.** `COMMAND_SPECS` is a `const`, not a `static`, so each use site materializes its own promoted array and a pointer-identity check fails on every row. Rewritten as value-equality plus `position()` assertions on `command` and `id`. Reviewer confirmed it genuinely fails on a duplicated or shadowed row — but noted it does NOT catch a straight two-row swap, which remains pinned only by the seven `*_is_at_index_N` guards and the end-to-end drain steps in `//crates/wolf-ffi:commands`.
+2. **§14 edit 7 was under-specified and the branch's version was self-inconsistent.** The branch computed `DrawerLayout` only inside the drawer branch and passed raw `paneAreaHeight` to `tree.neighbor` — wrong once edit 3 makes `paneRects()` tile over `dl.editorHeight`. The construction was hoisted above both branches and `dl.editorHeight` passed through. Provably a no-op with no drawer open (`DrawerLayout.init` false branch is an exact passthrough).
+3. **§5 understated the auto-merged `toggle_terminal`.** It arrived in a form `rustfmt` rejected and failed `//tools/lint:rustfmt_core`. Merge-introduced, so fixed.
+4. **§13 understated the `viewMenuItem` doc change.** Main's doc comment was already stale pre-merge (listed neither Buffer Picker nor Preview nor Edit Source), so the whole list needed rewriting, not a clause appended.
+5. **Correction (c) was a non-issue in practice.** The regenerated bindings were byte-identical to the auto-merged state — `mod command_kind` is private and non-bridged, so its constants never cross into the generated header. Now verified rather than assumed.
+6. **§18's `crates/wolf-core/tests/README.md` reference was wrong.** That file has no `palette_rank` static-row count and never did; the line the plan pointed at is the `command.rs` unit-test paragraph, which was correctly updated. No work dropped.
+7. **`Sources/README.md` file count was wrong on BOTH sides** (HEAD "Twenty-seven", branch "Twenty-one"); actual is 29.
+8. **Two stale doc sentences contradicted the new `applyFocus`** (`Sources/README.md:56`, `README.md:89`) — caught by the reviewer as the sole blocker, fixed.
+9. **`build.md`'s "47/47" was stale** → corrected to 53/53. The malformed `//crates/wolf-core:...` target pattern turned out to live in this plan file, not `build.md`.
 
-The guarantee that DOES hold, and is what the shipped doc comment now says: the pane-kind map and the webview set are written together in one `syncPreviewWebViews` pass, so a pane is never drawn with `.preview` alignment when it has no webview. The frame lag is pre-existing and orthogonal.
+### Known-remaining, non-blocking
 
-### Other deltas from the plan
+- `crates/wolf-ffi/README.md:103` — the `command_kind` table is collapsed onto one line and renders as a paragraph. **Pre-existing on main**, correctly extended with Terminal; left alone to avoid merge churn.
+- `crates/wolf-ffi/src/README.md:41-43` — a sentence breaks mid-clause into a spurious list item. Present identically in both parents.
+- The §21 GUI-toolkit dep query can never print `clean`: `glibc` in `libc`'s source paths matches the `glib` substring. Pattern needs tightening to stay usable as a gate.
+- §19's manual edge cases (split-from-drawer no-op, preview webview reframing, drawer-close focus re-homing) remain compile-and-smoke only — the same coverage posture as the rest of `PaneContainerView`.
 
-1. **13 tests, not 12.** Added `testEditorSpanEqualsTheLegacyExpressionAcrossTheCapThreshold` — a sweep asserting the `.editor` span equals the longhand legacy expression at 10 widths × 2 `gridLeft` values, straddling the cap in both directions. Case 2 alone pinned only a single point, and "editor panes stay bit-identical" is the top risk.
-2. **The wide test cases were unrealistic.** They paired `gridWidth = 1400` with a hard-coded `paintOffsetX = 250`, but the real value is 340 — the `expectedPaintOffsetX` helper existed to model that and was only used by two cases. Now derived. Cases 4 and 5 also gained `offset > 0` guards, since the central assertion in case 5 (`editor.left - preview.left == paintOffsetX`) passes vacuously at zero.
-3. **`w` used in both branches**, not the plan's raw `gridWidth` for `.editor`. Reviewer confirmed value-identical for _every_ input, not just negatives.
-4. **Two pre-existing undocumented seams closed.** `Sources/README.md` said "Twenty-four files" — true before this change, but `TreeChildrenMemo.swift` and `TreeRefreshGate.swift` had no bullets at all, so the corrected count of 25 disagreed with a 23-entry list. Both now documented; sweep confirms 25 files ↔ 25 bullets.
+---
 
-### Confirmed as planned
+## Original plan follows
 
-- **Right edge fixed for free** — `.preview` spans the whole grid rect, so `textRight == gRect.maxX == web.frame.maxX`. No extra work.
-- **`pumAnchorX` is NOT the same defect** — view-wide cmdline overlay, no pane/grid rect in scope, already self-consistent with `CmdlineView`. Left alone, with a doc sentence so nobody "fixes" it by analogy.
-- **GNOME front-end** has zero statusbar code (grepped `statusbar|status_bar|statusline`). **Rust core** unchanged — strings only, no geometry crosses the FFI.
-
-### Outstanding — rests on visual review
-
-That the preview statusbar's left edge lands on the rendered content's left edge **on screen** spans `paintStatusbar`, `syncPreviewWebViews`, and `base.css`'s flush padding. No unit test pins it. **Only observable on a pane wider than 90 cells** — in a typical vertical split each pane is under the cap, `paintOffsetX == 0`, and the two kinds coincide, so a reviewer testing in a split will see no difference at all.
-
-### Noted, not acted on
-
-- SourceKit reports "No such module" for `XCTest`/`WolfFFI` in the editor. Confirmed artifacts: the worktree has no `compile_commands.json`, `buildServer.json`, `.bsp/`, or `.xcodeproj`, so SourceKit falls back to standalone parsing. Both files are Bazel-compiled sources (verified by `bazel query`) and both targets build clean.
-- The two new files are **untracked** and need `git add` before commit.
-- `WolfMacOS/`'s 33-bullet README list was not audited against its directory; only `WolfKeyMap/` was swept.
 
 ## Problem statement
 
-On a Markdown preview pane wider than 90 cells, the statusbar's left edge does not line up with the preview content's left edge — it sits where editor text _would_ be.
+A merge of `feat/terminal-drawer` into `main` is **already in progress** in the working tree. Do **not** run `git merge --abort`. 23 files are conflicted (`UU` in `git status`).
 
-`paintStatusbar` (`crates/wolf-macos/Sources/WolfMacOS/PaneContainerView.swift` ~1219) computes the text origin as `gRect.minX + geo.paintOffsetX` — correct for editor panes, whose grid is painted at that same offset (`paintGrid` ~1198-1201). But `syncPreviewWebViews` (~836-838) frames the preview `WKWebView` to the **uncentered** `gridRect`, and the preview CSS is flush (`body.wolf-markdown { margin: 0; padding: 0 }`, a recent intentional change).
+Merge base is `919ab85`. Since then `main` absorbed a large typography / markdown-preview merge (~28k lines), and `feat/terminal-drawer` developed in parallel (31 commits).
 
-`paintOffsetX` is the centering inset applied when a pane exceeds `maxGridCols = 90` cells. So on a wide preview pane the statusbar text is indented relative to its own content by an amount that grows with pane width.
+Both sides appended to the **append-only** `COMMAND_SPECS` registry in `crates/wolf-core/src/command.rs`, where slice index == enum discriminant == FFI `command_kind` wire value (an ABI contract, confirmed by the architect at `command.rs:24-36` and `:134-135`, enforced by the `*_is_at_index_N` tests and the exhaustive `FfiCommand::from_command` match at `lib.rs:2336-2362`).
 
-## Fix direction (fixed, do not revisit)
+- `main` (HEAD) added `Preview` (18), `Edit` (19); count 20.
+- `feat/terminal-drawer` added `Terminal` (18); count 19.
 
-Align the **statusbar** to the **preview content**: for preview panes, do not add `paintOffsetX`, so the text lands at `gRect.minX`, matching the webview frame. **Do NOT center the webview instead** — that caps preview line length and is a different change than requested. **Editor panes must be bit-identical.**
+**Resolution: keep both. `Terminal` renumbers to 20 and becomes the LAST row. `Preview` stays 18, `Edit` stays 19. `EXPECTED_COMMAND_COUNT` = 21.**
+
+## Corrections to the original premise (found by the architect — read these)
+
+**(a) `crates/wolf-ffi/tests/terminal.rs` needs ZERO edits.** The original brief guessed it asserted on command discriminant 18. It does not — it drives `WolfCoreHandle::toggle_terminal()` directly (deliberately, per its header at lines 26-28). Its only discriminant assertion is `INTENT_KIND_DRAWER_OPEN: u8 = 2` (line 89), which is the **layout-intent** table, unaffected by this merge.
+
+**(b) The merge carries a second, separate ABI addition** — `intent_kind::DRAWER_OPEN = 2` / `LayoutIntent::DrawerOpen { win }`. It **auto-merged cleanly** and is unaffected by the command renumbering. Do not disturb it, nor: the `"drawer_open"` arm in `layout.rs::from_payload` + its two unit tests; `toggle_terminal()` at `lib.rs:480-482`/`1902-1907` and `api.rs:626`; the `FfiLayoutIntent::from_intent` arm at `lib.rs:2298`.
+
+**(c) `generated/wolf-ffi.h` and `generated/wolf-ffi.swift` auto-merged into an UNVERIFIED state.** Not conflicted ≠ correct. They are a textual union of both sides and must still be regenerated (§7).
+
+**(d) The two sides use different Swift indentation.** `main` is **2-space** (swift-format has been run); the branch is **4-space**. Every conflicted Swift file shows this. The merged result must be 2-space throughout, including the four cleanly-added drawer files, or `//tools/lint:swift_format` churns.
 
 ---
 
-# Architect's plan
+## 3. `crates/wolf-core/src/command.rs` — the anchor file
 
-## 1. The extracted seam
+Resolve first; everything derives from it.
 
-**New file: `crates/wolf-macos/Sources/WolfKeyMap/StatusbarTextSpan.swift`**
+### Final ordered `COMMAND_SPECS` (21 rows)
 
-```swift
-import Foundation
+| idx | variant | id | ex_command | title | menu |
+|----|---------|----|-----------|-------|------|
+| 0 | `NewWindow` | `new_window` | `WolfNewWindow` | New Window | File |
+| 1 | `CloseWindow` | `close_window` | `WolfCloseWindow` | Close Window | File |
+| 2 | `QuitApplication` | `quit_application` | `WolfQuitApplication` | Quit Wolf | App |
+| 3 | `HideApplication` | `hide_application` | `WolfHideApplication` | Hide Wolf | App |
+| 4 | `MinimizeWindow` | `minimize_window` | `WolfMinimizeWindow` | Minimize | Window |
+| 5 | `GoToFile` | `go_to_file` | `WolfGoToFile` | Go to File… | File |
+| 6 | `OpenFile` | `open_file` | `WolfOpenFile` | Open File… | File |
+| 7 | `OpenFolder` | `open_folder` | `WolfOpenFolder` | Open Folder… | File |
+| 8 | `ClosePane` | `close_pane` | `WolfClosePane` | Close | File |
+| 9 | `NewBuffer` | `new_buffer` | `WolfNewBuffer` | New | File |
+| 10 | `ResetFontSize` | `reset_font_size` | `WolfResetFontSize` | Reset Font Size | View |
+| 11 | `IncreaseFontSize` | `increase_font_size` | `WolfIncreaseFontSize` | Increase Font Size | View |
+| 12 | `DecreaseFontSize` | `decrease_font_size` | `WolfDecreaseFontSize` | Decrease Font Size | View |
+| 13 | `CommandPalette` | `command_palette` | `WolfCommandPalette` | Command Palette… | View |
+| 14 | `Copy` | `copy` | `WolfCopy` | Copy | Edit |
+| 15 | `Paste` | `paste` | `WolfPaste` | Paste | Edit |
+| 16 | `BufferPicker` | `buffer_picker` | `WolfBufferPicker` | Buffer Picker… | View |
+| 17 | `NewTab` | `new_tab` | `WolfNewTab` | New Tab | File |
+| 18 | `Preview` | `preview` | `WolfPreview` | Preview | View |
+| 19 | `Edit` | `edit` | `WolfEdit` | Edit Source | View |
+| **20** | **`Terminal`** | **`terminal`** | **`WolfTerminal`** | **Terminal** | **View** |
 
-public enum PaneContentKind {
-  case editor
-  case preview
-}
+### Edits
 
-public struct StatusbarTextSpan {
-  public let left: Double
-  public let width: Double
+- **Enum doc (conflict ~30-35).** Take HEAD's text, extend the trailing list to `` `BufferPicker`(16), `NewTab`(17), `Preview`(18), `Edit`(19), `Terminal`(20). Adding a command is additive `` + HEAD's existing continuation.
+- **Enum body (conflict ~79-89).** Keep HEAD's `Preview` then `Edit`, then append the branch's `Terminal` variant with its doc comment.
+- **`COMMAND_SPECS` (conflict ~267-286).** Keep HEAD's `Preview` and `Edit` rows verbatim, then append a full `CommandSpec` row for `Terminal`. **The conflict is badly aligned** — the branch's `menu: MenuGroup::View,\n},` tail is *shared* text, so construct the two closing rows carefully rather than mechanically deleting one side.
+- **`EXPECTED_COMMAND_COUNT` (~316-327)** → `21`, doc updated to name Preview (18), Edit (19), Terminal (20).
+- **Index consts (~349-370).** `NEW_TAB_INDEX = 17` (keep HEAD's doc). `PREVIEW_INDEX = 18` unchanged. `EDIT_INDEX = 19` — change doc from "LAST row" to "no longer the last row after `Terminal` is appended at 20". Add `TERMINAL_INDEX: usize = 20` with the "appended discriminant 20 and LAST row" doc.
+- **`command_specs_has_expected_len` (~393-412).** Doc + message string → "…Copy, Paste, BufferPicker, NewTab, Preview, Edit, and Terminal … exactly 21 rows".
+- **`new_tab_is_at_index_17` doc (~545-551).** Take HEAD's wording; still accurate.
+- **Final test block (~561-664).** Keep HEAD's `preview_id_round_trips`, `preview_spec_fields`, `preview_is_at_index_18`, `edit_id_round_trips`, `edit_spec_fields` verbatim. Then:
+  - **Rename `edit_is_the_last_row` → `edit_is_at_index_19`.** Drop its `EDIT_INDEX == COMMAND_SPECS.len() - 1` assertion entirely — Edit is no longer final. Keep only the row-identity assertion. Update the doc to the "stays at fixed index 19" pattern.
+  - Append the branch's `terminal_id_round_trips`, `terminal_spec_fields`, `terminal_is_the_last_row` — with `TERMINAL_INDEX` = 20. The "is FINAL" assertion moves here and is the only one of its kind.
 
-  public init(gridLeft: Double, gridWidth: Double, paintOffsetX: Double, kind: PaneContentKind)
-}
+---
+
+## 4. `crates/wolf-core/tests/palette_rank.rs`
+
+**`STATIC_COMMAND_COUNT = 20`.** Derivation verified against code, not assumed: `rank_palette` (`crates/wolf-core/src/palette.rs:89-103`) iterates `for spec in COMMAND_SPECS` with exactly one `continue`, guarded by `if spec.command == Command::CommandPalette`. No other filter, no `MenuGroup` gating, no "is markdown active" check, no dedup. Sections (2)/(3) append only window/recent-dir rows, empty in the `rank_palette(&[], &[], &[], "", …)` calls these assertions use. So static rows == `COMMAND_SPECS.len() - 1` == 21 - 1 == **20** — correct *because* exactly one spec self-excludes, not by arithmetic coincidence.
+
+Two count-only consumers, no other edits: `command_palette_is_excluded_and_static_rows_present` (~line 100), `empty_inputs_yield_only_static_rows` (~line 238).
+
+Resolve the conflict (~35-47) with one merged doc comment: 21 registered commands (appended at 14-20) yield 20 static rows; Preview, Edit and Terminal are all NEW palette static rows (OD4 — the palette does not gate them on active buffer/pane, unlike the menu items).
+
+`query_filters_to_and_subsequence_matches` still holds (`rows.len() == 3` for `"font size"`; none of "Preview"/"Edit Source"/"Terminal" contains both tokens).
+
+---
+
+## 5. `crates/wolf-core/src/input.rs`
+
+Pure adjacent-append; keep both, HEAD first.
+
+- **Conflict ~245-280.** Keep HEAD's `SetBackground { dark: bool }` variant *and* HEAD's `impl InputEvent { … is_toast_dismissing … }` block. Then insert the branch's `ToggleTerminal` variant **inside the enum, after `SetBackground`, before the enum's closing brace**. ⚠️ The conflict markers are misleadingly placed: the branch side puts `ToggleTerminal` *after* HEAD's `impl` block, which would be a syntax error. Be deliberate about brace placement.
+- **Conflict ~420-431 (`apply_input` match).** Keep both arms: HEAD's `SetBackground` block, then `InputEvent::ToggleTerminal => toggle_terminal(nvim).await,`.
+- The free `async fn toggle_terminal(nvim: &Nvim)` (~531-546) auto-merged; leave it.
+
+---
+
+## 6. `crates/wolf-ffi/src/lib.rs`
+
+- **`mod command_kind` (~197-205).** Keep `PREVIEW = 18`, `EDIT = 19`, append `TERMINAL: u8 = 20` with doc.
+- **Bridge doc (~783-787)** and **`FfiCommand::kind` doc (~2323-2327)** → range ends at `` `TERMINAL` ``.
+- **`FfiCommand::from_command` match (~2356-2361).** Keep Preview/Edit arms, append `Command::Terminal => command_kind::TERMINAL,`. Exhaustive, no `_` fallback → omitting it is a compile error (useful early signal).
+
+Do **not** touch `mod intent_kind`, the `toggle_terminal` bridge decl/impl, or the `LayoutIntent::DrawerOpen` arm.
+
+---
+
+## 7. Regenerating the FFI bindings
+
+After `lib.rs` resolves and `//crates/wolf-ffi:wolf_ffi` builds — **do not hand-edit** `generated/wolf-ffi.h` / `wolf-ffi.swift`:
+
+```sh
+bazel run //crates/wolf-ffi:gen_bindings
 ```
 
-`Double`-based, Foundation-only (no `CGFloat`/CoreGraphics), matching `EditorInset` / `PaneGeometry` / `StatusbarLayout`. Scalars rather than a `Rect` — the caller holds a `CGRect` and needs `CGFloat` back, so two scalars keep the conversion to two casts each way.
+Documented at `crates/wolf-ffi/README.md:211` and `build.md:157` ("Regenerating the swift-bridge bindings"). It is a `rust_binary` (`crates/wolf-ffi/BUILD.bazel:81`) over `src/bin/gen_bindings.rs`, writing in-tree via `BUILD_WORKSPACE_DIRECTORY` — only `bazel run` provides that. Then `git add crates/wolf-ffi/generated/`.
 
-**Placement rejections:**
-
-- **`StatusbarLayout`** — its init takes _font sizes_; this takes _rect scalars + pane kind_. No shared input. It is documented in three places (file header, `Sources/README.md:23`, `Tests/README.md:53`) as specifically the **vertical** math; widening it invalidates all three descriptions of an otherwise stable seam.
-- **`EditorInset`** — deliberately **pane-local** (its `gridRect` origin is the pane's top-left) and knows nothing about the 90-column cap or centering. Feeding `paintOffsetX` in would make it depend on a concept it correctly does not model. `textLeftInset` (`== padding`) is the _pane-local_ left inset and stays exactly as-is.
-- **`PaneGeometry`** — models the grid, not the statusbar; has no notion of content kind and should not acquire one.
-
-One-type-per-file with its own `Sources/README.md` bullet is the established convention (`PickerPanelSeam`, `EditorInset`, `StatusbarLayout`).
-
-### Arithmetic
-
-Let `w = max(0, gridWidth)` and `offset = min(max(0, paintOffsetX), w)` — the clamp handles a negative `paintOffsetX` (impossible today, defensive) and an offset larger than the grid, so `width` never goes negative and `left` never passes the grid's right edge.
-
-- `.editor`: `left = gridLeft + offset`, `width = max(0, gridWidth - offset)`
-- `.preview`: `left = gridLeft`, `width = w`
-
-The editor branch reproduces today's expression **exactly** (`gRect.maxX - (gRect.minX + offset) == gridWidth - offset`), so editor panes are bit-identical. Only the clamp is new, and it is a no-op for every real input.
-
-### Call-site rewrite (paintStatusbar, replacing 1236-1242, merging with 1249-1260)
-
-1. Hoist a **single** preview lookup above the geometry block: `let previewName = previewNamesByGrid[grid]`.
-2. Fetch `gRect` and `geo` as today, then construct `StatusbarTextSpan(gridLeft: Double(gRect.minX), gridWidth: Double(gRect.width), paintOffsetX: geo.paintOffsetX, kind: previewName != nil ? .preview : .editor)`; derive `textLeft = CGFloat(span.left)`, `textWidth = CGFloat(span.width)`.
-3. Change the filename branch at 1251 from `if let name = previewNamesByGrid[grid]` to `if let name = previewName` — one lookup, one source of truth for "is this a preview".
-
-`primaryRect` / `secondaryRect` (1288-1296) unchanged; they already consume `textLeft`/`textWidth`.
-
-## 2. Pane kind: reuse `previewNamesByGrid`
-
-**Recommendation: reuse the existing lookup.** Do not thread a new parameter or store a kind on `PaneBinding`.
-
-- `paintStatusbar` already reads that map two lines below the geometry it must affect, and `drawScrollbars` (~1390) already uses exactly this predicate for exactly this purpose. A third mechanism for the same fact is a divergence risk.
-- It is the only live record of preview-ness in scope at paint time. Deriving kind from `PaneBinding` would require re-querying `handle.previews()` during `draw(_:)` — an FFI call in the paint path, which nothing else does.
-
-### Ordering hazard — assessed, NOT a problem
-
-`syncPreviewWebViews()` runs at `onRenderWake` (~728, and ~715 on the refocus-rebind path) and is the **same function** that both rebuilds `previewNamesByGrid` (~811, 827) and sets `web.frame = gRect` (~838). `needsDisplay = true` follows at ~730; AppKit's `draw(_:)` runs later in the run loop, never synchronously inside `onRenderWake`. So on any frame after a wake, the map and the webview frames were written **atomically in the same pass**.
-
-The other `needsDisplay = true` sites (471, 513, 637, 644, 936, 1463, 1474, 1484, 1611) repaint without rebuilding the map — but they also do not move the webview (`setFrameSize` ~633 calls only `syncGridSizes` + `refreshOverlays`). During a live resize both are stale together and converge on the wake `syncGridSizes` provokes. Pre-existing lag; this change neither creates nor worsens it.
-
-**Failure mode if it were wrong** (recorded so a future reader recognizes it): a single-frame flash where a just-opened preview's statusbar is still indented while the HTML is flush. It does not occur. **The coder must not move the `previewNamesByGrid` rebuild out of `syncPreviewWebViews`, and must not reorder `syncPreviewWebViews()` after `needsDisplay = true`** — that atomicity is load-bearing and belongs in the doc comment.
-
-## 3. Geometry, independently derived
-
-`pad = EditorInset.padding = 20`, `cap = 90 * cellWidth`. `gridRect(ofPane:)` → `gRect.minX = P.minX + 20`, `gRect.width = max(0, P.width - 40)`. `geometry(for: gRect)` passes `gRect` as `paneRect`, so `paintOffsetX = max(0, (gRect.width - min(gRect.width, cap)) / 2)`.
-
-| case | gRect.width | paintOffsetX | editor textLeft | preview textLeft | textWidth |
-| --- | --- | --- | --- | --- | --- |
-| narrow (< 90 cells) | `< cap` | 0 | `P.minX + 20` | `P.minX + 20` | `gRect.width` |
-| wide (> 90 cells) | `> cap` | `(gRect.width - cap)/2` | `P.minX + 20 + offset` | `P.minX + 20` | editor `gRect.width - offset`; preview `gRect.width` |
-
-**Preview matches the webview exactly:** `web.frame = gridRect(ofPane:)` so `web.frame.minX == gRect.minX == P.minX + 20`, and the CSS is flush. Preview `textLeft == web.frame.minX`. Confirmed.
-
-**Right edge — fixed for free.** For previews `textWidth = gRect.width` gives `textRight == gRect.maxX == web.frame.maxX`. `.preview` simply spans the whole grid rect and **both** edges land on the webview frame. No extra work needed.
-
-For **editors**, `textRight` remains `gRect.maxX` — i.e. `paintOffsetX` past the centered grid's right column. This is a **pre-existing** asymmetry, invisible in practice (it only widens the tail-truncation budget of a long path on a wide pane). **Out of scope — do not "fix" it**; changing it would alter editor truncation behavior, contradicting "editor panes completely unaffected". The `.editor` branch deliberately preserves it.
-
-## 4. The strip itself does not change
-
-`statusbarRect(ofPane:)` (~384) spans the full pane width and is unchanged; the background fill (`ctx.fill(strip)` ~1234) must keep covering the whole pane width for both kinds. Only the **text** is inset. No edit to `statusbarRect`, no edit to the fill.
-
-## 5. Test plan
-
-**Approach confirmed.** Swift unit tests over a pure `WolfKeyMap` seam is right here; CLAUDE.md's "start a real Neovim process" preference does not bite because no Neovim state participates — pane kind arrives as an enum, the rest is rect arithmetic. Mirrors `StatusbarLayoutTests` / `PaneGeometryTests` / `EditorInsetTests`. The extraction exists _precisely so_ there is something testable.
-
-**File:** `crates/wolf-macos/Tests/WolfKeyMapTests/StatusbarTextSpanTests.swift` **Target:** the Bazel `swift_test` named `WolfKeyMapTests` in `crates/wolf-macos/BUILD.bazel` (~193). `srcs` lists are **explicit, not globbed**, for both the library (~45) and the test (~195) — both need an entry. There is no SwiftPM `Package.swift`; Bazel only.
-
-Follow sibling style: file header stating the contract, `eps: Double = 1e-9`, helper constructors.
-
-Cases:
-
-1. **Editor, narrow** (`paintOffsetX == 0`) — `left == gridLeft`, `width == gridWidth`.
-2. **Editor, wide** (`gridWidth = 1400`, `paintOffsetX = 250`) — `left == gridLeft + 250`, `width == 1150`; assert `left + width == gridLeft + gridWidth` (pins that the editor right edge is preserved, not silently changed).
-3. **Preview, narrow** — identical to case 1. Pins that the fix is a no-op below the cap.
-4. **Preview, wide** — `left == gridLeft` (ignores `paintOffsetX`), `width == gridWidth`; assert `left + width == gridLeft + gridWidth`.
-5. **Kind-difference invariant** — same wide inputs: `editor.left - preview.left == paintOffsetX`; same narrow inputs: both `left` and `width` equal. **This is the assertion that most directly encodes the bug.**
-6. **Non-zero `gridLeft`** — `20` and `512` (a right-hand split), both kinds: `left` is absolute, never pane-local.
-7. **Zero-width pane** — `gridWidth == 0`, `paintOffsetX == 0`, both kinds: `width == 0`, `left == gridLeft`, no negative output.
-8. **Pane narrower than the padding** — `gridWidth == 0` (what `EditorInset` clamps a sub-`2*padding` pane to) with `gridLeft` beyond the pane's right edge: `width == 0`, no negative. Comment that `EditorInset` produces the clamped 0.
-9. **`paintOffsetX` larger than the grid** — `gridWidth = 100`, `paintOffsetX = 400`: editor `width == 0` and `left == gridLeft + 100` (never past the right edge); preview unaffected.
-10. **Negative `paintOffsetX`** (defensive) — clamps to 0; editor equals the narrow case.
-11. **Exact boundary** — `gridWidth == 90 * cellWidth` exactly → `paintOffsetX == 0`, both kinds identical. Pins continuity across the cap threshold.
-12. **Universal invariants helper** (mirroring `assertInvariants` in `StatusbarLayoutTests`) over every case: `width >= 0`, `left >= gridLeft`, `left + width <= gridLeft + max(0, gridWidth)`.
-
-### What this CANNOT test
-
-That the statusbar origin and the _live_ `WKWebView` frame coincide on screen is an integration property spanning `paintStatusbar`, `syncPreviewWebViews`, and the CSS's zero left padding. No unit test can pin it. Mitigations, in order of value:
-
-- **Pin the shared expression, not the two consumers.** Both derive from the _same_ `gridRect(ofPane:)` call. State this in **both** doc comments: the preview statusbar's left edge is `gridRect(ofPane:).minX` **because** that is the webview's frame origin, and the two must change together.
-- A Rust-side assertion that `base.css` keeps `margin: 0; padding: 0` would pin the CSS half. Check whether `crates/wolf-core` already has such a test; if not, **do not add one** — separate concern, low value.
-- The remainder rests on visual review: open a preview in a window wider than 90 columns, confirm the statusbar filename's left edge sits on the first heading's left edge.
-
-**Do not attempt an AppKit/XCTest UI test** — no such harness exists here and adding one is disproportionate.
-
-## 6. `pumAnchorX` — leave it, it is NOT the same defect
-
-`pumAnchorX` (~788) returns `EditorInset.padding + <rendered prefix width>`, no `paintOffsetX`, no pane rect.
-
-1. **Different coordinate space and anchor.** The popup is positioned in the container view's own `bounds` (~769-771) against the **cmdline**, a bottom-spanning overlay across the whole view — not inside any pane. There is no pane rect, grid rect, or `paintOffsetX` in scope; bare `EditorInset.padding` is correct for a view-wide overlay.
-2. **Already self-consistent.** The popup aligns to the cmdline text, and `CmdlineView` uses the same bare padding. Adding a centering offset would _break_ that agreement, not fix one.
-
-**Leave it and note it.** Add one sentence to its doc comment recording _why_ bare padding is right there, so the next reader doesn't "fix" it by analogy.
-
-## 7. File-by-file
-
-### Create
-
-1. `Sources/WolfKeyMap/StatusbarTextSpan.swift` — per §1. House-style header: what it is, why it is a headless seam, that `.preview` deliberately ignores `paintOffsetX` because the webview is framed to the uncentered grid rect, and that only `width` clamps.
-2. `Tests/WolfKeyMapTests/StatusbarTextSpanTests.swift` — per §5.
-
-### Modify
-
-3. **`crates/wolf-macos/BUILD.bazel`** — add the source to `wolf_key_map` `srcs` (~45) and the test to `WolfKeyMapTests` `srcs` (~195), both alphabetically after the `StatusbarLayout*` entries. Verify the comment block at ~25-33 globs `Tests/WolfKeyMapTests/*.swift` (no change expected there) and that no other explicit list exists.
-4. **`PaneContainerView.swift`** — the call-site rewrite (§1); `paintStatusbar` doc comment (~1216-1218) currently says text is "left-aligned with the grid's text left edge (respecting `PaneGeometry.paintOffsetX`)" → rewrite to state both kinds; `syncPreviewWebViews` doc comment (~799-809) → add that `web.frame = gRect` (uncentered) is what `.preview` mirrors and that rebuilding the map in the same pass keeps them consistent within a frame; `pumAnchorX` doc comment (~783-787) → the §6 sentence. **No change** to `statusbarRect`, `gridRect(ofPane:)`, `geometry(for:)`, `paintGrid`, `drawScrollbars`.
-5. **`crates/wolf-macos/Sources/README.md`** — new `StatusbarTextSpan.swift` bullet after `StatusbarLayout.swift` (~23) in the dense house style (type, `PaneContentKind`, init signature, both branches' arithmetic, the clamp, why preview ignores `paintOffsetX`); update the `StatusbarLayout.swift` bullet to say **vertical** and cross-reference the horizontal sibling; update the `EditorInset.swift` bullet (~29) to clarify `textLeftInset` is the _pane-local_ left padding and that the statusbar's absolute origin additionally depends on pane kind and the centering offset via `StatusbarTextSpan`; update the `PaneContainerView` bullet (~48) where it describes `paintStatusbar`. **Update the module-count phrase at ~6** ("Twenty-four deliberately AppKit-free files" → twenty-five) — **verify the count against the actual directory first**; if already stale, fix it to the true count rather than incrementing.
-6. **`crates/wolf-macos/Tests/README.md`** — add a `StatusbarTextSpanTests` entry alongside `StatusbarLayoutTests` (~53) and `EditorInsetTests` (~95, 101), matching that file's structure. Update any test-count figure.
-7. **`architecture.md`** — **read ~30-90 first.** Line 85 describes preview as "a SECOND kind of pane content: a web view." If that section enumerates consequences of the two-kinds split, add statusbar horizontal alignment (alongside the noted scrollbar suppression). If it is a one-line mention with no consequence list, **leave it alone — do not pad it.** Line 34 unaffected; no Rust change.
-
-### Confirmed NOT changed
-
-- **`crates/wolf-gnome`** — grepped case-insensitively for `statusbar|status_bar|statusline`: **zero matches**. Confirmed out of scope.
-- **`crates/wolf-core/src/pane_status.rs`** — strings only, no geometry crosses the FFI. Confirmed unchanged.
-- **`crates/wolf-core/src/markdown/base.css`** — the flush padding is what this fix aligns _to_. Unchanged. **Never prettier it.**
-
-**No new dependencies.** `StatusbarTextSpan.swift` imports only `Foundation`; the test imports `XCTest` + `@testable import WolfKeyMap`, like its siblings.
-
-## 8. Implementation order
-
-1. Create `StatusbarTextSpan.swift` (compiles standalone against Foundation).
-2. Add to `wolf_key_map` `srcs`; build the library alone to confirm it compiles before anything consumes it.
-3. Create the test file, add to `WolfKeyMapTests` `srcs`, run the target — the seam is now pinned independently of the view.
-4. Rewrite the `paintStatusbar` call site. Build the app target.
-5. Doc comments in `PaneContainerView.swift`.
-6. READMEs + `architecture.md` if warranted, then `prettier --write` on **only** the Markdown files.
-
-Steps 1-3 cannot break the app; step 4 is the only behavioral change and lands after the seam is proven.
-
-## 9. Lint
-
-No ignore directives expected. Watch: swift-format line length (~100 cols, 2-space indent) — the `StatusbarTextSpan(...)` construction will wrap, follow surrounding style. Buildifier — keep both `srcs` lists sorted. Doc-comment coverage — every `public` member in `WolfKeyMap` carries `///`, so `PaneContentKind`, each case, the struct, `left`, `width`, and `init` all need one. Prettier on Markdown only.
-
-## 10. Risks
-
-- **Editor panes regressing** — lowest probability, highest impact. Mitigated structurally (the `.editor` branch is algebraically identical) and by test case 2 asserting `left + width == gridLeft + gridWidth`. **The coder must not "simplify" the editor branch to also drop `paintOffsetX`.**
-- **Exactly 90 cells.** At `gridWidth == 90*cw`, `inset = max(0, 0/2) = 0` → both kinds identical. `paintOffsetX` is **continuous** across the threshold, so no jump or flicker as a window is dragged across it — the gap widens continuously from zero. Pinned by case 11.
-- **A pane changing kind.** Editor→preview: the map insert and the webview frame happen in the same pass, then a redraw; the first frame showing the webview is the first frame using `.preview`. Preview→closed: the map is fully cleared (`removeAll` ~811) and rebuilt at the top of every sync, and `removePreviewWebView` runs in the same pass (~852-854), so stale `.preview` alignment cannot outlive the webview. **The `removeAll`-then-rebuild pattern is what makes this safe — do not convert it to an incremental update.**
-- **Multi-pane splits.** `gridLeft` is absolute; the seam only adds to it. Case 6 covers a non-zero `gridLeft`. Note: in a vertical split each pane is typically **narrower than 90 cells**, so `paintOffsetX == 0` and the kinds coincide — **the bug and the fix are both only observable on wide panes**; a reviewer testing in a split may see no difference. Say so in the manual-smoke note.
-- **Cmdline / pum.** Untouched; `pumAnchorX` shares no state with `paintStatusbar`. Risk is a reviewer applying the new branch by analogy — pre-empted by the §6 doc comment.
-- **Scrollbars.** `drawScrollbars` keeps its own lookup and its own `gridRect` call; the hoisted `previewName` local is scoped to `paintStatusbar`. No change.
-- **Preview webview sync.** Untouched in code. The only new coupling is documentary: `web.frame = gRect` is now load-bearing for the statusbar too. If someone later centers the preview webview (the rejected alternative), they must flip the statusbar back to `.editor` semantics — which is exactly what the cross-referencing doc comments exist to catch.
-- **Live-resize lag.** During a live resize, `setFrameSize` repaints without re-framing the webview, so the two can visibly disagree mid-drag until the wake lands. **Pre-existing** and orthogonal; do not fix here. If it becomes distracting once alignment is noticeable, the follow-up is calling `syncPreviewWebViews()` from `setFrameSize` — a separate change with its own performance question.
+`SwiftBridgeCore.swift`/`.h`, `wolf_ffi_wake.h`, `module.modulemap` are hand-written/runtime-shared and not rewritten. `wolf_ffi_wake.h` should stay byte-identical.
 
 ---
 
-## Workflow log
+## 8. `crates/wolf-ffi/tests/commands.rs`
 
-- [x] Problem statement written
-- [x] Architect plan
-- [x] Tests written (13)
-- [x] Implementation + tests passing (cold run, 171 total)
-- [x] Review (approved; two notes closed)
-- [x] Documentation
-- [ ] Visual confirmation — needs a preview pane wider than 90 cells
+- **Header doc (~26-38)** → `… NEW_TAB = 17, PREVIEW = 18, EDIT = 19, TERMINAL = 20 … guard array asserts contiguous 0..=20.`
+- **Local consts (~114-123).** Keep `CMD_KIND_PREVIEW = 18`, `CMD_KIND_EDIT = 19`; append `CMD_KIND_TERMINAL: u8 = 20`.
+- **Guard comment (~190-196)** → "contiguous 0..=20 … Referencing all twenty-one here".
+- **Guard array (~218-229).** Add `CMD_KIND_TERMINAL,`; expected literal → `[0, …, 20]`; message → "contiguous 0..=20". (`CMD_KIND_TERMINAL` must appear here or it trips `dead_code` — that is the array's stated purpose, see its comment at ~line 197.)
+- **Drain steps (~329-355).** Keep HEAD's `3i` (`:WolfPreview`) and `3j` (`:WolfEdit`) verbatim, append the branch's block **renumbered `3k`** with its comment corrected from "discriminant 18" to **"discriminant 20"**.
+
+---
+
+## 9-13. Swift front-end
+
+**`CommandSeam.swift`** — take HEAD's whole body (2-space), discard the branch's 4-space block. Add `case terminal` after `case edit`; add `case 20: self = .terminal` in `init?(ffi:)`; update the header doc to `` `preview == 18`, `edit == 19`, `terminal == 20` `` and the `init?(ffi:)` doc range to `0` → `.newWindow` .. `20` → `.terminal`.
+
+**`CommandSeamTests.swift`** — HEAD's 2-space bodies for both conflicts.
+- `testCommandKindFfiDiscriminants`: add `XCTAssertEqual(CommandKind(ffi: 20), .terminal, "ffi 20 -> .terminal")`.
+- `testCommandKindOutOfRangeIsNil`: change `CommandKind(ffi: 20)` → **`CommandKind(ffi: 21)`**. Main currently asserts 20 is out of range, which becomes false. Easy to miss; fails loudly if missed.
+- Header comment → `… preview = 18, edit = 19, terminal = 20 (the range 0..20).`
+
+**`CommandDispatcher.swift`** — take HEAD's `dispatch` body in full; add after `case .edit: controller?.editSource()`:
+```
+case .terminal:
+  controller?.toggleTerminal()
+```
+Exhaustive switch, no `default:` → missing case is a compile error.
+
+**`WolfWindowController.swift`** — single conflict (~611-1024). **Take HEAD wholesale** (611-797); the branch side is the pre-rewrite body and contributes exactly one thing. Insert after main's `newBuffer()` (ends ~550), before the `// MARK: - Edit commands` divider:
+```
+/// Toggles this window's per-project terminal drawer (`:WolfTerminal`).
+func toggleTerminal() {
+  handle?.toggle_terminal()
+}
+```
+`handle` is the same optional `WolfCoreHandle?` that `closePane()`/`newBuffer()` use (~543-550) — no new plumbing. `openPreview()` (~688) and `editSource()` (~710) are main's and stay.
+
+**`AppMenu.swift`** — take HEAD for both conflicts (HEAD already has the `modifiers:` parameter on `commandItem`, which the Terminal item needs — no signature work).
+- **Conflict ~18-289 (`Tag` enum).** Keep HEAD's tags through `static let edit = 19`, add `static let terminal = 20`. **Must be 20, not the branch's 18** — tags carry the FFI discriminant into `handleCommandMenuItem`.
+- **Conflict ~335-597.** Keep HEAD's `commandItem` and everything after. In `viewMenuItem` (~170), insert **after** the "Edit Source" item (~212-214) and **before** `menu.addItem(.separator())` (~215):
+```
+menu.addItem(
+  commandItem(
+    title: "Terminal", tag: Tag.terminal, keyEquivalent: "`",
+    target: target, modifiers: .control))
+```
+- Update `viewMenuItem`'s doc (~159-162) to the full order, including **Terminal ⌃`**.
+- Terminal is **not** gated in `AppDelegate.validateMenuItem` (unlike Preview/Edit Source) — always enabled, matching the branch.
+
+---
+
+## 14. `PaneContainerView.swift` — the hard one
+
+Four conflicts. Two are **spurious mega-hunks**: at ~519-1301 HEAD's side is 38 lines of current code while the branch's is 744 lines of the *deleted* pre-rewrite body (grid-drawn `paintCmdlineStrip`/`paintStripRow`, removed by main under OD9 when the cmdline became an overlay `NSView`); likewise ~2384-2412 is HEAD's `drawScrollbars` vs the branch's old `setActivePane`.
+
+**Strategy: resolve all four conflicts by taking HEAD wholesale, confirm `bazel build //crates/wolf-macos:wolf_macos_lib` succeeds, THEN apply the nine edits below and rebuild.** Do not do both in one pass — the point is separating "resolve the conflict" from "re-apply the feature." Do not merge line-by-line inside the big hunks.
+
+All edits 2-space. Line numbers are main's current (HEAD-side) positions.
+
+1. **Constant** — after `intentKindFocusDir` (~71) add `private static let intentKindDrawerOpen: UInt8 = 2` with doc. **Do NOT bring over the branch's `inactiveDim: CGFloat = 0.28`** — main deleted whole-pane dimming, carrying active/inactive in the statusbar (`statusbarInactiveAlpha`, ~136). It would be dead code.
+2. **State** — after `activePane` (~183) add `drawerPaneId: PaneId?` and `lastEditorPane: PaneId?` with the branch's doc comments.
+3. **`paneRects()`** (~398-403) — rewrite per the branch. Construct `let dl = DrawerLayout(paneAreaHeight: Double(paneAreaHeight), hasDrawer: drawerPaneId != nil, weight: DrawerLayout.defaultWeight)`, tile the tree over `dl.editorHeight` into `var rects`, append the drawer rect from `dl.drawerRect(width: Double(bounds.width))` when `drawerPaneId` is set. Extend the doc with the branch's "When the terminal drawer is open…" paragraph. ⚠️ **Main's `paneAreaHeight` is `bounds.height`** (full view height under OD9, ~385), not the branch's `bounds.height - stripHeight`. Do not carry the branch's expression over.
+4. **`applyIntents()`** (~1945-1958) — add before `default:`: `case Self.intentKindDrawerOpen: applyDrawerOpen(win: intent.win())`.
+5. **`applySplit`** (~1963-1971) — after the `guard let target = …` line add `guard target != drawerPaneId else { return }` with the FD2 comment (a split fired from within the drawer is dropped front-end-side).
+6. **New `applyDrawerOpen(win:)`** — insert between `applySplit` and `applyFocus`, from the branch (~989-1000), reindented. Allocs a pane id, sets `drawerPaneId`, binds `PaneBinding(win:boundGrid:)`, calls `setActivePane`. `allocPaneId()` (~2624) and `PaneBinding` are unchanged — drops in as-is.
+7. **`applyFocus`** (~1975-1983) — replace with the branch's drawer-aware version (~1013-1039), reindented, keeping main's `paneAreaHeight`. If `origin == drawerPaneId`, handle only `.up` via `DrawerFocusSeam.drawerUpTarget(lastEditorPane:leaves:rects:)` over `tree.paneRects(width:height: dl.editorHeight)` + `focus_win`, then return; otherwise resolve `tree.neighbor(origin, dir, width:, height:)` and, on a nil neighbour with `dir == .down` and an open drawer, focus the drawer. ⚠️ **Geometry consistency matters:** the neighbour rects must be computed over `dl.editorHeight`, the same basis `paneRects()` now uses, or focus moves disagree with what is painted.
+8. **`detectCloses()`** (~1987-2004) — insert the branch's drawer-removal block (~1051-1059) between the `if closed.isEmpty { return }` guard and the `for id in closed` loop; change the loop header to `for id in closed where id != closedDrawer`. The drawer is removed from `panes` and `drawerPaneId` cleared **without** `tree.remove` and **without** the last-leaf guard — it was never a tree leaf. Main's trailing `if let active = activePane, panes[active] == nil { setActivePane(tree.leaves().first) }` stays and correctly re-homes focus.
+9. **`setActivePane`** (~2636-2641) — prepend `if let pane, pane != drawerPaneId, tree.leaves().contains(pane) { lastEditorPane = pane }`. Keep main's `if activePane != pane { … }` body and main's doc phrasing ("the one with the bold statusbar filename" — **not** the branch's "the one NOT dimmed", which describes deleted behavior), extended with the branch's `lastEditorPane` paragraph.
+
+**Interaction notes:** main's `syncGridSizes()` (~1471) and `syncPreviewWebViews()` (~1668) both call `paneRects()`, so after (3) the drawer participates in grid sizing and preview-webview framing automatically — no edits there. `drawScrollbars`/`drawDividers` iterate the same rects, so the drawer gets a scrollbar and separators for free; cosmetic follow-up, not a merge blocker. The drawer is never in `previewNamesByGrid`, so it paints as an ordinary grid pane with a statusbar — acceptable.
+
+---
+
+## 15. `crates/wolf-macos/BUILD.bazel`
+
+Two conflicts, both **unions in alphabetical order**:
+- `wolf_key_map.srcs` (~54-59): `CommandSeam.swift`, `DrawerFocusSeam.swift`, `DrawerLayout.swift`, `EditSeam.swift`, `EditorInset.swift`.
+- `WolfKeyMapTests.srcs` (~242-247): `CommandSeamTests.swift`, `DrawerFocusSeamTests.swift`, `DrawerLayoutTests.swift`, `EditSeamTests.swift`, `EditorInsetTests.swift`.
+
+`wolf_macos_lib` and `swift_format_srcs` use `glob()` — no change.
+
+---
+
+## 16. New seam files — verified compile-clean against main
+
+Architect checked both against main's current `PaneTree.swift`:
+- `DrawerLayout.swift` uses only `Rect(x:y:w:h:)` — present at `PaneTree.swift:97`, public `let x/y/w/h: Double`. ✅
+- `DrawerFocusSeam.swift` uses `PaneId` (`public typealias PaneId = UInt64`, `PaneTree.swift:34`, so the `id < current.id` comparison compiles) and `Rect`. Callers pass `tree.leaves()` (`:184` → `[PaneId]`) and `tree.paneRects(width:height:)` (`:193` → `[(PaneId, Rect)]`) — signatures unchanged. ✅
+
+**Only adaptation: reindent both + their two test files from 4-space to 2-space.** Not conflicted, so this is a deliberate follow-up edit.
+
+---
+
+## 17. Lua: `runtime/nvim/init.lua` — NO EDITS
+
+Not conflicted; auto-merged. Architect verified the branch's additions survived and their dependencies still exist on main:
+- `emit_drawer(win)` (~389-394) is defined inside `wolf_setup_layout`, closing over its local `chan`, exported as `_G.wolf_emit_drawer` (~402) beside main's intact `_G.wolf_do_split`/`wolf_do_close`/`wolf_do_focus` (~399-401) — so the enclosing function and its `chan` binding survived main's rewrite.
+- `_G.wolf_toggle_terminal()` (~547-591) is module-level, depends only on stock nvim API, and guards its emit with `if _G.wolf_emit_drawer then` (~587).
+- The `t`-mode `<C-w>` maps (~429-432) and the `WolfTerminalInsert` augroup (~439+) are self-contained.
+
+**Verify at test time, do not edit:** main's `wolf_buffers`/`wolf_current_file` trackers skip `b:wolf_preview_source` buffers. Terminal buffers carry `b:wolf_terminal`, not that flag, so `term://…` names flow through the path-based trackers. That is the branch's intent (OD7 relies on terminal buffers being `buflisted` and appearing in the picker). **If `//crates/wolf-ffi:terminal` fails on a `display()` assertion, look here first.**
+
+---
+
+## 18. Documentation (docs are the source of truth — must describe all three commands)
+
+**`architecture.md`**
+- **Conflict ~160-166.** Take HEAD's registry bullet; "now twenty commands (`command_kind` discriminants `0..19`)" → **"twenty-one commands (`0..20`)"**; after HEAD's Edit Source (`19`) clause append the Terminal clause renumbered to `20` (id `terminal`, `:WolfTerminal`, title "Terminal", `` ⌃` ``) describing the per-tabpage bottom `:terminal` drawer over a single shared per-project buffer (`wolf_toggle_terminal` → `WolfCoreHandle::toggle_terminal` → `InputEvent::ToggleTerminal`; buffer/job persist across toggles VS-Code-style, recreated if the shell exited). **Keep the branch's trailing** `See [Command lifecycle](command-lifecycle.md) …` line — that file is new from the branch and `README.md:18` already links it.
+- **Conflict ~214-232.** Merged order: (1) the branch's "The terminal drawer rides this same channel" paragraph (~225) verbatim — documents `DrawerOpen`, the outside-the-`PaneTree` decision, the `win_close` hide asymmetry, the `<C-w>j`/`<C-w>k` bridge; nothing in main contradicts it and `architecture.md:212` already names `DrawerOpen { win }`. (2) HEAD's "macOS consumes this same channel over the FFI" paragraph (~215), splicing in the branch's "**a DRAWER_OPEN reuses `win`**" after "a FOCUS_DIR carries `dir` + `from`"; keep HEAD's cmdline/pum/toast-accessor sentence and **discard the branch's stale "the cmdline strip reads the message/command-line grid" sentence** (that mechanism is gone). (3) HEAD's `### Output: commands` heading, static list extended to `… / Preview / Edit Source / Terminal (0..20)`, plus the Terminal (`20`) clause noting it is an editor-affecting command unlike the front-end-only overlays. (4) HEAD's `### Output: preview` section (~221-223) verbatim.
+- **Outside any conflict:** the `### wolf-ffi` paragraph (~43) hardcodes the table ending `… NEW_TAB=17 / PREVIEW=18 / EDIT=19`. Append `/ TERMINAL=20`. Grep for `EDIT=19`.
+
+**`crates/wolf-core/src/README.md`** (~97-103, ~132-137, ~346-350) — 21 commands with Terminal at 20; `InputEvent` list carries both `SetBackground` and `ToggleTerminal`; palette section states 20 static rows.
+
+**`crates/wolf-core/tests/README.md`** (~101-105) — `palette_rank` static-row count → 20, as `COMMAND_SPECS.len() - 1` over 21 commands.
+
+**`crates/wolf-ffi/README.md`** (~233-237, ~276-280) — `command_kind` table gains `TERMINAL=20`; keep both the preview-surface and `toggle_terminal` descriptions.
+
+**`crates/wolf-ffi/src/README.md`** (~11-15, ~41-45) — discriminant summary gains `TERMINAL=20`; `intent_kind` summary gains `DRAWER_OPEN=2` (branch side, keep); handle-method list keeps `render_preview`/`edit_source`/`is_preview_active` **and** `toggle_terminal`.
+
+**`crates/wolf-ffi/tests/README.md`** (~49-79) — keep HEAD's `preview`/`edit` entries **and** add the branch's `terminal.rs`. Cross-check against the actual `rust_test` targets in `crates/wolf-ffi/BUILD.bazel`: `commands` (~241), `terminal` (~385), `preview` (~879) all exist and all must be documented.
+
+**`crates/wolf-macos/README.md`** (~45-55, ~81-93), **`Sources/README.md`** (4 conflicts), **`Tests/README.md`** (~3-7, ~73-93) — union, HEAD first. `Sources/README.md` documents the two new `WolfKeyMap` seams beside main's `EditSeam`/`PreviewSeam`/`PreviewLinkSeam`, and `PaneContainerView`'s drawer handling beside its preview handling. `Tests/README.md` lists `DrawerFocusSeamTests`/`DrawerLayoutTests`. Keep seam lists **alphabetized** to match the BUILD file.
+
+**`runtime/nvim/README.md`** (~146-194) — largest doc conflict (HEAD 33 lines vs branch 15). Keep HEAD's block (preview scratch-buffer helpers, `wolf_preview`, `wolf_markdown_dirty`) and append the branch's documenting `wolf_toggle_terminal`, `wolf_emit_drawer`, the `t`-mode `<C-w>` maps and their shell word-erase tradeoff, and the `WolfTerminalInsert` re-entry autocmd.
+
+**After every Markdown edit:** `prettier --write` on the touched file; no hard line breaks inside a paragraph (per `CLAUDE.md`).
+
+---
+
+## 19. Test plan
+
+### Must change
+| File | Change |
+|---|---|
+| `crates/wolf-core/src/command.rs` (`mod tests`) | count 21; `TERMINAL_INDEX` 20; `edit_is_the_last_row` → `edit_is_at_index_19`, finality assertion removed |
+| `crates/wolf-core/tests/palette_rank.rs` | `STATIC_COMMAND_COUNT` 20 |
+| `crates/wolf-ffi/tests/commands.rs` | `CMD_KIND_TERMINAL` 20; guard array `0..=20`; new `3k` `:WolfTerminal` drain step |
+| `crates/wolf-macos/Tests/WolfKeyMapTests/CommandSeamTests.swift` | `ffi: 20 -> .terminal`; out-of-range probe 20 → **21** |
+
+### Must NOT change
+- `crates/wolf-ffi/tests/terminal.rs` — asserts `DRAWER_OPEN = 2` only (see correction (a)).
+- `DrawerFocusSeamTests.swift`, `DrawerLayoutTests.swift` — pure geometry; **reindent only**.
+
+### New test warranted (one, cheap and high-value)
+In `command.rs`'s `mod tests`, add **`command_specs_index_matches_variant_order`**: iterate `COMMAND_SPECS.iter().enumerate()` and assert `COMMAND_SPECS[i].command.spec()` resolves to the same row — i.e. `spec()`'s linear scan and the slice index agree for **every** row, not just the seven hand-picked ones. This merge is exactly the scenario the per-command guards were designed to catch, and it is the third command append; a whole-table invariant is cheaper than a 22nd hand-written guard next time.
+
+Otherwise coverage is adequate: `//crates/wolf-ffi:commands` proves every discriminant round-trips through a real nvim, `:terminal` proves the drawer lifecycle, `:preview` the preview surface, `palette_rank` all 20 static rows.
+
+### Manual edge cases (AppKit glue is compile+smoke only)
+- Open the drawer, then `:vsplit` from inside it → must be a no-op (edit 5).
+- Preview pane + drawer together → the preview `WKWebView` frame must shrink to the reduced `dl.editorHeight` on the next wake.
+- `<C-w>k` out of the drawer with `lastEditorPane` pointing at a since-closed pane → must fall back to `bottomMostLeaf`.
+- Close the drawer while it is active → `detectCloses` re-homes focus via `tree.leaves().first`.
+
+---
+
+## 20. Implementation order (each step yields a compile signal)
+
+1. `crates/wolf-core/src/command.rs` — the anchor.
+2. `crates/wolf-core/src/input.rs` — watch the enum/`impl` brace placement.
+3. `bazel test //crates/wolf-core/...`
+4. `crates/wolf-core/tests/palette_rank.rs` → 20.
+5. `crates/wolf-ffi/src/lib.rs` — exhaustive `from_command` match is the compile gate.
+6. `bazel run //crates/wolf-ffi:gen_bindings`, then `git add crates/wolf-ffi/generated/`.
+7. `crates/wolf-ffi/tests/commands.rs`.
+8. `bazel test //crates/wolf-ffi:commands //crates/wolf-ffi:terminal //crates/wolf-ffi:preview` — Rust fully green before Swift.
+9. `crates/wolf-macos/BUILD.bazel` — **before** the Swift files, so the new seams are in the module when the compiler runs.
+10. `CommandSeam.swift` → `CommandSeamTests.swift`.
+11. `bazel test //crates/wolf-macos:WolfKeyMapTests`
+12. `CommandDispatcher.swift` → `WolfWindowController.swift` (supplies `toggleTerminal()`) → `AppMenu.swift`.
+13. `PaneContainerView.swift` — last and largest; HEAD-wholesale + build, **then** the nine edits + rebuild.
+14. `bazel build //crates/wolf-macos:Wolf`
+15. Reindent the four drawer files to 2-space.
+16. Docs + `prettier --write`.
+17. Full verification (§21).
+18. `git add` everything; `git commit` **only after** §21 passes.
+
+---
+
+## 21. Build / test commands (from `build.md`)
+
+```sh
+bazel test //crates/wolf-core/...                 # unit + real-nvim integration
+bazel test //crates/wolf-ffi/...                  # command channel, drawer, preview
+bazel test //crates/wolf-macos:WolfKeyMapTests    # pure Swift seams
+bazel build //crates/wolf-macos:Wolf
+bazel test  //crates/wolf-macos:bundle_layout_test
+bazel test //crates/...                           # full default sweep
+bazel test //tools/lint:check                     # clippy + rustfmt + swift-format (manual-tagged)
+bazel query 'deps(//crates/wolf-core:wolf_core)' | grep -iE \
+  'gtk|gdk|glib|cairo|pango|adwaita|objc|cocoa|core-graphics|winit|wgpu|skia|softbuffer' \
+  || echo clean                                   # no GUI toolkit in core
+```
+
+Notes: lint targets are **advisory** (`build.md:348`) — a pass only means the linter ran; pre-existing findings are not merge blockers, but anything **this merge introduces** must be fixed. Tests run in the **default** configuration, never `-c opt` (`@testable import` needs `-enable-testing`, omitted by rules_swift in opt). `//crates/wolf-macos:WolfRelease` is `manual` and irrelevant. No `CARGO_BAZEL_REPIN` needed (`build.md:87`) — no new Cargo deps.
+
+## 22. Lint considerations
+
+No new `#[allow(...)]` or `// swift-format-ignore` should be needed; following the existing named-constant pattern for `TERMINAL_INDEX = 20` keeps the magic-number lint quiet. **swift-format is the real risk** — every Swift file touched (five conflicted + four cleanly-added drawer files) must end up 2-space. `bazel run //tools/lint:swift_format.fix` is available; note check and fix enforce different things (`build.md:364`).
+
+## Out of scope
+
+Untracked scratch files (`test-1-no-preview` … `test-7-with-opt-param`, `preview-*-decisions.md`) are unrelated. Leave them.

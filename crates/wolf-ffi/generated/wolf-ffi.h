@@ -345,6 +345,7 @@ void __swift_bridge__$WolfCoreHandle$chdir(void* self, void* path);
 void __swift_bridge__$WolfCoreHandle$set_background(void* self, bool dark);
 void __swift_bridge__$WolfCoreHandle$close_pane(void* self);
 void __swift_bridge__$WolfCoreHandle$new_buffer(void* self);
+void __swift_bridge__$WolfCoreHandle$toggle_terminal(void* self);
 void* __swift_bridge__$WolfCoreHandle$copy_selection(void* self);
 void __swift_bridge__$WolfCoreHandle$paste(void* self, void* text);
 void* __swift_bridge__$WolfCoreHandle$buffer_picker(void* self);

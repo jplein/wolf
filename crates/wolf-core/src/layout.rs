@@ -14,6 +14,14 @@
 //! computes the neighbouring pane in its own layout and drives the focus change.
 //! A CLOSE is performed by nvim (guarded against closing the last window) and the
 //! shell observes it via the `win_close` redraw event — there is no close intent.
+//!
+//! The terminal DRAWER has a matched asymmetry: OPENING the drawer is PERFORMED by
+//! nvim (`wolf_toggle_terminal` really creates the `botright` split window +
+//! terminal buffer) AND reported as a [`LayoutIntent::DrawerOpen`] so the shell
+//! renders the drawer as a full-width, root-bottom pane held OUTSIDE its pure
+//! `PaneTree`. HIDING the drawer is a guarded `win_close` the shell observes via
+//! the `win_close` redraw event — there is no drawer-close intent (symmetric with
+//! the split close path).
 
 use rmpv::Value;
 
@@ -64,6 +72,15 @@ pub enum LayoutIntent {
         /// The window the move originates from.
         from: i64,
     },
+    /// The terminal drawer was OPENED by nvim. `win` is the newly created drawer
+    /// window (a full-width `botright` split showing the terminal buffer). The
+    /// shell renders it as a full-width, root-bottom pane at a fixed ~1/3 height
+    /// held OUTSIDE its pure `PaneTree`, and binds it to `win`'s grid. Hiding the
+    /// drawer is observed via `win_close` (no drawer-close intent).
+    DrawerOpen {
+        /// The new drawer window handle.
+        win: i64,
+    },
 }
 
 impl LayoutIntent {
@@ -74,8 +91,9 @@ impl LayoutIntent {
     /// The Lua side sends a map with an `action` discriminator:
     /// `action == "split"` carries `orientation` (`"h"`/`"v"`), `from`, `win`;
     /// `action == "focus_dir"` carries `dir` (`"left"`/`"right"`/`"up"`/`"down"`)
-    /// and `from`. Window handles arrive as plain integers (Lua numbers), but we
-    /// also tolerate the msgpack-`Ext` encoding for robustness.
+    /// and `from`; `action == "drawer_open"` carries just `win` (the new drawer
+    /// window). Window handles arrive as plain integers (Lua numbers), but we also
+    /// tolerate the msgpack-`Ext` encoding for robustness.
     #[must_use]
     pub fn from_payload(payload: &Value) -> Option<Self> {
         let map = payload.as_map()?;
@@ -110,6 +128,10 @@ impl LayoutIntent {
                 };
                 let from = get("from").and_then(handle_i64)?;
                 Some(LayoutIntent::FocusDir { dir, from })
+            }
+            "drawer_open" => {
+                let win = get("win").and_then(handle_i64)?;
+                Some(LayoutIntent::DrawerOpen { win })
             }
             _ => None,
         }
@@ -231,6 +253,31 @@ mod tests {
                 "dir {dir_str:?} should map to {want:?}"
             );
         }
+    }
+
+    /// A valid `drawer_open` map -> `Some(DrawerOpen { win })`, preserving `win`.
+    ///
+    /// NOTE (coder): the `LayoutIntent::DrawerOpen { win: i64 }` variant and its
+    /// `from_payload` `"drawer_open"` arm do NOT exist yet — the coder adds them per
+    /// the fix plan §2. This test will not compile until they land (by design).
+    #[test]
+    fn from_payload_valid_drawer_open() {
+        let payload = map(vec![
+            ("action", Value::from("drawer_open")),
+            ("win", int(7)),
+        ]);
+        assert_eq!(
+            LayoutIntent::from_payload(&payload),
+            Some(LayoutIntent::DrawerOpen { win: 7 })
+        );
+    }
+
+    /// A `drawer_open` missing `win` yields `None` (mirrors the split missing-field
+    /// tolerance).
+    #[test]
+    fn from_payload_drawer_missing_win_is_none() {
+        let payload = map(vec![("action", Value::from("drawer_open"))]);
+        assert_eq!(LayoutIntent::from_payload(&payload), None);
     }
 
     /// A missing `action` discriminator yields `None`.

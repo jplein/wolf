@@ -39,6 +39,7 @@ enum AppMenu {
     static let newTab = 17
     static let preview = 18
     static let edit = 19
+    static let terminal = 20
   }
 
   /// The dynamic submenus `install` hands back to the coordinator: the Window
@@ -157,8 +158,9 @@ enum AppMenu {
 
   /// The View menu (Toggle Sidebar `⌃⌘s` / a separator / Reset Font Size `⌘0` /
   /// Increase Font Size `⌘=` / Decrease Font Size `⌘-` / a separator / Command
-  /// Palette… `⌘p` / a separator / Enter Full Screen `⌃⌘f`). The font-size and
-  /// palette titles mirror `wolf_core::COMMAND_SPECS`.
+  /// Palette… `⌘p` / Buffer Picker… `⌘e` / Preview / Edit Source / Terminal
+  /// `` ⌃` `` / a separator / Enter Full Screen `⌃⌘f`). The font-size, palette,
+  /// preview and terminal titles mirror `wolf_core::COMMAND_SPECS`.
   ///
   /// Toggle Sidebar and Enter Full Screen are STANDARD AppKit items (NOT Wolf
   /// commands / registry entries): their actions are
@@ -211,6 +213,13 @@ enum AppMenu {
     menu.addItem(
       commandItem(
         title: "Edit Source", tag: Tag.edit, keyEquivalent: "", target: target))
+    // View > Terminal: toggles the per-project terminal drawer. Always enabled
+    // (unlike Preview / Edit Source it is not gated in
+    // AppDelegate.validateMenuItem).
+    menu.addItem(
+      commandItem(
+        title: "Terminal", tag: Tag.terminal, keyEquivalent: "`",
+        target: target, modifiers: .control))
     menu.addItem(.separator())
     let fullScreen = NSMenuItem(
       title: "Enter Full Screen",

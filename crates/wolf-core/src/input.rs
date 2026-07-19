@@ -253,6 +253,10 @@ pub enum InputEvent {
         /// `true` selects `background=dark`, `false` selects `background=light`.
         dark: bool,
     },
+    /// Toggle the per-project terminal drawer (delegated to the init.lua
+    /// `wolf_toggle_terminal` helper, which opens/hides a bottom `:terminal`
+    /// split and recreates the shared terminal buffer if it is gone).
+    ToggleTerminal,
 }
 
 impl InputEvent {
@@ -418,6 +422,7 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
             };
             command(nvim, cmd).await
         }
+        InputEvent::ToggleTerminal => toggle_terminal(nvim).await,
     }
 }
 
@@ -512,6 +517,20 @@ async fn switch_buffer(nvim: &Nvim, win: i64, bufnr: i64) -> Result<(), Box<Call
                 Value::from("wolf_switch_buffer(...)"),
                 Value::Array(vec![Value::from(win), Value::from(bufnr)]),
             ],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Toggles the per-project terminal drawer via the init.lua
+/// `wolf_toggle_terminal` helper, invoked over `nvim_exec_lua`. The helper
+/// opens a bottom `:terminal` split in the current tabpage, or hides that
+/// window if it is already showing the shared terminal buffer (which persists).
+async fn toggle_terminal(nvim: &Nvim) -> Result<(), Box<CallError>> {
+    let _ = nvim
+        .call(
+            "nvim_exec_lua",
+            vec![Value::from("wolf_toggle_terminal()"), Value::Array(vec![])],
         )
         .await?;
     Ok(())

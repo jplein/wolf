@@ -147,6 +147,9 @@ mod intent_kind {
     pub const SPLIT: u8 = 0;
     /// A PURE focus-direction move request (carries dir + from).
     pub const FOCUS_DIR: u8 = 1;
+    /// The terminal DRAWER was opened by nvim (carries just win — the new drawer
+    /// window). Append-only/last: never reorder (contract with the Swift port).
+    pub const DRAWER_OPEN: u8 = 2;
 }
 
 /// The command-kind discriminants packed into [`FfiCommand::kind`].
@@ -195,6 +198,8 @@ mod command_kind {
     pub const PREVIEW: u8 = 18;
     /// Navigate from a preview pane back to its source file (inverse of preview).
     pub const EDIT: u8 = 19;
+    /// Toggle the per-project terminal drawer (a bottom `:terminal` split).
+    pub const TERMINAL: u8 = 20;
 }
 
 /// The palette-row-kind discriminants packed into [`FfiCommandRow::row_kind`].
@@ -469,6 +474,9 @@ mod ffi {
         // Opens a new empty buffer in the current window via
         // `InputEvent::NewBuffer` (`:enew`).
         fn new_buffer(&self);
+        // Toggles the per-project terminal drawer via
+        // `InputEvent::ToggleTerminal` (the `wolf_toggle_terminal` Lua helper).
+        fn toggle_terminal(&self);
         // The current visual-mode selection yanked to text (blocks briefly on
         // the captive nvim), or the empty string when not in visual mode / the
         // selection is empty / the core is gone. The front-end writes it to
@@ -750,25 +758,26 @@ mod ffi {
     extern "Rust" {
         type FfiLayoutIntent;
 
-        // The intent kind (`intent_kind::SPLIT` / `FOCUS_DIR`).
+        // The intent kind (`intent_kind::SPLIT` / `FOCUS_DIR` / `DRAWER_OPEN`).
         fn kind(&self) -> u8;
         // For a SPLIT: the orientation (`orientation::HORIZONTAL` / `VERTICAL`);
-        // 0 for a FOCUS_DIR.
+        // 0 for a FOCUS_DIR / DRAWER_OPEN.
         fn orientation(&self) -> u8;
         // For a FOCUS_DIR: the direction (`focus_dir::LEFT` / `RIGHT` / `UP` /
-        // `DOWN`); 0 for a SPLIT.
+        // `DOWN`); 0 for a SPLIT / DRAWER_OPEN.
         fn dir(&self) -> u8;
         // The origin window handle (current before the split / when the chord
-        // fired).
+        // fired); 0 for a DRAWER_OPEN.
         fn from(&self) -> i64;
-        // For a SPLIT: the new window handle; 0 for a FOCUS_DIR.
+        // For a SPLIT: the new window handle; for a DRAWER_OPEN: the new drawer
+        // window handle; 0 for a FOCUS_DIR.
         fn win(&self) -> i64;
     }
 
     extern "Rust" {
         type FfiCommand;
 
-        // The command kind (`command_kind::NEW_WINDOW` .. `EDIT`).
+        // The command kind (`command_kind::NEW_WINDOW` .. `TERMINAL`).
         fn kind(&self) -> u8;
     }
 
@@ -1883,6 +1892,14 @@ impl WolfCoreHandle {
         }
     }
 
+    /// Toggles the per-project terminal drawer via [`InputEvent::ToggleTerminal`]
+    /// (the `wolf_toggle_terminal` Lua helper). A no-op once the core is gone.
+    pub fn toggle_terminal(&self) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.send_input(InputEvent::ToggleTerminal);
+        }
+    }
+
     /// The current visual-mode selection yanked to text, or the empty string
     /// when not in visual mode / the selection is empty / the core is gone.
     /// Blocks briefly on the captive nvim (see
@@ -2193,10 +2210,10 @@ impl FfiCell {
 /// One drained layout intent (opaque to Swift, so a `Vec<FfiLayoutIntent>` is
 /// supported — swift-bridge emits Vec support only for opaque types).
 ///
-/// Flattens [`wolf_core::LayoutIntent`]'s two variants into a tagged struct: `kind`
-/// discriminates (`intent_kind::SPLIT` / `FOCUS_DIR`); a SPLIT carries
-/// `orientation` + `from` + `win`; a FOCUS_DIR carries `dir` + `from` (the unused
-/// scalar fields are 0).
+/// Flattens [`wolf_core::LayoutIntent`]'s variants into a tagged struct: `kind`
+/// discriminates (`intent_kind::SPLIT` / `FOCUS_DIR` / `DRAWER_OPEN`); a SPLIT
+/// carries `orientation` + `from` + `win`; a FOCUS_DIR carries `dir` + `from`; a
+/// DRAWER_OPEN carries just `win` (the unused scalar fields are 0).
 pub struct FfiLayoutIntent {
     kind: u8,
     orientation: u8,
@@ -2206,33 +2223,35 @@ pub struct FfiLayoutIntent {
 }
 
 impl FfiLayoutIntent {
-    /// The intent kind (`intent_kind::SPLIT` / `FOCUS_DIR`).
+    /// The intent kind (`intent_kind::SPLIT` / `FOCUS_DIR` / `DRAWER_OPEN`).
     #[must_use]
     pub fn kind(&self) -> u8 {
         self.kind
     }
 
     /// For a SPLIT: the orientation (`orientation::HORIZONTAL` / `VERTICAL`); 0 for
-    /// a FOCUS_DIR.
+    /// a FOCUS_DIR / DRAWER_OPEN.
     #[must_use]
     pub fn orientation(&self) -> u8 {
         self.orientation
     }
 
     /// For a FOCUS_DIR: the direction (`focus_dir::LEFT` / `RIGHT` / `UP` /
-    /// `DOWN`); 0 for a SPLIT.
+    /// `DOWN`); 0 for a SPLIT / DRAWER_OPEN.
     #[must_use]
     pub fn dir(&self) -> u8 {
         self.dir
     }
 
-    /// The origin window handle (current before the split / when the chord fired).
+    /// The origin window handle (current before the split / when the chord fired);
+    /// 0 for a DRAWER_OPEN.
     #[must_use]
     pub fn from(&self) -> i64 {
         self.from
     }
 
-    /// For a SPLIT: the new window handle; 0 for a FOCUS_DIR.
+    /// For a SPLIT: the new window handle; for a DRAWER_OPEN: the new drawer window
+    /// handle; 0 for a FOCUS_DIR.
     #[must_use]
     pub fn win(&self) -> i64 {
         self.win
@@ -2269,6 +2288,13 @@ impl FfiLayoutIntent {
                 from,
                 win: 0,
             },
+            LayoutIntent::DrawerOpen { win } => Self {
+                kind: intent_kind::DRAWER_OPEN,
+                orientation: 0,
+                dir: 0,
+                from: 0,
+                win,
+            },
         }
     }
 }
@@ -2287,7 +2313,7 @@ pub struct FfiCommand {
 }
 
 impl FfiCommand {
-    /// The command kind (`command_kind::NEW_WINDOW` .. `EDIT`).
+    /// The command kind (`command_kind::NEW_WINDOW` .. `TERMINAL`).
     #[must_use]
     pub fn kind(&self) -> u8 {
         self.kind
@@ -2318,6 +2344,7 @@ impl FfiCommand {
             Command::NewTab => command_kind::NEW_TAB,
             Command::Preview => command_kind::PREVIEW,
             Command::Edit => command_kind::EDIT,
+            Command::Terminal => command_kind::TERMINAL,
         };
         Self { kind }
     }
