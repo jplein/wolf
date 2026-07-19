@@ -75,8 +75,9 @@ use pulldown_latex::{
 pub const MARKER_COLUMN_STRIDE: usize = 100;
 
 /// The structural + marker CSS shared by every preview theme (the `.wolf-src`
-/// marker rule plus baseline layout). Embedded BEFORE the selected theme's CSS in
-/// the rendered document. See `markdown/base.css`.
+/// marker rule plus the 24px-baseline-grid structural layout). Embedded BEFORE
+/// the selected theme's CSS in the rendered document. See `markdown/base.css`
+/// and `markdown/README.md`.
 const BASE_CSS: &str = include_str!("markdown/base.css");
 
 /// The Inter variable-weight `@font-face`, inlined as a base64 `data:font/woff2`
@@ -141,7 +142,7 @@ pub fn theme_css(theme: PreviewTheme) -> &'static str {
 /// forward-compatible per-line / per-100-column position markers embedded.
 ///
 /// The rendered Markdown body is wrapped as
-/// `<!doctype html><html><head><meta charset="utf-8"><style>{BASE_CSS}{theme_css}</style></head><body class="wolf-markdown">{body}</body></html>`
+/// `<!doctype html><html><head><meta charset="utf-8"><style>{INTER_FONT_FACE}{MATH_FONT_FACE}{BASE_CSS}{MATH_CSS}{theme_css}</style></head><body class="wolf-markdown">{body}</body></html>`
 /// so the front-end web view can load the string directly. See the module docs for
 /// the marker scheme and its DOM placement.
 #[must_use]

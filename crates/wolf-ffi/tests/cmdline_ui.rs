@@ -146,9 +146,13 @@ fn poll_first_chunk_fg(handle: &WolfCoreHandle, needle: &str) -> FfiColor {
         let toast = handle.toast();
         if toast.visible() && toast_text(handle).contains(needle) {
             let lines = toast.lines();
-            let first_line = lines.first().expect("the toast should have at least one line");
+            let first_line = lines
+                .first()
+                .expect("the toast should have at least one line");
             let chunks = first_line.chunks();
-            let first_chunk = chunks.first().expect("the first toast line should have a chunk");
+            let first_chunk = chunks
+                .first()
+                .expect("the first toast line should have a chunk");
             return first_chunk.fg();
         }
         assert!(
@@ -299,8 +303,15 @@ fn cmdline_pum_and_toast_over_the_bridge() {
         sleep(POLL_INTERVAL);
     }
     let cm = handle.cmdline();
-    assert!(cm.active(), "cmdline() should be active while typing `:e Fi`");
-    assert_eq!(cm.firstc(), EX_FIRSTC, "cmdline() firstc should be the Ex `:` prefix");
+    assert!(
+        cm.active(),
+        "cmdline() should be active while typing `:e Fi`"
+    );
+    assert_eq!(
+        cm.firstc(),
+        EX_FIRSTC,
+        "cmdline() firstc should be the Ex `:` prefix"
+    );
     assert_eq!(cm.text(), CMDLINE_TEXT, "cmdline() text should be `e Fi`");
     assert!(
         cm.pos() > 0,
@@ -361,8 +372,14 @@ fn cmdline_pum_and_toast_over_the_bridge() {
         }
         sleep(POLL_INTERVAL);
     }
-    assert!(!handle.cmdline().active(), "cmdline() should be inactive after <Esc>");
-    assert!(!handle.pum().visible(), "pum() should be hidden after <Esc>");
+    assert!(
+        !handle.cmdline().active(),
+        "cmdline() should be inactive after <Esc>"
+    );
+    assert!(
+        !handle.pum().visible(),
+        "pum() should be hidden after <Esc>"
+    );
 
     // --- 5. Drive a multi-line echo -> handle.toast() -----------------------
     send_ex_command(
@@ -397,9 +414,13 @@ fn cmdline_pum_and_toast_over_the_bridge() {
     // Inspect the first chunk of the first line: its text is non-empty and its
     // foreground color is resolved in Rust (set) against the highlight table.
     let lines = toast.lines();
-    let first_line = lines.first().expect("the toast should have at least one line");
+    let first_line = lines
+        .first()
+        .expect("the toast should have at least one line");
     let chunks = first_line.chunks();
-    let first_chunk = chunks.first().expect("the first toast line should have a chunk");
+    let first_chunk = chunks
+        .first()
+        .expect("the first toast line should have a chunk");
     assert!(
         !first_chunk.text().is_empty(),
         "the first toast chunk should carry non-empty text"
