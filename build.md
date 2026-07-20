@@ -385,10 +385,12 @@ If any of these appears in core's tree, the platform boundary has leaked and the
 The same rule holds under the Bazel build on macOS: `wolf-gnome` is deliberately given no Bazel target, so GTK never enters `wolf-core`'s Bazel dependency graph. Verify it with a `bazel query` over the resolved deps:
 
 ```sh
-bazel query 'deps(//crates/wolf-core:wolf_core)' | grep -iE \
+bazel query 'kind(rule, deps(//crates/wolf-core:wolf_core))' | grep -iE \
   'gtk|gdk|glib|cairo|pango|adwaita|objc|cocoa|core-graphics|winit|wgpu|skia|softbuffer' \
   || echo clean
 ```
+
+The `kind(rule, …)` wrapper is load-bearing: a bare `deps()` returns every source file in the graph as well as the crate targets, and `libc` vendors its bindings under `src/new/glibc/…`, whose paths match the `glib` pattern. Without the wrapper the guard reports seven `libc` files on every run and `|| echo clean` can never fire — a check that always cries wolf is a check nobody reads. Note that this is the secondary guard; the `cargo tree` check above matches on crate names and was never affected.
 
 ## Notes
 
