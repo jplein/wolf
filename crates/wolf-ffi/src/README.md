@@ -38,6 +38,4 @@ The crate root: the single `#[swift_bridge::bridge] mod ffi` plus the glue that 
 
 ## `bin/gen_bindings.rs`
 
-The standalone codegen binary (`//crates/wolf-ffi:gen_bindings`, run via `bazel run`). It invokes `swift-bridge-build`'s parser over `lib.rs` and writes the Swift
-
-- C output into `$BUILD_WORKSPACE_DIRECTORY/crates/wolf-ffi/generated/`, prepending the `import WolfFFI` line the Swift glue needs. It writes **in-tree** (only `bazel run` sets `BUILD_WORKSPACE_DIRECTORY` and may write into the source tree — a genrule cannot), so the generated files stay **committed** and are refreshed explicitly after a bridge change.
+The standalone codegen binary (`//crates/wolf-ffi:gen_bindings`, run via `bazel run`). It invokes `swift-bridge-build`'s parser over `lib.rs` and writes the Swift and C output into `$BUILD_WORKSPACE_DIRECTORY/crates/wolf-ffi/generated/`, prepending the `import WolfFFI` line the Swift glue needs to the `.swift` files. It writes **in-tree** (only `bazel run` sets `BUILD_WORKSPACE_DIRECTORY` and may write into the source tree — a genrule cannot), so the generated files stay **committed** and are refreshed explicitly after a bridge change.
