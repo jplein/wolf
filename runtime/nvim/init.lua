@@ -634,6 +634,12 @@ function _G.wolf_toggle_terminal()
 		vim.cmd("terminal")
 		vim.b.wolf_terminal = true
 	end
+	-- Default the terminal drawer to FULL WIDTH. Capture the buffer actually bound
+	-- into the drawer window (the reused termbuf on the persisted path, or the
+	-- freshly-created terminal buffer entered by `:terminal`) and tag it. Still
+	-- user-toggleable via :WolfFullWidth (this only sets the default).
+	local termwin_buf = vim.api.nvim_get_current_buf()
+	vim.b[termwin_buf].wolf_full_width = true
 	-- Report the new drawer window so the front-end renders it as a full-width
 	-- root-bottom pane (it lives OUTSIDE the pure PaneTree). `botright split`
 	-- performs the real window op; this intent is what makes it VISIBLE. Guarded
@@ -641,6 +647,18 @@ function _G.wolf_toggle_terminal()
 	local w = vim.api.nvim_get_current_win()
 	if _G.wolf_emit_drawer then
 		_G.wolf_emit_drawer(w)
+	end
+	-- Re-emit the full-width state on this same wake so the front-end learns the
+	-- drawer's full-width default immediately -- the per-window `wolf_full_width`
+	-- and current-file autocmds fire when the terminal buffer is ENTERED, BEFORE
+	-- the var is set above, so an explicit re-emit is needed for determinism.
+	-- current_file drives is_full_width_active (the View-menu checkmark for the
+	-- focused terminal); full_width drives the drawer window's pane geometry.
+	if _G.wolf_emit_current_file then
+		_G.wolf_emit_current_file()
+	end
+	if _G.wolf_emit_full_width then
+		_G.wolf_emit_full_width()
 	end
 	vim.cmd("startinsert")
 end
