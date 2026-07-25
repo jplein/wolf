@@ -76,6 +76,15 @@ fn mru_for(cache: &MruCache, cwd: &Path) -> Option<MruStore> {
 /// applied batch (one RPC for fused keys, hence one redraw flush).
 const INPUT_COALESCE_DELAY: Duration = Duration::from_millis(8);
 
+/// Default budget for a single interactive synchronous nvim RPC issued through
+/// [`WolfCore::block_on_rpc`]. An RPC that exceeds this elapses to
+/// [`NvimError::Timeout`], converting an unbounded main-thread hang into a
+/// bounded stall that degrades to each call site's documented fallback.
+///
+/// Matches `SHUTDOWN_TIMEOUT`. Overridable at [`WolfCore::start`] via the
+/// `WOLF_RPC_TIMEOUT_MS` env var (invalid / unset / zero → this default).
+const RPC_TIMEOUT_DEFAULT: Duration = Duration::from_secs(5);
+
 /// Configuration to start a [`WolfCore`].
 #[derive(Clone, Debug)]
 pub struct CoreConfig {
@@ -184,6 +193,11 @@ pub struct WolfCore {
     /// (bufnr resolution runs before the lock is taken); the only `block_on`
     /// under the lock is the trivial, self-contained TCP bind during lazy spawn.
     browser_preview: Mutex<Option<BrowserPreview>>,
+    /// The per-RPC timeout budget for interactive synchronous nvim calls routed
+    /// through [`block_on_rpc`](Self::block_on_rpc). Resolved ONCE at
+    /// [`WolfCore::start`] from `WOLF_RPC_TIMEOUT_MS` (falling back to
+    /// [`RPC_TIMEOUT_DEFAULT`]), so every guarded call site shares one bound.
+    rpc_timeout: Duration,
 }
 
 /// The process's canonicalized home directory, resolved at most once.
@@ -212,6 +226,16 @@ impl WolfCore {
             .map_err(CoreError::Runtime)?;
 
         let cwd = cfg.cwd.clone();
+
+        // Resolve the interactive-RPC timeout budget ONCE. An invalid, unset, or
+        // zero `WOLF_RPC_TIMEOUT_MS` falls back to the default (the `> 0` guard
+        // avoids a `Duration::ZERO` instant-timeout).
+        let rpc_timeout = std::env::var("WOLF_RPC_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|&ms| ms > 0)
+            .map(Duration::from_millis)
+            .unwrap_or(RPC_TIMEOUT_DEFAULT);
 
         // Per-cwd MRU stores are opened lazily (graceful) instead of one eager
         // open at cfg.cwd; `tracked_cwd` follows nvim's live cwd out-of-band.
@@ -342,6 +366,7 @@ impl WolfCore {
             command_mru,
             cwd,
             browser_preview: Mutex::new(None),
+            rpc_timeout,
         })
     }
 
@@ -368,13 +393,16 @@ impl WolfCore {
     /// nothing to copy.
     ///
     /// Blocks briefly on the captive nvim to yank the selection (see
-    /// [`crate::nvim::NvimProcess::yank_visual_selection`]) via `runtime.block_on`
-    /// (same pattern as [`resolve_search_root`](Self::resolve_search_root)). An
-    /// RPC error, a `None` result (not in visual mode), or an empty selection all
-    /// map to `None`, so the front-end only writes real text to the clipboard.
+    /// [`crate::nvim::NvimProcess::yank_visual_selection`]) via
+    /// [`block_on_rpc`](Self::block_on_rpc) (same pattern as
+    /// [`resolve_search_root`](Self::resolve_search_root)), bounded by
+    /// [`rpc_timeout`](Self::rpc_timeout) ([`RPC_TIMEOUT_DEFAULT`],
+    /// `WOLF_RPC_TIMEOUT_MS`). An RPC error, a [`NvimError::Timeout`] on a wedged
+    /// nvim, a `None` result (not in visual mode), or an empty selection all map
+    /// to `None`, so the front-end only writes real text to the clipboard.
     #[must_use]
     pub fn copy_visual_selection(&self) -> Option<String> {
-        match self.runtime.block_on(self.nvim.yank_visual_selection()) {
+        match self.block_on_rpc("yank_visual_selection", self.nvim.yank_visual_selection()) {
             Ok(Some(text)) if !text.is_empty() => Some(text),
             Ok(_) => None,
             Err(e) => {
@@ -404,14 +432,17 @@ impl WolfCore {
     /// Snapshots the captive nvim's listed buffers (for seeding the buffer picker).
     ///
     /// Blocks briefly on the captive nvim to query `getbufinfo({'buflisted': 1})`
-    /// (see [`crate::nvim::NvimProcess::list_buffers`]) via `runtime.block_on`, the
-    /// same blocking pattern [`copy_visual_selection`](Self::copy_visual_selection)
-    /// and [`resolve_search_root`](Self::resolve_search_root) use. An RPC error is
-    /// logged and yields an empty list (the picker just shows no candidates rather
-    /// than failing).
+    /// (see [`crate::nvim::NvimProcess::list_buffers`]) via
+    /// [`block_on_rpc`](Self::block_on_rpc), the same bounded blocking pattern
+    /// [`copy_visual_selection`](Self::copy_visual_selection) and
+    /// [`resolve_search_root`](Self::resolve_search_root) use — bounded by
+    /// [`rpc_timeout`](Self::rpc_timeout) ([`RPC_TIMEOUT_DEFAULT`],
+    /// `WOLF_RPC_TIMEOUT_MS`). An RPC error (including a [`NvimError::Timeout`] on a
+    /// wedged nvim) is logged and yields an empty list (the picker just shows no
+    /// candidates rather than failing).
     #[must_use]
     pub fn list_buffers(&self) -> Vec<BufInfo> {
-        match self.runtime.block_on(self.nvim.list_buffers()) {
+        match self.block_on_rpc("list_buffers", self.nvim.list_buffers()) {
             Ok(buffers) => buffers,
             Err(e) => {
                 tracing::warn!("list_buffers failed: {e}");
@@ -423,19 +454,19 @@ impl WolfCore {
     /// Renders the Markdown SOURCE buffer `source_bufnr` to a themed HTML preview
     /// document (empty string on error).
     ///
-    /// Blocks briefly on the captive nvim (`runtime.block_on`, the same pattern
-    /// [`list_buffers`](Self::list_buffers) uses) to read the buffer lines and
-    /// render them via [`crate::markdown::render_html`] (see
+    /// Blocks briefly on the captive nvim via
+    /// [`block_on_rpc`](Self::block_on_rpc) (the same bounded pattern
+    /// [`list_buffers`](Self::list_buffers) uses, bounded by
+    /// [`rpc_timeout`](Self::rpc_timeout) — [`RPC_TIMEOUT_DEFAULT`],
+    /// `WOLF_RPC_TIMEOUT_MS`) to read the buffer lines and render them via
+    /// [`crate::markdown::render_html`] (see
     /// [`crate::nvim::NvimProcess::render_preview`]). An RPC error (e.g. a
-    /// closed/unloaded buffer, or after shutdown) is logged and yields an empty
-    /// string, which the front-end web view loads as a blank document rather than
-    /// failing.
+    /// closed/unloaded buffer, a [`NvimError::Timeout`] on a wedged nvim, or after
+    /// shutdown) is logged and yields an empty string, which the front-end web view
+    /// loads as a blank document rather than failing.
     #[must_use]
     pub fn render_preview(&self, source_bufnr: i64) -> String {
-        match self
-            .runtime
-            .block_on(self.nvim.render_preview(source_bufnr))
-        {
+        match self.block_on_rpc("render_preview", self.nvim.render_preview(source_bufnr)) {
             Ok(html) => html,
             Err(e) => {
                 tracing::warn!("render_preview({source_bufnr}) failed: {e}");
@@ -450,9 +481,13 @@ impl WolfCore {
     /// buffer is unnamed) — or the EMPTY string when the active buffer is not
     /// Markdown / on error.
     ///
-    /// All captive-nvim queries run via `runtime.block_on` FIRST — OUTSIDE the
-    /// `browser_preview` lock — so no lock is ever held across a `block_on` (the
-    /// crate's locking invariant): the pinned bufnr
+    /// All captive-nvim queries run via [`block_on_rpc`](Self::block_on_rpc)
+    /// FIRST — OUTSIDE the `browser_preview` lock — so no lock is ever held across
+    /// a `block_on` (the crate's locking invariant), each bounded by
+    /// [`rpc_timeout`](Self::rpc_timeout) ([`RPC_TIMEOUT_DEFAULT`],
+    /// `WOLF_RPC_TIMEOUT_MS`) so a wedged nvim degrades to `""` (or, for the cwd
+    /// query, no root) on [`NvimError::Timeout`] rather than hanging: the pinned
+    /// bufnr
     /// ([`crate::nvim::NvimProcess::current_markdown_bufnr`], non-positive → `""`),
     /// the pinned file's absolute path
     /// ([`crate::nvim::NvimProcess::buffer_path`]), and the captive nvim's cwd
@@ -468,22 +503,24 @@ impl WolfCore {
     pub fn open_in_browser(&self) -> String {
         // Resolve everything from the captive nvim BEFORE taking the
         // browser_preview lock, so the lock is never held across a block_on.
-        let bufnr = match self.runtime.block_on(self.nvim.current_markdown_bufnr()) {
-            Ok(bufnr) => bufnr,
-            Err(e) => {
-                tracing::warn!("open_in_browser: current_markdown_bufnr failed: {e}");
-                return String::new();
-            }
-        };
+        let bufnr =
+            match self.block_on_rpc("current_markdown_bufnr", self.nvim.current_markdown_bufnr()) {
+                Ok(bufnr) => bufnr,
+                Err(e) => {
+                    tracing::warn!("open_in_browser: current_markdown_bufnr failed: {e}");
+                    return String::new();
+                }
+            };
         if bufnr <= 0 {
             return String::new();
         }
 
         let pinned_raw = self
-            .runtime
-            .block_on(self.nvim.buffer_path(bufnr))
+            .block_on_rpc("buffer_path", self.nvim.buffer_path(bufnr))
             .unwrap_or_default();
-        let cwd = self.runtime.block_on(self.nvim.current_dir()).ok();
+        let cwd = self
+            .block_on_rpc("current_dir", self.nvim.current_dir())
+            .ok();
         let target = browser_preview::build_target(bufnr, cwd, &pinned_raw);
 
         let mut slot = self.browser_preview.lock();
@@ -523,8 +560,11 @@ impl WolfCore {
     /// returns the preview scratch buffer's number (`0` on error or when the active
     /// buffer is not Markdown).
     ///
-    /// Blocks briefly on the captive nvim (`runtime.block_on`) to run the
-    /// `wolf_open_preview` helper (see [`crate::nvim::NvimProcess::open_preview`]).
+    /// Blocks briefly on the captive nvim via
+    /// [`block_on_rpc`](Self::block_on_rpc) (bounded by
+    /// [`rpc_timeout`](Self::rpc_timeout) — [`RPC_TIMEOUT_DEFAULT`],
+    /// `WOLF_RPC_TIMEOUT_MS`) to run the `wolf_open_preview` helper (see
+    /// [`crate::nvim::NvimProcess::open_preview`]).
     /// `mode` is chosen by the front-end via `PreviewSeam.placementMode`:
     /// `"split_right"` (single pane → new pane on the right), `"active"` (multi
     /// pane → replace the active pane's buffer), or `"reuse_preview_pane"` (exactly
@@ -533,10 +573,11 @@ impl WolfCore {
     /// none). The
     /// front-end learns the new pane + the source↔preview mapping on the next wake
     /// (via the `wolf_preview` notification), so no synchronous window handle is
-    /// needed. An RPC error is logged and returns `0`.
+    /// needed. An RPC error (including a [`NvimError::Timeout`] on a wedged nvim) is
+    /// logged and returns `0`.
     #[must_use]
     pub fn open_preview(&self, mode: &str) -> i64 {
-        match self.runtime.block_on(self.nvim.open_preview(mode)) {
+        match self.block_on_rpc("open_preview", self.nvim.open_preview(mode)) {
             Ok(bufnr) => bufnr,
             Err(e) => {
                 tracing::warn!("open_preview({mode}) failed: {e}");
@@ -549,8 +590,11 @@ impl WolfCore {
     /// the source buffer's number (`0` on error or when the active buffer is not a
     /// preview pane).
     ///
-    /// Blocks briefly on the captive nvim (`runtime.block_on`) to run the
-    /// `wolf_edit_source` helper (see [`crate::nvim::NvimProcess::edit_source`]).
+    /// Blocks briefly on the captive nvim via
+    /// [`block_on_rpc`](Self::block_on_rpc) (bounded by
+    /// [`rpc_timeout`](Self::rpc_timeout) — [`RPC_TIMEOUT_DEFAULT`],
+    /// `WOLF_RPC_TIMEOUT_MS`) to run the `wolf_edit_source` helper (see
+    /// [`crate::nvim::NvimProcess::edit_source`]).
     /// `mode` is chosen by the front-end via `EditSeam.placementMode`:
     /// `"split_left"` (single pane → new editor pane on the LEFT, preview stays
     /// right), `"active"` (replace the active preview's buffer with the source), or
@@ -558,11 +602,11 @@ impl WolfCore {
     /// the source into that OTHER editor window and focus it; falls back to
     /// `"active"` when none). The front-end learns the new pane + updated snapshot on
     /// the next wake (via the `wolf_preview` / `wolf_current_file` notifications), so
-    /// no synchronous window handle is needed. An RPC error is logged and returns
-    /// `0`.
+    /// no synchronous window handle is needed. An RPC error (including a
+    /// [`NvimError::Timeout`] on a wedged nvim) is logged and returns `0`.
     #[must_use]
     pub fn edit_source(&self, mode: &str) -> i64 {
-        match self.runtime.block_on(self.nvim.edit_source(mode)) {
+        match self.block_on_rpc("edit_source", self.nvim.edit_source(mode)) {
             Ok(bufnr) => bufnr,
             Err(e) => {
                 tracing::warn!("edit_source({mode}) failed: {e}");
@@ -575,16 +619,19 @@ impl WolfCore {
     /// (a linked file the user clicked in the preview), replacing that pane's preview
     /// with the linked file's, and returns the linked file's SOURCE bufnr.
     ///
-    /// Blocks briefly on the captive nvim (`runtime.block_on`) to run the
-    /// `wolf_preview_file` helper (see [`crate::nvim::NvimProcess::preview_file`]).
+    /// Blocks briefly on the captive nvim via
+    /// [`block_on_rpc`](Self::block_on_rpc) (bounded by
+    /// [`rpc_timeout`](Self::rpc_timeout) — [`RPC_TIMEOUT_DEFAULT`],
+    /// `WOLF_RPC_TIMEOUT_MS`) to run the `wolf_preview_file` helper (see
+    /// [`crate::nvim::NvimProcess::preview_file`]).
     /// `path` is ABSOLUTE — resolved by the front-end from WebKit's `file://` URL;
     /// no relative resolution happens here. Returns the linked file's source bufnr
     /// (`> 0`) on success; `0` when `path` is empty, unreadable, or not Markdown, or
-    /// on RPC error (logged). The front-end applies its own O3 fallback on `0` (hand
+    /// on RPC error (including a [`NvimError::Timeout`] on a wedged nvim, logged). The front-end applies its own O3 fallback on `0` (hand
     /// an existing-but-non-previewable file to the OS default app; no-op if missing).
     #[must_use]
     pub fn preview_file(&self, win: i64, path: &str) -> i64 {
-        match self.runtime.block_on(self.nvim.preview_file(win, path)) {
+        match self.block_on_rpc("preview_file", self.nvim.preview_file(win, path)) {
             Ok(bufnr) => bufnr,
             Err(e) => {
                 tracing::warn!("preview_file({win}, {path}) failed: {e}");
@@ -617,17 +664,20 @@ impl WolfCore {
     /// Creates a new nvim TABPAGE (optionally rooted at `cwd` via `:tcd`) and
     /// returns its stable HANDLE (`0` on error).
     ///
-    /// Blocks briefly on the captive nvim (`runtime.block_on`, the same pattern
-    /// [`list_buffers`](Self::list_buffers) uses) to run the `wolf_create_tabpage`
-    /// helper. The macOS front-end calls this to add a view (a new tabpage) to a
-    /// project's shared nvim. An RPC error is logged and returns `0` so the caller
-    /// can drop the would-be view.
+    /// Blocks briefly on the captive nvim via
+    /// [`block_on_rpc`](Self::block_on_rpc) (the same bounded pattern
+    /// [`list_buffers`](Self::list_buffers) uses, bounded by
+    /// [`rpc_timeout`](Self::rpc_timeout) — [`RPC_TIMEOUT_DEFAULT`],
+    /// `WOLF_RPC_TIMEOUT_MS`) to run the `wolf_create_tabpage` helper. The macOS
+    /// front-end calls this to add a view (a new tabpage) to a project's shared
+    /// nvim. An RPC error (including a [`NvimError::Timeout`] on a wedged nvim) is
+    /// logged and returns `0` so the caller can drop the would-be view.
     #[must_use]
     pub fn create_tabpage(&self, cwd: Option<&Path>) -> i64 {
         let cwd = cwd
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
-        match self.runtime.block_on(self.nvim.create_tabpage(&cwd)) {
+        match self.block_on_rpc("create_tabpage", self.nvim.create_tabpage(&cwd)) {
             Ok(handle) => handle,
             Err(e) => {
                 tracing::warn!("create_tabpage failed: {e}");
@@ -639,8 +689,11 @@ impl WolfCore {
     /// Returns the CANONICALIZED tab-local working directory of tabpage `handle`,
     /// or `None` on error / a closed handle.
     ///
-    /// Blocks briefly on the captive nvim (`runtime.block_on`) to run the
-    /// `wolf_tab_cwd` helper (`getcwd(-1, <number>)`), then canonicalizes the
+    /// Blocks briefly on the captive nvim via
+    /// [`block_on_rpc`](Self::block_on_rpc) (bounded by
+    /// [`rpc_timeout`](Self::rpc_timeout) — [`RPC_TIMEOUT_DEFAULT`],
+    /// `WOLF_RPC_TIMEOUT_MS`, degrading to `None` on [`NvimError::Timeout`]) to run
+    /// the `wolf_tab_cwd` helper (`getcwd(-1, <number>)`), then canonicalizes the
     /// result (keeping the raw path if canonicalization fails — a live tabpage's
     /// cwd is a real directory). This is AUTHORITATIVE for a NON-current view's
     /// cwd, the gap that [`live_cwd`](Self::live_cwd) (current view only) cannot
@@ -651,7 +704,7 @@ impl WolfCore {
     /// RPC).
     #[must_use]
     pub fn cwd_for_tabpage(&self, handle: i64) -> Option<PathBuf> {
-        match self.runtime.block_on(self.nvim.tab_cwd(handle)) {
+        match self.block_on_rpc("tab_cwd", self.nvim.tab_cwd(handle)) {
             Ok(p) => Some(std::fs::canonicalize(&p).unwrap_or(p)),
             Err(e) => {
                 tracing::warn!("cwd_for_tabpage({handle}) failed: {e}");
@@ -663,13 +716,16 @@ impl WolfCore {
     /// Returns the current tabpage's stable HANDLE (`0` on error) — the
     /// authoritative first-view bind.
     ///
-    /// Blocks briefly on the captive nvim (`runtime.block_on`) via
+    /// Blocks briefly on the captive nvim via
+    /// [`block_on_rpc`](Self::block_on_rpc) (bounded by
+    /// [`rpc_timeout`](Self::rpc_timeout) — [`RPC_TIMEOUT_DEFAULT`],
+    /// `WOLF_RPC_TIMEOUT_MS`, degrading to `0` on [`NvimError::Timeout`]) via
     /// `nvim_get_current_tabpage`. Contrast [`Snapshot::current_tabpage`] (the
     /// cheap live gate, updated out-of-band via `wolf_tabpage`): this is the
     /// authoritative value read at bind time.
     #[must_use]
     pub fn current_tabpage(&self) -> i64 {
-        match self.runtime.block_on(self.nvim.current_tabpage()) {
+        match self.block_on_rpc("current_tabpage", self.nvim.current_tabpage()) {
             Ok(handle) => handle,
             Err(e) => {
                 tracing::warn!("current_tabpage failed: {e}");
@@ -937,19 +993,207 @@ impl WolfCore {
     /// Resolves the file-search traversal root: the captive Neovim's live working
     /// directory (`getcwd()`), falling back to the configured `self.cwd`.
     ///
-    /// A brief blocking `getcwd()` RPC is issued via `runtime.block_on` (the same
-    /// pattern `start`/`shutdown` use — one sub-ms round-trip). On success the
-    /// returned path is canonicalized (keeping the raw path if canonicalization
-    /// fails — a successful `getcwd()` is a real directory) so it lines up with the
-    /// canonical paths the MRU stores. On failure it logs and falls back to
-    /// canonicalizing `self.cwd`, the configured root.
+    /// A brief blocking `getcwd()` RPC is issued via
+    /// [`block_on_rpc`](Self::block_on_rpc), bounded by
+    /// [`rpc_timeout`](Self::rpc_timeout) ([`RPC_TIMEOUT_DEFAULT`],
+    /// `WOLF_RPC_TIMEOUT_MS`) — one sub-ms round-trip in the healthy case. On
+    /// success the returned path is canonicalized (keeping the raw path if
+    /// canonicalization fails — a successful `getcwd()` is a real directory) so it
+    /// lines up with the canonical paths the MRU stores. On failure — including a
+    /// [`NvimError::Timeout`] when nvim is wedged — it logs and falls back to
+    /// canonicalizing `self.cwd`, the configured root (the reproduced crash path,
+    /// now bounded rather than an unbounded main-thread hang).
     fn resolve_search_root(&self) -> PathBuf {
-        match self.runtime.block_on(self.nvim.current_dir()) {
+        match self.block_on_rpc("current_dir", self.nvim.current_dir()) {
             Ok(p) => std::fs::canonicalize(&p).unwrap_or(p),
             Err(e) => {
                 tracing::warn!("getcwd() query failed ({e}); falling back to configured cwd");
                 std::fs::canonicalize(&self.cwd).unwrap_or_else(|_| self.cwd.clone())
             }
+        }
+    }
+
+    /// Runs an interactive synchronous nvim RPC under the core's configured
+    /// [`rpc_timeout`](Self::rpc_timeout) budget, delegating to the module-level
+    /// [`timeout_block_on`].
+    ///
+    /// The central chokepoint for every interactive `block_on` on `self.nvim`:
+    /// on elapse it logs a `warn!` and returns [`NvimError::Timeout`], which each
+    /// call site already degrades to its documented fallback (`""`, `0`, `None`,
+    /// an empty `Vec`, …) — so a wedged nvim yields a bounded stall instead of an
+    /// unbounded main-thread hang. Deliberately NOT used for startup or shutdown
+    /// (those have their own bounds).
+    fn block_on_rpc<F, T>(&self, what: &'static str, fut: F) -> Result<T, NvimError>
+    where
+        F: std::future::Future<Output = Result<T, NvimError>>,
+    {
+        timeout_block_on(&self.runtime, self.rpc_timeout, what, fut)
+    }
+}
+
+/// Runs `fut` to completion on `runtime`, bounded by `timeout`.
+///
+/// Extracted as a free fn (rather than only a `&self` method) so the timeout
+/// mechanism is unit-testable WITHOUT spawning a live nvim: a never-resolving
+/// future under a short budget must map to [`NvimError::Timeout`] promptly. On
+/// elapse it logs a `warn!` naming the wedged RPC and returns
+/// `NvimError::Timeout(what, timeout)`; otherwise the inner `Result` (whether
+/// `Ok` or a real RPC `Err`) passes through verbatim.
+fn timeout_block_on<F, T>(
+    runtime: &Runtime,
+    timeout: Duration,
+    what: &'static str,
+    fut: F,
+) -> Result<T, NvimError>
+where
+    F: std::future::Future<Output = Result<T, NvimError>>,
+{
+    // The `tokio::time::timeout` future must be CONSTRUCTED inside the runtime
+    // context (its timer registers with the reactor on creation), so build it in
+    // the async block rather than passing it as an already-created argument to
+    // `block_on` (which would evaluate it outside any runtime → "no reactor").
+    match runtime.block_on(async move { tokio::time::timeout(timeout, fut).await }) {
+        Ok(inner) => inner,
+        Err(_elapsed) => {
+            tracing::warn!("nvim RPC '{what}' timed out after {timeout:?}");
+            Err(NvimError::Timeout(what, timeout))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for the RPC-timeout chokepoint mechanism.
+    //!
+    //! These exercise the private free fn `timeout_block_on` DIRECTLY, with NO
+    //! live nvim: the point of extracting the mechanism into a free fn (rather than
+    //! only a `&self` method on `WolfCore`) is that its timeout behaviour can be
+    //! pinned deterministically and fast, without spawning Neovim. The end-to-end
+    //! behaviour against a real, wedged nvim is covered by
+    //! `tests/rpc_timeout.rs`.
+    //!
+    //! NOTE to coder: these are written to the signature the plan specifies for the
+    //! not-yet-existing items. `timeout_block_on` is expected to be:
+    //!
+    //! ```ignore
+    //! fn timeout_block_on<F, T>(
+    //!     runtime: &tokio::runtime::Runtime,
+    //!     timeout: std::time::Duration,
+    //!     what: &'static str,
+    //!     fut: F,
+    //! ) -> Result<T, NvimError>
+    //! where
+    //!     F: std::future::Future<Output = Result<T, NvimError>>;
+    //! ```
+    //!
+    //! and `NvimError::Timeout(&'static str, Duration)` a new variant. If the coder
+    //! diverges from these, align the source (not the test) with the plan.
+
+    use std::future;
+    use std::time::{Duration, Instant};
+
+    use tokio::runtime::Builder;
+
+    use super::{timeout_block_on, NvimError};
+
+    /// A short timeout for the never-resolving case: long enough to be a genuine
+    /// bound, short enough to keep the test fast.
+    const SHORT_TIMEOUT: Duration = Duration::from_millis(50);
+
+    /// A generous timeout for the pass-through cases, where the future is already
+    /// resolved so the timeout must NEVER fire.
+    const GENEROUS_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// Upper bound on how long `timeout_block_on` may take to return on a future
+    /// that never resolves: comfortably above the 50ms timeout plus scheduling
+    /// slack, and far below a real unbounded hang. Proves the call is bounded.
+    const RETURN_BOUND: Duration = Duration::from_secs(2);
+
+    /// The value carried by the ready-Ok pass-through future.
+    const READY_VALUE: i32 = 7;
+
+    /// Builds the current-thread runtime the unit tests drive `timeout_block_on`
+    /// on. `enable_all()` is required so `tokio::time::timeout`'s timer is armed.
+    fn rt() -> tokio::runtime::Runtime {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build current-thread runtime")
+    }
+
+    /// A future that never resolves must elapse the timeout and map to
+    /// `NvimError::Timeout(what, timeout)` — returning PROMPTLY (bounded), never
+    /// parking the caller indefinitely.
+    #[test]
+    fn timeout_block_on_times_out_on_never_resolving_future() {
+        let rt = rt();
+
+        let start = Instant::now();
+        let result: Result<(), NvimError> = timeout_block_on(
+            &rt,
+            SHORT_TIMEOUT,
+            "wedged",
+            future::pending::<Result<(), NvimError>>(),
+        );
+        let elapsed = start.elapsed();
+
+        match result {
+            Err(NvimError::Timeout(what, dur)) => {
+                assert_eq!(what, "wedged", "the timeout error must carry the RPC label");
+                assert_eq!(
+                    dur, SHORT_TIMEOUT,
+                    "the timeout error must carry the configured duration"
+                );
+            }
+            other => panic!("expected Err(NvimError::Timeout(..)), got {other:?}"),
+        }
+
+        assert!(
+            elapsed < RETURN_BOUND,
+            "timeout_block_on must return promptly (bounded); took {elapsed:?}"
+        );
+    }
+
+    /// An already-ready `Ok` future passes straight through under a generous
+    /// timeout: the timeout is a backstop, not a delay.
+    #[test]
+    fn timeout_block_on_passes_through_ready_ok() {
+        let rt = rt();
+
+        let result: Result<i32, NvimError> = timeout_block_on(
+            &rt,
+            GENEROUS_TIMEOUT,
+            "ready",
+            future::ready(Ok(READY_VALUE)),
+        );
+
+        assert_eq!(
+            result.expect("a ready Ok future must pass through as Ok"),
+            READY_VALUE
+        );
+    }
+
+    /// An inner `Err` is returned VERBATIM (not remapped to `Timeout`): the
+    /// chokepoint only converts an ELAPSED timeout, never a real RPC failure.
+    #[test]
+    fn timeout_block_on_passes_through_inner_err() {
+        let rt = rt();
+
+        let result: Result<(), NvimError> = timeout_block_on(
+            &rt,
+            GENEROUS_TIMEOUT,
+            "boom",
+            future::ready(Err(NvimError::Rpc("boom".into()))),
+        );
+
+        match result {
+            Err(NvimError::Rpc(msg)) => {
+                assert_eq!(
+                    msg, "boom",
+                    "the inner Rpc error must pass through verbatim"
+                );
+            }
+            other => panic!("expected the inner Err(NvimError::Rpc(\"boom\")), got {other:?}"),
         }
     }
 }

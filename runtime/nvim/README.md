@@ -14,7 +14,7 @@ nvim --embed --clean -u runtime/nvim/init.lua -i NONE -n
 
 What it sets and why:
 
-- **Hermetic / no on-disk side effects** — `swapfile = false`, `shadafile = "NONE"`, `undofile = false`, `backup = false`, `writebackup = false`. The captive editor must never touch the user's state.
+- **Hermetic / no on-disk side effects** — `swapfile = false`, `shadafile = "NONE"`, `undofile = false`, `backup = false`, `writebackup = false`. The captive editor must never touch the user's state. A `SwapExists` autocmd (the `WolfSwap` augroup) additionally sets `vim.v.swapchoice = "e"` (edit anyway) so a stale swap file left in the shared global state dir (e.g. by a crashed prior run) can never raise the blocking E325 "swap file exists" prompt — complementing `swapfile = false`, which stops NEW swap files, whereas this handles a PRE-EXISTING one. Wolf is hermetic and does not manage recovery, so "edit anyway" is the correct policy.
 - **Clean initial grid** — `shortmess += "I"` suppresses the intro message so it does not pollute the first frame.
 - **True color** — `termguicolors = true`, so `hl_attr_define` / `default_colors_set` carry RGB values the front-ends paint directly.
 - **Chrome-free, deterministic grid** — `number = false`, `signcolumn = "no"`, `ruler = false`, `showcmd = false`, `laststatus = 0` (the front-end draws its own chrome).

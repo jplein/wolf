@@ -23,6 +23,19 @@ local opt = vim.opt
 
 -- Hermetic / no on-disk side effects: never touch the user's state.
 opt.swapfile = false
+
+-- Hermetic "edit anyway" swap policy: Wolf does not manage recovery, so a stale
+-- swap file (e.g. left by a crashed prior run) must never surface the blocking
+-- E325 "swap file exists" prompt. Answer any SwapExists with "e" (edit anyway).
+local swap_group = vim.api.nvim_create_augroup("WolfSwap", { clear = true })
+vim.api.nvim_create_autocmd("SwapExists", {
+	group = swap_group,
+	pattern = "*",
+	callback = function()
+		vim.v.swapchoice = "e"
+	end,
+})
+
 opt.shadafile = "NONE"
 opt.undofile = false
 opt.backup = false

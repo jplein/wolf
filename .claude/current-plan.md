@@ -1,121 +1,287 @@
-# Plan: Browser preview — follow links to other files
+# Current Plan: bound synchronous nvim RPCs + make swap prompts impossible
 
-## Status: COMPLETE ✅
+Source of truth for this effort is `rpc-timeout-plan.md` at the repo root. This
+file is the orchestrator's working copy and will be replaced with the
+architect's detailed plan.
 
-Reviewer APPROVED WITH NITS (traversal guard + binary safety verified correct). Nits resolved: FFI source doc-comments (`wolf-ffi/src/lib.rs:531,2041`) + 3 README mentions updated to `/<relpath>`; rustfmt clean; docs prettier-clean. Coder re-verified: `wolf_core_lib_test` pass, `wolf-ffi:all` 30/30, `wolf_ffi` builds. `browser_preview` 6/6, full 52 sweep green, clippy + denylist clean, no new crate. NOT committed (per user instruction).
+## Scope (confirmed with user)
 
-Accepted non-blocking: rare non-canonical-root edge (only over-rejects, never escapes); no integration test for the unnamed-buffer empty-relpath live-at-`/` branch (unit-covered).
+Implement TWO of the three separable efforts from `rpc-timeout-plan.md`:
 
+- **(a) RPC timeout backstop** — a central `block_on_rpc` chokepoint on
+  `WolfCore` that wraps every interactive synchronous nvim RPC in a
+  `tokio::time::timeout`, converting an unbounded main-thread hang (macOS
+  beach-ball) into a bounded stall that degrades to each method's existing
+  fallback, plus a `tracing::warn!` naming the wedged RPC.
+- **(b) SwapExists autocmd** — add a `SwapExists` autocmd to
+  `runtime/nvim/init.lua` that sets `vim.v.swapchoice = "e"` so a stale swap
+  file never blocks the captive nvim.
 
+OUT OF SCOPE for this run (deferred to a separate PR, per the plan):
 
-### Coder report (done, all green)
-Implemented nvim.rs `buffer_path`, browser_preview.rs `Target`/helpers/`route`/`Vec<u8>` refactor, api.rs `open_in_browser` return-URL. Results: `wolf_core_lib_test` pass; `browser_preview` 6/6 (incl. traversal rejection, raw asset bytes, linked markdown static, missing-404); `//crates/wolf-core:all //crates/wolf-ffi:all` 52 pass; clippy clean (no await_holding_lock); denylist clean (only glibc false positive); no new crate. All frozen signatures/content-types matched.
-- OPEN: 2 rustfmt diffs inside the frozen test module (`browser_preview.rs:777-778`, `:919`) — coder left them (no-test-edit rule); test-writer to run rustfmt.
+- (c) the inline cmdline `prompt` render/answer UX in `CmdlineView.swift`.
+- The off-main-thread follow-up for the hot picker/preview paths.
 
-### Test-writer report (done)
-- `src/browser_preview.rs` mod tests: updated `http_response_*`/`not_found_*` to `Vec<u8>`; added `http_response_bytes` (non-UTF8 byte-exact), `redirect_response`, `content_type_for`, `is_markdown_path`, `relpath_between`, `encode_url_path`, `percent_decode`, `resolve_path` (tempdir traversal guard).
-- `tests/browser_preview.rs`: added `path_from_url`, `http_get_bytes`, local `start_core_in_dir` (dedicated tempdir so siblings resolve as server root); modified happy-path to GET the relpath + `GET /`→302; added `linked_markdown_sibling_renders_static`, `path_traversal_is_rejected`, `linked_asset_serves_raw_bytes`, `missing_markdown_target_is_404`.
-- **Coder MUST match these assumed signatures** (tests are frozen): `content_type_for(&Path) -> &'static str`, `is_markdown_path(&Path) -> bool`, `relpath_between(&Path, &Path) -> String`, `resolve_path(&Path, &str) -> Option<PathBuf>`, `http_response_bytes(&str, &str, &[u8]) -> Vec<u8>`, `redirect_response(&str) -> Vec<u8>`, `encode_url_path(&str)`, `percent_decode(&str)`. Content-type strings must be EXACTLY: `image/png`, `image/jpeg`, `image/svg+xml`, `text/css; charset=utf-8`, `text/javascript; charset=utf-8`, unknown→`application/octet-stream`.
-- Test-writer wished for a `common::start_core_in_dir` helper (used a local one instead) — coder may optionally add it to `common/mod.rs` but not required.
+## Confirmed open decisions
 
-## Problem statement
+1. `RPC_TIMEOUT_DEFAULT` = **5 seconds** (matches `SHUTDOWN_TIMEOUT`).
+2. Env-override escape hatch **`WOLF_RPC_TIMEOUT_MS`**: **yes** — resolved once
+   at `WolfCore::start`, stored as a `Duration` field on `WolfCore`. Makes the
+   integration test deterministic and gives operators an escape hatch.
+4. `SwapExists` policy: **`"e"`** (edit anyway) — Wolf is hermetic and does not
+   manage recovery.
 
-The "Preview in Browser" feature (already shipped) serves only the pinned buffer
-at `GET /` and returns 404 for anything else. So clicking a relative link in the
-rendered Markdown — e.g. the README's "Building Wolf" → `build.md` — navigates the
-browser to `http://127.0.0.1:<port>/build.md`, which 404s ("Not found"). The
-in-app pane preview follows the same link fine (it intercepts the WebKit `file://`
-navigation and calls `preview_file(win, absolute_path)`).
+## Design summary (from rpc-timeout-plan.md)
 
-**Goal:** make relative links in the browser preview work — clicking a link to
-another Markdown file renders that file in the browser; linked assets (images,
-etc.) also load — so the browser preview reaches parity with the in-app preview.
+### (a) RPC timeout
 
-## Grounding (verified in code)
+1. Add a `Timeout(&'static str, Duration)` variant to `NvimError` in
+   `crates/wolf-core/src/nvim.rs`. Existing call sites already match
+   `Ok(_) => …, Err(_) => <fallback>`, so the new `Err` variant needs no
+   per-site branch change.
+2. Add `const RPC_TIMEOUT_DEFAULT: Duration = Duration::from_secs(5);` and a
+   `block_on_rpc<F, T>(&self, what: &'static str, fut: F)` helper on `WolfCore`
+   in `crates/wolf-core/src/api.rs` that runs
+   `self.runtime.block_on(tokio::time::timeout(self.rpc_timeout, fut))`, logging
+   a `warn!` and returning `NvimError::Timeout` on elapse.
+3. Store `rpc_timeout: Duration` on `WolfCore`, resolved at `WolfCore::start`
+   from `WOLF_RPC_TIMEOUT_MS` (falling back to `RPC_TIMEOUT_DEFAULT`).
+4. Route the interactive RPC sites through the helper (see the table in
+   `rpc-timeout-plan.md`, sites at api.rs 377, 414, 437, 471, 484, 486, 539,
+   565, 587, 630, 654, 672, 947). `start_file_search` is covered transitively
+   via `resolve_search_root`. Explicitly NOT rerouted: startup `block_on`
+   (api.rs:251) and shutdown (api.rs:933).
 
-- Server: `crates/wolf-core/src/browser_preview.rs` — routes `/` (render pinned
-  buffer + reload script), `/tick` (pinned buffer changedtick), else 404. Pinned
-  target is `Arc<AtomicI64>` (bufnr). Hand-rolled HTTP/1.1 on tokio.
-- `crates/wolf-core/src/nvim.rs`: `render_source_html(nvim, bufnr)` (pure render
-  path shared with the in-app preview), `current_markdown_bufnr()`, a `getcwd()`
-  helper (~line 195), `nvim_buf_get_name` usage, and `preview_file(win, path)`
-  (the in-app link-follow — repoints a preview window at an ABSOLUTE path).
-- `crates/wolf-core/src/markdown.rs::render_html` passes relative link hrefs
-  through unchanged (its event rewriter only touches markers/headings/math), so
-  `[Building Wolf](build.md)` → `<a href="build.md">` — no rewriting needed; the
-  browser resolves it relative to the current page URL.
-- `WolfCore::open_in_browser() -> String` (api.rs) returns `http://127.0.0.1:<port>/`.
-- The macOS front-end just opens the returned URL via `NSWorkspace`; NO front-end
-  change is needed for link-following (the browser handles navigation; the server
-  serves the target). This stays macOS-agnostic / server-side.
+### (b) SwapExists autocmd
 
-## Design direction (architect to finalize)
+Add a `SwapExists` autocmd to `runtime/nvim/init.lua` setting
+`vim.v.swapchoice = "e"`.
 
-Turn the server into a tiny static site rooted at the PROJECT ROOT (nvim
-`getcwd()`), so relative links (including `../`) resolve correctly in URL space:
+## Tests (from rpc-timeout-plan.md)
 
-- Root the server at `ROOT` = nvim `getcwd()` (canonicalized). Fallback to the
-  pinned file's parent directory when the file is not under `ROOT` or cwd query
-  fails; handle an unnamed/unsaved buffer (empty path) gracefully.
-- The pinned file is served at its ROOT-relative URL. RECOMMENDATION:
-  `open_in_browser` returns `http://127.0.0.1:<port>/<relpath>` DIRECTLY (cleanest;
-  the browser address bar shows the real path and relative links resolve against
-  it). Alternative: keep returning `/` and 302-redirect `/` → `/<relpath>`.
-  Architect picks one and justifies; note the integration-test impact either way.
-- `GET /<relpath>`: canonicalize `ROOT/<url-path>` (URL-decode, strip query/frag),
-  and REJECT (404) any path that escapes `ROOT` (path-traversal guard — hard
-  requirement, even though loopback-only). Then:
-  - If the resolved path is the PINNED file → render live from its buffer via
-    `render_source_html` + inject the reload script (the live-editing page).
-  - Else if it is a Markdown file (`.md`/`.markdown`) that exists → render from
-    DISK via `markdown::render_html` (a static snapshot; linked pages are not
-    live — document this). No reload script (or a benign one).
-  - Else if it exists (image/css/other asset) → serve RAW bytes with a content
-    type guessed from the extension (so `![img](pic.png)` and any linked asset
-    load).
-  - Else → 404.
-- `/tick` unchanged (pinned buffer). Live reload continues to apply to the pinned
-  file only; navigating to a linked page is static. Justify this scope.
-- Keep the module GUI-free, hand-rolled on tokio, loopback-only. No new crate
-  (content-type gufrom extension is a tiny match; do NOT add a mime crate).
+- Unit test of `block_on_rpc` with a never-resolving future under a short
+  `rpc_timeout`; assert `Err(NvimError::Timeout(..))` within a small bound.
+- Integration test `crates/wolf-core/tests/rpc_timeout.rs`: real nvim, small
+  `WOLF_RPC_TIMEOUT_MS` (~200ms), wedge nvim with a FINITE
+  `:lua vim.uv.sleep(<3x timeout>)<CR>`, call interactive methods
+  (`start_file_search`/`resolve_search_root`, plus one of `open_preview` /
+  `current_tabpage`), assert fallback returned within ~`RPC_TIMEOUT`, record
+  elapsed to prove the bound.
+- SwapExists test: create a stale swap file for a fixture, open it through the
+  captive nvim, assert it opens without a pending `"confirm"` toast and without
+  blocking.
 
-## Constraints
+## Docs to update
 
-- wolf-core ONE HARD RULE: no GUI toolkit dep; no new crate (extension→content-type
-  is a hand-written match). Re-verify the denylist if anything is added.
-- Loopback-only bind stays; the traversal guard is a NEW hard security requirement
-  (a loopback client must not read files outside ROOT).
-- Prefer end-to-end/integration tests (real nvim + real loopback socket).
-- Docs are source of truth: update `browser_preview.rs` module doc + the READMEs
-  that describe the routes / behavior; `prettier --write` edited Markdown.
+- `crates/wolf-ffi/README.md`: bridge methods reaching nvim are bounded by
+  `RPC_TIMEOUT` and return their documented fallback on timeout; correct the
+  impression that `start_file_search` is entirely non-blocking.
+- `crates/wolf-core/src/README.md`: document `block_on_rpc`,
+  `RPC_TIMEOUT_DEFAULT`, `WOLF_RPC_TIMEOUT_MS`, `NvimError::Timeout`.
+- `runtime/nvim/` README (if present): note the `SwapExists` autocmd.
+- Reformat edited Markdown with `prettier --write`.
 
-## Do NOT commit or push unless the user asks.
+## Architect's detailed plan (authoritative for implementation)
 
----
+### (a) RPC timeout — source changes
 
-## Architect's plan
+**nvim.rs** (`crates/wolf-core/src/nvim.rs`): add to `NvimError` enum after the
+`Attach(String)` variant (~line 53):
+```
+#[error("nvim RPC '{0}' timed out after {1:?}")]
+Timeout(&'static str, Duration),
+```
+`Duration` already imported. Verified: all `NvimError::*` uses are constructors,
+never exhaustive matches — new variant compiles with no match-arm changes.
 
-**Scope: wolf-core only** (no FFI/Swift/discriminant change — the front-end opens whatever URL string it's handed).
+**api.rs** (`crates/wolf-core/src/api.rs`):
+1. Module-level const near `INPUT_COALESCE_DELAY` (~line 77):
+   `const RPC_TIMEOUT_DEFAULT: Duration = Duration::from_secs(5);`
+2. Field on `WolfCore` struct: `rpc_timeout: Duration`.
+3. In `WolfCore::start` (~line 214, near `cwd`), resolve once:
+   ```
+   let rpc_timeout = std::env::var("WOLF_RPC_TIMEOUT_MS")
+       .ok().and_then(|v| v.trim().parse::<u64>().ok())
+       .filter(|&ms| ms > 0)
+       .map(Duration::from_millis)
+       .unwrap_or(RPC_TIMEOUT_DEFAULT);
+   ```
+   The `.filter(|&ms| ms > 0)` guard (refinement over the source plan) prevents
+   `0`/invalid → instant-timeout `Duration::ZERO`. Add `rpc_timeout,` to the
+   `Ok(Self { … })` initializer. Runtime already built `.enable_all()` (~209),
+   so the timer works.
+4. Add a private module-level free fn `timeout_block_on` (extracted so the
+   mechanism is unit-testable WITHOUT a live nvim — the source plan's "unit test
+   with a never-resolving future, no live nvim" is only achievable this way):
+   ```
+   fn timeout_block_on<F, T>(runtime: &Runtime, timeout: Duration,
+       what: &'static str, fut: F) -> Result<T, NvimError>
+   where F: std::future::Future<Output = Result<T, NvimError>> {
+       match runtime.block_on(tokio::time::timeout(timeout, fut)) {
+           Ok(inner) => inner,
+           Err(_elapsed) => {
+               tracing::warn!("nvim RPC '{what}' timed out after {timeout:?}");
+               Err(NvimError::Timeout(what, timeout))
+           }
+       }
+   }
+   ```
+   And the delegating method on `WolfCore`:
+   ```
+   fn block_on_rpc<F, T>(&self, what: &'static str, fut: F) -> Result<T, NvimError>
+   where F: std::future::Future<Output = Result<T, NvimError>> {
+       timeout_block_on(&self.runtime, self.rpc_timeout, what, fut)
+   }
+   ```
+5. Reroute the 13 interactive sites: replace `self.runtime.block_on(self.nvim.X())`
+   with `self.block_on_rpc("X", self.nvim.X())`, leaving the surrounding
+   `.unwrap_or_default()` / `.ok()` / `match` wrapper INTACT. Verified current
+   lines (no drift from source table):
 
-### Decisions
-- **D1 Root** = `canonicalize(getcwd())`. Fallback (cwd fails, or pinned file not under cwd, or unnamed buffer) = `canonicalize(pinned_abs.parent())`. NOTE: the existing integration test's temp `.md` is OUTSIDE nvim cwd → exercises the parent-dir fallback (root = temp dir, relpath = filename).
-- **D2 Return value**: `open_in_browser` returns `http://127.0.0.1:<port>/<url-encoded relpath>` (or `.../` when unnamed). `GET /` **302-redirects** to `/<relpath>` (or serves pinned live when relpath empty). URL-encode each `/`-split segment (unreserved `A-Za-z0-9-_.~` kept; `build.md`→`build.md`, `a b.md`→`a%20b.md`).
-- **D3 Path→FS (traversal guard, HARD security req)**: `resolve_path(root, url_target)`: strip `?`/`#`, percent-decode, `trim_start_matches('/')`, `root.join(rel)`, `std::fs::canonicalize` (non-existent → None → 404), `starts_with(root)` else None. `root` must be canonical (macOS `/var`→`/private/var`). Canonicalize BEFORE starts_with (symlinks/`..` normalized).
-- **D4 Live vs static**: pinned file → live from buffer via `render_source_html`+`render_page` (reload script). Other markdown → static from DISK via `markdown::render_html(.., PreviewTheme::Default)`, NO reload script (`/tick` tracks only pinned). "Is pinned?" = decoded rel == stored `pinned_relpath` (also defensive canonical `pinned_abs` compare).
-- **D5 Assets + binary-safe**: non-markdown existing files → raw bytes via `std::fs::read` + `content_type_for(path)` hand-written match (no mime crate). REFACTOR the whole write path to `Vec<u8>`: new `http_response_bytes(status, content_type, &[u8]) -> Vec<u8>`; `http_response(..&str)` delegates. Images MUST NOT pass through `from_utf8_lossy`.
-- **D6 Markdown exts** (case-insensitive): `md`, `markdown`, `mdown`, `mkd`, `mkdn`, `mdwn`. File I/O = blocking `std::fs` (no tokio `fs` feature; tiny local files, multi-thread runtime).
+   | Line | Method | `what` | Fallback on Err |
+   | --- | --- | --- | --- |
+   | 377 | copy_visual_selection | `yank_visual_selection` | None |
+   | 414 | list_buffers | `list_buffers` | `Vec::new()` |
+   | 435-437 | render_preview | `render_preview` | `String::new()` |
+   | 471 | open_in_browser | `current_markdown_bufnr` | early `return String::new()` |
+   | 483-484 | open_in_browser | `buffer_path` | `.unwrap_or_default()`→`""`, cmd continues (URL root `/`) |
+   | 486 | open_in_browser | `current_dir` | `.ok()`→`None` root |
+   | 539 | open_preview | `open_preview` | 0 |
+   | 565 | edit_source | `edit_source` | 0 |
+   | 587 | preview_file | `preview_file` | 0 |
+   | 630 | create_tabpage | `create_tabpage` | 0 |
+   | 654 | cwd_for_tabpage | `tab_cwd` | None |
+   | 672 | current_tabpage | `current_tabpage` | 0 |
+   | 947 | resolve_search_root | `current_dir` | `self.cwd` (reproduced crash path) |
 
-### Files to modify
-**`browser_preview.rs`**: new `pub(crate) struct Target { bufnr, root: PathBuf, pinned_abs: PathBuf, pinned_relpath: String }` (Clone). Change `BrowserPreview.target` `Arc<AtomicI64>`→`Arc<parking_lot::Mutex<Target>>`; `set_target(Target)`; `spawn(.., initial: Target)`; thread through `accept_loop`/`handle_conn`. New helpers: `build_target(bufnr, cwd: Option<PathBuf>, pinned_raw) -> Target` (FS canonicalize), pure `relpath_between(root, abs) -> String`, `encode_url_path(rel)`, `percent_decode(s)`, `resolve_path(root, url_target) -> Option<PathBuf>`, `is_markdown_path(path)`, `content_type_for(path) -> &'static str`, `http_response_bytes`, `redirect_response(location)`. Refactor `http_response`/`not_found_response`→`Vec<u8>`; `handle_conn` writes `&Vec<u8>`. Extract `async fn route(..) -> Vec<u8>`: `/tick` unchanged; clone `Target` out of the lock and DROP guard before any `.await`; `/`→ pinned-live-if-empty else 302; if rel==pinned_relpath → pinned live; else `resolve_path` → None=404 / ==pinned_abs=live / markdown=disk-render / else=raw bytes. Rewrite module doc Routes section.
-**`nvim.rs`**: add `pub async fn buffer_path(&self, bufnr: i64) -> Result<String, NvimError>` (`nvim_buf_get_name`, empty when unnamed). Reuse `render_source_html`, `current_dir` (getcwd ~line 202).
-**`api.rs`**: rewrite `open_in_browser` — block_on `current_markdown_bufnr` (≤0→""), `buffer_path(bufnr)`, `current_dir()` — ALL before the lock; `build_target`; lock reuse-or-spawn; build URL per D2. Update doc comments.
+   **Do NOT touch**: startup `block_on` (~api.rs:251), shutdown (~api.rs:933,
+   already `SHUTDOWN_TIMEOUT`-bounded), `browser_preview.rs` `TcpListener::bind`.
+   Steps 1-5 land as ONE unit to keep the crate compiling (avoid transient
+   `dead_code` on the helpers — do not add `#[allow(dead_code)]`).
 
-### Tests (for test-writer) §5
-**Unit (`browser_preview.rs` mod tests)**: CHANGE `http_response_frames_*` + `not_found_response_is_404` to `Vec<u8>` (assert via `from_utf8_lossy` or byte slices). ADD: `content_type_for` (png/jpg/jpeg/svg/css/js/unknown, case-insensitive), `is_markdown_path`, `relpath_between` (pure), `encode_url_path`, `percent_decode`, `resolve_path` (tempdir: valid/percent/query-strip/`..`-escape/`%2e%2e`-escape/non-existent), `http_response_bytes` (non-UTF8 body `[0xFF,0x00,0xFE]` byte-exact + Content-Length), `redirect_response` (302 + Location + CL 0). Keep `render_page_*`/`reload_script_*`/`fallback_page_*`/`parse_request_target_*`/`preview_listener_binds_loopback_only`.
-**Integration (`tests/browser_preview.rs`)**: add `path_from_url(url)` helper + `http_get_bytes(port, path) -> (u16, Vec<u8>, content_type)`. MODIFY happy-path test: GET the returned relpath (`path_from_url`) not `/`; optional `GET /`→302 assert (don't follow). ADD (each in a dedicated `tempdir`, open `<dir>/test.md`, write siblings there): (a) `<dir>/build.md` → `GET /build.md` 200, contains `wolf-markdown`+build text, NOT `location.reload`; (b) `GET /../../etc/passwd` and `/%2e%2e/%2e%2e/etc/passwd` → 404, body lacks `root:`; (c) `<dir>/pic.png` known bytes → `GET /pic.png` 200, `Content-Type: image/png`, exact bytes; (d) `GET /missing.md` → 404. Keep `non_markdown_buffer_returns_empty_url`.
+   Note: sites 483-484 and 486 use combinators, not `match` — flagged
+   discrepancy with source plan line 50, but both still degrade on `Err` with no
+   per-site branch change, so the reroute is mechanical. Sites that already
+   `warn!` in their Err arm will log twice on timeout — harmless, leave as-is.
 
-### Docs (technical-writer) §8
-`browser_preview.rs` module doc; `crates/wolf-core/README.md` "browser preview server" (return value + routes + traversal guard + Target); `crates/wolf-core/src/README.md` (browser_preview section + `buffer_path` bullet); `crates/wolf-core/tests/README.md` (new cases + bytes helper); grep `command-lifecycle.md`/`architecture.md` for the returned-URL/`127.0.0.1` and update only if they state the old `/` route. `prettier --write` each.
+### (b) SwapExists autocmd
 
-### Order: nvim.rs `buffer_path` → browser_preview.rs (Target+helpers+route, Vec<u8> refactor) → api.rs → unit tests → integration → docs.
-### Risks: binary safety (Vec<u8> path, never lossy an image); traversal guard (canonicalize before starts_with, canonical root for macOS /var symlink); lock-across-await (clone Target out, drop guard before await → clippy::await_holding_lock); no new crate (hand-written encode/decode/mime); loopback bind unchanged; return-URL ripple into the integration test.
+**runtime/nvim/init.lua**: immediately after line 25 (`opt.swapfile = false`),
+before `opt.shortmess`, add (tab-indented to match the file):
+```
+local swap_group = vim.api.nvim_create_augroup("WolfSwap", { clear = true })
+vim.api.nvim_create_autocmd("SwapExists", {
+	group = swap_group,
+	pattern = "*",
+	callback = function()
+		vim.v.swapchoice = "e"
+	end,
+})
+```
+With a short comment explaining hermetic "edit anyway" policy.
+
+## Tests (architect's plan — test-writer follows this)
+
+1. **Unit tests** in `#[cfg(test)] mod tests` in `api.rs` (test `timeout_block_on`,
+   in-crate, no nvim):
+   - `timeout_block_on_times_out_on_never_resolving_future`: current-thread
+     runtime `.enable_all()`, `std::future::pending::<Result<(),NvimError>>()`
+     under 50ms, assert `Err(NvimError::Timeout("wedged", 50ms))`, returned in
+     well under 2s.
+   - `timeout_block_on_passes_through_ready_ok`: `future::ready(Ok(7))` under
+     generous timeout → `Ok(7)`.
+   - `timeout_block_on_passes_through_inner_err`: future → `Err(Rpc("boom"))`
+     returned verbatim (not converted to Timeout).
+2. **Integration** `crates/wolf-core/tests/rpc_timeout.rs` (real nvim; copy
+   harness from `tests/file_search.rs` / `tests/save_open.rs`: `mod common;`,
+   `require_nvim_bin`, `config`/`config_in`, `wake_channel`, `start_core_*`,
+   `wait_for_initial_flush`, `ch`/`type_str`/`key(Key::Enter)`):
+   - Set `std::env::set_var("WOLF_RPC_TIMEOUT_MS", "200")` BEFORE `WolfCore::start`
+     (resolved once at start).
+   - Wedge FINITE: feed `:` then `type_str("lua vim.uv.sleep(700)")` then Enter.
+     Use `vim.uv.sleep` NOT `while true do end` so nvim recovers for teardown.
+     Do NOT `wait_for_flush` after wedging.
+   - `start_file_search_returns_within_timeout_while_wedged`: call
+     `start_file_search` (→ resolve_search_root, site 947) while wedged, assert
+     returns `< 2s` (>> 200ms timeout, << ~24s real hang), record elapsed.
+   - At least one more: `current_tabpage()`→0 or `list_buffers()`→empty within
+     the same bound.
+   - Teardown: `core.shutdown().expect(..)` after nvim recovers.
+   - Document the coalesce/async race; widen sleep/bound if flaky, don't tighten.
+3. **SwapExists** (real nvim, in `save_open.rs` or new `swap_exists.rs`): place a
+   stale swap file in the isolated `XDG_STATE_HOME/nvim/swap` (under the core's
+   temp `state_root`, see `NvimConfig::from_env` in nvim.rs), open the fixture
+   through the core, assert it opens (grid reflects content) without blocking and
+   `!core.read_snapshot().toast.is_prompt()`. If a genuine E325 can't be provoked
+   deterministically in hermetic `--clean`, the load-bearing assertion is:
+   opening with a stale swap present completes and shows no confirm prompt.
+   Coordinate with coder on where the isolated swap dir resolves.
+
+No existing test should need changes (FFI discriminant/snapshot/signatures
+unchanged; new NvimError variant breaks no match).
+
+## Docs to update (technical-writer)
+
+- `crates/wolf-core/src/README.md`: `block_on_rpc`, `RPC_TIMEOUT_DEFAULT`,
+  `WOLF_RPC_TIMEOUT_MS`, `rpc_timeout` field, the 13 guarded methods + the 2 not
+  guarded (startup/shutdown), and `NvimError::Timeout` variant.
+- `crates/wolf-ffi/README.md`: bridge methods reaching nvim bounded by
+  `RPC_TIMEOUT`; correct `start_file_search` (~line 34) — not entirely
+  non-blocking, resolves search root via a bounded `getcwd()` RPC.
+- `runtime/nvim/README.md`: `SwapExists`/`WolfSwap` autocmd in the hermetic
+  bullet (~line 17).
+- `prettier --write` each edited Markdown.
+
+## Status
+
+- [x] architect — detailed plan
+- [x] test-writer — tests (unit in api.rs mod tests; `tests/rpc_timeout.rs`;
+      `tests/swap_exists.rs`). Assumed sigs: `timeout_block_on(runtime:
+      &tokio::runtime::Runtime, timeout: Duration, what: &'static str, fut: F) ->
+      Result<T, NvimError>` where `F: Future<Output=Result<T,NvimError>>`, called
+      as `super::timeout_block_on`; `NvimError::Timeout(&'static str, Duration)`
+      with `#[error("nvim RPC '{0}' timed out after {1:?}")]`. Tuple order is
+      load-bearing (test asserts `"wedged"`, `Duration::from_millis(50)`). Swap
+      test is best-effort provocation (E325 may not fire in hermetic --clean);
+      load-bearing assertion = opens + no confirm prompt.
+- [x] coder — implement + run tests. All green under **bazel** (real nvim):
+      `wolf_core_lib_test` 141 pass (incl. 3 `timeout_block_on_*`),
+      `rpc_timeout` pass, `swap_exists` pass, `//crates/wolf-core:all` +
+      `//crates/wolf-ffi:all` 54/54, rustfmt + clippy (fail-on-warnings) clean.
+      DEVIATION (correctness): `timeout_block_on` builds `tokio::time::timeout`
+      INSIDE the `block_on` async block (`async move { timeout(..).await }`) — the
+      plan's literal form constructs the timer future outside a runtime context
+      and panics "no reactor running"; unit tests caught it. Signature/behavior
+      otherwise identical. Added `rpc_timeout`/`swap_exists` rust_test targets to
+      `crates/wolf-core/BUILD.bazel`. ORCHESTRATOR DECISION: declined the
+      optional `WOLF_RPC_TIMEOUT_MS=0/invalid` fallback test (trivial guard, would
+      need a live-nvim start-level test for marginal value; env path already
+      exercised with "200"). Note: `tests/swap_exists.rs` (untracked) was
+      rustfmt-formatted by the workspace fix run — cosmetic, leaves it gate-clean.
+- [x] reviewer — APPROVED WITH NITS. Full plan conformance: all 13 sites
+      rerouted with exact labels (api.rs 402,439,460,494,506,509,563,589,611,654,
+      678,696,971), no interactive site missed (only startup:275, shutdown:957,
+      the helper's own:1019, and browser_preview bind:130 remain untouched — all
+      intentional), deviation validated correct, fallback wrappers intact,
+      SwapExists idempotent. NITS: (1) stale inline rustdoc in api.rs at ~396,
+      432, 451, 475, 550, 576, 602, 644, 666, 690, 964 still says "Blocks briefly
+      on the captive nvim (`runtime.block_on`)" — now bounded by rpc_timeout →
+      technical-writer. (2) swap test provocation probabilistic (empty swap file
+      may not fire E325) — ACCEPTED as-is, no change (guard still catches
+      regression when check fires; honestly documented).
+- [x] technical-writer — docs. Updated `crates/wolf-core/src/README.md`
+      (block_on_rpc/timeout_block_on, rpc_timeout, RPC_TIMEOUT_DEFAULT,
+      WOLF_RPC_TIMEOUT_MS, 13 guarded sites + 2 unguarded, NvimError::Timeout),
+      `crates/wolf-ffi/README.md` (RPC_TIMEOUT bound + corrected start_file_search),
+      `runtime/nvim/README.md` (SwapExists/WolfSwap bullet), and the 11 inline
+      api.rs `///` doc-comments (reviewer nit 1 resolved). Orchestrator ran
+      `prettier --write` on the 3 READMEs (all unchanged/already clean) and
+      verified `//tools/lint:rustfmt_core` PASSES after the doc-comment edits.
+      Note: actual startup block_on is api.rs:275, shutdown :957 (early-draft
+      plan said 251/933) — both correctly remain unguarded.
+
+## COMPLETE ✅
+
+Both efforts landed and verified. NOT committed (consistent with prior effort's
+convention — awaiting user). Effort (c) cmdline-prompt render and the
+off-main-thread follow-up remain deferred as separate PRs per the plan.

@@ -573,6 +573,69 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
+# Real-nvim integration test for the central RPC-timeout chokepoint (effort (a)):
+# with a small `WOLF_RPC_TIMEOUT_MS`, a captive nvim WEDGED inside a finite
+# `vim.uv.sleep` still returns each interactive synchronous RPC's documented
+# fallback within a bound (proving `block_on_rpc` converts an unbounded hang into
+# a bounded stall). An EXACT mirror of the `theme` target above: drives a REAL
+# pinned Neovim (no mocks), stages the captive `init.lua` + the pinned nvim tree
+# as runfiles, reuses `tests/common/mod.rs`, and runs unsandboxed so the nvim
+# child can spawn.
+rust_test(
+    name = "rpc_timeout",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/rpc_timeout.rs",
+    ],
+    crate_root = "tests/rpc_timeout.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+# Real-nvim integration test for the `SwapExists` autocmd (effort (b)): a stale
+# swap file planted next to a fixture must NOT block the open — the init.lua
+# `WolfSwap`/`SwapExists` autocmd answers `swapchoice = "e"`, so the file opens
+# and no confirm prompt is left pending. An EXACT mirror of the `theme` target
+# above: drives a REAL pinned Neovim (no mocks), stages the captive `init.lua` +
+# the pinned nvim tree as runfiles, reuses `tests/common/mod.rs`, and runs
+# unsandboxed so the nvim child can spawn.
+rust_test(
+    name = "swap_exists",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/swap_exists.rs",
+    ],
+    crate_root = "tests/swap_exists.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
 # Real-nvim integration test for the record-on-`:cd` write path of the GLOBAL
 # recent-directories MRU: a `:cd <dir>` typed into the embedded nvim must land
 # `<dir>` at the top of the always-on `folder-mru.sqlite` store (verified via both

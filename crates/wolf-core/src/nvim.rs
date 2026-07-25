@@ -52,6 +52,9 @@ pub enum NvimError {
     /// Attaching as a UI failed.
     #[error("nvim_ui_attach failed: {0}")]
     Attach(String),
+    /// A synchronous interactive RPC exceeded the configured timeout budget.
+    #[error("nvim RPC '{0}' timed out after {1:?}")]
+    Timeout(&'static str, Duration),
 }
 
 /// Configuration for launching the captive Neovim.
