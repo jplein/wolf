@@ -218,6 +218,26 @@ impl NvimProcess {
         }
     }
 
+    /// Returns the absolute filesystem path of buffer `bufnr` via
+    /// `nvim_buf_get_name`, or the EMPTY string for an unnamed (never-saved)
+    /// buffer.
+    ///
+    /// Calls `nvim_buf_get_name([bufnr])` and reads the result via
+    /// [`Value::as_str`]; nvim returns `""` for a buffer with no associated file.
+    /// The browser-preview command ([`crate::api::WolfCore::open_in_browser`]) uses
+    /// this to root the loopback static-site server at the pinned file's location.
+    /// An RPC error is propagated as [`NvimError::Rpc`].
+    pub async fn buffer_path(&self, bufnr: i64) -> Result<String, NvimError> {
+        let value = self
+            .nvim
+            .call("nvim_buf_get_name", vec![Value::from(bufnr)])
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+        Ok(value.as_str().unwrap_or_default().to_string())
+    }
+
     /// Queries the captive nvim for its listed buffers, newest-used first-agnostic.
     ///
     /// Calls `nvim_call_function("getbufinfo", [ {buflisted=1} ])` — the single

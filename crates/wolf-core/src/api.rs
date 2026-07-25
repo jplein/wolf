@@ -444,22 +444,30 @@ impl WolfCore {
         }
     }
 
-    /// Opens (or reuses) the loopback-only browser-preview server pinned at the
-    /// currently-active Markdown buffer and returns its `http://127.0.0.1:<port>/`
-    /// URL, or the EMPTY string when the active buffer is not Markdown / on error.
+    /// Opens (or reuses) the loopback-only browser-preview server rooted at the
+    /// project (a tiny static site) and returns the loopback URL of the pinned
+    /// Markdown buffer — `http://127.0.0.1:<port>/<relpath>` (or `.../` when the
+    /// buffer is unnamed) — or the EMPTY string when the active buffer is not
+    /// Markdown / on error.
     ///
-    /// The bufnr is resolved via `runtime.block_on(current_markdown_bufnr())`
-    /// FIRST — OUTSIDE the `browser_preview` lock — so no lock is ever held across
-    /// a `block_on` (the crate's locking invariant). A non-positive bufnr (not a
-    /// markdown buffer) short-circuits to `""`. Then the `browser_preview` slot is
-    /// locked: an existing server is re-pointed at the new bufnr and reused (same
+    /// All captive-nvim queries run via `runtime.block_on` FIRST — OUTSIDE the
+    /// `browser_preview` lock — so no lock is ever held across a `block_on` (the
+    /// crate's locking invariant): the pinned bufnr
+    /// ([`crate::nvim::NvimProcess::current_markdown_bufnr`], non-positive → `""`),
+    /// the pinned file's absolute path
+    /// ([`crate::nvim::NvimProcess::buffer_path`]), and the captive nvim's cwd
+    /// ([`crate::nvim::NvimProcess::current_dir`]). These build the
+    /// [`browser_preview::Target`] (root + relpath) via
+    /// [`browser_preview::build_target`]. Then the `browser_preview` slot is
+    /// locked: an existing server is re-pointed at the new target and reused (same
     /// port); otherwise a server is lazily started (bound `127.0.0.1:0`, random
     /// port). A bind failure is logged and yields `""`. The front-end opens the
-    /// returned URL in the system default browser.
+    /// returned URL in the system default browser; the browser resolves relative
+    /// links against it, and the server serves the linked files.
     #[must_use]
     pub fn open_in_browser(&self) -> String {
-        // Resolve the pinned bufnr BEFORE taking the browser_preview lock, so the
-        // lock is never held across this block_on.
+        // Resolve everything from the captive nvim BEFORE taking the
+        // browser_preview lock, so the lock is never held across a block_on.
         let bufnr = match self.runtime.block_on(self.nvim.current_markdown_bufnr()) {
             Ok(bufnr) => bufnr,
             Err(e) => {
@@ -471,16 +479,23 @@ impl WolfCore {
             return String::new();
         }
 
+        let pinned_raw = self
+            .runtime
+            .block_on(self.nvim.buffer_path(bufnr))
+            .unwrap_or_default();
+        let cwd = self.runtime.block_on(self.nvim.current_dir()).ok();
+        let target = browser_preview::build_target(bufnr, cwd, &pinned_raw);
+
         let mut slot = self.browser_preview.lock();
         let port = if let Some(server) = slot.as_ref() {
-            server.set_target(bufnr);
+            server.set_target(target.clone());
             server.port()
         } else {
             match browser_preview::spawn(
                 &self.runtime,
                 self.nvim.handle(),
                 self.snapshot.clone_handle(),
-                bufnr,
+                target.clone(),
             ) {
                 Ok(server) => {
                     let port = server.port();
@@ -494,7 +509,14 @@ impl WolfCore {
             }
         };
 
-        format!("http://127.0.0.1:{port}/")
+        if target.pinned_relpath.is_empty() {
+            format!("http://127.0.0.1:{port}/")
+        } else {
+            format!(
+                "http://127.0.0.1:{port}/{}",
+                browser_preview::encode_url_path(&target.pinned_relpath)
+            )
+        }
     }
 
     /// Opens (or reuses) the Markdown preview pane for the active source buffer and

@@ -528,8 +528,9 @@ mod ffi {
         // nvim. Returns the empty string on error / when the core is gone.
         fn render_preview(&self, source_bufnr: i64) -> String;
         // Opens (or reuses) the loopback-only browser-preview HTTP server pinned at
-        // the active Markdown buffer and returns its `http://127.0.0.1:<port>/`
-        // URL, which the front-end opens in the system default browser. Blocks
+        // the active Markdown buffer and returns its `http://127.0.0.1:<port>/<relpath>`
+        // URL (the pinned file's root-relative path), which the front-end opens in
+        // the system default browser. Blocks
         // briefly on the captive nvim to resolve the buffer. Returns the empty
         // string when the active buffer is not Markdown, on error, or when the core
         // is gone.
@@ -2038,8 +2039,9 @@ impl WolfCoreHandle {
     }
 
     /// Opens (or reuses) the loopback-only browser-preview HTTP server pinned at
-    /// the active Markdown buffer and returns its `http://127.0.0.1:<port>/` URL,
-    /// which the front-end opens in the system default browser.
+    /// the active Markdown buffer and returns its `http://127.0.0.1:<port>/<relpath>`
+    /// URL (the pinned file's root-relative path), which the front-end opens in the
+    /// system default browser.
     ///
     /// Blocks briefly on the captive nvim to resolve the buffer. Returns the empty
     /// string when the active buffer is not Markdown, on error, or once the core
