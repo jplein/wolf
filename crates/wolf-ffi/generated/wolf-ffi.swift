@@ -379,6 +379,18 @@ extension WolfCoreHandleRef {
         __swift_bridge__$WolfCoreHandle$toggle_terminal(ptr)
     }
 
+    public func toggle_full_width() {
+        __swift_bridge__$WolfCoreHandle$toggle_full_width(ptr)
+    }
+
+    public func is_full_width_active() -> Bool {
+        __swift_bridge__$WolfCoreHandle$is_full_width_active(ptr)
+    }
+
+    public func full_width_for_win(_ win: Int64) -> Bool {
+        __swift_bridge__$WolfCoreHandle$full_width_for_win(ptr, win)
+    }
+
     public func copy_selection() -> RustString {
         RustString(ptr: __swift_bridge__$WolfCoreHandle$copy_selection(ptr))
     }
@@ -541,6 +553,10 @@ extension FfiPreviewRef {
 
     public func source_tick() -> UInt64 {
         __swift_bridge__$FfiPreview$source_tick(ptr)
+    }
+
+    public func source_full_width() -> Bool {
+        __swift_bridge__$FfiPreview$source_full_width(ptr)
     }
 }
 extension FfiPreview: Vectorizable {

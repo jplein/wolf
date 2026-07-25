@@ -28,7 +28,7 @@
 /// `ClosePane`(8), `NewBuffer`(9), `ResetFontSize`(10), `IncreaseFontSize`(11),
 /// `DecreaseFontSize`(12), `CommandPalette`(13), `Copy`(14), `Paste`(15),
 /// `BufferPicker`(16), `NewTab`(17), `Preview`(18), `Edit`(19), `Terminal`(20),
-/// `PreviewInBrowser`(21).
+/// `PreviewInBrowser`(21), `FullWidth`(22).
 /// Adding a command is additive
 /// (append a variant + a [`COMMAND_SPECS`] row); reordering is a breaking change.
 /// `CommandPalette` is the palette's own invoking command and is EXCLUDED from the
@@ -85,6 +85,9 @@ pub enum Command {
     /// browser, backed by a lazily-started loopback-only HTTP server owned by the
     /// core (only available when the active buffer is a Markdown file).
     PreviewInBrowser,
+    /// Toggle the active buffer between the ~90-char default content width and full
+    /// pane width (`b:wolf_full_width`).
+    FullWidth,
 }
 
 /// The menu group a command belongs to in a native menu bar.
@@ -289,6 +292,13 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         title: "Preview in Browser",
         menu: MenuGroup::View,
     },
+    CommandSpec {
+        command: Command::FullWidth,
+        id: "full_width",
+        ex_command: "WolfFullWidth",
+        title: "Use full width for content",
+        menu: MenuGroup::View,
+    },
 ];
 
 impl Command {
@@ -319,10 +329,11 @@ mod tests {
     /// The total number of registered commands AFTER appending
     /// `Command::Copy` (14), `Command::Paste` (15), `Command::BufferPicker`
     /// (16), `Command::NewTab` (17), `Command::Preview` (18), `Command::Edit`
-    /// (19), `Command::Terminal` (20), and `Command::PreviewInBrowser`
-    /// (discriminant 21) past `Command::CommandPalette` (13). A named constant so
-    /// the magic-number lint stays quiet and the count's meaning is explicit.
-    const EXPECTED_COMMAND_COUNT: usize = 22;
+    /// (19), `Command::Terminal` (20), `Command::PreviewInBrowser` (21), and
+    /// `Command::FullWidth` (discriminant 22) past `Command::CommandPalette` (13).
+    /// A named constant so the magic-number lint stays quiet and the count's
+    /// meaning is explicit.
+    const EXPECTED_COMMAND_COUNT: usize = 23;
 
     /// The append-only slice index (== FFI discriminant == `command_kind`) of
     /// `Command::CommandPalette`.
@@ -363,9 +374,14 @@ mod tests {
     const TERMINAL_INDEX: usize = 20;
 
     /// The append-only slice index (== FFI discriminant == `command_kind`) of
-    /// `Command::PreviewInBrowser`: the appended discriminant 21 and LAST row of
-    /// [`COMMAND_SPECS`].
+    /// `Command::PreviewInBrowser`: the appended discriminant 21. No longer the
+    /// last row after `FullWidth` is appended at 22.
     const PREVIEW_IN_BROWSER_INDEX: usize = 21;
+
+    /// The append-only slice index (== FFI discriminant == `command_kind`) of
+    /// `Command::FullWidth`: the appended discriminant 22 and LAST row of
+    /// [`COMMAND_SPECS`].
+    const FULL_WIDTH_INDEX: usize = 22;
 
     /// `from_id` resolves the canonical `command_palette` id to the new variant.
     #[test]
@@ -388,8 +404,8 @@ mod tests {
         assert_eq!(spec.menu, MenuGroup::View, "menu group");
     }
 
-    /// Appending Copy, Paste, BufferPicker, NewTab, Preview, Edit, Terminal, and
-    /// PreviewInBrowser grows the registry to exactly 22 rows.
+    /// Appending Copy, Paste, BufferPicker, NewTab, Preview, Edit, Terminal,
+    /// PreviewInBrowser, and FullWidth grows the registry to exactly 23 rows.
     #[test]
     fn command_specs_has_expected_len() {
         assert_eq!(
@@ -397,7 +413,7 @@ mod tests {
             EXPECTED_COMMAND_COUNT,
             "COMMAND_SPECS must hold exactly {EXPECTED_COMMAND_COUNT} rows \
              after appending Copy, Paste, BufferPicker, NewTab, Preview, Edit, \
-             Terminal, and PreviewInBrowser"
+             Terminal, PreviewInBrowser, and FullWidth"
         );
     }
 
@@ -663,19 +679,52 @@ mod tests {
         assert_eq!(spec.menu, MenuGroup::View, "menu group");
     }
 
-    /// Append-discriminant guard: PreviewInBrowser is the LAST row (index 21), so
-    /// the slice index equals its FFI discriminant. Reordering breaks this.
+    /// Append-discriminant guard: PreviewInBrowser stays at fixed index 21 (no
+    /// longer the last row after FullWidth is appended at 22), so the slice index
+    /// still equals its FFI discriminant. Reordering breaks this.
     #[test]
-    fn preview_in_browser_is_the_last_row() {
+    fn preview_in_browser_is_at_index_21() {
         assert_eq!(
             COMMAND_SPECS[PREVIEW_IN_BROWSER_INDEX].command,
             Command::PreviewInBrowser,
             "the row at index {PREVIEW_IN_BROWSER_INDEX} must be Command::PreviewInBrowser"
         );
+    }
+
+    /// `from_id` resolves the canonical `full_width` id to the new variant.
+    #[test]
+    fn full_width_id_round_trips() {
         assert_eq!(
-            PREVIEW_IN_BROWSER_INDEX,
+            Command::from_id("full_width"),
+            Some(Command::FullWidth),
+            "\"full_width\" must resolve to Command::FullWidth"
+        );
+    }
+
+    /// The FullWidth spec pins its id, ex-command, title, and View menu group (the
+    /// canonical registry row for the full-width toggle command).
+    #[test]
+    fn full_width_spec_fields() {
+        let spec = Command::FullWidth.spec();
+        assert_eq!(spec.id, "full_width", "id");
+        assert_eq!(spec.ex_command, "WolfFullWidth", "ex_command");
+        assert_eq!(spec.title, "Use full width for content", "title");
+        assert_eq!(spec.menu, MenuGroup::View, "menu group");
+    }
+
+    /// Append-discriminant guard: FullWidth is the LAST row (index 22), so the
+    /// slice index equals its FFI discriminant. Reordering breaks this.
+    #[test]
+    fn full_width_is_the_last_row() {
+        assert_eq!(
+            COMMAND_SPECS[FULL_WIDTH_INDEX].command,
+            Command::FullWidth,
+            "the row at index {FULL_WIDTH_INDEX} must be Command::FullWidth"
+        );
+        assert_eq!(
+            FULL_WIDTH_INDEX,
             COMMAND_SPECS.len() - 1,
-            "PreviewInBrowser must be the FINAL row of COMMAND_SPECS"
+            "FullWidth must be the FINAL row of COMMAND_SPECS"
         );
     }
 

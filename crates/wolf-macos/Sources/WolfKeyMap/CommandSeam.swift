@@ -21,7 +21,8 @@ import Foundation
 /// `openFolder == 7`, `closePane == 8`, `newBuffer == 9`, `resetFontSize == 10`,
 /// `increaseFontSize == 11`, `decreaseFontSize == 12`, `commandPalette == 13`,
 /// `copy == 14`, `paste == 15`, `bufferPicker == 16`, `newTab == 17`,
-/// `preview == 18`, `edit == 19`, `terminal == 20`, `previewInBrowser == 21`.
+/// `preview == 18`, `edit == 19`, `terminal == 20`, `previewInBrowser == 21`,
+/// `fullWidth == 22`.
 public enum CommandKind {
   /// Open a new editor window.
   case newWindow
@@ -67,9 +68,12 @@ public enum CommandKind {
   case terminal
   /// Render the active Markdown buffer and open it in the system web browser.
   case previewInBrowser
+  /// Toggle the active buffer between the ~90-char default content width and full
+  /// pane width (`b:wolf_full_width`).
+  case fullWidth
 
-  /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `21` →
-  /// `.previewInBrowser`, else `nil`), guarding the contract shared with
+  /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `22` →
+  /// `.fullWidth`, else `nil`), guarding the contract shared with
   /// `wolf-ffi`'s `mod command_kind`.
   public init?(ffi: UInt8) {
     switch ffi {
@@ -95,6 +99,7 @@ public enum CommandKind {
     case 19: self = .edit
     case 20: self = .terminal
     case 21: self = .previewInBrowser
+    case 22: self = .fullWidth
     default: return nil
     }
   }

@@ -18,13 +18,13 @@
 //      (`textLeft = gRect.minX + offset`, `textWidth = gRect.maxX - textLeft`), so
 //      editor panes are bit-identical; only the clamp below is new, and it is a
 //      no-op for every real input.
-//    - `.preview` — `PaneContainerView.syncPreviewWebViews` frames the preview
-//      `WKWebView` to the UNCENTERED `gridRect(ofPane:)` and the preview CSS is
-//      flush (`body.wolf-markdown { margin: 0; padding: 0 }`), so the content's left
-//      edge IS `gridRect.minX`. This branch therefore deliberately IGNORES
-//      `paintOffsetX` and spans the whole grid rect, putting BOTH text edges on the
-//      webview frame. If the preview webview is ever CENTERED instead, this branch
-//      must revert to `.editor` semantics.
+//    - `.preview` — now IDENTICAL to `.editor`. The "Use full width for content"
+//      feature reframes the preview `WKWebView` to the capped+CENTERED `gridRect`
+//      (`PaneContainerView.geometry(…, fullWidth:).gridRect`) in the ~90-char default,
+//      so the content's left edge is `gridRect.minX + paintOffsetX` and the statusbar
+//      must indent to match; in full-width mode `paintOffsetX == 0`, so it lands flush
+//      at `gridLeft`. This REDEFINES the earlier flush-left `.preview` behavior, which
+//      assumed the preview was framed to the UNCENTERED `gridRect` and never indented.
 //
 //  Only `width` clamps to a non-negative floor; `left` is a fixed offset from
 //  `gridLeft` (bounded above by the grid's right edge via the offset clamp). Like
@@ -40,17 +40,20 @@ public enum PaneContentKind {
   /// A normal text-grid pane, whose grid is painted at the centering
   /// `PaneGeometry.paintOffsetX` when the pane exceeds the column cap.
   case editor
-  /// A Markdown-preview pane, whose `WKWebView` is framed to the UNCENTERED grid
-  /// rect with flush CSS, so its content starts at the grid rect's left edge.
+  /// A Markdown-preview pane, whose `WKWebView` is now framed to the capped+CENTERED
+  /// grid rect (or the full inset pane in full-width mode), so its content aligns
+  /// with the editor grid — indented by `PaneGeometry.paintOffsetX` in the ~90-char
+  /// default, flush at the grid's left edge in full-width mode.
   case preview
 }
 
 /// The horizontal span (absolute left edge + width) of a pane's statusbar text.
 ///
 /// `left` is ABSOLUTE — it is `gridLeft` (the pane's grid-rect x origin in the
-/// container view's coordinates) plus, for `.editor` only, the grid-centering
-/// offset. `width` never goes negative: the grid width floors at 0 and the offset
-/// is clamped into `[0, width]`, so `left` also never passes the grid's right edge.
+/// container view's coordinates) plus the grid-centering offset (for BOTH `.editor`
+/// and `.preview`, now identical). `width` never goes negative: the grid width floors
+/// at 0 and the offset is clamped into `[0, width]`, so `left` also never passes the
+/// grid's right edge.
 public struct StatusbarTextSpan {
   /// The absolute x origin of the statusbar text, in points.
   public let left: Double
@@ -61,21 +64,19 @@ public struct StatusbarTextSpan {
   /// grid-centering inset (`PaneGeometry.paintOffsetX`), and the pane's content
   /// kind.
   ///
-  /// With `w = max(0, gridWidth)` and `offset = min(max(0, paintOffsetX), w)`:
-  /// `.editor` gives `left = gridLeft + offset`, `width = max(0, w - offset)`;
-  /// `.preview` gives `left = gridLeft`, `width = w`. The negative-`paintOffsetX`
-  /// clamp is defensive (`PaneGeometry` already floors it at 0).
+  /// With `w = max(0, gridWidth)` and `offset = min(max(0, paintOffsetX), w)`, BOTH
+  /// `.editor` and `.preview` give `left = gridLeft + offset`,
+  /// `width = max(0, w - offset)` (the preview is now centered exactly like the
+  /// editor). The negative-`paintOffsetX` clamp is defensive (`PaneGeometry` already
+  /// floors it at 0).
   public init(gridLeft: Double, gridWidth: Double, paintOffsetX: Double, kind: PaneContentKind) {
     let w = max(0, gridWidth)
     let offset = min(max(0, paintOffsetX), w)
 
     switch kind {
-    case .editor:
+    case .editor, .preview:
       self.left = gridLeft + offset
       self.width = max(0, w - offset)
-    case .preview:
-      self.left = gridLeft
-      self.width = w
     }
   }
 }

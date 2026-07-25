@@ -75,6 +75,14 @@ const CURRENT_FILE_EVENT: &str = "wolf_current_file";
 /// separately from `redraw` in [`RedrawHandler::handle_notify`].
 const BUFFERS_EVENT: &str = "wolf_buffers";
 
+/// Name of the out-of-band notification carrying the per-window full-width flags,
+/// emitted by the `WolfFullWidth` autocmds in `runtime/nvim/init.lua` (and once
+/// immediately at setup). The payload is a single msgpack array of
+/// `[win_id, full_width]` pairs for ALL windows in the current tabpage; core
+/// WHOLESALE-REPLACES [`Snapshot::full_width`] with the reported set. Routed
+/// separately from `redraw` in [`RedrawHandler::handle_notify`].
+const FULL_WIDTH_EVENT: &str = "wolf_full_width";
+
 /// Name of the out-of-band notification carrying the active window handle,
 /// emitted by the `WolfLayout` `WinEnter` autocmd in `runtime/nvim/init.lua`.
 /// Routed separately from `redraw` in [`RedrawHandler::handle_notify`].
@@ -192,6 +200,15 @@ impl Handler for RedrawHandler {
                 // wake-after-unlock invariant). This is NOT a redraw frame, so
                 // `seq` is left unchanged.
                 self.apply_buffers(args).await;
+                (self.wake)();
+            }
+            FULL_WIDTH_EVENT => {
+                // `apply_full_width` builds the new map BEFORE taking the write
+                // guard, then assigns it wholesale and DROPS the lock before
+                // returning; the wake fires strictly after the lock is released
+                // (same wake-after-unlock invariant). This is NOT a redraw frame, so
+                // `seq` is left unchanged.
+                self.apply_full_width(args).await;
                 (self.wake)();
             }
             ACTIVE_WIN_EVENT => {
@@ -327,6 +344,11 @@ impl RedrawHandler {
     /// buffer (it carries `b:wolf_preview_source`). A missing 3rd arg maps to
     /// `false`, which drives [`Snapshot::is_preview_active`] to `false`.
     ///
+    /// The (new) fourth argument is a boolean: whether the active buffer is in
+    /// FULL-WIDTH mode (it carries a truthy `b:wolf_full_width`; for a preview
+    /// scratch this is the SOURCE buffer's flag — OQ-1). A missing 4th arg maps to
+    /// `false`, which drives [`Snapshot::is_full_width_active`] to `false`.
+    ///
     /// The write lock is acquired via [`SharedSnapshot::write_async`] and is NOT
     /// held across any `.await`; it is dropped before returning so the caller's
     /// wake fires after the lock is released.
@@ -343,11 +365,13 @@ impl RedrawHandler {
             .unwrap_or_default()
             .to_string();
         let is_preview = args.get(2).and_then(Value::as_bool).unwrap_or(false);
+        let is_full_width = args.get(3).and_then(Value::as_bool).unwrap_or(false);
 
         let mut snap = self.snapshot.write_async().await;
         snap.current_file = target;
         snap.current_filetype = filetype;
         snap.current_is_preview = is_preview;
+        snap.current_is_full_width = is_full_width;
         // A current_file change is NOT a redraw frame, so `seq` (the redraw-frame
         // counter, advanced only on `flush`) is intentionally left unchanged. The
         // caller still fires the wake after this lock drops so the front-end can
@@ -360,11 +384,13 @@ impl RedrawHandler {
     /// set.
     ///
     /// The single argument is a msgpack array of
-    /// `[preview_win, source_bufnr, source_abs_path]` triples, one per window
-    /// showing a `b:wolf_preview_source` scratch buffer. Each `preview_win` /
-    /// `source_bufnr` decodes via [`ext_handle`] (a plain integer, or defensively a
-    /// msgpack-`Ext`-wrapped integer); each `source_abs_path` is the absolute path
-    /// of the source Markdown file. A triple missing either handle is SKIPPED.
+    /// `[preview_win, source_bufnr, source_abs_path, source_full_width]` tuples, one
+    /// per window showing a `b:wolf_preview_source` scratch buffer. Each
+    /// `preview_win` / `source_bufnr` decodes via [`ext_handle`] (a plain integer, or
+    /// defensively a msgpack-`Ext`-wrapped integer); each `source_abs_path` is the
+    /// absolute path of the source Markdown file; each `source_full_width` is the
+    /// SOURCE buffer's `b:wolf_full_width` flag (a missing 4th element maps to
+    /// `false`). A tuple missing either handle is SKIPPED.
     ///
     /// The new map is built in full BEFORE the write guard is taken, then assigned
     /// wholesale. The lock is acquired via [`SharedSnapshot::write_async`], is NOT
@@ -390,11 +416,13 @@ impl RedrawHandler {
                     .and_then(Value::as_str)
                     .map(PathBuf::from)
                     .unwrap_or_default();
+                let source_full_width = triple.get(3).and_then(Value::as_bool).unwrap_or(false);
                 map.insert(
                     win,
                     PreviewInfo {
                         source_bufnr,
                         source_path,
+                        source_full_width,
                     },
                 );
             }
@@ -474,6 +502,42 @@ impl RedrawHandler {
         let mut snap = self.snapshot.write_async().await;
         snap.buffers = map;
         // A buffers change is NOT a redraw frame, so `seq` is intentionally left
+        // unchanged. The caller fires the wake after this lock drops.
+        // Lock drops here as `snap` goes out of scope at function return.
+    }
+
+    /// Applies a `wolf_full_width` notification: WHOLESALE-REPLACES the snapshot's
+    /// per-window full-width map ([`Snapshot::full_width`]) with the reported set.
+    ///
+    /// The single argument is a msgpack array of `[win_id, full_width]` pairs for
+    /// ALL windows in the current tabpage. Each `win_id` decodes via [`ext_handle`]
+    /// (a plain integer, or defensively a msgpack-`Ext`-wrapped integer); each
+    /// `full_width` is the window's buffer's `b:wolf_full_width` flag. A pair missing
+    /// its handle is SKIPPED.
+    ///
+    /// The new map is built in full BEFORE the write guard is taken, then assigned
+    /// wholesale. The lock is acquired via [`SharedSnapshot::write_async`], is NOT
+    /// held across any `.await`, and is dropped before returning so the caller's wake
+    /// fires after the lock is released. This is NOT a redraw frame, so `seq` is left
+    /// unchanged; the wholesale replacement drops any stale/closed windows.
+    async fn apply_full_width(&self, args: Vec<Value>) {
+        let mut map: HashMap<i64, bool> = HashMap::new();
+        if let Some(pairs) = args.first().and_then(Value::as_array) {
+            for pair in pairs {
+                let Some(pair) = pair.as_array() else {
+                    continue;
+                };
+                let Some(win) = pair.first().and_then(ext_handle) else {
+                    continue;
+                };
+                let full_width = pair.get(1).and_then(Value::as_bool).unwrap_or(false);
+                map.insert(win, full_width);
+            }
+        }
+
+        let mut snap = self.snapshot.write_async().await;
+        snap.full_width = map;
+        // A full_width change is NOT a redraw frame, so `seq` is intentionally left
         // unchanged. The caller fires the wake after this lock drops.
         // Lock drops here as `snap` goes out of scope at function return.
     }

@@ -554,6 +554,16 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     handle?.toggle_terminal()
   }
 
+  /// Toggles the active buffer's content width between the ~90-char default and
+  /// full pane width (`:WolfFullWidth`). Core flips `b:wolf_full_width` on the
+  /// effective buffer (the SOURCE buffer for a preview scratch — OQ-1) and re-emits
+  /// the current-file / per-window full-width / previews notifications; a repaint is
+  /// requested so the editor + preview panes resize promptly on the next wake.
+  func toggleFullWidth() {
+    handle?.toggle_full_width()
+    paneContainer?.onRenderWake()
+  }
+
   // MARK: - Edit commands
 
   /// Copies the current visual-mode selection to the system clipboard. Yanks
@@ -678,6 +688,11 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
   /// coordinator's menu validation to enable the View > Edit Source command only
   /// from a preview pane.
   var isPreviewActive: Bool { handle?.is_preview_active() ?? false }
+
+  /// Whether this window's active buffer is in FULL-WIDTH mode. Read by the
+  /// coordinator's menu validation to show the View > Use full width for content
+  /// checkmark (the item is always enabled — OQ-2).
+  var isFullWidthActive: Bool { handle?.is_full_width_active() ?? false }
 
   /// Opens (or reuses) the Markdown preview pane for the active source buffer.
   ///

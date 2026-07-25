@@ -195,14 +195,32 @@ end
 -- for the (non-markdown) preview pane. The THIRD arg is a boolean, is_preview:
 -- true when the active buffer is a preview scratch (drives core's
 -- Snapshot.is_preview_active, the Edit command's enable gate), false otherwise.
+-- The FOURTH arg is a boolean, is_full_width: the effective buffer's
+-- b:wolf_full_width flag (drives core's Snapshot.is_full_width_active, the View-menu
+-- "Use full width for content" checkmark). For a preview scratch this reports the
+-- SOURCE buffer's flag (OQ-1), so the checkmark tracks the document, not the scratch.
 function _G.wolf_setup_current_file_tracking(chan)
 	local group = vim.api.nvim_create_augroup("WolfCurrentFile", { clear = true })
 	local function emit()
 		local buf = vim.api.nvim_get_current_buf()
 		if vim.b[buf].wolf_preview_source ~= nil then
-			vim.rpcnotify(chan, "wolf_current_file", "", "", true)
+			-- A preview scratch reports the SOURCE buffer's full-width flag (4th arg)
+			-- so the View-menu checkmark matches the document (OQ-1).
+			local source_bufnr = vim.b[buf].wolf_preview_source_bufnr
+			local full_width = false
+			if source_bufnr ~= nil and vim.api.nvim_buf_is_valid(source_bufnr) then
+				full_width = vim.b[source_bufnr].wolf_full_width == true
+			end
+			vim.rpcnotify(chan, "wolf_current_file", "", "", true, full_width)
 		else
-			vim.rpcnotify(chan, "wolf_current_file", vim.fn.expand("%:p"), vim.bo.filetype, false)
+			vim.rpcnotify(
+				chan,
+				"wolf_current_file",
+				vim.fn.expand("%:p"),
+				vim.bo.filetype,
+				false,
+				vim.b[buf].wolf_full_width == true
+			)
 		end
 	end
 	-- Expose the emit closure so wolf_open_preview can re-assert the active buffer's
@@ -248,6 +266,43 @@ function _G.wolf_setup_buffer_tracking(chan)
 	end
 	vim.api.nvim_create_autocmd(
 		{ "BufEnter", "BufWinEnter", "BufFilePost", "WinEnter", "WinNew", "WinClosed" },
+		{
+			group = group,
+			callback = emit,
+		}
+	)
+	-- Initial emit so the startup window layout is reflected without a change.
+	emit()
+end
+
+-- Per-window full-width tracking: wolf-core invokes this over RPC after ui_attach
+-- (right after buffer tracking), passing its own RPC channel id. It registers
+-- autocmds that notify core, via wolf_full_width, of the full-width flag of the
+-- buffer shown in EVERY window of the current tabpage -- a list of
+-- { win, vim.b[buf].wolf_full_width == true } pairs -- so the front-end can thread a
+-- pane's content-width mode (full vs the ~90-char default) into its geometry keyed by
+-- window handle. It emits once immediately so the startup layout is reflected.
+--
+-- Mirrors wolf_setup_buffer_tracking: the whole current window set is re-emitted on
+-- each autocmd and core WHOLESALE-REPLACES its per-window map, so stale/closed windows
+-- drop out. Unlike buffer tracking, preview scratch panes are NOT skipped -- a window
+-- absent from the map defaults to false core-side, and a preview pane's own flag is
+-- irrelevant (the front-end frames the preview off the SOURCE flag via wolf_preview).
+function _G.wolf_setup_full_width(chan)
+	local group = vim.api.nvim_create_augroup("WolfFullWidth", { clear = true })
+	local function emit()
+		local list = {}
+		for _, win in ipairs(vim.api.nvim_list_wins()) do
+			local buf = vim.api.nvim_win_get_buf(win)
+			list[#list + 1] = { win, vim.b[buf].wolf_full_width == true }
+		end
+		vim.rpcnotify(chan, "wolf_full_width", list)
+	end
+	-- Expose the emit closure so wolf_toggle_full_width can re-emit after flipping the
+	-- flag (a background flip fires no window event).
+	_G.wolf_emit_full_width = emit
+	vim.api.nvim_create_autocmd(
+		{ "BufEnter", "BufWinEnter", "WinEnter", "WinNew", "WinClosed" },
 		{
 			group = group,
 			callback = emit,
@@ -588,6 +643,37 @@ function _G.wolf_toggle_terminal()
 		_G.wolf_emit_drawer(w)
 	end
 	vim.cmd("startinsert")
+end
+
+-- Toggle the active buffer's content width between the ~90-char default and full
+-- pane width. Flips b:wolf_full_width on the EFFECTIVE buffer: when the current
+-- buffer is a preview scratch (it carries b:wolf_preview_source_bufnr), the SOURCE
+-- buffer is targeted (OQ-1) so the visible preview resizes and the document's editor
+-- + preview views stay consistent; otherwise the current buffer is targeted. After
+-- flipping, re-emits the current-file (menu checkmark), per-window full-width (editor
+-- pane geometry), and previews (preview pane framing) notifications so the front-end
+-- resizes the content. Defined alongside wolf_toggle_terminal.
+function _G.wolf_toggle_full_width()
+	local cur = vim.api.nvim_get_current_buf()
+	-- Resolve the effective buffer: the SOURCE buffer when the current pane is a
+	-- preview scratch, else the current buffer.
+	local buf = cur
+	local source_bufnr = vim.b[cur].wolf_preview_source_bufnr
+	if source_bufnr ~= nil and vim.api.nvim_buf_is_valid(source_bufnr) then
+		buf = source_bufnr
+	end
+	vim.b[buf].wolf_full_width = not (vim.b[buf].wolf_full_width == true)
+	-- Re-emit the three state channels the toggle affects (guarded: the emitters only
+	-- exist once their respective setup helpers have run).
+	if _G.wolf_emit_current_file then
+		_G.wolf_emit_current_file()
+	end
+	if _G.wolf_emit_full_width then
+		_G.wolf_emit_full_width()
+	end
+	if _G.wolf_emit_previews then
+		_G.wolf_emit_previews()
+	end
 end
 
 -- Return the tab-local working directory of the tabpage named by its STABLE
@@ -962,10 +1048,12 @@ end
 -- WolfPreview augroup:
 --   * a window-scan (WinEnter/BufWinEnter/WinNew/WinClosed/BufWinLeave) that
 --     rpcnotifies wolf_preview with a list of { preview_win, source_bufnr,
---     source_abs_path } triples -- one per window showing a b:wolf_preview_source
---     scratch buffer -- so the front-end learns which pane previews what source
---     (and, via the source bufnr, joins the live changedtick). Emits once
---     immediately so an already-open preview is reflected.
+--     source_abs_path, source_full_width } tuples -- one per window showing a
+--     b:wolf_preview_source scratch buffer -- so the front-end learns which pane
+--     previews what source (and, via the source bufnr, joins the live changedtick),
+--     and frames the pane capped or full-width by the SOURCE buffer's
+--     b:wolf_full_width flag. Emits once immediately so an already-open preview is
+--     reflected.
 --   * markdown-guarded TextChanged/TextChangedI/BufWritePost autocmds that
 --     rpcnotify wolf_markdown_dirty with { source_bufnr, changedtick } so the
 --     front-end pulls fresh HTML on the next wake (OD6 live-on-change). The
@@ -981,7 +1069,13 @@ function _G.wolf_setup_preview(chan)
 			local src = vim.b[buf].wolf_preview_source
 			if src ~= nil and src ~= "" then
 				local source_bufnr = vim.b[buf].wolf_preview_source_bufnr or -1
-				list[#list + 1] = { win, source_bufnr, src }
+				-- 4th element: the SOURCE buffer's full-width flag, so the front-end
+				-- frames this preview pane's web view capped (~90-char) or full-width.
+				local full_width = false
+				if source_bufnr ~= -1 and vim.api.nvim_buf_is_valid(source_bufnr) then
+					full_width = vim.b[source_bufnr].wolf_full_width == true
+				end
+				list[#list + 1] = { win, source_bufnr, src, full_width }
 			end
 		end
 		vim.rpcnotify(chan, "wolf_preview", list)

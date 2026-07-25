@@ -20,27 +20,29 @@
 //                    paintOffsetX: Double, kind: PaneContentKind)
 //    }
 //
-//  Arithmetic (plan §1), with `w = max(0, gridWidth)` and
+//  Arithmetic (feature plan §8), with `w = max(0, gridWidth)` and
 //  `offset = min(max(0, paintOffsetX), w)`:
 //    .editor  -> left = gridLeft + offset,  width = max(0, gridWidth - offset)
-//    .preview -> left = gridLeft,           width = w
+//    .preview -> left = gridLeft + offset,  width = max(0, gridWidth - offset)
 //
-//  The `.editor` branch reproduces today's expression EXACTLY, so editor panes are
-//  bit-identical; only the clamp is new, and it is a no-op for every real input. The
-//  `.preview` branch deliberately IGNORES `paintOffsetX` because `syncPreviewWebViews`
-//  frames the preview `WKWebView` to the UNCENTERED `gridRect(ofPane:)` and the preview
-//  CSS is flush (`body.wolf-markdown { margin: 0; padding: 0 }`).
+//  The two kinds are now IDENTICAL: the preview is CENTERED exactly like the editor.
+//  The "Use full width for content" feature reframes the preview `WKWebView` to the
+//  capped+CENTERED `gridRect` in the ~90-char default (so the preview statusbar must
+//  indent by the same `paintOffsetX` the editor grid uses), and to the FULL inset pane
+//  in full-width mode (where `paintOffsetX == 0`, so it lands flush at `gridLeft`).
+//  This REDEFINES the earlier flush-left `.preview` behavior, which assumed the preview
+//  was framed to the UNCENTERED `gridRect` and never indented. The `.editor` branch is
+//  unchanged and stays bit-identical to the pre-refactor expression.
 //
-//  ## WHAT THESE TESTS CANNOT PROVE (plan §5)
+//  ## WHAT THESE TESTS CANNOT PROVE (feature plan §8)
 //
 //  That the statusbar text origin and the LIVE `WKWebView` frame actually coincide on
 //  screen is an integration property spanning `paintStatusbar`, `syncPreviewWebViews`
-//  and the markdown CSS's zero left padding. No unit test can pin it — these tests pin
-//  only the shared arithmetic both consumers derive from. The remainder rests on visual
-//  review: open a preview in a window wider than 90 columns and confirm the statusbar
-//  filename's left edge sits on the first heading's left edge. Note also that in a
-//  vertical split each pane is typically narrower than 90 cells, so `paintOffsetX == 0`
-//  and the two kinds coincide — the bug and the fix are only observable on WIDE panes.
+//  and the markdown CSS. No unit test can pin it — these tests pin only the shared
+//  arithmetic both consumers derive from. The remainder rests on visual review: open a
+//  preview in a window wider than 90 columns and confirm the statusbar filename's left
+//  edge sits on the centered content's left edge, and that toggling full width moves it
+//  to the pane's left edge.
 //
 
 import XCTest
@@ -165,10 +167,12 @@ final class StatusbarTextSpanTests: XCTestCase {
         + "do not 'simplify' it to match the .preview branch.")
   }
 
-  // MARK: - Case 3: preview, narrow pane — the fix is a no-op below the cap
+  // MARK: - Case 3: preview, narrow pane — flush with the grid below the cap
 
   func testPreviewNarrowPaneMatchesTheEditorCase() {
-    // Below the cap there is no offset to ignore, so preview and editor coincide.
+    // Below the cap there is no centering offset, so preview and editor coincide at
+    // the grid's left edge (this is also the FULL-WIDTH preview case: paintOffsetX
+    // == 0 means the whole inset pane is the content area).
     let gridWidth: Double = 600.0
     let s = span(
       gridLeft: gridLeftAtOrigin, gridWidth: gridWidth, paintOffsetX: 0, kind: .preview)
@@ -177,61 +181,71 @@ final class StatusbarTextSpanTests: XCTestCase {
     XCTAssertEqual(s.width, gridWidth, accuracy: eps, "preview narrow: width == gridWidth")
   }
 
-  // MARK: - Case 4: preview, wide pane — spans the whole (uncentered) grid rect
+  // MARK: - Case 4: preview, wide pane — centered like the editor, plus full-width
 
-  func testPreviewWidePaneIgnoresThePaintOffset() {
-    // The preview WKWebView is framed to the UNCENTERED gridRect, so the statusbar
-    // text must span that same rect: both edges land on the webview frame.
+  func testPreviewWidePaneIsCenteredAndFullWidthIsFlush() {
+    // REDEFINED behavior: a wide preview in the ~90-char DEFAULT is framed to the
+    // capped+CENTERED gridRect, so the statusbar text must indent by paintOffsetX,
+    // EXACTLY like the editor. (Previously the preview ignored the offset and sat
+    // flush-left; that is the behavior this feature replaces.)
     let gridWidth: Double = 1400.0
     let paintOffsetX = expectedPaintOffsetX(gridWidth: gridWidth)
     XCTAssertGreaterThan(
       paintOffsetX, 0.0,
-      "this width must be past the cap, or there would be no offset to ignore")
+      "this width must be past the cap, or there would be no centering offset")
 
-    let s = span(
+    let centered = span(
       gridLeft: gridLeftAtOrigin, gridWidth: gridWidth, paintOffsetX: paintOffsetX,
       kind: .preview)
 
     XCTAssertEqual(
-      s.left, gridLeftAtOrigin, accuracy: eps,
-      "preview wide: left == gridLeft, ignoring paintOffsetX (== web.frame.minX)")
+      centered.left, gridLeftAtOrigin + paintOffsetX, accuracy: eps,
+      "preview wide default: left == gridLeft + paintOffsetX (centered like the editor)")
     XCTAssertEqual(
-      s.width, gridWidth, accuracy: eps,
-      "preview wide: width == gridWidth (the full grid rect)")
+      centered.width, gridWidth - paintOffsetX, accuracy: eps,
+      "preview wide default: width == gridWidth - paintOffsetX")
+
+    // FULL-WIDTH preview: the webview is framed to the FULL inset pane, so
+    // paintOffsetX == 0 and the content is flush at the pane's left edge spanning the
+    // whole grid (the ~90-char cap is off for a full-width buffer).
+    let full = span(
+      gridLeft: gridLeftAtOrigin, gridWidth: gridWidth, paintOffsetX: 0, kind: .preview)
     XCTAssertEqual(
-      s.left + s.width, gridLeftAtOrigin + gridWidth, accuracy: eps,
-      "preview wide: textRight == gridLeft + gridWidth == web.frame.maxX")
+      full.left, gridLeftAtOrigin, accuracy: eps,
+      "preview full-width: left == gridLeft (no centering inset)")
+    XCTAssertEqual(
+      full.width, gridWidth, accuracy: eps,
+      "preview full-width: width == gridWidth (the whole inset pane)")
   }
 
-  // MARK: - Case 5: the kind-difference invariant — THE BUG
+  // MARK: - Case 5: the two kinds are now IDENTICAL (the redefinition)
 
-  func testKindDifferenceIsExactlyThePaintOffsetOnWidePanes() {
-    // THIS IS THE ASSERTION THAT MOST DIRECTLY ENCODES THE BUG BEING FIXED.
-    let gridWidth: Double = 1400.0
-    let paintOffsetX = expectedPaintOffsetX(gridWidth: gridWidth)
+  func testPreviewAndEditorSpansAreIdenticalForTheSameInputs() {
+    // THIS IS THE ASSERTION THAT MOST DIRECTLY ENCODES THE REDEFINITION: because the
+    // preview is now centered exactly like the editor, `.preview` and `.editor` must
+    // produce the SAME span for the same inputs — both on a wide (centered) pane and
+    // on a narrow (flush) one.
+    let wideWidth: Double = 1400.0
+    let widePaintOffsetX = expectedPaintOffsetX(gridWidth: wideWidth)
     XCTAssertGreaterThan(
-      paintOffsetX, 0.0,
-      "this width must be past the cap, or the two kinds would trivially coincide")
+      widePaintOffsetX, 0.0,
+      "this width must be past the cap, or the centering would trivially be zero")
 
-    let editor = span(
-      gridLeft: gridLeftAtOrigin, gridWidth: gridWidth, paintOffsetX: paintOffsetX,
+    let wideEditor = span(
+      gridLeft: gridLeftAtOrigin, gridWidth: wideWidth, paintOffsetX: widePaintOffsetX,
       kind: .editor)
-    let preview = span(
-      gridLeft: gridLeftAtOrigin, gridWidth: gridWidth, paintOffsetX: paintOffsetX,
+    let widePreview = span(
+      gridLeft: gridLeftAtOrigin, gridWidth: wideWidth, paintOffsetX: widePaintOffsetX,
       kind: .preview)
 
     XCTAssertEqual(
-      editor.left - preview.left, paintOffsetX, accuracy: eps,
-      "THE BUG: on a WIDE preview pane the statusbar text must NOT be indented by the "
-        + "grid-centering offset (paintOffsetX == \(paintOffsetX)). The preview "
-        + "WKWebView is framed to the UNCENTERED gridRect and the preview CSS is flush "
-        + "(margin: 0; padding: 0), so the preview statusbar's left edge must sit at "
-        + "gridRect.minX == web.frame.minX. Only EDITOR panes add paintOffsetX, because "
-        + "only the editor GRID is painted at that centered offset. Got "
-        + "editor.left == \(editor.left), preview.left == \(preview.left).")
+      wideEditor.left, widePreview.left, accuracy: eps,
+      "wide: preview.left must EQUAL editor.left (the preview is centered like the editor)")
+    XCTAssertEqual(
+      wideEditor.width, widePreview.width, accuracy: eps,
+      "wide: preview.width must EQUAL editor.width")
 
-    // Below the cap there is no offset, so the two kinds must be indistinguishable —
-    // the fix changes nothing for narrow panes.
+    // Narrow (below the cap): offset 0, so both kinds sit flush at gridLeft.
     let narrowWidth: Double = 600.0
     let narrowEditor = span(
       gridLeft: gridLeftAtOrigin, gridWidth: narrowWidth, paintOffsetX: 0, kind: .editor)
@@ -240,10 +254,10 @@ final class StatusbarTextSpanTests: XCTestCase {
 
     XCTAssertEqual(
       narrowEditor.left, narrowPreview.left, accuracy: eps,
-      "narrow: both kinds share the same left (the fix is a no-op below the cap)")
+      "narrow: both kinds share the same left")
     XCTAssertEqual(
       narrowEditor.width, narrowPreview.width, accuracy: eps,
-      "narrow: both kinds share the same width (the fix is a no-op below the cap)")
+      "narrow: both kinds share the same width")
   }
 
   // MARK: - Case 6: gridLeft is ABSOLUTE, never pane-local
@@ -271,11 +285,13 @@ final class StatusbarTextSpanTests: XCTestCase {
         editor.left, gridLeft + paintOffsetX, accuracy: eps,
         "\(desc): editor left == gridLeft + offset (absolute)")
 
+      // The preview is now centered like the editor, so its absolute left is the same
+      // gridLeft + offset (a right-hand split shifts it right by gridLeft).
       let preview = span(
         gridLeft: gridLeft, gridWidth: gridWidth, paintOffsetX: paintOffsetX, kind: .preview)
       XCTAssertEqual(
-        preview.left, gridLeft, accuracy: eps,
-        "\(desc): preview left == gridLeft (absolute)")
+        preview.left, gridLeft + paintOffsetX, accuracy: eps,
+        "\(desc): preview left == gridLeft + offset (absolute, centered like the editor)")
 
       assertInvariants(editor, gridLeft: gridLeft, gridWidth: gridWidth, "editor \(desc)")
       assertInvariants(preview, gridLeft: gridLeft, gridWidth: gridWidth, "preview \(desc)")
@@ -340,16 +356,17 @@ final class StatusbarTextSpanTests: XCTestCase {
       editor.left, gridLeftAtOrigin + gridWidth, accuracy: eps,
       "editor: left clamps to the grid's right edge, never past it")
 
-    // The preview branch never reads the offset, so it is unaffected.
+    // The preview branch now clamps the SAME way as the editor (it is centered like
+    // the editor), so an over-large offset floors its width at 0 and clamps its left
+    // to the grid's right edge.
     let preview = span(
       gridLeft: gridLeftAtOrigin, gridWidth: gridWidth, paintOffsetX: paintOffsetX,
       kind: .preview)
     XCTAssertEqual(
-      preview.left, gridLeftAtOrigin, accuracy: eps,
-      "preview: unaffected by an over-large offset (left == gridLeft)")
+      preview.width, 0.0, accuracy: eps, "preview: an over-large offset floors width at 0")
     XCTAssertEqual(
-      preview.width, gridWidth, accuracy: eps,
-      "preview: unaffected by an over-large offset (width == gridWidth)")
+      preview.left, gridLeftAtOrigin + gridWidth, accuracy: eps,
+      "preview: left clamps to the grid's right edge, never past it")
   }
 
   // MARK: - Case 10: negative paintOffsetX (defensive)

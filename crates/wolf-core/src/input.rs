@@ -257,6 +257,12 @@ pub enum InputEvent {
     /// `wolf_toggle_terminal` helper, which opens/hides a bottom `:terminal`
     /// split and recreates the shared terminal buffer if it is gone).
     ToggleTerminal,
+    /// Toggle the active buffer's content width between the ~90-char default and
+    /// full pane width (delegated to the init.lua `wolf_toggle_full_width` helper,
+    /// which flips `b:wolf_full_width` on the effective buffer — the SOURCE buffer
+    /// when the active pane is a preview scratch — and re-emits the current-file /
+    /// per-window full-width / previews notifications).
+    ToggleFullWidth,
 }
 
 impl InputEvent {
@@ -423,6 +429,7 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
             command(nvim, cmd).await
         }
         InputEvent::ToggleTerminal => toggle_terminal(nvim).await,
+        InputEvent::ToggleFullWidth => toggle_full_width(nvim).await,
     }
 }
 
@@ -531,6 +538,24 @@ async fn toggle_terminal(nvim: &Nvim) -> Result<(), Box<CallError>> {
         .call(
             "nvim_exec_lua",
             vec![Value::from("wolf_toggle_terminal()"), Value::Array(vec![])],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Toggles the active buffer's content width via the init.lua
+/// `wolf_toggle_full_width` helper, invoked over `nvim_exec_lua`. The helper flips
+/// `b:wolf_full_width` on the effective buffer (the SOURCE buffer when the active
+/// pane is a preview scratch — OQ-1) and re-emits the current-file / per-window
+/// full-width / previews notifications so the front-end resizes the content.
+async fn toggle_full_width(nvim: &Nvim) -> Result<(), Box<CallError>> {
+    let _ = nvim
+        .call(
+            "nvim_exec_lua",
+            vec![
+                Value::from("wolf_toggle_full_width()"),
+                Value::Array(vec![]),
+            ],
         )
         .await?;
     Ok(())

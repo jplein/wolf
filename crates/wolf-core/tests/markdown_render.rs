@@ -41,7 +41,7 @@
 
 use std::collections::HashMap;
 
-use wolf_core::{render_html, theme_css, PreviewTheme};
+use wolf_core::{render_html, theme_css, PreviewTheme, WidthMode};
 
 /// The per-line/per-100-column marker id substring for hard line `line` (1-based)
 /// and 0-based character column `col`, per the plan's `id="wl-{L}-{C}"` anchor
@@ -72,7 +72,7 @@ const MULTIBYTE_CHAR_COUNT: usize = 120;
 
 #[test]
 fn render_html_wraps_body_in_a_themed_document() {
-    let html = render_html("# Title\n\nHello", PreviewTheme::Default);
+    let html = render_html("# Title\n\nHello", PreviewTheme::Default, WidthMode::Full);
 
     // The doctype + <style> + body-class document wrapper.
     assert!(
@@ -108,7 +108,7 @@ fn every_hard_line_yields_a_column_zero_marker() {
     let line_count = source.split('\n').count() as u32;
     assert_eq!(line_count, 3, "sanity: this fixture has three hard lines");
 
-    let html = render_html(source, PreviewTheme::Default);
+    let html = render_html(source, PreviewTheme::Default, WidthMode::Full);
     for line in 1..=line_count {
         assert!(
             html.contains(&marker_id(line, 0)),
@@ -124,7 +124,7 @@ fn markers_appear_in_source_order() {
     let source = "# A\n\n## B\n\nC\n";
     let line_count = source.split('\n').count() as u32;
 
-    let html = render_html(source, PreviewTheme::Default);
+    let html = render_html(source, PreviewTheme::Default, WidthMode::Full);
 
     let mut last = None;
     for line in 1..=line_count {
@@ -148,7 +148,7 @@ fn heading_marker_sits_immediately_before_its_tag() {
     // must be emitted IMMEDIATELY BEFORE the `<h1>` (substring order), so a later
     // scroll-sync can map line 3 to the heading's top.
     let source = "para\n\n# Heading\n";
-    let html = render_html(source, PreviewTheme::Default);
+    let html = render_html(source, PreviewTheme::Default, WidthMode::Full);
 
     let marker = marker_id(3, 0);
     let marker_idx = html
@@ -188,7 +188,7 @@ fn long_line_earns_a_per_hundred_column_marker() {
     let long_line = "a".repeat(LONG_LINE_LEN);
     let source = format!("short\n\n{long_line}");
 
-    let html = render_html(&source, PreviewTheme::Default);
+    let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
 
     assert!(
         html.contains(&marker_id(3, COLUMN_STRIDE)),
@@ -211,7 +211,7 @@ fn no_marker_span_inside_a_fenced_code_block() {
     // BEFORE the `<pre>` (the block start); none may land inside `<pre><code>…`,
     // which would corrupt the rendered code.
     let source = "# Heading\n\n```\nfn main() {}\ncode two\n```\n";
-    let html = render_html(source, PreviewTheme::Default);
+    let html = render_html(source, PreviewTheme::Default, WidthMode::Full);
 
     let pre_start = html
         .find("<pre")
@@ -241,7 +241,7 @@ fn multi_line_paragraph_collapses_its_markers_before_the_single_p() {
     // Three consecutive non-blank lines form ONE paragraph. Each line still gets a
     // unique `wl-{L}-0` anchor, and all of them collapse to BEFORE the single <p>.
     let source = "foo\nbar\nbaz";
-    let html = render_html(source, PreviewTheme::Default);
+    let html = render_html(source, PreviewTheme::Default, WidthMode::Full);
 
     assert_eq!(
         html.matches("<p>").count(),
@@ -285,7 +285,7 @@ fn per_hundred_column_marker_counts_characters_not_bytes() {
     // `long_line_earns_a_per_hundred_column_marker` already relies on.
     let source = format!("# Title\n\n{multibyte_line}");
 
-    let html = render_html(&source, PreviewTheme::Default);
+    let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
 
     assert!(
         html.contains(&marker_id(3, COLUMN_STRIDE)),
@@ -309,7 +309,7 @@ fn container_collapses_interior_line_markers_before_its_opening_tag() {
     //
     // Two leading lines put the list's three items on hard lines 3, 4, and 5.
     let source = "intro\n\n- item one\n- item two\n- item three\n";
-    let html = render_html(source, PreviewTheme::Default);
+    let html = render_html(source, PreviewTheme::Default, WidthMode::Full);
 
     let list_idx = html
         .find("<ul>")
@@ -339,7 +339,7 @@ fn latex_math_renders_mathml_with_inlined_fonts() {
     // contracts (`<math`, `display="block"`, the family names, `data:font/woff2`),
     // NOT exact MathML byte sequences.
     let source = "Inline $e=mc^2$ here.\n\n$$\\int_0^1 x\\,dx$$\n";
-    let html = render_html(source, PreviewTheme::Default);
+    let html = render_html(source, PreviewTheme::Default, WidthMode::Full);
 
     assert!(
         html.contains("<math"),
@@ -385,7 +385,7 @@ fn default_theme_carries_dark_and_light_palettes() {
     // a `@media (prefers-color-scheme: light)` block so the preview follows the app's
     // resolved appearance. The rendered document must embed BOTH palettes plus the
     // `color-scheme: light dark` declaration that makes the web view honor them.
-    let html = render_html("# Title\n\ntext", PreviewTheme::Default);
+    let html = render_html("# Title\n\ntext", PreviewTheme::Default, WidthMode::Full);
 
     assert!(
         html.contains("#1b1b1b"),
@@ -687,7 +687,7 @@ fn shorthand_block_edges(value: &str) -> Option<(String, String)> {
 /// tests reading as end-to-end render tests rather than file reads.
 fn rendered_stylesheet() -> String {
     let source = "# H1\n\ntext\n\n## H2\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n---\n";
-    let html = render_html(source, PreviewTheme::Default);
+    let html = render_html(source, PreviewTheme::Default, WidthMode::Full);
     style_block(&html).to_string()
 }
 
@@ -696,7 +696,7 @@ fn baseline_unit_is_declared() {
     // The grid's single documented token. Literal px are used everywhere else
     // (so the sweep test can actually check the numbers), but the unit itself
     // must be declared and discoverable.
-    let html = render_html("# Title\n\ntext", PreviewTheme::Default);
+    let html = render_html("# Title\n\ntext", PreviewTheme::Default, WidthMode::Full);
 
     assert!(
         html.contains("--wolf-baseline: 24px"),
@@ -919,7 +919,7 @@ fn heading_bottom_rule_is_gone_from_base_and_theme() {
     // not just declaring it. That is deliberate — a comment describing a border
     // color is a strong hint someone is about to re-add one — but if you trip it
     // from a comment, the fix is to reword the comment, not to loosen the check.
-    let html = render_html("# Title\n\n## Section\n", PreviewTheme::Default);
+    let html = render_html("# Title\n\n## Section\n", PreviewTheme::Default, WidthMode::Full);
     assert!(
         !html.contains("border-bottom-color"),
         "no `border-bottom-color` may survive anywhere in the emitted \
@@ -965,7 +965,7 @@ fn blockquote_keeps_its_indent_without_a_border() {
 
     // Theme half, same argument as `heading_bottom_rule_is_gone_from_base_and_theme`:
     // substring over the whole document so the one check covers both palettes.
-    let html = render_html("> quoted\n", PreviewTheme::Default);
+    let html = render_html("> quoted\n", PreviewTheme::Default, WidthMode::Full);
     assert!(
         !html.contains("border-left-color"),
         "no `border-left-color` may survive anywhere in the emitted stylesheets \
@@ -1020,7 +1020,7 @@ fn hr_occupies_whole_baselines_and_is_painted_by_its_border() {
     // regression in this change. Substring checks, not `rule_decls`: the light
     // palette lives inside the one `@media` block, which the crude parser
     // cannot address (see `style_block`).
-    let html = render_html("---\n", PreviewTheme::Default);
+    let html = render_html("---\n", PreviewTheme::Default, WidthMode::Full);
     assert!(
         html.contains("border-top-color: #3a3a3a"),
         "the DARK theme must color the hr via `border-top-color: #3a3a3a`, not \
@@ -1200,7 +1200,7 @@ fn stylesheets_are_emitted_in_base_then_math_then_theme_order() {
     // light dark` is the theme declaration `default_theme_carries_dark_and_light_palettes`
     // already pins. None can be edited away without failing another test first.
     let source = "# Title\n\nInline $e=mc^2$ and a rule.\n\n---\n";
-    let html = render_html(source, PreviewTheme::Default);
+    let html = render_html(source, PreviewTheme::Default, WidthMode::Full);
 
     let base = html.find("--wolf-baseline").unwrap_or_else(|| {
         panic!("expected base.css's `--wolf-baseline` token in the rendered document")
@@ -1903,7 +1903,7 @@ fn first_child_margin_reset_reaches_the_opening_heading() {
     // A document that OPENS with a heading — the exact case the opening-block
     // rule, `> *:not(.wolf-src):not(*:not(.wolf-src) ~ *) { margin-top: 0 }`,
     // exists for.
-    let html = render_html("# Title\n\nBody text.\n", PreviewTheme::Default);
+    let html = render_html("# Title\n\nBody text.\n", PreviewTheme::Default, WidthMode::Full);
     let children = body_children(&html);
     assert!(
         !children.is_empty(),
@@ -1984,7 +1984,7 @@ fn first_child_margin_reset_survives_a_multi_anchor_leading_run() {
     // <h1>. (A heading past 100 columns is the other trigger.) Nothing about
     // this is exotic — a document that opens with a blank line is ordinary — so
     // the reset must hold for a run of ANY length, not just one.
-    let html = render_html("\n\n# Title\n\nBody.\n", PreviewTheme::Default);
+    let html = render_html("\n\n# Title\n\nBody.\n", PreviewTheme::Default, WidthMode::Full);
     let children = body_children(&html);
 
     let idx = children
@@ -2046,7 +2046,7 @@ fn last_child_margin_reset_reaches_the_closing_block() {
     // `wolf-src` anchor after the final block: the last hard line's marker has
     // nowhere left to attach, so `flush_before(usize::MAX)` emits it after the
     // closing tag.
-    let html = render_html("# Title\n\nLast paragraph.\n", PreviewTheme::Default);
+    let html = render_html("# Title\n\nLast paragraph.\n", PreviewTheme::Default, WidthMode::Full);
     let children = body_children(&html);
     assert!(
         !children.is_empty(),

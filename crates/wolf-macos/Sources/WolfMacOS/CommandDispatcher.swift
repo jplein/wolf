@@ -76,6 +76,8 @@ enum CommandDispatcher {
       controller?.toggleTerminal()
     case .previewInBrowser:
       controller?.openInBrowser()
+    case .fullWidth:
+      controller?.toggleFullWidth()
     }
   }
 }

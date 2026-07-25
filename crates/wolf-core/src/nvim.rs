@@ -316,7 +316,9 @@ impl NvimProcess {
     /// [`NvimError::Rpc`]; the caller ([`crate::api::WolfCore::render_preview`])
     /// maps that to an empty string.
     pub async fn render_preview(&self, source_bufnr: i64) -> Result<String, NvimError> {
-        render_source_html(&self.nvim, source_bufnr).await
+        // In-app preview: full-bleed render (WidthMode::Full) — the webview FRAME
+        // caps the content to the ~90-char width when the source is not full-width.
+        render_source_html(&self.nvim, source_bufnr, crate::markdown::WidthMode::Full).await
     }
 
     /// Returns the number of the buffer currently being edited when it is a
@@ -796,6 +798,49 @@ impl NvimProcess {
         Ok(())
     }
 
+    /// Installs the per-window full-width tracking autocmds inside the captive nvim.
+    ///
+    /// Mirrors [`setup_buffer_tracking`](Self::setup_buffer_tracking): looks up this
+    /// RPC channel's id via `nvim_get_api_info`, then calls the
+    /// `_G.wolf_setup_full_width` helper (defined in `runtime/nvim/init.lua`) over
+    /// `nvim_exec_lua`, passing the channel id as a Lua vararg. The helper registers
+    /// `BufEnter`/`BufWinEnter`/`WinEnter`/`WinNew`/`WinClosed` autocmds that
+    /// `rpcnotify` `wolf_full_width` with a list of
+    /// `[win, vim.b[buf].wolf_full_width == true]` pairs for ALL windows, and emits
+    /// once immediately.
+    pub async fn setup_full_width(&self) -> Result<(), NvimError> {
+        let info = self
+            .nvim
+            .call("nvim_get_api_info", vec![])
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+        let chan = info
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(Value::as_i64)
+            .ok_or_else(|| {
+                NvimError::Rpc(format!(
+                    "nvim_get_api_info returned no channel id: {info:?}"
+                ))
+            })?;
+
+        let _ = self
+            .nvim
+            .call(
+                "nvim_exec_lua",
+                vec![
+                    Value::from("wolf_setup_full_width(...)"),
+                    Value::Array(vec![Value::from(chan)]),
+                ],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+        Ok(())
+    }
+
     /// Installs the split-panes layout overrides inside the captive nvim.
     ///
     /// Mirrors [`setup_current_file_tracking`](Self::setup_current_file_tracking):
@@ -1012,8 +1057,11 @@ impl NvimProcess {
 /// Blocks on `nvim_buf_get_lines(source_bufnr, 0, -1, false)` to read the whole
 /// buffer, joins the lines with `\n`, and renders via
 /// [`crate::markdown::render_html`] with the fixed
-/// [`crate::markdown::PreviewTheme::Default`] (OD5). An RPC error (e.g. an
-/// unloaded/closed buffer) is propagated as [`NvimError::Rpc`].
+/// [`crate::markdown::PreviewTheme::Default`] (OD5) and the given `width_mode`
+/// (in-app callers pass [`crate::markdown::WidthMode::Full`] and let the webview
+/// frame cap; the browser preview passes [`crate::markdown::WidthMode::Capped`]).
+/// An RPC error (e.g. an unloaded/closed buffer) is propagated as
+/// [`NvimError::Rpc`].
 ///
 /// Extracted from [`NvimProcess::render_preview`] so the loopback browser-preview
 /// server ([`crate::browser_preview`]) can re-render off a bare RPC handle
@@ -1021,6 +1069,7 @@ impl NvimProcess {
 pub(crate) async fn render_source_html(
     nvim: &Neovim<Compat<ChildStdin>>,
     source_bufnr: i64,
+    width_mode: crate::markdown::WidthMode,
 ) -> Result<String, NvimError> {
     let value = nvim
         .call(
@@ -1050,6 +1099,7 @@ pub(crate) async fn render_source_html(
     Ok(crate::markdown::render_html(
         &source,
         crate::markdown::PreviewTheme::Default,
+        width_mode,
     ))
 }
 
