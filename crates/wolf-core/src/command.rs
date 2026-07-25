@@ -27,7 +27,8 @@
 /// `MinimizeWindow`(4), `GoToFile`(5), `OpenFile`(6), `OpenFolder`(7),
 /// `ClosePane`(8), `NewBuffer`(9), `ResetFontSize`(10), `IncreaseFontSize`(11),
 /// `DecreaseFontSize`(12), `CommandPalette`(13), `Copy`(14), `Paste`(15),
-/// `BufferPicker`(16), `NewTab`(17), `Preview`(18), `Edit`(19), `Terminal`(20).
+/// `BufferPicker`(16), `NewTab`(17), `Preview`(18), `Edit`(19), `Terminal`(20),
+/// `PreviewInBrowser`(21).
 /// Adding a command is additive
 /// (append a variant + a [`COMMAND_SPECS`] row); reordering is a breaking change.
 /// `CommandPalette` is the palette's own invoking command and is EXCLUDED from the
@@ -80,6 +81,10 @@ pub enum Command {
     Edit,
     /// Toggle the terminal drawer (a bottom `:terminal` split, one per project).
     Terminal,
+    /// Render the active Markdown buffer and open it in the system default web
+    /// browser, backed by a lazily-started loopback-only HTTP server owned by the
+    /// core (only available when the active buffer is a Markdown file).
+    PreviewInBrowser,
 }
 
 /// The menu group a command belongs to in a native menu bar.
@@ -277,6 +282,13 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         title: "Terminal",
         menu: MenuGroup::View,
     },
+    CommandSpec {
+        command: Command::PreviewInBrowser,
+        id: "preview_in_browser",
+        ex_command: "WolfPreviewInBrowser",
+        title: "Preview in Browser",
+        menu: MenuGroup::View,
+    },
 ];
 
 impl Command {
@@ -307,10 +319,10 @@ mod tests {
     /// The total number of registered commands AFTER appending
     /// `Command::Copy` (14), `Command::Paste` (15), `Command::BufferPicker`
     /// (16), `Command::NewTab` (17), `Command::Preview` (18), `Command::Edit`
-    /// (19), and `Command::Terminal` (discriminant 20) past
-    /// `Command::CommandPalette` (13). A named constant so the magic-number lint
-    /// stays quiet and the count's meaning is explicit.
-    const EXPECTED_COMMAND_COUNT: usize = 21;
+    /// (19), `Command::Terminal` (20), and `Command::PreviewInBrowser`
+    /// (discriminant 21) past `Command::CommandPalette` (13). A named constant so
+    /// the magic-number lint stays quiet and the count's meaning is explicit.
+    const EXPECTED_COMMAND_COUNT: usize = 22;
 
     /// The append-only slice index (== FFI discriminant == `command_kind`) of
     /// `Command::CommandPalette`.
@@ -346,9 +358,14 @@ mod tests {
     const EDIT_INDEX: usize = 19;
 
     /// The append-only slice index (== FFI discriminant == `command_kind`) of
-    /// `Command::Terminal`: the appended discriminant 20 and LAST row of
-    /// [`COMMAND_SPECS`].
+    /// `Command::Terminal`: the appended discriminant 20. No longer the last row
+    /// after `PreviewInBrowser` is appended at 21.
     const TERMINAL_INDEX: usize = 20;
+
+    /// The append-only slice index (== FFI discriminant == `command_kind`) of
+    /// `Command::PreviewInBrowser`: the appended discriminant 21 and LAST row of
+    /// [`COMMAND_SPECS`].
+    const PREVIEW_IN_BROWSER_INDEX: usize = 21;
 
     /// `from_id` resolves the canonical `command_palette` id to the new variant.
     #[test]
@@ -371,8 +388,8 @@ mod tests {
         assert_eq!(spec.menu, MenuGroup::View, "menu group");
     }
 
-    /// Appending Copy, Paste, BufferPicker, NewTab, Preview, Edit, and Terminal
-    /// grows the registry to exactly 21 rows.
+    /// Appending Copy, Paste, BufferPicker, NewTab, Preview, Edit, Terminal, and
+    /// PreviewInBrowser grows the registry to exactly 22 rows.
     #[test]
     fn command_specs_has_expected_len() {
         assert_eq!(
@@ -380,7 +397,7 @@ mod tests {
             EXPECTED_COMMAND_COUNT,
             "COMMAND_SPECS must hold exactly {EXPECTED_COMMAND_COUNT} rows \
              after appending Copy, Paste, BufferPicker, NewTab, Preview, Edit, \
-             and Terminal"
+             Terminal, and PreviewInBrowser"
         );
     }
 
@@ -613,19 +630,52 @@ mod tests {
         assert_eq!(spec.menu, MenuGroup::View, "menu group");
     }
 
-    /// Append-discriminant guard: Terminal is the LAST row (index 20), so the
-    /// slice index equals its FFI discriminant. Reordering breaks this.
+    /// Append-discriminant guard: Terminal stays at fixed index 20 (no longer the
+    /// last row after PreviewInBrowser is appended at 21), so the slice index still
+    /// equals its FFI discriminant. Reordering breaks this.
     #[test]
-    fn terminal_is_the_last_row() {
+    fn terminal_is_at_index_20() {
         assert_eq!(
             COMMAND_SPECS[TERMINAL_INDEX].command,
             Command::Terminal,
             "the row at index {TERMINAL_INDEX} must be Command::Terminal"
         );
+    }
+
+    /// `from_id` resolves the canonical `preview_in_browser` id to the new variant.
+    #[test]
+    fn preview_in_browser_id_round_trips() {
         assert_eq!(
-            TERMINAL_INDEX,
+            Command::from_id("preview_in_browser"),
+            Some(Command::PreviewInBrowser),
+            "\"preview_in_browser\" must resolve to Command::PreviewInBrowser"
+        );
+    }
+
+    /// The PreviewInBrowser spec pins its id, ex-command, title, and View menu
+    /// group (the canonical registry row for the browser-preview command).
+    #[test]
+    fn preview_in_browser_spec_fields() {
+        let spec = Command::PreviewInBrowser.spec();
+        assert_eq!(spec.id, "preview_in_browser", "id");
+        assert_eq!(spec.ex_command, "WolfPreviewInBrowser", "ex_command");
+        assert_eq!(spec.title, "Preview in Browser", "title");
+        assert_eq!(spec.menu, MenuGroup::View, "menu group");
+    }
+
+    /// Append-discriminant guard: PreviewInBrowser is the LAST row (index 21), so
+    /// the slice index equals its FFI discriminant. Reordering breaks this.
+    #[test]
+    fn preview_in_browser_is_the_last_row() {
+        assert_eq!(
+            COMMAND_SPECS[PREVIEW_IN_BROWSER_INDEX].command,
+            Command::PreviewInBrowser,
+            "the row at index {PREVIEW_IN_BROWSER_INDEX} must be Command::PreviewInBrowser"
+        );
+        assert_eq!(
+            PREVIEW_IN_BROWSER_INDEX,
             COMMAND_SPECS.len() - 1,
-            "Terminal must be the FINAL row of COMMAND_SPECS"
+            "PreviewInBrowser must be the FINAL row of COMMAND_SPECS"
         );
     }
 

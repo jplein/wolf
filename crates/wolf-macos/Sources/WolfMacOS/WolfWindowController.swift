@@ -722,6 +722,21 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     paneContainer.onRenderWake()
   }
 
+  /// Renders the active Markdown buffer and opens it in the system default web
+  /// browser (`:WolfPreviewInBrowser`).
+  ///
+  /// Core lazily starts a loopback-only HTTP server pinned at the active markdown
+  /// buffer and returns its `http://127.0.0.1:<port>/` URL (an empty string when
+  /// the active buffer is not markdown / on error). On a non-empty, parseable URL
+  /// the front-end hands it to `NSWorkspace.shared.open`, which opens the user's
+  /// default browser. A no-op when the handle is gone or the URL is empty/invalid.
+  func openInBrowser() {
+    guard let handle else { return }
+    let url = handle.open_in_browser().toString()
+    guard !url.isEmpty, let u = URL(string: url) else { return }
+    NSWorkspace.shared.open(u)
+  }
+
   /// Raises and activates this window (the Window-menu dynamic list item's
   /// action, routed by the coordinator from the item's `windowIndex` tag).
   func raise() {

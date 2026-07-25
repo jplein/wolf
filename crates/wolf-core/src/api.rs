@@ -19,6 +19,7 @@ use parking_lot::{Mutex, RwLock};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{self, UnboundedSender};
 
+use crate::browser_preview::{self, BrowserPreview};
 use crate::buffer_picker::BufInfo;
 use crate::command::Command;
 use crate::command_mru::CommandMru;
@@ -175,6 +176,14 @@ pub struct WolfCore {
     /// `getcwd()` (see [`WolfCore::start_file_search`]); this path is used only
     /// when that query fails or returns an unusable path.
     cwd: PathBuf,
+    /// The lazily-started, loopback-only browser-preview HTTP server (one per
+    /// core). `None` until the user first runs the "Preview in Browser" command
+    /// ([`WolfCore::open_in_browser`]); once started it is reused (and re-pointed
+    /// at the active markdown buffer) on subsequent invocations. Guarded by a
+    /// `Mutex` that is NEVER held across the slow/contended nvim RPC `block_on`
+    /// (bufnr resolution runs before the lock is taken); the only `block_on`
+    /// under the lock is the trivial, self-contained TCP bind during lazy spawn.
+    browser_preview: Mutex<Option<BrowserPreview>>,
 }
 
 /// The process's canonicalized home directory, resolved at most once.
@@ -332,6 +341,7 @@ impl WolfCore {
             recent_dirs,
             command_mru,
             cwd,
+            browser_preview: Mutex::new(None),
         })
     }
 
@@ -432,6 +442,59 @@ impl WolfCore {
                 String::new()
             }
         }
+    }
+
+    /// Opens (or reuses) the loopback-only browser-preview server pinned at the
+    /// currently-active Markdown buffer and returns its `http://127.0.0.1:<port>/`
+    /// URL, or the EMPTY string when the active buffer is not Markdown / on error.
+    ///
+    /// The bufnr is resolved via `runtime.block_on(current_markdown_bufnr())`
+    /// FIRST — OUTSIDE the `browser_preview` lock — so no lock is ever held across
+    /// a `block_on` (the crate's locking invariant). A non-positive bufnr (not a
+    /// markdown buffer) short-circuits to `""`. Then the `browser_preview` slot is
+    /// locked: an existing server is re-pointed at the new bufnr and reused (same
+    /// port); otherwise a server is lazily started (bound `127.0.0.1:0`, random
+    /// port). A bind failure is logged and yields `""`. The front-end opens the
+    /// returned URL in the system default browser.
+    #[must_use]
+    pub fn open_in_browser(&self) -> String {
+        // Resolve the pinned bufnr BEFORE taking the browser_preview lock, so the
+        // lock is never held across this block_on.
+        let bufnr = match self.runtime.block_on(self.nvim.current_markdown_bufnr()) {
+            Ok(bufnr) => bufnr,
+            Err(e) => {
+                tracing::warn!("open_in_browser: current_markdown_bufnr failed: {e}");
+                return String::new();
+            }
+        };
+        if bufnr <= 0 {
+            return String::new();
+        }
+
+        let mut slot = self.browser_preview.lock();
+        let port = if let Some(server) = slot.as_ref() {
+            server.set_target(bufnr);
+            server.port()
+        } else {
+            match browser_preview::spawn(
+                &self.runtime,
+                self.nvim.handle(),
+                self.snapshot.clone_handle(),
+                bufnr,
+            ) {
+                Ok(server) => {
+                    let port = server.port();
+                    *slot = Some(server);
+                    port
+                }
+                Err(e) => {
+                    tracing::warn!("open_in_browser: failed to start preview server: {e}");
+                    return String::new();
+                }
+            }
+        };
+
+        format!("http://127.0.0.1:{port}/")
     }
 
     /// Opens (or reuses) the Markdown preview pane for the active source buffer and

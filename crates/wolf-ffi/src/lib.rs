@@ -200,6 +200,8 @@ mod command_kind {
     pub const EDIT: u8 = 19;
     /// Toggle the per-project terminal drawer (a bottom `:terminal` split).
     pub const TERMINAL: u8 = 20;
+    /// Render the active Markdown buffer and open it in the system web browser.
+    pub const PREVIEW_IN_BROWSER: u8 = 21;
 }
 
 /// The palette-row-kind discriminants packed into [`FfiCommandRow::row_kind`].
@@ -525,6 +527,13 @@ mod ffi {
         // document the front-end web view loads. Blocks briefly on the captive
         // nvim. Returns the empty string on error / when the core is gone.
         fn render_preview(&self, source_bufnr: i64) -> String;
+        // Opens (or reuses) the loopback-only browser-preview HTTP server pinned at
+        // the active Markdown buffer and returns its `http://127.0.0.1:<port>/`
+        // URL, which the front-end opens in the system default browser. Blocks
+        // briefly on the captive nvim to resolve the buffer. Returns the empty
+        // string when the active buffer is not Markdown, on error, or when the core
+        // is gone.
+        fn open_in_browser(&self) -> String;
         // Repoints the preview window `win` at the Markdown file at absolute
         // `path` (a linked file the user clicked in the preview), replacing that
         // pane's preview with the linked file's. Blocks briefly on the captive
@@ -777,7 +786,7 @@ mod ffi {
     extern "Rust" {
         type FfiCommand;
 
-        // The command kind (`command_kind::NEW_WINDOW` .. `TERMINAL`).
+        // The command kind (`command_kind::NEW_WINDOW` .. `PREVIEW_IN_BROWSER`).
         fn kind(&self) -> u8;
     }
 
@@ -2028,6 +2037,21 @@ impl WolfCoreHandle {
             .map_or_else(String::new, |c| c.render_preview(source_bufnr))
     }
 
+    /// Opens (or reuses) the loopback-only browser-preview HTTP server pinned at
+    /// the active Markdown buffer and returns its `http://127.0.0.1:<port>/` URL,
+    /// which the front-end opens in the system default browser.
+    ///
+    /// Blocks briefly on the captive nvim to resolve the buffer. Returns the empty
+    /// string when the active buffer is not Markdown, on error, or once the core
+    /// has been shut down.
+    #[must_use]
+    pub fn open_in_browser(&self) -> String {
+        self.core
+            .borrow()
+            .as_ref()
+            .map_or_else(String::new, WolfCore::open_in_browser)
+    }
+
     /// Repoints the preview window `win` at the Markdown file at absolute `path`
     /// (a linked file the user clicked in the preview), replacing that pane's preview
     /// with the linked file's, and returns the linked file's SOURCE bufnr.
@@ -2345,6 +2369,7 @@ impl FfiCommand {
             Command::Preview => command_kind::PREVIEW,
             Command::Edit => command_kind::EDIT,
             Command::Terminal => command_kind::TERMINAL,
+            Command::PreviewInBrowser => command_kind::PREVIEW_IN_BROWSER,
         };
         Self { kind }
     }

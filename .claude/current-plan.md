@@ -1,347 +1,199 @@
-# Plan: Merge feat/terminal-drawer into main
+# Plan: "Preview in Browser" command
 
-## Status: COMPLETE — merged and verified
+## Status: COMPLETE ✅
 
-**Final verification (cold, `--nocache_test_results`): 57/57 tests pass. `//tools/lint:check` 4/4. `//crates/wolf-macos:Wolf` builds.** `WolfKeyMapTests` = 220 Swift cases, 0 failures, including the new `DrawerFocusSeamTests` (8), `DrawerLayoutTests` (5), `CommandSeamTests` (2).
+Nit 1 fixed (api.rs field-doc reworded, rustfmt clean, builds). Docs updated across 10 files by technical-writer; `prettier --write` run by orchestrator (all already clean, `proseWrap: never`). Feature implemented, all tests green, reviewer APPROVED, docs synced. NOT committed (per user instruction).
 
-### Deltas from this plan, discovered during execution
 
-1. **§19's new test could not be written as specified.** `COMMAND_SPECS` is a `const`, not a `static`, so each use site materializes its own promoted array and a pointer-identity check fails on every row. Rewritten as value-equality plus `position()` assertions on `command` and `id`. Reviewer confirmed it genuinely fails on a duplicated or shadowed row — but noted it does NOT catch a straight two-row swap, which remains pinned only by the seven `*_is_at_index_N` guards and the end-to-end drain steps in `//crates/wolf-ffi:commands`.
-2. **§14 edit 7 was under-specified and the branch's version was self-inconsistent.** The branch computed `DrawerLayout` only inside the drawer branch and passed raw `paneAreaHeight` to `tree.neighbor` — wrong once edit 3 makes `paneRects()` tile over `dl.editorHeight`. The construction was hoisted above both branches and `dl.editorHeight` passed through. Provably a no-op with no drawer open (`DrawerLayout.init` false branch is an exact passthrough).
-3. **§5 understated the auto-merged `toggle_terminal`.** It arrived in a form `rustfmt` rejected and failed `//tools/lint:rustfmt_core`. Merge-introduced, so fixed.
-4. **§13 understated the `viewMenuItem` doc change.** Main's doc comment was already stale pre-merge (listed neither Buffer Picker nor Preview nor Edit Source), so the whole list needed rewriting, not a clause appended.
-5. **Correction (c) was a non-issue in practice.** The regenerated bindings were byte-identical to the auto-merged state — `mod command_kind` is private and non-bridged, so its constants never cross into the generated header. Now verified rather than assumed.
-6. **§18's `crates/wolf-core/tests/README.md` reference was wrong.** That file has no `palette_rank` static-row count and never did; the line the plan pointed at is the `command.rs` unit-test paragraph, which was correctly updated. No work dropped.
-7. **`Sources/README.md` file count was wrong on BOTH sides** (HEAD "Twenty-seven", branch "Twenty-one"); actual is 29.
-8. **Two stale doc sentences contradicted the new `applyFocus`** (`Sources/README.md:56`, `README.md:89`) — caught by the reviewer as the sole blocker, fixed.
-9. **`build.md`'s "47/47" was stale** → corrected to 53/53. The malformed `//crates/wolf-core:...` target pattern turned out to live in this plan file, not `build.md`.
 
-### Known-remaining, non-blocking
+### Reviewer verdict: APPROVED WITH NITS
+All hard requirements verified: loopback-only bind (`Ipv4Addr::LOCALHOST`, browser_preview.rs:96), no snapshot-guard-across-await, bufnr resolved outside the lock, discriminant 21 intact across all 6 mirrors, tokio gained only `net`, wolf-gnome untouched, bindings additive-only, Swift wiring + markdown gating correct.
+- Nit 1 (coder): `api.rs:183-184` field doc overstates "never held across block_on" — the bind block_on IS under the lock (benign). Reword to "never held across the nvim RPC block_on".
+- Nit 2 (technical-writer): docs pending — `crates/wolf-core/src/README.md`, `crates/wolf-core/README.md`, `crates/wolf-ffi/README.md` (`0..=20`→`0..=21`, add `:WolfPreviewInBrowser`), `architecture.md` §10, `command-lifecycle.md`, wolf-macos READMEs.
 
-- `crates/wolf-ffi/README.md:103` — the `command_kind` table is collapsed onto one line and renders as a paragraph. **Pre-existing on main**, correctly extended with Terminal; left alone to avoid merge churn.
-- `crates/wolf-ffi/src/README.md:41-43` — a sentence breaks mid-clause into a spurious list item. Present identically in both parents.
-- The §21 GUI-toolkit dep query can never print `clean`: `glibc` in `libc`'s source paths matches the `glib` substring. Pattern needs tightening to stay usable as a gate.
-- §19's manual edge cases (split-from-drawer no-op, preview webview reframing, drawer-close focus re-homing) remain compile-and-smoke only — the same coverage posture as the rest of `PaneContainerView`.
+### Unit-test gap closed
+Test-writer added 12 in-module `#[cfg(test)]` unit tests to `src/browser_preview.rs` (parse/render_page/reload_script/fallback/http_response/404 + a `#[tokio::test]` loopback-bind). Coder ran them: `//crates/wolf-core:wolf_core_lib_test` 130/130 (was 118, +12); integration `browser_preview` passing; `//crates/wolf-core:all //crates/wolf-ffi:all` 52/52. No code changes needed.
 
----
+### Coder report (done, all green)
+- Implemented all of §2–§9, §12. Inline Lua for `current_markdown_bufnr` (no init.lua change). `BrowserPreview::abort()` exists but not wired into shutdown (runtime drop cancels task; avoids lock-across-block_on).
+- Results: `browser_preview` 2/2; wolf-core+wolf-ffi 52/52; `WolfKeyMapTests` + `bundle_layout_test` pass; `bazel build //crates/wolf-macos:Wolf` builds; denylist clean (only documented `glibc` false positive); bindings regenerated (adds only `open_in_browser`); rustfmt+clippy clean. `Cargo.Bazel.lock` updated by repin; `Cargo.lock` unchanged (net adds no crate node).
+- GAP: plan §3/§10b in-module `#[cfg(test)] mod tests` (pure-helper unit tests) were NOT written (coder correctly leaves test code). Routing to test-writer.
 
-## Original plan follows
-
+### Test-writer report (done)
+- CREATED `crates/wolf-core/tests/browser_preview.rs` — happy path (serve rendered HTML + live `/tick` + reuse + 404 + shutdown) and non-markdown-returns-"" edge case; `http_get` helper on `std::net::TcpStream` only. Buffer mutation uses the `save_open.rs` insert pattern (`ch('i')` + `type_str` + `Key::Esc`), token `freshinserttoken`.
+- MODIFIED `command.rs` mod tests (count 22, `PREVIEW_IN_BROWSER_INDEX=21`, migrated `terminal_is_the_last_row`→`terminal_is_at_index_20`, 3 new preview_in_browser_* tests).
+- MODIFIED `palette_rank.rs` (`STATIC_COMMAND_COUNT`→21).
+- MODIFIED `wolf-ffi/tests/commands.rs` (`CMD_KIND_PREVIEW_IN_BROWSER=21`, guard arrays 0..=21, drain step 3l).
+- MODIFIED `CommandSeamTests.swift` (ffi 21→.previewInBrowser, oob probe→22).
+- NOTE: test-writer did NOT add the `browser_preview` BUILD.bazel target (that's coder's job, §4e). Assumed API: `open_in_browser(&self) -> String`.
 
 ## Problem statement
 
-A merge of `feat/terminal-drawer` into `main` is **already in progress** in the working tree. Do **not** run `git merge --abort`. 23 files are conflicted (`UU` in `git status`).
+Add a new user command **"Preview in Browser"** to Wolf that renders the current
+Markdown file and opens it in the system default web browser, backed by a
+lazily-started local HTTP server owned by the project's captive core.
 
-Merge base is `919ab85`. Since then `main` absorbed a large typography / markdown-preview merge (~28k lines), and `feat/terminal-drawer` developed in parallel (31 commits).
+## Confirmed decisions (from the user)
 
-Both sides appended to the **append-only** `COMMAND_SPECS` registry in `crates/wolf-core/src/command.rs`, where slice index == enum discriminant == FFI `command_kind` wire value (an ABI contract, confirmed by the architect at `command.rs:24-36` and `:134-135`, enforced by the `*_is_at_index_N` tests and the exhaustive `FfiCommand::from_command` match at `lib.rs:2336-2362`).
+1. **Live reload.** The server re-renders on change and the already-open browser
+   tab auto-refreshes. Reuse the same signal that drives the in-app preview —
+   `Snapshot.markdown_ticks` (source buffer `changedtick` via `wolf_markdown_dirty`)
+   and the `markdown::render_html` / `render_preview` path. Inject a tiny JS poller
+   into the served HTML that watches for a tick bump and reloads. Prefer a simple
+   poll endpoint over websockets to keep deps minimal.
 
-- `main` (HEAD) added `Preview` (18), `Edit` (19); count 20.
-- `feat/terminal-drawer` added `Terminal` (18); count 19.
+2. **macOS only.** Wire the command through `wolf-core`, `wolf-ffi`, and
+   `wolf-macos` (AppKit menu + `CommandDispatcher` + palette). Do NOT wire
+   `wolf-gnome`. Follow the append-only discriminant contract: append the new
+   `Command` variant LAST (after `Terminal` at 20, so the new one is **21**), add
+   the `COMMAND_SPECS` row, bump `EXPECTED_COMMAND_COUNT`, add index/round-trip/spec
+   tests, add the `command_kind` constant + `FfiCommand::from_command` arm, extend
+   the Swift `CommandKind` `init?(ffi:)` + `CommandSeamTests`, extend
+   `crates/wolf-ffi/tests/commands.rs` contiguous `0..=N` guard, add `AppMenu` Tag +
+   menu item, add `CommandDispatcher` arm. Gate the menu item's enablement on
+   `is_markdown_active` (mirror the `Preview` command precedent). Update
+   `STATIC_COMMAND_COUNT` in `crates/wolf-core/tests/palette_rank.rs`.
 
-**Resolution: keep both. `Terminal` renumbers to 20 and becomes the LAST row. `Preview` stays 18, `Edit` stays 19. `EXPECTED_COMMAND_COUNT` = 21.**
+3. **One server per project** (per captive core). Lazily started — not until the
+   user first runs the command. Bind ONLY to `127.0.0.1` on a RANDOM port
+   (`127.0.0.1:0`, read back the OS-assigned port). URLs are unique between
+   projects because each core's server gets its own random port. The front-end
+   opens the returned URL in the default browser (`NSWorkspace.open`).
 
-## Corrections to the original premise (found by the architect — read these)
+## Architectural constraints (critical)
 
-**(a) `crates/wolf-ffi/tests/terminal.rs` needs ZERO edits.** The original brief guessed it asserted on command discriminant 18. It does not — it drives `WolfCoreHandle::toggle_terminal()` directly (deliberately, per its header at lines 26-28). Its only discriminant assertion is `INTENT_KIND_DRAWER_OPEN: u8 = 2` (line 89), which is the **layout-intent** table, unaffected by this merge.
+- **wolf-core's ONE HARD RULE:** must compile with NO GUI toolkit in its
+  dependency tree (denylist + `cargo tree` / `bazel query` checks). Any HTTP
+  server dependency MUST be GUI-free, pure-Rust. Prefer minimal (`tiny_http`) OR
+  hand-rolled HTTP/1.1 on the existing tokio runtime. RE-VERIFY the denylist stays
+  clean and DOCUMENT the new dependency in `crates/wolf-core/README.md` (rusqlite/
+  ignore/serde/pulldown precedents). Update `Cargo.lock` + Bazel crate_universe pin
+  if a crate is added (macOS builds under Bazel).
+- Server serves the RENDERED HTML of the current markdown buffer, reusing
+  `markdown::render_html` so browser and in-app preview match.
+- Binds `127.0.0.1` ONLY (never `0.0.0.0`). Hard security requirement — verify in
+  a test.
+- Lazy start; subsequent invocations reuse the same server/port.
 
-**(b) The merge carries a second, separate ABI addition** — `intent_kind::DRAWER_OPEN = 2` / `LayoutIntent::DrawerOpen { win }`. It **auto-merged cleanly** and is unaffected by the command renumbering. Do not disturb it, nor: the `"drawer_open"` arm in `layout.rs::from_payload` + its two unit tests; `toggle_terminal()` at `lib.rs:480-482`/`1902-1907` and `api.rs:626`; the `FfiLayoutIntent::from_intent` arm at `lib.rs:2298`.
+## Suggested core API shape (architect to refine)
 
-**(c) `generated/wolf-ffi.h` and `generated/wolf-ffi.swift` auto-merged into an UNVERIFIED state.** Not conflicted ≠ correct. They are a textual union of both sides and must still be regenerated (§7).
+- New blocking `WolfCore` method e.g. `open_in_browser(&self) -> Option<String>`:
+  lazily starts the per-core server (Arc handle stored in `WolfCore`), determines
+  the current markdown source buffer, returns the URL (None if not markdown / on
+  error). Front-end opens the URL.
+- Server serves `GET /` -> `render_html` of current source buffer (re-rendered per
+  request) with injected auto-reload script; `GET /tick` -> current changedtick as
+  text; injected JS polls `/tick` and reloads on change.
 
-**(d) The two sides use different Swift indentation.** `main` is **2-space** (swift-format has been run); the branch is **4-space**. Every conflicted Swift file shows this. The merged result must be 2-space throughout, including the four cleanly-added drawer files, or `//tools/lint:swift_format` churns.
+## Testing requirements (CLAUDE.md)
 
----
+- Prefer end-to-end/integration tests over mocks; start a real Neovim.
+- wolf-core integration test: start core, open a markdown buffer, call
+  `open_in_browser`, GET the URL over 127.0.0.1, assert rendered HTML returned and
+  `/tick` works, assert listener bound to 127.0.0.1 only.
 
-## 3. `crates/wolf-core/src/command.rs` — the anchor file
+## Documentation requirements (CLAUDE.md)
 
-Resolve first; everything derives from it.
+- Docs are source of truth. Update READMEs in every touched dir (wolf-core
+  public-API + "How core embeds Neovim" if relevant, `command-lifecycle.md`
+  checklist, `architecture.md` §10, wolf-ffi README, wolf-macos READMEs).
+  `prettier --write` every edited Markdown file.
+- Regenerate swift-bridge bindings (`bazel run //crates/wolf-ffi:gen_bindings`) and
+  commit `crates/wolf-ffi/generated/` after FFI changes.
 
-### Final ordered `COMMAND_SPECS` (21 rows)
-
-| idx | variant | id | ex_command | title | menu |
-|----|---------|----|-----------|-------|------|
-| 0 | `NewWindow` | `new_window` | `WolfNewWindow` | New Window | File |
-| 1 | `CloseWindow` | `close_window` | `WolfCloseWindow` | Close Window | File |
-| 2 | `QuitApplication` | `quit_application` | `WolfQuitApplication` | Quit Wolf | App |
-| 3 | `HideApplication` | `hide_application` | `WolfHideApplication` | Hide Wolf | App |
-| 4 | `MinimizeWindow` | `minimize_window` | `WolfMinimizeWindow` | Minimize | Window |
-| 5 | `GoToFile` | `go_to_file` | `WolfGoToFile` | Go to File… | File |
-| 6 | `OpenFile` | `open_file` | `WolfOpenFile` | Open File… | File |
-| 7 | `OpenFolder` | `open_folder` | `WolfOpenFolder` | Open Folder… | File |
-| 8 | `ClosePane` | `close_pane` | `WolfClosePane` | Close | File |
-| 9 | `NewBuffer` | `new_buffer` | `WolfNewBuffer` | New | File |
-| 10 | `ResetFontSize` | `reset_font_size` | `WolfResetFontSize` | Reset Font Size | View |
-| 11 | `IncreaseFontSize` | `increase_font_size` | `WolfIncreaseFontSize` | Increase Font Size | View |
-| 12 | `DecreaseFontSize` | `decrease_font_size` | `WolfDecreaseFontSize` | Decrease Font Size | View |
-| 13 | `CommandPalette` | `command_palette` | `WolfCommandPalette` | Command Palette… | View |
-| 14 | `Copy` | `copy` | `WolfCopy` | Copy | Edit |
-| 15 | `Paste` | `paste` | `WolfPaste` | Paste | Edit |
-| 16 | `BufferPicker` | `buffer_picker` | `WolfBufferPicker` | Buffer Picker… | View |
-| 17 | `NewTab` | `new_tab` | `WolfNewTab` | New Tab | File |
-| 18 | `Preview` | `preview` | `WolfPreview` | Preview | View |
-| 19 | `Edit` | `edit` | `WolfEdit` | Edit Source | View |
-| **20** | **`Terminal`** | **`terminal`** | **`WolfTerminal`** | **Terminal** | **View** |
-
-### Edits
-
-- **Enum doc (conflict ~30-35).** Take HEAD's text, extend the trailing list to `` `BufferPicker`(16), `NewTab`(17), `Preview`(18), `Edit`(19), `Terminal`(20). Adding a command is additive `` + HEAD's existing continuation.
-- **Enum body (conflict ~79-89).** Keep HEAD's `Preview` then `Edit`, then append the branch's `Terminal` variant with its doc comment.
-- **`COMMAND_SPECS` (conflict ~267-286).** Keep HEAD's `Preview` and `Edit` rows verbatim, then append a full `CommandSpec` row for `Terminal`. **The conflict is badly aligned** — the branch's `menu: MenuGroup::View,\n},` tail is *shared* text, so construct the two closing rows carefully rather than mechanically deleting one side.
-- **`EXPECTED_COMMAND_COUNT` (~316-327)** → `21`, doc updated to name Preview (18), Edit (19), Terminal (20).
-- **Index consts (~349-370).** `NEW_TAB_INDEX = 17` (keep HEAD's doc). `PREVIEW_INDEX = 18` unchanged. `EDIT_INDEX = 19` — change doc from "LAST row" to "no longer the last row after `Terminal` is appended at 20". Add `TERMINAL_INDEX: usize = 20` with the "appended discriminant 20 and LAST row" doc.
-- **`command_specs_has_expected_len` (~393-412).** Doc + message string → "…Copy, Paste, BufferPicker, NewTab, Preview, Edit, and Terminal … exactly 21 rows".
-- **`new_tab_is_at_index_17` doc (~545-551).** Take HEAD's wording; still accurate.
-- **Final test block (~561-664).** Keep HEAD's `preview_id_round_trips`, `preview_spec_fields`, `preview_is_at_index_18`, `edit_id_round_trips`, `edit_spec_fields` verbatim. Then:
-  - **Rename `edit_is_the_last_row` → `edit_is_at_index_19`.** Drop its `EDIT_INDEX == COMMAND_SPECS.len() - 1` assertion entirely — Edit is no longer final. Keep only the row-identity assertion. Update the doc to the "stays at fixed index 19" pattern.
-  - Append the branch's `terminal_id_round_trips`, `terminal_spec_fields`, `terminal_is_the_last_row` — with `TERMINAL_INDEX` = 20. The "is FINAL" assertion moves here and is the only one of its kind.
-
----
-
-## 4. `crates/wolf-core/tests/palette_rank.rs`
-
-**`STATIC_COMMAND_COUNT = 20`.** Derivation verified against code, not assumed: `rank_palette` (`crates/wolf-core/src/palette.rs:89-103`) iterates `for spec in COMMAND_SPECS` with exactly one `continue`, guarded by `if spec.command == Command::CommandPalette`. No other filter, no `MenuGroup` gating, no "is markdown active" check, no dedup. Sections (2)/(3) append only window/recent-dir rows, empty in the `rank_palette(&[], &[], &[], "", …)` calls these assertions use. So static rows == `COMMAND_SPECS.len() - 1` == 21 - 1 == **20** — correct *because* exactly one spec self-excludes, not by arithmetic coincidence.
-
-Two count-only consumers, no other edits: `command_palette_is_excluded_and_static_rows_present` (~line 100), `empty_inputs_yield_only_static_rows` (~line 238).
-
-Resolve the conflict (~35-47) with one merged doc comment: 21 registered commands (appended at 14-20) yield 20 static rows; Preview, Edit and Terminal are all NEW palette static rows (OD4 — the palette does not gate them on active buffer/pane, unlike the menu items).
-
-`query_filters_to_and_subsequence_matches` still holds (`rows.len() == 3` for `"font size"`; none of "Preview"/"Edit Source"/"Terminal" contains both tokens).
+## Do NOT commit or push unless the user asks.
 
 ---
 
-## 5. `crates/wolf-core/src/input.rs`
+## Architect's plan
 
-Pure adjacent-append; keep both, HEAD first.
+### 1. Summary
 
-- **Conflict ~245-280.** Keep HEAD's `SetBackground { dark: bool }` variant *and* HEAD's `impl InputEvent { … is_toast_dismissing … }` block. Then insert the branch's `ToggleTerminal` variant **inside the enum, after `SetBackground`, before the enum's closing brace**. ⚠️ The conflict markers are misleadingly placed: the branch side puts `ToggleTerminal` *after* HEAD's `impl` block, which would be a syntax error. Be deliberate about brace placement.
-- **Conflict ~420-431 (`apply_input` match).** Keep both arms: HEAD's `SetBackground` block, then `InputEvent::ToggleTerminal => toggle_terminal(nvim).await,`.
-- The free `async fn toggle_terminal(nvim: &Nvim)` (~531-546) auto-merged; leave it.
+New command **"Preview in Browser"** (id `preview_in_browser`, ex `:WolfPreviewInBrowser`, discriminant **21**, View menu). Lazily starts a single loopback-only HTTP server per `WolfCore` (bound `127.0.0.1:0`, random port), points it at the markdown buffer active when the command fired, returns `http://127.0.0.1:<port>/`; macOS opens it via `NSWorkspace`. Server re-renders on each `GET /` via `markdown::render_html` and injects a JS poller hitting `GET /tick` every 1s → `location.reload()` when `changedtick` (from `Snapshot.markdown_ticks`) advances. Modeled on the blocking `open_preview`/`render_preview` methods.
 
----
+### 2. Design decisions
 
-## 6. `crates/wolf-ffi/src/lib.rs`
+- **2a. HAND-ROLLED HTTP/1.1 server on tokio (no crate).** Enable tokio's `net` feature only. `mio`/`socket2`/`libc` already in `Cargo.lock` (via tokio `process`), so `net` adds NO new crate node — denylist stays clean. Cargo.toml line 14 → `features = ["rt-multi-thread", "macros", "io-util", "process", "sync", "net", "time"]`. Serves only `GET /`, `GET /tick`, 404. Re-run BOTH denylist checks; repin crate_universe (`CARGO_BAZEL_REPIN=1 bazel build //crates/wolf-core:wolf_core`) since features changed; commit lockfiles.
+- **2b. PINNED-per-invocation target** via `Arc<AtomicI64>`. Each `open_in_browser` resolves the current active markdown bufnr and STORES it as the new target, returns the stable URL. Server does not live-follow between invocations.
+- **2c. Tick source** = `Snapshot.markdown_ticks.get(&target).copied().unwrap_or(0)`, fed by `wolf_markdown_dirty` (fires for any `filetype==markdown` buffer, not gated on a preview window). `0` until first edit; page embeds render-time tick as JS baseline to avoid a spurious first-poll reload.
+- **2d. Test HTTP client = `std::net::TcpStream`** + hand-written GET (no crate). Bazel `deps()` query is not `-e no-dev`-scoped and wolf-core test targets pull `normal_dev` deps, so a dev-dep client risks the Bazel denylist; `std::net` adds zero deps.
 
-- **`mod command_kind` (~197-205).** Keep `PREVIEW = 18`, `EDIT = 19`, append `TERMINAL: u8 = 20` with doc.
-- **Bridge doc (~783-787)** and **`FfiCommand::kind` doc (~2323-2327)** → range ends at `` `TERMINAL` ``.
-- **`FfiCommand::from_command` match (~2356-2361).** Keep Preview/Edit arms, append `Command::Terminal => command_kind::TERMINAL,`. Exhaustive, no `_` fallback → omitting it is a compile error (useful early signal).
+### 3. Files to CREATE
 
-Do **not** touch `mod intent_kind`, the `toggle_terminal` bridge decl/impl, or the `LayoutIntent::DrawerOpen` arm.
+**`crates/wolf-core/src/browser_preview.rs`**:
+- `pub struct BrowserPreview { port: u16, target: Arc<AtomicI64>, task: AbortHandle }` — `port()`, `set_target(bufnr)` (atomic store), optional `abort()`.
+- `pub(crate) fn spawn(runtime, nvim, snapshot: SharedSnapshot, initial_bufnr) -> io::Result<BrowserPreview>`: `runtime.block_on(TcpListener::bind((Ipv4Addr::LOCALHOST, 0)))`, read `local_addr().port()`, `runtime.spawn(accept_loop(...))`, capture `abort_handle()`.
+- `async fn accept_loop(listener, nvim, snapshot, target)`: loop accept → `tokio::spawn(handle_conn(...))`, log+continue on error.
+- `async fn handle_conn(stream, nvim, snapshot, target)`: read head until `\r\n\r\n` (cap ~8 KiB), `parse_request_target`, route:
+  - `/` → `bufnr = target.load()`; `render_source_html(&nvim, bufnr).await`; read tick; `render_page(html, tick)`; 200 `text/html`. On Err → `fallback_page(tick)` (still carries reload script).
+  - `/tick` → tick as text, 200 `text/plain`.
+  - else → 404.
+- Pure helpers (module `#[cfg(test)]`): `parse_request_target`, `render_page` (inject reload script before the single `</body>` via `replacen(…,1)`), `reload_script(tick)`, `fallback_page(tick)`, `http_response`, `not_found_response`.
+- **Injected reload JS**: poll `/tick` every **1000ms** with `fetch('/tick',{cache:'no-store'})`; `parseInt`; if `!isNaN && n !== baseline` → `location.reload()`; `.catch` keeps polling. Baseline = render-time tick.
+- Module unit tests: `parse_request_target` (valid `/`,`/tick`, malformed, non-GET); `render_page` (contains body + `location.reload` + `/tick` + baseline, exactly one `</body>`); `reload_script` embeds tick; `not_found_response` = 404; bind test asserts `local_addr().ip().is_loopback()`.
 
----
+**`crates/wolf-core/tests/browser_preview.rs`** — real-nvim + real loopback socket (see §10).
 
-## 7. Regenerating the FFI bindings
+### 4. Files to MODIFY (wolf-core)
 
-After `lib.rs` resolves and `//crates/wolf-ffi:wolf_ffi` builds — **do not hand-edit** `generated/wolf-ffi.h` / `wolf-ffi.swift`:
+- **`command.rs`**: enum doc + append `PreviewInBrowser` variant after `Terminal`; append `COMMAND_SPECS` row (`preview_in_browser`/`WolfPreviewInBrowser`/"Preview in Browser"/View). Tests: `EXPECTED_COMMAND_COUNT` → **22**; add `PREVIEW_IN_BROWSER_INDEX = 21`; migrate `terminal_is_the_last_row` → fixed-index `terminal_is_at_index_20` (drop `==len()-1`); update `TERMINAL_INDEX` doc ("no longer last"); add `preview_in_browser_id_round_trips`, `preview_in_browser_spec_fields`, `preview_in_browser_is_the_last_row` (index 21 AND `==len()-1`); update count message.
+- **`nvim.rs`**: extract `render_preview` body into `pub(crate) async fn render_source_html(nvim, source_bufnr) -> Result<String, NvimError>` (buf_get_lines + join + `markdown::render_html`); `render_preview` calls it. Add `pub async fn current_markdown_bufnr(&self) -> Result<i64, NvimError>` (inline `nvim_exec_lua`: `(vim.bo.filetype=='markdown') and nvim_get_current_buf() or 0`). If coder prefers a named `wolf_*` helper, also update `init.lua` + `runtime/nvim/README.md`.
+- **`api.rs`**: `use crate::browser_preview::BrowserPreview;`; add field `browser_preview: Mutex<Option<BrowserPreview>>` (init `Mutex::new(None)` in `start`). Add blocking `pub fn open_in_browser(&self) -> String`: resolve bufnr via `runtime.block_on(nvim.current_markdown_bufnr())` (outside the lock); if `<=0` return ""; lock slot; if Some reuse+`set_target`; if None `browser_preview::spawn(...)` (Err→log+""); `format!("http://127.0.0.1:{port}/")`. Optional explicit `abort()` in `shutdown` (do NOT hold the lock across `block_on`).
+- **`lib.rs`**: `pub mod browser_preview;` + module doc bullet; `pub use browser_preview::BrowserPreview;`.
+- **`BUILD.bazel`**: add `browser_preview` `rust_test` target (copy of `commands`: srcs `tests/browser_preview.rs` + `tests/common/mod.rs`, `no-sandbox`, same data/env, `normal_dev` deps).
 
-```sh
-bazel run //crates/wolf-ffi:gen_bindings
-```
+### 5. Files to MODIFY (wolf-ffi) — `src/lib.rs`
 
-Documented at `crates/wolf-ffi/README.md:211` and `build.md:157` ("Regenerating the swift-bridge bindings"). It is a `rust_binary` (`crates/wolf-ffi/BUILD.bazel:81`) over `src/bin/gen_bindings.rs`, writing in-tree via `BUILD_WORKSPACE_DIRECTORY` — only `bazel run` provides that. Then `git add crates/wolf-ffi/generated/`.
+- `mod command_kind`: `pub const PREVIEW_IN_BROWSER: u8 = 21;`.
+- Bridge decl in `extern "Rust"`: `fn open_in_browser(&self) -> String;` (after preview methods).
+- `WolfCoreHandle` impl: `pub fn open_in_browser(&self) -> String { self.core.borrow().as_ref().map_or_else(String::new, WolfCore::open_in_browser) }`.
+- `FfiCommand::from_command`: arm `Command::PreviewInBrowser => command_kind::PREVIEW_IN_BROWSER,` (keeps match exhaustive).
+- Doc ranges (`FfiCommand::kind` doc, module doc) extend ".. TERMINAL" → ".. PREVIEW_IN_BROWSER".
+- **`tests/commands.rs`**: header/contract comment → `PREVIEW_IN_BROWSER = 21`, "contiguous 0..=21"; `const CMD_KIND_PREVIEW_IN_BROWSER: u8 = 21;`; add to both guard arrays (`21`); drain step `3l` `:WolfPreviewInBrowser` → `poll_for_command_kind(..., CMD_KIND_PREVIEW_IN_BROWSER, ...)`. **NOTE for test-writer**: this only proves the discriminant round-trips; it does NOT start the server (no front-end). Assert no HTTP here.
 
-`SwiftBridgeCore.swift`/`.h`, `wolf_ffi_wake.h`, `module.modulemap` are hand-written/runtime-shared and not rewritten. `wolf_ffi_wake.h` should stay byte-identical.
+### 6. Files to MODIFY (wolf-macos)
 
----
+- **`CommandSeam.swift`**: `case previewInBrowser` after `terminal`; `init?(ffi:)` `case 21: self = .previewInBrowser`; header doc `previewInBrowser == 21`.
+- **`CommandSeamTests.swift`**: add `XCTAssertEqual(CommandKind(ffi: 21), .previewInBrowser, ...)`; bump out-of-range probe `21` → **`22`**; header doc range 0..21.
+- **`CommandDispatcher.swift`**: `case .previewInBrowser: controller?.openInBrowser()`.
+- **`WolfWindowController.swift`**: add `func openInBrowser()`: `guard let handle else { return }; let url = handle.open_in_browser().toString(); guard !url.isEmpty, let u = URL(string: url) else { return }; NSWorkspace.shared.open(u)`.
+- **`AppMenu.swift`**: `static let previewInBrowser = 21`; View-menu item after Terminal, before separator: `commandItem(title: "Preview in Browser", tag: Tag.previewInBrowser, keyEquivalent: "", target: target)` (**NO accelerator** — matches Preview/Edit Source).
+- **`AppDelegate.swift`**: `validateMenuItem` case `.previewInBrowser: return keyController?.isMarkdownActive ?? false` (mirror `.preview`).
 
-## 8. `crates/wolf-ffi/tests/commands.rs`
+### 7. `crates/wolf-core/tests/palette_rank.rs`
+`STATIC_COMMAND_COUNT` 20 → **21**; update doc (22 registered, `PreviewInBrowser` at 21, palette gates nothing so it is a static row like Preview/Edit/Terminal).
 
-- **Header doc (~26-38)** → `… NEW_TAB = 17, PREVIEW = 18, EDIT = 19, TERMINAL = 20 … guard array asserts contiguous 0..=20.`
-- **Local consts (~114-123).** Keep `CMD_KIND_PREVIEW = 18`, `CMD_KIND_EDIT = 19`; append `CMD_KIND_TERMINAL: u8 = 20`.
-- **Guard comment (~190-196)** → "contiguous 0..=20 … Referencing all twenty-one here".
-- **Guard array (~218-229).** Add `CMD_KIND_TERMINAL,`; expected literal → `[0, …, 20]`; message → "contiguous 0..=20". (`CMD_KIND_TERMINAL` must appear here or it trips `dead_code` — that is the array's stated purpose, see its comment at ~line 197.)
-- **Drain steps (~329-355).** Keep HEAD's `3i` (`:WolfPreview`) and `3j` (`:WolfEdit`) verbatim, append the branch's block **renumbered `3k`** with its comment corrected from "discriminant 18" to **"discriminant 20"**.
+### 8. swift-bridge regen (REQUIRED)
+`bazel run //crates/wolf-ffi:gen_bindings`; commit `crates/wolf-ffi/generated/`.
 
----
+### 9. Dependencies
+No new crate. Only tokio `net` feature. Repin crate_universe; commit lockfiles.
 
-## 9-13. Swift front-end
+### 10. Test plan (for test-writer)
 
-**`CommandSeam.swift`** — take HEAD's whole body (2-space), discard the branch's 4-space block. Add `case terminal` after `case edit`; add `case 20: self = .terminal` in `init?(ffi:)`; update the header doc to `` `preview == 18`, `edit == 19`, `terminal == 20` `` and the `init?(ffi:)` doc range to `0` → `.newWindow` .. `20` → `.terminal`.
+**`tests/browser_preview.rs`** (real nvim + `std::net::TcpStream`; model on `tests/theme.rs`/`tabpages.rs`; `mod common;`; SKIP when `WOLF_NVIM_BIN` unset). `fn http_get(port, path) -> (status, body)` helper.
+1. Start core; write `test.md` (`# Title\n\nhello world\n`); `Open`; poll `is_markdown_active()` true.
+2. `url = open_in_browser()`; non-empty, `starts_with("http://127.0.0.1:")`; parse port.
+3. `GET /` → 200; body contains `<body class="wolf-markdown"` and `hello` AND `/tick` + `location.reload`.
+4. `GET /tick` → 200; body parses as integer.
+5. Edit buffer so `TextChanged` fires; poll `/tick` until it differs from tick₁.
+6. After edit, `GET /` body contains the newly typed text.
+7. `GET /nope` → 404.
+8. Second `open_in_browser()` → same port (reuse).
+9. `shutdown()` → Ok.
+Edge: non-markdown buffer → `open_in_browser()` returns ""; tick 0 before first edit still serves.
 
-**`CommandSeamTests.swift`** — HEAD's 2-space bodies for both conflicts.
-- `testCommandKindFfiDiscriminants`: add `XCTAssertEqual(CommandKind(ffi: 20), .terminal, "ffi 20 -> .terminal")`.
-- `testCommandKindOutOfRangeIsNil`: change `CommandKind(ffi: 20)` → **`CommandKind(ffi: 21)`**. Main currently asserts 20 is out of range, which becomes false. Easy to miss; fails loudly if missed.
-- Header comment → `… preview = 18, edit = 19, terminal = 20 (the range 0..20).`
+**Module `#[cfg(test)]` unit tests** (no nvim/socket): as listed in §3.
 
-**`CommandDispatcher.swift`** — take HEAD's `dispatch` body in full; add after `case .edit: controller?.editSource()`:
-```
-case .terminal:
-  controller?.toggleTerminal()
-```
-Exhaustive switch, no `default:` → missing case is a compile error.
+**Existing contract guards updated**: `command.rs` (§4), `commands.rs` (§5), `CommandSeamTests.swift` (§6), `palette_rank.rs` (§7).
 
-**`WolfWindowController.swift`** — single conflict (~611-1024). **Take HEAD wholesale** (611-797); the branch side is the pre-rewrite body and contributes exactly one thing. Insert after main's `newBuffer()` (ends ~550), before the `// MARK: - Edit commands` divider:
-```
-/// Toggles this window's per-project terminal drawer (`:WolfTerminal`).
-func toggleTerminal() {
-  handle?.toggle_terminal()
-}
-```
-`handle` is the same optional `WolfCoreHandle?` that `closePane()`/`newBuffer()` use (~543-550) — no new plumbing. `openPreview()` (~688) and `editSource()` (~710) are main's and stay.
+### 11. Documentation (for technical-writer)
+`command-lifecycle.md` (enum list 21, command_kind list, Swift map, note the hybrid "dispatcher opens a URL from a blocking core call" flavor); `architecture.md` §10 (command list + loopback preview server paragraph); `crates/wolf-core/README.md` (`open_in_browser` bullet, "Browser preview server" note, Commands 22 rows, dependency/denylist paragraph = no crate, only tokio `net`); `crates/wolf-core/src/README.md` (`browser_preview` module); `crates/wolf-ffi/README.md` + `src/README.md` (bridge method + `PREVIEW_IN_BROWSER=21`); `crates/wolf-ffi/tests/README.md` (drains 0..=21); `crates/wolf-macos/README.md` + `Sources/README.md` + `Tests/README.md` (CommandKind case, dispatcher arm, `openInBrowser()`, menu item + gating, tests 0..21/oob-22); `crates/wolf-core/tests/README.md` (new integration test + no-sandbox target); `runtime/nvim/README.md` only if a named Lua helper is used. `prettier --write` every edited MD; no hard line breaks in paragraphs.
 
-**`AppMenu.swift`** — take HEAD for both conflicts (HEAD already has the `modifiers:` parameter on `commandItem`, which the Terminal item needs — no signature work).
-- **Conflict ~18-289 (`Tag` enum).** Keep HEAD's tags through `static let edit = 19`, add `static let terminal = 20`. **Must be 20, not the branch's 18** — tags carry the FFI discriminant into `handleCommandMenuItem`.
-- **Conflict ~335-597.** Keep HEAD's `commandItem` and everything after. In `viewMenuItem` (~170), insert **after** the "Edit Source" item (~212-214) and **before** `menu.addItem(.separator())` (~215):
-```
-menu.addItem(
-  commandItem(
-    title: "Terminal", tag: Tag.terminal, keyEquivalent: "`",
-    target: target, modifiers: .control))
-```
-- Update `viewMenuItem`'s doc (~159-162) to the full order, including **Terminal ⌃`**.
-- Terminal is **not** gated in `AppDelegate.validateMenuItem` (unlike Preview/Edit Source) — always enabled, matching the branch.
+### 12. Implementation order
+1. `command.rs` registry+tests. 2. `Cargo.toml` tokio `net`. 3. `nvim.rs` refactor+`current_markdown_bufnr`. 4. `browser_preview.rs`+`lib.rs`. 5. `api.rs` field+method. 6. `wolf-ffi` const/arm/bridge/handle. 7. regen bindings. 8. Swift files. 9. contract-guard tests. 10. integration test+BUILD. 11. repin+docs+prettier.
 
----
+**Verification**: denylist (both checks) → `cargo test -p wolf-core` → `cargo test -p wolf-ffi` → `CARGO_BAZEL_REPIN=1 bazel build //crates/wolf-core:wolf_core` → `bazel run //crates/wolf-ffi:gen_bindings` → `bazel test //crates/wolf-core:browser_preview //crates/wolf-core:commands //crates/wolf-core:palette_rank //crates/wolf-ffi:commands //crates/wolf-macos/...`.
 
-## 14. `PaneContainerView.swift` — the hard one
-
-Four conflicts. Two are **spurious mega-hunks**: at ~519-1301 HEAD's side is 38 lines of current code while the branch's is 744 lines of the *deleted* pre-rewrite body (grid-drawn `paintCmdlineStrip`/`paintStripRow`, removed by main under OD9 when the cmdline became an overlay `NSView`); likewise ~2384-2412 is HEAD's `drawScrollbars` vs the branch's old `setActivePane`.
-
-**Strategy: resolve all four conflicts by taking HEAD wholesale, confirm `bazel build //crates/wolf-macos:wolf_macos_lib` succeeds, THEN apply the nine edits below and rebuild.** Do not do both in one pass — the point is separating "resolve the conflict" from "re-apply the feature." Do not merge line-by-line inside the big hunks.
-
-All edits 2-space. Line numbers are main's current (HEAD-side) positions.
-
-1. **Constant** — after `intentKindFocusDir` (~71) add `private static let intentKindDrawerOpen: UInt8 = 2` with doc. **Do NOT bring over the branch's `inactiveDim: CGFloat = 0.28`** — main deleted whole-pane dimming, carrying active/inactive in the statusbar (`statusbarInactiveAlpha`, ~136). It would be dead code.
-2. **State** — after `activePane` (~183) add `drawerPaneId: PaneId?` and `lastEditorPane: PaneId?` with the branch's doc comments.
-3. **`paneRects()`** (~398-403) — rewrite per the branch. Construct `let dl = DrawerLayout(paneAreaHeight: Double(paneAreaHeight), hasDrawer: drawerPaneId != nil, weight: DrawerLayout.defaultWeight)`, tile the tree over `dl.editorHeight` into `var rects`, append the drawer rect from `dl.drawerRect(width: Double(bounds.width))` when `drawerPaneId` is set. Extend the doc with the branch's "When the terminal drawer is open…" paragraph. ⚠️ **Main's `paneAreaHeight` is `bounds.height`** (full view height under OD9, ~385), not the branch's `bounds.height - stripHeight`. Do not carry the branch's expression over.
-4. **`applyIntents()`** (~1945-1958) — add before `default:`: `case Self.intentKindDrawerOpen: applyDrawerOpen(win: intent.win())`.
-5. **`applySplit`** (~1963-1971) — after the `guard let target = …` line add `guard target != drawerPaneId else { return }` with the FD2 comment (a split fired from within the drawer is dropped front-end-side).
-6. **New `applyDrawerOpen(win:)`** — insert between `applySplit` and `applyFocus`, from the branch (~989-1000), reindented. Allocs a pane id, sets `drawerPaneId`, binds `PaneBinding(win:boundGrid:)`, calls `setActivePane`. `allocPaneId()` (~2624) and `PaneBinding` are unchanged — drops in as-is.
-7. **`applyFocus`** (~1975-1983) — replace with the branch's drawer-aware version (~1013-1039), reindented, keeping main's `paneAreaHeight`. If `origin == drawerPaneId`, handle only `.up` via `DrawerFocusSeam.drawerUpTarget(lastEditorPane:leaves:rects:)` over `tree.paneRects(width:height: dl.editorHeight)` + `focus_win`, then return; otherwise resolve `tree.neighbor(origin, dir, width:, height:)` and, on a nil neighbour with `dir == .down` and an open drawer, focus the drawer. ⚠️ **Geometry consistency matters:** the neighbour rects must be computed over `dl.editorHeight`, the same basis `paneRects()` now uses, or focus moves disagree with what is painted.
-8. **`detectCloses()`** (~1987-2004) — insert the branch's drawer-removal block (~1051-1059) between the `if closed.isEmpty { return }` guard and the `for id in closed` loop; change the loop header to `for id in closed where id != closedDrawer`. The drawer is removed from `panes` and `drawerPaneId` cleared **without** `tree.remove` and **without** the last-leaf guard — it was never a tree leaf. Main's trailing `if let active = activePane, panes[active] == nil { setActivePane(tree.leaves().first) }` stays and correctly re-homes focus.
-9. **`setActivePane`** (~2636-2641) — prepend `if let pane, pane != drawerPaneId, tree.leaves().contains(pane) { lastEditorPane = pane }`. Keep main's `if activePane != pane { … }` body and main's doc phrasing ("the one with the bold statusbar filename" — **not** the branch's "the one NOT dimmed", which describes deleted behavior), extended with the branch's `lastEditorPane` paragraph.
-
-**Interaction notes:** main's `syncGridSizes()` (~1471) and `syncPreviewWebViews()` (~1668) both call `paneRects()`, so after (3) the drawer participates in grid sizing and preview-webview framing automatically — no edits there. `drawScrollbars`/`drawDividers` iterate the same rects, so the drawer gets a scrollbar and separators for free; cosmetic follow-up, not a merge blocker. The drawer is never in `previewNamesByGrid`, so it paints as an ordinary grid pane with a statusbar — acceptable.
-
----
-
-## 15. `crates/wolf-macos/BUILD.bazel`
-
-Two conflicts, both **unions in alphabetical order**:
-- `wolf_key_map.srcs` (~54-59): `CommandSeam.swift`, `DrawerFocusSeam.swift`, `DrawerLayout.swift`, `EditSeam.swift`, `EditorInset.swift`.
-- `WolfKeyMapTests.srcs` (~242-247): `CommandSeamTests.swift`, `DrawerFocusSeamTests.swift`, `DrawerLayoutTests.swift`, `EditSeamTests.swift`, `EditorInsetTests.swift`.
-
-`wolf_macos_lib` and `swift_format_srcs` use `glob()` — no change.
-
----
-
-## 16. New seam files — verified compile-clean against main
-
-Architect checked both against main's current `PaneTree.swift`:
-- `DrawerLayout.swift` uses only `Rect(x:y:w:h:)` — present at `PaneTree.swift:97`, public `let x/y/w/h: Double`. ✅
-- `DrawerFocusSeam.swift` uses `PaneId` (`public typealias PaneId = UInt64`, `PaneTree.swift:34`, so the `id < current.id` comparison compiles) and `Rect`. Callers pass `tree.leaves()` (`:184` → `[PaneId]`) and `tree.paneRects(width:height:)` (`:193` → `[(PaneId, Rect)]`) — signatures unchanged. ✅
-
-**Only adaptation: reindent both + their two test files from 4-space to 2-space.** Not conflicted, so this is a deliberate follow-up edit.
-
----
-
-## 17. Lua: `runtime/nvim/init.lua` — NO EDITS
-
-Not conflicted; auto-merged. Architect verified the branch's additions survived and their dependencies still exist on main:
-- `emit_drawer(win)` (~389-394) is defined inside `wolf_setup_layout`, closing over its local `chan`, exported as `_G.wolf_emit_drawer` (~402) beside main's intact `_G.wolf_do_split`/`wolf_do_close`/`wolf_do_focus` (~399-401) — so the enclosing function and its `chan` binding survived main's rewrite.
-- `_G.wolf_toggle_terminal()` (~547-591) is module-level, depends only on stock nvim API, and guards its emit with `if _G.wolf_emit_drawer then` (~587).
-- The `t`-mode `<C-w>` maps (~429-432) and the `WolfTerminalInsert` augroup (~439+) are self-contained.
-
-**Verify at test time, do not edit:** main's `wolf_buffers`/`wolf_current_file` trackers skip `b:wolf_preview_source` buffers. Terminal buffers carry `b:wolf_terminal`, not that flag, so `term://…` names flow through the path-based trackers. That is the branch's intent (OD7 relies on terminal buffers being `buflisted` and appearing in the picker). **If `//crates/wolf-ffi:terminal` fails on a `display()` assertion, look here first.**
-
----
-
-## 18. Documentation (docs are the source of truth — must describe all three commands)
-
-**`architecture.md`**
-- **Conflict ~160-166.** Take HEAD's registry bullet; "now twenty commands (`command_kind` discriminants `0..19`)" → **"twenty-one commands (`0..20`)"**; after HEAD's Edit Source (`19`) clause append the Terminal clause renumbered to `20` (id `terminal`, `:WolfTerminal`, title "Terminal", `` ⌃` ``) describing the per-tabpage bottom `:terminal` drawer over a single shared per-project buffer (`wolf_toggle_terminal` → `WolfCoreHandle::toggle_terminal` → `InputEvent::ToggleTerminal`; buffer/job persist across toggles VS-Code-style, recreated if the shell exited). **Keep the branch's trailing** `See [Command lifecycle](command-lifecycle.md) …` line — that file is new from the branch and `README.md:18` already links it.
-- **Conflict ~214-232.** Merged order: (1) the branch's "The terminal drawer rides this same channel" paragraph (~225) verbatim — documents `DrawerOpen`, the outside-the-`PaneTree` decision, the `win_close` hide asymmetry, the `<C-w>j`/`<C-w>k` bridge; nothing in main contradicts it and `architecture.md:212` already names `DrawerOpen { win }`. (2) HEAD's "macOS consumes this same channel over the FFI" paragraph (~215), splicing in the branch's "**a DRAWER_OPEN reuses `win`**" after "a FOCUS_DIR carries `dir` + `from`"; keep HEAD's cmdline/pum/toast-accessor sentence and **discard the branch's stale "the cmdline strip reads the message/command-line grid" sentence** (that mechanism is gone). (3) HEAD's `### Output: commands` heading, static list extended to `… / Preview / Edit Source / Terminal (0..20)`, plus the Terminal (`20`) clause noting it is an editor-affecting command unlike the front-end-only overlays. (4) HEAD's `### Output: preview` section (~221-223) verbatim.
-- **Outside any conflict:** the `### wolf-ffi` paragraph (~43) hardcodes the table ending `… NEW_TAB=17 / PREVIEW=18 / EDIT=19`. Append `/ TERMINAL=20`. Grep for `EDIT=19`.
-
-**`crates/wolf-core/src/README.md`** (~97-103, ~132-137, ~346-350) — 21 commands with Terminal at 20; `InputEvent` list carries both `SetBackground` and `ToggleTerminal`; palette section states 20 static rows.
-
-**`crates/wolf-core/tests/README.md`** (~101-105) — `palette_rank` static-row count → 20, as `COMMAND_SPECS.len() - 1` over 21 commands.
-
-**`crates/wolf-ffi/README.md`** (~233-237, ~276-280) — `command_kind` table gains `TERMINAL=20`; keep both the preview-surface and `toggle_terminal` descriptions.
-
-**`crates/wolf-ffi/src/README.md`** (~11-15, ~41-45) — discriminant summary gains `TERMINAL=20`; `intent_kind` summary gains `DRAWER_OPEN=2` (branch side, keep); handle-method list keeps `render_preview`/`edit_source`/`is_preview_active` **and** `toggle_terminal`.
-
-**`crates/wolf-ffi/tests/README.md`** (~49-79) — keep HEAD's `preview`/`edit` entries **and** add the branch's `terminal.rs`. Cross-check against the actual `rust_test` targets in `crates/wolf-ffi/BUILD.bazel`: `commands` (~241), `terminal` (~385), `preview` (~879) all exist and all must be documented.
-
-**`crates/wolf-macos/README.md`** (~45-55, ~81-93), **`Sources/README.md`** (4 conflicts), **`Tests/README.md`** (~3-7, ~73-93) — union, HEAD first. `Sources/README.md` documents the two new `WolfKeyMap` seams beside main's `EditSeam`/`PreviewSeam`/`PreviewLinkSeam`, and `PaneContainerView`'s drawer handling beside its preview handling. `Tests/README.md` lists `DrawerFocusSeamTests`/`DrawerLayoutTests`. Keep seam lists **alphabetized** to match the BUILD file.
-
-**`runtime/nvim/README.md`** (~146-194) — largest doc conflict (HEAD 33 lines vs branch 15). Keep HEAD's block (preview scratch-buffer helpers, `wolf_preview`, `wolf_markdown_dirty`) and append the branch's documenting `wolf_toggle_terminal`, `wolf_emit_drawer`, the `t`-mode `<C-w>` maps and their shell word-erase tradeoff, and the `WolfTerminalInsert` re-entry autocmd.
-
-**After every Markdown edit:** `prettier --write` on the touched file; no hard line breaks inside a paragraph (per `CLAUDE.md`).
-
----
-
-## 19. Test plan
-
-### Must change
-| File | Change |
-|---|---|
-| `crates/wolf-core/src/command.rs` (`mod tests`) | count 21; `TERMINAL_INDEX` 20; `edit_is_the_last_row` → `edit_is_at_index_19`, finality assertion removed |
-| `crates/wolf-core/tests/palette_rank.rs` | `STATIC_COMMAND_COUNT` 20 |
-| `crates/wolf-ffi/tests/commands.rs` | `CMD_KIND_TERMINAL` 20; guard array `0..=20`; new `3k` `:WolfTerminal` drain step |
-| `crates/wolf-macos/Tests/WolfKeyMapTests/CommandSeamTests.swift` | `ffi: 20 -> .terminal`; out-of-range probe 20 → **21** |
-
-### Must NOT change
-- `crates/wolf-ffi/tests/terminal.rs` — asserts `DRAWER_OPEN = 2` only (see correction (a)).
-- `DrawerFocusSeamTests.swift`, `DrawerLayoutTests.swift` — pure geometry; **reindent only**.
-
-### New test warranted (one, cheap and high-value)
-In `command.rs`'s `mod tests`, add **`command_specs_index_matches_variant_order`**: iterate `COMMAND_SPECS.iter().enumerate()` and assert `COMMAND_SPECS[i].command.spec()` resolves to the same row — i.e. `spec()`'s linear scan and the slice index agree for **every** row, not just the seven hand-picked ones. This merge is exactly the scenario the per-command guards were designed to catch, and it is the third command append; a whole-table invariant is cheaper than a 22nd hand-written guard next time.
-
-Otherwise coverage is adequate: `//crates/wolf-ffi:commands` proves every discriminant round-trips through a real nvim, `:terminal` proves the drawer lifecycle, `:preview` the preview surface, `palette_rank` all 20 static rows.
-
-### Manual edge cases (AppKit glue is compile+smoke only)
-- Open the drawer, then `:vsplit` from inside it → must be a no-op (edit 5).
-- Preview pane + drawer together → the preview `WKWebView` frame must shrink to the reduced `dl.editorHeight` on the next wake.
-- `<C-w>k` out of the drawer with `lastEditorPane` pointing at a since-closed pane → must fall back to `bottomMostLeaf`.
-- Close the drawer while it is active → `detectCloses` re-homes focus via `tree.leaves().first`.
-
----
-
-## 20. Implementation order (each step yields a compile signal)
-
-1. `crates/wolf-core/src/command.rs` — the anchor.
-2. `crates/wolf-core/src/input.rs` — watch the enum/`impl` brace placement.
-3. `bazel test //crates/wolf-core/...`
-4. `crates/wolf-core/tests/palette_rank.rs` → 20.
-5. `crates/wolf-ffi/src/lib.rs` — exhaustive `from_command` match is the compile gate.
-6. `bazel run //crates/wolf-ffi:gen_bindings`, then `git add crates/wolf-ffi/generated/`.
-7. `crates/wolf-ffi/tests/commands.rs`.
-8. `bazel test //crates/wolf-ffi:commands //crates/wolf-ffi:terminal //crates/wolf-ffi:preview` — Rust fully green before Swift.
-9. `crates/wolf-macos/BUILD.bazel` — **before** the Swift files, so the new seams are in the module when the compiler runs.
-10. `CommandSeam.swift` → `CommandSeamTests.swift`.
-11. `bazel test //crates/wolf-macos:WolfKeyMapTests`
-12. `CommandDispatcher.swift` → `WolfWindowController.swift` (supplies `toggleTerminal()`) → `AppMenu.swift`.
-13. `PaneContainerView.swift` — last and largest; HEAD-wholesale + build, **then** the nine edits + rebuild.
-14. `bazel build //crates/wolf-macos:Wolf`
-15. Reindent the four drawer files to 2-space.
-16. Docs + `prettier --write`.
-17. Full verification (§21).
-18. `git add` everything; `git commit` **only after** §21 passes.
-
----
-
-## 21. Build / test commands (from `build.md`)
-
-```sh
-bazel test //crates/wolf-core/...                 # unit + real-nvim integration
-bazel test //crates/wolf-ffi/...                  # command channel, drawer, preview
-bazel test //crates/wolf-macos:WolfKeyMapTests    # pure Swift seams
-bazel build //crates/wolf-macos:Wolf
-bazel test  //crates/wolf-macos:bundle_layout_test
-bazel test //crates/...                           # full default sweep
-bazel test //tools/lint:check                     # clippy + rustfmt + swift-format (manual-tagged)
-bazel query 'deps(//crates/wolf-core:wolf_core)' | grep -iE \
-  'gtk|gdk|glib|cairo|pango|adwaita|objc|cocoa|core-graphics|winit|wgpu|skia|softbuffer' \
-  || echo clean                                   # no GUI toolkit in core
-```
-
-Notes: lint targets are **advisory** (`build.md:348`) — a pass only means the linter ran; pre-existing findings are not merge blockers, but anything **this merge introduces** must be fixed. Tests run in the **default** configuration, never `-c opt` (`@testable import` needs `-enable-testing`, omitted by rules_swift in opt). `//crates/wolf-macos:WolfRelease` is `manual` and irrelevant. No `CARGO_BAZEL_REPIN` needed (`build.md:87`) — no new Cargo deps.
-
-## 22. Lint considerations
-
-No new `#[allow(...)]` or `// swift-format-ignore` should be needed; following the existing named-constant pattern for `TERMINAL_INDEX = 20` keeps the magic-number lint quiet. **swift-format is the real risk** — every Swift file touched (five conflicted + four cleanly-added drawer files) must end up 2-space. `bazel run //tools/lint:swift_format.fix` is available; note check and fix enforce different things (`build.md:364`).
-
-## Out of scope
-
-Untracked scratch files (`test-1-no-preview` … `test-7-with-opt-param`, `preview-*-decisions.md`) are unrelated. Leave them.
+### 13. Risks (coder must heed)
+tokio `net` required (compile error if missing) + repin. NEVER hold a lock across `.await` (drop snapshot guard before render await; resolve bufnr before taking `browser_preview` lock). Blocking `open_in_browser` uses `runtime.block_on` (runs on AppKit main thread). Loopback-only bind `(Ipv4Addr::LOCALHOST, 0)` — never `0.0.0.0`. Server stored on `WolfCore` (outlives call); shutdown drops runtime→cancels task (fallback page during teardown ok). Idempotent lazy start via `Mutex<Option<..>>`. `render_page` uses `replacen(…,1)`. Tick baseline avoids spurious first reload. Append-only discriminant contract — all mirrors move in lockstep (incl. oob probe → 22). swift-bridge regen mandatory before Swift links. Do NOT wire wolf-gnome.

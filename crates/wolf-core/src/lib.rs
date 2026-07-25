@@ -16,6 +16,8 @@
 //!
 //! - [`render`]: the toolkit-agnostic render-state model and shared snapshot.
 //! - [`command`]: the canonical, GUI-free command registry ([`Command`]).
+//! - [`browser_preview`]: the lazily-started, loopback-only HTTP server that
+//!   serves the rendered current Markdown buffer to the system web browser.
 //! - [`command_mru`]: the global command-palette MRU cache (SQLite).
 //! - [`buffer_picker`]: pure candidate assembly + ranking for the buffer picker.
 //! - [`palette`]: pure candidate assembly + ranking for the command palette.
@@ -37,6 +39,7 @@
 //! - [`state`]: the GUI-free application-state persistence ([`StateStore`]).
 
 pub mod api;
+pub mod browser_preview;
 pub mod buffer_picker;
 pub mod command;
 pub mod command_mru;
@@ -57,6 +60,7 @@ pub mod state;
 pub mod tree;
 
 pub use api::{CoreConfig, CoreError, SnapshotReadGuard, WolfCore};
+pub use browser_preview::BrowserPreview;
 pub use buffer_picker::{rank_buffers, BufInfo, BufferRow};
 pub use command::{Command, CommandSpec, MenuGroup, COMMAND_SPECS};
 pub use command_mru::{CommandMru, COMMAND_MRU_LIMIT};

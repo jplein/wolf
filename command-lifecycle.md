@@ -17,7 +17,7 @@ The `Command` enum's VARIANT ORDER is that discriminant contract. It is **append
 
 Everything starts here. The module is pure data + enums (no GUI toolkit, honoring wolf-core's one hard rule):
 
-- **`enum Command`** — one variant per command, in discriminant order (`NewWindow`(0), `CloseWindow`(1), … `NewTab`(17), `Preview`(18), `Edit`(19), `Terminal`(20)). The doc comment on the enum spells out the full ordered list and restates the append-only rule.
+- **`enum Command`** — one variant per command, in discriminant order (`NewWindow`(0), `CloseWindow`(1), … `NewTab`(17), `Preview`(18), `Edit`(19), `Terminal`(20), `PreviewInBrowser`(21)). The doc comment on the enum spells out the full ordered list and restates the append-only rule.
 - **`struct CommandSpec { command, id, ex_command, title, menu }`** — the canonical metadata for one command, all fields public. The `id` → `ex_command` mapping is stored EXPLICITLY as data (there is no snake→Pascal transform code), so the registry is the one source of truth.
 - **`const COMMAND_SPECS: &[CommandSpec]`** — one row per command, in variant order, so the **slice index equals the FFI discriminant**. Example row:
 
@@ -52,8 +52,8 @@ Both faces `rpcnotify` the SAME `wolf_command` channel with the canonical `id`. 
 
 The native front-end never learns the ids; it speaks only the discriminant. Three ports keep it aligned with the registry:
 
-- **`mod command_kind`** in `crates/wolf-ffi/src/lib.rs` — the `u8` constants (`NEW_WINDOW = 0` … `NEW_TAB = 17`, `PREVIEW = 18`, `EDIT = 19`, `TERMINAL = 20`), in `wolf_core::Command` order. `FfiCommand::from_command` is an EXHAUSTIVE match over `Command` that packs each variant to its `command_kind` (so adding or reordering a variant is a compile error here).
-- **`enum CommandKind`** in `crates/wolf-macos/Sources/WolfKeyMap/CommandSeam.swift` — the AppKit-free Swift mirror. `init?(ffi: UInt8)` decodes the byte (`0` → `.newWindow` … `20` → `.terminal`, anything else → `nil`), guarding the contract.
+- **`mod command_kind`** in `crates/wolf-ffi/src/lib.rs` — the `u8` constants (`NEW_WINDOW = 0` … `NEW_TAB = 17`, `PREVIEW = 18`, `EDIT = 19`, `TERMINAL = 20`, `PREVIEW_IN_BROWSER = 21`), in `wolf_core::Command` order. `FfiCommand::from_command` is an EXHAUSTIVE match over `Command` that packs each variant to its `command_kind` (so adding or reordering a variant is a compile error here).
+- **`enum CommandKind`** in `crates/wolf-macos/Sources/WolfKeyMap/CommandSeam.swift` — the AppKit-free Swift mirror. `init?(ffi: UInt8)` decodes the byte (`0` → `.newWindow` … `20` → `.terminal`, `21` → `.previewInBrowser`, anything else → `nil`), guarding the contract.
 - **`AppMenu`'s `Tag` enum** in `crates/wolf-macos/Sources/WolfMacOS/AppMenu.swift` — the macOS menu is HARDCODED (it does not read the registry over the FFI); each Wolf menu item carries its `command_kind` discriminant in `NSMenuItem.tag`. The menu titles mirror `COMMAND_SPECS`.
 
 ## 5. Invocation → drain
@@ -66,7 +66,9 @@ Both faces converge on the same drain path.
 
 ## 6. Dispatch — `crates/wolf-macos/Sources/WolfMacOS/CommandDispatcher.swift`
 
-`CommandDispatcher.dispatch(_ kind:window:coordinator:originatingCwd:controller:)` is the single funnel every command flows through, so a command has ONE implementation regardless of face. It maps a decoded `CommandKind` to its native action, e.g. `.closePane → controller?.closePane()`, `.newBuffer → controller?.newBuffer()`, `.terminal → controller?.toggleTerminal()`, `.newWindow → coordinator?.makeNewWindow(...)`.
+`CommandDispatcher.dispatch(_ kind:window:coordinator:originatingCwd:controller:)` is the single funnel every command flows through, so a command has ONE implementation regardless of face. It maps a decoded `CommandKind` to its native action, e.g. `.closePane → controller?.closePane()`, `.newBuffer → controller?.newBuffer()`, `.terminal → controller?.toggleTerminal()`, `.newWindow → coordinator?.makeNewWindow(...)`, `.previewInBrowser → controller?.openInBrowser()`.
+
+`.previewInBrowser` is a HYBRID flavor worth calling out: like the `.preview` / `.edit` arms (which reach the blocking `open_preview` / `render_preview` / `edit_source` core calls), its dispatcher arm invokes a BLOCKING core method — `handle.open_in_browser()` returns the loopback preview server's `http://127.0.0.1:<port>/` URL — and then the front-end opens that URL in the system default browser via `NSWorkspace`. It touches the captive nvim (a blocking RPC to resolve the pinned Markdown buffer + lazily start the per-project loopback HTTP server) but issues NO `InputEvent`, so it is neither the pure native-only flavor (a) nor the ordered-input editor-affecting flavor (b) — it is the same blocking-read-through-core shape as Preview.
 
 All three entry points route here:
 
@@ -124,7 +126,7 @@ Everything in (a); the `CommandDispatcher` arm opens a Swift overlay (`openComma
 
 - **Append** the `Command` variant LAST — never reorder (the discriminant contract is append-only).
 - Add the `COMMAND_SPECS` row (id / ex_command / title / menu group).
-- Bump `EXPECTED_COMMAND_COUNT` and add the index / round-trip / spec-fields tests in `command.rs` (mirror the existing `terminal_*` tests; demote the previous "last row" guard to a fixed-index guard).
+- Bump `EXPECTED_COMMAND_COUNT` and add the index / round-trip / spec-fields tests in `command.rs` (mirror the existing `preview_in_browser_*` tests; demote the previous "last row" guard to a fixed-index guard).
 - Add the `command_kind` constant and extend `FfiCommand::from_command`.
 - Extend the Swift `CommandKind` `init?(ffi:)` and its `CommandSeamTests`.
 - Extend the `crates/wolf-ffi/tests/commands.rs` contract-guard array (the contiguous `0..=N` assertion) and add a `:Wolf<Pascal>` drain step.

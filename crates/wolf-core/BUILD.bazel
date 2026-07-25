@@ -507,6 +507,40 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
+# Real-nvim integration test for the BROWSER PREVIEW server (browser-preview plan
+# §3/§10): `WolfCore::open_in_browser` lazily starts a loopback-only HTTP server
+# bound to `127.0.0.1:0`, serves `GET /` (rendered markdown + injected reload
+# script), `GET /tick` (the live changedtick), 404s everything else, reuses the
+# server on a second call, and returns "" for a non-markdown buffer. The HTTP
+# client is hand-rolled on `std::net::TcpStream` (no HTTP-client crate). An EXACT
+# mirror of the `commands` target above: drives a REAL pinned Neovim (no mocks),
+# stages the captive `init.lua` + the pinned nvim tree as runfiles, reuses
+# `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn (the
+# loopback socket also needs the unsandboxed network).
+rust_test(
+    name = "browser_preview",
+    srcs = [
+        "tests/browser_preview.rs",
+        "tests/common/mod.rs",
+    ],
+    crate_root = "tests/browser_preview.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
 # Real-nvim integration test for the EMPTY-STATE launch contract, TRIMMED to its
 # recent-directories (folder-MRU) hygiene assertions only (plan OD1): the captive
 # nvim's launch/initial cwd must NOT be recorded into the recent-dirs MRU, while a

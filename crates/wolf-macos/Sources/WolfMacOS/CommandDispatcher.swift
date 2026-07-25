@@ -74,6 +74,8 @@ enum CommandDispatcher {
       controller?.editSource()
     case .terminal:
       controller?.toggleTerminal()
+    case .previewInBrowser:
+      controller?.openInBrowser()
     }
   }
 }

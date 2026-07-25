@@ -356,6 +356,7 @@ bool __swift_bridge__$WolfCoreHandle$is_preview_active(void* self);
 int64_t __swift_bridge__$WolfCoreHandle$edit_source(void* self, void* mode);
 int64_t __swift_bridge__$WolfCoreHandle$open_preview(void* self, void* mode);
 void* __swift_bridge__$WolfCoreHandle$render_preview(void* self, int64_t source_bufnr);
+void* __swift_bridge__$WolfCoreHandle$open_in_browser(void* self);
 int64_t __swift_bridge__$WolfCoreHandle$preview_file(void* self, int64_t win, void* path);
 void* __swift_bridge__$WolfCoreHandle$previews(void* self);
 void* __swift_bridge__$WolfCoreHandle$cmdline(void* self);

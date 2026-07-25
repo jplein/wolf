@@ -296,36 +296,36 @@ impl NvimProcess {
     /// [`NvimError::Rpc`]; the caller ([`crate::api::WolfCore::render_preview`])
     /// maps that to an empty string.
     pub async fn render_preview(&self, source_bufnr: i64) -> Result<String, NvimError> {
+        render_source_html(&self.nvim, source_bufnr).await
+    }
+
+    /// Returns the number of the buffer currently being edited when it is a
+    /// Markdown file, else `0`.
+    ///
+    /// Runs one static, mode-agnostic Lua snippet over `nvim_exec_lua` (no string
+    /// interpolation): it returns `nvim_get_current_buf()` when the current
+    /// buffer's `&filetype == "markdown"`, else `0`. The browser-preview command
+    /// ([`crate::api::WolfCore::open_in_browser`]) uses this to PIN the source
+    /// buffer the loopback server re-renders, gating on markdown the same way the
+    /// in-app preview does. An RPC error is propagated as [`NvimError::Rpc`].
+    pub async fn current_markdown_bufnr(&self) -> Result<i64, NvimError> {
         let value = self
             .nvim
             .call(
-                "nvim_buf_get_lines",
+                "nvim_exec_lua",
                 vec![
-                    Value::from(source_bufnr),
-                    Value::from(0),
-                    Value::from(-1),
-                    Value::from(false),
+                    Value::from(
+                        "return (vim.bo.filetype == 'markdown') and \
+                         vim.api.nvim_get_current_buf() or 0",
+                    ),
+                    Value::Array(vec![]),
                 ],
             )
             .await
             .map_err(|e| NvimError::Rpc(e.to_string()))?
             .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
 
-        let Some(lines) = value.as_array() else {
-            return Err(NvimError::Rpc(format!(
-                "nvim_buf_get_lines did not return an array: {value:?}"
-            )));
-        };
-        let source = lines
-            .iter()
-            .map(|l| l.as_str().unwrap_or(""))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        Ok(crate::markdown::render_html(
-            &source,
-            crate::markdown::PreviewTheme::Default,
-        ))
+        Ok(value.as_i64().unwrap_or_default())
     }
 
     /// Opens (or reuses) the Markdown preview pane for the active source buffer and
@@ -984,6 +984,53 @@ impl NvimProcess {
         let _ = tokio::time::timeout(SHUTDOWN_TIMEOUT, self.child.wait()).await;
         Ok(())
     }
+}
+
+/// Renders the Markdown SOURCE buffer `source_bufnr` to a themed HTML preview
+/// document over the RPC handle `nvim`.
+///
+/// Blocks on `nvim_buf_get_lines(source_bufnr, 0, -1, false)` to read the whole
+/// buffer, joins the lines with `\n`, and renders via
+/// [`crate::markdown::render_html`] with the fixed
+/// [`crate::markdown::PreviewTheme::Default`] (OD5). An RPC error (e.g. an
+/// unloaded/closed buffer) is propagated as [`NvimError::Rpc`].
+///
+/// Extracted from [`NvimProcess::render_preview`] so the loopback browser-preview
+/// server ([`crate::browser_preview`]) can re-render off a bare RPC handle
+/// ([`NvimProcess::handle`]) without borrowing the whole [`NvimProcess`].
+pub(crate) async fn render_source_html(
+    nvim: &Neovim<Compat<ChildStdin>>,
+    source_bufnr: i64,
+) -> Result<String, NvimError> {
+    let value = nvim
+        .call(
+            "nvim_buf_get_lines",
+            vec![
+                Value::from(source_bufnr),
+                Value::from(0),
+                Value::from(-1),
+                Value::from(false),
+            ],
+        )
+        .await
+        .map_err(|e| NvimError::Rpc(e.to_string()))?
+        .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+    let Some(lines) = value.as_array() else {
+        return Err(NvimError::Rpc(format!(
+            "nvim_buf_get_lines did not return an array: {value:?}"
+        )));
+    };
+    let source = lines
+        .iter()
+        .map(|l| l.as_str().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Ok(crate::markdown::render_html(
+        &source,
+        crate::markdown::PreviewTheme::Default,
+    ))
 }
 
 /// Spawns the captive Neovim with the given redraw handler.

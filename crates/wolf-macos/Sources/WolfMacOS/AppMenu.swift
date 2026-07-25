@@ -40,6 +40,7 @@ enum AppMenu {
     static let preview = 18
     static let edit = 19
     static let terminal = 20
+    static let previewInBrowser = 21
   }
 
   /// The dynamic submenus `install` hands back to the coordinator: the Window
@@ -220,6 +221,13 @@ enum AppMenu {
       commandItem(
         title: "Terminal", tag: Tag.terminal, keyEquivalent: "`",
         target: target, modifiers: .control))
+    // View > Preview in Browser: renders the active Markdown buffer and opens it
+    // in the system default browser. Enabled only on a Markdown buffer (gated in
+    // AppDelegate.validateMenuItem, mirroring Preview). NO key equivalent.
+    menu.addItem(
+      commandItem(
+        title: "Preview in Browser", tag: Tag.previewInBrowser, keyEquivalent: "",
+        target: target))
     menu.addItem(.separator())
     let fullScreen = NSMenuItem(
       title: "Enter Full Screen",

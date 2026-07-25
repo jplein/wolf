@@ -419,6 +419,10 @@ extension WolfCoreHandleRef {
         RustString(ptr: __swift_bridge__$WolfCoreHandle$render_preview(ptr, source_bufnr))
     }
 
+    public func open_in_browser() -> RustString {
+        RustString(ptr: __swift_bridge__$WolfCoreHandle$open_in_browser(ptr))
+    }
+
     public func preview_file<GenericIntoRustString: IntoRustString>(_ win: Int64, _ path: GenericIntoRustString) -> Int64 {
         __swift_bridge__$WolfCoreHandle$preview_file(ptr, win, { let rustString = path.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
     }
