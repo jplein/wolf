@@ -218,6 +218,16 @@ tail -f /tmp/wolf-frame-stats.txt
 
 The pure aggregation logic (bucketing, percentiles, the exact report layout, env parsing) lives in the headless, unit-tested `WolfKeyMap.FrameStats` seam; the process-global glue (the once-only enable check, the clock reads, the report timer, the writes) lives in `WolfMacOS/FrameMetrics.swift`. See [`crates/wolf-macos/Sources/README.md`](crates/wolf-macos/Sources/README.md).
 
+### Logging (`WOLF_LOG`)
+
+`wolf-core` emits `tracing` diagnostics that are gated by the **`WOLF_LOG`** environment variable (standard [`EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html) directive syntax; default level `warn` when unset). The process-global subscriber writes to **stderr** and is installed on the first `wolf_ffi_start` call (see [`crates/wolf-core/src/README.md`](crates/wolf-core/src/README.md), "`logging.rs`"). Because `bazel run //crates/wolf-macos:Wolf` launches the inner binary with its stderr inherited by your terminal, the log lines appear there:
+
+```sh
+WOLF_LOG=wolf_core=debug bazel run //crates/wolf-macos:Wolf
+```
+
+With no `WOLF_LOG` set the default `warn` filter still surfaces the RPC-timeout `warn!` (which names the wedged RPC). `WOLF_LOG=wolf_core=debug` adds per-RPC timing and file-search root resolution (`getcwd` vs the home-relative `cwd_fallback`); `WOLF_LOG=trace` additionally shows the file-traversal batch markers. Note this is separate from `WOLF_FRAME_STATS` above (which is Swift front-end instrumentation, not `tracing`).
+
 ### Bundled Neovim (macOS)
 
 The macOS `.app` ships its own pinned Neovim so it runs with no external Neovim install and no `WOLF_NVIM_BIN`. The pinned version (**0.12.3**) and both per-arch sha256 checksums live in [`bazel/nvim/extensions.bzl`](bazel/nvim/extensions.bzl); the `//bazel/nvim` module extension downloads and verifies the official release tarballs (no system or `PATH` dependency). `//bazel/nvim:nvim_tree` is the arch-selected (`select()` on `@platforms//cpu`), structure-preserving `nvim/` tree — `bin/nvim` + `lib/nvim/parser/*.so` (including the `markdown` / `markdown_inline` treesitter parsers) + `share/nvim/runtime` — that `//crates/wolf-macos:Wolf` bundles into `Contents/Resources/nvim/`. The captive `runtime/nvim/init.lua` is bundled flat at `Contents/Resources/init.lua`. `aspect_bazel_lib` was added as a `bazel_dep` (build-time only — it never enters `wolf-core`'s dependency graph) for `copy_to_directory`, which preserves the tree hierarchy and the executable bits. See [`bazel/nvim/README.md`](bazel/nvim/README.md) for the overlay/select details.

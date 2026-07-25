@@ -523,36 +523,6 @@ impl NvimProcess {
         })
     }
 
-    /// Returns the tab-local working directory of tabpage `handle` via the
-    /// `_G.wolf_tab_cwd` helper.
-    ///
-    /// The helper maps the STABLE handle to its (renumbering) tabpage NUMBER and
-    /// returns `getcwd(-1, <number>)` (the tab-scoped cwd, falling back to the
-    /// global cwd for a tabpage that was never `:tcd`'d). Authoritative for a
-    /// NON-current view's cwd. The result is read via [`Value::as_str`]; a
-    /// missing/empty path yields [`NvimError::Rpc`] (e.g. a closed handle).
-    pub async fn tab_cwd(&self, handle: i64) -> Result<PathBuf, NvimError> {
-        let value = self
-            .nvim
-            .call(
-                "nvim_exec_lua",
-                vec![
-                    Value::from("return wolf_tab_cwd(...)"),
-                    Value::Array(vec![Value::from(handle)]),
-                ],
-            )
-            .await
-            .map_err(|e| NvimError::Rpc(e.to_string()))?
-            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
-
-        match value.as_str() {
-            Some(s) if !s.trim().is_empty() => Ok(PathBuf::from(s)),
-            _ => Err(NvimError::Rpc(format!(
-                "wolf_tab_cwd returned no usable path: {value:?}"
-            ))),
-        }
-    }
-
     /// Returns the current tabpage's stable HANDLE via `nvim_get_current_tabpage`.
     ///
     /// The authoritative bind-time value (the first-view bind reads it right after
@@ -611,10 +581,12 @@ impl NvimProcess {
     /// helper (defined in `runtime/nvim/init.lua`) over `nvim_exec_lua`, passing
     /// the channel id as a Lua vararg. The helper registers `TabEnter` /
     /// `TabNewEntered` autocmds that `rpcnotify` `wolf_tabpage` with
-    /// `nvim_get_current_tabpage()` (emitting once immediately), locks out the
-    /// nvim-internal tabpage navigation/creation chords + typed `:tab*` Ex-
-    /// commands, and defines the `wolf_create_tabpage` / `wolf_close_tabpage` /
-    /// `wolf_tab_cwd` helpers.
+    /// `nvim_get_current_tabpage()` (emitting once immediately), a second
+    /// `DirChanged`/`TabNewEntered`/`TabClosed` autocmd that `rpcnotify`s
+    /// `wolf_tab_cwds` with every tabpage's `[handle, getcwd(-1, n)]` (also
+    /// emitting once immediately), locks out the nvim-internal tabpage
+    /// navigation/creation chords + typed `:tab*` Ex-commands, and defines the
+    /// `wolf_create_tabpage` / `wolf_close_tabpage` helpers.
     pub async fn setup_tabs(&self) -> Result<(), NvimError> {
         let info = self
             .nvim

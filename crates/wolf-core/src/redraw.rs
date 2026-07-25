@@ -130,6 +130,14 @@ const PREVIEW_EVENT: &str = "wolf_preview";
 /// [`RedrawHandler::handle_notify`].
 const MARKDOWN_DIRTY_EVENT: &str = "wolf_markdown_dirty";
 
+/// Name of the out-of-band notification carrying every tabpage's tab-local
+/// working directory, emitted by the `WolfTabs` autocmds in
+/// `runtime/nvim/init.lua` (and once immediately at setup). The payload is a
+/// single msgpack array of `[tabpage_handle, cwd]` pairs for ALL tabpages; core
+/// WHOLESALE-REPLACES [`Snapshot::tab_cwds`] with the reported set. Routed
+/// separately from `redraw` in [`RedrawHandler::handle_notify`].
+const TAB_CWDS_EVENT: &str = "wolf_tab_cwds";
+
 /// `nvim-rs` [`Handler`] that applies redraw batches to a [`SharedSnapshot`].
 #[derive(Clone)]
 pub struct RedrawHandler {
@@ -192,6 +200,15 @@ impl Handler for RedrawHandler {
                 // wake-after-unlock invariant). This is NOT a redraw frame, so
                 // `seq` is left unchanged.
                 self.apply_buffers(args).await;
+                (self.wake)();
+            }
+            TAB_CWDS_EVENT => {
+                // `apply_tab_cwds` builds the new map BEFORE taking the write
+                // guard, then assigns it and DROPS the lock before returning; the
+                // wake fires strictly after the lock is released (same
+                // wake-after-unlock invariant). This is NOT a redraw frame, so
+                // `seq` is left unchanged.
+                self.apply_tab_cwds(args).await;
                 (self.wake)();
             }
             ACTIVE_WIN_EVENT => {
@@ -474,6 +491,54 @@ impl RedrawHandler {
         let mut snap = self.snapshot.write_async().await;
         snap.buffers = map;
         // A buffers change is NOT a redraw frame, so `seq` is intentionally left
+        // unchanged. The caller fires the wake after this lock drops.
+        // Lock drops here as `snap` goes out of scope at function return.
+    }
+
+    /// Applies a `wolf_tab_cwds` notification: WHOLESALE-REPLACES the snapshot's
+    /// per-tabpage tab-local cwd map ([`Snapshot::tab_cwds`]) with the reported
+    /// set.
+    ///
+    /// The single argument is a msgpack array of `[tabpage_handle, cwd]` pairs for
+    /// ALL tabpages. Each `tabpage_handle` decodes via [`ext_handle`] (a plain
+    /// integer, or defensively a msgpack-`Ext`-wrapped integer); each `cwd` is
+    /// `getcwd(-1, <number>)` (the tab-local cwd, falling back to the global cwd
+    /// for a tab never `:tcd`'d). Empty paths are SKIPPED; non-empty paths are
+    /// canonicalized (to match the canonical cwds/paths the rest of core keys on),
+    /// falling back to the raw path if canonicalization fails.
+    ///
+    /// The new map is built in full BEFORE the write guard is taken (so no
+    /// filesystem work happens under the lock, sidestepping
+    /// `clippy::await_holding_lock`), then assigned wholesale. The lock is acquired
+    /// via [`SharedSnapshot::write_async`], is NOT held across any `.await`, and is
+    /// dropped before returning so the caller's wake fires after the lock is
+    /// released. This is NOT a redraw frame, so `seq` is left unchanged; the
+    /// wholesale replacement drops any closed tabpages (a `TabClosed` cannot report
+    /// the closed handle).
+    async fn apply_tab_cwds(&self, args: Vec<Value>) {
+        let mut map: HashMap<i64, PathBuf> = HashMap::new();
+        if let Some(pairs) = args.first().and_then(Value::as_array) {
+            for pair in pairs {
+                let Some(pair) = pair.as_array() else {
+                    continue;
+                };
+                let Some(tp) = pair.first().and_then(ext_handle) else {
+                    continue;
+                };
+                let Some(dir) = pair.get(1).and_then(Value::as_str) else {
+                    continue;
+                };
+                if dir.is_empty() {
+                    continue;
+                }
+                let canon = std::fs::canonicalize(dir).unwrap_or_else(|_| PathBuf::from(dir));
+                map.insert(tp, canon);
+            }
+        }
+
+        let mut snap = self.snapshot.write_async().await;
+        snap.tab_cwds = map;
+        // A tab_cwds change is NOT a redraw frame, so `seq` is intentionally left
         // unchanged. The caller fires the wake after this lock drops.
         // Lock drops here as `snap` goes out of scope at function return.
     }

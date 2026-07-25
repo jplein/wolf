@@ -361,10 +361,13 @@ fn per_tabpage_cwd_including_non_current() {
         Some(canon_a.as_path()),
         "cwd_for_tabpage(T1) should be dir A while T1 is current"
     );
-    assert_eq!(
-        core.cwd_for_tabpage(t2).as_deref(),
-        Some(canon_b.as_path()),
-        "cwd_for_tabpage(T2) should be dir B for the NON-current tabpage"
+    // T2's cwd now arrives via the async wholesale `wolf_tab_cwds` notification, so
+    // the T1 poll above may be satisfied by an earlier emit before T2's entry lands.
+    // Poll for it rather than reading once (was safe under the old on-demand RPC).
+    poll_until(
+        &waiter,
+        "cwd_for_tabpage(T2) to become dir B for the NON-current tabpage",
+        || core.cwd_for_tabpage(t2).as_deref() == Some(canon_b.as_path()),
     );
 
     core.shutdown().expect("shutdown should be Ok");

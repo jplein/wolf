@@ -687,30 +687,22 @@ impl WolfCore {
     }
 
     /// Returns the CANONICALIZED tab-local working directory of tabpage `handle`,
-    /// or `None` on error / a closed handle.
+    /// or `None` for an unknown/closed handle (or one nvim has not yet reported).
     ///
-    /// Blocks briefly on the captive nvim via
-    /// [`block_on_rpc`](Self::block_on_rpc) (bounded by
-    /// [`rpc_timeout`](Self::rpc_timeout) — [`RPC_TIMEOUT_DEFAULT`],
-    /// `WOLF_RPC_TIMEOUT_MS`, degrading to `None` on [`NvimError::Timeout`]) to run
-    /// the `wolf_tab_cwd` helper (`getcwd(-1, <number>)`), then canonicalizes the
-    /// result (keeping the raw path if canonicalization fails — a live tabpage's
-    /// cwd is a real directory). This is AUTHORITATIVE for a NON-current view's
-    /// cwd, the gap that [`live_cwd`](Self::live_cwd) (current view only) cannot
-    /// cover. Contrast the two tiers: [`Snapshot::current_tabpage`] is a cheap
-    /// live gate via [`read_snapshot`](Self::read_snapshot), while this and
-    /// [`current_tabpage`](Self::current_tabpage) are authoritative bind-/read-time
-    /// RPCs (mirroring `live_cwd` cell vs [`resolve_search_root`](Self::resolve_search_root)
-    /// RPC).
+    /// A cheap, lock-free SNAPSHOT READ with NO nvim RPC — it does not block.
+    /// [`Snapshot::tab_cwds`] is maintained out-of-band by the `wolf_tab_cwds`
+    /// notification (the `WolfTabs` autocmds in `runtime/nvim/init.lua`), which
+    /// wholesale-replaces the map on every `DirChanged`/`TabNewEntered`/`TabClosed`
+    /// (plus one initial emit), with each cwd already canonicalized in
+    /// [`apply_tab_cwds`](crate::redraw::RedrawHandler::apply_tab_cwds). This is
+    /// AUTHORITATIVE even for a NON-current view's cwd — the gap that
+    /// [`live_cwd`](Self::live_cwd) (current view only) cannot cover — without the
+    /// blocking round-trip the old `wolf_tab_cwd` RPC required. `None` until nvim
+    /// first reports the tab (the same neutral fallback the old timeout failure
+    /// produced), and after a `TabClosed` prunes the handle from the map.
     #[must_use]
     pub fn cwd_for_tabpage(&self, handle: i64) -> Option<PathBuf> {
-        match self.block_on_rpc("tab_cwd", self.nvim.tab_cwd(handle)) {
-            Ok(p) => Some(std::fs::canonicalize(&p).unwrap_or(p)),
-            Err(e) => {
-                tracing::warn!("cwd_for_tabpage({handle}) failed: {e}");
-                None
-            }
-        }
+        self.read_snapshot().tab_cwds.get(&handle).cloned()
     }
 
     /// Returns the current tabpage's stable HANDLE (`0` on error) — the
@@ -955,6 +947,7 @@ impl WolfCore {
         let seed = mru_for(&self.mru_cache, &root)
             .map(|s| s.recent())
             .unwrap_or_default();
+        tracing::debug!(root = %root.display(), seed = seed.len(), "starting file search");
         let state = Arc::new(RwLock::new(FileSearchState::seeded(seed)));
         let cancel = Arc::new(AtomicBool::new(false));
 
@@ -1005,10 +998,24 @@ impl WolfCore {
     /// now bounded rather than an unbounded main-thread hang).
     fn resolve_search_root(&self) -> PathBuf {
         match self.block_on_rpc("current_dir", self.nvim.current_dir()) {
-            Ok(p) => std::fs::canonicalize(&p).unwrap_or(p),
+            Ok(p) => {
+                let resolved = std::fs::canonicalize(&p).unwrap_or(p);
+                tracing::debug!(
+                    root = %resolved.display(),
+                    source = "getcwd",
+                    "resolved file-search root"
+                );
+                resolved
+            }
             Err(e) => {
-                tracing::warn!("getcwd() query failed ({e}); falling back to configured cwd");
-                std::fs::canonicalize(&self.cwd).unwrap_or_else(|_| self.cwd.clone())
+                let fallback =
+                    std::fs::canonicalize(&self.cwd).unwrap_or_else(|_| self.cwd.clone());
+                tracing::warn!(
+                    root = %fallback.display(),
+                    source = "cwd_fallback",
+                    "getcwd() query failed ({e}); falling back to configured cwd"
+                );
+                fallback
             }
         }
     }
@@ -1052,10 +1059,20 @@ where
     // context (its timer registers with the reactor on creation), so build it in
     // the async block rather than passing it as an already-created argument to
     // `block_on` (which would evaluate it outside any runtime → "no reactor").
+    let start = std::time::Instant::now();
     match runtime.block_on(async move { tokio::time::timeout(timeout, fut).await }) {
-        Ok(inner) => inner,
+        Ok(inner) => {
+            let elapsed = start.elapsed();
+            tracing::debug!(rpc = what, ?elapsed, "nvim RPC completed");
+            inner
+        }
         Err(_elapsed) => {
-            tracing::warn!("nvim RPC '{what}' timed out after {timeout:?}");
+            let elapsed = start.elapsed();
+            tracing::warn!(
+                rpc = what,
+                ?elapsed,
+                "nvim RPC '{what}' timed out after {timeout:?}"
+            );
             Err(NvimError::Timeout(what, timeout))
         }
     }

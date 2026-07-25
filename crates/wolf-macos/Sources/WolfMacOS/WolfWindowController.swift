@@ -638,10 +638,12 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
 
   /// This view's PERSISTED working directory for the state snapshot + any
   /// surfaced cwd (Window menu / palette). A folder view reads its tabpage's
-  /// authoritative tab-local `:tcd` cwd via the blocking `cwd_for_tabpage`
-  /// (correct even when this view is NOT current, unlike the live `handle.cwd()`
-  /// which follows the current tabpage); an empty-state view persists `""` (the
-  /// `hasFolder` gate preserves the "empty-state persists ''" contract).
+  /// authoritative tab-local `:tcd` cwd via `cwd_for_tabpage` — now a cheap
+  /// out-of-band snapshot read (no RPC; core is fed every tabpage's cwd via the
+  /// `wolf_tab_cwds` notification), correct even when this view is NOT current,
+  /// unlike the live `handle.cwd()` which follows the current tabpage; an
+  /// empty-state view persists `""` (the `hasFolder` gate preserves the
+  /// "empty-state persists ''" contract).
   var persistedCwd: String {
     guard hasFolder, let handle else { return "" }
     return handle.cwd_for_tabpage(tabpageHandle).toString()

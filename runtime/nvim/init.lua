@@ -603,28 +603,20 @@ function _G.wolf_toggle_terminal()
 	vim.cmd("startinsert")
 end
 
--- Return the tab-local working directory of the tabpage named by its STABLE
--- handle (authoritative for a NON-current view's cwd). Maps the stable handle to
--- its current NUMBER (which getcwd(-1, n) needs) and returns getcwd(-1, n), which
--- falls back to the global cwd for a tab that was never `:tcd`'d. A stale/invalid
--- handle returns "" (core maps that to "no cwd").
-function _G.wolf_tab_cwd(handle)
-	local ok, n = pcall(vim.api.nvim_tabpage_get_number, handle)
-	if not ok or n == nil then
-		return ""
-	end
-	local ok2, dir = pcall(vim.fn.getcwd, -1, n)
-	if not ok2 or type(dir) ~= "string" then
-		return ""
-	end
-	return dir
-end
-
 -- Tabpage tracking + navigation/creation lockout: wolf-core invokes this over RPC
 -- after the command setup, passing its own RPC channel id. It notifies core of the
 -- current tabpage handle via wolf_tabpage on every TabEnter/TabNewEntered (emitting
 -- once immediately), so core's snapshot tracks the current tabpage (the cheap
 -- refocus gate the front-end uses).
+--
+-- It ALSO notifies core of EVERY tabpage's tab-local cwd via wolf_tab_cwds on
+-- every DirChanged/TabNewEntered/TabClosed (emitting once immediately). The
+-- payload is a list of { tabpage_handle, getcwd(-1, n) } pairs for all tabpages
+-- (getcwd(-1, n) is the tab-local cwd, falling back to the global cwd for a tab
+-- never `:tcd`'d). Core WHOLESALE-REPLACES its per-tabpage cwd map, so a closed
+-- tab (TabClosed cannot report the closed handle) drops out. This lets core's
+-- cwd_for_tabpage be a cheap snapshot read (no blocking RPC), authoritative even
+-- for a NON-current view's cwd.
 --
 -- LOCKOUT (OD4): Wolf owns ALL tabpage lifecycle (create/close/switch), so the
 -- nvim-internal tabpage navigation/creation chords are mapped to <Nop> and the
@@ -645,6 +637,29 @@ function _G.wolf_setup_tabs(chan)
 	})
 	-- Initial emit so the startup tabpage is reflected without a switch.
 	vim.rpcnotify(chan, "wolf_tabpage", vim.api.nvim_get_current_tabpage())
+
+	-- Emit every tabpage's tab-local cwd as { handle, getcwd(-1, n) } pairs. Core
+	-- wholesale-replaces its per-tabpage cwd map from this, so a closed tab drops
+	-- out (TabClosed cannot report the closed handle).
+	local function emit_tab_cwds()
+		local list = {}
+		for _, tp in ipairs(vim.api.nvim_list_tabpages()) do
+			local ok, n = pcall(vim.api.nvim_tabpage_get_number, tp)
+			if ok and n ~= nil then
+				local ok2, dir = pcall(vim.fn.getcwd, -1, n)
+				if ok2 and type(dir) == "string" then
+					list[#list + 1] = { tp, dir }
+				end
+			end
+		end
+		vim.rpcnotify(chan, "wolf_tab_cwds", list)
+	end
+	vim.api.nvim_create_autocmd({ "DirChanged", "TabNewEntered", "TabClosed" }, {
+		group = group,
+		callback = emit_tab_cwds,
+	})
+	-- Initial emit so the startup tab cwds are reflected without a change.
+	emit_tab_cwds()
 
 	-- Lock out the nvim-internal tabpage navigation/creation chords. `noremap`
 	-- (the default) fully replaces the native behavior.

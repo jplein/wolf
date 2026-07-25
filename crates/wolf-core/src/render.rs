@@ -705,6 +705,17 @@ pub struct Snapshot {
     /// its tick to decide when to re-pull rendered HTML. Because it is not a redraw
     /// frame, updating it does NOT bump `seq`. Defaults to empty.
     pub markdown_ticks: HashMap<i64, u64>,
+    /// Per-tabpage tab-local working directory, keyed by the Neovim TABPAGE handle
+    /// (an `i64`), each an absolute canonicalized cwd (`getcwd(-1, <number>)`).
+    /// Updated out-of-band from the redraw stream via the `wolf_tab_cwds`
+    /// notification (see [`crate::redraw`]): the whole map is WHOLESALE-REPLACED on
+    /// each emit, so closed tabpages vanish (a `TabClosed` cannot report the closed
+    /// handle, so the replacement is how they are pruned). Because it is not a
+    /// redraw frame, updating it does NOT bump `seq`. Read by
+    /// [`crate::api::WolfCore::cwd_for_tabpage`] as a cheap, lock-free snapshot
+    /// lookup (no RPC), authoritative even for a NON-current view. Defaults to
+    /// empty.
+    pub tab_cwds: HashMap<i64, PathBuf>,
     /// The native command line (`ext_cmdline`), folded from `cmdline_show` /
     /// `cmdline_pos` / `cmdline_hide` (see [`crate::redraw`]). Inactive by
     /// default; the front-ends paint it at the bottom of the editor area.

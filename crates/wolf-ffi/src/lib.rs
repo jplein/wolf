@@ -2155,6 +2155,7 @@ pub fn wolf_ffi_start(
     cols: u16,
     rows: u16,
 ) -> Option<WolfCoreHandle> {
+    wolf_core::init_tracing();
     let cfg = CoreConfig {
         init_lua: PathBuf::from(init_lua),
         cols,

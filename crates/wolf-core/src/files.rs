@@ -155,6 +155,7 @@ pub(crate) fn spawn_traversal(
     handle: tokio::runtime::Handle,
 ) {
     handle.spawn_blocking(move || {
+        tracing::debug!(root = %root.display(), "spawn_traversal walking");
         // Local dedup set, seeded from the synchronous MRU seed. The traversal is
         // the only producer after start, so a local set avoids locking per entry.
         let mut seen: HashSet<PathBuf> = state.read().seen.clone();

@@ -529,7 +529,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         guard let tab = controllers.first(where: { $0.owns(tabWindow) }) else { continue }
         // Per-view PERSISTED cwd (OD6): the tabpage's authoritative tab-local
         // `:tcd` cwd, correct even for a non-current view (unlike the live
-        // `currentCwd`, which follows the current tabpage).
+        // `currentCwd`, which follows the current tabpage). `persistedCwd` reads
+        // it via `cwd_for_tabpage` — a cheap out-of-band snapshot read (no RPC),
+        // so this per-tab snapshot walk never blocks on the captive nvim.
         wolf_ffi_state_snapshot_add_tab(tab.persistedCwd, tab.sidebarVisible)
       }
     }

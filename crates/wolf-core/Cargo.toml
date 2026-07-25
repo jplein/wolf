@@ -20,6 +20,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 ignore = "0.4"
 thiserror = "1"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
 tempfile = "3"
 serde = { version = "1", features = ["derive"] }
@@ -30,7 +31,6 @@ dirs = "5"
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["test-util", "macros", "rt-multi-thread"] }
-tracing-subscriber = "0.3"
 
 [[example]]
 name = "grid_dump"

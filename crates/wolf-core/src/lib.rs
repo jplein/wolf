@@ -23,6 +23,8 @@
 //! - [`palette`]: pure candidate assembly + ranking for the command palette.
 //! - [`pane_status`]: pure display-string math for the per-pane statusbar.
 //! - [`layout`]: the Neovim->shell layout-intent types ([`LayoutIntent`]).
+//! - [`logging`]: the process-global stderr `tracing` subscriber
+//!   ([`init_tracing`], installed once at startup, gated by `WOLF_LOG`).
 //! - [`markdown`]: pure, GUI-free Markdown -> themed-HTML rendering for the
 //!   preview pane (with forward-compatible per-line / per-100-column markers).
 //! - [`files`]: the async streaming file-list traversal and `FileSearch` session.
@@ -47,6 +49,7 @@ pub mod config;
 pub mod files;
 pub mod input;
 pub mod layout;
+pub mod logging;
 pub mod markdown;
 pub mod mru;
 pub mod nvim;
@@ -71,6 +74,7 @@ pub use input::{
     ScrollDirection, ScrollEvent,
 };
 pub use layout::{FocusDir, LayoutIntent, SplitOrientation};
+pub use logging::init_tracing;
 pub use markdown::{render_html, theme_css, PreviewTheme, MARKER_COLUMN_STRIDE};
 pub use mru::{MruError, MruStore, MRU_LIMIT};
 pub use palette::{rank_palette, PaletteRow, PaletteRowKind, PaletteWindow};
