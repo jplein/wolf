@@ -1695,7 +1695,10 @@ mod tests {
     #[test]
     fn cmdline_hide_clears_a_confirm_prompt_toast() {
         let mut snap = Snapshot::default();
-        msg_show(&mut snap, msg_show_params("confirm", "Choose", false, false, 0));
+        msg_show(
+            &mut snap,
+            msg_show_params("confirm", "Choose", false, false, 0),
+        );
         assert!(
             snap.toast.is_prompt(),
             "a `confirm` kind message is a prompt toast"
@@ -1724,7 +1727,10 @@ mod tests {
     #[test]
     fn cmdline_hide_leaves_a_non_prompt_toast_intact() {
         let mut snap = Snapshot::default();
-        msg_show(&mut snap, msg_show_params("echomsg", "hello", false, false, 0));
+        msg_show(
+            &mut snap,
+            msg_show_params("echomsg", "hello", false, false, 0),
+        );
         assert!(snap.toast.visible, "the echomsg toast should be visible");
         let before_len = snap.toast.messages.len();
 
@@ -1758,7 +1764,10 @@ mod tests {
         // The options line arrives as a prompt-style cmdline; the prompt text as
         // a `confirm` toast.
         cmdline_show(&mut snap, &cmdline_show_params(OPTIONS_PROMPT));
-        msg_show(&mut snap, msg_show_params("confirm", "Choose", false, false, 0));
+        msg_show(
+            &mut snap,
+            msg_show_params("confirm", "Choose", false, false, 0),
+        );
 
         // The dialog "resolves" (from the fold's view) on cmdline_hide: the toast
         // is hidden and its messages are stashed pending a possible re-prompt.
@@ -1801,7 +1810,10 @@ mod tests {
     fn cmdline_show_nonmatching_prompt_drops_stashed_confirm() {
         let mut snap = Snapshot::default();
         cmdline_show(&mut snap, &cmdline_show_params("[y]es, (n)o: "));
-        msg_show(&mut snap, msg_show_params("confirm", "Choose", false, false, 0));
+        msg_show(
+            &mut snap,
+            msg_show_params("confirm", "Choose", false, false, 0),
+        );
         cmdline_hide(&mut snap);
         assert!(
             snap.pending_confirm.is_some(),

@@ -345,6 +345,7 @@ void __swift_bridge__$WolfCoreHandle$focus_win(void* self, int64_t win);
 uint8_t __swift_bridge__$WolfCoreHandle$liveness(void* self);
 bool __swift_bridge__$WolfCoreHandle$restart(void* self);
 void* __swift_bridge__$WolfCoreHandle$open_files_for_tabpage(void* self, int64_t tab);
+void __swift_bridge__$WolfCoreHandle$set_ui_focus(void* self, bool gained);
 void __swift_bridge__$WolfCoreHandle$shutdown(void* self);
 void* __swift_bridge__$WolfCoreHandle$start_file_search(void* self);
 void* __swift_bridge__$WolfCoreHandle$start_tree_search(void* self);

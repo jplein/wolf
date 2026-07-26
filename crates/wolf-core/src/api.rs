@@ -911,6 +911,20 @@ impl WolfCore {
         self.send_input(InputEvent::FocusWin { win });
     }
 
+    /// Forwards the OS window/app focus state to the captive Neovim UI via
+    /// `nvim_ui_set_focus`, so `FocusGained` / `FocusLost` fire in the running app.
+    ///
+    /// A front-end reports focus GAINED (`true`) on app/window activation and focus
+    /// LOST (`false`) on resign. `FocusGained` drives the init.lua `WolfAutoRead`
+    /// augroup's `:checktime`, reloading an externally-changed unmodified buffer
+    /// when the user returns to Wolf (e.g. Dock reactivation). Both edges are
+    /// reported because nvim only fires `FocusGained` on a real unfocused→focused
+    /// transition. Enqueued on the same ordered input channel as keystrokes so it
+    /// never races pending input; applied via `nvim_ui_set_focus`.
+    pub fn set_ui_focus(&self, gained: bool) {
+        self.send_input(InputEvent::SetUiFocus { gained });
+    }
+
     /// Forwards a mouse event (click / drag / release) to Neovim.
     ///
     /// Enqueued on the same ordered input channel as keystrokes so it never races

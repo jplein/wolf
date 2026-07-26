@@ -327,6 +327,10 @@ extension WolfCoreHandleRef {
         FfiOpenFiles(ptr: __swift_bridge__$WolfCoreHandle$open_files_for_tabpage(ptr, tab))
     }
 
+    public func set_ui_focus(_ gained: Bool) {
+        __swift_bridge__$WolfCoreHandle$set_ui_focus(ptr, gained)
+    }
+
     public func shutdown() {
         __swift_bridge__$WolfCoreHandle$shutdown(ptr)
     }

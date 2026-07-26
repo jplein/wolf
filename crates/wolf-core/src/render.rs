@@ -666,7 +666,7 @@ impl Toast {
 /// This is purely internal render-fold bookkeeping: it is NEVER rendered and
 /// NEVER crossed over the FFI (the FFI projects only named [`Snapshot`] fields).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct PendingConfirm {
+pub struct PendingConfirm {
     /// The confirm toast's messages, moved out of [`Toast::messages`] on hide.
     pub(crate) messages: Vec<Message>,
     /// The options-line `cmdline` prompt captured at hide time, matched against
@@ -807,7 +807,7 @@ pub struct Snapshot {
     /// `cmdline_show` (see [`PendingConfirm`]). Internal render-fold bookkeeping:
     /// it is NEVER rendered and NEVER crossed over the FFI. `None` by default and
     /// whenever no confirm is mid-resolve.
-    pub(crate) pending_confirm: Option<PendingConfirm>,
+    pub pending_confirm: Option<PendingConfirm>,
     /// Monotonic frame sequence number, bumped on each `flush`.
     pub seq: u64,
 }

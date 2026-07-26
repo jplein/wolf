@@ -140,6 +140,17 @@ final class Project {
     handle.set_background(dark)
   }
 
+  /// Forwards the OS app focus state to this project's captive Neovim
+  /// (`nvim_ui_set_focus`). `gained: true` (app activated) fires `FocusGained`,
+  /// which the init.lua `WolfAutoRead` augroup rides to `:checktime` and reload an
+  /// externally-changed unmodified buffer (the Dock-reactivation reload path);
+  /// `false` (app resigned) fires `FocusLost`. Both edges are reported so each
+  /// refocus is a genuine transition. Called by `AppDelegate`'s
+  /// activate/resign fan-out.
+  func setUiFocus(gained: Bool) {
+    handle.set_ui_focus(gained)
+  }
+
   /// Closes `view`'s tabpage (a non-last view close). Skips the RPC when `view`
   /// is the LAST view — the last view's `detach` shuts the whole core down
   /// instead (closing the last tabpage would be a no-op E784 anyway).
