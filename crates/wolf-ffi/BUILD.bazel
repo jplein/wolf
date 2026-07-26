@@ -725,6 +725,39 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
+# Real-nvim integration test for treesitter syntax highlighting of fenced code
+# blocks in the Markdown preview (task #4). Stages the same nvim-treesitter + parsers
+# bundle as `treesitter_highlight`, opens a markdown doc with a fenced `go` block,
+# calls `render_preview`, and asserts the HTML contains inline-styled color spans for
+# the go tokens; an unknown language yields plain `<pre><code>`. SKIPS when Neovim or
+# either tree is not staged (the cargo / Linux path). Reuses `tests/common/mod.rs`.
+rust_test(
+    name = "code_block_highlight",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/code_block_highlight.rs",
+    ],
+    crate_root = "tests/code_block_highlight.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//bazel/nvim-treesitter:nvim_treesitter_tree",
+        "//bazel/treesitter-parsers:parsers_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+        "WOLF_TEST_NVIM_TREESITTER_DIR": "$(rootpath //bazel/nvim-treesitter:nvim_treesitter_tree)",
+        "WOLF_TEST_PARSERS_DIR": "$(rootpath //bazel/treesitter-parsers:parsers_tree)",
+    },
+    deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
+)
+
 # Real-nvim integration test for per-cell text ATTRIBUTES + the special (underline)
 # color crossing the FFI bridge (`FfiCell::flags()` + the new `FfiCell::special()`).
 # Modeled on `bridge_smoke` exactly: drives a REAL pinned Neovim (no mocks),

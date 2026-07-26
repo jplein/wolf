@@ -314,10 +314,13 @@ impl NvimProcess {
     ///
     /// Blocks on `nvim_buf_get_lines(source_bufnr, 0, -1, false)` to read the whole
     /// buffer, joins the lines with `\n`, and renders via
-    /// [`crate::markdown::render_html`] with the fixed [`crate::markdown::PreviewTheme::Default`]
-    /// (OD5). An RPC error (e.g. an unloaded/closed buffer) is propagated as
-    /// [`NvimError::Rpc`]; the caller ([`crate::api::WolfCore::render_preview`])
-    /// maps that to an empty string.
+    /// [`crate::markdown::render_html_with_highlights`] with the fixed
+    /// [`crate::markdown::PreviewTheme::Default`] (OD5). Fenced/indented code blocks
+    /// are treesitter-highlighted through the captive Neovim (see
+    /// [`render_source_html`] and [`highlight_code_blocks`]); any block that cannot
+    /// be highlighted falls back to plain `<pre><code>`. An RPC error (e.g. an
+    /// unloaded/closed buffer) is propagated as [`NvimError::Rpc`]; the caller
+    /// ([`crate::api::WolfCore::render_preview`]) maps that to an empty string.
     pub async fn render_preview(&self, source_bufnr: i64) -> Result<String, NvimError> {
         // In-app preview: full-bleed render (WidthMode::Full) — the webview FRAME
         // caps the content to the ~90-char width when the source is not full-width.
@@ -1030,13 +1033,17 @@ impl NvimProcess {
 /// document over the RPC handle `nvim`.
 ///
 /// Blocks on `nvim_buf_get_lines(source_bufnr, 0, -1, false)` to read the whole
-/// buffer, joins the lines with `\n`, and renders via
-/// [`crate::markdown::render_html`] with the fixed
+/// buffer, joins the lines with `\n`, enumerates its code blocks
+/// ([`crate::markdown::code_blocks`]), asks the captive Neovim to
+/// treesitter-highlight them ([`highlight_code_blocks`]), and renders via
+/// [`crate::markdown::render_html_with_highlights`] with the fixed
 /// [`crate::markdown::PreviewTheme::Default`] (OD5) and the given `width_mode`
 /// (in-app callers pass [`crate::markdown::WidthMode::Full`] and let the webview
 /// frame cap; the browser preview passes [`crate::markdown::WidthMode::Capped`]).
-/// An RPC error (e.g. an unloaded/closed buffer) is propagated as
-/// [`NvimError::Rpc`].
+/// The highlight pass degrades gracefully: any block Neovim cannot highlight
+/// (unknown language, missing parser/query, or the no-op treesitter path on
+/// Linux/cargo) renders as plain `<pre><code>`. An RPC error (e.g. an
+/// unloaded/closed buffer) reading the buffer is propagated as [`NvimError::Rpc`].
 ///
 /// Extracted from [`NvimProcess::render_preview`] so the loopback browser-preview
 /// server ([`crate::browser_preview`]) can re-render off a bare RPC handle
@@ -1071,11 +1078,123 @@ pub(crate) async fn render_source_html(
         .collect::<Vec<_>>()
         .join("\n");
 
-    Ok(crate::markdown::render_html(
+    // Enumerate the fenced/indented code blocks and ask the captive Neovim's
+    // treesitter to highlight each. ANY failure (RPC error, no parser/query,
+    // Linux/cargo no-op) degrades to `None` per block, i.e. the plain render.
+    let blocks = crate::markdown::code_blocks(&source);
+    let highlights = if blocks.is_empty() {
+        Vec::new()
+    } else {
+        highlight_code_blocks(nvim, &blocks).await
+    };
+
+    Ok(crate::markdown::render_html_with_highlights(
         &source,
         crate::markdown::PreviewTheme::Default,
         width_mode,
+        &highlights,
     ))
+}
+
+/// Asks the captive Neovim to treesitter-highlight a BATCH of code blocks in one
+/// RPC round-trip, returning per-block highlight data aligned to `blocks` by index.
+///
+/// Calls the module-level Lua helper `wolf_highlight_code_blocks(blocks)` (see
+/// `runtime/nvim/init.lua`) with an array of `[text, lang]` pairs. The reply is an
+/// array whose i-th entry is either `false`/nil (not highlightable — unknown
+/// language, missing parser/query, or the whole treesitter block a no-op as on
+/// Linux/cargo) or an array of 7-element span tuples
+/// `[row, start_col, end_col, fg, bold, italic, underline]`.
+///
+/// This is TOTAL graceful fallback: any RPC error, a non-array reply, or a
+/// length mismatch yields `vec![None; blocks.len()]` (every block plain), and any
+/// individual malformed entry decodes to `None`. It never panics and never
+/// unwraps on the decode path.
+async fn highlight_code_blocks(
+    nvim: &Neovim<Compat<ChildStdin>>,
+    blocks: &[crate::markdown::CodeBlockInfo],
+) -> Vec<Option<crate::markdown::BlockHighlight>> {
+    let fallback = || vec![None; blocks.len()];
+
+    let lua_blocks: Vec<Value> = blocks
+        .iter()
+        .map(|b| {
+            Value::Array(vec![
+                Value::from(b.text.clone()),
+                Value::from(b.lang.as_deref().unwrap_or("")),
+            ])
+        })
+        .collect();
+
+    let reply = nvim
+        .call(
+            "nvim_exec_lua",
+            vec![
+                Value::from("return wolf_highlight_code_blocks(...)"),
+                Value::Array(vec![Value::Array(lua_blocks)]),
+            ],
+        )
+        .await;
+
+    let Ok(Ok(value)) = reply else {
+        return fallback();
+    };
+    let Some(results) = value.as_array() else {
+        return fallback();
+    };
+    if results.len() != blocks.len() {
+        return fallback();
+    }
+
+    results.iter().map(decode_block_highlight).collect()
+}
+
+/// Decodes one per-block reply entry from `wolf_highlight_code_blocks` into an
+/// `Option<BlockHighlight>`.
+///
+/// `Boolean(false)`/`Nil` → `None` (not highlightable). An array of 7-element span
+/// tuples decodes each into a [`crate::markdown::HighlightSpan`]; a `fg` of `< 0`
+/// means "no foreground" (`color: None`). Anything else (wrong shape) → `None`.
+fn decode_block_highlight(entry: &Value) -> Option<crate::markdown::BlockHighlight> {
+    let spans_val = entry.as_array()?;
+    let mut spans = Vec::with_capacity(spans_val.len());
+    for span in spans_val {
+        let fields = span.as_array()?;
+        if fields.len() < 7 {
+            return None;
+        }
+        let row = fields.first().and_then(Value::as_i64)? as u32;
+        let start_col = fields.get(1).and_then(Value::as_i64)? as u32;
+        let end_col = fields.get(2).and_then(Value::as_i64)? as u32;
+        let fg = fields.get(3).and_then(Value::as_i64)?;
+        let bold = value_is_true(fields.get(4));
+        let italic = value_is_true(fields.get(5));
+        let underline = value_is_true(fields.get(6));
+        let color = if fg < 0 { None } else { Some(fg as u32) };
+        spans.push(crate::markdown::HighlightSpan {
+            row,
+            start_col,
+            end_col,
+            style: crate::markdown::HighlightStyle {
+                color,
+                bold,
+                italic,
+                underline,
+            },
+        });
+    }
+    Some(crate::markdown::BlockHighlight { spans })
+}
+
+/// Interprets an optional msgpack [`Value`] as a boolean flag, tolerating either a
+/// real `Boolean` or an integer (`0` = false, non-zero = true). Missing/other → false.
+fn value_is_true(value: Option<&Value>) -> bool {
+    match value {
+        Some(v) => v
+            .as_bool()
+            .unwrap_or_else(|| v.as_i64().is_some_and(|n| n != 0)),
+        None => false,
+    }
 }
 
 /// Spawns the captive Neovim with the given redraw handler.
