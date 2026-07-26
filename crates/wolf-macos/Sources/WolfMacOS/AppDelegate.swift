@@ -323,6 +323,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
   }
 
+  /// Fans the OS app-focus state out to every live project's nvim
+  /// (`nvim_ui_set_focus`). A no-op before any project exists (e.g. the launch
+  /// activate). `gained: true` on activate fires `FocusGained` → the init.lua
+  /// `WolfAutoRead` augroup's `:checktime` reloads an externally-changed unmodified
+  /// buffer; `false` on resign fires `FocusLost` so the next activate is a genuine
+  /// unfocused→focused transition (nvim only fires `FocusGained` on a real edge).
+  private func pushUiFocusToAllProjects(gained: Bool) {
+    for project in projects {
+      project.setUiFocus(gained: gained)
+    }
+  }
+
   /// A FileManager-backed `isDirectory` check for `RestoreSeam`/`StateSeam`.
   private func isDirectoryCheck() -> (String) -> Bool {
     { path in
@@ -337,6 +349,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     let id = nextTabId
     nextTabId += 1
     return id
+  }
+
+  /// The app regained OS focus (e.g. Dock reactivation, Cmd-Tab back). Report
+  /// focus GAINED to every project's nvim so `FocusGained` fires and the
+  /// `WolfAutoRead` augroup reloads any externally-changed unmodified buffer — the
+  /// exact "edit the file in another app, come back to Wolf" reload path. App-level
+  /// (not per-window) so switching between two windows of the SAME project — which
+  /// does not deactivate the app — sends nothing, avoiding spurious focus churn on
+  /// the shared nvim.
+  func applicationDidBecomeActive(_ notification: Notification) {
+    pushUiFocusToAllProjects(gained: true)
+  }
+
+  /// The whole app lost OS focus. Report focus LOST so the next activate is a
+  /// genuine unfocused→focused transition (nvim de-dupes `FocusGained` otherwise).
+  func applicationWillResignActive(_ notification: Notification) {
+    pushUiFocusToAllProjects(gained: false)
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

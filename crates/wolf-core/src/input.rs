@@ -4,7 +4,7 @@
 //! Front-ends speak in toolkit-neutral [`InputEvent`]s; this module turns them
 //! into Neovim's keystroke notation (`<Esc>`, `<C-w>`, `<CR>`, ...) and the
 //! corresponding generic msgpack-RPC calls (`nvim_input`, `nvim_input_mouse`,
-//! `nvim_ui_try_resize`, and Ex commands for open/save).
+//! `nvim_ui_try_resize`, `nvim_ui_set_focus`, and Ex commands for open/save).
 
 use std::path::{Path, PathBuf};
 
@@ -263,6 +263,19 @@ pub enum InputEvent {
     /// when the active pane is a preview scratch — and re-emits the current-file /
     /// per-window full-width / previews notifications).
     ToggleFullWidth,
+    /// Forward the OS window/app focus state to the captive Neovim UI via
+    /// `nvim_ui_set_focus`, so `FocusGained` / `FocusLost` fire in the running
+    /// app. `true` reports focus GAINED (→ nvim `FocusGained`, which the init.lua
+    /// `WolfAutoRead` augroup rides to run `:checktime` and reload an
+    /// externally-changed unmodified buffer); `false` reports focus LOST (→
+    /// `FocusLost`). nvim only fires `FocusGained` on an actual unfocused→focused
+    /// transition, so a front-end reports BOTH edges (resign → `false`, activate →
+    /// `true`) to keep each refocus a real transition. Enqueued on the ordered
+    /// input channel so it never races pending input.
+    SetUiFocus {
+        /// `true` = focus gained (`FocusGained`), `false` = focus lost (`FocusLost`).
+        gained: bool,
+    },
 }
 
 impl InputEvent {
@@ -430,6 +443,7 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
         }
         InputEvent::ToggleTerminal => toggle_terminal(nvim).await,
         InputEvent::ToggleFullWidth => toggle_full_width(nvim).await,
+        InputEvent::SetUiFocus { gained } => set_ui_focus(nvim, *gained).await,
     }
 }
 
@@ -557,6 +571,17 @@ async fn toggle_full_width(nvim: &Nvim) -> Result<(), Box<CallError>> {
                 Value::Array(vec![]),
             ],
         )
+        .await?;
+    Ok(())
+}
+
+/// Forwards the OS focus state to the captive Neovim UI via `nvim_ui_set_focus`
+/// (arity 1, a single bool). `gained = true` makes nvim fire `FocusGained`,
+/// `false` makes it fire `FocusLost`. Inlined like the `Resize` arm — there is no
+/// `NvimProcess::set_focus` wrapper.
+async fn set_ui_focus(nvim: &Nvim, gained: bool) -> Result<(), Box<CallError>> {
+    let _ = nvim
+        .call("nvim_ui_set_focus", vec![Value::from(gained)])
         .await?;
     Ok(())
 }

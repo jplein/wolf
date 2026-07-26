@@ -10,29 +10,23 @@
 //! `git checkout`), a `:checktime` re-reads the buffer — but ONLY when the
 //! in-editor copy is UNMODIFIED, so a user's unsaved edits are never clobbered.
 //!
-//! ## The faithful trigger (why NOT `:doautocmd CursorHold`)
+//! ## The trigger: `set_ui_focus` (the REAL production path)
 //!
-//! The real production path is `FocusGained` (the user leaves the app, an external
-//! tool rewrites the file, the user returns) plus the `CursorHold` idle catch-all.
-//! A headless embedded nvim cannot emit `FocusGained` directly, so these tests
-//! drive a GENUINE `CursorHold`:
+//! The real production path is `FocusGained`: the user leaves the app, an external
+//! tool (`prettier --write`, `git checkout`) rewrites the file, then the user
+//! reactivates Wolf. On macOS the front-end now forwards that OS focus transition
+//! to the captive nvim via `WolfCore::set_ui_focus(gained)`, which calls
+//! `nvim_ui_set_focus` → fires `FocusGained` → the existing `WolfAutoRead` autocmd
+//! runs `:checktime` → the unmodified buffer reloads. These tests drive exactly
+//! that method, so they exercise the true production trigger (not a proxy).
 //!
-//!   1. lower `updatetime` to 200ms (test-only, via `:set updatetime=200` — NOT an
-//!      init.lua change; it just makes the idle-fire fast enough to observe);
-//!   2. rewrite the file on disk;
-//!   3. send ONE non-modifying cursor-move interaction (`j` then `k`) to RESET the
-//!      idle timer, so a fresh `CursorHold` fires AFTER the external change.
-//!
-//! `CursorHold` is one-shot per idle period (see `:help CursorHold`: "not fired
-//! again until the user has pressed a key"), so pure continued idle after the
-//! write would NOT re-fire it — the single cursor-move models the user returning
-//! to / interacting with the app, which is the real interaction/`FocusGained`
-//! path the harness cannot emit directly. This is NOT a redraw nudge applied
-//! after the reload; the cursor-move IS the legitimate event that drives it.
-//!
-//! `:doautocmd CursorHold` is deliberately NOT used: it fires a SYNTHETIC
-//! `CursorHold` from cmdline context, and with no following interaction the
-//! async reload's repaint is never surfaced — an unfaithful trigger.
+//! Both tests send `set_ui_focus(false)` THEN `set_ui_focus(true)` to force a
+//! genuine unfocused→focused transition. nvim de-dupes `FocusGained` and only
+//! fires it on the unfocused→focused EDGE; a freshly-attached UI's initial focus
+//! state is uncertain, so a lone `set_ui_focus(true)` could be a no-op if nvim
+//! already considered the UI focused. Leading with `false` guarantees the edge.
+//! This mirrors the production resign→activate sequence (`applicationWillResign`
+//! then `applicationDidBecomeActive`).
 //!
 //! ## Load-bearing vs guard split (read before trusting green)
 //!
@@ -81,14 +75,9 @@ const NEVER_APPLIED_DOC: &str = "# External change never applied\nbody\n";
 /// check regardless, but the sleep makes mtime detection robust too).
 const PRE_REWRITE_SLEEP: Duration = Duration::from_millis(1100);
 
-/// Settle after `:set updatetime=200` so the option is applied on nvim's loop
-/// before the test proceeds (this is a separate input burst, not observable via a
-/// redraw flush).
-const SET_UPDATETIME_SETTLE: Duration = Duration::from_millis(300);
-
 /// Gap between poll iterations while waiting for a reload (or a settle) to land.
-/// A touch longer than the 200ms test `updatetime` so each iteration spans at
-/// least one potential idle-fire window.
+/// The reload is driven by a `set_ui_focus` transition rather than idle timing, so
+/// this only needs to be short enough to observe the async repaint promptly.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Marker text of the unsaved in-editor edit in the guard test. Chosen to be
@@ -113,31 +102,47 @@ fn start_core_in(cwd: &Path) -> (WolfCore, common::FlushWaiter) {
     (core, waiter)
 }
 
-/// Lowers `updatetime` to 200ms in the captive nvim via `:set updatetime=200`
-/// typed as keystrokes, so `CursorHold` fires promptly on idle. TEST-ONLY (it
-/// simulates the idle timing a real user session has over seconds); it is NOT an
-/// init.lua change. Settles so the option lands before the test proceeds.
-fn set_fast_updatetime(core: &WolfCore) {
-    core.send_input(ch(':'));
-    type_str(core, "set updatetime=200");
-    core.send_input(key(Key::Enter));
-    std::thread::sleep(SET_UPDATETIME_SETTLE);
+/// Forces a genuine unfocused→focused transition on the captive nvim UI, which
+/// fires `FocusGained` → the `WolfAutoRead` autocmd → `:checktime`. Sends `false`
+/// first because nvim de-dupes `FocusGained` (edge-triggered) and a freshly
+/// attached UI's initial focus state is uncertain, so a lone `true` could no-op.
+/// Mirrors the production resign→activate sequence.
+fn refocus_ui(core: &WolfCore) {
+    core.set_ui_focus(false);
+    core.set_ui_focus(true);
 }
 
-/// Sends ONE non-modifying cursor-move interaction (`j` then `k`) in normal mode.
-/// In the 2-line fixture this moves down then back up to line 1, leaving the
-/// buffer UNMODIFIED and the cursor where it started — but it RESETS the idle
-/// timer so a fresh `CursorHold` fires afterward. This is the faithful proxy for
-/// the user returning to / interacting with the app (the `FocusGained` path the
-/// headless harness cannot emit directly), NOT a post-reload repaint nudge.
-fn nudge_cursor_move(core: &WolfCore) {
-    core.send_input(ch('j'));
-    core.send_input(ch('k'));
+/// Polls row 0 of the active grid until it contains `needle`, bounded by
+/// [`FLUSH_TIMEOUT`], panicking with the last observed row on timeout. A single
+/// `wait_for_flush` can return on an intermediate redraw before the text under
+/// test is on the grid (especially under parallel-test contention), so callers
+/// that need a specific string to be present must poll rather than assert once.
+///
+/// Same lock discipline as the reload polls: `row_text` is read into an OWNED
+/// `String` so the snapshot read-guard drops BEFORE `drain()`/`sleep` — a guard
+/// held across the sleep starves the redraw handler's `write_async` `try_write`.
+fn wait_for_row0_contains(core: &WolfCore, waiter: &common::FlushWaiter, needle: &str) {
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    loop {
+        // Guard drops at the end of this statement (owned String).
+        let row0 = core.read_snapshot().active_grid().row_text(0);
+        if row0.contains(needle) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out after {FLUSH_TIMEOUT:?} waiting for row 0 to contain {needle:?}; \
+             last observed row0 = {row0:?}"
+        );
+        waiter.drain();
+        std::thread::sleep(POLL_INTERVAL);
+    }
 }
 
 /// An UNMODIFIED buffer whose file was changed on disk from OUTSIDE the editor
-/// must reload when a genuine `CursorHold` fires after the change. This is the
-/// load-bearing case (grid-assertion idiom mirrored from `swap_exists.rs`).
+/// must reload when the UI regains focus (`set_ui_focus(true)` → `FocusGained` →
+/// `:checktime`). This is the load-bearing case (grid-assertion idiom mirrored
+/// from `swap_exists.rs`).
 #[test]
 fn external_change_reloads_unmodified_buffer() {
     let _ = common::require_nvim_bin();
@@ -152,31 +157,23 @@ fn external_change_reloads_unmodified_buffer() {
 
     let (core, waiter) = start_core_in(&cwd);
 
-    // Open the fixture and confirm the ORIGINAL content is on the grid.
+    // Open the fixture and confirm the ORIGINAL content is on the grid. Poll (a
+    // single flush can land before the opened buffer's content is on the grid).
     core.send_input(InputEvent::Open {
         path: fixture.clone(),
     });
     waiter.wait_for_flush(&core, common::FLUSH_TIMEOUT);
-
-    let row0 = core.read_snapshot().active_grid().row_text(0);
-    assert!(
-        row0.contains("# Original"),
-        "the fixture must open and render its original heading; got row0 = {row0:?}"
-    );
-
-    // Make CursorHold fire promptly on idle (test-only), then flush stale wakes.
-    set_fast_updatetime(&core);
-    waiter.drain();
+    wait_for_row0_contains(&core, &waiter, "# Original");
 
     // Change the file on disk from OUTSIDE the editor. Sleep first (coarse mtime)
     // then write DIFFERENT-length content (size check always trips).
     std::thread::sleep(PRE_REWRITE_SLEEP);
     std::fs::write(&fixture, RELOADED_DOC).expect("failed to rewrite fixture externally");
 
-    // ONE non-modifying interaction resets the idle timer so a genuine CursorHold
-    // fires AFTER the change (the faithful FocusGained/interaction proxy). Send no
-    // further input.
-    nudge_cursor_move(&core);
+    // Flush stale wakes, then drive the REAL production trigger: an OS refocus
+    // forwarded to nvim (unfocused→focused) fires FocusGained → :checktime.
+    waiter.drain();
+    refocus_ui(&core);
 
     // Poll for the reload: the reload notification is not guaranteed to ride a
     // single redraw flush, so loop draining wakes with short sleeps, bounded by
@@ -237,39 +234,26 @@ fn modified_buffer_is_not_reloaded_by_checktime() {
         path: fixture.clone(),
     });
     waiter.wait_for_flush(&core, common::FLUSH_TIMEOUT);
-
-    let row0 = core.read_snapshot().active_grid().row_text(0);
-    assert!(
-        row0.contains("# Original"),
-        "the fixture must open and render its original heading; got row0 = {row0:?}"
-    );
-
-    // Make CursorHold fire promptly on idle (test-only), then flush stale wakes.
-    set_fast_updatetime(&core);
-    waiter.drain();
+    wait_for_row0_contains(&core, &waiter, "# Original");
 
     // Make an UNSAVED in-editor edit at the start of the heading line: insert the
-    // marker, then leave insert mode. The buffer is now modified (unsaved).
+    // marker, then leave insert mode. The buffer is now modified (unsaved). Poll
+    // for the marker rather than asserting after a single flush: under parallel
+    // contention that flush can return before the inserted text is on the grid.
     core.send_input(ch('i'));
     type_str(&core, "ZZUNSAVED ");
     core.send_input(key(Key::Esc));
-    waiter.wait_for_flush(&core, common::FLUSH_TIMEOUT);
-
-    let row0 = core.read_snapshot().active_grid().row_text(0);
-    assert!(
-        row0.contains(UNSAVED_MARKER),
-        "the unsaved in-editor edit must be visible before the external change; \
-         got row0 = {row0:?}"
-    );
+    wait_for_row0_contains(&core, &waiter, UNSAVED_MARKER);
 
     // Change the file on disk too (different length). This is the both-changed
     // (W12) situation once the freshness check runs.
     std::thread::sleep(PRE_REWRITE_SLEEP);
     std::fs::write(&fixture, NEVER_APPLIED_DOC).expect("failed to rewrite fixture externally");
 
-    // ONE non-modifying interaction resets the idle timer so a genuine CursorHold
-    // fires AFTER the change (same faithful trigger as test 1).
-    nudge_cursor_move(&core);
+    // Drive the same REAL refocus trigger as test 1 (unfocused→focused fires
+    // FocusGained → :checktime); the guard is that the modified buffer survives it.
+    waiter.drain();
+    refocus_ui(&core);
 
     // Settle window: throughout, the buffer must remain modified with the marker
     // intact and the external text must never appear. Because the buffer is

@@ -330,6 +330,7 @@ void* __swift_bridge__$WolfCoreHandle$cwd_for_tabpage(void* self, int64_t tab);
 void __swift_bridge__$WolfCoreHandle$set_current_tabpage(void* self, int64_t tab);
 void __swift_bridge__$WolfCoreHandle$close_tabpage(void* self, int64_t tab);
 void __swift_bridge__$WolfCoreHandle$focus_win(void* self, int64_t win);
+void __swift_bridge__$WolfCoreHandle$set_ui_focus(void* self, bool gained);
 void __swift_bridge__$WolfCoreHandle$shutdown(void* self);
 void* __swift_bridge__$WolfCoreHandle$start_file_search(void* self);
 void* __swift_bridge__$WolfCoreHandle$start_tree_search(void* self);

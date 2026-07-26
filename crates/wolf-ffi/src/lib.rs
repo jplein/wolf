@@ -422,6 +422,10 @@ mod ffi {
         fn close_tabpage(&self, tab: i64);
         // Focuses a specific Neovim window (click-to-focus / resolved FocusDir).
         fn focus_win(&self, win: i64);
+        // Forwards OS window/app focus to the captive Neovim UI (nvim_ui_set_focus):
+        // true on activate (fires FocusGained -> WolfAutoRead :checktime reload),
+        // false on resign. Both edges reported so each refocus is a real transition.
+        fn set_ui_focus(&self, gained: bool);
         fn shutdown(&self);
         // Starts a streaming file-search session over the core's cwd, fed by the
         // registered file-search wake. Infallible: returns an empty-backed handle
@@ -1686,6 +1690,18 @@ impl WolfCoreHandle {
     pub fn focus_win(&self, win: i64) {
         if let Some(core) = self.core.borrow().as_ref() {
             core.focus_win(win);
+        }
+    }
+
+    /// Forwards the OS window/app focus state to the captive Neovim UI via
+    /// `nvim_ui_set_focus`: `true` on app/window activation (fires `FocusGained`,
+    /// which the init.lua `WolfAutoRead` augroup rides to `:checktime` and reload an
+    /// externally-changed unmodified buffer), `false` on resign. Both edges are
+    /// reported so each refocus is a genuine transition. A no-op once the core has
+    /// been shut down.
+    pub fn set_ui_focus(&self, gained: bool) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.set_ui_focus(gained);
         }
     }
 

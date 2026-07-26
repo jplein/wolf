@@ -315,6 +315,10 @@ extension WolfCoreHandleRef {
         __swift_bridge__$WolfCoreHandle$focus_win(ptr, win)
     }
 
+    public func set_ui_focus(_ gained: Bool) {
+        __swift_bridge__$WolfCoreHandle$set_ui_focus(ptr, gained)
+    }
+
     public func shutdown() {
         __swift_bridge__$WolfCoreHandle$shutdown(ptr)
     }
