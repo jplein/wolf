@@ -139,7 +139,21 @@ final class PaneContainerView: NSView {
   /// Under the shared-nvim model a wake fires per PROJECT, but this container
   /// must only consume a refocus rebind once the snapshot reflects THIS view's
   /// tabpage — the `handle.active_tabpage() == controllerTabpageHandle` gate.
-  private let controllerTabpageHandle: Int64
+  /// A `var` because a crash-restart rebinds this view to a FRESH tabpage (see
+  /// `rebind(tabpageHandle:)`).
+  private var controllerTabpageHandle: Int64
+
+  /// The crash/stall overlay ("Neovim crashed" / "Neovim stopped responding" +
+  /// "Restart Neovim"). A subview of this container (mirroring the empty-state
+  /// overlay on the controller), shown via `showNvimOverlay(_:)` when the project
+  /// reads a non-`Alive` liveness and hidden via `hideNvimOverlay()`.
+  private let nvimOverlay = NvimStatusOverlayView()
+
+  /// Invoked when the overlay's "Restart Neovim" button is clicked. The controller
+  /// wires this to `project.restartNeovim()`.
+  var onRestart: (() -> Void)? {
+    didSet { nvimOverlay.onRestart = onRestart }
+  }
 
   /// Set by the window controller (`windowDidBecomeKey`) after it drives its
   /// project's `set_current_tabpage`: the next wake whose snapshot reflects this
@@ -321,6 +335,9 @@ final class PaneContainerView: NSView {
     addSubview(toastView)
     addSubview(cmdlineView)
     addSubview(completionPopupView)
+    // The crash/stall overlay composites ON TOP of everything (added last, starts
+    // hidden); it is revealed only when the project reads a non-Alive liveness.
+    addSubview(nvimOverlay)
     // Follow the live "Show scroll bars" setting so the synthetic scrollbars
     // switch between always-on (`.legacy`) and fade-on-scroll (`.overlay`)
     // without a relaunch.
@@ -813,6 +830,27 @@ final class PaneContainerView: NSView {
     syncPreviewWebViews()
     refreshOverlays()
     needsDisplay = true
+  }
+
+  /// Shows the crash/stall overlay for `mode` ("Neovim crashed" / "Neovim stopped
+  /// responding"). Kept ON TOP of the panes so a frozen last frame is covered.
+  func showNvimOverlay(_ mode: NvimStatusMode) {
+    nvimOverlay.removeFromSuperview()
+    addSubview(nvimOverlay)
+    nvimOverlay.show(mode: mode)
+  }
+
+  /// Hides the crash/stall overlay (liveness returned to `Alive`).
+  func hideNvimOverlay() {
+    nvimOverlay.hide()
+  }
+
+  /// Rebinds this container to a FRESH tabpage after a crash-restart, so the
+  /// refocus gate (`active_tabpage() == controllerTabpageHandle`) matches the new
+  /// nvim's tabpage. The next render wake repaints the rebound panes.
+  func rebind(tabpageHandle: Int64) {
+    controllerTabpageHandle = tabpageHandle
+    pendingRefocusRebind = true
   }
 
   /// Refreshes the three bottom overlays from the live snapshot and lays them

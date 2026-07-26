@@ -9,9 +9,10 @@
 //! is plain calls that core hands to the tokio side to issue RPC. There is one
 //! wake callback, fired on `flush`; no per-event callbacks cross the boundary.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -26,12 +27,13 @@ use crate::command_mru::CommandMru;
 use crate::files::{self, FileSearch, FileSearchState};
 use crate::input::{self, InputEvent, MouseEvent, Nvim, ScrollEvent};
 use crate::layout::LayoutIntent;
+use crate::liveness::{self, Liveness};
 use crate::mru::{FileEntry, MruError, MruStore};
 use crate::nvim::{self, NvimConfig, NvimError, NvimProcess};
 use crate::recent_dirs::RecentDirs;
 use crate::redraw::{CommandQueue, IntentQueue, RedrawHandler, TrackedCwd, WakeFn};
-use crate::render::{OwnedSnapshotReadGuard, SharedSnapshot, Snapshot};
-use crate::state::state_dir;
+use crate::render::{OwnedSnapshotReadGuard, SharedSnapshot, Snapshot, TabFiles};
+use crate::state::{state_dir, swap_dir_for};
 
 /// A lazily-populated, per-cwd cache of [`MruStore`]s, keyed by CANONICAL cwd.
 ///
@@ -140,7 +142,13 @@ impl std::ops::Deref for SnapshotReadGuard {
 /// The live core: tokio runtime + captive Neovim + shared snapshot.
 pub struct WolfCore {
     runtime: Runtime,
-    nvim: NvimProcess,
+    /// The captive Neovim process. Behind a [`RefCell`] because
+    /// [`restart_nvim`](WolfCore::restart_nvim) swaps in a fresh process by value
+    /// through `&self` (the bridge only ever hands the front-end a `&self`).
+    /// `WolfCore` is `!Send`, main-thread only, so the `RefCell` is never contended
+    /// across threads; every borrow is bound to a LOCAL so no guard crosses an
+    /// `.await` (satisfies `clippy::await_holding_refcell_ref`).
+    nvim: RefCell<NvimProcess>,
     snapshot: SharedSnapshot,
     /// The drainable layout-intent queue. The redraw handler pushes parsed
     /// `wolf_layout` intents here; the front-end consumes them via
@@ -198,6 +206,31 @@ pub struct WolfCore {
     /// [`WolfCore::start`] from `WOLF_RPC_TIMEOUT_MS` (falling back to
     /// [`RPC_TIMEOUT_DEFAULT`]), so every guarded call site shares one bound.
     rpc_timeout: Duration,
+    /// The captive nvim's liveness state (`Alive` / `NotResponding` / `Dead`),
+    /// backed by an atomic. The supervisor marks `Dead` on an unexpected death;
+    /// [`block_on_rpc`](WolfCore::block_on_rpc) escalates a `Timeout` to
+    /// `NotResponding` and auto-clears it back to `Alive` on a subsequent
+    /// successful RPC; [`restart_nvim`](WolfCore::restart_nvim) resets it to
+    /// `Alive`. Read cheaply (no RPC) by [`liveness`](WolfCore::liveness).
+    liveness: Arc<AtomicU8>,
+    /// A clone of the same front-end wake fired on liveness transitions, so the
+    /// front-end can re-read [`liveness`](WolfCore::liveness) and paint/recover.
+    wake: WakeFn,
+    /// The current RPC handle shared with the input pump. The pump reads a clone
+    /// per batch; [`restart_nvim`](WolfCore::restart_nvim) swaps in the fresh
+    /// nvim's handle so the pump keeps working after a respawn (a fixed captured
+    /// handle would go stale).
+    shared_handle: Arc<RwLock<Nvim>>,
+    /// The redraw handler (it is `Clone`, carrying the SAME snapshot / intents /
+    /// commands / tracked-cwd / recent-dirs / wake). Stored so a restart clones a
+    /// fresh handler for the respawned nvim's io loop.
+    handler: RedrawHandler,
+    /// The nvim launch config, reused VERBATIM by a restart (same hermetic XDG
+    /// `state_root`, same durable `swap_dir`, same cwd + initial grid size).
+    nvim_cfg: NvimConfig,
+    /// Reentrancy guard for [`restart_nvim`](WolfCore::restart_nvim): a concurrent
+    /// or nested restart request is a no-op while one is in flight.
+    restarting: AtomicBool,
 }
 
 /// The process's canonicalized home directory, resolved at most once.
@@ -266,14 +299,27 @@ impl WolfCore {
             commands.clone(),
             tracked_cwd.clone(),
             recent_dirs.clone(),
-            wake,
+            wake.clone(),
         );
 
-        let nvim_cfg = NvimConfig::from_env(cfg.init_lua, cwd.clone(), cfg.cols, cfg.rows)
+        // The liveness cell starts Alive; the supervisor / block_on_rpc / restart
+        // transition it. `wake` is cloned so liveness transitions can signal the
+        // front-end (they do not bump `seq`, so the front-end observes them via the
+        // raw-wake seam, not a flush).
+        let liveness: Arc<AtomicU8> = Arc::new(AtomicU8::new(Liveness::Alive.to_u8()));
+
+        // The durable, per-project swap dir (STABLE across respawns of this cwd).
+        // Canonicalize the cwd first so the hash matches a caller that passes an
+        // already-canonical cwd; `None` (unresolvable state_dir) makes NvimConfig
+        // fall back to an ephemeral swap dir under its temp state root.
+        let canonical_cwd = std::fs::canonicalize(&cwd).unwrap_or_else(|_| cwd.clone());
+        let swap_dir = swap_dir_for(&canonical_cwd);
+
+        let nvim_cfg = NvimConfig::from_env(cfg.init_lua, cwd.clone(), swap_dir, cfg.cols, cfg.rows)
             .map_err(CoreError::Nvim)?;
 
         let nvim = runtime.block_on(async {
-            let proc = nvim::spawn(&nvim_cfg, handler).await?;
+            let proc = nvim::spawn(&nvim_cfg, handler.clone(), liveness.clone(), wake.clone()).await?;
             proc.ui_attach(cfg.cols, cfg.rows).await?;
             proc.setup_current_file_tracking().await?;
             proc.setup_buffer_tracking().await?;
@@ -283,6 +329,7 @@ impl WolfCore {
             proc.setup_theme_tracking().await?;
             proc.setup_commands().await?;
             proc.setup_tabs().await?;
+            proc.setup_open_files().await?;
             proc.setup_view_tracking().await?;
             proc.setup_preview().await?;
             Ok::<NvimProcess, NvimError>(proc)
@@ -303,7 +350,11 @@ impl WolfCore {
         // which is what callers that "send N keys, then wait for one flush" rely
         // on. A brief settle yield lets a synchronous burst fully enqueue first.
         let (input_tx, mut input_rx) = mpsc::unbounded_channel::<InputEvent>();
-        let pump_nvim: Nvim = nvim.handle();
+        // The pump reads a FRESH handle clone per batch from the shared cell, so a
+        // restart (which swaps in the respawned nvim's handle) keeps it working; a
+        // once-captured handle would go stale after a respawn.
+        let shared_handle: Arc<RwLock<Nvim>> = Arc::new(RwLock::new(nvim.handle()));
+        let pump_shared_handle = shared_handle.clone();
         let pump_mru_cache = mru_cache.clone();
         let pump_tracked_cwd = tracked_cwd.clone();
         let pump_fallback_cwd = cwd.clone();
@@ -317,6 +368,9 @@ impl WolfCore {
                 while let Ok(ev) = input_rx.try_recv() {
                     batch.push(ev);
                 }
+
+                // Read the CURRENT handle for this batch (survives a restart swap).
+                let pump_nvim: Nvim = pump_shared_handle.read().clone();
 
                 // Toast-clear-on-input (OD8): if this batch carries any dismissing
                 // input (Key/Mouse/Scroll) and the toast is not a real prompt,
@@ -356,7 +410,7 @@ impl WolfCore {
 
         Ok(Self {
             runtime,
-            nvim,
+            nvim: RefCell::new(nvim),
             snapshot,
             intents,
             commands,
@@ -368,6 +422,12 @@ impl WolfCore {
             cwd,
             browser_preview: Mutex::new(None),
             rpc_timeout,
+            liveness,
+            wake,
+            shared_handle,
+            handler,
+            nvim_cfg,
+            restarting: AtomicBool::new(false),
         })
     }
 
@@ -403,7 +463,8 @@ impl WolfCore {
     /// to `None`, so the front-end only writes real text to the clipboard.
     #[must_use]
     pub fn copy_visual_selection(&self) -> Option<String> {
-        match self.block_on_rpc("yank_visual_selection", self.nvim.yank_visual_selection()) {
+        let nvim = self.nvim.borrow();
+        match self.block_on_rpc("yank_visual_selection", nvim.yank_visual_selection()) {
             Ok(Some(text)) if !text.is_empty() => Some(text),
             Ok(_) => None,
             Err(e) => {
@@ -443,7 +504,8 @@ impl WolfCore {
     /// candidates rather than failing).
     #[must_use]
     pub fn list_buffers(&self) -> Vec<BufInfo> {
-        match self.block_on_rpc("list_buffers", self.nvim.list_buffers()) {
+        let nvim = self.nvim.borrow();
+        match self.block_on_rpc("list_buffers", nvim.list_buffers()) {
             Ok(buffers) => buffers,
             Err(e) => {
                 tracing::warn!("list_buffers failed: {e}");
@@ -467,7 +529,8 @@ impl WolfCore {
     /// loads as a blank document rather than failing.
     #[must_use]
     pub fn render_preview(&self, source_bufnr: i64) -> String {
-        match self.block_on_rpc("render_preview", self.nvim.render_preview(source_bufnr)) {
+        let nvim = self.nvim.borrow();
+        match self.block_on_rpc("render_preview", nvim.render_preview(source_bufnr)) {
             Ok(html) => html,
             Err(e) => {
                 tracing::warn!("render_preview({source_bufnr}) failed: {e}");
@@ -503,25 +566,32 @@ impl WolfCore {
     #[must_use]
     pub fn open_in_browser(&self) -> String {
         // Resolve everything from the captive nvim BEFORE taking the
-        // browser_preview lock, so the lock is never held across a block_on.
-        let bufnr =
-            match self.block_on_rpc("current_markdown_bufnr", self.nvim.current_markdown_bufnr()) {
+        // browser_preview lock, so the lock is never held across a block_on. Each
+        // block_on_rpc binds the borrow to a LOCAL that drops before the next, so
+        // no `Ref` guard is ever held across the `.await`.
+        let bufnr = {
+            let nvim = self.nvim.borrow();
+            match self.block_on_rpc("current_markdown_bufnr", nvim.current_markdown_bufnr()) {
                 Ok(bufnr) => bufnr,
                 Err(e) => {
                     tracing::warn!("open_in_browser: current_markdown_bufnr failed: {e}");
                     return String::new();
                 }
-            };
+            }
+        };
         if bufnr <= 0 {
             return String::new();
         }
 
-        let pinned_raw = self
-            .block_on_rpc("buffer_path", self.nvim.buffer_path(bufnr))
-            .unwrap_or_default();
-        let cwd = self
-            .block_on_rpc("current_dir", self.nvim.current_dir())
-            .ok();
+        let pinned_raw = {
+            let nvim = self.nvim.borrow();
+            self.block_on_rpc("buffer_path", nvim.buffer_path(bufnr))
+                .unwrap_or_default()
+        };
+        let cwd = {
+            let nvim = self.nvim.borrow();
+            self.block_on_rpc("current_dir", nvim.current_dir()).ok()
+        };
         let target = browser_preview::build_target(bufnr, cwd, &pinned_raw);
 
         let mut slot = self.browser_preview.lock();
@@ -531,7 +601,7 @@ impl WolfCore {
         } else {
             match browser_preview::spawn(
                 &self.runtime,
-                self.nvim.handle(),
+                self.shared_handle.read().clone(),
                 self.snapshot.clone_handle(),
                 target.clone(),
             ) {
@@ -578,7 +648,8 @@ impl WolfCore {
     /// logged and returns `0`.
     #[must_use]
     pub fn open_preview(&self, mode: &str) -> i64 {
-        match self.block_on_rpc("open_preview", self.nvim.open_preview(mode)) {
+        let nvim = self.nvim.borrow();
+        match self.block_on_rpc("open_preview", nvim.open_preview(mode)) {
             Ok(bufnr) => bufnr,
             Err(e) => {
                 tracing::warn!("open_preview({mode}) failed: {e}");
@@ -607,7 +678,8 @@ impl WolfCore {
     /// [`NvimError::Timeout`] on a wedged nvim) is logged and returns `0`.
     #[must_use]
     pub fn edit_source(&self, mode: &str) -> i64 {
-        match self.block_on_rpc("edit_source", self.nvim.edit_source(mode)) {
+        let nvim = self.nvim.borrow();
+        match self.block_on_rpc("edit_source", nvim.edit_source(mode)) {
             Ok(bufnr) => bufnr,
             Err(e) => {
                 tracing::warn!("edit_source({mode}) failed: {e}");
@@ -632,7 +704,8 @@ impl WolfCore {
     /// an existing-but-non-previewable file to the OS default app; no-op if missing).
     #[must_use]
     pub fn preview_file(&self, win: i64, path: &str) -> i64 {
-        match self.block_on_rpc("preview_file", self.nvim.preview_file(win, path)) {
+        let nvim = self.nvim.borrow();
+        match self.block_on_rpc("preview_file", nvim.preview_file(win, path)) {
             Ok(bufnr) => bufnr,
             Err(e) => {
                 tracing::warn!("preview_file({win}, {path}) failed: {e}");
@@ -700,7 +773,8 @@ impl WolfCore {
         let cwd = cwd
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
-        match self.block_on_rpc("create_tabpage", self.nvim.create_tabpage(&cwd)) {
+        let nvim = self.nvim.borrow();
+        match self.block_on_rpc("create_tabpage", nvim.create_tabpage(&cwd)) {
             Ok(handle) => handle,
             Err(e) => {
                 tracing::warn!("create_tabpage failed: {e}");
@@ -740,7 +814,8 @@ impl WolfCore {
     /// authoritative value read at bind time.
     #[must_use]
     pub fn current_tabpage(&self) -> i64 {
-        match self.block_on_rpc("current_tabpage", self.nvim.current_tabpage()) {
+        let nvim = self.nvim.borrow();
+        match self.block_on_rpc("current_tabpage", nvim.current_tabpage()) {
             Ok(handle) => handle,
             Err(e) => {
                 tracing::warn!("current_tabpage failed: {e}");
@@ -1034,10 +1109,146 @@ impl WolfCore {
     }
 
     /// Cleanly shuts down the captive Neovim and tears down the runtime.
+    ///
+    /// Reaps the child even when it is WEDGED (the `shutdown` reap force-kills after
+    /// a bounded `child.wait()`) or already dead (a crashed core still returns
+    /// `Ok`).
     pub fn shutdown(self) -> Result<(), CoreError> {
         let WolfCore { runtime, nvim, .. } = self;
+        let nvim = nvim.into_inner();
         runtime.block_on(async move { nvim.shutdown().await })?;
         Ok(())
+    }
+
+    /// The captive nvim's current [`Liveness`] — a cheap, lock-free atomic read
+    /// (NOT an RPC).
+    ///
+    /// `Alive` normally; `NotResponding` after a synchronous RPC elapsed the
+    /// timeout budget (a stall — self-clears to `Alive` on the next successful
+    /// RPC); `Dead` after the supervisor observed an unexpected process death
+    /// (terminal until [`restart_nvim`](Self::restart_nvim)).
+    #[must_use]
+    pub fn liveness(&self) -> Liveness {
+        liveness::get(&self.liveness)
+    }
+
+    /// The Tier-1 open-file mirror for tabpage `handle` (its file-backed open
+    /// buffers + active buffer), or `None` for an unknown/closed tabpage.
+    ///
+    /// A cheap, lock-free SNAPSHOT READ with NO nvim RPC. [`Snapshot::open_files`]
+    /// is maintained out-of-band by the `wolf_open_files` notification. The
+    /// front-end CAPTURES this per view BEFORE a restart (a respawn wipes the
+    /// mirror) and reopens the files afterward.
+    #[must_use]
+    pub fn open_files_for_tabpage(&self, handle: i64) -> Option<TabFiles> {
+        self.read_snapshot().open_files.get(&handle).cloned()
+    }
+
+    /// Restarts the captive Neovim IN PLACE after a crash or stall: force-kills the
+    /// old process, respawns a fresh nvim in the same cwd, re-runs the full setup
+    /// chain, and swaps the new process + handle in.
+    ///
+    /// Returns whether an ACTUAL respawn happened:
+    /// - `Ok(true)` — the old process was killed, a fresh nvim was spawned, the
+    ///   full setup chain succeeded, and the new process + handle were swapped in.
+    ///   Post-`Ok(true)` contract: [`liveness`](Self::liveness) is `Alive`,
+    ///   [`current_tabpage`](Self::current_tabpage) is the fresh nvim's tabpage-1,
+    ///   and [`list_buffers`](Self::list_buffers) is empty (the respawn starts
+    ///   clean). Reopening the Tier-1 files + rebinding views is the FRONT-END's job
+    ///   (off the mirror captured before the restart) — this method reopens nothing.
+    /// - `Ok(false)` — a NO-OP: either the current liveness is already `Alive` (a
+    ///   redundant restart must NOT disturb a live nvim) or a restart is already in
+    ///   flight (the `restarting` CAS was set). The process is left untouched.
+    /// - `Err(_)` — the respawn or setup chain FAILED. Liveness is marked `Dead`
+    ///   (never left stale-`Alive`) so the front-end keeps its crash overlay, the
+    ///   `restarting` guard is released, and the error is returned.
+    pub fn restart_nvim(&self) -> Result<bool, CoreError> {
+        // Reentrancy guard: only one restart proceeds at a time. A concurrent
+        // request is a no-op (`Ok(false)`), NOT an actual restart.
+        if self
+            .restarting
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Ok(false);
+        }
+        // Ensure the guard is cleared on every exit path.
+        let result = self.restart_nvim_inner();
+        self.restarting.store(false, Ordering::SeqCst);
+        result
+    }
+
+    /// The body of [`restart_nvim`](Self::restart_nvim), run under the `restarting`
+    /// guard. Returns `Ok(true)` on an actual respawn, `Ok(false)` on the Alive
+    /// no-op, `Err` on a respawn/setup failure (with liveness marked `Dead`).
+    fn restart_nvim_inner(&self) -> Result<bool, CoreError> {
+        // A redundant restart on a HEALTHY (Alive) core is a safe no-op: there is
+        // nothing to recover, and tearing down a live nvim would needlessly drop
+        // its open buffers. The real crash/stall flow calls restart ONLY when
+        // liveness is Dead (auto) or NotResponding (the manual button), so this
+        // skip never blocks a genuine recovery.
+        if liveness::get(&self.liveness) == Liveness::Alive {
+            return Ok(false);
+        }
+
+        // Force-kill + reap the OLD process (works crashed-or-wedged). Its
+        // `shutting_down` is set first, so the old supervisor will NOT re-fire Dead.
+        // The `RefMut` is bound to a LOCAL so the guard lives in this SYNC frame,
+        // never held across an `.await` inside an async block (satisfies
+        // `clippy::await_holding_refcell_ref`).
+        {
+            let mut old = self.nvim.borrow_mut();
+            self.runtime.block_on(old.kill_in_place());
+        }
+
+        // Leave the terminal Dead state for the restart (Dead -> Alive), waking the
+        // front-end. This is the ONLY exit from Dead (unconditional store-Alive).
+        liveness::reset_alive(&self.liveness, &self.wake);
+
+        // Respawn on the runtime, reusing the config verbatim (same XDG state_root,
+        // same durable swap_dir, same cwd), then re-run ui_attach + the full setup
+        // chain. The grid uses the configured initial size; the next front-end
+        // resize re-establishes the live size.
+        let cols = self.nvim_cfg.initial_cols;
+        let rows = self.nvim_cfg.initial_rows;
+        let handler = self.handler.clone();
+        let liveness_arc = self.liveness.clone();
+        let wake = self.wake.clone();
+        let spawned = self.runtime.block_on(async {
+            let proc = nvim::spawn(&self.nvim_cfg, handler, liveness_arc, wake).await?;
+            proc.ui_attach(cols, rows).await?;
+            proc.setup_current_file_tracking().await?;
+            proc.setup_buffer_tracking().await?;
+            proc.setup_full_width().await?;
+            proc.setup_layout().await?;
+            proc.setup_dir_tracking().await?;
+            proc.setup_theme_tracking().await?;
+            proc.setup_commands().await?;
+            proc.setup_tabs().await?;
+            proc.setup_open_files().await?;
+            proc.setup_view_tracking().await?;
+            proc.setup_preview().await?;
+            Ok::<NvimProcess, NvimError>(proc)
+        });
+
+        let new_proc = match spawned {
+            Ok(proc) => proc,
+            Err(e) => {
+                // A failed respawn must NOT leave liveness stale-`Alive` (the
+                // `reset_alive` above optimistically cleared it): mark it `Dead` so
+                // the front-end keeps its crash overlay (and its manual-retry
+                // button). The old process is already reaped; the stale `self.nvim`
+                // handle is inert (its io loop is gone).
+                liveness::mark_dead(&self.liveness, &self.wake);
+                return Err(CoreError::Nvim(e));
+            }
+        };
+
+        // Swap in the fresh process + its handle (so the input pump picks it up).
+        let new_handle = new_proc.handle();
+        *self.nvim.borrow_mut() = new_proc;
+        *self.shared_handle.write() = new_handle;
+        Ok(true)
     }
 
     /// Resolves the file-search traversal root OUT-OF-BAND: the captive Neovim's
@@ -1084,11 +1295,42 @@ impl WolfCore {
     /// an empty `Vec`, …) — so a wedged nvim yields a bounded stall instead of an
     /// unbounded main-thread hang. Deliberately NOT used for startup or shutdown
     /// (those have their own bounds).
+    ///
+    /// Liveness is folded in here (the stall detector): a [`NvimError::Timeout`]
+    /// escalates the shared liveness to `NotResponding` (via
+    /// [`liveness::mark_not_responding`], `Alive -> NotResponding` only — never
+    /// downgrading `Dead`); a SUCCESSFUL result auto-clears a transient stall
+    /// (`compare_exchange(NotResponding -> Alive)` ONLY — it must NEVER touch
+    /// `Dead`, so a crashed core stays `Dead` until [`restart_nvim`](Self::restart_nvim)).
     fn block_on_rpc<F, T>(&self, what: &'static str, fut: F) -> Result<T, NvimError>
     where
-        F: std::future::Future<Output = Result<T, NvimError>>,
+        F: std::future::Future<Output = Result<T, NvimError>> + Send + 'static,
+        T: Send + 'static,
     {
-        timeout_block_on(&self.runtime, self.rpc_timeout, what, fut)
+        let result = timeout_block_on(&self.runtime, self.rpc_timeout, what, fut);
+        match &result {
+            Ok(_) => {
+                // RPC-success auto-clear: NotResponding -> Alive ONLY (never Dead).
+                // Fire the wake on an actual change so the overlay self-dismisses.
+                if self
+                    .liveness
+                    .compare_exchange(
+                        Liveness::NotResponding.to_u8(),
+                        Liveness::Alive.to_u8(),
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    )
+                    .is_ok()
+                {
+                    (self.wake)();
+                }
+            }
+            Err(NvimError::Timeout(_, _)) => {
+                liveness::mark_not_responding(&self.liveness, &self.wake);
+            }
+            Err(_) => {}
+        }
+        result
     }
 }
 
@@ -1100,6 +1342,16 @@ impl WolfCore {
 /// elapse it logs a `warn!` naming the wedged RPC and returns
 /// `NvimError::Timeout(what, timeout)`; otherwise the inner `Result` (whether
 /// `Ok` or a real RPC `Err`) passes through verbatim.
+///
+/// `fut` is SPAWNED as a runtime task (hence the `Send + 'static` bounds) rather
+/// than driven inline, and on a timeout the task's [`JoinHandle`] is DROPPED —
+/// which DETACHES the task, letting it run to completion in the background. This
+/// is load-bearing for stall recovery: an nvim-rs call whose response channel
+/// receiver is dropped mid-flight makes the io loop fail with "Could not send
+/// response" and DIE (which the supervisor would misread as a crash). By detaching
+/// (not aborting/dropping the future), the receiver stays alive until nvim
+/// eventually answers, so a WEDGED-then-recovered nvim's io loop survives and the
+/// next call succeeds (auto-clearing the transient `NotResponding`).
 fn timeout_block_on<F, T>(
     runtime: &Runtime,
     timeout: Duration,
@@ -1107,18 +1359,26 @@ fn timeout_block_on<F, T>(
     fut: F,
 ) -> Result<T, NvimError>
 where
-    F: std::future::Future<Output = Result<T, NvimError>>,
+    F: std::future::Future<Output = Result<T, NvimError>> + Send + 'static,
+    T: Send + 'static,
 {
-    // The `tokio::time::timeout` future must be CONSTRUCTED inside the runtime
-    // context (its timer registers with the reactor on creation), so build it in
-    // the async block rather than passing it as an already-created argument to
-    // `block_on` (which would evaluate it outside any runtime → "no reactor").
     let start = std::time::Instant::now();
-    match runtime.block_on(async move { tokio::time::timeout(timeout, fut).await }) {
-        Ok(inner) => {
+    // Spawn the RPC as a task, then wait on its JoinHandle bounded by `timeout`.
+    // The `tokio::time::timeout` future is CONSTRUCTED inside the runtime context
+    // (its timer registers with the reactor on creation).
+    let task = runtime.spawn(fut);
+    match runtime.block_on(async move { tokio::time::timeout(timeout, task).await }) {
+        Ok(Ok(inner)) => {
             let elapsed = start.elapsed();
             tracing::debug!(rpc = what, ?elapsed, "nvim RPC completed");
             inner
+        }
+        Ok(Err(join_err)) => {
+            // The spawned RPC task panicked (should not happen); surface it as an
+            // RPC error rather than a timeout.
+            Err(NvimError::Rpc(format!(
+                "nvim RPC '{what}' task failed: {join_err}"
+            )))
         }
         Err(_elapsed) => {
             let elapsed = start.elapsed();
@@ -1127,6 +1387,10 @@ where
                 ?elapsed,
                 "nvim RPC '{what}' timed out after {timeout:?}"
             );
+            // Dropping `timeout(..)` here drops the inner `JoinHandle`, which
+            // DETACHES the task (it keeps running to completion in the background)
+            // so the pending response is delivered to a LIVE receiver and the io
+            // loop is not killed.
             Err(NvimError::Timeout(what, timeout))
         }
     }

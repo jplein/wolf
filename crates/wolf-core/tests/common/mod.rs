@@ -353,6 +353,20 @@ impl FlushWaiter {
     pub fn drain(&self) {
         while self.rx.try_recv().is_ok() {}
     }
+
+    /// Blocks until ANY raw wake signal arrives, returning `true` on success or
+    /// `false` after `timeout`.
+    ///
+    /// Unlike [`wait_for_flush`](Self::wait_for_flush), this does NOT require the
+    /// snapshot `seq` to advance: it observes the wake SEAM directly. It exists
+    /// for the liveness tests, where a state transition (e.g. nvim death, marked
+    /// `Dead` by the supervisor) fires a wake so the front-end can re-read
+    /// `liveness()`, but does NOT bump `seq` (it is not a redraw frame). Callers
+    /// that want to attribute the wake to a specific episode should [`drain`]
+    /// first.
+    pub fn wait_for_wake(&self, timeout: Duration) -> bool {
+        matches!(self.rx.recv_timeout(timeout), Ok(()))
+    }
 }
 
 /// Builds a `WakeFn` (`Arc<dyn Fn() + Send + Sync>`) that signals on each flush,

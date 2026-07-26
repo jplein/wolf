@@ -9,18 +9,20 @@
 
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use nvim_rs::compat::tokio::Compat;
-use nvim_rs::error::LoopError;
 use nvim_rs::{create::tokio::new_child_cmd, Neovim};
 use rmpv::Value;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{ChildStdin, Command};
 use tokio::task::JoinHandle;
 
 use crate::buffer_picker::BufInfo;
 use crate::command::COMMAND_SPECS;
-use crate::redraw::RedrawHandler;
+use crate::redraw::{RedrawHandler, WakeFn};
 
 /// Application name pinned for the captive nvim, isolating its state dirs.
 const NVIM_APPNAME: &str = "wolf";
@@ -68,6 +70,12 @@ pub struct NvimConfig {
     pub appname: String,
     /// Root for the isolated `XDG_*` dirs (a private temp dir).
     pub state_root: PathBuf,
+    /// The DURABLE, Wolf-owned, per-project swap directory (`'directory'` inside
+    /// nvim, via the `WOLF_SWAP_DIR` env var). Resolved like
+    /// [`crate::state::swap_dir_for`] so it is STABLE across respawns of the same
+    /// project (letting a fresh nvim recover a dead nvim's swap), distinct from the
+    /// ephemeral `state_root` (which still hosts the hermetic XDG isolation).
+    pub swap_dir: PathBuf,
     /// Working directory the captive nvim is launched in (so its `getcwd()`
     /// starts here rather than inheriting the host process's cwd).
     pub cwd: PathBuf,
@@ -83,9 +91,16 @@ impl NvimConfig {
     /// Builds a config from the environment: reads `WOLF_NVIM_BIN` and creates a
     /// private temp dir to host the isolated `XDG_*` state. `cwd` is the working
     /// directory the captive nvim will be launched in (see [`spawn`]).
+    ///
+    /// `swap_dir` is the DURABLE per-project swap dir ([`crate::state::swap_dir_for`]);
+    /// `None` (an unresolvable `state_dir()`) falls back to an EPHEMERAL
+    /// `state_root/swap` under the private temp dir (documented — the swap then does
+    /// not survive a process exit, but recovery within one session still works and
+    /// nothing panics).
     pub fn from_env(
         init_lua: PathBuf,
         cwd: PathBuf,
+        swap_dir: Option<PathBuf>,
         cols: u16,
         rows: u16,
     ) -> Result<Self, NvimError> {
@@ -99,12 +114,14 @@ impl NvimConfig {
             .tempdir()
             .map_err(NvimError::StateDir)?;
         let state_root = temp.path().to_path_buf();
+        let swap_dir = swap_dir.unwrap_or_else(|| state_root.join("swap"));
 
         Ok(Self {
             nvim_bin: PathBuf::from(bin),
             init_lua,
             appname: NVIM_APPNAME.to_string(),
             state_root,
+            swap_dir,
             cwd,
             initial_cols: cols,
             initial_rows: rows,
@@ -113,11 +130,25 @@ impl NvimConfig {
     }
 }
 
-/// A live captive Neovim: the RPC handle plus the io-loop join handle and child.
+/// A live captive Neovim: the RPC handle plus the child and its supervisor.
+///
+/// The io-loop join handle is MOVED into the [`supervisor`](NvimProcess::supervisor)
+/// task (which reports `Dead` on an unexpected stdout EOF); it is no longer a
+/// field here. `shutting_down` is set BEFORE any intentional exit
+/// ([`shutdown`](NvimProcess::shutdown) / [`kill_in_place`](NvimProcess::kill_in_place))
+/// so the supervisor treats that EOF as intentional and does NOT fire a crash
+/// report.
 pub struct NvimProcess {
     nvim: Neovim<Compat<ChildStdin>>,
-    io_handle: JoinHandle<Result<(), Box<LoopError>>>,
     child: tokio::process::Child,
+    /// Set to `true` before an INTENTIONAL exit (clean `qa!` or a force-kill), so
+    /// the supervisor distinguishes an intentional teardown from a crash and
+    /// stays silent (does not mark `Dead`).
+    shutting_down: Arc<AtomicBool>,
+    /// The supervisor task: owns the moved io-loop handle, awaits it, and (unless
+    /// `shutting_down`) marks the shared liveness `Dead` and fires the wake on an
+    /// unexpected death.
+    supervisor: JoinHandle<()>,
 }
 
 impl NvimProcess {
@@ -202,22 +233,26 @@ impl NvimProcess {
     /// result is extracted via [`Value::as_str`]; if it is missing or empty after
     /// trimming, returns [`NvimError::Rpc`] so the caller can fall back to a
     /// configured directory rather than rooting at an unusable path.
-    pub async fn current_dir(&self) -> Result<PathBuf, NvimError> {
-        let value = self
-            .nvim
-            .call(
-                "nvim_call_function",
-                vec![Value::from("getcwd"), Value::Array(vec![])],
-            )
-            .await
-            .map_err(|e| NvimError::Rpc(e.to_string()))?
-            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+    pub fn current_dir(
+        &self,
+    ) -> impl std::future::Future<Output = Result<PathBuf, NvimError>> + Send + 'static {
+        let nvim = self.nvim.clone();
+        async move {
+            let value = nvim
+                .call(
+                    "nvim_call_function",
+                    vec![Value::from("getcwd"), Value::Array(vec![])],
+                )
+                .await
+                .map_err(|e| NvimError::Rpc(e.to_string()))?
+                .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
 
-        match value.as_str() {
-            Some(s) if !s.trim().is_empty() => Ok(PathBuf::from(s)),
-            _ => Err(NvimError::Rpc(format!(
-                "getcwd returned no usable path: {value:?}"
-            ))),
+            match value.as_str() {
+                Some(s) if !s.trim().is_empty() => Ok(PathBuf::from(s)),
+                _ => Err(NvimError::Rpc(format!(
+                    "getcwd returned no usable path: {value:?}"
+                ))),
+            }
         }
     }
 
@@ -230,15 +265,20 @@ impl NvimProcess {
     /// The browser-preview command ([`crate::api::WolfCore::open_in_browser`]) uses
     /// this to root the loopback static-site server at the pinned file's location.
     /// An RPC error is propagated as [`NvimError::Rpc`].
-    pub async fn buffer_path(&self, bufnr: i64) -> Result<String, NvimError> {
-        let value = self
-            .nvim
-            .call("nvim_buf_get_name", vec![Value::from(bufnr)])
-            .await
-            .map_err(|e| NvimError::Rpc(e.to_string()))?
-            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+    pub fn buffer_path(
+        &self,
+        bufnr: i64,
+    ) -> impl std::future::Future<Output = Result<String, NvimError>> + Send + 'static {
+        let nvim = self.nvim.clone();
+        async move {
+            let value = nvim
+                .call("nvim_buf_get_name", vec![Value::from(bufnr)])
+                .await
+                .map_err(|e| NvimError::Rpc(e.to_string()))?
+                .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
 
-        Ok(value.as_str().unwrap_or_default().to_string())
+            Ok(value.as_str().unwrap_or_default().to_string())
+        }
     }
 
     /// Queries the captive nvim for its listed buffers, newest-used first-agnostic.
@@ -251,10 +291,13 @@ impl NvimProcess {
     /// `name` (str), `lastused` (i64), and `changed` (i64 → `modified = changed !=
     /// 0`). Malformed entries (missing `bufnr`) are skipped defensively. The caller
     /// MRU-orders + ranks these via [`crate::buffer_picker::rank_buffers`].
-    pub async fn list_buffers(&self) -> Result<Vec<BufInfo>, NvimError> {
+    pub fn list_buffers(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Vec<BufInfo>, NvimError>> + Send + 'static {
+        let nvim = self.nvim.clone();
+        async move {
         let opts = Value::Map(vec![(Value::from("buflisted"), Value::from(1))]);
-        let value = self
-            .nvim
+        let value = nvim
             .call(
                 "nvim_call_function",
                 vec![Value::from("getbufinfo"), Value::Array(vec![opts])],
@@ -307,6 +350,7 @@ impl NvimProcess {
             });
         }
         Ok(buffers)
+        }
     }
 
     /// Renders the Markdown SOURCE buffer `source_bufnr` to a themed HTML preview
@@ -318,10 +362,14 @@ impl NvimProcess {
     /// (OD5). An RPC error (e.g. an unloaded/closed buffer) is propagated as
     /// [`NvimError::Rpc`]; the caller ([`crate::api::WolfCore::render_preview`])
     /// maps that to an empty string.
-    pub async fn render_preview(&self, source_bufnr: i64) -> Result<String, NvimError> {
+    pub fn render_preview(
+        &self,
+        source_bufnr: i64,
+    ) -> impl std::future::Future<Output = Result<String, NvimError>> + Send + 'static {
         // In-app preview: full-bleed render (WidthMode::Full) — the webview FRAME
         // caps the content to the ~90-char width when the source is not full-width.
-        render_source_html(&self.nvim, source_bufnr, crate::markdown::WidthMode::Full).await
+        let nvim = self.nvim.clone();
+        async move { render_source_html(&nvim, source_bufnr, crate::markdown::WidthMode::Full).await }
     }
 
     /// Returns the number of the buffer currently being edited when it is a
@@ -333,24 +381,28 @@ impl NvimProcess {
     /// ([`crate::api::WolfCore::open_in_browser`]) uses this to PIN the source
     /// buffer the loopback server re-renders, gating on markdown the same way the
     /// in-app preview does. An RPC error is propagated as [`NvimError::Rpc`].
-    pub async fn current_markdown_bufnr(&self) -> Result<i64, NvimError> {
-        let value = self
-            .nvim
-            .call(
-                "nvim_exec_lua",
-                vec![
-                    Value::from(
-                        "return (vim.bo.filetype == 'markdown') and \
-                         vim.api.nvim_get_current_buf() or 0",
-                    ),
-                    Value::Array(vec![]),
-                ],
-            )
-            .await
-            .map_err(|e| NvimError::Rpc(e.to_string()))?
-            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+    pub fn current_markdown_bufnr(
+        &self,
+    ) -> impl std::future::Future<Output = Result<i64, NvimError>> + Send + 'static {
+        let nvim = self.nvim.clone();
+        async move {
+            let value = nvim
+                .call(
+                    "nvim_exec_lua",
+                    vec![
+                        Value::from(
+                            "return (vim.bo.filetype == 'markdown') and \
+                             vim.api.nvim_get_current_buf() or 0",
+                        ),
+                        Value::Array(vec![]),
+                    ],
+                )
+                .await
+                .map_err(|e| NvimError::Rpc(e.to_string()))?
+                .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
 
-        Ok(value.as_i64().unwrap_or_default())
+            Ok(value.as_i64().unwrap_or_default())
+        }
     }
 
     /// Opens (or reuses) the Markdown preview pane for the active source buffer and
@@ -369,21 +421,27 @@ impl NvimProcess {
     /// The helper no-ops (returns `0`) unless `&filetype == "markdown"`, else
     /// creates-or-reuses the per-source scratch buffer and returns its bufnr,
     /// decoded via [`Value::as_i64`].
-    pub async fn open_preview(&self, mode: &str) -> Result<i64, NvimError> {
-        let value = self
-            .nvim
-            .call(
-                "nvim_exec_lua",
-                vec![
-                    Value::from("return wolf_open_preview(...)"),
-                    Value::Array(vec![Value::from(mode)]),
-                ],
-            )
-            .await
-            .map_err(|e| NvimError::Rpc(e.to_string()))?
-            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+    pub fn open_preview(
+        &self,
+        mode: &str,
+    ) -> impl std::future::Future<Output = Result<i64, NvimError>> + Send + 'static {
+        let nvim = self.nvim.clone();
+        let mode = mode.to_string();
+        async move {
+            let value = nvim
+                .call(
+                    "nvim_exec_lua",
+                    vec![
+                        Value::from("return wolf_open_preview(...)"),
+                        Value::Array(vec![Value::from(mode)]),
+                    ],
+                )
+                .await
+                .map_err(|e| NvimError::Rpc(e.to_string()))?
+                .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
 
-        Ok(value.as_i64().unwrap_or_default())
+            Ok(value.as_i64().unwrap_or_default())
+        }
     }
 
     /// Navigates from the active PREVIEW pane back to its source file and returns
@@ -400,21 +458,27 @@ impl NvimProcess {
     /// [`crate::api::WolfCore::edit_source`]. The helper no-ops (returns `0`) unless
     /// the active buffer carries `b:wolf_preview_source`, else binds its source
     /// buffer and returns that source bufnr, decoded via [`Value::as_i64`].
-    pub async fn edit_source(&self, mode: &str) -> Result<i64, NvimError> {
-        let value = self
-            .nvim
-            .call(
-                "nvim_exec_lua",
-                vec![
-                    Value::from("return wolf_edit_source(...)"),
-                    Value::Array(vec![Value::from(mode)]),
-                ],
-            )
-            .await
-            .map_err(|e| NvimError::Rpc(e.to_string()))?
-            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+    pub fn edit_source(
+        &self,
+        mode: &str,
+    ) -> impl std::future::Future<Output = Result<i64, NvimError>> + Send + 'static {
+        let nvim = self.nvim.clone();
+        let mode = mode.to_string();
+        async move {
+            let value = nvim
+                .call(
+                    "nvim_exec_lua",
+                    vec![
+                        Value::from("return wolf_edit_source(...)"),
+                        Value::Array(vec![Value::from(mode)]),
+                    ],
+                )
+                .await
+                .map_err(|e| NvimError::Rpc(e.to_string()))?
+                .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
 
-        Ok(value.as_i64().unwrap_or_default())
+            Ok(value.as_i64().unwrap_or_default())
+        }
     }
 
     /// Repoints the preview window `win` at the Markdown file at absolute `path`,
@@ -434,21 +498,28 @@ impl NvimProcess {
     /// ABSOLUTE — the helper does NO relative resolution. RPC failure maps to
     /// [`NvimError::Rpc`]; the caller
     /// ([`crate::api::WolfCore::preview_file`]) maps that to `0`.
-    pub async fn preview_file(&self, win: i64, path: &str) -> Result<i64, NvimError> {
-        let value = self
-            .nvim
-            .call(
-                "nvim_exec_lua",
-                vec![
-                    Value::from("return wolf_preview_file(...)"),
-                    Value::Array(vec![Value::from(win), Value::from(path)]),
-                ],
-            )
-            .await
-            .map_err(|e| NvimError::Rpc(e.to_string()))?
-            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+    pub fn preview_file(
+        &self,
+        win: i64,
+        path: &str,
+    ) -> impl std::future::Future<Output = Result<i64, NvimError>> + Send + 'static {
+        let nvim = self.nvim.clone();
+        let path = path.to_string();
+        async move {
+            let value = nvim
+                .call(
+                    "nvim_exec_lua",
+                    vec![
+                        Value::from("return wolf_preview_file(...)"),
+                        Value::Array(vec![Value::from(win), Value::from(path)]),
+                    ],
+                )
+                .await
+                .map_err(|e| NvimError::Rpc(e.to_string()))?
+                .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
 
-        Ok(value.as_i64().unwrap_or_default())
+            Ok(value.as_i64().unwrap_or_default())
+        }
     }
 
     /// Installs the preview tracking + dirty-signal autocmds inside the captive
@@ -506,42 +577,52 @@ impl NvimProcess {
     /// is non-empty, and returns `nvim_get_current_tabpage()`. The handle is
     /// decoded via [`crate::redraw::ext_handle`] (a plain integer, or defensively
     /// a msgpack-`Ext`-wrapped integer).
-    pub async fn create_tabpage(&self, cwd: &str) -> Result<i64, NvimError> {
-        let value = self
-            .nvim
-            .call(
-                "nvim_exec_lua",
-                vec![
-                    Value::from("return wolf_create_tabpage(...)"),
-                    Value::Array(vec![Value::from(cwd)]),
-                ],
-            )
-            .await
-            .map_err(|e| NvimError::Rpc(e.to_string()))?
-            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+    pub fn create_tabpage(
+        &self,
+        cwd: &str,
+    ) -> impl std::future::Future<Output = Result<i64, NvimError>> + Send + 'static {
+        let nvim = self.nvim.clone();
+        let cwd = cwd.to_string();
+        async move {
+            let value = nvim
+                .call(
+                    "nvim_exec_lua",
+                    vec![
+                        Value::from("return wolf_create_tabpage(...)"),
+                        Value::Array(vec![Value::from(cwd)]),
+                    ],
+                )
+                .await
+                .map_err(|e| NvimError::Rpc(e.to_string()))?
+                .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
 
-        crate::redraw::ext_handle(&value).ok_or_else(|| {
-            NvimError::Rpc(format!("wolf_create_tabpage returned no handle: {value:?}"))
-        })
+            crate::redraw::ext_handle(&value).ok_or_else(|| {
+                NvimError::Rpc(format!("wolf_create_tabpage returned no handle: {value:?}"))
+            })
+        }
     }
 
     /// Returns the current tabpage's stable HANDLE via `nvim_get_current_tabpage`.
     ///
     /// The authoritative bind-time value (the first-view bind reads it right after
     /// attach); decoded via [`crate::redraw::ext_handle`].
-    pub async fn current_tabpage(&self) -> Result<i64, NvimError> {
-        let value = self
-            .nvim
-            .call("nvim_get_current_tabpage", vec![])
-            .await
-            .map_err(|e| NvimError::Rpc(e.to_string()))?
-            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+    pub fn current_tabpage(
+        &self,
+    ) -> impl std::future::Future<Output = Result<i64, NvimError>> + Send + 'static {
+        let nvim = self.nvim.clone();
+        async move {
+            let value = nvim
+                .call("nvim_get_current_tabpage", vec![])
+                .await
+                .map_err(|e| NvimError::Rpc(e.to_string()))?
+                .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
 
-        crate::redraw::ext_handle(&value).ok_or_else(|| {
-            NvimError::Rpc(format!(
-                "nvim_get_current_tabpage returned no handle: {value:?}"
-            ))
-        })
+            crate::redraw::ext_handle(&value).ok_or_else(|| {
+                NvimError::Rpc(format!(
+                    "nvim_get_current_tabpage returned no handle: {value:?}"
+                ))
+            })
+        }
     }
 
     /// Makes tabpage `handle` current via `nvim_set_current_tabpage`.
@@ -622,6 +703,50 @@ impl NvimProcess {
         Ok(())
     }
 
+    /// Installs the Tier-1 open-file mirror autocmds inside the captive nvim.
+    ///
+    /// Mirrors [`setup_tabs`](Self::setup_tabs): looks up this RPC channel's id via
+    /// `nvim_get_api_info`, then calls the `_G.wolf_setup_open_files` helper
+    /// (defined in `runtime/nvim/init.lua`) over `nvim_exec_lua`, passing the
+    /// channel id as a Lua vararg. The helper registers the `WolfOpenFiles` augroup
+    /// (`BufEnter`/`BufWinEnter`/`BufWritePost`/`BufFilePost`/`BufDelete`/`WinEnter`/
+    /// `TabEnter`/`TabNewEntered`/`TabClosed`) that `rpcnotify`s `wolf_open_files`
+    /// with a per-tabpage `[tp_handle, active_path, files[]]` list (emitting once
+    /// immediately). Core mirrors this Rust-side so the open-file set survives nvim
+    /// death, and the front-end reopens it on restart.
+    pub async fn setup_open_files(&self) -> Result<(), NvimError> {
+        let info = self
+            .nvim
+            .call("nvim_get_api_info", vec![])
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+        let chan = info
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(Value::as_i64)
+            .ok_or_else(|| {
+                NvimError::Rpc(format!(
+                    "nvim_get_api_info returned no channel id: {info:?}"
+                ))
+            })?;
+
+        let _ = self
+            .nvim
+            .call(
+                "nvim_exec_lua",
+                vec![
+                    Value::from("wolf_setup_open_files(...)"),
+                    Value::Array(vec![Value::from(chan)]),
+                ],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+        Ok(())
+    }
+
     /// Installs the per-pane view-tracking autocmds inside the captive nvim.
     ///
     /// Unlike the other `setup_*` helpers, this passes NO channel id: the
@@ -658,7 +783,9 @@ impl NvimProcess {
     ///
     /// The mode guard prevents a `y` operator-pending hang if this is invoked
     /// outside visual mode. `as_str` → `Some`, `Nil`/absent → `None`.
-    pub async fn yank_visual_selection(&self) -> Result<Option<String>, NvimError> {
+    pub fn yank_visual_selection(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Option<String>, NvimError>> + Send + 'static {
         const YANK_LUA: &str = "\
             local mode = vim.api.nvim_get_mode().mode\n\
             if mode ~= 'v' and mode ~= 'V' and mode ~= '\\22' then\n\
@@ -667,17 +794,19 @@ impl NvimProcess {
             vim.api.nvim_feedkeys('y', 'nx', false)\n\
             return vim.fn.getreg('\"')";
 
-        let value = self
-            .nvim
-            .call(
-                "nvim_exec_lua",
-                vec![Value::from(YANK_LUA), Value::Array(vec![])],
-            )
-            .await
-            .map_err(|e| NvimError::Rpc(e.to_string()))?
-            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+        let nvim = self.nvim.clone();
+        async move {
+            let value = nvim
+                .call(
+                    "nvim_exec_lua",
+                    vec![Value::from(YANK_LUA), Value::Array(vec![])],
+                )
+                .await
+                .map_err(|e| NvimError::Rpc(e.to_string()))?
+                .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
 
-        Ok(value.as_str().map(ToString::to_string))
+            Ok(value.as_str().map(ToString::to_string))
+        }
     }
 
     /// Installs the current-file tracking autocmd inside the captive nvim.
@@ -1003,6 +1132,10 @@ impl NvimProcess {
     /// (see [`crate::render::SharedSnapshot::write_async`]) and so never pins a
     /// worker thread waiting for the reader to drop.
     pub async fn shutdown(mut self) -> Result<(), NvimError> {
+        // Flag the exit as intentional FIRST, so the supervisor treats the coming
+        // stdout EOF as a clean teardown and does NOT report a crash.
+        self.shutting_down.store(true, Ordering::SeqCst);
+
         // Ask nvim to quit. nvim exits rather than replying, so bound the call and
         // ignore the result (a timeout/error just means it is already exiting).
         let _ = tokio::time::timeout(
@@ -1011,18 +1144,34 @@ impl NvimProcess {
         )
         .await;
 
-        // Give the io loop a bounded chance to finish on its own (stdout EOF when
-        // nvim exits); if it overruns, force-kill the child.
-        match tokio::time::timeout(SHUTDOWN_TIMEOUT, &mut self.io_handle).await {
-            Ok(_join) => {}
+        // Reap the child: give it a bounded chance to exit on its own (stdout EOF
+        // when nvim quits); if it overruns — e.g. a WEDGED nvim that never
+        // processed `qa!` — force-kill it so shutdown never hangs.
+        match tokio::time::timeout(SHUTDOWN_TIMEOUT, self.child.wait()).await {
+            Ok(_status) => {}
             Err(_elapsed) => {
                 let _ = self.child.start_kill();
-                self.io_handle.abort();
+                let _ = tokio::time::timeout(SHUTDOWN_TIMEOUT, self.child.wait()).await;
             }
         }
-        // Best-effort reap so we leave no zombie.
-        let _ = tokio::time::timeout(SHUTDOWN_TIMEOUT, self.child.wait()).await;
+        // The supervisor owns the io-loop handle; abort it (it is either already
+        // resolved or will never resolve now that the child is gone).
+        self.supervisor.abort();
         Ok(())
+    }
+
+    /// Force-kills the captive nvim in place (for the stall-restart path), leaving
+    /// `self` reaped but no longer usable.
+    ///
+    /// Sets `shutting_down` FIRST (so the old supervisor stays silent and does not
+    /// fire a stale `Dead` after the restart), force-kills the child, reaps it with
+    /// a bounded `child.wait()`, then aborts the supervisor. Works for a crashed OR
+    /// wedged nvim (no `qa!` round-trip that a wedged nvim would never answer).
+    pub async fn kill_in_place(&mut self) {
+        self.shutting_down.store(true, Ordering::SeqCst);
+        let _ = self.child.start_kill();
+        let _ = tokio::time::timeout(SHUTDOWN_TIMEOUT, self.child.wait()).await;
+        self.supervisor.abort();
     }
 }
 
@@ -1081,11 +1230,22 @@ pub(crate) async fn render_source_html(
 /// Spawns the captive Neovim with the given redraw handler.
 ///
 /// Launches `--embed --clean -u <init.lua> -i NONE -n`, pinning `NVIM_APPNAME`
-/// and the `XDG_*` dirs under `cfg.state_root`, and sets the child's working
-/// directory to `cfg.cwd` (so its `getcwd()` starts there rather than inheriting
-/// the host process's cwd). Returns the live process; the caller then
-/// `ui_attach`es.
-pub async fn spawn(cfg: &NvimConfig, handler: RedrawHandler) -> Result<NvimProcess, NvimError> {
+/// and the `XDG_*` dirs under `cfg.state_root`, exporting `WOLF_SWAP_DIR`
+/// (`cfg.swap_dir`, the durable per-project swap dir init.lua points `'directory'`
+/// at), and sets the child's working directory to `cfg.cwd` (so its `getcwd()`
+/// starts there rather than inheriting the host process's cwd).
+///
+/// The io-loop handle is MOVED into a supervisor task that awaits it and — unless
+/// the exit was intentional (`shutting_down`) — marks `liveness` `Dead` and fires
+/// `wake`, so a crashed nvim signals the front-end instead of freezing silently.
+/// stderr is captured and drained to the log (rather than `/dev/null`). Returns
+/// the live process; the caller then `ui_attach`es.
+pub async fn spawn(
+    cfg: &NvimConfig,
+    handler: RedrawHandler,
+    liveness: Arc<AtomicU8>,
+    wake: WakeFn,
+) -> Result<NvimProcess, NvimError> {
     let config_home = cfg.state_root.join("config");
     let data_home = cfg.state_root.join("data");
     let state_home = cfg.state_root.join("state");
@@ -1093,7 +1253,15 @@ pub async fn spawn(cfg: &NvimConfig, handler: RedrawHandler) -> Result<NvimProce
     for d in [&config_home, &data_home, &state_home, &cache_home] {
         std::fs::create_dir_all(d).map_err(NvimError::StateDir)?;
     }
+    // The durable per-project swap dir must exist before nvim points `'directory'`
+    // at it; create it best-effort (a failure just means nvim falls back).
+    std::fs::create_dir_all(&cfg.swap_dir).map_err(NvimError::StateDir)?;
 
+    // NOTE: the `-n` flag (no swap file) is DELIBERATELY omitted: it forces
+    // `'updatecount' = 0`, which disables swap files entirely — but Wolf now relies
+    // on swap files for crash recovery of unsaved edits (init.lua sets
+    // `swapfile = true` + a durable `'directory'`). Omitting `-n` keeps nvim's
+    // default `updatecount` (200) so the swap is actually written.
     let mut cmd = Command::new(&cfg.nvim_bin);
     cmd.arg("--embed")
         .arg("--clean")
@@ -1101,24 +1269,61 @@ pub async fn spawn(cfg: &NvimConfig, handler: RedrawHandler) -> Result<NvimProce
         .arg(&cfg.init_lua)
         .arg("-i")
         .arg("NONE")
-        .arg("-n")
         .env("NVIM_APPNAME", &cfg.appname)
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_DATA_HOME", &data_home)
         .env("XDG_STATE_HOME", &state_home)
         .env("XDG_CACHE_HOME", &cache_home)
+        .env("WOLF_SWAP_DIR", &cfg.swap_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     cmd.current_dir(&cfg.cwd);
 
-    let (nvim, io_handle, child) = new_child_cmd(&mut cmd, handler)
+    let (nvim, io_handle, mut child) = new_child_cmd(&mut cmd, handler)
         .await
         .map_err(NvimError::Spawn)?;
 
+    // Drain nvim's stderr to the log to EOF, so a full pipe buffer never deadlocks
+    // the child and any startup/runtime diagnostics are visible.
+    if let Some(stderr) = child.stderr.take() {
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                tracing::warn!(target: "nvim_stderr", "{line}");
+            }
+        });
+    }
+
+    // The supervisor owns the moved io-loop handle: it resolves on stdout EOF
+    // (clean OR crash). Unless the exit was intentional (`shutting_down`), that is
+    // an unexpected death — mark `Dead` and wake the front-end.
+    let shutting_down = Arc::new(AtomicBool::new(false));
+    let sup_shutting = shutting_down.clone();
+    let supervisor = tokio::spawn(async move {
+        let result = io_handle.await;
+        if sup_shutting.load(Ordering::SeqCst) {
+            // Intentional teardown: the shutdown/kill path owns the outcome.
+            return;
+        }
+        match result {
+            Ok(Ok(())) => {
+                tracing::warn!(target: "nvim_supervisor", "captive nvim exited unexpectedly");
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(target: "nvim_supervisor", "captive nvim io loop error: {e}");
+            }
+            Err(e) => {
+                tracing::warn!(target: "nvim_supervisor", "captive nvim supervisor join error: {e}");
+            }
+        }
+        crate::liveness::mark_dead(&liveness, &wake);
+    });
+
     Ok(NvimProcess {
         nvim,
-        io_handle,
         child,
+        shutting_down,
+        supervisor,
     })
 }

@@ -146,6 +146,27 @@ pub fn state_dir() -> Option<PathBuf> {
     }
 }
 
+/// Resolves the durable, Wolf-owned, per-project swap directory for `cwd`.
+///
+/// Returns `state_dir()/swap/<stable-hex-hash-of-cwd>` — a STABLE, DETERMINISTIC
+/// path derived from the (assumed already-canonical) project `cwd`, so the SAME
+/// project reuses the SAME swap dir across respawns AND across separate Wolf
+/// processes (letting a fresh nvim find a dead nvim's swap), while DISTINCT
+/// projects get distinct dirs. The hash is a plain [`std::hash::DefaultHasher`]
+/// rendered as hex — not cryptographic, just a stable, collision-unlikely name.
+///
+/// `None` only when [`state_dir`] cannot be resolved (no `WOLF_STATE_DIR`
+/// override and no home directory); [`crate::api::WolfCore::start`] then falls
+/// back to an ephemeral swap dir under the nvim state root (documented, no panic).
+#[must_use]
+pub fn swap_dir_for(cwd: &Path) -> Option<PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    cwd.hash(&mut hasher);
+    let name = format!("{:016x}", hasher.finish());
+    state_dir().map(|d| d.join("swap").join(name))
+}
+
 /// Reads `dir/state.json`, or `None` when it is absent or unusable.
 ///
 /// INFALLIBLE and STRICTLY read-only: it NEVER creates, rewrites, or deletes

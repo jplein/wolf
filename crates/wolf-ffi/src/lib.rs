@@ -47,10 +47,11 @@ use std::time::Duration;
 use wolf_core::{
     rank_buffers, rank_matches_top_n, rank_palette, Appearance, BufInfo, BufferRow, Cmdline,
     Command, CommandMru, CoreConfig, CursorShape, FileSearch, FocusDir, Grid, HighlightTable,
-    InputEvent, Key, KeyEvent, LayoutIntent, MouseAction, MouseButton, MouseEvent, PaletteRow,
+    InputEvent, Key, KeyEvent, LayoutIntent, Liveness, MouseAction, MouseButton, MouseEvent,
+    PaletteRow,
     PaletteRowKind, PaletteWindow, PaneStatus, PreviewInfo, Pum, ResolvedStyle, Rgb,
-    ScrollDirection, ScrollEvent, SplitOrientation, StateStore, TabState, Toast, WakeFn, WinInfo,
-    WindowState, WolfCore, WolfState,
+    ScrollDirection, ScrollEvent, SplitOrientation, StateStore, TabFiles, TabState, Toast, WakeFn,
+    WinInfo, WindowState, WolfCore, WolfState,
 };
 
 // Re-export the bridge-defined transparent structs at the crate root so the Rust
@@ -291,6 +292,22 @@ mod scroll_dir {
     pub const RIGHT: u8 = 3;
 }
 
+/// The captive-nvim liveness discriminants returned by
+/// [`WolfCoreHandle::liveness`], mirroring [`wolf_core::Liveness::to_u8`]
+/// (`Alive` / `NotResponding` / `Dead` = `0` / `1` / `2`).
+///
+/// The single source of truth shared with the Swift front-end's
+/// `NvimStatusOverlayView` (which drives the "crashed" / "not responding" overlay
+/// off this value). A shut-down core reads as [`DEAD`].
+mod liveness {
+    /// The captive nvim is responding normally.
+    pub const ALIVE: u8 = 0;
+    /// The captive nvim has stalled (a synchronous RPC elapsed the timeout).
+    pub const NOT_RESPONDING: u8 = 1;
+    /// The captive nvim process has died (or the core is gone).
+    pub const DEAD: u8 = 2;
+}
+
 // swift-bridge's generated module expands into code that does not satisfy this
 // crate's stricter lints; scope a narrow allow to the bridge module only. The
 // hand-written glue below the module is held to the normal bar.
@@ -422,6 +439,22 @@ mod ffi {
         fn close_tabpage(&self, tab: i64);
         // Focuses a specific Neovim window (click-to-focus / resolved FocusDir).
         fn focus_win(&self, win: i64);
+        // The captive nvim's liveness (`mod liveness`: ALIVE / NOT_RESPONDING /
+        // DEAD), a cheap lock-free read (no RPC). DEAD when the core is gone. The
+        // front-end reads this on each wake to drive the crash/stall overlay.
+        fn liveness(&self) -> u8;
+        // Restarts the captive nvim IN PLACE after a crash/stall: force-kills the
+        // old process, respawns in the same cwd, re-runs the setup chain. Returns
+        // true on success (liveness Alive, fresh tabpage-1, empty buffer list);
+        // false when the core is gone or the respawn failed. The front-end then
+        // reopens the Tier-1 files it captured (via open_files_for_tabpage) BEFORE
+        // the restart and rebinds each view to a fresh tabpage.
+        fn restart(&self) -> bool;
+        // The Tier-1 open-file mirror for tabpage `tab` (its file-backed open
+        // buffers + active buffer), a cheap snapshot read (no RPC). The front-end
+        // captures this per view BEFORE a restart (a respawn wipes the mirror). An
+        // empty-backed `FfiOpenFiles` when the core is gone or the tab is unknown.
+        fn open_files_for_tabpage(&self, tab: i64) -> FfiOpenFiles;
         fn shutdown(&self);
         // Starts a streaming file-search session over the core's cwd, fed by the
         // registered file-search wake. Infallible: returns an empty-backed handle
@@ -578,6 +611,17 @@ mod ffi {
         // the same highlight table the frame uses (like `FfiCell`). Empty/hidden
         // when the core is gone.
         fn toast(&self) -> FfiToast;
+    }
+
+    extern "Rust" {
+        type FfiOpenFiles;
+
+        // The tabpage's active buffer's absolute path, or "" for an unnamed buffer.
+        fn active_path(&self) -> String;
+        // The file-backed buffer paths open in the tabpage (absolute), for the
+        // front-end to reopen after a restart. Empty when the core is gone / the
+        // tab is unknown. Reopen ACTIVE last so it lands focused.
+        fn files(&self) -> Vec<String>;
     }
 
     extern "Rust" {
@@ -1687,6 +1731,64 @@ impl WolfCoreHandle {
         if let Some(core) = self.core.borrow().as_ref() {
             core.focus_win(win);
         }
+    }
+
+    /// The captive nvim's liveness (`mod liveness`: `ALIVE` / `NOT_RESPONDING` /
+    /// `DEAD`), a cheap lock-free read (no RPC). `DEAD` when the core is gone. The
+    /// front-end reads this on each wake to drive the crash/stall overlay.
+    #[must_use]
+    pub fn liveness(&self) -> u8 {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return liveness::DEAD;
+        };
+        // Map through the `mod liveness` constants so the FFI discriminant module
+        // is provably the mirror of `wolf_core::Liveness` (a mismatch would fail to
+        // compile here rather than drift silently).
+        match core.liveness() {
+            Liveness::Alive => liveness::ALIVE,
+            Liveness::NotResponding => liveness::NOT_RESPONDING,
+            Liveness::Dead => liveness::DEAD,
+        }
+    }
+
+    /// Restarts the captive nvim IN PLACE after a crash/stall (via
+    /// [`WolfCore::restart_nvim`]). Returns `true` ONLY when an ACTUAL restart
+    /// happened and succeeded (post-contract: liveness `Alive`, fresh tabpage-1,
+    /// empty buffer list); `false` for a NO-OP (`Ok(false)` — a live nvim left
+    /// undisturbed, or a concurrent restart in flight), when the respawn FAILED
+    /// (logged; liveness is left `Dead`), or when the core is gone.
+    ///
+    /// The front-end drives the reopen + rebind ONLY when this returns `true`, off
+    /// the Tier-1 files it captured via
+    /// [`open_files_for_tabpage`](Self::open_files_for_tabpage) BEFORE the restart
+    /// (a respawn wipes the mirror). On `false` the front-end re-reads
+    /// [`liveness`](Self::liveness) and refreshes its overlay instead.
+    #[must_use]
+    pub fn restart(&self) -> bool {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return false;
+        };
+        match core.restart_nvim() {
+            Ok(did_restart) => did_restart,
+            Err(e) => {
+                tracing::warn!("wolf-ffi: nvim restart failed: {e}");
+                false
+            }
+        }
+    }
+
+    /// The Tier-1 open-file mirror for tabpage `tab` (its file-backed open buffers
+    /// and active buffer), a cheap snapshot read (no RPC). An empty-backed
+    /// [`FfiOpenFiles`] when the core is gone or the tab is unknown. The front-end
+    /// captures this per view BEFORE a restart (a respawn wipes the mirror) and
+    /// reopens the files afterward.
+    #[must_use]
+    pub fn open_files_for_tabpage(&self, tab: i64) -> FfiOpenFiles {
+        let borrow = self.core.borrow();
+        let mirror = borrow.as_ref().and_then(|core| core.open_files_for_tabpage(tab));
+        FfiOpenFiles::from_tab_files(mirror)
     }
 
     /// Cleanly shuts down the captive Neovim and tears down the runtime.
@@ -2802,6 +2904,53 @@ impl FfiPreview {
 /// One pane's statusbar strings — the base `filename` and the `display_path`
 /// beneath it (opaque to Swift, so its Strings are read back via accessor
 /// methods). A projection of [`wolf_core::PaneStatus`].
+/// The Tier-1 open-file mirror for one tabpage, opaque to Swift.
+///
+/// Built by [`WolfCoreHandle::open_files_for_tabpage`] from
+/// [`wolf_core::TabFiles`]: the tabpage's file-backed open buffers + its active
+/// buffer's path, as owned Strings. The front-end captures this per view BEFORE a
+/// restart and reopens `files` afterward (ACTIVE last so it lands focused).
+pub struct FfiOpenFiles {
+    active: String,
+    files: Vec<String>,
+}
+
+impl FfiOpenFiles {
+    /// The tabpage's active buffer's absolute path, or `""` for an unnamed buffer.
+    #[must_use]
+    pub fn active_path(&self) -> String {
+        self.active.clone()
+    }
+
+    /// The file-backed buffer paths open in the tabpage (absolute).
+    #[must_use]
+    pub fn files(&self) -> Vec<String> {
+        self.files.clone()
+    }
+
+    /// Projects an optional [`wolf_core::TabFiles`] into the opaque bridge type
+    /// (an empty-backed value for `None` — a gone core or unknown tabpage).
+    fn from_tab_files(mirror: Option<TabFiles>) -> Self {
+        match mirror {
+            Some(tf) => Self {
+                active: tf
+                    .active
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                files: tf
+                    .files
+                    .iter()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect(),
+            },
+            None => Self {
+                active: String::new(),
+                files: Vec::new(),
+            },
+        }
+    }
+}
+
 pub struct FfiPaneStatus {
     filename: String,
     display_path: String,
