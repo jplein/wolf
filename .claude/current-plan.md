@@ -1,207 +1,160 @@
-# Current Plan: resolve the file-search root out-of-band (drop the blocking getcwd from the picker)
+# Current plan: render the cmdline `prompt` field (rpc-timeout-plan.md §3)
 
-## Why (confirmed by repro logs)
+## Problem statement
 
-After the prior four fixes, the ORIGINAL never-recovers hang is gone. Residual:
-the ⌘O picker still fetches the cwd with a BLOCKING getcwd RPC
-(`resolve_search_root` → `block_on_rpc("current_dir", self.nvim.current_dir())`,
-api.rs:1019). When a window's nvim is wedged, every ⌘O issues a getcwd that
-blocks 5s (timeout) and piles requests into nvim's stdin (undrained during the
-wedge), so recovery has a tail proportional to the wedge length (5s sleep →
-recovers in a few seconds; 30s sleep → ~50s).
+This is the third of three fixes described in `rpc-timeout-plan.md`. The first two
+(RPC timeout backstop, `SwapExists` autocmd) are already done. This effort is the
+front-end-only UX fix: **render the cmdline `prompt` field in the macOS renderer.**
 
-Wolf ALREADY tracks nvim's cwd OUT-OF-BAND: `live_cwd()` (api.rs:874) is a cheap
-synchronous read of the `tracked_cwd` cell, already CANONICALIZED (in
-`apply_cwd`), fed by the `wolf_cwd`/`DirChanged` autocmd (redraw.rs CWD_EVENT).
-The picker asks nvim for something Wolf already knows.
+### Background (settled diagnosis, from the plan)
 
-## Goal
+When the embedded Neovim raises a dialog such as `confirm('Choose one', '&A\n&B')`,
+it arrives over TWO channels and core captures BOTH:
 
-Make `resolve_search_root` use the out-of-band `live_cwd()` instead of the
-blocking getcwd RPC, falling back to the configured `self.cwd` only when
-`live_cwd()` is `None` (before nvim first reports). Result: the ⌘O picker becomes
-fully independent of a wedged nvim — opens instantly from the last-known cwd, no
-5s stall ever, and no getcwd pile-up during a wedge. Keeps the 5s RPC timeout as
-the backstop for OTHER synchronous RPCs. Mirrors the tab_cwd out-of-band fix.
+- The dialog body (`Choose one`) → `ext_messages` `msg_show` kind `"confirm"` →
+  `Snapshot.toast`. Already rendered by `ToastView`.
+- The choice/answer line (`[A], (B): `) → `ext_cmdline` `cmdline_show` →
+  `Snapshot.cmdline`, as the `prompt` field, with `active: true`, `firstc: ""`,
+  `content: [""]`. Observed snapshot:
+  `Cmdline { active: true, firstc: "", prompt: "[A], (B): ", content: [""], pos: 0, level: 1 }`.
 
-## Design (confirmed against code)
+The `prompt` string is already present in `Snapshot.cmdline` and already crosses
+the bridge via `FfiCmdline::prompt()`. **The gap is purely in the macOS renderer:**
+`CmdlineView` (`crates/wolf-macos/Sources/WolfMacOS/CmdlineView.swift`) reads only
+`firstc()` + `text()` in `update()` and draws `firstc + text` in `draw()`, so it
+never reads or paints `prompt()`. With `firstc` and `text` both empty, the cmdline
+band is shown (`isHidden = !active` → visible) but blank — exactly the observed
+"`Choose one` shows, `[A], (B):` does not."
 
-`resolve_search_root` (api.rs:1019) becomes:
-```
-fn resolve_search_root(&self) -> PathBuf {
-    if let Some(cwd) = self.live_cwd() {
-        tracing::debug!(root = %cwd.display(), source = "live_cwd", "resolved file-search root");
-        return cwd;            // live_cwd is already canonicalized (apply_cwd)
-    }
-    let fallback = std::fs::canonicalize(&self.cwd).unwrap_or_else(|_| self.cwd.clone());
-    tracing::debug!(root = %fallback.display(), source = "configured_cwd", "resolved file-search root");
-    fallback
-}
-```
-- No `block_on_rpc`, no `nvim.current_dir()` call here → no main-thread RPC on the
-  ⌘O path.
-- `live_cwd()` = `self.tracked_cwd.read().clone()` (already canonical, None until
-  nvim first reports); per-core (per-window) so it's the right window's cwd.
-- Keep the doc comment accurate: now out-of-band, no RPC; the tracked cwd follows
-  `:cd/:lcd/:tcd` via DirChanged; last-known value used if a change is mid-flight.
+### The fix (per plan §3)
 
-## Scope / non-goals
-- Do NOT remove `NvimProcess::current_dir` — it's still used by `open_in_browser`
-  (verify: api.rs ~509). Leave that site as-is (out of scope; not the repro path).
-  Architect may NOTE whether open_in_browser should get the same treatment as a
-  future follow-up, but do not implement it here.
-- Do NOT change the 5s timeout, SwapExists, tab_cwd, observability, or traversal
-  bounding work (all landed).
+- **Render `prompt`.** In `CmdlineView.update()`, read `cmdline.prompt()`; in
+  `draw()`, prepend it to the drawn line (`prompt + firstc + text`), and include
+  its width in the caret-offset math (the `prefix` computed for the caret). No
+  core, FFI, or toast changes.
+- **Answering already works.** Keys flow via `nvim_input`; `Esc` cancels and a
+  single-key `A`/`B`/`o`/`e` answers once the prompt is visible. The remaining task
+  is presentation, not input plumbing — confirm the answering key is not swallowed
+  and the prompt clears on answer.
+- **Scope.** Neovim-ish is acceptable: the prompt text painted inline in the
+  existing cmdline band, not a native `NSAlert`.
 
-## Tests (real nvim)
-- A real-nvim test: wedge nvim with a finite `:lua vim.uv.sleep(...)` (copy
-  rpc_timeout.rs / tabpage_cwd.rs pattern), then call `start_file_search` (→
-  resolve_search_root) and assert it returns PROMPTLY (<< the 5s timeout, e.g.
-  <500ms) with the correct root from the tracked cwd — proving no getcwd block.
-  Ideally first `:cd <tempdir>` and poll `live_cwd()` so the tracked cwd is
-  populated, then wedge, then assert the search root matches the tracked cwd
-  promptly.
-- A test that after `:cd <dir>` (out-of-band), `start_file_search` roots at
-  `<dir>` (the tracked cwd is followed).
-- Confirm existing `file_search.rs` tests still pass (the healthy-path root is now
-  live_cwd instead of getcwd — should be the same value; verify no assertion
-  depended on the getcwd RPC specifically). Note `resolve_search_root` no longer
-  emits `source="getcwd"`/`"cwd_fallback"` — it emits `source="live_cwd"`/
-  `"configured_cwd"`; update any test/doc that keyed on those strings (grep).
-- See rpc_timeout.rs, tabpage_cwd.rs, file_search.rs, common/mod.rs for harness.
+### Repo conventions that shape the implementation
 
-## Docs
-- `crates/wolf-core/src/README.md` + `crates/wolf-core/README.md`: update
-  `resolve_search_root`/`start_file_search` to describe the out-of-band cwd
-  resolution (no RPC); note the picker is now wedge-independent. prettier.
+- Pure, AppKit-free display/decision logic lives in the Foundation-only
+  `WolfKeyMap` module as a "seam" (`enum` namespace with static funcs), unit tested
+  headlessly in `crates/wolf-macos/Tests/WolfKeyMapTests/`. See `PaletteSeam.swift`
+  / `PaletteSeamTests.swift` for the pattern. Views in `WolfMacOS` import
+  `WolfKeyMap` and consume the seam. `CmdlineView` currently has an inline
+  `bytePrefix` static and inline `firstc + text` composition; the testable analog
+  should be a `CmdlineSeam` covering line composition + caret-prefix.
 
-## Architect's detailed plan (authoritative)
+### Tests (per plan §3)
 
-### Source (api.rs) — coder
-- Rewrite `resolve_search_root` (api.rs:1019-1041) body: if `self.live_cwd()` is
-  `Some(cwd)` → `debug!(root=%cwd.display(), source="live_cwd", ...)`, return cwd
-  (NO re-canonicalize — live_cwd is already canonical via `apply_cwd`
-  redraw.rs:663). Else `fallback = canonicalize(self.cwd).unwrap_or(self.cwd
-  .clone())`, `debug!(source="configured_cwd", ...)`, return. Remove the
-  `block_on_rpc`/`nvim.current_dir()` call and the `warn!`. Signature UNCHANGED
-  (`fn resolve_search_root(&self) -> PathBuf` — NO `#[must_use]`, it doesn't have
-  one today; architect corrected the sketch). Rewrite the doc comment (out-of-band,
-  no RPC, follows :cd/:lcd/:tcd via wolf_cwd, last-known if mid-flight, self.cwd
-  only before first report, wedge-independent).
-- Update stale getcwd-mentioning doc comments in api.rs: `start_file_search`
-  (~921-927), `WolfCore.cwd` field (~185-186), `CoreConfig.cwd` (~98-101).
-- Do NOT delete `NvimProcess::current_dir` — still used by `open_in_browser`
-  (api.rs:522). Do NOT touch open_in_browser (out of scope; note as future
-  follow-up only).
-- Add the `search_root_out_of_band` rust_test Bazel target (mirror `tabpage_cwd`
-  BUILD.bazel:646-668).
+- A Swift unit test (the pure-view analog of the existing seam tests) that feeds a
+  cmdline-shaped value with `active=true`, empty `firstc`/`text`, non-empty
+  `prompt` and asserts the composed/rendered line contains the prompt.
+- Optionally a core-side assertion (already true today) that `confirm(...)` yields
+  `cmdline.prompt == "[A], (B): "` to pin the contract the view depends on.
 
-### Log-string migration
-`source="getcwd"`→`"live_cwd"`, `source="cwd_fallback"` (was warn!)→
-`"configured_cwd"` (now debug!). No test/assertion keys on these (verified); only
-docs/comments reference them.
+### Docs to update
 
-### Behavior equivalence
-Healthy case: live_cwd == the old getcwd value (both nvim cwd, both canonical).
-Only diff: a :cd whose wolf_cwd notify hasn't landed yet → picker uses previous
-cwd for that one invocation. Acceptable (last-known is fine for a picker; during
-a wedge the old getcwd returned nothing anyway).
+- Any README describing `CmdlineView` / the cmdline render surface — note that
+  `prompt` is now painted inline. `crates/wolf-ffi/README.md` already documents
+  `FfiCmdline::prompt()` (no change expected there beyond verification).
 
-## Tests (test-writer)
-### NEW `crates/wolf-core/tests/search_root_out_of_band.rs` (real nvim; mirror
-`tabpage_cwd.rs` wedge/poll harness; `mod common`):
-1. `file_search_root_is_out_of_band_and_prompt_when_wedged`: start core (NO
-   WOLF_RPC_TIMEOUT_MS); `:cd <tempdir>` via input pump; `poll_until`
-   `core.live_cwd()==Some(canon(tempdir))`; put a sentinel file (e.g.
-   `wedged_sentinel.md`) in tempdir; WEDGE nvim (`:lua vim.uv.sleep(1500)` +
-   ~200ms settle); time `core.start_file_search(wake)` → assert returns <500ms;
-   poll the FileSearch to complete and assert entries CONTAIN `wedged_sentinel.md`
-   (proves root = tracked cwd, not stale/fallback). Wait out the sleep,
-   `shutdown()`. Copy the widen-never-tighten timing note.
-2. `file_search_root_follows_cd_out_of_band` (no wedge): core in dir A (sentinel
-   `only_in_a.md`); `:cd <B>` (with `alpha.md`); poll `live_cwd()==canon(B)`;
-   `start_file_search` → entries include `alpha.md`, NOT `only_in_a.md`.
-Copy a local `poll_until` + `poll_until_complete` from tabpage_cwd.rs/file_search.rs.
+---
 
-### CRITICAL — update existing `file_search.rs` (flaky-race fix)
-`file_search_root_follows_nvim_cd` (~551) and `mru_seed_follows_nvim_cd` (~641)
-`:cd <B>` then `wait_for_flush` then `start_file_search`. After this change the
-root+seed come from `tracked_cwd` (fed by the `wolf_cwd` notify, which fires NO
-wake), so `wait_for_flush` (keys on seq) does NOT guarantee the cwd landed → add
-`poll_until(core.live_cwd().as_deref()==Some(canon_b.as_path()))` between the
-flush and `start_file_search` (add a small local `poll_until` — file_search.rs
-has none). `file_search_root_defaults_to_cfg_cwd_without_cd` (~605) needs NO poll
-(fallback==cfg.cwd==A either way). Reword `getcwd` prose comments (file_search.rs
-~575/601) to "tracked live_cwd()".
+## Architect's plan (authoritative)
 
-### Comment-only update `rpc_timeout.rs`
-start_file_search/resolve_search_root is now out-of-band (no RPC) — update the
-module docstring (~13-14) + comments (~67/68/92) to say `current_tabpage`
-(api.rs:719) is the remaining real RPC-timeout demo; the start_file_search
-`<RETURN_BOUND` assertion stays valid (now even faster). No assertion change.
+### Seam design — NEW `crates/wolf-macos/Sources/WolfKeyMap/CmdlineSeam.swift`
 
-## Docs (technical-writer)
-- `crates/wolf-core/src/README.md`: observability para ~364/366/368 — drop
-  `resolve_search_root` from the guarded-call-site list, count 13→12, remove the
-  "start_file_search covered transitively" claim, rewrite the start_file_search
-  root sentence (live_cwd, no RPC), migrate the source= strings.
-- `crates/wolf-core/README.md`: ~71 (start_file_search bullet), ~87 (CoreConfig
-  cwd) — out-of-band live_cwd, fallback only before first report.
-- `crates/wolf-core/tests/README.md`: ~46 (search-root test) + mention the new
-  wedge-independence test.
-- prettier --write all edited Markdown.
+`public enum CmdlineSeam` namespace, `import Foundation` only, mirrors `PaletteSeam.swift`.
+Three pure static funcs (scalars only — NOT `FfiCmdline`, which can't be built headlessly):
+
+- `static func composedLine(prompt: String, firstc: String, text: String) -> String`
+  → `prompt + firstc + text`. Empty prompt ⇒ identical to today's `firstc + text`.
+- `static func caretPrefix(prompt: String, firstc: String, text: String, byteCount: Int) -> String`
+  → `prompt + firstc + bytePrefix(of: text, byteCount:)`. Prompt width included so caret sits after it.
+- `static func bytePrefix(of s: String, byteCount: Int) -> String`
+  → moved VERBATIM from `CmdlineView.bytePrefix` (CmdlineView.swift:116-121), made `public`.
+
+`caretPrefix` MUST be defined in terms of `bytePrefix` (single tested impl backs caret math).
+
+### View changes
+
+**`Sources/WolfMacOS/CmdlineView.swift`** (globbed — no BUILD edit):
+- Add `private var prompt: String = ""` in the "Latest projected state" block (after line 33).
+- `update()` (~72-82): after `firstc = cmdline.firstc().toString()` add `prompt = cmdline.prompt().toString()`; update doc comment.
+- `draw()` line 99: `let line = CmdlineSeam.composedLine(prompt: prompt, firstc: firstc, text: text)`.
+- `draw()` line 106: `let prefix = CmdlineSeam.caretPrefix(prompt: prompt, firstc: firstc, text: text, byteCount: pos)`.
+- DELETE the static `bytePrefix` (lines 116-121) — now in the seam.
+- Update file header (3-6) + class doc (19-22) to say it paints `prompt + firstc + text`.
+
+**`Sources/WolfMacOS/PaneContainerView.swift` line 858** (SECOND `bytePrefix` caller!):
+- Replace `CmdlineView.bytePrefix(...)` → `CmdlineSeam.bytePrefix(...)`. Pure relocation.
+- Do NOT add prompt to `pumAnchorX` — out of scope (no completion popup on a `confirm()` dialog).
+
+### BUILD.bazel (explicit `srcs` lists, NOT globs — COder makes these edits)
+- `wolf_key_map.srcs` (50-84): add `"Sources/WolfKeyMap/CmdlineSeam.swift"` (alphabetical: between Cell… and Command…).
+- `WolfKeyMapTests.srcs` (235-265): add `"Tests/WolfKeyMapTests/CmdlineSeamTests.swift"` (between CellMetricsMathTests and CommandSeamTests).
+
+### Tests — NEW `Tests/WolfKeyMapTests/CmdlineSeamTests.swift`
+Mirror `PaletteSeamTests.swift` (XCTest, `@testable import WolfKeyMap`, table-driven, assert exact Strings — NOT widths).
+- `composedLine`: dialog case (`prompt="[A], (B): "`, firstc/text empty → `"[A], (B): "`); normal `:` (`""`,`":"`,`"wq"`→`":wq"`); normal `/`; prompt+text (`"Name: "`,`""`,`"bar"`→`"Name: bar"`).
+- `caretPrefix`: prompt + caret in text (`"[A], (B): "`,`""`,`"Bob"`,2 → `"[A], (B): Bo"`); normal (`""`,`":"`,`"wq"`,1→`":w"`); caret at 0 with prompt (`"P: "`,`""`,`"xyz"`,0→`"P: "`).
+- `bytePrefix`: `<=0`→`""` (incl negative); `>=len`→whole; ASCII mid (`"hello"`,3→`"hel"`); multi-byte clean boundary (`"日本"`,3→`"日"`). Skip split-boundary over-assertion.
+
+Core-side `confirm()` assertion: SKIP (already true; booting nvim is out of proportion for a front-end presentation fix).
+
+### Docs (technical-writer)
+- `Sources/README.md:59` — CmdlineView bullet: now paints `prompt + firstc + text`, stores prompt, caret from `prompt+firstc+bytePrefix`; add `CmdlineSeam.swift` seam bullet.
+- `Sources/README.md:7` — "Twenty-nine … files" → "Thirty".
+- `README.md:89` — PaneContainerView narrative: note cmdline prompt now painted inline; keep bytePrefix prose accurate after move.
+- `Tests/README.md` — add `CmdlineSeamTests.swift` section (style of PaletteSeamTests entry).
+- `crates/wolf-ffi/README.md` — verify only (already documents `FfiCmdline::prompt()`).
+- prettier --write edited Markdown; no hard line breaks in paragraphs.
+
+### Implementation order (avoid compile breaks)
+1. Create CmdlineSeam.swift. 2. BUILD: add seam to wolf_key_map.srcs. 3+4 TOGETHER: edit CmdlineView.swift (delete bytePrefix) AND PaneContainerView.swift:858. 5. Create CmdlineSeamTests.swift. 6. BUILD: add test to WolfKeyMapTests.srcs. 7. READMEs.
+
+### Verification (coder runs)
+- `bazel test //crates/wolf-macos:WolfKeyMapTests`
+- `bazel build //crates/wolf-macos:Wolf`
+- `bazel test //tools/lint:swift_format` (fix via `//tools/lint:swift_format.fix` if needed)
+- `prettier --write` on edited Markdown.
 
 ## Status
+
 - [x] architect — detailed plan
-- [x] test-writer — NEW `tests/search_root_out_of_band.rs` (2 tests:
-      `file_search_root_is_out_of_band_and_prompt_when_wedged`,
-      `file_search_root_follows_cd_out_of_band`). FLAKY-RACE FIX applied to BOTH
-      `file_search.rs` cd/seed tests (added local `poll_until` +
-      `poll_until(live_cwd()==canon_b)` before start_file_search). rpc_timeout.rs
-      comments updated (no assertion change). Coder must: rewrite
-      resolve_search_root to read live_cwd() (read guard exposes entries/complete;
-      live_cwd() -> Option<PathBuf> already canonical), add the
-      `search_root_out_of_band` Bazel target (mirror tabpage_cwd:646-668).
-- [x] coder — rewrote resolve_search_root (live_cwd, no RPC) + stale doc
-      comments + `search_root_out_of_band` Bazel target. ALL PASS:
-      search_root_out_of_band 2/2, file_search (with poll guards), rpc_timeout,
-      tabpage_cwd, //crates/wolf-ffi:all, //crates/wolf-macos:Wolf builds.
-      rustfmt+clippy+denylist clean. (copy_paste flaked under parallelism, passed
-      in isolation — pre-existing, unrelated.) NvimProcess::current_dir kept
-      (open_in_browser still uses it). FOLLOW-UP IN PROGRESS: test-writer wiring
-      `canon()` into the live_cwd equality polls (unused-canon warning; macOS
-      symlinked tempdirs need canonical comparison) → coder re-verify after.
-      (test-writer follow-up DONE: removed unused `canon`; temp_cwd() already
-      canonicalizes so live_cwd polls are canonical-vs-canonical, macOS symlink-
-      safe; warning cleared, dead-code removal can't affect the green run.)
-- [x] reviewer — APPROVED. Confirmed: (a) no RPC in resolve_search_root; (b)
-      Some branch doesn't re-canonicalize (live_cwd already canonical); (c) both
-      file_search.rs cd/seed tests got the poll_until(live_cwd()==canon_b) guard
-      (canonical-vs-canonical, macOS-safe); (d) start_file_search issues ZERO
-      nvim RPCs on the resolve path. current_dir kept (open_in_browser). Normal-
-      search equivalent; behavioral delta (mid-flight :cd) benign. NITS → tech-
-      writer: README.md:71, src/README.md:364/368 still describe getcwd (keep
-      src/README.md:186 current_dir entry — still valid for open_in_browser).
-- [x] technical-writer — updated wolf-core/README.md, wolf-core/src/README.md
-      (guarded-site count 13→12, source= strings, kept current_dir entry),
-      wolf-core/tests/README.md, wolf-ffi/README.md, wolf-macos/README.md,
-      architecture.md, build.md. Left rpc-timeout-plan.md +
-      completions-decision-report.md as historical artifacts (correct). Orch ran
-      prettier (all clean); no api.rs `///` touched so rustfmt unaffected.
+- [x] test-writer — created `Tests/WolfKeyMapTests/CmdlineSeamTests.swift`
+      (testComposedLineTable, testCaretPrefixTable, testBytePrefixTable). BUILD
+      left to coder. Won't compile until coder adds seam + BUILD srcs entries.
+- [x] coder — created CmdlineSeam.swift (composedLine/caretPrefix/bytePrefix);
+      wired both BUILD srcs entries; edited CmdlineView.swift (prompt property,
+      update() reads prompt, draw() uses seam, deleted local bytePrefix, header
+      docs); repointed PaneContainerView.swift:858 → CmdlineSeam.bytePrefix.
+      ALL PASS: WolfKeyMapTests PASSED 0.6s, `//crates/wolf-macos:Wolf` builds,
+      swift_format PASSED. No test changes recommended.
+- [x] reviewer — APPROVED. All 6 verification points pass: seam signatures exact
+      (caretPrefix delegates to bytePrefix), CmdlineView reads prompt + uses seam +
+      local bytePrefix gone, PaneContainerView repointed (no lingering
+      CmdlineView.bytePrefix, pumAnchorX left prompt-free), both BUILD srcs entries
+      present, tests match shipped signatures, front-end-only scope, caret math
+      sound. Only remaining work: README doc sync (below).
+- [x] technical-writer — updated Sources/README.md (count 29→30, new CmdlineSeam
+      bullet, rewrote CmdlineView bullet), README.md (PaneContainerView narrative:
+      prompt painted inline, pumAnchorX uses CmdlineSeam.bytePrefix), Tests/README.md
+      (new CmdlineSeamTests section). wolf-ffi/README.md verified (already correct,
+      no change). Orchestrator ran prettier --write on all three — all unchanged.
 
 ## COMPLETE ✅
 
-The ⌘O picker no longer issues ANY blocking nvim RPC on its resolve path:
-`resolve_search_root` reads the out-of-band `live_cwd()` (tracked cwd), so the
-picker opens instantly and is fully wedge-independent — removing the getcwd
-pile-up that caused the recovery tail. Regression test wedges nvim and proves
-`start_file_search` returns <500ms with the correct tracked root. Full suite
-green, app builds, rustfmt/clippy/denylist clean. NOT committed.
-
-### This branch now carries FIVE landed efforts (all uncommitted):
-1. RPC timeout backstop (5s, WOLF_RPC_TIMEOUT_MS) + SwapExists autocmd.
-2. Observability: init_tracing() (stderr, WOLF_LOG) + hot-path logs.
-3. Out-of-band per-tabpage cwd (removed the looped blocking tab_cwd RPC).
-4. Bounded file-search traversal (killed the $HOME-walk I/O storm).
-5. Out-of-band search-root resolution (removed the last blocking getcwd from ⌘O).
-Lockfiles from effort #2's repin are part of the uncommitted state.
+Fix §3 of rpc-timeout-plan.md landed: the macOS renderer now paints the cmdline
+`prompt` field inline. A `confirm()`/`input()`-style prompt's choice line (e.g.
+`[A], (B): `) — already crossing the FFI via `FfiCmdline::prompt()` but previously
+dropped by `CmdlineView` — is now composed and drawn via the new pure `CmdlineSeam`
+(`composedLine` / `caretPrefix` / `bytePrefix`), with the caret placed after the
+full prompt. Normal `:`/`/` command-line rendering is byte-identical (empty prompt).
+Front-end only — no core/FFI/toast changes. WolfKeyMapTests + Wolf build + swift_format
+all green; reviewer APPROVED; docs synced. NOT committed.

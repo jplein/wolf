@@ -50,6 +50,7 @@ swift_library(
     srcs = [
         "Sources/WolfKeyMap/AppearanceSeam.swift",
         "Sources/WolfKeyMap/CellMetricsMath.swift",
+        "Sources/WolfKeyMap/CmdlineSeam.swift",
         "Sources/WolfKeyMap/CommandSeam.swift",
         "Sources/WolfKeyMap/DrawerFocusSeam.swift",
         "Sources/WolfKeyMap/DrawerLayout.swift",
@@ -235,6 +236,7 @@ swift_test(
     srcs = [
         "Tests/WolfKeyMapTests/AppearanceSeamTests.swift",
         "Tests/WolfKeyMapTests/CellMetricsMathTests.swift",
+        "Tests/WolfKeyMapTests/CmdlineSeamTests.swift",
         "Tests/WolfKeyMapTests/CommandSeamTests.swift",
         "Tests/WolfKeyMapTests/DrawerFocusSeamTests.swift",
         "Tests/WolfKeyMapTests/DrawerLayoutTests.swift",

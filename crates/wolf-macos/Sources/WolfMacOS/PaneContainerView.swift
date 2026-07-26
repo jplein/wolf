@@ -855,7 +855,7 @@ final class PaneContainerView: NSView {
     let col = Int(pum.anchor_col())
     let prefix =
       cmdline.firstc().toString()
-      + CmdlineView.bytePrefix(of: cmdline.text().toString(), byteCount: col)
+      + CmdlineSeam.bytePrefix(of: cmdline.text().toString(), byteCount: col)
     let attrs: [NSAttributedString.Key: Any] = [.font: overlayFont(metrics: metrics)]
     return padding + (prefix as NSString).size(withAttributes: attrs).width
   }
