@@ -42,8 +42,18 @@ const GLOBAL_GRID: u64 = 1;
 /// Gap between polls while waiting for a structural change or a command.
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
+/// How long to let a (non-)event settle before asserting that something did NOT
+/// happen — long enough that a stray `close_window` command would have arrived if
+/// it were going to. Generous on purpose so the negative "refused close" assertion
+/// cannot pass by mere luck of timing. Mirrors `layout_intents.rs`'s `SETTLE`.
+const SETTLE: Duration = Duration::from_secs(1);
+
 /// Placeholder content for the temp markdown file.
 const DOC: &str = "# Commands\nbody\n";
+
+/// Distinctive text inserted before writing in the `:wq` test, so we can prove the
+/// buffer's edited contents actually reached disk.
+const WQ_MARKER: &str = "wolfwqmarker";
 
 /// Polls `core`'s snapshot until `pred` holds, draining wakes each iteration, or
 /// panics after [`FLUSH_TIMEOUT`]. `desc` describes the awaited condition.
@@ -195,6 +205,151 @@ fn ex_and_lua_faces_emit_commands() {
     assert!(
         commands.contains(&Command::NewBuffer),
         ":WolfNewBuffer must enqueue Command::NewBuffer; got {commands:?}"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// Typing `:q<CR>` on the SOLE (unmodified) pane routes through the `WolfQuit`
+/// user command's `do_quit`, whose last-pane branch fires the existing
+/// `close_window` registry command over RPC. A freshly attached core has no queued
+/// commands (no emit-on-attach), so the drained `Command::CloseWindow` can only be
+/// the one `:q` produced.
+#[test]
+fn ex_q_on_last_pane_emits_close_window() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    // No emit-on-attach: the command queue is empty right after the window settles.
+    assert!(
+        core.drain_commands().is_empty(),
+        "a freshly attached core must have NO queued commands before :q"
+    );
+
+    // `:q` on the sole unmodified pane -> last-pane branch -> close_window.
+    ex_command(&core, "q");
+    let commands = drain_until_command(&core, FLUSH_TIMEOUT, "CloseWindow from :q on the last pane");
+    assert!(
+        commands.contains(&Command::CloseWindow),
+        ":q on the sole (unmodified) pane must enqueue Command::CloseWindow; got {commands:?}"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// `:q!` on a MODIFIED sole pane must still fire `close_window`: the trailing `!`
+/// rides through the bare-`q` abbrev to `:WolfQuit!`, whose callback sees
+/// `o.bang == true` and passes `force = true`, overriding the modified-buffer
+/// guard. This exercises the FRAGILE bang path.
+#[test]
+fn ex_q_bang_forces_close_window_when_modified() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    // Modify the buffer so a plain `:q` would be refused; only the bang closes.
+    core.send_input(ch('i'));
+    core.send_input(ch('x'));
+    core.send_input(key(Key::Esc));
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
+
+    // Discard anything queued during setup so we observe only `:q!`'s effect.
+    let _ = core.drain_commands();
+
+    // `:q!` -> WolfQuit! -> force = true -> last-pane branch fires close_window.
+    ex_command(&core, "q!");
+    let commands =
+        drain_until_command(&core, FLUSH_TIMEOUT, "CloseWindow from :q! on a modified last pane");
+    assert!(
+        commands.contains(&Command::CloseWindow),
+        ":q! on a modified last pane must force Command::CloseWindow (bang reached the \
+         callback and overrode the modified-buffer guard); got {commands:?}"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// `:wq` on the sole pane writes the buffer to disk FIRST (so the distinctive
+/// inserted text lands in the file) and THEN, the buffer no longer modified, fires
+/// `close_window`. Proves the write side of the write-quit family and that the
+/// last-pane branch still closes the front-end window afterward.
+#[test]
+fn ex_wq_writes_to_disk_and_closes_window() {
+    let (core, waiter, file) = common::start_core_with_temp_md(DOC);
+    let path = file.path().to_path_buf();
+    wait_for_initial_window(&core, &waiter);
+
+    // Insert distinctive text so we can prove the edited buffer reached disk.
+    core.send_input(ch('i'));
+    for c in WQ_MARKER.chars() {
+        core.send_input(ch(c));
+    }
+    core.send_input(key(Key::Esc));
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
+
+    // Discard anything queued during setup so we observe only `:wq`'s command.
+    let _ = core.drain_commands();
+
+    // `:wq` -> WolfWriteQuit -> write then last-pane close_window.
+    ex_command(&core, "wq");
+
+    // The write is async over RPC: poll the file until the inserted text appears.
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    loop {
+        if let Ok(contents) = std::fs::read_to_string(&path) {
+            if contents.contains(WQ_MARKER) {
+                break;
+            }
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out after {FLUSH_TIMEOUT:?} waiting for :wq to write {WQ_MARKER:?} to disk"
+            );
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    // The write completed; the last-pane branch must then fire close_window.
+    let commands = drain_until_command(&core, FLUSH_TIMEOUT, "CloseWindow from :wq on the last pane");
+    assert!(
+        commands.contains(&Command::CloseWindow),
+        ":wq must close the front-end window after writing; got {commands:?}"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// A plain `:q` on a MODIFIED last pane must be REFUSED (native `:q` parity): the
+/// unsaved-changes guard surfaces an error and returns WITHOUT firing
+/// `close_window`, so no window is torn out from under unsaved edits. Mirrors the
+/// negative style of `ctrl_w_c_noop_on_last_window`.
+#[test]
+fn ex_q_refuses_modified_last_pane() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    // Modify the buffer so the unsaved-changes guard should trip.
+    core.send_input(ch('i'));
+    core.send_input(ch('x'));
+    core.send_input(key(Key::Esc));
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
+
+    // Discard anything queued during setup so we observe only `:q`'s (non-)effect.
+    let _ = core.drain_commands();
+
+    // Plain `:q` (no bang) on the modified last pane: must NOT close.
+    ex_command(&core, "q");
+
+    // Let any (erroneous) command settle, accumulating drained commands (draining
+    // is what wakes the queue side), then assert none was a close_window.
+    let mut drained: Vec<Command> = Vec::new();
+    let settle_deadline = Instant::now() + SETTLE;
+    while Instant::now() < settle_deadline {
+        drained.extend(core.drain_commands());
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    assert!(
+        !drained.contains(&Command::CloseWindow),
+        "a plain :q on a MODIFIED last pane must be refused (no close_window); got {drained:?}"
     );
 
     core.shutdown().expect("shutdown should be Ok");
