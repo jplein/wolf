@@ -161,6 +161,24 @@ final class PreviewSeamTests: XCTestCase {
       "a preview win with no prior loaded entry must reload on first bind")
   }
 
+  // MARK: - winsNeedingReload: an EMPTY loaded map reloads EVERY current win
+
+  func testEmptyLoadedReloadsEveryCurrentWin() {
+    // The exact mechanism the appearance re-pull relies on: clearing the per-window
+    // `loaded` map (an empty `[:]`) must make `winsNeedingReload` return EVERY
+    // currently-bound preview window, so a dark/light flip forces a full re-render
+    // of the freshly re-sourced nvim colorscheme colors.
+    let current: [Int64: PreviewSeam.PreviewLoad] = [
+      10: PreviewSeam.PreviewLoad(sourceBufnr: 1, sourceTick: 5),
+      11: PreviewSeam.PreviewLoad(sourceBufnr: 2, sourceTick: 6),
+      12: PreviewSeam.PreviewLoad(sourceBufnr: 3, sourceTick: 7),
+    ]
+    XCTAssertEqual(
+      Set(PreviewSeam.winsNeedingReload(current: current, loaded: [:])),
+      Set<Int64>([10, 11, 12]),
+      "with an empty loaded map every current preview window must reload (the appearance re-pull)")
+  }
+
   // MARK: - winsNeedingReload: source buffer changed at an EQUAL tick (THE regression)
 
   func testSourceBufnrChangedSameTickNeedsReload() {

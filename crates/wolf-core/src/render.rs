@@ -651,6 +651,29 @@ impl Toast {
     }
 }
 
+/// A confirm() prompt's toast messages stashed across the one-flush window
+/// between the dialog's `cmdline_hide` and a possible re-prompt `cmdline_show`.
+///
+/// A `confirm()` dialog resolving (a valid answer or `<Esc>`) and re-prompting
+/// (an invalid key) produce BYTE-IDENTICAL `cmdline_hide` batches that differ
+/// only temporally: on an invalid key Neovim re-emits a matching `cmdline_show`
+/// in a LATER flush. To distinguish the two, [`crate::redraw::cmdline_hide`]
+/// moves the confirm toast's messages here (hiding the toast so a genuine
+/// resolve shows cleared immediately), and [`crate::redraw::cmdline_show`]
+/// restores them IFF the re-prompt's prompt string matches the stashed one;
+/// otherwise the stash is dropped.
+///
+/// This is purely internal render-fold bookkeeping: it is NEVER rendered and
+/// NEVER crossed over the FFI (the FFI projects only named [`Snapshot`] fields).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PendingConfirm {
+    /// The confirm toast's messages, moved out of [`Toast::messages`] on hide.
+    pub(crate) messages: Vec<Message>,
+    /// The options-line `cmdline` prompt captured at hide time, matched against
+    /// a re-prompt's prompt to decide whether to restore.
+    pub(crate) prompt: String,
+}
+
 /// A complete, paint-ready frame of render state.
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
@@ -779,6 +802,12 @@ pub struct Snapshot {
     /// `msg_clear` / `msg_history_show`. Empty by default; cleared on the next
     /// dismissing input (Key/Mouse/Scroll — OD8) unless it is a prompt.
     pub toast: Toast,
+    /// A confirm() prompt's toast messages stashed across the one-flush window
+    /// between the dialog's `cmdline_hide` and a possible re-prompt
+    /// `cmdline_show` (see [`PendingConfirm`]). Internal render-fold bookkeeping:
+    /// it is NEVER rendered and NEVER crossed over the FFI. `None` by default and
+    /// whenever no confirm is mid-resolve.
+    pub(crate) pending_confirm: Option<PendingConfirm>,
     /// Monotonic frame sequence number, bumped on each `flush`.
     pub seq: u64,
 }
@@ -917,14 +946,17 @@ impl Snapshot {
             .map_or_else(Viewport::default, |w| w.viewport)
     }
 
-    /// Clears the message toast (empties its messages and hides it).
+    /// Clears the message toast (empties its messages and hides it), and also
+    /// drops any stashed confirm ([`Snapshot::pending_confirm`]) — a
+    /// dismiss/clear supersedes a confirm that was mid-resolve.
     ///
     /// Called from the input pump on the next dismissing input (Key/Mouse/Scroll
-    /// — OD8), gated by `!toast.is_prompt()`. This is NOT a redraw frame, so
-    /// callers do not bump `seq`.
+    /// — OD8), gated by `!toast.is_prompt()`, and from `msg_clear`. This is NOT a
+    /// redraw frame, so callers do not bump `seq`.
     pub fn clear_toast(&mut self) {
         self.toast.messages.clear();
         self.toast.visible = false;
+        self.pending_confirm = None;
     }
 
     /// Returns the grid id bound to window handle `win`, if any window maps to it.

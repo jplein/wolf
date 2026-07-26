@@ -198,6 +198,26 @@ Realizing the **live-updating Markdown preview** (OD1 = Design S: a preview pane
 
 Neither notification bumps `seq`; both wake the front-end. The rendered HTML itself is produced CORE-side by the GUI-free `wolf_core::markdown` module — `init.lua` never renders Markdown, only names the scratch buffer and reports the source + dirty tick. The channel id is passed as a Lua **vararg** (`...`), never interpolated into the code string, consistent with the other `wolf_setup_*` helpers.
 
+### Code-block syntax highlighting — `_G.wolf_highlight_code_blocks(blocks)`
+
+A **module-level** global (defined regardless of setup ordering, and NOT inside the conditional treesitter block, so it exists on EVERY platform) that backs the Markdown preview's fenced-code-block syntax highlighting. `wolf-core` (crate `nvim.rs`'s `highlight_code_blocks`) invokes it over `nvim_exec_lua("return wolf_highlight_code_blocks(...)", …)` with ONE argument — an array of `{ text, lang }` pairs (`lang` is `""` when the fence declares none) — and it highlights the WHOLE batch in one RPC round-trip, returning an array `results` of the SAME length. It takes **NO channel id** and emits **NO `rpcnotify`**: the highlight data is the return value of a single blocking call, not an out-of-band notification. See [`../../preview-code-block-syntax-highlighting-decisions.md`](../../preview-code-block-syntax-highlighting-decisions.md).
+
+**Return shape.** `results[i]` is either:
+
+- the scalar `false` — the i-th block is NOT highlightable (no/unknown language, missing parser, missing `highlights` query, a parse failure, or no resolved spans at all), OR
+- an array of fixed **7-element span tuples** `{ row, start_col, end_col, fg, bold, italic, underline }`. A span is a single-line, non-overlapping BYTE-column run: `row` is 0-based within the block text (`text` split on `"\n"`), `start_col`/`end_col` are 0-based half-open byte columns, `fg` is a packed `0xRRGGBB` integer or `-1` (no foreground), and the three attributes are Lua booleans.
+
+**The `false` sentinel.** The helper NEVER returns an empty Lua table for a block — msgpack cannot tell an empty array from an empty map — so a non-highlightable OR empty-result block is the scalar `false`, and each span is always a full 7-element array. This is the same map-vs-array ambiguity sidestep the `wolf_theme` payload uses (flat scalars + a `-1` sentinel).
+
+**Per-block work (`highlight_one(text, lang)`).** Returns `false` immediately when `lang` is nil/empty, when `vim.treesitter.get_string_parser(text, lang)` fails, when `vim.treesitter.query.get(lang, "highlights")` is nil, or on a parse failure. Otherwise it walks `query:iter_captures` over the parsed root:
+
+- **Capture → color resolution.** Each capture NAME is resolved via `pcall(vim.api.nvim_get_hl, 0, { name = "@"..name, link = false })` — `link = false` so a linked group resolves to its target's effective attributes (the same pattern `wolf_setup_theme_tracking` uses). On an EMPTY result and a DOTTED name it retries against successively trimmed prefixes (`@function.call` → `@function`), matching treesitter's group fallback. A group with no foreground AND no emphasis resolves to `nil` and is skipped (so there is never an empty `<span style="">`). Resolutions are cached per capture name.
+- **Precedence.** Captures are applied into a per-line, per-byte winner map; a later capture overwrites an incumbent when its `metadata.priority` is higher, or when priority ties and it appears later in iteration order (matching nvim's "later capture wins at equal priority"). The winning bytes are then coalesced into non-overlapping runs of one identical style; un-won bytes are plain gaps (no span emitted).
+
+Each per-block call is `pcall`-wrapped, so a runtime error degrades that block to `false` rather than failing the batch.
+
+**Platform degradation.** Because the helper is defined at module level (not inside the conditional treesitter block), it exists on Linux/cargo too — where there are no vendored parsers/queries, so `get_string_parser` / `query.get` find nothing and every block self-degrades to `false`. `wolf-core` maps that to the plain `<pre><code>` render. The rendered HTML itself is still produced CORE-side by the GUI-free `wolf_core::markdown` module; `init.lua` only supplies the per-token spans.
+
 ### Terminal drawer — `_G.wolf_toggle_terminal()`
 
 A module-level global (defined regardless of setup ordering, alongside `wolf_create_tabpage` / `wolf_close_tabpage`) that backs the **Terminal** command (id `terminal`, `:WolfTerminal`, `` ⌃` ``). Like the tabpage helpers it takes **NO channel id** and `wolf-core`'s `InputEvent::ToggleTerminal` invokes it over `nvim_exec_lua("wolf_toggle_terminal()", [])` (no args). It changes editor state directly, and — on the OPEN path — ALSO reports the new drawer window via `_G.wolf_emit_drawer` (a `wolf_layout { action = "drawer_open", win }` intent over `wolf_setup_layout`'s channel), which is what makes the drawer VISIBLE front-end-side; the HIDE path stays intent-less (the front-end observes the `nvim_win_close` via `win_close`).

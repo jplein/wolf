@@ -326,7 +326,22 @@ New integration tests under `crates/wolf-core/tests/`:
       not-wired note; BrowserPreview stale-handle limit) + SIGKILL loss-window + unnamed-buffer
       limits. `prettier --write` run by orchestrator on all 11 → all unchanged (already clean).
 
-## COMPLETE ✅ (NOT committed)
+## MERGE FROM MAIN (in progress)
+
+Merged origin/main (b5d2e99 ← abf6e2a: treesitter code-block syntax highlighting +
+confirm-prompt/toast handling). 5 conflicts hand-resolved by orchestrator:
+- `.claude/current-plan.md` → took ours.
+- `crates/wolf-core/src/redraw.rs` → import union (`PendingConfirm` + our `TabFiles`).
+- `crates/wolf-core/src/README.md` → union (our `liveness`/`Liveness` + main's markdown
+  highlight re-exports).
+- `crates/wolf-core/tests/README.md` → union (our liveness-unit clause + main's confirm-stash clause).
+- `crates/wolf-core/src/nvim.rs` `render_preview` → kept OUR `impl Future + Send + 'static`
+  signature (required by the timeout-spawn-detach) + main's highlighting doc/body-via-render_source_html.
+Auto-merged high-risk files flagged for the coder to verify semantically: init.lua (both heavily
+edited), render.rs, lib.rs, redraw.rs handlers. Merge STAGED, not yet committed — verification
+pass (build + all tests + clippy + swift-format + macOS build) running before the merge commit.
+
+## COMPLETE ✅ (pre-merge; NOT committed)
 
 Feature delivered end-to-end: detection (supervisor on the io-loop + RPC-timeout escalation) →
 three-state liveness (Alive/NotResponding/Dead) surfaced over FFI → per-Project restart
