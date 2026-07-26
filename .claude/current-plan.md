@@ -1,235 +1,211 @@
-# Current Plan: eliminate the looped blocking `tab_cwd` RPC (out-of-band per-tabpage cwd)
+# Current Plan: bound the file-search traversal (kill the $HOME-walk I/O storm)
 
-## The confirmed root cause (from a real repro log)
+## Confirmed root cause (from a full WOLF_LOG=debug repro)
 
-With `WOLF_LOG=wolf_core=debug`, wedging nvim (`:lua vim.uv.sleep(30000)`) and
-spamming ⌘O produced this after nvim wedged:
+The earlier `tab_cwd` out-of-band fix WORKED — zero `tab_cwd` lines in the whole
+log. The residual "never recovers" is a self-reinforcing disk-I/O storm:
 
 ```
-WARN current_dir timed out after 5s → source="cwd_fallback"   ← picker getcwd, now BOUNDED ✓
-WARN tab_cwd timed out after 5s → cwd_for_tabpage(1) failed
-WARN tab_cwd timed out after 5s → cwd_for_tabpage(1) failed
-WARN tab_cwd timed out after 5s → cwd_for_tabpage(1) failed
-WARN tab_cwd timed out after 5s → cwd_for_tabpage(1) failed
+current_dir timed out 5s → fallback root=/Users/jplein → spawn_traversal walking /Users/jplein   (x4, concurrent)
+… ~3.5 min of grinding …
+current_tabpage completed 24µs   ← nvim finally responsive
 ```
 
-- The RPC timeout WORKS (picker getcwd bounded at 5.001s, falls back correctly).
-- The residual "never recovers" is `cwd_for_tabpage(handle)` → the blocking
-  `tab_cwd` RPC (`nvim_exec_lua "return wolf_tab_cwd(...)"`), called REPEATEDLY on
-  the main thread (ThreadId 13), each blocking the full 5s. It's re-fired by the
-  state-snapshot walk (`snapshotNow`, per tab) + Window-menu rebuild
-  (`rebuildWindowMenu`, per window) + `otherWindows`/`controllerForCwd`, all via
-  `persistedCwd`. The 5s timeout turned an infinite hang into an infinite SEQUENCE
-  of 5s hangs — bounded but unusable.
-- Tell: it's `cwd_for_tabpage(1)` = the CURRENT tab, whose cwd is ALREADY
-  available out-of-band (cheap) via `live_cwd` / the existing `DirChanged`
-  autocmd. The code does a blocking RPC to fetch something it already has.
+Chain:
+1. A window's nvim is wedged (30s sleep). ⌘O → getcwd times out at 5s → picker
+   falls back to `self.cwd`. For a HOME-launched empty window that's `/Users/jplein`.
+2. It spawns a traversal of the ENTIRE home dir — UNBOUNDED: no depth cap, no
+   entry cap, no time budget; `hidden(false)` descends into `~/Library`,
+   `~/.cargo`, caches, every worktree (`files.rs:164-172`). Millions of files /
+   minutes / heavy disk on a dev Mac.
+3. Spamming ⌘O spawns SEVERAL concurrent full-$HOME walks (threads 31/45/46…),
+   none cancelled.
+4. Those walks saturate disk I/O → starve nvim itself → getcwd keeps timing out
+   LONG after the 30s sleep → picker falls back to $HOME AGAIN → MORE home walks.
+   Only "recovers" when the walks finally drain (~5 min).
 
-## Goal (user chose: FULL out-of-band)
+Latent even without a wedge: every empty/new window roots the picker at $HOME
+(`startEmptyStateWindow` → `Project.start(launchCwd: homeDir())`), so ⌘O there
+always walks all of $HOME.
 
-Make `cwd_for_tabpage` a cheap, lock-free SNAPSHOT READ with NO nvim RPC — the
-same out-of-band pattern already used for the current tab's cwd (`live_cwd`,
-`TrackedCwd`) and for `current_file`. Track EVERY tabpage's cwd out-of-band via
-nvim autocmds, so both current and non-current tabs are covered. The looped
-blocking disappears, and so does the wake-storm that re-fires it. Keep the 5s RPC
-timeout as the backstop for anything still synchronous.
+## Goal (user chose: BOUND THE WALK — safety net, universal, low-risk)
 
-## Existing out-of-band cwd machinery to mirror/extend (grounding)
+Make a file search INCAPABLE of running away, regardless of root:
+1. **Entry cap** — stop streaming after N entries (log truncation, no silent cap).
+2. **Wall-clock budget** — stop the walk after T seconds (log truncation).
+3. **Max depth** — a sane depth cap via `WalkBuilder::max_depth`.
+4. **Skip pathological dirs** — `~/Library`, caches, and similar huge non-project
+   trees (architect to choose the mechanism: name-based `filter_entry` extension
+   vs absolute-path skip; must not hide legit project files).
+5. **No concurrent pileup** — a superseded/closed search must cancel its walk
+   promptly, and/or cap the number of concurrent traversals per core, so repeated
+   ⌘O can't stack N full walks. Investigate why the log shows multiple concurrent
+   home walks from one window (picker close→reopen each starting a new search).
 
-- `runtime/nvim/init.lua`: `DirChanged` autocmd (~289) does
-  `vim.rpcnotify(chan, "wolf_cwd", vim.fn.getcwd())` (current tab only). The
-  `wolf_tab_cwd(handle)` lua helper (~611) returns `getcwd(-1, n)` — the current
-  BLOCKING read to be replaced.
-- Core: a `TrackedCwd` cell updated from the `wolf_cwd` notify feeds `live_cwd`
-  (cheap). Find where the `wolf_cwd` redraw/notify is handled and how the snapshot
-  is structured (`crates/wolf-core/src/redraw.rs` / `state.rs` / `api.rs`).
-- `crates/wolf-core/src/api.rs`: `cwd_for_tabpage` (~1006 area / the `tab_cwd`
-  block_on_rpc site), `live_cwd`, `resolve_search_root`. `crates/wolf-core/src/
-  nvim.rs`: `tab_cwd` (~534).
-- FFI/Swift consumers: `crates/wolf-ffi/src/lib.rs` `cwd_for_tabpage` (~1634);
-  Swift `WolfWindowController.persistedCwd` (~645), `AppDelegate.snapshotNow`
-  (~504-537, per-tab loop), `AppMenu.rebuildWindowMenu` (~264-282, per-window),
-  `otherWindows`/`controllerForCwd` (~470/478).
+Caps should be generous enough not to hurt real projects (pick sensible defaults;
+consider env overrides for tuning/testing, mirroring `WOLF_RPC_TIMEOUT_MS`).
 
-## Design sketch (architect to make concrete)
+## OUT OF SCOPE (this effort)
+- Changing that empty/home windows root the picker at $HOME (a product/UX change —
+  the user chose the pure safety-net scope). The bounding makes a home root merely
+  "large but bounded," which is sufficient to kill the storm.
+- The RPC timeout, SwapExists, observability, tab_cwd work (all landed).
 
-1. **nvim side**: on `DirChanged` AND tab lifecycle (`TabEnter`/`TabNewEntered`/
-   `TabClosed`, and the startup pass), notify core of `(tabpage_handle, cwd)` —
-   e.g. `vim.rpcnotify(chan, "wolf_tab_cwd", handle, getcwd(-1, tabnr))` — so core
-   has each tab's tab-local cwd without a blocking round-trip. Handle tab close
-   (remove from the map).
-2. **core side**: maintain a `HashMap<i64 handle, PathBuf>` (per-tabpage cwd) in
-   the shared snapshot/tracked state, updated on the notify. `cwd_for_tabpage`
-   reads it (no RPC). Decide the neutral fallback when a handle isn't yet known
-   (None, matching today's failure fallback). Keep it consistent with how
-   `live_cwd`/`TrackedCwd` are done (same locking discipline; watch
-   `await_holding_lock` clippy).
-3. **Remove** the blocking `tab_cwd` block_on_rpc from `cwd_for_tabpage` (and,
-   if now unused, the `nvim.tab_cwd` method + `wolf_tab_cwd` helper — verify no
-   other caller first).
-4. FFI/Swift `cwd_for_tabpage`/`persistedCwd` signatures should stay the same
-   (still return the cwd string) — only the core impl changes from RPC to
-   snapshot read, so no Swift change is needed beyond confirming correctness.
+## Grounding pointers
+- `crates/wolf-core/src/files.rs`: `spawn_traversal` (~150), `TRAVERSAL_BATCH`,
+  the `ignore::WalkBuilder` config (~164), `filter_entry` (~173),
+  `has_excluded_component` (~236), `is_listable_file`, `append_batch`,
+  `FileSearchState` (top of file), the `cancel: Arc<AtomicBool>` + `FileSearch`
+  Drop-cancels path.
+- `crates/wolf-core/src/api.rs`: `start_file_search` (~951, spawns the traversal),
+  `resolve_search_root` (~1006, the getcwd→`self.cwd` fallback that roots at home).
+- `WalkBuilder` supports `.max_depth(Some(n))`; the walk already checks `cancel`
+  each iteration and streams in `TRAVERSAL_BATCH` chunks.
 
-## Non-goals
-- Don't change the 5s timeout or the SwapExists autocmd.
-- Don't refactor other main-thread RPCs unless the log/architect shows they also
-  loop (the log shows ONLY current_dir (bounded) and tab_cwd (this fix)).
-
-## Test policy
-Real nvim, no mocks for nvim behavior. Must include a real-nvim test that:
-- Drives `:tcd`/`:cd` in one or more tabpages and asserts `cwd_for_tabpage`
-  reflects the change out-of-band (no RPC), including for a NON-current tab.
-- Wedges nvim (finite `vim.uv.sleep`) and asserts `cwd_for_tabpage` returns
-  PROMPTLY (does NOT block ~5s) — the regression guard for this exact bug.
-See `crates/wolf-core/tests/` (`common/mod.rs`, `file_search.rs`, `rpc_timeout.rs`)
-for harness patterns.
+## Test policy (real nvim / real FS, no mocks)
+- A test that builds a temp dir tree EXCEEDING the entry cap (or depth), starts a
+  search, and asserts the results are bounded at the cap, the search terminates
+  (marks complete/truncated), and truncation is logged — within the time budget.
+- A test that `max_depth` is respected (a file deeper than the cap is not listed).
+- A test that excluded dirs (e.g. a `Library`-named subtree) are skipped.
+- A cancellation/no-pileup test if feasible (superseded search stops walking).
+- See `crates/wolf-core/tests/file_search.rs` + `common/mod.rs` for harness.
 
 ## Architect's detailed plan (authoritative)
 
-**Approach: wholesale-replace map** (mirror `wolf_buffers`/`apply_buffers`), NOT
-per-handle upsert — auto-prunes closed tabs (TabClosed can't report the closed
-handle). Store in `Snapshot`, read on the main thread where `cwd_for_tabpage`
-already runs.
+### files.rs
+- New consts near `TRAVERSAL_BATCH` (~42): `SEARCH_MAX_ENTRIES_DEFAULT: usize =
+  50_000` (accepted/listable files), `SEARCH_BUDGET_DEFAULT: Duration =
+  from_secs(5)`, `SEARCH_MAX_DEPTH_DEFAULT: usize = 64`. Add `use
+  std::time::{Duration, Instant};`.
+- New crate-visible `SearchBounds { max_entries: usize, budget: Duration,
+  max_depth: usize, skip_dirs: HashSet<PathBuf> }` + `pub(crate) fn from_env()`
+  reading `WOLF_SEARCH_MAX_ENTRIES` / `WOLF_SEARCH_BUDGET_MS` /
+  `WOLF_SEARCH_MAX_DEPTH` via the api.rs:233 guard pattern
+  (`.ok().and_then(parse).filter(|&n| n>0).map(..).unwrap_or(DEFAULT)`);
+  `skip_dirs` empty (caller populates).
+- `FileSearchState`: add `pub truncated: bool` (doc: complete-but-not-exhaustive);
+  `seeded()` sets false.
+- `spawn_traversal` (~150): add ONE `bounds: SearchBounds` param (struct, not 3
+  scalars → avoids `too_many_arguments`). In the closure: `let started =
+  Instant::now(); let mut accepted = 0usize; let mut truncated = false;`.
+  `WalkBuilder`: add `.max_depth(Some(bounds.max_depth))`. Extend `filter_entry`
+  (keep `.git`/`.wolf`) to also reject `bounds.skip_dirs.contains(entry.path())`
+  (move a clone of skip_dirs in). In the loop, alongside the `cancel` check: if
+  `started.elapsed() >= bounds.budget` → set truncated, `warn!` (root, budget_ms,
+  accepted), break. After `batch.push`: `accepted += 1; if accepted >=
+  bounds.max_entries` → set truncated, `warn!` (root, cap), break. Post-loop
+  `complete = !cancel.load()` (cap-truncation ⇒ cancel==false ⇒ complete==true;
+  real cancel ⇒ complete==false, truncated==false).
+- `append_batch` (~226): add `truncated: bool` param → `if truncated {
+  guard.truncated = true; }`. Mid-loop call passes false; final passes computed.
+- NOTE: max_depth pruning is invisible in the `ignore` API, so depth-limited
+  results do NOT set `truncated` (silent, like gitignore). `truncated` reflects
+  entry-cap + time-budget only. Depth test asserts via ABSENCE of a deep file.
 
-### nvim (`runtime/nvim/init.lua`)
-- Extend existing `_G.wolf_setup_tabs(chan)` (~638): add an `emit()` closure that
-  iterates `nvim_list_tabpages()`, maps each handle→number via
-  `nvim_tabpage_get_number(tp)` (pcall), reads `getcwd(-1, n)` (pcall), builds a
-  list of `[tabpage_handle, cwd]` pairs, and `vim.rpcnotify(chan, "wolf_tab_cwds",
-  list)` (payload shape like `wolf_buffers` ~260).
-- Register a 2nd autocmd in the existing `WolfTabs` augroup on `{DirChanged,
-  TabNewEntered, TabClosed}` calling `emit()`. (TabEnter not needed.) Add an
-  initial `emit()` right after the initial `wolf_tabpage` emit (~647).
-- DELETE `_G.wolf_tab_cwd(handle)` (~606-621) — dead after core switch.
-- Update the `wolf_setup_tabs` block comment. (Lua, not Markdown — no prettier.)
+### api.rs `start_file_search` (~943)
+After resolving `root`+`seed`: `let mut bounds = files::SearchBounds::from_env();`
+then populate `bounds.skip_dirs` from `canonical_home()` (~212): if `Some(home)`,
+insert `home.join("Library")`, `home.join(".Trash")`, `home.join(".cache")` (ORCH
+DECISION: KEEP this dir-skip — zero false positives, kills the ~/Library offender
+before the 5s budget). Pass `bounds` as the new final arg to `spawn_traversal`.
+Env read here (calling thread, once per search) → deterministic for tests. Extend
+the doc comment to mention caps + the 3 env vars.
 
-### core
-- `crates/wolf-core/src/render.rs`: add `pub tab_cwds: HashMap<i64, PathBuf>` to
-  `Snapshot` (after `markdown_ticks` ~707), doc mirroring `buffers`/`previews`.
-  `Snapshot` derives `Default` + uses `..Self::default()`, so no constructor/
-  struct-literal change.
-- `crates/wolf-core/src/redraw.rs`: add `const TAB_CWDS_EVENT: &str =
-  "wolf_tab_cwds";` (~after 131); add a `handle_notify` arm (~173) mirroring the
-  `BUFFERS_EVENT` arm → `self.apply_tab_cwds(args).await; (self.wake)();`; add
-  `async fn apply_tab_cwds(&self, args)` modeled byte-for-byte on `apply_buffers`
-  (453-479): decode each `[tp, dir]` (tp via `ext_handle` ~680, dir via
-  `as_str`, skip empty, `canonicalize(dir).unwrap_or(PathBuf::from(dir))`), BUILD
-  the map BEFORE taking `write_async().await` (no `await_holding_lock`), assign
-  `snap.tab_cwds = map;`, DON'T bump `seq`.
-- `crates/wolf-core/src/api.rs`: rewrite `cwd_for_tabpage` (706-714) body to
-  `self.read_snapshot().tab_cwds.get(&handle).cloned()`. SIGNATURE UNCHANGED
-  (`fn cwd_for_tabpage(&self, handle: i64) -> Option<PathBuf>`). Canonicalization
-  now in `apply_tab_cwds` so callers still get canonical paths. Update doc (no
-  longer blocks/RPC; cheap snapshot read; `None` until nvim first reports the
-  tab). Keep `#[must_use]`. `create_tabpage`/`current_tabpage` block_on_rpc sites
-  UNCHANGED (out of scope).
-- `crates/wolf-core/src/nvim.rs`: DELETE `NvimProcess::tab_cwd` (526-554) — sole
-  caller was api.rs:707 (verified). Fix the `setup_tabs` doc comment (drop
-  `wolf_tab_cwd`, mention `wolf_tab_cwds`).
+### complete vs truncated
+`complete` is NOT bridged to Swift (FFI `FfiFileSearch` lib.rs:3149-3234 exposes
+only ranked/children_of/version/rel_path_for; Swift gates on `version()`).
+`complete` consumed only by core tests' `poll_until_complete`. So truncation sets
+`complete=true` (free via `!cancel`); `truncated` is added for TEST DETERMINISM
+(assert truncation w/o log capture) + future UX. No FFI change.
 
-### FFI/Swift — NO code change
-FFI `cwd_for_tabpage` (`lib.rs` ~1634) still `None→""`; Swift `persistedCwd`
-(~645), `snapshotNow`, `rebuildWindowMenu` all handle `""` gracefully. No
-swift-bridge regen. Startup race (handle not yet in map → `None`→`""`) = same
-neutral state as the old timeout fallback. (Swift doc-comments calling it
-"blocking" at WolfWindowController.swift:641 / AppDelegate.swift:530 →
-technical-writer corrects to "snapshot read".)
+### Concurrency: NO new machinery (assessed). The caps make a never-cancelled or
+stacked walk terminate in ≤ budget (~5s), so pileup is harmless. Cancel-on-drop
+still supersedes in the common case. Distinct windows = distinct cores (fine).
+Per-core "cancel previous search"/semaphore = deliberately out of scope.
 
-### Implementation order (avoid compile breaks)
-1. render.rs field. 2. redraw.rs const+apply+arm. 3. api.rs rewrite (removes the
-nvim.tab_cwd caller). 4. nvim.rs delete tab_cwd + doc. 5. init.lua emit+autocmd,
-delete wolf_tab_cwd. 6. tests. 7. docs.
+### Docs: `crates/wolf-core/src/README.md` (files.rs section ~225-238: the 4
+bounds, `truncated`, `SearchBounds`/from_env, 3 env vars+defaults, depth pruning
+is silent), `crates/wolf-core/README.md` (~91 FileSearch bullet). prettier.
 
-### Lint: no new `#[allow]`; build-before-lock keeps `await_holding_lock` quiet;
-deleting `tab_cwd` removes dead code.
+### Impl order: 1) files.rs data (consts, SearchBounds, truncated field). 2)
+files.rs behavior (append_batch+spawn_traversal) + 3) api.rs caller — atomically.
+4) docs. 5) tests.
+
+### Lint: bundle caps into `SearchBounds` (avoid too_many_arguments); Instant in
+spawn_blocking is normal; no new #[allow].
 
 ## Tests (test-writer)
-- **Existing tests already cover correctness + must pass unchanged** (they poll):
-  `crates/wolf-core/tests/tabpages.rs::per_tabpage_cwd_including_non_current`
-  (~324; asserts current + NON-current tab cwd) and
-  `::stable_handle_survives_tabpage_renumber` (~437; asserts closed-tab →
-  `None`, which the wholesale-replace pruning delivers). Verify they don't need
-  changes.
-- **NEW regression guard** `crates/wolf-core/tests/tabpage_cwd.rs` (real nvim,
-  one `#[test]`): `attach_and_first_tabpage`→t1; `:tcd <tempdir>`; `poll_until`
-  `cwd_for_tabpage(t1)==Some(canon(dir))` (proves out-of-band populate); then
-  WEDGE nvim with finite `:lua vim.uv.sleep(1500)` (copy `rpc_timeout.rs:85-90`
-  pattern: `ch(':')`, `type_str`, `key(Enter)`, ~200ms settle); time
-  `cwd_for_tabpage(t1)` and assert `elapsed < 500ms` (THE regression guard — no
-  RPC to block) AND value still correct; `shutdown()`. NO
-  `WOLF_RPC_TIMEOUT_MS` needed (no RPC to bound). Optionally also assert a
-  NON-current tab's cwd returns promptly while wedged.
-- **FFI test robustness**: `crates/wolf-ffi/tests/tabpages.rs:259` reads
-  `cwd_for_tabpage(t2)` WITHOUT a poll (works today via on-demand RPC; fragile
-  with async arrival) — wrap it in the file's existing `poll(...)` helper.
-- Grep `tests/` for other `cwd_for_tabpage`/`tab_cwd` users needing updates.
-
-## Docs (technical-writer)
-`runtime/nvim/README.md` (drop `wolf_tab_cwd` ~129, document `wolf_tab_cwds`
-autocmd+payload), `crates/wolf-core/src/README.md` (drop `tab_cwd` ~194, add
-`Snapshot.tab_cwds`), `crates/wolf-core/README.md` (rewrite `cwd_for_tabpage`
-~75: snapshot read not blocking), `crates/wolf-ffi/README.md` (rewrite
-`cwd_for_tabpage` ~18), `crates/wolf-core/tests/README.md` (new `tabpage_cwd.rs`),
-+ the two Swift doc-comments. `prettier --write` all edited Markdown.
+NEW SEPARATE binary `crates/wolf-core/tests/file_search_bounds.rs` (isolates its
+process-global env mutations from `file_search.rs`'s 11 tests). Use a module-level
+`static BOUNDS_ENV_LOCK: std::sync::Mutex<()>` held across
+`{set_var; start_file_search}` then remove the var (caps read synchronously in
+start_file_search, so holding across that call suffices — no serial_test dep).
+Reuse `mod common;` + copy the needed `file_search.rs`-local helpers (`temp_cwd`,
+`write_file`, `search_wake`, `start_core_in`, `poll_until_complete`, `displays`,
+`rel`).
+1. `entry_cap_truncates_and_completes`: `WOLF_SEARCH_MAX_ENTRIES=10`, ~100 flat
+   `.md` files (empty MRU), poll complete, assert `complete==true`,
+   `truncated==true`, `entries.len()` bounded near cap (==10 since BATCH 256>10).
+2. `max_depth_prunes_deep_files`: `WOLF_SEARCH_MAX_DEPTH=2`; `top.md`(d1),
+   `a/mid.md`(d2), `a/b/c/deep.md`(d4); assert top+mid present, deep ABSENT.
+3. `budget_truncates_quickly`: `WOLF_SEARCH_BUDGET_MS=1`, ~2000 files; assert
+   `complete==true` && `truncated==true`, returns within timeout; assert NO exact
+   count (loose). ORCH DECISION: make robust (large tree, loose assert); if it
+   can't be made non-flaky, DROP it (entry-cap test covers the same break path).
+4. NO home-junk-skip integration test (needs a home override — verify by
+   inspection). ORCH: agreed.
+Existing `file_search.rs` (≤600 files, shallow, no env vars) unchanged — confirm
+no assertion reads `truncated` or exceeds defaults.
+Coder must add a `file_search_bounds` rust_test Bazel target (mirror `file_search`
+/ real-nvim targets: staged nvim tree, no-sandbox).
 
 ## Status
-
 - [x] architect — detailed plan
-- [x] test-writer — created `tests/tabpage_cwd.rs` (regression guard:
-      `cwd_for_tabpage_is_out_of_band_and_does_not_block_when_nvim_wedged` —
-      populates via out-of-band, wedges nvim, asserts current+non-current tab
-      cwd returns <500ms while wedged). Wrapped FFI `tests/tabpages.rs:259`
-      read in poll. Coder must match: `cwd_for_tabpage(handle)->Option<PathBuf>`
-      returning CANONICAL paths (canonicalize in `apply_tab_cwds`), `None` for
-      unknown/closed handle. ORCHESTRATOR follow-up IN PROGRESS: wrapping the
-      flagged non-polled t2 read at `tabpages.rs:365` in `poll_until` (async
-      arrival makes it race-prone).
-- [x] coder — implemented all 5 source sites + added `//crates/wolf-core:
-      tabpage_cwd` Bazel target. `NvimProcess::tab_cwd` deletion confirmed
-      callerless (remaining `tab_cwd` hits are doc/README only). Handle wire-rep
-      matches `ext_handle`/`create_tabpage`. FFI/Swift unchanged. ALL PASS:
-      tabpage_cwd, tapages (incl. per_tabpage_cwd_including_non_current +
-      stable_handle_survives_tabpage_renumber), wolf_core_lib_test,
-      //crates/wolf-core:all 25/25, //crates/wolf-ffi:all 30/30,
-      //crates/wolf-macos:Wolf builds. rustfmt+clippy clean, denylist clean.
-      Flagged for technical-writer: wolf-core/src/README.md ~182/192/194 +
-      wolf-ffi/src/README.md still describe the old blocking tab_cwd.
-- [x] reviewer — APPROVED WITH NITS. Confirmed: (a) notify name matches both
-      sides char-for-char (`wolf_tab_cwds`), (b) handle reps match (ext_handle ==
-      create_tabpage/current_tabpage == nvim_list_tabpages space), (c) main-thread
-      blocking RPC GONE (now `read_snapshot().tab_cwds.get().cloned()`).
-      apply_tab_cwds build-before-lock clean, wholesale-replace prunes closed
-      tabs, no seq bump, no autocmd feedback loop, TabEnter omission sound
-      (all cwd mutations fire DirChanged). Regression test pins the bug. NITS: all
-      docs → technical-writer (runtime/nvim/README.md:129, wolf-core/src/
-      README.md:65/192/194, wolf-core/README.md:75, 2 Swift doc-comments).
-- [x] technical-writer — synced runtime/nvim/README.md,
-      crates/wolf-core/src/README.md, crates/wolf-core/README.md,
-      crates/wolf-ffi/README.md, crates/wolf-core/tests/README.md,
-      crates/wolf-macos/{README.md,Sources/README.md}, + the 2 Swift doc-comments
-      (WolfWindowController.swift, AppDelegate.swift). All verified against source.
-      Orchestrator ran `prettier --write` (all clean) + `//tools/lint:swift_format`
-      PASSED (Swift doc-comment edits format-clean).
+- [x] test-writer — created `tests/file_search_bounds.rs` (3 tests:
+      `entry_cap_truncates_and_completes`, `max_depth_prunes_deep_files`,
+      `budget_truncates_quickly`) with a `BOUNDS_ENV_LOCK` mutex + bare `set_var`
+      (crate not on 2024 edition; mirrors rpc_timeout.rs). CODER CONTRACT: read
+      guard must expose `entries`, `complete`, `version`, NEW `truncated: bool`;
+      `truncated` visible true in the SAME guard where `complete` first true;
+      `from_env()` read SYNCHRONOUSLY in `start_file_search` (not the spawned
+      thread) or the lock-then-remove races; entry cap counts ACCEPTED files;
+      `max_depth(Some(n))` uses ignore's root=depth-0 convention (root children =
+      depth 1). Copied file_search.rs-local helpers locally. Coder MUST add the
+      `file_search_bounds` rust_test Bazel target.
+- [x] coder — implemented files.rs (consts, SearchBounds/from_env, truncated
+      field, bounded spawn_traversal + append_batch) + api.rs (from_env on calling
+      thread, skip_dirs from canonical_home) + `file_search_bounds` Bazel target.
+      ALL PASS: file_search_bounds 3/3, file_search unchanged, //crates/wolf-core:
+      all, //crates/wolf-ffi:all, //crates/wolf-macos:Wolf builds. rustfmt+clippy
+      clean (no too_many_arguments — bundled into SearchBounds), denylist clean.
+      Depth convention matched (no off-by-one); budget test no flake this run.
+- [x] reviewer — APPROVED. Confirmed: (a) truncation → complete==true &&
+      truncated==true, real cancel → neither; (b) from_env on calling thread
+      (api.rs:966); (c) $HOME walk bounded on all axes (entries/time/depth +
+      ~/Library/.cache/.Trash skip) → storm + feedback loop broken. No off-by-one
+      (accepted>=cap after push; 0/invalid→default via >0 filter); skip_dirs
+      match canonical paths; 6 args (no too_many_arguments); no await_holding_lock.
+      Benign edge (cancel same iter after ≥5s → complete=false,truncated=true):
+      ORCH ACCEPTED as-is (vanishingly rare, no consumer depends). NITS → tech-
+      writer: FileSearchReadGuard doc (files.rs:165) omits `truncated`; READMEs.
+- [x] technical-writer — documented the bounds/env-vars/truncated in
+      crates/wolf-core/src/README.md + crates/wolf-core/README.md +
+      crates/wolf-core/tests/README.md, and fixed the FileSearchReadGuard doc
+      nit (files.rs). Orchestrator ran prettier (all clean) + rustfmt_core PASSED.
 
 ## COMPLETE ✅
 
-The confirmed "never recovers" hang is fixed at the root: `cwd_for_tabpage` is now
-a lock-scoped snapshot read fed out-of-band by the `wolf_tab_cwds` notification —
-NO main-thread nvim RPC, so the repeated 5s-blocking `tab_cwd` from the repro log
-is eliminated. Regression test (`tabpage_cwd.rs`) wedges nvim and proves prompt
-(<500ms) return for current AND non-current tabs. Full suite green
-(//crates/wolf-core:all, //crates/wolf-ffi:all), app builds, rustfmt/clippy/swift-
-format/denylist clean. NOT committed. Lockfiles from the observability effort's
-repin remain part of the uncommitted branch state.
+The unbounded $HOME-walk I/O storm — the confirmed cause of "never recovers" — is
+fixed: every file search is now capped (50k entries / 5s / depth 64, env-tunable
+via WOLF_SEARCH_MAX_ENTRIES / WOLF_SEARCH_BUDGET_MS / WOLF_SEARCH_MAX_DEPTH) and
+prunes ~/Library, ~/.cache, ~/.Trash. No walk can run more than ~5s, so it can't
+starve nvim or feed back into repeated home walks. Regression tests pin all three
+bounds. Full suite green, app builds, rustfmt/clippy/denylist clean. NOT committed.
 
-### This branch now carries three landed efforts (all uncommitted):
+### This branch now carries FOUR landed efforts (all uncommitted):
 1. RPC timeout backstop (5s, WOLF_RPC_TIMEOUT_MS) + SwapExists autocmd.
-2. Observability: `wolf_core::init_tracing()` (stderr, WOLF_LOG) + hot-path logs.
-3. Out-of-band per-tabpage cwd — the actual hang fix.
-
-### User's next step
-Rebuild + rerun the reliable repro (`:lua vim.uv.sleep(30000)`, spam ⌘O) — the
-serial 5s `tab_cwd` freezes should be gone. `WOLF_LOG=wolf_core=debug` should now
-show NO `tab_cwd` timeouts (only the bounded picker `current_dir` if the picker
-itself is used while wedged).
+2. Observability: init_tracing() (stderr, WOLF_LOG) + hot-path logs.
+3. Out-of-band per-tabpage cwd (removed the looped blocking tab_cwd RPC).
+4. Bounded file-search traversal (this effort).
+Lockfiles from effort #2's repin are part of the uncommitted state.

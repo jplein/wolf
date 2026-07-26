@@ -31,6 +31,7 @@ use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use parking_lot::{ArcRwLockReadGuard, RawRwLock, RwLock};
 
@@ -40,6 +41,74 @@ use crate::redraw::WakeFn;
 /// state (and a wake fired). Keeps lock hold-times short while still streaming
 /// results to the UI promptly.
 const TRAVERSAL_BATCH: usize = 256;
+
+/// Default cap on the number of listable files a single traversal will stream
+/// before it stops early (marking the result [`FileSearchState::truncated`]).
+/// Generous enough not to hurt real projects; overridable via
+/// `WOLF_SEARCH_MAX_ENTRIES`.
+const SEARCH_MAX_ENTRIES_DEFAULT: usize = 50_000;
+
+/// Default wall-clock budget for a single traversal. Once elapsed the walk stops
+/// early (marking the result [`FileSearchState::truncated`]). Overridable via
+/// `WOLF_SEARCH_BUDGET_MS`.
+const SEARCH_BUDGET_DEFAULT: Duration = Duration::from_secs(5);
+
+/// Default maximum directory depth for a single traversal (`ignore`'s
+/// convention: the root is depth 0, so a file directly in the root is depth 1).
+/// Overridable via `WOLF_SEARCH_MAX_DEPTH`. Depth pruning is SILENT (invisible in
+/// the `ignore` API), so it does NOT set [`FileSearchState::truncated`].
+const SEARCH_MAX_DEPTH_DEFAULT: usize = 64;
+
+/// The bounds that keep a single file-search traversal from running away (e.g. a
+/// fallback walk of the entire `$HOME` tree): an entry cap, a wall-clock budget,
+/// a max depth, and a set of absolute directories to skip outright.
+///
+/// Resolved once (synchronously, on the calling thread) per search via
+/// [`SearchBounds::from_env`] and moved into the traversal closure. `skip_dirs`
+/// starts empty; the caller populates it with pathological trees (e.g.
+/// `~/Library`, `~/.cache`) that should never be walked.
+pub(crate) struct SearchBounds {
+    /// Stop streaming after this many listable files (then set `truncated`).
+    pub(crate) max_entries: usize,
+    /// Stop the walk once this much wall-clock time has elapsed (then set
+    /// `truncated`).
+    pub(crate) budget: Duration,
+    /// Maximum directory depth (`ignore`'s root=depth-0 convention).
+    pub(crate) max_depth: usize,
+    /// Absolute directories to prune outright (never descended into).
+    pub(crate) skip_dirs: HashSet<PathBuf>,
+}
+
+impl SearchBounds {
+    /// Reads the caps from the environment, falling back to the defaults on any
+    /// unset / unparsable / zero value (the `> 0` guard avoids a zero cap or a
+    /// `Duration::ZERO` instant-truncation). Mirrors the `WOLF_RPC_TIMEOUT_MS`
+    /// guard pattern in `api.rs`. `skip_dirs` starts empty (caller populates).
+    pub(crate) fn from_env() -> Self {
+        let max_entries = std::env::var("WOLF_SEARCH_MAX_ENTRIES")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(SEARCH_MAX_ENTRIES_DEFAULT);
+        let budget = std::env::var("WOLF_SEARCH_BUDGET_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|&ms| ms > 0)
+            .map(Duration::from_millis)
+            .unwrap_or(SEARCH_BUDGET_DEFAULT);
+        let max_depth = std::env::var("WOLF_SEARCH_MAX_DEPTH")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(SEARCH_MAX_DEPTH_DEFAULT);
+        Self {
+            max_entries,
+            budget,
+            max_depth,
+            skip_dirs: HashSet::new(),
+        }
+    }
+}
 
 /// A file known to the picker: an absolute `path` (used to open the file), a
 /// `display` string (the path relative to the search root, what the UI shows and
@@ -66,6 +135,11 @@ pub struct FileSearchState {
     pub entries: Vec<FileEntry>,
     /// `true` once the background traversal has finished (or will never run).
     pub complete: bool,
+    /// `true` when the walk stopped early at the entry cap or the time budget —
+    /// the result is complete but not exhaustive (more files exist under the root
+    /// than were streamed). Depth pruning does NOT set this (it is invisible in
+    /// the `ignore` API), so it reflects the entry-cap + time-budget caps only.
+    pub truncated: bool,
     /// Monotonic version, bumped on each append so readers can detect changes.
     pub version: u64,
     /// Absolute paths already emitted, for dedup across the MRU seed + traversal.
@@ -81,6 +155,7 @@ impl FileSearchState {
         Self {
             entries: seed,
             complete: false,
+            truncated: false,
             version: 1,
             seen,
         }
@@ -91,7 +166,8 @@ impl FileSearchState {
 ///
 /// Owns an `Arc` clone of the lock (so its lifetime is independent of the
 /// [`FileSearch`]); `Deref`s to [`FileSearchState`] so callers read
-/// `guard.entries`, `guard.complete`, and `guard.version` directly.
+/// `guard.entries`, `guard.complete`, `guard.truncated`, and `guard.version`
+/// directly.
 pub struct FileSearchReadGuard {
     guard: ArcRwLockReadGuard<RawRwLock, FileSearchState>,
 }
@@ -147,12 +223,21 @@ impl Drop for FileSearch {
 /// `version` and calling `wake` after the write lock is dropped); `cancel` is
 /// checked each iteration. On completion the remainder is appended, `complete`
 /// is set (unless cancelled), and a final `wake` fires.
+///
+/// The walk is BOUNDED by `bounds` (see [`SearchBounds`]) so it cannot run away
+/// on a large root (e.g. a fallback walk of the entire `$HOME` tree): it stops
+/// early at the entry cap or the wall-clock budget (logging a `warn!` and marking
+/// [`FileSearchState::truncated`] — the result stays `complete`), never descends
+/// past `max_depth`, and prunes any `skip_dirs` subtree outright. A search
+/// truncated by a cap still ends `complete` (only a real `cancel` leaves it
+/// incomplete); depth pruning is silent and does NOT set `truncated`.
 pub(crate) fn spawn_traversal(
     root: PathBuf,
     state: Arc<RwLock<FileSearchState>>,
     cancel: Arc<AtomicBool>,
     wake: WakeFn,
     handle: tokio::runtime::Handle,
+    bounds: SearchBounds,
 ) {
     handle.spawn_blocking(move || {
         tracing::debug!(root = %root.display(), "spawn_traversal walking");
@@ -161,6 +246,13 @@ pub(crate) fn spawn_traversal(
         let mut seen: HashSet<PathBuf> = state.read().seen.clone();
         let mut batch: Vec<FileEntry> = Vec::new();
 
+        let started = Instant::now();
+        let mut accepted: usize = 0;
+        let mut truncated = false;
+
+        // Absolute directories to prune outright, moved into the `filter_entry`
+        // closure (kept `Send + Sync` so `ignore` can share it across threads).
+        let skip = bounds.skip_dirs.clone();
         let walker = ignore::WalkBuilder::new(&root)
             .parents(true)
             .hidden(false)
@@ -170,13 +262,26 @@ pub(crate) fn spawn_traversal(
             .ignore(false)
             .require_git(false)
             .follow_links(false)
-            .filter_entry(|entry| {
+            .max_depth(Some(bounds.max_depth))
+            .filter_entry(move |entry| {
                 let name = entry.file_name();
-                name != OsStr::new(".git") && name != OsStr::new(".wolf")
+                name != OsStr::new(".git")
+                    && name != OsStr::new(".wolf")
+                    && !skip.contains(entry.path())
             })
             .build();
 
         for result in walker {
+            if started.elapsed() >= bounds.budget {
+                truncated = true;
+                tracing::warn!(
+                    root = %root.display(),
+                    budget_ms = bounds.budget.as_millis() as u64,
+                    accepted,
+                    "file search truncated: time budget exceeded"
+                );
+                break;
+            }
             if cancel.load(Ordering::SeqCst) {
                 break;
             }
@@ -207,28 +312,47 @@ pub(crate) fn spawn_traversal(
                 display: display_for(&root, path),
                 mru_rank: None,
             });
+            accepted += 1;
+            if accepted >= bounds.max_entries {
+                truncated = true;
+                tracing::warn!(
+                    root = %root.display(),
+                    cap = bounds.max_entries,
+                    "file search truncated: entry cap reached"
+                );
+                break;
+            }
 
             if batch.len() >= TRAVERSAL_BATCH {
-                append_batch(&state, &mut batch, false);
+                append_batch(&state, &mut batch, false, false);
                 wake();
             }
         }
 
         let complete = !cancel.load(Ordering::SeqCst);
-        append_batch(&state, &mut batch, complete);
+        append_batch(&state, &mut batch, complete, truncated);
         wake();
     });
 }
 
-/// Appends `batch` (draining it) to the shared state, bumps `version`, and (when
-/// `complete`) marks the search finished. The write lock is held only for this
-/// short, IO-free critical section and never across a wake.
-fn append_batch(state: &Arc<RwLock<FileSearchState>>, batch: &mut Vec<FileEntry>, complete: bool) {
+/// Appends `batch` (draining it) to the shared state, bumps `version`, marks the
+/// search finished when `complete`, and marks it `truncated` when the walk
+/// stopped early at a cap. The write lock is held only for this short, IO-free
+/// critical section and never across a wake.
+fn append_batch(
+    state: &Arc<RwLock<FileSearchState>>,
+    batch: &mut Vec<FileEntry>,
+    complete: bool,
+    truncated: bool,
+) {
     let mut guard = state.write();
     guard.entries.append(batch);
     guard.version += 1;
     if complete {
         guard.complete = true;
+    }
+    if truncated {
+        guard.truncated = true;
     }
 }
 

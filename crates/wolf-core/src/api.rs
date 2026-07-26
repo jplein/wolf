@@ -940,6 +940,14 @@ impl WolfCore {
     /// to a stale configured cwd). When nvim is `:cd`'d into a different project, the
     /// seed comes from that project's store — per-project MRU isolation. A failed
     /// store open is graceful (empty seed).
+    ///
+    /// The traversal is BOUNDED so it cannot run away on a large root (e.g. a
+    /// fallback walk of the whole `$HOME` tree): [`files::SearchBounds`] caps the
+    /// number of streamed entries, imposes a wall-clock budget, limits the walk
+    /// depth, and prunes pathological home subtrees (`~/Library`, `~/.Trash`,
+    /// `~/.cache`) outright. The three caps are tunable via `WOLF_SEARCH_MAX_ENTRIES`,
+    /// `WOLF_SEARCH_BUDGET_MS`, and `WOLF_SEARCH_MAX_DEPTH` (defaults 50_000 / 5s /
+    /// 64), read SYNCHRONOUSLY here on the calling thread — once per search.
     #[must_use]
     pub fn start_file_search(&self, wake: WakeFn) -> FileSearch {
         let root = self.resolve_search_root();
@@ -951,12 +959,24 @@ impl WolfCore {
         let state = Arc::new(RwLock::new(FileSearchState::seeded(seed)));
         let cancel = Arc::new(AtomicBool::new(false));
 
+        // Resolve the traversal caps synchronously on the calling thread (so tests
+        // that set the env vars around this call observe them deterministically),
+        // then prune the known pathological home subtrees so a fallback $HOME walk
+        // never even descends into `~/Library` & friends.
+        let mut bounds = files::SearchBounds::from_env();
+        if let Some(home) = canonical_home() {
+            bounds.skip_dirs.insert(home.join("Library"));
+            bounds.skip_dirs.insert(home.join(".Trash"));
+            bounds.skip_dirs.insert(home.join(".cache"));
+        }
+
         files::spawn_traversal(
             root,
             state.clone(),
             cancel.clone(),
             wake,
             self.runtime.handle().clone(),
+            bounds,
         );
 
         FileSearch::from_parts(state, cancel)
