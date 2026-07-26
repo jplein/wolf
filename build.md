@@ -297,7 +297,21 @@ To **bump the vendored nvim-treesitter plugin + compiled parsers** (bump these t
 
 If any grammar stops compiling hermetically at the new revision, apply the **drop+LOG** policy (remove it from the extension, `use_repo`, and the assembly, and record it in [`bazel/treesitter-parsers/README.md`](bazel/treesitter-parsers/README.md)'s status table) rather than blocking the bump.
 
-### Test targets
+### Running the tests
+
+To run the whole suite, let Bazel expand the target pattern rather than naming targets one by one:
+
+```sh
+bazel test //...
+```
+
+This runs every test target in the workspace. Targets tagged `manual` are deliberately excluded from wildcard expansion — the optimized `//crates/wolf-macos:WolfRelease` app build and all `//tools/lint` targets (clippy, rustfmt, swift-format) — so a plain `bazel test //...` is the standard build/test path and never pulls in an opt rebuild or the advisory linters. Run those explicitly when you want them (see [Linting and formatting](#linting-and-formatting-macos)). Scope the pattern when you only need part of the tree, e.g. `bazel test //crates/...` for the Rust + Swift crate tests or `bazel test //bazel/...` for the vendored-asset tree tests.
+
+Because Bazel does not auto-discover test files, a new `tests/*.rs` (Rust) or `*Tests.swift` (Swift) file only runs once it is wired into a target in the owning `BUILD.bazel` — see the note in [`CLAUDE.md`](CLAUDE.md). `bazel test //...` then picks it up automatically.
+
+#### Notable targets and what each covers
+
+The list below is a guide to what individual targets exercise (useful for running one in isolation); it is NOT the full set — `bazel test //...` above is authoritative for running everything.
 
 ```sh
 bazel test //bazel/nvim:nvim_version_test        # execs the bundled pinned nvim
@@ -355,7 +369,7 @@ Tests run in the **default** configuration, not `-c opt`. `bazel test -c opt //c
 
 Advisory (non-gating) lint/format targets live in `//tools/lint` and run on the macOS Bazel host: **clippy** and **rustfmt** for Rust (via the rules_rust downloaded 1.85.0 toolchain — the devShell has no standalone cargo/rustc) and **swift-format** for Swift (the host Xcode 26 binary, resolved via `xcrun --find swift-format`).
 
-These targets are **advisory**: every one is tagged `manual`, so `bazel test //crates/...` never sweeps them in and the default suite stays exactly 53/53. They are NOT run in CI gating here; existing violations are expected. A CHECK target "passing" means "the linter ran"; it may still report findings (which fail the target). See [`tools/lint/README.md`](tools/lint/README.md).
+These targets are **advisory**: every one is tagged `manual`, so a wildcard `bazel test //...` (or `//crates/...`) never sweeps them in and the standard test path stays byte-for-byte unchanged. They are NOT run in CI gating here; existing violations are expected. A CHECK target "passing" means "the linter ran"; it may still report findings (which fail the target). See [`tools/lint/README.md`](tools/lint/README.md).
 
 Each tool has a CHECK (report/fail on violations via `bazel test`) and a FIX (rewrite in place via `bazel run`):
 
