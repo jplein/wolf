@@ -226,7 +226,7 @@ The pure aggregation logic (bucketing, percentiles, the exact report layout, env
 WOLF_LOG=wolf_core=debug bazel run //crates/wolf-macos:Wolf
 ```
 
-With no `WOLF_LOG` set the default `warn` filter still surfaces the RPC-timeout `warn!` (which names the wedged RPC). `WOLF_LOG=wolf_core=debug` adds per-RPC timing and file-search root resolution (`getcwd` vs the home-relative `cwd_fallback`); `WOLF_LOG=trace` additionally shows the file-traversal batch markers. Note this is separate from `WOLF_FRAME_STATS` above (which is Swift front-end instrumentation, not `tracing`).
+With no `WOLF_LOG` set the default `warn` filter still surfaces the RPC-timeout `warn!` (which names the wedged RPC). `WOLF_LOG=wolf_core=debug` adds per-RPC timing and file-search root resolution (`source="live_cwd"` vs `source="configured_cwd"`, both `debug!` — the root is resolved out-of-band from the tracked cwd, no `getcwd` RPC); `WOLF_LOG=trace` additionally shows the file-traversal batch markers. Note this is separate from `WOLF_FRAME_STATS` above (which is Swift front-end instrumentation, not `tracing`).
 
 ### Bundled Neovim (macOS)
 

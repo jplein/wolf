@@ -667,6 +667,37 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
+# Real-nvim integration test that the file-search root is resolved OUT-OF-BAND
+# (from the tracked `live_cwd()` cell, no blocking getcwd RPC): the picker must
+# follow a `:cd` out-of-band AND resolve its root PROMPTLY even while nvim is
+# wedged (the getcwd-pile-up bug this fix removes). An EXACT mirror of the
+# `tabpage_cwd` target above: drives a REAL pinned Neovim (no mocks), stages the
+# captive `init.lua` + the pinned nvim tree as runfiles, reuses
+# `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.
+rust_test(
+    name = "search_root_out_of_band",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/search_root_out_of_band.rs",
+    ],
+    crate_root = "tests/search_root_out_of_band.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
 # Real-nvim integration test for the `SwapExists` autocmd (effort (b)): a stale
 # swap file planted next to a fixture must NOT block the open — the init.lua
 # `WolfSwap`/`SwapExists` autocmd answers `swapchoice = "e"`, so the file opens

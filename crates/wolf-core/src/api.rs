@@ -96,8 +96,8 @@ pub struct CoreConfig {
     pub rows: u16,
     /// Working directory: the FALLBACK search root + the MRU cache location
     /// (`<cwd>/.wolf/mru.sqlite`). The captive Neovim is also launched here. The
-    /// picker's LIVE search root is the captive Neovim's `getcwd()`; this is used
-    /// only when that query fails or returns an unusable path.
+    /// picker's LIVE search root is the out-of-band tracked `live_cwd()`; this
+    /// configured cwd is used only before nvim first reports its cwd.
     pub cwd: PathBuf,
 }
 
@@ -181,9 +181,9 @@ pub struct WolfCore {
     /// the handle handed out by [`WolfCore::command_mru`].
     command_mru: CommandMru,
     /// The configured working directory: the file picker's FALLBACK search root
-    /// and the MRU cache location. The live search root is the captive Neovim's
-    /// `getcwd()` (see [`WolfCore::start_file_search`]); this path is used only
-    /// when that query fails or returns an unusable path.
+    /// and the MRU cache location. The live search root is the tracked
+    /// [`live_cwd`](Self::live_cwd) (see [`WolfCore::start_file_search`]); this path
+    /// is used only before nvim first reports its cwd.
     cwd: PathBuf,
     /// The lazily-started, loopback-only browser-preview HTTP server (one per
     /// core). `None` until the user first runs the "Preview in Browser" command
@@ -919,11 +919,13 @@ impl WolfCore {
     }
 
     /// Starts a streaming file search rooted at the captive Neovim's live working
-    /// directory (`getcwd()`), falling back to the configured cwd.
+    /// directory, falling back to the configured cwd.
     ///
-    /// The traversal root is resolved via [`resolve_search_root`](Self::resolve_search_root):
-    /// it follows wherever Neovim currently is (`:cd`/`:lcd`/`:tcd`), and only if
-    /// that query fails or returns an unusable path does it fall back to the
+    /// The traversal root is resolved OUT-OF-BAND via
+    /// [`resolve_search_root`](Self::resolve_search_root) — a cheap synchronous read
+    /// of the tracked [`live_cwd`](Self::live_cwd), no nvim RPC — so it follows
+    /// wherever Neovim currently is (`:cd`/`:lcd`/`:tcd`) and never blocks on a
+    /// wedged nvim. Only before nvim first reports its cwd does it fall back to the
     /// configured `self.cwd`.
     ///
     /// The MRU cache is seeded SYNCHRONOUSLY before returning (so the very first
@@ -1003,41 +1005,38 @@ impl WolfCore {
         Ok(())
     }
 
-    /// Resolves the file-search traversal root: the captive Neovim's live working
-    /// directory (`getcwd()`), falling back to the configured `self.cwd`.
+    /// Resolves the file-search traversal root OUT-OF-BAND: the captive Neovim's
+    /// live working directory via [`live_cwd`](Self::live_cwd) (the `tracked_cwd`
+    /// cell, fed by the `wolf_cwd`/`DirChanged` notification), falling back to the
+    /// configured `self.cwd`.
     ///
-    /// A brief blocking `getcwd()` RPC is issued via
-    /// [`block_on_rpc`](Self::block_on_rpc), bounded by
-    /// [`rpc_timeout`](Self::rpc_timeout) ([`RPC_TIMEOUT_DEFAULT`],
-    /// `WOLF_RPC_TIMEOUT_MS`) — one sub-ms round-trip in the healthy case. On
-    /// success the returned path is canonicalized (keeping the raw path if
-    /// canonicalization fails — a successful `getcwd()` is a real directory) so it
-    /// lines up with the canonical paths the MRU stores. On failure — including a
-    /// [`NvimError::Timeout`] when nvim is wedged — it logs and falls back to
-    /// canonicalizing `self.cwd`, the configured root (the reproduced crash path,
-    /// now bounded rather than an unbounded main-thread hang).
+    /// No nvim RPC is issued on this path. [`live_cwd`](Self::live_cwd) is a cheap
+    /// synchronous read of the tracked-cwd cell, ALREADY canonicalized (the redraw
+    /// handler canonicalizes it in `apply_cwd` before storing), so it is returned
+    /// as-is with no further work. It follows `:cd`/`:lcd`/`:tcd`, and uses the
+    /// last-known value if a directory change is still mid-flight (the notification
+    /// has not landed yet). Only before nvim's first `wolf_cwd` emit — when
+    /// [`live_cwd`](Self::live_cwd) is still `None` — does it fall back to
+    /// canonicalizing the configured `self.cwd` (keeping the raw path if
+    /// canonicalization fails). Because it never blocks on nvim, the picker is
+    /// wedge-independent: it opens instantly from the last-known cwd even while a
+    /// window's nvim is wedged.
     fn resolve_search_root(&self) -> PathBuf {
-        match self.block_on_rpc("current_dir", self.nvim.current_dir()) {
-            Ok(p) => {
-                let resolved = std::fs::canonicalize(&p).unwrap_or(p);
-                tracing::debug!(
-                    root = %resolved.display(),
-                    source = "getcwd",
-                    "resolved file-search root"
-                );
-                resolved
-            }
-            Err(e) => {
-                let fallback =
-                    std::fs::canonicalize(&self.cwd).unwrap_or_else(|_| self.cwd.clone());
-                tracing::warn!(
-                    root = %fallback.display(),
-                    source = "cwd_fallback",
-                    "getcwd() query failed ({e}); falling back to configured cwd"
-                );
-                fallback
-            }
+        if let Some(cwd) = self.live_cwd() {
+            tracing::debug!(
+                root = %cwd.display(),
+                source = "live_cwd",
+                "resolved file-search root"
+            );
+            return cwd;
         }
+        let fallback = std::fs::canonicalize(&self.cwd).unwrap_or_else(|_| self.cwd.clone());
+        tracing::debug!(
+            root = %fallback.display(),
+            source = "configured_cwd",
+            "resolved file-search root"
+        );
+        fallback
     }
 
     /// Runs an interactive synchronous nvim RPC under the core's configured

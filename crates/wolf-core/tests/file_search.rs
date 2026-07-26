@@ -162,6 +162,32 @@ fn poll_until_complete(search: &FileSearch, wakes: &Receiver<()>) -> Vec<FileEnt
     }
 }
 
+/// Polls `pred` until it returns `true`, draining wakes each iteration, or panics
+/// after [`common::FLUSH_TIMEOUT`]. `desc` describes the awaited condition.
+///
+/// Used by the `:cd` tests to confirm the tracked `live_cwd()` landed before
+/// searching: the search root (and MRU seed) now derive from that cell, which is
+/// fed by the `wolf_cwd` notify that fires NO wake, so `wait_for_flush` (which
+/// keys on `seq`) does NOT guarantee the cwd arrived. Mirrors
+/// `tabpage_cwd.rs::poll_until`; named to avoid colliding with
+/// [`poll_until_complete`].
+fn poll_until(waiter: &common::FlushWaiter, desc: &str, mut pred: impl FnMut() -> bool) {
+    let deadline = Instant::now() + common::FLUSH_TIMEOUT;
+    loop {
+        if pred() {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out after {:?} waiting for: {desc}",
+                common::FLUSH_TIMEOUT
+            );
+        }
+        waiter.drain();
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
 /// The set of `display` strings of `entries` (traversal order is nondeterministic,
 /// so tests assert on the SET rather than a sequence).
 fn displays(entries: &[FileEntry]) -> HashSet<String> {
@@ -571,9 +597,16 @@ fn file_search_root_follows_nvim_cd() {
     common::type_str(&core, path_b);
     core.send_input(common::key(Key::Enter));
 
-    // Wait for nvim to process the `:cd` and flush a redraw, so a subsequent
-    // getcwd() is guaranteed to report B before we start the search.
+    // Wait for nvim to process the `:cd` and flush a redraw, then poll until the
+    // tracked `live_cwd()` reports B. The search root now derives from that cell
+    // (fed by the `wolf_cwd` notify, which fires NO wake), so `wait_for_flush`
+    // alone — keyed on `seq` — does not guarantee the cwd landed before we search.
     waiter.wait_for_flush(&core, common::FLUSH_TIMEOUT);
+    poll_until(
+        &waiter,
+        "live_cwd() to follow the :cd into dir B before searching",
+        || core.live_cwd().as_deref() == Some(cwd_b.as_path()),
+    );
 
     let (wake, wakes) = search_wake();
     let search = core.start_file_search(wake);
@@ -598,9 +631,9 @@ fn file_search_root_follows_nvim_cd() {
 }
 
 /// (10) Absent any `:cd`, the search root is the configured cwd: nvim starts in
-/// A (== cfg.cwd) and never moves, so `getcwd() == cfg.cwd` and A's files are
-/// listed. Documents the fallback that the resolved root equals the configured
-/// cwd when nvim has not been moved.
+/// A (== cfg.cwd) and never moves, so the tracked `live_cwd()` == cfg.cwd and A's
+/// files are listed. Documents that the resolved root equals the configured cwd
+/// when nvim has not been moved.
 #[test]
 fn file_search_root_defaults_to_cfg_cwd_without_cd() {
     let _ = common::require_nvim_bin();
@@ -670,8 +703,16 @@ fn mru_seed_follows_nvim_cd() {
     common::type_str(&core, path_b);
     core.send_input(common::key(Key::Enter));
 
-    // Wait for nvim to process the `:cd` and flush, so the seed resolves against B.
+    // Wait for nvim to process the `:cd` and flush, then poll until the tracked
+    // `live_cwd()` reports B. The seed root now derives from that cell (fed by the
+    // `wolf_cwd` notify, which fires NO wake), so `wait_for_flush` alone — keyed on
+    // `seq` — does not guarantee the cwd landed before the seed resolves.
     waiter.wait_for_flush(&core, common::FLUSH_TIMEOUT);
+    poll_until(
+        &waiter,
+        "live_cwd() to follow the :cd into dir B before seeding",
+        || core.live_cwd().as_deref() == Some(cwd_b.as_path()),
+    );
 
     let (wake, wakes) = search_wake();
     let search = core.start_file_search(wake);

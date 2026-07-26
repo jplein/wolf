@@ -11,8 +11,15 @@
 //! `runtime.block_on(self.nvim.<rpc>())` through a `block_on_rpc` chokepoint that
 //! wraps the future in `tokio::time::timeout`. When nvim is wedged and never
 //! replies, the timeout elapses and the method degrades to its documented
-//! fallback (configured cwd for `start_file_search` -> `resolve_search_root`;
-//! `0` for `current_tabpage`).
+//! fallback (`0` for `current_tabpage`).
+//!
+//! NOTE: `start_file_search` -> `resolve_search_root` is now OUT-OF-BAND — it
+//! reads the tracked `live_cwd()` cell instead of issuing a `current_dir` RPC — so
+//! it no longer routes through `block_on_rpc` at all. Its promptness while wedged
+//! is therefore trivial (there is no RPC to block on), but we still time it below
+//! as a cheap regression guard. `current_tabpage` (api.rs:719, a real
+//! `block_on_rpc` on `nvim_get_current_tabpage`) is the remaining live
+//! demonstration of the RPC-timeout chokepoint in this test.
 //!
 //! ## Timing / coalescing race (READ BEFORE TIGHTENING ANYTHING)
 //!
@@ -60,14 +67,17 @@ fn noop_wake() -> WakeFn {
     Arc::new(|| {})
 }
 
-/// Both interactive RPCs return their bounded fallback (rather than hanging) while
-/// the captive nvim is wedged inside a finite `vim.uv.sleep`.
+/// The wedged captive nvim does not stall the interactive picker path: both
+/// `start_file_search` and `current_tabpage` return promptly inside a finite
+/// `vim.uv.sleep`.
 ///
-/// Covers TWO chokepoint sites in one wedge (proving the bound is central, not
-/// per-call): `start_file_search` -> `resolve_search_root` (`getcwd`, site 947,
-/// the reproduced crash path) and `current_tabpage` (site 672). Both are asserted
-/// to return `< RETURN_BOUND`; `current_tabpage` additionally degrades to its `0`
-/// fallback, demonstrating the timeout mapped onto the documented no-op value.
+/// `current_tabpage` (a real `block_on_rpc` on `nvim_get_current_tabpage`) is the
+/// live RPC-timeout demonstration: it is asserted to return `< RETURN_BOUND` AND
+/// to degrade to its `0` fallback, showing the timeout mapped onto the documented
+/// no-op value. `start_file_search` -> `resolve_search_root` is now OUT-OF-BAND (a
+/// `live_cwd()` read, NO RPC), so its `< RETURN_BOUND` assertion is trivially
+/// satisfied — kept as a cheap regression guard that the picker path never
+/// reintroduces a blocking getcwd.
 #[test]
 fn start_file_search_returns_within_timeout_while_wedged() {
     // Resolve the timeout deterministically BEFORE the core starts (it is read
@@ -89,7 +99,9 @@ fn start_file_search_returns_within_timeout_while_wedged() {
     // Let nvim actually enter the sleep before issuing the bounded RPCs.
     std::thread::sleep(WEDGE_SETTLE);
 
-    // Site 947: start_file_search blocks on resolve_search_root's getcwd RPC.
+    // start_file_search -> resolve_search_root is now OUT-OF-BAND (a live_cwd()
+    // read, NO RPC), so this returns promptly regardless of the wedge. Kept as a
+    // cheap guard that the picker path never reintroduces a blocking getcwd.
     let start = Instant::now();
     let search = core.start_file_search(noop_wake());
     let elapsed_search = start.elapsed();
@@ -98,7 +110,7 @@ fn start_file_search_returns_within_timeout_while_wedged() {
     assert!(
         elapsed_search < RETURN_BOUND,
         "start_file_search must return within {RETURN_BOUND:?} while nvim is wedged \
-         (bounded by the RPC timeout, not the ~24s real hang); took {elapsed_search:?}"
+         (out-of-band live_cwd() read, not a blocking getcwd RPC); took {elapsed_search:?}"
     );
 
     // Site 672: current_tabpage blocks on nvim_get_current_tabpage; the timeout
