@@ -92,7 +92,48 @@ follow-up.
       including macOS-ONLY scoping in `runtime/nvim/README.md` (GNOME explicitly not-yet-
       wired). `prettier --write` clean on all edited docs.
 
-## COMPLETE ✅
+## MERGE FROM MAIN (user-requested) + verification pass
+
+- [x] Merged `origin/main` (abf6e2a) into `feat/auto-refresh` → merge commit `cb37351`.
+      Incoming from main: code_block syntax highlighting in preview, sidebar tree-load
+      fix, confirm-prompt/toast fix, plus changes to `nvim.rs`/`redraw.rs`/`render.rs`/
+      `lib.rs`/`messages.rs`/ffi `BUILD.bazel` and new tests (code_block_highlight.rs,
+      markdown_render.rs, messages.rs, PreviewSeamTests). 3 conflicts resolved:
+      `.claude/current-plan.md` (took ours), and two macOS READMEs (`README.md` +
+      `Sources/README.md`) — Project.swift bullet edited on BOTH sides; merged to keep
+      main's expanded `onTreeWake()` (ALL-sidebars fan-out) AND our `setUiFocus` docs.
+      `init.lua` (WolfAutoRead) + `Project.swift` (setBackground/setUiFocus/onTreeWake all
+      coexist) auto-merged cleanly. No markers remain; prettier clean.
+- [~] Verification pass on merged HEAD `cb37351` — OUR WORK GREEN, 2 inherited-from-main reds.
+      GREEN: `//crates/wolf-macos:Wolf` builds+links (FFI `set_ui_focus` + all main changes
+      compile together); `//crates/wolf-core:autoread` 30/30 post-merge; all main's new tests
+      pass (markdown_render, messages, code_block_highlight, WolfKeyMapTests incl PreviewSeamTests);
+      clippy + rustfmt_ffi + swift_format PASS. 61/62 targets green.
+      (`bazel //...` can't parse `.worktrees/`; scoped to `//crates/...` + `//tools/lint:*` =
+      whole real source tree.)
+      RED (both proven PRE-EXISTING on origin/main, byte-identical, untouched by our commits):
+      1. `//crates/wolf-ffi:frame_pack` E0451 build break — main's confirm fix made
+         `Snapshot.pending_confirm` `pub(crate)` (lone non-pub of 22 fields); frame_pack.rs
+         (external test) uses `..Snapshot::default()` FRU which needs all fields visible →
+         origin/main itself doesn't build it. Fix options: (a) `pub(crate)`→`pub` on the field
+         (1 word, consistent w/ other 21 pub fields) OR (b) edit the test to avoid FRU (keeps
+         field crate-private).
+      2. `//tools/lint:rustfmt_core` — only main's `redraw.rs` (new confirm unit tests)
+         unformatted; advisory per build.md; fix = `bazel run //tools/lint:rustfmt.fix`.
+      USER CHOSE: fix both, field→pub.
+- [x] Verification GREEN. Fixes applied (uncommitted, on top of merge `cb37351`):
+      1. `render.rs`: `pending_confirm` field AND `PendingConfirm` type `pub(crate)`→`pub`
+         (the type too — clippy `private_interfaces` under `-D warnings` rejects a pub field
+         of a pub(crate) type; pure visibility-widening, no `#[allow]`). Exposes
+         `PendingConfirm` in wolf-core's public API — TRADEOFF flagged (alt: `#[allow(
+         private_interfaces)]` on the field keeps the type internal).
+      2. `redraw.rs`: rustfmt reflow of main's confirm unit tests (formatting only).
+      RESULT: `bazel build //crates/wolf-ffi:frame_pack` + `//crates/wolf-macos:Wolf` build;
+      `bazel test //crates/... --keep_going` = **62/62 pass**; all 4 lint gates (rustfmt_core,
+      rustfmt_ffi, clippy, swift_format) PASS; autoread 10/10 post-fix. WHOLE TREE GREEN.
+      Fixes NOT yet committed (awaiting user direction on commit).
+
+## COMPLETE ✅ (pre-merge feature summary below)
 
 Focus forwarding landed: on macOS, reactivating Wolf (Dock click) now fires nvim
 `FocusGained` → `WolfAutoRead` `:checktime` → external-file reload. Chain: AppDelegate
