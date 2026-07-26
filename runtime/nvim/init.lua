@@ -418,6 +418,187 @@ function _G.wolf_setup_theme_tracking(chan)
 	emit()
 end
 
+-- Batch treesitter highlighter for the Markdown preview's fenced/indented code
+-- blocks. wolf-core (crate nvim.rs::highlight_code_blocks) invokes this over
+-- `nvim_exec_lua` with ONE argument: an array of { text, lang } pairs (lang is ""
+-- when the fence declares none). It returns an array `results` of the SAME length,
+-- highlighting the whole batch in one RPC round-trip.
+--
+-- results[i] is either:
+--   * the scalar `false` -- the i-th block is NOT highlightable (no/unknown
+--     language, missing parser, missing `highlights` query, a parse failure, or no
+--     resolved spans at all), OR
+--   * an array of fixed 7-element span tuples
+--     { row, start_col, end_col, fg, bold, italic, underline }.
+-- A span is a single-line, non-overlapping byte-column run: `row` is 0-based within
+-- the block text (text split on "\n"), `start_col`/`end_col` are 0-based half-open
+-- BYTE columns, `fg` is a packed 0xRRGGBB integer or -1 (no foreground), and the
+-- three attributes are Lua booleans.
+--
+-- CONTRACT: NEVER return an empty Lua table for a block -- msgpack cannot tell an
+-- empty array from an empty map, so a non-highlightable OR empty-result block is the
+-- scalar `false`. Each span is always a full 7-element array.
+--
+-- Defined at MODULE LEVEL (not inside the conditional treesitter block) so it exists
+-- on EVERY platform. On Linux/cargo (no vendored parsers/queries) it self-degrades
+-- to `false` for every block because get_string_parser / query.get find nothing.
+function _G.wolf_highlight_code_blocks(blocks)
+	-- Resolve a treesitter capture NAME (e.g. "function.call") to its effective
+	-- highlight style via an @-prefixed `nvim_get_hl` lookup (link = false so a
+	-- linked group resolves to its target's attributes -- the same pattern
+	-- wolf_setup_theme_tracking uses). On an EMPTY result and a dotted name, retry
+	-- against successively trimmed prefixes ("@function.call" -> "@function"), matching
+	-- treesitter's group fallback. Returns { fg, bold, italic, underline } or nil when
+	-- the group has no foreground AND no emphasis (skip it -- no empty <span style="">).
+	local function resolve(name)
+		local hl = nil
+		local candidate = name
+		while candidate ~= nil and candidate ~= "" do
+			local ok, h = pcall(vim.api.nvim_get_hl, 0, { name = "@" .. candidate, link = false })
+			if ok and type(h) == "table" and next(h) ~= nil then
+				hl = h
+				break
+			end
+			candidate = candidate:match("^(.*)%.[^.]*$")
+		end
+		if hl == nil then
+			return nil
+		end
+		local fg = hl.fg or -1
+		local bold = hl.bold == true
+		local italic = hl.italic == true
+		local underline = hl.underline == true
+		if fg == -1 and not bold and not italic and not underline then
+			return nil
+		end
+		return { fg = fg, bold = bold, italic = italic, underline = underline }
+	end
+
+	local function highlight_one(text, lang)
+		if lang == nil or lang == "" then
+			return false
+		end
+		local ok, parser = pcall(vim.treesitter.get_string_parser, text, lang)
+		if not ok or parser == nil then
+			return false
+		end
+		local query = vim.treesitter.query.get(lang, "highlights")
+		if query == nil then
+			return false
+		end
+		local ok2, trees = pcall(function()
+			return parser:parse()
+		end)
+		if not ok2 or trees == nil or trees[1] == nil then
+			return false
+		end
+		local root = trees[1]:root()
+		local lines = vim.split(text, "\n", { plain = true })
+
+		-- Cache resolved styles per capture name (false = a resolved-but-empty style,
+		-- so we skip re-resolving). Returns the style table or nil to skip.
+		local style_cache = {}
+		local function resolve_cached(name)
+			local cached = style_cache[name]
+			if cached == nil then
+				cached = resolve(name) or false
+				style_cache[name] = cached
+			end
+			if cached == false then
+				return nil
+			end
+			return cached
+		end
+
+		-- Per-line, per-byte winner map: winners[r][col] = { style, prio, order }.
+		-- `order` is a monotonic counter so a later capture wins a same-priority tie,
+		-- matching nvim's "later capture wins" precedence.
+		local winners = {}
+		local order = 0
+		for id, node, metadata in query:iter_captures(root, text, 0, -1) do
+			local name = query.captures[id]
+			local style = resolve_cached(name)
+			if style ~= nil then
+				order = order + 1
+				local prio = tonumber(metadata.priority) or 100
+				local srow, scol, erow, ecol = node:range()
+				for r = srow, erow do
+					local line = lines[r + 1]
+					if line ~= nil then
+						local seg_start = (r == srow) and scol or 0
+						local seg_end = (r == erow) and ecol or #line
+						if seg_end > #line then
+							seg_end = #line
+						end
+						local wr = winners[r]
+						if wr == nil then
+							wr = {}
+							winners[r] = wr
+						end
+						for col = seg_start, seg_end - 1 do
+							local incumbent = wr[col]
+							if
+								incumbent == nil
+								or prio > incumbent.prio
+								or (prio == incumbent.prio and order > incumbent.order)
+							then
+								wr[col] = { style = style, prio = prio, order = order }
+							end
+						end
+					end
+				end
+			end
+		end
+
+		-- Coalesce each line's winning bytes into non-overlapping runs of one
+		-- identical style; un-won bytes are plain gaps (no run emitted).
+		local spans = {}
+		for r, wr in pairs(winners) do
+			local line = lines[r + 1]
+			local len = (line ~= nil) and #line or 0
+			local run_start = nil
+			local run_style = nil
+			local col = 0
+			while col <= len do
+				local w = (col < len) and wr[col] or nil
+				local s = (w ~= nil) and w.style or nil
+				if s ~= run_style then
+					if run_style ~= nil then
+						spans[#spans + 1] = {
+							r,
+							run_start,
+							col,
+							run_style.fg,
+							run_style.bold,
+							run_style.italic,
+							run_style.underline,
+						}
+					end
+					run_style = s
+					run_start = col
+				end
+				col = col + 1
+			end
+		end
+
+		if #spans == 0 then
+			return false
+		end
+		return spans
+	end
+
+	local results = {}
+	for i, b in ipairs(blocks) do
+		local ok, res = pcall(highlight_one, b[1], b[2])
+		if ok then
+			results[i] = res
+		else
+			results[i] = false
+		end
+	end
+	return results
+end
+
 -- Split-panes layout overrides: wolf-core invokes this over RPC after ui_attach
 -- (and after current-file tracking), passing its own RPC channel id. The SHELL
 -- owns the pane layout, so Neovim's split/close/focus chords and the

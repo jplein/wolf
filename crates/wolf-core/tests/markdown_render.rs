@@ -41,7 +41,10 @@
 
 use std::collections::HashMap;
 
-use wolf_core::{render_html, theme_css, PreviewTheme, WidthMode};
+use wolf_core::{
+    code_blocks, render_html, render_html_with_highlights, theme_css, BlockHighlight,
+    HighlightSpan, HighlightStyle, PreviewTheme, WidthMode,
+};
 
 /// The per-line/per-100-column marker id substring for hard line `line` (1-based)
 /// and 0-based character column `col`, per the plan's `id="wl-{L}-{C}"` anchor
@@ -97,6 +100,73 @@ fn render_html_wraps_body_in_a_themed_document() {
     assert!(
         html.contains("Title") && html.contains("Hello"),
         "the source text must survive into the body: {html}"
+    );
+}
+
+#[test]
+fn code_blocks_enumerates_a_fenced_go_block_via_public_api() {
+    // The re-exported `code_blocks` enumerates one `CodeBlockInfo` for a fenced go
+    // block: lowercased lang + the body text (incl. the trailing newline). Mirrors
+    // the in-module unit test at the PUBLIC-API level (crate-root re-exports).
+    let blocks = code_blocks("# H\n\n```go\npackage main\n```\n");
+    assert_eq!(blocks.len(), 1, "one fenced code block: {blocks:?}");
+    assert_eq!(
+        blocks[0].lang.as_deref(),
+        Some("go"),
+        "the fenced info-string language, lowercased: {blocks:?}"
+    );
+    assert_eq!(
+        blocks[0].text, "package main\n",
+        "the block body incl. the trailing newline: {blocks:?}"
+    );
+}
+
+#[test]
+fn render_html_with_highlights_emits_inline_styled_spans_via_public_api() {
+    // The re-exported `render_html_with_highlights` + `BlockHighlight` /
+    // `HighlightSpan` / `HighlightStyle` types turn one `[0, 7)` byte-column span
+    // into a color+bold inline `<span>`, still inside `<pre><code
+    // class="language-go">`.
+    let src = "```go\npackage foo\n```\n";
+    let block = BlockHighlight {
+        spans: vec![HighlightSpan {
+            row: 0,
+            start_col: 0,
+            end_col: 7,
+            style: HighlightStyle {
+                color: Some(0x00FF_8800),
+                bold: true,
+                italic: false,
+                underline: false,
+            },
+        }],
+    };
+    let html =
+        render_html_with_highlights(src, PreviewTheme::Default, WidthMode::Full, &[Some(block)]);
+    assert!(
+        html.contains(r#"<span style="color:#ff8800;font-weight:bold;">package</span>"#),
+        "the `package` token must render as an inline-styled span (color + bold): {html}"
+    );
+    assert!(
+        html.contains("<pre"),
+        "the highlighted block must still be wrapped in <pre>: {html}"
+    );
+    assert!(
+        html.contains(r#"class="language-go""#),
+        "the highlighted block must keep its `class=\"language-go\"`: {html}"
+    );
+}
+
+#[test]
+fn render_html_empty_highlights_matches_render_html_via_public_api() {
+    // The zero-churn delegation contract at the public-API level: an empty highlight
+    // slice reproduces the plain `render_html` byte-for-byte.
+    let src = "# H\n\n```go\npackage main\nfunc f() {}\n```\n";
+    let empty = render_html_with_highlights(src, PreviewTheme::Default, WidthMode::Full, &[]);
+    let plain = render_html(src, PreviewTheme::Default, WidthMode::Full);
+    assert_eq!(
+        empty, plain,
+        "render_html_with_highlights(src, .., &[]) must byte-equal render_html(src, ..)"
     );
 }
 

@@ -317,6 +317,144 @@ fn confirm_prompt_is_not_dismissed_by_input() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
+/// A real `confirm` prompt IS cleared once the dialog is ANSWERED. A `confirm()`
+/// dialog is two coupled surfaces: the prompt text arrives as a `msg_show` kind
+/// `"confirm"` (into `toast`) and the options line as a `cmdline_show` prompt
+/// (into `cmdline`). When the user answers with a valid accelerator, Neovim
+/// emits ONLY `cmdline_hide` (never `msg_clear`), so the fold must clear the
+/// lingering confirm prompt toast on that hide. This drives a live `confirm()`,
+/// answers with the valid accelerator `y`, and asserts the toast is gone —
+/// `!toast.is_prompt()` being the primary contract.
+///
+/// NOTE (test-writer): this is the positive complement to
+/// `confirm_prompt_is_not_dismissed_by_input`, which sends the INVALID `z` (so
+/// the prompt survives). Here the valid `y` resolves the dialog, so no trailing
+/// `<Esc>` is needed — nvim unblocks on the answer.
+#[test]
+fn confirm_prompt_cleared_when_answered() {
+    let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+
+    // Drive a confirm() dialog: it surfaces as a `msg_show` kind "confirm" and
+    // then blocks awaiting an answer key. The `&yes`/`&no` define accelerators
+    // `y`/`n`.
+    send_ex(&core, r#"call confirm("Really do it?", "&yes\n&no")"#);
+
+    poll_until(
+        &waiter,
+        "the confirm() dialog to surface as a prompt toast (kind `confirm`)",
+        || {
+            let snap = core.read_snapshot();
+            snap.toast.visible && snap.toast.is_prompt()
+        },
+    );
+    {
+        let snap = core.read_snapshot();
+        assert!(
+            snap.toast.is_prompt(),
+            "the confirm dialog should be a prompt toast"
+        );
+        assert_eq!(
+            snap.toast.kind(),
+            CONFIRM_KIND,
+            "the prompt toast kind() should be `{CONFIRM_KIND}`"
+        );
+    }
+
+    // Answer with the VALID accelerator `y`. This resolves the dialog, which
+    // Neovim reports with a `cmdline_hide` (and NO `msg_clear`); the fold must
+    // clear the lingering confirm prompt toast on that hide.
+    core.send_input(ch('y'));
+
+    poll_until(
+        &waiter,
+        "the confirm prompt toast to clear once the dialog is answered",
+        || !core.read_snapshot().toast.visible,
+    );
+
+    // Let any trailing message activity settle so a late redraw cannot re-show
+    // the prompt after the assertion.
+    sleep(SETTLE);
+    waiter.drain();
+    {
+        let snap = core.read_snapshot();
+        assert!(
+            !snap.toast.visible,
+            "the confirm prompt toast must clear once the dialog is answered"
+        );
+        assert!(
+            !snap.toast.is_prompt(),
+            "the answered dialog must leave no lingering confirm prompt toast"
+        );
+    }
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// Staleness guard for the stash-on-hide design: after a confirm dialog is
+/// answered (its prompt stashed then dropped), a subsequent UNRELATED message
+/// must NOT resurrect the stale prompt. This answers a live `confirm()` with the
+/// valid accelerator `y`, then drives an `:echomsg`; the new message supersedes
+/// any stashed confirm (the `msg_show`-drops-stash path). Asserts the toast
+/// shows only the new message, is no longer a prompt, and never re-shows the
+/// original confirm text.
+///
+/// NOTE (test-writer): the `msg_show`-drop path is exercised here (less
+/// timing-sensitive than driving a fresh `input()` cmdline); the cmdline
+/// prompt-mismatch drop path is covered deterministically by the inline
+/// `cmdline_show_nonmatching_prompt_drops_stashed_confirm` unit test.
+#[test]
+fn confirm_answer_then_message_does_not_resurrect_prompt() {
+    const AFTER: &str = "after confirm zzz";
+
+    let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+
+    // Drive and answer a confirm() dialog with the valid accelerator `y`.
+    send_ex(&core, r#"call confirm("Really do it?", "&yes\n&no")"#);
+    poll_until(
+        &waiter,
+        "the confirm() dialog to surface as a prompt toast (kind `confirm`)",
+        || {
+            let snap = core.read_snapshot();
+            snap.toast.visible && snap.toast.is_prompt()
+        },
+    );
+    core.send_input(ch('y'));
+    poll_until(
+        &waiter,
+        "the confirm prompt toast to clear once the dialog is answered",
+        || !core.read_snapshot().toast.visible,
+    );
+
+    // A fresh, unrelated message must supersede any stashed confirm, not
+    // resurrect it.
+    send_ex(&core, &format!("echomsg \"{AFTER}\""));
+    poll_until(
+        &waiter,
+        "the new message to surface without resurrecting the confirm prompt",
+        || {
+            let snap = core.read_snapshot();
+            snap.toast.visible && !snap.toast.is_prompt() && toast_text(&core).contains(AFTER)
+        },
+    );
+
+    let text = toast_text(&core);
+    let snap = core.read_snapshot();
+    assert!(
+        text.contains(AFTER),
+        "the toast should show the new message; got {text:?}"
+    );
+    assert!(
+        !snap.toast.is_prompt(),
+        "the new message must not be treated as a confirm prompt"
+    );
+    assert!(
+        !text.contains("Really do it?"),
+        "the answered confirm prompt must NOT resurrect in the toast; got {text:?}"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
 /// A `search_count` message (`[1/3]`) is SUPPRESSED — it never surfaces in the
 /// toast. Tolerant by design: if the headless nvim does not emit `search_count`
 /// at all, the negative assertion still holds (the point is that the toast is

@@ -982,6 +982,24 @@ final class PaneContainerView: NSView {
     }
   }
 
+  /// Forces every bound preview to re-render when the effective appearance flips
+  /// (dark↔light in `auto` mode). A code block's syntax colors come from nvim's
+  /// colorscheme, which re-sources on the appearance change, but the per-window
+  /// reload gate (`lastPreviewLoads`, keyed by `(sourceBufnr, sourceTick)`) does
+  /// NOT change on an appearance flip — so without invalidating it the stale
+  /// colors would linger. Clearing `lastPreviewLoads` makes
+  /// `PreviewSeam.winsNeedingReload(current:, loaded:[:])` return every bound
+  /// preview window (first-bind semantics), and the coalescer's debounce lets the
+  /// synchronous `set_background` RPC (from the AppDelegate appearance KVO) reach
+  /// nvim first, so the coalesced `render_preview` picks up the re-sourced colors.
+  /// A forced dark/light appearance does not change the effective appearance on an
+  /// OS toggle, so this correctly no-ops there.
+  override func viewDidChangeEffectiveAppearance() {
+    super.viewDidChangeEffectiveAppearance()
+    lastPreviewLoads.removeAll()
+    previewReloadCoalescer.request()
+  }
+
   /// The coalesced preview-reload pass (the `previewReloadCoalescer`'s `perform`,
   /// run once per debounce window on the main thread). Re-reads the core's
   /// `previews()` into a win → `PreviewLoad` map, then for each window whose bound

@@ -56,11 +56,35 @@
 //! scrolls it into view only when it nears / crosses a viewport-edge threshold.
 //! None of that is implemented here; this module only guarantees the markers are
 //! present in the emitted HTML from day one.
+//!
+//! ## Code-block syntax highlighting
+//!
+//! Fenced/indented code blocks render plain (`<pre><code>`) by default. When a
+//! caller supplies per-block highlight data (via [`render_html_with_highlights`]),
+//! this module rewrites each highlighted block's interior text into inline-styled
+//! `<span style="color:#RRGGBB;font-weight:bold;…">` runs, leaving the plain
+//! `<pre><code class="language-xxx">` wrapper untouched.
+//!
+//! The highlight data itself is produced OUTSIDE this pure module (in
+//! [`crate::nvim`], by asking the captive Neovim's treesitter to highlight each
+//! block). This module stays IO-free: it only enumerates the blocks
+//! ([`code_blocks`]) so the caller can align highlight results back to them by
+//! DOCUMENT ORDER, and applies whatever spans it is given ([`BlockHighlight`]).
+//!
+//! CRITICAL alignment contract: a pulldown-cmark fenced block is
+//! `Start(CodeBlock) → 1+ Text → End(CodeBlock)`. Both [`code_blocks`] (which the
+//! caller uses to build the highlight request) and the internal `CodeHighlighter`
+//! (which applies the results) concatenate the SAME `Event::Text` bodies —
+//! INCLUDING the trailing `\n` pulldown-cmark yields — so Neovim's `(row,
+//! byte-col)` indices align with `text.split('\n')` here. When a block has no
+//! highlight data (unknown language, missing parser, Linux/cargo no-op treesitter),
+//! it falls back to the plain output with zero change.
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::ops::Range;
 
-use pulldown_cmark::{html, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{html, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use pulldown_latex::{
     config::{DisplayMode, RenderConfig},
     mathml::push_mathml,
@@ -176,6 +200,134 @@ const CAPPED_WIDTH_CSS: &str =
     "body.wolf-markdown{max-width:45rem;margin-left:auto;margin-right:auto;\
      padding-left:24px;padding-right:24px}";
 
+/// One fenced or indented code block enumerated from a Markdown source, in
+/// document order, by [`code_blocks`].
+///
+/// The caller (see [`crate::nvim`]) hands each block's `lang` + `text` to Neovim's
+/// treesitter highlighter and threads the per-block results back into
+/// [`render_html_with_highlights`], aligning them by document-order index.
+#[derive(Clone, Debug)]
+pub struct CodeBlockInfo {
+    /// The block's language: the first whitespace-delimited token of a fenced
+    /// block's info string, lowercased. `None` for an indented block or a bare
+    /// fence (empty info string).
+    pub lang: Option<String>,
+    /// The block's body: the in-order concatenation of the block's
+    /// [`Event::Text`] events, byte-identical to what the render pipeline
+    /// concatenates (INCLUDING the trailing newline pulldown-cmark yields).
+    pub text: String,
+}
+
+/// The visual style resolved for one highlight span: a foreground color plus the
+/// three carried emphases (bold / italic / underline). No background color and no
+/// other attributes are carried (locked decision 4).
+#[derive(Clone, Copy, Debug)]
+pub struct HighlightStyle {
+    /// The foreground color as a packed `0xRRGGBB` integer (mirrors
+    /// [`crate::render::Rgb::from_packed`]), or `None` for no explicit foreground.
+    pub color: Option<u32>,
+    /// Whether the span is bold.
+    pub bold: bool,
+    /// Whether the span is italic.
+    pub italic: bool,
+    /// Whether the span is underlined.
+    pub underline: bool,
+}
+
+/// One highlighted run within a code block: a half-open `[start_col, end_col)`
+/// BYTE-column range on a single 0-based `row` (relative to the block's
+/// `text.split('\n')`), plus the [`HighlightStyle`] to apply.
+///
+/// Spans are single-line, non-overlapping, and sorted by `(row, start_col)` (the
+/// Neovim-side helper guarantees this; [`render_html_with_highlights`] is
+/// nonetheless defensive against malformed/overlapping input).
+#[derive(Clone, Copy, Debug)]
+pub struct HighlightSpan {
+    /// The 0-based row within the block text (`text.split('\n')`).
+    pub row: u32,
+    /// The 0-based inclusive start BYTE column of the run.
+    pub start_col: u32,
+    /// The exclusive end BYTE column of the run (half-open `[start_col, end_col)`).
+    pub end_col: u32,
+    /// The style applied to the run.
+    pub style: HighlightStyle,
+}
+
+/// All highlight spans for ONE code block (see [`HighlightSpan`]).
+#[derive(Clone, Debug)]
+pub struct BlockHighlight {
+    /// The block's spans, single-line and (expected) non-overlapping.
+    pub spans: Vec<HighlightSpan>,
+}
+
+/// The [`Options`] set used by every parse in this module (the Markdown feature
+/// flags): tables, footnotes, strikethrough, task lists, explicit heading
+/// attributes, and `$…$` math. Factored so [`render_html_with_highlights`], the
+/// [`heading_slugs`] pre-pass, and [`code_blocks`] all parse with identical flags.
+fn markdown_options() -> Options {
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_FOOTNOTES);
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_TASKLISTS);
+    // O5: honor explicit `{#custom-id}` heading attributes; the auto-slug pipeline
+    // only assigns an id when the heading declares none.
+    options.insert(Options::ENABLE_HEADING_ATTRIBUTES);
+    // Task 1: yield `Event::InlineMath` / `Event::DisplayMath` for `$…$` / `$$…$$`
+    // LaTeX so `MathRenderer` can convert them to inline MathML.
+    options.insert(Options::ENABLE_MATH);
+    options
+}
+
+/// Enumerates every fenced and indented code block in `source`, in DOCUMENT ORDER.
+///
+/// Runs a FRESH [`Parser::new_ext`] pass with [`markdown_options`]. Each block's
+/// `lang` is the lowercased first whitespace-token of a fenced info string
+/// (`None` for an indented block or a bare fence), and its `text` is the in-order
+/// concatenation of the block's [`Event::Text`] bodies — byte-identical to what
+/// the render pipeline concatenates, INCLUDING pulldown-cmark's trailing newline.
+///
+/// The i-th returned block ALIGNS with the i-th `Start(CodeBlock)` the internal
+/// `CodeHighlighter` counts in [`render_html_with_highlights`], so a caller can key
+/// per-block highlight data by index.
+#[must_use]
+pub fn code_blocks(source: &str) -> Vec<CodeBlockInfo> {
+    let mut blocks = Vec::new();
+    let mut current: Option<CodeBlockInfo> = None;
+
+    for event in Parser::new_ext(source, markdown_options()) {
+        match event {
+            Event::Start(Tag::CodeBlock(kind)) => {
+                let lang = match kind {
+                    CodeBlockKind::Fenced(info) => info
+                        .split_whitespace()
+                        .next()
+                        .map(str::to_lowercase)
+                        .filter(|s| !s.is_empty()),
+                    CodeBlockKind::Indented => None,
+                };
+                current = Some(CodeBlockInfo {
+                    lang,
+                    text: String::new(),
+                });
+            }
+            Event::Text(t) => {
+                if let Some(block) = current.as_mut() {
+                    block.text.push_str(&t);
+                }
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                if let Some(block) = current.take() {
+                    blocks.push(block);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    blocks
+}
+
 /// Renders `source` Markdown to a complete, themed HTML document with the
 /// forward-compatible per-line / per-100-column position markers embedded.
 ///
@@ -191,19 +343,39 @@ const CAPPED_WIDTH_CSS: &str =
 /// own content.
 #[must_use]
 pub fn render_html(source: &str, theme: PreviewTheme, width_mode: WidthMode) -> String {
+    // An empty highlight slice makes every code block plain — the current
+    // behavior — so existing call sites see zero change.
+    render_html_with_highlights(source, theme, width_mode, &[])
+}
+
+/// Renders `source` Markdown like [`render_html`], but with per-code-block
+/// treesitter highlight data applied.
+///
+/// `code_highlights[i]` (indexed by DOCUMENT ORDER, aligned with [`code_blocks`])
+/// carries the spans for the i-th code block: `Some(block)` rewrites that block's
+/// interior text into inline-styled `<span>`s (see [`build_highlighted_html`]),
+/// while `None` — or an index past the end of the slice — leaves it PLAIN
+/// (`<pre><code>`). Passing `&[]` makes every block plain, exactly reproducing
+/// [`render_html`].
+///
+/// The render pipeline is
+/// `offset_iter → HeadingIdAssigner → MathRenderer → CodeHighlighter → MarkerInjector → html::push_html`:
+/// `CodeHighlighter` runs BEFORE `MarkerInjector` so the injector still sees the
+/// real block-level `Start(CodeBlock)` (its flush trigger). The highlighter passes
+/// `Start`/`End` through untouched and swaps only interior `Text` for an
+/// `Event::InlineHtml` of the highlighted markup, so the `<pre><code
+/// class="language-xxx">` wrapper is unaffected and no marker ever lands inside
+/// `<pre>`.
+#[must_use]
+pub fn render_html_with_highlights(
+    source: &str,
+    theme: PreviewTheme,
+    width_mode: WidthMode,
+    code_highlights: &[Option<BlockHighlight>],
+) -> String {
     let markers = desired_markers(source);
 
-    let mut options = Options::empty();
-    options.insert(Options::ENABLE_TABLES);
-    options.insert(Options::ENABLE_FOOTNOTES);
-    options.insert(Options::ENABLE_STRIKETHROUGH);
-    options.insert(Options::ENABLE_TASKLISTS);
-    // O5: honor explicit `{#custom-id}` heading attributes; the auto-slug pipeline
-    // only assigns an id when the heading declares none.
-    options.insert(Options::ENABLE_HEADING_ATTRIBUTES);
-    // Task 1: yield `Event::InlineMath` / `Event::DisplayMath` for `$…$` / `$$…$$`
-    // LaTeX so `MathRenderer` can convert them to inline MathML.
-    options.insert(Options::ENABLE_MATH);
+    let options = markdown_options();
 
     let slugs = heading_slugs(source, options);
     let offset_iter = Parser::new_ext(source, options).into_offset_iter();
@@ -212,7 +384,11 @@ pub fn render_html(source: &str, theme: PreviewTheme, width_mode: WidthMode) -> 
     // `InlineHtml` MathML span, which `is_block_start` never matches, so no marker
     // is ever injected inside a `<math>` element.
     let with_math = MathRenderer::new(with_ids);
-    let injector = MarkerInjector::new(with_math, markers);
+    // CodeHighlighter sits BETWEEN MathRenderer and MarkerInjector so the injector
+    // still sees the real block-level `Start(CodeBlock)` (its flush trigger); the
+    // highlighter passes `Start`/`End` through and swaps only interior `Text`.
+    let with_code = CodeHighlighter::new(with_math, code_highlights);
+    let injector = MarkerInjector::new(with_code, markers);
 
     let mut body = String::new();
     html::push_html(&mut body, injector);
@@ -523,6 +699,201 @@ where
         };
         Some((rebuilt, range))
     }
+}
+
+/// An iterator adapter over the render pipeline that rewrites each HIGHLIGHTED
+/// code block's interior [`Event::Text`] into an [`Event::InlineHtml`] of
+/// inline-styled `<span>`s, leaving the block-level `Start`/`End` tags (and thus
+/// the `<pre><code class="language-xxx">` wrapper) untouched.
+///
+/// Blocks are matched to `highlights` by DOCUMENT ORDER: `next_index` advances on
+/// every `Start(CodeBlock)`, so the i-th code block consults `highlights[i]`. A
+/// `None` slot (or an index past the slice) passes the block through verbatim
+/// (plain fallback). Because this adapter preserves the real `Start(CodeBlock)`,
+/// the downstream [`MarkerInjector`] still flushes markers BEFORE the block, never
+/// inside `<pre>`; and because the highlighted markup is emitted as `InlineHtml`
+/// it passes through the HTML writer verbatim (like [`MathRenderer`]'s MathML),
+/// never double-escaped.
+struct CodeHighlighter<'a, I> {
+    inner: I,
+    /// Per-block highlight data (document order); see [`render_html_with_highlights`].
+    highlights: &'a [Option<BlockHighlight>],
+    /// Index of the next code-block `Start` to be seen.
+    next_index: usize,
+    /// Buffered events to yield before pulling the next inner event.
+    pending: VecDeque<(Event<'a>, Range<usize>)>,
+}
+
+impl<'a, I> CodeHighlighter<'a, I>
+where
+    I: Iterator<Item = (Event<'a>, Range<usize>)>,
+{
+    fn new(inner: I, highlights: &'a [Option<BlockHighlight>]) -> Self {
+        Self {
+            inner,
+            highlights,
+            next_index: 0,
+            pending: VecDeque::new(),
+        }
+    }
+}
+
+impl<'a, I> Iterator for CodeHighlighter<'a, I>
+where
+    I: Iterator<Item = (Event<'a>, Range<usize>)>,
+{
+    type Item = (Event<'a>, Range<usize>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Drain any buffered (rewritten) events first.
+        if let Some(buffered) = self.pending.pop_front() {
+            return Some(buffered);
+        }
+
+        let (event, range) = self.inner.next()?;
+
+        if matches!(event, Event::Start(Tag::CodeBlock(_))) {
+            let idx = self.next_index;
+            self.next_index += 1;
+            let block = self.highlights.get(idx).and_then(Option::as_ref);
+            let Some(block) = block else {
+                // Plain passthrough: no highlight data for this block.
+                return Some((event, range));
+            };
+
+            // Eagerly drain the inner iterator, accumulating interior `Text` into
+            // one string (byte-identical to `code_blocks`), until this block's
+            // `End(CodeBlock)`. Any unexpected interior event is buffered verbatim.
+            let mut text = String::new();
+            let mut end_range = range.clone();
+            for (inner_event, inner_range) in self.inner.by_ref() {
+                match inner_event {
+                    Event::Text(t) => text.push_str(&t),
+                    Event::End(TagEnd::CodeBlock) => {
+                        end_range = inner_range;
+                        break;
+                    }
+                    other => self.pending.push_back((other, inner_range)),
+                }
+            }
+
+            let inner_html = build_highlighted_html(&text, block);
+            self.pending
+                .push_back((Event::InlineHtml(inner_html.into()), end_range.clone()));
+            self.pending
+                .push_back((Event::End(TagEnd::CodeBlock), end_range));
+
+            // Emit the original `Start(CodeBlock)` now; the buffered rewritten
+            // interior + `End` follow on subsequent calls.
+            return Some((event, range));
+        }
+
+        Some((event, range))
+    }
+}
+
+/// Builds the inline-styled HTML for one code block's interior `text`, applying
+/// `block`'s spans.
+///
+/// The text is split on `'\n'`; each row after the first is preceded by a literal
+/// `'\n'` (so line structure is preserved inside `<pre>`). Within a row, the row's
+/// spans are collected and sorted by `start_col`, then walked with a byte
+/// `cursor`: each span's `[start, end)` byte range is DEFENSIVELY clamped to
+/// `[cursor, line.len()]` and SKIPPED if it would be empty (`start >= end`) or
+/// overlap an earlier span (`start < cursor`). The gap before a span and its body
+/// are HTML-escaped ([`escape_html_into`]); the body is wrapped in
+/// `<span style="{style_css}">…</span>`. Any trailing text after the last span is
+/// escaped. This never panics: all slicing uses clamped indices on treesitter byte
+/// columns (valid UTF-8 boundaries) via [`str::get`].
+fn build_highlighted_html(text: &str, block: &BlockHighlight) -> String {
+    let mut out = String::new();
+
+    for (row_idx, line) in text.split('\n').enumerate() {
+        if row_idx > 0 {
+            out.push('\n');
+        }
+
+        // Collect this row's spans, sorted by start column.
+        let mut row_spans: Vec<&HighlightSpan> = block
+            .spans
+            .iter()
+            .filter(|s| s.row as usize == row_idx)
+            .collect();
+        row_spans.sort_by_key(|s| s.start_col);
+
+        let line_len = line.len();
+        let mut cursor = 0usize;
+
+        for span in row_spans {
+            let start = (span.start_col as usize).min(line_len);
+            let end = (span.end_col as usize).min(line_len);
+            // Skip empty (after clamp) or overlapping spans.
+            if start >= end || start < cursor {
+                continue;
+            }
+
+            // Escaped gap before the span.
+            if let Some(gap) = line.get(cursor..start) {
+                escape_html_into(&mut out, gap);
+            }
+
+            out.push_str("<span style=\"");
+            out.push_str(&style_css(&span.style));
+            out.push_str("\">");
+            if let Some(body) = line.get(start..end) {
+                escape_html_into(&mut out, body);
+            }
+            out.push_str("</span>");
+
+            cursor = end;
+        }
+
+        // Escaped trailing text after the last span.
+        if let Some(rest) = line.get(cursor..) {
+            escape_html_into(&mut out, rest);
+        }
+    }
+
+    out
+}
+
+/// Appends `s` to `out`, escaping the three HTML-significant characters
+/// (`&`→`&amp;`, `<`→`&lt;`, `>`→`&gt;`).
+///
+/// A local helper so the module does not depend on [`pulldown_cmark::escape`]
+/// visibility. Order matters: `&` is escaped first so an already-escaped entity is
+/// not double-escaped by a later pass — here each char is handled exactly once, so
+/// a single left-to-right walk is correct.
+fn escape_html_into(out: &mut String, s: &str) {
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            other => out.push(other),
+        }
+    }
+}
+
+/// Renders a [`HighlightStyle`] to an inline CSS declaration string in a FIXED,
+/// deterministic order: `color:#{:06x};` (when a color is set, masked to
+/// `0x00FF_FFFF`), then `font-weight:bold;`, `font-style:italic;`,
+/// `text-decoration:underline;` for each set flag.
+fn style_css(style: &HighlightStyle) -> String {
+    let mut css = String::new();
+    if let Some(color) = style.color {
+        css.push_str(&format!("color:#{:06x};", color & 0x00FF_FFFF));
+    }
+    if style.bold {
+        css.push_str("font-weight:bold;");
+    }
+    if style.italic {
+        css.push_str("font-style:italic;");
+    }
+    if style.underline {
+        css.push_str("text-decoration:underline;");
+    }
+    css
 }
 
 /// Returns whether `event` is a block-level `Start` tag — the only injection
@@ -1003,5 +1374,311 @@ mod tests {
             !math_span.contains("wolf-src"),
             "no `wolf-src` marker span may appear inside the <math> element: {math_span}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Code-block syntax highlighting (task #4).
+    //
+    // These reference the NEW in-module API the coder implements: `code_blocks`,
+    // `render_html_with_highlights`, and the `CodeBlockInfo` / `HighlightStyle` /
+    // `HighlightSpan` / `BlockHighlight` types. Because they live IN the module
+    // they name those types directly (not the crate-root re-exported path).
+    //
+    // BYTE-COLUMN CONTRACT (constructed literally below): `start_col`/`end_col` are
+    // BYTE columns, half-open `[start, end)`; `row` is 0-based within the block text
+    // (`text.split('\n')`). For `text == "package foo\n"`, row 0 is `"package foo"`
+    // and the token `package` is bytes `[0, 7)`.
+    // -----------------------------------------------------------------------
+
+    /// A single fenced ```` ```go ```` block enumerates to one `CodeBlockInfo` whose
+    /// `lang` is the lowercased info-string token and whose `text` is the block body
+    /// INCLUDING the trailing newline pulldown-cmark yields.
+    #[test]
+    fn code_blocks_enumerates_lang_and_text() {
+        let blocks = code_blocks("# H\n\n```go\npackage main\n```\n");
+        assert_eq!(blocks.len(), 1, "exactly one fenced code block: {blocks:?}");
+        assert_eq!(
+            blocks[0].lang.as_deref(),
+            Some("go"),
+            "the fenced info-string language, lowercased: {blocks:?}"
+        );
+        assert_eq!(
+            blocks[0].text, "package main\n",
+            "the block text is the concatenated body incl. the trailing newline: {blocks:?}"
+        );
+    }
+
+    /// `code_blocks` enumerates every fenced AND indented block in DOCUMENT ORDER;
+    /// an indented block (no info string) carries `lang == None`.
+    #[test]
+    fn code_blocks_document_order_and_indented() {
+        // A fenced go block, a 4-space indented block, then a fenced rust block.
+        let source = "```go\na\n```\n\n    indented\n\n```rust\nb\n```\n";
+        let blocks = code_blocks(source);
+        let langs: Vec<Option<&str>> = blocks.iter().map(|b| b.lang.as_deref()).collect();
+        assert_eq!(
+            langs,
+            vec![Some("go"), None, Some("rust")],
+            "blocks enumerate in document order; the indented block has no lang: {blocks:?}"
+        );
+    }
+
+    /// A bare fence (no info string) has `lang == None`.
+    #[test]
+    fn code_blocks_bare_fence_is_none() {
+        let blocks = code_blocks("```\nplain text\n```\n");
+        assert_eq!(blocks.len(), 1, "one bare fenced block: {blocks:?}");
+        assert_eq!(
+            blocks[0].lang, None,
+            "a bare fence carries no language: {blocks:?}"
+        );
+    }
+
+    /// With highlight data for the block, the interior code is emitted as inline
+    /// styled `<span>`s in the EXACT `style_css` order, still wrapped in the plain
+    /// `<pre><code class="language-go">`.
+    #[test]
+    fn render_html_with_highlights_emits_styled_spans() {
+        let src = "```go\npackage foo\n```\n";
+        let block = BlockHighlight {
+            spans: vec![HighlightSpan {
+                row: 0,
+                start_col: 0,
+                end_col: 7,
+                style: HighlightStyle {
+                    color: Some(0x00FF_8800),
+                    bold: true,
+                    italic: false,
+                    underline: false,
+                },
+            }],
+        };
+        let html = render_html_with_highlights(
+            src,
+            PreviewTheme::Default,
+            WidthMode::Full,
+            &[Some(block)],
+        );
+        assert!(
+            html.contains(r#"<span style="color:#ff8800;font-weight:bold;">package</span>"#),
+            "the `package` token must render as an inline-styled span (color + bold): {html}"
+        );
+        assert!(
+            html.contains("<pre"),
+            "the highlighted block must still be wrapped in <pre>: {html}"
+        );
+        assert!(
+            html.contains(r#"class="language-go""#),
+            "the highlighted block must keep its `class=\"language-go\"`: {html}"
+        );
+    }
+
+    /// The highlighted interior text is HTML-ESCAPED — both the span-covered token
+    /// and the surrounding gap text — so `<`/`&`/`>` become `&lt;`/`&amp;`/`&gt;`
+    /// and never survive raw.
+    #[test]
+    fn render_html_with_highlights_escapes_text() {
+        let src = "```go\nx < y & z > w\n```\n";
+        // A span over the leading `x`, so both the span body and the gap text pass
+        // through the escaper.
+        let block = BlockHighlight {
+            spans: vec![HighlightSpan {
+                row: 0,
+                start_col: 0,
+                end_col: 1,
+                style: HighlightStyle {
+                    color: Some(0x0000_FF00),
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                },
+            }],
+        };
+        let html = render_html_with_highlights(
+            src,
+            PreviewTheme::Default,
+            WidthMode::Full,
+            &[Some(block)],
+        );
+        assert!(
+            html.contains("&lt;"),
+            "`<` must be escaped to `&lt;`: {html}"
+        );
+        assert!(
+            html.contains("&amp;"),
+            "`&` must be escaped to `&amp;`: {html}"
+        );
+        assert!(
+            html.contains("&gt;"),
+            "`>` must be escaped to `&gt;`: {html}"
+        );
+        assert!(
+            !html.contains("x < y"),
+            "the raw `<` must not survive unescaped: {html}"
+        );
+        assert!(
+            !html.contains("z > w"),
+            "the raw `>` must not survive unescaped: {html}"
+        );
+    }
+
+    /// A `None` highlight slot for a block renders it PLAIN — byte-identical body to
+    /// the 3-arg `render_html`, with no inline `<span style=` anywhere.
+    #[test]
+    fn render_html_with_highlights_none_is_plain() {
+        let src = "```go\npackage foo\n```\n";
+        let plain = render_html(src, PreviewTheme::Default, WidthMode::Full);
+        let with =
+            render_html_with_highlights(src, PreviewTheme::Default, WidthMode::Full, &[None]);
+        assert_eq!(
+            with, plain,
+            "a `None` highlight slot must reproduce the plain render exactly"
+        );
+        assert!(
+            !with.contains("<span style="),
+            "a `None` highlight slot must emit no inline-styled span: {with}"
+        );
+    }
+
+    /// An EMPTY highlight slice makes every block plain — `render_html_with_highlights`
+    /// with `&[]` is byte-for-byte identical to `render_html` for a doc with a code
+    /// block (the delegation contract that gives existing call sites zero churn).
+    #[test]
+    fn render_html_empty_highlights_matches_render_html() {
+        let src = "# H\n\n```go\npackage main\nfunc f() {}\n```\n";
+        let empty = render_html_with_highlights(src, PreviewTheme::Default, WidthMode::Full, &[]);
+        let plain = render_html(src, PreviewTheme::Default, WidthMode::Full);
+        assert_eq!(
+            empty, plain,
+            "render_html_with_highlights(src, .., &[]) must byte-equal render_html(src, ..)"
+        );
+    }
+
+    /// A highlighted block still carries NO `wolf-src` marker inside its `<pre>`
+    /// (markers collapse to before the block), while the line's `wl-1-0` anchor
+    /// still exists elsewhere in the document.
+    #[test]
+    fn highlighted_block_has_no_marker_inside_pre() {
+        let src = "# H\n\n```go\npackage main\nfunc f() {}\n```\n";
+        let block = BlockHighlight {
+            spans: vec![HighlightSpan {
+                row: 0,
+                start_col: 0,
+                end_col: 7,
+                style: HighlightStyle {
+                    color: Some(0x0000_FF00),
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                },
+            }],
+        };
+        let html = render_html_with_highlights(
+            src,
+            PreviewTheme::Default,
+            WidthMode::Full,
+            &[Some(block)],
+        );
+        let pre_start = html
+            .find("<pre")
+            .unwrap_or_else(|| panic!("missing <pre> for the highlighted block in: {html}"));
+        let pre_end = html
+            .find("</pre>")
+            .unwrap_or_else(|| panic!("missing </pre> in: {html}"));
+        let inside = &html[pre_start..pre_end];
+        assert!(
+            !inside.contains("wolf-src"),
+            "no `wolf-src` marker span may appear inside the highlighted <pre>: {inside}"
+        );
+        assert!(
+            html.contains(r#"id="wl-1-0""#),
+            "the first hard line's `wl-1-0` anchor must still exist elsewhere: {html}"
+        );
+    }
+
+    /// Deliberately MALFORMED highlight data — overlapping and out-of-range spans —
+    /// must not panic and must still emit well-formed, NON-NESTED spans (the
+    /// defensive clamp/overlap guard in `build_highlighted_html`).
+    #[test]
+    fn render_html_with_highlights_defensive_overlap() {
+        let src = "```go\npackage foo\n```\n";
+        // Row 0 is "package foo" (len 11). These spans overlap each other and the
+        // last runs past the line end — the renderer must cope.
+        let block = BlockHighlight {
+            spans: vec![
+                HighlightSpan {
+                    row: 0,
+                    start_col: 0,
+                    end_col: 7,
+                    style: HighlightStyle {
+                        color: Some(0x0000_FF00),
+                        bold: false,
+                        italic: false,
+                        underline: false,
+                    },
+                },
+                HighlightSpan {
+                    row: 0,
+                    start_col: 3,
+                    end_col: 10,
+                    style: HighlightStyle {
+                        color: Some(0x00FF_0000),
+                        bold: false,
+                        italic: false,
+                        underline: false,
+                    },
+                },
+                HighlightSpan {
+                    row: 0,
+                    start_col: 5,
+                    end_col: 999,
+                    style: HighlightStyle {
+                        color: Some(0x0000_00FF),
+                        bold: false,
+                        italic: false,
+                        underline: false,
+                    },
+                },
+            ],
+        };
+        // Must not panic.
+        let html = render_html_with_highlights(
+            src,
+            PreviewTheme::Default,
+            WidthMode::Full,
+            &[Some(block)],
+        );
+        let pre_start = html
+            .find("<pre")
+            .unwrap_or_else(|| panic!("missing <pre> in: {html}"));
+        let pre_end = html
+            .find("</pre>")
+            .unwrap_or_else(|| panic!("missing </pre> in: {html}"));
+        let inside = &html[pre_start..pre_end];
+
+        // `match_indices("<span")` never matches the `</span>` close (its char after
+        // `<` is `/`), so opens counts only span openings.
+        let opens = inside.matches("<span").count();
+        let closes = inside.matches("</span>").count();
+        assert_eq!(
+            opens, closes,
+            "every highlight <span> must be closed (well-formed): {inside}"
+        );
+
+        // Non-nested: walking the interleaved open/close tags in position order, the
+        // depth must never exceed 1 and must return to 0.
+        let mut events: Vec<(usize, i32)> = Vec::new();
+        events.extend(inside.match_indices("<span").map(|(i, _)| (i, 1)));
+        events.extend(inside.match_indices("</span>").map(|(i, _)| (i, -1)));
+        events.sort_by_key(|(i, _)| *i);
+        let mut depth = 0i32;
+        for (_, delta) in events {
+            depth += delta;
+            assert!(
+                (0..=1).contains(&depth),
+                "highlight spans must not nest (depth {depth}): {inside}"
+            );
+        }
+        assert_eq!(depth, 0, "highlight spans must balance: {inside}");
     }
 }

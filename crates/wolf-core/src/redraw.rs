@@ -23,8 +23,8 @@ use crate::layout::LayoutIntent;
 use crate::recent_dirs::RecentDirs;
 use crate::render::{
     Cell, Cmdline, CmdlineChunk, CursorShape, DefaultColors, HlAttr, Message, ModeInfo,
-    PreviewInfo, Pum, PumItem, Rgb, SharedSnapshot, Snapshot, ThemeColors, ThemeGroup, ToastChunk,
-    Viewport, WinInfo,
+    PendingConfirm, PreviewInfo, Pum, PumItem, Rgb, SharedSnapshot, Snapshot, ThemeColors,
+    ThemeGroup, ToastChunk, Viewport, WinInfo,
 };
 
 /// A shared, drainable queue of [`LayoutIntent`]s.
@@ -1237,6 +1237,25 @@ fn cmdline_show(snap: &mut Snapshot, params: &[Value]) {
         indent,
         level,
     };
+
+    // If a confirm dialog was hidden on the last `cmdline_hide` (its messages
+    // stashed in `pending_confirm`), decide whether THIS cmdline is that dialog
+    // re-prompting after an invalid key or an unrelated cmdline. The hide batch is
+    // byte-identical either way, so we distinguish by the prompt: a prompt-style
+    // cmdline (empty `firstc`, non-empty `prompt`) whose prompt matches the stashed
+    // options line is the confirm's own re-prompt → restore the toast. Anything
+    // else (a `:`/`/` cmdline, or a different prompt like a fresh `input()`) means
+    // the confirm resolved → drop the stash, leaving the toast cleared.
+    if let Some(pending) = snap.pending_confirm.take() {
+        let is_reprompt = snap.cmdline.firstc.is_empty()
+            && !snap.cmdline.prompt.is_empty()
+            && snap.cmdline.prompt == pending.prompt;
+        if is_reprompt {
+            snap.toast.messages = pending.messages;
+            snap.toast.visible = true;
+        }
+        // else: `pending` drops here — stash discarded, toast stays cleared.
+    }
 }
 
 fn cmdline_pos(snap: &mut Snapshot, params: &[Value]) {
@@ -1252,7 +1271,22 @@ fn cmdline_pos(snap: &mut Snapshot, params: &[Value]) {
 fn cmdline_hide(snap: &mut Snapshot) {
     // [level, abort] — the (possibly nested) command line closed. v1 collapses
     // any recursion level to the single surface, so any hide clears it.
+    //
+    // Capture the options-line prompt BEFORE resetting the cmdline: a `confirm()`
+    // dialog's options ride the cmdline while its prompt text rides the toast as a
+    // `confirm` message. Neovim never emits `msg_clear` when the dialog resolves,
+    // so if we left the toast alone the prompt would linger forever. But an INVALID
+    // key produces a byte-identical hide+re-prompt, so we cannot clear outright:
+    // instead STASH the confirm toast's messages (with the captured prompt) and
+    // hide the toast, so a genuine resolve shows cleared immediately while a later
+    // matching `cmdline_show` (see there) can restore it.
+    let prompt = snap.cmdline.prompt.clone();
     snap.cmdline = Cmdline::default();
+    if snap.toast.is_prompt() {
+        let messages = std::mem::take(&mut snap.toast.messages);
+        snap.toast.visible = false;
+        snap.pending_confirm = Some(PendingConfirm { messages, prompt });
+    }
 }
 
 fn popupmenu_show(snap: &mut Snapshot, params: &[Value]) {
@@ -1311,6 +1345,10 @@ fn popupmenu_hide(snap: &mut Snapshot) {
 }
 
 fn msg_show(snap: &mut Snapshot, params: Vec<Value>) {
+    // A new message supersedes any confirm stashed mid-resolve (see
+    // `cmdline_hide`): drop it so a later prompt-style `cmdline_show` cannot
+    // resurrect a stale confirm toast underneath this message.
+    snap.pending_confirm = None;
     // [kind, content, replace_last, history, append, id, trigger]
     let kind = params
         .first()
@@ -1374,6 +1412,10 @@ fn msg_clear(snap: &mut Snapshot) {
 }
 
 fn msg_history_show(snap: &mut Snapshot, params: Vec<Value>) {
+    // A history render supersedes any confirm stashed mid-resolve (see
+    // `cmdline_hide`): drop it so a later prompt-style `cmdline_show` cannot
+    // resurrect a stale confirm toast underneath these messages.
+    snap.pending_confirm = None;
     // [entries, prev_cmd]; entry [kind, content, append]
     let Some(entries) = params.first().and_then(Value::as_array) else {
         return;
@@ -1451,6 +1493,21 @@ mod tests {
             Value::from(append),
             Value::from(id),
             Value::from(false), // trigger (unused)
+        ]
+    }
+
+    /// Builds prompt-style `cmdline_show` params (empty content, empty `firstc`,
+    /// the given `prompt`) — the shape a confirm()/input() prompt cmdline arrives
+    /// in. Tuple order matches `fn cmdline_show`: `[content, pos, firstc, prompt,
+    /// indent, level]`.
+    fn cmdline_show_params(prompt: &str) -> Vec<Value> {
+        vec![
+            Value::Array(vec![]), // content: no chunks
+            Value::from(0u64),    // pos
+            Value::from(""),      // firstc: empty => prompt-style
+            Value::from(prompt),  // prompt
+            Value::from(0u64),    // indent
+            Value::from(1u64),    // level
         ]
     }
 
@@ -1558,5 +1615,147 @@ mod tests {
             "the non-matching message is left untouched"
         );
         assert!(snap.toast.visible, "an id-match keeps the toast visible");
+    }
+
+    /// `cmdline_hide` clears a lingering confirm PROMPT toast. A `confirm()`
+    /// dialog's prompt arrives as a `msg_show` kind `"confirm"` (into `toast`),
+    /// while its options line rides `cmdline`; when the dialog resolves Neovim
+    /// emits ONLY `cmdline_hide` (never `msg_clear`), so the fold must clear the
+    /// prompt toast here or it lingers forever.
+    #[test]
+    fn cmdline_hide_clears_a_confirm_prompt_toast() {
+        let mut snap = Snapshot::default();
+        msg_show(&mut snap, msg_show_params("confirm", "Choose", false, false, 0));
+        assert!(
+            snap.toast.is_prompt(),
+            "a `confirm` kind message is a prompt toast"
+        );
+        assert!(snap.toast.visible, "the prompt toast should be visible");
+
+        cmdline_hide(&mut snap);
+
+        assert!(
+            !snap.toast.visible,
+            "cmdline_hide must clear the resolved confirm prompt toast"
+        );
+        assert!(
+            !snap.toast.is_prompt(),
+            "no lingering confirm prompt should remain after the hide"
+        );
+        assert!(
+            snap.toast.messages.is_empty(),
+            "the cleared prompt toast should hold no messages"
+        );
+    }
+
+    /// `cmdline_hide` leaves a NON-prompt toast intact — the load-bearing guard
+    /// against over-clearing. An `echomsg` toast (kind not `"confirm"`) must
+    /// survive an unrelated `cmdline_hide` unchanged.
+    #[test]
+    fn cmdline_hide_leaves_a_non_prompt_toast_intact() {
+        let mut snap = Snapshot::default();
+        msg_show(&mut snap, msg_show_params("echomsg", "hello", false, false, 0));
+        assert!(snap.toast.visible, "the echomsg toast should be visible");
+        let before_len = snap.toast.messages.len();
+
+        cmdline_hide(&mut snap);
+
+        assert!(
+            snap.toast.visible,
+            "a non-prompt toast must survive an unrelated cmdline_hide"
+        );
+        assert_eq!(
+            snap.toast.messages.len(),
+            before_len,
+            "the surviving toast's message count is unchanged"
+        );
+        assert_eq!(
+            message_text(&snap.toast.messages[0]),
+            "hello",
+            "the surviving toast's content is unchanged"
+        );
+    }
+
+    /// Stash-then-restore: a confirm prompt hidden on `cmdline_hide` (stashed
+    /// into `pending_confirm`) is RESTORED when the dialog re-prompts with the
+    /// SAME options-line prompt (the invalid-key path — Neovim re-prompts in a
+    /// later flush after a non-answering key).
+    #[test]
+    fn cmdline_show_matching_reprompt_restores_stashed_confirm() {
+        const OPTIONS_PROMPT: &str = "[y]es, (n)o: ";
+
+        let mut snap = Snapshot::default();
+        // The options line arrives as a prompt-style cmdline; the prompt text as
+        // a `confirm` toast.
+        cmdline_show(&mut snap, &cmdline_show_params(OPTIONS_PROMPT));
+        msg_show(&mut snap, msg_show_params("confirm", "Choose", false, false, 0));
+
+        // The dialog "resolves" (from the fold's view) on cmdline_hide: the toast
+        // is hidden and its messages are stashed pending a possible re-prompt.
+        cmdline_hide(&mut snap);
+        assert!(
+            !snap.toast.visible,
+            "cmdline_hide hides the confirm toast immediately"
+        );
+        assert!(
+            snap.pending_confirm.is_some(),
+            "the hidden confirm messages are stashed pending a re-prompt"
+        );
+
+        // The SAME options prompt re-appears (invalid key => nvim re-prompts).
+        cmdline_show(&mut snap, &cmdline_show_params(OPTIONS_PROMPT));
+
+        assert!(
+            snap.toast.visible,
+            "a matching re-prompt restores the stashed confirm toast"
+        );
+        assert!(
+            snap.toast.is_prompt(),
+            "the restored toast is again a confirm prompt"
+        );
+        assert!(
+            snap.pending_confirm.is_none(),
+            "a consumed stash is cleared after restore"
+        );
+        assert_eq!(
+            message_text(&snap.toast.messages[0]),
+            "Choose",
+            "the restored toast carries the original prompt text"
+        );
+    }
+
+    /// Staleness guard: a stashed confirm is DROPPED (not restored) when the next
+    /// prompt-style `cmdline_show` carries a DIFFERENT prompt — e.g. the confirm
+    /// resolved and an unrelated `input("Name: ")` prompt followed.
+    #[test]
+    fn cmdline_show_nonmatching_prompt_drops_stashed_confirm() {
+        let mut snap = Snapshot::default();
+        cmdline_show(&mut snap, &cmdline_show_params("[y]es, (n)o: "));
+        msg_show(&mut snap, msg_show_params("confirm", "Choose", false, false, 0));
+        cmdline_hide(&mut snap);
+        assert!(
+            snap.pending_confirm.is_some(),
+            "the confirm messages are stashed on hide"
+        );
+
+        // A DIFFERENT prompt appears: the stash is stale and must be discarded.
+        cmdline_show(&mut snap, &cmdline_show_params("Name: "));
+
+        assert!(
+            !snap.toast.visible,
+            "a non-matching prompt must not restore the stale confirm toast"
+        );
+        assert!(
+            !snap.toast.is_prompt(),
+            "no confirm prompt should remain after a non-matching cmdline_show"
+        );
+        assert!(
+            snap.pending_confirm.is_none(),
+            "the stale stash is dropped on a non-matching prompt"
+        );
+        assert!(
+            snap.toast.messages.is_empty(),
+            "the dropped confirm leaves no toast messages"
+        );
     }
 }
