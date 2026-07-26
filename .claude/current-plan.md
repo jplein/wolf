@@ -1,296 +1,134 @@
-# Plan: `:q` and variants close the active pane / window
+# Plan: `:qa` and variants close the active window
 
 ## Feature request
 
-In the captive Neovim runtime, `:q` and its variants (`:q!`, `:wq`, and the
-other single-window quit forms) must:
+In the captive Neovim runtime, `:qa` and its variants must **close the active
+(front-end) window** — behaving like `:q` EXCEPT that when there are multiple
+panes, the whole window is closed rather than just the active pane. In the
+single-pane case `:qa` and `:q` are identical (both close the window).
 
-- **Close the active pane**, and
-- **If the active pane is the only one open, close the (front-end) window.**
+This BUILDS ON the just-shipped `:q` family (`do_quit`, `WolfQuit` /
+`WolfWriteQuit`, the bare-word abbrevs) in `runtime/nvim/init.lua`'s
+`_G.wolf_setup_layout(chan)`. The `:q` change previously declared quit-ALL "out
+of scope"; this change brings it IN scope — those "out of scope" notes in code
+comments and docs must be updated.
 
-## Why this matters / context
+## Authoritative investigation already done by the orchestrator (build on this)
 
-The captive Neovim is SHARED across front-end views (one nvim per project, one
-tabpage per view). A raw `:q` on the last window would quit nvim entirely (or
-close a tabpage out from under a view) — a disaster. Wolf already reroutes
-`:close` / `<C-w>c` / `<C-w>q` to a guarded pane-close (`wolf_do_close`) that
-refuses to close the last window. `:q` and its variants are currently NOT
-intercepted, so they fall through to native Neovim behavior. This change makes
-the whole `:q` family behave like Wolf's pane/window model.
+### Semantics
 
-## Investigation already done by the orchestrator (authoritative — build on this)
+- `:qa` (and variants) → ALWAYS close the front-end window, i.e. always take the
+  "close window" branch that fires `vim.rpcnotify(chan, "wolf_command",
+  "close_window")` — regardless of how many panes are open. (This is exactly the
+  `:q` last-pane branch, but unconditional on pane count.)
+- Force / write / unsaved-guard semantics mirror `:q` EXACTLY (keep it "basically
+  like :q"):
+  - `qa!` (bang) → force (discards; overrides the modified guard).
+  - `wqa`/`xa` (write variants) → `:write`(`!`) first; abort the quit if the
+    write fails.
+  - a plain (non-force) `:qa` on a MODIFIED buffer is REFUSED with the same E37
+    echo the `:q` last-pane branch uses. KEEP the guard scoped to the current
+    buffer (`vim.bo.modified`), same as `do_quit` today — do NOT expand it to
+    scan all panes. Rationale: the user framed this as "basically like `:q`";
+    consistency with `:q` is the goal, and closing a front-end window does not
+    unload the shared nvim's buffers except when it is the LAST view (buffers are
+    global to the captive nvim), so the active-buffer guard matches `:q`'s UX
+    without new complexity.
 
-### Interception mechanism (PROVEN empirically against the pinned nvim v0.12.3)
+### Interception mechanism (PROVEN empirically against pinned nvim v0.12.3)
 
-- A plain `cnoreabbrev` on the bare word (`q`, `wq`) does NOT handle the `!`
-  variants: when the user types `q` then `!`, the bare-`q` abbrev fires while
-  `getcmdline() == 'q'` is still true, expanding `q` and leaving a stray `!`
-  appended → e.g. `lua wolf_quit('q')!` → Lua syntax error. Confirmed by
-  experiment.
-- **The robust approach that WORKS for all variants:** expand the abbrev to a
-  real `nvim_create_user_command` that accepts a bang (`{ bang = true }`). Then
-  `:q!` expands `q` → `WolfQuit`, and the trailing `!` becomes `WolfQuit!` — a
-  valid banged user-command invocation whose callback sees `opts.bang == true`.
-  Empirically verified: `:q`, `:q!`, `:quit`, `:quit!`, `:wq`, `:wq!`, `:x`,
-  `:xit` all route correctly with the bang preserved.
+Same mechanism as the `:q` family. Verified this session for the qa family:
+`:qa`, `:qa!`, `:qall`, `:quitall`, `:wqa`, `:wqa!`, `:xa`, `:xall` all route
+correctly with the bang preserved, and there is NO collision with the existing
+`q`/`wq`/`x` abbrevs (because `a` is a keyword char, `:qa` forms a distinct word
+and never triggers the bare `q` abbrev). Concretely:
 
-  Two internal user commands are needed:
-  - `WolfQuit` (bang → force): for `q`, `quit`.
-  - `WolfWriteQuit` (bang → force): for `wq`, `x`, `xit`.
+- Extend the existing `do_quit(opts)` helper with an `all` flag: `opts = { write,
+  force, all }`. When `all` is true, SKIP the pane-count check and always take
+  the close-window branch (subject to the same modified guard + force). Minimal
+  diff — one added condition, e.g. change `if #vim.api.nvim_tabpage_list_wins(0)
+  > 1 then` to `if not opts.all and #vim.api.nvim_tabpage_list_wins(0) > 1
+  then`. (The existing `:q` callers pass no `all`, so `opts.all` is nil/false —
+  behavior unchanged.)
+- Add two internal user commands (NOT registry commands; do NOT touch
+  command.rs/FFI/Swift):
+  - `WolfQuitAll` → `do_quit({ write = false, force = o.bang, all = true })`
+  - `WolfWriteQuitAll` → `do_quit({ write = true, force = o.bang, all = true })`
+  - both `{ bang = true, nargs = 0 }`.
+- Add bare-word abbrevs (reusing the existing `abbrev()` helper): `qa`, `qall`,
+  `quitall` → `WolfQuitAll`; `wqa`, `wqall`, `xa`, `xall` → `WolfWriteQuitAll`.
+  Do NOT add `qa!`/`wqa!` abbrevs — the trailing `!` rides through to
+  `:WolfQuitAll!` / `:WolfWriteQuitAll!` (`o.bang` → force), same proven reason
+  as the `:q` family.
 
-  (These are INTERNAL plumbing — they are NOT registry `COMMAND_SPECS` commands
-  and must NOT be added to the `Command` enum / FFI. They exist only as
-  abbreviation targets. Naming is at the architect's discretion, but keep them
-  distinct from the registry-generated `:WolfClosePane` / `:WolfCloseWindow`.)
+### Reuses the existing `close_window` command — NO Rust/Swift/FFI changes
 
-- The abbrevs are installed exactly like the existing ones in
-  `runtime/nvim/init.lua`'s `_G.wolf_setup_layout(chan)` (see the `abbrev()`
-  helper and the `abbrev("close", "lua wolf_do_close()")` line, ~L760–779).
+`close_window` is `Command::CloseWindow` (id `"close_window"`, discriminant 1),
+already wired end to end. `:qa` firing `wolf_command "close_window"` routes
+through `Command::from_id` onto the drainable command queue; the macOS front-end
+drains it and calls `window?.performClose(nil)`. The KEY behavioral difference
+from `:q` (and the thing tests must prove): with MULTIPLE panes open, `:qa`
+fires `close_window` (whole window closes) whereas `:q` closes just the active
+pane (pane count drops, NO command fired).
 
-### The close logic
+### Test patterns (mirror the `:q` tests added this session)
 
-A new helper (e.g. `do_quit({ write, force })`), living inside
-`wolf_setup_layout(chan)` alongside `do_close` (so it closes over `chan`), and
-exposed as a global (e.g. `_G.wolf_do_quit`) like `_G.wolf_do_close`:
-
-```
-local function do_quit(opts)          -- opts = { write = bool, force = bool }
-  if opts.write then
-    pcall(vim.cmd, opts.force and "write!" or "write")
-  end
-  if #vim.api.nvim_tabpage_list_wins(0) > 1 then
-    pcall(vim.api.nvim_win_close, 0, opts.force or false)   -- close the pane
-  else
-    vim.rpcnotify(chan, "wolf_command", "close_window")      -- last pane: close the window
-  end
-end
-```
-
-Key facts backing this:
-- `#vim.api.nvim_tabpage_list_wins(0) > 1` is the SAME multi-pane guard
-  `wolf_do_close` uses (init.lua ~L681–685).
-- `nvim_win_close(0, force)` with `force = false` naturally refuses to discard
-  unsaved changes (matching `:q` semantics); `force = true` (from `:q!`)
-  discards (matching `:q!`).
-- `close_window` is a real registry command (`command.rs`: `Command::CloseWindow`,
-  id `"close_window"`, discriminant 1). Firing `vim.rpcnotify(chan,
-  "wolf_command", "close_window")` routes through `Command::from_id` onto the
-  drainable command queue; the macOS front-end drains it and calls
-  `window?.performClose(nil)` (`CommandDispatcher` `.closeWindow`). This is the
-  established way to close the front-end window from inside nvim.
-- `chan` here is core's RPC channel — the SAME channel `wolf_command`
-  notifications already use (the layout helper's `chan`).
-
-### Scope decision (orchestrator)
-
-- IN scope: the single-window quit family — `q`, `q!`, `quit`, `quit!`, `wq`,
-  `wq!`, `x`, `xit`. (`x`/`xit` = write-then-quit; treat like `wq`.)
-- OUT of scope: the quit-ALL family (`qa`, `qall`, `wqa`, `xa`, `qa!`, …). These
-  are pre-existing un-intercepted behavior; leave them as-is and note the
-  deferral. Do not expand scope without asking.
-
-### Test patterns to mirror
-
-- `crates/wolf-core/tests/layout_intents.rs` — drives a REAL hermetic nvim,
-  types Ex commands one key at a time (`ex_command` helper), polls the snapshot
-  (`poll_until`), and already tests pane close: `ctrl_w_c_closes_pane_when_multiple`
-  and `ctrl_w_c_noop_on_last_window`. The multi-pane `:q` close test mirrors the
-  former.
-- `crates/wolf-core/tests/commands.rs` — drives the command channel and has
-  `drain_until_command` for asserting a drained `Command` (e.g.
-  `Command::CloseWindow`). The last-pane `:q` → close-window test mirrors this.
-- NOTE the `ex_command` helper types the word one char at a time, which is what
-  triggers `cnoreabbrev`. For a banged variant the test types e.g. `q!`.
-
-### Build/test toolchain
-
-- Build/test with **bazelisk** (NOT cargo). Integration tests need the pinned
-  nvim via `WOLF_NVIM_BIN` (the common helpers panic if unset) — the Bazel test
-  targets wire this up.
+- `crates/wolf-core/tests/commands.rs` — has `ex_command`, `drain_until_command`,
+  `poll_until`, and the `:q` tests (`ex_q_on_last_pane_emits_close_window`,
+  `ex_q_bang_forces_close_window_when_modified`,
+  `ex_wq_writes_to_disk_and_closes_window`, `ex_q_refuses_modified_last_pane`).
+  The `:qa` command-channel tests belong here.
+- `crates/wolf-core/tests/layout_intents.rs` — has `ex_q_closes_pane_when_multiple`
+  (proves `:q` drops the pane count). The CRITICAL differentiator test for `:qa`
+  belongs here or in commands.rs: with multiple panes, `:qa` must fire
+  `close_window` and must NOT merely drop the pane count. Prefer commands.rs
+  (drain_until_command) for the close_window assertion; a negative pane-count
+  check can accompany it.
 
 ### Docs to update
 
-- `runtime/nvim/README.md` — the `_G.wolf_setup_layout(chan)` section
-  (Ex-command overrides list) and the asymmetry/close notes.
-- `command-lifecycle.md` — only if the close_window path description needs it
-  (likely a light touch, since `:q` reuses the existing `close_window` command).
-- Any affected directory README. Run `prettier --write` on edited Markdown.
+- `runtime/nvim/README.md` — the `_G.wolf_setup_layout(chan)` section: extend the
+  QUIT note to describe the `:qa` family (always closes the window; the `all`
+  flag), add the two new user commands + abbrevs to the Ex-command overrides
+  bullet, and REMOVE/UPDATE the "quit-ALL is out of scope" statement.
+- `command-lifecycle.md` — the §5 note already says the `:q` family fires
+  `close_window`; extend it to include the `:qa` family.
+- Update the `do_quit` code comment in `init.lua` (it currently says quit-ALL is
+  out of scope).
+- Run `prettier --write` on edited Markdown.
 
-## Orchestrator decision on the architect's refinement
+### Build/test toolchain
 
-ACCEPTED: the architect tightened the last-pane path so a plain `:q` on a
-MODIFIED last-pane buffer is REFUSED (native `:q` parity via an unsaved-changes
-guard + echo) rather than silently closing the front-end window and abandoning
-edits, and a failed write in a `:wq` ABORTS the quit. This prevents data loss
-and matches vim semantics; `:q!` (force) still closes. The optional
-`ex_q_refuses_modified_last_pane` guard test IS in scope. Everything else per
-the architect plan below.
+- Build/test with **bazelisk** (NOT cargo). Run at least
+  `//crates/wolf-core:commands` and `//crates/wolf-core:layout_intents`; the
+  final verification is `bazelisk test //...` (the documented full-suite command).
 
-## Architect plan
+## Architect plan (APPROVED by orchestrator)
 
-# Architect Plan: `:q` family closes the active pane / window
-
-## 1. Summary
-
-The captive Neovim currently intercepts `:close` / `<C-w>c` / `<C-w>q` (guarded
-pane-close) but lets the `:q` family fall through to native Neovim, which would
-quit nvim entirely or tear a tabpage out from under a front-end view. This
-change reroutes the single-window quit family (`q`, `q!`, `quit`, `quit!`, `wq`,
-`wq!`, `x`, `xit`) into Wolf's pane/window model: with multiple panes in the
-tabpage it performs a guarded `nvim_win_close` (respecting bang/unsaved
-semantics); on the last pane it fires the existing `close_window` registry
-command over RPC so the front-end closes the window. The work is entirely inside
-`runtime/nvim/init.lua`'s `_G.wolf_setup_layout(chan)` plus new integration
-tests and docs. No Rust, Swift, or FFI changes are required — `close_window`
-(`Command::CloseWindow`, id `"close_window"`, discriminant 1) already exists end
-to end, and the two new user commands are internal Lua-only plumbing, NOT
-registry commands.
-
-## 2. Files to modify
-
-### `runtime/nvim/init.lua` — inside `_G.wolf_setup_layout(chan)` (~L663–791)
-
-All additions live INSIDE `wolf_setup_layout` so they close over `chan` (core's
-RPC channel — the same one `do_close`/`do_focus` use). Place them alongside the
-existing `do_close` helper (~L681–685), the globals block (~L710–713), and the
-`abbrev(...)` calls (~L773–779).
-
-**a. New helper `do_quit(opts)`** — next to `do_close`, before the globals
-block. `opts` is `{ write = boolean, force = boolean }`:
-
-- If `opts.write`: run `pcall(vim.cmd, opts.force and "write!" or "write")`. If
-  the write fails (pcall false — nofile/scratch buffer, E32/E212), ABORT
-  `do_quit` (return early) so a failed `:wq` does not close, matching native.
-- Multi-pane branch — guard `#vim.api.nvim_tabpage_list_wins(0) > 1` (same guard
-  as `do_close` at ~L682): `pcall(vim.api.nvim_win_close, 0, opts.force or
-  false)`. `force = false` refuses to discard unsaved changes (native `:q`);
-  `force = true` discards (native `:q!`). The `pcall` swallows a bare E37.
-- Last-pane branch (`else`): if `not opts.force and vim.bo.modified`, surface a
-  native-style refusal (`vim.api.nvim_echo({{ "E37: No write since last change
-  (add ! to override)", "ErrorMsg" }}, true, {})`) and return WITHOUT firing.
-  Otherwise `vim.rpcnotify(chan, "wolf_command", "close_window")`.
-
-**b. Global exposure** — in the globals block (~L710–713) add `_G.wolf_do_quit =
-do_quit` for symmetry with `_G.wolf_do_close` (the user-command callbacks capture
-`do_quit` as a closure directly; the global is for consistency / Lua-face use).
-
-**c. Two internal user commands** — near the `abbrev(...)` calls. PROVEN
-bang-handling mechanism; NOT registry commands (do NOT touch
-`Command`/`COMMAND_SPECS`/FFI):
-- `vim.api.nvim_create_user_command("WolfQuit", function(o) do_quit({ write =
-  false, force = o.bang }) end, { bang = true, nargs = 0 })`
-- `vim.api.nvim_create_user_command("WolfWriteQuit", function(o) do_quit({ write
-  = true, force = o.bang }) end, { bang = true, nargs = 0 })`
-
-**d. Abbrevs (bare word ONLY)** — after `abbrev("close", ...)` (~L777), reusing
-the existing `abbrev(word, replacement)` helper. Replacement is the Ex-command
-NAME (not a `lua ...` string):
-- `abbrev("q", "WolfQuit")`
-- `abbrev("quit", "WolfQuit")`
-- `abbrev("wq", "WolfWriteQuit")`
-- `abbrev("x", "WolfWriteQuit")`
-- `abbrev("xit", "WolfWriteQuit")`
-
-**CRITICAL — do NOT add `q!` / `quit!` / `wq!` abbrevs.** `cnoreabbrev` matches a
-whole KEYWORD word; `!` is not a keyword char. Typing `:q!` fires the bare-`q`
-abbrev (`getcmdline() == "q"` still true), expands `q` → `WolfQuit`, and the
-trailing `!` rides through to `:WolfQuit!` — a valid banged invocation whose
-callback sees `o.bang == true`. A `q!` abbrev would be dead/broken.
-
-### Correctness notes / edge cases
-
-- `x`/`xit` treated as `wq` (always write). Native `:x` writes only when
-  modified; on an unmodified nofile/scratch buffer our always-write path could
-  error where native `:x` would not. Accepted, documented minor deviation.
-- Multi-pane E37 swallowing: `pcall` on `nvim_win_close(0, false)` swallows the
-  E37 native `:q` prints on a modified buffer shown only in that pane, so the
-  pane silently stays open. Acceptable (no crash, no data loss); note it.
-- NO Rust/Swift/FFI changes — reuses `close_window` verbatim.
-- Scope: single-window quit family only. Quit-ALL (`qa`, `qall`, `wqa`, `xa`,
-  `qa!`, …) stays un-intercepted, OUT of scope — add no abbrevs for them.
-
-## 3. Files to create
-
-None.
-
-## 4. Test plan
-
-All integration tests drive a REAL hermetic nvim via the shared
-`tests/common/mod.rs` helpers and type Ex commands ONE key at a time (so
-`cnoreabbrev` fires). Reuse the per-file locals (`ex_command`, `poll_until`,
-`wait_for_initial_window`, `ctrl_w_then`, `drain_until_intent` /
-`drain_until_command`). Build/test with bazelisk.
-
-### In `crates/wolf-core/tests/layout_intents.rs`
-
-- **`ex_q_closes_pane_when_multiple`** — mirror `ctrl_w_c_closes_pane_when_multiple`
-  (L397–423). Split with `ctrl_w_then(&core, 'v')`, `drain_until_intent`, poll
-  windows == base+1. Then `ex_command(&core, "q")` and poll windows == base (the
-  active pane closed via guarded `nvim_win_close`; buffer is unmodified so
-  `force = false` closes cleanly).
-
-### In `crates/wolf-core/tests/commands.rs`
-
-- **`ex_q_on_last_pane_emits_close_window`** — `wait_for_initial_window`, assert
-  `core.drain_commands().is_empty()` (no emit-on-attach), then `ex_command(&core,
-  "q")` on the sole (unmodified) pane; `drain_until_command` must contain
-  `Command::CloseWindow`.
-- **`ex_q_bang_forces_close_window_when_modified`** — the fragile BANG path.
-  Modify the buffer (`ch('i')`, `ch('x')`, `key(Key::Esc)`), drain/discard, then
-  `ex_command(&core, "q!")`; `drain_until_command` must contain
-  `Command::CloseWindow`, proving the bang reached the callback and overrode the
-  modified-buffer guard.
-- **`ex_wq_writes_to_disk_and_closes_window`** — capture `file.path()` from
-  `start_core_with_temp_md(DOC)`. Modify with distinctive text (`i`, chars,
-  `Esc`). `ex_command(&core, "wq")`. Poll `std::fs::read_to_string(file.path())`
-  until it contains the inserted text (write is async over RPC), and
-  `drain_until_command` must contain `Command::CloseWindow`.
-- **`ex_q_refuses_modified_last_pane`** (guard test — IN scope per orchestrator
-  decision) — modify the buffer (`i`,`x`,`Esc`), drain/discard, `ex_command(&core,
-  "q")`, let a SETTLE window elapse (draining wakes), assert `drain_commands()`
-  does NOT contain `Command::CloseWindow`. Mirrors the negative style of
-  `ctrl_w_c_noop_on_last_window`.
-
-Do NOT weaken the existing chord/close tests — the `<C-w>` chord tests remain the
-robust primary coverage.
-
-## 5. Docs to update
-
-- **`runtime/nvim/README.md`** — `_G.wolf_setup_layout(chan)` section:
-  - Ex-command overrides bullet (L114): append the quit family — `q`/`quit` →
-    `WolfQuit`, `wq`/`x`/`xit` → `WolfWriteQuit`. Explain the abbrev targets are
-    two INTERNAL `nvim_create_user_command`s (`{ bang = true, nargs = 0 }`, NOT
-    registry commands), and that only the bare word is abbreviated because the
-    trailing `!` rides through to `:WolfQuit!` / `:WolfWriteQuit!` (`o.bang` →
-    `force`).
-  - CLOSE asymmetry bullet (L103) / new QUIT note: describe `do_quit({ write,
-    force })` — multi-pane → guarded `nvim_win_close(0, force)` (no intent, like
-    CLOSE); last pane → `wolf_command "close_window"`; write variants write first
-    (aborting on failure); a plain `:q` on a modified last-pane buffer is
-    refused. Note quit-ALL is out of scope.
-  - Globals sentence (L107): add `_G.wolf_do_quit`.
-  - Optionally the intro (L98) that lists `:split`/`:vsplit`/`:close`.
-- **`command-lifecycle.md`** — light touch: if it enumerates `close_window`
-  triggers, add that the `:q` family (last pane) now also fires it.
-- Run `prettier --write` on every edited Markdown file.
-
-## 6. Implementation order
-
-1. `init.lua`: `do_quit(opts)`; `_G.wolf_do_quit`; two `nvim_create_user_command`;
-   five bare-word `abbrev(...)`.
-2. `commands.rs`: the four command-channel tests.
-3. `layout_intents.rs`: `ex_q_closes_pane_when_multiple`.
-4. Docs + `prettier --write`.
-5. Run the two integration suites + pure `command.rs` tests via bazelisk.
-
-## 7. Dependencies
-
-None.
+Key points (full plan executed by the agents):
+- `init.lua` `do_quit`: change the guard to `if not opts.all and #vim.api.nvim_tabpage_list_wins(0) > 1 then` — one condition; existing `:q` callers pass no `all`, so unchanged. Update the comment block (drop "quit-ALL out of scope").
+- Add user commands `WolfQuitAll` (write=false, all=true) / `WolfWriteQuitAll` (write=true, all=true), both `{ bang=true, nargs=0 }`.
+- Add abbrevs: `qa`,`qall`,`quitall`→WolfQuitAll; `wqa`,`wqall`,`xa`,`xall`→WolfWriteQuitAll. NO `qa!`/`wqa!` abbrevs (bang rides through). Extend the collision comment to the qa family.
+- Modified guard stays current-buffer-scoped (`vim.bo.modified`). No Rust/Swift/FFI changes.
+- Tests (commands.rs): ex_qa_on_last_pane_emits_close_window, ex_qa_bang_forces_close_window_when_modified, ex_wqa_writes_to_disk_and_closes_window, ex_qa_refuses_modified_last_pane, and the MUST-HAVE differentiator ex_qa_emits_close_window_when_multiple_panes (use `ex_command(&core,"vsplit")` + poll windows growth, then `:qa`, assert CloseWindow drained — avoids importing intent machinery/ctrl). Tests (layout_intents.rs): ex_qa_does_not_merely_drop_pane_count (negative: pane count does NOT drop to base after `:qa` with two panes).
+- Docs: README QUIT bullet + Ex-command overrides bullet (remove out-of-scope note); command-lifecycle §5 Face A; init.lua comment; prettier.
+- Verify: `bazelisk test //crates/wolf-core:commands //crates/wolf-core:layout_intents`, then `bazelisk test //...`.
 
 ## Status
 
 - [x] Architect plan
-- [x] Tests written (layout_intents.rs: ex_q_closes_pane_when_multiple; commands.rs: ex_q_on_last_pane_emits_close_window, ex_q_bang_forces_close_window_when_modified, ex_wq_writes_to_disk_and_closes_window, ex_q_refuses_modified_last_pane)
-- [x] Implementation + tests passing — init.lua do_quit + WolfQuit/WolfWriteQuit + 5 abbrevs. `bazelisk test //crates/wolf-core:commands //crates/wolf-core:layout_intents` → all pass (10/10, 9/9). Coder also added a missing `//crates/wolf-core:layout_intents` rust_test target to crates/wolf-core/BUILD.bazel (the file previously had no target). No Rust/Swift/FFI changes.
-- [x] Review — APPROVED, no blocking issues. Confirmed do_quit correctness, bang mechanism (no broken q! abbrevs), scope (no quit-all, no Rust/Swift/FFI changes), tests match §4, new BUILD target correct. Only pending: §5 docs.
-- [x] Docs — runtime/nvim/README.md (QUIT bullet, wolf_do_quit global, Ex-command overrides + bang mechanism) and command-lifecycle.md (§5 Face A note that :q family fires close_window). prettier --write run: both files conformant.
+- [x] Tests written (commands.rs: ex_qa_on_last_pane_emits_close_window, ex_qa_bang_forces_close_window_when_modified, ex_wqa_writes_to_disk_and_closes_window, ex_qa_refuses_modified_last_pane, ex_qa_emits_close_window_when_multiple_panes; layout_intents.rs: ex_qa_does_not_merely_drop_pane_count)
+- [x] Implementation + tests passing — init.lua: `all` flag on do_quit + WolfQuitAll/WolfWriteQuitAll + 7 abbrevs. `bazelisk test //crates/wolf-core:commands //crates/wolf-core:layout_intents` → pass (all new + existing :q tests). No Rust/Swift/FFI changes.
+- [x] Review — APPROVED, no findings. Confirmed all-flag correctness, bang mechanism, no collision, reuse of close_window (no Rust/Swift/FFI changes), both sides of the differentiator tested, existing :q tests untouched.
+- [x] Docs — runtime/nvim/README.md (QUIT bullet extended for :qa + all flag; Ex-command overrides bullet + 2 new user commands/7 abbrevs; removed quit-ALL out-of-scope wording) and command-lifecycle.md §5 Face A (:qa shares close_window trigger). prettier: clean.
+
+## Final verification
+
+`bazelisk test //...` → 79/80 pass on the first sweep. The single failure was
+`//crates/wolf-core:input_keys` (`cursor_moves`) — a PRE-EXISTING timing flake
+(reads the cursor before the `j` motion flushes), unrelated to :qa; it passed in
+the prior full-suite run and 5/5 on re-run. Not caused by this change; it is a
+latent flake in a file newly wired into Bazel this branch. FOLLOW-UP: harden
+`cursor_moves` to wait for a flush/poll the cursor (test-writer).
+
+FEATURE COMPLETE: :qa family. All :qa + :q tests pass reliably.

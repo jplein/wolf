@@ -685,15 +685,23 @@ function _G.wolf_setup_layout(chan)
 	end
 
 	-- QUIT: the :q family (q/quit/wq/x/xit and their banged variants) routed into
-	-- Wolf's pane/window model. `opts = { write = bool, force = bool }`.
+	-- Wolf's pane/window model. `opts = { write = bool, force = bool, all = bool }`.
 	--   * write variants (wq/x/xit) write first; a FAILED write ABORTS the quit
 	--     (native parity -- a failed :wq must not close).
-	--   * multi-pane: guarded nvim_win_close(0, force) like do_close; force=false
-	--     refuses to discard unsaved changes, force=true (from :q!) discards. No
-	--     intent -- the shell observes the removal via the win_close redraw event.
+	--   * multi-pane (NON-all): guarded nvim_win_close(0, force) like do_close;
+	--     force=false refuses to discard unsaved changes, force=true (from :q!)
+	--     discards. No intent -- the shell observes the removal via the win_close
+	--     redraw event.
 	--   * last pane: fire the existing close_window registry command so the
 	--     front-end closes the window -- BUT a plain :q on a modified buffer is
 	--     REFUSED with a native-style E37 (:q! overrides), preventing data loss.
+	--   * all=true (the :qa family: qa/qall/quitall/wqa/wqall/xa/xall + banged):
+	--     SKIP the pane-count check so control ALWAYS reaches the close-window
+	--     branch -- the whole front-end window closes regardless of how many panes
+	--     are open. Same write/force/current-buffer-modified (E37) semantics as
+	--     :q's last-pane branch; the modified guard stays scoped to the current
+	--     buffer (vim.bo.modified), matching :q -- it is not expanded to scan all
+	--     panes.
 	local function do_quit(opts)
 		if opts.write then
 			local ok = pcall(vim.cmd, opts.force and "write!" or "write")
@@ -701,7 +709,7 @@ function _G.wolf_setup_layout(chan)
 				return
 			end
 		end
-		if #vim.api.nvim_tabpage_list_wins(0) > 1 then
+		if not opts.all and #vim.api.nvim_tabpage_list_wins(0) > 1 then
 			pcall(vim.api.nvim_win_close, 0, opts.force or false)
 		else
 			if not opts.force and vim.bo.modified then
@@ -815,8 +823,15 @@ function _G.wolf_setup_layout(chan)
 	-- registry command). Typing :q! fires the bare-`q` abbrev (getcmdline()=='q'
 	-- still true), so `q` -> WolfQuit and the trailing `!` rides through to
 	-- :WolfQuit! -- a valid banged invocation whose callback sees o.bang == true.
-	-- CRITICAL: do NOT add q!/quit!/wq! abbrevs; `!` is not a keyword char and such
-	-- an abbrev would be dead/broken.
+	-- The :qa family (qa/qall/quitall -> WolfQuitAll; wqa/wqall/xa/xall ->
+	-- WolfWriteQuitAll) works the same way and passes all=true so do_quit always
+	-- closes the window. `a` is a keyword char, so :qa forms a distinct word and
+	-- never triggers the bare-`q` abbrev. These are internal plumbing user commands,
+	-- NOT registry commands (no command.rs/FFI/Swift changes).
+	-- CRITICAL: do NOT add q!/quit!/wq!/qa!/wqa! etc. abbrevs; `!` is not a keyword
+	-- char and such an abbrev would be dead/broken. For the banged forms the `!`
+	-- rides through to :WolfQuit! / :WolfQuitAll! / :WolfWriteQuitAll! (o.bang ->
+	-- force).
 	vim.api.nvim_create_user_command("WolfQuit", function(o)
 		do_quit({ write = false, force = o.bang })
 	end, { bang = true, nargs = 0 })
@@ -828,6 +843,19 @@ function _G.wolf_setup_layout(chan)
 	abbrev("wq", "WolfWriteQuit")
 	abbrev("x", "WolfWriteQuit")
 	abbrev("xit", "WolfWriteQuit")
+	vim.api.nvim_create_user_command("WolfQuitAll", function(o)
+		do_quit({ write = false, force = o.bang, all = true })
+	end, { bang = true, nargs = 0 })
+	vim.api.nvim_create_user_command("WolfWriteQuitAll", function(o)
+		do_quit({ write = true, force = o.bang, all = true })
+	end, { bang = true, nargs = 0 })
+	abbrev("qa", "WolfQuitAll")
+	abbrev("qall", "WolfQuitAll")
+	abbrev("quitall", "WolfQuitAll")
+	abbrev("wqa", "WolfWriteQuitAll")
+	abbrev("wqall", "WolfWriteQuitAll")
+	abbrev("xa", "WolfWriteQuitAll")
+	abbrev("xall", "WolfWriteQuitAll")
 
 	-- Active-window tracking: report the focused window on every WinEnter, and emit
 	-- once immediately so the startup window is reflected.

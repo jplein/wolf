@@ -355,6 +355,200 @@ fn ex_q_refuses_modified_last_pane() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
+/// Typing `:qa<CR>` on the SOLE (unmodified) pane routes through the
+/// `WolfQuitAll` user command's `do_quit({ all = true })`, which always takes the
+/// close-window branch and fires the existing `close_window` registry command over
+/// RPC. In the single-pane case `:qa` is identical to `:q`. A freshly attached
+/// core has no queued commands (no emit-on-attach), so the drained
+/// `Command::CloseWindow` can only be the one `:qa` produced.
+#[test]
+fn ex_qa_on_last_pane_emits_close_window() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    // No emit-on-attach: the command queue is empty right after the window settles.
+    assert!(
+        core.drain_commands().is_empty(),
+        "a freshly attached core must have NO queued commands before :qa"
+    );
+
+    // `:qa` on the sole unmodified pane -> always-close branch -> close_window.
+    ex_command(&core, "qa");
+    let commands =
+        drain_until_command(&core, FLUSH_TIMEOUT, "CloseWindow from :qa on the last pane");
+    assert!(
+        commands.contains(&Command::CloseWindow),
+        ":qa on the sole (unmodified) pane must enqueue Command::CloseWindow; got {commands:?}"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// `:qa!` on a MODIFIED sole pane must still fire `close_window`: the trailing `!`
+/// rides through the bare-`qa` abbrev to `:WolfQuitAll!`, whose callback sees
+/// `o.bang == true` and passes `force = true`, overriding the modified-buffer
+/// guard. This exercises the FRAGILE bang path for the qa family.
+#[test]
+fn ex_qa_bang_forces_close_window_when_modified() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    // Modify the buffer so a plain `:qa` would be refused; only the bang closes.
+    core.send_input(ch('i'));
+    core.send_input(ch('x'));
+    core.send_input(key(Key::Esc));
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
+
+    // Discard anything queued during setup so we observe only `:qa!`'s effect.
+    let _ = core.drain_commands();
+
+    // `:qa!` -> WolfQuitAll! -> force = true -> always-close branch fires close_window.
+    ex_command(&core, "qa!");
+    let commands = drain_until_command(
+        &core,
+        FLUSH_TIMEOUT,
+        "CloseWindow from :qa! on a modified last pane",
+    );
+    assert!(
+        commands.contains(&Command::CloseWindow),
+        ":qa! on a modified last pane must force Command::CloseWindow (bang reached the \
+         callback and overrode the modified-buffer guard); got {commands:?}"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// `:wqa` on the sole pane writes the buffer to disk FIRST (so the distinctive
+/// inserted text lands in the file) and THEN, the buffer no longer modified, fires
+/// `close_window`. Proves the write side of the qa write-quit family and that the
+/// always-close branch still closes the front-end window afterward.
+#[test]
+fn ex_wqa_writes_to_disk_and_closes_window() {
+    let (core, waiter, file) = common::start_core_with_temp_md(DOC);
+    let path = file.path().to_path_buf();
+    wait_for_initial_window(&core, &waiter);
+
+    // Insert distinctive text so we can prove the edited buffer reached disk.
+    core.send_input(ch('i'));
+    for c in WQ_MARKER.chars() {
+        core.send_input(ch(c));
+    }
+    core.send_input(key(Key::Esc));
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
+
+    // Discard anything queued during setup so we observe only `:wqa`'s command.
+    let _ = core.drain_commands();
+
+    // `:wqa` -> WolfWriteQuitAll -> write then always-close close_window.
+    ex_command(&core, "wqa");
+
+    // The write is async over RPC: poll the file until the inserted text appears.
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    loop {
+        if let Ok(contents) = std::fs::read_to_string(&path) {
+            if contents.contains(WQ_MARKER) {
+                break;
+            }
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out after {FLUSH_TIMEOUT:?} waiting for :wqa to write {WQ_MARKER:?} to disk"
+            );
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+
+    // The write completed; the always-close branch must then fire close_window.
+    let commands =
+        drain_until_command(&core, FLUSH_TIMEOUT, "CloseWindow from :wqa on the last pane");
+    assert!(
+        commands.contains(&Command::CloseWindow),
+        ":wqa must close the front-end window after writing; got {commands:?}"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// A plain `:qa` on a MODIFIED pane must be REFUSED (native `:qa` parity, and the
+/// same current-buffer-scoped guard as `:q`): the unsaved-changes guard surfaces an
+/// error and returns WITHOUT firing `close_window`. Mirrors
+/// `ex_q_refuses_modified_last_pane`.
+#[test]
+fn ex_qa_refuses_modified_last_pane() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    // Modify the buffer so the unsaved-changes guard should trip.
+    core.send_input(ch('i'));
+    core.send_input(ch('x'));
+    core.send_input(key(Key::Esc));
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
+
+    // Discard anything queued during setup so we observe only `:qa`'s (non-)effect.
+    let _ = core.drain_commands();
+
+    // Plain `:qa` (no bang) on the modified pane: must NOT close.
+    ex_command(&core, "qa");
+
+    // Let any (erroneous) command settle, accumulating drained commands (draining
+    // is what wakes the queue side), then assert none was a close_window.
+    let mut drained: Vec<Command> = Vec::new();
+    let settle_deadline = Instant::now() + SETTLE;
+    while Instant::now() < settle_deadline {
+        drained.extend(core.drain_commands());
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    assert!(
+        !drained.contains(&Command::CloseWindow),
+        "a plain :qa on a MODIFIED pane must be refused (no close_window); got {drained:?}"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// THE differentiator between `:qa` and `:q`. With MULTIPLE panes open, `:qa` must
+/// still fire `close_window` (the whole front-end window closes), whereas `:q`
+/// would instead close just the active pane and fire NO command (see
+/// `layout_intents.rs::ex_q_closes_pane_when_multiple`, which proves `:q` merely
+/// drops the pane count). We make a second pane via `:vsplit` (using only
+/// `ex_command` + a snapshot poll, so this test needs no intent machinery), then
+/// `:qa` and assert a `Command::CloseWindow` is drained.
+#[test]
+fn ex_qa_emits_close_window_when_multiple_panes() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    wait_for_initial_window(&core, &waiter);
+
+    let base = core.read_snapshot().windows.len();
+
+    // Make a second pane so this is genuinely the multi-pane case. Drive it via a
+    // plain `:vsplit` and observe the window count grow (no intent/ctrl imports).
+    ex_command(&core, "vsplit");
+    poll_until(
+        &core,
+        &waiter,
+        "windows.len() to grow by one after :vsplit",
+        |snap| snap.windows.len() == base + 1,
+    );
+
+    // Discard anything queued during setup so we observe only `:qa`'s command.
+    let _ = core.drain_commands();
+
+    // `:qa` with multiple panes -> always-close branch (unlike `:q`) -> close_window.
+    ex_command(&core, "qa");
+    let commands = drain_until_command(
+        &core,
+        FLUSH_TIMEOUT,
+        "CloseWindow from :qa with multiple panes",
+    );
+    assert!(
+        commands.contains(&Command::CloseWindow),
+        ":qa with multiple panes must close the WHOLE window (Command::CloseWindow), \
+         not merely drop the pane count; got {commands:?}"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
 // --- Pure registry tests (no nvim; run regardless of the skip guard) ----------
 //
 // These pin the canonical `COMMAND_SPECS` table + `Command::from_id` contract
