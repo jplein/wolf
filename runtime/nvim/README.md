@@ -144,6 +144,17 @@ The module-level helpers (defined regardless of setup ordering) that `wolf-core`
 
 **Residual v1 limitations (accepted, per OD4):** the lockout is best-effort — obscure typed variants / user-defined command abbreviations of the `:tab*` commands (or scripted `nvim_*` tabpage calls) are NOT caught, so a determined user could still create/switch/close a tabpage out from under the front-end. `:tcd`/`:lcd`/`:cd` are intentionally left open. The channel id is passed as a Lua **vararg**, never interpolated.
 
+### Pane-layout rebuild — `_G.wolf_rebuild_layout(spec_json)`
+
+A module-level global (defined alongside the tabpage helpers) that backs the macOS front-end's pane-layout RESTORE: `WolfCore::rebuild_layout` invokes it over `nvim_exec_lua("return wolf_rebuild_layout(...)", [spec_json])`, passing the spec as a Lua **vararg** (a JSON STRING, never interpolated) that the helper `vim.json.decode`s. It realizes a saved pane-split tree in the current tabpage's single starting window and RETURNS the resulting window handles in DFS/leaf order (a malformed / undecodable `spec_json` returns `{}`).
+
+The decoded `spec` is the same shape `PaneLayoutCodec.specJSON` emits: a **leaf** is `{ leaf = true, path = "<abs path or empty>" }`; a **split** is `{ orientation = "v"|"h", weights = {...}, children = {...} }`. A recursive `realize(node)`:
+
+- for a **leaf**, `:edit fnameescape(path)` when `path` is non-empty (else leaves the window on its empty buffer) and returns `{ current_win }`;
+- for a **split** of `n` children, creates `n` region windows starting from the current window — each new one placed to the RIGHT (`rightbelow vsplit` for `orientation == "v"`) or BELOW (`rightbelow split` otherwise) of the previous, so regions read left-to-right / top-to-bottom (**child 0 first**) — then recurses into each region in order, gathering the DFS leaf handles.
+
+nvim produces only the WINDOW COUNT + TOPOLOGY + per-window BUFFER; pane SIZES are irrelevant here (the front-end drives them from its own weights via `syncGridSizes`). The **child-0-first** region order is load-bearing: it MUST match the front-end `PaneTree.rebuilt`'s DFS leaf order so each returned handle zips to its rebuilt leaf.
+
 ### Buffer-picker view tracking — `_G.wolf_setup_view_tracking()`
 
 The FINAL global helper `wolf-core` invokes over RPC, **after** command registration and tabpage setup (see [`src/nvim.rs`](../../crates/wolf-core/src/nvim.rs)'s `setup_view_tracking`). It backs the buffer picker's **per-pane scroll/cursor restoration**, and it is a deliberate ASYMMETRY with every helper above: it takes **NO channel id** and emits **NO `rpcnotify`** — it maintains an in-nvim view cache and defines the switch helper that reads it, so **no view/scroll payload ever crosses the FFI boundary** and core stays view-agnostic (it is NOT an out-of-band notification into the snapshot).

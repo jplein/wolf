@@ -103,11 +103,15 @@ fn mtime(path: &Path) -> SystemTime {
         .unwrap_or_else(|e| panic!("stat {}: {e}", path.display()))
 }
 
-/// A tab with the given cwd + sidebar visibility (test builder).
+/// A tab with the given cwd + sidebar visibility (test builder). The new
+/// per-tab pane `layout` (feature plan §4.1) is irrelevant to this file's
+/// geometry/round-trip cases, so it is `None`; the dedicated `state_layout`
+/// target covers the pane-tree round-trip.
 fn tab(cwd: &str, sidebar_visible: bool) -> TabState {
     TabState {
         cwd: cwd.to_string(),
         sidebar_visible,
+        layout: None,
     }
 }
 

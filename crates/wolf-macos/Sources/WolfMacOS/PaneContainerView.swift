@@ -13,10 +13,17 @@
 //  responder and the single global key sink (keys go to nvim's current window).
 //
 //  Painting one flat view avoids the fragile compositing of deeply-nested custom
-//  layer-backed views; divider drag-to-resize (which `NSSplitView` would give for
-//  free) is deferred — splits are equal-weighted (parity with wolf-gnome's v1
-//  divider limitation). The pure layout decisions live in the headlessly-tested
-//  `WolfKeyMap.PaneTree`; this AppKit glue is compile-verified + manual-smoke only.
+//  layer-backed views. Interior dividers ARE draggable: `mouseDown` hit-tests the
+//  pure `PaneTree.dividers()` list (via `DividerHitTest`) BEFORE forwarding to
+//  nvim; a drag reweights the two adjacent panes through
+//  `DividerDragSeam.clampedLeftFraction` + `PaneTree.setPairFraction` (clamped so
+//  no pane drops below 3 rows / 10 columns) and converges the grids via
+//  `syncGridSizes`; `resetCursorRects` shows the resize cursor on hover (and is
+//  invalidated on every layout mutation). The whole layout (topology + weights +
+//  per-leaf buffer path) persists via `layoutSnapshot()` and is rebuilt on launch
+//  via `requestLayoutRebuild(_:)`. The pure layout decisions live in the
+//  headlessly-tested `WolfKeyMap.PaneTree`; this AppKit glue is compile-verified +
+//  manual-smoke only.
 //
 
 import AppKit
@@ -91,6 +98,16 @@ final class PaneContainerView: NSView {
   /// `scroll_dir::DOWN` (increases the viewport topline).
   private static let scrollDirDown: UInt8 = 1
 
+  // -- Divider drag-to-resize tuning ----------------------------------------
+  /// The clickable half-width around a divider line, in points: a `mouseDown`
+  /// within this distance of a divider grabs it instead of forwarding to nvim, and
+  /// the resize-cursor rect is this wide on each side of the line.
+  private static let dividerHitTolerance: CGFloat = 4
+  /// The minimum columns a pane may shrink to when dragging a vertical divider.
+  private static let minPaneCols = 10
+  /// The minimum rows a pane may shrink to when dragging a horizontal divider.
+  private static let minPaneRows = 3
+
   // -- Per-pane statusbar tuning --------------------------------------------
   /// Vertical padding above the first and below the last statusbar line (px).
   private static let statusbarVerticalPadding: Double = 3
@@ -148,8 +165,23 @@ final class PaneContainerView: NSView {
   /// the flag. See `onRenderWake`.
   private var pendingRefocusRebind = false
 
-  /// The pure pane-layout tree (split/remove/neighbour geometry).
-  private let tree = PaneTree(root: PaneContainerView.firstPaneId)
+  /// The pure pane-layout tree (split/remove/neighbour/divider geometry). A `var`
+  /// so `requestLayoutRebuild` can replace it wholesale on launch restore via
+  /// `replaceTree(_:)`.
+  private var tree = PaneTree(root: PaneContainerView.firstPaneId)
+
+  /// The interior divider a `mouseDown` grabbed, held across the drag so
+  /// `mouseDragged` reweights the two adjacent panes; cleared on `mouseUp`.
+  private var activeDivider: PaneTree.Divider?
+
+  /// A saved pane-split layout awaiting rebuild once this view's first pane binds
+  /// (consumed once in `onRenderWake`, gated like `pendingRefocusRebind`).
+  private var pendingLayoutRebuild: SavedPaneNode?
+
+  /// Invoked whenever the pane layout changes in a way that must be persisted (a
+  /// divider drag ends, or a restore rebuild completes). Set by the window
+  /// controller to `coordinator.scheduleStateSnapshot()`.
+  var onLayoutChanged: (() -> Void)?
   /// The per-pane bindings, keyed by `PaneId`.
   private var panes: [PaneId: PaneBinding] = [:]
   /// The next pane id to allocate (starts at `firstPaneId`).
@@ -387,6 +419,17 @@ final class PaneContainerView: NSView {
     return rects
   }
 
+  /// The editor tree's interior dividers, in this view's (flipped) coordinates,
+  /// over the SAME `DrawerLayout.editorHeight` as `paneRects()`. The drawer lives
+  /// outside `tree`, so it has no divider here.
+  private func editorDividers() -> [PaneTree.Divider] {
+    let dl = DrawerLayout(
+      paneAreaHeight: Double(paneAreaHeight),
+      hasDrawer: drawerPaneId != nil,
+      weight: DrawerLayout.defaultWeight)
+    return tree.dividers(width: Double(bounds.width), height: dl.editorHeight)
+  }
+
   /// The per-pane GRID-RECT-inside-PANE-RECT geometry for `rect` (the pure seam
   /// that owns all pixel<->cell mapping). When `fullWidth` is `false` (the ~90-char
   /// default) the grid width is capped at `maxGridCols` and CENTERED when the pane is
@@ -586,6 +629,18 @@ final class PaneContainerView: NSView {
   /// `mouse=a` this positions the cursor; a following drag extends a selection).
   override func mouseDown(with event: NSEvent) {
     let point = convert(event.locationInWindow, from: nil)
+
+    // A press near an interior divider grabs it to resize, and is NOT forwarded to
+    // nvim as a cursor/selection event. Hit-tested BEFORE the pane-forward loop.
+    if let divider = DividerHitTest.hit(
+      editorDividers(),
+      point: (x: Double(point.x), y: Double(point.y)),
+      tolerance: Double(Self.dividerHitTolerance))
+    {
+      activeDivider = divider
+      return
+    }
+
     for (id, rect) in paneRects() where rect.contains(point) {
       guard let binding = panes[id] else { return }
       handle.focus_win(binding.win)
@@ -605,8 +660,37 @@ final class PaneContainerView: NSView {
   /// Extends the press into a drag (visual selection under `mouse=a`), keeping the
   /// target on the pane the press started in even when the pointer leaves it.
   override func mouseDragged(with event: NSEvent) {
-    guard let grid = mouseDragGrid, let rect = paneRect(forGrid: grid) else { return }
     let point = convert(event.locationInWindow, from: nil)
+
+    // A divider drag reweights the two adjacent panes (clamped so neither drops
+    // below the min grid size) and converges the grids; it is NOT a nvim drag.
+    if let divider = activeDivider {
+      let pointerPos =
+        divider.orientation == .vertical ? Double(point.x) : Double(point.y)
+      let overhead: Double =
+        divider.orientation == .vertical
+        ? 2 * EditorInset.padding
+        : Double(statusbarHeight) + 2 * EditorInset.padding
+      let fraction = DividerDragSeam.clampedLeftFraction(
+        pairStart: divider.pairStart,
+        pairSpan: divider.pairSpan,
+        pointerPos: pointerPos,
+        orientation: divider.orientation,
+        cellWidth: Double(metrics.cellWidth),
+        cellHeight: Double(metrics.cellHeight),
+        minCols: Self.minPaneCols,
+        minRows: Self.minPaneRows,
+        leadingOverhead: overhead,
+        trailingOverhead: overhead)
+      tree.setPairFraction(
+        path: divider.path, boundary: divider.boundary, leftFraction: fraction)
+      syncGridSizes()
+      window?.invalidateCursorRects(for: self)
+      needsDisplay = true
+      return
+    }
+
+    guard let grid = mouseDragGrid, let rect = paneRect(forGrid: grid) else { return }
     let cell = geometry(for: gridRect(ofPane: rect), fullWidth: fullWidth(forGrid: grid))
       .cellAt(x: Double(point.x), y: Double(point.y))
     handle.send_mouse(mouseEvent(Self.mouseActionDrag, grid: grid, cell: cell, event: event))
@@ -614,6 +698,13 @@ final class PaneContainerView: NSView {
 
   /// Ends the press/drag (RELEASE), then clears the drag target.
   override func mouseUp(with event: NSEvent) {
+    // Finish a divider drag: clear it and persist the resized layout.
+    if activeDivider != nil {
+      activeDivider = nil
+      onLayoutChanged?()
+      return
+    }
+
     guard let grid = mouseDragGrid else { return }
     if let rect = paneRect(forGrid: grid) {
       let point = convert(event.locationInWindow, from: nil)
@@ -759,6 +850,36 @@ final class PaneContainerView: NSView {
           UInt16(truncatingIfNeeded: geo.rows))
       }
     }
+
+    // The divider lines moved with the panes, so the hover resize-cursor rects are
+    // now stale — rebuild them on the next tracking pass.
+    window?.invalidateCursorRects(for: self)
+  }
+
+  /// Registers a resize-cursor rect around each interior divider line so hovering
+  /// a divider shows `.resizeLeftRight` (vertical divider) / `.resizeUpDown`
+  /// (horizontal divider). Invalidated on every layout mutation (via
+  /// `invalidateCursorRects(for:)` in `syncGridSizes`).
+  override func resetCursorRects() {
+    let tol = Self.dividerHitTolerance
+    for divider in editorDividers() {
+      let line = divider.lineRect
+      let rect: CGRect
+      let cursor: NSCursor
+      switch divider.orientation {
+      case .vertical:
+        rect = CGRect(
+          x: CGFloat(line.x) - tol, y: CGFloat(line.y),
+          width: tol * 2, height: CGFloat(line.h))
+        cursor = .resizeLeftRight
+      case .horizontal:
+        rect = CGRect(
+          x: CGFloat(line.x), y: CGFloat(line.y) - tol,
+          width: CGFloat(line.w), height: tol * 2)
+        cursor = .resizeUpDown
+      }
+      addCursorRect(rect, cursor: cursor)
+    }
   }
 
   // MARK: - Render-wake orchestration
@@ -786,6 +907,22 @@ final class PaneContainerView: NSView {
   func onRenderWake() {
     let frameStart = FrameMetrics.begin()
     defer { FrameMetrics.end(.containerWake, frameStart) }
+
+    // One-shot launch restore of a multi-pane layout: once this view's tabpage is
+    // current AND its first pane has bound, realize the saved split tree in nvim
+    // and rebuild the pane bindings. Gated like `pendingRefocusRebind`.
+    if let saved = pendingLayoutRebuild,
+      handle.active_tabpage() == controllerTabpageHandle
+    {
+      ensureInitialPane()
+      if panes.isEmpty { return }  // no window grid yet; retry on the next wake.
+      pendingLayoutRebuild = nil
+      rebuildLayout(from: saved)
+      applyTitlebarTheme()
+      syncPreviewWebViews()
+      refreshOverlays()
+      return
+    }
 
     if pendingRefocusRebind {
       guard handle.active_tabpage() == controllerTabpageHandle else { return }
@@ -1204,6 +1341,68 @@ final class PaneContainerView: NSView {
       panes[id]?.boundGrid = nil
     }
     resolvePendingGrids()
+  }
+
+  // MARK: - Layout persistence (save + restore)
+
+  /// The tab's persistable pane-split layout (topology + per-child weights +
+  /// per-leaf buffer path), or `nil` for a single unsplit pane. The drawer is
+  /// excluded — it lives outside `tree`, so it never appears in `tree.layout()`.
+  func layoutSnapshot() -> SavedPaneNode? {
+    guard tree.leaves().count > 1 else { return nil }
+    return PaneLayoutCodec.encode(tree.layout(), paths: leafPaths())
+  }
+
+  /// Maps each editor leaf id to its bound buffer's ABSOLUTE path (via the bound
+  /// grid → `pane_status_for_grid().abs_path()`); an unresolved / unnamed leaf maps
+  /// to `""`.
+  private func leafPaths() -> [PaneId: String] {
+    var paths: [PaneId: String] = [:]
+    for id in tree.leaves() {
+      guard let grid = panes[id]?.boundGrid else { continue }
+      paths[id] = handle.pane_status_for_grid(grid).abs_path().toString()
+    }
+    return paths
+  }
+
+  /// Requests that this view's pane layout be rebuilt from `saved` once its first
+  /// pane binds and its tabpage is current (consumed once in `onRenderWake`).
+  func requestLayoutRebuild(_ saved: SavedPaneNode) {
+    pendingLayoutRebuild = saved
+  }
+
+  /// Replaces the pure layout tree wholesale (launch restore only).
+  private func replaceTree(_ newTree: PaneTree) {
+    tree = newTree
+  }
+
+  /// Realizes `saved` in nvim (its window topology) and rebuilds the pane bindings
+  /// from the returned DFS-ordered handles, taking the tree's weights from
+  /// `PaneTree.rebuilt`. On a handle-count mismatch it logs and falls back to the
+  /// single already-bound pane (leaving `tree` untouched).
+  private func rebuildLayout(from saved: SavedPaneNode) {
+    let handles = Array(handle.rebuild_layout(PaneLayoutCodec.specJSON(saved)))
+    guard handles.count == saved.leafCount else {
+      NSLog(
+        "wolf: layout rebuild handle count \(handles.count) != leaf count "
+          + "\(saved.leafCount); falling back to a single pane")
+      return
+    }
+    let (newTree, leafIds) = PaneTree.rebuilt(from: saved, firstLeafId: nextPaneId)
+    replaceTree(newTree)
+    nextPaneId += PaneId(leafIds.count)
+    var rebound: [PaneId: PaneBinding] = [:]
+    for (index, id) in leafIds.enumerated() {
+      rebound[id] = PaneBinding(win: handles[index], boundGrid: nil)
+    }
+    panes = rebound
+    drawerPaneId = nil
+    setActivePane(leafIds.first)
+    resolvePendingGrids()
+    syncGridSizes()
+    window?.invalidateCursorRects(for: self)
+    needsDisplay = true
+    onLayoutChanged?()
   }
 
   /// Applies the `WolfTitlebar` theme background to the window when it

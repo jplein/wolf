@@ -182,7 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
         let (_, hasFolder) = Self.dir(launchDecision(restoredCwd: tab.cwd))
         let restoredTab = RestoredTabState(
-          cwd: tab.cwd, sidebarVisible: tab.sidebarVisible)
+          cwd: tab.cwd, sidebarVisible: tab.sidebarVisible, layout: tab.layout)
         let controller = makeController(
           tabId: mintTabId(), project: project, tabpageHandle: tabpage,
           restoredTab: restoredTab, anchorFrame: nil, hasFolder: hasFolder)
@@ -562,6 +562,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // it via `cwd_for_tabpage` — a cheap out-of-band snapshot read (no RPC),
         // so this per-tab snapshot walk never blocks on the captive nvim.
         wolf_ffi_state_snapshot_add_tab(tab.persistedCwd, tab.sidebarVisible)
+
+        // Attach the tab's pane-split layout (topology + weights + per-leaf buffer
+        // path) via the post-order push-builder, when it has one (a multi-pane
+        // layout — a single unsplit pane returns nil and pushes nothing).
+        if let layout = tab.layoutSnapshot() {
+          for token in PaneLayoutCodec.postOrderTokens(layout) {
+            switch token {
+            case .leaf(let path, let weight):
+              wolf_ffi_state_layout_push_leaf(path, weight)
+            case .split(let orientation, let childCount, let weight):
+              let orient: UInt8 = orientation == .vertical ? 1 : 0
+              wolf_ffi_state_layout_push_split(orient, UInt32(childCount), weight)
+            }
+          }
+          wolf_ffi_state_layout_commit_to_tab()
+        }
       }
     }
     wolf_ffi_state_snapshot_commit()
@@ -688,7 +704,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     groups.map { group in
       RestoreSeam.SavedWindow(
         tabs: group.tabs.map {
-          RestoreSeam.SavedTab(cwd: $0.cwd, sidebarVisible: $0.sidebarVisible)
+          RestoreSeam.SavedTab(
+            cwd: $0.cwd, sidebarVisible: $0.sidebarVisible, layout: $0.layout)
         })
     }
   }
@@ -705,8 +722,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
       var tabs: [RestoredTabState] = []
       for j in 0..<tabsVec.len() {
         guard let t = tabsVec.get(index: UInt(j)) else { continue }
+        let layout: SavedPaneNode? = t.has_layout() ? Self.savedPaneNode(from: t.layout()) : nil
         tabs.append(
-          RestoredTabState(cwd: t.cwd().toString(), sidebarVisible: t.sidebar_visible()))
+          RestoredTabState(
+            cwd: t.cwd().toString(), sidebarVisible: t.sidebar_visible(), layout: layout))
       }
       if tabs.isEmpty { continue }
       result.append(
@@ -714,6 +733,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
           x: w.x(), y: w.y(), width: w.width(), height: w.height(), tabs: tabs))
     }
     return result
+  }
+
+  /// Recursively projects an opaque bridge `FfiPaneNode` into a plain
+  /// `SavedPaneNode` value (element refs must not outlive the bridge read).
+  private static func savedPaneNode(from node: FfiPaneNode) -> SavedPaneNode {
+    if node.is_leaf() {
+      return .leaf(path: node.leaf_path().toString())
+    }
+    let orientation: Orientation = node.orientation() == 1 ? .vertical : .horizontal
+    var weights: [Double] = []
+    var children: [SavedPaneNode] = []
+    for i in 0..<node.child_count() {
+      weights.append(node.weight(i))
+      children.append(savedPaneNode(from: node.child(i)))
+    }
+    return .split(orientation: orientation, weights: weights, children: children)
   }
 
   /// Shows a fatal alert when the core fails to start, then terminates.

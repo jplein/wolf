@@ -61,10 +61,12 @@ final class RestoreSeamTests: XCTestCase {
       windows: windows, home: home, isDirectory: { directories.contains($0) })
   }
 
-  /// A `SavedWindow` from `(cwd, sidebarVisible)` tuples, in tab order.
+  /// A `SavedWindow` from `(cwd, sidebarVisible)` tuples, in tab order. The
+  /// per-tab pane `layout` (feature plan §3.3) is irrelevant to grouping, so it is
+  /// `nil` here; the dedicated passthrough test below sets it explicitly.
   private func window(_ tabs: [(String, Bool)]) -> RestoreSeam.SavedWindow {
     RestoreSeam.SavedWindow(
-      tabs: tabs.map { RestoreSeam.SavedTab(cwd: $0.0, sidebarVisible: $0.1) })
+      tabs: tabs.map { RestoreSeam.SavedTab(cwd: $0.0, sidebarVisible: $0.1, layout: nil) })
   }
 
   /// The index of the project containing the tab at `(groupIndex, position)`, or
@@ -239,15 +241,52 @@ final class RestoreSeamTests: XCTestCase {
     let produced = Set(allTabs(plan))
     let expected: Set<RestoreSeam.PlannedTab> = [
       RestoreSeam.PlannedTab(
-        groupIndex: 0, positionInGroup: 0, cwd: dirX, sidebarVisible: true),
+        groupIndex: 0, positionInGroup: 0, cwd: dirX, sidebarVisible: true, layout: nil),
       RestoreSeam.PlannedTab(
-        groupIndex: 0, positionInGroup: 1, cwd: dirX, sidebarVisible: false),
+        groupIndex: 0, positionInGroup: 1, cwd: dirX, sidebarVisible: false, layout: nil),
       RestoreSeam.PlannedTab(
-        groupIndex: 1, positionInGroup: 0, cwd: dirY, sidebarVisible: true),
+        groupIndex: 1, positionInGroup: 0, cwd: dirY, sidebarVisible: true, layout: nil),
     ]
     XCTAssertEqual(allTabs(plan).count, 3, "no tab is dropped or duplicated")
     XCTAssertEqual(
       produced, expected,
       "every tab retains its (groupIndex, positionInGroup, cwd, sidebarVisible)")
+  }
+
+  // MARK: - (f) a saved tab's pane layout is carried through plan() unchanged
+
+  func testLayoutIsCarriedThroughPlanUnchanged() throws {
+    // Feature plan §3.3: `SavedTab.layout: SavedPaneNode?` is a PASSTHROUGH — it
+    // rides into the matching `PlannedTab.layout` verbatim, and it does NOT affect
+    // project grouping (still cwd-only). Two tabs sharing a real cwd but carrying
+    // DIFFERENT layouts must still merge into ONE project, each keeping its own
+    // layout.
+    let proj = "/Users/alice/projects/notes"
+    let splitLayout: SavedPaneNode = .split(
+      orientation: .vertical, weights: [0.5, 0.5],
+      children: [.leaf(path: "\(proj)/a.md"), .leaf(path: "\(proj)/b.md")])
+
+    let windows = [
+      RestoreSeam.SavedWindow(tabs: [
+        RestoreSeam.SavedTab(cwd: proj, sidebarVisible: true, layout: splitLayout),
+        RestoreSeam.SavedTab(cwd: proj, sidebarVisible: false, layout: nil),
+      ])
+    ]
+    let plan = makePlan(windows, directories: [proj, home])
+
+    // Grouping is UNAFFECTED by layout: both tabs still collapse into one project.
+    XCTAssertEqual(
+      plan.projects.count, 1,
+      "differing layouts must not split a shared-cwd project (grouping stays cwd-only)")
+
+    // Position 0 carries the split layout verbatim; position 1 carries nil.
+    let tab0 = try XCTUnwrap(
+      allTabs(plan).first { $0.positionInGroup == 0 }, "the position-0 tab must exist")
+    let tab1 = try XCTUnwrap(
+      allTabs(plan).first { $0.positionInGroup == 1 }, "the position-1 tab must exist")
+    XCTAssertEqual(
+      tab0.layout, splitLayout,
+      "the saved split layout rides into the PlannedTab unchanged")
+    XCTAssertNil(tab1.layout, "a nil saved layout stays nil in the PlannedTab")
   }
 }

@@ -709,6 +709,29 @@ impl WolfCore {
         }
     }
 
+    /// Realizes the saved pane-split tree described by `spec_json` in the current
+    /// tabpage's single starting window (via `:split`/`:vsplit` + `:edit`) and
+    /// returns the resulting window handles in DFS/leaf order — the SAME order as
+    /// the front-end `PaneTree.leaves()` / `PaneTree.rebuilt`.
+    ///
+    /// Blocks briefly on the captive nvim via
+    /// [`block_on_rpc`](Self::block_on_rpc) (the same bounded pattern
+    /// [`create_tabpage`](Self::create_tabpage) uses, bounded by
+    /// [`rpc_timeout`](Self::rpc_timeout)) to run the `wolf_rebuild_layout` helper.
+    /// nvim produces only the window COUNT + TOPOLOGY + per-window BUFFER; sizes
+    /// come from the front-end's weights. An RPC error (including a
+    /// [`NvimError::Timeout`] on a wedged nvim) is logged and returns `vec![]`.
+    #[must_use]
+    pub fn rebuild_layout(&self, spec_json: &str) -> Vec<i64> {
+        match self.block_on_rpc("rebuild_layout", self.nvim.rebuild_layout(spec_json)) {
+            Ok(handles) => handles,
+            Err(e) => {
+                tracing::warn!("rebuild_layout failed: {e}");
+                Vec::new()
+            }
+        }
+    }
+
     /// Returns the CANONICALIZED tab-local working directory of tabpage `handle`,
     /// or `None` for an unknown/closed handle (or one nvim has not yet reported).
     ///

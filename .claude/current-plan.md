@@ -1,250 +1,409 @@
-# Plan: Forward OS window focus to Neovim (external-file reload on app refocus)
+# Plan: macOS pane resize by mouse + full pane-layout persistence
 
-## Problem statement
+## Status: COMPLETE ✅ (all green, reviewer-approved, docs synced) — UNCOMMITTED
 
-Follow-up to the just-landed external-file-reload feature (`autoread` +
-`WolfAutoRead` augroup running `:checktime` on FocusGained/BufEnter/CursorHold/
-CursorHoldI in `runtime/nvim/init.lua`). That feature reloads a buffer whose file
-changed on disk — and the user confirms it WORKS when the file is edited from
-Wolf's own terminal drawer (going terminal-pane → editor-pane fires `BufEnter` →
-checktime → reload+repaint, reliably).
+Final state: WolfKeyMapTests + state_layout + state_unit + rebuild_layout (real nvim) +
+ffi state + pane_status + bridge_smoke PASS; 62/62 regression; lint all exit 0;
+//crates/wolf-macos:Wolf builds; reviewer APPROVED all areas A–F; all §6 READMEs +
+architecture.md synced and prettier-clean (2 files reformatted). NOT COMMITTED — includes
+regenerated crates/wolf-ffi/generated/wolf-ffi.{swift,h} which MUST be committed together
+with the source change. Awaiting user direction on commit.
 
-It does NOT work when the file is changed by an app OUTSIDE Wolf and the user then
-reactivates Wolf (e.g. clicks the Dock icon). Root cause (already established by
-investigation): **no Wolf front-end forwards OS window focus to the captive
-Neovim.** There is no `nvim_ui_set_focus` call anywhere; on macOS
-`WolfWindowController.windowDidBecomeKey` (`WolfWindowController.swift:775`) only
-marks the view current + rebinds panes; it never tells nvim its UI regained focus.
-So `FocusGained` never fires in the running app, and the `FocusGained` entry in the
-autocmd list is effectively dead.
+## Progress log
 
-Reproduction (macOS): launch Wolf; edit a file; change that file from an external
-terminal; reactivate Wolf via the Dock. Actual: no reload. Expected: reload.
+- [x] Architect plan complete (authoritative plan appended below).
+- [x] Tests written (test-writer). Files: WolfKeyMapTests/{PaneTreeWeights,DividerHitTest,
+      DividerDragSeam,PaneLayoutCodec}Tests.swift (new) + PaneTreeTests/RestoreSeamTests
+      (modified); wolf-core/tests/{state_layout.rs (new, no-nvim), rebuild_layout.rs (new,
+      real nvim)}; state_unit.rs + wolf-ffi/tests/state.rs (extended). Bazel: WolfKeyMapTests
+      srcs += 4; wolf-core targets += state_layout, rebuild_layout.
+- [x] Implementation + tests pass (coder). ALL GREEN: WolfKeyMapTests PASS; state_layout,
+      state_unit, rebuild_layout (real nvim) PASS; ffi state + bridge_smoke PASS; 62/62
+      regression; lint (swift_format, rustfmt_core, rustfmt_ffi, clippy) exit 0; bindings
+      regenerated (UNCOMMITTED); //crates/wolf-macos:Wolf builds. Coder finalized:
+      SavedPaneNode is Hashable (superset of Equatable, forced by PlannedTab: Hashable) +
+      added SavedPaneNode.leafCount; PaneStatus.abs_path added in pane_status.rs.
+- [x] Test hardening pass: test-writer added direct FfiPaneStatus.abs_path() assertion to
+      //crates/wolf-ffi:pane_status; coder ran it → PASSED (1/1). abs_path = canonical
+      buffer path, contract confirmed. SKIPPED #1 (FFI write→rebuild loop) — both halves
+      already covered separately.
+- [x] Review (reviewer) — APPROVED all areas A–F. Verified child-0-first DFS on BOTH Lua
+      (`rightbelow vsplit`/`split`) and Swift (`PaneTree.rebuilt`) sides (load-bearing handle
+      correspondence); weight preservation, min-clamp NaN/range safety, back-compat, no
+      mouse-event leak, cursor-rect invalidation coverage all sound. Only outstanding item:
+      docs sync. Non-blocking nit: drag uses same overhead for leading+trailing side of a
+      horizontal pair (marginally conservative, never out-of-range) — acceptable per plan.
+- [ ] Docs verified (technical-writer). Coder did NOT touch READMEs/architecture.md; several
+      now describe old interfaces (e.g. PaneStatus fields in wolf-core/src/README.md).
 
-## Goal
+## API contracts the coder MUST match (from test-writer)
 
-When the Wolf app/window regains OS focus, tell the captive Neovim its UI gained
-focus (`nvim_ui_set_focus(true)`), so `FocusGained` fires → the existing
-`WolfAutoRead` autocmd runs `:checktime` → an externally-changed, unmodified buffer
-reloads. Symmetrically report focus LOST on resign so nvim sees a real focus
-transition each time (else nvim de-dupes and only the first refocus would fire).
+- `PaneTree.Divider`: nested `public struct Divider: Equatable` with public stored props
+  `orientation, path:[Int], boundary:Int, lineRect:Rect, pairStart, pairSpan, before:PaneId,
+  after:PaneId, fraction` AND a public memberwise init (hit-test tests hand-build dividers).
+- `lineRect` is ZERO-thickness: vertical → w==0, h==splitHeight, x==boundary x; horizontal →
+  h==0, w==splitWidth, y==boundary y. Tolerance supplies clickable width.
+- `pairStart`/`pairSpan` describe only the two adjacent children; `fraction ==
+  w[boundary]/(w[boundary]+w[boundary+1])`; for two leaf children before/after are those ids.
+- `DividerDragSeam.clampedLeftFraction(pairStart:pairSpan:pointerPos:orientation:cellWidth:
+  cellHeight:minCols:minRows:leadingOverhead:trailingOverhead:) -> Double`, `minCols`/`minRows`
+  are `Int`; per-side min px = minCells*cellSize + overhead; clamp `[minLeft/span, 1-minRight/
+  span]`; degenerate → 0.5.
+- `LayoutToken` internal shape untested (only postOrderTokens↔decodeTokens round-trip + token
+  count == node count asserted) — struct-vs-enum is the coder's choice.
+- `specJSON` uses `"v"`/`"h"` for orientation and JSON keys `leaf`/`path`/`orientation`/
+  `weights`/`children` (matching `init.lua`'s `wolf_rebuild_layout`).
+- `FfiPaneNode.orientation() -> u8` (0=horizontal,1=vertical); `weight(u32)`/`child(u32)`/
+  `child_count()->u32`; `is_leaf`/`leaf_path`.
+- `WolfCore::rebuild_layout(&str) -> Vec<i64>` returns handles in DFS/leaf order (positional
+  correspondence is load-bearing + asserted).
+- `wolf_core` re-exports `PaneNode`/`PaneOrientation` at crate root; `TabState`/`SavedTab`/
+  `PlannedTab` gain a `layout` field (labeled `layout:` in inits).
+- `rebuild_layout.rs` verifies per-window buffer via `grid_for_win`→`pane_status`; empty-path
+  leaf → `[No Name]`.
 
-Primary platform: **macOS** (the user's platform / repro). Keep the wolf-core +
-wolf-ffi method front-end-agnostic so GNOME can wire the same call cheaply as a
-follow-up.
+## Feature request
 
-## Design direction (to be refined by the architect)
+Add the ability to resize panes on macOS by dragging the interior dividers with
+the mouse, plus full pane-layout persistence.
 
-- **wolf-core:** a new method (e.g. `WolfCore::set_ui_focus(&self, gained: bool)`)
-  that calls `nvim_ui_set_focus(gained)` over RPC. `NvimProcess` already wraps
-  `nvim_ui_attach` / `nvim_ui_try_resize` (see `crates/wolf-core/src/nvim.rs:146+`);
-  add a sibling `set_focus`. Wire a public `WolfCore` API + an `InputEvent` variant
-  or direct method, matching how existing UI ops (resize, focus_win) are exposed.
-- **wolf-ffi:** expose the new method across the FFI bridge (mirror an existing
-  no-payload-ish method like `focus_win` in `crates/wolf-ffi/src/lib.rs`), and
-  regenerate/extend the generated header if the FFI uses cbindgen/generated bindings.
-- **wolf-macos:** call the new FFI method with `true` on window-become-key
-  (`WolfWindowController.windowDidBecomeKey`) and `false` on window-resign
-  (add `windowDidResignKey`, or use app active/resign notifications — architect to
-  choose the correct AppKit hook so a real transition is reported each refocus).
+## Confirmed decisions (from the user)
 
-## Deliverables
+1. **Divider drag-to-resize**: dragging an interior divider between two adjacent
+   panes reweights those two panes (transfers weight between the adjacent
+   children of the owning split node). Show an appropriate resize cursor
+   (`resizeLeftRight` / `resizeUpDown`) on hover over a divider.
+2. **Minimum pane size when dragging**: 3 rows and 10 columns — clamp the drag so
+   no pane goes below this.
+3. **Full layout persistence**: persist each tab's ENTIRE pane-split tree
+   (topology + per-child weights) into `state.json` (new schema in `wolf-core` +
+   `wolf-ffi` projections + restore seam), and rebuild the nvim window topology +
+   pane sizes on launch, so both splits AND their sizes survive quit/relaunch.
 
-1. wolf-core focus method + public surface.
-2. wolf-ffi binding (+ generated header if applicable).
-3. macOS front-end wiring (become-key → focus true; resign → focus false).
-4. An integration test proving the chain end-to-end in REAL nvim: external change +
-   `set_ui_focus(true)` → FocusGained → reload. (This also becomes a more FAITHFUL
-   trigger for the autoread reload test than the CursorHold-idle proxy.)
-5. Docs: `runtime/nvim/README.md` (the FocusGained caveat can now say focus IS
-   forwarded on macOS), plus the relevant crate READMEs (`crates/wolf-core`,
-   `crates/wolf-ffi`, `crates/wolf-macos`).
+## Established architecture facts (docs are source of truth)
 
-## Status
+- Front-end `PaneTree` (`crates/wolf-macos/Sources/WolfKeyMap/PaneTree.swift`, a
+  pure headlessly-tested port of `wolf-gnome/src/layout.rs`) is the macOS source
+  of truth for pane layout. Splits are currently ALWAYS equal-weighted; there is
+  no weight-mutation API; header explicitly defers divider drag-to-resize. It
+  re-equalizes on every split/remove (`normalize()`).
+- `PaneContainerView.swift` paints all panes in one flat `NSView` via
+  `tree.paneRects(w:h:)`, draws interior dividers in `drawDividers()`, and pushes
+  each pane rect -> nvim grid size via `syncGridSizes()` (converges, no feedback
+  loop; layout is NOT taken from nvim). `mouseDown/Dragged/Up` currently forward
+  clicks to nvim as cursor/selection events; there is no divider hit-testing.
+- Today's persisted state (`wolf-core/src/state.rs`) is only
+  `TabState { cwd, sidebar_visible }` per tab; split topology is NOT persisted.
+  Restore is planned by `RestoreSeam.swift` (pure). `FfiWindowState` projects
+  `wolf_core::WindowState`.
+- Min pane size of 3 rows / 10 columns should map through `PaneGeometry` / grid
+  cell sizes.
 
-- [x] Architect plan
-- [x] Tests written — autoread.rs retriggered via `refocus_ui` (`set_ui_focus(false)`→
-      `(true)`); CursorHold-idle helpers deleted; module doc rewritten.
-- [~] Implementation + tests pass — coder implemented input.rs (`SetUiFocus` variant +
-      `set_ui_focus` helper → `nvim_ui_set_focus`), api.rs (`WolfCore::set_ui_focus`),
-      wolf-ffi bridge decl + impl, regenerated `generated/wolf-ffi.{swift,h}`, macOS
-      `Project.setUiFocus` + AppDelegate `applicationDidBecomeActive`/`WillResignActive`
-      → `pushUiFocusToAllProjects`. VERIFIED: autoread Test 1 (real set_ui_focus trigger)
-      **20/20** + 12/12; guard 20/20; swap_exists PASS; bridge_smoke PASS;
-      `bazel build //crates/wolf-macos:Wolf` SUCCESS (FFI symbol resolves); rustfmt +
-      clippy + swift_format PASS. Coder also updated crate READMEs (prettier clean).
-      Test 2 setup race HARDENED (test-writer added `wait_for_row0_contains` polling for
-      the `# Original` setup + `ZZUNSAVED` marker). Re-verified: autoread **40/40 each**,
-      swap_exists PASS, rustfmt + clippy PASS. Flake gone. (SourceKit `No such module
-      'WolfFFI'` diagnostics = editor-LSP noise; Bazel build produces that module + succeeded.)
-- [x] Review — reviewer APPROVED all 8 areas. Confirmed: helper calls `nvim_ui_set_focus`
-      with one bool (not toast-dismissing, no NvimProcess wrapper); `WolfCore::set_ui_focus`
-      fire-and-forget; ffi bridge decl + impl mirror `focus_win`; generated Swift/.h contain
-      the symbol and match the decl; `Project.setUiFocus`; AppDelegate wires BOTH edges
-      (become-active→true, resign→false — the critical transition edge); `windowDidBecomeKey`
-      untouched (no BufEnter regression); tests use `refocus_ui(false→true)`, CursorHold
-      helpers gone, owned-locals discipline intact; init.lua + BUILD unchanged. Minor doc
-      note: macOS `Sources/README.md` doesn't yet mention the focus wiring (crate-root
-      README does) — hand to technical-writer.
-- [x] Docs verified — technical-writer filled the one gap (macOS `Sources/README.md`
-      now documents the AppDelegate focus fan-out + `Project.setUiFocus`, both-edges
-      rationale, `windowDidBecomeKey` untouched) and verified all others accurate,
-      including macOS-ONLY scoping in `runtime/nvim/README.md` (GNOME explicitly not-yet-
-      wired). `prettier --write` clean on all edited docs.
+## Constraints
 
-## MERGE FROM MAIN (user-requested) + verification pass
-
-- [x] Merged `origin/main` (abf6e2a) into `feat/auto-refresh` → merge commit `cb37351`.
-      Incoming from main: code_block syntax highlighting in preview, sidebar tree-load
-      fix, confirm-prompt/toast fix, plus changes to `nvim.rs`/`redraw.rs`/`render.rs`/
-      `lib.rs`/`messages.rs`/ffi `BUILD.bazel` and new tests (code_block_highlight.rs,
-      markdown_render.rs, messages.rs, PreviewSeamTests). 3 conflicts resolved:
-      `.claude/current-plan.md` (took ours), and two macOS READMEs (`README.md` +
-      `Sources/README.md`) — Project.swift bullet edited on BOTH sides; merged to keep
-      main's expanded `onTreeWake()` (ALL-sidebars fan-out) AND our `setUiFocus` docs.
-      `init.lua` (WolfAutoRead) + `Project.swift` (setBackground/setUiFocus/onTreeWake all
-      coexist) auto-merged cleanly. No markers remain; prettier clean.
-- [~] Verification pass on merged HEAD `cb37351` — OUR WORK GREEN, 2 inherited-from-main reds.
-      GREEN: `//crates/wolf-macos:Wolf` builds+links (FFI `set_ui_focus` + all main changes
-      compile together); `//crates/wolf-core:autoread` 30/30 post-merge; all main's new tests
-      pass (markdown_render, messages, code_block_highlight, WolfKeyMapTests incl PreviewSeamTests);
-      clippy + rustfmt_ffi + swift_format PASS. 61/62 targets green.
-      (`bazel //...` can't parse `.worktrees/`; scoped to `//crates/...` + `//tools/lint:*` =
-      whole real source tree.)
-      RED (both proven PRE-EXISTING on origin/main, byte-identical, untouched by our commits):
-      1. `//crates/wolf-ffi:frame_pack` E0451 build break — main's confirm fix made
-         `Snapshot.pending_confirm` `pub(crate)` (lone non-pub of 22 fields); frame_pack.rs
-         (external test) uses `..Snapshot::default()` FRU which needs all fields visible →
-         origin/main itself doesn't build it. Fix options: (a) `pub(crate)`→`pub` on the field
-         (1 word, consistent w/ other 21 pub fields) OR (b) edit the test to avoid FRU (keeps
-         field crate-private).
-      2. `//tools/lint:rustfmt_core` — only main's `redraw.rs` (new confirm unit tests)
-         unformatted; advisory per build.md; fix = `bazel run //tools/lint:rustfmt.fix`.
-      USER CHOSE: fix both, field→pub.
-- [x] Verification GREEN. Fixes applied (uncommitted, on top of merge `cb37351`):
-      1. `render.rs`: `pending_confirm` field AND `PendingConfirm` type `pub(crate)`→`pub`
-         (the type too — clippy `private_interfaces` under `-D warnings` rejects a pub field
-         of a pub(crate) type; pure visibility-widening, no `#[allow]`). Exposes
-         `PendingConfirm` in wolf-core's public API — TRADEOFF flagged (alt: `#[allow(
-         private_interfaces)]` on the field keeps the type internal).
-      2. `redraw.rs`: rustfmt reflow of main's confirm unit tests (formatting only).
-      RESULT: `bazel build //crates/wolf-ffi:frame_pack` + `//crates/wolf-macos:Wolf` build;
-      `bazel test //crates/... --keep_going` = **62/62 pass**; all 4 lint gates (rustfmt_core,
-      rustfmt_ffi, clippy, swift_format) PASS; autoread 10/10 post-fix. WHOLE TREE GREEN.
-      Fixes NOT yet committed (awaiting user direction on commit).
-
-## COMPLETE ✅ (pre-merge feature summary below)
-
-Focus forwarding landed: on macOS, reactivating Wolf (Dock click) now fires nvim
-`FocusGained` → `WolfAutoRead` `:checktime` → external-file reload. Chain: AppDelegate
-`applicationDidBecomeActive`/`WillResignActive` → `pushUiFocusToAllProjects` →
-`Project.setUiFocus` → ffi `WolfCoreHandle::set_ui_focus` → `WolfCore::set_ui_focus` →
-`InputEvent::SetUiFocus` → `nvim_ui_set_focus(gained)`. Both edges wired (resign→false so
-each refocus is a real transition). Proven: autoread Test 1 on the real `set_ui_focus`
-trigger 40/40, guard 40/40, swap_exists + bridge_smoke PASS, `bazel build
-//crates/wolf-macos:Wolf` SUCCESS, rustfmt+clippy+swift_format PASS. Reviewer APPROVED;
-docs synced (macOS-only scope; GNOME follow-up noted).
-
-### GIT STATE (needs user attention)
-A subagent committed the FIRST feature as `4b453a3 "Reload changed files"` on a NEW local
-branch `feat/auto-refresh` (branched off a main that had fast-forwarded to bda1603) —
-WITHOUT the user asking to commit. Nothing pushed. This SECOND feature is left uncommitted
-in the working tree. Orchestrator will not commit/push/reset without user direction.
-
-### Remaining optional follow-up
-GNOME focus forwarding (a GTK `notify::is-active` handler → the SAME `set_ui_focus` FFI
-call) — the core/ffi method is front-end-agnostic and ready; only the GNOME wiring is
-unbuilt. Also still available: the modified+externally-changed W12-prompt policy (à la
-SwapExists) if a non-blocking modified-case is wanted.
+- Session persistence (weights surviving in-session splits/removes/tab-switches
+  instead of re-equalizing) is a prerequisite of restart persistence and must
+  also work.
+- Prefer end-to-end/integration tests that start a real Neovim (bundled pinned
+  nvim; build/test with **bazelisk**, not cargo).
+- Keep pure seams (PaneTree, and any new pure persistence/rebuild seams)
+  headlessly unit-tested.
+- Every source-directory README must stay in sync with the implementation.
 
 ---
 
-## Architect's plan (authoritative)
+# Architect's plan (authoritative)
 
-### wolf-core (fire-and-forget, ordered input channel — NOT block_on_rpc; mirrors Resize)
+## 1. Summary
 
-**`crates/wolf-core/src/input.rs`:**
-- Add `InputEvent::SetUiFocus { gained: bool }` after `ToggleFullWidth` (~after line 265),
-  doc: `true`→nvim `FocusGained`, `false`→`FocusLost`. `is_toast_dismissing` (line 278)
-  is a `matches!` over Key/Mouse/Scroll → new variant auto non-dismissing (correct; leave).
-- `apply()` arm (near 431): `InputEvent::SetUiFocus { gained } => set_ui_focus(nvim, *gained).await,`.
-- Private helper near `toggle_full_width` (~551):
-  `async fn set_ui_focus(nvim: &Nvim, gained: bool) -> Result<(), Box<CallError>>` →
-  `nvim.call("nvim_ui_set_focus", vec![Value::from(gained)]).await?; Ok(())`.
-  (arity 1, single bool. Do NOT add a `NvimProcess::set_focus` method — inline like Resize
-  calls `nvim_ui_try_resize` directly at input.rs:383-391.)
-- Update the module doc (1-7) to list `nvim_ui_set_focus`.
+Add two capabilities to the macOS front-end. First, interior pane dividers become
+draggable: hovering shows a resize cursor and dragging reweights the two adjacent
+children of the owning split node, clamped so no pane's grid drops below 3 rows /
+10 columns. Second, each tab's entire pane-split tree (topology + per-child
+weights + per-leaf buffer path) is persisted into `state.json` and rebuilt on
+launch, so splits and their sizes survive quit/relaunch. As a prerequisite, the
+pure `PaneTree` stops re-equalizing on every split/remove and instead preserves
+existing (user-resized) weights, so a resized layout survives in-session sibling
+splits/removes and tab switches. The pure layout/geometry decisions stay in the
+headlessly-tested `WolfKeyMap` seams; AppKit glue (`PaneContainerView`) and nvim
+topology reconstruction are the only non-headless pieces.
 
-**`crates/wolf-core/src/api.rs`:** add on `WolfCore` next to `focus_win` (~after 837):
-`pub fn set_ui_focus(&self, gained: bool) { self.send_input(InputEvent::SetUiFocus { gained }); }`.
-`WolfCore` already re-exported at crate root — no extra export.
+Verified architecture facts:
+- `PaneTree.swift` is pure, Foundation-only, `Double`-based; today `equalize()`s
+  on every same-orientation split insert (`splitIn`, ~line 278) and after every
+  remove (`normalize`, ~line 353). No weight-mutation API, no divider concept.
+- `PaneContainerView` paints all panes in one flat `NSView`; `mouseDown/Dragged/Up`
+  (~587-626) forward to nvim with no divider hit-testing; `drawDividers` (~1714)
+  strokes 1px separators; `syncGridSizes` (~733) pushes each pane rect → nvim grid
+  size. Splits applied from nvim intents in `applySplit` (~1253) via `tree.split`.
+- Runtime splits: `runtime/nvim/init.lua` `_G.wolf_do_split(orient)` (~626) does the
+  real `:split`/`:vsplit` and emits `wolf_layout{action='split',...}`; front-end
+  builds `PaneTree` from these; nvim is NOT the layout source of truth.
+- State: `wolf-core/src/state.rs` has `TabState{cwd, sidebar_visible}`,
+  `WindowState{x,y,width,height,tabs}`, `WolfState{windows}`, on-disk
+  `StateFile{version, windows}`, `STATE_VERSION = 1`; `load_state` strict-but-
+  tolerant (no `deny_unknown_fields`). Write is whole-tree `StateStore::set_snapshot`.
+- FFI: read side `FfiState`/`FfiWindowState`/`FfiTabState` opaque projections +
+  `wolf_ffi_load_state`. Write side incremental scratch builder
+  `wolf_ffi_state_snapshot_begin/add_window/add_tab/commit/flush`. macOS save is
+  `AppDelegate.snapshotNow()` (~533); restore is `RestoreSeam.plan` →
+  `materializeProjects` → `assembleWindows`. `RestoredTabState` carries only
+  `{cwd, sidebarVisible}`.
 
-### wolf-ffi (swift-bridge; committed generated/ tree)
+## 2. New files
 
-**`crates/wolf-ffi/src/lib.rs`:**
-- In the `#[swift_bridge::bridge] mod ffi` `WolfCoreHandle extern "Rust"` list, next to
-  `fn focus_win(&self, win: i64);` (line 424): add `fn set_ui_focus(&self, gained: bool);`.
-- In the hand-written `impl WolfCoreHandle` (after `focus_win` ~1690):
-  `pub fn set_ui_focus(&self, gained: bool) { if let Some(core) = self.core.borrow().as_ref() { core.set_ui_focus(gained); } }`.
-- **Regenerate:** `bazel run //crates/wolf-ffi:gen_bindings` → rewrites committed
-  `generated/wolf-ffi.swift` (adds `public func set_ui_focus(_ gained: Bool)`) +
-  `generated/wolf-ffi.h` (adds the C decl). Commit both. No BUILD change, no CARGO repin.
-- `crates/wolf-ffi/README.md`: add `set_ui_focus` to the bridge-surface list; `prettier --write`.
+All new Swift seams import ONLY Foundation, live in
+`crates/wolf-macos/Sources/WolfKeyMap/`, and MUST be added to the enumerated
+`srcs` of `wolf_key_map` AND `WolfKeyMapTests` in `crates/wolf-macos/BUILD.bazel`.
 
-### macOS (APP-LEVEL notifications — recommended over per-window; single clean transition)
+- **`WolfKeyMap/DividerHitTest.swift`** — `public enum DividerHitTest` with
+  `static func hit(_ dividers: [PaneTree.Divider], point: (x: Double, y: Double),
+  tolerance: Double) -> PaneTree.Divider?` returning the nearest divider whose
+  line is within `tolerance` (and within span), else `nil`. Enumeration lives on
+  `PaneTree` (needs the private `Frame`); picking is pure over the public list.
+- **`WolfKeyMap/DividerDragSeam.swift`** — `public enum DividerDragSeam` with
+  `static func clampedLeftFraction(pairStart:pairSpan:pointerPos:orientation:
+  cellWidth:cellHeight:minCols:minRows:leadingOverhead:trailingOverhead:) -> Double`.
+  Raw fraction `(pointerPos-pairStart)/pairSpan`; per-side min pixels =
+  `minCols*cellWidth+overhead` (vertical) / `minRows*cellHeight+overhead`
+  (horizontal); clamp to `[minLeft/span, 1-minRight/span]`; degenerate too-small
+  pair → midpoint (0.5). The clamp lives HERE (needs cell size + pixel spans),
+  NOT in pixel-free `PaneTree`.
+- **`WolfKeyMap/PaneLayoutCodec.swift`** — pure `PaneLayout`<->serializable value
+  tree + post-order token emission for the FFI push-builder:
+  - `public enum SavedPaneNode: Equatable { case leaf(path: String); case
+    split(orientation: Orientation, weights: [Double], children: [SavedPaneNode]) }`
+  - `enum PaneLayoutCodec`: `encode(_ layout:PaneLayout, paths:[PaneId:String]) ->
+    SavedPaneNode`; `struct LayoutToken` + `postOrderTokens(_:) -> [LayoutToken]`
+    (`.leaf(path,weight)` / `.split(orientation,childCount,weight)`, root weight
+    1.0); `decodeTokens(_:) -> SavedPaneNode?` (inverse); `specJSON(_ node:
+    SavedPaneNode) -> String` (single-String rebuild input, see §4.4).
+- **Test files** (in `crates/wolf-macos/Tests/WolfKeyMapTests/`):
+  `PaneTreeWeightsTests.swift`, `DividerHitTestTests.swift`,
+  `DividerDragSeamTests.swift`, `PaneLayoutCodecTests.swift`.
+- **`crates/wolf-core/tests/state_layout.rs`** — round-trip + back-compat (no
+  nvim). New `rust_test` target `state_layout` in `crates/wolf-core/BUILD.bazel`.
+- **`crates/wolf-core/tests/rebuild_layout.rs`** — real bundled nvim; new
+  `rust_test` target `rebuild_layout`.
 
-**`crates/wolf-macos/Sources/WolfMacOS/Project.swift`** (next to `setBackground(dark:)` ~after 125):
-`func setUiFocus(gained: Bool) { handle.set_ui_focus(gained) }`.
+## 3. Front-end pure layer
 
-**`crates/wolf-macos/Sources/WolfMacOS/AppDelegate.swift`:**
-- `func applicationDidBecomeActive(_:)` → `pushUiFocusToAllProjects(gained: true)`.
-- `func applicationWillResignActive(_:)` → `pushUiFocusToAllProjects(gained: false)`.
-- private fan-out next to `pushAppearanceToAllProjects` (~after 324):
-  `private func pushUiFocusToAllProjects(gained: Bool) { for project in projects { project.setUiFocus(gained: gained) } }`
-  (empty-projects launch no-op, like the appearance fan-out).
-- Do NOT touch `windowDidBecomeKey` (WolfWindowController.swift:775 — keeps setCurrent +
-  markRefocusRebind, the proven BufEnter path). New handlers are additive; no BufEnter regression.
-- `crates/wolf-macos/Sources/WolfMacOS/README.md`: document the focus wiring; `prettier --write`.
+### 3.1 `PaneTree.swift`
+**Weight-policy change (intentional divergence from the gnome 1:1 port; TOPOLOGY
+contract unchanged):**
+- `splitIn` same-orientation branch (~275-278): instead of inserting `0.0` then
+  `equalize`, carve the new pane's share from the TARGET child only —
+  `weights[i]` and inserted `weights[i+1]` each = `weights[i]/2`; other children
+  untouched. Fresh 2-child `split(...)` stays `0.5/0.5`.
+- `normalize` (~322-357): after FLATTEN (keep proportional grandchild scaling) and
+  1-child COLLAPSE, replace `equalize(&weights)` (~353) with proportional
+  RE-NORMALIZE to sum 1 (`w[i] /= sum`). Removing a sibling redistributes
+  proportionally, not equally.
+- Keep `equalize` for the fresh-split default only (or inline).
 
-Why app-level: `applicationDidBecomeActive` fires on Dock reactivation (the exact repro) and
-gives ONE unfocused→focused transition. Switching between two Wolf windows of the SAME project
-does NOT deactivate the app → no spurious false→true churn on the shared nvim (per-window
-become/resign-key would). `applicationWillResignActive` fires only when the whole app loses
-focus → the resign-while-sibling-window-key edge cannot occur.
+**New public divider API:**
+- `public struct Divider: Equatable { orientation: Orientation; path: [Int];
+  boundary: Int; lineRect: Rect; pairStart: Double; pairSpan: Double; before:
+  PaneId; after: PaneId; fraction: Double }` — `path` = child-index path root→
+  owning split; `boundary` = index `i` between child `i` and `i+1`;
+  `fraction = weights[i]/(weights[i]+weights[i+1])`.
+- `public func dividers(width:height:) -> [Divider]` — recurse mirroring
+  `collectRects` (~374); one Divider per interior boundary with the correct pixel
+  line (`.vertical` → vertical line at boundary x over split y-range; `.horizontal`
+  → horizontal line at boundary y).
+- `public func setPairFraction(path:[Int], boundary:Int, leftFraction:Double)` —
+  navigate to split at `path`; `pairSum = w[i]+w[i+1]`; clamp `leftFraction` to
+  `[eps,1-eps]`; `w[i]=leftFraction*pairSum`, `w[i+1]=(1-leftFraction)*pairSum`.
+  Global sum + other children unchanged. No-op on invalid path/boundary.
+- `public static func rebuilt(from saved:SavedPaneNode, firstLeafId:PaneId) ->
+  (tree:PaneTree, leafIds:[PaneId])` — build `Frame`s directly from `saved`
+  (topology + weights), assign leaf ids sequentially in DFS order from
+  `firstLeafId`, return tree + ordered leaf-id list (same DFS order as `leaves()`).
 
-### Integration test — `crates/wolf-core/tests/autoread.rs` (reuse `//crates/wolf-core:autoread`, no BUILD change)
+**Header comment (1-27, 38-39):** remove "always equal-weighted / not written
+back / deferred" language; document the new API, weight-preserving split/remove
+(fresh 2-child still 0.5/0.5), and the explicit gnome divergence (topology matches
+exactly; only weight policy + divider API are macOS-only).
 
-**REPLACE Test 1's trigger** (delete `set_fast_updatetime` + `nudge_cursor_move` helpers +
-their module-doc rationale; rewrite the module doc to describe the `set_ui_focus` trigger).
-New `external_change_reloads_unmodified_buffer`:
-1. `start_core_in` + open `note.md`; assert row0 has `# Original`.
-2. sleep `PRE_REWRITE_SLEEP`; rewrite fixture to `RELOADED_DOC` (different byte length).
-3. `waiter.drain()`.
-4. **Trigger: `core.set_ui_focus(false)` THEN `core.set_ui_focus(true)`** — the `false` first
-   forces a genuine unfocused→focused transition regardless of nvim's post-attach initial focus
-   (nvim de-dupes FocusGained; a lone `true` may no-op). Models production resign→activate.
-5. Poll reading `row_text(0)` / `is_prompt()` into OWNED locals (NEVER hold the snapshot
-   read-guard across drain/sleep — the prior starvation bug), bounded by FLUSH_TIMEOUT, until
-   `# Reloaded externally` appears; assert `!is_prompt()`.
-**Keep guard test** `modified_buffer_is_not_reloaded_by_checktime`; switch ITS trigger to the
-same `set_ui_focus(false)`→`(true)` (so both delete the CursorHold helpers). Keep all guard
-assertions (`ZZUNSAVED` survives, `never applied` never present, per-iteration dismissing Enter).
-No FFI/Swift focus test (headless AppKit focus is impractical — state so); wolf-core test is
-load-bearing, `bazel build //crates/wolf-macos:Wolf` proves the Swift symbol resolves.
+### 3.2 `PaneTreeTests.swift` (modify)
+Update assertions that expected re-equalization after same-orientation split or
+remove (now expect weight preservation). Keep all topological assertions.
 
-### Verification commands (coder)
-- `bazel run //crates/wolf-ffi:gen_bindings` (regen + commit generated Swift/C before macOS build).
-- `bazel test //crates/wolf-core:autoread` (reload + guard on the real set_ui_focus trigger).
-- `bazel test //crates/wolf-ffi:bridge_smoke` (bridge still links/round-trips).
-- `bazel build //crates/wolf-macos:Wolf` (new FFI symbol resolves in Swift).
-- Lint: `cargo fmt --all -- --check`, `cargo clippy -p wolf-core -p wolf-ffi --all-targets`
-  (or the repo's `//tools/lint:rustfmt` + `:clippy` bazel targets).
+### 3.3 `RestoreSeam.swift` (modify)
+Extend `SavedTab`, `PlannedTab` with `public let layout: SavedPaneNode?` (threaded
+through `plan` unchanged — grouping still by cwd; layout is passthrough). Update
+inits + the `plan` construction (~122-140) to carry `tab.layout` into `PlannedTab`.
 
-### Risks
-- **Transition dedup (primary):** nvim fires FocusGained only unfocused→focused. Both edges
-  wired (resign→false, activate→true); test forces false→true. Insulates from nvim's uncertain
-  post-attach focus state.
-- Multi-window same project: app-level fans one `true`/project; `:checktime` (no arg) checks ALL
-  buffers → correct + idempotent; intra-app window switch sends nothing (advantage over per-window).
-- Idempotent/harmless; unmodified-only reload (guard test proves); no hermetic-isolation interaction.
-- `nvim_ui_set_focus` = stock nvim ≥0.9 (pinned is 0.12.3) — no version guard, no new deps.
+## 4. Core / FFI / nvim / macOS glue
+
+### 4.1 `wolf-core/src/state.rs`
+- `#[derive(Clone,Debug,PartialEq,Serialize,Deserialize)] #[serde(rename_all=
+  "snake_case")] pub enum PaneOrientation { Horizontal, Vertical }` (strings in JSON).
+- `#[derive(...)] #[serde(tag="type", rename_all="snake_case")] pub enum PaneNode {
+  Leaf { path: String }, Split { orientation: PaneOrientation, weights: Vec<f64>,
+  children: Vec<PaneNode> } }`.
+- On `TabState` (~68-74): `#[serde(default, skip_serializing_if="Option::is_none")]
+  pub layout: Option<PaneNode>`; `Default` → `layout: None`.
+- KEEP `STATE_VERSION = 1` (layout is `serde(default)`; old files load `layout:
+  None`). A v2 bump would wrongly discard existing state — rejected.
+- Re-export `PaneNode`/`PaneOrientation` at crate root. Update module + `TabState` docs.
+
+### 4.2 `wolf-ffi/src/lib.rs` — WRITE side
+Post-order push-builder (scalar/String-only bridge). In `extern "Rust"` (~724-739):
+`wolf_ffi_state_layout_push_leaf(path:String, weight:f64)`,
+`wolf_ffi_state_layout_push_split(orientation:u8, child_count:u32, weight:f64)`,
+`wolf_ffi_state_layout_commit_to_tab()`. Impl uses a process-wide
+`static LAYOUT_STACK: OnceLock<Mutex<Vec<(PaneNode,f64)>>>`: push_leaf pushes a
+leaf; push_split pops the top `child_count`, wraps into a Split (orientation u8
+0→Horizontal,1→Vertical), pushes; commit_to_tab pops the single remaining node
+onto the scratch tree's LAST window's LAST tab `layout`, clears the stack.
+Also: extend `FfiPaneStatus` with `abs_path(&self) -> String` (+ its `extern`
+decl); if `wolf_core::PaneStatus` lacks the abs path, extend it + `WolfCore::
+pane_status`. (Reuse `pane_status_for_grid`, the established grid→buffer join.)
+
+### 4.3 `wolf-ffi/src/lib.rs` — READ side
+Opaque `pub struct FfiPaneNode { node: PaneNode }` with `extern "Rust"`:
+`is_leaf()->bool`, `leaf_path()->String`, `orientation()->u8`, `child_count()->
+u32`, `weight(index:u32)->f64`, `child(index:u32)->FfiPaneNode` (recursion via
+repeated opaque returns). Extend `FfiTabState` with `has_layout()->bool` +
+`layout()->FfiPaneNode` (empty leaf when None) + decls; `FfiTabState::from_tab`
+carries `t.layout.clone()`.
+
+### 4.4 REBUILD API (`init.lua` + `nvim.rs` + `api.rs` + ffi)
+- `runtime/nvim/init.lua`: `_G.wolf_rebuild_layout(spec)` where spec is nested
+  `{leaf=true,path=".."}` / `{orientation="h"|"v",weights={...},children={...}}`.
+  In the current tabpage (single starting window): realize topology via
+  `:split`/`:vsplit` (create `child_count-1` windows per split, recurse), `:edit
+  <fnameescape(path)>` for a non-empty leaf path else leave empty; collect
+  resulting window handles in DFS order (SAME order as `PaneTree.leaves()`/
+  `rebuilt`) and return list + count. nvim only produces the right WINDOW COUNT +
+  TOPOLOGY + BUFFER per window; sizes come from front-end weights via `syncGridSizes`.
+- `nvim.rs`: `fn rebuild_layout(&self, spec_json:&str) -> RpcFuture` invoking the
+  Lua helper (pass a JSON string the Lua side `vim.json.decode`s), returning the
+  ordered handles.
+- `api.rs`: `pub fn rebuild_layout(&self, spec_json:&str) -> Vec<i64>` via
+  `block_on_rpc` (bounded, like `create_tabpage` ~699); `vec![]` on error.
+- `wolf-ffi`: `pub fn rebuild_layout(&self, spec_json:String) -> Vec<i64>` on
+  `WolfCoreHandle` + `extern` decl. Swift builds `spec_json` via
+  `PaneLayoutCodec.specJSON`.
+
+**Regenerate + commit bindings after ALL bridge changes:**
+`bazelisk run //crates/wolf-ffi:gen_bindings` → commit
+`crates/wolf-ffi/generated/wolf-ffi.swift` + `.h`.
+
+### 4.5 macOS glue
+**`PaneContainerView.swift`:**
+- State: `private var activeDivider: PaneTree.Divider?`; `var onLayoutChanged:
+  (() -> Void)?` (→ `coordinator.scheduleStateSnapshot`).
+- `private func editorDividers() -> [PaneTree.Divider]` = `tree.dividers(width:
+  Double(bounds.width), height: dl.editorHeight)` (same `DrawerLayout` as
+  `paneRects()` ~375-388), view coords. Editor tree only (drawer is outside `tree`).
+- `mouseDown`: BEFORE the pane-forward loop (~589), `DividerHitTest.hit(
+  editorDividers(), point:, tolerance:~4pt)`. On hit: set `activeDivider`, DO NOT
+  `focus_win`/`send_mouse`, return. Else existing behavior.
+- `mouseDragged`: if `activeDivider != nil`, compute clamped fraction via
+  `DividerDragSeam.clampedLeftFraction(...)` (`pairStart`/`pairSpan` from divider,
+  `pointerPos` along axis, `cellWidth/Height` from `metrics`, `minCols:10`,
+  `minRows:3`, overheads from `EditorInset.padding` + statusbar height), call
+  `tree.setPairFraction(...)`, `syncGridSizes()`, invalidate cursor rects,
+  `needsDisplay=true`, RETURN. Else existing.
+- `mouseUp`: if `activeDivider != nil`, clear it, `onLayoutChanged?()`, return.
+  Else existing.
+- Constants: `dividerHitTolerance: CGFloat = 4`, `minPaneCols = 10`, `minPaneRows = 3`.
+- Cursor feedback: override `resetCursorRects()` to `addCursorRect` (thin rect
+  around each divider's `lineRect` widened by tolerance) with
+  `.resizeLeftRight` (vertical) / `.resizeUpDown` (horizontal). Call
+  `window?.invalidateCursorRects(for: self)` at end of `syncGridSizes()`,
+  `setFrameSize`, `viewDidEndLiveResize`, and after `applyIntents()`/
+  `detectCloses()` in `onRenderWake`.
+- Save capture: `func layoutSnapshot() -> SavedPaneNode?` =
+  `PaneLayoutCodec.encode(tree.layout(), paths: leafPaths())` where `leafPaths()`
+  maps each editor leaf → bound grid → `handle.pane_status_for_grid(grid).
+  abs_path()` (drawer excluded); return `nil` for a single unsplit leaf.
+- Restore rebuild: `private var pendingLayoutRebuild: SavedPaneNode?`;
+  `func requestLayoutRebuild(_ saved: SavedPaneNode)`. In `onRenderWake` (after
+  `ensureInitialPane`, gated like `pendingRefocusRebind` ~790-804): consume once —
+  `handles = handle.rebuild_layout(specJSON)`; guard `handles.count ==
+  saved.leafCount` (else fall back to single pane + log); `(newTree, leafIds) =
+  PaneTree.rebuilt(from: saved, firstLeafId: nextPaneId)`; replace `tree` (make it
+  `var` + internal `replaceTree(_:)`, currently `let` ~152), advance `nextPaneId`,
+  rebuild `panes` binding `leafIds[i]`→`PaneBinding(win: handles[i], boundGrid:
+  nil)`, set `activePane`; weights come from `rebuilt` (no separate apply);
+  `resolvePendingGrids()`, `syncGridSizes()`, invalidate cursor rects,
+  `needsDisplay=true`.
+- Header (16-19): replace "deferred / equal-weighted" with the hit-test→drag→
+  reweight→syncGridSizes flow + cursor-rect feedback.
+
+**`WolfWindowController.swift`:** extend `RestoredTabState` with `layout:
+SavedPaneNode?`; in `build()` (~189) after creating `paneContainer` (~196) set
+`onLayoutChanged` → `coordinator.scheduleStateSnapshot()`, and if
+`restoredTab?.layout` is a multi-leaf split call `paneContainer.requestLayoutRebuild
+(...)`; expose `func layoutSnapshot() -> SavedPaneNode?`.
+
+**`AppDelegate.swift`:** `snapshotNow()` (~533) after
+`wolf_ffi_state_snapshot_add_tab(...)` (~564) emits `PaneLayoutCodec.postOrderTokens`
+into `push_leaf`/`push_split` then `commit_to_tab()` when `layoutSnapshot()` is
+non-nil. `restoredGroups(from:)` (~699) reads `has_layout()`/`layout()` +
+`FfiPaneNode` into `SavedPaneNode?` → `RestoredTabState`. `savedWindows(from:)`
+(~686) carries `layout` into `RestoreSeam.SavedTab`. `materializeProjects` (~157)
+passes planned tab `layout` into `RestoredTabState` (~184).
+
+**`StateSeam.swift`:** no change (launch decision cwd-only).
+
+## 5. Test plan (see architect detail; test-writer implements)
+Pure Swift: `PaneTreeWeightsTests` (setPairFraction transfer/clamp/n-ary,
+weight-preservation on split+remove, topology preserved), `DividerHitTestTests`
+(within/beyond tolerance, nearest at intersection, empty→nil),
+`DividerDragSeamTests` (middle passthrough, clamp both sides both orientations,
+overhead, degenerate midpoint), `PaneLayoutCodecTests` (encode paths, token
+round-trip, `rebuilt` topology+weights+DFS ids, specJSON shape). Modify
+`PaneTreeTests` (preserve policy) + `RestoreSeamTests` (layout passthrough, cwd
+grouping unaffected).
+Rust: `state_layout.rs` (no nvim: snapshot→flush→load_state equality; v1-without-
+layout back-compat → None; unknown-field tolerance; orientation string shape);
+`wolf-ffi/tests/state.rs` modify (drive push-builder → load → FfiPaneNode
+round-trip); `rebuild_layout.rs` (real nvim: handle count == leaf count, distinct
+handles, per-window buffer path matches, empty-path leaf → unnamed buffer).
+macOS-only manual-smoke (state in Tests READMEs): AppKit resize cursor on hover,
+live drag visuals, end-to-end quit→relaunch restore.
+
+## 6. Docs to update (prettier --write after each)
+`PaneTree.swift` header, `PaneContainerView.swift` header,
+`crates/wolf-macos/Sources/README.md`, `crates/wolf-macos/README.md`,
+`crates/wolf-core/src/README.md` + `crates/wolf-core/README.md`,
+`crates/wolf-ffi/README.md` + `crates/wolf-ffi/src/README.md`,
+`crates/wolf-macos/Tests/README.md` + `crates/wolf-core/tests/README.md` +
+`crates/wolf-ffi/tests/README.md`, `runtime/nvim/README.md` (if present),
+`architecture.md` (pane-layout/persistence sections).
+
+## 7. Implementation order
+1. Pure `PaneTree` changes + `DividerHitTest` + `DividerDragSeam` +
+   `PaneLayoutCodec` (+ BUILD srcs) + `RestoreSeam` passthrough (Foundation-only).
+2. Pure Swift tests for step 1; update `PaneTreeTests`/`RestoreSeamTests`.
+3. `PaneContainerView` drag + cursor rects + `layoutSnapshot`/`requestLayoutRebuild`
+   + `onLayoutChanged`.
+4. Core `state.rs` schema + `state_layout.rs`.
+5. FFI read/write projections + rebuild API + regen/commit bindings; extend
+   `wolf-ffi/tests/state.rs`; add `rebuild_layout.rs`.
+6. macOS save path (`snapshotNow`, `layoutSnapshot`).
+7. macOS restore/rebuild path (`RestoredTabState.layout` threading,
+   `requestLayoutRebuild`, `onRenderWake` one-shot).
+8. Docs + `prettier --write`.
+
+## 8-11. Deps / lint / risks / commands
+- No new deps. New WolfKeyMap seams import ONLY Foundation. FFI accessors
+  `#[must_use]` + `///` docs. Don't hand-edit committed `generated/*`.
+- Risks: (1) nvim topology rebuild — DFS handle order must match both sides; gate
+  behind initial-pane-bound + tabpage-current; guard count mismatch → fall back to
+  single pane; topology-first then `:edit` so a bad path degrades to empty window;
+  sizes always from front-end weights. (2) weight-policy divergence — topology
+  unchanged, dedicated tests + header note. (3) back-compat — keep version 1 +
+  `serde(default)`. (4) stale cursor rects — invalidate on every layout mutation.
+  (5) stray nvim mouse events during drag — hit-test BEFORE pane-forward, early
+  return in all three handlers. (6) bridge fragility — no Vec/recursive-struct
+  args; regen + commit; smoke/state tests guard.
+- Commands (bazelisk): `run //crates/wolf-ffi:gen_bindings` (+commit generated);
+  `build //crates/wolf-macos:Wolf`; `test //crates/wolf-macos:WolfKeyMapTests`;
+  `test //crates/wolf-core:state_layout //crates/wolf-core:rebuild_layout` (+
+  `//crates/wolf-core/...`); `test //crates/wolf-ffi:state //crates/wolf-ffi:
+  bridge_smoke`; lint `test //tools/lint/...`.

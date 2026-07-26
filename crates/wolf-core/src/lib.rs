@@ -90,7 +90,9 @@ pub use render::{
     Message, ModeInfo, PreviewInfo, Pum, PumItem, ResolvedStyle, Rgb, SharedSnapshot, Snapshot,
     ThemeColors, ThemeGroup, Toast, ToastChunk, Viewport, WinInfo,
 };
-pub use state::{load_state, state_dir, StateStore, TabState, WindowState, WolfState};
+pub use state::{
+    load_state, state_dir, PaneNode, PaneOrientation, StateStore, TabState, WindowState, WolfState,
+};
 pub use tree::{
     ancestors_to_reveal, children_of, node_rel_path, rel_path_for, TreeIndex, TreeIndexCache,
     TreeNode,
