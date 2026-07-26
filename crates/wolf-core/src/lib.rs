@@ -75,7 +75,7 @@ pub use input::{
 };
 pub use layout::{FocusDir, LayoutIntent, SplitOrientation};
 pub use logging::init_tracing;
-pub use markdown::{render_html, theme_css, PreviewTheme, MARKER_COLUMN_STRIDE};
+pub use markdown::{render_html, theme_css, PreviewTheme, WidthMode, MARKER_COLUMN_STRIDE};
 pub use mru::{MruError, MruStore, MRU_LIMIT};
 pub use palette::{rank_palette, PaletteRow, PaletteRowKind, PaletteWindow};
 pub use pane_status::{pane_status, PaneStatus, NO_NAME};

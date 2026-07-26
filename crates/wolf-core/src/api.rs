@@ -277,6 +277,7 @@ impl WolfCore {
             proc.ui_attach(cfg.cols, cfg.rows).await?;
             proc.setup_current_file_tracking().await?;
             proc.setup_buffer_tracking().await?;
+            proc.setup_full_width().await?;
             proc.setup_layout().await?;
             proc.setup_dir_tracking().await?;
             proc.setup_theme_tracking().await?;
@@ -661,6 +662,28 @@ impl WolfCore {
         self.read_snapshot().is_preview_active()
     }
 
+    /// Returns whether the buffer currently being edited is in FULL-WIDTH mode.
+    ///
+    /// A cheap, synchronous main-thread read of [`Snapshot::is_full_width_active`]
+    /// (`current_is_full_width`, fed out-of-band via `wolf_current_file`'s 4th arg).
+    /// The front-end drives the View-menu "Use full width for content" checkmark on
+    /// this (mirrors `is_preview_active`).
+    #[must_use]
+    pub fn is_full_width_active(&self) -> bool {
+        self.read_snapshot().is_full_width_active()
+    }
+
+    /// Returns whether the window with handle `win` is in FULL-WIDTH mode.
+    ///
+    /// A cheap, synchronous main-thread read of [`Snapshot::full_width_for_win`]
+    /// (the per-window `full_width` map, fed out-of-band via `wolf_full_width`). The
+    /// front-end threads this into a pane's geometry (`maxCols: nil` for full width,
+    /// `90` for the ~90-char default).
+    #[must_use]
+    pub fn full_width_for_win(&self, win: i64) -> bool {
+        self.read_snapshot().full_width_for_win(win)
+    }
+
     /// Creates a new nvim TABPAGE (optionally rooted at `cwd` via `:tcd`) and
     /// returns its stable HANDLE (`0` on error).
     ///
@@ -765,6 +788,18 @@ impl WolfCore {
     /// terminal buffer/job persists across toggles).
     pub fn toggle_terminal(&self) {
         self.send_input(InputEvent::ToggleTerminal);
+    }
+
+    /// Toggles the active buffer's content width between the ~90-char default and
+    /// full pane width (fire-and-forget via [`InputEvent::ToggleFullWidth`]).
+    ///
+    /// Enqueued on the same ordered input channel as keystrokes; applied via the
+    /// init.lua `wolf_toggle_full_width` helper, which flips `b:wolf_full_width` on
+    /// the effective buffer (the SOURCE buffer when the active pane is a preview
+    /// scratch — OQ-1) and re-emits the current-file / per-window full-width /
+    /// previews notifications.
+    pub fn toggle_full_width(&self) {
+        self.send_input(InputEvent::ToggleFullWidth);
     }
 
     /// Drains and returns all pending layout intents (in arrival order).

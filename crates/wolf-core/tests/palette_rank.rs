@@ -32,9 +32,9 @@ use wolf_core::{rank_palette, Command, PaletteRow, PaletteRowKind, PaletteWindow
 
 /// The number of STATIC rows the palette assembles: every `COMMAND_SPECS` row
 /// EXCEPT `Command::CommandPalette` (which is excluded from its own list). With
-/// 22 registered commands (Copy/Paste/BufferPicker/NewTab/Preview/Edit/Terminal/
-/// PreviewInBrowser appended at 14/15/16/17/18/19/20/21) that is 21 static rows:
-/// exactly `COMMAND_SPECS.len() - 1`.
+/// 23 registered commands (Copy/Paste/BufferPicker/NewTab/Preview/Edit/Terminal/
+/// PreviewInBrowser/FullWidth appended at 14/15/16/17/18/19/20/21/22) that is 22
+/// static rows: exactly `COMMAND_SPECS.len() - 1`.
 ///
 /// The `- 1` is NOT arithmetic coincidence — it holds because `rank_palette`
 /// (`src/palette.rs`) iterates `for spec in COMMAND_SPECS` with exactly ONE
@@ -43,11 +43,11 @@ use wolf_core::{rank_palette, Command, PaletteRow, PaletteRowKind, PaletteWindow
 /// dedup. So every spec but the palette's own invoking command contributes one
 /// static row.
 ///
-/// Preview, Edit, Terminal and PreviewInBrowser are all NEW palette static rows
-/// (OD4: unlike the macOS menu items, which gate Preview/Edit Source/Preview in
-/// Browser on the active buffer/pane, the palette does not gate any spec — it
-/// lists them all).
-const STATIC_COMMAND_COUNT: usize = 21;
+/// Preview, Edit, Terminal, PreviewInBrowser and FullWidth are all NEW palette
+/// static rows (OD4: unlike the macOS menu items, which gate Preview/Edit
+/// Source/Preview in Browser/Use full width on the active buffer/pane, the palette
+/// does not gate any spec — it lists them all).
+const STATIC_COMMAND_COUNT: usize = 22;
 
 /// A `max` large enough to never truncate the assembled candidate set in tests
 /// that assert on membership rather than truncation.

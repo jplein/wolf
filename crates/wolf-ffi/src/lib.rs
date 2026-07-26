@@ -202,6 +202,9 @@ mod command_kind {
     pub const TERMINAL: u8 = 20;
     /// Render the active Markdown buffer and open it in the system web browser.
     pub const PREVIEW_IN_BROWSER: u8 = 21;
+    /// Toggle the active buffer between the ~90-char default content width and full
+    /// pane width (`b:wolf_full_width`).
+    pub const FULL_WIDTH: u8 = 22;
 }
 
 /// The palette-row-kind discriminants packed into [`FfiCommandRow::row_kind`].
@@ -479,6 +482,21 @@ mod ffi {
         // Toggles the per-project terminal drawer via
         // `InputEvent::ToggleTerminal` (the `wolf_toggle_terminal` Lua helper).
         fn toggle_terminal(&self);
+        // Toggles the active buffer's content width between the ~90-char default and
+        // full pane width via `InputEvent::ToggleFullWidth` (the
+        // `wolf_toggle_full_width` Lua helper; targets the SOURCE buffer for a preview
+        // scratch). A no-op when the core is gone.
+        fn toggle_full_width(&self);
+        // Whether the active buffer is in FULL-WIDTH mode (`current_is_full_width`,
+        // i.e. it carries a truthy `b:wolf_full_width`; for a preview scratch this is
+        // the SOURCE buffer's flag). Drives the View > Use full width for content menu
+        // checkmark. False when the core is gone.
+        fn is_full_width_active(&self) -> bool;
+        // Whether the window `win` is in FULL-WIDTH mode (the per-window `full_width`
+        // map). The front-end threads this into a pane's geometry (`maxCols: nil` for
+        // full width, `90` for the ~90-char default). False when the core is gone or
+        // `win` is absent from the map.
+        fn full_width_for_win(&self, win: i64) -> bool;
         // The current visual-mode selection yanked to text (blocks briefly on
         // the captive nvim), or the empty string when not in visual mode / the
         // selection is empty / the core is gone. The front-end writes it to
@@ -580,6 +598,11 @@ mod ffi {
         // The source buffer's current `changedtick`; the front-end reloads the web
         // view when this advances (0 until the first `wolf_markdown_dirty`).
         fn source_tick(&self) -> u64;
+        // Whether the SOURCE Markdown buffer is in FULL-WIDTH mode (its
+        // `b:wolf_full_width` flag). The front-end frames this preview pane's web view
+        // to the full inset pane when true, or the capped+centered ~90-char rect when
+        // false.
+        fn source_full_width(&self) -> bool;
     }
 
     extern "Rust" {
@@ -787,7 +810,7 @@ mod ffi {
     extern "Rust" {
         type FfiCommand;
 
-        // The command kind (`command_kind::NEW_WINDOW` .. `PREVIEW_IN_BROWSER`).
+        // The command kind (`command_kind::NEW_WINDOW` .. `FULL_WIDTH`).
         fn kind(&self) -> u8;
     }
 
@@ -1910,6 +1933,39 @@ impl WolfCoreHandle {
         }
     }
 
+    /// Toggles the active buffer's content width between the ~90-char default and
+    /// full pane width via [`WolfCore::toggle_full_width`] (the
+    /// `wolf_toggle_full_width` Lua helper; targets the SOURCE buffer when the active
+    /// pane is a preview scratch — OQ-1). A no-op once the core is gone.
+    pub fn toggle_full_width(&self) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.toggle_full_width();
+        }
+    }
+
+    /// Whether the active buffer is in FULL-WIDTH mode (`current_is_full_width`).
+    /// Drives the View > Use full width for content menu checkmark. False once the
+    /// core has been shut down.
+    #[must_use]
+    pub fn is_full_width_active(&self) -> bool {
+        self.core
+            .borrow()
+            .as_ref()
+            .is_some_and(WolfCore::is_full_width_active)
+    }
+
+    /// Whether the window `win` is in FULL-WIDTH mode (the per-window `full_width`
+    /// map). The front-end threads this into a pane's geometry (`maxCols: nil` for
+    /// full width, `90` for the ~90-char default). False once the core has been shut
+    /// down or when `win` is absent from the map.
+    #[must_use]
+    pub fn full_width_for_win(&self, win: i64) -> bool {
+        self.core
+            .borrow()
+            .as_ref()
+            .is_some_and(|c| c.full_width_for_win(win))
+    }
+
     /// The current visual-mode selection yanked to text, or the empty string
     /// when not in visual mode / the selection is empty / the core is gone.
     /// Blocks briefly on the captive nvim (see
@@ -2373,6 +2429,7 @@ impl FfiCommand {
             Command::Edit => command_kind::EDIT,
             Command::Terminal => command_kind::TERMINAL,
             Command::PreviewInBrowser => command_kind::PREVIEW_IN_BROWSER,
+            Command::FullWidth => command_kind::FULL_WIDTH,
         };
         Self { kind }
     }
@@ -2654,6 +2711,7 @@ pub struct FfiPreview {
     source_name: String,
     source_display_path: String,
     source_tick: u64,
+    source_full_width: bool,
 }
 
 impl FfiPreview {
@@ -2700,6 +2758,15 @@ impl FfiPreview {
         self.source_tick
     }
 
+    /// Whether the SOURCE Markdown buffer is in FULL-WIDTH mode
+    /// ([`PreviewInfo::source_full_width`]). The front-end frames this preview pane's
+    /// web view to the full inset pane when `true`, or the capped+centered ~90-char
+    /// rect when `false`.
+    #[must_use]
+    pub fn source_full_width(&self) -> bool {
+        self.source_full_width
+    }
+
     /// Projects one [`PreviewInfo`] (keyed by the preview window `win`) plus its
     /// joined `source_tick` and its cwd/home-relative `source_display_path` (computed
     /// by the caller via [`WolfCore::display_path`](wolf_core::WolfCore::display_path))
@@ -2723,6 +2790,7 @@ impl FfiPreview {
             source_name,
             source_display_path,
             source_tick,
+            source_full_width: info.source_full_width,
         }
     }
 }

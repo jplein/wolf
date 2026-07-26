@@ -239,6 +239,12 @@ final class PaneContainerView: NSView {
   /// `FfiPreview.source_display_path()`. Consulted by `paintStatusbar` to show the
   /// path on the preview pane's secondary statusbar line (mirroring editor panes).
   private var previewDisplayPathsByGrid: [UInt64: String] = [:]
+  /// The SOURCE buffer's full-width flag of each preview pane, keyed by the pane's
+  /// bound GRID, rebuilt every wake by `syncPreviewWebViews` from
+  /// `FfiPreview.source_full_width()`. Consulted by `fullWidth(forGrid:)` so the
+  /// preview's webview frame, occlusion test, and statusbar span all resolve the same
+  /// capped-vs-full geometry.
+  private var previewFullWidthByGrid: [UInt64: Bool] = [:]
   /// Debounces the BLOCKING preview reload (`render_preview` + `loadHTMLString`)
   /// so a fast-typing burst — which fires many render wakes, each advancing the
   /// source `changedtick` — yields ONE trailing main-thread `render_preview`
@@ -382,17 +388,38 @@ final class PaneContainerView: NSView {
   }
 
   /// The per-pane GRID-RECT-inside-PANE-RECT geometry for `rect` (the pure seam
-  /// that owns all pixel<->cell mapping). The grid width is capped at
-  /// `maxGridCols` and CENTERED when the pane is wider than that; a narrower pane
-  /// keeps `gridRect == rect`.
-  private func geometry(for rect: CGRect) -> PaneGeometry {
+  /// that owns all pixel<->cell mapping). When `fullWidth` is `false` (the ~90-char
+  /// default) the grid width is capped at `maxGridCols` and CENTERED when the pane is
+  /// wider than that; when `fullWidth` is `true` the cap is lifted (`maxCols: nil`)
+  /// so the grid fills the whole pane rect (`gridRect == rect`, `paintOffsetX == 0`).
+  /// A pane narrower than the cap keeps `gridRect == rect` regardless.
+  private func geometry(for rect: CGRect, fullWidth: Bool) -> PaneGeometry {
     PaneGeometry(
       paneRect: Rect(
         x: Double(rect.minX), y: Double(rect.minY),
         w: Double(rect.width), h: Double(rect.height)),
       cellWidth: Double(metrics.cellWidth),
       cellHeight: Double(metrics.cellHeight),
-      maxCols: Self.maxGridCols)
+      maxCols: fullWidth ? nil : Self.maxGridCols)
+  }
+
+  /// Whether window `win` is in FULL-WIDTH mode (core's per-window `full_width`
+  /// map). `false` when `win` is absent from the map or the core is gone.
+  private func fullWidth(forWin win: Int64) -> Bool {
+    handle.full_width_for_win(win)
+  }
+
+  /// Whether the pane bound to `grid` is in FULL-WIDTH mode. A PREVIEW pane follows
+  /// its SOURCE buffer's flag (cached per wake in `previewFullWidthByGrid` from
+  /// `FfiPreview.source_full_width()`), so its webview frame, occlusion test, and
+  /// statusbar span all agree; an EDITOR pane follows the per-window `full_width` map
+  /// via its bound window handle. `false` when the grid has no bound pane.
+  private func fullWidth(forGrid grid: UInt64) -> Bool {
+    if let cached = previewFullWidthByGrid[grid] { return cached }
+    for binding in panes.values where binding.boundGrid == grid {
+      return handle.full_width_for_win(binding.win)
+    }
+    return false
   }
 
   /// The pane rectangle currently bound to `grid`, if any (used to re-resolve a
@@ -565,8 +592,8 @@ final class PaneContainerView: NSView {
       setActivePane(id)
       needsDisplay = true
       if let grid = binding.boundGrid {
-        let cell = geometry(for: gridRect(ofPane: rect)).cellAt(
-          x: Double(point.x), y: Double(point.y))
+        let cell = geometry(for: gridRect(ofPane: rect), fullWidth: fullWidth(forGrid: grid))
+          .cellAt(x: Double(point.x), y: Double(point.y))
         handle.send_mouse(
           mouseEvent(Self.mouseActionPress, grid: grid, cell: cell, event: event))
         mouseDragGrid = grid
@@ -580,7 +607,8 @@ final class PaneContainerView: NSView {
   override func mouseDragged(with event: NSEvent) {
     guard let grid = mouseDragGrid, let rect = paneRect(forGrid: grid) else { return }
     let point = convert(event.locationInWindow, from: nil)
-    let cell = geometry(for: gridRect(ofPane: rect)).cellAt(x: Double(point.x), y: Double(point.y))
+    let cell = geometry(for: gridRect(ofPane: rect), fullWidth: fullWidth(forGrid: grid))
+      .cellAt(x: Double(point.x), y: Double(point.y))
     handle.send_mouse(mouseEvent(Self.mouseActionDrag, grid: grid, cell: cell, event: event))
   }
 
@@ -589,8 +617,8 @@ final class PaneContainerView: NSView {
     guard let grid = mouseDragGrid else { return }
     if let rect = paneRect(forGrid: grid) {
       let point = convert(event.locationInWindow, from: nil)
-      let cell = geometry(for: gridRect(ofPane: rect)).cellAt(
-        x: Double(point.x), y: Double(point.y))
+      let cell = geometry(for: gridRect(ofPane: rect), fullWidth: fullWidth(forGrid: grid))
+        .cellAt(x: Double(point.x), y: Double(point.y))
       handle.send_mouse(
         mouseEvent(Self.mouseActionRelease, grid: grid, cell: cell, event: event))
     }
@@ -653,7 +681,8 @@ final class PaneContainerView: NSView {
     // i.e. the viewport moves UP. If scrolling ever feels inverted, flip this line.
     let direction = steps > 0 ? Self.scrollDirUp : Self.scrollDirDown
 
-    let cell = geometry(for: gridRect(ofPane: rect)).cellAt(x: Double(point.x), y: Double(point.y))
+    let cell = geometry(for: gridRect(ofPane: rect), fullWidth: fullWidth(forGrid: grid))
+      .cellAt(x: Double(point.x), y: Double(point.y))
     for _ in 0..<abs(steps) {
       handle.send_scroll(
         FfiScrollEvent(
@@ -720,8 +749,8 @@ final class PaneContainerView: NSView {
       guard let grid = panes[id]?.boundGrid else { continue }
       // Size from the pane's GRID RECT (the pane minus the top statusbar
       // strip) via `PaneGeometry`, so nvim sees the REDUCED rows the grid
-      // actually paints into.
-      let geo = geometry(for: gridRect(ofPane: rect))
+      // actually paints into. Full-width panes lift the 90-column cap.
+      let geo = geometry(for: gridRect(ofPane: rect), fullWidth: fullWidth(forGrid: grid))
       let frame = handle.read_frame_for_grid(grid)
       if Int(frame.cols()) != geo.cols || Int(frame.rows()) != geo.rows {
         handle.resize_grid(
@@ -872,11 +901,11 @@ final class PaneContainerView: NSView {
   /// and `drawScrollbars` suppresses the synthetic scrollbar. Web views for
   /// windows that are no longer previews (or closed) are removed.
   ///
-  /// `web.frame = gRect` uses the UNCENTERED `gridRect(ofPane:)` — no
-  /// `PaneGeometry.paintOffsetX` — and this is what `paintStatusbar`'s `.preview`
-  /// span mirrors: the preview statusbar's left edge is `gridRect(ofPane:).minX`
-  /// BECAUSE that is the webview's frame origin (and the preview CSS is flush).
-  /// The two must change together.
+  /// `web.frame` uses the capped+CENTERED `geometry(…, fullWidth: source_full_width())
+  /// .gridRect` (the ~90-char default, or the full inset pane when the source is
+  /// full-width), and this is what `paintStatusbar`'s `.preview` span AND the draw
+  /// loop's occlusion test mirror: all three derive from the SAME
+  /// `geometry(…, fullWidth:)` off `gridRect(ofPane:)`, so they must change together.
   ///
   /// ATOMICITY, LOAD-BEARING: this one function both rebuilds `previewNamesByGrid`
   /// (cleared and repopulated below) and sets the webview frames, in the SAME pass,
@@ -901,6 +930,7 @@ final class PaneContainerView: NSView {
   private func syncPreviewWebViews() {
     previewNamesByGrid.removeAll(keepingCapacity: true)
     previewDisplayPathsByGrid.removeAll(keepingCapacity: true)
+    previewFullWidthByGrid.removeAll(keepingCapacity: true)
     var liveWins = Set<Int64>()
     var current: [Int64: PreviewSeam.PreviewLoad] = [:]
     let rects = paneRects()
@@ -917,6 +947,8 @@ final class PaneContainerView: NSView {
       liveWins.insert(win)
       previewNamesByGrid[grid] = preview.source_name().toString()
       previewDisplayPathsByGrid[grid] = preview.source_display_path().toString()
+      let sourceFullWidth = preview.source_full_width()
+      previewFullWidthByGrid[grid] = sourceFullWidth
 
       // Copy the borrowed ref's scalars out into a `PreviewLoad`; only wins that
       // passed the pane/grid guard land in `current`, preserving the "only
@@ -924,9 +956,14 @@ final class PaneContainerView: NSView {
       current[win] = PreviewSeam.PreviewLoad(
         sourceBufnr: preview.source_bufnr(), sourceTick: preview.source_tick())
 
-      let gRect = gridRect(ofPane: entry.1)
+      // Frame the web view to the capped+CENTERED grid rect when the source is in
+      // the ~90-char default, or the full inset pane when the source is full-width.
+      // The occlusion test (draw loop) and the preview statusbar span derive from
+      // this SAME `geometry(…, fullWidth:)` — they MUST change together.
+      let gRect = geometry(for: gridRect(ofPane: entry.1), fullWidth: sourceFullWidth).gridRect
       let web = ensurePreviewWebView(for: win)
-      web.frame = gRect
+      web.frame = CGRect(
+        x: gRect.x, y: gRect.y, width: gRect.w, height: gRect.h)
       web.isHidden = false
     }
 
@@ -1353,12 +1390,14 @@ final class PaneContainerView: NSView {
       // Skip the grid paint (and its FFI frame read) when an opaque, loaded
       // preview web view fully covers this pane's grid rect — those pixels are
       // never visible. The containment test has tolerance 0.0 against the SAME
-      // `gridRect(ofPane:)` expression `syncPreviewWebViews` assigns to the web
-      // view, so any out-of-sync geometry (live resize, split, pre-close) fails
-      // containment and the grid paints. The statusbar strip is OUTSIDE
-      // `gridRect` and always paints.
+      // capped+centered `geometry(…, fullWidth:).gridRect` expression
+      // `syncPreviewWebViews` assigns to the web view, so any out-of-sync geometry
+      // (live resize, split, pre-close) fails containment and the grid paints. The
+      // statusbar strip is OUTSIDE `gridRect` and always paints.
       let occluded = PaneOcclusion.isFullyOccluded(
-        gridRect: rect(from: gridRect(ofPane: paneRect)),
+        gridRect: geometry(
+          for: gridRect(ofPane: paneRect), fullWidth: fullWidth(forGrid: grid)
+        ).gridRect,
         by: previewOccluder(forWin: binding.win))
       // Explicit begin/end rather than `defer` so the sample covers exactly the
       // `paintPane` call and nothing else in the loop body (mirrors the
@@ -1420,7 +1459,8 @@ final class PaneContainerView: NSView {
     let frame = handle.read_frame_for_grid(grid)
     FrameMetrics.end(.paneFrameRead, frameReadStart)
 
-    paintGrid(frame, into: gridRect(ofPane: paneRect), ctx: ctx)
+    paintGrid(
+      frame, into: gridRect(ofPane: paneRect), fullWidth: fullWidth(forGrid: grid), ctx: ctx)
 
     ctx.restoreGState()
   }
@@ -1428,11 +1468,12 @@ final class PaneContainerView: NSView {
   /// Paints one window grid into the GRID rect `rect` (the pane minus its top
   /// statusbar strip).
   ///
-  /// When the grid is capped narrower than the rect (`maxGridCols`) it is CENTERED
-  /// via the geometry's paint offset; the whole grid rect is first filled with the
-  /// grid's default background so the side margins blend with the grid.
-  private func paintGrid(_ frame: FfiFrame, into rect: CGRect, ctx: CGContext) {
-    let geo = geometry(for: rect)
+  /// When the grid is capped narrower than the rect (`maxGridCols`, the ~90-char
+  /// default) it is CENTERED via the geometry's paint offset; a `fullWidth` pane
+  /// lifts the cap so the grid fills the rect. The whole grid rect is first filled
+  /// with the grid's default background so the side margins blend with the grid.
+  private func paintGrid(_ frame: FfiFrame, into rect: CGRect, fullWidth: Bool, ctx: CGContext) {
+    let geo = geometry(for: rect, fullWidth: fullWidth)
     ctx.saveGState()
     ctx.clip(to: rect)
 
@@ -1484,12 +1525,13 @@ final class PaneContainerView: NSView {
   ///   (the 90-column centering inset), so the text is indented by the same offset
   ///   and its right edge stays at `gRect.maxX`. This is bit-identical to the
   ///   pre-existing behavior.
-  /// - PREVIEW panes: `syncPreviewWebViews` frames the `WKWebView` to the UNCENTERED
-  ///   `gridRect(ofPane:)` and the preview CSS is flush, so the text spans the whole
-  ///   `gRect` and BOTH its edges land on the webview frame. `paintOffsetX` is
-  ///   deliberately ignored here. Both consumers derive from the SAME
-  ///   `gridRect(ofPane:)` call and must change together: if the preview webview is
-  ///   ever centered, this must revert to the editor semantics.
+  /// - PREVIEW panes: `syncPreviewWebViews` now frames the `WKWebView` to the SAME
+  ///   capped+CENTERED `geometry(…, fullWidth:).gridRect`, so a preview's statusbar is
+  ///   indented by `paintOffsetX` exactly like an editor's (`StatusbarTextSpan`'s two
+  ///   kinds are now identical). In full-width mode `paintOffsetX == 0`, so the text
+  ///   lands flush at `gRect.minX`. The webview frame, this span, and the draw loop's
+  ///   occlusion test all derive from the same `geometry(…, fullWidth:)` and must
+  ///   change together.
   ///
   /// The kind comes from `previewNamesByGrid` (looked up ONCE, and reused for the
   /// filename/path override below) — the same predicate `drawScrollbars` uses.
@@ -1523,7 +1565,7 @@ final class PaneContainerView: NSView {
     // `paintOffsetX`, a preview's webview is framed to the uncentered `gRect`.
     // `StatusbarTextSpan` owns that arithmetic.
     let gRect = gridRect(ofPane: paneRect)
-    let geo = geometry(for: gRect)
+    let geo = geometry(for: gRect, fullWidth: fullWidth(forGrid: grid))
     let span = StatusbarTextSpan(
       gridLeft: Double(gRect.minX), gridWidth: Double(gRect.width),
       paintOffsetX: geo.paintOffsetX, kind: previewName != nil ? .preview : .editor)

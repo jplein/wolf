@@ -41,6 +41,7 @@ enum AppMenu {
     static let edit = 19
     static let terminal = 20
     static let previewInBrowser = 21
+    static let fullWidth = 22
   }
 
   /// The dynamic submenus `install` hands back to the coordinator: the Window
@@ -227,6 +228,14 @@ enum AppMenu {
     menu.addItem(
       commandItem(
         title: "Preview in Browser", tag: Tag.previewInBrowser, keyEquivalent: "",
+        target: target))
+    // View > Use full width for content: toggles the active buffer between the
+    // ~90-char default content width and full pane width. ALWAYS enabled (OQ-2);
+    // its checkmark tracks isFullWidthActive (gated in AppDelegate.validateMenuItem).
+    // NO key equivalent.
+    menu.addItem(
+      commandItem(
+        title: "Use full width for content", tag: Tag.fullWidth, keyEquivalent: "",
         target: target))
     menu.addItem(.separator())
     let fullScreen = NSMenuItem(

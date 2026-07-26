@@ -236,8 +236,11 @@ async fn route(
     if is_markdown_path(&path) {
         match std::fs::read_to_string(&path) {
             Ok(src) => {
-                let html =
-                    crate::markdown::render_html(&src, crate::markdown::PreviewTheme::Default);
+                let html = crate::markdown::render_html(
+                    &src,
+                    crate::markdown::PreviewTheme::Default,
+                    crate::markdown::WidthMode::Capped,
+                );
                 http_response("200 OK", "text/html; charset=utf-8", &html)
             }
             Err(_) => not_found_response(),
@@ -254,7 +257,7 @@ async fn route(
 /// script), falling back to [`fallback_page`] on a render error.
 async fn render_pinned_live(nvim: &Nvim, snapshot: &SharedSnapshot, bufnr: i64) -> Vec<u8> {
     let tick = current_tick(snapshot, bufnr);
-    let body = match render_source_html(nvim, bufnr).await {
+    let body = match render_source_html(nvim, bufnr, crate::markdown::WidthMode::Capped).await {
         Ok(html) => render_page(&html, tick),
         Err(e) => {
             tracing::warn!("browser preview render_source_html({bufnr}) failed: {e}");

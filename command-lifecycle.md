@@ -17,7 +17,7 @@ The `Command` enum's VARIANT ORDER is that discriminant contract. It is **append
 
 Everything starts here. The module is pure data + enums (no GUI toolkit, honoring wolf-core's one hard rule):
 
-- **`enum Command`** — one variant per command, in discriminant order (`NewWindow`(0), `CloseWindow`(1), … `NewTab`(17), `Preview`(18), `Edit`(19), `Terminal`(20), `PreviewInBrowser`(21)). The doc comment on the enum spells out the full ordered list and restates the append-only rule.
+- **`enum Command`** — one variant per command, in discriminant order (`NewWindow`(0), `CloseWindow`(1), … `NewTab`(17), `Preview`(18), `Edit`(19), `Terminal`(20), `PreviewInBrowser`(21), `FullWidth`(22)). The doc comment on the enum spells out the full ordered list and restates the append-only rule.
 - **`struct CommandSpec { command, id, ex_command, title, menu }`** — the canonical metadata for one command, all fields public. The `id` → `ex_command` mapping is stored EXPLICITLY as data (there is no snake→Pascal transform code), so the registry is the one source of truth.
 - **`const COMMAND_SPECS: &[CommandSpec]`** — one row per command, in variant order, so the **slice index equals the FFI discriminant**. Example row:
 
@@ -52,8 +52,8 @@ Both faces `rpcnotify` the SAME `wolf_command` channel with the canonical `id`. 
 
 The native front-end never learns the ids; it speaks only the discriminant. Three ports keep it aligned with the registry:
 
-- **`mod command_kind`** in `crates/wolf-ffi/src/lib.rs` — the `u8` constants (`NEW_WINDOW = 0` … `NEW_TAB = 17`, `PREVIEW = 18`, `EDIT = 19`, `TERMINAL = 20`, `PREVIEW_IN_BROWSER = 21`), in `wolf_core::Command` order. `FfiCommand::from_command` is an EXHAUSTIVE match over `Command` that packs each variant to its `command_kind` (so adding or reordering a variant is a compile error here).
-- **`enum CommandKind`** in `crates/wolf-macos/Sources/WolfKeyMap/CommandSeam.swift` — the AppKit-free Swift mirror. `init?(ffi: UInt8)` decodes the byte (`0` → `.newWindow` … `20` → `.terminal`, `21` → `.previewInBrowser`, anything else → `nil`), guarding the contract.
+- **`mod command_kind`** in `crates/wolf-ffi/src/lib.rs` — the `u8` constants (`NEW_WINDOW = 0` … `NEW_TAB = 17`, `PREVIEW = 18`, `EDIT = 19`, `TERMINAL = 20`, `PREVIEW_IN_BROWSER = 21`, `FULL_WIDTH = 22`), in `wolf_core::Command` order. `FfiCommand::from_command` is an EXHAUSTIVE match over `Command` that packs each variant to its `command_kind` (so adding or reordering a variant is a compile error here).
+- **`enum CommandKind`** in `crates/wolf-macos/Sources/WolfKeyMap/CommandSeam.swift` — the AppKit-free Swift mirror. `init?(ffi: UInt8)` decodes the byte (`0` → `.newWindow` … `20` → `.terminal`, `21` → `.previewInBrowser`, `22` → `.fullWidth`, anything else → `nil`), guarding the contract.
 - **`AppMenu`'s `Tag` enum** in `crates/wolf-macos/Sources/WolfMacOS/AppMenu.swift` — the macOS menu is HARDCODED (it does not read the registry over the FFI); each Wolf menu item carries its `command_kind` discriminant in `NSMenuItem.tag`. The menu titles mirror `COMMAND_SPECS`.
 
 ## 5. Invocation → drain
@@ -66,7 +66,7 @@ Both faces converge on the same drain path.
 
 ## 6. Dispatch — `crates/wolf-macos/Sources/WolfMacOS/CommandDispatcher.swift`
 
-`CommandDispatcher.dispatch(_ kind:window:coordinator:originatingCwd:controller:)` is the single funnel every command flows through, so a command has ONE implementation regardless of face. It maps a decoded `CommandKind` to its native action, e.g. `.closePane → controller?.closePane()`, `.newBuffer → controller?.newBuffer()`, `.terminal → controller?.toggleTerminal()`, `.newWindow → coordinator?.makeNewWindow(...)`, `.previewInBrowser → controller?.openInBrowser()`.
+`CommandDispatcher.dispatch(_ kind:window:coordinator:originatingCwd:controller:)` is the single funnel every command flows through, so a command has ONE implementation regardless of face. It maps a decoded `CommandKind` to its native action, e.g. `.closePane → controller?.closePane()`, `.newBuffer → controller?.newBuffer()`, `.terminal → controller?.toggleTerminal()`, `.newWindow → coordinator?.makeNewWindow(...)`, `.previewInBrowser → controller?.openInBrowser()`, `.fullWidth → controller?.toggleFullWidth()`.
 
 `.previewInBrowser` is a HYBRID flavor worth calling out: like the `.preview` / `.edit` arms (which reach the blocking `open_preview` / `render_preview` / `edit_source` core calls), its dispatcher arm invokes a BLOCKING core method — `handle.open_in_browser()` returns the loopback preview server's `http://127.0.0.1:<port>/<relpath>` URL (the pinned Markdown file's root-relative path) — and then the front-end opens that URL in the system default browser via `NSWorkspace`. It touches the captive nvim (a blocking RPC to resolve the pinned Markdown buffer + lazily start the per-project loopback HTTP server) but issues NO `InputEvent`, so it is neither the pure native-only flavor (a) nor the ordered-input editor-affecting flavor (b) — it is the same blocking-read-through-core shape as Preview.
 
@@ -88,11 +88,12 @@ WolfCoreHandle::<method>            (crates/wolf-ffi/src/lib.rs)
         → nvim_command / nvim_exec_lua
 ```
 
-The input channel is ORDERED, so an editor-affecting command never races pending keystrokes. The `apply` arm is either a simple Ex-command or a call into a `wolf_*` Lua helper. Three worked examples span the range of complexity:
+The input channel is ORDERED, so an editor-affecting command never races pending keystrokes. The `apply` arm is either a simple Ex-command or a call into a `wolf_*` Lua helper. Four worked examples span the range of complexity:
 
 - **`NewBuffer` (simple):** `WolfCoreHandle::new_buffer` → `WolfCore::new_buffer` → `InputEvent::NewBuffer` → `apply` runs `command(nvim, "enew")` — a plain `:enew`.
 - **`SwitchBuffer` (helper):** `WolfCoreHandle::switch_buffer(bufnr)` (resolving the active window live) → `WolfCore::switch_buffer(win, bufnr)` → `InputEvent::SwitchBuffer { win, bufnr }` → `apply` calls `nvim_exec_lua("wolf_switch_buffer(...)", [win, bufnr])`, whose `init.lua` helper does a window-scoped `nvim_win_set_buf` plus per-pane view restore atomically.
 - **`Terminal` (helper, no args):** `WolfCoreHandle::toggle_terminal` → `WolfCore::toggle_terminal` → `InputEvent::ToggleTerminal` → `apply` calls `nvim_exec_lua("wolf_toggle_terminal()", [])`. The `wolf_toggle_terminal()` helper in `init.lua` finds the shared, tagged (`b:wolf_terminal` + `buftype == 'terminal'`) per-project terminal buffer, hides its per-tabpage drawer window if visible (the buffer/job persist), or opens a bottom `:terminal` split showing it (recreating the buffer if the user exited the shell). On the OPEN path it ALSO emits a `drawer_open` **LAYOUT** intent (`_G.wolf_emit_drawer(win)` → `wolf_layout { action = "drawer_open", win }` → `LayoutIntent::DrawerOpen`, drained via `WolfCore::drain_intents` — distinct from this command-drain path) so the front-end renders the drawer as a root-bottom pane; hiding stays intent-less (the front-end observes the `win_close`). Terminal is thus a good illustration that an editor-affecting command can ALSO drive the layout-intent channel — the two channels are independent. See [`runtime/nvim/README.md`](runtime/nvim/README.md).
+- **`FullWidth` (helper, no args, source-buffer redirect):** `WolfCoreHandle::toggle_full_width` → `WolfCore::toggle_full_width` → `InputEvent::ToggleFullWidth` → `apply` calls `nvim_exec_lua("wolf_toggle_full_width()", [])`. The `wolf_toggle_full_width()` helper in `init.lua` resolves the EFFECTIVE buffer — the current buffer, UNLESS the active pane is a preview scratch (it carries `b:wolf_preview_source_bufnr`), in which case it targets the SOURCE buffer (OQ-1) so the visible preview resizes and the document's editor + preview views stay consistent — then flips that buffer's `b:wolf_full_width`, and re-emits the three state channels the toggle affects: `wolf_emit_current_file()` (the menu checkmark), `wolf_emit_full_width()` (the per-window editor-pane geometry), and `wolf_emit_previews()` (the preview-pane framing). The macOS dispatcher arm (`.fullWidth → controller?.toggleFullWidth()`) also calls `paneContainer?.onRenderWake()` so the panes resize promptly on the next wake. The View-menu item is ALWAYS enabled (OQ-2); only its checkmark tracks `is_full_width_active()`. See [`architecture.md`](architecture.md) §10 and [`full-width-decisions.md`](full-width-decisions.md).
 
 ## 8. Checklist: adding a new command
 

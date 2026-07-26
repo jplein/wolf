@@ -138,15 +138,59 @@ pub fn theme_css(theme: PreviewTheme) -> &'static str {
     }
 }
 
+/// How the rendered Markdown body's content area is sized horizontally.
+///
+/// A per-render choice threaded into [`render_html`]. [`WidthMode::Full`] is the
+/// full-bleed / historical behavior (the in-app webview FRAME does any capping);
+/// [`WidthMode::Capped`] appends a `max-width` cap + horizontal centering to the
+/// CSS so the standalone document (the browser preview, always-capped per OQ-3)
+/// caps its own content.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum WidthMode {
+    /// Cap the content to [`CAPPED_WIDTH_CSS`] (`max-width: 45rem`, ≈ 90 proportional
+    /// Inter characters — OQ-3) and center it horizontally. Used by the always-capped
+    /// browser preview and static `.md` disk renders.
+    Capped,
+    /// Full-bleed: no content `max-width` cap and no centering, so the caller's
+    /// frame (the in-app webview) does any capping. The default and historical
+    /// behavior.
+    #[default]
+    Full,
+}
+
+/// The HORIZONTAL-ONLY content cap appended AFTER the theme CSS for
+/// [`WidthMode::Capped`]. Caps the body to `max-width: 45rem` and centers it with
+/// `margin-left:auto` / `margin-right:auto`, plus symmetric horizontal padding.
+///
+/// `45rem` ≈ 90 proportional Inter characters: at the default 16px root font the
+/// average Inter glyph advance is roughly half the em (~8px), so `45rem = 720px`
+/// holds on the order of 90 characters — honoring the user's explicit "~90
+/// characters" request (OQ-3) for a proportional font, the same target the 90-column
+/// editor cap uses for its monospaced grid.
+///
+/// ONLY horizontal properties are set (`max-width`, the two side margins, the two
+/// side paddings). The vertical margin/padding is deliberately left untouched: the
+/// preview's 24px baseline grid (in `markdown/base.css`) depends on the body's
+/// vertical box, so overriding it here would break the baseline rhythm.
+const CAPPED_WIDTH_CSS: &str =
+    "body.wolf-markdown{max-width:45rem;margin-left:auto;margin-right:auto;\
+     padding-left:24px;padding-right:24px}";
+
 /// Renders `source` Markdown to a complete, themed HTML document with the
 /// forward-compatible per-line / per-100-column position markers embedded.
 ///
 /// The rendered Markdown body is wrapped as
-/// `<!doctype html><html><head><meta charset="utf-8"><style>{INTER_FONT_FACE}{MATH_FONT_FACE}{BASE_CSS}{MATH_CSS}{theme_css}</style></head><body class="wolf-markdown">{body}</body></html>`
+/// `<!doctype html><html><head><meta charset="utf-8"><style>{INTER_FONT_FACE}{MATH_FONT_FACE}{BASE_CSS}{MATH_CSS}{theme_css}{width_css}</style></head><body class="wolf-markdown">{body}</body></html>`
 /// so the front-end web view can load the string directly. See the module docs for
 /// the marker scheme and its DOM placement.
+///
+/// `width_mode` selects the content-area sizing: [`WidthMode::Full`] appends no
+/// width CSS (full-bleed; the in-app webview frame caps it), while
+/// [`WidthMode::Capped`] appends [`CAPPED_WIDTH_CSS`] AFTER the theme CSS so the
+/// standalone document (the always-capped browser preview, OQ-3) caps + centers its
+/// own content.
 #[must_use]
-pub fn render_html(source: &str, theme: PreviewTheme) -> String {
+pub fn render_html(source: &str, theme: PreviewTheme, width_mode: WidthMode) -> String {
     let markers = desired_markers(source);
 
     let mut options = Options::empty();
@@ -173,9 +217,16 @@ pub fn render_html(source: &str, theme: PreviewTheme) -> String {
     let mut body = String::new();
     html::push_html(&mut body, injector);
 
+    // `WidthMode::Capped` appends the horizontal-only content cap AFTER the theme
+    // CSS (so it wins the cascade); `WidthMode::Full` appends nothing (full-bleed).
+    let width_css = match width_mode {
+        WidthMode::Capped => CAPPED_WIDTH_CSS,
+        WidthMode::Full => "",
+    };
+
     format!(
         "<!doctype html><html><head><meta charset=\"utf-8\">\
-         <style>{INTER_FONT_FACE}{MATH_FONT_FACE}{BASE_CSS}{MATH_CSS}{theme}</style>\
+         <style>{INTER_FONT_FACE}{MATH_FONT_FACE}{BASE_CSS}{MATH_CSS}{theme}{width_css}</style>\
          </head><body class=\"wolf-markdown\">{body}</body></html>",
         theme = theme_css(theme),
     )
@@ -650,11 +701,53 @@ mod tests {
     /// `render_html` wraps the body and renders the Markdown.
     #[test]
     fn render_html_smoke() {
-        let html = render_html("# Hi\n\ntext", PreviewTheme::Default);
+        let html = render_html("# Hi\n\ntext", PreviewTheme::Default, WidthMode::Full);
         assert!(html.to_ascii_lowercase().contains("<!doctype html"));
         assert!(html.contains(r#"class="wolf-markdown""#));
         assert!(html.contains("<h1"));
         assert!(html.contains(r#"id="wl-1-0""#));
+    }
+
+    /// `WidthMode::Full` is the FULL-BLEED / current behavior: no content
+    /// `max-width` cap and no centering, so the in-app webview FRAME (not CSS) does
+    /// any capping. The body stays flush.
+    #[test]
+    fn render_html_full_is_flush() {
+        let html = render_html("# Hi\n\ntext", PreviewTheme::Default, WidthMode::Full);
+        assert!(
+            !html.contains("max-width:45rem"),
+            "full-width render must NOT cap the content width (no `max-width:45rem` \
+             content-centering cap; note `base.css`'s `img {{ max-width: 100% }}` means \
+             the bare substring `max-width` is always present): {html}"
+        );
+        assert!(
+            !html.contains("margin-left:auto"),
+            "full-width render must NOT center the content (no `margin-left:auto`): {html}"
+        );
+    }
+
+    /// `WidthMode::Capped` (the BROWSER preview's always-on mode, OD3) appends a
+    /// `body.wolf-markdown` rule that caps the content to `max-width:45rem` (≈ 90
+    /// proportional Inter chars, OQ-3) and centers it with `margin-left:auto` /
+    /// `margin-right:auto`. Only HORIZONTAL props are set, so the vertical baseline
+    /// grid is preserved (checked here by the presence of the horizontal-only cap
+    /// rule; a substring match for `max-width:45rem` + the auto side margins is
+    /// sufficient).
+    #[test]
+    fn render_html_capped_centers() {
+        let html = render_html("# Hi\n\ntext", PreviewTheme::Default, WidthMode::Capped);
+        assert!(
+            html.contains("max-width:45rem"),
+            "capped render must cap the content to `max-width:45rem`: {html}"
+        );
+        assert!(
+            html.contains("margin-left:auto"),
+            "capped render must center via `margin-left:auto`: {html}"
+        );
+        assert!(
+            html.contains("margin-right:auto"),
+            "capped render must center via `margin-right:auto`: {html}"
+        );
     }
 
     /// A fresh, empty dedup map, so each `slugify` case starts from a clean
@@ -729,7 +822,7 @@ mod tests {
     /// `ENABLE_HEADING_ATTRIBUTES` on and the auto-slug pipeline wired in).
     #[test]
     fn render_html_heading_has_id() {
-        let html = render_html("# Alpha Heading\n", PreviewTheme::Default);
+        let html = render_html("# Alpha Heading\n", PreviewTheme::Default, WidthMode::Full);
         assert!(
             html.contains(r#"id="alpha-heading""#),
             "a heading must carry its computed slug id: {html}"
@@ -741,13 +834,21 @@ mod tests {
     /// (`"# Custom"` → `id="custom-1"`).
     #[test]
     fn render_html_explicit_heading_id() {
-        let html = render_html("# Title {#custom}\n", PreviewTheme::Default);
+        let html = render_html(
+            "# Title {#custom}\n",
+            PreviewTheme::Default,
+            WidthMode::Full,
+        );
         assert!(
             html.contains(r#"id="custom""#),
             "an explicit {{#custom}} id must be honored verbatim: {html}"
         );
 
-        let html = render_html("# Title {#custom}\n\n# Custom\n", PreviewTheme::Default);
+        let html = render_html(
+            "# Title {#custom}\n\n# Custom\n",
+            PreviewTheme::Default,
+            WidthMode::Full,
+        );
         assert!(
             html.contains(r#"id="custom""#),
             "the explicit id stays verbatim: {html}"
@@ -762,7 +863,7 @@ mod tests {
     /// adding heading ids must not displace the marker injector's spans.
     #[test]
     fn render_html_marker_still_present() {
-        let html = render_html("# Alpha Heading\n", PreviewTheme::Default);
+        let html = render_html("# Alpha Heading\n", PreviewTheme::Default, WidthMode::Full);
         assert!(
             html.contains(r#"id="alpha-heading""#),
             "the heading slug id must be present: {html}"
@@ -779,7 +880,7 @@ mod tests {
     /// exact markup pulldown-latex emits.
     #[test]
     fn inline_math_renders_mathml() {
-        let html = render_html("$e=mc^2$\n", PreviewTheme::Default);
+        let html = render_html("$e=mc^2$\n", PreviewTheme::Default, WidthMode::Full);
         assert!(
             html.contains("<math"),
             "inline math must render a <math> element: {html}"
@@ -797,7 +898,11 @@ mod tests {
     /// Display `$$...$$` math renders a BLOCK-mode `<math display="block">` element.
     #[test]
     fn display_math_is_block() {
-        let html = render_html("$$\\int_0^1 x\\,dx$$\n", PreviewTheme::Default);
+        let html = render_html(
+            "$$\\int_0^1 x\\,dx$$\n",
+            PreviewTheme::Default,
+            WidthMode::Full,
+        );
         assert!(
             html.contains("display=\"block\""),
             "display math must render `display=\"block\"` on its <math> element: {html}"
@@ -809,7 +914,7 @@ mod tests {
     /// double-escaped by the HTML writer.
     #[test]
     fn math_not_double_escaped() {
-        let html = render_html("$e=mc^2$\n", PreviewTheme::Default);
+        let html = render_html("$e=mc^2$\n", PreviewTheme::Default, WidthMode::Full);
         assert!(
             html.contains("<math"),
             "the MathML must appear as raw HTML (`<math`), not escaped: {html}"
@@ -825,7 +930,7 @@ mod tests {
     /// host-installed font.
     #[test]
     fn inter_font_face_present() {
-        let html = render_html("# Title\n", PreviewTheme::Default);
+        let html = render_html("# Title\n", PreviewTheme::Default, WidthMode::Full);
         assert!(
             html.contains("@font-face"),
             "the document must inline an @font-face rule: {html}"
@@ -848,7 +953,7 @@ mod tests {
     /// MathML rendering is pinned to a bundled math font (no host-installed font).
     #[test]
     fn math_font_present() {
-        let html = render_html("$e=mc^2$\n", PreviewTheme::Default);
+        let html = render_html("$e=mc^2$\n", PreviewTheme::Default, WidthMode::Full);
         assert!(
             html.contains("Latin Modern Math"),
             "the document must pin MathML to the bundled `Latin Modern Math` font: {html}"
@@ -865,7 +970,7 @@ mod tests {
     /// document containing a `<math` element.
     #[test]
     fn malformed_latex_degrades_without_panic() {
-        let html = render_html("$\\frac{1}$\n", PreviewTheme::Default);
+        let html = render_html("$\\frac{1}$\n", PreviewTheme::Default, WidthMode::Full);
         assert!(
             html.to_ascii_lowercase().contains("<!doctype html"),
             "malformed math must still yield a valid full document: {html}"
@@ -885,7 +990,7 @@ mod tests {
     /// between the first `<math` and the following `</math>` for any `wolf-src` span.
     #[test]
     fn marker_not_inside_math() {
-        let html = render_html("$x=1$ and text\n", PreviewTheme::Default);
+        let html = render_html("$x=1$ and text\n", PreviewTheme::Default, WidthMode::Full);
         let math_start = html
             .find("<math")
             .unwrap_or_else(|| panic!("missing <math> element in: {html}"));

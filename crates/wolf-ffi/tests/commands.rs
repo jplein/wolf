@@ -24,10 +24,11 @@
 //! CLOSE_PANE = 8, NEW_BUFFER = 9, RESET_FONT_SIZE = 10, INCREASE_FONT_SIZE = 11,
 //! DECREASE_FONT_SIZE = 12, COMMAND_PALETTE = 13, COPY = 14, PASTE = 15,
 //! BUFFER_PICKER = 16, NEW_TAB = 17, PREVIEW = 18, EDIT = 19, TERMINAL = 20,
-//! PREVIEW_IN_BROWSER = 21 (the `wolf_core::Command` variant order). These local
-//! consts MUST match `mod command_kind` in `wolf-ffi/src/lib.rs` and the Swift
-//! `CommandKind` port — exactly how `panes.rs` re-declares `INTENT_KIND_SPLIT`
-//! locally as a contract guard (the guard array below asserts contiguous 0..=21).
+//! PREVIEW_IN_BROWSER = 21, FULL_WIDTH = 22 (the `wolf_core::Command` variant
+//! order). These local consts MUST match `mod command_kind` in
+//! `wolf-ffi/src/lib.rs` and the Swift `CommandKind` port — exactly how `panes.rs`
+//! re-declares `INTENT_KIND_SPLIT` locally as a contract guard (the guard array
+//! below asserts contiguous 0..=22).
 //!
 //! ## What this asserts
 //!
@@ -116,6 +117,9 @@ const CMD_KIND_TERMINAL: u8 = 20;
 /// `FfiCommand::kind()` for Preview in Browser (the appended discriminant 21,
 /// View menu).
 const CMD_KIND_PREVIEW_IN_BROWSER: u8 = 21;
+/// `FfiCommand::kind()` for Use Full Width (the appended discriminant 22, View
+/// menu; the per-buffer content-width toggle).
+const CMD_KIND_FULL_WIDTH: u8 = 22;
 
 /// Builds a printable-character `FfiKeyEvent` (kind=Char) for `c`, all modifiers
 /// false (the already-resolved glyph rides in `ch`). Same as `panes.rs`.
@@ -182,8 +186,8 @@ fn commands_drain_close_and_minimize() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // Discriminant-contract guard: the local consts MUST be contiguous 0..=21 in
-    // variant order (mirrors `mod command_kind`). Referencing all twenty-two here
+    // Discriminant-contract guard: the local consts MUST be contiguous 0..=22 in
+    // variant order (mirrors `mod command_kind`). Referencing all twenty-three here
     // also keeps them from tripping dead-code lints.
     assert_eq!(
         [
@@ -209,9 +213,10 @@ fn commands_drain_close_and_minimize() {
             CMD_KIND_EDIT,
             CMD_KIND_TERMINAL,
             CMD_KIND_PREVIEW_IN_BROWSER,
+            CMD_KIND_FULL_WIDTH,
         ],
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21],
-        "command_kind discriminants must be contiguous 0..=21 in Command variant order"
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22],
+        "command_kind discriminants must be contiguous 0..=22 in Command variant order"
     );
 
     let init_lua = common::init_lua_path();
@@ -347,6 +352,16 @@ fn commands_drain_close_and_minimize() {
     // server is covered by wolf-core's `browser_preview.rs` integration test.
     send_ex_command(&handle, ":WolfPreviewInBrowser");
     poll_for_command_kind(&handle, CMD_KIND_PREVIEW_IN_BROWSER, ":WolfPreviewInBrowser");
+
+    // --- 3m. :WolfFullWidth<CR> -> an FfiCommand with kind() == FULL_WIDTH ----
+    // A pure FFI drain: nothing acts on it here (the front-end that would call
+    // `toggle_full_width()` and re-lay out the panes is absent), so NO buffer's
+    // content width is toggled. This proves ONLY that the discriminant round-trips
+    // (`:WolfFullWidth` is auto-registered as a COMMAND_SPECS row and drains the
+    // appended discriminant 22) — the editor-affecting toggle itself is covered by
+    // the `full_width.rs` integration test via `handle.toggle_full_width()`.
+    send_ex_command(&handle, ":WolfFullWidth");
+    poll_for_command_kind(&handle, CMD_KIND_FULL_WIDTH, ":WolfFullWidth");
 
     // --- 4. Shutdown: clean teardown ----------------------------------------
     handle.shutdown();

@@ -472,6 +472,13 @@ pub struct PreviewInfo {
     pub source_bufnr: i64,
     /// Absolute path of the source Markdown file.
     pub source_path: PathBuf,
+    /// Whether the SOURCE Markdown buffer is in full-width mode (it carries a
+    /// truthy `b:wolf_full_width`). Updated out-of-band from the redraw stream via
+    /// the `wolf_preview` notification (a 4th tuple element added to the existing
+    /// preview autocmd emit; see [`crate::redraw`]). The front-end frames this
+    /// preview pane's web view to the capped+centered rect when `false`, or the
+    /// full inset pane when `true`. Defaults to `false`.
+    pub source_full_width: bool,
 }
 
 /// One styled run of command-line text, from a `cmdline_show` content tuple.
@@ -692,6 +699,24 @@ pub struct Snapshot {
     /// [`Snapshot::is_preview_active`], the Edit command's enable gate. Defaults to
     /// `false`.
     pub current_is_preview: bool,
+    /// Whether the buffer currently being edited in nvim is in FULL-WIDTH mode (it
+    /// carries a truthy `b:wolf_full_width`). Updated out-of-band from the redraw
+    /// stream via the `wolf_current_file` notification (a 4th boolean argument added
+    /// to the existing current-file autocmd emit; see [`crate::redraw`]). For a
+    /// preview scratch the reported flag is the SOURCE buffer's (OQ-1). Because it is
+    /// not a redraw frame, updating it does NOT bump `seq`. Drives
+    /// [`Snapshot::is_full_width_active`], the View-menu "Use full width for content"
+    /// checkmark. Defaults to `false`.
+    pub current_is_full_width: bool,
+    /// Per-window full-width flags, keyed by the Neovim WINDOW handle
+    /// (`WinInfo.win`, an `i64`). Updated out-of-band from the redraw stream via the
+    /// `wolf_full_width` notification (see [`crate::redraw`]): the whole map is
+    /// WHOLESALE-REPLACED on each emit, so stale/closed windows vanish. A window
+    /// ABSENT from the map defaults to `false` (the ~90-char default). Because it is
+    /// not a redraw frame, updating it does NOT bump `seq`; the front-end threads a
+    /// pane's flag (via [`Snapshot::full_width_for_win`]) into its geometry
+    /// (`maxCols: nil` for full width, `90` for the default). Defaults to empty.
+    pub full_width: HashMap<i64, bool>,
     /// Per-preview-window source info, keyed by the preview WINDOW handle (an
     /// `i64`). Updated out-of-band from the redraw stream via the `wolf_preview`
     /// notification (see [`crate::redraw`]): the whole map is WHOLESALE-REPLACED on
@@ -812,6 +837,29 @@ impl Snapshot {
         self.current_is_preview
     }
 
+    /// Returns `true` when the buffer currently being edited is in FULL-WIDTH mode.
+    ///
+    /// Resolves `current_is_full_width` (mirrors [`is_preview_active`]'s "resolve one
+    /// field" shape). This drives the View-menu "Use full width for content"
+    /// checkmark (front-end `validateMenuItem`).
+    ///
+    /// [`is_preview_active`]: Snapshot::is_preview_active
+    #[must_use]
+    pub fn is_full_width_active(&self) -> bool {
+        self.current_is_full_width
+    }
+
+    /// Returns whether the window with handle `win` is in FULL-WIDTH mode.
+    ///
+    /// Looks up `win` in [`Snapshot::full_width`], defaulting to `false` (the
+    /// ~90-char default) for a window ABSENT from the wholesale-replaced map. The
+    /// front-end threads this into a pane's geometry (`maxCols: nil` for full width,
+    /// `90` for the default). Mirrors the `buffers`-map lookup shape.
+    #[must_use]
+    pub fn full_width_for_win(&self, win: i64) -> bool {
+        self.full_width.get(&win).copied().unwrap_or(false)
+    }
+
     /// Returns the active grid (see [`Snapshot::active_grid_id`]), or a shared
     /// empty `0x0` grid if no grid is present.
     #[must_use]
@@ -909,6 +957,51 @@ mod tests {
         assert!(
             snap.is_preview_active(),
             "current_is_preview == true must report a preview active"
+        );
+    }
+
+    /// `is_full_width_active()` is `true` IFF `current_is_full_width` is set
+    /// (mirrors `is_preview_active`'s "resolve one field" shape). A fresh snapshot
+    /// has `current_is_full_width == false`; setting it flips it on.
+    #[test]
+    fn is_full_width_active_true_only_when_current_is_full_width_set() {
+        let mut snap = Snapshot::new(TEST_COLS, TEST_ROWS);
+        assert!(
+            !snap.is_full_width_active(),
+            "a fresh snapshot has current_is_full_width == false and is not full width"
+        );
+
+        snap.current_is_full_width = true;
+        assert!(
+            snap.is_full_width_active(),
+            "current_is_full_width == true must report full width active"
+        );
+    }
+
+    /// A window handle used to key the `full_width` per-window map under test.
+    const TEST_WIN: i64 = 1001;
+    /// A DIFFERENT window handle, absent from the map, so it defaults to false.
+    const OTHER_WIN: i64 = 2002;
+
+    /// `full_width_for_win(win)` defaults to `false` for a fresh snapshot (empty
+    /// map), reflects a `true` entry after one is inserted, and stays `false` for a
+    /// window not present in the map (mirrors the wholesale-replaced `buffers` map).
+    #[test]
+    fn full_width_for_win_defaults_false_and_reflects_map() {
+        let mut snap = Snapshot::new(TEST_COLS, TEST_ROWS);
+        assert!(
+            !snap.full_width_for_win(TEST_WIN),
+            "a fresh snapshot has an empty full_width map, so any window is not full width"
+        );
+
+        snap.full_width.insert(TEST_WIN, true);
+        assert!(
+            snap.full_width_for_win(TEST_WIN),
+            "an inserted full_width[win] == true must report that window full width"
+        );
+        assert!(
+            !snap.full_width_for_win(OTHER_WIN),
+            "a window absent from the full_width map must default to not full width"
         );
     }
 }
