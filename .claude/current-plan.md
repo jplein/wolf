@@ -1,160 +1,148 @@
-# Current plan: render the cmdline `prompt` field (rpc-timeout-plan.md §3)
+# Fix: sporadic partial file-tree on inactive macOS windows
 
 ## Problem statement
 
-This is the third of three fixes described in `rpc-timeout-plan.md`. The first two
-(RPC timeout backstop, `SwapExists` autocmd) are already done. This effort is the
-front-end-only UX fix: **render the cmdline `prompt` field in the macOS renderer.**
+The file-tree sidebar occasionally fails to load the full list of files on macOS.
+Most reliable repro: launch Wolf with a two-window state — the frontmost window
+loads the full tree; the inactive window loads a partial list. The list is
+refreshed only once you open a file in the inactive window.
 
-### Background (settled diagnosis, from the plan)
+## Root cause (diagnosed)
 
-When the embedded Neovim raises a dialog such as `confirm('Choose one', '&A\n&B')`,
-it arrives over TWO channels and core captures BOTH:
+The file-tree sidebar streams in asynchronously. Each view's `FileTreeView` runs
+its own independent `start_tree_search()` traversal; streaming batch wakes trigger
+`refresh()` to rebuild the outline, and the final batch fills the tree completely.
 
-- The dialog body (`Choose one`) → `ext_messages` `msg_show` kind `"confirm"` →
-  `Snapshot.toast`. Already rendered by `ToastView`.
-- The choice/answer line (`[A], (B): `) → `ext_cmdline` `cmdline_show` →
-  `Snapshot.cmdline`, as the `prompt` field, with `active: true`, `firstc: ""`,
-  `content: [""]`. Observed snapshot:
-  `Cmdline { active: true, firstc: "", prompt: "[A], (B): ", content: [""], pos: 0, level: 1 }`.
+`Project.onTreeWake()` (`crates/wolf-macos/Sources/WolfMacOS/Project.swift`) routes
+the tree wake to ONLY `currentView`. On restore, `materializeProjects`
+(`crates/wolf-macos/Sources/WolfMacOS/AppDelegate.swift`) never calls
+`project.setCurrent`, so inactive windows have `currentView == nil` (or pointing at
+a sibling tab). Their streaming batch wakes are dropped, leaving a partial tree
+until the window becomes key (opening a file → `onRenderWake` → tree refresh shows
+the full list).
 
-The `prompt` string is already present in `Snapshot.cmdline` and already crosses
-the bridge via `FfiCmdline::prompt()`. **The gap is purely in the macOS renderer:**
-`CmdlineView` (`crates/wolf-macos/Sources/WolfMacOS/CmdlineView.swift`) reads only
-`firstc()` + `text()` in `update()` and draws `firstc + text` in `draw()`, so it
-never reads or paints `prompt()`. With `firstc` and `text` both empty, the cmdline
-band is shown (`isHidden = !active` → visible) but blank — exactly the observed
-"`Choose one` shows, `[A], (B):` does not."
+## Confirmed FFI facts
 
-### The fix (per plan §3)
+- Each `start_tree_search()` is fully independent — multiple concurrent traversals
+  coexist on one core; a second call never cancels the first. Every view's own
+  traversal completes regardless of focus; only the wake notification is lost.
+- The tree wake token is per-project and carries no view/session discriminator.
 
-- **Render `prompt`.** In `CmdlineView.update()`, read `cmdline.prompt()`; in
-  `draw()`, prepend it to the drawn line (`prompt + firstc + text`), and include
-  its width in the caret-offset math (the `prefix` computed for the caret). No
-  core, FFI, or toast changes.
-- **Answering already works.** Keys flow via `nvim_input`; `Esc` cancels and a
-  single-key `A`/`B`/`o`/`e` answers once the prompt is visible. The remaining task
-  is presentation, not input plumbing — confirm the answering key is not swallowed
-  and the prompt clears on answer.
-- **Scope.** Neovim-ish is acceptable: the prompt text painted inline in the
-  existing cmdline band, not a native `NSAlert`.
+## Fix (proposed — architect to finalize)
 
-### Repo conventions that shape the implementation
+Change `Project.onTreeWake()` to fan the tree wake out to ALL attached views'
+trees (iterate `views.allObjects`, call `view.tree?.scheduleRefresh()` on each),
+not just `currentView`. Each `FileTreeView.refresh()` is already gated on its own
+`search.version()` and coalesced via `refreshCoalescer`, so refreshing every view
+is cheap and idempotent.
 
-- Pure, AppKit-free display/decision logic lives in the Foundation-only
-  `WolfKeyMap` module as a "seam" (`enum` namespace with static funcs), unit tested
-  headlessly in `crates/wolf-macos/Tests/WolfKeyMapTests/`. See `PaletteSeam.swift`
-  / `PaletteSeamTests.swift` for the pattern. Views in `WolfMacOS` import
-  `WolfKeyMap` and consume the seam. `CmdlineView` currently has an inline
-  `bytePrefix` static and inline `firstc + text` composition; the testable analog
-  should be a `CmdlineSeam` covering line composition + caret-prefix.
+Do NOT change `onWake` (render wakes) or `onPickerWake` — those routing policies
+are correct by design (nvim only renders the current tabpage; pickers are
+transient on the key window only).
 
-### Tests (per plan §3)
+## Testing
 
-- A Swift unit test (the pure-view analog of the existing seam tests) that feeds a
-  cmdline-shaped value with `active=true`, empty `firstc`/`text`, non-empty
-  `prompt` and asserts the composed/rendered line contains the prompt.
-- Optionally a core-side assertion (already true today) that `confirm(...)` yields
-  `cmdline.prompt == "[A], (B): "` to pin the contract the view depends on.
+Repo prefers end-to-end/integration tests with a real Neovim process. Add/adjust a
+test reproducing the partial-tree condition, ideally exercising the per-project
+wake fan-out to multiple views. The AppKit NSOutlineView shell is manual-smoke
+only; make the routing logic testable via a seam if one fits (consult
+`crates/wolf-macos/README.md` and the WolfKeyMap headless test suites).
 
-### Docs to update
+## Documentation
 
-- Any README describing `CmdlineView` / the cmdline render surface — note that
-  `prompt` is now painted inline. `crates/wolf-ffi/README.md` already documents
-  `FfiCmdline::prompt()` (no change expected there beyond verification).
-
----
+`architecture.md` says "the project fans every wake out to its currentView; other
+views hold their last painted frame until refocused." Accurate for RENDER wakes,
+but must be corrected/clarified for the TREE wake. Update `architecture.md`,
+`crates/wolf-macos/README.md`, and the `Project.swift` / `TreeWakeBridge.swift`
+doc comments so docs and implementation agree.
 
 ## Architect's plan (authoritative)
 
-### Seam design — NEW `crates/wolf-macos/Sources/WolfKeyMap/CmdlineSeam.swift`
+### Code change — `crates/wolf-macos/Sources/WolfMacOS/Project.swift`
+In `onTreeWake()` (lines 148-151), replace `currentView?.tree?.scheduleRefresh()`
+with a fan-out over all attached views:
+```
+for view in views.allObjects {
+  view.tree?.scheduleRefresh()
+}
+```
+`views` is `NSHashTable<WolfWindowController>.weakObjects()`; `.allObjects` returns
+a `[WolfWindowController]` snapshot — the same idiom `detach`/`closeTabpage`
+already use. `view.tree` is `private(set) var tree: FileTreeView?` (same module).
+Leave `onWake` and `onPickerWake` routing to `currentView` only.
 
-`public enum CmdlineSeam` namespace, `import Foundation` only, mirrors `PaletteSeam.swift`.
-Three pure static funcs (scalars only — NOT `FfiCmdline`, which can't be built headlessly):
+Doc-comment updates in `Project.swift`: file header (8-11), `wakeToken` (35-40),
+and `onTreeWake()` (148) — distinguish RENDER/picker wakes (currentView only) from
+the TREE wake (fanned to ALL views; each view runs its own independent
+`start_tree_search()`, per-project token carries no view discriminator; fan-out is
+cheap/idempotent via per-view `search.version()` gate + `refreshCoalescer`).
 
-- `static func composedLine(prompt: String, firstc: String, text: String) -> String`
-  → `prompt + firstc + text`. Empty prompt ⇒ identical to today's `firstc + text`.
-- `static func caretPrefix(prompt: String, firstc: String, text: String, byteCount: Int) -> String`
-  → `prompt + firstc + bytePrefix(of: text, byteCount:)`. Prompt width included so caret sits after it.
-- `static func bytePrefix(of s: String, byteCount: Int) -> String`
-  → moved VERBATIM from `CmdlineView.bytePrefix` (CmdlineView.swift:116-121), made `public`.
+### Seam / test decision — NO new seam, NO new automated test
+The routing change is a constant policy (tree→all, render/picker→current), not an
+input-dependent decision, so a `WakeFanout`-style seam would test a hard-coded map
+= ceremony, not coverage. Sibling `onWake`/`onPickerWake` are untested manual-smoke
+today; the load-bearing idempotence primitives are already pinned by existing
+`TreeRefreshGateTests` + `PickerRefreshCoalescerTests`. Verification is doc
+alignment + manual smoke (the NSOutlineView shell is manual-smoke by convention).
 
-`caretPrefix` MUST be defined in terms of `bytePrefix` (single tested impl backs caret math).
+### Doc updates
+- `TreeWakeBridge.swift` header (2-6) + enum doc (12-20): token resolves to the
+  PROJECT, which fans refresh to ALL its views' sidebars (not one window).
+- `architecture.md` line 272: qualify "the project drives wakes only to
+  `currentView`" → "drives RENDER wakes only to `currentView`". Line 204 (file-tree
+  sidebar paragraph): add that the tree wake is per-PROJECT and fanned to ALL of a
+  project's views' sidebars.
+- `crates/wolf-macos/README.md` line 83 + line 101 (`TreeWakeBridge` bullet):
+  `onTreeWake()` fans to all attached views. Leave `PickerWakeBridge`/`WakeBridge`.
+- `crates/wolf-macos/Sources/README.md` line 50 + line 72: same split.
+- Keep Markdown paragraphs as single long lines (no hard breaks); `prettier
+  --write` the edited `.md` files.
 
-### View changes
-
-**`Sources/WolfMacOS/CmdlineView.swift`** (globbed — no BUILD edit):
-- Add `private var prompt: String = ""` in the "Latest projected state" block (after line 33).
-- `update()` (~72-82): after `firstc = cmdline.firstc().toString()` add `prompt = cmdline.prompt().toString()`; update doc comment.
-- `draw()` line 99: `let line = CmdlineSeam.composedLine(prompt: prompt, firstc: firstc, text: text)`.
-- `draw()` line 106: `let prefix = CmdlineSeam.caretPrefix(prompt: prompt, firstc: firstc, text: text, byteCount: pos)`.
-- DELETE the static `bytePrefix` (lines 116-121) — now in the seam.
-- Update file header (3-6) + class doc (19-22) to say it paints `prompt + firstc + text`.
-
-**`Sources/WolfMacOS/PaneContainerView.swift` line 858** (SECOND `bytePrefix` caller!):
-- Replace `CmdlineView.bytePrefix(...)` → `CmdlineSeam.bytePrefix(...)`. Pure relocation.
-- Do NOT add prompt to `pumAnchorX` — out of scope (no completion popup on a `confirm()` dialog).
-
-### BUILD.bazel (explicit `srcs` lists, NOT globs — COder makes these edits)
-- `wolf_key_map.srcs` (50-84): add `"Sources/WolfKeyMap/CmdlineSeam.swift"` (alphabetical: between Cell… and Command…).
-- `WolfKeyMapTests.srcs` (235-265): add `"Tests/WolfKeyMapTests/CmdlineSeamTests.swift"` (between CellMetricsMathTests and CommandSeamTests).
-
-### Tests — NEW `Tests/WolfKeyMapTests/CmdlineSeamTests.swift`
-Mirror `PaletteSeamTests.swift` (XCTest, `@testable import WolfKeyMap`, table-driven, assert exact Strings — NOT widths).
-- `composedLine`: dialog case (`prompt="[A], (B): "`, firstc/text empty → `"[A], (B): "`); normal `:` (`""`,`":"`,`"wq"`→`":wq"`); normal `/`; prompt+text (`"Name: "`,`""`,`"bar"`→`"Name: bar"`).
-- `caretPrefix`: prompt + caret in text (`"[A], (B): "`,`""`,`"Bob"`,2 → `"[A], (B): Bo"`); normal (`""`,`":"`,`"wq"`,1→`":w"`); caret at 0 with prompt (`"P: "`,`""`,`"xyz"`,0→`"P: "`).
-- `bytePrefix`: `<=0`→`""` (incl negative); `>=len`→whole; ASCII mid (`"hello"`,3→`"hel"`); multi-byte clean boundary (`"日本"`,3→`"日"`). Skip split-boundary over-assertion.
-
-Core-side `confirm()` assertion: SKIP (already true; booting nvim is out of proportion for a front-end presentation fix).
-
-### Docs (technical-writer)
-- `Sources/README.md:59` — CmdlineView bullet: now paints `prompt + firstc + text`, stores prompt, caret from `prompt+firstc+bytePrefix`; add `CmdlineSeam.swift` seam bullet.
-- `Sources/README.md:7` — "Twenty-nine … files" → "Thirty".
-- `README.md:89` — PaneContainerView narrative: note cmdline prompt now painted inline; keep bytePrefix prose accurate after move.
-- `Tests/README.md` — add `CmdlineSeamTests.swift` section (style of PaletteSeamTests entry).
-- `crates/wolf-ffi/README.md` — verify only (already documents `FfiCmdline::prompt()`).
-- prettier --write edited Markdown; no hard line breaks in paragraphs.
-
-### Implementation order (avoid compile breaks)
-1. Create CmdlineSeam.swift. 2. BUILD: add seam to wolf_key_map.srcs. 3+4 TOGETHER: edit CmdlineView.swift (delete bytePrefix) AND PaneContainerView.swift:858. 5. Create CmdlineSeamTests.swift. 6. BUILD: add test to WolfKeyMapTests.srcs. 7. READMEs.
+### Implementation order
+1. Edit `Project.swift` `onTreeWake()` body. 2. Update 3 `Project.swift` doc
+comments. 3. `TreeWakeBridge.swift` docs. 4. `architecture.md` (204, 272).
+5. `crates/wolf-macos/README.md` (83, 101). 6. `Sources/README.md` (50, 72).
+7. `prettier --write` the `.md` files. 8. swift-format + build/verify.
 
 ### Verification (coder runs)
-- `bazel test //crates/wolf-macos:WolfKeyMapTests`
 - `bazel build //crates/wolf-macos:Wolf`
-- `bazel test //tools/lint:swift_format` (fix via `//tools/lint:swift_format.fix` if needed)
-- `prettier --write` on edited Markdown.
+- `bazel test //crates/wolf-macos:WolfKeyMapTests` (regression sanity — unchanged)
+- swift-format check via `//tools/lint` (no BUILD srcs edit — no new files)
+- `prettier --write` on `architecture.md`, `crates/wolf-macos/README.md`,
+  `crates/wolf-macos/Sources/README.md`
+- Manual smoke: two-window restore repro — both windows load the FULL tree without
+  refocus/opening a file; plus same-project two-tab variant.
+
+Note: doc edits (architecture.md/READMEs/`TreeWakeBridge.swift`) are assigned to
+the technical-writer stage; the coder handles `Project.swift` + build/verify.
 
 ## Status
 
-- [x] architect — detailed plan
-- [x] test-writer — created `Tests/WolfKeyMapTests/CmdlineSeamTests.swift`
-      (testComposedLineTable, testCaretPrefixTable, testBytePrefixTable). BUILD
-      left to coder. Won't compile until coder adds seam + BUILD srcs entries.
-- [x] coder — created CmdlineSeam.swift (composedLine/caretPrefix/bytePrefix);
-      wired both BUILD srcs entries; edited CmdlineView.swift (prompt property,
-      update() reads prompt, draw() uses seam, deleted local bytePrefix, header
-      docs); repointed PaneContainerView.swift:858 → CmdlineSeam.bytePrefix.
-      ALL PASS: WolfKeyMapTests PASSED 0.6s, `//crates/wolf-macos:Wolf` builds,
-      swift_format PASSED. No test changes recommended.
-- [x] reviewer — APPROVED. All 6 verification points pass: seam signatures exact
-      (caretPrefix delegates to bytePrefix), CmdlineView reads prompt + uses seam +
-      local bytePrefix gone, PaneContainerView repointed (no lingering
-      CmdlineView.bytePrefix, pumAnchorX left prompt-free), both BUILD srcs entries
-      present, tests match shipped signatures, front-end-only scope, caret math
-      sound. Only remaining work: README doc sync (below).
-- [x] technical-writer — updated Sources/README.md (count 29→30, new CmdlineSeam
-      bullet, rewrote CmdlineView bullet), README.md (PaneContainerView narrative:
-      prompt painted inline, pumAnchorX uses CmdlineSeam.bytePrefix), Tests/README.md
-      (new CmdlineSeamTests section). wolf-ffi/README.md verified (already correct,
-      no change). Orchestrator ran prettier --write on all three — all unchanged.
+- [x] Architect plan
+- [~] Tests: NONE (deliberate — see seam/test decision above)
+- [x] Implementation (Project.swift): `onTreeWake()` fans to `views.allObjects`;
+      3 doc comments updated. `bazel build //crates/wolf-macos:Wolf` OK;
+      `WolfKeyMapTests` PASSED (unchanged); `//tools/lint:swift_format` PASSED.
+      (SourceKit "No such module 'WolfFFI'" is editor-only noise — bazel build OK.)
+- [x] Review — APPROVED. `onTreeWake()` at `Project.swift:161-165` fans to
+      `views.allObjects`; `onWake`/`onPickerWake` unchanged; doc comments accurate;
+      no new hazards; root cause addressed.
+- [x] Documentation: TreeWakeBridge.swift header/enum doc (per-project → all
+      views); architecture.md (204 sidebar paragraph, 272 RENDER-wake qualifier,
+      + 3 general routing statements at ~43/65/240); both READMEs (onTreeWake fans
+      to all views, TreeWakeBridge bullet). prettier --write: all unchanged/clean.
 
 ## COMPLETE ✅
 
-Fix §3 of rpc-timeout-plan.md landed: the macOS renderer now paints the cmdline
-`prompt` field inline. A `confirm()`/`input()`-style prompt's choice line (e.g.
-`[A], (B): `) — already crossing the FFI via `FfiCmdline::prompt()` but previously
-dropped by `CmdlineView` — is now composed and drawn via the new pure `CmdlineSeam`
-(`composedLine` / `caretPrefix` / `bytePrefix`), with the caret placed after the
-full prompt. Normal `:`/`/` command-line rendering is byte-identical (empty prompt).
-Front-end only — no core/FFI/toast changes. WolfKeyMapTests + Wolf build + swift_format
-all green; reviewer APPROVED; docs synced. NOT committed.
+Bug fixed: `Project.onTreeWake()` now fans the per-project file-tree wake out to
+ALL attached views' sidebars (`for view in views.allObjects { view.tree?
+.scheduleRefresh() }`) instead of only `currentView`. This ensures an inactive /
+non-current window (currentView == nil on restore, or pointing at a sibling tab)
+receives its streaming tree-traversal batch wakes and loads the FULL file list —
+no longer a partial tree until you open a file. Render/picker wakes stay
+currentView-only by design. Fan-out is cheap/idempotent (per-view `search.version()`
+gate + `refreshCoalescer`). No automated test (deliberate — constant routing
+policy; idempotence primitives already covered by TreeRefreshGateTests /
+PickerRefreshCoalescerTests). build + WolfKeyMapTests + swift_format all green;
+reviewer APPROVED; docs synced. NOT committed. Manual smoke (two-window / two-tab
+restore) recommended before shipping.

@@ -5,9 +5,12 @@
 //
 //  A `Project` owns the single `WolfCoreHandle` (one process, one shared buffer
 //  list) and its per-project wake token; each `WolfWindowController` (a VIEW) is
-//  bound to one of the project's tabpages. Only the focused view live-updates —
-//  the project fans every wake out to its `currentView`; other views hold their
-//  last painted frame until refocused. The project stays alive while ANY view
+//  bound to one of the project's tabpages. RENDER and picker wakes go only to the
+//  focused view — the project fans them out to its `currentView`; other views hold
+//  their last painted frame until refocused. The file-TREE wake is the exception:
+//  it fans out to EVERY attached view's sidebar (each view runs its own file-tree
+//  traversal and the wake token can't say which view a batch is for). The project
+//  stays alive while ANY view
 //  remains and shuts its nvim down only when its LAST view closes.
 //
 //  Ownership (no cycles): the `AppDelegate` coordinator strong-holds `projects`
@@ -35,7 +38,8 @@ final class Project {
   /// The core's per-PROJECT wake-routing token (minted per `wolf_ffi_start`).
   /// The front-end registers ONE process-global wake callback per channel and
   /// looks this token up in `WindowRegistry` to reach the owning project, which
-  /// fans the wake out to its `currentView`.
+  /// fans RENDER and picker wakes out to its `currentView` while fanning the
+  /// file-TREE wake out to ALL of its attached views' sidebars.
   let wakeToken: UInt64
 
   /// The view whose tabpage is currently the project's current tabpage (the one
@@ -145,9 +149,19 @@ final class Project {
     currentView?.picker?.scheduleRefresh()
   }
 
-  /// Fans a file-tree wake out to the current view's sidebar (session-local).
+  /// Fans a file-tree wake out to EVERY attached view's sidebar (not just the
+  /// current view). Unlike `onWake`/`onPickerWake` — which stay currentView-only
+  /// by design (nvim renders only the current tabpage; pickers are transient on
+  /// the key window) — each view runs its OWN independent `start_tree_search()`
+  /// traversal, and the per-project wake token carries no view discriminator, so
+  /// the front-end cannot tell which view the streaming batch belongs to. Fanning
+  /// to all views is cheap and idempotent: each `FileTreeView.refresh()` is
+  /// version-gated on its own `search.version()` and coalesced via
+  /// `refreshCoalescer`, so a view with no new data does no real work.
   func onTreeWake() {
-    currentView?.tree?.scheduleRefresh()
+    for view in views.allObjects {
+      view.tree?.scheduleRefresh()
+    }
   }
 
   /// Shuts the captive Neovim down (flushing the shared state store), unregisters
