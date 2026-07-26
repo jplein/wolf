@@ -36,6 +36,26 @@ vim.api.nvim_create_autocmd("SwapExists", {
 	end,
 })
 
+-- External-file reload: when the file shown in a buffer is changed on disk from
+-- OUTSIDE the editor (e.g. `prettier --write`, `git checkout`), reload it into the
+-- buffer. `autoread` is Neovim's built-in mechanism, but on its own it only
+-- re-reads on certain triggers, so a `WolfAutoRead` augroup runs `:checktime` on
+-- focus regain, buffer entry, and after `updatetime` idle (`CursorHold`/`CursorHoldI`).
+-- `:checktime` only re-reads a buffer whose in-editor copy is UNMODIFIED (autoread's
+-- own guard — an unsaved edit is never clobbered) and is a NO-OP on buffers with no
+-- associated file (the terminal `buftype=terminal` drawer and the `buftype=nofile`
+-- preview scratch), so it is harmless there. Wrapped in pcall + `silent!` so a
+-- special buffer can neither raise nor pollute the grid.
+opt.autoread = true
+local autoread_group = vim.api.nvim_create_augroup("WolfAutoRead", { clear = true })
+vim.api.nvim_create_autocmd({ "FocusGained", "BufEnter", "CursorHold", "CursorHoldI" }, {
+	group = autoread_group,
+	pattern = "*",
+	callback = function()
+		pcall(vim.cmd, "silent! checktime")
+	end,
+})
+
 opt.shadafile = "NONE"
 opt.undofile = false
 opt.backup = false
