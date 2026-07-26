@@ -1,6 +1,66 @@
 # Plan: Neovim crash & stall recovery
 
-## Status: COMPLETE ✅ (not committed)
+## FOLLOW-UP BUG (active): restart is invisible — no user indication
+
+Reported repro: `:q!` in the editor. Actual: Neovim silently restarts, no indication.
+Expected: an overlay/toast tells the user Neovim was restarted.
+
+Root cause (confirmed by reading Project.swift + NvimStatusOverlayView.swift): on a
+`Dead` wake, `Project.onWake()` runs SYNCHRONOUSLY on the main thread —
+`showNvimOverlay(.dead)` then `restartNeovim()`, which BLOCKS the main thread through the
+entire respawn, then hides the overlay — all in one turn with NO intervening paint cycle,
+so the full-bleed overlay never renders. And the fresh nvim's first render wake hits
+onWake's Alive (default) branch which calls `hideNvimOverlay()`, so any liveness-driven
+overlay is cleared immediately anyway. Net: the restart is invisible. The existing
+full-bleed opaque NvimStatusOverlayView is also the WRONG vehicle for a post-restart
+confirmation (it would opaquely cover the now-working editor).
+
+Fix direction: add a TRANSIENT, auto-dismissing "Neovim was restarted" notice (a small
+banner/toast, NOT the full-bleed overlay) shown from `restartNeovim`'s SUCCESS path, with
+its own timer, INDEPENDENT of the liveness-driven overlay show/hide (so onWake's Alive
+branch does not clear it). Front-end only (Swift, manual-smoke — no automated UI test per
+established convention). Out of scope: whether `:q!` should be remapped so it doesn't kill
+the shared nvim at all (separate design question — flag to user, do NOT change here).
+
+## Status: FOLLOW-UP COMPLETE ✅ (restart-indicator banner; NOT committed)
+
+Delivered: new `NvimRestartedBannerView` (transient top-center "Neovim was restarted"
+banner, ~4s auto-dismiss, generation-token coalescing, `[weak self]` timer, `hitTest→nil`
+click passthrough, dark/light-aware), fanned from `Project.restartNeovim`'s SUCCESS path via
+`WolfWindowController.flashRestartNotice()` → `PaneContainerView.flashRestartNotice()`,
+INDEPENDENT of the liveness overlay (onWake's Alive branch never clears it). Also flashes on
+the manual `.notResponding` button restart. NOT shown on the no-op/race (restart==false) path.
+Reviewer APPROVED (no blockers); both nice-to-haves (click passthrough, comment accuracy)
+applied. `bazel build //crates/wolf-macos:Wolf` builds, swift-format PASS, wolf-core 29/29 +
+wolf-ffi 31/31 + clippy unaffected. Docs synced (wolf-macos README + Sources/README +
+architecture.md) + prettier-clean. Manual-smoke before shipping: `:q!` → file reopens +
+top-center banner → auto-dismiss ~4s; rapid `:q!` coalesces to one banner.
+
+### (implementation notes below)
+
+### Architect's plan (restart-indicator banner) — authoritative
+- NEW `crates/wolf-macos/Sources/WolfMacOS/NvimRestartedBannerView.swift`: small non-modal
+  layer-backed banner (NOT full-bleed), top-center, message "Neovim was restarted",
+  `visibleDuration ~4s`; `flash()` uses a `flashGeneration` token + `DispatchQueue.main
+  .asyncAfter([weak self])` guarded hide (coalesces rapid restarts, no premature/double hide);
+  `applyChromeColors()` + `viewDidChangeEffectiveAppearance` for dark/light; unavailable
+  `init?(coder:)`. Mirrors NvimStatusOverlayView/EmptyStateView patterns.
+- PaneContainerView: add `private let restartBanner` (added ONCE in init, topmost), method
+  `flashRestartNotice()`. Do NOT modify `hideNvimOverlay()` — banner stays independent.
+- WolfWindowController: `flashRestartNotice()` forwarder → paneContainer.
+- Project.restartNeovim: at END of SUCCESS path (after the existing hideNvimOverlay fan-out),
+  add `for view in views.allObjects { view.flashRestartNotice() }`. NOT in the no-op/race
+  `guard handle.restart() else` branch. Manual `.notResponding` button restart also flashes
+  (same success path) — intended. onWake unchanged (Alive branch touches only nvimOverlay).
+- Front-end only; NO core/FFI/Lua change; NO automated test (manual-smoke per convention).
+- Docs: wolf-macos README + Sources/README (new banner + the overlay-vs-banner distinction),
+  architecture.md crash-overlay line. prettier --write.
+- Manual-smoke: `:q!` → file reopens + top-center "Neovim was restarted" banner → auto-dismiss
+  ~4s; rapid `:q!` twice coalesces to one banner; dark/light re-resolves; multi-tab shows per view.
+
+---
+
+## (prior effort) Status: COMPLETE ✅ (merged from main, commit 423a493)
 
 ## Problem statement
 
@@ -326,7 +386,15 @@ New integration tests under `crates/wolf-core/tests/`:
       not-wired note; BrowserPreview stale-handle limit) + SIGKILL loss-window + unnamed-buffer
       limits. `prettier --write` run by orchestrator on all 11 → all unchanged (already clean).
 
-## MERGE FROM MAIN (in progress)
+## MERGE FROM MAIN ✅ COMPLETE (commit 423a493)
+
+Verified green on a CLEAN build: wolf-core 29/29, wolf-ffi 31/31, clippy (-Dwarnings),
+swift-format, macOS bundle. origin/main is now a full ancestor of HEAD. Also fixed a
+pre-existing main-side breakage in the macOS-only wolf-ffi `frame_pack.rs` test
+(`pending_confirm` became pub(crate) but the cross-crate fixture used FRU syntax) by
+constructing the Snapshot fixture field-by-field. Merge committed.
+
+### (history) MERGE FROM MAIN — details
 
 Merged origin/main (b5d2e99 ← abf6e2a: treesitter code-block syntax highlighting +
 confirm-prompt/toast handling). 5 conflicts hand-resolved by orchestrator:

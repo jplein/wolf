@@ -406,6 +406,12 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     paneContainer?.hideNvimOverlay()
   }
 
+  /// Flashes this view's transient "Neovim was restarted" banner (fanned by the
+  /// project at the end of a successful restart; auto-dismisses on its own timer).
+  func flashRestartNotice() {
+    paneContainer?.flashRestartNotice()
+  }
+
   /// Rebinds this view to a FRESH tabpage after a crash-restart: updates the
   /// stored `tabpageHandle` and re-gates the pane container's refocus rebind so
   /// the next render wake repaints against the new nvim's tabpage.

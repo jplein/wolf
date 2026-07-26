@@ -149,6 +149,12 @@ final class PaneContainerView: NSView {
   /// reads a non-`Alive` liveness and hidden via `hideNvimOverlay()`.
   private let nvimOverlay = NvimStatusOverlayView()
 
+  /// The transient post-restart banner ("Neovim was restarted"). A SMALL top-center
+  /// banner over the WORKING editor, flashed via `flashRestartNotice()` from a
+  /// successful restart and auto-dismissed on its own timer — INDEPENDENT of the
+  /// liveness-driven `nvimOverlay` (so `hideNvimOverlay()` never clears it).
+  private let restartBanner = NvimRestartedBannerView()
+
   /// Invoked when the overlay's "Restart Neovim" button is clicked. The controller
   /// wires this to `project.restartNeovim()`.
   var onRestart: (() -> Void)? {
@@ -338,6 +344,14 @@ final class PaneContainerView: NSView {
     // The crash/stall overlay composites ON TOP of everything (added last, starts
     // hidden); it is revealed only when the project reads a non-Alive liveness.
     addSubview(nvimOverlay)
+    // The transient restart banner is added ONCE here, above the panes. It is NOT
+    // re-added per flash (that would duplicate its `viewDidMoveToSuperview`
+    // constraints); `flash()` only toggles `isHidden`. This is NOT a permanent
+    // topmost invariant: a later `showNvimOverlay` does removeFromSuperview +
+    // addSubview on `nvimOverlay`, intentionally re-raising the full-bleed overlay
+    // ABOVE the banner — a fresh crash's overlay should cover any stale banner, and
+    // the banner only ever shows while `nvimOverlay` is hidden.
+    addSubview(restartBanner)
     // Follow the live "Show scroll bars" setting so the synthetic scrollbars
     // switch between always-on (`.legacy`) and fade-on-scroll (`.overlay`)
     // without a relaunch.
@@ -843,6 +857,13 @@ final class PaneContainerView: NSView {
   /// Hides the crash/stall overlay (liveness returned to `Alive`).
   func hideNvimOverlay() {
     nvimOverlay.hide()
+  }
+
+  /// Flashes the transient "Neovim was restarted" banner (auto-dismisses on its own
+  /// timer). Independent of the liveness overlay — kept separate from
+  /// `hideNvimOverlay()` so the Alive render wake never clears it.
+  func flashRestartNotice() {
+    restartBanner.flash()
   }
 
   /// Rebinds this container to a FRESH tabpage after a crash-restart, so the

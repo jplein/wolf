@@ -234,6 +234,13 @@ final class Project {
       handle.set_current_tabpage(current.tabpageHandle)
     }
     for view in views.allObjects { view.hideNvimOverlay() }
+
+    // Flash a TRANSIENT "Neovim was restarted" banner on every view. This is
+    // independent of the liveness overlay (which the fresh nvim's Alive wake clears
+    // immediately), so the user sees a visible, self-dismissing confirmation over
+    // the now-working editor. Only the SUCCESS path flashes — the no-op/race branch
+    // above does not.
+    for view in views.allObjects { view.flashRestartNotice() }
   }
 
   /// Fans a file-search wake out to the current view's picker (session-local, so
