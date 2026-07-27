@@ -204,6 +204,28 @@ fn wait_for_markdown_active(handle: &wolf_ffi::WolfCoreHandle, target: bool, des
     );
 }
 
+/// Blocks (bounded by [`FLUSH_TIMEOUT`]) until the core's `current_file()` ends with
+/// `suffix` (a BASENAME match, robust to absolute-vs-cwd-relative display and to
+/// `/var`<->`/private/var` symlinking), deterministically confirming that file is the
+/// ACTIVE buffer. Copy of `preview.rs`'s helper. Unlike `is_markdown_active` — which
+/// stays true across a markdown->markdown `:e` and so cannot witness the switch — this
+/// only flips once the `wolf_current_file` notification for the new buffer has landed.
+fn wait_for_current_file(handle: &wolf_ffi::WolfCoreHandle, suffix: &str) {
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    let mut current = handle.current_file();
+    while Instant::now() < deadline {
+        current = handle.current_file();
+        if current.ends_with(suffix) {
+            return;
+        }
+        sleep(POLL_INTERVAL);
+    }
+    panic!(
+        "timed out after {FLUSH_TIMEOUT:?} waiting for current_file() to end with \
+         {suffix} (got {current})"
+    );
+}
+
 /// The live editor WINDOW grids (grids `>= WINDOW_GRID_MIN` that are not hidden).
 /// Mirrors `preview.rs::live_window_count`.
 fn live_window_count(handle: &wolf_ffi::WolfCoreHandle) -> usize {
@@ -366,6 +388,11 @@ fn full_width_flag_flows_to_the_preview_source() {
     wait_for_attach(&handle);
     send_ex_command(&handle, ":e alpha.md");
     wait_for_markdown_active(&handle, true, "after :e alpha.md");
+    // Real switch barrier: the startup buffer is now a markdown `Untitled.md`, so
+    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
+    // cannot witness the `:e alpha.md`. Wait until alpha.md is genuinely the ACTIVE
+    // buffer before the SYNC `open_preview` races ahead of the buffered `:e`.
+    wait_for_current_file(&handle, "alpha.md");
 
     let preview_bufnr = handle.open_preview("split_right".to_string());
     assert!(

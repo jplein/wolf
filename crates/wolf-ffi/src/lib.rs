@@ -513,8 +513,9 @@ mod ffi {
         // Closes the current split (the pane) via `InputEvent::ClosePane`
         // (`:close`).
         fn close_pane(&self);
-        // Opens a new empty buffer in the current window via
-        // `InputEvent::NewBuffer` (`:enew`).
+        // Opens a new empty buffer in the current window and names it the next
+        // free `Untitled N.md` (markdown-typed, not written to disk) via
+        // `InputEvent::NewBuffer` (the `wolf_new_untitled` Lua helper).
         fn new_buffer(&self);
         // Toggles the per-project terminal drawer via
         // `InputEvent::ToggleTerminal` (the `wolf_toggle_terminal` Lua helper).
@@ -2034,8 +2035,11 @@ impl WolfCoreHandle {
         }
     }
 
-    /// Opens a new empty buffer in the current window via
-    /// [`InputEvent::NewBuffer`] (`:enew`). A no-op once the core has been shut
+    /// Opens a new empty buffer in the current window and names it the next free
+    /// `Untitled N.md` — `Untitled.md`, then `Untitled 2.md`, … (the first name
+    /// colliding with neither an existing buffer nor a file on disk in cwd),
+    /// markdown-typed but NOT written to disk — via [`InputEvent::NewBuffer`]
+    /// (the `wolf_new_untitled` Lua helper). A no-op once the core has been shut
     /// down.
     pub fn new_buffer(&self) {
         if let Some(core) = self.core.borrow().as_ref() {

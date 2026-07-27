@@ -53,6 +53,11 @@ const CLEAN_DOC: &str = "# Swap Fixture\nbody line\n";
 /// buffer head so it lands on row 0 (`i` + marker + `Esc`).
 const EDIT_MARKER: &str = "WOLFEDIT ";
 
+/// A distinctive marker typed into the startup `Untitled.md` buffer for the
+/// restart-shadow test, absent from every fixture so a wrong (or shadowing) buffer
+/// cannot fake a pass.
+const UNTITLED_MARKER: &str = "UNTITLEDSWAPRECOVER";
+
 /// Gap between polls.
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
@@ -238,4 +243,136 @@ fn live_owner_edits_anyway() {
     // Shut both down cleanly (A last, so it owns the swap for B's whole lifetime).
     core_b.shutdown().expect("core B shutdown should be Ok");
     core_a.shutdown().expect("core A shutdown should be Ok");
+}
+
+/// RESTART-SHADOW guard (architect follow-up, round 2): an unsaved `Untitled.md` must
+/// survive a crash-restart via swap recovery. On restart the fresh nvim's `VimEnter`
+/// naming names its OWN startup buffer `<cwd>/Untitled.md` WITHOUT loading it; if the
+/// subsequent Tier-1 reopen `:e <cwd>/Untitled.md` merely switched to that
+/// already-named empty buffer, `SwapExists` would NOT fire and the dead owner's
+/// unsaved edit would be lost ("shadowed"). This drives EXACTLY the `nvim_restart.rs`
+/// Tier-1 reopen path (`open_files_for_tabpage` -> reopen) and asserts the typed text
+/// is recovered, pinning whether the shadow happens.
+#[test]
+fn restart_recovers_unsaved_untitled_buffer() {
+    // Fresh, canonicalized cwd (stable across the restart => stable durable swap dir).
+    // Deliberately EMPTY: the startup buffer must be the anonymous `Untitled.md`.
+    let (_dir, cwd) = owned_cwd();
+
+    let (core, waiter) = start_core_in(&cwd);
+
+    // Wait for the initial editor window, then capture tabpage 1.
+    poll_until(&waiter, "the initial editor window after attach", || {
+        !core.read_snapshot().windows.is_empty()
+    });
+    let tab = core.current_tabpage();
+    assert_ne!(tab, 0, "current_tabpage() should be nonzero after attach");
+
+    // The Tier-1 mirror must carry the startup Untitled.md (named-but-unsaved).
+    poll_until(
+        &waiter,
+        "open_files_for_tabpage to mirror the startup Untitled.md",
+        || match core.open_files_for_tabpage(tab) {
+            Some(tf) => tf
+                .files
+                .iter()
+                .any(|p| p.file_name().and_then(|s| s.to_str()) == Some("Untitled.md")),
+            None => false,
+        },
+    );
+
+    // Type a distinctive unsaved edit into the Untitled.md buffer (the active buffer),
+    // then force the swap to disk deterministically so the SIGKILL cannot race the
+    // swap sync (mirrors the other swap_recovery tests).
+    core.send_input(ch('i'));
+    type_str(&core, UNTITLED_MARKER);
+    core.send_input(key(Key::Esc));
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
+    ex_command(&core, "preserve");
+    sleep(PRESERVE_SETTLE);
+
+    // Capture the Tier-1 set BEFORE the restart (respawn wipes the mirror). Reopen
+    // order: non-active first, ACTIVE last — EXACTLY as `nvim_restart.rs` does.
+    let mirror = core
+        .open_files_for_tabpage(tab)
+        .expect("mirror must be present before the restart");
+    let active = mirror.active.clone();
+    let mut reopen: Vec<PathBuf> = mirror
+        .files
+        .iter()
+        .filter(|p| active.as_deref() != Some(p.as_path()))
+        .cloned()
+        .collect();
+    if let Some(a) = active {
+        reopen.push(a);
+    }
+    assert!(
+        reopen
+            .iter()
+            .any(|p| p.file_name().and_then(|s| s.to_str()) == Some("Untitled.md")),
+        "the captured Tier-1 reopen set must include Untitled.md, got {reopen:?}"
+    );
+
+    // Crash nvim (SIGKILL: the swap owner dies WITHOUT cleaning up), wait for Dead.
+    self_sigkill(&core);
+    poll_until(&waiter, "liveness() to become Dead after the SIGKILL", || {
+        core.liveness() == Liveness::Dead
+    });
+
+    // Restart in the SAME cwd (=> SAME durable swap dir) from a Dead state: an ACTUAL
+    // respawn, so restart_nvim() returns Ok(true).
+    let restarted = core
+        .restart_nvim()
+        .expect("restart_nvim should be Ok from a Dead state");
+    assert!(
+        restarted,
+        "restart_nvim() from a Dead state must report an ACTUAL respawn (Ok(true))"
+    );
+    assert_eq!(
+        core.liveness(),
+        Liveness::Alive,
+        "nvim must be Alive after the restart"
+    );
+    let fresh_tab = core.current_tabpage();
+    assert_ne!(fresh_tab, 0, "current_tabpage() must be valid after restart");
+
+    // Drive the reopen the front-end performs off the captured set. Reopening
+    // <cwd>/Untitled.md is what must trigger the dead owner's swap recovery — even
+    // though the fresh nvim's VimEnter already named its own startup buffer the same
+    // name (the "shadow" risk this test exists to catch).
+    core.set_current_tabpage(fresh_tab);
+    for path in &reopen {
+        core.send_input(InputEvent::Open { path: path.clone() });
+    }
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
+
+    // The recovered Untitled.md buffer must show the unsaved edit on row 0. If the
+    // restart shadow occurred, SwapExists never fired and row 0 is empty — this fails
+    // loudly, which is exactly the risk this test pins.
+    poll_until(
+        &waiter,
+        "the recovered Untitled.md buffer to show the unsaved edit on row 0",
+        || {
+            core.read_snapshot()
+                .active_grid()
+                .row_text(0)
+                .contains(UNTITLED_MARKER)
+        },
+    );
+    let snap = core.read_snapshot();
+    let row0 = snap.active_grid().row_text(0);
+    assert!(
+        row0.contains(UNTITLED_MARKER),
+        "the crashed nvim's unsaved Untitled.md edit must be recovered across restart; \
+         got row0 = {row0:?}"
+    );
+    assert!(
+        !snap.toast.is_prompt(),
+        "swap recovery of Untitled.md must be SILENT (swapchoice 'r'), never a confirm \
+         prompt; toast kind = {:?}",
+        snap.toast.kind()
+    );
+    drop(snap);
+
+    core.shutdown().expect("shutdown should be Ok");
 }

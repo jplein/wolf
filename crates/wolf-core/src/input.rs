@@ -226,7 +226,9 @@ pub enum InputEvent {
     },
     /// Close the current split, i.e. the pane (delegated to `:close`).
     ClosePane,
-    /// Open a new empty buffer in the current window (delegated to `:enew`).
+    /// Open a new empty buffer in the current window and name it the next free
+    /// `Untitled N.md` (delegated to the init.lua `wolf_new_untitled` helper,
+    /// which runs `:enew` then names + markdown-types the buffer).
     NewBuffer,
     /// Paste text into the active document (delegated to `nvim_paste`).
     Paste {
@@ -426,11 +428,17 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
         InputEvent::SaveAs { path } => {
             command(nvim, &format!("saveas {}", fnameescape(path))).await
         }
-        InputEvent::Chdir { path } => command(nvim, &format!("tcd {}", fnameescape(path))).await,
+        InputEvent::Chdir { path } => {
+            command(nvim, &format!("tcd {}", fnameescape(path))).await?;
+            // Opening a folder from the empty state re-homes the untouched
+            // anonymous buffer into the new cwd (the guard makes this a no-op for
+            // real files / general chdirs).
+            name_untitled_current(nvim).await
+        }
         InputEvent::SetTabpage { handle } => set_current_tabpage(nvim, *handle).await,
         InputEvent::CloseTabpage { handle } => close_tabpage(nvim, *handle).await,
         InputEvent::ClosePane => command(nvim, "close").await,
-        InputEvent::NewBuffer => command(nvim, "enew").await,
+        InputEvent::NewBuffer => new_untitled(nvim).await,
         InputEvent::Paste { text } => nvim_paste(nvim, text).await,
         InputEvent::SwitchBuffer { win, bufnr } => switch_buffer(nvim, *win, *bufnr).await,
         InputEvent::SetBackground { dark } => {
@@ -552,6 +560,40 @@ async fn toggle_terminal(nvim: &Nvim) -> Result<(), Box<CallError>> {
         .call(
             "nvim_exec_lua",
             vec![Value::from("wolf_toggle_terminal()"), Value::Array(vec![])],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Opens a new empty buffer and names it the next free `Untitled N.md` via the
+/// init.lua `wolf_new_untitled` helper, invoked over `nvim_exec_lua`. The helper
+/// runs `:enew`, then names + markdown-types the buffer (choosing the first name
+/// colliding with neither an existing buffer nor a file on disk in cwd) without
+/// writing it to disk.
+async fn new_untitled(nvim: &Nvim) -> Result<(), Box<CallError>> {
+    let _ = nvim
+        .call(
+            "nvim_exec_lua",
+            vec![Value::from("wolf_new_untitled()"), Value::Array(vec![])],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Re-homes the current anonymous buffer into cwd as an `Untitled N.md` name via
+/// the init.lua `wolf_name_untitled_current` helper, invoked over
+/// `nvim_exec_lua`. The helper is GUARDED: it is a no-op unless the current
+/// buffer is a normal, unmodified, non-preview buffer whose name is empty or an
+/// existing (not-yet-saved) Untitled name — so a real, saved file is never
+/// renamed by a `chdir`.
+async fn name_untitled_current(nvim: &Nvim) -> Result<(), Box<CallError>> {
+    let _ = nvim
+        .call(
+            "nvim_exec_lua",
+            vec![
+                Value::from("wolf_name_untitled_current()"),
+                Value::Array(vec![]),
+            ],
         )
         .await?;
     Ok(())

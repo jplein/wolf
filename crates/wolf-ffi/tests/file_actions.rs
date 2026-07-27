@@ -4,9 +4,14 @@
 //!
 //!   * `WolfCoreHandle::chdir(&self, path: String)` -> `InputEvent::Chdir` ->
 //!     `:cd <path>` (GLOBAL working-directory change)
-//!   * `WolfCoreHandle::new_buffer(&self)` -> `InputEvent::NewBuffer` -> `:enew`
-//!     (a fresh, unnamed `[No Name]` buffer in the current window, so
-//!     `current_file()` -> "")
+//!   * `WolfCoreHandle::new_buffer(&self)` -> `InputEvent::NewBuffer` ->
+//!     `wolf_new_untitled()` (a fresh, MODIFIABLE, unsaved buffer in the current
+//!     window, named `Untitled.md` / `Untitled 2.md` / … — the first name that
+//!     collides with neither an existing buffer nor a file on disk in cwd — so
+//!     `current_file()` ends with an `Untitled( N)?.md` name, NOT the old empty
+//!     `[No Name]`. In THIS test the earlier `chdir` re-homes the startup
+//!     `Untitled.md` into the target dir (a listed buffer collision), so the
+//!     `new_buffer()` collision walk skips index 1 and lands on `Untitled 2.md`.)
 //!
 //! (The `:close`/`close_pane` split-drop action lives in its own real-nvim test,
 //! `close_pane.rs` — it is observed structurally via `windows()`, not via
@@ -19,10 +24,10 @@
 //!
 //! ## Dependency on coder work (plan §3 + §5)
 //!
-//! `new_buffer` does NOT exist on `WolfCoreHandle` yet: the coder adds it to the
-//! bridge (`extern "Rust"`) and `impl WolfCoreHandle` in
-//! `crates/wolf-ffi/src/lib.rs`, backed by the new `wolf_core::InputEvent::NewBuffer`
-//! variant (`chdir` already exists), AND keeps the `//crates/wolf-ffi:file_actions`
+//! `new_buffer` on `WolfCoreHandle` is backed by the `wolf_core::InputEvent::NewBuffer`
+//! variant, which the coder rewires from a raw `:enew` to the `wolf_new_untitled()`
+//! Lua helper (naming + `filetype=markdown`, no auto-write); `chdir` already exists.
+//! The coder keeps the `//crates/wolf-ffi:file_actions`
 //! `rust_test` target in `BUILD.bazel`. This test file does NOT touch BUILD files,
 //! and it will not compile until that method lands — that is expected.
 //!
@@ -57,6 +62,27 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Placeholder content for the temp file opened before `new_buffer`.
 const FILE_CONTENT: &str = "# new me\nbody\n";
+
+/// True when `name` is a valid anonymous-buffer BASENAME — bare `Untitled.md` or
+/// `Untitled <n>.md` for a run of digits `n` — i.e. it matches the regex
+/// `^Untitled( \d+)?\.md$`. Implemented WITHOUT a regex dependency (the wolf-ffi
+/// test deps do not carry one).
+fn is_untitled_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("Untitled") else {
+        return false;
+    };
+    let Some(mid) = rest.strip_suffix(".md") else {
+        return false;
+    };
+    // `mid` is either empty (bare `Untitled.md`) or ` <digits>` (`Untitled 2.md`).
+    if mid.is_empty() {
+        return true;
+    }
+    match mid.strip_prefix(' ') {
+        Some(digits) => !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()),
+        None => false,
+    }
+}
 
 #[test]
 fn file_actions_chdir_and_new_buffer() {
@@ -161,22 +187,41 @@ fn file_actions_chdir_and_new_buffer() {
          (reported={current:?}, target={canonical_file:?})"
     );
 
-    // --- 4. new_buffer(): :enew makes a fresh [No Name] -> current_file "" ------
+    // --- 4. new_buffer(): wolf_new_untitled names the fresh buffer Untitled N.md -
+    // The old behavior was a raw `:enew` -> `[No Name]` -> empty `current_file()`.
+    // That expectation is now INVERTED: `new_buffer()` produces a real, unsaved,
+    // markdown-named buffer. Because the earlier `chdir` re-homed the startup buffer
+    // to `<target_dir>/Untitled.md` (still a listed buffer), the collision walk skips
+    // the un-numbered index 1 and lands on `Untitled 2.md`. Assert the BASENAME
+    // matches the `^Untitled( \d+)?\.md$` shape (robust to `/var` <-> `/private/var`
+    // symlinking and to the exact collision index), AND specifically that it is the
+    // numbered `Untitled 2.md` the single re-homed collision forces here.
+    const UNTITLED_2: &str = "Untitled 2.md";
     handle.new_buffer();
 
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut after_new = handle.current_file();
     while Instant::now() < deadline {
         after_new = handle.current_file();
-        if after_new.is_empty() {
+        if after_new.ends_with(UNTITLED_2) {
             break;
         }
         sleep(POLL_INTERVAL);
     }
+    let basename = Path::new(&after_new)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
     assert!(
-        after_new.is_empty(),
-        "current_file() should become empty after new_buffer() \
-         (:enew opens a fresh, unnamed [No Name] buffer), got {after_new:?}"
+        is_untitled_name(&basename),
+        "current_file() basename should match ^Untitled( \\d+)?\\.md$ after new_buffer() \
+         (wolf_new_untitled names the fresh, unsaved buffer), got basename {basename:?} \
+         from {after_new:?}"
+    );
+    assert!(
+        after_new.ends_with(UNTITLED_2),
+        "with the re-homed startup Untitled.md occupying index 1, the new_buffer() \
+         collision walk must yield {UNTITLED_2:?}, got {after_new:?}"
     );
 
     // --- 5. Shutdown: clean teardown ----------------------------------------

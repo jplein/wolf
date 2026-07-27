@@ -3,6 +3,12 @@
 //! the front-end reopens the file-backed buffers that were open (the Tier-1
 //! open-file mirror captured BEFORE the restart wiped it).
 //!
+//! Tier-1 now also includes named-but-unsaved `Untitled.md` buffers (the
+//! anonymous-buffer feature names the startup buffer `Untitled.md`). Reopening such a
+//! buffer via `:e` is exactly what drives Neovim's swap-based recovery of unsaved
+//! edits, so it legitimately joins the crash-reopen set; excluding it would
+//! permanently lose those edits.
+//!
 //! Drives a REAL, hermetic Neovim (via `WOLF_NVIM_BIN`, resolved by
 //! `common::require_nvim_bin`) — no mocks.
 //!
@@ -153,10 +159,25 @@ fn restart_respawns_and_reopens_open_files() {
     if let Some(a) = active {
         reopen.push(a);
     }
+    // Three, not two: the two file fixtures PLUS the startup `Untitled.md`. The
+    // never-saved `Untitled.md` is a legitimate Tier-1 member — it is carried across
+    // the crash-restart so the reopen `:e` can drive Neovim's swap-based recovery of
+    // any unsaved edits; excluding it would permanently lose them.
     assert_eq!(
         reopen.len(),
-        2,
-        "the captured Tier-1 set must contain exactly the two open files"
+        3,
+        "the captured Tier-1 set must contain the two open files PLUS the startup \
+         named-but-unsaved Untitled.md, got {reopen:?}"
+    );
+    // Positive proof that the startup Untitled.md is in the mirror (matched by
+    // basename — its path is `<cwd>/Untitled.md`, which is never written to disk).
+    assert!(
+        mirror
+            .files
+            .iter()
+            .any(|p| p.file_name().and_then(|s| s.to_str()) == Some("Untitled.md")),
+        "the Tier-1 mirror must include the named-but-unsaved startup Untitled.md, got {:?}",
+        mirror.files
     );
 
     // Crash nvim and wait for the Dead transition.

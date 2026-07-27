@@ -1181,6 +1181,187 @@ function _G.wolf_setup_view_tracking()
 	end
 end
 
+-- ============================================================================
+-- Anonymous-buffer naming
+--
+-- Give every new/empty EDITABLE buffer a real, unsaved markdown name --
+-- "Untitled.md", then "Untitled 2.md", "Untitled 3.md", ... (index 1 is
+-- un-numbered, so "Untitled 1.md" is NEVER generated) -- choosing the first name
+-- that collides with neither an existing Neovim buffer NOR a file on disk in cwd.
+-- Naming sets filetype=markdown (so the in-app preview gate at wolf_open_preview
+-- passes) but NEVER writes the file to disk and NEVER changes
+-- buftype/bufhidden/swapfile: an Untitled N.md buffer stays a normal, modifiable,
+-- UNSAVED document until the user explicitly :w-saves it. Naming fires
+-- BufFilePost + FileType, so the existing current-file / per-window trackers
+-- re-emit the new name with no extra wiring.
+-- ============================================================================
+
+-- Pure name generator. Returns (name, abspath) for the first index i = 1, 2, 3,
+-- ... whose name collides with neither a file/dir on disk in `cwd` nor any
+-- existing buffer's name (skipping `exclude_buf`, the buffer being (re)named).
+--   * i == 1 -> "Untitled.md" (un-numbered); the literal "Untitled 1.md" is
+--     never generated.
+--   * Disk collision: uv.fs_stat(abspath) ~= nil (file OR dir).
+--   * Buffer collision: any valid buffer b ~= exclude_buf (listed OR unlisted,
+--     loaded OR unloaded -- all can trigger E95) whose name == abspath.
+-- Deliberately does NOT inspect .swp swap files -- only the .md file itself.
+-- Whether a Wolf-owned swap file already exists for `abspath` (i.e. a crashed
+-- nvim left unsaved edits for that exact path in WOLF_SWAP_DIR). Scans the swap
+-- dir and matches on `swapinfo().fname` — the SAME identity nvim's own SwapExists
+-- machinery uses — so it is robust to the `dir//` path-mangled swap filenames.
+-- Only the VimEnter STARTUP naming consults this (as an extra collision), so a
+-- fresh restart names its own startup buffer `Untitled 2.md` and the Tier-1 reopen
+-- of `<cwd>/Untitled.md` recovers the crashed edit into its own buffer instead of
+-- being shadowed. Never used by Cmd-N (`wolf_new_untitled`) or `Chdir`.
+function _G.wolf_untitled_swap_exists(abspath)
+	local uv = vim.uv or vim.loop
+	local swap_dir = vim.env.WOLF_SWAP_DIR
+	if not uv or swap_dir == nil or swap_dir == "" then
+		return false
+	end
+	local fs = uv.fs_scandir(swap_dir)
+	if not fs then
+		return false
+	end
+	while true do
+		local name = uv.fs_scandir_next(fs)
+		if not name then
+			break
+		end
+		local ok, info = pcall(vim.fn.swapinfo, swap_dir .. "/" .. name)
+		if ok and type(info) == "table" and info.fname == abspath then
+			return true
+		end
+	end
+	return false
+end
+
+-- `extra_collision` (optional): a predicate `abspath -> bool` treated as an
+-- ADDITIONAL collision source on top of the on-disk and in-buffer checks. Used
+-- ONLY by the VimEnter startup naming (swap-existence); nil for Cmd-N / Chdir, so
+-- their collision rules are unchanged.
+function _G.wolf_next_untitled(cwd, exclude_buf, extra_collision)
+	local uv = vim.uv or vim.loop
+	local i = 1
+	-- Defensive upper bound: never expected to be hit in practice.
+	while i < 10000 do
+		local name = (i == 1) and "Untitled.md" or ("Untitled " .. i .. ".md")
+		local abspath = cwd .. "/" .. name
+		local collision = uv and uv.fs_stat(abspath) ~= nil
+		if not collision and extra_collision then
+			collision = extra_collision(abspath)
+		end
+		if not collision then
+			for _, b in ipairs(vim.api.nvim_list_bufs()) do
+				if b ~= exclude_buf and vim.api.nvim_buf_is_valid(b) then
+					if vim.api.nvim_buf_get_name(b) == abspath then
+						collision = true
+						break
+					end
+				end
+			end
+		end
+		if not collision then
+			return name, abspath
+		end
+		i = i + 1
+	end
+	-- Fallback (never expected): a name unique enough to dodge any clash.
+	local name = "Untitled " .. tostring((uv and uv.hrtime()) or os.time()) .. ".md"
+	return name, cwd .. "/" .. name
+end
+
+-- Names `buf` with the first free Untitled name in cwd and sets its filetype to
+-- markdown. Does NOT write to disk and does NOT touch buftype/bufhidden/swapfile.
+-- On an E95 race (the name got taken between the collision walk and the set-name),
+-- retries the next index (the now-colliding buffer is picked up by the next
+-- collision walk, advancing the index); after a few attempts it bails gracefully
+-- (leaves the buffer unnamed rather than raising).
+-- `extra_collision` (optional) is forwarded to `wolf_next_untitled` (see there);
+-- nil for every caller except the VimEnter startup naming.
+function _G.wolf_name_untitled(buf, extra_collision)
+	local cwd = vim.fn.getcwd()
+	for _ = 1, 8 do
+		local _, abspath = wolf_next_untitled(cwd, buf, extra_collision)
+		if pcall(vim.api.nvim_buf_set_name, buf, abspath) then
+			break
+		end
+	end
+	-- Filetype makes the in-app preview gate pass. pcall so a transient failure
+	-- never surfaces as an RPC error.
+	pcall(function()
+		vim.bo[buf].filetype = "markdown"
+	end)
+end
+
+-- Opens a new empty buffer (:enew) and names it the next free Untitled name.
+-- Replaces the raw :enew for the NewBuffer input event. The PREVIOUS buffer, if
+-- it carried a real name (e.g. an earlier Untitled.md), stays LISTED (a named
+-- buffer is buflisted by default and :enew does not wipe it), so the collision
+-- walk yields Untitled 2.md, then Untitled 3.md across repeated calls.
+function _G.wolf_new_untitled()
+	vim.cmd("enew")
+	wolf_name_untitled(vim.api.nvim_get_current_buf())
+end
+
+-- GUARDED re-home of the CURRENT buffer into cwd as an Untitled name. Proceeds
+-- ONLY when the current buffer is a normal (buftype == ""), UNMODIFIED, non-
+-- preview buffer whose name is either empty OR an existing Untitled name that is
+-- NOT yet on disk (so a real, saved file is never renamed). Used by the Chdir arm
+-- (opening a folder from the empty state names the buffer Untitled.md IN the
+-- opened folder) and by the VimEnter autocmd (first-launch / launch-on-folder).
+-- `extra_collision` (optional) is forwarded to the naming path; only the VimEnter
+-- startup caller passes it (swap-existence), so opening a folder via Chdir keeps
+-- the plain collision rules.
+function _G.wolf_name_untitled_current(extra_collision)
+	local uv = vim.uv or vim.loop
+	if vim.bo.buftype ~= "" or vim.bo.modified then
+		return
+	end
+	-- Never re-home a preview scratch pane.
+	if vim.b.wolf_preview_source ~= nil then
+		return
+	end
+	local buf = vim.api.nvim_get_current_buf()
+	local name = vim.api.nvim_buf_get_name(buf)
+	local ok = name == ""
+	if not ok then
+		-- Lua patterns cannot quantify a capture group, so match the un-numbered
+		-- and numbered Untitled names separately: "Untitled.md" or "Untitled N.md".
+		local base = vim.fn.fnamemodify(name, ":t")
+		local is_untitled = base == "Untitled.md" or base:match("^Untitled %d+%.md$") ~= nil
+		if is_untitled and uv and uv.fs_stat(name) == nil then
+			ok = true
+		end
+	end
+	if ok then
+		wolf_name_untitled(buf, extra_collision)
+	end
+end
+
+-- On startup (first-launch and launch-on-folder), if there is exactly ONE listed
+-- buffer and the current buffer passes the re-home guard, name it Untitled.md.
+-- getcwd() at VimEnter is the launch cwd. The guard keeps this off crash-recovery-
+-- restored buffers (modified / a non-empty non-Untitled name) and off buffers
+-- opened for a real file passed on the command line.
+--
+-- Restart-shadow guard: after a crash-restart the fresh nvim's startup buffer is
+-- named WITHOUT loading it (nvim_buf_set_name skips the swap check). If a crashed
+-- nvim left a swap for `<cwd>/Untitled.md`, naming THIS buffer that same name would
+-- shadow the Tier-1 reopen `:e <cwd>/Untitled.md` (it would merely switch to the
+-- already-named empty buffer, SwapExists never fires, unsaved edits lost). So the
+-- STARTUP naming ONLY treats an existing swap for a candidate name as a collision,
+-- yielding `Untitled 2.md` here and letting the reopen recover cleanly into its own
+-- buffer. Cmd-N / Chdir naming is unaffected (they pass no swap check).
+vim.api.nvim_create_autocmd("VimEnter", {
+	group = vim.api.nvim_create_augroup("WolfUntitled", { clear = true }),
+	callback = function()
+		if #vim.fn.getbufinfo({ buflisted = 1 }) == 1 then
+			wolf_name_untitled_current(_G.wolf_untitled_swap_exists)
+		end
+	end,
+})
+
 -- Per-source preview scratch-buffer map (source bufnr -> preview bufnr), a global
 -- so wolf_open_preview reuses one preview buffer per source across invocations.
 _G.wolf_preview_bufs = _G.wolf_preview_bufs or {}

@@ -526,15 +526,39 @@ fn missing_markdown_target_is_404() {
 }
 
 /// Edge case: with a NON-markdown buffer active, `open_in_browser` returns an
-/// EMPTY string (there is no markdown source to preview). A bare core's initial
-/// scratch buffer has an empty filetype, so `is_markdown_active()` is false.
+/// EMPTY string (there is no markdown source to preview).
+///
+/// The startup buffer is no longer non-markdown — the anonymous-buffer feature names
+/// it `Untitled.md` and sets `filetype=markdown` — so this drives a genuinely
+/// NON-markdown buffer by opening a real `.txt` file and waiting for the markdown
+/// gate to drop to false.
 #[test]
 fn non_markdown_buffer_returns_empty_url() {
-    let (core, _waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+    let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+
+    // Open a real plain-text file so the active buffer is a genuinely NON-markdown
+    // document (empty/`text` filetype), not the markdown-named startup `Untitled.md`.
+    let dir = tempfile::tempdir().expect("failed to create temp dir");
+    let txt = dir.path().join("notes.txt");
+    std::fs::write(&txt, "plain text, not markdown\n").expect("failed to write notes.txt");
+    core.send_input(InputEvent::Open { path: txt });
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
+
+    // The markdown gate is fed by the out-of-band `wolf_current_file` notification,
+    // so poll until it drops to false after the `.txt` open lands.
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    while core.is_markdown_active() {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for is_markdown_active() to become false after opening a .txt file"
+        );
+        waiter.drain();
+        std::thread::sleep(POLL_INTERVAL);
+    }
 
     assert!(
         !core.is_markdown_active(),
-        "a bare core's scratch buffer must not be markdown"
+        "an opened .txt buffer must not be markdown"
     );
 
     let url = core.open_in_browser();
@@ -543,5 +567,7 @@ fn non_markdown_buffer_returns_empty_url() {
         "open_in_browser() on a non-markdown buffer must return an empty string; got {url:?}"
     );
 
+    // Keep the temp dir alive until the assertions above have run.
+    drop(dir);
     core.shutdown().expect("shutdown should be Ok");
 }

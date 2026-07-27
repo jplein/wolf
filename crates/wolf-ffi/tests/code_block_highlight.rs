@@ -325,6 +325,11 @@ fn code_block_go_highlighted_and_unknown_lang_plain() {
     // --- 2. POSITIVE: hl.md's go block highlights to inline-styled spans -------
     send_ex_command(&handle, ":e hl.md");
     wait_for_markdown_active(&handle, true, "after :e hl.md");
+    // Real switch barrier: the startup buffer is now a markdown `Untitled.md`, so
+    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
+    // cannot witness the `:e hl.md`. Wait until hl.md is genuinely the ACTIVE buffer
+    // before the SYNC `open_preview` races ahead of the buffered `:e`.
+    wait_for_current_file(&handle, "hl.md");
 
     let preview_bufnr = handle.open_preview("split_right".to_string());
     assert!(

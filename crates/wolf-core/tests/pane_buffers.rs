@@ -245,8 +245,14 @@ fn split_windows_report_distinct_filenames() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// An unnamed startup buffer (empty `nvim_buf_get_name`) is absent from the buffer
+/// A genuinely unnamed buffer (empty `nvim_buf_get_name`) is absent from the buffer
 /// map, so `pane_status(grid)` reports `[No Name]` with an EMPTY display path.
+///
+/// The startup buffer is no longer unnamed — the anonymous-buffer feature names it
+/// `Untitled.md` at `VimEnter` — so this drives a RAW `:enew` buffer to exercise the
+/// `[No Name]` path. A raw `:enew` Ex command does NOT route through the
+/// `wolf_new_untitled` naming helper (that helper is wired ONLY to the `NewBuffer`
+/// InputEvent), so the resulting buffer keeps an empty name.
 #[test]
 fn unnamed_buffer_reports_no_name() {
     let cwd = common::fresh_cwd();
@@ -254,8 +260,23 @@ fn unnamed_buffer_reports_no_name() {
 
     let grid = wait_for_active_window_grid(&core, &waiter);
 
-    // Let the initial (and any late) `wolf_buffers` emit settle, draining wakes,
-    // before asserting the unnamed buffer left pane_status at NO_NAME / "".
+    // Replace the (now named `Untitled.md`) startup buffer with a genuinely UNNAMED
+    // buffer via a raw `:enew`. This bypasses the `wolf_new_untitled` naming helper,
+    // so the buffer keeps an empty name and must report NO_NAME.
+    ex_command(&core, "enew");
+
+    // Wait until the `wolf_buffers` emit reflects the unnamed buffer (pane_status for
+    // this grid reports NO_NAME rather than the pre-`:enew` `Untitled.md`).
+    poll_pane_status(
+        &core,
+        &waiter,
+        grid,
+        "the raw :enew buffer to report NO_NAME",
+        |filename, _| filename == NO_NAME,
+    );
+
+    // Let any late `wolf_buffers` emit settle, draining wakes, to be sure the unnamed
+    // buffer STAYS at NO_NAME / "" (no stray rename sneaks in).
     let settle_deadline = Instant::now() + UNNAMED_SETTLE;
     while Instant::now() < settle_deadline {
         waiter.drain();
@@ -265,12 +286,12 @@ fn unnamed_buffer_reports_no_name() {
     let st = core.pane_status(grid);
     assert_eq!(
         st.filename, NO_NAME,
-        "an unnamed startup buffer should report NO_NAME; got {:?}",
+        "a genuinely unnamed buffer should report NO_NAME; got {:?}",
         st.filename
     );
     assert_eq!(
         st.display_path, "",
-        "an unnamed startup buffer should report an empty display_path; got {:?}",
+        "a genuinely unnamed buffer should report an empty display_path; got {:?}",
         st.display_path
     );
 

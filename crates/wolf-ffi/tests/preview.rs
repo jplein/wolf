@@ -73,6 +73,8 @@ const TWO_PANES: usize = 2;
 const KIND_CHAR: u8 = 0;
 /// The Enter / Return key (executes the typed Ex command).
 const KIND_ENTER: u8 = 1;
+/// The Escape key (leaves insert mode back to normal mode).
+const KIND_ESC: u8 = 2;
 
 /// Builds a printable-character `FfiKeyEvent` (kind=Char) for `c`, all modifiers
 /// false. Same as the sibling tests.
@@ -99,6 +101,30 @@ fn enter_key() -> FfiKeyEvent {
         alt: false,
         meta: false,
     }
+}
+
+/// Builds an Escape `FfiKeyEvent` (kind=Esc), all modifiers false.
+fn esc_key() -> FfiKeyEvent {
+    FfiKeyEvent {
+        kind: KIND_ESC,
+        ch: 0,
+        fnum: 0,
+        ctrl: false,
+        shift: false,
+        alt: false,
+        meta: false,
+    }
+}
+
+/// Types `text` into the active buffer via the insert-mode path: an `i` to enter
+/// insert, then each printable character, then Escape back to normal mode so the
+/// buffer change is committed and observable.
+fn type_in_insert(handle: &wolf_ffi::WolfCoreHandle, text: &str) {
+    handle.send_key(char_key('i'));
+    for c in text.chars() {
+        handle.send_key(char_key(c));
+    }
+    handle.send_key(esc_key());
 }
 
 /// Types `cmd` as an Ex command and presses Enter, through the same
@@ -218,6 +244,28 @@ fn wait_for_current_file(handle: &wolf_ffi::WolfCoreHandle, suffix: &str) {
     panic!(
         "timed out after {FLUSH_TIMEOUT:?} waiting for current_file() to end with \
          {suffix} (got {current})"
+    );
+}
+
+/// Blocks (bounded by [`FLUSH_TIMEOUT`]) until the ACTIVE frame's rendered text
+/// contains `needle`. The frame is reconstructed by concatenating every resolved
+/// cell's text (row-major) from `read_frame()`. This deterministically witnesses
+/// that asynchronously-typed text has landed in AND rendered from the currently
+/// focused buffer — a pure read of the already-flushed frame that does NOT issue an
+/// RPC (so it cannot itself move focus). Panics with `needle` on timeout.
+fn wait_for_frame_text(handle: &wolf_ffi::WolfCoreHandle, needle: &str) {
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    let mut text = String::new();
+    while Instant::now() < deadline {
+        text = handle.read_frame().cells().iter().map(|c| c.text()).collect();
+        if text.contains(needle) {
+            return;
+        }
+        sleep(POLL_INTERVAL);
+    }
+    panic!(
+        "timed out after {FLUSH_TIMEOUT:?} waiting for the active frame to render \
+         {needle:?} (last frame text: {text:?})"
     );
 }
 
@@ -458,6 +506,11 @@ fn preview_picker_shows_cwd_relative_path_for_subdir_source() {
     wait_for_attach(&handle);
     send_ex_command(&handle, ":e docs/alpha.md");
     wait_for_markdown_active(&handle, true, "after :e docs/alpha.md");
+    // Real switch barrier: the startup buffer is now a markdown `Untitled.md`, so
+    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
+    // cannot witness the `:e docs/alpha.md`. Wait until alpha.md is genuinely the
+    // ACTIVE buffer before the SYNC `open_preview` races ahead of the buffered `:e`.
+    wait_for_current_file(&handle, "alpha.md");
 
     // --- 2. Split-right preview: previews() surfaces one row for alpha.md -----
     let preview_bufnr = handle.open_preview("split_right".to_string());
@@ -524,6 +577,11 @@ fn preview_reuses_the_other_preview_pane() {
     wait_for_attach(&handle);
     send_ex_command(&handle, ":e alpha.md");
     wait_for_markdown_active(&handle, true, "after :e alpha.md");
+    // Real switch barrier: the startup buffer is now a markdown `Untitled.md`, so
+    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
+    // cannot witness the `:e alpha.md`. Wait until alpha.md is genuinely the ACTIVE
+    // buffer before the SYNC `open_preview` races ahead of the buffered `:e`.
+    wait_for_current_file(&handle, "alpha.md");
 
     // --- 2. Split-right preview: two panes, right previews alpha.md ----------
     let alpha_preview_bufnr = handle.open_preview("split_right".to_string());
@@ -636,6 +694,11 @@ fn preview_reuse_falls_back_to_active_when_no_other_preview() {
     wait_for_attach(&handle);
     send_ex_command(&handle, ":e alpha.md");
     wait_for_markdown_active(&handle, true, "after :e alpha.md");
+    // Real switch barrier: the startup buffer is now a markdown `Untitled.md`, so
+    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
+    // cannot witness the `:e alpha.md`. Wait until alpha.md is genuinely the ACTIVE
+    // buffer before the SYNC `open_preview` races ahead of the buffered `:e`.
+    wait_for_current_file(&handle, "alpha.md");
 
     // --- 2. Make a second EDITOR pane (no previews) via :vsplit --------------
     // Both panes now show the SAME markdown buffer; neither is a preview pane.
@@ -720,6 +783,11 @@ fn render_preview_renders_latex_math_and_inlines_fonts() {
     wait_for_attach(&handle);
     send_ex_command(&handle, ":e math.md");
     wait_for_markdown_active(&handle, true, "after :e math.md");
+    // Real switch barrier: the startup buffer is now a markdown `Untitled.md`, so
+    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
+    // cannot witness the `:e math.md`. Wait until math.md is genuinely the ACTIVE
+    // buffer before the SYNC `open_preview` races ahead of the buffered `:e`.
+    wait_for_current_file(&handle, "math.md");
 
     let preview_bufnr = handle.open_preview("split_right".to_string());
     assert!(
@@ -817,6 +885,11 @@ fn preview_file_repoints_pane_to_linked_file() {
     wait_for_attach(&handle);
     send_ex_command(&handle, ":e alpha.md");
     wait_for_markdown_active(&handle, true, "after :e alpha.md");
+    // Real switch barrier: the startup buffer is now a markdown `Untitled.md`, so
+    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
+    // cannot witness the `:e alpha.md`. Wait until alpha.md is genuinely the ACTIVE
+    // buffer before the SYNC `open_preview` races ahead of the buffered `:e`.
+    wait_for_current_file(&handle, "alpha.md");
 
     let alpha_preview_bufnr = handle.open_preview("split_right".to_string());
     assert!(
@@ -902,5 +975,111 @@ fn preview_file_repoints_pane_to_linked_file() {
         "after shutdown preview_file() must be the neutral 0"
     );
 
+    drop(tmp);
+}
+
+#[test]
+fn preview_renders_untitled_buffer() {
+    // The anonymous-buffer feature: a fresh session with NO markdown file on disk
+    // still lands on a real, markdown-named `Untitled.md` buffer, so the in-app
+    // preview gate (which previously returned 0 for a filetype-less `[No Name]`
+    // buffer) now passes and renders the buffer's live contents.
+    //
+    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    let Some(nvim_bin) = common::nvim_bin_or_skip() else {
+        return;
+    };
+    std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
+
+    let init_lua = common::init_lua_path();
+
+    // The un-numbered first name and the heading text we type into the buffer.
+    const UNTITLED: &str = "Untitled.md";
+    const HEADING: &str = "# Untitled Heading";
+    const HEADING_TEXT: &str = "Untitled Heading";
+
+    // A fresh, EMPTY temp cwd — deliberately NO markdown file to open. The startup
+    // buffer must be the anonymous `Untitled.md` document. Kept alive until after
+    // `shutdown()`.
+    let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
+
+    let handle = wolf_ffi_start(
+        init_lua.to_string_lossy().into_owned(),
+        tmp.path().to_string_lossy().into_owned(),
+        common::DEFAULT_COLS,
+        common::DEFAULT_ROWS,
+    )
+    .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
+
+    // --- 1. Attach: the startup buffer is a markdown-named Untitled.md --------
+    wait_for_attach(&handle);
+    // `filetype=markdown` is set at naming time, so the "is markdown" gate is true
+    // even though nothing was `:e`-opened.
+    wait_for_markdown_active(&handle, true, "startup anonymous Untitled.md buffer");
+    // And `current_file()` names it `Untitled.md` (basename `ends_with`, robust to
+    // `/var` <-> `/private/var` symlinking).
+    wait_for_current_file(&handle, UNTITLED);
+
+    // --- 2. Type a heading into the (empty) Untitled.md buffer ----------------
+    type_in_insert(&handle, HEADING);
+
+    // CRITICAL ordering barrier: the heading is typed via the ASYNC key channel,
+    // while `open_preview("split_right")` below is a SYNCHRONOUS RPC that splits and
+    // binds the NOMODIFIABLE preview scratch into the current window, STEALING focus.
+    // If the sync RPC wins the race, the async `i# Untitled Heading<Esc>` keys arrive
+    // AFTER focus has moved to the nomodifiable preview buffer — `i` fails with E21,
+    // nothing is inserted, and the source stays empty. So first WAIT until the heading
+    // has actually landed in and rendered from the (still-focused, modifiable) source
+    // buffer. `wait_for_frame_text` is a pure read of the already-flushed active frame
+    // (no RPC), so it cannot move focus; only once the heading is on screen do we
+    // split.
+    wait_for_frame_text(&handle, HEADING_TEXT);
+
+    // --- 3. open_preview("split_right") now returns a real preview bufnr ------
+    // Previously this returned 0 (no-op) because the anonymous buffer had no
+    // filetype; naming + `filetype=markdown` makes the gate pass.
+    let preview_bufnr = handle.open_preview("split_right".to_string());
+    assert!(
+        preview_bufnr > 0,
+        "open_preview(\"split_right\") on the Untitled.md buffer must return a valid \
+         preview bufnr (> 0, previously 0 for a filetype-less [No Name]), got {preview_bufnr}"
+    );
+    wait_for_window_count(&handle, TWO_PANES, "after split-right preview of Untitled.md");
+
+    // --- 4. previews() surfaces the Untitled.md source row --------------------
+    let previews = wait_for_previews(&handle, "one Untitled.md preview", |p| {
+        p.iter().any(|row| row.source_name() == UNTITLED)
+    });
+    let source_bufnr = previews
+        .iter()
+        .find(|row| row.source_name() == UNTITLED)
+        .expect("a preview row for Untitled.md must exist")
+        .source_bufnr();
+    assert!(
+        source_bufnr > 0,
+        "the preview row must carry Untitled.md's real source bufnr (> 0), got {source_bufnr}"
+    );
+
+    // --- 5. render_preview() carries the typed heading text -------------------
+    // The insert-mode text is buffered on the async key channel, and the render
+    // reflects the source buffer's current lines. A one-shot `render_preview` can
+    // race ahead of the typed heading landing, so POLL the blocking pull (bounded by
+    // FLUSH_TIMEOUT) until the rendered HTML CONTAINS the heading text.
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    let mut html = handle.render_preview(source_bufnr);
+    while Instant::now() < deadline {
+        html = handle.render_preview(source_bufnr);
+        if html.contains(HEADING_TEXT) {
+            break;
+        }
+        sleep(POLL_INTERVAL);
+    }
+    assert!(
+        html.contains(HEADING_TEXT),
+        "render_preview must contain the heading typed into the Untitled.md buffer \
+         ({HEADING_TEXT:?}): {html}"
+    );
+
+    handle.shutdown();
     drop(tmp);
 }

@@ -153,6 +153,28 @@ fn wait_for_markdown_active(handle: &wolf_ffi::WolfCoreHandle, target: bool, des
     );
 }
 
+/// Blocks (bounded by [`FLUSH_TIMEOUT`]) until the core's `current_file()` ends with
+/// `suffix` (a BASENAME match, robust to absolute-vs-cwd-relative display and to
+/// `/var`<->`/private/var` symlinking), deterministically confirming that file is the
+/// ACTIVE buffer. Copy of `preview.rs`'s helper. Unlike `is_markdown_active` — which
+/// stays true across a markdown->markdown `:e` and so cannot witness the switch — this
+/// only flips once the `wolf_current_file` notification for the new buffer has landed.
+fn wait_for_current_file(handle: &wolf_ffi::WolfCoreHandle, suffix: &str) {
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    let mut current = handle.current_file();
+    while Instant::now() < deadline {
+        current = handle.current_file();
+        if current.ends_with(suffix) {
+            return;
+        }
+        sleep(POLL_INTERVAL);
+    }
+    panic!(
+        "timed out after {FLUSH_TIMEOUT:?} waiting for current_file() to end with \
+         {suffix} (got {current})"
+    );
+}
+
 /// Blocks until `handle.is_preview_active()` equals `target`, then asserts it. The
 /// EDIT analogue of [`wait_for_markdown_active`]: `is_preview_active()` reads the
 /// snapshot's `current_is_preview`, re-asserted async via `wolf_current_file`, so a
@@ -319,6 +341,11 @@ fn edit_gates_on_preview_pane_and_neutralizes_on_shutdown() {
     // --- 1. A plain markdown buffer is NOT a preview -------------------------
     send_ex_command(&handle, ":e alpha.md");
     wait_for_markdown_active(&handle, true, "after :e alpha.md");
+    // Real switch barrier: the startup buffer is now a markdown `Untitled.md`, so
+    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
+    // cannot witness the `:e alpha.md`. Wait until alpha.md is genuinely the ACTIVE
+    // buffer before the SYNC preview/edit_source RPC races ahead of the buffered `:e`.
+    wait_for_current_file(&handle, "alpha.md");
     wait_for_preview_active(
         &handle,
         false,
@@ -384,6 +411,11 @@ fn edit_split_left_opens_source_in_a_new_pane() {
     // --- 1. Collapse to a SINGLE preview pane (the split_left precondition) ---
     send_ex_command(&handle, ":e alpha.md");
     wait_for_markdown_active(&handle, true, "after :e alpha.md");
+    // Real switch barrier: the startup buffer is now a markdown `Untitled.md`, so
+    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
+    // cannot witness the `:e alpha.md`. Wait until alpha.md is genuinely the ACTIVE
+    // buffer before the SYNC preview/edit_source RPC races ahead of the buffered `:e`.
+    wait_for_current_file(&handle, "alpha.md");
     let alpha_source_bufnr = collapse_to_single_preview_pane(&handle);
 
     // --- 2. edit_source("split_left"): open the SOURCE in a NEW pane ----------
@@ -436,6 +468,11 @@ fn edit_reuses_the_editor_pane() {
     // --- 1. alpha.md editor pane; capture its window BEFORE the split --------
     send_ex_command(&handle, ":e alpha.md");
     wait_for_markdown_active(&handle, true, "after :e alpha.md");
+    // Real switch barrier: the startup buffer is now a markdown `Untitled.md`, so
+    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
+    // cannot witness the `:e alpha.md`. Wait until alpha.md is genuinely the ACTIVE
+    // buffer before the SYNC preview/edit_source RPC races ahead of the buffered `:e`.
+    wait_for_current_file(&handle, "alpha.md");
     let editor_win = handle.active_win();
     assert!(
         editor_win > 0,
@@ -497,6 +534,11 @@ fn edit_active_replaces_the_preview_with_the_source() {
     // --- 1. alpha.md; split-right preview; focus the preview -----------------
     send_ex_command(&handle, ":e alpha.md");
     wait_for_markdown_active(&handle, true, "after :e alpha.md");
+    // Real switch barrier: the startup buffer is now a markdown `Untitled.md`, so
+    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
+    // cannot witness the `:e alpha.md`. Wait until alpha.md is genuinely the ACTIVE
+    // buffer before the SYNC preview/edit_source RPC races ahead of the buffered `:e`.
+    wait_for_current_file(&handle, "alpha.md");
     let preview_bufnr = handle.open_preview("split_right".to_string());
     assert!(
         preview_bufnr > 0,
@@ -558,6 +600,11 @@ fn edit_reuse_falls_back_to_active_when_no_other_editor() {
     // --- 1. Collapse to a SINGLE preview pane (no OTHER editor pane) ---------
     send_ex_command(&handle, ":e alpha.md");
     wait_for_markdown_active(&handle, true, "after :e alpha.md");
+    // Real switch barrier: the startup buffer is now a markdown `Untitled.md`, so
+    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
+    // cannot witness the `:e alpha.md`. Wait until alpha.md is genuinely the ACTIVE
+    // buffer before the SYNC preview/edit_source RPC races ahead of the buffered `:e`.
+    wait_for_current_file(&handle, "alpha.md");
     let alpha_source_bufnr = collapse_to_single_preview_pane(&handle);
     let active_before = handle.active_win();
 
@@ -605,6 +652,11 @@ fn edit_source_is_a_noop_off_a_preview_pane() {
     // --- 1. A plain markdown editor pane (NOT a preview) --------------------
     send_ex_command(&handle, ":e alpha.md");
     wait_for_markdown_active(&handle, true, "after :e alpha.md");
+    // Real switch barrier: the startup buffer is now a markdown `Untitled.md`, so
+    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
+    // cannot witness the `:e alpha.md`. Wait until alpha.md is genuinely the ACTIVE
+    // buffer before the SYNC preview/edit_source RPC races ahead of the buffered `:e`.
+    wait_for_current_file(&handle, "alpha.md");
     wait_for_preview_active(
         &handle,
         false,
