@@ -4,8 +4,9 @@
 //! application-state directory (macOS `~/Library/Application Support/Wolf`,
 //! Linux `~/.local/state/wolf`), reads a pretty-printed `state.json` holding a
 //! TREE of windows — each window carries geometry plus a LIST of tabs, and each
-//! tab carries its own working directory + sidebar visibility — and writes it
-//! back through a single dedicated writer thread.
+//! tab carries its own working directory, sidebar visibility, and (optionally) its
+//! full pane-split [`layout`](TabState::layout) tree — and writes it back through a
+//! single dedicated writer thread.
 //!
 //! ## Loading (infallible, silently-ignore)
 //!
@@ -58,19 +59,74 @@ const WRITE_COALESCE_DELAY: Duration = Duration::from_millis(100);
 /// then exits). Purely a cleanup path — mutations wake it immediately.
 const WRITER_IDLE_POLL: Duration = Duration::from_millis(500);
 
+/// The axis along which a [`PaneNode::Split`] divides its bounds.
+///
+/// Serialized as the lowercase strings `"horizontal"` / `"vertical"`. A
+/// `.horizontal` split stacks its panes top/bottom (dividing HEIGHT); a
+/// `.vertical` split places them side by side (dividing WIDTH) — matching the
+/// macOS `PaneTree` / `wolf-ffi` orientation table (horizontal == 0, vertical == 1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneOrientation {
+    /// Panes stacked top/bottom; the divider runs horizontally and splits HEIGHT.
+    Horizontal,
+    /// Panes side by side; the divider runs vertically and splits WIDTH.
+    Vertical,
+}
+
+/// One node of a tab's persisted pane-split tree: either a leaf bound to a buffer
+/// path, or an n-ary split of child nodes along an [`PaneOrientation`] with a
+/// parallel per-child `weights` vector.
+///
+/// Serialized as an internally-tagged enum (`"type": "leaf"` / `"type": "split"`),
+/// mirroring the front-end `SavedPaneNode`. A `Leaf`'s `path` is `""` for an
+/// unnamed buffer; when `preview` is `true` the pane is a Markdown preview and
+/// `path` is the SOURCE Markdown file's ABS path (restored via `wolf_preview_file`,
+/// not `:edit`). `preview` is `#[serde(default)]` so an old v1 file without it loads
+/// with `preview = false`.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PaneNode {
+    /// A single pane showing the buffer at `path` (`""` for an unnamed buffer), or a
+    /// Markdown preview of the source file at `path` when `preview` is `true`.
+    Leaf {
+        /// The absolute buffer path, or `""` for an unnamed buffer.
+        path: String,
+        /// Whether this leaf is a Markdown preview of the source file at `path`.
+        #[serde(default)]
+        preview: bool,
+    },
+    /// An n-ary split of `children` along `orientation`, with parallel per-child
+    /// `weights`.
+    Split {
+        /// The axis this node splits along.
+        orientation: PaneOrientation,
+        /// The per-child weights (parallel to `children`).
+        weights: Vec<f64>,
+        /// The child nodes, in DFS (left-to-right / top-to-bottom) order.
+        children: Vec<PaneNode>,
+    },
+}
+
 /// One tab's persisted state (a tab is its own captive Neovim: buffers, splits,
 /// scroll, sidebar, and working directory).
 ///
 /// `cwd` is the absolute canonicalized path nvim reported, or `""` when it has
 /// not been reported yet (a fresh empty-state tab); restore validates it is a
 /// non-empty, existing directory before use. `sidebar_visible` records whether
-/// the file-tree sidebar was showing (defaults to `true`).
+/// the file-tree sidebar was showing (defaults to `true`). `layout` is the tab's
+/// full pane-split tree (topology + per-child weights + per-leaf buffer path), or
+/// `None` for a single unsplit pane; it is `#[serde(default)]` so an old v1 file
+/// without it loads with `layout: None` (no version bump).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TabState {
     /// The embedded Neovim's working directory (`""` == not yet reported).
     pub cwd: String,
     /// Whether the file-tree sidebar is visible (defaults to `true`).
     pub sidebar_visible: bool,
+    /// The tab's pane-split layout, or `None` for a single unsplit pane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<PaneNode>,
 }
 
 impl Default for TabState {
@@ -78,6 +134,7 @@ impl Default for TabState {
         Self {
             cwd: String::new(),
             sidebar_visible: true,
+            layout: None,
         }
     }
 }

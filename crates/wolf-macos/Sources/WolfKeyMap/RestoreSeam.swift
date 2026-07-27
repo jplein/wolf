@@ -32,10 +32,15 @@ public enum RestoreSeam {
     public let cwd: String
     /// Whether the tab's file-tree sidebar was visible.
     public let sidebarVisible: Bool
+    /// The tab's saved pane-split layout, or `nil` for a single unsplit pane. A
+    /// PASSTHROUGH — it does NOT affect grouping (still cwd-only); it rides into
+    /// the matching `PlannedTab.layout` verbatim.
+    public let layout: SavedPaneNode?
 
-    public init(cwd: String, sidebarVisible: Bool) {
+    public init(cwd: String, sidebarVisible: Bool, layout: SavedPaneNode?) {
       self.cwd = cwd
       self.sidebarVisible = sidebarVisible
+      self.layout = layout
     }
   }
 
@@ -64,14 +69,19 @@ public enum RestoreSeam {
     public let cwd: String
     /// Whether the tab's file-tree sidebar was visible.
     public let sidebarVisible: Bool
+    /// The tab's saved pane-split layout, carried verbatim from `SavedTab.layout`
+    /// (a passthrough that does not affect grouping).
+    public let layout: SavedPaneNode?
 
     public init(
-      groupIndex: Int, positionInGroup: Int, cwd: String, sidebarVisible: Bool
+      groupIndex: Int, positionInGroup: Int, cwd: String, sidebarVisible: Bool,
+      layout: SavedPaneNode?
     ) {
       self.groupIndex = groupIndex
       self.positionInGroup = positionInGroup
       self.cwd = cwd
       self.sidebarVisible = sidebarVisible
+      self.layout = layout
     }
   }
 
@@ -124,7 +134,8 @@ public enum RestoreSeam {
           groupIndex: groupIndex,
           positionInGroup: position,
           cwd: tab.cwd,
-          sidebarVisible: tab.sidebarVisible)
+          sidebarVisible: tab.sidebarVisible,
+          layout: tab.layout)
 
         let isRealDir = !tab.cwd.isEmpty && isDirectory(tab.cwd)
         if isRealDir {

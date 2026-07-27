@@ -68,13 +68,8 @@ final class PaneTreeTests: XCTestCase {
   private let halfW: Double = 50.0
   /// Half the height — a 0.5 Horizontal split boundary.
   private let halfH: Double = 20.0
-  /// One third of the test width — a flat 3-way Vertical split column width
-  /// (and the x of the second column).
-  private let thirdW: Double = 100.0 / 3.0
-  /// Two thirds of the test width — the x of the third column in a flat 3-way
-  /// Vertical split.
-  private let twoThirdW: Double = 2.0 * 100.0 / 3.0
-  /// One quarter of the test width — a flat 4-way Vertical split column width.
+  /// One quarter of the test width — a 0.25-weight Vertical split column width
+  /// under the macOS weight-preservation policy (feature plan §3.1).
   private let quarterW: Double = 100.0 / 4.0
 
   /// Tolerance for comparing the `Double` rect components. The arithmetic is a
@@ -226,8 +221,7 @@ final class PaneTreeTests: XCTestCase {
   func testVsplitFlattensIntoRow() {
     // Start with a row [P1, P2] (Vertical = side by side), then Vertical-split
     // P1 AGAIN. Because the new split's orientation MATCHES the row, P3 is
-    // inserted as a FLAT sibling AFTER the target P1 and the row re-equalizes
-    // — NOT a nested sub-split.
+    // inserted as a FLAT sibling AFTER the target P1 — NOT a nested sub-split.
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
     tree.split(p1, p3, .vertical)
@@ -245,11 +239,14 @@ final class PaneTreeTests: XCTestCase {
     let r3 = rectFor(rects, p3)
     let r2 = rectFor(rects, p2)
 
-    // Three equal full-height thirds tiling [0, W] left to right: P1, P3, P2.
-    // THIS is the regression assertion: the old nested model gave 25/25/50.
-    assertRect(r1, 0.0, 0.0, thirdW, h, "P1 left third")
-    assertRect(r3, thirdW, 0.0, thirdW, h, "P3 middle third")
-    assertRect(r2, twoThirdW, 0.0, thirdW, h, "P2 right third")
+    // POLICY (macOS split RE-EQUALIZATION, feature plan ROUND 2): a same-orientation
+    // vsplit RE-EQUALIZES the whole row — the pre-split 0.5/0.5 is discarded and all
+    // three columns become equal thirds (`:vsplit` redistributes to equal widths, per
+    // the user follow-up; this REVERTS round 1's carve-from-target). The TOPOLOGY
+    // (flat [P1, P3, P2]) is unchanged.
+    assertRect(r1, 0.0, 0.0, w / 3.0, h, "P1 re-equalizes to a left third")
+    assertRect(r3, w / 3.0, 0.0, w / 3.0, h, "P3 takes the middle third")
+    assertRect(r2, 2.0 * w / 3.0, 0.0, w / 3.0, h, "P2 re-equalizes to the right third")
 
     // No rect is zero-width (the pre-existing right pane is NOT starved).
     for (id, r) in rects {
@@ -267,26 +264,34 @@ final class PaneTreeTests: XCTestCase {
       "leaf areas must sum to the full bounds")
   }
 
-  func testVsplitTwiceStaysFlatFourEqual() {
+  func testVsplitTwiceStaysFlatEqualWeights() {
     // Repeated same-orientation vsplits of P1 keep the row FLAT (no growing
-    // nesting): four equal-width full-height columns.
+    // nesting). POLICY (macOS split RE-EQUALIZATION, feature plan ROUND 2): each
+    // same-orientation vsplit RE-EQUALIZES the whole row, so after three vsplits the
+    // row is FOUR EQUAL QUARTERS (`:vsplit` redistributes to equal widths; this
+    // REVERTS round 1's carve-from-target). The TOPOLOGY (a single flat row of four
+    // leaves) is unchanged.
     let tree = PaneTree(root: p1)
-    tree.split(p1, p2, .vertical)
-    tree.split(p1, p3, .vertical)
-    tree.split(p1, p4, .vertical)
+    tree.split(p1, p2, .vertical)  // [P1:0.5, P2:0.5]
+    tree.split(p1, p3, .vertical)  // re-equalize -> [P1, P3, P2] each 1/3
+    tree.split(p1, p4, .vertical)  // re-equalize -> [P1, P4, P3, P2] each 0.25
 
     let leaves = tree.leaves()
     XCTAssertEqual(
       leaves.count, 4, "four flat leaves after three same-orientation vsplits")
+    XCTAssertEqual(
+      leaves, [p1, p4, p3, p2], "each new pane is inserted AFTER the target (flat row)")
 
     let rects = tree.paneRects(width: w, height: h)
     XCTAssertEqual(rects.count, 4, "four flat leaves -> four rects")
 
-    // Each column is an equal quarter of the width, full height; none zero.
+    // The row re-equalizes: every column is an equal quarter (x at 0/0.25w/0.5w/0.75w).
+    assertRect(rectFor(rects, p1), 0.0, 0.0, quarterW, h, "P1 re-equalizes to a quarter")
+    assertRect(rectFor(rects, p4), quarterW, 0.0, quarterW, h, "P4 re-equalizes to a quarter")
+    assertRect(rectFor(rects, p3), 2.0 * quarterW, 0.0, quarterW, h, "P3 re-equalizes to a quarter")
+    assertRect(rectFor(rects, p2), 3.0 * quarterW, 0.0, quarterW, h, "P2 re-equalizes to a quarter")
+
     for (id, r) in rects {
-      XCTAssertTrue(
-        approx(r.w, quarterW), "pane \(id) must be an equal quarter-width: \(r)")
-      XCTAssertTrue(approx(r.h, h), "pane \(id) must be full-height: \(r)")
       XCTAssertTrue(r.w > eps, "pane \(id) must not be zero-width: \(r)")
     }
 
@@ -373,13 +378,20 @@ final class PaneTreeTests: XCTestCase {
     XCTAssertEqual(tree.leaves(), [p1], "removing the last pane is a no-op")
   }
 
-  func testRemoveReEqualizesRow() {
-    // Flat row [P1, P3, P2] (see testVsplitFlattensIntoRow); removing the
-    // middle pane P3 leaves a flat [P1, P2] that RE-EQUALIZES to 50/50 — NOT
-    // 25/75 (nvim equalalways).
+  func testRemoveProportionallyRenormalizesRow() {
+    // REMOVE stays PROPORTIONAL (survivors keep dragged relative sizes) even though
+    // SPLIT now re-equalizes (feature plan ROUND 2). Since a same-orientation split
+    // re-equalizes, the ONLY way to create unequal weights is a DRAG: build equal
+    // thirds [P1, P3, P2], then drag the P3/P2 boundary so P3=1/6, P2=1/2, P1=1/3.
+    // Removing the middle P3 leaves [P1, P2] whose survivors keep their RELATIVE
+    // sizes (1/3 : 1/2) and renormalize PROPORTIONALLY to [0.4, 0.6] — NOT
+    // re-equalized to 50/50. The TOPOLOGY (flat [P1, P2]) is unchanged.
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
-    tree.split(p1, p3, .vertical)
+    tree.split(p1, p3, .vertical)  // re-equalize -> [P1, P3, P2] each 1/3
+    // Drag the second boundary (between P3 and P2) to leftFraction 0.25 of the
+    // (1/3 + 1/3) = 2/3 pair: P3 -> 1/6, P2 -> 1/2; P1 (untouched) stays 1/3.
+    tree.setPairFraction(path: [], boundary: 1, leftFraction: 0.25)
     tree.remove(p3)
 
     XCTAssertEqual(
@@ -387,8 +399,13 @@ final class PaneTreeTests: XCTestCase {
 
     let rects = tree.paneRects(width: w, height: h)
     XCTAssertEqual(rects.count, 2, "two leaves -> two rects")
-    assertRect(rectFor(rects, p1), 0.0, 0.0, halfW, h, "P1 re-equalized left half")
-    assertRect(rectFor(rects, p2), halfW, 0.0, halfW, h, "P2 re-equalized right half")
+    // Survivors [1/3, 1/2] renormalize proportionally to [0.4, 0.6].
+    assertRect(
+      rectFor(rects, p1), 0.0, 0.0, 0.4 * w, h,
+      "P1 keeps its relative 1/3 -> renormalizes to 0.4 (NOT re-equalized)")
+    assertRect(
+      rectFor(rects, p2), 0.4 * w, 0.0, 0.6 * w, h,
+      "P2 keeps its relative 1/2 -> renormalizes to 0.6")
   }
 
   func testRemoveCollapsesSingleChild() {
@@ -438,12 +455,17 @@ final class PaneTreeTests: XCTestCase {
     let rects = tree.paneRects(width: w, height: h)
     XCTAssertEqual(rects.count, 3, "three flat leaves -> three rects")
 
+    // POLICY CHANGE (macOS weight preservation, feature plan §3.1): the collapsed
+    // + same-orientation-MERGED subtree keeps its PROPORTIONAL share of the parent
+    // slot. The column occupied 0.5 of the row; its two survivors (0.5/0.5) scale
+    // by that 0.5 to 0.25/0.25, while P1 keeps its 0.5. The old gnome 1:1 port
+    // re-equalized to thirds. The TOPOLOGY (flat [P1, P2, P4]) is unchanged.
     let r1 = rectFor(rects, p1)
     let r2 = rectFor(rects, p2)
     let r4 = rectFor(rects, p4)
-    assertRect(r1, 0.0, 0.0, thirdW, h, "P1 left third")
-    assertRect(r2, thirdW, 0.0, thirdW, h, "P2 middle third")
-    assertRect(r4, twoThirdW, 0.0, thirdW, h, "P4 right third")
+    assertRect(r1, 0.0, 0.0, halfW, h, "P1 keeps its 0.5 (left half)")
+    assertRect(r2, halfW, 0.0, quarterW, h, "P2 scales to 0.25")
+    assertRect(r4, 0.75 * w, 0.0, quarterW, h, "P4 scales to 0.25")
 
     for (id, r) in rects {
       XCTAssertTrue(r.w > eps, "pane \(id) must not be zero-width: \(r)")

@@ -48,9 +48,9 @@ use wolf_core::{
     rank_buffers, rank_matches_top_n, rank_palette, Appearance, BufInfo, BufferRow, Cmdline,
     Command, CommandMru, CoreConfig, CursorShape, FileSearch, FocusDir, Grid, HighlightTable,
     InputEvent, Key, KeyEvent, LayoutIntent, Liveness, MouseAction, MouseButton, MouseEvent,
-    PaletteRow, PaletteRowKind, PaletteWindow, PaneStatus, PreviewInfo, Pum, ResolvedStyle, Rgb,
-    ScrollDirection, ScrollEvent, SplitOrientation, StateStore, TabFiles, TabState, Toast, WakeFn,
-    WinInfo, WindowState, WolfCore, WolfState,
+    PaletteRow, PaletteRowKind, PaletteWindow, PaneNode, PaneOrientation, PaneStatus, PreviewInfo,
+    Pum, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SplitOrientation, StateStore, TabFiles,
+    TabState, Toast, WakeFn, WinInfo, WindowState, WolfCore, WolfState,
 };
 
 // Re-export the bridge-defined transparent structs at the crate root so the Rust
@@ -418,6 +418,14 @@ mod ffi {
         // stable HANDLE. Blocks briefly on the captive nvim. 0 when the core is
         // gone (the caller then drops the would-be view).
         fn create_tabpage(&self, cwd: String) -> i64;
+        // Realizes a saved pane-split tree (`spec_json` from
+        // `PaneLayoutCodec.specJSON`) in the current tabpage's single starting
+        // window via `:split`/`:vsplit` + `:edit`, returning the resulting window
+        // handles in DFS/leaf order (same order as `PaneTree.leaves()`). Blocks
+        // briefly on the captive nvim. An empty `Vec` on error / when the core is
+        // gone. nvim produces only the window COUNT + TOPOLOGY + per-window BUFFER;
+        // sizes come from the front-end's weights.
+        fn rebuild_layout(&self, spec_json: String) -> Vec<i64>;
         // The current tabpage's stable HANDLE via a blocking RPC (the first-view
         // bind). 0 when the core is gone.
         fn current_tabpage(&self) -> i64;
@@ -756,6 +764,34 @@ mod ffi {
         fn cwd(&self) -> String;
         // Whether the tab's file-tree sidebar was visible.
         fn sidebar_visible(&self) -> bool;
+        // Whether the tab carries a saved pane-split layout (false for a single
+        // unsplit pane).
+        fn has_layout(&self) -> bool;
+        // The tab's saved pane-split layout as an opaque `FfiPaneNode` root (an
+        // empty leaf when the tab has no layout).
+        fn layout(&self) -> FfiPaneNode;
+    }
+
+    extern "Rust" {
+        type FfiPaneNode;
+
+        // Whether this node is a leaf (vs. a split).
+        fn is_leaf(&self) -> bool;
+        // Whether this leaf is a Markdown preview (its `leaf_path` is the source
+        // file's abs path, restored via `wolf_preview_file`); false for a split.
+        fn is_preview(&self) -> bool;
+        // For a leaf: the buffer path ("" for an unnamed buffer); "" for a split.
+        fn leaf_path(&self) -> String;
+        // For a split: the orientation discriminant (0 = horizontal, 1 = vertical);
+        // 0 for a leaf.
+        fn orientation(&self) -> u8;
+        // For a split: the number of children; 0 for a leaf.
+        fn child_count(&self) -> u32;
+        // For a split: the weight of child `index` (0.0 when out of range / a leaf).
+        fn weight(&self, index: u32) -> f64;
+        // For a split: child `index` as another opaque `FfiPaneNode` (an empty leaf
+        // when out of range / a leaf) — recursion via repeated opaque returns.
+        fn child(&self, index: u32) -> FfiPaneNode;
     }
 
     extern "Rust" {
@@ -774,6 +810,19 @@ mod ffi {
         // Pushes a tab (its cwd + sidebar visibility) onto the most recently
         // added window. A defensive no-op when no window has been added yet.
         fn wolf_ffi_state_snapshot_add_tab(cwd: String, sidebar_visible: bool);
+        // Pushes a LEAF node (buffer `path`, a Markdown preview of `path` when
+        // `preview` is true, weighing `weight` within its parent) onto the layout
+        // push-builder stack. Part of the post-order token replay that assembles a
+        // tab's pane-split layout across the scalar bridge.
+        fn wolf_ffi_state_layout_push_leaf(path: String, preview: bool, weight: f64);
+        // Pops the top `child_count` layout-stack nodes, wraps them into a SPLIT
+        // (`orientation` 0 = horizontal, 1 = vertical), and pushes it back on
+        // (weighing `weight` within its parent; the root split's weight is 1.0).
+        fn wolf_ffi_state_layout_push_split(orientation: u8, child_count: u32, weight: f64);
+        // Pops the single remaining layout-stack node onto the scratch tree's LAST
+        // window's LAST tab's `layout`, then clears the stack. A defensive no-op
+        // when the stack is not a single node or there is no tab to attach to.
+        fn wolf_ffi_state_layout_commit_to_tab();
         // Commits the scratch tree into the shared state store (a whole-tree
         // `set_snapshot`); an identical tree is a no-op there.
         fn wolf_ffi_state_snapshot_commit();
@@ -943,6 +992,9 @@ mod ffi {
         // The path shown beneath the filename (cwd-relative, `~`-prefixed, or
         // absolute; empty for an unnamed buffer).
         fn display_path(&self) -> String;
+        // The buffer's raw ABSOLUTE path (never relativized; empty for an unnamed
+        // buffer). The macOS front-end persists it as a pane-layout leaf path.
+        fn abs_path(&self) -> String;
     }
 
     extern "Rust" {
@@ -1349,6 +1401,7 @@ impl FfiWindowState {
 pub struct FfiTabState {
     cwd: String,
     sidebar_visible: bool,
+    layout: Option<PaneNode>,
 }
 
 impl FfiTabState {
@@ -1364,11 +1417,113 @@ impl FfiTabState {
         self.sidebar_visible
     }
 
+    /// Whether the tab carries a saved pane-split layout (false for a single
+    /// unsplit pane).
+    #[must_use]
+    pub fn has_layout(&self) -> bool {
+        self.layout.is_some()
+    }
+
+    /// The tab's saved pane-split layout as an opaque [`FfiPaneNode`] root (an
+    /// empty leaf when the tab has no layout).
+    #[must_use]
+    pub fn layout(&self) -> FfiPaneNode {
+        FfiPaneNode {
+            node: self.layout.clone().unwrap_or(PaneNode::Leaf {
+                path: String::new(),
+                preview: false,
+            }),
+        }
+    }
+
     /// Projects a [`wolf_core::TabState`] into its FFI accessor form.
     fn from_tab(t: &TabState) -> Self {
         Self {
             cwd: t.cwd.clone(),
             sidebar_visible: t.sidebar_visible,
+            layout: t.layout.clone(),
+        }
+    }
+}
+
+/// One node of a tab's saved pane-split tree (opaque to Swift). A projection of
+/// [`wolf_core::PaneNode`] read back recursively: `child(index)` returns another
+/// `FfiPaneNode` (repeated opaque returns rather than a `Vec`, so the bridge stays
+/// on scalar/String/opaque returns).
+pub struct FfiPaneNode {
+    node: PaneNode,
+}
+
+impl FfiPaneNode {
+    /// Whether this node is a leaf (vs. a split).
+    #[must_use]
+    pub fn is_leaf(&self) -> bool {
+        matches!(self.node, PaneNode::Leaf { .. })
+    }
+
+    /// Whether this leaf is a Markdown preview (its `leaf_path` is the source file's
+    /// abs path, restored via `wolf_preview_file`); `false` for a split.
+    #[must_use]
+    pub fn is_preview(&self) -> bool {
+        match &self.node {
+            PaneNode::Leaf { preview, .. } => *preview,
+            PaneNode::Split { .. } => false,
+        }
+    }
+
+    /// For a leaf: the buffer path (`""` for an unnamed buffer); `""` for a split.
+    #[must_use]
+    pub fn leaf_path(&self) -> String {
+        match &self.node {
+            PaneNode::Leaf { path, .. } => path.clone(),
+            PaneNode::Split { .. } => String::new(),
+        }
+    }
+
+    /// For a split: the orientation discriminant (`0` = horizontal, `1` =
+    /// vertical); `0` for a leaf.
+    #[must_use]
+    pub fn orientation(&self) -> u8 {
+        match &self.node {
+            PaneNode::Split { orientation, .. } => match orientation {
+                PaneOrientation::Horizontal => 0,
+                PaneOrientation::Vertical => 1,
+            },
+            PaneNode::Leaf { .. } => 0,
+        }
+    }
+
+    /// For a split: the number of children; `0` for a leaf.
+    #[must_use]
+    pub fn child_count(&self) -> u32 {
+        match &self.node {
+            PaneNode::Split { children, .. } => children.len() as u32,
+            PaneNode::Leaf { .. } => 0,
+        }
+    }
+
+    /// For a split: the weight of child `index` (`0.0` when out of range / a leaf).
+    #[must_use]
+    pub fn weight(&self, index: u32) -> f64 {
+        match &self.node {
+            PaneNode::Split { weights, .. } => weights.get(index as usize).copied().unwrap_or(0.0),
+            PaneNode::Leaf { .. } => 0.0,
+        }
+    }
+
+    /// For a split: child `index` as another opaque [`FfiPaneNode`] (an empty leaf
+    /// when out of range / a leaf).
+    #[must_use]
+    pub fn child(&self, index: u32) -> FfiPaneNode {
+        let node = match &self.node {
+            PaneNode::Split { children, .. } => children.get(index as usize).cloned(),
+            PaneNode::Leaf { .. } => None,
+        };
+        FfiPaneNode {
+            node: node.unwrap_or(PaneNode::Leaf {
+                path: String::new(),
+                preview: false,
+            }),
         }
     }
 }
@@ -1456,7 +1611,95 @@ pub fn wolf_ffi_state_snapshot_add_tab(cwd: String, sidebar_visible: bool) {
         window.tabs.push(TabState {
             cwd,
             sidebar_visible,
+            layout: None,
         });
+    }
+}
+
+/// The layout push-builder stack: `(node, weight-within-parent)` pairs the
+/// post-order token replay assembles into a tab's pane-split tree across the
+/// scalar bridge. A process-wide `Mutex` (driven only from the AppKit main thread,
+/// but the lock keeps the free fns sound), lazily initialized by [`layout_stack`].
+static LAYOUT_STACK: OnceLock<Mutex<Vec<(PaneNode, f64)>>> = OnceLock::new();
+
+/// Returns the process-wide layout-stack mutex, initializing it empty on first use.
+fn layout_stack() -> &'static Mutex<Vec<(PaneNode, f64)>> {
+    LAYOUT_STACK.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Pushes a LEAF node (buffer `path`, a Markdown preview of `path` when `preview`
+/// is true, weighing `weight` within its parent split) onto the layout
+/// push-builder stack.
+pub fn wolf_ffi_state_layout_push_leaf(path: String, preview: bool, weight: f64) {
+    layout_stack()
+        .lock()
+        .expect("layout stack mutex poisoned")
+        .push((PaneNode::Leaf { path, preview }, weight));
+}
+
+/// Pops the top `child_count` layout-stack nodes (in DFS push order), wraps them
+/// into a SPLIT (`orientation` 0 → Horizontal, 1 → Vertical), and pushes it back
+/// (weighing `weight` within its parent; the root split carries weight 1.0). A
+/// defensive no-op when the stack holds fewer than `child_count` nodes.
+pub fn wolf_ffi_state_layout_push_split(orientation: u8, child_count: u32, weight: f64) {
+    let mut stack = layout_stack().lock().expect("layout stack mutex poisoned");
+    let count = child_count as usize;
+    if stack.len() < count {
+        tracing::warn!(
+            "wolf-ffi: layout push_split wants {count} children but only {} on the stack",
+            stack.len()
+        );
+        return;
+    }
+    // The top `count` pairs are the children in DFS (left-to-right) order.
+    let split_at = stack.len() - count;
+    let popped = stack.split_off(split_at);
+    let orientation = match orientation {
+        1 => PaneOrientation::Vertical,
+        _ => PaneOrientation::Horizontal,
+    };
+    let weights = popped.iter().map(|(_, w)| *w).collect();
+    let children = popped.into_iter().map(|(node, _)| node).collect();
+    stack.push((
+        PaneNode::Split {
+            orientation,
+            weights,
+            children,
+        },
+        weight,
+    ));
+}
+
+/// Pops the single remaining layout-stack node onto the scratch tree's LAST
+/// window's LAST tab's `layout`, then clears the stack. A defensive no-op (still
+/// clearing the stack) when the stack is not exactly one node or there is no tab
+/// to attach to.
+pub fn wolf_ffi_state_layout_commit_to_tab() {
+    let node = {
+        let mut stack = layout_stack().lock().expect("layout stack mutex poisoned");
+        let node = if stack.len() == 1 {
+            Some(stack[0].0.clone())
+        } else {
+            tracing::warn!(
+                "wolf-ffi: layout commit_to_tab expected 1 root node, found {}",
+                stack.len()
+            );
+            None
+        };
+        stack.clear();
+        node
+    };
+    let Some(node) = node else {
+        return;
+    };
+    if let Some(tab) = scratch()
+        .lock()
+        .expect("state scratch mutex poisoned")
+        .windows
+        .last_mut()
+        .and_then(|w| w.tabs.last_mut())
+    {
+        tab.layout = Some(node);
     }
 }
 
@@ -1665,6 +1908,24 @@ impl WolfCoreHandle {
         };
         let path = (!cwd.is_empty()).then(|| PathBuf::from(cwd));
         core.create_tabpage(path.as_deref())
+    }
+
+    /// Realizes the saved pane-split tree described by `spec_json` (from
+    /// `PaneLayoutCodec.specJSON`) in the current tabpage's single starting window,
+    /// returning the resulting window handles in DFS/leaf order.
+    ///
+    /// Delegates to [`WolfCore::rebuild_layout`], which drives the
+    /// `wolf_rebuild_layout` Lua helper (`:split`/`:vsplit` + `:edit`). Blocks
+    /// briefly on the captive nvim; an empty `Vec` on error / when the core is
+    /// gone. nvim produces only the window COUNT + TOPOLOGY + per-window BUFFER;
+    /// sizes come from the front-end's weights.
+    #[must_use]
+    pub fn rebuild_layout(&self, spec_json: String) -> Vec<i64> {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return Vec::new();
+        };
+        core.rebuild_layout(&spec_json)
     }
 
     /// The current tabpage's stable HANDLE via a blocking RPC (the first-view
@@ -2975,6 +3236,7 @@ impl FfiOpenFiles {
 pub struct FfiPaneStatus {
     filename: String,
     display_path: String,
+    abs_path: String,
 }
 
 impl FfiPaneStatus {
@@ -2992,12 +3254,20 @@ impl FfiPaneStatus {
         self.display_path.clone()
     }
 
-    /// The empty-status fallback (`[No Name]` filename, empty display path), used
-    /// when the core has been shut down.
+    /// The buffer's raw ABSOLUTE path (never relativized; empty for an unnamed
+    /// buffer). The macOS front-end persists it as a pane-layout leaf path.
+    #[must_use]
+    pub fn abs_path(&self) -> String {
+        self.abs_path.clone()
+    }
+
+    /// The empty-status fallback (`[No Name]` filename, empty display + abs path),
+    /// used when the core has been shut down.
     fn empty() -> Self {
         Self::from_pane_status(PaneStatus {
             filename: wolf_core::NO_NAME.to_string(),
             display_path: String::new(),
+            abs_path: String::new(),
         })
     }
 
@@ -3006,6 +3276,7 @@ impl FfiPaneStatus {
         Self {
             filename: status.filename,
             display_path: status.display_path,
+            abs_path: status.abs_path,
         }
     }
 }

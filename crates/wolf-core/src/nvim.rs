@@ -609,6 +609,49 @@ impl NvimProcess {
         }
     }
 
+    /// Realizes a saved pane-split tree (`spec_json`) in the current tabpage's
+    /// single starting window and returns the resulting window handles in DFS/leaf
+    /// order.
+    ///
+    /// Calls the `_G.wolf_rebuild_layout` helper (defined in
+    /// `runtime/nvim/init.lua`) over `nvim_exec_lua`, passing `spec_json` as a Lua
+    /// vararg (never interpolated) that the helper `vim.json.decode`s. The helper
+    /// creates the splits with `:split`/`:vsplit`, `:edit`s each non-empty leaf
+    /// path, and returns the window handles in DFS order. Each handle is decoded
+    /// via [`crate::redraw::ext_handle`].
+    pub fn rebuild_layout(
+        &self,
+        spec_json: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<i64>, NvimError>> + Send + 'static {
+        let nvim = self.nvim.clone();
+        let spec_json = spec_json.to_string();
+        async move {
+            let value = nvim
+                .call(
+                    "nvim_exec_lua",
+                    vec![
+                        Value::from("return wolf_rebuild_layout(...)"),
+                        Value::Array(vec![Value::from(spec_json)]),
+                    ],
+                )
+                .await
+                .map_err(|e| NvimError::Rpc(e.to_string()))?
+                .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+            let entries = value.as_array().ok_or_else(|| {
+                NvimError::Rpc(format!("wolf_rebuild_layout returned non-array: {value:?}"))
+            })?;
+            entries
+                .iter()
+                .map(|v| {
+                    crate::redraw::ext_handle(v).ok_or_else(|| {
+                        NvimError::Rpc(format!("wolf_rebuild_layout handle undecodable: {v:?}"))
+                    })
+                })
+                .collect()
+        }
+    }
+
     /// Returns the current tabpage's stable HANDLE via `nvim_get_current_tabpage`.
     ///
     /// The authoritative bind-time value (the first-view bind reads it right after

@@ -17,6 +17,8 @@ import WolfKeyMap
 struct RestoredTabState {
   let cwd: String
   let sidebarVisible: Bool
+  /// The tab's saved pane-split layout, or `nil` for a single unsplit pane.
+  let layout: SavedPaneNode?
 }
 
 /// One saved WINDOW GROUP: its geometry (points; AppKit bottom-left) plus its
@@ -196,6 +198,16 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     let paneContainer = PaneContainerView(
       handle: handle, metrics: metrics, tabpageHandle: tabpageHandle)
     self.paneContainer = paneContainer
+
+    // A divider drag (or a restore rebuild) persists the whole-tree snapshot.
+    paneContainer.onLayoutChanged = { [weak self] in
+      self?.coordinator?.scheduleStateSnapshot()
+    }
+    // Rebuild a saved multi-pane layout on launch (single-pane layouts need no
+    // rebuild — the first bound pane already IS the layout).
+    if let saved = restoredTab?.layout, saved.leafCount > 1 {
+      paneContainer.requestLayoutRebuild(saved)
+    }
 
     // The file-tree sidebar (left pane) owns its OWN long-lived file-search
     // session; the render wake reveals/bolds the current buffer, the tree
@@ -710,6 +722,11 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
   /// window. Read by the coordinator's menu validation to disable the Close
   /// command on the last split.
   var paneCount: Int { paneContainer?.paneCount ?? 1 }
+
+  /// This tab's persistable pane-split layout (topology + weights + per-leaf buffer
+  /// path), or `nil` for a single unsplit pane. Read by the coordinator's
+  /// whole-tree snapshot walk (`AppDelegate.snapshotNow`).
+  func layoutSnapshot() -> SavedPaneNode? { paneContainer?.layoutSnapshot() }
 
   /// Whether this window's active document is in Neovim visual mode
   /// (`v`/`V`/`<C-v>`). Read by the coordinator's menu validation to enable

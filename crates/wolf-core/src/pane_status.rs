@@ -25,6 +25,10 @@ pub struct PaneStatus {
     /// absolute path (with a `~` prefix when under home), else empty for an
     /// unnamed buffer.
     pub display_path: String,
+    /// The buffer's raw absolute path (`""` for an unnamed buffer). Unlike
+    /// [`display_path`](Self::display_path) this is never relativized — the macOS
+    /// front-end persists it as a pane-layout leaf path.
+    pub abs_path: String,
 }
 
 /// Computes the [`PaneStatus`] for a buffer path, given the (already-canonical)
@@ -47,6 +51,7 @@ pub fn pane_status(buf_path: &str, cwd: Option<&Path>, home: Option<&Path>) -> P
         return PaneStatus {
             filename: NO_NAME.to_string(),
             display_path: String::new(),
+            abs_path: String::new(),
         };
     }
 
@@ -64,6 +69,7 @@ pub fn pane_status(buf_path: &str, cwd: Option<&Path>, home: Option<&Path>) -> P
     PaneStatus {
         filename,
         display_path,
+        abs_path: buf_path.to_string(),
     }
 }
 

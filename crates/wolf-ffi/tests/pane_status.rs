@@ -9,6 +9,7 @@
 //!   * `WolfCoreHandle::pane_status_for_grid(grid: u64) -> FfiPaneStatus`
 //!   * `FfiPaneStatus::filename() -> String`
 //!   * `FfiPaneStatus::display_path() -> String`
+//!   * `FfiPaneStatus::abs_path() -> String`
 //!
 //! ## Dependency on coder work (plan §5 / §8)
 //!
@@ -28,8 +29,11 @@
 //!
 //! A file opened under the session cwd surfaces its base name via
 //! `pane_status_for_grid(grid).filename()` with a non-empty cwd-relative
-//! `display_path()`; and after a `:vsplit` + opening a SECOND file in the new
-//! window, the two window grids report DISTINCT filenames (per-window, not global).
+//! `display_path()`, and its `abs_path()` equals the opened file's CANONICAL
+//! absolute path (the raw, never-relativized buffer path core stores — canonical
+//! because `apply_buffers` canonicalizes each `nvim_buf_get_name`); and after a
+//! `:vsplit` + opening a SECOND file in the new window, the two window grids report
+//! DISTINCT filenames (per-window, not global).
 
 mod common;
 
@@ -180,6 +184,23 @@ fn pane_status_reports_filename_and_path_per_grid() {
         );
         sleep(POLL_INTERVAL);
     }
+
+    // --- 3b. abs_path() is the opened file's CANONICAL absolute path --------
+    // `PaneStatus.abs_path` is the RAW, never-relativized buffer path core stored
+    // for this window. Core canonicalizes each `nvim_buf_get_name` in
+    // `apply_buffers` (redraw.rs), so it resolves the tempdir symlink (on macOS
+    // `/var/folders/...` -> `/private/var/folders/...`). Canonicalize the expected
+    // path the SAME way so the comparison lines up regardless of that symlink.
+    let expected_abs = std::fs::canonicalize(tmp.path().join("alpha.md"))
+        .expect("alpha.md should canonicalize to an absolute path")
+        .to_string_lossy()
+        .into_owned();
+    let abs_path = handle.pane_status_for_grid(original_grid).abs_path();
+    assert_eq!(
+        abs_path, expected_abs,
+        "pane_status_for_grid({original_grid}).abs_path() should equal alpha.md's \
+         canonical absolute path"
+    );
 
     // --- 4. vsplit; poll windows() until two grids --------------------------
     send_ex_command(&handle, ":vsplit");

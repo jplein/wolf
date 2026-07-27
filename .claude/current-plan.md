@@ -77,4 +77,27 @@ Regenerated bindings committed together with the merge.
 
 ## Status
 
-(merge not yet performed)
+Merge performed; 3 conflicts resolved (plan by orchestrator; lib.rs import superset
++ wolf-macos/README.md prose union by coder). FFI bindings regenerated → BYTE-
+IDENTICAL to the auto-merge (auto-merge was correct). Build (incl. macOS app) ✓;
+clippy + rustfmt_core + rustfmt_ffi + swift_format ✓; 73/74 tests pass, both feature
+families ran.
+
+ONE semantic-merge failure (predicted by the watch list):
+`crates/wolf-core/tests/rebuild_layout.rs::rebuild_perpendicular_tree_with_empty_leaf`
+(assertion ~line 221, doc ~184-186/219). `wolf_rebuild_layout` leaves an empty-path
+leaf showing the window's INHERITED buffer; on main that startup buffer was
+`[No Name]`, but our `VimEnter` naming (`wolf_name_untitled_current`) now names it
+`Untitled.md`. Test asserts `NO_NAME`.
+
+DECISION (orchestrator): this is the CORRECT, intended merged behavior — our feature
+deliberately eliminates bare `[No Name]` startup buffers, so an empty-leaf pane
+inheriting `Untitled.md` is right. NOT an impl bug (forcing `[No Name]` would need a
+gratuitous `:enew` contradicting the feature). Stale-expectation test update, same
+class as the first merge's `current_file.rs`. TEST-WRITER: update the assertion at
+~line 221 to expect basename `Untitled.md` (robust `ends_with`/basename match) and
+fix the doc comment (~184-186, 219) to describe the empty leaf inheriting the named
+`Untitled.md` startup buffer. Leave the other two subtests
+(`rebuild_vertical_split_of_two_files`, `rebuild_editor_and_preview_of_same_markdown`)
+unchanged. Then coder re-runs `:rebuild_layout` + full suite; reviewer; tech-writer;
+commit.

@@ -20,6 +20,15 @@ public func wolf_ffi_state_snapshot_add_window(_ x: Double, _ y: Double, _ width
 public func wolf_ffi_state_snapshot_add_tab<GenericIntoRustString: IntoRustString>(_ cwd: GenericIntoRustString, _ sidebar_visible: Bool) {
     __swift_bridge__$wolf_ffi_state_snapshot_add_tab({ let rustString = cwd.intoRustString(); rustString.isOwned = false; return rustString.ptr }(), sidebar_visible)
 }
+public func wolf_ffi_state_layout_push_leaf<GenericIntoRustString: IntoRustString>(_ path: GenericIntoRustString, _ preview: Bool, _ weight: Double) {
+    __swift_bridge__$wolf_ffi_state_layout_push_leaf({ let rustString = path.intoRustString(); rustString.isOwned = false; return rustString.ptr }(), preview, weight)
+}
+public func wolf_ffi_state_layout_push_split(_ orientation: UInt8, _ child_count: UInt32, _ weight: Double) {
+    __swift_bridge__$wolf_ffi_state_layout_push_split(orientation, child_count, weight)
+}
+public func wolf_ffi_state_layout_commit_to_tab() {
+    __swift_bridge__$wolf_ffi_state_layout_commit_to_tab()
+}
 public func wolf_ffi_state_snapshot_commit() {
     __swift_bridge__$wolf_ffi_state_snapshot_commit()
 }
@@ -289,6 +298,10 @@ extension WolfCoreHandleRef {
 
     public func create_tabpage<GenericIntoRustString: IntoRustString>(_ cwd: GenericIntoRustString) -> Int64 {
         __swift_bridge__$WolfCoreHandle$create_tabpage(ptr, { let rustString = cwd.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
+    }
+
+    public func rebuild_layout<GenericIntoRustString: IntoRustString>(_ spec_json: GenericIntoRustString) -> RustVec<Int64> {
+        RustVec(ptr: __swift_bridge__$WolfCoreHandle$rebuild_layout(ptr, { let rustString = spec_json.intoRustString(); rustString.isOwned = false; return rustString.ptr }()))
     }
 
     public func current_tabpage() -> Int64 {
@@ -1278,6 +1291,14 @@ extension FfiTabStateRef {
     public func sidebar_visible() -> Bool {
         __swift_bridge__$FfiTabState$sidebar_visible(ptr)
     }
+
+    public func has_layout() -> Bool {
+        __swift_bridge__$FfiTabState$has_layout(ptr)
+    }
+
+    public func layout() -> FfiPaneNode {
+        FfiPaneNode(ptr: __swift_bridge__$FfiTabState$layout(ptr))
+    }
 }
 extension FfiTabState: Vectorizable {
     public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
@@ -1325,6 +1346,110 @@ extension FfiTabState: Vectorizable {
 
     public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
         __swift_bridge__$Vec_FfiTabState$len(vecPtr)
+    }
+}
+
+
+public class FfiPaneNode: FfiPaneNodeRefMut {
+    var isOwned: Bool = true
+
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+
+    deinit {
+        if isOwned {
+            __swift_bridge__$FfiPaneNode$_free(ptr)
+        }
+    }
+}
+public class FfiPaneNodeRefMut: FfiPaneNodeRef {
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+}
+public class FfiPaneNodeRef {
+    var ptr: UnsafeMutableRawPointer
+
+    public init(ptr: UnsafeMutableRawPointer) {
+        self.ptr = ptr
+    }
+}
+extension FfiPaneNodeRef {
+    public func is_leaf() -> Bool {
+        __swift_bridge__$FfiPaneNode$is_leaf(ptr)
+    }
+
+    public func is_preview() -> Bool {
+        __swift_bridge__$FfiPaneNode$is_preview(ptr)
+    }
+
+    public func leaf_path() -> RustString {
+        RustString(ptr: __swift_bridge__$FfiPaneNode$leaf_path(ptr))
+    }
+
+    public func orientation() -> UInt8 {
+        __swift_bridge__$FfiPaneNode$orientation(ptr)
+    }
+
+    public func child_count() -> UInt32 {
+        __swift_bridge__$FfiPaneNode$child_count(ptr)
+    }
+
+    public func weight(_ index: UInt32) -> Double {
+        __swift_bridge__$FfiPaneNode$weight(ptr, index)
+    }
+
+    public func child(_ index: UInt32) -> FfiPaneNode {
+        FfiPaneNode(ptr: __swift_bridge__$FfiPaneNode$child(ptr, index))
+    }
+}
+extension FfiPaneNode: Vectorizable {
+    public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
+        __swift_bridge__$Vec_FfiPaneNode$new()
+    }
+
+    public static func vecOfSelfFree(vecPtr: UnsafeMutableRawPointer) {
+        __swift_bridge__$Vec_FfiPaneNode$drop(vecPtr)
+    }
+
+    public static func vecOfSelfPush(vecPtr: UnsafeMutableRawPointer, value: FfiPaneNode) {
+        __swift_bridge__$Vec_FfiPaneNode$push(vecPtr, {value.isOwned = false; return value.ptr;}())
+    }
+
+    public static func vecOfSelfPop(vecPtr: UnsafeMutableRawPointer) -> Optional<Self> {
+        let pointer = __swift_bridge__$Vec_FfiPaneNode$pop(vecPtr)
+        if pointer == nil {
+            return nil
+        } else {
+            return (FfiPaneNode(ptr: pointer!) as! Self)
+        }
+    }
+
+    public static func vecOfSelfGet(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiPaneNodeRef> {
+        let pointer = __swift_bridge__$Vec_FfiPaneNode$get(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiPaneNodeRef(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfGetMut(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiPaneNodeRefMut> {
+        let pointer = __swift_bridge__$Vec_FfiPaneNode$get_mut(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiPaneNodeRefMut(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfAsPtr(vecPtr: UnsafeMutableRawPointer) -> UnsafePointer<FfiPaneNodeRef> {
+        UnsafePointer<FfiPaneNodeRef>(OpaquePointer(__swift_bridge__$Vec_FfiPaneNode$as_ptr(vecPtr)))
+    }
+
+    public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
+        __swift_bridge__$Vec_FfiPaneNode$len(vecPtr)
     }
 }
 
@@ -2225,6 +2350,10 @@ extension FfiPaneStatusRef {
 
     public func display_path() -> RustString {
         RustString(ptr: __swift_bridge__$FfiPaneStatus$display_path(ptr))
+    }
+
+    public func abs_path() -> RustString {
+        RustString(ptr: __swift_bridge__$FfiPaneStatus$abs_path(ptr))
     }
 }
 extension FfiPaneStatus: Vectorizable {

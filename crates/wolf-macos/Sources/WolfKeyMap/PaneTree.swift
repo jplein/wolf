@@ -2,13 +2,14 @@
 //  PaneTree.swift
 //  Pure, AppKit-free pane-layout tree for the macOS split-panes UI.
 //
-//  A FAITHFUL port of `crates/wolf-gnome/src/layout.rs::PaneTree`, the macOS copy
-//  of that pure seam (like `KeyMap.swift` / `Cursor.swift` / `PickerSeam.swift`).
-//  It imports ONLY Foundation (uses `Double`, never `CGFloat`/CoreGraphics) so it
+//  A port of `crates/wolf-gnome/src/layout.rs::PaneTree`, the macOS copy of that
+//  pure seam (like `KeyMap.swift` / `Cursor.swift` / `PickerSeam.swift`). It
+//  imports ONLY Foundation (uses `Double`, never `CGFloat`/CoreGraphics) so it
 //  stays in the headless `WolfKeyMap` module and is unit-tested without a window
-//  (see `PaneTreeTests.swift`). The AppKit glue (`PaneContainerView`) consumes
-//  `paneRects()` (and `layout()`) to paint each pane into a computed rectangle in a
-//  single flat view.
+//  (see `PaneTreeTests.swift` / `PaneTreeWeightsTests.swift`). The AppKit glue
+//  (`PaneContainerView`) consumes `paneRects()` (and `layout()`) to paint each
+//  pane into a computed rectangle in a single flat view, and `dividers()` +
+//  `setPairFraction()` to drag interior dividers to resize.
 //
 //  ## N-ary frame model (matches Neovim's window layout)
 //
@@ -20,11 +21,22 @@
 //  same-orientation split (those are FLATTENED), so each axis is a single flat row/
 //  column.
 //
-//  CONTRACT (must match wolf-gnome/src/layout.rs exactly): a same-orientation split
-//  inserts a FLAT sibling AFTER the target then re-equalizes; a perpendicular split
-//  NESTS `[target, newPane]`; remove never empties the tree; neighbor uses STRICTLY
-//  positive cross-axis overlap; `leaves()`/`paneRects()` are a stable DFS order;
-//  `.vertical` divides WIDTH, `.horizontal` divides HEIGHT.
+//  ## Intentional divergence from the gnome 1:1 port (macOS-only)
+//
+//  The TOPOLOGY contract still matches `wolf-gnome/src/layout.rs` exactly: a
+//  same-orientation split inserts a FLAT sibling AFTER the target; a perpendicular
+//  split NESTS `[target, newPane]`; remove never empties the tree; neighbor uses
+//  STRICTLY positive cross-axis overlap; `leaves()`/`paneRects()` are a stable DFS
+//  order; `.vertical` divides WIDTH, `.horizontal` divides HEIGHT.
+//
+//  The WEIGHT POLICY and the DIVIDER API are macOS-only additions. A
+//  same-orientation split RE-EQUALIZES the row/column (each child gets `1/n` — this
+//  MATCHES the gnome port: `:vsplit`/`:split` redistributes to equal shares); a
+//  fresh two-child split is 0.5/0.5. The ONE remaining divergence from gnome is
+//  REMOVE: it RE-NORMALIZES survivors PROPORTIONALLY (relative sizes preserved, NOT
+//  re-equalized), so a user-resized layout survives an adjacent pane closing.
+//  Together with `dividers()` / `setPairFraction()` / `rebuilt(from:firstLeafId:)`
+//  these drive divider drag-to-resize and full layout persistence.
 //
 
 import Foundation
@@ -34,9 +46,14 @@ import Foundation
 public typealias PaneId = UInt64
 
 /// The default split weight for a fresh two-child split: each child gets half the
-/// bounds. A user drag of a divider is owned by the widget layer (and not written
-/// back to these weights in v1), not this pure tree.
+/// bounds. A user drag of a divider is applied back into these weights via
+/// `setPairFraction(path:boundary:leftFraction:)`.
 private let defaultRatio: Double = 0.5
+
+/// The clamp margin `setPairFraction` keeps between a divider fraction and the
+/// `0` / `1` extremes so neither adjacent pane can fully collapse. The pixel-aware
+/// minimum-pane clamp lives in `DividerDragSeam`; this is only the pure-tree floor.
+private let pairFractionEps: Double = 1e-6
 
 /// Tolerance for the geometric edge/overlap comparisons in `PaneTree.neighbor`. It
 /// makes the cross-axis overlap STRICTLY positive (a shared edge does not count) so
@@ -141,6 +158,56 @@ private indirect enum Frame {
 public final class PaneTree {
   private var root: Frame
 
+  /// One interior divider between two adjacent children of a split node, produced
+  /// by `dividers(width:height:)` for the widget layer to hit-test + drag.
+  ///
+  /// `path` is the child-index path root → owning split; `boundary` is the index
+  /// `i` between child `i` and child `i + 1`. `lineRect` is a ZERO-thickness
+  /// segment (a `.vertical` divider has `w == 0` and spans the split's height at
+  /// the boundary x; a `.horizontal` divider has `h == 0` and spans the split's
+  /// width at the boundary y) — the hit tolerance supplies the clickable width.
+  /// `pairStart` / `pairSpan` are the pixel extent of ONLY the two adjacent
+  /// children the divider governs (the same pair `setPairFraction` reweights);
+  /// `fraction == weights[boundary] / (weights[boundary] + weights[boundary + 1])`.
+  /// `before` / `after` are the first-DFS leaf of each of those two children (the
+  /// two leaf ids themselves when both children are leaves).
+  public struct Divider: Equatable {
+    /// The owning split's orientation (`.vertical` → a vertical divider line).
+    public let orientation: Orientation
+    /// The child-index path from the root to the owning split.
+    public let path: [Int]
+    /// The boundary index `i` (between child `i` and child `i + 1`).
+    public let boundary: Int
+    /// The zero-thickness divider line rect (see the type doc).
+    public let lineRect: Rect
+    /// The pixel start (x for `.vertical`, y for `.horizontal`) of the governed pair.
+    public let pairStart: Double
+    /// The pixel span of the governed pair (both children combined).
+    public let pairSpan: Double
+    /// The first-DFS leaf id of child `boundary`.
+    public let before: PaneId
+    /// The first-DFS leaf id of child `boundary + 1`.
+    public let after: PaneId
+    /// `weights[boundary] / (weights[boundary] + weights[boundary + 1])`.
+    public let fraction: Double
+
+    /// Creates a divider from its components (the widget layer + tests build these).
+    public init(
+      orientation: Orientation, path: [Int], boundary: Int, lineRect: Rect,
+      pairStart: Double, pairSpan: Double, before: PaneId, after: PaneId, fraction: Double
+    ) {
+      self.orientation = orientation
+      self.path = path
+      self.boundary = boundary
+      self.lineRect = lineRect
+      self.pairStart = pairStart
+      self.pairSpan = pairSpan
+      self.before = before
+      self.after = after
+      self.fraction = fraction
+    }
+  }
+
   /// Creates a tree of a single leaf pane `root`.
   public init(root: PaneId) {
     self.root = .leaf(root)
@@ -150,7 +217,7 @@ public final class PaneTree {
   ///
   /// If the split's `orientation` MATCHES the frame that owns `target`, `newPane`
   /// is inserted as a FLAT sibling immediately AFTER `target` and that row/column
-  /// re-equalizes. Otherwise `target` is wrapped in a new two-child sub-frame
+  /// RE-EQUALIZES (each child `1/n`). Otherwise `target` is wrapped in a new two-child sub-frame
   /// `[target, newPane]` (NEST), with `target` first. The root special case (a
   /// single leaf) becomes a two-child split. No-op if `target` is not a leaf.
   public func split(_ target: PaneId, _ newPane: PaneId, _ orientation: Orientation) {
@@ -229,6 +296,55 @@ public final class PaneTree {
   public func layout() -> PaneLayout {
     frameLayout(root)
   }
+
+  /// Returns one `Divider` per interior boundary within bounds
+  /// `(0, 0, width, height)`, mirroring `paneRects()`'s recursion so each divider's
+  /// `lineRect` / `pairStart` / `pairSpan` are in the same pixel space.
+  public func dividers(width: Double, height: Double) -> [Divider] {
+    var out: [Divider] = []
+    collectDividers(root, Rect(x: 0, y: 0, w: width, h: height), [], &out)
+    return out
+  }
+
+  /// Reweights ONLY the two adjacent children at `boundary` within the split
+  /// reached by the child-index `path`, so child `boundary` takes `leftFraction`
+  /// of their combined weight and child `boundary + 1` takes the rest.
+  ///
+  /// The pair's combined weight (and every other child's weight, and the global
+  /// sum) is unchanged. `leftFraction` is clamped to `[pairFractionEps,
+  /// 1 - pairFractionEps]` so neither pane collapses. A no-op when `path` does not
+  /// reach a split or `boundary` is out of range.
+  public func setPairFraction(path: [Int], boundary: Int, leftFraction: Double) {
+    setPairFractionIn(&root, path[...], boundary, leftFraction)
+  }
+
+  /// Rebuilds a live tree from a saved layout (topology + weights), assigning leaf
+  /// ids sequentially in DFS order starting at `firstLeafId`.
+  ///
+  /// Returns the tree plus the ordered leaf-id list — the SAME DFS order as
+  /// `leaves()` — so the caller can zip each id to its restored window handle.
+  public static func rebuilt(
+    from saved: SavedPaneNode, firstLeafId: PaneId
+  ) -> (tree: PaneTree, leafIds: [PaneId]) {
+    var nextId = firstLeafId
+    var leafIds: [PaneId] = []
+    func build(_ node: SavedPaneNode) -> Frame {
+      switch node {
+      case .leaf:
+        let id = nextId
+        nextId += 1
+        leafIds.append(id)
+        return .leaf(id)
+      case .split(let orientation, let weights, let children):
+        return .split(
+          orientation: orientation, children: children.map(build), weights: weights)
+      }
+    }
+    let root = build(saved)
+    let tree = PaneTree(root: firstLeafId)
+    tree.root = root
+    return (tree, leafIds)
+  }
 }
 
 // MARK: - Free helpers (ported 1:1 from layout.rs)
@@ -247,22 +363,10 @@ private func frameLayout(_ frame: Frame) -> PaneLayout {
   }
 }
 
-/// Equalizes `weights` to `1/n` each, where `n = weights.count`.
-private func equalize(_ weights: inout [Double]) {
-  let n = weights.count
-  if n == 0 {
-    return
-  }
-  let each = 1.0 / Double(n)
-  for i in weights.indices {
-    weights[i] = each
-  }
-}
-
 /// Recursively splits the leaf matching `target` within a split `frame`. A
-/// same-orientation split inserts a flat sibling after `target` and re-equalizes; a
-/// perpendicular split wraps `target` in a new two-child sub-frame. Returns `true`
-/// if a matching leaf was found and split.
+/// same-orientation split inserts a flat sibling after `target` and re-equalizes the
+/// row/column (each child `1/n`); a perpendicular split wraps `target` in a new
+/// two-child sub-frame. Returns `true` if a matching leaf was found and split.
 private func splitIn(
   _ frame: inout Frame, _ target: PaneId, _ newPane: PaneId, _ orientation: Orientation
 ) -> Bool {
@@ -272,7 +376,9 @@ private func splitIn(
 
   if let i = children.firstIndex(where: { isLeaf($0, target) }) {
     if own == orientation {
-      // FLAT: insert the new pane immediately after the target, re-equalize.
+      // FLAT: insert the new pane immediately after the target, then RE-EQUALIZE the
+      // whole row/column to `1/n` each — `:vsplit`/`:split` redistributes to equal
+      // shares (matches the gnome port).
       children.insert(.leaf(newPane), at: i + 1)
       weights.insert(0.0, at: i + 1)
       equalize(&weights)
@@ -347,11 +453,18 @@ private func normalize(_ frame: inout Frame) {
   children = newChildren
   weights = newWeights
 
-  // COLLAPSE a 1-child split into its sole child; else re-equalize the row/column.
+  // COLLAPSE a 1-child split into its sole child; else RE-NORMALIZE the survivors
+  // PROPORTIONALLY (sum back to 1 while preserving relative sizes) — the macOS
+  // weight-preserving divergence from the gnome re-equalize.
   if children.count == 1 {
     frame = children[0]
   } else {
-    equalize(&weights)
+    let sum = weights.reduce(0, +)
+    if sum > 0 {
+      for i in weights.indices {
+        weights[i] /= sum
+      }
+    }
     frame = .split(orientation: orientation, children: children, weights: weights)
   }
 }
@@ -434,10 +547,125 @@ private func xOverlap(_ a: Rect, _ b: Rect) -> Bool {
   max(a.x, b.x) < min(a.x + a.w, b.x + b.w) - neighborEps
 }
 
+/// Re-equalizes `weights` so each of the `n` children gets `1/n` (a no-op on an
+/// empty vector). Used by the same-orientation `splitIn` branch to redistribute a
+/// row/column to equal shares on `:vsplit`/`:split`.
+private func equalize(_ weights: inout [Double]) {
+  guard !weights.isEmpty else {
+    return
+  }
+  let share = 1.0 / Double(weights.count)
+  for i in weights.indices {
+    weights[i] = share
+  }
+}
+
 /// Whether `frame` is exactly the leaf `id`.
 private func isLeaf(_ frame: Frame, _ id: PaneId) -> Bool {
   if case .leaf(let leafId) = frame {
     return leafId == id
   }
   return false
+}
+
+/// The first leaf id encountered under `frame` in DFS (child-order) order.
+private func firstLeafOf(_ frame: Frame) -> PaneId {
+  switch frame {
+  case .leaf(let id):
+    return id
+  case .split(_, let children, _):
+    return children.first.map(firstLeafOf) ?? 0
+  }
+}
+
+/// Appends one `Divider` per interior boundary under `frame` (occupying `rect` at
+/// child-index `path`) to `out`, then recurses, mirroring `collectRects`.
+private func collectDividers(
+  _ frame: Frame, _ rect: Rect, _ path: [Int], _ out: inout [PaneTree.Divider]
+) {
+  guard case .split(let orientation, let children, let weights) = frame else {
+    return
+  }
+
+  // Child rects, exactly as collectRects divides them (cumulative weight fractions).
+  let total = weights.reduce(0, +)
+  var childRects: [Rect] = []
+  var offset = 0.0
+  for w in weights {
+    let frac = total > 0 ? w / total : 0
+    let childRect: Rect
+    switch orientation {
+    case .vertical:
+      let cw = rect.w * frac
+      childRect = Rect(x: rect.x + offset, y: rect.y, w: cw, h: rect.h)
+      offset += cw
+    case .horizontal:
+      let ch = rect.h * frac
+      childRect = Rect(x: rect.x, y: rect.y + offset, w: rect.w, h: ch)
+      offset += ch
+    }
+    childRects.append(childRect)
+  }
+
+  // One divider per interior boundary i (between child i and child i + 1).
+  if children.count >= 2 {
+    for i in 0..<(children.count - 1) {
+      let a = childRects[i]
+      let b = childRects[i + 1]
+      let pairSum = weights[i] + weights[i + 1]
+      let fraction = pairSum > 0 ? weights[i] / pairSum : defaultRatio
+      let lineRect: Rect
+      let pairStart: Double
+      let pairSpan: Double
+      switch orientation {
+      case .vertical:
+        lineRect = Rect(x: a.x + a.w, y: rect.y, w: 0, h: rect.h)
+        pairStart = a.x
+        pairSpan = a.w + b.w
+      case .horizontal:
+        lineRect = Rect(x: rect.x, y: a.y + a.h, w: rect.w, h: 0)
+        pairStart = a.y
+        pairSpan = a.h + b.h
+      }
+      out.append(
+        PaneTree.Divider(
+          orientation: orientation, path: path, boundary: i, lineRect: lineRect,
+          pairStart: pairStart, pairSpan: pairSpan,
+          before: firstLeafOf(children[i]), after: firstLeafOf(children[i + 1]),
+          fraction: fraction))
+    }
+  }
+
+  for (idx, child) in children.enumerated() {
+    collectDividers(child, childRects[idx], path + [idx], &out)
+  }
+}
+
+/// Navigates `frame` by the child-index `path` to a split, then reweights the two
+/// adjacent children at `boundary` (see `PaneTree.setPairFraction`). A no-op when
+/// the path does not reach a split or the boundary is out of range.
+private func setPairFractionIn(
+  _ frame: inout Frame, _ path: ArraySlice<Int>, _ boundary: Int, _ leftFraction: Double
+) {
+  guard case .split(let orientation, var children, var weights) = frame else {
+    return
+  }
+
+  if let idx = path.first {
+    guard idx >= 0, idx < children.count else {
+      return
+    }
+    setPairFractionIn(&children[idx], path.dropFirst(), boundary, leftFraction)
+    frame = .split(orientation: orientation, children: children, weights: weights)
+    return
+  }
+
+  guard boundary >= 0, boundary + 1 < weights.count else {
+    return
+  }
+  let pairSum = weights[boundary] + weights[boundary + 1]
+  let clamped = min(max(leftFraction, pairFractionEps), 1.0 - pairFractionEps)
+  weights[boundary] = clamped * pairSum
+  weights[boundary + 1] = (1.0 - clamped) * pairSum
+  frame = .split(orientation: orientation, children: children, weights: weights)
 }

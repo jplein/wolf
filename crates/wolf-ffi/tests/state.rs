@@ -39,9 +39,10 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use wolf_ffi::{
-    wolf_ffi_load_state, wolf_ffi_state_flush, wolf_ffi_state_snapshot_add_tab,
-    wolf_ffi_state_snapshot_add_window, wolf_ffi_state_snapshot_begin,
-    wolf_ffi_state_snapshot_commit,
+    wolf_ffi_load_state, wolf_ffi_state_flush, wolf_ffi_state_layout_commit_to_tab,
+    wolf_ffi_state_layout_push_leaf, wolf_ffi_state_layout_push_split,
+    wolf_ffi_state_snapshot_add_tab, wolf_ffi_state_snapshot_add_window,
+    wolf_ffi_state_snapshot_begin, wolf_ffi_state_snapshot_commit,
 };
 
 /// Generous overall timeout for the coalesced writer to land the committed tree.
@@ -75,6 +76,27 @@ const W1_HEIGHT: f64 = 768.0;
 const W0_TAB0_CWD: &str = "/proj/window-zero/tab-a";
 const W0_TAB1_CWD: &str = "/proj/window-zero/tab-b";
 const W1_TAB0_CWD: &str = "/proj/window-one/only-tab";
+
+// -- Pane-layout push-builder fixture (feature plan §4.2/§4.3) ------------------
+/// The FFI orientation discriminant for a VERTICAL split (0 = horizontal, 1 = vertical).
+const ORIENT_VERTICAL: u8 = 1;
+/// The number of children in the pushed split.
+const TWO_CHILDREN: u32 = 2;
+/// Each child's weight in the pushed 0.5/0.5 split.
+const HALF_WEIGHT: f64 = 0.5;
+/// The root node's weight (always 1.0 in the token stream).
+const ROOT_WEIGHT: f64 = 1.0;
+/// The two leaves' buffer paths in the pushed split (DFS order: left, then right).
+const LEAF_LEFT_PATH: &str = "/proj/window-one/left.md";
+const LEAF_RIGHT_PATH: &str = "/proj/window-one/right.md";
+
+// -- Preview-leaf fixture (feature plan ROUND 2 — preview restore) --------------
+/// The SOURCE markdown path carried by the PREVIEW leaf (preview: true). For a
+/// preview leaf the path is its source file, so `is_preview()` + `leaf_path()`
+/// together let the rebuild recreate a preview of this file.
+const PREVIEW_SOURCE_PATH: &str = "/proj/window-one/preview-source.md";
+/// The editor sibling's path in the preview split (preview: false).
+const EDITOR_SIBLING_PATH: &str = "/proj/window-one/editor.md";
 
 #[test]
 fn snapshot_builder_round_trips_the_whole_tree() {
@@ -175,6 +197,164 @@ fn snapshot_builder_round_trips_the_whole_tree() {
     assert!(
         text.contains("\n  "),
         "state.json must be pretty-printed (newline + indentation), got:\n{text}"
+    );
+
+    // --- 3b. Attach a pane layout to the last tab and round-trip it ----------
+    // Rebuild the SAME 2-window / 3-tab tree, then attach a vertical 2-leaf split
+    // to the LAST tab (window 1, tab 0) via the post-order layout push-builder:
+    // push the two leaves, wrap them in a split, then commit-to-tab. The whole
+    // scratch tree (now carrying the layout) is committed and read back through
+    // the FfiTabState.has_layout()/layout() + FfiPaneNode accessors.
+    wolf_ffi_state_snapshot_begin();
+    wolf_ffi_state_snapshot_add_window(W0_X, W0_Y, W0_WIDTH, W0_HEIGHT);
+    wolf_ffi_state_snapshot_add_tab(W0_TAB0_CWD.to_string(), true);
+    wolf_ffi_state_snapshot_add_tab(W0_TAB1_CWD.to_string(), false);
+    wolf_ffi_state_snapshot_add_window(W1_X, W1_Y, W1_WIDTH, W1_HEIGHT);
+    wolf_ffi_state_snapshot_add_tab(W1_TAB0_CWD.to_string(), false);
+    // Post-order token stream for split[ leaf(LEFT), leaf(RIGHT) ]: leaves first,
+    // then the split that pops the top two. Both leaves are plain EDITOR leaves
+    // (preview: false); the preview case is exercised in step 3c below.
+    wolf_ffi_state_layout_push_leaf(LEAF_LEFT_PATH.to_string(), false, HALF_WEIGHT);
+    wolf_ffi_state_layout_push_leaf(LEAF_RIGHT_PATH.to_string(), false, HALF_WEIGHT);
+    wolf_ffi_state_layout_push_split(ORIENT_VERTICAL, TWO_CHILDREN, ROOT_WEIGHT);
+    wolf_ffi_state_layout_commit_to_tab();
+    wolf_ffi_state_snapshot_commit();
+
+    // Flush + poll the load side until the last tab reports a layout.
+    let layout_deadline = Instant::now() + FLUSH_TIMEOUT;
+    let with_layout = loop {
+        assert!(
+            wolf_ffi_state_flush(),
+            "wolf_ffi_state_flush() must complete after the layout commit"
+        );
+        let restored = wolf_ffi_load_state();
+        let windows = restored.windows();
+        if windows.len() == TWO_WINDOWS
+            && windows[1]
+                .tabs()
+                .last()
+                .is_some_and(|t| t.has_layout())
+        {
+            break restored;
+        }
+        if Instant::now() >= layout_deadline {
+            break restored;
+        }
+        sleep(POLL_INTERVAL);
+    };
+
+    let w1_windows = with_layout.windows();
+    let w1_tabs = w1_windows[1].tabs();
+    let last_tab = &w1_tabs[W1_TABS - 1];
+    assert!(
+        last_tab.has_layout(),
+        "the last tab must report has_layout() == true after the layout commit"
+    );
+
+    // The root node is the vertical split.
+    let root = last_tab.layout();
+    assert!(!root.is_leaf(), "the root pane node is a split, not a leaf");
+    assert_eq!(
+        root.orientation(),
+        ORIENT_VERTICAL,
+        "the root split's orientation discriminant must round-trip as VERTICAL (1)"
+    );
+    assert_eq!(
+        root.child_count(),
+        TWO_CHILDREN,
+        "the root split has two children"
+    );
+    assert_eq!(root.weight(0), HALF_WEIGHT, "child 0 weight round-trips");
+    assert_eq!(root.weight(1), HALF_WEIGHT, "child 1 weight round-trips");
+
+    // Both children are leaves whose paths round-trip in DFS order.
+    let left = root.child(0);
+    assert!(left.is_leaf(), "child 0 is a leaf");
+    assert_eq!(left.leaf_path(), LEAF_LEFT_PATH, "child 0 leaf path");
+    let right = root.child(1);
+    assert!(right.is_leaf(), "child 1 is a leaf");
+    assert_eq!(right.leaf_path(), LEAF_RIGHT_PATH, "child 1 leaf path");
+
+    // --- 3c. A PREVIEW leaf round-trips its is_preview() marker + source path -
+    // Rebuild the SAME tree, but attach a vertical split to the LAST tab whose
+    // FIRST child is a PREVIEW leaf (source path, preview=true) and whose second
+    // child is a plain EDITOR leaf (preview=false). After load, walk the FfiPaneNode
+    // and assert is_preview() true/false per child and that the preview leaf's
+    // leaf_path() is the pushed SOURCE path.
+    wolf_ffi_state_snapshot_begin();
+    wolf_ffi_state_snapshot_add_window(W0_X, W0_Y, W0_WIDTH, W0_HEIGHT);
+    wolf_ffi_state_snapshot_add_tab(W0_TAB0_CWD.to_string(), true);
+    wolf_ffi_state_snapshot_add_tab(W0_TAB1_CWD.to_string(), false);
+    wolf_ffi_state_snapshot_add_window(W1_X, W1_Y, W1_WIDTH, W1_HEIGHT);
+    wolf_ffi_state_snapshot_add_tab(W1_TAB0_CWD.to_string(), false);
+    // Post-order: preview leaf (preview=true), then editor sibling (preview=false),
+    // then the split that pops the top two.
+    wolf_ffi_state_layout_push_leaf(PREVIEW_SOURCE_PATH.to_string(), true, HALF_WEIGHT);
+    wolf_ffi_state_layout_push_leaf(EDITOR_SIBLING_PATH.to_string(), false, HALF_WEIGHT);
+    wolf_ffi_state_layout_push_split(ORIENT_VERTICAL, TWO_CHILDREN, ROOT_WEIGHT);
+    wolf_ffi_state_layout_commit_to_tab();
+    wolf_ffi_state_snapshot_commit();
+
+    // Flush + poll until the last tab's layout reports a preview first child.
+    let preview_deadline = Instant::now() + FLUSH_TIMEOUT;
+    let with_preview = loop {
+        assert!(
+            wolf_ffi_state_flush(),
+            "wolf_ffi_state_flush() must complete after the preview-layout commit"
+        );
+        let restored = wolf_ffi_load_state();
+        let windows = restored.windows();
+        if windows.len() == TWO_WINDOWS
+            && windows[1]
+                .tabs()
+                .last()
+                .is_some_and(|t| t.has_layout() && t.layout().child(0).is_preview())
+        {
+            break restored;
+        }
+        if Instant::now() >= preview_deadline {
+            break restored;
+        }
+        sleep(POLL_INTERVAL);
+    };
+
+    let pv_windows = with_preview.windows();
+    let pv_tab = &pv_windows[1].tabs()[W1_TABS - 1];
+    assert!(
+        pv_tab.has_layout(),
+        "the last tab must report has_layout() == true after the preview commit"
+    );
+    let pv_root = pv_tab.layout();
+    assert_eq!(
+        pv_root.child_count(),
+        TWO_CHILDREN,
+        "the preview split has two children"
+    );
+
+    // Child 0: the PREVIEW leaf — is_preview() true, path is the SOURCE path.
+    let pv_left = pv_root.child(0);
+    assert!(pv_left.is_leaf(), "the preview child is a leaf");
+    assert!(
+        pv_left.is_preview(),
+        "the preview child must report is_preview() == true"
+    );
+    assert_eq!(
+        pv_left.leaf_path(),
+        PREVIEW_SOURCE_PATH,
+        "the preview leaf's path is its SOURCE markdown path"
+    );
+
+    // Child 1: the EDITOR sibling — is_preview() false, its own path.
+    let pv_right = pv_root.child(1);
+    assert!(pv_right.is_leaf(), "the editor sibling is a leaf");
+    assert!(
+        !pv_right.is_preview(),
+        "the editor sibling must report is_preview() == false"
+    );
+    assert_eq!(
+        pv_right.leaf_path(),
+        EDITOR_SIBLING_PATH,
+        "the editor sibling keeps its own buffer path"
     );
 
     // --- 4. Old (flat, pre-tabs) format is rejected -> zero windows ----------

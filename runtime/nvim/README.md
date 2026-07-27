@@ -146,6 +146,17 @@ The module-level helpers (defined regardless of setup ordering) that `wolf-core`
 
 **Residual v1 limitations (accepted, per OD4):** the lockout is best-effort — obscure typed variants / user-defined command abbreviations of the `:tab*` commands (or scripted `nvim_*` tabpage calls) are NOT caught, so a determined user could still create/switch/close a tabpage out from under the front-end. `:tcd`/`:lcd`/`:cd` are intentionally left open. The channel id is passed as a Lua **vararg**, never interpolated.
 
+### Pane-layout rebuild — `_G.wolf_rebuild_layout(spec_json)`
+
+A module-level global (defined alongside the tabpage helpers) that backs the macOS front-end's pane-layout RESTORE: `WolfCore::rebuild_layout` invokes it over `nvim_exec_lua("return wolf_rebuild_layout(...)", [spec_json])`, passing the spec as a Lua **vararg** (a JSON STRING, never interpolated) that the helper `vim.json.decode`s. It realizes a saved pane-split tree in the current tabpage's single starting window and RETURNS the resulting window handles in DFS/leaf order (a malformed / undecodable `spec_json` returns `{}`).
+
+The decoded `spec` is the same shape `PaneLayoutCodec.specJSON` emits: a **leaf** is `{ leaf = true, path = "<abs path or empty>", preview = true|false }`; a **split** is `{ orientation = "v"|"h", weights = {...}, children = {...} }`. A recursive `realize(node)`:
+
+- for a **leaf**: when `preview == true` and `path` is non-empty, recreates a Markdown preview of that SOURCE file IN the current window via `wolf_preview_file(win, path)` (bufadd/bufload/markdown-gate + `nvim_win_set_buf`, converting the window into a preview WITHOUT creating/destroying it, so the handle is intact for DFS correspondence; a missing/non-md source degrades to the inherited buffer but still returns the handle); else when `path` is non-empty, `:edit fnameescape(path)`; else leaves the window on its inherited unnamed buffer — and returns `{ current_win }`;
+- for a **split** of `n` children, creates `n` region windows starting from the current window — each new one placed to the RIGHT (`rightbelow vsplit` for `orientation == "v"`) or BELOW (`rightbelow split` otherwise) of the previous, so regions read left-to-right / top-to-bottom (**child 0 first**) — then recurses into each region in order, gathering the DFS leaf handles.
+
+nvim produces only the WINDOW COUNT + TOPOLOGY + per-window BUFFER; pane SIZES are irrelevant here (the front-end drives them from its own weights via `syncGridSizes`). The **child-0-first** region order is load-bearing: it MUST match the front-end `PaneTree.rebuilt`'s DFS leaf order so each returned handle zips to its rebuilt leaf.
+
 ### Tier-1 open-file mirror — `_G.wolf_setup_open_files(chan)`
 
 Backing the **crash/stall restart's file restore**, `wolf-core` invokes this over RPC after the tabpage setup, passing core's own RPC channel id (see [`src/nvim.rs`](../../crates/wolf-core/src/nvim.rs)'s `setup_open_files`). It notifies core of the file-backed buffers open in the project so the mirror survives nvim death Rust-side, and the front-end can reopen those files after a crash-restart respawns the nvim.

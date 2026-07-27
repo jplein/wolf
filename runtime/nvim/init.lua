@@ -917,6 +917,69 @@ function _G.wolf_create_tabpage(cwd)
 	return vim.api.nvim_get_current_tabpage()
 end
 
+-- Realize a saved pane-split tree (a JSON string, decoded via vim.json.decode) in
+-- the current tabpage's single starting window, and return the resulting window
+-- handles in DFS/leaf order -- the SAME order as the front-end PaneTree.leaves() /
+-- PaneTree.rebuilt, so the front-end can zip each handle to its rebuilt leaf. The
+-- spec shape matches PaneLayoutCodec.specJSON:
+--   * leaf:  { leaf = true, path = "<abs path or empty>", preview = true|false }
+--   * split: { orientation = "h"|"v", weights = {...}, children = {...} }
+-- nvim produces only the window COUNT + TOPOLOGY + per-window BUFFER: a preview leaf
+-- (preview = true, non-empty path) turns its window into a Markdown preview of that
+-- SOURCE file via wolf_preview_file; a non-preview leaf with a non-empty path is
+-- :edit'd; an empty leaf keeps its inherited unnamed buffer. Pane SIZES come later
+-- from the front-end's weights via syncGridSizes.
+function _G.wolf_rebuild_layout(spec_json)
+	local ok, spec = pcall(vim.json.decode, spec_json)
+	if not ok or spec == nil then
+		return {}
+	end
+
+	local function realize(node)
+		if node.leaf then
+			local win = vim.api.nvim_get_current_win()
+			if node.preview and node.path ~= nil and node.path ~= "" then
+				-- Recreate a Markdown preview of the saved source file IN this window
+				-- (bufadd/bufload/markdown-gate + nvim_win_set_buf), converting the
+				-- window into a preview without creating/destroying it (handle intact
+				-- for DFS correspondence). A failure (missing/non-md source) leaves the
+				-- inherited buffer -- the handle is still returned.
+				wolf_preview_file(win, node.path)
+			elseif node.path ~= nil and node.path ~= "" then
+				vim.cmd("edit " .. vim.fn.fnameescape(node.path))
+			end
+			return { win }
+		end
+
+		local children = node.children or {}
+		local n = #children
+		local vertical = node.orientation == "v"
+
+		-- Create n region windows in order, starting from the current window. Each
+		-- new window is placed to the right (vsplit) / below (split) of the previous
+		-- one, so regions read left-to-right / top-to-bottom (child 0 first). Pane
+		-- sizes are irrelevant here (the front-end drives them from its weights).
+		local regions = { vim.api.nvim_get_current_win() }
+		for _ = 2, n do
+			vim.api.nvim_set_current_win(regions[#regions])
+			vim.cmd(vertical and "rightbelow vsplit" or "rightbelow split")
+			regions[#regions + 1] = vim.api.nvim_get_current_win()
+		end
+
+		-- Recurse into each region, gathering the DFS leaf handles in order.
+		local handles = {}
+		for i = 1, n do
+			vim.api.nvim_set_current_win(regions[i])
+			for _, h in ipairs(realize(children[i])) do
+				handles[#handles + 1] = h
+			end
+		end
+		return handles
+	end
+
+	return realize(spec)
+end
+
 -- Close the tabpage named by its STABLE handle. Tabpage NUMBERS renumber as tabs
 -- open/close, so we resolve the handle to its CURRENT number and run `<n>tabclose`
 -- inside a pcall: this swallows a last-tabpage E784 (the front-end never closes
