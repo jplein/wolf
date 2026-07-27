@@ -48,8 +48,7 @@ use wolf_core::{
     rank_buffers, rank_matches_top_n, rank_palette, Appearance, BufInfo, BufferRow, Cmdline,
     Command, CommandMru, CoreConfig, CursorShape, FileSearch, FocusDir, Grid, HighlightTable,
     InputEvent, Key, KeyEvent, LayoutIntent, Liveness, MouseAction, MouseButton, MouseEvent,
-    PaletteRow,
-    PaletteRowKind, PaletteWindow, PaneStatus, PreviewInfo, Pum, ResolvedStyle, Rgb,
+    PaletteRow, PaletteRowKind, PaletteWindow, PaneStatus, PreviewInfo, Pum, ResolvedStyle, Rgb,
     ScrollDirection, ScrollEvent, SplitOrientation, StateStore, TabFiles, TabState, Toast, WakeFn,
     WinInfo, WindowState, WolfCore, WolfState,
 };
@@ -1792,7 +1791,9 @@ impl WolfCoreHandle {
     #[must_use]
     pub fn open_files_for_tabpage(&self, tab: i64) -> FfiOpenFiles {
         let borrow = self.core.borrow();
-        let mirror = borrow.as_ref().and_then(|core| core.open_files_for_tabpage(tab));
+        let mirror = borrow
+            .as_ref()
+            .and_then(|core| core.open_files_for_tabpage(tab));
         FfiOpenFiles::from_tab_files(mirror)
     }
 

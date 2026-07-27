@@ -296,60 +296,60 @@ impl NvimProcess {
     ) -> impl std::future::Future<Output = Result<Vec<BufInfo>, NvimError>> + Send + 'static {
         let nvim = self.nvim.clone();
         async move {
-        let opts = Value::Map(vec![(Value::from("buflisted"), Value::from(1))]);
-        let value = nvim
-            .call(
-                "nvim_call_function",
-                vec![Value::from("getbufinfo"), Value::Array(vec![opts])],
-            )
-            .await
-            .map_err(|e| NvimError::Rpc(e.to_string()))?
-            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+            let opts = Value::Map(vec![(Value::from("buflisted"), Value::from(1))]);
+            let value = nvim
+                .call(
+                    "nvim_call_function",
+                    vec![Value::from("getbufinfo"), Value::Array(vec![opts])],
+                )
+                .await
+                .map_err(|e| NvimError::Rpc(e.to_string()))?
+                .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
 
-        let Some(entries) = value.as_array() else {
-            return Err(NvimError::Rpc(format!(
-                "getbufinfo did not return an array: {value:?}"
-            )));
-        };
+            let Some(entries) = value.as_array() else {
+                return Err(NvimError::Rpc(format!(
+                    "getbufinfo did not return an array: {value:?}"
+                )));
+            };
 
-        let mut buffers = Vec::with_capacity(entries.len());
-        for entry in entries {
-            let Value::Map(fields) = entry else { continue };
-            let mut bufnr: Option<i64> = None;
-            let mut name = String::new();
-            let mut lastused: i64 = 0;
-            let mut changed: i64 = 0;
-            for (k, v) in fields {
-                let Some(key) = k.as_str() else { continue };
-                match key {
-                    "bufnr" => bufnr = v.as_i64(),
-                    "name" => {
-                        if let Some(s) = v.as_str() {
-                            name = s.to_string();
+            let mut buffers = Vec::with_capacity(entries.len());
+            for entry in entries {
+                let Value::Map(fields) = entry else { continue };
+                let mut bufnr: Option<i64> = None;
+                let mut name = String::new();
+                let mut lastused: i64 = 0;
+                let mut changed: i64 = 0;
+                for (k, v) in fields {
+                    let Some(key) = k.as_str() else { continue };
+                    match key {
+                        "bufnr" => bufnr = v.as_i64(),
+                        "name" => {
+                            if let Some(s) = v.as_str() {
+                                name = s.to_string();
+                            }
                         }
-                    }
-                    "lastused" => {
-                        if let Some(n) = v.as_i64() {
-                            lastused = n;
+                        "lastused" => {
+                            if let Some(n) = v.as_i64() {
+                                lastused = n;
+                            }
                         }
-                    }
-                    "changed" => {
-                        if let Some(n) = v.as_i64() {
-                            changed = n;
+                        "changed" => {
+                            if let Some(n) = v.as_i64() {
+                                changed = n;
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
+                let Some(bufnr) = bufnr else { continue };
+                buffers.push(BufInfo {
+                    bufnr,
+                    name,
+                    lastused,
+                    modified: changed != 0,
+                });
             }
-            let Some(bufnr) = bufnr else { continue };
-            buffers.push(BufInfo {
-                bufnr,
-                name,
-                lastused,
-                modified: changed != 0,
-            });
-        }
-        Ok(buffers)
+            Ok(buffers)
         }
     }
 

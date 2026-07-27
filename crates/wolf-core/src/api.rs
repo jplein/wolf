@@ -315,11 +315,13 @@ impl WolfCore {
         let canonical_cwd = std::fs::canonicalize(&cwd).unwrap_or_else(|_| cwd.clone());
         let swap_dir = swap_dir_for(&canonical_cwd);
 
-        let nvim_cfg = NvimConfig::from_env(cfg.init_lua, cwd.clone(), swap_dir, cfg.cols, cfg.rows)
-            .map_err(CoreError::Nvim)?;
+        let nvim_cfg =
+            NvimConfig::from_env(cfg.init_lua, cwd.clone(), swap_dir, cfg.cols, cfg.rows)
+                .map_err(CoreError::Nvim)?;
 
         let nvim = runtime.block_on(async {
-            let proc = nvim::spawn(&nvim_cfg, handler.clone(), liveness.clone(), wake.clone()).await?;
+            let proc =
+                nvim::spawn(&nvim_cfg, handler.clone(), liveness.clone(), wake.clone()).await?;
             proc.ui_attach(cfg.cols, cfg.rows).await?;
             proc.setup_current_file_tracking().await?;
             proc.setup_buffer_tracking().await?;

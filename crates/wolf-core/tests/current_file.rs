@@ -32,11 +32,6 @@ const CURRENT_FILE_TIMEOUT: Duration = FLUSH_TIMEOUT;
 /// Gap between `read_snapshot` polls while waiting for `current_file` to settle.
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
-/// How long to let the initial autocmd emit settle before asserting that an
-/// unnamed buffer reports no current file. Generous so a late emit can't sneak a
-/// false `Some(..)` past the assertion.
-const UNNAMED_SETTLE: Duration = Duration::from_secs(2);
-
 /// Polls `core.read_snapshot().current_file` until it canonical-equals `expected`,
 /// or panics after [`CURRENT_FILE_TIMEOUT`]. Drains pending wakes each iteration
 /// so the wake channel never backs up while we poll.
@@ -103,26 +98,46 @@ fn open_via_ex_command_keystrokes_sets_current_file() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// A core started WITHOUT opening any file sits on an unnamed buffer, so
-/// `current_file` must be `None` (the initial autocmd emit reports an empty
-/// `expand('%:p')`, which maps to `None`).
+/// A genuinely UNNAMED buffer must report `current_file == None`.
+///
+/// The startup buffer is now a NAMED `Untitled.md` (so anonymous-file preview
+/// works), so it reports `Some(.../Untitled.md)`, not `None`. To exercise the
+/// unnamed case we create a genuinely no-name buffer AFTER startup by typing a
+/// raw `:enew<CR>` on the nvim command line. A raw `:enew` does NOT route through
+/// `wolf_new_untitled` (that runs only for the `NewBuffer` `InputEvent` and the
+/// `VimEnter` autocmd), so the new buffer stays `[No Name]`/unnamed and its empty
+/// `expand('%:p')` maps to `None`. We poll until `current_file` transitions from
+/// the startup `Some(.../Untitled.md)` to `None`.
 #[test]
 fn unnamed_buffer_has_no_current_file() {
     let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
 
-    // Give the initial emit time to arrive (if it is going to), draining wakes,
-    // then assert it left current_file as None for the unnamed buffer.
-    let settle_deadline = Instant::now() + UNNAMED_SETTLE;
-    while Instant::now() < settle_deadline {
+    // Create a genuinely unnamed buffer with a RAW `:enew` typed one key at a
+    // time (NOT `InputEvent::NewBuffer`, which would name it `Untitled.md`):
+    // ':' enters command-line mode, `enew` is the ex command, Enter runs it.
+    core.send_input(ch(':'));
+    type_str(&core, "enew");
+    core.send_input(key(Key::Enter));
+
+    // current_file starts at Some(.../Untitled.md) after startup and must become
+    // None once the unnamed `:enew` buffer is current. Poll (draining wakes each
+    // iteration, like `wait_for_current_file`) until it does, bounded by the
+    // shared timeout; panic loudly with the last value seen on timeout.
+    let deadline = Instant::now() + CURRENT_FILE_TIMEOUT;
+    loop {
+        let current = core.read_snapshot().current_file.clone();
+        if current.is_none() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out after {CURRENT_FILE_TIMEOUT:?} waiting for current_file to become \
+                 None for an unnamed `:enew` buffer; last observed: {current:?}"
+            );
+        }
         waiter.drain();
         std::thread::sleep(POLL_INTERVAL);
     }
-
-    let current = core.read_snapshot().current_file.clone();
-    assert_eq!(
-        current, None,
-        "an unnamed/no-name buffer should report no current_file; got {current:?}"
-    );
 
     core.shutdown().expect("shutdown should be Ok");
 }

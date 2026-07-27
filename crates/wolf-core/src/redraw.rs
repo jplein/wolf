@@ -628,7 +628,11 @@ impl RedrawHandler {
                 let files = triple
                     .get(2)
                     .and_then(Value::as_array)
-                    .map(|arr| arr.iter().filter_map(|v| v.as_str().and_then(canon)).collect())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().and_then(canon))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 map.insert(tp, TabFiles { active, files });
             }

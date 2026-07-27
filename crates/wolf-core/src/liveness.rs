@@ -217,7 +217,11 @@ mod tests {
         mark_not_responding(&state, &wake);
 
         assert_eq!(get(&state), Liveness::NotResponding);
-        assert_eq!(wakes(&count), 1, "Alive -> NotResponding must fire one wake");
+        assert_eq!(
+            wakes(&count),
+            1,
+            "Alive -> NotResponding must fire one wake"
+        );
     }
 
     #[test]
