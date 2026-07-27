@@ -264,7 +264,10 @@ final class RestoreSeamTests: XCTestCase {
     let proj = "/Users/alice/projects/notes"
     let splitLayout: SavedPaneNode = .split(
       orientation: .vertical, weights: [0.5, 0.5],
-      children: [.leaf(path: "\(proj)/a.md"), .leaf(path: "\(proj)/b.md")])
+      children: [
+        .leaf(path: "\(proj)/a.md", preview: false),
+        .leaf(path: "\(proj)/b.md", preview: false),
+      ])
 
     let windows = [
       RestoreSeam.SavedWindow(tabs: [

@@ -12,9 +12,10 @@
 //      ONLY the two adjacent children (all other children — and the global
 //      sum-to-1 invariant — are untouched), clamps to (eps, 1-eps), and is a
 //      no-op on an invalid path/boundary.
-//    * A same-orientation sibling split now CARVES the new pane's share from the
-//      TARGET child only (target halves; every other sibling keeps its weight).
-//      A fresh two-child split is still 0.5/0.5.
+//    * A same-orientation sibling split now RE-EQUALIZES the whole row/column
+//      (feature plan ROUND 2: `:vsplit`/`:split` redistribute to equal widths,
+//      reverting round 1's carve-from-target). A fresh two-child split is 0.5/0.5.
+//      The ONLY remaining way to CREATE unequal weights is a drag (setPairFraction).
 //    * A remove RE-NORMALIZES survivors PROPORTIONALLY (relative sizes preserved),
 //      NOT back to equal.
 //    * `dividers(width:height:)` yields one `Divider` per interior boundary with
@@ -129,26 +130,26 @@ final class PaneTreeWeightsTests: XCTestCase {
   // MARK: - setPairFraction: n-ary interior boundary touches ONLY the pair
 
   func testSetPairFractionNaryTouchesOnlyThePair() {
-    // Flat row [P1, P3, P2] (each 1/3 after the same-orientation vsplits... but
-    // note: under the new policy the second vsplit carves P1 -> [0.25, 0.25, 0.5]).
-    // Resize the FIRST boundary (between P1 and P3) to leftFraction 0.75; P2 (the
-    // third child) must be completely untouched.
+    // Flat row [P1, P3, P2], each 1/3 after the same-orientation vsplits (ROUND 2:
+    // the second vsplit RE-EQUALIZES to equal thirds). Resize the FIRST boundary
+    // (between P1 and P3) to leftFraction 0.75; P2 (the third child) must be
+    // completely untouched.
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
-    tree.split(p1, p3, .vertical)  // -> [P1:0.25, P3:0.25, P2:0.5]
+    tree.split(p1, p3, .vertical)  // re-equalize -> [P1, P3, P2] each 1/3
 
     let before = tree.paneRects(width: w, height: h)
-    let p2WidthBefore = rectFor(before, p2).w  // 0.5 * w
+    let p2WidthBefore = rectFor(before, p2).w  // (1/3) * w
 
-    // pairSum for boundary 0 = w[0] + w[1] = 0.25 + 0.25 = 0.5.
-    // leftFraction 0.75 -> w[0] = 0.375, w[1] = 0.125; P2 (w[2]) stays 0.5.
+    // pairSum for boundary 0 = w[0] + w[1] = 1/3 + 1/3 = 2/3.
+    // leftFraction 0.75 -> w[0] = 0.5, w[1] = 1/6; P2 (w[2]) stays 1/3.
     tree.setPairFraction(path: [], boundary: 0, leftFraction: 0.75)
 
     let rects = tree.paneRects(width: w, height: h)
-    assertRect(rectFor(rects, p1), 0.0, 0.0, 0.375 * w, h, "P1 = 0.75 of the 0.5 pair")
-    assertRect(rectFor(rects, p3), 0.375 * w, 0.0, 0.125 * w, h, "P3 = 0.25 of the 0.5 pair")
+    assertRect(rectFor(rects, p1), 0.0, 0.0, 0.5 * w, h, "P1 = 0.75 of the 2/3 pair")
+    assertRect(rectFor(rects, p3), 0.5 * w, 0.0, (1.0 / 6.0) * w, h, "P3 = 0.25 of the 2/3 pair")
     assertRect(
-      rectFor(rects, p2), 0.5 * w, 0.0, p2WidthBefore, h,
+      rectFor(rects, p2), (2.0 / 3.0) * w, 0.0, p2WidthBefore, h,
       "the third child P2 is untouched by a resize of the P1/P3 boundary")
     XCTAssertTrue(approx(totalArea(rects), w * h), "the global sum stays 1 (rects tile bounds)")
   }
@@ -225,66 +226,71 @@ final class PaneTreeWeightsTests: XCTestCase {
     }
   }
 
-  // MARK: - split weight PRESERVATION: only the target child halves
+  // MARK: - split RE-EQUALIZATION: a same-orientation split redistributes the row
 
-  func testSameOrientationSplitCarvesFromTargetOnly() {
+  func testSameOrientationSplitReEqualizesRow() {
     // Resize [P1, P2] to 0.8/0.2, THEN same-orientation-split the resized P1.
-    // NEW policy: the new pane's share is carved from P1 (the target) only ->
-    // P1 and P4 each 0.4; P2 keeps its resized 0.2. (Old policy re-equalized to
-    // thirds — that would blow away the user's 0.8/0.2 resize.)
+    // ROUND 2 policy: `:vsplit` RE-EQUALIZES the whole row, so the prior 0.8/0.2
+    // drag is DISCARDED and all three columns become equal thirds. (This reverts
+    // round 1's carve-from-target, matching the user's "splits redistribute to
+    // equal widths" follow-up.)
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
     tree.setPairFraction(path: [], boundary: 0, leftFraction: 0.8)
-    tree.split(p1, p4, .vertical)  // insert P4 after P1 -> [P1, P4, P2]
+    tree.split(p1, p4, .vertical)  // insert P4 after P1 -> [P1, P4, P2], re-equalized
 
     XCTAssertEqual(tree.leaves(), [p1, p4, p2], "P4 inserted after the target P1")
     let rects = tree.paneRects(width: w, height: h)
-    assertRect(rectFor(rects, p1), 0.0, 0.0, 0.4 * w, h, "P1 halves to 0.4")
-    assertRect(rectFor(rects, p4), 0.4 * w, 0.0, 0.4 * w, h, "P4 takes the other 0.4")
+    assertRect(rectFor(rects, p1), 0.0, 0.0, w / 3.0, h, "P1 re-equalizes to a third")
+    assertRect(rectFor(rects, p4), w / 3.0, 0.0, w / 3.0, h, "P4 re-equalizes to a third")
     assertRect(
-      rectFor(rects, p2), 0.8 * w, 0.0, 0.2 * w, h,
-      "the non-target sibling P2 keeps its user-resized 0.2 weight")
+      rectFor(rects, p2), 2.0 * w / 3.0, 0.0, w / 3.0, h,
+      "the pre-split 0.8/0.2 drag is discarded — P2 re-equalizes to a third too")
     XCTAssertTrue(approx(totalArea(rects), w * h), "weights still sum to 1")
   }
 
-  func testSplittingOneSiblingKeepsTheResizedSiblingsWeight() {
+  func testSplittingSiblingReEqualizesRow() {
     // Resize [P1, P2] to 0.8/0.2, then split the OTHER (non-resized) child P2.
-    // P2 halves to 0.1/0.1; the resized P1 keeps 0.8 exactly.
+    // ROUND 2 policy: the same-orientation split RE-EQUALIZES the whole row, so the
+    // resized P1 does NOT keep 0.8 — every column becomes an equal third.
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
     tree.setPairFraction(path: [], boundary: 0, leftFraction: 0.8)
-    tree.split(p2, p3, .vertical)  // insert P3 after P2 -> [P1, P2, P3]
+    tree.split(p2, p3, .vertical)  // insert P3 after P2 -> [P1, P2, P3], re-equalized
 
     XCTAssertEqual(tree.leaves(), [p1, p2, p3], "P3 inserted after the target P2")
     let rects = tree.paneRects(width: w, height: h)
     assertRect(
-      rectFor(rects, p1), 0.0, 0.0, 0.8 * w, h,
-      "the resized sibling P1 keeps its 0.8 weight across a split of another child")
-    assertRect(rectFor(rects, p2), 0.8 * w, 0.0, 0.1 * w, h, "P2 halves to 0.1")
-    assertRect(rectFor(rects, p3), 0.9 * w, 0.0, 0.1 * w, h, "P3 takes the other 0.1")
+      rectFor(rects, p1), 0.0, 0.0, w / 3.0, h,
+      "the resized P1 re-equalizes to a third (its 0.8 drag is discarded, NOT kept)")
+    assertRect(rectFor(rects, p2), w / 3.0, 0.0, w / 3.0, h, "P2 re-equalizes to a third")
+    assertRect(rectFor(rects, p3), 2.0 * w / 3.0, 0.0, w / 3.0, h, "P3 re-equalizes to a third")
   }
 
   // MARK: - remove weight PRESERVATION: survivors keep RELATIVE sizes
 
   func testRemoveRenormalizesProportionallyNotEqually() {
-    // Row [P1, P4, P2] with weights [0.4, 0.4, 0.2] (from the target-carve split
-    // above). Remove the middle P4; survivors [P1, P2] carry [0.4, 0.2], which
-    // renormalize PROPORTIONALLY to [2/3, 1/3] — NOT back to 0.5/0.5.
+    // REMOVE stays PROPORTIONAL even though SPLIT re-equalizes (ROUND 2). Since a
+    // same-orientation split re-equalizes, unequal weights come ONLY from a DRAG:
+    // build equal thirds [P1, P4, P2], then drag the FIRST boundary (P1/P4) to
+    // leftFraction 0.75 of the (1/3 + 1/3) = 2/3 pair -> P1=0.5, P4=1/6; P2 stays
+    // 1/3. Remove the middle P4; survivors [P1, P2] carry [0.5, 1/3], which
+    // renormalize PROPORTIONALLY to [0.6, 0.4] — NOT back to 0.5/0.5.
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
-    tree.setPairFraction(path: [], boundary: 0, leftFraction: 0.8)
-    tree.split(p1, p4, .vertical)  // -> [P1:0.4, P4:0.4, P2:0.2]
+    tree.split(p1, p4, .vertical)  // re-equalize -> [P1, P4, P2] each 1/3
+    tree.setPairFraction(path: [], boundary: 0, leftFraction: 0.75)  // -> [0.5, 1/6, 1/3]
     tree.remove(p4)
 
     XCTAssertEqual(tree.leaves(), [p1, p2], "removing the middle leaves [P1, P2]")
     let rects = tree.paneRects(width: w, height: h)
     assertRect(
-      rectFor(rects, p1), 0.0, 0.0, (2.0 / 3.0) * w, h,
-      "P1:P2 relative sizes 0.4:0.2 are PRESERVED (proportional renormalize to 2/3)")
+      rectFor(rects, p1), 0.0, 0.0, 0.6 * w, h,
+      "P1:P2 relative sizes 0.5:(1/3) are PRESERVED (proportional renormalize to 0.6)")
     assertRect(
-      rectFor(rects, p2), (2.0 / 3.0) * w, 0.0, (1.0 / 3.0) * w, h,
-      "P2 renormalizes to 1/3 (NOT re-equalized to 0.5)")
-    // Explicitly reject the OLD re-equalization policy.
+      rectFor(rects, p2), 0.6 * w, 0.0, 0.4 * w, h,
+      "P2 renormalizes to 0.4 (NOT re-equalized to 0.5)")
+    // Explicitly reject the equalization policy for REMOVE.
     XCTAssertFalse(
       approx(rectFor(rects, p1).w, halfW), "survivors must NOT re-equalize to 50/50")
   }
@@ -374,30 +380,34 @@ final class PaneTreeWeightsTests: XCTestCase {
   // MARK: - dividers(): flat n-ary row (per-pair start/span + before/after)
 
   func testDividersForFlatRow() {
-    // Row [P1, P3, P2] with weights [0.25, 0.25, 0.5] (widths 25/25/50).
+    // Row [P1, P3, P2] with weights [1/3, 1/3, 1/3] (ROUND 2: the same-orientation
+    // vsplit RE-EQUALIZES to equal thirds; widths ~33.33 each).
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
     tree.split(p1, p3, .vertical)
 
+    let third = w / 3.0  // ~33.333: one equal column width.
+    let twoThirds = 2.0 * w / 3.0  // ~66.667: two equal columns.
+
     let dividers = tree.dividers(width: w, height: h)
     XCTAssertEqual(dividers.count, 2, "a flat 3-way row has 2 interior dividers")
 
-    // Boundary 0: between P1 (0..25) and P3 (25..50). Pair spans x 0..50.
+    // Boundary 0: between P1 (0..1/3) and P3 (1/3..2/3). Pair spans x 0..2/3.
     let d0 = divider(dividers, path: [], boundary: 0)
     XCTAssertEqual(d0.orientation, .vertical, "row dividers are vertical")
-    XCTAssertTrue(approx(d0.lineRect.x, 25.0), "divider 0 sits at the P1/P3 boundary x = 25")
+    XCTAssertTrue(approx(d0.lineRect.x, third), "divider 0 sits at the P1/P3 boundary x = w/3")
     XCTAssertTrue(approx(d0.pairStart, 0.0), "pair 0 starts at x = 0")
-    XCTAssertTrue(approx(d0.pairSpan, 50.0), "pair 0 spans P1+P3 = 50")
-    XCTAssertTrue(approx(d0.fraction, 0.5), "0.25 / (0.25 + 0.25) = 0.5")
+    XCTAssertTrue(approx(d0.pairSpan, twoThirds), "pair 0 spans P1+P3 = 2w/3")
+    XCTAssertTrue(approx(d0.fraction, 0.5), "(1/3) / (1/3 + 1/3) = 0.5")
     XCTAssertEqual(d0.before, p1, "divider 0 is between leaf P1...")
     XCTAssertEqual(d0.after, p3, "...and leaf P3")
 
-    // Boundary 1: between P3 (25..50) and P2 (50..100). Pair spans x 25..100.
+    // Boundary 1: between P3 (1/3..2/3) and P2 (2/3..1). Pair spans x 1/3..1.
     let d1 = divider(dividers, path: [], boundary: 1)
-    XCTAssertTrue(approx(d1.lineRect.x, 50.0), "divider 1 sits at the P3/P2 boundary x = 50")
-    XCTAssertTrue(approx(d1.pairStart, 25.0), "pair 1 starts at x = 25 (left edge of P3)")
-    XCTAssertTrue(approx(d1.pairSpan, 75.0), "pair 1 spans P3+P2 = 75")
-    XCTAssertTrue(approx(d1.fraction, 0.25 / 0.75), "0.25 / (0.25 + 0.5) = 1/3")
+    XCTAssertTrue(approx(d1.lineRect.x, twoThirds), "divider 1 sits at the P3/P2 boundary x = 2w/3")
+    XCTAssertTrue(approx(d1.pairStart, third), "pair 1 starts at x = w/3 (left edge of P3)")
+    XCTAssertTrue(approx(d1.pairSpan, twoThirds), "pair 1 spans P3+P2 = 2w/3")
+    XCTAssertTrue(approx(d1.fraction, 0.5), "(1/3) / (1/3 + 1/3) = 0.5")
     XCTAssertEqual(d1.before, p3, "divider 1 is between leaf P3...")
     XCTAssertEqual(d1.after, p2, "...and leaf P2")
   }

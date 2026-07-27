@@ -80,14 +80,21 @@ pub enum PaneOrientation {
 ///
 /// Serialized as an internally-tagged enum (`"type": "leaf"` / `"type": "split"`),
 /// mirroring the front-end `SavedPaneNode`. A `Leaf`'s `path` is `""` for an
-/// unnamed buffer.
+/// unnamed buffer; when `preview` is `true` the pane is a Markdown preview and
+/// `path` is the SOURCE Markdown file's ABS path (restored via `wolf_preview_file`,
+/// not `:edit`). `preview` is `#[serde(default)]` so an old v1 file without it loads
+/// with `preview = false`.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PaneNode {
-    /// A single pane showing the buffer at `path` (`""` for an unnamed buffer).
+    /// A single pane showing the buffer at `path` (`""` for an unnamed buffer), or a
+    /// Markdown preview of the source file at `path` when `preview` is `true`.
     Leaf {
         /// The absolute buffer path, or `""` for an unnamed buffer.
         path: String,
+        /// Whether this leaf is a Markdown preview of the source file at `path`.
+        #[serde(default)]
+        preview: bool,
     },
     /// An n-ary split of `children` along `orientation`, with parallel per-child
     /// `weights`.

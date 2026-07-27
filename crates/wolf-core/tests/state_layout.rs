@@ -20,6 +20,9 @@
 //!   * TOLERANCE: a file carrying an unknown extra field still loads.
 //!   * ON-DISK SHAPE: orientation serializes as `"horizontal"` / `"vertical"` and
 //!     each node's tag is `"type": "leaf"` / `"type": "split"`.
+//!   * PREVIEW (ROUND 2): a leaf's `preview: bool` round-trips (`"preview": true`
+//!     on disk for a preview leaf); a v1 leaf object with NO `preview` key loads as
+//!     `preview: false` (the field is `#[serde(default)]`; STATE_VERSION stays 1).
 //!
 //! Needs NO nvim and no network: everything is driven through explicit `tempfile`
 //! tempdirs passed to `StateStore::open` / `load_state`.
@@ -50,10 +53,31 @@ fn write(path: &Path, contents: &str) {
     std::fs::write(path, contents).unwrap_or_else(|e| panic!("writing {}: {e}", path.display()));
 }
 
-/// A leaf pane node bound to `path`.
+/// A (non-preview) leaf pane node bound to `path`.
 fn leaf(path: &str) -> PaneNode {
     PaneNode::Leaf {
         path: path.to_string(),
+        preview: false,
+    }
+}
+
+/// A PREVIEW leaf pane node whose `path` is its SOURCE markdown file (ROUND 2 —
+/// preview restore). `preview: true` marks it so `wolf_rebuild_layout` recreates a
+/// preview of the source instead of `:edit`-ing a blank buffer.
+fn preview_leaf(path: &str) -> PaneNode {
+    PaneNode::Leaf {
+        path: path.to_string(),
+        preview: true,
+    }
+}
+
+/// A vertical split of an editor leaf and a PREVIEW leaf that share the SAME source
+/// markdown file (the canonical "editor + live preview of this file" layout).
+fn editor_and_preview_split(path: &str) -> PaneNode {
+    PaneNode::Split {
+        orientation: PaneOrientation::Vertical,
+        weights: vec![0.5, 0.5],
+        children: vec![leaf(path), preview_leaf(path)],
     }
 }
 
@@ -265,5 +289,117 @@ fn unknown_extra_field_is_tolerated() {
         tab0.layout,
         Some(two_child_split()),
         "the layout parses despite the unknown sibling fields"
+    );
+}
+
+// =========================================================================
+// PREVIEW round-trip: a preview leaf preserves `preview: true` (ROUND 2)
+// =========================================================================
+
+#[test]
+fn preview_leaf_round_trips_preserving_the_preview_flag() {
+    let dir = tempdir().expect("create temp state dir");
+    let tree = WolfState {
+        windows: vec![WindowState {
+            x: WIN_X,
+            y: WIN_Y,
+            width: WIN_WIDTH,
+            height: WIN_HEIGHT,
+            tabs: vec![tab("/proj", Some(editor_and_preview_split("/proj/a.md")))],
+        }],
+    };
+
+    let store = StateStore::open(dir.path());
+    store.set_snapshot(tree.clone());
+    assert!(
+        store.flush(FLUSH_TIMEOUT),
+        "flush after set_snapshot should complete within {FLUSH_TIMEOUT:?}"
+    );
+
+    let loaded = load_state(dir.path()).expect("load_state should parse the written file");
+    assert_eq!(
+        loaded, tree,
+        "the whole tree (including the preview leaf's preview flag) must round-trip"
+    );
+
+    // Spot-check the split's children: editor (preview: false) + preview (true).
+    match &loaded.windows[0].tabs[0].layout {
+        Some(PaneNode::Split { children, .. }) => {
+            assert_eq!(children.len(), 2, "the split has two children");
+            assert_eq!(
+                children[0],
+                leaf("/proj/a.md"),
+                "the editor child keeps preview: false"
+            );
+            assert_eq!(
+                children[1],
+                preview_leaf("/proj/a.md"),
+                "the preview child keeps preview: true and the SAME source path"
+            );
+        }
+        other => panic!("expected a split layout, got {other:?}"),
+    }
+
+    // On-disk shape: the preview leaf serializes `"preview": true`.
+    let text = read(&dir.path().join(STATE_FILE_NAME));
+    assert!(
+        text.contains("\"preview\": true"),
+        "a preview leaf must serialize with `\"preview\": true`, got:\n{text}"
+    );
+}
+
+// =========================================================================
+// Back-compat: a v1 layout leaf with NO `preview` key loads as preview: false
+// =========================================================================
+
+#[test]
+fn v1_layout_leaf_without_preview_defaults_to_false() {
+    let dir = tempdir().expect("create temp state dir");
+    let path = dir.path().join(STATE_FILE_NAME);
+
+    // A hand-crafted v1 file whose leaf objects carry `type`/`path` but NO `preview`
+    // key (the round-1 shape). `preview` is `#[serde(default)]`, so each leaf must
+    // load with `preview: false` — and the file must NOT be rejected (still v1, no
+    // version bump).
+    let no_preview = r#"{
+  "version": 1,
+  "windows": [
+    {
+      "x": 128.0,
+      "y": 64.0,
+      "width": 1180.0,
+      "height": 760.0,
+      "tabs": [
+        {
+          "cwd": "/proj",
+          "sidebar_visible": true,
+          "layout": {
+            "type": "split",
+            "orientation": "vertical",
+            "weights": [0.5, 0.5],
+            "children": [
+              { "type": "leaf", "path": "/proj/a.md" },
+              { "type": "leaf", "path": "/proj/b.md" }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
+"#;
+    write(&path, no_preview);
+
+    let loaded =
+        load_state(dir.path()).expect("a v1 layout without `preview` keys must still load");
+    assert_eq!(
+        loaded.windows.len(),
+        1,
+        "the v1 file is accepted, not rejected (still version 1)"
+    );
+    assert_eq!(
+        loaded.windows[0].tabs[0].layout,
+        Some(two_child_split()),
+        "a leaf with no on-disk `preview` field must default to preview: false"
     );
 }

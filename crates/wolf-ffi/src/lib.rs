@@ -733,6 +733,9 @@ mod ffi {
 
         // Whether this node is a leaf (vs. a split).
         fn is_leaf(&self) -> bool;
+        // Whether this leaf is a Markdown preview (its `leaf_path` is the source
+        // file's abs path, restored via `wolf_preview_file`); false for a split.
+        fn is_preview(&self) -> bool;
         // For a leaf: the buffer path ("" for an unnamed buffer); "" for a split.
         fn leaf_path(&self) -> String;
         // For a split: the orientation discriminant (0 = horizontal, 1 = vertical);
@@ -763,10 +766,11 @@ mod ffi {
         // Pushes a tab (its cwd + sidebar visibility) onto the most recently
         // added window. A defensive no-op when no window has been added yet.
         fn wolf_ffi_state_snapshot_add_tab(cwd: String, sidebar_visible: bool);
-        // Pushes a LEAF node (buffer `path`, weighing `weight` within its parent)
-        // onto the layout push-builder stack. Part of the post-order token replay
-        // that assembles a tab's pane-split layout across the scalar bridge.
-        fn wolf_ffi_state_layout_push_leaf(path: String, weight: f64);
+        // Pushes a LEAF node (buffer `path`, a Markdown preview of `path` when
+        // `preview` is true, weighing `weight` within its parent) onto the layout
+        // push-builder stack. Part of the post-order token replay that assembles a
+        // tab's pane-split layout across the scalar bridge.
+        fn wolf_ffi_state_layout_push_leaf(path: String, preview: bool, weight: f64);
         // Pops the top `child_count` layout-stack nodes, wraps them into a SPLIT
         // (`orientation` 0 = horizontal, 1 = vertical), and pushes it back on
         // (weighing `weight` within its parent; the root split's weight is 1.0).
@@ -1383,6 +1387,7 @@ impl FfiTabState {
         FfiPaneNode {
             node: self.layout.clone().unwrap_or(PaneNode::Leaf {
                 path: String::new(),
+                preview: false,
             }),
         }
     }
@@ -1412,11 +1417,21 @@ impl FfiPaneNode {
         matches!(self.node, PaneNode::Leaf { .. })
     }
 
+    /// Whether this leaf is a Markdown preview (its `leaf_path` is the source file's
+    /// abs path, restored via `wolf_preview_file`); `false` for a split.
+    #[must_use]
+    pub fn is_preview(&self) -> bool {
+        match &self.node {
+            PaneNode::Leaf { preview, .. } => *preview,
+            PaneNode::Split { .. } => false,
+        }
+    }
+
     /// For a leaf: the buffer path (`""` for an unnamed buffer); `""` for a split.
     #[must_use]
     pub fn leaf_path(&self) -> String {
         match &self.node {
-            PaneNode::Leaf { path } => path.clone(),
+            PaneNode::Leaf { path, .. } => path.clone(),
             PaneNode::Split { .. } => String::new(),
         }
     }
@@ -1463,6 +1478,7 @@ impl FfiPaneNode {
         FfiPaneNode {
             node: node.unwrap_or(PaneNode::Leaf {
                 path: String::new(),
+                preview: false,
             }),
         }
     }
@@ -1567,13 +1583,14 @@ fn layout_stack() -> &'static Mutex<Vec<(PaneNode, f64)>> {
     LAYOUT_STACK.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-/// Pushes a LEAF node (buffer `path`, weighing `weight` within its parent split)
-/// onto the layout push-builder stack.
-pub fn wolf_ffi_state_layout_push_leaf(path: String, weight: f64) {
+/// Pushes a LEAF node (buffer `path`, a Markdown preview of `path` when `preview`
+/// is true, weighing `weight` within its parent split) onto the layout
+/// push-builder stack.
+pub fn wolf_ffi_state_layout_push_leaf(path: String, preview: bool, weight: f64) {
     layout_stack()
         .lock()
         .expect("layout stack mutex poisoned")
-        .push((PaneNode::Leaf { path }, weight));
+        .push((PaneNode::Leaf { path, preview }, weight));
 }
 
 /// Pops the top `child_count` layout-stack nodes (in DFS push order), wraps them

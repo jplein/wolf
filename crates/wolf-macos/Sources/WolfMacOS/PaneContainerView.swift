@@ -1350,19 +1350,36 @@ final class PaneContainerView: NSView {
   /// excluded — it lives outside `tree`, so it never appears in `tree.layout()`.
   func layoutSnapshot() -> SavedPaneNode? {
     guard tree.leaves().count > 1 else { return nil }
-    return PaneLayoutCodec.encode(tree.layout(), paths: leafPaths())
+    let (paths, previewIds) = leafPaths()
+    return PaneLayoutCodec.encode(tree.layout(), paths: paths, previews: previewIds)
   }
 
-  /// Maps each editor leaf id to its bound buffer's ABSOLUTE path (via the bound
-  /// grid → `pane_status_for_grid().abs_path()`); an unresolved / unnamed leaf maps
-  /// to `""`.
-  private func leafPaths() -> [PaneId: String] {
-    var paths: [PaneId: String] = [:]
-    for id in tree.leaves() {
-      guard let grid = panes[id]?.boundGrid else { continue }
-      paths[id] = handle.pane_status_for_grid(grid).abs_path().toString()
+  /// Maps each editor leaf id to the ABSOLUTE path to persist plus the set of leaf
+  /// ids that are Markdown PREVIEWS. A preview leaf (its bound window is in the
+  /// `handle.previews()` snapshot, keyed by window like `syncPreviewWebViews`) maps
+  /// to its SOURCE Markdown file's abs path so restore can recreate the preview via
+  /// `wolf_preview_file`; a plain editor leaf maps to its bound buffer's abs path
+  /// (via the bound grid → `pane_status_for_grid().abs_path()`). An unresolved /
+  /// unnamed leaf maps to `""`.
+  private func leafPaths() -> (paths: [PaneId: String], previewIds: Set<PaneId>) {
+    // `previews()` yields borrowed refs valid only for this loop; snapshot the
+    // preview-window → source-path map up front.
+    var previewByWin: [Int64: String] = [:]
+    for preview in handle.previews() {
+      previewByWin[preview.win()] = preview.source_path().toString()
     }
-    return paths
+
+    var paths: [PaneId: String] = [:]
+    var previewIds: Set<PaneId> = []
+    for id in tree.leaves() {
+      if let win = panes[id]?.win, let source = previewByWin[win] {
+        paths[id] = source
+        previewIds.insert(id)
+      } else if let grid = panes[id]?.boundGrid {
+        paths[id] = handle.pane_status_for_grid(grid).abs_path().toString()
+      }
+    }
+    return (paths, previewIds)
   }
 
   /// Requests that this view's pane layout be rebuilt from `saved` once its first

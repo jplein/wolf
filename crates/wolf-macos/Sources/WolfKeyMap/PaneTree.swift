@@ -29,14 +29,14 @@
 //  STRICTLY positive cross-axis overlap; `leaves()`/`paneRects()` are a stable DFS
 //  order; `.vertical` divides WIDTH, `.horizontal` divides HEIGHT.
 //
-//  The WEIGHT POLICY and the DIVIDER API are macOS-only additions (gnome
-//  re-equalizes on every split/remove and has no weight-mutation API). Here a
-//  same-orientation split CARVES the new pane's share from the TARGET child only
-//  (a fresh two-child split is still 0.5/0.5); a remove RE-NORMALIZES survivors
-//  PROPORTIONALLY (relative sizes preserved, NOT re-equalized). This lets a
-//  user-resized layout survive in-session sibling splits/removes and, together with
-//  `dividers()` / `setPairFraction()` / `rebuilt(from:firstLeafId:)`, drives
-//  divider drag-to-resize and full layout persistence.
+//  The WEIGHT POLICY and the DIVIDER API are macOS-only additions. A
+//  same-orientation split RE-EQUALIZES the row/column (each child gets `1/n` — this
+//  MATCHES the gnome port: `:vsplit`/`:split` redistributes to equal shares); a
+//  fresh two-child split is 0.5/0.5. The ONE remaining divergence from gnome is
+//  REMOVE: it RE-NORMALIZES survivors PROPORTIONALLY (relative sizes preserved, NOT
+//  re-equalized), so a user-resized layout survives an adjacent pane closing.
+//  Together with `dividers()` / `setPairFraction()` / `rebuilt(from:firstLeafId:)`
+//  these drive divider drag-to-resize and full layout persistence.
 //
 
 import Foundation
@@ -217,7 +217,7 @@ public final class PaneTree {
   ///
   /// If the split's `orientation` MATCHES the frame that owns `target`, `newPane`
   /// is inserted as a FLAT sibling immediately AFTER `target` and that row/column
-  /// re-equalizes. Otherwise `target` is wrapped in a new two-child sub-frame
+  /// RE-EQUALIZES (each child `1/n`). Otherwise `target` is wrapped in a new two-child sub-frame
   /// `[target, newPane]` (NEST), with `target` first. The root special case (a
   /// single leaf) becomes a two-child split. No-op if `target` is not a leaf.
   public func split(_ target: PaneId, _ newPane: PaneId, _ orientation: Orientation) {
@@ -364,9 +364,9 @@ private func frameLayout(_ frame: Frame) -> PaneLayout {
 }
 
 /// Recursively splits the leaf matching `target` within a split `frame`. A
-/// same-orientation split inserts a flat sibling after `target` (carving its share
-/// from the target child); a perpendicular split wraps `target` in a new two-child
-/// sub-frame. Returns `true` if a matching leaf was found and split.
+/// same-orientation split inserts a flat sibling after `target` and re-equalizes the
+/// row/column (each child `1/n`); a perpendicular split wraps `target` in a new
+/// two-child sub-frame. Returns `true` if a matching leaf was found and split.
 private func splitIn(
   _ frame: inout Frame, _ target: PaneId, _ newPane: PaneId, _ orientation: Orientation
 ) -> Bool {
@@ -376,14 +376,12 @@ private func splitIn(
 
   if let i = children.firstIndex(where: { isLeaf($0, target) }) {
     if own == orientation {
-      // FLAT: insert the new pane immediately after the target, CARVING its share
-      // from the target child ONLY (each half of the target's old weight). Every
-      // other sibling keeps its (possibly user-resized) weight — the macOS
-      // weight-preserving divergence from the gnome re-equalize.
-      let half = weights[i] / 2.0
-      weights[i] = half
-      weights.insert(half, at: i + 1)
+      // FLAT: insert the new pane immediately after the target, then RE-EQUALIZE the
+      // whole row/column to `1/n` each — `:vsplit`/`:split` redistributes to equal
+      // shares (matches the gnome port).
       children.insert(.leaf(newPane), at: i + 1)
+      weights.insert(0.0, at: i + 1)
+      equalize(&weights)
     } else {
       // NEST: wrap the target leaf in a new perpendicular two-child frame.
       children[i] = .split(
@@ -547,6 +545,19 @@ private func yOverlap(_ a: Rect, _ b: Rect) -> Bool {
 /// Whether `a` and `b` overlap with strictly positive extent on the X axis.
 private func xOverlap(_ a: Rect, _ b: Rect) -> Bool {
   max(a.x, b.x) < min(a.x + a.w, b.x + b.w) - neighborEps
+}
+
+/// Re-equalizes `weights` so each of the `n` children gets `1/n` (a no-op on an
+/// empty vector). Used by the same-orientation `splitIn` branch to redistribute a
+/// row/column to equal shares on `:vsplit`/`:split`.
+private func equalize(_ weights: inout [Double]) {
+  guard !weights.isEmpty else {
+    return
+  }
+  let share = 1.0 / Double(weights.count)
+  for i in weights.indices {
+    weights[i] = share
+  }
 }
 
 /// Whether `frame` is exactly the leaf `id`.

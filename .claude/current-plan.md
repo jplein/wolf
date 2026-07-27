@@ -1,6 +1,198 @@
 # Plan: macOS pane resize by mouse + full pane-layout persistence
 
-## Status: COMPLETE ✅ (all green, reviewer-approved, docs synced) — UNCOMMITTED
+# ROUND 2 (user follow-up, committed round 1)
+
+## Status: ROUND 2 COMPLETE ✅ (all green, reviewer-approved, docs synced) — UNCOMMITTED
+
+Round-2 final: all targets green; reviewer APPROVED (A–D); docs synced + prettier-clean
+(Sources/README.md reformatted). UNCOMMITTED, includes regenerated wolf-ffi bindings
+(push_leaf preview arg + FfiPaneNode$is_preview) that MUST be committed together.
+
+Round-2 progress:
+- [x] Architect plan (authoritative round-2 plan appended below).
+- [x] Tests (test-writer). Modified: PaneLayoutCodecTests, PaneTreeWeightsTests, PaneTreeTests,
+      RestoreSeamTests, state_layout.rs, wolf-ffi/tests/state.rs, rebuild_layout.rs. Kept the
+      FULL preview-binding assertion in rebuild_layout (basename-matched via previews(), bounded
+      by FLUSH_TIMEOUT — preview.rs proves the same helper is reliable). AUDIT found + flipped
+      TWO extra carve-weight cases beyond the named list: testSetPairFractionNaryTouchesOnlyThePair
+      + testDividersForFlatRow (both now thirds). API shapes the coder must match are recorded
+      in the round-2 plan's tests notes.
+- [x] Implementation + tests pass (coder). ALL GREEN: WolfKeyMapTests, state_layout,
+      rebuild_layout, ffi state/bridge_smoke/pane_status PASS; 62/62 regression; lint (clippy,
+      rustfmt_core, rustfmt_ffi, swift_format) PASS; bindings regenerated (UNCOMMITTED, carry
+      push_leaf(path,preview,weight) + FfiPaneNode$is_preview); //crates/wolf-macos:Wolf builds.
+      No test edits needed. Docs NOT touched (technical-writer step).
+- [x] Review (reviewer) — APPROVED all areas A–D. DFS/preview-slot correspondence verified
+      (leaf branch always returns { win }; wolf_preview_file only nvim_win_set_buf, no create/
+      destroy). Back-compat, deleted-source graceful, rebuilt-ignores-split-policy all confirmed.
+      Flagged stale doc: PaneTree.swift:367 splitIn free-helper comment still says "carving its
+      share from the target child" (contradicts code — must flip to re-equalize).
+- [ ] Docs (technical-writer). Stale: PaneTree.swift:367 splitIn comment; Sources/README
+      (layoutSnapshot signature paths:previews: + split policy); wolf-core/src/README (+preview
+      field); wolf-ffi READMEs (+is_preview, push_leaf preview arg); PaneTree/PaneContainerView
+      headers; runtime/nvim/README (preview rebuild); Tests READMEs; architecture.md (split
+      re-equalizes; previews persist).
+- [x] Docs (technical-writer) — DONE. Fixed PaneTree.swift:367 comment + 10 READMEs/
+      architecture.md; prettier reformatted Sources/README.md (rest clean).
+
+Round 1 was COMMITTED by the user. Two follow-up items:
+
+1. **BUG — preview panes not restored.** On restore, a preview pane comes back as a
+   blank editor. Cause: `leafPaths()` saves each leaf via `pane_status_for_grid(grid).
+   abs_path()`; a preview pane's bound buffer is a preview SCRATCH buffer with no real
+   file path (→ `""`), so `wolf_rebuild_layout`'s `:edit <path>` yields an empty buffer
+   and the preview-ness is lost. Core tracks previews via `previews()` →
+   `FfiPreview{ win, source_bufnr, source_name, source_path (ABS), source_tick }`;
+   `preview_file(win, path)` repoints a preview window, `open_preview(mode)` creates one.
+   FIX shape: mark a leaf as a preview in the schema + carry its SOURCE abs path; on
+   rebuild, recreate a preview of that source in the target window instead of `:edit`.
+2. **CHANGE — splits re-equalize.** Per user: `:vsplit`/`:split` should re-distribute
+   the row/column to (approximately) equal widths again (e.g. an unequal 2-pane row
+   `|--|-------|` → 3 EQUAL panes on vsplit). This REVERTS the same-orientation split
+   weight policy from round 1 (carve-from-target) back to `equalize`. Drag-to-resize and
+   full persistence are UNCHANGED. DECISION (orchestrator default, stated to user):
+   REMOVE stays PROPORTIONAL (survivors keep dragged relative sizes); only SPLIT
+   equalizes. Persistence/restore uses `PaneTree.rebuilt` from saved weights, unaffected.
+
+---
+
+# ROUND 2 — Architect's plan (authoritative)
+
+## ITEM 1 — Preview panes not restored
+
+**1.1 Schema (`wolf-core/src/state.rs`):** extend `PaneNode::Leaf` to
+`Leaf { path: String, #[serde(default)] preview: bool }`. For a preview leaf, `path` =
+the SOURCE Markdown file's ABS path, `preview = true`. `#[serde(default)]` → round-1
+files load `preview=false`; STATE_VERSION stays 1. Update `PaneNode` doc. Decision:
+extend `Leaf` (not a new variant) — smaller serde/match surface.
+
+**1.2 FFI write (`wolf-ffi/src/lib.rs`, bridge change → regen):**
+`wolf_ffi_state_layout_push_leaf(path: String, preview: bool, weight: f64)` (insert
+`preview` between path and weight); impl pushes `PaneNode::Leaf { path, preview }`.
+
+**1.3 FFI read (bridge change → regen):** add `FfiPaneNode.is_preview() -> bool`
+(`Leaf{preview,..}=>preview`, `Split=>false`) + extern decl + `#[must_use]`/doc. Fix the
+two empty-leaf fallbacks (`FfiTabState::layout` + `FfiPaneNode::child`) to add
+`preview: false`. `leaf_path()` unchanged (returns the source path for a preview leaf).
+
+**1.4 nvim rebuild (`runtime/nvim/init.lua` `_G.wolf_rebuild_layout`), CHOSEN = option (b):**
+in the leaf branch, if `node.preview` and non-empty `node.path` → `wolf_preview_file(win,
+node.path)` (it does bufadd/bufload/markdown-gate + `nvim_win_set_buf(win, preview_buf)`,
+converting ANY window into a preview — no pre-existing preview window needed, window handle
+unchanged → DFS correspondence intact); elseif non-empty path → `:edit fnameescape(path)`;
+else keep inherited unnamed buffer. Failure (missing/non-md/empty source) → 0 → blank pane,
+handle still returned. NO `nvim.rs`/`api.rs`/`WolfCore::rebuild_layout` change (spec JSON
+flows through untouched). Update the helper header for the `{leaf,path,preview}` shape.
+
+**1.5 Swift codec (`WolfKeyMap/PaneLayoutCodec.swift`):**
+`SavedPaneNode.leaf(path:String, preview:Bool)` (stays Hashable);
+`LayoutToken.leaf(path:,preview:,weight:)`;
+`encode(_ layout:PaneLayout, paths:[PaneId:String], previews:Set<PaneId>)` — leaf →
+`.leaf(path: paths[id] ?? "", preview: previews.contains(id))` (explicit param, no default);
+update `emit`, `decodeTokens`, `jsonObject` (leaf → `["leaf":true,"path":path,
+"preview":preview]`). Update file header.
+
+**1.6 Save path (`PaneContainerView.swift`):** `layoutSnapshot()` passes a `previews`
+set; rework `leafPaths()` into one `handle.previews()` scan building
+`previewByWin: [Int64:String]` = `preview.win()` → `preview.source_path().toString()`
+(ABS source). For each `id in tree.leaves()`: if `panes[id]?.win` ∈ previewByWin →
+`paths[id]=source path` + insert into `previewIds`; else editor → `pane_status_for_grid(
+grid).abs_path()`. Return `(paths, previewIds)`. Match on `.win` (previews keyed by window,
+like syncPreviewWebViews). Update doc comments.
+
+**1.7 Restore wiring (`AppDelegate.swift`):** snapshot push arm →
+`case .leaf(let path, let preview, let weight): wolf_ffi_state_layout_push_leaf(path,
+preview, weight)`; `savedPaneNode(from:)` → `.leaf(path: node.leaf_path().toString(),
+preview: node.is_preview())`. NO change to restoredGroups/RestoredTabState/
+WolfWindowController/RestoreSeam/rebuildLayout/PaneTree.rebuilt (marker rides in
+SavedPaneNode; rebuilt ignores leaf payload).
+
+**1.8 WKWebView:** no extra work — `wolf_preview_file` re-emits previews, so
+`syncPreviewWebViews`/`previewNamesByGrid` (onRenderWake) hosts the web view automatically.
+
+**1.9 `.leaf` sites to update:** PaneLayoutCodec (case/token/encode/emit/decode/json),
+AppDelegate 572 + 742, RestoreSeamTests, PaneLayoutCodecTests. `PaneTree.swift` `.leaf`
+sites operate on internal Frame/PaneLayout/PaneId — UNCHANGED (rebuilt's `case .leaf:`
+binds nothing, still matches).
+
+## ITEM 2 — `:vsplit`/`:split` re-equalize
+
+**2.1 `PaneTree.swift`:** RE-ADD private `equalize(_ weights: inout [Double])` (1/n each,
+guard empty). Revert `splitIn` same-orientation branch to: insert `.leaf(newPane)` at
+`i+1`, insert weight `0.0`, `equalize(&weights)`. Keep perpendicular NEST at 0.5/0.5; keep
+root fresh two-child split 0.5/0.5; **do NOT touch `normalize`** — REMOVE stays PROPORTIONAL.
+
+**2.2 Docs:** `splitIn` doc → "re-equalizes the row/column"; header "Intentional divergence"
+rewrite → same-orientation split RE-EQUALIZES (matches gnome); fresh 2-child 0.5/0.5; REMOVE
+proportional (the ONLY remaining gnome divergence); dividers/setPairFraction/rebuilt
+unchanged. PaneContainerView header if it mentions split policy.
+
+## TESTS
+**Item 1 add/modify:** `PaneLayoutCodecTests` — all `.leaf(path:)` → `.leaf(path:,preview:)`
+(false); add encode-with-previews-set, preview token round-trip, specJSON `"preview"` key.
+`state_layout.rs` — `leaf` helper adds `preview:false`, add `preview_leaf`, preview round-trip
+(preserves true), v1-without-preview back-compat → false, serialized `"preview":true` shape.
+`wolf-ffi/tests/state.rs` — existing push_leaf calls add `preview` arg; add a preview-leaf
+case asserting `is_preview()` true/false + `leaf_path()` == source. `rebuild_layout.rs`
+(real nvim) — add a preview-leaf case (editor+preview of a bundled md): handle count 2,
+distinct, preview window reports expected `source_path` via `previews()`; REDUCED-SCOPE
+fallback (handle count/topology only) allowed if preview snapshot not observable in timeout
+— flag to test-writer. Save-path preview detection is AppKit → manual-smoke.
+
+**Item 2 MODIFY (weights flip; SETUPS that used carve-splits to make unequal weights must
+switch to `setPairFraction` drags):**
+- `PaneTreeWeightsTests.testSameOrientationSplitCarvesFromTargetOnly` → FLIP to equal thirds,
+  rename `...ReEqualizesRow` (prior 0.8/0.2 drag discarded).
+- `...testSplittingOneSiblingKeepsTheResizedSiblingsWeight` → FLIP to equal thirds, rename
+  `testSplittingSiblingReEqualizesRow` (P1 not 0.8).
+- `...testRemoveRenormalizesProportionallyNotEqually` → KEEP proportional assertion, REWRITE
+  setup via drag: split p1/p2, split p1/p4 (equal thirds), `setPairFraction([],0,0.75)`
+  (P1=0.5,P4=1/6,P2=1/3), remove p4 → [0.6,0.4]; reject 50/50.
+- `...testCollapseKeepsParentWeightNotEqual` → UNCHANGED (perpendicular nest, 0.8 survives).
+- `PaneTreeTests.testVsplitFlattensIntoRow` → FLIP to equal thirds (w/3 each), update comment.
+- `...testVsplitTwiceStaysFlatWeightsPreserved` → FLIP to four equal quarters, rename
+  `...EqualWeights`, rewrite weight comments.
+- `...testRemoveProportionallyRenormalizesRow` → KEEP proportional, REWRITE setup via drag:
+  split p1/p2, split p1/p3 (thirds), `setPairFraction([],1,0.25)` (P3=1/6,P2=1/2,P1=1/3),
+  remove p3 → [0.4,0.6]; keep "NOT re-equalized".
+- `...testRemoveCollapsesSingleChild`, perpendicular/neighbor/divider tests → UNCHANGED.
+- **AUDIT DIRECTIVE:** grep both PaneTree test files for any remaining assertion expecting a
+  same-orientation split to yield non-equal weights, or a pre-split drag to survive a
+  same-orientation split — flip to equal or rebuild the unequal precondition via
+  `setPairFraction`.
+- `RestoreSeamTests` `.leaf(path:)` → add `preview:false`.
+No new Bazel targets (all extend existing files).
+
+## ORDER (avoid compile breaks)
+1. Item 2 PaneTree revert + 6 test flips → build WolfKeyMapTests.
+2. Item 1 pure Swift codec (`SavedPaneNode.leaf` breaks all sites — fix AppDelegate 572/742,
+   RestoreSeamTests, PaneLayoutCodecTests same pass; do NOT wire new FFI arg yet).
+3. Item 1 core state.rs + state_layout.rs.
+4. Item 1 FFI (push_leaf preview + is_preview + empty-leaf fallbacks) + AppDelegate wiring →
+   REGEN + commit bindings → extend wolf-ffi/tests/state.rs.
+5. Item 1 nvim init.lua leaf branch + PaneContainerView save path → extend rebuild_layout.rs.
+6. Docs + prettier.
+
+## RISKS
+Bridge change needs regenerated committed bindings (sequence step 4 as one unit). Split-
+equalize breaks test SETUPS not just assertions (rebuild unequal preconditions via drags).
+DFS handle correspondence intact under option (b) (preview_file binds buffer, no win create/
+destroy). Deleted source → preview_file 0 → blank pane (graceful, handle retained). Shared
+source editor+preview leaf → bufadd returns same bufnr (no conflict). Back-compat: round-1
+files load preview=false, no version bump.
+
+## COMMANDS (bazelisk)
+`run //crates/wolf-ffi:gen_bindings` (+commit generated .swift/.h after step 4);
+`build //crates/wolf-macos:Wolf`; `test //crates/wolf-macos:WolfKeyMapTests //crates/
+wolf-core:state_layout //crates/wolf-core:rebuild_layout //crates/wolf-ffi:state //crates/
+wolf-ffi:bridge_smoke //crates/wolf-ffi:pane_status` + `//crates/wolf-core/...`;
+lint `test //tools/lint/...`.
+
+---
+
+# ROUND 1 — COMPLETE ✅ (committed by user)
+
+## Status: COMPLETE ✅ (all green, reviewer-approved, docs synced) — COMMITTED
 
 Final state: WolfKeyMapTests + state_layout + state_unit + rebuild_layout (real nvim) +
 ffi state + pane_status + bridge_smoke PASS; 62/62 regression; lint all exit 0;

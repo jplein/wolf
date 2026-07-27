@@ -22,8 +22,18 @@
 //! target. This file does NOT touch non-test source.
 //!
 //! The spec JSON shape matches `PaneLayoutCodec.specJSON`:
-//!   * leaf:  `{ "leaf": true, "path": "<abs path or empty>" }`
+//!   * leaf:  `{ "leaf": true, "path": "<abs path or empty>", "preview": <bool> }`
 //!   * split: `{ "orientation": "h"|"v", "weights": [...], "children": [...] }`
+//!
+//! ## Preview leaves (feature plan ROUND 2)
+//!
+//! A leaf with `"preview": true` carries its SOURCE markdown path; on rebuild the
+//! Lua helper turns that leaf's window into a PREVIEW of the source (via
+//! `wolf_preview_file`) instead of `:edit`-ing it, so the preview-ness survives
+//! restore. The reconstructed preview surfaces in the core's `previews()` snapshot
+//! (keyed by the preview WINDOW handle) with the source's absolute path — the same
+//! observability path `crates/wolf-ffi/tests/preview.rs` relies on, so the preview
+//! binding is asserted directly (not reduced).
 
 mod common;
 
@@ -78,6 +88,38 @@ fn poll_win_filename(
             panic!(
                 "timed out waiting for window {win} to report filename {expected:?}; \
                  last observed {observed:?}"
+            );
+        }
+        waiter.drain();
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Polls the core's snapshot until the preview WINDOW `win` reports a preview whose
+/// SOURCE path basename equals `expected_name`, or panics after [`FLUSH_TIMEOUT`].
+///
+/// Matches on the source path's BASENAME (not the full absolute path): the temp
+/// `.md` lives under `/var/folders/...` which nvim canonicalizes to
+/// `/private/var/...`, so an exact absolute compare would spuriously fail (the same
+/// `/var`<->`/private/var` reason `preview.rs` uses `ends_with`/basename).
+fn poll_preview_source(core: &WolfCore, waiter: &FlushWaiter, win: i64, expected_name: &str) {
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    loop {
+        if let Some(info) = core.read_snapshot().previews.get(&win) {
+            if info.source_path.file_name().and_then(|s| s.to_str()) == Some(expected_name) {
+                return;
+            }
+        }
+        if Instant::now() >= deadline {
+            let observed: Vec<(i64, String)> = core
+                .read_snapshot()
+                .previews
+                .iter()
+                .map(|(w, i)| (*w, i.source_path.display().to_string()))
+                .collect();
+            panic!(
+                "timed out after {FLUSH_TIMEOUT:?} waiting for window {win} to report a preview \
+                 of {expected_name:?}; observed previews {observed:?}"
             );
         }
         waiter.drain();
@@ -178,6 +220,51 @@ fn rebuild_perpendicular_tree_with_empty_leaf() {
     poll_win_filename(&core, &waiter, handles[0], name_a);
     poll_win_filename(&core, &waiter, handles[1], NO_NAME);
     poll_win_filename(&core, &waiter, handles[2], name_b);
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// (c) A vertical split of [ EDITOR of a .md, PREVIEW of the SAME .md ] (feature
+/// plan ROUND 2): two distinct handles; the editor pane shows the md file, and the
+/// preview leaf is RECONSTRUCTED as a real preview of the md SOURCE (reported by
+/// the core's `previews()` at the preview window handle) — NOT a blank/edit buffer.
+#[test]
+fn rebuild_editor_and_preview_of_same_markdown() {
+    let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+
+    let file = common::temp_md(DOC);
+    let md = file.path().to_str().expect("md path is UTF-8");
+    let name = file.path().file_name().unwrap().to_str().unwrap();
+
+    // Leaf 0 = editor of the md (preview: false); leaf 1 = PREVIEW of the SAME md
+    // (preview: true, path = the md's abs path). DFS leaf order is [editor, preview].
+    let spec = format!(
+        r#"{{"orientation":"v","weights":[0.5,0.5],"children":[{{"leaf":true,"path":"{md}","preview":false}},{{"leaf":true,"path":"{md}","preview":true}}]}}"#
+    );
+
+    let handles = core.rebuild_layout(&spec);
+    assert_eq!(
+        handles.len(),
+        2,
+        "a 2-leaf editor+preview split must return 2 window handles; got {handles:?}"
+    );
+    assert_distinct_handles(&handles);
+
+    poll_until(
+        &core,
+        &waiter,
+        "two windows after the editor+preview rebuild",
+        |snap| snap.windows.len() == 2,
+    );
+
+    // Handle 0 (the editor leaf) shows the md file.
+    poll_win_filename(&core, &waiter, handles[0], name);
+
+    // Handle 1 (the preview leaf) was reconstructed as a real preview of the md
+    // SOURCE: previews() reports it, keyed by the preview WINDOW handle (the DFS
+    // correspondence holds under option (b) — preview_file binds the buffer in the
+    // existing window, no window create/destroy).
+    poll_preview_source(&core, &waiter, handles[1], name);
 
     core.shutdown().expect("shutdown should be Ok");
 }
