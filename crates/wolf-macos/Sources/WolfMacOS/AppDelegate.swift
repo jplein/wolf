@@ -564,8 +564,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         wolf_ffi_state_snapshot_add_tab(tab.persistedCwd, tab.sidebarVisible)
 
         // Attach the tab's pane-split layout (topology + weights + per-leaf buffer
-        // path) via the post-order push-builder, when it has one (a multi-pane
-        // layout — a single unsplit pane returns nil and pushes nothing).
+        // path) via the post-order push-builder, when it has one. An empty-state
+        // (unnamed, non-preview) lone pane returns nil and pushes nothing; a lone
+        // pane bound to a file or preview now pushes a single leaf.
         if let layout = tab.layoutSnapshot() {
           for token in PaneLayoutCodec.postOrderTokens(layout) {
             switch token {

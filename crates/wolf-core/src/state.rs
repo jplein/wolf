@@ -115,16 +115,20 @@ pub enum PaneNode {
 /// not been reported yet (a fresh empty-state tab); restore validates it is a
 /// non-empty, existing directory before use. `sidebar_visible` records whether
 /// the file-tree sidebar was showing (defaults to `true`). `layout` is the tab's
-/// full pane-split tree (topology + per-child weights + per-leaf buffer path), or
-/// `None` for a single unsplit pane; it is `#[serde(default)]` so an old v1 file
-/// without it loads with `layout: None` (no version bump).
+/// full pane-split tree (topology + per-child weights + per-leaf buffer path); it
+/// is `None` ONLY for an empty-state lone pane (an unnamed, non-preview buffer,
+/// e.g. the "no folder" tab) — a lone pane showing a file or a preview persists a
+/// single `leaf`. It is `#[serde(default)]` so an old v1 file without it loads
+/// with `layout: None` (no version bump).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TabState {
     /// The embedded Neovim's working directory (`""` == not yet reported).
     pub cwd: String,
     /// Whether the file-tree sidebar is visible (defaults to `true`).
     pub sidebar_visible: bool,
-    /// The tab's pane-split layout, or `None` for a single unsplit pane.
+    /// The tab's pane-split layout, `None` ONLY for an empty-state (unnamed,
+    /// non-preview) lone pane; a lone pane showing a file or preview persists a
+    /// single `leaf`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<PaneNode>,
 }

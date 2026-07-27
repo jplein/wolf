@@ -764,8 +764,9 @@ mod ffi {
         fn cwd(&self) -> String;
         // Whether the tab's file-tree sidebar was visible.
         fn sidebar_visible(&self) -> bool;
-        // Whether the tab carries a saved pane-split layout (false for a single
-        // unsplit pane).
+        // Whether the tab carries a saved pane-split layout (false ONLY for an
+        // empty-state (unnamed, non-preview) lone pane; a lone pane showing a file
+        // or preview persists a single leaf).
         fn has_layout(&self) -> bool;
         // The tab's saved pane-split layout as an opaque `FfiPaneNode` root (an
         // empty leaf when the tab has no layout).
@@ -1417,8 +1418,9 @@ impl FfiTabState {
         self.sidebar_visible
     }
 
-    /// Whether the tab carries a saved pane-split layout (false for a single
-    /// unsplit pane).
+    /// Whether the tab carries a saved pane-split layout (false ONLY for an
+    /// empty-state (unnamed, non-preview) lone pane; a lone pane showing a file or
+    /// preview persists a single leaf).
     #[must_use]
     pub fn has_layout(&self) -> bool {
         self.layout.is_some()

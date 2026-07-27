@@ -99,6 +99,32 @@ final class PaneLayoutCodecTests: XCTestCase {
       children: [.leaf(path: "/src.md", preview: true), .leaf(path: "/b.md", preview: false)])
   }
 
+  // MARK: - isEmptyLeaf: only a lone empty NON-preview leaf is "empty"
+
+  func testIsEmptyLeafTrueForEmptyNonPreviewLeaf() {
+    XCTAssertTrue(
+      SavedPaneNode.leaf(path: "", preview: false).isEmptyLeaf,
+      "an empty-path, non-preview leaf is the empty-state leaf")
+  }
+
+  func testIsEmptyLeafFalseForNamedLeaf() {
+    XCTAssertFalse(
+      SavedPaneNode.leaf(path: "/a.md", preview: false).isEmptyLeaf,
+      "a leaf with a real path is NOT empty (its file must persist)")
+  }
+
+  func testIsEmptyLeafFalseForEmptyPreviewLeaf() {
+    XCTAssertFalse(
+      SavedPaneNode.leaf(path: "", preview: true).isEmptyLeaf,
+      "an empty-path PREVIEW leaf is NOT empty (preview-ness must persist)")
+  }
+
+  func testIsEmptyLeafFalseForSplit() {
+    XCTAssertFalse(
+      twoChild().isEmptyLeaf,
+      "a split is never the empty-state leaf")
+  }
+
   // MARK: - encode: leaf ids -> paths (unmapped leaf -> "")
 
   func testEncodeMapsLeafIdsToPaths() {

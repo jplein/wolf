@@ -17,7 +17,9 @@ import WolfKeyMap
 struct RestoredTabState {
   let cwd: String
   let sidebarVisible: Bool
-  /// The tab's saved pane-split layout, or `nil` for a single unsplit pane.
+  /// The tab's saved pane-split layout, `nil` ONLY for an empty-state (unnamed,
+  /// non-preview) lone pane; a lone pane showing a file or preview persists a
+  /// single leaf.
   let layout: SavedPaneNode?
 }
 
@@ -203,9 +205,10 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     paneContainer.onLayoutChanged = { [weak self] in
       self?.coordinator?.scheduleStateSnapshot()
     }
-    // Rebuild a saved multi-pane layout on launch (single-pane layouts need no
-    // rebuild — the first bound pane already IS the layout).
-    if let saved = restoredTab?.layout, saved.leafCount > 1 {
+    // Rebuild any saved layout on launch — including a single leaf, which just
+    // re-opens its file (or preview) in the tab's sole window via the shared
+    // rebuild path. (`leafCount` is always >= 1, so no guard is needed.)
+    if let saved = restoredTab?.layout {
       paneContainer.requestLayoutRebuild(saved)
     }
 
@@ -724,8 +727,9 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
   var paneCount: Int { paneContainer?.paneCount ?? 1 }
 
   /// This tab's persistable pane-split layout (topology + weights + per-leaf buffer
-  /// path), or `nil` for a single unsplit pane. Read by the coordinator's
-  /// whole-tree snapshot walk (`AppDelegate.snapshotNow`).
+  /// path), `nil` ONLY for an empty-state (unnamed, non-preview) lone pane; a lone
+  /// pane showing a file or preview persists a single leaf. Read by the
+  /// coordinator's whole-tree snapshot walk (`AppDelegate.snapshotNow`).
   func layoutSnapshot() -> SavedPaneNode? { paneContainer?.layoutSnapshot() }
 
   /// Whether this window's active document is in Neovim visual mode

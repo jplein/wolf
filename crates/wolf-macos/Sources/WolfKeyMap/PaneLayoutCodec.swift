@@ -42,6 +42,20 @@ public enum SavedPaneNode: Hashable {
       return children.reduce(0) { $0 + $1.leafCount }
     }
   }
+
+  /// The "suppress from persistence" predicate for a LONE pane: `true` iff this
+  /// node is `.leaf(path: "", preview: false)` — an empty (unnamed), non-preview
+  /// lone buffer. A preview leaf (`preview: true`), a leaf with a non-empty path,
+  /// and any `.split(...)` all return `false`, so multi-pane layouts and lone
+  /// panes bound to a file/preview are never suppressed.
+  public var isEmptyLeaf: Bool {
+    switch self {
+    case .leaf(let path, let preview):
+      return path.isEmpty && !preview
+    case .split:
+      return false
+    }
+  }
 }
 
 /// The pure layout codec. A namespace (`enum` with only static members),

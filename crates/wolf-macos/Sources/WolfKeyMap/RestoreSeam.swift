@@ -32,9 +32,10 @@ public enum RestoreSeam {
     public let cwd: String
     /// Whether the tab's file-tree sidebar was visible.
     public let sidebarVisible: Bool
-    /// The tab's saved pane-split layout, or `nil` for a single unsplit pane. A
-    /// PASSTHROUGH — it does NOT affect grouping (still cwd-only); it rides into
-    /// the matching `PlannedTab.layout` verbatim.
+    /// The tab's saved pane-split layout, `nil` ONLY for an empty-state (unnamed,
+    /// non-preview) lone pane; a lone pane showing a file or preview persists a
+    /// single leaf. A PASSTHROUGH — it does NOT affect grouping (still cwd-only);
+    /// it rides into the matching `PlannedTab.layout` verbatim.
     public let layout: SavedPaneNode?
 
     public init(cwd: String, sidebarVisible: Bool, layout: SavedPaneNode?) {

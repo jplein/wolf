@@ -98,6 +98,11 @@ const PREVIEW_SOURCE_PATH: &str = "/proj/window-one/preview-source.md";
 /// The editor sibling's path in the preview split (preview: false).
 const EDITOR_SIBLING_PATH: &str = "/proj/window-one/editor.md";
 
+// -- Lone-leaf fixture (single-pane tab persistence) ----------------------------
+/// The buffer path of a LONE editor leaf pushed with NO surrounding split, proving a
+/// single-pane tab persists its open file as a single top-level leaf layout.
+const SOLO_PATH: &str = "/proj/window-one/solo.md";
+
 #[test]
 fn snapshot_builder_round_trips_the_whole_tree() {
     // Point the state machinery at a private tempdir for the WHOLE test. This is
@@ -355,6 +360,68 @@ fn snapshot_builder_round_trips_the_whole_tree() {
         pv_right.leaf_path(),
         EDITOR_SIBLING_PATH,
         "the editor sibling keeps its own buffer path"
+    );
+
+    // --- 3d. A LONE leaf (single-pane tab) round-trips as a top-level leaf ----
+    // Rebuild the SAME tree, but attach a SINGLE editor leaf (NO split) to the LAST
+    // tab: push one leaf, then commit-to-tab. This is the single-pane persistence
+    // case — the layout's root is the leaf itself, not a split. After load, assert
+    // the last tab has_layout(), its root is a (non-preview) leaf, and its path is
+    // the pushed SOLO_PATH.
+    wolf_ffi_state_snapshot_begin();
+    wolf_ffi_state_snapshot_add_window(W0_X, W0_Y, W0_WIDTH, W0_HEIGHT);
+    wolf_ffi_state_snapshot_add_tab(W0_TAB0_CWD.to_string(), true);
+    wolf_ffi_state_snapshot_add_tab(W0_TAB1_CWD.to_string(), false);
+    wolf_ffi_state_snapshot_add_window(W1_X, W1_Y, W1_WIDTH, W1_HEIGHT);
+    wolf_ffi_state_snapshot_add_tab(W1_TAB0_CWD.to_string(), false);
+    // A single editor leaf with NO surrounding split: push the lone leaf, then
+    // commit it directly to the tab as the layout's root.
+    wolf_ffi_state_layout_push_leaf(SOLO_PATH.to_string(), false, ROOT_WEIGHT);
+    wolf_ffi_state_layout_commit_to_tab();
+    wolf_ffi_state_snapshot_commit();
+
+    // Flush + poll until the last tab reports a (leaf) layout.
+    let solo_deadline = Instant::now() + FLUSH_TIMEOUT;
+    let with_solo = loop {
+        assert!(
+            wolf_ffi_state_flush(),
+            "wolf_ffi_state_flush() must complete after the solo-leaf commit"
+        );
+        let restored = wolf_ffi_load_state();
+        let windows = restored.windows();
+        if windows.len() == TWO_WINDOWS
+            && windows[1]
+                .tabs()
+                .last()
+                .is_some_and(|t| t.has_layout() && t.layout().is_leaf())
+        {
+            break restored;
+        }
+        if Instant::now() >= solo_deadline {
+            break restored;
+        }
+        sleep(POLL_INTERVAL);
+    };
+
+    let solo_windows = with_solo.windows();
+    let solo_tab = &solo_windows[1].tabs()[W1_TABS - 1];
+    assert!(
+        solo_tab.has_layout(),
+        "the last tab must report has_layout() == true after the solo-leaf commit"
+    );
+    let solo_root = solo_tab.layout();
+    assert!(
+        solo_root.is_leaf(),
+        "the root pane node of a single-pane tab is a LEAF, not a split"
+    );
+    assert!(
+        !solo_root.is_preview(),
+        "the lone editor leaf must report is_preview() == false"
+    );
+    assert_eq!(
+        solo_root.leaf_path(),
+        SOLO_PATH,
+        "the lone leaf's path round-trips as the single-pane tab's open file"
     );
 
     // --- 4. Old (flat, pre-tabs) format is rejected -> zero windows ----------

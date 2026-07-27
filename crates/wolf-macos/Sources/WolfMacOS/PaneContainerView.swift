@@ -1405,12 +1405,14 @@ final class PaneContainerView: NSView {
   // MARK: - Layout persistence (save + restore)
 
   /// The tab's persistable pane-split layout (topology + per-child weights +
-  /// per-leaf buffer path), or `nil` for a single unsplit pane. The drawer is
-  /// excluded — it lives outside `tree`, so it never appears in `tree.layout()`.
+  /// per-leaf buffer path). A lone pane persists its single leaf UNLESS it is an
+  /// empty, non-preview buffer — in that empty-state case this returns `nil` so
+  /// the tab stays layout-less. The drawer is excluded — it lives outside `tree`,
+  /// so it never appears in `tree.layout()`.
   func layoutSnapshot() -> SavedPaneNode? {
-    guard tree.leaves().count > 1 else { return nil }
     let (paths, previewIds) = leafPaths()
-    return PaneLayoutCodec.encode(tree.layout(), paths: paths, previews: previewIds)
+    let saved = PaneLayoutCodec.encode(tree.layout(), paths: paths, previews: previewIds)
+    return saved.isEmptyLeaf ? nil : saved
   }
 
   /// Maps each editor leaf id to the ABSOLUTE path to persist plus the set of leaf

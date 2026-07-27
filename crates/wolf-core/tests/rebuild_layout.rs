@@ -307,3 +307,108 @@ fn rebuild_editor_and_preview_of_same_markdown() {
 
     core.shutdown().expect("shutdown should be Ok");
 }
+
+/// (d) A LONE editor leaf (single-pane tab): a `{leaf,path,preview:false}` spec with
+/// no split returns exactly ONE handle, and that one window shows the requested file.
+/// This locks in single-pane persistence — the front-end now emits a single leaf for
+/// an unsplit pane and rebuilds it just by opening the file.
+#[test]
+fn rebuild_single_leaf_editor() {
+    let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+
+    let file = common::temp_md(DOC);
+    let path = file.path().to_str().expect("file path is UTF-8");
+    let name = file.path().file_name().unwrap().to_str().unwrap();
+
+    let spec = format!(r#"{{"leaf":true,"path":"{path}","preview":false}}"#);
+
+    let handles = core.rebuild_layout(&spec);
+    assert_eq!(
+        handles.len(),
+        1,
+        "a lone editor leaf must return exactly 1 window handle; got {handles:?}"
+    );
+    assert_distinct_handles(&handles);
+
+    // Still exactly one editor window; the lone leaf reuses the starting window.
+    poll_until(
+        &core,
+        &waiter,
+        "one editor window after the single-leaf rebuild",
+        |snap| snap.windows.len() == 1,
+    );
+
+    // That one window shows the requested file.
+    poll_win_filename(&core, &waiter, handles[0], name);
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// (e) A LONE PREVIEW leaf (single-pane preview tab): a `{leaf,path,preview:true}`
+/// spec with no split returns ONE handle whose window is RECONSTRUCTED as a real
+/// preview of the source markdown (surfaced in `previews()` at the window handle) —
+/// NOT a plain `:edit` of the file. This preserves preview-ness for a single pane.
+#[test]
+fn rebuild_single_leaf_preview() {
+    let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+
+    let file = common::temp_md(DOC);
+    let md = file.path().to_str().expect("md path is UTF-8");
+    let name = file.path().file_name().unwrap().to_str().unwrap();
+
+    let spec = format!(r#"{{"leaf":true,"path":"{md}","preview":true}}"#);
+
+    let handles = core.rebuild_layout(&spec);
+    assert_eq!(
+        handles.len(),
+        1,
+        "a lone preview leaf must return exactly 1 window handle; got {handles:?}"
+    );
+    assert_distinct_handles(&handles);
+
+    poll_until(
+        &core,
+        &waiter,
+        "one window after the single-leaf preview rebuild",
+        |snap| snap.windows.len() == 1,
+    );
+
+    // The lone window is a reconstructed preview of the md SOURCE (via previews(),
+    // keyed by the window handle) — not a plain `:edit`.
+    poll_preview_source(&core, &waiter, handles[0], name);
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// (f) A LONE EMPTY leaf (`{leaf,path:"",preview:false}`): one handle, and its window
+/// carries no file to `:edit`, so it keeps the buffer it INHERITED from the starting
+/// window — the named `Untitled.md` startup buffer (matched by basename/suffix, robust
+/// to absolute-vs-relative paths and `/var`<->`/private/var`). Mirrors the empty-leaf
+/// assertion in `rebuild_perpendicular_tree_with_empty_leaf`.
+#[test]
+fn rebuild_single_empty_leaf() {
+    let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+
+    let spec = r#"{"leaf":true,"path":"","preview":false}"#;
+
+    let handles = core.rebuild_layout(spec);
+    assert_eq!(
+        handles.len(),
+        1,
+        "a lone empty leaf must return exactly 1 window handle; got {handles:?}"
+    );
+    assert_distinct_handles(&handles);
+
+    poll_until(
+        &core,
+        &waiter,
+        "one window after the single empty-leaf rebuild",
+        |snap| snap.windows.len() == 1,
+    );
+
+    // The empty-path leaf has no file to edit, so its window keeps the inherited
+    // `Untitled.md` startup buffer (basename/suffix match).
+    poll_win_filename_suffix(&core, &waiter, handles[0], UNTITLED_STARTUP);
+
+    core.shutdown().expect("shutdown should be Ok");
+}
