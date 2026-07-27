@@ -1,76 +1,80 @@
-# Plan: Verify merge of `main` into `feat/preview-anonymous-files`
+# Plan: Merge latest `main` (pane-dividers) into `feat/preview-anonymous-files`
 
 ## Task
 
-`main` was merged into `feat/preview-anonymous-files` (a real merge — the branches
-had diverged: main brought 4 commits, headlined by `:q`/`:qa` → close active
-pane/window; this branch had the `Untitled.md` anonymous-buffer + preview feature).
-The merge auto-resolved all code; the only conflict was `.claude/current-plan.md`
-(this throwaway coordination file), now resolved. Both features coexist in
-`runtime/nvim/init.lua` (untitled helpers near the preview helpers; `:q`/`:qa`
-`do_quit`/`WolfQuitAll` in `wolf_setup_layout` — different regions).
+Merge the current `main` (`2145703`) into `feat/preview-anonymous-files`
+(currently at the verified merge commit `9cf46b1`), resolve any conflicts, then run
+an `/orchestrate` verification pass: the app BUILDS, all LINTERS pass, all TESTS
+pass. Then commit the merge.
 
-Now run an `/orchestrate` verification pass to confirm the MERGED tree:
+`main` is 3 commits ahead of HEAD — the **pane-dividers** feature:
+`2145703` Merge origin/main into feat/macos-pane-dividers; `5f8becb` Pane dividers
+can be resized, save panes in app state; `03a4647` Resize panes by mouse. This
+brings in: mouse pane-divider resizing, full pane-layout persistence, new source
+files (`DividerDragSeam.swift`, `DividerHitTest.swift`, `PaneLayoutCodec.swift`),
+new Rust tests (`state_layout.rs`, `rebuild_layout.rs`), schema changes in
+`wolf-core/src/state.rs`, and **regenerated FFI bindings**
+(`crates/wolf-ffi/generated/wolf-ffi.{swift,h}` — the bridge surface changed on
+main's side: `push_leaf(path, preview, weight)`, `FfiPaneNode.is_preview()`).
 
-1. **Builds** — the Rust core, FFI, and (where buildable) the macOS app, via bazelisk.
-2. **Tests pass** — the full Rust test suites for `//crates/wolf-core/...` and
-   `//crates/wolf-ffi/...` (real-nvim integration tests, bundled pinned nvim), and
-   the Swift `//crates/wolf-macos:WolfKeyMapTests` target if buildable in this env.
-   This is the union of both merged features' tests — the `Untitled` tests
-   (`untitled.rs`, updated `preview`/`edit`/`full_width`/`code_block_highlight`/
-   `file_actions`/`pane_buffers`/`browser_preview`/`nvim_restart`/`swap_recovery`)
-   AND main's `:q`/`:qa` tests (`commands.rs`, `layout_intents.rs`).
-3. **Linters pass** — clippy (Rust) and any configured lint/format checks.
+## Known conflicts (from an earlier aborted attempt of this same merge)
 
-## Merge context the verifier must know
+Textual auto-merge left exactly 3 conflicts:
+1. `.claude/current-plan.md` — throwaway coordination file (orchestrator resolves).
+2. `crates/wolf-ffi/src/lib.rs` — ONE region: the `use wolf_core::{...}` import list.
+   HEAD lacks `PaneNode, PaneOrientation`; main adds them. Our side changed only
+   doc comments (no bridge/import change), so the resolution is main's SUPERSET
+   import list (keep `PaneNode, PaneOrientation`). Verify there is no other seam.
+3. `crates/wolf-macos/README.md` — ONE region: prose. Union BOTH features' text —
+   keep our `⌘N` → `Untitled N.md` (`wolf_new_untitled`) description AND main's
+   pane-divider/multi-window/persistence prose. No content dropped.
 
-- New CLAUDE.md rule (from main): every new test MUST be wired into a Bazel target
-  (`BUILD.bazel` `rust_test` for Rust; `srcs` list for Swift `swift_test`) — Bazel
-  does NOT auto-discover. Our `crates/wolf-ffi/tests/untitled.rs` already has a
-  `//crates/wolf-ffi:untitled` target. Verify it is present and RUNS after the merge
-  (main also touched `crates/wolf-core/BUILD.bazel`).
-- Main touched `crates/wolf-core/tests/commands.rs`, `crates/wolf-core/tests/
-  layout_intents.rs`, `crates/wolf-core/BUILD.bazel`, `build.md`,
-  `command-lifecycle.md`, `CLAUDE.md` — all auto-merged. Confirm the core test
-  targets still build and pass alongside our changes.
+Everything else auto-merged (generated bindings auto-merged as `M `/staged, but see
+CRITICAL below).
+
+## CRITICAL — regenerate FFI bindings
+
+The generated `crates/wolf-ffi/generated/wolf-ffi.{swift,h}` were TEXT-auto-merged.
+Main changed the bridge surface; our side did NOT. Before committing, the bindings
+MUST be regenerated from the merged Rust source and confirmed to match (byte-diff)
+the auto-merged result — a bridge/codegen mismatch would break the macOS build.
+The coder must regenerate (the repo's swift-bridge codegen step) and reconcile.
+
+## Watch for semantic (non-textual) merge breaks
+
+- Our feature added Neovim-side Lua helpers + `input.rs` `NewBuffer`/`Chdir` arms +
+  the current-file tracker naming the startup buffer `Untitled.md`. Main's pane
+  layout/persistence + rebuild_layout may interact (e.g. `leafPaths()` /
+  `pane_status` / restored layouts now seeing a named `Untitled.md` startup buffer,
+  or `rebuild_layout` re-`:edit`ing it). The coder must run BOTH families' test
+  suites and root-cause any failure as a real interaction vs. a stale expectation.
+- `api.rs`/`nvim.rs` seam: main may have changed `block_on_rpc` Send/'static bounds
+  or `self.nvim` borrowing; our feature's new `input.rs` RPC helpers must still
+  compile against the merged core (keep `Ref`/`RefCell` out of `.await`).
 
 ## Success criteria
 
-Full build + full Rust test suite (both crates) green, and ALL linters pass —
-clippy, swift-format, AND rustfmt (`rustfmt_core` + `rustfmt_ffi`). Per USER
-DIRECTIVE, rustfmt is a REQUIRED linter (NOT advisory); pre-existing rustfmt debt
-must be fixed. Do NOT weaken tests to pass.
+Merged tree: workspace build (incl. macOS app) ✓; full Rust suites
+(`//crates/wolf-core/...`, `//crates/wolf-ffi/...`) + Swift `WolfKeyMapTests` ✓,
+0 failures, both feature families' tests run; ALL linters GREEN — clippy,
+rustfmt_core, rustfmt_ffi, swift_format (rustfmt is REQUIRED, not advisory — fix any
+debt scoped to the crate library sources, NOT the test files). Do NOT weaken tests.
+Regenerated bindings committed together with the merge.
 
-## USER DECISION (rustfmt)
+## Workflow
 
-User: "Also fix the rustfmt debt and don't mark rustfmt as advisory - it's one of
-the linters that needs to pass." Action: run rustfmt on the library sources so
-`rustfmt_core`/`rustfmt_ffi` pass, KEEPING the fix SCOPED to the library sources
-those targets actually check (`crates/wolf-core/src/{api,liveness,nvim,redraw}.rs`,
-`crates/wolf-ffi/src/lib.rs`). Do NOT re-introduce the out-of-scope rustfmt churn
-on `tests/*.rs` (rustfmt targets don't check tests; that churn was deliberately
-reverted for a clean merge). Then confirm ALL linters + full test suite green, and
-commit the merge.
+1. [orchestrator] Perform `git merge --no-ff main`; resolve the 3 conflicts
+   (plan file by orchestrator; lib.rs + wolf-macos/README.md guidance to coder).
+2. [coder] Resolve lib.rs (import superset) + wolf-macos/README.md (prose union);
+   regenerate FFI bindings + reconcile; build; full test suite (both families);
+   all 4 linters. Fix semantic merge breaks minimally. Report.
+3. [test-writer] Only if a real coverage gap / stale expectation needs a test change
+   (route from coder findings).
+4. [reviewer] Verify the merge resolution is faithful (no dropped/duplicated content,
+   no marker residue, bindings correct, both features intact).
+5. [technical-writer] Sync any docs the merge left inconsistent.
+6. [orchestrator] Commit the merge; report.
 
 ## Status
 
-Verification round 1: merged tree BUILDS (incl. macOS app), clippy + rustfmt +
-swift-format PASS (coder ran the repo's official `//tools/lint:rustfmt.fix`, pure
-formatting — kept). 71/72 test targets pass. ONE semantic-merge failure:
-
-`crates/wolf-core/tests/current_file.rs::unnamed_buffer_has_no_current_file` —
-main ADDED the `current_file` Bazel target (the file existed unwired on our tip);
-its `unnamed_buffer_has_no_current_file` asserts the STARTUP buffer is unnamed →
-`current_file == None`. Our feature deliberately names the startup buffer
-`Untitled.md`, so it is now `Some(.../Untitled.md)`. Mutually exclusive with our
-(passing, correct) `untitled.rs::startup_names_untitled_markdown_no_auto_write`.
-
-DECISION (orchestrator): do NOT delete — the test's INTENT (current-file tracker
-maps a genuinely UNNAMED buffer's empty `expand('%:p')` → `None`) is still valid
-coverage. REWRITE it to drive a genuinely unnamed buffer via a raw `:enew`
-keystroke sequence (bypasses `wolf_new_untitled`; only `VimEnter` auto-names, so a
-post-startup `:enew` stays `[No Name]`), then poll `current_file` until it becomes
-`None` and assert — mirroring the sibling fixes already made to
-`pane_buffers::unnamed_buffer_reports_no_name` and
-`browser_preview::non_markdown_buffer_returns_empty_url`. Then re-run
-`//crates/wolf-core:current_file` + full suite; commit the merge once green.
+(merge not yet performed)
