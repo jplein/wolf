@@ -32,6 +32,18 @@ final class Project {
   /// Initial grid height in rows.
   private static let initialRows: UInt16 = 24
 
+  /// The captive-nvim liveness discriminants, mirroring the FFI `mod liveness`
+  /// (which mirrors `wolf_core::Liveness`). Swift cannot import the Rust module, so
+  /// these are the hand-kept mirror consumed by `onWake`.
+  private enum Liveness {
+    static let alive: UInt8 = 0
+    static let notResponding: UInt8 = 1
+    static let dead: UInt8 = 2
+  }
+
+  /// Reentrancy guard for `restartNeovim` (a nested/concurrent restart is a no-op).
+  private var restarting = false
+
   /// The single shared core handle for this project's captive Neovim.
   let handle: WolfCoreHandle
 
@@ -148,10 +160,98 @@ final class Project {
   }
 
   /// Fans a render wake out to the current view (others hold their last paint).
+  ///
+  /// Reads the captive nvim's LIVENESS first: a `Dead` core fans the crash overlay
+  /// to every view and auto-restarts (skipping the stale render); a
+  /// `NotResponding` core fans the stall overlay and waits for the user's manual
+  /// "Restart Neovim" (button-driven); an `Alive` core hides any overlay and
+  /// proceeds with the normal render fan-out.
   func onWake() {
     // Exactly one core wake through `WakeBridge`, independent of view count.
     FrameMetrics.noteWake()
-    currentView?.onRenderWake()
+
+    switch handle.liveness() {
+    case Liveness.dead:
+      for view in views.allObjects { view.showNvimOverlay(.dead) }
+      restartNeovim()
+      return
+    case Liveness.notResponding:
+      for view in views.allObjects { view.showNvimOverlay(.notResponding) }
+      return
+    default:
+      for view in views.allObjects { view.hideNvimOverlay() }
+      currentView?.onRenderWake()
+    }
+  }
+
+  /// Restarts the captive Neovim IN PLACE after a crash/stall and reopens the
+  /// Tier-1 file set per view.
+  ///
+  /// CAPTURES each view's open-file mirror + cwd BEFORE the restart (a respawn
+  /// wipes the mirror), then `handle.restart()`s, rebinds every view to a fresh
+  /// tabpage (first view → tabpage 1, the rest → a new `:tcd` tabpage), reopens
+  /// the captured files (active LAST so it lands focused), restores the current
+  /// view, and hides every overlay. Guarded against re-entry.
+  func restartNeovim() {
+    guard !restarting else { return }
+    restarting = true
+    defer { restarting = false }
+
+    // Capture the Tier-1 set + cwd per view BEFORE the restart wipes the mirror.
+    let snapshot: [(view: WolfWindowController, cwd: String, openFiles: FfiOpenFiles?)] =
+      views.allObjects.map { view in
+        (view, handle.cwd_for_tabpage(view.tabpageHandle).toString(), view.capturedOpenFiles())
+      }
+
+    // Only an ACTUAL restart (Ok(true)) rebinds + reopens. A no-op (`false`) means
+    // the nvim self-recovered to Alive before the click (a race) OR the respawn
+    // failed (liveness Dead): in both cases we must NOT rebind/reopen — instead
+    // refresh the overlay from a FRESH liveness read, mirroring `onWake`'s mapping.
+    guard handle.restart() else {
+      switch handle.liveness() {
+      case Liveness.dead:
+        for view in views.allObjects { view.showNvimOverlay(.dead) }
+      case Liveness.notResponding:
+        for view in views.allObjects { view.showNvimOverlay(.notResponding) }
+      default:
+        for view in views.allObjects { view.hideNvimOverlay() }
+      }
+      return
+    }
+
+    // Rebind each view to a fresh tabpage and reopen its Tier-1 files.
+    for (index, entry) in snapshot.enumerated() {
+      let tabpage: Int64 =
+        index == 0 ? bindFirstTabpage() : addTabpage(cwd: entry.cwd)
+      guard tabpage != 0 else { continue }
+      entry.view.rebind(toTabpage: tabpage)
+      handle.set_current_tabpage(tabpage)
+
+      // Reopen the captured file-backed buffers; the active buffer LAST so it
+      // lands focused in the rebound view.
+      if let openFiles = entry.openFiles {
+        let active = openFiles.active_path().toString()
+        for path in openFiles.files() {
+          let p = path.as_str().toString()
+          if p != active { handle.open(p) }
+        }
+        if !active.isEmpty { handle.open(active) }
+      }
+    }
+
+    // Restore the project's current view (its tabpage becomes current again) and
+    // clear every crash/stall overlay.
+    if let current = currentView {
+      handle.set_current_tabpage(current.tabpageHandle)
+    }
+    for view in views.allObjects { view.hideNvimOverlay() }
+
+    // Flash a TRANSIENT "Neovim was restarted" banner on every view. This is
+    // independent of the liveness overlay (which the fresh nvim's Alive wake clears
+    // immediately), so the user sees a visible, self-dismissing confirmation over
+    // the now-working editor. Only the SUCCESS path flashes — the no-op/race branch
+    // above does not.
+    for view in views.allObjects { view.flashRestartNotice() }
   }
 
   /// Fans a file-search wake out to the current view's picker (session-local, so

@@ -23,8 +23,8 @@ use crate::layout::LayoutIntent;
 use crate::recent_dirs::RecentDirs;
 use crate::render::{
     Cell, Cmdline, CmdlineChunk, CursorShape, DefaultColors, HlAttr, Message, ModeInfo,
-    PendingConfirm, PreviewInfo, Pum, PumItem, Rgb, SharedSnapshot, Snapshot, ThemeColors,
-    ThemeGroup, ToastChunk, Viewport, WinInfo,
+    PendingConfirm, PreviewInfo, Pum, PumItem, Rgb, SharedSnapshot, Snapshot, TabFiles,
+    ThemeColors, ThemeGroup, ToastChunk, Viewport, WinInfo,
 };
 
 /// A shared, drainable queue of [`LayoutIntent`]s.
@@ -146,6 +146,14 @@ const MARKDOWN_DIRTY_EVENT: &str = "wolf_markdown_dirty";
 /// separately from `redraw` in [`RedrawHandler::handle_notify`].
 const TAB_CWDS_EVENT: &str = "wolf_tab_cwds";
 
+/// Name of the out-of-band notification carrying the Tier-1 open-file mirror,
+/// emitted by the `WolfOpenFiles` autocmds in `runtime/nvim/init.lua` (and once
+/// immediately at setup). The payload is a single msgpack array of
+/// `[tabpage_handle, active_path, files[]]` triples for ALL tabpages; core
+/// WHOLESALE-REPLACES [`Snapshot::open_files`] with the reported set. Routed
+/// separately from `redraw` in [`RedrawHandler::handle_notify`].
+const OPEN_FILES_EVENT: &str = "wolf_open_files";
+
 /// `nvim-rs` [`Handler`] that applies redraw batches to a [`SharedSnapshot`].
 #[derive(Clone)]
 pub struct RedrawHandler {
@@ -217,6 +225,15 @@ impl Handler for RedrawHandler {
                 // wake-after-unlock invariant). This is NOT a redraw frame, so
                 // `seq` is left unchanged.
                 self.apply_tab_cwds(args).await;
+                (self.wake)();
+            }
+            OPEN_FILES_EVENT => {
+                // `apply_open_files` builds the new map BEFORE taking the write
+                // guard, then assigns it wholesale and DROPS the lock before
+                // returning; the wake fires strictly after the lock is released
+                // (same wake-after-unlock invariant). This is NOT a redraw frame, so
+                // `seq` is left unchanged.
+                self.apply_open_files(args).await;
                 (self.wake)();
             }
             FULL_WIDTH_EVENT => {
@@ -567,6 +584,63 @@ impl RedrawHandler {
         let mut snap = self.snapshot.write_async().await;
         snap.tab_cwds = map;
         // A tab_cwds change is NOT a redraw frame, so `seq` is intentionally left
+        // unchanged. The caller fires the wake after this lock drops.
+        // Lock drops here as `snap` goes out of scope at function return.
+    }
+
+    /// Applies a `wolf_open_files` notification: WHOLESALE-REPLACES the snapshot's
+    /// Tier-1 open-file mirror ([`Snapshot::open_files`]) with the reported set.
+    ///
+    /// The single argument is a msgpack array of `[tabpage_handle, active_path,
+    /// files]` triples, one per tabpage. Each `tabpage_handle` decodes via
+    /// [`ext_handle`]; `active_path` is the tabpage's active buffer's name (empty →
+    /// `None`); `files` is an array of the file-backed (non-empty, non-preview)
+    /// buffer names open in the tabpage. Paths are canonicalized (to match the
+    /// canonical paths the rest of core keys on), falling back to the raw path if
+    /// canonicalization fails. A triple missing its handle is SKIPPED.
+    ///
+    /// The new map is built in full BEFORE the write guard is taken (so no
+    /// filesystem work happens under the lock), then assigned wholesale. The lock is
+    /// acquired via [`SharedSnapshot::write_async`], is NOT held across any
+    /// `.await`, and is dropped before returning so the caller's wake fires after
+    /// the lock is released. This is NOT a redraw frame, so `seq` is left unchanged;
+    /// the wholesale replacement drops any closed tabpages.
+    async fn apply_open_files(&self, args: Vec<Value>) {
+        /// Canonicalizes a non-empty path string, raw fallback; empty → `None`.
+        fn canon(s: &str) -> Option<PathBuf> {
+            if s.is_empty() {
+                None
+            } else {
+                Some(std::fs::canonicalize(s).unwrap_or_else(|_| PathBuf::from(s)))
+            }
+        }
+
+        let mut map: HashMap<i64, TabFiles> = HashMap::new();
+        if let Some(triples) = args.first().and_then(Value::as_array) {
+            for triple in triples {
+                let Some(triple) = triple.as_array() else {
+                    continue;
+                };
+                let Some(tp) = triple.first().and_then(ext_handle) else {
+                    continue;
+                };
+                let active = triple.get(1).and_then(Value::as_str).and_then(canon);
+                let files = triple
+                    .get(2)
+                    .and_then(Value::as_array)
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().and_then(canon))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                map.insert(tp, TabFiles { active, files });
+            }
+        }
+
+        let mut snap = self.snapshot.write_async().await;
+        snap.open_files = map;
+        // An open_files change is NOT a redraw frame, so `seq` is intentionally left
         // unchanged. The caller fires the wake after this lock drops.
         // Lock drops here as `snap` goes out of scope at function return.
     }

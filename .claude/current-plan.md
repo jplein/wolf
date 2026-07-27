@@ -1,5 +1,33 @@
 # Plan: macOS pane resize by mouse + full pane-layout persistence
 
+# MERGE FROM MAIN (user-requested) — verification in progress
+
+Merged `origin/main` (9 commits: Neovim crash/stall handling + `:q`/`:qa`→close pane/window +
+test-wiring doc updates) into `feat/macos-pane-dividers`. Conflicts resolved (9 files):
+- `.claude/current-plan.md` → took ours.
+- `crates/wolf-ffi/src/lib.rs` → CODE: `use` import union (ours PaneNode/PaneOrientation +
+  main Liveness/TabFiles).
+- 7 doc files (architecture.md, wolf-core/src+tests README, wolf-ffi/src README, wolf-macos
+  README + Sources README, runtime/nvim README) → merged BOTH features' prose (kept our pane
+  divider/persistence/preview text AND injected main's crash-stall/liveness/FfiOpenFiles text).
+No markers remain; prettier clean. NOT yet committed (merge in progress).
+CRITICAL: generated `wolf-ffi.{swift,h}` were TEXT-auto-merged; both sides changed the bridge
+surface → MUST regenerate before committing. Verification pass (coder): regen bindings, build,
+FULL test suite (incl. main's new nvim_liveness/nvim_restart/swap_recovery), lint.
+
+- [x] Verify (coder): regen bindings (byte-identical to auto-merge → auto-merge was correct);
+      fixed 2 real merge-seam breaks (our `rebuild_layout` vs main's `block_on_rpc` Send+'static
+      + `self.nvim` RefCell change → mirror `create_tabpage`) + rustfmt drift. App builds; 72/72
+      Rust/FFI tests (BOTH families: ours state_layout/rebuild_layout/ffi state/pane_status +
+      main's nvim_liveness/nvim_restart/swap_recovery); WolfKeyMapTests; all 4 lint targets GREEN.
+- [x] Review (reviewer): MERGE RESOLUTION SOUND — all 9 resolutions faithful unions, no dropped/
+      duplicated content, no marker residue, obsolete "divider deferred" text gone everywhere,
+      both rebuild_layout code fixes correct. Fixed 1 flagged pre-existing doc drift (wolf-macos
+      README layoutSnapshot round-1→round-2 signature).
+- [x] Merge committed.
+
+---
+
 # ROUND 2 (user follow-up, committed round 1)
 
 ## Status: ROUND 2 COMPLETE ✅ (all green, reviewer-approved, docs synced) — UNCOMMITTED

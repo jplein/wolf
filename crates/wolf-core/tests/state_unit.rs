@@ -463,3 +463,60 @@ fn state_dir_honors_env_override() {
         "WOLF_STATE_DIR must override the platform state dir"
     );
 }
+
+// =========================================================================
+// swap_dir_for — STABLE per canonical cwd, DISTINCT across cwds (plan §6)
+// (env-mutating: WOLF_STATE_DIR, so serialized behind ENV_LOCK)
+// =========================================================================
+
+/// `swap_dir_for(cwd)` resolves the durable per-project swap dir
+/// (`state_dir()/swap/<stable hash of the canonical cwd>`). The property the
+/// design leans on: it is DETERMINISTIC for a fixed cwd (so a respawn — even in a
+/// separate Wolf process — reuses the SAME dir and finds the prior swap) and
+/// DISTINCT for distinct projects (so their swaps never collide). Under a
+/// `WOLF_STATE_DIR` override it must resolve to `Some(...)` under that dir.
+#[test]
+fn swap_dir_for_is_stable_per_cwd_and_distinct_across_cwds() {
+    let _guard = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+
+    let state = tempdir().expect("create temp state dir");
+    std::env::set_var("WOLF_STATE_DIR", state.path());
+
+    // Two DISTINCT project cwds, canonicalized so the hash input is stable.
+    let proj_a = tempdir().expect("create temp cwd A");
+    let proj_b = tempdir().expect("create temp cwd B");
+    let cwd_a = std::fs::canonicalize(proj_a.path()).expect("canonicalize cwd A");
+    let cwd_b = std::fs::canonicalize(proj_b.path()).expect("canonicalize cwd B");
+
+    let a1 = wolf_core::state::swap_dir_for(&cwd_a);
+    let a2 = wolf_core::state::swap_dir_for(&cwd_a);
+    let b1 = wolf_core::state::swap_dir_for(&cwd_b);
+
+    std::env::remove_var("WOLF_STATE_DIR");
+
+    // Resolvable under the override.
+    let a1 = a1.expect("swap_dir_for(cwd_a) should resolve under WOLF_STATE_DIR");
+    let a2 = a2.expect("swap_dir_for(cwd_a) should resolve under WOLF_STATE_DIR");
+    let b1 = b1.expect("swap_dir_for(cwd_b) should resolve under WOLF_STATE_DIR");
+
+    // STABLE: same canonical cwd -> same swap dir (deterministic hash).
+    assert_eq!(
+        a1, a2,
+        "swap_dir_for must be STABLE for a fixed canonical cwd (found {a1:?} vs {a2:?})"
+    );
+    // DISTINCT: different cwds -> different swap dirs.
+    assert_ne!(
+        a1, b1,
+        "swap_dir_for must be DISTINCT for distinct cwds (both resolved to {a1:?})"
+    );
+    // Rooted under the overridden state dir's `swap/` subtree.
+    let swap_root = state.path().join("swap");
+    assert!(
+        a1.starts_with(&swap_root),
+        "swap_dir_for(cwd_a) = {a1:?} must live under {swap_root:?}"
+    );
+    assert!(
+        b1.starts_with(&swap_root),
+        "swap_dir_for(cwd_b) = {b1:?} must live under {swap_root:?}"
+    );
+}

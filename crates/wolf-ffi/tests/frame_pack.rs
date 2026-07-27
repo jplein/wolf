@@ -101,13 +101,17 @@ fn snapshot(
 ) -> Snapshot {
     let mut grids = HashMap::new();
     grids.insert(grid_id, grid);
-    Snapshot {
-        grids,
-        highlights,
-        cursor,
-        mode_infos,
-        ..Snapshot::default()
-    }
+    // Build from `Snapshot::default()` and assign the PUBLIC fields, rather than a
+    // struct-update literal (`..Snapshot::default()`): the snapshot now carries a
+    // crate-private field (`pending_confirm`), and functional-update syntax cannot
+    // fill a private field across a crate boundary (E0451). Mirrors the
+    // `Snapshot::new(..) + field assignment` pattern the wolf-gnome fixtures use.
+    let mut snap = Snapshot::default();
+    snap.grids = grids;
+    snap.highlights = highlights;
+    snap.cursor = cursor;
+    snap.mode_infos = mode_infos;
+    snap
 }
 
 #[test]

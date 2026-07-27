@@ -21,18 +21,60 @@
 
 local opt = vim.opt
 
--- Hermetic / no on-disk side effects: never touch the user's state.
-opt.swapfile = false
+-- Swap files are ON (crash-recovery of unsaved edits). They live in a DURABLE,
+-- Wolf-owned, per-project swap directory (WOLF_SWAP_DIR, resolved core-side like
+-- state_dir() and STABLE across respawns of the same project) rather than next to
+-- the user's files, so a fresh nvim can recover a crashed nvim's unsaved edits.
+-- The trailing "//" makes nvim encode the full path into the swap file name (so
+-- files with the same basename in different dirs never collide) and DROPS the
+-- default leading "." entry (which would otherwise put a `.swp` next to the file).
+-- Keep nvim's default updatecount/updatetime.
+opt.swapfile = true
+local swap_dir = vim.env.WOLF_SWAP_DIR
+if swap_dir ~= nil and swap_dir ~= "" then
+	opt.directory = swap_dir .. "//"
+end
 
--- Hermetic "edit anyway" swap policy: Wolf does not manage recovery, so a stale
--- swap file (e.g. left by a crashed prior run) must never surface the blocking
--- E325 "swap file exists" prompt. Answer any SwapExists with "e" (edit anyway).
+-- Recovery-aware swap policy: a SwapExists must NEVER surface the blocking E325
+-- prompt. Decide from the swap's owner:
+--   * DEAD owner (stale/unreadable swap, or the owning pid is gone) -> "r": silently
+--     RECOVER the unsaved edit, then schedule a delete of the consumed swap.
+--   * LIVE / UNCERTAIN owner (owner pid still alive, or the swap was written on a
+--     DIFFERENT host so we cannot probe) -> "e": edit the clean on-disk copy anyway.
 local swap_group = vim.api.nvim_create_augroup("WolfSwap", { clear = true })
 vim.api.nvim_create_autocmd("SwapExists", {
 	group = swap_group,
 	pattern = "*",
 	callback = function()
-		vim.v.swapchoice = "e"
+		local uv = vim.uv or vim.loop
+		local swapname = vim.v.swapname
+		local info = vim.fn.swapinfo(swapname)
+		local dead
+		if type(info) ~= "table" or info.error ~= nil then
+			-- Unreadable / malformed swap: treat as a stale (dead) owner.
+			dead = true
+		elseif type(info.host) == "string" and info.host ~= "" and info.host ~= vim.fn.hostname() then
+			-- Written on another machine: we cannot probe that pid -> uncertain -> edit.
+			dead = false
+		elseif type(info.pid) == "number" and info.pid > 0 then
+			-- Existence probe: signal 0 succeeds iff the process is alive; ESRCH (or
+			-- any failure) means the owner is gone (dead).
+			local ok = uv.kill(info.pid, 0)
+			dead = not (ok == 0 or ok == true)
+		else
+			-- No usable owner pid: treat as dead.
+			dead = true
+		end
+
+		if dead then
+			vim.v.swapchoice = "r"
+			-- Delete the consumed swap AFTER recovery completes (post-SwapExists).
+			vim.schedule(function()
+				pcall(vim.fn.delete, swapname)
+			end)
+		else
+			vim.v.swapchoice = "e"
+		end
 	end,
 })
 
@@ -642,6 +684,46 @@ function _G.wolf_setup_layout(chan)
 		end
 	end
 
+	-- QUIT: the :q family (q/quit/wq/x/xit and their banged variants) routed into
+	-- Wolf's pane/window model. `opts = { write = bool, force = bool, all = bool }`.
+	--   * write variants (wq/x/xit) write first; a FAILED write ABORTS the quit
+	--     (native parity -- a failed :wq must not close).
+	--   * multi-pane (NON-all): guarded nvim_win_close(0, force) like do_close;
+	--     force=false refuses to discard unsaved changes, force=true (from :q!)
+	--     discards. No intent -- the shell observes the removal via the win_close
+	--     redraw event.
+	--   * last pane: fire the existing close_window registry command so the
+	--     front-end closes the window -- BUT a plain :q on a modified buffer is
+	--     REFUSED with a native-style E37 (:q! overrides), preventing data loss.
+	--   * all=true (the :qa family: qa/qall/quitall/wqa/wqall/xa/xall + banged):
+	--     SKIP the pane-count check so control ALWAYS reaches the close-window
+	--     branch -- the whole front-end window closes regardless of how many panes
+	--     are open. Same write/force/current-buffer-modified (E37) semantics as
+	--     :q's last-pane branch; the modified guard stays scoped to the current
+	--     buffer (vim.bo.modified), matching :q -- it is not expanded to scan all
+	--     panes.
+	local function do_quit(opts)
+		if opts.write then
+			local ok = pcall(vim.cmd, opts.force and "write!" or "write")
+			if not ok then
+				return
+			end
+		end
+		if not opts.all and #vim.api.nvim_tabpage_list_wins(0) > 1 then
+			pcall(vim.api.nvim_win_close, 0, opts.force or false)
+		else
+			if not opts.force and vim.bo.modified then
+				vim.api.nvim_echo(
+					{ { "E37: No write since last change (add ! to override)", "ErrorMsg" } },
+					true,
+					{}
+				)
+				return
+			end
+			vim.rpcnotify(chan, "wolf_command", "close_window")
+		end
+	end
+
 	-- FOCUS: PURE intent. Do NOT change nvim focus here; just report the request.
 	local function do_focus(dir)
 		vim.rpcnotify(chan, "wolf_layout", {
@@ -667,6 +749,7 @@ function _G.wolf_setup_layout(chan)
 	-- can emit the drawer intent over this setup's layout channel).
 	_G.wolf_do_split = do_split
 	_G.wolf_do_close = do_close
+	_G.wolf_do_quit = do_quit
 	_G.wolf_do_focus = do_focus
 	_G.wolf_emit_drawer = emit_drawer
 
@@ -735,6 +818,44 @@ function _G.wolf_setup_layout(chan)
 	abbrev("close", "lua wolf_do_close()")
 	abbrev("new", "lua wolf_do_split('h')")
 	abbrev("vnew", "lua wolf_do_split('v')")
+
+	-- QUIT family: the bare word expands to an INTERNAL banged user command (NOT a
+	-- registry command). Typing :q! fires the bare-`q` abbrev (getcmdline()=='q'
+	-- still true), so `q` -> WolfQuit and the trailing `!` rides through to
+	-- :WolfQuit! -- a valid banged invocation whose callback sees o.bang == true.
+	-- The :qa family (qa/qall/quitall -> WolfQuitAll; wqa/wqall/xa/xall ->
+	-- WolfWriteQuitAll) works the same way and passes all=true so do_quit always
+	-- closes the window. `a` is a keyword char, so :qa forms a distinct word and
+	-- never triggers the bare-`q` abbrev. These are internal plumbing user commands,
+	-- NOT registry commands (no command.rs/FFI/Swift changes).
+	-- CRITICAL: do NOT add q!/quit!/wq!/qa!/wqa! etc. abbrevs; `!` is not a keyword
+	-- char and such an abbrev would be dead/broken. For the banged forms the `!`
+	-- rides through to :WolfQuit! / :WolfQuitAll! / :WolfWriteQuitAll! (o.bang ->
+	-- force).
+	vim.api.nvim_create_user_command("WolfQuit", function(o)
+		do_quit({ write = false, force = o.bang })
+	end, { bang = true, nargs = 0 })
+	vim.api.nvim_create_user_command("WolfWriteQuit", function(o)
+		do_quit({ write = true, force = o.bang })
+	end, { bang = true, nargs = 0 })
+	abbrev("q", "WolfQuit")
+	abbrev("quit", "WolfQuit")
+	abbrev("wq", "WolfWriteQuit")
+	abbrev("x", "WolfWriteQuit")
+	abbrev("xit", "WolfWriteQuit")
+	vim.api.nvim_create_user_command("WolfQuitAll", function(o)
+		do_quit({ write = false, force = o.bang, all = true })
+	end, { bang = true, nargs = 0 })
+	vim.api.nvim_create_user_command("WolfWriteQuitAll", function(o)
+		do_quit({ write = true, force = o.bang, all = true })
+	end, { bang = true, nargs = 0 })
+	abbrev("qa", "WolfQuitAll")
+	abbrev("qall", "WolfQuitAll")
+	abbrev("quitall", "WolfQuitAll")
+	abbrev("wqa", "WolfWriteQuitAll")
+	abbrev("wqall", "WolfWriteQuitAll")
+	abbrev("xa", "WolfWriteQuitAll")
+	abbrev("xall", "WolfWriteQuitAll")
 
 	-- Active-window tracking: report the focused window on every WinEnter, and emit
 	-- once immediately so the startup window is reflected.
@@ -1071,6 +1192,83 @@ function _G.wolf_setup_tabs(chan)
 	for _, w in ipairs({ "tabnew", "tabnext", "tabprevious", "tabonly", "tabclose", "tabmove" }) do
 		lock(w)
 	end
+end
+
+-- Tier-1 open-file mirror: wolf-core invokes this over RPC after the command
+-- setup, passing its own RPC channel id. It notifies core of the file-backed
+-- buffers open PER TABPAGE (plus each tabpage's active buffer) via wolf_open_files
+-- on every relevant buffer/window/tab event (emitting once immediately). Core
+-- mirrors this Rust-side so the open-file set survives nvim death, and the
+-- front-end reopens those files after a crash restart.
+--
+-- The payload is a list of { tp_handle, active_path, files } triples, one per
+-- tabpage. `files` are the non-empty buffer names of the tabpage's windows,
+-- EXCLUDING preview scratch buffers (b:wolf_preview_source) and unnamed buffers.
+-- `active_path` is the tabpage's active window's buffer name (empty for unnamed).
+function _G.wolf_setup_open_files(chan)
+	local group = vim.api.nvim_create_augroup("WolfOpenFiles", { clear = true })
+
+	local function buf_is_preview(buf)
+		local ok, val = pcall(vim.api.nvim_buf_get_var, buf, "wolf_preview_source")
+		return ok and val ~= nil
+	end
+
+	-- The whole nvim instance's file-backed (non-empty, non-preview) buflisted
+	-- buffer set. Buffers are GLOBAL in nvim (shared across tabpages), so this is
+	-- the authoritative "what files are open" set — it survives an `:edit` that
+	-- hides (but keeps listed) an earlier buffer, which a per-window scan would
+	-- miss. Preview scratch buffers and unnamed buffers are excluded.
+	local function listed_files()
+		local seen = {}
+		local files = {}
+		for _, info in ipairs(vim.fn.getbufinfo({ buflisted = 1 })) do
+			local buf = info.bufnr
+			local name = info.name
+			if name ~= nil and name ~= "" and not buf_is_preview(buf) and not seen[name] then
+				seen[name] = true
+				files[#files + 1] = name
+			end
+		end
+		return files
+	end
+
+	local function emit()
+		local files = listed_files()
+		local list = {}
+		for _, tp in ipairs(vim.api.nvim_list_tabpages()) do
+			local active_path = ""
+			-- The tabpage's active buffer (its current window's buffer name).
+			local ok_win, win = pcall(vim.api.nvim_tabpage_get_win, tp)
+			if ok_win then
+				local ok_buf, abuf = pcall(vim.api.nvim_win_get_buf, win)
+				if ok_buf and not buf_is_preview(abuf) then
+					local name = vim.api.nvim_buf_get_name(abuf)
+					if name ~= "" then
+						active_path = name
+					end
+				end
+			end
+			list[#list + 1] = { tp, active_path, files }
+		end
+		vim.rpcnotify(chan, "wolf_open_files", list)
+	end
+
+	vim.api.nvim_create_autocmd({
+		"BufEnter",
+		"BufWinEnter",
+		"BufWritePost",
+		"BufFilePost",
+		"BufDelete",
+		"WinEnter",
+		"TabEnter",
+		"TabNewEntered",
+		"TabClosed",
+	}, {
+		group = group,
+		callback = emit,
+	})
+	-- Initial emit so the startup open-file set is reflected without an event.
+	emit()
 end
 
 -- Per-pane view tracking for the buffer picker: wolf-core invokes this over RPC

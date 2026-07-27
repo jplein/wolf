@@ -242,6 +242,10 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     emptyState.isHidden = hasFolder
     self.emptyState = emptyState
 
+    // The "Restart Neovim" button (on the crash/stall overlay) drives the
+    // project-wide restart (kill + respawn + reopen the Tier-1 files per view).
+    paneContainer.onRestart = { [weak self] in self?.project.restartNeovim() }
+
     // The top-center picker, hosted in its OWN borderless non-activating child
     // panel composited IN FRONT of this window (so it renders above the preview
     // `WKWebView`) — not a pane-container subview. The host is strong-held here;
@@ -401,6 +405,37 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
       coordinator?.scheduleStateSnapshot()
     }
     drainAndDispatchCommands()
+  }
+
+  /// Shows this view's crash/stall overlay for `mode` (fanned by the project when
+  /// it reads a non-`Alive` liveness).
+  func showNvimOverlay(_ mode: NvimStatusMode) {
+    paneContainer?.showNvimOverlay(mode)
+  }
+
+  /// Hides this view's crash/stall overlay (liveness returned to `Alive`).
+  func hideNvimOverlay() {
+    paneContainer?.hideNvimOverlay()
+  }
+
+  /// Flashes this view's transient "Neovim was restarted" banner (fanned by the
+  /// project at the end of a successful restart; auto-dismisses on its own timer).
+  func flashRestartNotice() {
+    paneContainer?.flashRestartNotice()
+  }
+
+  /// Rebinds this view to a FRESH tabpage after a crash-restart: updates the
+  /// stored `tabpageHandle` and re-gates the pane container's refocus rebind so
+  /// the next render wake repaints against the new nvim's tabpage.
+  func rebind(toTabpage handle: Int64) {
+    tabpageHandle = handle
+    paneContainer?.rebind(tabpageHandle: handle)
+  }
+
+  /// This view's bound nvim tabpage's Tier-1 open-file set (captured BEFORE a
+  /// restart wipes the mirror), or `nil` when the core is gone.
+  func capturedOpenFiles() -> FfiOpenFiles? {
+    handle?.open_files_for_tabpage(tabpageHandle)
   }
 
   /// Transitions this window from the empty state into an open project: reveals

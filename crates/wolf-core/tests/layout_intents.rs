@@ -422,6 +422,86 @@ fn ctrl_w_c_closes_pane_when_multiple() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
+/// Typing `:q<CR>` (the `cnoreabbrev` -> `WolfQuit` path) with multiple windows
+/// performs a guarded `nvim_win_close`, so the window count drops back by one —
+/// exactly like `<C-w>c`. The buffer is unmodified, so `force = false` closes the
+/// active pane cleanly. Mirrors `ctrl_w_c_closes_pane_when_multiple`.
+#[test]
+fn ex_q_closes_pane_when_multiple() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    let base = wait_for_initial_window(&core, &waiter);
+    let _ = core.drain_intents();
+
+    // Make two windows to have one to close.
+    ctrl_w_then(&core, 'v');
+    let _ = drain_until_intent(&core, FLUSH_TIMEOUT, "Split from <C-w>v (setup)");
+    poll_until(
+        &core,
+        &waiter,
+        "two windows after the setup <C-w>v",
+        |snap| snap.windows.len() == base + 1,
+    );
+
+    // Close the focused pane via `:q` (routes through WolfQuit -> do_quit).
+    ex_command(&core, "q");
+    poll_until(
+        &core,
+        &waiter,
+        "windows.len() to drop back by one after :q",
+        |snap| snap.windows.len() == base,
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// Typing `:qa<CR>` (the `cnoreabbrev` -> `WolfQuitAll` path) with multiple
+/// windows must NOT merely drop the pane count — unlike `:q`, which closes just the
+/// active pane (see `ex_q_closes_pane_when_multiple` above). `:qa` always takes the
+/// close-window branch, firing `close_window` for the front-end to close the WHOLE
+/// window, and in this core-only test nothing acts on that command, so the nvim
+/// pane count stays put. This is the NEGATIVE half of the differentiator; the
+/// POSITIVE close_window proof lives in
+/// `commands.rs::ex_qa_emits_close_window_when_multiple_panes`. Mirrors
+/// `ex_q_closes_pane_when_multiple`'s setup and the SETTLE style of
+/// `ctrl_w_c_noop_on_last_window`.
+#[test]
+fn ex_qa_does_not_merely_drop_pane_count() {
+    let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
+    let base = wait_for_initial_window(&core, &waiter);
+    let _ = core.drain_intents();
+
+    // Make two windows so this is genuinely the multi-pane case.
+    ctrl_w_then(&core, 'v');
+    let _ = drain_until_intent(&core, FLUSH_TIMEOUT, "Split from <C-w>v (setup)");
+    poll_until(
+        &core,
+        &waiter,
+        "two windows after the setup <C-w>v",
+        |snap| snap.windows.len() == base + 1,
+    );
+
+    // `:qa` routes through WolfQuitAll -> do_quit({ all = true }) -> always-close
+    // branch. It fires `close_window` (asserted in commands.rs), NOT a pane close,
+    // so the nvim pane count must NOT drop back to `base`.
+    ex_command(&core, "qa");
+
+    // Let any (erroneous) pane close settle, draining wakes on the interval like the
+    // negative tests do, then assert the pane count did NOT drop to `base`.
+    let settle_deadline = Instant::now() + SETTLE;
+    while Instant::now() < settle_deadline {
+        waiter.drain();
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    assert_ne!(
+        core.read_snapshot().windows.len(),
+        base,
+        "with multiple panes, :qa must NOT merely drop the pane count (it closes the whole \
+         window via close_window instead); the pane count should stay above the single-pane base"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
 /// `<C-w>c` on the LAST window is a no-op (the Lua guard refuses to close the
 /// final window), so the window count is unchanged and nvim stays alive (a
 /// subsequent edit still produces a flush).

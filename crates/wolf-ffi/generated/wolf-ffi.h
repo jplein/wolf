@@ -21,6 +21,18 @@ void* __swift_bridge__$Vec_WolfCoreHandle$get_mut(void* vec_ptr, uintptr_t index
 uintptr_t __swift_bridge__$Vec_WolfCoreHandle$len(void* vec_ptr);
 void* __swift_bridge__$Vec_WolfCoreHandle$as_ptr(void* vec_ptr);
 
+typedef struct FfiOpenFiles FfiOpenFiles;
+void __swift_bridge__$FfiOpenFiles$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiOpenFiles$new(void);
+void __swift_bridge__$Vec_FfiOpenFiles$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiOpenFiles$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiOpenFiles$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiOpenFiles$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiOpenFiles$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiOpenFiles$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiOpenFiles$as_ptr(void* vec_ptr);
+
 typedef struct FfiPreview FfiPreview;
 void __swift_bridge__$FfiPreview$_free(void* self);
 
@@ -343,6 +355,9 @@ void* __swift_bridge__$WolfCoreHandle$cwd_for_tabpage(void* self, int64_t tab);
 void __swift_bridge__$WolfCoreHandle$set_current_tabpage(void* self, int64_t tab);
 void __swift_bridge__$WolfCoreHandle$close_tabpage(void* self, int64_t tab);
 void __swift_bridge__$WolfCoreHandle$focus_win(void* self, int64_t win);
+uint8_t __swift_bridge__$WolfCoreHandle$liveness(void* self);
+bool __swift_bridge__$WolfCoreHandle$restart(void* self);
+void* __swift_bridge__$WolfCoreHandle$open_files_for_tabpage(void* self, int64_t tab);
 void __swift_bridge__$WolfCoreHandle$set_ui_focus(void* self, bool gained);
 void __swift_bridge__$WolfCoreHandle$shutdown(void* self);
 void* __swift_bridge__$WolfCoreHandle$start_file_search(void* self);
@@ -379,6 +394,8 @@ void* __swift_bridge__$WolfCoreHandle$previews(void* self);
 void* __swift_bridge__$WolfCoreHandle$cmdline(void* self);
 void* __swift_bridge__$WolfCoreHandle$pum(void* self);
 void* __swift_bridge__$WolfCoreHandle$toast(void* self);
+void* __swift_bridge__$FfiOpenFiles$active_path(void* self);
+void* __swift_bridge__$FfiOpenFiles$files(void* self);
 int64_t __swift_bridge__$FfiPreview$win(void* self);
 int64_t __swift_bridge__$FfiPreview$source_bufnr(void* self);
 void* __swift_bridge__$FfiPreview$source_name(void* self);

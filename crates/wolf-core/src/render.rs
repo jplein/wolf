@@ -481,6 +481,24 @@ pub struct PreviewInfo {
     pub source_full_width: bool,
 }
 
+/// The Tier-1 open-file mirror for one tabpage: the set of file-backed buffers
+/// open in that tabpage, plus its active buffer's path.
+///
+/// Maintained out-of-band via the `wolf_open_files` notification (the
+/// `WolfOpenFiles` autocmds in `runtime/nvim/init.lua`), wholesale-replaced per
+/// tabpage in [`Snapshot::open_files`]. Read (per tabpage handle) by
+/// [`crate::api::WolfCore::open_files_for_tabpage`] BEFORE a restart, so the
+/// front-end can reopen the files a crashed nvim had open. `files` are the
+/// non-empty, non-preview buffer names; `active` is the tabpage's active buffer's
+/// path (`None` when unnamed). Paths are canonicalized (raw fallback).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TabFiles {
+    /// The tabpage's active buffer's path, or `None` for an unnamed buffer.
+    pub active: Option<PathBuf>,
+    /// The file-backed (non-empty, non-preview) buffer paths open in the tabpage.
+    pub files: Vec<PathBuf>,
+}
+
 /// One styled run of command-line text, from a `cmdline_show` content tuple.
 ///
 /// Neovim reports the command-line content as a list of `[attr, text]` tuples;
@@ -764,6 +782,15 @@ pub struct Snapshot {
     /// lookup (no RPC), authoritative even for a NON-current view. Defaults to
     /// empty.
     pub tab_cwds: HashMap<i64, PathBuf>,
+    /// The Tier-1 open-file mirror, keyed by TABPAGE handle (an `i64`). Each entry
+    /// is that tabpage's file-backed open buffers + its active buffer, per
+    /// [`TabFiles`]. Updated out-of-band from the redraw stream via the
+    /// `wolf_open_files` notification (see [`crate::redraw`]): the whole map is
+    /// WHOLESALE-REPLACED on each emit, so closed tabpages vanish. Because it is not
+    /// a redraw frame, updating it does NOT bump `seq`. Read (per handle) by
+    /// [`crate::api::WolfCore::open_files_for_tabpage`] so the front-end can reopen
+    /// a crashed nvim's files after a restart. Defaults to empty.
+    pub open_files: HashMap<i64, TabFiles>,
     /// The native command line (`ext_cmdline`), folded from `cmdline_show` /
     /// `cmdline_pos` / `cmdline_hide` (see [`crate::redraw`]). Inactive by
     /// default; the front-ends paint it at the bottom of the editor area.

@@ -49,6 +49,7 @@ pub mod config;
 pub mod files;
 pub mod input;
 pub mod layout;
+pub mod liveness;
 pub mod logging;
 pub mod markdown;
 pub mod mru;
@@ -74,6 +75,7 @@ pub use input::{
     ScrollDirection, ScrollEvent,
 };
 pub use layout::{FocusDir, LayoutIntent, SplitOrientation};
+pub use liveness::Liveness;
 pub use logging::init_tracing;
 pub use markdown::{
     code_blocks, render_html, render_html_with_highlights, theme_css, BlockHighlight,
@@ -88,7 +90,7 @@ pub use redraw::WakeFn;
 pub use render::{
     Cell, Cmdline, CmdlineChunk, Cursor, CursorShape, DefaultColors, Grid, HighlightTable, HlAttr,
     Message, ModeInfo, PreviewInfo, Pum, PumItem, ResolvedStyle, Rgb, SharedSnapshot, Snapshot,
-    ThemeColors, ThemeGroup, Toast, ToastChunk, Viewport, WinInfo,
+    TabFiles, ThemeColors, ThemeGroup, Toast, ToastChunk, Viewport, WinInfo,
 };
 pub use state::{
     load_state, state_dir, PaneNode, PaneOrientation, StateStore, TabState, WindowState, WolfState,
