@@ -16,7 +16,7 @@
 //  canonicalize — the AppKit caller persists an already-canonical cwd via
 //  `cwd_for_tabpage`, so grouping is on the cwd string as-saved. Imports only
 //  Foundation, so it lives in the Foundation-only `WolfKeyMap` module alongside
-//  `StateSeam.swift` / `TabTitleSeam.swift`.
+//  `StateSeam.swift` / `CwdTitleSeam.swift`.
 //
 
 import Foundation

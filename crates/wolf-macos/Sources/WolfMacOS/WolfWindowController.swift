@@ -153,13 +153,6 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
   /// `nil` until the first non-empty cwd is observed.
   private var initialCwd: String?
 
-  /// This view's cached active-buffer path, refreshed from `handle.current_file()`
-  /// at the TOP of every render wake (OD6). A NON-current view keeps its last
-  /// cached value (a non-current tabpage's buffer cannot change without input),
-  /// so tab titles stay frozen-accurate; a restored-but-never-focused view holds
-  /// `""` until its first focus (a generic-label fallback — v1 limitation).
-  private var cachedActiveBufferPath = ""
-
   init(
     tabId: Int,
     project: Project,
@@ -359,10 +352,6 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     let frameStart = FrameMetrics.begin()
     defer { FrameMetrics.end(.controllerWake, frameStart) }
 
-    // Cache this view's active-buffer path FIRST (OD6): tab titles read the
-    // cached value per wake, so a non-current view keeps its last-known title.
-    cachedActiveBufferPath = handle?.current_file().toString() ?? cachedActiveBufferPath
-
     paneContainer?.onRenderWake()
     // The tree is driven only for a window that has a folder — an empty-state
     // window never scans/reroots (TreeWakeBridge already no-ops while its
@@ -392,9 +381,9 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     }
 
     // Refresh the tab titles for this window's whole tab group from each
-    // tab's active buffer basename (with minimal disambiguation on a
-    // collision) via the coordinator. Set unconditionally each wake — the
-    // active buffer / current_file may change with no cwd change.
+    // tab's working directory (abbreviating the home prefix to `~`) via the
+    // coordinator. Set unconditionally each wake — a `:cd` changes a tab's cwd
+    // with no separate signal here, so re-derive the titles every wake.
     if let window {
       coordinator?.refreshTabTitles(forGroupOf: window)
     }
@@ -685,15 +674,6 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
   var sidebarVisible: Bool {
     guard let window else { return false }
     return !window.sidebarItem.isCollapsed
-  }
-
-  /// The absolute path of this tab's active buffer, CACHED from the last render
-  /// wake (OD6). A non-current view returns its last-known value (its buffer
-  /// cannot change without input), so the coordinator's `TabTitleSeam` titles
-  /// stay frozen-accurate for background tabs. `""` for an unnamed buffer or a
-  /// restored-but-never-focused view.
-  var activeBufferPath: String {
-    cachedActiveBufferPath
   }
 
   /// This view's PERSISTED working directory for the state snapshot + any

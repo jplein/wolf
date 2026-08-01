@@ -1,87 +1,177 @@
-# Plan: Move recent-files MRU cache to the state directory
-
-## Status: COMPLETE ✓
-
-## Progress log
-- **test-writer**: rewrote `tests/mru.rs` (8 cases: create/record/filter/order+upsert/prune/state-dir-location/cap/relative-display), added `common::hermetic_state_dir()`, updated `mru_open_records.rs` + `file_search.rs` (3 tests) + stale comments. No BUILD changes (targets already wired).
-- **coder**: implemented `mru.rs` rewrite (global self-healing store, `directory`+`file` schema, filter/prune/cap), `lib.rs` re-export, `api.rs` (dropped `MruCache`/`mru_for`/`CoreError::Mru`/pre-warm; `mru: MruStore` field). Docs updated + prettier. Tests GREEN under `bazelisk test`: `:mru` 8/8, `:mru_open_records` 2/2, `:file_search` 11/11 (confirmed not cached). Clippy + rustfmt_core/ffi PASS; wolf-core + wolf-ffi build.
-- **reviewer**: APPROVED. All 5 correctness questions verified (write/read directory normalization agree in tracked + fallback paths; prune is best-effort `let _=`; `MRU_LIMIT` per-directory; no panic/unwrap; nothing creates `<cwd>/.wolf` for MRU). One nit: `mru.rs` clock-before-epoch logged at `warn!` vs documented `debug!`.
-- **coder (nit fix)**: downgraded `mru.rs:112` `warn!`→`debug!` to match documented contract. `:mru` 8/8, build, rustfmt_core, clippy all PASS.
-- **technical-writer**: verified core READMEs accurate; corrected remaining stale MRU-location references — `wolf-gnome/tests/common/mod.rs:67`, `wolf-ffi/tests/common/mod.rs`, `wolf-core/tests/README.md`, `wolf-ffi/tests/README.md`, `src/README.md` (per-cwd phrasings), `redraw.rs`, `init.lua`, `BUILD.bazel`, and ~22 wolf-ffi test-file comments ("per-cwd/`.wolf` MRU" → "global store scoped by live cwd"). Left legitimate `.wolf` traversal-exclusion docs intact.
-- **orchestrator**: ran `prettier --write` on the 3 edited `.md` files (all clean/unchanged). Technical-writer's other edits were comment-only (`.rs`/`BUILD.bazel`/`init.lua`) — no impact on build/rustfmt.
-
-## COMPLETE ✓
-MRU cache moved to `state_dir()/file-mru.sqlite` with `directory`+`file` schema, directory-filtered recents, no migration. Tested (bazelisk: `:mru` 8/8, `:mru_open_records` 2/2, `:file_search` 11/11), reviewed (APPROVED), documented, formatters green.
+# Current Plan: Sidebar UI — Toolbar + Working-Directory Title
 
 ## Problem statement
 
-The recent-files MRU cache currently lives in the working directory at
-`<cwd>/.wolf/mru.sqlite`. It must move to the platform state directory
-(`~/Library/Application Support/Wolf` on macOS, the XDG state dir on Linux),
-using the existing `crate::state::state_dir()` helper.
+We are changing the macOS window chrome (`crates/wolf-macos`) in two ways:
 
-### Requirements
+1. **Show a toolbar.** The window currently has NO `NSToolbar` (it uses a
+   transparent `.fullSizeContentView` titlebar). Add an `NSToolbar`. For now its
+   ONLY item is a "show sidebar" button (toggle the file-tree sidebar).
 
-1. Store the recent-files MRU in the state directory (single global DB),
-   following the pattern of the sibling stores `command-mru.sqlite` and
-   `folder-mru.sqlite`.
-2. The MRU table must have a `file` column and a `directory` column,
-   replacing the current single `path TEXT PRIMARY KEY` column.
-3. When Wolf populates the recent-file list, it must filter to only the rows
-   whose `directory` matches the current working directory.
-4. Retain `opened_at` ordering (most-recent first).
-5. **No migration path** — the old `<cwd>/.wolf/mru.sqlite` scheme is simply
-   dropped. Do not attempt to read or migrate the old DB.
+2. **Show the working directory instead of the filename in the title.** Today the
+   window `title` shows the active buffer's filename (basename) via
+   `TabTitleSeam` + `AppDelegate.refreshTabTitles`. Change it so the title shows
+   the **working directory**, with a **file proxy** (`representedURL` = the cwd)
+   so the user can command-click the title to see its parent directories.
 
-### Key files
-- `crates/wolf-core/src/mru.rs` — `MruStore`, schema, `open`/`record`/`recent`/`recent_inner`.
-- `crates/wolf-core/src/api.rs` — `mru_for` HashMap cache, record on `InputEvent::Open`
-  (~L406), `mru_recent()` (~L980), `start_file_search` seed (~L1104-1111), pre-warm (~L340).
-- `crates/wolf-core/src/state.rs:194` — `state_dir()` helper.
-- `crates/wolf-core/src/command_mru.rs`, `recent_dirs.rs` — sibling-store patterns.
-- `crates/wolf-core/README.md` — MRU documentation (source of truth; must be updated).
+## Decisions (confirmed with the user)
 
-### Testing rules (CLAUDE.md)
-- Prefer real-nvim integration / end-to-end tests over mocks.
-- Any new Rust test file must be wired into a `rust_test` target in `BUILD.bazel`
-  and confirmed to run under `bazelisk test`.
+- **Title text form:** the FULL working-directory path, abbreviating `$HOME` → `~`
+  per macOS convention (e.g. `~/Git/jplein/wolf`).
+- **Tab labels:** `NSWindow.title` drives BOTH the titlebar text AND the native
+  tab-group label. Both become the working directory. The filename-based
+  `TabTitleSeam` disambiguation is RETIRED (tabs in the same folder share a
+  label — acceptable).
+- **File proxy:** set `window.representedURL` to the cwd directory URL so the
+  proxy icon + command-click parent-hierarchy popup works.
+- **Toolbar item:** a single toggle-sidebar button.
 
-## Architect plan
+## Key existing code (for reference)
 
-### Key decisions
-- **DB filename**: `file-mru.sqlite` under `state_dir()` (matches `command-mru.sqlite`/`folder-mru.sqlite`). Const `MRU_DB_NAME = "file-mru.sqlite"`.
-- **Schema**:
-  ```
-  CREATE TABLE IF NOT EXISTS mru (
-      directory  TEXT    NOT NULL,
-      file       TEXT    NOT NULL,
-      opened_at  INTEGER NOT NULL,
-      PRIMARY KEY (directory, file)
-  )
-  ```
-  `file` stores the **absolute** path (canonical if exists, else absolutized against `directory`). `FileEntry.path` = `PathBuf::from(file)`; `FileEntry.display` = `strip_prefix(directory)`.
-- **Directory normalization**: helper `normalize_dir(dir) = canonicalize(dir).unwrap_or(dir)`, applied identically on write and read so `WHERE directory = ?` matches exactly.
-- **Collapse the per-cwd `MruCache` HashMap** into a single global always-on `MruStore` built once in `start` from `state_dir()` (or `disabled()`). Scoping directory passed into `record`/`recent`. Removes `mru_for`, `MruCache`, pre-warm.
-- **Infallible + self-heal pattern** mirroring `recent_dirs.rs`/`command_mru.rs`: drop `MruError`; `open` infallible; `record`/`recent` swallow errors. Drop `CoreError::Mru`.
-- **Retain**: `opened_at DESC, rowid DESC` ordering, `MRU_LIMIT = 50` per-directory, WAL, busy_timeout=2000, inline missing-file prune (`!path.exists()` → best-effort `DELETE`, `let _ =`, NOT `?`), `mru_rank` 0-based.
+- `crates/wolf-macos/Sources/WolfMacOS/MainWindow.swift` — the `NSWindow`
+  subclass; transparent titlebar, computes chrome height to keep the grid at
+  exactly cols×rows.
+- `crates/wolf-macos/Sources/WolfMacOS/EditorSplitViewController.swift` — the
+  `NSSplitViewController`; `sidebarItem` is the collapsible `.sidebar` split item.
+- `crates/wolf-macos/Sources/WolfMacOS/AppDelegate.swift` —
+  `refreshTabTitles(forGroupOf:)` sets each tab's `NSWindow.title` from
+  `TabTitleSeam.labels(...)`.
+- `crates/wolf-macos/Sources/WolfMacOS/WolfWindowController.swift` — per-window
+  controller; `persistedCwd` / `currentCwd` expose the cwd; `onRenderWake()`
+  already calls `coordinator?.refreshTabTitles(forGroupOf:)` each wake and
+  reacts to cwd changes.
+- `crates/wolf-macos/Sources/WolfKeyMap/TabTitleSeam.swift` — pure filename-title
+  seam (Foundation-only, tested by `TabTitleSeamTests`).
 
-### Files to modify
-1. `crates/wolf-core/src/mru.rs` — rewrite: new struct `{ dir: Option<PathBuf>, conn: Arc<Mutex<Option<Connection>>> }`; `open(dir)->MruStore`, `disabled()`, `record(&self, directory, file)`, `recent(&self, directory)->Vec<FileEntry>`; self-heal helpers `with_conn`/`db_path`/`init`/`open_or_heal`/`remove_db_files`; `normalize_dir`, `absolute`, `display_for`, `now_millis`. Remove `MruError`.
-2. `crates/wolf-core/src/lib.rs` — L84 `pub use mru::{MruStore, MRU_LIMIT};` (drop `MruError`); L31 doc.
-3. `crates/wolf-core/src/api.rs` — drop `MruCache` (L38-45) + `mru_for` (L47-74) + `CoreError::Mru` (L106-122); import `use crate::mru::{FileEntry, MruStore};`; struct field `mru: MruStore` (was `mru_cache`); construct in `start` near recent_dirs/command_mru (`state_dir().map(|d| MruStore::open(&d)).unwrap_or_else(MruStore::disabled)`); remove pre-warm (L340-343); pump clone `pump_mru`; record path (L399-409) → `pump_mru.record(&record_cwd, path)`; `mru_recent` (L980-989) → `self.mru.recent(&cwd)`; `start_file_search` seed (L1088-1109) → `self.mru.recent(&root)`; update `CoreConfig.cwd` doc (L99-104).
-4. `crates/wolf-core/src/README.md` — rewrite `## mru.rs` (L280-292): new location/struct/schema/signatures; remove `MruError` + per-cwd `MruCache`/`mru_for`. Adjust `## recent_dirs.rs`/`## command_mru.rs` cross-refs.
-5. `crates/wolf-core/README.md` — L70 `mru_recent` reword; L24/L102/L267 drop `<cwd>/.wolf`/`MruError` (L102 lists `MruStore`/`MRU_LIMIT` only).
+## Status: COMPLETE ✓
 
-### Test plan (all targets already wired — no new BUILD wiring)
-- `crates/wolf-core/tests/mru.rs` (headless, `//crates/wolf-core:mru`) — rewrite to new API; cases: (a) record writes correct dir/file; (b) `recent` filters by directory (A vs B isolation); (c) opened_at ordering + ranks + upsert re-record; (d) missing-file prune (re-open confirms DELETE); (e) DB at `<state_dir>/file-mru.sqlite`, no `.wolf` created; cap at MRU_LIMIT; nested display relative to directory.
-- `crates/wolf-core/tests/mru_open_records.rs` (real-nvim, `//crates/wolf-core:mru_open_records`) — rewrite physical-DB assertions to `MruStore::open(&common::hermetic_state_dir())` + `recent(&cwd_b)`/`recent(&cwd_a)`; update doc comments.
-- `crates/wolf-core/tests/file_search.rs` (real-nvim, `//crates/wolf-core:file_search`) — `wolf_cache_dir_is_excluded`: drop `<cwd>/.wolf` existence assert, manually create `.wolf/junk.md` to still exercise exclusion; `mru_seed_is_synchronous_and_not_duplicated` + `mru_seed_follows_nvim_cd`: pre-seed via `MruStore::open(&hermetic_state_dir()).record(&cwd, file)`; final assert `<hermetic>/file-mru.sqlite` exists.
-- `crates/wolf-core/tests/common/mod.rs` — add `pub fn hermetic_state_dir() -> PathBuf`; fix stale `<cwd>/.wolf/mru.sqlite` comments (L194-197, L254-255).
+Docs updated (README ×3 + architecture.md), prettier-conformant, no orphan
+`TabTitleSeam` refs in code/BUILD. Tests pass (273, 0 failures; 9 new
+CwdTitleSeamTests run). Build clean. Manual-smoke items remain for the user (see
+below).
 
-### Notable correctness points
-- Exact filter match hinges on identical `normalize_dir` on write and read.
-- Inline-prune `DELETE` must NOT propagate through `with_conn` (would heal/recreate whole DB on transient failure).
-- Old `<cwd>/.wolf/mru.sqlite` never read/deleted/migrated; `.wolf` exclusion in `files.rs` left as harmless backstop.
-- Lint: lock mutex guard into a named local (avoid `clippy::significant_drop_in_scrutinee`), mirror sibling `with_conn`.
+## Status (historical): review PASSED — updating docs
 
-### Optional (comment-only, accuracy): stale `<cwd>/.wolf` MRU comments in wolf-ffi/wolf-gnome test files — not required to pass.
+### Reviewer verdict: Approved, no code defects
+- All 6 focus areas PASS. Notes: (1) stale `TabTitleSeam` reference at
+  `architecture.md:66` — route to tech-writer (NOT in the original §F list);
+  (2) `.whitespaces` vs `.whitespacesAndNewlines` in CwdTitleSeam.swift:35 —
+  theoretical only, LEFT as-is.
+
+### Coder result
+- Implemented all steps A–F. `bazelisk test //crates/wolf-macos:WolfKeyMapTests`
+  → 273 tests, 0 failures; all 9 `CwdTitleSeamTests` ran; `TabTitleSeamTests`
+  gone. `bazelisk build //crates/wolf-macos:wolf_macos_lib //crates/wolf-macos:wolf_key_map`
+  → success. `//tools/lint:swift_format` → passed. No deviations.
+- SourceKit diagnostics (WolfFFI/WolfKeyMap/XCTest "No such module",
+  SavedPaneNode) are IDE-only false positives — Bazel build is authoritative.
+- Manual-smoke items still pending (non-headless): initial grid stays cols×rows
+  with toolbar band; toggle-sidebar button works; cwd title + proxy command-click;
+  empty-state "Wolf" + no proxy.
+
+## Architect's implementation plan
+
+### A. New title seam + test
+- CREATE `Sources/WolfKeyMap/CwdTitleSeam.swift`: `public enum CwdTitleSeam` with
+  `public static func displayTitle(cwd: String, home: String) -> String`.
+  Contract:
+  - empty/whitespace `cwd` → `""` (caller substitutes app-name fallback).
+  - normalize `home` by stripping one trailing `/`; empty `home` disables
+    abbreviation (return `cwd` unchanged).
+  - `cwd == home` → `"~"`.
+  - `cwd` begins with `home + "/"` → `"~/" + remainder` (segment-boundary match
+    only — guard the `/Users/jane` vs `/Users/janet/x` prefix-collision bug).
+  - otherwise → `cwd` verbatim (full absolute path).
+  - Foundation-only, NO implicit `$HOME`/`FileManager` — `home` always injected
+    (load-bearing purity / determinism constraint).
+- CREATE `Tests/WolfKeyMapTests/CwdTitleSeamTests.swift`: `@testable import
+  WolfKeyMap`. Cases: under-home→abbreviated; cwd==home→`~`; not-under-home→
+  verbatim; prefix-collision guard; trailing-slash home normalizes; empty cwd→
+  `""`; empty home→verbatim; deep nested path keeps all trailing segments.
+
+### B. Toolbar (`Sources/WolfMacOS/MainWindow.swift`)
+- Make `MainWindow` conform to `NSToolbarDelegate` (extension; no new stored
+  property — `NSWindow.toolbar` strong-holds it, delegate is weak).
+- Add `private static let toolbarIdentifier = NSToolbar.Identifier("com.wolf.editor.toolbar")`.
+- Use the SYSTEM `.toggleSidebar` item (auto-wires to
+  `NSSplitViewController.toggleSidebar(_:)` up the responder chain — same
+  mechanism as the existing View-menu Toggle Sidebar item). Delegate methods:
+  - `toolbarDefaultItemIdentifiers` → `[.toggleSidebar]`
+  - `toolbarAllowedItemIdentifiers` → `[.toggleSidebar]`
+  - `toolbar(_:itemForItemIdentifier:willBeInsertedIntoToolbar:)` → return `nil`
+    for `.toggleSidebar` so AppKit supplies the built-in item; FALLBACK: if the
+    slot renders empty, construct an `NSToolbarItem` for that identifier.
+- `toolbarStyle = .unified`; `toolbar.displayMode = .iconOnly`; keep
+  `titleVisibility = .visible`.
+- **CRITICAL ordering:** install the toolbar (create, set delegate, assign
+  `self.toolbar`, set `toolbarStyle`) AFTER `contentViewController = splitVC`
+  (line 112) but BEFORE the `let fullHeight = ...` / `chrome` measurement (lines
+  118-119), so the measured chrome includes the toolbar band and `setContentSize`
+  keeps the grid at exactly cols×rows. If manual smoke shows a wrong initial
+  grid, add `contentView?.layoutSubtreeIfNeeded()` after assigning the toolbar,
+  before reading `contentLayoutRect`.
+
+### C. Title / representedURL wiring (`Sources/WolfMacOS/AppDelegate.swift`)
+- Rewrite `refreshTabTitles(forGroupOf:)` (lines 587-600):
+  - resolve `home` via existing `homeDir()` helper (line 258).
+  - for each `tabWindow` in `window.tabGroup?.windows ?? [window]`, find its
+    controller, read its **`persistedCwd`** (correct for non-current tabs; `""`
+    for empty-state — NOT `currentCwd`, NOT `activeBufferPath`).
+  - `title = CwdTitleSeam.displayTitle(cwd: cwd, home: home)`.
+  - `tabWindow.title = title.isEmpty ? "Wolf" : title`.
+  - `tabWindow.representedURL = cwd.isEmpty ? nil : URL(fileURLWithPath: cwd, isDirectory: true)`.
+  - remove the `TabTitleSeam.labels` / `paths` / `zip` machinery; update the doc
+    comment.
+
+### D. Retire filename title plumbing (`Sources/WolfMacOS/WolfWindowController.swift`)
+- Remove `cachedActiveBufferPath` stored property (lines 160-161) + its refresh
+  at top of `onRenderWake()` (line 364); remove `activeBufferPath` accessor
+  (lines 691-697). KEEP the unconditional `refreshTabTitles(forGroupOf:)` call in
+  `onRenderWake()` (now reads cwd; keeps titles fresh after `:cd`). Update the
+  `onRenderWake` comment (lines 394-397).
+- DELETE `Sources/WolfKeyMap/TabTitleSeam.swift` and
+  `Tests/WolfKeyMapTests/TabTitleSeamTests.swift` (only AFTER step C removes the
+  last app reference).
+- Fix stray comments referencing `TabTitleSeam` in `RestoreSeam.swift` (line 19)
+  and `RestoreSeamTests.swift` (line 9).
+
+### E. BUILD.bazel wiring (`crates/wolf-macos/BUILD.bazel`)
+- `wolf_key_map` `srcs`: ADD `Sources/WolfKeyMap/CwdTitleSeam.swift`, REMOVE
+  `Sources/WolfKeyMap/TabTitleSeam.swift` (alphabetical).
+- `WolfKeyMapTests` `srcs`: ADD `Tests/WolfKeyMapTests/CwdTitleSeamTests.swift`,
+  REMOVE `Tests/WolfKeyMapTests/TabTitleSeamTests.swift`. (Hand-maintained list,
+  NOT a glob — unlisted files silently never run.)
+- No `deps` changes. `swift_format_srcs` glob needs no edit.
+
+### F. Docs (source of truth)
+- `README.md`: line 43 (TabTitleSeam para → CwdTitleSeam), line 80 (compiled
+  files list), line 87 (AppDelegate/refreshTabTitles), line 88
+  (WolfWindowController), line 91 (MainWindow — now HAS a `.unified` toolbar +
+  cwd title + proxy), line 92 (EditorSplitViewController — toolbar toggle).
+- `Sources/README.md`: line 17 (TabTitleSeam bullet → CwdTitleSeam); verify the
+  "Thirty-three … files" count is unchanged (one added, one removed = 33).
+- `Tests/README.md`: line 3 roll-call, lines 117-119 section, line 135 removed-
+  seams note.
+- `prettier --write` all edited Markdown; no hard line breaks inside paragraphs.
+
+### Implementation order (avoid compile/test breakage)
+1. Create `CwdTitleSeam.swift`. 2. Add it to `wolf_key_map` srcs. 3. Update
+`AppDelegate.refreshTabTitles`. 4. Update `WolfWindowController` cleanup. 5.
+Install toolbar in `MainWindow`. 6. Delete `TabTitleSeam.swift` +
+`TabTitleSeamTests.swift`. 7. Update BUILD.bazel (drop deleted, add new test). 8.
+Create `CwdTitleSeamTests.swift`. 9. Update READMEs + stray comments; prettier.
+10. `bazelisk test //crates/wolf-macos:WolfKeyMapTests`; confirm new test runs,
+old gone; build app for smoke.
+
+### Testability note
+Only `CwdTitleSeam` is headlessly testable. The AppKit glue (toolbar, chrome
+ordering, title/representedURL) is compile-verify + manual-smoke — do NOT invent
+mock-heavy AppKit tests (consistent with how these files self-document).
+
+### Risks
+- Chrome measurement synchrony (grid must stay 80×24) — highest risk; mitigate
+  with `layoutSubtreeIfNeeded()` if needed; verify visually.
+- System `.toggleSidebar` provisioning — fall back to a constructed item if empty.
+- KVO on animated `isCollapsed` still fires (both observers) — verify in smoke.
+- Empty-state title = "Wolf" + no proxy (product decision).
+
