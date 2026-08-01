@@ -135,9 +135,21 @@ final class SearchView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate {
     allFilesButton.state = SearchToggleSeam.defaultAllFiles ? .on : .off
   }
 
-  /// Make the search text field the window's first responder (called when the
-  /// search panel is activated via menu / ⇧⌘F / the magnifier button).
-  func focusSearchField() { window?.makeFirstResponder(searchField) }
+  /// Make the search text field the window's first responder. Deferred to the
+  /// next main-runloop tick on purpose: when search is invoked from the Command
+  /// Palette, `CommandPaletteView.activateSelection()` dispatches the focus
+  /// synchronously and THEN calls `close()` → `PickerPanelHost.dismissPanel()`,
+  /// which ends with `makeFirstResponder(paneContainer)` and would clobber a
+  /// synchronous focus here. Hopping one tick lets that dismissal-refocus run
+  /// first, so the search field wins. For the other invocation paths (View
+  /// menu, ⇧⌘F, the magnifier button) there is no competing refocus, so the
+  /// deferral is harmless — the field is focused uniformly across all paths.
+  func focusSearchField() {
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.window?.makeFirstResponder(self.searchField)
+    }
+  }
 
   /// Relays the sidebar's visibility (from the enclosing split item's
   /// `isCollapsed` KVO). Becoming visible with a refresh deferred runs one catch-up.
