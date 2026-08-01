@@ -529,6 +529,85 @@ impl NvimProcess {
         }
     }
 
+    /// Binds the buffer for absolute `path` into window `win` (loading it if
+    /// needed) and restores that pane's saved view, for a per-pane navigation-history
+    /// move to an [`Edit`](crate::nav_history::NavTarget::Edit) target.
+    ///
+    /// Runs the `_G.wolf_history_open` helper (defined in `runtime/nvim/init.lua`)
+    /// over `nvim_exec_lua`, passing `win` and `path` as Lua varargs (never
+    /// interpolated). The helper is WINDOW-SCOPED (`nvim_win_set_buf` via
+    /// `_G.wolf_switch_buffer`), never `:edit` — no disk re-read, no
+    /// `current_file`/file-MRU churn. It rebinds the EXISTING buffer for `path`
+    /// (matched by name, or by a symlink-resolved name — `path` is canonicalized
+    /// core-side while nvim may hold the unresolved name — falling back to
+    /// `vim.fn.bufadd`), so navigating back to an unsaved `Untitled N.md` rebinds
+    /// that same modified buffer.
+    ///
+    /// Returns the bound bufnr (`> 0`) on success, `0` for an empty path or an
+    /// invalid window. RPC failure maps to [`NvimError::Rpc`]; the caller
+    /// ([`crate::api::WolfCore::history_back`] and siblings) maps that to `0`, which
+    /// becomes a cursor REVERT.
+    pub fn history_open(
+        &self,
+        win: i64,
+        path: &str,
+    ) -> impl std::future::Future<Output = Result<i64, NvimError>> + Send + 'static {
+        let nvim = self.nvim.clone();
+        let path = path.to_string();
+        async move {
+            let value = nvim
+                .call(
+                    "nvim_exec_lua",
+                    vec![
+                        Value::from("return wolf_history_open(...)"),
+                        Value::Array(vec![Value::from(win), Value::from(path)]),
+                    ],
+                )
+                .await
+                .map_err(|e| NvimError::Rpc(e.to_string()))?
+                .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+            Ok(value.as_i64().unwrap_or_default())
+        }
+    }
+
+    /// Binds buffer `bufnr` into window `win` and restores that pane's saved view,
+    /// for a per-pane navigation-history move to a
+    /// [`Terminal`](crate::nav_history::NavTarget::Terminal) or
+    /// [`Untitled`](crate::nav_history::NavTarget::Untitled) target.
+    ///
+    /// Runs the `_G.wolf_history_set_buf` helper (defined in
+    /// `runtime/nvim/init.lua`) over `nvim_exec_lua`, passing `win` and `bufnr` as
+    /// Lua varargs. Window-scoped like [`history_open`](Self::history_open).
+    ///
+    /// Returns `bufnr` on success, or `0` when either handle is invalid — most
+    /// commonly a buffer `:bwipeout`ed since it was recorded — or when the bind
+    /// itself THREW (the cmdwin is open, the window is `'winfixbuf'`, the outgoing
+    /// buffer cannot be abandoned); the caller turns either into a cursor REVERT.
+    /// RPC failure maps to [`NvimError::Rpc`].
+    pub fn history_set_buf(
+        &self,
+        win: i64,
+        bufnr: i64,
+    ) -> impl std::future::Future<Output = Result<i64, NvimError>> + Send + 'static {
+        let nvim = self.nvim.clone();
+        async move {
+            let value = nvim
+                .call(
+                    "nvim_exec_lua",
+                    vec![
+                        Value::from("return wolf_history_set_buf(...)"),
+                        Value::Array(vec![Value::from(win), Value::from(bufnr)]),
+                    ],
+                )
+                .await
+                .map_err(|e| NvimError::Rpc(e.to_string()))?
+                .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+            Ok(value.as_i64().unwrap_or_default())
+        }
+    }
+
     /// Installs the preview tracking + dirty-signal autocmds inside the captive
     /// nvim.
     ///

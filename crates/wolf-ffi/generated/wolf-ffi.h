@@ -45,6 +45,18 @@ void* __swift_bridge__$Vec_FfiPreview$get_mut(void* vec_ptr, uintptr_t index);
 uintptr_t __swift_bridge__$Vec_FfiPreview$len(void* vec_ptr);
 void* __swift_bridge__$Vec_FfiPreview$as_ptr(void* vec_ptr);
 
+typedef struct FfiHistoryEntry FfiHistoryEntry;
+void __swift_bridge__$FfiHistoryEntry$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiHistoryEntry$new(void);
+void __swift_bridge__$Vec_FfiHistoryEntry$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiHistoryEntry$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiHistoryEntry$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiHistoryEntry$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiHistoryEntry$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiHistoryEntry$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiHistoryEntry$as_ptr(void* vec_ptr);
+
 typedef struct FfiFileSearch FfiFileSearch;
 void __swift_bridge__$FfiFileSearch$_free(void* self);
 
@@ -391,6 +403,12 @@ void* __swift_bridge__$WolfCoreHandle$render_preview(void* self, int64_t source_
 void* __swift_bridge__$WolfCoreHandle$open_in_browser(void* self);
 int64_t __swift_bridge__$WolfCoreHandle$preview_file(void* self, int64_t win, void* path);
 void* __swift_bridge__$WolfCoreHandle$previews(void* self);
+bool __swift_bridge__$WolfCoreHandle$history_can_back(void* self, int64_t win);
+bool __swift_bridge__$WolfCoreHandle$history_can_forward(void* self, int64_t win);
+bool __swift_bridge__$WolfCoreHandle$history_back(void* self, int64_t win);
+bool __swift_bridge__$WolfCoreHandle$history_forward(void* self, int64_t win);
+bool __swift_bridge__$WolfCoreHandle$history_jump(void* self, int64_t win, uint32_t index);
+void* __swift_bridge__$WolfCoreHandle$history_entries(void* self, int64_t win);
 void* __swift_bridge__$WolfCoreHandle$cmdline(void* self);
 void* __swift_bridge__$WolfCoreHandle$pum(void* self);
 void* __swift_bridge__$WolfCoreHandle$toast(void* self);
@@ -403,6 +421,9 @@ void* __swift_bridge__$FfiPreview$source_path(void* self);
 void* __swift_bridge__$FfiPreview$source_display_path(void* self);
 uint64_t __swift_bridge__$FfiPreview$source_tick(void* self);
 bool __swift_bridge__$FfiPreview$source_full_width(void* self);
+void* __swift_bridge__$FfiHistoryEntry$display(void* self);
+uint32_t __swift_bridge__$FfiHistoryEntry$index(void* self);
+bool __swift_bridge__$FfiHistoryEntry$is_current(void* self);
 void* __swift_bridge__$FfiFileSearch$ranked(void* self, void* query, uintptr_t max);
 void* __swift_bridge__$FfiFileSearch$children_of(void* self, void* dir);
 void* __swift_bridge__$FfiFileSearch$rel_path_for(void* self, void* abs);

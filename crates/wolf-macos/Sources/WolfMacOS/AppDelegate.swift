@@ -66,6 +66,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// `menuNeedsUpdate` so `openRecentMenuItem(_:)` can resolve `tag` -> path.
   private var recentDirs: [String] = []
 
+  /// The History submenu (returned by `AppMenu.install`), rebuilt lazily in
+  /// `menuNeedsUpdate` from the key window's ACTIVE pane. Wolf holds no copy of the
+  /// history — core is the single source of truth. `nil` until launch.
+  private var historyMenu: NSMenu?
+
   /// The key window as far as owning-controller lookups are concerned. While a
   /// picker panel is key, `NSApp.keyWindow` is the borderless child panel (which no
   /// controller owns); the panel is a child window of its `MainWindow`, so resolve
@@ -95,6 +100,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     windowMenu = menus.window
     openRecentMenu = menus.openRecent
     openRecentMenu?.delegate = self
+    // The History submenu rebuilds the same lazy way, from the key window's
+    // active pane, so it always reflects the pane the user is looking at.
+    historyMenu = menus.history
+    historyMenu?.delegate = self
 
     // Register the bundled font TTFs with CoreText, then resolve the user
     // config BEFORE measuring so `CellMetrics` can resolve the configured
@@ -602,14 +611,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
   }
 
-  /// `NSMenuDelegate`: rebuilds the Open Recent submenu just before it opens,
-  /// reading the recent-dirs MRU from the key window's controller (falling back
-  /// to the first controller when no Wolf window is key). Ignores any other menu.
+  /// `NSMenuDelegate`: rebuilds a dynamic submenu just before it opens, reading
+  /// from the key window's controller (falling back to the first controller when no
+  /// Wolf window is key). Dispatches on menu IDENTITY; any other menu is ignored.
+  ///
+  /// * Open Recent -> the recent-dirs MRU.
+  /// * History -> the ACTIVE pane's navigation rows (newest-first, ≤10 distinct,
+  ///   one checkmark), pulled fresh from core on every open.
   func menuNeedsUpdate(_ menu: NSMenu) {
-    guard menu === openRecentMenu else { return }
     let source = controllers.first { $0.owns(effectiveKeyWindow) } ?? controllers.first
-    recentDirs = source?.recentDirs() ?? []
-    AppMenu.rebuildOpenRecentMenu(menu, recentDirs: recentDirs, target: self)
+    if menu === openRecentMenu {
+      recentDirs = source?.recentDirs() ?? []
+      AppMenu.rebuildOpenRecentMenu(menu, recentDirs: recentDirs, target: self)
+      return
+    }
+    if menu === historyMenu {
+      AppMenu.rebuildHistoryMenu(menu, rows: source?.historyRows() ?? [], target: self)
+    }
+  }
+
+  /// History > Back: moves the key window's ACTIVE pane one entry back.
+  @objc func historyBackMenuItem(_ sender: NSMenuItem) {
+    let target = controllers.first { $0.owns(effectiveKeyWindow) } ?? controllers.first
+    target?.historyBack()
+  }
+
+  /// History > Forward: moves the key window's ACTIVE pane one entry forward.
+  @objc func historyForwardMenuItem(_ sender: NSMenuItem) {
+    let target = controllers.first { $0.owns(effectiveKeyWindow) } ?? controllers.first
+    target?.historyForward()
+  }
+
+  /// A dynamic History row: jumps the key window's ACTIVE pane to the STACK index
+  /// carried in the item's `tag`.
+  ///
+  /// That `tag` is a stack index, NOT a `command_kind` discriminant — this distinct
+  /// selector is what keeps it unambiguous. Clicking the CHECKMARKED row is a true
+  /// no-op: its tag is the cursor's own index, which core rejects.
+  @objc func historyJumpMenuItem(_ sender: NSMenuItem) {
+    let target = controllers.first { $0.owns(effectiveKeyWindow) } ?? controllers.first
+    target?.historyJump(index: sender.tag)
   }
 
   /// The dynamic Open Recent item action: changes the key window's Neovim
@@ -636,6 +677,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// command unless the key window's active buffer is Markdown. Every other item
   /// stays enabled.
   func validateMenuItem(_ item: NSMenuItem) -> Bool {
+    // The History items are front-end-only (no `command_kind` tag), so they are
+    // validated BEFORE the `handleCommandMenuItem` guard below. Back/Forward track
+    // the active pane's stack; a dynamic row is always clickable (the checkmarked
+    // one is a no-op core-side).
+    //
+    // The controller is resolved with the SAME `?? controllers.first` fallback as
+    // `menuNeedsUpdate` and the three actions: without it, a menu opened while no
+    // Wolf window is key would render rows that click through fine while Back /
+    // Forward (and their ⌘[ / ⌘] equivalents) greyed out.
+    switch item.action {
+    case #selector(historyBackMenuItem(_:)):
+      let target = controllers.first { $0.owns(effectiveKeyWindow) } ?? controllers.first
+      return target?.historyCanBack ?? false
+    case #selector(historyForwardMenuItem(_:)):
+      let target = controllers.first { $0.owns(effectiveKeyWindow) } ?? controllers.first
+      return target?.historyCanForward ?? false
+    case #selector(historyJumpMenuItem(_:)):
+      return true
+    default:
+      break
+    }
     guard item.action == #selector(handleCommandMenuItem(_:)) else { return true }
     let kind = CommandKind(ffi: UInt8(truncatingIfNeeded: item.tag))
     let keyController = controllers.first { $0.owns(effectiveKeyWindow) }

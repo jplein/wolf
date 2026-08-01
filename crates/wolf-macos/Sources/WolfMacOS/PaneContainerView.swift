@@ -555,6 +555,15 @@ final class PaneContainerView: NSView {
   /// last split.
   var paneCount: Int { tree.leaves().count }
 
+  /// The nvim WINDOW handle of the ACTIVE pane, or `0` when there is none (or it
+  /// is not bound yet).
+  ///
+  /// `activePane` / `PaneBinding` are private, so this is the internal accessor the
+  /// window controller reads to address the per-pane navigation history. Preferred
+  /// over `WolfCoreHandle.active_win()` because the handle is shared across a
+  /// project's tabpages, while `activePane` is per-VIEW — it is what the user sees.
+  var activeWin: Int64 { activePane.flatMap { panes[$0]?.win } ?? 0 }
+
   /// The scalar inputs `PreviewSeam.placementMode` needs to choose a preview
   /// placement, read from this container's live pane/preview state (no new state):
   /// the live pane count, whether the ACTIVE pane is itself a preview, and how

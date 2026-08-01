@@ -11,6 +11,7 @@
 //
 
 import AppKit
+import WolfKeyMap
 
 /// Builds and installs `NSApp.mainMenu` once. A namespace (`enum` with only static
 /// members).
@@ -51,12 +52,14 @@ enum AppMenu {
   struct InstalledMenus {
     let window: NSMenu
     let openRecent: NSMenu
+    /// The dynamic History menu, rebuilt from core on every `menuNeedsUpdate`.
+    let history: NSMenu
   }
 
-  /// Installs the standard five-menu bar (App / File / Edit / View / Window)
-  /// onto `NSApp.mainMenu`, wiring every Wolf item to `target`'s
-  /// `handleCommandMenuItem(_:)`. Returns the Window and Open Recent submenus so
-  /// the coordinator can rebuild their dynamic lists.
+  /// Installs the standard six-menu bar (App / File / Edit / View / History /
+  /// Window) onto `NSApp.mainMenu`, wiring every Wolf item to `target`'s
+  /// `handleCommandMenuItem(_:)`. Returns the Window, Open Recent and History
+  /// submenus so the coordinator can rebuild their dynamic lists.
   static func install(target: AppDelegate) -> InstalledMenus {
     let mainMenu = NSMenu()
 
@@ -65,12 +68,95 @@ enum AppMenu {
     mainMenu.addItem(fileMenuItem(target: target, openRecent: openRecent))
     mainMenu.addItem(editMenuItem(target: target))
     mainMenu.addItem(viewMenuItem(target: target))
+    // History sits BETWEEN View and Window, the conventional place for a
+    // navigation menu.
+    let historyItem = historyMenuItem(target: target)
+    mainMenu.addItem(historyItem)
     let windowItem = windowMenuItem(target: target)
     mainMenu.addItem(windowItem)
 
     NSApp.mainMenu = mainMenu
-    // Force-unwrap: `windowMenuItem` always sets a submenu.
-    return InstalledMenus(window: windowItem.submenu!, openRecent: openRecent)
+    // Force-unwrap: `windowMenuItem` / `historyMenuItem` always set a submenu.
+    return InstalledMenus(
+      window: windowItem.submenu!, openRecent: openRecent, history: historyItem.submenu!)
+  }
+
+  /// The History menu: Back `⌘[` / Forward `⌘]` / separator / the active pane's
+  /// recently-visited rows (rebuilt at menu-open time by
+  /// ``rebuildHistoryMenu(_:rows:target:)``), seeded with the disabled placeholder
+  /// so it is never empty before the first rebuild.
+  ///
+  /// These are FRONT-END-ONLY items, like Toggle Sidebar: no `wolf_core::Command`
+  /// variant exists for them, so they do NOT route through
+  /// `handleCommandMenuItem` / `CommandDispatcher`.
+  private static func historyMenuItem(target: AppDelegate) -> NSMenuItem {
+    let item = NSMenuItem()
+    let menu = NSMenu(title: "History")
+    addHistoryFixedItems(to: menu, target: target)
+    menu.addItem(historyPlaceholderItem())
+    item.submenu = menu
+    return item
+  }
+
+  /// Adds the History menu's FIXED head — Back, Forward, separator — to `menu`.
+  /// Shared by the initial build and every rebuild so the two never drift.
+  private static func addHistoryFixedItems(to menu: NSMenu, target: AppDelegate) {
+    let back = NSMenuItem(
+      title: "Back",
+      action: #selector(AppDelegate.historyBackMenuItem(_:)),
+      keyEquivalent: "[")
+    back.keyEquivalentModifierMask = .command
+    back.target = target
+    menu.addItem(back)
+
+    let forward = NSMenuItem(
+      title: "Forward",
+      action: #selector(AppDelegate.historyForwardMenuItem(_:)),
+      keyEquivalent: "]")
+    forward.keyEquivalentModifierMask = .command
+    forward.target = target
+    menu.addItem(forward)
+
+    menu.addItem(.separator())
+  }
+
+  /// The disabled "No History" placeholder shown when the active pane has no
+  /// history (standard macOS empty-state; `action: nil` auto-disables).
+  private static func historyPlaceholderItem() -> NSMenuItem {
+    let item = NSMenuItem(
+      title: HistorySeam.emptyPlaceholderTitle, action: nil, keyEquivalent: "")
+    item.isEnabled = false
+    return item
+  }
+
+  /// Rebuilds the dynamic History `menu` from the active pane's `rows`
+  /// (NEWEST-FIRST, already capped at 10 distinct rows and disambiguated by core).
+  /// Empty -> a single disabled placeholder; otherwise one clickable item per row,
+  /// checkmarked on the row core marks `isCurrent`. Called from `menuNeedsUpdate`
+  /// at menu-open time.
+  ///
+  /// NOTE: a row item's `tag` is a STACK INDEX, **not** a `command_kind`
+  /// discriminant like every `commandItem` tag in this file. The distinct
+  /// `historyJumpMenuItem(_:)` selector is what keeps the two unambiguous.
+  static func rebuildHistoryMenu(
+    _ menu: NSMenu, rows: [HistorySeam.Row], target: AppDelegate
+  ) {
+    menu.removeAllItems()
+    addHistoryFixedItems(to: menu, target: target)
+    if rows.isEmpty {
+      menu.addItem(historyPlaceholderItem())
+      return
+    }
+    for row in rows {
+      let item = NSMenuItem(
+        title: row.title,
+        action: #selector(AppDelegate.historyJumpMenuItem(_:)),
+        keyEquivalent: "")
+      item.target = target
+      item.tag = row.index
+      item.state = row.isCurrent ? .on : .off
+      menu.addItem(item)
+    }
   }
 
   /// The application menu (About / Hide `h` / Quit `q`).

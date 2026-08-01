@@ -39,7 +39,7 @@ struct RestoredWindowGroup {
 /// the `AppDelegate` coordinator (once per window); `start()` builds and shows the
 /// window. Wake routing reaches this controller through `WindowRegistry` keyed on
 /// the core's `wakeToken`.
-final class WolfWindowController: NSObject, NSWindowDelegate {
+final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating {
   /// Initial grid width in columns.
   private static let initialCols = 80
   /// Initial grid height in rows.
@@ -225,6 +225,10 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
       cols: Self.initialCols,
       rows: Self.initialRows
     )
+    // The toolbar's Back / Forward buttons delegate here explicitly: this
+    // controller is NOT an NSWindowController, so it is not in the responder
+    // chain and a `target: nil` action could never reach it.
+    window.historyNav = self
 
     // The centered "Open folder…" overlay (a subview of the pane container),
     // visible only in the empty state (`hasFolder == false`). Added FIRST so it
@@ -353,6 +357,11 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     defer { FrameMetrics.end(.controllerWake, frameStart) }
 
     paneContainer?.onRenderWake()
+    // Re-enable/disable the Back + Forward toolbar buttons for THIS frame's active
+    // pane (two cheap lock-free snapshot reads, no RPC — the same cost class as the
+    // `handle?.cwd()` read below). Must run AFTER the pane container reconciles
+    // `activePane`, so `historyWin` addresses the pane the user now sees.
+    window?.refreshHistoryToolbar(canBack: historyCanBack, canForward: historyCanForward)
     // The tree is driven only for a window that has a folder — an empty-state
     // window never scans/reroots (TreeWakeBridge already no-ops while its
     // search is nil). `didOpenFolder()` flips `hasFolder`, so the FIRST wake
@@ -731,6 +740,82 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
   /// coordinator's menu validation to show the View > Use full width for content
   /// checkmark (the item is always enabled — OQ-2).
   var isFullWidthActive: Bool { handle?.is_full_width_active() ?? false }
+
+  /// The nvim WINDOW handle addressed by the History menu and the Back / Forward
+  /// toolbar buttons: this VIEW's active pane, falling back to core's global
+  /// `active_win()` before the container has bound one. `0` when neither resolves.
+  ///
+  /// The container's own `activeWin` is PREFERRED because the core handle is shared
+  /// across a project's tabpages while `activePane` is per-view — it is the pane the
+  /// user is looking at. The terminal drawer's pane IS in `panes`, but core never
+  /// gives it history, so `historyCanBack` correctly reports `false` when it is
+  /// focused.
+  var historyWin: Int64 {
+    let win = paneContainer?.activeWin ?? 0
+    return win != 0 ? win : (handle?.active_win() ?? 0)
+  }
+
+  /// Whether the active pane has an older entry to go Back to. A cheap snapshot
+  /// read (no RPC), safe to call on every render wake.
+  var historyCanBack: Bool {
+    let win = historyWin
+    guard win != 0 else { return false }
+    return handle?.history_can_back(win) ?? false
+  }
+
+  /// Whether the active pane has a newer entry to go Forward to. See
+  /// ``historyCanBack``.
+  var historyCanForward: Bool {
+    let win = historyWin
+    guard win != 0 else { return false }
+    return handle?.history_can_forward(win) ?? false
+  }
+
+  /// Moves the active pane one entry BACK in its navigation history, then returns
+  /// focus to the editor (the click/menu activation moved it to the chrome).
+  func historyBack() {
+    let win = historyWin
+    guard win != 0 else { return }
+    _ = handle?.history_back(win)
+    refocusEditor()
+  }
+
+  /// Moves the active pane one entry FORWARD. See ``historyBack()``.
+  func historyForward() {
+    let win = historyWin
+    guard win != 0 else { return }
+    _ = handle?.history_forward(win)
+    refocusEditor()
+  }
+
+  /// Moves the active pane to the STACK index `index` (a `HistorySeam.Row.index`
+  /// carried on the clicked menu item's `tag`). A negative index — or the
+  /// checkmarked row's own index — is a no-op.
+  ///
+  /// The `UInt32` conversion is non-trapping (`exactly:`): every row index
+  /// originates from a `u32` on the Rust side, so an out-of-range `Int` is
+  /// unreachable today, but an `NSMenuItem.tag` is a plain `Int` that any future
+  /// caller could set — a trap here would crash the app rather than no-op.
+  func historyJump(index: Int) {
+    let win = historyWin
+    guard win != 0, index >= 0, let index32 = UInt32(exactly: index) else { return }
+    _ = handle?.history_jump(win, index32)
+    refocusEditor()
+  }
+
+  /// The active pane's History-menu rows, NEWEST-FIRST with at most one checkmark.
+  ///
+  /// Wolf holds NO copy of the history: this pulls core's finished, disambiguated
+  /// rows through the pure `HistorySeam.rows` zip on every `menuNeedsUpdate`.
+  func historyRows() -> [HistorySeam.Row] {
+    let win = historyWin
+    guard win != 0, let handle else { return [] }
+    let entries = handle.history_entries(win)
+    return HistorySeam.rows(
+      displays: entries.map { $0.display().toString() },
+      indices: entries.map { Int($0.index()) },
+      currentFlags: entries.map { $0.is_current() })
+  }
 
   /// Opens (or reuses) the Markdown preview pane for the active source buffer.
   ///

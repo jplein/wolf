@@ -268,6 +268,26 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
+# Headless coverage for the PUBLIC per-pane navigation-history data model
+# (`NavTarget` / `PaneHistory` / `NavHistory` / `NavMove` / `MenuRow` +
+# `derive_target` / `disambiguate` / `menu_rows`): feedback-loop suppression (the
+# locked absorb rule), truncate-on-new-navigation, keep-every-visit, the
+# MAX_ENTRIES cap + cursor math, can_back/can_forward, jump/revert, the
+# stale-`expected` self-heal, the `derive_target` precedence matrix, per-window
+# prune, the 10-distinct-row menu cap + checkmark rule, and the PREFIX-form
+# minimal-growth label pipeline. `nav_history` is pure path MATH (no nvim, no
+# filesystem — `disambiguate` never touches the disk), so this needs NO staged
+# runfiles — the pure analog of `palette_rank`, kept in a dedicated file to avoid
+# colliding with the coder who creates `src/nav_history.rs`.
+rust_test(
+    name = "nav_history",
+    srcs = ["tests/nav_history.rs"],
+    crate_root = "tests/nav_history.rs",
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
 # Headless coverage for the PUBLIC buffer-picker ranking surface (`rank_buffers` +
 # `BufInfo`/`BufferRow`): MRU ordering (current buffer at index 0), tie-break by
 # bufnr ascending, the AND-subsequence query filter keeping MRU-first order,
@@ -356,6 +376,39 @@ rust_test(
         "tests/pane_buffers.rs",
     ],
     crate_root = "tests/pane_buffers.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+# Real-nvim integration test for the PER-PANE NAVIGATION HISTORY core surface: the
+# extended `wolf_buffers` emit feeding `Snapshot.win_buffers`, the per-window fold
+# over `win_buffers` + `previews`, the `win_close` prune, and the six
+# `WolfCore::history_*` methods that move the pane through the new
+# `_G.wolf_history_*` Lua helpers (including the LOAD-BEARING feedback-loop
+# assertion: Back moves the pane AND the resulting emit is absorbed). An EXACT
+# mirror of the `pane_buffers` target above: drives a REAL pinned Neovim (no
+# mocks), stages the captive `init.lua` + the pinned nvim tree as runfiles, reuses
+# `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.
+rust_test(
+    name = "nav_history_live",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/nav_history_live.rs",
+    ],
+    crate_root = "tests/nav_history_live.rs",
     # Spawning a real nvim child does not work under the macOS build sandbox, so
     # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
     tags = ["no-sandbox"],

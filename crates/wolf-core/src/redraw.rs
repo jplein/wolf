@@ -24,7 +24,7 @@ use crate::recent_dirs::RecentDirs;
 use crate::render::{
     Cell, Cmdline, CmdlineChunk, CursorShape, DefaultColors, HlAttr, Message, ModeInfo,
     PendingConfirm, PreviewInfo, Pum, PumItem, Rgb, SharedSnapshot, Snapshot, TabFiles,
-    ThemeColors, ThemeGroup, ToastChunk, Viewport, WinInfo,
+    ThemeColors, ThemeGroup, ToastChunk, Viewport, WinBuffer, WinInfo,
 };
 
 /// A shared, drainable queue of [`LayoutIntent`]s.
@@ -56,6 +56,27 @@ pub type CommandQueue = Arc<Mutex<VecDeque<Command>>>;
 /// reported".
 pub type TrackedCwd = Arc<parking_lot::RwLock<Option<PathBuf>>>;
 
+/// A shared cell holding every pane's navigation history (back/forward).
+///
+/// Owned by [`crate::api::WolfCore`] (read and moved by its `history_*` methods)
+/// and cloned into the [`RedrawHandler`], which FOLDS a derived per-window
+/// [`NavTarget`](crate::nav_history::NavTarget) into it after every `wolf_buffers`
+/// / `wolf_preview` emit and PRUNES a closed window's stack on `win_close`. Like
+/// [`IntentQueue`] / [`TrackedCwd`] it is a sibling of the render snapshot (NOT
+/// part of it): history is out-of-band app state, mutated from FFI accessors that
+/// also do blocking RPC, so it must not ride on the `Clone`-per-frame
+/// [`Snapshot`]. Updating it does not bump the snapshot `seq`.
+///
+/// LOCK ORDER: the fold takes the snapshot write lock FIRST and this mutex second,
+/// with no `.await` or RPC between; the `WolfCore::history_*` side takes this mutex
+/// ALONE (never while holding the snapshot lock, never across a `block_on_rpc`), so
+/// there is no lock-order cycle.
+///
+/// A restart clones the SAME handler, so history survives a respawn by
+/// construction — acceptable, because the new nvim issues fresh window handles and
+/// stale panes are never queried.
+pub type NavHistoryCell = Arc<Mutex<crate::nav_history::NavHistory>>;
+
 /// The front-end wake callback, invoked once per `flush` (after the lock drops).
 ///
 /// May run on a tokio worker thread, hence `Send + Sync`; the front-end is
@@ -68,12 +89,17 @@ pub type WakeFn = Arc<dyn Fn() + Send + Sync>;
 /// [`RedrawHandler::handle_notify`].
 const CURRENT_FILE_EVENT: &str = "wolf_current_file";
 
-/// Name of the out-of-band notification carrying the per-window buffer paths,
+/// Name of the out-of-band notification carrying what every window is showing,
 /// emitted by the `WolfBuffers` autocmds in `runtime/nvim/init.lua` (and once
 /// immediately at setup). The payload is a single msgpack array of
-/// `[win_id, buf_path]` pairs for ALL windows in the current tabpage; core
-/// WHOLESALE-REPLACES [`Snapshot::buffers`] with the reported set. Routed
-/// separately from `redraw` in [`RedrawHandler::handle_notify`].
+/// `[win_id, buf_path, bufnr, is_terminal, is_drawer]` tuples for ALL windows in the
+/// current tabpage (preview scratch panes are SKIPPED emit-side, which keeps this
+/// map DISJOINT from [`Snapshot::previews`]); core WHOLESALE-REPLACES BOTH
+/// [`Snapshot::buffers`] (named windows only, path-valued — unchanged) and the
+/// parallel [`Snapshot::win_buffers`] (every window, [`WinBuffer`]-valued) with the
+/// reported set. Routed separately from `redraw` in
+/// [`RedrawHandler::handle_notify`]. A legacy 2-element tuple still decodes, with
+/// `bufnr: 0` and both flags `false`.
 const BUFFERS_EVENT: &str = "wolf_buffers";
 
 /// Name of the out-of-band notification carrying the per-window full-width flags,
@@ -163,6 +189,7 @@ pub struct RedrawHandler {
     commands: CommandQueue,
     cwd: TrackedCwd,
     recent_dirs: RecentDirs,
+    nav_history: NavHistoryCell,
     wake: WakeFn,
 }
 
@@ -170,7 +197,8 @@ impl RedrawHandler {
     /// Creates a handler writing into `snapshot`, pushing layout intents onto
     /// `intents`, pushing user-triggered commands onto `commands`, tracking nvim's
     /// cwd into `cwd` (recording it into the always-on global `recent_dirs` MRU),
-    /// and waking via `wake`.
+    /// folding per-pane navigation targets into `nav_history`, and waking via
+    /// `wake`.
     #[must_use]
     pub fn new(
         snapshot: SharedSnapshot,
@@ -178,6 +206,7 @@ impl RedrawHandler {
         commands: CommandQueue,
         cwd: TrackedCwd,
         recent_dirs: RecentDirs,
+        nav_history: NavHistoryCell,
         wake: WakeFn,
     ) -> Self {
         Self {
@@ -186,6 +215,7 @@ impl RedrawHandler {
             commands,
             cwd,
             recent_dirs,
+            nav_history,
             wake,
         }
     }
@@ -332,9 +362,16 @@ impl RedrawHandler {
     /// The write lock is acquired via [`SharedSnapshot::write_async`] so a held
     /// reader cannot pin this worker thread; once acquired it is NOT held across
     /// any `.await` (the whole batch is applied synchronously below).
+    ///
+    /// A `win_close` cannot report the closed WINDOW handle (its payload is just
+    /// the grid), so `win_close` resolves it from `snap.windows` BEFORE removing
+    /// the entry and pushes it onto a `closed_wins` collector threaded through
+    /// [`apply_event`]. After the batch — still under the guard, with no `.await`
+    /// in between — those panes' navigation histories are PRUNED.
     async fn apply_redraw(&self, batch: Vec<Value>) -> bool {
         let mut snap = self.snapshot.write_async().await;
         let mut flushed = false;
+        let mut closed_wins: Vec<i64> = Vec::new();
 
         for event in batch {
             let Value::Array(parts) = event else { continue };
@@ -349,7 +386,7 @@ impl RedrawHandler {
             // The remaining items are one-or-more argument tuples, each an array.
             for call in it {
                 let Value::Array(params) = call else { continue };
-                if apply_event(&mut snap, &name, params) {
+                if apply_event(&mut snap, &name, params, &mut closed_wins) {
                     flushed = true;
                 }
             }
@@ -357,6 +394,11 @@ impl RedrawHandler {
 
         if flushed {
             snap.seq = snap.seq.wrapping_add(1);
+        }
+        if !closed_wins.is_empty() {
+            // No `.await` between here and the guard drop, so this brief mutex is
+            // never held across a suspension point.
+            self.nav_history.lock().prune_many(&closed_wins);
         }
         // Lock drops here as `snap` goes out of scope at function return.
         flushed
@@ -466,9 +508,61 @@ impl RedrawHandler {
 
         let mut snap = self.snapshot.write_async().await;
         snap.previews = map;
+        // The derived navigation target joins BOTH maps, and EITHER notification
+        // can complete a transition, so the fold runs here as well as in
+        // `apply_buffers`.
+        self.fold_nav_targets(&snap);
         // A previews change is NOT a redraw frame, so `seq` is intentionally left
         // unchanged. The caller fires the wake after this lock drops.
         // Lock drops here as `snap` goes out of scope at function return.
+    }
+
+    /// Folds one derived [`NavTarget`](crate::nav_history::NavTarget) per window
+    /// into the sibling [`NavHistoryCell`], from the CURRENT snapshot state.
+    ///
+    /// Called at the tail of BOTH [`apply_buffers`](Self::apply_buffers) and
+    /// [`apply_previews`](Self::apply_previews), under the snapshot write guard,
+    /// because the derived target joins [`Snapshot::win_buffers`] and
+    /// [`Snapshot::previews`] and either notification can complete a transition.
+    ///
+    /// The candidate windows are the UNION of the two maps' keys, materialized
+    /// into a local `Vec` BEFORE the nav mutex is taken (so no `MutexGuard` is ever
+    /// a `for`/`match` scrutinee — `clippy::significant_drop_in_scrutinee`). A
+    /// window in NEITHER map is simply not in the union: **no entry, no push, no
+    /// prune** — the locked rule realized structurally, which is what makes the two
+    /// notifications' arrival order irrelevant during a preview transition.
+    ///
+    /// There is NO `.await` in this function, so `clippy::await_holding_lock` does
+    /// not fire (mirroring the note on `apply_buffers`); the mutex is taken after
+    /// the snapshot lock and released before returning, and the `WolfCore` side
+    /// never takes them together, so there is no lock-order cycle.
+    fn fold_nav_targets(&self, snap: &Snapshot) {
+        let mut wins: Vec<i64> = snap.win_buffers.keys().copied().collect();
+        wins.extend(
+            snap.previews
+                .keys()
+                .copied()
+                .filter(|w| !snap.win_buffers.contains_key(w)),
+        );
+        if wins.is_empty() {
+            return;
+        }
+
+        let mut hist = self.nav_history.lock();
+        for win in wins {
+            // An empty source path means "no usable preview", not a preview of "".
+            let preview_source = snap
+                .previews
+                .get(&win)
+                .map(|p| p.source_path.as_path())
+                .filter(|p| !p.as_os_str().is_empty());
+            if let Some(target) =
+                crate::nav_history::derive_target(snap.win_buffers.get(&win), preview_source)
+            {
+                hist.observe(win, target);
+            }
+        }
+        // The mutex drops here; no `.await` was crossed.
     }
 
     /// Applies a `wolf_markdown_dirty` notification: UPSERTS the reported
@@ -495,20 +589,35 @@ impl RedrawHandler {
         // Lock drops here as `snap` goes out of scope at function return.
     }
 
-    /// Applies a `wolf_buffers` notification: WHOLESALE-REPLACES the snapshot's
-    /// per-window buffer map ([`Snapshot::buffers`]) with the reported set.
+    /// Applies a `wolf_buffers` notification: WHOLESALE-REPLACES BOTH the
+    /// snapshot's per-window buffer map ([`Snapshot::buffers`]) and the parallel
+    /// [`Snapshot::win_buffers`] with the reported set, then folds the derived
+    /// navigation targets.
     ///
-    /// The single argument is a msgpack array of `[win_id, buf_path]` pairs for
-    /// ALL windows in the current tabpage. Each `win_id` decodes via
-    /// [`ext_handle`] (a plain integer, or defensively a msgpack-`Ext`-wrapped
-    /// integer); each `buf_path` is `nvim_buf_get_name(buf)` — absolute for a file
-    /// buffer, empty for an unnamed one. Empty paths are SKIPPED (unnamed windows
-    /// are absent from the map); non-empty paths are canonicalized (to match the
-    /// canonical cwds/paths the rest of core keys on), falling back to the raw
-    /// path if canonicalization fails.
+    /// The single argument is a msgpack array of
+    /// `[win_id, buf_path, bufnr, is_terminal, is_drawer]` tuples for ALL windows in
+    /// the current tabpage (preview scratch panes are skipped emit-side). Each
+    /// `win_id` decodes via [`ext_handle`] (a plain integer, or defensively a
+    /// msgpack-`Ext`-wrapped integer); each `buf_path` is `nvim_buf_get_name(buf)` —
+    /// absolute for a file buffer, empty for an unnamed one.
     ///
-    /// The new map is built in full BEFORE the write guard is taken (so no
-    /// filesystem work happens under the lock, sidestepping
+    /// The two maps are filled in the SAME pre-guard pass but by DELIBERATELY
+    /// different rules:
+    ///
+    /// * [`Snapshot::buffers`] is UNCHANGED from before the tuple grew — a missing
+    ///   or non-string element 2 is skipped, an EMPTY path is skipped (so unnamed
+    ///   windows are ABSENT), and a non-empty path is canonicalized with a raw
+    ///   fallback. Its only production consumer is
+    ///   [`crate::api::WolfCore::pane_status`], which must not regress.
+    /// * [`Snapshot::win_buffers`] gets an entry for EVERY tuple that decodes a
+    ///   `win`, including unnamed windows (with `path: None`); it reuses the SAME
+    ///   canonicalized value (never canonicalizing twice) and decodes `bufnr` via
+    ///   [`ext_handle`] (defaulting `0`) plus the two booleans (defaulting `false`).
+    ///   A legacy 2-element tuple therefore yields `bufnr: 0` and both flags
+    ///   `false`.
+    ///
+    /// Both maps are built in full BEFORE the write guard is taken (so no filesystem
+    /// work happens under the lock, sidestepping
     /// `clippy::significant_drop_in_scrutinee`), then assigned wholesale. The lock
     /// is acquired via [`SharedSnapshot::write_async`], is NOT held across any
     /// `.await`, and is dropped before returning so the caller's wake fires after
@@ -516,6 +625,7 @@ impl RedrawHandler {
     /// unchanged; the wholesale replacement drops any stale/closed windows.
     async fn apply_buffers(&self, args: Vec<Value>) {
         let mut map: HashMap<i64, PathBuf> = HashMap::new();
+        let mut win_map: HashMap<i64, WinBuffer> = HashMap::new();
         if let Some(pairs) = args.first().and_then(Value::as_array) {
             for pair in pairs {
                 let Some(pair) = pair.as_array() else {
@@ -524,19 +634,35 @@ impl RedrawHandler {
                 let Some(win) = pair.first().and_then(ext_handle) else {
                     continue;
                 };
-                let Some(path) = pair.get(1).and_then(Value::as_str) else {
-                    continue;
+                // Canonicalize ONCE; both maps share the result.
+                let canon: Option<PathBuf> = match pair.get(1).and_then(Value::as_str) {
+                    Some(path) if !path.is_empty() => {
+                        Some(std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path)))
+                    }
+                    _ => None,
                 };
-                if path.is_empty() {
-                    continue;
+                if let Some(canon) = canon.clone() {
+                    map.insert(win, canon);
                 }
-                let canon = std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
-                map.insert(win, canon);
+                win_map.insert(
+                    win,
+                    WinBuffer {
+                        bufnr: pair.get(2).and_then(ext_handle).unwrap_or_default(),
+                        path: canon,
+                        is_terminal: pair.get(3).and_then(Value::as_bool).unwrap_or(false),
+                        is_drawer: pair.get(4).and_then(Value::as_bool).unwrap_or(false),
+                    },
+                );
             }
         }
 
         let mut snap = self.snapshot.write_async().await;
         snap.buffers = map;
+        snap.win_buffers = win_map;
+        // The derived navigation target joins BOTH maps, and EITHER notification
+        // can complete a transition, so the fold runs here as well as in
+        // `apply_previews`.
+        self.fold_nav_targets(&snap);
         // A buffers change is NOT a redraw frame, so `seq` is intentionally left
         // unchanged. The caller fires the wake after this lock drops.
         // Lock drops here as `snap` goes out of scope at function return.
@@ -839,7 +965,16 @@ impl RedrawHandler {
 /// `cmdline_block_show` / `cmdline_block_append` / `cmdline_block_hide` (OD5 —
 /// interactive `:function` blocks, v1 limitation); `msg_showmode` /
 /// `msg_showcmd` (showcmd off) / `msg_ruler` (ruler off).
-fn apply_event(snap: &mut RwLockWriteGuard<'_, Snapshot>, name: &str, params: Vec<Value>) -> bool {
+///
+/// `closed_wins` collects the nvim WINDOW handles of every `win_close`d grid (the
+/// handle is only recoverable BEFORE the `snap.windows` entry is removed), so the
+/// caller can prune those panes' navigation histories.
+fn apply_event(
+    snap: &mut RwLockWriteGuard<'_, Snapshot>,
+    name: &str,
+    params: Vec<Value>,
+    closed_wins: &mut Vec<i64>,
+) -> bool {
     match name {
         "grid_resize" => grid_resize(snap, &params),
         "grid_clear" => grid_clear(snap, &params),
@@ -854,7 +989,7 @@ fn apply_event(snap: &mut RwLockWriteGuard<'_, Snapshot>, name: &str, params: Ve
         "win_pos" => win_pos(snap, &params),
         "win_viewport" => win_viewport(snap, &params),
         "win_hide" => win_hide(snap, &params),
-        "win_close" => win_close(snap, &params),
+        "win_close" => win_close(snap, &params, closed_wins),
         "cmdline_show" => cmdline_show(snap, &params),
         "cmdline_pos" => cmdline_pos(snap, &params),
         "cmdline_hide" => cmdline_hide(snap),
@@ -1165,7 +1300,7 @@ fn win_hide(snap: &mut Snapshot, params: &[Value]) {
     snap.windows.remove(&grid);
 }
 
-fn win_close(snap: &mut Snapshot, params: &[Value]) {
+fn win_close(snap: &mut Snapshot, params: &[Value], closed_wins: &mut Vec<i64>) {
     // [grid]
     //
     // Remove BOTH the window entry and its grid. Neovim also emits `grid_destroy`
@@ -1174,6 +1309,23 @@ fn win_close(snap: &mut Snapshot, params: &[Value]) {
     let Some(grid) = params.first().and_then(as_u64) else {
         return;
     };
+    // The payload carries only the GRID, so resolve the nvim WINDOW handle from
+    // the entry we are about to remove and hand it to the caller's collector; that
+    // pane's navigation history is pruned after the batch.
+    //
+    // KNOWN LIMIT (documented, deliberately not fixed): `win_hide` — fired for
+    // every window of a tabpage being LEFT — already removes the `windows` entry,
+    // so a later `win_close` for such a grid cannot recover the handle and that
+    // pane's history is orphaned. nvim never reuses window handles, so an orphan is
+    // only memory (bounded per pane per nvim-process lifetime). An "absent from
+    // `wolf_buffers` for N emits" reaper would be WRONG: a window in a non-current
+    // tabpage is absent from both maps by construction, and pruning it would
+    // violate the locked no-prune rule.
+    if let Some(win) = snap.windows.get(&grid).map(|w| w.win) {
+        if win != 0 {
+            closed_wins.push(win);
+        }
+    }
     snap.windows.remove(&grid);
     snap.grids.remove(&grid);
 }

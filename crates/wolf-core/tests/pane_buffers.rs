@@ -158,6 +158,31 @@ fn wait_two_grids_by_name(
     }
 }
 
+/// Burns `dur` draining wakes, so a late `wolf_buffers` emit lands BEFORE a
+/// "nothing changed" assertion runs.
+fn settle(waiter: &FlushWaiter, dur: Duration) {
+    let deadline = Instant::now() + dur;
+    while Instant::now() < deadline {
+        waiter.drain();
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Resolves the nvim WINDOW handle backing `grid`, polling until it appears.
+fn wait_for_win_handle(core: &WolfCore, waiter: &FlushWaiter, grid: u64) -> i64 {
+    poll_until(
+        core,
+        waiter,
+        &format!("a window handle for grid {grid}"),
+        |snap| snap.windows.get(&grid).is_some_and(|w| w.win != 0),
+    );
+    core.read_snapshot()
+        .windows
+        .get(&grid)
+        .map(|w| w.win)
+        .expect("the grid must carry a window handle")
+}
+
 /// Types an Ex command `:<cmd><CR>` one key at a time (mirrors `redraw_multigrid.rs`).
 fn ex_command(core: &WolfCore, cmd: &str) {
     core.send_input(ch(':'));
@@ -355,6 +380,186 @@ fn closing_split_drops_that_window_survivor_keeps_file() {
         survivors.contains(&alpha_grid),
         "the surviving window grid {alpha_grid} must remain; survivors: {survivors:?}"
     );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+// =========================================================================
+// REGRESSION GUARDS for the nav-history `wolf_buffers` tuple extension (§B5).
+//
+// `wolf_buffers` grows from a 2-element `{ win, name }` tuple to a 5-element
+// `{ win, name, bufnr, is_terminal, is_drawer }` tuple feeding a NEW parallel
+// `Snapshot.win_buffers` map. `Snapshot.buffers` — and therefore
+// `WolfCore::pane_status(grid)`, its ONLY production consumer — must stay
+// BEHAVIORALLY IDENTICAL. These two tests pin that contract directly, at the map
+// level rather than only through the formatted display strings above.
+// =========================================================================
+
+/// `Snapshot.buffers` still holds CANONICALIZED paths keyed by WINDOW handle and
+/// still OMITS unnamed windows; `pane_status(grid)` is unchanged for a NAMED
+/// buffer, an UNNAMED buffer, and a grid with NO window at all.
+#[test]
+fn buffers_map_stays_canonicalized_and_omits_unnamed_windows() {
+    /// A grid id no window will ever draw into.
+    const ABSENT_GRID: u64 = 9999;
+
+    let cwd = common::fresh_cwd();
+    let docs = cwd.join("docs");
+    std::fs::create_dir_all(&docs).expect("failed to create docs subdir");
+    let file = docs.join("note.md");
+    std::fs::write(&file, DOC).expect("failed to write note.md");
+
+    let (core, waiter) = start_core_in(cwd.clone());
+    core.send_input(InputEvent::Open { path: file.clone() });
+
+    let grid = wait_for_active_window_grid(&core, &waiter);
+    let win = wait_for_win_handle(&core, &waiter, grid);
+    let canon = std::fs::canonicalize(&file).expect("note.md should canonicalize");
+
+    // (a) Keyed by WINDOW handle, holding the CANONICAL path.
+    poll_until(
+        &core,
+        &waiter,
+        "buffers[win] to equal the canonical note.md path",
+        |snap| snap.buffers.get(&win) == Some(&canon),
+    );
+
+    // (b) pane_status for a NAMED buffer is unchanged.
+    let rel = expected_cwd_relative(&cwd, &file);
+    let st = core.pane_status(grid);
+    assert_eq!(st.filename, "note.md", "filename is still the base name");
+    assert_eq!(
+        st.display_path, rel,
+        "display_path is still the cwd-relative remainder"
+    );
+    assert_eq!(
+        st.abs_path,
+        canon.to_string_lossy(),
+        "abs_path is still the raw canonical path (persisted as a layout leaf)"
+    );
+
+    // (c) An UNNAMED window is still ABSENT from the map.
+    ex_command(&core, "enew");
+    poll_until(
+        &core,
+        &waiter,
+        "the now-unnamed window to drop out of buffers",
+        |snap| !snap.buffers.contains_key(&win),
+    );
+    settle(&waiter, UNNAMED_SETTLE);
+    assert!(
+        !core.read_snapshot().buffers.contains_key(&win),
+        "a genuinely unnamed buffer keeps its window OUT of the buffers map"
+    );
+    let st = core.pane_status(grid);
+    assert_eq!(st.filename, NO_NAME, "an unnamed buffer still reports NO_NAME");
+    assert_eq!(st.display_path, "", "…with an empty display_path");
+    assert_eq!(st.abs_path, "", "…and an empty abs_path");
+
+    // (d) A grid with NO window is still the [No Name] shape.
+    let st = core.pane_status(ABSENT_GRID);
+    assert_eq!(
+        st.filename, NO_NAME,
+        "a grid with no window still reports NO_NAME"
+    );
+    assert_eq!(st.display_path, "", "…with an empty display_path");
+    assert_eq!(st.abs_path, "", "…and an empty abs_path");
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// Wholesale replacement still DROPS a closed window's entry, and PREVIEW scratch
+/// panes are still SKIPPED by the emit (so their grid reports the `[No Name]`
+/// shape from `pane_status`).
+#[test]
+fn buffers_map_skips_preview_panes_and_drops_closed_windows() {
+    let cwd = common::fresh_cwd();
+    let file_a = cwd.join("alpha.md");
+    let file_b = cwd.join("beta.md");
+    std::fs::write(&file_a, DOC).expect("failed to write alpha.md");
+    std::fs::write(&file_b, DOC).expect("failed to write beta.md");
+
+    let (core, waiter) = start_core_in(cwd);
+    core.send_input(InputEvent::Open {
+        path: file_a.clone(),
+    });
+
+    let grid = wait_for_active_window_grid(&core, &waiter);
+    let win_a = wait_for_win_handle(&core, &waiter, grid);
+    poll_pane_status(
+        &core,
+        &waiter,
+        grid,
+        "the initial window to report alpha.md before splitting",
+        |filename, _| filename == "alpha.md",
+    );
+
+    // (a) A closed window's entry vanishes with the next wholesale replacement.
+    ex_command(&core, "vsplit");
+    ex_command(&core, "e beta.md");
+    let (_alpha_grid, beta_grid) = wait_two_grids_by_name(&core, &waiter, "alpha.md", "beta.md");
+    let win_b = wait_for_win_handle(&core, &waiter, beta_grid);
+    poll_until(
+        &core,
+        &waiter,
+        "both windows to be present in the buffers map",
+        |snap| snap.buffers.contains_key(&win_a) && snap.buffers.contains_key(&win_b),
+    );
+
+    ex_command(&core, "close");
+    poll_until(
+        &core,
+        &waiter,
+        "the closed window's entry to drop out of buffers",
+        |snap| !snap.buffers.contains_key(&win_b),
+    );
+    assert!(
+        core.read_snapshot().buffers.contains_key(&win_a),
+        "the SURVIVING window keeps its buffers entry"
+    );
+
+    // (b) A preview scratch pane is still SKIPPED by the emit.
+    let preview_bufnr = core.open_preview("split_right");
+    assert!(
+        preview_bufnr > 0,
+        "open_preview(\"split_right\") on a markdown buffer must return a scratch \
+         bufnr (> 0), got {preview_bufnr}"
+    );
+    poll_until(&core, &waiter, "a preview window to appear", |snap| {
+        !snap.previews.is_empty()
+    });
+    let preview_win = *core
+        .read_snapshot()
+        .previews
+        .keys()
+        .next()
+        .expect("a preview window handle must exist");
+    poll_until(
+        &core,
+        &waiter,
+        "the preview window's grid to be known",
+        |snap| snap.windows.values().any(|w| w.win == preview_win),
+    );
+    let preview_grid = core
+        .read_snapshot()
+        .windows
+        .values()
+        .find(|w| w.win == preview_win)
+        .map(|w| w.grid)
+        .expect("the preview window must draw into a grid");
+
+    settle(&waiter, UNNAMED_SETTLE);
+    assert!(
+        !core.read_snapshot().buffers.contains_key(&preview_win),
+        "preview scratch panes are SKIPPED, so their window never enters buffers"
+    );
+    let st = core.pane_status(preview_grid);
+    assert_eq!(
+        st.filename, NO_NAME,
+        "a preview pane's grid still reports NO_NAME from pane_status"
+    );
+    assert_eq!(st.display_path, "", "…with an empty display_path");
+    assert_eq!(st.abs_path, "", "…and an empty abs_path");
 
     core.shutdown().expect("shutdown should be Ok");
 }

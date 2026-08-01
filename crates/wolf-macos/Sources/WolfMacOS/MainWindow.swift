@@ -13,10 +13,38 @@
 import AppKit
 import WolfKeyMap
 
+/// The per-pane navigation-history actions the toolbar's Back / Forward buttons
+/// need from the window controller.
+///
+/// Explicit delegation rather than a `target: nil` responder-chain hop, because
+/// `WolfWindowController` is NOT an `NSWindowController` and is therefore not in
+/// the responder chain.
+protocol HistoryNavigating: AnyObject {
+  /// Moves the active pane one entry BACK in its navigation history.
+  func historyBack()
+  /// Moves the active pane one entry FORWARD in its navigation history.
+  func historyForward()
+  /// Whether the active pane has an older entry to go Back to.
+  var historyCanBack: Bool { get }
+  /// Whether the active pane has a newer entry to go Forward to.
+  var historyCanForward: Bool { get }
+}
+
 /// The main "Wolf" window. Its `contentViewController` is an
 /// `EditorSplitViewController`; the window uses a transparent
 /// `.fullSizeContentView` titlebar.
 final class MainWindow: NSWindow {
+  /// The Back toolbar item's identifier, derived from the pure seam so the
+  /// ordering and the identifier strings have exactly one source of truth.
+  static let backItemIdentifier = NSToolbarItem.Identifier(HistorySeam.backIdentifier)
+
+  /// The Forward toolbar item's identifier. See ``backItemIdentifier``.
+  static let forwardItemIdentifier = NSToolbarItem.Identifier(HistorySeam.forwardIdentifier)
+
+  /// The window controller that owns this window's panes, for the Back / Forward
+  /// toolbar buttons. Weak — the controller owns the window, not the reverse.
+  /// Assigned in `WolfWindowController.build()` right after construction.
+  weak var historyNav: HistoryNavigating?
   /// Fixed initial width of the file-tree sidebar pane in points.
   static let treePaneWidth: CGFloat = 240
 
@@ -171,6 +199,34 @@ final class MainWindow: NSWindow {
       backgroundColor = defaultBackgroundColor
     }
   }
+
+  /// Enables/disables the Back and Forward toolbar buttons for the ACTIVE pane.
+  ///
+  /// Called from `WolfWindowController.onRenderWake()` (right after the pane
+  /// container reconciles its active pane for this frame) with two cheap,
+  /// lock-free core snapshot reads. The items are built with
+  /// `autovalidates = false`, which is what makes an explicitly-set `isEnabled`
+  /// stick instead of being overwritten by AppKit's own validation pass.
+  func refreshHistoryToolbar(canBack: Bool, canForward: Bool) {
+    guard let items = toolbar?.items else { return }
+    for item in items {
+      switch item.itemIdentifier {
+      case Self.backItemIdentifier: item.isEnabled = canBack
+      case Self.forwardItemIdentifier: item.isEnabled = canForward
+      default: break
+      }
+    }
+  }
+
+  /// Toolbar Back button action; forwards to the window controller.
+  @objc func historyBackToolbarAction(_ sender: Any?) {
+    historyNav?.historyBack()
+  }
+
+  /// Toolbar Forward button action; forwards to the window controller.
+  @objc func historyForwardToolbarAction(_ sender: Any?) {
+    historyNav?.historyForward()
+  }
 }
 
 /// The window's toolbar delegate. Two items in the Apple-standard order: the
@@ -185,13 +241,25 @@ final class MainWindow: NSWindow {
 /// mechanism as the View-menu Toggle Sidebar item), so returning `nil` for it
 /// lets AppKit supply the built-in item; the separator is constructed here bound
 /// to the split view's first divider.
+/// The Back / Forward navigation buttons follow the separator, giving the LOCKED
+/// toolbar order `traffic lights → toggle sidebar → sidebar separator → back →
+/// forward → title`. That ordering lives in the pure `HistorySeam.itemIdentifiers`
+/// so it is unit-testable without AppKit.
 extension MainWindow: NSToolbarDelegate {
+  /// The locked ordering, mapped back from the pure seam's raw identifiers.
+  private static var orderedItemIdentifiers: [NSToolbarItem.Identifier] {
+    HistorySeam.itemIdentifiers(
+      toggleSidebar: NSToolbarItem.Identifier.toggleSidebar.rawValue,
+      trackingSeparator: NSToolbarItem.Identifier.sidebarTrackingSeparator.rawValue
+    ).map(NSToolbarItem.Identifier.init(_:))
+  }
+
   func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-    [.toggleSidebar, .sidebarTrackingSeparator]
+    Self.orderedItemIdentifiers
   }
 
   func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-    [.toggleSidebar, .sidebarTrackingSeparator]
+    Self.orderedItemIdentifiers
   }
 
   func toolbar(
@@ -208,8 +276,46 @@ extension MainWindow: NSToolbarDelegate {
         splitView: splitViewController.splitView,
         dividerIndex: 0)
     }
+    if itemIdentifier == Self.backItemIdentifier {
+      return navigationItem(
+        identifier: itemIdentifier,
+        label: "Back",
+        symbolName: HistorySeam.backSymbolName,
+        action: #selector(historyBackToolbarAction(_:)))
+    }
+    if itemIdentifier == Self.forwardItemIdentifier {
+      return navigationItem(
+        identifier: itemIdentifier,
+        label: "Forward",
+        symbolName: HistorySeam.forwardSymbolName,
+        action: #selector(historyForwardToolbarAction(_:)))
+    }
     // Return nil for the system `.toggleSidebar` identifier so AppKit supplies
     // the built-in item (auto-wired to `toggleSidebar(_:)`).
     return nil
+  }
+
+  /// Builds one SF-Symbol navigation toolbar item targeting this window.
+  ///
+  /// `autovalidates = false` is LOAD-BEARING: it hands enablement entirely to
+  /// `refreshHistoryToolbar(canBack:canForward:)`, which the render wake drives
+  /// from core's per-pane history.
+  private func navigationItem(
+    identifier: NSToolbarItem.Identifier,
+    label: String,
+    symbolName: String,
+    action: Selector
+  ) -> NSToolbarItem {
+    let item = NSToolbarItem(itemIdentifier: identifier)
+    item.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: label)
+    item.label = label
+    item.paletteLabel = label
+    item.toolTip = label
+    item.isNavigational = true
+    item.autovalidates = false
+    item.isEnabled = false
+    item.target = self
+    item.action = action
+    return item
   }
 }

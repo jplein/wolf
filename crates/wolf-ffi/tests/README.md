@@ -62,6 +62,17 @@ The real-nvim coverage of the Edit-command bridge surface (Bazel target `//crate
 bazel test //crates/wolf-ffi:edit
 ```
 
+## `history.rs`
+
+The real-nvim coverage of the **per-pane navigation-history** bridge surface (Bazel target `//crates/wolf-ffi:history`, two tests) — the six `WolfCoreHandle` methods `history_can_back` / `history_can_forward` / `history_back` / `history_forward` / `history_jump` / `history_entries` plus the opaque `FfiHistoryEntry` accessors — **no mocks**, mirroring `//crates/wolf-ffi:preview` exactly (same `common/` helpers, same runfile staging, same loud-SKIP gate, same live polling). Core owns the history and is covered in depth by `//crates/wolf-core:nav_history` / `:nav_history_live`; these two tests pin what the BRIDGE adds — that the methods follow core, that the `u32` index round-trips, and that a shut-down core degrades neutrally.
+
+- `history_bridge_tracks_navigation_back_forward_and_jump` — seeds a temp cwd with three Markdown files, navigates between them, and asserts `history_can_back` / `history_can_forward` follow core; that `history_entries(win)` returns opaque rows whose `display()` / `index()` / `is_current()` match the expected newest-first, at-most-one-checkmark shape; that `history_back` returns `true` and actually moves the pane; that `history_forward` returns; and that `history_jump(win, index)` moves the pane to the row's own `index()` and returns `true`, while an out-of-range index returns `false`.
+- `history_bridge_is_neutral_for_unknown_windows_the_drawer_and_after_shutdown` — the neutral-fallback contract every sibling asserts: an unknown `win` and the terminal DRAWER's window both yield `false` / `false` / an empty `Vec`, and after `shutdown()` every one of the six methods returns `false` / `false` / `false` / empty.
+
+```sh
+bazel test //crates/wolf-ffi:history
+```
+
 ## `appearance.rs`
 
 The real-nvim coverage of the `set_background(dark:)` handle method over the bridge (Bazel target `//crates/wolf-ffi:appearance`) — **no mocks**, modeled on `file_actions.rs` / `close_pane.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate). After `wolf_ffi_start`, it flips nvim's global `&background` via `handle.set_background(false)` / `set_background(true)`, observing the change indirectly through the `WolfCursor` marker technique: a marker `guibg` chosen by the live `&background`, read back through `FfiFrame::cursor_fill()` (the bridge exposes no `&background` accessor). It relies on the input-channel FIFO ordering so the `SetBackground` event applies before the marker keystrokes. The headless discriminant half — that `wolf_ffi_load_config().appearance()` round-trips `appearance: dark|light|auto` → `1`/`2`/`0` (and an absent key → `0`) — is covered by `config.rs` (the `:config` target).

@@ -611,6 +611,27 @@ mod ffi {
         // changedtick. `FfiPreview` is opaque so a `Vec<FfiPreview>` is supported.
         // Empty when the core is gone.
         fn previews(&self) -> Vec<FfiPreview>;
+        // Whether pane `win` has an older entry to go Back to in its per-pane
+        // navigation history. A cheap snapshot read (no RPC). False for an unknown
+        // window, a never-navigated pane, the terminal DRAWER, or a gone core.
+        fn history_can_back(&self, win: i64) -> bool;
+        // Whether pane `win` has a newer entry to go Forward to. Same contract.
+        fn history_can_forward(&self, win: i64) -> bool;
+        // Moves pane `win` one entry BACK. Blocks briefly on the captive nvim.
+        // Returns whether the pane actually MOVED; false at the bottom of the
+        // stack, for an unknown window, on error, or when the core is gone.
+        fn history_back(&self, win: i64) -> bool;
+        // Moves pane `win` one entry FORWARD. Same contract as `history_back`.
+        fn history_forward(&self, win: i64) -> bool;
+        // Moves pane `win` to the STACK index `index` (an `FfiHistoryEntry::index`).
+        // Returns whether the pane actually MOVED; false for an out-of-range index
+        // AND for the cursor's own index (clicking the checkmarked row is a no-op).
+        fn history_jump(&self, win: i64, index: u32) -> bool;
+        // Pane `win`'s History-menu rows, NEWEST-FIRST, capped at 10 DISTINCT
+        // targets, with finished disambiguated labels and at most one `is_current`.
+        // `FfiHistoryEntry` is opaque so a `Vec<FfiHistoryEntry>` is supported.
+        // Empty when the core is gone.
+        fn history_entries(&self, win: i64) -> Vec<FfiHistoryEntry>;
         // The native command line (`ext_cmdline`) as an opaque `FfiCmdline`
         // (active / firstc / prompt / text / pos / indent / level). An inactive
         // cmdline (or a shut-down core) yields an inactive value.
@@ -659,6 +680,20 @@ mod ffi {
         // to the full inset pane when true, or the capped+centered ~90-char rect when
         // false.
         fn source_full_width(&self) -> bool;
+    }
+
+    extern "Rust" {
+        type FfiHistoryEntry;
+
+        // The disambiguated menu label, e.g. "bar/README.md", "Preview: alpha.md",
+        // "Terminal 2", "Untitled". Already home-abbreviated; draw it verbatim.
+        fn display(&self) -> String;
+        // The STACK index to hand back to `history_jump`. For the checkmarked row
+        // this is the CURSOR's own index, so clicking it is a true no-op.
+        fn index(&self) -> u32;
+        // Whether this row draws the checkmark (at most one row per menu; NONE when
+        // the cursor's target fell outside the 10-distinct-row cap).
+        fn is_current(&self) -> bool;
     }
 
     extern "Rust" {
@@ -2537,6 +2572,84 @@ impl WolfCoreHandle {
             .collect()
     }
 
+    /// Whether pane `win` has an older entry to go Back to in its per-pane
+    /// navigation history.
+    ///
+    /// A cheap snapshot-side read (a brief mutex, no RPC), so the front-end can call
+    /// it on every render wake to enable/disable the toolbar button. `false` for an
+    /// unknown window, a never-navigated pane, the terminal DRAWER (which is EXCLUDED
+    /// from history), or once the core has been shut down.
+    #[must_use]
+    pub fn history_can_back(&self, win: i64) -> bool {
+        self.core
+            .borrow()
+            .as_ref()
+            .is_some_and(|c| c.history_can_back(win))
+    }
+
+    /// Whether pane `win` has a newer entry to go Forward to. Same contract as
+    /// [`history_can_back`](Self::history_can_back).
+    #[must_use]
+    pub fn history_can_forward(&self, win: i64) -> bool {
+        self.core
+            .borrow()
+            .as_ref()
+            .is_some_and(|c| c.history_can_forward(win))
+    }
+
+    /// Moves pane `win` one entry BACK in its navigation history and returns whether
+    /// the pane actually MOVED.
+    ///
+    /// Blocks briefly on the captive nvim. `false` at the bottom of the stack, for an
+    /// unknown window, when the recorded target no longer exists (the cursor is then
+    /// REVERTED, so Back stays available), on RPC error, or once the core has been
+    /// shut down.
+    pub fn history_back(&self, win: i64) -> bool {
+        self.core
+            .borrow()
+            .as_ref()
+            .is_some_and(|c| c.history_back(win))
+    }
+
+    /// Moves pane `win` one entry FORWARD. Same contract as
+    /// [`history_back`](Self::history_back).
+    pub fn history_forward(&self, win: i64) -> bool {
+        self.core
+            .borrow()
+            .as_ref()
+            .is_some_and(|c| c.history_forward(win))
+    }
+
+    /// Moves pane `win` to the STACK index `index` (an [`FfiHistoryEntry::index`])
+    /// and returns whether the pane actually MOVED.
+    ///
+    /// `false` for an out-of-range index AND for the cursor's own index, so clicking
+    /// the checkmarked History-menu row is a true no-op. Otherwise identical to
+    /// [`history_back`](Self::history_back).
+    pub fn history_jump(&self, win: i64, index: u32) -> bool {
+        self.core
+            .borrow()
+            .as_ref()
+            .is_some_and(|c| c.history_jump(win, index as usize))
+    }
+
+    /// Pane `win`'s History-menu rows as opaque [`FfiHistoryEntry`] values:
+    /// NEWEST-FIRST, capped at 10 DISTINCT targets, carrying finished disambiguated
+    /// labels and at most one `is_current`. Empty for an unknown window, a
+    /// never-navigated pane, the terminal DRAWER, or once the core has been shut
+    /// down.
+    #[must_use]
+    pub fn history_entries(&self, win: i64) -> Vec<FfiHistoryEntry> {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return Vec::new();
+        };
+        core.history_entries(win)
+            .into_iter()
+            .map(FfiHistoryEntry::from_menu_row)
+            .collect()
+    }
+
     /// The native command line (`ext_cmdline`) as an opaque [`FfiCmdline`].
     ///
     /// Projects [`Snapshot::cmdline`](wolf_core::Snapshot::cmdline). An inactive
@@ -3177,6 +3290,63 @@ impl FfiPreview {
             source_display_path,
             source_tick,
             source_full_width: info.source_full_width,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FfiHistoryEntry: one History-menu row (opaque to Swift).
+// ---------------------------------------------------------------------------
+
+/// One rendered History-menu row (opaque to Swift, so a `Vec<FfiHistoryEntry>` is
+/// supported — swift-bridge emits Vec support only for opaque types, exactly like
+/// [`FfiPreview`]).
+///
+/// A projection of one [`wolf_core::MenuRow`]: the finished, disambiguated display
+/// label, the STACK index to hand back to
+/// [`WolfCoreHandle::history_jump`](WolfCoreHandle::history_jump), and whether this
+/// row draws the checkmark.
+#[derive(Debug)]
+pub struct FfiHistoryEntry {
+    display: String,
+    index: u32,
+    is_current: bool,
+}
+
+impl FfiHistoryEntry {
+    /// The disambiguated menu label (e.g. `"bar/README.md"`,
+    /// `"Preview: alpha.md"`, `"Terminal 2"`). Already home-abbreviated to `~`;
+    /// the front-end draws it verbatim.
+    #[must_use]
+    pub fn display(&self) -> String {
+        self.display.clone()
+    }
+
+    /// The STACK index to hand back to
+    /// [`WolfCoreHandle::history_jump`](WolfCoreHandle::history_jump). For the
+    /// checkmarked row this is the CURSOR's own index, so clicking it is a no-op.
+    #[must_use]
+    pub fn index(&self) -> u32 {
+        self.index
+    }
+
+    /// Whether this row draws the checkmark. At most one row per menu, and NONE
+    /// when the cursor's target fell outside the 10-distinct-row cap.
+    #[must_use]
+    pub fn is_current(&self) -> bool {
+        self.is_current
+    }
+
+    /// Projects one [`wolf_core::MenuRow`] into the bridge-friendly flat row.
+    ///
+    /// The `usize` stack index narrows via `u32::try_from` (never `as`, per
+    /// `clippy::cast_possible_truncation`); an index that cannot fit — impossible,
+    /// the stack is capped at 100 — degrades to `0`.
+    fn from_menu_row(row: wolf_core::MenuRow) -> Self {
+        Self {
+            display: row.display,
+            index: u32::try_from(row.index).unwrap_or(0),
+            is_current: row.is_current,
         }
     }
 }

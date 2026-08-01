@@ -472,6 +472,30 @@ extension WolfCoreHandleRef {
         RustVec(ptr: __swift_bridge__$WolfCoreHandle$previews(ptr))
     }
 
+    public func history_can_back(_ win: Int64) -> Bool {
+        __swift_bridge__$WolfCoreHandle$history_can_back(ptr, win)
+    }
+
+    public func history_can_forward(_ win: Int64) -> Bool {
+        __swift_bridge__$WolfCoreHandle$history_can_forward(ptr, win)
+    }
+
+    public func history_back(_ win: Int64) -> Bool {
+        __swift_bridge__$WolfCoreHandle$history_back(ptr, win)
+    }
+
+    public func history_forward(_ win: Int64) -> Bool {
+        __swift_bridge__$WolfCoreHandle$history_forward(ptr, win)
+    }
+
+    public func history_jump(_ win: Int64, _ index: UInt32) -> Bool {
+        __swift_bridge__$WolfCoreHandle$history_jump(ptr, win, index)
+    }
+
+    public func history_entries(_ win: Int64) -> RustVec<FfiHistoryEntry> {
+        RustVec(ptr: __swift_bridge__$WolfCoreHandle$history_entries(ptr, win))
+    }
+
     public func cmdline() -> FfiCmdline {
         FfiCmdline(ptr: __swift_bridge__$WolfCoreHandle$cmdline(ptr))
     }
@@ -718,6 +742,94 @@ extension FfiPreview: Vectorizable {
 
     public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
         __swift_bridge__$Vec_FfiPreview$len(vecPtr)
+    }
+}
+
+
+public class FfiHistoryEntry: FfiHistoryEntryRefMut {
+    var isOwned: Bool = true
+
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+
+    deinit {
+        if isOwned {
+            __swift_bridge__$FfiHistoryEntry$_free(ptr)
+        }
+    }
+}
+public class FfiHistoryEntryRefMut: FfiHistoryEntryRef {
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+}
+public class FfiHistoryEntryRef {
+    var ptr: UnsafeMutableRawPointer
+
+    public init(ptr: UnsafeMutableRawPointer) {
+        self.ptr = ptr
+    }
+}
+extension FfiHistoryEntryRef {
+    public func display() -> RustString {
+        RustString(ptr: __swift_bridge__$FfiHistoryEntry$display(ptr))
+    }
+
+    public func index() -> UInt32 {
+        __swift_bridge__$FfiHistoryEntry$index(ptr)
+    }
+
+    public func is_current() -> Bool {
+        __swift_bridge__$FfiHistoryEntry$is_current(ptr)
+    }
+}
+extension FfiHistoryEntry: Vectorizable {
+    public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
+        __swift_bridge__$Vec_FfiHistoryEntry$new()
+    }
+
+    public static func vecOfSelfFree(vecPtr: UnsafeMutableRawPointer) {
+        __swift_bridge__$Vec_FfiHistoryEntry$drop(vecPtr)
+    }
+
+    public static func vecOfSelfPush(vecPtr: UnsafeMutableRawPointer, value: FfiHistoryEntry) {
+        __swift_bridge__$Vec_FfiHistoryEntry$push(vecPtr, {value.isOwned = false; return value.ptr;}())
+    }
+
+    public static func vecOfSelfPop(vecPtr: UnsafeMutableRawPointer) -> Optional<Self> {
+        let pointer = __swift_bridge__$Vec_FfiHistoryEntry$pop(vecPtr)
+        if pointer == nil {
+            return nil
+        } else {
+            return (FfiHistoryEntry(ptr: pointer!) as! Self)
+        }
+    }
+
+    public static func vecOfSelfGet(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiHistoryEntryRef> {
+        let pointer = __swift_bridge__$Vec_FfiHistoryEntry$get(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiHistoryEntryRef(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfGetMut(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiHistoryEntryRefMut> {
+        let pointer = __swift_bridge__$Vec_FfiHistoryEntry$get_mut(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiHistoryEntryRefMut(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfAsPtr(vecPtr: UnsafeMutableRawPointer) -> UnsafePointer<FfiHistoryEntryRef> {
+        UnsafePointer<FfiHistoryEntryRef>(OpaquePointer(__swift_bridge__$Vec_FfiHistoryEntry$as_ptr(vecPtr)))
+    }
+
+    public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
+        __swift_bridge__$Vec_FfiHistoryEntry$len(vecPtr)
     }
 }
 

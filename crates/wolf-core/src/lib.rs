@@ -30,6 +30,8 @@
 //! - [`files`]: the async streaming file-list traversal and `FileSearch` session.
 //! - [`mru`]: the global, directory-filtered most-recently-used file cache
 //!   (SQLite, `state_dir()/file-mru.sqlite`).
+//! - [`nav_history`]: the pure per-pane file navigation history (back/forward)
+//!   backing the History menu and the two toolbar buttons.
 //! - [`recent_dirs`]: the global recent-directories MRU cache (SQLite).
 //! - [`rank`]: pure fuzzy-match + ranking for the file picker.
 //! - [`input`]: abstract input events and their translation to Neovim RPC.
@@ -54,6 +56,7 @@ pub mod liveness;
 pub mod logging;
 pub mod markdown;
 pub mod mru;
+pub mod nav_history;
 pub mod nvim;
 pub mod palette;
 pub mod pane_status;
@@ -83,6 +86,10 @@ pub use markdown::{
     CodeBlockInfo, HighlightSpan, HighlightStyle, PreviewTheme, WidthMode, MARKER_COLUMN_STRIDE,
 };
 pub use mru::{MruStore, MRU_LIMIT};
+pub use nav_history::{
+    derive_target, disambiguate, MenuRow, NavHistory, NavMove, NavTarget, PaneHistory, MAX_ENTRIES,
+    MAX_MENU_ROWS,
+};
 pub use palette::{rank_palette, PaletteRow, PaletteRowKind, PaletteWindow};
 pub use pane_status::{pane_status, PaneStatus, NO_NAME};
 pub use rank::{rank_matches, rank_matches_top_n, Match, MatchKey};
@@ -91,7 +98,7 @@ pub use redraw::WakeFn;
 pub use render::{
     Cell, Cmdline, CmdlineChunk, Cursor, CursorShape, DefaultColors, Grid, HighlightTable, HlAttr,
     Message, ModeInfo, PreviewInfo, Pum, PumItem, ResolvedStyle, Rgb, SharedSnapshot, Snapshot,
-    TabFiles, ThemeColors, ThemeGroup, Toast, ToastChunk, Viewport, WinInfo,
+    TabFiles, ThemeColors, ThemeGroup, Toast, ToastChunk, Viewport, WinBuffer, WinInfo,
 };
 pub use state::{
     load_state, state_dir, PaneNode, PaneOrientation, StateStore, TabState, WindowState, WolfState,

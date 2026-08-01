@@ -481,6 +481,29 @@ pub struct PreviewInfo {
     pub source_full_width: bool,
 }
 
+/// What ONE window is showing, from the `wolf_buffers` notification.
+///
+/// The PARALLEL companion to [`Snapshot::buffers`] (which stays byte-identical for
+/// its existing consumers): where `buffers` carries only a named window's path,
+/// this carries everything the per-pane navigation history needs to derive a
+/// [`crate::nav_history::NavTarget`] — the buffer number, the path (`None` for an
+/// unnamed buffer), and the two terminal flags that separate a `:terminal` in a
+/// NORMAL split (tracked) from the terminal DRAWER (excluded from history).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WinBuffer {
+    /// The Neovim buffer number shown in the window (`0` when undecodable).
+    pub bufnr: i64,
+    /// The buffer's absolute, canonicalized path, or `None` for an UNNAMED buffer
+    /// (unlike [`Snapshot::buffers`], which omits unnamed windows entirely).
+    pub path: Option<PathBuf>,
+    /// Whether the buffer is a terminal (`vim.bo[buf].buftype == "terminal"`).
+    pub is_terminal: bool,
+    /// Whether the window is the per-project terminal DRAWER (`b:wolf_terminal` on
+    /// the buffer, or `w:wolf_terminal` on the window). The drawer is EXCLUDED from
+    /// navigation history; a `:terminal` in a normal split is not.
+    pub is_drawer: bool,
+}
+
 /// The Tier-1 open-file mirror for one tabpage: the set of file-backed buffers
 /// open in that tabpage, plus its active buffer's path.
 ///
@@ -717,6 +740,19 @@ pub struct Snapshot {
     /// a grid → window → buffer path via [`crate::api::WolfCore::pane_status`].
     /// Defaults to empty.
     pub buffers: HashMap<i64, PathBuf>,
+    /// The PARALLEL per-window buffer map, keyed by the Neovim WINDOW handle
+    /// (`WinInfo.win`, an `i64`), each a [`WinBuffer`] carrying the bufnr, the
+    /// canonicalized path (`None` for an UNNAMED buffer — unlike
+    /// [`buffers`](Self::buffers), which OMITS unnamed windows) and the two terminal
+    /// flags. Preview scratch panes are EXCLUDED (they are in
+    /// [`previews`](Self::previews) instead). Updated out-of-band from the redraw
+    /// stream via the same `wolf_buffers` notification that fills
+    /// [`buffers`](Self::buffers) (see [`crate::redraw`]): the whole map is
+    /// WHOLESALE-REPLACED on each emit, so stale/closed windows vanish. Because it
+    /// is not a redraw frame, updating it does NOT bump `seq`. Read by the
+    /// navigation-history fold (see [`crate::nav_history::derive_target`]).
+    /// Defaults to empty.
+    pub win_buffers: HashMap<i64, WinBuffer>,
     /// The app-level theme colors from the optional `WolfCursor` /
     /// `WolfTitlebar` highlight groups. Updated out-of-band from the redraw
     /// stream via the `wolf_theme` notification (a `ColorScheme` autocmd plus

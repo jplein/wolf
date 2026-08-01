@@ -311,36 +311,136 @@ function _G.wolf_setup_current_file_tracking(chan)
 	emit()
 end
 
+-- Suppression flag for wolf_buffers emits, consulted by wolf_setup_buffer_tracking's
+-- emit(). While TRUE, emit() returns immediately without notifying core.
+--
+-- Needed because a multi-step window build (wolf_toggle_terminal's OPEN path) fires
+-- WinNew/WinEnter/BufEnter SYNCHRONOUSLY, mid-build, at points where the new window
+-- still shows the PREVIOUS buffer or the drawer's terminal buffer is not yet tagged
+-- b:wolf_terminal. Core's history fold pushes on every observed CHANGE, so an
+-- intermediate wrong emit persists in the pane's stack even if a later emit is
+-- correct -- the emits must be SUPPRESSED, not corrected afterwards.
+--
+-- LOAD-BEARING: whoever sets this MUST clear it on every exit path (including
+-- errors), or per-window buffer tracking dies for the rest of the session. Use
+-- wolf_suppress_buffers(fn), which is pcall-guarded, rather than setting it directly.
+_G.wolf_buffers_suppressed = false
+
+-- Runs `fn` with wolf_buffers emits SUPPRESSED, then restores the previous flag,
+-- re-emits ONCE so core sees the fully-built final state, and finally re-raises any
+-- error `fn` raised. The flag is cleared even when `fn` errors (the pcall), which is
+-- what keeps buffer tracking alive for the rest of the session. Nests safely (the
+-- previous value is saved/restored, and only the OUTERMOST call re-emits).
+function _G.wolf_suppress_buffers(fn)
+	local prev = _G.wolf_buffers_suppressed
+	_G.wolf_buffers_suppressed = true
+	local ok, err = pcall(fn)
+	_G.wolf_buffers_suppressed = prev
+	if not prev and _G.wolf_emit_buffers then
+		_G.wolf_emit_buffers()
+	end
+	if not ok then
+		error(err, 0)
+	end
+end
+
 -- Per-window buffer tracking: wolf-core invokes this over RPC after ui_attach (and
 -- right after the current-file setup), passing its own RPC channel id. It registers
--- autocmds that notify core, via wolf_buffers, of the buffer path shown in EVERY
--- window of the current tabpage -- a list of { win, nvim_buf_get_name(buf) } pairs
--- -- so the front-end can render a per-pane statusbar keyed by window handle. It
--- emits once immediately so the startup layout is reflected without a change.
+-- autocmds that notify core, via wolf_buffers, of what EVERY window of the current
+-- tabpage is showing -- a list of five-element tuples
+--   { win, nvim_buf_get_name(buf), buf, is_terminal, is_drawer }
+-- -- so the front-end can render a per-pane statusbar keyed by window handle AND
+-- core can derive a per-pane navigation-history target. It emits once immediately so
+-- the startup layout is reflected without a change.
+--
+-- The tuple elements:
+--   1. win          -- the window handle (the map key on both sides).
+--   2. name         -- nvim_buf_get_name(buf); absolute for a file buffer, EMPTY for
+--                      an unnamed one. Core's legacy `buffers` map SKIPS empty names
+--                      (an unnamed pane reports "[No Name]"); the parallel
+--                      `win_buffers` map keeps the window with path = nil.
+--   3. buf          -- the buffer NUMBER, so core can track an unnamed buffer's
+--                      identity (Untitled { bufnr }) across navigation.
+--   4. is_terminal  -- vim.bo[buf].buftype == "terminal".
+--   5. is_drawer    -- whether this is the per-project terminal DRAWER, which is
+--                      EXCLUDED from navigation history (a :terminal in a NORMAL
+--                      split is NOT excluded). Read from the BUFFER tag
+--                      (b:wolf_terminal, set at drawer creation and carried by the
+--                      shared terminal buffer forever) OR'd with the WINDOW tag
+--                      (w:wolf_terminal, set on the drawer window right after its
+--                      split) -- belt-and-braces, so the drawer stays identifiable
+--                      even if the shared terminal buffer is ever surfaced elsewhere.
 --
 -- The whole current window set is re-emitted on each autocmd; core WHOLESALE-
--- REPLACES its per-window map, so stale/closed windows drop out. WinClosed fires
+-- REPLACES both per-window maps, so stale/closed windows drop out. WinClosed fires
 -- while the closing window is still listed by nvim_list_wins(), but re-emitting the
 -- full current set is still correct: the survivor set replaces the previous one.
--- An unnamed buffer yields an empty string from nvim_buf_get_name, which core skips
--- (absent from the map -> the pane reports "[No Name]").
+--
+-- COALESCED, NOT SYNCHRONOUS. Each autocmd only ARMS an emit; the actual scan +
+-- rpcnotify runs once, on the next event-loop tick, via vim.schedule. This is
+-- LOAD-BEARING for the per-pane navigation history, which pushes an entry on every
+-- observed CHANGE and so must never see a half-built window:
+--   * `:terminal` fires BufEnter (brand-new UNNAMED buffer), then BufFilePost (name
+--     now "term://..."), and only sets buftype = "terminal" by TermOpen. Emitting on
+--     each would push Untitled{n}, then Edit("term://..."), then Terminal{n} -- three
+--     history entries for one user action. Coalesced, core sees only the settled
+--     Terminal{n}.
+--   * `botright split` (the terminal drawer) fires WinNew/WinEnter with the new
+--     window still showing the PREVIOUS buffer.
+-- Coalescing also collapses the 2-4 identical emits a plain `:e file` produces into
+-- one, which keeps stale in-flight notifications from racing a back/forward move.
 function _G.wolf_setup_buffer_tracking(chan)
 	local group = vim.api.nvim_create_augroup("WolfBuffers", { clear = true })
-	local function emit()
+	-- Scans every window and notifies core. Only ever called from the scheduled
+	-- callback below, i.e. at a settled point between event-loop iterations.
+	local function emit_now()
 		local list = {}
 		for _, win in ipairs(vim.api.nvim_list_wins()) do
 			local buf = vim.api.nvim_win_get_buf(win)
 			-- Skip preview scratch panes (b:wolf_preview_source): the front-end
 			-- overlays a web view and paints its own "Preview: <name>" statusbar, so
 			-- core must not track the bogus scratch name as a real per-window path.
+			-- This is also what keeps the two maps (`win_buffers` / `previews`)
+			-- DISJOINT, which the history fold relies on.
 			if vim.b[buf].wolf_preview_source == nil then
-				list[#list + 1] = { win, vim.api.nvim_buf_get_name(buf) }
+				list[#list + 1] = {
+					win,
+					vim.api.nvim_buf_get_name(buf),
+					buf,
+					vim.bo[buf].buftype == "terminal",
+					vim.b[buf].wolf_terminal == true or vim.w[win].wolf_terminal == true,
+				}
 			end
 		end
 		vim.rpcnotify(chan, "wolf_buffers", list)
 	end
+
+	-- Arms a coalesced emit. A burst of autocmds within one event-loop iteration
+	-- produces exactly ONE notification, carrying the SETTLED state.
+	local pending = false
+	local function emit()
+		-- Mid-build suppression (see wolf_suppress_buffers): a partially-built
+		-- window must never reach core's history fold. Checked here AND at delivery,
+		-- because a suppressed region may open after the emit was armed.
+		if _G.wolf_buffers_suppressed or pending then
+			return
+		end
+		pending = true
+		vim.schedule(function()
+			pending = false
+			if _G.wolf_buffers_suppressed then
+				return
+			end
+			emit_now()
+		end)
+	end
+	-- Expose the emit closure so wolf_suppress_buffers can re-emit the final state
+	-- once a multi-step window build finishes.
+	_G.wolf_emit_buffers = emit
 	vim.api.nvim_create_autocmd(
-		{ "BufEnter", "BufWinEnter", "BufFilePost", "WinEnter", "WinNew", "WinClosed" },
+		-- TermOpen is where a `:terminal` buffer's buftype finally becomes
+		-- "terminal"; the earlier BufEnter/BufFilePost see it as a plain buffer.
+		{ "BufEnter", "BufWinEnter", "BufFilePost", "WinEnter", "WinNew", "WinClosed", "TermOpen" },
 		{
 			group = group,
 			callback = emit,
@@ -1024,20 +1124,35 @@ function _G.wolf_toggle_terminal()
 
 	-- 3. Otherwise open a bottom split ~1/3 tall showing the terminal
 	--    (creating + tagging a fresh one if it is gone).
+	--
+	--    The whole build runs with wolf_buffers emits SUPPRESSED. `botright split`
+	--    fires WinNew/WinEnter SYNCHRONOUSLY with the new window still showing the
+	--    PREVIOUS buffer, and on the fresh path `:terminal` fires BufEnter BEFORE
+	--    b:wolf_terminal is set -- both would feed the drawer window into core's
+	--    navigation history (which the drawer is EXCLUDED from), and an intermediate
+	--    wrong push persists even if a later emit is correct. wolf_suppress_buffers
+	--    clears the flag even if a step errors, and re-emits ONCE at the end so core
+	--    sees the fully-tagged final state.
 	local height = math.max(1, math.floor(vim.o.lines / 3))
-	vim.cmd("botright " .. height .. "split")
-	if termbuf and vim.api.nvim_buf_is_valid(termbuf) then
-		vim.api.nvim_win_set_buf(0, termbuf)
-	else
-		vim.cmd("terminal")
-		vim.b.wolf_terminal = true
-	end
-	-- Default the terminal drawer to FULL WIDTH. Capture the buffer actually bound
-	-- into the drawer window (the reused termbuf on the persisted path, or the
-	-- freshly-created terminal buffer entered by `:terminal`) and tag it. Still
-	-- user-toggleable via :WolfFullWidth (this only sets the default).
-	local termwin_buf = vim.api.nvim_get_current_buf()
-	vim.b[termwin_buf].wolf_full_width = true
+	local termwin_buf
+	wolf_suppress_buffers(function()
+		vim.cmd("botright " .. height .. "split")
+		-- Tag the drawer WINDOW immediately, so it is identifiable as the drawer
+		-- from this point on regardless of which buffer ends up bound into it.
+		vim.w.wolf_terminal = true
+		if termbuf and vim.api.nvim_buf_is_valid(termbuf) then
+			vim.api.nvim_win_set_buf(0, termbuf)
+		else
+			vim.cmd("terminal")
+			vim.b.wolf_terminal = true
+		end
+		-- Default the terminal drawer to FULL WIDTH. Capture the buffer actually
+		-- bound into the drawer window (the reused termbuf on the persisted path, or
+		-- the freshly-created terminal buffer entered by `:terminal`) and tag it.
+		-- Still user-toggleable via :WolfFullWidth (this only sets the default).
+		termwin_buf = vim.api.nvim_get_current_buf()
+		vim.b[termwin_buf].wolf_full_width = true
+	end)
 	-- Report the new drawer window so the front-end renders it as a full-width
 	-- root-bottom pane (it lives OUTSIDE the pure PaneTree). `botright split`
 	-- performs the real window op; this intent is what makes it VISIBLE. Guarded
@@ -1306,8 +1421,15 @@ function _G.wolf_setup_view_tracking()
 	-- force the top of the buffer. Keyed on (win, buf) so each pane remembers its
 	-- OWN scroll of a shared buffer, and never borrows another pane's scroll.
 	-- Wrapped in pcall so a stale bufnr degrades to a no-op.
+	--
+	-- Returns the pcall's ok flag (true on success, false when the bind or the view
+	-- restore threw). Every pre-existing caller (InputEvent::SwitchBuffer, over a
+	-- bare nvim_exec_lua chunk with no `return`) IGNORES the value, so this only
+	-- ADDS information; wolf_history_set_buf consumes it so a silently failed bind
+	-- (cmdwin, 'winfixbuf', a modified buffer that cannot be abandoned) is reported
+	-- to core as a 0 rather than a false success.
 	function _G.wolf_switch_buffer(win, buf)
-		pcall(function()
+		local ok = pcall(function()
 			vim.api.nvim_win_set_buf(win, buf)
 			if view_cache[win] and view_cache[win][buf] then
 				local view = view_cache[win][buf]
@@ -1320,7 +1442,134 @@ function _G.wolf_setup_view_tracking()
 				end)
 			end
 		end)
+		return ok
 	end
+end
+
+-- ============================================================================
+-- Navigation-history helpers (back / forward / jump)
+--
+-- wolf-core calls these over nvim_exec_lua from WolfCore::history_back /
+-- history_forward / history_jump to move ONE pane to a previously-visited target.
+-- Defined after wolf_setup_view_tracking so _G.wolf_switch_buffer exists.
+--
+-- Both are WINDOW-SCOPED (nvim_win_set_buf via wolf_switch_buffer), NEVER `:edit`:
+-- no disk re-read, no current_file/file-MRU churn -- exactly like the buffer
+-- picker's switch. Both return the bufnr actually bound (> 0) or 0; core turns a 0
+-- into a cursor REVERT, so a target that no longer exists never silently drifts the
+-- pane.
+-- ============================================================================
+
+-- Bind buffer `bufnr` into window `win` and restore that pane's saved view.
+-- Returns `bufnr` on success, or 0 when either handle is invalid (most commonly a
+-- buffer that has been :bwipeout'd since it was recorded in the pane's history) or
+-- when the bind itself FAILED.
+--
+-- The failure case matters: wolf_switch_buffer wraps its whole body in pcall, so a
+-- nvim_win_set_buf that throws AFTER the validity checks above (the cmdwin is open,
+-- the window is 'winfixbuf', or the outgoing buffer is modified and cannot be
+-- abandoned) is silent. Propagating its ok flag as a 0 is what makes core REVERT
+-- the history cursor instead of leaving it pointing at a pane that never moved.
+--
+-- Both re-emits below mirror wolf_preview_file / wolf_edit_source, but they earn
+-- their keep for DIFFERENT reasons. Measured against the pinned nvim 0.12.3, not
+-- inferred: a bind into a window that is NOT nvim's current one DOES fire
+-- BufEnter + BufWinEnter, and it fires them with the TARGET window and buffer
+-- temporarily current (inside the callback, nvim_get_current_win/_buf are the
+-- BACKGROUND ones); focus is back where it started by the time set_buf returns,
+-- and nothing fires again.
+--
+--   * wolf_emit_current_file is LOAD-BEARING for a background bind. The
+--     WolfCurrentFile emit reads nvim_get_current_buf(), so the autocmd-driven
+--     emit describes the pane that was just bound in the background -- an empty
+--     path + is_preview when that pane holds a preview scratch. Without this
+--     re-emit core keeps that wrong current_file / is_markdown_active /
+--     is_preview_active until the next real buffer switch.
+--   * wolf_emit_previews is HARDENING. It is a full nvim_list_wins() sweep that
+--     core wholesale-replaces, it is already on BufWinEnter, and the sweep does
+--     not read the current window -- so a stale `previews` entry for this window
+--     drops on its own. Kept because it is idempotent, costs one notification,
+--     and makes the update independent of autocmd ordering.
+--
+-- The only bind that fires NOTHING is a no-op rebind, i.e. the window already
+-- shows this exact buffer. That is `:help BufWinEnter`'s already-displayed
+-- carve-out, and it is per-WINDOW: a buffer already displayed in ANOTHER window
+-- still fires (measured). A no-op rebind changes nothing, so both re-emits are
+-- merely redundant there rather than needed.
+-- wolf_history_open reaches them by delegating here.
+function _G.wolf_history_set_buf(win, bufnr)
+	if win == nil or bufnr == nil or win == 0 or bufnr == 0 then
+		return 0
+	end
+	if not vim.api.nvim_win_is_valid(win) then
+		return 0
+	end
+	if not vim.api.nvim_buf_is_valid(bufnr) then
+		return 0
+	end
+	if not _G.wolf_switch_buffer(win, bufnr) then
+		return 0
+	end
+	if _G.wolf_emit_previews then
+		_G.wolf_emit_previews()
+	end
+	if _G.wolf_emit_current_file then
+		_G.wolf_emit_current_file()
+	end
+	return bufnr
+end
+
+-- Bind the buffer for absolute `path` into window `win`, loading it if needed, and
+-- restore that pane's saved view. Returns the bufnr (> 0) or 0 for an empty path /
+-- invalid window.
+--
+-- LOAD-BEARING: rebinding the EXISTING buffer -- never a fresh one -- is what
+-- makes navigating back to an unsaved "Untitled N.md" (which HAS a real cwd-joined
+-- name, see wolf_name_untitled) restore that same MODIFIED buffer rather than
+-- reading a file that was never written to disk.
+--
+-- Two steps, in this order:
+--   1. Scan nvim_list_bufs() for an ordinary file buffer whose name EQUALS, or
+--      SYMLINK-RESOLVES to, `path`. `path` was canonicalized by
+--      std::fs::canonicalize on the core side, so under a symlinked project root
+--      (~/Projects -> /Volumes/work/projects) it can differ from the name nvim
+--      kept. bufadd alone would then bind a DIFFERENT buffer, re-read from disk:
+--      unsaved edits invisible, and a bufload against a live swapfile can raise
+--      nvim's ATTENTION prompt.
+--      (nvim closes most of that gap on its own -- buflist_new matches an existing
+--      buffer by FILE ID, so a divergent name still finds the same buffer whenever
+--      the file exists on disk -- but a NEVER-WRITTEN buffer has no file id and is
+--      matched by name only, which is exactly the unsaved case above. This scan
+--      makes the rebind independent of which mechanism happens to apply.)
+--   2. Only if no buffer matches, vim.fn.bufadd(path) + bufload.
+function _G.wolf_history_open(win, path)
+	if path == nil or path == "" then
+		return 0
+	end
+	if win == nil or win == 0 or not vim.api.nvim_win_is_valid(win) then
+		return 0
+	end
+	local ok, buf = pcall(function()
+		for _, b in ipairs(vim.api.nvim_list_bufs()) do
+			-- Only ordinary file buffers: buftype ~= "" skips the preview scratch
+			-- panes (nofile), terminals and quickfix, none of which is ever an
+			-- `Edit` target, and keeps the resolve() calls off non-file names.
+			if vim.api.nvim_buf_is_valid(b) and vim.bo[b].buftype == "" then
+				local name = vim.api.nvim_buf_get_name(b)
+				if name ~= "" and (name == path or vim.fn.resolve(name) == path) then
+					vim.fn.bufload(b)
+					return b
+				end
+			end
+		end
+		local added = vim.fn.bufadd(path)
+		vim.fn.bufload(added)
+		return added
+	end)
+	if not ok or buf == nil or buf == 0 then
+		return 0
+	end
+	return _G.wolf_history_set_buf(win, buf)
 end
 
 -- ============================================================================
@@ -1597,10 +1846,30 @@ function _G.wolf_open_preview(mode)
 		vim.api.nvim_win_set_buf(0, preview_buf)
 	end
 
-	-- A background-window nvim_win_set_buf (the reuse path) does not fire
-	-- BufWinEnter, so the front-end would never learn the new bind; nudge it to
-	-- re-emit the previews snapshot. Done for ALL modes (the emit is idempotent --
-	-- the handler wholesale-replaces its previews snapshot).
+	-- Nudge the front-end to re-emit the previews snapshot so it learns the new
+	-- bind. Done for ALL modes (the emit is idempotent -- the handler wholesale-
+	-- replaces its previews snapshot).
+	--
+	-- CORRECTION: this comment used to claim a background-window nvim_win_set_buf
+	-- fires NO window event. It DOES. Probed directly against the pinned nvim
+	-- 0.12.3, binding into a NON-current window leaves focus alone and fires
+	-- BufEnter + BufWinEnter (focus_unchanged=true,
+	-- events_after_background_set_buf=[BufEnter,BufWinEnter]) -- which is what
+	-- wolf_setup_current_file_tracking's comment above already said, so the two
+	-- contradictory claims are settled in ITS favor. BufWinEnter is in both the
+	-- wolf_buffers augroup (see wolf_setup_buffer_tracking) and the WolfPreview
+	-- window-scan augroup, so Snapshot.buffers / win_buffers -- and therefore
+	-- pane_status -- recover on their own after a background bind.
+	--
+	-- The previews re-emit immediately below is therefore HARDENING, and is RETAINED
+	-- regardless: it is idempotent (the handler wholesale-replaces its map), it costs
+	-- one notification, and it makes the update independent of which events a
+	-- particular bind happens to fire and of autocmd ordering. (The one bind that
+	-- fires nothing at all is a no-op rebind of the buffer a window already shows --
+	-- `:help BufWinEnter`'s already-displayed carve-out, which is per-WINDOW: a buffer
+	-- already displayed in ANOTHER window still fires. A no-op rebind changes nothing
+	-- to emit.) The current-file re-emit further below is NOT hardening -- see its own
+	-- comment.
 	if _G.wolf_emit_previews then
 		_G.wolf_emit_previews()
 	end
@@ -1681,9 +1950,16 @@ function _G.wolf_edit_source(mode)
 		edit_into(0)
 	end
 
-	-- Re-emit so the front-end learns the pane now shows the source (a
-	-- background-window bind fires no window event) and core re-settles
-	-- current_is_preview. Both are idempotent.
+	-- Re-emit so the front-end learns the pane now shows the source and core
+	-- re-settles current_is_preview. Both are idempotent, but only one is required.
+	--
+	-- Measured against the pinned nvim 0.12.3: a bind into a background window DOES
+	-- fire BufEnter + BufWinEnter -- it just fires them with the TARGET window and
+	-- buffer temporarily current, then restores focus without firing again. So
+	-- wolf_emit_current_file is LOAD-BEARING (the WolfCurrentFile emit reads
+	-- nvim_get_current_buf() and would leave core describing the background pane),
+	-- while wolf_emit_previews is hardening -- its nvim_list_wins() sweep already
+	-- runs on that BufWinEnter and does not depend on which window is current.
 	if _G.wolf_emit_previews then
 		_G.wolf_emit_previews()
 	end
@@ -1736,9 +2012,17 @@ function _G.wolf_preview_file(win, path)
 		vim.api.nvim_win_set_buf(0, preview_buf)
 	end
 
-	-- Re-emit so the front-end learns the pane now previews the linked file (a
-	-- background-window bind fires no window event) and re-asserts the active
-	-- source pane's filetype. Both are idempotent.
+	-- Re-emit so the front-end learns the pane now previews the linked file and the
+	-- ACTIVE pane's filetype is re-asserted. Both are idempotent, but only one is
+	-- required.
+	--
+	-- Measured against the pinned nvim 0.12.3: a bind into a background window DOES
+	-- fire BufEnter + BufWinEnter, with the TARGET window and buffer temporarily
+	-- current. The BufWinEnter-driven WolfCurrentFile emit therefore reports this
+	-- preview SCRATCH as the active buffer (empty path, is_preview true) and nothing
+	-- corrects it once focus snaps back -- wolf_emit_current_file is LOAD-BEARING.
+	-- wolf_emit_previews is hardening: its nvim_list_wins() sweep runs on the same
+	-- BufWinEnter and is already accurate.
 	if _G.wolf_emit_previews then
 		_G.wolf_emit_previews()
 	end
@@ -1787,8 +2071,18 @@ function _G.wolf_setup_preview(chan)
 		vim.rpcnotify(chan, "wolf_preview", list)
 	end
 
-	-- Expose the emit closure (it closes over `chan`) so wolf_open_preview can
-	-- re-emit after a background-window bind that fires no window event.
+	-- Expose the emit closure (it closes over `chan`) so the helpers that change what
+	-- a pane shows can re-emit: wolf_open_preview / wolf_preview_file /
+	-- wolf_edit_source / wolf_history_set_buf after a window bind, and
+	-- wolf_toggle_full_width after flipping b:wolf_full_width.
+	--
+	-- Measured against the pinned nvim 0.12.3: a bind into a NON-current window does
+	-- fire BufWinEnter, and this sweep reads nvim_list_wins() rather than the current
+	-- window, so it is already accurate when the autocmd runs. For the four BIND
+	-- callers the re-emit is therefore HARDENING -- idempotent (core wholesale-
+	-- replaces the map) and independent of autocmd ordering. For wolf_toggle_full_width
+	-- it is LOAD-BEARING: writing a buffer variable fires no autocmd at all, whether
+	-- or not that buffer is current.
 	_G.wolf_emit_previews = emit_previews
 
 	vim.api.nvim_create_autocmd(

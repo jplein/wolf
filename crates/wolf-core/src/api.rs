@@ -29,9 +29,10 @@ use crate::input::{self, InputEvent, MouseEvent, Nvim, ScrollEvent};
 use crate::layout::LayoutIntent;
 use crate::liveness::{self, Liveness};
 use crate::mru::{FileEntry, MruStore};
+use crate::nav_history::{MenuRow, NavMove, NavTarget, MAX_MENU_ROWS};
 use crate::nvim::{self, NvimConfig, NvimError, NvimProcess};
 use crate::recent_dirs::RecentDirs;
-use crate::redraw::{CommandQueue, IntentQueue, RedrawHandler, TrackedCwd, WakeFn};
+use crate::redraw::{CommandQueue, IntentQueue, NavHistoryCell, RedrawHandler, TrackedCwd, WakeFn};
 use crate::render::{OwnedSnapshotReadGuard, SharedSnapshot, Snapshot, TabFiles};
 use crate::state::{state_dir, swap_dir_for};
 
@@ -139,6 +140,18 @@ pub struct WolfCore {
     /// redraw handler, which records each `wolf_cwd` directory change into it. Read
     /// back via [`WolfCore::recent_dirs`].
     recent_dirs: RecentDirs,
+    /// Every pane's navigation history (back/forward), keyed by nvim WINDOW handle.
+    /// Created once at [`WolfCore::start`] and cloned into the redraw handler, which
+    /// FOLDS a derived target into it after every `wolf_buffers` / `wolf_preview`
+    /// emit and PRUNES a closed window's stack on `win_close`. Read and moved by the
+    /// six `history_*` methods.
+    ///
+    /// LOCK DISCIPLINE: this mutex is NEVER held across a
+    /// [`block_on_rpc`](Self::block_on_rpc) and NEVER held while the snapshot lock is
+    /// held from this side. The redraw fold takes them in the OPPOSITE order
+    /// (snapshot then nav) but has no `.await`/RPC in between, so there is no
+    /// lock-order cycle.
+    nav_history: NavHistoryCell,
     /// The always-on GLOBAL command-palette MRU (`<state_dir>/command-mru.sqlite`).
     /// Constructed once at [`WolfCore::start`] from [`state_dir`] (or
     /// [`CommandMru::disabled`] when it cannot be resolved). Unlike
@@ -234,6 +247,8 @@ impl WolfCore {
         let snapshot = SharedSnapshot::new(cfg.cols as usize, cfg.rows as usize);
         let intents: IntentQueue = Arc::new(Mutex::new(VecDeque::new()));
         let commands: CommandQueue = Arc::new(Mutex::new(VecDeque::new()));
+        let nav_history: NavHistoryCell =
+            Arc::new(Mutex::new(crate::nav_history::NavHistory::default()));
 
         // The global recent-directories MRU is ALWAYS-ON: construct it once from
         // state_dir(), or a no-op disabled store when that cannot be resolved.
@@ -264,6 +279,7 @@ impl WolfCore {
             commands.clone(),
             tracked_cwd.clone(),
             recent_dirs.clone(),
+            nav_history.clone(),
             wake.clone(),
         );
 
@@ -378,6 +394,7 @@ impl WolfCore {
             mru,
             tracked_cwd,
             recent_dirs,
+            nav_history,
             command_mru,
             cwd,
             browser_preview: Mutex::new(None),
@@ -672,6 +689,137 @@ impl WolfCore {
                 0
             }
         }
+    }
+
+    /// Whether pane `win` has an older entry to go Back to.
+    ///
+    /// A cheap, LOCK-FREE-of-the-snapshot read of the sibling navigation-history
+    /// cell (a brief mutex, no RPC) — same cost class as [`Self::cwd`]. `false` for
+    /// an unknown window, a never-navigated pane, or the terminal DRAWER (which is
+    /// EXCLUDED from history entirely).
+    #[must_use]
+    pub fn history_can_back(&self, win: i64) -> bool {
+        self.nav_history.lock().can_back(win)
+    }
+
+    /// Whether pane `win` has a newer entry to go Forward to. See
+    /// [`history_can_back`](Self::history_can_back).
+    #[must_use]
+    pub fn history_can_forward(&self, win: i64) -> bool {
+        self.nav_history.lock().can_forward(win)
+    }
+
+    /// Moves pane `win` one entry BACK in its navigation history and returns
+    /// whether the pane actually moved.
+    ///
+    /// The cursor moves (and the pane's feedback-loop `expected` is armed) BEFORE
+    /// the nvim RPC is issued, so a redraw fold racing that RPC's autocmds already
+    /// sees it and ABSORBS the resulting `wolf_buffers` emit instead of pushing a
+    /// duplicate entry. When the nvim-side helper reports failure (a `:bwipeout`ed
+    /// buffer, a deleted or non-Markdown preview source) the cursor is REVERTED —
+    /// see [`crate::nav_history`].
+    ///
+    /// Blocks briefly on the captive nvim via
+    /// [`block_on_rpc`](Self::block_on_rpc) (bounded by
+    /// [`rpc_timeout`](Self::rpc_timeout)). Returns `false` at the bottom of the
+    /// stack, for an unknown window, and on RPC error.
+    pub fn history_back(&self, win: i64) -> bool {
+        // The nav mutex is taken, used, and RELEASED before the RPC below; it is
+        // never held across `block_on_rpc` and never held with the snapshot lock.
+        let mv = self.nav_history.lock().back(win);
+        match mv {
+            Some(mv) => self.apply_nav(win, &mv),
+            None => false,
+        }
+    }
+
+    /// Moves pane `win` one entry FORWARD in its navigation history and returns
+    /// whether the pane actually moved. Mirrors [`history_back`](Self::history_back)
+    /// exactly.
+    pub fn history_forward(&self, win: i64) -> bool {
+        let mv = self.nav_history.lock().forward(win);
+        match mv {
+            Some(mv) => self.apply_nav(win, &mv),
+            None => false,
+        }
+    }
+
+    /// Moves pane `win` to the STACK index `index` (a [`MenuRow::index`] handed back
+    /// from [`history_entries`](Self::history_entries)) and returns whether the pane
+    /// actually moved.
+    ///
+    /// Returns `false` — a true no-op — for an out-of-range index and for the
+    /// CURSOR'S OWN index, so clicking the checkmarked History-menu row does
+    /// nothing. Otherwise identical to [`history_back`](Self::history_back).
+    pub fn history_jump(&self, win: i64, index: usize) -> bool {
+        let mv = self.nav_history.lock().jump(win, index);
+        match mv {
+            Some(mv) => self.apply_nav(win, &mv),
+            None => false,
+        }
+    }
+
+    /// Renders pane `win`'s History-menu rows: NEWEST-FIRST, capped at
+    /// [`MAX_MENU_ROWS`] DISTINCT targets, with finished disambiguated display
+    /// strings (home already abbreviated to `~`) and at most one `is_current` row.
+    ///
+    /// Each [`MenuRow::index`] is a real STACK index, usable verbatim with
+    /// [`history_jump`](Self::history_jump). Empty for an unknown window, a
+    /// never-navigated pane, or the terminal DRAWER. A brief mutex, no RPC.
+    #[must_use]
+    pub fn history_entries(&self, win: i64) -> Vec<MenuRow> {
+        self.nav_history
+            .lock()
+            .menu_rows(win, MAX_MENU_ROWS, canonical_home())
+    }
+
+    /// Issues the nvim RPC that actually moves pane `win` to `mv.target`, and
+    /// reverts the cursor when it fails.
+    ///
+    /// The mechanism is per-target: an [`Edit`](NavTarget::Edit) goes through the
+    /// window-scoped `_G.wolf_history_open`, a [`Preview`](NavTarget::Preview)
+    /// re-uses the existing `_G.wolf_preview_file` link-follow path, and a
+    /// [`Terminal`](NavTarget::Terminal) / [`Untitled`](NavTarget::Untitled) goes
+    /// through `_G.wolf_history_set_buf`. All three are window-scoped
+    /// `nvim_win_set_buf` (never `:edit`), so no disk re-read and no
+    /// `current_file`/file-MRU churn.
+    ///
+    /// The `RefCell` borrow is bound to a LOCAL and dropped before the nav mutex is
+    /// taken (`clippy::await_holding_refcell_ref`), and the nav mutex is NEVER held
+    /// across the RPC. A helper result of `0` (or an RPC error) reverts the cursor —
+    /// but only if a racing fold has not already reconciled the pane — and returns
+    /// `false`.
+    fn apply_nav(&self, win: i64, mv: &NavMove) -> bool {
+        let nvim = self.nvim.borrow();
+        let outcome = match &mv.target {
+            NavTarget::Edit { path } => {
+                let path = path.to_string_lossy().into_owned();
+                self.block_on_rpc("history_open", nvim.history_open(win, &path))
+            }
+            NavTarget::Preview { source } => {
+                let path = source.to_string_lossy().into_owned();
+                self.block_on_rpc("preview_file", nvim.preview_file(win, &path))
+            }
+            NavTarget::Terminal { bufnr } | NavTarget::Untitled { bufnr } => {
+                self.block_on_rpc("history_set_buf", nvim.history_set_buf(win, *bufnr))
+            }
+        };
+        drop(nvim);
+
+        let bound = match outcome {
+            Ok(bufnr) => bufnr,
+            Err(e) => {
+                tracing::warn!("history navigation for win {win} failed: {e}");
+                0
+            }
+        };
+        if bound > 0 {
+            return true;
+        }
+        // The move did not land: put the cursor back where it was (a no-op if a
+        // racing `observe` already reconciled this pane).
+        self.nav_history.lock().revert(win, mv.to, mv.from);
+        false
     }
 
     /// Returns whether the buffer currently being edited is a Markdown file.
