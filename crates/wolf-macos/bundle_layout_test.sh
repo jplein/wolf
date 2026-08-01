@@ -15,6 +15,7 @@
 #   e. Contents/Resources/orlando/plugin/orlando.lua         exists & is a file
 #   f. Contents/Resources/orlando/lua/orlando/init.lua       exists & is a file
 #   g. Contents/Resources/lighthouse/colors/lighthouse.lua   exists & is a file
+#   u. Contents/Resources/rg/rg                              exists & executable
 #
 # This test only inspects files; it does NOT execute nvim and needs no network.
 #
@@ -269,4 +270,15 @@ IA_FONT_LICENSE="$RES/fonts/LICENSE.md"
 [ -s "$IA_FONT_LICENSE" ] || fail "bundled iA font license $IA_FONT_LICENSE exists but is EMPTY (zero bytes)"
 echo "PASS check (t): $IA_FONT_LICENSE exists and is non-empty"
 
-echo "PASS: Wolf.app bundles nvim/bin/nvim (executable), the markdown parser, the runtime tree, init.lua, the vendored orlando plugin, the vendored lighthouse colorscheme, the vendored nvim-treesitter + textobjects plugins, the curated compiled treesitter parsers, the JetBrains Mono fonts (4 TTFs + OFL.txt), and the iA Writer Mono S fonts (4 TTFs + LICENSE.md)"
+# ---------------------------------------------------------------------------
+# (u) Contents/Resources/rg/rg — the pinned, bundled ripgrep binary powering the
+#     sidebar content search (located by Project.rgBinPath() -> WOLF_RG_BIN).
+#     Exists & executable (catches exec-bit loss through http_archive ->
+#     copy_to_directory, exactly like the nvim check (a)).
+# ---------------------------------------------------------------------------
+RG="$RES/rg/rg"
+[ -f "$RG" ] || fail "expected bundled rg binary at $RG, but it is missing"
+[ -x "$RG" ] || fail "bundled rg binary is not executable (exec bit lost?): $RG"
+echo "PASS check (u): $RG exists and is executable"
+
+echo "PASS: Wolf.app bundles nvim/bin/nvim (executable), the markdown parser, the runtime tree, init.lua, the vendored orlando plugin, the vendored lighthouse colorscheme, the vendored nvim-treesitter + textobjects plugins, the curated compiled treesitter parsers, the JetBrains Mono fonts (4 TTFs + OFL.txt), the iA Writer Mono S fonts (4 TTFs + LICENSE.md), and rg/rg (executable)"

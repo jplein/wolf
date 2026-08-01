@@ -22,7 +22,8 @@ import Foundation
 /// `increaseFontSize == 11`, `decreaseFontSize == 12`, `commandPalette == 13`,
 /// `copy == 14`, `paste == 15`, `bufferPicker == 16`, `newTab == 17`,
 /// `preview == 18`, `edit == 19`, `terminal == 20`, `previewInBrowser == 21`,
-/// `fullWidth == 22`.
+/// `fullWidth == 22`, `toggleSidebar == 23`, `sidebarShowProject == 24`,
+/// `searchInProject == 25`.
 public enum CommandKind {
   /// Open a new editor window.
   case newWindow
@@ -71,9 +72,15 @@ public enum CommandKind {
   /// Toggle the active buffer between the ~90-char default content width and full
   /// pane width (`b:wolf_full_width`).
   case fullWidth
+  /// Toggle the sidebar (collapse/expand).
+  case toggleSidebar
+  /// Reveal the sidebar showing the file/project tree.
+  case sidebarShowProject
+  /// Reveal the sidebar showing the search UI (and focus the search field).
+  case searchInProject
 
-  /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `22` →
-  /// `.fullWidth`, else `nil`), guarding the contract shared with
+  /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `25` →
+  /// `.searchInProject`, else `nil`), guarding the contract shared with
   /// `wolf-ffi`'s `mod command_kind`.
   public init?(ffi: UInt8) {
     switch ffi {
@@ -100,6 +107,9 @@ public enum CommandKind {
     case 20: self = .terminal
     case 21: self = .previewInBrowser
     case 22: self = .fullWidth
+    case 23: self = .toggleSidebar
+    case 24: self = .sidebarShowProject
+    case 25: self = .searchInProject
     default: return nil
     }
   }

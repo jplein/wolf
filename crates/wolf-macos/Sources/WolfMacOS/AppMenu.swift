@@ -244,11 +244,17 @@ enum AppMenu {
     return item
   }
 
-  /// The View menu (Toggle Sidebar `⌃⌘s` / a separator / Reset Font Size `⌘0` /
-  /// Increase Font Size `⌘=` / Decrease Font Size `⌘-` / a separator / Command
-  /// Palette… `⌘p` / Buffer Picker… `⌘e` / Preview / Edit Source / Terminal
-  /// `` ⌃` `` / a separator / Enter Full Screen `⌃⌘f`). The font-size, palette,
-  /// preview and terminal titles mirror `wolf_core::COMMAND_SPECS`.
+  /// The View menu (Toggle Sidebar `⌃⌘s` / Project `⇧⌘e` / Search
+  /// `⇧⌘f` / a separator / Reset Font Size `⌘0` / Increase Font Size `⌘=` /
+  /// Decrease Font Size `⌘-` / a separator / Command Palette… `⌘p` / Buffer
+  /// Picker… `⌘e` / Preview / Edit Source / Terminal `` ⌃` `` / a separator /
+  /// Enter Full Screen `⌃⌘f`). The font-size, palette, preview and terminal
+  /// titles mirror `wolf_core::COMMAND_SPECS`.
+  ///
+  /// Project / Search are AppDelegate-targeted view-state items
+  /// (`showProjectTreeMenuItem`/`showSearchMenuItem`): each reveals the sidebar
+  /// and switches it to that panel, and `validateMenuItem` checkmarks the one
+  /// matching the visible panel (none when the sidebar is hidden).
   ///
   /// Toggle Sidebar and Enter Full Screen are STANDARD AppKit items (NOT Wolf
   /// commands / registry entries): their actions are
@@ -267,6 +273,23 @@ enum AppMenu {
     toggleSidebar.keyEquivalentModifierMask = [.control, .command]
     toggleSidebar.target = nil
     menu.addItem(toggleSidebar)
+
+    let showTree = NSMenuItem(
+      title: "Project",
+      action: #selector(AppDelegate.showProjectTreeMenuItem(_:)),
+      keyEquivalent: "e")
+    showTree.keyEquivalentModifierMask = [.command, .shift]
+    showTree.target = target
+    menu.addItem(showTree)
+
+    let showSearch = NSMenuItem(
+      title: "Search",
+      action: #selector(AppDelegate.showSearchMenuItem(_:)),
+      keyEquivalent: "f")
+    showSearch.keyEquivalentModifierMask = [.command, .shift]
+    showSearch.target = target
+    menu.addItem(showSearch)
+
     menu.addItem(.separator())
 
     menu.addItem(

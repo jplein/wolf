@@ -86,6 +86,7 @@
           packages = [
             rustToolchain
             pkgs.neovim
+            pkgs.ripgrep
             pkgs.pkg-config
 
             # GTK4 / Cairo / Pango toolchain for the wolf-gnome front-end's
@@ -137,6 +138,9 @@
             # WOLF_NVIM_BIN is how wolf-core and its tests locate the hermetic,
             # pinned nvim. Do not rely on PATH.
             export WOLF_NVIM_BIN="${pkgs.lib.getExe pkgs.neovim}"
+            # WOLF_RG_BIN is how wolf-core's content search + its tests locate the
+            # ripgrep binary on the Linux/cargo path. Do not rely on PATH.
+            export WOLF_RG_BIN="${pkgs.lib.getExe pkgs.ripgrep}"
             export RUST_SRC_PATH="${rustToolchain}/lib/rustlib/src/rust/library"
 
             # Pin the font stack for deterministic golden renders. We generate a

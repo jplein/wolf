@@ -111,6 +111,11 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   /// Accessed by `WakeBridge` / `TreeWakeBridge` (via `WindowRegistry`) to
   /// refresh the sidebar on render/tree wakes.
   private(set) var tree: FileTreeView?
+  /// Accessed by `SearchWakeBridge` (via `WindowRegistry`) to refresh the sidebar
+  /// search panel on content-search wakes.
+  private(set) var search: SearchView?
+  /// The sidebar body container (header toggle + tree/search switch).
+  private var sidebarContainer: SidebarContainerView?
   /// Accessed by `PickerWakeBridge` (via `WindowRegistry`) to refresh the picker
   /// on file-search wakes.
   private(set) var picker: PickerView?
@@ -218,8 +223,16 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     let tree = FileTreeView(handle: handle, paneContainer: paneContainer)
     self.tree = tree
 
+    // The sidebar search panel (its own transient rg-backed session), shown when
+    // the header's magnifying-glass toggle is active. Wrapped alongside the tree
+    // in a `SidebarContainerView` whose header switches the sidebar body.
+    let search = SearchView(handle: handle, paneContainer: paneContainer)
+    self.search = search
+    let sidebarContainer = SidebarContainerView(tree: tree, search: search)
+    self.sidebarContainer = sidebarContainer
+
     let window = MainWindow(
-      treeView: tree,
+      sidebar: sidebarContainer,
       paneContainer: paneContainer,
       metrics: metrics,
       cols: Self.initialCols,
@@ -328,7 +341,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     sidebarVisibilityObservation = window.sidebarItem.observe(
       \.isCollapsed, options: [.initial, .new]
     ) { [weak self] item, _ in
-      self?.tree?.setSidebarVisible(!item.isCollapsed)
+      self?.sidebarContainer?.setSidebarVisible(!item.isCollapsed)
     }
 
     // Start the file tree LAST — only for a window that has a folder — now that
@@ -685,6 +698,34 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     return !window.sidebarItem.isCollapsed
   }
 
+  /// The active sidebar panel (file tree vs. content search), or `nil` when there
+  /// is no sidebar container yet. Drives the View-menu "Project" /
+  /// "Search" checkmarks via `SidebarMenuSeam`.
+  var sidebarPanel: SidebarPanel? {
+    guard let container = sidebarContainer else { return nil }
+    switch container.mode {
+    case .tree: return .tree
+    case .search: return .search
+    }
+  }
+
+  /// Reveals the sidebar (if collapsed) and switches it to `panel`. The
+  /// `isCollapsed = false` write relays visibility to the container via KVO; the
+  /// `setMode` call swaps the active child (and re-relays visibility so the
+  /// newly-shown panel catches up any deferred refresh).
+  func showSidebar(panel: SidebarPanel) {
+    window?.sidebarItem.isCollapsed = false
+    sidebarContainer?.setMode(panel == .tree ? .tree : .search)
+    if panel == .search { sidebarContainer?.search.focusSearchField() }
+  }
+
+  /// Toggles the sidebar (collapse/expand) via the window's animated
+  /// `NSSplitViewController.toggleSidebar(_:)` path, which flips the sidebar
+  /// item's `isCollapsed` so `StatePersistence`'s KVO still relays visibility.
+  func toggleSidebar() {
+    window?.toggleSidebar()
+  }
+
   /// This view's PERSISTED working directory for the state snapshot + any
   /// surfaced cwd (Window menu / palette). A folder view reads its tabpage's
   /// authoritative tab-local `:tcd` cwd via `cwd_for_tabpage` — now a cheap
@@ -922,6 +963,9 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
 
     tree?.close()
     tree = nil
+    search?.close()
+    search = nil
+    sidebarContainer = nil
     picker?.close()
     picker = nil
     palette?.close()

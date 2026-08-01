@@ -49,8 +49,9 @@ use wolf_core::{
     Command, CommandMru, CoreConfig, CursorShape, FileSearch, FocusDir, Grid, HighlightTable,
     InputEvent, Key, KeyEvent, LayoutIntent, Liveness, MouseAction, MouseButton, MouseEvent,
     PaletteRow, PaletteRowKind, PaletteWindow, PaneNode, PaneOrientation, PaneStatus, PreviewInfo,
-    Pum, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SplitOrientation, StateStore, TabFiles,
-    TabState, Toast, WakeFn, WinInfo, WindowState, WolfCore, WolfState,
+    Pum, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SearchMatch, SearchOptions,
+    SearchSession, SplitOrientation, StateStore, TabFiles, TabState, Toast, WakeFn, WinInfo,
+    WindowState, WolfCore, WolfState,
 };
 
 // Re-export the bridge-defined transparent structs at the crate root so the Rust
@@ -205,6 +206,14 @@ mod command_kind {
     /// Toggle the active buffer between the ~90-char default content width and full
     /// pane width (`b:wolf_full_width`).
     pub const FULL_WIDTH: u8 = 22;
+    /// Toggle the sidebar (collapse/expand) — a native-only AppKit action.
+    pub const TOGGLE_SIDEBAR: u8 = 23;
+    /// Reveal the sidebar showing the file/project tree — a native-only AppKit
+    /// action.
+    pub const SIDEBAR_SHOW_PROJECT: u8 = 24;
+    /// Reveal the sidebar showing the search UI (and focus the search field) — a
+    /// native-only AppKit action.
+    pub const SEARCH_IN_PROJECT: u8 = 25;
 }
 
 /// The palette-row-kind discriminants packed into [`FfiCommandRow::row_kind`].
@@ -475,6 +484,26 @@ mod ffi {
         // file-tree sidebar, fed by the registered TREE wake. Same infallible
         // empty-backed fallback as `start_file_search`.
         fn start_tree_search(&self) -> FfiFileSearch;
+        // Starts a ripgrep-backed CONTENT search for the sidebar search panel,
+        // fed by the registered SEARCH wake. `use_regex`/`case_sensitive`/
+        // `all_files` are the three toggle-button states. Infallible: returns an
+        // empty-backed `FfiSearch` when the core is gone (or `WOLF_RG_BIN` is
+        // unset, degrading gracefully to no results).
+        fn start_search(
+            &self,
+            query: String,
+            use_regex: bool,
+            case_sensitive: bool,
+            all_files: bool,
+        ) -> FfiSearch;
+        // The captive nvim's `ignorecase` option, read once to seed the search
+        // panel's "case sensitive" toggle (`case_sensitive = !ignorecase`).
+        // Blocks briefly on the captive nvim; false on error/timeout/shut-down.
+        fn ignorecase(&self) -> bool;
+        // Opens `path` AND jumps the cursor to `line`/`col` (search-result click)
+        // via `InputEvent::OpenAt`. `line` is 1-based, `col` a 0-based byte offset.
+        // The core's input pump records the MRU. A no-op when the core is gone.
+        fn open_at(&self, path: String, line: u64, col: u64);
         // Builds a fresh command-palette session seeded with the core's recent
         // dirs + command MRU. The front-end feeds each OTHER window via
         // `add_window`, then calls `ranked`. Infallible: returns an empty-backed
@@ -747,6 +776,56 @@ mod ffi {
     }
 
     extern "Rust" {
+        type FfiSearch;
+
+        // The current content-search snapshot version (0 when no session backs
+        // this handle). The panel reloads its results outline only when this
+        // advances.
+        fn version(&self) -> u64;
+        // The matched files projected + sorted (case-insensitively by rel-path)
+        // from the latest streamed snapshot, each carrying its matching lines
+        // windowed to `budget` CHARACTERS. `FfiSearchFile` is opaque so a
+        // `Vec<FfiSearchFile>` is supported.
+        fn files(&self, budget: u32) -> Vec<FfiSearchFile>;
+    }
+
+    extern "Rust" {
+        type FfiSearchFile;
+
+        // The display label: "<basename> - <relative parent dir>" (just the
+        // basename for a root file).
+        fn label(&self) -> String;
+        // The file's `/`-separated path relative to the search root (the sort key).
+        fn rel_path(&self) -> String;
+        // The absolute filesystem path, handed back to `WolfCoreHandle::open_at`.
+        fn abs_path(&self) -> String;
+        // The matching lines in this file, ordered by line number. `FfiSearchMatch`
+        // is opaque so a `Vec<FfiSearchMatch>` is supported.
+        fn matches(&self) -> Vec<FfiSearchMatch>;
+    }
+
+    extern "Rust" {
+        type FfiSearchMatch;
+
+        // The 1-based line number of the match.
+        fn line_number(&self) -> u64;
+        // The 0-based byte column of the first submatch (for cursor placement).
+        fn column(&self) -> u32;
+        // The visible (budget-windowed) line text; the front-end wraps it across
+        // up to two lines and prefixes/suffixes an ellipsis per `truncated_*`.
+        fn display_text(&self) -> String;
+        // Whether context was hidden on the LEFT of the window (leading ellipsis).
+        fn truncated_left(&self) -> bool;
+        // Whether context was hidden on the RIGHT of the window (trailing ellipsis).
+        fn truncated_right(&self) -> bool;
+        // The bold match ranges within `display_text`, as parallel byte-offset
+        // vectors (`range_starts[i]`..`range_ends[i]`), avoiding an extra opaque
+        // type.
+        fn range_starts(&self) -> Vec<u32>;
+        fn range_ends(&self) -> Vec<u32>;
+    }
+
+    extern "Rust" {
         type FfiConfig;
 
         // The resolved font family name (e.g. "iA Writer Mono S").
@@ -943,7 +1022,7 @@ mod ffi {
     extern "Rust" {
         type FfiCommand;
 
-        // The command kind (`command_kind::NEW_WINDOW` .. `FULL_WIDTH`).
+        // The command kind (`command_kind::NEW_WINDOW` .. `SEARCH_IN_PROJECT`).
         fn kind(&self) -> u8;
     }
 
@@ -1247,6 +1326,48 @@ fn registered_tree_wake(token: u64) -> WakeFn {
         if !ptr.is_null() {
             // SAFETY: `ptr` was set from a valid `extern "C" fn(u64)` by
             // `wolf_ffi_set_tree_wake`; a non-null value is always such a pointer.
+            let f: WakeCallback = unsafe { std::mem::transmute::<*mut (), WakeCallback>(ptr) };
+            f(token);
+        }
+    })
+}
+
+/// The globally-registered content-SEARCH wake callback, or null when none is
+/// registered (the Rust integration-test path). Stored as a raw pointer in an
+/// [`AtomicPtr`], a fourth sibling of [`WAKE_FN`] / [`FILESEARCH_WAKE_FN`] /
+/// [`TREE_WAKE_FN`] feeding the sidebar search panel's rg-streaming batch wakes.
+static SEARCH_WAKE_FN: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+
+/// Registers (or, with `None`, clears) the front-end's content-search wake
+/// callback.
+///
+/// Swift's `SearchWakeBridge` calls this once at startup with a thunk that does
+/// `DispatchQueue.main.async { … project.onSearchWake() … }`. A fourth registered
+/// `extern "C"` callback alongside [`wolf_ffi_set_wake`],
+/// [`wolf_ffi_set_filesearch_wake`], and [`wolf_ffi_set_tree_wake`], declared in
+/// the hand-written `generated/wolf_ffi_wake.h`, so a Rust-only build leaves no
+/// `extern "Swift"` symbol unresolved.
+///
+/// # Safety
+///
+/// `wake`, if `Some`, must be a valid `extern "C" fn(u64)` that is safe to call
+/// from any thread (core fires the wake from its tokio worker thread).
+#[no_mangle]
+pub extern "C" fn wolf_ffi_set_search_wake(wake: Option<WakeCallback>) {
+    let ptr = wake.map_or(std::ptr::null_mut(), |f| f as *mut ());
+    SEARCH_WAKE_FN.store(ptr, Ordering::Release);
+}
+
+/// Builds the [`WakeFn`] core invokes on each content-search batch: it loads the
+/// registered search callback and calls it with this core's `token`, or does
+/// nothing if none is registered. Captures only the `token` (a `u64`), so it is
+/// `Send + Sync` as `WakeFn` requires.
+fn registered_search_wake(token: u64) -> WakeFn {
+    Arc::new(move || {
+        let ptr = SEARCH_WAKE_FN.load(Ordering::Acquire);
+        if !ptr.is_null() {
+            // SAFETY: `ptr` was set from a valid `extern "C" fn(u64)` by
+            // `wolf_ffi_set_search_wake`; a non-null value is always such a pointer.
             let f: WakeCallback = unsafe { std::mem::transmute::<*mut (), WakeCallback>(ptr) };
             f(token);
         }
@@ -2168,6 +2289,60 @@ impl WolfCoreHandle {
         }
     }
 
+    /// Starts a ripgrep-backed CONTENT search for the sidebar search panel, fed by
+    /// the registered search wake.
+    ///
+    /// Infallible across the bridge, exactly like
+    /// [`start_file_search`](WolfCoreHandle::start_file_search): when the core has
+    /// already been shut down (or `WOLF_RG_BIN` is unset) it returns an
+    /// empty-backed [`FfiSearch`] (whose [`FfiSearch::files`] yields nothing).
+    /// Dropping the returned handle cancels the rg subprocess.
+    #[must_use]
+    pub fn start_search(
+        &self,
+        query: String,
+        use_regex: bool,
+        case_sensitive: bool,
+        all_files: bool,
+    ) -> FfiSearch {
+        let opts = SearchOptions {
+            query,
+            use_regex,
+            case_sensitive,
+            all_files,
+        };
+        let search = self
+            .core
+            .borrow()
+            .as_ref()
+            .map(|core| core.start_search(opts, registered_search_wake(self.wake_token)));
+        FfiSearch {
+            search,
+            cache: RefCell::new(SearchProjectionCache::new()),
+        }
+    }
+
+    /// The captive nvim's `ignorecase` option (a one-shot seed for the search
+    /// panel's "case sensitive" toggle). Blocks briefly on the captive nvim; false
+    /// on error/timeout or a shut-down core.
+    #[must_use]
+    pub fn ignorecase(&self) -> bool {
+        self.core
+            .borrow()
+            .as_ref()
+            .is_some_and(WolfCore::ignorecase)
+    }
+
+    /// Opens `path` AND jumps the cursor to `line`/`col` (a search-result click)
+    /// via [`InputEvent::OpenAt`]; the core's input pump records the MRU. `line` is
+    /// 1-based, `col` a 0-based byte offset. A no-op once the core has been shut
+    /// down.
+    pub fn open_at(&self, path: String, line: u64, col: u64) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.open_at(PathBuf::from(path), line, col);
+        }
+    }
+
     /// Builds a fresh command-palette session seeded with the core's recent
     /// directories + the global command MRU.
     ///
@@ -2895,7 +3070,7 @@ pub struct FfiCommand {
 }
 
 impl FfiCommand {
-    /// The command kind (`command_kind::NEW_WINDOW` .. `TERMINAL`).
+    /// The command kind (`command_kind::NEW_WINDOW` .. `SEARCH_IN_PROJECT`).
     #[must_use]
     pub fn kind(&self) -> u8 {
         self.kind
@@ -2929,6 +3104,9 @@ impl FfiCommand {
             Command::Terminal => command_kind::TERMINAL,
             Command::PreviewInBrowser => command_kind::PREVIEW_IN_BROWSER,
             Command::FullWidth => command_kind::FULL_WIDTH,
+            Command::ToggleSidebar => command_kind::TOGGLE_SIDEBAR,
+            Command::SidebarShowProject => command_kind::SIDEBAR_SHOW_PROJECT,
+            Command::SearchInProject => command_kind::SEARCH_IN_PROJECT,
         };
         Self { kind }
     }
@@ -3975,6 +4153,204 @@ impl FfiTreeNode {
                 is_dir: false,
             },
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FfiSearch / FfiSearchFile / FfiSearchMatch: the sidebar content-search surface
+// (opaque to Swift).
+// ---------------------------------------------------------------------------
+
+/// A live content-search session handle (opaque to Swift).
+///
+/// Wraps an `Option<`[`SearchSession`]`>` so [`WolfCoreHandle::start_search`] stays
+/// infallible across the bridge: `None` means the core was gone (or `WOLF_RG_BIN`
+/// unset) at start, and [`files`](FfiSearch::files) then yields nothing. Dropping
+/// this handle drops the inner [`SearchSession`], cancelling the rg subprocess.
+pub struct FfiSearch {
+    search: Option<SearchSession>,
+    /// Memoizes the projected + windowed `Vec<FfiSearchFile>` keyed on
+    /// `(snapshot version, char budget)`, so AppKit's reload storm rebuilds the
+    /// projection at most once per `(version, budget)` (the analog of
+    /// [`FfiFileSearch`]'s `tree_cache`).
+    cache: RefCell<SearchProjectionCache>,
+}
+
+/// A `(version, budget)`-keyed memo of the projected search results.
+struct SearchProjectionCache {
+    key: Option<(u64, u32)>,
+    files: Vec<FfiSearchFile>,
+}
+
+impl SearchProjectionCache {
+    fn new() -> Self {
+        Self {
+            key: None,
+            files: Vec::new(),
+        }
+    }
+}
+
+impl FfiSearch {
+    /// The current content-search snapshot version, or 0 when no session backs
+    /// this handle. Live snapshots start at `version = 1`, so 0 uniquely marks an
+    /// absent session; the panel's refresh gate reloads only when this advances.
+    #[must_use]
+    pub fn version(&self) -> u64 {
+        self.search.as_ref().map_or(0, |s| s.read().version)
+    }
+
+    /// The matched files projected + sorted from the latest streamed snapshot,
+    /// each carrying its matching lines windowed to `budget` CHARACTERS.
+    ///
+    /// Reads the snapshot briefly, runs [`wolf_core::project`] + one
+    /// [`wolf_core::context_window`] per match under the guard, and clones out an
+    /// owned `Vec<FfiSearchFile>` (dropping the guard). Memoized per
+    /// `(version, budget)`; an empty `Vec` when the session is absent.
+    #[must_use]
+    pub fn files(&self, budget: u32) -> Vec<FfiSearchFile> {
+        let Some(search) = &self.search else {
+            return Vec::new();
+        };
+        let view = search.read();
+        let version = view.version;
+        let mut cache = self.cache.borrow_mut();
+        if cache.key != Some((version, budget)) {
+            cache.files = build_search_files(&view.matches, budget);
+            cache.key = Some((version, budget));
+        }
+        cache.files.clone()
+    }
+}
+
+/// Projects `matches` into per-file groups and windows each match's line to
+/// `budget` characters, producing the owned bridge representation.
+fn build_search_files(matches: &[SearchMatch], budget: u32) -> Vec<FfiSearchFile> {
+    let budget = budget as usize;
+    wolf_core::project(matches)
+        .into_iter()
+        .map(|group| {
+            let file_matches: Vec<FfiSearchMatch> = group
+                .match_indices
+                .iter()
+                .map(|&i| {
+                    let m = &matches[i];
+                    let cw = wolf_core::context_window(&m.line_text, &m.match_ranges, budget);
+                    FfiSearchMatch {
+                        line_number: m.line_number,
+                        column: m.column,
+                        display_text: cw.text,
+                        truncated_left: cw.truncated_left,
+                        truncated_right: cw.truncated_right,
+                        range_starts: cw.ranges.iter().map(|&(s, _)| s).collect(),
+                        range_ends: cw.ranges.iter().map(|&(_, e)| e).collect(),
+                    }
+                })
+                .collect();
+            FfiSearchFile {
+                label: group.label,
+                rel_path: group.rel_path,
+                abs_path: group.abs_path,
+                matches: file_matches,
+            }
+        })
+        .collect()
+}
+
+/// One matched file in the projected search tree (opaque to Swift, so a
+/// `Vec<FfiSearchFile>` is supported).
+#[derive(Clone)]
+pub struct FfiSearchFile {
+    label: String,
+    rel_path: String,
+    abs_path: PathBuf,
+    matches: Vec<FfiSearchMatch>,
+}
+
+impl FfiSearchFile {
+    /// The display label: `"<basename> - <relative parent dir>"` (just the
+    /// basename for a root file).
+    #[must_use]
+    pub fn label(&self) -> String {
+        self.label.clone()
+    }
+
+    /// The file's `/`-separated path relative to the search root (the sort key).
+    #[must_use]
+    pub fn rel_path(&self) -> String {
+        self.rel_path.clone()
+    }
+
+    /// The absolute filesystem path, handed back to
+    /// [`WolfCoreHandle::open_at`](WolfCoreHandle::open_at).
+    #[must_use]
+    pub fn abs_path(&self) -> String {
+        self.abs_path.to_string_lossy().into_owned()
+    }
+
+    /// The matching lines in this file, ordered by line number.
+    #[must_use]
+    pub fn matches(&self) -> Vec<FfiSearchMatch> {
+        self.matches.clone()
+    }
+}
+
+/// One matching line within a file (opaque to Swift, so a `Vec<FfiSearchMatch>`
+/// is supported).
+#[derive(Clone)]
+pub struct FfiSearchMatch {
+    line_number: u64,
+    column: u32,
+    display_text: String,
+    truncated_left: bool,
+    truncated_right: bool,
+    range_starts: Vec<u32>,
+    range_ends: Vec<u32>,
+}
+
+impl FfiSearchMatch {
+    /// The 1-based line number of the match.
+    #[must_use]
+    pub fn line_number(&self) -> u64 {
+        self.line_number
+    }
+
+    /// The 0-based byte column of the first submatch (for cursor placement via
+    /// `open_at`; indexes the ORIGINAL line, not `display_text`).
+    #[must_use]
+    pub fn column(&self) -> u32 {
+        self.column
+    }
+
+    /// The visible (budget-windowed) line text.
+    #[must_use]
+    pub fn display_text(&self) -> String {
+        self.display_text.clone()
+    }
+
+    /// Whether context was hidden on the LEFT of the window (leading ellipsis).
+    #[must_use]
+    pub fn truncated_left(&self) -> bool {
+        self.truncated_left
+    }
+
+    /// Whether context was hidden on the RIGHT of the window (trailing ellipsis).
+    #[must_use]
+    pub fn truncated_right(&self) -> bool {
+        self.truncated_right
+    }
+
+    /// The start byte offsets (into `display_text`) of the bold match ranges.
+    #[must_use]
+    pub fn range_starts(&self) -> Vec<u32> {
+        self.range_starts.clone()
+    }
+
+    /// The end byte offsets (into `display_text`) of the bold match ranges,
+    /// parallel to [`range_starts`](Self::range_starts).
+    #[must_use]
+    pub fn range_ends(&self) -> Vec<u32> {
+        self.range_ends.clone()
     }
 }
 

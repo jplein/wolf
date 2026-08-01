@@ -1,0 +1,23 @@
+# Arch-selected, structure-preserving ripgrep 15.2.0 TreeArtifact + a smoke test.
+#
+# `rg_tree` resolves to the assembled `rg/` directory for the host CPU; the macOS
+# app bundles it at `Contents/Resources/rg/`. See extensions.bzl and the directory
+# README for the pins and how to bump them.
+
+# The host-arch ripgrep tree (a `rg/` TreeArtifact containing `rg/rg`). Selected on
+# @platforms//cpu.
+alias(
+    name = "rg_tree",
+    actual = select({
+        "@platforms//cpu:arm64": "@rg_macos_arm64//:rg_tree",
+        "@platforms//cpu:x86_64": "@rg_macos_x86_64//:rg_tree",
+    }),
+    visibility = ["//visibility:public"],
+)
+
+# Exercises the pinned binary: exists + executable, reports `ripgrep 15.2.0`.
+sh_test(
+    name = "rg_version_test",
+    srcs = ["rg_version_test.sh"],
+    data = [":rg_tree"],
+)
