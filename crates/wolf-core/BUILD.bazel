@@ -86,6 +86,92 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
+# Real-nvim + real-rg integration test for the ripgrep-backed CONTENT search
+# (`WolfCore::start_search` streaming into a `SearchSession` snapshot, the
+# `SearchOptions` knobs, `SearchMatch` ranges/column, and the `open_at`
+# line/column round-trip). Modeled on the `file_search` target above but ALSO
+# stages the pinned rg tree (`//bazel/rg:rg_tree`) and wires `WOLF_RG_BIN` (the
+# test harness resolves it to an absolute path, mirroring the nvim handling).
+# NOTE: `//bazel/rg:rg_tree` is a CODER-CREATED target (search plan impl step 4);
+# this test target will not build until `bazel/rg` exists.
+rust_test(
+    name = "search",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/search.rs",
+    ],
+    crate_root = "tests/search.rs",
+    # Spawning a real nvim child (and rg subprocess) does not work under the macOS
+    # build sandbox, so run unsandboxed. `no-sandbox` (vs `local`) keeps caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//bazel/rg:rg_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_RG_BIN": "$(rootpath //bazel/rg:rg_tree)/rg/rg",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+# Real-nvim graceful-degrade test for the ripgrep-backed CONTENT search when the
+# pinned rg binary is ABSENT: `WolfCore::start_search` with `WOLF_RG_BIN` unset
+# must return an immediately-`complete` `SearchSession` carrying
+# `error == Some("WOLF_RG_BIN unset")` and no matches (review note N1). This lives
+# in its OWN dedicated binary because it removes the process-global `WOLF_RG_BIN`
+# env var, which would race the real-rg `search` target's threads if co-located.
+# Mirrors the `search` target for the nvim setup (staged `//bazel/nvim:nvim_tree`
+# + `//runtime/nvim:init.lua`, wired `WOLF_NVIM_BIN`/`WOLF_TEST_*` env,
+# `no-sandbox` so the nvim child can spawn) but DELIBERATELY OMITS
+# `//bazel/rg:rg_tree` from `data` and `WOLF_RG_BIN` from `env` — the whole point
+# is that rg is unavailable.
+rust_test(
+    name = "search_no_rg",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/search_no_rg.rs",
+    ],
+    crate_root = "tests/search_no_rg.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+# Headless coverage for the PUBLIC search projection/display surface
+# (`project` / `file_label` / `context_window` re-exported from `search_tree`):
+# case-insensitive file grouping, line-number ordering, and the balanced 2-line
+# context-window truncation (including multibyte/emoji char-boundary slicing).
+# These are pure `&str`/slice transforms (no nvim, no rg, no filesystem), so this
+# needs NO staged runfiles and no `no-sandbox` tag — the pure analog of
+# `pane_status_unit`. The PRIVATE rg-JSON parse fns are covered by the coder's
+# inline `#[cfg(test)]` module in `src/search.rs` (run by `wolf_core_lib_test`).
+rust_test(
+    name = "search_projection",
+    srcs = ["tests/search_projection.rs"],
+    crate_root = "tests/search_projection.rs",
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
 # Real-nvim integration test for the BOUNDED file-search traversal (the
 # `$HOME`-walk safety net: entry cap, wall-clock budget, max depth). An EXACT
 # mirror of the `file_search` target above: drives a REAL pinned Neovim (no

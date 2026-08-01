@@ -33,14 +33,15 @@ final class MainWindow: NSWindow {
     splitViewController.sidebarItem
   }
 
-  /// Builds the window around `treeView` (sidebar) and `paneContainer` (editor),
+  /// Builds the window around `sidebar` (the tree/search container) and
+  /// `paneContainer` (editor),
   /// sizing the editor pane to `cols` × `rows` cells with the cmdline strip as
   /// extra height below it.
   convenience init(
-    treeView: FileTreeView, paneContainer: PaneContainerView, metrics: CellMetrics,
+    sidebar: SidebarContainerView, paneContainer: PaneContainerView, metrics: CellMetrics,
     cols: Int, rows: Int
   ) {
-    let splitVC = EditorSplitViewController(treeView: treeView, paneContainer: paneContainer)
+    let splitVC = EditorSplitViewController(sidebar: sidebar, paneContainer: paneContainer)
     // Each pane's text grid is inset by a uniform 20pt padding on all four sides
     // (`EditorInset.padding`) — with the statusbar strip flush at the pane top and
     // the grid inset below it — so the initial content must grow by 2*padding in

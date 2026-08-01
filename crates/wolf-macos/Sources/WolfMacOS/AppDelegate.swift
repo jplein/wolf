@@ -86,6 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     WakeBridge.install()
     PickerWakeBridge.install()
     TreeWakeBridge.install()
+    SearchWakeBridge.install()
 
     // Build the native menu bar (net-new). Every Wolf item funnels through
     // `handleCommandMenuItem(_:)` → `CommandDispatcher`. Keep the Window and

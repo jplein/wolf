@@ -27,12 +27,12 @@ final class EditorSplitViewController: NSSplitViewController {
   /// Maximum width of the sidebar pane, in points.
   static let maxThickness: CGFloat = 420
 
-  /// Builds the split of `treeView` (sidebar) and `paneContainer` (editor
-  /// content).
-  init(treeView: FileTreeView, paneContainer: PaneContainerView) {
+  /// Builds the split of `sidebar` (the tree/search container) and `paneContainer`
+  /// (editor content).
+  init(sidebar: SidebarContainerView, paneContainer: PaneContainerView) {
     super.init(nibName: nil, bundle: nil)
 
-    let sidebarHost = HostViewController(hostedView: treeView, pinTopToSafeArea: false)
+    let sidebarHost = HostViewController(hostedView: sidebar, pinTopToSafeArea: false)
     let contentHost = HostViewController(hostedView: paneContainer, pinTopToSafeArea: true)
 
     // `sidebarWithViewController:` gives the `.sidebar` behavior: vibrancy,

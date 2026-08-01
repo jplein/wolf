@@ -175,6 +175,40 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
+# Real-nvim + real-rg integration test for the CONTENT-SEARCH bridge surface
+# (`start_search` -> `FfiSearch::version`/`files(budget)`,
+# `FfiSearchFile::label`/`rel_path`/`abs_path`/`matches`,
+# `FfiSearchMatch::line_number`/`column`/`display_text`/`truncated_*`/`range_*`,
+# `ignorecase`, and the `open_at` line/column round-trip). Modeled on
+# `tree_search` exactly but ALSO stages the pinned rg tree (`//bazel/rg:rg_tree`)
+# and wires `WOLF_RG_BIN`. Loud-skips when nvim OR rg is unavailable. Reuses
+# `tests/common/mod.rs`. NOTE: `//bazel/rg:rg_tree` is a CODER-CREATED target
+# (search plan impl step 4); this target will not build until `bazel/rg` exists.
+rust_test(
+    name = "search",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/search.rs",
+    ],
+    crate_root = "tests/search.rs",
+    # Spawning a real nvim child (and rg subprocess) does not work under the macOS
+    # build sandbox, so run unsandboxed. `no-sandbox` (vs `local`) keeps caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//bazel/rg:rg_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_RG_BIN": "$(rootpath //bazel/rg:rg_tree)/rg/rg",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
+)
+
 # Real-nvim integration test for the split-panes bridge surface
 # (`windows` / `active_win` / `grid_for_win` / `read_frame_for_grid` /
 # `drain_intents` / `resize_grid` / `focus_win`, plus the `FfiLayoutIntent` /

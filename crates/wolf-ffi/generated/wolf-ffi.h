@@ -81,6 +81,42 @@ void* __swift_bridge__$Vec_FfiTreeNode$get_mut(void* vec_ptr, uintptr_t index);
 uintptr_t __swift_bridge__$Vec_FfiTreeNode$len(void* vec_ptr);
 void* __swift_bridge__$Vec_FfiTreeNode$as_ptr(void* vec_ptr);
 
+typedef struct FfiSearch FfiSearch;
+void __swift_bridge__$FfiSearch$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiSearch$new(void);
+void __swift_bridge__$Vec_FfiSearch$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiSearch$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiSearch$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiSearch$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiSearch$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiSearch$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiSearch$as_ptr(void* vec_ptr);
+
+typedef struct FfiSearchFile FfiSearchFile;
+void __swift_bridge__$FfiSearchFile$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiSearchFile$new(void);
+void __swift_bridge__$Vec_FfiSearchFile$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiSearchFile$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiSearchFile$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiSearchFile$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiSearchFile$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiSearchFile$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiSearchFile$as_ptr(void* vec_ptr);
+
+typedef struct FfiSearchMatch FfiSearchMatch;
+void __swift_bridge__$FfiSearchMatch$_free(void* self);
+
+void* __swift_bridge__$Vec_FfiSearchMatch$new(void);
+void __swift_bridge__$Vec_FfiSearchMatch$drop(void* vec_ptr);
+void __swift_bridge__$Vec_FfiSearchMatch$push(void* vec_ptr, void* item_ptr);
+void* __swift_bridge__$Vec_FfiSearchMatch$pop(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiSearchMatch$get(void* vec_ptr, uintptr_t index);
+void* __swift_bridge__$Vec_FfiSearchMatch$get_mut(void* vec_ptr, uintptr_t index);
+uintptr_t __swift_bridge__$Vec_FfiSearchMatch$len(void* vec_ptr);
+void* __swift_bridge__$Vec_FfiSearchMatch$as_ptr(void* vec_ptr);
+
 typedef struct FfiConfig FfiConfig;
 void __swift_bridge__$FfiConfig$_free(void* self);
 
@@ -362,6 +398,9 @@ void __swift_bridge__$WolfCoreHandle$set_ui_focus(void* self, bool gained);
 void __swift_bridge__$WolfCoreHandle$shutdown(void* self);
 void* __swift_bridge__$WolfCoreHandle$start_file_search(void* self);
 void* __swift_bridge__$WolfCoreHandle$start_tree_search(void* self);
+void* __swift_bridge__$WolfCoreHandle$start_search(void* self, void* query, bool use_regex, bool case_sensitive, bool all_files);
+bool __swift_bridge__$WolfCoreHandle$ignorecase(void* self);
+void __swift_bridge__$WolfCoreHandle$open_at(void* self, void* path, uint64_t line, uint64_t col);
 void* __swift_bridge__$WolfCoreHandle$command_palette(void* self);
 void* __swift_bridge__$WolfCoreHandle$current_file(void* self);
 void* __swift_bridge__$WolfCoreHandle$cwd(void* self);
@@ -414,6 +453,19 @@ void* __swift_bridge__$FfiTreeNode$rel_path(void* self);
 void* __swift_bridge__$FfiTreeNode$abs_path(void* self);
 bool __swift_bridge__$FfiTreeNode$is_dir(void* self);
 void* __swift_bridge__$wolf_ffi_ancestors_to_reveal(void* rel_path);
+uint64_t __swift_bridge__$FfiSearch$version(void* self);
+void* __swift_bridge__$FfiSearch$files(void* self, uint32_t budget);
+void* __swift_bridge__$FfiSearchFile$label(void* self);
+void* __swift_bridge__$FfiSearchFile$rel_path(void* self);
+void* __swift_bridge__$FfiSearchFile$abs_path(void* self);
+void* __swift_bridge__$FfiSearchFile$matches(void* self);
+uint64_t __swift_bridge__$FfiSearchMatch$line_number(void* self);
+uint32_t __swift_bridge__$FfiSearchMatch$column(void* self);
+void* __swift_bridge__$FfiSearchMatch$display_text(void* self);
+bool __swift_bridge__$FfiSearchMatch$truncated_left(void* self);
+bool __swift_bridge__$FfiSearchMatch$truncated_right(void* self);
+void* __swift_bridge__$FfiSearchMatch$range_starts(void* self);
+void* __swift_bridge__$FfiSearchMatch$range_ends(void* self);
 void* __swift_bridge__$FfiConfig$font_family(void* self);
 double __swift_bridge__$FfiConfig$font_size(void* self);
 double __swift_bridge__$FfiConfig$line_height(void* self);

@@ -427,6 +427,44 @@
         ]
       }
     },
+    "//bazel/rg:extensions.bzl%rg": {
+      "general": {
+        "bzlTransitiveDigest": "5Pa3SztfRQC6BkQICtLNw2RQuPjHXZAfIaM6dxdJQgU=",
+        "usagesDigest": "n85OfSO01LZeMsaY09Q7GLilfLOtOr56c1j+ycHBvcA=",
+        "recordedFileInputs": {},
+        "recordedDirentsInputs": {},
+        "envVariables": {},
+        "generatedRepoSpecs": {
+          "rg_macos_arm64": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
+            "attributes": {
+              "urls": [
+                "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-apple-darwin.tar.gz"
+              ],
+              "sha256": "3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4",
+              "build_file_content": "load(\"@aspect_bazel_lib//lib:copy_to_directory.bzl\", \"copy_to_directory\")\n\npackage(default_visibility = [\"//visibility:public\"])\n\n# Every extracted file lives under the archive's top directory; the generated\n# overlay markers (BUILD/REPO/WORKSPACE) sit at the repo root and are not matched.\nfilegroup(\n    name = \"all\",\n    srcs = glob([\"ripgrep-15.2.0-aarch64-apple-darwin/**\"]),\n)\n\n# Assemble the whole arch tree under a single inner `rg/` directory (remapping the\n# archive root), preserving the executable bit on `rg`. `rg_tree` is the\n# TreeArtifact bundled into Wolf.app at Contents/Resources/rg/.\ncopy_to_directory(\n    name = \"rg_tree\",\n    srcs = [\":all\"],\n    out = \"rg_tree\",\n    replace_prefixes = {\"ripgrep-15.2.0-aarch64-apple-darwin\": \"rg\"},\n)\n"
+            }
+          },
+          "rg_macos_x86_64": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
+            "attributes": {
+              "urls": [
+                "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-apple-darwin.tar.gz"
+              ],
+              "sha256": "af7825fcc69a2afc7a7aea55fc9af90e26421d8f20fe59df32e233c0b8a231c1",
+              "build_file_content": "load(\"@aspect_bazel_lib//lib:copy_to_directory.bzl\", \"copy_to_directory\")\n\npackage(default_visibility = [\"//visibility:public\"])\n\n# Every extracted file lives under the archive's top directory; the generated\n# overlay markers (BUILD/REPO/WORKSPACE) sit at the repo root and are not matched.\nfilegroup(\n    name = \"all\",\n    srcs = glob([\"ripgrep-15.2.0-x86_64-apple-darwin/**\"]),\n)\n\n# Assemble the whole arch tree under a single inner `rg/` directory (remapping the\n# archive root), preserving the executable bit on `rg`. `rg_tree` is the\n# TreeArtifact bundled into Wolf.app at Contents/Resources/rg/.\ncopy_to_directory(\n    name = \"rg_tree\",\n    srcs = [\":all\"],\n    out = \"rg_tree\",\n    replace_prefixes = {\"ripgrep-15.2.0-x86_64-apple-darwin\": \"rg\"},\n)\n"
+            }
+          }
+        },
+        "recordedRepoMappingEntries": [
+          [
+            "",
+            "bazel_tools",
+            "bazel_tools"
+          ]
+        ]
+      }
+    },
     "//bazel/treesitter-parsers:extensions.bzl%treesitter_parsers": {
       "general": {
         "bzlTransitiveDigest": "5yRCpxXcDzjfhOd1arnD0Yx/2IjOeZXuGS5gl87iCJE=",

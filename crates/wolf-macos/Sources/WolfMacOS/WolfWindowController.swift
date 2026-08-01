@@ -111,6 +111,11 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
   /// Accessed by `WakeBridge` / `TreeWakeBridge` (via `WindowRegistry`) to
   /// refresh the sidebar on render/tree wakes.
   private(set) var tree: FileTreeView?
+  /// Accessed by `SearchWakeBridge` (via `WindowRegistry`) to refresh the sidebar
+  /// search panel on content-search wakes.
+  private(set) var search: SearchView?
+  /// The sidebar body container (header toggle + tree/search switch).
+  private var sidebarContainer: SidebarContainerView?
   /// Accessed by `PickerWakeBridge` (via `WindowRegistry`) to refresh the picker
   /// on file-search wakes.
   private(set) var picker: PickerView?
@@ -225,8 +230,16 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     let tree = FileTreeView(handle: handle, paneContainer: paneContainer)
     self.tree = tree
 
+    // The sidebar search panel (its own transient rg-backed session), shown when
+    // the header's magnifying-glass toggle is active. Wrapped alongside the tree
+    // in a `SidebarContainerView` whose header switches the sidebar body.
+    let search = SearchView(handle: handle, paneContainer: paneContainer)
+    self.search = search
+    let sidebarContainer = SidebarContainerView(tree: tree, search: search)
+    self.sidebarContainer = sidebarContainer
+
     let window = MainWindow(
-      treeView: tree,
+      sidebar: sidebarContainer,
       paneContainer: paneContainer,
       metrics: metrics,
       cols: Self.initialCols,
@@ -331,7 +344,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     sidebarVisibilityObservation = window.sidebarItem.observe(
       \.isCollapsed, options: [.initial, .new]
     ) { [weak self] item, _ in
-      self?.tree?.setSidebarVisible(!item.isCollapsed)
+      self?.sidebarContainer?.setSidebarVisible(!item.isCollapsed)
     }
 
     // Start the file tree LAST — only for a window that has a folder — now that
@@ -857,6 +870,9 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
 
     tree?.close()
     tree = nil
+    search?.close()
+    search = nil
+    sidebarContainer = nil
     picker?.close()
     picker = nil
     palette?.close()

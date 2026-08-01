@@ -183,6 +183,23 @@ pub enum InputEvent {
         /// Path to open.
         path: PathBuf,
     },
+    /// Open a file AND jump the cursor to a specific line/column (delegated to
+    /// Neovim's `edit` followed by `nvim_win_set_cursor`).
+    ///
+    /// Used by the sidebar search panel when a matching line is clicked. `line`
+    /// is 1-based (ripgrep's `line_number`, the same convention nvim's cursor
+    /// line uses); `col` is a 0-based BYTE offset (ripgrep's first-submatch
+    /// start, the same convention `nvim_win_set_cursor`'s column uses). Neovim
+    /// clamps an out-of-range line/column to the buffer, so a stale match never
+    /// errors.
+    OpenAt {
+        /// Path to open.
+        path: PathBuf,
+        /// 1-based line number to place the cursor on.
+        line: u64,
+        /// 0-based byte column to place the cursor on.
+        col: u64,
+    },
     /// Save the current buffer (delegated to Neovim's `write`).
     Save,
     /// Save the current buffer to a new path (delegated to `saveas`).
@@ -424,6 +441,7 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
             Ok(())
         }
         InputEvent::Open { path } => command(nvim, &format!("edit {}", fnameescape(path))).await,
+        InputEvent::OpenAt { path, line, col } => open_at(nvim, path, *line, *col).await,
         InputEvent::Save => command(nvim, "write").await,
         InputEvent::SaveAs { path } => {
             command(nvim, &format!("saveas {}", fnameescape(path))).await
@@ -531,6 +549,29 @@ async fn nvim_paste(nvim: &Nvim, text: &str) -> Result<(), Box<CallError>> {
 
 async fn command(nvim: &Nvim, cmd: &str) -> Result<(), Box<CallError>> {
     let _ = nvim.call("nvim_command", vec![Value::from(cmd)]).await?;
+    Ok(())
+}
+
+/// Opens `path` via `:edit` and then jumps the cursor to `line`/`col` via
+/// `nvim_win_set_cursor(0, [line, col])`.
+///
+/// `line` is 1-based (matching both ripgrep's `line_number` and
+/// `nvim_win_set_cursor`'s row convention); `col` is a 0-based byte offset
+/// (matching ripgrep's submatch start and `nvim_win_set_cursor`'s column
+/// convention). Neovim clamps an out-of-range line/column to the buffer, so a
+/// stale match never errors. The two calls happen back-to-back in one
+/// input-pump step so the edit and the cursor placement are ordered.
+async fn open_at(nvim: &Nvim, path: &Path, line: u64, col: u64) -> Result<(), Box<CallError>> {
+    command(nvim, &format!("edit {}", fnameescape(path))).await?;
+    let _ = nvim
+        .call(
+            "nvim_win_set_cursor",
+            vec![
+                Value::from(0),
+                Value::Array(vec![Value::from(line), Value::from(col)]),
+            ],
+        )
+        .await?;
     Ok(())
 }
 
