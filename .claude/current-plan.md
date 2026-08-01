@@ -1,6 +1,8 @@
 # Plan: Merge `main` into `feat/search-ui` + verify build/tests/linters
 
-## Status: MERGE IN PROGRESS — resolving conflicts, then build/test/lint
+## Status: MERGE COMPLETE ✓ (commit `3946abb`)
+
+Merged `main` into `feat/search-ui`. Conflicts (2 macOS READMEs + plan file) resolved keeping both sides. Auto-merged Swift verified semantically correct (window toolbar AND in-sidebar search header both survive; no compile fixes needed). `WindowRegistry` "three→four wake bridges" comment fixed. Reviewer APPROVED merge integrity (both features present, refactor complete, no residue). All green under bazelisk: app builds+signs; 8/8 tests (WolfKeyMapTests, wolf_core_lib_test, search, search_projection, search_no_rg, ffi:search, bundle_layout_test, rg_version_test); 4/4 linters (rustfmt_core/ffi, clippy -Dwarnings, swift_format). Not pushed (branch ahead of origin by 3).
 
 The Search UI feature is COMPLETE (see git history `98e62cd "Search UI"`). Now merging `main` (which advanced with `96d2c97 "Toolbar"` + `ebc7300 "Move sidebar to the left"`) into this branch.
 
