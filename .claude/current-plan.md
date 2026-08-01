@@ -58,7 +58,7 @@ Both call one new private `RedrawHandler::fold_nav_targets(&self, snap: &Snapsho
 
 **Ownership: NOT on `Snapshot`** — `Snapshot` is render state, derives `Clone`, is read under the paint `RwLock` every frame. History is out-of-band app state mutated from FFI accessors that also do blocking RPC.
 
-**Ownership: NOT solely on `RedrawHandler`** — it is `Clone`, re-cloned on restart; a *writer*, not an owner.
+**Ownership: NOT solely on `RedrawHandler`** — it is `Clone`, re-cloned on restart; a _writer_, not an owner.
 
 **Follow the `IntentQueue` / `CommandQueue` / `TrackedCwd` / `RecentDirs` pattern** (`redraw.rs:30-63`, `api.rs:108-148`, `api.rs:261-268`):
 
@@ -75,7 +75,7 @@ pub type NavHistoryCell = Arc<parking_lot::Mutex<crate::nav_history::NavHistory>
 
 ## B3. `win_close` pruning
 
-**Core DOES see it:** `redraw.rs:857` routes `"win_close"` → `fn win_close(snap, params)` at `redraw.rs:1168`. **But the payload is `[grid]`, not a window handle.** The handle is recoverable *before* removal: `snap.windows.get(&grid).map(|w| w.win)`.
+**Core DOES see it:** `redraw.rs:857` routes `"win_close"` → `fn win_close(snap, params)` at `redraw.rs:1168`. **But the payload is `[grid]`, not a window handle.** The handle is recoverable _before_ removal: `snap.windows.get(&grid).map(|w| w.win)`.
 
 `apply_event` is a free function with only `&mut RwLockWriteGuard<Snapshot>`, so thread a collector:
 
@@ -88,7 +88,7 @@ pub type NavHistoryCell = Arc<parking_lot::Mutex<crate::nav_history::NavHistory>
 ## B4. How back/forward moves the pane
 
 | target | mechanism | status |
-|---|---|---|
+| --- | --- | --- |
 | `Preview { source }` | `WolfCore::preview_file(win, path)` (`api.rs:666`) → `NvimProcess::preview_file` (`nvim.rs:508`) → `_G.wolf_preview_file(win, path)` (`init.lua:1706`). Window-scoped `nvim_win_set_buf`, re-emits previews + current-file, returns source bufnr (`>0`) or `0`. | **Reuse verbatim** — this is the link-follow path; no change needed |
 | `Terminal`/`Untitled { bufnr }` | `_G.wolf_switch_buffer(win, buf)` (`init.lua:1309`) — window-scoped `nvim_win_set_buf` + per-`(winid, bufnr)` `winrestview`. `pcall`-wrapped, silent, returns nothing → a WIPED buffer is an invisible no-op | **New thin wrapper needed** |
 | `Edit { path }` | Nothing window-scoped exists. `InputEvent::Open` is `:edit` on the CURRENT window and records the file MRU. Closest precedent: `wolf_edit_source`'s local `edit_into` (`init.lua:1648`) | **New helper needed** |
@@ -362,13 +362,13 @@ Free pure functions:
 
 ## B10. Files to create
 
-| path | kind |
-|---|---|
-| `crates/wolf-core/src/nav_history.rs` | source |
-| `crates/wolf-core/tests/nav_history.rs` | headless test |
-| `crates/wolf-core/tests/nav_history_live.rs` | real-nvim test |
-| `crates/wolf-ffi/tests/history.rs` | real-nvim test |
-| `crates/wolf-macos/Sources/WolfKeyMap/HistorySeam.swift` | source |
+| path                                                             | kind                |
+| ---------------------------------------------------------------- | ------------------- |
+| `crates/wolf-core/src/nav_history.rs`                            | source              |
+| `crates/wolf-core/tests/nav_history.rs`                          | headless test       |
+| `crates/wolf-core/tests/nav_history_live.rs`                     | real-nvim test      |
+| `crates/wolf-ffi/tests/history.rs`                               | real-nvim test      |
+| `crates/wolf-macos/Sources/WolfKeyMap/HistorySeam.swift`         | source              |
 | `crates/wolf-macos/Tests/WolfKeyMapTests/HistorySeamTests.swift` | headless Swift test |
 
 ## B11. Files to modify
@@ -508,7 +508,7 @@ The test-writer found, and the orchestrator verified in `runtime/nvim/init.lua`,
 1. `vim.cmd("botright " .. height .. "split")` (`:1026`) fires `WinNew`/`WinEnter` **synchronously**. `wolf_setup_buffer_tracking` listens on exactly those events, so it emits with the NEW drawer window showing the **previous** buffer → an `Edit(prev)` push for the drawer window.
 2. On the FRESH path, `vim.cmd("terminal")` (`:1032`) fires `BufEnter` **before** `vim.b.wolf_terminal = true` on the next line (`:1033`), so that emit sees `is_drawer == false, is_terminal == true` → a `Terminal{n}` push. No further `wolf_buffers` emit follows to correct it. (The REUSE path at `:1028` is already fine — `termbuf` carries the tag from its original creation.)
 
-Tagging the window after the split does NOT fix this: the split's own emit has already fired. And because `observe` pushes on every *change*, an intermediate wrong push persists in the stack even if a later emit is correct. **The emits must be suppressed, not corrected afterwards.**
+Tagging the window after the split does NOT fix this: the split's own emit has already fired. And because `observe` pushes on every _change_, an intermediate wrong push persists in the stack even if a later emit is correct. **The emits must be suppressed, not corrected afterwards.**
 
 **Required fix (coder):**
 
@@ -579,12 +579,12 @@ Fixed `back_moves_the_pane_and_the_resulting_emit_is_absorbed`, `two_panes_have_
 
 ## D3. Test-writer round 2 — orchestrator decisions
 
-| coder recommendation | decision |
-|---|---|
-| Fix `a_failed_back_returns_false_and_reverts_the_cursor` (broken premise: `:e` reuses the empty unnamed buffer) | **ACCEPT** — route to test-writer |
-| Add a headless test for the D2 repeat filter | **ACCEPT** — new behavior, no direct coverage |
-| Add a live assertion that a split `:terminal` grows the stack by exactly ONE | **ACCEPT** — guards the D1 fix against regression |
-| Add AppKit-level coverage for phase 8 (menu rebuild, toolbar enablement, `validateMenuItem`) | **DECLINE** — matches the repo's existing posture that only pure Foundation seams are Swift-tested; `HistorySeam` already carries that layer |
+| coder recommendation                                                                                            | decision                                                                                                                                     |
+| --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fix `a_failed_back_returns_false_and_reverts_the_cursor` (broken premise: `:e` reuses the empty unnamed buffer) | **ACCEPT** — route to test-writer                                                                                                            |
+| Add a headless test for the D2 repeat filter                                                                    | **ACCEPT** — new behavior, no direct coverage                                                                                                |
+| Add a live assertion that a split `:terminal` grows the stack by exactly ONE                                    | **ACCEPT** — guards the D1 fix against regression                                                                                            |
+| Add AppKit-level coverage for phase 8 (menu rebuild, toolbar enablement, `validateMenuItem`)                    | **DECLINE** — matches the repo's existing posture that only pure Foundation seams are Swift-tested; `HistorySeam` already carries that layer |
 
 **Not routed:** `rustfmt.fix` reformatted the two untracked test files (line-wrapping only, assertions verified unchanged). `rustfmt_core` does not check test files, so this is cosmetic — not worth the churn.
 
@@ -645,12 +645,12 @@ Also measured: `:help BufWinEnter`'s already-displayed carve-out is **per-window
 
 Part G1 settled empirically that a background `nvim_win_set_buf` DOES fire `[BufEnter, BufWinEnter]`. The technical writer corrected the one instance in `wolf_open_preview`, but `grep` finds four more, **including one in a helper written this session**:
 
-| line | location |
-|---|---|
+| line            | location                                                |
+| --------------- | ------------------------------------------------------- |
 | `init.lua:1475` | **`wolf_history_set_buf` — ours, written this session** |
-| `init.lua:1928` | preview re-emit rationale |
-| `init.lua:1983` | active-buffer re-assert rationale |
-| `init.lua:2034` | `wolf_setup_preview`'s emit-closure exposure |
+| `init.lua:1928` | preview re-emit rationale                               |
+| `init.lua:1983` | active-buffer re-assert rationale                       |
+| `init.lua:2034` | `wolf_setup_preview`'s emit-closure exposure            |
 
 `init.lua:477` carries a related claim about a full-width flag flip — verify whether it is the same false assertion or a genuinely different case.
 
@@ -674,16 +674,16 @@ The technical-writer session had no Bash tool. `.prettierrc` is `{"proseWrap": "
 
 ## Final test status — ALL GREEN
 
-| target | result |
-|---|---|
-| `//crates/wolf-core:nav_history` | 31/31 |
-| `//crates/wolf-core:nav_history_live` | 14/14 |
-| `//crates/wolf-core:pane_buffers` | 6/6 |
-| `//crates/wolf-ffi:history` | 2/2 |
-| `//crates/wolf-ffi:pane_status` | 1/1 |
-| `//crates/wolf-macos:WolfKeyMapTests` | 283 assertions, 10 seam tests |
-| `bazelisk test //...` | 86/86 |
-| `rustfmt_core`, `rustfmt_ffi`, `clippy`, `swift_format` | 4/4 |
+| target                                                  | result                        |
+| ------------------------------------------------------- | ----------------------------- |
+| `//crates/wolf-core:nav_history`                        | 31/31                         |
+| `//crates/wolf-core:nav_history_live`                   | 14/14                         |
+| `//crates/wolf-core:pane_buffers`                       | 6/6                           |
+| `//crates/wolf-ffi:history`                             | 2/2                           |
+| `//crates/wolf-ffi:pane_status`                         | 1/1                           |
+| `//crates/wolf-macos:WolfKeyMapTests`                   | 283 assertions, 10 seam tests |
+| `bazelisk test //...`                                   | 86/86                         |
+| `rustfmt_core`, `rustfmt_ffi`, `clippy`, `swift_format` | 4/4                           |
 
 Coverage now reaches all three `apply_nav` failure routes — the invalid-bufnr gate, the `filereadable` gate, and the post-guard throw — plus background-window navigation.
 
@@ -725,20 +725,20 @@ The C-3 test's doc comment hedges that the `pane_status` half might also arrive 
 The coder disproved it empirically: reverted all three Lua fixes, ran the target, and got **12 passed / 0 failed**, including `back_to_a_symlinked_path_rebinds_the_same_buffer`. Two independent nvim 0.12.3 mechanisms already covered the scenario:
 
 1. **nvim resolves DIRECTORY symlinks in buffer names itself.** `:e link/doc.md` (where `link -> real`) yields `nvim_buf_get_name(0) == "<cwd>/real/doc.md"` — already the canonical form core stores.
-2. **Buffer lookup is by file id (device+inode), not name** (`buflist_new` → `buflist_findname_file_id`). With a *file* symlink, `:e filelink.md` keeps the link name, yet a later `:e real/doc.md` reuses the SAME buffer.
+2. **Buffer lookup is by file id (device+inode), not name** (`buflist_new` → `buflist_findname_file_id`). With a _file_ symlink, `:e filelink.md` keeps the link name, yet a later `:e real/doc.md` reuses the SAME buffer.
 
 So `bufadd(canonical_path)` returns the existing buffer whenever the file exists on disk, regardless of name divergence. The only genuine name-only gap is a **never-written** buffer — and there `canonicalize` fails, so `redraw.rs:640` stores the raw path and the names match anyway.
 
 **The C-1 fix is RETAINED as defensive hardening** — it makes the rebind independent of which nvim mechanism happens to apply, and covers a buffer written under one name whose file was later replaced or moved. But it is hardening, not a bug fix, and `back_to_a_symlinked_path_rebinds_the_same_buffer` does **not** discriminate it (passes with and without).
 
-**Decision: do NOT build an elaborate discriminating test for C-1.** Pinning it would require defeating nvim's own dir-symlink resolution *and* file-id matching simultaneously — a contrived scenario with poor value. The existing test is retained as harmless general rebind coverage, but its doc comment must stop claiming to guard C-1.
+**Decision: do NOT build an elaborate discriminating test for C-1.** Pinning it would require defeating nvim's own dir-symlink resolution _and_ file-id matching simultaneously — a contrived scenario with poor value. The existing test is retained as harmless general rebind coverage, but its doc comment must stop claiming to guard C-1.
 
 ## F2. Remaining coverage gaps — ACCEPTED
 
 Both are code paths introduced this session by the E1 fixes, with no test:
 
-- **C-2** — a bind that throws *after* the validity checks returns `0` → `apply_nav` returns `false` → cursor reverted. Reachable by setting `'winfixbuf'` on the target window (nvim ≥ 0.10) or opening the cmdwin before `history_back`.
-- **C-3** — the background-window re-emits. Every existing test acts on nvim's *current* window, so the re-emits run but are never asserted. Needs a bind into a window that is NOT current, asserting `Snapshot.previews` drops the stale entry and `pane_status(grid)` reports the new file with no further input.
+- **C-2** — a bind that throws _after_ the validity checks returns `0` → `apply_nav` returns `false` → cursor reverted. Reachable by setting `'winfixbuf'` on the target window (nvim ≥ 0.10) or opening the cmdwin before `history_back`.
+- **C-3** — the background-window re-emits. Every existing test acts on nvim's _current_ window, so the re-emits run but are never asserted. Needs a bind into a window that is NOT current, asserting `Snapshot.previews` drops the stale entry and `pane_status(grid)` reports the new file with no further input.
 
 ## F3. Comment accuracy — ACCEPTED
 
@@ -789,6 +789,7 @@ Invisible to the live tests because `fresh_cwd()` makes nvim's own names already
 ```
 bazelisk test //... //tools/lint:rustfmt_core //tools/lint:rustfmt_ffi //tools/lint:clippy //tools/lint:swift_format
 ```
+
 - **Implementation** — pending
 - **Review** — pending
 - **Documentation** — pending

@@ -187,16 +187,16 @@ Empty output → **wolf-core UNTOUCHED** (no source change, no new dep, no CARGO
 
 ## Summary table (steps 1-8)
 
-| Step | What | Result |
-| --- | --- | --- |
-| 1 | nvim_version_test (pinned 0.12.3, exec bit, self-locate VIMRUNTIME, markdown.so) | PASS |
-| 2 | build //crates/wolf-macos:Wolf (delivered as Wolf.zip) | PASS |
-| 3 | structure preservation (RISK #1): nvim/ prefix + exec bits + init.lua | PASS |
-| 4 | bundle_layout_test (4 bundle paths over the built .app) | PASS |
-| 5 | signing (RISK #2): nested adhoc-signed; codesign --verify --deep --strict OK | PASS |
-| 6 | real start vs bundled nvim | PARTIAL: bundled nvim proven to start+key+shutdown; bridge_smoke hangs HOST-WIDE (also with system nvim) — pre-existing, not bundling |
-| 7 | regression frame_pack + WolfKeyMapTests | PASS |
-| 8 | boundary: GUI denylist clean + wolf-core untouched | PASS |
+| Step | What                                                                             | Result                                                                                                                                |
+| ---- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | nvim_version_test (pinned 0.12.3, exec bit, self-locate VIMRUNTIME, markdown.so) | PASS                                                                                                                                  |
+| 2    | build //crates/wolf-macos:Wolf (delivered as Wolf.zip)                           | PASS                                                                                                                                  |
+| 3    | structure preservation (RISK #1): nvim/ prefix + exec bits + init.lua            | PASS                                                                                                                                  |
+| 4    | bundle_layout_test (4 bundle paths over the built .app)                          | PASS                                                                                                                                  |
+| 5    | signing (RISK #2): nested adhoc-signed; codesign --verify --deep --strict OK     | PASS                                                                                                                                  |
+| 6    | real start vs bundled nvim                                                       | PARTIAL: bundled nvim proven to start+key+shutdown; bridge_smoke hangs HOST-WIDE (also with system nvim) — pre-existing, not bundling |
+| 7    | regression frame_pack + WolfKeyMapTests                                          | PASS                                                                                                                                  |
+| 8    | boundary: GUI denylist clean + wolf-core untouched                               | PASS                                                                                                                                  |
 
 No implementation files were changed during verification (no `.sh` runfiles fix or signing fallback was needed — both `# NOTE to coder` resolvers worked as written, and the nested Mach-O was already adhoc-signed and verifies deep+strict).
 

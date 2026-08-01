@@ -169,9 +169,9 @@ All types are re-exported at the crate root (`wolf_ffi::…`).
 
 - `FfiKeyEvent` — transparent `{ kind: u8, ch: u32, fnum: u8, ctrl, shift, alt, meta: bool }`. Swift fills it from an `NSEvent`; Rust maps it into a `wolf_core::KeyEvent` (so nvim notation stays the single source of truth in core). `kind` mirrors the variant order of `wolf_core::input::Key`:
 
-  | kind | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 |
-  | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-  | key | Char | Enter | Esc | Tab | Backspace | Delete | Left | Right | Up | Down | Home | End | PageUp | PageDown | F(fnum) |
+  | kind | 0    | 1     | 2   | 3   | 4         | 5      | 6    | 7     | 8   | 9    | 10   | 11  | 12     | 13       | 14      |
+  | ---- | ---- | ----- | --- | --- | --------- | ------ | ---- | ----- | --- | ---- | ---- | --- | ------ | -------- | ------- |
+  | key  | Char | Enter | Esc | Tab | Backspace | Delete | Left | Right | Up  | Down | Home | End | PageUp | PageDown | F(fnum) |
 
   These discriminants are the single source of truth shared with the Swift `WolfKeyMap` and the test suites.
 

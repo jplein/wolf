@@ -13,16 +13,16 @@ Advisory (non-gating) lint/format targets for the macOS Bazel host: **clippy** a
 
 ## Targets
 
-| Purpose | Target | Command |
-| --- | --- | --- |
-| clippy check | `:clippy` | `bazel test //tools/lint:clippy` |
-| clippy fix | `:clippy.fix` | `bazel run //tools/lint:clippy.fix` |
-| rustfmt check | `:rustfmt` | `bazel test //tools/lint:rustfmt` |
-| rustfmt fix | `:rustfmt.fix` | `bazel run //tools/lint:rustfmt.fix` |
-| swift-format check | `:swift_format` | `bazel test //tools/lint:swift_format` |
-| swift-format fix | `:swift_format.fix` | `bazel run //tools/lint:swift_format.fix` |
-| all checks | `:check` | `bazel test //tools/lint:check` |
-| all fixes | `:fix` | `bazel run //tools/lint:fix` |
+| Purpose            | Target              | Command                                   |
+| ------------------ | ------------------- | ----------------------------------------- |
+| clippy check       | `:clippy`           | `bazel test //tools/lint:clippy`          |
+| clippy fix         | `:clippy.fix`       | `bazel run //tools/lint:clippy.fix`       |
+| rustfmt check      | `:rustfmt`          | `bazel test //tools/lint:rustfmt`         |
+| rustfmt fix        | `:rustfmt.fix`      | `bazel run //tools/lint:rustfmt.fix`      |
+| swift-format check | `:swift_format`     | `bazel test //tools/lint:swift_format`    |
+| swift-format fix   | `:swift_format.fix` | `bazel run //tools/lint:swift_format.fix` |
+| all checks         | `:check`            | `bazel test //tools/lint:check`           |
+| all fixes          | `:fix`              | `bazel run //tools/lint:fix`              |
 
 Internal targets: `:clippy_core` / `:clippy_ffi` (`rust_clippy`, built as `data` of `:clippy` so a clippy failure fails that test) and `:rustfmt_core` / `:rustfmt_ffi` (`rustfmt_test`, aggregated by the `:rustfmt` and `:check` suites).
 

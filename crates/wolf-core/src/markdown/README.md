@@ -66,9 +66,9 @@ The MathML styling for pulldown-latex's `<math>` output, embedded (via the `MATH
 
 The vendored fonts, each committed three ways: the raw woff2 (provenance), a single-line base64 sidecar (`*.woff2.b64`, the file the code actually `include_str!`s), and the license text.
 
-| File | Bytes | Upstream source | License |
-| --- | --- | --- | --- |
-| `inter-variable.woff2` | 352240 | rsms/inter v4.1 release asset `web/InterVariable.woff2` | SIL OFL 1.1 (`inter-OFL.txt`) |
+| File                     | Bytes  | Upstream source                                                                                                                            | License                                                  |
+| ------------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| `inter-variable.woff2`   | 352240 | rsms/inter v4.1 release asset `web/InterVariable.woff2`                                                                                    | SIL OFL 1.1 (`inter-OFL.txt`)                            |
 | `latinmodern-math.woff2` | 387976 | pulldown-latex repo `font/latinmodern-math.woff2` (`raw.githubusercontent.com/carloskiki/pulldown-latex/main/font/latinmodern-math.woff2`) | GUST GFL v1.0 (`latinmodern-math-GUST-FONT-LICENSE.txt`) |
 
 **How they reach the document.** `markdown.rs` builds the `INTER_FONT_FACE` and `MATH_FONT_FACE` consts at COMPILE time with `concat!` + `include_str!` of the `.b64` sidecars, wrapping each in a `@font-face { … src: url('data:font/woff2;base64,<b64>') format('woff2') }` rule — zero runtime base64 encoding, and no base64 crate dependency. Inter declares the full variable weight axis (`font-weight: 100 900`); Latin Modern Math is pinned to all `<math>` content by `math.css`.

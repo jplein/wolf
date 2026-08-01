@@ -373,12 +373,12 @@ These targets are **advisory**: every one is tagged `manual`, so a wildcard `baz
 
 Each tool has a CHECK (report/fail on violations via `bazel test`) and a FIX (rewrite in place via `bazel run`):
 
-| Tool | Check | Fix |
-| --- | --- | --- |
-| clippy | `bazel test //tools/lint:clippy` | `bazel run //tools/lint:clippy.fix` |
-| rustfmt | `bazel test //tools/lint:rustfmt` | `bazel run //tools/lint:rustfmt.fix` |
+| Tool         | Check                                  | Fix                                       |
+| ------------ | -------------------------------------- | ----------------------------------------- |
+| clippy       | `bazel test //tools/lint:clippy`       | `bazel run //tools/lint:clippy.fix`       |
+| rustfmt      | `bazel test //tools/lint:rustfmt`      | `bazel run //tools/lint:rustfmt.fix`      |
 | swift-format | `bazel test //tools/lint:swift_format` | `bazel run //tools/lint:swift_format.fix` |
-| **all** | `bazel test //tools/lint:check` | `bazel run //tools/lint:fix` |
+| **all**      | `bazel test //tools/lint:check`        | `bazel run //tools/lint:fix`              |
 
 Notes and caveats:
 

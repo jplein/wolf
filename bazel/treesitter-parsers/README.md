@@ -49,24 +49,24 @@ Two grammars need special handling:
 
 All 16 languages in the curated set compile hermetically at their pinned revisions and ship in the bundle. **No grammar was dropped.** All scanners are C at these revisions (no C++ scanner needed).
 
-| lang | repo | subdir | scanner | status | notes |
-| --- | --- | --- | --- | --- | --- |
-| json | tree-sitter/tree-sitter-json | — | none | SHIPPED |  |
-| go | tree-sitter/tree-sitter-go | — | none | SHIPPED |  |
-| c | tree-sitter/tree-sitter-c | — | none | SHIPPED |  |
-| java | tree-sitter/tree-sitter-java | — | none | SHIPPED |  |
-| css | tree-sitter/tree-sitter-css | — | scanner.c | SHIPPED |  |
-| javascript | tree-sitter/tree-sitter-javascript | — | scanner.c | SHIPPED |  |
-| rust | tree-sitter/tree-sitter-rust | — | scanner.c | SHIPPED |  |
-| bash | tree-sitter/tree-sitter-bash | — | scanner.c | SHIPPED |  |
-| html | tree-sitter/tree-sitter-html | — | scanner.c | SHIPPED | scanner also includes `src/tag.h` (globbed via `src/*.h`) |
-| toml | tree-sitter-grammars/tree-sitter-toml | — | scanner.c | SHIPPED |  |
-| cpp | tree-sitter/tree-sitter-cpp | — | scanner.c | SHIPPED |  |
-| typescript | tree-sitter/tree-sitter-typescript | `typescript/` | scanner.c | SHIPPED | shares repo + `common/scanner.h` with tsx |
-| tsx | tree-sitter/tree-sitter-typescript | `tsx/` | scanner.c | SHIPPED | shares repo + `common/scanner.h` with typescript |
-| yaml | tree-sitter-grammars/tree-sitter-yaml | — | scanner.c | SHIPPED | custom overlay: `schema.*.c` staged as `textual_hdrs` |
-| kotlin | fwcd/tree-sitter-kotlin | — | scanner.c | SHIPPED |  |
-| swift | alex-pinkus/tree-sitter-swift | — | scanner.c | SHIPPED | pinned to the `with-generated-files` branch (committed parser.c) |
+| lang       | repo                                  | subdir        | scanner   | status  | notes                                                            |
+| ---------- | ------------------------------------- | ------------- | --------- | ------- | ---------------------------------------------------------------- |
+| json       | tree-sitter/tree-sitter-json          | —             | none      | SHIPPED |                                                                  |
+| go         | tree-sitter/tree-sitter-go            | —             | none      | SHIPPED |                                                                  |
+| c          | tree-sitter/tree-sitter-c             | —             | none      | SHIPPED |                                                                  |
+| java       | tree-sitter/tree-sitter-java          | —             | none      | SHIPPED |                                                                  |
+| css        | tree-sitter/tree-sitter-css           | —             | scanner.c | SHIPPED |                                                                  |
+| javascript | tree-sitter/tree-sitter-javascript    | —             | scanner.c | SHIPPED |                                                                  |
+| rust       | tree-sitter/tree-sitter-rust          | —             | scanner.c | SHIPPED |                                                                  |
+| bash       | tree-sitter/tree-sitter-bash          | —             | scanner.c | SHIPPED |                                                                  |
+| html       | tree-sitter/tree-sitter-html          | —             | scanner.c | SHIPPED | scanner also includes `src/tag.h` (globbed via `src/*.h`)        |
+| toml       | tree-sitter-grammars/tree-sitter-toml | —             | scanner.c | SHIPPED |                                                                  |
+| cpp        | tree-sitter/tree-sitter-cpp           | —             | scanner.c | SHIPPED |                                                                  |
+| typescript | tree-sitter/tree-sitter-typescript    | `typescript/` | scanner.c | SHIPPED | shares repo + `common/scanner.h` with tsx                        |
+| tsx        | tree-sitter/tree-sitter-typescript    | `tsx/`        | scanner.c | SHIPPED | shares repo + `common/scanner.h` with typescript                 |
+| yaml       | tree-sitter-grammars/tree-sitter-yaml | —             | scanner.c | SHIPPED | custom overlay: `schema.*.c` staged as `textual_hdrs`            |
+| kotlin     | fwcd/tree-sitter-kotlin               | —             | scanner.c | SHIPPED |                                                                  |
+| swift      | alex-pinkus/tree-sitter-swift         | —             | scanner.c | SHIPPED | pinned to the `with-generated-files` branch (committed parser.c) |
 
 **swift note:** swift's `src/parser.c` is generated and **not** committed on the default branch, so it is pinned to the `with-generated-files` branch HEAD (an immutable commit sha) which carries a committed `src/parser.c` + a C `src/scanner.c`. This is a different revision than the nvim-treesitter lockfile (which points at the default branch); acceptable because tree-sitter grammar ABIs are stable and we only need a compilable, ABI-compatible parser to ship (no test asserts swift highlighting).
 

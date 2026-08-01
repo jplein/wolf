@@ -76,21 +76,21 @@ The timer is available because the runtime is built with `.enable_all()`. `self.
 
 Replace `self.runtime.block_on(self.nvim.X())` with `self.block_on_rpc("X", self.nvim.X())` at each interactive site. The existing `Ok`/`Err` handling stays; the timeout maps onto the method's documented fallback:
 
-| Site (`api.rs`) | Method | RPC | Fallback on timeout |
-| --- | --- | --- | --- |
-| 947 | `resolve_search_root` | `current_dir` (getcwd) | configured `self.cwd` (the repro path) |
-| 377 | `copy_visual_selection` | `yank_visual_selection` | `None` |
-| 414 | `list_buffers` | `list_buffers` | empty `Vec` |
-| 437 | `render_preview` | `render_preview` | empty `String` |
-| 471 | `open_in_browser` | `current_markdown_bufnr` | empty `String` (whole cmd) |
-| 484 | `open_in_browser` | `buffer_path` | empty `String` (whole cmd) |
-| 486 | `open_in_browser` | `current_dir` | already `.ok()` -> `None` root |
-| 539 | `open_preview` | `open_preview` | `0` |
-| 565 | `edit_source` | `edit_source` | `0` |
-| 587 | `preview_file` | `preview_file` | `0` |
-| 630 | `create_tabpage` | `create_tabpage` | `0` |
-| 654 | `cwd_for_tabpage` | `tab_cwd` | `None` |
-| 672 | `current_tabpage` | `current_tabpage` | `0` |
+| Site (`api.rs`) | Method                  | RPC                      | Fallback on timeout                    |
+| --------------- | ----------------------- | ------------------------ | -------------------------------------- |
+| 947             | `resolve_search_root`   | `current_dir` (getcwd)   | configured `self.cwd` (the repro path) |
+| 377             | `copy_visual_selection` | `yank_visual_selection`  | `None`                                 |
+| 414             | `list_buffers`          | `list_buffers`           | empty `Vec`                            |
+| 437             | `render_preview`        | `render_preview`         | empty `String`                         |
+| 471             | `open_in_browser`       | `current_markdown_bufnr` | empty `String` (whole cmd)             |
+| 484             | `open_in_browser`       | `buffer_path`            | empty `String` (whole cmd)             |
+| 486             | `open_in_browser`       | `current_dir`            | already `.ok()` -> `None` root         |
+| 539             | `open_preview`          | `open_preview`           | `0`                                    |
+| 565             | `edit_source`           | `edit_source`            | `0`                                    |
+| 587             | `preview_file`          | `preview_file`           | `0`                                    |
+| 630             | `create_tabpage`        | `create_tabpage`         | `0`                                    |
+| 654             | `cwd_for_tabpage`       | `tab_cwd`                | `None`                                 |
+| 672             | `current_tabpage`       | `current_tabpage`        | `0`                                    |
 
 `start_file_search` (the reproduced path) is covered transitively by fixing `resolve_search_root`.
 
