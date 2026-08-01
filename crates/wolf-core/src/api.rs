@@ -34,6 +34,7 @@ use crate::nvim::{self, NvimConfig, NvimError, NvimProcess};
 use crate::recent_dirs::RecentDirs;
 use crate::redraw::{CommandQueue, IntentQueue, NavHistoryCell, RedrawHandler, TrackedCwd, WakeFn};
 use crate::render::{OwnedSnapshotReadGuard, SharedSnapshot, Snapshot, TabFiles};
+use crate::search::{self, SearchOptions, SearchSession, SearchState};
 use crate::state::{state_dir, swap_dir_for};
 
 /// How long the input pump waits after the first event of a burst for siblings
@@ -373,7 +374,7 @@ impl WolfCore {
                 // Reading the cell clones out the path so the brief RwLock guard is
                 // not held across the record. Fire-and-forget.
                 for ev in &batch {
-                    if let InputEvent::Open { path } = ev {
+                    if let InputEvent::Open { path } | InputEvent::OpenAt { path, .. } = ev {
                         let record_cwd = pump_tracked_cwd
                             .read()
                             .clone()
@@ -455,6 +456,37 @@ impl WolfCore {
     /// [`InputEvent::Paste`]).
     pub fn paste(&self, text: String) {
         self.send_input(InputEvent::Paste { text });
+    }
+
+    /// Opens `path` AND jumps the cursor to `line`/`col` (fire-and-forget via
+    /// [`InputEvent::OpenAt`]).
+    ///
+    /// Used by the sidebar search panel when a matching line is clicked. `line`
+    /// is 1-based (ripgrep's `line_number`); `col` is a 0-based byte offset
+    /// (ripgrep's first-submatch start). The core's input pump records the open
+    /// into the global MRU, exactly like [`InputEvent::Open`].
+    pub fn open_at(&self, path: PathBuf, line: u64, col: u64) {
+        self.send_input(InputEvent::OpenAt { path, line, col });
+    }
+
+    /// Reads the captive nvim's global `ignorecase` option (a one-shot seed for
+    /// the sidebar search panel's "case sensitive" toggle).
+    ///
+    /// Blocks briefly on the captive nvim via [`block_on_rpc`](Self::block_on_rpc)
+    /// (the same bounded pattern [`copy_visual_selection`](Self::copy_visual_selection)
+    /// uses), bounded by [`rpc_timeout`](Self::rpc_timeout). An RPC error or a
+    /// [`NvimError::Timeout`] on a wedged nvim degrades to `false`, so the toggle
+    /// simply defaults to case-sensitive rather than hanging.
+    #[must_use]
+    pub fn ignorecase(&self) -> bool {
+        let nvim = self.nvim.borrow();
+        match self.block_on_rpc("ignorecase", nvim.ignorecase()) {
+            Ok(value) => value,
+            Err(e) => {
+                tracing::warn!("ignorecase query failed: {e}");
+                false
+            }
+        }
     }
 
     /// Sets the global `background` option (fire-and-forget via
@@ -1235,6 +1267,60 @@ impl WolfCore {
         );
 
         FileSearch::from_parts(state, cancel)
+    }
+
+    /// Starts a streaming, ripgrep-backed CONTENT search under the current search
+    /// root, returning a live [`SearchSession`].
+    ///
+    /// The search root is resolved OUT-OF-BAND via
+    /// [`resolve_search_root`](Self::resolve_search_root) (the tracked
+    /// [`live_cwd`](Self::live_cwd), no nvim RPC), so it follows `:cd`/`:lcd`/`:tcd`
+    /// and never blocks on a wedged nvim — exactly like the file picker.
+    ///
+    /// The pinned `rg` binary is located via `WOLF_RG_BIN` (set by the front-end
+    /// from the bundled binary; the Nix devShell exports the Nixpkgs `ripgrep`).
+    /// When it is unset/empty the search degrades GRACEFULLY to an
+    /// immediately-complete session carrying an `error` (no results), rather than
+    /// panicking. Otherwise the rg subprocess is spawned on the core's tokio
+    /// runtime; it streams matches into the shared state, bumping `version` and
+    /// calling `wake` after each batch and once more when `complete`. Dropping (or
+    /// [`SearchSession::cancel`]-ing) the returned handle kills the rg subprocess.
+    #[must_use]
+    pub fn start_search(&self, opts: SearchOptions, wake: WakeFn) -> SearchSession {
+        let rg_bin = std::env::var("WOLF_RG_BIN")
+            .ok()
+            .filter(|v| !v.trim().is_empty());
+        let Some(rg_bin) = rg_bin else {
+            tracing::warn!("WOLF_RG_BIN unset; content search unavailable");
+            let handles = search::SearchHandles {
+                state: Arc::new(RwLock::new(SearchState::errored(
+                    "WOLF_RG_BIN unset".to_string(),
+                ))),
+                cancel: Arc::new(AtomicBool::new(false)),
+                child: Arc::new(Mutex::new(None)),
+            };
+            wake();
+            return SearchSession::from_parts(handles);
+        };
+
+        let root = self.resolve_search_root();
+        tracing::debug!(root = %root.display(), query = %opts.query, "starting content search");
+        let handles = search::SearchHandles {
+            state: Arc::new(RwLock::new(SearchState::new())),
+            cancel: Arc::new(AtomicBool::new(false)),
+            child: Arc::new(Mutex::new(None)),
+        };
+
+        search::spawn_search(
+            root,
+            opts,
+            PathBuf::from(rg_bin),
+            &handles,
+            wake,
+            self.runtime.handle().clone(),
+        );
+
+        SearchSession::from_parts(handles)
     }
 
     /// Requests a grid resize. The authoritative size arrives via `grid_resize`.

@@ -108,6 +108,13 @@ use_repo(crate, "crates")
 nvim = use_extension("//bazel/nvim:extensions.bzl", "nvim")
 use_repo(nvim, "nvim_macos_arm64", "nvim_macos_x86_64")
 
+# --- Pinned, hermetic ripgrep 15.2.0 release tarballs ----------------------
+# Downloaded + sha256-verified by the //bazel/rg module extension; assembled into
+# the `rg/` TreeArtifact bundled into Wolf.app at Contents/Resources/rg/. Powers
+# the sidebar content search (no system `rg` required). See bazel/rg/README.md.
+rg = use_extension("//bazel/rg:extensions.bzl", "rg")
+use_repo(rg, "rg_macos_arm64", "rg_macos_x86_64")
+
 # --- Vendored orlando Neovim plugin (macOS bundle only) ---------------------
 # Downloaded + sha256-verified by the //bazel/orlando module extension; assembled
 # into the `orlando/` TreeArtifact bundled into Wolf.app at

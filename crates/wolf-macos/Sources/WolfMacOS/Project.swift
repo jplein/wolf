@@ -82,6 +82,11 @@ final class Project {
     if let bin = Self.nvimBinPath() {
       setenv("WOLF_NVIM_BIN", bin, 0)
     }
+    // Point wolf-core's content search at the bundled ripgrep unless a developer
+    // has already exported `WOLF_RG_BIN` (overwrite=0 so the dev override wins).
+    if let rg = Self.rgBinPath() {
+      setenv("WOLF_RG_BIN", rg, 0)
+    }
     guard
       let handle = wolf_ffi_start(
         Self.initLuaPath(), launchCwd, Self.initialCols, Self.initialRows)
@@ -275,6 +280,17 @@ final class Project {
     }
   }
 
+  /// Fans a content-search wake out to EVERY attached view's search panel, for the
+  /// same reason as `onTreeWake`: each view runs its OWN independent
+  /// `start_search()` session, the per-project wake token carries no view
+  /// discriminator, and each `SearchView.scheduleRefresh()` is version-gated +
+  /// coalesced, so an idle panel does no real work.
+  func onSearchWake() {
+    for view in views.allObjects {
+      view.search?.scheduleRefresh()
+    }
+  }
+
   /// Shuts the captive Neovim down (flushing the shared state store), unregisters
   /// the wake token, and drops this project from the coordinator. Called by
   /// `detach` when the last view closes (and as a terminate-time backstop).
@@ -291,6 +307,18 @@ final class Project {
   private static func nvimBinPath() -> String? {
     guard let resourcePath = Bundle.main.resourcePath else { return nil }
     let candidate = resourcePath + "/nvim/bin/nvim"
+    guard FileManager.default.isExecutableFile(atPath: candidate) else {
+      return nil
+    }
+    return candidate
+  }
+
+  /// Resolves the bundled ripgrep binary at `Contents/Resources/rg/rg`, or `nil`
+  /// when absent/not executable (so a `WOLF_RG_BIN` export wins, and an
+  /// unbundled dev build degrades gracefully to no content search).
+  static func rgBinPath() -> String? {
+    guard let resourcePath = Bundle.main.resourcePath else { return nil }
+    let candidate = resourcePath + "/rg/rg"
     guard FileManager.default.isExecutableFile(atPath: candidate) else {
       return nil
     }

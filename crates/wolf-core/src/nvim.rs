@@ -256,6 +256,31 @@ impl NvimProcess {
         }
     }
 
+    /// Returns the captive nvim's global `ignorecase` option via
+    /// `nvim_get_option_value("ignorecase", {})`.
+    ///
+    /// Read ONCE when the sidebar search panel is first shown, to seed the
+    /// "case sensitive" toggle's initial state (the toggle is inverted:
+    /// `case_sensitive = !ignorecase`). The value is extracted via
+    /// [`Value::as_bool`], defaulting to `false` when the result is missing or
+    /// not a boolean. Modeled on [`current_dir`](Self::current_dir).
+    pub fn ignorecase(
+        &self,
+    ) -> impl std::future::Future<Output = Result<bool, NvimError>> + Send + 'static {
+        let nvim = self.nvim.clone();
+        async move {
+            let value = nvim
+                .call(
+                    "nvim_get_option_value",
+                    vec![Value::from("ignorecase"), Value::Map(vec![])],
+                )
+                .await
+                .map_err(|e| NvimError::Rpc(e.to_string()))?
+                .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+            Ok(value.as_bool().unwrap_or(false))
+        }
+    }
+
     /// Returns the absolute filesystem path of buffer `bufnr` via
     /// `nvim_buf_get_name`, or the EMPTY string for an unnamed (never-saved)
     /// buffer.

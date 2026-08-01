@@ -91,11 +91,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     WakeBridge.install()
     PickerWakeBridge.install()
     TreeWakeBridge.install()
+    SearchWakeBridge.install()
 
     // Build the native menu bar (net-new). Every Wolf item funnels through
-    // `handleCommandMenuItem(_:)` → `CommandDispatcher`. Keep the Window and
-    // Open Recent submenus so their dynamic lists can be rebuilt; the Open
-    // Recent submenu rebuilds lazily via `menuNeedsUpdate`.
+    // `handleCommandMenuItem(_:)` → `CommandDispatcher`. Keep all THREE dynamic
+    // submenus — Window, Open Recent, and History — so their dynamic lists can
+    // be rebuilt; Window is rebuilt explicitly from lifecycle hooks, while Open
+    // Recent and History both rebuild lazily via `menuNeedsUpdate`, which
+    // dispatches on menu IDENTITY.
     let menus = AppMenu.install(target: self)
     windowMenu = menus.window
     openRecentMenu = menus.openRecent
@@ -499,6 +502,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     controllers.first { $0.tabId == sender.tag }?.raise()
   }
 
+  /// View > Project: reveals the key window's sidebar and switches it
+  /// to the file tree (a no-op checkmark is applied in `validateMenuItem`).
+  @objc func showProjectTreeMenuItem(_ sender: NSMenuItem) {
+    controllers.first { $0.owns(effectiveKeyWindow) }?.showSidebar(panel: .tree)
+  }
+
+  /// View > Search: reveals the key window's sidebar and switches it to the
+  /// content-search panel.
+  @objc func showSearchMenuItem(_ sender: NSMenuItem) {
+    controllers.first { $0.owns(effectiveKeyWindow) }?.showSidebar(panel: .search)
+  }
+
   /// The OTHER open tabs (all live controllers EXCEPT `excluding`), as
   /// `(tabId, currentCwd)` pairs — the command palette's "Switch to Window"
   /// candidate source. The current tab is excluded (it cannot switch to itself).
@@ -670,12 +685,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     rebuildWindowMenu()
   }
 
-  /// Menu validation: disables the Close (`.closePane`) command when the key
-  /// window is on its LAST split (`:close` would error, E444), disables the
-  /// Copy (`.copy`) command unless the key window is in visual mode (there is
-  /// no selection to copy otherwise), and disables the Preview (`.preview`)
-  /// command unless the key window's active buffer is Markdown. Every other item
-  /// stays enabled.
+  /// Menu validation. Two groups of front-end-only items (they carry no
+  /// `command_kind` tag) are evaluated FIRST, before the
+  /// `handleCommandMenuItem` guard:
+  ///
+  /// 1. The three **History** branches — Back / Forward are enabled from the
+  ///    active pane's stack (`historyCanBack` / `historyCanForward`), and a
+  ///    dynamic jump row is always enabled (the checkmarked one is a core-side
+  ///    no-op).
+  /// 2. The **sidebar** branch — Project / Search set their checkmark from the
+  ///    pure `SidebarMenuSeam` (checked only when the sidebar is visible AND
+  ///    showing that panel) and ALWAYS return `true`, since choosing either
+  ///    while the sidebar is hidden reveals it.
+  ///
+  /// For tagged Wolf commands it then disables the Close (`.closePane`) command
+  /// when the key window is on its LAST split (`:close` would error, E444),
+  /// disables the Copy (`.copy`) command unless the key window is in visual mode
+  /// (there is no selection to copy otherwise), and disables the Preview
+  /// (`.preview`) command unless the key window's active buffer is Markdown.
+  /// Every other item stays enabled.
   func validateMenuItem(_ item: NSMenuItem) -> Bool {
     // The History items are front-end-only (no `command_kind` tag), so they are
     // validated BEFORE the `handleCommandMenuItem` guard below. Back/Forward track
@@ -697,6 +725,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
       return true
     default:
       break
+    }
+    if item.action == #selector(showProjectTreeMenuItem(_:))
+      || item.action == #selector(showSearchMenuItem(_:))
+    {
+      let c = controllers.first { $0.owns(effectiveKeyWindow) }
+      let panel: SidebarPanel =
+        item.action == #selector(showProjectTreeMenuItem(_:)) ? .tree : .search
+      item.state =
+        SidebarMenuSeam.isChecked(
+          sidebarVisible: c?.sidebarVisible ?? false, current: c?.sidebarPanel, item: panel)
+        ? .on : .off
+      // Always enabled — choosing either while the sidebar is hidden reveals it.
+      return true
     }
     guard item.action == #selector(handleCommandMenuItem(_:)) else { return true }
     let kind = CommandKind(ffi: UInt8(truncatingIfNeeded: item.tag))

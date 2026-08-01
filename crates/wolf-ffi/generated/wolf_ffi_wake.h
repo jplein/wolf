@@ -23,4 +23,9 @@ void wolf_ffi_set_filesearch_wake(void (*wake)(uint64_t token));
 // AppKit main thread, routed by `token`. Passing NULL clears it.
 void wolf_ffi_set_tree_wake(void (*wake)(uint64_t token));
 
+// The sidebar search panel's wake (see `wolf_ffi_set_search_wake`): Swift's
+// `SearchWakeBridge` registers a thunk that dispatches a search-results refresh
+// onto the AppKit main thread, routed by `token`. Passing NULL clears it.
+void wolf_ffi_set_search_wake(void (*wake)(uint64_t token));
+
 #endif /* WOLF_FFI_WAKE_H */

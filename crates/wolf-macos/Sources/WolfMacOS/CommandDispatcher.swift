@@ -78,6 +78,12 @@ enum CommandDispatcher {
       controller?.openInBrowser()
     case .fullWidth:
       controller?.toggleFullWidth()
+    case .toggleSidebar:
+      controller?.toggleSidebar()
+    case .sidebarShowProject:
+      controller?.showSidebar(panel: .tree)
+    case .searchInProject:
+      controller?.showSidebar(panel: .search)
     }
   }
 }

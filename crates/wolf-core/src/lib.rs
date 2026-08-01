@@ -37,6 +37,11 @@
 //! - [`input`]: abstract input events and their translation to Neovim RPC.
 //! - [`redraw`]: the `redraw` handler that folds events into the snapshot.
 //! - [`nvim`]: spawning/supervising the captive, hermetic Neovim.
+//! - [`search`]: the ripgrep-backed, streaming content search and its
+//!   `SearchSession` (sibling of [`files`], `rg --json` subprocess in place of the
+//!   walk).
+//! - [`search_tree`]: the pure, toolkit-free projection of the flat match list
+//!   into per-file groups plus the balanced-context line-window display math.
 //! - [`tree`]: the pure, toolkit-free hierarchical projection of the flat file
 //!   list into the sidebar's per-directory children (shared by all front-ends).
 //! - [`api`]: the FFI-shaped front-end surface ([`WolfCore`]).
@@ -64,6 +69,8 @@ pub mod rank;
 pub mod recent_dirs;
 pub mod redraw;
 pub mod render;
+pub mod search;
+pub mod search_tree;
 pub mod state;
 pub mod tree;
 
@@ -100,6 +107,8 @@ pub use render::{
     Message, ModeInfo, PreviewInfo, Pum, PumItem, ResolvedStyle, Rgb, SharedSnapshot, Snapshot,
     TabFiles, ThemeColors, ThemeGroup, Toast, ToastChunk, Viewport, WinBuffer, WinInfo,
 };
+pub use search::{SearchMatch, SearchOptions, SearchReadGuard, SearchSession};
+pub use search_tree::{context_window, file_label, project, ContextWindow, SearchFileGroup};
 pub use state::{
     load_state, state_dir, PaneNode, PaneOrientation, StateStore, TabState, WindowState, WolfState,
 };
