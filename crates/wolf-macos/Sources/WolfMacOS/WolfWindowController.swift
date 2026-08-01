@@ -690,8 +690,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
   }
 
   /// The active sidebar panel (file tree vs. content search), or `nil` when there
-  /// is no sidebar container yet. Drives the View-menu "Show Project Tree" /
-  /// "Show Search" checkmarks via `SidebarMenuSeam`.
+  /// is no sidebar container yet. Drives the View-menu "Project" /
+  /// "Search" checkmarks via `SidebarMenuSeam`.
   var sidebarPanel: SidebarPanel? {
     guard let container = sidebarContainer else { return nil }
     switch container.mode {
@@ -707,6 +707,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
   func showSidebar(panel: SidebarPanel) {
     window?.sidebarItem.isCollapsed = false
     sidebarContainer?.setMode(panel == .tree ? .tree : .search)
+    if panel == .search { sidebarContainer?.search.focusSearchField() }
   }
 
   /// This view's PERSISTED working directory for the state snapshot + any

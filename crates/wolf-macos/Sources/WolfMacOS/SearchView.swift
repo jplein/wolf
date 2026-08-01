@@ -135,6 +135,10 @@ final class SearchView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate {
     allFilesButton.state = SearchToggleSeam.defaultAllFiles ? .on : .off
   }
 
+  /// Make the search text field the window's first responder (called when the
+  /// search panel is activated via menu / ⇧⌘F / the magnifier button).
+  func focusSearchField() { window?.makeFirstResponder(searchField) }
+
   /// Relays the sidebar's visibility (from the enclosing split item's
   /// `isCollapsed` KVO). Becoming visible with a refresh deferred runs one catch-up.
   func setSidebarVisible(_ visible: Bool) {

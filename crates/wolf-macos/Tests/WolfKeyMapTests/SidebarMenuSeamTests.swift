@@ -3,7 +3,7 @@
 //  Pure, headless unit tests for the `WolfKeyMap.SidebarMenuSeam` namespace.
 //
 //  These exercise the display-free seam that decides whether a View-menu
-//  sidebar entry ("Show Project Tree" / "Show Search") shows a checkmark —
+//  sidebar entry ("Project" / "Search") shows a checkmark —
 //  scalar inputs only, NO NSMenuItem, NO window, NO AppKit.
 //
 //  CONTRACT UNDER TEST (sidebar-menu plan, `SidebarMenuSeam.swift`):

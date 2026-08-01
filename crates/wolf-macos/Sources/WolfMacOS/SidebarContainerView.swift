@@ -77,7 +77,7 @@ final class SidebarContainerView: NSView {
     setMode(.search)
     // Seed the toggles the first time the panel is shown, and give the field focus.
     search.seedToggles()
-    window?.makeFirstResponder(nil)
+    search.focusSearchField()
   }
 
   // MARK: - Private

@@ -158,14 +158,14 @@ enum AppMenu {
     return item
   }
 
-  /// The View menu (Toggle Sidebar `⌃⌘s` / Show Project Tree `⇧⌘e` / Show Search
+  /// The View menu (Toggle Sidebar `⌃⌘s` / Project `⇧⌘e` / Search
   /// `⇧⌘f` / a separator / Reset Font Size `⌘0` / Increase Font Size `⌘=` /
   /// Decrease Font Size `⌘-` / a separator / Command Palette… `⌘p` / Buffer
   /// Picker… `⌘e` / Preview / Edit Source / Terminal `` ⌃` `` / a separator /
   /// Enter Full Screen `⌃⌘f`). The font-size, palette, preview and terminal
   /// titles mirror `wolf_core::COMMAND_SPECS`.
   ///
-  /// Show Project Tree / Show Search are AppDelegate-targeted view-state items
+  /// Project / Search are AppDelegate-targeted view-state items
   /// (`showProjectTreeMenuItem`/`showSearchMenuItem`): each reveals the sidebar
   /// and switches it to that panel, and `validateMenuItem` checkmarks the one
   /// matching the visible panel (none when the sidebar is hidden).
@@ -189,7 +189,7 @@ enum AppMenu {
     menu.addItem(toggleSidebar)
 
     let showTree = NSMenuItem(
-      title: "Show Project Tree",
+      title: "Project",
       action: #selector(AppDelegate.showProjectTreeMenuItem(_:)),
       keyEquivalent: "e")
     showTree.keyEquivalentModifierMask = [.command, .shift]
@@ -197,7 +197,7 @@ enum AppMenu {
     menu.addItem(showTree)
 
     let showSearch = NSMenuItem(
-      title: "Show Search",
+      title: "Search",
       action: #selector(AppDelegate.showSearchMenuItem(_:)),
       keyEquivalent: "f")
     showSearch.keyEquivalentModifierMask = [.command, .shift]

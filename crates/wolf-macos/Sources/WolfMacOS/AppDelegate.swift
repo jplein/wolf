@@ -491,13 +491,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     controllers.first { $0.tabId == sender.tag }?.raise()
   }
 
-  /// View > Show Project Tree: reveals the key window's sidebar and switches it
+  /// View > Project: reveals the key window's sidebar and switches it
   /// to the file tree (a no-op checkmark is applied in `validateMenuItem`).
   @objc func showProjectTreeMenuItem(_ sender: NSMenuItem) {
     controllers.first { $0.owns(effectiveKeyWindow) }?.showSidebar(panel: .tree)
   }
 
-  /// View > Show Search: reveals the key window's sidebar and switches it to the
+  /// View > Search: reveals the key window's sidebar and switches it to the
   /// content-search panel.
   @objc func showSearchMenuItem(_ sender: NSMenuItem) {
     controllers.first { $0.owns(effectiveKeyWindow) }?.showSidebar(panel: .search)
