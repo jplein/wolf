@@ -689,6 +689,26 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     return !window.sidebarItem.isCollapsed
   }
 
+  /// The active sidebar panel (file tree vs. content search), or `nil` when there
+  /// is no sidebar container yet. Drives the View-menu "Show Project Tree" /
+  /// "Show Search" checkmarks via `SidebarMenuSeam`.
+  var sidebarPanel: SidebarPanel? {
+    guard let container = sidebarContainer else { return nil }
+    switch container.mode {
+    case .tree: return .tree
+    case .search: return .search
+    }
+  }
+
+  /// Reveals the sidebar (if collapsed) and switches it to `panel`. The
+  /// `isCollapsed = false` write relays visibility to the container via KVO; the
+  /// `setMode` call swaps the active child (and re-relays visibility so the
+  /// newly-shown panel catches up any deferred refresh).
+  func showSidebar(panel: SidebarPanel) {
+    window?.sidebarItem.isCollapsed = false
+    sidebarContainer?.setMode(panel == .tree ? .tree : .search)
+  }
+
   /// This view's PERSISTED working directory for the state snapshot + any
   /// surfaced cwd (Window menu / palette). A folder view reads its tabpage's
   /// authoritative tab-local `:tcd` cwd via `cwd_for_tabpage` — now a cheap

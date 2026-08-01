@@ -491,6 +491,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     controllers.first { $0.tabId == sender.tag }?.raise()
   }
 
+  /// View > Show Project Tree: reveals the key window's sidebar and switches it
+  /// to the file tree (a no-op checkmark is applied in `validateMenuItem`).
+  @objc func showProjectTreeMenuItem(_ sender: NSMenuItem) {
+    controllers.first { $0.owns(effectiveKeyWindow) }?.showSidebar(panel: .tree)
+  }
+
+  /// View > Show Search: reveals the key window's sidebar and switches it to the
+  /// content-search panel.
+  @objc func showSearchMenuItem(_ sender: NSMenuItem) {
+    controllers.first { $0.owns(effectiveKeyWindow) }?.showSidebar(panel: .search)
+  }
+
   /// The OTHER open tabs (all live controllers EXCEPT `excluding`), as
   /// `(tabId, currentCwd)` pairs — the command palette's "Switch to Window"
   /// candidate source. The current tab is excluded (it cannot switch to itself).
@@ -637,6 +649,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// command unless the key window's active buffer is Markdown. Every other item
   /// stays enabled.
   func validateMenuItem(_ item: NSMenuItem) -> Bool {
+    if item.action == #selector(showProjectTreeMenuItem(_:))
+      || item.action == #selector(showSearchMenuItem(_:))
+    {
+      let c = controllers.first { $0.owns(effectiveKeyWindow) }
+      let panel: SidebarPanel =
+        item.action == #selector(showProjectTreeMenuItem(_:)) ? .tree : .search
+      item.state =
+        SidebarMenuSeam.isChecked(
+          sidebarVisible: c?.sidebarVisible ?? false, current: c?.sidebarPanel, item: panel)
+        ? .on : .off
+      // Always enabled — choosing either while the sidebar is hidden reveals it.
+      return true
+    }
     guard item.action == #selector(handleCommandMenuItem(_:)) else { return true }
     let kind = CommandKind(ffi: UInt8(truncatingIfNeeded: item.tag))
     let keyController = controllers.first { $0.owns(effectiveKeyWindow) }
