@@ -21,9 +21,9 @@
 //! These accessors do not exist yet: the coder implements them in
 //! `crates/wolf-ffi/src/lib.rs` (the `FfiLayoutIntent` / `FfiWinInfo` opaque types
 //! + the `WolfCoreHandle` methods), regenerates `generated/`, AND adds the
-//! `//crates/wolf-ffi:panes` `rust_test` target to `BUILD.bazel` (mirroring
-//! `tree_search`, srcs `["tests/common/mod.rs", "tests/panes.rs"]`,
-//! `crate_root = "tests/panes.rs"`). This test file does NOT touch BUILD files.
+//!   `//crates/wolf-ffi:panes` `rust_test` target to `BUILD.bazel` (mirroring
+//!   `tree_search`, srcs `["tests/common/mod.rs", "tests/panes.rs"]`,
+//!   `crate_root = "tests/panes.rs"`). This test file does NOT touch BUILD files.
 //!
 //! ## Discriminant contract (plan §3.1)
 //!

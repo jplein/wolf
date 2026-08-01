@@ -41,10 +41,11 @@ fn key(k: Key) -> InputEvent {
 }
 
 fn main() {
-    if std::env::var("WOLF_NVIM_BIN").map(|v| v.trim().is_empty()).unwrap_or(true) {
-        eprintln!(
-            "WOLF_NVIM_BIN is not set. Enter the flake devShell (`direnv allow`) first."
-        );
+    if std::env::var("WOLF_NVIM_BIN")
+        .map(|v| v.trim().is_empty())
+        .unwrap_or(true)
+    {
+        eprintln!("WOLF_NVIM_BIN is not set. Enter the flake devShell (`direnv allow`) first.");
         std::process::exit(1);
     }
 
@@ -74,7 +75,8 @@ fn main() {
 
     // Wait for the first post-typing flush, then keep draining brief follow-up
     // flushes so we observe the settled frame (insert -> normal mode emits a few).
-    rx.recv_timeout(FLUSH_TIMEOUT).expect("no flush after typing");
+    rx.recv_timeout(FLUSH_TIMEOUT)
+        .expect("no flush after typing");
     while rx.recv_timeout(Duration::from_millis(200)).is_ok() {}
 
     {
@@ -102,7 +104,11 @@ fn main() {
 
         // Sample the first non-space cell on row 0 and show its resolved colors.
         let row0 = grid.row_text(0);
-        if let Some(col) = row0.char_indices().find(|(_, c)| !c.is_whitespace()).map(|(i, _)| i) {
+        if let Some(col) = row0
+            .char_indices()
+            .find(|(_, c)| !c.is_whitespace())
+            .map(|(i, _)| i)
+        {
             if let Some(cell) = grid.cell(0, col) {
                 let style = snap.highlights.resolve(cell.hl_id);
                 println!(

@@ -739,7 +739,7 @@ fn shorthand_block_edges(value: &str) -> Option<(String, String)> {
     let parts: Vec<&str> = value.split_whitespace().collect();
     match parts.len() {
         1 => Some((parts[0].to_string(), parts[0].to_string())),
-        2 | 3 | 4 => Some((
+        2..=4 => Some((
             parts[0].to_string(),
             if parts.len() == 2 {
                 parts[0].to_string()
@@ -989,7 +989,11 @@ fn heading_bottom_rule_is_gone_from_base_and_theme() {
     // not just declaring it. That is deliberate — a comment describing a border
     // color is a strong hint someone is about to re-add one — but if you trip it
     // from a comment, the fix is to reword the comment, not to loosen the check.
-    let html = render_html("# Title\n\n## Section\n", PreviewTheme::Default, WidthMode::Full);
+    let html = render_html(
+        "# Title\n\n## Section\n",
+        PreviewTheme::Default,
+        WidthMode::Full,
+    );
     assert!(
         !html.contains("border-bottom-color"),
         "no `border-bottom-color` may survive anywhere in the emitted \
@@ -1836,7 +1840,7 @@ fn add_specificity(part: &str, acc: &mut (u32, u32, u32)) {
         acc.1 += 1;
     } else if part.starts_with(':') {
         if let Some(inner) = functional_arg(part) {
-            let inner = inner.trim_start_matches(|c| matches!(c, '+' | '~' | '>' | ' '));
+            let inner = inner.trim_start_matches(['+', '~', '>', ' ']);
             let (a, b, c) = specificity(inner);
             acc.0 += a;
             acc.1 += b;
@@ -1913,8 +1917,13 @@ fn winning_margin(
     idx: usize,
     top: bool,
 ) -> (Option<(String, String)>, Vec<String>) {
+    /// A cascade candidate: `(specificity, source order, selector list, value)`.
+    /// Ordered by `(specificity, order)` — highest specificity wins, last rule
+    /// breaks ties.
+    type Candidate = ((u32, u32, u32), usize, String, String);
+
     let mut unsupported = Vec::new();
-    let mut winner: Option<((u32, u32, u32), usize, String, String)> = None;
+    let mut winner: Option<Candidate> = None;
 
     for (order, (selectors, decls)) in stylesheet_rules(css).into_iter().enumerate() {
         let Some(value) = declared_margin_edge(&decls, top) else {
@@ -1973,7 +1982,11 @@ fn first_child_margin_reset_reaches_the_opening_heading() {
     // A document that OPENS with a heading — the exact case the opening-block
     // rule, `> *:not(.wolf-src):not(*:not(.wolf-src) ~ *) { margin-top: 0 }`,
     // exists for.
-    let html = render_html("# Title\n\nBody text.\n", PreviewTheme::Default, WidthMode::Full);
+    let html = render_html(
+        "# Title\n\nBody text.\n",
+        PreviewTheme::Default,
+        WidthMode::Full,
+    );
     let children = body_children(&html);
     assert!(
         !children.is_empty(),
@@ -2054,7 +2067,11 @@ fn first_child_margin_reset_survives_a_multi_anchor_leading_run() {
     // <h1>. (A heading past 100 columns is the other trigger.) Nothing about
     // this is exotic — a document that opens with a blank line is ordinary — so
     // the reset must hold for a run of ANY length, not just one.
-    let html = render_html("\n\n# Title\n\nBody.\n", PreviewTheme::Default, WidthMode::Full);
+    let html = render_html(
+        "\n\n# Title\n\nBody.\n",
+        PreviewTheme::Default,
+        WidthMode::Full,
+    );
     let children = body_children(&html);
 
     let idx = children
@@ -2116,7 +2133,11 @@ fn last_child_margin_reset_reaches_the_closing_block() {
     // `wolf-src` anchor after the final block: the last hard line's marker has
     // nowhere left to attach, so `flush_before(usize::MAX)` emits it after the
     // closing tag.
-    let html = render_html("# Title\n\nLast paragraph.\n", PreviewTheme::Default, WidthMode::Full);
+    let html = render_html(
+        "# Title\n\nLast paragraph.\n",
+        PreviewTheme::Default,
+        WidthMode::Full,
+    );
     let children = body_children(&html);
     assert!(
         !children.is_empty(),

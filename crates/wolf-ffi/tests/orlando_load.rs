@@ -16,7 +16,7 @@
 //! and MUST wire, alongside the existing WOLF_TEST_INIT_LUA / WOLF_TEST_NVIM_DIR:
 //!   * `data`: add `"//bazel/orlando:orlando_tree"`
 //!   * `env`:  add `"WOLF_TEST_ORLANDO_DIR": "$(rootpath //bazel/orlando:orlando_tree)"`
-//! `tempfile` is already a `[dev-dependencies]` of the crate (used by `panes`).
+//!     `tempfile` is already a `[dev-dependencies]` of the crate (used by `panes`).
 //!
 //! ## How this proves the load (no exec_lua seam on the FFI surface)
 //!

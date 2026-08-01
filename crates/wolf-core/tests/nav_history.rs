@@ -771,7 +771,10 @@ fn a_late_repeat_of_the_target_we_left_is_dropped_not_pushed() {
          pushes (truncating ahead of the cursor)"
     );
     assert_eq!(pane.cursor(), 1, "the cursor follows the pushed entry");
-    assert!(!nav.can_forward(WIN), "the push parked the cursor at the top");
+    assert!(
+        !nav.can_forward(WIN),
+        "the push parked the cursor at the top"
+    );
 }
 
 /// The filter's memory is "the LAST target folded", not a permanent ban: our own
@@ -1255,6 +1258,6 @@ fn labels_are_computed_for_nonexistent_paths() {
 fn disambiguate_accepts_a_borrowed_path_home() {
     let home: &Path = Path::new("/Users/alice");
     let p = PathBuf::from("/Users/alice/notes/a.md");
-    let labels = disambiguate(&[p.clone()], Some(home));
+    let labels = disambiguate(std::slice::from_ref(&p), Some(home));
     assert_eq!(labels.get(&p).map(String::as_str), Some("a.md"));
 }

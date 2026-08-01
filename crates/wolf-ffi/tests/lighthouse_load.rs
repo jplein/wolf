@@ -24,7 +24,7 @@
 //! WOLF_TEST_INIT_LUA / WOLF_TEST_NVIM_DIR:
 //!   * `data`: add `"//bazel/lighthouse:lighthouse_tree"`
 //!   * `env`:  add `"WOLF_TEST_LIGHTHOUSE_DIR": "$(rootpath //bazel/lighthouse:lighthouse_tree)"`
-//! `tempfile` is already a `[dev-dependencies]` of the crate (used by `panes`).
+//!     `tempfile` is already a `[dev-dependencies]` of the crate (used by `panes`).
 //!
 //! ## How this proves activation (no exec_lua seam on the FFI surface)
 //!

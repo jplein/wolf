@@ -285,7 +285,10 @@ fn terminal_toggle_persists_and_recreates() {
         b.len() == 1
     });
     let first = opened[0];
-    assert_ne!(first, 0, "the opened terminal buffer must have a nonzero bufnr");
+    assert_ne!(
+        first, 0,
+        "the opened terminal buffer must have a nonzero bufnr"
+    );
 
     // --- 2b. Open emits a DRAWER_OPEN layout intent naming the drawer window -----
     // The Lua open path calls `wolf_emit_drawer(win)` -> `rpcnotify(chan,

@@ -24,8 +24,8 @@
 //!     notification's 3rd boolean arg)
 //!   * `edit_source(&self, mode: String) -> i64` (the preview's SOURCE bufnr, `0`
 //!     off a preview pane / on error)
-//! plus the `Command::Edit` registry row and `command_kind::EDIT = 19`. This test
-//! file will not compile until that lands — expected.
+//!     plus the `Command::Edit` registry row and `command_kind::EDIT = 19`. This test
+//!     file will not compile until that lands — expected.
 //!
 //! ## SKIP-when-unset policy
 //!

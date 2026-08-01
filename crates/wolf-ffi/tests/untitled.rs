@@ -401,9 +401,7 @@ fn chdir_rehomes_anonymous_buffer() {
     let dir_b = tempfile::tempdir().expect("failed to create temp cwd B");
     let cwd_a = dir_a.path().to_path_buf();
     let cwd_b = dir_b.path().to_path_buf();
-    let canonical_b = cwd_b
-        .canonicalize()
-        .expect("failed to canonicalize dir B");
+    let canonical_b = cwd_b.canonicalize().expect("failed to canonicalize dir B");
 
     let handle = start_core(&cwd_a);
     wait_for_attach(&handle);

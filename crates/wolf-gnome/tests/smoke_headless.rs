@@ -1,5 +1,4 @@
-//! Opt-in, headless-compositor end-to-end smoke test for the real `wolf-gnome`
-//! window.
+//! Headless-compositor end-to-end smoke tests for the real `wolf-gnome` window.
 //!
 //! ## What it proves
 //!
@@ -7,32 +6,57 @@
 //! headless Wayland compositor, attaches Neovim, accepts keyboard input, and
 //! *actually renders glyphs* — verified by screenshotting the live window and
 //! OCR-ing it. Unlike the Tier-1 seam tests (which exercise `gdk_key`/`paint`
-//! offscreen), this is the only test that confirms the whole stack draws a window
-//! a human could see.
+//! offscreen), the cage smokes here are the only tests that confirm the whole stack
+//! draws a window a human could see.
 //!
-//! ## Why it is `#[ignore]` (opt-in)
+//! ## What this file contains
 //!
-//! It needs a compositor + a screenshot/OCR toolchain that a normal `cargo test`
-//! run (and most CI lanes) will not have, so it is ignored by default. Run it
-//! explicitly:
+//! **Nine cage smokes** — one window-render smoke, two file-picker smokes, one
+//! file-tree-sidebar smoke, and five split-pane smokes — each of which launches the
+//! real binary under `cage` and OCRs a screenshot of the live window.
+//!
+//! **One pure guard**, [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`],
+//! which mechanically enforces the fixture invariants the smokes' OCR assertions
+//! depend on. It is compositor-free: it does NOT call `require_smoke_env`, takes no
+//! `CAGE_LOCK`, spawns no subprocess and needs none of the toolchain below, so it
+//! still guards the fixture on a machine where the smoke toolchain is unavailable.
+//! It lives here, next to the consts it reads, rather than in a file of its own.
+//!
+//! So this target's summary line reads **`10 passed`**, not `9`: nine cage smokes
+//! plus that guard.
+//!
+//! ## When it runs
+//!
+//! The nine cage smokes run as part of the STANDARD suite — `cargo test -p
+//! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
+//! the Linux verification gate's only end-to-end proof that the GTK front-end draws
+//! a window a human could see (see `build.md`, "The Linux verification gate").
+//!
+//! They are deliberately NOT `#[ignore]`d. "They are slow" is not a reason to skip
+//! the only real end-to-end test the front-end has; per `CLAUDE.md` a test the
+//! suite command does not run is a silently-skipped test.
+//!
+//! They are, however, the slowest part of the suite: each drives a real
+//! compositor, and all nine serialize behind `CAGE_LOCK` (see below).
 //!
 //! ```text
-//! nix develop --command cargo test -p wolf-gnome -- --ignored
+//! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements (all provided by the flake devShell's smoke toolchain)
+//! ## Requirements of the nine cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` on `PATH`.
 //! - `WOLF_NVIM_BIN` pointing at the pinned Neovim (same contract as the other
 //!   wolf-gnome tests; nvim is never taken from `PATH`).
 //! - `XDG_RUNTIME_DIR` set and writable (the Wayland socket lives there).
 //!
-//! Per project policy we FAIL LOUD if any of the above is missing rather than
-//! silently skipping, mirroring `common::require_nvim_bin` — a missing
-//! precondition means the smoke toolchain was not provisioned, which is a setup
-//! bug we want surfaced, not hidden. (NOTE to coder: the compositor tools come
-//! from the flake, so a hard fail is intentional even for the "optional"-looking
-//! binaries; do not soften this to a skip without revisiting the plan.)
+//! Per project policy every one of the nine FAILS LOUD if any of the above is
+//! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
+//! missing precondition means the smoke toolchain was not provisioned, which is a
+//! setup bug we want surfaced, not hidden. Now that these tests run by default, that
+//! hard fail matters more, not less: a missing tool means the suite was invoked
+//! outside the devShell, and softening `require_smoke_env` to a skip would let the
+//! gate pass green on an unprovisioned machine while proving nothing. Do not.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -43,7 +67,7 @@ use std::process::Command;
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the nine `#[ignore]` cage smoke tests. Each launches its own
+/// Serializes the nine cage smoke tests. Each launches its own
 /// `cage` compositor, and two compositors started concurrently contend for the
 /// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
 /// Under the default multi-threaded test harness these tests would otherwise run
@@ -56,6 +80,83 @@ static CAGE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// interactive default so the rendered glyphs are big enough for `tesseract` to
 /// recognize reliably in a screenshot.
 const SMOKE_FONT_PT: &str = "28";
+
+/// How many tiny marker `.md` files [`window_renders_typed_text_under_cage`] drops
+/// into its temp cwd before launching the app, purely so the tree sidebar has rows
+/// of text to draw.
+///
+/// This is an OCR-robustness fixture, not a product requirement, and it weakens
+/// nothing: the assertion, [`OCR_WORD`], [`SMOKE_FONT_PT`], the [`SCENARIO`] string
+/// and its timing knobs are all untouched.
+///
+/// ## Why the sidebar has to carry text
+///
+/// With an EMPTY cwd the app renders correctly and the assertion still fails: the
+/// capture shows row 0 reading `hello` with the block cursor exactly ONE row below
+/// it, and an ASCII pixel dump of that region shows `h e l l o` with correct
+/// ascenders and no clipping — yet `tesseract` reports `ﬁello`, misclassifying the
+/// isolated leading `h` as the ligature U+FB01 (`ﬁ`) when the rest of the page is
+/// nearly blank. The decisive control: cropping a PASSING capture (one taken with a
+/// densely populated sidebar) down to just the editor region reproduces `ﬁello` from
+/// the very same pixels. The `hello` glyphs are therefore byte-identical in the
+/// passing and failing cases; the only variable is how much other text is on the page
+/// for the classifier to calibrate against. `--psm 3`, `4`, `6`, `11` and `12` were
+/// all tried and all fail on the sparse page, so this is not a page-segmentation-mode
+/// question and must not be "fixed" by changing psm.
+///
+/// ## Why this number
+///
+/// Measured on this host: 5 files is the FLOOR at which OCR reads `hello` reliably
+/// (1 file and 3 files both fail; 5 files passed three runs in a row, 12 files
+/// passed). Nine sits comfortably above that floor without slowing the file-search
+/// traversal. If this ever regresses, add files — do not touch the assertion.
+///
+/// ## Why it belongs here at all
+///
+/// Before the per-test temp cwd landed, this smoke ran with `crates/wolf-gnome` as
+/// the app's cwd and the sidebar happened to list ~35 repo entries, so the assertion
+/// has ALWAYS implicitly depended on that page density — accidentally. Writing these
+/// files makes the dependency explicit and deliberate, and mirrors what the other
+/// eight smokes already get incidentally from the fixture files they drop into their
+/// own temp cwds.
+const SIDEBAR_FILLER_COUNT: usize = 9;
+
+/// Names of the [`SIDEBAR_FILLER_COUNT`] marker files. Only the FILENAME is ever
+/// rendered (they are listed in the sidebar and never opened), so the names are
+/// word-like and all-lowercase — the shapes `tesseract` reads best — and short
+/// enough to fit the sidebar pane without being ellipsized.
+///
+/// The naming constraint is load-bearing. No name may contain [`OCR_WORD`]: a filler
+/// row in the sidebar would then satisfy this smoke's assertion on its own, and the
+/// test would pass green while the editor drew nothing — a silent false positive.
+/// They are likewise kept clear of every other smoke's OCR constants — the asserted
+/// SUBSTRINGS, not the fixture filenames: `pickertarget`, `pickone`/`picktwo`,
+/// `treenode`, `paneleft`/`paneright`, `htopfile`/`hbotfile`,
+/// `focusone`/`focustwo`/`zzleft`, `closekeep`/`closegone`, and
+/// `triaone`/`tribtwo`/`tricthree` — so a stray filler can never satisfy one of
+/// those either. [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`] enforces
+/// this mechanically against [`ASSERTED_OCR_TERMS`], which holds the consts
+/// themselves; this list is a reader's summary and the test is the authority.
+///
+/// The NATO words `echo` and `hotel` are deliberately SKIPPED: they are the two in
+/// the alphabet whose letters are closest to `hello`, and the whole point of this
+/// fixture is an OCR classifier that already confuses letter shapes here.
+const SIDEBAR_FILLER_FILES: [&str; SIDEBAR_FILLER_COUNT] = [
+    "fillalfa.md",
+    "fillbravo.md",
+    "fillcharlie.md",
+    "filldelta.md",
+    "fillfoxtrot.md",
+    "fillgolf.md",
+    "fillindia.md",
+    "filljuliett.md",
+    "fillkilo.md",
+];
+
+/// Body written into every [`SIDEBAR_FILLER_FILES`] entry. Their CONTENTS are never
+/// rendered — no scenario opens them — so this exists only so the files are not
+/// zero-length.
+const SIDEBAR_FILLER_BODY: &str = "# FILLER\n";
 
 /// Picker smoke scenario: the markdown file dropped into the launched app's temp
 /// working directory. Its name contains `PICKER_QUERY` so the typed query matches
@@ -98,11 +199,11 @@ const PICKER_QUERY: &str = "picker";
 // OCR must then contain `picktwo`. We also (loosely) assert OCR does NOT contain
 // `pickone`, proving the selection actually moved off the top row.
 //
-// NOTE to coder: this relies on (a) the rank tiebreaks resolving these two equal
-// matches by display length then lexicographically (so `pick1.md` is row 0), and
-// (b) `Down` moving the LIST/ListBox selection rather than the SearchEntry text
-// cursor. If either assumption is wrong the OCR assertion (`picktwo`) will fail —
-// verify both against the picker implementation.
+// Note: this relies on (a) the rank tiebreaks resolving these two equal matches by
+// display length then lexicographically (so `pick1.md` is row 0), and (b) `Down`
+// moving the LIST/ListBox selection rather than the SearchEntry text cursor. Both
+// hold in the current picker; if either ever stops holding, the `picktwo` OCR
+// assertion is what catches it.
 
 /// First navigation-test markdown file; sorts BEFORE [`PICKER_NAV_FILE_B`] under
 /// the rank tiebreaks (equal-length display, lexicographically smaller), so it is
@@ -142,18 +243,18 @@ const PICKER_NAV_OCR_ABSENT: &str = "pickone";
 // window (loose OCR contains), which demonstrates the long-lived FileSearch fed
 // the tree projection (`children_of`) and the ListView drew the row.
 //
-// NOTE to coder: this asserts tree POPULATION only (the filename is visible in
-// the sidebar). Single-click-to-open and the current-file highlight/reveal are
-// NOT verified here — they are covered by S1 (current_file core tests), S2 +
+// Note: this asserts tree POPULATION only (the filename is visible in the
+// sidebar). Single-click-to-open and the current-file highlight/reveal are NOT
+// verified here — they are covered by S1 (current_file core tests), S2 +
 // `rel_path_for` pure unit tests, and manual/visual checking, because OCR cannot
-// reliably confirm a highlight color and we deliberately avoid pixel-accurate
-// row clicking (too flaky — the architect explicitly avoids it).
+// reliably confirm a highlight color and pixel-accurate row clicking is
+// deliberately avoided (too flaky).
 //
-// NOTE to coder: adding the gtk::Paned + tree ListView to the left of the editor
-// MUST NOT break the existing `window_renders_typed_text_under_cage` and
-// `picker_*_under_cage` OCR assertions — the editor must still render its glyphs
-// (OCR_WORD / PICKER_OCR) in the right-hand pane. Verify those three smokes still
-// pass after wiring the Paned (e.g. give the editor pane adequate width).
+// Note: the gtk::Paned + tree ListView sitting to the left of the editor must not
+// crowd out the editor's own glyphs — `window_renders_typed_text_under_cage` and
+// the `picker_*_under_cage` smokes still assert OCR_WORD / PICKER_OCR render in
+// the right-hand pane, so any future change to the sidebar's width budget that
+// starves the editor pane fails those three tests, not just this one.
 
 /// Tree-sidebar smoke markdown file dropped into the launched app's temp cwd.
 /// Its NAME is OCR-friendly and unlikely to be misread; the tree shows this
@@ -182,25 +283,24 @@ const TREE_OCR: &str = "treenode";
 // caller (`paneleft.md` => `# PANELEFT`, `paneright.md` => `# PANERIGHT`). The OCR
 // assertion is LOOSE (contains BOTH `paneleft` AND `paneright`).
 //
-// NOTE to coder (the `<C-w>v` chord): the scenario sends the window-command chord
-// as `wtype -M ctrl -k w -m ctrl` (hold Ctrl, tap w, release Ctrl) followed by
-// `wtype -k v`. Verify this against the installed wtype build and against how the
-// init.lua keymap expects the chord (S2 wired <C-w>v -> vsplit). If your wtype
-// needs a single combined invocation (e.g. `wtype -M ctrl -k w -m ctrl -k v`) or a
-// different release sequence, adjust the two chord lines only — the rest of the
-// scenario does not depend on how the chord is delivered.
+// Note (the `<C-w>v` chord): the scenario sends the window-command chord as
+// `wtype -M ctrl -k w -m ctrl` (hold Ctrl, tap w, release Ctrl) followed by
+// `wtype -k v`, which is what the pinned wtype delivers and what the init.lua
+// keymap expects (S2 wired <C-w>v -> vsplit). The chord delivery is isolated to
+// those two lines; nothing else in the scenario depends on how it is sent.
 //
-// NOTE to coder (OCR width): both files are opened at WOLF_FONT_PT=28 (matching the
-// other smokes). Two panes SIDE BY SIDE halve the per-pane width, so 28pt glyphs in
-// each pane may be too narrow for tesseract to read reliably. If this OCR fails on
-// width alone (headings clipped/illegible) — NOT on a real rendering bug — the
-// coder may launch THIS test with a wider window and/or a smaller WOLF_FONT_PT so
-// both headings fit. Keep the assertion loose (contains).
+// Note (OCR width): both files are opened at WOLF_FONT_PT=28 (matching the other
+// smokes). Two panes SIDE BY SIDE halve the per-pane width, so 28pt glyphs in each
+// pane are near tesseract's legibility floor. If OCR ever misses on width alone
+// (headings clipped/illegible) — NOT on a real rendering bug — a wider window
+// and/or a smaller WOLF_FONT_PT for THIS test are the robustness knobs. The
+// assertion stays loose (contains) either way.
 //
-// NOTE to coder (cmdline visibility): this relies on the ★ S3 cmdline strip — the
-// typed `:e <file><CR>` Ex-commands live on grid 1, which must be rendered as the
-// bottom command strip for the typed text to take effect/be visible. If `:e` does
-// not open the files, confirm the grid-1 strip + that nvim_input reaches cmdline.
+// Note (cmdline visibility): this relies on the ★ S3 cmdline strip — the typed
+// `:e <file><CR>` Ex-commands live on grid 1, which is rendered as the bottom
+// command strip so the typed text takes effect and is visible. A failure where
+// `:e` does not open the files points at the grid-1 strip or at nvim_input not
+// reaching the cmdline.
 
 /// Vertical-split smoke: file opened in the FIRST (left) pane.
 const VSPLIT_FILE_LEFT: &str = "paneleft.md";
@@ -235,18 +335,18 @@ const VSPLIT_OCR_RIGHT: &str = "paneright";
 // caller (`htop.md` => `# HTOPFILE`, `hbot.md` => `# HBOTFILE`). The OCR assertion
 // is LOOSE (contains BOTH `htopfile` AND `hbotfile`).
 //
-// NOTE to coder (the `<C-w>s` chord): the scenario sends the window-command chord
-// as `wtype -M ctrl -k w -m ctrl` (hold Ctrl, tap w, release Ctrl) followed by
-// `wtype -k s`, exactly mirroring the vertical-split smoke's `<C-w>v`. Verify this
-// against the installed wtype build and how the init.lua keymap expects the chord
-// (S2 wired <C-w>s -> horizontal split). Adjust the two chord lines only if needed.
+// Note (the `<C-w>s` chord): the scenario sends the window-command chord as
+// `wtype -M ctrl -k w -m ctrl` (hold Ctrl, tap w, release Ctrl) followed by
+// `wtype -k s`, exactly mirroring the vertical-split smoke's `<C-w>v`, and matching
+// what the init.lua keymap expects (S2 wired <C-w>s -> horizontal split). Chord
+// delivery is isolated to those two lines.
 //
-// NOTE to coder (OCR height): both files are opened at WOLF_FONT_PT=28 (matching
-// the other smokes). Two panes STACKED halve the per-pane HEIGHT, so each pane may
-// be too short for tesseract to read both headings reliably. If this OCR fails on
-// height alone (a heading clipped/illegible) — NOT on a real rendering bug — the
-// coder may launch THIS test with a taller window and/or a smaller WOLF_FONT_PT so
-// both headings fit. Try as-is first; keep the assertion loose (contains).
+// Note (OCR height): both files are opened at WOLF_FONT_PT=28 (matching the other
+// smokes). Two panes STACKED halve the per-pane HEIGHT, so each pane has fewer rows
+// for tesseract to work with. If OCR ever misses on height alone (a heading
+// clipped/illegible) — NOT on a real rendering bug — a taller window and/or a
+// smaller WOLF_FONT_PT for THIS test are the robustness knobs. The assertion stays
+// loose (contains) either way.
 
 /// Horizontal-split smoke: file opened in the FIRST (top) pane.
 const HSPLIT_FILE_TOP: &str = "htop.md";
@@ -282,15 +382,13 @@ const HSPLIT_OCR_BOTTOM: &str = "hbotfile";
 // contains BOTH `focusone` and `focustwo` (the split persisted across the focus
 // move and marker insert).
 //
-// NOTE to coder: this verifies the focus-move PLUMBING end to end (chord ->
-// FocusDir intent -> shell neighbor -> nvim_set_current_win -> keys route to the
-// refocused window). It does NOT pixel-verify WHICH pane received the marker —
-// positional OCR (proving `zzleft` sits in the LEFT pane's column next to
-// `focusone`) is too fragile to assert here. The pure `layout::neighbor` unit
-// tests cover the geometry of which pane is the left neighbor; this smoke proves
-// the wiring fires and the layout survives. If the coder can make a cleaner
-// deterministic per-pane assertion (e.g. distinct unambiguous text only reachable
-// in the left pane), they may strengthen it.
+// Note: this verifies the focus-move PLUMBING end to end (chord -> FocusDir intent
+// -> shell neighbor -> nvim_set_current_win -> keys route to the refocused window).
+// It deliberately does NOT pixel-verify WHICH pane received the marker — positional
+// OCR (proving `zzleft` sits in the LEFT pane's column next to `focusone`) is too
+// fragile to assert here. The pure `layout::neighbor` unit tests cover the geometry
+// of which pane is the left neighbor; this smoke proves the wiring fires and the
+// layout survives.
 
 /// Focus-move smoke: file opened in the FIRST (left) pane.
 const FOCUS_FILE_LEFT: &str = "fone.md";
@@ -331,11 +429,12 @@ const FOCUS_OCR_MARKER: &str = "zzleft";
 // `<C-w>c`. The right pane disappears and the left (survivor) reclaims the width.
 //
 // Assertions: OCR contains `closekeep` (the survivor renders) and does NOT contain
-// `closegone` (the closed pane is gone).
-//
-// NOTE to coder: if nvim leaves the closed buffer listed elsewhere, or OCR noise
-// makes `closegone` linger in the capture, relax to ONLY asserting `closekeep` is
-// present (survivor renders). Try the stronger NOT-contains assertion first.
+// `closegone` (the closed pane is gone). The NOT-contains assertion is load-bearing
+// — it is the only thing that distinguishes "the pane closed" from "nothing
+// happened" — and is well-founded: after `:e cgone.md` nvim's cmdline toast shows
+// the FILENAME (`cgone.md`), whose lowercase does not contain the HEADING word
+// `closegone`. If it ever fires, that is a finding to diagnose from the retained
+// PNG, not an assertion to loosen.
 
 /// Close-pane smoke: file opened in the FIRST (left) pane — the SURVIVOR.
 const CLOSE_FILE_KEEP: &str = "ckeep.md";
@@ -370,19 +469,23 @@ const CLOSE_OCR_GONE: &str = "closegone";
 // Three distinctly-named markdown files are dropped into the app's temp cwd by the
 // caller (`tri_a.md` => `# TRIAONE`, `tri_b.md` => `# TRIBTWO`, `tri_c.md` =>
 // `# TRICTHREE`). The OCR assertion is LOOSE (contains ALL THREE: `triaone` AND
-// `tribtwo` AND `trictthree`). The load-bearing one is `tribtwo` — the right pane
-// B that today's bug blanks.
+// `tribtwo` AND `trictthree`). The load-bearing one is `tribtwo` — the right pane B
+// that the pre-n-ary binary model blanked.
 //
-// NOTE to coder: this FAILS today (B collapses to ~0 width / gray) and PASSES after
-// the n-ary frame redesign + divider (install_paned_position) fix. The chords
-// (`<C-w>v`, `<C-w>h`) and `:e <file><CR>` exactly mirror the vsplit/focus smokes.
+// This is the regression guard for the n-ary frame model, which HAS landed. Before
+// it, the always-nest binary model collapsed the pre-existing right pane B to ~0
+// width and blanked file B; `PaneTree::split`'s same-orientation flatten plus
+// `pane_view::install_paned_position` (which re-applies the proportional divider on
+// EVERY `max-position` notify, not one-shot) fixed it. This test must PASS. The
+// chords (`<C-w>v`, `<C-w>h`) and `:e <file><CR>` exactly mirror the vsplit/focus
+// smokes.
 //
-// NOTE to coder (OCR width): three side-by-side panes split the editor width into
-// thirds, so 28pt glyphs in each ~third-width pane may be too narrow for tesseract
-// to read all three headings. If this OCR fails on WIDTH alone (headings clipped/
-// illegible) — NOT on the real B-collapse bug — the coder may launch THIS test with
-// a wider window and/or a smaller WOLF_FONT_PT so all three headings fit. Keep the
-// assertion loose (contains). Do NOT pre-change app code for this.
+// Note (OCR width): three side-by-side panes split the editor width into thirds, so
+// 28pt glyphs in each ~third-width pane can be too narrow for tesseract to read all
+// three headings. If OCR misses on WIDTH alone (headings clipped/illegible) — NOT on
+// a layout regression — the window size and/or WOLF_FONT_PT for THIS test are the
+// robustness knobs to turn. Diagnose from the retained PNG first. The assertion is
+// deliberately loose (contains) and must stay; `tribtwo` is the load-bearing one.
 
 /// Three-pane smoke: file opened FIRST (becomes the left pane).
 const TRI_FILE_A: &str = "tri_a.md";
@@ -394,14 +497,15 @@ const TRI_HEADING_A: &str = "# TRIAONE";
 const TRI_OCR_A: &str = "triaone";
 
 /// Three-pane smoke: file opened in the RIGHT pane after the first `<C-w>v`. This
-/// is the PRE-EXISTING right pane the 3-pane bug blanks (load-bearing assertion).
+/// is the PRE-EXISTING right pane the pre-n-ary binary model blanked (load-bearing
+/// assertion).
 const TRI_FILE_B: &str = "tri_b.md";
 
 /// Heading written into [`TRI_FILE_B`]; lowercased it contains [`TRI_OCR_B`].
 const TRI_HEADING_B: &str = "# TRIBTWO";
 
-/// Lowercased substring OCR must find for the RIGHT pane's file (the one the bug
-/// collapses to ~0 width today).
+/// Lowercased substring OCR must find for the RIGHT pane's file (the one the
+/// pre-n-ary binary model collapsed to ~0 width).
 const TRI_OCR_B: &str = "tribtwo";
 
 /// Three-pane smoke: file opened in the new sub-pane after focusing left and the
@@ -441,7 +545,7 @@ fn require_smoke_env() -> PathBuf {
         missing.is_empty(),
         "wolf-gnome headless smoke test: missing required tool(s) {missing:?} on PATH. \
          These are provided by the flake devShell smoke toolchain (cage, wtype, grim, \
-         tesseract). Run via `nix develop --command cargo test -p wolf-gnome -- --ignored`."
+         tesseract). Run via `nix develop --command cargo test -p wolf-gnome`."
     );
 
     match std::env::var("WOLF_NVIM_BIN") {
@@ -500,7 +604,11 @@ const SCENARIO: &str = r#"
 set -eu
 
 # Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-WAIT_TRIES=25
+# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
+# binaries (most spawning a real nvim) run in parallel: under that load the window
+# can take well over the old 5s budget to map. This is a timing knob only -- no
+# assertion depends on it.
+WAIT_TRIES=75
 WAIT_INTERVAL=0.2
 SETTLE=0.5
 
@@ -566,7 +674,11 @@ const PICKER_SCENARIO: &str = r#"
 set -eu
 
 # Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-WAIT_TRIES=25
+# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
+# binaries (most spawning a real nvim) run in parallel: under that load the window
+# can take well over the old 5s budget to map. This is a timing knob only -- no
+# assertion depends on it.
+WAIT_TRIES=75
 WAIT_INTERVAL=0.2
 SETTLE=0.5
 
@@ -594,13 +706,10 @@ sleep "$SETTLE"
 
 # Open the picker with the trigger chord Ctrl+Shift+P.
 #
-# NOTE to coder: verify this wtype modifier invocation against the installed
-# wtype build. `-M <mod>` / `-m <mod>` press / release a modifier, and `-k <key>`
+# Note: `-M <mod>` / `-m <mod>` press / release a modifier, and `-k <key>`
 # presses+releases a key while the held modifiers apply, so the chord is
-# "hold ctrl, hold shift, tap p, release shift, release ctrl". If your wtype
-# needs different syntax (e.g. explicit `-P p` / `-p p` for press/release of the
-# letter, or a `--` separator), adjust this single line — the rest of the
-# scenario does not depend on how the chord is delivered.
+# "hold ctrl, hold shift, tap p, release shift, release ctrl". Chord delivery is
+# isolated to this single line; the rest of the scenario does not depend on it.
 wtype -M ctrl -M shift -k p -m shift -m ctrl
 
 # Let the picker map + grab keyboard focus on its search entry.
@@ -642,7 +751,11 @@ const PICKER_NAV_SCENARIO: &str = r#"
 set -eu
 
 # Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-WAIT_TRIES=25
+# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
+# binaries (most spawning a real nvim) run in parallel: under that load the window
+# can take well over the old 5s budget to map. This is a timing knob only -- no
+# assertion depends on it.
+WAIT_TRIES=75
 WAIT_INTERVAL=0.2
 SETTLE=0.5
 
@@ -669,7 +782,7 @@ done
 sleep "$SETTLE"
 
 # Open the picker with the trigger chord Ctrl+Shift+P (same chord as the other
-# picker scenario; see its NOTE to coder for the wtype modifier syntax).
+# picker scenario; see its note for the wtype modifier syntax).
 wtype -M ctrl -M shift -k p -m shift -m ctrl
 
 # Let the picker map + grab keyboard focus on its search entry.
@@ -683,11 +796,10 @@ sleep "$SETTLE"
 
 # Move the LIST selection down one row (row 0 -> row 1).
 #
-# NOTE to coder: this assumes `Down` moves the ListBox selection, NOT the
-# SearchEntry text cursor, and that the keyval name `Down` is what wtype emits
-# for the arrow key. If the picker leaves focus on the entry and Down does not
-# reach the list, the selection will not move and this test's assertion will
-# fail. Verify the picker routes Up/Down to the list.
+# Note: the picker routes Up/Down to the ListBox selection rather than the
+# SearchEntry text cursor (focus stays in the textbox), and `Down` is the keyval
+# name wtype emits for the arrow key. If the selection ever stops moving, this
+# test's `picktwo` assertion is what catches it.
 wtype -k Down
 
 # Brief settle so the selection change is processed before activating.
@@ -696,8 +808,8 @@ sleep "$SETTLE"
 # Activate the SELECTED row: sends InputEvent::Open{path} for row 1 and closes
 # the picker, which makes nvim `:e` the second file.
 #
-# NOTE to coder: `Return` is assumed to be wtype's key name for Enter (matches
-# the other picker scenario). Adjust if your wtype build differs.
+# Note: `Return` is wtype's key name for Enter (matches the other picker
+# scenario).
 wtype -k Return
 
 # Let nvim load the file and redraw before capturing.
@@ -723,11 +835,15 @@ const TREE_SCENARIO: &str = r#"
 set -eu
 
 # Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-WAIT_TRIES=25
+# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
+# binaries (most spawning a real nvim) run in parallel: under that load the window
+# can take well over the old 5s budget to map. This is a timing knob only -- no
+# assertion depends on it.
+WAIT_TRIES=75
 WAIT_INTERVAL=0.2
 SETTLE=0.5
 # Extra settle for the streamed FileSearch traversal to populate the tree.
-TREE_SETTLE=1.0
+TREE_SETTLE=1.5
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
@@ -773,7 +889,11 @@ const VSPLIT_SCENARIO: &str = r#"
 set -eu
 
 # Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-WAIT_TRIES=25
+# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
+# binaries (most spawning a real nvim) run in parallel: under that load the window
+# can take well over the old 5s budget to map. This is a timing knob only -- no
+# assertion depends on it.
+WAIT_TRIES=75
 WAIT_INTERVAL=0.2
 SETTLE=0.5
 
@@ -807,7 +927,7 @@ wtype -k Return
 # Let nvim load file A and redraw before splitting.
 sleep "$SETTLE"
 
-# Trigger a VERTICAL split with the <C-w>v chord (see the NOTE to coder near the
+# Trigger a VERTICAL split with the <C-w>v chord (see the note near the
 # VSPLIT_* consts about the exact wtype modifier syntax). The new pane opens to the
 # RIGHT of the current one and initially shows the same buffer (file A).
 wtype -M ctrl -k w -m ctrl
@@ -843,7 +963,11 @@ const HSPLIT_SCENARIO: &str = r#"
 set -eu
 
 # Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-WAIT_TRIES=25
+# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
+# binaries (most spawning a real nvim) run in parallel: under that load the window
+# can take well over the old 5s budget to map. This is a timing knob only -- no
+# assertion depends on it.
+WAIT_TRIES=75
 WAIT_INTERVAL=0.2
 SETTLE=0.5
 
@@ -877,7 +1001,7 @@ wtype -k Return
 # Let nvim load file A and redraw before splitting.
 sleep "$SETTLE"
 
-# Trigger a HORIZONTAL split with the <C-w>s chord (see the NOTE to coder near the
+# Trigger a HORIZONTAL split with the <C-w>s chord (see the note near the
 # HSPLIT_* consts about the exact wtype modifier syntax). The new pane stacks
 # below/above the current one and initially shows the same buffer (file A).
 wtype -M ctrl -k w -m ctrl
@@ -913,7 +1037,11 @@ const FOCUS_SCENARIO: &str = r#"
 set -eu
 
 # Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-WAIT_TRIES=25
+# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
+# binaries (most spawning a real nvim) run in parallel: under that load the window
+# can take well over the old 5s budget to map. This is a timing knob only -- no
+# assertion depends on it.
+WAIT_TRIES=75
 WAIT_INTERVAL=0.2
 SETTLE=0.5
 
@@ -961,7 +1089,7 @@ wtype -k Return
 sleep "$SETTLE"
 
 # Move focus BACK to the LEFT pane with the <C-w>h chord (pure FocusDir intent ->
-# shell neighbor -> nvim_set_current_win). See the NOTE to coder near FOCUS_* consts.
+# shell neighbor -> nvim_set_current_win). See the note near the FOCUS_* consts.
 wtype -M ctrl -k w -m ctrl
 wtype -k h
 
@@ -1009,7 +1137,11 @@ const CLOSE_SCENARIO: &str = r#"
 set -eu
 
 # Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-WAIT_TRIES=25
+# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
+# binaries (most spawning a real nvim) run in parallel: under that load the window
+# can take well over the old 5s budget to map. This is a timing knob only -- no
+# assertion depends on it.
+WAIT_TRIES=75
 WAIT_INTERVAL=0.2
 SETTLE=0.5
 
@@ -1085,7 +1217,11 @@ const TRISPLIT_SCENARIO: &str = r#"
 set -eu
 
 # Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-WAIT_TRIES=25
+# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
+# binaries (most spawning a real nvim) run in parallel: under that load the window
+# can take well over the old 5s budget to map. This is a timing knob only -- no
+# assertion depends on it.
+WAIT_TRIES=75
 WAIT_INTERVAL=0.2
 SETTLE=0.5
 
@@ -1174,10 +1310,37 @@ exit 0
 
 /// Creates a fresh, unique temp directory to serve as the launched app's working
 /// directory. The app derives `CoreConfig.cwd` from `std::env::current_dir()`, so
-/// the picker traverses this directory (the recent-files MRU lives in the global
-/// `state_dir()/file-mru.sqlite`, not under the cwd). Not
-/// auto-deleted: keeping it around aids post-mortem inspection of a failed run,
-/// mirroring the wolf-core/common `fresh_cwd` rationale.
+/// this is the directory the file-search traversal walks and the directory the
+/// captive nvim runs in (the recent-files MRU lives in the global
+/// `state_dir()/file-mru.sqlite`, not under the cwd).
+///
+/// ALL NINE smokes use this. A fresh cwd per run is MANDATORY, not tidiness:
+///
+/// * The captive nvim keeps a DURABLE, per-project swap dir keyed on the cwd
+///   (`wolf_core::state::swap_dir_for` → `state_dir()/swap/<hash of cwd>`), which
+///   deliberately survives the process so a fresh nvim can recover a crashed
+///   nvim's unsaved edits.
+/// * Every scenario ends by `kill`ing the app, so its nvim never cleans up its
+///   swap files.
+/// * At a FIXED cwd those two facts compose into a self-poisoning test: run N
+///   leaves a stale `%…%Untitled.md.swp` behind, and run N+1 finds it at startup.
+///   Naming the startup buffer `<cwd>/Untitled.md` then collides with that swap
+///   inside `nvim_buf_set_name`, which raises a BLOCKING ATTENTION dialog that
+///   eats the first keystroke — so the smoke goes red for whatever change happens
+///   to be in flight, and its own failure message points at the wrong cause. A
+///   test whose fixture is its own previous run's leftovers is order-dependent and
+///   non-idempotent.
+///
+/// The product-level guard for that collision is deliberate, headless and lives
+/// elsewhere:
+/// `crates/wolf-core/tests/swap_recovery.rs::stale_untitled_swap_does_not_block_a_fresh_start`.
+/// Isolating the cwd here does not remove coverage; it moves it from accidental to
+/// deliberate.
+///
+/// Not auto-deleted: keeping it around aids post-mortem inspection of a failed
+/// run, mirroring the wolf-core/common `fresh_cwd` rationale. Each run therefore
+/// also leaves one new `state_dir()/swap/<hash>/` holding at most one `.swp`;
+/// harmless, because no future run resolves to that hash.
 fn make_temp_cwd() -> PathBuf {
     let pid = std::process::id();
     let nanos = std::time::SystemTime::now()
@@ -1190,8 +1353,164 @@ fn make_temp_cwd() -> PathBuf {
     dir
 }
 
+/// Every lowercased substring the nine cage smokes assert OCR must — or must not —
+/// contain, as `(term, const name, the smoke that asserts it)`.
+///
+/// The terms are the CONSTS themselves, never re-typed literals: a table of copies
+/// could drift away from the values the smokes actually assert without anything
+/// noticing, which would leave the check below quietly guarding nothing.
+///
+/// [`FOCUS_OCR_MARKER`] is the lowercased form of [`FOCUS_MARKER`], so the typed
+/// marker is covered too. The two must-NOT-contain terms ([`PICKER_NAV_OCR_ABSENT`],
+/// [`CLOSE_OCR_GONE`]) are listed deliberately: a filler row carrying one of those
+/// would make its smoke fail SPURIOUSLY rather than pass vacuously — the opposite
+/// symptom, but the same fixture bug.
+const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
+    (OCR_WORD, "OCR_WORD", "window_renders_typed_text_under_cage"),
+    (
+        PICKER_OCR,
+        "PICKER_OCR",
+        "picker_opens_and_loads_selected_file_under_cage",
+    ),
+    (
+        PICKER_NAV_OCR_PRESENT,
+        "PICKER_NAV_OCR_PRESENT",
+        "picker_arrow_navigation_selects_second_match_under_cage",
+    ),
+    (
+        PICKER_NAV_OCR_ABSENT,
+        "PICKER_NAV_OCR_ABSENT",
+        "picker_arrow_navigation_selects_second_match_under_cage",
+    ),
+    (TREE_OCR, "TREE_OCR", "tree_sidebar_shows_files_under_cage"),
+    (
+        VSPLIT_OCR_LEFT,
+        "VSPLIT_OCR_LEFT",
+        "vertical_split_shows_two_panes_under_cage",
+    ),
+    (
+        VSPLIT_OCR_RIGHT,
+        "VSPLIT_OCR_RIGHT",
+        "vertical_split_shows_two_panes_under_cage",
+    ),
+    (
+        HSPLIT_OCR_TOP,
+        "HSPLIT_OCR_TOP",
+        "horizontal_split_shows_two_panes_under_cage",
+    ),
+    (
+        HSPLIT_OCR_BOTTOM,
+        "HSPLIT_OCR_BOTTOM",
+        "horizontal_split_shows_two_panes_under_cage",
+    ),
+    (
+        FOCUS_OCR_LEFT,
+        "FOCUS_OCR_LEFT",
+        "focus_move_returns_to_first_pane_under_cage",
+    ),
+    (
+        FOCUS_OCR_RIGHT,
+        "FOCUS_OCR_RIGHT",
+        "focus_move_returns_to_first_pane_under_cage",
+    ),
+    (
+        FOCUS_OCR_MARKER,
+        "FOCUS_OCR_MARKER",
+        "focus_move_returns_to_first_pane_under_cage",
+    ),
+    (
+        CLOSE_OCR_KEEP,
+        "CLOSE_OCR_KEEP",
+        "close_pane_leaves_one_under_cage",
+    ),
+    (
+        CLOSE_OCR_GONE,
+        "CLOSE_OCR_GONE",
+        "close_pane_leaves_one_under_cage",
+    ),
+    (
+        TRI_OCR_A,
+        "TRI_OCR_A",
+        "three_panes_keep_all_files_visible_under_cage",
+    ),
+    (
+        TRI_OCR_B,
+        "TRI_OCR_B",
+        "three_panes_keep_all_files_visible_under_cage",
+    ),
+    (
+        TRI_OCR_C,
+        "TRI_OCR_C",
+        "three_panes_keep_all_files_visible_under_cage",
+    ),
+];
+
+/// Mechanically enforces the naming invariant documented on [`SIDEBAR_FILLER_FILES`]:
+/// no filler filename may contain any substring a cage smoke asserts on.
+///
+/// ## Why a comment was promoted to a test
+///
+/// The invariant is load-bearing, and until now a comment was the only thing holding
+/// it. Were a filler ever named `fillhello.md`, the tree sidebar would render the word
+/// `hello` on a row of its own, [`window_renders_typed_text_under_cage`]'s OCR
+/// assertion would be satisfied by that sidebar row, and the smoke would pass green
+/// forever — with an editor pane that drew nothing at all. That is precisely the
+/// silently-passing test `CLAUDE.md` warns about, and it is invisible in review:
+/// [`SIDEBAR_FILLER_FILES`] and the assertion it can defeat sit a thousand lines apart,
+/// and adding a filler file does not look like touching an assertion. A fixture that
+/// can disarm the assertion it exists to support needs an executable guard, not prose.
+///
+/// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
+/// subprocess. It reads two const tables and finishes in microseconds, so it adds
+/// nothing to the smoke suite's runtime and — unlike the nine smokes — still guards the
+/// fixture on a machine where the smoke toolchain is unavailable.
 #[test]
-#[ignore = "headless-compositor smoke test; run explicitly with --ignored (needs flake smoke toolchain)"]
+fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
+    // Guard the guard: `ocr_to_lowercase` lowercases tesseract's output before every
+    // `contains`, so an OCR const that is not itself lowercase could never match a real
+    // capture — and would make the filename check below vacuous too.
+    for &(term, const_name, smoke) in ASSERTED_OCR_TERMS {
+        assert!(
+            !term.chars().any(char::is_uppercase),
+            "asserted OCR term {const_name} = {term:?} is not all-lowercase. `ocr_to_lowercase` \
+             lowercases tesseract's output before every `contains`, so `{smoke}` could never \
+             match this term against a real capture. Lowercase the const."
+        );
+    }
+
+    for name in SIDEBAR_FILLER_FILES {
+        let lowercased = name.to_lowercase();
+        for &(term, const_name, smoke) in ASSERTED_OCR_TERMS {
+            assert!(
+                !lowercased.contains(term),
+                "sidebar filler file {name:?} contains {const_name} = {term:?}. The tree sidebar \
+                 renders filler FILENAMES, so that row would satisfy `{smoke}`'s OCR assertion \
+                 all on its own: the smoke would then pass green forever even if the editor pane \
+                 drew nothing — a permanent silent false positive, not a flake. Rename the filler \
+                 (see the doc comment on `SIDEBAR_FILLER_FILES`); do NOT change the OCR const and \
+                 do NOT touch the smoke's assertion."
+            );
+        }
+    }
+
+    // Names must also be distinct: duplicates collapse on disk, so the fixture would
+    // write fewer files than it claims to and thin the page density silently.
+    let mut seen = std::collections::HashSet::new();
+    for name in SIDEBAR_FILLER_FILES {
+        assert!(
+            seen.insert(name),
+            "sidebar filler file {name:?} is listed twice in `SIDEBAR_FILLER_FILES`. Duplicate \
+             names collapse on disk, so {SIDEBAR_FILLER_COUNT} entries would write fewer than \
+             {SIDEBAR_FILLER_COUNT} files and silently thin the page density \
+             `window_renders_typed_text_under_cage` depends on (measured floor: five files). \
+             Below that floor tesseract misreads the isolated leading `h` of the typed word as a \
+             ligature, and the smoke fails with no visible cause. Give every entry a distinct \
+             name."
+        );
+    }
+}
+
+#[test]
 fn window_renders_typed_text_under_cage() {
     // Serialize against the other cage test (shared Wayland socket); recover from
     // poisoning so a failure in the sibling test does not cascade here.
@@ -1202,6 +1521,25 @@ fn window_renders_typed_text_under_cage() {
     // Locate the freshly built binary under test (Cargo sets this env var for
     // integration tests of a crate that declares a `[[bin]]`).
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd, exactly like the other eight smokes. The app reads
+    // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
+    // directory as its working directory (see `.current_dir` below). See
+    // `make_temp_cwd` for why isolation is mandatory here: at a fixed cwd this
+    // scenario's own `kill` leaves a stale `Untitled.md` swap that becomes the NEXT
+    // run's fixture.
+    let cwd = make_temp_cwd();
+
+    // Give the tree sidebar rows of text to draw. See `SIDEBAR_FILLER_COUNT`: with an
+    // empty cwd the editor draws `hello` correctly (proven pixel by pixel) but
+    // tesseract misreads its isolated leading `h` as the ligature `ﬁ` on the sparse
+    // page. These files restore the page density this assertion has always implicitly
+    // relied on. They are fixture only — nothing here asserts on them.
+    for name in SIDEBAR_FILLER_FILES {
+        let filler = cwd.join(name);
+        std::fs::write(&filler, SIDEBAR_FILLER_BODY)
+            .unwrap_or_else(|e| panic!("failed to write filler {}: {e}", filler.display()));
+    }
 
     // Put the screenshot under XDG_RUNTIME_DIR (guaranteed writable above) so we
     // do not depend on CWD being writable.
@@ -1225,6 +1563,7 @@ fn window_renders_typed_text_under_cage() {
         .arg("sh")
         .arg("-c")
         .arg(SCENARIO)
+        .current_dir(&cwd)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("OCR_WORD", OCR_WORD)
@@ -1260,14 +1599,29 @@ fn window_renders_typed_text_under_cage() {
     assert!(
         ocr_text.contains(OCR_WORD),
         "OCR of the rendered window did not contain the typed word {OCR_WORD:?}. The cursor was \
-         moved off row 0 so it should not obscure any letter; a miss here usually means no glyphs \
-         rendered. PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+         moved off row 0 so it should not obscure any letter. PNG kept at {} — OPEN IT before \
+         concluding anything: (a) if nothing drew at all (no window, no tildes, no cursor), it is \
+         a rendering/launch failure; (b) if the window, sidebar, editor pane, tildes and cursor \
+         all drew correctly but row 0 is EMPTY and the cursor sits TWO rows below it, then \
+         exactly ONE keystroke — the leading `i` — was consumed before Neovim saw it, so \
+         {OCR_WORD:?} executed in NORMAL mode instead of being inserted. The KNOWN cause of that \
+         signature is the swap modal, and it is where to look FIRST: `nvim_buf_set_name` creates \
+         the startup buffer's swap file inside the rename, and a pre-existing swap for \
+         `<cwd>/Untitled.md` raises a blocking `do_dialog` ATTENTION/E325 prompt \
+         (`mode() == \"r?\"`) that answers itself with your first key. Check \
+         `state_dir()/swap/<hash-of-cwd>/` for a `%…%Untitled.md.swp` (on Linux that is \
+         `~/.local/state/wolf/swap/`), and see `crates/wolf-core/tests/swap_recovery.rs`'s \
+         `stale_untitled_swap_does_not_block_a_fresh_start`, which pins this headlessly \
+         (and deterministically). Only if there is no such swap should you consider focus / \
+         input routing (a Phase 2 pass chased that hypothesis and DISPROVED it — deferring \
+         `grab_focus()` into `window.connect_map()` changes nothing). Either way it is NOT a \
+         rendering failure, and no amount of extra settle time will fix it. OCR output \
+         was:\n{ocr_text}",
         out_png.display()
     );
 }
 
 #[test]
-#[ignore = "headless-compositor smoke test; run explicitly with --ignored (needs flake smoke toolchain)"]
 fn picker_opens_and_loads_selected_file_under_cage() {
     // Serialize against the other cage test (shared Wayland socket); recover from
     // poisoning so a failure in the sibling test does not cascade here.
@@ -1348,7 +1702,6 @@ fn picker_opens_and_loads_selected_file_under_cage() {
 }
 
 #[test]
-#[ignore = "headless-compositor smoke test; run explicitly with --ignored (needs flake smoke toolchain)"]
 fn picker_arrow_navigation_selects_second_match_under_cage() {
     // Serialize against the other cage tests (shared Wayland socket); recover from
     // poisoning so a failure in a sibling test does not cascade here.
@@ -1367,10 +1720,18 @@ fn picker_arrow_navigation_selects_second_match_under_cage() {
     let cwd = make_temp_cwd();
     let target_a = cwd.join(PICKER_NAV_FILE_A);
     let target_b = cwd.join(PICKER_NAV_FILE_B);
-    std::fs::write(&target_a, format!("{PICKER_NAV_HEADING_A}\n"))
-        .unwrap_or_else(|e| panic!("failed to write picker nav file {}: {e}", target_a.display()));
-    std::fs::write(&target_b, format!("{PICKER_NAV_HEADING_B}\n"))
-        .unwrap_or_else(|e| panic!("failed to write picker nav file {}: {e}", target_b.display()));
+    std::fs::write(&target_a, format!("{PICKER_NAV_HEADING_A}\n")).unwrap_or_else(|e| {
+        panic!(
+            "failed to write picker nav file {}: {e}",
+            target_a.display()
+        )
+    });
+    std::fs::write(&target_b, format!("{PICKER_NAV_HEADING_B}\n")).unwrap_or_else(|e| {
+        panic!(
+            "failed to write picker nav file {}: {e}",
+            target_b.display()
+        )
+    });
 
     // Put the screenshot under XDG_RUNTIME_DIR (guaranteed writable) and start
     // from a clean slate so a stale PNG cannot pass.
@@ -1446,7 +1807,6 @@ fn picker_arrow_navigation_selects_second_match_under_cage() {
 }
 
 #[test]
-#[ignore = "headless-compositor smoke test; run explicitly with --ignored (needs flake smoke toolchain)"]
 fn tree_sidebar_shows_files_under_cage() {
     // Serialize against the other cage tests (shared Wayland socket); recover from
     // poisoning so a failure in a sibling test does not cascade here.
@@ -1529,7 +1889,6 @@ fn tree_sidebar_shows_files_under_cage() {
 }
 
 #[test]
-#[ignore = "headless-compositor smoke test; run explicitly with --ignored (needs flake smoke toolchain)"]
 fn vertical_split_shows_two_panes_under_cage() {
     // Serialize against the other cage tests (shared Wayland socket); recover from
     // poisoning so a failure in a sibling test does not cascade here.
@@ -1547,12 +1906,18 @@ fn vertical_split_shows_two_panes_under_cage() {
     let cwd = make_temp_cwd();
     let target_left = cwd.join(VSPLIT_FILE_LEFT);
     let target_right = cwd.join(VSPLIT_FILE_RIGHT);
-    std::fs::write(&target_left, format!("{VSPLIT_HEADING_LEFT}\n"))
-        .unwrap_or_else(|e| panic!("failed to write vsplit left file {}: {e}", target_left.display()));
-    std::fs::write(&target_right, format!("{VSPLIT_HEADING_RIGHT}\n"))
-        .unwrap_or_else(|e| {
-            panic!("failed to write vsplit right file {}: {e}", target_right.display())
-        });
+    std::fs::write(&target_left, format!("{VSPLIT_HEADING_LEFT}\n")).unwrap_or_else(|e| {
+        panic!(
+            "failed to write vsplit left file {}: {e}",
+            target_left.display()
+        )
+    });
+    std::fs::write(&target_right, format!("{VSPLIT_HEADING_RIGHT}\n")).unwrap_or_else(|e| {
+        panic!(
+            "failed to write vsplit right file {}: {e}",
+            target_right.display()
+        )
+    });
 
     // Put the screenshot under XDG_RUNTIME_DIR (guaranteed writable) and start from
     // a clean slate so a stale PNG cannot pass.
@@ -1578,9 +1943,10 @@ fn vertical_split_shows_two_panes_under_cage() {
         .env("OUT_PNG", &out_png)
         .env("VSPLIT_FILE_LEFT", VSPLIT_FILE_LEFT)
         .env("VSPLIT_FILE_RIGHT", VSPLIT_FILE_RIGHT)
-        // Large font so the rendered glyphs are legible to tesseract. (See the NOTE
-        // to coder near the VSPLIT_* consts: if two side-by-side panes are too
-        // narrow for 28pt OCR, widen the window or lower the font for THIS test.)
+        // Large font so the rendered glyphs are legible to tesseract. (See the
+        // "Note (OCR width)" paragraph above the VSPLIT_* consts: if two
+        // side-by-side panes are too narrow for 28pt OCR, widen the window or lower
+        // the font for THIS test.)
         .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .status()
         .expect("failed to spawn `cage` for the headless vsplit smoke scenario");
@@ -1626,7 +1992,6 @@ fn vertical_split_shows_two_panes_under_cage() {
 }
 
 #[test]
-#[ignore = "headless-compositor smoke test; run explicitly with --ignored (needs flake smoke toolchain)"]
 fn horizontal_split_shows_two_panes_under_cage() {
     // Serialize against the other cage tests (shared Wayland socket); recover from
     // poisoning so a failure in a sibling test does not cascade here.
@@ -1644,8 +2009,12 @@ fn horizontal_split_shows_two_panes_under_cage() {
     let cwd = make_temp_cwd();
     let target_top = cwd.join(HSPLIT_FILE_TOP);
     let target_bottom = cwd.join(HSPLIT_FILE_BOTTOM);
-    std::fs::write(&target_top, format!("{HSPLIT_HEADING_TOP}\n"))
-        .unwrap_or_else(|e| panic!("failed to write hsplit top file {}: {e}", target_top.display()));
+    std::fs::write(&target_top, format!("{HSPLIT_HEADING_TOP}\n")).unwrap_or_else(|e| {
+        panic!(
+            "failed to write hsplit top file {}: {e}",
+            target_top.display()
+        )
+    });
     std::fs::write(&target_bottom, format!("{HSPLIT_HEADING_BOTTOM}\n")).unwrap_or_else(|e| {
         panic!(
             "failed to write hsplit bottom file {}: {e}",
@@ -1677,9 +2046,10 @@ fn horizontal_split_shows_two_panes_under_cage() {
         .env("OUT_PNG", &out_png)
         .env("HSPLIT_FILE_TOP", HSPLIT_FILE_TOP)
         .env("HSPLIT_FILE_BOTTOM", HSPLIT_FILE_BOTTOM)
-        // Large font so the rendered glyphs are legible to tesseract. (See the NOTE
-        // to coder near the HSPLIT_* consts: if two stacked panes are too short for
-        // 28pt OCR, make the window taller or lower the font for THIS test.)
+        // Large font so the rendered glyphs are legible to tesseract. (See the
+        // "Note (OCR height)" paragraph above the HSPLIT_* consts: if two stacked
+        // panes are too short for 28pt OCR, make the window taller or lower the font
+        // for THIS test.)
         .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .status()
         .expect("failed to spawn `cage` for the headless hsplit smoke scenario");
@@ -1725,7 +2095,6 @@ fn horizontal_split_shows_two_panes_under_cage() {
 }
 
 #[test]
-#[ignore = "headless-compositor smoke test; run explicitly with --ignored (needs flake smoke toolchain)"]
 fn focus_move_returns_to_first_pane_under_cage() {
     // Serialize against the other cage tests (shared Wayland socket); recover from
     // poisoning so a failure in a sibling test does not cascade here.
@@ -1742,8 +2111,12 @@ fn focus_move_returns_to_first_pane_under_cage() {
     let cwd = make_temp_cwd();
     let target_left = cwd.join(FOCUS_FILE_LEFT);
     let target_right = cwd.join(FOCUS_FILE_RIGHT);
-    std::fs::write(&target_left, format!("{FOCUS_HEADING_LEFT}\n"))
-        .unwrap_or_else(|e| panic!("failed to write focus left file {}: {e}", target_left.display()));
+    std::fs::write(&target_left, format!("{FOCUS_HEADING_LEFT}\n")).unwrap_or_else(|e| {
+        panic!(
+            "failed to write focus left file {}: {e}",
+            target_left.display()
+        )
+    });
     std::fs::write(&target_right, format!("{FOCUS_HEADING_RIGHT}\n")).unwrap_or_else(|e| {
         panic!(
             "failed to write focus right file {}: {e}",
@@ -1804,7 +2177,7 @@ fn focus_move_returns_to_first_pane_under_cage() {
     // post-<C-w>h insert reached the focused pane) AND the split persisted (both
     // file headings still render).
     //
-    // NOTE to coder: this proves the focus-move PLUMBING end to end but does NOT
+    // Note: this proves the focus-move PLUMBING end to end but does NOT
     // pixel-verify WHICH pane received the marker (positional OCR is too fragile).
     // The pure `layout::neighbor` unit tests cover which pane is the left neighbor.
     let ocr_text = ocr_to_lowercase(&out_png);
@@ -1830,7 +2203,6 @@ fn focus_move_returns_to_first_pane_under_cage() {
 }
 
 #[test]
-#[ignore = "headless-compositor smoke test; run explicitly with --ignored (needs flake smoke toolchain)"]
 fn close_pane_leaves_one_under_cage() {
     // Serialize against the other cage tests (shared Wayland socket); recover from
     // poisoning so a failure in a sibling test does not cascade here.
@@ -1847,10 +2219,18 @@ fn close_pane_leaves_one_under_cage() {
     let cwd = make_temp_cwd();
     let target_keep = cwd.join(CLOSE_FILE_KEEP);
     let target_gone = cwd.join(CLOSE_FILE_GONE);
-    std::fs::write(&target_keep, format!("{CLOSE_HEADING_KEEP}\n"))
-        .unwrap_or_else(|e| panic!("failed to write close keep file {}: {e}", target_keep.display()));
-    std::fs::write(&target_gone, format!("{CLOSE_HEADING_GONE}\n"))
-        .unwrap_or_else(|e| panic!("failed to write close gone file {}: {e}", target_gone.display()));
+    std::fs::write(&target_keep, format!("{CLOSE_HEADING_KEEP}\n")).unwrap_or_else(|e| {
+        panic!(
+            "failed to write close keep file {}: {e}",
+            target_keep.display()
+        )
+    });
+    std::fs::write(&target_gone, format!("{CLOSE_HEADING_GONE}\n")).unwrap_or_else(|e| {
+        panic!(
+            "failed to write close gone file {}: {e}",
+            target_gone.display()
+        )
+    });
 
     // Put the screenshot under XDG_RUNTIME_DIR (guaranteed writable) and start from
     // a clean slate so a stale PNG cannot pass.
@@ -1902,11 +2282,8 @@ fn close_pane_leaves_one_under_cage() {
 
     // OCR the screenshot. The survivor (left) pane's file must render, and the
     // closed (right) pane's file must NOT — proving <C-w>c removed the focused pane
-    // and the survivor reclaimed the width.
-    //
-    // NOTE to coder: if nvim leaves the closed buffer listed elsewhere or OCR noise
-    // makes `closegone` linger, relax to ONLY the `closekeep` present assertion.
-    // Try the stronger NOT-contains first.
+    // and the survivor reclaimed the width. Both assertions are load-bearing; see
+    // the close-pane scenario notes above for why the NOT-contains one is sound.
     let ocr_text = ocr_to_lowercase(&out_png);
     assert!(
         ocr_text.contains(CLOSE_OCR_KEEP),
@@ -1924,7 +2301,6 @@ fn close_pane_leaves_one_under_cage() {
 }
 
 #[test]
-#[ignore = "headless-compositor smoke test; run explicitly with --ignored (needs flake smoke toolchain)"]
 fn three_panes_keep_all_files_visible_under_cage() {
     // Serialize against the other cage tests (shared Wayland socket); recover from
     // poisoning so a failure in a sibling test does not cascade here.
@@ -1974,9 +2350,10 @@ fn three_panes_keep_all_files_visible_under_cage() {
         .env("TRI_FILE_A", TRI_FILE_A)
         .env("TRI_FILE_B", TRI_FILE_B)
         .env("TRI_FILE_C", TRI_FILE_C)
-        // Large font so the rendered glyphs are legible to tesseract. (See the NOTE
-        // to coder near the TRI_* consts: if three side-by-side panes are too narrow
-        // for 28pt OCR, widen the window or lower the font for THIS test.)
+        // Large font so the rendered glyphs are legible to tesseract. (See the
+        // "Note (OCR width)" paragraph above the TRI_* consts: if three side-by-side
+        // panes are too narrow for 28pt OCR, widen the window or lower the font for
+        // THIS test.)
         .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .status()
         .expect("failed to spawn `cage` for the headless three-pane smoke scenario");
@@ -2004,7 +2381,8 @@ fn three_panes_keep_all_files_visible_under_cage() {
     // OCR the screenshot and assert (loosely) that ALL THREE files' headings render
     // at once — proving the third (same-orientation) split flattened into a row of
     // three panes WITHOUT collapsing the pre-existing right pane (B). The
-    // load-bearing assertion is `tribtwo`: today's bug blanks the right pane B.
+    // load-bearing assertion is `tribtwo`: the pre-n-ary binary model blanked the
+    // right pane B.
     let ocr_text = ocr_to_lowercase(&out_png);
     assert!(
         ocr_text.contains(TRI_OCR_A),

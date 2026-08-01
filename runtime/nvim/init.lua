@@ -41,6 +41,19 @@ end
 --     RECOVER the unsaved edit, then schedule a delete of the consumed swap.
 --   * LIVE / UNCERTAIN owner (owner pid still alive, or the swap was written on a
 --     DIFFERENT host so we cannot probe) -> "e": edit the clean on-disk copy anyway.
+--
+-- LIMIT -- this autocmd does NOT cover every way a swap collision can happen.
+-- Neovim raises SwapExists ONLY where it has armed the choice machinery
+-- (`swap_exists_action ~= SEA_NONE` in findswapname), i.e. on the FILE-LOAD path:
+-- `:edit` -> do_ecmd -> open_buffer -> readfile -> check_need_swap. That covers the
+-- Tier-1 reopen and every user-driven open. It does NOT cover:
+--   * `nvim_buf_set_name`, which creates the swap INSIDE the rename (ml_setname ->
+--     ml_open_file -> findswapname) with the choice machinery unarmed, so a stale
+--     swap there goes straight to the blocking do_dialog ATTENTION modal, and
+--   * changed()'s first-modification ml_open_file, same story.
+-- Both of those are covered instead by NAME AVOIDANCE -- see
+-- `_G.wolf_untitled_swap_exists` and the anonymous-buffer naming section below.
+-- (Upstream: neovim/neovim#23145.)
 local swap_group = vim.api.nvim_create_augroup("WolfSwap", { clear = true })
 vim.api.nvim_create_autocmd("SwapExists", {
 	group = swap_group,
@@ -1587,27 +1600,109 @@ end
 -- re-emit the new name with no extra wiring.
 -- ============================================================================
 
--- Pure name generator. Returns (name, abspath) for the first index i = 1, 2, 3,
--- ... whose name collides with neither a file/dir on disk in `cwd` nor any
--- existing buffer's name (skipping `exclude_buf`, the buffer being (re)named).
---   * i == 1 -> "Untitled.md" (un-numbered); the literal "Untitled 1.md" is
---     never generated.
---   * Disk collision: uv.fs_stat(abspath) ~= nil (file OR dir).
---   * Buffer collision: any valid buffer b ~= exclude_buf (listed OR unlisted,
---     loaded OR unloaded -- all can trigger E95) whose name == abspath.
--- Deliberately does NOT inspect .swp swap files -- only the .md file itself.
+-- Does the OWNER path recorded inside a swap file denote `abspath`?
+--
+-- `swapinfo().fname` is the swap header's b0_fname, which nvim writes through
+-- home_replace: a path under $HOME is stored HOME-RELATIVE, and on Unix the
+-- leading "~/" is further rewritten to "~<username>/". Measured on Linux, the
+-- swap for /home/jplein/Git/jplein/wolf/crates/wolf-gnome/Untitled.md reads back
+-- as "~jplein/Git/jplein/wolf/crates/wolf-gnome/Untitled.md". A plain
+-- `fname == abspath` therefore NEVER matches for a project under $HOME -- which
+-- is every real user project, on both Linux and macOS.
+--
+-- Normalize the STORED value FORWARD to absolute; never normalize the query
+-- backward. `fnamemodify(fname, ":p")` expands "~" / "~user" / "$VAR" (expand_env)
+-- and then makes the name a full path; it is the identity for an already-absolute
+-- path, so branch 3 subsumes branch 2 -- branch 2 is kept because it is the only
+-- one every fixture OUTSIDE $HOME (/tmp, /private/var/folders) exercises.
+--   * NOT vim.fn.expand(): it also does WILDCARD expansion, so a name containing
+--     *, ?, [, { or ` would be mangled.
+--   * NOT fnamemodify(abspath, ":~"): that yields "~/..." and never the
+--     "~<username>/..." form nvim actually stores, so it would never match.
+-- pcall because "~someuser" for a nonexistent user (a swap copied from another
+-- machine) can raise.
+local function swap_fname_matches(fname, abspath)
+	if type(fname) ~= "string" or fname == "" then
+		return false
+	end
+	if fname == abspath then
+		return true
+	end
+	local ok, full = pcall(vim.fn.fnamemodify, fname, ":p")
+	return ok and type(full) == "string" and full == abspath
+end
+
+-- The swap file nvim ITSELF would pick for a buffer named `abspath`, or nil when
+-- WOLF_SWAP_DIR is unset/empty (no Wolf-owned swap dir -> nothing to check).
+--
+-- Because 'directory' ends in "//" (see the top of this file), makeswapname takes
+-- the "use full path" branch: make_percent_swname replaces every path separator in
+-- the full name with "%" and joins it under the swap dir, then modname appends
+-- ".swp". findswapname only raises the ATTENTION dialog for the FIRST candidate --
+-- the ".swp" one -- so this single stat is precisely the test nvim performs.
+local function untitled_swap_file(abspath)
+	local swap_dir = vim.env.WOLF_SWAP_DIR
+	if type(swap_dir) ~= "string" or swap_dir == "" then
+		return nil
+	end
+	local full = abspath
+	if type(full) ~= "string" or full == "" then
+		return nil
+	end
+	if full:sub(1, 1) ~= "/" then
+		local ok, expanded = pcall(vim.fn.fnamemodify, full, ":p")
+		if not ok or type(expanded) ~= "string" or expanded == "" then
+			return nil
+		end
+		full = expanded
+	end
+	-- Collapse repeated separators first: cwd == "/" makes `cwd .. "/" .. name`
+	-- yield "//Untitled.md", which nvim would have normalized before mangling.
+	-- gsub returns TWO values, and "%" is the escape char in the REPLACEMENT, so
+	-- "%%" is a literal "%" -- both calls are parenthesized to keep exactly one.
+	full = (full:gsub("//+", "/"))
+	local mangled = (full:gsub("/", "%%"))
+	local dir = (swap_dir:gsub("/+$", ""))
+	return dir .. "/" .. mangled .. ".swp"
+end
+
 -- Whether a Wolf-owned swap file already exists for `abspath` (i.e. a crashed
--- nvim left unsaved edits for that exact path in WOLF_SWAP_DIR). Scans the swap
--- dir and matches on `swapinfo().fname` — the SAME identity nvim's own SwapExists
--- machinery uses — so it is robust to the `dir//` path-mangled swap filenames.
--- Only the VimEnter STARTUP naming consults this (as an extra collision), so a
--- fresh restart names its own startup buffer `Untitled 2.md` and the Tier-1 reopen
--- of `<cwd>/Untitled.md` recovers the crashed edit into its own buffer instead of
--- being shadowed. Never used by Cmd-N (`wolf_new_untitled`) or `Chdir`.
+-- nvim left unsaved edits for that exact path in WOLF_SWAP_DIR). TWO criteria,
+-- either of which counts:
+--
+--   (a) EXACT, and O(1): stat the "%"-mangled name nvim's own findswapname would
+--       test (see untitled_swap_file). This is the criterion that matters for the
+--       blocking dialog, and it cannot be defeated by an unreadable / truncated /
+--       b0-less swap file, which the swapinfo() scan below can.
+--   (b) BROADER: scan the swap dir and compare each swap's RECORDED owner path
+--       (swapinfo().fname, via swap_fname_matches) against `abspath`. Kept because
+--       the documented contract is broader than the dialog -- a .swo/.swn leftover
+--       still holds recoverable edits though it would not raise a dialog -- and
+--       because it is the fallback if the "%"-mangling ever drifts from nvim's
+--       (e.g. a symlinked cwd where fix_fname differs from getcwd()).
+--
+-- NOTE: nvim's own SwapExists machinery matches on the swap FILE NAME derived from
+-- b_ffname, NOT on b0_fname; b0_fname is the home_replace'd owner path. The two
+-- criteria above are those two identities, in that order.
+--
+-- Consulted by EVERY naming call site (startup VimEnter, Cmd-N, Chdir) so that
+-- naming a buffer can never walk into the ATTENTION modal, and so a fresh restart
+-- names its own startup buffer `Untitled 2.md` while the Tier-1 reopen of
+-- `<cwd>/Untitled.md` recovers the crashed edit into its own buffer instead of
+-- being shadowed.
 function _G.wolf_untitled_swap_exists(abspath)
 	local uv = vim.uv or vim.loop
+	if not uv then
+		return false
+	end
+	-- (a) The exact file nvim would find.
+	local exact = untitled_swap_file(abspath)
+	if exact ~= nil and uv.fs_stat(exact) ~= nil then
+		return true
+	end
+	-- (b) The owner-path scan.
 	local swap_dir = vim.env.WOLF_SWAP_DIR
-	if not uv or swap_dir == nil or swap_dir == "" then
+	if swap_dir == nil or swap_dir == "" then
 		return false
 	end
 	local fs = uv.fs_scandir(swap_dir)
@@ -1620,17 +1715,29 @@ function _G.wolf_untitled_swap_exists(abspath)
 			break
 		end
 		local ok, info = pcall(vim.fn.swapinfo, swap_dir .. "/" .. name)
-		if ok and type(info) == "table" and info.fname == abspath then
+		if ok and type(info) == "table" and swap_fname_matches(info.fname, abspath) then
 			return true
 		end
 	end
 	return false
 end
 
+-- Pure name generator. Returns (name, abspath) for the first index i = 1, 2, 3,
+-- ... whose name collides with neither a file/dir on disk in `cwd` nor any
+-- existing buffer's name (skipping `exclude_buf`, the buffer being (re)named).
+--   * i == 1 -> "Untitled.md" (un-numbered); the literal "Untitled 1.md" is
+--     never generated.
+--   * Disk collision: uv.fs_stat(abspath) ~= nil (file OR dir).
+--   * Buffer collision: any valid buffer b ~= exclude_buf (listed OR unlisted,
+--     loaded OR unloaded -- all can trigger E95) whose name == abspath.
+-- Deliberately does NOT inspect .swp swap files on its own -- only the .md file
+-- itself; swap-existence arrives via `extra_collision`.
+--
 -- `extra_collision` (optional): a predicate `abspath -> bool` treated as an
--- ADDITIONAL collision source on top of the on-disk and in-buffer checks. Used
--- ONLY by the VimEnter startup naming (swap-existence); nil for Cmd-N / Chdir, so
--- their collision rules are unchanged.
+-- ADDITIONAL collision source on top of the on-disk and in-buffer checks. Every
+-- caller now passes `_G.wolf_untitled_swap_exists` (the callers default it, see
+-- wolf_name_untitled_current / wolf_new_untitled); it stays a parameter so this
+-- generator remains pure and testable.
 function _G.wolf_next_untitled(cwd, exclude_buf, extra_collision)
 	local uv = vim.uv or vim.loop
 	local i = 1
@@ -1669,7 +1776,24 @@ end
 -- collision walk, advancing the index); after a few attempts it bails gracefully
 -- (leaves the buffer unnamed rather than raising).
 -- `extra_collision` (optional) is forwarded to `wolf_next_untitled` (see there);
--- nil for every caller except the VimEnter startup naming.
+-- every caller defaults it to `_G.wolf_untitled_swap_exists`.
+--
+-- The `pcall` around nvim_buf_set_name protects ONLY against E95 (a duplicate
+-- buffer name). It gives ZERO protection against a stale swap: nvim_buf_set_name
+-- creates the swap file inside the rename (ml_setname -> ml_open_file ->
+-- findswapname) and, finding one, raises a BLOCKING do_dialog ATTENTION prompt --
+-- not an error, so pcall returns true while the editor sits in MODE_CONFIRM eating
+-- keystrokes. `extra_collision` (name avoidance) is the only defence; see
+-- `_G.wolf_untitled_swap_exists`.
+--
+-- 'swapfile' is deliberately LEFT ON here, so the swap is created EAGERLY at
+-- naming time: that atomically CLAIMS the name against a sibling nvim in the same
+-- project, and it is what makes an unsaved Untitled buffer crash-recoverable at
+-- all. `setlocal noswapfile` on this buffer is FORBIDDEN -- it would break the
+-- recovery promise pinned by `crates/wolf-core/tests/swap_recovery.rs`
+-- (restart_recovers_unsaved_untitled_buffer) and `crates/wolf-core/tests/
+-- nvim_restart.rs`, and it would not even fix the dialog: it merely defers
+-- ml_open_file to changed(), i.e. moves the modal onto the user's FIRST keystroke.
 function _G.wolf_name_untitled(buf, extra_collision)
 	local cwd = vim.fn.getcwd()
 	for _ = 1, 8 do
@@ -1690,9 +1814,14 @@ end
 -- it carried a real name (e.g. an earlier Untitled.md), stays LISTED (a named
 -- buffer is buflisted by default and :enew does not wipe it), so the collision
 -- walk yields Untitled 2.md, then Untitled 3.md across repeated calls.
+--
+-- Passes the swap check too (see wolf_name_untitled_current for why that is a
+-- no-op in-session): otherwise the mid-session sequence crash -> relaunch (startup
+-- correctly takes Untitled 2.md) -> Cmd-N would find `Untitled.md` free by the
+-- buffer/disk rules, name it, and walk straight into the same blocking modal.
 function _G.wolf_new_untitled()
 	vim.cmd("enew")
-	wolf_name_untitled(vim.api.nvim_get_current_buf())
+	wolf_name_untitled(vim.api.nvim_get_current_buf(), _G.wolf_untitled_swap_exists)
 end
 
 -- GUARDED re-home of the CURRENT buffer into cwd as an Untitled name. Proceeds
@@ -1701,9 +1830,15 @@ end
 -- NOT yet on disk (so a real, saved file is never renamed). Used by the Chdir arm
 -- (opening a folder from the empty state names the buffer Untitled.md IN the
 -- opened folder) and by the VimEnter autocmd (first-launch / launch-on-folder).
--- `extra_collision` (optional) is forwarded to the naming path; only the VimEnter
--- startup caller passes it (swap-existence), so opening a folder via Chdir keeps
--- the plain collision rules.
+-- `extra_collision` (optional) is forwarded to the naming path; when nil it
+-- DEFAULTS to `_G.wolf_untitled_swap_exists`, so Chdir gets the same swap
+-- avoidance the VimEnter startup naming has always had.
+--
+-- Behaviour-preserving in-session: every named `Untitled N.md` buffer owns its own
+-- swap, so the swap check only ever adds a collision for a name that ALREADY
+-- collides via the buffer-name check, and a :bwipeout'ed buffer has its swap
+-- deleted by nvim. The net effect is only against swaps left by a PREVIOUS, dead
+-- nvim -- exactly the case that raises the modal.
 function _G.wolf_name_untitled_current(extra_collision)
 	local uv = vim.uv or vim.loop
 	if vim.bo.buftype ~= "" or vim.bo.modified then
@@ -1726,7 +1861,7 @@ function _G.wolf_name_untitled_current(extra_collision)
 		end
 	end
 	if ok then
-		wolf_name_untitled(buf, extra_collision)
+		wolf_name_untitled(buf, extra_collision or _G.wolf_untitled_swap_exists)
 	end
 end
 
@@ -1736,14 +1871,31 @@ end
 -- restored buffers (modified / a non-empty non-Untitled name) and off buffers
 -- opened for a real file passed on the command line.
 --
--- Restart-shadow guard: after a crash-restart the fresh nvim's startup buffer is
--- named WITHOUT loading it (nvim_buf_set_name skips the swap check). If a crashed
--- nvim left a swap for `<cwd>/Untitled.md`, naming THIS buffer that same name would
--- shadow the Tier-1 reopen `:e <cwd>/Untitled.md` (it would merely switch to the
--- already-named empty buffer, SwapExists never fires, unsaved edits lost). So the
--- STARTUP naming ONLY treats an existing swap for a candidate name as a collision,
--- yielding `Untitled 2.md` here and letting the reopen recover cleanly into its own
--- buffer. Cmd-N / Chdir naming is unaffected (they pass no swap check).
+-- Swap-collision guard (TWO reasons, both load-bearing after a crash-restart):
+--
+-- 1. THE BLOCKING MODAL. nvim_buf_set_name does NOT skip the swap check. It
+--    renames via setfname -> buf_name_changed -> ml_setname, whose first branch
+--    reads: if there is no swapfile yet and 'updatecount' is nonzero and the
+--    buffer is swapfile-enabled, call ml_open_file(buf) -- so the swap is CREATED
+--    INSIDE the rename, findswapname runs, and a stale `%...%Untitled.md.swp` is
+--    found. SwapExists does NOT fire there (nvim only raises it where it has armed
+--    the choice machinery, i.e. the file-load path; upstream neovim/neovim#23145),
+--    so nvim goes straight to the blocking do_dialog ATTENTION prompt. That prompt
+--    is not an error -- the surrounding pcall returns true -- it just sits in
+--    MODE_CONFIRM ("r?") swallowing the user's keystrokes until an O/E/R/Q/A/D
+--    answer arrives. THIS is why the check exists; without it the first thing a
+--    user types after a crash-restart disappears.
+-- 2. RESTART SHADOW. If a crashed nvim left a swap for `<cwd>/Untitled.md`, naming
+--    THIS buffer that same name would also shadow the Tier-1 reopen
+--    `:e <cwd>/Untitled.md` (it would merely switch to the already-named empty
+--    buffer, SwapExists never fires, unsaved edits lost).
+--
+-- So an existing swap for a candidate name counts as a collision, yielding
+-- `Untitled 2.md` here and letting the reopen recover cleanly into its own buffer.
+-- Cmd-N and Chdir apply the SAME check (they default it, see
+-- wolf_new_untitled / wolf_name_untitled_current) -- reason 1 is reachable from
+-- them too, and in-session the check adds no collision the buffer-name check does
+-- not already produce.
 vim.api.nvim_create_autocmd("VimEnter", {
 	group = vim.api.nvim_create_augroup("WolfUntitled", { clear = true }),
 	callback = function()

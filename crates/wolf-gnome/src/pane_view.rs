@@ -150,6 +150,16 @@ impl PaneInner {
     }
 
     /// Drains and applies all pending layout intents (splits + focus moves).
+    ///
+    /// [`LayoutIntent::DrawerOpen`] is drained and DROPPED: the terminal drawer is
+    /// a macOS-only front-end feature today (`wolf-macos` renders it as a
+    /// full-width, root-bottom pane held outside the pure `PaneTree`). wolf-gnome
+    /// exposes no way to reach it — it binds no `wolf_toggle_terminal` trigger — so
+    /// this arm is unreachable in practice. It exists so that adding a variant to
+    /// the shared `wolf_core::LayoutIntent` cannot silently break the GTK build,
+    /// and so the drop is a deliberate, documented decision rather than a `_`
+    /// wildcard that would swallow the NEXT variant too. Building the GTK drawer is
+    /// tracked as a wolf-gnome gap (see `crates/wolf-gnome/src/README.md`).
     fn apply_intents(self: &Rc<Self>) {
         let intents = {
             let core_ref = self.core.borrow();
@@ -166,6 +176,7 @@ impl PaneInner {
                     win,
                 } => self.apply_split(orientation, from, win),
                 LayoutIntent::FocusDir { dir, from } => self.apply_focus(dir, from),
+                LayoutIntent::DrawerOpen { .. } => {}
             }
         }
     }
@@ -431,11 +442,7 @@ impl PaneInner {
             return;
         };
         let snap = core.read_snapshot();
-        let grid_id = self
-            .panes
-            .borrow()
-            .get(&pane_id)
-            .and_then(|p| p.grid.get());
+        let grid_id = self.panes.borrow().get(&pane_id).and_then(|p| p.grid.get());
         let grid = grid_id
             .and_then(|g| snap.grid(g))
             .unwrap_or_else(|| snap.active_grid());
@@ -449,11 +456,7 @@ impl PaneInner {
 
     /// Handles a pane area resize: resize the pane's own grid, then the global grid.
     fn on_pane_resize(&self, pane_id: PaneId, width: i32, height: i32) {
-        let grid = self
-            .panes
-            .borrow()
-            .get(&pane_id)
-            .and_then(|p| p.grid.get());
+        let grid = self.panes.borrow().get(&pane_id).and_then(|p| p.grid.get());
         if let Some(grid) = grid {
             if width > 0 && height > 0 {
                 let (cols, rows) =
@@ -618,10 +621,7 @@ impl PaneHandle {
 /// Builds the pane view (container, pane area host, cmdline strip) and returns a
 /// [`PaneHandle`]. No panes exist until the first window grid appears on a wake.
 #[must_use]
-pub fn build(
-    core: &Rc<RefCell<Option<WolfCore>>>,
-    metrics: &Rc<CellMetrics>,
-) -> PaneHandle {
+pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) -> PaneHandle {
     install_pane_css();
 
     let cmdline_area = gtk::DrawingArea::builder()
@@ -677,7 +677,8 @@ fn draw_cursor(cr: &cairo::Context, snap: &Snapshot, metrics: &CellMetrics) {
 
     let cell_x = snap.cursor.col as f64 * metrics.cell_w;
     let cell_y = snap.cursor.row as f64 * metrics.cell_h;
-    let (x, y, w, h) = cursor::cursor_rect(shape, cell_x, cell_y, metrics.cell_w, metrics.cell_h, pct);
+    let (x, y, w, h) =
+        cursor::cursor_rect(shape, cell_x, cell_y, metrics.cell_w, metrics.cell_h, pct);
 
     cr.set_source_rgb(
         f64::from(fill.r) / RGB_MAX,
@@ -706,7 +707,9 @@ fn build_layout_widget(
     panes: &HashMap<PaneId, PaneWidgets>,
 ) -> Option<gtk::Widget> {
     match layout {
-        PaneLayout::Leaf(id) => panes.get(id).map(|p| p.area.clone().upcast::<gtk::Widget>()),
+        PaneLayout::Leaf(id) => panes
+            .get(id)
+            .map(|p| p.area.clone().upcast::<gtk::Widget>()),
         PaneLayout::Split {
             orientation,
             children,

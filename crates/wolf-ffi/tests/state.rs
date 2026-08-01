@@ -234,11 +234,7 @@ fn snapshot_builder_round_trips_the_whole_tree() {
         );
         let restored = wolf_ffi_load_state();
         let windows = restored.windows();
-        if windows.len() == TWO_WINDOWS
-            && windows[1]
-                .tabs()
-                .last()
-                .is_some_and(|t| t.has_layout())
+        if windows.len() == TWO_WINDOWS && windows[1].tabs().last().is_some_and(|t| t.has_layout())
         {
             break restored;
         }

@@ -33,13 +33,19 @@ Do not use a system `cargo`/`rustc`/`nvim`. The toolchain and the Neovim binary 
 cargo build        # builds the whole workspace
 ```
 
+The verification gate below uses `cargo build --workspace --all-targets` instead, which additionally compiles the integration-test binaries and `crates/wolf-core/examples/grid_dump.rs`. Plain `cargo build` does not.
+
 ### Testing
 
 ```sh
-cargo test         # unit + integration tests for wolf-core
+cargo test         # unit + integration tests for the whole workspace
 ```
 
-The integration tests spawn the **pinned** Neovim (via `WOLF_NVIM_BIN`) as a real child process — there are no mocks, per the project's testing policy. They are fully **headless**: `nvim --embed` speaks msgpack-RPC over stdio and needs no TTY, so the suite is CI-safe. The tests fail loudly (they do not silently pass) if `WOLF_NVIM_BIN` is unset.
+At the workspace root (a virtual manifest) this runs **every** member — `wolf-core`, `wolf-ffi` and `wolf-gnome` — not just `wolf-core`. See "The Linux verification gate" below for the authoritative full check.
+
+The integration tests spawn the **pinned** Neovim (via `WOLF_NVIM_BIN`) as a real child process — there are no mocks, per the project's testing policy. The `wolf-core` and `wolf-ffi` integration tests are fully **headless**: `nvim --embed` speaks msgpack-RPC over stdio and needs no TTY, so that part of the suite is CI-safe. The tests fail loudly (they do not silently pass) if `WOLF_NVIM_BIN` is unset.
+
+The nine `wolf-gnome` cage smokes in `crates/wolf-gnome/tests/smoke_headless.rs` are the exception worth knowing about. They are headless in the _display_ sense — `cage` is a headless wlroots compositor — but they are not toolchain-free: they additionally need `cage`, `wtype`, `grim` and `tesseract` plus a writable `XDG_RUNTIME_DIR`, all of which the flake devShell provides. Like the rest of the suite they fail loud rather than skipping when that toolchain is absent, because a miss there means the suite was run outside the devShell.
 
 You can also run the headless smoke example, which starts the core, types a little text, and dumps the resulting grid:
 
@@ -47,9 +53,60 @@ You can also run the headless smoke example, which starts the core, types a litt
 cargo run -p wolf-core --example grid_dump
 ```
 
+## The Linux verification gate
+
+This is the complete definition of "Linux is green": formatting, Markdown formatting, clippy, the workspace build, and the whole test suite including the nine `wolf-gnome` cage smokes. Unlike the macOS `//tools/lint` targets — which are advisory and `manual`-tagged — **this gate is gating**: `-D warnings` is on unconditionally and every step must exit 0.
+
+Run from the repo root:
+
+```sh
+nix develop --command cargo fmt --all -- --check
+nix develop --command prettier --check "**/*.md"
+nix develop --command cargo clippy --workspace --all-targets -- -D warnings
+nix develop --command cargo build --workspace --all-targets
+nix develop --command cargo test --workspace
+```
+
+Or as a single fail-fast invocation with one flake evaluation:
+
+```sh
+nix develop --command bash -c '
+  set -euo pipefail
+  cargo fmt --all -- --check
+  prettier --check "**/*.md"
+  cargo clippy --workspace --all-targets -- -D warnings
+  cargo build --workspace --all-targets
+  cargo test --workspace
+'
+```
+
+| Check           | Command                                                                       | Fix                                                                      |
+| --------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| rustfmt         | `nix develop --command cargo fmt --all -- --check`                            | `nix develop --command cargo fmt --all`                                  |
+| Markdown format | `nix develop --command prettier --check "**/*.md"`                            | `nix develop --command prettier --write "**/*.md"`                       |
+| clippy          | `nix develop --command cargo clippy --workspace --all-targets -- -D warnings` | fix the finding; `#[allow(…, reason = "…")]` only when the lint is wrong |
+| build           | `nix develop --command cargo build --workspace --all-targets`                 | —                                                                        |
+| tests           | `nix develop --command cargo test --workspace`                                | —                                                                        |
+
+The order is deliberate: the two format checks compile nothing and finish in seconds, so a stray blank line fails the gate immediately rather than after a twelve-minute compile; clippy runs before the build because it compiles the same dependency graph the build then reuses, so running it first surfaces the biggest work item earliest at no extra cost; the build precedes the tests so a compile error in a test file is reported as a build failure rather than mid-run; and the test step is last because it is by far the longest and the only one with external side effects.
+
+Notes:
+
+- **Everything runs through `nix develop --command`.** This is not optional. After a `flake.nix` edit the already-loaded direnv environment is stale — it will not have the newly added tools on `PATH` — and `nix develop` re-evaluates the flake. The toolchain (`cargo` / `rustc` / `clippy` / `rustfmt`), `nvim` (`WOLF_NVIM_BIN`), `rg` (`WOLF_RG_BIN`), the GTK stack, the pinned DejaVu `FONTCONFIG_FILE`, the cage/wtype/grim/tesseract smoke toolchain and `prettier` all come from the devShell. Never a system binary.
+- **`--all-targets` on clippy is load-bearing.** Without it clippy lints only `--lib` and `--bins`; every `tests/*.rs` and every `#[cfg(test)] mod tests` goes unlinted. Since `smoke_headless.rs` is now a first-class gating test, it has to be clippy-clean too.
+- **`--all-targets` on build** compiles the integration-test binaries and `crates/wolf-core/examples/grid_dump.rs`, so a test-file compile error surfaces as a clean build failure.
+- **`cargo test --workspace` deliberately omits `--all-targets`**, which would silently drop doctests.
+- **`cargo test --workspace` includes the nine cage smokes.** They are no longer `#[ignore]`d, they need a compositor plus an OCR toolchain, and they serialize behind a shared mutex, so they are the slowest part of the suite. Expect roughly 10-25 minutes for a cold full gate.
+- **Prettier scope** is `**/*.md` minus [`.prettierignore`](.prettierignore), which excludes `target/`, `.direnv/`, `.worktrees/`, `bazel-*/`, `node_modules/`, `.claude/` (orchestration scratch), and `feat-list-workflow.md` (the feat-list workflow's own procedure document, whose formatting that workflow dictates). `feat-list.md` is deliberately **in** scope — it is maintained project documentation. `.direnv/` in particular _must_ stay excluded: it symlinks into `/nix/store`, and prettier's globber follows symlinks. Quote the glob so the shell does not expand it — prettier expands it internally and only then applies `.prettierignore`.
+- **`--ignored` now means only one thing.** `cargo test -p wolf-gnome -- --ignored` no longer runs the smokes. The single remaining `#[ignore]` in the repo is `regenerate_png_golden` in `crates/wolf-gnome/tests/paint_golden.rs`, which **rewrites** `crates/wolf-gnome/tests/testdata/paint_golden.png` in the source tree. If you have the old muscle memory, that command now does nothing but rewrite a golden.
+- **Narrow iteration loops** — convenience only, _not_ extra gate steps: `nix develop --command cargo test -p wolf-gnome`, `nix develop --command cargo test -p wolf-gnome --test smoke_headless`, `nix develop --command cargo clippy -p wolf-gnome --all-targets -- -D warnings`. The `--test smoke_headless` target reports **`10 passed`**, not `9`: alongside the nine cage smokes that file carries one pure, compositor-free guard on the smokes' own OCR fixture (`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`), which needs no toolchain.
+- **macOS is not covered here.** Nothing in this gate builds or tests `wolf-macos` or exercises the Bazel graph. See "Linting and formatting (macOS)" below, and [macos-followups.md](macos-followups.md) for Linux-branch work still awaiting re-verification on a macOS host.
+
 ## Building on macOS (Bazel)
 
 On macOS the canonical build tool is **Bazel**, driven by **bazelisk**, and it builds with the **host Xcode SDK** (not the older SDK shipped inside Nix). It builds `wolf-core`, the `wolf-ffi` swift-bridge crate, and the `wolf-macos` AppKit `.app` (see "Building the macOS app" below). The `.app` bundles its own pinned Neovim 0.12.3 (see "Bundled Neovim (macOS)" below), so the packaged app no longer needs `WOLF_NVIM_BIN` to run.
+
+None of this can be built or verified from the Linux devShell. Work done on Linux-only branches that still needs re-checking here is logged in [macos-followups.md](macos-followups.md).
 
 ### Prerequisites
 
@@ -368,6 +425,8 @@ Tests run in the **default** configuration, not `-c opt`. `bazel test -c opt //c
 ## Linting and formatting (macOS)
 
 Advisory (non-gating) lint/format targets live in `//tools/lint` and run on the macOS Bazel host: **clippy** and **rustfmt** for Rust (via the rules_rust downloaded 1.85.0 toolchain — the devShell has no standalone cargo/rustc) and **swift-format** for Swift (the host Xcode 26 binary, resolved via `xcrun --find swift-format`).
+
+This section covers macOS only. Linux has its own path, and the asymmetry is deliberate: these Bazel targets are advisory and `manual`-tagged with `-Dwarnings` opt-in via `--config=lint`, whereas "The Linux verification gate" above is **gating** and applies `-D warnings` unconditionally. `swift-format` has no Linux counterpart (no Swift in the Linux devShell), and the gate's prettier Markdown check has no macOS/Bazel counterpart today.
 
 These targets are **advisory**: every one is tagged `manual`, so a wildcard `bazel test //...` (or `//crates/...`) never sweeps them in and the standard test path stays byte-for-byte unchanged. They are NOT run in CI gating here; existing violations are expected. A CHECK target "passing" means "the linter ran"; it may still report findings (which fail the target). See [`tools/lint/README.md`](tools/lint/README.md).
 

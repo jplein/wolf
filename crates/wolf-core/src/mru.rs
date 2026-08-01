@@ -17,9 +17,20 @@
 //! - [`MruStore::recent`] returns the most-recently-opened files for a directory
 //!   newest-first, pruning any whose backing file has since been deleted (both
 //!   from the result AND from the cache, in the same connection).
-//! - Any open/schema/query failure is handled SILENTLY: the sqlite file (plus its
-//!   `-wal`/`-shm` sidecars) is deleted and the schema recreated. Nothing panics,
-//!   no error is propagated, and the only log is `tracing::debug!` (never `warn!`).
+//! - Every failure is handled SILENTLY — nothing panics, no error is propagated,
+//!   and the only log is `tracing::debug!` (never `warn!`) — but the RESPONSE
+//!   depends on WHY it failed (see [`warrants_recreate`]):
+//!   - A CORRUPT or SCHEMA-INCOMPATIBLE database (`SQLITE_CORRUPT`,
+//!     `SQLITE_NOTADB`, `SQLITE_SCHEMA`, or the `no such table`/`no such column`
+//!     that this module's schema probe raises) is unusable as it stands, so the
+//!     sqlite file plus its `-wal`/`-shm` sidecars is deleted and the schema
+//!     recreated.
+//!   - Any OTHER failure — most importantly a transient `SQLITE_BUSY`/
+//!     `SQLITE_LOCKED` from another Wolf window opening the same store — degrades
+//!     to an empty result or a dropped record and NEVER deletes the file. Deleting
+//!     a merely-busy database would unlink it from under every other live
+//!     connection in the process and silently wipe the user's entire recent-files
+//!     history.
 //!
 //! Unlike the sibling stores, ordering is by an `opened_at` millisecond timestamp
 //! (most-recent first, `rowid DESC` tiebreak) rather than a monotonic `seq`, and
@@ -47,7 +58,8 @@ pub const MRU_LIMIT: usize = 50;
 const MRU_DB_NAME: &str = "file-mru.sqlite";
 
 /// SQLite `busy_timeout` (milliseconds) so concurrent opens back off rather than
-/// fail immediately with `SQLITE_BUSY`.
+/// fail immediately with `SQLITE_BUSY`. Installed as the FIRST statement after
+/// `Connection::open` — see [`init`].
 const MRU_BUSY_TIMEOUT_MS: u32 = 2000;
 
 /// The global recent-files MRU cache: an optional directory (the store is a no-op
@@ -68,8 +80,9 @@ impl MruStore {
     ///
     /// Infallible: it stores `dir` and eagerly opens/creates the database via
     /// `open_or_heal` (so the file exists right after `open`). Any failure to open
-    /// is silent — the connection is left `None` and lazily retried (with a heal)
-    /// on the next `record`/`recent`. Does NOT create any `.wolf` directory under a
+    /// is silent — the connection is left `None` and retried on the next
+    /// `record`/`recent` (recreating the file only if it is corrupt or
+    /// schema-incompatible; see `warrants_recreate`). Does NOT create any `.wolf` directory under a
     /// project directory; the MRU lives entirely under `dir`.
     #[must_use]
     pub fn open(dir: &Path) -> MruStore {
@@ -183,15 +196,19 @@ impl MruStore {
     }
 
     /// The single lock + self-heal choke point: runs `f` against the (lazily
-    /// (re)opened) connection, healing once on a runtime error.
+    /// (re)opened) connection, recreating the database once IF the failure means
+    /// the file is unusable.
     ///
-    /// Returns `None` for a disabled store or when the connection cannot be opened
-    /// even after a heal. The mutex guard is locked into a NAMED LOCAL (never held
-    /// in a `match`/`if let` scrutinee) so `clippy::significant_drop_in_scrutinee`
-    /// does not fire and the guard's lifetime is explicit. On the first `Err` from
-    /// `f`, the connection is dropped, the DB files are deleted, the store is
-    /// reopened, and `f` is retried ONCE; a second `Err` is swallowed at
-    /// `tracing::debug!` and returns `None`.
+    /// Returns `None` for a disabled store or when the connection cannot be opened.
+    /// The mutex guard is locked into a NAMED LOCAL (never held in a `match`/
+    /// `if let` scrutinee) so `clippy::significant_drop_in_scrutinee` does not fire
+    /// and the guard's lifetime is explicit. On a first `Err` from `f` that
+    /// [`warrants_recreate`], the connection is dropped, the DB files are deleted,
+    /// the store is reopened, and `f` is retried ONCE; a second `Err` is swallowed
+    /// at `tracing::debug!` and returns `None`. Any OTHER `Err` — a transient busy
+    /// / locked / I/O failure — is swallowed at `tracing::debug!` and returns
+    /// `None` while LEAVING BOTH the file and the open connection alone, so the
+    /// next call simply tries again.
     fn with_conn<T>(&self, f: impl Fn(&Connection) -> rusqlite::Result<T>) -> Option<T> {
         let dir = self.dir.as_ref()?;
 
@@ -203,8 +220,11 @@ impl MruStore {
 
         match f(conn) {
             Ok(v) => Some(v),
-            Err(first) => {
-                tracing::debug!(error = %first, "file-mru query failed; healing DB");
+            Err(first) if warrants_recreate(&first) => {
+                tracing::debug!(
+                    error = %first,
+                    "file-mru DB corrupt or schema-incompatible; recreating"
+                );
                 // Drop the bad connection, delete the files, and reopen fresh.
                 *guard = None;
                 remove_db_files(&db_path(dir));
@@ -215,11 +235,18 @@ impl MruStore {
                     Err(second) => {
                         tracing::debug!(
                             error = %second,
-                            "file-mru query failed again after heal; giving up"
+                            "file-mru query failed again after recreating; giving up"
                         );
                         None
                     }
                 }
+            }
+            Err(first) => {
+                tracing::debug!(
+                    error = %first,
+                    "file-mru query failed transiently; leaving the DB untouched"
+                );
+                None
             }
         }
     }
@@ -230,17 +257,29 @@ fn db_path(dir: &Path) -> PathBuf {
     dir.join(MRU_DB_NAME)
 }
 
-/// Opens the database at `db_path`, enabling WAL journaling + a busy timeout,
-/// ensuring the `mru` table exists, and PROBING it.
+/// Opens the database at `db_path`, installing a busy timeout, enabling WAL
+/// journaling, ensuring the `mru` table exists, and PROBING it.
+///
+/// The pragma ORDER is load-bearing: `busy_timeout` MUST be installed before
+/// `journal_mode=WAL`, because the rollback-journal -> WAL conversion is the one
+/// statement here that can need an exclusive lock, and a connection with no
+/// back-off installed fails it immediately with `SQLITE_BUSY` when several handles
+/// open the same not-yet-converted database at once. (`rusqlite` happens to install
+/// a default busy timeout of its own inside `Connection::open`, so this ordering is
+/// belt-and-braces rather than the sole line of defence — but the invariant must not
+/// depend on a dependency's implementation detail, and only this pragma makes
+/// [`MRU_BUSY_TIMEOUT_MS`] the value actually in force during the conversion.)
 ///
 /// The probe (`SELECT directory, file, opened_at FROM mru LIMIT 0`) is REQUIRED: a
 /// pre-existing `mru` table with the OLD single-`path` schema survives
 /// `CREATE TABLE IF NOT EXISTS`, so only a query referencing the new columns forces
-/// the wrong-schema case to surface as an `Err` that the caller heals.
+/// the wrong-schema case to surface as an `Err` that the caller heals. It surfaces
+/// as `SQLITE_ERROR` + `no such column`, which [`warrants_recreate`] classifies as
+/// recreate-worthy.
 fn init(db_path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(db_path)?;
-    conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "busy_timeout", MRU_BUSY_TIMEOUT_MS)?;
+    conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.execute(
         "CREATE TABLE IF NOT EXISTS mru (\
              directory TEXT NOT NULL, \
@@ -256,18 +295,71 @@ fn init(db_path: &Path) -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
-/// Opens the database under `dir`, self-healing ONCE on failure.
+/// Whether `err` means the database on disk is UNUSABLE AS IT STANDS and must be
+/// deleted and recreated, as opposed to a transient failure that will pass.
 ///
-/// Creates `dir` (best-effort), then tries [`init`]. On failure it deletes the DB
-/// files ([`remove_db_files`]) and tries [`init`] ONCE more; a second failure logs
-/// at `tracing::debug!` and returns `None`. Never panics, never propagates.
+/// This is the guard on the store's only destructive operation
+/// ([`remove_db_files`]). Deleting the file unlinks it from under every other live
+/// connection in the process — on Linux those connections keep writing to the
+/// now-unreachable inode — so recreating for a merely-busy database silently wipes
+/// the user's whole recent-files history the moment a second Wolf window opens the
+/// same store. Mirrors the identically-named private classifier in
+/// [`crate::recent_dirs`] and [`crate::command_mru`]; the three are deliberately
+/// duplicated rather than shared, so each store's classification stays readable next
+/// to the schema probe that feeds it.
+///
+/// Recreate-worthy:
+/// - `SQLITE_CORRUPT` / `SQLITE_NOTADB`: a damaged file or one that is not a
+///   SQLite database at all (e.g. truncated by a crash, or garbage bytes).
+/// - `SQLITE_SCHEMA`: the schema changed underneath a prepared statement.
+/// - `SQLITE_ERROR` (`ErrorCode::Unknown`) whose message names a missing table or
+///   column: the WRONG-SCHEMA case that [`init`]'s probe exists to raise, e.g. a
+///   database left by an older Wolf with the single-`path` `mru` table.
+///
+/// Everything else — `SQLITE_BUSY`, `SQLITE_LOCKED`, I/O failures, read-only or
+/// full disks, and every variant that carries no SQLite error code at all — is
+/// `false`: back off and leave the file alone.
+fn warrants_recreate(err: &rusqlite::Error) -> bool {
+    // BOTH error variants must be classified. `rusqlite` splits a failure that
+    // SQLite can attribute to a byte offset in the SQL text out into
+    // `SqlInputError` instead of `SqliteFailure`, and that is exactly the shape
+    // the schema probe's `prepare` raises — matching only `SqliteFailure` here
+    // would silently disable the wrong-schema recreation path.
+    let (ffi_err, msg) = match err {
+        rusqlite::Error::SqliteFailure(ffi_err, msg) => (ffi_err, msg.as_deref()),
+        rusqlite::Error::SqlInputError { error, msg, .. } => (error, Some(msg.as_str())),
+        _ => return false,
+    };
+    match ffi_err.code {
+        rusqlite::ErrorCode::DatabaseCorrupt
+        | rusqlite::ErrorCode::NotADatabase
+        | rusqlite::ErrorCode::SchemaChanged => true,
+        rusqlite::ErrorCode::Unknown => {
+            msg.is_some_and(|m| m.contains("no such table") || m.contains("no such column"))
+        }
+        _ => false,
+    }
+}
+
+/// Opens the database under `dir`, recreating it ONCE if — and only if — the
+/// failure means the file itself is unusable ([`warrants_recreate`]).
+///
+/// Creates `dir` (best-effort), then tries [`init`]. On a recreate-worthy failure
+/// it deletes the DB files ([`remove_db_files`]) and tries [`init`] ONCE more; a
+/// second failure logs at `tracing::debug!` and returns `None`. On any OTHER
+/// failure it logs and returns `None` WITHOUT touching the file: the handle is
+/// simply disabled for now, and `with_conn` retries the open on the next
+/// `record`/`recent`. Never panics, never propagates.
 fn open_or_heal(dir: &Path) -> Option<Connection> {
     let _ = std::fs::create_dir_all(dir);
     let db = db_path(dir);
     match init(&db) {
         Ok(conn) => Some(conn),
-        Err(first) => {
-            tracing::debug!(error = %first, "file-mru DB unusable; recreating");
+        Err(first) if warrants_recreate(&first) => {
+            tracing::debug!(
+                error = %first,
+                "file-mru DB corrupt or schema-incompatible; recreating"
+            );
             remove_db_files(&db);
             match init(&db) {
                 Ok(conn) => Some(conn),
@@ -279,6 +371,13 @@ fn open_or_heal(dir: &Path) -> Option<Connection> {
                     None
                 }
             }
+        }
+        Err(first) => {
+            tracing::debug!(
+                error = %first,
+                "file-mru DB temporarily unavailable; leaving it untouched and retrying later"
+            );
+            None
         }
     }
 }

@@ -1,0 +1,18 @@
+# Build + environment output — never source.
+target/
+.direnv/
+.worktrees/
+bazel-*/
+node_modules/
+
+# Orchestration scratch, not project documentation. `.claude/current-plan.md`
+# is rewritten every task; formatting it is churn, and a dirty scratch file
+# must never be able to fail the Linux verification gate.
+.claude/
+
+# The feat-list workflow's own procedure document. Its formatting is dictated by
+# that workflow rather than by prettier, so reformatting it would fight the tool
+# that owns it. `feat-list.md` -- the document the workflow PRODUCES -- is
+# deliberately NOT excluded: it is maintained project documentation and stays in
+# the format gate's scope.
+feat-list-workflow.md

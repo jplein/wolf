@@ -86,9 +86,7 @@ const WAKE_CHANNEL_CAP: usize = 1;
 /// Runs the windowed `wolf-gnome` application, returning the process exit code.
 #[must_use]
 pub fn run() -> glib::ExitCode {
-    let app = adw::Application::builder()
-        .application_id(APP_ID)
-        .build();
+    let app = adw::Application::builder().application_id(APP_ID).build();
     app.connect_activate(build_ui);
     // The app takes no CLI args; pass an empty list so GTK does not try to parse
     // (and reject) anything from the real argv.

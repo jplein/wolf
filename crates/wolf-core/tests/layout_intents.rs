@@ -30,9 +30,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use common::{ch, ctrl, key, FlushWaiter, FLUSH_TIMEOUT};
-use wolf_core::{
-    FocusDir, InputEvent, Key, LayoutIntent, Snapshot, SplitOrientation, WolfCore,
-};
+use wolf_core::{FocusDir, InputEvent, Key, LayoutIntent, Snapshot, SplitOrientation, WolfCore};
 
 /// The outer/global grid id. Window content lives on grids `>= 2`; grid 1 is
 /// never a window grid in these scenarios.
@@ -52,12 +50,7 @@ const DOC: &str = "# Layout Intents\nbody\n";
 
 /// Polls `core`'s snapshot until `pred` holds, draining wakes each iteration, or
 /// panics after [`FLUSH_TIMEOUT`]. `desc` describes the awaited condition.
-fn poll_until(
-    core: &WolfCore,
-    waiter: &FlushWaiter,
-    desc: &str,
-    pred: impl Fn(&Snapshot) -> bool,
-) {
+fn poll_until(core: &WolfCore, waiter: &FlushWaiter, desc: &str, pred: impl Fn(&Snapshot) -> bool) {
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     loop {
         {
@@ -170,7 +163,10 @@ fn ctrl_w_s_emits_horizontal_split() {
         matches!(orientation, SplitOrientation::Horizontal),
         "<C-w>s must map to a HORIZONTAL (stacked) split; got {orientation:?}"
     );
-    assert_ne!(win, 0, "the split's new window handle should be a real (nonzero) i64");
+    assert_ne!(
+        win, 0,
+        "the split's new window handle should be a real (nonzero) i64"
+    );
     assert_ne!(
         from, win,
         "the split's `from` (origin window) and `win` (new window) must differ"
@@ -300,9 +296,13 @@ fn ctrl_w_l_emits_focus_dir_and_does_not_change_nvim_focus() {
 
     let intents = drain_until_intent(&core, FLUSH_TIMEOUT, "FocusDir from <C-w>l");
     assert!(
-        intents
-            .iter()
-            .any(|i| matches!(i, LayoutIntent::FocusDir { dir: FocusDir::Right, .. })),
+        intents.iter().any(|i| matches!(
+            i,
+            LayoutIntent::FocusDir {
+                dir: FocusDir::Right,
+                ..
+            }
+        )),
         "<C-w>l must emit a FocusDir {{ dir: Right, .. }} intent; got {intents:?}"
     );
 
@@ -369,7 +369,10 @@ fn focus_win_changes_active_and_current_file() {
             .expect("a second, distinct window handle should exist after the split");
         (active, target)
     };
-    assert_ne!(target, active_b, "the focus target must differ from the active window");
+    assert_ne!(
+        target, active_b,
+        "the focus target must differ from the active window"
+    );
 
     // Drive focus from the shell side.
     core.focus_win(target);
@@ -511,7 +514,10 @@ fn ctrl_w_c_noop_on_last_window() {
     let base = wait_for_initial_window(&core, &waiter);
     // NOTE to coder: a freshly opened single file is exactly one editor window,
     // so `base == 1` here; the guard must refuse to close it.
-    assert_eq!(base, 1, "expected exactly one window before the last-window close test");
+    assert_eq!(
+        base, 1,
+        "expected exactly one window before the last-window close test"
+    );
     let _ = core.drain_intents();
 
     // Attempt to close the only window.
@@ -577,17 +583,17 @@ fn win_enter_updates_active_win() {
             .expect("a second, distinct window handle should exist after the split");
         (active, target)
     };
-    assert_ne!(target, active, "the focus target must differ from the active window");
+    assert_ne!(
+        target, active,
+        "the focus target must differ from the active window"
+    );
 
     core.focus_win(target);
     poll_until(
         &core,
         &waiter,
         "active_win to update to the focused window via WinEnter",
-        |snap| {
-            snap.active_win == Some(target)
-                && snap.windows.values().any(|w| w.win == target)
-        },
+        |snap| snap.active_win == Some(target) && snap.windows.values().any(|w| w.win == target),
     );
 
     core.shutdown().expect("shutdown should be Ok");

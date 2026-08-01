@@ -478,6 +478,20 @@ fn mru_seed_is_synchronous_and_not_duplicated() {
     {
         let store = MruStore::open(&common::hermetic_state_dir());
         store.record(&cwd, &cwd.join("seeded.md"));
+        // Read the row back through the SAME handle before the core is ever
+        // started. `record` is fire-and-forget and `recent` degrades SILENTLY to an
+        // empty Vec, so a store that failed to write leaves no trace here — and the
+        // traversal below would still find seeded.md on disk, satisfying the
+        // "exactly one" assertions from the TRAVERSAL rather than from the MRU. This
+        // makes the write land loudly, at the point it actually broke, instead of as
+        // a mysterious `mru_rank == None` further down.
+        let stored = displays(&store.recent(&cwd));
+        assert!(
+            stored.contains("seeded.md"),
+            "precondition: the MRU write did not land — `record` then `recent` on the \
+             same store does not show seeded.md, so the store degraded to empty and the \
+             seed assertions below would be testing nothing; got {stored:?}"
+        );
     }
 
     let core = start_core_in(&cwd);
@@ -693,6 +707,28 @@ fn mru_seed_follows_nvim_cd() {
         let store = MruStore::open(&common::hermetic_state_dir());
         store.record(&cwd_b, &recent_b);
         store.record(&cwd_a, &recent_a);
+        // Read BOTH rows back through the SAME handle before the core is started.
+        // `record` is fire-and-forget and `recent` degrades SILENTLY to an empty Vec,
+        // so a store that failed to write (or that another handle recreated under us)
+        // leaves no trace here. The traversal would still find `sub/recent_b.md` on
+        // disk, so the `seeded.len() == 1` assertion further down would pass off the
+        // TRAVERSAL and only the `mru_rank.is_some()` line would fail — a failure that
+        // names the wrong thing. Fail here instead, where the write actually broke.
+        let stored_b = displays(&store.recent(&cwd_b));
+        assert!(
+            stored_b.contains(&rel(&["sub", "recent_b.md"])),
+            "precondition: B's MRU write did not land — `record` then `recent` on the \
+             same store does not show sub/recent_b.md, so the store degraded to empty \
+             and the seed assertions below would be testing the traversal, not the MRU; \
+             got {stored_b:?}"
+        );
+        let stored_a = displays(&store.recent(&cwd_a));
+        assert!(
+            stored_a.contains("recent_a.md"),
+            "precondition: A's MRU write did not land — `record` then `recent` on the \
+             same store does not show recent_a.md, so the per-directory isolation \
+             assertion below would pass vacuously against an empty store; got {stored_a:?}"
+        );
     }
 
     // Start nvim in A, retaining the waiter so we can confirm the `:cd` landed.

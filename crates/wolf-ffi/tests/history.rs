@@ -23,10 +23,10 @@
 //!   * `history_forward(&self, win: i64) -> bool`
 //!   * `history_jump(&self, win: i64, index: u32) -> bool`
 //!   * `history_entries(&self, win: i64) -> Vec<FfiHistoryEntry>`
-//! plus the OPAQUE `FfiHistoryEntry { display() -> String, index() -> u32,
+//!     plus the OPAQUE `FfiHistoryEntry { display() -> String, index() -> u32,
 //! is_current() -> bool }` (opaque, not a `swift_repr = "struct"`, so a
-//! `Vec<FfiHistoryEntry>` is supported), and regenerates `generated/`. This test
-//! file will not compile until that lands — expected.
+//!     `Vec<FfiHistoryEntry>` is supported), and regenerates `generated/`. This test
+//!     file will not compile until that lands — expected.
 //!
 //! ## The startup buffer is a NAMED `Untitled.md`
 //!

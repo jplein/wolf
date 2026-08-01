@@ -47,7 +47,11 @@ const OPAQUE: u8 = 255;
 // --- Fixture colors (kept maximally distinct for unambiguous sampling) ------
 
 /// Default foreground (white).
-const DEFAULT_FG: Rgb = Rgb { r: 255, g: 255, b: 255 };
+const DEFAULT_FG: Rgb = Rgb {
+    r: 255,
+    g: 255,
+    b: 255,
+};
 /// Default background (black).
 const DEFAULT_BG: Rgb = Rgb { r: 0, g: 0, b: 0 };
 /// Defined-highlight foreground (red).

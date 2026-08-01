@@ -28,7 +28,7 @@
 //! WOLF_TEST_NVIM_DIR:
 //!   * `data`: add `"//bazel/treesitter-parsers:parsers_tree"`
 //!   * `env`:  add `"WOLF_TEST_PARSERS_DIR": "$(rootpath //bazel/treesitter-parsers:parsers_tree)"`
-//! `tempfile` is already a `[dev-dependencies]` of the crate (used by `panes`).
+//!     `tempfile` is already a `[dev-dependencies]` of the crate (used by `panes`).
 //!
 //! ## How this proves ABI compat (no exec_lua seam on the FFI surface)
 //!

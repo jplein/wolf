@@ -59,13 +59,14 @@
 //! determinism guaranteed by the explicit tie-breaks below.
 //!
 //! ### Sort key, ascending (lower = better), in priority order:
-//!     1. `mru_group`: `0` if `mru_rank.is_some()` else `1`  [MRU FIRST — LOCKED]
-//!     2. `mru_rank.unwrap_or(MAX)`
-//!     3. `score` wrapped in `Reverse` (so a HIGHER score sorts FIRST)
-//!     4. `match_start`: smallest first-matched-char index across the terms
-//!     5. `span`: sum over terms of `last_matched - first_matched`
-//!     6. `len`: `display.chars().count()`
-//!     7. `display` lexicographic
+//!
+//! 1. `mru_group`: `0` if `mru_rank.is_some()` else `1`  [MRU FIRST — LOCKED]
+//! 2. `mru_rank.unwrap_or(MAX)`
+//! 3. `score` wrapped in `Reverse` (so a HIGHER score sorts FIRST)
+//! 4. `match_start`: smallest first-matched-char index across the terms
+//! 5. `span`: sum over terms of `last_matched - first_matched`
+//! 6. `len`: `display.chars().count()`
+//! 7. `display` lexicographic
 
 use std::collections::BinaryHeap;
 

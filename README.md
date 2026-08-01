@@ -15,6 +15,7 @@ Each editor pane keeps its own back/forward history of the files you visited in 
 ## Building Wolf
 
 - See [Building Wolf](build.md).
+- See [macOS follow-ups](macos-followups.md) for work done on Linux that still needs re-verification on a macOS host.
 
 ## Architecture
 

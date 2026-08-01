@@ -26,11 +26,11 @@
 //!   * `render_preview(&self, source_bufnr: i64) -> String` (blocking; empty on
 //!     error)
 //!   * `previews(&self) -> Vec<FfiPreview>`
-//! plus the opaque `FfiPreview { win() -> i64, source_bufnr() -> i64,
+//!     plus the opaque `FfiPreview { win() -> i64, source_bufnr() -> i64,
 //! source_name() -> String (basename), source_path() -> String,
 //! source_tick() -> u64 }` in `crates/wolf-ffi/src/lib.rs`, regenerates
-//! `generated/`, and appends `command_kind::PREVIEW = 18`. This test file will not
-//! compile until that lands — expected.
+//!     `generated/`, and appends `command_kind::PREVIEW = 18`. This test file will not
+//!     compile until that lands — expected.
 //!
 //! ## SKIP-when-unset policy
 //!
@@ -257,7 +257,12 @@ fn wait_for_frame_text(handle: &wolf_ffi::WolfCoreHandle, needle: &str) {
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut text = String::new();
     while Instant::now() < deadline {
-        text = handle.read_frame().cells().iter().map(|c| c.text()).collect();
+        text = handle
+            .read_frame()
+            .cells()
+            .iter()
+            .map(|c| c.text())
+            .collect();
         if text.contains(needle) {
             return;
         }
@@ -1045,7 +1050,11 @@ fn preview_renders_untitled_buffer() {
         "open_preview(\"split_right\") on the Untitled.md buffer must return a valid \
          preview bufnr (> 0, previously 0 for a filetype-less [No Name]), got {preview_bufnr}"
     );
-    wait_for_window_count(&handle, TWO_PANES, "after split-right preview of Untitled.md");
+    wait_for_window_count(
+        &handle,
+        TWO_PANES,
+        "after split-right preview of Untitled.md",
+    );
 
     // --- 4. previews() surfaces the Untitled.md source row --------------------
     let previews = wait_for_previews(&handle, "one Untitled.md preview", |p| {

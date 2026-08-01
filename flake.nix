@@ -7,9 +7,11 @@
 #   `wolf-core` (and the `wolf-gnome` GTK front-end) with Cargo under Nix — a
 #   pinned Rust toolchain (via the oxalica rust-overlay), a pinned hermetic
 #   Neovim, and the GTK/Cairo/Pango GUI toolkit for the front-end's testable
-#   seams. This shell exports `WOLF_NVIM_BIN`, the absolute path to the pinned
-#   `nvim` binary — the *only* way `wolf-core` and its tests are allowed to
-#   locate Neovim: never via the system PATH, never by scanning `/nix/store`.
+#   seams, plus the headless-compositor smoke toolchain and the Markdown
+#   formatter that the Linux verification gate (`build.md`) requires. This shell
+#   exports `WOLF_NVIM_BIN`, the absolute path to the pinned `nvim` binary — the
+#   *only* way `wolf-core` and its tests are allowed to locate Neovim: never via
+#   the system PATH, never by scanning `/nix/store`.
 # - Darwin (aarch64-darwin, x86_64-darwin): a minimal shell that provides
 #   bazelisk to drive the Bazel build of `wolf-core`, using the host Xcode SDK
 #   for the C/link toolchain (not the older SDK shipped inside Nix). It carries
@@ -122,16 +124,23 @@
             pkgs.freetype
             pkgs.dejavu_fonts
 
-            # SMOKE-ONLY: the opt-in headless end-to-end smoke test
-            # (tests/smoke_headless.rs, run with `--ignored`) launches the real
-            # window under a headless Wayland compositor and OCRs a screenshot.
-            # cage = headless wlroots compositor, wtype = synthetic keystrokes,
-            # grim = screenshot, tesseract = OCR. Not needed to build or to run
-            # the app interactively.
+            # GATE-REQUIRED: the nine headless end-to-end smoke tests in
+            # crates/wolf-gnome/tests/smoke_headless.rs run as part of a plain
+            # `cargo test` (no `--ignored`). They launch the real window under a
+            # headless Wayland compositor and OCR a screenshot, so these four
+            # must be present or the suite fails loud. cage = headless wlroots
+            # compositor, wtype = synthetic keystrokes, grim = screenshot,
+            # tesseract = OCR. Not needed to *build*.
             pkgs.cage
             pkgs.wtype
             pkgs.grim
             pkgs.tesseract
+
+            # LINT/FORMAT GATE: prettier backs the Markdown format check in the
+            # Linux verification gate (see build.md, "The Linux verification
+            # gate"). Pinned here so the gate can never silently run a host
+            # prettier of a different version against `.prettierrc`.
+            pkgs.prettier
           ];
 
           shellHook = ''
@@ -166,8 +175,10 @@
             export XDG_DATA_DIRS="$__gsd_schemas:$__gtk4_schemas:${pkgs.adwaita-icon-theme}/share:${pkgs.hicolor-icon-theme}/share:${pkgs.shared-mime-info}/share''${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
             export GSETTINGS_SCHEMA_DIR="$__gsd_schemas/glib-2.0/schemas:$__gtk4_schemas/glib-2.0/schemas''${GSETTINGS_SCHEMA_DIR:+:$GSETTINGS_SCHEMA_DIR}"
 
-            # --- SMOKE-ONLY: headless Wayland compositor env -------------------
-            # Used only by the opt-in `--ignored` smoke test (cage/wtype/grim).
+            # --- SMOKE: headless Wayland compositor env ------------------------
+            # Used by the cage smoke tests in
+            # crates/wolf-gnome/tests/smoke_headless.rs, which run as part of the
+            # default `cargo test`.
             # XDG_RUNTIME_DIR holds the Wayland socket; default it to a private
             # mktemp dir if the host has not set one. wlroots is told to use its
             # headless backend with no real input devices. We do NOT export
