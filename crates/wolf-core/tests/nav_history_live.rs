@@ -21,10 +21,10 @@
 //!   * `history_jump(&self, win: i64, index: usize) -> bool`
 //!   * `history_entries(&self, win: i64) -> Vec<MenuRow>`  (newest-first, capped
 //!     at `MAX_MENU_ROWS` distinct rows, home-abbreviated)
-//! plus `Snapshot.win_buffers: HashMap<i64, WinBuffer>` and the two Lua helpers
-//! `_G.wolf_history_open` / `_G.wolf_history_set_buf`. This file does NOT touch
-//! non-test source. It runs under the `//crates/wolf-core:nav_history_live`
-//! `rust_test` target, which mirrors `//crates/wolf-core:pane_buffers`.
+//!     plus `Snapshot.win_buffers: HashMap<i64, WinBuffer>` and the two Lua helpers
+//!     `_G.wolf_history_open` / `_G.wolf_history_set_buf`. This file does NOT touch
+//!     non-test source. It runs under the `//crates/wolf-core:nav_history_live`
+//!     `rust_test` target, which mirrors `//crates/wolf-core:pane_buffers`.
 //!
 //! ## The startup buffer is a NAMED `Untitled.md`
 //!

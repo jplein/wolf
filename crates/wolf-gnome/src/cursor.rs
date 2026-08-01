@@ -384,7 +384,10 @@ mod tests {
     #[test]
     fn named_constants_match_contract() {
         assert!(approx(MIN_BAR_PX, 2.0), "MIN_BAR_PX must be 2.0");
-        assert!(approx(DEFAULT_CELL_PCT, 0.25), "DEFAULT_CELL_PCT must be 0.25");
+        assert!(
+            approx(DEFAULT_CELL_PCT, 0.25),
+            "DEFAULT_CELL_PCT must be 0.25"
+        );
         assert!(approx(PCT_DENOM, 100.0), "PCT_DENOM must be 100.0");
     }
 
@@ -414,15 +417,35 @@ mod tests {
     // Four maximally-distinct colors so honor-vs-invert and fill-vs-glyph are
     // unambiguous, plus the two fallbacks the contract pins.
     /// Mode cursor highlight foreground.
-    const MODE_FG: Rgb = Rgb { r: 10, g: 20, b: 30 };
+    const MODE_FG: Rgb = Rgb {
+        r: 10,
+        g: 20,
+        b: 30,
+    };
     /// Mode cursor highlight background.
-    const MODE_BG: Rgb = Rgb { r: 40, g: 50, b: 60 };
+    const MODE_BG: Rgb = Rgb {
+        r: 40,
+        g: 50,
+        b: 60,
+    };
     /// Underlying cell foreground.
-    const CELL_FG: Rgb = Rgb { r: 70, g: 80, b: 90 };
+    const CELL_FG: Rgb = Rgb {
+        r: 70,
+        g: 80,
+        b: 90,
+    };
     /// Underlying cell background.
-    const CELL_BG: Rgb = Rgb { r: 100, g: 110, b: 120 };
+    const CELL_BG: Rgb = Rgb {
+        r: 100,
+        g: 110,
+        b: 120,
+    };
     /// Contract fallback fill when nothing resolves: white.
-    const FALLBACK_FG: Rgb = Rgb { r: 255, g: 255, b: 255 };
+    const FALLBACK_FG: Rgb = Rgb {
+        r: 255,
+        g: 255,
+        b: 255,
+    };
     /// Contract fallback glyph when nothing resolves: black.
     const FALLBACK_BG: Rgb = Rgb { r: 0, g: 0, b: 0 };
 
@@ -435,11 +458,19 @@ mod tests {
     /// Editor default background (set via `set_defaults` in the guard cases);
     /// deliberately distinct from `CELL_BG` so it is never mistaken for the
     /// underlying cell background.
-    const DEFAULT_BG: Rgb = Rgb { r: 200, g: 210, b: 220 };
+    const DEFAULT_BG: Rgb = Rgb {
+        r: 200,
+        g: 210,
+        b: 220,
+    };
     /// A single color used for BOTH fg and bg to make a degenerate, invisible
     /// honored pair. Distinct from `CELL_BG` so the "equals background" guard is
     /// NOT what trips here — only the "fill == glyph" guard.
-    const DEGENERATE: Rgb = Rgb { r: 77, g: 88, b: 99 };
+    const DEGENERATE: Rgb = Rgb {
+        r: 77,
+        g: 88,
+        b: 99,
+    };
 
     /// Builds a base snapshot whose cursor sits at `(CURSOR_ROW, CURSOR_COL)` on a
     /// cell carrying `cell_hl`. `CELL_HL` is always defined with distinct fg/bg so
@@ -625,7 +656,10 @@ mod tests {
         let (fill, glyph) = cursor_colors(&snap);
         // Must invert the cell, NOT return the invisible (CELL_BG, DEFAULT_FG).
         assert_eq!(fill, CELL_FG, "guard: fill must be the cell fg (inversion)");
-        assert_eq!(glyph, CELL_BG, "guard: glyph must be the cell bg (inversion)");
+        assert_eq!(
+            glyph, CELL_BG,
+            "guard: glyph must be the cell bg (inversion)"
+        );
         assert_ne!(
             fill, CELL_BG,
             "guard: must not honor a fill equal to the cell background"
@@ -650,8 +684,14 @@ mod tests {
         snap.mode_infos = one_mode(Some(MODE_HL));
 
         let (fill, glyph) = cursor_colors(&snap);
-        assert_eq!(fill, CELL_FG, "degenerate honor: fill = cell fg (inversion)");
-        assert_eq!(glyph, CELL_BG, "degenerate honor: glyph = cell bg (inversion)");
+        assert_eq!(
+            fill, CELL_FG,
+            "degenerate honor: fill = cell fg (inversion)"
+        );
+        assert_eq!(
+            glyph, CELL_BG,
+            "degenerate honor: glyph = cell bg (inversion)"
+        );
         assert_ne!(
             fill, glyph,
             "inversion must yield a visible (fill != glyph) pair"
@@ -682,8 +722,14 @@ mod tests {
         snap.mode_infos = one_mode(Some(MODE_HL));
 
         let (fill, glyph) = cursor_colors(&snap);
-        assert_eq!(fill, MODE_BG, "honor: fill = mode bg even with defaults set");
-        assert_eq!(glyph, MODE_FG, "honor: glyph = mode fg even with defaults set");
+        assert_eq!(
+            fill, MODE_BG,
+            "honor: fill = mode bg even with defaults set"
+        );
+        assert_eq!(
+            glyph, MODE_FG,
+            "honor: glyph = mode fg even with defaults set"
+        );
         assert_ne!(
             fill, CELL_BG,
             "honored fill is distinct from the cell background"
@@ -707,7 +753,11 @@ mod tests {
     const THEME_FG: Rgb = Rgb { r: 5, g: 15, b: 25 };
     /// WolfCursor theme background (the themed FILL color); distinct from every
     /// other fixture color.
-    const THEME_BG: Rgb = Rgb { r: 130, g: 140, b: 150 };
+    const THEME_BG: Rgb = Rgb {
+        r: 130,
+        g: 140,
+        b: 150,
+    };
 
     #[test]
     fn cursor_colors_honors_theme_cursor_fg_and_bg() {

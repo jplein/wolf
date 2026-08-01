@@ -1,10 +1,21 @@
 # tools/lint
 
-Advisory (non-gating) lint/format targets for the macOS Bazel host: **clippy** and **rustfmt** for Rust and **swift-format** for Swift. Each tool has a CHECK target (`bazel test`, reports/fails on violations) and a FIX target (`bazel run`, rewrites files in place under `$BUILD_WORKSPACE_DIRECTORY`).
+**macOS-only.** Advisory (non-gating) lint/format targets for the macOS Bazel host: **clippy** and **rustfmt** for Rust and **swift-format** for Swift. This is not the repo's whole lint story — Linux has its own, gating, path; see [Linux](#linux) below. Each tool has a CHECK target (`bazel test`, reports/fails on violations) and a FIX target (`bazel run`, rewrites files in place under `$BUILD_WORKSPACE_DIRECTORY`).
 
 ## Policy: advisory, not gating
 
-**Every** target here is tagged `manual`, so no wildcard build/test (e.g. `bazel test //crates/...`) ever sweeps it in. The pre-existing default suite stays exactly 47/47. Existing lint violations across the codebase are EXPECTED and out of scope: a CHECK target "passing verification" means "the linter RAN on the host without a Bazel/toolchain error" — it may still legitimately REPORT findings (which fail the target). Only running these targets deliberately, by label, exercises them.
+**Every** target here is tagged `manual`, so no wildcard build/test (e.g. `bazel test //crates/...`) ever sweeps it in — the pre-existing default suite is unchanged by these targets. (A specific pass/fail count was asserted here historically; it is not verifiable from a Linux host and the repo has grown test targets since, so the load-bearing claim is the `manual` tagging, not a number. See [`macos-followups.md`](../../macos-followups.md).) Existing lint violations across the codebase are EXPECTED and out of scope: a CHECK target "passing verification" means "the linter RAN on the host without a Bazel/toolchain error" — it may still legitimately REPORT findings (which fail the target). Only running these targets deliberately, by label, exercises them.
+
+## Linux
+
+These Bazel targets do not and cannot run on Linux: the Linux devShell has no Bazel and no Xcode. On Linux the equivalents are `cargo clippy`, `cargo fmt` and `prettier` invoked directly inside the Nix devShell, and — unlike the advisory targets here — they are **gating**. See [`build.md`](../../build.md), "The Linux verification gate", for the canonical command set.
+
+The two hosts are deliberately asymmetric:
+
+- **`-Dwarnings`** is opt-in on macOS (via `--config=lint`) and unconditional on Linux.
+- **`swift-format`** has no Linux counterpart — there is no Swift in the Linux devShell.
+- **`prettier`** (the Markdown format check) has no macOS/Bazel counterpart today; it exists only in the Linux gate.
+- **`wolf-gnome`** is linted only on Linux; its GTK stack does not build on macOS, which is why the Rust fixers here are scoped to `-p wolf-core -p wolf-ffi`.
 
 ## Toolchains and binaries
 

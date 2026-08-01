@@ -24,9 +24,9 @@
 //!   * a `#[cfg(test)]` / fallback no-op `wolf_ffi_wake` in the crate, OR
 //!   * the planned `extern "C" fn wolf_ffi_start(..., wake: extern "C" fn())`
 //!     shim, against which this test passes a no-op `extern "C"` wake.
-//! Whichever the coder picks, `wolf_ffi_start(init_lua, cwd, cols, rows)` as
-//! called below must link and run with no Swift runtime present. The wake is
-//! irrelevant to what this test asserts (it polls `read_frame`, see below).
+//!     Whichever the coder picks, `wolf_ffi_start(init_lua, cwd, cols, rows)` as
+//!     called below must link and run with no Swift runtime present. The wake is
+//!     irrelevant to what this test asserts (it polls `read_frame`, see below).
 //!
 //! ## NOTE to coder — import paths
 //!

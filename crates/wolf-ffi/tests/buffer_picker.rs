@@ -16,17 +16,17 @@
 //!     `list_buffers()` snapshot taken at construction), and
 //!   * `switch_buffer(&self, bufnr: i64)` (reads `active_win()` live, then
 //!     window-scopes the switch),
-//! plus the opaque types
+//!     plus the opaque types
 //!   * `FfiBufferPicker { fn ranked(&self, query: String, max: usize) ->
 //!     Vec<FfiBufferRow> }`
 //!   * `FfiBufferRow { fn bufnr() -> i64; fn display() -> String;
 //!     fn modified() -> bool }`
-//! in `crates/wolf-ffi/src/lib.rs`, regenerates `generated/`, AND adds the
-//! `//crates/wolf-ffi:buffer_picker` `rust_test` target to `BUILD.bazel` (a copy
-//! of the `command_palette` stanza, srcs `["tests/common/mod.rs",
+//!     in `crates/wolf-ffi/src/lib.rs`, regenerates `generated/`, AND adds the
+//!     `//crates/wolf-ffi:buffer_picker` `rust_test` target to `BUILD.bazel` (a copy
+//!     of the `command_palette` stanza, srcs `["tests/common/mod.rs",
 //! "tests/buffer_picker.rs"]`, `crate_root = "tests/buffer_picker.rs"`). This test
-//! file does NOT touch non-test source or BUILD files, and it will not compile
-//! until that lands — expected.
+//!     file does NOT touch non-test source or BUILD files, and it will not compile
+//!     until that lands — expected.
 //!
 //! ## SKIP-when-unset policy
 //!

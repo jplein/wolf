@@ -111,9 +111,9 @@ impl FlushWaiter {
     pub fn wait_for_flush(&self, timeout: Duration) {
         match self.rx.recv_timeout(timeout) {
             Ok(()) => {}
-            Err(RecvTimeoutError::Timeout) => panic!(
-                "timed out after {timeout:?} waiting for a redraw flush/wake from nvim"
-            ),
+            Err(RecvTimeoutError::Timeout) => {
+                panic!("timed out after {timeout:?} waiting for a redraw flush/wake from nvim")
+            }
             Err(RecvTimeoutError::Disconnected) => {
                 panic!("wake channel disconnected before a flush arrived (nvim/core gone?)")
             }

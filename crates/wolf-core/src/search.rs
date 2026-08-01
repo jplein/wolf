@@ -295,12 +295,11 @@ pub(crate) fn spawn_search(
                         }
                     }
                     // Flush on each file's `end` so a file's matches surface as a
-                    // group promptly, even below the batch threshold.
-                    Some(RgEvent::End(_)) => {
-                        if !batch.is_empty() {
-                            append_batch(&state, &mut batch, false);
-                            wake();
-                        }
+                    // group promptly, even below the batch threshold. An empty
+                    // batch falls through to the catch-all arm (nothing to flush).
+                    Some(RgEvent::End(_)) if !batch.is_empty() => {
+                        append_batch(&state, &mut batch, false);
+                        wake();
                     }
                     _ => {}
                 }

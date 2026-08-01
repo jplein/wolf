@@ -185,13 +185,7 @@ impl PaneTree {
     /// overlap on Y; Up/Down overlap on X). Returns `None` at an edge or for an
     /// unknown pane.
     #[must_use]
-    pub fn neighbor(
-        &self,
-        from: PaneId,
-        dir: FocusDir,
-        width: f64,
-        height: f64,
-    ) -> Option<PaneId> {
+    pub fn neighbor(&self, from: PaneId, dir: FocusDir, width: f64, height: f64) -> Option<PaneId> {
         let rects = self.pane_rects(width, height);
         let from_rect = rects.iter().find(|(id, _)| *id == from).map(|(_, r)| *r)?;
 
@@ -442,22 +436,14 @@ fn collect_rects(frame: &Frame, rect: Rect, out: &mut Vec<(PaneId, Rect)>) {
 /// otherwise `None`. A smaller distance means a nearer neighbour.
 fn directional_distance(from: Rect, cand: Rect, dir: FocusDir) -> Option<f64> {
     match dir {
-        FocusDir::Left => {
-            (cand.x + cand.w <= from.x + NEIGHBOR_EPS && y_overlap(from, cand))
-                .then_some(from.x - (cand.x + cand.w))
-        }
-        FocusDir::Right => {
-            (cand.x + NEIGHBOR_EPS >= from.x + from.w && y_overlap(from, cand))
-                .then_some(cand.x - (from.x + from.w))
-        }
-        FocusDir::Up => {
-            (cand.y + cand.h <= from.y + NEIGHBOR_EPS && x_overlap(from, cand))
-                .then_some(from.y - (cand.y + cand.h))
-        }
-        FocusDir::Down => {
-            (cand.y + NEIGHBOR_EPS >= from.y + from.h && x_overlap(from, cand))
-                .then_some(cand.y - (from.y + from.h))
-        }
+        FocusDir::Left => (cand.x + cand.w <= from.x + NEIGHBOR_EPS && y_overlap(from, cand))
+            .then_some(from.x - (cand.x + cand.w)),
+        FocusDir::Right => (cand.x + NEIGHBOR_EPS >= from.x + from.w && y_overlap(from, cand))
+            .then_some(cand.x - (from.x + from.w)),
+        FocusDir::Up => (cand.y + cand.h <= from.y + NEIGHBOR_EPS && x_overlap(from, cand))
+            .then_some(from.y - (cand.y + cand.h)),
+        FocusDir::Down => (cand.y + NEIGHBOR_EPS >= from.y + from.h && x_overlap(from, cand))
+            .then_some(cand.y - (from.y + from.h)),
     }
 }
 
@@ -547,7 +533,11 @@ mod tests {
     #[test]
     fn new_is_single_leaf() {
         let tree = PaneTree::new(P1);
-        assert_eq!(tree.leaves(), vec![P1], "a fresh tree has exactly its root leaf");
+        assert_eq!(
+            tree.leaves(),
+            vec![P1],
+            "a fresh tree has exactly its root leaf"
+        );
 
         // The single pane fills the whole bounds.
         let rects = tree.pane_rects(W, H);
@@ -581,7 +571,14 @@ mod tests {
         let rects = tree.pane_rects(W, H);
         assert_eq!(rects.len(), 2, "two leaves -> two rects");
         assert_rect(rect_for(&rects, P1), 0.0, 0.0, HALF_W, H, "P1 left half");
-        assert_rect(rect_for(&rects, P2), HALF_W, 0.0, HALF_W, H, "P2 right half");
+        assert_rect(
+            rect_for(&rects, P2),
+            HALF_W,
+            0.0,
+            HALF_W,
+            H,
+            "P2 right half",
+        );
     }
 
     #[test]
@@ -593,7 +590,14 @@ mod tests {
         let rects = tree.pane_rects(W, H);
         assert_eq!(rects.len(), 2, "two leaves -> two rects");
         assert_rect(rect_for(&rects, P1), 0.0, 0.0, W, HALF_H, "P1 top half");
-        assert_rect(rect_for(&rects, P2), 0.0, HALF_H, W, HALF_H, "P2 bottom half");
+        assert_rect(
+            rect_for(&rects, P2),
+            0.0,
+            HALF_H,
+            W,
+            HALF_H,
+            "P2 bottom half",
+        );
     }
 
     #[test]
@@ -624,7 +628,10 @@ mod tests {
 
         // Areas sum to the full bounds.
         let total: f64 = rects.iter().map(|(_, r)| r.w * r.h).sum();
-        assert!(approx(total, W * H), "leaf areas must sum to the full bounds");
+        assert!(
+            approx(total, W * H),
+            "leaf areas must sum to the full bounds"
+        );
     }
 
     // =====================================================================
@@ -680,7 +687,10 @@ mod tests {
 
         // Areas tile the full bounds.
         let total: f64 = rects.iter().map(|(_, r)| r.w * r.h).sum();
-        assert!(approx(total, W * H), "leaf areas must sum to the full bounds");
+        assert!(
+            approx(total, W * H),
+            "leaf areas must sum to the full bounds"
+        );
     }
 
     #[test]
@@ -693,21 +703,31 @@ mod tests {
         tree.split(P1, P4, Orientation::Vertical);
 
         let leaves = tree.leaves();
-        assert_eq!(leaves.len(), 4, "four flat leaves after three same-orientation vsplits");
+        assert_eq!(
+            leaves.len(),
+            4,
+            "four flat leaves after three same-orientation vsplits"
+        );
 
         let rects = tree.pane_rects(W, H);
         assert_eq!(rects.len(), 4, "four flat leaves -> four rects");
 
         // Each column is an equal quarter of the width, full height; none zero.
         for (id, r) in &rects {
-            assert!(approx(r.w, QUARTER_W), "pane {id} must be an equal quarter-width: {r:?}");
+            assert!(
+                approx(r.w, QUARTER_W),
+                "pane {id} must be an equal quarter-width: {r:?}"
+            );
             assert!(approx(r.h, H), "pane {id} must be full-height: {r:?}");
             assert!(r.w > EPS, "pane {id} must not be zero-width: {r:?}");
         }
 
         // Areas tile the full bounds.
         let total: f64 = rects.iter().map(|(_, r)| r.w * r.h).sum();
-        assert!(approx(total, W * H), "leaf areas must sum to the full bounds");
+        assert!(
+            approx(total, W * H),
+            "leaf areas must sum to the full bounds"
+        );
     }
 
     #[test]
@@ -729,18 +749,31 @@ mod tests {
         let r2 = rect_for(&rects, P2);
 
         assert_rect(r1, 0.0, 0.0, HALF_W, HALF_H, "P1 top-left (nested column)");
-        assert_rect(r3, 0.0, HALF_H, HALF_W, HALF_H, "P3 bottom-left (nested column)");
+        assert_rect(
+            r3,
+            0.0,
+            HALF_H,
+            HALF_W,
+            HALF_H,
+            "P3 bottom-left (nested column)",
+        );
         assert_rect(r2, HALF_W, 0.0, HALF_W, H, "P2 full-height right");
 
         for (id, r) in &rects {
-            assert!(r.w > EPS && r.h > EPS, "pane {id} must not be zero-area: {r:?}");
+            assert!(
+                r.w > EPS && r.h > EPS,
+                "pane {id} must not be zero-area: {r:?}"
+            );
         }
         assert!(!rects_overlap(r1, r2), "P1/P2 must not overlap");
         assert!(!rects_overlap(r1, r3), "P1/P3 must not overlap");
         assert!(!rects_overlap(r2, r3), "P2/P3 must not overlap");
 
         let total: f64 = rects.iter().map(|(_, r)| r.w * r.h).sum();
-        assert!(approx(total, W * H), "leaf areas must sum to the full bounds");
+        assert!(
+            approx(total, W * H),
+            "leaf areas must sum to the full bounds"
+        );
     }
 
     // =====================================================================
@@ -755,10 +788,21 @@ mod tests {
         tree.split(P1, P2, Orientation::Vertical);
         tree.remove(P2);
 
-        assert_eq!(tree.leaves(), vec![P1], "removing the sibling collapses to P1");
+        assert_eq!(
+            tree.leaves(),
+            vec![P1],
+            "removing the sibling collapses to P1"
+        );
         let rects = tree.pane_rects(W, H);
         assert_eq!(rects.len(), 1, "one leaf remains");
-        assert_rect(rect_for(&rects, P1), 0.0, 0.0, W, H, "P1 reclaims the full bounds");
+        assert_rect(
+            rect_for(&rects, P1),
+            0.0,
+            0.0,
+            W,
+            H,
+            "P1 reclaims the full bounds",
+        );
     }
 
     #[test]
@@ -773,13 +817,30 @@ mod tests {
 
         let leaves = tree.leaves();
         assert_eq!(leaves.len(), 2, "P1 gone, the right subtree survives");
-        assert!(leaves.contains(&P2) && leaves.contains(&P3), "P2 and P3 remain");
+        assert!(
+            leaves.contains(&P2) && leaves.contains(&P3),
+            "P2 and P3 remain"
+        );
 
         // The surviving subtree now occupies the FULL bounds (its parent's slot):
         // P2 top half, P3 bottom half across the entire width.
         let rects = tree.pane_rects(W, H);
-        assert_rect(rect_for(&rects, P2), 0.0, 0.0, W, HALF_H, "P2 spans full width, top");
-        assert_rect(rect_for(&rects, P3), 0.0, HALF_H, W, HALF_H, "P3 spans full width, bottom");
+        assert_rect(
+            rect_for(&rects, P2),
+            0.0,
+            0.0,
+            W,
+            HALF_H,
+            "P2 spans full width, top",
+        );
+        assert_rect(
+            rect_for(&rects, P3),
+            0.0,
+            HALF_H,
+            W,
+            HALF_H,
+            "P3 spans full width, bottom",
+        );
     }
 
     #[test]
@@ -800,12 +861,30 @@ mod tests {
         tree.split(P1, P3, Orientation::Vertical);
         tree.remove(P3);
 
-        assert_eq!(tree.leaves(), vec![P1, P2], "removing P3 leaves the flat [P1, P2] row");
+        assert_eq!(
+            tree.leaves(),
+            vec![P1, P2],
+            "removing P3 leaves the flat [P1, P2] row"
+        );
 
         let rects = tree.pane_rects(W, H);
         assert_eq!(rects.len(), 2, "two leaves -> two rects");
-        assert_rect(rect_for(&rects, P1), 0.0, 0.0, HALF_W, H, "P1 re-equalized left half");
-        assert_rect(rect_for(&rects, P2), HALF_W, 0.0, HALF_W, H, "P2 re-equalized right half");
+        assert_rect(
+            rect_for(&rects, P1),
+            0.0,
+            0.0,
+            HALF_W,
+            H,
+            "P1 re-equalized left half",
+        );
+        assert_rect(
+            rect_for(&rects, P2),
+            HALF_W,
+            0.0,
+            HALF_W,
+            H,
+            "P2 re-equalized right half",
+        );
     }
 
     #[test]
@@ -827,8 +906,22 @@ mod tests {
 
         let rects = tree.pane_rects(W, H);
         assert_eq!(rects.len(), 2, "two leaves -> two rects");
-        assert_rect(rect_for(&rects, P1), 0.0, 0.0, HALF_W, H, "P1 reclaims+equalizes left half");
-        assert_rect(rect_for(&rects, P2), HALF_W, 0.0, HALF_W, H, "P2 right half");
+        assert_rect(
+            rect_for(&rects, P1),
+            0.0,
+            0.0,
+            HALF_W,
+            H,
+            "P1 reclaims+equalizes left half",
+        );
+        assert_rect(
+            rect_for(&rects, P2),
+            HALF_W,
+            0.0,
+            HALF_W,
+            H,
+            "P2 right half",
+        );
     }
 
     #[test]
@@ -875,7 +968,10 @@ mod tests {
         }
 
         let total: f64 = rects.iter().map(|(_, r)| r.w * r.h).sum();
-        assert!(approx(total, W * H), "leaf areas must sum to the full bounds");
+        assert!(
+            approx(total, W * H),
+            "leaf areas must sum to the full bounds"
+        );
     }
 
     // =====================================================================
@@ -888,13 +984,37 @@ mod tests {
         let mut tree = PaneTree::new(P1);
         tree.split(P1, P2, Orientation::Vertical);
 
-        assert_eq!(tree.neighbor(P1, FocusDir::Right, W, H), Some(P2), "left->right is P2");
-        assert_eq!(tree.neighbor(P2, FocusDir::Left, W, H), Some(P1), "right->left is P1");
-        assert_eq!(tree.neighbor(P1, FocusDir::Left, W, H), None, "P1 is at the left edge");
-        assert_eq!(tree.neighbor(P2, FocusDir::Right, W, H), None, "P2 is at the right edge");
+        assert_eq!(
+            tree.neighbor(P1, FocusDir::Right, W, H),
+            Some(P2),
+            "left->right is P2"
+        );
+        assert_eq!(
+            tree.neighbor(P2, FocusDir::Left, W, H),
+            Some(P1),
+            "right->left is P1"
+        );
+        assert_eq!(
+            tree.neighbor(P1, FocusDir::Left, W, H),
+            None,
+            "P1 is at the left edge"
+        );
+        assert_eq!(
+            tree.neighbor(P2, FocusDir::Right, W, H),
+            None,
+            "P2 is at the right edge"
+        );
         // No vertical neighbours in a purely side-by-side layout.
-        assert_eq!(tree.neighbor(P1, FocusDir::Up, W, H), None, "no pane above P1");
-        assert_eq!(tree.neighbor(P1, FocusDir::Down, W, H), None, "no pane below P1");
+        assert_eq!(
+            tree.neighbor(P1, FocusDir::Up, W, H),
+            None,
+            "no pane above P1"
+        );
+        assert_eq!(
+            tree.neighbor(P1, FocusDir::Down, W, H),
+            None,
+            "no pane below P1"
+        );
     }
 
     #[test]
@@ -903,13 +1023,37 @@ mod tests {
         let mut tree = PaneTree::new(P1);
         tree.split(P1, P2, Orientation::Horizontal);
 
-        assert_eq!(tree.neighbor(P1, FocusDir::Down, W, H), Some(P2), "top->down is P2");
-        assert_eq!(tree.neighbor(P2, FocusDir::Up, W, H), Some(P1), "bottom->up is P1");
-        assert_eq!(tree.neighbor(P1, FocusDir::Up, W, H), None, "P1 is at the top edge");
-        assert_eq!(tree.neighbor(P2, FocusDir::Down, W, H), None, "P2 is at the bottom edge");
+        assert_eq!(
+            tree.neighbor(P1, FocusDir::Down, W, H),
+            Some(P2),
+            "top->down is P2"
+        );
+        assert_eq!(
+            tree.neighbor(P2, FocusDir::Up, W, H),
+            Some(P1),
+            "bottom->up is P1"
+        );
+        assert_eq!(
+            tree.neighbor(P1, FocusDir::Up, W, H),
+            None,
+            "P1 is at the top edge"
+        );
+        assert_eq!(
+            tree.neighbor(P2, FocusDir::Down, W, H),
+            None,
+            "P2 is at the bottom edge"
+        );
         // No horizontal neighbours in a purely stacked layout.
-        assert_eq!(tree.neighbor(P1, FocusDir::Left, W, H), None, "no pane left of P1");
-        assert_eq!(tree.neighbor(P1, FocusDir::Right, W, H), None, "no pane right of P1");
+        assert_eq!(
+            tree.neighbor(P1, FocusDir::Left, W, H),
+            None,
+            "no pane left of P1"
+        );
+        assert_eq!(
+            tree.neighbor(P1, FocusDir::Right, W, H),
+            None,
+            "no pane right of P1"
+        );
     }
 
     #[test]
@@ -928,25 +1072,93 @@ mod tests {
 
         // Sanity-check the geometry the neighbour cases rely on.
         let rects = tree.pane_rects(W, H);
-        assert_rect(rect_for(&rects, P1), 0.0, 0.0, HALF_W, HALF_H, "P1 top-left");
-        assert_rect(rect_for(&rects, P2), HALF_W, 0.0, HALF_W, HALF_H, "P2 top-right");
-        assert_rect(rect_for(&rects, P3), 0.0, HALF_H, HALF_W, HALF_H, "P3 bottom-left");
-        assert_rect(rect_for(&rects, P4), HALF_W, HALF_H, HALF_W, HALF_H, "P4 bottom-right");
+        assert_rect(
+            rect_for(&rects, P1),
+            0.0,
+            0.0,
+            HALF_W,
+            HALF_H,
+            "P1 top-left",
+        );
+        assert_rect(
+            rect_for(&rects, P2),
+            HALF_W,
+            0.0,
+            HALF_W,
+            HALF_H,
+            "P2 top-right",
+        );
+        assert_rect(
+            rect_for(&rects, P3),
+            0.0,
+            HALF_H,
+            HALF_W,
+            HALF_H,
+            "P3 bottom-left",
+        );
+        assert_rect(
+            rect_for(&rects, P4),
+            HALF_W,
+            HALF_H,
+            HALF_W,
+            HALF_H,
+            "P4 bottom-right",
+        );
 
         // Unambiguous neighbours (each shares a full edge with exactly one pane
         // per direction).
-        assert_eq!(tree.neighbor(P1, FocusDir::Right, W, H), Some(P2), "TL right -> TR");
-        assert_eq!(tree.neighbor(P1, FocusDir::Down, W, H), Some(P3), "TL down -> BL");
-        assert_eq!(tree.neighbor(P4, FocusDir::Left, W, H), Some(P3), "BR left -> BL");
-        assert_eq!(tree.neighbor(P4, FocusDir::Up, W, H), Some(P2), "BR up -> TR");
-        assert_eq!(tree.neighbor(P2, FocusDir::Left, W, H), Some(P1), "TR left -> TL");
-        assert_eq!(tree.neighbor(P3, FocusDir::Right, W, H), Some(P4), "BL right -> BR");
+        assert_eq!(
+            tree.neighbor(P1, FocusDir::Right, W, H),
+            Some(P2),
+            "TL right -> TR"
+        );
+        assert_eq!(
+            tree.neighbor(P1, FocusDir::Down, W, H),
+            Some(P3),
+            "TL down -> BL"
+        );
+        assert_eq!(
+            tree.neighbor(P4, FocusDir::Left, W, H),
+            Some(P3),
+            "BR left -> BL"
+        );
+        assert_eq!(
+            tree.neighbor(P4, FocusDir::Up, W, H),
+            Some(P2),
+            "BR up -> TR"
+        );
+        assert_eq!(
+            tree.neighbor(P2, FocusDir::Left, W, H),
+            Some(P1),
+            "TR left -> TL"
+        );
+        assert_eq!(
+            tree.neighbor(P3, FocusDir::Right, W, H),
+            Some(P4),
+            "BL right -> BR"
+        );
 
         // Edges return None.
-        assert_eq!(tree.neighbor(P1, FocusDir::Up, W, H), None, "TL has no pane above");
-        assert_eq!(tree.neighbor(P1, FocusDir::Left, W, H), None, "TL has no pane left");
-        assert_eq!(tree.neighbor(P4, FocusDir::Right, W, H), None, "BR has no pane right");
-        assert_eq!(tree.neighbor(P4, FocusDir::Down, W, H), None, "BR has no pane below");
+        assert_eq!(
+            tree.neighbor(P1, FocusDir::Up, W, H),
+            None,
+            "TL has no pane above"
+        );
+        assert_eq!(
+            tree.neighbor(P1, FocusDir::Left, W, H),
+            None,
+            "TL has no pane left"
+        );
+        assert_eq!(
+            tree.neighbor(P4, FocusDir::Right, W, H),
+            None,
+            "BR has no pane right"
+        );
+        assert_eq!(
+            tree.neighbor(P4, FocusDir::Down, W, H),
+            None,
+            "BR has no pane below"
+        );
     }
 
     #[test]
@@ -955,8 +1167,16 @@ mod tests {
         let mut tree = PaneTree::new(P1);
         tree.split(P1, P2, Orientation::Vertical);
         let absent: PaneId = 99;
-        assert_eq!(tree.neighbor(absent, FocusDir::Left, W, H), None, "unknown pane -> None");
-        assert_eq!(tree.neighbor(absent, FocusDir::Right, W, H), None, "unknown pane -> None");
+        assert_eq!(
+            tree.neighbor(absent, FocusDir::Left, W, H),
+            None,
+            "unknown pane -> None"
+        );
+        assert_eq!(
+            tree.neighbor(absent, FocusDir::Right, W, H),
+            None,
+            "unknown pane -> None"
+        );
     }
 
     #[test]
@@ -967,11 +1187,31 @@ mod tests {
         tree.split(P1, P2, Orientation::Vertical);
         tree.split(P1, P3, Orientation::Vertical);
 
-        assert_eq!(tree.neighbor(P1, FocusDir::Right, W, H), Some(P3), "P1 right -> P3");
-        assert_eq!(tree.neighbor(P3, FocusDir::Right, W, H), Some(P2), "P3 right -> P2");
-        assert_eq!(tree.neighbor(P2, FocusDir::Right, W, H), None, "P2 is at the right edge");
-        assert_eq!(tree.neighbor(P3, FocusDir::Left, W, H), Some(P1), "P3 left -> P1");
-        assert_eq!(tree.neighbor(P1, FocusDir::Left, W, H), None, "P1 is at the left edge");
+        assert_eq!(
+            tree.neighbor(P1, FocusDir::Right, W, H),
+            Some(P3),
+            "P1 right -> P3"
+        );
+        assert_eq!(
+            tree.neighbor(P3, FocusDir::Right, W, H),
+            Some(P2),
+            "P3 right -> P2"
+        );
+        assert_eq!(
+            tree.neighbor(P2, FocusDir::Right, W, H),
+            None,
+            "P2 is at the right edge"
+        );
+        assert_eq!(
+            tree.neighbor(P3, FocusDir::Left, W, H),
+            Some(P1),
+            "P3 left -> P1"
+        );
+        assert_eq!(
+            tree.neighbor(P1, FocusDir::Left, W, H),
+            None,
+            "P1 is at the left edge"
+        );
     }
 
     // =====================================================================
@@ -993,6 +1233,10 @@ mod tests {
         assert_eq!(first, second, "pane_rects() order is stable");
 
         // pane_rects order matches leaves order (same DFS).
-        assert_eq!(first, tree.leaves(), "pane_rects order matches leaves order");
+        assert_eq!(
+            first,
+            tree.leaves(),
+            "pane_rects order matches leaves order"
+        );
     }
 }

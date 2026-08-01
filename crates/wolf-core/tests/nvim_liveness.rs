@@ -134,7 +134,8 @@ fn crash_marks_dead() {
     );
 
     // Shutdown of an already-dead core reaps the dead child and returns Ok.
-    core.shutdown().expect("shutdown should be Ok even after a crash");
+    core.shutdown()
+        .expect("shutdown should be Ok even after a crash");
 }
 
 /// STALL → `NotResponding`: a wedged nvim event loop makes a synchronous
@@ -158,7 +159,10 @@ fn stall_marks_not_responding() {
     // Wedge nvim's main loop with a long FINITE sleep so it is still parked when the
     // RPC(s) below land. Do NOT wait_for_flush: a flush only arrives once nvim
     // recovers, and we want to call the RPC WHILE it is wedged.
-    ex_command(&core, &format!("lua (vim.uv or vim.loop).sleep({WEDGE_SLEEP_MS})"));
+    ex_command(
+        &core,
+        &format!("lua (vim.uv or vim.loop).sleep({WEDGE_SLEEP_MS})"),
+    );
     sleep(WEDGE_SETTLE);
 
     // Drive a `block_on_rpc`-backed method against the wedged nvim; each call
@@ -166,10 +170,13 @@ fn stall_marks_not_responding() {
     // degrades to its fallback (empty) on timeout. Repeating it satisfies the
     // "repeated Timeout" escalation regardless of the exact threshold; the finite
     // wedge stays parked across the whole poll window.
-    poll_until_no_drain("liveness() to escalate to NotResponding while wedged", || {
-        let _ = core.list_buffers();
-        core.liveness() == Liveness::NotResponding
-    });
+    poll_until_no_drain(
+        "liveness() to escalate to NotResponding while wedged",
+        || {
+            let _ = core.list_buffers();
+            core.liveness() == Liveness::NotResponding
+        },
+    );
     assert_eq!(
         core.liveness(),
         Liveness::NotResponding,
@@ -178,7 +185,8 @@ fn stall_marks_not_responding() {
 
     // Teardown must NOT block for the remaining wedge: `shutdown` reaps via a
     // bounded `child.wait()` + SIGKILL of the wedged child.
-    core.shutdown().expect("shutdown should force-kill the wedged child and return Ok");
+    core.shutdown()
+        .expect("shutdown should force-kill the wedged child and return Ok");
 }
 
 /// STALL → recovery AUTO-CLEAR (RESOLVED §11): a transient stall escalates to
@@ -226,10 +234,13 @@ fn stall_then_recovery_clears_not_responding() {
     // nvim recovers) until liveness returns to Alive — this is the load-bearing
     // assertion. Bounded by FLUSH_TIMEOUT (>> the 1.5s wedge), and NOT draining, so
     // the auto-clear wake stays queued for the seam assertion.
-    poll_until_no_drain("liveness() to auto-clear back to Alive after recovery", || {
-        let _ = core.list_buffers();
-        core.liveness() == Liveness::Alive
-    });
+    poll_until_no_drain(
+        "liveness() to auto-clear back to Alive after recovery",
+        || {
+            let _ = core.list_buffers();
+            core.liveness() == Liveness::Alive
+        },
+    );
     assert_eq!(
         core.liveness(),
         Liveness::Alive,

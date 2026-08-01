@@ -50,10 +50,9 @@ pub fn grid_size_for(width_px: i32, height_px: i32, cell_w: f64, cell_h: f64) ->
 fn floor_div_clamped(numer: f64, denom: f64) -> u16 {
     // Clamp in f64 space FIRST so the value is provably within u16 range before
     // the cast; this makes the truncating cast saturating-safe by construction.
-    let n = (numer / denom).floor().clamp(
-        f64::from(MIN_GRID_DIM),
-        f64::from(u16::MAX),
-    );
+    let n = (numer / denom)
+        .floor()
+        .clamp(f64::from(MIN_GRID_DIM), f64::from(u16::MAX));
     // n is finite and in [1.0, 65535.0], so the cast neither wraps nor truncates
     // out of range; `floor` already removed any fractional part.
     #[allow(

@@ -452,7 +452,10 @@ fn buffers_map_stays_canonicalized_and_omits_unnamed_windows() {
         "a genuinely unnamed buffer keeps its window OUT of the buffers map"
     );
     let st = core.pane_status(grid);
-    assert_eq!(st.filename, NO_NAME, "an unnamed buffer still reports NO_NAME");
+    assert_eq!(
+        st.filename, NO_NAME,
+        "an unnamed buffer still reports NO_NAME"
+    );
     assert_eq!(st.display_path, "", "…with an empty display_path");
     assert_eq!(st.abs_path, "", "…and an empty abs_path");
 

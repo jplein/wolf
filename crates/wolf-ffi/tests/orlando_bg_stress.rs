@@ -280,7 +280,7 @@ fn check_invariants(
     // (otherwise orlando isn't painting and the whole test would be vacuous).
     let mut block_bg: Option<Option<u32>> = None;
 
-    for r in 0..rows {
+    for (r, row) in row_cells.iter().enumerate().take(rows) {
         let bufline = topline + r;
         if bufline >= doc_lines.len() {
             break; // end-of-buffer filler rows
@@ -301,8 +301,8 @@ fn check_invariants(
             continue;
         }
 
-        let expected = *block_bg.get_or_insert_with(|| row_cells[r][0].bg);
-        for (c, cell) in row_cells[r].iter().enumerate() {
+        let expected = *block_bg.get_or_insert_with(|| row[0].bg);
+        for (c, cell) in row.iter().enumerate() {
             if cell.bg != expected {
                 violations.push(format!(
                     "BG row {r} (buffer line {bufline}) col {c} text {:?}: \

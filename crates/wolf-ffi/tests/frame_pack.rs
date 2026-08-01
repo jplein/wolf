@@ -92,6 +92,13 @@ fn cursor_on(grid: u64, row: usize, col: usize) -> Cursor {
 
 /// Assembles a single-grid snapshot from explicit parts (every other `Snapshot`
 /// field defaults: no windows, no active win, seq 0).
+#[allow(
+    clippy::field_reassign_with_default,
+    reason = "clippy's suggested `Snapshot { .., ..Default::default() }` does not compile \
+              here: `Snapshot` carries a crate-private field (`pending_confirm`), and \
+              functional-update syntax cannot fill a private field from another crate \
+              (E0451). Build-then-assign is the only shape available."
+)]
 fn snapshot(
     grid_id: u64,
     grid: Grid,

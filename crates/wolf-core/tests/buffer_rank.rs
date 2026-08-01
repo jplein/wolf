@@ -124,7 +124,7 @@ fn equal_lastused_breaks_tie_by_bufnr_ascending() {
 /// order among the survivors. Query "rs":
 ///   - "main.rs" / "lib.rs" contain the subsequence r..s -> KEPT.
 ///   - "README.md" has no 's' after its 'r' -> DROPPED.
-/// Among the survivors, the higher-`lastused` (lib.rs) sorts ahead of main.rs.
+///     Among the survivors, the higher-`lastused` (lib.rs) sorts ahead of main.rs.
 #[test]
 fn query_narrows_and_keeps_mru_first() {
     let buffers = [

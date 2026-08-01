@@ -59,7 +59,7 @@ The window has a built-in file picker (implemented in [`src/picker.rs`](src/READ
 - **Navigation + activation.** `Up`/`Down` move the list selection (focus stays in the textbox, so typing keeps working; selection is preserved as streamed results arrive). `Enter` (or clicking a row) opens the selected file; `Esc` closes the picker. While it is open, all keys go to the picker and are not forwarded to Neovim.
 - **Open + MRU.** Selecting a file sends it through `wolf-core` as `InputEvent::Open { path }`, which Neovim loads via `:e`; the core's input pump records the open in the MRU cache, so it ranks first next time. There is no separate "select" path.
 
-The only pure, headlessly-tested seam here is `is_picker_trigger` (the trigger predicate); the navigation clamp/preserve logic is factored into the pure `next_selection` / `restored_index` helpers (also unit-tested), with the full end-to-end behavior covered by the opt-in picker cage smokes (see [`tests/README.md`](tests/README.md)).
+The only pure, headlessly-tested seam here is `is_picker_trigger` (the trigger predicate); the navigation clamp/preserve logic is factored into the pure `next_selection` / `restored_index` helpers (also unit-tested), with the full end-to-end behavior covered by the picker cage smokes (see [`tests/README.md`](tests/README.md)).
 
 ## The seams
 
@@ -120,19 +120,23 @@ nix develop --command cargo build -p wolf-gnome
 nix develop --command cargo test  -p wolf-gnome
 ```
 
+`cargo test -p wolf-gnome` now includes the nine cage smokes described below, which is why it is slow. These two commands are a narrow iteration loop; the authoritative full check is the Linux verification gate in [`build.md`](../../build.md), "The Linux verification gate".
+
 The devShell provides the GTK toolchain (`gtk4`, `cairo`, `pango`, `glib`, `gdk-pixbuf`, `graphene`, `harfbuzz`) and pins a deterministic font: it points `FONTCONFIG_FILE` at a generated copy of [`testdata/fonts.conf`](testdata/fonts.conf) exposing **only** DejaVu Sans Mono (no host font dirs), so Pango measurement / Cairo rasterization is reproducible.
 
 The round-trip test spawns **real Neovim** (no mocks, per project policy) located via `WOLF_NVIM_BIN` (also exported by the devShell). See [`tests/README.md`](tests/README.md).
 
 ### The headless smoke test
 
-A suite of **opt-in, `#[ignore]`d** end-to-end tests launches the real application under a headless Wayland compositor and confirms it actually draws a window a human could see. Run them explicitly:
+A suite of nine end-to-end tests launches the real application under a headless Wayland compositor and confirms it actually draws a window a human could see. They are **not** `#[ignore]`d: they run as part of `cargo test -p wolf-gnome` and of the Linux verification gate. To run just them:
 
 ```sh
-nix develop --command cargo test -p wolf-gnome -- --ignored
+nix develop --command cargo test -p wolf-gnome --test smoke_headless
 ```
 
-They require the flake's smoke toolchain (`cage`, `wtype`, `grim`, `tesseract` on `PATH`), a set and writable `XDG_RUNTIME_DIR` (where the Wayland socket lives), and `WOLF_NVIM_BIN`. Each runs its whole scenario inside `cage`, drives the window with `wtype`, screenshots the live window with `grim`, and OCRs it with `tesseract --psm 11` ("sparse text" mode, needed for the light-on-dark editor grid). The base smoke types `hello` in insert mode and asserts the OCR loosely contains it; further smokes cover the file picker, the file-tree sidebar, and the four split-pane operations (vertical / horizontal split, focus move, close pane). Missing preconditions fail loud rather than silently skipping. See the full list in [`tests/README.md`](tests/README.md).
+That target reports **`10 passed`**, not `9`. Alongside the nine smokes the same file carries one pure, compositor-free guard, `sidebar_filler_names_cannot_satisfy_any_smoke_assertion`, which asserts that no sidebar-filler fixture filename can contain a substring a smoke's OCR assertion looks for — otherwise that smoke would pass green forever on the sidebar row alone. It needs no toolchain and runs in microseconds. See [`tests/README.md`](tests/README.md).
+
+They require the flake's smoke toolchain (`cage`, `wtype`, `grim`, `tesseract` on `PATH`), a set and writable `XDG_RUNTIME_DIR` (where the Wayland socket lives), and `WOLF_NVIM_BIN`. Each runs its whole scenario inside `cage`, drives the window with `wtype`, screenshots the live window with `grim`, and OCRs it with `tesseract --psm 11` ("sparse text" mode, needed for the light-on-dark editor grid). The base smoke types `hello` in insert mode and asserts the OCR loosely contains it; further smokes cover the file picker, the file-tree sidebar, and the five split-pane operations (vertical split, horizontal split, the three-pane same-orientation split that guards the N-ary flatten, focus move, and close pane). Missing preconditions fail loud rather than silently skipping. See the full list in [`tests/README.md`](tests/README.md).
 
 ## gtk-rs versions
 
