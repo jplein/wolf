@@ -39,6 +39,13 @@ final class MainWindow: NSWindow {
     splitViewController.sidebarItem
   }
 
+  /// Toggles the sidebar via the split VC's animated
+  /// `NSSplitViewController.toggleSidebar(_:)`, which flips the sidebar item's
+  /// `isCollapsed` (so `StatePersistence`'s KVO on it still fires).
+  func toggleSidebar() {
+    splitViewController.toggleSidebar(nil)
+  }
+
   /// Builds the window around `sidebar` (the tree/search container) and
   /// `paneContainer` (editor),
   /// sizing the editor pane to `cols` × `rows` cells with the cmdline strip as

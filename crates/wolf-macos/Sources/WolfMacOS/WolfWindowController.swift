@@ -710,6 +710,13 @@ final class WolfWindowController: NSObject, NSWindowDelegate {
     if panel == .search { sidebarContainer?.search.focusSearchField() }
   }
 
+  /// Toggles the sidebar (collapse/expand) via the window's animated
+  /// `NSSplitViewController.toggleSidebar(_:)` path, which flips the sidebar
+  /// item's `isCollapsed` so `StatePersistence`'s KVO still relays visibility.
+  func toggleSidebar() {
+    window?.toggleSidebar()
+  }
+
   /// This view's PERSISTED working directory for the state snapshot + any
   /// surfaced cwd (Window menu / palette). A folder view reads its tabpage's
   /// authoritative tab-local `:tcd` cwd via `cwd_for_tabpage` — now a cheap

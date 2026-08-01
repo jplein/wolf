@@ -206,6 +206,14 @@ mod command_kind {
     /// Toggle the active buffer between the ~90-char default content width and full
     /// pane width (`b:wolf_full_width`).
     pub const FULL_WIDTH: u8 = 22;
+    /// Toggle the sidebar (collapse/expand) — a native-only AppKit action.
+    pub const TOGGLE_SIDEBAR: u8 = 23;
+    /// Reveal the sidebar showing the file/project tree — a native-only AppKit
+    /// action.
+    pub const SIDEBAR_SHOW_PROJECT: u8 = 24;
+    /// Reveal the sidebar showing the search UI (and focus the search field) — a
+    /// native-only AppKit action.
+    pub const SEARCH_IN_PROJECT: u8 = 25;
 }
 
 /// The palette-row-kind discriminants packed into [`FfiCommandRow::row_kind`].
@@ -979,7 +987,7 @@ mod ffi {
     extern "Rust" {
         type FfiCommand;
 
-        // The command kind (`command_kind::NEW_WINDOW` .. `FULL_WIDTH`).
+        // The command kind (`command_kind::NEW_WINDOW` .. `SEARCH_IN_PROJECT`).
         fn kind(&self) -> u8;
     }
 
@@ -2949,7 +2957,7 @@ pub struct FfiCommand {
 }
 
 impl FfiCommand {
-    /// The command kind (`command_kind::NEW_WINDOW` .. `TERMINAL`).
+    /// The command kind (`command_kind::NEW_WINDOW` .. `SEARCH_IN_PROJECT`).
     #[must_use]
     pub fn kind(&self) -> u8 {
         self.kind
@@ -2983,6 +2991,9 @@ impl FfiCommand {
             Command::Terminal => command_kind::TERMINAL,
             Command::PreviewInBrowser => command_kind::PREVIEW_IN_BROWSER,
             Command::FullWidth => command_kind::FULL_WIDTH,
+            Command::ToggleSidebar => command_kind::TOGGLE_SIDEBAR,
+            Command::SidebarShowProject => command_kind::SIDEBAR_SHOW_PROJECT,
+            Command::SearchInProject => command_kind::SEARCH_IN_PROJECT,
         };
         Self { kind }
     }

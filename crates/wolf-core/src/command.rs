@@ -28,7 +28,8 @@
 /// `ClosePane`(8), `NewBuffer`(9), `ResetFontSize`(10), `IncreaseFontSize`(11),
 /// `DecreaseFontSize`(12), `CommandPalette`(13), `Copy`(14), `Paste`(15),
 /// `BufferPicker`(16), `NewTab`(17), `Preview`(18), `Edit`(19), `Terminal`(20),
-/// `PreviewInBrowser`(21), `FullWidth`(22).
+/// `PreviewInBrowser`(21), `FullWidth`(22), `ToggleSidebar`(23),
+/// `SidebarShowProject`(24), `SearchInProject`(25).
 /// Adding a command is additive
 /// (append a variant + a [`COMMAND_SPECS`] row); reordering is a breaking change.
 /// `CommandPalette` is the palette's own invoking command and is EXCLUDED from the
@@ -88,6 +89,14 @@ pub enum Command {
     /// Toggle the active buffer between the ~90-char default content width and full
     /// pane width (`b:wolf_full_width`).
     FullWidth,
+    /// Toggle the sidebar (collapse/expand) — a native-only AppKit action.
+    ToggleSidebar,
+    /// Reveal the sidebar showing the file/project tree — a native-only AppKit
+    /// action.
+    SidebarShowProject,
+    /// Reveal the sidebar showing the search UI (and focus the search field) — a
+    /// native-only AppKit action.
+    SearchInProject,
 }
 
 /// The menu group a command belongs to in a native menu bar.
@@ -299,6 +308,27 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         title: "Use full width for content",
         menu: MenuGroup::View,
     },
+    CommandSpec {
+        command: Command::ToggleSidebar,
+        id: "toggle_sidebar",
+        ex_command: "WolfToggleSidebar",
+        title: "Toggle sidebar",
+        menu: MenuGroup::View,
+    },
+    CommandSpec {
+        command: Command::SidebarShowProject,
+        id: "sidebar_show_project",
+        ex_command: "WolfSidebarShowProject",
+        title: "Sidebar: Show project",
+        menu: MenuGroup::View,
+    },
+    CommandSpec {
+        command: Command::SearchInProject,
+        id: "search_in_project",
+        ex_command: "WolfSearchInProject",
+        title: "Search in project",
+        menu: MenuGroup::View,
+    },
 ];
 
 impl Command {
@@ -329,11 +359,13 @@ mod tests {
     /// The total number of registered commands AFTER appending
     /// `Command::Copy` (14), `Command::Paste` (15), `Command::BufferPicker`
     /// (16), `Command::NewTab` (17), `Command::Preview` (18), `Command::Edit`
-    /// (19), `Command::Terminal` (20), `Command::PreviewInBrowser` (21), and
-    /// `Command::FullWidth` (discriminant 22) past `Command::CommandPalette` (13).
+    /// (19), `Command::Terminal` (20), `Command::PreviewInBrowser` (21),
+    /// `Command::FullWidth` (22), `Command::ToggleSidebar` (23),
+    /// `Command::SidebarShowProject` (24), and `Command::SearchInProject`
+    /// (discriminant 25) past `Command::CommandPalette` (13).
     /// A named constant so the magic-number lint stays quiet and the count's
     /// meaning is explicit.
-    const EXPECTED_COMMAND_COUNT: usize = 23;
+    const EXPECTED_COMMAND_COUNT: usize = 26;
 
     /// The append-only slice index (== FFI discriminant == `command_kind`) of
     /// `Command::CommandPalette`.
@@ -379,9 +411,24 @@ mod tests {
     const PREVIEW_IN_BROWSER_INDEX: usize = 21;
 
     /// The append-only slice index (== FFI discriminant == `command_kind`) of
-    /// `Command::FullWidth`: the appended discriminant 22 and LAST row of
-    /// [`COMMAND_SPECS`].
+    /// `Command::FullWidth`: the appended discriminant 22. No longer the last row
+    /// after `ToggleSidebar` is appended at 23.
     const FULL_WIDTH_INDEX: usize = 22;
+
+    /// The append-only slice index (== FFI discriminant == `command_kind`) of
+    /// `Command::ToggleSidebar`: the appended discriminant 23. No longer the last
+    /// row after `SidebarShowProject` is appended at 24.
+    const TOGGLE_SIDEBAR_INDEX: usize = 23;
+
+    /// The append-only slice index (== FFI discriminant == `command_kind`) of
+    /// `Command::SidebarShowProject`: the appended discriminant 24. No longer the
+    /// last row after `SearchInProject` is appended at 25.
+    const SIDEBAR_SHOW_PROJECT_INDEX: usize = 24;
+
+    /// The append-only slice index (== FFI discriminant == `command_kind`) of
+    /// `Command::SearchInProject`: the appended discriminant 25 and LAST row of
+    /// [`COMMAND_SPECS`].
+    const SEARCH_IN_PROJECT_INDEX: usize = 25;
 
     /// `from_id` resolves the canonical `command_palette` id to the new variant.
     #[test]
@@ -405,7 +452,8 @@ mod tests {
     }
 
     /// Appending Copy, Paste, BufferPicker, NewTab, Preview, Edit, Terminal,
-    /// PreviewInBrowser, and FullWidth grows the registry to exactly 23 rows.
+    /// PreviewInBrowser, FullWidth, ToggleSidebar, SidebarShowProject, and
+    /// SearchInProject grows the registry to exactly 26 rows.
     #[test]
     fn command_specs_has_expected_len() {
         assert_eq!(
@@ -413,7 +461,8 @@ mod tests {
             EXPECTED_COMMAND_COUNT,
             "COMMAND_SPECS must hold exactly {EXPECTED_COMMAND_COUNT} rows \
              after appending Copy, Paste, BufferPicker, NewTab, Preview, Edit, \
-             Terminal, PreviewInBrowser, and FullWidth"
+             Terminal, PreviewInBrowser, FullWidth, ToggleSidebar, \
+             SidebarShowProject, and SearchInProject"
         );
     }
 
@@ -712,19 +761,120 @@ mod tests {
         assert_eq!(spec.menu, MenuGroup::View, "menu group");
     }
 
-    /// Append-discriminant guard: FullWidth is the LAST row (index 22), so the
-    /// slice index equals its FFI discriminant. Reordering breaks this.
+    /// Append-discriminant guard: FullWidth stays at fixed index 22 (no longer the
+    /// last row after ToggleSidebar is appended at 23), so the slice index still
+    /// equals its FFI discriminant. Reordering breaks this.
     #[test]
-    fn full_width_is_the_last_row() {
+    fn full_width_is_at_index_22() {
         assert_eq!(
             COMMAND_SPECS[FULL_WIDTH_INDEX].command,
             Command::FullWidth,
             "the row at index {FULL_WIDTH_INDEX} must be Command::FullWidth"
         );
+    }
+
+    /// `from_id` resolves the canonical `toggle_sidebar` id to the new variant.
+    #[test]
+    fn toggle_sidebar_id_round_trips() {
         assert_eq!(
-            FULL_WIDTH_INDEX,
+            Command::from_id("toggle_sidebar"),
+            Some(Command::ToggleSidebar),
+            "\"toggle_sidebar\" must resolve to Command::ToggleSidebar"
+        );
+    }
+
+    /// The ToggleSidebar spec pins its id, ex-command, title, and View menu group
+    /// (the canonical registry row for the toggle-sidebar command).
+    #[test]
+    fn toggle_sidebar_spec_fields() {
+        let spec = Command::ToggleSidebar.spec();
+        assert_eq!(spec.id, "toggle_sidebar", "id");
+        assert_eq!(spec.ex_command, "WolfToggleSidebar", "ex_command");
+        assert_eq!(spec.title, "Toggle sidebar", "title");
+        assert_eq!(spec.menu, MenuGroup::View, "menu group");
+    }
+
+    /// Append-discriminant guard: ToggleSidebar stays at fixed index 23 (no longer
+    /// the last row after SidebarShowProject is appended at 24), so the slice index
+    /// still equals its FFI discriminant. Reordering breaks this.
+    #[test]
+    fn toggle_sidebar_is_at_index_23() {
+        assert_eq!(
+            COMMAND_SPECS[TOGGLE_SIDEBAR_INDEX].command,
+            Command::ToggleSidebar,
+            "the row at index {TOGGLE_SIDEBAR_INDEX} must be Command::ToggleSidebar"
+        );
+    }
+
+    /// `from_id` resolves the canonical `sidebar_show_project` id to the new variant.
+    #[test]
+    fn sidebar_show_project_id_round_trips() {
+        assert_eq!(
+            Command::from_id("sidebar_show_project"),
+            Some(Command::SidebarShowProject),
+            "\"sidebar_show_project\" must resolve to Command::SidebarShowProject"
+        );
+    }
+
+    /// The SidebarShowProject spec pins its id, ex-command, title, and View menu
+    /// group (the canonical registry row for the show-project command).
+    #[test]
+    fn sidebar_show_project_spec_fields() {
+        let spec = Command::SidebarShowProject.spec();
+        assert_eq!(spec.id, "sidebar_show_project", "id");
+        assert_eq!(spec.ex_command, "WolfSidebarShowProject", "ex_command");
+        assert_eq!(spec.title, "Sidebar: Show project", "title");
+        assert_eq!(spec.menu, MenuGroup::View, "menu group");
+    }
+
+    /// Append-discriminant guard: SidebarShowProject stays at fixed index 24 (no
+    /// longer the last row after SearchInProject is appended at 25), so the slice
+    /// index still equals its FFI discriminant. Reordering breaks this.
+    #[test]
+    fn sidebar_show_project_is_at_index_24() {
+        assert_eq!(
+            COMMAND_SPECS[SIDEBAR_SHOW_PROJECT_INDEX].command,
+            Command::SidebarShowProject,
+            "the row at index {SIDEBAR_SHOW_PROJECT_INDEX} must be \
+             Command::SidebarShowProject"
+        );
+    }
+
+    /// `from_id` resolves the canonical `search_in_project` id to the new variant.
+    #[test]
+    fn search_in_project_id_round_trips() {
+        assert_eq!(
+            Command::from_id("search_in_project"),
+            Some(Command::SearchInProject),
+            "\"search_in_project\" must resolve to Command::SearchInProject"
+        );
+    }
+
+    /// The SearchInProject spec pins its id, ex-command, title, and View menu group
+    /// (the canonical registry row for the search-in-project command).
+    #[test]
+    fn search_in_project_spec_fields() {
+        let spec = Command::SearchInProject.spec();
+        assert_eq!(spec.id, "search_in_project", "id");
+        assert_eq!(spec.ex_command, "WolfSearchInProject", "ex_command");
+        assert_eq!(spec.title, "Search in project", "title");
+        assert_eq!(spec.menu, MenuGroup::View, "menu group");
+    }
+
+    /// Append-discriminant guard: SearchInProject is the LAST row (index 25), so
+    /// the slice index equals its FFI discriminant. Reordering breaks this.
+    #[test]
+    fn search_in_project_is_the_last_row() {
+        assert_eq!(
+            COMMAND_SPECS[SEARCH_IN_PROJECT_INDEX].command,
+            Command::SearchInProject,
+            "the row at index {SEARCH_IN_PROJECT_INDEX} must be \
+             Command::SearchInProject"
+        );
+        assert_eq!(
+            SEARCH_IN_PROJECT_INDEX,
             COMMAND_SPECS.len() - 1,
-            "FullWidth must be the FINAL row of COMMAND_SPECS"
+            "SearchInProject must be the FINAL row of COMMAND_SPECS"
         );
     }
 

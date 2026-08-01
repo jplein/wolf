@@ -24,11 +24,12 @@
 //! CLOSE_PANE = 8, NEW_BUFFER = 9, RESET_FONT_SIZE = 10, INCREASE_FONT_SIZE = 11,
 //! DECREASE_FONT_SIZE = 12, COMMAND_PALETTE = 13, COPY = 14, PASTE = 15,
 //! BUFFER_PICKER = 16, NEW_TAB = 17, PREVIEW = 18, EDIT = 19, TERMINAL = 20,
-//! PREVIEW_IN_BROWSER = 21, FULL_WIDTH = 22 (the `wolf_core::Command` variant
-//! order). These local consts MUST match `mod command_kind` in
+//! PREVIEW_IN_BROWSER = 21, FULL_WIDTH = 22, TOGGLE_SIDEBAR = 23,
+//! SIDEBAR_SHOW_PROJECT = 24, SEARCH_IN_PROJECT = 25 (the `wolf_core::Command`
+//! variant order). These local consts MUST match `mod command_kind` in
 //! `wolf-ffi/src/lib.rs` and the Swift `CommandKind` port — exactly how `panes.rs`
 //! re-declares `INTENT_KIND_SPLIT` locally as a contract guard (the guard array
-//! below asserts contiguous 0..=22).
+//! below asserts contiguous 0..=25).
 //!
 //! ## What this asserts
 //!
@@ -120,6 +121,15 @@ const CMD_KIND_PREVIEW_IN_BROWSER: u8 = 21;
 /// `FfiCommand::kind()` for Use Full Width (the appended discriminant 22, View
 /// menu; the per-buffer content-width toggle).
 const CMD_KIND_FULL_WIDTH: u8 = 22;
+/// `FfiCommand::kind()` for Toggle Sidebar (the appended discriminant 23, View
+/// menu; collapses/expands the sidebar).
+const CMD_KIND_TOGGLE_SIDEBAR: u8 = 23;
+/// `FfiCommand::kind()` for Sidebar: Show project (the appended discriminant 24,
+/// View menu; reveals the sidebar showing the file/project tree).
+const CMD_KIND_SIDEBAR_SHOW_PROJECT: u8 = 24;
+/// `FfiCommand::kind()` for Search in project (the appended discriminant 25, View
+/// menu; reveals the sidebar showing the search UI).
+const CMD_KIND_SEARCH_IN_PROJECT: u8 = 25;
 
 /// Builds a printable-character `FfiKeyEvent` (kind=Char) for `c`, all modifiers
 /// false (the already-resolved glyph rides in `ch`). Same as `panes.rs`.
@@ -186,8 +196,8 @@ fn commands_drain_close_and_minimize() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // Discriminant-contract guard: the local consts MUST be contiguous 0..=22 in
-    // variant order (mirrors `mod command_kind`). Referencing all twenty-three here
+    // Discriminant-contract guard: the local consts MUST be contiguous 0..=25 in
+    // variant order (mirrors `mod command_kind`). Referencing all twenty-six here
     // also keeps them from tripping dead-code lints.
     assert_eq!(
         [
@@ -214,9 +224,15 @@ fn commands_drain_close_and_minimize() {
             CMD_KIND_TERMINAL,
             CMD_KIND_PREVIEW_IN_BROWSER,
             CMD_KIND_FULL_WIDTH,
+            CMD_KIND_TOGGLE_SIDEBAR,
+            CMD_KIND_SIDEBAR_SHOW_PROJECT,
+            CMD_KIND_SEARCH_IN_PROJECT,
         ],
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22],
-        "command_kind discriminants must be contiguous 0..=22 in Command variant order"
+        [
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25
+        ],
+        "command_kind discriminants must be contiguous 0..=25 in Command variant order"
     );
 
     let init_lua = common::init_lua_path();
@@ -362,6 +378,34 @@ fn commands_drain_close_and_minimize() {
     // the `full_width.rs` integration test via `handle.toggle_full_width()`.
     send_ex_command(&handle, ":WolfFullWidth");
     poll_for_command_kind(&handle, CMD_KIND_FULL_WIDTH, ":WolfFullWidth");
+
+    // --- 3n. :WolfToggleSidebar<CR> -> an FfiCommand with kind() == TOGGLE_SIDEBAR
+    // A pure FFI drain: nothing acts on it here (the front-end that would toggle
+    // `sidebarItem.isCollapsed` is absent), so no sidebar is collapsed/expanded.
+    // This proves `:WolfToggleSidebar` is auto-registered as a COMMAND_SPECS row and
+    // drains the appended discriminant 23.
+    send_ex_command(&handle, ":WolfToggleSidebar");
+    poll_for_command_kind(&handle, CMD_KIND_TOGGLE_SIDEBAR, ":WolfToggleSidebar");
+
+    // --- 3o. :WolfSidebarShowProject<CR> -> an FfiCommand with kind() ==
+    // SIDEBAR_SHOW_PROJECT. A pure FFI drain: nothing acts on it here (the front-end
+    // that would call `showSidebar(panel: .tree)` is absent), so no sidebar is
+    // revealed. This proves `:WolfSidebarShowProject` is auto-registered as a
+    // COMMAND_SPECS row and drains the appended discriminant 24.
+    send_ex_command(&handle, ":WolfSidebarShowProject");
+    poll_for_command_kind(
+        &handle,
+        CMD_KIND_SIDEBAR_SHOW_PROJECT,
+        ":WolfSidebarShowProject",
+    );
+
+    // --- 3p. :WolfSearchInProject<CR> -> an FfiCommand with kind() ==
+    // SEARCH_IN_PROJECT. A pure FFI drain: nothing acts on it here (the front-end
+    // that would call `showSidebar(panel: .search)` and focus the search field is
+    // absent), so no sidebar is revealed. This proves `:WolfSearchInProject` is
+    // auto-registered as a COMMAND_SPECS row and drains the appended discriminant 25.
+    send_ex_command(&handle, ":WolfSearchInProject");
+    poll_for_command_kind(&handle, CMD_KIND_SEARCH_IN_PROJECT, ":WolfSearchInProject");
 
     // --- 4. Shutdown: clean teardown ----------------------------------------
     handle.shutdown();

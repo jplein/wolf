@@ -15,8 +15,9 @@
 //    closePane = 8, newBuffer = 9, resetFontSize = 10, increaseFontSize = 11,
 //    decreaseFontSize = 12, commandPalette = 13, copy = 14, paste = 15,
 //    bufferPicker = 16, newTab = 17, preview = 18, edit = 19, terminal = 20,
-//    previewInBrowser = 21, fullWidth = 22 (the range 0..22). Any out-of-range
-//    discriminant decodes to `nil`.
+//    previewInBrowser = 21, fullWidth = 22, toggleSidebar = 23,
+//    sidebarShowProject = 24, searchInProject = 25 (the range 0..25). Any
+//    out-of-range discriminant decodes to `nil`.
 //
 //  NOTE to coder: this references the pure `WolfKeyMap.CommandKind` enum the coder
 //  adds in `Sources/WolfKeyMap/CommandSeam.swift` (Foundation only, no AppKit),
@@ -65,17 +66,25 @@ final class CommandSeamTests: XCTestCase {
     XCTAssertEqual(
       CommandKind(ffi: 21), .previewInBrowser, "ffi 21 -> .previewInBrowser")
     XCTAssertEqual(CommandKind(ffi: 22), .fullWidth, "ffi 22 -> .fullWidth")
+    XCTAssertEqual(
+      CommandKind(ffi: 23), .toggleSidebar, "ffi 23 -> .toggleSidebar")
+    XCTAssertEqual(
+      CommandKind(ffi: 24), .sidebarShowProject,
+      "ffi 24 -> .sidebarShowProject")
+    XCTAssertEqual(
+      CommandKind(ffi: 25), .searchInProject, "ffi 25 -> .searchInProject")
   }
 
   // MARK: - out-of-range discriminants decode to nil
 
   // The first out-of-range probe tracks the registry's high-water mark: it was 21
-  // while `previewInBrowser` was the last case, and moves to 23 now that `fullWidth`
-  // claims 22. Appending a command WITHOUT bumping this probe turns the new case's
-  // decode into a silent nil assertion, so it must be updated in lockstep with the
-  // enum.
+  // while `previewInBrowser` was the last case, then 23 while `fullWidth` claimed 22,
+  // and moves to 26 now that `searchInProject` claims 25 (with `toggleSidebar` = 23
+  // and `sidebarShowProject` = 24). Appending a command WITHOUT bumping this probe
+  // turns the new case's decode into a silent nil assertion, so it must be updated in
+  // lockstep with the enum.
   func testCommandKindOutOfRangeIsNil() {
-    XCTAssertNil(CommandKind(ffi: 23), "the first out-of-range discriminant -> nil")
+    XCTAssertNil(CommandKind(ffi: 26), "the first out-of-range discriminant -> nil")
     XCTAssertNil(CommandKind(ffi: 255), "a far out-of-range discriminant -> nil")
   }
 }

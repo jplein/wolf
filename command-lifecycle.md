@@ -17,7 +17,7 @@ The `Command` enum's VARIANT ORDER is that discriminant contract. It is **append
 
 Everything starts here. The module is pure data + enums (no GUI toolkit, honoring wolf-core's one hard rule):
 
-- **`enum Command`** — one variant per command, in discriminant order (`NewWindow`(0), `CloseWindow`(1), … `NewTab`(17), `Preview`(18), `Edit`(19), `Terminal`(20), `PreviewInBrowser`(21), `FullWidth`(22)). The doc comment on the enum spells out the full ordered list and restates the append-only rule.
+- **`enum Command`** — one variant per command, in discriminant order (`NewWindow`(0), `CloseWindow`(1), … `NewTab`(17), `Preview`(18), `Edit`(19), `Terminal`(20), `PreviewInBrowser`(21), `FullWidth`(22), `ToggleSidebar`(23), `SidebarShowProject`(24), `SearchInProject`(25)). The doc comment on the enum spells out the full ordered list and restates the append-only rule. The last three are flavor (a) native-only sidebar UI actions (append LAST; the captive nvim is never touched — see §8a).
 - **`struct CommandSpec { command, id, ex_command, title, menu }`** — the canonical metadata for one command, all fields public. The `id` → `ex_command` mapping is stored EXPLICITLY as data (there is no snake→Pascal transform code), so the registry is the one source of truth.
 - **`const COMMAND_SPECS: &[CommandSpec]`** — one row per command, in variant order, so the **slice index equals the FFI discriminant**. Example row:
 
@@ -52,8 +52,8 @@ Both faces `rpcnotify` the SAME `wolf_command` channel with the canonical `id`. 
 
 The native front-end never learns the ids; it speaks only the discriminant. Three ports keep it aligned with the registry:
 
-- **`mod command_kind`** in `crates/wolf-ffi/src/lib.rs` — the `u8` constants (`NEW_WINDOW = 0` … `NEW_TAB = 17`, `PREVIEW = 18`, `EDIT = 19`, `TERMINAL = 20`, `PREVIEW_IN_BROWSER = 21`, `FULL_WIDTH = 22`), in `wolf_core::Command` order. `FfiCommand::from_command` is an EXHAUSTIVE match over `Command` that packs each variant to its `command_kind` (so adding or reordering a variant is a compile error here).
-- **`enum CommandKind`** in `crates/wolf-macos/Sources/WolfKeyMap/CommandSeam.swift` — the AppKit-free Swift mirror. `init?(ffi: UInt8)` decodes the byte (`0` → `.newWindow` … `20` → `.terminal`, `21` → `.previewInBrowser`, `22` → `.fullWidth`, anything else → `nil`), guarding the contract.
+- **`mod command_kind`** in `crates/wolf-ffi/src/lib.rs` — the `u8` constants (`NEW_WINDOW = 0` … `NEW_TAB = 17`, `PREVIEW = 18`, `EDIT = 19`, `TERMINAL = 20`, `PREVIEW_IN_BROWSER = 21`, `FULL_WIDTH = 22`, `TOGGLE_SIDEBAR = 23`, `SIDEBAR_SHOW_PROJECT = 24`, `SEARCH_IN_PROJECT = 25`), in `wolf_core::Command` order. `FfiCommand::from_command` is an EXHAUSTIVE match over `Command` that packs each variant to its `command_kind` (so adding or reordering a variant is a compile error here).
+- **`enum CommandKind`** in `crates/wolf-macos/Sources/WolfKeyMap/CommandSeam.swift` — the AppKit-free Swift mirror. `init?(ffi: UInt8)` decodes the byte (`0` → `.newWindow` … `20` → `.terminal`, `21` → `.previewInBrowser`, `22` → `.fullWidth`, `23` → `.toggleSidebar`, `24` → `.sidebarShowProject`, `25` → `.searchInProject`, anything else → `nil`), guarding the contract.
 - **`AppMenu`'s `Tag` enum** in `crates/wolf-macos/Sources/WolfMacOS/AppMenu.swift` — the macOS menu is HARDCODED (it does not read the registry over the FFI); each Wolf menu item carries its `command_kind` discriminant in `NSMenuItem.tag`. The menu titles mirror `COMMAND_SPECS`.
 
 ## 5. Invocation → drain
