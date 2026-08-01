@@ -586,17 +586,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   }
 
   /// Refreshes the tab-bar titles for `window`'s whole tab group from each tab's
-  /// active buffer basename, disambiguating collisions via `TabTitleSeam`. Each
-  /// tab IS its own NSWindow, so setting `window.title` per tab drives both the
-  /// tab label and that tab's titlebar. A solo window is a one-element group.
+  /// working directory, abbreviating the home prefix to `~` via `CwdTitleSeam`.
+  /// Each tab IS its own NSWindow, so setting `window.title` per tab drives both
+  /// the tab label and that tab's titlebar; the tab's `representedURL` is set to
+  /// the cwd directory so the proxy icon + command-click parent-hierarchy popup
+  /// work. An empty-state tab (no folder) gets the "Wolf" fallback title and no
+  /// proxy. A solo window is a one-element group.
   func refreshTabTitles(forGroupOf window: NSWindow) {
+    let home = homeDir()
     let groupWindows = window.tabGroup?.windows ?? [window]
-    let paths = groupWindows.map { tabWindow -> String in
-      controllers.first { $0.owns(tabWindow) }?.activeBufferPath ?? ""
-    }
-    let labels = TabTitleSeam.labels(activeBufferPaths: paths)
-    for (tabWindow, label) in zip(groupWindows, labels) {
-      tabWindow.title = label
+    for tabWindow in groupWindows {
+      let cwd = controllers.first { $0.owns(tabWindow) }?.persistedCwd ?? ""
+      let title = CwdTitleSeam.displayTitle(cwd: cwd, home: home)
+      tabWindow.title = title.isEmpty ? "Wolf" : title
+      tabWindow.representedURL = cwd.isEmpty ? nil : URL(fileURLWithPath: cwd, isDirectory: true)
     }
   }
 

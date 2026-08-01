@@ -6,7 +6,7 @@
 //  (window, tab, cwd) tree into PROJECTS for restore ("group-by-cwd"): one
 //  project per distinct real directory, MERGED across windows; each empty-state
 //  (or since-deleted) tab is its OWN project. It mirrors the existing pure seams
-//  (`StateSeam`, `TabTitleSeam`) and is exercised with scalar inputs only — NO
+//  (`StateSeam`, `CwdTitleSeam`) and is exercised with scalar inputs only — NO
 //  AppKit, NO NSWindow, NO live Neovim — so it stays in the headless
 //  `WolfKeyMapTests` bundle.
 //

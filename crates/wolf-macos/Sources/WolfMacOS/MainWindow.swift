@@ -5,7 +5,9 @@
 //  file-tree sidebar and a content split item for the editor grid, under a
 //  transparent full-size-content-view titlebar. The sidebar's vibrancy extends
 //  full-height under the titlebar; the editor pane is pinned below the titlebar
-//  so it keeps its exact `cols` × `rows` cell size.
+//  (and the unified toolbar) so it keeps its exact `cols` × `rows` cell size.
+//  The window has a `.unified` `NSToolbar` whose only item is the system
+//  toggle-sidebar button (auto-wired to `NSSplitViewController.toggleSidebar`).
 //
 
 import AppKit
@@ -17,6 +19,10 @@ import WolfKeyMap
 final class MainWindow: NSWindow {
   /// Fixed initial width of the file-tree sidebar pane in points.
   static let treePaneWidth: CGFloat = 240
+
+  /// The window's `NSToolbar` identifier (a unified toolbar whose only item is
+  /// the system toggle-sidebar button).
+  private static let toolbarIdentifier = NSToolbar.Identifier("com.wolf.editor.toolbar")
 
   /// The window's pristine `backgroundColor`, captured on the FIRST themed
   /// titlebar application so an unset `WolfTitlebar` can restore the exact
@@ -112,9 +118,20 @@ final class MainWindow: NSWindow {
 
     contentViewController = splitVC
 
+    // Install the unified toolbar (the system toggle-sidebar button pinned to
+    // the sidebar section at the top-left, then a sidebar-tracking separator
+    // aligned to the sidebar divider) BEFORE measuring the chrome height, so the
+    // measured chrome includes the toolbar band and `setContentSize` keeps the
+    // grid at exactly cols × rows cells.
+    let toolbar = NSToolbar(identifier: Self.toolbarIdentifier)
+    toolbar.delegate = self
+    toolbar.displayMode = .iconOnly
+    self.toolbar = toolbar
+    toolbarStyle = .unified
+
     // Size the content so the editor pane is exactly `editorWidth` ×
     // `editorHeight` BELOW the titlebar chrome. `contentLayoutRect` is
-    // the area not obscured by the (now-attached) titlebar, so the
+    // the area not obscured by the (now-attached) titlebar + toolbar, so the
     // chrome height is the difference from the full content height.
     let fullHeight = contentView?.bounds.height ?? editorHeight
     let chrome = fullHeight - contentLayoutRect.height
@@ -154,5 +171,46 @@ final class MainWindow: NSWindow {
     } else if let defaultBackgroundColor {
       backgroundColor = defaultBackgroundColor
     }
+  }
+}
+
+/// The window's toolbar delegate. Two items in the Apple-standard order: the
+/// SYSTEM `.toggleSidebar` button FIRST (so it lands in the toolbar's SIDEBAR
+/// section — the top-left, just right of the traffic lights, at the LEFT of the
+/// toolbar), then a `.sidebarTrackingSeparator` that stays aligned with the
+/// sidebar/content split divider (the window title / cwd renders in the content
+/// section to its right). Placing the toggle AFTER the separator instead pushes
+/// it to the trailing edge, because the visible title claims the content-leading
+/// slot. AppKit auto-wires `.toggleSidebar` to
+/// `NSSplitViewController.toggleSidebar(_:)` up the responder chain (the same
+/// mechanism as the View-menu Toggle Sidebar item), so returning `nil` for it
+/// lets AppKit supply the built-in item; the separator is constructed here bound
+/// to the split view's first divider.
+extension MainWindow: NSToolbarDelegate {
+  func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+    [.toggleSidebar, .sidebarTrackingSeparator]
+  }
+
+  func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+    [.toggleSidebar, .sidebarTrackingSeparator]
+  }
+
+  func toolbar(
+    _ toolbar: NSToolbar,
+    itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+    willBeInsertedIntoToolbar flag: Bool
+  ) -> NSToolbarItem? {
+    // The tracking separator is bound to the sidebar/content divider (index 0)
+    // so it — and everything after it, including the toggle button — stays
+    // pinned to the sidebar's right edge.
+    if itemIdentifier == .sidebarTrackingSeparator {
+      return NSTrackingSeparatorToolbarItem(
+        identifier: itemIdentifier,
+        splitView: splitViewController.splitView,
+        dividerIndex: 0)
+    }
+    // Return nil for the system `.toggleSidebar` identifier so AppKit supplies
+    // the built-in item (auto-wired to `toggleSidebar(_:)`).
+    return nil
   }
 }

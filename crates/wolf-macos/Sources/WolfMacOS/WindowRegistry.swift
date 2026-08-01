@@ -10,7 +10,7 @@ import Foundation
 /// that owns it.
 ///
 /// The wake fires on a tokio worker thread with only a plain `Send` `u64` token;
-/// the three `*WakeBridge` thunks hop onto the AppKit main thread and then look
+/// the four `*WakeBridge` thunks hop onto the AppKit main thread and then look
 /// the token up HERE to reach the right project (which routes to its current
 /// view). Because every access happens on the main thread (registration at
 /// `Project.start()`, lookup inside the dispatched-to-main wake, removal at last-
