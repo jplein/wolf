@@ -69,7 +69,7 @@ Core folds the payload into the sibling `Snapshot.full_width` map (win handle â†
 
 ### Directory tracking â€” `_G.wolf_setup_dir_tracking(chan)`
 
-A third global helper that `wolf-core` invokes over RPC **after** `ui_attach`, current-file tracking, and layout setup, again passing core's own RPC channel id (see [`src/nvim.rs`](../../crates/wolf-core/src/nvim.rs)'s `setup_dir_tracking`). It lets core follow Neovim's live working directory so the file picker's MRU cache resolves to the right per-project store (`<nvim-cwd>/.wolf/mru.sqlite`) for BOTH seeding the picker and recording opened files.
+A third global helper that `wolf-core` invokes over RPC **after** `ui_attach`, current-file tracking, and layout setup, again passing core's own RPC channel id (see [`src/nvim.rs`](../../crates/wolf-core/src/nvim.rs)'s `setup_dir_tracking`). It lets core follow Neovim's live working directory so the file picker's global MRU cache (`state_dir()/file-mru.sqlite`) filters to the right project `directory` for BOTH seeding the picker and recording opened files.
 
 The helper:
 

@@ -221,7 +221,7 @@ fn commands_drain_close_and_minimize() {
 
     let init_lua = common::init_lua_path();
 
-    // A fresh temp cwd (its `<cwd>/.wolf/` MRU cache must outlive the session), kept
+    // A fresh temp cwd (it is nvim's working dir + search root, so it must outlive the session), kept
     // alive until after `shutdown()`, then dropped explicitly at the end.
     let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
 

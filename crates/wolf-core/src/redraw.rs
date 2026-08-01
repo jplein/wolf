@@ -51,8 +51,9 @@ pub type CommandQueue = Arc<Mutex<VecDeque<Command>>>;
 /// writes it on each `wolf_cwd` notification (the `WolfDir` `DirChanged` autocmd
 /// in `runtime/nvim/init.lua`). It is a sibling of the render snapshot (NOT part
 /// of it): nvim's cwd is not render state, so updating it does not bump the
-/// snapshot `seq`. The input pump reads it synchronously to pick the per-cwd MRU
-/// store when recording opened files; `None` means "not yet reported".
+/// snapshot `seq`. The input pump reads it synchronously to scope the global MRU
+/// store by nvim's live cwd when recording opened files; `None` means "not yet
+/// reported".
 pub type TrackedCwd = Arc<parking_lot::RwLock<Option<PathBuf>>>;
 
 /// The front-end wake callback, invoked once per `flush` (after the lock drops).
@@ -315,7 +316,8 @@ impl Handler for RedrawHandler {
                 // produces its own redraw flush (and hence wake) through the
                 // normal `redraw` path. `apply_cwd` only updates the sibling
                 // `TrackedCwd` cell (a brief RwLock, no snapshot lock, no `seq`
-                // bump), which the input pump reads to pick the per-cwd MRU store.
+                // bump), which the input pump reads to scope the global MRU store
+                // by nvim's live cwd.
                 self.apply_cwd(args);
             }
             _ => {}

@@ -1174,7 +1174,8 @@ exit 0
 
 /// Creates a fresh, unique temp directory to serve as the launched app's working
 /// directory. The app derives `CoreConfig.cwd` from `std::env::current_dir()`, so
-/// the picker traverses (and the MRU cache `.wolf/` lands in) this directory. Not
+/// the picker traverses this directory (the recent-files MRU lives in the global
+/// `state_dir()/file-mru.sqlite`, not under the cwd). Not
 /// auto-deleted: keeping it around aids post-mortem inspection of a failed run,
 /// mirroring the wolf-core/common `fresh_cwd` rationale.
 fn make_temp_cwd() -> PathBuf {

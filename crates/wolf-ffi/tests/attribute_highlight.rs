@@ -106,7 +106,7 @@ fn attribute_highlight_flags_and_special_cross_ffi() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // A fresh temp cwd (its `<cwd>/.wolf/` MRU cache must outlive the session).
+    // A fresh temp cwd (it is nvim's working dir + search root, so it must outlive the session).
     let cwd = common::fresh_cwd();
     let init_lua = common::init_lua_path();
 

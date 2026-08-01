@@ -224,8 +224,10 @@ pub fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::
 static CWD_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Creates a fresh, unique temp directory to serve as the core `cwd` and returns
-/// its path. Mirrors wolf-core's `fresh_cwd` (intentionally NOT auto-deleted: the
-/// MRU cache lives under `<cwd>/.wolf/` and must outlive `wolf_ffi_start`).
+/// its path. Mirrors wolf-core's `fresh_cwd` (intentionally NOT auto-deleted: it
+/// is nvim's working dir + file-search root, so it must outlive `wolf_ffi_start`;
+/// the recent-files MRU now lives in the global `state_dir()/file-mru.sqlite`, not
+/// under the cwd).
 #[must_use]
 pub fn fresh_cwd() -> PathBuf {
     let n = CWD_COUNTER.fetch_add(1, Ordering::Relaxed);

@@ -108,13 +108,13 @@ fn has_display(recent: &[wolf_core::FileEntry], display: &str) -> bool {
 
 /// The WRITE path follows nvim's live cwd: start the core in dir A, `:cd` nvim
 /// into dir B, then open a file under B via `InputEvent::Open`. The input pump
-/// must record that open into B's MRU (`<B>/.wolf/mru.sqlite`), B-relative — NOT
-/// into A's store.
+/// must record that open into the single global MRU (`state_dir()/file-mru.sqlite`)
+/// scoped to B's directory, B-relative — NOT scoped to A's directory.
 ///
 /// NOTE to coder: this asserts the plan's WRITE-path behavior — the pump records
-/// `InputEvent::Open` into `<nvim-cwd>/.wolf` (the tracked cwd, B), and
-/// `mru_recent()` reports B's store with B-relative `display`. It depends on the
-/// not-yet-written per-cwd MRU + `wolf_cwd` tracking; it passes once that lands.
+/// `InputEvent::Open` into the global MRU under `<nvim-cwd>` (the tracked cwd, B),
+/// and `mru_recent()` reports B's rows with B-relative `display`. It depends on the
+/// directory-scoped MRU + `wolf_cwd` tracking; it passes once that lands.
 #[test]
 fn open_after_cd_records_in_nvim_cwd_mru() {
     let _ = common::require_nvim_bin();
@@ -152,21 +152,21 @@ fn open_after_cd_records_in_nvim_cwd_mru() {
         recent.iter().map(|e| e.display.clone()).collect::<Vec<_>>()
     );
 
-    // The row physically lives in <B>/.wolf/mru.sqlite.
-    let store_b = MruStore::open(&cwd_b).expect("MruStore::open(B) should succeed");
+    // The row physically lives in the single global file-mru.sqlite (the state
+    // dir), directory-scoped: open it and inspect via recent(&cwd_b)/recent(&cwd_a).
+    let store = MruStore::open(&common::hermetic_state_dir());
     assert!(
-        has_display(&store_b.recent(), "written.md"),
-        "B's store should contain the recorded open as \"written.md\""
+        has_display(&store.recent(&cwd_b), "written.md"),
+        "B's directory in the global MRU should contain the recorded open as \"written.md\""
     );
 
-    // The pump wrote to B's store, NOT A's.
-    let store_a = MruStore::open(&cwd_a).expect("MruStore::open(A) should succeed");
+    // The pump recorded under B's directory, NOT A's.
     assert!(
-        !store_a
-            .recent()
+        !store
+            .recent(&cwd_a)
             .iter()
             .any(|e| paths_equal(&e.path, &written)),
-        "the open must be recorded in B's store, NOT A's; A's store leaked it"
+        "the open must be recorded under B's directory, NOT A's; A's directory leaked it"
     );
 
     core.shutdown().expect("shutdown should be Ok");

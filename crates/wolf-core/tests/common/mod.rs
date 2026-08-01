@@ -191,10 +191,11 @@ static CWD_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// `cwd`, and returns its path.
 ///
 /// The directory is intentionally NOT auto-deleted: [`config`] returns only a
-/// `CoreConfig`, so there is no `TempDir` guard to keep alive, and the MRU cache
-/// (S1) lives at `<cwd>/.wolf/mru.sqlite`. Leaking one small temp dir per test is
-/// acceptable for this hermetic suite, and avoids the directory vanishing out
-/// from under `WolfCore::start` before it opens the cache.
+/// `CoreConfig`, so there is no `TempDir` guard to keep alive. The recent-files
+/// MRU now lives in a single global DB at `state_dir()/file-mru.sqlite`
+/// (directory-filtered), NOT under the cwd; this dir is still leaked so it does
+/// not vanish out from under `WolfCore::start` (nvim's working dir + search root).
+/// Leaking one small temp dir per test is acceptable for this hermetic suite.
 pub fn fresh_cwd() -> PathBuf {
     let n = CWD_COUNTER.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id();
@@ -208,7 +209,7 @@ pub fn fresh_cwd() -> PathBuf {
 }
 
 /// Builds a `CoreConfig` with the resolved init.lua path, the given grid size,
-/// and a fresh per-call `cwd` (so each core gets its own MRU cache directory).
+/// and a fresh per-call `cwd` (so each core gets its own working directory).
 ///
 /// NOTE: assumes `CoreConfig` has public fields `init_lua`, `cols`, `rows`, and
 /// (new in S1) `cwd` (per plan §D6). If `CoreConfig` instead exposes a
@@ -251,8 +252,23 @@ fn ensure_hermetic_state_dir() {
     }
 }
 
-/// Like [`config`] but with an explicit `cwd`, for tests that must control where
-/// the MRU cache (`<cwd>/.wolf/mru.sqlite`) lives so they can inspect it.
+/// Resolves the process-global hermetic state dir as a `PathBuf`, ensuring
+/// `WOLF_STATE_DIR` first points at a throwaway dir (see
+/// [`ensure_hermetic_state_dir`]) and then returning `wolf_core::state_dir()`.
+///
+/// The recent-files MRU now lives in a SINGLE global DB at
+/// `state_dir()/file-mru.sqlite` (directory-filtered), so real-nvim tests that
+/// must pre-seed or inspect the MRU open a `MruStore` against THIS dir — the same
+/// dir the core resolves via `state_dir()` — rather than a per-cwd `.wolf`.
+pub fn hermetic_state_dir() -> PathBuf {
+    ensure_hermetic_state_dir();
+    wolf_core::state_dir().expect("state_dir() should resolve once WOLF_STATE_DIR is set")
+}
+
+/// Like [`config`] but with an explicit `cwd`, for tests that must control nvim's
+/// working directory — the search root and the `directory` scope under which
+/// opens are recorded into the single global MRU at `state_dir()/file-mru.sqlite`
+/// — so they can drive it and inspect the results.
 pub fn config_in(cwd: PathBuf, cols: u16, rows: u16) -> CoreConfig {
     require_nvim_bin();
     // Keep the always-on recent-directories store off the user's real state dir

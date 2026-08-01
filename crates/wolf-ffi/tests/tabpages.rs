@@ -157,7 +157,7 @@ fn tabpage_lifecycle_over_the_bridge() {
     let state_dir = tempfile::tempdir().expect("failed to create temp state dir");
     std::env::set_var("WOLF_STATE_DIR", state_dir.path());
 
-    // The core's cwd (its `<cwd>/.wolf/` MRU cache must outlive the session).
+    // The core's cwd (nvim's working dir + search root, which must outlive the session).
     let cwd = tempfile::tempdir().expect("failed to create temp cwd directory");
 
     // Argument order mirrors the sibling tests exactly: (init_lua, cwd, cols, rows).

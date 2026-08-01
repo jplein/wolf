@@ -96,8 +96,8 @@ fn file_search_ranks_and_opens() {
 
     // Seed a fresh temp cwd with a couple of files for the search to find. We use
     // `tempfile` (a dev-dependency) so the directory is cleaned up on drop; we
-    // keep `tmp` alive until after `shutdown()` so the core's `<cwd>/.wolf/` MRU
-    // cache outlives the session, then drop it explicitly at the end.
+    // keep `tmp` alive until after `shutdown()` so it outlives the session as
+    // nvim's working dir + search root, then drop it explicitly at the end.
     let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
     std::fs::write(tmp.path().join(FILE_ALPHA), "# alpha\n").expect("failed to seed alpha.md");
     std::fs::write(tmp.path().join(FILE_BETA), "# beta\n").expect("failed to seed beta.md");
@@ -231,7 +231,7 @@ fn file_search_ranks_and_opens() {
     // --- Shutdown: clean teardown --------------------------------------------
     handle.shutdown();
 
-    // Explicitly clean up the temp cwd (and its `.wolf/` MRU cache) now that the
+    // Explicitly clean up the temp cwd now that the
     // session is fully torn down.
     drop(search);
     drop(tmp);

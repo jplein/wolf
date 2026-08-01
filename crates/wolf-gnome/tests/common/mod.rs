@@ -64,7 +64,9 @@ static CWD_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Creates a fresh, unique directory under the OS temp dir to serve as a core
 /// `cwd`, and returns its path. Not auto-deleted (see the wolf-core harness for
-/// the rationale): the MRU cache (S1) lives at `<cwd>/.wolf/mru.sqlite`.
+/// the rationale): it is nvim's working dir + file-search root, so it must outlive
+/// the session. The recent-files MRU now lives in the global
+/// `state_dir()/file-mru.sqlite`, not under the cwd.
 pub fn fresh_cwd() -> PathBuf {
     let n = CWD_COUNTER.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id();

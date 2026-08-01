@@ -118,7 +118,7 @@ rust_test(
 )
 
 # Real-nvim integration test for the record-on-open write path
-# (`InputEvent::Open` recorded into the per-cwd MRU store at nvim's live cwd).
+# (`InputEvent::Open` recorded into the global MRU store scoped to nvim's live cwd).
 # An EXACT mirror of the `file_search` target above: drives a REAL pinned Neovim
 # (no mocks), stages the captive `init.lua` + the pinned nvim tree as runfiles,
 # reuses `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.

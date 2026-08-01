@@ -426,21 +426,20 @@ fn gitignore_applies_to_nested_subdirs() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// (6) The `.wolf` cache dir (created by the core opening the MRU cache) is
-/// excluded from traversal.
+/// (6) A `.wolf` directory in the tree is excluded from traversal.
+///
+/// The core no longer creates `<cwd>/.wolf` (the MRU moved to the state dir), so
+/// to still exercise the traversal exclusion we create a `.wolf/junk.md` by hand
+/// and assert it never appears in the results.
 #[test]
 fn wolf_cache_dir_is_excluded() {
     let _ = common::require_nvim_bin();
     let (_dir, cwd) = temp_cwd();
     write_file(&cwd.join("real.md"), "r");
+    // Manually plant a file under .wolf/ (the core will not create one anymore).
+    write_file(&cwd.join(".wolf").join("junk.md"), "j");
 
-    // start_core_in opens the MRU cache, creating <cwd>/.wolf/mru.sqlite.
     let core = start_core_in(&cwd);
-    assert!(
-        cwd.join(".wolf").exists(),
-        "opening the core should have created the .wolf cache dir"
-    );
-
     let (wake, wakes) = search_wake();
     let search = core.start_file_search(wake);
     let entries = poll_until_complete(&search, &wakes);
@@ -449,6 +448,10 @@ fn wolf_cache_dir_is_excluded() {
     assert!(
         set.contains("real.md"),
         "the real file should be listed; got {set:?}"
+    );
+    assert!(
+        !set.contains(&rel(&[".wolf", "junk.md"])),
+        "a file under .wolf/ must be excluded from traversal; got {set:?}"
     );
     assert!(
         !any_under(&entries, ".wolf"),
@@ -470,10 +473,11 @@ fn mru_seed_is_synchronous_and_not_duplicated() {
     write_file(&cwd.join("other.md"), "o");
 
     // Record seeded.md into the MRU BEFORE starting the core/search, via a direct
-    // MruStore on the same cwd (same on-disk sqlite the core will then open).
+    // MruStore on the global state-dir DB (the same file-mru.sqlite the core will
+    // read), scoped to `cwd`.
     {
-        let store = MruStore::open(&cwd).expect("MruStore::open should succeed");
-        store.record(&cwd.join("seeded.md"));
+        let store = MruStore::open(&common::hermetic_state_dir());
+        store.record(&cwd, &cwd.join("seeded.md"));
     }
 
     let core = start_core_in(&cwd);
@@ -658,39 +662,37 @@ fn file_search_root_defaults_to_cfg_cwd_without_cd() {
 
 /// (11) The MRU SEED follows nvim's live cwd (the headline regression guard for
 /// the screenshot bug). Start the core in dir A, but `:cd` nvim into dir B, then
-/// open the picker. The seed must come from `<B>/.wolf` and its `display` must be
-/// RELATIVE to B (not an absolute path, and not relative to A). A's MRU must NOT
-/// leak into B's seed (per-project isolation), and the store must physically live
-/// at `<B>/.wolf/mru.sqlite`.
+/// open the picker. The seed must come from the global MRU scoped to B and its
+/// `display` must be RELATIVE to B (not an absolute path, and not relative to A).
+/// A's MRU rows must NOT leak into B's seed (per-directory isolation), and the DB
+/// must physically live at `state_dir()/file-mru.sqlite`.
 ///
 /// Dirs A and B are built with `temp_cwd` (canonicalized), exactly like the other
 /// `:cd` test, so B's absolute path types cleanly as `:cd` keystrokes and the
 /// relativized `display` strings line up.
 ///
 /// NOTE to coder: this asserts the plan's READ-path behavior — `start_file_search`
-/// must seed from `<resolved-root>/.wolf` (resolved-root = nvim's live cwd), so the
-/// seed's `display` relativizes against the SAME dir the traversal lists.
+/// must seed from the global MRU filtered by `<resolved-root>` (resolved-root =
+/// nvim's live cwd), so the seed's `display` relativizes against the SAME dir the
+/// traversal lists.
 #[test]
 fn mru_seed_follows_nvim_cd() {
     let _ = common::require_nvim_bin();
     let (_dir_a, cwd_a) = temp_cwd();
     let (_dir_b, cwd_b) = temp_cwd();
 
-    // B holds a NESTED recent file, recorded directly into B's store so it is in
-    // B's MRU before the core ever runs. A holds its own recent file in A's store;
-    // it must NOT appear once nvim is in B (per-project isolation).
+    // B holds a NESTED recent file; A holds its own recent file. Both are recorded
+    // into the SINGLE global MRU (state_dir/file-mru.sqlite), scoped by directory,
+    // before the core ever runs. A's row must NOT appear once nvim is in B
+    // (per-directory isolation).
     let recent_b = cwd_b.join("sub").join("recent_b.md");
     write_file(&recent_b, "b");
-    {
-        let store = MruStore::open(&cwd_b).expect("MruStore::open(B) should succeed");
-        store.record(&recent_b);
-    }
-
     let recent_a = cwd_a.join("recent_a.md");
     write_file(&recent_a, "a");
     {
-        let store = MruStore::open(&cwd_a).expect("MruStore::open(A) should succeed");
-        store.record(&recent_a);
+        let store = MruStore::open(&common::hermetic_state_dir());
+        store.record(&cwd_b, &recent_b);
+        store.record(&cwd_a, &recent_a);
     }
 
     // Start nvim in A, retaining the waiter so we can confirm the `:cd` landed.
@@ -736,14 +738,32 @@ fn mru_seed_follows_nvim_cd() {
     // A's MRU must not leak into B's seed.
     assert!(
         !displays(&entries).contains("recent_a.md"),
-        "A's MRU must NOT appear in B's seed (per-project isolation); got {:?}",
+        "A's MRU must NOT appear in B's seed (per-directory isolation); got {:?}",
         displays(&entries)
     );
 
-    // The store physically lives at <B>/.wolf/mru.sqlite.
+    // The MRU physically lives in the single global DB at state_dir()/file-mru.sqlite.
+    let state = common::hermetic_state_dir();
     assert!(
-        cwd_b.join(".wolf").join("mru.sqlite").exists(),
-        "B's MRU store should live at <B>/.wolf/mru.sqlite"
+        state.join("file-mru.sqlite").exists(),
+        "the global MRU should live at <state_dir>/file-mru.sqlite"
+    );
+
+    // Directly confirm the global MRU, scoped to B, holds the B-relative entry and
+    // NOT A's file (which is scoped to A's directory).
+    let store = MruStore::open(&state);
+    let recent_b_rows = store.recent(&cwd_b);
+    assert!(
+        recent_b_rows.iter().any(|e| e.display == nested),
+        "B's directory in the global MRU should contain {nested:?}; got {:?}",
+        recent_b_rows
+            .iter()
+            .map(|e| e.display.clone())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !recent_b_rows.iter().any(|e| e.display == "recent_a.md"),
+        "A's file must NOT appear under B's directory in the global MRU"
     );
 
     drop(search);

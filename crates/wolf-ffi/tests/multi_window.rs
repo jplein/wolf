@@ -166,8 +166,8 @@ fn multi_core_identity_snapshots_and_wake_routing() {
     wolf_ffi_set_wake(Some(recording_wake));
 
     // Two distinct cwds so the two cores are unmistakably separate sessions; kept
-    // alive until after both `shutdown()`s (their `<cwd>/.wolf/` MRU caches must
-    // outlive the sessions).
+    // alive until after both `shutdown()`s (they are nvim's working dirs + search
+    // roots and must outlive the sessions).
     let cwd_a = tempfile::tempdir().expect("failed to create temp cwd A");
     let cwd_b = tempfile::tempdir().expect("failed to create temp cwd B");
 

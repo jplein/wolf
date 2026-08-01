@@ -392,7 +392,7 @@ end
 -- a DirChanged autocmd (pattern '*', covering :cd/:lcd/:tcd) that notifies core of
 -- the new working directory via wolf_cwd, and emits once immediately so the startup
 -- cwd is reflected without a directory change. Core tracks this in a sibling cell
--- (not the render snapshot) and uses it to pick the per-cwd MRU store.
+-- (not the render snapshot) and uses it to scope the global MRU store by the live cwd.
 --
 -- The one-shot INITIAL emit carries a distinguishing `true` second arg; the
 -- DirChanged callback carries no second arg (treated as false). Core uses this

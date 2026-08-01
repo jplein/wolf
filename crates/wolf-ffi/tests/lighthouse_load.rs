@@ -160,8 +160,8 @@ fn lighthouse_colorscheme_active_from_sibling_dir() {
         }
     };
 
-    // Stage the bundle layout in a temp dir T (its `<cwd>/.wolf/` MRU cache must
-    // outlive the session; kept alive until after `shutdown()`).
+    // Stage the bundle layout in a temp dir T (nvim's working dir + search root,
+    // which must outlive the session; kept alive until after `shutdown()`).
     let tmp = tempfile::tempdir().expect("failed to create temp staging dir");
     let root = tmp.path();
 

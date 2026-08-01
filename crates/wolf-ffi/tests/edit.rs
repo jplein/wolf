@@ -262,8 +262,8 @@ fn focus_preview(handle: &wolf_ffi::WolfCoreHandle) {
 }
 
 /// Seeds a fresh temp cwd with a single real Markdown file `alpha.md`. Returns the
-/// live `TempDir` (kept alive until after `shutdown()`) so its `.wolf/` MRU cache
-/// outlives the core.
+/// live `TempDir` (kept alive until after `shutdown()`) so it outlives the core as
+/// nvim's working dir + search root.
 fn seed_markdown_cwd() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
     std::fs::write(

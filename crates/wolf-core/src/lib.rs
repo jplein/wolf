@@ -28,7 +28,8 @@
 //! - [`markdown`]: pure, GUI-free Markdown -> themed-HTML rendering for the
 //!   preview pane (with forward-compatible per-line / per-100-column markers).
 //! - [`files`]: the async streaming file-list traversal and `FileSearch` session.
-//! - [`mru`]: the most-recently-used file cache (SQLite).
+//! - [`mru`]: the global, directory-filtered most-recently-used file cache
+//!   (SQLite, `state_dir()/file-mru.sqlite`).
 //! - [`recent_dirs`]: the global recent-directories MRU cache (SQLite).
 //! - [`rank`]: pure fuzzy-match + ranking for the file picker.
 //! - [`input`]: abstract input events and their translation to Neovim RPC.
@@ -81,7 +82,7 @@ pub use markdown::{
     code_blocks, render_html, render_html_with_highlights, theme_css, BlockHighlight,
     CodeBlockInfo, HighlightSpan, HighlightStyle, PreviewTheme, WidthMode, MARKER_COLUMN_STRIDE,
 };
-pub use mru::{MruError, MruStore, MRU_LIMIT};
+pub use mru::{MruStore, MRU_LIMIT};
 pub use palette::{rank_palette, PaletteRow, PaletteRowKind, PaletteWindow};
 pub use pane_status::{pane_status, PaneStatus, NO_NAME};
 pub use rank::{rank_matches, rank_matches_top_n, Match, MatchKey};
