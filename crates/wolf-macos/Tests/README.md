@@ -16,9 +16,9 @@ The test pins the `Kind` discriminants and the `kVK_*` virtual key codes (notabl
 
 ## `WolfKeyMapTests/PickerSeamTests.swift`
 
-Pure, headless `XCTest` coverage of the AppKit-free `PickerSeam` helpers (`@testable import WolfKeyMap`), table-driven to mirror wolf-gnome's picker.rs tables:
+Pure, headless `XCTest` coverage of the AppKit-free `PickerSeam` helpers (`@testable import WolfKeyMap`), table-driven; the two list-navigation tables mirror wolf-gnome's `picker.rs` tables:
 
-- `isPickerTrigger(charactersIgnoringModifiers:command:)` — the **Command+O** contract (lowercase and uppercase `"o"` → `true`, command not held → `false`, the wrong letter → `false`, and an empty string → `false`);
+- `isPickerTrigger(charactersIgnoringModifiers:command:)` — the **Command+O** contract (lowercase and uppercase `"o"` → `true`, command not held → `false`, the wrong letter → `false`, and an empty string → `false`). This one has **no** picker.rs counterpart any more: wolf-gnome deleted `is_picker_trigger` when the file-picker chord moved to Ctrl+Shift+O, and the Linux chord is now a table-driven `wolf_gnome::actions::action_for_key` lookup unit-tested there by `action_for_key_table`. Both platforms agree on the letter **O**; only the modifier (⌘ vs Ctrl+Shift) and the mechanism differ.
 - `nextSelection(current:delta:nRows:)` — the list-navigation clamp across its cases (including the empty-list `nil`);
 - `restoredIndex(resetToTop:prev:newLen:)` — selection restore across streaming result batches.
 

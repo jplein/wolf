@@ -2,11 +2,19 @@
 //!
 //! This is the GTK glue that turns the pure hierarchical projection in
 //! [`crate::tree`] into a live `gtk::ListView` driven by a `gtk::TreeListModel`.
-//! It mirrors [`crate::picker`]'s patterns: a long-lived `wolf_core::FileSearch`
-//! started at build time, an `async-channel` + `glib::spawn_future_local` drain
-//! that refreshes on each traversal batch, `Rc`/`RefCell` interior mutability on
-//! the single GTK main thread, and a `Weak` upgrade in the drain task to avoid a
-//! reference cycle.
+//! It mirrors [`crate::picker`]'s patterns: a long-lived `wolf_core::FileSearch`,
+//! an `async-channel` + `glib::spawn_future_local` drain that refreshes on each
+//! traversal batch, `Rc`/`RefCell` interior mutability on the single GTK main
+//! thread, and a `Weak` upgrade in the drain task to avoid a reference cycle.
+//!
+//! ## When the search starts
+//!
+//! [`build`] takes a `start` flag: the search begins at build time for a normal
+//! project launch, but NOT in the empty state (no project open — see
+//! [`crate::workspace`]), where the sidebar is hidden and there is nothing to
+//! walk. [`TreeHandle::reroot`] then starts (or restarts) it once the Open Folder
+//! path has settled, i.e. once nvim has reported the new cwd that
+//! `WolfCore::start_file_search` resolves its root from.
 //!
 //! ## Model
 //!
@@ -207,6 +215,41 @@ impl TreeInner {
         let _ = self.search.borrow_mut().take();
     }
 
+    /// Starts (or restarts) the long-lived file search feeding the tree. The
+    /// traversal root is resolved by the core from its LIVE cwd, so this must only
+    /// run once nvim has reported the cwd the tree is meant to show.
+    fn start_search(&self) {
+        let search = {
+            let core_ref = self.core.borrow();
+            core_ref
+                .as_ref()
+                .map(|core| core.start_file_search(self.wake.clone()))
+        };
+        *self.search.borrow_mut() = search;
+    }
+
+    /// Re-roots the sidebar at the core's CURRENT live cwd: cancels the existing
+    /// traversal, clears every cached projection, then starts a fresh search and
+    /// refreshes.
+    ///
+    /// Driven only from the Open Folder path, and only once
+    /// [`crate::workspace::reroot_ready`] holds — `start_file_search` resolves its
+    /// root from `live_cwd()`, which only updates after nvim reports `DirChanged`,
+    /// so re-rooting earlier would re-root at the OLD cwd.
+    fn reroot(&self) {
+        // Drop the old search FIRST so its in-flight traversal (at the old root)
+        // is cancelled before the new one starts.
+        let _ = self.search.borrow_mut().take();
+        self.entries.borrow_mut().clear();
+        self.root_store.remove_all();
+        *self.pending_reveal.borrow_mut() = None;
+        // Forget the last current file so the next wake re-reveals it under the new
+        // root rather than treating it as unchanged.
+        *self.last_current.borrow_mut() = None;
+        self.start_search();
+        self.refresh();
+    }
+
     /// Returns the `TreeListRow` at flattened `pos` (items are rows since
     /// passthrough is false).
     fn row_at(&self, pos: u32) -> Option<gtk::TreeListRow> {
@@ -256,6 +299,12 @@ impl TreeHandle {
     /// Drops the file search, cancelling any in-flight traversal.
     pub fn close(&self) {
         self.inner.close();
+    }
+
+    /// Re-roots the sidebar at the core's live cwd (used after Open Folder, once
+    /// nvim has reported the new directory).
+    pub fn reroot(&self) {
+        self.inner.reroot();
     }
 }
 
@@ -353,11 +402,22 @@ fn build_factory(core: &Rc<RefCell<Option<WolfCore>>>) -> gtk::SignalListItemFac
     factory
 }
 
-/// Builds the tree sidebar widgets, starts a long-lived `FileSearch`, wires the
-/// streaming refresh + single-click activation, and returns a [`TreeHandle`]. The
-/// sidebar's root widget is obtained via [`TreeHandle::widget`].
+/// Builds the tree sidebar widgets, wires the streaming refresh + single-click
+/// activation, and returns a [`TreeHandle`]. The sidebar's root widget is obtained
+/// via [`TreeHandle::widget`].
+///
+/// `start` decides whether the long-lived `FileSearch` is started NOW. It is
+/// `false` in the empty state (no project open — see [`crate::workspace`]), where
+/// the sidebar is hidden and there is no project tree to walk; the search then
+/// starts on the first [`TreeHandle::reroot`] instead. The wake-drain task is
+/// spawned either way and is a no-op while there is no search (`refresh` early
+/// returns).
 #[must_use]
-pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, area: &gtk::DrawingArea) -> TreeHandle {
+pub fn build(
+    core: &Rc<RefCell<Option<WolfCore>>>,
+    area: &gtk::DrawingArea,
+    start: bool,
+) -> TreeHandle {
     install_css();
 
     let entries: Rc<RefCell<Vec<FileEntry>>> = Rc::new(RefCell::new(Vec::new()));
@@ -402,14 +462,11 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, area: &gtk::DrawingArea) -> T
         last_current: RefCell::new(None),
     });
 
-    // Start the long-lived file search feeding the tree.
-    let search = {
-        let core_ref = inner.core.borrow();
-        core_ref
-            .as_ref()
-            .map(|c| c.start_file_search(inner.wake.clone()))
-    };
-    *inner.search.borrow_mut() = search;
+    // Start the long-lived file search feeding the tree — unless this is the empty
+    // state, where there is no project to walk yet.
+    if start {
+        inner.start_search();
+    }
 
     // Drain the wake channel on the GTK main thread, refreshing on each batch. A
     // Weak avoids a reference cycle (inner owns the wake sender; the task holds only

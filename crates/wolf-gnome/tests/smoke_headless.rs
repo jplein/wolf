@@ -11,9 +11,15 @@
 //!
 //! ## What this file contains
 //!
-//! **Nine cage smokes** — one window-render smoke, two file-picker smokes, one
-//! file-tree-sidebar smoke, and five split-pane smokes — each of which launches the
-//! real binary under `cage` and OCRs a screenshot of the live window.
+//! **Fourteen cage smokes** — one window-render smoke, two file-picker smokes, one
+//! file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
+//! new-untitled-buffer smoke, one Ctrl+Shift+W close-pane smoke (the accelerator
+//! path, as opposed to the split-pane suite's `<C-w>c`) and two quit smokes (`:q`
+//! closes the focused pane, `:qa` closes the window) — each of which launches the
+//! real binary under `cage`. Thirteen of them OCR a screenshot of the live window;
+//! the `:qa` smoke deliberately captures no image and asserts on the cage exit
+//! status alone (the app must be GONE, and gone with a ZERO exit status — a panic
+//! in the GTK main loop makes a process vanish just as a clean shutdown does).
 //!
 //! **One pure guard**, [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`],
 //! which mechanically enforces the fixture invariants the smokes' OCR assertions
@@ -22,12 +28,12 @@
 //! still guards the fixture on a machine where the smoke toolchain is unavailable.
 //! It lives here, next to the consts it reads, rather than in a file of its own.
 //!
-//! So this target's summary line reads **`10 passed`**, not `9`: nine cage smokes
-//! plus that guard.
+//! So this target's summary line reads **`15 passed`**, not `14`: fourteen cage
+//! smokes plus that guard.
 //!
 //! ## When it runs
 //!
-//! The nine cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The fourteen cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The Linux verification gate").
@@ -37,20 +43,20 @@
 //! suite command does not run is a silently-skipped test.
 //!
 //! They are, however, the slowest part of the suite: each drives a real
-//! compositor, and all nine serialize behind `CAGE_LOCK` (see below).
+//! compositor, and all fourteen serialize behind `CAGE_LOCK` (see below).
 //!
 //! ```text
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the nine cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the fourteen cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` on `PATH`.
 //! - `WOLF_NVIM_BIN` pointing at the pinned Neovim (same contract as the other
 //!   wolf-gnome tests; nvim is never taken from `PATH`).
 //! - `XDG_RUNTIME_DIR` set and writable (the Wayland socket lives there).
 //!
-//! Per project policy every one of the nine FAILS LOUD if any of the above is
+//! Per project policy every one of the fourteen FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -67,7 +73,7 @@ use std::process::Command;
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the nine cage smoke tests. Each launches its own
+/// Serializes the fourteen cage smoke tests. Each launches its own
 /// `cage` compositor, and two compositors started concurrently contend for the
 /// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
 /// Under the default multi-threaded test harness these tests would otherwise run
@@ -116,9 +122,10 @@ const SMOKE_FONT_PT: &str = "28";
 /// Before the per-test temp cwd landed, this smoke ran with `crates/wolf-gnome` as
 /// the app's cwd and the sidebar happened to list ~35 repo entries, so the assertion
 /// has ALWAYS implicitly depended on that page density — accidentally. Writing these
-/// files makes the dependency explicit and deliberate, and mirrors what the other
-/// eight smokes already get incidentally from the fixture files they drop into their
-/// own temp cwds.
+/// files makes the dependency explicit and deliberate, and mirrors what the eleven
+/// other smokes that drop fixture files into their own temp cwds already get
+/// incidentally. (The empty-state and `:qa` smokes drop no files: the first hides
+/// the sidebar entirely, and the second asserts on an exit status rather than OCR.)
 const SIDEBAR_FILLER_COUNT: usize = 9;
 
 /// Names of the [`SIDEBAR_FILLER_COUNT`] marker files. Only the FILENAME is ever
@@ -132,10 +139,11 @@ const SIDEBAR_FILLER_COUNT: usize = 9;
 /// They are likewise kept clear of every other smoke's OCR constants — the asserted
 /// SUBSTRINGS, not the fixture filenames: `pickertarget`, `pickone`/`picktwo`,
 /// `treenode`, `paneleft`/`paneright`, `htopfile`/`hbotfile`,
-/// `focusone`/`focustwo`/`zzleft`, `closekeep`/`closegone`, and
-/// `triaone`/`tribtwo`/`tricthree` — so a stray filler can never satisfy one of
-/// those either. [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`] enforces
-/// this mechanically against [`ASSERTED_OCR_TERMS`], which holds the consts
+/// `focusone`/`focustwo`/`zzleft`, `closekeep`/`closegone`,
+/// `triaone`/`tribtwo`/`tricthree`, `folder`, `zzfresh`/`newbufbase`,
+/// `quitkeep`/`quitgone` and `chordkeep`/`chordgone` — so a stray filler can never
+/// satisfy one of those either. [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`]
+/// enforces this mechanically against [`ASSERTED_OCR_TERMS`], which holds the consts
 /// themselves; this list is a reader's summary and the test is the authority.
 ///
 /// The NATO words `echo` and `hotel` are deliberately SKIPPED: they are the two in
@@ -159,13 +167,36 @@ const SIDEBAR_FILLER_FILES: [&str; SIDEBAR_FILLER_COUNT] = [
 const SIDEBAR_FILLER_BODY: &str = "# FILLER\n";
 
 /// Picker smoke scenario: the markdown file dropped into the launched app's temp
-/// working directory. Its name contains `PICKER_QUERY` so the typed query matches
-/// it, and its heading (below) contains `PICKER_OCR` so OCR can confirm nvim
-/// actually opened it.
-const PICKER_FILE_NAME: &str = "pickertarget.md";
+/// working directory. Its name contains [`PICKER_QUERY`] so the typed query matches
+/// it, and its HEADING — deliberately a different word — contains [`PICKER_OCR`] so
+/// OCR can confirm nvim actually opened it.
+///
+/// ## Why the filename must NOT contain [`PICKER_OCR`]
+///
+/// It used to. This file was named `pickertarget.md` while [`PICKER_OCR`] was
+/// `pickertarget`, so the tree sidebar's own row for the fixture satisfied the
+/// smoke's positive assertion whether or not the picker ever opened — the editor
+/// pane contributed nothing. That is not a theory: during the command-drain unit's
+/// broken-accelerator run (GTK's keymap-aware accel matching never fired under
+/// `wtype`, so Ctrl+Shift+O was forwarded to Neovim instead of opening the picker)
+/// this smoke PASSED while the picker demonstrably never opened.
+///
+/// It is the exact failure mode
+/// [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`] exists to prevent,
+/// which that guard could not catch because it only inspects
+/// [`SIDEBAR_FILLER_FILES`], not each smoke's own fixture. The fix follows the
+/// precedent already set by [`CLOSE_FILE_GONE`] (`cgone.md` => `# CLOSEGONE`) and
+/// [`NEWBUF_FILE`] (`nbase.md` => `# NEWBUFBASE`): put the asserted word in the
+/// file's CONTENT and give the file a name whose lowercase does not contain it, so
+/// only a rendered buffer can satisfy the assertion. Neither the assertion nor
+/// [`PICKER_OCR`] changed — this strengthens the test, it does not weaken it.
+const PICKER_FILE_NAME: &str = "ptarget.md";
 
 /// Heading written into [`PICKER_FILE_NAME`]. Once the picker opens the file,
 /// nvim renders this line; lowercased, the rendered text contains [`PICKER_OCR`].
+/// Deliberately UNLIKE the filename (see the note above), so neither the sidebar
+/// row nor nvim's `:e` toast — both of which show `ptarget.md` — can satisfy the
+/// assertion on their own.
 const PICKER_HEADING: &str = "# PICKERTARGET";
 
 /// Lowercased substring OCR must find in the screenshot to prove the picker
@@ -173,7 +204,12 @@ const PICKER_HEADING: &str = "# PICKERTARGET";
 const PICKER_OCR: &str = "pickertarget";
 
 /// Text typed into the picker's search entry to filter down to the target file.
-const PICKER_QUERY: &str = "picker";
+///
+/// It must match [`PICKER_FILE_NAME`], which is the only file in that smoke's temp
+/// cwd: as a prefix of `ptarget.md` it takes the ranker's path-component-prefix,
+/// word-prefix and contiguous-substring bonuses, so the target is row 0 and plain
+/// `Enter` opens it.
+const PICKER_QUERY: &str = "ptarget";
 
 // ---------------------------------------------------------------------------
 // Keyboard-navigation picker smoke (Up/Down move the list selection).
@@ -280,8 +316,22 @@ const TREE_OCR: &str = "treenode";
 // a second pane bound to the new nvim window/grid and painted it beside the first.
 //
 // Two distinctly-named markdown files are dropped into the app's temp cwd by the
-// caller (`paneleft.md` => `# PANELEFT`, `paneright.md` => `# PANERIGHT`). The OCR
+// caller (`pleft.md` => `# PANELEFT`, `pright.md` => `# PANERIGHT`). The OCR
 // assertion is LOOSE (contains BOTH `paneleft` AND `paneright`).
+//
+// Note (why the FILENAMES are not `paneleft.md` / `paneright.md`): they were, and
+// that made this smoke unable to fail for the reason it exists. The tree sidebar
+// renders every cwd file BY NAME, so rows reading `paneleft.md` and `paneright.md`
+// satisfied both `contains` assertions on their own — the editor panes contributed
+// nothing, and the test would have passed green with `<C-w>v` splitting nothing at
+// all. This is the same defect that let `picker_opens_and_loads_selected_file_under_cage`
+// pass while the picker demonstrably never opened (see the note on
+// [`PICKER_FILE_NAME`] for that incident). The fix is the convention the sibling
+// smokes already follow — `htop.md` => `# HTOPFILE`, `ckeep.md` => `# CLOSEKEEP` —
+// put the asserted word in the file's CONTENT and give the file a name whose
+// lowercase does not contain it, so only a rendered BUFFER can satisfy the
+// assertion. Neither assertion nor either OCR term changed: this strengthens the
+// test, it does not weaken it.
 //
 // Note (the `<C-w>v` chord): the scenario sends the window-command chord as
 // `wtype -M ctrl -k w -m ctrl` (hold Ctrl, tap w, release Ctrl) followed by
@@ -303,17 +353,25 @@ const TREE_OCR: &str = "treenode";
 // reaching the cmdline.
 
 /// Vertical-split smoke: file opened in the FIRST (left) pane.
-const VSPLIT_FILE_LEFT: &str = "paneleft.md";
+///
+/// Deliberately UNLIKE [`VSPLIT_OCR_LEFT`] (see the note above): the sidebar row
+/// and nvim's `:e` toast both show this FILENAME, so a name containing the asserted
+/// word would satisfy the assertion whether or not the pane ever rendered.
+const VSPLIT_FILE_LEFT: &str = "pleft.md";
 
 /// Heading written into [`VSPLIT_FILE_LEFT`]; lowercased it contains
-/// [`VSPLIT_OCR_LEFT`].
+/// [`VSPLIT_OCR_LEFT`]. This line renders only once nvim has loaded the file INTO A
+/// PANE, which is what makes it the honest evidence the split happened.
 const VSPLIT_HEADING_LEFT: &str = "# PANELEFT";
 
 /// Lowercased substring OCR must find for the LEFT pane's file.
 const VSPLIT_OCR_LEFT: &str = "paneleft";
 
 /// Vertical-split smoke: file opened in the SECOND (right) pane after `<C-w>v`.
-const VSPLIT_FILE_RIGHT: &str = "paneright.md";
+///
+/// Deliberately UNLIKE [`VSPLIT_OCR_RIGHT`], for the reason given on
+/// [`VSPLIT_FILE_LEFT`].
+const VSPLIT_FILE_RIGHT: &str = "pright.md";
 
 /// Heading written into [`VSPLIT_FILE_RIGHT`]; lowercased it contains
 /// [`VSPLIT_OCR_RIGHT`].
@@ -518,6 +576,152 @@ const TRI_HEADING_C: &str = "# TRICTHREE";
 /// Lowercased substring OCR must find for the third (middle) pane's file.
 const TRI_OCR_C: &str = "tricthree";
 
+// ---------------------------------------------------------------------------
+// Empty-state smoke: no project open => the "Open Folder…" status page renders.
+//
+// This scenario proves the launch decision end to end. `workspace::launch_decision`
+// returns `EmptyState` when the process cwd IS the home directory (the
+// desktop-launcher shape), so the fixture simply points BOTH at the same fresh
+// temp dir: `.current_dir(&cwd)` plus `.env("HOME", &cwd)`. That fires the
+// production rule with no test-only env var, and keeps every `$HOME`-derived path
+// (`state_dir`, the MRU sqlite, the swap dir) inside the temp dir too.
+//
+// No keyboard interaction at all: the `gtk::FileDialog` the button opens cannot be
+// driven under `cage` (there is no portal backend) and is deliberately NOT asserted
+// — this smoke covers the empty state's PRESENTATION.
+//
+// The scenario writes NO fixture files. The sidebar is hidden in the empty state,
+// so sidebar filler density is irrelevant here; the asserted text is the
+// `adw::StatusPage`, which is theme-font, dark-on-light and large — the opposite of
+// the sparse light-on-dark editor grid that made `SIDEBAR_FILLER_COUNT` necessary.
+
+/// Lowercased substring OCR must find to prove the empty state rendered.
+///
+/// Deliberately the shared word of all three strings the status page draws — its
+/// title ("No folder open"), its description ("Open a folder to start editing.")
+/// and its button ("Open Folder…") — so the assertion has three independent
+/// chances to match rather than one.
+const EMPTY_STATE_OCR: &str = "folder";
+
+// ---------------------------------------------------------------------------
+// New-untitled-buffer smoke: Ctrl+Shift+N replaces the open file with a fresh
+// untitled Markdown buffer.
+//
+// This proves the accelerator -> gio action -> `InputEvent::NewBuffer` path (which
+// does NOT go through the command queue: the accelerator activates the action
+// directly). Open a known file, fire the chord, then type a distinctive marker and
+// park the cursor off its row; the marker must render while the previous file's
+// heading must NOT.
+//
+// The NOT-contains assertion is load-bearing — it is the only thing that
+// distinguishes "a new buffer replaced the old one" from "nothing happened" — and
+// it is well-founded for the same reason `close_pane_leaves_one_under_cage`'s is:
+// after `:e nbase.md` nvim's cmdline toast shows the FILENAME (`nbase.md`), whose
+// lowercase does not contain the HEADING word `newbufbase`, and the sidebar row
+// shows that same filename. The filename is deliberately UNLIKE the heading word.
+
+/// New-buffer smoke: the file opened BEFORE the chord (the one that must vanish).
+const NEWBUF_FILE: &str = "nbase.md";
+
+/// Heading written into [`NEWBUF_FILE`]; lowercased it contains
+/// [`NEWBUF_OCR_ABSENT`]. Deliberately unlike the filename so nvim's `:e` toast and
+/// the sidebar row cannot satisfy the NOT-contains assertion.
+const NEWBUF_HEADING: &str = "# NEWBUFBASE";
+
+/// Lowercased substring OCR must NOT find: the heading of the file that was open
+/// before Ctrl+Shift+N.
+const NEWBUF_OCR_ABSENT: &str = "newbufbase";
+
+/// Distinctive marker typed (in insert mode) into the NEW untitled buffer. Its
+/// lowercased form is [`NEWBUF_OCR_PRESENT`]. Short/all-uppercase to survive OCR,
+/// mirroring [`FOCUS_MARKER`].
+const NEWBUF_MARKER: &str = "ZZFRESH";
+
+/// Lowercased substring OCR MUST find: proof the new untitled buffer exists and
+/// received the typed text.
+const NEWBUF_OCR_PRESENT: &str = "zzfresh";
+
+// ---------------------------------------------------------------------------
+// `:q` smoke: the Ex command closes the focused PANE (not the window).
+//
+// `runtime/nvim/init.lua`'s `do_quit` closes the pane with `nvim_win_close` when
+// more than one window is open, and the shell observes that through the `win_close`
+// redraw event exactly as it does for `<C-w>c`. So this mirrors `CLOSE_SCENARIO`
+// step for step and swaps only the closing chord for `:q<CR>`.
+//
+// Assertions: OCR contains `quitkeep` (the survivor renders) and does NOT contain
+// `quitgone` (the closed pane is gone). Same soundness argument as the `<C-w>c`
+// smoke: after `:e qgone.md` the cmdline toast shows the FILENAME, whose lowercase
+// does not contain the HEADING word `quitgone`.
+
+/// `:q` smoke: file opened in the FIRST (left) pane — the SURVIVOR.
+const QUIT_FILE_KEEP: &str = "qkeep.md";
+
+/// Heading written into [`QUIT_FILE_KEEP`]; lowercased it contains
+/// [`QUIT_OCR_KEEP`].
+const QUIT_HEADING_KEEP: &str = "# QUITKEEP";
+
+/// Lowercased substring OCR MUST find: the survivor pane's file.
+const QUIT_OCR_KEEP: &str = "quitkeep";
+
+/// `:q` smoke: file opened in the SECOND (right) pane — the one `:q` closes.
+const QUIT_FILE_GONE: &str = "qgone.md";
+
+/// Heading written into [`QUIT_FILE_GONE`]; lowercased it contains
+/// [`QUIT_OCR_GONE`].
+const QUIT_HEADING_GONE: &str = "# QUITGONE";
+
+/// Lowercased substring OCR must NOT find: the closed pane's file.
+const QUIT_OCR_GONE: &str = "quitgone";
+
+// ---------------------------------------------------------------------------
+// Ctrl+Shift+W close-pane smoke: the ACCELERATOR closes the focused pane.
+//
+// This is the only end-to-end coverage of `UiAction::ClosePane`. The two sibling
+// close smokes exercise different halves of the stack and neither touches this
+// path: `close_pane_leaves_one_under_cage` sends `<C-w>c`, and
+// `colon_q_closes_focused_pane_under_cage` sends `:q` — both are performed by
+// NEOVIM and merely observed by the shell through the `win_close` redraw event.
+// The chord instead travels the FRONT-END path: the capture-phase
+// `EventControllerKey` -> `actions::action_for_key` -> `win.close-pane` ->
+// `UiAction::ClosePane` -> `InputEvent::ClosePane` -> nvim's `:close`. Only the
+// last step is shared, so a break anywhere in the action namespace, the chord
+// matcher or the shell's dispatch shows up here and nowhere else.
+//
+// It otherwise mirrors `CLOSE_SCENARIO` step for step and swaps only the closing
+// chord: open file A in the (single) pane, vertical-split (`<C-w>v`, which focuses
+// the new RIGHT pane), open file B there, then fire Ctrl+Shift+W.
+//
+// Assertions: OCR contains `chordkeep` (the survivor renders) and does NOT contain
+// `chordgone` (the closed pane is gone). The NOT-contains assertion is
+// load-bearing — it is the only thing separating "the pane closed" from "the chord
+// did nothing" — and it is sound for the same reason the sibling smokes' are: the
+// FILENAMES (`wkeep.md` / `wgone.md`) deliberately share no word with the HEADINGS,
+// so neither the sidebar rows nor nvim's `:e` toast can satisfy either assertion.
+// Its own fixture names and OCR terms are used rather than the `:q` smoke's, so a
+// failure names exactly one smoke.
+
+/// Ctrl+Shift+W smoke: file opened in the FIRST (left) pane — the SURVIVOR.
+const CHORD_CLOSE_FILE_KEEP: &str = "wkeep.md";
+
+/// Heading written into [`CHORD_CLOSE_FILE_KEEP`]; lowercased it contains
+/// [`CHORD_CLOSE_OCR_KEEP`].
+const CHORD_CLOSE_HEADING_KEEP: &str = "# CHORDKEEP";
+
+/// Lowercased substring OCR MUST find: the survivor pane's file.
+const CHORD_CLOSE_OCR_KEEP: &str = "chordkeep";
+
+/// Ctrl+Shift+W smoke: file opened in the SECOND (right) pane — the one the chord
+/// closes.
+const CHORD_CLOSE_FILE_GONE: &str = "wgone.md";
+
+/// Heading written into [`CHORD_CLOSE_FILE_GONE`]; lowercased it contains
+/// [`CHORD_CLOSE_OCR_GONE`].
+const CHORD_CLOSE_HEADING_GONE: &str = "# CHORDGONE";
+
+/// Lowercased substring OCR must NOT find: the closed pane's file.
+const CHORD_CLOSE_OCR_GONE: &str = "chordgone";
+
 /// External binaries the scenario shells out to. All come from the flake's
 /// smoke toolchain; absence means the devShell was not entered.
 const REQUIRED_TOOLS: [&str; 4] = ["cage", "wtype", "grim", "tesseract"];
@@ -664,7 +868,7 @@ exit 0
 
 /// The interactive PICKER scenario, run as a single `sh -c` string INSIDE `cage`
 /// (same structure as [`SCENARIO`]): launch the app, wait for the window to map,
-/// open the picker with the Ctrl+Shift+P trigger, type a query that matches the
+/// open the picker with the Ctrl+Shift+O trigger, type a query that matches the
 /// target file, activate the selection with Enter, settle, and screenshot.
 ///
 /// The app derives `CoreConfig.cwd` from `std::env::current_dir()`, so the target
@@ -704,13 +908,14 @@ done
 # Final settle for nvim's initial redraw before driving the picker.
 sleep "$SETTLE"
 
-# Open the picker with the trigger chord Ctrl+Shift+P.
+# Open the picker with the trigger chord Ctrl+Shift+O. That chord is the
+# `win.go-to-file` accelerator; Ctrl+Shift+P is reserved for the command palette.
 #
 # Note: `-M <mod>` / `-m <mod>` press / release a modifier, and `-k <key>`
 # presses+releases a key while the held modifiers apply, so the chord is
-# "hold ctrl, hold shift, tap p, release shift, release ctrl". Chord delivery is
+# "hold ctrl, hold shift, tap o, release shift, release ctrl". Chord delivery is
 # isolated to this single line; the rest of the scenario does not depend on it.
-wtype -M ctrl -M shift -k p -m shift -m ctrl
+wtype -M ctrl -M shift -k o -m shift -m ctrl
 
 # Let the picker map + grab keyboard focus on its search entry.
 sleep "$SETTLE"
@@ -740,7 +945,7 @@ exit 0
 
 /// The interactive picker KEYBOARD-NAVIGATION scenario, run as a single `sh -c`
 /// string INSIDE `cage` (same structure as [`PICKER_SCENARIO`]): launch the app,
-/// wait for the window to map, open the picker with Ctrl+Shift+P, type a query
+/// wait for the window to map, open the picker with Ctrl+Shift+O, type a query
 /// that matches BOTH navigation files, press `Down` once to move the list
 /// selection to the SECOND row, then `Enter` to open it, settle, and screenshot.
 ///
@@ -781,9 +986,9 @@ done
 # Final settle for nvim's initial redraw before driving the picker.
 sleep "$SETTLE"
 
-# Open the picker with the trigger chord Ctrl+Shift+P (same chord as the other
+# Open the picker with the trigger chord Ctrl+Shift+O (same chord as the other
 # picker scenario; see its note for the wtype modifier syntax).
-wtype -M ctrl -M shift -k p -m shift -m ctrl
+wtype -M ctrl -M shift -k o -m shift -m ctrl
 
 # Let the picker map + grab keyboard focus on its search entry.
 sleep "$SETTLE"
@@ -1308,13 +1513,423 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
+/// The EMPTY-STATE scenario, run as a single `sh -c` string INSIDE `cage` (same
+/// structure as [`TREE_SCENARIO`]): launch the app, wait for the window to map,
+/// settle, and screenshot. No keyboard interaction at all — the assertion is purely
+/// that the "no folder open" status page rendered.
+///
+/// The caller launches cage with `HOME` set to the same fresh temp directory it
+/// uses as the working directory, which is what makes `workspace::launch_decision`
+/// take its `cwd == home` branch (see the notes near [`EMPTY_STATE_OCR`]).
+const EMPTY_STATE_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
+# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
+# binaries (most spawning a real nvim) run in parallel: under that load the window
+# can take well over the old 5s budget to map. This is a timing knob only -- no
+# assertion depends on it.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=0.5
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the Wayland display to be usable
+# (cheap no-op wtype succeeds only once cage has a mapped surface).
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome empty-state smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle so the status page (and the captive nvim's initial redraw behind it)
+# have landed before capturing.
+sleep "$SETTLE"
+
+# Capture the live window to the output PNG.
+grim "$OUT_PNG"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+/// The NEW-UNTITLED-BUFFER scenario, run as a single `sh -c` string INSIDE `cage`
+/// (same structure as [`VSPLIT_SCENARIO`]): launch the app, wait for the window to
+/// map, open the base file (`:e $NEWBUF_FILE<CR>`), fire the Ctrl+Shift+N
+/// accelerator, type the marker into the fresh buffer, park the cursor off the
+/// marker's row, settle, and screenshot. The base file lives in the cage process's
+/// working directory (set via `Command::current_dir` by the caller).
+const NEWBUF_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
+# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
+# binaries (most spawning a real nvim) run in parallel: under that load the window
+# can take well over the old 5s budget to map. This is a timing knob only -- no
+# assertion depends on it.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=0.5
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the Wayland display to be usable
+# (cheap no-op wtype succeeds only once cage has a mapped surface).
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome new-buffer smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw before driving the editor.
+sleep "$SETTLE"
+
+# Open the base file so there is something DISTINCTIVE on screen to displace.
+wtype -- ":e $NEWBUF_FILE"
+wtype -k Return
+
+# Let nvim load the base file and redraw before firing the accelerator.
+sleep "$SETTLE"
+
+# Fire the New (untitled buffer) accelerator Ctrl+Shift+N. GTK captures the chord
+# before the window key controller, activates `win.new-buffer`, and the shell sends
+# InputEvent::NewBuffer -> `wolf_new_untitled()` (:enew + "Untitled N.md").
+#
+# Note: `-M <mod>` / `-m <mod>` press / release a modifier and `-k <key>`
+# presses+releases a key while the held modifiers apply, exactly as in the picker
+# scenarios. Chord delivery is isolated to this single line.
+wtype -M ctrl -M shift -k n -m shift -m ctrl
+
+# Let the new buffer be created and painted before typing into it.
+sleep "$SETTLE"
+
+# Type the distinctive marker into the fresh buffer, then leave insert mode.
+wtype -- "i$NEWBUF_MARKER"
+wtype -k Escape
+
+# Brief settle between keystroke steps so each is processed in order.
+sleep "$SETTLE"
+
+# Move the cursor OFF the marker's row so its inverted block does not sit atop (and
+# OCR-distort) the asserted marker -- the SCENARIO / FOCUS_SCENARIO precedent. In
+# normal mode `o` opens a new line BELOW and enters insert on it; Escape parks the
+# cursor there.
+wtype -- o
+wtype -k Escape
+
+# Let the redraw of the typed text land before capturing.
+sleep "$SETTLE"
+
+# Capture the live window to the output PNG.
+grim "$OUT_PNG"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+/// The `:q` CLOSE-PANE scenario, run as a single `sh -c` string INSIDE `cage`
+/// (mirrors [`CLOSE_SCENARIO`] step for step): launch the app, wait for the window
+/// to map, open file A in the editor pane, vertical-split (`<C-w>v`, focus moves to
+/// the new RIGHT pane), open file B there, then close the focused pane with the Ex
+/// command `:q` instead of `<C-w>c`, settle, and screenshot. Both files live in the
+/// cage process's working directory (set by the caller).
+const COLON_Q_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
+# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
+# binaries (most spawning a real nvim) run in parallel: under that load the window
+# can take well over the old 5s budget to map. This is a timing knob only -- no
+# assertion depends on it.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=0.5
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the Wayland display to be usable
+# (cheap no-op wtype succeeds only once cage has a mapped surface).
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome :q smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw before driving the editor.
+sleep "$SETTLE"
+
+# Open file A (the SURVIVOR) in the (single) editor pane.
+wtype -- ":e $QUIT_FILE_KEEP"
+wtype -k Return
+
+# Let nvim load file A and redraw before splitting.
+sleep "$SETTLE"
+
+# Vertical split: the new pane opens to the RIGHT and becomes focused.
+wtype -M ctrl -k w -m ctrl
+wtype -k v
+
+# Let the shell build the second (right) pane and redraw.
+sleep "$SETTLE"
+
+# In the now-focused RIGHT pane, open file B (the one we will close).
+wtype -- ":e $QUIT_FILE_GONE"
+wtype -k Return
+
+# Let nvim load file B and both panes redraw.
+sleep "$SETTLE"
+
+# Close the focused (right) pane with `:q`. init.lua's do_quit closes the PANE
+# (nvim_win_close) whenever more than one window is open, and only fires the
+# `close_window` command when it is the last one -- so this must NOT quit the app.
+wtype -- ":q"
+wtype -k Return
+
+# Let the close land: the right pane vanishes and the survivor reclaims the width.
+sleep "$SETTLE"
+
+# Capture the live window to the output PNG.
+grim "$OUT_PNG"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+/// The `:qa` CLOSE-WINDOW scenario, run as a single `sh -c` string INSIDE `cage`:
+/// launch the app, wait for the window to map, settle, type `:qa<CR>`, then POLL
+/// for the app process to disappear and REAP it to check how it went.
+///
+/// This is the only scenario that captures NO screenshot: its whole assertion is
+/// that the process is gone and exited cleanly, which is a property of the process
+/// table, not of any pixel. It therefore calls neither `grim` nor `tesseract`, and
+/// contributes no [`ASSERTED_OCR_TERMS`] rows.
+///
+/// It asserts the app closed CLEANLY, not merely that it disappeared: after the
+/// poll loop sees the process go, it `wait`s for the reaped child and checks the
+/// status the shell retained. A panic or abort in the GTK main loop makes the
+/// process vanish exactly as a clean shutdown does, so without that check this
+/// scenario would pass green on the very regression its failure message blames.
+///
+/// Exit codes: `0` the app exited cleanly (success); `11` the app died before the
+/// window mapped; `12` the app was still alive after `QUIT_TRIES * WAIT_INTERVAL`
+/// seconds — i.e. the drained `close_window` command never reached
+/// `window.close()`; `13` the app exited but with a NON-ZERO status — i.e. the
+/// shutdown path itself panicked or aborted.
+const COLON_QA_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
+# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
+# binaries (most spawning a real nvim) run in parallel: under that load the window
+# can take well over the old 5s budget to map. This is a timing knob only -- no
+# assertion depends on it.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=0.5
+# How many WAIT_INTERVAL polls to allow for the app to EXIT after :qa. Sized like
+# WAIT_TRIES because the shutdown path (close-request -> picker/tree close ->
+# WolfCore::shutdown -> nvim exit) runs under the same parallel-suite load.
+QUIT_TRIES=75
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the Wayland display to be usable
+# (cheap no-op wtype succeeds only once cage has a mapped surface).
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome :qa smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw before driving the cmdline.
+sleep "$SETTLE"
+
+# Quit-all. init.lua's do_quit sees `all` and fires
+# `vim.rpcnotify(chan, "wolf_command", "close_window")` (behind its E37 guard; the
+# startup buffer is untouched here, so the guard does not trip). redraw.rs queues
+# the command AND fires the wake, so the GTK drain runs promptly.
+wtype -- ":qa"
+wtype -k Return
+
+# POLL (do not sleep-and-hope) for the process to actually go away -- then REAP it
+# and check its EXIT STATUS.
+#
+# The status check is load-bearing, not belt-and-braces. "The process is gone" is
+# equally true of a clean shutdown and of a panic or abort in the GTK main loop, so
+# without it this scenario would exit 0 on exactly the regression its failure
+# message blames (an outstanding `core.borrow()` held across the dispatch while
+# `wire_close`'s handler does `core.borrow_mut().take()` is a RefCell panic). The
+# smoke would then prove only that the app died, not that it closed cleanly.
+#
+# `wait` can still report the status here: the shell reaps a background child and
+# RETAINS its status until a `wait` asks for it -- that retention is also why
+# `kill -0` starts failing in this loop at all (a still-unreaped child would linger
+# as a zombie and keep answering `kill -0`). A clean run exits 0: `main` forwards
+# `adw::Application::run_with_args`, which returns SUCCESS when the last window
+# closes and the main loop ends normally.
+tries=0
+while [ "$tries" -lt "$QUIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        # `set -e` would abort the script on a non-zero status before we could
+        # report it, so collect the status through `||` (exempt from `set -e`).
+        rc=0
+        wait "$app_pid" || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            echo "wolf-gnome :qa smoke: app (pid $app_pid) exited $rc, not 0." >&2
+            echo "  It went away, but NOT cleanly: the shutdown path panicked" >&2
+            echo "  or aborted rather than returning from the GTK main loop." >&2
+            exit 13
+        fi
+        exit 0
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+echo "wolf-gnome :qa smoke: app (pid $app_pid) still alive after :qa" >&2
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 12
+"#;
+
+/// The Ctrl+Shift+W CLOSE-PANE scenario, run as a single `sh -c` string INSIDE
+/// `cage` (mirrors [`CLOSE_SCENARIO`] step for step): launch the app, wait for the
+/// window to map, open file A in the editor pane, vertical-split (`<C-w>v`, focus
+/// moves to the new RIGHT pane), open file B there, then close the focused pane
+/// with the Ctrl+Shift+W ACCELERATOR instead of `<C-w>c`, settle, and screenshot.
+/// Both files live in the cage process's working directory (set by the caller).
+const CHORD_CLOSE_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
+# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
+# binaries (most spawning a real nvim) run in parallel: under that load the window
+# can take well over the old 5s budget to map. This is a timing knob only -- no
+# assertion depends on it.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=0.5
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the Wayland display to be usable
+# (cheap no-op wtype succeeds only once cage has a mapped surface).
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome chord-close smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw before driving the editor.
+sleep "$SETTLE"
+
+# Open file A (the SURVIVOR) in the (single) editor pane.
+wtype -- ":e $CHORD_CLOSE_FILE_KEEP"
+wtype -k Return
+
+# Let nvim load file A and redraw before splitting.
+sleep "$SETTLE"
+
+# Vertical split: the new pane opens to the RIGHT and becomes focused.
+wtype -M ctrl -k w -m ctrl
+wtype -k v
+
+# Let the shell build the second (right) pane and redraw.
+sleep "$SETTLE"
+
+# In the now-focused RIGHT pane, open file B (the one we will CLOSE).
+wtype -- ":e $CHORD_CLOSE_FILE_GONE"
+wtype -k Return
+
+# Let nvim load file B and both panes redraw.
+sleep "$SETTLE"
+
+# Close the focused (right) pane with the Ctrl+Shift+W accelerator. Wolf matches
+# the chord in a CAPTURE-phase EventControllerKey (actions::action_for_key), so it
+# never reaches Neovim as a key; it activates `win.close-pane`, which the shell
+# turns into InputEvent::ClosePane -> nvim's `:close`.
+#
+# Note: `-M <mod>` / `-m <mod>` press / release a modifier and `-k <key>`
+# presses+releases a key while the held modifiers apply, exactly as in the picker
+# and new-buffer scenarios. Chord delivery is isolated to this single line.
+wtype -M ctrl -M shift -k w -m shift -m ctrl
+
+# Let the close land: the right pane vanishes and the survivor reclaims the width.
+sleep "$SETTLE"
+
+# Capture the live window to the output PNG.
+grim "$OUT_PNG"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
 /// Creates a fresh, unique temp directory to serve as the launched app's working
 /// directory. The app derives `CoreConfig.cwd` from `std::env::current_dir()`, so
 /// this is the directory the file-search traversal walks and the directory the
 /// captive nvim runs in (the recent-files MRU lives in the global
 /// `state_dir()/file-mru.sqlite`, not under the cwd).
 ///
-/// ALL NINE smokes use this. A fresh cwd per run is MANDATORY, not tidiness:
+/// ALL FOURTEEN smokes use this. A fresh cwd per run is MANDATORY, not tidiness:
 ///
 /// * The captive nvim keeps a DURABLE, per-project swap dir keyed on the cwd
 ///   (`wolf_core::state::swap_dir_for` → `state_dir()/swap/<hash of cwd>`), which
@@ -1353,18 +1968,25 @@ fn make_temp_cwd() -> PathBuf {
     dir
 }
 
-/// Every lowercased substring the nine cage smokes assert OCR must — or must not —
-/// contain, as `(term, const name, the smoke that asserts it)`.
+/// Every lowercased substring the OCR-asserting cage smokes must — or must not —
+/// find, as `(term, const name, the smoke that asserts it)`.
 ///
 /// The terms are the CONSTS themselves, never re-typed literals: a table of copies
 /// could drift away from the values the smokes actually assert without anything
 /// noticing, which would leave the check below quietly guarding nothing.
 ///
-/// [`FOCUS_OCR_MARKER`] is the lowercased form of [`FOCUS_MARKER`], so the typed
-/// marker is covered too. The two must-NOT-contain terms ([`PICKER_NAV_OCR_ABSENT`],
-/// [`CLOSE_OCR_GONE`]) are listed deliberately: a filler row carrying one of those
-/// would make its smoke fail SPURIOUSLY rather than pass vacuously — the opposite
-/// symptom, but the same fixture bug.
+/// [`FOCUS_OCR_MARKER`] and [`NEWBUF_OCR_PRESENT`] are the lowercased forms of
+/// [`FOCUS_MARKER`] and [`NEWBUF_MARKER`], so the typed markers are covered too.
+/// The must-NOT-contain terms ([`PICKER_NAV_OCR_ABSENT`], [`CLOSE_OCR_GONE`],
+/// [`NEWBUF_OCR_ABSENT`], [`QUIT_OCR_GONE`], [`CHORD_CLOSE_OCR_GONE`]) are listed
+/// deliberately: a filler row carrying one of those would make its smoke fail
+/// SPURIOUSLY rather than pass vacuously — the opposite symptom, but the same
+/// fixture bug.
+///
+/// Thirteen of the fourteen smokes appear here.
+/// [`colon_qa_closes_the_window_under_cage`] contributes NO rows on purpose: it
+/// captures no PNG and asserts only that the app process is gone, so it has no OCR
+/// term a fixture filename could satisfy.
 const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
     (OCR_WORD, "OCR_WORD", "window_renders_typed_text_under_cage"),
     (
@@ -1443,6 +2065,41 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         "TRI_OCR_C",
         "three_panes_keep_all_files_visible_under_cage",
     ),
+    (
+        EMPTY_STATE_OCR,
+        "EMPTY_STATE_OCR",
+        "empty_state_shows_open_folder_button_under_cage",
+    ),
+    (
+        NEWBUF_OCR_PRESENT,
+        "NEWBUF_OCR_PRESENT",
+        "new_untitled_buffer_replaces_open_file_under_cage",
+    ),
+    (
+        NEWBUF_OCR_ABSENT,
+        "NEWBUF_OCR_ABSENT",
+        "new_untitled_buffer_replaces_open_file_under_cage",
+    ),
+    (
+        QUIT_OCR_KEEP,
+        "QUIT_OCR_KEEP",
+        "colon_q_closes_focused_pane_under_cage",
+    ),
+    (
+        QUIT_OCR_GONE,
+        "QUIT_OCR_GONE",
+        "colon_q_closes_focused_pane_under_cage",
+    ),
+    (
+        CHORD_CLOSE_OCR_KEEP,
+        "CHORD_CLOSE_OCR_KEEP",
+        "close_pane_chord_closes_focused_pane_under_cage",
+    ),
+    (
+        CHORD_CLOSE_OCR_GONE,
+        "CHORD_CLOSE_OCR_GONE",
+        "close_pane_chord_closes_focused_pane_under_cage",
+    ),
 ];
 
 /// Mechanically enforces the naming invariant documented on [`SIDEBAR_FILLER_FILES`]:
@@ -1460,10 +2117,47 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
 /// and adding a filler file does not look like touching an assertion. A fixture that
 /// can disarm the assertion it exists to support needs an executable guard, not prose.
 ///
+/// ## The terms it guards
+///
+/// [`ASSERTED_OCR_TERMS`] is the authority; as a reader's summary the terms are
+/// `hello`, `pickertarget`, `picktwo`/`pickone`, `treenode`,
+/// `paneleft`/`paneright`, `htopfile`/`hbotfile`, `focusone`/`focustwo`/`zzleft`,
+/// `closekeep`/`closegone`, `triaone`/`tribtwo`/`tricthree`, and — added with the
+/// command-drain unit — `folder` ([`EMPTY_STATE_OCR`]), `zzfresh`
+/// ([`NEWBUF_OCR_PRESENT`]), `newbufbase` ([`NEWBUF_OCR_ABSENT`]), `quitkeep`
+/// ([`QUIT_OCR_KEEP`]), `quitgone` ([`QUIT_OCR_GONE`]), `chordkeep`
+/// ([`CHORD_CLOSE_OCR_KEEP`]) and `chordgone` ([`CHORD_CLOSE_OCR_GONE`]). None is a
+/// substring of any [`SIDEBAR_FILLER_FILES`] entry, and no filler may be renamed to
+/// make one so. [`colon_qa_closes_the_window_under_cage`] contributes no term: it
+/// asserts on the cage exit status and captures no image.
+///
+/// ## What it does NOT guard (and why that matters)
+///
+/// It inspects [`SIDEBAR_FILLER_FILES`] only — never a smoke's OWN fixture
+/// filenames — so it cannot catch a smoke whose fixture file is named after the
+/// word that smoke asserts. That gap was live, and an audit with the command-drain
+/// unit found exactly two instances:
+///
+/// * [`picker_opens_and_loads_selected_file_under_cage`] shipped a
+///   `pickertarget.md` fixture against a `pickertarget` assertion, and PASSED green
+///   during a run in which the picker provably never opened — the sidebar row alone
+///   satisfied it. See the note on [`PICKER_FILE_NAME`].
+/// * [`vertical_split_shows_two_panes_under_cage`] shipped `paneleft.md` /
+///   `paneright.md` against `paneleft` / `paneright`, so BOTH of its assertions
+///   were satisfiable without `<C-w>v` splitting anything. See the note above the
+///   `VSPLIT_*` consts.
+///
+/// Both are fixed, and the convention they now follow is the one to apply to any
+/// new smoke: **when a smoke asserts on a file's CONTENT, the file's NAME must not
+/// contain the asserted word.** The single deliberate exception is
+/// [`tree_sidebar_shows_files_under_cage`], whose whole subject IS the sidebar row,
+/// so [`TREE_OCR`] is a filename word on purpose — which is also why this guard
+/// cannot simply be widened to cover fixture names without an opt-out list.
+///
 /// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the nine smokes — still guards the
-/// fixture on a machine where the smoke toolchain is unavailable.
+/// nothing to the smoke suite's runtime and — unlike the fourteen smokes — still
+/// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
     // Guard the guard: `ocr_to_lowercase` lowercases tesseract's output before every
@@ -1522,7 +2216,7 @@ fn window_renders_typed_text_under_cage() {
     // integration tests of a crate that declares a `[[bin]]`).
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // A fresh temp cwd, exactly like the other eight smokes. The app reads
+    // A fresh temp cwd, exactly like the other thirteen smokes. The app reads
     // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
     // directory as its working directory (see `.current_dir` below). See
     // `make_temp_cwd` for why isolation is mandatory here: at a fixed cwd this
@@ -1688,15 +2382,22 @@ fn picker_opens_and_loads_selected_file_under_cage() {
         out_png.display()
     );
 
-    // OCR the screenshot and assert (loosely) that the target file's heading is
+    // OCR the screenshot and assert (loosely) that the target file's HEADING is
     // present — proving the picker opened, matched `PICKER_QUERY`, selected the
-    // entry, and nvim loaded the file.
+    // entry, and nvim loaded the file. The heading word appears nowhere but inside
+    // the buffer (the fixture is named `ptarget.md`), so only a rendered buffer can
+    // satisfy this; see the note on `PICKER_FILE_NAME` for the run in which a
+    // filename-shaped term made this assertion pass with the picker never opening.
     let ocr_text = ocr_to_lowercase(&out_png);
     assert!(
         ocr_text.contains(PICKER_OCR),
-        "OCR of the rendered window did not contain {PICKER_OCR:?} (loose match). This usually \
-         means the picker did not open the target file. PNG kept at {} for inspection. OCR \
-         output was:\n{ocr_text}",
+        "OCR of the rendered window did not contain {PICKER_OCR:?} (loose match) — the HEADING of \
+         {PICKER_FILE_NAME}, which only renders once nvim has actually loaded that file. This \
+         usually means the picker did not open the target: either the Ctrl+Shift+O chord never \
+         reached `win.go-to-file` (Wolf matches its chords in a capture-phase \
+         EventControllerKey via `actions::action_for_key`), or the query \
+         {PICKER_QUERY:?} did not rank {PICKER_FILE_NAME} first. PNG kept at {} for inspection. \
+         OCR output was:\n{ocr_text}",
         out_png.display()
     );
 }
@@ -1971,22 +2672,28 @@ fn vertical_split_shows_two_panes_under_cage() {
         out_png.display()
     );
 
-    // OCR the screenshot and assert (loosely) that BOTH files' headings render at
+    // OCR the screenshot and assert (loosely) that BOTH files' HEADINGS render at
     // once — proving the vertical split produced a second pane bound to the new
-    // nvim window/grid and painted it beside the first.
+    // nvim window/grid and painted it beside the first. Both terms are heading
+    // words that appear nowhere but inside a loaded buffer (the fixtures are named
+    // `pleft.md` / `pright.md`), so neither the sidebar rows nor nvim's `:e` toast
+    // can satisfy either assertion; see the note above the VSPLIT_* consts.
     let ocr_text = ocr_to_lowercase(&out_png);
     assert!(
         ocr_text.contains(VSPLIT_OCR_LEFT),
-        "OCR did not contain {VSPLIT_OCR_LEFT:?} (the LEFT pane's file). A miss usually means the \
-         first pane stopped rendering after the split. PNG kept at {} for inspection. OCR output \
-         was:\n{ocr_text}",
+        "OCR did not contain {VSPLIT_OCR_LEFT:?} — the HEADING of {VSPLIT_FILE_LEFT}, which only \
+         renders once that file is loaded into a PANE. A miss usually means the first pane stopped \
+         rendering after the split; if NEITHER heading appears, suspect instead that the `:e` \
+         commands never reached the cmdline (see the cmdline-visibility note above the VSPLIT_* \
+         consts). PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
         out_png.display()
     );
     assert!(
         ocr_text.contains(VSPLIT_OCR_RIGHT),
-        "OCR did not contain {VSPLIT_OCR_RIGHT:?} (the RIGHT pane's file). A miss usually means the \
-         <C-w>v split did not create a second pane, or :e did not open file B in it. PNG kept at {} \
-         for inspection. OCR output was:\n{ocr_text}",
+        "OCR did not contain {VSPLIT_OCR_RIGHT:?} — the HEADING of {VSPLIT_FILE_RIGHT}, which only \
+         renders once that file is loaded into a PANE. A miss usually means the <C-w>v chord did \
+         not create a second pane, or :e did not open file B in it. PNG kept at {} for inspection. \
+         OCR output was:\n{ocr_text}",
         out_png.display()
     );
 }
@@ -2403,6 +3110,455 @@ fn three_panes_keep_all_files_visible_under_cage() {
         "OCR did not contain {TRI_OCR_C:?} (the new middle pane's file). A miss usually means the \
          second <C-w>v did not create a third pane, or :e did not open file C in it. PNG kept at {} \
          for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+}
+
+#[test]
+fn empty_state_shows_open_folder_button_under_cage() {
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd with NO fixture files: the empty state hides the sidebar, so
+    // there is nothing for filler rows to populate and nothing that asserts on them.
+    let cwd = make_temp_cwd();
+
+    // Put the screenshot under XDG_RUNTIME_DIR (guaranteed writable) and start from
+    // a clean slate so a stale PNG cannot pass.
+    let out_png = runtime_dir.join("wolf_gnome_empty_state_smoke.png");
+    if out_png.exists() {
+        std::fs::remove_file(&out_png).unwrap_or_else(|e| {
+            panic!(
+                "failed to remove stale screenshot {}: {e}",
+                out_png.display()
+            )
+        });
+    }
+
+    // Run the whole empty-state scenario inside cage. Setting HOME to the SAME temp
+    // directory we hand cage as its cwd is what fires `launch_decision`'s
+    // `cwd == home` branch — the production rule, with no test-only env var — and
+    // keeps every $HOME-derived path (state_dir, the MRU sqlite, the swap dir)
+    // inside the temp dir too.
+    let status = Command::new("cage")
+        .arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg(EMPTY_STATE_SCENARIO)
+        .current_dir(&cwd)
+        .env("HOME", &cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        // Large font so the rendered glyphs are legible to tesseract.
+        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
+        .status()
+        .expect("failed to spawn `cage` for the headless empty-state smoke scenario");
+    assert!(
+        status.success(),
+        "cage empty-state scenario exited unsuccessfully ({status}); the app may have failed to \
+         launch, the window may not have mapped, or grim failed. Screenshot expected at {}.",
+        out_png.display()
+    );
+
+    // The screenshot must exist and be non-empty.
+    let png_meta = std::fs::metadata(&out_png).unwrap_or_else(|e| {
+        panic!(
+            "expected screenshot {} to exist after the cage empty-state scenario, but: {e}",
+            out_png.display()
+        )
+    });
+    assert!(
+        png_meta.len() > 0,
+        "screenshot {} exists but is empty (grim produced no image data)",
+        out_png.display()
+    );
+
+    // OCR the screenshot and assert (loosely) that the status page rendered. The
+    // word appears three times (title, description, button), which is the
+    // OCR-robustness margin.
+    let ocr_text = ocr_to_lowercase(&out_png);
+    assert!(
+        ocr_text.contains(EMPTY_STATE_OCR),
+        "OCR of the rendered window did not contain {EMPTY_STATE_OCR:?} (loose match). The likely \
+         causes, in order: (a) `launch_decision` did not return EmptyState — HOME and the cwd are \
+         the same temp dir here, so a Folder decision means the rule or the canonicalization is \
+         wrong; (b) the empty-state overlay was built but never shown \
+         (`set_empty_state(true)`); (c) it was shown but is transparent/behind the editor \
+         DrawingArea, so the grid painted over it. PNG kept at {} — open it to tell those apart. \
+         OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+}
+
+#[test]
+fn new_untitled_buffer_replaces_open_file_under_cage() {
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // Create a fresh temp cwd and drop the base markdown file into it. The app reads
+    // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
+    // directory as its working directory (see `.current_dir` below).
+    let cwd = make_temp_cwd();
+    let target = cwd.join(NEWBUF_FILE);
+    std::fs::write(&target, format!("{NEWBUF_HEADING}\n"))
+        .unwrap_or_else(|e| panic!("failed to write new-buffer base {}: {e}", target.display()));
+
+    // Put the screenshot under XDG_RUNTIME_DIR (guaranteed writable) and start from
+    // a clean slate so a stale PNG cannot pass.
+    let out_png = runtime_dir.join("wolf_gnome_newbuf_smoke.png");
+    if out_png.exists() {
+        std::fs::remove_file(&out_png).unwrap_or_else(|e| {
+            panic!(
+                "failed to remove stale screenshot {}: {e}",
+                out_png.display()
+            )
+        });
+    }
+
+    // Run the whole new-untitled-buffer scenario inside cage, with the temp dir as
+    // the working directory so the app picks it up as its cwd.
+    let status = Command::new("cage")
+        .arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg(NEWBUF_SCENARIO)
+        .current_dir(&cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("NEWBUF_FILE", NEWBUF_FILE)
+        .env("NEWBUF_MARKER", NEWBUF_MARKER)
+        // Large font so the rendered glyphs are legible to tesseract.
+        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
+        .status()
+        .expect("failed to spawn `cage` for the headless new-untitled-buffer smoke scenario");
+    assert!(
+        status.success(),
+        "cage new-untitled-buffer scenario exited unsuccessfully ({status}); the app may have \
+         failed to launch, the window may not have mapped, the :e may not have loaded, or \
+         wtype/grim failed. Screenshot expected at {}.",
+        out_png.display()
+    );
+
+    // The screenshot must exist and be non-empty.
+    let png_meta = std::fs::metadata(&out_png).unwrap_or_else(|e| {
+        panic!(
+            "expected screenshot {} to exist after the cage new-buffer scenario, but: {e}",
+            out_png.display()
+        )
+    });
+    assert!(
+        png_meta.len() > 0,
+        "screenshot {} exists but is empty (grim produced no image data)",
+        out_png.display()
+    );
+
+    // OCR the screenshot. The marker typed into the FRESH buffer must render, and
+    // the base file's heading must NOT — together they prove Ctrl+Shift+N created a
+    // new untitled buffer and put it in the focused pane. Both assertions are
+    // load-bearing; see the NEWBUF_* const notes for why the NOT-contains one is
+    // sound (the filename differs from the heading word, so nvim's `:e` toast and
+    // the sidebar row cannot satisfy it).
+    let ocr_text = ocr_to_lowercase(&out_png);
+    assert!(
+        ocr_text.contains(NEWBUF_OCR_PRESENT),
+        "OCR did not contain the marker {NEWBUF_OCR_PRESENT:?} typed into the new untitled \
+         buffer. The likely causes: the Ctrl+Shift+N accelerator never fired (GTK's application \
+         accels are matched in the CAPTURE phase — if this fails together with both picker \
+         smokes, suspect accel matching for a shifted letter and see the plan's contingency), or \
+         `win.new-buffer` fired but never reached `InputEvent::NewBuffer`. PNG kept at {} for \
+         inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+    assert!(
+        !ocr_text.contains(NEWBUF_OCR_ABSENT),
+        "OCR unexpectedly contained {NEWBUF_OCR_ABSENT:?} (the base file's heading). A hit means \
+         the pane still shows {NEWBUF_FILE} — i.e. no new buffer replaced it, and the marker \
+         above was typed into the ORIGINAL buffer. PNG kept at {} for inspection. OCR output \
+         was:\n{ocr_text}",
+        out_png.display()
+    );
+}
+
+#[test]
+fn colon_q_closes_focused_pane_under_cage() {
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
+    // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
+    // directory as its working directory (see `.current_dir` below).
+    let cwd = make_temp_cwd();
+    let target_keep = cwd.join(QUIT_FILE_KEEP);
+    let target_gone = cwd.join(QUIT_FILE_GONE);
+    std::fs::write(&target_keep, format!("{QUIT_HEADING_KEEP}\n")).unwrap_or_else(|e| {
+        panic!(
+            "failed to write the :q survivor file {}: {e}",
+            target_keep.display()
+        )
+    });
+    std::fs::write(&target_gone, format!("{QUIT_HEADING_GONE}\n")).unwrap_or_else(|e| {
+        panic!(
+            "failed to write the :q closed-pane file {}: {e}",
+            target_gone.display()
+        )
+    });
+
+    // Put the screenshot under XDG_RUNTIME_DIR (guaranteed writable) and start from
+    // a clean slate so a stale PNG cannot pass.
+    let out_png = runtime_dir.join("wolf_gnome_colon_q_smoke.png");
+    if out_png.exists() {
+        std::fs::remove_file(&out_png).unwrap_or_else(|e| {
+            panic!(
+                "failed to remove stale screenshot {}: {e}",
+                out_png.display()
+            )
+        });
+    }
+
+    // Run the whole :q scenario inside cage, with the temp dir as the working
+    // directory so the app picks it up as its cwd.
+    let status = Command::new("cage")
+        .arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg(COLON_Q_SCENARIO)
+        .current_dir(&cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("QUIT_FILE_KEEP", QUIT_FILE_KEEP)
+        .env("QUIT_FILE_GONE", QUIT_FILE_GONE)
+        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
+        .status()
+        .expect("failed to spawn `cage` for the headless :q smoke scenario");
+    assert!(
+        status.success(),
+        "cage :q scenario exited unsuccessfully ({status}); the app may have failed to launch, \
+         the window may not have mapped, the <C-w>v split chord may not have fired, the :e \
+         commands may not have loaded, or wtype/grim failed. A crash here can also mean `:q` \
+         closed the WINDOW instead of the pane. Screenshot expected at {}.",
+        out_png.display()
+    );
+
+    // The screenshot must exist and be non-empty.
+    let png_meta = std::fs::metadata(&out_png).unwrap_or_else(|e| {
+        panic!(
+            "expected screenshot {} to exist after the cage :q scenario, but: {e}",
+            out_png.display()
+        )
+    });
+    assert!(
+        png_meta.len() > 0,
+        "screenshot {} exists but is empty (grim produced no image data)",
+        out_png.display()
+    );
+
+    // OCR the screenshot. The survivor (left) pane's file must render, and the
+    // closed (right) pane's file must NOT — proving `:q` removed the focused pane
+    // and the survivor reclaimed the width, exactly as <C-w>c does.
+    let ocr_text = ocr_to_lowercase(&out_png);
+    assert!(
+        ocr_text.contains(QUIT_OCR_KEEP),
+        "OCR did not contain {QUIT_OCR_KEEP:?} (the survivor pane's file). A miss usually means \
+         the surviving pane stopped rendering after the close — or that `:q` closed the whole \
+         WINDOW (init.lua's do_quit must close the PANE while more than one window is open). PNG \
+         kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+    assert!(
+        !ocr_text.contains(QUIT_OCR_GONE),
+        "OCR unexpectedly contained {QUIT_OCR_GONE:?} (the closed pane's file). A hit usually \
+         means `:q` did not remove the focused pane. PNG kept at {} for inspection. OCR output \
+         was:\n{ocr_text}",
+        out_png.display()
+    );
+}
+
+#[test]
+fn colon_qa_closes_the_window_under_cage() {
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    // No screenshot is taken here, but the smoke env is still required: the scenario
+    // launches under `cage` and drives it with `wtype`.
+    let _runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd with no fixture files: nothing is opened, and the startup
+    // buffer stays untouched so init.lua's E37 modified-buffer guard does not trip.
+    let cwd = make_temp_cwd();
+
+    // Run the whole :qa scenario inside cage. This smoke deliberately captures NO
+    // PNG and runs neither grim nor tesseract: its assertion is that the app PROCESS
+    // exited, and exited CLEANLY, which no pixel can show.
+    let status = Command::new("cage")
+        .arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg(COLON_QA_SCENARIO)
+        .current_dir(&cwd)
+        .env("WOLF_BIN", bin)
+        // Kept for parity with the other smokes: the window renders before :qa, and
+        // a legible window is what makes a retained-video/manual repro readable.
+        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
+        .status()
+        .expect("failed to spawn `cage` for the headless :qa smoke scenario");
+
+    assert!(
+        status.success(),
+        "cage :qa scenario exited unsuccessfully ({status}). This is the load-bearing proof of \
+         the WHOLE command drain: `:qa` -> init.lua's do_quit -> `wolf_command close_window` -> \
+         redraw.rs queues it AND fires the wake -> `WolfCore::drain_commands` on the render wake \
+         -> `UiAction::CloseWindow` -> `window.close()` -> clean `WolfCore::shutdown`. The \
+         scenario reports WHICH half failed through its exit code; read it before anything else. \
+         \n\
+         Exit 11: the app died before its window ever mapped. That is a LAUNCH failure, not a \
+         drain failure — `:qa` was never even typed. \n\
+         Exit 12: the app was STILL RUNNING after the poll budget, i.e. the drained \
+         `close_window` never reached `window.close()`. Check that `shell.on_render_wake()` is \
+         actually called from the wake closure (and called LAST, after panes and tree), and that \
+         `UiAction::CloseWindow` calls `window.close()` rather than `window.destroy()`. \n\
+         Exit 13: the app DID exit, but with a non-zero status — it went away without closing \
+         cleanly, so the shutdown path itself panicked or aborted. The most likely culprit is an \
+         outstanding `core.borrow()` held across the dispatch while `wire_close`'s handler does \
+         `core.borrow_mut().take()`, which is a RefCell double-borrow panic; the scenario echoes \
+         the raw status to stderr. This is the case the smoke was BLIND to before the status \
+         check was added — a panic makes the process vanish exactly as a clean close does, so it \
+         used to pass green. \n\
+         A signal/abort status on the CAGE process itself (rather than one of the three above) \
+         means the compositor died, which is an environment failure."
+    );
+}
+
+#[test]
+fn close_pane_chord_closes_focused_pane_under_cage() {
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
+    // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
+    // directory as its working directory (see `.current_dir` below).
+    let cwd = make_temp_cwd();
+    let target_keep = cwd.join(CHORD_CLOSE_FILE_KEEP);
+    let target_gone = cwd.join(CHORD_CLOSE_FILE_GONE);
+    std::fs::write(&target_keep, format!("{CHORD_CLOSE_HEADING_KEEP}\n")).unwrap_or_else(|e| {
+        panic!(
+            "failed to write the Ctrl+Shift+W survivor file {}: {e}",
+            target_keep.display()
+        )
+    });
+    std::fs::write(&target_gone, format!("{CHORD_CLOSE_HEADING_GONE}\n")).unwrap_or_else(|e| {
+        panic!(
+            "failed to write the Ctrl+Shift+W closed-pane file {}: {e}",
+            target_gone.display()
+        )
+    });
+
+    // Put the screenshot under XDG_RUNTIME_DIR (guaranteed writable) and start from
+    // a clean slate so a stale PNG cannot pass.
+    let out_png = runtime_dir.join("wolf_gnome_chord_close_smoke.png");
+    if out_png.exists() {
+        std::fs::remove_file(&out_png).unwrap_or_else(|e| {
+            panic!(
+                "failed to remove stale screenshot {}: {e}",
+                out_png.display()
+            )
+        });
+    }
+
+    // Run the whole Ctrl+Shift+W close-pane scenario inside cage, with the temp dir
+    // as the working directory so the app picks it up as its cwd.
+    let status = Command::new("cage")
+        .arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg(CHORD_CLOSE_SCENARIO)
+        .current_dir(&cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("CHORD_CLOSE_FILE_KEEP", CHORD_CLOSE_FILE_KEEP)
+        .env("CHORD_CLOSE_FILE_GONE", CHORD_CLOSE_FILE_GONE)
+        // Large font so the rendered glyphs are legible to tesseract.
+        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
+        .status()
+        .expect("failed to spawn `cage` for the headless Ctrl+Shift+W close-pane smoke scenario");
+    assert!(
+        status.success(),
+        "cage Ctrl+Shift+W close-pane scenario exited unsuccessfully ({status}); the app may have \
+         failed to launch, the window may not have mapped, the <C-w>v split chord may not have \
+         fired, the :e commands may not have loaded, or wtype/grim failed. Screenshot expected at \
+         {}.",
+        out_png.display()
+    );
+
+    // The screenshot must exist and be non-empty.
+    let png_meta = std::fs::metadata(&out_png).unwrap_or_else(|e| {
+        panic!(
+            "expected screenshot {} to exist after the cage Ctrl+Shift+W close-pane scenario, \
+             but: {e}",
+            out_png.display()
+        )
+    });
+    assert!(
+        png_meta.len() > 0,
+        "screenshot {} exists but is empty (grim produced no image data)",
+        out_png.display()
+    );
+
+    // OCR the screenshot. The survivor (left) pane's file must render, and the
+    // closed (right) pane's file must NOT — proving the chord travelled the whole
+    // front-end path (capture-phase controller -> `actions::action_for_key` ->
+    // `win.close-pane` -> `UiAction::ClosePane` -> `InputEvent::ClosePane`) and
+    // removed the focused pane. Both assertions are load-bearing; see the
+    // CHORD_CLOSE_* const notes for why the NOT-contains one is sound.
+    let ocr_text = ocr_to_lowercase(&out_png);
+    assert!(
+        ocr_text.contains(CHORD_CLOSE_OCR_KEEP),
+        "OCR did not contain {CHORD_CLOSE_OCR_KEEP:?} (the survivor pane's file). A miss usually \
+         means the surviving pane stopped rendering after the close — or, if OCR shows NEITHER \
+         heading, that Ctrl+Shift+W was forwarded to Neovim instead of being captured, in which \
+         case `<C-w>` started a window command and `W` moved the cursor. PNG kept at {} for \
+         inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+    assert!(
+        !ocr_text.contains(CHORD_CLOSE_OCR_GONE),
+        "OCR unexpectedly contained {CHORD_CLOSE_OCR_GONE:?} (the closed pane's file). A hit \
+         means the Ctrl+Shift+W chord did not remove the focused pane. Check, in order: \
+         `actions::action_for_key` matched the delivered keyval (a real keymap sends the SHIFTED \
+         glyph `W`, so the letter comparison must be case-insensitive — \
+         `actions::tests::action_for_key_table` pins that), the `win.close-pane` action is \
+         installed and enabled, and the shell's `UiAction::ClosePane` arm sends \
+         `InputEvent::ClosePane`. If `colon_q_closes_focused_pane_under_cage` and \
+         `close_pane_leaves_one_under_cage` both pass while this fails, the nvim-side close works \
+         and the break is in the front-end chord path. PNG kept at {} for inspection. OCR output \
+         was:\n{ocr_text}",
         out_png.display()
     );
 }

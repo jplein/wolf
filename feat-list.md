@@ -79,7 +79,7 @@ GTK paints a single-row bottom strip: an active command line, or the last toast 
 | Project search UI (ripgrep-backed)          | `feat/search-ui`                                                             | [x]   | [ ]   |
 | Native file dialogs (open / save / save-as) | —                                                                            | [x]   | [ ]   |
 
-The `wolf-core` halves of the buffer picker (`buffer_picker::rank_buffers`), the palette (`palette::rank_palette`), the recent-directories MRU, the navigation history (`nav_history`), and project search (`search.rs` / `search_tree.rs`) are all platform-agnostic and already linked into `wolf-gnome` — only the GTK views and their wiring are missing. Those are the highest-leverage Linux tasks.
+The `wolf-core` halves of the buffer picker (`buffer_picker::rank_buffers`), the palette (`palette::rank_palette`), the recent-directories MRU, the navigation history (`nav_history`), and project search (`search.rs` / `search_tree.rs`) are all platform-agnostic and already linked into `wolf-gnome` — only the GTK views and their wiring are missing. Those are the highest-leverage Linux tasks. The native-file-dialogs row covers all three dialogs together: `wolf-gnome` now has native **Open File… / Open Folder…** `gtk::FileDialog`s in its primary menu, but save and save-as remain absent (saving is `:w` / `:saveas` from within Neovim), so the row stays unticked. The sidebar re-roots after an **Open Folder**, but still not on a user-typed `:cd`, so that row stays unticked too.
 
 ## Windows, tabs, commands
 
@@ -87,9 +87,9 @@ The `wolf-core` halves of the buffer picker (`buffer_picker::rank_buffers`), the
 | -------------------------------------------- | --------------------------------------- | ----- | ----- |
 | Multiple windows                             | `feat/mac-ui-changes` (`2fd6256`)       | [x]   | [ ]   |
 | Command registry (`:Wolf*` + Lua faces)      | `feat/commands` (`fb0147c`)             | [x]   | [x]   |
-| Commands drained and dispatched to the UI    | `feat/commands` (`fb0147c`)             | [x]   | [ ]   |
-| Native application menu bar                  | `feat/commands`                         | [x]   | [ ]   |
-| Empty state ("Open folder…" button)          | `feat/commands` (`2a1eb94`)             | [x]   | [ ]   |
+| Commands drained and dispatched to the UI    | `feat/commands` (`fb0147c`)             | [x]   | [x]   |
+| Native application menu bar                  | `feat/commands`                         | [x]   | [x]   |
+| Empty state ("Open folder…" button)          | `feat/commands` (`2a1eb94`)             | [x]   | [x]   |
 | Working directory in the window title        | `feat/status-bar` (`6fd2427`)           | [x]   | [ ]   |
 | Unified toolbar (sidebar toggle, nav, title) | `feat/nav-buttons` (`96d2c97`)          | [x]   | [ ]   |
 | Native tabs, one Neovim per project          | `feat/window-tabs`                      | [x]   | [ ]   |
@@ -97,10 +97,10 @@ The `wolf-core` halves of the buffer picker (`buffer_picker::rank_buffers`), the
 | Pane-layout persistence across relaunch      | `feat/macos-pane-dividers` (`5f8becb`)  | [x]   | [ ]   |
 | Single-pane state-persistence fix            | `fix/state-persistence-single-pane-bug` | [x]   | [ ]   |
 | Copy / paste through the system clipboard    | `feat/copy-paste`                       | [x]   | [ ]   |
-| `:q` / `:qa` mapped to close pane / window   | `feat/colon-q-remapping`                | [x]   | [ ]   |
-| ⌘N opens a new untitled Markdown buffer      | `feat/colon-q-remapping` (`0266b96`)    | [x]   | [ ]   |
+| `:q` / `:qa` mapped to close pane / window   | `feat/colon-q-remapping`                | [x]   | [x]   |
+| ⌘N opens a new untitled Markdown buffer      | `feat/colon-q-remapping` (`0266b96`)    | [x]   | [x]   |
 
-`wolf-gnome` gets `WolfCore::drain_commands()` and the whole `state` module for free, but never calls either: there is no GTK menu, no window/tab tree to snapshot, and nothing reads `state.json`. `:q` remapping and ⌘N depend on the command drain, so they are blocked behind it.
+`wolf-gnome` now calls `WolfCore::drain_commands()` on every render wake, behind a pure, TOTAL `Command → UiAction` mapping (`command_action.rs`, a match with no `_` arm, so a new core command is a compile error until it is classified). **8 of the 26 commands dispatch today, 1 never will on GNOME** (`HideApplication` — the shell owns window visibility), **and 17 are recorded as `Deferred`** with a distinct reason that is printed rather than silently dropped. The GNOME equivalent of the macOS menu bar is a **primary menu** (a header-bar hamburger `gtk::MenuButton` + `gio::Menu`) driven by the same `gio` action namespace as the accelerators, so the menu, the chords and the drained commands cannot drift apart; the Linux accelerator scheme — `Ctrl+Shift+<letter>`, plus the invariant that no Neovim key becomes unreachable — is documented in [`crates/wolf-gnome/README.md`](crates/wolf-gnome/README.md). The whole `state` module is still unread: there is no window/tab tree to snapshot and nothing loads `state.json`, so the persistence rows stay unticked.
 
 ## Markdown preview
 
@@ -145,7 +145,7 @@ The rendering pipeline and the loopback preview server are entirely in `wolf-cor
 | Terminal drawer (⌃\`)           | `feat/terminal-drawer`             | [x]   | [ ]   |
 | Terminal defaults to full width | `feat/use-whole-width` (`0506e92`) | [x]   | [ ]   |
 
-The drawer itself is an `init.lua` helper driven by `InputEvent::ToggleTerminal`, but it arrives through the command drain and needs a `DRAWER_OPEN` layout intent the GTK pane view does not handle.
+The drawer itself is an `init.lua` helper driven by `InputEvent::ToggleTerminal`. `Command::Terminal` now reaches the GTK drain and is deliberately classified `Deferred` there, because `pane_view` drops the `DRAWER_OPEN` layout intent — toggling would open a `:terminal` window GTK never paints. The Ctrl+backquote chord (`<Control>grave`) is reserved for it in `crates/wolf-gnome/src/actions.rs` but not bound.
 
 ## Reliability and performance
 
@@ -168,11 +168,14 @@ Liveness, swap recovery, auto-reload, and the hang fixes are all core- or `init.
 
 ## Suggested order of work for Linux
 
-1. **Command drain + a GTK menu.** Almost everything else on the list is gated behind `drain_commands()` reaching an action. This unblocks `:q` remapping, new buffer, open folder, close pane, and the palette's dispatch target.
-2. **Mouse and scroll input.** Self-contained, no core changes, and it is the most conspicuous gap in day-to-day use.
-3. **Crash/stall overlay.** The core surface is already there; this is pure GTK wiring, and its absence is a hard freeze.
-4. **State persistence.** `wolf_core::state` is consumed directly from Rust — no FFI to mirror.
-5. **The three overlay pickers** (command palette, buffer picker, project search). Ranking is already shared; each needs a GTK view of the shape the file picker already has.
-6. **Config-driven typography**, then the completion popup and multi-line toast.
-7. **Markdown preview**, which is the largest single item: it introduces a second kind of pane content on the GTK side.
-8. **Multi-window and tabs**, which reshape `wolf-gnome` from a single-window application into a coordinator-plus-views one.
+**Done: command drain + a GTK menu.** This was the unblocking item — almost everything else on the list was gated behind `drain_commands()` reaching an action. It landed with `:q` / `:qa` remapping, the new untitled buffer, the empty state's open-folder path, close pane, the GNOME primary menu, and the accelerator scheme later units consume. The palette now has a dispatch target and a reserved chord.
+
+The remaining order:
+
+1. **Mouse and scroll input.** Self-contained, no core changes, and it is the most conspicuous gap in day-to-day use.
+2. **Crash/stall overlay.** The core surface is already there; this is pure GTK wiring, and its absence is a hard freeze.
+3. **State persistence.** `wolf_core::state` is consumed directly from Rust — no FFI to mirror.
+4. **The three overlay pickers** (command palette, buffer picker, project search). Ranking is already shared, each command already lands in the drain as `Deferred`, and each chord is already reserved; each needs a GTK view of the shape the file picker already has.
+5. **Config-driven typography**, then the completion popup and multi-line toast.
+6. **Markdown preview**, which is the largest single item: it introduces a second kind of pane content on the GTK side.
+7. **Multi-window and tabs**, which reshape `wolf-gnome` from a single-window application into a coordinator-plus-views one.

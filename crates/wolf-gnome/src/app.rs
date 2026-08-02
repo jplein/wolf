@@ -15,22 +15,35 @@
 //!   bounded `async-channel` (capacity 1, coalescing a burst of flushes), and a
 //!   [`glib::spawn_future_local`] task on the GTK main thread drains it and calls
 //!   `pane_view::PaneHandle::on_render_wake` (per-pane redraw + split/close/focus
-//!   intent consumption) and `tree_view::TreeHandle::on_render_wake`.
+//!   intent consumption), `tree_view::TreeHandle::on_render_wake`, and finally
+//!   `shell::AppShell::on_render_wake` (the command drain). The shell runs LAST:
+//!   a drained `close_window` tears the core down.
 //! - **Paint:** per-pane painting and the mode-aware cursor live in
 //!   [`crate::pane_view`] (which uses the pure [`crate::paint`]/[`crate::cursor`]
 //!   seams); the app installs no draw handler of its own.
 //! - **Input:** a window-level [`gtk::EventControllerKey`] routes keys through the
 //!   pure [`crate::gdk_key`] seam into [`WolfCore::send_input`]; nvim routes them to
 //!   its current window, and the cursor renders in whichever pane owns that grid.
+//!   The controller has no propagation phase (i.e. Bubble), so it runs only after
+//!   [`crate::shell`]'s CAPTURE-phase chord controller has had its say — which is
+//!   exactly the guarantee that a bound chord is not also forwarded to Neovim.
+//! - **Commands / menu:** [`crate::shell`] installs one `gio::SimpleAction` per
+//!   implemented action of [`crate::actions::ACTION_TABLE`], builds the primary
+//!   menu from the same data, matches the accelerators, and drains
+//!   [`WolfCore::drain_commands`] on each wake.
 //! - **Resize:** per-pane and global grid resizing live in [`crate::pane_view`]
 //!   (each pane's `connect_resize` → [`crate::grid_size_for`] → per-grid/global
 //!   resize).
 //! - **Lifecycle:** [`WolfCore`] lives in an `Rc<RefCell<Option<_>>>` on the main
 //!   thread; closing the window takes it out and runs [`WolfCore::shutdown`].
 //!
-//! Files are opened from within Neovim (`:e`) or via the picker/tree; there are no
-//! file dialogs. Native command line (`ext_cmdline`/`ext_messages`), theming, and
-//! mouse/scroll are deferred (the cmdline strip paints grid 1 in the meantime).
+//! Files are opened from within Neovim (`:e`), via the picker/tree, or via the
+//! primary menu's native Open File / Open Folder dialogs (there are still no save
+//! / save-as dialogs). When no project is open, [`crate::workspace::launch_decision`]
+//! puts the window into an EMPTY STATE: the sidebar is hidden, no `FileSearch`
+//! starts, and an "Open Folder…" status page covers the editor. Native command line
+//! (`ext_cmdline`/`ext_messages`), theming, and mouse/scroll are deferred (the
+//! cmdline strip paints grid 1 in the meantime).
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -43,7 +56,9 @@ use wolf_core::{CoreConfig, InputEvent, WakeFn, WolfCore};
 
 use crate::pane_view;
 use crate::picker::{self, PickerHandle};
+use crate::shell::{self, ShellParts, GO_TO_FILE_ACTION};
 use crate::tree_view::{self, TreeHandle};
+use crate::workspace::{self, LaunchDecision};
 use crate::CellMetrics;
 
 /// The GApplication id. Adwaita uses it for resource paths, the default window
@@ -75,8 +90,9 @@ const WINDOW_WIDTH: i32 = 1200;
 const WINDOW_HEIGHT: i32 = 640;
 
 /// Default width (px) of the file-tree sidebar pane (the `gtk::Paned` divider
-/// position).
-const TREE_PANE_WIDTH: i32 = 250;
+/// position). Collapsed to `0` in the empty state by
+/// [`crate::shell::AppShell::set_empty_state`].
+pub(crate) const TREE_PANE_WIDTH: i32 = 250;
 
 /// Wake channel capacity. One slot is enough: it coalesces a burst of flushes into
 /// a single queued redraw (a dropped "full" send just means a redraw is already
@@ -134,11 +150,27 @@ fn build_ui(app: &adw::Application) {
         let _ = wake_tx.try_send(());
     });
 
+    // Is a project open? The Linux rule reads the PROCESS working directory (there
+    // is no state.json restore here): a terminal launch from a project is a
+    // project; a desktop-launcher start at $HOME or / is not. Both paths are
+    // canonicalized so `launch_decision`'s comparisons mean what they say.
+    let process_cwd = std::env::current_dir()
+        .ok()
+        .map(|cwd| std::fs::canonicalize(&cwd).unwrap_or(cwd));
+    let home = workspace::home_dir();
+    let (core_cwd, empty) =
+        match workspace::launch_decision(process_cwd.as_deref(), home.as_deref(), |path| {
+            path.is_dir()
+        }) {
+            LaunchDecision::Folder { cwd } => (cwd, false),
+            LaunchDecision::EmptyState { nvim_cwd } => (nvim_cwd, true),
+        };
+
     let cfg = CoreConfig {
         init_lua: init_lua_path(),
         cols: INITIAL_COLS,
         rows: INITIAL_ROWS,
-        cwd: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        cwd: core_cwd,
     };
     let core = match WolfCore::start(cfg, wake) {
         Ok(core) => core,
@@ -161,33 +193,40 @@ fn build_ui(app: &adw::Application) {
     // window-level controller after they close).
     let focus_area = panes.cmdline_widget();
 
-    // The editor area is the overlay's main child; the picker is added as an
-    // overlay child (built below) so it floats over the editor when open.
+    // The editor area is the overlay's main child. The empty state is added FIRST
+    // so the picker, added after it, floats above it.
     let overlay = gtk::Overlay::new();
     overlay.set_child(Some(&editor));
 
+    let empty_state = shell::build_empty_state();
+    overlay.add_overlay(&empty_state);
+
     let picker = picker::build(&overlay, &focus_area, &core);
 
-    // The file-tree sidebar on the left; the editor (overlay) on the right.
-    let tree = tree_view::build(&core, &focus_area);
+    // The file-tree sidebar on the left; the editor (overlay) on the right. In the
+    // empty state there is no project to walk, so no FileSearch starts.
+    let tree = tree_view::build(&core, &focus_area, !empty);
+    let sidebar = tree.widget();
     let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
-    paned.set_start_child(Some(&tree.widget()));
+    paned.set_start_child(Some(&sidebar));
     paned.set_end_child(Some(&overlay));
     paned.set_position(TREE_PANE_WIDTH);
 
-    // Header bar with an "Open" button that opens the picker.
+    // Header bar: an "Open" button that triggers the file picker via its action,
+    // plus the GNOME primary (hamburger) menu.
     let header = adw::HeaderBar::new();
     let open_button = gtk::Button::builder()
         .icon_name("document-open-symbolic")
-        .tooltip_text("Open file (Ctrl+Shift+P)")
+        .tooltip_text("Open file (Ctrl+Shift+O)")
         .build();
-    {
-        let picker = picker.clone();
-        open_button.connect_clicked(move |_button| {
-            picker.open();
-        });
-    }
     header.pack_start(&open_button);
+
+    let menu_button = gtk::MenuButton::builder()
+        .icon_name("open-menu-symbolic")
+        .tooltip_text("Main menu")
+        .menu_model(&shell::build_menu_model())
+        .build();
+    header.pack_end(&menu_button);
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.append(&header);
@@ -201,16 +240,55 @@ fn build_ui(app: &adw::Application) {
         .content(&content)
         .build();
 
+    // The action namespace (win.* / app.*), the accelerators, and the command
+    // drain. Actions must exist before `present()` so the menu and the header
+    // button resolve them.
+    let shell = shell::build(ShellParts {
+        core: &core,
+        window: &window,
+        picker: &picker,
+        tree: &tree,
+        sidebar: &sidebar,
+        paned: &paned,
+        empty_state: &empty_state,
+        open_button: &open_button,
+    });
+    shell.install_actions(app);
+    shell.set_empty_state(empty);
+
+    // The header Open button activates the same action the Ctrl+Shift+O
+    // accelerator does. Explicit activation (rather than the `action-name`
+    // property) sidesteps the ordering footgun where a widget naming an
+    // as-yet-uninstalled action renders insensitive.
+    {
+        let window = window.clone();
+        open_button.connect_clicked(move |_button| {
+            // Qualified because `adw::ApplicationWindow` implements BOTH
+            // `gio::ActionGroup` (whose `activate_action` takes a bare, unprefixed
+            // name and returns nothing) and `gtk::Widget` (whose takes the full
+            // `win.`-prefixed name and reports failure). We want the latter.
+            if let Err(err) =
+                gtk::prelude::WidgetExt::activate_action(&window, GO_TO_FILE_ACTION, None)
+            {
+                eprintln!("wolf-gnome: failed to activate {GO_TO_FILE_ACTION}: {err}");
+            }
+        });
+    }
+
     // Drain the wake channel on the main thread. Each signal lets the pane view
-    // react (create/split/close panes, consume layout intents, redraw) and the tree
-    // react to a current-file change carried by the same wake.
+    // react (create/split/close panes, consume layout intents, redraw), the tree
+    // react to a current-file change carried by the same wake, and the shell drain
+    // any queued commands. The shell runs LAST: a drained `close_window` shuts the
+    // core down, and the other two must have had their turn first.
     {
         let panes = panes.clone();
         let tree = tree.clone();
+        let shell = shell.clone();
         glib::spawn_future_local(async move {
             while wake_rx.recv().await.is_ok() {
                 panes.on_render_wake();
                 tree.on_render_wake();
+                shell.on_render_wake();
             }
         });
     }
@@ -220,6 +298,15 @@ fn build_ui(app: &adw::Application) {
     wire_keys(&window, &core, &picker);
     wire_close(&window, &core, &picker, &tree);
 
+    // The shell's first drain runs only AFTER `wire_close` has installed the
+    // `close-request` handler. A drained `CloseWindow` calls `window.close()`,
+    // which is a no-op teardown-wise until that handler exists — it would tear the
+    // window down without shutting the core down, orphaning the captive nvim. The
+    // queue is empty at this point today (commands are user-triggered only, so a
+    // freshly attached core has none), so this ordering costs nothing and removes
+    // the hazard.
+    shell.on_render_wake();
+
     window.present();
     // Focus the cmdline strip so key events have a focused target in the editor
     // region to bubble from to the window-level key controller.
@@ -227,9 +314,14 @@ fn build_ui(app: &adw::Application) {
 }
 
 /// Installs the key controller. While the picker is open, keys are left for the
-/// focused picker widgets (forwarding to the core is suppressed). Otherwise the
-/// trigger chord (Ctrl+Shift+P) opens the picker, and any other key is translated
-/// via the pure [`crate::gdk_key`] seam into core input.
+/// focused picker widgets (forwarding to the core is suppressed). Otherwise every
+/// key is translated via the pure [`crate::gdk_key`] seam into core input.
+///
+/// The controller carries NO propagation phase (i.e. Bubble), so a chord Wolf
+/// binds — Ctrl+Shift+O opens the picker now — never reaches it:
+/// [`crate::shell`]'s chord controller matches it in the CAPTURE phase and stops
+/// propagation. That is deliberate; it is what guarantees a bound chord is not
+/// ALSO forwarded to Neovim.
 fn wire_keys(
     window: &adw::ApplicationWindow,
     core: &Rc<RefCell<Option<WolfCore>>>,
@@ -243,11 +335,6 @@ fn wire_keys(
         // to nvim/core.
         if picker.is_open() {
             return glib::Propagation::Proceed;
-        }
-        // Trigger chord: open the picker and consume the key.
-        if crate::is_picker_trigger(keyval, state) {
-            picker.open();
-            return glib::Propagation::Stop;
         }
         match crate::gdk_key(keyval, state) {
             Some(event) => {

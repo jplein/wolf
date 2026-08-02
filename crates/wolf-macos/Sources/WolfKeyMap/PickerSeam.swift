@@ -3,10 +3,16 @@
 //  Pure, AppKit-free decision seams for the macOS file picker.
 //
 //  These are the macOS analog of wolf-gnome's pure picker seams in
-//  `crates/wolf-gnome/src/picker.rs` (`is_picker_trigger`, `next_selection`,
-//  `restored_index`). They take scalar inputs only — NO NSEvent, NO window, NO
-//  AppKit — so they are unit-testable headlessly (see `PickerSeamTests.swift`).
-//  The semantics MUST stay identical to the Rust seams they mirror.
+//  `crates/wolf-gnome/src/picker.rs` (`next_selection`, `restored_index`). They
+//  take scalar inputs only — NO NSEvent, NO window, NO AppKit — so they are
+//  unit-testable headlessly (see `PickerSeamTests.swift`). The semantics of
+//  those two MUST stay identical to the Rust seams they mirror.
+//
+//  `isPickerTrigger` below is the exception: it has no Rust counterpart to
+//  mirror any more. wolf-gnome deleted its `is_picker_trigger` predicate when
+//  the file-picker chord moved to Ctrl+Shift+O, and the Linux chord is now a
+//  table-driven `wolf_gnome::actions::action_for_key` lookup against
+//  `ACTION_TABLE` that resolves to the `win.go-to-file` action.
 //
 //  Imports ONLY Foundation, so it lives in the Foundation-only `WolfKeyMap`
 //  module alongside `KeyMap.swift`.
@@ -27,9 +33,24 @@ public enum PickerSeam {
   /// modifiers (ctrl/alt) are not part of the signature and so are neither
   /// required nor disqualifying. An empty string (no first scalar) is `false`.
   ///
-  /// This macOS chord intentionally DIVERGES from the GNOME Ctrl+Shift+P (`"p"`)
-  /// seam it was ported from: Command+O is the idiomatic macOS "open" chord and,
-  /// unlike Ctrl-modified keys, is not a Neovim keybinding.
+  /// Both platforms now agree on the LETTER: wolf-gnome's file picker is
+  /// Ctrl+Shift+O (it was Ctrl+Shift+P until the command-drain unit moved it and
+  /// reserved P for the command palette). What differs is the MODIFIER and the
+  /// MECHANISM.
+  ///
+  /// The modifier difference is deliberate and still load-bearing: Command+O is
+  /// the idiomatic macOS "open" chord and, unlike Ctrl-modified keys, is not a
+  /// Neovim keybinding — so macOS gets a whole free modifier and needs no Shift.
+  /// Linux has no such modifier: there is effectively no `Ctrl+<letter>` free in
+  /// all Neovim modes, so wolf-gnome is forced onto the GNOME-Terminal-style
+  /// `Ctrl+Shift+<letter>` namespace, which gives up only the Ctrl+Shift alias
+  /// for `<C-o>` (`<C-o>` itself is still typed as plain Ctrl+O, which Wolf
+  /// never binds).
+  ///
+  /// The mechanism difference: this is a Swift predicate, whereas the Linux side
+  /// is a table lookup (`actions::action_for_key` -> `win.go-to-file`), so there
+  /// is no longer a Rust predicate for this function to be a parity port of. See
+  /// `crates/wolf-gnome/README.md`, "Keyboard accelerators".
   public static func isPickerTrigger(
     charactersIgnoringModifiers: String,
     command: Bool

@@ -23,7 +23,7 @@ The macOS front-end: a native **AppKit** application (Swift) that renders the em
 
 The module also holds `PickerSeam.swift` — a second AppKit-free seam (`public enum PickerSeam`, Foundation only, headlessly tested) that ports wolf-gnome's pure picker helpers:
 
-- `isPickerTrigger(charactersIgnoringModifiers:command:) -> Bool` — the **Command+O** trigger predicate (`command && first scalar lowercased == "o"`; other modifiers ignored). Command-modified keys are not Neovim keybindings, so the chord does not consume a Neovim key.
+- `isPickerTrigger(charactersIgnoringModifiers:command:) -> Bool` — the **Command+O** trigger predicate (`command && first scalar lowercased == "o"`; other modifiers ignored). Command-modified keys are not Neovim keybindings, so the chord does not consume a Neovim key. This one is macOS-only rather than a port: wolf-gnome has no trigger predicate any more (its Ctrl+Shift+O chord resolves through the table-driven `actions::action_for_key`), so only the two helpers below are parity ports.
 - `nextSelection(current:delta:nRows:) -> Int?` — list navigation clamp (a port of wolf-gnome's `next_selection`; `nil` when there are no rows).
 - `restoredIndex(resetToTop:prev:newLen:) -> Int?` — selection restore across streaming result batches (a port of `restored_index`).
 

@@ -1,19 +1,27 @@
 //! The GNOME file-picker UI for `wolf-gnome`.
 //!
-//! Trigger: **Ctrl+Shift+P** (a non-conflicting shortcut — every Neovim key,
-//! including `<C-p>`, is preserved) plus a header-bar button. While the picker is
-//! open, all keys are routed to the picker widget (forwarding to nvim/core is
-//! suppressed); `Esc` closes it; `Enter` / row-activation sends
+//! Trigger: the **`win.go-to-file`** action — bound to **Ctrl+Shift+O**, listed in
+//! the primary menu as "Go to File…", and wired to the header-bar Open button.
+//! The picker has no trigger predicate of its own: the chord is resolved from
+//! [`crate::actions::ACTION_TABLE`] by a CAPTURE-phase controller
+//! ([`crate::shell`]), so it is guaranteed not to also be forwarded to Neovim (see
+//! `crates/wolf-gnome/README.md`, "Keyboard accelerators").
+//!
+//! What that chord costs, precisely: only the terminal-style Ctrl+Shift ALIAS for
+//! `<C-o>`. `wolf-gnome`'s encoder forces `shift: false` on printables, so
+//! Ctrl+Shift+O would have encoded to `<C-O>`, which `nvim_replace_termcodes`
+//! makes byte-identical to `<C-o>` — and `<C-o>` itself is still typed as plain
+//! Ctrl+O, which Wolf never binds. No Neovim key becomes unreachable.
+//!
+//! While the picker is open, all keys are routed to the picker widget (forwarding
+//! to nvim/core is suppressed); `Esc` closes it; `Enter` / row-activation sends
 //! `InputEvent::Open { path }` (MRU is auto-recorded by the core input pump) and
 //! closes.
 //!
 //! Almost all of this module is GTK widget wiring (an `Overlay` over the
 //! `DrawingArea`, a `SearchEntry` + `ListBox` fed by `wolf_core::start_file_search`
-//! / `rank_matches`) which cannot be unit-tested headlessly. The ONE pure,
-//! display-free seam is [`is_picker_trigger`], which decides whether a given GDK
-//! keyval + modifier state is the picker trigger. It is unit-tested below exactly
-//! like `gdk_key` / `cursor` — `gdk::Key` constants are compile-time and no display
-//! server is required.
+//! / `rank_matches`) which cannot be unit-tested headlessly. Its pure, display-free
+//! seams are [`next_selection`] and [`restored_index`], unit-tested below.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -35,28 +43,6 @@ const PICKER_MAX_ROWS: usize = 200;
 /// of traversal-batch wakes into a single queued refresh (a dropped "full" send
 /// just means a refresh is already pending), mirroring the app's main wake channel.
 const PICKER_WAKE_CHANNEL_CAP: usize = 1;
-
-/// Returns `true` iff `keyval` + `state` is the picker trigger chord
-/// **Ctrl+Shift+P**.
-///
-/// The rule is `CONTROL && SHIFT && letter == 'p'`, case-insensitive on the letter
-/// (with SHIFT held the compositor delivers the uppercase `P` keyval; without an
-/// explicit shift glyph it may deliver `p`, so both are accepted). Other modifiers
-/// (e.g. ALT, SUPER) are ignored — they neither satisfy nor disqualify the
-/// trigger. This is a pure, display-free predicate, testable headlessly like
-/// [`crate::gdk_key`].
-#[must_use]
-pub fn is_picker_trigger(keyval: gdk::Key, state: gdk::ModifierType) -> bool {
-    if !(state.contains(gdk::ModifierType::CONTROL_MASK)
-        && state.contains(gdk::ModifierType::SHIFT_MASK))
-    {
-        return false;
-    }
-    keyval
-        .to_unicode()
-        .map(|c| c.to_ascii_lowercase())
-        .is_some_and(|c| c == 'p')
-}
 
 /// Computes the next list selection index after moving by `delta` rows from
 /// `current`, clamped into `[0, n_rows - 1]` with NO wrap. Returns `None` when the
@@ -259,9 +245,9 @@ impl PickerInner {
     }
 }
 
-/// A handle to the built picker, used by the app to drive it (header-bar button,
-/// trigger chord, close-on-shutdown) and to query whether it currently owns the
-/// keyboard (so key forwarding to the core can be suppressed).
+/// A handle to the built picker, used by the shell to drive it (the
+/// `win.go-to-file` action, close-on-shutdown) and to query whether it currently
+/// owns the keyboard (so key forwarding to the core can be suppressed).
 #[derive(Clone)]
 pub struct PickerHandle {
     inner: Rc<PickerInner>,
@@ -288,8 +274,8 @@ impl PickerHandle {
 
 /// Builds the picker widgets as an overlay child over `area` (the overlay's main
 /// child), wires all signals, and returns a [`PickerHandle`]. The picker starts
-/// hidden; call [`PickerHandle::open`] (via the trigger chord or the header-bar
-/// button) to show it.
+/// hidden; call [`PickerHandle::open`] (which the `win.go-to-file` action does) to
+/// show it.
 #[must_use]
 pub fn build(
     overlay: &gtk::Overlay,
@@ -431,97 +417,6 @@ const PICKER_BOX_HEIGHT: i32 = 400;
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use gdk::glib::translate::from_glib;
-    use gdk::ModifierType;
-
-    /// Builds the GDK keyval for a Unicode scalar exactly as GDK would from a real
-    /// keypress (gdk4-rs has no `Key::from_unicode`). Copied from
-    /// `tests/gdk_key.rs` so the trigger predicate is exercised with the same
-    /// keyval shape a live `EventControllerKey` callback receives — layout
-    /// independent, since the glyph is carried directly in the keyval.
-    fn key_from_char(c: char) -> gdk::Key {
-        unsafe { from_glib(gdk::unicode_to_keyval(c as u32)) }
-    }
-
-    /// One `is_picker_trigger` table row: (description, keyval, modifier state,
-    /// expected result).
-    struct Case {
-        desc: &'static str,
-        keyval: gdk::Key,
-        state: ModifierType,
-        expected: bool,
-    }
-
-    #[test]
-    fn is_picker_trigger_table() {
-        let ctrl = ModifierType::CONTROL_MASK;
-        let shift = ModifierType::SHIFT_MASK;
-        let alt = ModifierType::ALT_MASK;
-
-        let cases = [
-            // --- The trigger: Ctrl+Shift held, letter p ----------------------
-            Case {
-                desc: "Ctrl+Shift+'p' (lowercase keyval) => true",
-                keyval: key_from_char('p'),
-                state: ctrl | shift,
-                expected: true,
-            },
-            Case {
-                // With SHIFT held the compositor delivers the uppercase `P`
-                // keyval; the predicate must match the letter case-insensitively.
-                desc: "Ctrl+Shift+'P' (uppercase keyval) => true",
-                keyval: key_from_char('P'),
-                state: ctrl | shift,
-                expected: true,
-            },
-            Case {
-                // Extra ALT must NOT disqualify the trigger: the rule is
-                // CONTROL && SHIFT && letter==p, ignoring other modifiers.
-                desc: "Ctrl+Shift+Alt+'P' (extra mod) => true",
-                keyval: key_from_char('P'),
-                state: ctrl | shift | alt,
-                expected: true,
-            },
-            // --- Missing a required modifier ---------------------------------
-            Case {
-                desc: "Ctrl+'p' (no shift) => false",
-                keyval: key_from_char('p'),
-                state: ctrl,
-                expected: false,
-            },
-            Case {
-                desc: "Shift+'P' (no ctrl) => false",
-                keyval: key_from_char('P'),
-                state: shift,
-                expected: false,
-            },
-            Case {
-                desc: "plain 'p' (no modifiers) => false",
-                keyval: key_from_char('p'),
-                state: ModifierType::empty(),
-                expected: false,
-            },
-            // --- Right modifiers, wrong letter -------------------------------
-            Case {
-                desc: "Ctrl+Shift+'A' (wrong letter) => false",
-                keyval: key_from_char('A'),
-                state: ctrl | shift,
-                expected: false,
-            },
-            Case {
-                desc: "Ctrl+Shift+'a' (wrong letter, lowercase) => false",
-                keyval: key_from_char('a'),
-                state: ctrl | shift,
-                expected: false,
-            },
-        ];
-
-        for case in &cases {
-            let got = is_picker_trigger(case.keyval, case.state);
-            assert_eq!(got, case.expected, "case: {}", case.desc);
-        }
-    }
 
     /// One `next_selection` table row:
     /// (description, current, delta, n_rows, expected).
