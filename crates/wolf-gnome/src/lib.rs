@@ -32,6 +32,15 @@
 //! - [`launch_decision`] / [`workspace::reroot_ready`]: whether a project is open,
 //!   where the captive Neovim starts, and when an Open Folder re-root has settled
 //!   ([`workspace`]).
+//! - [`mod@liveness_ui`]: the CRASH/STALL recovery rulebook — the TOTAL
+//!   [`wolf_core::Liveness`] → `(overlay mode, auto_restart, paint)` mapping the
+//!   wake drain gates on ([`liveness_ui()`]), the message each overlay mode
+//!   carries ([`liveness_ui::overlay_message`]), what follows a
+//!   `WolfCore::restart_nvim()` call ([`liveness_ui::restart_outcome`]), the
+//!   Tier-1 reopen order with the ACTIVE file LAST so it lands focused
+//!   ([`reopen_order`]), and the derived geometry of the "Restart Neovim" button
+//!   inside the overlay ([`restart_button_rect`]) — one function shared by the
+//!   widget builder and the cage smoke so the two cannot drift.
 //! - [`actions`]: the action namespace as data — [`actions::ACTION_TABLE`],
 //!   [`actions::MENU_SECTIONS`], and the [`actions::parse_accel`] /
 //!   [`actions::forbidden_reason`] checker that mechanically enforces "no Neovim
@@ -62,10 +71,12 @@
 pub mod actions;
 pub mod app;
 pub mod command_action;
+pub mod crash_overlay;
 pub mod cursor;
 pub mod geometry;
 pub mod input;
 pub mod layout;
+pub mod liveness_ui;
 pub mod mouse;
 pub mod pane_view;
 pub mod picker;
@@ -78,5 +89,8 @@ pub mod workspace;
 pub use command_action::{ui_action_for, UiAction};
 pub use geometry::{cell_at, grid_size_for};
 pub use input::gdk_key;
+pub use liveness_ui::{
+    liveness_ui, reopen_order, restart_button_rect, LivenessUi, OverlayMode, RestartOutcome,
+};
 pub use render::{paint, CellMetrics};
 pub use workspace::{launch_decision, LaunchDecision};

@@ -154,8 +154,8 @@ The drawer itself is an `init.lua` helper driven by `InputEvent::ToggleTerminal`
 | Feature                                              | Branch or commit                                  | macOS | Linux |
 | ---------------------------------------------------- | ------------------------------------------------- | ----- | ----- |
 | Crash/stall detection (three-state liveness)         | `feat/neovim-crash-handling`                      | [x]   | [x]   |
-| Crash/stall overlay + "Restart Neovim" button        | `feat/neovim-crash-handling`                      | [x]   | [ ]   |
-| In-place Neovim restart with open-file restore       | `feat/neovim-crash-handling`                      | [x]   | [ ]   |
+| Crash/stall overlay + "Restart Neovim" button        | `feat/neovim-crash-handling`                      | [x]   | [x]   |
+| In-place Neovim restart with open-file restore       | `feat/neovim-crash-handling`                      | [x]   | [x]   |
 | Swap-file recovery of unsaved edits                  | `feat/neovim-crash-handling`                      | [x]   | [x]   |
 | Auto-reload of externally changed files              | `feat/auto-refresh`                               | [x]   | [x]   |
 | Sporadic hang / beach-ball fixes                     | `fix/sporadic-crash`                              | [x]   | [x]   |
@@ -166,7 +166,7 @@ The drawer itself is an `init.lua` helper driven by `InputEvent::ToggleTerminal`
 | Typing-latency instrumentation + draw fixes          | `feat/slow-typing-latency`                        | [x]   | [ ]   |
 | Optimized release build target                       | `feat/slow-typing-latency` (`8ba033c`, `296954c`) | [x]   | [ ]   |
 
-Liveness, swap recovery, auto-reload, and the hang fixes are all core- or `init.lua`-level and are live on Linux today. What is missing is the GTK front-end reading `liveness()` on each wake and driving `restart_nvim()` — the crate marks this `// TODO(crash-recovery)`, and until it lands a crashed captive Neovim freezes the GTK window on its last frame.
+Liveness, swap recovery, auto-reload, and the hang fixes are all core- or `init.lua`-level and are live on Linux today. The GTK front-end now reads `liveness()` at the top of every wake and drives `restart_nvim()`: a dead captive Neovim raises a full-bleed opaque overlay carrying a "Restart Neovim" button, one automatic in-place restart is attempted, and on success the pane view is reset, the captured Tier-1 files are reopened with the active one last, and a transient "Neovim was restarted" banner is flashed. Two limits are worth stating rather than glossing. **The pane topology is not restored** — only the Tier-1 file set is, so a crash while the window was split comes back as one pane (macOS restores no more than that either, so this is not a Linux gap). And **`NotResponding` is currently unreachable from `wolf-gnome`**: `wolf-core` only marks a stall from `block_on_rpc`'s timeout arm, and nothing in the GTK front-end issues a synchronous RPC, so the stall overlay's presentation is table-tested headlessly but has no end-to-end coverage. That changes the moment the buffer picker, Copy or the Markdown preview land on GTK, all of which are `block_on_rpc` paths.
 
 ## Suggested order of work for Linux
 
@@ -174,11 +174,12 @@ Liveness, swap recovery, auto-reload, and the hang fixes are all core- or `init.
 
 **Done: mouse and scroll input.** The most conspicuous gap in day-to-day use, and self-contained — `wolf-core` already carried the whole `MouseEvent` / `ScrollEvent` seam, so this was pure GTK wiring over new pure seams (`geometry::cell_at` and the `mouse` module). It also fixed a live focus-wedge defect on the path it replaced: clicking a pane used to move GTK keyboard focus onto that pane's ephemeral `DrawingArea`, so closing the pane you had clicked left the window with no focus widget and killed key dispatch outright. Still open on this row: horizontal scroll, non-primary buttons, and the synthetic per-pane scrollbar. Pointer input **does** now have compositor-level test coverage: a later infrastructure unit built `tools/wolf-pointer-inject` and added four cage pointer smokes, which is also what turned that focus-wedge fix from a structural argument into an executed regression test.
 
+**Done: the crash/stall overlay and the in-place restart.** The core surface was already there, so this was GTK wiring over a new pure seam (`liveness_ui`): a level-triggered `liveness()` read at the top of the wake drain, a full-bleed opaque overlay with a "Restart Neovim" button, one automatic restart attempt per crash, a pane-view reset so the fresh Neovim is handed a correctly-sized grid, and the Tier-1 reopen with the active file last. Its absence had been a hard freeze. Two cage smokes cover it end to end, including a deliberately failing respawn so the overlay dwells long enough to be observed and its opacity asserted. What this did **not** close: the split topology across a restart, and any end-to-end coverage of `NotResponding`, which the GTK front-end cannot currently reach.
+
 The remaining order:
 
-1. **Crash/stall overlay.** The core surface is already there; this is pure GTK wiring, and its absence is a hard freeze.
-2. **State persistence.** `wolf_core::state` is consumed directly from Rust — no FFI to mirror.
-3. **The three overlay pickers** (command palette, buffer picker, project search). Ranking is already shared, each command already lands in the drain as `Deferred`, and each chord is already reserved; each needs a GTK view of the shape the file picker already has.
-4. **Config-driven typography**, then the completion popup and multi-line toast.
-5. **Markdown preview**, which is the largest single item: it introduces a second kind of pane content on the GTK side.
-6. **Multi-window and tabs**, which reshape `wolf-gnome` from a single-window application into a coordinator-plus-views one.
+1. **State persistence.** `wolf_core::state` is consumed directly from Rust — no FFI to mirror.
+2. **The three overlay pickers** (command palette, buffer picker, project search). Ranking is already shared, each command already lands in the drain as `Deferred`, and each chord is already reserved; each needs a GTK view of the shape the file picker already has. The buffer picker also carries the first `block_on_rpc` call on the GTK side, which is what will finally make `NotResponding` reachable — and testable — on Linux.
+3. **Config-driven typography**, then the completion popup and multi-line toast.
+4. **Markdown preview**, which is the largest single item: it introduces a second kind of pane content on the GTK side.
+5. **Multi-window and tabs**, which reshape `wolf-gnome` from a single-window application into a coordinator-plus-views one.
