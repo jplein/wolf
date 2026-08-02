@@ -28,24 +28,26 @@ Linux gets the pinned Neovim from the flake devShell via `WOLF_NVIM_BIN`; there 
 
 ## Editor surface
 
-| Feature                                                    | Branch or commit                                  | macOS | Linux |
-| ---------------------------------------------------------- | ------------------------------------------------- | ----- | ----- |
-| Split panes (`PaneTree`: split / close / focus)            | `feat/split-panes` / `feat/mac-panes`             | [x]   | [x]   |
-| Divider drag-to-resize (persisted weights)                 | `feat/macos-pane-dividers` (`5f8becb`, `03a4647`) | [x]   | [ ]   |
-| Mouse input (click to position, drag to select)            | `feat/mac-panes` (`9051f0f`)                      | [x]   | [ ]   |
-| Scroll / trackpad input                                    | `feat/mac-panes` (`9051f0f`, `4b7fdc5`)           | [x]   | [ ]   |
-| Synthetic per-pane scrollbars from `win_viewport`          | `feat/mac-panes` (`9051f0f`)                      | [x]   | [ ]   |
-| Max column width (90-col cap, centered grid)               | `feat/mac-panes` (`b6f545c`)                      | [x]   | [ ]   |
-| "Use full width for content" toggle                        | `feat/use-whole-width`                            | [x]   | [ ]   |
-| Text attributes: bold / italic / underline                 | `feat/paint-special-attributes` (`0cdaedd`)       | [x]   | [x]   |
-| Text attributes: undercurl / strikethrough / special color | `feat/paint-special-attributes` (`0cdaedd`)       | [x]   | [ ]   |
-| Cursor color from the `WolfCursor` highlight group         | `feat/cursor-color`                               | [x]   | [x]   |
-| Editor background inherits the theme background            | `feat/cursor-color` (`ca8b3c3`)                   | [x]   | [x]   |
-| Per-pane status bar (filename + display path)              | `feat/status-bar` (`ffc3c49`)                     | [x]   | [ ]   |
-| Active/inactive pane treatment (no dimming)                | `fix/dark-mode` (`745a8f5`)                       | [x]   | [ ]   |
-| Editor padding / insets                                    | `feat/ui-tweaks-2`                                | [x]   | [ ]   |
+| Feature                                                    | Branch or commit                                                    | macOS | Linux |
+| ---------------------------------------------------------- | ------------------------------------------------------------------- | ----- | ----- |
+| Split panes (`PaneTree`: split / close / focus)            | `feat/split-panes` / `feat/mac-panes`                               | [x]   | [x]   |
+| Divider drag-to-resize (persisted weights)                 | `feat/macos-pane-dividers` (`5f8becb`, `03a4647`)                   | [x]   | [ ]   |
+| Mouse input (click to position, drag to select)            | `feat/mac-panes` (`9051f0f`) / `linux-feat/mouse-scroll`            | [x]   | [x]   |
+| Scroll / trackpad input                                    | `feat/mac-panes` (`9051f0f`, `4b7fdc5`) / `linux-feat/mouse-scroll` | [x]   | [x]   |
+| Synthetic per-pane scrollbars from `win_viewport`          | `feat/mac-panes` (`9051f0f`)                                        | [x]   | [ ]   |
+| Max column width (90-col cap, centered grid)               | `feat/mac-panes` (`b6f545c`)                                        | [x]   | [ ]   |
+| "Use full width for content" toggle                        | `feat/use-whole-width`                                              | [x]   | [ ]   |
+| Text attributes: bold / italic / underline                 | `feat/paint-special-attributes` (`0cdaedd`)                         | [x]   | [x]   |
+| Text attributes: undercurl / strikethrough / special color | `feat/paint-special-attributes` (`0cdaedd`)                         | [x]   | [ ]   |
+| Cursor color from the `WolfCursor` highlight group         | `feat/cursor-color`                                                 | [x]   | [x]   |
+| Editor background inherits the theme background            | `feat/cursor-color` (`ca8b3c3`)                                     | [x]   | [x]   |
+| Per-pane status bar (filename + display path)              | `feat/status-bar` (`ffc3c49`)                                       | [x]   | [ ]   |
+| Active/inactive pane treatment (no dimming)                | `fix/dark-mode` (`745a8f5`)                                         | [x]   | [ ]   |
+| Editor padding / insets                                    | `feat/ui-tweaks-2`                                                  | [x]   | [ ]   |
 
 Divider drag on GTK is the stock `gtk::Paned` behaviour, but `install_paned_position` re-derives the divider from the equal-share ratio on every `max-position` notify, so a drag does not survive a resize and is never persisted. The macOS side hit-tests the pure `PaneTree.dividers()` list, reweights the split, and saves the weights into `state.json`.
+
+**Mouse and vertical scroll input now work on both front-ends.** `wolf-gnome` puts three controllers on each pane — a `gtk::GestureDrag` (primary button only) for press → drag → release, a `gtk::EventControllerScroll` subscribed to `VERTICAL`, and a `gtk::EventControllerMotion` that records the pointer position because GTK's `scroll` signal carries no coordinates — all of them thin glue over pure, headlessly-tested seams (`geometry::cell_at` and the `mouse` module). Three caveats, stated plainly. **Horizontal scroll and non-primary mouse buttons are handled on NEITHER platform** (no right-click menu, no middle-click paste, no `deltaX`), and momentum / kinetic scrolling is not special-cased on either; those are parity gaps against other editors, not against macOS. The **synthetic per-pane scrollbar** remains its own unticked row above — scroll input reaches Neovim on Linux, but nothing draws a scrollbar there. And on Linux **drag-to-select is verified against a real Neovim but NOT at the compositor level**: `crates/wolf-gnome/tests/mouse_nvim.rs` drives the seams through a live `WolfCore` into real nvim, but no cage smoke touches the pointer at all, because pointer injection into the headless harness does not work yet (`wtype` is keyboard-only and `wlrctl` was measured not to deliver). The precise list of what that leaves unproven is in [`crates/wolf-gnome/tests/README.md`](crates/wolf-gnome/tests/README.md), "Deliberate test gaps".
 
 ## Command line, messages, completion
 
@@ -170,12 +172,13 @@ Liveness, swap recovery, auto-reload, and the hang fixes are all core- or `init.
 
 **Done: command drain + a GTK menu.** This was the unblocking item — almost everything else on the list was gated behind `drain_commands()` reaching an action. It landed with `:q` / `:qa` remapping, the new untitled buffer, the empty state's open-folder path, close pane, the GNOME primary menu, and the accelerator scheme later units consume. The palette now has a dispatch target and a reserved chord.
 
+**Done: mouse and scroll input.** The most conspicuous gap in day-to-day use, and self-contained — `wolf-core` already carried the whole `MouseEvent` / `ScrollEvent` seam, so this was pure GTK wiring over new pure seams (`geometry::cell_at` and the `mouse` module). It also fixed a live focus-wedge defect on the path it replaced: clicking a pane used to move GTK keyboard focus onto that pane's ephemeral `DrawingArea`, so closing the pane you had clicked left the window with no focus widget and killed key dispatch outright. Still open on this row: horizontal scroll, non-primary buttons, and the synthetic per-pane scrollbar — and pointer input has no compositor-level test coverage, because pointer injection into the headless smoke harness does not work yet.
+
 The remaining order:
 
-1. **Mouse and scroll input.** Self-contained, no core changes, and it is the most conspicuous gap in day-to-day use.
-2. **Crash/stall overlay.** The core surface is already there; this is pure GTK wiring, and its absence is a hard freeze.
-3. **State persistence.** `wolf_core::state` is consumed directly from Rust — no FFI to mirror.
-4. **The three overlay pickers** (command palette, buffer picker, project search). Ranking is already shared, each command already lands in the drain as `Deferred`, and each chord is already reserved; each needs a GTK view of the shape the file picker already has.
-5. **Config-driven typography**, then the completion popup and multi-line toast.
-6. **Markdown preview**, which is the largest single item: it introduces a second kind of pane content on the GTK side.
-7. **Multi-window and tabs**, which reshape `wolf-gnome` from a single-window application into a coordinator-plus-views one.
+1. **Crash/stall overlay.** The core surface is already there; this is pure GTK wiring, and its absence is a hard freeze.
+2. **State persistence.** `wolf_core::state` is consumed directly from Rust — no FFI to mirror.
+3. **The three overlay pickers** (command palette, buffer picker, project search). Ranking is already shared, each command already lands in the drain as `Deferred`, and each chord is already reserved; each needs a GTK view of the shape the file picker already has.
+4. **Config-driven typography**, then the completion popup and multi-line toast.
+5. **Markdown preview**, which is the largest single item: it introduces a second kind of pane content on the GTK side.
+6. **Multi-window and tabs**, which reshape `wolf-gnome` from a single-window application into a coordinator-plus-views one.
