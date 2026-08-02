@@ -27,6 +27,12 @@
 //!   The controller has no propagation phase (i.e. Bubble), so it runs only after
 //!   [`crate::shell`]'s CAPTURE-phase chord controller has had its say — which is
 //!   exactly the guarantee that a bound chord is not also forwarded to Neovim.
+//!   **POINTER input, unlike keys, is not window-level at all**: it is PER-PANE and
+//!   lives entirely in [`crate::pane_view`], where each pane `DrawingArea` carries
+//!   its own `gtk::GestureDrag` (press → drag → release), `gtk::EventControllerScroll`
+//!   (vertical) and `gtk::EventControllerMotion` (position recording), all thin glue
+//!   over the pure [`crate::mouse`] and [`crate::cell_at`] seams. `app.rs` installs
+//!   no pointer controller of its own.
 //! - **Commands / menu:** [`crate::shell`] installs one `gio::SimpleAction` per
 //!   implemented action of [`crate::actions::ACTION_TABLE`], builds the primary
 //!   menu from the same data, matches the accelerators, and drains
@@ -41,9 +47,13 @@
 //! primary menu's native Open File / Open Folder dialogs (there are still no save
 //! / save-as dialogs). When no project is open, [`crate::workspace::launch_decision`]
 //! puts the window into an EMPTY STATE: the sidebar is hidden, no `FileSearch`
-//! starts, and an "Open Folder…" status page covers the editor. Native command line
-//! (`ext_cmdline`/`ext_messages`), theming, and mouse/scroll are deferred (the
-//! cmdline strip paints grid 1 in the meantime).
+//! starts, and an "Open Folder…" status page covers the editor. Mouse and vertical
+//! scroll are wired (see the Input bullet above). What is still deferred is THEMING
+//! and a native command line as Adw widgets: the cmdline strip already paints
+//! natively from the folded `Snapshot::cmdline` / `Snapshot::toast` — it never
+//! paints grid 1, which under `ext_messages` (`cmdheight=0`) is empty — but it draws
+//! a single row, with no `ext_popupmenu` completion popup and no multi-line
+//! scrollable toast.
 
 use std::cell::RefCell;
 use std::path::PathBuf;

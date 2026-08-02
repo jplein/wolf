@@ -17,11 +17,13 @@
 //!
 //! ## Cmdline strip (★ S3 requirement)
 //!
-//! Under `ext_multigrid` the command line, `/`-search, and messages live on grid 1,
-//! which the panes do not paint. The [`PaneInner::cmdline_area`] is a one-row
-//! `DrawingArea` along the bottom that paints grid 1's LAST row (translated up so
-//! only that row lands in the strip), making typed `:`/`/` input and messages
-//! visible again.
+//! Under `ext_multigrid` the command line, `/`-search, and messages live outside the
+//! window grids the panes paint. The [`PaneInner::cmdline_area`] is a one-row
+//! `DrawingArea` along the bottom that makes them visible again — and it paints
+//! them NATIVELY, from the folded [`Snapshot::cmdline`] / [`Snapshot::toast`]. It
+//! never reads grid 1: `ext_messages` implicitly enables `ext_cmdline` and sets
+//! `cmdheight=0`, so grid 1 is EMPTY and painting its last row would draw nothing.
+//! See [`PaneInner::draw_cmdline`].
 //!
 //! ## Intents
 //!
@@ -31,18 +33,75 @@
 //! (resolve the neighbour in the tree + `focus_win`), detects closed windows (a
 //! bound pane whose grid vanished) and collapses them, resolves pending pane grids,
 //! and updates the active-pane focus ring from `active_win`.
+//!
+//! ## Mouse and scroll
+//!
+//! Each pane area carries THREE pointer controllers, all of them thin glue over the
+//! pure [`crate::mouse`] and [`crate::cell_at`] seams:
+//!
+//! 1. A `gtk::GestureDrag` (primary button only) for the whole press -> drag ->
+//!    release sequence. ONE gesture, not a `GestureClick` plus something else: a
+//!    gesture takes an implicit grab on the sequence and keeps delivering after the
+//!    pointer leaves the widget, which is what makes drag-past-the-edge selection
+//!    work (`EventControllerMotion` stops at the widget edge). Press calls
+//!    [`PaneInner::on_pane_clicked`] FIRST and only then `send_mouse(Press)` —
+//!    `focus_win` and `send_mouse` ride the SAME ordered input channel, so that
+//!    ordering is guaranteed by construction. The press also PINS the target grid in
+//!    `drag_grid`, and every subsequent drag/release event targets that pinned grid,
+//!    so a drag that wanders into another pane still edits the pane it started in —
+//!    and it pins the GDK BUTTON NUMBER in `drag_button` the same way, replayed for
+//!    every later callback of the sequence. The MODIFIERS, by contrast, are re-read
+//!    LIVE each time (macOS parity); see [`PaneInner::send_pane_mouse`] for why the
+//!    two are treated differently. Drag is forwarded UNCONDITIONALLY on every
+//!    callback (no throttling, no "changed cell" dedupe) — macOS parity.
+//! 2. A `gtk::EventControllerScroll` with `VERTICAL` only (not `DISCRETE`, so the
+//!    accumulation stays in our own tested seam; not `BOTH_AXES`, because horizontal
+//!    scroll is not handled). It keeps ONE [`crate::mouse::PaneScroll`] per pane —
+//!    the carried remainder AND the grid it belongs to, as one pure value, so the
+//!    reset-on-grid-change rule is unit-tested instead of living in this file — and
+//!    emits that many discrete `ScrollEvent`s. **Scrolling never changes focus** —
+//!    no `focus_win`, no `set_active_pane`, no `grab_focus`.
+//! 3. A `gtk::EventControllerMotion` whose ONLY job is to record the last
+//!    widget-local pointer position, because GTK's `scroll` signal carries no
+//!    coordinates and the scroll handler needs a cell.
+//!
+//! While the picker or the empty state is up, the pointer picks the overlay child
+//! rather than a pane `DrawingArea`, so none of these controllers run — no
+//! `is_open()` guard is needed here (do not add one).
+//!
+//! ## Focus: the pane areas are deliberately NOT focus targets
+//!
+//! Pane `DrawingArea`s are ephemeral — `detect_closes` destroys one whenever its
+//! Neovim window closes — so they are never made focusable and nothing ever calls
+//! `grab_focus` on them. GTK keyboard focus stays on the persistent
+//! [`PaneInner::cmdline_area`], which is the focus-return target
+//! [`PaneHandle::cmdline_widget`] already documents for the picker and the tree.
+//! See `crates/wolf-gnome/src/README.md` for the defect this prevents.
+//!
+//! The pane areas are not the only ephemeral widget under `pane_area`, though: the
+//! inner `gtk::Paned` DIVIDERS are rebuilt from scratch on every
+//! [`PaneInner::rebuild_pane_area`], and `GtkPaned` sets `focusable = TRUE` in
+//! `gtk_paned_init` (GTK 4.22.4, `gtk/gtkpaned.c:1510`). We cannot make those
+//! non-focusable — GTK owns them — so `rebuild_pane_area` carries a guard instead:
+//! if the toplevel's focus widget is inside `pane_area` when the teardown starts,
+//! focus is returned to `cmdline_area` once the rebuild has settled.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
 use adw::prelude::*;
+use gtk::glib;
 
-use wolf_core::{CursorShape, LayoutIntent, Snapshot, SplitOrientation, WolfCore};
+use wolf_core::{
+    CursorShape, LayoutIntent, MouseAction, MouseEvent, ScrollEvent, Snapshot, SplitOrientation,
+    WolfCore,
+};
 
 use crate::layout::{Orientation, PaneId, PaneLayout, PaneTree};
+use crate::mouse::{self, PaneScroll};
 use crate::render::{draw_glyph, FALLBACK_BG, FALLBACK_FG};
-use crate::{cursor, grid_size_for, paint, CellMetrics};
+use crate::{cell_at, cursor, grid_size_for, paint, CellMetrics};
 
 /// The id of the first (root) pane. The [`PaneTree`] is constructed with this as
 /// its root leaf, so the first bound pane reuses it (no `split` needed).
@@ -69,8 +128,13 @@ const ACTIVE_PANE_CSS_DATA: &str =
 /// Divisor to convert an 8-bit color channel (0–255) to Cairo's 0.0–1.0 range.
 const RGB_MAX: f64 = 255.0;
 
-/// The widgets bound to one pane: its Neovim window handle, its grid (pending until
-/// `win_pos` is observed), and its drawing area (reused across rebuilds by id).
+/// The widgets and pointer state bound to one pane: its Neovim window handle, its
+/// grid (pending until `win_pos` is observed), its drawing area (reused across
+/// rebuilds by id), and the per-pane mouse/scroll bookkeeping.
+///
+/// Every mutable field is a `Cell`, never a `RefCell`: all access is on the single
+/// GTK main thread, and a `Cell` cannot have a borrow accidentally held across a
+/// [`WolfCore`] call (the rule this whole module follows).
 struct PaneWidgets {
     /// The Neovim window handle this pane is bound to.
     win: i64,
@@ -78,6 +142,60 @@ struct PaneWidgets {
     grid: Cell<Option<u64>>,
     /// The pane's drawing area (reused by [`PaneId`] across tree rebuilds).
     area: gtk::DrawingArea,
+    /// The grid captured at PRESS, pinning the drag target for the rest of the
+    /// sequence (macOS's `mouseDragGrid`). Set on drag-begin, read on
+    /// update/end, cleared on end. Pinning is what makes a drag that leaves the
+    /// pane keep targeting the pane it STARTED in.
+    drag_grid: Cell<Option<u64>>,
+    /// The GDK button number captured at PRESS, pinned alongside `drag_grid` for
+    /// the rest of the sequence. See [`PaneInner::send_pane_mouse`] for why the
+    /// BUTTON is pinned while the MODIFIERS are deliberately re-read live.
+    drag_button: Cell<Option<u32>>,
+    /// This pane's scroll bookkeeping: the carried sub-threshold remainder plus
+    /// the grid it was last applied to, as ONE pure value
+    /// ([`crate::mouse::PaneScroll`]) so the reset-on-grid-change rule is
+    /// unit-tested rather than living untestably in this file.
+    scroll: Cell<PaneScroll>,
+    /// The last WIDGET-LOCAL pointer position, recorded by the motion controller.
+    /// Its ONLY consumer is the scroll handler, because GTK's `scroll` signal
+    /// carries no coordinates of its own.
+    pointer: Cell<(f64, f64)>,
+}
+
+impl PaneWidgets {
+    /// Binds `area` to window `win` (and `grid`, when already resolved), with the
+    /// pointer state zeroed.
+    ///
+    /// Both construction sites (`ensure_initial_pane`, `apply_split`) go through
+    /// here, so a future field is one edit rather than two.
+    fn new(win: i64, grid: Option<u64>, area: gtk::DrawingArea) -> Self {
+        Self {
+            win,
+            grid: Cell::new(grid),
+            area,
+            drag_grid: Cell::new(None),
+            drag_button: Cell::new(None),
+            scroll: Cell::new(PaneScroll::new()),
+            pointer: Cell::new((0.0, 0.0)),
+        }
+    }
+}
+
+/// A mouse/scroll target: a grid id plus that grid's LIVE dimensions, read from the
+/// snapshot at the moment the event is handled.
+///
+/// The three fields travel together everywhere (`cell_at` needs the dims, the
+/// `MouseEvent`/`ScrollEvent` needs the id), so they are one value — which also
+/// keeps `send_pane_mouse` under clippy's argument-count threshold without an
+/// `#[allow]`.
+#[derive(Clone, Copy)]
+struct GridTarget {
+    /// The Neovim grid the event targets. Always a WINDOW grid (`>= 2`).
+    grid: u64,
+    /// That grid's live column count.
+    cols: u16,
+    /// That grid's live row count.
+    rows: u16,
 }
 
 /// The pane view's shared, interior-mutable state. All access is on the single GTK
@@ -137,14 +255,9 @@ impl PaneInner {
         };
         let id = self.alloc_pane_id();
         let area = self.make_pane_area(id);
-        self.panes.borrow_mut().insert(
-            id,
-            PaneWidgets {
-                win,
-                grid: Cell::new(Some(grid)),
-                area,
-            },
-        );
+        self.panes
+            .borrow_mut()
+            .insert(id, PaneWidgets::new(win, Some(grid), area));
         self.rebuild_pane_area();
         self.set_active_pane(Some(id));
     }
@@ -205,14 +318,9 @@ impl PaneInner {
                 .and_then(|c| c.read_snapshot().grid_for_win(win))
         };
         let area = self.make_pane_area(new_id);
-        self.panes.borrow_mut().insert(
-            new_id,
-            PaneWidgets {
-                win,
-                grid: Cell::new(grid),
-                area,
-            },
-        );
+        self.panes
+            .borrow_mut()
+            .insert(new_id, PaneWidgets::new(win, grid, area));
         self.rebuild_pane_area();
         self.set_active_pane(Some(new_id));
     }
@@ -392,12 +500,15 @@ impl PaneInner {
     }
 
     /// Builds a pane's `DrawingArea`, wiring its draw func (paint its grid + cursor),
-    /// resize (per-grid + global resize), and click-to-focus gesture.
+    /// resize (per-grid + global resize), and the three pointer controllers.
+    ///
+    /// The area is deliberately NOT `focusable`: it is destroyed whenever its Neovim
+    /// window closes, and a destroyed focus widget leaves the toplevel with none —
+    /// see this module's "Focus" section and `crates/wolf-gnome/src/README.md`.
     fn make_pane_area(self: &Rc<Self>, pane_id: PaneId) -> gtk::DrawingArea {
         let area = gtk::DrawingArea::builder()
             .hexpand(true)
             .vexpand(true)
-            .focusable(true)
             .build();
         // A one-cell minimum so that, with `shrink-*-child(false)` on the enclosing
         // paneds, a child can never be allocated to zero pixels (a starved pane).
@@ -420,15 +531,96 @@ impl PaneInner {
                 }
             });
         }
+        // ONE gesture for the whole press -> drag -> release sequence.
+        //
+        // Not a `GestureClick` (+ anything): a `GtkGesture` takes an implicit grab
+        // on the sequence and keeps delivering after the pointer leaves the widget,
+        // which is exactly what drag-past-the-edge selection needs — an
+        // `EventControllerMotion` would silently stop at the pane edge. And one
+        // gesture rather than two removes any question of the pair fighting over
+        // sequence claiming.
+        //
+        // VERIFIED against the GTK 4.22.4 C source (the version this devShell
+        // builds against): `GtkGestureDrag` installs `gesture_class->begin`, and
+        // `GtkGesture::handle_event` emits BEGIN straight from `GDK_BUTTON_PRESS`
+        // once the point count matches `n-points` (default 1). `drag-begin` is
+        // therefore NOT motion-gated — a plain press with no movement fires it, so
+        // the press path (focus + `MouseAction::Press`) is sound.
         {
             let weak = Rc::downgrade(self);
-            let gesture = gtk::GestureClick::new();
-            gesture.connect_pressed(move |_g, _n, _x, _y| {
+            let gesture = gtk::GestureDrag::new();
+            // Explicit rather than leaning on `GtkGestureSingle`'s default, so the
+            // "primary button only" decision is visible where it is made (the pure
+            // `mouse::mouse_input` seam refuses every other button as well).
+            gesture.set_button(gdk::BUTTON_PRIMARY);
+            {
+                let weak = weak.clone();
+                gesture.connect_drag_begin(move |g, x, y| {
+                    if let Some(inner) = weak.upgrade() {
+                        inner.on_pane_press(pane_id, x, y, g);
+                    }
+                });
+            }
+            {
+                let weak = weak.clone();
+                gesture.connect_drag_update(move |g, off_x, off_y| {
+                    if let Some(inner) = weak.upgrade() {
+                        inner.on_pane_drag(pane_id, off_x, off_y, g);
+                    }
+                });
+            }
+            gesture.connect_drag_end(move |g, off_x, off_y| {
                 if let Some(inner) = weak.upgrade() {
-                    inner.on_pane_clicked(pane_id);
+                    inner.on_pane_release(pane_id, off_x, off_y, g);
                 }
             });
             area.add_controller(gesture);
+        }
+
+        // Vertical scroll. `VERTICAL` alone on purpose:
+        //   * NOT `DISCRETE` — that would move the accumulation inside GTK, where
+        //     the sub-cell remainder policy, the per-unit threshold and the
+        //     reset-on-grid-change rule could not be unit-tested. They belong in
+        //     the pure `mouse` seam.
+        //   * NOT `BOTH_AXES` — horizontal scroll is not handled (macOS parity), so
+        //     claiming horizontal events would be dishonest.
+        //   * NOT `KINETIC` — that only adds the `decelerate` momentum signal, which
+        //     macOS does not special-case either.
+        // The handler always stops propagation: a scroll over a pane belongs to that
+        // pane, and no ancestor (Paned -> Overlay -> Paned -> Box) scrolls.
+        {
+            let weak = Rc::downgrade(self);
+            let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+            scroll.connect_scroll(move |controller, _dx, dy| {
+                if let Some(inner) = weak.upgrade() {
+                    inner.on_pane_scroll(pane_id, dy, controller.unit());
+                }
+                glib::Propagation::Stop
+            });
+            area.add_controller(scroll);
+        }
+
+        // Position recording ONLY. GTK's `scroll` signal carries no coordinates, so
+        // this is the sole way to give the scroll handler a cell to aim at. It is
+        // explicitly NOT used for drag — it stops delivering the moment the pointer
+        // leaves the widget, which is precisely what the gesture above avoids.
+        {
+            let weak = Rc::downgrade(self);
+            let motion = gtk::EventControllerMotion::new();
+            {
+                let weak = weak.clone();
+                motion.connect_motion(move |_c, x, y| {
+                    if let Some(inner) = weak.upgrade() {
+                        inner.record_pointer(pane_id, x, y);
+                    }
+                });
+            }
+            motion.connect_enter(move |_c, x, y| {
+                if let Some(inner) = weak.upgrade() {
+                    inner.record_pointer(pane_id, x, y);
+                }
+            });
+            area.add_controller(motion);
         }
 
         area
@@ -483,7 +675,18 @@ impl PaneInner {
         }
     }
 
-    /// Click-to-focus: focus the clicked pane's window and mark it active.
+    /// Click-to-focus: focus the clicked pane's Neovim window, mark it active, and
+    /// park GTK keyboard focus on the PERSISTENT cmdline strip.
+    ///
+    /// The GTK focus target is deliberately the cmdline strip and NOT the pane's own
+    /// `DrawingArea`. Pane areas are ephemeral — `detect_closes` destroys one as soon
+    /// as its Neovim window closes — and GTK does not hand focus back when the focus
+    /// widget is destroyed, so the toplevel is left with no focus widget and
+    /// window-level key dispatch dies outright (keys stop reaching BOTH nvim and the
+    /// `wolf-gnome` chord controller). Focusing the strip instead is the same
+    /// focus-return contract [`PaneHandle::cmdline_widget`] already gives the picker
+    /// and the file tree, and it still pulls focus out of the sidebar list on a
+    /// click. See `crates/wolf-gnome/src/README.md`.
     fn on_pane_clicked(&self, pane_id: PaneId) {
         let win = self.panes.borrow().get(&pane_id).map(|p| p.win);
         if let Some(win) = win {
@@ -492,8 +695,240 @@ impl PaneInner {
             }
         }
         self.set_active_pane(Some(pane_id));
+        self.cmdline_area.grab_focus();
+    }
+
+    /// The pane's bound grid plus that grid's LIVE dimensions from the snapshot.
+    ///
+    /// `None` when the pane is unbound, or its grid is not (yet) in the snapshot —
+    /// in which case no mouse or scroll event is sent at all, because there is no
+    /// grid to name and no dimensions to clamp against.
+    ///
+    /// The snapshot guard is dropped before this returns; nothing here calls into
+    /// [`WolfCore`] while holding it.
+    fn grid_and_dims(&self, pane_id: PaneId) -> Option<GridTarget> {
+        let grid = self
+            .panes
+            .borrow()
+            .get(&pane_id)
+            .and_then(|p| p.grid.get())?;
+        self.dims_for_grid(grid)
+    }
+
+    /// The LIVE dimensions of `grid`, as a [`GridTarget`].
+    ///
+    /// Used by the drag/release path, which must NOT re-resolve the pane's current
+    /// grid: the drag targets the grid PINNED at press, so following a rebind
+    /// mid-drag would silently retarget the selection.
+    ///
+    /// `usize -> u16` goes through `try_from`, never `as`: a grid wider than
+    /// `u16::MAX` is impossible in practice, but saturating is the only honest
+    /// answer if it ever happened, and a wrapping cast would produce a cell inside
+    /// a grid that does not exist.
+    fn dims_for_grid(&self, grid: u64) -> Option<GridTarget> {
+        let core_ref = self.core.borrow();
+        let core = core_ref.as_ref()?;
+        let snap = core.read_snapshot();
+        let g = snap.grid(grid)?;
+        Some(GridTarget {
+            grid,
+            cols: u16::try_from(g.cols).unwrap_or(u16::MAX),
+            rows: u16::try_from(g.rows).unwrap_or(u16::MAX),
+        })
+    }
+
+    /// Press: FOCUS FIRST, then the mouse event, then pin the drag grid + button.
+    ///
+    /// The ordering is the macOS ordering and it is guaranteed rather than hoped
+    /// for: `focus_win` and `send_mouse` are enqueued on the SAME ordered input
+    /// channel, so nvim sees the focus change before the press.
+    fn on_pane_press(self: &Rc<Self>, pane_id: PaneId, x: f64, y: f64, g: &gtk::GestureDrag) {
+        // Reusing the existing handler verbatim is what preserves focus-on-click.
+        self.on_pane_clicked(pane_id);
+        let Some(target) = self.grid_and_dims(pane_id) else {
+            return;
+        };
+        // The press is the ONE callback that reads the live button; every later
+        // one reuses this number (see `send_pane_mouse`).
+        let button = g.current_button();
+        self.send_pane_mouse(target, MouseAction::Press, button, x, y, g);
         if let Some(p) = self.panes.borrow().get(&pane_id) {
-            p.area.grab_focus();
+            p.drag_grid.set(Some(target.grid));
+            p.drag_button.set(Some(button));
+        }
+    }
+
+    /// Drag: forwarded UNCONDITIONALLY on every callback — no throttling and no
+    /// "only when the cell changed" dedupe, matching macOS's `mouseDragged`.
+    fn on_pane_drag(&self, pane_id: PaneId, off_x: f64, off_y: f64, g: &gtk::GestureDrag) {
+        let Some((target, button, x, y)) = self.drag_point(pane_id, off_x, off_y, g) else {
+            return;
+        };
+        self.send_pane_mouse(target, MouseAction::Drag, button, x, y, g);
+    }
+
+    /// Release at the current point, then unpin the drag grid and button.
+    fn on_pane_release(&self, pane_id: PaneId, off_x: f64, off_y: f64, g: &gtk::GestureDrag) {
+        if let Some((target, button, x, y)) = self.drag_point(pane_id, off_x, off_y, g) {
+            self.send_pane_mouse(target, MouseAction::Release, button, x, y, g);
+        }
+        // Unpin even when the send was skipped, so a failed lookup cannot strand a
+        // stale grid (or button) into the NEXT drag.
+        if let Some(p) = self.panes.borrow().get(&pane_id) {
+            p.drag_grid.set(None);
+            p.drag_button.set(None);
+        }
+    }
+
+    /// Reconstructs the absolute widget-local point of a drag update/end and pairs
+    /// it with the grid AND button PINNED at press.
+    ///
+    /// `GestureDrag`'s update/end callbacks carry OFFSETS FROM THE START POINT, not
+    /// absolute coordinates, so the point is `start_point() + offset`. That
+    /// reconstructed point routinely lands OUTSIDE the widget — negative, or past
+    /// the right/bottom edge — and nothing here rejects it: [`cell_at`] clamps it to
+    /// the nearest edge cell, which is exactly what makes drag-past-the-edge
+    /// selection extend to the last row/column instead of stalling.
+    ///
+    /// Returns `None` when the gesture is no longer active (no start point) or the
+    /// sequence never pinned a grid/button.
+    fn drag_point(
+        &self,
+        pane_id: PaneId,
+        off_x: f64,
+        off_y: f64,
+        g: &gtk::GestureDrag,
+    ) -> Option<(GridTarget, u32, f64, f64)> {
+        let (start_x, start_y) = g.start_point()?;
+        let (grid, button) = {
+            let panes = self.panes.borrow();
+            let p = panes.get(&pane_id)?;
+            (p.drag_grid.get()?, p.drag_button.get()?)
+        };
+        // The PINNED grid's dims, re-read live — NOT `grid_and_dims(pane_id)`, which
+        // would follow a rebind and retarget the drag mid-sequence.
+        let target = self.dims_for_grid(grid)?;
+        Some((target, button, start_x + off_x, start_y + off_y))
+    }
+
+    /// Encodes button + modifiers via the pure [`mouse::mouse_input`] seam, maps the
+    /// widget-local point to a grid cell via [`cell_at`], and sends the event.
+    ///
+    /// A button the seam refuses (anything but the primary) sends nothing at all.
+    ///
+    /// **The BUTTON is pinned at press; the MODIFIERS are not, and that asymmetry is
+    /// deliberate.** `button` is the number [`Self::on_pane_press`] captured and
+    /// stashed in `drag_button`, replayed for every drag/release callback of the
+    /// sequence rather than re-read from the gesture. The GTK 4.22.4 source says
+    /// `current_button()` is still valid inside `drag-end` (the button is cleared
+    /// only AFTER the signal emission), but nothing in this repo's harness can
+    /// execute that path (`crates/wolf-gnome/tests/README.md`, "Deliberate test
+    /// gaps"), and if it ever reported `0` the seam would refuse it, the `Release`
+    /// would be dropped silently, and nvim would be stranded mid-drag in visual
+    /// mode. Pinning costs one `Cell` and removes that failure mode entirely. The
+    /// MODIFIERS, by contrast, are re-read LIVE on every callback — macOS parity
+    /// (`PaneContainerView.mouseEvent` reads `event.modifierFlags` per event), so a
+    /// modifier pressed or released mid-drag takes effect at once. Both still go
+    /// through the one pure seam, which is why the pinned value is the raw GDK
+    /// NUMBER rather than an already-translated `wolf_core::MouseButton`: the seam
+    /// stays the single place that decides which buttons are forwarded and how the
+    /// modifier bits map.
+    fn send_pane_mouse(
+        &self,
+        target: GridTarget,
+        action: MouseAction,
+        button: u32,
+        x: f64,
+        y: f64,
+        g: &gtk::GestureDrag,
+    ) {
+        let Some(input) = mouse::mouse_input(button, g.current_event_state()) else {
+            return;
+        };
+        let (row, col) = cell_at(
+            x,
+            y,
+            self.metrics.cell_w,
+            self.metrics.cell_h,
+            target.cols,
+            target.rows,
+        );
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.send_mouse(MouseEvent {
+                button: input.button,
+                action,
+                grid: target.grid,
+                row,
+                col,
+                ctrl: input.ctrl,
+                shift: input.shift,
+                alt: input.alt,
+            });
+        }
+    }
+
+    /// Scroll: pick the threshold from the reported unit, hand the delta to this
+    /// pane's [`PaneScroll`], and emit that many discrete `ScrollEvent`s.
+    ///
+    /// The reset-the-carry-on-a-grid-change rule is NOT here: it lives inside
+    /// [`PaneScroll::steps_for`], where it is decidable from its arguments and
+    /// unit-tested headlessly. That is the point — pointer input has no end-to-end
+    /// coverage on Linux, so a rule left in this file is a rule nothing verifies.
+    ///
+    /// **This method NEVER changes focus** — no `focus_win`, no `set_active_pane`,
+    /// no `grab_focus`. Scrolling a background pane must leave the keyboard exactly
+    /// where it was.
+    fn on_pane_scroll(&self, pane_id: PaneId, dy: f64, unit: gdk::ScrollUnit) {
+        let Some(target) = self.grid_and_dims(pane_id) else {
+            return;
+        };
+        let threshold = mouse::scroll_threshold(unit, self.metrics.cell_h);
+
+        // One scoped borrow: accumulate and read the recorded pointer, then drop it
+        // before touching the core. `PaneScroll` is `Copy`, so this is a
+        // get/modify/set rather than a held borrow.
+        let Some((steps, pointer)) = ({
+            let panes = self.panes.borrow();
+            panes.get(&pane_id).map(|p| {
+                let mut scroll = p.scroll.get();
+                let steps = scroll.steps_for(target.grid, dy, threshold);
+                p.scroll.set(scroll);
+                (steps, p.pointer.get())
+            })
+        }) else {
+            return;
+        };
+
+        let Some((direction, count)) = mouse::scroll_steps(steps) else {
+            return;
+        };
+        // GTK's `scroll` signal carries no coordinates, so the cell comes from the
+        // position the motion controller recorded.
+        let (px, py) = pointer;
+        let (row, col) = cell_at(
+            px,
+            py,
+            self.metrics.cell_w,
+            self.metrics.cell_h,
+            target.cols,
+            target.rows,
+        );
+        if let Some(core) = self.core.borrow().as_ref() {
+            for _ in 0..count {
+                core.send_scroll(ScrollEvent {
+                    direction,
+                    grid: target.grid,
+                    row,
+                    col,
+                });
+            }
+        }
+    }
+
+    /// Records the last widget-local pointer position for the scroll handler.
+    fn record_pointer(&self, pane_id: PaneId, x: f64, y: f64) {
+        if let Some(p) = self.panes.borrow().get(&pane_id) {
+            p.pointer.set((x, y));
         }
     }
 
@@ -564,7 +999,22 @@ impl PaneInner {
 
     /// Rebuilds `pane_area`'s child widget tree from the current [`PaneTree`],
     /// REUSING each pane's `DrawingArea` by id (so bound grids are preserved).
+    ///
+    /// The pane `DrawingArea`s survive (they are only detached and re-parented),
+    /// but every inner `gtk::Paned` [`build_chain`] created is DESTROYED here, on
+    /// every call — and a `GtkPaned` is `focusable` by default
+    /// (`gtk_paned_init` calls `gtk_widget_set_focusable (…, TRUE)`, GTK 4.22.4
+    /// `gtk/gtkpaned.c:1510`). So a divider that held GTK focus would be destroyed
+    /// with no focus-return, which is the SAME wedge the pane areas' missing
+    /// `focusable(true)` prevents structurally. Hence the guard below: if focus is
+    /// anywhere inside `pane_area` when the teardown starts, it is parked on the
+    /// persistent `cmdline_area` afterwards. See this module's "Focus" section and
+    /// `crates/wolf-gnome/src/README.md`.
     fn rebuild_pane_area(&self) {
+        // Must be sampled BEFORE anything is unparented: once the focus widget is
+        // gone the root reports no focus at all and there is nothing left to test.
+        let had_focus = self.focus_inside_pane_area();
+
         // Detach every reusable pane area from its current parent so it can be
         // re-inserted into the freshly built widget tree.
         {
@@ -578,13 +1028,38 @@ impl PaneInner {
         while let Some(child) = self.pane_area.first_child() {
             self.pane_area.remove(&child);
         }
-        let layout = self.tree.borrow().layout();
-        let panes = self.panes.borrow();
-        if let Some(widget) = build_layout_widget(&layout, &panes) {
-            widget.set_hexpand(true);
-            widget.set_vexpand(true);
-            self.pane_area.append(&widget);
+        {
+            let layout = self.tree.borrow().layout();
+            let panes = self.panes.borrow();
+            if let Some(widget) = build_layout_widget(&layout, &panes) {
+                widget.set_hexpand(true);
+                widget.set_vexpand(true);
+                self.pane_area.append(&widget);
+            }
         }
+
+        // AFTER the rebuild, so the strip is focused against the settled tree.
+        if had_focus {
+            self.cmdline_area.grab_focus();
+        }
+    }
+
+    /// Whether the toplevel's focus widget is `pane_area` itself or anything under
+    /// it — i.e. whether [`Self::rebuild_pane_area`]'s teardown is about to destroy
+    /// the focus widget.
+    ///
+    /// `false` when the widget is not yet rooted (no window), which is the case for
+    /// the very first rebuild, and `false` in the normal steady state: nothing under
+    /// `pane_area` is focusable by wolf-gnome's own doing. It is the `gtk::Paned`
+    /// dividers that make this reachable at all.
+    fn focus_inside_pane_area(&self) -> bool {
+        let Some(root) = self.pane_area.root() else {
+            return false;
+        };
+        let Some(focus) = root.focus() else {
+            return false;
+        };
+        focus.is_ancestor(&self.pane_area) || &focus == self.pane_area.upcast_ref::<gtk::Widget>()
     }
 }
 
