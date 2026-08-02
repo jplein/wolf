@@ -3,23 +3,30 @@
 //  Pure, headless unit tests for the `WolfKeyMap.PickerSeam` namespace.
 //
 //  These are the AppKit analog of wolf-gnome's headless picker-seam tests in
-//  `crates/wolf-gnome/src/picker.rs` (`is_picker_trigger_table`,
-//  `next_selection_table`, `restored_index_table`). They exercise the THREE
-//  PURE, display-free seams of the macOS picker with scalar inputs only — NO
-//  NSEvent, NO window, NO AppKit, NO NSView. They are the authoritative parity
-//  reference: every case here mirrors a case from picker.rs.
+//  `crates/wolf-gnome/src/picker.rs` (`next_selection_table`,
+//  `restored_index_table`). They exercise the THREE PURE, display-free seams of
+//  the macOS picker with scalar inputs only — NO NSEvent, NO window, NO AppKit,
+//  NO NSView. They are the authoritative parity reference: every list-navigation
+//  case here mirrors a case from picker.rs.
 //
 //  CONTRACT UNDER TEST:
 //    * PickerSeam.isPickerTrigger(charactersIgnoringModifiers:command:) -> Bool
 //      — true iff `command && firstScalar.lowercased == "o"`. This is the macOS
-//      Command+O chord, which INTENTIONALLY diverges from the wolf-gnome
-//      Ctrl+Shift+"p" seam (different letter, single Command modifier): on macOS
-//      the platform convention is Command+O for "open", so this seam does NOT
-//      mirror picker.rs's `is_picker_trigger`. Command does not mangle
-//      `charactersIgnoringModifiers`, so with Command held the field carries "o"
-//      (or "O" if Shift is also down); the predicate matches case-insensitively.
-//      An empty string (no first scalar) is false. The `nextSelection` and
-//      `restoredIndex` seams below remain exact parity ports of picker.rs.
+//      Command+O chord. Both platforms now agree on the LETTER: wolf-gnome's
+//      file picker is Ctrl+Shift+O (it was Ctrl+Shift+P until the command-drain
+//      unit moved it and reserved P for the command palette). What still differs
+//      is the modifier — ⌘ on macOS, Ctrl+Shift on Linux, since Linux has no
+//      free modifier — and the MECHANISM: there is no `is_picker_trigger`
+//      predicate in wolf-gnome any more. The Linux chord is a table-driven
+//      `wolf_gnome::actions::action_for_key(keyval, state)` lookup against
+//      `ACTION_TABLE`, resolving to the `win.go-to-file` action, and it is
+//      unit-tested there by `action_for_key_table` rather than here. So this
+//      seam has no one-to-one Rust counterpart to mirror; the `nextSelection`
+//      and `restoredIndex` seams below still are exact parity ports of
+//      picker.rs. Command does not mangle `charactersIgnoringModifiers`, so with
+//      Command held the field carries "o" (or "O" if Shift is also down); the
+//      predicate matches case-insensitively. An empty string (no first scalar)
+//      is false.
 //    * PickerSeam.nextSelection(current:delta:nRows:) -> Int? — exact port of
 //      Rust `next_selection`: `nRows <= 0 -> nil`, else
 //      `clamp(current + delta, 0, nRows - 1)` (NO wrap; out-of-range/negative
