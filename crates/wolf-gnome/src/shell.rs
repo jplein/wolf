@@ -10,14 +10,44 @@
 //! Because the menu, the accelerators and the drained commands all resolve through
 //! the same tables, they cannot drift apart.
 //!
-//! ## The drain
+//! ## Two shell entry points per wake
 //!
-//! [`AppShell::on_render_wake`] runs on every render wake, AFTER the pane view and
-//! the tree (a drained `close_window` shuts the core down, so the shell must be
-//! last). It settles a pending re-root, then drains
-//! [`wolf_core::WolfCore::drain_commands`] and dispatches each command. A command
-//! `wolf-gnome` does not implement is PRINTED with its recorded reason — never
-//! silently dropped.
+//! [`AppShell::on_liveness_wake`] runs FIRST on every wake — before the pane view
+//! and the tree — and [`AppShell::on_render_wake`] runs LAST. They are not
+//! interchangeable:
+//!
+//! - [`AppShell::on_liveness_wake`] reads the captive nvim's
+//!   [`wolf_core::Liveness`] ONCE, applies the pure [`crate::liveness_ui()`]
+//!   mapping, drives the crash/stall overlay, schedules an automatic restart for a
+//!   `Dead` core, and RETURNS whether the pane view and the tree should paint at
+//!   all. It must run before any handler that can early-return: liveness is
+//!   LEVEL-triggered (an atomic read), and putting the read behind
+//!   `pane_view::on_render_wake`'s `core.is_none()` guard would reintroduce an
+//!   edge-triggered swallow.
+//! - [`AppShell::on_render_wake`] settles a pending re-root, then drains
+//!   [`wolf_core::WolfCore::drain_commands`] and dispatches each command. A
+//!   command `wolf-gnome` does not implement is PRINTED with its recorded reason —
+//!   never silently dropped. It runs LAST because a drained `close_window` shuts
+//!   the core down.
+//!
+//! The drain keeps running in ALL THREE liveness states — a deliberate divergence
+//! from macOS, whose `onWake` `return`s before its command drain. On Linux the
+//! drain is the ONLY path by which a `close_window` / `quit_application` reaches
+//! `window.close()`, so a command queued in the instant before a crash would
+//! otherwise be stranded behind the crash overlay with no way out but the window
+//! manager. The drain issues no RPC and paints nothing, so running it costs
+//! nothing.
+//!
+//! ## The restart orchestration
+//!
+//! [`AppShell::restart_nvim`] is the ONE path both the automatic (`Dead`) restart
+//! and the overlay button take. It captures the Tier-1 open-file mirror BEFORE
+//! calling [`wolf_core::WolfCore::restart_nvim`] (a respawn wipes the mirror),
+//! then on an actual respawn resets the pane view, reopens the captured files with
+//! the ACTIVE one LAST, hides the overlay and flashes the banner. Automatic
+//! attempts are capped at [`crate::liveness_ui::MAX_AUTO_RESTART_ATTEMPTS`] per
+//! crash; an explicit button press RESETS that counter, because the cap exists to
+//! stop a retry loop, never to refuse a user.
 //!
 //! ## Two entry paths, one namespace
 //!
@@ -33,19 +63,39 @@
 //! `UiAction::CloseWindow` / `UiAction::QuitApplication` synchronously run
 //! `app::wire_close`'s `close-request` handler, which does `core.borrow_mut()
 //! .take()`; an outstanding `borrow()` there is a `RefCell` panic, not a warning.
+//!
+//! The restart path adds a SECOND rule: **never hold a snapshot read guard across
+//! `open_files_for_tabpage`**. [`AppShell::capture_open_files`] binds
+//! `Snapshot::current_tabpage` to a local in its own statement so the
+//! `SnapshotReadGuard` is dropped before the mirror read takes the same
+//! `parking_lot` lock again (the `api.rs` `pane_status` precedent: a re-entrant
+//! read can deadlock behind a queued writer).
+//!
+//! And a THIRD, which is about liveness rather than borrows but fails just as
+//! loudly: **never call `WolfCore::current_tabpage()` on the restart path.** It is
+//! a `block_on_rpc`, and against a dead nvim it freezes the GTK main loop for the
+//! whole RPC timeout budget on every single crash. The cheap, RPC-free
+//! `Snapshot::current_tabpage` field carries the same handle.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
+use std::time::Duration;
 
 use adw::prelude::*;
 use gtk::{gio, glib};
 
-use wolf_core::{Command, InputEvent, WolfCore};
+use wolf_core::{Command, InputEvent, Liveness, TabFiles, WolfCore};
 
 use crate::actions::{self, BindingStatus};
 use crate::app::TREE_PANE_WIDTH;
 use crate::command_action::{ui_action_for, UiAction};
+use crate::crash_overlay::CrashOverlay;
+use crate::liveness_ui::{
+    liveness_ui, reopen_order, restart_outcome, OverlayMode, RestartOutcome,
+    MAX_AUTO_RESTART_ATTEMPTS,
+};
+use crate::pane_view::PaneHandle;
 use crate::picker::PickerHandle;
 use crate::tree_view::TreeHandle;
 use crate::workspace;
@@ -75,6 +125,31 @@ const OPEN_FOLDER_DIALOG_TITLE: &str = "Open Folder";
 /// Title of the file-selection dialog.
 const OPEN_FILE_DIALOG_TITLE: &str = "Open File";
 
+/// How long [`AppShell::schedule_restart`] waits before running the (synchronous,
+/// main-loop-blocking) respawn, so the crash overlay is actually PRESENTED first.
+///
+/// **A `glib::idle_add_local_once` is NOT sufficient here, and this was measured
+/// rather than reasoned about.** The tempting argument — that an idle at
+/// `G_PRIORITY_DEFAULT_IDLE` (200) loses to `GDK_PRIORITY_REDRAW` (120), so the
+/// pending frame wins — is wrong in practice: GDK's frame clock does not attach a
+/// *ready* paint source. Its paint source is gated on `min_next_frame_time` and,
+/// under Wayland, on the compositor's `wl_surface.frame` callback, so it is not
+/// runnable at the instant the wake handler returns while a plain idle IS. GLib
+/// therefore runs the idle first and the overlay is never composited.
+///
+/// Verified under `cage` with a deliberately slow (2 s) respawn: with
+/// `idle_add_local_once` every capture across the whole respawn showed the FROZEN
+/// pre-crash frame; with this timeout every capture showed
+/// [`crate::liveness_ui::CRASHED_RETRYING_MESSAGE`].
+///
+/// The value is one compositor frame at a pessimistic refresh rate plus slack. It
+/// is a COSMETIC latency knob paid at most
+/// [`MAX_AUTO_RESTART_ATTEMPTS`] times per crash, and no assertion anywhere
+/// depends on it: the cage smokes' `crashed` OCR term is satisfied by
+/// [`crate::liveness_ui::CRASHED_FAILED_MESSAGE`] too, which is the state that
+/// genuinely dwells.
+const RESTART_DEFER: Duration = Duration::from_millis(50);
+
 /// The widgets and handles [`build`] needs, as one struct rather than eight
 /// positional parameters (`clippy::too_many_arguments` bites at seven).
 pub struct ShellParts<'a> {
@@ -94,6 +169,11 @@ pub struct ShellParts<'a> {
     pub empty_state: &'a gtk::Widget,
     /// The header bar's Open button, desensitized in the empty state.
     pub open_button: &'a gtk::Button,
+    /// The crash/stall overlay + banner, driven by the liveness read.
+    pub crash_overlay: &'a CrashOverlay,
+    /// The pane view, reset after a successful in-place Neovim restart. No cycle:
+    /// [`crate::pane_view`] does not reference the shell.
+    pub panes: &'a PaneHandle,
 }
 
 /// The shell's shared state. All access happens on the single GTK main thread, so
@@ -121,6 +201,23 @@ struct ShellInner {
     /// A directory the user chose in the Open Folder dialog, awaiting nvim's
     /// `DirChanged`. Settled on a later wake by [`workspace::reroot_ready`].
     pending_reroot: RefCell<Option<PathBuf>>,
+    /// The crash/stall overlay + banner, driven by [`AppShell::on_liveness_wake`].
+    crash_overlay: CrashOverlay,
+    /// The pane view, reset after a successful in-place restart.
+    panes: PaneHandle,
+    /// FRONT-END re-entrancy guard for [`AppShell::restart_nvim`].
+    ///
+    /// Needed IN ADDITION to the core's own CAS: the core's guard returns
+    /// `Ok(false)`, which this front-end would otherwise misread as "no respawn
+    /// happened" and act on.
+    restarting: Cell<bool>,
+    /// Whether an idle callback that will call [`AppShell::restart_nvim`] is
+    /// already pending, so a burst of `Dead` wakes schedules exactly one.
+    restart_scheduled: Cell<bool>,
+    /// AUTOMATIC restart attempts made since the core was last seen `Alive`,
+    /// capped at [`MAX_AUTO_RESTART_ATTEMPTS`]. Reset to 0 on an `Alive` reading,
+    /// on a successful respawn, and on an explicit button press.
+    restart_attempts: Cell<u32>,
 }
 
 /// A cloneable handle to the application shell: the action namespace, the primary
@@ -198,9 +295,10 @@ pub fn build_empty_state() -> gtk::Widget {
     container.upcast::<gtk::Widget>()
 }
 
-/// Builds the application shell over an already-constructed window.
+/// Builds the application shell over an already-constructed window, and wires the
+/// crash overlay's "Restart Neovim" button to [`AppShell::restart_nvim`].
 ///
-/// Installs nothing by itself: call [`AppShell::install_actions`] (after the
+/// Installs nothing else by itself: call [`AppShell::install_actions`] (after the
 /// window exists, before `present()`) and [`AppShell::set_empty_state`] next.
 #[must_use]
 pub fn build(parts: ShellParts<'_>) -> AppShell {
@@ -215,8 +313,41 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         open_button: parts.open_button.clone(),
         go_to_file: RefCell::new(None),
         pending_reroot: RefCell::new(None),
+        crash_overlay: parts.crash_overlay.clone(),
+        panes: parts.panes.clone(),
+        restarting: Cell::new(false),
+        restart_scheduled: Cell::new(false),
+        restart_attempts: Cell::new(0),
     });
-    AppShell { inner }
+    let shell = AppShell { inner };
+
+    // The button and the automatic `Dead` path call the SAME function. Resetting
+    // the attempt counter first is deliberate: the cap exists to stop an automatic
+    // retry loop, never to refuse a user who asks again.
+    //
+    // KNOWN, DELIBERATE CONSEQUENCE — one button press can cost TWO respawns when
+    // the respawn keeps failing. The reset restores the automatic budget, so if the
+    // button's own restart fails, `WolfCore::restart_nvim`'s `Err` arm re-marks the
+    // core `Dead` and fires a wake; `on_liveness_wake` then sees `restart_attempts
+    // == 0`, classifies as `Crashed { retrying: true }` and schedules one more
+    // AUTOMATIC attempt. The user sees the message flicker
+    // `…restart failed` -> `…restarting…` -> `…restart failed`.
+    //
+    // This is BOUNDED, not a loop: the automatic attempt increments the counter
+    // again, so the sequence terminates after exactly one extra respawn and only
+    // another press can restart it. It is also arguably the desired reading of "the
+    // user asked for a restart" — the alternative (resetting the counter only on an
+    // Alive reading) would refuse a user whose first press raced a failing
+    // automatic attempt. Left as is; the flicker is the price.
+    let weak = Rc::downgrade(&shell.inner);
+    shell.inner.crash_overlay.connect_restart(move || {
+        if let Some(shell) = upgrade(&weak) {
+            shell.inner.restart_attempts.set(0);
+            shell.restart_nvim();
+        }
+    });
+
+    shell
 }
 
 impl AppShell {
@@ -379,11 +510,234 @@ impl AppShell {
         }
     }
 
+    /// Reads the captive nvim's [`Liveness`] ONCE per wake, applies the pure
+    /// [`liveness_ui`] mapping, and reports whether the pane view and the file
+    /// tree should run.
+    ///
+    /// Called FIRST on every wake, before `panes.on_render_wake()`. The placement
+    /// is load-bearing: the death of the captive nvim fires exactly ONE wake
+    /// (`liveness::mark_dead` stores `Dead` and then wakes, once), after which no
+    /// redraw wake will ever come again. Liveness is LEVEL-triggered — an atomic
+    /// read, not a message — so a coalesced or dropped wake loses nothing PROVIDED
+    /// the read is unconditional and happens before any handler that can
+    /// early-return. `pane_view::on_render_wake` starts with a
+    /// `core.borrow().is_none()` guard; reading liveness behind it would turn a
+    /// level-triggered signal back into an edge-triggered one.
+    ///
+    /// Returns `false` (do not paint) when there is no core at all.
+    pub fn on_liveness_wake(&self) -> bool {
+        // Short borrow in its own statement; `Liveness` is `Copy`, and
+        // `WolfCore::liveness` is a lock-free atomic read, never an RPC.
+        let liveness = {
+            let core_ref = self.inner.core.borrow();
+            let Some(core) = core_ref.as_ref() else {
+                return false;
+            };
+            core.liveness()
+        };
+
+        let may_auto_restart = self.inner.restart_attempts.get() < MAX_AUTO_RESTART_ATTEMPTS;
+        let ui = liveness_ui(liveness, may_auto_restart);
+
+        // A healthy core clears the budget, so a LATER, unrelated crash gets its
+        // own automatic attempt rather than inheriting an exhausted counter.
+        if liveness == Liveness::Alive {
+            self.inner.restart_attempts.set(0);
+        }
+
+        self.apply_overlay(ui.overlay);
+
+        if ui.auto_restart && !self.inner.restarting.get() && !self.inner.restart_scheduled.get() {
+            self.schedule_restart();
+        }
+
+        ui.paint
+    }
+
+    /// Applies an overlay mode, performing the focus/picker side effects ONLY on a
+    /// real transition.
+    ///
+    /// [`crate::crash_overlay::CrashOverlay::set_mode`] reports whether the mode
+    /// changed, and gating on that is what keeps this from firing on every wake:
+    /// closing the picker (or yanking focus back to the cmdline strip) once per
+    /// `Alive` frame would make the picker unusable.
+    ///
+    /// - hidden -> visible: close the picker. A crashed core must not leave an
+    ///   overlay whose Open would send into a dead nvim reachable underneath.
+    /// - visible -> hidden: if focus was inside the overlay (i.e. on the restart
+    ///   button), park it back on the persistent cmdline strip. Hiding the focus
+    ///   widget without a focus-return leaves the toplevel with no focus widget at
+    ///   all, which kills window-level key dispatch outright.
+    fn apply_overlay(&self, mode: OverlayMode) {
+        // Sampled BEFORE `set_mode`, which is what hides the overlay. GTK4 hides
+        // rather than unroots, so the root would still report the focus widget
+        // afterwards today — but `pane_view::rebuild_pane_area` states the
+        // convention for this codebase ("must be sampled BEFORE anything is
+        // unparented: once the focus widget is gone the root reports no focus at
+        // all"), and the moment this overlay is ever unparented instead of hidden
+        // a post-hoc sample would silently stop returning focus. Do not "tidy"
+        // this back below the `set_mode` call.
+        let had_focus = self.inner.crash_overlay.focus_is_inside();
+        if !self.inner.crash_overlay.set_mode(mode) {
+            return;
+        }
+        if mode == OverlayMode::Hidden {
+            if had_focus {
+                self.inner.panes.cmdline_widget().grab_focus();
+            }
+        } else {
+            self.inner.picker.close();
+        }
+    }
+
+    /// Schedules ONE automatic restart attempt [`RESTART_DEFER`] after the wake
+    /// handler returns.
+    ///
+    /// **Deferred rather than called inline, deliberately.**
+    /// [`WolfCore::restart_nvim`] is synchronous — a `runtime.block_on` over a
+    /// kill, a spawn and twelve setup RPCs — so calling it from inside the wake
+    /// handler would block the GTK main loop for the whole respawn with the crash
+    /// overlay shown-but-never-presented, which is precisely why macOS's `.dead`
+    /// overlay is never drawn on the success path. Deferring also guarantees the
+    /// restart runs with no `RefCell` borrow live anywhere and lets
+    /// [`AppShell::on_render_wake`]'s command drain have its turn first.
+    fn schedule_restart(&self) {
+        self.inner.restart_scheduled.set(true);
+        self.inner
+            .restart_attempts
+            .set(self.inner.restart_attempts.get().saturating_add(1));
+
+        let weak = Rc::downgrade(&self.inner);
+        glib::timeout_add_local_once(RESTART_DEFER, move || {
+            let Some(shell) = upgrade(&weak) else {
+                return;
+            };
+            shell.inner.restart_scheduled.set(false);
+            shell.restart_nvim();
+        });
+    }
+
+    /// Restarts the captive Neovim in place and restores the Tier-1 file set.
+    ///
+    /// The ONE path shared by the automatic (`Dead`) restart and the overlay
+    /// button. Order matters: the open-file mirror is captured BEFORE the call
+    /// (a respawn wipes it), the front-end re-entrancy flag is cleared BEFORE
+    /// anything is acted on (so a re-entrant call from a widget callback cannot
+    /// strand it set), and the banner is flashed on the SUCCESS path only.
+    fn restart_nvim(&self) {
+        if self.inner.restarting.get() {
+            return;
+        }
+        self.inner.restarting.set(true);
+
+        let captured = self.capture_open_files();
+        let respawned = self.perform_restart();
+        let fresh = self.read_liveness();
+
+        // Cleared before acting on the outcome, so every exit path below — early
+        // return included — leaves the guard down.
+        self.inner.restarting.set(false);
+
+        let Some(fresh) = fresh else {
+            return;
+        };
+        match restart_outcome(respawned, fresh) {
+            // No respawn: the core self-recovered before the click, a concurrent
+            // restart held the core's CAS, or the respawn failed. Re-apply the
+            // overlay from the fresh reading and do NOTHING else — no reset, no
+            // reopen, no banner, and above all no rescheduling (the `auto_restart`
+            // field of a `Refresh` is always `false`, and acting on it would be an
+            // infinite respawn loop).
+            RestartOutcome::Refresh(ui) => self.apply_overlay(ui.overlay),
+            RestartOutcome::Respawned => {
+                self.inner.restart_attempts.set(0);
+                self.inner.panes.reset_after_restart();
+                self.reopen_captured(captured.as_ref());
+                self.apply_overlay(OverlayMode::Hidden);
+                self.inner.crash_overlay.flash_banner();
+                // Belt and braces, mirroring `app.rs`'s "react to whatever is
+                // already there" call: a harmless no-op if the fresh nvim has not
+                // reported `win_pos` yet.
+                self.inner.panes.on_render_wake();
+            }
+        }
+    }
+
+    /// Captures the Tier-1 open-file mirror for the current tabpage BEFORE a
+    /// restart wipes it. Both reads are RPC-free.
+    ///
+    /// **Never `WolfCore::current_tabpage()`**: that is a `block_on_rpc`, and
+    /// against a dead nvim it would freeze the GTK main loop for the whole timeout
+    /// budget on every crash. `Snapshot::current_tabpage` carries the same handle
+    /// as a plain field, emitted once at setup by `runtime/nvim/init.lua`'s
+    /// `wolf_setup_tabs`. A `current_tabpage` of `0` simply yields `None` — that
+    /// is "nothing to reopen", not an error.
+    fn capture_open_files(&self) -> Option<TabFiles> {
+        let tabpage = {
+            let core_ref = self.inner.core.borrow();
+            let core = core_ref.as_ref()?;
+            // Bound to a local so the `SnapshotReadGuard` is dropped at the end of
+            // THIS block, before `open_files_for_tabpage` takes the same lock.
+            let snapshot = core.read_snapshot();
+            snapshot.current_tabpage
+        };
+        let core_ref = self.inner.core.borrow();
+        core_ref.as_ref()?.open_files_for_tabpage(tabpage)
+    }
+
+    /// Calls [`WolfCore::restart_nvim`] under a short borrow and reports whether an
+    /// ACTUAL respawn happened.
+    ///
+    /// An `Err` is logged, never swallowed, and reported as "no respawn" — the
+    /// core has already re-marked liveness `Dead`, so the caller's fresh read
+    /// keeps the overlay up.
+    fn perform_restart(&self) -> bool {
+        let result = {
+            let core_ref = self.inner.core.borrow();
+            core_ref.as_ref().map(WolfCore::restart_nvim)
+        };
+        match result {
+            Some(Ok(respawned)) => respawned,
+            Some(Err(err)) => {
+                eprintln!("wolf-gnome: failed to restart Neovim: {err}");
+                false
+            }
+            None => false,
+        }
+    }
+
+    /// The captive nvim's current [`Liveness`], or `None` when there is no core.
+    fn read_liveness(&self) -> Option<Liveness> {
+        let core_ref = self.inner.core.borrow();
+        Some(core_ref.as_ref()?.liveness())
+    }
+
+    /// Reopens a captured Tier-1 file set in [`reopen_order`] — non-active files
+    /// first, the ACTIVE one LAST so it lands focused.
+    ///
+    /// `InputEvent::Open` is the same event the picker and the file tree send, so
+    /// the MRU is recorded identically: one path, no drift. Nothing in the loop can
+    /// re-enter the `RefCell`, so one short borrow covers the whole reopen.
+    fn reopen_captured(&self, captured: Option<&TabFiles>) {
+        let Some(captured) = captured else {
+            return;
+        };
+        let order = reopen_order(&captured.files, captured.active.as_deref());
+        let core_ref = self.inner.core.borrow();
+        let Some(core) = core_ref.as_ref() else {
+            return;
+        };
+        for path in order {
+            core.send_input(InputEvent::Open { path });
+        }
+    }
+
     /// Reacts to a render wake: settles a pending Open Folder re-root, then drains
     /// and dispatches every queued command.
     ///
     /// The app calls this LAST on each wake (after the pane view and the tree),
-    /// because a drained `close_window` tears the core down.
+    /// because a drained `close_window` tears the core down. Unlike the paint, it
+    /// runs in ALL THREE liveness states — see the module docs.
     pub fn on_render_wake(&self) {
         self.settle_pending_reroot();
         self.drain_and_dispatch_commands();

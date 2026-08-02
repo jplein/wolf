@@ -1059,6 +1059,25 @@ impl PaneInner {
         }
     }
 
+    /// Resets the pane view to its pre-first-pane state after a SUCCESSFUL in-place
+    /// Neovim restart, so the next render wake re-creates the first pane against
+    /// the FRESH nvim's window and grid. See
+    /// [`PaneHandle::reset_after_restart`] for why this is load-bearing rather
+    /// than cosmetic.
+    fn reset_after_restart(&self) {
+        *self.tree.borrow_mut() = PaneTree::new(FIRST_PANE_ID);
+        self.panes.borrow_mut().clear();
+        self.next_pane_id.set(FIRST_PANE_ID);
+        self.active_pane.set(None);
+        // Unparents and destroys everything and builds nothing (an empty `panes`
+        // map makes `build_layout_widget` return `None` for the root leaf) — and,
+        // critically, runs its own `focus_inside_pane_area()` guard, parking focus
+        // on the persistent `cmdline_area` BEFORE the widgets go away. Reusing
+        // that path rather than open-coding the teardown is what keeps the
+        // focus-wedge fix intact through a restart.
+        self.rebuild_pane_area();
+    }
+
     /// Whether the toplevel's focus widget is `pane_area` itself or anything under
     /// it — i.e. whether [`Self::rebuild_pane_area`]'s teardown is about to destroy
     /// the focus widget.
@@ -1105,6 +1124,50 @@ impl PaneHandle {
     /// Reacts to a render wake (see [`PaneInner::on_render_wake`]).
     pub fn on_render_wake(&self) {
         self.inner.on_render_wake();
+    }
+
+    /// Resets the pane view to its pre-first-pane state after a SUCCESSFUL in-place
+    /// Neovim restart ([`crate::shell::AppShell`] calls this from its restart
+    /// orchestration). The next render wake re-creates the first pane against the
+    /// FRESH nvim's window/grid.
+    ///
+    /// ## Why this is load-bearing, not cosmetic — the grid-size argument
+    ///
+    /// `WolfCore::restart_nvim` re-attaches the fresh nvim with
+    /// `NvimConfig::initial_cols`/`initial_rows` — 80x24 for `wolf-gnome`
+    /// ([`crate::app`]'s `INITIAL_COLS`/`INITIAL_ROWS`). The live pane is a very
+    /// different size (45x14 cells in the cage smoke's window), and the ONLY thing
+    /// that ever tells the core otherwise is a `::resize` on a pane
+    /// `DrawingArea`, which GTK emits only when a widget's allocation CHANGES.
+    /// After a restart the old `DrawingArea` is still there at exactly the same
+    /// size, so no `::resize` fires — and the fresh nvim would keep an 80x24 grid
+    /// inside a 45x14 pane for the rest of the session, rendering the editor at
+    /// the wrong size with no way back.
+    ///
+    /// Destroying the old area and letting [`PaneInner::ensure_initial_pane`]
+    /// create a new one means GTK allocates a FRESH widget (whose recorded size
+    /// starts at 0x0), which necessarily emits `::resize` ->
+    /// [`PaneInner::on_pane_resize`] -> `resize_grid` + `resize_global`. That
+    /// chain is what re-establishes the correct grid size, and it is exactly what
+    /// `nvim_crash_recovers_and_reopens_the_file_under_cage`'s
+    /// `winwidth`/`winheight` equality assertion discriminates — deleting this
+    /// call turns those dimensions into the config's 80x24 while every OCR term
+    /// still passes, because the buffer text is simply drawn at the top-left of an
+    /// over-large grid.
+    ///
+    /// ## Known v1 limitations
+    ///
+    /// - A crash while the window was SPLIT leaves the dead nvim's extra
+    ///   window/grid entries in the snapshot: no `win_close`/`grid_destroy` is
+    ///   ever sent for a killed process, and nothing clears the snapshot on
+    ///   restart. The reset binds only the fresh nvim's single window, which is
+    ///   correct; the stale entries linger harmlessly because no pane is bound to
+    ///   them.
+    /// - The pane TOPOLOGY is not restored — only the Tier-1 file set is.
+    ///   Restoring the split layout (and cursor/scroll position) across a restart
+    ///   is out of scope.
+    pub fn reset_after_restart(&self) {
+        self.inner.reset_after_restart();
     }
 }
 

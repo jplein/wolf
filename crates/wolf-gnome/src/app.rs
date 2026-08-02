@@ -14,10 +14,27 @@
 //!   tokio worker thread, so it cannot touch GTK directly; instead it pushes onto a
 //!   bounded `async-channel` (capacity 1, coalescing a burst of flushes), and a
 //!   [`glib::spawn_future_local`] task on the GTK main thread drains it and calls
+//!   `shell::AppShell::on_liveness_wake` (the LIVENESS read, FIRST),
 //!   `pane_view::PaneHandle::on_render_wake` (per-pane redraw + split/close/focus
 //!   intent consumption), `tree_view::TreeHandle::on_render_wake`, and finally
 //!   `shell::AppShell::on_render_wake` (the command drain). The shell runs LAST:
 //!   a drained `close_window` tears the core down.
+//! - **Liveness / crash recovery:** the liveness read is UNCONDITIONAL and at the
+//!   TOP of the drain-loop body, and it GATES the two paint handlers (see
+//!   [`mod@crate::liveness_ui`] for the mapping and [`crate::crash_overlay`] for the
+//!   widgets). Coalescing that read is safe, and the argument is worth stating
+//!   because the capacity-1 channel silently DROPS a wake fired while it is full,
+//!   while `liveness::mark_dead` fires exactly once and no redraw wake ever
+//!   follows a death: a `try_send` returning `Full` implies an unconsumed item is
+//!   queued, which implies a full handler run WILL happen after the drop, and
+//!   because `mark_dead` stores `Dead` BEFORE waking and liveness is a
+//!   level-triggered atomic read (not an edge-triggered message), that later run
+//!   observes `Dead`. `async_channel::Receiver::recv` also frees the slot before
+//!   the handler body runs, so a wake fired DURING a handler run finds the queue
+//!   empty and succeeds. There is therefore no interleaving in which the death
+//!   wake is lost with no subsequent handler run, and no periodic liveness poll
+//!   exists (a timer would destroy this design's zero-polling property AND make
+//!   the crash smoke unable to discriminate a broken wake bridge).
 //! - **Paint:** per-pane painting and the mode-aware cursor live in
 //!   [`crate::pane_view`] (which uses the pure [`crate::paint`]/[`crate::cursor`]
 //!   seams); the app installs no draw handler of its own.
@@ -64,6 +81,7 @@ use adw::prelude::*;
 use gtk::glib;
 use wolf_core::{CoreConfig, InputEvent, WakeFn, WolfCore};
 
+use crate::crash_overlay;
 use crate::pane_view;
 use crate::picker::{self, PickerHandle};
 use crate::shell::{self, ShellParts, GO_TO_FILE_ACTION};
@@ -203,15 +221,28 @@ fn build_ui(app: &adw::Application) {
     // window-level controller after they close).
     let focus_area = panes.cmdline_widget();
 
-    // The editor area is the overlay's main child. The empty state is added FIRST
-    // so the picker, added after it, floats above it.
+    // The editor area is the overlay's main child. Overlay children stack in the
+    // order they are added, and this order is a decision:
+    //
+    //   empty_state -> picker -> crash overlay -> restart banner
+    //
+    // The crash overlay covers BOTH the picker (whose Open would send into a dead
+    // nvim) and the empty state (whose Open Folder would `Chdir` one — the captive
+    // nvim runs in the empty state too, so it can crash there). The banner is
+    // topmost and click-through, so it confirms a restart without ever swallowing
+    // a click meant for the editor.
     let overlay = gtk::Overlay::new();
     overlay.set_child(Some(&editor));
 
     let empty_state = shell::build_empty_state();
     overlay.add_overlay(&empty_state);
 
+    let crash = crash_overlay::build();
+
     let picker = picker::build(&overlay, &focus_area, &core);
+
+    overlay.add_overlay(&crash.widget());
+    overlay.add_overlay(&crash.banner_widget());
 
     // The file-tree sidebar on the left; the editor (overlay) on the right. In the
     // empty state there is no project to walk, so no FileSearch starts.
@@ -262,6 +293,8 @@ fn build_ui(app: &adw::Application) {
         paned: &paned,
         empty_state: &empty_state,
         open_button: &open_button,
+        crash_overlay: &crash,
+        panes: &panes,
     });
     shell.install_actions(app);
     shell.set_empty_state(empty);
@@ -285,25 +318,36 @@ fn build_ui(app: &adw::Application) {
         });
     }
 
-    // Drain the wake channel on the main thread. Each signal lets the pane view
-    // react (create/split/close panes, consume layout intents, redraw), the tree
-    // react to a current-file change carried by the same wake, and the shell drain
-    // any queued commands. The shell runs LAST: a drained `close_window` shuts the
-    // core down, and the other two must have had their turn first.
+    // Drain the wake channel on the main thread. Each signal first asks the shell
+    // to read the captive nvim's LIVENESS (`on_liveness_wake`), which drives the
+    // crash/stall overlay, schedules an automatic restart for a dead core, and
+    // reports whether painting this wake is worth anything at all. Only then does
+    // the pane view react (create/split/close panes, consume layout intents,
+    // redraw) and the tree react to a current-file change carried by the same
+    // wake. The shell's command drain runs LAST and UNGATED: a drained
+    // `close_window` shuts the core down, the other two must have had their turn
+    // first, and a `close_window` queued just before a crash must not be stranded
+    // behind the overlay.
     {
         let panes = panes.clone();
         let tree = tree.clone();
         let shell = shell.clone();
         glib::spawn_future_local(async move {
             while wake_rx.recv().await.is_ok() {
-                panes.on_render_wake();
-                tree.on_render_wake();
+                let paint = shell.on_liveness_wake();
+                if paint {
+                    panes.on_render_wake();
+                    tree.on_render_wake();
+                }
                 shell.on_render_wake();
             }
         });
     }
-    // React to whatever is already there (the initial attached frame).
-    panes.on_render_wake();
+    // React to whatever is already there (the initial attached frame), through the
+    // same liveness gate as every later wake.
+    if shell.on_liveness_wake() {
+        panes.on_render_wake();
+    }
 
     wire_keys(&window, &core, &picker);
     wire_close(&window, &core, &picker, &tree);
@@ -385,4 +429,110 @@ fn wire_close(
         }
         glib::Propagation::Proceed
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WAKE_CHANNEL_CAP;
+
+    // The wake bridge's SAFETY ARGUMENT, made executable.
+    //
+    // The bounded wake channel silently DROPS a wake fired while it is full, and
+    // `wolf_core::liveness::mark_dead` fires exactly once — after which a dead
+    // Neovim produces no further redraw wakes at all. So the crash overlay only
+    // ever appears because of this implication: a dropped wake means an unconsumed
+    // one is still queued, which means a full handler run WILL happen after the
+    // drop, and because `mark_dead` stores `Dead` BEFORE waking and liveness is a
+    // level-triggered atomic read, that later run observes the death. These tests
+    // pin the transport half of that argument against a future change to
+    // `async-channel`'s bounded semantics (e.g. a ring buffer that drops the OLD
+    // item instead of refusing the new one), which would silently invalidate it.
+    //
+    // They deliberately read the production `WAKE_CHANNEL_CAP` rather than a
+    // literal `1`, so raising the capacity cannot quietly turn them into tests of
+    // something else.
+
+    #[test]
+    fn a_dropped_wake_implies_a_pending_wake() {
+        let (wake_tx, wake_rx) = async_channel::bounded::<()>(WAKE_CHANNEL_CAP);
+
+        for slot in 0..WAKE_CHANNEL_CAP {
+            assert!(
+                wake_tx.try_send(()).is_ok(),
+                "filling the wake channel: send {slot} of {WAKE_CHANNEL_CAP} must be accepted, \
+                 or the capacity is not what the drain loop was designed against"
+            );
+        }
+
+        let overflow = wake_tx.try_send(());
+        assert!(
+            // Matched through a reference so `overflow` survives for the message.
+            matches!(&overflow, Err(async_channel::TrySendError::Full(_))),
+            "a send into a FULL wake channel must be refused with Full (the receiver is still \
+             alive here, so a Closed would mean something else entirely); got {overflow:?}"
+        );
+
+        // The load-bearing implication: the wake that was just dropped left a
+        // queued one behind it, so a handler run is still guaranteed to follow.
+        assert!(
+            wake_rx.try_recv().is_ok(),
+            "a DROPPED wake must imply a PENDING wake: the send above was refused because the \
+             queue was full, so an unconsumed item must still be there for the drain loop to \
+             pop. If this ever fails, a death wake can be lost with no handler run after it, and \
+             the crash overlay needs a periodic liveness poll to appear at all."
+        );
+    }
+
+    #[test]
+    fn consuming_a_wake_frees_the_slot_before_the_handler_runs() {
+        let (wake_tx, wake_rx) = async_channel::bounded::<()>(WAKE_CHANNEL_CAP);
+
+        for slot in 0..WAKE_CHANNEL_CAP {
+            assert!(
+                wake_tx.try_send(()).is_ok(),
+                "filling the wake channel: send {slot} of {WAKE_CHANNEL_CAP} must be accepted"
+            );
+        }
+        assert!(
+            wake_tx.try_send(()).is_err(),
+            "precondition: the wake channel must be full before the receive below can show \
+             anything"
+        );
+
+        assert!(
+            wake_rx.try_recv().is_ok(),
+            "the queued wake must be receivable"
+        );
+
+        // `recv()` resolves over `try_recv`, which pops the item BEFORE the future
+        // resolves — so the drain loop's handler body runs against an already-empty
+        // slot, and a wake fired DURING a handler run (the `mark_dead` case that
+        // matters most) is accepted rather than dropped.
+        assert!(
+            wake_tx.try_send(()).is_ok(),
+            "consuming a wake must free its slot BEFORE the handlers run: a death wake fired \
+             while the drain loop is mid-handler must be accepted, not dropped"
+        );
+    }
+
+    #[test]
+    fn wake_channel_capacity_is_at_least_one() {
+        assert_ne!(
+            WAKE_CHANNEL_CAP, 0,
+            "the wake channel capacity must be at least 1: async_channel::bounded panics on a \
+             capacity of 0, and a zero-capacity channel would drop every wake fired while the \
+             drain loop was not already parked in recv()"
+        );
+
+        let (wake_tx, wake_rx) = async_channel::bounded::<()>(WAKE_CHANNEL_CAP);
+        assert!(
+            wake_tx.try_send(()).is_ok(),
+            "at least one wake must fit in the channel while nothing is draining it — that is \
+             what makes a wake fired from a tokio worker reach the GTK main loop at all"
+        );
+        assert!(
+            wake_rx.try_recv().is_ok(),
+            "and the drain loop must be able to pop it"
+        );
+    }
 }
