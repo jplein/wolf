@@ -10,38 +10,41 @@
 //!
 //! ## Why this file exists
 //!
-//! **NOTHING IN THIS REPOSITORY CAN INJECT A POINTER EVENT.** The `cage` smokes
-//! are keyboard-only — the whole smoke toolchain is `cage`, `wtype`, `grim`,
-//! `tesseract` (`smoke_headless.rs`'s own `REQUIRED_TOOLS`), `wtype` is a
-//! keyboard injector, and there is no pointer injector in `flake.nix` at all.
+//! **Pointer injection under cage now EXISTS**, and this file is deliberately not
+//! made redundant by it. The repo builds its own long-lived Wayland
+//! `zwlr_virtual_pointer_v1` client, `wolf-pointer-inject` (see
+//! `tools/wolf-pointer-inject/README.md`), and four cage smokes in
+//! `smoke_headless.rs` use it to drive real `wl_pointer` events into the running
+//! GTK app.
 //!
-//! `wlrctl` was TRIED and is proven not to work, which is why it is deliberately
-//! absent from the toolchain rather than merely unused: `cage` advertises
-//! `WL_SEAT_CAPABILITY_POINTER` only while a pointer device exists, and each
-//! `wlrctl` invocation is a separate short-lived process that creates and
-//! destroys its `zwlr_virtual_pointer_v1` inside a single dispatch batch. The GTK
-//! client's own `WAYLAND_DEBUG=1` log shows `wl_seat.capabilities(3)` ->
-//! `get_pointer` -> `capabilities(2)` -> `wl_pointer.release()` **59 us apart**,
-//! so the client never holds a live `wl_pointer` when the events fire and wlroots
-//! drops them. The consequence is NOT "drag is missing while click and scroll are
-//! covered": **no pointer event of any kind reaches the client, so click and
-//! scroll have no compositor-level coverage either.** (`wlrctl`'s missing
-//! press/release split would separately rule out drag, but it never gets that
-//! far — and shipping it would advertise a capability the toolchain does not
-//! have.)
+//! The split of responsibility is the point, and neither half duplicates the
+//! other. **This file covers the pure SEAMS** — `cell_at`, `mouse_input`, the
+//! accumulator, `send_mouse` / `send_scroll` — driven into a real `WolfCore` and a
+//! real Neovim with no GTK controller anywhere in the picture, which is what makes
+//! it fast, deterministic, font-free and able to assert the exact landed cell, the
+//! out-of-bounds clamp, visual mode, and strictly-monotonic `win_viewport.topline`.
+//! **The cage smokes cover the GTK GLUE**: whether a controller fires from a real
+//! pointer event at all, whether `gtk::GestureDrag` emits `drag-update`, whether
+//! `offset_x`/`offset_y` reconstruct the absolute point, whether the implicit grab
+//! keeps delivering after the pointer leaves the pane, and which
+//! `gdk::ScrollUnit` a real cage/wlroots wheel event reports. A seam test cannot
+//! answer any of those, and a compositor smoke is a poor place to enumerate seam
+//! edge cases. Keep both.
 //!
-//! So this file is the automated coverage for the WHOLE path from `cell_at` /
-//! `mouse_input` onward — press, drag including the clamp that makes
-//! drag-past-the-edge selection work, release, and scroll in both directions —
-//! driven against a real `WolfCore` and a real Neovim.
+//! Historical note, kept short on purpose: `wlrctl` was tried and measured NOT to
+//! deliver — cage advertises `WL_SEAT_CAPABILITY_POINTER` only while a pointer
+//! device exists, and each short-lived `wlrctl` process creates and destroys its
+//! virtual pointer inside one dispatch batch, so zero `wl_pointer.button` events
+//! ever reached the client while `wlrctl` exited `0` regardless. That is why it is
+//! deliberately absent from `flake.nix` and why a long-lived injector had to be
+//! written; the full record is in `tools/wolf-pointer-inject/README.md`.
 //!
-//! What it deliberately does NOT prove, and nothing on this machine can: that any
-//! of the per-pane GTK controllers ever fires at all; that `gtk::GestureDrag`
-//! emits `drag-update` during a button-held move; that its `offset_x`/`offset_y`
-//! carry the point outside the widget; or that it keeps delivering after the
-//! pointer leaves the pane. `crates/wolf-gnome/tests/README.md`, section
-//! "Deliberate test gaps", is the full statement of the gap — keep this doc
-//! consistent with it.
+//! What this file still does NOT prove, and does not try to: anything about the
+//! GTK controllers themselves (above), and — like the cage smokes — nothing about
+//! `record_pointer` or the `drag_grid` / `drag_button` press-pinning.
+//! `crates/wolf-gnome/tests/README.md`, section "Pointer injection: how it works
+//! and why it is built this way", carries the authoritative proven/unproven list —
+//! keep this doc consistent with it.
 //!
 //! ## Test wiring (read this before hunting for a BUILD file)
 //!

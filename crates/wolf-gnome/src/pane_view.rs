@@ -78,6 +78,15 @@
 //! [`PaneHandle::cmdline_widget`] already documents for the picker and the tree.
 //! See `crates/wolf-gnome/src/README.md` for the defect this prevents.
 //!
+//! That invariant is no longer a structural argument only: it is executed end to
+//! end by the cage smoke `click_then_close_keeps_keyboard_input_alive_under_cage`
+//! in `crates/wolf-gnome/tests/smoke_headless.rs`, which CLICKS a pane, closes that
+//! same pane, and asserts keys still reach Neovim afterwards. Read its doc comment
+//! before touching any of this: making it red takes a THREE-part revert (restore
+//! `focusable(true)`, restore `area.grab_focus()` in `on_pane_clicked`, AND neuter
+//! the `rebuild_pane_area` guard below), and it proves the COMPOSITE invariant
+//! rather than the `focusable(false)` half in isolation.
+//!
 //! The pane areas are not the only ephemeral widget under `pane_area`, though: the
 //! inner `gtk::Paned` DIVIDERS are rebuilt from scratch on every
 //! [`PaneInner::rebuild_pane_area`], and `GtkPaned` sets `focusable = TRUE` in
@@ -872,8 +881,14 @@ impl PaneInner {
     ///
     /// The reset-the-carry-on-a-grid-change rule is NOT here: it lives inside
     /// [`PaneScroll::steps_for`], where it is decidable from its arguments and
-    /// unit-tested headlessly. That is the point — pointer input has no end-to-end
-    /// coverage on Linux, so a rule left in this file is a rule nothing verifies.
+    /// unit-tested headlessly. That move was made when pointer input had no
+    /// end-to-end coverage on Linux at all, so a rule left in this file was a rule
+    /// nothing verified. This method IS covered end to end now —
+    /// `smoke_headless.rs`'s `wheel_scroll_moves_the_viewport_under_cage` drives it
+    /// from a real `wl_pointer.axis` frame and pins one detent to exactly one line
+    /// — but the rule stays in `PaneScroll`: discriminating a per-grid carry would
+    /// need two panes and a pointer that scrolls across both, which no smoke does,
+    /// and a rule decidable from its arguments is far better pinned headlessly.
     ///
     /// **This method NEVER changes focus** — no `focus_win`, no `set_active_pane`,
     /// no `grab_focus`. Scrolling a background pane must leave the keyboard exactly

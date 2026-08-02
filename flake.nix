@@ -7,8 +7,10 @@
 #   `wolf-core` (and the `wolf-gnome` GTK front-end) with Cargo under Nix — a
 #   pinned Rust toolchain (via the oxalica rust-overlay), a pinned hermetic
 #   Neovim, and the GTK/Cairo/Pango GUI toolkit for the front-end's testable
-#   seams, plus the headless-compositor smoke toolchain and the Markdown
-#   formatter that the Linux verification gate (`build.md`) requires. This shell
+#   seams, plus the headless-compositor smoke toolchain (including the repo's
+#   own `wolf-pointer-inject` Wayland pointer injector, built from `tools/`) and
+#   the Markdown formatter that the Linux verification gate (`build.md`)
+#   requires. This shell
 #   exports `WOLF_NVIM_BIN`, the absolute path to the pinned `nvim` binary — the
 #   *only* way `wolf-core` and its tests are allowed to locate Neovim: never via
 #   the system PATH, never by scanning `/nix/store`.
@@ -43,10 +45,15 @@
 
         isDarwin = pkgs.stdenv.isDarwin;
 
-        # NOTE: `rustToolchain` and the GTK/Neovim packages below are only ever
-        # forced when `linuxShell` is evaluated. On Darwin `devShells.default`
-        # resolves to `darwinShell`, which references none of them, so Nix's
-        # laziness keeps these Linux-only derivations off the Darwin eval path.
+        # NOTE: `rustToolchain`, `wolfPointerInject` and the GTK/Neovim packages
+        # below are only ever forced when `linuxShell` is evaluated. On Darwin
+        # `devShells.default` resolves to `darwinShell`, which references none of
+        # them, so Nix's laziness keeps these Linux-only derivations off the
+        # Darwin eval path. `wolfPointerInject` in particular is a Wayland
+        # program that could not build on Darwin at all; it is safe only because
+        # nothing outside `linuxShell.packages` forces the thunk. Do not add a
+        # top-level reference to it, and do not wrap it in a `lib.optional`
+        # guard — a guard would imply this laziness argument is unsound.
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [
             "rust-src"
@@ -70,6 +77,65 @@
           mkdir -p "$out/bin"
           ln -s ${pkgs.bazelisk}/bin/bazelisk "$out/bin/bazel"
         '';
+
+        # The repo's own Wayland pointer injector, built from tools/. A
+        # long-lived `zwlr_virtual_pointer_v1` client that both HOLDS the seat's
+        # pointer capability open (wlroots advertises
+        # WL_SEAT_CAPABILITY_POINTER only while a pointer device exists, and the
+        # headless backend creates none) and injects motion / button / axis
+        # events on command. Used by the `wolf-gnome` cage pointer smokes; see
+        # tools/wolf-pointer-inject/README.md. Linux-only — see the NOTE above
+        # about why it stays off the Darwin eval path.
+        wolfPointerInject =
+          let
+            # Take the protocol XML from wlr-protocols rather than vendoring it,
+            # so the protocol revision stays tied to the wlroots this flake
+            # actually ships.
+            protoXml = "${pkgs.wlr-protocols}/share/wlr-protocols/unstable/wlr-virtual-pointer-unstable-v1.xml";
+          in
+          pkgs.stdenv.mkDerivation {
+            pname = "wolf-pointer-inject";
+            version = "0.1.0";
+            src = ./tools/wolf-pointer-inject;
+
+            # wayland-scanner is a code generator that runs at build time, hence
+            # native. pkg-config resolves wayland-client.pc.
+            nativeBuildInputs = [
+              pkgs.pkg-config
+              pkgs.wayland-scanner
+            ];
+            buildInputs = [ pkgs.wayland ];
+
+            # NOTE: wayland.xml is deliberately NOT scanned. wl_registry,
+            # wl_seat, wl_output, the WL_POINTER_* enums and wl_fixed_from_double
+            # all come from wayland-client.h / wayland-client-protocol.h and
+            # libwayland-client.so, which pkgs.wayland provides. Only the wlr XML
+            # needs scanning; do not add a redundant second scanner invocation.
+            #
+            # Deliberately NOT -Werror: a nixpkgs gcc bump must not be able to
+            # break `nix develop` for the whole team over a new pedantic warning
+            # in wayland-scanner's generated .c. -Wall -Wextra is, however, the
+            # ONLY automated check this C file gets — no gate step (rustfmt,
+            # clippy, prettier, cargo test) reaches it.
+            buildPhase = ''
+              runHook preBuild
+              wayland-scanner client-header \
+                "${protoXml}" wlr-virtual-pointer-unstable-v1-client-protocol.h
+              wayland-scanner private-code \
+                "${protoXml}" wlr-virtual-pointer-unstable-v1-protocol.c
+              $CC -O2 -Wall -Wextra -I. \
+                -o wolf-pointer-inject \
+                main.c wlr-virtual-pointer-unstable-v1-protocol.c \
+                $(pkg-config --cflags --libs wayland-client)
+              runHook postBuild
+            '';
+
+            installPhase = ''
+              runHook preInstall
+              install -Dm755 wolf-pointer-inject "$out/bin/wolf-pointer-inject"
+              runHook postInstall
+            '';
+          };
 
         darwinShell = pkgs.mkShell {
           packages = [
@@ -124,17 +190,25 @@
             pkgs.freetype
             pkgs.dejavu_fonts
 
-            # GATE-REQUIRED: the nine headless end-to-end smoke tests in
+            # GATE-REQUIRED: the eighteen headless end-to-end smoke tests in
             # crates/wolf-gnome/tests/smoke_headless.rs run as part of a plain
             # `cargo test` (no `--ignored`). They launch the real window under a
-            # headless Wayland compositor and OCR a screenshot, so these four
+            # headless Wayland compositor and OCR a screenshot, so these five
             # must be present or the suite fails loud. cage = headless wlroots
             # compositor, wtype = synthetic keystrokes, grim = screenshot,
-            # tesseract = OCR. Not needed to *build*.
+            # tesseract = OCR, wolf-pointer-inject = synthetic pointer (motion /
+            # button / axis). Not needed to *build*.
+            #
+            # wolf-pointer-inject is the repo's OWN tool, built from
+            # tools/wolf-pointer-inject by the derivation above, not an upstream
+            # nixpkgs package: it is the persistent virtual-pointer injector that
+            # holds the seat's pointer capability open for a whole scenario. See
+            # tools/wolf-pointer-inject/README.md.
             pkgs.cage
             pkgs.wtype
             pkgs.grim
             pkgs.tesseract
+            wolfPointerInject
 
             # LINT/FORMAT GATE: prettier backs the Markdown format check in the
             # Linux verification gate (see build.md, "The Linux verification

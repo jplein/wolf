@@ -231,11 +231,16 @@ impl ScrollAccumulator {
 /// sub-line remainder** — is the macOS `if grid != lastScrollGrid { reset() }`,
 /// which on macOS lives in the VIEW (`PaneContainerView.scrollWheel`). Keeping it
 /// there on this side would put it in `pane_view.rs`, which needs a live display,
-/// so nothing could execute it: pointer input has NO end-to-end coverage on Linux
-/// (`crates/wolf-gnome/tests/README.md`, "Deliberate test gaps"), and a rule left
-/// in the GTK glue is therefore a rule nothing verifies at all. Here it is
-/// decidable from the arguments, and `pane_scroll_table` /
-/// `grid_change_discards_the_carry` pin it headlessly.
+/// so at the time nothing could execute it: pointer input then had NO end-to-end
+/// coverage on Linux at all, and a rule left in the GTK glue was therefore a rule
+/// nothing verified. Pointer input DOES have cage coverage now — four smokes drive
+/// real `wl_pointer` events through the controllers, see
+/// `crates/wolf-gnome/tests/README.md`, "Pointer injection: how it works and why
+/// it is built this way" — but the placement is unchanged and still right, because
+/// discriminating a per-grid carry end to end would need two panes plus a pointer
+/// that scrolls across both, which no smoke does. Here it is decidable from the
+/// arguments, and `pane_scroll_table` / `grid_change_discards_the_carry` pin it
+/// headlessly.
 ///
 /// The grid id is used ONLY for equality against the previous call; this type
 /// never resolves it against a snapshot.
@@ -1218,11 +1223,13 @@ mod tests {
     // rather than pointing at a table row.
     //
     // It used to live in `pane_view.rs::on_pane_scroll` — GTK glue, which needs a
-    // live display, so nothing in the suite could execute it. That is the whole
-    // reason it moved: pointer input has NO end-to-end coverage on Linux (see
-    // `crates/wolf-gnome/tests/README.md`, "Deliberate test gaps"), so a rule left
-    // in the glue is a rule NOTHING verifies. If this test is deleted along with
-    // the type, the rule silently becomes unverified again.
+    // live display, so at the time nothing in the suite could execute it. That is
+    // the whole reason it moved: pointer input then had NO end-to-end coverage on
+    // Linux at all. It does now (see `crates/wolf-gnome/tests/README.md`, "Pointer
+    // injection: how it works and why it is built this way"), but no cage smoke can
+    // discriminate THIS rule — that would need two panes and a pointer scrolling
+    // across both — so this test remains the only thing that verifies it. If it is
+    // deleted along with the type, the rule silently becomes unverified again.
     // =========================================================================
     #[test]
     fn grid_change_discards_the_carry() {
