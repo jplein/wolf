@@ -40,6 +40,20 @@ filegroup(
     visibility = ["//tools/lint:__pkg__"],
 )
 
+# This package's docs, for `//tools/lint:markdown`. Same cross-package globbing
+# constraint as `swift_format_srcs` above.
+filegroup(
+    name = "markdown_srcs",
+    srcs = glob(
+        [
+            "**/README.md",
+            "DECISIONS.md",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//tools/lint:__pkg__"],
+)
+
 # The pure key-translation seam. Compiles `KeyMap.swift` together with the
 # swift-bridge-generated Swift glue (which provides `FfiKeyEvent` and the
 # `WolfCoreHandle` / `FfiFrame` wrappers) into one Foundation-only module — NO

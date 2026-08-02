@@ -2,3 +2,22 @@ exports_files([
     "Cargo.toml",
     "Cargo.lock",
 ])
+
+# Docs owned by the root package, for `//tools/lint:markdown`. wolf-gnome, tools/
+# and resources/ have no BUILD.bazel of their own, so their Markdown belongs to
+# this package. Sibling `markdown_srcs` filegroups live in each real package
+# because Bazel forbids cross-package globbing.
+filegroup(
+    name = "markdown_srcs",
+    srcs = glob(
+        [
+            "README.md",
+            "crates/wolf-gnome/**/README.md",
+            "crates/wolf-gnome/DECISIONS.md",
+            "resources/README.md",
+            "tools/README.md",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//tools/lint:__pkg__"],
+)

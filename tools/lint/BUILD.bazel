@@ -118,6 +118,47 @@ sh_binary(
 )
 
 # ---------------------------------------------------------------------------
+# markdown (documentation rules from CLAUDE.md)
+# ---------------------------------------------------------------------------
+
+# The docs this checker covers, collected from the per-package `markdown_srcs`
+# filegroups (Bazel forbids cross-package globbing, so each package exposes its
+# own). Adding docs to a new package means adding a filegroup there and listing
+# it here.
+filegroup(
+    name = "markdown_srcs",
+    srcs = [
+        "README.md",
+        "//:markdown_srcs",
+        "//bazel/ia-writer-mono:markdown_srcs",
+        "//bazel/jetbrains-mono:markdown_srcs",
+        "//bazel/lighthouse:markdown_srcs",
+        "//bazel/nvim:markdown_srcs",
+        "//bazel/nvim-treesitter:markdown_srcs",
+        "//bazel/nvim-treesitter-textobjects:markdown_srcs",
+        "//bazel/orlando:markdown_srcs",
+        "//bazel/rg:markdown_srcs",
+        "//bazel/treesitter-parsers:markdown_srcs",
+        "//crates/wolf-core:markdown_srcs",
+        "//crates/wolf-ffi:markdown_srcs",
+        "//crates/wolf-macos:markdown_srcs",
+        "//resources/icons:markdown_srcs",
+        "//runtime/nvim:markdown_srcs",
+    ],
+)
+
+# markdown CHECK: line length, changelog voice, ALL-CAPS emphasis, per-entry word
+# budget, and a size warning. Pure bash + awk, so it needs no toolchain and runs
+# sandboxed. `bazel test //tools/lint:markdown`.
+sh_test(
+    name = "markdown",
+    srcs = ["markdown_check.sh"],
+    args = ["$(rootpaths :markdown_srcs)"],
+    data = [":markdown_srcs"],
+    tags = ["manual"],
+)
+
+# ---------------------------------------------------------------------------
 # Aggregates
 # ---------------------------------------------------------------------------
 
@@ -127,6 +168,7 @@ test_suite(
     tags = ["manual"],
     tests = [
         ":clippy",
+        ":markdown",
         ":rustfmt_core",
         ":rustfmt_ffi",
         ":swift_format",

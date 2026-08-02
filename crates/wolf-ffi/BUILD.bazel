@@ -16,6 +16,22 @@ load("@build_bazel_rules_swift//swift:swift_interop_hint.bzl", "swift_interop_hi
 
 exports_files(["Cargo.toml"])
 
+# This crate's docs, for `//tools/lint:markdown`. Bazel forbids cross-package
+# globbing, so each package exposes its own `markdown_srcs`. The machine-generated
+# bindings under `generated/` carry no prose and are excluded.
+filegroup(
+    name = "markdown_srcs",
+    srcs = glob(
+        [
+            "**/README.md",
+            "DECISIONS.md",
+        ],
+        exclude = ["generated/**"],
+        allow_empty = True,
+    ),
+    visibility = ["//tools/lint:__pkg__"],
+)
+
 # The swift-bridge-generated Swift glue (committed). Compiled INTO the Swift
 # front-end's `wolf_key_map` module so `FfiKeyEvent` and the `WolfCoreHandle` /
 # `FfiFrame` wrappers are available to Swift. Foundation-only (no AppKit).

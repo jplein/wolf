@@ -2,13 +2,19 @@
 
 Hermetic, pinned **nvim-treesitter-textobjects** plugin for bundling into `Wolf.app`.
 
-This package downloads the pinned GitHub source tarball for the pure-Lua nvim-treesitter-textobjects plugin (sha256-pinned, fetched by Bazel — no system or PATH dependency), assembles it into a structure-preserving directory artifact, and exposes it for bundling. `//crates/wolf-macos:Wolf` bundles the result at `Contents/Resources/nvim-treesitter-textobjects/`.
+This package downloads the pinned GitHub source tarball for the pure-Lua nvim-treesitter-textobjects plugin (sha256-pinned, fetched by Bazel — no system or `PATH` dependency), assembles it into a structure-preserving directory artifact, and exposes it for bundling. `//crates/wolf-macos:Wolf` bundles the result at `Contents/Resources/nvim-treesitter-textobjects/`.
 
-This change **vendors the plugin only** — it does **not** enable treesitter textobjects (it is bundled-but-inert: not sourced, no keymaps). The bundled `lua/` and per-language `queries/<lang>/textobjects.scm` are shipped for a future enablement change; the captive `runtime/nvim/init.lua` is **not** modified by this change. Enablement, and the Linux/Nix vendoring path, are deferred.
+The plugin is bundled but inert. The captive `runtime/nvim/init.lua` prepends the tree to `runtimepath` when the sibling directory exists, so the `lua/` modules and the per-language `queries/<lang>/textobjects.scm` are resolvable, but nothing sources the plugin, calls its setup, or binds a textobject keymap. Enablement, and the Linux/Nix vendoring path, are deferred.
 
-## Why the `main` branch (not `master`)
+## Why the `main` branch and not `master`
 
-The pin is on nvim-treesitter-textobjects' **`main`** branch — for **branch-consistency** with the sibling [`bazel/nvim-treesitter`](../nvim-treesitter/README.md), which was re-pinned to nvim-treesitter's `main` branch (the rewrite / new module API). Pairing textobjects with the nvim-treesitter branch it targets avoids a latent incompatibility, so both track `main`. On `main` the modules live under the self-named `lua/nvim-treesitter-textobjects/` layout (**not** the classic `lua/nvim-treesitter/textobjects/` of the old `master` branch). It still ships per-language `queries/<lang>/textobjects.scm` at the archive **root** — unlike the sibling nvim-treesitter `main`, which relocated its queries under `runtime/queries/`, textobjects `main` did **not** move its queries. It carries **no** top-level `plugin/` loader (the `master` branch had one; `main` dropped it). This re-pin is purely for consistency and future use — the plugin remains bundled-but-inert.
+The pin tracks the textobjects `main` branch for branch-consistency with the sibling [`bazel/nvim-treesitter`](../nvim-treesitter/README.md), which is pinned to nvim-treesitter's `main` (the rewrite and its new module API). Pairing textobjects with the nvim-treesitter branch it targets avoids a latent incompatibility, so both track `main`.
+
+Three layout facts follow from that branch, and the overlay depends on all three:
+
+- The Lua modules live under the self-named `lua/nvim-treesitter-textobjects/` layout, not the `lua/nvim-treesitter/textobjects/` layout `master` uses.
+- The per-language `queries/<lang>/textobjects.scm` sit at the archive root. Unlike the sibling nvim-treesitter `main`, textobjects `main` does not relocate its queries under `runtime/`.
+- There is no top-level `plugin/` loader, so the overlay globs none.
 
 ## The pin
 
@@ -20,12 +26,14 @@ The pin is on nvim-treesitter-textobjects' **`main`** branch — for **branch-co
 
 ## Targets
 
-- **`//bazel/nvim-treesitter-textobjects:nvim_treesitter_textobjects_tree`** — an `alias` to `@nvim_treesitter_textobjects//:nvim_treesitter_textobjects_tree`. Pure Lua (arch-independent), so there is **no** `select()`: a single repo. The actual target is a `copy_to_directory` TreeArtifact whose contents are `nvim-treesitter-textobjects/lua/nvim-treesitter-textobjects/**`, `nvim-treesitter-textobjects/queries/<lang>/textobjects.scm`, and `nvim-treesitter-textobjects/LICENSE`.
+- **`//bazel/nvim-treesitter-textobjects:nvim_treesitter_textobjects_tree`** — an `alias` to `@nvim_treesitter_textobjects//:nvim_treesitter_textobjects_tree`. Pure Lua (arch-independent), so there is no `select()`: a single repo. The actual target is a `copy_to_directory` TreeArtifact whose contents are `nvim-treesitter-textobjects/lua/nvim-treesitter-textobjects/**`, `nvim-treesitter-textobjects/queries/<lang>/textobjects.scm`, and `nvim-treesitter-textobjects/LICENSE`.
 - **`//bazel/nvim-treesitter-textobjects:nvim_treesitter_textobjects_tree_test`** — an `sh_test` over `:nvim_treesitter_textobjects_tree`: asserts the `lua/nvim-treesitter-textobjects/` module directory and at least one `queries/**/textobjects.scm` landed inside the tree's inner `nvim-treesitter-textobjects/` dir.
 
 ## How it works
 
-`extensions.bzl` is a bzlmod module extension that declares a single `http_archive` repo (`nvim_treesitter_textobjects`) for the pinned source tarball. Its overlay `BUILD` file globs the vendored subtrees (`lua/`, `queries/`, `LICENSE*`) under the archive's top dir, `nvim-treesitter-textobjects-<commit>/` (deliberately excluding dev-only `tests/`, `scripts/`, `doc/`, `README.md`, and dotfiles; `main` ships no `plugin/` loader), then runs `@aspect_bazel_lib//lib:copy_to_directory` to assemble them into one TreeArtifact, **remapping** the archive's top dir to `nvim-treesitter-textobjects/` via `replace_prefixes`. Because textobjects `main` keeps its queries at the archive root (it did not move them under `runtime/`), the inner-dir remap is the only prefix rewrite needed.
+`extensions.bzl` is a bzlmod module extension that declares a single `http_archive` repo (`nvim_treesitter_textobjects`) for the pinned source tarball. Its overlay `BUILD` file globs the vendored subtrees (`lua/`, `queries/`, `LICENSE*`) under the archive's top dir, `nvim-treesitter-textobjects-<commit>/`, deliberately excluding dev-only `tests/`, `scripts/`, `doc/`, `README.md`, and dotfiles.
+
+It then runs `@aspect_bazel_lib//lib:copy_to_directory` to assemble them into one TreeArtifact, remapping the archive's top dir to `nvim-treesitter-textobjects/` via `replace_prefixes`. Because the queries stay at the archive root, that inner-dir remap is the only prefix rewrite needed.
 
 The inner directory is deliberate: `rules_apple` strips the bundled TreeArtifact's _own_ top-level directory name when copying it into `Contents/Resources/`. Nesting everything under `nvim-treesitter-textobjects/` reliably yields `Contents/Resources/nvim-treesitter-textobjects/...`.
 

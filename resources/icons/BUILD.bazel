@@ -8,3 +8,10 @@ exports_files(
     ],
     visibility = ["//crates/wolf-macos:__pkg__"],
 )
+
+# This package's docs, for `//tools/lint:markdown`.
+filegroup(
+    name = "markdown_srcs",
+    srcs = ["README.md"],
+    visibility = ["//tools/lint:__pkg__"],
+)

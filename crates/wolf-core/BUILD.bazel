@@ -12,6 +12,20 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files(["Cargo.toml"])
 
+# This crate's docs, for `//tools/lint:markdown`. Bazel forbids cross-package
+# globbing, so each package exposes its own `markdown_srcs`.
+filegroup(
+    name = "markdown_srcs",
+    srcs = glob(
+        [
+            "**/README.md",
+            "DECISIONS.md",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//tools/lint:__pkg__"],
+)
+
 # wolf-core's LIBRARY unit tests: the `#[cfg(test)] mod tests` modules inside
 # `src/**` (e.g. rank.rs, layout.rs). These are PURE — no Neovim, no filesystem,
 # no GUI — so they need no runfiles and no `no-sandbox` tag. `crate = ":wolf_core"`

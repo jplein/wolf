@@ -2,7 +2,7 @@
 
 Hermetic, pinned **orlando** Neovim plugin for bundling into `Wolf.app`.
 
-This package downloads the pinned GitHub source tarball for the pure-Lua orlando plugin (sha256-pinned, fetched by Bazel — no system or PATH dependency), assembles it into a structure-preserving directory artifact, and exposes it for bundling. `//crates/wolf-macos:Wolf` bundles the result at `Contents/Resources/orlando/`, and the captive `runtime/nvim/init.lua` conditionally prepends it to `runtimepath` and sources `plugin/orlando.lua`. The load is a strict no-op when the tree is absent (Linux/cargo).
+This package downloads the pinned GitHub source tarball for the pure-Lua orlando plugin (sha256-pinned, fetched by Bazel — no system or `PATH` dependency), assembles it into a structure-preserving directory artifact, and exposes it for bundling. `//crates/wolf-macos:Wolf` bundles the result at `Contents/Resources/orlando/`, and the captive `runtime/nvim/init.lua` conditionally prepends it to `runtimepath` and sources `plugin/orlando.lua`. The load is a strict no-op when the tree is absent (Linux/cargo).
 
 ## The pin
 
@@ -13,7 +13,7 @@ This package downloads the pinned GitHub source tarball for the pure-Lua orlando
 
 ## Targets
 
-- **`//bazel/orlando:orlando_tree`** — an `alias` to `@orlando//:orlando_tree`. Unlike `//bazel/nvim` there is **no** `select()`: orlando is pure Lua and therefore arch-independent, so there is a single repo. The actual target is a `copy_to_directory` TreeArtifact whose contents are `orlando/plugin/orlando.lua`, `orlando/lua/orlando/**`, `orlando/doc/**`, and `orlando/LICENSE*`. This is the value bundled into the app and exercised by the smoke test.
+- **`//bazel/orlando:orlando_tree`** — an `alias` to `@orlando//:orlando_tree`. Unlike `//bazel/nvim` there is no `select()`: orlando is pure Lua and therefore arch-independent, so there is a single repo. The actual target is a `copy_to_directory` TreeArtifact whose contents are `orlando/plugin/orlando.lua`, `orlando/lua/orlando/**`, `orlando/doc/**`, and `orlando/LICENSE*`. This is the value bundled into the app and exercised by the smoke test.
 - **`//bazel/orlando:orlando_tree_test`** — an `sh_test` over `:orlando_tree`: asserts `plugin/orlando.lua` and `lua/orlando/init.lua` landed at the expected paths inside the tree's inner `orlando/` dir.
 
 ## How it works
@@ -21,7 +21,7 @@ This package downloads the pinned GitHub source tarball for the pure-Lua orlando
 `extensions.bzl` is a bzlmod module extension that declares a single `http_archive` repo (`orlando`) for the pinned source tarball. It gets an overlay `BUILD` file (`build_file_content`) that:
 
 1. globs the vendored subtrees (`plugin/`, `lua/`, `doc/`, `LICENSE*`) under the archive's top dir, `orlando-<commit>/` (deliberately excluding dev-only `test/`, `flake.*`, `.luarc.json`, `README.md`), and
-2. runs `@aspect_bazel_lib//lib:copy_to_directory` to assemble them into a single TreeArtifact, **remapping** the archive's top dir to `orlando/` via `replace_prefixes` (NOT `http_archive`'s `strip_prefix`).
+2. runs `@aspect_bazel_lib//lib:copy_to_directory` to assemble them into a single TreeArtifact, remapping the archive's top dir to `orlando/` via `replace_prefixes` rather than `http_archive`'s `strip_prefix`.
 
 The `orlando/` inner directory is deliberate: `rules_apple` strips the bundled TreeArtifact's _own_ top-level directory name when copying it into `Contents/Resources/`. By nesting everything under `orlando/`, the app reliably gets `Contents/Resources/orlando/...`.
 

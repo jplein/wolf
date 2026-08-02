@@ -1,139 +1,383 @@
 # wolf-ffi/tests
 
-Integration tests for the `wolf-ffi` bridge surface. They drive the **Rust half** of the swift-bridge boundary directly — no Swift, no AppKit, no window — exactly as the generated Swift glue eventually will. Each test is its own binary (see `BUILD.bazel` for the full list; not every binary is documented here yet), sharing the `common/` helper.
-
-## `frame_pack.rs`
-
-Headless, deterministic coverage of `FfiFrame`'s snapshot → frame packing. It builds a `wolf_core::Snapshot` **by hand** (no nvim, no `WolfCore`) and asserts exactly what `FfiFrame::from_snapshot` produces: explicit-highlight color packing to `0x00RRGGBB` with `set = true`; unset colors packing to `set = false, rgb = 0`; the style-flag bitset (bold/italic/underline/undercurl/strikethrough) packing to exact bits; that `reverse` is applied **once** by `HighlightTable::resolve` and not re-swapped by the bridge; cursor shape → `u8`; `cursor_visible` true only on the active grid; the reverse-video cursor `fill`/`glyph` (plain inversion, the mode-cursor `attr_id` override when distinct, and the `WolfCursor` theme override — a set `theme.cursor.bg` wins as the fill, a bg-only theme keeps the reverse-video glyph as the cell bg, and the theme beats an otherwise-honorable mode cursor attr); the default fg/bg; and that `cells()` is a dense row-major `cols * rows` grid. It needs no `WOLF_NVIM_BIN` and runs **regardless** — real, non-mock coverage of the resolution/packing logic that otherwise only runs when a live nvim is present.
-
-## `bridge_smoke.rs`
-
-The real-nvim smoke test. It drives a hermetic, pinned Neovim through the bridge — **no mocks**, per the project testing policy — constructing `FfiKeyEvent`s by hand and calling `wolf_ffi_start` → `read_frame` (dims/cursor sane, `cells()` == `cols * rows`) → `send_key` (`i` then `x`, polling `read_frame` until the typed `x` appears) → `resize` (polling until the dims update) → `shutdown`. Because the `FfiFrame` surface exposes no `seq`, it **polls** `read_frame` on a timeout rather than keying on a flush counter (the same pattern wolf-core's `current_file` / multigrid tests use).
-
-It runs for real on Linux/Cargo devShells and **passes under `bazel test` on the macOS Bazel host** too: the `bridge_smoke` target stages the captive `init.lua` and the pinned Neovim tree (`//bazel/nvim:nvim_tree`) as runfiles (via `data` + the `$(rootpath)` env vars `WOLF_TEST_INIT_LUA` / `WOLF_TEST_NVIM_DIR`), so a real nvim is always available to drive hermetically; an explicit `WOLF_NVIM_BIN` still wins. Because spawning a real nvim child does not work under the macOS build sandbox, the test runs `tags = ["no-sandbox"]` (unsandboxed, but still test-result-cached). Unlike the wolf-core suite (which panics when no nvim is available), this test **loudly SKIPs** (a no-op pass with a stderr banner) only when NEITHER an explicit `WOLF_NVIM_BIN` NOR the staged tree is available. It never calls the Swift wake — the Swift-free `extern "C"` wake path means `wolf_ffi_start` links and runs with no Swift runtime present.
-
-## `unicode_key.rs`
-
-The real-nvim coverage of the COMPOSED-CHARACTER delivery path behind the macOS **option-as-option** feature (Bazel target `//crates/wolf-ffi:unicode_key`) — **no mocks**, modeled on `bridge_smoke.rs` (same `common/` helpers, same `data` / `$(rootpath)` env runfile staging, same `tags = ["no-sandbox"]` unsandboxed run, same loud-SKIP gate, same `read_frame()` polling). It is the Rust-side proof for the Swift `KeyComposer` → `KeyComposition.charEvents` → `send_key` path: the AppKit/Carbon composition glue is not headlessly testable, but the composed SCALAR crossing the FFI bridge and reaching nvim IS. A single `#[test]` (`composed_scalar_lands_in_buffer`) constructs `FfiKeyEvent`s by hand (each a modifier-free `{ kind: char, ch, all mods false }` — exactly what `KeyComposition.charEvents` emits per composed scalar): after `wolf_ffi_start` it enters insert mode (`i`) and sends the composed `ü` (U+00FC) as ONE event, polling `read_frame()` until the glyph appears in the grid; then it sends a two-scalar run (`é` then `ü`, both modifier-free — wolf-core fuses the run into one `nvim_input`) and polls until both land in order, before `shutdown()`.
+Integration tests for the [`wolf-ffi`](../README.md) bridge surface. Most drive a real, pinned Neovim rather than a mock, because what is under test is a live RPC round-trip across the FFI boundary.
 
 ```sh
-bazel test //crates/wolf-ffi:unicode_key
+cargo test -p wolf-ffi                     # all of them, on the Linux and Nix path
+bazel test //crates/wolf-ffi:bridge_smoke  # one target, on the macOS Bazel host
 ```
 
-## `file_search.rs`
+## Adding a test file
 
-The real-nvim coverage of the file-picker surface — **no mocks**, modeled on `bridge_smoke.rs` (same `common/` helpers, same `data` / `$(rootpath)` env runfile staging, same `tags = ["no-sandbox"]` unsandboxed run, same loud-SKIP gate via `nvim_bin_or_skip`). It seeds a temp cwd with a couple of `.md` files, calls `wolf_ffi_start` there, opens a session with `start_file_search()`, and **polls** `ranked("", N)` until the background traversal streams the created files in; it then asserts the displays are present, that `path()` is absolute (under the cwd) while `display()` is the relative name, and that a focused query (e.g. `ranked("alpha")`) ranks the matching file first. Finally it issues `open(path())` and confirms the core survives the round-trip (it cannot assert the exact opened buffer name — `FfiFrame` exposes no `current_file` accessor, and the test does not add one — so `open` is checked at the round-trip-survives level, `ranked` correctness strongly).
+Cargo discovers every `tests/*.rs`. **Bazel does not.** A new file needs a matching `rust_test` target in [`../BUILD.bazel`](../BUILD.bazel) or it runs under `cargo test` alone, which makes it a silent macOS-only gap. Mirror an existing sibling of the same kind:
 
-A second test, `file_search_bounds_large_tree`, is the real-traversal guard for the BOUNDED ranking (`FfiFileSearch::ranked` now delegating to `wolf_core::rank_matches_top_n`): it seeds a large temp tree (thousands of files, many sharing an `alpha`-matching name plus one root `alpha.md`), polls `ranked("", MAX_RESULTS)` until the walk streams in, then asserts `ranked("alpha", MAX_RESULTS)` returns EXACTLY `MAX_RESULTS` rows (bounded — the top-N select never returns the whole match set), ranks the root `alpha.md` first, and that every returned `display()` still contains the query as a subsequence.
+- **Real-nvim** — stages `//bazel/nvim:nvim_tree` and `//runtime/nvim:init.lua` as `data`, wires `WOLF_TEST_NVIM_DIR` / `WOLF_TEST_INIT_LUA` via `$(rootpath)`, lists `tests/common/mod.rs` in `srcs`, and carries `tags = ["no-sandbox"]` because spawning a child nvim does not work under the macOS build sandbox. Results are still cached.
+- **Headless** — none of that: no `data`, no env, no tag, no `common/`.
 
-## `file_actions.rs`
+Some targets stage more: `search` adds `//bazel/rg:rg_tree` and wires `WOLF_RG_BIN`; `orlando_load` and `lighthouse_load` add their vendored plugin trees; the `treesitter_*` targets add the parser and `nvim-treesitter` trees. Each entry below says which kind it is and what it needs.
 
-The real-nvim coverage of the file-action handle methods (`file_actions_chdir_and_new_buffer`) — **no mocks**, modeled on `commands.rs` (same `common/` helpers, same `data` / `$(rootpath)` env runfile staging, same `tags = ["no-sandbox"]` unsandboxed run, same loud-SKIP gate, plus `tempfile`). After attach it `chdir`s to a fresh temp directory and polls `cwd()` until it equals the canonicalized target, then `open`s a seeded file (polling `current_file()` until it matches) and `new_buffer()`s (`:enew`), polling `current_file()` back to the empty string, before `shutdown()`. (This test formerly exercised `close_buffer()`/`:bdelete`; the `:close` split-drop path moved to `close_pane.rs`.)
+## The shared harness — `common/mod.rs`
 
-## `close_pane.rs`
+The shared harness for every `wolf-ffi` bridge test. It mirrors `crates/wolf-core/tests/common/mod.rs` with one deliberate policy difference: where the wolf-core suite panics without a real nvim, these tests skip loudly, so a host that cannot provision the pinned Neovim is a no-op pass rather than a failure.
 
-The real-nvim coverage of the `close_pane()` handle method (`:close`) — **no mocks**, modeled on `panes.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate). After attach it types `:vsplit` to reach two live editor grids (`windows()`), then calls `handle.close_pane()` **directly over RPC** (which bypasses init.lua's interactive `:close` override — `nvim_command` is not the typed Ex-command), and polls `windows()` back to a single live grid.
+- `nvim_bin_or_skip()` — the skip gate. An explicit `WOLF_NVIM_BIN` wins, then the staged pinned tree via `WOLF_TEST_NVIM_DIR`. A caller that gets `None` must return from the test; panicking or asserting success instead defeats the policy, and the stderr banner is what keeps a misconfigured environment from reading as real coverage.
+- `init_lua_path()` — resolves the captive `runtime/nvim/init.lua`, preferring the staged runfile over the `CARGO_MANIFEST_DIR` fallback. Under Bazel that manifest path is an ephemeral sandbox directory absent at test runtime, and nvim launched with a missing `-u` file blocks forever on its `Press ENTER` prompt, hanging startup.
+- `orlando_dir_or_none()`, `lighthouse_dir_or_none()`, `parsers_dir_or_none()`, `nvim_treesitter_dir_or_none()` — staged vendored-tree resolvers that return `None` off Bazel so the dependent test skips instead of failing.
+- `copy_dir_recursive()` — stages a sibling tree next to a temp `init.lua` for the tests whose Lua self-locates its siblings. It classifies entries with `std::fs::metadata`, which follows symlinks, because Bazel runfiles entries are symlinks that `DirEntry::file_type` would skip.
+- `fresh_cwd()` — a unique temp dir that is deliberately not auto-deleted: it is nvim's working directory and file-search root, so it must outlive `wolf_ffi_start`.
+- `DEFAULT_COLS` / `DEFAULT_ROWS` — the starting grid size the smoke-style tests attach with.
 
-```sh
-bazel test //crates/wolf-ffi:close_pane
-```
+## Files
 
-## `copy_paste.rs`
+#### `appearance.rs`
 
-The real-nvim coverage of the copy/paste + visual-mode handle surface (`is_visual_mode()` / `copy_selection()` / `paste(text)`, Bazel target `//crates/wolf-ffi:copy_paste`) — **no mocks**, modeled on `close_pane.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate, same `read_frame` live-grid polling). A single `#[test]` (`copy_selection_and_paste_round_trip`): after attach it confirms a fresh buffer is NOT visual (`is_visual_mode() == false`), types a known word (`i` + `WOLF` + `<Esc>`), enters a character-wise selection (`0 v e`), polls `is_visual_mode()` true and asserts `copy_selection()` contains the word, then `<Esc>` back to normal (`is_visual_mode() == false`), and finally `paste("Z")` polling `read_frame()` until the glyph appears in the grid. It exercises the discriminant-free handle methods (the `:WolfCopy`/`:WolfPaste` drained-command discriminants `14`/`15` are covered by `commands.rs`).
+**Covers**
 
-```sh
-bazel test //crates/wolf-ffi:copy_paste
-```
+`WolfCoreHandle::set_background(dark)` flipping the captive Neovim's global `&background`. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:appearance` target stages the nvim runfiles and is tagged `no-sandbox`.
 
-## `buffer_picker.rs`
+**Gotchas**
 
-The real-nvim coverage of the buffer-picker session + view round-trip (Bazel target `//crates/wolf-ffi:buffer_picker`) — **no mocks**, modeled on `command_palette.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate, same `read_frame` live-grid polling). A single `#[test]` (`buffer_picker_lists_switches_and_restores_view`): it seeds a temp cwd with a few `.md` files, opens buffers A then B a strict second apart (a `sleep(1100ms)` straddled by `wait_for_active_filename` before/after, so B gets a later `lastused` second than A — `getbufinfo().lastused` has 1-second resolution, and equal `lastused` correctly tie-breaks by `bufnr` ASC per the headless `buffer_rank` spec), plus a `:badd` buffer C that is listed-but-unloaded (proving `list_buffers` filters by `buflisted`, not loadedness) and an unlisted buffer that must NOT appear. It asserts `buffer_picker().ranked("", N)` lists the `buflisted` buffers MRU-first (B before A before C), switches the active pane via `switch_buffer(bufnr)` (observing the change through `FfiFrame`), and checks the per-`(winid, bufnr)` VIEW round-trip: scroll buffer A (capture `topline() > 0`), switch to B, switch back to A, and assert the topline is RESTORED; a buffer the pane never showed opens at the top (`topline() == 0`).
+- The bridge exposes no `&background` accessor. A case observes it indirectly, by setting `WolfCursor guibg` to a marker chosen by the live option and reading `FfiFrame::cursor_fill()` back.
+- A plain `:hi` does not fire `ColorScheme`, so the marker must be followed by `:doautocmd ColorScheme` or the theme tracker never re-emits.
+- The captive `init.lua` launches with `&background` dark, so that is the baseline a new case starts from.
 
-```sh
-bazel test //crates/wolf-ffi:buffer_picker
-```
+#### `attribute_highlight.rs`
 
-## `preview.rs`
+**Covers**
 
-The real-nvim coverage of the Markdown-preview bridge surface (Bazel target `//crates/wolf-ffi:preview`) — the `is_markdown_active()` gate, the `open_preview(mode)` mechanism (single-pane split-right, multi-pane active, and the two-pane `reuse_preview_pane` path + its fallback), the `previews()` snapshot + `FfiPreview` accessors (`win` / `source_bufnr` / `source_name` / `source_path` / `source_display_path` / `source_tick`), and `render_preview(source_bufnr)` — **no mocks**, modeled on `buffer_picker.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate, same `read_frame()` / `windows()` / `previews()` live polling; it imports `wolf_ffi::FfiPreview` from the crate root). It seeds a temp cwd with `alpha.md` + `notes.txt`, then asserts: `:e alpha.md` polls `is_markdown_active()` true and `:e notes.txt` polls it false; back on `alpha.md`, `open_preview("split_right")` grows the editor grids to two and `previews()` yields ONE entry whose `source_name() == "alpha.md"` carries alpha's source bufnr and whose `source_display_path()` is non-empty and `ends_with("alpha.md")` (the preview pane's secondary statusbar line, computed via `WolfCore::display_path`); `render_preview(bufnr)` contains the heading + `id="wl-1-0"` + `id="alpha-heading"` (the computed heading slug shipped through nvim); typing into the source advances that preview's `source_tick()` (the live-update path); the buffer picker (`buffer_picker().ranked("", N)`) surfaces a row whose `display()` begins `Preview: alpha.md` (proving the scratch buffer is `buflisted`); and with two panes `open_preview("active")` replaces the active window's buffer; finally `shutdown()` yields neutral values. Two more tests (seeding the cwd with `alpha.md` AND `beta.md`) cover the reuse path: `preview_reuses_the_other_preview_pane` opens alpha's preview to the RIGHT, switches the source window to `beta.md` (deterministically confirmed via a `wait_for_current_file` poll before the reuse call — the source→source transition can't rely on `wait_for_markdown_active`), then `open_preview("reuse_preview_pane")` and asserts beta's preview bound INTO the existing preview window (same `win()`, no new pane, the active window unchanged, alpha's preview row gone, `is_markdown_active()` still true); `preview_reuse_falls_back_to_active_when_no_other_preview` makes a second EDITOR pane (neither a preview) and asserts `open_preview("reuse_preview_pane")` binds into the ACTIVE window (the fallback) with no new pane. A further test, `preview_file_repoints_pane_to_linked_file` (seeding `alpha.md` — with a `[to beta](beta.md#beta-heading)` link + a heading — plus `beta.md` (`# Beta Heading`) and `notes.txt`), covers the **link-follow bridge** (`preview_file(win, path)`): `:e alpha.md`, `open_preview("split_right")`, capture the preview `win`, then `handle.preview_file(win, <abs beta.md>)` returns `> 0` and `previews()` polls until the row for `win` reports `source_name() == "beta.md"` (same window count — the pane repointed, no new pane), with `render_preview(beta_bufnr)` containing `"Beta Heading"` + `id="beta-heading"`; the negative `preview_file(win, <abs notes.txt>)` returns `0` with `previews()` unchanged; and post-`shutdown()` returns `0`. A final test, `preview_picker_shows_cwd_relative_path_for_subdir_source` (seeding `docs/alpha.md` in a SUBDIR so the `fnamemodify(source_path, ":.")` naming is actually witnessed rather than collapsing to a bare basename), asserts the buffer-picker row `display().starts_with("Preview: docs/alpha.md")` and that the matching `previews()` entry's `source_display_path().ends_with("docs/alpha.md")`.
+Per-cell text attributes (`FfiCell::flags()`) and the special/underline color (`FfiCell::special()`) crossing the bridge, driven by an `nvim_set_hl` group applied with `matchadd`. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:attribute_highlight` target stages the nvim runfiles and is tagged `no-sandbox`.
 
-```sh
-bazel test //crates/wolf-ffi:preview
-```
+**Gotchas**
 
-## `edit.rs`
+- The bit values are copied from `mod flag` in `src/lib.rs`; a new attribute case must mirror that layout rather than inventing bits.
+- The styled repaint lags the `:lua` command by a frame or two, so the cell is located by its glyph text and polled.
 
-The real-nvim coverage of the Edit-command bridge surface (Bazel target `//crates/wolf-ffi:edit`) — the `is_preview_active()` gate and the `edit_source(mode)` mechanism (`split_left` / `reuse_editor_pane` / `active` + the reuse fallback + the not-a-preview negative) — **no mocks**, modeled on `preview.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate, same `read_frame()` / `windows()` / `previews()` live polling). It seeds a temp cwd with `alpha.md` + `notes.txt` and asserts: `is_preview_active()` is false on the `alpha.md` source buffer and flips true after `open_preview` + focusing the preview window; `edit_source("split_left")` from a single preview pane grows the editor grids (a new pane), binds the source into a non-preview window, leaves ONE preview, and returns alpha's source bufnr; `edit_source("reuse_editor_pane")` (with a second, non-preview editor pane present) binds the source into + focuses that OTHER editor window with no new pane; `edit_source("active")` replaces the active preview's buffer; the reuse fallback (no other editor → binds the active window, no new pane); and the negative case (not a preview → returns `0`, nothing changes); finally `shutdown()` yields neutral values.
+#### `bridge_smoke.rs`
 
-```sh
-bazel test //crates/wolf-ffi:edit
-```
+**Covers**
 
-## `history.rs`
+The baseline handle lifecycle: `wolf_ffi_start`, `read_frame` (dense `cols * rows` cells, cursor in bounds), `send_key` with hand-built `FfiKeyEvent`s, `resize`, `shutdown` — no Swift involved. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:bridge_smoke` target stages the nvim runfiles and is tagged `no-sandbox`.
 
-The real-nvim coverage of the **per-pane navigation-history** bridge surface (Bazel target `//crates/wolf-ffi:history`, two tests) — the six `WolfCoreHandle` methods `history_can_back` / `history_can_forward` / `history_back` / `history_forward` / `history_jump` / `history_entries` plus the opaque `FfiHistoryEntry` accessors — **no mocks**, mirroring `//crates/wolf-ffi:preview` exactly (same `common/` helpers, same runfile staging, same loud-SKIP gate, same live polling). Core owns the history and is covered in depth by `//crates/wolf-core:nav_history` / `:nav_history_live`; these two tests pin what the BRIDGE adds — that the methods follow core, that the `u32` index round-trips, and that a shut-down core degrades neutrally.
+**Gotchas**
 
-- `history_bridge_tracks_navigation_back_forward_and_jump` — seeds a temp cwd with three Markdown files, navigates between them, and asserts `history_can_back` / `history_can_forward` follow core; that `history_entries(win)` returns opaque rows whose `display()` / `index()` / `is_current()` match the expected newest-first, at-most-one-checkmark shape; that `history_back` returns `true` and actually moves the pane; that `history_forward` returns; and that `history_jump(win, index)` moves the pane to the row's own `index()` and returns `true`, while an out-of-range index returns `false`.
-- `history_bridge_is_neutral_for_unknown_windows_the_drawer_and_after_shutdown` — the neutral-fallback contract every sibling asserts: an unknown `win` and the terminal DRAWER's window both yield `false` / `false` / an empty `Vec`, and after `shutdown()` every one of the six methods returns `false` / `false` / `false` / empty.
+- `FfiFrame` carries no snapshot `seq`, so every assertion polls `read_frame()` to a timeout rather than keying on a flush counter. Prefer a sequence accessor if one is ever added.
+- `resize` drives the global UI size while `read_frame()` reports the active-window grid: the width matches the request exactly, the height is the request minus the cmdline row(s), so height assertions need a small tolerance.
 
-```sh
-bazel test //crates/wolf-ffi:history
-```
+#### `buffer_picker.rs`
 
-## `appearance.rs`
+**Covers**
 
-The real-nvim coverage of the `set_background(dark:)` handle method over the bridge (Bazel target `//crates/wolf-ffi:appearance`) — **no mocks**, modeled on `file_actions.rs` / `close_pane.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate). After `wolf_ffi_start`, it flips nvim's global `&background` via `handle.set_background(false)` / `set_background(true)`, observing the change indirectly through the `WolfCursor` marker technique: a marker `guibg` chosen by the live `&background`, read back through `FfiFrame::cursor_fill()` (the bridge exposes no `&background` accessor). It relies on the input-channel FIFO ordering so the `SetBackground` event applies before the marker keystrokes. The headless discriminant half — that `wolf_ffi_load_config().appearance()` round-trips `appearance: dark|light|auto` → `1`/`2`/`0` (and an absent key → `0`) — is covered by `config.rs` (the `:config` target).
+`buffer_picker()` and its `ranked(query, max)` (buflisted-only, most-recently-used first), the window-scoped `switch_buffer(bufnr)`, and the per-`(winid, bufnr)` view round-trip. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:buffer_picker` target stages the nvim runfiles and is tagged `no-sandbox`.
 
-```sh
-bazel test //crates/wolf-ffi:appearance
-```
+**Gotchas**
 
-## `terminal.rs`
+- The picker snapshots `list_buffers()` at construction, so a case that creates a buffer must call `buffer_picker()` again to see it.
+- `getbufinfo().lastused` has one-second resolution. The fixture sleeps past a second boundary between opening two buffers and awaits each becoming current on either side, because `send_ex_command` is fire-and-forget and the keystrokes would otherwise drain together and tie on `lastused`.
 
-The real-nvim coverage of the TERMINAL-DRAWER handle surface (`WolfCoreHandle::toggle_terminal()`, Bazel target `//crates/wolf-ffi:terminal`) — **no mocks**, modeled on `file_actions.rs` / `buffer_picker.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate, same "poll `read_frame()` until attached" pattern). It drives `toggle_terminal()` (the HANDLE method that actually runs the `wolf_toggle_terminal()` helper) rather than `:WolfTerminal` — the Ex-command would only enqueue an `FfiCommand` with no front-end dispatcher present to call the method back (that pure-FFI discriminant drain, `:WolfTerminal` → `command_kind` 20, is covered by the extra `:WolfTerminal` step in `commands.rs`). Terminal buffers are detected by the `term://` name prefix on the `buffer_picker().ranked("", N)` snapshot (they are `buflisted`, and the picker leaves a `term://` display name untouched — OD7), and the drawer WINDOW open/hide via `windows().len()`. A single `#[test]` (`terminal_toggle_persists_and_recreates`) walks the whole lifecycle against one embedded nvim: **open** (`toggle_terminal()` → window count `base + 1`, exactly one `term://` buffer, record its `bufnr` as `first`), **drawer-open intent** (the open path additionally emits a `LayoutIntent::DrawerOpen { win }` → `FfiLayoutIntent { kind: intent_kind::DRAWER_OPEN = 2, win }`; since nothing drains intents here they ACCUMULATE, so the test polls `drain_intents()` for `kind() == 2` and asserts `win() != 0` — the intent that makes the drawer render as a root-bottom pane), **hide/persist** (toggle → back to `base`, the `first` buffer STILL listed — the window closed but the buffer/job survive; the HIDE path emits NO intent, the front-end observing the `win_close`), **reopen/reuse** (toggle → `base + 1`, the `term://` row's `bufnr` still `first`), and **recreate-if-gone** (`<C-\><C-n>` to leave terminal-insert, then `:bwipeout!` the focused terminal, poll until no `term://` row remains, then toggle → a FRESH terminal whose `bufnr != first`), before `shutdown()`. The `DRAWER_OPEN = 2` assertion is on the LAYOUT-INTENT table and is untouched by the command renumbering.
+#### `close_pane.rs`
 
-```sh
-bazel test //crates/wolf-ffi:terminal
-```
+**Covers**
 
-## `tabpages.rs`
+`close_pane()` dropping one split, counted through `windows()` (non-hidden grids at or above the first editor grid). Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:close_pane` target stages the nvim runfiles and is tagged `no-sandbox`.
 
-The real-nvim coverage of the TABPAGE bridge surface (Bazel target `//crates/wolf-ffi:tabpages`) — the per-project/tabpage-per-view handle methods the macOS front-end drives (`current_tabpage` / `create_tabpage` / `active_tabpage` / `set_current_tabpage` / `cwd_for_tabpage` / `close_tabpage`) — **no mocks**, modeled on `panes.rs` / `close_pane.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate, same `read_frame()` / `windows()` live-grid polling). A single `#[test]` (`tabpage_lifecycle_over_the_bridge`, mutating the process-global `WOLF_STATE_DIR` for shutdown-flush hygiene): attach → `current_tabpage()` is a nonzero first-view bind T1 that `active_tabpage()` also reports → `create_tabpage(dirB)` yields a distinct T2 that becomes current with a FRESH window and a non-empty per-grid frame → `set_current_tabpage(t1)` rebinds w1 to a live grid. The **grid re-bind keystone (OD2)**: `:vsplit` on T1 (two windows), switch to T2 and back, and assert each window handle re-resolves via `grid_for_win` to a live, paintable grid. Then `cwd_for_tabpage(t2)` returns dirB while T2 is NON-current; `close_tabpage(t2)` keeps the core alive (T1 still readable) while T2's handle goes invalid; finally `shutdown()` and confirm the handle calls return neutral values (`active_tabpage()` / `current_tabpage()` == 0, `read_frame().cols()` == 0, `cwd_for_tabpage()` empty).
+**Gotchas**
 
-```sh
-bazel test //crates/wolf-ffi:tabpages
-```
+- Drive the handle method, not a typed `:close<CR>`: the captive `init.lua` intercepts the interactive Ex command, while the method issues `nvim_command("close")` over RPC and bypasses it. Only the setup `:vsplit` is typed.
 
-## `pane_status.rs`
+#### `cmdline_ui.rs`
 
-The real-nvim coverage of the per-pane statusbar bridge surface (Bazel target `//crates/wolf-ffi:pane_status`) — **no mocks**, modeled on `panes.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate via `nvim_bin_or_skip`). It seeds a fresh temp cwd with `alpha.md` / `beta.md`, calls `wolf_ffi_start` there, polls `read_frame()` until attached and `windows()` down to one editor grid, then `:e alpha.md` and polls `pane_status_for_grid(grid).filename()` until it reports `alpha.md` with a non-empty `display_path()`. After a `:vsplit` (polling `windows()` to two grids) and `:e beta.md` in the new window, it polls until the two window grids report DISTINCT filenames (`alpha.md` vs `beta.md`), proving the status is per-WINDOW rather than a single global value. It also asserts `pane_status_for_grid(grid).abs_path()` equals alpha.md's CANONICAL absolute path — the RAW, never-relativized buffer path core stored, which the macOS front-end persists as a pane-layout leaf path.
+**Covers**
 
-## `cmdline_ui.rs`
+The native command line, completion popup and message toast — `cmdline()`, `pum()` and `toast()`, including per-chunk colors resolved in Rust against the highlight table. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:cmdline_ui` target stages the nvim runfiles and is tagged `no-sandbox`.
 
-The real-nvim coverage of the native command-line / completion-popup / message-toast bridge surface (Bazel target `//crates/wolf-ffi:cmdline_ui`) — **no mocks**, modeled on `theme.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate, same `read_frame`/`cmdline`/`toast` polling). It seeds a temp cwd with `File A.md` / `File B.md` / `Something else.md`, types `:e Fi` and polls `handle.cmdline()` (active / firstc `:` / `text` / `pos > 0`); presses `Tab` and polls `handle.pum()` (visible / selected / item `word()` containing the `File *` entries); drives an echo and polls `handle.toast()` (visible / kind / line count / chunk `text()` / `fg()`); and asserts a key clears the toast. A second test, `emsg_toast_keeps_styled_color`, pins OD1: an `emsg`-kind message resolves a chunk `fg()` DISTINCT from a plain echo's default foreground (the toast keeps its STYLED color across the FFI, not flattened).
+**Gotchas**
 
-```sh
-bazel test //crates/wolf-ffi:cmdline_ui
-```
+- `emsg_toast_keeps_styled_color` asserts only that an `ErrorMsg` chunk's `fg()` differs from a plain echo's, never a fixed RGB. It would need softening if a future pinned colorscheme made `ErrorMsg` equal the default foreground.
+- Completion words can come back shell-escaped, so a filename comparison de-escapes first — the seeded fixture files deliberately contain spaces.
 
-## `state.rs`
+#### `code_block_highlight.rs`
 
-The HEADLESS coverage of the state-persistence bridge surface (Bazel target `//crates/wolf-ffi:state`) — **NO nvim** (the write side is a pure builder over the process-wide `SHARED_STORE` + a `Mutex` scratch tree, so no captive Neovim is needed), driven purely through `WOLF_STATE_DIR` like `config.rs`. It is deliberately a **single `#[test]`** (`snapshot_builder_round_trips_the_whole_tree`) because it mutates the process-global `WOLF_STATE_DIR` AND opens the process-wide `SHARED_STORE` `OnceLock`. The flow: with `WOLF_STATE_DIR` pointed at a tempdir, `wolf_ffi_load_state()` on the empty dir yields zero windows (and the file is never created); it builds a 2-window / 3-tab tree via `wolf_ffi_state_snapshot_begin` / `add_window(x,y,w,h)` / `add_tab(cwd, sidebar)` / `commit`, `wolf_ffi_state_flush()`es, and polls `wolf_ffi_load_state()` until the tree lands — asserting geometry + per-tab cwd/sidebar/order through the `FfiWindowState` / `FfiTabState` accessors and a pretty-printed version-1 `state.json`. It then drives the **pane-layout push-builder** (`wolf_ffi_state_layout_push_leaf(path, preview, weight)` / `push_split` / `commit_to_tab`) to attach a 2-leaf vertical split to the LAST tab, flushes + polls the load side until that tab reports `has_layout()`, and reads the tree back through `FfiTabState.layout()` + the recursive `FfiPaneNode` accessors (`is_leaf` / `is_preview` / `orientation` / `child_count` / `weight` / `child` / `leaf_path`) — the write→load→projection round-trip for the split tree. A ROUND-2 step then commits a split whose FIRST child is a PREVIEW leaf (`push_leaf(source_path, true, …)`) and second is a plain editor leaf, polls until the last tab's `layout().child(0).is_preview()`, and asserts each child's `is_preview()` (true / false) with the preview leaf's `leaf_path()` == its SOURCE markdown path. Finally an OLD flat (pre-tabs, no `tabs`) file overwritten in place loads back as zero windows and is preserved byte-for-byte.
+**Covers**
 
-## `multi_window.rs`
+End-to-end treesitter highlighting of fenced code blocks in `render_preview` output: a `go` fence yields inline color-styled spans, an unknown-language fence stays plain `<pre><code>`. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:code_block_highlight` target stages the nvim runfiles and is tagged `no-sandbox`.
 
-The real-nvim coverage of the MULTI-WINDOW wake-routing bridge surface (Bazel target `//crates/wolf-ffi:multi_window`) — **no mocks**, the sibling of `panes.rs` (same `common/` helpers, same runfile staging, same loud-SKIP gate). Deliberately a **single `#[test]`** because it registers the process-global wake callback (and sets `WOLF_STATE_DIR` for shutdown-flush hygiene). It starts TWO real cores at distinct cwds — `wolf_ffi_start(init_lua, cwd, cols, rows)` (4-arg; no `window_index`) — then asserts: **distinct identity** (`hA.wake_token() != hB.wake_token()`); **independent snapshots** (a marker typed into A appears in `hA.read_frame()` but never in B's); and **wake routing not clobbered** (a process-global `extern "C" fn(u64)` records per-token wake counts into a `Mutex<HashMap<u64,u32>>`, and driving input into A advances only A's token, driving B only B's — neither bumps the other). The former per-index state section is gone — the whole-tree snapshot round-trip is covered headlessly by `state.rs`.
+**Gotchas**
 
-## `orlando_bg_stress.rs`
+- It also needs `WOLF_TEST_NVIM_TREESITTER_DIR` and `WOLF_TEST_PARSERS_DIR`, and loud-skips when either is absent — without them the captive treesitter block self-degrades and there is nothing to assert.
+- The fixture rebuilds the bundle layout in a temp dir (`init.lua` beside sibling `nvim-treesitter/` and `parsers/`) because the captive block self-locates relative to the init file's own directory, and sanity-checks the staged `go.so` and injections query before paying for an nvim launch.
+- The styled-span probe omits the space in `color:#`, which the emitted CSS rules (`color: #`) do not match.
 
-Regression test for the "occasionally cells draw with the wrong background" bug (single default-black cells inside an orlando `OrlandoCodeBlock` gray region, persisting on screen). Root cause: Neovim ends many `grid_line` events with a zero-width clear-to-EOL cell `[" ", hl 0, repeat 0]`, and wolf-core's parser clamped `repeat` with `.max(1)`, writing a spurious default-highlight space one column past the event's real span; Neovim's shadow grid never has that cell, so it is never re-sent and the corruption persists until unrelated churn rewrites it. The test stages the vendored orlando (and lighthouse, when present) trees like `orlando_load`, opens a Markdown document with two fenced code blocks, then drives a seeded-random mix of scrolling, cursor motion, in-block edit+undo, and fence insert/delete churn; after every op it waits for the frame to go idle and asserts (1) every visible row's text equals the corresponding buffer line and (2) every cell of every code-block row shares one background, which must differ from the default bg so the check cannot pass vacuously. This reproduced the corruption deterministically before the fix. Seed and iteration count are overridable via `WOLF_STRESS_SEED` / `WOLF_STRESS_ITERS`.
+#### `command_palette.rs`
 
-## `common/mod.rs`
+**Covers**
 
-Shared helpers mirroring `crates/wolf-core/tests/common/mod.rs`, with the one deliberate policy difference (skip, not panic, when nvim is absent):
+A `command_palette()` session: static registry rows, `add_window` and recent-folder rows, and the `record` MRU round-trip observed through `ranked("")`. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:command_palette` target stages the nvim runfiles and is tagged `no-sandbox`.
 
-- `nvim_bin_or_skip()` — the skip gate: returns the nvim binary path, preferring an explicit `WOLF_NVIM_BIN`, else the binary inside the staged pinned tree (`WOLF_TEST_NVIM_DIR`, the `//bazel/nvim:nvim_tree` runfiles); returns `None` after printing a loud stderr banner only when neither is available (the caller then `return`s — a no-op pass).
-- `init_lua_path()` — resolves the captive `runtime/nvim/init.lua`, preferring the staged runfiles copy (`WOLF_TEST_INIT_LUA`) and falling back to the in-repo path under `CARGO_MANIFEST_DIR` (`crates/wolf-ffi`) for the cargo/devShell path. Using the staged runfiles under Bazel is what fixed the prior hang — `CARGO_MANIFEST_DIR` points at an ephemeral sandbox path that does not exist at test runtime, so nvim could not read its init and blocked on the "Press ENTER" prompt forever.
-- `fresh_cwd()` — a fresh, unique, **non-auto-deleted** temp dir for a core's `cwd` (it is nvim's working dir + file-search root, so it must outlive `wolf_ffi_start`; the recent-files MRU now lives in the global `state_dir()/file-mru.sqlite`, not under the cwd).
-- `DEFAULT_COLS` / `DEFAULT_ROWS` (80 × 24) — the smoke test's starting grid size.
+**Gotchas**
+
+- One `#[test]` per binary by design: the case points the process-global `WOLF_STATE_DIR` at a tempdir before `wolf_ffi_start`, and the MRU stores open under it exactly once at core start.
+- A session fixes its candidate rows and MRU order at construction, so observing a new window, recent dir or recorded key means opening a fresh `command_palette()`.
+- The palette excludes its own invoking command, so the highest static `command_kind` that appears as a row is one below `CommandPalette`.
+
+#### `commands.rs`
+
+**Covers**
+
+The command channel: typing each `:Wolf…` Ex command and draining an `FfiCommand` of the matching `kind()` from `drain_commands()`. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:commands` target stages the nvim runfiles and is tagged `no-sandbox`.
+
+**Gotchas**
+
+- The drains are inert — no front-end is present to act on them, so nothing closes, quits or opens. Only add commands whose observable effect stays confined to the queue; the editor-affecting halves are covered in their own files.
+- The file re-declares every `command_kind` discriminant locally and asserts the set is contiguous from zero, as a drift guard. A new `wolf_core::Command` variant means adding the const, extending both sides of that guard, and appending a drain case.
+
+#### `config.rs`
+
+**Covers**
+
+`wolf_ffi_load_config()` and the `FfiConfig` accessors: font family/size/line-height, the `appearance` discriminant, `macos_option_as_alt`, back-compat for absent keys, and default-file creation. Headless — it spawns no Neovim, and the `:config` target stages no runfiles and carries no `no-sandbox` tag.
+
+**Gotchas**
+
+- Every case points the process-global `WOLF_CONFIG_DIR` at its own tempdir and holds `ENV_LOCK` across the whole set/load/remove window. Cargo runs these concurrently in one process, so a new case must take the lock as well.
+- Expected defaults are duplicated from `wolf_core::config` and the font size is platform-split, so a default change has to be mirrored here.
+
+#### `copy_paste.rs`
+
+**Covers**
+
+`is_visual_mode()`, `copy_selection()` and `paste(text)` across a full editing round-trip: type a word, select it, copy, leave visual mode, paste. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:copy_paste` target stages the nvim runfiles and is tagged `no-sandbox`.
+
+**Gotchas**
+
+- The selection is built from keystrokes and the result checked by flattening the frame's cell texts, so cases stay free of exact coordinates.
+- The drained `:WolfCopy` / `:WolfPaste` command discriminants live in `commands.rs`; this file covers only the handle methods.
+
+#### `edit.rs`
+
+**Covers**
+
+The Edit surface: the `is_preview_active()` gate and `edit_source(mode)` for `split_left`, `reuse_editor_pane` and `active`, plus the reuse fallback with no other editor pane, the not-a-preview no-op, and neutral values after `shutdown()`. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:edit` target stages the nvim runfiles and is tagged `no-sandbox`.
+
+**Gotchas**
+
+- After `:e alpha.md` a case must wait on `current_file()`, not just `is_markdown_active()`: the startup buffer is already a markdown `Untitled.md`, so the markdown gate returns immediately and a synchronous `open_preview` or `edit_source` would race ahead of the buffered `:e`.
+- `edit_source` is gated on the active pane being a preview, so a case must cycle focus onto the preview window first.
+
+#### `file_actions.rs`
+
+Real-nvim coverage of the native file-action methods on `WolfCoreHandle`, all driven against one session in a single `#[test]`. Target `//crates/wolf-ffi:file_actions` stages the nvim runfiles and runs unsandboxed; without a pinned nvim (`WOLF_NVIM_BIN` or the staged tree) it loud-skips.
+
+**Covers**
+
+- `chdir` / `open` / `new_buffer`, each observed by polling `cwd()` or `current_file()` until it settles.
+
+**Gotchas**
+
+- The startup buffer is a named `Untitled.md`, which `chdir` re-homes into the target directory, so `new_buffer()`'s collision walk lands on `Untitled 2.md`; a case that changes the `chdir` sequence changes that name.
+- Path assertions canonicalize both sides — macOS temp dirs resolve `/var` to `/private/var`.
+
+#### `file_search.rs`
+
+Real-nvim coverage of the file-picker bridge: `start_file_search`, `FfiFileSearch::ranked`, and the `FfiFileEntry` accessors, seeded from a temp cwd. Target `//crates/wolf-ffi:file_search` stages the nvim runfiles and runs unsandboxed; loud-skips without a pinned nvim.
+
+**Covers**
+
+- Ranking and per-entry shape (`display()` relative, `path()` absolute and under the cwd), plus `ranked`'s bounding to the requested `max`.
+
+**Gotchas**
+
+- The traversal runs on a background worker, so every assertion polls `ranked` until the seeded files stream in.
+- `open` is only checked at the core-stays-responsive level: `FfiFrame` exposes no `current_file` accessor.
+- The bounding case seeds a few hundred matching files on purpose, so the top-N select is observably narrower than the match set.
+
+#### `frame_pack.rs`
+
+Headless, deterministic coverage of `FfiFrame::from_snapshot`: it builds a `wolf_core::Snapshot` by hand — no nvim, no `WolfCore`, no `tests/common/`. Target `//crates/wolf-ffi:frame_pack` needs no runfiles, no env, and no `no-sandbox` tag, so this is the packing coverage that still runs on a host with no nvim.
+
+**Covers**
+
+- Color packing and set/unset flags, the style-flag bitset, reverse-video resolution, cursor shape and visibility, cursor fill/glyph precedence (theme over mode attr over plain reverse video), and the dense row-major `cells()` grid.
+
+**Gotchas**
+
+- `from_snapshot` is public solely so this test can drive it without a live core.
+- The flag and cursor-shape discriminants are copied from `src/lib.rs`; they are the values under test, so keep them in sync by hand.
+- Build snapshots from `Snapshot::default()` plus field assignment — `..Snapshot::default()` fails with E0451 on the crate-private field.
+
+#### `full_width.rs`
+
+Real-nvim coverage of the per-buffer content-width toggle: `toggle_full_width`, `is_full_width_active`, `full_width_for_win`, and `FfiPreview::source_full_width`, plus `:WolfFullWidth` reaching the command channel. Target `//crates/wolf-ffi:full_width` stages the nvim runfiles and runs unsandboxed; loud-skips without a pinned nvim.
+
+**Gotchas**
+
+- Drive the handle method, not the Ex command: `:WolfFullWidth` only enqueues an `FfiCommand`, and no front-end dispatcher exists in-test, so it never flips the flag on its own.
+- After `:e alpha.md`, wait on `current_file()` rather than `is_markdown_active()`, which stays true across a markdown-to-markdown switch and returns immediately.
+- A split leaves the preview scratch pane active, so focus the markdown source before toggling or the flag lands on the wrong buffer.
+
+#### `history.rs`
+
+Real-nvim coverage of the per-pane navigation-history bridge — the six `WolfCoreHandle::history_*` methods and the opaque `FfiHistoryEntry` rows behind the History menu. Core owns the history and covers it in depth; these tests pin only what the bridge adds. Target `//crates/wolf-ffi:history` stages the nvim runfiles and runs unsandboxed; loud-skips without a pinned nvim.
+
+**Covers**
+
+- Rows follow core (newest-first, one `is_current()`, descending stack indices), `index()` round-trips through `history_jump`, and unknown windows, the terminal drawer, and a shut-down core all fall back to `false` / empty.
+
+**Gotchas**
+
+- The startup buffer is a named `Untitled.md`, so every pane's history carries an extra row; assert relative order and prefixes, never an absolute depth.
+- Each move is followed by a settle pause so the self-caused emit is absorbed before the next assertion.
+
+#### `lighthouse_load.rs`
+
+Real-nvim proof that the captive `runtime/nvim/init.lua` both finds and activates a sibling vendored `lighthouse/` colorscheme. Target `//crates/wolf-ffi:lighthouse_load` stages the nvim runfiles plus `//bazel/lighthouse:lighthouse_tree` (`WOLF_TEST_LIGHTHOUSE_DIR`) and runs unsandboxed; it loud-skips when either the pinned nvim or the lighthouse tree is missing, the normal cargo/Linux case.
+
+**Covers**
+
+- `vim.g.colors_name` / `vim.o.background`, and the startup pickup of the scheme's `WolfTitlebar` / `WolfCursor` groups through the theme and frame accessors.
+
+**Gotchas**
+
+- `init.lua` self-locates the colorscheme relative to its own file, so the test rebuilds the bundle layout (`init.lua` beside `lighthouse/`) in a temp dir; pointing at the staged tree would skip the real code path.
+- The bridge has no Lua-eval accessor, so activation is read back from a sentinel file written by a typed `:lua vim.fn.writefile(...)`.
+- The expected colors are pinned to the vendored commit; a lighthouse bump means updating those constants.
+
+#### `mouse_scroll.rs`
+
+Real-nvim coverage of `send_mouse` / `send_scroll` and the `FfiFrame` viewport accessors (`topline` / `botline` / `curline` / `linecount`). Target `//crates/wolf-ffi:mouse_scroll` stages the nvim runfiles and runs unsandboxed; loud-skips without a pinned nvim.
+
+**Covers**
+
+- Grid targeting: events carry a window grid (`>= 2`) with grid-local coordinates, and a press lands the cursor on exactly that cell; wheel down raises `topline`, wheel up lowers it.
+
+**Gotchas**
+
+- `topline` is 0-based, so it settles to 0 after `:1`.
+- The fixture fills the buffer with zero-padded five-char lines, quoting the format with doubled single quotes: narrow lines would clamp the click column, and a literal double quote under `:put =` is parsed as an Ex comment.
+- The drag check is deliberately soft (log, not fail) to avoid headless visual-mode flakiness.
+
+#### `multi_window.rs`
+
+Real-nvim coverage of multi-core identity and wake routing, running two cores at distinct cwds. Target `//crates/wolf-ffi:multi_window` stages the nvim runfiles and runs unsandboxed; loud-skips without a pinned nvim.
+
+**Covers**
+
+- Distinct `wake_token()` per core, per-core snapshot independence, and a process-global `wolf_ffi_set_wake` callback that attributes each wake to its own token without clobbering the other core.
+
+**Gotchas**
+
+- Deliberately one `#[test]`: it installs the process-global wake callback and sets `WOLF_STATE_DIR`, so new cases belong inside that test rather than beside it.
+- Baselines are captured after a settle pause, so a late startup redraw wake is not mistaken for a misrouted one.
+
+#### `orlando_bg_stress.rs`
+
+Real-nvim regression test for cells drawing with the wrong background inside an orlando code block: it stages the vendored plugin like `orlando_load` and hammers a fenced-code document with seeded-random scrolling, motion, edit+undo, and fence churn. Target `//crates/wolf-ffi:orlando_bg_stress` stages the nvim runfiles, `//bazel/orlando:orlando_tree`, and `//bazel/lighthouse:lighthouse_tree`, runs unsandboxed, and is `size = "medium"`; it skips without a pinned nvim or the orlando tree, but lighthouse is optional.
+
+**Covers**
+
+- After every op, at idle: each visible row's text equals its buffer line, and every cell of a code-block row shares one background.
+
+**Gotchas**
+
+- It exists because wolf-core's `grid_line` clamped a zero-width clear-to-EOL `repeat` up to 1, writing a stray default-background cell that Neovim's shadow grid never repaints. Checks run only at idle, so a failure means persistent divergence, not a transient frame.
+- The block background must differ from the default background, so the check cannot pass vacuously.
+- The document's block line ranges are pinned and asserted; edit `DOC` and you must update them. Seed and iteration count come from `WOLF_STRESS_SEED` / `WOLF_STRESS_ITERS`.
+
+#### `orlando_load.rs`
+
+Real-nvim proof that the captive `runtime/nvim/init.lua` finds a sibling vendored `orlando/` tree, puts it on `runtimepath`, and sources it — the only automated coverage of the plugin-present branch. Target `//crates/wolf-ffi:orlando_load` stages the nvim runfiles plus `//bazel/orlando:orlando_tree` (`WOLF_TEST_ORLANDO_DIR`) and runs unsandboxed; it loud-skips when either the pinned nvim or the orlando tree is missing.
+
+**Gotchas**
+
+- `init.lua` self-locates the plugin relative to its own file, so the test rebuilds the bundle layout (`init.lua` beside `orlando/`) in a temp dir rather than pointing at the staged tree.
+- The bridge has no Lua-eval accessor, so `vim.g.loaded_orlando` and `require("orlando")` are read back from a sentinel file written by a typed `:lua vim.fn.writefile(...)`.
+
+#### `pane_status.rs`
+
+Real-nvim coverage of the per-pane statusbar bridge: `pane_status_for_grid` and the opaque `FfiPaneStatus` accessors. It opens one file, splits, opens a second, and requires the two grids to report distinct names — the assertion that makes the status per-window rather than global. Target `//crates/wolf-ffi:pane_status` stages the nvim runfiles and runs unsandboxed; loud-skips without a pinned nvim.
+
+**Gotchas**
+
+- `abs_path()` is the raw, never-relativized buffer path, which core canonicalizes when it applies buffers, so compare against a canonicalized expectation.
+
+#### `panes.rs`
+
+Real-nvim coverage of the split-panes bridge — `windows()`, `active_win`, `grid_for_win`, `read_frame_for_grid`, `drain_intents`, `resize_grid`, `focus_win` — over a split/resize/focus/close sequence. Target `//crates/wolf-ffi:panes` stages the nvim runfiles and runs unsandboxed; loud-skips without a pinned nvim.
+
+**Gotchas**
+
+- `drain_intents` drains, so accumulate intents across polls and keep the scalar fields; the opaque intent cannot be retained.
+- Drive layout changes with Ex commands rather than `<C-w>` chords: both emit the same intent, but the Ex path is deterministic headless.
+- Closing a window emits no intent — it is observed by the window vanishing from `windows()` and `grid_for_win` returning 0.
+- Grid 1 is the outer cmdline strip, so pane assertions filter to grids `>= 2`.
+
+#### `preview.rs`
+
+**Covers** — the Markdown-preview bridge: the `is_markdown_active` gate, `open_preview(mode)` placements plus the reuse-pane fallback, the `previews()` rows, `render_preview` HTML (headings, slugs, LaTeX), and `preview_file(win, path)` link-follow. Real nvim; target `//crates/wolf-ffi:preview` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`). Each case seeds its own temp cwd and polls the local `wait_for_*` helpers.
+
+**Gotchas** — the startup buffer is already a markdown `Untitled.md`, so `wait_for_markdown_active(true)` returns instantly across a markdown-to-markdown `:e`; use `wait_for_current_file` as the switch barrier before a synchronous `open_preview`. The temp cwd is nvim's working dir and search root, so keep it alive until after `shutdown()`.
+
+#### `recent_dirs.rs`
+
+**Covers** — `WolfCoreHandle::recent_dirs()`, the global folder MRU read back newest-first after driving `:cd`. Real nvim; target `//crates/wolf-ffi:recent_dirs` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
+
+**Gotchas** — deliberately a single `#[test]`: it sets the process-global `WOLF_STATE_DIR` before start, and the store opens `folder-mru.sqlite` once at core start, so new cases belong inside that test. The MRU is global and records every cwd change, so nvim's launch cwd is in the list alongside the dirs the test chdirs into.
+
+#### `search.rs`
+
+**Covers** — the content-search bridge: `start_search(query, use_regex, case_sensitive, all_files) -> FfiSearch`, the `files(budget)` file and match rows with their truncation flags and highlight ranges, `ignorecase()`, and `open_at(path, line, col)`. Real nvim plus a real `rg` child; target `//crates/wolf-ffi:search`, which additionally stages `//bazel/rg:rg_tree` and wires `WOLF_RG_BIN`, and skips loudly when either binary is missing.
+
+**Gotchas** — the local `rg_bin_or_skip` re-exports `WOLF_RG_BIN` as an absolute path because Bazel injects it runfiles-relative, which the spawned `rg` could not resolve from a different cwd. The seeded `notes.txt` is there to prove the non-`all_files` filter drops it.
+
+#### `state.rs`
+
+**Covers** — the state-persistence bridge end to end: the snapshot-builder free functions, the pane-layout push-builder, the read side (`wolf_ffi_load_state` through the `FfiState` / `FfiWindowState` / `FfiTabState` / `FfiPaneNode` accessors), and rejection of an old flat file. Headless — the write side is a pure builder over the shared store, so target `//crates/wolf-ffi:state` stages no nvim and carries no `no-sandbox` tag; everything is driven through `WOLF_STATE_DIR` pointed at a tempdir.
+
+**Gotchas** — one `#[test]` only: it mutates the process-global `WOLF_STATE_DIR` and opens the process-wide `SHARED_STORE` `OnceLock`, so extend that test rather than adding a sibling.
+
+#### `tabpages.rs`
+
+**Covers** — the tabpage handle methods the macOS front-end drives (`current_tabpage`, `create_tabpage`, `active_tabpage`, `set_current_tabpage`, `cwd_for_tabpage`, `close_tabpage`) plus their neutral values after `shutdown()`. Real nvim; target `//crates/wolf-ffi:tabpages` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
+
+**Gotchas** — one `#[test]`, which also sets the process-global `WOLF_STATE_DIR` for shutdown-flush hygiene. The `:vsplit`-then-switch-away-and-back step is the point of the test, not setup: it proves each window handle re-resolves to a live, paintable grid after a tabpage switch.
+
+#### `terminal.rs`
+
+**Covers** — the terminal-drawer surface through `WolfCoreHandle::toggle_terminal()`: open, hide with the buffer surviving, reopen reusing that buffer, recreate after the buffer is wiped, the `DRAWER_OPEN` layout intent, and the drawer's full-width default. Real nvim; target `//crates/wolf-ffi:terminal` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
+
+**Gotchas** — drive the handle method, not `:WolfTerminal`; the Ex command only enqueues an `FfiCommand` and there is no front-end dispatcher here to call the method back. Drawer buffers are identified by the `term://` prefix on buffer-picker rows, and because nothing drains layout intents they accumulate, so the test polls `drain_intents()` for the kind it wants.
+
+#### `theme.rs`
+
+**Covers** — `theme_titlebar_bg()` / `theme_titlebar_fg()` and the frame's pre-resolved `cursor_fill()` / `cursor_glyph()`, across defining and then clearing the `WolfTitlebar` and `WolfCursor` highlight groups. Real nvim; target `//crates/wolf-ffi:theme` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
+
+**Gotchas** — follow every `:hi` mutation with an explicit `:doautocmd ColorScheme`: theme detection rides that autocmd and a plain `:hi` does not fire it. The target stages the repo `init.lua` with no lighthouse sibling, so no colorscheme defines the Wolf groups at startup; startup pickup from a real scheme is `lighthouse_load.rs`'s job.
+
+#### `tree_search.rs`
+
+**Covers** — the file-tree sidebar surface: `start_tree_search()`, `children_of(dir)` with the `FfiTreeNode` accessors, `rel_path_for(abs)`, the free function `wolf_ffi_ancestors_to_reveal`, and `cwd()` / `current_file()` round-tripped through `open`. Real nvim; target `//crates/wolf-ffi:tree_search` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
+
+**Gotchas** — the seeded cwd carries a dotfile and a `.gitignore` plus the file it ignores on purpose; directories-before-files case-insensitive ordering, dotfile inclusion, and gitignore exclusion are all asserted against that exact layout. Path comparisons canonicalize, so the macOS `/var` to `/private/var` symlink does not break them.
+
+#### `treesitter_highlight.rs`
+
+**Covers** — the captive `init.lua` treesitter block: markdown highlighting is genuinely active on the buffer, and a fenced `go` code block yields an injected `go` langtree. Real nvim plus two staged trees; target `//crates/wolf-ffi:treesitter_highlight` adds `//bazel/nvim-treesitter:nvim_treesitter_tree` and `//bazel/treesitter-parsers:parsers_tree` to the nvim runfiles (`tags = ["no-sandbox"]`), and skips loudly when any is absent.
+
+**Gotchas** — the `init.lua` block self-locates its siblings relative to its own directory, so the test copies the real `init.lua` and both trees into one temp dir; pointing nvim at the staged paths would not exercise the gate. Facts come back through a sentinel file nvim writes via `:lua vim.fn.writefile(...)`, since the bridge has no Lua-eval accessor.
+
+#### `treesitter_parser_abi.rs`
+
+**Covers** — that a host-compiled parser `.so` from the vendored parsers tree is ABI-compatible with the pinned Neovim: `vim.treesitter.language.add` by absolute path succeeds, and parsing yields an error-free `source_file` root. Real nvim plus the staged `//bazel/treesitter-parsers:parsers_tree`; target `//crates/wolf-ffi:treesitter_parser_abi` (`WOLF_TEST_PARSERS_DIR` plus the nvim runfiles, `tags = ["no-sandbox"]`), skipping loudly when the tree or the go parser is missing.
+
+**Gotchas** — scope is ABI only: it uses the captive `init.lua` unchanged, stages no sibling bundle, and never enables highlighting, which is `treesitter_highlight.rs`'s job. Results come back through a sentinel file, as with that sibling.
+
+#### `unicode_key.rs`
+
+**Covers** — the composed-character delivery path: a modifier-free `FfiKeyEvent { kind: char }` per Unicode scalar, the exact shape Swift's `KeyComposition.charEvents` emits, lands verbatim in insert mode both singly and as a two-scalar run that wolf-core fuses into one `nvim_input`. Real nvim; target `//crates/wolf-ffi:unicode_key` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
+
+**Gotchas** — `FfiFrame` carries no sequence number, so a new case polls `read_frame()` and searches the flattened grid text rather than asserting once.
+
+#### `untitled.rs`
+
+**Covers** — anonymous-buffer naming over the existing `new_buffer` / `chdir` / `open` / `current_file` / `is_markdown_active` surface: the un-numbered first `Untitled.md`, the collision walk over both live buffers and files on disk, the absence of any write before an explicit `:w`, and chdir re-homing an untouched anonymous buffer while leaving a real file alone. Real nvim; target `//crates/wolf-ffi:untitled` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
+
+**Gotchas** — each `#[test]` starts its own core through the local `start_core` on a fresh temp cwd, and the on-disk-collision case depends on that cwd being empty except for the file it seeds.

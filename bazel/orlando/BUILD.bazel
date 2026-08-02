@@ -20,3 +20,10 @@ sh_test(
     srcs = ["orlando_tree_test.sh"],
     data = [":orlando_tree"],
 )
+
+# This package's docs, for `//tools/lint:markdown`.
+filegroup(
+    name = "markdown_srcs",
+    srcs = ["README.md"],
+    visibility = ["//tools/lint:__pkg__"],
+)

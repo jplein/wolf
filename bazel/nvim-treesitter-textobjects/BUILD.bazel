@@ -23,3 +23,10 @@ sh_test(
     srcs = ["nvim_treesitter_textobjects_tree_test.sh"],
     data = [":nvim_treesitter_textobjects_tree"],
 )
+
+# This package's docs, for `//tools/lint:markdown`.
+filegroup(
+    name = "markdown_srcs",
+    srcs = ["README.md"],
+    visibility = ["//tools/lint:__pkg__"],
+)
