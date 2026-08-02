@@ -144,7 +144,10 @@ fn wait_for_markdown_active(handle: &WolfCoreHandle, target: bool, desc: &str) {
         }
         sleep(POLL_INTERVAL);
     }
-    assert_eq!(got, target, "is_markdown_active() should be {target} ({desc})");
+    assert_eq!(
+        got, target,
+        "is_markdown_active() should be {target} ({desc})"
+    );
 }
 
 /// Blocks until exactly `n` live editor window grids exist, then asserts it.

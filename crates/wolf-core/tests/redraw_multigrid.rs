@@ -43,12 +43,7 @@ const RESIZE_GRID_ROWS: u16 = 15;
 /// panic message. This mirrors `current_file.rs`'s poll-with-timeout pattern,
 /// which is the right tool when the change we await may arrive across multiple
 /// flushes (win_pos / grid creation / grid_destroy) rather than on one.
-fn poll_until(
-    core: &WolfCore,
-    waiter: &FlushWaiter,
-    desc: &str,
-    pred: impl Fn(&Snapshot) -> bool,
-) {
+fn poll_until(core: &WolfCore, waiter: &FlushWaiter, desc: &str, pred: impl Fn(&Snapshot) -> bool) {
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     loop {
         {
@@ -132,7 +127,10 @@ fn attach_creates_window_grid() {
     );
 
     // The windows map is non-empty...
-    assert!(!snap.windows.is_empty(), "windows map should be non-empty after attach");
+    assert!(
+        !snap.windows.is_empty(),
+        "windows map should be non-empty after attach"
+    );
 
     // ...and the active grid's content is paintable (real dimensions).
     let active = snap.active_grid();
@@ -353,7 +351,10 @@ fn active_grid_follows_focus() {
 
     let snap = core.read_snapshot();
     let grid_b = snap.cursor.grid;
-    assert_ne!(grid_b, grid_a, "focus switch should change the cursor's grid");
+    assert_ne!(
+        grid_b, grid_a,
+        "focus switch should change the cursor's grid"
+    );
     assert_ne!(
         grid_b, GLOBAL_GRID,
         "the newly focused grid should be a window grid, not the global grid"
@@ -395,9 +396,7 @@ fn resize_grid_changes_only_that_grid() {
     // grid id (the resize target).
     let (target, global_before_cols, global_before_rows) = {
         let snap = core.read_snapshot();
-        let global = snap
-            .grid(GLOBAL_GRID)
-            .expect("global grid must exist");
+        let global = snap.grid(GLOBAL_GRID).expect("global grid must exist");
         (snap.active_grid_id(), global.cols, global.rows)
     };
 
@@ -435,7 +434,9 @@ fn resize_grid_changes_only_that_grid() {
     );
 
     // The global grid is unaffected by a per-grid resize of a window grid.
-    let global = snap.grid(GLOBAL_GRID).expect("global grid must still exist");
+    let global = snap
+        .grid(GLOBAL_GRID)
+        .expect("global grid must still exist");
     assert_eq!(
         global.cols, global_before_cols,
         "global grid cols must be unchanged by a per-grid resize of grid {target}"

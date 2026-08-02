@@ -367,7 +367,11 @@ fn commands_drain_close_and_minimize() {
     // discriminant 21) — it deliberately asserts NO HTTP here; the real loopback
     // server is covered by wolf-core's `browser_preview.rs` integration test.
     send_ex_command(&handle, ":WolfPreviewInBrowser");
-    poll_for_command_kind(&handle, CMD_KIND_PREVIEW_IN_BROWSER, ":WolfPreviewInBrowser");
+    poll_for_command_kind(
+        &handle,
+        CMD_KIND_PREVIEW_IN_BROWSER,
+        ":WolfPreviewInBrowser",
+    );
 
     // --- 3m. :WolfFullWidth<CR> -> an FfiCommand with kind() == FULL_WIDTH ----
     // A pure FFI drain: nothing acts on it here (the front-end that would call

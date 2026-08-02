@@ -652,6 +652,15 @@ public enum PreviewScrollSeam {
   /// backwards. All but the last are O(1) id lookups; because every hard line emits
   /// a `-0` marker, the scan normally terminates in a single step.
   ///
+  /// That tier-4 sweep's `[data-col="0"]` filter is LOAD-BEARING and must never be
+  /// widened to all `.wolf-src`. wolf-core now places the per-100-column anchors
+  /// INLINE, at their true position inside a block's rendered content, so `col > 0`
+  /// anchors are no longer in globally ascending document order (a later hard line's
+  /// `-0` anchor is still flushed at the block top, ahead of an earlier-offset
+  /// `col > 0` anchor placed inside that block). Only the `data-col="0"`
+  /// SUBSEQUENCE is guaranteed ascending, which is exactly what a backwards sweep
+  /// assumes.
+  ///
   /// Scrolling is always instantaneous `window.scrollTo(0, y)`. A smooth animation
   /// would still be running when the next keystroke's follow fires, which would make
   /// the restore inexact.

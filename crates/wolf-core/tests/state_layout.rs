@@ -32,7 +32,9 @@ use std::time::Duration;
 
 use tempfile::tempdir;
 use wolf_core::state::STATE_FILE_NAME;
-use wolf_core::{load_state, PaneNode, PaneOrientation, StateStore, TabState, WindowState, WolfState};
+use wolf_core::{
+    load_state, PaneNode, PaneOrientation, StateStore, TabState, WindowState, WolfState,
+};
 
 /// Generous upper bound for `StateStore::flush` in tests.
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);

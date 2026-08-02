@@ -242,7 +242,10 @@ fn wait_for_preview_active(handle: &wolf_ffi::WolfCoreHandle, target: bool, desc
         }
         sleep(POLL_INTERVAL);
     }
-    assert_eq!(got, target, "is_preview_active() should be {target} ({desc})");
+    assert_eq!(
+        got, target,
+        "is_preview_active() should be {target} ({desc})"
+    );
 }
 
 /// Blocks until exactly `n` live editor window grids exist, then asserts it.
@@ -334,7 +337,12 @@ fn wait_for_frame_text(handle: &wolf_ffi::WolfCoreHandle, needle: &str) {
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut text = String::new();
     while Instant::now() < deadline {
-        text = handle.read_frame().cells().iter().map(|c| c.text()).collect();
+        text = handle
+            .read_frame()
+            .cells()
+            .iter()
+            .map(|c| c.text())
+            .collect();
         if text.contains(needle) {
             return;
         }
@@ -1122,7 +1130,11 @@ fn preview_renders_untitled_buffer() {
         "open_preview(\"split_right\") on the Untitled.md buffer must return a valid \
          preview bufnr (> 0, previously 0 for a filetype-less [No Name]), got {preview_bufnr}"
     );
-    wait_for_window_count(&handle, TWO_PANES, "after split-right preview of Untitled.md");
+    wait_for_window_count(
+        &handle,
+        TWO_PANES,
+        "after split-right preview of Untitled.md",
+    );
 
     // --- 4. previews() surfaces the Untitled.md source row --------------------
     let previews = wait_for_previews(&handle, "one Untitled.md preview", |p| {

@@ -72,12 +72,7 @@ fn poll_until(core: &WolfCore, waiter: &FlushWaiter, desc: &str, pred: impl Fn(&
 
 /// Resolves a window handle to the base `filename` its pane reports, polling until
 /// the handle is bound to a grid and `pane_status` reports the expected name.
-fn poll_win_filename(
-    core: &WolfCore,
-    waiter: &FlushWaiter,
-    win: i64,
-    expected: &str,
-) {
+fn poll_win_filename(core: &WolfCore, waiter: &FlushWaiter, win: i64, expected: &str) {
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     loop {
         if let Some(grid) = core.read_snapshot().grid_for_win(win) {

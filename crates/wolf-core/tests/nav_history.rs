@@ -771,7 +771,10 @@ fn a_late_repeat_of_the_target_we_left_is_dropped_not_pushed() {
          pushes (truncating ahead of the cursor)"
     );
     assert_eq!(pane.cursor(), 1, "the cursor follows the pushed entry");
-    assert!(!nav.can_forward(WIN), "the push parked the cursor at the top");
+    assert!(
+        !nav.can_forward(WIN),
+        "the push parked the cursor at the top"
+    );
 }
 
 /// The filter's memory is "the LAST target folded", not a permanent ban: our own

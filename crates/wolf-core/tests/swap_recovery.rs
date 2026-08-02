@@ -110,7 +110,11 @@ fn type_unsaved_edit(core: &WolfCore, waiter: &FlushWaiter) {
 fn start_core_in(cwd: &Path) -> (WolfCore, FlushWaiter) {
     let (wake, waiter) = common::wake_channel();
     let core = WolfCore::start(
-        common::config_in(cwd.to_path_buf(), common::DEFAULT_COLS, common::DEFAULT_ROWS),
+        common::config_in(
+            cwd.to_path_buf(),
+            common::DEFAULT_COLS,
+            common::DEFAULT_ROWS,
+        ),
         wake,
     )
     .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
@@ -154,14 +158,20 @@ fn dead_owner_recovers_silently() {
 
     // Kill the swap owner (SIGKILL), then wait for the Dead transition.
     self_sigkill(&core);
-    poll_until(&waiter, "liveness() to become Dead after the SIGKILL", || {
-        core.liveness() == Liveness::Dead
-    });
+    poll_until(
+        &waiter,
+        "liveness() to become Dead after the SIGKILL",
+        || core.liveness() == Liveness::Dead,
+    );
 
     // Restart in the SAME cwd (=> SAME durable swap dir), so the fresh nvim finds
     // the dead owner's swap.
     core.restart_nvim().expect("restart_nvim should be Ok");
-    assert_eq!(core.liveness(), Liveness::Alive, "nvim must be Alive after restart");
+    assert_eq!(
+        core.liveness(),
+        Liveness::Alive,
+        "nvim must be Alive after restart"
+    );
 
     // Reopen the fixture: the recovery-aware SwapExists sees a DEAD owner and
     // silently recovers ("r"), so the buffer shows the unsaved edit.
@@ -169,7 +179,12 @@ fn dead_owner_recovers_silently() {
     poll_until(
         &waiter,
         "the recovered buffer to show the unsaved edit on row 0",
-        || core.read_snapshot().active_grid().row_text(0).contains("WOLFEDIT"),
+        || {
+            core.read_snapshot()
+                .active_grid()
+                .row_text(0)
+                .contains("WOLFEDIT")
+        },
     );
 
     let snap = core.read_snapshot();
@@ -315,9 +330,11 @@ fn restart_recovers_unsaved_untitled_buffer() {
 
     // Crash nvim (SIGKILL: the swap owner dies WITHOUT cleaning up), wait for Dead.
     self_sigkill(&core);
-    poll_until(&waiter, "liveness() to become Dead after the SIGKILL", || {
-        core.liveness() == Liveness::Dead
-    });
+    poll_until(
+        &waiter,
+        "liveness() to become Dead after the SIGKILL",
+        || core.liveness() == Liveness::Dead,
+    );
 
     // Restart in the SAME cwd (=> SAME durable swap dir) from a Dead state: an ACTUAL
     // respawn, so restart_nvim() returns Ok(true).
@@ -334,7 +351,10 @@ fn restart_recovers_unsaved_untitled_buffer() {
         "nvim must be Alive after the restart"
     );
     let fresh_tab = core.current_tabpage();
-    assert_ne!(fresh_tab, 0, "current_tabpage() must be valid after restart");
+    assert_ne!(
+        fresh_tab, 0,
+        "current_tabpage() must be valid after restart"
+    );
 
     // Drive the reopen the front-end performs off the captured set. Reopening
     // <cwd>/Untitled.md is what must trigger the dead owner's swap recovery — even

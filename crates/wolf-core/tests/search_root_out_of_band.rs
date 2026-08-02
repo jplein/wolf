@@ -121,7 +121,11 @@ fn write_file(path: &Path, contents: &str) {
 fn start_core_in_with_waiter(cwd: &Path) -> (WolfCore, FlushWaiter) {
     let (wake, waiter) = common::wake_channel();
     let core = WolfCore::start(
-        common::config_in(cwd.to_path_buf(), common::DEFAULT_COLS, common::DEFAULT_ROWS),
+        common::config_in(
+            cwd.to_path_buf(),
+            common::DEFAULT_COLS,
+            common::DEFAULT_ROWS,
+        ),
         wake,
     )
     .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");

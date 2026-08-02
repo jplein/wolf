@@ -25,27 +25,152 @@
 //! `>= MARKER_COLUMN_STRIDE`, markers `(L, 100)`, `(L, 200)`, … for each multiple
 //! of [`MARKER_COLUMN_STRIDE`] strictly less than the line's character length.
 //!
-//! ## DOM placement (block-level injection only)
+//! ## DOM placement (two tiers: block-top flush, and inline splitting)
 //!
-//! Markers are injected ONLY immediately before block-level `Start` tags, by
-//! [`MarkerInjector`] over the offset iterator: before emitting a block-level
-//! `Start(tag)` whose source range is `s..e`, every pending marker with byte offset
-//! `< e` is flushed (as an `Event::Html` raw span) in source order, so a block's
-//! interior line markers COLLAPSE to immediately before that block's opening tag.
-//! Any markers left after the stream ends are flushed as trailing spans. Inline
-//! tags are never injection points, so a marker never splits inline content and
-//! never lands inside `<pre><code>` (which would corrupt rendered code).
+//! [`MarkerInjector`] walks the offset iterator and places each marker by one of
+//! two rules. Marker ids, the id scheme, the CHARACTER-column semantics (OD4),
+//! source ordering and [`MARKER_COLUMN_STRIDE`] are identical under both — only
+//! DOM PLACEMENT differs.
 //!
-//! **Collapse consequence (v1, documented):** lines inside one block (a wrapped
-//! paragraph, a fenced code block, a table) collapse to that block's start `y` —
-//! every line's `wl-{L}-0` marker still EXISTS (a unique id) but resolves to the
-//! block top. That is the correct scroll granularity for v1. Because a marker is
-//! flushed before the block whose range CONTAINS it, a container block (e.g. a
-//! `List`) collapses all of its items' interior line markers to the top of the
-//! container; finer per-item anchoring is a later refinement. The per-100-column
-//! markers are mostly redundant in v1 (they collapse to the same block top) but are
-//! REQUIRED by the scheme and become meaningful once inline-level anchoring is
-//! added.
+//! **Tier 1 — block-top flush (unchanged).** At a block-level `Start(tag)` whose
+//! source range is `s..e`, the injector CLAIMS every marker with byte offset `< e`
+//! and emits it (as an `Event::Html` raw span, in source order) immediately before
+//! the opening tag, UNLESS the marker qualifies for tier 2. A marker is always
+//! flushed here when its column is `0`, when its offset is `<= s`, when the block
+//! is a `CodeBlock` / `HtmlBlock` / `Table` / `TableHead` / `TableRow`, or when
+//! injection is suppressed (see the exclusions below). Any markers left after the
+//! stream ends are flushed as trailing spans.
+//!
+//! **Tier 2 — inline splitting of a block's interior `col != 0` markers.** A
+//! marker with `col != 0` whose offset is strictly inside a block that may hold it
+//! (`Paragraph`, `Heading`, `BlockQuote`, `List`, `Item`, `FootnoteDefinition`) is
+//! DEFERRED rather than flushed, and lands at the first of these, in stream order:
+//!
+//! 1. an incoming `Event::Text` whose range STARTS at or after the marker's offset
+//!    — the marker is emitted immediately before that `Text` (this is how a marker
+//!    that fell in a source region covered by no `Text` at all — `**`, `_`,
+//!    `[`/`](url)`, a backslash byte, a link destination, an entity span, raw
+//!    inline HTML — still lands inside its block);
+//! 2. an incoming `Event::Text` that strictly CONTAINS the offset and passes the
+//!    identity predicate below — that `Text` is SPLIT into `Text(prefix)`,
+//!    `Html(marker)`, …, `Text(remainder)`, so the anchor sits at its true position
+//!    in the rendered inline flow. Several markers inside one `Text` all split it,
+//!    in order, at strictly increasing points, and empty slices are never emitted;
+//! 3. a block-level `End` — the drain is BOUNDED by that `End`'s own `range.end`,
+//!    so a deferred marker never escapes the INNERMOST block containing it and a
+//!    sibling's marker is never dragged into the block that closes first (a
+//!    container claims all of its items' markers at its own `Start`, so item two's
+//!    `wl-L-100` must survive item one's `</li>`);
+//! 4. the next block-level `Start` (markers with offset `<= s` are drained before
+//!    that block's own flush), or the trailing flush at stream end.
+//!
+//! A marker is therefore never dropped and never emitted twice.
+//!
+//! **Identity predicate (why splitting is safe).** A `Text` is split only when
+//! `source[range] == payload`, byte for byte. For a real text item the payload IS
+//! the source slice of its reported range (pulldown-cmark 0.12.2,
+//! `parse.rs:2113`), but `SynthesizeText`/`SynthesizeChar` items —
+//! entity references (`&amp;` over 5 source bytes → the 1-byte `"&"`), code/HTML
+//! indent padding — carry a payload UNRELATED to the range (`parse.rs:2115-2116`).
+//! A LENGTH check is not sufficient: some HTML5 named entities expand to a
+//! same-length string (`&nvap;`, 6 source bytes → `≍⃒`, 6 bytes). When the
+//! predicate fails the `Text` is emitted verbatim and the marker simply waits for
+//! rule 1/3/4. Splitting is escaping-neutral because pulldown-cmark-escape escapes
+//! byte by byte with no cross-character state.
+//!
+//! The identity holds in the non-obvious cases too, which is what makes the
+//! predicate usable rather than merely safe:
+//!
+//! - trailing intra-line whitespace is trimmed out of the text item's RANGE, not
+//!   just its payload (`firstpass.rs:1218-1227` closes the item at
+//!   `final_ix - trailing_whitespace`), so a paragraph ending in a space yields
+//!   `Text@0..239` for a 240-byte line rather than `0..240`. Were the range to
+//!   cover the trimmed byte, the predicate would reject EVERY such paragraph and
+//!   inline anchoring would silently never happen;
+//! - a backslash escape closes the current item and restarts the next one AFTER
+//!   the backslash (`firstpass.rs:890-926`), so the backslash byte is covered by no
+//!   event at all — a gap, not a mismatch;
+//! - soft/hard breaks are their own items, so a `Text` never spans a `\n` outside a
+//!   code block;
+//! - adjacent text items `a..b` + `b..c` are merged into `a..c`
+//!   (`parse.rs:1361-1376`), which preserves the identity.
+//!
+//! **Exclusions.** `CodeBlock`, `HtmlBlock`, `Table` and `Image`, tracked as a
+//! depth counter. No marker is emitted, deferred or split INSIDE any of the four.
+//!
+//! Where the excluded marker goes instead differs between the three BLOCK-level
+//! exclusions and the inline one:
+//!
+//! - `CodeBlock` / `HtmlBlock` / `Table` are block `Start`s, so every marker whose
+//!   offset falls inside one is flushed immediately BEFORE its opening tag — the
+//!   historical placement. That flush happens at the block's own `Start` for its
+//!   still-unclaimed markers, AND, because a container
+//!   (`List` / `Item` / `BlockQuote` / `FootnoteDefinition`) defers `col != 0`
+//!   markers across its whole range at its own `Start`, that same `Start` also
+//!   drains any of its interior markers the container already claimed. Both halves
+//!   are required: without the second, a fence nested in a list item would have its
+//!   deferred markers drained at the block's `End`, where the depth is back to 0 —
+//!   landing them inside `<pre><code>`.
+//! - `Image` is **not** a block start (it is inline, and `End(Image)` deliberately
+//!   does not drain — see below), so a marker whose offset falls in an image's alt
+//!   text is NOT flushed before the `<img …/>`. It simply stays deferred across the
+//!   image and lands at the containing block's next placement point, i.e. AFTER the
+//!   `<img …/>` — at the next splittable `Text`, or at that block's `End`. What the
+//!   exclusion guarantees for an image is only that the marker never enters the
+//!   element; it does not promise a before-the-tag position.
+//!
+//! - a PLAIN code block still yields `Event::Text`, and inside a fence one `Text`
+//!   can span a whole line INCLUDING its `\n`, so an interior marker would
+//!   otherwise be "strictly inside" it and would corrupt rendered code (a
+//!   highlighted block's interior is already `InlineHtml`, and `CodeHighlighter`
+//!   passes `Start`/`End(CodeBlock)` through, so the bracket holds either way);
+//! - an HTML block yields only `Event::Html`, but a marker must not be emitted
+//!   between two raw HTML lines either;
+//! - a raw span between `<tbody>` and `<tr>` is FOSTER-PARENTED out of the table by
+//!   the HTML parser;
+//! - **images are the load-bearing case**: pulldown-cmark builds `alt="…"` with
+//!   `raw_text()`, which DROPS `Event::Html` outright and escapes
+//!   `Text`/`InlineHtml` INTO the attribute (`html.rs:471-509`). A marker leaking
+//!   into an image would vanish from the document and break its id's existence
+//!   guarantee — which is also why a marker span is emitted as `Event::Html` and
+//!   must NEVER become `Event::InlineHtml` (`Html` fails safe).
+//!
+//! `Tag::MetadataBlock` is unreachable: neither metadata option is enabled in
+//! `markdown_options`.
+//!
+//! **Snap (layout safety).** An inline split puts an inline-box boundary between
+//! two characters. That introduces no soft-wrap opportunity (line breaking is
+//! defined on text content, not inline-box edges) and `.wolf-src`'s
+//! `font-size:0`/`line-height:0` keep it from contributing a line box — but it does
+//! break glyph SHAPING across it, so a ligature or kern pair straddling the point
+//! would be lost. The split point is therefore snapped to the nearest whitespace
+//! word boundary within [`MARKER_SNAP_MAX_BYTES`] (ties pick the smaller offset);
+//! with no boundary in the window it splits at the exact offset. The marker's `id`
+//! / `data-line` / `data-col` always name the EXACT `(L, C)`.
+//!
+//! One accepted behavioral consequence: an inline anchor's
+//! `getBoundingClientRect().top` is measured at its zero-height inline box, near
+//! the text baseline of the line it sits on — a few pixels lower than the rect a
+//! block-top anchor reported for the same `(L, C)`. The cursor-follow decision's
+//! viewport-edge threshold absorbs that offset, so no front-end change is needed.
+//!
+//! **Ordering invariant, and its documented exception.** The col-0 markers are
+//! still emitted in strictly ascending document order — the front-end's tier-4
+//! fallback sweep walks `.wolf-src[data-col="0"]` backwards and depends on exactly
+//! that, so it must never be widened to all `.wolf-src`. GLOBAL document order is
+//! no longer ascending: within one block a col-0 marker belonging to a LATER hard
+//! line is flushed at the block top before an earlier-offset `col != 0` marker
+//! placed inline (a paragraph spanning lines 3–4 whose line 3 is 250 characters
+//! emits `wl-3-0`, `wl-4-0`, then `wl-3-100`, `wl-3-200` inside the `<p>`). This is
+//! harmless because tiers 1–3 of the front-end's `resolve()` are `getElementById`
+//! lookups.
+//!
+//! **Remaining accepted limitation.** Only lines longer than
+//! [`MARKER_COLUMN_STRIDE`] gain intra-block anchoring. A paragraph HARD-WRAPPED
+//! into several short source lines still collapses all of its `wl-{L}-0` markers to
+//! the block top, so cursor-follow is still paragraph-granular there; likewise a
+//! fenced code block, a table and an image's alt text anchor to their block top by
+//! construction. Every marker still EXISTS with a unique id in all of those cases.
 //!
 //! ## Who consumes the markers (all of it built, all of it OUTSIDE this module)
 //!
@@ -122,7 +247,7 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::ops::Range;
 
-use pulldown_cmark::{html, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{html, CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd};
 use pulldown_latex::{
     config::{DisplayMode, RenderConfig},
     mathml::push_mathml,
@@ -135,6 +260,26 @@ use pulldown_latex::{
 /// (`100`, `200`, …). A named const so the "every 100 columns" rule is explicit
 /// (no magic number).
 pub const MARKER_COLUMN_STRIDE: usize = 100;
+
+/// How far (in BYTES, each way) an interior marker's inline split point may move
+/// to land on a word boundary instead of mid-word.
+///
+/// A marker placed inside a paragraph's text splits one `Event::Text` into a
+/// prefix and a remainder, which puts an inline box boundary between two
+/// characters. Such a boundary introduces no soft-wrap opportunity (line breaking
+/// is defined on text content, not inline-box edges) and `.wolf-src`'s
+/// `font-size:0`/`line-height:0` keep it from contributing a line box — but it
+/// DOES break glyph shaping across it, so a ligature (Inter has `ffi`/`fi`) or a
+/// kern pair straddling the split point would be lost. Snapping the split to the
+/// nearest whitespace boundary within this window avoids that; the marker's `id` /
+/// `data-line` / `data-col` still name the EXACT `(L, C)` position.
+///
+/// The value must stay comfortably below HALF of [`MARKER_COLUMN_STRIDE`]: two
+/// consecutive stride markers are at least `MARKER_COLUMN_STRIDE` CHARACTERS (so
+/// at least that many bytes) apart, and `2 * 32 < 100` guarantees their snap
+/// windows cannot overlap — snapped split points therefore stay strictly
+/// ascending, and no two markers can ever snap onto the same point.
+const MARKER_SNAP_MAX_BYTES: usize = 32;
 
 /// The structural + marker CSS shared by every preview theme (the `.wolf-src`
 /// marker rule plus the 24px-baseline-grid structural layout). Embedded BEFORE
@@ -426,7 +571,7 @@ pub fn render_html_with_highlights(
     // still sees the real block-level `Start(CodeBlock)` (its flush trigger); the
     // highlighter passes `Start`/`End` through and swaps only interior `Text`.
     let with_code = CodeHighlighter::new(with_math, code_highlights);
-    let injector = MarkerInjector::new(with_code, markers);
+    let injector = MarkerInjector::new(with_code, markers, source);
 
     let mut body = String::new();
     html::push_html(&mut body, injector);
@@ -934,12 +1079,15 @@ fn style_css(style: &HighlightStyle) -> String {
     css
 }
 
-/// Returns whether `event` is a block-level `Start` tag — the only injection
-/// point for markers. Block-level tags: `Paragraph`, `Heading`, `BlockQuote`,
-/// `CodeBlock`, `HtmlBlock`, `List`, `Item`, `FootnoteDefinition`, `Table`,
-/// `TableHead`, `TableRow`. Inline tags (`Emphasis`/`Strong`/`Link`/…) and
-/// `TableCell` are intentionally NOT injection points, so a marker never splits
-/// inline content or lands inside `<pre><code>`.
+/// Returns whether `event` is a block-level `Start` tag — where [`MarkerInjector`]
+/// CLAIMS the markers whose offsets fall inside the block (flushing them before the
+/// opening tag, or deferring them for inline placement — see
+/// [`defers_interior_markers`]). Block-level tags: `Paragraph`, `Heading`,
+/// `BlockQuote`, `CodeBlock`, `HtmlBlock`, `List`, `Item`, `FootnoteDefinition`,
+/// `Table`, `TableHead`, `TableRow`. Inline tags (`Emphasis`/`Strong`/`Link`/…) and
+/// `TableCell` are intentionally NOT claim points; the only other placement point
+/// is an `Event::Text` in an unsuppressed context, so a marker still never lands
+/// inside `<pre><code>` or an attribute.
 fn is_block_start(event: &Event<'_>) -> bool {
     matches!(
         event,
@@ -959,20 +1107,193 @@ fn is_block_start(event: &Event<'_>) -> bool {
     )
 }
 
-/// An iterator adapter over [`pulldown_cmark::OffsetIter`] that injects the
-/// marker spans (as raw `Event::Html`) immediately before block-level `Start`
-/// tags, in source order, and flushes any remaining markers as trailing spans.
+/// Returns whether `event` is a block-level `Start` that may HOLD BACK its
+/// interior `col != 0` markers for inline placement instead of flushing them
+/// before its opening tag.
 ///
-/// See the module docs for the placement rule and its collapse consequence.
+/// True for the blocks whose rendered body is ordinary inline content
+/// (`Paragraph`, `Heading`, `BlockQuote`, `List`, `Item`, `FootnoteDefinition`).
+/// False for `CodeBlock` / `HtmlBlock` / `Table` / `TableHead` / `TableRow` (see
+/// [`opens_no_inject_region`]): those keep the historical flush-before-the-tag
+/// placement EXACTLY, so no marker can reach a `<pre>`, an author's raw HTML, or a
+/// table interior. Column-zero markers are never deferred regardless of this
+/// predicate — [`MarkerInjector::claim_before`] decides that.
+fn defers_interior_markers(event: &Event<'_>) -> bool {
+    matches!(
+        event,
+        Event::Start(
+            Tag::Paragraph
+                | Tag::Heading { .. }
+                | Tag::BlockQuote(..)
+                | Tag::List(..)
+                | Tag::Item
+                | Tag::FootnoteDefinition(..)
+        )
+    )
+}
+
+/// Returns whether `event` OPENS a region in which no marker may be emitted,
+/// deferred or split (see [`MarkerInjector::no_inject_depth`]).
+///
+/// - `CodeBlock`: a plain (unhighlighted) block still yields `Event::Text`, and
+///   inside a fence one `Text` can span a whole line INCLUDING its `\n`, so an
+///   interior marker would otherwise be "strictly inside" it and would corrupt the
+///   rendered code. (A highlighted block's interior is already `InlineHtml`, but
+///   `CodeHighlighter` passes `Start`/`End(CodeBlock)` through, so this bracket
+///   still holds.)
+/// - `HtmlBlock`: yields only `Event::Html`, so there is nothing to split — but a
+///   marker must not be emitted BETWEEN two raw HTML lines either.
+/// - `Table`: a raw span between `<tbody>` and `<tr>` is FOSTER-PARENTED out of the
+///   table by the HTML parser, relocating the anchor.
+/// - `Image`: pulldown-cmark builds `alt="…"` with `raw_text()`, which DROPS
+///   `Event::Html` outright and escapes `Text`/`InlineHtml` INTO the attribute
+///   (`html.rs:471-509`) — a marker leaking in would vanish from the document and
+///   break its id's existence guarantee.
+///
+/// `Tag::MetadataBlock` is unreachable here: neither metadata option is enabled in
+/// [`markdown_options`].
+fn opens_no_inject_region(event: &Event<'_>) -> bool {
+    matches!(
+        event,
+        Event::Start(Tag::CodeBlock(..) | Tag::HtmlBlock | Tag::Table(..) | Tag::Image { .. })
+    )
+}
+
+/// Returns whether `event` CLOSES a region opened by [`opens_no_inject_region`].
+fn closes_no_inject_region(event: &Event<'_>) -> bool {
+    matches!(
+        event,
+        Event::End(TagEnd::CodeBlock | TagEnd::HtmlBlock | TagEnd::Table | TagEnd::Image)
+    )
+}
+
+/// Returns whether `event` is a block-level `End` at which still-deferred markers
+/// must be drained, so that **a deferred marker never escapes the INNERMOST block
+/// that contains it**.
+///
+/// The drain is BOUNDED by the `End`'s own `range.end`
+/// ([`MarkerInjector::drain_deferred_before`]): a container (a `List`) claims every
+/// one of its items' markers at its own `Start`, so an unbounded drain at the first
+/// `End(Item)` would flush item two's marker into item one's `<li>`. pulldown-cmark
+/// reports the FULL tag range on an `End` (it is read from the same tree node that
+/// produced the `Start` — `parse.rs:2051-2060` vs `:2066-2075`), which is what
+/// makes the bound available.
+///
+/// Deliberately NOT `TagEnd::Image`: a raw `Event::Html` emitted before
+/// `End(Image)` is still consumed and dropped by `html.rs`'s `raw_text`. The inline
+/// ends (`Emphasis`/`Strong`/`Strikethrough`/`Link`/`TableCell`) are excluded to
+/// keep the rule minimal, not because they are known-unsafe.
+fn drains_deferred(event: &Event<'_>) -> bool {
+    matches!(
+        event,
+        Event::End(
+            TagEnd::Paragraph
+                | TagEnd::Heading(_)
+                | TagEnd::Item
+                | TagEnd::BlockQuote(_)
+                | TagEnd::List(_)
+                | TagEnd::FootnoteDefinition
+                | TagEnd::CodeBlock
+                | TagEnd::HtmlBlock
+                | TagEnd::Table
+                | TagEnd::TableHead
+                | TagEnd::TableRow
+        )
+    )
+}
+
+/// The byte offset at which to split a `Text` event so an interior marker lands as
+/// close as possible to `offset` WITHOUT breaking glyph shaping mid-word.
+///
+/// Snaps to the nearest WORD BOUNDARY within `MARKER_SNAP_MAX_BYTES` bytes either
+/// way: a byte position `p` is a word boundary iff `source` has a char boundary at
+/// `p` and either the char ENDING at `p` or the char STARTING at `p` is
+/// [`char::is_whitespace`]. Ties (equal distance on both sides) pick the SMALLER
+/// `p`, so the result is deterministic. With no boundary in the window — a `>= 32`
+/// byte unbroken token — it splits at `offset` exactly; the body's
+/// `word-wrap: break-word` already permits intra-word breaks there.
+///
+/// Preconditions (the caller, [`MarkerInjector::try_split_text`], checks all of
+/// them): `min_exclusive < offset < range.end`, `range.start <= min_exclusive`, and
+/// `source.is_char_boundary(offset)`. The result then always satisfies
+/// `min_exclusive < result < range.end` and `source.is_char_boundary(result)`.
+/// `min_exclusive` is the previous split point in the same `Text`, which keeps
+/// split points strictly increasing even though [`MARKER_SNAP_MAX_BYTES`] already
+/// makes overlapping snap windows impossible.
+///
+/// Never panics: every index goes through [`str::get`] / [`str::is_char_boundary`].
+fn snap_split_point(
+    source: &str,
+    range: &Range<usize>,
+    offset: usize,
+    min_exclusive: usize,
+) -> usize {
+    // The half-open candidate window `[low, high)`, clamped into the splittable
+    // interior `(max(min_exclusive, range.start), range.end)`. An empty window
+    // (possible only if the caller's preconditions are violated) falls through to
+    // `offset`.
+    let lower = min_exclusive.max(range.start).saturating_add(1);
+    let low = offset.saturating_sub(MARKER_SNAP_MAX_BYTES).max(lower);
+    let high = offset.saturating_add(MARKER_SNAP_MAX_BYTES).min(range.end);
+
+    let boundary = (low..high)
+        .filter(|p| is_word_boundary(source, *p))
+        .min_by_key(|p| (p.abs_diff(offset), *p));
+
+    boundary.unwrap_or(offset)
+}
+
+/// Whether byte position `p` is a word boundary in `source`: a char boundary with
+/// whitespace on at least one side. See [`snap_split_point`].
+fn is_word_boundary(source: &str, p: usize) -> bool {
+    if !source.is_char_boundary(p) {
+        return false;
+    }
+    let before_is_space = source
+        .get(..p)
+        .and_then(|s| s.chars().next_back())
+        .is_some_and(char::is_whitespace);
+    let after_is_space = source
+        .get(p..)
+        .and_then(|s| s.chars().next())
+        .is_some_and(char::is_whitespace);
+    before_is_space || after_is_space
+}
+
+/// An iterator adapter over [`pulldown_cmark::OffsetIter`] that injects the marker
+/// spans (as raw `Event::Html`) at their DOM position: column-zero markers (and the
+/// interior markers of the non-deferrable blocks) immediately before a block-level
+/// `Start` tag, and a block's interior `col != 0` markers inside the rendered
+/// inline flow, by splitting the `Event::Text` that contains them. Any markers left
+/// after the stream ends are flushed as trailing spans.
+///
+/// See the module docs for the full placement rule, the identity predicate that
+/// gates splitting, the exclusion contexts, and the ordering invariant.
 struct MarkerInjector<'a, I> {
     inner: I,
+    /// The ORIGINAL Markdown source the inner events' ranges index into. Used for
+    /// the `source[range] == payload` identity predicate, for the word-boundary
+    /// snap, and as the owner of the borrowed prefix/remainder slices a split
+    /// emits.
+    source: &'a str,
     /// Desired markers, ascending byte offset (from [`desired_markers`]).
     markers: Vec<(usize, u32, u32)>,
-    /// Index of the next un-emitted marker in `markers`.
+    /// Index of the next un-emitted marker in `markers`. Invariant: every marker
+    /// below this index has been either emitted or moved to `deferred`, exactly
+    /// once.
     next_marker: usize,
+    /// Markers CLAIMED by a block (so `next_marker` has passed them) but not yet
+    /// placed: they are waiting for the `Event::Text` that contains them. FIFO,
+    /// always ascending by offset.
+    deferred: VecDeque<(usize, u32, u32)>,
+    /// `> 0` while inside a code block, an HTML block, a table or an image, where
+    /// no marker may be emitted, deferred or split. See
+    /// [`opens_no_inject_region`].
+    no_inject_depth: u32,
     /// Buffered events to yield before pulling the next inner event (a block
-    /// `Start` expands to its flushed markers followed by the `Start` itself).
-    pending: std::collections::VecDeque<Event<'a>>,
+    /// `Start` expands to its flushed markers followed by the `Start` itself; a
+    /// split `Text` expands to prefix/marker/remainder).
+    pending: VecDeque<Event<'a>>,
     /// Set once the inner iterator is exhausted, so the trailing-marker flush runs
     /// exactly once.
     inner_done: bool,
@@ -982,25 +1303,253 @@ impl<'a, I> MarkerInjector<'a, I>
 where
     I: Iterator<Item = (Event<'a>, Range<usize>)>,
 {
-    fn new(inner: I, markers: Vec<(usize, u32, u32)>) -> Self {
+    fn new(inner: I, markers: Vec<(usize, u32, u32)>, source: &'a str) -> Self {
         Self {
             inner,
+            source,
             markers,
             next_marker: 0,
-            pending: std::collections::VecDeque::new(),
+            deferred: VecDeque::new(),
+            no_inject_depth: 0,
+            pending: VecDeque::new(),
             inner_done: false,
         }
     }
 
-    /// Buffers every pending marker with byte offset `< end` as a raw-HTML span,
-    /// in source order.
+    /// Buffers ONE marker span for output.
+    ///
+    /// The event MUST stay `Event::Html` and must never become
+    /// `Event::InlineHtml`: `html.rs:471-509`'s `raw_text` (which builds an image's
+    /// `alt="…"` attribute) DROPS `Html` but escapes `InlineHtml` INTO the
+    /// attribute. Emitting `Html` is therefore fail-safe — a marker that ever leaks
+    /// into an image loses its anchor rather than corrupting the rendered markup.
+    fn emit_marker(&mut self, line: u32, col: u32) {
+        self.pending
+            .push_back(Event::Html(marker_span(line, col).into()));
+    }
+
+    /// Buffers every UNCLAIMED marker with byte offset `< end` as a raw-HTML span,
+    /// in source order. Used only by the trailing flush at stream end.
     fn flush_before(&mut self, end: usize) {
         while self.next_marker < self.markers.len() && self.markers[self.next_marker].0 < end {
             let (_, line, col) = self.markers[self.next_marker];
-            self.pending
-                .push_back(Event::Html(marker_span(line, col).into()));
+            self.emit_marker(line, col);
             self.next_marker += 1;
         }
+    }
+
+    /// Claims every marker whose offset falls before `block.end` as this block's,
+    /// at the block's opening tag.
+    ///
+    /// A claimed marker is either EMITTED right away (today's behavior — the flush
+    /// that collapses it to the block top) or moved to `deferred` for inline
+    /// placement. It is deferred only when all of these hold:
+    ///
+    /// - `deferrable` — the block may hold interior markers back
+    ///   ([`defers_interior_markers`]);
+    /// - `no_inject_depth == 0` — not inside an excluded region;
+    /// - `col != 0` — column-zero markers ALWAYS keep their block-top placement
+    ///   (the front-end's tier-4 sweep filters on `[data-col="0"]` and depends on
+    ///   their document order);
+    /// - `offset > block.start` — a marker at or before the tag has nothing to sit
+    ///   inside.
+    ///
+    /// `next_marker` advances either way, so a marker is claimed exactly once.
+    fn claim_before(&mut self, block: &Range<usize>, deferrable: bool) {
+        while self.next_marker < self.markers.len() && self.markers[self.next_marker].0 < block.end
+        {
+            let (offset, line, col) = self.markers[self.next_marker];
+            if deferrable && self.no_inject_depth == 0 && col != 0 && offset > block.start {
+                self.deferred.push_back((offset, line, col));
+            } else {
+                self.emit_marker(line, col);
+            }
+            self.next_marker += 1;
+        }
+    }
+
+    /// Emits every deferred marker whose offset is `<= limit`. Used at a block
+    /// `Start` (with the block's `range.start`) and before a `Text` event (with the
+    /// text's `range.start`), so a marker that fell in a gap covered by no `Text`
+    /// still lands inside its block.
+    fn drain_deferred_at_or_before(&mut self, limit: usize) {
+        while self.deferred.front().is_some_and(|(o, _, _)| *o <= limit) {
+            if let Some((_, line, col)) = self.deferred.pop_front() {
+                self.emit_marker(line, col);
+            }
+        }
+    }
+
+    /// Emits every deferred marker whose offset is STRICTLY `< end`. Two call
+    /// sites, both passing the range of the block they are placing markers for:
+    ///
+    /// - a block `End`, with that `End`'s own `range.end` — so a deferred marker
+    ///   never escapes the innermost block containing it, and, equally important, a
+    ///   SIBLING block's marker (a container claims all of its items' markers at its
+    ///   own `Start`) is not dragged into the block that happens to close first. See
+    ///   [`drains_deferred`];
+    /// - an EXCLUDED block's `Start` ([`opens_no_inject_region`]), with that
+    ///   block's `range.end` — flushing the interior markers a container already
+    ///   claimed ahead of the opening tag, since nothing may place them once the
+    ///   block is open and its `End` would place them inside it.
+    ///
+    /// The bound is strict in both cases: `claim_before` only defers markers with
+    /// `offset > block.start`, so an offset can never equal the range end of the
+    /// block that owns it.
+    fn drain_deferred_before(&mut self, end: usize) {
+        while self.deferred.front().is_some_and(|(o, _, _)| *o < end) {
+            if let Some((_, line, col)) = self.deferred.pop_front() {
+                self.emit_marker(line, col);
+            }
+        }
+    }
+
+    /// Emits every remaining deferred marker. Used ONLY at stream end, before the
+    /// trailing [`flush_before`](Self::flush_before), so nothing is ever dropped.
+    fn drain_deferred_all(&mut self) {
+        self.drain_deferred_before(usize::MAX);
+    }
+
+    /// Tries to place the deferred markers that fall STRICTLY inside `range` by
+    /// splitting this `Text` event into `Text(prefix), Html(marker), …,
+    /// Text(remainder)`.
+    ///
+    /// Returns `false` — the caller then emits the `Text` verbatim and the markers
+    /// stay deferred for a later placement point — when:
+    ///
+    /// - injection is suppressed (`no_inject_depth > 0`), or
+    /// - no deferred marker lies in `(range.start, range.end)`, or
+    /// - the IDENTITY PREDICATE fails: `source[range] != payload`. A `Text` payload
+    ///   is the source slice of its range for a real text item
+    ///   (`parse.rs:2113`), but `SynthesizeText`/`SynthesizeChar` items — entity
+    ///   references (`&amp;` → `"&"`), code/HTML indent padding — carry a payload
+    ///   UNRELATED to the range (`parse.rs:2115-2116`). A length check is not
+    ///   enough: some HTML5 named entities expand to a same-LENGTH string, so the
+    ///   bytes are compared.
+    ///
+    /// Splitting is escaping-neutral: pulldown-cmark-escape escapes byte by byte
+    /// with no cross-character state, so `escape(prefix) ++ escape(remainder)` is
+    /// `escape(prefix ++ remainder)`.
+    fn try_split_text(&mut self, text: &CowStr<'a>, range: &Range<usize>) -> bool {
+        if self.no_inject_depth > 0 {
+            return false;
+        }
+        // Is there anything to place, and is the range's payload trustworthy?
+        if !self
+            .deferred
+            .front()
+            .is_some_and(|(o, _, _)| *o > range.start && *o < range.end)
+        {
+            return false;
+        }
+        if self.source.get(range.start..range.end) != Some(text.as_ref()) {
+            return false;
+        }
+
+        let mut cut = range.start;
+        while let Some(&(offset, line, col)) = self.deferred.front() {
+            if offset <= cut || offset >= range.end || !self.source.is_char_boundary(offset) {
+                break;
+            }
+            let point = snap_split_point(self.source, range, offset, cut);
+            if let Some(prefix) = self.source.get(cut..point) {
+                if !prefix.is_empty() {
+                    self.pending.push_back(Event::Text(prefix.into()));
+                }
+            }
+            self.emit_marker(line, col);
+            self.deferred.pop_front();
+            cut = point;
+        }
+
+        if let Some(remainder) = self.source.get(cut..range.end) {
+            if !remainder.is_empty() {
+                self.pending.push_back(Event::Text(remainder.into()));
+            }
+        }
+        true
+    }
+
+    /// Places every marker due at `event` and buffers `event` itself, expanding a
+    /// `Text` that contains deferred markers into its split form. The whole
+    /// placement rule lives here so [`Iterator::next`] stays a dispatcher.
+    fn place(&mut self, event: Event<'a>, range: &Range<usize>) {
+        // 1. Leave an excluded region BEFORE any drain, so a marker due right after
+        //    a `</pre>` is emittable.
+        if closes_no_inject_region(&event) {
+            self.no_inject_depth = self.no_inject_depth.saturating_sub(1);
+        }
+
+        // 2. A block `End` drains the deferred markers that belong to THIS block
+        //    (bounded by its own `range.end`), so none escapes it.
+        if drains_deferred(&event) && self.no_inject_depth == 0 {
+            self.drain_deferred_before(range.end);
+        }
+
+        // 3. A block `Start` first lets through anything due at or before its tag,
+        //    then claims its own interior markers.
+        if is_block_start(&event) {
+            let opens_exclusion = opens_no_inject_region(&event);
+            self.drain_deferred_at_or_before(range.start);
+            if opens_exclusion {
+                // An EXCLUDED block nested in a container needs its interior
+                // markers flushed here, ahead of its opening tag.
+                //
+                // `no_inject_depth` alone cannot protect it: a container (`List`,
+                // `Item`, `BlockQuote`, `FootnoteDefinition`) defers every
+                // `col != 0` marker across its WHOLE range at its own `Start`,
+                // including markers whose offsets fall inside a `CodeBlock` /
+                // `HtmlBlock` / `Table` nested inside it. Those markers are
+                // already past `next_marker` by the time this `Start` arrives, so
+                // the `claim_before(.., deferrable = false)` below cannot reclaim
+                // them — they would survive to the block's `End`, where step 1 has
+                // just dropped the depth back to 0 and step 2 would drain them
+                // INSIDE `<pre><code>` or just before `</tbody></table>` (the
+                // foster-parenting hazard the exclusion exists to prevent).
+                //
+                // Draining them before the tag gives a nested excluded block
+                // exactly the same flush-before-the-tag placement a top-level one
+                // gets, which is what `defers_interior_markers` promises.
+                //
+                // Deliberately NOT gated on `no_inject_depth == 0` the way step 2
+                // is, and the asymmetry is intentional rather than an oversight.
+                // Step 2's gate stops a drain from firing INSIDE a suppressed
+                // region (`End(TableRow)` within a table). This drain is what makes
+                // the exclusion work — it moves markers out of harm's way BEFORE
+                // the region opens — so if an excluded block ever did nest inside
+                // another (unreachable today: none of the four regions can contain
+                // a `CodeBlock`, `HtmlBlock` or `Table`, and `Start(Image)` is not
+                // a block start so it takes step 5), suppressing it would be
+                // exactly wrong: the markers would be stranded and drained at the
+                // inner `End`, which is the bug this drain exists to fix.
+                self.drain_deferred_before(range.end);
+            }
+            self.claim_before(range, defers_interior_markers(&event));
+            if opens_exclusion {
+                self.no_inject_depth += 1;
+            }
+            self.pending.push_back(event);
+            return;
+        }
+
+        // 4. A `Text` in an unsuppressed context is the inline placement point:
+        //    first let through everything due at or before it (the markers that
+        //    fell in a gap covered by no `Text`), then try to split it.
+        if let Event::Text(text) = &event {
+            if self.no_inject_depth == 0 && !self.deferred.is_empty() {
+                self.drain_deferred_at_or_before(range.start);
+                if self.try_split_text(text, range) {
+                    return;
+                }
+            }
+        }
+
+        // 5. `Start(Image)` is not a block start, so its exclusion opens here.
+        if opens_no_inject_region(&event) {
+            self.no_inject_depth += 1;
+        }
+
+        self.pending.push_back(event);
     }
 }
 
@@ -1017,22 +1566,30 @@ where
             }
             match self.inner.next() {
                 Some((event, range)) => {
-                    if is_block_start(&event) {
-                        // Flush this block's interior (and any preceding) markers
-                        // before its opening tag, then emit the tag.
-                        self.flush_before(range.end);
-                        self.pending.push_back(event);
-                        // Loop back to drain `pending` (the flushed markers first).
-                    } else {
-                        return Some(event);
-                    }
+                    // Buffer the event (expanded with whatever markers are due at
+                    // it), then loop back to drain `pending` in order.
+                    //
+                    // EVERY event goes through `pending` — do NOT "optimize" this
+                    // into returning a non-block, non-Text event directly. Step 4
+                    // of `place` may drain markers into `pending` and only THEN
+                    // have `try_split_text` decline (the identity predicate fails
+                    // on an entity reference, say), in which case the `Text` must
+                    // still be emitted AFTER the markers just drained ahead of it.
+                    // A direct return would emit it first and silently reverse
+                    // their document order. `entity_reference_is_not_split` and
+                    // `escapes_and_entities_survive_inline_anchoring` both take
+                    // exactly that path. The cost is one extra loop iteration per
+                    // event.
+                    self.place(event, &range);
                 }
                 None => {
                     if self.inner_done {
                         return None;
                     }
                     self.inner_done = true;
-                    // Flush every remaining marker as a trailing span.
+                    // Nothing is ever dropped: place what is still deferred, then
+                    // flush every remaining marker as a trailing span.
+                    self.drain_deferred_all();
                     self.flush_before(usize::MAX);
                     // Loop back to drain `pending`; if empty, the next pass returns
                     // None (inner_done is set).
@@ -1718,5 +2275,1016 @@ mod tests {
             );
         }
         assert_eq!(depth, 0, "highlight spans must balance: {inside}");
+    }
+
+    // -----------------------------------------------------------------------
+    // Inline-level marker anchoring.
+    //
+    // A block's interior per-100-column markers (`col != 0`) are DEFERRED past
+    // the block's opening tag and placed at their real position in the rendered
+    // inline flow, by splitting the `Event::Text` whose SOURCE range contains
+    // them (prefix `Text`, the marker as raw `Event::Html`, remainder `Text`).
+    // Column-zero markers keep their block-top placement, the split point snaps
+    // to the nearest word boundary, and splitting is suppressed inside code
+    // blocks, HTML blocks, tables and image alt text.
+    //
+    // Every fixture below is built with `repeat()`/`format!`, and every column
+    // arithmetic claim (which character sits at column 100/200, and where the
+    // nearest whitespace boundary is) is spelled out in the test's comment so it
+    // can be re-derived without running the code.
+    // -----------------------------------------------------------------------
+
+    /// The rendered document's `<body …>` INNER html: the slice between the body
+    /// start tag's `>` and the closing `</body>`.
+    ///
+    /// Every assertion in this section goes through it, because the `<style>`
+    /// block mentions `.wolf-src`, `p`, `pre`, `table`, … and would otherwise
+    /// poison a bare `contains`/`find` on the whole document.
+    fn body_of(html: &str) -> &str {
+        let open = html
+            .find("<body")
+            .unwrap_or_else(|| panic!("the rendered document must contain a <body>: {html}"));
+        let open_end = html[open..]
+            .find('>')
+            .unwrap_or_else(|| panic!("the <body> start tag must be closed: {html}"));
+        let start = open + open_end + 1;
+        let end = html[start..]
+            .find("</body>")
+            .unwrap_or_else(|| panic!("the <body> must be closed: {html}"));
+        &html[start..start + end]
+    }
+
+    /// `s` with every `<span class="wolf-src" …></span>` anchor removed, leaving
+    /// only the markup the anchors are woven into.
+    ///
+    /// The whole point of inline anchoring is that it changes DOM PLACEMENT and
+    /// nothing else, so stripping the anchors must reproduce a vanilla render.
+    fn strip_marker_spans(s: &str) -> String {
+        const OPEN: &str = "<span class=\"wolf-src\"";
+        const CLOSE: &str = "</span>";
+
+        let mut out = String::with_capacity(s.len());
+        let mut rest = s;
+        while let Some(at) = rest.find(OPEN) {
+            out.push_str(&rest[..at]);
+            let after = &rest[at..];
+            let close = after
+                .find(CLOSE)
+                .unwrap_or_else(|| panic!("an anchor span must be closed by `</span>`: {after}"));
+            rest = &after[close + CLOSE.len()..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// U1: a single-line paragraph longer than two strides puts its `wl-1-100` and
+    /// `wl-1-200` anchors INSIDE the `<p>` (in source order), while `wl-1-0` keeps
+    /// its block-top placement before the `<p>`. This is the whole point of the
+    /// change: a cursor near the end of the line must resolve to a rect deep in the
+    /// paragraph, not to the paragraph's top.
+    #[test]
+    fn column_marker_lands_inside_the_paragraph() {
+        // `"lorem ipsum "` is 12 characters, so this is one 240-character hard line.
+        let source = "lorem ipsum ".repeat(20);
+        let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+        let body = body_of(&html);
+
+        let p_open = body
+            .find("<p>")
+            .unwrap_or_else(|| panic!("the long line must render one <p>: {body}"));
+        let p_close = body
+            .find("</p>")
+            .unwrap_or_else(|| panic!("the <p> must be closed: {body}"));
+        let zero = body
+            .find(r#"id="wl-1-0""#)
+            .unwrap_or_else(|| panic!("missing the `wl-1-0` anchor: {body}"));
+        let hundred = body
+            .find(r#"id="wl-1-100""#)
+            .unwrap_or_else(|| panic!("missing the `wl-1-100` anchor: {body}"));
+        let two_hundred = body
+            .find(r#"id="wl-1-200""#)
+            .unwrap_or_else(|| panic!("missing the `wl-1-200` anchor: {body}"));
+
+        assert!(
+            zero < p_open,
+            "the column-ZERO anchor keeps its block-top placement: `wl-1-0` at \
+             {zero} must precede the <p> at {p_open}: {body}"
+        );
+        assert!(
+            p_open < hundred && hundred < p_close,
+            "`wl-1-100` (at {hundred}) must sit INSIDE the paragraph's inline \
+             content (<p> at {p_open}, </p> at {p_close}): {body}"
+        );
+        assert!(
+            p_open < two_hundred && two_hundred < p_close,
+            "`wl-1-200` (at {two_hundred}) must sit INSIDE the paragraph's inline \
+             content (<p> at {p_open}, </p> at {p_close}): {body}"
+        );
+        assert!(
+            hundred < two_hundred,
+            "the interior anchors must stay in source order: `wl-1-100` at \
+             {hundred} must precede `wl-1-200` at {two_hundred}: {body}"
+        );
+    }
+
+    /// U2: the split point SNAPS to the nearest word boundary (so no glyph-shaping
+    /// pair is broken by the inline box), while the anchor's `id` / `data-line` /
+    /// `data-col` stay at the EXACT `(L, C)`.
+    ///
+    /// Fixture arithmetic for `"lorem ipsum ".repeat(20)` (12 ASCII characters per
+    /// repeat, so byte offset == character column):
+    ///
+    /// - Repeat #9 covers bytes `96..108` = `l o r e m ␠ i p s u m ␠`. Column 100 is
+    ///   therefore the `m` that ENDS `lorem`. The nearest word boundary is byte 101
+    ///   (the space starts there), 1 byte away — the alternatives are 102 (distance
+    ///   2), 96 and 95 (distances 4 and 5). So the split snaps FORWARD to 101 and
+    ///   the anchor lands between `lorem` and `␠ipsum`.
+    /// - Repeat #17 covers bytes `192..204`. Column 200 is the `s` of `ipsum`
+    ///   (`i`=198, `p`=199, `s`=200). The nearest boundary is byte 198 (the space at
+    ///   197 ends there), 2 bytes away; 197 and 203 are both 3 away. So the split
+    ///   snaps BACKWARD to 198 and the anchor lands between `lorem␠` and `ipsum`.
+    ///
+    /// The two directions are asserted together on purpose: a splitter that only
+    /// ever scanned forward (or only backward) would pass one and fail the other.
+    #[test]
+    fn split_snaps_to_the_nearest_word_boundary() {
+        let source = "lorem ipsum ".repeat(20);
+        let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+        let body = body_of(&html);
+
+        let snapped_forward = format!("lorem{} ipsum", marker_span(1, 100));
+        assert!(
+            body.contains(&snapped_forward),
+            "the `wl-1-100` anchor must snap FORWARD from column 100 (the `m` \
+             ending `lorem`) to the word boundary one byte later, landing between \
+             `lorem` and ` ipsum` — expected the substring `{snapped_forward}` \
+             in: {body}"
+        );
+
+        let snapped_backward = format!("lorem {}ipsum", marker_span(1, 200));
+        assert!(
+            body.contains(&snapped_backward),
+            "the `wl-1-200` anchor must snap BACKWARD from column 200 (the `s` of \
+             `ipsum`) to the word boundary two bytes earlier, landing between \
+             `lorem ` and `ipsum` — expected the substring `{snapped_backward}` \
+             in: {body}"
+        );
+    }
+
+    /// U3: with no word boundary anywhere in the snap window, the split happens at
+    /// the EXACT byte offset. A 300-`a` paragraph therefore renders as three
+    /// 100-character runs separated by the two interior anchors — asserted as an
+    /// exact body, so nothing else may be inserted, duplicated or dropped.
+    ///
+    /// The `\n` before `<p>` and the one after `</p>` are pulldown-cmark's, and the
+    /// leading one is a PRE-EXISTING artifact of flushing a raw span before a block
+    /// tag — it is NOT produced by inline anchoring, and the same `\n` is already
+    /// emitted today for the column-zero anchor. The chain: `html.rs:65` seeds
+    /// `end_newline = true`; `html.rs:86-88`'s `write` clears it when the anchor
+    /// span (which does not end in a newline) is written; `html.rs:163-167` then
+    /// emits `"\n<p>"` rather than `"<p>"`. `TagEnd::Paragraph` (`html.rs:394-396`)
+    /// always writes `"</p>\n"`, anchors or not.
+    #[test]
+    fn unbroken_token_splits_at_the_exact_offset() {
+        const RUNS: usize = 3;
+        let chunk = "a".repeat(MARKER_COLUMN_STRIDE);
+        let source = chunk.repeat(RUNS);
+
+        let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+        let body = body_of(&html);
+
+        let expected = format!(
+            "{zero}\n<p>{chunk}{hundred}{chunk}{two_hundred}{chunk}</p>\n",
+            zero = marker_span(1, 0),
+            hundred = marker_span(1, 100),
+            two_hundred = marker_span(1, 200),
+        );
+        assert_eq!(
+            body, expected,
+            "a 300-character unbroken token has no word boundary within the snap \
+             window, so each interior anchor must split the text at its EXACT \
+             column offset (100 and 200), leaving three untouched 100-character \
+             runs and the column-zero anchor still ahead of the <p>"
+        );
+    }
+
+    /// U4: several markers inside ONE `Event::Text` all get placed — each exactly
+    /// once, at strictly increasing positions, all within the paragraph. This is
+    /// the split loop's guard against emitting a marker twice, dropping the tail of
+    /// the queue, or letting two markers collapse onto the same point.
+    #[test]
+    fn markers_in_one_text_event_stay_ordered_and_unique() {
+        const RUNS: usize = 4;
+        const TAIL: usize = 50;
+        let source = "a".repeat(RUNS * MARKER_COLUMN_STRIDE + TAIL);
+
+        let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+        let body = body_of(&html);
+
+        let p_open = body
+            .find("<p>")
+            .unwrap_or_else(|| panic!("the long line must render one <p>: {body}"));
+        let p_close = body
+            .find("</p>")
+            .unwrap_or_else(|| panic!("the <p> must be closed: {body}"));
+
+        let mut previous = p_open;
+        for col in 1..=RUNS {
+            let id = format!(r#"id="wl-1-{}""#, col * MARKER_COLUMN_STRIDE);
+            assert_eq!(
+                body.matches(&id).count(),
+                1,
+                "`{id}` must be emitted EXACTLY once: {body}"
+            );
+            let idx = body
+                .find(&id)
+                .unwrap_or_else(|| panic!("missing the `{id}` anchor: {body}"));
+            assert!(
+                previous < idx && idx < p_close,
+                "`{id}` (at {idx}) must sit inside the paragraph and after the \
+                 previous anchor (at {previous}, </p> at {p_close}): {body}"
+            );
+            previous = idx;
+        }
+    }
+
+    /// U5: column-ZERO markers are untouched by this change — a three-hard-line
+    /// paragraph still collapses all three `wl-{L}-0` anchors to before the single
+    /// `<p>`. The front-end's tier-4 sweep filters on `[data-col="0"]` and depends
+    /// on exactly this.
+    #[test]
+    fn column_zero_markers_keep_block_placement() {
+        let html = render_html("foo\nbar\nbaz", PreviewTheme::Default, WidthMode::Full);
+        let body = body_of(&html);
+
+        let p_open = body
+            .find("<p>")
+            .unwrap_or_else(|| panic!("the three lines must render one <p>: {body}"));
+        for line in 1..=3u32 {
+            let id = format!(r#"id="wl-{line}-0""#);
+            let idx = body
+                .find(&id)
+                .unwrap_or_else(|| panic!("missing the `{id}` anchor: {body}"));
+            assert!(
+                idx < p_open,
+                "`{id}` (at {idx}) must still collapse to before the <p> (at \
+                 {p_open}): {body}"
+            );
+        }
+    }
+
+    /// U6: a PLAIN (unhighlighted) fenced code block still yields `Event::Text`, and
+    /// inside a fence one `Text` event can span a whole line including its `\n` — so
+    /// without the code-block exclusion an interior column marker would be "strictly
+    /// inside" it and would corrupt the rendered code. Nothing may land in `<pre>`,
+    /// and the marker must still exist elsewhere (never dropped).
+    #[test]
+    fn plain_code_block_takes_no_inline_marker() {
+        let code_line = "x".repeat(2 * MARKER_COLUMN_STRIDE);
+        // Hard lines: 1 = "```", 2 = the 200-character body line, 3 = "code two",
+        // 4 = "```", 5 = "" (the trailing newline).
+        let source = format!("```\n{code_line}\ncode two\n```\n");
+
+        let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+        let body = body_of(&html);
+
+        let pre_start = body
+            .find("<pre")
+            .unwrap_or_else(|| panic!("missing <pre> for the fenced block: {body}"));
+        let pre_end = body
+            .find("</pre>")
+            .unwrap_or_else(|| panic!("missing </pre>: {body}"));
+        let inside = &body[pre_start..pre_end];
+        assert!(
+            !inside.contains("wolf-src"),
+            "no `wolf-src` anchor may be split into a plain <pre><code>: {inside}"
+        );
+        assert!(
+            !inside.contains("wl-"),
+            "no `wl-` anchor id may appear inside a plain <pre><code>: {inside}"
+        );
+        assert!(
+            body.contains(r#"id="wl-2-100""#),
+            "the code line's `wl-2-100` anchor must still EXIST outside the <pre> \
+             (excluded from the block, not dropped): {body}"
+        );
+    }
+
+    /// U7: the HIGHLIGHTED path is the other half of the code-block exclusion.
+    /// `CodeHighlighter` rewrites the block interior to a single `Event::InlineHtml`
+    /// (never splittable) but passes `Start`/`End(CodeBlock)` through, so the
+    /// exclusion depth still brackets the block.
+    #[test]
+    fn highlighted_code_block_takes_no_inline_marker() {
+        const HIGHLIGHT_END_COL: u32 = 10;
+        let code_line = "x".repeat(2 * MARKER_COLUMN_STRIDE);
+        let source = format!("```go\n{code_line}\ncode two\n```\n");
+        let block = BlockHighlight {
+            spans: vec![HighlightSpan {
+                row: 0,
+                start_col: 0,
+                end_col: HIGHLIGHT_END_COL,
+                style: HighlightStyle {
+                    color: Some(0x0000_FF00),
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                },
+            }],
+        };
+
+        let html = render_html_with_highlights(
+            &source,
+            PreviewTheme::Default,
+            WidthMode::Full,
+            &[Some(block)],
+        );
+        let body = body_of(&html);
+
+        let pre_start = body
+            .find("<pre")
+            .unwrap_or_else(|| panic!("missing <pre> for the highlighted block: {body}"));
+        let pre_end = body
+            .find("</pre>")
+            .unwrap_or_else(|| panic!("missing </pre>: {body}"));
+        let inside = &body[pre_start..pre_end];
+        assert!(
+            !inside.contains("wolf-src"),
+            "no `wolf-src` anchor may land inside a HIGHLIGHTED <pre><code>: {inside}"
+        );
+        assert!(
+            !inside.contains("wl-"),
+            "no `wl-` anchor id may appear inside a HIGHLIGHTED <pre><code>: {inside}"
+        );
+        assert!(
+            inside.contains("<span style="),
+            "fixture sanity: the block must actually be highlighted (inline-styled \
+             spans present): {inside}"
+        );
+        assert!(
+            body.contains(r#"id="wl-2-100""#),
+            "the code line's `wl-2-100` anchor must still EXIST outside the <pre>: {body}"
+        );
+    }
+
+    /// U8: image alt text is a VERIFIED corruption hazard. `html.rs`'s `raw_text()`
+    /// (used to build the `alt` attribute) DROPS `Event::Html` outright and escapes
+    /// `Event::Text`/`InlineHtml` into the attribute — so a marker leaking into an
+    /// image would either vanish (breaking its id's existence guarantee) or be
+    /// baked into `alt="…"`. Neither may happen: the anchor must stay out of the
+    /// `<img …/>` tag AND still exist in the document.
+    #[test]
+    fn image_alt_text_keeps_its_marker_out_of_the_attribute() {
+        // `"alt word "` is 9 characters, so the alt text spans source bytes
+        // 2..182 and character column 100 falls well inside it.
+        let source = format!("![{}](i.png)", "alt word ".repeat(20));
+        let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+        let body = body_of(&html);
+
+        let img_start = body
+            .find("<img")
+            .unwrap_or_else(|| panic!("missing the <img> element: {body}"));
+        let img_len = body[img_start..]
+            .find("/>")
+            .unwrap_or_else(|| panic!("the <img> element must be closed with `/>`: {body}"));
+        let img_tag = &body[img_start..img_start + img_len + "/>".len()];
+        assert!(
+            !img_tag.contains("wolf-src"),
+            "no `wolf-src` anchor may be escaped into the image's alt attribute: {img_tag}"
+        );
+        assert!(
+            !img_tag.contains("wl-"),
+            "no `wl-` anchor id may appear inside the <img> tag: {img_tag}"
+        );
+        assert!(
+            body.contains(r#"id="wl-1-100""#),
+            "the anchor must still exist in the document — if it is missing, it \
+             leaked into the image and `raw_text()`'s `Html(_) => {{}}` arm \
+             silently dropped it: {body}"
+        );
+    }
+
+    /// U9: a marker must never reach a table interior. A raw span between `<tbody>`
+    /// and `<tr>` is foster-parented out of the table by the HTML parser, so tables
+    /// keep the pre-change behavior: every interior marker is flushed BEFORE the
+    /// opening `<table>`.
+    #[test]
+    fn table_interior_takes_no_inline_marker() {
+        // Hard line 3 is `| {130 w's} | y |` — 138 characters, so it earns a
+        // `wl-3-100` marker whose offset is inside the table's source range.
+        let long_cell = "w".repeat(130);
+        let source = format!("| a | b |\n| --- | --- |\n| {long_cell} | y |\n| c | d |\n");
+
+        let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+        let body = body_of(&html);
+
+        let table_start = body
+            .find("<table")
+            .unwrap_or_else(|| panic!("missing the <table>: {body}"));
+        let table_end = body
+            .find("</table>")
+            .unwrap_or_else(|| panic!("missing </table>: {body}"));
+        let inside = &body[table_start..table_end];
+        assert!(
+            !inside.contains("wolf-src"),
+            "no `wolf-src` anchor may be placed inside a <table> (it would be \
+             foster-parented out of the table by the HTML parser): {inside}"
+        );
+
+        let marker = body
+            .find(r#"id="wl-3-100""#)
+            .unwrap_or_else(|| panic!("missing the `wl-3-100` anchor: {body}"));
+        assert!(
+            marker < table_start,
+            "the long cell's `wl-3-100` anchor (at {marker}) must keep its \
+             flush-before-the-block placement, ahead of the <table> at \
+             {table_start}: {body}"
+        );
+    }
+
+    /// U10: an HTML block yields only `Event::Html`, so there is nothing to split —
+    /// but the exclusion also has to stop a deferred marker from being emitted
+    /// BETWEEN two raw HTML lines, which would inject a span into the author's own
+    /// markup.
+    #[test]
+    fn html_block_is_not_split() {
+        const RUN_LEN: usize = 150;
+        let run = "h".repeat(RUN_LEN);
+        let source = format!("<div>\n{run}\n</div>\n");
+
+        let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+        let body = body_of(&html);
+
+        let div_start = body
+            .find("<div>")
+            .unwrap_or_else(|| panic!("the HTML block must pass through verbatim: {body}"));
+        let div_end = body
+            .find("</div>")
+            .unwrap_or_else(|| panic!("missing the HTML block's </div>: {body}"));
+        let inside = &body[div_start..div_end];
+        assert!(
+            !inside.contains("wolf-src"),
+            "no `wolf-src` anchor may be placed inside a raw HTML block: {inside}"
+        );
+        assert!(
+            body.contains(&run),
+            "the HTML block's {RUN_LEN}-character run must survive verbatim: {body}"
+        );
+    }
+
+    /// U11: character column 100 falls inside a LINK DESTINATION, a source region
+    /// covered by no `Event::Text` at all. The marker must not be dropped and must
+    /// not end up inside the `href` attribute; it lands at the next legal point
+    /// inside the containing paragraph.
+    #[test]
+    fn link_destination_gap_marker_lands_inside_the_paragraph() {
+        // `[text](https://example.com/` is 27 bytes, so the 150-`p` path occupies
+        // bytes 27..177 and character column 100 sits inside the URL.
+        let source = format!("[text](https://example.com/{})", "p".repeat(150));
+        let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+        let body = body_of(&html);
+
+        let marker = body
+            .find(r#"id="wl-1-100""#)
+            .unwrap_or_else(|| panic!("missing the `wl-1-100` anchor: {body}"));
+        let a_close = body
+            .find("</a>")
+            .unwrap_or_else(|| panic!("missing the link's </a>: {body}"));
+        let p_close = body
+            .find("</p>")
+            .unwrap_or_else(|| panic!("missing the paragraph's </p>: {body}"));
+        assert!(
+            a_close < marker && marker < p_close,
+            "a marker whose offset falls in the link DESTINATION (a gap covered by \
+             no Text event) must land after the </a> (at {a_close}) and before the \
+             </p> (at {p_close}), not be dropped — found at {marker}: {body}"
+        );
+
+        let href_start = body
+            .find("href=\"")
+            .unwrap_or_else(|| panic!("missing the link's href: {body}"));
+        let href_rest = &body[href_start + "href=\"".len()..];
+        let href_end = href_rest
+            .find('"')
+            .unwrap_or_else(|| panic!("the href attribute must be closed: {body}"));
+        let href = &href_rest[..href_end];
+        assert!(
+            !href.contains("wolf-src") && !href.contains("wl-"),
+            "the href attribute must never receive an anchor span: {href}"
+        );
+    }
+
+    /// U12: an entity reference is a `SynthesizeText` item whose payload
+    /// (`"&"`) is UNRELATED to its 5-byte source range (`"&amp;"`), so the exact
+    /// `source[range] == payload` identity predicate must reject it and the marker
+    /// must fall through to the next legal point rather than slicing the entity in
+    /// half (or double-escaping it).
+    #[test]
+    fn entity_reference_is_not_split() {
+        // 98 filler characters put `&amp;` at bytes 98..103, so character column
+        // 100 (the `m`) is STRICTLY inside the entity's source span.
+        let source = format!("{}&amp;{}", "a".repeat(98), "a".repeat(60));
+        let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+        let body = body_of(&html);
+
+        assert!(
+            body.contains("a&amp;"),
+            "the rendered entity must stay intact and un-split, directly following \
+             the filler text: {body}"
+        );
+        assert_eq!(
+            body.matches("&amp;").count(),
+            1,
+            "the source's single `&amp;` must render exactly once: {body}"
+        );
+        assert!(
+            !body.contains("&amp;amp;"),
+            "the entity must not be double-escaped: {body}"
+        );
+        assert!(
+            body.contains(r#"id="wl-1-100""#),
+            "a marker that cannot be placed by splitting must still be emitted \
+             somewhere (never dropped): {body}"
+        );
+    }
+
+    /// U13: a backslash escape closes the current text item and starts the next one
+    /// AFTER the backslash, so the backslash byte is covered by no event at all.
+    /// A marker landing on that seam must not resurrect the escape (turning
+    /// `\*stars\*` into `<em>stars</em>`) or split the escaped run.
+    #[test]
+    fn backslash_escape_is_not_corrupted() {
+        // 99 filler characters, then `\*stars\*` at bytes 99..108: the backslash is
+        // byte 99 and character column 100 is the escaped `*` that opens the run.
+        let source = format!("{}\\*stars\\*{}", "a".repeat(99), "a".repeat(60));
+        let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+        let body = body_of(&html);
+
+        assert!(
+            body.contains("*stars*"),
+            "the escaped `\\*stars\\*` must render as the literal `*stars*`, \
+             uninterrupted by an anchor span: {body}"
+        );
+        assert!(
+            !body.contains("<em>"),
+            "the backslash escapes must still suppress emphasis (no <em>): {body}"
+        );
+        assert!(
+            body.contains(r#"id="wl-1-100""#),
+            "the marker must still be emitted: {body}"
+        );
+    }
+
+    /// A deliberately hostile single fixture for [`stripping_marker_spans_reproduces_a_vanilla_render`]:
+    /// a >300-character paragraph carrying strong/emphasis, a code span, a long
+    /// link, an image with long alt text, backslash escapes, an entity reference, a
+    /// multibyte run and a hard break, followed by a fenced code block with a
+    /// 150-character line, a table with a long cell, and a raw HTML block.
+    ///
+    /// It deliberately contains NO heading and NO math: `HeadingIdAssigner` adds
+    /// slug ids and `MathRenderer` rewrites math to MathML, so either one would make
+    /// the render legitimately differ from a vanilla `html::push_html` for reasons
+    /// that have nothing to do with markers.
+    fn marker_stress_fixture() -> String {
+        let filler = "lorem ipsum dolor sit amet ".repeat(6);
+        let link_path = "q".repeat(60);
+        let alt = "alt word ".repeat(12);
+        let multibyte = "é".repeat(40);
+        let code_line = "z".repeat(150);
+        let long_cell = "w".repeat(130);
+        let html_run = "h".repeat(120);
+
+        let mut source = String::new();
+        source.push_str(&filler);
+        source.push_str("**bold** and _em_ and `code span` and ");
+        source.push_str(&format!("[link](https://example.com/{link_path}) and "));
+        source.push_str(&format!("![{alt}](pic.png) and "));
+        source.push_str("\\*escapes\\* and &amp; and ");
+        source.push_str(&multibyte);
+        // Two trailing spaces: a HARD break, so this paragraph spans two hard lines.
+        source.push_str(" tail  \n");
+        source.push_str("second hard line of the same paragraph\n\n");
+        source.push_str(&format!("```text\n{code_line}\n```\n\n"));
+        source.push_str(&format!(
+            "| a | b |\n| --- | --- |\n| {long_cell} | y |\n\n"
+        ));
+        source.push_str(&format!("<div>\n{html_run}\n</div>\n"));
+        source
+    }
+
+    /// U14: the strongest guard. Stripping every anchor span out of the rendered
+    /// body must reproduce a VANILLA `html::push_html` render byte for byte — i.e.
+    /// inline anchoring changes DOM placement and nothing else: no text is
+    /// duplicated, dropped, re-escaped, or moved.
+    #[test]
+    fn stripping_marker_spans_reproduces_a_vanilla_render() {
+        let source = marker_stress_fixture();
+        let rendered = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+
+        let mut vanilla = String::new();
+        html::push_html(&mut vanilla, Parser::new_ext(&source, markdown_options()));
+
+        // The `\n` normalization is REQUIRED and is not a weakening of the check.
+        // pulldown-cmark's HTML writer tracks whether the last thing it wrote ended
+        // in a newline (`html.rs:86-88`); writing a raw anchor span clears that
+        // flag, so a block tag following an anchor is written as `\n<p>` instead of
+        // `<p>`. That artifact PREDATES this change (it is a property of injecting
+        // raw HTML at all) and is pure inter-tag whitespace. Both sides are
+        // transformed identically, so every remaining difference — a lost
+        // character, a re-escaped entity, a duplicated run — still fails the
+        // comparison.
+        let stripped = strip_marker_spans(body_of(&rendered)).replace('\n', "");
+        let expected = vanilla.replace('\n', "");
+        assert_eq!(
+            stripped, expected,
+            "with the anchor spans stripped, the rendered body must be identical \
+             to a vanilla pulldown-cmark render — inline anchoring may change DOM \
+             PLACEMENT only, never the rendered content"
+        );
+    }
+
+    /// The HTML5 named entity `&nvap;`, whose expansion is **the same byte length
+    /// as its source**: 6 source bytes (`&`, `n`, `v`, `a`, `p`, `;`) expand to
+    /// `U+224D U+20D2`, two 3-byte UTF-8 characters — 6 bytes.
+    ///
+    /// Verified in the vendored engine: `pulldown-cmark-0.12.2/src/entities.rs:1547`
+    /// maps `b"nvap"` to `"\u{224D}\u{20D2}"`, and `scanners.rs:901-928`'s
+    /// `scan_entity` returns `(end + 1, Some(value))` — i.e. the item range spans
+    /// the full `&nvap;`, while the payload is the expansion.
+    const SAME_LENGTH_ENTITY_SOURCE: &str = "&nvap;";
+
+    /// What [`SAME_LENGTH_ENTITY_SOURCE`] renders to: `≍` (U+224D) immediately
+    /// followed by its combining overlay (U+20D2). They must stay ADJACENT — an
+    /// anchor span wedged between a base character and its combining mark breaks
+    /// the grapheme.
+    const SAME_LENGTH_ENTITY_RENDERED: &str = "\u{224D}\u{20D2}";
+
+    /// G2: the identity predicate must be an EXACT byte compare of
+    /// `source[range]` against the payload, not the `range.len() == text.len()`
+    /// heuristic the plan explicitly rejected.
+    ///
+    /// `&amp;` (U12, I5) cannot tell the two apart: 5 source bytes → 1 payload byte
+    /// fails a length check just as it fails a byte check. `&nvap;` can — its
+    /// source and payload are both 6 bytes, so ONLY the byte compare rejects it.
+    ///
+    /// The consequence of getting this wrong is concrete, not theoretical.
+    /// [`MarkerInjector::try_split_text`] slices **`self.source`**, not the payload,
+    /// so a length-gated variant would accept this range and then cut the SOURCE at
+    /// the split point — emitting `Text("&nv")`, the anchor, `Text("ap;")`. The HTML
+    /// writer escapes both halves, so the document ends up carrying a literal
+    /// `&amp;nvap;` and the rendered `≍⃒` grapheme never appears at all.
+    #[test]
+    fn same_length_entity_is_not_split() {
+        assert_eq!(
+            SAME_LENGTH_ENTITY_SOURCE.len(),
+            SAME_LENGTH_ENTITY_RENDERED.len(),
+            "fixture sanity: this test only distinguishes the byte predicate from a \
+             length check while the entity's source and expansion are the SAME byte \
+             length; pick another same-length entity if this ever changes"
+        );
+
+        // 97 filler characters put `&nvap;` at bytes 97..103, so character column
+        // 100 (the `a` of `nvap`) is STRICTLY inside the entity's source span.
+        let source = format!(
+            "{}{SAME_LENGTH_ENTITY_SOURCE}{}",
+            "a".repeat(97),
+            "a".repeat(60)
+        );
+        let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+        let body = body_of(&html);
+
+        assert!(
+            body.contains(SAME_LENGTH_ENTITY_RENDERED),
+            "`{SAME_LENGTH_ENTITY_SOURCE}` must render as an intact grapheme — its \
+             base character and combining mark ADJACENT, with no anchor span \
+             between them. A splitter gated on `range.len() == text.len()` instead \
+             of the exact `source[range] == payload` compare accepts this range \
+             (both sides are 6 bytes) and then slices the SOURCE, emitting `&nv` + \
+             the anchor + `ap;` — which the HTML writer escapes into a literal \
+             `&amp;nvap;`, so the grapheme is gone entirely: {body}"
+        );
+        assert!(
+            body.contains(&format!("a{SAME_LENGTH_ENTITY_RENDERED}")),
+            "nothing may be inserted between the filler text and the rendered \
+             entity: {body}"
+        );
+        assert!(
+            !body.contains(SAME_LENGTH_ENTITY_SOURCE),
+            "fixture sanity: the entity must actually be EXPANDED by the parser (if \
+             the raw `{SAME_LENGTH_ENTITY_SOURCE}` survives, the fixture is not \
+             exercising the `SynthesizeText` path at all): {body}"
+        );
+        assert!(
+            body.contains(r#"id="wl-1-100""#),
+            "a marker that cannot be placed by splitting must still be emitted \
+             somewhere (never dropped): {body}"
+        );
+    }
+
+    /// Length of the multibyte run in [`snap_split_point_honors_its_contract`]:
+    /// 40 × `あ` (3 UTF-8 bytes each) = 120 bytes, comfortably more than two
+    /// [`MARKER_SNAP_MAX_BYTES`] windows, so the whitespace at either end of the
+    /// fixture is out of reach of a split point in the middle.
+    const MULTIBYTE_RUN_CHARS: usize = 40;
+
+    /// G3: [`snap_split_point`]'s contract, pinned directly rather than inferred
+    /// from a rendered document.
+    ///
+    /// Its documented postcondition is
+    /// `min_exclusive < result < range.end && source.is_char_boundary(result)`;
+    /// every case below asserts that in addition to the exact expected offset. The
+    /// cases are the adversarial ones the contract exists for: a `min_exclusive`
+    /// one byte below the offset (both when a boundary is reachable and when the
+    /// only nearby one is excluded by it), whitespace only at `range.start`,
+    /// whitespace only at `range.end - 1`, `range.end` ITSELF as the nearest
+    /// boundary, a distance tie, a sub-range that is not the whole source, and a
+    /// multibyte run where nothing in the window qualifies.
+    #[test]
+    fn snap_split_point_honors_its_contract() {
+        // A space, 40 × `あ`, a space: 122 bytes. Char boundaries are 0, 1, 4, 7,
+        // … 121, 122. A split at byte 61 is 61 bytes from the leading space and 60
+        // from the trailing one — both outside the ±32-byte window — so nothing in
+        // the window is a word boundary and the split must stay at the offset.
+        let multibyte_run = format!(" {} ", "あ".repeat(MULTIBYTE_RUN_CHARS));
+        let multibyte_len = multibyte_run.len();
+        assert!(
+            multibyte_run.is_char_boundary(61),
+            "fixture sanity: byte 61 must be a char boundary in the multibyte run"
+        );
+
+        // Each case is `(case, source, range, offset, min_exclusive, expected)`;
+        // `range` is a `Range<usize>` and the three numbers are byte offsets (the
+        // `snap_split_point` call below pins the element types).
+        let cases = [
+            (
+                "snaps to the word boundary at the offset itself",
+                "ab cdefgh",
+                0..9,
+                3,
+                2,
+                3,
+            ),
+            (
+                "min_exclusive excludes the only nearby boundary, so it falls back \
+                 to the exact offset",
+                "ab cdefghij",
+                0..11,
+                4,
+                3,
+                4,
+            ),
+            (
+                "whitespace only at range.start",
+                " abcdefghij",
+                0..11,
+                5,
+                0,
+                1,
+            ),
+            (
+                "whitespace only at range.end - 1",
+                "abcdefghij ",
+                0..11,
+                5,
+                0,
+                10,
+            ),
+            // The whitespace sits at byte 11 == `range.end`, so `range.end` is the
+            // NEAREST word boundary — and must still be rejected, because splitting
+            // there would leave an empty remainder slice. Without the
+            // `min(.., range.end)` clamp on the window this returns 11.
+            (
+                "range.end is never a candidate, even when it is the nearest boundary",
+                "abcdefghijk lm",
+                0..11,
+                9,
+                0,
+                9,
+            ),
+            (
+                "a distance tie picks the SMALLER offset",
+                "ab cd ef",
+                0..8,
+                4,
+                0,
+                3,
+            ),
+            (
+                "candidates are clamped to the given sub-range, not the whole source",
+                "aaa bbb ccc ddd",
+                4..11,
+                6,
+                4,
+                7,
+            ),
+            (
+                "no word boundary anywhere in the window of a multibyte run",
+                multibyte_run.as_str(),
+                0..multibyte_len,
+                61,
+                0,
+                61,
+            ),
+        ];
+
+        for (case, source, range, offset, min_exclusive, expected) in &cases {
+            let result = snap_split_point(source, range, *offset, *min_exclusive);
+            assert_eq!(
+                result, *expected,
+                "snap_split_point({source:?}, {range:?}, {offset}, {min_exclusive}) \
+                 must be {expected} — {case}"
+            );
+            assert!(
+                *min_exclusive < result,
+                "the split point must stay STRICTLY above `min_exclusive` \
+                 ({min_exclusive}), or two markers could share a point / the prefix \
+                 could be empty; got {result} — {case}"
+            );
+            assert!(
+                result < range.end,
+                "the split point must stay STRICTLY below `range.end` ({}), or the \
+                 remainder slice would be empty; got {result} — {case}",
+                range.end
+            );
+            assert!(
+                source.is_char_boundary(result),
+                "the split point must be a char boundary, or slicing the `Text` \
+                 payload would panic; got {result} in {source:?} — {case}"
+            );
+        }
+    }
+
+    /// G4: a split lands INSIDE an inline element. Both the module docs and
+    /// `src/README.md` state that an interior anchor is placed within the rendered
+    /// inline flow — including inside `<em>` / `<strong>` / `<a>` text — and
+    /// nothing else in the suite pins it.
+    ///
+    /// Fixture: `*{240 chars}end*` — one emphasized run spanning both stride
+    /// columns. The trailing `end` matters: a closing `*` preceded by whitespace is
+    /// not right-flanking, so `*lorem ipsum *` would NOT produce emphasis at all.
+    #[test]
+    fn split_lands_inside_an_inline_element() {
+        let inner = format!("{}end", "lorem ipsum ".repeat(20));
+        let source = format!("*{inner}*");
+
+        let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+        let body = body_of(&html);
+
+        let em_open = body
+            .find("<em>")
+            .unwrap_or_else(|| panic!("fixture sanity: the run must render an <em>: {body}"));
+        let em_close = body
+            .find("</em>")
+            .unwrap_or_else(|| panic!("the <em> must be closed: {body}"));
+
+        let mut previous = em_open;
+        for stride in 1..=2u32 {
+            let col = stride * (MARKER_COLUMN_STRIDE as u32);
+            let id = format!(r#"id="wl-1-{col}""#);
+            let idx = body
+                .find(&id)
+                .unwrap_or_else(|| panic!("missing the `{id}` anchor: {body}"));
+            assert!(
+                previous < idx && idx < em_close,
+                "`{id}` (at {idx}) must sit INSIDE the <em> element (<em> at \
+                 {em_open}, </em> at {em_close}), after the previous anchor at \
+                 {previous} — an interior marker is placed in the rendered inline \
+                 flow, which includes the interior of an inline element: {body}"
+            );
+            previous = idx;
+        }
+
+        // …and splitting the emphasis text must not disturb it.
+        let em_inner = &body[em_open + "<em>".len()..em_close];
+        assert_eq!(
+            strip_marker_spans(em_inner),
+            inner,
+            "with its anchors stripped, the <em> element's text must be byte-identical \
+             to the source's emphasized run"
+        );
+    }
+
+    /// The maximum number of characters of an offending stylesheet line to quote
+    /// back in a failure. The inlined `@font-face` rules are single lines of several
+    /// hundred KiB of base64, so an untruncated excerpt would be unusable.
+    const CSS_EXCERPT_CHARS: usize = 120;
+
+    /// The first `<` followed by an ASCII letter or `/` in `css`, as a 1-based line
+    /// number plus a truncated excerpt of that line. `None` when the stylesheet
+    /// carries nothing that an HTML scanner could mistake for a tag.
+    fn first_markup_like_sequence(css: &str) -> Option<(usize, String)> {
+        for (idx, line) in css.lines().enumerate() {
+            let bytes = line.as_bytes();
+            for (i, b) in bytes.iter().enumerate() {
+                if *b != b'<' {
+                    continue;
+                }
+                if bytes
+                    .get(i + 1)
+                    .is_some_and(|next| next.is_ascii_alphabetic() || *next == b'/')
+                {
+                    return Some((idx + 1, line.chars().take(CSS_EXCERPT_CHARS).collect()));
+                }
+            }
+        }
+        None
+    }
+
+    /// The failure message for [`embedded_stylesheets_carry_no_markup_like_text`].
+    /// Spelled out at length on purpose: the hazard is invisible at the edit site
+    /// (it is "just a comment"), so the failure has to carry the whole argument.
+    fn markup_in_stylesheet_failure(what: &str, line: usize, excerpt: &str) -> String {
+        format!(
+            "{what} line {line} contains a `<` followed by a letter or `/`:\n\n  \
+             {excerpt}\n\n\
+             This is NOT a style nit. Every one of these stylesheets is \
+             `include_str!`'d VERBATIM into the `<style>` block of each rendered \
+             document, so an element name in angle brackets — even inside a CSS \
+             COMMENT — becomes literal text in the emitted HTML, ahead of the real \
+             `<body>`. Three consumers scan that HTML for the FIRST match of a \
+             fixed needle and are silently corrupted by it:\n\n\
+             1. `PreviewScrollSeam.splitDocument` (`PreviewScrollSeam.swift`) does \
+             `html.range(of: \"<body\")`. A `<body`-like string in the stylesheet \
+             precedes the real body tag, so the head/body split moves. The update \
+             strategy guards itself by comparing head LENGTHS across renders — but a \
+             wrong split is CONSISTENTLY wrong, so the lengths still match and the \
+             guard never trips. Instead of degrading to a safe full page load, the \
+             preview swaps a wrong body into the live page on every keystroke.\n\n\
+             2. `browser_preview::render_page` does \
+             `html.replacen(\"</body>\", …, 1)` to inject the live-reload script. A \
+             `</body>`-like string in the stylesheet puts that `<script>` INSIDE the \
+             `<style>` block, silently killing browser-preview auto-reload.\n\n\
+             3. The integration tests in `tests/markdown_render.rs` scan for `<p>`, \
+             `<pre`, `<table`, `<ul>`, `<li>`, `<em>` … over the whole document; a \
+             match inside the stylesheet makes them assert against CSS instead of \
+             rendered content. A previous edit of this kind broke ten of them at \
+             once.\n\n\
+             Fix: write the element name as prose (`the code element`) or without \
+             the angle brackets (`code`). Do not \"fix\" the scanners."
+        )
+    }
+
+    /// The rendered document's `<style>` block contents. Deliberately does NOT dump
+    /// the document on failure: it is around a megabyte of inlined base64 fonts.
+    fn style_block_of(html: &str) -> &str {
+        const OPEN: &str = "<style>";
+        const CLOSE: &str = "</style>";
+        let open = html
+            .find(OPEN)
+            .unwrap_or_else(|| panic!("the rendered document must embed a <style> block"));
+        let start = open + OPEN.len();
+        let end = html[start..]
+            .find(CLOSE)
+            .unwrap_or_else(|| panic!("the <style> block must be closed"));
+        &html[start..start + end]
+    }
+
+    /// No stylesheet that reaches the rendered `<style>` block may contain anything
+    /// an HTML scanner could mistake for a tag — see
+    /// [`markup_in_stylesheet_failure`] for the full argument and the three
+    /// consumers it protects.
+    ///
+    /// Scope: EVERY constant `render_html_with_highlights` concatenates into the
+    /// `<style>` block, not just `base.css` — `MATH_CSS`, the theme CSS, both
+    /// inlined `@font-face` rules and `CAPPED_WIDTH_CSS` all ship through the same
+    /// path and would cause the same corruption. The named-constant pass names the
+    /// exact file to fix; the rendered-document pass then re-scans the real emitted
+    /// `<style>` block so anything ADDED to that concatenation later is covered
+    /// without touching this test.
+    #[test]
+    fn embedded_stylesheets_carry_no_markup_like_text() {
+        // Exhaustive by construction: adding a `PreviewTheme` variant breaks this
+        // `match`, which is the reminder to add its CSS to `sheets` below.
+        match PreviewTheme::Default {
+            PreviewTheme::Default => {}
+        }
+
+        let sheets = [
+            ("markdown/base.css (BASE_CSS)", BASE_CSS),
+            ("markdown/math.css (MATH_CSS)", MATH_CSS),
+            (
+                "markdown/themes/default.css (theme_css(PreviewTheme::Default))",
+                theme_css(PreviewTheme::Default),
+            ),
+            ("the INTER_FONT_FACE rule", INTER_FONT_FACE),
+            ("the MATH_FONT_FACE rule", MATH_FONT_FACE),
+            ("CAPPED_WIDTH_CSS", CAPPED_WIDTH_CSS),
+        ];
+
+        for (name, css) in &sheets {
+            if let Some((line, excerpt)) = first_markup_like_sequence(css) {
+                panic!("{}", markup_in_stylesheet_failure(name, line, &excerpt));
+            }
+        }
+
+        // The same scan over the REAL emitted `<style>` block, for both width modes
+        // (only `WidthMode::Capped` appends `CAPPED_WIDTH_CSS`).
+        for width_mode in [WidthMode::Full, WidthMode::Capped] {
+            let html = render_html("# H\n\ntext\n", PreviewTheme::Default, width_mode);
+            if let Some((line, excerpt)) = first_markup_like_sequence(style_block_of(&html)) {
+                let what = format!("the rendered <style> block ({width_mode:?} width)");
+                panic!("{}", markup_in_stylesheet_failure(&what, line, &excerpt));
+            }
+        }
     }
 }
