@@ -11,15 +11,31 @@
 //!
 //! ## What this file contains
 //!
-//! **Fourteen cage smokes** — one window-render smoke, two file-picker smokes, one
+//! **Eighteen cage smokes** — one window-render smoke, two file-picker smokes, one
 //! file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
 //! new-untitled-buffer smoke, one Ctrl+Shift+W close-pane smoke (the accelerator
-//! path, as opposed to the split-pane suite's `<C-w>c`) and two quit smokes (`:q`
-//! closes the focused pane, `:qa` closes the window) — each of which launches the
-//! real binary under `cage`. Thirteen of them OCR a screenshot of the live window;
-//! the `:qa` smoke deliberately captures no image and asserts on the cage exit
-//! status alone (the app must be GONE, and gone with a ZERO exit status — a panic
-//! in the GTK main loop makes a process vanish just as a clean shutdown does).
+//! path, as opposed to the split-pane suite's `<C-w>c`), two quit smokes (`:q`
+//! closes the focused pane, `:qa` closes the window) and four POINTER smokes
+//! (click-to-position, drag-to-select, wheel scroll, and the click-then-close
+//! focus-wedge regression) — each of which launches the real binary under `cage`.
+//!
+//! The four pointer smokes additionally run **`wolf-pointer-inject`** inside cage —
+//! this repo's own long-lived `zwlr_virtual_pointer_v1` client, see
+//! `tools/wolf-pointer-inject/README.md` — started BEFORE the app so the seat
+//! already carries `WL_SEAT_CAPABILITY_POINTER` when GTK does its first `wl_seat`
+//! roundtrip, and driven over a FIFO with a poll-for-ack protocol. Three of them
+//! assert on FILES THE CAPTIVE NEOVIM WRITES ABOUT ITS OWN STATE — `line('.')` /
+//! `col('.')`, `visualmode()` plus `'<` / `'>`, and `line('w0')` — rather than on
+//! OCR. Those are exact integers that no sidebar row and no `:e` toast can satisfy,
+//! and OCR is structurally incapable of answering "did the cursor land at exactly
+//! row 12, column 25".
+//!
+//! Fourteen of the eighteen OCR a screenshot of the live window. The `:qa` smoke
+//! deliberately captures no image and asserts on the cage exit status alone (the app
+//! must be GONE, and gone with a ZERO exit status — a panic in the GTK main loop
+//! makes a process vanish just as a clean shutdown does); the click, drag and scroll
+//! smokes still capture and still RETAIN a screenshot for post-mortem, but assert on
+//! their readback files rather than on pixels.
 //!
 //! **One pure guard**, [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`],
 //! which mechanically enforces the fixture invariants the smokes' OCR assertions
@@ -28,12 +44,12 @@
 //! still guards the fixture on a machine where the smoke toolchain is unavailable.
 //! It lives here, next to the consts it reads, rather than in a file of its own.
 //!
-//! So this target's summary line reads **`15 passed`**, not `14`: fourteen cage
+//! So this target's summary line reads **`19 passed`**, not `18`: eighteen cage
 //! smokes plus that guard.
 //!
 //! ## When it runs
 //!
-//! The fourteen cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The eighteen cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The Linux verification gate").
@@ -43,20 +59,25 @@
 //! suite command does not run is a silently-skipped test.
 //!
 //! They are, however, the slowest part of the suite: each drives a real
-//! compositor, and all fourteen serialize behind `CAGE_LOCK` (see below).
+//! compositor, and all eighteen serialize behind `CAGE_LOCK` (see below).
 //!
 //! ```text
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the fourteen cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the eighteen cage smokes (from the devShell's smoke toolchain)
 //!
-//! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` on `PATH`.
+//! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` and
+//!   `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
+//!   built from this repo's own `tools/wolf-pointer-inject/` by `flake.nix`, so
+//!   `command -v wolf-pointer-inject` succeeding can only mean the flake provided
+//!   it. Only the four pointer smokes use it, but it is required unconditionally —
+//!   see [`REQUIRED_TOOLS`].
 //! - `WOLF_NVIM_BIN` pointing at the pinned Neovim (same contract as the other
 //!   wolf-gnome tests; nvim is never taken from `PATH`).
 //! - `XDG_RUNTIME_DIR` set and writable (the Wayland socket lives there).
 //!
-//! Per project policy every one of the fourteen FAILS LOUD if any of the above is
+//! Per project policy every one of the eighteen FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -64,8 +85,12 @@
 //! outside the devShell, and softening `require_smoke_env` to a skip would let the
 //! gate pass green on an unprovisioned machine while proving nothing. Do not.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
+
+use cairo::{Context, Format, ImageSurface};
+use wolf_gnome::CellMetrics;
 
 /// The lowercase word we type in insert mode (in the window smoke scenario).
 /// Kept short and all-lowercase so OCR noise is unlikely to corrupt every
@@ -73,13 +98,20 @@ use std::process::Command;
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the fourteen cage smoke tests. Each launches its own
+/// Serializes the eighteen cage smoke tests. Each launches its own
 /// `cage` compositor, and two compositors started concurrently contend for the
 /// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
 /// Under the default multi-threaded test harness these tests would otherwise run
 /// in parallel, so each acquires this lock for its whole body to force serial
 /// execution. Poisoning is recovered from (`into_inner`) so one panicking test
 /// does not cascade into failing the others.
+///
+/// The four pointer smokes join this same lock rather than living in a file of
+/// their own: each `tests/*.rs` is a separate crate AND a separate PROCESS, so an
+/// in-process `static Mutex` cannot serialize across them at all, and
+/// `tests/common/mod.rs` is compiled separately into every integration-test binary,
+/// so a `static CAGE_LOCK` moved there would be N independent mutexes rather than
+/// one shared one — it would look like a fix and serialize nothing.
 static CAGE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Font size (points) handed to the app via `WOLF_FONT_PT`. Larger than the
@@ -122,10 +154,12 @@ const SMOKE_FONT_PT: &str = "28";
 /// Before the per-test temp cwd landed, this smoke ran with `crates/wolf-gnome` as
 /// the app's cwd and the sidebar happened to list ~35 repo entries, so the assertion
 /// has ALWAYS implicitly depended on that page density — accidentally. Writing these
-/// files makes the dependency explicit and deliberate, and mirrors what the eleven
+/// files makes the dependency explicit and deliberate, and mirrors what the twelve
 /// other smokes that drop fixture files into their own temp cwds already get
-/// incidentally. (The empty-state and `:qa` smokes drop no files: the first hides
-/// the sidebar entirely, and the second asserts on an exit status rather than OCR.)
+/// incidentally. (Five drop no files: the empty-state smoke hides the sidebar
+/// entirely, the `:qa` smoke asserts on an exit status rather than OCR, and the
+/// click, drag and scroll pointer smokes build their buffer with `:put` and assert
+/// on Neovim-written readback files rather than on pixels.)
 const SIDEBAR_FILLER_COUNT: usize = 9;
 
 /// Names of the [`SIDEBAR_FILLER_COUNT`] marker files. Only the FILENAME is ever
@@ -141,7 +175,8 @@ const SIDEBAR_FILLER_COUNT: usize = 9;
 /// `treenode`, `paneleft`/`paneright`, `htopfile`/`hbotfile`,
 /// `focusone`/`focustwo`/`zzleft`, `closekeep`/`closegone`,
 /// `triaone`/`tribtwo`/`tricthree`, `folder`, `zzfresh`/`newbufbase`,
-/// `quitkeep`/`quitgone` and `chordkeep`/`chordgone` — so a stray filler can never
+/// `quitkeep`/`quitgone`, `chordkeep`/`chordgone` and — added with the
+/// pointer-harness unit — `wedgestay`/`wedgeclick` — so a stray filler can never
 /// satisfy one of those either. [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`]
 /// enforces this mechanically against [`ASSERTED_OCR_TERMS`], which holds the consts
 /// themselves; this list is a reader's summary and the test is the authority.
@@ -722,9 +757,236 @@ const CHORD_CLOSE_HEADING_GONE: &str = "# CHORDGONE";
 /// Lowercased substring OCR must NOT find: the closed pane's file.
 const CHORD_CLOSE_OCR_GONE: &str = "chordgone";
 
+// ---------------------------------------------------------------------------
+// Click-then-close focus-wedge smoke: fixtures.
+//
+// The two files exist so the smoke can (a) put a CLICKABLE pane on the left, (b)
+// close that same pane, and (c) corroborate with OCR that the close really
+// happened. The load-bearing assertions are the two `ALIVE*` readback files; the
+// OCR pair is corroboration, not the proof.
+//
+// Both obey the file-naming convention the sibling close smokes follow: a
+// fixture's NAME must not contain the word its own assertion needs. After
+// `:e zclick.md` Neovim's toast and the sidebar row both show `zclick.md`, whose
+// lowercase contains neither `wedgeclick` nor `wedgestay`, so only a rendered
+// BUFFER can satisfy either assertion.
+
+/// Wedge smoke: file opened FIRST, so it ends up in the LEFT pane. This is the
+/// pane the smoke CLICKS and then CLOSES.
+const WEDGE_FILE_CLICK: &str = "zclick.md";
+
+/// Heading written into [`WEDGE_FILE_CLICK`]; lowercased it contains
+/// [`WEDGE_OCR_CLICK`].
+const WEDGE_HEADING_CLICK: &str = "# WEDGECLICK";
+
+/// Lowercased substring OCR must NOT find after the close: the clicked-then-closed
+/// pane's file.
+const WEDGE_OCR_CLICK: &str = "wedgeclick";
+
+/// Wedge smoke: file opened in the new RIGHT pane after `<C-w>v` — the SURVIVOR.
+const WEDGE_FILE_STAY: &str = "zstay.md";
+
+/// Heading written into [`WEDGE_FILE_STAY`]; lowercased it contains
+/// [`WEDGE_OCR_STAY`].
+const WEDGE_HEADING_STAY: &str = "# WEDGESTAY";
+
+/// Lowercased substring OCR MUST find after the close: the survivor pane's file.
+const WEDGE_OCR_STAY: &str = "wedgestay";
+
+/// Exact contents of the CONTROL readback the wedge smoke writes BEFORE the pane
+/// close. Its presence separates "keys never worked at all / the click broke input
+/// immediately" from "keys died at the close" — without it a red run is ambiguous.
+const WEDGE_ALIVE_MARK_1: &str = "ALIVE1";
+
+/// Exact contents of the PROOF readback the wedge smoke writes AFTER the pane
+/// close. Its absence IS the click-then-close focus wedge.
+const WEDGE_ALIVE_MARK_2: &str = "ALIVE2";
+
+// ---------------------------------------------------------------------------
+// Pointer smokes: injected geometry.
+//
+// No smoke hardcodes a magic pixel for the cell it means to hit. The Rust side
+// measures `cell_w`/`cell_h` EXACTLY (see `cell_metrics_for_smoke`), clicks once at
+// the PROBE point, reads the resulting `(line, col)` back out of Neovim, and then
+// expresses every later target RELATIVE to the probe:
+//
+//     TARGET = (round(PROBE_X + DX * cell_w), round(PROBE_Y + DY * cell_h))
+//
+// with the assertion on the exact DELTA `C1 - C0 == (DY, DX)`. That is
+// origin-independent, so no unknown constant can make it pass or fail spuriously.
+//
+// The derived pane ORIGIN is then checked as a loud, self-checking precondition —
+// see `assert_probe_cell_and_pane_origin`. It is the tripwire that makes a future
+// GTK / libadwaita / cage geometry change fail these smokes loudly instead of
+// silently retargeting a different cell.
+
+/// x of the point every pointer smoke probes first, in absolute OUTPUT pixels
+/// (`zwlr_virtual_pointer_v1.motion_absolute` takes output pixels; there is no CSD
+/// or surface offset under cage — `motion 640 360` was measured arriving at the GTK
+/// client as surface-local `640.00000000, 360.00000000`).
+///
+/// MEASURED on this host at `WOLF_FONT_PT` = [`SMOKE_FONT_PT`] on a 1280x720 cage
+/// output: `(640, 360)` maps to Neovim cell `(line 8, col 18)`, which satisfies
+/// every geometry precondition at once — `l0 >= 2 && c0 >= 2`;
+/// `c0 + CLICK_DX(7) = 25 <= 30`; `c0 + DRAG_DX(9) = 27 <= 30`; and
+/// `l0 + DRAG_DY(5) = 13 <= 14` visible rows. It is also comfortably inside the LEFT
+/// pane after a 50/50 vertical split, which the wedge smoke depends on.
+///
+/// If a phase ever lands within half a pixel of a cell boundary and skews a delta
+/// assertion, the symptom is REPRODUCIBLE, not flaky (fixed output size,
+/// `FONTCONFIG_FILE`-pinned DejaVu, pinned GTK/libadwaita): shift this by 2 px and
+/// record why.
+const PROBE_X: i32 = 640;
+
+/// y of the probe point, in absolute output pixels. See [`PROBE_X`].
+const PROBE_Y: i32 = 360;
+
+/// x of the editor pane's top-left corner in output pixels, as DERIVED from the
+/// probe click: `PROBE_X - (c0 - 1) * cell_w`.
+///
+/// MEASURED 2026-08-02 on a **1280x720** cage output at `WOLF_FONT_PT` =
+/// [`SMOKE_FONT_PT`]: the probe at `(640, 360)` landed on Neovim cell
+/// `(line 8, col 18)` with `cell_w = 22.4765625`, `cell_h = 44.0`, giving a derived
+/// origin of `(257.8984375, 52.0)`. Both numbers are also recorded in
+/// `crates/wolf-gnome/tests/README.md`.
+///
+/// The value carries the probe click's unknown SUB-CELL PHASE, so it OVER-estimates
+/// the true origin by up to one cell — which is exactly why the band adds `cell_w` /
+/// `cell_h` (see [`PANE_ORIGIN_TOLERANCE_PX`]). `-1.0` is the deliberate impossible
+/// placeholder the smoke is first landed with; re-deriving it is a matter of putting
+/// `-1.0` back and reading the band failure's message.
+const PANE_ORIGIN_X_EXPECTED: f64 = 257.8984375;
+
+/// y of the editor pane's top-left corner in output pixels, as DERIVED from the
+/// probe click: `PROBE_Y - (l0 - 1) * cell_h`. See [`PANE_ORIGIN_X_EXPECTED`] for the
+/// measurement, its date and the cage output size it was taken on.
+const PANE_ORIGIN_Y_EXPECTED: f64 = 52.0;
+
+/// Half-width of the band the derived pane origin must fall inside.
+///
+/// ACCEPTANCE CRITERION: it must be narrow enough that a `+20,+20` surface offset
+/// FAILS, so it has to be `< 20.0`. `12.0` also comfortably contains the measured
+/// 15.2 px (x) / 16 px (y) spread of derived origins across three probe points —
+/// that spread is the SUB-CELL PHASE of the probe click, which is why the band adds
+/// `cell_w` / `cell_h` on top. Those two terms are an unavoidable phase allowance,
+/// NOT slack, and must not be grown to make a failing run pass.
+const PANE_ORIGIN_TOLERANCE_PX: f64 = 12.0;
+
+/// The smallest Neovim `line`/`col` the probe click may report. `(1, 1)` is where
+/// the cursor already is, so anything below this means the press never landed and
+/// every delta downstream would be measuring a no-op.
+const MIN_PROBE_CELL: i64 = 2;
+
+/// Width, in characters, of every line the `:put` fixture writes. See the
+/// `fill_buffer` comment in [`POINTER_PREAMBLE`] for the three empirical
+/// constraints that pin this number.
+const FIXTURE_LINE_WIDTH: i64 = 30;
+
+/// Columns the click smoke moves RIGHT from the probe cell.
+const CLICK_DX: i64 = 7;
+
+/// Rows the click smoke moves DOWN from the probe cell.
+const CLICK_DY: i64 = 4;
+
+/// Columns the drag smoke's Drag A sweeps RIGHT from the press cell.
+const DRAG_DX: i64 = 9;
+
+/// Rows the drag smoke's Drag A sweeps DOWN from the press cell.
+const DRAG_DY: i64 = 5;
+
+/// Fractions of the way from the press point to the release point at which Drag A
+/// injects intermediate `motion` events, so GTK receives several `drag-update`s the
+/// way a real drag would rather than a single teleport.
+///
+/// Drag Z (the round trip, which runs FIRST) walks these outbound and then walks
+/// them again in REVERSE on the way home, so its whole gesture is
+/// probe -> waypoints -> `(DRAG_X, DRAG_Y)` -> the same waypoints -> probe.
+const DRAG_STEP_FRACTIONS: [f64; 3] = [0.25, 0.5, 0.75];
+
+/// x, in output pixels, at which the drag smoke's Drag B RELEASES — deliberately
+/// over the file-tree sidebar, far to the LEFT of the editor pane's left edge.
+///
+/// This is what proves the `GtkGesture`'s implicit grab keeps delivering after the
+/// pointer leaves the pane, and that `cell_at` CLAMPS the out-of-widget point to the
+/// nearest edge cell rather than the event being dropped.
+const DRAG_OUT_X: i64 = 2;
+
+/// How many wheel detents the scroll smoke injects in each direction.
+const SCROLL_DETENTS: i64 = 3;
+
+/// The continuous `wl_pointer.axis` value paired with each discrete detent, as a
+/// string because it is passed to the helper verbatim.
+///
+/// A conventional per-detent value: `zwlr_virtual_pointer_v1.axis_discrete` carries
+/// BOTH this continuous value and the discrete step count in one request, and it is
+/// the DISCRETE count that GDK turns into `ScrollUnit::Wheel` with `|dy| == 1.0`.
+/// MEASURED under cage: `axis 15.0 1` arrives at the client as `axis_source(0)` +
+/// `axis_relative_direction(0, 0)` + `axis_value120(0, 120)` + `axis(t, 0, 15.0)` +
+/// `frame()`.
+const SCROLL_AXIS_VALUE: &str = "15.0";
+
+/// The `<linux/input-event-codes.h>` `BTN_LEFT` code, as the helper's `press` /
+/// `release` grammar takes it. Passed into every pointer scenario as `$BTN_LEFT` so
+/// this const is the single source of truth rather than a `272` retyped four times.
+const POINTER_BUTTON_LEFT: &str = "272";
+
+/// What `visualmode()` returns for a CHARWISE visual selection. An EMPTY string
+/// instead means Neovim never entered visual mode at all.
+///
+/// MEASURED, and NOT what an earlier version of this file assumed: a `<LeftDrag>` is
+/// **not** the only way in. On nvim 0.12.2 a bare `<LeftMouse>` at one cell followed
+/// by a `<LeftRelease>` at a DIFFERENT cell also enters charwise visual mode, with
+/// exactly the same marks:
+///
+/// ```text
+/// press+release only : visualmode="v" marks="3 4 8 13" cursor="8 13"
+/// press+drag+release : visualmode="v" marks="3 4 8 13" cursor="8 13"
+/// ```
+///
+/// So `visualmode() == "v"` after a press-here / release-there gesture proves that
+/// `on_pane_release` ran — it does NOT prove that `drag-update` ever fired. The one
+/// gesture in this file whose mode DOES prove that is Drag Z, the ROUND TRIP, whose
+/// press and release are at the SAME cell: without `<LeftDrag>` in between Neovim
+/// sees no movement, stays out of visual mode, and returns the empty string.
+const VISUAL_CHARWISE: &str = "v";
+
+/// Upper bound on any pixel the harness will inject, used only as a sanity range in
+/// [`pixel_target`]. Far above any plausible cage output; its job is to reject a
+/// nonsense value (a NaN cell size, a runaway multiplication) before it is silently
+/// narrowed into a plausible-looking coordinate.
+const MAX_INJECTED_PIXEL: f64 = 65_535.0;
+
+/// Name, under the smoke's temp cwd, of the FIFO the scenario writes helper commands
+/// into.
+const POINTER_CMD_FIFO_NAME: &str = "wolf-pointer.fifo";
+
+/// Name, under the smoke's temp cwd, of the file the helper's STDOUT (`ready …`,
+/// `ok <n>`, `err <n> …`) is redirected to. The scenario polls it for acks.
+const POINTER_ACK_NAME: &str = "wolf-pointer.ack";
+
+/// Name, under the smoke's temp cwd, of the file the helper's STDERR is redirected
+/// to. Every scenario `exit` echoes it, and the Rust side prints it in the
+/// cage-status failure message.
+const POINTER_HELPER_ERR_NAME: &str = "wolf-pointer.err";
+
+/// Name, under the smoke's temp cwd, of the file the scenario copies the helper's
+/// `ready extents=<W>x<H> …` line into, so the Rust side can assert every injected
+/// point really is inside the compositor's reported output rather than assuming it.
+const POINTER_READY_NAME: &str = "wolf-pointer.ready";
+
 /// External binaries the scenario shells out to. All come from the flake's
 /// smoke toolchain; absence means the devShell was not entered.
-const REQUIRED_TOOLS: [&str; 4] = ["cage", "wtype", "grim", "tesseract"];
+///
+/// `wolf-pointer-inject` is the odd one out and deliberately so: it is not an
+/// upstream nixpkgs package but THIS REPO'S OWN tool, built from
+/// `tools/wolf-pointer-inject/` by `flake.nix`'s `wolfPointerInject` derivation and
+/// put on the devShell `PATH`. The name is repo-namespaced precisely so that
+/// `command -v wolf-pointer-inject` succeeding can only mean the flake provided it —
+/// a bare `pointer-inject` could be shadowed by something on the host. It is
+/// required unconditionally, not just by the four pointer smokes: a devShell missing
+/// it is an unprovisioned devShell, and the project policy is to fail loud rather
+/// than let the gate pass green while proving less than it claims.
+const REQUIRED_TOOLS: [&str; 5] = ["cage", "wtype", "grim", "tesseract", "wolf-pointer-inject"];
 
 /// Confirms `tool` resolves on `PATH` (via `command -v`). Returns true if found.
 fn tool_on_path(tool: &str) -> bool {
@@ -737,7 +999,7 @@ fn tool_on_path(tool: &str) -> bool {
 }
 
 /// Panics with an actionable message unless every smoke precondition holds:
-/// the four compositor/OCR tools are on `PATH`, `WOLF_NVIM_BIN` is set, and
+/// the five compositor/OCR/pointer tools are on `PATH`, `WOLF_NVIM_BIN` is set, and
 /// `XDG_RUNTIME_DIR` is set and writable. Returns the resolved `XDG_RUNTIME_DIR`.
 fn require_smoke_env() -> PathBuf {
     let missing: Vec<&str> = REQUIRED_TOOLS
@@ -749,7 +1011,10 @@ fn require_smoke_env() -> PathBuf {
         missing.is_empty(),
         "wolf-gnome headless smoke test: missing required tool(s) {missing:?} on PATH. \
          These are provided by the flake devShell smoke toolchain (cage, wtype, grim, \
-         tesseract). Run via `nix develop --command cargo test -p wolf-gnome`."
+         tesseract, wolf-pointer-inject). Run via `nix develop --command cargo test -p \
+         wolf-gnome`. Note that `wolf-pointer-inject` is built from this repo's own \
+         `tools/wolf-pointer-inject/` by flake.nix, NOT from nixpkgs — if it alone is \
+         missing, the devShell is stale, so re-enter `nix develop`."
     );
 
     match std::env::var("WOLF_NVIM_BIN") {
@@ -1923,13 +2188,640 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
+/// Everything the FOUR pointer scenarios have in common, as one `sh` fragment:
+/// the teardown trap, the command FIFO, the `wolf-pointer-inject` helper, the
+/// poll-for-ack protocol, the readback-file poll, the buffer fixture, the app
+/// launch + window-map poll, and one initial in-pane `motion`.
+///
+/// This is a DELIBERATE deviation from this file's "one self-contained scenario
+/// const per smoke" style. The preamble is ~90 lines of FIFO / ack / poll plumbing,
+/// and four copies would be four places to fix a poll bug — the exact shape that
+/// lets a harness rot in three of its four instances unnoticed. Each smoke's own
+/// body is still a self-contained const; [`pointer_scenario`] concatenates them.
+///
+/// ## Ordering: helper FIRST, then the app
+///
+/// The helper is started and confirmed `ready` BEFORE `"$WOLF_BIN"` launches, so the
+/// seat already carries `WL_SEAT_CAPABILITY_POINTER` when GTK does its first
+/// `wl_seat` roundtrip and calls `get_pointer` at bind time. MEASURED under cage:
+/// the seat trace shows `wl_seat#3.capabilities(3)` -> `get_pointer` at bind time,
+/// dropping to `2` only when the helper quits, and the GTK client received
+/// `wl_pointer#21.enter(…, 640.0, 360.0)` followed by real
+/// `wl_pointer#21.button(…, 272, 1)` / `(…, 272, 0)` events. Mid-session capability
+/// appearance also works, so this ordering is belt-and-braces rather than a known
+/// requirement — but it removes an entire class of question from every failure
+/// diagnosis at zero cost.
+///
+/// ## Teardown: helper, app, cage
+///
+/// `cleanup` kills the HELPER first — it is the only process that can still inject —
+/// so the app's shutdown never races a pointer event; then the app; then the
+/// scenario returns and cage exits with its child. The trap is installed before
+/// anything is started, so every `exit NN` below runs it.
+///
+/// ## Exit codes (following the [`COLON_QA_SCENARIO`] precedent)
+///
+/// * `11` — the app died before its window mapped.
+/// * `12` — the helper never became ready.
+/// * `13` — a helper command was not acked within budget.
+/// * `14` — a Neovim readback file never appeared.
+/// * `15` — the helper died mid-scenario.
+///
+/// Each one echoes a one-line reason AND the helper's stderr, because when the
+/// helper is the failing party its own message ("no `zwlr_virtual_pointer_manager_v1`
+/// in the registry", "more than one `wl_output`") is the whole diagnosis.
+const POINTER_PREAMBLE: &str = r#"
+set -eu
+
+# Poll knobs. WAIT_TRIES/WAIT_INTERVAL/SETTLE are the SAME values the fourteen
+# keyboard-only smokes use, sized for the FULL workspace suite where ~90
+# integration-test binaries run in parallel. Timing knobs only -- no assertion
+# depends on any of them.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=0.5
+# How many WAIT_INTERVAL polls to allow for a helper line (`ready ...` or `ok <n>`).
+ACK_TRIES=75
+# How many WAIT_INTERVAL polls to allow for a readback file the captive Neovim
+# writes. Larger than ACK_TRIES: an ack is one compositor roundtrip, whereas a
+# readback needs wtype -> GTK -> nvim_input -> Ex execution -> writefile.
+FILE_TRIES=100
+# Pause between two injected pointer events that belong to the SAME gesture; see
+# `hstep`. A timing knob only -- no assertion depends on its value.
+POINTER_STEP=0.2
+
+# ---------------------------------------------------------------------------
+# Teardown, installed BEFORE anything is started so every `exit NN` below runs it.
+#
+# The helper dies FIRST: it is the only process that can still inject, so killing
+# it first means the app's shutdown is never racing a pointer event. Belt and
+# braces, the helper also exits on stdin EOF and on a failed wl_display_roundtrip,
+# so an orphan reaps itself when cage tears the socket down.
+cleanup() {
+    set +e
+    if [ -n "${helper_pid:-}" ]; then
+        kill "$helper_pid" 2>/dev/null
+        wait "$helper_pid" 2>/dev/null
+    fi
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+# ---------------------------------------------------------------------------
+# The command channel.
+#
+# CMD_FIFO / ACK_FILE / HELPER_ERR / READY_FILE are absolute paths handed in by the
+# Rust side, all under this run's fresh temp cwd.
+mkfifo "$CMD_FIFO"
+
+# Start the helper BEFORE the app (see this const's doc comment). Its stdout
+# carries the readiness line and the acks; its stderr carries diagnostics that
+# every failure path below echoes.
+wolf-pointer-inject < "$CMD_FIFO" > "$ACK_FILE" 2> "$HELPER_ERR" &
+helper_pid=$!
+
+# Open the WRITE end of the FIFO and keep fd 3 open for the WHOLE scenario. This
+# is load-bearing, not tidiness: without it every `printf ... > "$CMD_FIFO"` would
+# open and then CLOSE the FIFO, handing the helper a spurious EOF after the first
+# command, and the helper exits on EOF by design.
+#
+# This `exec` is also what unblocks the helper: its own `< "$CMD_FIFO"` blocks
+# until a writer appears. Readiness must therefore be polled AFTER this line.
+# (If `wolf-pointer-inject` were missing from PATH entirely this would block
+# forever -- which is why `require_smoke_env` checks for it before we get here.)
+exec 3>"$CMD_FIFO"
+
+# 1-based command counter; the helper acks `ok <seq>` counting non-blank lines.
+seq=0
+
+# True (exit 0) when the helper is no longer running.
+hdead() {
+    if kill -0 "$helper_pid" 2>/dev/null; then
+        return 1
+    fi
+    return 0
+}
+
+# Poll the helper's stdout for its readiness line, then copy that line into
+# READY_FILE so the Rust side can read the AUTHORITATIVE output extents rather
+# than assuming 1280x720 (which is wlroots' headless default, not a contract).
+hwait_ready() {
+    t=0
+    while [ "$t" -lt "$ACK_TRIES" ]; do
+        if grep -q '^ready ' "$ACK_FILE" 2>/dev/null; then
+            grep '^ready ' "$ACK_FILE" > "$READY_FILE" || true
+            return 0
+        fi
+        if hdead; then
+            echo "wolf-gnome pointer smoke: wolf-pointer-inject exited before printing its readiness line." >&2
+            echo "  Its exit code names the cause (3 = cage does not advertise zwlr_virtual_pointer_manager_v1," >&2
+            echo "  4 = no wl_seat, 5 = no wl_output, 6 = more than one output, 7 = zero extents)." >&2
+            echo "  wolf-pointer-inject stderr follows:" >&2
+            cat "$HELPER_ERR" >&2
+            exit 15
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome pointer smoke: wolf-pointer-inject never printed 'ready ...' within budget." >&2
+    echo "  Check stdout buffering FIRST: without setbuf(stdout, NULL) the readiness line never" >&2
+    echo "  reaches a redirected stdout and this poll can only time out." >&2
+    echo "  wolf-pointer-inject stderr follows:" >&2
+    cat "$HELPER_ERR" >&2
+    exit 12
+}
+
+# Send one command to the helper and BLOCK until it is acked.
+#
+# The ack is printed only after a wl_display_roundtrip, so it means "the compositor
+# has processed this event", not "the bytes left our buffer" -- that is what makes
+# this poll meaningful rather than cosmetic. (`quit` is the one exception: its ack
+# follows a flush + disconnect, because a roundtrip during teardown would race the
+# compositor and produce a spurious exit 8.)
+hsend() {
+    seq=$((seq + 1))
+    printf '%s\n' "$*" >&3
+    t=0
+    while [ "$t" -lt "$ACK_TRIES" ]; do
+        if grep -qx "ok $seq" "$ACK_FILE" 2>/dev/null; then
+            return 0
+        fi
+        if hdead; then
+            # Re-check the ack before declaring death: `quit` prints its ack and
+            # then exits, so a liveness check alone would race a perfectly normal
+            # teardown into a spurious exit 15.
+            if grep -qx "ok $seq" "$ACK_FILE" 2>/dev/null; then
+                return 0
+            fi
+            echo "wolf-gnome pointer smoke: wolf-pointer-inject died while handling command #$seq ($*)." >&2
+            echo "  wolf-pointer-inject stderr follows:" >&2
+            cat "$HELPER_ERR" >&2
+            exit 15
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome pointer smoke: command #$seq ($*) was never acked within budget." >&2
+    echo "  The ack follows a wl_display_roundtrip, so a missing ack means the compositor" >&2
+    echo "  never processed the event." >&2
+    echo "  wolf-pointer-inject stderr follows:" >&2
+    cat "$HELPER_ERR" >&2
+    exit 13
+}
+
+# `hsend`, then pace before the next pointer event of the SAME gesture.
+#
+# LOAD-BEARING, and the reason is NEOVIM'S API rather than anything in GTK or in
+# this repo. `nvim_input_mouse(button, action, modifier, grid, row, col)` transports
+# only the BUTTON CODE through the typeahead; the POSITION rides on the globals
+# `mouse_grid` / `mouse_row` / `mouse_col`, which the API handler overwrites the
+# moment the call is serviced. Two calls serviced before nvim's main loop has
+# CONSUMED the first key therefore both resolve at the SECOND call's position.
+#
+# MEASURED against nvim 0.12.2, three back-to-back calls (press at one cell, drag and
+# release at another):
+#
+#     rapid : visualmode="" marks="0 0 0 0" cursor=<the RELEASE cell>
+#     paced : visualmode="v" marks=<press cell>..<release cell>
+#
+# `hsend` acks after one compositor roundtrip and GTK hands a whole button/motion
+# group to the app in a single main-loop iteration, so an unpaced press -> drag ->
+# release reaches nvim ~0.4 ms apart, collapses onto ONE cell, and Neovim never
+# enters visual mode at all -- intermittently, depending on whether its loop happened
+# to drain in between. A real drag is spread over tens of milliseconds; this restores
+# that, and it also stops GDK's motion compression from folding the intermediate
+# waypoints into a single `drag-update`.
+#
+# This is a PACING knob, not a weakening: every assertion downstream is unchanged and
+# still exact.
+hstep() {
+    hsend "$@"
+    sleep "$POINTER_STEP"
+}
+
+# Poll for a readback file the captive Neovim writes. This replaces every
+# assertion-bearing sleep: nothing downstream may read a file we merely hope is
+# there. Returns non-zero on timeout so the caller decides what that means.
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome pointer smoke: readback file $f never appeared (or stayed empty)." >&2
+    echo "  wolf-pointer-inject stderr follows:" >&2
+    cat "$HELPER_ERR" >&2
+    return 1
+}
+
+# Fill the startup buffer with 200 lines of exactly 30 characters and park the
+# viewport at the top. Used by the click, drag and scroll bodies; the wedge body
+# opens real files instead.
+#
+# THREE EMPIRICAL CONSTRAINTS, all load-bearing:
+#
+#  * The lines must be 30 CHARACTERS wide -- not 1, and not 5. This is the trap
+#    `crates/wolf-gnome/tests/mouse_nvim.rs` documents: `:put =range(1,200)` yields
+#    ONE-character lines, so a click at column N clamps to end-of-line and the
+#    exact-column assertion silently degenerates into "the cursor is at the end of
+#    a short line", which is true no matter where the click landed.
+#  * The lines must be NARROWER THAN THE PANE IN CELLS. This trap is NEW --
+#    mouse_nvim.rs never renders, so it never met it. `runtime/nvim/init.lua` sets
+#    `opt.wrap = true` and `opt.linebreak = true`, so any line wider than the pane
+#    soft-wraps and SCREEN ROW STOPS CORRESPONDING TO BUFFER LINE -- the very
+#    correspondence every assertion here rests on. MEASURED at WOLF_FONT_PT=28:
+#    winwidth(0) = 45, so 30 characters leaves 15 columns of margin. The click and
+#    drag bodies read winwidth(0)/winheight(0) back and the Rust side asserts on
+#    them, so a future narrowing fails loudly. If the pane ever narrows below ~35
+#    columns this FIXTURE must shrink -- never the assertion.
+#  * A literal double quote must NOT appear in any Vimscript typed here. Under
+#    `:put =<expr>` Neovim treats a `"` as the start of an Ex comment and strips it
+#    BEFORE evaluating the expression (`E115: Missing quote`), so the buffer is
+#    never filled. Every string below is SINGLE-quoted, with '' for an embedded
+#    single quote. That also removes all shell-quoting and Rust-escaping noise,
+#    since these scenarios are r#-raw strings interpolated into double-quoted sh
+#    words.
+#
+# `:1delete` drops the empty line 1 that `:put` leaves above the inserted text, so
+# every visible row carries 30 characters; `:1` parks topline at 1. Neither word
+# collides with init.lua's `cnoreabbrev` set, which fires only on a whole-line
+# exact match.
+fill_buffer() {
+    wtype -- ":put =map(range(1,200), 'printf(''%03d'', v:val) . repeat(''x'', 27)')"
+    wtype -k Return
+    sleep "$SETTLE"
+    wtype -- ":1delete"
+    wtype -k Return
+    sleep "$SETTLE"
+    wtype -- ":1"
+    wtype -k Return
+    sleep "$SETTLE"
+}
+
+# ---------------------------------------------------------------------------
+# Bring the helper up, THEN the app.
+hwait_ready
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the Wayland display to be usable
+# (cheap no-op wtype succeeds only once cage has a mapped surface).
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome pointer smoke: app process exited early (pid $app_pid)" >&2
+        echo "  wolf-pointer-inject stderr follows:" >&2
+        cat "$HELPER_ERR" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw. There is nothing observable to poll for
+# the FIRST redraw, so this matches every existing smoke.
+sleep "$SETTLE"
+
+# One initial in-pane motion, so wl_pointer.enter and a first motion are delivered
+# before anything depends on them. This is also the position `record_pointer`
+# stores for the scroll handler, which GTK's coordinate-less `scroll` signal has no
+# other way to learn.
+hsend motion "$PROBE_X" "$PROBE_Y"
+sleep "$SETTLE"
+"#;
+
+/// Concatenates [`POINTER_PREAMBLE`] with a per-smoke `body`. `Command::arg`
+/// accepts a `String`, so the callers need no signature change.
+fn pointer_scenario(body: &str) -> String {
+    format!("{POINTER_PREAMBLE}\n{body}\n")
+}
+
+/// Body of [`click_positions_the_cursor_under_cage`], appended to
+/// [`POINTER_PREAMBLE`].
+///
+/// Two clicks: one at the PROBE point, one at a point exactly
+/// `(CLICK_DX, CLICK_DY)` cells away, with Neovim's own `line('.')`/`col('.')` read
+/// back after each. The assertion is on the exact DELTA, which is
+/// origin-independent.
+const POINTER_CLICK_BODY: &str = r#"
+fill_buffer
+
+# Ask the captive Neovim where its own cursor is, into the file named by $1.
+#
+# This -- not OCR -- is the observable. OCR is fine for "did this word render" and
+# is structurally incapable of "did the cursor land at exactly row 12, column 25".
+# The path is absolute and passed in as an env var, so nothing depends on Neovim's
+# cwd.
+read_cursor() {
+    wtype -- ":call writefile([printf('%d %d', line('.'), col('.'))], '$1')"
+    wtype -k Return
+    wait_file "$1" || exit 14
+}
+
+# The grid the 30-character fixture has to fit inside. The Rust side asserts
+# winwidth(0) > 30 (or the fixture soft-wraps and screen row stops tracking buffer
+# line) and that the click target row is within winheight(0).
+wtype -- ":call writefile([printf('%d %d', winwidth(0), winheight(0))], '$DIMS')"
+wtype -k Return
+wait_file "$DIMS" || exit 14
+
+# --- The PROBE click -------------------------------------------------------
+hsend motion "$PROBE_X" "$PROBE_Y"
+hsend press "$BTN_LEFT"
+hsend release "$BTN_LEFT"
+sleep "$SETTLE"
+read_cursor "$POS0"
+
+# --- The TARGET click, CLICK_DX columns right and CLICK_DY rows down --------
+hsend motion "$TARGET_X" "$TARGET_Y"
+hsend press "$BTN_LEFT"
+hsend release "$BTN_LEFT"
+sleep "$SETTLE"
+read_cursor "$POS1"
+
+# grim still runs and the PNG is still retained for post-mortem, even though no
+# assertion here reads a pixel.
+grim "$OUT_PNG"
+hsend quit
+exit 0
+"#;
+
+/// Body of [`drag_selects_a_range_under_cage`], appended to [`POINTER_PREAMBLE`].
+///
+/// THREE drags, and the ORDER IS LOAD-BEARING. Drag Z runs first: it is a ROUND TRIP
+/// (press at the probe, sweep out, sweep back, release at the probe) and it is the
+/// only one of the three whose `visualmode()` can only be `"v"` if `drag-update`
+/// fired. Drag A then stays inside the pane and sweeps down-and-right through three
+/// intermediate waypoints; Drag B releases OUTSIDE the pane, over the file-tree
+/// sidebar. All three read `visualmode()` plus the `'<` / `'>` marks back out of
+/// Neovim.
+const POINTER_DRAG_BODY: &str = r#"
+fill_buffer
+
+# Ask the captive Neovim for the visual mode and the two selection marks.
+#
+# `line('''<')` is `line("'<")`: doubled single quotes are Vimscript's escape for an
+# embedded single quote, which is how this whole file avoids ever typing a literal
+# double quote into an Ex command.
+#
+# Escape is what SETS `'<` / `'>` -- the marks are written when visual mode is left,
+# so the readback must come after it.
+read_selection() {
+    wtype -- ":call writefile([printf('%s %d %d %d %d', visualmode(), line('''<'), col('''<'), line('''>'), col('''>'))], '$1')"
+    wtype -k Return
+    wait_file "$1" || exit 14
+}
+
+wtype -- ":call writefile([printf('%d %d', winwidth(0), winheight(0))], '$DIMS')"
+wtype -k Return
+wait_file "$DIMS" || exit 14
+
+# --- Drag Z: the ROUND TRIP. THIS DRAG MUST RUN FIRST. -----------------------
+#
+# WHY FIRST: `visualmode()` reports the LAST visual mode of the SESSION, not the
+# mode of the most recent gesture. Run after Drag A or Drag B it would report their
+# stale `v` and assert nothing at all. It also has to run before anything else
+# leaves marks, since a stale `'<` / `'>` pair would satisfy the collapse assertion
+# on its own. Do not reorder these three drags.
+#
+# WHY IT EXISTS: this is the ONLY gesture in this smoke that can discriminate
+# `drag-update`. MEASURED on nvim 0.12.2, a press at one cell and a release at a
+# DIFFERENT cell enters charwise visual mode all by itself -- press+release only and
+# press+drag+release produce byte-identical `visualmode()`, marks and cursor. So
+# Drag A's `v` is real coverage of `on_pane_release` but is NOT evidence that
+# `<LeftDrag>` was ever delivered.
+#
+# Here press and release are at the SAME cell. Without `drag-update` Neovim sees
+# `<LeftMouse>` then `<LeftRelease>` with no movement between them, never enters
+# visual mode, and returns an empty `visualmode()` with marks `0 0 0 0`. WITH
+# `drag-update` the outbound sweep starts visual mode anchored at the probe, the
+# return sweep walks the cursor back, and the selection collapses to exactly one
+# cell -- the probe cell.
+#
+# The outbound waypoints are walked again in REVERSE on the way home, so the return
+# is a real sweep rather than one teleport back to the anchor.
+#
+# `hstep` rather than `hsend` for every event of every gesture here -- see `hstep`
+# in POINTER_PREAMBLE for why an unpaced press/drag/release collapses onto one cell
+# inside Neovim.
+hstep motion "$PROBE_X" "$PROBE_Y"
+hstep press "$BTN_LEFT"
+hstep motion "$DRAG_MID1_X" "$DRAG_MID1_Y"
+hstep motion "$DRAG_MID2_X" "$DRAG_MID2_Y"
+hstep motion "$DRAG_MID3_X" "$DRAG_MID3_Y"
+hstep motion "$DRAG_X" "$DRAG_Y"
+hstep motion "$DRAG_MID3_X" "$DRAG_MID3_Y"
+hstep motion "$DRAG_MID2_X" "$DRAG_MID2_Y"
+hstep motion "$DRAG_MID1_X" "$DRAG_MID1_Y"
+hstep motion "$PROBE_X" "$PROBE_Y"
+hstep release "$BTN_LEFT"
+sleep "$SETTLE"
+wtype -k Escape
+sleep "$SETTLE"
+read_selection "$SEL_Z"
+
+# --- Drag A: press at the probe, sweep DOWN-AND-RIGHT, release inside the pane
+#
+# The three intermediate motions exist so GTK receives several `drag-update`s, the
+# way a real drag would, rather than one teleport from press to release.
+#
+# Drag A pins the EXACT (DRAG_DY, DRAG_DX) delta, which is real coverage of
+# `on_pane_release`'s `drag_point` -> `start_point() + offset` -> `cell_at` path. It
+# is NOT a `drag-update` discriminator -- see Drag Z above for why, and note that
+# Drag A stays green with `on_pane_drag` neutered to a no-op.
+hstep motion "$PROBE_X" "$PROBE_Y"
+hstep press "$BTN_LEFT"
+hstep motion "$DRAG_MID1_X" "$DRAG_MID1_Y"
+hstep motion "$DRAG_MID2_X" "$DRAG_MID2_Y"
+hstep motion "$DRAG_MID3_X" "$DRAG_MID3_Y"
+hstep motion "$DRAG_X" "$DRAG_Y"
+hstep release "$BTN_LEFT"
+sleep "$SETTLE"
+wtype -k Escape
+sleep "$SETTLE"
+read_selection "$SEL_A"
+
+# --- Drag B: press at the probe, sweep LEFT out of the pane, release over the
+# --- sidebar.
+#
+# This is the drag that proves the GtkGesture's implicit grab keeps delivering
+# after the pointer leaves the widget, and that `cell_at` clamps the out-of-widget
+# point to the nearest edge cell rather than the event being dropped. Like Drag A it
+# releases at a DIFFERENT cell from its press, so its `visualmode()` is not a
+# `drag-update` discriminator either -- see Drag Z.
+hstep motion "$PROBE_X" "$PROBE_Y"
+hstep press "$BTN_LEFT"
+hstep motion "$OUT_X" "$PROBE_Y"
+hstep release "$BTN_LEFT"
+sleep "$SETTLE"
+wtype -k Escape
+sleep "$SETTLE"
+read_selection "$SEL_B"
+
+grim "$OUT_PNG"
+hsend quit
+exit 0
+"#;
+
+/// Body of [`wheel_scroll_moves_the_viewport_under_cage`], appended to
+/// [`POINTER_PREAMBLE`].
+///
+/// Three wheel detents down, three up, with `line('w0')` read back before, between
+/// and after.
+const POINTER_SCROLL_BODY: &str = r#"
+fill_buffer
+
+# LOAD-BEARING. Neovim's default `mousescroll` is `ver:3`, so one ScrollEvent moves
+# the view THREE lines. Pinning it to 1 makes "one detent = one line" an exact,
+# injector-side-only measurement instead of a claim entangled with a Neovim default.
+wtype -- ":set mousescroll=ver:1"
+wtype -k Return
+sleep "$SETTLE"
+
+# Ask the captive Neovim for its viewport topline, into the file named by $1.
+read_topline() {
+    wtype -- ":call writefile([printf('%d', line('w0'))], '$1')"
+    wtype -k Return
+    wait_file "$1" || exit 14
+}
+
+# The pointer must be OVER the pane: GTK's `scroll` signal carries no coordinates,
+# so this is the position `record_pointer` stores and `on_pane_scroll` aims at.
+hsend motion "$PROBE_X" "$PROBE_Y"
+sleep "$SETTLE"
+
+read_topline "$W0_BEFORE"
+
+# SCROLL_DETENTS separate commands, hence SCROLL_DETENTS separate frames -- a real
+# wheel sends one event group per detent, and GTK only converts buffered
+# wl_pointer events into GdkEvents on wl_pointer.frame.
+i=0
+while [ "$i" -lt "$SCROLL_DETENTS" ]; do
+    hsend axis "$SCROLL_AXIS_VALUE" 1
+    i=$((i + 1))
+done
+sleep "$SETTLE"
+
+read_topline "$W0_DOWN"
+
+# The same number of detents back UP. A negative discrete count is the direction.
+i=0
+while [ "$i" -lt "$SCROLL_DETENTS" ]; do
+    hsend axis "-$SCROLL_AXIS_VALUE" -1
+    i=$((i + 1))
+done
+sleep "$SETTLE"
+
+read_topline "$W0_UP"
+
+grim "$OUT_PNG"
+hsend quit
+exit 0
+"#;
+
+/// Body of [`click_then_close_keeps_keyboard_input_alive_under_cage`], appended to
+/// [`POINTER_PREAMBLE`].
+///
+/// Open a file, vertical-split, open a second file in the new RIGHT pane, CLICK the
+/// LEFT pane, prove keys still work (the control), close that same pane, and prove
+/// keys STILL work (the regression assertion).
+const POINTER_WEDGE_BODY: &str = r#"
+# Left pane content.
+wtype -- ":e $WEDGE_FILE_CLICK"
+wtype -k Return
+sleep "$SETTLE"
+
+# Vertical split: the new pane opens to the RIGHT and becomes focused.
+wtype -M ctrl -k w -m ctrl
+wtype -k v
+sleep "$SETTLE"
+
+# Right pane content. Now: left = the clicked file, right = the survivor, focus
+# is on the RIGHT.
+wtype -- ":e $WEDGE_FILE_STAY"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- THE CLICK -------------------------------------------------------------
+#
+# (PROBE_X, PROBE_Y) is inside the LEFT pane: the probe is only a few cells right
+# of the editor pane's left edge, and the left pane spans roughly half the editor
+# width. In the FIXED build this runs `on_pane_clicked` -> `focus_win(left)` +
+# `set_active_pane` + `cmdline_area.grab_focus()`. In the reverted build it parks
+# GTK focus on the left pane's EPHEMERAL DrawingArea.
+#
+# The nudge to (1, 1) first is deliberate. The preamble already moved the pointer to
+# the probe point, but the split has since REBUILT the pane widget tree
+# (`rebuild_pane_area` unparents and re-adds every area), and a `motion_absolute` to
+# a position the pointer already occupies need not produce a fresh
+# `wl_pointer.motion` at all. Leaving the pane and coming back guarantees a real
+# leave/enter/motion sequence into the LEFT pane before the button events, so the
+# gesture cannot be handed a stale coordinate.
+hsend motion 1 1
+hsend motion "$PROBE_X" "$PROBE_Y"
+hsend press "$BTN_LEFT"
+hsend release "$BTN_LEFT"
+sleep "$SETTLE"
+
+# --- CONTROL STEP, before the close ----------------------------------------
+#
+# NOTE the `|| true` on both wait_file calls below, which is deliberate and unlike
+# every other pointer body. Here a MISSING readback file IS the observable this
+# smoke exists to detect, not a harness failure, and the Rust side's message for it
+# is far better than a bare `exit 14`. Let the scenario run to completion so the
+# PNG and whichever ALIVE file DID appear survive as evidence.
+wtype -- ":call writefile(['$ALIVE_MARK1'], '$ALIVE1')"
+wtype -k Return
+wait_file "$ALIVE1" || true
+
+# --- Close THAT SAME pane --------------------------------------------------
+#
+# Step "THE CLICK" moved Neovim's current window to the LEFT one, so <C-w>c closes
+# the pane that was clicked. (`:q` is equivalent; <C-w>c is fewer keystrokes and
+# does not depend on init.lua's cnoreabbrev machinery.)
+wtype -M ctrl -k w -m ctrl
+wtype -k c
+
+# There is nothing to poll for "the close landed", so settle -- parity with the
+# three sibling close smokes.
+sleep "$SETTLE"
+
+# --- PROOF STEP, after the close -------------------------------------------
+wtype -- ":call writefile(['$ALIVE_MARK2'], '$ALIVE2')"
+wtype -k Return
+wait_file "$ALIVE2" || true
+
+# Park the pointer in the far top-left, over the sidebar, BEFORE the screenshot.
+# grim does not composite the cursor by default (overlay_cursor is only set with
+# `grim -c`), so this is belt-and-braces; it costs nothing and removes any
+# possibility of a cursor glyph landing on an OCR-asserted heading.
+hsend motion 1 1
+sleep "$SETTLE"
+
+grim "$OUT_PNG"
+hsend quit
+exit 0
+"#;
+
 /// Creates a fresh, unique temp directory to serve as the launched app's working
 /// directory. The app derives `CoreConfig.cwd` from `std::env::current_dir()`, so
 /// this is the directory the file-search traversal walks and the directory the
 /// captive nvim runs in (the recent-files MRU lives in the global
 /// `state_dir()/file-mru.sqlite`, not under the cwd).
 ///
-/// ALL FOURTEEN smokes use this. A fresh cwd per run is MANDATORY, not tidiness:
+/// ALL EIGHTEEN smokes use this. A fresh cwd per run is MANDATORY, not tidiness:
 ///
 /// * The captive nvim keeps a DURABLE, per-project swap dir keyed on the cwd
 ///   (`wolf_core::state::swap_dir_for` → `state_dir()/swap/<hash of cwd>`), which
@@ -1968,6 +2860,494 @@ fn make_temp_cwd() -> PathBuf {
     dir
 }
 
+// ---------------------------------------------------------------------------
+// Pointer smokes: shared Rust helpers.
+
+/// The monospace family the app measures its cell metrics with.
+///
+/// This MUST match `wolf_gnome::app::FONT_FAMILY`, which is private — hence the
+/// duplication. `crates/wolf-gnome/tests/paint_golden.rs` carries the same local
+/// const for the same reason. If the app's family ever changes and this does not,
+/// [`cell_metrics_for_smoke`] silently measures a DIFFERENT cell size, every derived
+/// pixel target lands in the wrong cell, and the exact-delta assertions are what
+/// catch it — which is why their failure messages name this const.
+const SMOKE_FONT_FAMILY: &str = "DejaVu Sans Mono";
+
+/// [`SMOKE_FONT_PT`] as an `f64` — PARSED, never re-typed as a literal.
+///
+/// The app is launched with that same STRING via `WOLF_FONT_PT`, so the two sides
+/// cannot be allowed to drift: a re-typed `28.0` here would keep compiling after
+/// someone changed `SMOKE_FONT_PT`, and every pixel target would then be computed
+/// against a cell size the app does not use.
+fn smoke_font_pt() -> f64 {
+    SMOKE_FONT_PT.parse::<f64>().unwrap_or_else(|e| {
+        panic!(
+            "SMOKE_FONT_PT = {SMOKE_FONT_PT:?} does not parse as an f64 ({e}). It is handed to the \
+             app verbatim as WOLF_FONT_PT and parsed here to size this test's own cell \
+             measurement; the two MUST be the same number, so it has to parse."
+        )
+    })
+}
+
+/// Measures the app's monospace cell size EXACTLY, by making the same call the app
+/// makes.
+///
+/// This is what makes the cell size exact rather than estimated:
+/// `wolf_gnome::app::measure_metrics` and this function are the same
+/// `CellMetrics::for_font` call, on the same throwaway 1x1 `ImageSurface` probe
+/// (whose pixel size is irrelevant — it exists only to obtain a Pango context), with
+/// the same family, the same points, and the same `FONTCONFIG_FILE`-pinned DejaVu.
+/// `tests/paint_golden.rs::render_fixture` uses the identical idiom.
+fn cell_metrics_for_smoke() -> CellMetrics {
+    let probe = ImageSurface::create(Format::ARgb32, 1, 1)
+        .expect("failed to create the 1x1 probe surface for cell measurement");
+    let cr = Context::new(&probe).expect("failed to create the probe Cairo context");
+    let metrics = CellMetrics::for_font(&cr, SMOKE_FONT_FAMILY, smoke_font_pt());
+    drop(cr);
+    assert!(
+        metrics.cell_w > 0.0 && metrics.cell_h > 0.0,
+        "CellMetrics::for_font({SMOKE_FONT_FAMILY:?}, {}) produced a non-positive cell size \
+         (cell_w = {}, cell_h = {}). Every pixel target in every pointer smoke is derived from \
+         these two numbers, so nothing below can mean anything. The usual cause is a missing \
+         FONTCONFIG_FILE (the flake devShell pins DejaVu Sans Mono through it), which leaves Pango \
+         resolving the family to nothing.",
+        smoke_font_pt(),
+        metrics.cell_w,
+        metrics.cell_h
+    );
+    metrics
+}
+
+/// Absolute path of the file the scenario copies the helper's `ready …` line into.
+fn pointer_ready_path(cwd: &Path) -> PathBuf {
+    cwd.join(POINTER_READY_NAME)
+}
+
+/// Absolute path of the file the helper's stderr is redirected to.
+fn pointer_err_path(cwd: &Path) -> PathBuf {
+    cwd.join(POINTER_HELPER_ERR_NAME)
+}
+
+/// Runs one pointer scenario — [`POINTER_PREAMBLE`] plus `body` — inside `cage`, and
+/// returns cage's exit status.
+///
+/// The per-smoke environment arrives as a SLICE rather than as positional
+/// parameters. That is a deliberate lint-shape decision, following the `GridTarget`
+/// precedent in `pane_view.rs`: eight more positional parameters would trip
+/// `clippy::too_many_arguments`, which is gating here (`cargo clippy --workspace
+/// --all-targets -- -D warnings`), and the only honest fix would be an `#[allow]`.
+fn run_pointer_scenario(
+    body: &str,
+    cwd: &Path,
+    out_png: &Path,
+    extra_env: &[(&str, &OsStr)],
+) -> ExitStatus {
+    // Cargo sets this for integration tests of a crate that declares a `[[bin]]`.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+    let mut cmd = Command::new("cage");
+    cmd.arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg(pointer_scenario(body))
+        .current_dir(cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", out_png)
+        // Large font so the rendered glyphs are legible to tesseract, AND the exact
+        // number `cell_metrics_for_smoke` measures against.
+        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
+        .env("CMD_FIFO", cwd.join(POINTER_CMD_FIFO_NAME))
+        .env("ACK_FILE", cwd.join(POINTER_ACK_NAME))
+        .env("HELPER_ERR", pointer_err_path(cwd))
+        .env("READY_FILE", pointer_ready_path(cwd))
+        .env("PROBE_X", PROBE_X.to_string())
+        .env("PROBE_Y", PROBE_Y.to_string())
+        .env("BTN_LEFT", POINTER_BUTTON_LEFT);
+    for &(key, value) in extra_env {
+        cmd.env(key, value);
+    }
+    cmd.status()
+        .expect("failed to spawn `cage` for a headless pointer smoke scenario")
+}
+
+/// Asserts cage exited 0, spelling out the pointer scenarios' exit-code table and
+/// echoing the helper's own stderr — which, when the helper is the failing party, is
+/// the whole diagnosis.
+fn assert_pointer_scenario_succeeded(smoke: &str, status: ExitStatus, cwd: &Path, out: &Path) {
+    let err_path = pointer_err_path(cwd);
+    let helper_err = std::fs::read_to_string(&err_path)
+        .unwrap_or_else(|e| format!("<could not read {}: {e}>", err_path.display()));
+    assert!(
+        status.success(),
+        "{smoke}: the cage pointer scenario exited unsuccessfully ({status}). Read the exit code \
+         FIRST; each one names a different half of the harness.\n\
+         Exit 11: the app died before its window ever mapped. A LAUNCH failure — no pointer event \
+         was ever injected, and nothing below is about pointer input.\n\
+         Exit 12: `wolf-pointer-inject` never printed its `ready …` line. Check its own exit code \
+         in the stderr below: 3 = cage does not advertise `zwlr_virtual_pointer_manager_v1` at \
+         all, 4 = no `wl_seat`, 5 = no `wl_output` and no `-e`, 6 = more than one output, 7 = zero \
+         extents. If the stderr is EMPTY, suspect stdout buffering in the helper \
+         (`setbuf(stdout, NULL)` must be the first statement in `main`), which makes every poll \
+         time out with nothing to show.\n\
+         Exit 13: a helper command was never acked within budget. The ack is printed only after a \
+         `wl_display_roundtrip`, so a missing ack means the compositor never processed the event. \
+         The other classic cause is the FIFO write end being closed between commands — the \
+         scenario holds fd 3 open for its whole life precisely to prevent that.\n\
+         Exit 14: a readback file the captive Neovim was told to write never appeared. Keys are \
+         not reaching Neovim, or the typed Ex command did not execute — this is a KEYBOARD \
+         failure, not a pointer one, so check the keyboard-only smokes first.\n\
+         Exit 15: the helper died mid-scenario.\n\
+         A signal/abort status on the CAGE process itself means the compositor died, which is an \
+         environment failure.\n\
+         Screenshot expected at {}.\n\
+         wolf-pointer-inject stderr was:\n{helper_err}",
+        out.display()
+    );
+}
+
+/// Asserts the retained screenshot exists and is non-empty.
+fn assert_png_present(smoke: &str, out_png: &Path) {
+    let meta = std::fs::metadata(out_png).unwrap_or_else(|e| {
+        panic!(
+            "{smoke}: expected screenshot {} to exist after the cage pointer scenario, but: {e}",
+            out_png.display()
+        )
+    });
+    assert!(
+        meta.len() > 0,
+        "{smoke}: screenshot {} exists but is empty (grim produced no image data)",
+        out_png.display()
+    );
+}
+
+/// Removes a stale evidence file and asserts it is gone BEFORE the scenario runs.
+///
+/// The temp cwd is fresh every run, so in practice nothing is ever removed here —
+/// but a test whose evidence file could be a previous run's leftover is not
+/// evidence, and this is the same clean-slate discipline every existing smoke
+/// applies to its PNG. The assertion is what makes it non-vacuous: if the file
+/// survives, every later assertion would be reading the wrong run.
+fn clear_evidence(path: &Path, smoke: &str) {
+    if path.exists() {
+        std::fs::remove_file(path).unwrap_or_else(|e| {
+            panic!(
+                "{smoke}: failed to remove stale evidence file {}: {e}",
+                path.display()
+            )
+        });
+    }
+    assert!(
+        !path.exists(),
+        "{smoke}: evidence file {} still exists after removal, so this run would read a PREVIOUS \
+         run's evidence and could pass without the app doing anything at all.",
+        path.display()
+    );
+}
+
+/// Reads a file the captive Neovim (or the scenario) wrote, panicking with an
+/// actionable message when it cannot be read.
+fn read_readback(path: &Path, smoke: &str) -> String {
+    std::fs::read_to_string(path).unwrap_or_else(|e| {
+        panic!(
+            "{smoke}: could not read the readback file {}: {e}. The scenario polls for this file \
+             with `wait_file`, so a cage status of 0 together with an unreadable file here means \
+             the file was written and then removed, or was written somewhere else (the path is \
+             handed to Neovim as an ABSOLUTE env var, so it does not depend on Neovim's cwd).",
+            path.display()
+        )
+    })
+}
+
+/// Reads a file whose whole content is one marker word, trimmed.
+fn read_trimmed(path: &Path, smoke: &str) -> String {
+    read_readback(path, smoke).trim().to_string()
+}
+
+/// Parses one whitespace-separated readback token as an `i64`.
+fn parse_readback_int(token: &str, path: &Path, raw: &str, smoke: &str) -> i64 {
+    token.parse::<i64>().unwrap_or_else(|e| {
+        panic!(
+            "{smoke}: readback token {token:?} in {} is not an integer ({e}). Raw file contents \
+             were {raw:?}. Every readback integer is produced by a `printf('%d', …)` inside the \
+             captive Neovim, so a non-integer means the typed Ex command did not execute as \
+             written — check for a stray keystroke landing in the buffer instead of the cmdline.",
+            path.display()
+        )
+    })
+}
+
+/// Reads a readback file and parses it into exactly `expected` integers.
+///
+/// Every integer readback goes through this, so a truncated or malformed file
+/// produces ONE good message carrying the raw contents rather than four bespoke
+/// ones.
+fn read_ints(path: &Path, expected: usize, smoke: &str) -> Vec<i64> {
+    let raw = read_readback(path, smoke);
+    let tokens: Vec<&str> = raw.split_whitespace().collect();
+    assert!(
+        tokens.len() == expected,
+        "{smoke}: readback file {} holds {} whitespace-separated token(s), expected {expected}. \
+         Raw contents were {raw:?}. A SHORT file usually means the `printf` format and its \
+         argument list disagree; an EMPTY one means `writefile` ran with an empty list.",
+        path.display(),
+        tokens.len()
+    );
+    tokens
+        .iter()
+        .map(|t| parse_readback_int(t, path, &raw, smoke))
+        .collect()
+}
+
+/// Reads the drag smoke's selection readback: `visualmode()` plus the four
+/// `'<` / `'>` line/column numbers.
+///
+/// The empty-`visualmode()` case is handled explicitly and is the whole point of
+/// this helper. `printf('%s %d %d %d %d', '', 0, 0, 0, 0)` writes a LEADING SPACE
+/// and therefore only four whitespace-separated tokens, so a naive five-token parse
+/// would blow up with a shape error and bury the actual finding. An empty
+/// `visualmode()` means Neovim never entered visual mode at all, so it is returned as
+/// the empty string and the caller's `visualmode() == "v"` assertion reports it
+/// properly.
+///
+/// What a NON-empty `"v"` does and does not license is measured, and is documented on
+/// [`VISUAL_CHARWISE`]: on nvim 0.12.2 a press at one cell plus a release at a
+/// DIFFERENT cell enters charwise visual mode on its own, with the same marks a full
+/// press+drag+release produces. So the mode alone discriminates `drag-update` ONLY
+/// for the round-trip gesture (Drag Z), whose press and release are at the same cell.
+fn read_selection(path: &Path, smoke: &str) -> (String, [i64; 4]) {
+    let raw = read_readback(path, smoke);
+    let tokens: Vec<&str> = raw.split_whitespace().collect();
+    let (mode, numbers): (String, &[&str]) = match tokens.len() {
+        4 => (String::new(), &tokens[..]),
+        5 => (tokens[0].to_string(), &tokens[1..]),
+        n => panic!(
+            "{smoke}: selection readback {} holds {n} whitespace-separated token(s); expected 5 \
+             (visualmode, '< line, '< col, '> line, '> col) or 4 (the same with an EMPTY \
+             visualmode). Raw contents were {raw:?}.",
+            path.display()
+        ),
+    };
+    let mut out = [0_i64; 4];
+    for (slot, token) in out.iter_mut().zip(numbers.iter()) {
+        *slot = parse_readback_int(token, path, &raw, smoke);
+    }
+    (mode, out)
+}
+
+/// Parses `extents=<W>x<H>` out of the helper's readiness line, which the scenario
+/// copies verbatim into `$READY_FILE`.
+///
+/// The extents are the AUTHORITATIVE output size for the scenario, read rather than
+/// assumed: 1280x720 is wlroots' headless default, not a contract.
+fn read_output_extents(cwd: &Path, smoke: &str) -> (i64, i64) {
+    let path = pointer_ready_path(cwd);
+    let raw = read_readback(&path, smoke);
+    let field = raw
+        .split_whitespace()
+        .find_map(|token| token.strip_prefix("extents="))
+        .unwrap_or_else(|| {
+            panic!(
+                "{smoke}: the helper readiness line copied into {} has no `extents=<W>x<H>` \
+                 field. Raw contents were {raw:?}. The expected shape is \
+                 `ready extents=1280x720 manager_version=2 outputs=1`; see \
+                 `tools/wolf-pointer-inject/README.md`.",
+                path.display()
+            )
+        });
+    let (w, h) = field.split_once('x').unwrap_or_else(|| {
+        panic!(
+            "{smoke}: the readiness line's extents field {field:?} in {} is not `<W>x<H>`. Raw \
+             contents were {raw:?}.",
+            path.display()
+        )
+    });
+    let width = parse_readback_int(w, &path, &raw, smoke);
+    let height = parse_readback_int(h, &path, &raw, smoke);
+    assert!(
+        width > 0 && height > 0,
+        "{smoke}: the helper reported a degenerate output extent of {width}x{height} in {}. It \
+         exits 7 rather than report zero extents, so this should be unreachable. Raw contents \
+         were {raw:?}.",
+        path.display()
+    );
+    (width, height)
+}
+
+/// Widens a small readback/geometry integer to `f64` WITHOUT an `as` cast: `i64` ->
+/// `i32` through `try_from` (so an absurd value fails loudly instead of silently
+/// truncating), then the lossless `f64::from`.
+fn exact_f64(value: i64, what: &str) -> f64 {
+    let narrowed = i32::try_from(value).unwrap_or_else(|e| {
+        panic!(
+            "{what} = {value} does not fit in an i32 ({e}), so it cannot be widened losslessly to \
+             f64. Every value passed here is a cell count or a Neovim line/column, so this means \
+             the readback is nonsense rather than that the bound is too small."
+        )
+    });
+    f64::from(narrowed)
+}
+
+/// Converts a derived pixel coordinate into the integer the helper's `motion`
+/// grammar takes: `f64::round()` followed by a CHECKED range.
+///
+/// Never a bare `as` cast on an unchecked value — that would turn a NaN or a runaway
+/// multiplication into a plausible-looking coordinate and retarget the injection
+/// silently, which is precisely the class of failure these smokes exist to make
+/// impossible.
+fn pixel_target(value: f64, what: &str) -> i64 {
+    assert!(
+        value.is_finite(),
+        "{what} computed to a non-finite pixel ({value}); `cell_metrics_for_smoke` must have \
+         returned a NaN or infinite cell size."
+    );
+    let rounded = value.round();
+    assert!(
+        (0.0..=MAX_INJECTED_PIXEL).contains(&rounded),
+        "{what} rounded to {rounded}, outside the sane injected-pixel range \
+         0.0..={MAX_INJECTED_PIXEL}. Either the measured cell size is wrong or the per-smoke cell \
+         delta is far larger than intended."
+    );
+    // Exact: `rounded` is an integral f64 already proven to lie in
+    // 0.0..=MAX_INJECTED_PIXEL, so this conversion cannot truncate. The range check
+    // above is what makes the value CORRECT; Rust's float->int `as` merely saturates
+    // rather than being undefined, which is not the same guarantee.
+    rounded as i64
+}
+
+/// Asserts an injected point lies inside the output extents the helper reported.
+///
+/// A point outside the output would be CLAMPED by the compositor, so the pointer
+/// would silently land somewhere other than the cell the smoke computed, and the
+/// exact-delta assertion would then fail for a reason that has nothing to do with
+/// the code under test. This turns that into a named precondition.
+fn assert_inside_extents(smoke: &str, label: &str, point: (i64, i64), extents: (i64, i64)) {
+    let (x, y) = point;
+    let (width, height) = extents;
+    assert!(
+        x >= 0 && y >= 0 && x < width && y < height,
+        "{smoke}: the injected point {label} = ({x}, {y}) is OUTSIDE the {width}x{height} \
+         compositor output `wolf-pointer-inject` reported on its `ready` line. \
+         `zwlr_virtual_pointer_v1.motion_absolute` clamps to the output, so this point would land \
+         somewhere other than the cell this smoke computed. Either the cage output shrank, or the \
+         measured cell size grew (check that WOLF_FONT_PT = {SMOKE_FONT_PT} still reaches the app \
+         and that SMOKE_FONT_FAMILY = {SMOKE_FONT_FAMILY:?} still matches `app::FONT_FAMILY`). \
+         Move PROBE_X/PROBE_Y or shrink the per-smoke cell deltas; do NOT loosen the delta \
+         assertion."
+    );
+}
+
+/// Asserts the probe click moved the cursor off `(1, 1)`, derives the editor pane's
+/// on-screen origin from it, and asserts that origin sits inside the measured band.
+/// Returns the derived origin so the caller can print it.
+///
+/// `probe_cell` is whatever Neovim reported for a gesture whose PRESS was at
+/// `(PROBE_X, PROBE_Y)`: the click smoke passes its probe click's `line('.')` /
+/// `col('.')`, and the drag smoke passes Drag Z's `'<` — Drag Z presses AND releases
+/// at the probe, so its `'<` is the probe cell.
+///
+/// The band is the CSD / geometry TRIPWIRE. Because the probe lands at an unknown
+/// sub-cell phase, the derived origin over-estimates the true origin by that phase,
+/// i.e. it lies in `[true_origin, true_origin + cell_w)`. The `+ cell_w` / `+ cell_h`
+/// terms below are therefore an unavoidable PHASE ALLOWANCE, not slack, and must not
+/// be widened to make a failing run pass; [`PANE_ORIGIN_TOLERANCE_PX`] is what
+/// carries the real tolerance, and it is deliberately `< 20.0` so a `+20,+20` surface
+/// offset FAILS.
+fn assert_probe_cell_and_pane_origin(
+    smoke: &str,
+    probe_cell: (i64, i64),
+    metrics: &CellMetrics,
+    extents: (i64, i64),
+    out_png: &Path,
+    raw: &str,
+) -> (f64, f64) {
+    let (line, col) = probe_cell;
+    assert!(
+        line >= MIN_PROBE_CELL && col >= MIN_PROBE_CELL,
+        "{smoke}: the probe click at ({PROBE_X}, {PROBE_Y}) left the Neovim cursor at line {line}, \
+         column {col}, but both must be >= {MIN_PROBE_CELL}. `(1, 1)` is exactly where the cursor \
+         already was, so a `(1, 1)` readback means THE PRESS NEVER REACHED NEOVIM and every delta \
+         below would be measuring a no-op. Check, in order: (1) `pane_view.rs::on_pane_press` \
+         still calls `self.send_pane_mouse(target, MouseAction::Press, button, x, y, g)`; (2) the \
+         `gtk::GestureDrag` built in `pane_view.rs::make_pane_area` still has \
+         `set_button(gdk::BUTTON_PRIMARY)` and the injected button is still \
+         {POINTER_BUTTON_LEFT}; (3) `pane_view.rs::grid_and_dims` resolved a grid at all (an \
+         unbound pane sends nothing); (4) the helper really delivered — its stderr is echoed by \
+         the scenario, and every command is acked only after a `wl_display_roundtrip`. Raw \
+         readback was {raw:?}. PNG kept at {}.",
+        out_png.display()
+    );
+
+    let origin_x = f64::from(PROBE_X) - exact_f64(col - 1, "the probe column") * metrics.cell_w;
+    let origin_y = f64::from(PROBE_Y) - exact_f64(line - 1, "the probe line") * metrics.cell_h;
+    let (width, height) = extents;
+
+    assert!(
+        (origin_x - PANE_ORIGIN_X_EXPECTED).abs() <= PANE_ORIGIN_TOLERANCE_PX + metrics.cell_w,
+        "{smoke}: the editor pane's derived X ORIGIN is {origin_x}, outside the band \
+         {PANE_ORIGIN_X_EXPECTED} +/- ({PANE_ORIGIN_TOLERANCE_PX} + cell_w). The four candidate \
+         causes, in order of likelihood: (1) a GTK4 client-side-decoration / shadow-margin offset \
+         has appeared under cage (there was none: `motion 640 360` was measured arriving as \
+         surface-local `640.00000000, 360.00000000`); (2) the `adw::HeaderBar` height changed — a \
+         libadwaita/GTK bump; (3) `app::TREE_PANE_WIDTH` or the `gtk::Paned` divider width \
+         changed; (4) the cage output size changed. Derived origin ({origin_x}, {origin_y}); \
+         expected ({PANE_ORIGIN_X_EXPECTED}, {PANE_ORIGIN_Y_EXPECTED}); cell_w {}, cell_h {}; \
+         probe ({PROBE_X}, {PROBE_Y}) -> (line {line}, col {col}); reported output extents \
+         {width}x{height}. Raw readback was {raw:?}. PNG kept at {}. If \
+         PANE_ORIGIN_X_EXPECTED is still the -1.0 placeholder this failure is EXPECTED and is how \
+         the constant is obtained: paste the derived origin above into the const, record it with \
+         the date and the output size, and re-run.",
+        metrics.cell_w,
+        metrics.cell_h,
+        out_png.display()
+    );
+    assert!(
+        (origin_y - PANE_ORIGIN_Y_EXPECTED).abs() <= PANE_ORIGIN_TOLERANCE_PX + metrics.cell_h,
+        "{smoke}: the editor pane's derived Y ORIGIN is {origin_y}, outside the band \
+         {PANE_ORIGIN_Y_EXPECTED} +/- ({PANE_ORIGIN_TOLERANCE_PX} + cell_h). Same four candidate \
+         causes as the X band, in the same order, but a Y-only shift points hardest at (2) — the \
+         `adw::HeaderBar` height — since the header bar is the only thing above the pane. Derived \
+         origin ({origin_x}, {origin_y}); expected ({PANE_ORIGIN_X_EXPECTED}, \
+         {PANE_ORIGIN_Y_EXPECTED}); cell_w {}, cell_h {}; probe ({PROBE_X}, {PROBE_Y}) -> \
+         (line {line}, col {col}); reported output extents {width}x{height}. Raw readback was \
+         {raw:?}. PNG kept at {}. If PANE_ORIGIN_Y_EXPECTED is still the -1.0 placeholder this \
+         failure is EXPECTED and is how the constant is obtained.",
+        metrics.cell_w,
+        metrics.cell_h,
+        out_png.display()
+    );
+
+    (origin_x, origin_y)
+}
+
+/// Asserts the pane grid Neovim reports can actually hold the `:put` fixture and the
+/// cell the smoke is about to target.
+///
+/// Both halves are preconditions of the fixture, not of the product: if `winwidth(0)`
+/// ever drops to the fixture's width the lines soft-wrap (`opt.wrap`/`opt.linebreak`
+/// are on in `runtime/nvim/init.lua`) and SCREEN ROW STOPS TRACKING BUFFER LINE,
+/// which would break the row correspondence every assertion here rests on — quietly.
+/// If the target row is past `winheight(0)` the click lands on a different buffer
+/// line than intended. Both fail loudly here instead.
+fn assert_fixture_fits(smoke: &str, dims: (i64, i64), probe_line: i64, rows_below: i64) {
+    let (win_width, win_height) = dims;
+    assert!(
+        win_width > FIXTURE_LINE_WIDTH,
+        "{smoke}: Neovim reports winwidth(0) = {win_width}, which is not wider than the \
+         {FIXTURE_LINE_WIDTH}-character `:put` fixture. `runtime/nvim/init.lua` sets \
+         `opt.wrap = true` and `opt.linebreak = true`, so at this width the fixture SOFT-WRAPS and \
+         screen row stops corresponding to buffer line — silently invalidating every row \
+         assertion in this smoke. Shrink the FIXTURE (see `fill_buffer` in POINTER_PREAMBLE); do \
+         NOT relax the assertion, and do NOT turn `wrap` off, which would diverge from the \
+         product's real configuration."
+    );
+    assert!(
+        probe_line + rows_below <= win_height,
+        "{smoke}: the target row (probe line {probe_line} + {rows_below}) is below the last \
+         visible row, since Neovim reports winheight(0) = {win_height}. The click would land on a \
+         different buffer line than intended. Move PROBE_Y up, or shrink the row delta; do NOT \
+         relax the delta assertion."
+    );
+}
+
 /// Every lowercased substring the OCR-asserting cage smokes must — or must not —
 /// find, as `(term, const name, the smoke that asserts it)`.
 ///
@@ -1983,10 +3363,24 @@ fn make_temp_cwd() -> PathBuf {
 /// SPURIOUSLY rather than pass vacuously — the opposite symptom, but the same
 /// fixture bug.
 ///
-/// Thirteen of the fourteen smokes appear here.
-/// [`colon_qa_closes_the_window_under_cage`] contributes NO rows on purpose: it
-/// captures no PNG and asserts only that the app process is gone, so it has no OCR
-/// term a fixture filename could satisfy.
+/// Fourteen of the eighteen smokes appear here. FOUR contribute no rows at all, on
+/// purpose, and it is worth being explicit about which and why:
+///
+/// * [`colon_qa_closes_the_window_under_cage`] captures no PNG and asserts only that
+///   the app process is gone, so it has no OCR term a fixture filename could satisfy.
+/// * [`click_positions_the_cursor_under_cage`],
+///   [`drag_selects_a_range_under_cage`] and
+///   [`wheel_scroll_moves_the_viewport_under_cage`] assert on FILES the captive
+///   Neovim writes about its own state — exact `line('.')`/`col('.')`,
+///   `visualmode()` plus `'<`/`'>`, and `line('w0')` — not on pixels. They still
+///   capture and retain a screenshot for post-mortem, but no assertion reads it, so
+///   no fixture filename can help or hurt them.
+///
+/// The fourth pointer smoke,
+/// [`click_then_close_keeps_keyboard_input_alive_under_cage`], DOES OCR, and its two
+/// terms are listed below. For it the OCR pair is corroboration (the close really
+/// happened, the survivor kept rendering, the app was still drawing at all); the
+/// load-bearing assertions are its two `ALIVE*` readback files.
 const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
     (OCR_WORD, "OCR_WORD", "window_renders_typed_text_under_cage"),
     (
@@ -2100,6 +3494,16 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         "CHORD_CLOSE_OCR_GONE",
         "close_pane_chord_closes_focused_pane_under_cage",
     ),
+    (
+        WEDGE_OCR_STAY,
+        "WEDGE_OCR_STAY",
+        "click_then_close_keeps_keyboard_input_alive_under_cage",
+    ),
+    (
+        WEDGE_OCR_CLICK,
+        "WEDGE_OCR_CLICK",
+        "click_then_close_keeps_keyboard_input_alive_under_cage",
+    ),
 ];
 
 /// Mechanically enforces the naming invariant documented on [`SIDEBAR_FILLER_FILES`]:
@@ -2126,10 +3530,13 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
 /// command-drain unit — `folder` ([`EMPTY_STATE_OCR`]), `zzfresh`
 /// ([`NEWBUF_OCR_PRESENT`]), `newbufbase` ([`NEWBUF_OCR_ABSENT`]), `quitkeep`
 /// ([`QUIT_OCR_KEEP`]), `quitgone` ([`QUIT_OCR_GONE`]), `chordkeep`
-/// ([`CHORD_CLOSE_OCR_KEEP`]) and `chordgone` ([`CHORD_CLOSE_OCR_GONE`]). None is a
-/// substring of any [`SIDEBAR_FILLER_FILES`] entry, and no filler may be renamed to
-/// make one so. [`colon_qa_closes_the_window_under_cage`] contributes no term: it
-/// asserts on the cage exit status and captures no image.
+/// ([`CHORD_CLOSE_OCR_KEEP`]) and `chordgone` ([`CHORD_CLOSE_OCR_GONE`]); and — added
+/// with the pointer-harness unit — `wedgestay` ([`WEDGE_OCR_STAY`]) and `wedgeclick`
+/// ([`WEDGE_OCR_CLICK`]). None is a substring of any [`SIDEBAR_FILLER_FILES`] entry,
+/// and no filler may be renamed to make one so. Four smokes contribute no term:
+/// [`colon_qa_closes_the_window_under_cage`] asserts on the cage exit status and
+/// captures no image, and the click, drag and scroll pointer smokes assert on files
+/// the captive Neovim writes about its own state rather than on pixels.
 ///
 /// ## What it does NOT guard (and why that matters)
 ///
@@ -2156,7 +3563,7 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the fourteen smokes — still
+/// nothing to the smoke suite's runtime and — unlike the eighteen smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
@@ -2216,7 +3623,7 @@ fn window_renders_typed_text_under_cage() {
     // integration tests of a crate that declares a `[[bin]]`).
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // A fresh temp cwd, exactly like the other thirteen smokes. The app reads
+    // A fresh temp cwd, exactly like the other seventeen smokes. The app reads
     // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
     // directory as its working directory (see `.current_dir` below). See
     // `make_temp_cwd` for why isolation is mandatory here: at a fixed cwd this
@@ -3558,6 +4965,890 @@ fn close_pane_chord_closes_focused_pane_under_cage() {
          `InputEvent::ClosePane`. If `colon_q_closes_focused_pane_under_cage` and \
          `close_pane_leaves_one_under_cage` both pass while this fails, the nvim-side close works \
          and the break is in the front-end chord path. PNG kept at {} for inspection. OCR output \
+         was:\n{ocr_text}",
+        out_png.display()
+    );
+}
+
+/// A real `wl_pointer.button` press positions the Neovim cursor at exactly the cell
+/// the geometry predicts.
+///
+/// ## What it proves
+///
+/// That `gtk::GestureDrag::drag-begin` fires from a real `wl_pointer.button` at all;
+/// that `pane_view.rs::on_pane_press` runs; and that `send_pane_mouse`'s `cell_at`
+/// call maps a real widget-local coordinate to the cell the measured `CellMetrics`
+/// predicts. The assertion is on the EXACT delta between two clicks, so it is
+/// independent of the pane origin and of any surface offset.
+///
+/// ## What it must NOT duplicate
+///
+/// `crates/wolf-gnome/tests/mouse_nvim.rs::mouse_press_drag_release_selects_via_seams`
+/// calls `WolfCore::send_mouse` BY HAND and never runs a GTK controller, and
+/// `geometry.rs`'s `cell_at_table` / `cell_at_never_exceeds_grid_size_for` are pure
+/// arithmetic. Neither can tell you whether a GTK controller ever fires. That —
+/// and only that — is this smoke's subject.
+///
+/// ## Measured geometry (2026-08-02)
+///
+/// This is the smoke that derives [`PANE_ORIGIN_X_EXPECTED`] /
+/// [`PANE_ORIGIN_Y_EXPECTED`]. On a **1280x720** cage output (the extents
+/// `wolf-pointer-inject` reported on its `ready` line, read back and asserted rather
+/// than assumed) at `WOLF_FONT_PT` = [`SMOKE_FONT_PT`]:
+///
+/// | quantity | value |
+/// | --- | --- |
+/// | cage output size | `1280x720` |
+/// | `cell_w` / `cell_h` | `22.4765625` / `44.0` |
+/// | probe `(640, 360)` -> Neovim cell | `line 8, col 18` |
+/// | derived pane origin | `(257.8984375, 52.0)` |
+///
+/// ## Red-run revert
+///
+/// In `pane_view.rs::on_pane_press`, delete the
+/// `self.send_pane_mouse(target, MouseAction::Press, button, x, y, g);` line, leaving
+/// `on_pane_clicked` and the grid/button pinning in place. Expected symptom: both
+/// readbacks come back `1 1`, and the `l0 >= 2 && c0 >= 2` precondition fires first
+/// with the message naming "the press never reached Neovim". Restore, re-run, green.
+#[test]
+fn click_positions_the_cursor_under_cage() {
+    const SMOKE: &str = "click_positions_the_cursor_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // A fresh temp cwd, exactly like the other seventeen smokes; see `make_temp_cwd`
+    // for why isolation is mandatory. The readback files live here too.
+    let cwd = make_temp_cwd();
+
+    // Measure the cell EXACTLY, the same way the app does, BEFORE the run: the
+    // target pixel is derived from it.
+    let metrics = cell_metrics_for_smoke();
+
+    let pos0 = cwd.join("pointer_click_pos0.txt");
+    let pos1 = cwd.join("pointer_click_pos1.txt");
+    let dims = cwd.join("pointer_click_dims.txt");
+    for path in [&pos0, &pos1, &dims] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let out_png = runtime_dir.join("wolf_gnome_pointer_click_smoke.png");
+    clear_evidence(&out_png, SMOKE);
+
+    // The target is expressed RELATIVE to the probe, never as a magic pixel, so no
+    // unknown geometry constant can make the delta assertion pass or fail
+    // spuriously.
+    let target_x = pixel_target(
+        f64::from(PROBE_X) + exact_f64(CLICK_DX, "CLICK_DX") * metrics.cell_w,
+        "the click target x",
+    );
+    let target_y = pixel_target(
+        f64::from(PROBE_Y) + exact_f64(CLICK_DY, "CLICK_DY") * metrics.cell_h,
+        "the click target y",
+    );
+    let target_x_env = target_x.to_string();
+    let target_y_env = target_y.to_string();
+
+    let status = run_pointer_scenario(
+        POINTER_CLICK_BODY,
+        &cwd,
+        &out_png,
+        &[
+            ("POS0", pos0.as_os_str()),
+            ("POS1", pos1.as_os_str()),
+            ("DIMS", dims.as_os_str()),
+            ("TARGET_X", OsStr::new(&target_x_env)),
+            ("TARGET_Y", OsStr::new(&target_y_env)),
+        ],
+    );
+    assert_pointer_scenario_succeeded(SMOKE, status, &cwd, &out_png);
+    assert_png_present(SMOKE, &out_png);
+
+    // Extents FIRST: a compositor-clamped injection would make every later message
+    // point at the wrong thing.
+    let extents = read_output_extents(&cwd, SMOKE);
+    assert_inside_extents(
+        SMOKE,
+        "the PROBE point",
+        (i64::from(PROBE_X), i64::from(PROBE_Y)),
+        extents,
+    );
+    assert_inside_extents(
+        SMOKE,
+        "the CLICK TARGET point",
+        (target_x, target_y),
+        extents,
+    );
+
+    let raw0 = read_readback(&pos0, SMOKE);
+    let raw1 = read_readback(&pos1, SMOKE);
+    let probe_cell = read_ints(&pos0, 2, SMOKE);
+    let target_cell = read_ints(&pos1, 2, SMOKE);
+    let (l0, c0) = (probe_cell[0], probe_cell[1]);
+    let (l1, c1) = (target_cell[0], target_cell[1]);
+
+    let grid = read_ints(&dims, 2, SMOKE);
+    assert_fixture_fits(SMOKE, (grid[0], grid[1]), l0, CLICK_DY);
+
+    let (origin_x, origin_y) =
+        assert_probe_cell_and_pane_origin(SMOKE, (l0, c0), &metrics, extents, &out_png, &raw0);
+
+    // Asserted BEFORE the delta is used, so the target column cannot be silently
+    // clamped to end-of-line and turn the exact-column assertion into a tautology.
+    assert!(
+        c0 + CLICK_DX <= FIXTURE_LINE_WIDTH,
+        "{SMOKE}: the probe landed at column {c0}, so the target column {} would be past the \
+         {FIXTURE_LINE_WIDTH}-character fixture line and Neovim would CLAMP the click to \
+         end-of-line — making the exact-column assertion below true no matter where the pointer \
+         went. Move PROBE_X left or widen the `fill_buffer` fixture; do NOT relax the assertion.",
+        c0 + CLICK_DX
+    );
+
+    assert!(
+        l1 - l0 == CLICK_DY,
+        "{SMOKE}: the click moved the cursor {} row(s), expected exactly {CLICK_DY}. Probe click \
+         ({PROBE_X}, {PROBE_Y}) -> line {l0}, column {c0} (raw {raw0:?}); target click \
+         ({target_x}, {target_y}) -> line {l1}, column {c1} (raw {raw1:?}); cell_w {}, cell_h {}; \
+         derived pane origin ({origin_x}, {origin_y}). A delta of ZERO means the press never \
+         reached Neovim at all — check `pane_view.rs::on_pane_press` still calls \
+         `send_pane_mouse`. A WRONG NON-ZERO delta means the pixel->cell scale disagrees between \
+         this test and the app — check that WOLF_FONT_PT = {SMOKE_FONT_PT} really reached the app \
+         (`app::font_pt_from_env`) and that SMOKE_FONT_FAMILY = {SMOKE_FONT_FAMILY:?} still \
+         matches the private `app::FONT_FAMILY`. PNG kept at {}.",
+        l1 - l0,
+        metrics.cell_w,
+        metrics.cell_h,
+        out_png.display()
+    );
+    assert!(
+        c1 - c0 == CLICK_DX,
+        "{SMOKE}: the click moved the cursor {} column(s), expected exactly {CLICK_DX}. Probe \
+         click ({PROBE_X}, {PROBE_Y}) -> line {l0}, column {c0} (raw {raw0:?}); target click \
+         ({target_x}, {target_y}) -> line {l1}, column {c1} (raw {raw1:?}); cell_w {}, cell_h {}; \
+         derived pane origin ({origin_x}, {origin_y}). Read the ROW assertion above first: if the \
+         row delta was right and only the column is wrong, `cell_w` is the disagreement, which \
+         points at the font family or size rather than at the mouse path. PNG kept at {}.",
+        c1 - c0,
+        metrics.cell_w,
+        metrics.cell_h,
+        out_png.display()
+    );
+}
+
+/// A real button-held pointer move drives Neovim into charwise visual mode and
+/// selects exactly the range the geometry predicts — including when the release
+/// happens OUTSIDE the pane.
+///
+/// ## What it proves
+///
+/// That `gtk::GestureDrag` emits `drag-update` during a button-held move at all;
+/// that `pane_view.rs::drag_point` reconstructs the absolute widget-local point from
+/// `start_point() + offset` (its callbacks carry OFFSETS, not absolute coordinates);
+/// and that the gesture's implicit grab keeps delivering AFTER the pointer leaves the
+/// pane, with `cell_at` clamping the out-of-widget point to the nearest edge cell
+/// rather than the event being dropped.
+///
+/// ## Three drags, and which one proves what — read this before editing any of them
+///
+/// A premise this smoke was originally written on is FALSE, and was measured to be
+/// false against nvim 0.12.2: it is NOT the case that "Vim enters visual mode only on
+/// a drag, never on a press+release at two different cells". Both gestures produce
+/// byte-identical state:
+///
+/// ```text
+/// press+release only : visualmode="v" marks="3 4 8 13" cursor="8 13"
+/// press+drag+release : visualmode="v" marks="3 4 8 13" cursor="8 13"
+/// ```
+///
+/// `on_pane_release` alone therefore reproduces everything Drag A asserts, which is
+/// why Drag A cannot discriminate `drag-update` and why the round-trip Drag Z exists.
+///
+/// * **Drag Z (runs FIRST, and must)** — press at the probe, sweep out to
+///   `(DRAG_X, DRAG_Y)` through the waypoints, sweep BACK through them, release at
+///   the probe. Press and release are at the SAME cell, so without `drag-update`
+///   Neovim sees no movement, never enters visual mode, and returns an empty
+///   `visualmode()` with marks `0 0 0 0`. Its `visualmode() == "v"` IS the
+///   `drag-update` discriminator, and its collapsed `'<` == `'>` is the proof the
+///   cursor was walked out and back rather than teleported. It runs first because
+///   `visualmode()` carries SESSION memory: after Drag A or Drag B it would report
+///   their stale `"v"`. The derived pane-origin band is computed from ITS `'<`,
+///   which is the probe cell.
+/// * **Drag A** — pins the exact `(DRAG_DY, DRAG_DX)` delta. Real coverage of
+///   `on_pane_release`'s `drag_point` -> `start_point() + offset` -> `cell_at` path;
+///   not a `drag-update` discriminator.
+/// * **Drag B** — pins the out-of-widget clamp to column 1, proving the gesture's
+///   implicit grab keeps delivering after the pointer leaves the pane. Also an
+///   `on_pane_release` path.
+///
+/// ## What it must NOT duplicate
+///
+/// `mouse_nvim.rs::mouse_press_drag_release_selects_via_seams` drives the same seams
+/// BY HAND against a real Neovim and never runs a GTK controller. It cannot observe
+/// whether `drag-update` is emitted, whether the offsets reconstruct, or whether the
+/// implicit grab holds — those three are exactly what this smoke adds.
+///
+/// ## Red-run revert
+///
+/// Make `pane_view.rs::on_pane_drag` an immediate no-op (`fn on_pane_drag(&self, …)
+/// { }`). The assertion that goes RED is **Drag Z's `visualmode() == "v"`**, not Drag
+/// A's: with `on_pane_drag` neutered Drag A and Drag B both still pass (measured —
+/// 3/3), because their press and release are at different cells and `on_pane_release`
+/// alone puts Neovim into visual mode. Expected symptom in `$SEL_Z`: an EMPTY
+/// `visualmode()` and marks `0 0 0 0`, with Drag Z's mode assertion firing first.
+/// Restore, re-run, green.
+#[test]
+fn drag_selects_a_range_under_cage() {
+    const SMOKE: &str = "drag_selects_a_range_under_cage";
+    // The column `cell_at` must clamp Drag B's out-of-pane release to.
+    const CLAMPED_LEFT_COLUMN: i64 = 1;
+
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+    let cwd = make_temp_cwd();
+    let metrics = cell_metrics_for_smoke();
+
+    let sel_z = cwd.join("pointer_drag_sel_z.txt");
+    let sel_a = cwd.join("pointer_drag_sel_a.txt");
+    let sel_b = cwd.join("pointer_drag_sel_b.txt");
+    let dims = cwd.join("pointer_drag_dims.txt");
+    for path in [&sel_z, &sel_a, &sel_b, &dims] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let out_png = runtime_dir.join("wolf_gnome_pointer_drag_smoke.png");
+    clear_evidence(&out_png, SMOKE);
+
+    // Drag Z and Drag A share these: Z sweeps out to the same far corner, walks the
+    // same waypoints in reverse, and comes home to the probe.
+    let dx_px = exact_f64(DRAG_DX, "DRAG_DX") * metrics.cell_w;
+    let dy_px = exact_f64(DRAG_DY, "DRAG_DY") * metrics.cell_h;
+    let drag_x = pixel_target(f64::from(PROBE_X) + dx_px, "the far-corner drag x");
+    let drag_y = pixel_target(f64::from(PROBE_Y) + dy_px, "the far-corner drag y");
+    let waypoints = DRAG_STEP_FRACTIONS.map(|fraction| {
+        (
+            pixel_target(f64::from(PROBE_X) + fraction * dx_px, "a drag waypoint x"),
+            pixel_target(f64::from(PROBE_Y) + fraction * dy_px, "a drag waypoint y"),
+        )
+    });
+    let drag_x_env = drag_x.to_string();
+    let drag_y_env = drag_y.to_string();
+    let waypoint_env = waypoints.map(|(x, y)| (x.to_string(), y.to_string()));
+    let out_x_env = DRAG_OUT_X.to_string();
+
+    let status = run_pointer_scenario(
+        POINTER_DRAG_BODY,
+        &cwd,
+        &out_png,
+        &[
+            ("SEL_Z", sel_z.as_os_str()),
+            ("SEL_A", sel_a.as_os_str()),
+            ("SEL_B", sel_b.as_os_str()),
+            ("DIMS", dims.as_os_str()),
+            ("DRAG_X", OsStr::new(&drag_x_env)),
+            ("DRAG_Y", OsStr::new(&drag_y_env)),
+            ("DRAG_MID1_X", OsStr::new(&waypoint_env[0].0)),
+            ("DRAG_MID1_Y", OsStr::new(&waypoint_env[0].1)),
+            ("DRAG_MID2_X", OsStr::new(&waypoint_env[1].0)),
+            ("DRAG_MID2_Y", OsStr::new(&waypoint_env[1].1)),
+            ("DRAG_MID3_X", OsStr::new(&waypoint_env[2].0)),
+            ("DRAG_MID3_Y", OsStr::new(&waypoint_env[2].1)),
+            ("OUT_X", OsStr::new(&out_x_env)),
+        ],
+    );
+    assert_pointer_scenario_succeeded(SMOKE, status, &cwd, &out_png);
+    assert_png_present(SMOKE, &out_png);
+
+    let extents = read_output_extents(&cwd, SMOKE);
+    assert_inside_extents(
+        SMOKE,
+        "the PROBE point",
+        (i64::from(PROBE_X), i64::from(PROBE_Y)),
+        extents,
+    );
+    assert_inside_extents(
+        SMOKE,
+        "the far-corner point Drag Z sweeps out to and Drag A releases at",
+        (drag_x, drag_y),
+        extents,
+    );
+    for (index, &(x, y)) in waypoints.iter().enumerate() {
+        assert_inside_extents(
+            SMOKE,
+            &format!("intermediate waypoint {index} (walked by Drag Z both ways, and by Drag A)"),
+            (x, y),
+            extents,
+        );
+    }
+    // Drag B releases over the SIDEBAR — outside the pane, but still inside the
+    // output. That distinction is the whole point of the out-of-widget drag, so the
+    // point still has to be a real output pixel.
+    assert_inside_extents(
+        SMOKE,
+        "the DRAG-B release point",
+        (DRAG_OUT_X, i64::from(PROBE_Y)),
+        extents,
+    );
+
+    // --- Drag Z: the ROUND TRIP, asserted FIRST because it RAN first ---------
+    //
+    // This block, and only this block, discriminates `drag-update`. Its press and
+    // release are at the SAME cell, so `on_pane_release` on its own cannot produce
+    // the state asserted here: with no movement between `<LeftMouse>` and
+    // `<LeftRelease>` Neovim never enters visual mode. MEASURED: with `on_pane_drag`
+    // neutered to an immediate no-op, this smoke as it stood BEFORE Drag Z existed
+    // — i.e. Drag A and Drag B alone — passed 3 runs out of 3. They cover
+    // `on_pane_release`'s reconstruction and clamp paths, not the drag signal.
+    let raw_z = read_readback(&sel_z, SMOKE);
+    let (mode_z, marks_z) = read_selection(&sel_z, SMOKE);
+    let [z_start_line, z_start_col, z_end_line, z_end_col] = marks_z;
+
+    assert!(
+        mode_z == VISUAL_CHARWISE,
+        "{SMOKE}: Drag Z — the ROUND TRIP — left `visualmode()` as {mode_z:?}, expected \
+         {VISUAL_CHARWISE:?} (charwise). THIS IS THE `drag-update` DISCRIMINATOR OF THIS SMOKE. \
+         Drag Z presses and releases at the SAME cell ({PROBE_X}, {PROBE_Y}), sweeping out to \
+         ({drag_x}, {drag_y}) and back through the waypoints in between, so an EMPTY string here \
+         means Neovim saw `<LeftMouse>` then `<LeftRelease>` with NO movement between them, never \
+         entered visual mode, and left the marks unset (`0 0 0 0`) — i.e. `drag-update` never \
+         fired. Check that the `gtk::GestureDrag` in `pane_view.rs::make_pane_area` still connects \
+         `drag-update` to `on_pane_drag`, and that `on_pane_drag` still calls `send_pane_mouse` \
+         with `MouseAction::Drag`. Note that Drag A's mode CANNOT stand in for this one: measured \
+         on nvim 0.12.2, a press at one cell plus a release at a DIFFERENT cell enters charwise \
+         visual mode all by itself, with identical marks. A DIFFERENT non-empty mode (`V` \
+         linewise, CTRL-V blockwise) would instead mean the encoded modifiers are wrong. Raw \
+         readback was {raw_z:?}; PNG kept at {}.",
+        out_png.display()
+    );
+
+    assert!(
+        z_start_line == z_end_line,
+        "{SMOKE}: Drag Z returned to its anchor before releasing, so its `'<` and `'>` must be on \
+         the SAME line — instead they are lines {z_start_line} and {z_end_line}. The gesture ends \
+         at the exact pixel it started at, so a residual row span means the return sweep's \
+         `drag-update`s were dropped (GDK motion compression folding the way home into nothing, or \
+         the last waypoint never being delivered) and the selection is still anchored out at the \
+         far corner. Raw readback was {raw_z:?}; PNG kept at {}.",
+        out_png.display()
+    );
+    assert!(
+        z_start_col == z_end_col,
+        "{SMOKE}: Drag Z returned to its anchor before releasing, so its `'<` and `'>` must be in \
+         the SAME column — instead they are columns {z_start_col} and {z_end_col}. Read the LINE \
+         assertion above first: if the rows collapsed and only the columns did not, the return \
+         sweep was delivered but stopped short horizontally. Raw readback was {raw_z:?}; PNG kept \
+         at {}.",
+        out_png.display()
+    );
+
+    let grid = read_ints(&dims, 2, SMOKE);
+
+    // Drag Z pressed AND released at the probe point, so its `'<` IS the probe cell —
+    // which makes it the right readback to derive the pane origin from, exactly as
+    // the click smoke derives it from its probe click. This also asserts
+    // `'<`.line >= MIN_PROBE_CELL and `'<`.col >= MIN_PROBE_CELL.
+    let (origin_x, origin_y) = assert_probe_cell_and_pane_origin(
+        SMOKE,
+        (z_start_line, z_start_col),
+        &metrics,
+        extents,
+        &out_png,
+        &raw_z,
+    );
+
+    // --- Drag A: inside the pane, exact delta -------------------------------
+    //
+    // Drag A pins the EXACT (DRAG_DY, DRAG_DX) delta. That is real coverage of
+    // `on_pane_release`'s `drag_point` -> `start_point() + offset` -> `cell_at` path,
+    // and it is NOT a `drag-update` discriminator — see Drag Z above.
+    let raw_a = read_readback(&sel_a, SMOKE);
+    let (mode_a, marks_a) = read_selection(&sel_a, SMOKE);
+    let [a_start_line, a_start_col, a_end_line, a_end_col] = marks_a;
+
+    assert!(
+        mode_a == VISUAL_CHARWISE,
+        "{SMOKE}: Drag A left `visualmode()` as {mode_a:?}, expected {VISUAL_CHARWISE:?} \
+         (charwise). Drag Z passed, so `drag-update` IS firing; this instead says the press and \
+         release of a plain down-and-right sweep did not put Neovim into visual mode at all. \
+         Note that an empty string here is NOT the `drag-update` discriminator it was once \
+         described as: measured on nvim 0.12.2, `<LeftMouse>` at one cell plus `<LeftRelease>` at \
+         a DIFFERENT cell enters charwise visual mode WITHOUT any `<LeftDrag>`, with identical \
+         marks and cursor. So an empty mode here means Neovim received neither the press nor the \
+         release as a mouse event — check `pane_view.rs::on_pane_press` and `on_pane_release` \
+         still call `send_pane_mouse`. A DIFFERENT non-empty mode (`V` linewise, CTRL-V blockwise) \
+         would instead mean the encoded modifiers are wrong. Raw readback was {raw_a:?}; PNG kept \
+         at {}.",
+        out_png.display()
+    );
+
+    assert_fixture_fits(SMOKE, (grid[0], grid[1]), a_start_line, DRAG_DY);
+
+    assert!(
+        a_start_col + DRAG_DX <= FIXTURE_LINE_WIDTH,
+        "{SMOKE}: Drag A pressed at column {a_start_col}, so its release column {} would be past \
+         the {FIXTURE_LINE_WIDTH}-character fixture line and Neovim would CLAMP the selection to \
+         end-of-line — making the exact-column assertion below true regardless of where the drag \
+         went. Move PROBE_X left or widen the `fill_buffer` fixture; do NOT relax the assertion.",
+        a_start_col + DRAG_DX
+    );
+
+    // Guaranteed by DRAG_DX, DRAG_DY >= 1, but asserted explicitly so a failure NAMES
+    // "the selection was empty" instead of leaving it to be inferred from two deltas.
+    assert!(
+        (a_start_line, a_start_col) != (a_end_line, a_end_col),
+        "{SMOKE}: Drag A's `'<` and `'>` marks are the SAME cell (line {a_start_line}, column \
+         {a_start_col}), so the selection is empty and the deltas below would be comparing a \
+         no-op against itself. Raw readback was {raw_a:?}; PNG kept at {}.",
+        out_png.display()
+    );
+
+    assert!(
+        a_end_line - a_start_line == DRAG_DY,
+        "{SMOKE}: Drag A selected {} row(s), expected exactly {DRAG_DY}. Press ({PROBE_X}, \
+         {PROBE_Y}) -> line {a_start_line}, column {a_start_col}; release ({drag_x}, {drag_y}) -> \
+         line {a_end_line}, column {a_end_col}; cell_w {}, cell_h {}; derived pane origin \
+         ({origin_x}, {origin_y}). A wrong delta with a correct `visualmode()` means the events \
+         DID reach Neovim but the point reconstruction is off — check \
+         `pane_view.rs::drag_point`, which must return `start_point() + offset` (both the \
+         `drag-update` and `drag-end` callbacks carry OFFSETS, not absolute coordinates). Raw \
+         readback was {raw_a:?}; PNG kept at {}.",
+        a_end_line - a_start_line,
+        metrics.cell_w,
+        metrics.cell_h,
+        out_png.display()
+    );
+    assert!(
+        a_end_col - a_start_col == DRAG_DX,
+        "{SMOKE}: Drag A selected {} column(s), expected exactly {DRAG_DX}. Press ({PROBE_X}, \
+         {PROBE_Y}) -> line {a_start_line}, column {a_start_col}; release ({drag_x}, {drag_y}) -> \
+         line {a_end_line}, column {a_end_col}; cell_w {}, cell_h {}; derived pane origin \
+         ({origin_x}, {origin_y}). Read the ROW assertion above first: a correct row delta with a \
+         wrong column delta points at `cell_w` (font family/size), not at the drag path. Raw \
+         readback was {raw_a:?}; PNG kept at {}.",
+        a_end_col - a_start_col,
+        metrics.cell_w,
+        metrics.cell_h,
+        out_png.display()
+    );
+
+    // --- Drag B: released OUTSIDE the pane, over the sidebar ----------------
+    let raw_b = read_readback(&sel_b, SMOKE);
+    let (mode_b, marks_b) = read_selection(&sel_b, SMOKE);
+    let [b_start_line, b_start_col, b_end_line, b_end_col] = marks_b;
+
+    assert!(
+        mode_b == VISUAL_CHARWISE,
+        "{SMOKE}: Drag B left `visualmode()` as {mode_b:?}, expected {VISUAL_CHARWISE:?}. Drag A \
+         passed, so the gesture works INSIDE the pane; an empty mode here means the drag stopped \
+         being delivered the moment the pointer left the widget, i.e. the `GtkGesture`'s implicit \
+         grab is not holding. That is exactly why `make_pane_area` uses ONE `gtk::GestureDrag` \
+         rather than an `EventControllerMotion`, which would silently stop at the pane edge. Raw \
+         readback was {raw_b:?}; PNG kept at {}.",
+        out_png.display()
+    );
+    assert!(
+        b_start_line == b_end_line,
+        "{SMOKE}: Drag B was injected along a single row (both motions used y = {PROBE_Y}), but \
+         its marks span lines {b_start_line}..{b_end_line}. Raw readback was {raw_b:?}; PNG kept \
+         at {}.",
+        out_png.display()
+    );
+    assert!(
+        b_start_col == CLAMPED_LEFT_COLUMN,
+        "{SMOKE}: Drag B released at x = {DRAG_OUT_X}, far LEFT of the editor pane and over the \
+         file-tree sidebar, so `cell_at` must clamp it to column {CLAMPED_LEFT_COLUMN} — instead \
+         `'<` is column {b_start_col}. Two candidate causes: either the events STOPPED at the \
+         pane edge (the `GtkGesture` implicit grab is not holding, so the last delivered point was \
+         still inside the widget), or `cell_at`'s clamp-to-nearest-edge-cell is not being reached \
+         (`pane_view.rs::drag_point` rejecting the out-of-widget point instead of passing it \
+         through — nothing there may reject it; the clamp IS the mechanism that makes \
+         drag-past-the-edge selection work). Raw readback was {raw_b:?}; PNG kept at {}.",
+        out_png.display()
+    );
+    assert!(
+        b_end_col == a_start_col,
+        "{SMOKE}: Drag B pressed at the same probe point as Drag A, so its `'>` (the press cell, \
+         since the drag went LEFT and the marks order the other way) must still be column \
+         {a_start_col} — instead it is {b_end_col}. Raw readback was {raw_b:?}; PNG kept at {}.",
+        out_png.display()
+    );
+}
+
+/// A real `wl_pointer.axis` group scrolls the Neovim viewport by exactly one line
+/// per detent, in both directions.
+///
+/// ## What it proves
+///
+/// That `gtk::EventControllerScroll` fires from a real `wl_pointer.axis` frame at
+/// all, WHICH `gdk::ScrollUnit` it reports, and how large its `dy` is. The exact
+/// delta assertion IS the `ScrollUnit` measurement — see its failure message.
+///
+/// MEASURED under cage: `axis 15.0 1` arrives at the client as `axis_source(0)`
+/// (WHEEL) + `axis_relative_direction(0, 0)` + `axis_value120(0, 120)` +
+/// `axis(t, 0, 15.0)` + `frame()`; GDK reports `ScrollUnit::Wheel` with
+/// `|dy| == 1.0` per detent; `scroll_threshold(Wheel, _) == 1.0`; and with
+/// `:set mousescroll=ver:1` one detent is exactly one line. The assertion is
+/// therefore EXACT and has NO fallback branch.
+///
+/// ## What it must NOT duplicate
+///
+/// `mouse_nvim.rs::scroll_seam_moves_viewport_via_wolfcore` drives
+/// `ScrollAccumulator` and `WolfCore::send_scroll` by hand; `mouse.rs`'s
+/// `scroll_threshold_table` / `scroll_accumulator_table` / `pane_scroll_table` /
+/// `scroll_steps_table` / `scroll_direction_is_inverted_from_macos` are pure tables;
+/// and `crates/wolf-ffi/tests/mouse_scroll.rs` pins the nvim side. None of them can
+/// say which `ScrollUnit` a real cage/wlroots wheel event reports. That is this
+/// smoke's subject.
+///
+/// It also does NOT prove `record_pointer`: `on_pane_scroll` names the target grid
+/// explicitly, so a stuck `(0.0, 0.0)` pointer would still scroll the right window.
+///
+/// ## Red-run revert
+///
+/// In `pane_view.rs::make_pane_area`, replace the scroll controller's closure body
+/// with `glib::Propagation::Stop` alone, dropping the `inner.on_pane_scroll(...)`
+/// call. Expected symptom: all three readbacks are `1`, and
+/// `w0_down - w0_before == SCROLL_DETENTS` fails with an observed delta of 0.
+/// Restore, re-run, green.
+#[test]
+fn wheel_scroll_moves_the_viewport_under_cage() {
+    const SMOKE: &str = "wheel_scroll_moves_the_viewport_under_cage";
+    // Where `:1` parks the viewport, and therefore what `line('w0')` must read before
+    // any scrolling. A PRECONDITION: without it the increase below would not be
+    // falsifiable.
+    const TOPLINE_AT_REST: i64 = 1;
+
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+    let cwd = make_temp_cwd();
+
+    let w0_before_file = cwd.join("pointer_scroll_w0_before.txt");
+    let w0_down_file = cwd.join("pointer_scroll_w0_down.txt");
+    let w0_up_file = cwd.join("pointer_scroll_w0_up.txt");
+    for path in [&w0_before_file, &w0_down_file, &w0_up_file] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let out_png = runtime_dir.join("wolf_gnome_pointer_scroll_smoke.png");
+    clear_evidence(&out_png, SMOKE);
+
+    let detents_env = SCROLL_DETENTS.to_string();
+
+    let status = run_pointer_scenario(
+        POINTER_SCROLL_BODY,
+        &cwd,
+        &out_png,
+        &[
+            ("W0_BEFORE", w0_before_file.as_os_str()),
+            ("W0_DOWN", w0_down_file.as_os_str()),
+            ("W0_UP", w0_up_file.as_os_str()),
+            ("SCROLL_DETENTS", OsStr::new(&detents_env)),
+            ("SCROLL_AXIS_VALUE", OsStr::new(SCROLL_AXIS_VALUE)),
+        ],
+    );
+    assert_pointer_scenario_succeeded(SMOKE, status, &cwd, &out_png);
+    assert_png_present(SMOKE, &out_png);
+
+    let extents = read_output_extents(&cwd, SMOKE);
+    assert_inside_extents(
+        SMOKE,
+        "the PROBE point (which is where the wheel events are aimed)",
+        (i64::from(PROBE_X), i64::from(PROBE_Y)),
+        extents,
+    );
+
+    let raw_before = read_readback(&w0_before_file, SMOKE);
+    let raw_down = read_readback(&w0_down_file, SMOKE);
+    let raw_up = read_readback(&w0_up_file, SMOKE);
+    let w0_before = read_ints(&w0_before_file, 1, SMOKE)[0];
+    let w0_down = read_ints(&w0_down_file, 1, SMOKE)[0];
+    let w0_up = read_ints(&w0_up_file, 1, SMOKE)[0];
+
+    assert!(
+        w0_before == TOPLINE_AT_REST,
+        "{SMOKE}: `line('w0')` was {w0_before} before any wheel event, expected \
+         {TOPLINE_AT_REST}. The `fill_buffer` fixture ends with `:1`, which parks topline at 1; \
+         this is the precondition that makes the increase below FALSIFIABLE, so it must hold \
+         before anything else is believed. Raw readback was {raw_before:?}; PNG kept at {}.",
+        out_png.display()
+    );
+
+    assert!(
+        w0_down - w0_before == SCROLL_DETENTS,
+        "{SMOKE}: {SCROLL_DETENTS} DOWN detents moved `line('w0')` by {} line(s) ({w0_before} -> \
+         {w0_down}), expected exactly {SCROLL_DETENTS}. THIS ASSERTION IS THE `ScrollUnit` \
+         MEASUREMENT, so read the observed number as a diagnosis:\n\
+         * exactly {SCROLL_DETENTS} — GDK reported `ScrollUnit::Wheel`, `|dy| == 1.0` per detent, \
+         `scroll_threshold(Wheel, _) == 1.0`, one detent = one step. This is the measured, \
+         expected outcome.\n\
+         * exactly 1 (or 0) — GDK reported `ScrollUnit::Surface`; the threshold is then `cell_h` \
+         (~44 px at {SMOKE_FONT_PT} pt) and a {SCROLL_AXIS_VALUE} delta is about a third of a \
+         cell, so three detents accumulate to one step. That is the \"over-sensitive beats dead\" \
+         fallback working. RECORD the finding in `crates/wolf-gnome/tests/README.md`; do NOT \
+         loosen this assertion.\n\
+         * {SCROLL_DETENTS} * 120, or 0 with no movement at all — wlroots is interpreting \
+         `axis_discrete`'s `discrete` argument in value120 units differently than measured. Probe \
+         with `axis {SCROLL_AXIS_VALUE} 120` (the helper's grammar already allows it, no C \
+         change) and record which form works.\n\
+         * anything else with `w0_before` correct — check that \
+         `:set mousescroll=ver:1` actually took effect; Neovim's default is `ver:3`, which would \
+         give three lines per step.\n\
+         Raw readbacks: before {raw_before:?}, down {raw_down:?}, up {raw_up:?}. PNG kept at {}.",
+        w0_down - w0_before,
+        out_png.display()
+    );
+
+    // Direction is asserted SEPARATELY from movement: down must strictly INCREASE
+    // `line('w0')` and up must strictly DECREASE it, matching the sign convention
+    // `mouse.rs::scroll_direction_is_inverted_from_macos` pins headlessly and
+    // `crates/wolf-ffi/tests/mouse_scroll.rs` pins against real Neovim.
+    assert!(
+        w0_up < w0_down,
+        "{SMOKE}: {SCROLL_DETENTS} UP detents did not move the viewport back UP: `line('w0')` \
+         went {w0_down} -> {w0_up}. Scrolling up must strictly DECREASE the topline. If the DOWN \
+         assertion passed and this one fails, the sign is being dropped somewhere between \
+         `axis_discrete`'s negative `discrete` and `mouse::scroll_steps` — check \
+         `mouse::scroll_direction_is_inverted_from_macos`, which pins the convention. Raw \
+         readbacks: before {raw_before:?}, down {raw_down:?}, up {raw_up:?}. PNG kept at {}.",
+        out_png.display()
+    );
+    assert!(
+        w0_up == w0_before,
+        "{SMOKE}: {SCROLL_DETENTS} down detents followed by {SCROLL_DETENTS} up detents left \
+         `line('w0')` at {w0_up}, not back at the starting {w0_before}. The two directions are \
+         not symmetric, which usually means a sub-cell remainder is being carried across the \
+         direction change — check `mouse::PaneScroll::steps_for`. Raw readbacks: before \
+         {raw_before:?}, down {raw_down:?}, up {raw_up:?}. PNG kept at {}.",
+        out_png.display()
+    );
+}
+
+/// Clicking a pane and then CLOSING that same pane must not wedge keyboard input.
+///
+/// This is the first ever execution of the fix in `df3bb3d`, which until now has
+/// been a structural argument only.
+///
+/// ## HONEST SCOPE — read this before extending or "simplifying" anything
+///
+/// This smoke proves the **composite** invariant — *a click followed by closing the
+/// clicked pane never wedges keyboard input* — and NOT the `focusable(false)` half in
+/// isolation. Isolating that half would need a Tab-traversal probe, which is not
+/// worth the fragility. Do not read a green run as more than the composite claim.
+///
+/// ## What it proves
+///
+/// That the click really moves Neovim's current window (`<C-w>c` afterwards closes
+/// the pane that was CLICKED, which the OCR pair corroborates), and that keys still
+/// reach Neovim after that pane's `DrawingArea` is destroyed. The `$ALIVE1` control
+/// step BEFORE the close is what makes a red run diagnosable at all: without it,
+/// "keys never worked" and "keys died at the close" are indistinguishable.
+///
+/// ## What it must NOT duplicate
+///
+/// `close_pane_leaves_one_under_cage` (`<C-w>c`),
+/// `colon_q_closes_focused_pane_under_cage` (`:q`) and
+/// `close_pane_chord_closes_focused_pane_under_cage` (Ctrl+Shift+W) all close a
+/// pane, and NONE of them ever CLICKS one first — so in all three the wedge cannot
+/// arise, and all three stay green with the fix reverted. The one thing this smoke
+/// adds is the click before the close, and its assertion is on KEYBOARD LIVENESS
+/// AFTERWARDS, not on which pane survived.
+///
+/// ## Red-run revert — THREE parts, not one
+///
+/// All three, or `$ALIVE2` still appears and the wedge assertion never fires (see
+/// the measured matrix below for what each smaller revert actually produces):
+///
+/// 1. `pane_view.rs::make_pane_area` — add `.focusable(true)` to the
+///    `gtk::DrawingArea::builder()` chain.
+/// 2. `pane_view.rs::on_pane_clicked` — replace `self.cmdline_area.grab_focus();`
+///    with a `grab_focus()` on the clicked pane's own `area` (the historical code).
+/// 3. `pane_view.rs::rebuild_pane_area` — neuter the return-focus guard, e.g.
+///    `let had_focus = false;` in place of
+///    `let had_focus = self.focus_inside_pane_area();`.
+///
+/// **Why (3) is required.** `detect_closes` removes the closed pane from
+/// `self.panes` and THEN calls `rebuild_pane_area`, which samples
+/// `focus_inside_pane_area()` BEFORE any unparenting — at which moment the closed
+/// pane's `DrawingArea` is still in the widget tree and still holds GTK focus. So
+/// `had_focus` is `true` and the guard re-grabs focus onto `cmdline_area` after the
+/// rebuild. Reverting only (1)+(2) therefore leaves BOTH `ALIVE` assertions PASSING:
+/// keyboard input survives on the guard alone, which is the finding — the guard is
+/// load-bearing, measured rather than argued.
+///
+/// ## The MEASURED revert matrix (2026-08-02) — Run B is NOT "still green"
+///
+/// Run B's two `ALIVE` assertions pass, but the RUN IS NOT GREEN OVERALL: that
+/// deliberately-broken configuration renders the surviving pane BLANK (screenshot
+/// inspected: sidebar and header draw, editor pane empty), so the OCR corroboration
+/// below fails. That is a SECOND, separate defect of a broken build, not the wedge,
+/// and it was reproduced twice. Do not record Run B as green; record it as "both
+/// `ALIVE` assertions pass, OCR fails".
+///
+/// ```text
+/// configuration                          | result
+/// ---------------------------------------|--------------------------------------
+/// revert (1) `.focusable(true)` only      | green
+/// revert (2) `area.grab_focus()` only     | green
+/// revert (1)+(2), guard intact  (Run B)   | ALIVE1 ok, ALIVE2 ok, OCR FAILS — pane blank
+/// revert (1)+(2)+(3)            (Run A)   | ALIVE1 ok, ALIVE2 ABSENT — the wedge
+/// ```
+///
+/// Run A is the headline red evidence and holds: it is the first execution of
+/// `df3bb3d`. The guard's load-bearingness is evidenced by the two `ALIVE`
+/// assertions passing in Run B, NOT by a green overall run.
+#[test]
+fn click_then_close_keeps_keyboard_input_alive_under_cage() {
+    const SMOKE: &str = "click_then_close_keeps_keyboard_input_alive_under_cage";
+
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
+    // `std::env::current_dir()` for `CoreConfig.cwd`, so cage is launched with this
+    // directory as its working directory.
+    let cwd = make_temp_cwd();
+    let target_click = cwd.join(WEDGE_FILE_CLICK);
+    let target_stay = cwd.join(WEDGE_FILE_STAY);
+    std::fs::write(&target_click, format!("{WEDGE_HEADING_CLICK}\n")).unwrap_or_else(|e| {
+        panic!(
+            "failed to write the wedge clicked-pane file {}: {e}",
+            target_click.display()
+        )
+    });
+    std::fs::write(&target_stay, format!("{WEDGE_HEADING_STAY}\n")).unwrap_or_else(|e| {
+        panic!(
+            "failed to write the wedge survivor file {}: {e}",
+            target_stay.display()
+        )
+    });
+
+    let alive1 = cwd.join("pointer_wedge_alive1.txt");
+    let alive2 = cwd.join("pointer_wedge_alive2.txt");
+    for path in [&alive1, &alive2] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let out_png = runtime_dir.join("wolf_gnome_pointer_wedge_smoke.png");
+    clear_evidence(&out_png, SMOKE);
+
+    let status = run_pointer_scenario(
+        POINTER_WEDGE_BODY,
+        &cwd,
+        &out_png,
+        &[
+            ("WEDGE_FILE_CLICK", OsStr::new(WEDGE_FILE_CLICK)),
+            ("WEDGE_FILE_STAY", OsStr::new(WEDGE_FILE_STAY)),
+            ("ALIVE1", alive1.as_os_str()),
+            ("ALIVE2", alive2.as_os_str()),
+            ("ALIVE_MARK1", OsStr::new(WEDGE_ALIVE_MARK_1)),
+            ("ALIVE_MARK2", OsStr::new(WEDGE_ALIVE_MARK_2)),
+        ],
+    );
+    assert_pointer_scenario_succeeded(SMOKE, status, &cwd, &out_png);
+    assert_png_present(SMOKE, &out_png);
+
+    let extents = read_output_extents(&cwd, SMOKE);
+    assert_inside_extents(
+        SMOKE,
+        "the PROBE point (which must land in the LEFT pane)",
+        (i64::from(PROBE_X), i64::from(PROBE_Y)),
+        extents,
+    );
+
+    // The scenario deliberately does NOT `exit 14` when either readback is missing:
+    // here their ABSENCE is the observable, so the discrimination happens on this
+    // side, where the message can be a real diagnosis.
+    let alive2_present = alive2.exists();
+    assert!(
+        alive1.exists(),
+        "{SMOKE}: the CONTROL readback {} does not exist, so keys were NOT reaching Neovim even \
+         BEFORE the pane close.{} This is a different defect from the click-then-close focus \
+         wedge, and it makes the wedge assertion below meaningless. Check \
+         `click_positions_the_cursor_under_cage` FIRST: if it is also red, the click itself is \
+         broken; if it is green, suspect that `on_pane_clicked`'s `cmdline_area.grab_focus()` \
+         moved GTK focus somewhere that never gets it back. PNG kept at {}.",
+        alive1.display(),
+        if alive2_present {
+            " (Curiously the POST-close readback DID appear, which would mean input recovered — \
+             investigate the ordering in the scenario.)"
+        } else {
+            " Neither readback appeared."
+        },
+        out_png.display()
+    );
+    let alive1_text = read_trimmed(&alive1, SMOKE);
+    assert!(
+        alive1_text == WEDGE_ALIVE_MARK_1,
+        "{SMOKE}: the CONTROL readback {} holds {alive1_text:?}, expected \
+         {WEDGE_ALIVE_MARK_1:?}. The file exists, so `writefile` ran, but with the wrong payload — \
+         the typed Ex command was garbled in transit. PNG kept at {}.",
+        alive1.display(),
+        out_png.display()
+    );
+
+    assert!(
+        alive2_present,
+        "{SMOKE}: `{WEDGE_ALIVE_MARK_1}` exists but `{WEDGE_ALIVE_MARK_2}` does not ({}). Keys \
+         reached Neovim BEFORE the pane close and stopped reaching it AFTER — THIS IS THE \
+         CLICK-THEN-CLOSE FOCUS WEDGE (`crates/wolf-gnome/src/README.md`, \"GTK keyboard focus \
+         never lands on a pane area\"). Closing the pane that held GTK focus destroyed the focus \
+         widget, the toplevel was left with none, and window-level key dispatch died for BOTH the \
+         Neovim key controller and the chord controller. Check, in order: (1) pane `DrawingArea`s \
+         are still built WITHOUT `focusable(true)` in `pane_view.rs::make_pane_area`; (2) \
+         `pane_view.rs::on_pane_clicked` still calls `self.cmdline_area.grab_focus()` and never \
+         `area.grab_focus()`; (3) `pane_view.rs::rebuild_pane_area`'s \
+         `focus_inside_pane_area()` -> `cmdline_area.grab_focus()` guard is still present and \
+         still sampled BEFORE any unparenting. MEASURED: reverting only (1) and (2) leaves BOTH \
+         `ALIVE` readbacks passing — the guard in (3) catches it on its own, so keyboard input \
+         survives — although that build then renders the surviving pane BLANK and fails the OCR \
+         corroboration below for an unrelated reason. Only reverting all three produces THIS \
+         failure. PNG kept at {}.",
+        alive2.display(),
+        out_png.display()
+    );
+    let alive2_text = read_trimmed(&alive2, SMOKE);
+    assert!(
+        alive2_text == WEDGE_ALIVE_MARK_2,
+        "{SMOKE}: the POST-close readback {} holds {alive2_text:?}, expected \
+         {WEDGE_ALIVE_MARK_2:?}. The file exists, so keys DO still reach Neovim after the close — \
+         the wedge is not present — but the payload is wrong, so the typed Ex command was garbled \
+         in transit. PNG kept at {}.",
+        alive2.display(),
+        out_png.display()
+    );
+
+    // OCR corroboration: the close actually happened, the survivor kept rendering,
+    // and the app was still drawing at all. These two are corroboration; the
+    // `ALIVE*` files above are the load-bearing assertions.
+    let ocr_text = ocr_to_lowercase(&out_png);
+    assert!(
+        ocr_text.contains(WEDGE_OCR_STAY),
+        "{SMOKE}: OCR did not contain {WEDGE_OCR_STAY:?} — the HEADING of {WEDGE_FILE_STAY}, the \
+         pane that must SURVIVE the close. Both `ALIVE` readbacks passed, so keyboard input is \
+         alive; this instead says the surviving pane stopped rendering, or that the wrong pane was \
+         closed. MEASURED PRECEDENT: this is exactly the shape of Run B in this smoke's revert \
+         matrix — with `.focusable(true)` and `area.grab_focus()` both reverted but the \
+         `rebuild_pane_area` guard intact, the surviving pane renders BLANK while keyboard input \
+         keeps working. If a revert is in flight, check for a half-reverted focus setup before \
+         suspecting the renderer. PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+    assert!(
+        !ocr_text.contains(WEDGE_OCR_CLICK),
+        "{SMOKE}: OCR unexpectedly contained {WEDGE_OCR_CLICK:?} — the HEADING of \
+         {WEDGE_FILE_CLICK}, the pane that was CLICKED and then closed. A hit means `<C-w>c` did \
+         not close the clicked pane, which usually means the click never moved Neovim's current \
+         window: `pane_view.rs::on_pane_clicked` must call `core.focus_win(win)` for the clicked \
+         pane. Without that, the whole premise of this smoke collapses — it would be closing the \
+         pane that was never clicked, in which case no wedge could arise and the green `ALIVE2` \
+         above proves nothing. The assertion is sound: after `:e {WEDGE_FILE_CLICK}` Neovim's \
+         toast and the sidebar row both show the FILENAME, whose lowercase contains neither \
+         {WEDGE_OCR_CLICK:?} nor {WEDGE_OCR_STAY:?}. PNG kept at {} for inspection. OCR output \
          was:\n{ocr_text}",
         out_png.display()
     );
