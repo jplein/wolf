@@ -301,6 +301,55 @@ final class PaneContainerView: NSView {
   /// unconditionally. Reloads can straddle one page load, and a window that switched
   /// SOURCE FILES must not inherit the previous file's offset.
   private var pendingPreviewRestores: [Int64: PreviewScrollSeam.RestoreRequest] = [:]
+  /// How many `loadHTMLString` navigations have been issued for each preview window
+  /// and have not yet had a terminal callback (`didFinish` or either `didFail…`).
+  ///
+  /// A COUNT, never a `Set`, and that is load-bearing. Two navigations can STRADDLE
+  /// one page load: the coalescer serializes reloads to one per debounce window but
+  /// does NOT wait for `didFinish`, so load N+1 is routinely issued while N is still
+  /// navigating (the same straddling window H2 exists to survive). With a set, N's
+  /// callback — very often a `didFail`, since WebKit reports a superseded load as a
+  /// failure — cleared the flag while N+1 was still outstanding, the next coalescer
+  /// tick read rule 2 as all-clear, and the resulting body swap was discarded by
+  /// N+1's commit: a visible flicker, the exact symptom the in-place path removes.
+  ///
+  /// Feeds `PreviewScrollSeam.updateStrategy`'s rule 2 as
+  /// `(previewLoadsInFlight[win] ?? 0) > 0`. Incremented at issue time; decremented by
+  /// `previewLoadSettled(win:succeeded:)`, which then routes the REMAINING count
+  /// through `PreviewScrollSeam.loadCommitOutcome`. Reaching zero drops the entry
+  /// entirely, so an absent key and a zero count are the same thing.
+  private var previewLoadsInFlight: [Int64: Int] = [:]
+  /// What the MOST RECENTLY issued `loadHTMLString` for each preview window will
+  /// commit. Absent when the HTML could not be split — an unsplittable document must
+  /// never become a live one.
+  ///
+  /// Consumed ONLY by `previewLoadSettled(win:succeeded:)`, and only on the callback
+  /// of the LAST outstanding navigation: a superseded load's callback must not take
+  /// this descriptor, because it belongs to the load that is still navigating.
+  private var pendingPreviewDocuments: [Int64: PreviewScrollSeam.LiveDocument] = [:]
+  /// What is COMMITTED in each preview web view right now: the sole input to
+  /// `PreviewScrollSeam.updateStrategy`'s rules 3, 4 and 6.
+  ///
+  /// Deliberately distinct from `lastPreviewLoads` (what was last DISPATCHED, keyed
+  /// `(sourceBufnr, sourceTick)`): the strategy gate has to know what the page
+  /// actually shows, because that is what a body-only swap mutates. Written ONLY by
+  /// `previewLoadSettled(win:succeeded:)`'s `.commit` case, and cleared by
+  /// `previewInPlaceUpdateFailed` (to force rule 3) and by the capture `.drop` branch
+  /// (everything it touches is stale). A FAILED navigation deliberately leaves it
+  /// alone — the web view is still displaying the previous document, so the previous
+  /// descriptor is still accurate.
+  private var previewLiveDocuments: [Int64: PreviewScrollSeam.LiveDocument] = [:]
+  /// Preview windows whose next coalesced pass must reload even though their
+  /// `(sourceBufnr, sourceTick)` is unchanged, unioned into `winsNeedingReload`'s
+  /// result by `reloadDirtyPreviews` and removed as each is consumed.
+  ///
+  /// Set only by `previewInPlaceUpdateFailed`. Re-arming through a dedicated set
+  /// rather than by nil'ing `lastPreviewLoads[win]` is deliberate: `lastPreviewLoads`
+  /// is also `captureDecision`'s `previousLoad`, and rule 1 (the H1 guard — a source
+  /// switch must DROP the previous file's offsets) requires it to be non-nil.
+  /// Destroying it to force a reload would disable that guard on exactly the recovery
+  /// reload, and in the persistent-failure mode permanently.
+  private var previewForcedReloads: Set<Int64> = []
   /// The absolute source path currently previewed in each preview window, captured
   /// from `FfiPreview.source_path()` in `reloadDirtyPreviews`. Used as the
   /// `loadHTMLString` `baseURL` (so relative links resolve) and as the same-file
@@ -1320,9 +1369,17 @@ final class PaneContainerView: NSView {
   /// A forced dark/light appearance does not change the effective appearance on an
   /// OS toggle, so this correctly no-ops there.
   ///
-  /// A free bonus of the scroll-sync work: because the reload path now captures the
-  /// pre-reload anchor offset and restores it after `didFinish`, a dark↔light flip
-  /// re-renders the preview IN PLACE rather than snapping it back to the top.
+  /// This clears `lastPreviewLoads` but deliberately NOT `previewLiveDocuments`, so a
+  /// flip takes the genuine in-place path (`PreviewScrollSeam.updateStrategy` rule 7)
+  /// and never navigates at all — no capture, no restore, no document commit, and so
+  /// no flash. That is CORRECT because the in-app preview's `<head>` is byte-identical
+  /// across a flip: `render_preview` pins `PreviewTheme::Default` + `WidthMode::Full`,
+  /// and dark/light is a `prefers-color-scheme` media query INSIDE that constant CSS.
+  /// The only thing a flip actually changes is the BODY's inline
+  /// `style="color:#…"` highlight spans, which nvim's re-sourced colorscheme
+  /// produces — exactly what the body swap replaces. Should the head ever stop being
+  /// constant (a themes or width feature), strategy rule 6 catches it by length and
+  /// this path falls back to a full load on its own.
   override func viewDidChangeEffectiveAppearance() {
     super.viewDidChangeEffectiveAppearance()
     lastPreviewLoads.removeAll()
@@ -1355,11 +1412,19 @@ final class PaneContainerView: NSView {
       // (baseURL) and classifies same-vs-cross file (PreviewLinkSeam).
       previewSourcePaths[win] = preview.source_path().toString()
     }
-    let needing = PreviewSeam.winsNeedingReload(current: current, loaded: lastPreviewLoads)
+    var needing = PreviewSeam.winsNeedingReload(current: current, loaded: lastPreviewLoads)
+    // Windows re-armed by a FAILED in-place update. Their `(sourceBufnr, sourceTick)`
+    // is unchanged — the tick was recorded when the swap was dispatched — so
+    // `winsNeedingReload` cannot see them, and the alternative of nil'ing
+    // `lastPreviewLoads[win]` would blind `captureDecision` rule 1 (see
+    // `previewForcedReloads`). Consumed (removed) below, once the win is actually
+    // handled; a win with no web view yet stays armed for the next pass.
+    needing.append(contentsOf: previewForcedReloads.subtracting(needing).sorted())
     for win in needing {
       // Skip a preview whose web view does not exist yet WITHOUT updating the
       // map, so the next sync re-requests once the web view exists.
       guard let web = previewWebViews[win], let load = current[win] else { continue }
+      previewForcedReloads.remove(win)
       // ORDERING HAZARD: the capture decision below needs the PREVIOUS load to see
       // whether this window just switched to another SOURCE FILE, so it must be read
       // BEFORE `lastPreviewLoads[win]` is reassigned. Do not move the assignment up.
@@ -1375,6 +1440,77 @@ final class PaneContainerView: NSView {
       // (unchanged OD/O4 behavior — no local-subresource loading is added).
       let path = previewSourcePaths[win] ?? ""
       let base = path.isEmpty ? nil : URL(fileURLWithPath: path)
+      // HOW this render reaches the page. The typing path takes `.inPlace` — a body
+      // swap inside the LIVE document, with no navigation at all — because a
+      // navigation re-ships ~965 KiB of inlined base64 @font-face CSS across the
+      // WKWebView IPC boundary and re-commits the document at the coalescer's ~33ms
+      // cadence, which is what made the preview flicker between the top and its real
+      // offset while typing. Everything that genuinely needs a navigation still gets
+      // one; the whole ordered decision lives in the pure seam and this is a
+      // mechanical switch over it.
+      switch PreviewScrollSeam.updateStrategy(
+        html: html,
+        currentLoad: load,
+        liveDocument: previewLiveDocuments[win],
+        // A COUNT, not a set membership: two navigations can straddle one page load,
+        // and the superseded one's callback must not read as "nothing in flight".
+        loadInFlight: (previewLoadsInFlight[win] ?? 0) > 0,
+        hasPendingFragment: pendingPreviewFragments[win] != nil)
+      {
+      case .inPlace(let body):
+        let cursor = currentCursors[win] ?? PreviewScrollSeam.CursorPos(line: 0, col: 0)
+        // `__wolfUpdate` ENDS with `__wolfFollow`, so the follow has been applied.
+        // Recording it here keeps `followDirtyPreviewCursors` from immediately
+        // re-issuing a redundant `followJS` — exactly mirroring what
+        // `previewDidFinishLoad`'s restore branch does.
+        lastPreviewCursors[win] = cursor
+        // The in-place path touches NONE of the capture/restore machinery: no
+        // `captureDecision`, no `pendingPreviewRestores`, no `previewLoadsInFlight` /
+        // `pendingPreviewDocuments` / `previewLiveDocuments` / `previewScrollStates`.
+        // Strategy rule 2 makes an in-place update and a pending restore mutually
+        // exclusive per window BY CONSTRUCTION.
+        //
+        // Reuses the `prev.html` bucket rather than adding a `FrameStatsBucket` case:
+        // `FrameStatsTests` pins the bucket table exhaustively (rawValues 0..<n), so a
+        // new case is not the cheap change it looks like. Both samples measure the
+        // synchronous DISPATCH of one document update, so the bucket stays coherent.
+        let updateStart = FrameMetrics.begin()
+        web.callAsyncJavaScript(
+          PreviewScrollSeam.inPlaceUpdateJS(),
+          arguments: [
+            PreviewScrollSeam.inPlaceUpdateArgumentNames.html: body,
+            PreviewScrollSeam.inPlaceUpdateArgumentNames.line: Int(cursor.line),
+            PreviewScrollSeam.inPlaceUpdateArgumentNames.col: Int(cursor.col),
+          ],
+          in: nil,
+          // THE CONTENT WORLD MUST BE `.page`. User scripts added via
+          // `addUserScript` WITHOUT an explicit world land in `.page`, so that is
+          // where `__wolfUpdate` lives. A `.defaultClient` world would see a
+          // DIFFERENT `window`, every call would return the `0` sentinel, and the
+          // feature would silently degrade to permanent full reloads — a green test
+          // suite and an unchanged flicker bug. This is the highest-risk line in the
+          // change; do not "tidy" it to the isolated world.
+          in: .page,
+          completionHandler: { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .failure:
+              // A JS exception, an invalid frame, or a web-process crash.
+              self.previewInPlaceUpdateFailed(win: win)
+            case .success(let value):
+              // `__wolfUpdate` returns 1 on success and the falsy 0 sentinel on any
+              // refusal. Anything that does not bridge to a non-zero number — NSNull,
+              // undefined, a bare Void — is treated as a refusal too.
+              if ((value as? NSNumber)?.intValue ?? 0) == 0 {
+                self.previewInPlaceUpdateFailed(win: win)
+              }
+            }
+          })
+        FrameMetrics.end(.previewLoadHTML, updateStart)
+        continue
+      case .fullLoad:
+        break
+      }
       // LIMITATION: this measures ONLY the synchronous `loadHTMLString` call.
       // The WebKit parse / layout / paint it schedules happens asynchronously,
       // off this call stack, and is NOT included in the `prev.html` bucket.
@@ -1411,11 +1547,27 @@ final class PaneContainerView: NSView {
         previewScrollStates[win] = nil
         pendingPreviewRestores[win] = nil
         lastPreviewCursors[win] = nil
+        // Same F-2 reasoning: what is committed belongs to the OLD file, so it must
+        // not be the basis of any strategy decision for the new one.
+        previewLiveDocuments[win] = nil
       case .keepPending:
         // An in-flight restore holds the only real position; leave it alone.
         break
       case .capture(let request):
         pendingPreviewRestores[win] = request
+      }
+      // One MORE navigation is now outstanding (rule 2 forbids an in-place update
+      // while the count is non-zero), and this is what it WILL commit — moved into
+      // `previewLiveDocuments` by `previewLoadSettled` when the LAST outstanding
+      // navigation lands. Incremented, not set: this reload may well be issued while
+      // the previous one is still navigating, and the callbacks must be able to tell
+      // "the last one landed" from "an earlier, superseded one landed". Assigning
+      // `nil` to the pending descriptor clears it: an unsplittable document must never
+      // become a live document, because a body-only swap could not reproduce it.
+      previewLoadsInFlight[win, default: 0] += 1
+      pendingPreviewDocuments[win] = PreviewScrollSeam.splitDocument(html).map {
+        PreviewScrollSeam.LiveDocument(
+          sourceBufnr: load.sourceBufnr, headLength: $0.headLength)
       }
       let htmlStart = FrameMetrics.begin()
       web.loadHTMLString(html, baseURL: base)
@@ -1551,6 +1703,15 @@ final class PaneContainerView: NSView {
     pendingPreviewRestores[win] = nil
     previewSourcePaths[win] = nil
     pendingPreviewFragments[win] = nil
+    // The in-place-update bookkeeping. Leaving a non-zero `previewLoadsInFlight`
+    // count would pin a recreated window on the full path; leaving either document
+    // entry would let a recreated web view be judged against a document it never
+    // committed; leaving a forced-reload entry would arm a reload for a window that
+    // no longer exists.
+    previewLoadsInFlight[win] = nil
+    pendingPreviewDocuments[win] = nil
+    previewLiveDocuments[win] = nil
+    previewForcedReloads.remove(win)
     // Dropping this is what restores grid painting IMMEDIATELY when a preview
     // closes: with no web view and no loaded-content flag, `previewOccluder`
     // returns nil and `isFullyOccluded` is `false` on the very next frame.
@@ -1639,10 +1800,22 @@ final class PaneContainerView: NSView {
   ///  3. **Otherwise a first-ever load**: follow the current cursor, if one is
   ///     known. This is what makes the very first paint of a freshly opened preview
   ///     land where the user is instead of at the top.
+  ///
+  /// Since the in-place update path landed this is reached ONLY on the five
+  /// navigating paths (first bind, a source switch, a pending cross-file fragment, a
+  /// load already in flight, and unsplittable HTML) plus recovery after a failed
+  /// in-place update — an ordinary keystroke never gets here. `pendingPreviewRestores`
+  /// and `PreviewScrollSeam.restoreJS` therefore remain load-bearing for exactly
+  /// those, and the three-branch precedence below is unchanged.
   func previewDidFinishLoad(win: Int64) {
     // FIRST — the branches below can return early, and the occlusion test depends
     // on this flag being set on every finished load.
     previewLoadedWins.insert(win)
+
+    // Also before the branches, for the same early-return reason: this navigation is
+    // over, so the in-flight count drops and — IF it was the last one outstanding —
+    // what it was carrying becomes the live document.
+    previewLoadSettled(win: win, succeeded: true)
 
     if let fragment = pendingPreviewFragments.removeValue(forKey: win) {
       pendingPreviewRestores[win] = nil
@@ -1668,6 +1841,105 @@ final class PaneContainerView: NSView {
         PreviewScrollSeam.followJS(line: cursor.line, col: cursor.col), completionHandler: nil)
       break
     }
+  }
+
+  /// A preview web view's navigation FAILED (provisionally or after commit), called
+  /// from `PreviewNavigationDelegate`'s two `didFail…` callbacks. WebKit also reports
+  /// a SUPERSEDED load this way, so this is a routine path, not an exotic one.
+  ///
+  /// Mostly bookkeeping: without the decrement a failed load would leave the in-flight
+  /// count stuck non-zero, and `PreviewScrollSeam.updateStrategy` rule 2 would pin that
+  /// window on the full-load path forever — a SAFE degradation, but a silent one, and
+  /// cheap to close. `previewLiveDocuments[win]` is deliberately left alone (the seam's
+  /// `.discard`): a failed navigation never commits, so the web view is still showing
+  /// the previous document and the previous descriptor is still accurate.
+  ///
+  /// A `.discard` ALSO drops any pending scroll restore, because only
+  /// `previewDidFinishLoad` consumes one and no navigation will now reach it: the
+  /// stale offset would otherwise survive until some later `.capture` overwrote it,
+  /// and a `.keepPending` decision (an empty cache after a `.drop`) would leave it to
+  /// be applied to an unrelated document. The clear is gated on `.discard` rather than
+  /// unconditional precisely because of the straddling case — while another navigation
+  /// is still outstanding, THAT load's `didFinish` is still going to consume the
+  /// restore, and dropping it here would make a superseded load's failure lose a good
+  /// restore.
+  func previewDidFailLoad(win: Int64) {
+    if case .discard = previewLoadSettled(win: win, succeeded: false) {
+      pendingPreviewRestores[win] = nil
+    }
+  }
+
+  /// The shared terminal-callback bookkeeping for one preview navigation: decrement
+  /// this window's outstanding-navigation count, then apply
+  /// `PreviewScrollSeam.loadCommitOutcome`'s answer to the live and pending document
+  /// descriptors. A mechanical switch — the whole decision is in the pure seam,
+  /// because this bookkeeping is compile + manual-smoke only, which is exactly where
+  /// the straddling-load defect (M1) hid.
+  ///
+  /// A callback arriving with NOTHING counted for that window belongs to a navigation
+  /// this view never issued, and it decides nothing: `decidePolicyFor` `.cancel`s
+  /// every clicked link, and WebKit reports at least some of those cancellations as a
+  /// `didFailProvisionalNavigation`. Without the guard such a callback would drive the
+  /// count negative (wedging rule 2 permanently on) or, worse, present as a `.discard`
+  /// and drop a scroll restore belonging to a real, still-pending reload.
+  ///
+  /// - Returns: the outcome, for callers that have their own work to gate on it.
+  @discardableResult
+  private func previewLoadSettled(win: Int64, succeeded: Bool)
+    -> PreviewScrollSeam.LoadCommitOutcome
+  {
+    let outstanding = previewLoadsInFlight[win] ?? 0
+    guard outstanding > 0 else { return .stillOutstanding }
+    let remaining = outstanding - 1
+    previewLoadsInFlight[win] = remaining > 0 ? remaining : nil
+    let outcome = PreviewScrollSeam.loadCommitOutcome(
+      remaining: remaining, pending: pendingPreviewDocuments[win], succeeded: succeeded)
+    switch outcome {
+    case .stillOutstanding:
+      // Another navigation is still on its way and this descriptor is ITS descriptor.
+      // Touch nothing.
+      break
+    case .commit(let document):
+      previewLiveDocuments[win] = document
+      pendingPreviewDocuments[win] = nil
+    case .discard:
+      // The live descriptor stays: nothing replaced what is on screen.
+      pendingPreviewDocuments[win] = nil
+    }
+    return outcome
+  }
+
+  /// Recovery after an in-place `__wolfUpdate` did not apply — the call failed, or
+  /// the page returned the falsy sentinel (no `__wolfUpdate`, no `document.body`, or
+  /// a `DOMParser` result with no body).
+  ///
+  /// TERMINATION ARGUMENT: inserting into `previewForcedReloads` is what re-arms this
+  /// window for the next coalesced pass (its `(sourceBufnr, sourceTick)` did not
+  /// change, so `PreviewSeam.winsNeedingReload` alone would never revisit it);
+  /// clearing `previewLiveDocuments[win]` is what forces that re-armed pass onto the
+  /// FULL path (`updateStrategy` rule 3). The full path never calls this function, so
+  /// a failure costs at most ONE extra full reload — there is no loop.
+  ///
+  /// The re-arm goes through its own set rather than through `lastPreviewLoads[win] =
+  /// nil`, which is what it used to do. `lastPreviewLoads` is ALSO `captureDecision`'s
+  /// `previousLoad`, and rule 1 — the H1 guard, which DROPS the previous file's
+  /// offsets when the source buffer switches — requires a non-nil `previousLoad`.
+  /// Nil'ing it disabled that guard on the recovery reload, and in the persistent
+  /// failure mode below it disabled it on EVERY reload; a fragment-less cross-file
+  /// link landing in that state would then open the new file at the old file's scroll
+  /// offset, which is H1 verbatim.
+  ///
+  /// A PERSISTENTLY failing in-place update (a wrong `callAsyncJavaScript` content
+  /// world is the way to get one) therefore degrades to one full load per tick, which
+  /// is the pre-change behavior with every guard still armed — one wasted async call
+  /// per tick, and nothing else weakened. It recovers automatically the moment a load
+  /// commits, which is why there is no "stop trying" latch. (If the preview ever
+  /// flickers again while the suite is green, look here first: that content world
+  /// lands exactly on this path.)
+  private func previewInPlaceUpdateFailed(win: Int64) {
+    previewLiveDocuments[win] = nil
+    previewForcedReloads.insert(win)
+    previewReloadCoalescer.request()
   }
 
   /// Nulls EVERY pane's bound grid, then re-resolves each via `grid_for_win` on

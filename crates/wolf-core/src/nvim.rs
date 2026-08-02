@@ -394,6 +394,21 @@ impl NvimProcess {
     /// Returns a `Send + 'static` future (owns a cloned RPC handle) so the
     /// timeout chokepoint ([`crate::api::WolfCore::block_on_rpc`]) can spawn it and
     /// detach on timeout without holding a borrow of `self`.
+    ///
+    /// HEAD-IS-INVARIANT (relied on by the macOS front-end). Because the theme is
+    /// fixed at [`crate::markdown::PreviewTheme::Default`] and the width mode at
+    /// [`crate::markdown::WidthMode::Full`], and everything else
+    /// [`crate::markdown::render_html`] assembles into `<head>` is a compile-time
+    /// constant, the `<style>` block this returns is BYTE-IDENTICAL on every call —
+    /// including across a dark/light appearance flip, which is a
+    /// `prefers-color-scheme` media query inside that constant CSS rather than a
+    /// different render. Only the BODY changes between calls (the inline
+    /// `style="color:#…"` highlight spans and the `.wolf-src` markers). The macOS
+    /// preview exploits this to swap ONLY the body into the live web view while the
+    /// user types, instead of re-loading a document whose head inlines ~965 KiB of
+    /// base64 `@font-face` data. It guards the premise by comparing head lengths and
+    /// degrading to a full load when they differ, so adding a theme/width parameter
+    /// here is safe — but it costs that optimization, so revisit the front-end too.
     pub fn render_preview(
         &self,
         source_bufnr: i64,

@@ -42,6 +42,32 @@
 //                                         // in-flight restore
 //            case capture(RestoreRequest)
 //        }
+//        public struct DocumentSplit: Equatable {
+//            public let headLength: Int   // UTF-8 count of everything up to AND
+//                                         // INCLUDING the `<body …>` tag
+//            public let body: String      // the body element's INNER html
+//            public init(headLength: Int, body: String)
+//        }
+//        public struct LiveDocument: Equatable {
+//            public let sourceBufnr: Int64 // what is COMMITTED in the web view — NOT
+//            public let headLength: Int    // PreviewSeam.PreviewLoad, which is what
+//                                          // was last DISPATCHED (D3)
+//            public init(sourceBufnr: Int64, headLength: Int)
+//        }
+//        public enum UpdateStrategy: Equatable {
+//            case fullLoad                // loadHTMLString; didFinish drives
+//                                         // capture/restore
+//            case inPlace(body: String)   // callAsyncJavaScript(__wolfUpdate); NO
+//                                         // navigation
+//        }
+//        public enum LoadCommitOutcome: Equatable {
+//            case stillOutstanding        // more loads pending: leave the live AND
+//                                         // the pending descriptor ALONE
+//            case commit(LiveDocument?)   // the last load, and it SUCCEEDED:
+//                                         // live = pending, then clear pending
+//            case discard                 // the last load, and it FAILED: leave live
+//                                         // UNCHANGED, clear pending
+//        }
 //
 //        public static let markerColumnStride: UInt32      // 100
 //        public static let minEdgeThreshold: Double        // 48
@@ -65,10 +91,120 @@
 //            cachedState: ScrollState?,
 //            pendingRestore: RestoreRequest?
 //        ) -> CaptureDecision
+//        static func splitDocument(_ html: String) -> DocumentSplit?
+//        static func updateStrategy(
+//            html: String,
+//            currentLoad: PreviewSeam.PreviewLoad,
+//            liveDocument: LiveDocument?,   // previewLiveDocuments[win]
+//            loadInFlight: Bool,            // (previewLoadsInFlight[win] ?? 0) > 0
+//            hasPendingFragment: Bool       // pendingPreviewFragments[win] != nil
+//        ) -> UpdateStrategy
+//        static func loadCommitOutcome(
+//            remaining: Int,                // previewLoadsInFlight[win] AFTER the
+//                                           // callback decremented it
+//            pending: LiveDocument?,        // pendingPreviewDocuments[win]
+//            succeeded: Bool                // didFinish => true, didFail => false
+//        ) -> LoadCommitOutcome
+//        public static let inPlaceUpdateArgumentNames:
+//            (html: String, line: String, col: String)
+//        static func inPlaceUpdateJS() -> String
 //        static func stateScriptJS(handlerName: String = stateHandlerName) -> String
 //        static func followJS(line: UInt32, col: UInt32) -> String
 //        static func restoreJS(_ request: RestoreRequest) -> String
 //    }
+//
+//  ## THE TWO-PATH UPDATE MODEL (the flicker fix)
+//
+//  Navigating the preview web view on every keystroke re-ships ~965 KiB of inlined
+//  base64 `@font-face` CSS across the WKWebView IPC boundary at the reload
+//  coalescer's ~33ms cadence, re-parses it, and commits a whole new document — which
+//  commits at scrollY 0 and only THEN jumps to the restored offset. That visible
+//  round trip is the flicker. So the typing path stops navigating: `updateStrategy`
+//  decides per window between the existing full `loadHTMLString` and an IN-PLACE body
+//  swap, and `splitDocument` carves the `<body>` inner HTML out of `render_html`'s
+//  fixed wrapper so only that ~200 KB travels.
+//
+//  The `<head>` is INVARIANT for the in-app preview: `render_preview` hardcodes
+//  `PreviewTheme::Default` + `WidthMode::Full`, and dark/light is a
+//  `prefers-color-scheme` media query INSIDE that constant CSS, so even an appearance
+//  flip changes only the body's inline `style="color:#…"` highlight spans. That is
+//  what makes a body-only swap correct. `updateStrategy` rule 6 (`headLength`
+//  equality) makes the premise SELF-ENFORCING rather than comment-only — the class of
+//  latent assumption that produced H1/H2.
+//
+//  `updateStrategy`'s six `.fullLoad` rules are ORDERED, and each one is a
+//  correctness rule, not an optimization:
+//
+//   1. a PENDING FRAGMENT — the `#anchor` is delivered from `previewDidFinishLoad`,
+//      which an in-place update never fires, so the fragment would be stranded;
+//   2. a LOAD IN FLIGHT — mutating the outgoing document is pointless and would race
+//      that load's `didFinish` restore. This rule is ALSO what guarantees
+//      `pendingPreviewRestores[win] == nil` on every in-place path, since a pending
+//      restore exists only between `loadHTMLString` and `didFinish`;
+//   3. NO LIVE DOCUMENT — nothing is committed, so `window.__wolfUpdate` may not
+//      exist (first bind, and post-failure recovery);
+//   4. a SOURCE SWITCH — a navigation; the new file must open at its top. This is
+//      H1's guarantee mirrored at the strategy layer;
+//   5. UNSPLITTABLE HTML — e.g. the `""` a failed `render_preview` returns;
+//   6. a CHANGED HEAD LENGTH — a body-only swap would leave stale CSS.
+//
+//  ## TWO NAVIGATIONS CAN STRADDLE ONE PAGE LOAD (M1)
+//
+//  `previewLoadsInFlight` is a per-window COUNT, never a Set, because the reload
+//  coalescer serializes to one reload per ~33ms and does NOT wait for `didFinish` —
+//  the very same straddling window H2 exists to survive. With a Set, `didFinish(N)`
+//  — or `didFail(N)`, since WebKit reports a SUPERSEDED load as a failure — cleared
+//  the flag while load N+1 was still outstanding AND destructively consumed N+1's
+//  pending descriptor into `previewLiveDocuments`. The next coalescer tick then saw
+//  rule 2 false and rule 3 false and chose `.inPlace`, swapping a body into the
+//  document N+1 was about to replace; N+1 then committed, discarded the swap and
+//  restored — a visible flicker, i.e. the exact symptom this whole change exists to
+//  remove — and N+1's own `didFinish` finally nil'd the live descriptor and forced
+//  one more pointless full load.
+//
+//  ``PreviewScrollSeam/loadCommitOutcome(remaining:pending:succeeded:)`` is the pure
+//  decision that closes it, moved into the seam for the same reason `captureDecision`
+//  was: the bug lived in `PaneContainerView` bookkeeping, which is compile +
+//  manual-smoke only. BOTH callbacks decrement the count first and then hand the
+//  REMAINING count, the pending descriptor and whether the navigation succeeded to
+//  the seam:
+//
+//   * `remaining > 0` -> `.stillOutstanding`, which carries NO payload at all, so a
+//     superseded load's callback can neither commit nor discard anything;
+//   * `remaining == 0 && succeeded` -> `.commit(pending)` — including `.commit(nil)`
+//     when the HTML could not be split, since an unsplittable document must never
+//     become a live document;
+//   * `remaining == 0 && !succeeded` -> `.discard`, which is deliberately NOT
+//     `.commit(nil)`: a failed navigation never commits, so WebKit keeps displaying
+//     the PREVIOUS document and the previous live descriptor stays accurate.
+//     Conflating the two would wipe a good live document (M1 step 7).
+//
+//  `updateStrategy`'s own signature is unchanged; only the CALLER changes, deriving
+//  `loadInFlight` as `(previewLoadsInFlight[win] ?? 0) > 0`.
+//
+//  ## `captureDecision` IS UNCHANGED AND IS A FULL-LOAD-ONLY CONCERN
+//
+//  `captureDecision` gains NO case, loses NO rule, and is still called exactly where
+//  it is called today: immediately before `loadHTMLString`. All 12 of its tests below
+//  stay valid VERBATIM — they are the H1/H2 regression guards and the fix must not
+//  silently retire them. The two functions answer DIFFERENT questions at DIFFERENT
+//  times: `captureDecision` keys on `lastPreviewLoads[win]` ("what did we last
+//  DISPATCH"), `updateStrategy` keys on `previewLiveDocuments[win]` ("what is
+//  COMMITTED"). `updateStrategy` rule 4 and `captureDecision` rule 1 are
+//  near-duplicates BY DESIGN and must always agree on a real source switch — which is
+//  what `testASourceSwitchIsBothAFullLoadAndADrop` pins. Both are required because one
+//  runs before the navigation exists and the other before the restore is consumed.
+//
+//  ## WHY THE HTML TRAVELS AS AN ARGUMENT, NOT AS SOURCE
+//
+//  `inPlaceUpdateJS()` is the body handed to
+//  `WKWebView.callAsyncJavaScript(_:arguments:in:contentWorld:)`, whose free
+//  identifiers must be EXACTLY the keys of the caller's `arguments:` dictionary. Both
+//  sides read those names from ``inPlaceUpdateArgumentNames``, so the body and the
+//  dictionary cannot drift; `testInPlaceUpdateJSUsesExactlyTheDeclaredArgumentNames`
+//  is that anti-drift pin. A ~200 KB body string therefore never gets escaped into,
+//  or re-lexed as, JS source — which is why `testInPlaceUpdateJSInterpolatesNoDocument`
+//  asserts the returned string contains no `<` at all.
 //
 //  ## WHY `captureDecision` IS IN THE SEAM AT ALL (plan §16)
 //
@@ -1184,6 +1320,20 @@ final class PreviewScrollSeamTests: XCTestCase {
   /// substring matched here is `scrollTo(` with its paren, which cannot match
   /// `scrollIntoView`; the sweep below additionally proves the injected script contains no
   /// `scrollIntoView` (or any other viewport-mutating API) of its own.
+  ///
+  /// NEW CALLER — `__wolfUpdate` (the in-place body swap). It is the fourth entry point
+  /// that moves the viewport, and it is bound by exactly the same invariant: it must
+  /// reach the viewport ONLY through `scrollAnchorTo` / `moveTo` / `__wolfFollow`, and
+  /// must introduce neither a second `scrollTo(` nor any of the bypass APIs swept below.
+  /// It is deliberately defined AFTER `moveTo` in the script, which is what keeps the
+  /// "no `function` token between `moveTo=function` and the sole `scrollTo(`" analysis
+  /// above valid. Do NOT "optimize" a direct `window.scrollTo` / `el.scrollIntoView` into
+  /// the swap to save the re-anchor's layout flush: the swap's whole point is that the
+  /// replaceChildren AND the re-anchor happen in ONE JavaScript task, and routing the
+  /// re-anchor around `moveTo` would fire an unarmed `scroll` event that the listener
+  /// classifies as the USER's — DEV-2, for the fourth time. If this test ever fails after
+  /// `__wolfUpdate` is added, the fix is to move `__wolfUpdate`'s DEFINITION after
+  /// `moveTo`; it is never to loosen an assertion here.
   func testStateScriptJSFunnelsEveryScrollThroughMoveTo() {
     let js = PreviewScrollSeam.stateScriptJS()
     // Whitespace-insensitive so reformatting the JS string cannot break this test, while
@@ -1249,5 +1399,1247 @@ final class PreviewScrollSeamTests: XCTestCase {
       js.contains("1234,50"),
       "a comma decimal separator would corrupt the JS argument list (it would read as "
         + "two arguments): \(js)")
+  }
+
+  // MARK: - in-place-update fixtures
+
+  /// `render_html`'s FIXED wrapper up to AND INCLUDING the `<body …>` open tag — i.e.
+  /// exactly the prefix whose UTF-8 count a ``PreviewScrollSeam/DocumentSplit``'s
+  /// `headLength` reports. Transcribed from the `format!` in
+  /// `crates/wolf-core/src/markdown.rs` (`render_html`), with the giant
+  /// `{INTER_FONT_FACE}{MATH_FONT_FACE}{BASE_CSS}{MATH_CSS}{theme}{width_css}`
+  /// concatenation standing in as one short `head` string.
+  ///
+  /// Written out VERBATIM rather than derived from `splitDocument`, so a bug in the
+  /// scan cannot define its own expected value into existence.
+  private func headPrefix(head: String = "CSS") -> String {
+    "<!doctype html><html><head><meta charset=\"utf-8\"><style>\(head)</style></head>"
+      + "<body class=\"wolf-markdown\">"
+  }
+
+  /// A whole preview document in that wrapper's shape.
+  private func document(head: String = "CSS", body: String) -> String {
+    headPrefix(head: head) + body + "</body></html>"
+  }
+
+  /// The `headLength` a split of `document(head:body:)` must report.
+  private func headLength(head: String = "CSS") -> Int {
+    headPrefix(head: head).utf8.count
+  }
+
+  /// What is COMMITTED in a preview web view currently showing `document(head:)` for
+  /// `bufnr` — the `previewLiveDocuments[win]` input to `updateStrategy`.
+  private func live(bufnr: Int64, head: String = "CSS") -> PreviewScrollSeam.LiveDocument {
+    PreviewScrollSeam.LiveDocument(sourceBufnr: bufnr, headLength: headLength(head: head))
+  }
+
+  /// `updateStrategy` with the "ordinary same-buffer edit" defaults, so each test below
+  /// varies exactly the ONE input it is about.
+  private func strategy(
+    html: String,
+    bufnr: Int64,
+    tick: UInt64 = 6,
+    liveDocument: PreviewScrollSeam.LiveDocument?,
+    loadInFlight: Bool = false,
+    hasPendingFragment: Bool = false
+  ) -> PreviewScrollSeam.UpdateStrategy {
+    PreviewScrollSeam.updateStrategy(
+      html: html,
+      currentLoad: load(bufnr: bufnr, tick: tick),
+      liveDocument: liveDocument,
+      loadInFlight: loadInFlight,
+      hasPendingFragment: hasPendingFragment)
+  }
+
+  /// The body carried by an `.inPlace` strategy, or `nil` (with a failure) otherwise.
+  private func inPlaceBody(
+    _ strategy: PreviewScrollSeam.UpdateStrategy,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) -> String? {
+    guard case .inPlace(let body) = strategy else {
+      XCTFail("expected an .inPlace strategy, got \(strategy)", file: file, line: line)
+      return nil
+    }
+    return body
+  }
+
+  // MARK: - splitDocument: the real wrapper splits into (head length, body)
+
+  func testSplitDocumentExtractsTheBodyOfTheRealWrapper() {
+    let body = "<h1 id=\"title\">Title</h1><p>text</p>"
+    let split = PreviewScrollSeam.splitDocument(document(body: body))
+    XCTAssertEqual(
+      split,
+      PreviewScrollSeam.DocumentSplit(headLength: headLength(), body: body),
+      "splitDocument must carve render_html's fixed "
+        + "`<!doctype html><html><head>…</head><body class=\"wolf-markdown\">{body}"
+        + "</body></html>` wrapper into the body's INNER html plus the UTF-8 length of "
+        + "everything up to and INCLUDING the `<body …>` open tag")
+    XCTAssertFalse(
+      split?.body.hasPrefix("<body") ?? true,
+      "the `<body …>` open tag belongs to the HEAD side of the split — including it "
+        + "would make replaceChildren nest a second body inside the live one")
+    XCTAssertFalse(
+      split?.body.hasSuffix("</body>") ?? true,
+      "the wrapper's closing tag is a delimiter, not content")
+  }
+
+  // MARK: - splitDocument: an empty document is the RPC-failure sentinel
+
+  func testSplitDocumentReturnsNilForEmptyHTML() {
+    XCTAssertNil(
+      PreviewScrollSeam.splitDocument(""),
+      "`WolfCore::render_preview` returns \"\" when the Neovim RPC fails, and an empty "
+        + "document must NEVER be swapped into a live preview — returning nil is what "
+        + "sends that tick down updateStrategy rule 5 to the (unchanged) full path")
+  }
+
+  // MARK: - splitDocument: a document with no body element cannot be split
+
+  func testSplitDocumentReturnsNilWithoutABodyTag() {
+    XCTAssertNil(
+      PreviewScrollSeam.splitDocument("<!doctype html><html><head></head></html>"),
+      "with no `<body` there is nothing to swap; the wrapper must have changed shape, "
+        + "so degrade to a full load rather than guess")
+    XCTAssertNil(
+      PreviewScrollSeam.splitDocument("<p>a bare fragment with no wrapper at all</p>"),
+      "a fragment is not a document — splitDocument must not treat the whole string as "
+        + "a body")
+  }
+
+  // MARK: - splitDocument: an unterminated body cannot be split
+
+  func testSplitDocumentReturnsNilWithoutAClosingBodyTag() {
+    XCTAssertNil(
+      PreviewScrollSeam.splitDocument(
+        "<!doctype html><html><head></head><body class=\"wolf-markdown\">truncated"),
+      "a truncated document has no closing `</body>`, so there is no way to know where "
+        + "the body ends — full load")
+    XCTAssertNil(
+      PreviewScrollSeam.splitDocument("</body><body class=\"wolf-markdown\">inverted"),
+      "a `</body>` that PRECEDES the open tag does not close it; the closing tag must "
+        + "be found at or after the open tag or the substring range would be inverted")
+  }
+
+  // MARK: - splitDocument: the LAST `</body>` wins (raw HTML passthrough)
+
+  func testSplitDocumentUsesTheLastClosingBodyTag() {
+    // pulldown-cmark passes raw HTML through (there is no disable flag in
+    // `markdown_options()`), so a source file can put a LITERAL `</body>` in the
+    // rendered body. The wrapper's own closing tag is always the last one.
+    let body = "<p>before</p></body><p>after</p>"
+    let split = PreviewScrollSeam.splitDocument(document(body: body))
+    XCTAssertEqual(
+      split?.body, body,
+      "the scan must take the LAST `</body>` — taking the first would truncate the "
+        + "document at a user-authored literal and silently drop everything after it")
+    XCTAssertTrue(
+      split?.body.contains("</body>") ?? false,
+      "the embedded literal must survive INSIDE the extracted body, untouched")
+  }
+
+  // MARK: - splitDocument: the FIRST `<body` wins (raw HTML passthrough)
+
+  /// The mirror image of ``testSplitDocumentUsesTheLastClosingBodyTag``, and the other
+  /// half of the scan's deliberate first-open / last-close asymmetry. Raw HTML passes
+  /// straight through pulldown-cmark, so a source file can put a literal `<body` into
+  /// the RENDERED BODY just as easily as a literal `</body>` — but any such tag is
+  /// always AFTER the wrapper's own open tag, which is why the FIRST one is the
+  /// wrapper's.
+  func testSplitDocumentUsesTheFirstOpeningBodyTag() {
+    let body = "<p>before</p><body class=\"from-the-source-file\"><p>after</p>"
+    let split = PreviewScrollSeam.splitDocument(document(body: body))
+    XCTAssertEqual(
+      split?.headLength, headLength(),
+      "headLength must be measured through the WRAPPER's open tag. Taking the LAST "
+        + "`<body` instead would report a head that runs into the middle of the "
+        + "content, so rule 6's `did the head change?` comparison would start tracking "
+        + "the body's text and every keystroke would look like a head change")
+    XCTAssertEqual(
+      split?.body, body,
+      "and the body extracted from the wrapper's open tag is the WHOLE body: taking a "
+        + "later `<body` would silently drop everything the user wrote before their "
+        + "literal tag")
+    XCTAssertTrue(
+      split?.body.contains("<body") ?? false,
+      "the embedded literal must survive INSIDE the extracted body, untouched — "
+        + "splitDocument is a scan, not a parser, and the page's DOMParser is what "
+        + "decides what a nested `<body` means")
+  }
+
+  // MARK: - splitDocument: a `<body>` carrying no attributes at all
+
+  /// The scan finds the first `>` AFTER the first `<body`, so it must not depend on
+  /// an attribute being present to terminate the open tag. `render_html` emits
+  /// `<body class="wolf-markdown">` today, but the browser-preview wrapper and any
+  /// future render change need not, and an attribute-dependent scan would fail by
+  /// returning a WRONG split rather than `nil` — the one failure mode rule 5's
+  /// degrade-to-full-load safety net cannot catch.
+  func testSplitDocumentHandlesABodyTagWithNoAttributes() {
+    let prefix = "<!doctype html><html><head><style>CSS</style></head><body>"
+    let body = "<p>content</p>"
+    let split = PreviewScrollSeam.splitDocument(prefix + body + "</body></html>")
+    XCTAssertEqual(
+      split,
+      PreviewScrollSeam.DocumentSplit(headLength: prefix.utf8.count, body: body),
+      "a bare `<body>` must split exactly like `<body class=\"wolf-markdown\">`: the "
+        + "head runs up to and INCLUDING the tag's own `>`, and the body is everything "
+        + "after it")
+    XCTAssertFalse(
+      split?.body.hasPrefix(">") ?? true,
+      "the open tag's `>` belongs to the HEAD side of the split — leaving it on the "
+        + "body side would prepend a stray `>` text node to the live document on every "
+        + "in-place swap")
+  }
+
+  // MARK: - splitDocument: MathML and highlight spans survive byte-for-byte
+
+  func testSplitDocumentPreservesMathMLAndHighlightSpans() {
+    // Everything the in-place DOMParser path has to reproduce faithfully: the
+    // MathRenderer's inline `<math>` markup, the CodeHighlighter's inline-styled
+    // spans, and the `.wolf-src` position markers the whole anchor scheme depends on.
+    let body =
+      "<span class=\"wolf-src\" id=\"wl-1-0\" data-line=\"1\" data-col=\"0\"></span>"
+      + "<math><mi>x</mi><mo>&#8804;</mo><mn>2</mn></math>"
+      + "<pre><code><span style=\"color:#ff0000;font-weight:bold\">fn</span></code></pre>"
+    let split = PreviewScrollSeam.splitDocument(document(body: body))
+    XCTAssertEqual(
+      split?.body, body,
+      "splitDocument is a SCAN, not a parser: it must never sanitize, re-encode or "
+        + "normalize the body. The markers are what `resolve` looks up by id, the "
+        + "inline styles are the only thing an appearance flip actually changes, and "
+        + "the `<math>` markup is ordinary HTML-parser input")
+  }
+
+  // MARK: - splitDocument: headLength tracks the head, in UTF-8 BYTES
+
+  func testSplitDocumentHeadLengthChangesWithTheHeadContent() {
+    let body = "<p>same</p>"
+    let short = PreviewScrollSeam.splitDocument(document(head: "A", body: body))
+    let long = PreviewScrollSeam.splitDocument(document(head: "AAAA", body: body))
+    XCTAssertEqual(short?.body, body, "the body is unaffected by the head")
+    XCTAssertEqual(long?.body, body, "the body is unaffected by the head")
+    XCTAssertEqual(
+      (long?.headLength ?? 0) - (short?.headLength ?? 0), 3,
+      "headLength must track the head's content exactly — it is the ONLY detector "
+        + "updateStrategy rule 6 has for `the CSS changed, so a body-only swap would "
+        + "leave stale styles`")
+
+    // The wrapper is `format!`ed from a Rust `String`, so the length that matters is
+    // the UTF-8 one. A head carrying any non-ASCII character makes the two counts
+    // disagree, which is what pins WHICH count is meant.
+    let prefix = headPrefix(head: "—")
+    let split = PreviewScrollSeam.splitDocument(document(head: "—", body: body))
+    XCTAssertEqual(
+      split?.headLength, prefix.utf8.count,
+      "headLength is a UTF-8 BYTE count, matching the Rust side's notion of length")
+    XCTAssertNotEqual(
+      prefix.utf8.count, prefix.count,
+      "this fixture only pins the UTF-8 rule if the two counts actually differ")
+  }
+
+  // MARK: - updateStrategy rule 1: a pending fragment must navigate
+
+  func testUpdateStrategyFullLoadWhenAFragmentIsPending() {
+    XCTAssertEqual(
+      strategy(
+        html: document(body: "<p>edited</p>"),
+        bufnr: sourceBufnr,
+        liveDocument: live(bufnr: sourceBufnr),
+        hasPendingFragment: true),
+      .fullLoad,
+      "a cross-file `other.md#anchor` link stashes the fragment in "
+        + "pendingPreviewFragments and it is delivered from previewDidFinishLoad — "
+        + "which an in-place update NEVER fires. Swapping the body here would strand "
+        + "the anchor forever")
+  }
+
+  // MARK: - updateStrategy rule 2: never mutate a document that is being replaced
+
+  func testUpdateStrategyFullLoadWhenALoadIsInFlight() {
+    XCTAssertEqual(
+      strategy(
+        html: document(body: "<p>edited</p>"),
+        bufnr: sourceBufnr,
+        liveDocument: live(bufnr: sourceBufnr),
+        loadInFlight: true),
+      .fullLoad,
+      "an otherwise PERFECT same-buffer edit must still take the full path while a "
+        + "loadHTMLString is outstanding: the in-flight navigation will discard the "
+        + "swap, and the swap would race that load's didFinish restore. This rule is "
+        + "also what structurally guarantees pendingPreviewRestores[win] == nil on "
+        + "every in-place path, since a pending restore exists ONLY between "
+        + "loadHTMLString and didFinish")
+  }
+
+  // MARK: - updateStrategy rule 3: nothing is committed yet
+
+  func testUpdateStrategyFullLoadOnFirstBind() {
+    XCTAssertEqual(
+      strategy(
+        html: document(body: "<p>first</p>"),
+        bufnr: sourceBufnr,
+        liveDocument: nil),
+      .fullLoad,
+      "with no live document there is no page to swap into and `window.__wolfUpdate` "
+        + "may not exist at all. This covers first bind AND recovery after a failed "
+        + "in-place update, which clears previewLiveDocuments[win] precisely to force "
+        + "this rule")
+  }
+
+  // MARK: - updateStrategy rule 4: a source switch is a NAVIGATION (H1, mirrored)
+
+  func testUpdateStrategyFullLoadWhenTheSourceBufferSwitched() {
+    XCTAssertEqual(
+      strategy(
+        html: document(body: "<p>the other file</p>"),
+        bufnr: otherBufnr,
+        tick: 5,
+        liveDocument: live(bufnr: sourceBufnr)),
+      .fullLoad,
+      "the committed document belongs to another SOURCE BUFFER, so this is a "
+        + "navigation and the new file must open at its TOP — H1's guarantee, mirrored "
+        + "at the strategy layer. Note the ticks are EQUAL here: two freshly opened "
+        + "files can legitimately share a changedtick, so only the bufnr may decide")
+  }
+
+  // MARK: - updateStrategy rule 5: an unsplittable document
+
+  func testUpdateStrategyFullLoadWhenTheHTMLCannotBeSplit() {
+    XCTAssertEqual(
+      strategy(html: "", bufnr: sourceBufnr, liveDocument: live(bufnr: sourceBufnr)),
+      .fullLoad,
+      "`render_preview` returns \"\" on an RPC failure; there is no body to swap, so "
+        + "the tick degrades to exactly today's behavior")
+    XCTAssertEqual(
+      strategy(
+        html: "<!doctype html><html><head></head></html>",
+        bufnr: sourceBufnr,
+        liveDocument: live(bufnr: sourceBufnr)),
+      .fullLoad,
+      "a wrapper whose `<body>` cannot be located must degrade to a full load, never "
+        + "to breakage — that is what keeps splitDocument's coupling to render_html's "
+        + "wrapper safe")
+  }
+
+  // MARK: - updateStrategy rule 6: the head-is-invariant premise, self-enforcing
+
+  func testUpdateStrategyFullLoadWhenTheHeadLengthChanged() {
+    let html = document(head: "CSS-AND-MORE", body: "<p>edited</p>")
+    XCTAssertEqual(
+      strategy(html: html, bufnr: sourceBufnr, liveDocument: live(bufnr: sourceBufnr)),
+      .fullLoad,
+      "a body-only swap leaves the committed document's `<head>` in place, so a "
+        + "changed head would mean stale CSS. Today this is unreachable — the in-app "
+        + "preview pins PreviewTheme::Default + WidthMode::Full, so the head is "
+        + "byte-identical on every render, INCLUDING across a dark/light flip — but "
+        + "encoding it as a RULE makes the premise self-enforcing rather than "
+        + "comment-only, which is the class of latent assumption that produced H1/H2")
+    XCTAssertEqual(
+      strategy(
+        html: html,
+        bufnr: sourceBufnr,
+        liveDocument: live(bufnr: sourceBufnr, head: "CSS-AND-MORE")),
+      .inPlace(body: "<p>edited</p>"),
+      "and the head length is what flipped it: the same html against a live document "
+        + "whose head MATCHES is an ordinary in-place update")
+  }
+
+  // MARK: - updateStrategy rule 7: the typing path
+
+  func testUpdateStrategyInPlaceForAnOrdinaryEdit() {
+    let body = "<p>the user just typed a character</p>"
+    XCTAssertEqual(
+      strategy(
+        html: document(body: body),
+        bufnr: sourceBufnr,
+        liveDocument: live(bufnr: sourceBufnr)),
+      .inPlace(body: body),
+      "same source buffer, nothing in flight, no fragment pending, a splittable "
+        + "document with an unchanged head: the keystroke path, and the whole reason "
+        + "this strategy exists. The carried payload is the body's INNER html, which "
+        + "is what `__wolfUpdate` DOMParses and replaceChildren-s in")
+  }
+
+  // MARK: - updateStrategy: the TICK is not an input to this decision
+
+  func testUpdateStrategyInPlaceIgnoresTheTick() {
+    let body = "<p>edited</p>"
+    for tick: UInt64 in [1, 2, 99] {
+      XCTAssertEqual(
+        strategy(
+          html: document(body: body),
+          bufnr: sourceBufnr,
+          tick: tick,
+          liveDocument: live(bufnr: sourceBufnr)),
+        .inPlace(body: body),
+        "LiveDocument is deliberately (sourceBufnr, headLength) with NO tick: what is "
+          + "committed is a DOCUMENT, and how many edits it is behind is irrelevant to "
+          + "whether its body can be swapped. Two ticks apart, or ninety-eight, is "
+          + "still an in-place update (tick=\(tick))")
+    }
+  }
+
+  // MARK: - updateStrategy: the rules are ORDERED (rule 1 over rule 7)
+
+  func testUpdateStrategyRuleOrderFragmentBeatsAValidInPlace() {
+    let html = document(body: "<p>edited</p>")
+    XCTAssertEqual(
+      strategy(
+        html: html,
+        bufnr: sourceBufnr,
+        liveDocument: live(bufnr: sourceBufnr),
+        hasPendingFragment: true),
+      .fullLoad,
+      "every other input here describes a textbook in-place candidate, and the pending "
+        + "fragment alone must still force a navigation")
+    XCTAssertEqual(
+      strategy(
+        html: html,
+        bufnr: sourceBufnr,
+        liveDocument: live(bufnr: sourceBufnr),
+        hasPendingFragment: false),
+      .inPlace(body: "<p>edited</p>"),
+      "and with the fragment cleared the SAME inputs go in place — so the fragment is "
+        + "provably what decided it, not some incidental mismatch")
+  }
+
+  // MARK: - updateStrategy: the rules are ORDERED (rule 4 over rule 6/7)
+
+  func testUpdateStrategyRuleOrderSourceSwitchBeatsAMatchingHeadLength() {
+    let html = document(body: "<p>the other file</p>")
+    XCTAssertEqual(
+      strategy(html: html, bufnr: otherBufnr, liveDocument: live(bufnr: sourceBufnr)),
+      .fullLoad,
+      "the head lengths MATCH (every in-app preview shares the same constant head), so "
+        + "rule 6 is satisfied and only rule 4 stands between a cross-file link and an "
+        + "in-place swap that would open the new file at the old one's scroll offset — "
+        + "the H1 regression, reached through the new path")
+    XCTAssertEqual(
+      strategy(html: html, bufnr: sourceBufnr, liveDocument: live(bufnr: sourceBufnr)),
+      .inPlace(body: "<p>the other file</p>"),
+      "and the bufnr is provably what decided it: the identical html against a live "
+        + "document for the SAME buffer goes in place")
+  }
+
+  // MARK: - updateStrategy: rules 1 and 2 are INDEPENDENT, not one masking the other
+
+  /// Both flags are true at once in a real, reachable sequence: a cross-file
+  /// `other.md#anchor` click stashes the fragment in `pendingPreviewFragments` AND
+  /// issues the `loadHTMLString` that sets `previewLoadsInFlight`, and a keystroke
+  /// arriving before that load's `didFinish` sees both. Each must force `.fullLoad` on
+  /// its own, for its own reason — the fragment because it is delivered from
+  /// `previewDidFinishLoad`, which an in-place update never fires; the in-flight load
+  /// because the swap would be discarded by the navigation and would race its restore.
+  /// If one silently masked the other, removing the masked rule would look harmless.
+  func testUpdateStrategyFullLoadWhenALoadIsInFlightAndAFragmentIsPending() {
+    let html = document(body: "<p>edited</p>")
+    XCTAssertEqual(
+      strategy(
+        html: html,
+        bufnr: sourceBufnr,
+        liveDocument: live(bufnr: sourceBufnr),
+        loadInFlight: true,
+        hasPendingFragment: true),
+      .fullLoad,
+      "a keystroke landing while a fragment-carrying load is still in flight must "
+        + "navigate — the anchor would otherwise be stranded AND the swap would race "
+        + "the outstanding load's didFinish restore")
+    XCTAssertEqual(
+      strategy(
+        html: html,
+        bufnr: sourceBufnr,
+        liveDocument: live(bufnr: sourceBufnr),
+        loadInFlight: true,
+        hasPendingFragment: false),
+      .fullLoad,
+      "the in-flight load ALONE is enough (rule 2), with no fragment to help it")
+    XCTAssertEqual(
+      strategy(
+        html: html,
+        bufnr: sourceBufnr,
+        liveDocument: live(bufnr: sourceBufnr),
+        loadInFlight: false,
+        hasPendingFragment: true),
+      .fullLoad,
+      "and the pending fragment ALONE is enough (rule 1), with nothing in flight to "
+        + "help it — so neither rule is merely riding on the other")
+    XCTAssertEqual(
+      strategy(
+        html: html,
+        bufnr: sourceBufnr,
+        liveDocument: live(bufnr: sourceBufnr),
+        loadInFlight: false,
+        hasPendingFragment: false),
+      .inPlace(body: "<p>edited</p>"),
+      "the control: with BOTH flags cleared these otherwise identical inputs are a "
+        + "textbook in-place update, so the three .fullLoad results above are provably "
+        + "caused by the flags and not by some incidental mismatch")
+  }
+
+  // MARK: - E1: the in-place payload sheds the ~965 KiB base64 head
+
+  func testUpdateStrategyInPlaceCarriesTheExactBodyNotTheWholeDocument() {
+    let head = "@font-face{font-family:Inter;src:url(data:font/woff2;base64,AAAABBBB)}"
+    let body = "<p>edited</p>"
+    let html = document(head: head, body: body)
+    let decision = strategy(
+      html: html,
+      bufnr: sourceBufnr,
+      liveDocument: live(bufnr: sourceBufnr, head: head))
+    guard let carried = inPlaceBody(decision) else { return }
+    XCTAssertEqual(carried, body, "the payload is the body's inner html, exactly")
+    XCTAssertTrue(
+      html.contains("@font-face") && html.contains("<style"),
+      "this fixture is only meaningful if the whole document really does carry the "
+        + "head payload")
+    for shed in ["<style", "@font-face", "base64", "<!doctype", "<head"] {
+      XCTAssertFalse(
+        carried.contains(shed),
+        "the in-place payload must NOT carry `\(shed)`. The real head inlines two "
+          + "woff2 faces as ~965 KiB of base64; re-shipping that across the WKWebView "
+          + "IPC boundary and re-parsing it as CSS at the reload coalescer's ~33ms "
+          + "cadence — ~30 MB/s while the user types — is the cost this whole change "
+          + "exists to remove: \(carried)")
+    }
+  }
+
+  // MARK: - composition: the two gates must AGREE on a real source switch
+
+  /// `updateStrategy` rule 4 and `captureDecision` rule 1 are near-duplicates BY
+  /// DESIGN, and both are required: one runs before the navigation exists, the other
+  /// before the restore is consumed. They key on different state —
+  /// `previewLiveDocuments[win]` (what is COMMITTED) versus `lastPreviewLoads[win]`
+  /// (what was last DISPATCHED) — so nothing but a test stops them from drifting
+  /// apart. If they ever disagreed, a cross-file link would either swap the new file's
+  /// body into the old document, or restore the old file's offset into the new one.
+  /// Both are H1.
+  func testASourceSwitchIsBothAFullLoadAndADrop() {
+    let previous = load(bufnr: sourceBufnr, tick: 5)
+    let current = load(bufnr: otherBufnr, tick: 5)
+    XCTAssertEqual(
+      PreviewScrollSeam.updateStrategy(
+        html: document(body: "<p>the other file</p>"),
+        currentLoad: current,
+        liveDocument: live(bufnr: sourceBufnr),
+        loadInFlight: false,
+        hasPendingFragment: false),
+      .fullLoad,
+      "the strategy gate must navigate on a source switch")
+    XCTAssertEqual(
+      PreviewScrollSeam.captureDecision(
+        previousLoad: previous,
+        currentLoad: current,
+        cursor: knownCursor,
+        cachedState: liveState,
+        pendingRestore: nil),
+      .drop,
+      "and the capture gate — which the full path then consults, exactly as it does "
+        + "today — must drop the previous file's offset. H1 is guaranteed DOUBLY, and "
+        + "that redundancy is deliberate: neither gate may be removed on the strength "
+        + "of the other")
+  }
+
+  // MARK: - composition: captureDecision is a FULL-LOAD-ONLY concern
+
+  /// `captureDecision` is FROZEN by this change: no new case, no rule relaxed, and it
+  /// is still called only where it is called today — immediately before
+  /// `loadHTMLString`. The in-place path NEVER consults it, never reads or writes
+  /// `pendingPreviewRestores`, and never emits `restoreJS`. That is not merely a
+  /// convention: `updateStrategy` rule 2 (`loadInFlight`) makes an in-place update and
+  /// a pending restore mutually exclusive per window BY CONSTRUCTION, because a
+  /// pending restore exists only between `loadHTMLString` and its `didFinish`.
+  ///
+  /// The absence of a call cannot be asserted from a pure seam, so what is asserted
+  /// structurally is the `.inPlace` result itself — reaching it is what proves the
+  /// caller's `switch` took the branch that has no `captureDecision` in it. The second
+  /// assertion records what the full path WOULD have captured, so a reader can see the
+  /// two paths are answering different questions rather than duplicating one.
+  func testAnOrdinaryEditIsInPlaceAndNeverConsultsCaptureDecision() {
+    let previous = load(bufnr: sourceBufnr, tick: 5)
+    let current = load(bufnr: sourceBufnr, tick: 6)
+    let body = "<p>edited</p>"
+    XCTAssertEqual(
+      PreviewScrollSeam.updateStrategy(
+        html: document(body: body),
+        currentLoad: current,
+        liveDocument: live(bufnr: sourceBufnr),
+        loadInFlight: false,
+        hasPendingFragment: false),
+      .inPlace(body: body),
+      "a keystroke in the same buffer takes the in-place branch, which issues "
+        + "callAsyncJavaScript(__wolfUpdate) and touches NONE of the capture/restore "
+        + "machinery")
+    XCTAssertEqual(
+      captured(
+        PreviewScrollSeam.captureDecision(
+          previousLoad: previous,
+          currentLoad: current,
+          cursor: knownCursor,
+          cachedState: liveState,
+          pendingRestore: nil)),
+      PreviewScrollSeam.RestoreRequest(
+        cursor: knownCursor, targetY: liveState.anchorTop, fallbackScrollY: liveState.scrollY),
+      "captureDecision still answers this correctly and is still exercised on every "
+        + "full load — first bind, source switch, pending fragment, in-flight load, "
+        + "unsplittable HTML and failure recovery. It is unchanged, not retired")
+  }
+
+  // MARK: - inPlaceUpdateJS analysis helpers
+
+  /// JS source with every string/template literal blanked out, so an identifier-shaped
+  /// word inside a literal such as `'text/html'` cannot be mistaken for a variable.
+  private func withoutStringLiterals(_ source: String) -> String {
+    var out = ""
+    var quote: Character?
+    var escaped = false
+    for c in source {
+      guard let q = quote else {
+        if c == "'" || c == "\"" || c == "`" {
+          quote = c
+        } else {
+          out.append(c)
+        }
+        continue
+      }
+      if escaped {
+        escaped = false
+      } else if c == "\\" {
+        escaped = true
+      } else if c == q {
+        quote = nil
+      }
+    }
+    return out
+  }
+
+  /// Every identifier-shaped token in `source`, in order, paired with whether it is a
+  /// MEMBER name — i.e. immediately preceded by a `.`, so it is a property lookup on
+  /// some object rather than a name resolved against the enclosing scope.
+  private func jsIdentifierTokens(_ source: String) -> [(name: String, isMember: Bool)] {
+    func isStart(_ c: Character) -> Bool { c == "_" || c == "$" || c.isLetter }
+    func isPart(_ c: Character) -> Bool { isStart(c) || c.isNumber }
+    let chars = Array(source)
+    var tokens: [(name: String, isMember: Bool)] = []
+    var i = 0
+    while i < chars.count {
+      guard isStart(chars[i]) else {
+        i += 1
+        continue
+      }
+      var j = i
+      while j < chars.count && isPart(chars[j]) { j += 1 }
+      var k = i - 1
+      while k >= 0 && chars[k].isWhitespace { k -= 1 }
+      tokens.append((String(chars[i..<j]), k >= 0 && chars[k] == "."))
+      i = j
+    }
+    return tokens
+  }
+
+  /// The names `js` resolves against its ENCLOSING scope: identifier tokens that are
+  /// neither property lookups, nor reserved words, nor page globals, nor declared
+  /// inside the snippet itself.
+  ///
+  /// For a `callAsyncJavaScript` body those must be exactly the keys of the caller's
+  /// `arguments:` dictionary — an extra one is a `ReferenceError` at call time (and so
+  /// a permanent silent fallback to full loads), and a missing one is an argument that
+  /// is shipped and then ignored.
+  private func freeIdentifiers(inJS js: String) -> Set<String> {
+    let tokens = jsIdentifierTokens(withoutStringLiterals(js))
+    let binders: Set<String> = ["var", "let", "const", "function", "catch"]
+    var declared: Set<String> = []
+    for (index, token) in tokens.enumerated() where index > 0 && !token.isMember {
+      let previous = tokens[index - 1]
+      if !previous.isMember && binders.contains(previous.name) {
+        declared.insert(token.name)
+      }
+    }
+    let reserved: Set<String> = [
+      "async", "await", "break", "case", "catch", "class", "const", "continue",
+      "default", "delete", "do", "else", "false", "finally", "for", "function", "if",
+      "in", "instanceof", "let", "new", "null", "of", "return", "switch", "this",
+      "throw", "true", "try", "typeof", "undefined", "var", "void", "while",
+    ]
+    let globals: Set<String> = [
+      "Array", "Boolean", "JSON", "Number", "Object", "String", "document",
+      "globalThis", "self", "window",
+    ]
+    return Set(
+      tokens
+        .filter { !$0.isMember }
+        .map { $0.name }
+        .filter { !reserved.contains($0) && !globals.contains($0) && !declared.contains($0) })
+  }
+
+  // MARK: - inPlaceUpdateJS: the entry point is guarded, with a falsy sentinel
+
+  func testInPlaceUpdateJSGuardsOnTheEntryPointExisting() {
+    let js = PreviewScrollSeam.inPlaceUpdateJS()
+    let squeezed = String(js.filter { !$0.isWhitespace })
+    XCTAssertTrue(
+      js.contains("__wolfUpdate"),
+      "the callAsyncJavaScript body must call the injected `__wolfUpdate` entry point: "
+        + "\(js)")
+    XCTAssertTrue(
+      js.contains("!") || js.contains("&&"),
+      "the body must short-circuit when `window.__wolfUpdate` is absent — a page that "
+        + "is not ours, or a wrong content world — rather than throwing: \(js)")
+    let sentinels = ["return0", ":0", "||0", "?0"]
+    XCTAssertTrue(
+      sentinels.contains { squeezed.contains($0) },
+      "the absent-entry-point branch must return a FALSY `0` sentinel (one of "
+        + "\(sentinels) ignoring whitespace), because that is what the Swift "
+        + "completion handler bridges and routes to previewInPlaceUpdateFailed. "
+        + "Returning undefined would be indistinguishable from a successful swap that "
+        + "simply returned nothing: \(js)")
+    XCTAssertTrue(
+      js.contains("return"),
+      "this string is a FUNCTION BODY, not an expression — it has to return its "
+        + "result for the completion handler to see it: \(js)")
+    XCTAssertFalse(
+      js.contains("throw"),
+      "a throw would surface as a .failure and trigger the fallback reload, but it "
+        + "would also log a JS exception on every call in a wrong content world; the "
+        + "sentinel is the designed signal: \(js)")
+  }
+
+  // MARK: - inPlaceUpdateJS: the anti-drift pin between body and `arguments:`
+
+  func testInPlaceUpdateJSUsesExactlyTheDeclaredArgumentNames() {
+    let names = PreviewScrollSeam.inPlaceUpdateArgumentNames
+    let declared = Set([names.html, names.line, names.col])
+    XCTAssertEqual(
+      declared.count, 3,
+      "the three argument names must be DISTINCT — a collision would silently drop one "
+        + "of the three values from the arguments dictionary: \(declared)")
+    XCTAssertFalse(
+      declared.contains(""),
+      "an empty argument name is not a valid JS identifier: \(declared)")
+
+    let js = PreviewScrollSeam.inPlaceUpdateJS()
+    XCTAssertEqual(
+      freeIdentifiers(inJS: js), declared,
+      "the body's free identifiers must be EXACTLY the exported argument names. The "
+        + "caller builds its `arguments:` dictionary from the same constants, so this "
+        + "is what makes the two provably unable to drift: an extra free name is a "
+        + "ReferenceError on every keystroke (which degrades the feature to permanent "
+        + "full loads, silently, with a green suite), and a missing one is a payload "
+        + "shipped and ignored: \(js)")
+  }
+
+  // MARK: - inPlaceUpdateJS: the document travels as an ARGUMENT, never as source
+
+  func testInPlaceUpdateJSInterpolatesNoDocument() {
+    let js = PreviewScrollSeam.inPlaceUpdateJS()
+    XCTAssertFalse(
+      js.contains("<"),
+      "the returned body must contain no `<` at all. `callAsyncJavaScript` takes real "
+        + "arguments, so the ~200 KB body string is handed over as a VALUE — it is "
+        + "never escaped into, or re-lexed as, JS source. A `<` here would mean some "
+        + "markup got interpolated, which is both a quoting hazard and the exact cost "
+        + "this path exists to avoid: \(js)")
+    XCTAssertFalse(
+      js.contains("wolf-markdown"),
+      "nor may the body hard-code any part of render_html's wrapper: \(js)")
+  }
+
+  // MARK: - inPlaceUpdateJS: the string is a function BODY, not a whole function
+
+  /// `callAsyncJavaScript(_:arguments:in:in:completionHandler:)` SYNTHESIZES the async
+  /// function itself, from the `arguments:` keys plus this string as its BODY. A whole
+  /// function expression here — `function (h, l, c) { … }`, `(h, l, c) => { … }`, or a
+  /// parenthesized wrapper — is therefore rejected at CALL time, not at Swift compile
+  /// time.
+  ///
+  /// This is the same silent-degradation class as the `.page` content world (OD-4),
+  /// and the reason it needs its own test is that NOTHING else here would catch it:
+  /// `testInPlaceUpdateJSUsesExactlyTheDeclaredArgumentNames` would happily pass a body
+  /// wrapped in `function (h, l, c) { … }`, because the wrapper's own parameters are
+  /// DECLARED names and so the free-identifier set is unchanged; the guard, sentinel
+  /// and no-`<` tests would all still pass too. Every in-place update would fail,
+  /// `previewInPlaceUpdateFailed` would clear `previewLiveDocuments[win]` and pin each
+  /// window onto updateStrategy rule 3's full-load path, and the typing flicker would
+  /// return in full — with a completely green test suite.
+  func testInPlaceUpdateJSIsAFunctionBodyNotAWholeFunction() {
+    let js = PreviewScrollSeam.inPlaceUpdateJS()
+    let trimmed = js.drop { $0.isWhitespace }
+    let consequence =
+      "callAsyncJavaScript builds the async function AROUND this string and evaluates "
+      + "it as that function's BODY, so a function expression is a syntax error at call "
+      + "time. Every in-place update would then fail, previewInPlaceUpdateFailed would "
+      + "clear previewLiveDocuments[win] and pin every window onto the full-load path, "
+      + "and the typing flicker would come back WITH A COMPLETELY GREEN TEST SUITE"
+    for wrapper in ["function", "async", "("] {
+      XCTAssertFalse(
+        trimmed.hasPrefix(wrapper),
+        "the body must not START with `\(wrapper)` — every accidentally-wrapped form "
+          + "(`function (h, l, c) { … }`, `async (h, l, c) => { … }`, "
+          + "`(function (h, l, c) { … })(…)`) begins with one of those three tokens. "
+          + consequence + ": \(js)")
+    }
+    XCTAssertFalse(
+      js.contains("=>"),
+      "nor may the body BE an arrow function, in any position. " + consequence
+        + ": \(js)")
+  }
+
+  // MARK: - stateScriptJS region helper
+
+  /// The whitespace-squeezed `stateScriptJS` text that is `__wolfUpdate`'s definition:
+  /// from its `= function` up to the scroll listener that follows it.
+  ///
+  /// `__wolfUpdate` is defined AFTER `moveTo` and `__wolfRestore` and BEFORE the
+  /// listener, so slicing this way keeps `__wolfRestore`'s statements — notably its
+  /// `__wolfUserScrolled = false` — OUT of the region. That placement is also what
+  /// keeps `testStateScriptJSFunnelsEveryScrollThroughMoveTo`'s "no `function` token
+  /// between `moveTo=function` and the sole `scrollTo(`" analysis valid (OD-3).
+  private func inPlaceUpdateRegion(
+    _ squeezed: String,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) -> Substring? {
+    guard let start = squeezed.range(of: "__wolfUpdate=function") else {
+      XCTFail(
+        "stateScriptJS must define `window.__wolfUpdate = function (html, line, col)` "
+          + "at DOCUMENT START, beside __wolfFollow and __wolfRestore — a per-load "
+          + "user script would mean tearing down and re-adding every injected script "
+          + "on each keystroke: \(squeezed)",
+        file: file, line: line)
+      return nil
+    }
+    let tail = squeezed[start.upperBound...]
+    guard let listener = tail.range(of: "addEventListener('scroll'") else {
+      XCTFail(
+        "__wolfUpdate must be defined BEFORE the scroll listener, so this test can "
+          + "bound its body: \(squeezed)",
+        file: file, line: line)
+      return nil
+    }
+    return tail[tail.startIndex..<listener.lowerBound]
+  }
+
+  // MARK: - stateScriptJS: the in-place update entry point exists at document start
+
+  func testStateScriptJSDefinesTheInPlaceUpdateEntryPoint() {
+    let js = PreviewScrollSeam.stateScriptJS()
+    XCTAssertTrue(
+      js.contains("__wolfUpdate"),
+      "the injected script must install the in-place update entry point: \(js)")
+    XCTAssertTrue(
+      js.contains("DOMParser"),
+      "the incoming body is parsed with DOMParser — the SAME HTML parser a document "
+        + "load uses, including the foreign-content rules that make `<math>` markup "
+        + "parse correctly: \(js)")
+    XCTAssertTrue(
+      js.contains("parseFromString"),
+      "DOMParser is used via parseFromString: \(js)")
+    XCTAssertTrue(
+      js.contains("text/html"),
+      "the parse MIME type must be `text/html`, not an XML mode — the rendered body "
+        + "is HTML-parser input, and an XML parse would reject it: \(js)")
+    XCTAssertTrue(
+      js.contains("createDocumentFragment"),
+      "the parsed children are collected into a document fragment first: \(js)")
+    XCTAssertTrue(
+      js.contains("replaceChildren"),
+      "the swap itself is ONE replaceChildren, so the whole update — swap and "
+        + "re-anchor — happens in a single JavaScript task and no frame at scrollY 0 "
+        + "can ever be painted: \(js)")
+  }
+
+  // MARK: - stateScriptJS: the swap must not spread thousands of nodes into apply()
+
+  func testStateScriptJSInPlaceUpdateDoesNotUseApplyForTheSwap() {
+    let js = PreviewScrollSeam.stateScriptJS()
+    let squeezed = String(js.filter { !$0.isWhitespace })
+    for hazard in ["replaceChildren.apply", ".apply(", "Array.from("] {
+      XCTAssertFalse(
+        squeezed.contains(hazard),
+        "the swap must not go through `\(hazard)`. A long README has thousands of "
+          + "top-level children, and Function.prototype.apply with a very large "
+          + "argument list can throw RangeError — which would fail the update on "
+          + "exactly the documents that flicker worst: \(js)")
+    }
+    guard let region = inPlaceUpdateRegion(squeezed) else { return }
+    XCTAssertTrue(
+      region.contains("while("),
+      "the children are moved with a LOOP instead: \(js)")
+    XCTAssertTrue(
+      region.contains("firstChild"),
+      "the loop drains the parsed body's firstChild until it is empty: \(js)")
+    XCTAssertTrue(
+      region.contains("appendChild("),
+      "appendChild into the fragment ADOPTS each node into the live document "
+        + "automatically, so no explicit document.adoptNode is needed: \(js)")
+  }
+
+  // MARK: - stateScriptJS: the anchor is read BEFORE the swap (the load-bearing order)
+
+  /// The whole flicker fix is this ordering. `beforeTop` must be measured on the OLD
+  /// document with the INCOMING `(line, col)` — not the stale `__wolfLine`/`__wolfCol`
+  /// — so the freshly moved cursor is what stays visually stationary; reading
+  /// `getBoundingClientRect()` there also forces the pending layout, so the value is
+  /// exact. After the swap the anchor is resolved AGAIN in the new DOM and
+  /// `scrollAnchorTo(afterEl, beforeTop)` pins it back to the same viewport offset —
+  /// which is exactly the correction needed when content ABOVE the cursor changed
+  /// height. Measure after the swap and the old offset is gone; re-anchor before it
+  /// and you re-anchor to a node that is about to be discarded.
+  func testStateScriptJSInPlaceUpdateReadsTheAnchorBeforeTheSwap() {
+    let squeezed = String(PreviewScrollSeam.stateScriptJS().filter { !$0.isWhitespace })
+    guard let region = inPlaceUpdateRegion(squeezed) else { return }
+    guard let firstResolve = region.range(of: "resolve("),
+      let measured = region.range(of: "getBoundingClientRect"),
+      let swapped = region.range(of: "replaceChildren")
+    else {
+      return XCTFail(
+        "__wolfUpdate must resolve the anchor, measure it with getBoundingClientRect "
+          + "and then swap with replaceChildren: \(region)")
+    }
+    XCTAssertLessThan(
+      firstResolve.lowerBound, measured.lowerBound,
+      "the anchor must be RESOLVED before it is measured: \(region)")
+    XCTAssertLessThan(
+      measured.lowerBound, swapped.lowerBound,
+      "the measurement must happen BEFORE replaceChildren — after the swap the old "
+        + "element is detached and its viewport offset is unrecoverable, so the update "
+        + "would have nothing to re-anchor to and the preview would sit wherever the "
+        + "new content put it: \(region)")
+
+    let afterSwap = region[swapped.upperBound...]
+    guard let secondResolve = afterSwap.range(of: "resolve("),
+      let follow = afterSwap.range(of: "__wolfFollow(")
+    else {
+      return XCTFail(
+        "after the swap __wolfUpdate must resolve the anchor AGAIN in the new DOM and "
+          + "then compose __wolfFollow on top: \(region)")
+    }
+    XCTAssertLessThan(
+      secondResolve.lowerBound, follow.lowerBound,
+      "the re-anchor must precede the follow, exactly mirroring __wolfRestore's "
+        + "restore-then-follow composition: the re-anchor satisfies `the edited region "
+        + "stays stationary`, and the follow is then a no-op unless the cursor left "
+        + "the comfort band (and it also post()s, refreshing the Swift cache): "
+        + "\(region)")
+    XCTAssertTrue(
+      afterSwap.contains("scrollAnchorTo(") || afterSwap.contains("moveTo("),
+      "the re-anchor must reach the viewport through scrollAnchorTo/moveTo — the "
+        + "single funnel that arms and clamps __wolfProgrammatic (OD-3): \(region)")
+  }
+
+  // MARK: - stateScriptJS: the in-place path must NOT clear the user-scroll flag
+
+  /// `__wolfRestore` clears `__wolfUserScrolled` for one reason only: to re-open the
+  /// gate on `restoreJS`'s `requestAnimationFrame` and `document.fonts.ready`
+  /// re-applies. There are NO late re-applies on the in-place path — the fonts were
+  /// never unloaded, and `getBoundingClientRect()` forces layout synchronously — so
+  /// clearing the flag inside `__wolfUpdate` would buy nothing and would silently
+  /// discard a genuine user scroll that the NEXT full load's restore then has to
+  /// respect.
+  func testStateScriptJSInPlaceUpdateDoesNotClearTheUserScrollFlag() {
+    let squeezed = String(PreviewScrollSeam.stateScriptJS().filter { !$0.isWhitespace })
+    guard let region = inPlaceUpdateRegion(squeezed) else { return }
+    XCTAssertFalse(
+      region.contains("__wolfUserScrolled"),
+      "__wolfUpdate must not READ or WRITE the user-scroll flag at all: \(region)")
+
+    // The two legitimate assignment sites, and only those: the document-start
+    // initialization (so the first genuine user scroll is not swallowed) and
+    // __wolfRestore's deliberate clear.
+    let expectedAssignments = 2
+    XCTAssertEqual(
+      squeezed.components(separatedBy: "__wolfUserScrolled=false").count - 1,
+      expectedAssignments,
+      "there must be exactly \(expectedAssignments) `__wolfUserScrolled = false` "
+        + "assignments in the whole script — the document-start initialization and "
+        + "__wolfRestore's clear. A third would mean some other entry point (almost "
+        + "certainly __wolfUpdate) started discarding user scrolls: \(squeezed)")
+  }
+
+  // MARK: - loadCommitOutcome fixtures (M1)
+
+  /// The head string identifying the descriptor full load N stages in
+  /// `pendingPreviewDocuments[win]` while it navigates.
+  private let documentNHead = "CSS-N"
+  /// The head string identifying the descriptor the NEXT coalescer tick's full load
+  /// (N+1) overwrites that pending slot with, while N is STILL navigating.
+  private let documentNPlus1Head = "CSS-N-PLUS-1"
+
+  /// Load N's pending descriptor. The straddling descriptors carry deliberately
+  /// DIFFERENT head lengths, purely as identity tags: in production the head is
+  /// invariant (`updateStrategy` rule 6), but a test that cannot tell D_N from D_N+1
+  /// cannot tell a correct commit from M1's commit of the wrong one.
+  private var documentN: PreviewScrollSeam.LiveDocument {
+    live(bufnr: sourceBufnr, head: documentNHead)
+  }
+
+  /// Load N+1's pending descriptor.
+  private var documentNPlus1: PreviewScrollSeam.LiveDocument {
+    live(bufnr: sourceBufnr, head: documentNPlus1Head)
+  }
+
+  /// `loadCommitOutcome` with every argument labelled at the call site, mirroring the
+  /// `strategy(...)` helper above.
+  private func commitOutcome(
+    remaining: Int,
+    pending: PreviewScrollSeam.LiveDocument?,
+    succeeded: Bool
+  ) -> PreviewScrollSeam.LoadCommitOutcome {
+    PreviewScrollSeam.loadCommitOutcome(
+      remaining: remaining, pending: pending, succeeded: succeeded)
+  }
+
+  // MARK: - T-E: remaining > 0 is .stillOutstanding, whatever the callback reported
+
+  /// A SUPERSEDED load's callback must neither commit nor discard anything.
+  /// `.stillOutstanding` carries NO payload at all — no descriptor comes back out of
+  /// the seam — which is precisely what makes a contract-following caller leave BOTH
+  /// the live slot and the pending slot exactly as they were, so load N+1's descriptor
+  /// survives load N's callback (M1 step 4, where the old `Set` destructively consumed
+  /// it). WebKit reports a superseded load as a FAILURE, so `succeeded: false` is the
+  /// COMMON case here, not the exotic one; both must answer identically, because at
+  /// `remaining > 0` the callback simply is not the one that decides.
+  func testLoadCommitOutcomeIsStillOutstandingWhileLoadsRemain() {
+    let remainingCounts = [1, 2, 5]
+    let pendings: [PreviewScrollSeam.LiveDocument?] = [documentN, documentNPlus1, nil]
+    for remaining in remainingCounts {
+      for succeeded in [true, false] {
+        for pending in pendings {
+          XCTAssertEqual(
+            commitOutcome(remaining: remaining, pending: pending, succeeded: succeeded),
+            .stillOutstanding,
+            "with \(remaining) load(s) still outstanding the callback decides NOTHING "
+              + "(succeeded: \(succeeded), pending: \(String(describing: pending))). The "
+              + "case is payload-free by design: the caller is handed no descriptor to "
+              + "commit and is told nothing that would let it clear the pending slot")
+        }
+      }
+    }
+  }
+
+  // MARK: - T-E: the LAST load, succeeded => .commit(pending)
+
+  /// The only outcome that may move a descriptor into `previewLiveDocuments[win]`, and
+  /// it must carry the descriptor of the load that actually COMMITTED — not some older
+  /// one. `.commit` is what makes `updateStrategy` rule 3 stop forcing full loads.
+  func testLoadCommitOutcomeCommitsThePendingDescriptorOnTheLastSuccess() {
+    let outcome = commitOutcome(remaining: 0, pending: documentNPlus1, succeeded: true)
+    XCTAssertEqual(
+      outcome, .commit(documentNPlus1),
+      "the last outstanding load succeeded, so the pending descriptor becomes live")
+    guard case .commit(let committed) = outcome else {
+      return XCTFail("expected a .commit outcome, got \(outcome)")
+    }
+    XCTAssertEqual(
+      committed?.sourceBufnr, sourceBufnr,
+      "the committed descriptor must be the EXACT pending value, passed through whole")
+    XCTAssertEqual(
+      committed?.headLength, documentNPlus1.headLength,
+      "including its headLength — rule 6 compares against it, so a wrong one would "
+        + "either wedge the preview into permanent full loads or authorize a body-only "
+        + "swap against stale CSS")
+    XCTAssertNotEqual(
+      outcome, .commit(documentN),
+      "committing the SUPERSEDED load's descriptor is the mirror image of M1: the live "
+        + "slot would describe a document the web view is not showing")
+  }
+
+  // MARK: - T-E: the LAST load, succeeded, nothing splittable => .commit(nil)
+
+  /// `splitDocument` returns nil for the `""` a failed `render_preview` yields, so the
+  /// caller stages NO pending descriptor even though the navigation itself succeeds.
+  /// The commit must then clear the live slot: an unsplittable document must never
+  /// become a live document, or rule 6 would compare against a headLength that
+  /// describes nothing on screen.
+  func testLoadCommitOutcomeCommitsNilForAnUnsplittableDocument() {
+    XCTAssertEqual(
+      commitOutcome(remaining: 0, pending: nil, succeeded: true), .commit(nil),
+      "a successful load with no splittable document commits `nil`, which positively "
+        + "CLEARS the live slot and sends the next update back down the full-load path")
+  }
+
+  // MARK: - T-E: the LAST load, FAILED => .discard, which is NOT .commit(nil)
+
+  /// The heart of the fix. A failed navigation never commits, so WebKit keeps
+  /// displaying the PREVIOUS document and the previous live descriptor stays accurate —
+  /// `.discard` therefore leaves the live slot UNTOUCHED and only clears the pending
+  /// descriptor that will now never commit. Conflating it with `.commit(nil)` is
+  /// exactly how M1 step 7 wiped a perfectly good live document and forced a pointless
+  /// extra full load; the two cases are kept distinct so a caller's mechanical `switch`
+  /// physically cannot make that mistake.
+  func testLoadCommitOutcomeDiscardsOnTheLastFailureAndNeverCommits() {
+    let outcome = commitOutcome(remaining: 0, pending: documentN, succeeded: false)
+    XCTAssertEqual(
+      outcome, .discard,
+      "the last outstanding load FAILED, so nothing is committed and the pending "
+        + "descriptor is dropped")
+    XCTAssertNotEqual(
+      outcome, .commit(nil),
+      "`.discard` is deliberately NOT `.commit(nil)`: the first leaves a good live "
+        + "document in place (the web view still shows it), the second would erase it. "
+        + "That erasure IS M1 step 7")
+    XCTAssertNotEqual(
+      outcome, .commit(documentN),
+      "and a failed navigation certainly may not promote the descriptor of a document "
+        + "that never rendered")
+    XCTAssertEqual(
+      commitOutcome(remaining: 0, pending: nil, succeeded: false), .discard,
+      "a failure with nothing pending is still a discard — the caller must not be "
+        + "handed a `.commit` it would apply to the live slot")
+  }
+
+  // MARK: - T-E / M1: the shipping blocker — two loads straddling one page load
+
+  /// THE regression guard for M1, walked step by step through `loadCommitOutcome` with
+  /// `remaining` / live / pending modelled as locals and the caller's whole mechanical
+  /// `switch` reproduced verbatim.
+  ///
+  /// The failure it guards: the reload coalescer serializes to one reload per ~33ms and
+  /// does NOT wait for `didFinish`, so full load N+1 is issued while N is still
+  /// navigating and OVERWRITES the pending descriptor. With the old `Set<Int64>`,
+  /// `didFinish(N)` — or `didFail(N)`, since WebKit reports a superseded load as a
+  /// failure — removed the window from the set, so the in-flight flag read CLEAR while
+  /// N+1 was still navigating, AND that same callback consumed N+1's descriptor into
+  /// the live slot. The next tick then saw rule 2 false and rule 3 false, chose
+  /// `.inPlace`, and swapped a body into the document N+1 was about to replace; N+1
+  /// committed, discarded the swap and reverted to older content — a visible flicker,
+  /// the exact symptom this whole change exists to remove — and N+1's own callback
+  /// finally nil'd the live descriptor, forcing one more pointless full load.
+  ///
+  /// Run for BOTH flavors of N's callback, because which one WebKit delivers for a
+  /// superseded load is not under our control and must not change the answer.
+  func testStraddlingNavigationsNeverCommitEarlyAndNeverWipeTheLiveDocument() {
+    for supersededSucceeded in [true, false] {
+      let flavor = supersededSucceeded ? "didFinish(N)" : "didFail(N)"
+      let alreadyShowing = live(bufnr: sourceBufnr)
+
+      // Step 0: the preview already shows a committed document, nothing in flight.
+      var remaining = 0
+      var liveSlot: PreviewScrollSeam.LiveDocument? = alreadyShowing
+      var pendingSlot: PreviewScrollSeam.LiveDocument?
+
+      // The caller's ENTIRE bookkeeping: decrement first, hand the REMAINING count to
+      // the seam, then apply its answer. `PaneContainerView` must contain nothing else.
+      func callback(succeeded: Bool) {
+        remaining -= 1
+        switch PreviewScrollSeam.loadCommitOutcome(
+          remaining: remaining, pending: pendingSlot, succeeded: succeeded)
+        {
+        case .stillOutstanding:
+          break  // leave the live AND the pending descriptor ALONE
+        case .commit(let document):
+          liveSlot = document
+          pendingSlot = nil
+        case .discard:
+          pendingSlot = nil
+        }
+      }
+
+      // Step 1: full load N is issued for a long document.
+      remaining += 1
+      pendingSlot = documentN
+      XCTAssertEqual(remaining, 1, "\(flavor): load N is outstanding")
+      XCTAssertEqual(
+        liveSlot, alreadyShowing,
+        "\(flavor): N has not committed, so the web view still shows the OLD document")
+      XCTAssertEqual(pendingSlot, documentN, "\(flavor): N staged its descriptor")
+
+      // Step 2: a coalescer tick issues full load N+1 before N finished; the pending
+      // descriptor is overwritten and the COUNT — not a set membership — goes to 2.
+      remaining += 1
+      pendingSlot = documentNPlus1
+      let bothOutstanding = 2
+      XCTAssertEqual(
+        remaining, bothOutstanding,
+        "\(flavor): a COUNT distinguishes two straddling loads; the old Set could not")
+      XCTAssertEqual(liveSlot, alreadyShowing, "\(flavor): still nothing committed")
+      XCTAssertEqual(
+        pendingSlot, documentNPlus1, "\(flavor): N+1's descriptor replaced N's")
+
+      // Step 3: N's callback lands while N+1 is still navigating.
+      callback(succeeded: supersededSucceeded)
+      XCTAssertEqual(
+        remaining, 1,
+        "\(flavor): N+1 is STILL outstanding, so the in-flight count stays non-zero and "
+          + "an in-place update remains forbidden. This is the assertion the Set-based "
+          + "bookkeeping could not make")
+      XCTAssertEqual(
+        liveSlot, alreadyShowing,
+        "\(flavor): a superseded load's callback commits NOTHING — the live descriptor "
+          + "must still describe what the web view is actually displaying")
+      XCTAssertEqual(
+        pendingSlot, documentNPlus1,
+        "\(flavor): and it must NOT destructively consume N+1's pending descriptor, "
+          + "which N+1's own callback still needs (M1 step 4)")
+
+      // Steps 4-5: the next coalescer tick. Every other full-load rule is satisfied —
+      // same buffer as the live document, matching head length, no pending fragment —
+      // so rule 2 (a load in flight) is the ONLY thing standing between the preview and
+      // the body swap that M1 performed into a doomed document.
+      XCTAssertEqual(
+        strategy(
+          html: document(body: "<p>a third keystroke</p>"),
+          bufnr: sourceBufnr,
+          liveDocument: liveSlot,
+          loadInFlight: remaining > 0),
+        .fullLoad,
+        "\(flavor): with N+1 outstanding the tick must NOT choose .inPlace. M1 chose it "
+          + "here, swapped a body into the document N+1 was about to replace, and the "
+          + "commit then reverted the swap — the visible flicker")
+
+      // Step 6: N+1 commits.
+      callback(succeeded: true)
+      XCTAssertEqual(remaining, 0, "\(flavor): nothing is outstanding any more")
+      XCTAssertEqual(
+        liveSlot, documentNPlus1,
+        "\(flavor): M1 step 7 — the live slot must hold D_N+1, NOT nil. The Set-based "
+          + "code had already consumed the descriptor in step 3, so this callback set "
+          + "the live slot to nil and forced a pointless extra full load")
+      XCTAssertNil(
+        pendingSlot, "\(flavor): the descriptor moved to the live slot, so nothing pends")
+
+      // Step 7: the very next edit is therefore the cheap in-place swap this whole
+      // change exists to enable, instead of another ~965 KiB navigation.
+      let nextBody = "<p>after the straddle</p>"
+      XCTAssertEqual(
+        strategy(
+          html: document(head: documentNPlus1Head, body: nextBody),
+          bufnr: sourceBufnr,
+          liveDocument: liveSlot,
+          loadInFlight: remaining > 0),
+        .inPlace(body: nextBody),
+        "\(flavor): a correct live descriptor is what lets rule 3 and rule 6 pass; "
+          + "wiping it in step 6 is what made M1 pay for one more full load")
+    }
+  }
+
+  // MARK: - T-F: the three outcomes are mutually distinguishable values
+
+  /// A caller's `switch` is only as safe as the type's ability to tell its cases apart.
+  /// `.discard` and `.commit(nil)` are the pair that matters — one preserves a live
+  /// document, the other erases it — but all three are pinned, so no future
+  /// `Equatable` hand-rolling (or a `commit` payload made non-optional and defaulted)
+  /// can quietly collapse two of them into one.
+  func testLoadCommitOutcomeCasesAreMutuallyDistinguishable() {
+    let discard = PreviewScrollSeam.LoadCommitOutcome.discard
+    let stillOutstanding = PreviewScrollSeam.LoadCommitOutcome.stillOutstanding
+    let commitNothing = PreviewScrollSeam.LoadCommitOutcome.commit(nil)
+    XCTAssertNotEqual(
+      discard, stillOutstanding,
+      "`.discard` ends the load and clears the pending descriptor; "
+        + "`.stillOutstanding` must change nothing at all")
+    XCTAssertNotEqual(
+      discard, commitNothing,
+      "the M1 distinction: a FAILED last load leaves the live document alone, a "
+        + "SUCCESSFUL one with nothing splittable erases it")
+    XCTAssertNotEqual(
+      stillOutstanding, commitNothing,
+      "a superseded load's callback must never be mistaken for the commit of an "
+        + "unsplittable document")
+    XCTAssertNotEqual(
+      commitNothing, .commit(documentN),
+      "and the commit payload participates in equality, so committing a descriptor is "
+        + "distinguishable from clearing the live slot")
   }
 }

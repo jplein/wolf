@@ -120,6 +120,90 @@ public enum PreviewScrollSeam {
     case capture(RestoreRequest)
   }
 
+  /// A rendered preview document carved into "the part that must not be touched"
+  /// and "the part that is swapped in place".
+  ///
+  /// Produced by ``splitDocument(_:)`` from `render_html`'s FIXED wrapper. The head
+  /// is deliberately NOT copied — only its length is kept, because the only question
+  /// ever asked of it is "did it change?" (``updateStrategy(html:currentLoad:liveDocument:loadInFlight:hasPendingFragment:)``
+  /// rule 6). Copying it would mean carrying the ~965 KiB of inlined base64
+  /// `@font-face` CSS around on every keystroke, which is the exact cost the in-place
+  /// path exists to remove.
+  public struct DocumentSplit: Equatable {
+    /// The UTF-8 BYTE count of everything up to and INCLUDING the `<body …>` open
+    /// tag. A byte count, not a `Character` count, matching the Rust side's notion of
+    /// length (the wrapper is `format!`ed from a Rust `String`).
+    public let headLength: Int
+    /// The body element's INNER html — what `__wolfUpdate` `DOMParser`-parses and
+    /// `replaceChildren`s into the live document. The open/close `<body>` tags are
+    /// delimiters, not content: including the open tag would nest a second body
+    /// inside the live one.
+    public let body: String
+
+    public init(headLength: Int, body: String) {
+      self.headLength = headLength
+      self.body = body
+    }
+  }
+
+  /// What is currently COMMITTED in a preview web view.
+  ///
+  /// Deliberately separate from `PreviewSeam.PreviewLoad`, which is what was last
+  /// DISPATCHED and must stay exactly `(sourceBufnr, sourceTick)` so a cursor-only
+  /// change can never arm a reload (D3). This type carries no tick on purpose: what
+  /// is committed is a DOCUMENT, and how many edits behind it is says nothing about
+  /// whether its body can be swapped. What it carries instead is `headLength`, the
+  /// only thing a body-only swap can get WRONG.
+  public struct LiveDocument: Equatable {
+    /// The SOURCE buffer whose render is committed in the web view.
+    public let sourceBufnr: Int64
+    /// The ``DocumentSplit/headLength`` of the committed document.
+    public let headLength: Int
+
+    public init(sourceBufnr: Int64, headLength: Int) {
+      self.sourceBufnr = sourceBufnr
+      self.headLength = headLength
+    }
+  }
+
+  /// How a preview window's next render must reach the page.
+  public enum UpdateStrategy: Equatable {
+    /// `loadHTMLString`, with `didFinish` driving the existing capture/restore
+    /// machinery. The path for first bind, a source switch, a pending cross-file
+    /// fragment, a load already in flight, HTML that cannot be split, and recovery
+    /// after an in-place failure.
+    case fullLoad
+    /// `callAsyncJavaScript(__wolfUpdate)` with this body — NO navigation, so no
+    /// document commit, no ~1 MB CSS re-parse, and no frame at scrollY 0.
+    case inPlace(body: String)
+  }
+
+  /// What one preview navigation's terminal callback (`didFinish` or `didFail…`) may
+  /// do to that window's live and pending document descriptors.
+  ///
+  /// Produced by ``loadCommitOutcome(remaining:pending:succeeded:)``. The three cases
+  /// are deliberately distinct VALUES rather than one optional, because a caller's
+  /// mechanical `switch` is only as safe as the type's ability to tell them apart —
+  /// and `.discard` versus `.commit(nil)` is exactly the pair whose conflation wiped a
+  /// good live document (M1).
+  public enum LoadCommitOutcome: Equatable {
+    /// More navigations are still outstanding for this window, so THIS callback is
+    /// not the one that decides: leave the live AND the pending descriptor alone.
+    /// The case carries no payload on purpose — a superseded load's callback is
+    /// handed nothing it could commit, and is told nothing that would let it clear
+    /// the pending slot.
+    case stillOutstanding
+    /// This was the last outstanding navigation and it SUCCEEDED: the pending
+    /// descriptor becomes the live one and the pending slot is cleared. The payload
+    /// is optional because an unsplittable document stages no descriptor, and
+    /// `.commit(nil)` must positively CLEAR the live slot — an unsplittable document
+    /// may never be treated as live.
+    case commit(LiveDocument?)
+    /// This was the last outstanding navigation and it FAILED: leave the live
+    /// descriptor UNCHANGED and clear only the pending one.
+    case discard
+  }
+
   /// Whether a resolved anchor needs the viewport moved, and to where.
   public enum FollowDecision: Equatable {
     /// The anchor is inside the comfort band — do NOT scroll. This is the
@@ -313,6 +397,171 @@ public enum PreviewScrollSeam {
         fallbackScrollY: cachedState?.scrollY ?? 0))
   }
 
+  // MARK: - The in-place update decision
+
+  /// Carves a whole rendered preview document into its head LENGTH and its body's
+  /// INNER html, or `nil` when it does not have the expected shape.
+  ///
+  /// The shape is `render_html`'s fixed wrapper (`crates/wolf-core/src/markdown.rs`):
+  /// `<!doctype html><html><head>…</head><body class="wolf-markdown">{body}</body></html>`.
+  ///
+  /// The scan is FIRST-open / LAST-close, and that asymmetry is deliberate. Raw HTML
+  /// passes straight through pulldown-cmark (there is no disable flag in
+  /// `markdown_options()`), so a source file can put a LITERAL `</body>` into the
+  /// rendered body — but the wrapper's own closing tag is always the LAST one.
+  /// Symmetrically, any `<body` appearing in content is always AFTER the wrapper's
+  /// open tag, so the FIRST one is the wrapper's.
+  ///
+  /// Returns `nil` when there is no `<body`, no `>` closing that tag, no `</body>`,
+  /// or when the closing tag PRECEDES the open one (an inverted range). An empty
+  /// `html` — what `WolfCore::render_preview` returns on an RPC failure — hits the
+  /// first of those. Every `nil` degrades that tick to ``UpdateStrategy/fullLoad``,
+  /// i.e. exactly today's behavior; a wrapper change can therefore cost performance
+  /// but never correctness.
+  ///
+  /// This is a SCAN, not a parse: the body is returned byte-for-byte, never
+  /// sanitized, re-encoded or normalized. The `.wolf-src` markers are what the page's
+  /// `resolve` looks up by id, and the inline `style="color:#…"` highlight spans are
+  /// the only thing a dark/light flip actually changes.
+  public static func splitDocument(_ html: String) -> DocumentSplit? {
+    guard let open = html.range(of: "<body") else { return nil }
+    guard let openEnd = html.range(of: ">", range: open.upperBound..<html.endIndex) else {
+      return nil
+    }
+    guard let close = html.range(of: "</body>", options: .backwards) else { return nil }
+    guard close.lowerBound >= openEnd.upperBound else { return nil }
+    return DocumentSplit(
+      headLength: html[html.startIndex..<openEnd.upperBound].utf8.count,
+      body: String(html[openEnd.upperBound..<close.lowerBound]))
+  }
+
+  /// How one preview window's freshly rendered `html` must reach its page.
+  ///
+  /// The rules are ORDERED and each is load-bearing:
+  ///
+  ///  1. **`.fullLoad` when `hasPendingFragment`.** A cross-file `other.md#anchor`
+  ///     link stashes its fragment in `pendingPreviewFragments`, and that fragment is
+  ///     delivered from `previewDidFinishLoad` — which an in-place update NEVER
+  ///     fires. Swapping the body here would strand the anchor forever.
+  ///  2. **`.fullLoad` when `loadInFlight`.** Mutating a document that an outstanding
+  ///     `loadHTMLString` is about to replace is pointless, and it would race that
+  ///     load's `didFinish` restore. What the caller passes here is
+  ///     `(previewLoadsInFlight[win] ?? 0) > 0` — a per-window COUNT, never a set
+  ///     membership, because TWO navigations can straddle one page load (the
+  ///     coalescer serializes to one reload per ~33ms and does NOT wait for
+  ///     `didFinish`). The count is what this rule actually guarantees: it stays
+  ///     non-zero from the FIRST outstanding navigation until the LAST one's callback,
+  ///     so no in-place update can ever run while any navigation is pending. A
+  ///     Set-based flag guaranteed only "the most recent callback has not landed", and
+  ///     the earlier callback cleared it out from under a still-navigating load (M1).
+  ///     Because the slot is empty again exactly when the count reaches zero — every
+  ///     capture is consumed by a `didFinish`, and
+  ///     ``loadCommitOutcome(remaining:pending:succeeded:)``'s `.discard` is where the
+  ///     caller drops a restore no navigation will ever consume — this rule ALSO
+  ///     keeps `pendingPreviewRestores[win] == nil` on every in-place path.
+  ///  3. **`.fullLoad` when `liveDocument == nil`.** Nothing is committed, so
+  ///     `window.__wolfUpdate` may not exist. Covers first bind AND recovery after a
+  ///     failed in-place update, which clears `previewLiveDocuments[win]` precisely to
+  ///     force this rule.
+  ///  4. **`.fullLoad` when the SOURCE BUFFER changed.** That is a NAVIGATION, and
+  ///     the new file must open at its top — H1's guarantee, mirrored here at the
+  ///     strategy layer. The tick is irrelevant: two freshly opened files can share a
+  ///     `changedtick`, so only the bufnr may decide.
+  ///  5. **`.fullLoad` when ``splitDocument(_:)`` returns `nil`.**
+  ///  6. **`.fullLoad` when the head LENGTH changed.** A body-only swap leaves the
+  ///     committed `<head>` in place, so a changed head would mean stale CSS. Today
+  ///     unreachable — the in-app preview pins `PreviewTheme::Default` +
+  ///     `WidthMode::Full`, so the head is byte-identical on every render, INCLUDING
+  ///     across a dark/light flip (that flip is a `prefers-color-scheme` media query
+  ///     inside the constant CSS; only the body's inline highlight colors change) —
+  ///     but encoding it as a RULE makes the premise self-enforcing rather than
+  ///     comment-only. TRADE-OFF: this is a LENGTH comparison, not a content hash. A
+  ///     future theme whose head happened to be the same length would slip through;
+  ///     hashing ~1 MB per keystroke was judged the worse cost, and the failure mode
+  ///     (stale CSS until the next full load) is mild.
+  ///  7. **`.inPlace`** otherwise — the typing path, and the whole reason this
+  ///     function exists.
+  ///
+  /// **Relationship to ``captureDecision(previousLoad:currentLoad:cursor:cachedState:pendingRestore:)``.**
+  /// That function is UNCHANGED by the in-place path and is still called exactly
+  /// where it is called today: immediately before `loadHTMLString`, i.e. on the
+  /// `.fullLoad` branch only. The two answer different questions at different times —
+  /// `captureDecision` keys on `lastPreviewLoads[win]` ("what did we last DISPATCH"),
+  /// this function keys on `previewLiveDocuments[win]` ("what is COMMITTED"). Rule 4
+  /// here and `captureDecision`'s rule 1 are near-duplicates BY DESIGN and always
+  /// agree on a real source switch; both are required, because one runs before the
+  /// navigation exists and the other before the restore is consumed. Neither may be
+  /// removed on the strength of the other.
+  ///
+  /// - Parameters:
+  ///   - html: The whole document `render_preview` just returned.
+  ///   - currentLoad: The `(sourceBufnr, sourceTick)` this tick is rendering.
+  ///   - liveDocument: `previewLiveDocuments[win]` — what is committed NOW.
+  ///   - loadInFlight: `(previewLoadsInFlight[win] ?? 0) > 0` — the per-window count
+  ///     of outstanding navigations, NOT a set membership (see rule 2).
+  ///   - hasPendingFragment: `pendingPreviewFragments[win] != nil`.
+  public static func updateStrategy(
+    html: String,
+    currentLoad: PreviewSeam.PreviewLoad,
+    liveDocument: LiveDocument?,
+    loadInFlight: Bool,
+    hasPendingFragment: Bool
+  ) -> UpdateStrategy {
+    if hasPendingFragment { return .fullLoad }
+    if loadInFlight { return .fullLoad }
+    guard let liveDocument else { return .fullLoad }
+    if liveDocument.sourceBufnr != currentLoad.sourceBufnr { return .fullLoad }
+    guard let split = splitDocument(html) else { return .fullLoad }
+    if liveDocument.headLength != split.headLength { return .fullLoad }
+    return .inPlace(body: split.body)
+  }
+
+  /// What a preview navigation's terminal callback may commit, given how many
+  /// navigations for that window are STILL outstanding after it decremented the count.
+  ///
+  /// TWO NAVIGATIONS CAN STRADDLE ONE PAGE LOAD — the same window H2 exists to
+  /// survive. The reload coalescer serializes to one reload per ~33ms and does NOT
+  /// wait for `didFinish`, so full load N+1 is routinely issued while N is still
+  /// navigating, OVERWRITING the pending descriptor. WebKit then reports the
+  /// superseded load N as a FAILURE as often as not, so which callback flavor arrives
+  /// is not under our control and must not change the answer.
+  ///
+  /// The rules:
+  ///
+  ///  * `remaining > 0` → ``LoadCommitOutcome/stillOutstanding``, whatever `succeeded`
+  ///    says. A superseded load's callback decides nothing: it may not commit, and it
+  ///    may not destructively consume the pending descriptor that the load STILL
+  ///    navigating needs. (Consuming it is exactly what the old `Set<Int64>` flag did,
+  ///    after which the next coalescer tick saw an all-clear in-flight flag, chose
+  ///    `.inPlace`, and swapped a body into a document that was about to be replaced —
+  ///    a visible flicker, i.e. the exact symptom the in-place path exists to remove.)
+  ///  * `remaining == 0 && succeeded` → ``LoadCommitOutcome/commit(_:)`` carrying
+  ///    `pending` VERBATIM, including `nil`: a successful load of an unsplittable
+  ///    document must positively clear the live slot, or
+  ///    ``updateStrategy(html:currentLoad:liveDocument:loadInFlight:hasPendingFragment:)``
+  ///    rule 6 would compare against a `headLength` describing nothing on screen.
+  ///  * `remaining == 0 && !succeeded` → ``LoadCommitOutcome/discard``, which is
+  ///    deliberately NOT `.commit(nil)`. A failed navigation never commits, so WebKit
+  ///    keeps displaying the PREVIOUS document and the previous live descriptor stays
+  ///    accurate; erasing it would force one pointless extra full load and, worse,
+  ///    would let rule 3 fire against a page that is perfectly swappable.
+  ///
+  /// The caller's whole bookkeeping is: decrement first, hand the REMAINING count
+  /// here, then apply the answer mechanically. Nothing else belongs in the callback.
+  ///
+  /// - Parameters:
+  ///   - remaining: `previewLoadsInFlight[win]` AFTER this callback decremented it.
+  ///   - pending: `pendingPreviewDocuments[win]` — what the load was carrying.
+  ///   - succeeded: `didFinish` → `true`, either `didFail…` → `false`.
+  public static func loadCommitOutcome(
+    remaining: Int,
+    pending: LiveDocument?,
+    succeeded: Bool
+  ) -> LoadCommitOutcome {
+    if remaining > 0 { return .stillOutstanding }
+    return succeeded ? .commit(pending) : .discard
+  }
+
   // MARK: - JS synthesis
 
   /// A `Double` rendered for interpolation into JS: fixed two decimals, no locale
@@ -334,8 +583,68 @@ public enum PreviewScrollSeam {
   ///    composition is deliberate: the restore satisfies "the edited region stays
   ///    stationary", and the follow is then a no-op unless the user typed past an
   ///    edge, which satisfies "cursor-follow" — one entry point, no ordering hazard.
+  ///  * `__wolfUpdate(html, line, col)` — the IN-PLACE body swap that replaces a
+  ///    navigation on the typing path. See the ordering contract below.
   ///  * a rAF-throttled, PASSIVE `scroll` listener that keeps the Swift-side cache
   ///    fresh when the user wheel-scrolls independently of the cursor.
+  ///
+  /// ## `__wolfUpdate`'s ordering contract
+  ///
+  /// The whole flicker fix IS this ordering, and every step is load-bearing:
+  ///
+  ///  1. **The anchor is resolved and measured BEFORE the swap**, using the INCOMING
+  ///     `(line, col)` rather than the stale `__wolfLine`/`__wolfCol`, so the freshly
+  ///     moved cursor is what stays visually stationary. Every hard line emits a
+  ///     `wl-{L}-0` marker, so a line the edit just created resolves through the
+  ///     existing bounded backward scan to the preceding line. Reading
+  ///     `getBoundingClientRect()` here also forces the pending layout, so `beforeTop`
+  ///     is exact.
+  ///  2. **The parsed children are moved into a fragment with a `while` loop, then
+  ///     swapped with ONE `replaceChildren(frag)`.** Deliberately NOT
+  ///     `replaceChildren.apply(body, Array.from(…))`: a long README has thousands of
+  ///     top-level children, and `Function.prototype.apply` with a very large argument
+  ///     list can throw `RangeError` — on exactly the documents that flicker worst.
+  ///     `appendChild` into the fragment ADOPTS each node into the live document
+  ///     automatically, so no explicit `document.adoptNode` is needed.
+  ///  3. **After the swap the anchor is resolved AGAIN and re-anchored to
+  ///     `beforeTop`.** `getBoundingClientRect()` on the new element forces the
+  ///     post-swap layout (which also clamps `scrollTop` if the document shrank), and
+  ///     `scrollAnchorTo(afterEl, beforeTop)` sets `scrollY = anchorDocY_new -
+  ///     beforeTop` — pinning the anchor to the SAME viewport offset it had, no matter
+  ///     how much content above it grew or shrank. That IS the height correction; no
+  ///     separate one is needed. When no anchor resolves on either side, `moveTo`
+  ///     restores the raw pre-swap `scrollY`.
+  ///  4. **`__wolfFollow` LAST**, exactly mirroring `__wolfRestore`'s restore-then-
+  ///     follow composition: the re-anchor satisfies "the edited region stays
+  ///     stationary" and the follow is a no-op unless the cursor left the comfort
+  ///     band. It also `post()`s, refreshing the Swift-side cache.
+  ///
+  /// The swap AND the re-anchor happen in ONE JavaScript task, so rendering cannot
+  /// interleave and no frame at scrollY 0 can ever be painted. That is a structural
+  /// guarantee, not a race won on average.
+  ///
+  /// ONE DELIBERATE ASYMMETRY BETWEEN THE TWO PATHS: `<script>` elements in the body
+  /// do NOT execute on the in-place path. A `DOMParser`-created script element is
+  /// flagged "already started" by the HTML spec and does not run when it is adopted
+  /// into another document, whereas `loadHTMLString` runs it. The wrapper emits no
+  /// scripts of its own, but pulldown-cmark passes raw HTML through, so a source file
+  /// containing a literal `<script>` can reach the body — and it will run on a full
+  /// load and not on a body swap. Nothing in the rendered document relies on script
+  /// execution and the in-place behavior is the SAFER of the two, so this is recorded
+  /// rather than fixed: it is a known asymmetry, not a bug to be diagnosed later.
+  ///
+  /// `__wolfUpdate` deliberately does NOT touch `__wolfUserScrolled`. `__wolfRestore`
+  /// clears it only to re-open the gate on ``restoreJS(_:)``'s rAF /
+  /// `document.fonts.ready` re-applies; there are NO late re-applies on this path (the
+  /// fonts were never unloaded and layout is forced synchronously), so clearing it
+  /// would buy nothing and would silently discard a genuine user scroll.
+  ///
+  /// It is defined AFTER `moveTo`/`__wolfRestore` and BEFORE the scroll listener, and
+  /// it reaches the viewport ONLY through `scrollAnchorTo` / `moveTo` /
+  /// `__wolfFollow` — it adds no second `scrollTo`, and none of `scrollBy`,
+  /// `scrollIntoView` or `scrollTop =`. Keep it that way (see the N2 funnel invariant
+  /// below); a direct scroll here would fire an unarmed `scroll` event that the
+  /// listener classifies as the USER's.
   ///
   /// Anchor resolution order: the rounded exact-column marker, then the line's
   /// `-0` marker, then a bounded backward scan for the nearest PRECEDING line's
@@ -467,6 +776,29 @@ public enum PreviewScrollSeam {
           }
           W.__wolfFollow(line, col);
         };
+        W.__wolfUpdate = function (html, line, col) {
+          if (!document.body) { return 0; }
+          var beforeEl = resolve(line, col);
+          var beforeTop = beforeEl ? beforeEl.getBoundingClientRect().top : null;
+          var beforeY = W.scrollY;
+          var parsed = new DOMParser().parseFromString(html, 'text/html');
+          if (!parsed || !parsed.body) { return 0; }
+          var frag = document.createDocumentFragment();
+          while (parsed.body.firstChild) {
+            frag.appendChild(parsed.body.firstChild);
+          }
+          document.body.replaceChildren(frag);
+          W.__wolfLine = line;
+          W.__wolfCol = col;
+          var afterEl = resolve(line, col);
+          if (afterEl && beforeTop !== null) {
+            scrollAnchorTo(afterEl, beforeTop);
+          } else {
+            moveTo(beforeY);
+          }
+          W.__wolfFollow(line, col);
+          return 1;
+        };
         var pending = false;
         W.addEventListener('scroll', function () {
           if (pending) { return; }
@@ -527,5 +859,41 @@ public enum PreviewScrollSeam {
       + "if(document.fonts&&document.fonts.ready){"
       + "document.fonts.ready.then(function(){"
       + "if(!window.__wolfUserScrolled){f();}});}})();"
+  }
+
+  /// The names of the three values ``inPlaceUpdateJS()``'s body resolves against its
+  /// enclosing scope — i.e. exactly the keys the caller must build its
+  /// `callAsyncJavaScript(_:arguments:in:in:completionHandler:)` dictionary from.
+  ///
+  /// They live HERE, as one exported constant, for the same reason the tuning numbers
+  /// do (D1): the JS body and the caller's dictionary must be provably unable to
+  /// drift. An EXTRA free name in the body is a `ReferenceError` on every keystroke —
+  /// which degrades the feature to permanent full loads, silently, with a green
+  /// suite — and a missing one is a payload shipped and then ignored. Short names
+  /// because they are re-lexed as JS source on every call.
+  public static let inPlaceUpdateArgumentNames: (html: String, line: String, col: String) = (
+    html: "h", line: "l", col: "c"
+  )
+
+  /// The `callAsyncJavaScript` FUNCTION BODY that drives one in-place update.
+  ///
+  /// `callAsyncJavaScript` — not `evaluateJavaScript` — because it takes REAL
+  /// arguments: the ~200 KB body string is handed over as a VALUE and is never
+  /// escaped into, or re-lexed as, JS source. Hence this string contains no `<` at
+  /// all, and hard-codes no part of `render_html`'s wrapper. It also yields a proper
+  /// `Result<Any, Error>`, which is what drives the caller's fallback.
+  ///
+  /// The body short-circuits on `window.__wolfUpdate` being absent — a page that is
+  /// not ours, or a WRONG CONTENT WORLD — and returns a FALSY `0` sentinel rather
+  /// than throwing. The sentinel is deliberate: a throw would surface as `.failure`
+  /// and trigger the same fallback, but it would also log a JS exception on every
+  /// call. Returning `undefined` would be indistinguishable from a successful swap
+  /// that simply returned nothing.
+  ///
+  /// Its free identifiers are exactly ``inPlaceUpdateArgumentNames``.
+  public static func inPlaceUpdateJS() -> String {
+    let names = inPlaceUpdateArgumentNames
+    return "if (!window.__wolfUpdate) { return 0; }\n"
+      + "return window.__wolfUpdate(\(names.html), \(names.line), \(names.col));"
   }
 }

@@ -68,9 +68,28 @@
 //!    `#wl-{line}-{col}` (column rounded DOWN to a multiple of
 //!    [`MARKER_COLUMN_STRIDE`]) → `#wl-{line}-0` → the nearest PRECEDING line's
 //!    marker → raw `scrollY`, and scrolls it into view only when it crosses a
-//!    viewport-edge threshold. It also captures the anchor's viewport offset before
-//!    a reload and restores it afterward, so typing does not jump the preview to the
-//!    top.
+//!    viewport-edge threshold. On the paths that still navigate (first bind, a
+//!    source switch, a pending cross-file `#fragment`, a load already in flight) it
+//!    captures the anchor's viewport offset before the reload and restores it
+//!    afterward. On the TYPING path it does not navigate at all: it splits this
+//!    module's rendered document at the `<body …>` tag and swaps the body's inner
+//!    HTML into the live page (`__wolfUpdate` — `DOMParser` + `replaceChildren`),
+//!    re-anchoring in the SAME JavaScript task, so typing neither jumps the preview
+//!    to the top nor flickers.
+//!
+//!    That body-only swap is sound ONLY because the in-app preview's `<head>` is
+//!    INVARIANT: [`crate::nvim::Nvim::render_preview`] pins
+//!    [`PreviewTheme::Default`] + [`WidthMode::Full`], and everything
+//!    [`render_html`] puts in the head is a compile-time constant — so the head is
+//!    byte-identical on every render, INCLUDING across a dark/light flip (that flip
+//!    is a `prefers-color-scheme` media query inside the constant CSS; only the
+//!    body's inline `style="color:#…"` highlight spans change). It also matters
+//!    because that head inlines two woff2 faces as ~965 KiB of base64, which a
+//!    navigation would re-ship and re-parse on every keystroke. A future themes or
+//!    width feature MUST revisit this: the front-end self-enforces the premise by
+//!    comparing head LENGTHS and falling back to a full load when they differ, so a
+//!    change here degrades performance rather than correctness — but do not assume
+//!    the swap stays free.
 //!
 //! This module's own guarantee is unchanged and is the whole contract it owes that
 //! chain: the markers are present in the emitted HTML, their ids are stable, and `C`
