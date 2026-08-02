@@ -1435,6 +1435,10 @@ extension FfiConfigRef {
     public func appearance() -> UInt8 {
         __swift_bridge__$FfiConfig$appearance(ptr)
     }
+
+    public func macos_option_as_alt() -> Bool {
+        __swift_bridge__$FfiConfig$macos_option_as_alt(ptr)
+    }
 }
 extension FfiConfig: Vectorizable {
     public static func vecOfSelfNew() -> UnsafeMutableRawPointer {

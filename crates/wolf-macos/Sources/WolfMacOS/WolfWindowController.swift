@@ -196,7 +196,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     self.handle = handle
 
     let paneContainer = PaneContainerView(
-      handle: handle, metrics: metrics, tabpageHandle: tabpageHandle)
+      handle: handle, metrics: metrics, tabpageHandle: tabpageHandle,
+      optionAsAlt: config.macos_option_as_alt())
     self.paneContainer = paneContainer
 
     // A divider drag (or a restore rebuild) persists the whole-tree snapshot.

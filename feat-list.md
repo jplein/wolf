@@ -44,6 +44,7 @@ Linux gets the pinned Neovim from the flake devShell via `WOLF_NVIM_BIN`; there 
 | Per-pane status bar (filename + display path)              | `feat/status-bar` (`ffc3c49`)                     | [x]   | [ ]   |
 | Active/inactive pane treatment (no dimming)                | `fix/dark-mode` (`745a8f5`)                       | [x]   | [ ]   |
 | Editor padding / insets                                    | `feat/ui-tweaks-2`                                | [x]   | [ ]   |
+| macOS Option key composes accents (option-as-option)       | `feat/macos-alt-key-handling`                     | [x]   | [ ]   |
 
 Divider drag on GTK is the stock `gtk::Paned` behaviour, but `install_paned_position` re-derives the divider from the equal-share ratio on every `max-position` notify, so a drag does not survive a resize and is never persisted. The macOS side hit-tests the pure `PaneTree.dividers()` list, reweights the split, and saves the weights into `state.json`.
 

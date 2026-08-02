@@ -53,6 +53,18 @@ fn default_appearance() -> Appearance {
     DEFAULT_APPEARANCE
 }
 
+/// The built-in default for the macOS option-as-alt flag: `false`
+/// (option-as-option — Option composes accented characters rather than sending
+/// Neovim `<M-…>` mappings). Mirrors Ghostty's `macos-option-as-alt` default.
+const DEFAULT_MACOS_OPTION_AS_ALT: bool = false;
+
+/// The default macos-option-as-alt flag, used as the `#[serde(default)]` for the
+/// on-disk `macos-option-as-alt` field so a config that predates the key parses
+/// to `false`.
+fn default_macos_option_as_alt() -> bool {
+    DEFAULT_MACOS_OPTION_AS_ALT
+}
+
 /// The resolved user configuration surfaced to the front-end.
 ///
 /// A GUI-toolkit-free value type: `font_family` is a CoreText/Pango family name,
@@ -69,6 +81,9 @@ pub struct WolfConfig {
     pub line_height: f64,
     /// The app appearance mode (`auto`/`dark`/`light`); defaults to `auto`.
     pub appearance: Appearance,
+    /// On macOS, whether the Option key acts as Alt (`<M-…>` mappings) rather
+    /// than composing accented characters; defaults to `false` (option-as-option).
+    pub macos_option_as_alt: bool,
 }
 
 /// The on-disk file shape: a single top-level `config:` key wrapping the section.
@@ -91,6 +106,10 @@ struct ConfigSection {
     /// failing the whole section (unlike the required font fields).
     #[serde(default = "default_appearance")]
     appearance: Appearance,
+    /// Back-compat: a config file predating this key parses to `false` rather than
+    /// failing the whole section (unlike the required font fields).
+    #[serde(default = "default_macos_option_as_alt")]
+    macos_option_as_alt: bool,
 }
 
 /// Resolves the per-platform preferences directory that holds `wolf-config.yaml`.
@@ -129,6 +148,7 @@ pub fn default_config() -> WolfConfig {
         font_size,
         line_height: DEFAULT_LINE_HEIGHT,
         appearance: DEFAULT_APPEARANCE,
+        macos_option_as_alt: DEFAULT_MACOS_OPTION_AS_ALT,
     }
 }
 
@@ -153,6 +173,7 @@ pub fn load_or_create(dir: &Path) -> WolfConfig {
                 font_size: file.config.font_size,
                 line_height: file.config.line_height,
                 appearance: file.config.appearance,
+                macos_option_as_alt: file.config.macos_option_as_alt,
             },
             Err(e) => {
                 tracing::warn!(
@@ -196,6 +217,7 @@ fn write_defaults(path: &Path, config: &WolfConfig) {
             font_size: config.font_size,
             line_height: config.line_height,
             appearance: config.appearance,
+            macos_option_as_alt: config.macos_option_as_alt,
         },
     };
     match serde_yaml::to_string(&file) {
@@ -270,6 +292,12 @@ mod tests {
         // `Appearance` derives `PartialEq`/`Debug` (plan §3.1), so compare it
         // directly. `default_config()` yields `Appearance::Auto`.
         assert_eq!(actual.appearance, expected.appearance, "{ctx}: appearance");
+        // The macOS option-as-alt flag (plan: `WolfConfig.macos_option_as_alt`,
+        // kebab key `macos-option-as-alt`); `default_config()` yields `false`.
+        assert_eq!(
+            actual.macos_option_as_alt, expected.macos_option_as_alt,
+            "{ctx}: macos_option_as_alt"
+        );
     }
 
     /// Reads a file to a `String`, panicking with context on failure (errcheck).
@@ -593,6 +621,134 @@ mod tests {
                 "hand-written `appearance: {value}` must load as {want:?}"
             );
         }
+    }
+
+    // =====================================================================
+    // macos-option-as-alt — new config key (bool, default false =
+    // option-as-option; mirrors Ghostty's `macos-option-as-alt`)
+    // =====================================================================
+
+    /// Formats a full, well-formed `config:` section (all three required font
+    /// fields, with the CUSTOM non-default values) plus a `macos-option-as-alt:`
+    /// line holding `value`. Used by the option-as-alt parse/round-trip cases so a
+    /// pass cannot be faked by the defaults.
+    fn config_yaml_with_option_as_alt(value: bool) -> String {
+        format!(
+            "config:\n  font-family: \"{CUSTOM_FONT_FAMILY}\"\n  font-size: {}\n  \
+             line-height: {}\n  macos-option-as-alt: {value}\n",
+            CUSTOM_FONT_SIZE as i64, CUSTOM_LINE_HEIGHT as i64,
+        )
+    }
+
+    #[test]
+    fn default_macos_option_as_alt_is_false() {
+        assert!(
+            !default_config().macos_option_as_alt,
+            "the built-in default macos_option_as_alt must be false (option-as-option)"
+        );
+    }
+
+    #[test]
+    fn parses_macos_option_as_alt_values() {
+        // Each boolean maps to itself, and the font fields parse alongside it (so we
+        // know the whole section deserialized, not a defaults fallback).
+        for value in [true, false] {
+            let dir = tempdir().expect("create temp dir");
+            let path = dir.path().join(CONFIG_FILE_NAME);
+            write(&path, &config_yaml_with_option_as_alt(value));
+
+            let cfg = load_or_create(dir.path());
+            assert_eq!(
+                cfg.macos_option_as_alt, value,
+                "`macos-option-as-alt: {value}` must parse to {value}"
+            );
+            // The font fields must survive alongside the option-as-alt field,
+            // proving the whole section parsed (not a defaults fallback).
+            assert_eq!(
+                cfg.font_family, CUSTOM_FONT_FAMILY,
+                "`macos-option-as-alt: {value}` case: font_family preserved"
+            );
+            assert_eq!(
+                cfg.font_size, CUSTOM_FONT_SIZE,
+                "`macos-option-as-alt: {value}` case: font_size preserved"
+            );
+            assert_eq!(
+                cfg.line_height, CUSTOM_LINE_HEIGHT,
+                "`macos-option-as-alt: {value}` case: line_height preserved"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_macos_option_as_alt_defaults_to_false() {
+        // Back-compat: a config with all the required font fields but NO
+        // `macos-option-as-alt` key must parse SUCCESSFULLY (via
+        // `#[serde(default)]`), NOT fall back to the full defaults. So the flag is
+        // false AND the custom font fields are preserved (distinguishing this from
+        // the whole-file fallback of `missing_field_falls_back_to_defaults`, which
+        // drops a REQUIRED font field).
+        let dir = tempdir().expect("create temp dir");
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        let yaml = format!(
+            "config:\n  font-family: \"{CUSTOM_FONT_FAMILY}\"\n  font-size: {}\n  \
+             line-height: {}\n",
+            CUSTOM_FONT_SIZE as i64, CUSTOM_LINE_HEIGHT as i64,
+        );
+        write(&path, &yaml);
+
+        let cfg = load_or_create(dir.path());
+        assert!(
+            !cfg.macos_option_as_alt,
+            "a config with no `macos-option-as-alt` key must default to false (back-compat)"
+        );
+        // The custom font fields must be preserved — proving the section parsed
+        // rather than falling back to defaults.
+        assert_eq!(
+            cfg.font_family, CUSTOM_FONT_FAMILY,
+            "back-compat: font_family preserved when macos-option-as-alt is absent"
+        );
+        assert_eq!(
+            cfg.font_size, CUSTOM_FONT_SIZE,
+            "back-compat: font_size preserved when macos-option-as-alt is absent"
+        );
+        assert_eq!(
+            cfg.line_height, CUSTOM_LINE_HEIGHT,
+            "back-compat: line_height preserved when macos-option-as-alt is absent"
+        );
+    }
+
+    #[test]
+    fn macos_option_as_alt_round_trips() {
+        // 1. An absent file is created with the defaults: the written YAML carries
+        //    the `macos-option-as-alt:` key and re-reads to false.
+        let dir = tempdir().expect("create temp dir");
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        let created = load_or_create(dir.path());
+        assert!(
+            !created.macos_option_as_alt,
+            "defaults-created config must have macos_option_as_alt false"
+        );
+        assert!(
+            read(&path).contains("macos-option-as-alt:"),
+            "the defaults-written YAML must serialize the `macos-option-as-alt:` key"
+        );
+        let reread = load_or_create(dir.path());
+        assert!(
+            !reread.macos_option_as_alt,
+            "re-reading the written defaults must round-trip macos_option_as_alt to false"
+        );
+
+        // 2. A hand-written `true` round-trips through the loader to `true`.
+        let vdir = tempdir().expect("create temp dir");
+        write(
+            &vdir.path().join(CONFIG_FILE_NAME),
+            &config_yaml_with_option_as_alt(true),
+        );
+        let cfg = load_or_create(vdir.path());
+        assert!(
+            cfg.macos_option_as_alt,
+            "hand-written `macos-option-as-alt: true` must load as true"
+        );
     }
 
     // =====================================================================

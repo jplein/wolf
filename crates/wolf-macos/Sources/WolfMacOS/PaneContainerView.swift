@@ -152,6 +152,17 @@ final class PaneContainerView: NSView {
   /// per-window font-size change can re-measure and reflow via `applyMetrics`.
   private var metrics: CellMetrics
 
+  /// Whether the Option key acts as Alt (`<M-…>` mappings) rather than composing
+  /// accented characters. When `false` (the default, option-as-option),
+  /// printable-candidate key presses route through `keyComposer` so dead-key
+  /// sequences (Option-u then u → ü) compose; when `true` (legacy option-as-alt)
+  /// they always take the existing `WolfKeyMap.translate` path.
+  private let optionAsAlt: Bool
+
+  /// The dead-key / Option-character composer (Carbon `UCKeyTranslate` with
+  /// persisted dead-key state). Used only in option-as-option mode.
+  private let keyComposer = KeyComposer()
+
   /// This view's bound nvim TABPAGE handle (the project/tabpage-per-view bind).
   /// Under the shared-nvim model a wake fires per PROJECT, but this container
   /// must only consume a refocus rebind once the snapshot reflects THIS view's
@@ -356,10 +367,13 @@ final class PaneContainerView: NSView {
   /// the view's `tabpageHandle` (the project/tabpage-per-view bind used to gate
   /// the refocus rebind). No panes exist until the first window grid appears on a
   /// wake.
-  init(handle: WolfCoreHandle, metrics: CellMetrics, tabpageHandle: Int64) {
+  init(
+    handle: WolfCoreHandle, metrics: CellMetrics, tabpageHandle: Int64, optionAsAlt: Bool
+  ) {
     self.handle = handle
     self.metrics = metrics
     self.controllerTabpageHandle = tabpageHandle
+    self.optionAsAlt = optionAsAlt
     self.cmdlineView = CmdlineView(metrics: metrics)
     self.completionPopupView = CompletionPopupView(metrics: metrics)
     self.toastView = ToastView(metrics: metrics)
@@ -647,6 +661,34 @@ final class PaneContainerView: NSView {
       return
     }
 
+    // Option-as-option (the default): route every printable-candidate key press
+    // through the dead-key composer so accented characters compose (Option-u then
+    // u → ü). The persisted `deadKeyState` carries composition across the two
+    // keystrokes; a plain key with no pending dead key composes to itself. Named
+    // keys, ctrl/meta combos, and legacy option-as-alt fall through to `translate`.
+    if KeyComposition.routesThroughComposer(
+      keyCode: event.keyCode,
+      ctrl: flags.contains(.control),
+      meta: flags.contains(.command),
+      optionAsAlt: optionAsAlt
+    ) {
+      let composed = keyComposer.compose(
+        keyCode: event.keyCode,
+        shift: flags.contains(.shift),
+        option: flags.contains(.option),
+        capsLock: flags.contains(.capsLock))
+      let events = KeyComposition.charEvents(for: composed)
+      // An empty result means a dead key is still pending (e.g. the first press of
+      // Option-u): consume the event WITHOUT sending or counting a keystroke.
+      if !events.isEmpty {
+        FrameMetrics.noteKeystroke()
+        for ev in events {
+          handle.send_key(ev)
+        }
+      }
+      return
+    }
+
     guard
       let ev = WolfKeyMap.translate(
         keyCode: event.keyCode,
@@ -662,6 +704,16 @@ final class PaneContainerView: NSView {
     // it reflects only keys actually delivered to Neovim.
     FrameMetrics.noteKeystroke()
     handle.send_key(ev)
+  }
+
+  /// Clears any pending dead-key composition when this pane loses first-responder
+  /// status (a focus/window change). Without this a half-typed dead key (e.g. the
+  /// first press of Option-u) would survive the focus switch and unexpectedly
+  /// commit an accent on the NEXT keystroke after refocus.
+  override func resignFirstResponder() -> Bool {
+    let resigned = super.resignFirstResponder()
+    keyComposer.reset()
+    return resigned
   }
 
   /// Click-to-focus AND position the cursor: focus the window of the pane under

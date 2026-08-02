@@ -491,6 +491,7 @@ void* __swift_bridge__$FfiConfig$font_family(void* self);
 double __swift_bridge__$FfiConfig$font_size(void* self);
 double __swift_bridge__$FfiConfig$line_height(void* self);
 uint8_t __swift_bridge__$FfiConfig$appearance(void* self);
+bool __swift_bridge__$FfiConfig$macos_option_as_alt(void* self);
 void* __swift_bridge__$wolf_ffi_load_config(void);
 void* __swift_bridge__$FfiState$windows(void* self);
 double __swift_bridge__$FfiWindowState$x(void* self);

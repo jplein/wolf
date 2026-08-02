@@ -837,6 +837,9 @@ mod ffi {
         // The resolved appearance mode as a discriminant (see the `appearance`
         // module: AUTO=0, DARK=1, LIGHT=2). Swift maps it via `AppearanceMode`.
         fn appearance(&self) -> u8;
+        // On macOS, whether the Option key acts as Alt (`<M-…>` mappings) rather
+        // than composing accented characters. Defaults to false (option-as-option).
+        fn macos_option_as_alt(&self) -> bool;
     }
 
     extern "Rust" {
@@ -1417,6 +1420,7 @@ pub struct FfiConfig {
     font_size: f64,
     line_height: f64,
     appearance: u8,
+    macos_option_as_alt: bool,
 }
 
 impl FfiConfig {
@@ -1444,6 +1448,13 @@ impl FfiConfig {
     pub fn appearance(&self) -> u8 {
         self.appearance
     }
+
+    /// On macOS, whether the Option key acts as Alt (`<M-…>` mappings) rather
+    /// than composing accented characters. Defaults to `false` (option-as-option).
+    #[must_use]
+    pub fn macos_option_as_alt(&self) -> bool {
+        self.macos_option_as_alt
+    }
 }
 
 /// Loads the resolved user configuration, reading — or creating with defaults —
@@ -1469,6 +1480,7 @@ pub fn wolf_ffi_load_config() -> FfiConfig {
         font_size: config.font_size,
         line_height: config.line_height,
         appearance,
+        macos_option_as_alt: config.macos_option_as_alt,
     }
 }
 
