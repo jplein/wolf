@@ -5,13 +5,21 @@
  * prettier-formatted. It owns three things:
  *
  *  1. The invisible position-marker rule (.wolf-src): a zero-size inline anchor
- *     the deferred scroll-sync JS will getElementById by its `wl-{line}-{col}`
- *     id. It must take NO layout space and never affect the rendered body, so it
- *     is an inline element clamped to zero width/height with hidden overflow.
+ *     that the macOS preview's cursor-follow scroll JS (WolfKeyMap's
+ *     PreviewScrollSeam) resolves by getElementById on its `wl-{line}-{col}` id
+ *     and then measures with getBoundingClientRect(). It must take NO layout
+ *     space and never affect the rendered body, so it is an inline element
+ *     clamped to zero width/height with hidden overflow.
  *     Its `font-size: 0` and `line-height: 0` are load-bearing: because the body
  *     now sets line-height as a LENGTH (see 3 below), a marker that lost its own
  *     `line-height: 0` would inherit a hard 24px and inject visible blank lines
- *     throughout the document. Do not touch this rule.
+ *     throughout the document. Its `visibility: hidden` is load-bearing for a
+ *     DIFFERENT reason and must NOT be "optimized" into `display: none`: a
+ *     visibility-hidden element still generates a box, so
+ *     getBoundingClientRect() reports a real position; a display-none element
+ *     generates no box and reports all zeros, which would silently collapse
+ *     every anchor to the top of the document and break the whole scheme with no
+ *     visible symptom in the rendered page. Do not touch this rule.
  *
  *  2. Structural layout (margins, code/table/blockquote framing) that a theme
  *     layers colors on top of.
@@ -182,8 +190,12 @@
  */
 
 /* Invisible per-line / per-100-column source markers. Zero-size, no layout
- * impact, never selectable — purely an anchor target for a future cursor-follow
- * scroll. */
+ * impact, never selectable — purely an anchor target for the cursor-follow
+ * scroll, whose JS (WolfKeyMap's PreviewScrollSeam) looks each one up by id and
+ * measures it with getBoundingClientRect(). `visibility: hidden` is therefore
+ * load-bearing and must NOT become `display: none`: a no-box element reports an
+ * all-zero rect, silently collapsing every anchor to the top of the document.
+ * See the header comment. */
 .wolf-src {
   display: inline;
   width: 0;

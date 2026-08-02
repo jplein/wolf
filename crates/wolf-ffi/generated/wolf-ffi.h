@@ -460,6 +460,8 @@ void* __swift_bridge__$FfiPreview$source_path(void* self);
 void* __swift_bridge__$FfiPreview$source_display_path(void* self);
 uint64_t __swift_bridge__$FfiPreview$source_tick(void* self);
 bool __swift_bridge__$FfiPreview$source_full_width(void* self);
+uint32_t __swift_bridge__$FfiPreview$source_cursor_line(void* self);
+uint32_t __swift_bridge__$FfiPreview$source_cursor_col(void* self);
 void* __swift_bridge__$FfiHistoryEntry$display(void* self);
 uint32_t __swift_bridge__$FfiHistoryEntry$index(void* self);
 bool __swift_bridge__$FfiHistoryEntry$is_current(void* self);

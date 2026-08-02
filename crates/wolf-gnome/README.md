@@ -151,6 +151,7 @@ The window, the file picker, the file-tree sidebar, and native split panes exist
 - HiDPI scale handling (the cell-measurement probe is 96-dpi).
 - IME / `IMContext` composition input.
 - Floating windows (`win_float_pos`) and windows opened by non-overridden paths (`:help`, quickfix, preview, `:diffsplit`) — see the split-pane known limitations in [`src/README.md`](src/README.md).
+- The whole **Markdown preview** pane. There is no WebKitGTK (or any other) preview surface in this shell at all — the only "preview" this crate mentions elsewhere is nvim's own `:preview` window — so the preview's **cursor-follow scroll-sync is macOS-only**. Nothing is needed here for it: core's new `Snapshot::markdown_cursors` field is additive with a `Default` impl and the cursor signal rides the existing notification path, so `wolf-gnome` keeps compiling untouched. Building a GTK preview pane would be the point at which a GTK port of the scroll-sync seam (`WolfKeyMap.PreviewScrollSeam`) becomes relevant.
 - A GTK **buffer-picker** overlay (parity with the macOS `BufferPickerView`, ⌘E). Deferred like the command-palette overlay: `wolf-gnome` still gets the `Command::BufferPicker` drain and the pure `wolf_core::rank_buffers` / `WolfCore::list_buffers` / `switch_buffer` API for free (it consumes `wolf-core` directly), but no GTK overlay is wired this change.
 
 ## Note on the GUI denylist

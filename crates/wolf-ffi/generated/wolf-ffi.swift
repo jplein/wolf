@@ -707,6 +707,14 @@ extension FfiPreviewRef {
     public func source_full_width() -> Bool {
         __swift_bridge__$FfiPreview$source_full_width(ptr)
     }
+
+    public func source_cursor_line() -> UInt32 {
+        __swift_bridge__$FfiPreview$source_cursor_line(ptr)
+    }
+
+    public func source_cursor_col() -> UInt32 {
+        __swift_bridge__$FfiPreview$source_cursor_col(ptr)
+    }
 }
 extension FfiPreview: Vectorizable {
     public static func vecOfSelfNew() -> UnsafeMutableRawPointer {

@@ -7,10 +7,10 @@
 //! its [`pulldown_cmark::Parser::into_offset_iter`], which yields each event paired
 //! with its SOURCE byte range — the basis of the forward-compatible marker scheme.
 //!
-//! ## The marker/anchor scheme (built now; JS + cursor signal deferred)
+//! ## The marker/anchor scheme (and the cursor-follow scroll that consumes it)
 //!
 //! The emitted HTML carries invisible per-line and per-100-column position markers
-//! whose ids encode a position in the ORIGINAL Markdown source, so a later
+//! whose ids encode a position in the ORIGINAL Markdown source, so the front-end's
 //! cursor-follow scroll can find and reveal the line the user is editing. Each
 //! marker is an empty inline `<span class="wolf-src" id="wl-{L}-{C}"
 //! data-line="{L}" data-col="{C}"></span>` (see [`marker_span`]): `L` is the
@@ -47,15 +47,34 @@
 //! REQUIRED by the scheme and become meaningful once inline-level anchoring is
 //! added.
 //!
-//! ## Forward-compat contract (designed, NOT built here)
+//! ## Who consumes the markers (all of it built, all of it OUTSIDE this module)
 //!
-//! The follow-up (out of scope for this change) adds (1) a Neovim → web-view
-//! cursor-position `(line, col)` signal — which must convert nvim's BYTE column to
-//! a CHARACTER column before looking up `#wl-{line}-{col}` (OD4) — and (2) JS that
-//! on cursor move finds `#wl-{line}-{col}` (falling back to `#wl-{line}-0`) and
-//! scrolls it into view only when it nears / crosses a viewport-edge threshold.
-//! None of that is implemented here; this module only guarantees the markers are
-//! present in the emitted HTML from day one.
+//! The cursor-follow scroll is live. The chain, end to end:
+//!
+//! 1. `runtime/nvim/init.lua` emits the `wolf_markdown_cursor` notification
+//!    (`[source_bufnr, line, char_col]`) from markdown-guarded `CursorMoved` /
+//!    `CursorMovedI` / `BufEnter` / `BufWinEnter` autocmds. `line` is a 1-based
+//!    `line('.')`; `char_col` is `charcol('.') - 1`, which is ALREADY a 0-based
+//!    CHARACTER column (OD4) — `charcol()` is `col()`'s character-index twin, so
+//!    there is **no** byte→character conversion anywhere in the chain, and none is
+//!    needed. Do NOT add one, and do not switch the Lua side to `col('.')`: that
+//!    would silently mis-anchor every line containing a multibyte character.
+//! 2. [`crate::redraw`]'s `MARKDOWN_CURSOR_EVENT` / `apply_markdown_cursor` upserts
+//!    it into `Snapshot::markdown_cursors`, keyed by the SOURCE buffer number (the
+//!    same key as `markdown_ticks`). No `seq` bump.
+//! 3. `wolf-ffi` joins that cursor per preview window as
+//!    `FfiPreview::source_cursor_line()` / `source_cursor_col()`.
+//! 4. The macOS `WolfKeyMap.PreviewScrollSeam` builds the JS that resolves
+//!    `#wl-{line}-{col}` (column rounded DOWN to a multiple of
+//!    [`MARKER_COLUMN_STRIDE`]) → `#wl-{line}-0` → the nearest PRECEDING line's
+//!    marker → raw `scrollY`, and scrolls it into view only when it crosses a
+//!    viewport-edge threshold. It also captures the anchor's viewport offset before
+//!    a reload and restores it afterward, so typing does not jump the preview to the
+//!    top.
+//!
+//! This module's own guarantee is unchanged and is the whole contract it owes that
+//! chain: the markers are present in the emitted HTML, their ids are stable, and `C`
+//! is a CHARACTER column.
 //!
 //! ## Code-block syntax highlighting
 //!

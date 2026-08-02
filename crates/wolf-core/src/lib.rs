@@ -104,8 +104,9 @@ pub use recent_dirs::{RecentDirs, RECENT_DIRS_LIMIT};
 pub use redraw::WakeFn;
 pub use render::{
     Cell, Cmdline, CmdlineChunk, Cursor, CursorShape, DefaultColors, Grid, HighlightTable, HlAttr,
-    Message, ModeInfo, PreviewInfo, Pum, PumItem, ResolvedStyle, Rgb, SharedSnapshot, Snapshot,
-    TabFiles, ThemeColors, ThemeGroup, Toast, ToastChunk, Viewport, WinBuffer, WinInfo,
+    MarkdownCursor, Message, ModeInfo, PreviewInfo, Pum, PumItem, ResolvedStyle, Rgb,
+    SharedSnapshot, Snapshot, TabFiles, ThemeColors, ThemeGroup, Toast, ToastChunk, Viewport,
+    WinBuffer, WinInfo,
 };
 pub use search::{SearchMatch, SearchOptions, SearchReadGuard, SearchSession};
 pub use search_tree::{context_window, file_label, project, ContextWindow, SearchFileGroup};

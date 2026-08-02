@@ -5,6 +5,20 @@
 //! `render_preview(source_bufnr)` HTML pull, and the fact that the preview's
 //! scratch buffer surfaces in the buffer picker as `Preview: <basename>` (OD1).
 //!
+//! It ALSO covers the scroll-sync CURSOR join: `WolfCoreHandle::previews()` looks
+//! each row's `source_bufnr` up in `wolf_core::Snapshot::markdown_cursors` and hands
+//! the result to `FfiPreview::source_cursor_line()` / `source_cursor_col()`, with an
+//! `unwrap_or_default()` producing the `line == 0` "cursor unknown" sentinel for a
+//! source that has never reported one. That join is otherwise covered only by
+//! compilation, so the last two tests in this file drive it end to end.
+//!
+//! NOTE on ground truth: `WolfCoreHandle`'s inner `WolfCore` is private, so an FFI
+//! test cannot read `Snapshot::markdown_cursors` directly to compare against. The
+//! ground truth used here is therefore the KEYSTROKES — an absolute, normalized
+//! cursor position driven into the source buffer — which is a strictly stronger,
+//! end-to-end assertion: a broken join reports the `(0, 0)` default (or another
+//! buffer's position) rather than the position we just navigated to.
+//!
 //! This drives the RUST half against a REAL, hermetic Neovim — NO mocks, per the
 //! project testing policy. It is modeled on `tests/buffer_picker.rs` and
 //! `tests/pane_status.rs`, reusing `tests/common/mod.rs` and the same loud
@@ -57,6 +71,34 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// `WinEnter`/`BufEnter` autocmd to re-emit `wolf_current_file` (so
 /// `is_markdown_active()` reflects the newly-focused window).
 const CYCLE_SETTLE: Duration = Duration::from_millis(150);
+
+/// How long to keep re-reading `previews()` while asserting that a cursor did NOT
+/// appear for a source buffer that has never reported one. Generous, so a late
+/// out-of-band `wolf_markdown_cursor` cannot sneak past the NEGATIVE assertion.
+const NEGATIVE_SETTLE: Duration = Duration::from_millis(1500);
+
+/// The `line` an `FfiPreview` reports until the first `wolf_markdown_cursor` lands
+/// for its source buffer: the "cursor unknown" sentinel produced by the
+/// `unwrap_or_default()` in `WolfCoreHandle::previews()`'s `markdown_cursors` join.
+/// The front-end reads it as "do not scroll".
+const CURSOR_UNKNOWN: (u32, u32) = (0, 0);
+
+/// A Markdown fixture whose SECOND line is a plain, non-empty paragraph, so `gg0`,
+/// `j` and `l` land on predictable ABSOLUTE (line, column) pairs rather than on
+/// wherever nvim happened to leave the cursor.
+const CURSOR_DOC: &str = "# Alpha Heading\nalpha bravo\ncharlie\n";
+
+/// The `(line, col)` [`CURSOR_DOC`] reports after `gg0`: the 1-based FIRST line and
+/// the 0-based FIRST column.
+const CURSOR_AT_START: (u32, u32) = (1, 0);
+
+/// The `(line, col)` after one `j` from [`CURSOR_AT_START`] — down one hard line,
+/// column retained.
+const CURSOR_AFTER_J: (u32, u32) = (2, 0);
+
+/// The `(line, col)` after one further `l` — right one CHARACTER, so the 0-BASED
+/// column is 1 (a byte/1-based regression would report 2).
+const CURSOR_AFTER_L: (u32, u32) = (2, 1);
 
 /// A `max` large enough that the assembled buffer set is never truncated.
 const RANKED_MAX: usize = 100;
@@ -183,6 +225,26 @@ fn wait_for_markdown_active(handle: &wolf_ffi::WolfCoreHandle, target: bool, des
     );
 }
 
+/// Blocks until `handle.is_preview_active()` equals `target`, then asserts it.
+///
+/// This is the deterministic barrier after `open_preview("split_right")`, which
+/// leaves the freshly split PREVIEW pane current. Without it, a following
+/// `focus_markdown_source` can read a STALE `is_markdown_active() == true` (the
+/// notification for the new active pane not having landed yet), return without
+/// cycling, and leave subsequent motions landing in the preview pane.
+fn wait_for_preview_active(handle: &wolf_ffi::WolfCoreHandle, target: bool, desc: &str) {
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    let mut got = handle.is_preview_active();
+    while Instant::now() < deadline {
+        got = handle.is_preview_active();
+        if got == target {
+            return;
+        }
+        sleep(POLL_INTERVAL);
+    }
+    assert_eq!(got, target, "is_preview_active() should be {target} ({desc})");
+}
+
 /// Blocks until exactly `n` live editor window grids exist, then asserts it.
 fn wait_for_window_count(handle: &wolf_ffi::WolfCoreHandle, n: usize, desc: &str) {
     let deadline = Instant::now() + FLUSH_TIMEOUT;
@@ -222,6 +284,21 @@ fn tick_for_source(previews: &[FfiPreview], bufnr: i64) -> Option<u64> {
         .iter()
         .find(|p| p.source_bufnr() == bufnr)
         .map(FfiPreview::source_tick)
+}
+
+/// The `(source_cursor_line(), source_cursor_col())` pair of the preview row whose
+/// `source_bufnr()` is `bufnr`, or `None` when no such row is present.
+///
+/// Looking the pair up through the SAME `source_bufnr` key that
+/// `WolfCoreHandle::previews()` joins `Snapshot::markdown_cursors` on is what makes
+/// the cursor assertions a test OF that join: a join keyed on anything else (the
+/// preview scratch bufnr, the window handle) falls through `unwrap_or_default()` and
+/// yields [`CURSOR_UNKNOWN`] instead of the position the test navigated to.
+fn cursor_for_source(previews: &[FfiPreview], bufnr: i64) -> Option<(u32, u32)> {
+    previews
+        .iter()
+        .find(|p| p.source_bufnr() == bufnr)
+        .map(|p| (p.source_cursor_line(), p.source_cursor_col()))
 }
 
 /// Blocks (bounded by [`FLUSH_TIMEOUT`]) until the core's `current_file()` ends
@@ -1080,6 +1157,257 @@ fn preview_renders_untitled_buffer() {
         "render_preview must contain the heading typed into the Untitled.md buffer \
          ({HEADING_TEXT:?}): {html}"
     );
+
+    handle.shutdown();
+    drop(tmp);
+}
+
+#[test]
+fn preview_carries_the_source_buffers_cursor() {
+    // THE scroll-sync FFI join, end to end: `WolfCoreHandle::previews()` looks each
+    // row's `source_bufnr` up in `wolf_core::Snapshot::markdown_cursors` and exposes
+    // the result as `FfiPreview::source_cursor_line()` / `source_cursor_col()`. This
+    // is the one layer of the cursor-follow feature that is otherwise covered only
+    // by compilation: the Lua -> core half is pinned by
+    // `//crates/wolf-core:markdown_cursor` and the Swift arithmetic by
+    // `PreviewScrollSeamTests`, but nothing else witnesses the JOIN.
+    //
+    // The contract pinned here is exactly the one the front-end consumes: LINE is
+    // 1-based (matching the `wl-{L}-{C}` marker scheme's `L`), COLUMN is a 0-based
+    // CHARACTER column (its `C`), and both describe the row's OWN SOURCE buffer.
+    //
+    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    let Some(nvim_bin) = common::nvim_bin_or_skip() else {
+        return;
+    };
+    std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
+
+    let init_lua = common::init_lua_path();
+
+    let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
+    std::fs::write(tmp.path().join("alpha.md"), CURSOR_DOC).expect("failed to write alpha.md");
+
+    let handle = wolf_ffi_start(
+        init_lua.to_string_lossy().into_owned(),
+        tmp.path().to_string_lossy().into_owned(),
+        common::DEFAULT_COLS,
+        common::DEFAULT_ROWS,
+    )
+    .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
+
+    // --- 1. Attach; open alpha.md as the source ------------------------------
+    wait_for_attach(&handle);
+    send_ex_command(&handle, ":e alpha.md");
+    wait_for_markdown_active(&handle, true, "after :e alpha.md");
+    // Real switch barrier: the startup buffer is itself a markdown `Untitled.md`, so
+    // `wait_for_markdown_active(true)` returns IMMEDIATELY and cannot witness the
+    // `:e alpha.md`. Wait until alpha.md is genuinely the ACTIVE buffer before the
+    // SYNC `open_preview` races ahead of the buffered `:e`.
+    wait_for_current_file(&handle, "alpha.md");
+
+    // --- 2. Split-right preview ----------------------------------------------
+    let preview_bufnr = handle.open_preview("split_right".to_string());
+    assert!(
+        preview_bufnr > 0,
+        "open_preview(\"split_right\") on a markdown buffer must return a valid \
+         preview bufnr (> 0), got {preview_bufnr}"
+    );
+    wait_for_window_count(&handle, TWO_PANES, "after split-right preview");
+    // Deterministic barrier before cycling back: the split leaves the PREVIEW pane
+    // current, and `focus_markdown_source` would otherwise be able to read a stale
+    // `is_markdown_active() == true` and skip the cycle.
+    wait_for_preview_active(
+        &handle,
+        true,
+        "the split-right placement leaves the new preview pane current",
+    );
+
+    let previews = wait_for_previews(&handle, "one alpha.md preview", |p| {
+        p.iter().any(|row| row.source_name() == "alpha.md")
+    });
+    let alpha_bufnr = previews
+        .iter()
+        .find(|row| row.source_name() == "alpha.md")
+        .expect("a preview row for alpha.md must exist")
+        .source_bufnr();
+    assert!(
+        alpha_bufnr > 0,
+        "the preview row must carry alpha.md's real source bufnr (> 0), got {alpha_bufnr}"
+    );
+
+    // --- 3. Drive the SOURCE buffer's cursor to an ABSOLUTE position ---------
+    // Back to the source pane first, so the motions move the SOURCE cursor rather
+    // than the (nomodifiable, guarded) preview scratch's.
+    focus_markdown_source(&handle);
+    handle.send_key(char_key('g'));
+    handle.send_key(char_key('g'));
+    handle.send_key(char_key('0'));
+
+    let previews = wait_for_previews(
+        &handle,
+        "the joined preview cursor to settle at line 1, column 0 after `gg0`",
+        |p| cursor_for_source(p, alpha_bufnr) == Some(CURSOR_AT_START),
+    );
+    assert_eq!(
+        cursor_for_source(&previews, alpha_bufnr),
+        Some(CURSOR_AT_START),
+        "the preview row must report its SOURCE buffer's cursor as a 1-based line and \
+         a 0-based column — a broken markdown_cursors join would fall through \
+         unwrap_or_default() to {CURSOR_UNKNOWN:?}"
+    );
+
+    // --- 4. A pure motion moves the JOINED cursor with it --------------------
+    handle.send_key(char_key('j'));
+    let previews = wait_for_previews(
+        &handle,
+        "the joined preview cursor line to advance to 2 after `j`",
+        |p| cursor_for_source(p, alpha_bufnr).is_some_and(|(line, _)| line == CURSOR_AFTER_J.0),
+    );
+    assert_eq!(
+        cursor_for_source(&previews, alpha_bufnr),
+        Some(CURSOR_AFTER_J),
+        "a single `j` must advance the joined LINE by one hard line and retain the \
+         column — this is the signal that makes the preview follow the cursor at all"
+    );
+
+    handle.send_key(char_key('l'));
+    let previews = wait_for_previews(
+        &handle,
+        "the joined preview cursor column to advance to 1 after `l`",
+        |p| cursor_for_source(p, alpha_bufnr) == Some(CURSOR_AFTER_L),
+    );
+    assert_eq!(
+        cursor_for_source(&previews, alpha_bufnr),
+        Some(CURSOR_AFTER_L),
+        "one `l` from column 0 must report the 0-BASED column 1 (not the 1-based 2) — \
+         the front-end rounds this DOWN to a marker stride to build the `wl-{{L}}-{{C}}` \
+         anchor id, so an off-by-one here silently mis-anchors every scroll"
+    );
+
+    // --- 5. The join keys on the SOURCE bufnr, not the preview scratch -------
+    // No row's `source_bufnr()` is the scratch buffer, so a lookup by the scratch's
+    // number finds nothing at all — which is what makes step 3/4's values provably
+    // the SOURCE buffer's cursor rather than anything the preview pane reported.
+    assert!(
+        cursor_for_source(&previews, preview_bufnr).is_none(),
+        "the preview SCRATCH bufnr {preview_bufnr} must never appear as a row's \
+         source_bufnr(); previews were {previews:?}"
+    );
+
+    handle.shutdown();
+    drop(tmp);
+}
+
+#[test]
+fn preview_cursor_defaults_to_zero_when_unreported() {
+    // The "cursor unknown" sentinel: `WolfCoreHandle::previews()`'s
+    // `markdown_cursors` join ends in `unwrap_or_default()`, so a preview whose
+    // SOURCE buffer has never reported a cursor reports `(0, 0)`. The front-end
+    // gates on that (`CursorPos.isKnown` is `line > 0`) and refuses to scroll — so
+    // if the sentinel ever became, say, `1`, every such preview would silently jump
+    // to the top of the document instead of staying put.
+    //
+    // `preview_file` is the deterministic way to reach that state: it makes the
+    // linked file a source via a background `bufadd`/`bufload` and binds only the
+    // PREVIEW SCRATCH into the window, so the linked source never becomes current
+    // and never fires the cursor autocmds (`emit_cursor` bails on any buffer that is
+    // not `nvim_get_current_buf()`, and the scratch is excluded by the explicit
+    // `b:wolf_preview_source` guard). That is exactly why the plan deliberately does
+    // NOT add a cursor re-emit to `wolf_preview_file`.
+    //
+    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    let Some(nvim_bin) = common::nvim_bin_or_skip() else {
+        return;
+    };
+    std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
+
+    let init_lua = common::init_lua_path();
+
+    let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
+    std::fs::write(tmp.path().join("alpha.md"), CURSOR_DOC).expect("failed to write alpha.md");
+    std::fs::write(
+        tmp.path().join("beta.md"),
+        "# Beta Heading\n\nAnother paragraph.\n",
+    )
+    .expect("failed to write beta.md");
+    // Absolute, as WebKit would resolve a `file://` link; Lua does NO relative
+    // resolution. `tmp.path()` is already absolute.
+    let beta_path = tmp.path().join("beta.md").to_string_lossy().into_owned();
+
+    let handle = wolf_ffi_start(
+        init_lua.to_string_lossy().into_owned(),
+        tmp.path().to_string_lossy().into_owned(),
+        common::DEFAULT_COLS,
+        common::DEFAULT_ROWS,
+    )
+    .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
+
+    // --- 1. Attach; open alpha.md and split-right preview it -----------------
+    wait_for_attach(&handle);
+    send_ex_command(&handle, ":e alpha.md");
+    wait_for_markdown_active(&handle, true, "after :e alpha.md");
+    wait_for_current_file(&handle, "alpha.md");
+
+    let preview_bufnr = handle.open_preview("split_right".to_string());
+    assert!(
+        preview_bufnr > 0,
+        "open_preview(\"split_right\") on a markdown buffer must return a valid \
+         preview bufnr (> 0), got {preview_bufnr}"
+    );
+    wait_for_window_count(&handle, TWO_PANES, "after split-right preview");
+
+    // --- 2. POSITIVE control: alpha.md's preview DOES carry a known cursor ---
+    // Without this the negative assertion below would be vacuous — a dead cursor
+    // pipeline would also report the sentinel.
+    let previews = wait_for_previews(
+        &handle,
+        "alpha.md's preview row to carry a KNOWN cursor (line >= 1)",
+        |p| {
+            p.iter()
+                .any(|row| row.source_name() == "alpha.md" && row.source_cursor_line() >= 1)
+        },
+    );
+    let preview_win = previews
+        .iter()
+        .find(|row| row.source_name() == "alpha.md")
+        .expect("a preview row for alpha.md must exist")
+        .win();
+    assert!(
+        preview_win > 0,
+        "the alpha.md preview must carry a real preview WINDOW handle (> 0), got {preview_win}"
+    );
+
+    // --- 3. Repoint that window at beta.md, which has NO reported cursor -----
+    let beta_bufnr = handle.preview_file(preview_win, beta_path);
+    assert!(
+        beta_bufnr > 0,
+        "preview_file(win, <abs beta.md>) must return beta.md's source bufnr (> 0), got {beta_bufnr}"
+    );
+    let previews = wait_for_previews(&handle, "the preview window now previews beta.md", |p| {
+        p.iter()
+            .any(|row| row.win() == preview_win && row.source_name() == "beta.md")
+    });
+    assert_eq!(
+        cursor_for_source(&previews, beta_bufnr),
+        Some(CURSOR_UNKNOWN),
+        "a preview whose SOURCE buffer has never reported a cursor must expose the \
+         `line == 0` unknown sentinel from the join's unwrap_or_default(), which is \
+         what makes the front-end leave the freshly bound preview's scroll position \
+         alone; previews were {previews:?}"
+    );
+
+    // --- 4. And it STAYS the sentinel (no late emit sneaks in) ---------------
+    let deadline = Instant::now() + NEGATIVE_SETTLE;
+    while Instant::now() < deadline {
+        let now = handle.previews();
+        assert_eq!(
+            cursor_for_source(&now, beta_bufnr),
+            Some(CURSOR_UNKNOWN),
+            "a background `bufadd`/`bufload` source is never CURRENT, so no \
+             wolf_markdown_cursor may ever land for it; previews were {now:?}"
+        );
+        sleep(POLL_INTERVAL);
+    }
 
     handle.shutdown();
     drop(tmp);
