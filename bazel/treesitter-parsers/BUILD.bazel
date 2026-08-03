@@ -58,3 +58,10 @@ sh_test(
     srcs = ["parsers_tree_test.sh"],
     data = [":parsers_tree"],
 )
+
+# This package's docs, for `//tools/lint:markdown`.
+filegroup(
+    name = "markdown_srcs",
+    srcs = ["README.md"],
+    visibility = ["//tools/lint:__pkg__"],
+)

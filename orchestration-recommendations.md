@@ -70,9 +70,7 @@ When a test depends on an external tool having an effect (input injection, a scr
 
 ## Recommendation 3 — the test-writer must state, per assertion, what it discriminates
 
-The best assertion messages in this codebase read like a decision tree: they name each way the test can fail and what each one implies. One from the relaunch smokes:
-
-> `Untitled.md` alone means NOTHING was restored; the three right names in the WRONG ORDER means the DFS zip is inverted; fewer than three names means the rebuild ran but produced the wrong topology.
+The best assertion messages in this codebase read like a decision tree: they name each way the test can fail and what each one implies. The relaunch smokes distinguish four outcomes in one message — the placeholder buffer alone means nothing was restored; the right names in the wrong order means the depth-first zip is inverted; too few names means the rebuild produced the wrong topology; and a look-alike fixture means the application reopened the first file it found rather than the saved one.
 
 Writing that forces the author to ask what else could produce a pass — which is exactly the question that catches fixture contamination and indistinguishable outcomes at authoring time rather than three units later. It also makes the eventual failure diagnosable without re-deriving the test's intent.
 
@@ -80,7 +78,7 @@ A specific sub-rule with a mechanical guard already in this repo: **when a test 
 
 **Change to `.claude/agents/test-writer.md`:**
 
-> Every assertion message must state what a failure would mean — ideally enumerating the distinguishable failure modes and what each implies. Before writing an assertion, ask what else could satisfy it besides the feature working, and either eliminate that path or assert against it explicitly. When asserting on a file's content, never name the file after the asserted term. Prefer assertions that include a discriminating negative (the expected value is present AND a specific look-alike is absent).
+> Every assertion message must state what a failure would mean — ideally enumerating the distinguishable failure modes and what each implies. Before writing an assertion, ask what else could satisfy it besides the feature working, and either eliminate that path or assert against it explicitly. When asserting on a file's content, never name the file after the asserted term. Prefer assertions that include a discriminating negative (the expected value is present and a specific look-alike is absent).
 
 ## Recommendation 4 — premises about third-party behaviour must be measured
 

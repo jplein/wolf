@@ -70,4 +70,30 @@ final class PreviewNavigationDelegate: NSObject, WKNavigationDelegate {
   func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
     container?.previewDidFinishLoad(win: win)
   }
+
+  /// A COMMITTED preview load failed. Purely bookkeeping: the container decrements
+  /// that window's outstanding-navigation COUNT so `PreviewScrollSeam.updateStrategy`
+  /// rule 2 does not pin this window on the full-load path forever (a safe
+  /// degradation, but a silent one). It is a count rather than a flag because two
+  /// navigations can straddle one page load, and WebKit reports the SUPERSEDED one as
+  /// a failure — so this callback is a routine part of the typing path, not an
+  /// error-only path.
+  func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error)
+  {
+    container?.previewDidFailLoad(win: win)
+  }
+
+  /// A preview load failed BEFORE committing (the far likelier half — the
+  /// provisional navigation never became the displayed document). Same bookkeeping;
+  /// the web view keeps showing the previous document either way, which is why the
+  /// container leaves its live-document descriptor alone on a failure. WebKit also
+  /// reports a `.cancel`led policy decision here, i.e. every clicked link, so the
+  /// container ignores a callback for which it counted no navigation.
+  func webView(
+    _ webView: WKWebView,
+    didFailProvisionalNavigation navigation: WKNavigation!,
+    withError error: any Error
+  ) {
+    container?.previewDidFailLoad(win: win)
+  }
 }

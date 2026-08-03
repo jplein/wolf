@@ -13,33 +13,42 @@
 //! further down follows the same principle.
 //!
 //! Behavior, not implementation, is asserted: a `>= 100`-character line yields a
-//! per-100-column
-//! marker `id="wl-{L}-100"`, a shorter line does not, every hard line yields a
-//! `wl-{L}-0` anchor, and none of these markers land inside a fenced code block.
+//! per-100-column marker `id="wl-{L}-100"`, a shorter line does not, every hard
+//! line yields a `wl-{L}-0` anchor, and none of these markers land inside a fenced
+//! code block.
+//!
+//! The two anchor tiers are both pinned here. A `wl-{L}-0` anchor is flushed
+//! immediately BEFORE its block's opening tag (so a multi-line paragraph collapses
+//! every one of its column-zero anchors to the block top, and their `data-line`
+//! values stay in ascending document order — the front-end's fallback sweep depends
+//! on that). A per-100-column anchor is placed INSIDE the block's rendered inline
+//! content, at its real position, EXCEPT inside a code block, an HTML block, a
+//! table or an image's alt text, where it keeps the block-top placement. See the
+//! section at the end of this file.
 //!
 //! ## Why a separate integration test file (not `markdown.rs`'s own `#[cfg(test)]`)
 //!
-//! `crates/wolf-core/src/markdown.rs` does not exist yet — the coder creates it,
-//! together with its own in-module `#[cfg(test)] mod tests`. Testing through the
-//! public surface here keeps file ownership clean (this file is the test-writer's
-//! alone; the coder never edits it) and pins the re-exported contract from
-//! `lib.rs`.
+//! `crates/wolf-core/src/markdown.rs` carries its own in-module
+//! `#[cfg(test)] mod tests` for the renderer's internals. Testing through the
+//! PUBLIC surface here keeps the two layers distinct and pins the re-exported
+//! contract from `lib.rs`: an internal refactor may move the in-module tests
+//! freely, but anything asserted here is a promise to callers outside the crate.
 //!
-//! ## Dependency on coder work
+//! ## Build wiring
 //!
-//! None of `render_html`, `PreviewTheme`, or `theme_css` exists yet: the coder adds
-//! the `markdown` module + re-exports in `crates/wolf-core/src/lib.rs`, AND (since
-//! every `crates/wolf-core/tests/*.rs` file has a matching `rust_test` target) adds
-//! a `//crates/wolf-core:markdown_render` `rust_test` target to
-//! `crates/wolf-core/BUILD.bazel` (a copy of the `pane_status_unit` stanza — a pure,
-//! nvim-free unit test, `srcs = ["tests/markdown_render.rs"]`,
-//! `crate_root = "tests/markdown_render.rs"`). This test file does NOT touch source
-//! or BUILD files and will not compile until the module lands — expected.
+//! Bazel does not auto-discover test files, so this one runs only because
+//! `crates/wolf-core/BUILD.bazel` declares the `//crates/wolf-core:markdown_render`
+//! `rust_test` target (`srcs = ["tests/markdown_render.rs"]`,
+//! `crate_root = "tests/markdown_render.rs"` — a pure, nvim-free unit test modeled
+//! on the `pane_status_unit` stanza). The in-module tests run under
+//! `//crates/wolf-core:wolf_core_lib_test`. A new `tests/*.rs` file added here
+//! without its own `rust_test` target is silently skipped on macOS even though
+//! `cargo test` would pick it up.
 //!
 //! This is a PURE render test: no Neovim, no filesystem, no wake — it needs no
 //! `WOLF_NVIM_BIN` and never skips.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use wolf_core::{
     code_blocks, render_html, render_html_with_highlights, theme_css, BlockHighlight,
@@ -1402,9 +1411,12 @@ fn every_vertical_dimension_is_on_the_baseline_grid() {
 //   body.wolf-markdown > *:first-child { margin-top: 0 }
 //   body.wolf-markdown > *:last-child  { margin-bottom: 0 }
 //
-// The scroll-sync `MarkerInjector` flushes its `<span class="wolf-src">` anchors
-// as raw HTML BEFORE each block's opening tag, and the `wl-1-0` anchor has byte
-// offset 0 — so the body's actual first child is an ANCHOR, not the first block:
+// The scroll-sync `MarkerInjector` flushes its column-ZERO `<span
+// class="wolf-src">` anchors as raw HTML BEFORE each block's opening tag (its
+// per-100-column anchors go inside the block's inline content instead, which is
+// irrelevant here — they are never direct children of the body), and the
+// `wl-1-0` anchor has byte offset 0 — so the body's actual first child is an
+// ANCHOR, not the first block:
 //
 //   <body class="wolf-markdown"><span class="wolf-src" id="wl-1-0" …></span><h1 …>
 //
@@ -2064,9 +2076,11 @@ fn first_child_margin_reset_survives_a_multi_anchor_leading_run() {
     // The same outcome as the test above, but with a leading anchor run LONGER
     // THAN ONE. Leading blank lines advance the first block's source line past
     // 0, so the renderer flushes a marker per skipped line before the opening
-    // <h1>. (A heading past 100 columns is the other trigger.) Nothing about
-    // this is exotic — a document that opens with a blank line is ordinary — so
-    // the reset must hold for a run of ANY length, not just one.
+    // <h1>. Blank lines are the only way to stack a leading run: a heading past
+    // 100 columns does not, because its per-100-column anchors are placed inside
+    // the <h1> rather than before it. Nothing about this is exotic — a document
+    // that opens with a blank line is ordinary — so the reset must hold for a run
+    // of any length, not just one.
     let html = render_html(
         "\n\n# Title\n\nBody.\n",
         PreviewTheme::Default,
@@ -2089,9 +2103,10 @@ fn first_child_margin_reset_survives_a_multi_anchor_leading_run() {
         "fixture sanity: this test only means something if MORE THAN ONE anchor \
          precedes the opening block, and this source produced {idx}: [{}].\n\n\
          If marker emission changed so leading blank lines no longer stack \
-         anchors, pick another source that does stack them (a heading longer \
-         than 100 columns) rather than weakening this assertion — the point is \
-         to cover leading runs of arbitrary length.",
+         anchors, pick another source that does stack them (NOT a heading \
+         longer than 100 columns — those anchors are placed inside the <h1> \
+         now) rather than weakening this assertion — the point is to cover \
+         leading runs of arbitrary length.",
         describe(&children)
     );
 
@@ -2226,5 +2241,726 @@ fn scroll_sync_anchors_stay_zero_sized() {
         decls.get("height").and_then(|v| px(v)),
         Some(0),
         "`.wolf-src` must keep `height: 0`: {decls:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Inline-level anchoring for the per-100-column markers.
+//
+// Reported symptom: "if a single paragraph is very long and a user is typing at
+// the end, it is the beginning of the paragraph that is in view, not the end."
+// The per-100-column markers used to be flushed before the block's opening tag
+// along with the per-line ones, so every one of them measured to the paragraph's
+// top and cursor-follow always revealed the paragraph's start.
+//
+// A block's interior `col != 0` markers are now DEFERRED past the opening tag and
+// placed at their real position in the rendered inline flow. Column-zero markers
+// keep their block-top placement (the front-end's tier-4 sweep filters on
+// `[data-col="0"]` and depends on their document order), and the placement is
+// suppressed inside code blocks, HTML blocks, tables and image alt text.
+//
+// These tests use the PUBLIC surface only, like the rest of this file.
+// ---------------------------------------------------------------------------
+
+/// Number of `"lorem ipsum dolor "` (18-character) repeats that make the
+/// regression fixture's paragraph: 30 × 18 = 540 characters on ONE hard line, so
+/// it earns interior anchors at columns 100, 200, 300, 400 and 500.
+const REGRESSION_PARAGRAPH_REPEATS: usize = 30;
+
+/// The `id="wl-…"` values in the document, in document order.
+///
+/// A crude scanner, legitimate for the same reason [`body_children`]'s is: the
+/// anchor markup is a fixed shape emitted by this crate.
+///
+/// LOAD-BEARING ASSUMPTION: it scans the WHOLE document, so it relies on the
+/// `<style>` block containing no `id="`. That is true today but is not enforced
+/// anywhere — an ID selector written as an attribute selector
+/// (`[id="wl-1-0"] { … }`) in `base.css` or a theme would be picked up as a
+/// marker id and this helper would report anchors that do not exist. The
+/// `embedded_stylesheets_carry_no_markup_like_text` guard in `markdown.rs` does
+/// NOT cover this needle — it only rejects `<`-prefixed sequences. If a
+/// stylesheet ever needs such a selector, restrict this scan to the body first.
+fn marker_ids_in_document_order(html: &str) -> Vec<String> {
+    const NEEDLE: &str = "id=\"wl-";
+    let mut ids = Vec::new();
+    let mut rest = html;
+    while let Some(at) = rest.find(NEEDLE) {
+        let after = &rest[at + "id=\"".len()..];
+        let end = after
+            .find('"')
+            .unwrap_or_else(|| panic!("an anchor id must be closed by a quote: {after}"));
+        ids.push(after[..end].to_string());
+        rest = &after[end..];
+    }
+    ids
+}
+
+/// The `data-line` of every `data-col="0"` anchor, in document order.
+///
+/// LOAD-BEARING ASSUMPTION: like [`marker_ids_in_document_order`], this scans the
+/// WHOLE document and relies on the `<style>` block containing no `data-line="`.
+/// That is a REAL risk rather than a theoretical one: the front-end already
+/// selects on `.wolf-src[data-col="0"]`, so mirroring that selector into
+/// `base.css` is a plausible future edit, and a `[data-line="…"]` rule alongside
+/// it would be parsed here as an anchor. The
+/// `embedded_stylesheets_carry_no_markup_like_text` guard in `markdown.rs` does
+/// NOT cover this needle. If such a selector is ever added, restrict this scan to
+/// the body first.
+fn column_zero_marker_lines(html: &str) -> Vec<u32> {
+    const NEEDLE: &str = "data-line=\"";
+    let mut lines = Vec::new();
+    let mut rest = html;
+    while let Some(at) = rest.find(NEEDLE) {
+        let after = &rest[at + NEEDLE.len()..];
+        let end = after
+            .find('"')
+            .unwrap_or_else(|| panic!("a data-line attribute must be closed: {after}"));
+        let line: u32 = after[..end]
+            .parse()
+            .unwrap_or_else(|_| panic!("a data-line must be numeric: {}", &after[..end]));
+        let tail = &after[end + 1..];
+        if tail.starts_with(" data-col=\"0\"") {
+            lines.push(line);
+        }
+        rest = tail;
+    }
+    lines
+}
+
+/// The marker ids the SCHEME predicts for `source`, recomputed here from the
+/// documented rule rather than read out of the implementation: `wl-{L}-0` for
+/// every hard line, plus `wl-{L}-{k*100}` for every multiple of
+/// [`COLUMN_STRIDE`] strictly less than the line's CHARACTER length.
+fn expected_marker_ids(source: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    for (idx, line) in source.split('\n').enumerate() {
+        let line_no = idx as u32 + 1;
+        ids.push(format!("wl-{line_no}-0"));
+
+        let char_len = line.chars().count() as u32;
+        let mut col = COLUMN_STRIDE;
+        while col < char_len {
+            ids.push(format!("wl-{line_no}-{col}"));
+            col += COLUMN_STRIDE;
+        }
+    }
+    ids
+}
+
+/// A document exercising every placement path at once: a heading, a very long
+/// single-line paragraph, a list with a long item, a table with a long cell, a
+/// fenced code block with a long line, an image with long alt text, and a
+/// trailing newline (which leaves a final empty hard line).
+fn mixed_marker_fixture() -> String {
+    let long_para = "lorem ipsum dolor ".repeat(REGRESSION_PARAGRAPH_REPEATS);
+    let long_item = "list word ".repeat(15);
+    let long_cell = "w".repeat(130);
+    let long_code = "z".repeat(150);
+    let long_alt = "alt word ".repeat(15);
+
+    let mut source = String::new();
+    source.push_str("# Title\n\n");
+    source.push_str(&long_para);
+    source.push_str("\n\n- item one\n- ");
+    source.push_str(&long_item);
+    source.push_str("\n\n| a | b |\n| --- | --- |\n| ");
+    source.push_str(&long_cell);
+    source.push_str(" | y |\n\n```text\n");
+    source.push_str(&long_code);
+    source.push_str("\n```\n\n![");
+    source.push_str(&long_alt);
+    source.push_str("](pic.png)\n");
+    source
+}
+
+#[test]
+fn long_single_line_paragraph_anchors_inside_the_paragraph() {
+    // THE regression test for the reported bug. Hard line 3 is one 540-character
+    // paragraph (`"lorem ipsum dolor "` is 18 characters). Its `wl-3-0` anchor
+    // keeps the block-top placement, but `wl-3-100`, `wl-3-200` and `wl-3-300`
+    // must now sit INSIDE the <p>, in source order, so a cursor deep in the line
+    // resolves to a rect deep in the rendered paragraph.
+    let paragraph = "lorem ipsum dolor ".repeat(REGRESSION_PARAGRAPH_REPEATS);
+    assert!(
+        paragraph.chars().count() > 3 * COLUMN_STRIDE as usize,
+        "fixture sanity: the paragraph must clear three strides"
+    );
+    let source = format!("# Title\n\n{paragraph}");
+
+    let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+
+    let p_open = html
+        .find("<p>")
+        .unwrap_or_else(|| panic!("the long line must render one <p>: {html}"));
+    let p_close = html
+        .find("</p>")
+        .unwrap_or_else(|| panic!("the <p> must be closed: {html}"));
+
+    let zero = html
+        .find(&marker_id(3, 0))
+        .unwrap_or_else(|| panic!("missing the `wl-3-0` anchor: {html}"));
+    assert!(
+        zero < p_open,
+        "the column-ZERO anchor must keep its block-top placement: `wl-3-0` at \
+         {zero} must precede the <p> at {p_open}: {html}"
+    );
+
+    let mut previous = p_open;
+    for stride in 1..=3u32 {
+        let col = stride * COLUMN_STRIDE;
+        let idx = html
+            .find(&marker_id(3, col))
+            .unwrap_or_else(|| panic!("missing the `wl-3-{col}` anchor: {html}"));
+        assert!(
+            previous < idx && idx < p_close,
+            "REGRESSION: the `wl-3-{col}` anchor (at {idx}) must sit INSIDE the \
+             paragraph's inline content, after the previous anchor (at {previous}) \
+             and before the </p> (at {p_close}).\n\n\
+             When the per-100-column anchors all collapse to the paragraph's top \
+             instead, the preview reveals the START of the paragraph while the \
+             user is typing at its END — the exact reported symptom: `#wl-3-{col}` \
+             resolves, but its rect is the paragraph's top, so cursor-follow \
+             scrolls the wrong wrapped visual line into view.\n\n{html}"
+        );
+        previous = idx;
+    }
+}
+
+#[test]
+fn inline_marker_never_lands_inside_a_fenced_code_block() {
+    // Hard line 4 is a 200-character code line, so it earns a `wl-4-100` marker
+    // whose byte offset is inside the fence. Inside a fenced block a single Text
+    // event can span a whole line INCLUDING its newline, so without the exclusion
+    // that marker would split the rendered code.
+    let code_line = "x".repeat(2 * COLUMN_STRIDE as usize);
+    let source = format!("# H\n\n```\n{code_line}\ncode two\n```\n");
+
+    let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+
+    let pre_start = html
+        .find("<pre")
+        .unwrap_or_else(|| panic!("missing <pre> for the fenced code block: {html}"));
+    let pre_end = html
+        .find("</pre>")
+        .unwrap_or_else(|| panic!("missing </pre>: {html}"));
+    let inside = &html[pre_start..pre_end];
+    assert!(
+        !inside.contains("wolf-src"),
+        "no `wolf-src` anchor may be split into <pre><code>…: {inside}"
+    );
+    assert!(
+        !inside.contains("wl-"),
+        "no `wl-` anchor id may appear inside <pre><code>…: {inside}"
+    );
+    assert!(
+        html.contains(&marker_id(4, COLUMN_STRIDE)),
+        "the code line's `wl-4-100` anchor must still EXIST outside the <pre> \
+         (excluded from the block, never dropped): {html}"
+    );
+}
+
+#[test]
+fn inline_marker_never_lands_inside_a_highlighted_code_block() {
+    // The highlighted path: `CodeHighlighter` rewrites the block interior into one
+    // inline-HTML event but keeps the real `Start`/`End(CodeBlock)`, so the
+    // exclusion must still bracket the block — and the `<pre><code
+    // class="language-…">` wrapper must be untouched.
+    const HIGHLIGHT_END_COL: u32 = 10;
+    let code_line = "x".repeat(2 * COLUMN_STRIDE as usize);
+    let source = format!("# H\n\n```rust\n{code_line}\ncode two\n```\n");
+    let block = BlockHighlight {
+        spans: vec![HighlightSpan {
+            row: 0,
+            start_col: 0,
+            end_col: HIGHLIGHT_END_COL,
+            style: HighlightStyle {
+                color: Some(0x0000_FF00),
+                bold: false,
+                italic: false,
+                underline: false,
+            },
+        }],
+    };
+
+    let html = render_html_with_highlights(
+        &source,
+        PreviewTheme::Default,
+        WidthMode::Full,
+        &[Some(block)],
+    );
+
+    let pre_start = html
+        .find("<pre")
+        .unwrap_or_else(|| panic!("missing <pre> for the highlighted block: {html}"));
+    let pre_end = html
+        .find("</pre>")
+        .unwrap_or_else(|| panic!("missing </pre>: {html}"));
+    let inside = &html[pre_start..pre_end];
+    assert!(
+        !inside.contains("wolf-src"),
+        "no `wolf-src` anchor may land inside a HIGHLIGHTED <pre><code>: {inside}"
+    );
+    assert!(
+        !inside.contains("wl-"),
+        "no `wl-` anchor id may appear inside a HIGHLIGHTED <pre><code>: {inside}"
+    );
+    assert!(
+        html.contains(r#"class="language-rust""#),
+        "the highlighted block must keep its `class=\"language-rust\"`: {html}"
+    );
+    assert!(
+        html.contains(&marker_id(4, COLUMN_STRIDE)),
+        "the code line's `wl-4-100` anchor must still EXIST outside the <pre>: {html}"
+    );
+}
+
+#[test]
+fn image_alt_attribute_never_receives_a_marker() {
+    // `"alt word "` is 9 characters, so the alt text spans source bytes 2..182 and
+    // character column 100 falls well inside it. pulldown-cmark builds the `alt`
+    // attribute by consuming the image's inner events: it ESCAPES text into the
+    // attribute and DROPS raw HTML outright — so a marker leaking in would either
+    // corrupt `alt="…"` or vanish from the document entirely.
+    let source = format!("![{}](i.png)", "alt word ".repeat(20));
+    let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+
+    let img_start = html
+        .find("<img")
+        .unwrap_or_else(|| panic!("missing the <img> element: {html}"));
+    let img_len = html[img_start..]
+        .find("/>")
+        .unwrap_or_else(|| panic!("the <img> element must be closed with `/>`: {html}"));
+    let img_tag = &html[img_start..img_start + img_len + "/>".len()];
+    assert!(
+        !img_tag.contains("wolf-src"),
+        "no `wolf-src` anchor may be escaped into the image's alt attribute: {img_tag}"
+    );
+    assert!(
+        !img_tag.contains("wl-"),
+        "no `wl-` anchor id may appear inside the <img> tag: {img_tag}"
+    );
+    assert!(
+        html.contains(&marker_id(1, COLUMN_STRIDE)),
+        "the `wl-1-100` anchor must still exist in the document — if it is missing \
+         it leaked into the image and was silently dropped while the alt attribute \
+         was built: {html}"
+    );
+}
+
+#[test]
+fn escapes_and_entities_survive_inline_anchoring() {
+    // 96 filler characters put `&amp;` at bytes 96..101, so character column 100
+    // (the `;`) falls STRICTLY inside the entity's source span — a region whose
+    // rendered payload (`&`) is unrelated to its source bytes, so it must never be
+    // split. `\*escaped\*` follows, where the backslash bytes are covered by no
+    // event at all. Total line length is 174 characters: past one stride, short of
+    // two.
+    let source = format!("{}&amp; \\*escaped\\* {}", "a".repeat(96), "a".repeat(60));
+    assert!(
+        source.chars().count() > COLUMN_STRIDE as usize
+            && source.chars().count() < 2 * COLUMN_STRIDE as usize,
+        "fixture sanity: exactly one interior anchor (`wl-1-100`) is expected"
+    );
+
+    let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+
+    assert!(
+        html.contains("*escaped*"),
+        "the escaped `\\*escaped\\*` must render as the literal `*escaped*`, \
+         uninterrupted by an anchor span: {html}"
+    );
+    assert!(
+        !html.contains("<em>"),
+        "the backslash escapes must still suppress emphasis (no <em>): {html}"
+    );
+    assert_eq!(
+        html.matches("&amp;").count(),
+        1,
+        "the source's single `&amp;` must render exactly once, un-split: {html}"
+    );
+    assert!(
+        !html.contains("&amp;amp;"),
+        "the entity must not be double-escaped: {html}"
+    );
+    assert!(
+        html.contains(&marker_id(1, COLUMN_STRIDE)),
+        "a marker that cannot be placed by splitting must still be emitted \
+         somewhere (never dropped): {html}"
+    );
+}
+
+#[test]
+fn column_zero_markers_still_collapse_to_the_block_top() {
+    // Pins BOTH halves of the placement rule at once, on one paragraph made of
+    // three hard lines whose first line is 250 characters:
+    //
+    //   * `wl-1-0`, `wl-2-0` and `wl-3-0` all still collapse to before the <p>;
+    //   * `wl-1-100` and `wl-1-200` sit inside it.
+    //
+    // That also pins the DOCUMENTED ordering exception: in document order the
+    // later lines' column-zero anchors precede line 1's interior anchors, so
+    // markers are no longer globally ascending. That is only safe because the
+    // front-end's fallback sweep filters on `[data-col="0"]`, and the col-0
+    // subsequence IS still ascending (see
+    // `column_zero_markers_appear_in_ascending_document_order`).
+    let long_first_line = "a".repeat(250);
+    let source = format!("{long_first_line}\nsecond line\nthird line\n");
+
+    let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+
+    assert_eq!(
+        html.matches("<p>").count(),
+        1,
+        "the three hard lines must render as exactly one <p>: {html}"
+    );
+    let p_open = html.find("<p>").expect("the paragraph must render a <p>");
+    let p_close = html
+        .find("</p>")
+        .unwrap_or_else(|| panic!("the <p> must be closed: {html}"));
+
+    for line in 1..=3u32 {
+        let idx = html
+            .find(&marker_id(line, 0))
+            .unwrap_or_else(|| panic!("missing the `wl-{line}-0` anchor: {html}"));
+        assert!(
+            idx < p_open,
+            "`wl-{line}-0` (at {idx}) must still collapse to before the <p> (at \
+             {p_open}) — the tier-4 fallback sweep depends on it: {html}"
+        );
+    }
+
+    for stride in 1..=2u32 {
+        let col = stride * COLUMN_STRIDE;
+        let idx = html
+            .find(&marker_id(1, col))
+            .unwrap_or_else(|| panic!("missing the `wl-1-{col}` anchor: {html}"));
+        assert!(
+            p_open < idx && idx < p_close,
+            "`wl-1-{col}` (at {idx}) must sit inside the <p> ({p_open}..{p_close}): {html}"
+        );
+    }
+}
+
+#[test]
+fn every_marker_id_appears_exactly_once() {
+    // The "none emitted twice, none dropped" guard, over a fixture that drives
+    // every placement path (inline split, deferral past an un-splittable region,
+    // block-top flush for code/table/image, and the trailing flush).
+    let source = mixed_marker_fixture();
+    let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+
+    let found = marker_ids_in_document_order(&html);
+    let unique: HashSet<&String> = found.iter().collect();
+    assert_eq!(
+        found.len(),
+        unique.len(),
+        "every `wl-…` anchor id must be emitted EXACTLY once; the document order \
+         was {found:?}"
+    );
+
+    let expected = expected_marker_ids(&source);
+    let expected_set: HashSet<&String> = expected.iter().collect();
+    let missing: Vec<&&String> = expected_set.difference(&unique).collect();
+    assert!(
+        missing.is_empty(),
+        "every marker the scheme predicts must exist in the document; missing \
+         {missing:?} (deferring a marker must never drop it): {html}"
+    );
+    let extra: Vec<&&String> = unique.difference(&expected_set).collect();
+    assert!(
+        extra.is_empty(),
+        "the document must not carry anchors the scheme does not predict; extra \
+         {extra:?}: {html}"
+    );
+}
+
+#[test]
+fn column_zero_markers_appear_in_ascending_document_order() {
+    // The exact invariant the front-end's tier-4 fallback sweep depends on: it
+    // walks `.wolf-src[data-col="0"]` BACKWARDS from the end of the document to
+    // find the nearest preceding line, which is only correct while the col-0
+    // anchors' `data-line` values are non-decreasing in document order.
+    //
+    // Interior (`col != 0`) anchors deliberately break the GLOBAL ordering — see
+    // `column_zero_markers_still_collapse_to_the_block_top` — so this subsequence
+    // is what has to hold, and the sweep must never be widened to all `.wolf-src`.
+    let source = mixed_marker_fixture();
+    let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+
+    let lines = column_zero_marker_lines(&html);
+    assert!(
+        !lines.is_empty(),
+        "fixture sanity: the document must carry column-zero anchors: {html}"
+    );
+    for pair in lines.windows(2) {
+        assert!(
+            pair[0] <= pair[1],
+            "the `data-col=\"0\"` anchors must stay in non-decreasing `data-line` \
+             order in the document: found {} before {} in {lines:?}",
+            pair[0],
+            pair[1]
+        );
+    }
+}
+
+#[test]
+fn inline_marker_lands_inside_its_own_list_item() {
+    // A container claims ALL of its items' markers at its own `Start`, so a
+    // multi-item list is the case where two siblings' deferred markers coexist in
+    // the queue. Hard line 1 is the short item; hard line 2 is `- ` + 240
+    // characters = 242 characters, so it earns `wl-2-100` and `wl-2-200` (300 is
+    // not < 242), whose byte offsets (112 and 212) both fall inside the SECOND
+    // item's text.
+    //
+    // The list is TIGHT (no blank line between the items), so pulldown-cmark
+    // splices the item paragraphs away and renders `<ul>\n<li>…</li>\n<li>…</li>\n
+    // </ul>` with no `<p>` wrappers — these assertions do not depend on that
+    // either way, they only key off the `</li>` positions.
+    let long = "lorem ipsum ".repeat(20);
+    let source = format!("- short one\n- {long}\n");
+
+    let second_line = source
+        .split('\n')
+        .nth(1)
+        .expect("fixture sanity: the source has a second hard line");
+    assert!(
+        second_line.chars().count() > 2 * COLUMN_STRIDE as usize
+            && second_line.chars().count() < 3 * COLUMN_STRIDE as usize,
+        "fixture sanity: the long item must earn exactly `wl-2-100` and `wl-2-200`, \
+         but hard line 2 is {} characters",
+        second_line.chars().count()
+    );
+
+    let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+
+    let ul_open = html
+        .find("<ul>")
+        .unwrap_or_else(|| panic!("the two items must render one <ul>: {html}"));
+    let ul_close = html
+        .find("</ul>")
+        .unwrap_or_else(|| panic!("the <ul> must be closed: {html}"));
+    let first_li_close = html
+        .find("</li>")
+        .unwrap_or_else(|| panic!("missing the first item's </li>: {html}"));
+    let last_li_close = html
+        .rfind("</li>")
+        .unwrap_or_else(|| panic!("missing the second item's </li>: {html}"));
+    assert!(
+        first_li_close < last_li_close,
+        "fixture sanity: the list must render TWO <li> elements: {html}"
+    );
+
+    // 1. Column-zero still collapses to the container's top (unchanged).
+    let zero = html
+        .find(&marker_id(2, 0))
+        .unwrap_or_else(|| panic!("missing the `wl-2-0` anchor: {html}"));
+    assert!(
+        zero < ul_open,
+        "the column-ZERO anchor must still collapse to the container top: `wl-2-0` \
+         at {zero} must precede the <ul> at {ul_open}: {html}"
+    );
+
+    // 2. The interior anchor belongs to the SECOND item, not the first.
+    let interior = html
+        .find(&marker_id(2, COLUMN_STRIDE))
+        .unwrap_or_else(|| panic!("missing the `wl-2-100` anchor: {html}"));
+    assert!(
+        first_li_close < interior && interior < last_li_close,
+        "the `wl-2-100` anchor (at {interior}) must sit inside the SECOND <li> — \
+         after the first item's </li> (at {first_li_close}) and before the last \
+         </li> (at {last_li_close}).\n\n\
+         When it lands earlier, the bug is: a deferred column marker drained at \
+         the *first* `End(Item)` lands in the wrong `<li>`; the drain at a block \
+         `End` must be bounded by that End's own `range.end`. A container claims \
+         every item's markers at its own `Start`, so an UNBOUNDED drain at the \
+         first item's `End` flushes item two's marker into item one — and the \
+         preview then scrolls to the wrong list item.\n\n{html}"
+    );
+
+    // 3. And it never escapes the list.
+    assert!(
+        interior < ul_close,
+        "the `wl-2-100` anchor (at {interior}) must not escape the list (</ul> at \
+         {ul_close}): {html}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// NESTED excluded blocks.
+//
+// Every other code-block / table test in this file uses a TOP-LEVEL block, where
+// nothing is ever deferred — so they cannot see this failure mode at all:
+//
+//   A CONTAINER (`List` / `Item` / `BlockQuote` / `FootnoteDefinition`) defers
+//   every `col != 0` marker across its WHOLE range at its own `Start`, including
+//   markers whose byte offsets fall inside a `CodeBlock` / `HtmlBlock` / `Table`
+//   NESTED in that container. By the time the nested block's `Start` arrives
+//   those markers are already deferred — past the marker cursor — so the nested
+//   block's own non-deferrable claim cannot reclaim them. They then survive to
+//   the nested block's `End`, where the suppression depth has already dropped
+//   back to 0, and get drained INSIDE `<pre><code>` / `<table>`.
+//
+// The markers of a nested excluded block must instead be flushed ahead of that
+// block's opening tag, exactly as a top-level one's are.
+// ---------------------------------------------------------------------------
+
+/// The slice of `html` from the first `open` to the first `close`, with `html` in
+/// the panic message when either is missing. Crude on purpose — the fixtures
+/// below emit exactly one code block / table each.
+fn region_between<'a>(html: &'a str, open: &str, close: &str) -> &'a str {
+    let start = html
+        .find(open)
+        .unwrap_or_else(|| panic!("missing `{open}` in: {html}"));
+    let end = html
+        .find(close)
+        .unwrap_or_else(|| panic!("missing `{close}` in: {html}"));
+    assert!(
+        start < end,
+        "`{open}` (at {start}) must precede `{close}` (at {end}): {html}"
+    );
+    &html[start..end]
+}
+
+/// The failure message shared by the three nested-exclusion tests: names the bug
+/// and the required placement. `container` / `nested` describe the fixture.
+fn nested_exclusion_failure(container: &str, nested: &str, region: &str, html: &str) -> String {
+    format!(
+        "an anchor span landed inside the {nested} nested in a {container}.\n\n\
+         A container defers markers across its WHOLE range, including ones whose \
+         offsets fall inside a nested excluded block; those must be flushed AHEAD \
+         of the nested block's opening tag, not drained at its `End` (by which \
+         point the suppression depth is already back to 0). Every other \
+         code-block/table test uses a TOP-LEVEL block, where nothing is ever \
+         deferred, so only this test can see the bug.\n\n\
+         Region: {region}\n\nDocument: {html}"
+    )
+}
+
+#[test]
+fn nested_code_block_in_a_blockquote_takes_no_inline_marker() {
+    // Hard line 2 is `> ` + 200 characters = 202 characters, so it earns `wl-2-100`
+    // and `wl-2-200` at byte offsets 106 and 206 — both inside the fenced block's
+    // source range, and both deferred by the enclosing blockquote.
+    let long = "x".repeat(2 * COLUMN_STRIDE as usize);
+    let source = format!("> ```\n> {long}\n> ```\n");
+
+    let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+
+    let inside = region_between(&html, "<pre", "</pre>");
+    assert!(
+        !inside.contains("wolf-src"),
+        "{}",
+        nested_exclusion_failure("blockquote", "fenced code block", inside, &html)
+    );
+    assert!(
+        !inside.contains("wl-"),
+        "{}",
+        nested_exclusion_failure("blockquote", "fenced code block", inside, &html)
+    );
+
+    for stride in 1..=2u32 {
+        let col = stride * COLUMN_STRIDE;
+        assert!(
+            html.contains(&marker_id(2, col)),
+            "the code line's `wl-2-{col}` anchor must still EXIST outside the <pre> \
+             — excluded from the block, never dropped: {html}"
+        );
+    }
+}
+
+#[test]
+fn nested_code_block_in_a_list_item_takes_no_inline_marker() {
+    // The same hole reached through `List`/`Item` rather than `BlockQuote`, and the
+    // shape this repo's own Markdown actually uses. Hard line 2 is two spaces of
+    // continuation indent plus 200 characters = 202 characters, so `wl-2-100` and
+    // `wl-2-200` sit at byte offsets 106 and 206, inside the fence.
+    let long = "x".repeat(2 * COLUMN_STRIDE as usize);
+    let source = format!("- ```\n  {long}\n  ```\n");
+
+    let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+
+    let li_open = html
+        .find("<li>")
+        .unwrap_or_else(|| panic!("fixture sanity: the source must render a <li>: {html}"));
+    let inside = region_between(&html, "<pre", "</pre>");
+    let pre_start = html
+        .find("<pre")
+        .unwrap_or_else(|| panic!("missing <pre>: {html}"));
+    assert!(
+        li_open < pre_start,
+        "fixture sanity: the fenced block must be NESTED inside the list item \
+         (<li> at {li_open}, <pre> at {pre_start}) — if it is not, the test is not \
+         exercising the deferred path at all: {html}"
+    );
+
+    assert!(
+        !inside.contains("wolf-src"),
+        "{}",
+        nested_exclusion_failure("list item", "fenced code block", inside, &html)
+    );
+    assert!(
+        !inside.contains("wl-"),
+        "{}",
+        nested_exclusion_failure("list item", "fenced code block", inside, &html)
+    );
+
+    for stride in 1..=2u32 {
+        let col = stride * COLUMN_STRIDE;
+        assert!(
+            html.contains(&marker_id(2, col)),
+            "the code line's `wl-2-{col}` anchor must still EXIST outside the <pre>: {html}"
+        );
+    }
+}
+
+#[test]
+fn nested_table_in_a_list_item_takes_no_inline_marker() {
+    // The foster-parenting variant: a raw span emitted between `<tbody>` and `<tr>`
+    // is relocated OUT of the table by the HTML parser, so it must never get there.
+    // Hard line 3 is `  | ` + 130 + ` | y |` = 140 characters, so it earns
+    // `wl-3-100` at byte offset 128 — inside the table, deferred by the list.
+    let long_cell = "w".repeat(130);
+    let source = format!("- | a | b |\n  | --- | --- |\n  | {long_cell} | y |\n");
+
+    let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
+
+    let li_open = html.find("<li>").unwrap_or_else(|| {
+        panic!(
+            "fixture sanity: the source must render a <li>. If pulldown-cmark stopped \
+             parsing this indented table inside the list item, FIX THE FIXTURE (a \
+             blockquote-wrapped table reaches the same code path) rather than \
+             deleting the test: {html}"
+        )
+    });
+    let table_start = html.find("<table").unwrap_or_else(|| {
+        panic!(
+            "fixture sanity: the source must render a <table> nested in the list \
+             item. If pulldown-cmark stopped parsing it, FIX THE FIXTURE (a \
+             blockquote-wrapped table reaches the same code path) rather than \
+             deleting the test: {html}"
+        )
+    });
+    assert!(
+        li_open < table_start,
+        "fixture sanity: the table must be NESTED inside the list item (<li> at \
+         {li_open}, <table> at {table_start}): {html}"
+    );
+
+    let inside = region_between(&html, "<table", "</table>");
+    assert!(
+        !inside.contains("wolf-src"),
+        "{}",
+        nested_exclusion_failure("list item", "table", inside, &html)
+    );
+    assert!(
+        !inside.contains("wl-"),
+        "{}",
+        nested_exclusion_failure("list item", "table", inside, &html)
+    );
+
+    assert!(
+        html.contains(&marker_id(3, COLUMN_STRIDE)),
+        "the long cell's `wl-3-100` anchor must still EXIST outside the <table> \
+         — excluded from the block, never dropped: {html}"
     );
 }

@@ -40,6 +40,20 @@ filegroup(
     visibility = ["//tools/lint:__pkg__"],
 )
 
+# This package's docs, for `//tools/lint:markdown`. Same cross-package globbing
+# constraint as `swift_format_srcs` above.
+filegroup(
+    name = "markdown_srcs",
+    srcs = glob(
+        [
+            "**/README.md",
+            "DECISIONS.md",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//tools/lint:__pkg__"],
+)
+
 # The pure key-translation seam. Compiles `KeyMap.swift` together with the
 # swift-bridge-generated Swift glue (which provides `FfiKeyEvent` and the
 # `WolfCoreHandle` / `FfiFrame` wrappers) into one Foundation-only module — NO
@@ -63,6 +77,7 @@ swift_library(
         "Sources/WolfKeyMap/FrameStats.swift",
         "Sources/WolfKeyMap/GlyphStyle.swift",
         "Sources/WolfKeyMap/HistorySeam.swift",
+        "Sources/WolfKeyMap/KeyComposition.swift",
         "Sources/WolfKeyMap/KeyMap.swift",
         "Sources/WolfKeyMap/PaneGeometry.swift",
         "Sources/WolfKeyMap/PaneLayoutCodec.swift",
@@ -73,6 +88,7 @@ swift_library(
         "Sources/WolfKeyMap/PickerRefreshCoalescer.swift",
         "Sources/WolfKeyMap/PickerSeam.swift",
         "Sources/WolfKeyMap/PreviewLinkSeam.swift",
+        "Sources/WolfKeyMap/PreviewScrollSeam.swift",
         "Sources/WolfKeyMap/PreviewSeam.swift",
         "Sources/WolfKeyMap/RestoreSeam.swift",
         "Sources/WolfKeyMap/ScrollAccumulator.swift",
@@ -258,6 +274,7 @@ swift_test(
         "Tests/WolfKeyMapTests/FrameStatsTests.swift",
         "Tests/WolfKeyMapTests/GlyphStyleTests.swift",
         "Tests/WolfKeyMapTests/HistorySeamTests.swift",
+        "Tests/WolfKeyMapTests/KeyCompositionTests.swift",
         "Tests/WolfKeyMapTests/KeyMapTests.swift",
         "Tests/WolfKeyMapTests/PaneGeometryTests.swift",
         "Tests/WolfKeyMapTests/PaletteSeamTests.swift",
@@ -269,6 +286,7 @@ swift_test(
         "Tests/WolfKeyMapTests/PickerRefreshCoalescerTests.swift",
         "Tests/WolfKeyMapTests/PickerSeamTests.swift",
         "Tests/WolfKeyMapTests/PreviewLinkSeamTests.swift",
+        "Tests/WolfKeyMapTests/PreviewScrollSeamTests.swift",
         "Tests/WolfKeyMapTests/PreviewSeamTests.swift",
         "Tests/WolfKeyMapTests/RestoreSeamTests.swift",
         "Tests/WolfKeyMapTests/ScrollAccumulatorTests.swift",

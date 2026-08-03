@@ -206,3 +206,49 @@ fn appearance_discriminant_round_trips() {
         "back-compat: font-family preserved when appearance is absent"
     );
 }
+
+#[test]
+fn macos_option_as_alt_round_trips() {
+    let _guard = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+
+    // A present `macos-option-as-alt: true` must surface as `true` over the bridge.
+    let dir = tempdir().expect("create temp dir");
+    let yaml = format!(
+        "config:\n  font-family: \"{CUSTOM_FONT_FAMILY}\"\n  font-size: {CUSTOM_FONT_SIZE}\n  \
+         line-height: {CUSTOM_LINE_HEIGHT}\n  macos-option-as-alt: true\n",
+    );
+    write(&dir.path().join(CONFIG_FILE_NAME), &yaml);
+
+    std::env::set_var("WOLF_CONFIG_DIR", dir.path());
+    let config = wolf_ffi_load_config();
+    std::env::remove_var("WOLF_CONFIG_DIR");
+
+    assert!(
+        config.macos_option_as_alt(),
+        "`macos-option-as-alt: true` must surface as true over the bridge"
+    );
+
+    // Back-compat: a config with NO `macos-option-as-alt` key (only the required
+    // font fields) must parse successfully and surface `false`, NOT fall back to
+    // defaults — the custom font fields must survive.
+    let dir = tempdir().expect("create temp dir");
+    let yaml = format!(
+        "config:\n  font-family: \"{CUSTOM_FONT_FAMILY}\"\n  font-size: {CUSTOM_FONT_SIZE}\n  \
+         line-height: {CUSTOM_LINE_HEIGHT}\n",
+    );
+    write(&dir.path().join(CONFIG_FILE_NAME), &yaml);
+
+    std::env::set_var("WOLF_CONFIG_DIR", dir.path());
+    let config = wolf_ffi_load_config();
+    std::env::remove_var("WOLF_CONFIG_DIR");
+
+    assert!(
+        !config.macos_option_as_alt(),
+        "an absent `macos-option-as-alt` key must surface as false over the bridge (back-compat)"
+    );
+    assert_eq!(
+        config.font_family(),
+        CUSTOM_FONT_FAMILY,
+        "back-compat: font-family preserved when macos-option-as-alt is absent"
+    );
+}

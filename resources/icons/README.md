@@ -8,7 +8,11 @@ Application-icon exports, in light and dark variants for both desktop targets:
 
 ## What the build consumes
 
-Only two files here are consumed: the 1024×1024 `icon-silhouette_512x512@2x.png` from each macOS directory, exported to the build by the `exports_files` in this directory's `BUILD.bazel`. No copies are committed anywhere: the `copy_file` targets `//crates/wolf-macos:wolf_icon_light` and `:wolf_icon_dark` copy them **unmodified** into the output tree as `Wolf.icon/Assets/wolf-light.png` and `Wolf.icon/Assets/wolf-dark.png`, assembling the Icon Composer bundle at build time together with the committed `crates/wolf-macos/Wolf.icon.json` (re-materialized as `Wolf.icon/icon.json` by `:wolf_icon_json`). actool (Xcode 26) then compiles the assembled bundle into `Wolf.app`'s `Assets.car` with automatic light/dark switching on macOS Tahoe. actool derives all icon sizes per appearance from these 1024×1024 masters, so every other size in these directories is unconsumed by the build.
+Only two files here are consumed: the 1024×1024 `icon-silhouette_512x512@2x.png` from each macOS directory, exported to the build by the `exports_files` in this directory's `BUILD.bazel`.
+
+No copies are committed anywhere. The `copy_file` targets `//crates/wolf-macos:wolf_icon_light` and `:wolf_icon_dark` copy them unmodified into the output tree as `Wolf.icon/Assets/wolf-light.png` and `Wolf.icon/Assets/wolf-dark.png`, assembling the Icon Composer bundle at build time together with the committed `crates/wolf-macos/Wolf.icon.json` (re-materialized as `Wolf.icon/icon.json` by `:wolf_icon_json`).
+
+actool (Xcode 26) then compiles the assembled bundle into `Wolf.app`'s `Assets.car`, with automatic light/dark switching on macOS Tahoe. It derives every icon size per appearance from these 1024×1024 masters, so all the other sizes in these directories are unconsumed by the build.
 
 ## Source of truth and constraints
 

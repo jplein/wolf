@@ -16,6 +16,22 @@ load("@build_bazel_rules_swift//swift:swift_interop_hint.bzl", "swift_interop_hi
 
 exports_files(["Cargo.toml"])
 
+# This crate's docs, for `//tools/lint:markdown`. Bazel forbids cross-package
+# globbing, so each package exposes its own `markdown_srcs`. The machine-generated
+# bindings under `generated/` carry no prose and are excluded.
+filegroup(
+    name = "markdown_srcs",
+    srcs = glob(
+        [
+            "**/README.md",
+            "DECISIONS.md",
+        ],
+        exclude = ["generated/**"],
+        allow_empty = True,
+    ),
+    visibility = ["//tools/lint:__pkg__"],
+)
+
 # The swift-bridge-generated Swift glue (committed). Compiled INTO the Swift
 # front-end's `wolf_key_map` module so `FfiKeyEvent` and the `WolfCoreHandle` /
 # `FfiFrame` wrappers are available to Swift. Foundation-only (no AppKit).
@@ -107,6 +123,38 @@ rust_test(
     # Staging `init.lua` is what fixes the former hang: under Bazel,
     # `CARGO_MANIFEST_DIR` is an ephemeral sandbox path, so nvim could not read its
     # init and blocked on a "Press ENTER" prompt forever.
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
+)
+
+# Real-nvim integration test for the COMPOSED-CHARACTER delivery path (the macOS
+# option-as-option feature): a single Unicode scalar such as "ü" (U+00FC),
+# delivered as ONE modifier-free `FfiKeyEvent`, must land verbatim in the Neovim
+# buffer in insert mode. This is the Rust-side proof for the Swift `KeyComposer` →
+# `charEvents` → `send_key` path (the AppKit/Carbon glue is not headlessly
+# testable, but the composed scalar crossing the bridge IS). Modeled on
+# `bridge_smoke` exactly: drives a REAL pinned Neovim (no mocks), loud-skips when
+# WOLF_NVIM_BIN is unset, and stages the captive `init.lua` + pinned nvim tree as
+# runfiles. Reuses `tests/common/mod.rs`.
+rust_test(
+    name = "unicode_key",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/unicode_key.rs",
+    ],
+    crate_root = "tests/unicode_key.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
     data = [
         "//bazel/nvim:nvim_tree",
         "//runtime/nvim:init.lua",

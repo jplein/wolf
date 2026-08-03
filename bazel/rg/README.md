@@ -2,7 +2,7 @@
 
 Hermetic, pinned ripgrep **15.2.0** for bundling into `Wolf.app`.
 
-This package downloads the official ripgrep macOS release tarballs (sha256-pinned, fetched by Bazel — no system or PATH dependency), assembles each into a structure-preserving directory artifact, and selects the right one for the host CPU. `//crates/wolf-macos:Wolf` bundles the result at `Contents/Resources/rg/`, so the packaged app runs its own ripgrep for the sidebar content search with no system `rg` required. It mirrors `//bazel/nvim` end-to-end.
+This package downloads the official ripgrep macOS release tarballs (sha256-pinned, fetched by Bazel — no system or `PATH` dependency), assembles each into a structure-preserving directory artifact, and selects the right one for the host CPU. `//crates/wolf-macos:Wolf` bundles the result at `Contents/Resources/rg/`, so the packaged app runs its own ripgrep for the sidebar content search with no system `rg` required. It mirrors `//bazel/nvim` end-to-end.
 
 ## Targets
 
@@ -14,7 +14,7 @@ This package downloads the official ripgrep macOS release tarballs (sha256-pinne
 `extensions.bzl` is a bzlmod module extension that declares two `http_archive` repos (`rg_macos_arm64`, `rg_macos_x86_64`) for the pinned release tarballs. Each repo gets an overlay `BUILD` file (`build_file_content`) that:
 
 1. globs every extracted file (all under the archive's top dir, `ripgrep-15.2.0-<triple>/`, which contains `rg` at its root), and
-2. runs `@aspect_bazel_lib//lib:copy_to_directory` to assemble them into a single TreeArtifact, **remapping** the archive's top dir to `rg/` via `replace_prefixes` (NOT `http_archive`'s `strip_prefix`), giving `rg/rg`.
+2. runs `@aspect_bazel_lib//lib:copy_to_directory` to assemble them into a single TreeArtifact, remapping the archive's top dir to `rg/` via `replace_prefixes` rather than `http_archive`'s `strip_prefix`, giving `rg/rg`.
 
 The `rg/` inner directory is deliberate: `rules_apple` strips the bundled TreeArtifact's _own_ top-level directory name when copying it into `Contents/Resources/`. By nesting the binary under `rg/`, the app reliably gets `Contents/Resources/rg/rg`. `copy_to_directory` preserves file permissions, so the executable bit on `rg` survives into the bundle (required for the nested ad-hoc code signature to remain valid).
 

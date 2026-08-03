@@ -47,9 +47,9 @@ use std::time::Duration;
 use wolf_core::{
     rank_buffers, rank_matches_top_n, rank_palette, Appearance, BufInfo, BufferRow, Cmdline,
     Command, CommandMru, CoreConfig, CursorShape, FileSearch, FocusDir, Grid, HighlightTable,
-    InputEvent, Key, KeyEvent, LayoutIntent, Liveness, MouseAction, MouseButton, MouseEvent,
-    PaletteRow, PaletteRowKind, PaletteWindow, PaneNode, PaneOrientation, PaneStatus, PreviewInfo,
-    Pum, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SearchMatch, SearchOptions,
+    InputEvent, Key, KeyEvent, LayoutIntent, Liveness, MarkdownCursor, MouseAction, MouseButton,
+    MouseEvent, PaletteRow, PaletteRowKind, PaletteWindow, PaneNode, PaneOrientation, PaneStatus,
+    PreviewInfo, Pum, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SearchMatch, SearchOptions,
     SearchSession, SplitOrientation, StateStore, TabFiles, TabState, Toast, WakeFn, WinInfo,
     WindowState, WolfCore, WolfState,
 };
@@ -709,6 +709,14 @@ mod ffi {
         // to the full inset pane when true, or the capped+centered ~90-char rect when
         // false.
         fn source_full_width(&self) -> bool;
+        // The SOURCE buffer's cursor LINE (1-based, matching the `wl-{L}-{C}` marker
+        // scheme emitted into the preview HTML). `0` until the first
+        // `wolf_markdown_cursor` — the front-end treats 0 as "cursor unknown" and
+        // does not scroll.
+        fn source_cursor_line(&self) -> u32;
+        // The SOURCE buffer's cursor COLUMN — a 0-based CHARACTER column, NOT a byte
+        // column. `0` until the first `wolf_markdown_cursor`.
+        fn source_cursor_col(&self) -> u32;
     }
 
     extern "Rust" {
@@ -837,6 +845,9 @@ mod ffi {
         // The resolved appearance mode as a discriminant (see the `appearance`
         // module: AUTO=0, DARK=1, LIGHT=2). Swift maps it via `AppearanceMode`.
         fn appearance(&self) -> u8;
+        // On macOS, whether the Option key acts as Alt (`<M-…>` mappings) rather
+        // than composing accented characters. Defaults to false (option-as-option).
+        fn macos_option_as_alt(&self) -> bool;
     }
 
     extern "Rust" {
@@ -1417,6 +1428,7 @@ pub struct FfiConfig {
     font_size: f64,
     line_height: f64,
     appearance: u8,
+    macos_option_as_alt: bool,
 }
 
 impl FfiConfig {
@@ -1444,6 +1456,13 @@ impl FfiConfig {
     pub fn appearance(&self) -> u8 {
         self.appearance
     }
+
+    /// On macOS, whether the Option key acts as Alt (`<M-…>` mappings) rather
+    /// than composing accented characters. Defaults to `false` (option-as-option).
+    #[must_use]
+    pub fn macos_option_as_alt(&self) -> bool {
+        self.macos_option_as_alt
+    }
 }
 
 /// Loads the resolved user configuration, reading — or creating with defaults —
@@ -1469,6 +1488,7 @@ pub fn wolf_ffi_load_config() -> FfiConfig {
         font_size: config.font_size,
         line_height: config.line_height,
         appearance,
+        macos_option_as_alt: config.macos_option_as_alt,
     }
 }
 
@@ -2725,7 +2745,10 @@ impl WolfCoreHandle {
     /// A snapshot of the open preview panes: one [`FfiPreview`] per window showing a
     /// preview scratch buffer, each joined to its source buffer's live
     /// `changedtick` (from `Snapshot::markdown_ticks`, `0` until the first
-    /// `wolf_markdown_dirty`). Empty once the core has been shut down.
+    /// `wolf_markdown_dirty`) AND to its source buffer's editing CURSOR (from
+    /// `Snapshot::markdown_cursors`, defaulting to the `line: 0` "unknown" sentinel
+    /// until the first `wolf_markdown_cursor`). Both joins key on the same
+    /// `PreviewInfo::source_bufnr`. Empty once the core has been shut down.
     #[must_use]
     pub fn previews(&self) -> Vec<FfiPreview> {
         let borrow = self.core.borrow();
@@ -2741,8 +2764,13 @@ impl WolfCoreHandle {
                     .get(&info.source_bufnr)
                     .copied()
                     .unwrap_or(0);
+                let cursor = snap
+                    .markdown_cursors
+                    .get(&info.source_bufnr)
+                    .copied()
+                    .unwrap_or_default();
                 let source_display_path = core.display_path(&info.source_path.to_string_lossy());
-                FfiPreview::from_preview(win, info, source_tick, source_display_path)
+                FfiPreview::from_preview(win, info, source_tick, source_display_path, cursor)
             })
             .collect()
     }
@@ -3389,6 +3417,8 @@ pub struct FfiPreview {
     source_display_path: String,
     source_tick: u64,
     source_full_width: bool,
+    source_cursor_line: u32,
+    source_cursor_col: u32,
 }
 
 impl FfiPreview {
@@ -3444,16 +3474,36 @@ impl FfiPreview {
         self.source_full_width
     }
 
+    /// The SOURCE buffer's cursor LINE — 1-based, matching the `wl-{L}-{C}` position
+    /// markers `wolf_core::markdown` emits into the preview HTML. `0` until the
+    /// first `wolf_markdown_cursor`, which the front-end reads as "cursor unknown"
+    /// and does NOT scroll for.
+    #[must_use]
+    pub fn source_cursor_line(&self) -> u32 {
+        self.source_cursor_line
+    }
+
+    /// The SOURCE buffer's cursor COLUMN — a 0-based CHARACTER column (NOT a byte
+    /// column), matching the marker scheme's `C`. The front-end rounds it DOWN to a
+    /// multiple of `wolf_core::markdown::MARKER_COLUMN_STRIDE` to build the anchor
+    /// id. `0` until the first `wolf_markdown_cursor`.
+    #[must_use]
+    pub fn source_cursor_col(&self) -> u32 {
+        self.source_cursor_col
+    }
+
     /// Projects one [`PreviewInfo`] (keyed by the preview window `win`) plus its
-    /// joined `source_tick` and its cwd/home-relative `source_display_path` (computed
-    /// by the caller via [`WolfCore::display_path`](wolf_core::WolfCore::display_path))
-    /// into the bridge-friendly flat row. The basename is derived from `source_path`'s
-    /// final component (empty for a pathless source).
+    /// joined `source_tick`, its joined `cursor`, and its cwd/home-relative
+    /// `source_display_path` (computed by the caller via
+    /// [`WolfCore::display_path`](wolf_core::WolfCore::display_path)) into the
+    /// bridge-friendly flat row. The basename is derived from `source_path`'s final
+    /// component (empty for a pathless source).
     fn from_preview(
         win: i64,
         info: &PreviewInfo,
         source_tick: u64,
         source_display_path: String,
+        cursor: MarkdownCursor,
     ) -> Self {
         let source_name = info
             .source_path
@@ -3468,6 +3518,8 @@ impl FfiPreview {
             source_display_path,
             source_tick,
             source_full_width: info.source_full_width,
+            source_cursor_line: cursor.line,
+            source_cursor_col: cursor.col,
         }
     }
 }

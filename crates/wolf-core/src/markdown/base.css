@@ -4,14 +4,32 @@
  * selected theme's CSS) by crate::markdown. It is NOT a Markdown doc and is not
  * prettier-formatted. It owns three things:
  *
+ * CAUTION -- NEVER write an element name in angle brackets anywhere in this
+ * file, not even in a comment. Every byte here ships VERBATIM into the rendered
+ * document's style block, ahead of the real body tag, and three consumers scan
+ * that HTML for the FIRST match of a fixed needle: the macOS preview's
+ * head/body split, the browser preview's live-reload script injection, and the
+ * integration tests. A comment that merely mentions a tag corrupts all three,
+ * silently. Name elements in prose instead -- "the code element", "p", "li".
+ * The in-module test embedded_stylesheets_carry_no_markup_like_text enforces
+ * this and explains the failure modes in full.
+ *
  *  1. The invisible position-marker rule (.wolf-src): a zero-size inline anchor
- *     the deferred scroll-sync JS will getElementById by its `wl-{line}-{col}`
- *     id. It must take NO layout space and never affect the rendered body, so it
- *     is an inline element clamped to zero width/height with hidden overflow.
+ *     that the macOS preview's cursor-follow scroll JS (WolfKeyMap's
+ *     PreviewScrollSeam) resolves by getElementById on its `wl-{line}-{col}` id
+ *     and then measures with getBoundingClientRect(). It must take NO layout
+ *     space and never affect the rendered body, so it is an inline element
+ *     clamped to zero width/height with hidden overflow.
  *     Its `font-size: 0` and `line-height: 0` are load-bearing: because the body
  *     now sets line-height as a LENGTH (see 3 below), a marker that lost its own
  *     `line-height: 0` would inherit a hard 24px and inject visible blank lines
- *     throughout the document. Do not touch this rule.
+ *     throughout the document. Its `visibility: hidden` is load-bearing for a
+ *     DIFFERENT reason and must NOT be "optimized" into `display: none`: a
+ *     visibility-hidden element still generates a box, so
+ *     getBoundingClientRect() reports a real position; a display-none element
+ *     generates no box and reports all zeros, which would silently collapse
+ *     every anchor to the top of the document and break the whole scheme with no
+ *     visible symptom in the rendered page. Do not touch this rule.
  *
  *  2. Structural layout (margins, code/table/blockquote framing) that a theme
  *     layers colors on top of.
@@ -40,11 +58,11 @@
  *
  * body.wolf-markdown sets `line-height: 24px`, deliberately not a unitless
  * `1.5`. A unitless number re-multiplies against each DESCENDANT's own
- * font-size, so inline <code> at 0.875em, <small>, and superscripts would each
- * produce a different line box and fall off the grid. A length inherits as the
- * COMPUTED 24px regardless of descendant font-size. The cost is that any
- * element wanting different leading must say so explicitly: only h1/h2 (48px)
- * and pre (24px, stated anyway) do.
+ * font-size, so an inline code element at 0.875em, a small element, and
+ * superscripts would each produce a different line box and fall off the grid.
+ * A length inherits as the COMPUTED 24px regardless of descendant font-size.
+ * The cost is that any element wanting different leading must say so
+ * explicitly: only h1/h2 (48px) and pre (24px, stated anyway) do.
  *
  * THE TYPE SCALE
  *
@@ -147,6 +165,23 @@
  * display/size change on the anchor would help, and its font-size/line-height 0
  * are load-bearing (see 1 above).
  *
+ * MID-BLOCK ANCHORS DO NOT AFFECT THESE RULES -- AND STILL DO NOT.
+ *
+ * The renderer no longer emits .wolf-src anchors only as leading/trailing runs:
+ * a line's per-100-column anchors (wl-{L}-100, wl-{L}-200, ...) are now placed
+ * INSIDE a block's inline content, by splitting the text run that contains them,
+ * so an anchor can sit between two characters of a paragraph, heading, list item
+ * or link. Every selector above is a `body.wolf-markdown > *` CHILD selector, so
+ * it only ever considers the body's DIRECT element children -- and an
+ * inline-placed anchor is a descendant of a p/h1/li/a/em element, never a
+ * direct child of the body. It therefore cannot match `> *`, cannot become a
+ * first/last body child, and cannot lengthen the anchor run these rules skip.
+ * Body-level leading/trailing anchor runs still come exclusively from
+ * column-zero markers and from markers flushed before/after a block, whose
+ * placement is unchanged. No rule here needed a change for inline anchoring, and
+ * none should be added: these selectors are already correct, not now
+ * over-general. Do not simplify them.
+ *
  * DOCUMENTED RESIDUALS
  *
  *  - A table immediately followed by any block whose margin-top exceeds 23px
@@ -182,8 +217,12 @@
  */
 
 /* Invisible per-line / per-100-column source markers. Zero-size, no layout
- * impact, never selectable — purely an anchor target for a future cursor-follow
- * scroll. */
+ * impact, never selectable — purely an anchor target for the cursor-follow
+ * scroll, whose JS (WolfKeyMap's PreviewScrollSeam) looks each one up by id and
+ * measures it with getBoundingClientRect(). `visibility: hidden` is therefore
+ * load-bearing and must NOT become `display: none`: a no-box element reports an
+ * all-zero rect, silently collapsing every anchor to the top of the document.
+ * See the header comment. */
 .wolf-src {
   display: inline;
   width: 0;

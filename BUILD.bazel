@@ -2,3 +2,31 @@ exports_files([
     "Cargo.toml",
     "Cargo.lock",
 ])
+
+# Docs owned by the root package, for `//tools/lint:markdown`. wolf-gnome, tools/
+# and resources/ have no BUILD.bazel of their own, so their Markdown belongs to
+# this package. Sibling `markdown_srcs` filegroups live in each real package
+# because Bazel forbids cross-package globbing.
+#
+# The workspace docs are listed one by one rather than globbed, because most
+# root-level Markdown is deliberately OUT of scope: CLAUDE.md quotes the banned
+# changelog words as rules (it would flag itself), and the plan and decision
+# reports are historical artifacts that legitimately describe past states.
+filegroup(
+    name = "markdown_srcs",
+    srcs = [
+        "architecture.md",
+        "build.md",
+        "command-lifecycle.md",
+    ] + glob(
+        [
+            "README.md",
+            "crates/wolf-gnome/**/README.md",
+            "crates/wolf-gnome/DECISIONS.md",
+            "resources/README.md",
+            "tools/README.md",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//tools/lint:__pkg__"],
+)

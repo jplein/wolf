@@ -1,544 +1,409 @@
 # wolf-gnome/src
 
-The `wolf-gnome` source modules. Each is a single file (not a subdirectory). The crate is **both a library and a binary**: a `[[bin]]` (`main.rs` → `app.rs`) runs the windowed application, while the library keeps the pure, widget-free seams (`input.rs`, `render.rs`, `geometry.rs`, `cursor.rs`, `tree.rs`, `layout.rs`, `pane_layout.rs`, `actions.rs`, `command_action.rs`, `workspace.rs`, `state_seam.rs`, `title.rs`, `liveness_ui.rs`) so they stay testable without a display. The GTK glue that binds them to live widgets lives in `app.rs`, `pane_view.rs`, `picker.rs`, `tree_view.rs`, `crash_overlay.rs`, `persistence.rs`, and `shell.rs`. See the crate [`README.md`](../README.md).
+The GTK front-end's modules, one entry each. The pure seams here are the Linux counterparts of the ones in [`wolf-macos/Sources/WolfKeyMap/`](../../wolf-macos/Sources/WolfKeyMap/README.md), and the two are kept deliberately close.
 
-## `main.rs`
+**Read [DECISIONS.md](../DECISIONS.md) first** for the gtk-rs version constraints, the threading and wake model, the window structure and focus regime, the accelerator invariant, the application-state rules, the crash-recovery model, and why this crate has no Bazel target.
 
-The thin binary entry point. `main` only forwards the process exit code from [`app::run`](#apprs); the binary takes **no** command-line arguments (files are opened from within Neovim via `:e`).
-
-## `lib.rs`
-
-Crate root. Declares the public modules (`pub mod actions;`, `pub mod app;`, `pub mod command_action;`, `pub mod crash_overlay;`, `pub mod cursor;`, `pub mod geometry;`, `pub mod input;`, `pub mod layout;`, `pub mod liveness_ui;`, `pub mod mouse;`, `pub mod pane_layout;`, `pub mod pane_view;`, `pub mod persistence;`, `pub mod picker;`, `pub mod render;`, `pub mod shell;`, `pub mod state_seam;`, `pub mod title;`, `pub mod tree;`, `pub mod tree_view;`, `pub mod workspace;`) and re-exports the public surface: `gdk_key` (from `input`), `paint` + `CellMetrics` (from `render`), `cell_at` + `grid_size_for` (from `geometry`), `ui_action_for` + `UiAction` (from `command_action`), `liveness_ui` + `reopen_order` + `restart_button_rect` + `LivenessUi` + `OverlayMode` + `RestartOutcome` (from `liveness_ui`), `launch_decision` + `LaunchDecision` (from `workspace`), `restore_plan` + `RestorePlan` (from `state_seam`), and `window_title` + `WINDOW_TITLE_FALLBACK` (from `title`). `cell_at` is re-exported precisely because `grid_size_for` already is and the two are a pair (their composition guarantee is the point). `restart_button_rect` is re-exported for a concrete consumer rather than for symmetry: the crash-overlay cage smoke calls `wolf_gnome::restart_button_rect` to derive the pixel it clicks, so the widget builder and the test read the same function and cannot drift. The `crash_overlay` items (`CrashOverlay`, `build`) are reached via the module path — the shell is their only caller. The `pane_layout` and `persistence` items are reached by module path too, and for different reasons: `persistence` is glue with exactly one caller (`app.rs`), while `pane_layout` has no consumer outside the crate at all — `state_seam` and `pane_view` are its only users. The `actions` items (`ACTION_TABLE`, `MENU_SECTIONS`, `action_for_key`, `parse_accel`, `forbidden_reason`, …), the `cursor` module's `cursor_rect` / `cursor_colors`, the `layout` module's `PaneTree` / `PaneLayout`, the `mouse` module's items, the `pane_view` items, the `shell` items, and the `tree` / `tree_view` items are reached via the module path rather than re-exported. There is no `is_picker_trigger` re-export any more — the picker's trigger is now the `win.go-to-file` action (see [`actions.rs`](#actionsrs) and [`shell.rs`](#shellrs)).
-
-## `app.rs`
-
-All GTK4/Adwaita application wiring. `pub fn run() -> glib::ExitCode` builds an `adw::Application` with id `org.wolf.Wolf` and, on `activate`, `build_ui` constructs the window and attaches a freshly started `WolfCore`:
-
-- **State restore prologue.** The FIRST thing `build_ui` does, before any widget exists, is `open_state_store()` — `wolf_core::state_dir().map(StateStore::open)`, logging once (never per wake) when no state directory can be resolved, in which case every later state operation degrades to a no-op and the app simply neither restores nor saves. `launch_plan(saved)` then canonicalizes the process cwd and `$HOME` and hands them, with the loaded tree, to the pure [`state_seam::restore_plan`](#state_seamrs), which returns the `RestorePlan` the rest of `build_ui` reads: `core_cwd`, `empty`, the tab's saved `layout`, and the restored `window_size`. Both helpers are extracted from `build_ui` for the same reason `shell.rs` splits `capture_open_files` / `perform_restart` — to keep `clippy::too_many_lines` from biting.
-- **Launch decision + `CoreConfig.cwd`.** The decision itself is [`workspace::launch_decision`](#workspacers), now reached through `restore_plan` and given BOTH candidates: the process cwd first, then the cwd restored from `state.json`. `core_cwd` — the project directory, or the home/`FALLBACK_CWD` fallback in the empty state — is what goes into `CoreConfig.cwd` (it replaced an unconditional `current_dir()`), and `empty` drives `tree_view::build`'s `start` flag and `AppShell::set_empty_state`.
-- **Queueing the saved pane layout.** Right after `pane_view::build`, `if let Some(layout) = plan.layout.clone() { panes.request_layout_rebuild(layout); }`. **There is deliberately NO arity guard on that call** — a single-leaf layout is queued exactly like a three-leaf one. That is one half of the single-pane persistence fix (the other half is `state_seam::persistable_layout`'s content predicate); see [`pane_layout.rs`](#pane_layoutrs) for the bug an arity guard here would reintroduce.
-- **Construction.** An `adw::ApplicationWindow` (title `title::WINDOW_TITLE_FALLBACK`, i.e. "Wolf" — the same string [`title.rs`](#titlers) falls back to, so the title never flickers between two spellings before the first cwd is reported; default size `plan.window_size.unwrap_or((WINDOW_WIDTH, WINDOW_HEIGHT))`, i.e. the restored SIZE or 1200×640 — never a restored position, since Wayland gives a client neither its own position nor screen geometry) whose content is a vertical `gtk::Box` of an `adw::HeaderBar` over a `gtk::Paned` (horizontal). The Paned's **start** child is the file-tree sidebar (built by [`tree_view::build`](#tree_viewrs)); its **end** child is the `gtk::Overlay`, whose main child is the **native pane view** ([`pane_view::build`](#pane_viewrs) — a tree of nested `gtk::Paned`s + per-pane `DrawingArea`s plus a bottom cmdline strip, replacing the former single editor area) and whose overlay children are, in order, the empty state ([`shell::build_empty_state`](#shellrs), added FIRST), the file picker ([`picker::build`](#pickerrs), added after it so it floats above), the crash/stall overlay and finally the restart banner ([`crash_overlay::build`](#crash_overlayrs) — see the stacking-order bullet below for why they go last). The Paned divider position starts at `TREE_PANE_WIDTH` (250 px). The header bar carries an **Open** button (`document-open-symbolic`, tooltip "Open file (Ctrl+Shift+O)") on the start side, which activates `win.go-to-file`, and a `gtk::MenuButton` (`open-menu-symbolic`, tooltip "Main menu", model from `shell::build_menu_model()`) on the end side. Cell metrics are measured **once** (via a throwaway 1×1 `ImageSurface` probe → `CellMetrics::for_font`) and shared by Rc into the pane view.
-- **Persistence glue construction.** After the window exists and before the shell, `persistence::build(StateParts { core, window, panes, store, launch_cwd: plan.core_cwd.clone(), empty })` produces the `StateHandle` (see [`persistence.rs`](#persistencers)). The ordering is forced from both sides: it reads the window's size, so the window must exist; and the shell drives it from the wake and keeps its empty-state flag in step, so it must exist before the shell.
-- **Shell construction + action install ORDER.** After the window exists, `shell::build(ShellParts { … })` takes the core, window, picker, tree, sidebar widget, outer paned, empty-state widget, Open button, crash overlay, pane handle and the `StateHandle`; then `shell.install_actions(app)` and `shell.set_empty_state(empty)` run — **after** the window is constructed and **before** `window.present()`, so the menu and the header button can resolve their actions. The Open button is wired with `connect_clicked` + the qualified `gtk::prelude::WidgetExt::activate_action(&window, "win.go-to-file", None)`: `adw::ApplicationWindow` implements BOTH `gio::ActionGroup` (bare name, no result) and `gtk::Widget` (full `win.`-prefixed name, reports failure) and the latter is wanted; using the `action-name` property instead would render the button insensitive if the action did not exist yet.
-- **Picker/tree focus target.** The pane view's **cmdline strip** (`pane_view::PaneHandle::cmdline_widget`) is a focusable widget in the editor region; it is handed to `picker::build` and `tree_view::build` as their focus-return `DrawingArea` so that, after they close, keys keep bubbling to the window-level key controller. The window grabs focus on it after `present()`.
-- **Wake bridge + threading.** A bounded `async-channel` (capacity 1) carries wake signals; the `WakeFn` (the only thing that crosses a thread boundary) `try_send`s from the tokio worker, and a `glib::spawn_future_local` task on the GTK main thread drains it and, per signal, calls `shell.on_liveness_wake()` **first** (the liveness read — see the next bullet), then, ONLY if that returned `true`, `panes.on_render_wake()` (create/split/close panes, consume layout intents, redraw) and `tree.on_render_wake()` (so the tree highlights/reveals the current file carried by the same render wake), and finally — always, whatever the liveness — `shell.on_render_wake()` (settle a pending re-root, refresh the window TITLE from the live cwd, take an application-state SNAPSHOT, then drain and dispatch commands). **The shell is LAST, deliberately:** a drained `close_window` shuts the core down, so the other two must have had their turn first — and, since the state-persistence unit, so must the snapshot, which is why the drain is the last thing inside the shell's own handler too. **It is also UNGATED, deliberately** — a divergence from macOS, whose `onWake` `return`s before its command drain: on Linux the drain is the only path by which a `close_window` / `quit_application` reaches `window.close()`, so a command queued in the instant before a crash would otherwise be stranded behind an opaque crash overlay with no way out but the window manager. It issues no RPC and paints nothing, so running it in all three states costs nothing. The one-shot "react to the initial attached frame" call runs `panes.on_render_wake()` through the same `shell.on_liveness_wake()` gate directly after the drain task is spawned; the matching `shell.on_render_wake()` runs a little later, after `wire_close` has installed the `close-request` handler (a drained `CloseWindow` before that point would tear the window down without shutting the core down). `WolfCore` is started before the window is built; if it fails, the error is logged and no window appears. Per-pane painting, the mode-aware cursor, and per-grid/global resize now live in `pane_view.rs` (the app no longer installs a draw/resize handler).
-- **Crash/stall recovery IS wired into the GTK front-end.** `shell.on_liveness_wake()` reads `WolfCore::liveness()` once per wake, at the very TOP of the drain-loop body, and applies the pure [`liveness_ui`](#liveness_uirs) mapping: `Alive` hides the overlay and paints; `NotResponding` shows the "Neovim stopped responding" overlay and skips the paint; `Dead` shows the crash overlay and schedules one automatic in-place restart. The widgets are [`crash_overlay.rs`](#crash_overlayrs); the orchestration is [`shell.rs`](#shellrs). **The placement is load-bearing, not stylistic:** the read must be unconditional and must precede every handler that can early-return (`pane_view::on_render_wake` opens with `if self.core.borrow().is_none() { return; }`), because liveness is LEVEL-triggered — an atomic read, not a message — and hiding the read behind an early return would turn it back into an edge-triggered signal that a coalesced wake can swallow.
-- **Why coalescing the death wake is safe, and why there is NO liveness poll.** `WAKE_CHANNEL_CAP` is 1 and a `try_send` into a full channel is silently DROPPED, while `liveness::mark_dead` fires exactly once and a dead Neovim produces no further redraw wakes ever again — so the overlay's appearance rests on one implication, and it holds: `async-channel` returns `Full` only when an item is queued, that queued item WILL be popped by the single drain task, and popping it runs the whole loop body strictly after the drop; because `mark_dead` stores `Dead` **before** calling `wake()` and `liveness()` is a `SeqCst` load, that later run observes the death. `async_channel::Receiver::recv` also frees the slot before the future resolves, so a wake fired DURING a handler run finds the queue empty and succeeds. There is therefore no interleaving in which the death wake is lost with no subsequent handler run. A periodic `glib::timeout_add_local` liveness poll was considered and REJECTED: it would destroy this design's zero-polling property and, decisively, would make the crash smoke unable to discriminate a broken wake bridge (a lossy transport would still eventually paint the overlay via the poll), i.e. it would buy insurance by destroying evidence. The transport half of the argument is pinned executably by `app.rs`'s own `#[cfg(test)] mod tests` (`a_dropped_wake_implies_a_pending_wake`, `consuming_a_wake_frees_the_slot_before_the_handler_runs`, `wake_channel_capacity_is_at_least_one`), which read the production `WAKE_CHANNEL_CAP` rather than a literal `1`, and the end-to-end half by `nvim_crash_recovers_and_reopens_the_file_under_cage`, whose scenario bursts input into the wake channel and SIGKILLs Neovim with no settle in between. **If that smoke ever flakes, the diagnosis is a wake-transport bug, not a settle that needs raising.**
-- **Overlay stacking order.** `build_ui` adds the `gtk::Overlay` children in the order `empty_state` → `picker` → `crash_overlay.widget()` → `crash_overlay.banner_widget()`. The crash overlay must cover both the picker (whose Open would send into a dead nvim) and the empty state (whose Open Folder would `Chdir` one — the captive nvim runs in the empty state too, so it can crash there); the banner is topmost and click-through, so it confirms a restart without ever swallowing a click meant for the editor.
-- **Key controller (+ picker wiring).** `wire_keys` installs a `gtk::EventControllerKey` on the window with **no propagation phase** (i.e. Bubble): while the picker is open it `Proceed`s (keys are left for the focused picker widgets and never forwarded to nvim/core); otherwise the key routes via the pure `gdk_key` seam into `WolfCore::send_input` (`Stop` when handled, else `Proceed`). It carries **no trigger branch of its own any more** — the chord that opens the picker is matched by [`shell.rs`](#shellrs)'s CAPTURE-phase controller, which runs first and stops propagation, so a bound chord never reaches this controller and is never also forwarded to Neovim. Keys reach nvim's current window globally; the cursor renders in whichever pane owns the cursor's grid.
-- **Lifecycle / shutdown.** `WolfCore` lives in `Rc<RefCell<Option<WolfCore>>>` on the main thread. `connect_close_request` runs `state.flush_on_close()` **first**, then closes the picker **and** the tree (each dropping its `FileSearch` so any in-flight traversal is cancelled) before the core shuts down, then takes the core out (in its own statement to release the borrow) and runs `WolfCore::shutdown`. `wire_close` takes the `&TreeHandle` and the `&StateHandle` alongside the `&PickerHandle` for this. **That first position is load-bearing, not stylistic:** the final snapshot has to be taken while the core and the panes are still alive, because a snapshot after `core.borrow_mut().take()` sees no core, `state_seam::may_snapshot` refuses it, and the session is silently not saved. Moving the call below any of the three statements that follow it leaves both relaunch smokes (`pane_layout_survives_relaunch_under_cage`, `single_pane_file_survives_relaunch_under_cage`) restoring from an empty `state.json`.
+## Files
 
-Key constants: `APP_ID` (`org.wolf.Wolf`), `FONT_FAMILY` (`DejaVu Sans Mono`), `DEFAULT_FONT_PT` (`14.0`) with the `FONT_PT_ENV` (`WOLF_FONT_PT`) override, `INITIAL_COLS`/`INITIAL_ROWS` (80×24 — also the size a restarted Neovim re-attaches at, which is why [`pane_view::reset_after_restart`](#pane_viewrs) exists), `WINDOW_WIDTH`/`WINDOW_HEIGHT` (1200×640), `TREE_PANE_WIDTH` (250, now `pub(crate)` so `shell.rs` can restore the divider when the empty state clears), and `WAKE_CHANNEL_CAP` (1). `WINDOW_WIDTH` was widened from the editor-only default so that, after the tree takes `TREE_PANE_WIDTH` on the left, the editor pane keeps roughly its previous width (important for the OCR smoke tests). **`WAKE_CHANNEL_CAP` is private and stays that way**, and the three wake-channel tests live in `app.rs`'s own `#[cfg(test)] mod tests` rather than under `tests/` precisely so they can read it: raising the capacity must not be able to turn them into tests of something else. Coalescing at capacity 1 is what the crash-recovery liveness read is designed against — see the wake-bridge bullets above.
+#### `actions.rs`
 
-## `actions.rs`
+Purpose: the action namespace as data — every `gio` action name, its accelerator, the `wolf_core::Command` behind it, its binding status, and its menu placement — plus the chord matcher and the invariant checker. It names no widget type, so it is tested with no display.
 
-The **action namespace as pure data** — no GTK widget types, so the whole namespace is unit-tested headlessly in its own `#[cfg(test)] mod tests` (like `geometry.rs` / `cursor.rs`). One table is the single source of truth for every `gio::SimpleAction` name, its accelerator, the `wolf_core::Command` it corresponds to, and the one-line justification mirrored into the crate README's accelerator table; a second declares the primary menu over those same names. Because the menu, the accelerators and the command dispatch all read the same data, they cannot drift.
+**Public API**
 
-```rust
-pub enum BindingStatus { Bound, Reserved, MenuOnly }
-pub struct ActionBinding { pub action: &'static str, pub accel: Option<&'static str>, pub command: Option<Command>, pub status: BindingStatus, pub note: &'static str }
-pub const ACTION_TABLE: &[ActionBinding];
-
-pub struct MenuItemSpec { pub label: &'static str, pub action: &'static str }
-pub struct MenuSection  { pub items: &'static [MenuItemSpec] }
-pub const MENU_SECTIONS: &[MenuSection];
-
-pub fn binding_for_action(action: &str) -> Option<&'static ActionBinding>
-pub fn action_for_command(cmd: Command) -> Option<&'static str>
-pub fn command_for_action(action: &str) -> Option<Command>
-pub fn bound_bindings() -> impl Iterator<Item = &'static ActionBinding>
-pub fn action_for_key(keyval: gdk::Key, state: gdk::ModifierType) -> Option<&'static str>
-
-pub struct ParsedAccel { pub ctrl: bool, pub shift: bool, pub alt: bool, pub key: &'static str }
-pub fn parse_accel(spec: &'static str) -> Option<ParsedAccel>
-pub fn forbidden_reason(p: &ParsedAccel) -> Option<&'static str>
-```
-
-- **`BindingStatus`.** `Bound` = the accelerator is registered and matched now; `Reserved` = spoken for by a later unit, neither registered nor matched, and **never** in `MENU_SECTIONS` (the menu must not show an item that does nothing); `MenuOnly` = no chord at all, reachable from the menu, a button, or a drained command. Reserved rows live in the table anyway so the whole scheme is auditable in one place **and** so the invariant tests check them — a chord that would shadow a Neovim key must fail while it is reserved, not later when it is finally bound. Exactly four rows are `Bound`: `win.go-to-file` (Ctrl+Shift+O), `win.new-buffer` (Ctrl+Shift+N), `win.close-pane` (Ctrl+Shift+W), `app.quit` (Ctrl+Shift+Q).
-- **`parse_accel`** is a deliberate re-implementation of the SUBSET of `gtk_accelerator_parse` this crate allows, because `gtk::accelerator_parse` cannot be called from a headless unit test (gtk4-rs asserts an initialized main thread) and a checker nobody can run is not a checker. The grammar is zero or more `<Control>` / `<Shift>` / `<Alt>` tokens (each at most once) followed by ONE key NAME of ASCII alphanumerics (`p`, `o`, `0`, `equal`, `minus`, `grave`, `Left`, `Right`). Anything else returns `None` — **including `<Super>` and `<Primary>`**, which is why those tokens never reach `forbidden_reason`.
-- **`forbidden_reason`** rejects the chords that DO parse but would break the invariant: a bare `Ctrl+<single letter>` ("would make `<C-letter>` unreachable") and `Alt` combined with a single-letter key (GTK's mnemonic namespace, and an unmapped forwarded Alt chord splits into `<Esc>` + the base key). `Alt` with a NAMED key (`Left` / `Right`) is allowed — capturing it is precisely what prevents that split.
-- **`action_for_key`** is the LIVE chord matcher used by [`shell.rs`](#shellrs)'s capture-phase controller. It scans only `Bound` rows (matching a Reserved row would swallow the key and do nothing), compares Ctrl / Shift / Alt **exactly**, ignores every other modifier bit — so `Ctrl+Shift+Super+O` still activates `win.go-to-file`, which is better than forwarding a Super chord Neovim mangles — and compares the key case-insensitively via the private `key_name_matches` (whether a shifted letter arrives as `o` or `O` is keymap-dependent). An unknown key name resolves to `false` rather than a guess.
-- **The one GDK dependency.** `action_for_key` needs `gdk::Key` and `gdk::ModifierType`. Both are plain value types — no widget, no display, no initialized main thread — exactly what `input::gdk_key` and its headless tests already use, so the module stays headlessly testable.
-
-The invariant these tables exist to enforce, its justification, the full macOS→Linux table, the two flagged assumptions and the disabled-action wart are all in the crate [`README.md`](../README.md), "Keyboard accelerators".
-
-## `command_action.rs`
-
-The **pure, GTK-free** mapping from a drained `wolf_core::Command` to the UI action `wolf-gnome` performs for it. Unit-tested headlessly in its own `#[cfg(test)] mod tests`.
-
-```rust
-pub enum UiAction {
-    OpenFilePicker, OpenFileDialog, OpenFolderDialog, NewUntitledBuffer,
-    ClosePane, CloseWindow, MinimizeWindow, QuitApplication,
-    Deferred(&'static str),          // implemented on macOS, planned on GTK
-    NoGnomeEquivalent(&'static str), // no GNOME counterpart, never implemented
-}
-pub fn ui_action_for(command: Command) -> UiAction
-```
-
-**Totality is the contract.** `ui_action_for` is a `match` with **no `_` arm**, so appending a variant to `wolf_core::Command` is an `E0004` compile error in `wolf-gnome` until the new command is classified — the same guard `pane_view::apply_intents` uses for `LayoutIntent`, and for the same reason: a silently-dropped command is indistinguishable from a broken one. `every_registered_command_maps` adds a runtime belt-and-braces check that walks `COMMAND_SPECS` rather than the match, so the guard survives even if someone adds a catch-all arm.
-
-Of the 26 registered commands: **8 dispatch** today (`CloseWindow`, `QuitApplication`, `MinimizeWindow`, `GoToFile`, `OpenFile`, `OpenFolder`, `ClosePane`, `NewBuffer`), **1** is `NoGnomeEquivalent` (`HideApplication` — GNOME has no application-level hide; the shell owns window visibility), and **17** are `Deferred`, each with a DISTINCT reason naming its concrete blocker (a unit test enforces distinctness, non-emptiness and clause casing, so no two rows can collapse into one indistinguishable entry and the printed diagnostic always names the real blocker). `OpenFile` dispatching does **not** tick the feat-list's "Native file dialogs (open / save / save-as)" row — save and save-as remain absent.
-
-## `liveness_ui.rs`
-
-The **pure, GTK-free** rulebook for crash/stall recovery: everything about a `wolf_core::Liveness` reading that can be decided without a widget. Unit-tested headlessly in its own `#[cfg(test)] mod tests`, like `command_action.rs` / `workspace.rs` / `geometry.rs`.
-
-```rust
-pub enum OverlayMode { Hidden, Crashed { retrying: bool }, Stalled }
-pub struct LivenessUi { pub overlay: OverlayMode, pub auto_restart: bool, pub paint: bool }
-pub enum RestartOutcome { Respawned, Refresh(LivenessUi) }
-
-pub const CRASHED_RETRYING_MESSAGE: &str  = "Neovim crashed — restarting…";
-pub const CRASHED_FAILED_MESSAGE:   &str  = "Neovim crashed — automatic restart failed";
-pub const STALLED_MESSAGE:          &str  = "Neovim stopped responding";
-pub const RESTART_BUTTON_LABEL:     &str  = "Restart Neovim";
-pub const RESTARTED_BANNER_MESSAGE: &str  = "Neovim was restarted";
-pub const MAX_AUTO_RESTART_ATTEMPTS: u32  = 1;
-pub const BANNER_VISIBLE_SECS:       f64  = 4.0;
-pub const OVERLAY_MESSAGE_HEIGHT:    i32  = 56;
-pub const OVERLAY_SPACING:           i32  = 24;
-pub const RESTART_BUTTON_WIDTH:      i32  = 320;
-pub const RESTART_BUTTON_HEIGHT:     i32  = 64;
-
-pub fn liveness_ui(liveness: wolf_core::Liveness, may_auto_restart: bool) -> LivenessUi
-pub fn overlay_message(mode: OverlayMode) -> Option<&'static str>
-pub fn restart_outcome(respawned: bool, fresh: wolf_core::Liveness) -> RestartOutcome
-pub fn reopen_order(files: &[PathBuf], active: Option<&Path>) -> Vec<PathBuf>
-pub fn restart_button_rect(overlay_w: f64, overlay_h: f64) -> (f64, f64, f64, f64)
-```
-
-- **`liveness_ui`** — the three-state mapping, a `match` with **no `_` arm** (so a new `wolf_core::Liveness` variant is an `E0004` here until it is classified, the same guard `ui_action_for` and `pane_view::apply_intents` rely on):
-  - `Alive`, whatever the budget → overlay `Hidden`, `auto_restart: false`, `paint: true`.
-  - `NotResponding`, whatever the budget → overlay `Stalled`, `auto_restart: false`, `paint: false`.
-  - `Dead` with `may_auto_restart: true` → overlay `Crashed { retrying: true }`, `auto_restart: true`, `paint: false`.
-  - `Dead` with `may_auto_restart: false` → overlay `Crashed { retrying: false }`, `auto_restart: false`, `paint: false`.
-
-  That is six inputs (three states × two budget values) and exactly ONE of them may request an automatic restart; `only_dead_auto_restarts` states that as its own rule, so a regression names the rule rather than a table row.
-
-  `Alive` and `NotResponding` are deliberately INSENSITIVE to `may_auto_restart`, and both halves matter: a spent attempt budget must never stop a healthy editor painting, and a wedged-but-recoverable nvim must never be force-killed automatically (`restart_nvim` on a stall loses everything not already in a swap file, so that decision belongs to the user's button press alone). `not_responding_never_auto_restarts` pins the second half on its own so a failure names the rule.
-
-- **`OverlayMode::Crashed { retrying }` means "an automatic attempt is still PERMITTED", not "one is in flight."** The flag is derived purely from the attempt budget, and `shell::schedule_restart` increments the counter when it SCHEDULES the attempt, so a `Dead` reading taken while an automatic restart is running already reports `retrying: false`. Reading it as "in flight" is the one plausible misreading and is called out in the type's own doc comment.
-- **`overlay_message`** — total, no `_` arm: `Hidden` → `None`, the two `Crashed` variants → two DISTINCT messages, `Stalled` → `STALLED_MESSAGE`. `overlay_message_table` additionally asserts, executably rather than in a comment, that both crash messages contain `crashed` and that NEITHER they nor the button label contain `restarted` — which is what stops the crash-overlay smoke's OCR term and the banner smoke's OCR term from cross-satisfying each other.
-- **`restart_outcome`** — `respawned == true` → `Respawned`; anything else (`Ok(false)`: the core was already `Alive` or a concurrent restart held its CAS; or an `Err`) → `Refresh(liveness_ui(fresh, false))`. **That `false` is load-bearing:** a `Refresh` carrying `auto_restart: true` would let a persistently failing respawn retry from inside the restart path, bypassing the attempt cap entirely. `refresh_never_requests_an_auto_restart` states that over every fresh reading.
-- **`reopen_order`** — every entry of `files` not equal to `active` (ALL occurrences filtered, input order otherwise preserved), then `active` appended LAST when `Some`. Reopening is a sequence of `InputEvent::Open`s on one ordered channel, so the last path opened is the one that ends up focused. `active` is appended even when it was not a member of `files` (macOS parity), and non-active entries are NOT deduplicated (also macOS parity; `TabFiles::files` is already unique, and collapsing duplicates here would hide a core bug rather than fix one). `active_is_always_last` states the rule over the whole table.
-- **`restart_button_rect`** — the restart button's `(x, y, w, h)` relative to the overlay child's own top-left, given the overlay's allocation: a fixed block of `OVERLAY_MESSAGE_HEIGHT + OVERLAY_SPACING + RESTART_BUTTON_HEIGHT` centred both ways, with the button occupying its bottom `RESTART_BUTTON_HEIGHT`. Degenerate guard mirroring `geometry.rs`'s whole-result-collapse convention: a non-finite or non-positive allocation, or one that simply cannot contain the fixed block (narrower than `RESTART_BUTTON_WIDTH` or shorter than the block), collapses the WHOLE result to `(0.0, 0.0, 0.0, 0.0)` rather than returning a partial rect — so a caller deriving a click point must check the size before trusting the origin. Every `i32 → f64` widening is `f64::from`, never `as`. **This function is the single source of truth shared by two consumers that must not drift**: [`crash_overlay.rs`](#crash_overlayrs) realises the four constants as explicit size requests, and `crash_overlay_and_restart_button_recover_under_cage` calls `wolf_gnome::restart_button_rect` to derive the pixel it clicks. That sharing is exactly why the overlay is a hand-built `gtk::Box` and not an `adw::StatusPage`.
-
-## `crash_overlay.rs`
-
-The **GTK glue** for crash/stall recovery: the full-bleed opaque overlay carrying the "Restart Neovim" button, and the small transient "Neovim was restarted" banner. Every decision it acts on is made in [`liveness_ui.rs`](#liveness_uirs); this file only builds widgets and toggles visibility. It mirrors `picker.rs` / `tree_view.rs`: an `Rc<CrashInner>` on the single GTK main thread, `Cell` interior mutability, and a `Weak` upgrade inside every closure.
-
-```rust
-pub struct CrashOverlay { /* Rc<CrashInner> */ }   // Clone
-pub fn build() -> CrashOverlay
-
-impl CrashOverlay {
-    pub fn widget(&self) -> gtk::Widget         // the full-bleed opaque overlay child
-    pub fn banner_widget(&self) -> gtk::Widget  // the transient, click-through banner child
-    pub fn set_mode(&self, mode: OverlayMode) -> bool   // true iff the mode CHANGED
-    pub fn connect_restart<F: Fn() + 'static>(&self, on_restart: F)
-    pub fn flash_banner(&self)
-    pub fn focus_is_inside(&self) -> bool
-}
-```
-
-- **The overlay's internal layout is DERIVABLE, and that is the point.** Root is a `gtk::Box::new(Vertical, 0)` — spacing **0**, deliberately — with `add_css_class("background")` (the same opacity mechanism `shell::build_empty_state` uses), `hexpand`/`vexpand`, `halign`/`valign` `Fill`, starting hidden. Its four children are a `vexpand` spacer, the message `gtk::Label` (`set_size_request(-1, OVERLAY_MESSAGE_HEIGHT)`, `set_margin_bottom(OVERLAY_SPACING)`, no size-changing CSS class and no icon), the `gtk::Button` (`RESTART_BUTTON_WIDTH` × `RESTART_BUTTON_HEIGHT`, `suggested-action` + `pill`), and a second `vexpand` spacer. Two spacers of natural size 0 split `GtkBox`'s leftover equally, so the fixed block is exactly vertically centred and `restart_button_rect` describes the button's real position to within GTK's ±1 px odd-leftover rounding. **Do not substitute an `adw::StatusPage`, and do not give the box a non-zero spacing** — a status page's padding is theme-owned and not derivable from anything this crate declares, and `gtk::Box` spacing applies between EVERY pair of children (the spacers included), so either change silently invalidates the derived pixel the cage smoke clicks. The gap between message and button lives in the label's `margin_bottom` for that reason. The code carries the same warning, naming the smoke it would break.
-- **Opacity, targeting and focus.** The overlay is opaque via `background`, exactly like the empty state, because its whole job is to HIDE the frozen last frame — a user must be able to tell "Neovim died" from "Neovim is idle". It deliberately does NOT call `set_can_target(false)`: swallowing clicks is half its job, and a visible, allocated overlay child takes the pointer instead of the pane `DrawingArea`s beneath it (the mechanism [`pane_view.rs`](#pane_viewrs) already records for the picker and the empty state). It **never** calls `grab_focus()` on the button — a focusable widget inside a container that is later HIDDEN is precisely the wedge `click_then_close_keeps_keyboard_input_alive_under_cage` guards against — and `focus_is_inside()` (`root().focus()` + `is_ancestor`, the same shape as `pane_view::focus_inside_pane_area`) is what lets the shell park focus back on the cmdline strip on a visible → hidden transition.
-- **`set_mode` returns whether the mode CHANGED, and that return value is load-bearing.** The shell's picker-close and focus-return actions must fire on the transition only; firing them on every `Alive` wake would close the picker (or yank focus) continuously.
-- **The banner is INDEPENDENT of liveness.** A successful restart makes the fresh nvim `Alive`, whose wake hides the crash overlay immediately, so without a separate channel a user would see no confirmation at all. It is a top-centred `osd` pill with `set_can_target(false)` (the GTK equivalent of macOS's `hitTest → nil`; it has no controls and sits over a WORKING editor, so a click in its rect belongs to the pane beneath). `flash_banner` bumps a monotonic `Cell<u64>` generation, captures it, shows the banner, and schedules a `glib::timeout_add_local_once(BANNER_VISIBLE_SECS)` hide that only fires while its token is still current — so rapid restarts coalesce into one continuous banner instead of a premature hide. Exactly macOS's `flashGeneration` scheme. Nothing in the liveness mapping ever touches it; only the restart SUCCESS path calls it.
-- **There is no `mode()` accessor.** One was designed and then removed for having zero callers; the current mode lives in a private `Cell<OverlayMode>` and is observable only through `set_mode`'s return value.
-- **This module has no unit tests and cannot have any** — it is entirely GTK widget construction. Its coverage is `crash_overlay_and_restart_button_recover_under_cage`, which is the SOLE coverage for four of its five documented red-run reverts. See [`tests/README.md`](../tests/README.md).
-
-## `shell.rs`
-
-The **GTK glue** for the action namespace: `gio::SimpleAction`s, the primary menu, accelerator registration, the chord controller, the empty state, the command drain, **and the crash/stall recovery orchestration**. Mirrors `picker.rs` / `tree_view.rs`: `Rc<ShellInner>` with `RefCell` on the single GTK main thread and a `Weak` upgrade inside **every** closure (`ShellInner` owns the window, and the window owns the actions whose closures would otherwise own `ShellInner` back).
-
-```rust
-pub struct ShellParts<'a> { pub core, pub window, pub picker, pub tree, pub sidebar, pub paned, pub empty_state, pub open_button, pub crash_overlay, pub panes, pub state }
-pub struct AppShell { /* Rc<ShellInner> */ }  // Clone
-
-pub fn build_menu_model() -> gio::Menu
-pub fn build_empty_state() -> gtk::Widget
-pub fn build(parts: ShellParts<'_>) -> AppShell
-
-impl AppShell {
-    pub fn install_actions(&self, app: &adw::Application)
-    pub fn set_empty_state(&self, empty: bool)
-    pub fn on_liveness_wake(&self) -> bool   // FIRST on every wake; returns "paint?"
-    pub fn on_render_wake(&self)             // LAST on every wake, ungated
-}
-```
-
-`ShellParts` is a struct rather than eleven positional parameters because `clippy::too_many_arguments` bites at seven. Private methods: `install_chord_controller`, `action_is_enabled`, `drain_and_dispatch_commands`, `perform`, `close_window`, `quit_application`, `open_folder_dialog`, `open_file_dialog`, `chdir_to`, `settle_pending_reroot`, `refresh_title`, `send_input`, `apply_overlay`, `schedule_restart`, `restart_nvim`, `capture_open_files`, `perform_restart`, `read_liveness`, `reopen_captured`. The crash-recovery state is three `Cell`s on `ShellInner`: `restarting` (the FRONT-END re-entrancy guard), `restart_scheduled` (a deferred attempt is already pending) and `restart_attempts` (automatic attempts since the core was last seen `Alive`). The title state is two more fields: `home` (the user's home directory stringified ONCE at `build` time — the injected `home` for `title::window_title`, captured rather than re-read per frame because [`title.rs`](#titlers) deliberately never touches the environment and `$HOME` does not change under a running process) and `last_title`. Taking `panes: PaneHandle` and `state: StateHandle` introduces no cycle — neither `pane_view` nor `persistence` references the shell.
-
-- **`install_actions`** creates one `gio::SimpleAction` per **implemented** row of `ACTION_TABLE` — "implemented" meaning the row carries a command whose `ui_action_for` is neither `Deferred` nor `NoGnomeEquivalent` — adding `app.*` via `app.add_action` and `win.*` via `window.add_action`, and stashing the `win.go-to-file` action so the empty state can disable it. It then calls `set_accels_for_action` for every `Bound` row and installs the chord controller. **Must run after the window is constructed and before `window.present()`.**
-- **`install_chord_controller`** adds a **CAPTURE-phase** `gtk::EventControllerKey` on the window that resolves the event through `actions::action_for_key`, checks `action_is_enabled`, activates the action and returns `Propagation::Stop`. It exists because GTK's own matching is keymap-aware and does not fire under the cage/`wtype` harness (`GdkKeyEvent::matches` returns `KeyMatch::None` even against the event's own keyval and state, because `wtype` uploads a fresh one-keycode keymap per keystroke). `set_accels_for_action` is still called, but **only so `gio::Menu` renders the chord labels**. A DISABLED action is deliberately left to fall through, matching what a real GTK accelerator does. Because it lives on the WINDOW, it also runs ahead of `picker.rs`'s own capture-phase controller (which sits on the picker box) and carries **no `picker.is_open()` guard**, so a bound chord fires even while the picker overlay is up — intended, and a behaviour change from the deleted `is_picker_trigger` branch, which sat behind `wire_keys`'s `picker.is_open()` early return. The picker's own keys are unaffected: `Esc` / `Up` / `Down` / `Enter` / ordinary typing are not bound chords, so `action_for_key` returns `None` and the event proceeds. See the crate [`README.md`](../README.md), "How a chord is actually matched (not by GTK)".
-- **`on_liveness_wake`** is the crash/stall entry point and the app calls it **FIRST** on each wake, before the pane view and the tree. It takes a short `core.borrow()` in its own statement, reads `WolfCore::liveness()` (a lock-free atomic read, never an RPC — free to call on every wake), computes `may_auto_restart = restart_attempts < MAX_AUTO_RESTART_ATTEMPTS`, applies the pure [`liveness_ui`](#liveness_uirs) mapping, resets `restart_attempts` to 0 on an `Alive` reading (so a later, unrelated crash gets its own automatic attempt rather than inheriting an exhausted counter), applies the overlay, schedules an automatic restart when the mapping asks for one and neither `restarting` nor `restart_scheduled` is set, and returns `ui.paint`. A `None` core returns `false`.
-- **`apply_overlay`** calls `crash_overlay.set_mode(mode)` and performs its side effects **only when that returns `true`** (a real transition): hidden → visible closes the picker (a crashed core must not leave an overlay whose Open would send into a dead nvim reachable underneath); visible → hidden parks focus back on the cmdline strip if focus was inside the overlay. **`focus_is_inside()` is sampled BEFORE `set_mode`**, which is what hides the overlay. GTK4 hides rather than unroots, so the root would still report the focus widget afterwards today — but `pane_view::rebuild_pane_area` sets the convention for this codebase ("sample before anything is unparented"), and the moment this overlay is unparented instead of hidden a post-hoc sample would silently stop returning focus. **Do not "tidy" that sample back below the `set_mode` call.**
-- **`schedule_restart`** sets `restart_scheduled`, increments `restart_attempts`, and defers the actual restart by `RESTART_DEFER` (50 ms) via `glib::timeout_add_local_once`. **Deferred rather than called inline, deliberately, and the mechanism was MEASURED rather than reasoned about.** `WolfCore::restart_nvim` is synchronous (a `runtime.block_on` over a kill, a spawn and the whole setup chain), so calling it from inside the wake handler would block the GTK main loop for the entire respawn with the overlay shown-but-never-presented — which is exactly why macOS's `.dead` overlay is never drawn on its success path. The tempting fix, `glib::idle_add_local_once` (on the argument that `G_PRIORITY_DEFAULT_IDLE` 200 loses to `GDK_PRIORITY_REDRAW` 120), is **empirically false under GDK/Wayland**: GDK's frame clock does not attach a _ready_ paint source — it is gated on `min_next_frame_time` and on the compositor's `wl_surface.frame` callback — so at the instant the handler returns it is not runnable while a plain idle is, and GLib runs the idle first. Verified under cage with a deliberately slow (2 s) respawn: with `idle_add_local_once` every capture showed the frozen pre-crash frame; with the timeout every capture showed `CRASHED_RETRYING_MESSAGE`. This fires ONCE per crash and introduces no polling, and the value is a cosmetic latency knob no assertion depends on.
-- **`restart_nvim`** is the ONE path shared by the automatic (`Dead`) restart and the overlay button, split into `capture_open_files` / `perform_restart` / `read_liveness` / `reopen_captured` so `clippy::too_many_lines` never bites. Order: the front-end re-entrancy guard (needed IN ADDITION to the core's own CAS, whose `Ok(false)` this front-end would otherwise misread as "no respawn happened"); capture the Tier-1 mirror BEFORE the call, because a respawn wipes it; call `WolfCore::restart_nvim()` under a short borrow, logging an `Err` rather than swallowing it; re-read liveness; clear the guard; then `match restart_outcome(...)`. A `Refresh` re-applies the overlay and does **nothing** else — no reset, no reopen, no banner, and above all no rescheduling. A `Respawned` resets `restart_attempts`, calls `panes.reset_after_restart()`, reopens the captured files in `reopen_order` (active LAST) via the same `InputEvent::Open` the picker and the tree use, hides the overlay, flashes the banner, and calls `panes.on_render_wake()` as belt-and-braces.
-- **The button and the automatic path call the same function, and the button RESETS the attempt counter.** The cap exists to stop an automatic retry loop, never to refuse a user. **Known, deliberate consequence:** against a permanently failing respawn one press can cost TWO respawns — the reset restores the automatic budget, so if the button's own restart fails, `restart_nvim`'s `Err` arm re-marks the core `Dead` and fires a wake, `on_liveness_wake` sees `restart_attempts == 0`, and one more automatic attempt is scheduled. The user sees the message flicker "…restart failed" → "…restarting…" → "…restart failed". This is **bounded, not a loop** (the automatic attempt increments the counter again, so it terminates after exactly one extra respawn), and the alternative — resetting only on an `Alive` reading — would refuse a user whose press raced a failing automatic attempt. Left as is; the flicker is the price, and it is documented at the reset site.
-- **`NotResponding` is reachable from `wolf-gnome` at exactly ONE point: launch.** `wolf_core` only ever marks `NotResponding` from `block_on_rpc`'s timeout arm, i.e. when the front-end issues a SYNCHRONOUS RPC that elapses `RPC_TIMEOUT_DEFAULT`. The intersection of the `WolfCore` methods `wolf-gnome` calls with `api.rs`'s sixteen `block_on_rpc` sites used to be **empty**; the application-state restore added exactly one entry, `rebuild_layout`, issued at most once per launch from [`pane_view::apply_layout_rebuild`](#pane_viewrs) before the window is interactive. Everything else this crate calls (`read_snapshot`, `send_input`, `drain_intents`, `drain_commands`, `focus_win`, `send_mouse`, `send_scroll`, `resize`, `resize_grid`, `live_cwd`, `pane_status`, `start_file_search`, `liveness`, `restart_nvim`, `open_files_for_tabpage`, `shutdown`) is a snapshot read or a queued input, so a wedged nvim at launch is the only thing that can raise the stall overlay — and nothing on the RESTART path issues one, which is what keeps the rule in the next bullet intact. Consequently `SIGSTOP`ing the captive nvim under a running, already-launched GTK app still produces nothing. The mapping and the message selection are table-tested headlessly, but the stall overlay's PRESENTATION remains unproven end to end on Linux: the one reachable window is a wedged nvim during launch, which no smoke induces, and no smoke fakes it either — manufacturing one would have meant a product change made solely to satisfy a test. The reachable surface widens the moment the buffer picker (`list_buffers`), Copy (`copy_visual_selection`) or the Markdown preview (`render_preview`) land on GTK, all of which are `block_on_rpc` paths; the paint gate is written now so those units inherit it.
-- **Never call `WolfCore::current_tabpage()` on the restart path.** It is a `block_on_rpc` (`api.rs`), and against a dead nvim it would freeze the GTK main loop for the whole RPC timeout budget on every single crash. `capture_open_files` uses the cheap, RPC-free `Snapshot::current_tabpage` field instead — emitted once at setup by `runtime/nvim/init.lua`'s `wolf_setup_tabs`, so it is populated right after attach. A `current_tabpage` of `0` yields `None`, which is "nothing to reopen", not an error. This is the sharpest trap in the whole feature.
-- **Input straddles a restart** (a shared `wolf-core` property, not a GTK one, recorded here because this is where a reader will look for it). The input pump reads a fresh RPC handle per batch, so keys enqueued while nvim is dead are delivered to the FRESH nvim once the handle swaps — a half-typed Ex command arrives as normal-mode keys. Benign for a human (the overlay is up, and a stray `Escape` clears whatever it started), but real: the crash smokes' recovery polls have to `wait_nvim_respawn` before typing for exactly this reason.
-- **`on_render_wake`** runs `settle_pending_reroot()`, `refresh_title()`, `state.on_render_wake()` and then `drain_and_dispatch_commands()`, **in that order**. The app calls it LAST on each wake, and — unlike the paint — **in all three liveness states**; see the [`app.rs`](#apprs) wake-bridge bullet for why. The drain stays last inside the handler for the same reason the handler is last outside it: a drained `close_window` tears the core down, so the state snapshot must already have been taken. The title refresh and the snapshot run UNGATED like the drain — both are cheap, neither issues an RPC, and the snapshot has its own `state_seam::may_snapshot` gate for the non-`Alive` case.
-- **`refresh_title`** reads `WolfCore::live_cwd()` under a short borrow (RPC-free — a tracked-cell read), passes it with the once-captured `home` through the pure [`title::window_title`](#titlers) seam, and pushes the result with `window.set_title` **only when it differs from `last_title`**. The cache is not cosmetic: `set_title` on every frame is pointless GTK churn, and — more to the point — the cage title smoke's red-run revert is the deletion of that single `set_title` call, so it has to be the only place a title is ever pushed. The `last_title` comparison is bound to a local so the `RefCell` borrow cannot still be alive when the `borrow_mut()` below it runs.
-- **Borrow discipline (load-bearing).** `drain_and_dispatch_commands` takes a SHORT `core.borrow()`, collects into a `Vec<Command>`, and drops the borrow **in its own statement** before dispatching anything. `UiAction::CloseWindow` / `QuitApplication` synchronously run `app::wire_close`'s `close-request` handler, which does `core.borrow_mut().take()`; an outstanding `borrow()` there is a `RefCell` panic, not a warning. The restart path adds a second rule: **never hold a snapshot read guard across `open_files_for_tabpage`.** `capture_open_files` binds `Snapshot::current_tabpage` to a local in its own statement so the `SnapshotReadGuard` drops before the mirror read takes the same `parking_lot` lock again (the `api.rs` `pane_status` precedent — a re-entrant read can deadlock behind a queued writer). Deferring the restart out of the wake handler also guarantees it runs with no `RefCell` borrow live anywhere.
-- **`perform`** is exhaustive with no `_` arm, so a new `UiAction` variant is a compile error here too. `CloseWindow` → `window.close()`, **never** `destroy()` (which skips `close-request` and leaks the nvim child); `QuitApplication` → `close()` on every one of the application's windows, deliberately **not** `gio::Application::quit()`, which bypasses `close-request` and orphans the captive Neovim; `MinimizeWindow` → `window.minimize()`; `ClosePane` / `NewUntitledBuffer` → `InputEvent::ClosePane` / `InputEvent::NewBuffer`; `OpenFilePicker` → `picker.open()`. A `Deferred` / `NoGnomeEquivalent` reaching either the drain or `perform` is **printed**, never silent.
-- **`open_folder_dialog`** shows a `gtk::FileDialog` folder chooser; on success `chdir_to` canonicalizes the path, sends `InputEvent::Chdir` and records it as `pending_reroot`. It does **not** re-root the tree synchronously — `start_file_search` resolves its root from `live_cwd()`, which only updates after nvim reports `DirChanged`, so an immediate re-root would re-root at the OLD cwd. `settle_pending_reroot` re-checks `workspace::reroot_ready` on each wake and, when ready, clears the pending value, calls `set_empty_state(false)` and `tree.reroot()`. `open_file_dialog` is the same shape, ending in `InputEvent::Open { path }`. A dialog `Err` is overwhelmingly "the user dismissed it" and is not reported.
-- **`set_empty_state(empty)`** toggles the empty-state overlay's visibility, sets `sidebar.set_visible(!empty)`, moves the paned divider to `0` / `TREE_PANE_WIDTH`, desensitizes the header Open button, enables/disables `win.go-to-file`, and forwards the flag to `StateHandle::set_empty` so the persisted `cwd` / `sidebar_visible` follow the LIVE empty state rather than being frozen at whatever launch decided (opening a folder into an empty-state window must start persisting that folder). **`sidebar.set_visible(false)` is the load-bearing half** — a divider position is advisory, while an invisible start child is never allocated at all. It disables **only** `win.go-to-file`: `win.new-buffer` and `win.close-pane` stay enabled in the empty state, so Ctrl+Shift+N there creates a buffer hidden behind the opaque status page. See the crate [`README.md`](../README.md), "The empty state", for that known limitation.
-- **`build_empty_state`** returns an opaque (`background` style class), full-bleed `gtk::Box` holding an `adw::StatusPage` (`folder-symbolic`, "No folder open", "Open a folder to start editing.") with a suggested-action pill button labelled "Open Folder…". It starts hidden and is meant to be added via `gtk::Overlay::add_overlay` so the editor `DrawingArea` keeps its full allocation. The button **self-wires** with `connect_clicked` + `activate_action(OPEN_FOLDER_ACTION)` on itself (widget action activation walks up the same muxer the window installs), which is why there is no `empty_state_widget()` accessor — it would have had no caller.
-
-Named constants: `OPEN_FOLDER_ACTION`, `GO_TO_FILE_ACTION` (`pub(crate)`, also the header Open button's target), `EMPTY_STATE_TITLE` / `_DESCRIPTION` / `_BUTTON` / `_ICON`, and `OPEN_FOLDER_DIALOG_TITLE` / `OPEN_FILE_DIALOG_TITLE`.
-
-## `persistence.rs`
-
-The **GTK glue** that commits `wolf-gnome`'s application state to `state.json` — named after, and playing the role of, the macOS `StatePersistence.swift`. It is thin by construction: every DECISION already lives in the pure [`state_seam.rs`](#state_seamrs) / [`pane_layout.rs`](#pane_layoutrs) seams, so this module only gathers live values and hands them over. Same conventions as `shell.rs` / `crash_overlay.rs`: an `Rc<PersistInner>` on the single GTK main thread, `Cell` interior mutability, and short core borrows never held across a `WolfCore` call.
-
-```rust
-pub struct StateParts<'a> { pub core, pub window, pub panes, pub store: Option<StateStore>, pub launch_cwd: PathBuf, pub empty: bool }
-pub struct StateHandle { /* Rc<PersistInner> */ }   // Clone
-pub fn build(parts: StateParts<'_>) -> StateHandle
-
-impl StateHandle {
-    pub fn set_empty(&self, empty: bool)   // from AppShell::set_empty_state
-    pub fn on_render_wake(&self)           // from AppShell::on_render_wake
-    pub fn flush_on_close(&self)           // FIRST in app::wire_close's close-request handler
-}
-```
-
-- **`build` installs no closures and takes no snapshot of its own.** It is a value constructor: the shell drives it from the wake, and `app::wire_close` from the close request. `StateParts` is a struct for the same reason `ShellParts` is.
-- **`store: Option<StateStore>` is the whole degradation story.** When `wolf_core::state_dir()` resolves to nothing (`app::open_state_store` logs that once), every method here early-returns and the app runs normally, neither restoring nor saving. There is no error path and no second convention.
-- **A snapshot is taken on EVERY render wake, with no timer and no debounce**, which is affordable because two coalescers already exist beneath it: `StateStore::set_snapshot` is a no-op when the submitted tree is identical to the current one, and the `wolf-state-writer` thread coalesces at 100 ms. Rebuilding a one-window/one-tab tree costs a `leaves()` walk plus one RPC-free `pane_status` per pane, so a resize drag produces at most ~10 disk writes per second. This preserves the crate's documented **zero-polling** property — no `glib::timeout` is added. It is also strictly better than macOS, whose snapshot is trigger-driven (window move / resize-end / sidebar KVO) and therefore does not capture a file opened in an already-open single-pane tab until the next trigger, reliably only at clean quit; here it is captured within one frame, and a SIGKILL loses at most the writer's 100 ms coalesce window.
-- **Every snapshot is GATED by `state_seam::may_snapshot`, and the gate prevents DATA LOSS rather than churn.** `snapshot_now` reads `liveness` under a short borrow, asks `PaneHandle::snapshot_readiness()` for `(bound panes, reported windows)`, and returns early unless the gate passes. A snapshot taken while nvim is dead, before the first pane binds, or before nvim's first `wolf_buffers` report would persist `layout: None` (or a topology whose leaf paths are all empty) and **destroy the user's saved layout**; gated, a crash preserves the last good save instead.
-- **What is submitted.** `state_seam::snapshot_state(width, height, cwd, sidebar_visible, layout)`, where the size comes from `window.default_size()` (SIZE only — position is never persisted), the layout from `PaneHandle::layout_snapshot()`, the cwd from `state_seam::snapshot_cwd(empty, launch_cwd, live_cwd)`, and `sidebar_visible` is the **inverse of the live empty-state flag** (the sidebar is hidden exactly when no project is open).
-- **`flush_on_close` takes a final synchronous snapshot and then blocks on `StateStore::flush(STATE_FLUSH_TIMEOUT)`** (`Duration::from_secs(2)`, mirroring `wolf-ffi`'s shutdown flush). Two seconds is generous by construction — the writer coalesces at 100 ms and each write is one small document plus a rename — and exists to bound the quit path against a wedged filesystem, not to be reached; a timeout prints rather than panicking.
-- **Borrow discipline is load-bearing HERE SPECIFICALLY.** `flush_on_close` runs inside `close-request`, which goes on to do `core.borrow_mut().take()`. Every `core.borrow()` in this module is therefore taken and dropped in its OWN statement, and none is live when the method returns. An outstanding `borrow()` there is a `RefCell` panic, not a warning — and it is exactly what the relaunch smokes' scenario exit code `13` ("run 1 exited non-zero") was given a distinct meaning for.
-- **This module has no unit tests and needs none** — it holds no rules. Its coverage is the two relaunch cage smokes plus the `state_seam` tables; see [`tests/README.md`](../tests/README.md).
-
-## `workspace.rs`
-
-The **pure, GTK-free** workspace decision: is a project open, and where does the captive Neovim start? Unit-tested headlessly in its own `#[cfg(test)] mod tests`.
-
-```rust
-pub const FALLBACK_CWD: &str = "/";
-pub enum LaunchDecision { EmptyState { nvim_cwd: PathBuf }, Folder { cwd: PathBuf } }
-pub fn launch_decision(process_cwd: Option<&Path>, restored: Option<&Path>, home: Option<&Path>, is_dir: impl Fn(&Path) -> bool) -> LaunchDecision
-pub fn reroot_ready(pending: Option<&Path>, live: Option<&Path>) -> bool
-pub fn home_dir() -> Option<PathBuf>
-```
-
-- **`launch_decision`** takes TWO candidate directories and returns `Folder { cwd }` for the FIRST that the private `is_usable_project(path, home, is_dir)` accepts — it is a directory, it is not `home`, and it is not `FALLBACK_CWD`. The order IS the Linux rule: `process_cwd` first (a terminal launch from a project is the idiom, and it wins over anything `state.json` remembers, because silently reopening yesterday's project instead would be surprising), then `restored` — the cwd recovered from `state.json` by [`state_seam::restore_plan`](#state_seamrs) — which is what a desktop-launcher start falls back to, and which is the macOS behaviour (`StateSeam.launchDecision` consults only the restored cwd). With neither usable it returns `EmptyState { nvim_cwd }`, where `nvim_cwd` is `home` when `home` is `Some` and `is_dir(home)`, else `FALLBACK_CWD` (a `$HOME` pointing at a non-directory is no better a place to start nvim than `/`). **Applying the SAME predicate to the restored cwd is deliberate:** it means a hand-edited `state.json` naming `/` can never point the sidebar's `FileSearch` at the whole filesystem, and treating `$HOME` as a project would point it at the whole home tree — the pathological case `wolf_core::files::SearchBounds` exists to prune. Passing `restored: None` reproduces the pre-restore behaviour EXACTLY, which is why every historical unit-test row still holds unchanged: the parameter is a strict superset, not a change of rule. `is_dir` is an **injected predicate**, not a filesystem call, which is what makes the rule testable with no temp dirs and no real `$HOME`; production passes `Path::is_dir`. See the crate [`README.md`](../README.md), "The empty state".
-- **`reroot_ready`** is `false` unless BOTH sides are `Some` and equal. It is a plain `==`: `Path: PartialEq` compares COMPONENTS, so a trailing separator is already ignored — but `.` / `..` / symlinks are **not** resolved, which is exactly why callers canonicalize both sides first (`app.rs` for the launch paths, `shell.rs::chdir_to` for the pending re-root).
-- **`home_dir`** is the module's one impure function: `std::env::var_os("HOME")`, rejecting unset/empty, then `std::fs::canonicalize`. Read this way rather than adding a `dirs` dependency to `wolf-gnome`. It is also the ONE `$HOME` read in the crate — [`shell.rs`](#shellrs) captures its result once at build time and injects it into [`title.rs`](#titlers), which never reads the environment itself.
-
-## `state_seam.rs`
-
-The **pure, GTK-free** APPLICATION-STATE seam: what to restore at launch, and what to persist on each wake. The Rust analogue of the macOS `StateSeam.swift` plus the write-side rules macOS keeps inside `AppDelegate.snapshotNow`. GTK-free, IO-free, and it never reads `$HOME` or the process cwd — every input is injected, so the whole restore/persist rulebook is unit-tested headlessly in its own `#[cfg(test)] mod tests`, with no temp dirs and no window, exactly like [`layout.rs`](#layoutrs) and [`workspace.rs`](#workspacers).
-
-```rust
-pub struct RestorePlan { pub core_cwd: PathBuf, pub empty: bool, pub layout: Option<PaneNode>, pub window_size: Option<(i32, i32)> }
-
-pub fn restore_plan(saved: Option<&WolfState>, process_cwd: Option<&Path>, home: Option<&Path>, is_dir: impl Fn(&Path) -> bool) -> RestorePlan
-pub fn restored_window_size(width: f64, height: f64) -> Option<(i32, i32)>
-pub fn persistable_layout(node: PaneNode) -> Option<PaneNode>
-pub fn snapshot_cwd(empty: bool, launch_cwd: &Path, live_cwd: Option<&Path>) -> String
-pub fn may_snapshot(liveness: Liveness, bound_panes: usize, reported_windows: usize) -> bool
-pub fn snapshot_state(width: i32, height: i32, cwd: String, sidebar_visible: bool, layout: Option<PaneNode>) -> WolfState
-```
-
-- **`restore_plan`**, in order: take `saved.windows.first()`, then its `tabs.first()`; treat a non-empty `tab.cwd` as the restored project (`""` is the documented "nvim never reported a cwd" sentinel, not a path); hand BOTH candidates to [`workspace::launch_decision`](#workspacers); then attach the saved layout and the saved window size. It is what `app::build_ui` reads before any widget exists.
-- **A saved layout is restored ONLY into the project it was saved from.** Its leaf paths are absolute paths belonging to one project, so `tab.layout` is attached only when the decision is `Folder { cwd }` **and** that `cwd` IS the restored cwd. Launching from a different directory therefore restores a fresh empty pane and nothing else — its own named unit test, because the failure it prevents (one project's files reopened inside another) would look like data corruption to a user.
-- **`restored_window_size` is the Linux half of macOS's `StateSeam.restoredWindowFrame`.** A non-positive, non-finite, or out-of-`i32`-range dimension is the unset sentinel and collapses the WHOLE result to `None` — the [`geometry.rs`](#geometryrs) whole-result-collapse convention, never a per-axis partial answer, because a usable width with a garbage height is not half a window size. `f64 as i64` saturates in Rust (never wraps, never UB), so an absurd saved value lands outside `i32` and `i32::try_from` turns it into the documented `None` rather than a clamped nonsense size.
-- **Window POSITION is deliberately NOT persisted, permanently, on Wayland.** A Wayland client is given neither its own position nor screen geometry, so there is no Linux analogue of macOS's "the restored frame intersects some screen" check — with no screen rectangle to test against, a restored `x`/`y` could not be validated even in principle. `snapshot_state` therefore writes `x`/`y` as `0.0` unconditionally (a deliberate zero, rather than a plausible-looking coordinate a later reader might trust), a unit test pins that so nobody "fixes" it with a garbage value, and only the SIZE is ever restored. This is a permanent platform decision, not an unfinished corner.
-- **`sidebar_visible` is written but never read back, also deliberately.** It is written so the field cannot silently rot out of the file (a unit test asserts the snapshot side writes `!empty`), and it is not applied on restore because `win.toggle-sidebar` is `Reserved`: a user can never legitimately produce `sidebar_visible == false` with a folder open, so honouring a `false` from a hand-edited file would hide the sidebar with no way to bring it back. `RestorePlan` does not carry the field at all, which is what makes that non-application structural rather than a forgotten branch.
-- **`persistable_layout` IS the single-pane fix.** It suppresses a layout only when [`pane_layout::is_empty_leaf`](#pane_layoutrs) holds — a CONTENT test — and **never** `leaf_count(..) > 1`. The suppressed case is the pre-existing invariant that must be preserved: the empty-state "no folder" lone pane persists `layout: None`. See [`pane_layout.rs`](#pane_layoutrs) for the macOS bug an arity guard here reintroduces.
-- **`snapshot_cwd`: the empty state persists `""` ALWAYS.** A `LaunchDecision::EmptyState` hands nvim `$HOME` (or `/`) purely because a process needs a working directory; persisting that would turn every desktop-launcher start into "a project at `$HOME`" on the next launch. macOS has the same rule (its passive launch cwd is never persisted). With a project open it is nvim's LIVE cwd once reported, else the launch cwd — so quitting before the first `DirChanged` does not forget the project.
-- **`may_snapshot` is a data-loss guard, not tidiness.** `true` **iff** the core is `Alive`, at least one pane has a RESOLVED grid, and nvim has reported its per-window buffer map at least once (`reported_windows` is `Snapshot::win_buffers.len()`, empty until the first `wolf_buffers` notification). Without it, a snapshot taken while nvim is dead or before the first pane binds would persist `layout: None` — or a topology with empty leaf paths — and overwrite the user's saved layout with nothing. The match over `wolf_core::Liveness` is TOTAL — **no catch-all arm** — so a new variant is an `E0004` here rather than a silent "not alive", matching [`liveness_ui`](#liveness_uirs), `ui_action_for` and `pane_view::apply_intents`.
-- **`snapshot_state` is the ONE place the "single window, single tab" shape lives.** It writes exactly one of each, pinned by its own unit test, so a later multi-window unit has to change it deliberately rather than discovering the assumption scattered through the glue.
-
-## `title.rs`
-
-The **pure, GTK-free** WINDOW-TITLE seam: the working directory, rendered. A 1:1 port of the macOS `CwdTitleSeam.displayTitle(cwd:home:)`, so the two front-ends abbreviate a path identically. Scalar strings only — no widget, no `PathBuf`, no filesystem, and above all **no implicit `$HOME`**: `home` is ALWAYS injected by the caller, which is what makes the whole rule decidable from its arguments and unit-testable headlessly. Unit-tested in its own `#[cfg(test)] mod tests`.
+- `ACTION_TABLE` and `MENU_SECTIONS` — the source of truth the menu, the accelerators, and the command dispatch all read, so none can drift.
+- `BindingStatus` — `Bound` is registered and matched; `Reserved` is declared for a later unit and is neither; `MenuOnly` carries no chord.
+- `action_for_key(keyval, state)` — the matcher the chord controller calls. It scans `Bound` rows only: matching a reserved row would swallow the key and do nothing.
+- `parse_accel` and `forbidden_reason` — the invariant checker, run over every row by this module's tests.
 
-```rust
-pub const WINDOW_TITLE_FALLBACK: &str = "Wolf";
-pub fn display_title(cwd: &str, home: &str) -> String
-pub fn window_title(cwd: &str, home: &str) -> String
-```
-
-`display_title`'s contract, in order:
+**Decisions**
 
-1. `cwd` empty or all-whitespace (`cwd.trim().is_empty()`) → `""` — an unknown cwd carries no information at all, and the caller substitutes a fallback.
-2. `home` empty → `cwd` verbatim (abbreviation disabled).
-3. `home` is normalized by stripping **one** trailing `/`; if that leaves it empty (i.e. `home` was `"/"`) → `cwd` verbatim, because abbreviating every absolute path to `~/…` would be actively misleading.
-4. `cwd == normalized_home` → `"~"`.
-5. `cwd` starts with `normalized_home + "/"` → `"~/" + remainder`. **The match is on a full path-SEGMENT boundary only**, which is the whole point of comparing against `normalized_home + "/"` rather than `normalized_home`: `/Users/janet/x` shares a character prefix with home `/Users/jane` but is not under it and must NOT be abbreviated.
-6. otherwise → `cwd` verbatim.
+- `parse_accel` re-implements the accelerator grammar this crate allows rather than calling `gtk::accelerator_parse`, which asserts an initialized main thread and cannot run headlessly. A checker nobody can run is not a checker. The grammar admits only `<Control>`, `<Shift>`, and `<Alt>` with a key name, so `<Super>` and `<Primary>` never reach `forbidden_reason`.
+- `action_for_key` compares its three modifiers exactly and ignores every other bit: intercepting a Super-contaminated chord beats forwarding one Neovim mangles. Letters compare case-insensitively, since a shifted letter's keyval is keymap-dependent.
 
-`window_title` is `display_title` with the empty result replaced by `WINDOW_TITLE_FALLBACK`, so the widget layer has nothing left to decide — "what do we show when there is no cwd yet" is answered here, and unit-tested, rather than inside a GTK closure. `app.rs`'s window builder seeds the same constant as the initial title, so the title never flickers between two spellings before the first cwd is reported. [`shell.rs`](#shellrs)'s `refresh_title` is the only caller.
+**Gotchas**
 
-## `geometry.rs`
+- Whether an action is installed follows from its command's classification, not from `status`. Promoting a reserved row means flipping `status` too, or the chord stays inert.
 
-The pure pixel-to-grid geometry seams (no GTK/pango). Both live in ONE file on purpose: the composition guarantee between them must be provable — and is mechanically asserted — in a single place.
+#### `app.rs`
 
-```rust
-pub fn grid_size_for(width_px: i32, height_px: i32, cell_w: f64, cell_h: f64) -> (u16, u16)
-pub fn cell_at(x: f64, y: f64, cell_w: f64, cell_h: f64, cols: u16, rows: u16) -> (u32, u32)
-```
+Purpose: all GTK and Adwaita window wiring. `run` builds the `adw::Application` and, on activate, constructs the window — header bar, sidebar, and an editor overlay holding the pane view, the picker, the empty state, and the crash overlay — attached to a freshly started `WolfCore`.
 
-- **`grid_size_for`** — `cols = floor(width_px / cell_w)`, `rows = floor(height_px / cell_h)`, each clamped to `[1, u16::MAX]`. As a resize guard, the **whole** result collapses to `(1, 1)` if either pixel dimension is non-positive or either cell size is degenerate (zero, negative, NaN, or infinite). The clamp is done in `f64` space _before_ the cast, so the truncating cast to `u16` is saturating-safe by construction. `#[must_use]`.
-- **`cell_at`** — the pointer position → grid cell conversion, returning **`(row, col)`**: that tuple order matches `wolf_core::MouseEvent`'s `row` / `col` field order and macOS's `PaneGeometry.cellAt`, and is deliberately NOT `(x, y)`. `col = clamp(floor(x / cell_w), 0, cols - 1)`, `row = clamp(floor(y / cell_h), 0, rows - 1)`. A point **outside** the grid maps to the NEAREST EDGE CELL — never rejected, never out of range — which is what makes drag-past-the-edge selection keep extending to the last row/column instead of stalling at the pane edge. Degenerate guards mirror `grid_size_for`'s whole-result collapse: a non-finite or `<= 0.0` `cell_w`/`cell_h`, or `cols == 0`, or `rows == 0`, all yield `(0, 0)`. Like `grid_size_for` it clamps in `f64` space before the cast (via the private `floor_clamped` helper, which is where the one `#[allow]` lives), so the truncating cast to `u32` is saturating-safe by construction. `#[must_use]`.
+**Public API**
 
-**Non-finite COORDINATES are not one rule but two, and the distinction is load-bearing.** A **NaN** coordinate has no direction, so there is no "nearest edge" to clamp it to and that axis is treated as `0.0`. An **infinite** coordinate DOES have a direction, so it clamps to the nearest edge exactly like any other out-of-range point — `+inf` to the last cell, `-inf` to the first. `cell_at_table` pins both, from three directions (NaN, `+inf`, `-inf`). The tempting shorthand "non-finite → `0.0`" is **wrong**: it would send a drag that overshoots to `+inf` back to the FIRST cell instead of the last, silently inverting the selection. Note this is about the POINTER coordinates only: a non-finite `cell_w`/`cell_h` still collapses the whole result to `(0, 0)`.
+- `run() -> glib::ExitCode` — hands GTK an empty argv, so the process command line is never parsed or rejected.
 
-**How it composes with `grid_size_for`.** `cell_at` takes `cols`/`rows` as parameters and clamps into `[0, cols-1] × [0, rows-1]`; it cannot produce anything else. `pane_view` passes the **live** grid dimensions read from the snapshot (`snap.grid(g).cols` / `.rows`, converted with `u16::try_from(..).unwrap_or(u16::MAX)`) — what nvim has actually applied, which is strictly more authoritative than what `grid_size_for` last requested. On top of that, the `cell_at_never_exceeds_grid_size_for` unit test composes the two mechanically over a table of widget sizes × cell sizes × probe points (including far outside the widget in both directions, and NaN), asserting `row < rows && col < cols` where `(cols, rows) = grid_size_for(...)`. The invariant is executable, not a comment — which is why `pane_view` can pass a pointer position straight through with no bounds check of its own.
+**Decisions**
 
-**`(x, y)` are WIDGET-LOCAL, and that is a deliberate contract, not an accident.** GTK gesture/motion callbacks deliver coordinates already translated into the `DrawingArea`'s own space, and `pane_view::draw_pane` paints cell `(row, col)` at `(col * cell_w, row * cell_h)` from that same origin, so there is **no grid-origin subtraction** here. This matters for any future pointer-injection test harness: **GTK4's CSD shadow margin offsets SURFACE coordinates by exactly +20,+20 unless the window is fullscreened**, so a harness that computes a target from the surface geometry and assumes window-origin == surface-origin will miss by 20 px in both axes. `cell_at` is correct as written precisely because it never makes that assumption — but no pixel→cell seam in this crate may start making it. Relatedly, `wolf-gnome` has no editor insets, no 90-column cap, no centering and no per-pane status bar (all separate, still-unticked feat-list rows), so the GTK conversion is strictly simpler than macOS's: **do not import the macOS `gridRect` / `paintOffset` machinery.** If any of those rows lands, this function grows a grid-origin parameter, and this paragraph is the tripwire.
+- Before any widget exists, the state store is opened and turned into a restore plan, so the working directory, window size, and saved pane tree are known while the window is still being built. A missing state directory degrades every later state call to a no-op.
+- The saved layout is queued on the pane view with no arity guard, which is one half of the content-predicate rule in [DECISIONS.md](../DECISIONS.md).
+- Cell metrics are measured once from a throwaway 1x1 `ImageSurface` (used only to obtain a Pango context) and shared by `Rc`, so a resize arriving before the first draw already has a size.
+- The close-request handler flushes state first, while the core and panes are still alive, and takes the core out in its own statement so the borrow is released before `shutdown` blocks. A flush after the take sees no core, is refused by the snapshot gate, and silently loses the session.
 
-## `input.rs`
+**Gotchas**
 
-The GDK key-translation seam.
+- The wake-channel capacity stays private, and its three tests live in this module so they read the production constant rather than a literal.
 
-```rust
-pub fn gdk_key(keyval: gdk::Key, state: gdk::ModifierType) -> Option<wolf_core::KeyEvent>
-```
+#### `command_action.rs`
 
-- **Modifier extraction**: `ctrl` ← `CONTROL_MASK`, `shift` ← `SHIFT_MASK`, `alt` ← `ALT_MASK`, `meta` ← `SUPER_MASK`.
-- **Mapping table** (named keys resolved _before_ the printable fallback, since their `to_unicode()` is often a control char): `Return`/`KP_Enter` → `Enter`; `Escape` → `Esc`; `Tab`/`ISO_Left_Tab` → `Tab`; `BackSpace` → `Backspace`; `Delete` → `Delete`; `Left`/`Right`/`Up`/`Down`; `Home`/`End`; `Page_Up`/`Page_Down` → `PageUp`/`PageDown`. The contiguous `F1..=F12` keyval range maps to `Key::F(n)`, with the named base constant `F_KEY_FIRST = 1` (so `F1` → `n = 1`).
-- **Printable fallback**: otherwise `keyval.to_unicode()`; a non-control char becomes `Key::Char(c)`.
-- **Shift rule**: the printable branch _always_ sets `shift = false` (the keyval already carries the shifted glyph); named keys pass the real `shift` through. `ISO_Left_Tab` is treated as Shift+Tab → `Key::Tab` with `shift = true` even if the SHIFT mask was not set.
-- **`None` behavior**: bare modifier / lock keys (`is_modifier_or_lock`: `Shift_L/R`, `Control_L/R`, `Alt_L/R`, `Meta_L/R`, `Super_L/R`, `Hyper_L/R`, `Caps_Lock`, `Shift_Lock`, `Num_Lock`, `Scroll_Lock`); any keyval with no unicode value; and any control-character unicode value.
-
-Internal helpers: `named_key` (the match table), `function_key` (the `F1..=F12` range check via `into_glib()`), and `is_modifier_or_lock`.
-
-## `mouse.rs`
-
-The GDK **pointer**-translation seams — the mouse/scroll analogue of [`input.rs`](#inputrs). GDK value types in, `wolf_core` input values out, with no widget, no display and no event loop, so every rule is unit-tested headlessly in the module's own `#[cfg(test)] mod tests`. Ported BEHAVIOURALLY (not literally) from `crates/wolf-macos/Sources/WolfKeyMap/ScrollAccumulator.swift` and `PaneContainerView.swift`'s `mouseEvent` / `scrollWheel`.
-
-```rust
-pub struct MouseInput { pub button: wolf_core::MouseButton, pub ctrl: bool, pub shift: bool, pub alt: bool }
-pub fn mouse_input(button: u32, state: gdk::ModifierType) -> Option<MouseInput>
-pub fn scroll_threshold(unit: gdk::ScrollUnit, cell_h: f64) -> f64
-
-pub struct ScrollAccumulator { /* private `remainder: f64` */ }   // Clone + Copy + Debug + Default + PartialEq
-impl ScrollAccumulator {
-    pub const fn new() -> Self
-    pub fn consume(&mut self, delta: f64, threshold: f64) -> i32
-    pub fn reset(&mut self)
-}
-
-pub struct PaneScroll { /* private `acc: ScrollAccumulator`, `last_grid: Option<u64>` */ }  // Clone + Copy + Debug + Default + PartialEq
-impl PaneScroll {
-    pub const fn new() -> Self
-    pub fn steps_for(&mut self, grid: u64, delta: f64, threshold: f64) -> i32
-}
-
-pub fn scroll_steps(steps: i32) -> Option<(wolf_core::ScrollDirection, u32)>
-```
-
-The module deliberately performs **no pixel-to-cell conversion** and never reads a snapshot — the cell comes from [`geometry::cell_at`](#geometryrs) and the grid from the live snapshot. Keeping those out is what makes every rule here decidable from its arguments alone. `PaneScroll` is handed a grid id, but only as an **opaque identity token it compares for equality**; it never resolves one, so that property still holds. `MouseInput` is deliberately not a `wolf_core::MouseEvent` for the same reason: it carries only what GDK itself reports about the button.
-
-- **`mouse_input`** — `button == gdk::BUTTON_PRIMARY` (1) yields `Some(MouseInput { button: MouseButton::Left, .. })`; **every other button number yields `None`**. That is deliberate parity with macOS, which overrides only `mouseDown` / `mouseDragged` / `mouseUp` — right-click context menus and middle-click paste are separate, unimplemented features on both platforms. `GtkGestureSingle`'s default `button` property is already `GDK_BUTTON_PRIMARY` and `pane_view` sets it explicitly, so in practice the gesture never fires for another button; the `None` arm is defence-in-depth plus the one place the decision is recorded and tested. Modifiers: `ctrl` ← `CONTROL_MASK`, `shift` ← `SHIFT_MASK`, `alt` ← `ALT_MASK`. **`SUPER_MASK` is ignored, not forwarded** — Neovim has no meta mouse modifier (`wolf_core::input::apply_mouse` builds only `"C-"`, `"S-"` and `"A-"`, in that fixed order), so forwarding it would be meaningless. Every other bit (`LOCK_MASK` for Caps Lock, the button masks) is outside that grammar and is dropped the same way. Note this DIFFERS from `input::gdk_key`, which does map `SUPER_MASK` → `meta`: keys have a `<D-…>` notation, mouse events do not.
-- **`scroll_threshold`** — the delta, in whatever unit GDK reported, that constitutes exactly one line step. `ScrollUnit::Wheel` → the private `WHEEL_THRESHOLD` (`1.0`): a wheel delta is already expressed in detents, so one detent is one step regardless of cell height. `ScrollUnit::Surface` → `cell_h` when it is finite and `> 0.0`, since a surface delta is in pixels. Everything else — a degenerate `Surface` cell height, and the catch-all arm that `gdk::ScrollUnit`'s `#[non_exhaustive]` + `__Unknown(i32)` variant force — falls back to `WHEEL_THRESHOLD`. **That fallback direction is a decision, not a default:** guessing WHEEL for a pixel-shaped delta makes scrolling over-sensitive, which is immediately visible and recoverable by the user, whereas guessing SURFACE for a detent-shaped delta would need roughly `cell_h` detents per line, i.e. scrolling would be dead. Over-sensitive beats dead.
-- **`ScrollAccumulator`** — accumulates fractional deltas into discrete whole-threshold line steps. The carried remainder is SIGNED and carries between calls indefinitely, so a run of sub-threshold trackpad nudges crosses a boundary exactly once and a direction reversal is symmetric. It is `Copy` on purpose: `pane_view` keeps one per pane in a `Cell` (wrapped in a `PaneScroll`), so no borrow can ever be held across a `WolfCore` call. `reset` clears the carry; deciding WHEN it must be cleared is deliberately not this type's job — `PaneScroll` owns that rule. `consume(delta, threshold)` guarantees, in order:
-  1. A non-finite `delta`, or a non-finite or non-positive `threshold`, returns `0` and leaves the carry **UNTOUCHED** — a rejected call must be indistinguishable, from the accumulator's point of view, from no call at all. (A NaN remainder would return `0` forever and kill scrolling for the rest of the session.)
-  2. If adding `delta` makes the remainder itself non-finite, the remainder is **zeroed** and `0` returned — recover, do not poison.
-  3. `raw = trunc(remainder / threshold)`, clamped to `[-MAX_STEPS_PER_EVENT, MAX_STEPS_PER_EVENT]` (`±256`). When the clamp bites, the carry is **DROPPED**: a delta that large is garbage, and carrying it would keep firing forever.
-  4. It is **O(1)**. This is the one **deliberate divergence from macOS**: `ScrollAccumulator.swift` uses two unbounded `while` loops that are `O(delta / threshold)`. Its only guard is `cellHeight > 0` — which does incidentally reject a NaN cell height, since `NaN > 0` is false — and there is **no guard at all on `deltaY`**: a NaN delta poisons its `remainder` permanently (both loop conditions then read false forever, so it returns `0` for the rest of the session), and an infinite delta makes the first loop run forever. The arithmetic form has identical semantics for every realistic input; the ported unit-test table pins that equivalence, and its `1e300` row would never finish under the loop form. Logged in [`macos-followups.md`](../../../macos-followups.md) as a hardening suggestion for the Swift side.
-
-  Private constants: `WHEEL_THRESHOLD` (`1.0`), `MAX_STEPS_PER_EVENT` (`256`) and `MAX_STEPS_PER_EVENT_F`, which is DERIVED from the former (`MAX_STEPS_PER_EVENT as f64`) rather than restated, so the two spellings of the cap cannot drift.
-
-- **`PaneScroll`** — a `ScrollAccumulator` plus the grid it was last applied to: the whole of one pane's scroll bookkeeping as a pure value. `steps_for(grid, delta, threshold)` resets the carried remainder FIRST when `grid` differs from the grid of the previous call, then returns exactly what `ScrollAccumulator::consume` returns; every other rule (the non-finite guards, the O(1) arithmetic, the `±256` clamp, the carry) is the accumulator's, sequenced here and never re-implemented. **"The previous call" means the previous call to `steps_for`, accepted or not**: a call `consume` rejects still names a grid and still records it, so a rejected event on a different grid ends the old grid's carry just like an accepted one would (the natural implementation gets this for free, and `pane_scroll_table` pins it). It exposes **no manual reset** — a grid change is the only way the carry is cleared. Why the rule exists: the remainder is a fraction of a line **of one particular grid**, so carrying half a line out of the pane the pointer just left and into the pane it just entered would make the new pane's first event jump by a step it did not earn.
-
-  **Why this lives here and not in `pane_view`.** macOS keeps it in the view (`PaneContainerView.scrollWheel`'s `if grid != lastScrollGrid { reset() }`), and it did on this side too until it was pulled down. That was pure logic sitting in GTK glue, which needs a live display — and at the time pointer input had **no end-to-end coverage at all** on Linux, so a rule left in the glue was a rule nothing verified. Pointer input now HAS cage coverage — four smokes driving real `wl_pointer` events through the controllers (see [`tests/README.md`](../tests/README.md), "Pointer injection: how it works and why it is built this way") — and the placement is unchanged and still right for two reasons: the rule is decidable from its arguments, so `pane_scroll_table` / `grid_change_discards_the_carry` pin it headlessly and exhaustively; and discriminating a per-grid carry end to end would need two panes plus a pointer that scrolls across both, which no smoke does. `Copy` for the same reason `ScrollAccumulator` is: `pane_view` holds it in a `Cell`.
-
-- **`scroll_steps`** — `0` → `None`; `steps > 0` → `Some((ScrollDirection::Down, n))`; `steps < 0` → `Some((ScrollDirection::Up, n))`, with `n = steps.unsigned_abs()`, which is total where a plain `-steps` would panic in a debug build on `i32::MIN`.
-
-  > **This sign convention is the OPPOSITE of macOS's. Do not "fix" it.** AppKit's `scrollingDeltaY > 0` means "show earlier content" (the viewport moves toward line 1), so `crates/wolf-macos` maps a positive step count to `Up`. GDK's smooth-scroll `dy > 0` corresponds to `GDK_SCROLL_DOWN` — the viewport moves toward the END of the buffer — so `wolf-gnome` maps a positive step count to `Down`. And `ScrollDirection::Down` is pinned empirically, against real Neovim, by `crates/wolf-ffi/tests/mouse_scroll.rs` to strictly INCREASE `win_viewport.topline`, which is exactly what a positive GDK `dy` must do. Anyone cross-reading `PaneContainerView.swift` will find this backwards; it is SUPPOSED to look backwards, and flipping it would make GTK scrolling run the wrong way while every macOS test stayed green, because macOS never runs this code. The `scroll_direction_is_inverted_from_macos` unit test exists for no other purpose than to make that impossible by accident.
-
-## `render.rs`
-
-The Cairo/Pango paint seam.
-
-```rust
-pub struct CellMetrics { pub cell_w: f64, pub cell_h: f64, pub baseline: f64, pub font: pango::FontDescription }
-impl CellMetrics { pub fn for_font(cr: &cairo::Context, family: &str, size_pt: f64) -> Self }
-pub fn paint(cr: &cairo::Context, grid: &wolf_core::Grid, highlights: &wolf_core::HighlightTable, metrics: &CellMetrics)
-```
-
-Under `ext_multigrid` the front-end paints a single grid at a time, so `paint` takes the `Grid` and its `HighlightTable` directly rather than a whole `Snapshot`. `app.rs` passes `snap.active_grid()` + `&snap.highlights` (the active window grid in this stage; a per-pane grid later).
-
-- **`CellMetrics` fields** (all in Cairo device units — pixels for an `ImageSurface`): `cell_w` advance width, `cell_h` line height, `baseline` offset from cell top, and `font` the base `pango::FontDescription` (cloned and toggled for bold/italic per cell).
-- **`CellMetrics::for_font`** builds a `FontDescription` for `family` at `size_pt` (× `pango::SCALE`), creates a Pango context from `cr` (surface size irrelevant), and reads its `FontMetrics`: `cell_w` = `approximate_char_width` (exact for monospace), `cell_h` = ascent + descent, `baseline` = ascent — each divided by `pango::SCALE`.
-- **`paint` algorithm**, per `(row, col)` over the grid: resolve the cell's highlight via `HighlightTable::resolve` (`reverse` + defaults already applied); choose fg/bg with fallback to the editor defaults and finally to the named `FALLBACK_FG` (white) / `FALLBACK_BG` (black); convert 8-bit channels via the `RGB_MAX = 255.0` divisor; **always** fill the background rectangle (the Cairo `Result` is `expect`ed, never dropped); then **skip the glyph for empty text** (`cell.text.is_empty()` — a wide-char trailing placeholder or never-painted cell, where the bg fill alone preserves alignment).
-- **`draw_glyph`** (the glyph path): clones the base font, toggles `Weight::Bold` / `Style::Italic` per `ResolvedStyle`, creates a pangocairo layout, sets the text, applies single `Underline` via an `AttrList` when `style.underline`, sets the fg source, moves to the cell top-left, and shows the layout.
-- **Attributes applied**: bold, italic, single underline. **Deferred** for Tier 1: undercurl and strikethrough. No system theme is queried.
-
-`FALLBACK_FG` / `FALLBACK_BG` and `draw_glyph` are `pub(crate)` so the `cursor` module and `app.rs` can reuse them (no color/alignment drift).
-
-## `cursor.rs`
-
-The pure, GTK-free cursor geometry and color logic (mirrors `geometry.rs`: no widget, no display, no nvim — fully unit-tested in its own `#[cfg(test)] mod tests`). `app.rs`'s `draw_cursor` is the only GTK glue: it computes the cell box from `CellMetrics`, calls these two functions, issues the opaque fill, and (for a block) redraws the glyph via `render::draw_glyph`.
-
-```rust
-pub fn cursor_rect(shape: wolf_core::CursorShape, cell_x: f64, cell_y: f64, cell_w: f64, cell_h: f64, cell_percentage: Option<u32>) -> (f64, f64, f64, f64)
-pub fn cursor_colors(snap: &wolf_core::Snapshot) -> (wolf_core::Rgb, wolf_core::Rgb)
-```
-
-- **`cursor_rect`** returns the `(x, y, w, h)` to fill for `shape` within the cell box:
-  - `Block` → the whole cell, ignoring `cell_percentage`.
-  - `Vertical` → a left bar of full height; width = `cell_percentage` of `cell_w`, floored to `MIN_BAR_PX` and capped at `cell_w`.
-  - `Horizontal` → a bottom bar of full width (anchored to the cell's bottom edge); height follows the same rule against `cell_h`.
-  - `cell_percentage` is a **PERCENT** (1–100): it is divided by `PCT_DENOM` (`100.0`) and clamped to `0.0..=1.0`, defaulting to `DEFAULT_CELL_PCT` (`0.25`, Neovim's convention) when `None`. Named constants: `MIN_BAR_PX` (`2.0`), `DEFAULT_CELL_PCT` (`0.25`), `PCT_DENOM` (`100.0`).
-- **`cursor_colors`** returns the `(fill, glyph)` pair. The **`WolfCursor` app-theme group** (`Snapshot.theme.cursor`, from the `wolf_theme` notification) is honored FIRST and unconditionally when its bg is set — `fill` = theme bg, `glyph` = theme fg or (when the theme fg is unset) the underlying cell's bg, the reverse-video glyph — kept in lockstep with wolf-ffi's `cursor_colors` port. When the theme bg is unset (group absent/cleared) it falls through to **reverse video**: it honors the current mode's cursor highlight (`mode_infos[cursor.mode_idx].attr_id`, resolved) as `(fill, glyph) = (bg, fg)` **only when that yields a visible cursor** — both fg and bg resolve to `Some`, the fill `bg` differs from the underlying cell's background (no dark-on-dark over an identical cell), and `bg` differs from `fg` (the glyph is not invisible against its own fill). Otherwise it **inverts** the underlying cell: `fill` = the cell's fg, `glyph` = the cell's bg, each falling back through the editor defaults and finally to `render`'s `FALLBACK_FG` (white) / `FALLBACK_BG` (black). An out-of-range `mode_idx`, empty `mode_infos`, or an out-of-bounds cursor cell all fall through to inversion without panicking (via `.get`).
-
-## `layout.rs`
-
-The **pure, GTK-free** N-ARY pane-layout tree (decision D7, Neovim's frame model), unit-tested headlessly in its own `#[cfg(test)] mod tests` (mirroring `geometry.rs` / `cursor.rs`). It owns every pane-geometry decision reasonable without a display; `pane_view.rs` is the only place that turns it into widgets.
-
-```rust
-pub type PaneId = u64;
-pub enum Orientation { Horizontal, Vertical }   // matches wolf_core::SplitOrientation
-pub struct Rect { pub x: f64, pub y: f64, pub w: f64, pub h: f64 }
-pub enum PaneLayout { Leaf(PaneId), Split { orientation, children: Vec<PaneLayout>, weights: Vec<f64> } }
-pub struct PaneTree { /* private n-ary frame tree of leaves/splits */ }
-impl PaneTree {
-    pub fn new(root: PaneId) -> Self
-    pub fn split(&mut self, target: PaneId, new_pane: PaneId, orientation: Orientation)
-    pub fn remove(&mut self, pane: PaneId)
-    pub fn leaves(&self) -> Vec<PaneId>
-    pub fn pane_rects(&self, width: f64, height: f64) -> Vec<(PaneId, Rect)>
-    pub fn neighbor(&self, from: PaneId, dir: wolf_core::FocusDir, width: f64, height: f64) -> Option<PaneId>
-    pub fn layout(&self) -> PaneLayout
-    pub fn from_layout(layout: &PaneLayout) -> Option<Self>
-}
-```
-
-- **Frame model.** Internally a `Frame` is either a `Leaf(PaneId)` or an n-ary `Split { orientation, children, weights }` (a flat ROW for `Vertical`, a flat COLUMN for `Horizontal`). Invariants: a split has `>= 2` children; `weights.len() == children.len()` and the weights sum to 1 (they drive divider positions); and no split sits directly under a same-orientation split (each axis is a single flat row/column) — that last one is upheld by `split`/`remove` and **preserved as given** by `from_layout`. `PaneLayout` is the read-only mirror returned by `layout()`.
-- **`Orientation`** matches `wolf_core::SplitOrientation`: a `Horizontal` split STACKS panes top/bottom (divides HEIGHT); a `Vertical` split places them SIDE BY SIDE (divides WIDTH).
-- **`split`** — a split whose orientation MATCHES the frame that owns `target` inserts `new_pane` as a FLAT sibling immediately AFTER `target` and re-EQUALIZES the row/column (so re-splitting along the same axis yields equal siblings — e.g. a row `[P1, P2]` vsplit on `P1` becomes equal thirds `[P1, P3, P2]`, NOT a nested 25/25/50 that blanks `P2`). A PERPENDICULAR split instead NESTS: it wraps `target` in a new two-child sub-frame `[target, new_pane]` (target FIRST: LEFT for vertical, TOP for horizontal). The root single-leaf case becomes a two-child split. No-op if `target` is not a leaf.
-- **`remove`** drops the leaf's slot+weight, then NORMALIZES bottom-up: FLATTEN any same-orientation child split into its parent (scaling weights), COLLAPSE a now-1-child split into its sole child, and re-EQUALIZE remaining siblings (nvim `equalalways`). This subsumes collapse-to-sibling AND same-orientation merge. Removing the last pane is a no-op (the tree is never empty).
-- **`leaves`** / **`pane_rects`** enumerate leaves and their tiling rectangles in a deterministic DFS (child-order) traversal; `pane_rects` divides each split's bounds by cumulative normalized weight fractions, tiling the bounds exactly (no zero rects for valid weights).
-- **`neighbor`** returns the nearest pane in `dir` (from `pane_rects` geometry) that STRICTLY overlaps `from` on the cross axis (Left/Right overlap on Y; Up/Down on X), else `None` (edge / unknown pane). Uses `wolf_core::FocusDir` directly.
-- **`layout`** returns the read-only `PaneLayout` mirror so the widget layer can build a chain of `gtk::Paned`s without seeing the private `Frame`.
-- **`from_layout`** is `layout`'s inverse, and it rebuilds **VERBATIM**: no flatten, no collapse, no re-equalize, so `leaves()` enumerates in byte-for-byte the same DFS order as the `PaneLayout` it was given. That is load-bearing rather than pedantic — the state-restore path zips nvim window handles onto those leaves BY INDEX (see [`pane_layout::decode`](#pane_layoutrs)), so any reshaping here would silently misbind panes to the wrong buffers. It returns `None` on any invariant violation: a split with fewer than 2 children, a `weights.len() != children.len()` mismatch, a non-finite or negative weight, or a split whose weights sum to `<= 0.0`. **Validating rather than repairing is a CRASH GUARD, not tidiness:** `pane_view::build_chain` indexes `children[0]` unconditionally, so a zero-child split reaching the widget layer is a panic, and `pane_rects` divides by the weight sum. The validation lives here, with the type that owns the invariants, rather than only in `pane_layout::decode`. Note this constructor CAN produce a same-orientation nested split — which `split()` never produces but a hand-edited `state.json` can; that is cosmetic (`pane_rects`, `neighbor` and the widget builder all handle it, and the first `remove()` normalizes it).
+Purpose: the pure mapping from a drained `wolf_core::Command` to the UI action this front-end performs for it. GTK-free, so the whole classification is tested headlessly.
 
-Named constants: `DEFAULT_RATIO` (`0.5`, a fresh two-child split's per-child weight), `NEIGHBOR_EPS` (`1e-9`, strict overlap), `MIN_SPLIT_CHILDREN` (`2`, the arity `from_layout` validates against).
+**Public API**
 
-## `pane_layout.rs`
+- `ui_action_for(command) -> UiAction` — total.
+- `UiAction` — the dispatched variants, plus `Deferred` and `NoGnomeEquivalent`, each carrying the concrete blocker as a string.
 
-The **pure, GTK-free** CODEC between the live pane tree and the persisted one — the GTK-side analogue of the macOS `PaneLayoutCodec`. It bridges [`layout.rs`](#layoutrs)'s `PaneLayout` / `PaneId` (whose leaves are pane IDS) and `wolf_core::PaneNode` (whose leaves are buffer PATHS, the `state.json` shape). No GTK, no serde, no IO, so every rule is unit-tested headlessly in its own `#[cfg(test)] mod tests`.
+**Decisions**
 
-```rust
-pub const MAX_RESTORE_LEAVES: usize = 64;
-pub const MAX_RESTORE_DEPTH:  usize = 32;
+- The match carries no catch-all arm, so appending a variant to `wolf_core::Command` fails to compile here until the new command is classified. A silently dropped command is indistinguishable from a broken one.
+- A second check walks the command registry rather than the match, so the guard survives someone adding a catch-all arm.
+- Every unimplemented reason is distinct and non-empty, enforced by a test, so no two rows collapse into one indistinguishable diagnostic and the printed message always names the real blocker.
 
-pub fn encode(layout: &PaneLayout, paths: &HashMap<PaneId, String>) -> PaneNode
-pub fn is_empty_leaf(node: &PaneNode) -> bool
-pub fn leaf_count(node: &PaneNode) -> usize
-pub fn leaf_paths_dfs(node: &PaneNode) -> Vec<String>
-pub fn decode(node: &PaneNode, first_leaf_id: PaneId) -> Option<(PaneTree, Vec<PaneId>)>
-```
+**Gotchas**
 
-**The single-pane persistence rule, which is why this module is shaped the way it is.** A tab's open buffer paths have **no persistence channel of their own**: they ride only inside `TabState::layout`'s leaves. The macOS bug this crate must not reintroduce was a save side that suppressed the layout by **ARITY** — `guard tree.leaves().count > 1 else { return nil }` — so the single most common shape there is (one window, one tab, one pane, one file) persisted its cwd and `sidebar_visible` and nothing else, and the file was **not reopened on relaunch**. The fix, on both sides, is a **CONTENT** predicate: `is_empty_leaf` suppresses ONLY an unnamed, non-preview lone leaf, and the restore side rebuilds ANY saved layout with no arity guard at all (see [`app.rs`](#apprs) and [`state_seam.rs`](#state_seamrs), which hold the two halves). **Never gate persistence on `leaf_count`** — it exists solely to check the handle count `WolfCore::rebuild_layout` returns. `arity_is_never_the_predicate` states that rule on its own so a regression NAMES it, and `single_pane_file_survives_relaunch_under_cage` is its end-to-end guard.
+- A `Deferred` or `NoGnomeEquivalent` command reaching the drain is printed with its reason, never dropped quietly.
 
-- **`encode`** maps a live `PaneLayout` into a persistable `PaneNode`, looking each leaf id up in `paths`. A leaf id MISSING from `paths` becomes `path: ""` (macOS parity: an unbound or unnamed pane persists as an empty leaf). Weights and orientation are copied VERBATIM. `preview` is always `false`, which is a VALUE choice and not a shape choice: `wolf-gnome` has no Markdown preview yet, but the flag is already carried end to end by `PaneNode`, `wolf_core::state::rebuild_layout_spec` and `wolf_rebuild_layout`, so that unit will add a value rather than a field.
-- **`is_empty_leaf`** is `true` **iff** `node` is `Leaf { path: "", preview: false }`. A preview leaf, a leaf with a non-empty path, and EVERY split — including a split of two empty leaves — are `false`. It is never an arity test; see above.
-- **`leaf_count`** is the number of leaves under `node` (`1` for a leaf), used ONLY to validate `rebuild_layout`'s returned handle count against the leaves `decode` produced.
-- **`leaf_paths_dfs`** returns the leaf paths in DFS order — the order `wolf_core::state::rebuild_layout_spec` emits leaves in, and therefore the order `WolfCore::rebuild_layout` returns window handles in.
-- **`decode`** turns a saved `PaneNode` into a live `PaneTree` plus its leaf ids in DFS order, allocating ids sequentially from `first_leaf_id`, so `leaf_ids[i]` is the pane for `handles[i]` and for `leaf_paths_dfs(node)[i]`. It returns `None` when the node is unusable: any structural violation [`PaneTree::from_layout`](#layoutrs) rejects, a leaf count above `MAX_RESTORE_LEAVES`, or a depth above `MAX_RESTORE_DEPTH`. **Validating BEFORE the spec is rendered is what keeps nvim from ever being asked to realize a malformed tree**, and the two caps are a restore POLICY (a corrupt or hand-edited `state.json` must not make the app ask for hundreds of windows at launch, or blow the recursive builder's stack) rather than a limit on the tree type. Recursing over untrusted input is safe because `serde_json`'s own deserialization recursion limit (128) rejects anything deeper long before `load_state` hands a tree to this module.
-- **Orientation mapping lives here, in both directions, in one place**: `layout::Orientation::Vertical` ↔ `PaneOrientation::Vertical` (side by side, divides WIDTH) and `Horizontal` ↔ `Horizontal` (stacked, divides HEIGHT). Both directions together so an inversion is one edit to make and one test to catch, rather than two half-inversions that cancel and leave every count-based assertion green while every restored layout is transposed.
+#### `crash_overlay.rs`
 
-## `pane_view.rs`
+Purpose: the widgets for crash and stall recovery — the opaque overlay carrying the restart button, and the transient banner that confirms a restart. Every decision it acts on is made in [`liveness_ui.rs`](#liveness_uirs); this file builds widgets and toggles visibility.
 
-The **GTK glue** that turns `layout`'s pure `PaneTree` into a live tree of nested `gtk::Paned`s + one `gtk::DrawingArea` per pane, plus the ★ S3 **cmdline strip**. It mirrors `tree_view.rs` / `picker.rs`: `Rc`/`RefCell`/`Cell` on the GTK main thread, a `Weak` upgrade inside every widget closure (no cycles), and short snapshot/borrow scopes never held across a `WolfCore` call.
+**Public API**
 
-```rust
-pub struct PaneHandle { /* Rc<PaneInner> */ }  // Clone
-pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) -> PaneHandle
-impl PaneHandle {
-    pub fn widget(&self) -> gtk::Widget          // the [pane area | cmdline strip] container
-    pub fn cmdline_widget(&self) -> gtk::DrawingArea  // focus-return target for picker/tree
-    pub fn on_render_wake(&self)
-    pub fn reset_after_restart(&self)            // after a SUCCESSFUL in-place nvim restart
-    pub fn request_layout_rebuild(&self, saved: PaneNode)   // queue a restored layout, once
-    pub fn layout_snapshot(&self) -> Option<PaneNode>       // the tab's persistable tree
-    pub fn snapshot_readiness(&self) -> (usize, usize)      // (bound panes, reported windows)
-}
-```
+- `build() -> CrashOverlay`, with `widget()` and `banner_widget()` for the two overlay children.
+- `set_mode(mode) -> bool` — returns whether the mode changed. The caller's side effects must fire on the transition only.
+- `connect_restart`, `flash_banner`, `focus_is_inside`.
 
-- **Per-pane render.** Each pane binds to a Neovim window (`win`) + its grid (`>= 2`, resolved via `win_pos`; pending until then). A pane's draw func paints ITS grid via the pure `paint` seam, and the mode-aware cursor (the `draw_cursor` helper, moved here from `app.rs`) is drawn only in the pane that owns the cursor's grid (`cursor.grid`). Panes NEVER paint grid 1. The active pane carries an `ACTIVE_PANE_CSS` (`wolf-active-pane`) focus-ring `outline` (no layout impact), loaded once into the default display.
-- **Cmdline strip (`draw_cmdline`, OD4 minimal-but-correct).** A one-row `DrawingArea` along the bottom now paints from the folded `Snapshot::cmdline` / `Snapshot::toast` rather than grid 1's last row: under `ext_messages` (which implicitly enables `ext_cmdline` and sets `cmdheight=0`) the outer grid 1 empties, so when a command line is active the strip paints `firstc` + the flattened cmdline text with a caret at the byte position `pos` (snapped to a char boundary, column-approximate for single-width cells); when inactive it paints the LAST `toast` line so the emptied strip never shows blank/stale. The Adw completion popup (`ext_popupmenu`) and the multi-line scrollable toast are DEFERRED for GTK (OD4) — only the last toast line shows. Background + colors resolve from the default highlight (`highlights.resolve(0)`).
-- **Layout persistence — this module is BOTH halves.** _Save:_ `layout_snapshot` walks the live tree, reads each leaf's RAW buffer path from `WolfCore::pane_status(grid).abs_path` (**not** `display_path`, which is relativized for the statusbar and would be useless to restore from), encodes it via [`pane_layout::encode`](#pane_layoutrs) and applies [`state_seam::persistable_layout`](#state_seamrs)'s CONTENT suppression rule. `pane_status` is RPC-free (a snapshot read plus `live_cwd`), which is what makes this cheap enough to run on every wake; the `panes` borrow is dropped before the core borrow is taken. `snapshot_readiness` supplies the two counts `state_seam::may_snapshot` gates on — panes with a RESOLVED grid, and `Snapshot::win_buffers.len()` — so a snapshot taken before the first pane binds can never wipe a good save. [`persistence.rs`](#persistencers) is the only caller of both. _Restore:_ `request_layout_rebuild` stores the saved tree in a `RefCell<Option<PaneNode>>`; it is called once from `app::build_ui` before `present()` and cannot be applied there, because no Neovim window has appeared yet.
-- **Consuming the pending layout, and the three outcomes.** `on_render_wake` calls `consume_pending_layout()` immediately after `ensure_initial_pane()` and returns early when it applied (mirroring macOS). Nothing pending → `false`. **No pane bound yet → `false` and the pending value is KEPT**, so the next wake retries — taking it there would silently discard the restore on the first wake before a grid exists. More than one pane already exists → the value is TAKEN and dropped with a message, because splits made before the restore could run mean the saved topology no longer describes this tab and rebuilding over it would discard live windows.
-- **`apply_layout_rebuild`, in a load-bearing order.** (1) `pane_layout::decode` **validates first**, so nvim is never asked to realize a malformed tree; (2) `wolf_core::state::rebuild_layout_spec` renders the wire JSON; (3) `WolfCore::rebuild_layout(&spec)` runs under a SHORT borrow in its own statement — **the only BLOCKING RPC `wolf-gnome` issues.** Every other core call this crate makes is a snapshot read or a queued input, which is exactly why `NotResponding` used to be unreachable from this front-end (see [`shell.rs`](#shellrs)). It is acceptable here and nowhere else: at most once per launch, before the window is interactive, never on the crash/restart path — `shell.rs`'s "never call a `block_on_rpc` on the restart path" rule stands unchanged. (4) A handle count that does not match the decoded leaf count logs both numbers and aborts, leaving the single already-bound pane intact (macOS parity). Only then are the tree and the pane map swapped, `next_pane_id` advanced, and the guarded `rebuild_pane_area` / `set_active_pane` / `resolve_pending_grids` / `queue_redraw` sequence run — `rebuild_pane_area` rather than an open-coded teardown precisely so the `focus_inside_pane_area()` guard runs first.
-- **Render-wake orchestration.** `on_render_wake` (1) creates the first pane (reusing `FIRST_PANE_ID = 1`, the tree root) when a window grid appears; (1a) consumes a pending restored layout and returns if it applied; (2) drains `WolfCore::drain_intents` and applies each — `Split` mutates the tree + binds a new pane (grid resolved now or pending) and makes it active; `FocusDir` resolves the neighbour in the tree and calls `focus_win`; `DrawerOpen` is drained and DROPPED (see below); (3) detects closed windows (a bound pane whose grid vanished) and collapses them, never emptying the tree; (4) resolves pending pane grids via `grid_for_win` and sizes them; (5) refreshes the active pane from `active_win` (fallback: the cursor's grid); (6) queues redraws.
-- **The terminal drawer is a wolf-gnome gap.** `wolf_core::LayoutIntent` carries a third variant, `DrawerOpen { win }`, which `wolf-macos` renders as a full-width, root-bottom pane held outside the pure `PaneTree`. wolf-gnome implements none of that and binds no `wolf_toggle_terminal` trigger, so the intent is unreachable in practice; `apply_intents` matches it explicitly and does nothing. The arm is written out (rather than a `_` wildcard) so that adding a FOURTH variant to the shared enum fails the GTK build loudly instead of being silently swallowed — which is exactly what went wrong when `DrawerOpen` first landed and left `wolf-gnome` failing to compile with E0004.
-- **Rebuild reuses areas.** `rebuild_pane_area` detaches each pane's `DrawingArea` from its old parent and rebuilds the widget tree from `PaneTree::layout`, REUSING areas by `PaneId` (so bound grids/contents survive). A `Vertical` (side-by-side) split maps to a HORIZONTAL `gtk::Paned`; `Horizontal` (stacked) to a VERTICAL one. An n-ary split is rendered by `build_chain` as a RIGHT-LEANING chain of binary `gtk::Paned`s (first child = `start`, the rest = a nested chain as `end`); each paned has `set_shrink_start_child(false)`/`set_shrink_end_child(false)` and its divider is positioned at the first child's SHARE of the children that paned spans (so equal thirds give an outer 1/3 over an inner 1/2 — equal columns). Unbound leaves are skipped (a `None` side collapses to the other). Each leaf `DrawingArea` also carries a one-cell `content-width/height` floor so a non-shrinking child can never be allocated to zero pixels. `install_paned_position` re-applies the proportional divider on EVERY `max-position` notify (not one-shot): this converges across the nested multi-pass allocation and re-proportions on resize, so a 3rd same-orientation split no longer starves the pre-existing pane to a blank/gray zero-width strip.
-- **Resize.** Each pane `DrawingArea`'s `connect_resize` → `grid_size_for` → `WolfCore::resize_grid` for that pane's grid, then `resize_global` resizes the outer/global grid 1 (`WolfCore::resize`) to the full editor area (so the cmdline spans the width and nvim's overall layout tracks the window). Dragging a paned divider resizes the child areas, which drives the same path.
-- **Mouse + scroll.** Each pane area carries three pointer controllers, all thin glue over the pure `mouse` and `geometry::cell_at` seams. (1) A `gtk::GestureDrag` restricted to `gdk::BUTTON_PRIMARY` drives the whole press → drag → release sequence: `on_pane_press` calls `on_pane_clicked` FIRST (`WolfCore::focus_win` + `set_active_pane`) and only then `send_mouse(MouseAction::Press)` — both ride the same ordered input channel, so nvim sees focus before press by construction — and pins the target grid in `drag_grid`; `on_pane_drag`/`on_pane_release` reconstruct the absolute widget-local point as `start_point() + offset` (GTK gives update/end callbacks OFFSETS, not coordinates) and re-read the PINNED grid's live dims, so a drag that wanders out of the pane still edits the pane it started in. **The BUTTON is pinned at press too (`drag_button`), while the MODIFIERS are deliberately re-read live on every callback.** `GestureDrag::current_button()` is still valid inside `drag-end` per the GTK 4.22.4 source (the button is cleared only after the emission), but nothing in this repo's harness can execute that path, and if it ever reported `0` the pure seam would refuse it, the `Release` would be dropped silently, and nvim would be stranded mid-drag in visual mode — one `Cell` removes the failure mode. The modifiers stay live because that is macOS parity (`mouseEvent` reads `event.modifierFlags` per event), so a modifier pressed or released mid-drag takes effect at once. What is pinned is the raw GDK button NUMBER rather than an already-translated `wolf_core::MouseButton`, so `mouse::mouse_input` stays the single place that decides which buttons are forwarded and how the modifier bits map — it is still called on every callback, just with a replayed number. Drag is forwarded unconditionally on every callback — no throttling, no changed-cell dedupe (macOS parity). One gesture rather than `GestureClick` + something else, because a `GtkGesture` takes an implicit grab and keeps delivering after the pointer leaves the widget, which is what `cell_at`'s clamp-to-nearest-edge needs for drag-past-the-edge selection. (2) A `gtk::EventControllerScroll` with `VERTICAL` only — not `DISCRETE` (that would bury the accumulation inside GTK where no test can reach it), not `BOTH_AXES` (horizontal scroll is not handled, matching macOS), not `KINETIC` — keeping one `mouse::PaneScroll` per pane and emitting that many discrete `ScrollEvent`s; it returns `Propagation::Stop` and **never changes focus**. `on_pane_scroll` picks the threshold from the reported `gdk::ScrollUnit` and hands `(grid, dy, threshold)` straight to `PaneScroll::steps_for` — the reset-the-carry-when-the-target-grid-changes rule is **not** in this file any more, precisely because a rule living in GTK glue is a rule no test on Linux can execute. (3) A `gtk::EventControllerMotion` (`connect_motion` + `connect_enter`) whose only job is recording the last widget-local pointer position, because GTK's `scroll` signal carries no coordinates; it is explicitly NOT used for drag, since it stops delivering the moment the pointer leaves the widget. Every path first resolves a private `GridTarget { grid, cols, rows }` — the target grid plus that grid's LIVE dimensions, read from the snapshot at the moment the event is handled — and sends **nothing at all** when the pane is unbound or its grid is not (yet) in the snapshot; `grid_and_dims(pane_id)` is used for press and scroll, while drag/release go through `dims_for_grid(pinned)` precisely so a mid-sequence rebind cannot retarget the drag. `on_pane_release` unpins `drag_grid` even when the send was skipped, so a failed lookup cannot strand a stale grid into the next drag. `usize → u16` always goes through `try_from(..).unwrap_or(u16::MAX)`, never an `as` cast, because a wrapping cast would name a cell inside a grid that does not exist. Bundling the three fields into `GridTarget` is also what keeps `send_pane_mouse` under clippy's argument-count threshold without an `#[allow]`. While the picker or the empty state is up the pointer picks the overlay child, not a pane area, so none of these run — no `is_open()` guard is needed (do not add one).
-- **GTK keyboard focus never lands on a pane area, deliberately.** Pane `DrawingArea`s are built WITHOUT `focusable(true)`, and nothing calls `grab_focus()` on them; `on_pane_clicked` focuses the persistent `cmdline_area` instead. This fixes a live defect: `on_pane_clicked` used to `grab_focus()` the clicked pane's own area, and `detect_closes` later destroys that widget with no focus-return, so closing the pane you had clicked left the toplevel with **no focus widget at all** and window-level key dispatch died outright — after the wedge even `Ctrl+Shift+O` rendered nothing, while nvim stayed alive and stderr stayed empty. It reproduced with `:q`, with `<C-w>c`, and with the close-pane chord, and only ever for the pane holding GTK focus. The fix keeps focus on the one widget in the editor region that is never destroyed, which is exactly the contract `PaneHandle::cmdline_widget()` already documents for the picker and the tree ("the focus-return target … so keys keep bubbling to the window-level controller after they close") — one focus regime instead of two. Dropping `focusable(true)` is the other half: a focusable pane area is still reachable by Tab traversal, so leaving it set would let the user re-create the same wedge by hand. Nothing needs it — the focus ring is the `ACTIVE_PANE_CSS` class, not a `:focus` selector, and GTK gestures do not require a focusable widget. The alternative (have `detect_closes` hand focus back to `cmdline_area`) was rejected: it leaves two focus regimes coexisting and only patches the one code path that happens to be known. **This is no longer a structural argument only — it is executed.** The cage smoke `click_then_close_keeps_keyboard_input_alive_under_cage` clicks a pane, writes an `ALIVE1` marker from Neovim as a control, closes that same clicked pane, and asserts a second `ALIVE2` marker still lands. **Making it red takes a THREE-part revert, and a future reader must not "simplify" it to one:** (1) add `.focusable(true)` back to `make_pane_area`'s `gtk::DrawingArea::builder()` chain; (2) make `on_pane_clicked` `grab_focus()` the clicked pane's own `area` instead of `cmdline_area`; and (3) neuter `rebuild_pane_area`'s return-focus guard (`let had_focus = false;`). Reverting only (1)+(2) leaves both `ALIVE` assertions PASSING, because the guard in the next bullet catches it. Note the honest scope too: the smoke proves the **composite** invariant (a click followed by closing the clicked pane never wedges keyboard input), not the `focusable(false)` half in isolation, which would need a Tab-traversal probe.
+**Decisions**
 
-- **The `gtk::Paned` dividers are ephemeral focus targets too, and GTK will not let us make them otherwise.** The pane areas are not the only widget under `pane_area` that gets destroyed: `rebuild_pane_area` tears down and rebuilds **every** inner `gtk::Paned` produced by `build_chain`, on every call — and it is called from `ensure_initial_pane`, `apply_split`, `detect_closes` **and** `resolve_pending_grids`. That matters because **`GtkPaned` is focusable by default**: `gtk_paned_init` calls `gtk_widget_set_focusable (GTK_WIDGET (paned), TRUE)` (GTK 4.22.4, `gtk/gtkpaned.c:1510`, the exact version this devShell links), because a divider needs focus for its own arrow-key/F8 adjustment bindings. A divider holding focus when the teardown runs would therefore reproduce the identical wedge, and dropping `focusable(true)` from OUR widgets would have closed the hole for one ephemeral widget class while leaving it open for another. We cannot fix that structurally — GTK owns the divider — so `rebuild_pane_area` samples, **before** any unparenting, whether the toplevel's focus widget is `pane_area` or a descendant of it (`focus_inside_pane_area`, via `root().focus()` + `is_ancestor`), and if so calls `cmdline_area.grab_focus()` once the rebuild has settled. This is an **addition to** the structural fix above, not a substitute for it. Two nuances, so nobody mistakes the guard for the whole story: `GtkPaned` also sets `widget_class->focus = gtk_widget_focus_child` (`gtk/gtkpaned.c:425`), whose body is a bare `gtk_widget_focus_move` — so plain Tab traversal descends INTO a paned's children and never stops on the divider itself, and no path in wolf-gnome is known to put focus on an inner divider today (nothing inside one is focusable, so the F8 `cycle-handle-focus` binding — the one place GTK does `gtk_widget_grab_focus` on a paned, `gtk/gtkpaned.c:2491`/`:2552` — is not on the key-dispatch path). The guard is therefore cheap insurance against a reachable-tomorrow defect rather than a fix for a reproduced one: it costs one `root().focus()` read per rebuild, and it removes the entire class instead of the one instance we happen to be able to reach. **It is now executed, and measured to be load-bearing.** `click_then_close_keeps_keyboard_input_alive_under_cage` runs it on every pane close, and the deliberate two-part revert above — restoring `focusable(true)` and the `area.grab_focus()`, but leaving this guard intact — leaves **both** of that smoke's `ALIVE` assertions passing: keyboard input survives on this guard alone. That is measured, not argued. Two honest caveats: that run is **not** green overall (the deliberately-broken configuration renders the surviving pane blank, so the smoke's OCR corroboration fails — a second, separate defect of a broken build, reproduced twice), and the guard is exercised here only for the pane-`DrawingArea` case, not for a divider actually holding focus, which no known path reaches. See [`tests/README.md`](../tests/README.md), "The focus-wedge fix is now executed, and what Run B does and does not show", for the full 2x2 matrix.
+- The overlay's layout is deliberately derivable: a zero-spacing box with two equal expanding spacers around a fixed message-plus-button block, so `restart_button_rect` describes the button's real position. Do not substitute an `adw::StatusPage` and do not give the box a non-zero spacing — a status page's padding is theme-owned, and box spacing applies between every pair of children, so either change silently invalidates the pixel the smoke clicks.
+- It never grabs focus on the button. A focusable widget inside a container that is later hidden is exactly the wedge the focus regime exists to prevent.
+- It does not disable pointer targeting: swallowing clicks is half its job, and a visible overlay child takes the pointer instead of the panes beneath.
+- The banner is independent of liveness, because a successful restart clears the overlay immediately and a user would otherwise see no confirmation. Its hide is generation-tokened, so rapid restarts coalesce into one continuous banner.
 
-- **`reset_after_restart` — load-bearing, not cosmetic.** Called by [`shell.rs`](#shellrs) after a SUCCESSFUL in-place Neovim restart, it resets the pane tree to `PaneTree::new(FIRST_PANE_ID)`, clears the pane map, resets `next_pane_id` and `active_pane`, and calls `rebuild_pane_area()` — which unparents and destroys everything and builds nothing (an empty pane map makes `build_layout_widget` return `None`), so the next render wake re-creates the first pane against the FRESH nvim's window and grid. **Why the destroy-and-recreate is required:** `WolfCore::restart_nvim` re-attaches with `NvimConfig::initial_cols`/`initial_rows` — `app.rs`'s 80×24 — and the ONLY thing that ever tells the core otherwise is a `::resize` on a pane `DrawingArea`, which GTK emits only when a widget's allocation CHANGES. The old area is still there at exactly the same size, so no `::resize` fires, and the fresh nvim would keep an 80×24 grid inside a 45×14 pane for the rest of the session with no way back. A brand-new `DrawingArea` starts at a recorded size of 0×0, so GTK necessarily emits `::resize` → `on_pane_resize` → `resize_grid` + `resize_global`, which is what re-establishes the correct grid. It also reuses `rebuild_pane_area` rather than open-coding the teardown precisely so the existing `focus_inside_pane_area()` guard runs and parks focus on the persistent `cmdline_area` BEFORE the widgets go away — that is what keeps the focus-wedge fix intact through a restart. `nvim_crash_recovers_and_reopens_the_file_under_cage`'s `winwidth`/`winheight` equality assertion is the only assertion in the suite that discriminates this call: deleting it turns the dims from `45 14` into `80 24` while every OCR term still passes, because the buffer text is simply drawn at the top-left of an over-large grid.
+#### `cursor.rs`
 
-Named constants: `FIRST_PANE_ID` (1), `MIN_WINDOW_GRID` (2), `CMDLINE_STRIP_ROWS` (1.0), `CMDLINE_CARET_WIDTH` (2.0), `ACTIVE_PANE_CSS` (+ its `ACTIVE_PANE_CSS_DATA`), `RGB_MAX` (255.0).
+Purpose: pure, GTK-free cursor geometry and color logic — the pixel rectangle to fill for a shape, and the `(fill, glyph)` color pair.
 
-Shared state added by layout persistence: `PaneInner::pending_layout` — a `RefCell<Option<PaneNode>>` holding the saved tree between `app::build_ui` and the first wake at which a window grid exists.
+**Public API**
 
-Per-pane state (`PaneWidgets`, all built through `PaneWidgets::new` so a new field is one edit, not two): `win`, `grid`, `area`, plus `drag_grid` (the grid pinned at press), `drag_button` (the GDK button NUMBER pinned at the same moment), `scroll` — one `mouse::PaneScroll`, i.e. the carried sub-threshold remainder **and** the grid it belongs to as a single pure value, replacing the former separate `scroll` / `scroll_grid` pair — and `pointer` (the last widget-local pointer position, for the coordinate-less scroll signal). Every mutable field is a `Cell`, never a `RefCell`, so no borrow can be held across a `WolfCore` call.
+- `cursor_rect(shape, cell_x, cell_y, cell_w, cell_h, cell_percentage)` — `cell_percentage` is a percent in 1–100, not a fraction; `Block` ignores it entirely.
+- `cursor_colors(&Snapshot) -> (Rgb, Rgb)` — returns fill first, glyph second.
 
-### Known v1 limitations (split panes)
+**Decisions**
 
-These are deliberate scope choices for the first split-panes cut, not bugs. Each has a clear future direction:
+- A mode's cursor highlight is honored only when it demonstrably yields a visible cursor: both channels resolve, the fill differs from the underlying cell background, and the fill differs from the glyph. A naive "both channels set" test lets an invisible cursor through, because a background-only Cursor highlight has its foreground filled in from the editor defaults and then paints dark on dark.
+- The `WolfCursor` theme group is honored first and unconditionally, because it is an explicit app-level opt-in; a background-only group keeps the reverse-video glyph.
+- Inverting the underlying cell is the fallback because it is visible by construction.
+- Bar thickness floors at `MIN_BAR_PX` so a tiny percentage still renders something wider than a hairline.
 
-- **Only windows opened via the overridden split commands get a pane.** Panes are created from `wolf_layout` `Split` intents, which only the rebound chords / Ex-commands (`<C-w>s`/`v`, `:split`/`:vsplit`/`:new`/`:vnew`) emit. A window created by a NON-overridden path — `:help`, the quickfix / location list, a preview window, `:diffsplit` — still gets a grid and a `WinInfo` in the snapshot but **no pane**, so its content is not shown (and it can hold stale focus). This follows from the intent-driven design. _Future:_ auto-create a pane for any unbound window grid (e.g. an append-split of the active pane).
-- **The cmdline strip is single-row and popup/multi-line-toast are DEFERRED (OD4).** The strip now paints natively from `Snapshot::cmdline` / `Snapshot::toast` (not grid 1), but GTK renders only ONE row: an active command line (`firstc` + text + caret) or, when idle, the LAST toast line. The Adw completion popup (`ext_popupmenu`) and a multi-line scrollable toast (`ext_messages`) are deferred for GTK — so multi-line messages (`:messages`, a long wrapped `:`-command, the `press-ENTER` prompt) show only their final line, and command-line completion has no popup (macOS has both). This is the accepted gnome scope (OD4); wolf-core folds all three protocols regardless, so wiring the Adw widgets later is additive.
-- **Focus-direction moves use idealized split ratios.** `PaneTree::neighbor` computes neighbours from the tree's nominal EQUAL split weights, not the actual dragged `gtk::Paned` divider positions, so `<C-w>h/j/k/l` can pick a different neighbour than the pixel geometry would after a manual drag.
-- **Paned drags reset to equal on the next resize (v1).** The frame's per-child `weights` always equalize on split/close, and `install_paned_position` re-derives each divider from those weights on every `max-position` notify. A user drag changes a paned's `position` (not its `max-position`) so it holds until the next window/container resize or split/close, at which point the divider snaps back to the equal ratio. The `weights` make a future drag-writeback straightforward. **A persistence consequence worth stating plainly:** every weight `layout_snapshot` persists today is therefore an equal share, and the restore path DOES apply saved weights (`pane_layout::decode` copies them verbatim and `build_chain` derives its ratio from them) — so the drag-to-resize unit has to change exactly two things (write dragged positions back into `PaneTree`'s weights, and stop `install_paned_position` re-deriving) and **no persistence format, encoder, decoder or test needs reshaping**. What that leaves unexercised end to end is recorded in [`tests/README.md`](../tests/README.md) rather than claimed as covered.
-- **Floats and external windows are ignored.** `win_float_pos` / `win_external_pos` (and `msg_set_pos`) are dropped by core, so floating windows and detached UI grids do not appear as panes.
-- **A crash while the window was SPLIT loses the topology, and leaves stale snapshot entries.** No `win_close` / `grid_destroy` is ever sent for a killed process and nothing clears the snapshot on restart, so the dead nvim's extra window/grid entries linger. `reset_after_restart` binds only the fresh nvim's single window, which is correct, and the stale entries are harmless because no pane is bound to them — but the pane **topology is not restored ACROSS A CRASH RESTART**: a restart always comes back as ONE pane. Only the Tier-1 _file set_ is restored (in `reopen_order`, active last). **Do not confuse this with the QUIT/RELAUNCH case, which IS restored** by the layout persistence above: that path reads a saved tree out of `state.json` at launch, whereas an in-place restart has no saved tree to read and deliberately rebinds a single fresh pane. Restoring the split layout — and cursor/scroll position — across a RESTART remains out of scope.
+**Gotchas**
 
-## `picker.rs`
+- `wolf-ffi` carries a port of `cursor_colors`; the two are kept in lockstep, so change both together.
+- An out-of-range `mode_idx`, empty `mode_infos`, and an out-of-bounds cursor cell all fall through to inversion rather than panicking.
 
-The GNOME file-picker UI. Almost all of it is GTK widget wiring (which cannot be unit-tested headlessly); the small pure seams (`next_selection`, `restored_index`) are factored out and unit-tested in the module's own `#[cfg(test)] mod tests`, like `geometry.rs` / `cursor.rs`.
+#### `geometry.rs`
 
-**Widgets.** `build(overlay, area, core) -> PickerHandle` constructs a floating `gtk::Box` (a `SearchEntry` over a `ScrolledWindow` wrapping a single-selection `ListBox`), adds it as an `Overlay` child over the editor `area`, wires all signals, and returns a `PickerHandle`. The box starts hidden. `PickerHandle` exposes `open()` / `close()` (both idempotent) and `is_open()` (the app queries it to suppress key forwarding while the picker has focus). **Trigger: the `win.go-to-file` action** — Ctrl+Shift+O, the primary menu's "Go to File…" item, or the header-bar Open button. The module has no trigger predicate of its own any more: the chord is resolved from [`actions::ACTION_TABLE`](#actionsrs) by [`shell.rs`](#shellrs)'s capture-phase controller, and `perform(UiAction::OpenFilePicker)` calls `open()`.
+Purpose: the pure pixel-to-grid conversions behind every resize and every pointer event, kept GTK- and pango-free so they are unit-tested headlessly.
 
-**Streaming refresh (the wake pattern).** `open()` calls `WolfCore::start_file_search(wake)`, shows + focuses the entry, and does an initial refresh so the MRU seed appears immediately. The `wake` (a `WakeFn` fired from a tokio worker on each traversal batch) only `try_send`s onto a bounded `async-channel` (capacity `PICKER_WAKE_CHANNEL_CAP = 1`, coalescing a burst; the send is **drop-safe** so a late cancel-path wake is harmless); a `glib::spawn_future_local` task drains it on the GTK main thread and calls `refresh()`. `connect_search_changed` also refreshes on every query change. `refresh()` reads the live `FileSearch` snapshot, calls `wolf_core::rank_matches`, and rebuilds the `ListBox` from the top `PICKER_MAX_ROWS = 200` matches, keeping a parallel `row_paths` vec (row index → absolute path). The drain task holds only a `Weak` ref to the picker state, so dropping the handle ends the task (no cycle).
+**Public API**
 
-**Keyboard navigation.** A capture-phase `EventControllerKey` on the picker box: `Esc` closes; `Up`/`Down` move the **list** selection (not the entry's text cursor) via `move_selection` (`next_selection`, clamped `[0, n-1]`, no wrap) and are consumed; every other key proceeds to the `SearchEntry` so typing flows. Selection is **preserved** across a streaming rebuild unless the query changed: `refresh()` uses `last_query` to decide reset-vs-preserve and `restored_index` (reset → row 0; else the clamped previous index; `None` for an empty list) to pick the row to select.
+- `grid_size_for(width_px, height_px, cell_w, cell_h) -> (u16, u16)` — floor division per axis, each clamped into `[1, u16::MAX]`.
+- `cell_at(x, y, cell_w, cell_h, cols, rows) -> (u32, u32)` — returns `(row, col)`, matching `wolf_core::MouseEvent`'s field order. The coordinates are widget-local; no grid origin is subtracted.
 
-**Activation.** `Enter` in the entry (`connect_activate`) or a `row-activated` signal calls `activate_selection`, which sends `InputEvent::Open { path }` for the selected row (or the first row if none) to the core — the MRU is auto-recorded by the core input pump — then closes the picker. With **zero** rows it is a true no-op (it neither sends `Open` nor closes). `close()` drops the `FileSearch` (cancelling the traversal), hides the box, and returns focus to the editor.
+**Decisions**
 
-**Pure seams (unit-tested):**
+- Any degenerate input — a non-positive pixel dimension, or a zero, negative, NaN, or infinite cell size — collapses the whole result rather than only the offending axis, because a partial result would send Neovim a nonsense size for the good axis. Both functions clamp in `f64` space before the cast, so the truncating cast is exact by construction.
+- A point outside the grid clamps to the nearest edge cell rather than being rejected, which is what makes drag-past-the-edge selection work.
+- Non-finite coordinates are two rules, not one: NaN has no direction, so that axis reads as zero, while an infinity clamps to the far edge. The shorthand "non-finite means zero" would silently invert an overshooting drag.
 
-```rust
-fn next_selection(current: i32, delta: i32, n_rows: i32) -> Option<usize>
-fn restored_index(reset_to_top: bool, prev: Option<usize>, new_len: usize) -> Option<usize>
-```
+**Gotchas**
 
-- `next_selection` — `clamp(current + delta, 0, n_rows - 1)`, `None` when `n_rows <= 0` (no wrap; a negative/out-of-range `current` is clamped by the same formula).
-- `restored_index` — `None` for an empty list; `Some(0)` when resetting to the top; else the preserved `prev` (defaulting to `0`) clamped into the new range.
+- A test composes the two over a table of shapes and probe points, so a caller may pass a pointer position through with no bounds check.
+- This crate has no editor insets, no column cap, and no centering, so do not import the macOS grid-origin machinery. If any lands, this function grows an origin parameter.
 
-## `tree.rs`
+#### `input.rs`
 
-A thin **re-export shim**: `pub use wolf_core::tree::*;`. The pure, toolkit-free hierarchical projection of the picker's flat file list — `TreeNode`, `children_of`, `ancestors_to_reveal`, `node_rel_path`, `rel_path_for` — and its headless unit tests now live in `wolf_core::tree` (a single, FFI-expressible source of truth shared by every front-end; see [`wolf-core/src/README.md`](../../wolf-core/src/README.md)). This module re-exports it so the GTK glue in `tree_view.rs` (and `lib.rs`'s re-exports) keeps compiling against the unchanged `crate::tree::{…}` paths.
+Purpose: translates a GDK keyval plus modifier state into a `wolf_core::KeyEvent`. It has the exact shape of a `gtk::EventControllerKey` callback but stays a free function so it is testable without a display server.
 
-## `tree_view.rs`
+**Public API**
 
-The **GTK glue** that turns `tree`'s pure projection into a live file-tree sidebar (a `gtk::ListView` driven by a `gtk::TreeListModel`). It mirrors `picker.rs`'s patterns: a long-lived `wolf_core::FileSearch`, an `async-channel` + `glib::spawn_future_local` drain that refreshes on each traversal batch, `Rc`/`RefCell` interior mutability on the single GTK main thread, and a `Weak` upgrade in the drain task to avoid a reference cycle.
+- `gdk_key(keyval, state) -> Option<KeyEvent>` — `None` for bare modifier and lock keys, and for any keyval whose unicode value is absent or a control character.
 
-**`build(core, area, start) -> TreeHandle`** assembles the widgets and returns a handle. The `start` flag decides whether the `FileSearch` begins at build time: `true` for a normal project launch, `false` in the empty state (no project open — the sidebar is hidden and there is nothing to walk), which leaves `inner.search` as `None`. The wake-drain task is spawned either way; it is a no-op while `search` is `None`, since `refresh` already early-returns. `TreeHandle` exposes `widget()` (the root `gtk::ScrolledWindow`, placed as the Paned start child), `on_render_wake()` (called from the app's render drain), `reroot()`, and `close()` (drops the `FileSearch`, cancelling the traversal — called by `wire_close` before shutdown).
+**Decisions**
 
-**`reroot()`** starts (or restarts) the traversal after an Open Folder has settled: it cancels/drops the existing `FileSearch`, clears `entries`, empties `root_store`, clears `pending_reveal` and `last_current`, then calls `start_file_search` again and `refresh()`es. It is driven ONLY from [`shell.rs`](#shellrs)'s `settle_pending_reroot`, i.e. only after nvim has reported the new cwd that `WolfCore::start_file_search` resolves its root from. A user-typed `:cd` still does not re-root the sidebar.
+- Named keys resolve before the printable fallback, because their `to_unicode()` is often a control character (`Return` is `\r`) and would otherwise be swallowed by the control-character rejection.
+- For printable characters `shift` is always false: GDK already delivers the shifted glyph in the keyval, and `KeyEvent` ignores `shift` for `Key::Char`. Named keys pass the real shift through, which is what keeps `<S-Tab>`, `<S-Left>`, and `<S-F5>` working.
+- `ISO_Left_Tab` is what Shift+Tab actually reports on X11, so it maps to `Key::Tab` with `shift` forced true even when the platform did not also set the shift mask.
 
-- **Model.** Each `TreeNode` is wrapped in a `glib::BoxedAnyObject` (no custom GObject subclass). The root `gio::ListStore` holds `children_of(entries, "")` (the cwd's immediate children, so the top level is "expanded by default"). A `gtk::TreeListModel` (passthrough = false, **autoexpand = false**) lazily materializes each directory's children via a create-func that re-runs `children_of` against the latest shared `entries` (files return `None`). A `gtk::SingleSelection` wraps it with `set_autoselect(false)` (no stray row-0 highlight before a reveal), and the `gtk::ListView` uses `set_single_click_activate(true)`.
-- **Factory.** A `gtk::SignalListItemFactory` builds a `gtk::TreeExpander` + a `gtk::Label` per row; bind sets `expander.set_list_row(..)`, the label text to the node name, and adds/removes the `CURRENT_FILE_CSS` (`wolf-current-file`, bold via CSS loaded once into the default display) class iff the row's `File` `abs_path` equals `Snapshot::current_file`.
-- **Streaming refresh.** The long-lived `FileSearch` fires a drop-safe `wake` (bounded(1) `async-channel`) on each batch; the drain task calls `refresh()`, which copies the latest entries, rebuilds the root store from `children_of(entries, "")`, then retries any `pending_reveal`. The initial `refresh()` shows the MRU seed immediately.
-- **Highlight + reveal.** `on_render_wake()` reads `Snapshot::current_file`; if it changed since `last_current`, it records it, stashes it as `pending_reveal`, and `refresh()`es (so fresh binds pick up the highlight) then `reveal`s. `reveal(abs)` maps the path via `rel_path_for`, expands its `ancestors_to_reveal` top-down (re-scanning row positions after each expansion via `find_row`), `selects` the file row, and `list_view.scroll_to(pos, …)` it into view (needs the gtk `v4_12` feature). Because the current file can arrive before the tree has streamed in, an unresolved reveal stays in `pending_reveal` and is retried on each refresh.
-- **Single-click activation.** `connect_activate` → `activate(pos)`: a `File` sends `InputEvent::Open { path }` then `area.grab_focus()` (returns focus to the editor); a `Dir` toggles its row's expansion.
+**Gotchas**
 
-**v1 limitation (documented in the code):** rebuilding the root store on each refresh collapses any manual nested expansion; the subsequent reveal re-expands the path to the current file, but other manually-expanded directories are not restored.
+- `SUPER_MASK` maps to `meta`, so an unmapped Super chord is forwarded and Neovim mangles it. The chord controller intercepts the ones this crate binds; the rest is a known limitation.
+
+#### `layout.rs`
+
+Purpose: the pure, GTK-free n-ary pane-layout tree behind the split-panes UI, mirroring Neovim's frame model. `pane_view.rs` is the only place that turns it into widgets.
+
+**Public API**
+
+- `PaneTree::split(target, new_pane, orientation)` is a no-op when `target` is not a leaf, and `remove(pane)` is a no-op on the last pane, so the tree is never empty.
+- `PaneTree::leaves()` and `pane_rects(w, h)` — the same deterministic depth-first order; the rects tile the bounds exactly.
+- `PaneTree::neighbor(from, dir, w, h)` — the nearest pane in `dir` strictly overlapping `from` on the cross axis.
+- `PaneTree::layout()` and `from_layout(&PaneLayout)` — a read-only mirror for the widget layer and its inverse; the frame type stays private.
+- `Orientation` — `Vertical` divides width, `Horizontal` divides height, matching `wolf_core::SplitOrientation`.
+
+**Decisions**
+
+- A split whose orientation matches its containing frame inserts a flat sibling and re-equalizes the row; only a perpendicular split nests. A binary always-nest model turns a third same-orientation split into 25/25/50 and starves the pre-existing pane.
+- `remove` normalizes bottom-up — flatten same-orientation children, collapse a one-child split, re-equalize — so the tree stays canonical, matching Neovim's `equalalways`.
+- Cross-axis overlap must be strictly positive within `NEIGHBOR_EPS`, so a shared edge never counts and a 2x2 grid has unambiguous neighbours.
+- `from_layout` rebuilds verbatim, with no flatten, collapse, or re-equalize, because the restore path zips Neovim window handles onto its leaves by index. It validates rather than repairs: a malformed split reaching the widget builder panics.
+
+#### `lib.rs`
+
+Purpose: crate root. Declares the modules and re-exports the display-free seams a consumer reaches for: the key and geometry conversions, the paint, the command classification, the crash rulebook, the launch and restore plans, and the window title.
+
+**Gotchas**
+
+- `cell_at` is re-exported because `grid_size_for` is, and the two are a pair whose composition is the point.
+- `restart_button_rect` is re-exported for one concrete consumer: the crash-overlay smoke derives the pixel it clicks from the same function the widget builder realizes, so the two cannot drift.
+- Items in `actions`, `crash_overlay`, `cursor`, `layout`, `mouse`, `pane_layout`, `pane_view`, `persistence`, `shell`, `tree`, and `tree_view` are reached by module path rather than re-exported.
+
+#### `liveness_ui.rs`
+
+Purpose: the pure, GTK-free rulebook for crash and stall recovery — everything about a `wolf_core::Liveness` reading that can be decided without a widget.
+
+**Public API**
+
+- `liveness_ui(liveness, may_auto_restart) -> LivenessUi` — the overlay mode, whether to schedule an automatic restart, and whether painting this wake is worth anything.
+- `overlay_message(mode)`, `restart_outcome(respawned, fresh)`, `reopen_order(files, active)`, `restart_button_rect(w, h)`.
+- The overlay and banner strings, `MAX_AUTO_RESTART_ATTEMPTS`, and the four geometry constants.
+
+**Decisions**
+
+- Both matches are total, with no catch-all arm, so a new `Liveness` variant fails to compile here until it is classified.
+- `Alive` and `NotResponding` are insensitive to the attempt budget: a spent budget must never stop a healthy editor painting, and a wedged Neovim must never be force-killed automatically.
+- `Crashed { retrying }` means an automatic attempt is still permitted, not that one is in flight — the counter is incremented when the attempt is scheduled.
+- A `Refresh` outcome never requests an automatic restart, or a persistently failing respawn would retry from inside the restart path and bypass the cap entirely.
+- `reopen_order` appends the active path last, and appends it even when it was absent from the set. Reopening rides one ordered channel, so the last path opened is the one that ends up focused.
+- `restart_button_rect` collapses the whole result on a degenerate or too-small allocation rather than returning a partial rect, so a caller deriving a click point must check the size before trusting the origin.
+
+#### `main.rs`
+
+Purpose: the binary entry point. `main` forwards the exit code from `wolf_gnome::app::run`; all wiring lives in `app.rs`.
+
+#### `mouse.rs`
+
+Purpose: the GDK pointer-translation rulebook, the analogue of [`input.rs`](#inputrs). GDK value types in, `wolf_core` input values out, with no widget and no event loop.
+
+**Public API**
+
+- `mouse_input(button, state)` and `scroll_threshold(unit, cell_h)` — the button plus the modifier bools Neovim's mouse grammar carries, and the delta that makes one line step.
+- `ScrollAccumulator::consume`, `PaneScroll::steps_for(grid, delta, threshold)`, and `scroll_steps(steps)`.
+
+**Decisions**
+
+- Only the primary button is forwarded; every other number yields `None`. That is parity with macOS, and the one place the decision is recorded and tested.
+- Every modifier bit outside `C-`, `S-`, `A-` is dropped rather than translated, because Neovim's mouse grammar has nowhere to put it. Unlike `gdk_key`, which has a meta notation.
+- An unknown scroll unit falls back to the wheel threshold on purpose: guessing wheel for a pixel delta is over-sensitive and recoverable, while guessing surface for a detent delta makes scrolling dead.
+- A rejected `consume` leaves the carry untouched, so it is indistinguishable from no call; a poisoned remainder would kill scrolling for the session. `PaneScroll` discards the carry when the target grid differs from the previous call, accepted or not, because a remainder is a fraction of a line of one grid.
+- **The scroll sign is the opposite of macOS's, deliberately.** A positive AppKit delta shows earlier content while a positive GDK delta moves toward the end of the buffer, so a positive step count maps to `Down` here and `Up` there. A test exists to stop that being "corrected".
+
+#### `pane_layout.rs`
+
+Purpose: the pure codec between the live pane tree, whose leaves are pane ids, and the persisted `wolf_core::PaneNode`, whose leaves are buffer paths. No GTK, no serde, no IO.
+
+**Public API**
+
+- `encode(layout, paths) -> PaneNode` — an id missing from `paths` becomes an empty leaf.
+- `decode(node, first_leaf_id) -> Option<(PaneTree, Vec<PaneId>)>` — ids allocated sequentially in depth-first order, so leaf `i` is the pane for handle `i`.
+- `is_empty_leaf(node)`, `leaf_count(node)`, `leaf_paths_dfs(node)`.
+- `MAX_RESTORE_LEAVES` and `MAX_RESTORE_DEPTH`.
+
+**Decisions**
+
+- `is_empty_leaf` is the content predicate the save path gates on: true only for an unnamed, non-preview lone leaf. `leaf_count` exists solely to validate the handle count a rebuild returns, and gating persistence on it reintroduces the macOS bug described in [DECISIONS.md](../DECISIONS.md). A named test states that rule on its own so a regression names it.
+- `decode` validates before anything is rendered, so Neovim is never asked to realize a malformed tree. The two caps are restore policy against a hand-edited file, not a limit on the tree type.
+- The orientation mapping lives here in both directions, so an inversion is one edit to make and one test to catch rather than two half-inversions that cancel.
+- `preview` is always written false. The flag is already carried end to end by the schema and the rebuild spec, so a preview pane adds a value here, not a field.
+
+#### `pane_view.rs`
+
+Purpose: the GTK glue that turns `layout`'s pane tree into nested `gtk::Paned` with one `gtk::DrawingArea` per Neovim window, plus the bottom command-line strip.
+
+**Public API**
+
+- `build(core, metrics) -> PaneHandle` — no panes exist until the first window grid appears on a wake.
+- `cmdline_widget()` — the strip, handed to the picker and sidebar as their focus-return target.
+- `reset_after_restart()`, `request_layout_rebuild(saved)`, `layout_snapshot()`, `snapshot_readiness()`.
+
+**Decisions**
+
+- Panes paint window grids only. Grid 1 empties under `ext_messages`, so the strip paints from the folded `Snapshot::cmdline` and `Snapshot::toast`.
+- The active-pane ring is an `outline`, not a `border`, so a focus change consumes no layout space.
+- Divider positions re-apply on every `max-position` notify, because nested allocation reports an intermediate maximum before settling.
+- Each area carries a one-cell content floor and its paneds refuse to shrink children, so no pane is allocated zero pixels.
+- Pointer input is one `gtk::GestureDrag`, not a click controller plus something else: a gesture takes an implicit grab and keeps delivering after the pointer leaves the widget, which is what makes drag-past-the-edge selection work.
+- The target grid and button number are pinned at press while modifiers are re-read live, so a drag that wanders out still edits the pane it started in.
+- `layout_snapshot` reads each leaf's raw absolute path, never the relativized display path.
+
+**Gotchas**
+
+- A pending saved layout is kept while no pane has bound and dropped once more than one exists, because splits before the restore leave it describing a different tab.
+
+#### `persistence.rs`
+
+Purpose: the glue that commits this crate's application state to `state.json`. It is thin by construction: every decision lives in [`state_seam.rs`](#state_seamrs) and [`pane_layout.rs`](#pane_layoutrs), so this module gathers live values and hands them over.
+
+**Public API**
+
+- `build(parts) -> StateHandle` — a value constructor that installs no closures and takes no snapshot of its own.
+- `set_empty(empty)`, `on_render_wake()`, `flush_on_close()`.
+
+**Decisions**
+
+- An absent state store is the whole degradation story: every method early-returns, and the app runs normally while neither restoring nor saving. There is no error path and no second convention.
+- The size comes from the window's default size and the position is never written, per [DECISIONS.md](../DECISIONS.md). The persisted `sidebar_visible` is the inverse of the live empty-state flag.
+- `flush_on_close` blocks on a bounded flush rather than trusting the writer thread, and a timeout prints rather than panicking. It exists to bound the quit path against a wedged filesystem, not to be reached.
+
+**Gotchas**
+
+- Borrow discipline is load-bearing here specifically. `flush_on_close` runs inside the close-request handler, which then takes the core out, so every core borrow in this module is taken and dropped in its own statement.
+- This module has no unit tests and needs none: it holds no rules. Its coverage is the relaunch smokes plus the seam tables.
+
+#### `picker.rs`
+
+Purpose: the file-picker overlay — a search entry over a ranked results list floating above the editor. Activation sends `InputEvent::Open`, which also records the file in the MRU cache.
+
+**Public API**
+
+- `build(overlay, area, core) -> PickerHandle` — starts hidden. `area` is the focus-return widget, not the results host.
+- `PickerHandle::open`, `close` (both idempotent), and `is_open` — the app queries `is_open` to suppress key forwarding to the core.
+
+**Decisions**
+
+- The picker has no trigger predicate of its own. It opens from the `win.go-to-file` action, which is reachable from the `Ctrl+Shift+O` chord, the primary menu, and the header-bar button; see [`actions.rs`](#actionsrs) and the invariant in [DECISIONS.md](../DECISIONS.md).
+- The key controller runs in the capture phase, so Escape and the arrows are seen before the `SearchEntry` consumes them. Arrows move the list selection while focus stays in the entry, which keeps typing working.
+- The selection is preserved across a streaming rebuild unless the query changed, so an arriving traversal batch does not yank the user back to the top row.
+- Activation with zero rows is a true no-op: it neither opens anything nor closes the picker.
+
+**Gotchas**
+
+- Closing drops the `FileSearch`, which cancels the background traversal.
+
+#### `render.rs`
+
+Purpose: the Cairo/Pango paint seam. `paint` rasterizes one grid and its highlight table onto any Cairo context — an offscreen `ImageSurface` in tests, a drawing area's context in production.
+
+**Public API**
+
+- `CellMetrics::for_font(cr, family, size_pt)` — uses `cr` only to obtain a Pango context, so the surface's size is irrelevant; the advance width comes from Pango's approximate char width, which is exact for a monospace font.
+- `paint(cr, grid, highlights, metrics)` — takes one grid rather than a whole `Snapshot`, because under `ext_multigrid` a front-end paints a single grid per surface.
+
+**Decisions**
+
+- Every cell's background rectangle is filled, including empty ones, which keeps wide-character trailing placeholders and never-painted cells aligned.
+- A cell with empty text gets its background and no glyph.
+- Bold, italic, and single underline render; undercurl and strikethrough do not.
+
+**Gotchas**
+
+- `FALLBACK_FG`, `FALLBACK_BG`, and `draw_glyph` are `pub(crate)` so `cursor.rs` and `pane_view.rs` reuse them. Reimplementing either in a caller lets cursor colors or glyph placement drift away from the grid paint.
+
+#### `shell.rs`
+
+Purpose: the glue for the action namespace — `gio` actions, the primary menu, the chord controller, the empty state, the command drain, and crash-recovery orchestration.
+
+**Public API**
+
+- `build_menu_model()`, `build_empty_state()`, `build(parts) -> AppShell`.
+- `install_actions(app)` — must run after the window is constructed and before it is presented, so the menu and header button can resolve their actions.
+- `set_empty_state(empty)`, `on_liveness_wake() -> bool`, `on_render_wake()`.
+
+**Decisions**
+
+- The chord controller matches keys itself rather than relying on GTK's accelerator matching, which is keymap-aware and does not fire under the smokes' keystroke injector. Accelerators are still registered, but only so the menu renders their labels. A disabled action falls through, matching what a real GTK accelerator does.
+- Because the controller lives on the window it also runs ahead of the picker's own controller and carries no open-picker guard, so an application command fires with the overlay up. The picker's own keys are unaffected: none is a bound chord.
+- `install_actions` filters on the command's classification, so an implemented command installs its action even while its chord stays reserved.
+- Overlay side effects fire only on a real mode transition, and the focus sample is taken before the overlay is hidden. Do not move that sample below the hide: it stops reporting once the overlay is unparented rather than hidden.
+- An Open Folder result records a pending re-root rather than re-rooting synchronously, because the file search resolves its root from the live cwd, which updates only after Neovim reports the change.
+
+#### `state_seam.rs`
+
+Purpose: the pure application-state seam — what to restore at launch, and what to persist on each wake. GTK-free and IO-free, and it reads neither the environment nor the process cwd, so the whole rulebook is testable with no temp directory.
+
+**Public API**
+
+- `restore_plan(saved, process_cwd, home, is_dir) -> RestorePlan` — the working directory, the empty-state flag, the tab's saved layout, and the window size.
+- `restored_window_size(w, h)`, `persistable_layout(node)`, `snapshot_cwd(empty, launch_cwd, live_cwd)`, `may_snapshot(liveness, bound_panes, reported_windows)`, `snapshot_state(...)`.
+
+**Decisions**
+
+- A saved layout is attached only when the chosen directory is the one it was saved from, because its leaves are absolute paths belonging to one project. Reopening one project's files inside another would look like data corruption.
+- `restored_window_size` collapses the whole result on any unusable dimension, following the geometry convention, because a usable width with a garbage height is not half a window size.
+- `persistable_layout` suppresses by content, never by arity; see [`pane_layout.rs`](#pane_layoutrs) and [DECISIONS.md](../DECISIONS.md).
+- The empty state persists an empty cwd always. A passive launch hands Neovim a home directory purely because a process needs one, and persisting it would turn every launcher start into a project at home.
+- `may_snapshot` is a data-loss guard, not tidiness, and its match over `Liveness` is total so a new variant cannot silently read as "not alive".
+- `snapshot_state` is the one place the single-window, single-tab shape lives, pinned by its own test so a later unit changes it deliberately.
+
+#### `title.rs`
+
+Purpose: the pure window-title seam — the working directory, rendered, with the home prefix abbreviated. A port of the macOS title seam, so the two front-ends abbreviate identically.
+
+**Public API**
+
+- `display_title(cwd, home) -> String` and `window_title(cwd, home) -> String`, which substitutes `WINDOW_TITLE_FALLBACK` for an empty result.
+
+**Decisions**
+
+- `home` is always injected, never read from the environment, which is what makes the rule decidable from its arguments. The single environment read in this crate lives in [`workspace.rs`](#workspacers), and the shell captures it once at build time.
+- Abbreviation matches on a full path-segment boundary only. A directory sharing a character prefix with home is not under it and must be returned verbatim.
+- A home of `/` disables abbreviation entirely, because abbreviating every absolute path would be actively misleading.
+- The window builder seeds the same fallback constant as the initial title, so the title never flickers between two spellings before the first directory is reported.
+
+#### `tree.rs`
+
+Purpose: a re-export shim over `wolf_core::tree`. The hierarchical projection of the flat file list and its tests live in the core as one source of truth shared by every front-end; this module keeps the `crate::tree::…` paths resolving for the GTK glue.
+
+#### `tree_view.rs`
+
+Purpose: the GTK glue for the file-tree sidebar — a `gtk::ListView` over a `gtk::TreeListModel`, fed by a long-lived `FileSearch` and tracking the file being edited.
+
+**Public API**
+
+- `build(core, area, start) -> TreeHandle` — `area` is the focus-return widget. `start` is false in the empty state, where no project is open and nothing is walked.
+- `widget()` — the scrolled window, placed as the app's `Paned` start child.
+- `on_render_wake()` — reveals and highlights the current file when it changes.
+- `reroot()` — restarts the traversal after an Open Folder has settled; `close()` drops the search, cancelling the traversal.
+
+**Decisions**
+
+- Nodes are wrapped in `glib::BoxedAnyObject` rather than a custom GObject subclass.
+- Directory children materialize lazily against the latest shared entries, so a directory expanded mid-traversal shows whatever has streamed in by then.
+- The selection model disables autoselect, so row 0 is not highlighted at startup and a selection appears only when a reveal lands.
+- A reveal that cannot resolve stays pending and retries on each refresh, because the current file often arrives before the traversal has reached it.
+- Row positions are re-scanned after each ancestor expansion, since expanding a row shifts every later position.
+
+**Gotchas**
+
+- Each refresh rebuilds the root store, collapsing manual expansion; the reveal re-expands only the path to the current file.
+
+#### `workspace.rs`
+
+Purpose: the pure workspace decision — is a project open, where does Neovim start, and when has a pending re-root settled.
+
+**Public API**
+
+- `launch_decision(process_cwd, restored, home, is_dir) -> LaunchDecision` — `Folder` or `EmptyState`, the latter carrying the directory Neovim is started in.
+- `reroot_ready(pending, live) -> bool` and `home_dir()`.
+
+**Decisions**
+
+- Two candidates are offered and the first that satisfies one shared predicate wins: it is a directory, it is not home, and it is not the root. The order is the rule: the process cwd comes first because a terminal launch from a project is the Linux idiom, and the restored cwd comes second, so it gets its turn exactly when a launcher start yields home or the root — which is precisely "no project".
+- Applying that same predicate to the restored cwd is deliberate. A hand-edited state file naming the root would otherwise point the sidebar's file search at the whole filesystem, and home at the whole home tree — the pathological case core's search bounds exist to prune.
+- `is_dir` is an injected predicate rather than a filesystem call, which is what makes the rule testable with no temp directories and no real home.
+- `reroot_ready` is a plain equality, so a trailing separator is already ignored while `..` and symlinks are not. Callers canonicalize both sides first.
+
+**Gotchas**
+
+- `home_dir` is the one environment read in this crate, and the shell captures its result once at build time rather than re-reading per frame.

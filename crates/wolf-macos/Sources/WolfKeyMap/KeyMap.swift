@@ -122,6 +122,14 @@ public enum WolfKeyMap {
     )
   }
 
+  /// Whether `keyCode` is a recognized NAMED key (Return, Tab, Esc, arrows,
+  /// Home/End/PageUp/PageDown, forward-delete, backspace, or an F-key) — the keys
+  /// `translate` owns from the `keyCode` alone. A public wrapper over the private
+  /// `namedKey` lookup so the `KeyComposition` routing gate can exclude them.
+  public static func isNamedKey(keyCode: UInt16) -> Bool {
+    namedKey(keyCode: keyCode) != nil
+  }
+
   /// A recognized named key: its `FfiKeyEvent.kind` and (for F-keys) its number.
   private struct Named {
     let kind: UInt8
