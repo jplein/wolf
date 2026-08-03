@@ -1817,6 +1817,19 @@ function _G.wolf_open_preview(mode)
 	local source_buf = vim.api.nvim_get_current_buf()
 	local source_path = vim.api.nvim_buf_get_name(source_buf)
 
+	-- Re-emit the SOURCE buffer's cursor BEFORE any placement branch, while the
+	-- source buffer and its window are still CURRENT.
+	--
+	-- LOAD-BEARING ORDERING: for "split_right" / "active" the placement below does
+	-- nvim_win_set_buf(0, preview_buf), making the preview scratch the current
+	-- buffer. Emitting after that would hit emit_cursor's preview-scratch guard and
+	-- bail, leaving the freshly opened preview with no anchor until the user's next
+	-- cursor move. Emitting first means a newly opened preview immediately scrolls
+	-- to where the user is.
+	if _G.wolf_emit_markdown_cursor then
+		_G.wolf_emit_markdown_cursor(source_buf)
+	end
+
 	local preview_buf = _G.wolf_ensure_preview_buf(source_buf, source_path)
 
 	if mode == "split_right" then
@@ -2107,6 +2120,92 @@ function _G.wolf_setup_preview(chan)
 		end,
 	})
 
+	-- Reports the CURRENT window's cursor position for a Markdown SOURCE buffer as
+	-- `wolf_markdown_cursor(bufnr, line, char_col)` -- three FLAT scalars, mirroring
+	-- wolf_markdown_dirty's flat (bufnr, tick) shape rather than a table. Flat
+	-- scalars sidestep the empty-Lua-table map-vs-array msgpack ambiguity that
+	-- wolf_setup_theme_tracking already documents.
+	--
+	-- Core UPSERTS the pair into Snapshot::markdown_cursors keyed by the SOURCE
+	-- bufnr (the same key space as markdown_ticks and PreviewInfo::source_bufnr), so
+	-- the front-end can scroll the preview's `wl-{line}-{col}` marker into view.
+	local function emit_cursor(buf)
+		if not buf or not vim.api.nvim_buf_is_valid(buf) then
+			return
+		end
+		-- LOAD-BEARING: line('.') / charcol('.') read the CURRENT window's cursor, so
+		-- reporting for a non-current buffer would emit the wrong position.
+		-- CursorMoved/CursorMovedI always fire for the current buffer, so this is
+		-- purely defensive -- but it is what makes the un-winid'd charcol('.')
+		-- unambiguous.
+		if buf ~= vim.api.nvim_get_current_buf() then
+			return
+		end
+		-- LOAD-BEARING, and NOT redundant with the check above: "current buffer" is
+		-- not the same as "displayed in a real window". vim.fn.bufload() (used by
+		-- wolf_preview_file for its background source, and by nvim_buf_call) makes the
+		-- target buffer current inside nvim's synthetic AUTOCMD WINDOW and fires
+		-- BufEnter + BufWinEnter there. Measured against the pinned nvim 0.12.3, that
+		-- window reports win_gettype() == "autocmd" and a fabricated line 1 / col 1
+		-- cursor that belongs to no user window. Emitting it would attribute a bogus
+		-- (1, 0) anchor to a buffer whose cursor is genuinely UNKNOWN, defeating the
+		-- front-end's `source_cursor_line() == 0` sentinel (CursorPos.isKnown), which
+		-- is what tells it to leave a freshly bound preview's scroll position alone.
+		-- Only a NORMAL window (win_gettype() == "") carries a real cursor; this also
+		-- excludes floating/popup, command-line, quickfix and loclist windows.
+		if vim.fn.win_gettype() ~= "" then
+			return
+		end
+		if vim.bo[buf].filetype ~= "markdown" then
+			return
+		end
+		-- The preview-scratch guard. This is a deliberate ASYMMETRY with the sibling
+		-- wolf_markdown_dirty autocmd above, which excludes preview scratches only
+		-- INCIDENTALLY (a `nofile` scratch never runs filetype detection, so its
+		-- filetype stays ""). Here we are explicit, so a future `:filetype detect` on
+		-- a `Preview: foo.md`-named scratch can never leak a bogus cursor whose line
+		-- numbers describe the RENDERED text rather than the source.
+		if vim.b[buf].wolf_preview_source ~= nil then
+			return
+		end
+		local line = vim.fn.line(".")
+		-- charcol() is col()'s CHARACTER-index twin: it returns the 1-based CHARACTER
+		-- index of the cursor column, so subtracting 1 yields the 0-based CHARACTER
+		-- column the `wl-{L}-{C}` marker scheme wants, with NO byte->char conversion
+		-- anywhere downstream. In insert mode past end-of-line charcol('.') returns
+		-- char_len + 1, so char_col == char_len (one past the last character); the
+		-- front-end rounds down to a multiple of 100 and falls back, so that is
+		-- benign.
+		local char_col = vim.fn.charcol(".") - 1
+		if char_col < 0 then
+			char_col = 0
+		end
+		vim.rpcnotify(chan, "wolf_markdown_cursor", buf, line, char_col)
+	end
+
+	-- Expose the emit closure (it closes over `chan`) so wolf_open_preview can
+	-- re-emit BEFORE it binds the preview scratch into a window -- see the call site.
+	_G.wolf_emit_markdown_cursor = emit_cursor
+
+	-- CursorMoved/CursorMovedI are the steady-state signal. BufEnter/BufWinEnter are
+	-- LOAD-BEARING for FRESHNESS, not redundant: probed against the pinned nvim,
+	-- `:edit foo.md` fires CursorMoved BEFORE filetype detection has run (so
+	-- emit_cursor's `filetype == "markdown"` guard bails), and no further CursorMoved
+	-- fires until the user actually moves. Without a buffer-entry emit, a markdown
+	-- buffer that is opened and simply LOOKED at reports no cursor at all, so a
+	-- preview bound to it would have no anchor (source_cursor_line() == 0) until the
+	-- first motion. BufEnter/BufWinEnter both fire AFTER detection, with the buffer
+	-- current and its filetype set. The emit is idempotent (core upserts), so the
+	-- overlap between the two entry events costs one extra notify per open.
+	vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI", "BufEnter", "BufWinEnter" }, {
+		group = group,
+		callback = function(ev)
+			emit_cursor(ev.buf)
+		end,
+	})
+
 	-- Initial emit so an already-open preview is reflected without a window event.
 	emit_previews()
+	-- ...and so the startup buffer's cursor is known without waiting for a move.
+	emit_cursor(vim.api.nvim_get_current_buf())
 end

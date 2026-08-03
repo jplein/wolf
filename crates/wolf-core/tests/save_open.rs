@@ -30,7 +30,8 @@ fn wait_for_file_contains(path: &std::path::Path, needle: &str) -> String {
             }
         }
         if std::time::Instant::now() >= deadline {
-            let dump = std::fs::read_to_string(path).unwrap_or_else(|e| format!("<unreadable: {e}>"));
+            let dump =
+                std::fs::read_to_string(path).unwrap_or_else(|e| format!("<unreadable: {e}>"));
             panic!(
                 "timed out waiting for {} to contain {needle:?}; current contents: {dump:?}",
                 path.display()
@@ -57,11 +58,8 @@ fn open_existing_markdown() {
     // hl_id from a plain body cell. Markdown highlighting is enabled in init.lua.
     // Pick the first non-space cell on the heading row (row 0) and on the body
     // row (row 1) and assert their hl_ids differ.
-    let heading_col = first_non_space_col(&row0)
-        .expect("heading row should have a non-space char");
-    let heading_cell = grid
-        .cell(0, heading_col)
-        .expect("expected a heading cell");
+    let heading_col = first_non_space_col(&row0).expect("heading row should have a non-space char");
+    let heading_cell = grid.cell(0, heading_col).expect("expected a heading cell");
 
     let row1 = grid.row_text(1);
     let body_col = first_non_space_col(&row1).expect("body row should have a non-space char");

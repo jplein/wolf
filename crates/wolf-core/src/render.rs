@@ -481,6 +481,29 @@ pub struct PreviewInfo {
     pub source_full_width: bool,
 }
 
+/// The cursor position in a SOURCE Markdown buffer, as reported by the
+/// `wolf_markdown_cursor` notification.
+///
+/// Named `MarkdownCursor` (NOT `Cursor`) because this module already owns the grid
+/// [`Cursor`] type and the two must never be confused: this one is a BUFFER
+/// position in the Markdown source, not a screen-grid position.
+///
+/// The pair addresses the invisible position markers the Markdown renderer emits
+/// (`<span class="wolf-src" id="wl-{L}-{C}">`, see [`crate::markdown`]): the
+/// front-end rounds `col` down to a multiple of
+/// `crate::markdown::MARKER_COLUMN_STRIDE` to build the anchor id.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MarkdownCursor {
+    /// 1-based hard buffer line (`line('.')`), matching the `wl-{L}-{C}` marker
+    /// scheme's `L`. `0` means "never reported".
+    pub line: u32,
+    /// 0-based CHARACTER column (`charcol('.') - 1`), matching the marker scheme's
+    /// `C` — a CHARACTER offset, NOT a byte offset. In insert mode past
+    /// end-of-line this can equal the line's character LENGTH (one past the last
+    /// character); the front-end's anchor lookup falls back, so that is benign.
+    pub col: u32,
+}
+
 /// What ONE window is showing, from the `wolf_buffers` notification.
 ///
 /// The PARALLEL companion to [`Snapshot::buffers`] (which stays byte-identical for
@@ -807,6 +830,15 @@ pub struct Snapshot {
     /// its tick to decide when to re-pull rendered HTML. Because it is not a redraw
     /// frame, updating it does NOT bump `seq`. Defaults to empty.
     pub markdown_ticks: HashMap<i64, u64>,
+    /// Per-source-buffer editing CURSOR position, keyed by the SOURCE Markdown
+    /// buffer number (an `i64`) — the SAME key space as [`Snapshot::markdown_ticks`]
+    /// and [`PreviewInfo::source_bufnr`]. Updated out-of-band from the redraw stream
+    /// via the `wolf_markdown_cursor` notification (see [`crate::redraw`]): each
+    /// emit UPSERTS one `[bufnr, line, char_col]` triple. The front-end joins a
+    /// preview's `source_bufnr` to its cursor to scroll the matching
+    /// `wl-{line}-{col}` marker into view. Because it is not a redraw frame,
+    /// updating it does NOT bump `seq`. Defaults to empty.
+    pub markdown_cursors: HashMap<i64, MarkdownCursor>,
     /// Per-tabpage tab-local working directory, keyed by the Neovim TABPAGE handle
     /// (an `i64`), each an absolute canonicalized cwd (`getcwd(-1, <number>)`).
     /// Updated out-of-band from the redraw stream via the `wolf_tab_cwds`

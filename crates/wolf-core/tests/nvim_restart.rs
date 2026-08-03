@@ -182,9 +182,11 @@ fn restart_respawns_and_reopens_open_files() {
 
     // Crash nvim and wait for the Dead transition.
     self_sigkill(&core);
-    poll_until(&waiter, "liveness() to become Dead after the SIGKILL", || {
-        core.liveness() == Liveness::Dead
-    });
+    poll_until(
+        &waiter,
+        "liveness() to become Dead after the SIGKILL",
+        || core.liveness() == Liveness::Dead,
+    );
 
     // Restart from a DEAD state: an ACTUAL respawn, so `restart_nvim()` returns
     // `Ok(true)` (true = really respawned; false would mean a no-op). Post-restart

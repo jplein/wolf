@@ -172,7 +172,7 @@ Where a command lands is a front-end decision, and there are three answers: enti
 
 ### Output: preview (core → front-end)
 
-A preview pane is a real Neovim scratch buffer carrying `b:wolf_preview_source`, so the shell invents no document type of its own. Core reports one `PreviewInfo { source_bufnr, source_path, source_full_width }` per preview window in `Snapshot.previews`, and each source buffer's `changedtick` in `Snapshot.markdown_ticks`. The front-end joins the two by `source_bufnr`: when a tick advances it re-pulls through the blocking `render_preview(source_bufnr)`, which returns a complete HTML document with CSS and fonts inlined.
+A preview pane is a real Neovim scratch buffer carrying `b:wolf_preview_source`, so the shell invents no document type of its own. Core reports one `PreviewInfo { source_bufnr, source_path, source_full_width }` per preview window in `Snapshot.previews`, and each source buffer's `changedtick` in `Snapshot.markdown_ticks`. The front-end joins the two by `source_bufnr`: when a tick advances it re-pulls through the blocking `render_preview(source_bufnr)`, which returns a complete HTML document with CSS and fonts inlined. Because the in-app render pins one theme and full width, that document's `<head>` is byte-identical on every render, including across a dark/light flip, so a front-end may replace only the body.
 
 Placement is the front-end's choice, passed as a mode string. `open_preview(mode)` accepts `split_right`, `active`, or `reuse_preview_pane`; its inverse `edit_source(mode)` accepts `split_left`, `active`, or `reuse_editor_pane`. Both return the resulting buffer number, or `0`, and the front-end learns the new pane on the next wake rather than from the return value. `preview_file(win, path)` repoints an existing preview window at a linked file, and `open_in_browser()` returns a loopback URL for the same rendered document (decision 10).
 
@@ -181,6 +181,10 @@ Two gotchas fall out of the scratch-buffer design. The path-based trackers skip 
 **Content width.** A buffer's content area is capped near 90 columns and centered by default, in both the editor and its preview, and the Use full width for content command flips the buffer-local `b:wolf_full_width` for that one buffer. There is no global default-to-full-width setting; the per-buffer toggle is the only control.
 
 The contract is three fields and one event: `full_width` keyed by window handle, `PreviewInfo.source_full_width` for a preview pane, `current_is_full_width` for the menu checkmark, and `InputEvent::ToggleFullWidth`. Framing a pane to that flag is the front-end's job — see [`crates/wolf-macos/DECISIONS.md`](crates/wolf-macos/DECISIONS.md). The terminal drawer defaults to full width because nvim seeds the flag on its buffer, and the browser preview is always capped and carries no toggle.
+
+**Cursor position.** A third out-of-band notification closes the loop from the editor cursor to the preview's scroll position. `wolf_markdown_cursor` carries three flat scalars `(source_bufnr, line, col)`, which core upserts into `Snapshot.markdown_cursors` keyed by the source buffer number — the same key space as `markdown_ticks` and `PreviewInfo.source_bufnr`, so a front-end joins all three on one key. An absent entry, or a `line` of `0`, is the cursor-unknown sentinel, and a front-end must not scroll for it.
+
+The column semantics are the contract: `line` is a 1-based hard buffer line and `col` a 0-based character column, not a byte offset, so nothing on the path converts. They pair with the `wl-{L}-{C}` position markers `render_html` emits into the preview HTML. Whether a front-end scrolls at all is its own decision, per decision 2.
 
 ### Input: events (front-end → core)
 
@@ -226,8 +230,8 @@ The `.app` bundles its own pinned Neovim, the captive `init.lua`, the vendored p
 
 - The GTK native completion popup and multi-line scrollable toast. Both exist on macOS.
 - Whether a shared portable renderer, rather than a native paint backend per platform, ever earns its keep. See decision 2.
-- **Markdown-preview scroll-sync is designed but unbuilt.** The emitted preview HTML already carries the position markers: a per-hard-line marker `wl-{L}-0` and a per-100-character-column marker `wl-{L}-{k*100}`, each of the form `<span class="wolf-src" id="wl-{L}-{C}" data-line="{L}" data-col="{C}"></span>`, where `L` is the 1-based hard buffer line matching nvim's `line('.')` and `C` a 0-based character column. What is missing is the Neovim-to-web-view cursor signal and the JavaScript that finds the marker and scrolls it into view.
-- **The markers collapse at block granularity.** A block's interior line markers all resolve to just before that block's opening tag, so every `wl-{L}-0` id exists but points at the block top. That leaves the per-column markers mostly redundant until inline anchoring is added.
+- **Marker granularity below the block.** A source line longer than `MARKER_COLUMN_STRIDE` is anchored inside its block, at the marker's true position in the rendered inline flow. A paragraph hard-wrapped into several shorter source lines is not: all of its `wl-{L}-0` markers resolve to the block's opening tag. Injection is suppressed entirely in a fenced code block, an HTML block and a table, which anchor to their opening tag, and in an image's alt text, which anchors just after the image. Generalizing is rejected rather than pending — an anchor between `<tbody>` and `<tr>` is foster-parented out of the table by the HTML parser, and one between `<ul>` and `<li>` is invalid.
+- **Preview scroll-sync is macOS-only.** The GTK shell has no Markdown preview pane, and the browser preview reloads on a poll with no cursor coupling.
 - **One preview theme ships.** The `PreviewTheme` enum, `theme_css`, and the embedded stylesheets are structured for more, with a config key as the intended selector. The preview follows the app's resolved light or dark appearance through a `prefers-color-scheme` block, and is not wired to the live Neovim colorscheme.
 
 ### Split panes — present limitations

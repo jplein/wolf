@@ -338,10 +338,18 @@ fn full_width_toggles_active_buffer_and_routes_the_command() {
 
     // --- 4. Direct editor-affecting toggle flips the flag ON -----------------
     let win = handle.active_win();
-    assert_ne!(win, 0, "attach should report a nonzero active window handle");
+    assert_ne!(
+        win, 0,
+        "attach should report a nonzero active window handle"
+    );
     handle.toggle_full_width();
     wait_for_full_width_active(&handle, true, "after the first toggle_full_width()");
-    wait_for_win_full_width(&handle, win, true, "the active window's per-window flag flips true");
+    wait_for_win_full_width(
+        &handle,
+        win,
+        true,
+        "the active window's per-window flag flips true",
+    );
 
     // --- 5. Toggling again flips the flag back to the ~90-char default -------
     handle.toggle_full_width();

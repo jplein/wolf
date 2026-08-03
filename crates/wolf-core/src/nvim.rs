@@ -394,6 +394,21 @@ impl NvimProcess {
     /// Returns a `Send + 'static` future (owns a cloned RPC handle) so the
     /// timeout chokepoint ([`crate::api::WolfCore::block_on_rpc`]) can spawn it and
     /// detach on timeout without holding a borrow of `self`.
+    ///
+    /// HEAD-IS-INVARIANT (relied on by the macOS front-end). Because the theme is
+    /// fixed at [`crate::markdown::PreviewTheme::Default`] and the width mode at
+    /// [`crate::markdown::WidthMode::Full`], and everything else
+    /// [`crate::markdown::render_html`] assembles into `<head>` is a compile-time
+    /// constant, the `<style>` block this returns is BYTE-IDENTICAL on every call —
+    /// including across a dark/light appearance flip, which is a
+    /// `prefers-color-scheme` media query inside that constant CSS rather than a
+    /// different render. Only the BODY changes between calls (the inline
+    /// `style="color:#…"` highlight spans and the `.wolf-src` markers). The macOS
+    /// preview exploits this to swap ONLY the body into the live web view while the
+    /// user types, instead of re-loading a document whose head inlines ~965 KiB of
+    /// base64 `@font-face` data. It guards the premise by comparing head lengths and
+    /// degrading to a full load when they differ, so adding a theme/width parameter
+    /// here is safe — but it costs that optimization, so revisit the front-end too.
     pub fn render_preview(
         &self,
         source_bufnr: i64,
@@ -633,8 +648,8 @@ impl NvimProcess {
         }
     }
 
-    /// Installs the preview tracking + dirty-signal autocmds inside the captive
-    /// nvim.
+    /// Installs the preview tracking + dirty-signal + cursor-signal autocmds inside
+    /// the captive nvim.
     ///
     /// Mirrors [`setup_buffer_tracking`](Self::setup_buffer_tracking): looks up this
     /// RPC channel's id via `nvim_get_api_info`, then calls the
@@ -645,7 +660,35 @@ impl NvimProcess {
     /// `[preview_win, source_bufnr, source_abs_path]` triples (emitting once
     /// immediately), plus markdown-guarded `TextChanged`/`TextChangedI`/
     /// `BufWritePost` autocmds that `rpcnotify` `wolf_markdown_dirty` with
-    /// `[source_bufnr, changedtick]`.
+    /// `[source_bufnr, changedtick]`, plus
+    /// `CursorMoved`/`CursorMovedI`/`BufEnter`/`BufWinEnter` autocmds that
+    /// `rpcnotify` `wolf_markdown_cursor` with the three FLAT scalars
+    /// `[source_bufnr, line('.'), charcol('.') - 1]` — a 1-based LINE and a 0-based
+    /// CHARACTER column (NOT a byte column), which core UPSERTS into
+    /// [`crate::render::Snapshot::markdown_cursors`].
+    ///
+    /// The cursor emit is guarded on the buffer being CURRENT (so the un-winid'd
+    /// `charcol('.')` is unambiguous), on the current window being a NORMAL window
+    /// (`win_gettype() == ""`, which rejects nvim's synthetic AUTOCMD window — see
+    /// below), on `filetype == "markdown"`, and — unlike the
+    /// dirty autocmd, which excludes preview scratches only incidentally via their
+    /// empty filetype — on an EXPLICIT `b:wolf_preview_source == nil`, so only
+    /// SOURCE buffers ever become keys. It also emits once at setup, and
+    /// `_G.wolf_open_preview` re-emits it before binding a preview scratch into a
+    /// window so a freshly opened preview has an anchor immediately.
+    ///
+    /// The two buffer-entry events are load-bearing for FRESHNESS: `:edit foo.md`
+    /// fires `CursorMoved` BEFORE filetype detection runs (so the markdown guard
+    /// bails) and then nothing further until the user moves, which would leave a
+    /// just-opened, un-navigated Markdown buffer with no reported cursor at all.
+    ///
+    /// The `win_gettype()` guard exists because those same two entry events also fire
+    /// from `vim.fn.bufload()` — which `_G.wolf_preview_file` uses to load a linked
+    /// SOURCE file in the background — inside nvim's AUTOCMD window, where the buffer
+    /// IS current but the cursor is a fabricated line 1 belonging to no user window.
+    /// Without the guard a background-loaded source would report a bogus `(1, 0)`
+    /// instead of the `line == 0` "cursor unknown" sentinel the front-end relies on to
+    /// leave a freshly bound preview's scroll position alone.
     pub async fn setup_preview(&self) -> Result<(), NvimError> {
         let info = self
             .nvim

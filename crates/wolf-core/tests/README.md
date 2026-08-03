@@ -213,13 +213,27 @@ Real Neovim (`WOLF_NVIM_BIN`, `no-sandbox` target with staged nvim runfiles).
 - Focus is a pure intent — the core never acts on `FocusDir`, so `<C-w>l` must leave nvim focus and `active_win` unchanged. That negative assertion needs the `SETTLE` delay to be meaningful.
 - Assert on membership and relative change, never literal window or grid handle values, and never HashMap order.
 
+#### `markdown_cursor.rs`
+
+Real Neovim (`//crates/wolf-core:markdown_cursor`: staged nvim runfiles, `WOLF_NVIM_BIN`, `no-sandbox`).
+
+**Covers**
+
+- `Snapshot.markdown_cursors`: the 1-based line and 0-based character column contract, including `charcol`'s past-end-of-line value in insert mode; entry on buffer enter with no motion; independence from `markdown_ticks`; the filetype, preview-scratch and window-type guards; and the source-bufnr key the FFI join depends on.
+
+**Gotchas**
+
+- `wolf_markdown_cursor` arrives out of band, so every assertion polls `read_snapshot()` and drains wakes. `seq` invariance is deliberately not asserted: a cursor motion legitimately produces its own redraw batch, so the no-bump property is structural.
+- The startup buffer is a markdown `Untitled.md` that is itself reported, so the map legitimately holds more than one entry; resolve the opened file's bufnr from `Snapshot.win_buffers` rather than assuming a single key.
+- A background `bufload` case is what pins the `win_gettype()` guard; without it nvim's synthetic autocmd window reports a fabricated cursor that passes every other guard.
+
 #### `markdown_render.rs`
 
 Headless: no Neovim, no filesystem, no staged runfiles.
 
 **Covers**
 
-- The public preview render surface (`render_html`, `render_html_with_highlights`, `code_blocks`, `theme_css`, `PreviewTheme`, `WidthMode`): `wl-{L}-{C}` scroll-sync anchor placement, MathML with inlined fonts, the paired dark/light palettes, and a sweep asserting every vertical dimension in the shipped `base.css` lands on the baseline grid.
+- The public preview render surface (`render_html`, `render_html_with_highlights`, `code_blocks`, `theme_css`, `PreviewTheme`, `WidthMode`): `wl-{L}-{C}` anchor placement in both tiers — column-zero markers collapsing to a block's opening tag, and column markers landing inside a paragraph and inside a list item — the code-block, table and image-alt exclusions including the nested-in-a-container cases, MathML with inlined fonts, the paired dark/light palettes, and a sweep asserting every vertical dimension in the shipped `base.css` lands on the baseline grid.
 
 **Gotchas**
 

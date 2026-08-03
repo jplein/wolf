@@ -22,8 +22,8 @@ use crate::command::Command;
 use crate::layout::LayoutIntent;
 use crate::recent_dirs::RecentDirs;
 use crate::render::{
-    Cell, Cmdline, CmdlineChunk, CursorShape, DefaultColors, HlAttr, Message, ModeInfo,
-    PendingConfirm, PreviewInfo, Pum, PumItem, Rgb, SharedSnapshot, Snapshot, TabFiles,
+    Cell, Cmdline, CmdlineChunk, CursorShape, DefaultColors, HlAttr, MarkdownCursor, Message,
+    ModeInfo, PendingConfirm, PreviewInfo, Pum, PumItem, Rgb, SharedSnapshot, Snapshot, TabFiles,
     ThemeColors, ThemeGroup, ToastChunk, Viewport, WinBuffer, WinInfo,
 };
 
@@ -164,6 +164,25 @@ const PREVIEW_EVENT: &str = "wolf_preview";
 /// [`Snapshot::markdown_ticks`]. Routed separately from `redraw` in
 /// [`RedrawHandler::handle_notify`].
 const MARKDOWN_DIRTY_EVENT: &str = "wolf_markdown_dirty";
+
+/// Name of the out-of-band notification carrying a `[source_bufnr, line,
+/// char_col]` triple for a Markdown source buffer whose cursor moved OR which was
+/// just entered, emitted by the `CursorMoved`/`CursorMovedI`/`BufEnter`/
+/// `BufWinEnter` autocmds in `runtime/nvim/init.lua`. `line` is 1-based
+/// (`line('.')`); `char_col` is a 0-based CHARACTER column (`charcol('.') - 1`),
+/// NOT a byte column. Core UPSERTS the pair into [`Snapshot::markdown_cursors`].
+/// Routed separately from `redraw` in [`RedrawHandler::handle_notify`].
+///
+/// The two BUFFER-ENTRY events are load-bearing for freshness (`:edit foo.md` fires
+/// `CursorMoved` BEFORE filetype detection, so the markdown guard bails and nothing
+/// further fires until the user moves), and they are exactly why the emitter also
+/// guards on `win_gettype() == ""`: `vim.fn.bufload()` fires them inside nvim's
+/// synthetic AUTOCMD window, where the buffer is genuinely current but the cursor is
+/// a fabricated line 1 belonging to no user pane. Without that guard a
+/// background-loaded source would report a bogus `(1, 0)` instead of the `line == 0`
+/// "cursor unknown" sentinel the front-end relies on. See
+/// [`crate::nvim::NvimProcess::setup_preview`] for the full guard list.
+const MARKDOWN_CURSOR_EVENT: &str = "wolf_markdown_cursor";
 
 /// Name of the out-of-band notification carrying every tabpage's tab-local
 /// working directory, emitted by the `WolfTabs` autocmds in
@@ -338,6 +357,14 @@ impl Handler for RedrawHandler {
                 // wake-after-unlock invariant). This is NOT a redraw frame, so
                 // `seq` is left unchanged.
                 self.apply_markdown_dirty(args).await;
+                (self.wake)();
+            }
+            MARKDOWN_CURSOR_EVENT => {
+                // `apply_markdown_cursor` acquires and DROPS the write lock before
+                // returning; wake fires after the lock is released (same
+                // wake-after-unlock invariant). This is NOT a redraw frame, so
+                // `seq` is left unchanged.
+                self.apply_markdown_cursor(args).await;
                 (self.wake)();
             }
             CWD_EVENT => {
@@ -586,6 +613,41 @@ impl RedrawHandler {
         };
         let mut snap = self.snapshot.write_async().await;
         snap.markdown_ticks.insert(bufnr, tick);
+        // Lock drops here as `snap` goes out of scope at function return.
+    }
+
+    /// Applies a `wolf_markdown_cursor` notification: UPSERTS the reported
+    /// `[source_bufnr, line, char_col]` triple into
+    /// [`Snapshot::markdown_cursors`].
+    ///
+    /// The payload is a source buffer number (decoded via [`ext_handle`]), the
+    /// 1-based cursor LINE (`line('.')`), and the 0-based CHARACTER column
+    /// (`charcol('.') - 1` — a CHARACTER offset, NOT a byte offset). A payload
+    /// missing any of the three is dropped. Each scalar saturates into a `u32`, so
+    /// an absurd value can never truncate into a small one. The front-end joins a
+    /// preview's `source_bufnr` to this position to scroll the corresponding
+    /// `wl-{line}-{col}` marker into view.
+    ///
+    /// The write lock is acquired via [`SharedSnapshot::write_async`], is NOT held
+    /// across any `.await`, and is dropped before returning so the caller's wake
+    /// fires after the lock is released. This is NOT a redraw frame, so `seq` is
+    /// left unchanged.
+    async fn apply_markdown_cursor(&self, args: Vec<Value>) {
+        let Some(bufnr) = args.first().and_then(ext_handle) else {
+            return;
+        };
+        let Some(line) = args.get(1).and_then(as_u64) else {
+            return;
+        };
+        let Some(col) = args.get(2).and_then(as_u64) else {
+            return;
+        };
+        let cursor = MarkdownCursor {
+            line: u32::try_from(line).unwrap_or(u32::MAX),
+            col: u32::try_from(col).unwrap_or(u32::MAX),
+        };
+        let mut snap = self.snapshot.write_async().await;
+        snap.markdown_cursors.insert(bufnr, cursor);
         // Lock drops here as `snap` goes out of scope at function return.
     }
 

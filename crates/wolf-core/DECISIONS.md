@@ -83,6 +83,22 @@ Two hard requirements in the `browser_preview` server, both of which look remova
 
 Each connection clones the current target under a short lock dropped before any `.await`, so no lock is held across an await. The `browser_preview` lock is never held across an nvim RPC.
 
+## The preview position-marker contract
+
+`render_html` seeds every rendered document with position markers — `<span class="wolf-src" id="wl-{L}-{C}" data-line="{L}" data-col="{C}"></span>` — one per hard source line at column zero, plus one every `MARKER_COLUMN_STRIDE` characters along a longer line. `L` is a 1-based hard buffer line and `C` a 0-based character column, matching what `wolf_markdown_cursor` reports, so nothing along the path converts between bytes and characters. pulldown-cmark is chosen for `Parser::into_offset_iter`, which pairs each event with its source byte range; the placement rules are built on those ranges, so a plain event iterator is not a substitute.
+
+Placement has two tiers. A column-zero marker is flushed as a raw span before the opening tag of the block that claims it, which for a list is the outermost container rather than the item. A `col != 0` marker inside a paragraph, heading, blockquote, list or footnote definition is deferred to its true position in the rendered inline flow: it splits the `Event::Text` that contains it when there is one, and otherwise lands before the next `Text` or at the block's end rather than collapsing to the block top.
+
+Three properties are load-bearing on consumers and must survive any rewrite. Every marker the rule predicts exists exactly once, because a marker is deferred rather than dropped. Only the column-zero markers are guaranteed to appear in ascending document order — a block's inline markers follow a later line's column-zero marker — so a consumer sweeping the document must filter on `data-col="0"`. And `MARKER_COLUMN_STRIDE` is mirrored in Swift as `PreviewScrollSeam.markerColumnStride`; neither side reads the other, so the Swift assertion pins only its own literal and a change here must be mirrored by hand.
+
+A `Text` is split only when `source[range]` matches the payload byte for byte: a length check passes a same-length entity such as `&nvap;` and then corrupts it, and a failed match defers the marker instead of dropping it. The split point snaps to the nearest word boundary within `MARKER_SNAP_MAX_BYTES`, because an inline-box edge breaks glyph shaping across it and a mid-word cut loses a ligature or kern pair; with no boundary in the window it splits at the exact offset. The id and `data-*` attributes always name the exact `(L, C)`.
+
+Injection is suppressed inside four regions: code blocks, HTML blocks, tables and image alt text. The three block-level regions keep the before-the-tag placement. An image is inline, so its alt-text marker stays deferred across the element and lands at the block's next placement point, after the `<img>` — the exclusion promises only that no marker enters the element, never a before-the-tag position.
+
+A raw span between `<tbody>` and `<tr>` is foster-parented out of the table by the HTML parser. An `alt` attribute is built by pulldown-cmark's `raw_text`, which drops an `Event::Html` outright — which is also why a marker is emitted as `Event::Html` and never as `Event::InlineHtml`, so a leak loses one anchor instead of corrupting the attribute.
+
+What the markers cost the stylesheet is in [`src/markdown/README.md`](src/markdown/README.md); the granularity that remains out of reach is in [`architecture.md`](../../architecture.md).
+
 ## Present limitations
 
 - A browser-preview server spawned before a `restart_nvim` keeps the RPC handle it captured at spawn time, so its live render goes blank after a restart until the command is run again.

@@ -258,9 +258,10 @@ fn tabpage_lifecycle_over_the_bridge() {
     // still readable and equals dirB. The value now arrives out-of-band (via the
     // `wolf_tab_cwds` notification) rather than on-demand, so POLL for it to land
     // before asserting, rather than reading once.
-    poll("cwd_for_tabpage(T2) to report dirB via the out-of-band snapshot", || {
-        canon(&handle.cwd_for_tabpage(t2)) == canon_b
-    });
+    poll(
+        "cwd_for_tabpage(T2) to report dirB via the out-of-band snapshot",
+        || canon(&handle.cwd_for_tabpage(t2)) == canon_b,
+    );
     let reported_b = handle.cwd_for_tabpage(t2);
     assert!(
         !reported_b.is_empty(),

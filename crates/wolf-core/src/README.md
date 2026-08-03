@@ -46,13 +46,13 @@ Spawns and supervises the captive Neovim child, and wraps every RPC core issues 
 
 #### `redraw.rs`
 
-The `nvim-rs` handler. It folds each `redraw` batch into the shared `Snapshot`, and routes the out-of-band `wolf_*` notifications (cwd, buffers, previews, tabpages, theme, open files, commands, intents) into the snapshot's sibling cells and queues.
+The `nvim-rs` handler: it folds each `redraw` batch into `Snapshot` and routes the out-of-band `wolf_*` notifications (cwd, buffers, previews, markdown ticks and cursors, tabpages, theme, open files, commands, intents) into its sibling cells and queues.
 
 **Decisions**
 
 - Only `flush` bumps `seq`. Out-of-band notifications fire the wake without bumping it, so a front-end gating on `seq` alone misses every cwd, buffer, theme, and preview update.
 - In `grid_line`, each cell tuple maps to exactly one column and `repeat` counts columns including the first, so an explicit `0` is a real zero-width no-op. Clamping it to 1 paints a cell one column past the event's span; Neovim's shadow grid never repaints it, so a wrong-background cell persists. Likewise Neovim already sends the trailing half of a double-width glyph as its own empty-text cell, so synthesizing a placeholder shifts the rest of the row right.
-- `win_hide` removes the window entry but keeps its grid, because Neovim reuses that grid id and may re-`win_pos` the window without resizing it first.
+- `win_hide` removes the window entry but keeps its grid: Neovim reuses that grid id and may re-`win_pos` the window without resizing it first.
 - A resolved `confirm()` and an invalid-key re-prompt produce byte-identical `cmdline_hide` batches, so the toast is stashed with its prompt and restored only if a later `cmdline_show` prompt matches.
 
 **Gotchas**
@@ -66,15 +66,15 @@ The toolkit-agnostic render-state model: `Snapshot` is a complete paint-ready fr
 
 **Public API**
 
-- `HighlightTable::resolve` applies the defaults and `reverse` (swapping fg/bg), so a front-end paints `fg`/`bg` verbatim.
 - A `Cell` with empty `text` is either never-painted or the trailing half of a double-width glyph; `Grid::row_text` renders both as one space to keep columns aligned.
-- `active_grid` falls back to a shared empty `0x0` grid, so a caller never dereferences a missing grid. Grid 1 (`OUTER_GRID_ID`) always exists but is never painted as window content.
+- `active_grid` falls back to a shared empty `0x0` grid, so a caller never dereferences a missing grid.
 - `Toast::is_prompt` is the dismiss-on-input gate: a `confirm` toast must survive a passing keystroke.
+- `Snapshot.markdown_cursors` is keyed by source buffer number, like `markdown_ticks` and `PreviewInfo.source_bufnr`, so a consumer joins all three on one key. `MarkdownCursor.line` is 1-based, `col` a 0-based character column; an absent entry, or `line == 0`, means the cursor is unknown.
 
 **Decisions**
 
 - `Grid::resize` preserves the overlapping region rather than clearing. Neovim's `grid_resize` is not a clear (there is a separate `grid_clear`) and it does not re-send `grid_line` for rows it considers unchanged, so a UI that cleared on resize blanks the surviving pane after a split or a close.
-- `WinInfo.hidden` is always `false`: a `win_hide` removes the window from `windows` outright instead of flagging it, so `windows` and `grid_for_win` describe only the current tabpage. The field exists to keep the FFI and Swift surface stable.
+- `WinInfo.hidden` is always `false`: a `win_hide` removes the window from `windows` outright rather than flagging it. The field exists to keep the FFI and Swift surface stable.
 - `ToastChunk` carries its `attr_id` across the FFI while `CmdlineChunk` is flattened to plain text, because message color is load-bearing (error red, warnings, list highlights).
 - `Snapshot::pending_confirm` is internal fold bookkeeping. It is never rendered and never crossed over the FFI.
 
@@ -213,10 +213,9 @@ Pure Markdown to themed-HTML rendering for the preview pane: a `&str` to `String
 
 **Decisions**
 
-- pulldown-cmark is chosen for `Parser::into_offset_iter`, which pairs each event with its source byte range — the basis of the marker scheme; a plain event iterator is no substitute.
 - Alignment contract: `code_blocks` and the highlighter concatenate the same `Event::Text` bodies, including pulldown-cmark's trailing newline, so Neovim's `(row, byte column)` indices match `text.split('\n')`; changing either side silently misplaces every span.
-- Markers are injected only before block-level `Start` tags, so one never splits inline content or lands inside `<pre><code>`, corrupting rendered code; interior line markers therefore collapse to their block's top.
-- Math and highlighted code are emitted as `Event::InlineHtml`, so the writer passes the markup through verbatim and the injector never treats it as a block start.
+- Marker placement, its byte-identity guard, its exclusions, and the document-order guarantee consumers depend on are one contract with a long half-life: see [the preview position-marker contract](../DECISIONS.md).
+- Math and highlighted code are `Event::InlineHtml`, so the writer passes them through verbatim and the injector never reads them as a block start.
 - `CAPPED_WIDTH_CSS` is horizontal-only: the baseline grid depends on the body's vertical box.
 
 ### Search, traversal, and ranking

@@ -247,6 +247,18 @@ The three pure file-picker seams, each as a table of cases: `isPickerTrigger` (t
 
 `PreviewLinkSeam.classify(url:sourcePath:)` across every branch — a non-`file` scheme goes to the browser, a same-file fragment scrolls, and a cross-file link previews with or without its fragment — plus the detail that a same-file link with no fragment previews the file rather than scrolling. Path comparison runs through `standardizedFileURL`, so `/a/./x.md` and `/a/x.md` are the same file. It also pins that `scrollIntoViewJS(fragmentId:)` JSON-escapes the id before interpolating it.
 
+#### `PreviewScrollSeamTests.swift`
+
+**Covers**
+
+- `PreviewScrollSeam`'s anchor arithmetic (`anchorColumn`, `anchorIds` and their dedup at column zero), the edge-threshold band including its inclusive boundaries and the short-viewport cap, `winsNeedingScroll`, `splitDocument`'s first-open / last-close scan and the shapes it refuses, and the ordered rules of `captureDecision`, `updateStrategy` and `loadCommitOutcome`.
+- The synthesized JavaScript: that each tuning constant's rendered value appears in the generated source, and that `inPlaceUpdateJS`'s free identifiers are exactly `inPlaceUpdateArgumentNames`.
+
+**Gotchas**
+
+- Scalar and string inputs only — no AppKit, no `WKWebView`, no Neovim. The on-screen scrolling and the `PaneContainerView` wiring are compile-and-manual-smoke only.
+- `markerColumnStride` is asserted equal to the literal `100` that `wolf_core::markdown::MARKER_COLUMN_STRIDE` also carries. Neither side reads the other, so this catches Swift-side drift only; a Rust-side change fails nothing here.
+
 #### `PreviewSeamTests.swift`
 
 **Covers**

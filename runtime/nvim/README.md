@@ -90,11 +90,15 @@ Takes no channel id and emits nothing, so no scroll or cursor payload ever cross
 
 #### `wolf_setup_preview(chan)`
 
-Registers two things in one augroup. A window scan on `WinEnter`/`BufWinEnter`/`WinNew`/`WinClosed`/`BufWinLeave` notifies **`wolf_preview`** with a list of `{ preview_win, source_bufnr, source_abs_path, source_full_width }` tuples, one per window showing a `b:wolf_preview_source` scratch buffer; core wholesale-replaces `Snapshot.previews`. `source_bufnr` is `-1` when the source is unknown, and `source_full_width` is the source buffer's flag, which decides whether the preview renders capped or full-width.
+Registers three things in one augroup. A window scan on `WinEnter`/`BufWinEnter`/`WinNew`/`WinClosed`/`BufWinLeave` notifies **`wolf_preview`** with a list of `{ preview_win, source_bufnr, source_abs_path, source_full_width }` tuples, one per window showing a `b:wolf_preview_source` scratch buffer; core wholesale-replaces `Snapshot.previews`. `source_bufnr` is `-1` when the source is unknown, and `source_full_width` is the source buffer's flag, which decides whether the preview renders capped or full-width.
 
-Markdown-guarded `TextChanged`/`TextChangedI`/`BufWritePost` autocmds notify **`wolf_markdown_dirty`** with `{ source_bufnr, changedtick }`. Core upserts it into `Snapshot.markdown_ticks`; the front-end joins a preview's source bufnr to its tick to decide when to re-pull rendered HTML. `init.lua` never renders Markdown — `wolf_core::markdown` does. Exposes `_G.wolf_emit_previews`.
+Markdown-guarded `TextChanged`/`TextChangedI`/`BufWritePost` autocmds notify **`wolf_markdown_dirty`** with `{ source_bufnr, changedtick }`. Core upserts it into `Snapshot.markdown_ticks`; the front-end joins a preview's source bufnr to its tick to decide when to re-pull rendered HTML. `init.lua` never renders Markdown — `wolf_core::markdown` does.
 
-#### `wolf_emit_current_file`, `wolf_emit_buffers`, `wolf_emit_full_width`, `wolf_emit_previews`, `wolf_emit_drawer`
+`CursorMoved`/`CursorMovedI`/`BufEnter`/`BufWinEnter` autocmds notify **`wolf_markdown_cursor`** with three flat scalars `(source_bufnr, line, char_col)` — a 1-based `line('.')` and a 0-based `charcol('.') - 1`. That column is a character index rather than a byte index, which is what lets it pair with the `wl-{L}-{C}` markers with no conversion anywhere downstream; core upserts it into `Snapshot.markdown_cursors`. Five guards decide whether to emit: the buffer must be valid, must be current, its window must be a normal window, its filetype must be `markdown`, and `b:wolf_preview_source` must be nil.
+
+Exposes `_G.wolf_emit_previews` and `_G.wolf_emit_markdown_cursor`.
+
+#### `wolf_emit_current_file`, `wolf_emit_buffers`, `wolf_emit_full_width`, `wolf_emit_previews`, `wolf_emit_markdown_cursor`, `wolf_emit_drawer`
 
 Each is a closure exposed by its setup helper, over that helper's channel, so it exists only after that setup has run. Every caller guards with `if _G.wolf_emit_… then`.
 
@@ -172,7 +176,7 @@ Naming falls back to a bufnr-disambiguated name when two sources share a cwd-rel
 
 Opens or reuses the Markdown preview for the active source buffer and returns the preview buffer's number, or `0` when the active buffer's filetype is not `markdown` — the same gate as the Preview command.
 
-`mode` selects placement. `split_right` reuses `wolf_do_split("v")` so the shell creates and binds a new pane, then binds the preview into it. `reuse_preview_pane` binds into the other window that already carries `b:wolf_preview_source`, leaving the current window focused, and falls back to the current window when there is none. `active`, and any unknown mode, replaces the current window's buffer. Every mode ends with a guarded `_G.wolf_emit_previews` and `_G.wolf_emit_current_file`.
+`mode` selects placement. `split_right` reuses `wolf_do_split("v")` so the shell creates and binds a new pane, then binds the preview into it. `reuse_preview_pane` binds into the other window that already carries `b:wolf_preview_source`, leaving the current window focused, and falls back to the current window when there is none. `active`, and any unknown mode, replaces the current window's buffer. Every mode ends with a guarded `_G.wolf_emit_previews` and `_G.wolf_emit_current_file`. It re-emits the source buffer's cursor before any placement branch, because `split_right` and `active` make the preview scratch current and the cursor emit's preview-scratch guard would then bail, leaving a freshly opened preview with no anchor.
 
 #### `wolf_edit_source(mode)`
 
@@ -184,7 +188,7 @@ Binding prefers `nvim_win_set_buf` with the recorded source bufnr and falls back
 
 Repoints preview window `win` at the Markdown file `path`, which the front-end has already resolved to an absolute path from a clicked `file://` link. This helper does no relative-path resolution. Returns the linked file's source bufnr, or `0` when `path` is empty, unreadable, or not Markdown — on `0` the front-end leaves the pane alone.
 
-It `bufadd`s and `bufload`s the source, honors an already-set filetype or asks `vim.filetype.match`, builds the preview buffer through `wolf_ensure_preview_buf`, and binds it into `win`, falling back to the current window when `win` is missing or invalid. Ends with the same two guarded re-emits.
+It `bufadd`s and `bufload`s the source, honors an already-set filetype or asks `vim.filetype.match`, builds the preview buffer through `wolf_ensure_preview_buf`, and binds it into `win`, falling back to the current window when `win` is missing or invalid. Ends with the same two guarded re-emits. It deliberately does not re-emit the cursor: the source is loaded in the background with no window, so it carries no meaningful position.
 
 #### `wolf_next_untitled(cwd, exclude_buf, extra_collision)`
 
@@ -247,6 +251,8 @@ Whether a Wolf-owned swap file already exists for `abspath`, meaning a crashed n
 **Coalescing is not enough for a multi-step window build, which is why `wolf_suppress_buffers` exists.** A `botright split` fires `WinNew` and `WinEnter` synchronously with the new window still showing the previous buffer, and the drawer's buffer is not tagged until after `:terminal` has fired `BufEnter`. Those emits must be suppressed rather than corrected afterwards.
 
 **A background `nvim_win_set_buf` does fire `BufEnter` and `BufWinEnter`**, measured against the pinned nvim 0.12.3, with the target window and buffer temporarily current and focus restored before the call returns. That makes `wolf_emit_current_file` load-bearing after any background bind, because the autocmd-driven emit reads `nvim_get_current_buf()` and would leave core describing the background pane. `wolf_emit_previews` is hardening: its `nvim_list_wins()` sweep does not read the current window, so it is already correct — it is retained because it is idempotent and makes the update independent of autocmd ordering. The one bind that fires nothing is a no-op rebind of the buffer a window already shows, which changes nothing to emit.
+
+**The cursor emit needs both buffer-entry events and the `win_gettype()` guard, and neither is redundant.** `:edit foo.md` fires `CursorMoved` before filetype detection, so the steady-state autocmds alone would leave an opened-but-untouched buffer reporting no cursor at all. Adding `BufEnter` and `BufWinEnter` fixes that but opens a hole: `vim.fn.bufload()` fires both inside nvim's synthetic autocmd window, where the target buffer is genuinely current and every other guard passes, over a fabricated line 1 that belongs to no user pane. Only a normal window carries a real cursor, so the guard is what preserves the `line == 0` unknown sentinel a background-loaded source must report.
 
 **A preview pane is a real listed nvim scratch buffer, not a synthetic front-end pseudo-pane.** Being listed is what makes it surface in the buffer picker as `Preview: <path>` with no front-end injection; carrying `b:wolf_preview_source` is what lets the path-based trackers skip it.
 

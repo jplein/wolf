@@ -228,7 +228,8 @@ fn ex_q_on_last_pane_emits_close_window() {
 
     // `:q` on the sole unmodified pane -> last-pane branch -> close_window.
     ex_command(&core, "q");
-    let commands = drain_until_command(&core, FLUSH_TIMEOUT, "CloseWindow from :q on the last pane");
+    let commands =
+        drain_until_command(&core, FLUSH_TIMEOUT, "CloseWindow from :q on the last pane");
     assert!(
         commands.contains(&Command::CloseWindow),
         ":q on the sole (unmodified) pane must enqueue Command::CloseWindow; got {commands:?}"
@@ -257,8 +258,11 @@ fn ex_q_bang_forces_close_window_when_modified() {
 
     // `:q!` -> WolfQuit! -> force = true -> last-pane branch fires close_window.
     ex_command(&core, "q!");
-    let commands =
-        drain_until_command(&core, FLUSH_TIMEOUT, "CloseWindow from :q! on a modified last pane");
+    let commands = drain_until_command(
+        &core,
+        FLUSH_TIMEOUT,
+        "CloseWindow from :q! on a modified last pane",
+    );
     assert!(
         commands.contains(&Command::CloseWindow),
         ":q! on a modified last pane must force Command::CloseWindow (bang reached the \
@@ -309,7 +313,11 @@ fn ex_wq_writes_to_disk_and_closes_window() {
     }
 
     // The write completed; the last-pane branch must then fire close_window.
-    let commands = drain_until_command(&core, FLUSH_TIMEOUT, "CloseWindow from :wq on the last pane");
+    let commands = drain_until_command(
+        &core,
+        FLUSH_TIMEOUT,
+        "CloseWindow from :wq on the last pane",
+    );
     assert!(
         commands.contains(&Command::CloseWindow),
         ":wq must close the front-end window after writing; got {commands:?}"
@@ -374,8 +382,11 @@ fn ex_qa_on_last_pane_emits_close_window() {
 
     // `:qa` on the sole unmodified pane -> always-close branch -> close_window.
     ex_command(&core, "qa");
-    let commands =
-        drain_until_command(&core, FLUSH_TIMEOUT, "CloseWindow from :qa on the last pane");
+    let commands = drain_until_command(
+        &core,
+        FLUSH_TIMEOUT,
+        "CloseWindow from :qa on the last pane",
+    );
     assert!(
         commands.contains(&Command::CloseWindow),
         ":qa on the sole (unmodified) pane must enqueue Command::CloseWindow; got {commands:?}"
@@ -459,8 +470,11 @@ fn ex_wqa_writes_to_disk_and_closes_window() {
     }
 
     // The write completed; the always-close branch must then fire close_window.
-    let commands =
-        drain_until_command(&core, FLUSH_TIMEOUT, "CloseWindow from :wqa on the last pane");
+    let commands = drain_until_command(
+        &core,
+        FLUSH_TIMEOUT,
+        "CloseWindow from :wqa on the last pane",
+    );
     assert!(
         commands.contains(&Command::CloseWindow),
         ":wqa must close the front-end window after writing; got {commands:?}"

@@ -215,7 +215,11 @@ fn records_are_recent_first_and_rerecord_moves_to_front() {
     store.record(&dir_a, &a);
 
     let recent = store.recent(&dir_a);
-    assert_eq!(recent.len(), 3, "re-record must upsert, not add a duplicate");
+    assert_eq!(
+        recent.len(),
+        3,
+        "re-record must upsert, not add a duplicate"
+    );
     assert!(
         ends_with(&recent[0].path, "a.md"),
         "the re-recorded entry should now be most recent"
@@ -266,7 +270,11 @@ fn deleted_file_is_omitted_and_pruned_from_cache() {
     // gone for good, proving recent() DELETEd it (not just filtered it).
     let store2 = MruStore::open(state.path());
     let recent2 = store2.recent(&dir_a);
-    assert_eq!(recent2.len(), 1, "pruned row must not reappear after re-open");
+    assert_eq!(
+        recent2.len(),
+        1,
+        "pruned row must not reappear after re-open"
+    );
     assert!(
         !recent2.iter().any(|e| ends_with(&e.path, "gone.md")),
         "the deleted path must never reappear"

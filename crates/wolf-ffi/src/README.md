@@ -167,6 +167,7 @@ One captive nvim is one project; each of its views binds to a distinct tabpage.
 - `FfiPreview::win/source_bufnr/source_name/source_path/source_display_path` — `win` is the pane the web view overlays. `source_name` is the basename, `source_display_path` the cwd-relative or `~`-prefixed form.
 - `FfiPreview::source_tick() -> u64` — The source buffer's `changedtick`; the front-end reloads the web view when it advances. 0 until the first dirty notification.
 - `FfiPreview::source_full_width() -> bool` — The source buffer's full-width flag, which decides whether the web view fills the pane or gets the capped, centered rect.
+- `FfiPreview::source_cursor_line() -> u32` / `source_cursor_col() -> u32` — The source buffer's editing cursor, joined in `previews()` from `Snapshot.markdown_cursors` by `source_bufnr`. `line` is 1-based to match the `wl-{L}-{C}` markers and `col` is a 0-based character column, which the front-end rounds down to a marker stride. A `line` of `0` means the cursor is unknown, and the front-end must not scroll for it. Both are opaque-type accessors, so they are additive and `wolf_ffi_wake.h` is unaffected.
 
 ### Per-pane navigation history
 

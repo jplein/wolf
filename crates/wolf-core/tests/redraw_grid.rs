@@ -143,13 +143,19 @@ fn wide_char_grid_line() {
         .active_grid()
         .cell(0, WIDE_ASCII_A_COL)
         .expect("expected a cell for the first ASCII char");
-    assert_eq!(a_cell.text, "a", "'a' should render at col 2 after the wide glyph");
+    assert_eq!(
+        a_cell.text, "a",
+        "'a' should render at col 2 after the wide glyph"
+    );
 
     let b_cell = snap
         .active_grid()
         .cell(0, WIDE_ASCII_B_COL)
         .expect("expected a cell for the second ASCII char");
-    assert_eq!(b_cell.text, "b", "'b' should render at col 3 after the wide glyph");
+    assert_eq!(
+        b_cell.text, "b",
+        "'b' should render at col 3 after the wide glyph"
+    );
 
     core.shutdown().expect("shutdown should be Ok");
 }
@@ -364,9 +370,8 @@ fn scroll_up_shifts_grid_content_down() {
     waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
     let before_row0 = core.read_snapshot().active_grid().row_text(0);
-    let before_num = trailing_line_number(&before_row0).expect(
-        "after jumping to end, row 0 should be a numbered 'line N' that is not line 0",
-    );
+    let before_num = trailing_line_number(&before_row0)
+        .expect("after jumping to end, row 0 should be a numbered 'line N' that is not line 0");
     assert!(
         before_num > 0,
         "after `G` on a {SCROLL_BUFFER_LINES}-line buffer, row 0 should show a \

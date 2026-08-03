@@ -312,7 +312,7 @@ Real-nvim coverage of the split-panes bridge — `windows()`, `active_win`, `gri
 
 #### `preview.rs`
 
-**Covers** — the Markdown-preview bridge: the `is_markdown_active` gate, `open_preview(mode)` placements plus the reuse-pane fallback, the `previews()` rows, `render_preview` HTML (headings, slugs, LaTeX), and `preview_file(win, path)` link-follow. Real nvim; target `//crates/wolf-ffi:preview` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`). Each case seeds its own temp cwd and polls the local `wait_for_*` helpers.
+**Covers** — the Markdown-preview bridge: the `is_markdown_active` gate, `open_preview(mode)` placements plus the reuse-pane fallback, the `previews()` rows, `render_preview` HTML (headings, slugs, LaTeX), and `preview_file(win, path)` link-follow, plus the scroll-sync cursor join — a row's `source_cursor_line()` / `source_cursor_col()` matching `Snapshot.markdown_cursors` for its own source buffer, and the `line == 0` sentinel a background-loaded source produces. Real nvim; target `//crates/wolf-ffi:preview` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`). Each case seeds its own temp cwd and polls the local `wait_for_*` helpers.
 
 **Gotchas** — the startup buffer is already a markdown `Untitled.md`, so `wait_for_markdown_active(true)` returns instantly across a markdown-to-markdown `:e`; use `wait_for_current_file` as the switch barrier before a synchronous `open_preview`. The temp cwd is nvim's working dir and search root, so keep it alive until after `shutdown()`.
 

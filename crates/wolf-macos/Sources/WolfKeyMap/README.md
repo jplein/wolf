@@ -201,25 +201,24 @@ Purpose: The pure step-and-clamp arithmetic behind the View menu's per-window fo
 
 #### `FrameStats.swift`
 
-Purpose: The pure half of the dev-only frame-time instrumentation — the bucket set, accumulation, percentiles, report formatting and the `WOLF_FRAME_STATS` env parsing. The clock, report timer and stderr writes live in `WolfMacOS/FrameMetrics.swift`.
+Purpose: The pure half of the dev-only frame-time instrumentation — buckets, accumulation, percentiles, report formatting and `WOLF_FRAME_STATS` parsing. The clock, report timer and stderr writes live in `WolfMacOS/FrameMetrics.swift`.
 
 **Public API**
 
 - `FrameStatsBucket` — the instrumented regions on the keystroke-to-pixel path; `label` is the report-table name.
-- `record(_:nanos:)`, the two counter notes, `reset()` and `summarize(index:elapsedSeconds:)`, plus the statics `format(_:)`, `percentile(_:_:)`, `isEnabled(env:)` and `reportInterval(env:)`.
 
 **Decisions**
 
 - The bucket raw values are storage indices into a dense array. Keep them dense and ascending from zero: that is what keeps the hot path free of dictionary hashing and string allocation.
 - No internal locking, and documented main-thread-only. `FrameMetrics` owns the single instance and enforces that with a `#if DEBUG` `dispatchPrecondition` — kept out of this file so tests can drive the type off the main thread.
 - `record` is O(1) with no allocation (every ring reserves `sampleCapacity` in `init`); sorting happens only in `summarize`, once per report.
-- Percentiles are nearest-rank rather than interpolated, so every number in the table was actually observed. Only the percentile window is capped; `count`, the sum and `max` stay exact, and a bucket past the cap reports `truncated`.
+- Percentiles are nearest-rank, not interpolated, so every number in the table was actually observed. Only the percentile window is capped; `count`, the sum and `max` stay exact, and a bucket past the cap reports `truncated`.
 
 **Gotchas**
 
 - The six `pane.*` buckets are not a partition. `pane.vec` and `pane.glyphs` are nested inside `pane.cells`, so summing all six double-counts.
 - `pane.status` is recorded for occluded panes and `pane.read` is not, so their counts differ.
-- `wakesPerKeystroke` is an upper bound: mouse, scroll, resize and out-of-band core wakes inflate it.
+- `prev.html` covers both document-update paths — the `loadHTMLString` call and the `callAsyncJavaScript` issue — because both measure one thing: dispatching an update. It times only the synchronous dispatch, never the WebKit parse, layout or JavaScript the dispatch queues.
 
 #### `GlyphStyle.swift`
 
@@ -457,6 +456,28 @@ Purpose: Classifies a link clicked in the Markdown preview web view into one of 
 **Gotchas**
 
 - Every link-routing branch belongs here. `PreviewNavigationDelegate` is deliberately thin glue that only calls `NSWorkspace.open` and `evaluateJavaScript`; behavior added there is untestable.
+
+#### `PreviewScrollSeam.swift`
+
+Purpose: Every decision behind Markdown-preview scroll-sync — which marker a cursor anchors to, whether that anchor warrants scrolling, how a fresh render reaches the page, and the scroll JavaScript the preview web view evaluates. Foundation only.
+
+**Public API**
+
+- `CursorPos` — `line` is 1-based, `0` meaning unknown; `col` a 0-based character column. `anchorColumn(_:)` and `anchorIds(line:col:)` give the id preference order the injected script mirrors.
+- `edgeThreshold(viewportHeight:)` and `followDecision(anchorTop:viewportHeight:)` — the comfort band, inclusive at both ends, and where an anchor lands on leaving it.
+- `winsNeedingScroll(current:applied:)`, `captureDecision(…)`, `splitDocument(_:)`, `updateStrategy(…)`, `loadCommitOutcome(remaining:pending:succeeded:)` — the per-window gates; each carries its ordered rules on its doc comment.
+- `stateHandlerName`, `stateScriptJS(handlerName:)`, `followJS(line:col:)`, `restoreJS(_:)`, `inPlaceUpdateArgumentNames`, `inPlaceUpdateJS()`.
+
+**Decisions**
+
+- Every tuning constant is interpolated into the generated JavaScript rather than written twice, so a test proves what the page runs.
+- `markerColumnStride` mirrors `wolf_core::markdown::MARKER_COLUMN_STRIDE`, but neither side reads the other: the test here pins only this literal, so a Rust-side change must be mirrored by hand.
+- The capture and commit rules live here, not in `PaneContainerView`: their ordering is their correctness, and that AppKit block cannot be tested. The caller keeps a mechanical `switch`.
+
+**Gotchas**
+
+- The fallback sweep filters on `data-col="0"` and must never be widened — see [the position-marker contract](../../../wolf-core/DECISIONS.md).
+- `stateHandlerName` and `PreviewSeam.clickFocusHandlerName` share one `WKUserContentController`, so they must differ; teardown is in [DECISIONS.md](../../DECISIONS.md).
 
 #### `PreviewSeam.swift`
 

@@ -215,7 +215,7 @@ The default `warn` level surfaces the RPC-timeout warning naming the wedged call
 
 ## Frame-time instrumentation (macOS)
 
-The macOS front-end carries an off-by-default frame-time measurement surface, enabled with `WOLF_FRAME_STATS=1`, which reports periodic aggregates to stderr. `WOLF_FRAME_STATS_INTERVAL` sets the report period in seconds and `WOLF_FRAME_STATS_FILE` also appends each report to a file. The bucket set and the report format are documented in [`Sources/WolfKeyMap/README.md`](crates/wolf-macos/Sources/WolfKeyMap/README.md), and the two caveats worth knowing before drawing a conclusion from a report are in [`wolf-macos/DECISIONS.md`](crates/wolf-macos/DECISIONS.md).
+The macOS front-end carries an off-by-default frame-time measurement surface, enabled with `WOLF_FRAME_STATS=1`, which reports periodic aggregates to stderr. `WOLF_FRAME_STATS_INTERVAL` sets the report period in seconds and `WOLF_FRAME_STATS_FILE` also appends each report to a file. The bucket set, the report format and the per-bucket caveats are documented in [`Sources/WolfKeyMap/README.md`](crates/wolf-macos/Sources/WolfKeyMap/README.md); the caveat that applies to a report as a whole, and the pointer to the rest, are in [`wolf-macos/DECISIONS.md`](crates/wolf-macos/DECISIONS.md).
 
 **Double-clicking `Wolf.app` shows nothing.** A bundle launched from the Finder is started by `launchd`, so it inherits `launchd`'s stderr, which reaches no terminal, and it does not inherit the shell environment either — so the flag would not even be set.
 

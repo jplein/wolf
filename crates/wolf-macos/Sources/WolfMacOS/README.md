@@ -314,22 +314,22 @@ Purpose: The crash/stall overlay — a full-bleed opaque cover over a broken edi
 
 #### `PaneContainerView.swift`
 
-Purpose: The editor area: one flat, flipped `NSView` that paints every split pane itself, owns the pure `PaneTree`, and hosts the preview web views and overlays. It is the editor's first responder and key sink. [DECISIONS.md](../../DECISIONS.md) explains the flat-view choice.
+Purpose: The editor area — one flat, flipped `NSView` that paints every split pane itself, owns the pure `PaneTree`, hosts the preview web views and overlays, and is the editor's first responder. The flat-view choice is in [DECISIONS.md](../../DECISIONS.md).
 
 **Public API**
 
-- `onRenderWake()` — reconciles panes, grids, previews, and overlays.
 - `markRefocusRebind()` / `rebind(tabpageHandle:)` — arm a grid rebind after a tabpage switch or crash restart.
-- `layoutSnapshot()` / `requestLayoutRebuild(_:)` — save and restore the split layout; the snapshot is `nil` for a lone empty pane.
+- `layoutSnapshot()` / `requestLayoutRebuild(_:)` — the snapshot is `nil` for a lone empty pane.
 - `activeWin` — the per-view active window; prefer it over the tabpage-shared `WolfCoreHandle.active_win()`.
 
 **Decisions**
 
 - The refocus rebind waits for `handle.active_tabpage()` to match this view's tabpage and skips close detection on that pass: the vacated tabpage's grids are gone and would prune live panes.
 - Web-view frame, occlusion test, and statusbar span come from one `geometry(_:fullWidth:)` call, written together before `needsDisplay`, so no frame paints preview alignment without a web view.
-- A grid paints unless an opaque, loaded preview web view fully covers it; the FFI frame read sits below that guard, since blank nvim cells hold a space and an empty preview grid costs a full paint. The loaded flag survives reloads: WebKit still displays the previous document while the next loads.
+- A grid is skipped only when an opaque, loaded preview web view fully covers it, and the loaded flag survives reloads, because WebKit keeps displaying the previous document while the next one loads.
 - Scroll direction is the sign of `scrollingDeltaY` alone; it already reflects natural scrolling, so `isDirectionInvertedFromDevice` double-corrects.
 - The terminal drawer pane lives in the pane map but outside `tree`, so leaves, neighbours, and splits exclude it.
+- Preview updating is a four-file model this class implements only part of; read [how a preview reaches its web view](../../DECISIONS.md) before changing the strategy switch, the navigation count, or the live-document bookkeeping.
 
 #### `PickerPanel.swift`
 
@@ -448,6 +448,21 @@ Purpose: The `WKNavigationDelegate` that routes a preview web view's clicked lin
 - Every `.linkActivated` navigation is cancelled and handled out of band (open in the browser, scroll to a fragment, or preview another file), so the pane only ever shows core-rendered HTML. Non-link navigations — the initial `loadHTMLString` and programmatic `evaluateJavaScript` scrolls — must keep passing through with `.allow`, so the guard cannot be widened to cancel everything.
 - Link classification lives in `WolfKeyMap.PreviewLinkSeam`; this file only dispatches the resulting action.
 - `container` is weak because the container retains this delegate (`WKWebView.navigationDelegate` is itself weak).
+- The two `didFail…` callbacks are routine bookkeeping, not an error path: they decrement that window's outstanding-navigation count — see [DECISIONS.md](../../DECISIONS.md) for why it is a count. A cancelled policy decision, meaning every clicked link, also arrives here, so the container ignores a callback for which it counted no navigation.
+
+#### `PreviewScrollStateHandler.swift`
+
+Purpose: The `WKScriptMessageHandler` that forwards a preview page's pushed scroll state, posted by `PreviewScrollSeam.stateScriptJS`, into its `PaneContainerView`'s per-window cache.
+
+**Public API**
+
+- `init(win:container:)` — `win` is the Neovim window handle identifying the pane in the container's per-window maps.
+
+**Decisions**
+
+- The push direction, and why it cannot be a pull, is in [DECISIONS.md](../../DECISIONS.md).
+- A body missing `s` degrades to `0` rather than dropping the message, so a partially decodable push still refreshes the cache.
+- `container` is weak: the web view's `WKUserContentController` retains this handler strongly.
 
 #### `Project.swift`
 
