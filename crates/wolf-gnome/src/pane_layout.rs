@@ -231,12 +231,13 @@ mod tests {
 
     // --- Weights ---------------------------------------------------------------
     //
-    // NON-EQUAL on purpose. `PaneTree::split`/`remove` always equalize and
-    // `pane_view::install_paned_position` re-derives every divider from the
-    // equal-share ratio, so `1/n` is the ONLY weight vector wolf-gnome can produce
-    // today. That means an equal-weight round trip could not tell "the saved weights
-    // were preserved" from "they were recomputed to the same numbers". These two are
-    // the only place in the whole unit where non-equal weights are exercised at all.
+    // NON-EQUAL on purpose. `PaneTree::split` and `remove` always equalize, so an
+    // equal-weight round trip could not tell "the saved weights were preserved" from
+    // "they were recomputed to the same numbers". These are hand-written literals,
+    // which keeps the codec's round trip independent of the one thing in this crate
+    // that produces a non-equal vector — `PaneTree::set_divider_fraction`, exercised
+    // against the codec by `encode_carries_a_dragged_weight_vector` and
+    // `decode_restores_a_dragged_weight_vector`.
     /// The DFS-first child's share in the non-equal round-trip tree.
     const WEIGHT_SMALL: f64 = 0.25;
     /// The DFS-second child's share in the non-equal round-trip tree.
@@ -581,10 +582,11 @@ mod tests {
                   correct — the `mouse::scroll_threshold_table` precedent"
     )]
     fn decode_round_trips_encode() {
-        // A two-leaf tree whose weights are NOT equal shares. This is the only place
-        // in the unit where a non-equal weight vector is exercised at all: nothing on
-        // Linux can produce one until divider drag-to-resize lands, so the END-TO-END
-        // application of saved weights stays unproven and is not claimed anywhere.
+        // A two-leaf tree whose weights are NOT equal shares, written as literals
+        // rather than dragged, so this asserts the CODEC alone: whatever vector goes
+        // in comes back out. The end-to-end path — a real drag reaching `state.json`
+        // and being reapplied on the next launch — is
+        // `dragged_divider_weights_survive_relaunch_under_cage`.
         let layout = PaneLayout::Split {
             orientation: Orientation::Vertical,
             children: vec![PaneLayout::Leaf(P0), PaneLayout::Leaf(P1)],
@@ -781,6 +783,158 @@ mod tests {
             decode(&nested_chain(MAX_RESTORE_DEPTH), P0).is_some(),
             "a tree exactly MAX_RESTORE_DEPTH ({MAX_RESTORE_DEPTH}) deep must be ACCEPTED, for the \
              same reason"
+        );
+    }
+
+    // =====================================================================
+    // a DRAGGED weight vector, through the codec both ways
+    //
+    // The pure twins of the divider-relaunch smoke's first two assertions. The
+    // weights here are not hand-written: they are produced by
+    // `PaneTree::set_divider_fraction`, the same call a `gtk::Paned` drag makes, so
+    // these two tests cover the codec against the exact values the front-end can
+    // really put on disk.
+    // =====================================================================
+
+    /// The head fraction the drag tests aim at. Not an equal share, and not a value
+    /// `PaneTree::split` or `remove` can produce, so seeing it survive a codec hop
+    /// proves the weights were CARRIED rather than recomputed.
+    const DRAGGED_HEAD_FRACTION: f64 = 0.7;
+
+    /// Tolerance for a weight the drag COMPUTED (as opposed to one copied through
+    /// unmodified). `set_divider_fraction` scales and renormalizes, so the stored
+    /// value is `0.7` only to within float noise.
+    const WEIGHT_EPS: f64 = 1e-9;
+
+    /// The smallest gap between the two dragged weights that no equal-share vector
+    /// could show. `[0.5, 0.5]` has a gap of exactly zero.
+    const MIN_DRAGGED_WEIGHT_GAP: f64 = 0.1;
+
+    /// A two-leaf vertical split whose divider has been dragged to
+    /// [`DRAGGED_HEAD_FRACTION`] — the only way anything in this crate can produce a
+    /// non-equal weight vector.
+    fn dragged_two_leaf_tree() -> PaneTree {
+        let mut tree = PaneTree::new(P0);
+        tree.split(P0, P1, Orientation::Vertical);
+        assert!(
+            tree.set_divider_fraction(&[], 0, DRAGGED_HEAD_FRACTION),
+            "precondition: a finite fraction on a real divider must apply, or nothing below is \
+             testing a dragged weight at all"
+        );
+        tree
+    }
+
+    /// The `PaneId` -> path map the drag tests encode with.
+    fn dragged_paths() -> HashMap<PaneId, String> {
+        let mut paths = HashMap::new();
+        paths.insert(P0, PATH_A.to_string());
+        paths.insert(P1, PATH_B.to_string());
+        paths
+    }
+
+    /// [`encode`] carries a DRAGGED weight vector onto the persisted node verbatim.
+    ///
+    /// The pure twin of the divider-relaunch smoke's save-side assertion. That smoke
+    /// reads the same property off a real `state.json`; this one is what says WHERE
+    /// to look when it goes red.
+    ///
+    /// FALSIFYING EDIT: in [`encode`], replace `weights: weights.clone()` with
+    /// `vec![0.5; children.len()]`.
+    ///
+    /// MEASURED: the persisted-weights assertion fires with left `[0.5, 0.5]` and
+    /// right `[0.7, 0.30000000000000004]` — the live tree's own vector, which is
+    /// what makes the exact comparison the right one here.
+    #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "the expected weights are the LIVE tree's own weights, which `encode` is required \
+                  to copy through unmodified — an epsilon comparison would weaken the assertion \
+                  without making it more correct, since its whole point is that the two vectors are \
+                  the SAME numbers (the `decode_round_trips_encode` precedent)"
+    )]
+    fn encode_carries_a_dragged_weight_vector() {
+        let tree = dragged_two_leaf_tree();
+        let live = weights_of(&tree.layout());
+
+        // Non-vacuity: an equal-share vector would round-trip through an `encode`
+        // that ignored its input entirely.
+        assert!(
+            (live[0] - live[1]).abs() > MIN_DRAGGED_WEIGHT_GAP,
+            "precondition: the drag must leave a visibly NON-EQUAL pair, got {live:?}"
+        );
+        assert!(
+            (live[0] - DRAGGED_HEAD_FRACTION).abs() < WEIGHT_EPS,
+            "precondition: the dragged head weight should be {DRAGGED_HEAD_FRACTION}, got {live:?}"
+        );
+
+        let node = encode(&tree.layout(), &dragged_paths());
+
+        let PaneNode::Split {
+            orientation,
+            weights,
+            children,
+        } = &node
+        else {
+            panic!("encode turned a two-leaf split into {node:?}, which is not a split at all");
+        };
+        assert_eq!(
+            *orientation,
+            PaneOrientation::Vertical,
+            "a side-by-side split must persist as PaneOrientation::Vertical"
+        );
+        assert_eq!(
+            weights.as_slice(),
+            live.as_slice(),
+            "encode must copy the DRAGGED weights onto the persisted node verbatim. Equal shares \
+             are what every other code path in this crate produces, so a `[0.5, 0.5]` here is \
+             indistinguishable from `the weights were recomputed` — which is precisely the \
+             confusion these two tests exist to remove."
+        );
+        assert_eq!(
+            children.len(),
+            2,
+            "the topology must survive alongside the weights: {node:?}"
+        );
+    }
+
+    /// [`decode`] restores a DRAGGED weight vector, as the fraction the widget layer
+    /// will position the `gtk::Paned` at.
+    ///
+    /// The pure twin of the divider-relaunch smoke's restore-side assertion. It
+    /// asserts through `PaneTree::divider_fraction` rather than on the raw weights
+    /// on purpose: that is the call `install_paned_position` makes on every
+    /// `max-position` notify, so it is the value a restored divider is really placed
+    /// from.
+    ///
+    /// FALSIFYING EDIT: in `to_layout`, replace `weights: weights.clone()` with an
+    /// equalized vector.
+    ///
+    /// MEASURED: `the restored divider fraction is 0.5, not the dragged 0.7`.
+    #[test]
+    fn decode_restores_a_dragged_weight_vector() {
+        let node = encode(&dragged_two_leaf_tree().layout(), &dragged_paths());
+
+        let Some((rebuilt, leaf_ids)) = decode(&node, P0) else {
+            panic!("decode rejected the encoding of a dragged two-leaf split: {node:?}");
+        };
+        assert_eq!(
+            leaf_ids,
+            vec![P0, P1],
+            "the two leaves must still come back in DFS order"
+        );
+
+        let Some(fraction) = rebuilt.divider_fraction(&[], 0) else {
+            panic!(
+                "the restored tree reports NO divider at (&[], 0), but it is a two-child split: \
+                 {node:?}"
+            );
+        };
+        assert!(
+            (fraction - DRAGGED_HEAD_FRACTION).abs() < WEIGHT_EPS,
+            "the restored divider fraction is {fraction}, not the dragged \
+             {DRAGGED_HEAD_FRACTION}. `install_paned_position` reads exactly this value on every \
+             `max-position` notify, so a `0.5` here means every relaunch silently re-centres the \
+             user's dividers while the save side looks perfectly correct."
         );
     }
 }

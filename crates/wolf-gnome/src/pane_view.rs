@@ -52,6 +52,19 @@
 //!   ([`PaneInner::apply_layout_rebuild`]) through `WolfCore::rebuild_layout` —
 //!   the ONE blocking RPC this front-end issues, documented there.
 //!
+//! A user's DIVIDER DRAG feeds the save half. [`install_paned_position`] writes the
+//! dragged `gtk::Paned` position back into the tree's weights through
+//! [`PaneTree::set_divider_fraction`], which is what puts it on the save path at
+//! all: the encoder copies whatever weights the tree holds, so a drag left in the
+//! widget alone would never be persisted and would not survive the next
+//! re-allocation either.
+//!
+//! Those divider closures capture the tree as an `Rc<RefCell<PaneTree>>` rather
+//! than a `Weak<PaneInner>`, and that is deliberate. The tree is all they need, and
+//! the ownership edges run `PaneInner` -> `container` -> paned -> closure -> tree
+//! and `PaneInner` -> tree, with none back to `PaneInner` — so there is no cycle to
+//! break and no upgrade that can fail mid-drag. Do not "correct" it to a `Weak`.
+//!
 //! ## Mouse and scroll
 //!
 //! Each pane area carries THREE pointer controllers, all of them thin glue over the
@@ -125,6 +138,7 @@ use wolf_core::{
     SplitOrientation, WolfCore,
 };
 
+use crate::geometry;
 use crate::layout::{Orientation, PaneId, PaneLayout, PaneTree};
 use crate::mouse::{self, PaneScroll};
 use crate::pane_layout;
@@ -231,7 +245,11 @@ struct GridTarget {
 /// main thread, so `Cell`/`RefCell` (not a `Mutex`) suffices.
 struct PaneInner {
     /// The pure pane-layout tree (split/remove/neighbour geometry).
-    tree: RefCell<PaneTree>,
+    ///
+    /// Shared by `Rc` because the divider closures [`install_paned_position`]
+    /// installs need it and nothing else. See this module's "Layout persistence"
+    /// section for why that is an `Rc` rather than the crate's usual `Weak`.
+    tree: Rc<RefCell<PaneTree>>,
     /// The per-pane widgets, keyed by [`PaneId`].
     panes: RefCell<HashMap<PaneId, PaneWidgets>>,
     /// The next pane id to allocate (starts at [`FIRST_PANE_ID`]).
@@ -1233,7 +1251,11 @@ impl PaneInner {
         {
             let layout = self.tree.borrow().layout();
             let panes = self.panes.borrow();
-            if let Some(widget) = build_layout_widget(&layout, &panes) {
+            let ctx = BuildCtx {
+                panes: &panes,
+                tree: &self.tree,
+            };
+            if let Some(widget) = build_layout_widget(&layout, &ctx, &[]) {
                 widget.set_hexpand(true);
                 widget.set_vexpand(true);
                 self.pane_area.append(&widget);
@@ -1409,7 +1431,7 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
     container.append(&cmdline_area);
 
     let inner = Rc::new(PaneInner {
-        tree: RefCell::new(PaneTree::new(FIRST_PANE_ID)),
+        tree: Rc::new(RefCell::new(PaneTree::new(FIRST_PANE_ID))),
         panes: RefCell::new(HashMap::new()),
         next_pane_id: Cell::new(FIRST_PANE_ID),
         container,
@@ -1468,22 +1490,42 @@ fn draw_cursor(cr: &cairo::Context, snap: &Snapshot, metrics: &CellMetrics) {
     }
 }
 
+/// What the widget builders need besides the layout they are walking: the bound
+/// panes to reuse a `DrawingArea` from, and the live tree every divider closure
+/// reads its fraction out of.
+///
+/// One value rather than two parameters, following the [`GridTarget`] precedent —
+/// it keeps [`build_chain`] under clippy's argument-count threshold without an
+/// `#[allow]`.
+struct BuildCtx<'a> {
+    /// The per-pane widgets, keyed by [`PaneId`].
+    panes: &'a HashMap<PaneId, PaneWidgets>,
+    /// The live pane tree, shared into every divider closure.
+    tree: &'a Rc<RefCell<PaneTree>>,
+}
+
 /// Recursively builds the GTK widget for a [`PaneLayout`], reusing each leaf's
 /// `DrawingArea` by id. Returns `None` for a leaf whose pane is not (yet) bound. An
 /// n-ary split is rendered as a RIGHT-LEANING chain of binary `gtk::Paned`s (see
 /// [`build_chain`]).
+///
+/// `path` is this node's address in the tree — the root-to-here list of child
+/// indices, `&[]` at the root — which is what lets each paned name the divider it
+/// is, in the coordinates [`PaneTree::divider_fraction`] speaks.
 fn build_layout_widget(
     layout: &PaneLayout,
-    panes: &HashMap<PaneId, PaneWidgets>,
+    ctx: &BuildCtx<'_>,
+    path: &[usize],
 ) -> Option<gtk::Widget> {
     match layout {
-        PaneLayout::Leaf(id) => panes
+        PaneLayout::Leaf(id) => ctx
+            .panes
             .get(id)
             .map(|p| p.area.clone().upcast::<gtk::Widget>()),
         PaneLayout::Split {
             orientation,
             children,
-            weights,
+            ..
         } => {
             // Orientation::Vertical (side by side) -> a HORIZONTAL gtk::Paned
             // (children left/right); Horizontal (stacked) -> a VERTICAL paned.
@@ -1491,40 +1533,50 @@ fn build_layout_widget(
                 Orientation::Vertical => gtk::Orientation::Horizontal,
                 Orientation::Horizontal => gtk::Orientation::Vertical,
             };
-            build_chain(gtk_orient, children, weights, panes)
+            build_chain(gtk_orient, children, ctx, path, 0)
         }
     }
 }
 
 /// Renders the `children` of one n-ary split as a RIGHT-LEANING chain of binary
 /// `gtk::Paned`s: the first child is the `start` child of a paned whose `end` child
-/// is the chain over the remaining children. Each paned's divider is positioned at
-/// the first child's SHARE of the children it spans (so equal thirds give an outer
-/// 1/3 divider over an inner 1/2 divider). Unbound leaves are skipped: a `None`
+/// is the chain over the remaining children. Unbound leaves are skipped: a `None`
 /// start collapses to the end chain and vice versa.
+///
+/// `path` addresses the SPLIT being rendered and `boundary` counts how many of its
+/// children this recursion has already peeled off, so the paned built here IS the
+/// divider `(path, boundary)` — the identity [`PaneTree::divider_fraction`] and
+/// [`PaneTree::set_divider_fraction`] take. `children` is the split's suffix
+/// `[boundary..]`, and the fraction that divider sits at is its head's share of
+/// that suffix ([`crate::layout::split_head_fraction`], reached from the tree
+/// through [`PaneTree::divider_fraction`]): each divider governs its head child
+/// against everything the chain nests beneath it, not against the adjacent sibling.
+/// Equal thirds therefore give an outer 1/3 divider over an inner 1/2 one.
+///
+/// No position is set here, and the split's weights are deliberately not a
+/// parameter. A paned has no travel before its first allocation, so the only honest
+/// position is the one [`install_paned_position`] derives from the live tree on each
+/// `max-position` notify — the first of which arrives with that allocation — and the
+/// tree is therefore the only thing that ever reads those weights.
 fn build_chain(
     gtk_orient: gtk::Orientation,
     children: &[PaneLayout],
-    weights: &[f64],
-    panes: &HashMap<PaneId, PaneWidgets>,
+    ctx: &BuildCtx<'_>,
+    path: &[usize],
+    boundary: usize,
 ) -> Option<gtk::Widget> {
     if children.len() == 1 {
-        return build_layout_widget(&children[0], panes);
+        return build_layout_widget(&children[0], ctx, &child_path(path, boundary));
     }
 
-    let start = build_layout_widget(&children[0], panes);
-    let end = build_chain(gtk_orient, &children[1..], &weights[1..], panes);
+    let start = build_layout_widget(&children[0], ctx, &child_path(path, boundary));
+    let end = build_chain(gtk_orient, &children[1..], ctx, path, boundary + 1);
 
     let (start, end) = match (start, end) {
         (Some(start), Some(end)) => (start, end),
         // One side is entirely unbound: collapse to whichever side has a widget.
         (start, end) => return start.or(end),
     };
-
-    // The divider's share = this (first) child's weight over the total weight of
-    // the children THIS paned spans (first + rest).
-    let total: f64 = weights.iter().sum();
-    let ratio = if total > 0.0 { weights[0] / total } else { 0.5 };
 
     let paned = gtk::Paned::new(gtk_orient);
     paned.set_hexpand(true);
@@ -1533,35 +1585,110 @@ fn build_chain(
     paned.set_shrink_end_child(false);
     paned.set_start_child(Some(&start));
     paned.set_end_child(Some(&end));
-    install_paned_position(&paned, ratio);
+    install_paned_position(&paned, ctx.tree, path.to_vec(), boundary);
     Some(paned.upcast::<gtk::Widget>())
 }
 
-/// Keeps the paned divider at `ratio` of its travel. Re-applies on EVERY
-/// `max-position` notify (not one-shot): the nested multi-pass allocation reports an
-/// intermediate `max-position` before settling, and a window/container resize
-/// changes it again, so re-deriving the position from `ratio` each time converges
-/// correctly and keeps every child a proportional, non-collapsed size. (A user drag
-/// changes `position`, not `max-position`, so it is not fought here; in v1 a drag is
-/// reset to the equal ratio on the next resize.)
-fn install_paned_position(paned: &gtk::Paned, ratio: f64) {
-    paned.connect_notify_local(Some("max-position"), move |p, _| {
-        let max = p.max_position();
-        if max > 0 {
-            p.set_position(ratio_position(max, ratio));
-        }
-    });
+/// The path of child `index` under the split addressed by `path`.
+fn child_path(path: &[usize], index: usize) -> Vec<usize> {
+    let mut out = Vec::with_capacity(path.len() + 1);
+    out.extend_from_slice(path);
+    out.push(index);
+    out
 }
 
-/// Computes a divider position as `round(max * ratio)`, clamped into `[0, max]`.
-fn ratio_position(max: i32, ratio: f64) -> i32 {
-    let v = (f64::from(max) * ratio).round().clamp(0.0, f64::from(max));
-    #[allow(
-        clippy::cast_possible_truncation,
-        reason = "v is clamped to [0, max] and rounded, so the cast is exact and in range"
-    )]
+/// The per-paned state the two divider closures share.
+struct DividerGuard {
+    /// Set around this module's own `set_position` calls. `set_position` emits
+    /// `notify::position` SYNCHRONOUSLY, so without it the re-apply would read its
+    /// own write back as a user drag.
+    applying: Cell<bool>,
+    /// The `max-position` the last re-apply ran against. A `notify::position` whose
+    /// maximum has moved since is one GTK produced while re-allocating, and the
+    /// `max-position` handler is about to correct it.
+    last_max: Cell<i32>,
+}
+
+/// Ties one `gtk::Paned` to the divider `(path, boundary)` in `tree`, in both
+/// directions.
+///
+/// **Tree to widget.** On every `max-position` notify the divider's position is
+/// re-derived from the tree's current fraction. Re-applying on every notify rather
+/// than once is load-bearing: the nested multi-pass allocation reports an
+/// intermediate maximum before settling, and a window or container resize changes it
+/// again, so re-deriving each time is what converges and keeps every child a
+/// proportional, non-collapsed size. Reading the LIVE tree each time (rather than a
+/// ratio captured when the widget was built) is what makes a user's drag survive
+/// that re-apply.
+///
+/// **Widget to tree.** A `notify::position` that is not this module's own write, and
+/// whose `max-position` has not moved, is a user drag, and is written into the tree
+/// through [`PaneTree::set_divider_fraction`]. That is what puts a drag on the save
+/// path (see this module's "Layout persistence" section).
+///
+/// Two rules here are not stylistic:
+///
+/// - The `applying` check comes BEFORE any tree borrow. `set_position` emits
+///   `notify::position` synchronously, so a `Ref` still held from the re-apply plus
+///   a `borrow_mut` here is a `RefCell` PANIC rather than a warning. Every borrow is
+///   taken and dropped in its own statement, per the crate's borrow discipline.
+/// - The write-back rebuilds NOTHING — no [`PaneInner::rebuild_pane_area`], no
+///   redraw, no snapshot request. A rebuild destroys every paned, including the one
+///   holding the live gesture. The widget already shows the new position; only the
+///   tree is behind. The drag reaches `state.json` on the next render wake anyway,
+///   because resizing a pane resizes its grid.
+fn install_paned_position(
+    paned: &gtk::Paned,
+    tree: &Rc<RefCell<PaneTree>>,
+    path: Vec<usize>,
+    boundary: usize,
+) {
+    let guard = Rc::new(DividerGuard {
+        applying: Cell::new(false),
+        last_max: Cell::new(0),
+    });
+
     {
-        v as i32
+        let tree = tree.clone();
+        let guard = guard.clone();
+        let path = path.clone();
+        paned.connect_notify_local(Some("max-position"), move |p, _| {
+            let max = p.max_position();
+            if max <= 0 {
+                return;
+            }
+            // Its own statement: the `Ref` must be gone before any GTK call, which
+            // can re-enter this module through `notify::position`.
+            let fraction = tree.borrow().divider_fraction(&path, boundary);
+            let Some(fraction) = fraction else {
+                return;
+            };
+            guard.last_max.set(max);
+            guard.applying.set(true);
+            p.set_position(geometry::divider_position(p.min_position(), max, fraction));
+            guard.applying.set(false);
+        });
+    }
+
+    {
+        let tree = tree.clone();
+        paned.connect_notify_local(Some("position"), move |p, _| {
+            // FIRST, before any borrow: this notify can arrive SYNCHRONOUSLY from
+            // the re-apply's own `set_position`, so a borrow taken above this check
+            // would be taken from inside that call.
+            if guard.applying.get() {
+                return;
+            }
+            let max = p.max_position();
+            if max <= 0 || max != guard.last_max.get() {
+                return;
+            }
+            let Some(fraction) = geometry::divider_travel_fraction(p.position(), max) else {
+                return;
+            };
+            tree.borrow_mut()
+                .set_divider_fraction(&path, boundary, fraction);
+        });
     }
 }
 

@@ -28,25 +28,25 @@ Linux gets the pinned Neovim from the flake devShell via `WOLF_NVIM_BIN`; there 
 
 ## Editor surface
 
-| Feature                                                    | Branch or commit                                                    | macOS | Linux |
-| ---------------------------------------------------------- | ------------------------------------------------------------------- | ----- | ----- |
-| Split panes (`PaneTree`: split / close / focus)            | `feat/split-panes` / `feat/mac-panes`                               | [x]   | [x]   |
-| Divider drag-to-resize (persisted weights)                 | `feat/macos-pane-dividers` (`5f8becb`, `03a4647`)                   | [x]   | [ ]   |
-| Mouse input (click to position, drag to select)            | `feat/mac-panes` (`9051f0f`) / `linux-feat/mouse-scroll`            | [x]   | [x]   |
-| Scroll / trackpad input                                    | `feat/mac-panes` (`9051f0f`, `4b7fdc5`) / `linux-feat/mouse-scroll` | [x]   | [x]   |
-| Synthetic per-pane scrollbars from `win_viewport`          | `feat/mac-panes` (`9051f0f`)                                        | [x]   | [ ]   |
-| Max column width (90-col cap, centered grid)               | `feat/mac-panes` (`b6f545c`)                                        | [x]   | [ ]   |
-| "Use full width for content" toggle                        | `feat/use-whole-width`                                              | [x]   | [ ]   |
-| Text attributes: bold / italic / underline                 | `feat/paint-special-attributes` (`0cdaedd`)                         | [x]   | [x]   |
-| Text attributes: undercurl / strikethrough / special color | `feat/paint-special-attributes` (`0cdaedd`)                         | [x]   | [ ]   |
-| Cursor color from the `WolfCursor` highlight group         | `feat/cursor-color`                                                 | [x]   | [x]   |
-| Editor background inherits the theme background            | `feat/cursor-color` (`ca8b3c3`)                                     | [x]   | [x]   |
-| Per-pane status bar (filename + display path)              | `feat/status-bar` (`ffc3c49`)                                       | [x]   | [ ]   |
-| Active/inactive pane treatment (no dimming)                | `fix/dark-mode` (`745a8f5`)                                         | [x]   | [ ]   |
-| Editor padding / insets                                    | `feat/ui-tweaks-2`                                                  | [x]   | [ ]   |
-| macOS Option key composes accents (option-as-option)       | `feat/macos-alt-key-handling`                                       | [x]   | [ ]   |
+| Feature                                                    | Branch or commit                                                              | macOS | Linux |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------- | ----- | ----- |
+| Split panes (`PaneTree`: split / close / focus)            | `feat/split-panes` / `feat/mac-panes`                                         | [x]   | [x]   |
+| Divider drag-to-resize (persisted weights)                 | `feat/macos-pane-dividers` (`5f8becb`, `03a4647`) / `linux-feat/divider-drag` | [x]   | [x]   |
+| Mouse input (click to position, drag to select)            | `feat/mac-panes` (`9051f0f`) / `linux-feat/mouse-scroll`                      | [x]   | [x]   |
+| Scroll / trackpad input                                    | `feat/mac-panes` (`9051f0f`, `4b7fdc5`) / `linux-feat/mouse-scroll`           | [x]   | [x]   |
+| Synthetic per-pane scrollbars from `win_viewport`          | `feat/mac-panes` (`9051f0f`)                                                  | [x]   | [ ]   |
+| Max column width (90-col cap, centered grid)               | `feat/mac-panes` (`b6f545c`)                                                  | [x]   | [ ]   |
+| "Use full width for content" toggle                        | `feat/use-whole-width`                                                        | [x]   | [ ]   |
+| Text attributes: bold / italic / underline                 | `feat/paint-special-attributes` (`0cdaedd`)                                   | [x]   | [x]   |
+| Text attributes: undercurl / strikethrough / special color | `feat/paint-special-attributes` (`0cdaedd`)                                   | [x]   | [ ]   |
+| Cursor color from the `WolfCursor` highlight group         | `feat/cursor-color`                                                           | [x]   | [x]   |
+| Editor background inherits the theme background            | `feat/cursor-color` (`ca8b3c3`)                                               | [x]   | [x]   |
+| Per-pane status bar (filename + display path)              | `feat/status-bar` (`ffc3c49`)                                                 | [x]   | [ ]   |
+| Active/inactive pane treatment (no dimming)                | `fix/dark-mode` (`745a8f5`)                                                   | [x]   | [ ]   |
+| Editor padding / insets                                    | `feat/ui-tweaks-2`                                                            | [x]   | [ ]   |
+| macOS Option key composes accents (option-as-option)       | `feat/macos-alt-key-handling`                                                 | [x]   | [ ]   |
 
-Divider drag on GTK is the stock `gtk::Paned` behaviour, but `install_paned_position` re-derives the divider from the equal-share ratio on every `max-position` notify, so a drag does not survive a resize and is never persisted. The macOS side hit-tests the pure `PaneTree.dividers()` list, reweights the split, and saves the weights into `state.json`.
+Divider drag on GTK is the stock `gtk::Paned` handle drag, and the position it lands on is written back into the pure tree's weights, which is what makes it survive a re-layout and reach `state.json`. One divergence from macOS is real and deliberate: GTK renders an n-ary split as a right-leaning paned chain, so a divider governs its head child against the whole remainder, which is rescaled proportionally, where macOS's `setPairFraction` reweights only the adjacent pair.
 
 Mouse and vertical scroll input work on both front-ends, as thin GTK glue over pure seams (`geometry::cell_at` and the `mouse` module).
 
@@ -115,7 +115,7 @@ The `state` module is read and written. `wolf-gnome` snapshots on every wake wit
 
 The single-pane fix is structural: the layout is suppressed by a content predicate, never by leaf arity, which is what made the original bug swallow the commonest shape of all — one window, one tab, one pane, one file.
 
-Two things are deliberately not persisted on Linux. Window position is unavailable, because Wayland gives a client neither its own position nor screen geometry, so only size is restored; and `sidebar_visible` is written so the field cannot rot, but never read back. Persisted weights stay equal shares until divider drag-to-resize lands.
+Two things are deliberately not persisted on Linux. Window position is unavailable, because Wayland gives a client neither its own position nor screen geometry, so only size is restored; and `sidebar_visible` is written so the field cannot rot, but never read back.
 
 ## Markdown preview
 
@@ -189,8 +189,7 @@ Two limits are worth stating. The pane topology does not survive a restart — o
 
 Work already carried is recorded in the tables above. What remains, in order:
 
-1. **Divider drag-to-resize**, which makes the persisted pane weights vary rather than always being equal shares.
-2. **The three overlay pickers** (command palette, buffer picker, project search). Ranking is already shared, each command already lands in the drain as `Deferred`, and each chord is already reserved; each needs a GTK view of the shape the file picker already has. The buffer picker also carries the first `block_on_rpc` call on the GTK side, which is what will finally make `NotResponding` reachable — and testable — on Linux.
-3. **Config-driven typography**, then the completion popup and multi-line toast.
-4. **Markdown preview**, which is the largest single item: it introduces a second kind of pane content on the GTK side.
-5. **Multi-window and tabs**, which reshape `wolf-gnome` from a single-window application into a coordinator-plus-views one.
+1. **The three overlay pickers** (command palette, buffer picker, project search). Ranking is already shared, each command already lands in the drain as `Deferred`, and each chord is already reserved; each needs a GTK view of the shape the file picker already has. The buffer picker also carries the first `block_on_rpc` call on the GTK side, which is what will finally make `NotResponding` reachable — and testable — on Linux.
+2. **Config-driven typography**, then the completion popup and multi-line toast.
+3. **Markdown preview**, which is the largest single item: it introduces a second kind of pane content on the GTK side.
+4. **Multi-window and tabs**, which reshape `wolf-gnome` from a single-window application into a coordinator-plus-views one.

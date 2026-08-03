@@ -7,9 +7,13 @@
 //! unit-tested headlessly, with no display server, no widget, and no nvim —
 //! exactly mirroring how the `gdk_key`/`paint` seams stay testable in Tier 1.
 //!
-//! The two live in ONE file on purpose: the composition guarantee — that a cell
+//! Those two live in ONE file on purpose: the composition guarantee — that a cell
 //! produced by [`cell_at`] is always inside the grid [`grid_size_for`] asked for —
 //! must be provable (and is mechanically asserted) in a single place.
+//!
+//! [`divider_position`] and [`divider_travel_fraction`] are here for the same
+//! reason: they are the pixel half of a divider drag, the point where a
+//! `gtk::Paned` position and a pane weight meet, and they must be exact inverses.
 
 // Contract the tests below assert (from the ARCHITECT PLAN):
 //   cols = floor(width_px / cell_w), rows = floor(height_px / cell_h),
@@ -147,6 +151,73 @@ fn floor_clamped(coord: f64, cell: f64, max_index: u16) -> u32 {
     {
         n as u32
     }
+}
+
+/// Converts a divider fraction into a `gtk::Paned` position, as
+/// `round(max * fraction)` clamped into `[max(min, 0), max]`.
+///
+/// `min` and `max` are the paned's own `min_position` / `max_position`. Clamping
+/// into that range rather than into `[0, max]` matters because `min_position` is
+/// the far side of the start child's minimum size: a position below it is one GTK
+/// would clamp itself, and every clamp GTK performs emits a `notify::position` the
+/// drag handler then has to tell apart from a user's.
+///
+/// That lower bound is itself capped at `max`, and the cap is a PANIC GUARD rather
+/// than tidiness: `gtk::Paned` transiently reports a `min_position` ABOVE its
+/// `max_position` while a nested allocation settles, and `f64::clamp` on an
+/// inverted range panics outright (`min > max, or either was NaN. min = 900.0,
+/// max = 500.0`, measured). Capping collapses that instant to `max`, which the next
+/// `max-position` notify corrects.
+///
+/// Degenerate inputs collapse the whole result, following this module's convention:
+/// a `max <= 0` (a paned measured before its first allocation) yields `0`, and a
+/// non-finite `fraction` yields the minimum, since neither names a position.
+///
+/// The fraction is of the paned's TRAVEL, not of its width; see
+/// [`divider_travel_fraction`].
+#[must_use]
+pub fn divider_position(min: i32, max: i32, fraction: f64) -> i32 {
+    if max <= 0 {
+        return 0;
+    }
+    let low = min.max(0).min(max);
+    if !fraction.is_finite() {
+        return low;
+    }
+    // Clamp in f64 space FIRST so the value is provably within i32 range before the
+    // cast, exactly as `floor_div_clamped` does.
+    let v = (f64::from(max) * fraction)
+        .round()
+        .clamp(f64::from(low), f64::from(max));
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "v is clamped to [0, max] and rounded, so the cast is exact and in range"
+    )]
+    {
+        v as i32
+    }
+}
+
+/// Converts a `gtk::Paned` position back into a divider fraction, clamped into
+/// `[0, 1]`. The exact inverse of [`divider_position`], to within the half pixel
+/// `round` can move a position.
+///
+/// **The fraction is of the paned's TRAVEL (`max_position`), not of its width.**
+/// `max_position` excludes the handle and the far child's minimum, so a `0.5`
+/// fraction is not exactly half the pixels. That convention is what makes the pair
+/// exact inverses, which is what stops the `max-position` re-apply walking a weight
+/// a little further on every allocation pass. Do not "fix" it to divide by the
+/// allocation.
+///
+/// `None` when `max <= 0`: a paned notifies before it has been allocated, and there
+/// is no travel for a position to be a fraction OF. Answering `Some(0.0)` there
+/// would write a collapsed pane into the layout on the first notify.
+#[must_use]
+pub fn divider_travel_fraction(position: i32, max: i32) -> Option<f64> {
+    if max <= 0 {
+        return None;
+    }
+    Some((f64::from(position) / f64::from(max)).clamp(0.0, 1.0))
 }
 
 #[cfg(test)]
@@ -652,6 +723,377 @@ mod tests {
                     case.desc
                 );
             }
+        }
+    }
+
+    // -- divider position / travel fraction ---------------------------------
+    //
+    // The integer half of the divider conversion. `pane_view` owns the widget and
+    // the tree owns the weight; these two are the only place the pixel and the
+    // fraction meet, and they must be exact inverses or the `max-position` re-apply
+    // walks the weight a little further on every allocation pass.
+
+    /// One [`divider_position`] table row.
+    struct DividerCase {
+        desc: &'static str,
+        min: i32,
+        max: i32,
+        fraction: f64,
+        expected: i32,
+    }
+
+    /// A `gtk::Paned` travel typical of the smokes' 1280x720 cage output: the pane
+    /// area's width less the handle and the far child's one-cell minimum.
+    const TRAVEL: i32 = 1000;
+
+    /// A far child's minimum position, as `gtk::Paned::min_position` reports it for
+    /// a non-shrinking start child.
+    const MIN_POS: i32 = 100;
+
+    /// Pins [`divider_position`]: `round(max * fraction)` clamped into the paned's
+    /// own `[min, max]`, with a whole-result collapse for a degenerate travel.
+    ///
+    /// FALSIFYING EDITS, two, and each has exactly one row aimed at it.
+    ///
+    /// - Change the clamp's lower bound from `min` back to `0`. MEASURED: `case:
+    ///   0.0 clamps UP to the paned's own minimum position (min 100, max 1000,
+    ///   fraction 0)`, left `0` and right `100`.
+    /// - Drop the `.min(max)` cap on that lower bound. MEASURED: not an assertion
+    ///   failure but a PANIC, from inside the standard library —
+    ///   `core/src/num/f64.rs:1503:9: min > max, or either was NaN. min = 900.0,
+    ///   max = 500.0` — which is the whole reason the cap is there.
+    ///
+    /// A third, aimed at the rounding rows rather than at either clamp: replacing
+    /// `.round()` with `.floor()` fires this table too, MEASURED, so
+    /// `divider_position_and_travel_fraction_round_trip` is not the only guard on
+    /// the rounding.
+    #[test]
+    fn divider_position_table() {
+        let cases = [
+            // --- Degenerate travel collapses the WHOLE result, as this module's
+            // --- other two functions do.
+            DividerCase {
+                desc: "max == 0 (a paned measured before its first allocation) -> 0",
+                min: 0,
+                max: 0,
+                fraction: 0.5,
+                expected: 0,
+            },
+            DividerCase {
+                desc: "a negative max -> 0, even with a positive minimum",
+                min: MIN_POS,
+                max: -5,
+                fraction: 0.5,
+                expected: 0,
+            },
+            // --- The ordinary case.
+            DividerCase {
+                desc: "half the travel",
+                min: 0,
+                max: TRAVEL,
+                fraction: 0.5,
+                expected: 500,
+            },
+            DividerCase {
+                desc: "a .5 pixel rounds AWAY from zero, never truncates",
+                min: 0,
+                max: 101,
+                fraction: 0.5,
+                expected: 51,
+            },
+            DividerCase {
+                desc: "below the .5 boundary rounds down",
+                min: 0,
+                max: TRAVEL,
+                fraction: 0.4004,
+                expected: 400,
+            },
+            DividerCase {
+                desc: "above the .5 boundary rounds up",
+                min: 0,
+                max: TRAVEL,
+                fraction: 0.4006,
+                expected: 401,
+            },
+            // --- The clamp is into [min, max], NOT [0, max]: `min_position` is the
+            // --- far side of the start child's own minimum, so a position below it
+            // --- is one GTK would clamp itself and notify about.
+            DividerCase {
+                desc: "0.0 clamps UP to the paned's own minimum position",
+                min: MIN_POS,
+                max: TRAVEL,
+                fraction: 0.0,
+                expected: MIN_POS,
+            },
+            DividerCase {
+                desc: "a negative fraction clamps up to the minimum too",
+                min: MIN_POS,
+                max: TRAVEL,
+                fraction: -0.5,
+                expected: MIN_POS,
+            },
+            DividerCase {
+                desc: "1.0 is the far end of the travel",
+                min: MIN_POS,
+                max: TRAVEL,
+                fraction: 1.0,
+                expected: TRAVEL,
+            },
+            DividerCase {
+                desc: "a fraction above 1 clamps to the far end",
+                min: MIN_POS,
+                max: TRAVEL,
+                fraction: 1.5,
+                expected: TRAVEL,
+            },
+            DividerCase {
+                desc: "a NEGATIVE minimum is floored at 0",
+                min: -50,
+                max: TRAVEL,
+                fraction: 0.0,
+                expected: 0,
+            },
+            // --- An INVERTED range, which is a PANIC GUARD rather than a
+            // --- convention: `f64::clamp` panics outright when its lower bound
+            // --- exceeds its upper one, and `gtk::Paned` can report
+            // --- `min_position > max_position` transiently while an allocation is
+            // --- still settling — the same multi-pass allocation the whole
+            // --- `max-position` re-apply exists for. Capping the lower bound at
+            // --- `max` is what makes the call total, and this row is the cap's
+            // --- only test.
+            DividerCase {
+                desc: "min > max caps at max instead of panicking",
+                min: 900,
+                max: 500,
+                fraction: 0.5,
+                expected: 500,
+            },
+            // --- A non-finite fraction has no position at all.
+            DividerCase {
+                desc: "NaN collapses to the minimum",
+                min: MIN_POS,
+                max: TRAVEL,
+                fraction: f64::NAN,
+                expected: MIN_POS,
+            },
+            DividerCase {
+                desc: "+inf collapses to the minimum",
+                min: MIN_POS,
+                max: TRAVEL,
+                fraction: f64::INFINITY,
+                expected: MIN_POS,
+            },
+            DividerCase {
+                desc: "-inf collapses to the minimum",
+                min: MIN_POS,
+                max: TRAVEL,
+                fraction: f64::NEG_INFINITY,
+                expected: MIN_POS,
+            },
+        ];
+
+        for case in &cases {
+            let got = divider_position(case.min, case.max, case.fraction);
+            assert_eq!(
+                got, case.expected,
+                "case: {} (min {}, max {}, fraction {})",
+                case.desc, case.min, case.max, case.fraction
+            );
+        }
+    }
+
+    /// Tolerance for a fraction this module COMPUTED (as opposed to copied), in
+    /// fraction units. The arithmetic is one divide, so a tight epsilon is right.
+    const FRACTION_EPS: f64 = 1e-9;
+
+    /// Whether two optional fractions agree within [`FRACTION_EPS`], treating
+    /// `None` as its own answer rather than as a number.
+    fn approx_fraction(got: Option<f64>, want: Option<f64>) -> bool {
+        match (got, want) {
+            (None, None) => true,
+            (Some(a), Some(b)) => (a - b).abs() < FRACTION_EPS,
+            _ => false,
+        }
+    }
+
+    /// One [`divider_travel_fraction`] table row.
+    struct TravelCase {
+        desc: &'static str,
+        position: i32,
+        max: i32,
+        expected: Option<f64>,
+    }
+
+    /// Pins [`divider_travel_fraction`]: `None` for a degenerate travel, and
+    /// otherwise `position / max` clamped into `[0, 1]`.
+    ///
+    /// The `None` is the load-bearing half. This is the direction a USER DRAG
+    /// travels — `notify::position` reads the pixel and the tree stores the
+    /// fraction — so whatever this function answers for a paned that has not been
+    /// allocated yet is what gets written into the layout's weights and persisted.
+    /// `Some(0.0)` there would collapse the head child of a split the user never
+    /// touched, and nothing downstream rejects a zero weight (see
+    /// `layout::MIN_DIVIDER_FRACTION`).
+    ///
+    /// FALSIFYING EDIT: return `Some(0.0)` instead of `None` when `max <= 0`.
+    /// MEASURED: `case: max == 0 has no travel to be a fraction OF —
+    /// divider_travel_fraction(0, 0) = Some(0.0), want None`, which is the first
+    /// row of the table.
+    #[test]
+    fn divider_travel_fraction_table() {
+        let cases = [
+            // --- No travel means there is no fraction to report. `None` rather
+            // --- than `Some(0.0)` is the whole point: a paned notifies `position`
+            // --- before it has been allocated, and writing a 0.0 back into the
+            // --- tree there would persist a collapsed pane the user never asked
+            // --- for.
+            TravelCase {
+                desc: "max == 0 has no travel to be a fraction OF",
+                position: 0,
+                max: 0,
+                expected: None,
+            },
+            TravelCase {
+                desc: "a negative max likewise",
+                position: 10,
+                max: -10,
+                expected: None,
+            },
+            // --- The ordinary case, and the two ends.
+            TravelCase {
+                desc: "half the travel",
+                position: 500,
+                max: TRAVEL,
+                expected: Some(0.5),
+            },
+            TravelCase {
+                desc: "the near end",
+                position: 0,
+                max: TRAVEL,
+                expected: Some(0.0),
+            },
+            TravelCase {
+                desc: "the far end",
+                position: TRAVEL,
+                max: TRAVEL,
+                expected: Some(1.0),
+            },
+            TravelCase {
+                desc: "a non-round fraction",
+                position: 1,
+                max: 3,
+                expected: Some(1.0 / 3.0),
+            },
+            // --- Out of range clamps rather than escaping [0, 1]: GTK can report a
+            // --- position outside the travel during an allocation pass, and a
+            // --- weight outside [0, 1] would be rejected by `from_layout` at the
+            // --- next launch.
+            TravelCase {
+                desc: "a position past the far end clamps to 1.0",
+                position: 1500,
+                max: TRAVEL,
+                expected: Some(1.0),
+            },
+            TravelCase {
+                desc: "a negative position clamps to 0.0",
+                position: -20,
+                max: TRAVEL,
+                expected: Some(0.0),
+            },
+        ];
+
+        for case in &cases {
+            let got = divider_travel_fraction(case.position, case.max);
+            assert!(
+                approx_fraction(got, case.expected),
+                "case: {} — divider_travel_fraction({}, {}) = {got:?}, want {:?}",
+                case.desc,
+                case.position,
+                case.max,
+                case.expected
+            );
+        }
+    }
+
+    /// Slack added to the half-pixel round-trip bound, to absorb the rounding of
+    /// `max * fraction` itself rather than of its result.
+    const ROUND_TRIP_SLACK: f64 = 1e-12;
+
+    /// [`divider_position`] and [`divider_travel_fraction`] are inverses, to within
+    /// the half pixel `round` can move a position.
+    ///
+    /// This is the test that stops the `max-position` re-apply drifting a weight.
+    /// Every notify reads the tree's fraction, turns it into a pixel, and — on the
+    /// next user drag — turns a pixel back into a fraction; a pair that lost half a
+    /// pixel per pass would walk every divider across the window over a session.
+    ///
+    /// The bound is HALF a pixel of travel, which is exactly what `round` can cost
+    /// and is what makes the test discriminating: `floor` can lose up to a WHOLE
+    /// pixel, so a fraction whose scaled value sits past the .5 boundary catches it.
+    ///
+    /// FALSIFYING EDIT: use `floor` instead of `round` in `divider_position`.
+    ///
+    /// MEASURED: `case just past a .5 pixel boundary: 0.5009 -> position 500 -> 0.5,
+    /// which is 0.0009000000000000119 out; at most 0.000500000001 … is allowed`. (A
+    /// bound of one whole pixel could NOT catch this: `floor`'s error is always
+    /// strictly less than one pixel, which is why the bound is half of one.)
+    #[test]
+    fn divider_position_and_travel_fraction_round_trip() {
+        let cases = [
+            ("the midpoint", 0, TRAVEL, 0.5),
+            ("just past a .5 pixel boundary", 0, TRAVEL, 0.5009),
+            ("just below a .5 pixel boundary", 0, TRAVEL, 0.4991),
+            ("a dragged head fraction", 0, 998, 0.7),
+            ("the midpoint above a real minimum", MIN_POS, 998, 0.5),
+            ("a wide paned and an awkward fraction", 0, 65_535, 0.123_456),
+        ];
+
+        for (desc, min, max, fraction) in cases {
+            let position = divider_position(min, max, fraction);
+            assert!(
+                position >= min.max(0) && position <= max,
+                "case {desc}: divider_position({min}, {max}, {fraction}) = {position}, outside \
+                 [{}, {max}] — the table row itself is wrong, not the function",
+                min.max(0)
+            );
+
+            let Some(back) = divider_travel_fraction(position, max) else {
+                panic!(
+                    "case {desc}: divider_travel_fraction({position}, {max}) reported no travel"
+                );
+            };
+            let tolerance = 0.5 / f64::from(max) + ROUND_TRIP_SLACK;
+            assert!(
+                (back - fraction).abs() <= tolerance,
+                "case {desc}: {fraction} -> position {position} -> {back}, which is {} out; at most \
+                 {tolerance} (half a pixel of a {max}-pixel travel) is allowed",
+                (back - fraction).abs()
+            );
+        }
+
+        // The other direction, which is the one the re-apply actually walks: a
+        // position that came OUT of a paned must go back IN unchanged, so a
+        // notify that changes nothing writes nothing back.
+        for (desc, min, max, position) in [
+            ("the near end", 0, 998, 0),
+            ("one pixel in", 0, 998, 1),
+            ("exactly the minimum", MIN_POS, 998, MIN_POS),
+            ("a dragged position", MIN_POS, 998, 700),
+            ("the far end", 0, 998, 998),
+            ("a wide paned", 0, 65_535, 12_345),
+        ] {
+            let Some(fraction) = divider_travel_fraction(position, max) else {
+                panic!(
+                    "case {desc}: divider_travel_fraction({position}, {max}) reported no travel"
+                );
+            };
+            assert_eq!(
+                divider_position(min, max, fraction),
+                position,
+                "case {desc}: position {position} -> fraction {fraction} -> a DIFFERENT position. \
+                 The re-apply runs on every `max-position` notify, so a pixel lost here is a pixel \
+                 lost per allocation pass."
+            );
         }
     }
 }

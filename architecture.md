@@ -242,6 +242,5 @@ These are scoped deliberately, and each has a clear direction.
 
 - **Only windows opened through the overridden split commands become panes.** Panes come from `Split` intents, which only the rebound chords and Ex-commands emit. A window created another way — `:help`, quickfix, a location list, a preview window, `:diffsplit` — still gets a grid and a `WinInfo` but no pane, so its content is not shown. The direction is to auto-pane any unbound window grid.
 - **Floating and external windows are ignored**, so they never appear as panes.
-- **On GNOME, focus-direction moves use the tree's idealized split ratios** rather than the dragged divider positions, so `<C-w>h/j/k/l` can pick a different neighbour than the pixel geometry suggests after a manual drag. This is GNOME-specific: the macOS pane tree preserves per-child weights and resolves neighbours over the live weighted rectangles, so a dragged divider is reflected there.
 
 The macOS project-and-tabpage model adds two more, both detailed in [`crates/wolf-macos/DECISIONS.md`](crates/wolf-macos/DECISIONS.md): the lockout on Neovim-internal tabpage navigation is best-effort and a determined user can still desync a view from its tabpage, and a visible non-current window of a project can blank during a live resize until refocused.

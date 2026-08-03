@@ -11,42 +11,43 @@
 //!
 //! ## What this file contains
 //!
-//! **Twenty-three cage smokes** — one window-render smoke, two file-picker smokes,
+//! **Twenty-five cage smokes** — one window-render smoke, two file-picker smokes,
 //! one file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
 //! new-untitled-buffer smoke, one Ctrl+Shift+W close-pane smoke (the accelerator
 //! path, as opposed to the split-pane suite's `<C-w>c`), two quit smokes (`:q`
 //! closes the focused pane, `:qa` closes the window), one keyboard-only CRASH /
-//! auto-restart smoke, five POINTER smokes (click-to-position, drag-to-select,
-//! wheel scroll, the click-then-close focus-wedge regression, and the crash
-//! overlay + "Restart Neovim" button), and three STATE-PERSISTENCE smokes (a
-//! three-pane layout and a lone open file each surviving a quit-and-relaunch, plus
+//! auto-restart smoke, six POINTER smokes (click-to-position, drag-to-select,
+//! wheel scroll, the click-then-close focus-wedge regression, the crash
+//! overlay + "Restart Neovim" button, and a divider drag surviving a pane
+//! re-layout), and four STATE-PERSISTENCE smokes (a three-pane layout, a lone open
+//! file, and a dragged divider's WEIGHTS each surviving a quit-and-relaunch, plus
 //! the window title rendering the working directory) — each of which launches the
 //! real binary under `cage`.
 //!
-//! The two relaunch smokes run **two app launches inside ONE `cage` instance** (one
-//! scenario string, two sequential `"$WOLF_BIN" &` blocks), so `CAGE_LOCK`
+//! The three relaunch smokes run **two app launches inside ONE `cage` instance**
+//! (one scenario string, two sequential `"$WOLF_BIN" &` blocks), so `CAGE_LOCK`
 //! semantics are unchanged and the count of compositors started is still one per
 //! smoke.
 //!
-//! The five pointer smokes additionally run **`wolf-pointer-inject`** inside cage —
+//! Seven of them additionally run **`wolf-pointer-inject`** inside cage —
 //! this repo's own long-lived `zwlr_virtual_pointer_v1` client, see
 //! `tools/wolf-pointer-inject/README.md` — started BEFORE the app so the seat
 //! already carries `WL_SEAT_CAPABILITY_POINTER` when GTK does its first `wl_seat`
-//! roundtrip, and driven over a FIFO with a poll-for-ack protocol. Three of them
+//! roundtrip, and driven over a FIFO with a poll-for-ack protocol. Four of them
 //! assert on FILES THE CAPTIVE NEOVIM WRITES ABOUT ITS OWN STATE — `line('.')` /
-//! `col('.')`, `visualmode()` plus `'<` / `'>`, and `line('w0')` — rather than on
-//! OCR. Those are exact integers that no sidebar row and no `:e` toast can satisfy,
-//! and OCR is structurally incapable of answering "did the cursor land at exactly
-//! row 12, column 25".
+//! `col('.')`, `visualmode()` plus `'<` / `'>`, `line('w0')`, and the per-window
+//! `winwidth()` — rather than on OCR. Those are exact integers that no sidebar row
+//! and no `:e` toast can satisfy, and OCR is structurally incapable of answering
+//! "did the cursor land at exactly row 12, column 25".
 //!
-//! Nineteen of the twenty-three OCR a screenshot of the live window. The `:qa`
+//! Twenty of the twenty-five OCR a screenshot of the live window. The `:qa`
 //! smoke deliberately captures no image and asserts on the cage exit status alone
 //! (the app must be GONE, and gone with a ZERO exit status — a panic in the GTK main
-//! loop makes a process vanish just as a clean shutdown does); the click, drag and
-//! scroll smokes still capture and still RETAIN a screenshot for post-mortem, but
-//! assert on their readback files rather than on pixels. The two relaunch smokes OCR
-//! **and** assert on a Neovim readback, and one of them additionally asserts on the
-//! `state.json` the first launch wrote.
+//! loop makes a process vanish just as a clean shutdown does); the click, drag,
+//! scroll and divider-relayout smokes still capture and still RETAIN a screenshot
+//! for post-mortem, but assert on their readback files rather than on pixels. The
+//! three relaunch smokes OCR **and** assert on a Neovim readback, and two of them
+//! additionally assert on the `state.json` the first launch wrote.
 //!
 //! **Four pure guards**, which mechanically enforce invariants the cage smokes
 //! depend on but cannot check themselves:
@@ -77,7 +78,7 @@
 //! live here, next to the consts and helpers they read, rather than in a file of
 //! their own.
 //!
-//! So this target's summary line reads **`27 passed`**, not `23`: twenty-three cage
+//! So this target's summary line reads **`29 passed`**, not `25`: twenty-five cage
 //! smokes plus those four guards.
 //!
 //! ## A vacuously-passing check recorded here: the `wtype ""` window-map poll
@@ -120,7 +121,7 @@
 //!
 //! ## When it runs
 //!
-//! The twenty-three cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The twenty-five cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The Linux verification gate").
@@ -130,25 +131,25 @@
 //! suite command does not run is a silently-skipped test.
 //!
 //! They are, however, the slowest part of the suite: each drives a real
-//! compositor, and all twenty-three serialize behind `CAGE_LOCK` (see below).
+//! compositor, and all twenty-five serialize behind `CAGE_LOCK` (see below).
 //!
 //! ```text
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the twenty-three cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the twenty-five cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` and
 //!   `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
 //!   built from this repo's own `tools/wolf-pointer-inject/` by `flake.nix`, so
 //!   `command -v wolf-pointer-inject` succeeding can only mean the flake provided
-//!   it. Only the five pointer smokes use it, but it is required unconditionally —
-//!   see [`REQUIRED_TOOLS`].
+//!   it. Only the seven pointer-driven smokes use it, but it is required
+//!   unconditionally — see [`REQUIRED_TOOLS`].
 //! - `WOLF_NVIM_BIN` pointing at the pinned Neovim (same contract as the other
 //!   wolf-gnome tests; nvim is never taken from `PATH`).
 //! - `XDG_RUNTIME_DIR` set and writable (the Wayland socket lives there).
 //!
-//! Per project policy every one of the twenty-three FAILS LOUD if any of the above is
+//! Per project policy every one of the twenty-five FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -163,7 +164,7 @@ use std::time::SystemTime;
 
 use cairo::{Context, Format, ImageSurface};
 use wolf_core::state::STATE_FILE_NAME;
-use wolf_core::{load_state, state_dir, PaneNode};
+use wolf_core::{load_state, state_dir, PaneNode, PaneOrientation};
 use wolf_gnome::{CellMetrics, WINDOW_TITLE_FALLBACK};
 
 /// The lowercase word we type in insert mode (in the window smoke scenario).
@@ -172,7 +173,7 @@ use wolf_gnome::{CellMetrics, WINDOW_TITLE_FALLBACK};
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the twenty-three cage smoke tests. Each launches its own
+/// Serializes the twenty-five cage smoke tests. Each launches its own
 /// `cage` compositor, and two compositors started concurrently contend for the
 /// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
 /// Under the default multi-threaded test harness these tests would otherwise run
@@ -180,7 +181,7 @@ const OCR_WORD: &str = "hello";
 /// execution. Poisoning is recovered from (`into_inner`) so one panicking test
 /// does not cascade into failing the others.
 ///
-/// The five pointer smokes join this same lock rather than living in a file of
+/// The seven pointer-driven smokes join this same lock rather than living in a file of
 /// their own: each `tests/*.rs` is a separate crate AND a separate PROCESS, so an
 /// in-process `static Mutex` cannot serialize across them at all, and
 /// `tests/common/mod.rs` is compiled separately into every integration-test binary,
@@ -1366,6 +1367,103 @@ const POINTER_HELPER_ERR_NAME: &str = "wolf-pointer.err";
 /// point really is inside the compositor's reported output rather than assuming it.
 const POINTER_READY_NAME: &str = "wolf-pointer.ready";
 
+// ---------------------------------------------------------------------------
+// Divider-drag smokes: finding a `gtk::Paned` handle without hardcoding a pixel.
+//
+// A divider is the one target in this file that NO arithmetic here can predict.
+// Its handle is theme-owned (Adwaita's non-wide `paned > separator` is a single
+// pixel, widened by GTK's own invisible grab area), and its position is
+// `round(max_position * fraction)` where `max_position` has ALREADY subtracted the
+// handle and the far child's minimum — so a position modelled from the pane origin
+// and the cell size is out by tens of pixels before it starts, which is more than a
+// handle width.
+//
+// So the two divider smokes BISECT for it, against the only authority available:
+// which Neovim window a click focuses. That is exact and theme-independent. The
+// modelled position below is a SEED and only a seed; see the `bisect_divider` shell
+// function in [`POINTER_DIVIDER_BODY`] for the protocol, including why each probe
+// is preceded by a RESET click.
+
+/// How far either side of the MODELLED divider position each bisection starts.
+///
+/// The model assumes equal shares of the editor pane's width, but a `gtk::Paned`
+/// positions its divider at a fraction of its TRAVEL (`max_position`), which
+/// excludes the handle and the far child's minimum — worth ~15-20 px per divider at
+/// this output size. This margin only has to exceed that error while staying INSIDE
+/// the neighbouring panes, which are ~340 px wide in the three-pane case.
+const BISECT_SEED_MARGIN_PX: i64 = 128;
+
+/// How many halvings each bisection runs.
+///
+/// The seeds span `2 * BISECT_SEED_MARGIN_PX` = 256 px, so seven halvings leave a
+/// two-pixel residual — comfortably inside a `GtkPaned` handle's grab area, which is
+/// several pixels wider than the one-pixel separator Adwaita draws. The drag's own
+/// first assertion (the panes either side of it really moved) is what proves the
+/// press landed on the handle; this constant only has to make that likely.
+const BISECT_STEPS: i64 = 7;
+
+/// Pixels the divider between the MIDDLE and RIGHT panes is dragged right in
+/// [`divider_drag_survives_a_pane_relayout_under_cage`].
+///
+/// About 6.7 cells at [`SMOKE_FONT_PT`], against ~15-cell columns: large enough
+/// that the resulting ratio is unmistakably off centre, small enough that the pane
+/// it shrinks stays far above the one-cell `set_content_width` floor.
+const DIVIDER_INNER_DRAG_PX: i64 = 150;
+
+/// Pixels the divider between the LEFT and MIDDLE panes is dragged left in
+/// [`divider_drag_survives_a_pane_relayout_under_cage`]. This is the drag that
+/// re-allocates the inner paned and so fires the re-apply the smoke exists to test.
+const DIVIDER_OUTER_DRAG_PX: i64 = 150;
+
+/// Pixels the single divider is dragged right in
+/// [`dragged_divider_weights_survive_relaunch_under_cage`].
+///
+/// Sized so BOTH panes stay wide enough to render their whole heading without
+/// soft-wrapping (`runtime/nvim/init.lua` sets `wrap`/`linebreak`, and a wrapped
+/// heading breaks the OCR corroboration): the narrower pane keeps ~15 columns
+/// against a 14-character heading.
+const DIVIDER_RELAUNCH_DRAG_PX: i64 = 175;
+
+/// How far apart three nominally-equal columns may be, in cells, before the
+/// baseline precondition fails.
+///
+/// They are not exactly equal and cannot be: each `gtk::Paned` positions its
+/// divider at a fraction of its own TRAVEL, which subtracts the handle and the far
+/// child's minimum, so a chain of them lands the columns within about a cell of
+/// each other rather than identical. The widths themselves are exact —
+/// `winwidth()` reports the grid size the front-end asked for, and
+/// `nvim_ui_try_resize_grid` was MEASURED not to reflow Neovim's own window layout,
+/// so resizing one pane's grid cannot take columns from another's.
+const BASELINE_TOLERANCE_CELLS: i64 = 2;
+
+/// The smallest width change, in cells, that counts as "this drag moved the
+/// divider". Three cells is ~67 px against drags of 150+ px, so it discriminates a
+/// drag that did nothing from one that landed.
+const MIN_DRAG_CELLS: i64 = 3;
+
+/// How far a PRESERVED width ratio may drift across a re-layout or a relaunch.
+///
+/// The ratio is computed from cell counts, which quantize: one cell is ~0.03 of a
+/// two-pane ratio, so this allows a couple of cells of rounding while staying far
+/// below the ~0.2 gap that separates a preserved ratio from a re-centred one.
+const RATIO_TOLERANCE: f64 = 0.08;
+
+/// How far from `0.5` a preserved ratio must sit for "it did not change" to mean
+/// anything at all.
+///
+/// Without this clause a divider that snapped back to the centre would satisfy
+/// "unchanged" whenever the drag never took effect. It is the same non-vacuity
+/// discipline the fixture-naming guards apply, aimed at an arithmetic assertion.
+const MIN_RATIO_OFFSET: f64 = 0.08;
+
+/// The smallest gap between the two PERSISTED weights that no equal-share vector
+/// could show. `[0.5, 0.5]` — everything this front-end could write before divider
+/// drag — has a gap of exactly zero.
+const MIN_WEIGHT_GAP: f64 = 0.15;
+
+/// Tolerance on the persisted weights' sum, which the pure tree renormalizes to 1.
+const WEIGHT_SUM_EPS: f64 = 1e-9;
+
 /// External binaries the scenario shells out to. All come from the flake's
 /// smoke toolchain; absence means the devShell was not entered.
 ///
@@ -1375,7 +1473,7 @@ const POINTER_READY_NAME: &str = "wolf-pointer.ready";
 /// put on the devShell `PATH`. The name is repo-namespaced precisely so that
 /// `command -v wolf-pointer-inject` succeeding can only mean the flake provided it —
 /// a bare `pointer-inject` could be shadowed by something on the host. It is
-/// required unconditionally, not just by the five pointer smokes: a devShell missing
+/// required unconditionally, not just by the seven pointer-driven smokes: a devShell missing
 /// it is an unprovisioned devShell, and the project policy is to fail loud rather
 /// than let the gate pass green while proving less than it claims.
 const REQUIRED_TOOLS: [&str; 5] = ["cage", "wtype", "grim", "tesseract", "wolf-pointer-inject"];
@@ -4062,16 +4160,203 @@ hsend quit
 exit 0
 "#;
 
+/// Body of [`divider_drag_survives_a_pane_relayout_under_cage`], appended to
+/// [`POINTER_PREAMBLE`].
+///
+/// Builds a flat row of THREE panes with two `<C-w>v`, bisects for both divider
+/// handles, drags the inner divider right, drags the outer divider left, and reads
+/// the three panes' widths back out of Neovim after each step.
+///
+/// ## Exit codes it adds to [`POINTER_PREAMBLE`]'s 11-15
+///
+/// * `21` — the divider-0 seeds did not straddle a divider.
+/// * `22` — the divider-1 seeds did not straddle a divider.
+/// * `23` — the two bisections disagree about which window is the MIDDLE pane, so
+///   the seeds are not landing in the panes they are meant to.
+///
+/// No fixture file is written and `fill_buffer` is never called: every observable
+/// here is a number Neovim reports about its own windows, so there is nothing to
+/// render and nothing to OCR.
+const POINTER_DIVIDER_BODY: &str = r#"
+# ---------------------------------------------------------------------------
+# Build the flat row of THREE panes.
+#
+# Each <C-w>v splits the FOCUSED pane and the new pane takes focus, and the pane
+# tree inserts a new pane immediately AFTER its target -- so two of them give the
+# on-screen row [first, second, third] with the widget chain
+# paned0 = first | paned1(second | third). Divider 0 is paned0's handle, divider 1
+# is paned1's.
+wtype -M ctrl -k w -m ctrl
+wtype -k v
+sleep "$SETTLE"
+wtype -M ctrl -k w -m ctrl
+wtype -k v
+sleep "$SETTLE"
+
+# ---------------------------------------------------------------------------
+# probe_winnr <x>: click at (<x>, $PROBE_Y) and leave the number of the window
+# that click focused in $winnr.
+#
+# A click inside a pane focuses that pane's window (`on_pane_clicked` ->
+# `focus_win`, which the wedge smoke already proves end to end). A click that
+# lands on a `gtk::Paned` HANDLE reaches no pane at all and therefore changes
+# nothing. Both facts are load-bearing in `bisect_divider`.
+#
+# ONE HAZARD, recorded because its symptom would point elsewhere: `gtk::Paned`
+# binds Return, space, Escape and the arrow keys on a FOCUSED handle
+# (accept-position / cancel-position / move-handle). If a click on the handle ever
+# started grabbing keyboard focus, the `wtype -k Return` below would be swallowed,
+# no readback would appear, and the scenario would exit 14 -- which reads as "keys
+# are not reaching Neovim". Measured today it does not: GTK4's paned grabs focus
+# only on F6/F8 handle cycling, and the reset click that precedes every probe lands
+# in a PANE, whose handler returns focus to the command-line strip.
+probe_winnr() {
+    rm -f "$PROBE_FILE"
+    hstep motion "$1" "$PROBE_Y"
+    hstep press "$BTN_LEFT"
+    hstep release "$BTN_LEFT"
+    sleep "$POINTER_STEP"
+    wtype -- ":call writefile([printf('%d', winnr())], '$PROBE_FILE')"
+    wtype -k Return
+    wait_file "$PROBE_FILE" || exit 14
+    winnr=$(cat "$PROBE_FILE")
+}
+
+# bisect_divider <lo> <hi> <precondition-exit-code>: locate the divider handle
+# between the panes the two seeds land in. Sets $lo_win, $hi_win and $divider_x.
+#
+# WHY A SEARCH AND NOT A FORMULA: the handle's width is theme-owned and its
+# position is a fraction of the paned's TRAVEL, which subtracts the handle and the
+# far child's minimum -- no arithmetic on this side can predict it to within a
+# handle width. Clicking is exact, and Neovim's own window number is the answer.
+#
+# THE RESET CLICK IS LOAD-BEARING. A probe that lands ON the handle focuses no
+# window, so it reports whatever the PREVIOUS probe focused. Without first putting
+# the focus back on the LOW side before every probe, a handle hit would be read as
+# "the high side" whenever the previous probe was there, and the search would
+# converge on the wrong edge.
+bisect_divider() {
+    lo=$1
+    hi=$2
+    probe_winnr "$lo"
+    lo_win=$winnr
+    probe_winnr "$hi"
+    hi_win=$winnr
+    if [ "$lo_win" = "$hi_win" ]; then
+        echo "wolf-gnome divider smoke: the bisection seeds $lo and $hi BOTH focused window $lo_win," >&2
+        echo "  so they do not straddle a divider and no bisection can find one." >&2
+        echo "  Candidate causes, in order of likelihood:" >&2
+        echo "    1. the editor pane's ORIGIN moved (an adw::HeaderBar height or a sidebar width" >&2
+        echo "       change) -- click_positions_the_cursor_under_cage derives it and fails first;" >&2
+        echo "    2. the measured CELL SIZE changed, so the panes are not the size modelled;" >&2
+        echo "    3. the divider HANDLE is far wider than the theme's one pixel, and both seeds" >&2
+        echo "       landed on it;" >&2
+        echo "    4. a fresh split no longer produces EQUAL shares, which is what the seeds model." >&2
+        exit "$3"
+    fi
+    steps=0
+    while [ "$steps" -lt "$BISECT_STEPS" ]; do
+        mid=$(( (lo + hi) / 2 ))
+        probe_winnr "$lo"
+        probe_winnr "$mid"
+        if [ "$winnr" = "$hi_win" ]; then
+            hi=$mid
+        else
+            lo=$mid
+        fi
+        steps=$((steps + 1))
+    done
+    # $lo is the largest x that did NOT focus the high-side window, so it is inside
+    # the handle by construction.
+    divider_x=$lo
+}
+
+bisect_divider "$D0_LO" "$D0_HI" 21
+win_left=$lo_win
+win_mid=$hi_win
+divider0_x=$divider_x
+
+bisect_divider "$D1_LO" "$D1_HI" 22
+if [ "$lo_win" != "$win_mid" ]; then
+    echo "wolf-gnome divider smoke: the two bisections disagree about the MIDDLE pane -- divider 0's" >&2
+    echo "  high side is window $win_mid but divider 1's low side is window $lo_win. One of the four" >&2
+    echo "  seeds is landing in a pane it was not meant to, so the same causes as exit 21 apply." >&2
+    exit 23
+fi
+win_right=$hi_win
+divider1_x=$divider_x
+
+# Hand the discovered numbering to the Rust side, which prints it in every failure
+# message: nvim numbers windows by ITS OWN layout, which need not agree with the
+# order this front-end draws the panes in.
+printf '%s %s %s\n' "$win_left" "$win_mid" "$win_right" > "$WINS"
+
+# read_widths <file>: the three panes' widths in SCREEN order, then the window
+# count, as four integers on one line.
+#
+# Keyed by the DISCOVERED window numbers rather than by `range(1, winnr('$'))`,
+# because nvim's numbering follows its own window layout: the pane tree inserts a
+# new pane after its target, while `:vsplit` (with 'splitright' off, as
+# `runtime/nvim/init.lua` leaves it) creates its new window on the other side. Only
+# a discovered number makes "the middle pane grew" mean the pane in the middle of
+# the SCREEN.
+#
+# `winwidth`, never `nvim_win_get_width`: the latter reports the LAYOUT width,
+# which `nvim_ui_try_resize_grid` does not touch, so it cannot see a divider drag
+# at all. DIVIDER_RELAUNCH_SCENARIO's own `read_widths` carries the measurement.
+#
+# `len(nvim_tabpage_list_wins(0))` rather than `winnr('$')` so that no `$` appears
+# inside the double-quoted shell word carrying the Ex command.
+read_widths() {
+    rm -f "$1"
+    wtype -- ":call writefile([printf('%d %d %d %d', winwidth($win_left), winwidth($win_mid), winwidth($win_right), len(nvim_tabpage_list_wins(0)))], '$1')"
+    wtype -k Return
+    wait_file "$1" || exit 14
+}
+
+read_widths "$W_BASE"
+
+# --- The INNER drag: divider 1, to the RIGHT --------------------------------
+#
+# `hstep` rather than `hsend` for every event of the gesture -- see `hstep` in
+# POINTER_PREAMBLE for the measured reason.
+hstep motion "$divider1_x" "$PROBE_Y"
+hstep press "$BTN_LEFT"
+hstep motion "$(( divider1_x + INNER_DRAG_PX ))" "$PROBE_Y"
+hstep release "$BTN_LEFT"
+sleep "$SETTLE"
+read_widths "$W_INNER"
+
+# --- The OUTER drag: divider 0, to the LEFT ---------------------------------
+#
+# THIS is the step the smoke exists for. It changes the INNER paned's allocation,
+# which is the one thing that changes that paned's `max-position` and so fires the
+# re-apply. Whatever the re-apply reads -- the live tree, or a ratio frozen when
+# the widget was built -- is what the middle and right panes end up sharing.
+hstep motion "$divider0_x" "$PROBE_Y"
+hstep press "$BTN_LEFT"
+hstep motion "$(( divider0_x - OUTER_DRAG_PX ))" "$PROBE_Y"
+hstep release "$BTN_LEFT"
+sleep "$SETTLE"
+read_widths "$W_OUTER"
+
+# The PNG is retained for post-mortem only; no assertion reads a pixel here.
+grim "$OUT_PNG"
+hsend quit
+exit 0
+"#;
+
 // ---------------------------------------------------------------------------
-// STATE-PERSISTENCE smokes (three): the pane layout and the lone open file
-// survive a QUIT AND RELAUNCH, and the window title renders the working
-// directory.
+// STATE-PERSISTENCE smokes (four): the pane layout, the lone open file and a
+// dragged divider's WEIGHTS survive a QUIT AND RELAUNCH, and the window title
+// renders the working directory.
 //
-// The two relaunch smokes run TWO app launches inside ONE `cage` instance — one
+// The three relaunch smokes run TWO app launches inside ONE `cage` instance — one
 // scenario string with two sequential `"$WOLF_BIN" &` blocks — so `CAGE_LOCK`
-// semantics are unchanged and no second compositor is ever started. Both share
-// this exit-code vocabulary, which is documented once here and referenced from
-// each scenario:
+// semantics are unchanged and no second compositor is ever started. The first two
+// share this exit-code vocabulary, which is documented once here and referenced
+// from each scenario; the divider one keeps `POINTER_PREAMBLE`'s codes for the
+// helper functions it copies and renumbers these, so it carries its own table:
 //
 // | code | meaning |
 // | --- | --- |
@@ -4525,6 +4810,541 @@ grim "$OUT_PNG"
 exit 0
 "#;
 
+// --- S4 fixtures: two files, one dragged divider, two launches --------------
+//
+// Same naming convention as every sibling: the file NAMES contain neither asserted
+// term, so only a rendered buffer can satisfy the OCR corroboration.
+// `restore_fixture_names_cannot_satisfy_their_own_assertions` enforces it over
+// `RELAUNCH_FIXTURE_NAMES`, which these four names are registered in.
+
+/// The file opened in the LEFT pane (`dvleft.md`) — the pane the drag widens.
+const DIVIDER_FILE_LEFT: &str = "dvleft.md";
+
+/// Heading inside [`DIVIDER_FILE_LEFT`]; lowercased it contains
+/// [`DIVIDER_OCR_LEFT`].
+const DIVIDER_HEADING_LEFT: &str = "# DIVIDERALFA";
+
+/// Lowercased substring OCR must find for the restored LEFT pane.
+const DIVIDER_OCR_LEFT: &str = "divideralfa";
+
+/// The file opened in the RIGHT pane (`dvright.md`) — the pane the drag narrows.
+const DIVIDER_FILE_RIGHT: &str = "dvright.md";
+
+/// Heading on line 1 of [`DIVIDER_FILE_RIGHT`]; lowercased it contains
+/// [`DIVIDER_OCR_RIGHT`]. [`divider_right_fixture_body`] writes it above
+/// [`DIVIDER_BODY_LINE_COUNT`] body lines, for the page-density reason recorded
+/// there.
+const DIVIDER_HEADING_RIGHT: &str = "# DIVIDERBRAVO";
+
+/// Lowercased substring OCR must find for the restored RIGHT pane. It is 12
+/// characters, 14 with the heading marker, which is what
+/// [`DIVIDER_RELAUNCH_DRAG_PX`] is sized against: a narrower pane would soft-wrap
+/// it and OCR would read two fragments.
+///
+/// Soft-wrapping is not the only way this term can go unread in a narrow pane, and
+/// it was not the first one met: see [`DIVIDER_BODY_LINE_COUNT`].
+const DIVIDER_OCR_RIGHT: &str = "dividerbravo";
+
+/// How many body lines [`divider_right_fixture_body`] writes below
+/// [`DIVIDER_HEADING_RIGHT`].
+///
+/// FIXTURE, and load-bearing for the divider relaunch smoke's OCR assertion rather
+/// than decoration.
+///
+/// `tesseract --psm 11` groups a sparse pane into ONE region and estimates a scale
+/// from it, so anything long, thin and high-contrast sharing that region corrupts
+/// the reading of a 15-cell heading it can plainly see. TWO such neighbours were
+/// measured in this pane, and they take different fixes: the `~` end-of-buffer
+/// column, which this constant answers, and the active-pane FOCUS RING, which
+/// [`DIVIDER_RELAUNCH_SCENARIO`]'s focus move answers — its ablation table lives
+/// beside that move. A reader who has just seen the OCR assertion go red wants the
+/// ring first; it is the one whose corruptor is production rendering.
+///
+/// MEASURED for the `~` column, with a heading and nothing else in the file: the
+/// narrow pane renders that one short line above a bare vertical column of markers,
+/// and the heading read as `4 DIVIDERBR=I-\V0`. The glyphs were not the problem —
+/// the `A` bitmaps in the two panes are pixel-identical bar a two-pixel offset, and
+/// the SAME pixels moved into the wide pane read `DIVIDERBRAVO` correctly. Four
+/// controlled ablations on the retained PNG isolated it: masking out the block
+/// cursor, masking out the focus ring and padding the image all left the misread in
+/// place, while blanking the `~` column alone — everything else untouched — fixed
+/// it. It is the hazard [`SIDEBAR_FILLER_COUNT`] exists for, one pane wide instead
+/// of one page wide, and it takes the same fix: give tesseract ordinary text at the
+/// ordinary scale to calibrate against.
+///
+/// Twenty-four lines plus the heading is comfortably more than the measured
+/// `winheight(0)` of 14, so no `~` marker is drawn in that pane at all — a later
+/// run's retained PNG shows the 24 body lines and no marker anywhere. RAISING IT
+/// BUYS NOTHING against a red OCR assertion now: the column it targets is already
+/// gone. The other lever, shrinking [`DIVIDER_RELAUNCH_DRAG_PX`], is wrong for both
+/// hazards — it would leave the `~` column exactly where it is, leave the ring
+/// exactly where it is, and narrow the weight gap the smoke's first assertion rests
+/// on.
+///
+/// With BOTH of those answered, a third cause remained and is not a fixture problem
+/// at all: `--psm 11` misclassified one glyph of the heading at 15 columns, on
+/// pixels a second segmentation mode read correctly. That one is answered by
+/// [`ocr_uniform_block_to_lowercase`], the reader the divider relaunch smoke adds
+/// for itself, and it is the first thing to suspect if the OCR assertion goes red —
+/// not this constant.
+const DIVIDER_BODY_LINE_COUNT: usize = 24;
+
+/// How many `x`s each [`divider_right_fixture_body`] line carries after its
+/// three-digit ordinal.
+///
+/// Nine, so every body line is twelve characters — inside the fifteen columns the
+/// drag leaves the right pane, so `runtime/nvim/init.lua`'s `wrap` / `linebreak`
+/// never soft-wrap one and each buffer line occupies exactly one screen row. A
+/// wrapped body would fill the pane just as well; an UNWRAPPED one is one fewer
+/// thing that differs between the two runs when the OCR assertion goes red.
+const DIVIDER_BODY_LINE_PAD: usize = 9;
+
+/// Builds the contents of [`DIVIDER_FILE_RIGHT`]: [`DIVIDER_HEADING_RIGHT`], then
+/// [`DIVIDER_BODY_LINE_COUNT`] lines of a three-digit ordinal followed by
+/// [`DIVIDER_BODY_LINE_PAD`] `x`s — the shape [`restart_fixture_body`] and the
+/// `fill_buffer` fixture in [`POINTER_PREAMBLE`] already use.
+///
+/// The trailing newline is [`write_relaunch_fixtures`]'s, so the file ends on a
+/// body line rather than on a blank one.
+///
+/// ## Why the body may only be digits and `x`
+///
+/// A fixture whose CONTENT carried an asserted term would satisfy an OCR assertion
+/// on its own — the hazard [`PICKER_FILE_NAME`] documents, aimed at content rather
+/// than at a file name, and the reason this body is deliberately not word-like.
+/// [`restore_fixture_names_cannot_satisfy_their_own_assertions`] enforces it
+/// mechanically against [`ASSERTED_OCR_TERMS`] rather than leaving it here as
+/// prose.
+fn divider_right_fixture_body() -> String {
+    let mut body = String::from(DIVIDER_HEADING_RIGHT);
+    for line in 1..=DIVIDER_BODY_LINE_COUNT {
+        body.push_str(&format!("\n{line:03}{}", "x".repeat(DIVIDER_BODY_LINE_PAD)));
+    }
+    body
+}
+
+/// Name of the file RUN 1's Neovim writes its pre-drag pane widths into, in the
+/// smoke's temp cwd (so the tree sidebar renders it — hence its registration in
+/// [`RELAUNCH_FIXTURE_NAMES`]). Its readback is the precondition that separates "the
+/// press missed the divider handle" from "the weight was not written back".
+const DIVIDER_W0_NAME: &str = "dv_widths_zero.txt";
+
+/// Name of the file RUN 1's Neovim writes its post-drag pane widths into. See
+/// [`DIVIDER_W0_NAME`].
+const DIVIDER_W1_NAME: &str = "dv_widths_one.txt";
+
+/// Name of the file RUN 2's Neovim writes its restored pane widths into. See
+/// [`DIVIDER_W1_NAME`].
+const DIVIDER_W2_NAME: &str = "dv_widths_two.txt";
+
+/// The two-launch DIVIDER-WEIGHT RELAUNCH scenario, run as one `sh -c` string
+/// inside ONE `cage`.
+///
+/// ## Why it duplicates the pointer plumbing instead of reusing it
+///
+/// [`POINTER_PREAMBLE`] launches the app itself, and a two-run scenario cannot use
+/// it: the helper must outlive run 1 while the app must not. So the FIFO, the
+/// helper launch, `exec 3>`, `hdead`, `hwait_ready`, `hsend`, `hstep`, `wait_file`
+/// and the trapped cleanup are duplicated here, exactly as
+/// [`RESTORE_SOLO_SCENARIO`] duplicates [`RESTORE_LAYOUT_SCENARIO`]'s poll-and-reap
+/// machinery. The cleanup kills the HELPER first, so the app's shutdown is never
+/// racing a pointer event.
+///
+/// Between the two runs it freezes run 1's `state.json` into `$DIV_STATE_COPY`,
+/// following the [`RESTORE_SOLO_SCENARIO`] precedent: run 2 re-snapshots on every
+/// render wake, so the live file would carry RUN 2's tree by the time the Rust side
+/// could read it — and the save-side and restore-side red runs would then be
+/// indistinguishable.
+///
+/// ## Exit codes
+///
+/// The first five are [`POINTER_PREAMBLE`]'s, because the functions that raise them
+/// are copied from it verbatim. The relaunch-specific ones are renumbered from the
+/// shared state-persistence table to avoid colliding with those.
+///
+/// | code | meaning |
+/// | --- | --- |
+/// | `11` | run 1's app died before its window mapped |
+/// | `12` | `wolf-pointer-inject` never printed its `ready …` line |
+/// | `13` | a helper command was never acked within budget |
+/// | `14` | a Neovim readback file never appeared |
+/// | `15` | the helper died mid-scenario |
+/// | `16` | run 1 was still alive after the `:qa` poll budget |
+/// | `17` | run 1 exited NON-ZERO — it went away, but not cleanly |
+/// | `18` | run 1 wrote no `state.json` at all |
+/// | `19` | run 2's app died before its window mapped |
+/// | `21` | the bisection seeds did not straddle the divider |
+const DIVIDER_RELAUNCH_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs, all copied from POINTER_PREAMBLE and RESTORE_SOLO_SCENARIO. Timing
+# knobs only -- no assertion depends on any of them. SETTLE is the ONLY real budget
+# between spawning either run's app and its first keystroke; see SCENARIO.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+ACK_TRIES=75
+FILE_TRIES=100
+POINTER_STEP=0.2
+QUIT_TRIES=75
+
+# Teardown, installed BEFORE anything is started. The HELPER dies first: it is the
+# only process that can still inject, so killing it first means neither run's
+# shutdown is ever racing a pointer event.
+cleanup() {
+    set +e
+    if [ -n "${helper_pid:-}" ]; then
+        kill "$helper_pid" 2>/dev/null
+        wait "$helper_pid" 2>/dev/null
+    fi
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+mkfifo "$CMD_FIFO"
+wolf-pointer-inject < "$CMD_FIFO" > "$ACK_FILE" 2> "$HELPER_ERR" &
+helper_pid=$!
+
+# Hold the FIFO's write end open for the WHOLE scenario on fd 3: without it every
+# `printf > "$CMD_FIFO"` would close it and hand the helper a spurious EOF, which
+# it exits on by design. This `exec` is also what unblocks the helper's own read.
+exec 3>"$CMD_FIFO"
+seq=0
+
+hdead() {
+    if kill -0 "$helper_pid" 2>/dev/null; then
+        return 1
+    fi
+    return 0
+}
+
+hwait_ready() {
+    t=0
+    while [ "$t" -lt "$ACK_TRIES" ]; do
+        if grep -q '^ready ' "$ACK_FILE" 2>/dev/null; then
+            grep '^ready ' "$ACK_FILE" > "$READY_FILE" || true
+            return 0
+        fi
+        if hdead; then
+            echo "wolf-gnome divider relaunch smoke: wolf-pointer-inject exited before printing its readiness line." >&2
+            cat "$HELPER_ERR" >&2
+            exit 15
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome divider relaunch smoke: wolf-pointer-inject never printed 'ready ...' within budget." >&2
+    cat "$HELPER_ERR" >&2
+    exit 12
+}
+
+# Send one command and BLOCK until it is acked. The ack follows a
+# wl_display_roundtrip, so it means the compositor has PROCESSED the event.
+hsend() {
+    seq=$((seq + 1))
+    printf '%s\n' "$*" >&3
+    t=0
+    while [ "$t" -lt "$ACK_TRIES" ]; do
+        if grep -qx "ok $seq" "$ACK_FILE" 2>/dev/null; then
+            return 0
+        fi
+        if hdead; then
+            if grep -qx "ok $seq" "$ACK_FILE" 2>/dev/null; then
+                return 0
+            fi
+            echo "wolf-gnome divider relaunch smoke: wolf-pointer-inject died while handling command #$seq ($*)." >&2
+            cat "$HELPER_ERR" >&2
+            exit 15
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome divider relaunch smoke: command #$seq ($*) was never acked within budget." >&2
+    cat "$HELPER_ERR" >&2
+    exit 13
+}
+
+# `hsend`, then pace before the next event of the SAME gesture. Every event of
+# every gesture below goes through this, never through bare `hsend`; see `hstep` in
+# POINTER_PREAMBLE for the measured reason.
+hstep() {
+    hsend "$@"
+    sleep "$POINTER_STEP"
+}
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome divider relaunch smoke: readback file $f never appeared (or stayed empty)." >&2
+    cat "$HELPER_ERR" >&2
+    return 1
+}
+
+# The no-op `wtype ""` does NOT prove a surface has mapped (measured: it breaks at
+# tries=0 on every run) -- SETTLE is the real budget, see SCENARIO. $1 is the exit
+# code to use if the app dies first, so run 1 and run 2 stay distinguishable.
+wait_window() {
+    tries=0
+    while [ "$tries" -lt "$WAIT_TRIES" ]; do
+        if ! kill -0 "$app_pid" 2>/dev/null; then
+            echo "wolf-gnome divider relaunch smoke: app process exited early (pid $app_pid)" >&2
+            cat "$HELPER_ERR" >&2
+            exit "$1"
+        fi
+        if wtype "" >/dev/null 2>&1; then
+            return 0
+        fi
+        tries=$((tries + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    return 0
+}
+
+# probe_buffer <x>: click at (<x>, $PROBE_Y) and leave the TAIL NAME of the buffer
+# in the focused window in $focused.
+#
+# The buffer name rather than the window number, because each pane here holds a
+# distinctly-named file: that makes the bisection's precondition name the actual
+# panes ("the low seed must focus dvleft.md"), and it is immune to nvim numbering
+# its windows in an order this front-end does not draw them in.
+#
+# A click that lands ON the divider handle reaches no pane and changes nothing,
+# which is what the reset click in `bisect_divider` exists for. See
+# POINTER_DIVIDER_BODY's `probe_winnr` for the one recorded hazard of clicking a
+# handle: `gtk::Paned` binds Return on a FOCUSED handle, so an exit 14 immediately
+# after a probe is the thing to check first.
+probe_buffer() {
+    rm -f "$PROBE_FILE"
+    hstep motion "$1" "$PROBE_Y"
+    hstep press "$BTN_LEFT"
+    hstep release "$BTN_LEFT"
+    sleep "$POINTER_STEP"
+    wtype -- ":call writefile([fnamemodify(bufname('%'), ':t')], '$PROBE_FILE')"
+    wtype -k Return
+    wait_file "$PROBE_FILE" || exit 14
+    focused=$(cat "$PROBE_FILE")
+}
+
+# bisect_divider <lo> <hi>: locate the single divider's handle. Sets $divider_x.
+#
+# THE RESET CLICK IS LOAD-BEARING: a probe that lands on the handle focuses no
+# window at all, so it reports whatever the PREVIOUS probe focused. Re-focusing the
+# low side before every probe is what stops a handle hit being read as "the high
+# side" and converging the search on the wrong edge.
+bisect_divider() {
+    lo=$1
+    hi=$2
+    probe_buffer "$lo"
+    lo_buf=$focused
+    probe_buffer "$hi"
+    hi_buf=$focused
+    if [ "$lo_buf" != "$DIVIDER_FILE_LEFT" ] || [ "$hi_buf" != "$DIVIDER_FILE_RIGHT" ]; then
+        echo "wolf-gnome divider relaunch smoke: the bisection seeds do not straddle the divider." >&2
+        echo "  Seed $lo focused '$lo_buf' (expected $DIVIDER_FILE_LEFT) and seed $hi focused" >&2
+        echo "  '$hi_buf' (expected $DIVIDER_FILE_RIGHT). Candidate causes, in order:" >&2
+        echo "    1. the editor pane's ORIGIN moved (an adw::HeaderBar height or sidebar width" >&2
+        echo "       change) -- click_positions_the_cursor_under_cage derives it and fails first;" >&2
+        echo "    2. the measured CELL SIZE changed, so the panes are not the size modelled;" >&2
+        echo "    3. the divider HANDLE is far wider than the theme's one pixel;" >&2
+        echo "    4. a fresh split no longer produces EQUAL shares, which is what the seeds model." >&2
+        echo "  An empty name means the click focused a pane holding no file at all, i.e. the :e" >&2
+        echo "  never landed." >&2
+        exit 21
+    fi
+    steps=0
+    while [ "$steps" -lt "$BISECT_STEPS" ]; do
+        mid=$(( (lo + hi) / 2 ))
+        probe_buffer "$lo"
+        probe_buffer "$mid"
+        if [ "$focused" = "$hi_buf" ]; then
+            hi=$mid
+        else
+            lo=$mid
+        fi
+        steps=$((steps + 1))
+    done
+    divider_x=$lo
+}
+
+# read_widths <file>: one `<columns>:<buffer tail>` pair per window, space
+# separated, in whatever order Neovim enumerates its windows.
+#
+# `winwidth()`, NEVER `nvim_win_get_width()`, and that difference IS the
+# observable. MEASURED against the pinned nvim 0.12.2 with a real ext_multigrid UI
+# attached: `nvim_ui_try_resize_grid` -- which is what `WolfCore::resize_grid`
+# issues, and the only thing a divider drag ever makes reach Neovim -- changes a
+# window's GRID width and leaves its LAYOUT width untouched:
+#
+#     before                         win1 nvim_win_get_width=40 winwidth=40 | win2 nvim_win_get_width=39 winwidth=39
+#     after resizing grids to 30x20  win1 nvim_win_get_width=40 winwidth=30 | win2 nvim_win_get_width=39 winwidth=30
+#
+# So `nvim_win_get_width` is BLIND to every drag this smoke performs: a readback
+# built on it reports identical widths before and after, which is exactly how this
+# smoke first failed (22/22 cells either side of a drag the screenshot showed
+# plainly). Worse than insensitive, it also drifts on its own across the relaunch
+# -- 39/5 for panes drawn 679 and 349 px wide -- so it is not a quantity any
+# assertion here may rest on.
+#
+# Keyed by BUFFER NAME, not by window number: run 1 builds its split with an
+# interactive `<C-w>v` while run 2's is rebuilt by `wolf_rebuild_layout`, and nvim
+# need not number the same pane the same way in both. `nvim_win_get_number` turns
+# each handle into the number `winwidth` wants, so the enumeration stays
+# order-independent, and staying inside the nvim_* API keeps `$` out of the typed
+# command.
+read_widths() {
+    rm -f "$1"
+    wtype -- ":call writefile([join(map(nvim_tabpage_list_wins(0), {_, w -> winwidth(nvim_win_get_number(w)) . ':' . fnamemodify(bufname(nvim_win_get_buf(w)), ':t')}), ' ')], '$1')"
+    wtype -k Return
+    wait_file "$1" || exit 14
+}
+
+# ---------------------------------------------------------------------------
+# Bring the helper up, THEN run 1's app (so the seat already carries pointer
+# capability when GTK does its first wl_seat roundtrip).
+hwait_ready
+
+# =========================================================================
+# RUN 1 -- two panes, one dragged divider, then a clean quit.
+# =========================================================================
+"$WOLF_BIN" &
+app_pid=$!
+wait_window 11
+sleep "$SETTLE"
+
+# One in-pane motion so wl_pointer.enter and a first motion are delivered before
+# anything depends on them.
+hsend motion "$PROBE_X" "$PROBE_Y"
+sleep "$SETTLE"
+
+wtype -- ":e $DIVIDER_FILE_LEFT"
+wtype -k Return
+sleep "$SETTLE"
+
+# Vertical split: the new pane is drawn to the RIGHT of its target and takes focus.
+wtype -M ctrl -k w -m ctrl
+wtype -k v
+sleep "$SETTLE"
+
+wtype -- ":e $DIVIDER_FILE_RIGHT"
+wtype -k Return
+sleep "$SETTLE"
+
+read_widths "$DIV_W0"
+
+bisect_divider "$D_LO" "$D_HI"
+
+# THE DRAG. `hstep` for every event of the gesture.
+hstep motion "$divider_x" "$PROBE_Y"
+hstep press "$BTN_LEFT"
+hstep motion "$(( divider_x + RELAUNCH_DRAG_PX ))" "$PROBE_Y"
+hstep release "$BTN_LEFT"
+sleep "$SETTLE"
+
+read_widths "$DIV_W1"
+
+# Quit the whole application. `StateHandle::flush_on_close` is the FIRST statement
+# in the close-request handler and blocks on `StateStore::flush`, so state.json is
+# on disk before the process goes.
+wtype -- ":qa"
+wtype -k Return
+
+tries=0
+gone=0
+while [ "$tries" -lt "$QUIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        gone=1
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+if [ "$gone" -ne 1 ]; then
+    echo "wolf-gnome divider relaunch smoke: run 1 (pid $app_pid) still alive after :qa." >&2
+    exit 16
+fi
+rc=0
+wait "$app_pid" || rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo "wolf-gnome divider relaunch smoke: run 1 (pid $app_pid) exited $rc, not 0." >&2
+    echo "  It went away, but NOT cleanly -- suspect flush_on_close panicking or holding a" >&2
+    echo "  core.borrow() across wire_close's core.borrow_mut().take()." >&2
+    exit 17
+fi
+app_pid=
+
+# --- Freeze RUN 1'S SAVE before run 2 can write over it --------------------
+if [ ! -s "$DIV_STATE_SRC" ]; then
+    echo "wolf-gnome divider relaunch smoke: run 1 wrote no state.json at $DIV_STATE_SRC." >&2
+    echo "  Nothing at all was persisted, so this is not the weight write-back: suspect" >&2
+    echo "  open_state_store() resolving no directory, flush_on_close never running, or" >&2
+    echo "  WOLF_STATE_DIR not reaching the app." >&2
+    exit 18
+fi
+cp "$DIV_STATE_SRC" "$DIV_STATE_COPY"
+
+# =========================================================================
+# RUN 2 -- relaunch in the SAME cwd with the SAME state dir, and read back.
+# =========================================================================
+"$WOLF_BIN" &
+app_pid=$!
+wait_window 19
+sleep "$SETTLE"
+sleep "$RESTORE_SETTLE"
+
+read_widths "$DIV_W2"
+
+# Move focus to the WIDE left pane, AFTER the widths above are read and before the
+# screenshot.
+#
+# The blue active-pane FOCUS RING around the narrow right pane corrupts the OCR of
+# the heading inside it. Isolated by ablation on a retained PNG, one mask at a
+# time and everything else untouched:
+#
+#     as captured                     4 DIVIDERBR=AVO
+#     right pane cropped out alone    77 DIVIDERBRAVO   (correct)
+#     whole ring masked               B DIVIDERBRAVO    (correct)
+#     ring TOP edge only masked       # DIVIDERBRAVO    (correct)
+#     ring LEFT edge only masked      a DIVIDERBRAVO    (correct)
+#     ring RIGHT edge only masked     4 DIVIDERBR=AVO   (still wrong)
+#     ring BOTTOM edge only masked    4 DIVIDERBR=AVO   (still wrong)
+#
+# So it is the ring's TOP edge: a long thin high-contrast horizontal line
+# immediately above a 15-cell heading, which `--psm 11` folds into the same sparse
+# region and scales from. That is the DIVIDER_BODY_LINE_COUNT hazard from a second
+# source, and the ring is production rendering -- the active-pane treatment -- so
+# the fixture moves rather than the ring.
+#
+# `<C-w>h` is a pure FocusDir intent (the shell's `PaneTree::neighbor` ->
+# nvim_set_current_win; the FOCUS_SCENARIO precedent). It resizes nothing, so the
+# widths just read stay true whatever it does, and if focus is already on the left
+# pane it is a no-op -- the same end state either way.
+#
+# This MOVES the ring onto the left pane rather than removing it from the capture,
+# so if the OCR assertion now fails on DIVIDER_OCR_LEFT instead, this line is the
+# first suspect and the next lever is known: give dvleft.md the body dvright.md
+# already carries. The left pane is twice as wide and holds a bare heading over a
+# `~` column TODAY while reading correctly, and several sibling smokes OCR a
+# heading inside a focused pane, so the ring alone is not expected to bite there --
+# but that is inference, and only this pane has been ablated.
+wtype -M ctrl -k w -m ctrl
+wtype -k h
+sleep "$SETTLE"
+
+grim "$OUT_PNG"
+hsend quit
+exit 0
+"#;
+
 // --- S3 fixtures: the window title renders the working directory ------------
 //
 // Two NESTED temp directories, so the `~` abbreviation is exercised rather than
@@ -4621,9 +5441,9 @@ exit 0
 /// captive nvim runs in (the recent-files MRU lives in the global
 /// `state_dir()/file-mru.sqlite`, not under the cwd).
 ///
-/// ALL TWENTY-THREE smokes derive their working directory from this — the window
+/// ALL TWENTY-FIVE smokes derive their working directory from this — the window
 /// title smoke uses the result as the base for the two NESTED directories its `~`
-/// abbreviation needs, and the two relaunch smokes share one of these directories
+/// abbreviation needs, and the three relaunch smokes share one of these directories
 /// across BOTH of their launches, which is the whole scenario. A fresh cwd per run
 /// is MANDATORY, not tidiness:
 ///
@@ -5078,7 +5898,7 @@ const HOME_STATE_DIR_FALLBACKS: [&str; 2] = [".local/state/wolf", ".local/share/
 /// the "Note (OCR width)" / "Note (OCR height)" paragraphs above their own consts,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
-/// be applied here to all twenty-three.
+/// be applied here to all twenty-five.
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
@@ -5666,6 +6486,116 @@ fn assert_fixture_fits(smoke: &str, dims: (i64, i64), probe_line: i64, rows_belo
     );
 }
 
+/// The MODELLED on-screen x of the divider that follows column `index` (1-based)
+/// when the editor pane is divided into `columns` equal columns, in output pixels.
+///
+/// A model, and knowingly a rough one: a `gtk::Paned` positions its divider at a
+/// fraction of its TRAVEL rather than of its width, so this over-estimates by the
+/// handle and the far child's minimum — worth ~15-20 px per divider here. It exists
+/// only to seed a bisection, which is what actually finds the handle.
+fn equal_share_divider_x(index: i64, columns: i64) -> f64 {
+    let editor_w =
+        exact_f64(CAGE_OUTPUT_W_EXPECTED, "CAGE_OUTPUT_W_EXPECTED") - PANE_ORIGIN_X_EXPECTED;
+    let share = exact_f64(index, "the divider index") / exact_f64(columns, "the column count");
+    PANE_ORIGIN_X_EXPECTED + editor_w * share
+}
+
+/// The `(LO, HI)` seeds a bisection for the divider after column `index` of
+/// `columns` starts from: [`equal_share_divider_x`] widened by
+/// [`BISECT_SEED_MARGIN_PX`] on each side.
+///
+/// Both seeds must land INSIDE the panes either side of that divider, which the
+/// scenario checks for itself before it searches — see `bisect_divider`.
+fn divider_seed_span(index: i64, columns: i64) -> (i64, i64) {
+    let nominal = equal_share_divider_x(index, columns);
+    let margin = exact_f64(BISECT_SEED_MARGIN_PX, "BISECT_SEED_MARGIN_PX");
+    (
+        pixel_target(nominal - margin, "the bisection LO seed"),
+        pixel_target(nominal + margin, "the bisection HI seed"),
+    )
+}
+
+/// Parses a name-keyed pane-width readback: whitespace-separated
+/// `<columns>:<buffer tail>` pairs, one per Neovim window, in whatever order
+/// Neovim enumerated them.
+///
+/// Keyed by NAME rather than by position because nvim numbers its windows by its
+/// own layout, which need not match the order this front-end draws the panes in.
+///
+/// The columns are `winwidth()`, the GRID width `resize_grid` drives — NOT
+/// `nvim_win_get_width()`, which reports the layout width and is measurably blind
+/// to a divider drag. [`DIVIDER_RELAUNCH_SCENARIO`]'s `read_widths` carries the
+/// measurement; do not "simplify" the readback back to the API call.
+fn read_pane_widths(path: &Path, smoke: &str) -> Vec<(String, i64)> {
+    let raw = read_readback(path, smoke);
+    let mut out = Vec::new();
+    for token in raw.split_whitespace() {
+        let (width, name) = token.split_once(':').unwrap_or_else(|| {
+            panic!(
+                "{smoke}: pane-width token {token:?} in {} is not `<columns>:<buffer tail>`. Raw \
+                 contents were {raw:?}.",
+                path.display()
+            )
+        });
+        out.push((
+            name.to_string(),
+            parse_readback_int(width, path, &raw, smoke),
+        ));
+    }
+    assert!(
+        !out.is_empty(),
+        "{smoke}: the pane-width readback {} holds no `<columns>:<buffer tail>` pairs at all. Raw \
+         contents were {raw:?}.",
+        path.display()
+    );
+    out
+}
+
+/// The head pane's share of a head/tail pair of widths, as a fraction.
+///
+/// The pair rather than the whole window: the two panes either side of one
+/// `gtk::Paned` are what that paned's position governs, and every other pane's
+/// width is irrelevant to it.
+fn head_width_ratio(head: i64, tail: i64, smoke: &str, what: &str) -> f64 {
+    let total = head + tail;
+    assert!(
+        total > 0,
+        "{smoke}: {what} report {head} and {tail} cells, a total of {total}. A ratio cannot be \
+         taken of that, and a non-positive pane width means Neovim was never resized to the \
+         widget's allocation at all."
+    );
+    exact_f64(head, "a pane width") / exact_f64(total, "a pane-pair total width")
+}
+
+/// The file NAME of a persisted leaf's path — `None` for a split, and `None` for a
+/// leaf whose path is empty or has no final component.
+fn leaf_tail(node: &PaneNode) -> Option<&str> {
+    match node {
+        PaneNode::Leaf { path, .. } => Path::new(path).file_name().and_then(OsStr::to_str),
+        PaneNode::Split { .. } => None,
+    }
+}
+
+/// The width, in columns, of the pane showing the buffer whose tail name is `name`.
+///
+/// Panics naming every pane that WAS present, because "the pane holding this file
+/// is gone" and "the pane holding this file is the wrong width" are different
+/// findings and must not share a message.
+fn pane_width_for(panes: &[(String, i64)], name: &str, path: &Path, smoke: &str) -> i64 {
+    panes
+        .iter()
+        .find(|(buffer, _)| buffer == name)
+        .map(|(_, width)| *width)
+        .unwrap_or_else(|| {
+            panic!(
+                "{smoke}: no pane in {} is showing {name:?}. The panes present were {panes:?}. An \
+                 `Untitled.md` here means the file was never opened (run 1) or never restored (run \
+                 2); an EMPTY name means a pane is bound to an unnamed buffer.",
+                path.display()
+            )
+        })
+}
+
 /// Asserts the restart button's rect is the NAMED size, before anything derives a
 /// click point from it.
 ///
@@ -5763,7 +6693,7 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// explicit, documented exemption for the two title directory names rather than
 /// widening this table's guards to cover them.
 ///
-/// Nineteen of the twenty-three smokes appear here. FOUR contribute no rows at
+/// Twenty of the twenty-five smokes appear here. FIVE contribute no rows at
 /// all, on purpose, and it is worth being explicit about which and why:
 ///
 /// * [`colon_qa_closes_the_window_under_cage`] captures no PNG and asserts only that
@@ -5775,6 +6705,10 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 ///   `visualmode()` plus `'<`/`'>`, and `line('w0')` — not on pixels. They still
 ///   capture and retain a screenshot for post-mortem, but no assertion reads it, so
 ///   no fixture filename can help or hurt them.
+/// * [`divider_drag_survives_a_pane_relayout_under_cage`] for the same reason: it
+///   asserts on the pane WIDTHS Neovim reports for its own windows, writes no
+///   fixture file at all, and its retained screenshot is post-mortem evidence
+///   rather than an observable.
 ///
 /// The other two pointer smokes DO OCR and their terms are listed below. For
 /// [`click_then_close_keeps_keyboard_input_alive_under_cage`] the OCR pair is
@@ -5961,9 +6895,19 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         "TITLE_OCR_ABSENT",
         "window_title_shows_the_working_directory_under_cage",
     ),
+    (
+        DIVIDER_OCR_LEFT,
+        "DIVIDER_OCR_LEFT",
+        "dragged_divider_weights_survive_relaunch_under_cage",
+    ),
+    (
+        DIVIDER_OCR_RIGHT,
+        "DIVIDER_OCR_RIGHT",
+        "dragged_divider_weights_survive_relaunch_under_cage",
+    ),
 ];
 
-/// Every fixture NAME the three state-persistence smokes create inside their own
+/// Every fixture NAME the state-persistence smokes create inside their own
 /// working directory, as `(name, const name, the smoke that owns it)`.
 ///
 /// The tree sidebar renders every cwd entry BY NAME, so each of these is page text
@@ -6009,6 +6953,31 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "SOLO_READBACK_NAME",
         "single_pane_file_survives_relaunch_under_cage",
     ),
+    (
+        DIVIDER_FILE_LEFT,
+        "DIVIDER_FILE_LEFT",
+        "dragged_divider_weights_survive_relaunch_under_cage",
+    ),
+    (
+        DIVIDER_FILE_RIGHT,
+        "DIVIDER_FILE_RIGHT",
+        "dragged_divider_weights_survive_relaunch_under_cage",
+    ),
+    (
+        DIVIDER_W0_NAME,
+        "DIVIDER_W0_NAME",
+        "dragged_divider_weights_survive_relaunch_under_cage",
+    ),
+    (
+        DIVIDER_W1_NAME,
+        "DIVIDER_W1_NAME",
+        "dragged_divider_weights_survive_relaunch_under_cage",
+    ),
+    (
+        DIVIDER_W2_NAME,
+        "DIVIDER_W2_NAME",
+        "dragged_divider_weights_survive_relaunch_under_cage",
+    ),
 ];
 
 /// Mechanically enforces the naming invariant documented on [`SIDEBAR_FILLER_FILES`]:
@@ -6044,11 +7013,13 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 /// `restorecharlie` ([`RESTORE_OCR_ALFA`] / [`RESTORE_OCR_BRAVO`] /
 /// [`RESTORE_OCR_CHARLIE`]), `solozulu` ([`SOLO_OCR_PRESENT`]), `soloalfa`
 /// ([`SOLO_OCR_ABSENT`]), `titlezulu` ([`TITLE_OCR_PRESENT`]) and `titlehome`
-/// ([`TITLE_OCR_ABSENT`]). None is a substring of any [`SIDEBAR_FILLER_FILES`] entry,
-/// and no filler may be renamed to make one so. Four smokes contribute no term:
+/// ([`TITLE_OCR_ABSENT`]); and — added with the divider-drag unit — `divideralfa`
+/// and `dividerbravo` ([`DIVIDER_OCR_LEFT`] / [`DIVIDER_OCR_RIGHT`]). None is a
+/// substring of any [`SIDEBAR_FILLER_FILES`] entry, and no filler may be renamed to
+/// make one so. Five smokes contribute no term:
 /// [`colon_qa_closes_the_window_under_cage`] asserts on the cage exit status and
-/// captures no image, and the click, drag and scroll pointer smokes assert on files
-/// the captive Neovim writes about its own state rather than on pixels.
+/// captures no image, and the click, drag, scroll and divider-relayout smokes assert
+/// on files the captive Neovim writes about its own state rather than on pixels.
 ///
 /// ## What it does NOT guard (and why that matters)
 ///
@@ -6081,11 +7052,12 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the twenty-three smokes — still
+/// nothing to the smoke suite's runtime and — unlike the twenty-five smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
-    // Guard the guard: `ocr_to_lowercase` lowercases tesseract's output before every
+    // Guard the guard: both OCR readers — `ocr_to_lowercase` and
+    // `ocr_uniform_block_to_lowercase` — lowercase tesseract's output before every
     // `contains`, so an OCR const that is not itself lowercase could never match a real
     // capture — and would make the filename check below vacuous too.
     for &(term, const_name, smoke) in ASSERTED_OCR_TERMS {
@@ -6293,9 +7265,21 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// [`TITLE_HOME_DIR`] must contain [`TITLE_OCR_ABSENT`] (the assertion is that
 /// the home segment is abbreviated to `~` and therefore NOT drawn). This is the
 /// same shape as [`tree_sidebar_shows_files_under_cage`]'s exemption from the
-/// filler guard. Rather than leave that as prose, the last block below asserts
+/// filler guard. Rather than leave that as prose, the third block below asserts
 /// the exemption's PRECONDITIONS — including the crossed pair, where a mistake
 /// really would be fatal.
+///
+/// ## The one fixture whose CONTENT is checked too
+///
+/// Every other relaunch fixture is a bare heading, so its name is the only thing
+/// that can collide with an assertion. [`DIVIDER_FILE_RIGHT`] also carries the body
+/// [`divider_right_fixture_body`] builds — page density for a 15-cell pane, see
+/// [`DIVIDER_BODY_LINE_COUNT`] — and every one of those lines renders in the same
+/// pane as the heading the divider relaunch smoke asserts on. A body line carrying
+/// an asserted term would satisfy that assertion with the heading never drawn,
+/// which is the [`PICKER_FILE_NAME`] failure reached through CONTENT instead of
+/// through a name. The last block below checks it here rather than from a guard of
+/// its own so the smoke count this file's docs pin does not move.
 ///
 /// PURE, like its two siblings: no compositor, no `require_smoke_env`, no
 /// `CAGE_LOCK`, no subprocess.
@@ -6376,6 +7360,56 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          If the home segment ever did get rendered it would then satisfy the must-CONTAIN \
          assertion on its own, and a broken abbreviation would look like a pass."
     );
+
+    // The one relaunch fixture whose CONTENT is more than a heading, checked here
+    // rather than in a guard of its own so the smoke count this file's docs pin
+    // stays put. Its lines are editor text in the very pane whose heading
+    // `dragged_divider_weights_survive_relaunch_under_cage` asserts on, so a body
+    // line carrying an asserted term would satisfy that assertion with the heading
+    // never drawn — the `PICKER_FILE_NAME` failure reached through content instead
+    // of through a name. Both directions matter here exactly as they do above.
+    let fixture = divider_right_fixture_body();
+    let lines: Vec<&str> = fixture.lines().collect();
+    assert_eq!(
+        lines.len(),
+        DIVIDER_BODY_LINE_COUNT + 1,
+        "`divider_right_fixture_body` produced {} line(s), expected the heading plus \
+         DIVIDER_BODY_LINE_COUNT = {DIVIDER_BODY_LINE_COUNT} body lines. The body's whole job is \
+         to fill the narrow pane past the measured winheight(0) of 14 so no `~` end-of-buffer \
+         column is drawn; a short body puts that column back and tesseract misreads the heading \
+         above it (see DIVIDER_BODY_LINE_COUNT for the ablations that isolated it).",
+        lines.len()
+    );
+    assert_eq!(
+        lines.first().copied(),
+        Some(DIVIDER_HEADING_RIGHT),
+        "`divider_right_fixture_body`'s FIRST line must be DIVIDER_HEADING_RIGHT = \
+         {DIVIDER_HEADING_RIGHT:?} — that is the line the smoke's OCR assertion reads, and a body \
+         line ahead of it would push it down the pane for no stated reason."
+    );
+    for (index, line) in lines.iter().enumerate().skip(1) {
+        let lowercased = line.to_lowercase();
+        for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {
+            assert!(
+                !lowercased.contains(term),
+                "body line {index} of `divider_right_fixture_body` ({line:?}) contains \
+                 {term_const} = {term:?}. That line renders in the SAME pane as \
+                 DIVIDER_HEADING_RIGHT, so it would satisfy — or, for a must-NOT-contain term, \
+                 spuriously break — `{smoke}`'s OCR assertion with the heading itself unrendered: \
+                 the silent false positive that let \
+                 `picker_opens_and_loads_selected_file_under_cage` pass while the picker never \
+                 opened. The body is PAGE DENSITY and nothing else, so keep it to digits and `x`; \
+                 do NOT change the OCR const and do NOT touch the smoke's assertion."
+            );
+        }
+        assert!(
+            line.chars().all(|c| c.is_ascii_digit() || c == 'x'),
+            "body line {index} of `divider_right_fixture_body` is {line:?}, which is not digits \
+             and `x` alone. The loop above only rejects the terms asserted on TODAY; keeping the \
+             body wordless is what keeps it safe against a term added tomorrow by a smoke that \
+             never looks at this file."
+        );
+    }
 }
 
 #[test]
@@ -9374,8 +10408,12 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
     );
 }
 
-/// Writes the three [`RELAUNCH_FIXTURE_NAMES`] markdown fixtures a smoke owns into
-/// `cwd`, plus the [`SIDEBAR_FILLER_FILES`] page-density fixture.
+/// Writes the [`RELAUNCH_FIXTURE_NAMES`] markdown fixtures a smoke owns into `cwd`,
+/// plus the [`SIDEBAR_FILLER_FILES`] page-density fixture.
+///
+/// Each `contents` is a whole file, newline-terminated here rather than by the
+/// caller. Most callers pass a bare heading; the divider smoke's right-hand fixture
+/// passes a heading plus a body ([`divider_right_fixture_body`]).
 ///
 /// The fillers are FIXTURE, not assertion: the asserted terms in both relaunch
 /// smokes are sparse, light-on-dark EDITOR text, which is exactly the case
@@ -9385,9 +10423,9 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
 /// [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`] is what keeps one
 /// from satisfying an assertion by accident.
 fn write_relaunch_fixtures(smoke: &str, cwd: &Path, files: &[(&str, &str)]) {
-    for (name, heading) in files {
+    for (name, contents) in files {
         let path = cwd.join(name);
-        std::fs::write(&path, format!("{heading}\n"))
+        std::fs::write(&path, format!("{contents}\n"))
             .unwrap_or_else(|e| panic!("{smoke}: failed to write fixture {}: {e}", path.display()));
     }
     for name in SIDEBAR_FILLER_FILES {
@@ -9447,12 +10485,12 @@ fn state_file_fingerprint(path: &Path) -> Option<(u64, Option<SystemTime>)> {
 ///
 /// ## What it does NOT prove
 ///
-/// **Nothing here exercises non-equal pane WEIGHTS.** Divider drag-to-resize is not
-/// implemented on Linux, so every persisted weight is an equal share and no smoke
-/// can distinguish "the saved weights were applied to the dividers" from "the
-/// equal-share default was recomputed" — the two agree numerically. The weight
-/// FORMAT is pinned headlessly by `pane_layout::tests::decode_round_trips_encode`,
-/// which uses `[0.25, 0.75]`; only the pixels are unproven.
+/// **Nothing here exercises non-equal pane WEIGHTS.** This scenario never drags a
+/// divider, so every weight it persists is an equal share, and "the saved weights
+/// were applied to the dividers" and "the equal-share default was recomputed" agree
+/// numerically throughout. It proves the TOPOLOGY round trip and nothing about the
+/// weights; [`dragged_divider_weights_survive_relaunch_under_cage`] is the smoke
+/// that drags one and asserts on the value that comes back.
 ///
 /// ## Red-run revert (one, and one line)
 ///
@@ -9928,6 +10966,780 @@ fn single_pane_file_survives_relaunch_under_cage() {
     );
 }
 
+/// A user's divider drag becomes the LAYOUT'S WEIGHTS, so it survives the next
+/// re-allocation of the paned that carries it.
+///
+/// ## What it proves
+///
+/// That a real `wl_pointer` drag of a `gtk::Paned` handle is written back into the
+/// pure tree, and that the `max-position` re-apply then re-derives the divider from
+/// THAT rather than from a ratio frozen when the widget was built. Those two are
+/// one property from the outside: drag one divider, then re-allocate its paned by
+/// dragging a different one, and see whether the first drag is still there.
+///
+/// Nothing here is a pixel assertion. Every observable is `winwidth()` for a window
+/// Neovim reports about itself, so no OCR term and no fixture file is involved at
+/// all — which is also why this smoke contributes no row to [`ASSERTED_OCR_TERMS`].
+///
+/// ## How it finds the divider, and why not by arithmetic
+///
+/// The handle's width is theme-owned and its position is a fraction of the paned's
+/// TRAVEL, which subtracts the handle and the far child's minimum — so nothing this
+/// repo controls can predict it to within a handle width. The scenario therefore
+/// BISECTS for it against Neovim's own `winnr()`, with a reset click before every
+/// probe because a click that lands on the handle focuses no window at all. See
+/// `bisect_divider` in [`POINTER_DIVIDER_BODY`]; the modelled seed from
+/// [`divider_seed_span`] is a seed and nothing more.
+///
+/// ## Why assertion 5 cannot pass without the feature
+///
+/// The outer drag changes the INNER paned's allocation, which is the one thing that
+/// changes its `max-position` and fires the re-apply. Without the write-back the
+/// tree still holds equal thirds, the re-apply restores `0.5`, and the middle and
+/// right panes come back equal — MEASURED in the red run below at 18 vs 19 cells,
+/// against the 0.7 share the inner drag had just left them at (widths
+/// `[14, 21, 9]`, which the write-back is what preserves).
+///
+/// Its second clause is what stops the first being vacuous, and the hazard is real:
+/// `set_size_request` is a MINIMUM and a centred widget stays centred, so an
+/// assertion sited at a midpoint can hold for any size. Here "the ratio did not
+/// change" would be satisfied by a ratio that snapped back to `0.5` if the drag had
+/// never taken effect — so the ratio is also required to sit at least
+/// [`MIN_RATIO_OFFSET`] away from the centre, and assertion 2 has already excluded
+/// a drag that did nothing.
+///
+/// ## Red-run revert (one line)
+///
+/// | assertion | revert | expected red symptom | measured |
+/// | --- | --- | --- | --- |
+/// | 5 | delete the `notify::position` handler from `pane_view::install_paned_position` | assertions 1-4 stay GREEN — the drag itself is stock `gtk::Paned` behaviour and is measured before any re-layout — and assertion 5 fires on its ratio-preservation clause, with the middle and right panes back at equal widths | AS PREDICTED. Assertions 1-4 all passed; assertion 5 fired on the ratio-preservation clause: "the middle pane's share of the middle/right pair was 0.7 after the inner drag and 0.4864864864864865 after the outer one — a change of 0.21351351351351344, beyond the 0.08 that cell quantization can explain. … Widths after the inner drag [14, 21, 9], after the outer drag [7, 18, 19]." `0 passed; 1 failed` in 57.41s |
+#[test]
+fn divider_drag_survives_a_pane_relayout_under_cage() {
+    const SMOKE: &str = "divider_drag_survives_a_pane_relayout_under_cage";
+    // Columns the scenario builds, and therefore the denominator the bisection
+    // seeds are modelled from.
+    const COLUMNS: i64 = 3;
+    // How many windows every width readback must report.
+    const EXPECTED_WINDOWS: i64 = 3;
+    // How far the LEFT pane's reported width may move while the INNER divider is
+    // dragged. The inner drag leaves the left pane's ALLOCATION untouched, so
+    // nothing resizes its grid, and `nvim_ui_try_resize_grid` was MEASURED not to
+    // reflow Neovim's own layout — so the honest expectation is that it does not
+    // move at all. The spare cell is slack against Neovim's bookkeeping rather than
+    // against any known effect, and it costs nothing: a drag that hit the OUTER
+    // handle instead would move this pane by the whole drag distance, six cells or
+    // more.
+    const UNDISTURBED_CELLS: i64 = 2;
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // A fresh temp cwd like every other smoke. It stays EMPTY of fixtures: this
+    // smoke opens no file and renders nothing it asserts on.
+    let cwd = make_temp_cwd();
+
+    let w_base = cwd.join("divider_widths_base.txt");
+    let w_inner = cwd.join("divider_widths_inner.txt");
+    let w_outer = cwd.join("divider_widths_outer.txt");
+    let wins = cwd.join("divider_windows.txt");
+    // The bisection's scratch file lives OUTSIDE the cwd: it is written and removed
+    // once per probe, and the sidebar watches the cwd.
+    let probe = runtime_dir.join("wolf_gnome_divider_relayout_probe.txt");
+    let out_png = runtime_dir.join("wolf_gnome_divider_relayout_smoke.png");
+    for path in [&w_base, &w_inner, &w_outer, &wins, &probe, &out_png] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let (d0_lo, d0_hi) = divider_seed_span(1, COLUMNS);
+    let (d1_lo, d1_hi) = divider_seed_span(2, COLUMNS);
+    let d0_lo_env = d0_lo.to_string();
+    let d0_hi_env = d0_hi.to_string();
+    let d1_lo_env = d1_lo.to_string();
+    let d1_hi_env = d1_hi.to_string();
+    let steps_env = BISECT_STEPS.to_string();
+    let inner_env = DIVIDER_INNER_DRAG_PX.to_string();
+    let outer_env = DIVIDER_OUTER_DRAG_PX.to_string();
+
+    let status = run_pointer_scenario(
+        POINTER_DIVIDER_BODY,
+        &cwd,
+        &out_png,
+        &[
+            ("PROBE_FILE", probe.as_os_str()),
+            ("WINS", wins.as_os_str()),
+            ("W_BASE", w_base.as_os_str()),
+            ("W_INNER", w_inner.as_os_str()),
+            ("W_OUTER", w_outer.as_os_str()),
+            ("D0_LO", OsStr::new(&d0_lo_env)),
+            ("D0_HI", OsStr::new(&d0_hi_env)),
+            ("D1_LO", OsStr::new(&d1_lo_env)),
+            ("D1_HI", OsStr::new(&d1_hi_env)),
+            ("BISECT_STEPS", OsStr::new(&steps_env)),
+            ("INNER_DRAG_PX", OsStr::new(&inner_env)),
+            ("OUTER_DRAG_PX", OsStr::new(&outer_env)),
+        ],
+    );
+
+    // This smoke's OWN exit codes first: the shared helper below names 11-15 and
+    // would report a bisection failure as an unexplained non-zero status.
+    assert!(
+        !matches!(status.code(), Some(21..=23)),
+        "{SMOKE}: the cage scenario exited {status}, which is a BISECTION precondition failure, not \
+         an assertion failure. Exit 21: the seeds for divider 0 ({d0_lo}, {d0_hi}) both focused the \
+         same window. Exit 22: the same for divider 1 ({d1_lo}, {d1_hi}). Exit 23: the two \
+         bisections disagree about which window is the middle pane. The scenario's own stderr \
+         names the four candidate causes in order — pane origin, cell size, handle width, the \
+         equal-share assumption. Read `click_positions_the_cursor_under_cage` first: it derives \
+         PANE_ORIGIN_X_EXPECTED = {PANE_ORIGIN_X_EXPECTED} and fails on its own if that moved. PNG \
+         kept at {}.",
+        out_png.display()
+    );
+    assert_pointer_scenario_succeeded(SMOKE, status, &cwd, &out_png);
+    assert_png_present(SMOKE, &out_png);
+
+    // Extents FIRST: a compositor-clamped injection would land somewhere other than
+    // the point this smoke computed and make every message below point at the wrong
+    // thing. The two drag END points are bounded by the seeds, so checking the
+    // extremes covers every injected x.
+    let extents = read_output_extents(&cwd, SMOKE);
+    for (label, x) in [
+        ("the divider-0 LO seed", d0_lo),
+        ("the divider-0 HI seed", d0_hi),
+        ("the divider-1 LO seed", d1_lo),
+        ("the divider-1 HI seed", d1_hi),
+        (
+            "the furthest RIGHT the inner drag can reach",
+            d1_hi + DIVIDER_INNER_DRAG_PX,
+        ),
+        (
+            "the furthest LEFT the outer drag can reach",
+            d0_lo - DIVIDER_OUTER_DRAG_PX,
+        ),
+    ] {
+        assert_inside_extents(SMOKE, label, (x, i64::from(PROBE_Y)), extents);
+    }
+
+    // The window numbers the bisection discovered, purely so every message below can
+    // print them: nvim numbers windows by ITS layout, not by the order this
+    // front-end draws the panes in.
+    let numbering = read_ints(&wins, 3, SMOKE);
+    assert!(
+        numbering[0] != numbering[1]
+            && numbering[1] != numbering[2]
+            && numbering[0] != numbering[2],
+        "{SMOKE}: the bisections discovered window numbers {numbering:?} for the left, middle and \
+         right panes, but two of them are the same — so at least one seed landed in a pane it was \
+         not meant to and the widths below are not three different panes."
+    );
+
+    let w0 = read_ints(&w_base, 4, SMOKE);
+    let w1 = read_ints(&w_inner, 4, SMOKE);
+    let w2 = read_ints(&w_outer, 4, SMOKE);
+    for (label, widths) in [
+        ("the baseline", &w0),
+        ("after the inner drag", &w1),
+        ("after the outer drag", &w2),
+    ] {
+        assert_eq!(
+            widths[3], EXPECTED_WINDOWS,
+            "{SMOKE}: Neovim reports {} windows {label}, expected {EXPECTED_WINDOWS}. Two `<C-w>v` \
+             must leave a flat row of three panes; a different count means a split did not land (or \
+             one closed), and the three widths are not the three columns this smoke thinks they \
+             are. Widths were {widths:?}, window numbering {numbering:?}. PNG kept at {}.",
+            widths[3],
+            out_png.display()
+        );
+    }
+
+    // --- Assertion 1: the baseline really is three roughly equal columns -------
+    //
+    // A PRECONDITION as much as an assertion: it is the equal-share assumption the
+    // bisection seeds are modelled on.
+    let widest = w0[0].max(w0[1]).max(w0[2]);
+    let narrowest = w0[0].min(w0[1]).min(w0[2]);
+    assert!(
+        widest - narrowest <= BASELINE_TOLERANCE_CELLS,
+        "{SMOKE}: the three fresh panes are {:?} cells wide, a spread of {} — more than the \
+         {BASELINE_TOLERANCE_CELLS} cells a chain of paneds positioned by TRAVEL rather than by \
+         width can account for. The bisection seeds are modelled on equal shares, so this also \
+         says those seeds are aimed at the wrong pixels. PNG kept at {}.",
+        &w0[..3],
+        widest - narrowest,
+        out_png.display()
+    );
+
+    // --- Assertion 2: the inner drag actually moved the inner divider ----------
+    assert!(
+        w1[1] > w0[1] + MIN_DRAG_CELLS,
+        "{SMOKE}: after dragging the inner divider {DIVIDER_INNER_DRAG_PX} px to the RIGHT the \
+         middle pane is {} cells wide, up from {} — less than the {MIN_DRAG_CELLS} cells that \
+         counts as movement. Read this FIRST as: THE PRESS MISSED THE DIVIDER HANDLE, which is a \
+         harness failure and not a product one — the bisection converged on the wrong pixel, or \
+         the handle is narrower than the two-pixel residual {BISECT_STEPS} halvings leave. Only \
+         after ruling that out does it mean `gtk::Paned` stopped moving on a drag at all. Baseline \
+         {:?}, after the drag {:?}, window numbering {numbering:?}. PNG kept at {}.",
+        w1[1],
+        w0[1],
+        &w0[..3],
+        &w1[..3],
+        out_png.display()
+    );
+    assert!(
+        w1[2] < w0[2] - MIN_DRAG_CELLS,
+        "{SMOKE}: the middle pane grew but the RIGHT pane did not shrink ({} cells, from {}). The \
+         two share one paned, so this means the drag resized something else — check that the \
+         bisection found the INNER divider and not the outer one. Baseline {:?}, after the drag \
+         {:?}. PNG kept at {}.",
+        w1[2],
+        w0[2],
+        &w0[..3],
+        &w1[..3],
+        out_png.display()
+    );
+
+    // --- Assertion 3: the inner drag did not disturb the outer divider ---------
+    assert!(
+        (w1[0] - w0[0]).abs() <= UNDISTURBED_CELLS,
+        "{SMOKE}: dragging the INNER divider moved the LEFT pane from {} to {} cells. The left pane \
+         is the OUTER paned's start child, and resizing inside that paned's end child cannot move \
+         it — so read this as: THE FIRST BISECTION FOUND THE WRONG HANDLE and this drag was \
+         actually on divider 0. The other candidate is a write-back that named the wrong (path, \
+         boundary) and a later re-apply propagating it. Either way assertion 5 below would be \
+         measuring the wrong pair. Baseline {:?}, after the drag {:?}. PNG kept at {}.",
+        w0[0],
+        w1[0],
+        &w0[..3],
+        &w1[..3],
+        out_png.display()
+    );
+
+    // --- Assertion 4: the outer drag actually moved the outer divider ----------
+    assert!(
+        w2[0] < w1[0] - MIN_DRAG_CELLS,
+        "{SMOKE}: after dragging the outer divider {DIVIDER_OUTER_DRAG_PX} px to the LEFT the left \
+         pane is {} cells wide, down from {} — less than the {MIN_DRAG_CELLS} cells that counts as \
+         movement. As with assertion 2, read this first as THE PRESS MISSED THE DIVIDER HANDLE. \
+         Without this drag the re-apply below is never provoked at all, so assertion 5 would prove \
+         nothing. After the inner drag {:?}, after the outer drag {:?}. PNG kept at {}.",
+        w2[0],
+        w1[0],
+        &w1[..3],
+        &w2[..3],
+        out_png.display()
+    );
+
+    // --- Assertion 5: THE assertion --------------------------------------------
+    let ratio1 = head_width_ratio(
+        w1[1],
+        w1[2],
+        SMOKE,
+        "the middle/right pair after the inner drag",
+    );
+    let ratio2 = head_width_ratio(
+        w2[1],
+        w2[2],
+        SMOKE,
+        "the middle/right pair after the outer drag",
+    );
+    assert!(
+        (ratio2 - ratio1).abs() <= RATIO_TOLERANCE,
+        "{SMOKE}: the middle pane's share of the middle/right pair was {ratio1} after the inner \
+         drag and {ratio2} after the outer one — a change of {}, beyond the {RATIO_TOLERANCE} that \
+         cell quantization can explain. THE OUTER DRAG RE-ALLOCATED THE INNER PANED, and whatever \
+         its `max-position` handler read is what those two panes now share. A ratio back at ~0.5 \
+         means it re-derived from a ratio captured when the widget was built instead of from the \
+         live tree — i.e. the drag was never written back. Assertions 2 and 4 already proved both \
+         drags moved, so this is not a missed handle. Widths after the inner drag {:?}, after the \
+         outer drag {:?}. PNG kept at {}.",
+        (ratio2 - ratio1).abs(),
+        &w1[..3],
+        &w2[..3],
+        out_png.display()
+    );
+    assert!(
+        (ratio2 - 0.5).abs() >= MIN_RATIO_OFFSET,
+        "{SMOKE}: the preserved ratio is {ratio2}, within {MIN_RATIO_OFFSET} of dead centre — so \
+         the clause above (`the ratio did not change`) is VACUOUS here: an equal split satisfies it \
+         whenever the drag never took effect. This clause is what keeps the assertion honest, and \
+         it fires either because the inner drag was too small to be distinguishable from centre (a \
+         FIXTURE problem — raise DIVIDER_INNER_DRAG_PX, never lower MIN_RATIO_OFFSET) or because \
+         both panes really did come back equal. Widths after the outer drag {:?}. PNG kept at {}.",
+        &w2[..3],
+        out_png.display()
+    );
+}
+
+/// A dragged divider's weights reach `state.json` and come back on the next launch.
+///
+/// The round trip unit 4 built the channel for, driven for the first time by a
+/// weight that is NOT an equal share — which is what makes "the saved weights were
+/// applied" distinguishable from "the equal-share default was recomputed" at all.
+///
+/// Two app launches run inside ONE `cage` instance, with `wolf-pointer-inject` alive
+/// across both; see [`DIVIDER_RELAUNCH_SCENARIO`] for the exit-code table and for
+/// why it duplicates the pointer plumbing rather than reusing
+/// [`POINTER_PREAMBLE`].
+///
+/// ## What it asserts
+///
+/// 1. **The save side, on the FILE.** The `state.json` RUN 1 wrote — frozen by the
+///    scenario before run 2 can write over it — carries a `Vertical` split of two
+///    named leaves whose weights sum to 1 and differ by at least
+///    [`MIN_WEIGHT_GAP`]. Nothing before this unit could write such a vector:
+///    `layout.rs`'s only writers produce `1/n` and `[0.5, 0.5]`.
+/// 2. **The restore side, on run 2's PIXELS.** The restored panes' width ratio
+///    matches run 1's post-drag ratio and sits at least [`MIN_RATIO_OFFSET`] off
+///    centre. The second clause is what stops the first being satisfied by a
+///    re-centred pair.
+/// 3. **Corroboration.** OCR carries both headings, so two panes really did bind
+///    grids and paint. The capture is read twice — `--psm 11` through
+///    [`ocr_to_lowercase`] and `--psm 6` through [`ocr_uniform_block_to_lowercase`]
+///    — and each term is accepted from either reading, for the reason under
+///    "Reading a 15-cell column" below. Both terms are still demanded literally.
+///
+/// The two preconditions before them — the baseline pair is equal, and the drag
+/// moved it — are what separate "the press missed the divider handle" from "the
+/// weight was not written back". Without them a `[0.5, 0.5]` on disk would be
+/// ambiguous between the two.
+///
+/// ## Measured geometry, and what the assertions have margin against
+///
+/// Every width here is `winwidth()` — the GRID width the front-end drives through
+/// `resize_grid`. `nvim_win_get_width()` is the LAYOUT width and cannot see a
+/// divider drag at all; see [`DIVIDER_RELAUNCH_SCENARIO`]'s `read_widths` for the
+/// measurement that pins the difference.
+///
+/// | quantity | value |
+/// | --- | --- |
+/// | paned travel at the drag | `max_position` 1005 px, position 679 px after it, fraction 0.6756 |
+/// | run 1 post-drag, MEASURED at the `resize_grid` calls | 30 and 15 cells, ratio 0.667 |
+/// | run 2's restored panes, MEASURED in pixels | 679 and 349 px — the same 30 and 15 cells |
+/// | run 1 baseline, DERIVED from half the same travel | about 22 and 23 cells |
+/// | the narrow pane against the 14-character heading | 15 columns, one to spare |
+///
+/// So [`MIN_DRAG_CELLS`] (3) sits against a move of about 8 cells per pane,
+/// [`RATIO_TOLERANCE`] (0.08) against a run-1-to-run-2 difference of 0, and
+/// [`MIN_RATIO_OFFSET`] (0.08) against a ratio 0.167 off centre. The tightest of
+/// the five is the heading's one spare column, which is what
+/// [`DIVIDER_RELAUNCH_DRAG_PX`] is sized by: widen the drag and the narrow pane
+/// soft-wraps `# DIVIDERBRAVO`, and assertion 3 reads two fragments.
+///
+/// ## Reading a 15-cell column
+///
+/// Fitting the heading is necessary and was not sufficient, and three separate
+/// things had to be answered before assertion 3 could read the narrow pane. Two are
+/// answered by FIXTURE and one by the READER; each was isolated by measurement on a
+/// retained PNG rather than argued.
+///
+/// | what corrupted the reading | how it was isolated | what answers it |
+/// | --- | --- | --- |
+/// | the `~` end-of-buffer column above a lone heading — a sparse region `--psm 11` scales the whole pane from | four ablations on one PNG, one at a time; blanking the `~` column alone fixed it | [`DIVIDER_BODY_LINE_COUNT`] body lines, which fill the pane past `winheight` so no marker is drawn |
+/// | the active-pane FOCUS RING's top edge — a long thin high-contrast line immediately above the heading | six ablations on one PNG; the top edge alone accounted for it | [`DIVIDER_RELAUNCH_SCENARIO`]'s closing `<C-w>h`, which moves the ring to the WIDE pane |
+/// | a single misclassified GLYPH at 15 columns | the same pixels read through both segmentation modes, twice over | the second reader, [`ocr_uniform_block_to_lowercase`] |
+///
+/// The third is why this smoke, alone of the twenty-five, reads its capture twice.
+/// With the first two answered, on one retained PNG:
+///
+/// | command | verbatim output |
+/// | --- | --- |
+/// | `tesseract PNG stdout --psm 11` | `# DIVIDERBkAVO` — the `R` of `BRAVO` read as a `k` |
+/// | `tesseract PNG stdout --psm 6` | `A 7 DIVIDERALFA # DIVIDERBRAVO` — both asserted terms correct |
+///
+/// It is deterministic rather than flaky: two independently
+/// rendered screenshots gave byte-identical text in both modes, and `DIVIDERALFA` in
+/// the wide pane reads correctly under both. The premise is stated where the reader
+/// lives: a two-pane page whose narrow column is one heading over a block of body
+/// text is a UNIFORM text block, which is what `--psm 6` assumes, and not the sparse
+/// layout `--psm 11` assumes. `--psm 11` is untouched for the other smokes.
+///
+/// ## Red-run reverts (TWO, and BOTH must be run)
+///
+/// They isolate the two halves of the round trip and must produce DISTINGUISHABLE
+/// failures — which is exactly why the scenario freezes run 1's save.
+///
+/// | half | revert | expected red symptom | measured |
+/// | --- | --- | --- | --- |
+/// | SAVE side | delete the `notify::position` handler from `pane_view::install_paned_position` | assertion 1 fires FIRST, with `weights == [0.5, 0.5]` in the frozen copy; the two preconditions above it stay green, which is what says the drag DID move the divider and only the write-back is missing | AS PREDICTED, on assertion 1: "run 1 persisted weights [0.5, 0.5], whose gap is 0 — below the 0.15 that only a DRAGGED divider can produce." Both preconditions stayed green. `0 passed; 1 failed` in 38.32s |
+/// | RESTORE side | in `install_paned_position`'s `max-position` handler, replace `tree.borrow().divider_fraction(&path, boundary)` with `Some(0.5)` | assertion 1 PASSES (the frozen copy carries the dragged weights) and assertion 2 fires, with run 2's panes back at equal widths | AS PREDICTED, on assertion 2 with assertion 1 GREEN: "run 1 quit with the left pane holding 0.6666666666666666 of the pair (30 and 15 cells) and run 2 restored 0.4888888888888889 (22 and 23 cells) — a change of 0.17777777777777776." `0 passed; 1 failed` in 38.36s |
+#[test]
+fn dragged_divider_weights_survive_relaunch_under_cage() {
+    const SMOKE: &str = "dragged_divider_weights_survive_relaunch_under_cage";
+    // Columns run 1 builds, and therefore the denominator the bisection seeds are
+    // modelled from.
+    const COLUMNS: i64 = 2;
+    // How many panes each width readback must describe.
+    const EXPECTED_PANES: usize = 2;
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd shared by BOTH launches — relaunching in the project you
+    // saved from is the whole scenario.
+    let cwd = make_temp_cwd();
+    // The RIGHT fixture carries a body as well as its heading: the drag leaves that
+    // pane 15 cells wide, and a heading alone above a bare `~` column is a sparse
+    // region tesseract misclassifies. See `DIVIDER_BODY_LINE_COUNT` for the
+    // ablations. The LEFT pane is the wide one and needs none.
+    let right_fixture = divider_right_fixture_body();
+    write_relaunch_fixtures(
+        SMOKE,
+        &cwd,
+        &[
+            (DIVIDER_FILE_LEFT, DIVIDER_HEADING_LEFT),
+            (DIVIDER_FILE_RIGHT, right_fixture.as_str()),
+        ],
+    );
+
+    // The smoke's own state dir — the SAME one `cage_command` hands the app as
+    // WOLF_STATE_DIR, so the two runs share one `state.json`.
+    let smoke_state_file = smoke_state_dir(&cwd).join(STATE_FILE_NAME);
+
+    // Where the scenario freezes RUN 1's save. A DIRECTORY holding a `state.json`,
+    // because `wolf_core::load_state` takes the directory; under XDG_RUNTIME_DIR so
+    // the app's own `FileSearch` never lists it in the sidebar.
+    let run1_state_dir = runtime_dir.join("wolf_gnome_divider_run1_state");
+    std::fs::create_dir_all(&run1_state_dir).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: failed to create the run-1 state snapshot dir {}: {e}",
+            run1_state_dir.display()
+        )
+    });
+    let run1_state_file = run1_state_dir.join(STATE_FILE_NAME);
+
+    let w_base = cwd.join(DIVIDER_W0_NAME);
+    let w_drag = cwd.join(DIVIDER_W1_NAME);
+    let w_restored = cwd.join(DIVIDER_W2_NAME);
+    // Outside the cwd: the bisection rewrites it once per probe and the sidebar
+    // watches the cwd.
+    let probe = runtime_dir.join("wolf_gnome_divider_relaunch_probe.txt");
+    let out_png = runtime_dir.join("wolf_gnome_divider_relaunch_smoke.png");
+    for path in [
+        &w_base,
+        &w_drag,
+        &w_restored,
+        &probe,
+        &out_png,
+        &run1_state_file,
+    ] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let (seed_lo, seed_hi) = divider_seed_span(1, COLUMNS);
+
+    let status = cage_command(DIVIDER_RELAUNCH_SCENARIO, &cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("CMD_FIFO", cwd.join(POINTER_CMD_FIFO_NAME))
+        .env("ACK_FILE", cwd.join(POINTER_ACK_NAME))
+        .env("HELPER_ERR", pointer_err_path(&cwd))
+        .env("READY_FILE", pointer_ready_path(&cwd))
+        .env("PROBE_X", PROBE_X.to_string())
+        .env("PROBE_Y", PROBE_Y.to_string())
+        .env("BTN_LEFT", POINTER_BUTTON_LEFT)
+        .env("PROBE_FILE", &probe)
+        .env("DIVIDER_FILE_LEFT", DIVIDER_FILE_LEFT)
+        .env("DIVIDER_FILE_RIGHT", DIVIDER_FILE_RIGHT)
+        .env("DIV_W0", &w_base)
+        .env("DIV_W1", &w_drag)
+        .env("DIV_W2", &w_restored)
+        .env("D_LO", seed_lo.to_string())
+        .env("D_HI", seed_hi.to_string())
+        .env("BISECT_STEPS", BISECT_STEPS.to_string())
+        .env("RELAUNCH_DRAG_PX", DIVIDER_RELAUNCH_DRAG_PX.to_string())
+        .env("DIV_STATE_SRC", &smoke_state_file)
+        .env("DIV_STATE_COPY", &run1_state_file)
+        .env("RESTORE_SETTLE", RELAUNCH_RESTORE_SETTLE)
+        .status()
+        .expect("failed to spawn `cage` for the headless divider relaunch scenario");
+
+    let helper_err = std::fs::read_to_string(pointer_err_path(&cwd))
+        .unwrap_or_else(|e| format!("<could not read the helper stderr: {e}>"));
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage divider relaunch scenario exited unsuccessfully ({status}). Read the \
+         exit code FIRST; each names a different half of the harness.\n\
+         Exit 11: run 1's app died before its window mapped — a LAUNCH failure.\n\
+         Exit 12: `wolf-pointer-inject` never printed its `ready …` line (its own exit code is in \
+         the stderr below: 3 = no `zwlr_virtual_pointer_manager_v1`, 4 = no `wl_seat`, 5 = no \
+         `wl_output`, 6 = more than one output, 7 = zero extents).\n\
+         Exit 13: a helper command was never acked within budget.\n\
+         Exit 14: a readback file the captive Neovim was told to write never appeared — a KEYBOARD \
+         failure, not a pointer one.\n\
+         Exit 15: the helper died mid-scenario.\n\
+         Exit 16: run 1 was still alive after `:qa`.\n\
+         Exit 17: run 1 exited NON-ZERO — it went away, but not cleanly, which implicates \
+         `flush_on_close`.\n\
+         Exit 18: run 1 wrote NO state.json at all at {}, which is upstream of anything about \
+         weights.\n\
+         Exit 19: run 2's app died before its window mapped.\n\
+         Exit 21: the bisection seeds ({seed_lo}, {seed_hi}) did not straddle the divider; the \
+         scenario's stderr names the four candidate causes in order, and \
+         `click_positions_the_cursor_under_cage` fails on its own if the pane origin moved.\n\
+         Screenshot expected at {}.\n\
+         wolf-pointer-inject stderr was:\n{helper_err}",
+        smoke_state_file.display(),
+        out_png.display()
+    );
+
+    assert_png_present(SMOKE, &out_png);
+
+    // Extents FIRST, as in every pointer smoke. The drag's end point is bounded by
+    // the HI seed plus the drag distance, so these three cover every injected x.
+    let extents = read_output_extents(&cwd, SMOKE);
+    for (label, x) in [
+        ("the bisection LO seed", seed_lo),
+        ("the bisection HI seed", seed_hi),
+        (
+            "the furthest RIGHT the drag can reach",
+            seed_hi + DIVIDER_RELAUNCH_DRAG_PX,
+        ),
+    ] {
+        assert_inside_extents(SMOKE, label, (x, i64::from(PROBE_Y)), extents);
+    }
+
+    let base = read_pane_widths(&w_base, SMOKE);
+    let dragged = read_pane_widths(&w_drag, SMOKE);
+    let restored = read_pane_widths(&w_restored, SMOKE);
+    for (label, panes, path) in [
+        ("run 1's baseline", &base, &w_base),
+        ("run 1's post-drag", &dragged, &w_drag),
+        ("run 2's restored", &restored, &w_restored),
+    ] {
+        assert_eq!(
+            panes.len(),
+            EXPECTED_PANES,
+            "{SMOKE}: {label} readback describes {} pane(s), expected {EXPECTED_PANES}: {panes:?} \
+             (from {}). One pane in RUN 2 means the split was not restored at all, which is the \
+             topology failure `pane_layout_survives_relaunch_under_cage` owns — fix that first, \
+             since weights cannot be asserted against a layout that did not come back.",
+            panes.len(),
+            path.display()
+        );
+    }
+
+    let base_left = pane_width_for(&base, DIVIDER_FILE_LEFT, &w_base, SMOKE);
+    let base_right = pane_width_for(&base, DIVIDER_FILE_RIGHT, &w_base, SMOKE);
+    let drag_left = pane_width_for(&dragged, DIVIDER_FILE_LEFT, &w_drag, SMOKE);
+    let drag_right = pane_width_for(&dragged, DIVIDER_FILE_RIGHT, &w_drag, SMOKE);
+    let run2_left = pane_width_for(&restored, DIVIDER_FILE_LEFT, &w_restored, SMOKE);
+    let run2_right = pane_width_for(&restored, DIVIDER_FILE_RIGHT, &w_restored, SMOKE);
+
+    // --- Precondition A: run 1 started from two roughly equal panes ------------
+    assert!(
+        (base_left - base_right).abs() <= BASELINE_TOLERANCE_CELLS,
+        "{SMOKE}: the fresh split gave panes of {base_left} and {base_right} cells, a spread of {} \
+         — more than the {BASELINE_TOLERANCE_CELLS} cells a paned positioned by TRAVEL rather than \
+         by width can account for. The bisection seed is modelled on equal shares, so this also \
+         says the seed is aimed at the wrong pixels. PNG kept at {}.",
+        (base_left - base_right).abs(),
+        out_png.display()
+    );
+
+    // --- Precondition B: the drag moved the divider ----------------------------
+    //
+    // This is what makes assertion 1 unambiguous. Without it an equal-share pair on
+    // disk could equally mean "the press missed the handle".
+    assert!(
+        drag_left > base_left + MIN_DRAG_CELLS && drag_right < base_right - MIN_DRAG_CELLS,
+        "{SMOKE}: after dragging the divider {DIVIDER_RELAUNCH_DRAG_PX} px to the RIGHT the panes \
+         are {drag_left} and {drag_right} cells, from {base_left} and {base_right} — less than the \
+         {MIN_DRAG_CELLS} cells that counts as movement. Read this FIRST as: THE PRESS MISSED THE \
+         DIVIDER HANDLE, a harness failure rather than a product one (the bisection converged on \
+         the wrong pixel, or the handle is narrower than the residual {BISECT_STEPS} halvings \
+         leave). Only after ruling that out does it mean `gtk::Paned` stopped moving on a drag. \
+         Nothing below can be interpreted while this is red: an equal-share weight on disk would \
+         then be perfectly correct. PNG kept at {}.",
+        out_png.display()
+    );
+
+    // --- Assertion 1: RUN 1's saved weights are NOT equal shares ---------------
+    let saved = load_state(&run1_state_dir).unwrap_or_else(|| {
+        panic!(
+            "{SMOKE}: wolf_core::load_state could not parse the frozen copy of run 1's state at {}. \
+             `load_state` is silently-ignore, so a None means the file is absent, unreadable, \
+             malformed or of an unsupported version — the scenario already proved it was non-empty \
+             (it exits 18 otherwise), so suspect the shape.",
+            run1_state_file.display()
+        )
+    });
+    let window = saved.windows.first().unwrap_or_else(|| {
+        panic!(
+            "{SMOKE}: run 1's state.json carries NO windows at all, so nothing was persisted. File: \
+             {}",
+            run1_state_file.display()
+        )
+    });
+    let tab = window.tabs.first().unwrap_or_else(|| {
+        panic!(
+            "{SMOKE}: run 1's persisted window carries NO tabs. `snapshot_state` writes exactly \
+             one. File: {}",
+            run1_state_file.display()
+        )
+    });
+    match &tab.layout {
+        Some(PaneNode::Split {
+            orientation,
+            weights,
+            children,
+        }) => {
+            assert_eq!(
+                *orientation,
+                PaneOrientation::Vertical,
+                "{SMOKE}: run 1 persisted a {orientation:?} split for a `<C-w>v`, which divides \
+                 WIDTH and must persist as Vertical. File: {}",
+                run1_state_file.display()
+            );
+            let tails: Vec<Option<&str>> = children.iter().map(leaf_tail).collect();
+            assert_eq!(
+                tails,
+                vec![Some(DIVIDER_FILE_LEFT), Some(DIVIDER_FILE_RIGHT)],
+                "{SMOKE}: run 1 persisted leaves naming {tails:?}, not the two fixture files in \
+                 left-to-right order. The weights below are parallel to THIS child order, so they \
+                 cannot be read at all until it is right. A `None` entry is a nested split where a \
+                 leaf belongs; the comparison is on the file NAME rather than the whole path \
+                 because /tmp may resolve through a symlink. File: {}",
+                run1_state_file.display()
+            );
+            assert_eq!(
+                weights.len(),
+                children.len(),
+                "{SMOKE}: run 1 persisted {} weights for {} children. File: {}",
+                weights.len(),
+                children.len(),
+                run1_state_file.display()
+            );
+
+            let sum = weights[0] + weights[1];
+            assert!(
+                (sum - 1.0).abs() < WEIGHT_SUM_EPS,
+                "{SMOKE}: run 1's persisted weights {weights:?} sum to {sum}, not 1. \
+                 `set_divider_fraction` renormalizes the whole split after every drag precisely so \
+                 an unbounded number of them cannot drift the sum. File: {}",
+                run1_state_file.display()
+            );
+            assert!(
+                weights[0] - weights[1] >= MIN_WEIGHT_GAP,
+                "{SMOKE}: run 1 persisted weights {weights:?}, whose gap is {} — below the \
+                 {MIN_WEIGHT_GAP} that only a DRAGGED divider can produce. **`[0.5, 0.5]` HERE IS \
+                 THE WHOLE POINT OF THIS SMOKE**: it means the drag never reached the layout's \
+                 weights, so `layout_snapshot` serialized the equal shares `split` left behind. \
+                 The precondition above already proved the divider DID move on screen \
+                 ({base_left}/{base_right} cells before, {drag_left}/{drag_right} after), so this \
+                 is the write-back — `install_paned_position`'s `notify::position` handler and \
+                 `PaneTree::set_divider_fraction` — and not the gesture. The pure twin is \
+                 `pane_layout::tests::encode_carries_a_dragged_weight_vector`. File: {}",
+                weights[0] - weights[1],
+                run1_state_file.display()
+            );
+        }
+        other => panic!(
+            "{SMOKE}: run 1 persisted `layout: {other:?}` for two side-by-side panes, not a \
+             two-child Vertical split. A `None` means nothing was persisted at all (the snapshot \
+             gate refused every wake) and a `Leaf` means the split never reached the pane tree — \
+             either way this is the topology failure `pane_layout_survives_relaunch_under_cage` \
+             owns, not a weight failure. File: {}",
+            run1_state_file.display()
+        ),
+    }
+
+    // --- Assertion 2: run 2 came back at the SAME ratio ------------------------
+    let ratio1 = head_width_ratio(drag_left, drag_right, SMOKE, "run 1's post-drag panes");
+    let ratio2 = head_width_ratio(run2_left, run2_right, SMOKE, "run 2's restored panes");
+    assert!(
+        (ratio2 - ratio1).abs() <= RATIO_TOLERANCE,
+        "{SMOKE}: run 1 quit with the left pane holding {ratio1} of the pair ({drag_left} and \
+         {drag_right} cells) and run 2 restored {ratio2} ({run2_left} and {run2_right} cells) — a \
+         change of {}, beyond the {RATIO_TOLERANCE} cell quantization can explain. Assertion 1 \
+         above already proved the right weights are ON DISK, so with that green this is the RESTORE \
+         side: `pane_layout::decode` dropping the weights, or \
+         `install_paned_position` re-deriving its position from something other than the live \
+         tree's `divider_fraction`. PNG kept at {}.",
+        (ratio2 - ratio1).abs(),
+        out_png.display()
+    );
+    assert!(
+        ratio2 >= 0.5 + MIN_RATIO_OFFSET,
+        "{SMOKE}: the restored ratio is {ratio2}, less than {MIN_RATIO_OFFSET} clear of dead \
+         centre — so the clause above (`the ratio is unchanged`) is VACUOUS: an equal split \
+         satisfies it whenever the drag never took effect. This clause is what keeps the assertion \
+         honest. It fires either because the drag was too small to be distinguishable from centre \
+         (a FIXTURE problem — raise DIVIDER_RELAUNCH_DRAG_PX, never lower MIN_RATIO_OFFSET) or \
+         because the restored panes really did come back equal. Run 2's panes were {run2_left} and \
+         {run2_right} cells. PNG kept at {}.",
+        out_png.display()
+    );
+
+    // --- Assertion 3: two panes really bound grids and PAINTED -----------------
+    //
+    // The page is read TWICE, in two page-segmentation modes, and each term is
+    // accepted from either reading. Both readers see the same pixels of the same
+    // capture, so accepting either does not weaken what is demanded — it is still
+    // the literal term, both terms, and no page element other than the two headings
+    // can produce one (see `ocr_uniform_block_to_lowercase` for the mechanical
+    // guards, which cover the extra page text `--psm 6` reads).
+    //
+    // The two `contains` calls are kept SEPARATE rather than run against the two
+    // readings joined: a concatenation would let a `divider` at the tail of one and a
+    // `bravo` at the head of the other satisfy the assertion between them, and no
+    // rendered pane would have produced that.
+    let ocr_sparse = ocr_to_lowercase(&out_png);
+    let ocr_block = ocr_uniform_block_to_lowercase(&out_png);
+    for (term, const_name, side) in [
+        (DIVIDER_OCR_LEFT, "DIVIDER_OCR_LEFT", "left"),
+        (DIVIDER_OCR_RIGHT, "DIVIDER_OCR_RIGHT", "right"),
+    ] {
+        assert!(
+            ocr_sparse.contains(term) || ocr_block.contains(term),
+            "{SMOKE}: NEITHER OCR reading contained {const_name} = {term:?} (the {side} pane's \
+             heading). The capture is read twice — `--psm 11` (sparse text, the mode every other \
+             smoke uses) and `--psm 6` (one uniform block, this smoke's second reader) — and the \
+             term is accepted from either, so this is a miss in BOTH. READ THE TWO DUMPS BELOW FOR \
+             A MANGLED NEAR-MISS of the term rather than for its absence: every cause measured on \
+             this page corrupts the heading instead of removing it, and the two readings \
+             disagreeing about ONE GLYPH is the shape to expect. The narrow RIGHT pane is the one \
+             to suspect either way.\n\
+             FIRST, GLYPH CLASSIFICATION AT THE NARROW PANE'S COLUMN WIDTH. This is the live \
+             hazard and it is what the second reader answers: at 15 cells `--psm 11` read \
+             `# DIVIDERBkAVO` — the `R` of `BRAVO` as a `k` — on pixels where `--psm 6` read \
+             `# DIVIDERBRAVO` correctly, deterministically, across two independently rendered \
+             screenshots. If BOTH modes mangle it now, the levers are a THIRD segmentation mode \
+             (`--psm 4`, columns of variable size) or a larger rendered size; NEVER a weaker \
+             assertion. Do not relax this to a prefix, a fuzzy match, an edit distance or one of \
+             the two terms.\n\
+             SECOND, SOFT-WRAPPING — the one hazard a fixture still owns. \
+             `runtime/nvim/init.lua` sets `wrap`/`linebreak`, so a pane narrower than the \
+             14-character heading splits it into two fragments and no reading of the page can \
+             contain the term. That IS what lowering DIVIDER_RELAUNCH_DRAG_PX fixes. Run 2's panes \
+             were {run2_left} and {run2_right} cells, against a heading that needs 14.\n\
+             THIRD, and only once those are ruled out: a genuinely unbound or unpainted pane. The \
+             width readback above already showed Neovim has both windows, so this is the LAST \
+             reading of a red assertion 3, not the first.\n\
+             Two further causes are ANSWERED BY FIXTURE, and the retained PNG is where to confirm \
+             they are still answered rather than re-derive them: the `~` end-of-buffer column \
+             (DIVIDER_BODY_LINE_COUNT's body lines fill the pane past winheight, so no marker is \
+             drawn) and the active-pane FOCUS RING (DIVIDER_RELAUNCH_SCENARIO's closing `<C-w>h` \
+             puts it around the WIDE pane; the ablation table is beside that move). Do NOT lower \
+             DIVIDER_RELAUNCH_DRAG_PX for either: it moves neither, and it narrows the weight gap \
+             assertion 1 rests on.\n\
+             PNG kept at {} for inspection.\n\
+             `--psm 11` output was:\n\
+             {ocr_sparse}\n\
+             `--psm 6` output was:\n\
+             {ocr_block}",
+            out_png.display()
+        );
+    }
+}
+
 /// Proves the window TITLE renders the working directory, home-abbreviated.
 ///
 /// A single-launch smoke. The title is drawn by the `adw::HeaderBar`'s title label
@@ -10086,6 +11898,11 @@ fn window_title_shows_the_working_directory_under_cage() {
 /// (`--psm 11` — "sparse text" — is needed because the default page-segmentation
 /// mode returns empty on the sparse, light-on-dark editor grid.) Panics with the
 /// captured stderr if tesseract fails to run or exits non-zero.
+///
+/// This is the reader every smoke but one uses, and its mode is deliberately fixed
+/// rather than a parameter. The one exception reads the page a SECOND time through
+/// [`ocr_uniform_block_to_lowercase`]; that function's doc says why, and nothing
+/// about this one changes for it.
 fn ocr_to_lowercase(png: &Path) -> String {
     let output = Command::new("tesseract")
         .arg(png)
@@ -10097,6 +11914,92 @@ fn ocr_to_lowercase(png: &Path) -> String {
     assert!(
         output.status.success(),
         "tesseract failed on {} ({}): {}",
+        png.display(),
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).to_lowercase()
+}
+
+/// Runs `tesseract <png> stdout --psm 6` and returns its lowercased text output.
+///
+/// A SECOND reader, used by
+/// [`dragged_divider_weights_survive_relaunch_under_cage`] and by nothing else.
+/// Every other smoke reads through [`ocr_to_lowercase`] at `--psm 11`, which this
+/// leaves entirely untouched: those assertions are calibrated against that mode's
+/// output on their own pages, and re-segmenting them is not what this reader is for.
+///
+/// ## Why this smoke's page needs a different segmentation mode
+///
+/// `--psm 11` is "sparse text": it locates text in no particular order and estimates
+/// a scale per region it decides is sparse. That is the right assumption for the
+/// pages the other smokes capture, and the WRONG one for this one. After the drag,
+/// this smoke's page is two columns of editor text, the narrow one being a single
+/// heading over a solid block of body lines — a uniform block of text at one scale,
+/// which is precisely what `--psm 6` ("a single uniform block") assumes. The 15-cell
+/// column is too narrow for `--psm 11`'s per-region scale estimate to resolve, and
+/// the failure it produces is not a missing word but a misclassified glyph.
+///
+/// MEASURED, both modes over the same retained PNG:
+///
+/// | mode | verbatim output |
+/// | --- | --- |
+/// | `tesseract PNG stdout --psm 11` | `# DIVIDERBkAVO` — the `R` of `BRAVO` read as a `k`; `DIVIDERALFA` in the wide pane correct |
+/// | `tesseract PNG stdout --psm 6` | `A 7 DIVIDERALFA # DIVIDERBRAVO` — BOTH asserted terms correct |
+///
+/// Deterministic, not flaky: two independently rendered screenshots produced
+/// byte-identical OCR text in both modes. `DIVIDERALFA` reads correctly under both,
+/// so what is being worked around is a property of the narrow COLUMN, not of the
+/// font, the theme or the term.
+///
+/// ## Red-run revert (one line)
+///
+/// This reader is LOAD-BEARING, not belt-and-braces, and the revert below is the
+/// measurement that settles it — meet it here rather than re-deriving it, because
+/// the deletion it argues against is the one that turns the smoke red.
+///
+/// | assertion | revert | expected red symptom | measured |
+/// | --- | --- | --- | --- |
+/// | assertion 3 of [`dragged_divider_weights_survive_relaunch_under_cage`] | drop this reader from it: `ocr_sparse.contains(term)` in place of `ocr_sparse.contains(term) || ocr_block.contains(term)` | the loop's [`DIVIDER_OCR_RIGHT`] iteration fires on the narrow pane's heading, while its [`DIVIDER_OCR_LEFT`] iteration stays green | AS PREDICTED, and against a FRESH render under `cage` rather than the retained PNG: `thread 'dragged_divider_weights_survive_relaunch_under_cage' (2140204) panicked at crates/wolf-gnome/tests/smoke_headless.rs:11700:9:` / `dragged_divider_weights_survive_relaunch_under_cage: NEITHER OCR reading contained DIVIDER_OCR_RIGHT = "dividerbravo" (the right pane's heading).`, then `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 28 filtered out; finished in 39.92s`. It fires on `dividerbravo` ONLY: the same run's `divideralfa` iteration passes, so `--psm 11` resolves the wide pane's heading and what the revert exposes is the narrow COLUMN rather than the sparse reader as such. Reproducing on a render of its own is also what says the misread in the table above is a property of the settled arrangement, not an artifact of one retained capture. |
+///
+/// ## What the wider mode does not open up
+///
+/// `--psm 6` reads MORE of the page than `--psm 11` does — the header-bar title and
+/// every tree-sidebar row included — so the premise that only the right pane's
+/// heading can supply [`DIVIDER_OCR_RIGHT`] has to hold against the whole page, not
+/// just against the editor grid. It does, and mechanically rather than by
+/// convention: [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`] covers the
+/// filler names, [`temp_cwd_name_cannot_satisfy_any_smoke_assertion`] the two path
+/// components the title bar draws, and
+/// [`restore_fixture_names_cannot_satisfy_their_own_assertions`] both
+/// [`RELAUNCH_FIXTURE_NAMES`] — which is where `dvright.md`, deliberately unlike
+/// `dividerbravo`, is registered — and every body line
+/// [`divider_right_fixture_body`] writes. So no sidebar row, no `:e` echo of a
+/// filename and no title segment can satisfy the assertion however much of the page
+/// is read.
+///
+/// ## Why it duplicates [`ocr_to_lowercase`] instead of parameterizing it
+///
+/// So that the reader twenty-four smokes depend on stays a fixed, unparameterized
+/// command. A mode argument is a value a later change can pass wrongly from a call
+/// site that looks unrelated to OCR, and the symptom would be a distant smoke
+/// failing on a term it renders perfectly. This file already duplicates for that
+/// class of reason — see [`DIVIDER_RELAUNCH_SCENARIO`] on the pointer plumbing.
+///
+/// Panics with the captured stderr if tesseract fails to run or exits non-zero.
+fn ocr_uniform_block_to_lowercase(png: &Path) -> String {
+    let output = Command::new("tesseract")
+        .arg(png)
+        .arg("stdout")
+        .arg("--psm")
+        .arg("6")
+        .output()
+        .expect("failed to spawn `tesseract` for OCR in --psm 6");
+    assert!(
+        output.status.success(),
+        "tesseract failed on {} in --psm 6 ({}): {}. `--psm 11` is the mode every other smoke \
+         uses and it is unaffected by this; a failure HERE is tesseract rejecting the mode \
+         argument or the image, not a rendering problem.",
         png.display(),
         output.status,
         String::from_utf8_lossy(&output.stderr)

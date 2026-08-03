@@ -6,7 +6,7 @@ The durable constraints behind this crate. Read this before changing anything he
 
 This is the GTK 4 / libadwaita front-end: a runnable single-window application that consumes [`wolf-core`](../wolf-core/README.md) as an ordinary Rust crate dependency. It renders Neovim natively rather than embedding a terminal, so every pixel comes from a Cairo/Pango paint of a core `Snapshot`.
 
-The window carries a file-tree sidebar, a native pane view with real split panes, a floating file picker, a GNOME primary menu, an empty state for when no project is open, and a bottom command-line strip. Split, close, focus move, and divider drag all work, driven by core's layout-intent channel. Menu items, accelerators, and commands drained from Neovim all resolve through one `gio` action namespace.
+The window carries a file-tree sidebar, a native pane view with real split panes, a floating file picker, a GNOME primary menu, an empty state for when no project is open, and a bottom command-line strip. Split, close, and focus move are driven by core's layout-intent channel; a divider drag is the `gtk::Paned` handle's own gesture, landing in the pure tree's weights. Menu items, accelerators, and commands drained from Neovim all resolve through one `gio` action namespace.
 
 Files reach Neovim one way. The picker, the sidebar, and the menu's native Open File and Open Folder dialogs all end in `InputEvent::Open`, which core performs as `:e`; saving is `:w` or `:saveas` from inside Neovim, with no save dialog. The binary takes no command-line arguments, and hands GTK an empty argv so the real command line is never parsed.
 
@@ -68,6 +68,16 @@ The overlay's children are added empty state, then picker, then crash overlay, t
 
 Input has two regimes. Keys are global: a capture-phase controller on the window matches this crate's own chords and stops propagation, and a bubble-phase controller routes everything else through the key seam into Neovim's current window, so a bound chord is never also forwarded. Pointer input is per pane, on each drawing area. Resize flows per pane through the geometry seam into `resize_grid` and then resizes the outer grid; the authoritative sizes come back from core.
 
+## Pane weights and dividers
+
+An n-ary split renders as a right-leaning chain of binary `gtk::Paned`, so a divider governs its head child against the whole remainder rather than against its immediate sibling. `PaneTree::set_divider_fraction` therefore rescales that remainder in proportion and leaves every weight before the divider alone. macOS's `PaneTree.setPairFraction` reweights the adjacent pair instead, which suits its flat divider list and would be wrong here: on a chain it moves a second divider the user never touched.
+
+`gtk::Paned` owns the handle, the hit test, the cursor and the drag gesture, so this crate needs no analogue of the macOS `DividerHitTest` or `DividerDragSeam` seams; the pure tree owes it a mutator and that mutator's inverse, and nothing else. The pixel-level minimum pane size is GTK's too, from non-shrinking paned children plus the one-cell content floor.
+
+**A zero weight is dangerous because nothing rejects it.** `PaneTree::from_layout` checks that every weight is finite and non-negative and that the split's total is positive, and a lone zero among positives satisfies all three. It is durable rather than loud: `pane_rects` hands that child a zero-extent rectangle, `neighbor` never returns it because the cross-axis overlap test is strictly positive, and `layout()` copies the zero straight back out, so it survives the `state.json` round trip and comes back on every later launch.
+
+`MIN_DIVIDER_FRACTION` is the arithmetic floor that keeps a dragged weight strictly positive. The renormalization at the end of `set_divider_fraction` is repair rather than tidiness: `from_layout` never checks that a saved vector sums to 1, and `state.json` carries `weights` as plain JSON through `pane_layout::decode` into it, so a denormalized split is a reachable input. A non-finite fraction is refused outright rather than clamped, because a NaN weight is the loud failure of the pair: `from_layout` rejects the whole tree at the next launch and the saved layout is gone.
+
 ## The accelerator namespace
 
 Every action name, its accelerator, its `Command` correspondence, and its menu placement live in one table, so the menu, the accelerators, and the command dispatch cannot drift apart. Chords spoken for by a later unit are declared and marked reserved rather than omitted, which is what lets the invariant below be checked before anything binds them.
@@ -125,7 +135,6 @@ Three details are load-bearing. Every smoke holds a shared mutex for its whole b
 - Pointer input covers the primary button and vertical scroll. There is no context menu, no middle-click paste, no horizontal scroll, and no kinetic scrolling, all matching macOS, and no scrollbar is drawn.
 - The command-line strip renders a single row: an active command line, or the last message line when idle. There is no completion popup and no multi-line scrollable message view. Core folds all three UI extensions regardless, so adding the Adwaita widgets later is additive.
 - Only windows created through the overridden split commands become panes. A window from `:help`, quickfix, a preview, or `:diffsplit` gets a grid but no pane, and floating or external windows are ignored.
-- A divider drag is not written back into the layout's weights, so it holds until the next resize, split, or close and then returns to the equal share. Weights are persisted and restored already; only their source is missing. Focus-direction moves resolve against those nominal weights rather than dragged positions.
 - The sidebar re-roots on Open Folder alone, never on a user-typed `:cd`.
 - No HiDPI scale handling: the cell-measurement probe assumes 96 dpi.
 - No input-method composition support.
