@@ -1,18 +1,25 @@
 //! The pure, GTK-free WORKSPACE decision: is a project open, and where does the
 //! captive Neovim start?
 //!
-//! `wolf-gnome` has no `state.json` restore (that feat-list row is unticked), so —
-//! unlike macOS, whose `StateSeam.launchDecision` consults a restored cwd — the
-//! Linux launch decision is derived from the PROCESS working directory:
+//! The Linux rule is **process cwd wins, then the restored cwd**, under ONE
+//! shared predicate. Both candidates are offered to [`launch_decision`], which
+//! takes the first that [`is_usable_project`] accepts:
 //!
 //! - A terminal launch (`cargo run` from a project) yields a real project
-//!   directory, which is a project.
+//!   directory, which is a project — and it WINS over anything `state.json`
+//!   remembers, because launching Wolf from a directory is the Linux idiom and
+//!   silently reopening yesterday's project instead would be surprising.
 //! - A desktop-launcher / `.desktop` launch yields `$HOME` or `/`, which is
-//!   exactly "no project".
+//!   exactly "no project" — and THAT is when the cwd restored from `state.json`
+//!   (see [`crate::state_seam::restore_plan`]) gets its turn, which is the macOS
+//!   behaviour (`StateSeam.launchDecision` consults only the restored cwd).
+//! - With neither usable, the empty state.
 //!
-//! Treating `$HOME` as a project would also point the sidebar's `FileSearch` at
-//! the whole home tree — the pathological case `wolf_core::files::SearchBounds`
-//! already exists to prune.
+//! Applying the SAME predicate to the restored cwd is deliberate: it means a
+//! hand-edited `state.json` pointing at `/` can never make the sidebar's
+//! `FileSearch` traverse the whole filesystem. Treating `$HOME` as a project
+//! would point it at the whole home tree — the pathological case
+//! `wolf_core::files::SearchBounds` already exists to prune.
 //!
 //! [`launch_decision`] takes `is_dir` as an injected predicate rather than calling
 //! the filesystem, which is what makes the whole rule unit-testable headlessly
@@ -50,25 +57,32 @@ pub enum LaunchDecision {
 
 /// Decides whether the app launches into a project or into the empty state.
 ///
-/// Returns [`LaunchDecision::Folder`] ONLY when `process_cwd` is `Some`,
-/// `is_dir(cwd)` holds, `cwd != home`, and `cwd != /`. Otherwise
+/// Tries `process_cwd` FIRST and `restored` (the cwd recovered from
+/// `state.json`) SECOND, returning [`LaunchDecision::Folder`] for the first that
+/// satisfies [`is_usable_project`] — it is a directory, it is not `home`, and it
+/// is not [`FALLBACK_CWD`]. With neither usable it returns
 /// [`LaunchDecision::EmptyState`], whose `nvim_cwd` is `home` when `home` is
 /// `Some` and `is_dir(home)` holds, else [`FALLBACK_CWD`].
+///
+/// Passing `restored: None` reproduces the pre-restore behaviour EXACTLY, which
+/// is why every historical table row still holds — the parameter is a strict
+/// superset, not a change of rule.
 ///
 /// `is_dir` is injected so the rule is pure and testable; production passes
 /// `Path::is_dir`.
 #[must_use]
 pub fn launch_decision(
     process_cwd: Option<&Path>,
+    restored: Option<&Path>,
     home: Option<&Path>,
     is_dir: impl Fn(&Path) -> bool,
 ) -> LaunchDecision {
-    if let Some(cwd) = process_cwd {
-        // A real directory that is neither the home directory (the
-        // desktop-launcher shape) nor the filesystem root IS the open project.
-        if is_dir(cwd) && Some(cwd) != home && cwd != Path::new(FALLBACK_CWD) {
+    // Order is the rule: the process cwd is the terminal-launch idiom and wins;
+    // the restored cwd is what a desktop-launcher start falls back to.
+    for candidate in [process_cwd, restored].into_iter().flatten() {
+        if is_usable_project(candidate, home, &is_dir) {
             return LaunchDecision::Folder {
-                cwd: cwd.to_path_buf(),
+                cwd: candidate.to_path_buf(),
             };
         }
     }
@@ -79,6 +93,17 @@ pub fn launch_decision(
         .filter(|home| is_dir(home))
         .map_or_else(|| PathBuf::from(FALLBACK_CWD), Path::to_path_buf);
     LaunchDecision::EmptyState { nvim_cwd }
+}
+
+/// Whether `path` is a usable project root: a real directory that is neither the
+/// home directory (the desktop-launcher shape) nor the filesystem root.
+///
+/// ONE predicate applied to BOTH candidates, so a restored cwd can never open a
+/// project the process cwd would have been refused for — in particular a
+/// hand-edited `state.json` naming `/` cannot point the sidebar's `FileSearch` at
+/// the whole filesystem.
+fn is_usable_project(path: &Path, home: Option<&Path>, is_dir: &impl Fn(&Path) -> bool) -> bool {
+    is_dir(path) && Some(path) != home && path != Path::new(FALLBACK_CWD)
 }
 
 /// Whether a pending re-root for `pending` is satisfied by the core's live cwd.
@@ -127,6 +152,9 @@ mod tests {
     const ROOT: &str = "/";
     /// A path that does NOT exist as a directory (the injected `is_dir` says no).
     const MISSING: &str = "/projects/deleted";
+    /// A second real project directory, used as the cwd recovered from `state.json`
+    /// so it is always distinguishable from [`PROJECT`].
+    const RESTORED: &str = "/projects/restored";
 
     /// What a [`Case`] expects, as the path each `LaunchDecision` variant carries.
     enum Want {
@@ -136,11 +164,17 @@ mod tests {
         EmptyState(&'static str),
     }
 
-    /// One `launch_decision` table row: a description, the two inputs, the set of
+    /// One `launch_decision` table row: a description, the three inputs, the set of
     /// paths the injected `is_dir` reports as directories, and the expectation.
+    ///
+    /// `restored` is the cwd recovered from `state.json`. Every row that predates the
+    /// state-persistence unit carries `restored: None`, which is the COMPATIBILITY
+    /// PROOF made executable: the parameter is a strict superset of the old rule, so
+    /// each historical expectation must still hold unchanged.
     struct Case {
         desc: &'static str,
         process_cwd: Option<&'static str>,
+        restored: Option<&'static str>,
         home: Option<&'static str>,
         dirs: &'static [&'static str],
         want: Want,
@@ -161,10 +195,20 @@ mod tests {
     #[test]
     fn launch_decision_table() {
         let cases = [
+            // =============================================================
+            // The PRE-RESTORE rows, re-run verbatim with `restored: None`.
+            //
+            // Their expectations are UNCHANGED, which is the whole compatibility
+            // argument for adding the parameter: with nothing saved (or nothing
+            // usable saved) `launch_decision` must behave exactly as it always did,
+            // and every existing cage smoke — all of which now launch with an empty
+            // state dir — must therefore see the same first launch as before.
+            // =============================================================
             // --- the one Folder case, and its near misses --------------------
             Case {
                 desc: "a real project dir that is neither home nor / is a project",
                 process_cwd: Some(PROJECT),
+                restored: None,
                 home: Some(HOME),
                 dirs: &[PROJECT, HOME],
                 want: Want::Folder(PROJECT),
@@ -174,6 +218,7 @@ mod tests {
                 // treating it as one would point FileSearch at the whole home tree.
                 desc: "cwd == home is NOT a project; nvim still starts in home",
                 process_cwd: Some(HOME),
+                restored: None,
                 home: Some(HOME),
                 dirs: &[HOME],
                 want: Want::EmptyState(HOME),
@@ -181,6 +226,7 @@ mod tests {
             Case {
                 desc: "cwd == / is NOT a project; nvim starts in home",
                 process_cwd: Some(ROOT),
+                restored: None,
                 home: Some(HOME),
                 dirs: &[ROOT, HOME],
                 want: Want::EmptyState(HOME),
@@ -188,6 +234,7 @@ mod tests {
             Case {
                 desc: "no process cwd at all => empty state at home",
                 process_cwd: None,
+                restored: None,
                 home: Some(HOME),
                 dirs: &[HOME],
                 want: Want::EmptyState(HOME),
@@ -197,6 +244,7 @@ mod tests {
                 // `dirs`), e.g. the launch directory was deleted underneath us.
                 desc: "cwd is not a directory => empty state at home",
                 process_cwd: Some(MISSING),
+                restored: None,
                 home: Some(HOME),
                 dirs: &[HOME],
                 want: Want::EmptyState(HOME),
@@ -205,6 +253,7 @@ mod tests {
             Case {
                 desc: "home unknown but cwd is a real project => still a project",
                 process_cwd: Some(PROJECT),
+                restored: None,
                 home: None,
                 dirs: &[PROJECT],
                 want: Want::Folder(PROJECT),
@@ -212,6 +261,7 @@ mod tests {
             Case {
                 desc: "home unknown and cwd unusable => empty state at FALLBACK_CWD",
                 process_cwd: Some(MISSING),
+                restored: None,
                 home: None,
                 dirs: &[],
                 want: Want::EmptyState(FALLBACK_CWD),
@@ -221,17 +271,106 @@ mod tests {
                 // it is no better a place to start nvim than the fallback.
                 desc: "home set but not a directory => empty state at FALLBACK_CWD",
                 process_cwd: None,
+                restored: None,
                 home: Some(HOME),
                 dirs: &[],
                 want: Want::EmptyState(FALLBACK_CWD),
+            },
+            // =============================================================
+            // The RESTORED candidate. It gets its turn only after the process cwd
+            // has been refused, and it faces the SAME `is_usable_project` predicate.
+            // =============================================================
+            Case {
+                // The desktop-launcher shape, which is the case macOS handles too:
+                // $HOME is not a project, so the saved project opens.
+                desc: "process cwd is home => the RESTORED project opens",
+                process_cwd: Some(HOME),
+                restored: Some(RESTORED),
+                home: Some(HOME),
+                dirs: &[HOME, RESTORED],
+                want: Want::Folder(RESTORED),
+            },
+            Case {
+                desc: "process cwd is / => the RESTORED project opens",
+                process_cwd: Some(ROOT),
+                restored: Some(RESTORED),
+                home: Some(HOME),
+                dirs: &[ROOT, HOME, RESTORED],
+                want: Want::Folder(RESTORED),
+            },
+            Case {
+                desc: "no process cwd at all => the RESTORED project opens",
+                process_cwd: None,
+                restored: Some(RESTORED),
+                home: Some(HOME),
+                dirs: &[HOME, RESTORED],
+                want: Want::Folder(RESTORED),
+            },
+            Case {
+                desc: "process cwd is not a directory => the RESTORED project opens",
+                process_cwd: Some(MISSING),
+                restored: Some(RESTORED),
+                home: Some(HOME),
+                dirs: &[HOME, RESTORED],
+                want: Want::Folder(RESTORED),
+            },
+            Case {
+                // THE ORDERING RULE. Launching Wolf from a directory is the Linux
+                // idiom; silently reopening yesterday's project instead would be
+                // surprising, and macOS (which never consults a process cwd) is
+                // deliberately NOT mirrored here.
+                desc: "a usable process cwd WINS over an equally usable restored cwd",
+                process_cwd: Some(PROJECT),
+                restored: Some(RESTORED),
+                home: Some(HOME),
+                dirs: &[PROJECT, RESTORED, HOME],
+                want: Want::Folder(PROJECT),
+            },
+            Case {
+                // The saved project was deleted between runs.
+                desc: "restored cwd is not a directory => empty state at home",
+                process_cwd: Some(HOME),
+                restored: Some(MISSING),
+                home: Some(HOME),
+                dirs: &[HOME],
+                want: Want::EmptyState(HOME),
+            },
+            Case {
+                // The SHARED-PREDICATE rule: a restored cwd can never open a project
+                // the process cwd would have been refused for.
+                desc: "restored cwd == home is refused by the same predicate",
+                process_cwd: None,
+                restored: Some(HOME),
+                home: Some(HOME),
+                dirs: &[HOME],
+                want: Want::EmptyState(HOME),
+            },
+            Case {
+                // A hand-edited `state.json` naming `/` must NOT be able to point the
+                // sidebar's FileSearch at the whole filesystem.
+                desc: "restored cwd == / is refused by the same predicate",
+                process_cwd: None,
+                restored: Some(ROOT),
+                home: Some(HOME),
+                dirs: &[ROOT, HOME],
+                want: Want::EmptyState(HOME),
+            },
+            Case {
+                desc: "restored used with home unknown => still a project",
+                process_cwd: None,
+                restored: Some(RESTORED),
+                home: None,
+                dirs: &[RESTORED],
+                want: Want::Folder(RESTORED),
             },
         ];
 
         for case in &cases {
             let process_cwd = case.process_cwd.map(Path::new);
+            let restored = case.restored.map(Path::new);
             let home = case.home.map(Path::new);
             let is_dir = |p: &Path| case.dirs.iter().any(|dir| Path::new(dir) == p);
-            let got = launch_decision(process_cwd, home, is_dir);
+            let got = launch_decision(process_cwd, restored, home, is_dir);
             let want = expected_decision(&case.want);
             assert_eq!(got, want, "case: {}", case.desc);
         }

@@ -30,8 +30,9 @@
 use std::path::Path;
 use std::time::Duration;
 
+use serde_json::Value;
 use tempfile::tempdir;
-use wolf_core::state::STATE_FILE_NAME;
+use wolf_core::state::{rebuild_layout_spec, STATE_FILE_NAME};
 use wolf_core::{
     load_state, PaneNode, PaneOrientation, StateStore, TabState, WindowState, WolfState,
 };
@@ -403,5 +404,318 @@ fn v1_layout_leaf_without_preview_defaults_to_false() {
         loaded.windows[0].tabs[0].layout,
         Some(two_child_split()),
         "a leaf with no on-disk `preview` field must default to preview: false"
+    );
+}
+
+// =========================================================================
+// `rebuild_layout_spec` — the WIRE shape `_G.wolf_rebuild_layout` decodes
+//
+// This is NOT `PaneNode`'s serde shape. The Lua helper reads a terser document:
+//
+//   leaf  -> { "leaf": true, "path": "<abs or empty>", "preview": true|false }
+//   split -> { "orientation": "v"|"h", "weights": [...], "children": [...] }
+//
+// Every assertion below PARSES the rendered string back with
+// `serde_json::from_str::<Value>` and inspects fields, rather than comparing
+// strings: key ORDER is not part of the contract (`vim.json.decode` is a JSON
+// parser, not a text matcher), and a string comparison would turn a harmless
+// serializer change into a red test while still missing a genuinely wrong VALUE.
+// =========================================================================
+
+/// Parses a rendered spec back into a `serde_json::Value`, panicking with the
+/// offending text on failure.
+///
+/// A parse failure here is exactly what `wolf_rebuild_layout`'s
+/// `pcall(vim.json.decode, …)` degrades to: it returns `{}`, `rebuild_layout`
+/// returns no handles, and the restore silently does nothing.
+fn parse_spec(node: &PaneNode) -> Value {
+    let text = rebuild_layout_spec(node);
+    serde_json::from_str(&text).unwrap_or_else(|e| {
+        panic!(
+            "rebuild_layout_spec produced text that is not valid JSON ({e}). \
+             `wolf_rebuild_layout` wraps its decode in a pcall, so on the Lua side this failure is \
+             SILENT: it returns {{}}, no window handles come back, and the saved layout is simply \
+             never restored. Rendered text was:\n{text}"
+        )
+    })
+}
+
+/// Collects the `path` of every leaf object in `value`, in DOCUMENT order — the
+/// order `wolf_rebuild_layout` realizes regions and returns handles in.
+fn spec_leaf_paths(value: &Value, out: &mut Vec<String>) {
+    if value.get("leaf").and_then(Value::as_bool) == Some(true) {
+        out.push(
+            value
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        );
+        return;
+    }
+    if let Some(children) = value.get("children").and_then(Value::as_array) {
+        for child in children {
+            spec_leaf_paths(child, out);
+        }
+    }
+}
+
+#[test]
+fn rebuild_layout_spec_matches_the_lua_contract() {
+    // --- a plain editor leaf ---------------------------------------------
+    let doc = parse_spec(&leaf("/proj/only.md"));
+    assert_eq!(
+        doc.get("leaf"),
+        Some(&Value::Bool(true)),
+        "a leaf must carry `\"leaf\": true`; `wolf_rebuild_layout`'s `if node.leaf then` is the \
+         ONLY thing that distinguishes a leaf from a split, and a missing/false flag makes it fall \
+         through to the split branch with no children, creating one region and no `:edit`"
+    );
+    assert_eq!(
+        doc.get("path").and_then(Value::as_str),
+        Some("/proj/only.md"),
+        "the leaf's `path` is what the Lua side `:edit`s (through `fnameescape`)"
+    );
+    assert_eq!(
+        doc.get("preview"),
+        Some(&Value::Bool(false)),
+        "`preview` must be present and false for an editor leaf; the Lua branches on it before \
+         `:edit`"
+    );
+    assert!(
+        doc.get("orientation").is_none() && doc.get("children").is_none(),
+        "a leaf must carry no split keys at all: {doc}"
+    );
+
+    // --- a preview leaf ---------------------------------------------------
+    let preview_doc = parse_spec(&preview_leaf("/proj/only.md"));
+    assert_eq!(
+        preview_doc.get("preview"),
+        Some(&Value::Bool(true)),
+        "a preview leaf must render `\"preview\": true`, which routes the Lua side to \
+         `wolf_preview_file` instead of `:edit`. wolf-gnome never produces one today, but the flag \
+         is carried end to end so the preview unit adds a VALUE rather than a field."
+    );
+
+    // --- an empty-path leaf ------------------------------------------------
+    let empty_doc = parse_spec(&leaf(""));
+    assert_eq!(
+        empty_doc.get("path").and_then(Value::as_str),
+        Some(""),
+        "an unnamed pane renders as an empty `path`, which the Lua side leaves as the inherited \
+         (unnamed) buffer while STILL returning the window handle — the handle count must match \
+         the leaf count regardless"
+    );
+
+    // --- the ORIENTATION TAG, both directions ------------------------------
+    //
+    // THE row most worth having. Inverting `v`/`h` transposes every restored
+    // layout — a saved side-by-side pair comes back stacked — while every
+    // count-based assertion (handles returned, leaves realized, panes bound)
+    // stays green, because the COUNT is unchanged.
+    let vertical = parse_spec(&two_child_split());
+    assert_eq!(
+        vertical.get("orientation").and_then(Value::as_str),
+        Some("v"),
+        "PaneOrientation::Vertical (side by side, divides WIDTH) must render as the tag \"v\", \
+         which is the only value `wolf_rebuild_layout` tests for (`local vertical = \
+         node.orientation == \"v\"`). Anything else falls through to `rightbelow split` and stacks \
+         the panes instead."
+    );
+    let horizontal = parse_spec(&nary_split());
+    assert_eq!(
+        horizontal.get("orientation").and_then(Value::as_str),
+        Some("h"),
+        "PaneOrientation::Horizontal (stacked, divides HEIGHT) must render as the tag \"h\". Note \
+         the Lua only tests for \"v\", so ANY other string stacks — which is why this row is \
+         asserted as an exact string rather than merely `!= \"v\"`."
+    );
+
+    // --- the split's own shape ---------------------------------------------
+    assert!(
+        vertical.get("leaf").is_none(),
+        "a split must NOT carry a `leaf` key: `if node.leaf then` would take the leaf branch and \
+         the whole subtree would collapse into one window. Got: {vertical}"
+    );
+    assert_eq!(
+        vertical
+            .get("children")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(2),
+        "the two-child split must render two children"
+    );
+    let want_vertical_weights = vec![Value::from(0.5_f64), Value::from(0.5_f64)];
+    assert_eq!(
+        vertical.get("weights").and_then(Value::as_array),
+        Some(&want_vertical_weights),
+        "weights render as a JSON array of numbers, parallel to `children`"
+    );
+    assert_eq!(
+        horizontal
+            .get("children")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(3),
+        "the n-ary split must render all three children — the Lua creates `#children` regions"
+    );
+    let want_horizontal_weights = vec![
+        Value::from(0.5_f64),
+        Value::from(0.25_f64),
+        Value::from(0.25_f64),
+    ];
+    assert_eq!(
+        horizontal.get("weights").and_then(Value::as_array),
+        Some(&want_horizontal_weights),
+        "the n-ary split's UNEQUAL weights render verbatim and in order"
+    );
+
+    // --- nesting recurses ---------------------------------------------------
+    let nested = parse_spec(&perpendicular_split());
+    let outer_children = nested
+        .get("children")
+        .and_then(Value::as_array)
+        .expect("the perpendicular tree's root is a split with children");
+    assert_eq!(outer_children.len(), 2, "the outer split has two children");
+    assert_eq!(
+        outer_children[0].get("leaf"),
+        Some(&Value::Bool(true)),
+        "the outer split's first child is a leaf"
+    );
+    assert_eq!(
+        outer_children[1].get("orientation").and_then(Value::as_str),
+        Some("h"),
+        "the outer split's second child is itself a HORIZONTAL split, so the renderer recurses \
+         and tags each level independently"
+    );
+}
+
+#[test]
+fn rebuild_layout_spec_leaf_order_is_dfs() {
+    // `wolf_rebuild_layout` realizes regions child-0-first and gathers handles in
+    // the same walk, so the DOCUMENT order of leaves IS the order the returned
+    // handle vector is in. Every front-end zips its own DFS leaf ids onto that
+    // vector by index, which is why the order is a contract and not an incidental.
+    let mut paths = Vec::new();
+    spec_leaf_paths(&parse_spec(&nary_split()), &mut paths);
+    assert_eq!(
+        paths,
+        vec![
+            "/proj/a.md".to_string(),
+            "/proj/b.md".to_string(),
+            "/proj/c.md".to_string()
+        ],
+        "a flat n-ary split emits its leaves left-to-right"
+    );
+
+    let mut nested_paths = Vec::new();
+    spec_leaf_paths(&parse_spec(&perpendicular_split()), &mut nested_paths);
+    assert_eq!(
+        nested_paths,
+        vec![
+            String::new(),
+            "/proj/b.md".to_string(),
+            "/proj/c.md".to_string()
+        ],
+        "a NESTED tree emits depth-first, child-0 first: the outer split's empty-path leaf comes \
+         before both leaves of the inner horizontal split. A breadth-first walk would produce the \
+         same three paths in a different order and misbind every restored pane."
+    );
+
+    // A lone leaf is still a one-element sequence — the single-pane restore shape.
+    let mut lone = Vec::new();
+    spec_leaf_paths(&parse_spec(&leaf("/proj/only.md")), &mut lone);
+    assert_eq!(
+        lone,
+        vec!["/proj/only.md".to_string()],
+        "a lone leaf renders as a single leaf document, which `wolf_rebuild_layout` realizes into \
+         exactly one handle"
+    );
+}
+
+#[test]
+fn rebuild_layout_spec_escapes_paths() {
+    // THIS is why the renderer is not hand-rolled. A file name may legally contain
+    // a double quote, a backslash and even a newline on Linux. An unescaped quote
+    // makes `pcall(vim.json.decode, …)` fail, `wolf_rebuild_layout` return `{}`,
+    // and the restore abort SILENTLY — no error, no handles, no layout.
+    const NASTY: &str = "/proj/we\"ird\\path\nnewline.md";
+
+    let doc = parse_spec(&leaf(NASTY));
+    assert_eq!(
+        doc.get("path").and_then(Value::as_str),
+        Some(NASTY),
+        "a path containing `\"`, `\\` and a newline must survive the render/parse round trip \
+         BYTE FOR BYTE. If this fails, `serde_json` is no longer doing the escaping — a \
+         hand-rolled writer would produce a document `vim.json.decode` rejects, and the restore \
+         would fail silently rather than loudly."
+    );
+
+    // And nested inside a split, so the escaping is not special-cased at the root.
+    let split = PaneNode::Split {
+        orientation: PaneOrientation::Vertical,
+        weights: vec![0.5, 0.5],
+        children: vec![leaf(NASTY), leaf("/proj/plain.md")],
+    };
+    let mut paths = Vec::new();
+    spec_leaf_paths(&parse_spec(&split), &mut paths);
+    assert_eq!(
+        paths,
+        vec![NASTY.to_string(), "/proj/plain.md".to_string()],
+        "the same path nested under a split must round-trip identically, and must not disturb its \
+         sibling"
+    );
+}
+
+#[test]
+fn rebuild_layout_spec_tolerates_a_non_finite_weight() {
+    // `serde_json::Number::from_f64` has no representation for NaN or ±inf, so the
+    // renderer substitutes `0.0` and stays TOTAL. The substitution is purely
+    // cosmetic: `wolf_rebuild_layout` produces the window COUNT and TOPOLOGY only
+    // and never reads `weights` (pane sizes come from the front-end). What matters
+    // is that the DOCUMENT still parses — an emitted `null` (or a panic) would take
+    // the whole restore down over a value nobody reads.
+    let poisoned = PaneNode::Split {
+        orientation: PaneOrientation::Vertical,
+        weights: vec![f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.5],
+        children: vec![
+            leaf("/proj/a.md"),
+            leaf("/proj/b.md"),
+            leaf("/proj/c.md"),
+            leaf("/proj/d.md"),
+        ],
+    };
+
+    let doc = parse_spec(&poisoned);
+    let weights = doc
+        .get("weights")
+        .and_then(Value::as_array)
+        .expect("the split still renders a `weights` array");
+    let want_weights = vec![
+        Value::from(0.0_f64),
+        Value::from(0.0_f64),
+        Value::from(0.0_f64),
+        Value::from(0.5_f64),
+    ];
+    assert_eq!(
+        weights, &want_weights,
+        "each NON-FINITE weight must be emitted as 0.0 while the finite one is untouched. A `null` \
+         in this array would change the document's SHAPE, and Lua would read `node.weights[1]` as \
+         nil."
+    );
+
+    // The topology — the part that actually matters — is unaffected.
+    let mut paths = Vec::new();
+    spec_leaf_paths(&doc, &mut paths);
+    assert_eq!(
+        paths,
+        vec![
+            "/proj/a.md".to_string(),
+            "/proj/b.md".to_string(),
+            "/proj/c.md".to_string(),
+            "/proj/d.md".to_string()
+        ],
+        "a poisoned weight must not cost the restore its topology: all four leaves still render, \
+         in order, so `wolf_rebuild_layout` still returns four handles"
     );
 }

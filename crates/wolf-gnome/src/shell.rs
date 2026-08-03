@@ -24,11 +24,16 @@
 //!   LEVEL-triggered (an atomic read), and putting the read behind
 //!   `pane_view::on_render_wake`'s `core.is_none()` guard would reintroduce an
 //!   edge-triggered swallow.
-//! - [`AppShell::on_render_wake`] settles a pending re-root, then drains
-//!   [`wolf_core::WolfCore::drain_commands`] and dispatches each command. A
-//!   command `wolf-gnome` does not implement is PRINTED with its recorded reason —
-//!   never silently dropped. It runs LAST because a drained `close_window` shuts
-//!   the core down.
+//! - [`AppShell::on_render_wake`] settles a pending re-root, refreshes the window
+//!   TITLE from the live cwd ([`AppShell::refresh_title`] over the pure
+//!   [`crate::title`] seam), asks [`crate::persistence`] for an application-state
+//!   SNAPSHOT, and then drains [`wolf_core::WolfCore::drain_commands`] and
+//!   dispatches each command. A command `wolf-gnome` does not implement is
+//!   PRINTED with its recorded reason — never silently dropped. The drain runs
+//!   LAST because a drained `close_window` shuts the core down, and the state
+//!   snapshot must happen before that. The title refresh and the snapshot run
+//!   UNGATED like the drain: both are cheap, neither issues an RPC, and the
+//!   snapshot's own `state_seam::may_snapshot` gate handles the non-`Alive` case.
 //!
 //! The drain keeps running in ALL THREE liveness states — a deliberate divergence
 //! from macOS, whose `onWake` `return`s before its command drain. On Linux the
@@ -76,6 +81,15 @@
 //! a `block_on_rpc`, and against a dead nvim it freezes the GTK main loop for the
 //! whole RPC timeout budget on every single crash. The cheap, RPC-free
 //! `Snapshot::current_tabpage` field carries the same handle.
+//!
+//! That rule stands, but its old JUSTIFYING CLAIM — that `wolf-gnome` calls no
+//! `block_on_rpc` at all, so `Liveness::NotResponding` is unreachable here — no
+//! longer holds. The application-state restore added exactly ONE:
+//! `WolfCore::rebuild_layout`, issued at most once per launch from
+//! `pane_view::apply_layout_rebuild`, before the window is interactive and never
+//! on the crash path. A wedged nvim AT LAUNCH can therefore mark the core
+//! `NotResponding` and raise the stall overlay, which nothing else in this crate
+//! can cause. Nothing on the restart path issues one.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -96,7 +110,9 @@ use crate::liveness_ui::{
     MAX_AUTO_RESTART_ATTEMPTS,
 };
 use crate::pane_view::PaneHandle;
+use crate::persistence::StateHandle;
 use crate::picker::PickerHandle;
+use crate::title;
 use crate::tree_view::TreeHandle;
 use crate::workspace;
 
@@ -174,6 +190,9 @@ pub struct ShellParts<'a> {
     /// The pane view, reset after a successful in-place Neovim restart. No cycle:
     /// [`crate::pane_view`] does not reference the shell.
     pub panes: &'a PaneHandle,
+    /// The application-state persistence glue, driven from the render wake and
+    /// kept in step with the empty-state flag.
+    pub state: &'a StateHandle,
 }
 
 /// The shell's shared state. All access happens on the single GTK main thread, so
@@ -205,6 +224,16 @@ struct ShellInner {
     crash_overlay: CrashOverlay,
     /// The pane view, reset after a successful in-place restart.
     panes: PaneHandle,
+    /// The application-state persistence glue.
+    state: StateHandle,
+    /// The user's home directory, stringified ONCE at [`build`] time — the
+    /// injected `home` for [`title::window_title`]. Captured rather than read per
+    /// frame because [`title`] deliberately never touches the environment, and
+    /// `$HOME` does not change under a running process.
+    home: String,
+    /// The last title actually pushed to the window, so
+    /// [`AppShell::refresh_title`] calls `set_title` only on a real change.
+    last_title: RefCell<String>,
     /// FRONT-END re-entrancy guard for [`AppShell::restart_nvim`].
     ///
     /// Needed IN ADDITION to the core's own CAS: the core's guard returns
@@ -315,6 +344,11 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         pending_reroot: RefCell::new(None),
         crash_overlay: parts.crash_overlay.clone(),
         panes: parts.panes.clone(),
+        state: parts.state.clone(),
+        home: workspace::home_dir()
+            .map(|home| home.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        last_title: RefCell::new(String::new()),
         restarting: Cell::new(false),
         restart_scheduled: Cell::new(false),
         restart_attempts: Cell::new(0),
@@ -508,6 +542,10 @@ impl AppShell {
         if let Some(action) = self.inner.go_to_file.borrow().as_ref() {
             action.set_enabled(!empty);
         }
+        // The persisted `cwd` / `sidebar_visible` follow the LIVE empty-state
+        // flag, so an Open Folder into an empty-state window starts persisting
+        // that folder from the very next wake.
+        self.inner.state.set_empty(empty);
     }
 
     /// Reads the captive nvim's [`Liveness`] ONCE per wake, applies the pure
@@ -740,7 +778,40 @@ impl AppShell {
     /// runs in ALL THREE liveness states — see the module docs.
     pub fn on_render_wake(&self) {
         self.settle_pending_reroot();
+        self.refresh_title();
+        self.inner.state.on_render_wake();
+        // LAST: a drained `close_window` tears the core down, so the state
+        // snapshot above must already have happened.
         self.drain_and_dispatch_commands();
+    }
+
+    /// Sets the window title from the captive nvim's LIVE working directory,
+    /// through the pure [`title::window_title`] seam.
+    ///
+    /// The cwd read is RPC-free (`WolfCore::live_cwd` is a tracked-cell read) and
+    /// `home` was captured once at [`build`] time, so this costs a string compare
+    /// on a steady-state frame.
+    ///
+    /// **The `last_title` cache is not cosmetic.** `set_title` on every frame is
+    /// pointless GTK churn; more to the point, the cage title smoke's red-run
+    /// revert is the deletion of the single `set_title` call below, so that call
+    /// has to be the only place a title is ever pushed.
+    fn refresh_title(&self) {
+        // Short borrow in its own statement, dropped before anything else.
+        let cwd = {
+            let core_ref = self.inner.core.borrow();
+            core_ref.as_ref().and_then(WolfCore::live_cwd)
+        };
+        let cwd = cwd.map(|cwd| cwd.to_string_lossy().into_owned());
+        let title = title::window_title(cwd.as_deref().unwrap_or_default(), &self.inner.home);
+        // Bound to a local so the `RefCell` borrow cannot still be alive when the
+        // `borrow_mut()` below runs.
+        let unchanged = *self.inner.last_title.borrow() == title;
+        if unchanged {
+            return;
+        }
+        self.inner.window.set_title(Some(&title));
+        *self.inner.last_title.borrow_mut() = title;
     }
 
     /// Drains the core's command queue and dispatches each command.

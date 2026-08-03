@@ -45,7 +45,7 @@ At the workspace root (a virtual manifest) this runs **every** member — `wolf-
 
 The integration tests spawn the **pinned** Neovim (via `WOLF_NVIM_BIN`) as a real child process — there are no mocks, per the project's testing policy. The `wolf-core` and `wolf-ffi` integration tests are fully **headless**: `nvim --embed` speaks msgpack-RPC over stdio and needs no TTY, so that part of the suite is CI-safe. The tests fail loudly (they do not silently pass) if `WOLF_NVIM_BIN` is unset.
 
-The twenty `wolf-gnome` cage smokes in `crates/wolf-gnome/tests/smoke_headless.rs` are the exception worth knowing about. They are headless in the _display_ sense — `cage` is a headless wlroots compositor — but they are not toolchain-free: they additionally need five tools — `cage`, `wtype`, `grim`, `tesseract` and [`wolf-pointer-inject`](tools/wolf-pointer-inject/README.md) (this repo's own long-lived Wayland virtual-pointer injector, built from `tools/` by `flake.nix` and used by the five smokes that inject pointer events) — plus a writable `XDG_RUNTIME_DIR`, all of which the flake devShell provides. Like the rest of the suite they fail loud rather than skipping when that toolchain is absent, because a miss there means the suite was run outside the devShell.
+The twenty-three `wolf-gnome` cage smokes in `crates/wolf-gnome/tests/smoke_headless.rs` are the exception worth knowing about. They are headless in the _display_ sense — `cage` is a headless wlroots compositor — but they are not toolchain-free: they additionally need five tools — `cage`, `wtype`, `grim`, `tesseract` and [`wolf-pointer-inject`](tools/wolf-pointer-inject/README.md) (this repo's own long-lived Wayland virtual-pointer injector, built from `tools/` by `flake.nix` and used by the five smokes that inject pointer events) — plus a writable `XDG_RUNTIME_DIR`, all of which the flake devShell provides. Like the rest of the suite they fail loud rather than skipping when that toolchain is absent, because a miss there means the suite was run outside the devShell.
 
 You can also run the headless smoke example, which starts the core, types a little text, and dumps the resulting grid:
 
@@ -55,7 +55,7 @@ cargo run -p wolf-core --example grid_dump
 
 ## The Linux verification gate
 
-This is the complete definition of "Linux is green": formatting, Markdown formatting, clippy, the workspace build, and the whole test suite including the twenty `wolf-gnome` cage smokes. Unlike the macOS `//tools/lint` targets — which are advisory and `manual`-tagged — **this gate is gating**: `-D warnings` is on unconditionally and every step must exit 0.
+This is the complete definition of "Linux is green": formatting, Markdown formatting, clippy, the workspace build, and the whole test suite including the twenty-three `wolf-gnome` cage smokes. Unlike the macOS `//tools/lint` targets — which are advisory and `manual`-tagged — **this gate is gating**: `-D warnings` is on unconditionally and every step must exit 0.
 
 Run from the repo root:
 

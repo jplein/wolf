@@ -31,7 +31,18 @@
 //!   command drain dispatches through ([`command_action`]).
 //! - [`launch_decision`] / [`workspace::reroot_ready`]: whether a project is open,
 //!   where the captive Neovim starts, and when an Open Folder re-root has settled
-//!   ([`workspace`]).
+//!   ([`workspace`]). The launch rule is process cwd first, then the cwd restored
+//!   from `state.json`, under one shared predicate.
+//! - [`window_title`]: the working directory rendered as a window title, with the
+//!   home prefix abbreviated to `~` on a full path-SEGMENT boundary and an
+//!   ALWAYS-INJECTED `home` (never an implicit `$HOME` read) — [`title`].
+//! - [`mod@pane_layout`]: the codec between the live [`layout`] `PaneLayout` (leaf
+//!   IDS) and the persisted `wolf_core::PaneNode` (leaf PATHS), including
+//!   [`pane_layout::is_empty_leaf`] — the CONTENT predicate that decides whether a
+//!   layout is persisted at all, and which must never be an arity test.
+//! - [`restore_plan`]: the whole launch plan (cwd, empty state, saved pane tree,
+//!   window size) plus the write-side rules — which snapshots may be committed,
+//!   what cwd is persisted, and the one-window/one-tab shape ([`state_seam`]).
 //! - [`mod@liveness_ui`]: the CRASH/STALL recovery rulebook — the TOTAL
 //!   [`wolf_core::Liveness`] → `(overlay mode, auto_restart, paint)` mapping the
 //!   wake drain gates on ([`liveness_ui()`]), the message each overlay mode
@@ -46,7 +57,14 @@
 //!   [`actions::forbidden_reason`] checker that mechanically enforces "no Neovim
 //!   key becomes unreachable".
 //!
-//! The windowed application: [`app::run`] builds an `adw::ApplicationWindow` with a
+//! The windowed application restores its state at launch and persists it as it
+//! runs: [`app::run`] opens a `wolf_core::StateStore` over `state.json` before any
+//! widget exists, turns it into a [`RestorePlan`] (working directory, window size,
+//! the tab's saved pane-split tree), realizes the saved layout through
+//! `WolfCore::rebuild_layout`, and — via [`persistence`] — writes the live tree
+//! back on every render wake and authoritatively at `close-request`.
+//!
+//! [`app::run`] builds an `adw::ApplicationWindow` with a
 //! header bar whose editor area is a **native pane view** ([`pane_view`]) — a tree
 //! of nested `gtk::Paned`s with one `gtk::DrawingArea` per Neovim window, driven by
 //! the pure [`layout`] `PaneTree` — plus a bottom **cmdline strip** showing the
@@ -78,10 +96,14 @@ pub mod input;
 pub mod layout;
 pub mod liveness_ui;
 pub mod mouse;
+pub mod pane_layout;
 pub mod pane_view;
+pub mod persistence;
 pub mod picker;
 pub mod render;
 pub mod shell;
+pub mod state_seam;
+pub mod title;
 pub mod tree;
 pub mod tree_view;
 pub mod workspace;
@@ -93,4 +115,6 @@ pub use liveness_ui::{
     liveness_ui, reopen_order, restart_button_rect, LivenessUi, OverlayMode, RestartOutcome,
 };
 pub use render::{paint, CellMetrics};
+pub use state_seam::{restore_plan, RestorePlan};
+pub use title::{window_title, WINDOW_TITLE_FALLBACK};
 pub use workspace::{launch_decision, LaunchDecision};
