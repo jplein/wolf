@@ -2,8 +2,8 @@
 //!
 //! One table ([`ACTION_TABLE`]) is the single source of truth for every
 //! `gio::SimpleAction` name, its GTK accelerator, the [`wolf_core::Command`] it
-//! corresponds to, and the one-line justification that appears in
-//! `crates/wolf-gnome/README.md`'s accelerator table. A second table
+//! corresponds to, and the one-line justification for the chord it claims under
+//! `crates/wolf-gnome/DECISIONS.md`'s scheme. A second table
 //! ([`MENU_SECTIONS`]) declares the GNOME primary menu in terms of those same
 //! action names. Because the menu, the accelerators and the command dispatch all
 //! read the same data, they cannot drift apart.
@@ -30,8 +30,8 @@
 //!
 //! [`parse_accel`] + [`forbidden_reason`] enforce that invariant MECHANICALLY over
 //! [`ACTION_TABLE`], so a future accelerator cannot quietly shadow a Neovim key.
-//! See `crates/wolf-gnome/README.md`, "Keyboard accelerators", for the full table
-//! and its justification.
+//! See `crates/wolf-gnome/DECISIONS.md`, "The accelerator namespace", for the
+//! reasoning behind the scheme.
 //!
 //! ## Why the accel grammar is re-implemented here
 //!
@@ -80,7 +80,7 @@ pub enum BindingStatus {
 
 /// One row of the action namespace: an action name, its optional accelerator, the
 /// [`wolf_core::Command`] it corresponds to (if any), its binding status, and the
-/// one-line justification mirrored into the README's accelerator table.
+/// one-line justification for the chord it claims.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActionBinding {
     /// The `gio` action name, e.g. `"win.go-to-file"` or `"app.quit"`. The `win.`
@@ -94,13 +94,13 @@ pub struct ActionBinding {
     pub command: Option<Command>,
     /// Whether the accelerator is registered now, reserved, or absent.
     pub status: BindingStatus,
-    /// The README table's justification for this row, one line.
+    /// The justification for this row's chord, one line.
     pub note: &'static str,
 }
 
-/// The COMPLETE Linux accelerator scheme: one row per row of the README's
-/// accelerator table, covering later units' reserved chords as well as this
-/// unit's bound ones.
+/// The COMPLETE Linux accelerator scheme of `crates/wolf-gnome/DECISIONS.md`,
+/// "The accelerator namespace": one row per action, covering later units'
+/// reserved chords as well as this unit's bound ones.
 ///
 /// Reserved rows are present so the namespace is auditable in one place and so
 /// the `no_accel_makes_a_neovim_key_unreachable` unit test checks them too — a
@@ -187,15 +187,16 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         note: "macOS Cmd+Q; gives up only the Ctrl+Shift alias for <C-q> (= CTRL-V in \
                insert/cmdline), which is still typed as plain Ctrl+Q",
     },
-    // --- Reserved for later units (declared here so the scheme is auditable) --
+    // --- The command-palette overlay -----------------------------------------
     ActionBinding {
         action: "win.command-palette",
         accel: Some("<Control><Shift>p"),
         command: Some(Command::CommandPalette),
-        status: BindingStatus::Reserved,
-        note: "macOS Cmd+P; reserved for the command palette (the strongest Linux idiom for this \
-               chord) and gives up only the Ctrl+Shift alias for <C-p>",
+        status: BindingStatus::Bound,
+        note: "macOS Cmd+P; the strongest Linux idiom for this chord, and gives up only the \
+               Ctrl+Shift alias for <C-p>",
     },
+    // --- Reserved for later units (declared here so the scheme is auditable) --
     ActionBinding {
         action: "win.buffer-picker",
         accel: Some("<Control><Shift>e"),
@@ -263,16 +264,16 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         accel: Some("<Control>0"),
         command: Some(Command::ResetFontSize),
         status: BindingStatus::Reserved,
-        note: "macOS Cmd+0; assumed free (<C-0> has no index.txt entry) — see the README's \
-               assumption note",
+        note: "macOS Cmd+0; assumed free because <C-0> has no index.txt entry, which is an \
+               assumption and not a verified fact",
     },
     ActionBinding {
         action: "win.terminal",
         accel: Some("<Control>grave"),
         command: Some(Command::Terminal),
         status: BindingStatus::Reserved,
-        note: "macOS Ctrl+`; assumed free (<C-`> has no index.txt entry) — see the README's \
-               assumption note",
+        note: "macOS Ctrl+`; assumed free because <C-`> has no index.txt entry, which is an \
+               assumption and not a verified fact",
     },
     ActionBinding {
         action: "win.history-back",
@@ -333,6 +334,10 @@ pub const MENU_SECTIONS: &[MenuSection] = &[
             MenuItemSpec {
                 label: "Go to File…",
                 action: "win.go-to-file",
+            },
+            MenuItemSpec {
+                label: "Command Palette…",
+                action: "win.command-palette",
             },
         ],
     },
@@ -550,11 +555,12 @@ mod tests {
     /// (`p`, `o`, `0`, `equal`, `minus`, `grave`), never a symbol.
     const NAMED_KEYS: [&str; 2] = ["Left", "Right"];
 
-    /// The actions whose accelerators this unit actually registers (plan section
-    /// 2.4's four **bound** rows), sorted.
-    const EXPECTED_BOUND_ACTIONS: [&str; 4] = [
+    /// The actions whose accelerators are actually registered — the
+    /// [`BindingStatus::Bound`] rows of [`ACTION_TABLE`] — sorted.
+    const EXPECTED_BOUND_ACTIONS: [&str; 5] = [
         "app.quit",
         "win.close-pane",
+        "win.command-palette",
         "win.go-to-file",
         "win.new-buffer",
     ];
@@ -641,8 +647,8 @@ mod tests {
         assert!(
             with_accel > 0,
             "ACTION_TABLE declares no accelerators at all, so every per-accel test in this module \
-             would pass vacuously. Populate it from the README's accelerator table (plan section \
-             2.4)."
+             would pass vacuously. Populate it from the scheme in \
+             `crates/wolf-gnome/DECISIONS.md`, \"The accelerator namespace\" (plan section 2.4)."
         );
 
         for binding in ACTION_TABLE {
@@ -725,8 +731,8 @@ mod tests {
             assert!(
                 reason.is_none(),
                 "accel {accel:?} for action {:?} is FORBIDDEN: {}. A chord that shadows a Neovim \
-                 key is a bug, not a tradeoff — see the invariant in the module docs and the \
-                 README's accelerator section.",
+                 key is a bug, not a tradeoff — see the invariant in the module docs and in \
+                 `crates/wolf-gnome/DECISIONS.md`, \"The accelerator namespace\".",
                 binding.action,
                 reason.unwrap_or("<no reason given>")
             );
@@ -804,8 +810,8 @@ mod tests {
         }
     }
 
-    /// The accelerators actually REGISTERED this unit are exactly the four of plan
-    /// section 2.4, and each of them really has a chord to register.
+    /// The accelerators actually REGISTERED are exactly
+    /// [`EXPECTED_BOUND_ACTIONS`], and each of them really has a chord to register.
     #[test]
     fn bound_set_is_exactly_this_unit() {
         let mut bound: Vec<&'static str> = bound_bindings().map(|b| b.action).collect();
@@ -816,11 +822,11 @@ mod tests {
 
         assert_eq!(
             bound, expected,
-            "the set of BOUND accelerators changed. This unit registers exactly four \
-             (Ctrl+Shift+O go-to-file, Ctrl+Shift+N new-buffer, Ctrl+Shift+W close-pane, \
-             Ctrl+Shift+Q quit); every other row of the table is Reserved for a later unit or \
-             MenuOnly. Binding a reserved chord early means shipping a menu/accelerator that does \
-             nothing."
+            "the set of BOUND accelerators changed. wolf-gnome registers exactly five \
+             (Ctrl+Shift+O go-to-file, Ctrl+Shift+N new-buffer, Ctrl+Shift+P command-palette, \
+             Ctrl+Shift+W close-pane, Ctrl+Shift+Q quit); every other row of the table is \
+             Reserved for a later unit or MenuOnly. Binding a reserved chord early means shipping \
+             a menu/accelerator that does nothing."
         );
 
         for binding in bound_bindings() {
@@ -841,7 +847,7 @@ mod tests {
     /// GTK's own keymap-aware matching does not fire under `wtype` (see the module
     /// docs) — so every row below is a user-visible behaviour:
     ///
-    /// * **The four Bound chords must fire, in BOTH letter cases.** A real keymap
+    /// * **The five Bound chords must fire, in BOTH letter cases.** A real keymap
     ///   delivers the SHIFTED glyph for Ctrl+Shift+O — keyval `O`, not `o`
     ///   (`input::gdk_key`'s shift contract, and what `tests/gdk_key.rs` pins) — so
     ///   a case-SENSITIVE comparison would mean the chord never fires on real
@@ -850,8 +856,8 @@ mod tests {
     ///   enforcement of the invariant in the module docs: the matcher runs in the
     ///   CAPTURE phase, ahead of the key controller that forwards to Neovim and
     ///   returning `Propagation::Stop`, so a match here is a Neovim key made
-    ///   UNREACHABLE. `<C-o>`, `<C-n>`, `<C-w>` (the window-command prefix) and
-    ///   `<C-q>` must all still reach Neovim.
+    ///   UNREACHABLE. `<C-o>`, `<C-n>`, `<C-p>`, `<C-w>` (the window-command prefix)
+    ///   and `<C-q>` must all still reach Neovim.
     /// * **A Reserved row must NOT fire.** Its action is not installed this unit,
     ///   so a match would swallow the key and do nothing at all — worse than not
     ///   binding it.
@@ -868,7 +874,7 @@ mod tests {
 
         // (description, delivered keyval, modifier state, expected action)
         let cases: Vec<(&str, gdk::Key, gdk::ModifierType, Option<&'static str>)> = vec![
-            // --- The four BOUND chords, in both letter cases ------------------
+            // --- The five BOUND chords, in both letter cases ------------------
             (
                 "Ctrl+Shift+o -> win.go-to-file",
                 key_from_char('o'),
@@ -917,6 +923,18 @@ mod tests {
                 ctrl | shift,
                 Some("app.quit"),
             ),
+            (
+                "Ctrl+Shift+p -> win.command-palette",
+                key_from_char('p'),
+                ctrl | shift,
+                Some("win.command-palette"),
+            ),
+            (
+                "Ctrl+Shift+P (shifted glyph) -> win.command-palette",
+                key_from_char('P'),
+                ctrl | shift,
+                Some("win.command-palette"),
+            ),
             // --- Bare Ctrl+<letter> stays Neovim's ---------------------------
             (
                 "Ctrl+o (no Shift) -> None, so <C-o> still reaches Neovim",
@@ -942,13 +960,13 @@ mod tests {
                 ctrl,
                 None,
             ),
-            // --- Reserved rows must never match ------------------------------
             (
-                "Ctrl+Shift+p -> None: win.command-palette is Reserved, not installed",
+                "Ctrl+p (no Shift) -> None, so <C-p> still reaches Neovim",
                 key_from_char('p'),
-                ctrl | shift,
+                ctrl,
                 None,
             ),
+            // --- Reserved rows must never match ------------------------------
             (
                 "Alt+Left -> None: win.history-back is Reserved, not installed",
                 gdk::Key::Left,
@@ -1007,7 +1025,7 @@ mod tests {
 
     /// [`key_name_matches`] over every key-NAME shape [`ACTION_TABLE`] uses.
     ///
-    /// [`action_for_key`] scans only the four Bound rows, and all four are single
+    /// [`action_for_key`] scans only the five Bound rows, and all five are single
     /// letters — so the named-key (`Left` / `Right`) and punctuation-name (`equal`
     /// / `minus` / `grave`) branches are otherwise completely unexercised, while a
     /// later unit promotes exactly those rows from Reserved to Bound. Pinning them

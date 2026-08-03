@@ -11,10 +11,11 @@
 //!
 //! ## What this file contains
 //!
-//! **Twenty-five cage smokes** — one window-render smoke, two file-picker smokes,
+//! **Twenty-six cage smokes** — one window-render smoke, two file-picker smokes,
 //! one file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
-//! new-untitled-buffer smoke, one Ctrl+Shift+W close-pane smoke (the accelerator
-//! path, as opposed to the split-pane suite's `<C-w>c`), two quit smokes (`:q`
+//! new-untitled-buffer smoke, one command-palette smoke, one Ctrl+Shift+W
+//! close-pane smoke (the accelerator path, as opposed to the split-pane suite's
+//! `<C-w>c`), two quit smokes (`:q`
 //! closes the focused pane, `:qa` closes the window), one keyboard-only CRASH /
 //! auto-restart smoke, six POINTER smokes (click-to-position, drag-to-select,
 //! wheel scroll, the click-then-close focus-wedge regression, the crash
@@ -40,7 +41,7 @@
 //! and no `:e` toast can satisfy, and OCR is structurally incapable of answering
 //! "did the cursor land at exactly row 12, column 25".
 //!
-//! Twenty of the twenty-five OCR a screenshot of the live window. The `:qa`
+//! Twenty-one of the twenty-six OCR a screenshot of the live window. The `:qa`
 //! smoke deliberately captures no image and asserts on the cage exit status alone
 //! (the app must be GONE, and gone with a ZERO exit status — a panic in the GTK main
 //! loop makes a process vanish just as a clean shutdown does); the click, drag,
@@ -62,10 +63,10 @@
 //!   `~/project` on every run — see [`make_temp_cwd`] and [`cage_command`] for the
 //!   measured reason.
 //! * [`restore_fixture_names_cannot_satisfy_their_own_assertions`] — the same rule
-//!   aimed at a THIRD fixture, [`RELAUNCH_FIXTURE_NAMES`]: the files the
-//!   state-persistence smokes create in their own working directories, which the
-//!   tree sidebar renders by name. It also pins the two preconditions behind the
-//!   window-title smoke's deliberate exemption.
+//!   aimed at a THIRD fixture, [`RELAUNCH_FIXTURE_NAMES`]: the SMOKE-OWNED files a
+//!   smoke writes into its own working directory (the state-persistence ones were
+//!   the first), which the tree sidebar renders by name. It also pins the two
+//!   preconditions behind the window-title smoke's deliberate exemption.
 //! * [`cage_is_only_spawned_through_the_isolating_helper`] — `cage` is spawned in
 //!   exactly one place, [`cage_command`], which is the only thing that sets
 //!   `WOLF_STATE_DIR` and so the only thing keeping the smokes off the developer's
@@ -78,7 +79,7 @@
 //! live here, next to the consts and helpers they read, rather than in a file of
 //! their own.
 //!
-//! So this target's summary line reads **`29 passed`**, not `25`: twenty-five cage
+//! So this target's summary line reads **`30 passed`**, not `26`: twenty-six cage
 //! smokes plus those four guards.
 //!
 //! ## A vacuously-passing check recorded here: the `wtype ""` window-map poll
@@ -121,7 +122,7 @@
 //!
 //! ## When it runs
 //!
-//! The twenty-five cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The twenty-six cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The Linux verification gate").
@@ -131,13 +132,13 @@
 //! suite command does not run is a silently-skipped test.
 //!
 //! They are, however, the slowest part of the suite: each drives a real
-//! compositor, and all twenty-five serialize behind `CAGE_LOCK` (see below).
+//! compositor, and all twenty-six serialize behind `CAGE_LOCK` (see below).
 //!
 //! ```text
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the twenty-five cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the twenty-six cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` and
 //!   `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
@@ -149,7 +150,7 @@
 //!   wolf-gnome tests; nvim is never taken from `PATH`).
 //! - `XDG_RUNTIME_DIR` set and writable (the Wayland socket lives there).
 //!
-//! Per project policy every one of the twenty-five FAILS LOUD if any of the above is
+//! Per project policy every one of the twenty-six FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -164,7 +165,7 @@ use std::time::SystemTime;
 
 use cairo::{Context, Format, ImageSurface};
 use wolf_core::state::STATE_FILE_NAME;
-use wolf_core::{load_state, state_dir, PaneNode, PaneOrientation};
+use wolf_core::{load_state, state_dir, CommandMru, PaneNode, PaneOrientation};
 use wolf_gnome::{CellMetrics, WINDOW_TITLE_FALLBACK};
 
 /// The lowercase word we type in insert mode (in the window smoke scenario).
@@ -173,7 +174,7 @@ use wolf_gnome::{CellMetrics, WINDOW_TITLE_FALLBACK};
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the twenty-five cage smoke tests. Each launches its own
+/// Serializes the twenty-six cage smoke tests. Each launches its own
 /// `cage` compositor, and two compositors started concurrently contend for the
 /// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
 /// Under the default multi-threaded test harness these tests would otherwise run
@@ -797,6 +798,84 @@ const NEWBUF_MARKER: &str = "ZZFRESH";
 /// Lowercased substring OCR MUST find: proof the new untitled buffer exists and
 /// received the typed text.
 const NEWBUF_OCR_PRESENT: &str = "zzfresh";
+
+// ---------------------------------------------------------------------------
+// Command-palette smoke: Ctrl+Shift+P opens the palette, a typed query narrows it
+// to ONE row, and Enter runs that row's command.
+//
+// This proves the whole palette path in one shot: the accelerator -> `gio` action ->
+// `UiAction::OpenCommandPalette` -> the overlay maps and takes keyboard focus -> the
+// search entry ranks `COMMAND_SPECS` -> Enter records the row's MRU key, closes the
+// overlay, and hands the command to the shell's `Command -> UiAction` funnel.
+//
+// It is shaped exactly like the new-untitled-buffer smoke above, and for the same
+// reason: the command the palette runs is `NewBuffer`, so "the palette really
+// dispatched something" is observable as the base file's heading DISAPPEARING from
+// the capture. The chord differs (Ctrl+Shift+P, not Ctrl+Shift+N) and the route
+// differs (through the palette's ranked list, not straight to the action), which is
+// what makes this a separate smoke rather than a duplicate.
+//
+// ## Why the fixture NAME and the asserted TERMS are deliberately unlike
+//
+// The tree sidebar renders every cwd entry by name and nvim's `:e` echoes the
+// filename, so a fixture named after an asserted term satisfies that assertion
+// whether or not the feature did anything — the permanent silent pass documented on
+// `PICKER_FILE_NAME` and `SIDEBAR_FILLER_FILES`. `PALETTE_FILE` is therefore
+// `pbase.md` while the term asserted ABSENT is the heading word `palcmdbase`: the
+// filename's lowercase does not contain it, so neither the sidebar row nor the `:e`
+// toast can keep assertion 3 green once the buffer really has been replaced.
+// `restore_fixture_names_cannot_satisfy_their_own_assertions` re-checks that
+// mechanically, in both directions, because this comment and the assertion it
+// protects sit thousands of lines apart.
+//
+// ## Why the query is DETERMINISTIC
+//
+// Among the eight titles the palette lists — `Close`, `Close Window`, `Go to File…`,
+// `Minimize`, `New`, `Open File…`, `Open Folder…`, `Quit Wolf` — `new` is a
+// case-insensitive SUBSEQUENCE of exactly one, `New`. (`Close Window` has an `n` with
+// no later `e`; `Minimize` and both `Open …` titles have `n` then `e` but no later
+// `w`; the rest have no `n` at all.) So the list holds one row, `restored_index`
+// selects it, and Enter activates it. That holds regardless of MRU state, because
+// `rank_matches` drops non-matching entries by its AND filter BEFORE the MRU
+// ordering applies. Unfiltered the query would match three (`New Window` and
+// `New Tab` are both Deferred), so it is the palette's classification filter that
+// makes it unique — which is why the premise is pinned executably by
+// `palette::tests::palette_rows_query_new_selects_exactly_the_new_buffer_row` rather
+// than left as prose here.
+
+/// Command-palette smoke: the file opened BEFORE the chord (the one that must
+/// vanish when the palette runs New).
+const PALETTE_FILE: &str = "pbase.md";
+
+/// Heading written into [`PALETTE_FILE`]; lowercased it contains
+/// [`PALETTE_OCR_ABSENT`]. Deliberately unlike the filename so nvim's `:e` toast and
+/// the sidebar row cannot satisfy the NOT-contains assertion.
+const PALETTE_HEADING: &str = "# PALCMDBASE";
+
+/// Lowercased substring OCR must NOT find: the heading of the file that was open
+/// before the palette dispatched `NewBuffer`.
+const PALETTE_OCR_ABSENT: &str = "palcmdbase";
+
+/// Distinctive marker typed (in insert mode) into the buffer the palette's command
+/// created. Its lowercased form is [`PALETTE_OCR_PRESENT`]. Short/all-uppercase to
+/// survive OCR, mirroring [`NEWBUF_MARKER`].
+const PALETTE_MARKER: &str = "ZZPALRUN";
+
+/// Lowercased substring OCR MUST find: proof that the text typed after the palette
+/// closed reached a buffer at all. It does NOT prove focus was returned to the
+/// editor — that revert was measured green; see the revert table on
+/// [`command_palette_chord_runs_the_selected_command_under_cage`].
+const PALETTE_OCR_PRESENT: &str = "zzpalrun";
+
+/// Typed into the palette's search entry. See the block comment above for why it
+/// narrows the list to exactly one row, and for the unit test that pins that.
+const PALETTE_QUERY: &str = "new";
+
+/// The canonical `CommandSpec::id` the activated row must record in the command MRU
+/// (`<state dir>/command-mru.sqlite`). Nothing but a palette activation writes that
+/// store — `wolf_core::api`'s `command_mru()` doc states it outright — so a hit for
+/// this key can only have come from the palette running the row.
+const PALETTE_MRU_KEY: &str = "new_buffer";
 
 // ---------------------------------------------------------------------------
 // `:q` smoke: the Ex command closes the focused PANE (not the window).
@@ -1716,7 +1795,7 @@ done
 sleep "$SETTLE"
 
 # Open the picker with the trigger chord Ctrl+Shift+O. That chord is the
-# `win.go-to-file` accelerator; Ctrl+Shift+P is reserved for the command palette.
+# `win.go-to-file` accelerator; Ctrl+Shift+P opens the command palette.
 #
 # Note: `-M <mod>` / `-m <mod>` press / release a modifier, and `-k <key>`
 # presses+releases a key while the held modifiers apply, so the chord is
@@ -2508,6 +2587,117 @@ sleep "$SETTLE"
 
 # Type the distinctive marker into the fresh buffer, then leave insert mode.
 wtype -- "i$NEWBUF_MARKER"
+wtype -k Escape
+
+# Brief settle between keystroke steps so each is processed in order.
+sleep "$SETTLE"
+
+# Move the cursor OFF the marker's row so its inverted block does not sit atop (and
+# OCR-distort) the asserted marker -- the SCENARIO / FOCUS_SCENARIO precedent. In
+# normal mode `o` opens a new line BELOW and enters insert on it; Escape parks the
+# cursor there.
+wtype -- o
+wtype -k Escape
+
+# Let the redraw of the typed text land before capturing.
+sleep "$SETTLE"
+
+# Capture the live window to the output PNG.
+grim "$OUT_PNG"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+/// The COMMAND-PALETTE scenario, run as a single `sh -c` string INSIDE `cage` (same
+/// structure as [`NEWBUF_SCENARIO`]): launch the app, poll until `cage` is up (NOT
+/// until the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle, open the
+/// base file (`:e $PALETTE_FILE<CR>`), fire the Ctrl+Shift+P accelerator, type the
+/// query, press Enter to activate the sole ranked row, then type the marker into the
+/// buffer that row's command created, park the cursor off the marker's row, settle,
+/// and screenshot. The base file lives in the cage process's working directory (set
+/// via `Command::current_dir` by the caller).
+const PALETTE_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome command-palette smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw before driving the editor.
+sleep "$SETTLE"
+
+# Open the base file so there is something DISTINCTIVE on screen for the palette's
+# command to displace.
+wtype -- ":e $PALETTE_FILE"
+wtype -k Return
+
+# Let nvim load the base file and redraw before firing the accelerator.
+sleep "$SETTLE"
+
+# Fire the command-palette accelerator Ctrl+Shift+P. The capture-phase chord
+# controller resolves it through `actions::action_for_key`, activates
+# `win.command-palette`, and the shell performs UiAction::OpenCommandPalette.
+#
+# Note: `-M <mod>` / `-m <mod>` press / release a modifier and `-k <key>`
+# presses+releases a key while the held modifiers apply, exactly as in the picker
+# and new-buffer scenarios. Chord delivery is isolated to this single line.
+wtype -M ctrl -M shift -k p -m shift -m ctrl
+
+# Let the palette map and grab keyboard focus on its search entry.
+sleep "$SETTLE"
+
+# Type the query so the ranked list narrows to the single actionable row.
+wtype -- "$PALETTE_QUERY"
+
+# Let the SearchEntry's own search delay fire and the list re-rank. That delay lives
+# inside this budget, exactly as it does in PICKER_SCENARIO.
+sleep "$SETTLE"
+
+# Activate the sole row: records its MRU key, closes the palette, returns focus to
+# the editor's cmdline strip, and dispatches the command through the shell.
+wtype -k Return
+
+# Let the dispatched command run and the pane repaint before typing into it.
+sleep "$SETTLE"
+
+# Type the distinctive marker into the buffer the command created, then leave insert
+# mode. These keystrokes only reach nvim once the palette has closed.
+wtype -- "i$PALETTE_MARKER"
 wtype -k Escape
 
 # Brief settle between keystroke steps so each is processed in order.
@@ -5898,7 +6088,7 @@ const HOME_STATE_DIR_FALLBACKS: [&str; 2] = [".local/state/wolf", ".local/share/
 /// the "Note (OCR width)" / "Note (OCR height)" paragraphs above their own consts,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
-/// be applied here to all twenty-five.
+/// be applied here to all twenty-six.
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
@@ -6693,7 +6883,7 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// explicit, documented exemption for the two title directory names rather than
 /// widening this table's guards to cover them.
 ///
-/// Twenty of the twenty-five smokes appear here. FIVE contribute no rows at
+/// Twenty-one of the twenty-six smokes appear here. FIVE contribute no rows at
 /// all, on purpose, and it is worth being explicit about which and why:
 ///
 /// * [`colon_qa_closes_the_window_under_cage`] captures no PNG and asserts only that
@@ -6811,6 +7001,16 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         "new_untitled_buffer_replaces_open_file_under_cage",
     ),
     (
+        PALETTE_OCR_PRESENT,
+        "PALETTE_OCR_PRESENT",
+        "command_palette_chord_runs_the_selected_command_under_cage",
+    ),
+    (
+        PALETTE_OCR_ABSENT,
+        "PALETTE_OCR_ABSENT",
+        "command_palette_chord_runs_the_selected_command_under_cage",
+    ),
+    (
         QUIT_OCR_KEEP,
         "QUIT_OCR_KEEP",
         "colon_q_closes_focused_pane_under_cage",
@@ -6907,13 +7107,22 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// Every fixture NAME the state-persistence smokes create inside their own
-/// working directory, as `(name, const name, the smoke that owns it)`.
+/// Every fixture NAME a smoke creates inside its OWN working directory, as
+/// `(name, const name, the smoke that owns it)`.
 ///
 /// The tree sidebar renders every cwd entry BY NAME, so each of these is page text
 /// in its own smoke's capture — the same hazard [`SIDEBAR_FILLER_FILES`] carries,
 /// aimed at a THIRD fixture. The readback files are listed too: they land in the
 /// temp cwd alongside the markdown, so the sidebar draws them as well.
+///
+/// The state-persistence smokes were the first entries here and the name records
+/// that, but the table is not limited to them: any smoke whose own fixture could
+/// satisfy — or spuriously break — an [`ASSERTED_OCR_TERMS`] entry belongs in it,
+/// and the command-palette smoke's base file is registered here for exactly that
+/// reason. A smoke whose fixture is absent from this table is a smoke whose fixture
+/// nothing checks, which is precisely how
+/// `picker_opens_and_loads_selected_file_under_cage` once passed green while the
+/// picker never opened.
 ///
 /// The values are the CONSTS themselves, never re-typed literals, for the same
 /// reason [`ASSERTED_OCR_TERMS`] is.
@@ -6978,6 +7187,11 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "DIVIDER_W2_NAME",
         "dragged_divider_weights_survive_relaunch_under_cage",
     ),
+    (
+        PALETTE_FILE,
+        "PALETTE_FILE",
+        "command_palette_chord_runs_the_selected_command_under_cage",
+    ),
 ];
 
 /// Mechanically enforces the naming invariant documented on [`SIDEBAR_FILLER_FILES`]:
@@ -7014,7 +7228,9 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 /// [`RESTORE_OCR_CHARLIE`]), `solozulu` ([`SOLO_OCR_PRESENT`]), `soloalfa`
 /// ([`SOLO_OCR_ABSENT`]), `titlezulu` ([`TITLE_OCR_PRESENT`]) and `titlehome`
 /// ([`TITLE_OCR_ABSENT`]); and — added with the divider-drag unit — `divideralfa`
-/// and `dividerbravo` ([`DIVIDER_OCR_LEFT`] / [`DIVIDER_OCR_RIGHT`]). None is a
+/// and `dividerbravo` ([`DIVIDER_OCR_LEFT`] / [`DIVIDER_OCR_RIGHT`]); and — added
+/// with the command-palette unit — `zzpalrun` ([`PALETTE_OCR_PRESENT`]) and
+/// `palcmdbase` ([`PALETTE_OCR_ABSENT`]). None is a
 /// substring of any [`SIDEBAR_FILLER_FILES`] entry, and no filler may be renamed to
 /// make one so. Five smokes contribute no term:
 /// [`colon_qa_closes_the_window_under_cage`] asserts on the cage exit status and
@@ -7052,7 +7268,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the twenty-five smokes — still
+/// nothing to the smoke suite's runtime and — unlike the twenty-six smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
@@ -7235,10 +7451,10 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
     }
 }
 
-/// The same invariant again, aimed at a THIRD fixture: the files the three
-/// state-persistence smokes create in their OWN working directories
-/// ([`RELAUNCH_FIXTURE_NAMES`]), plus the two directory names the title smoke
-/// builds.
+/// The same invariant again, aimed at a THIRD fixture: the SMOKE-OWNED files listed
+/// in [`RELAUNCH_FIXTURE_NAMES`] — the ones a smoke writes into its own working
+/// directory, of which the state-persistence smokes' were the first — plus the two
+/// directory names the title smoke builds.
 ///
 /// ## Why these fixtures need their own guard
 ///
@@ -7249,12 +7465,13 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// `picker_opens_and_loads_selected_file_under_cage` once passed green while the
 /// picker provably never opened, and how
 /// `vertical_split_shows_two_panes_under_cage` shipped `paneleft.md` /
-/// `paneright.md` against `paneleft` / `paneright`. The three smokes added with
-/// the state-persistence unit assert on FILE CONTENT (a rendered heading) while
-/// dropping their fixtures into a cwd the tree sidebar lists BY NAME, so they are
-/// in precisely that hazard class. Both directions matter: a must-CONTAIN term in
-/// a fixture name makes its smoke pass vacuously, and a must-NOT-CONTAIN term
-/// makes it fail spuriously.
+/// `paneright.md` against `paneleft` / `paneright`. Every smoke in this table
+/// asserts on FILE CONTENT (a rendered heading) while dropping its fixture into a
+/// cwd the tree sidebar lists BY NAME, so each is in precisely that hazard class —
+/// the state-persistence smokes, which brought the table into being, and the
+/// command-palette smoke, whose `pbase.md` must never come to contain `palcmdbase`.
+/// Both directions matter: a must-CONTAIN term in a fixture name makes its smoke
+/// pass vacuously, and a must-NOT-CONTAIN term makes it fail spuriously.
 ///
 /// ## The one deliberate, documented exemption
 ///
@@ -7293,9 +7510,9 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
     );
     assert!(
         !RELAUNCH_FIXTURE_NAMES.is_empty(),
-        "`RELAUNCH_FIXTURE_NAMES` is empty, so the state-persistence smokes' own fixtures are \
-         unguarded — which is the exact gap that let `picker_opens_and_loads_selected_file_under_cage` \
-         pass green while the picker never opened."
+        "`RELAUNCH_FIXTURE_NAMES` is empty, so the smoke-owned fixture files are unguarded — \
+         which is the exact gap that let `picker_opens_and_loads_selected_file_under_cage` pass \
+         green while the picker never opened."
     );
 
     for &(name, name_const, owner) in RELAUNCH_FIXTURE_NAMES {
@@ -7424,7 +7641,7 @@ fn window_renders_typed_text_under_cage() {
     // integration tests of a crate that declares a `[[bin]]`).
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // A fresh temp cwd, exactly like the other seventeen smokes. The app reads
+    // A fresh temp cwd, exactly like every other smoke. The app reads
     // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
     // directory as its working directory (see `cage_command` below). See
     // `make_temp_cwd` for why isolation is mandatory here: at a fixed cwd this
@@ -8465,6 +8682,190 @@ fn new_untitled_buffer_replaces_open_file_under_cage() {
     );
 }
 
+/// Ctrl+Shift+P opens the command palette, a typed query narrows it to one row, and
+/// Enter RUNS that row's command.
+///
+/// ## What it covers that no other smoke does
+///
+/// The whole palette path end to end: the accelerator resolving through
+/// `actions::action_for_key` to `win.command-palette`, `shell::perform` mapping
+/// `UiAction::OpenCommandPalette` onto `PaletteHandle::open`, the overlay mapping and
+/// taking keyboard focus, `palette_rows` ranking `COMMAND_SPECS` against the typed
+/// query, and activation recording the row's MRU key, closing the overlay and
+/// handing the command to the shell's dispatch funnel. The overlay's focus return
+/// runs on that path too, but nothing here discriminates it — see row 4 of the
+/// table below.
+///
+/// The command the palette runs is `New`, so "a command really ran" is observable the
+/// same way [`new_untitled_buffer_replaces_open_file_under_cage`] observes it: the
+/// base file's heading DISAPPEARS from the capture. That smoke drives the chord
+/// straight to the action; this one drives it through the palette's ranked list, so
+/// neither subsumes the other.
+///
+/// ## The premise, and where it is measured
+///
+/// The query is chosen so the list holds EXACTLY ONE row — see the `PALETTE_*` const
+/// block for the subsequence walk over all eight actionable titles. That premise is
+/// not asserted here (a screenshot cannot count palette rows: the overlay is closed
+/// before `grim` fires). It is measured in the fast suite by
+/// `palette::tests::palette_rows_query_new_selects_exactly_the_new_buffer_row`, which
+/// also pins that `PALETTE_MRU_KEY` still names that row. A registry change that adds
+/// a second matching row therefore turns that unit test red rather than making this
+/// smoke stochastic.
+///
+/// ## Assertions, classified
+///
+/// A precondition gets NO revert: inventing one would manufacture a discriminator
+/// this smoke does not have. The `measured` column is the coder's to fill from an
+/// actual red run, per `tests/README.md`'s "A red-run demonstration is a deliverable,
+/// not a formality".
+///
+/// | # | assertion | kind | revert | measured |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | n/a |
+/// | 2 | [`assert_png_present`] | precondition — grim produced an image | none; do not invent one | n/a |
+/// | 3 | OCR lacks [`PALETTE_OCR_ABSENT`] | **discriminator** — the palette DISPATCHED something | in `palette.rs`'s `activate_selection`, delete the call that invokes the `on_activate` handler, keeping the `record` and the `close`. The chord still opens the palette and Enter still closes it, but no command is dispatched, so `pbase.md`'s heading is still drawn. Nothing else reads that closure, so this isolates the smoke. | RED. `OCR unexpectedly contained "palcmdbase" (the base file's heading), so the pane still shows pbase.md and NO command was dispatched`. The capture held both `palcmdbase` and `zzpalrun#`, i.e. the marker was typed into the still-open base file — so assertion 4 stayed green and this row failed alone, exactly as designed. |
+/// | 4 | OCR contains [`PALETTE_OCR_PRESENT`] | **precondition** — the marker reached the editor after the palette closed | none. Deleting `self.area.grab_focus()` from `PaletteInner::close` was run as the candidate revert and did NOT go red. | GREEN across three consecutive runs with the `grab_focus` deleted. Hiding the palette box does not leave the toplevel unable to dispatch keys: GTK4 routes a key event with no focus widget to the window itself, where the bubble-phase controller `app::wire_keys` installs still runs. This row is therefore reclassified from discriminator to precondition — it says the keystrokes after the activation landed somewhere, not that focus was returned. Do not substitute a different revert to manufacture a discriminator. |
+/// | 5 | the command MRU holds [`PALETTE_MRU_KEY`] | **discriminator** — activation recorded the row's opaque key, and it is the registry id | delete the `CommandMru::record` call in `activate_selection`. | RED, three times out of three: `the command MRU at …/project-state/command-mru.sqlite does not hold "new_buffer"; it holds []`. No flakiness observed — the store read back non-empty on every run with the `record` in place, so the WAL-recovery worry in `tests/README.md` did not materialize here. |
+///
+/// Assertion 3 is what separates "the palette ran a command" from "nothing happened",
+/// and its soundness rests on the fixture-naming rule: nvim's `:e` toast and the
+/// sidebar row both show `pbase.md`, whose lowercase does not contain `palcmdbase`.
+/// Assertion 5 is independent of the pixels entirely — nothing but a palette
+/// activation writes that SQLite store — so it survives an OCR misread.
+#[test]
+fn command_palette_chord_runs_the_selected_command_under_cage() {
+    const SMOKE: &str = "command_palette_chord_runs_the_selected_command_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // Create a fresh temp cwd and drop the base markdown file into it. The app reads
+    // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
+    // directory as its working directory (see `cage_command` below).
+    let cwd = make_temp_cwd();
+    let target = cwd.join(PALETTE_FILE);
+    std::fs::write(&target, format!("{PALETTE_HEADING}\n")).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: failed to write base file {}: {e}",
+            target.display()
+        )
+    });
+
+    // Page density. The asserted marker is a short isolated word on an otherwise thin
+    // editor page, which is exactly the `SIDEBAR_FILLER_COUNT` hazard: below the
+    // measured five-file floor tesseract misclassifies isolated glyphs. The fillers
+    // cannot perturb the palette's candidate list, which comes from `COMMAND_SPECS`
+    // and not from a file search.
+    for name in SIDEBAR_FILLER_FILES {
+        let filler = cwd.join(name);
+        std::fs::write(&filler, SIDEBAR_FILLER_BODY).unwrap_or_else(|e| {
+            panic!("{SMOKE}: failed to write filler {}: {e}", filler.display())
+        });
+    }
+
+    // Put the screenshot under XDG_RUNTIME_DIR (guaranteed writable) and start from a
+    // clean slate so a stale PNG cannot pass.
+    let out_png = runtime_dir.join("wolf_gnome_palette_smoke.png");
+    clear_evidence(&out_png, SMOKE);
+
+    // The state dir `cage_command` hands the app as WOLF_STATE_DIR — the same one
+    // assertion 5 reads the command MRU back out of. No HOME override: this smoke
+    // wants the ordinary `Folder` launch decision and the constant `~/project` title.
+    let smoke_state = smoke_state_dir(&cwd);
+
+    let status = cage_command(PALETTE_SCENARIO, &cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("PALETTE_FILE", PALETTE_FILE)
+        .env("PALETTE_QUERY", PALETTE_QUERY)
+        .env("PALETTE_MARKER", PALETTE_MARKER)
+        .status()
+        .expect("failed to spawn `cage` for the headless command-palette smoke scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage command-palette scenario exited unsuccessfully ({status}). Exit 11: \
+         the app died before its window ever mapped — a LAUNCH failure, and nothing below is \
+         about the palette. Otherwise the app may have failed to map its window, the `:e` may \
+         not have loaded, or wtype/grim failed. Note this assertion says nothing about whether \
+         the palette opened: the scenario has no readback and exits 0 whatever the chord did. \
+         Screenshot expected at {}.",
+        out_png.display()
+    );
+
+    // --- Assertion 2 (precondition): grim produced an image -------------------
+    assert_png_present(SMOKE, &out_png);
+
+    let ocr_text = ocr_to_lowercase(&out_png);
+
+    // --- Assertion 3 (discriminator): the palette DISPATCHED a command --------
+    assert!(
+        !ocr_text.contains(PALETTE_OCR_ABSENT),
+        "{SMOKE}: OCR unexpectedly contained {PALETTE_OCR_ABSENT:?} (the base file's heading), so \
+         the pane still shows {PALETTE_FILE} and NO command was dispatched. The likely causes, in \
+         order: (a) the Ctrl+Shift+P chord never reached `win.command-palette` — check \
+         `actions::action_for_key` and that the row's BindingStatus is Bound, not Reserved; (b) \
+         the palette opened but Enter activated nothing, so `activation_index` returned None or \
+         the connected handler was never invoked; (c) the palette opened and dispatched, but \
+         `shell::perform` has no arm for the command. Note the marker assertion below can still \
+         pass in every one of those cases — the marker would simply have been typed into \
+         {PALETTE_FILE} itself. PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+
+    // --- Assertion 4 (precondition): the marker reached a buffer at all -------
+    //
+    // Assertion 3 above reads as "the editor is showing a buffer, and it is NOT the
+    // base file". Only this assertion carries the first half: an editor drawing no
+    // text at all — a dead session, a blank page, an unreadable capture — satisfies
+    // assertion 3 vacuously. It does NOT discriminate the palette's focus return:
+    // deleting `PaletteInner::close`'s `area.grab_focus()` was measured GREEN here,
+    // so read the revert table above before blaming focus for a failure.
+    assert!(
+        ocr_text.contains(PALETTE_OCR_PRESENT),
+        "{SMOKE}: OCR did not contain the marker {PALETTE_OCR_PRESENT:?} typed after the palette \
+         closed, so the keystrokes that followed the activation never reached a buffer — which \
+         also means assertion 3 above passed VACUOUSLY and proves nothing about the dispatch. The \
+         likely causes, in order: (a) the palette never closed, so its SearchEntry swallowed the \
+         marker; (b) the activation ran a row other than New — a Close or Quit row would leave no \
+         editor to draw the marker, and assertion 5 below names the row that actually ran; (c) \
+         the marker rendered but OCR misread it — check the retained PNG before touching \
+         anything. NOT a cause: `PaletteInner::close` failing to return focus, which was measured \
+         green: GTK4 routes a key event with no focus widget to the window itself, where the \
+         bubble-phase controller `app::wire_keys` installs still runs. PNG kept at {} for \
+         inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+
+    // --- Assertion 5 (discriminator): activation recorded the row's MRU key ---
+    //
+    // Independent of the pixels: nothing but a palette activation writes this store
+    // (`WolfCore::command_mru`'s doc states it), so a hit can only mean the row was
+    // activated AND that its opaque key is the canonical registry id the palette's
+    // ranking is keyed on.
+    let recent = CommandMru::open(&smoke_state).recent();
+    assert!(
+        recent.iter().any(|k| k == PALETTE_MRU_KEY),
+        "{SMOKE}: the command MRU at {} does not hold {PALETTE_MRU_KEY:?}; it holds {recent:?}. \
+         Nothing but a palette activation records into that store, so an EMPTY list means \
+         activation never called `CommandMru::record` (or the app resolved a different state dir \
+         — `cage_command` is the only thing that sets WOLF_STATE_DIR). A NON-empty list holding a \
+         different key means the activated row was not the New row, which would also have failed \
+         the unit test that pins the query to exactly one row. If this is the ONLY assertion that \
+         fails, and it fails intermittently, suspect SQLite WAL recovery from the scenario's \
+         `kill` rather than the palette — see tests/README.md, \"What is still unproven\".",
+        smoke_state.join("command-mru.sqlite").display()
+    );
+}
+
 #[test]
 fn colon_q_closes_focused_pane_under_cage() {
     // Serialize against the other cage tests (shared Wayland socket); recover from
@@ -8766,7 +9167,7 @@ fn click_positions_the_cursor_under_cage() {
 
     let runtime_dir = require_smoke_env();
 
-    // A fresh temp cwd, exactly like the other seventeen smokes; see `make_temp_cwd`
+    // A fresh temp cwd, exactly like every other smoke; see `make_temp_cwd`
     // for why isolation is mandatory. The readback files live here too.
     let cwd = make_temp_cwd();
 
@@ -11340,7 +11741,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// | the active-pane FOCUS RING's top edge — a long thin high-contrast line immediately above the heading | six ablations on one PNG; the top edge alone accounted for it | [`DIVIDER_RELAUNCH_SCENARIO`]'s closing `<C-w>h`, which moves the ring to the WIDE pane |
 /// | a single misclassified GLYPH at 15 columns | the same pixels read through both segmentation modes, twice over | the second reader, [`ocr_uniform_block_to_lowercase`] |
 ///
-/// The third is why this smoke, alone of the twenty-five, reads its capture twice.
+/// The third is why this smoke, alone of the twenty-six, reads its capture twice.
 /// With the first two answered, on one retained PNG:
 ///
 /// | command | verbatim output |
@@ -11980,11 +12381,12 @@ fn ocr_to_lowercase(png: &Path) -> String {
 ///
 /// ## Why it duplicates [`ocr_to_lowercase`] instead of parameterizing it
 ///
-/// So that the reader twenty-four smokes depend on stays a fixed, unparameterized
-/// command. A mode argument is a value a later change can pass wrongly from a call
-/// site that looks unrelated to OCR, and the symptom would be a distant smoke
-/// failing on a term it renders perfectly. This file already duplicates for that
-/// class of reason — see [`DIVIDER_RELAUNCH_SCENARIO`] on the pointer plumbing.
+/// So that the reader every OTHER OCR-asserting smoke depends on stays a fixed,
+/// unparameterized command. A mode argument is a value a later change can pass
+/// wrongly from a call site that looks unrelated to OCR, and the symptom would be a
+/// distant smoke failing on a term it renders perfectly. This file already
+/// duplicates for that class of reason — see [`DIVIDER_RELAUNCH_SCENARIO`] on the
+/// pointer plumbing.
 ///
 /// Panics with the captured stderr if tesseract fails to run or exits non-zero.
 fn ocr_uniform_block_to_lowercase(png: &Path) -> String {

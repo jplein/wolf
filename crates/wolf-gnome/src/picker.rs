@@ -5,7 +5,7 @@
 //! The picker has no trigger predicate of its own: the chord is resolved from
 //! [`crate::actions::ACTION_TABLE`] by a CAPTURE-phase controller
 //! ([`crate::shell`]), so it is guaranteed not to also be forwarded to Neovim (see
-//! `crates/wolf-gnome/README.md`, "Keyboard accelerators").
+//! `crates/wolf-gnome/DECISIONS.md`, "The accelerator namespace").
 //!
 //! What that chord costs, precisely: only the terminal-style Ctrl+Shift ALIAS for
 //! `<C-o>`. `wolf-gnome`'s encoder forces `shift: false` on printables, so
@@ -22,6 +22,11 @@
 //! `DrawingArea`, a `SearchEntry` + `ListBox` fed by `wolf_core::start_file_search`
 //! / `rank_matches`) which cannot be unit-tested headlessly. Its pure, display-free
 //! seams are [`next_selection`] and [`restored_index`], unit-tested below.
+//!
+//! Those two seams are `pub(crate)` and shared with [`crate::palette`]'s overlay,
+//! so the file list and the command list navigate identically — one arithmetic, one
+//! table of tests. The macOS `PickerSeam` port names this file as its counterpart,
+//! which is why the functions stay here rather than moving to a seam module.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -53,7 +58,7 @@ const PICKER_WAKE_CHANNEL_CAP: usize = 1;
 /// `next_selection(-5, 1, 5) == Some(0)`, `next_selection(99, 1, 5) == Some(4)`).
 /// Pure and display-free, unit-tested below.
 #[must_use]
-fn next_selection(current: i32, delta: i32, n_rows: i32) -> Option<usize> {
+pub(crate) fn next_selection(current: i32, delta: i32, n_rows: i32) -> Option<usize> {
     if n_rows <= 0 {
         None
     } else {
@@ -66,7 +71,11 @@ fn next_selection(current: i32, delta: i32, n_rows: i32) -> Option<usize> {
 /// changed / first open), else the preserved `prev` index (defaulting to `0`)
 /// clamped into the new range. Pure and display-free, unit-tested below.
 #[must_use]
-fn restored_index(reset_to_top: bool, prev: Option<usize>, new_len: usize) -> Option<usize> {
+pub(crate) fn restored_index(
+    reset_to_top: bool,
+    prev: Option<usize>,
+    new_len: usize,
+) -> Option<usize> {
     if new_len == 0 {
         None
     } else if reset_to_top {

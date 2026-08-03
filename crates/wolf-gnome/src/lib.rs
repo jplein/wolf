@@ -29,6 +29,13 @@
 //!   projection.
 //! - [`ui_action_for`]: the TOTAL [`wolf_core::Command`] → [`UiAction`] mapping the
 //!   command drain dispatches through ([`command_action`]).
+//! - [`mod@palette`]: the command-palette rulebook — the candidate list this
+//!   front-end may show ([`palette::palette_rows`], which ranks unbounded and
+//!   applies its cap after filtering), the TOTAL
+//!   [`wolf_core::PaletteRowKind`] → [`palette::PaletteAction`] classification that
+//!   keeps a row `wolf-gnome` cannot perform out of the list
+//!   ([`palette::palette_action_for`]), and which row `Enter` activates given the
+//!   `ListBox`'s reported selection ([`palette::activation_index`]).
 //! - [`launch_decision`] / [`workspace::reroot_ready`]: whether a project is open,
 //!   where the captive Neovim starts, and when an Open Folder re-root has settled
 //!   ([`workspace`]). The launch rule is process cwd first, then the cwd restored
@@ -96,6 +103,7 @@ pub mod input;
 pub mod layout;
 pub mod liveness_ui;
 pub mod mouse;
+pub mod palette;
 pub mod pane_layout;
 pub mod pane_view;
 pub mod persistence;
