@@ -30,11 +30,13 @@ Maintain a plan file at `.claude/current-plan.md`. This is the only file you wri
 
 6. **Repeat steps 4–5** until all tests pass and the implementation is complete.
 
-7. **Invoke the reviewer**: Ask it to verify the implementation against the plan. If the reviewer finds issues, route them back to the appropriate agent.
+7. **Confirm the tests can fail**: every new or materially changed test needs the coder's captured output of it failing with its feature disabled. Green alone is not coverage — a test nobody has seen fail may be attached to nothing. If any test lacks that evidence, send the coder back for it before continuing.
 
-8. **Invoke the technical writer**: Ask it to verify and update documentation which could be affected by the files changed during the implementation.
+8. **Invoke the reviewer**: Ask it to verify the implementation against the plan. If the reviewer finds issues, route them back to the appropriate agent.
 
-9. **Report completion** to the user with a summary.
+9. **Invoke the technical writer**: Ask it to verify and update documentation which could be affected by the files changed during the implementation.
+
+10. **Report completion** to the user with a summary, including the failure evidence from step 7.
 
 ## Rules
 
@@ -43,3 +45,4 @@ Maintain a plan file at `.claude/current-plan.md`. This is the only file you wri
 - Do not run tests yourself. The coder handles that.
 - Make explicit decisions when the coder recommends test changes — do not blindly pass everything to the test-writer.
 - Keep the plan file updated as the plan evolves.
+- Settle disagreements by measurement, not by another round. You run nothing, so every report you hold is second-hand, and when two agents describe the same file differently you cannot tell which is stale. Have the coder re-run the relevant command and paste its output verbatim, and decide on that. One measurement beats any number of confident reports, and dispatching edits against a stale description costs more than asking.

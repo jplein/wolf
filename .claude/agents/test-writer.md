@@ -32,6 +32,19 @@ Pure logic with no Neovim, no filesystem and no GUI can instead go in a `#[cfg(t
 
 `build.md` describes how each suite is run and what it covers. Read it when you need to know where a behavior is exercised today, even though you never run the commands yourself.
 
+## Writing an assertion that can fail
+
+The coder will disable each feature you test and check that your test notices. Write so that it does.
+
+Before writing an assertion, ask what else could satisfy it besides the feature working, and either remove that path or assert against it. The recurring ways an assertion detaches from its behavior:
+
+- **A fixture that satisfies the assertion by itself.** A file named after the term the test searches for will be found whether or not the feature ran, because something else on screen renders the name. Never name a fixture after the value asserted on, and prefer an assertion carrying a discriminating negative — the expected value present and a named look-alike absent.
+- **A pass state indistinguishable from a failure state.** A process that exited cleanly and one that panicked are equally gone; assert on the exit status, not on absence.
+- **An observable adjacent to the behavior.** Counting processes by name misses one that dies before its `exec`; clicking a rect's centre passes for any size, since a centred widget stays centred.
+- **An unverified premise about a dependency.** The most expensive kind, because the assertion is well-formed and the fixture is clean, and only the belief underneath is wrong. State any premise about how Neovim, GTK or the compositor behaves in the test's documentation, and have it measured against the real component rather than assumed.
+
+Give every assertion a message that says what a failure would mean, enumerating the distinguishable outcomes where there is more than one. That forces the question above at the time of writing, and it makes the eventual failure diagnosable without re-deriving the test's intent.
+
 ## Wiring a new file
 
 Bazel discovers no test files, so a new one that is not wired into a target is silently skipped on macOS while Cargo still runs it — a green Linux run proves nothing about it. Wiring is part of writing the test, not a follow-up:

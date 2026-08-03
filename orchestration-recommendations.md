@@ -6,9 +6,22 @@ This is not a hypothetical risk. Over five work units, **eight** such tests were
 
 ## Why this document exists in this form
 
-A standalone recommendations file only pays off if its contents end up in `.claude/agents/*.md` and in the `/orchestrate` workflow itself. Advice that lives only here will be read once and never applied. Each section below therefore ends with **the concrete change** to make to an agent definition, phrased so it can be pasted in.
+A standalone recommendations file only pays off if its contents end up in `.claude/agents/*.md` and in the `/orchestrate` workflow itself. Advice that lives only here gets read once and never applied. Each section below therefore ends with the concrete change to make to an agent definition.
 
-One sequencing note: the agent definitions are being revised on a separate branch at the time of writing. Apply the edits below **after** that work merges, so the two do not conflict.
+Those changes are applied. This file remains as the evidence behind them: the agent definitions carry the rule, and a rule without its reason is the first thing a later editor trims. Where each one landed:
+
+| Recommendation                                   | Lives in                                                              |
+| ------------------------------------------------ | --------------------------------------------------------------------- |
+| Prove every new test can fail                    | `.claude/agents/coder.md`, "Proving a test can fail"                  |
+| A tool's exit code is not proof of its effect    | same section                                                          |
+| Assertions state what a failure means            | `.claude/agents/test-writer.md`, "Writing an assertion that can fail" |
+| Premises about third-party behavior get measured | same section                                                          |
+| Name the falsifying revert per behavior          | `.claude/agents/architect.md`, the test-plan item                     |
+| Read tests adversarially                         | `.claude/agents/reviewer.md`, "Tests"                                 |
+| Failure evidence gates unit completion           | `.claude/commands/orchestrate.md`, step 7                             |
+| Settle disagreements by measurement              | `.claude/commands/orchestrate.md`, Rules                              |
+
+Two recommendations were already covered by the definitions and needed no change: wiring every new test file into the target that runs it, and the discipline that an agent with no shell states what it could not verify rather than implying it did.
 
 ## The evidence
 
