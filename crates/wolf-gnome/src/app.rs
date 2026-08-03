@@ -17,8 +17,22 @@
 //!   `shell::AppShell::on_liveness_wake` (the LIVENESS read, FIRST),
 //!   `pane_view::PaneHandle::on_render_wake` (per-pane redraw + split/close/focus
 //!   intent consumption), `tree_view::TreeHandle::on_render_wake`, and finally
-//!   `shell::AppShell::on_render_wake` (the command drain). The shell runs LAST:
-//!   a drained `close_window` tears the core down.
+//!   `shell::AppShell::on_render_wake` (the window title, the application-state
+//!   snapshot, then the command drain). The shell runs LAST: a drained
+//!   `close_window` tears the core down.
+//! - **Application state (`state.json`):** [`build_ui`] opens a
+//!   `wolf_core::StateStore` over `wolf_core::state_dir()` and turns the loaded
+//!   tree into a [`crate::state_seam::RestorePlan`] BEFORE any widget exists —
+//!   the working directory, the window size, and the tab's saved pane-split tree.
+//!   The layout is queued on the pane view
+//!   ([`crate::pane_view::PaneHandle::request_layout_rebuild`]) and realized on
+//!   the first wake with a window grid, through `WolfCore::rebuild_layout`. That
+//!   call is the ONE blocking RPC this front-end issues — at most once per launch,
+//!   before the window is interactive, never on the crash path — so
+//!   `Liveness::NotResponding` is reachable here for the first time (a wedged
+//!   nvim at launch raises the stall overlay). Writing back is
+//!   [`crate::persistence`]: a snapshot on every wake, and a final synchronous
+//!   snapshot + flush as the FIRST thing [`wire_close`] does.
 //! - **Liveness / crash recovery:** the liveness read is UNCONDITIONAL and at the
 //!   TOP of the drain-loop body, and it GATES the two paint handlers (see
 //!   [`mod@crate::liveness_ui`] for the mapping and [`crate::crash_overlay`] for the
@@ -58,13 +72,15 @@
 //!   (each pane's `connect_resize` → [`crate::grid_size_for`] → per-grid/global
 //!   resize).
 //! - **Lifecycle:** [`WolfCore`] lives in an `Rc<RefCell<Option<_>>>` on the main
-//!   thread; closing the window takes it out and runs [`WolfCore::shutdown`].
+//!   thread; closing the window flushes `state.json`, then takes the core out and
+//!   runs [`WolfCore::shutdown`].
 //!
 //! Files are opened from within Neovim (`:e`), via the picker/tree, or via the
 //! primary menu's native Open File / Open Folder dialogs (there are still no save
-//! / save-as dialogs). When no project is open, [`crate::workspace::launch_decision`]
-//! puts the window into an EMPTY STATE: the sidebar is hidden, no `FileSearch`
-//! starts, and an "Open Folder…" status page covers the editor. Mouse and vertical
+//! / save-as dialogs). When neither the process cwd nor the restored cwd names a
+//! usable project, [`crate::workspace::launch_decision`] puts the window into an
+//! EMPTY STATE: the sidebar is hidden, no `FileSearch` starts, and an
+//! "Open Folder…" status page covers the editor. Mouse and vertical
 //! scroll are wired (see the Input bullet above). What is still deferred is THEMING
 //! and a native command line as Adw widgets: the cmdline strip already paints
 //! natively from the folded `Snapshot::cmdline` / `Snapshot::toast` — it never
@@ -79,14 +95,17 @@ use std::sync::Arc;
 
 use adw::prelude::*;
 use gtk::glib;
-use wolf_core::{CoreConfig, InputEvent, WakeFn, WolfCore};
+use wolf_core::{CoreConfig, InputEvent, StateStore, WakeFn, WolfCore, WolfState};
 
 use crate::crash_overlay;
 use crate::pane_view;
+use crate::persistence::{self, StateHandle, StateParts};
 use crate::picker::{self, PickerHandle};
 use crate::shell::{self, ShellParts, GO_TO_FILE_ACTION};
+use crate::state_seam::{self, RestorePlan};
+use crate::title::WINDOW_TITLE_FALLBACK;
 use crate::tree_view::{self, TreeHandle};
-use crate::workspace::{self, LaunchDecision};
+use crate::workspace;
 use crate::CellMetrics;
 
 /// The GApplication id. Adwaita uses it for resource paths, the default window
@@ -162,6 +181,40 @@ fn init_lua_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../runtime/nvim/init.lua")
 }
 
+/// Opens the application-state store over the platform state directory.
+///
+/// `None` — with one message, not a per-wake stream — when
+/// `wolf_core::state_dir()` cannot be resolved (no `WOLF_STATE_DIR` override and
+/// no home directory). Every later state operation degrades to a no-op, so the
+/// app runs normally and simply neither restores nor saves.
+fn open_state_store() -> Option<StateStore> {
+    let Some(dir) = wolf_core::state_dir() else {
+        eprintln!(
+            "wolf-gnome: no state directory could be resolved; state will not be saved or restored"
+        );
+        return None;
+    };
+    Some(StateStore::open(&dir))
+}
+
+/// Builds the launch plan from the loaded state: canonicalizes the process cwd
+/// and `$HOME` exactly as before, then defers every decision to the pure
+/// [`state_seam::restore_plan`].
+fn launch_plan(saved: Option<&WolfState>) -> RestorePlan {
+    // Both paths are canonicalized so `launch_decision`'s comparisons mean what
+    // they say (`Path` equality compares components; it resolves no symlinks).
+    let process_cwd = std::env::current_dir()
+        .ok()
+        .map(|cwd| std::fs::canonicalize(&cwd).unwrap_or(cwd));
+    let home = workspace::home_dir();
+    state_seam::restore_plan(
+        saved,
+        process_cwd.as_deref(),
+        home.as_deref(),
+        std::path::Path::is_dir,
+    )
+}
+
 /// Builds the single application window and wires it to a freshly started
 /// [`WolfCore`]. If the core fails to start, logs and returns without building a
 /// window (so the application simply exits).
@@ -178,27 +231,23 @@ fn build_ui(app: &adw::Application) {
         let _ = wake_tx.try_send(());
     });
 
-    // Is a project open? The Linux rule reads the PROCESS working directory (there
-    // is no state.json restore here): a terminal launch from a project is a
-    // project; a desktop-launcher start at $HOME or / is not. Both paths are
-    // canonicalized so `launch_decision`'s comparisons mean what they say.
-    let process_cwd = std::env::current_dir()
-        .ok()
-        .map(|cwd| std::fs::canonicalize(&cwd).unwrap_or(cwd));
-    let home = workspace::home_dir();
-    let (core_cwd, empty) =
-        match workspace::launch_decision(process_cwd.as_deref(), home.as_deref(), |path| {
-            path.is_dir()
-        }) {
-            LaunchDecision::Folder { cwd } => (cwd, false),
-            LaunchDecision::EmptyState { nvim_cwd } => (nvim_cwd, true),
-        };
+    // The application-state restore prologue. `state()` is the in-memory tree the
+    // store loaded from `state.json` (defaults on any failure — loading is
+    // silently-ignore and never rewrites the file).
+    let store = open_state_store();
+    let saved = store.as_ref().map(StateStore::state);
+
+    // Is a project open, and which one? The Linux rule is process cwd first, then
+    // the restored cwd; the plan also carries the saved pane layout (only when the
+    // chosen cwd IS the saved one) and the saved window size.
+    let plan = launch_plan(saved.as_ref());
+    let empty = plan.empty;
 
     let cfg = CoreConfig {
         init_lua: init_lua_path(),
         cols: INITIAL_COLS,
         rows: INITIAL_ROWS,
-        cwd: core_cwd,
+        cwd: plan.core_cwd.clone(),
     };
     let core = match WolfCore::start(cfg, wake) {
         Ok(core) => core,
@@ -215,6 +264,14 @@ fn build_ui(app: &adw::Application) {
     // the former single editor DrawingArea. Its container is the overlay's main
     // child; the picker floats over it.
     let panes = pane_view::build(&core, &metrics);
+    // Queue the saved pane tree, if any. It is realized on the first wake at
+    // which a window grid exists — see `pane_view::consume_pending_layout`. NOTE
+    // there is deliberately NO arity guard here: a single-leaf layout is rebuilt
+    // exactly like a multi-leaf one, which is half of the single-pane fix (the
+    // other half is `state_seam::persistable_layout`'s content predicate).
+    if let Some(layout) = plan.layout.clone() {
+        panes.request_layout_rebuild(layout);
+    }
     let editor = panes.widget();
     // The cmdline strip is a focusable widget in the editor region used as the
     // focus-return target for the picker/tree (so keys keep bubbling to the
@@ -273,13 +330,29 @@ fn build_ui(app: &adw::Application) {
     content.append(&header);
     content.append(&paned);
 
+    // The restored size, or the defaults. Window POSITION is never restored:
+    // Wayland gives a client neither its own position nor screen geometry.
+    let (window_width, window_height) = plan.window_size.unwrap_or((WINDOW_WIDTH, WINDOW_HEIGHT));
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .title("Wolf")
-        .default_width(WINDOW_WIDTH)
-        .default_height(WINDOW_HEIGHT)
+        // The same string `title::window_title` falls back to, so the title never
+        // flickers between two spellings before the first cwd is reported.
+        .title(WINDOW_TITLE_FALLBACK)
+        .default_width(window_width)
+        .default_height(window_height)
         .content(&content)
         .build();
+
+    // The application-state persistence glue. Built after the window (it reads
+    // the window size) and before the shell (which drives it from the wake).
+    let state = persistence::build(StateParts {
+        core: &core,
+        window: &window,
+        panes: &panes,
+        store,
+        launch_cwd: plan.core_cwd.clone(),
+        empty,
+    });
 
     // The action namespace (win.* / app.*), the accelerators, and the command
     // drain. Actions must exist before `present()` so the menu and the header
@@ -295,6 +368,7 @@ fn build_ui(app: &adw::Application) {
         open_button: &open_button,
         crash_overlay: &crash,
         panes: &panes,
+        state: &state,
     });
     shell.install_actions(app);
     shell.set_empty_state(empty);
@@ -350,7 +424,7 @@ fn build_ui(app: &adw::Application) {
     }
 
     wire_keys(&window, &core, &picker);
-    wire_close(&window, &core, &picker, &tree);
+    wire_close(&window, &core, &picker, &tree, &state);
 
     // The shell's first drain runs only AFTER `wire_close` has installed the
     // `close-request` handler. A drained `CloseWindow` calls `window.close()`,
@@ -403,18 +477,32 @@ fn wire_keys(
     window.add_controller(controller);
 }
 
-/// Installs the close handler: take the core out (releasing the RefCell borrow in
-/// its own statement) and shut it down cleanly.
+/// Installs the close handler: persist the session, then take the core out
+/// (releasing the RefCell borrow in its own statement) and shut it down cleanly.
+///
+/// **The `state.flush_on_close()` call is the FIRST statement in the handler, and
+/// that ordering is load-bearing.** It must run while the core and the panes are
+/// still alive: a snapshot taken after `core.borrow_mut().take()` sees no core,
+/// `state_seam::may_snapshot` refuses it, and the session is silently not saved.
+/// Moving it below any of the three statements that follow would leave the
+/// relaunch smokes (`pane_layout_survives_relaunch_under_cage`,
+/// `single_pane_file_survives_relaunch_under_cage`) with an empty `state.json`.
 fn wire_close(
     window: &adw::ApplicationWindow,
     core: &Rc<RefCell<Option<WolfCore>>>,
     picker: &PickerHandle,
     tree: &TreeHandle,
+    state: &StateHandle,
 ) {
     let core = core.clone();
     let picker = picker.clone();
     let tree = tree.clone();
+    let state = state.clone();
     window.connect_close_request(move |_window| {
+        // FIRST, while the core and the panes are still alive. Synchronous
+        // snapshot + blocking flush; every core borrow it takes is released
+        // before it returns, so the `borrow_mut().take()` below cannot panic.
+        state.flush_on_close();
         // Close the picker and tree first so their FileSearches are dropped
         // (cancelling any in-flight traversal) before the core shuts down.
         picker.close();

@@ -46,6 +46,11 @@ const DEFAULT_RATIO: f64 = 0.5;
 /// clean 2x2 grid has unambiguous neighbours.
 const NEIGHBOR_EPS: f64 = 1e-9;
 
+/// The fewest children a [`Frame::Split`] may have. Enforced by
+/// [`PaneTree::from_layout`], which is the only constructor that takes a split's
+/// shape from OUTSIDE this module (a hand-edited `state.json`).
+const MIN_SPLIT_CHILDREN: usize = 2;
+
 /// A pane identifier. A plain `u64` alias (not a newtype) so the tree's
 /// `leaves()`/`pane_rects()` results compare directly against literal ids.
 pub type PaneId = u64;
@@ -80,10 +85,18 @@ pub struct Rect {
 /// split of two-or-more child frames along an [`Orientation`], with a parallel
 /// per-child `weights` vector (summing to 1) driving the divider positions.
 ///
-/// Invariants (upheld by [`PaneTree`]'s operations): a `Split` has `>= 2` children;
-/// `weights.len() == children.len()`; the weights sum to 1; and no `Split` is a
-/// direct child of a same-orientation `Split` (they are flattened into one row/
-/// column).
+/// Invariants: a `Split` has `>= 2` children; `weights.len() == children.len()`;
+/// the weights sum to 1; and no `Split` is a direct child of a same-orientation
+/// `Split` (they are flattened into one row/column).
+///
+/// [`PaneTree::split`] / [`PaneTree::remove`] UPHOLD all four.
+/// [`PaneTree::from_layout`] VALIDATES the first two (and rejects a non-finite,
+/// negative or zero-summing weight vector) but PRESERVES the last two AS GIVEN:
+/// it copies weights verbatim rather than re-equalizing, and it keeps a
+/// same-orientation nested split rather than flattening it, because reshaping
+/// would desynchronise the DFS leaf order the restore path zips nvim window
+/// handles onto. Such a nesting is cosmetic — `pane_rects`, `neighbor` and the
+/// widget builder all handle it, and the first `remove()` normalizes it away.
 enum Frame {
     /// A single pane, identified by its [`PaneId`].
     Leaf(PaneId),
@@ -210,6 +223,66 @@ impl PaneTree {
     #[must_use]
     pub fn layout(&self) -> PaneLayout {
         frame_layout(&self.root)
+    }
+
+    /// Builds a tree from a [`PaneLayout`] mirror — the inverse of
+    /// [`PaneTree::layout`] — VERBATIM: no flatten, no collapse, no re-equalize,
+    /// so [`PaneTree::leaves`] enumerates in byte-for-byte the same DFS order as
+    /// `layout`'s leaves. That is load-bearing: the state-restore path zips nvim
+    /// window handles onto those leaves BY INDEX (see
+    /// `crate::pane_layout::decode`), and any reshaping here would silently
+    /// misbind them.
+    ///
+    /// Returns `None` when `layout` violates this type's invariants — a split
+    /// with fewer than 2 children, a `weights.len() != children.len()` mismatch,
+    /// a non-finite or negative weight, or a split whose weights sum to `<= 0.0`.
+    /// Validating rather than repairing is deliberate for the same reason, and it
+    /// is a CRASH GUARD rather than tidiness: `pane_view::build_chain` indexes
+    /// `children[0]` unconditionally, so a zero-child split reaching the widget
+    /// layer is a panic, and `pane_rects` divides by the weight sum.
+    ///
+    /// Note this constructor CAN produce a tree with a same-orientation nested
+    /// split — which [`PaneTree::split`] never produces but a hand-edited
+    /// `state.json` can. That is cosmetic; see the [`Frame`] invariant list.
+    #[must_use]
+    pub fn from_layout(layout: &PaneLayout) -> Option<Self> {
+        Some(Self {
+            root: frame_from_layout(layout)?,
+        })
+    }
+}
+
+/// Recursively validates and mirrors a [`PaneLayout`] back into a [`Frame`].
+/// `None` on any invariant violation (see [`PaneTree::from_layout`]).
+fn frame_from_layout(layout: &PaneLayout) -> Option<Frame> {
+    match layout {
+        PaneLayout::Leaf(id) => Some(Frame::Leaf(*id)),
+        PaneLayout::Split {
+            orientation,
+            children,
+            weights,
+        } => {
+            // A split has >= 2 children with one weight each. `build_chain`
+            // indexes `children[0]`, so an empty split is a panic, not a wart.
+            if children.len() < MIN_SPLIT_CHILDREN || weights.len() != children.len() {
+                return None;
+            }
+            // A NaN/inf/negative weight would poison `pane_rects`' cumulative
+            // fractions; an all-zero vector would divide by zero.
+            if weights.iter().any(|w| !w.is_finite() || *w < 0.0) {
+                return None;
+            }
+            let total: f64 = weights.iter().sum();
+            if total <= 0.0 {
+                return None;
+            }
+            let children: Option<Vec<Frame>> = children.iter().map(frame_from_layout).collect();
+            Some(Frame::Split {
+                orientation: *orientation,
+                children: children?,
+                weights: weights.clone(),
+            })
+        }
     }
 }
 
@@ -1237,6 +1310,247 @@ mod tests {
             first,
             tree.leaves(),
             "pane_rects order matches leaves order"
+        );
+    }
+
+    // =====================================================================
+    // from_layout — the inverse of `layout()`, for the state-restore path
+    // =====================================================================
+
+    /// The four canonical shapes the rest of this module already builds, each as a
+    /// `(description, tree)` pair. Reused by the round-trip test so the constructor
+    /// is exercised against exactly the trees `split`/`remove` really produce.
+    fn canonical_trees() -> Vec<(&'static str, PaneTree)> {
+        let mut two = PaneTree::new(P1);
+        two.split(P1, P2, Orientation::Vertical);
+
+        let mut row_of_three = PaneTree::new(P1);
+        row_of_three.split(P1, P2, Orientation::Vertical);
+        row_of_three.split(P1, P3, Orientation::Vertical);
+
+        let mut nested = PaneTree::new(P1);
+        nested.split(P1, P2, Orientation::Vertical);
+        nested.split(P1, P3, Orientation::Horizontal);
+
+        vec![
+            ("a single leaf", PaneTree::new(P1)),
+            ("a 2-leaf vertical split", two),
+            ("a flat row of three", row_of_three),
+            ("a nested perpendicular split", nested),
+        ]
+    }
+
+    #[test]
+    fn from_layout_round_trips_layout() {
+        for (desc, tree) in canonical_trees() {
+            let mirror = tree.layout();
+            let Some(rebuilt) = PaneTree::from_layout(&mirror) else {
+                panic!("from_layout rejected {desc}, which `split` itself produced: {mirror:?}");
+            };
+
+            assert_eq!(
+                rebuilt.layout(),
+                mirror,
+                "from_layout must be the exact inverse of layout() for {desc} — orientation, \
+                 child order and weights all verbatim"
+            );
+            assert_eq!(
+                rebuilt.leaves(),
+                tree.leaves(),
+                "…and the DFS leaf ORDER must survive for {desc}: the state-restore path zips \
+                 nvim window handles onto these leaves BY INDEX"
+            );
+            assert_eq!(
+                rebuilt.pane_rects(W, H),
+                tree.pane_rects(W, H),
+                "…and the rebuilt tree must tile the bounds identically for {desc}, which is what \
+                 proves the weights came through and not just the topology"
+            );
+        }
+    }
+
+    #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "0.25 / 0.75 are exactly representable in binary f64 and `from_layout` copies \
+                  them through unmodified rather than computing with them, so an epsilon \
+                  comparison would weaken the assertion — its whole point is that the weights are \
+                  EXACTLY as given, not re-equalized (the `mouse::scroll_threshold_table` \
+                  precedent)"
+    )]
+    fn from_layout_does_not_reshape() {
+        // A SAME-ORIENTATION nested split. `PaneTree::split` never produces one (it
+        // inserts a flat sibling instead) and `remove`'s `normalize` flattens any it
+        // finds — but a hand-edited `state.json` can absolutely contain one, and
+        // `from_layout` must PRESERVE it rather than tidying it away. Flattening
+        // would not change the leaf SET, but it would change the tree the widget
+        // builder walks, and the whole point of this constructor is that what nvim
+        // was asked to build and what GTK builds stay in lockstep.
+        let nested_same_orientation = PaneLayout::Split {
+            orientation: Orientation::Vertical,
+            children: vec![
+                PaneLayout::Split {
+                    orientation: Orientation::Vertical,
+                    children: vec![PaneLayout::Leaf(P1), PaneLayout::Leaf(P2)],
+                    weights: vec![0.25, 0.75],
+                },
+                PaneLayout::Leaf(P3),
+            ],
+            weights: vec![0.5, 0.5],
+        };
+
+        let Some(rebuilt) = PaneTree::from_layout(&nested_same_orientation) else {
+            panic!("from_layout rejected a same-orientation nesting, which is legal (if unusual)");
+        };
+
+        assert_eq!(
+            rebuilt.layout(),
+            nested_same_orientation,
+            "a same-orientation nested split must survive VERBATIM: no flatten, no collapse, no \
+             re-equalize. Reshaping here desynchronises the DFS leaf order from the window handles \
+             `WolfCore::rebuild_layout` has already returned, silently binding each pane to \
+             another pane's grid."
+        );
+        assert_eq!(
+            rebuilt.leaves(),
+            vec![P1, P2, P3],
+            "the DFS leaf order is unchanged by the nesting — this is the property the restore \
+             zip depends on"
+        );
+
+        // The un-equalized weights survive too: `0.25 / 0.75` is not something
+        // `split()` can produce, so its presence proves nothing re-equalized.
+        let PaneLayout::Split { children, .. } = rebuilt.layout() else {
+            panic!("the rebuilt root must still be a split");
+        };
+        let PaneLayout::Split { weights, .. } = &children[0] else {
+            panic!("the rebuilt first child must still be the nested split");
+        };
+        assert_eq!(
+            weights.as_slice(),
+            [0.25, 0.75].as_slice(),
+            "the nested split's NON-EQUAL weights must be copied verbatim; `split`/`remove` always \
+             equalize, so seeing them here is what proves nothing re-equalized"
+        );
+    }
+
+    #[test]
+    fn from_layout_rejects_broken_invariants() {
+        // Every input below is reachable from a hand-edited or corrupted
+        // `state.json`. Rejecting is a CRASH GUARD, not tidiness: `pane_view`'s
+        // `build_chain` indexes `children[0]` unconditionally, so a zero-child split
+        // reaching the widget layer is a PANIC, and `collect_rects` divides by the
+        // weight sum.
+        let cases: [(&str, PaneLayout); 8] = [
+            (
+                "a zero-child split (build_chain would index children[0] and panic)",
+                PaneLayout::Split {
+                    orientation: Orientation::Vertical,
+                    children: vec![],
+                    weights: vec![],
+                },
+            ),
+            (
+                "a one-child split (below MIN_SPLIT_CHILDREN)",
+                PaneLayout::Split {
+                    orientation: Orientation::Vertical,
+                    children: vec![PaneLayout::Leaf(P1)],
+                    weights: vec![1.0],
+                },
+            ),
+            (
+                "more weights than children",
+                PaneLayout::Split {
+                    orientation: Orientation::Vertical,
+                    children: vec![PaneLayout::Leaf(P1), PaneLayout::Leaf(P2)],
+                    weights: vec![0.3, 0.3, 0.4],
+                },
+            ),
+            (
+                "fewer weights than children",
+                PaneLayout::Split {
+                    orientation: Orientation::Vertical,
+                    children: vec![PaneLayout::Leaf(P1), PaneLayout::Leaf(P2)],
+                    weights: vec![1.0],
+                },
+            ),
+            (
+                "a NaN weight (would poison every cumulative rect fraction)",
+                PaneLayout::Split {
+                    orientation: Orientation::Vertical,
+                    children: vec![PaneLayout::Leaf(P1), PaneLayout::Leaf(P2)],
+                    weights: vec![f64::NAN, 0.5],
+                },
+            ),
+            (
+                "an infinite weight",
+                PaneLayout::Split {
+                    orientation: Orientation::Horizontal,
+                    children: vec![PaneLayout::Leaf(P1), PaneLayout::Leaf(P2)],
+                    weights: vec![f64::INFINITY, 0.5],
+                },
+            ),
+            (
+                "a negative weight (would place a pane outside its parent's bounds)",
+                PaneLayout::Split {
+                    orientation: Orientation::Vertical,
+                    children: vec![PaneLayout::Leaf(P1), PaneLayout::Leaf(P2)],
+                    weights: vec![-0.5, 1.5],
+                },
+            ),
+            (
+                "an all-zero weight vector (collect_rects would divide by zero)",
+                PaneLayout::Split {
+                    orientation: Orientation::Vertical,
+                    children: vec![PaneLayout::Leaf(P1), PaneLayout::Leaf(P2)],
+                    weights: vec![0.0, 0.0],
+                },
+            ),
+        ];
+
+        for (desc, layout) in &cases {
+            assert!(
+                PaneTree::from_layout(layout).is_none(),
+                "from_layout must REJECT {desc}: {layout:?}"
+            );
+        }
+
+        // Validation must RECURSE: a violation buried under a well-formed root is
+        // exactly as fatal as one at the top.
+        let nested_violation = PaneLayout::Split {
+            orientation: Orientation::Vertical,
+            children: vec![
+                PaneLayout::Leaf(P1),
+                PaneLayout::Split {
+                    orientation: Orientation::Horizontal,
+                    children: vec![],
+                    weights: vec![],
+                },
+            ],
+            weights: vec![0.5, 0.5],
+        };
+        assert!(
+            PaneTree::from_layout(&nested_violation).is_none(),
+            "from_layout must reject a zero-child split NESTED under a well-formed root; \
+             `build_chain` recurses, so a buried violation panics just the same"
+        );
+
+        // Non-vacuity: the constructor must still accept the well-formed shapes, or
+        // every rejection above would hold for the wrong reason.
+        assert!(
+            PaneTree::from_layout(&PaneLayout::Leaf(P1)).is_some(),
+            "a bare leaf is the single-pane restore shape and must be ACCEPTED"
+        );
+        assert!(
+            PaneTree::from_layout(&PaneLayout::Split {
+                orientation: Orientation::Vertical,
+                children: vec![PaneLayout::Leaf(P1), PaneLayout::Leaf(P2)],
+                weights: vec![0.25, 0.75],
+            })
+            .is_some(),
+            "a well-formed two-child split with NON-EQUAL weights must be ACCEPTED; the validator \
+             checks the weights are finite, non-negative and positively-summing, never that they \
+             are equal shares"
         );
     }
 }

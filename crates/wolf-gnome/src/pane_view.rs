@@ -34,6 +34,24 @@
 //! bound pane whose grid vanished) and collapses them, resolves pending pane grids,
 //! and updates the active-pane focus ring from `active_win`.
 //!
+//! ## Layout persistence
+//!
+//! This module is both halves of the pane-layout persistence path:
+//!
+//! - **Save.** [`PaneHandle::layout_snapshot`] walks the live tree, reads each
+//!   leaf's RAW buffer path from `WolfCore::pane_status(grid).abs_path` (RPC-free),
+//!   encodes it via [`crate::pane_layout::encode`], and applies
+//!   [`crate::state_seam::persistable_layout`]'s CONTENT suppression rule. It is
+//!   called from [`crate::persistence`] on every render wake and at
+//!   `close-request`. [`PaneHandle::snapshot_readiness`] supplies the two counts
+//!   `state_seam::may_snapshot` gates on, so a snapshot taken before the first
+//!   pane binds can never wipe a good save.
+//! - **Restore.** [`PaneHandle::request_layout_rebuild`] queues the saved tree at
+//!   launch; the first wake at which a window grid exists consumes it
+//!   ([`PaneInner::consume_pending_layout`]) and realizes it
+//!   ([`PaneInner::apply_layout_rebuild`]) through `WolfCore::rebuild_layout` —
+//!   the ONE blocking RPC this front-end issues, documented there.
+//!
 //! ## Mouse and scroll
 //!
 //! Each pane area carries THREE pointer controllers, all of them thin glue over the
@@ -103,13 +121,15 @@ use adw::prelude::*;
 use gtk::glib;
 
 use wolf_core::{
-    CursorShape, LayoutIntent, MouseAction, MouseEvent, ScrollEvent, Snapshot, SplitOrientation,
-    WolfCore,
+    CursorShape, LayoutIntent, MouseAction, MouseEvent, PaneNode, ScrollEvent, Snapshot,
+    SplitOrientation, WolfCore,
 };
 
 use crate::layout::{Orientation, PaneId, PaneLayout, PaneTree};
 use crate::mouse::{self, PaneScroll};
+use crate::pane_layout;
 use crate::render::{draw_glyph, FALLBACK_BG, FALLBACK_FG};
+use crate::state_seam;
 use crate::{cell_at, cursor, grid_size_for, paint, CellMetrics};
 
 /// The id of the first (root) pane. The [`PaneTree`] is constructed with this as
@@ -228,6 +248,10 @@ struct PaneInner {
     core: Rc<RefCell<Option<WolfCore>>>,
     /// The currently active pane (focus ring + cursor target), if any.
     active_pane: Cell<Option<PaneId>>,
+    /// A saved pane tree awaiting realization, set ONCE at launch by
+    /// [`PaneHandle::request_layout_rebuild`] and consumed by the first wake at
+    /// which a window grid exists (see [`PaneInner::consume_pending_layout`]).
+    pending_layout: RefCell<Option<PaneNode>>,
 }
 
 impl PaneInner {
@@ -239,6 +263,12 @@ impl PaneInner {
             return;
         }
         self.ensure_initial_pane();
+        // A restored layout replaces the whole pane set, so nothing else on this
+        // wake would be looking at the tree it just built. Early-return (macOS
+        // parity) and let the NEXT wake drive the normal path.
+        if self.consume_pending_layout() {
+            return;
+        }
         self.apply_intents();
         self.detect_closes();
         self.resolve_pending_grids();
@@ -269,6 +299,163 @@ impl PaneInner {
             .insert(id, PaneWidgets::new(win, Some(grid), area));
         self.rebuild_pane_area();
         self.set_active_pane(Some(id));
+    }
+
+    /// Consumes a pending restored layout, if one is both set and realizable now.
+    /// Returns whether the layout was applied (the caller then skips the rest of
+    /// the wake).
+    ///
+    /// Three non-applying cases, deliberately distinguished:
+    ///
+    /// - nothing pending → `false`;
+    /// - no pane bound yet (no window grid has appeared) → `false` and the
+    ///   pending value is **kept**, so the next wake retries;
+    /// - more than one pane already exists → the pending value is **taken** and
+    ///   dropped with a message. Splits made before the restore could run mean the
+    ///   saved topology no longer describes this tab, and rebuilding over it would
+    ///   discard live windows.
+    fn consume_pending_layout(self: &Rc<Self>) -> bool {
+        if self.pending_layout.borrow().is_none() {
+            return false;
+        }
+        let pane_count = self.panes.borrow().len();
+        if pane_count == 0 {
+            // No window grid yet. Do NOT take the pending value.
+            return false;
+        }
+        let Some(saved) = self.pending_layout.borrow_mut().take() else {
+            return false;
+        };
+        if pane_count != 1 {
+            eprintln!(
+                "wolf-gnome: {pane_count} panes already exist at restore time; \
+                 dropping the saved pane layout"
+            );
+            return false;
+        }
+        self.apply_layout_rebuild(&saved);
+        true
+    }
+
+    /// Realizes a saved pane tree: ask nvim to rebuild the windows, then rebind
+    /// every pane onto the returned handles in DFS order.
+    ///
+    /// The order below is load-bearing:
+    ///
+    /// 1. **Validate first.** [`pane_layout::decode`] rejects a malformed tree
+    ///    BEFORE any spec is rendered, so nvim is never asked to realize one.
+    /// 2. Render the spec via `wolf_core::state::rebuild_layout_spec`.
+    /// 3. Call `rebuild_layout` under a SHORT borrow in its own statement.
+    ///
+    ///    **This is the only BLOCKING RPC `wolf-gnome` issues.** Every other core
+    ///    call this crate makes is a snapshot read or a queued input, which is why
+    ///    `NotResponding` was previously unreachable from this front-end. It is
+    ///    acceptable HERE and nowhere else: it happens at most once per launch,
+    ///    before the window is interactive, and never on the crash/restart path —
+    ///    see `shell.rs`'s "never call a `block_on_rpc` on the restart path" rule,
+    ///    which stands unchanged. A wedged nvim at launch can now genuinely mark
+    ///    the core `NotResponding`, and the crash overlay presents it.
+    /// 4. A handle count that does not match the decoded leaf count aborts,
+    ///    leaving the single already-bound pane intact (macOS parity).
+    fn apply_layout_rebuild(self: &Rc<Self>, saved: &PaneNode) {
+        let first_id = self.next_pane_id.get();
+        let Some((tree, leaf_ids)) = pane_layout::decode(saved, first_id) else {
+            eprintln!("wolf-gnome: saved pane layout is unusable; keeping the fresh single pane");
+            return;
+        };
+        let spec = wolf_core::state::rebuild_layout_spec(saved);
+        let handles = {
+            let core_ref = self.core.borrow();
+            let Some(core) = core_ref.as_ref() else {
+                return;
+            };
+            core.rebuild_layout(&spec)
+        };
+        if handles.len() != leaf_ids.len() {
+            eprintln!(
+                "wolf-gnome: rebuild_layout returned {} window handles for {} saved leaves; \
+                 keeping the fresh single pane",
+                handles.len(),
+                leaf_ids.len()
+            );
+            return;
+        }
+
+        let mut new_panes: HashMap<PaneId, PaneWidgets> = HashMap::new();
+        for (win, id) in handles.iter().zip(leaf_ids.iter()) {
+            let grid = {
+                let core_ref = self.core.borrow();
+                core_ref
+                    .as_ref()
+                    .and_then(|c| c.read_snapshot().grid_for_win(*win))
+            };
+            let area = self.make_pane_area(*id);
+            new_panes.insert(*id, PaneWidgets::new(*win, grid, area));
+        }
+
+        *self.tree.borrow_mut() = tree;
+        *self.panes.borrow_mut() = new_panes;
+        self.next_pane_id
+            .set(first_id + u64::try_from(leaf_ids.len()).unwrap_or(0));
+
+        // The guarded path: it samples `focus_inside_pane_area()` BEFORE tearing
+        // anything down, and its `pane_area.remove(..)` loop unparents the old
+        // single pane's area — which, in the guaranteed one-pane pre-state, is
+        // `pane_area`'s only child and is no longer in `panes`.
+        self.rebuild_pane_area();
+        self.set_active_pane(leaf_ids.first().copied());
+        self.resolve_pending_grids();
+        self.queue_redraw();
+    }
+
+    /// The tab's persistable pane tree, or `None` for an unnamed lone pane.
+    ///
+    /// Reads each leaf's buffer path from `WolfCore::pane_status(grid).abs_path`
+    /// — the RAW absolute path, NOT `display_path` (which is relativized for the
+    /// statusbar and would be useless to restore from). `pane_status` is RPC-free
+    /// (a snapshot read plus `live_cwd`), so this is cheap enough to run on every
+    /// wake.
+    ///
+    /// The `panes` borrow is dropped before the core borrow is taken; the `None`
+    /// suppression is [`state_seam::persistable_layout`]'s CONTENT rule, never an
+    /// arity test.
+    fn layout_snapshot(&self) -> Option<PaneNode> {
+        let leaves: Vec<(PaneId, Option<u64>)> = {
+            let tree = self.tree.borrow();
+            let panes = self.panes.borrow();
+            tree.leaves()
+                .into_iter()
+                .map(|id| (id, panes.get(&id).and_then(|p| p.grid.get())))
+                .collect()
+        };
+        let paths: HashMap<PaneId, String> = {
+            let core_ref = self.core.borrow();
+            let core = core_ref.as_ref()?;
+            leaves
+                .iter()
+                .filter_map(|(id, grid)| grid.map(|g| (*id, core.pane_status(g).abs_path)))
+                .collect()
+        };
+        let layout = self.tree.borrow().layout();
+        state_seam::persistable_layout(pane_layout::encode(&layout, &paths))
+    }
+
+    /// `(panes with a RESOLVED grid, windows nvim has reported buffers for)` —
+    /// the two readiness counts [`state_seam::may_snapshot`] gates on.
+    fn snapshot_readiness(&self) -> (usize, usize) {
+        let bound = self
+            .panes
+            .borrow()
+            .values()
+            .filter(|p| p.grid.get().is_some())
+            .count();
+        let reported = {
+            let core_ref = self.core.borrow();
+            core_ref
+                .as_ref()
+                .map_or(0, |core| core.read_snapshot().win_buffers.len())
+        };
+        (bound, reported)
     }
 
     /// Drains and applies all pending layout intents (splits + focus moves).
@@ -1126,6 +1313,31 @@ impl PaneHandle {
         self.inner.on_render_wake();
     }
 
+    /// Queues a saved pane tree to be realized ONCE, on the first wake at which a
+    /// window grid exists.
+    ///
+    /// Called from `app::build_ui` before `present()`, with the layout
+    /// `state_seam::restore_plan` attached. It cannot be applied here: no Neovim
+    /// window has appeared yet, so there is nothing to rebuild from. See
+    /// [`PaneInner::consume_pending_layout`] for the three outcomes.
+    pub fn request_layout_rebuild(&self, saved: PaneNode) {
+        *self.inner.pending_layout.borrow_mut() = Some(saved);
+    }
+
+    /// The tab's persistable pane tree for `state.json`, or `None` for an
+    /// unnamed lone pane (see [`PaneInner::layout_snapshot`]).
+    #[must_use]
+    pub fn layout_snapshot(&self) -> Option<PaneNode> {
+        self.inner.layout_snapshot()
+    }
+
+    /// `(panes with a resolved grid, windows nvim has reported buffers for)`, for
+    /// `state_seam::may_snapshot` (see [`PaneInner::snapshot_readiness`]).
+    #[must_use]
+    pub fn snapshot_readiness(&self) -> (usize, usize) {
+        self.inner.snapshot_readiness()
+    }
+
     /// Resets the pane view to its pre-first-pane state after a SUCCESSFUL in-place
     /// Neovim restart ([`crate::shell::AppShell`] calls this from its restart
     /// orchestration). The next render wake re-creates the first pane against the
@@ -1163,9 +1375,13 @@ impl PaneHandle {
     ///   restart. The reset binds only the fresh nvim's single window, which is
     ///   correct; the stale entries linger harmlessly because no pane is bound to
     ///   them.
-    /// - The pane TOPOLOGY is not restored — only the Tier-1 file set is.
-    ///   Restoring the split layout (and cursor/scroll position) across a restart
-    ///   is out of scope.
+    /// - The pane TOPOLOGY is not restored ACROSS A CRASH RESTART — only the
+    ///   Tier-1 file set is. Do not confuse this with the QUIT/RELAUNCH case,
+    ///   which the layout persistence in this module's "Layout persistence"
+    ///   section DOES restore: that path reads a saved tree out of `state.json`
+    ///   at launch, whereas an in-place restart has no saved tree to read and
+    ///   deliberately rebinds a single fresh pane. Restoring the split layout
+    ///   (and cursor/scroll position) across a RESTART remains out of scope.
     pub fn reset_after_restart(&self) {
         self.inner.reset_after_restart();
     }
@@ -1202,6 +1418,7 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
         metrics: metrics.clone(),
         core: core.clone(),
         active_pane: Cell::new(None),
+        pending_layout: RefCell::new(None),
     });
 
     {

@@ -11,14 +11,22 @@
 //!
 //! ## What this file contains
 //!
-//! **Twenty cage smokes** — one window-render smoke, two file-picker smokes, one
-//! file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
+//! **Twenty-three cage smokes** — one window-render smoke, two file-picker smokes,
+//! one file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
 //! new-untitled-buffer smoke, one Ctrl+Shift+W close-pane smoke (the accelerator
 //! path, as opposed to the split-pane suite's `<C-w>c`), two quit smokes (`:q`
 //! closes the focused pane, `:qa` closes the window), one keyboard-only CRASH /
-//! auto-restart smoke, and five POINTER smokes (click-to-position, drag-to-select,
-//! wheel scroll, the click-then-close focus-wedge regression, and the crash overlay
-//! + "Restart Neovim" button) — each of which launches the real binary under `cage`.
+//! auto-restart smoke, five POINTER smokes (click-to-position, drag-to-select,
+//! wheel scroll, the click-then-close focus-wedge regression, and the crash
+//! overlay + "Restart Neovim" button), and three STATE-PERSISTENCE smokes (a
+//! three-pane layout and a lone open file each surviving a quit-and-relaunch, plus
+//! the window title rendering the working directory) — each of which launches the
+//! real binary under `cage`.
+//!
+//! The two relaunch smokes run **two app launches inside ONE `cage` instance** (one
+//! scenario string, two sequential `"$WOLF_BIN" &` blocks), so `CAGE_LOCK`
+//! semantics are unchanged and the count of compositors started is still one per
+//! smoke.
 //!
 //! The five pointer smokes additionally run **`wolf-pointer-inject`** inside cage —
 //! this repo's own long-lived `zwlr_virtual_pointer_v1` client, see
@@ -31,26 +39,88 @@
 //! and OCR is structurally incapable of answering "did the cursor land at exactly
 //! row 12, column 25".
 //!
-//! Sixteen of the twenty OCR a screenshot of the live window. The `:qa` smoke
-//! deliberately captures no image and asserts on the cage exit status alone (the app
-//! must be GONE, and gone with a ZERO exit status — a panic in the GTK main loop
-//! makes a process vanish just as a clean shutdown does); the click, drag and scroll
-//! smokes still capture and still RETAIN a screenshot for post-mortem, but assert on
-//! their readback files rather than on pixels.
+//! Nineteen of the twenty-three OCR a screenshot of the live window. The `:qa`
+//! smoke deliberately captures no image and asserts on the cage exit status alone
+//! (the app must be GONE, and gone with a ZERO exit status — a panic in the GTK main
+//! loop makes a process vanish just as a clean shutdown does); the click, drag and
+//! scroll smokes still capture and still RETAIN a screenshot for post-mortem, but
+//! assert on their readback files rather than on pixels. The two relaunch smokes OCR
+//! **and** assert on a Neovim readback, and one of them additionally asserts on the
+//! `state.json` the first launch wrote.
 //!
-//! **One pure guard**, [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`],
-//! which mechanically enforces the fixture invariants the smokes' OCR assertions
-//! depend on. It is compositor-free: it does NOT call `require_smoke_env`, takes no
-//! `CAGE_LOCK`, spawns no subprocess and needs none of the toolchain below, so it
-//! still guards the fixture on a machine where the smoke toolchain is unavailable.
-//! It lives here, next to the consts it reads, rather than in a file of its own.
+//! **Four pure guards**, which mechanically enforce invariants the cage smokes
+//! depend on but cannot check themselves:
 //!
-//! So this target's summary line reads **`21 passed`**, not `20`: twenty cage
-//! smokes plus that guard.
+//! * [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`] — no
+//!   [`SIDEBAR_FILLER_FILES`] name may contain a term any smoke asserts on.
+//! * [`temp_cwd_name_cannot_satisfy_any_smoke_assertion`] — the same rule aimed at a
+//!   second fixture, the fixed components of the temp-cwd path
+//!   ([`TEMP_CWD_BASENAME`] and [`TEMP_CWD_PREFIX`]), because the window title
+//!   renders the app's working directory and the temp-dir NAME is therefore page
+//!   text too. The path is deliberately shaped so the title is the CONSTANT
+//!   `~/project` on every run — see [`make_temp_cwd`] and [`cage_command`] for the
+//!   measured reason.
+//! * [`restore_fixture_names_cannot_satisfy_their_own_assertions`] — the same rule
+//!   aimed at a THIRD fixture, [`RELAUNCH_FIXTURE_NAMES`]: the files the
+//!   state-persistence smokes create in their own working directories, which the
+//!   tree sidebar renders by name. It also pins the two preconditions behind the
+//!   window-title smoke's deliberate exemption.
+//! * [`cage_is_only_spawned_through_the_isolating_helper`] — `cage` is spawned in
+//!   exactly one place, [`cage_command`], which is the only thing that sets
+//!   `WOLF_STATE_DIR` and so the only thing keeping the smokes off the developer's
+//!   real `~/.local/state/wolf/` — and, since the shader-cache fix, the only thing
+//!   that sets `XDG_CACHE_HOME` too (see [`smoke_shader_cache_dir`]).
+//!
+//! All four are compositor-free: none calls `require_smoke_env`, none takes
+//! `CAGE_LOCK`, none spawns a subprocess and none needs any of the toolchain below,
+//! so they still guard on a machine where the smoke toolchain is unavailable. They
+//! live here, next to the consts and helpers they read, rather than in a file of
+//! their own.
+//!
+//! So this target's summary line reads **`27 passed`**, not `23`: twenty-three cage
+//! smokes plus those four guards.
+//!
+//! ## A vacuously-passing check recorded here: the `wtype ""` window-map poll
+//!
+//! Every scenario opens with a loop that retries a no-op `wtype ""` until one
+//! succeeds, and its comment used to claim that success "only happens once cage has
+//! a mapped surface to deliver input to". **That claim is measured FALSE.**
+//! Instrumented, the loop breaks at **`tries = 0` on every single run**: `cage`
+//! advertises `zwp_virtual_keyboard_manager_v1` as soon as the compositor itself is
+//! up, BEFORE any client surface maps, so the very first `wtype ""` always succeeds
+//! and the `WAIT_TRIES = 75` budget (15 s) is never spent.
+//!
+//! So the poll does **not** gate input readiness, and `WAIT_TRIES` / `WAIT_INTERVAL`
+//! are not an input-readiness budget. The ONLY real budget between spawning the app
+//! and typing the first key is the fixed `SETTLE` sleep that follows the loop —
+//! which is why `SETTLE` carries the measured margin table in [`SCENARIO`] and why
+//! it was raised from `0.5` to `1.0`.
+//!
+//! The poll is deliberately **kept**, not deleted: it still catches the one thing it
+//! can catch — a `cage` that never came up at all — and its `kill -0` arm still
+//! catches an app that died before the scenario ever typed. It simply no longer
+//! claims something it cannot prove.
+//!
+//! This is the EIGHTH vacuously-passing check this effort has found. It is recorded
+//! HERE, beside the scenarios, because that is where the next reader meets it — while
+//! editing a scenario's poll knobs, not while reading Markdown;
+//! `crates/wolf-gnome/tests/README.md` keeps the running prose record of the others,
+//! under "Vacuity is not only a fixture-naming problem". It is the same shape as the
+//! entries already there (the drag smoke's false premise, the untested auto-restart
+//! cap, the centre-derived restart-button click): **a check aimed at the right
+//! property, looking somewhere the defect could not appear.**
+//!
+//! Its concrete cost was DIAGNOSTIC. A residual ~0.8% failure of
+//! [`window_renders_typed_text_under_cage`] (1 in 120) was chased as input routing
+//! and then as the swap modal, because a poll that appeared to have already proved
+//! the client could accept keys ruled out the true cause — too little margin before
+//! the first keystroke — by fiat. The measured signature (two empty lines, cursor on
+//! line 2) is now the FIRST thing that smoke's failure message tells the reader to
+//! check.
 //!
 //! ## When it runs
 //!
-//! The twenty cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The twenty-three cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The Linux verification gate").
@@ -60,13 +130,13 @@
 //! suite command does not run is a silently-skipped test.
 //!
 //! They are, however, the slowest part of the suite: each drives a real
-//! compositor, and all twenty serialize behind `CAGE_LOCK` (see below).
+//! compositor, and all twenty-three serialize behind `CAGE_LOCK` (see below).
 //!
 //! ```text
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the twenty cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the twenty-three cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` and
 //!   `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
@@ -78,7 +148,7 @@
 //!   wolf-gnome tests; nvim is never taken from `PATH`).
 //! - `XDG_RUNTIME_DIR` set and writable (the Wayland socket lives there).
 //!
-//! Per project policy every one of the twenty FAILS LOUD if any of the above is
+//! Per project policy every one of the twenty-three FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -89,9 +159,12 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
+use std::time::SystemTime;
 
 use cairo::{Context, Format, ImageSurface};
-use wolf_gnome::CellMetrics;
+use wolf_core::state::STATE_FILE_NAME;
+use wolf_core::{load_state, state_dir, PaneNode};
+use wolf_gnome::{CellMetrics, WINDOW_TITLE_FALLBACK};
 
 /// The lowercase word we type in insert mode (in the window smoke scenario).
 /// Kept short and all-lowercase so OCR noise is unlikely to corrupt every
@@ -99,7 +172,7 @@ use wolf_gnome::CellMetrics;
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the twenty cage smoke tests. Each launches its own
+/// Serializes the twenty-three cage smoke tests. Each launches its own
 /// `cage` compositor, and two compositors started concurrently contend for the
 /// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
 /// Under the default multi-threaded test harness these tests would otherwise run
@@ -150,17 +223,53 @@ const SMOKE_FONT_PT: &str = "28";
 /// passed). Nine sits comfortably above that floor without slowing the file-search
 /// traversal. If this ever regresses, add files — do not touch the assertion.
 ///
+/// ## The window title is page text too, and is deliberately held CONSTANT
+///
+/// Since the state-persistence unit the `adw::HeaderBar` renders the app's WORKING
+/// DIRECTORY, so the title is part of the page `tesseract` calibrates against — a
+/// third input to this fixture's arithmetic, alongside the filler rows and the
+/// editor grid. It was measured to matter, and the measurement is recorded here
+/// rather than left to be re-derived:
+///
+/// | arm | five consecutive capture md5s | size |
+/// | --- | --- | --- |
+/// | title rendering the run-varying temp path | all five DIFFERENT | 34.2–35.0 KB, varying |
+/// | `set_title` suppressed (the base page) | `5ea4d070…` ×5, byte-identical | 26074 ×5 |
+///
+/// With a run-varying title — [`make_temp_cwd`] used to hand the app a directory
+/// named from `std::env::temp_dir()` + the pid + a 19-digit nanosecond timestamp, so
+/// the header bar drew a different string on every run —
+/// [`window_renders_typed_text_under_cage`]'s OCR became STOCHASTIC: the isolated
+/// leading `h` of [`OCR_WORD`] misclassified (`ello` / `ﬁello`, the documented
+/// signature above) in 2 of ~93 runs. Before that title existed the capture was
+/// bit-for-bit reproducible.
+///
+/// **The fix was not to raise this number.** [`make_temp_cwd`] and [`cage_command`]
+/// now hold the rendered title at the fixed string `~/project` for every smoke (a
+/// fixed-name cwd under a `HOME` that is its own parent), so the captured page is
+/// byte-identical across runs again and the five-file floor measured above still
+/// means what it meant when it was measured. Letting a run-varying path back into
+/// the title reintroduces that ~2% flake, and raising this count would NOT fix it:
+/// more filler files can only make a stochastic page misread less often, never
+/// deterministically.
+///
 /// ## Why it belongs here at all
 ///
 /// Before the per-test temp cwd landed, this smoke ran with `crates/wolf-gnome` as
 /// the app's cwd and the sidebar happened to list ~35 repo entries, so the assertion
 /// has ALWAYS implicitly depended on that page density — accidentally. Writing these
-/// files makes the dependency explicit and deliberate, and mirrors what the fourteen
-/// other smokes that drop fixture files into their own temp cwds already get
-/// incidentally. (Five drop no files: the empty-state smoke hides the sidebar
+/// files makes the dependency explicit and deliberate, and mirrors what most other
+/// smokes get incidentally from the fixture files they drop into their own temp
+/// cwds. (Five drop no fixture files at all: the empty-state smoke hides the sidebar
 /// entirely, the `:qa` smoke asserts on an exit status rather than OCR, and the
 /// click, drag and scroll pointer smokes build their buffer with `:put` and assert
 /// on Neovim-written readback files rather than on pixels.)
+///
+/// Several smokes now write these fillers DELIBERATELY rather than relying on their
+/// own fixtures for density — the keyboard crash-recovery smoke and all three
+/// state-persistence smokes, the last of which
+/// ([`window_title_shows_the_working_directory_under_cage`]) asserts on a single
+/// short header-bar title over an otherwise thin page.
 const SIDEBAR_FILLER_COUNT: usize = 9;
 
 /// Names of the [`SIDEBAR_FILLER_COUNT`] marker files. Only the FILENAME is ever
@@ -176,8 +285,10 @@ const SIDEBAR_FILLER_COUNT: usize = 9;
 /// `treenode`, `paneleft`/`paneright`, `htopfile`/`hbotfile`,
 /// `focusone`/`focustwo`/`zzleft`, `closekeep`/`closegone`,
 /// `triaone`/`tribtwo`/`tricthree`, `folder`, `zzfresh`/`newbufbase`,
-/// `quitkeep`/`quitgone`, `chordkeep`/`chordgone` and — added with the
-/// pointer-harness unit — `wedgestay`/`wedgeclick` — so a stray filler can never
+/// `quitkeep`/`quitgone`, `chordkeep`/`chordgone`, — added with the
+/// pointer-harness unit — `wedgestay`/`wedgeclick`, and — added with the
+/// state-persistence unit — `restorealfa`/`restorebravo`/`restorecharlie`,
+/// `solozulu`/`soloalfa` and `titlezulu`/`titlehome` — so a stray filler can never
 /// satisfy one of those either. [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`]
 /// enforces this mechanically against [`ASSERTED_OCR_TERMS`], which holds the consts
 /// themselves; this list is a reader's summary and the test is the authority.
@@ -618,9 +729,18 @@ const TRI_OCR_C: &str = "tricthree";
 // This scenario proves the launch decision end to end. `workspace::launch_decision`
 // returns `EmptyState` when the process cwd IS the home directory (the
 // desktop-launcher shape), so the fixture simply points BOTH at the same fresh
-// temp dir: `.current_dir(&cwd)` plus `.env("HOME", &cwd)`. That fires the
-// production rule with no test-only env var, and keeps every `$HOME`-derived path
-// (`state_dir`, the MRU sqlite, the swap dir) inside the temp dir too.
+// temp dir: `cage_command`'s `current_dir` plus this smoke's own `.env("HOME",
+// &cwd)`. That fires the production rule with no test-only env var, and keeps every
+// remaining `$HOME`-derived path inside the temp dir too. (`state_dir` is no longer
+// one of them: `cage_command` pins it with `WOLF_STATE_DIR`, which `state_dir()`
+// resolves ahead of anything `$HOME`-derived, so the MRU sqlite and the swap dir land
+// in the cwd's `-state` sibling — see `smoke_state_dir`.)
+//
+// `cage_command` now sets a DEFAULT `HOME` of its own — the cwd's parent, which pins
+// every other smoke's header-bar title to the constant `~/project` — and this smoke
+// deliberately overrides it. The override is what makes the smoke mean anything: with
+// the default, `cwd != home` and the app would open a `Folder`, so the status page
+// would never be built. It is chained after `cage_command`, so it wins.
 //
 // No keyboard interaction at all: the `gtk::FileDialog` the button opens cannot be
 // driven under `cage` (there is no portal backend) and is deliberately NOT asserted
@@ -1327,8 +1447,13 @@ fn require_smoke_env() -> PathBuf {
 ///
 /// Design notes:
 /// - Launch the app in the background and capture its pid so we can kill it.
-/// - Poll (NOT a fixed sleep) for the window to map + nvim to settle, bounded by
-///   `WAIT_TRIES * WAIT_INTERVAL` so a stuck launch fails fast instead of hanging.
+/// - Poll, bounded by `WAIT_TRIES * WAIT_INTERVAL`, so a compositor that never
+///   came up (or an app that died on launch) fails fast instead of hanging. This
+///   poll used to be described as waiting "for the window to map"; **it does not**
+///   — `cage` advertises `zwp_virtual_keyboard_manager_v1` before any surface
+///   maps, so the probe succeeds at `tries = 0` on every run. See the module doc
+///   comment's record of that vacuity, and the `SETTLE` block below, which is the
+///   only real budget before the first keystroke.
 /// - Type `ihello` (enter insert mode + the word), then `Escape`.
 /// - MOVE THE CURSOR OFF ROW 0 before screenshotting: send a normal-mode `o`
 ///   (open a new line BELOW and enter insert on the now-empty row 1), then
@@ -1344,22 +1469,61 @@ fn require_smoke_env() -> PathBuf {
 const SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
-# binaries (most spawning a real nvim) run in parallel: under that load the window
-# can take well over the old 5s budget to map. This is a timing knob only -- no
-# assertion depends on it.
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
 WAIT_TRIES=75
 WAIT_INTERVAL=0.2
-SETTLE=0.5
+#
+# SETTLE -- READ THIS BEFORE TRIMMING IT. This is the CANONICAL copy of this
+# comment; the other eighteen scenarios carry the same value and point back here.
+#
+# SETTLE is the ONLY real budget between spawning the app and typing the first
+# key. The wtype poll below LOOKS like an input-readiness gate and is not one:
+# cage advertises zwp_virtual_keyboard_manager_v1 as soon as the compositor is
+# up, before any surface maps, so instrumented that loop breaks at tries=0 on
+# every single run and WAIT_TRIES is never spent. See this file's module doc
+# comment, which records that as the eighth vacuously-passing check found here.
+#
+# Measured on this host: 20 iterations per cell, identical code, the ONLY
+# variable being whether the mesa shader cache under XDG_CACHE_HOME was warm.
+#
+#   SETTLE | cold cache | warm cache
+#   -------|------------|-----------
+#   0.15   |  0/20      |  0/20
+#   0.20   |  --        |  0/20
+#   0.25   |  0/20      | 20/20
+#   0.30   |  0/20      |  --
+#   0.35   | 20/20      | 20/20
+#   0.40   | 20/20      |  --
+#
+# Thresholds: warm in (0.20, 0.25], cold in (0.30, 0.35]. A cold cache costs
+# ~4.9 MB of shader rebuild (mesa_shader_cache + radv_builtin_shaders) on every
+# launch. At the old SETTLE=0.5 that left only ~1.5x headroom cold, and a
+# 120-iteration loop found 1 failure (~0.8%) whose capture md5
+# c9a797d31d606335297b40823e64371a is BYTE-IDENTICAL to a deliberately induced
+# cold/0.25 failure: two empty lines with the cursor on line 2, i.e. the whole
+# first `wtype -- "i$OCR_WORD"` and its Escape delivered before the client could
+# accept keys, and lost. `cage_command` now pins XDG_CACHE_HOME to a SHARED warm
+# directory, which deletes the cold column at its source; 1.0 is ~3x the measured
+# cold threshold on top of that. Do not trim it back.
+SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
 
-# Wait for the app to still be alive AND for the Wayland display to be usable.
-# We poll by attempting cheap no-op wtype invocations until one succeeds, which
-# only happens once cage has a mapped surface to deliver input to.
+# Wait for the app to still be alive AND for the compositor to be up.
+#
+# This is NOT an input-readiness gate, despite how it reads. A no-op `wtype ""`
+# succeeds as soon as cage advertises zwp_virtual_keyboard_manager_v1, which it
+# does before any surface maps -- measured, this loop breaks at tries=0 on every
+# single run, so WAIT_TRIES / WAIT_INTERVAL never gate anything here. It is kept
+# rather than deleted because it still catches a cage that never came up at all,
+# and the `kill -0` arm still catches an app that died on launch. The real budget
+# before the first keystroke is the SETTLE above.
 tries=0
 while [ "$tries" -lt "$WAIT_TRIES" ]; do
     if ! kill -0 "$app_pid" 2>/dev/null; then
@@ -1404,9 +1568,10 @@ exit 0
 "#;
 
 /// The interactive PICKER scenario, run as a single `sh -c` string INSIDE `cage`
-/// (same structure as [`SCENARIO`]): launch the app, wait for the window to map,
-/// open the picker with the Ctrl+Shift+O trigger, type a query that matches the
-/// target file, activate the selection with Enter, settle, and screenshot.
+/// (same structure as [`SCENARIO`]): launch the app, poll until `cage` is up (NOT
+/// until the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle, open the
+/// picker with the Ctrl+Shift+O trigger, type a query that matches the target file,
+/// activate the selection with Enter, settle, and screenshot.
 ///
 /// The app derives `CoreConfig.cwd` from `std::env::current_dir()`, so the target
 /// `.md` is placed in the cage process's working directory (set via
@@ -1414,21 +1579,28 @@ exit 0
 const PICKER_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
-# binaries (most spawning a real nvim) run in parallel: under that load the window
-# can take well over the old 5s budget to map. This is a timing knob only -- no
-# assertion depends on it.
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
 WAIT_TRIES=75
 WAIT_INTERVAL=0.2
-SETTLE=0.5
+SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
 
-# Wait for the app to still be alive AND for the Wayland display to be usable
-# (cheap no-op wtype succeeds only once cage has a mapped surface).
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
 tries=0
 while [ "$tries" -lt "$WAIT_TRIES" ]; do
     if ! kill -0 "$app_pid" 2>/dev/null; then
@@ -1482,9 +1654,10 @@ exit 0
 
 /// The interactive picker KEYBOARD-NAVIGATION scenario, run as a single `sh -c`
 /// string INSIDE `cage` (same structure as [`PICKER_SCENARIO`]): launch the app,
-/// wait for the window to map, open the picker with Ctrl+Shift+O, type a query
-/// that matches BOTH navigation files, press `Down` once to move the list
-/// selection to the SECOND row, then `Enter` to open it, settle, and screenshot.
+/// poll until `cage` is up (NOT until the window maps — see [`SCENARIO`]'s `SETTLE`
+/// comment), settle, open the picker with Ctrl+Shift+O, type a query that matches
+/// BOTH navigation files, press `Down` once to move the list selection to the
+/// SECOND row, then `Enter` to open it, settle, and screenshot.
 ///
 /// Two files are created in the cage process's working directory by the caller
 /// (`pick1.md` => row 0, `pick2.md` => row 1; see the rank-tiebreak comment near
@@ -1492,21 +1665,28 @@ exit 0
 const PICKER_NAV_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
-# binaries (most spawning a real nvim) run in parallel: under that load the window
-# can take well over the old 5s budget to map. This is a timing knob only -- no
-# assertion depends on it.
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
 WAIT_TRIES=75
 WAIT_INTERVAL=0.2
-SETTLE=0.5
+SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
 
-# Wait for the app to still be alive AND for the Wayland display to be usable
-# (cheap no-op wtype succeeds only once cage has a mapped surface).
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
 tries=0
 while [ "$tries" -lt "$WAIT_TRIES" ]; do
     if ! kill -0 "$app_pid" 2>/dev/null; then
@@ -1568,22 +1748,28 @@ exit 0
 "#;
 
 /// The TREE-SIDEBAR scenario, run as a single `sh -c` string INSIDE `cage` (same
-/// structure as [`SCENARIO`]): launch the app, wait for the window to map, then
-/// wait a little longer for the long-lived FileSearch to stream results into the
-/// tree, and screenshot. No keyboard interaction at all — we only assert the
+/// structure as [`SCENARIO`]): launch the app, poll until `cage` is up (NOT until
+/// the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle, then wait a
+/// little longer for the long-lived FileSearch to stream results into the tree, and
+/// screenshot. No keyboard interaction at all — we only assert the
 /// sidebar lists the file by name, which depends purely on tree population from
 /// the app's cwd (set via `Command::current_dir` by the caller).
 const TREE_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
-# binaries (most spawning a real nvim) run in parallel: under that load the window
-# can take well over the old 5s budget to map. This is a timing knob only -- no
-# assertion depends on it.
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
 WAIT_TRIES=75
 WAIT_INTERVAL=0.2
-SETTLE=0.5
+SETTLE=1.0
 # Extra settle for the streamed FileSearch traversal to populate the tree.
 TREE_SETTLE=1.5
 
@@ -1591,8 +1777,10 @@ TREE_SETTLE=1.5
 "$WOLF_BIN" &
 app_pid=$!
 
-# Wait for the app to still be alive AND for the Wayland display to be usable
-# (cheap no-op wtype succeeds only once cage has a mapped surface).
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
 tries=0
 while [ "$tries" -lt "$WAIT_TRIES" ]; do
     if ! kill -0 "$app_pid" 2>/dev/null; then
@@ -1622,7 +1810,8 @@ exit 0
 "#;
 
 /// The VERTICAL-SPLIT scenario, run as a single `sh -c` string INSIDE `cage` (same
-/// structure as [`SCENARIO`]): launch the app, wait for the window to map, open
+/// structure as [`SCENARIO`]): launch the app, poll until `cage` is up (NOT until
+/// the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle, open
 /// file A (`:e $VSPLIT_FILE_LEFT<CR>`) in the editor pane, trigger a vertical split
 /// with `<C-w>v`, open file B (`:e $VSPLIT_FILE_RIGHT<CR>`) in the new pane, settle,
 /// and screenshot. Both files live in the cage process's working directory (set via
@@ -1630,21 +1819,28 @@ exit 0
 const VSPLIT_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
-# binaries (most spawning a real nvim) run in parallel: under that load the window
-# can take well over the old 5s budget to map. This is a timing knob only -- no
-# assertion depends on it.
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
 WAIT_TRIES=75
 WAIT_INTERVAL=0.2
-SETTLE=0.5
+SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
 
-# Wait for the app to still be alive AND for the Wayland display to be usable
-# (cheap no-op wtype succeeds only once cage has a mapped surface).
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
 tries=0
 while [ "$tries" -lt "$WAIT_TRIES" ]; do
     if ! kill -0 "$app_pid" 2>/dev/null; then
@@ -1696,29 +1892,37 @@ exit 0
 "#;
 
 /// The HORIZONTAL-SPLIT scenario, run as a single `sh -c` string INSIDE `cage`
-/// (same structure as [`VSPLIT_SCENARIO`]): launch the app, wait for the window to
-/// map, open file A (`:e $HSPLIT_FILE_TOP<CR>`) in the editor pane, trigger a
+/// (same structure as [`VSPLIT_SCENARIO`]): launch the app, poll until `cage` is up
+/// (NOT until the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle,
+/// open file A (`:e $HSPLIT_FILE_TOP<CR>`) in the editor pane, trigger a
 /// HORIZONTAL split with `<C-w>s`, open file B (`:e $HSPLIT_FILE_BOTTOM<CR>`) in the
 /// new (stacked) pane, settle, and screenshot. Both files live in the cage
 /// process's working directory (set via `Command::current_dir` by the caller).
 const HSPLIT_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
-# binaries (most spawning a real nvim) run in parallel: under that load the window
-# can take well over the old 5s budget to map. This is a timing knob only -- no
-# assertion depends on it.
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
 WAIT_TRIES=75
 WAIT_INTERVAL=0.2
-SETTLE=0.5
+SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
 
-# Wait for the app to still be alive AND for the Wayland display to be usable
-# (cheap no-op wtype succeeds only once cage has a mapped surface).
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
 tries=0
 while [ "$tries" -lt "$WAIT_TRIES" ]; do
     if ! kill -0 "$app_pid" 2>/dev/null; then
@@ -1770,7 +1974,8 @@ exit 0
 "#;
 
 /// The FOCUS-MOVE scenario, run as a single `sh -c` string INSIDE `cage` (same
-/// structure as [`VSPLIT_SCENARIO`]): launch the app, wait for the window to map,
+/// structure as [`VSPLIT_SCENARIO`]): launch the app, poll until `cage` is up (NOT
+/// until the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle,
 /// open file A in the editor pane, vertical-split (`<C-w>v`, focus moves to the new
 /// RIGHT pane), open file B there, move focus back LEFT (`<C-w>h`), then type the
 /// marker (`i$FOCUS_MARKER<Esc>`) into the now-focused pane, settle, and screenshot.
@@ -1778,21 +1983,28 @@ exit 0
 const FOCUS_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
-# binaries (most spawning a real nvim) run in parallel: under that load the window
-# can take well over the old 5s budget to map. This is a timing knob only -- no
-# assertion depends on it.
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
 WAIT_TRIES=75
 WAIT_INTERVAL=0.2
-SETTLE=0.5
+SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
 
-# Wait for the app to still be alive AND for the Wayland display to be usable
-# (cheap no-op wtype succeeds only once cage has a mapped surface).
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
 tries=0
 while [ "$tries" -lt "$WAIT_TRIES" ]; do
     if ! kill -0 "$app_pid" 2>/dev/null; then
@@ -1870,7 +2082,8 @@ exit 0
 "#;
 
 /// The CLOSE-PANE scenario, run as a single `sh -c` string INSIDE `cage` (same
-/// structure as [`VSPLIT_SCENARIO`]): launch the app, wait for the window to map,
+/// structure as [`VSPLIT_SCENARIO`]): launch the app, poll until `cage` is up (NOT
+/// until the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle,
 /// open file A in the editor pane, vertical-split (`<C-w>v`, focus moves to the new
 /// RIGHT pane), open file B there, then close the focused (right) pane with
 /// `<C-w>c`, settle, and screenshot. Both files live in the cage process's working
@@ -1878,21 +2091,28 @@ exit 0
 const CLOSE_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
-# binaries (most spawning a real nvim) run in parallel: under that load the window
-# can take well over the old 5s budget to map. This is a timing knob only -- no
-# assertion depends on it.
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
 WAIT_TRIES=75
 WAIT_INTERVAL=0.2
-SETTLE=0.5
+SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
 
-# Wait for the app to still be alive AND for the Wayland display to be usable
-# (cheap no-op wtype succeeds only once cage has a mapped surface).
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
 tries=0
 while [ "$tries" -lt "$WAIT_TRIES" ]; do
     if ! kill -0 "$app_pid" 2>/dev/null; then
@@ -1949,7 +2169,8 @@ exit 0
 "#;
 
 /// The THREE-PANE scenario, run as a single `sh -c` string INSIDE `cage` (same
-/// structure as [`VSPLIT_SCENARIO`]): launch the app, wait for the window to map,
+/// structure as [`VSPLIT_SCENARIO`]): launch the app, poll until `cage` is up (NOT
+/// until the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle,
 /// open file A, vertical-split (`<C-w>v`) and open file B in the new RIGHT pane,
 /// focus back LEFT (`<C-w>h`), vertical-split AGAIN and open file C in the new
 /// sub-pane — flattening into one row of three columns [A, C, B] under the n-ary
@@ -1958,21 +2179,28 @@ exit 0
 const TRISPLIT_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
-# binaries (most spawning a real nvim) run in parallel: under that load the window
-# can take well over the old 5s budget to map. This is a timing knob only -- no
-# assertion depends on it.
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
 WAIT_TRIES=75
 WAIT_INTERVAL=0.2
-SETTLE=0.5
+SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
 
-# Wait for the app to still be alive AND for the Wayland display to be usable
-# (cheap no-op wtype succeeds only once cage has a mapped surface).
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
 tries=0
 while [ "$tries" -lt "$WAIT_TRIES" ]; do
     if ! kill -0 "$app_pid" 2>/dev/null; then
@@ -2051,31 +2279,41 @@ exit 0
 "#;
 
 /// The EMPTY-STATE scenario, run as a single `sh -c` string INSIDE `cage` (same
-/// structure as [`TREE_SCENARIO`]): launch the app, wait for the window to map,
+/// structure as [`TREE_SCENARIO`]): launch the app, poll until `cage` is up (NOT
+/// until the window maps — see [`SCENARIO`]'s `SETTLE` comment),
 /// settle, and screenshot. No keyboard interaction at all — the assertion is purely
 /// that the "no folder open" status page rendered.
 ///
 /// The caller launches cage with `HOME` set to the same fresh temp directory it
 /// uses as the working directory, which is what makes `workspace::launch_decision`
-/// take its `cwd == home` branch (see the notes near [`EMPTY_STATE_OCR`]).
+/// take its `cwd == home` branch (see the notes near [`EMPTY_STATE_OCR`]). That is
+/// an explicit OVERRIDE of [`cage_command`]'s default `HOME` (the cwd's parent),
+/// chained after it so it wins.
 const EMPTY_STATE_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
-# binaries (most spawning a real nvim) run in parallel: under that load the window
-# can take well over the old 5s budget to map. This is a timing knob only -- no
-# assertion depends on it.
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
 WAIT_TRIES=75
 WAIT_INTERVAL=0.2
-SETTLE=0.5
+SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
 
-# Wait for the app to still be alive AND for the Wayland display to be usable
-# (cheap no-op wtype succeeds only once cage has a mapped surface).
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
 tries=0
 while [ "$tries" -lt "$WAIT_TRIES" ]; do
     if ! kill -0 "$app_pid" 2>/dev/null; then
@@ -2104,29 +2342,37 @@ exit 0
 "#;
 
 /// The NEW-UNTITLED-BUFFER scenario, run as a single `sh -c` string INSIDE `cage`
-/// (same structure as [`VSPLIT_SCENARIO`]): launch the app, wait for the window to
-/// map, open the base file (`:e $NEWBUF_FILE<CR>`), fire the Ctrl+Shift+N
+/// (same structure as [`VSPLIT_SCENARIO`]): launch the app, poll until `cage` is up
+/// (NOT until the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle,
+/// open the base file (`:e $NEWBUF_FILE<CR>`), fire the Ctrl+Shift+N
 /// accelerator, type the marker into the fresh buffer, park the cursor off the
 /// marker's row, settle, and screenshot. The base file lives in the cage process's
 /// working directory (set via `Command::current_dir` by the caller).
 const NEWBUF_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
-# binaries (most spawning a real nvim) run in parallel: under that load the window
-# can take well over the old 5s budget to map. This is a timing knob only -- no
-# assertion depends on it.
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
 WAIT_TRIES=75
 WAIT_INTERVAL=0.2
-SETTLE=0.5
+SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
 
-# Wait for the app to still be alive AND for the Wayland display to be usable
-# (cheap no-op wtype succeeds only once cage has a mapped surface).
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
 tries=0
 while [ "$tries" -lt "$WAIT_TRIES" ]; do
     if ! kill -0 "$app_pid" 2>/dev/null; then
@@ -2190,29 +2436,37 @@ exit 0
 "#;
 
 /// The `:q` CLOSE-PANE scenario, run as a single `sh -c` string INSIDE `cage`
-/// (mirrors [`CLOSE_SCENARIO`] step for step): launch the app, wait for the window
-/// to map, open file A in the editor pane, vertical-split (`<C-w>v`, focus moves to
+/// (mirrors [`CLOSE_SCENARIO`] step for step): launch the app, poll until `cage` is
+/// up (NOT until the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle,
+/// open file A in the editor pane, vertical-split (`<C-w>v`, focus moves to
 /// the new RIGHT pane), open file B there, then close the focused pane with the Ex
 /// command `:q` instead of `<C-w>c`, settle, and screenshot. Both files live in the
 /// cage process's working directory (set by the caller).
 const COLON_Q_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
-# binaries (most spawning a real nvim) run in parallel: under that load the window
-# can take well over the old 5s budget to map. This is a timing knob only -- no
-# assertion depends on it.
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
 WAIT_TRIES=75
 WAIT_INTERVAL=0.2
-SETTLE=0.5
+SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
 
-# Wait for the app to still be alive AND for the Wayland display to be usable
-# (cheap no-op wtype succeeds only once cage has a mapped surface).
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
 tries=0
 while [ "$tries" -lt "$WAIT_TRIES" ]; do
     if ! kill -0 "$app_pid" 2>/dev/null; then
@@ -2270,7 +2524,8 @@ exit 0
 "#;
 
 /// The `:qa` CLOSE-WINDOW scenario, run as a single `sh -c` string INSIDE `cage`:
-/// launch the app, wait for the window to map, settle, type `:qa<CR>`, then POLL
+/// launch the app, poll until `cage` is up (NOT until the window maps — see
+/// [`SCENARIO`]'s `SETTLE` comment), settle, type `:qa<CR>`, then POLL
 /// for the app process to disappear and REAP it to check how it went.
 ///
 /// This is the only scenario that captures NO screenshot: its whole assertion is
@@ -2292,14 +2547,19 @@ exit 0
 const COLON_QA_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
-# binaries (most spawning a real nvim) run in parallel: under that load the window
-# can take well over the old 5s budget to map. This is a timing knob only -- no
-# assertion depends on it.
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
 WAIT_TRIES=75
 WAIT_INTERVAL=0.2
-SETTLE=0.5
+SETTLE=1.0
 # How many WAIT_INTERVAL polls to allow for the app to EXIT after :qa. Sized like
 # WAIT_TRIES because the shutdown path (close-request -> picker/tree close ->
 # WolfCore::shutdown -> nvim exit) runs under the same parallel-suite load.
@@ -2309,8 +2569,10 @@ QUIT_TRIES=75
 "$WOLF_BIN" &
 app_pid=$!
 
-# Wait for the app to still be alive AND for the Wayland display to be usable
-# (cheap no-op wtype succeeds only once cage has a mapped surface).
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
 tries=0
 while [ "$tries" -lt "$WAIT_TRIES" ]; do
     if ! kill -0 "$app_pid" 2>/dev/null; then
@@ -2377,29 +2639,37 @@ exit 12
 "#;
 
 /// The Ctrl+Shift+W CLOSE-PANE scenario, run as a single `sh -c` string INSIDE
-/// `cage` (mirrors [`CLOSE_SCENARIO`] step for step): launch the app, wait for the
-/// window to map, open file A in the editor pane, vertical-split (`<C-w>v`, focus
+/// `cage` (mirrors [`CLOSE_SCENARIO`] step for step): launch the app, poll until
+/// `cage` is up (NOT until the window maps — see [`SCENARIO`]'s `SETTLE` comment),
+/// settle, open file A in the editor pane, vertical-split (`<C-w>v`, focus
 /// moves to the new RIGHT pane), open file B there, then close the focused pane
 /// with the Ctrl+Shift+W ACCELERATOR instead of `<C-w>c`, settle, and screenshot.
 /// Both files live in the cage process's working directory (set by the caller).
 const CHORD_CLOSE_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-# WAIT_TRIES is sized for the FULL workspace suite, where ~90 integration-test
-# binaries (most spawning a real nvim) run in parallel: under that load the window
-# can take well over the old 5s budget to map. This is a timing knob only -- no
-# assertion depends on it.
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
 WAIT_TRIES=75
 WAIT_INTERVAL=0.2
-SETTLE=0.5
+SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
 
-# Wait for the app to still be alive AND for the Wayland display to be usable
-# (cheap no-op wtype succeeds only once cage has a mapped surface).
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
 tries=0
 while [ "$tries" -lt "$WAIT_TRIES" ]; do
     if ! kill -0 "$app_pid" 2>/dev/null; then
@@ -2804,12 +3074,18 @@ fn with_nvim_pid_helper(scenario: &str) -> String {
 const CRASH_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for the window to appear.
-# Same values the other keyboard-only smokes use, sized for the FULL workspace
-# suite. Timing knobs only -- no assertion depends on any of them.
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below). Same
+# values the other keyboard-only smokes use, sized for the FULL workspace suite.
+# Timing knobs only -- no assertion depends on any of them.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
 WAIT_TRIES=75
 WAIT_INTERVAL=0.2
-SETTLE=0.5
+SETTLE=1.0
 # How many WAIT_INTERVAL polls to allow for a readback file, and for the whole
 # crash -> auto-restart -> reopen round trip. The restart runs twelve setup RPCs
 # against a freshly spawned Neovim, so it is slower than a redraw.
@@ -2832,8 +3108,10 @@ trap cleanup EXIT INT TERM HUP
 "$WOLF_BIN" &
 app_pid=$!
 
-# Wait for the app to still be alive AND for the Wayland display to be usable
-# (cheap no-op wtype succeeds only once cage has a mapped surface).
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
 tries=0
 while [ "$tries" -lt "$WAIT_TRIES" ]; do
     if ! kill -0 "$app_pid" 2>/dev/null; then
@@ -3058,9 +3336,14 @@ set -eu
 # keyboard-only smokes use, sized for the FULL workspace suite where ~90
 # integration-test binaries run in parallel. Timing knobs only -- no assertion
 # depends on any of them.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first injected
+# event: the wtype poll below does NOT gate readiness (it breaks at tries=0 on
+# every run -- see the module doc comment). SCENARIO carries the measured margin
+# table behind this value; do not trim it back.
 WAIT_TRIES=75
 WAIT_INTERVAL=0.2
-SETTLE=0.5
+SETTLE=1.0
 # How many WAIT_INTERVAL polls to allow for a helper line (`ready ...` or `ok <n>`).
 ACK_TRIES=75
 # How many WAIT_INTERVAL polls to allow for a readback file the captive Neovim
@@ -3294,8 +3577,10 @@ hwait_ready
 "$WOLF_BIN" &
 app_pid=$!
 
-# Wait for the app to still be alive AND for the Wayland display to be usable
-# (cheap no-op wtype succeeds only once cage has a mapped surface).
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
 tries=0
 while [ "$tries" -lt "$WAIT_TRIES" ]; do
     if ! kill -0 "$app_pid" 2>/dev/null; then
@@ -3777,13 +4062,570 @@ hsend quit
 exit 0
 "#;
 
+// ---------------------------------------------------------------------------
+// STATE-PERSISTENCE smokes (three): the pane layout and the lone open file
+// survive a QUIT AND RELAUNCH, and the window title renders the working
+// directory.
+//
+// The two relaunch smokes run TWO app launches inside ONE `cage` instance — one
+// scenario string with two sequential `"$WOLF_BIN" &` blocks — so `CAGE_LOCK`
+// semantics are unchanged and no second compositor is ever started. Both share
+// this exit-code vocabulary, which is documented once here and referenced from
+// each scenario:
+//
+// | code | meaning |
+// | --- | --- |
+// | `11` | run 1's app died before its window mapped |
+// | `12` | run 1 was still alive after the `:qa` poll budget — the drain/close path failed |
+// | `13` | run 1 exited NON-ZERO: it went away, but not cleanly. After the state-persistence unit that specifically implicates a panic in `flush_on_close`, or a `RefCell` double-borrow against `wire_close`'s `core.borrow_mut().take()` |
+// | `14` | run 2's app died before its window mapped |
+// | `15` | the Neovim readback file never appeared in run 2 |
+// | `16` | (the single-pane smoke only) run 1 wrote no `state.json` at all |
+//
+// Both also poll rather than sleep-and-hope for every observable, and both reap
+// run 1 with `wait` so its EXIT STATUS is checked — "the process is gone" is
+// equally true of a clean shutdown and of a panic in the GTK main loop, and this
+// is the first unit in which the close path does real work.
+
+/// Extra settle after the SECOND launch of a relaunch smoke, on top of the usual
+/// `SETTLE`.
+///
+/// The layout rebuild does not happen at `build_ui` time: it is QUEUED there
+/// (`PaneHandle::request_layout_rebuild`) and consumed on the first render wake at
+/// which a window grid exists, and it then issues `WolfCore::rebuild_layout` — a
+/// BLOCKING RPC that drives `:vsplit` / `:split` / `:edit` inside the captive
+/// Neovim once per leaf. A timing knob only: no assertion depends on its value,
+/// and every observable below is polled for.
+const RELAUNCH_RESTORE_SETTLE: &str = "2.0";
+
+// --- S1 fixtures: three files, three panes, one asymmetric tree -------------
+//
+// The names are deliberately UNLIKE their headings, following the convention the
+// sibling smokes already follow (`ckeep.md` => `# CLOSEKEEP`, `nbase.md` =>
+// `# NEWBUFBASE`): the tree sidebar renders every cwd file BY NAME, so a fixture
+// named after the word its own smoke asserts on can satisfy that assertion with
+// the editor drawing nothing. `restore_fixture_names_cannot_satisfy_their_own_assertions`
+// enforces it mechanically.
+
+/// The file opened in the TOP-LEFT pane (`rleft.md`).
+const RESTORE_FILE_LEFT: &str = "rleft.md";
+
+/// Heading inside [`RESTORE_FILE_LEFT`]; lowercased it contains
+/// [`RESTORE_OCR_ALFA`].
+const RESTORE_HEADING_LEFT: &str = "# RESTOREALFA";
+
+/// Lowercased substring OCR must find for the restored TOP-LEFT pane.
+const RESTORE_OCR_ALFA: &str = "restorealfa";
+
+/// The file opened in the BOTTOM-LEFT pane (`rmid.md`) — DFS position 2.
+const RESTORE_FILE_MID: &str = "rmid.md";
+
+/// Heading inside [`RESTORE_FILE_MID`]; lowercased it contains
+/// [`RESTORE_OCR_BRAVO`].
+const RESTORE_HEADING_MID: &str = "# RESTOREBRAVO";
+
+/// Lowercased substring OCR must find for the restored BOTTOM-LEFT pane.
+const RESTORE_OCR_BRAVO: &str = "restorebravo";
+
+/// The file opened in the full-height RIGHT pane (`rright.md`) — DFS position 3.
+const RESTORE_FILE_RIGHT: &str = "rright.md";
+
+/// Heading inside [`RESTORE_FILE_RIGHT`]; lowercased it contains
+/// [`RESTORE_OCR_CHARLIE`].
+const RESTORE_HEADING_RIGHT: &str = "# RESTORECHARLIE";
+
+/// Lowercased substring OCR must find for the restored RIGHT pane.
+const RESTORE_OCR_CHARLIE: &str = "restorecharlie";
+
+/// Name of the file the RESTORED Neovim writes its own window list into, in the
+/// smoke's temp cwd (so the tree sidebar renders it — hence its inclusion in
+/// [`RELAUNCH_FIXTURE_NAMES`]).
+const RESTORE_READBACK_NAME: &str = "restore_windows.txt";
+
+/// The EXACT readback [`pane_layout_survives_relaunch_under_cage`] requires.
+///
+/// `tabpagebuflist()` returns one buffer per window in WINDOW-NUMBER order, and
+/// nvim numbers windows by layout position (a row left-to-right, a column
+/// top-to-bottom). For the tree run 1 builds — `row[ col[left-top, left-bottom],
+/// right ]` — that is exactly `[rleft, rmid, rright]`, so this single exact
+/// comparison proves the pane COUNT, the buffer IDENTITIES and their ORDER at
+/// once.
+const RESTORE_READBACK_EXPECTED: &str = "rleft.md rmid.md rright.md";
+
+/// The two-launch PANE-LAYOUT RELAUNCH scenario, run as one `sh -c` string inside
+/// ONE `cage`.
+///
+/// **Run 1** launches the app, opens `rleft.md`, and builds a THREE-PANE
+/// ASYMMETRIC tree with the same `wtype` chord invocations
+/// [`VSPLIT_SCENARIO`] / [`FOCUS_SCENARIO`] use:
+/// `<C-w>v` (new pane RIGHT, focused) → `:e rright.md` → `<C-w>h` (focus back
+/// LEFT) → `<C-w>s` (new pane BELOW the left one, focused) → `:e rmid.md`. It then
+/// types `:qa`, POLLS for the process to go, and REAPS it to check the status.
+///
+/// **Run 2** launches the SAME binary in the SAME working directory with the SAME
+/// `WOLF_STATE_DIR` (both inherited from `cage_command`), polls that `cage` is up
+/// (NOT that the window mapped — see [`SCENARIO`]'s `SETTLE` comment), settles for
+/// the restore, and asks the restored Neovim to `writefile` its own
+/// `tabpagebuflist()` — the load-bearing observable — before the screenshot.
+///
+/// See the exit-code table above this const.
+const RESTORE_LAYOUT_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for either run's window to map, which `wait_window` cannot observe (see it
+# below). WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. Timing
+# knobs only -- no assertion depends on any of them.
+#
+# SETTLE is the ONLY real budget between spawning EITHER run's app and its first
+# keystroke: `wait_window`'s wtype probe does NOT gate input readiness (it breaks
+# at tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+# How many WAIT_INTERVAL polls to allow for run 1 to EXIT after :qa, and for the
+# run-2 readback file to appear.
+QUIT_TRIES=75
+FILE_TRIES=100
+
+# Teardown, installed BEFORE anything starts so every `exit NN` below runs it.
+# Both runs use the same variable; it is cleared once run 1 has been reaped so a
+# later failure cannot signal an already-gone pid.
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped (measured: it breaks at tries=0
+# on every run) -- SETTLE is the real budget, see SCENARIO. $1 is the exit code
+# to use if the app dies first, so run 1 and run 2 stay distinguishable.
+wait_window() {
+    tries=0
+    while [ "$tries" -lt "$WAIT_TRIES" ]; do
+        if ! kill -0 "$app_pid" 2>/dev/null; then
+            echo "wolf-gnome relaunch smoke: app process exited early (pid $app_pid)" >&2
+            exit "$1"
+        fi
+        if wtype "" >/dev/null 2>&1; then
+            return 0
+        fi
+        tries=$((tries + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    return 0
+}
+
+# Poll for a readback file the captive Neovim writes. Nothing downstream may read
+# a file we merely hope is there.
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome relaunch smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# =========================================================================
+# RUN 1 -- build the three-pane asymmetric tree, then quit cleanly.
+# =========================================================================
+"$WOLF_BIN" &
+app_pid=$!
+wait_window 11
+sleep "$SETTLE"
+
+# Open file A in the single starting pane.
+wtype -- ":e $RESTORE_FILE_LEFT"
+wtype -k Return
+sleep "$SETTLE"
+
+# VERTICAL split: the new pane opens to the RIGHT and takes focus.
+wtype -M ctrl -k w -m ctrl
+wtype -k v
+sleep "$SETTLE"
+
+# The new RIGHT pane shows file C.
+wtype -- ":e $RESTORE_FILE_RIGHT"
+wtype -k Return
+sleep "$SETTLE"
+
+# Move focus BACK to the left pane (a pure FocusDir intent -> the shell's
+# `PaneTree::neighbor` -> nvim_set_current_win; the FOCUS_SCENARIO precedent).
+wtype -M ctrl -k w -m ctrl
+wtype -k h
+sleep "$SETTLE"
+
+# HORIZONTAL split of the LEFT pane: the new pane stacks BELOW it and takes focus.
+# The tree is now row[ col[A, new], C ] -- an asymmetric three-pane shape no fresh
+# launch could ever produce.
+wtype -M ctrl -k w -m ctrl
+wtype -k s
+sleep "$SETTLE"
+
+# The new BOTTOM-LEFT pane shows file B.
+wtype -- ":e $RESTORE_FILE_MID"
+wtype -k Return
+sleep "$SETTLE"
+
+# Quit the whole application. `StateHandle::flush_on_close` is the FIRST statement
+# in the close-request handler -- while the core and the panes are still alive --
+# and it blocks on `StateStore::flush`, so state.json is on disk before the process
+# goes.
+wtype -- ":qa"
+wtype -k Return
+
+# POLL (never sleep-and-hope) for run 1 to go away, then REAP it and check its
+# EXIT STATUS. `wait` can still report it: the shell retains a background child's
+# status until a `wait` asks for it.
+tries=0
+gone=0
+while [ "$tries" -lt "$QUIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        gone=1
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+if [ "$gone" -ne 1 ]; then
+    echo "wolf-gnome relaunch smoke: run 1 (pid $app_pid) still alive after :qa." >&2
+    echo "  The drained close_window command never reached window.close()." >&2
+    exit 12
+fi
+# `set -e` would abort before the status could be reported, so collect it through
+# `||` (which is exempt from `set -e`).
+rc=0
+wait "$app_pid" || rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo "wolf-gnome relaunch smoke: run 1 (pid $app_pid) exited $rc, not 0." >&2
+    echo "  It went away, but NOT cleanly. After the state-persistence unit that" >&2
+    echo "  specifically implicates flush_on_close: either it panicked, or it holds a" >&2
+    echo "  core.borrow() across wire_close's core.borrow_mut().take() (a RefCell" >&2
+    echo "  double-borrow), or StateStore::flush blocked past its timeout." >&2
+    exit 13
+fi
+app_pid=
+
+# =========================================================================
+# RUN 2 -- relaunch in the SAME cwd with the SAME state dir, and read back.
+# =========================================================================
+"$WOLF_BIN" &
+app_pid=$!
+wait_window 14
+sleep "$SETTLE"
+# The rebuild happens on the wake AFTER the first pane binds and issues a blocking
+# RPC per leaf, so this waits longer than a plain redraw would need.
+sleep "$RESTORE_SETTLE"
+
+# THE load-bearing observable: one line holding every window's buffer TAIL name, in
+# window order, space separated. `:t` sidesteps any question of how /tmp resolves.
+#
+# The mapping uses a LAMBDA rather than the usual `'…v:val…'` string expression so
+# that no double quote appears anywhere in the typed command: the whole line is
+# already inside a double-quoted shell word, and nesting quotes through sh -> wtype
+# -> the Neovim cmdline is exactly where these scenarios have historically broken.
+wtype -- ":call writefile([join(map(tabpagebuflist(), {_, b -> fnamemodify(bufname(b), ':t')}), ' ')], '$RESTORE_READBACK')"
+wtype -k Return
+wait_file "$RESTORE_READBACK" || exit 15
+
+# Capture the live window for the corroborating OCR.
+grim "$OUT_PNG"
+
+# The trap tears run 2 down on the way out.
+exit 0
+"#;
+
+// --- S2 fixtures: ONE file, ONE pane, and a decoy ---------------------------
+
+/// The single file opened in run 1 (`szulu.md`). Its NAME contains neither
+/// [`SOLO_OCR_PRESENT`] nor [`SOLO_OCR_ABSENT`], so only a RENDERED BUFFER can
+/// satisfy the OCR assertion.
+const SOLO_FILE: &str = "szulu.md";
+
+/// Heading inside [`SOLO_FILE`]; lowercased it contains [`SOLO_OCR_PRESENT`].
+const SOLO_HEADING: &str = "# SOLOZULU";
+
+/// Lowercased substring OCR MUST find: the restored file's heading.
+const SOLO_OCR_PRESENT: &str = "solozulu";
+
+/// The DECOY file, never opened by anything.
+///
+/// It is alphabetically FIRST in the cwd, so it kills the one plausible
+/// alternative hypothesis: if the app were reopening "the first file it found"
+/// rather than the saved layout, the readback would be `salfa.md` and the OCR
+/// would carry [`SOLO_OCR_ABSENT`]. Both are asserted against.
+const SOLO_DECOY_FILE: &str = "salfa.md";
+
+/// Heading inside [`SOLO_DECOY_FILE`]; lowercased it contains
+/// [`SOLO_OCR_ABSENT`].
+const SOLO_DECOY_HEADING: &str = "# SOLOALFA";
+
+/// Lowercased substring OCR must NOT find: the decoy's heading.
+const SOLO_OCR_ABSENT: &str = "soloalfa";
+
+/// Name of the file the RESTORED Neovim writes its current buffer's tail name
+/// into, in the smoke's temp cwd.
+const SOLO_READBACK_NAME: &str = "solo_buffer.txt";
+
+/// The EXACT readback [`single_pane_file_survives_relaunch_under_cage`] requires.
+const SOLO_READBACK_EXPECTED: &str = "szulu.md";
+
+/// The two-launch SINGLE-PANE RELAUNCH scenario, run as one `sh -c` string inside
+/// ONE `cage`. Structurally [`RESTORE_LAYOUT_SCENARIO`] with the split chords
+/// removed — that absence IS the subject.
+///
+/// Between the two runs it copies the state file run 1 wrote to
+/// `$SOLO_STATE_COPY`, so the Rust side can assert on RUN 1'S SAVE rather than on
+/// whatever run 2 later wrote over it. That separation is what keeps the two
+/// red-run reverts distinguishable: with the SAVE-side arity guard reintroduced
+/// the copy carries `layout: null`, while with the RESTORE-side arity guard
+/// reintroduced the copy is correct and only the readback and the OCR go red.
+///
+/// See the exit-code table above [`RELAUNCH_RESTORE_SETTLE`]; this scenario adds
+/// `16` for "run 1 wrote no state.json at all".
+const RESTORE_SOLO_SCENARIO: &str = r#"
+set -eu
+
+# SETTLE is the ONLY real budget between spawning EITHER run's app and its first
+# keystroke: `wait_window`'s wtype probe does NOT gate input readiness (it breaks
+# at tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+QUIT_TRIES=75
+FILE_TRIES=100
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+# The no-op `wtype ""` does NOT prove a surface has mapped (measured: it breaks at
+# tries=0 on every run) -- SETTLE is the real budget, see SCENARIO. $1 is the exit
+# code to use if the app dies first, so run 1 and run 2 stay distinguishable.
+wait_window() {
+    tries=0
+    while [ "$tries" -lt "$WAIT_TRIES" ]; do
+        if ! kill -0 "$app_pid" 2>/dev/null; then
+            echo "wolf-gnome single-pane smoke: app process exited early (pid $app_pid)" >&2
+            exit "$1"
+        fi
+        if wtype "" >/dev/null 2>&1; then
+            return 0
+        fi
+        tries=$((tries + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    return 0
+}
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome single-pane smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# =========================================================================
+# RUN 1 -- open ONE file in ONE pane. NO SPLIT. Then quit cleanly.
+# =========================================================================
+"$WOLF_BIN" &
+app_pid=$!
+wait_window 11
+sleep "$SETTLE"
+
+# The whole point: a single unsplit pane holding a single file. Under the old
+# ARITY guard this shape persisted its cwd and NOTHING else.
+wtype -- ":e $SOLO_FILE"
+wtype -k Return
+sleep "$SETTLE"
+
+wtype -- ":qa"
+wtype -k Return
+
+tries=0
+gone=0
+while [ "$tries" -lt "$QUIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        gone=1
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+if [ "$gone" -ne 1 ]; then
+    echo "wolf-gnome single-pane smoke: run 1 (pid $app_pid) still alive after :qa." >&2
+    exit 12
+fi
+rc=0
+wait "$app_pid" || rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo "wolf-gnome single-pane smoke: run 1 (pid $app_pid) exited $rc, not 0." >&2
+    echo "  It went away, but NOT cleanly -- suspect flush_on_close panicking or" >&2
+    echo "  holding a core.borrow() across wire_close's core.borrow_mut().take()." >&2
+    exit 13
+fi
+app_pid=
+
+# --- Freeze RUN 1'S SAVE before run 2 can write over it --------------------
+#
+# Run 2 re-snapshots on every render wake, so by the time the Rust side could read
+# the live file it would hold RUN 2's tree. Copying here is what lets the two
+# red-run reverts produce DISTINGUISHABLE failures.
+if [ ! -s "$SOLO_STATE_SRC" ]; then
+    echo "wolf-gnome single-pane smoke: run 1 wrote no state.json at $SOLO_STATE_SRC." >&2
+    echo "  Nothing at all was persisted, so this is not the arity guard: suspect" >&2
+    echo "  open_state_store() resolving no directory, flush_on_close never running," >&2
+    echo "  or WOLF_STATE_DIR not reaching the app." >&2
+    exit 16
+fi
+cp "$SOLO_STATE_SRC" "$SOLO_STATE_COPY"
+
+# =========================================================================
+# RUN 2 -- relaunch in the SAME cwd with the SAME state dir, and read back.
+# =========================================================================
+"$WOLF_BIN" &
+app_pid=$!
+wait_window 14
+sleep "$SETTLE"
+sleep "$RESTORE_SETTLE"
+
+# THE load-bearing observable: the tail name of the CURRENT buffer. A broken build
+# answers `Untitled.md`; an app that reopened "the first file it found" would
+# answer `salfa.md`.
+wtype -- ":call writefile([fnamemodify(bufname('%'),':t')], '$SOLO_READBACK')"
+wtype -k Return
+wait_file "$SOLO_READBACK" || exit 15
+
+grim "$OUT_PNG"
+exit 0
+"#;
+
+// --- S3 fixtures: the window title renders the working directory ------------
+//
+// Two NESTED temp directories, so the `~` abbreviation is exercised rather than
+// merely "some title was set": the cage command runs with `HOME` set to the
+// PARENT and its working directory set to the CHILD.
+//
+// That is the same SHAPE `cage_command` now applies to every other smoke by default
+// (HOME == the cwd's parent, so the title is a constant `~/<basename>`); the
+// difference here is that the two basenames are chosen to make the abbreviation
+// itself observable, one asserted PRESENT and one asserted ABSENT. This smoke sets
+// its own HOME explicitly rather than relying on the default, so its subject cannot
+// be retargeted by a later change to the helper.
+
+/// Basename component of the smoke-owned HOME directory. It is deliberately the
+/// term [`TITLE_OCR_ABSENT`] asserts must NOT be readable: the title must render
+/// `~/<project>`, so this segment appears on screen only if the abbreviation is
+/// broken.
+const TITLE_HOME_DIR: &str = "titlehome-parent";
+
+/// Basename of the PROJECT directory, which is what the header-bar title must
+/// render. It is the term [`TITLE_OCR_PRESENT`] asserts is present.
+const TITLE_PROJECT_DIR: &str = "titlezulu";
+
+/// Lowercased substring OCR MUST find: the working directory's basename, drawn by
+/// the `adw::HeaderBar` title. No fixture is named this (enforced by
+/// [`ASSERTED_OCR_TERMS`] plus the three fixture guards), so it can only come from
+/// the title.
+const TITLE_OCR_PRESENT: &str = "titlezulu";
+
+/// Lowercased substring OCR must NOT find: the HOME segment of the path. Its
+/// absence is what makes this smoke test `title::display_title`'s ABBREVIATION
+/// rather than merely "a title was set" — without the abbreviation the title would
+/// read `/tmp/…/titlehome-parent/titlezulu` and this assertion fires.
+const TITLE_OCR_ABSENT: &str = "titlehome";
+
+/// The WINDOW-TITLE scenario, run as a single `sh -c` string inside `cage` (the
+/// [`TREE_SCENARIO`] shape): launch the app, poll until `cage` is up (NOT until the
+/// window maps — see [`SCENARIO`]'s `SETTLE` comment), settle
+/// long enough for the tree's `FileSearch` to populate the sidebar AND for nvim to
+/// report its cwd on the render wake that sets the title, then screenshot. No
+/// keyboard interaction at all.
+const TITLE_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# Timing knobs only -- no assertion depends on any of them.
+#
+# SETTLE is the ONLY real budget between spawning the app and the capture: the
+# wtype poll below does NOT gate readiness (it breaks at tries=0 on every run --
+# see the module doc comment). SCENARIO carries the measured margin table behind
+# this value; do not trim it back.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+# Extra settle for the streamed FileSearch traversal to populate the sidebar and
+# for nvim's first cwd report to reach `AppShell::refresh_title` on a render wake.
+TREE_SETTLE=1.5
+
+"$WOLF_BIN" &
+app_pid=$!
+
+# The no-op `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome title smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+sleep "$SETTLE"
+sleep "$TREE_SETTLE"
+
+grim "$OUT_PNG"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
 /// Creates a fresh, unique temp directory to serve as the launched app's working
 /// directory. The app derives `CoreConfig.cwd` from `std::env::current_dir()`, so
 /// this is the directory the file-search traversal walks and the directory the
 /// captive nvim runs in (the recent-files MRU lives in the global
 /// `state_dir()/file-mru.sqlite`, not under the cwd).
 ///
-/// ALL TWENTY smokes use this. A fresh cwd per run is MANDATORY, not tidiness:
+/// ALL TWENTY-THREE smokes derive their working directory from this — the window
+/// title smoke uses the result as the base for the two NESTED directories its `~`
+/// abbreviation needs, and the two relaunch smokes share one of these directories
+/// across BOTH of their launches, which is the whole scenario. A fresh cwd per run
+/// is MANDATORY, not tidiness:
 ///
 /// * The captive nvim keeps a DURABLE, per-project swap dir keyed on the cwd
 ///   (`wolf_core::state::swap_dir_for` → `state_dir()/swap/<hash of cwd>`), which
@@ -3808,18 +4650,540 @@ exit 0
 ///
 /// Not auto-deleted: keeping it around aids post-mortem inspection of a failed
 /// run, mirroring the wolf-core/common `fresh_cwd` rationale. Each run therefore
-/// also leaves one new `state_dir()/swap/<hash>/` holding at most one `.swp`;
-/// harmless, because no future run resolves to that hash.
+/// also leaves one new `<state dir>/swap/<hash>/` holding at most one `.swp`;
+/// harmless, because no future run resolves to that hash — and since the
+/// `WOLF_STATE_DIR` isolation landed, that state dir is this cwd's own sibling
+/// ([`smoke_state_dir`]) rather than the developer's real `~/.local/state/wolf/`.
+///
+/// ## Why the returned directory has a FIXED name under a unique parent
+///
+/// The returned path is `<unique>/project`, not `<unique>`: the uniqueness lives
+/// entirely in the PARENT, and the component the app ever renders is the constant
+/// [`TEMP_CWD_BASENAME`]. That split exists for one reason, and it is an OCR
+/// determinism reason rather than a filesystem one.
+///
+/// Since the state-persistence unit the `adw::HeaderBar` renders the app's working
+/// directory, so the temp directory's NAME became page text in every capture. While
+/// that name was `<tmpdir>/wolf-gnome-smoke-<pid>-<19-digit nanos>` the captured page
+/// therefore differed on every run, and it was measured to differ:
+///
+/// | arm | five consecutive capture md5s | size |
+/// | --- | --- | --- |
+/// | title rendering the run-varying temp path | all five DIFFERENT | 34.2–35.0 KB, varying |
+/// | `set_title` suppressed (the base page) | `5ea4d070…` ×5, byte-identical | 26074 ×5 |
+///
+/// `tesseract` classifies a word by the whole page (see [`SIDEBAR_FILLER_COUNT`]), so
+/// a page that changes every run makes every OCR assertion stochastic:
+/// [`window_renders_typed_text_under_cage`] failed 2 of ~93 runs with the documented
+/// signature, the isolated leading `h` of [`OCR_WORD`] misclassifying as `ello` /
+/// `ﬁello`. Before the title existed that capture was bit-for-bit reproducible.
+///
+/// Pairing this fixed basename with [`cage_command`]'s `HOME` — which is exactly
+/// `<unique>`, this directory's parent — makes `title::display_title` abbreviate the
+/// whole varying part to `~`, so the header bar renders the constant string
+/// **`~/project`** in every smoke. Short, so the added glyph mass is small; constant,
+/// so the page is byte-identical across runs again. **Do not put a run-varying
+/// component back into this path, and do not stop `cage_command` setting `HOME`**:
+/// either one reintroduces the ~2% flake above, which no amount of extra filler files
+/// can fix.
+///
+/// Everything a smoke writes into "the temp cwd" still lands in the returned
+/// directory unchanged, and every caller builds its paths with `cwd.join(...)`, so
+/// nothing downstream sees the extra level.
 fn make_temp_cwd() -> PathBuf {
     let pid = std::process::id();
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system time is before the unix epoch")
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("wolf-gnome-picker-smoke-{pid}-{nanos}"));
+    // The UNIQUE part is the parent, and it is never rendered: `cage_command` makes
+    // it the app's `HOME`, so the title abbreviates it to `~`.
+    let parent = std::env::temp_dir().join(format!("{TEMP_CWD_PREFIX}{pid}-{nanos}"));
+    let dir = parent.join(TEMP_CWD_BASENAME);
     std::fs::create_dir_all(&dir)
         .unwrap_or_else(|e| panic!("failed to create temp cwd {}: {e}", dir.display()));
     dir
+}
+
+/// The fixed leading part of every [`make_temp_cwd`] directory's UNIQUE PARENT; the
+/// rest is the process id and a nanosecond timestamp, i.e. ASCII digits and `-` only.
+///
+/// It is a named const rather than an inline literal because it is a FIXTURE with the
+/// same hazard as [`SIDEBAR_FILLER_FILES`]: the window title renders the app's working
+/// directory, so a path component can become page text.
+///
+/// This one is NOT normally drawn. [`cage_command`] sets `HOME` to the directory this
+/// prefix names, so `title::display_title` abbreviates it — and the pid/nanos tail
+/// with it — to `~`, and the header bar shows [`TEMP_CWD_BASENAME`] alone. The guard
+/// covers it anyway, in both directions and for two reasons: a smoke may override
+/// `HOME` (two do), and if the abbreviation ever regresses the FULL path is what gets
+/// drawn, at which point a prefix carrying an asserted term would turn a real bug into
+/// a mysterious pass or a mysterious spurious failure instead of a clean red.
+/// [`temp_cwd_name_cannot_satisfy_any_smoke_assertion`] keeps it clear of every
+/// [`ASSERTED_OCR_TERMS`] entry, and reads it from here so a rename cannot drift past
+/// the guard.
+const TEMP_CWD_PREFIX: &str = "wolf-gnome-smoke-";
+
+/// The FIXED basename of every [`make_temp_cwd`] directory — the app's actual working
+/// directory, and the only part of it the header-bar title ever renders (as
+/// `~/project`, because [`cage_command`] makes the unique parent the app's `HOME`).
+///
+/// Being fixed is the whole point: it is what makes the captured page byte-identical
+/// across runs, which every OCR assertion in this file depends on. See
+/// [`make_temp_cwd`] for the measurement that forced it and
+/// [`SIDEBAR_FILLER_COUNT`] for why page stability matters at all.
+///
+/// Because it IS drawn, it carries the [`SIDEBAR_FILLER_FILES`] hazard for real:
+/// were it named `folder`, [`empty_state_shows_open_folder_button_under_cage`] would
+/// be satisfied by the header bar with no status page drawn at all.
+/// [`temp_cwd_name_cannot_satisfy_any_smoke_assertion`] checks it against every
+/// [`ASSERTED_OCR_TERMS`] entry, in both directions.
+///
+/// It must also stay SHORT and word-like: it is added glyph mass on every page, and
+/// a long or noisy title would move the OCR calibration this file's fixtures are
+/// measured against.
+const TEMP_CWD_BASENAME: &str = "project";
+
+/// The state directory one smoke's app is given via `WOLF_STATE_DIR`: a **sibling**
+/// of `cwd`, named after it with a `-state` suffix, created eagerly.
+///
+/// For a plain smoke that is `<unique>/project-state`, next to the
+/// `<unique>/project` [`make_temp_cwd`] returns — i.e. it sits INSIDE the directory
+/// [`cage_command`] hands the app as `HOME`, which is harmless (nothing walks `HOME`;
+/// the app's `FileSearch` is rooted at the cwd) and keeps the whole run in one
+/// deletable tree. Nothing derives the state dir from `HOME`: `state_dir()` resolves
+/// `WOLF_STATE_DIR` first.
+///
+/// ## Why this exists at all
+///
+/// `wolf_core::state::state_dir()` resolves `WOLF_STATE_DIR` first and otherwise
+/// falls back to `$XDG_STATE_HOME/wolf` — on Linux `~/.local/state/wolf`. Without
+/// this override every smoke writes into the DEVELOPER'S REAL state directory:
+/// today the durable per-project swap dir (`swap/<hash of cwd>/`) and the three MRU
+/// sqlite files, and — from the state-persistence unit onward — `state.json` itself.
+/// That last one is not untidiness. `state.json` holds the developer's real saved
+/// window size, working directory and pane layout, so without this helper running
+/// the test suite would read it at launch and then CLOBBER it on quit with a
+/// throwaway one-pane temp-cwd layout. [`cage_command`] is the single place it is
+/// set, and [`cage_is_only_spawned_through_the_isolating_helper`] is what keeps it
+/// single.
+///
+/// ## Why a SIBLING and not a child
+///
+/// A child of `cwd` would be walked by the app's own `FileSearch`, which excludes
+/// only `.git/` and `.wolf/`. `state.json` and every `swap/<hash>/*.swp` would then
+/// appear as rows in the file-tree sidebar and as picker candidates. That changes
+/// the page density every OCR assertion is calibrated against (see
+/// [`SIDEBAR_FILLER_COUNT`], whose measured floor exists precisely because tesseract
+/// classifies a word by the whole page) and adds filenames that could satisfy — or
+/// spuriously fail — an assertion. Naming it after `cwd` keeps the pairing obvious
+/// when reading a post-mortem, and like the temp cwd it is deliberately not deleted.
+fn smoke_state_dir(cwd: &Path) -> PathBuf {
+    let name = cwd.file_name().unwrap_or_else(|| {
+        panic!(
+            "smoke cwd {} has no final path component, so no `<name>-state` sibling can be \
+             derived for it. Every smoke's cwd comes from `make_temp_cwd`, which always produces \
+             one.",
+            cwd.display()
+        )
+    });
+    let parent = cwd.parent().unwrap_or_else(|| {
+        panic!(
+            "smoke cwd {} has no parent directory, so no SIBLING state dir can be derived for it. \
+             A child would be walked by the app's own `FileSearch` and is not an acceptable \
+             fallback; see `smoke_state_dir`.",
+            cwd.display()
+        )
+    });
+    let dir = parent.join(format!("{}-state", name.to_string_lossy()));
+    std::fs::create_dir_all(&dir).unwrap_or_else(|e| {
+        panic!(
+            "failed to create the smoke state dir {}: {e}. Without it the app under cage falls \
+             back to the developer's real state dir and would read and overwrite their real \
+             state.json.",
+            dir.display()
+        )
+    });
+    dir
+}
+
+/// The `HOME` one smoke's app is given: the PARENT of `cwd`.
+///
+/// For a plain smoke that is the `<unique>` directory [`make_temp_cwd`] built, whose
+/// fixed-name child `<unique>/project` is the cwd — so `title::display_title`
+/// abbreviates the varying part away and the header bar renders exactly
+/// `~/project`. See [`cage_command`] for why that constancy is load-bearing.
+///
+/// Borrows from `cwd` rather than allocating; `&Path` is an `AsRef<OsStr>`, which is
+/// all `Command::env` needs.
+fn smoke_home(cwd: &Path) -> &Path {
+    cwd.parent().unwrap_or_else(|| {
+        panic!(
+            "smoke cwd {} has no parent directory, so no HOME can be derived for it. Every \
+             smoke's cwd comes from `make_temp_cwd`, which always produces a fixed-name child of \
+             a unique parent precisely so this is total; see `cage_command` for why HOME must be \
+             that parent.",
+            cwd.display()
+        )
+    })
+}
+
+/// The FIXED name of the one directory every smoke of a `cargo test` invocation
+/// shares as its `XDG_CACHE_HOME` — see [`smoke_shader_cache_dir`], which is where the
+/// rationale lives, and where the measured limit on how far that sharing reaches is
+/// written down.
+///
+/// Deliberately does NOT begin with [`TEMP_CWD_PREFIX`], but that is a NAMING rule and
+/// nothing more. It used to be justified as "this directory must survive a
+/// `wolf-gnome-smoke-*` glob sweep", and that premise is false: `std::env::temp_dir()`
+/// follows `TMPDIR`, which `nix develop --command` rewrites per invocation, so this
+/// directory already lives inside the same per-invocation temp tree as the
+/// `wolf-gnome-smoke-*` cwds and any sweep of that tree takes it too. The reason to
+/// keep the name distinct is that it is SHARED by every smoke, so it must not be read
+/// as one more per-smoke artifact when someone is pairing directories to runs in a
+/// post-mortem. Losing it costs one cold launch, which [`smoke_shader_cache_dir`]
+/// shows is covered by `SETTLE` on its own.
+const SHARED_SHADER_CACHE_DIR: &str = "wolf-smoke-shader-cache";
+
+/// The `XDG_CACHE_HOME` every smoke's app is given: ONE directory —
+/// `<std::env::temp_dir()>/wolf-smoke-shader-cache` — deliberately **not** unique per
+/// smoke and deliberately **not** deleted.
+///
+/// ## How far the sharing actually reaches (measured, and NARROWER than it looks)
+///
+/// Read this before relying on the word "shared". `std::env::temp_dir()` reads
+/// `TMPDIR`, and `build.md` mandates that every invocation of this suite runs under
+/// `nix develop --command`, which sets a FRESH per-invocation
+/// `TMPDIR=/tmp/nix-shell.XXXXXX`. So this path is stable WITHIN one `cargo test`
+/// invocation and moves to a brand-new, empty directory on the next one.
+///
+/// Measured directly, not inferred: a 100-iteration loop with one
+/// `nix develop --command` per iteration created exactly 100 DISTINCT freshly-populated
+/// 4.9 MB caches, none of them reused; three consecutive
+/// `nix develop --command sh -c 'echo $TMPDIR'` calls returned `/tmp/nix-shell.NESmku`,
+/// `/tmp/nix-shell.0Gs0Ux`, `/tmp/nix-shell.RcvfBt`; and 724 such leftover directories
+/// were counted on this host.
+///
+/// So state honestly what this buys and what it does not. It buys: the first cage
+/// smoke of an invocation pays a cold cache and the other 26 run warm, which is where
+/// the pre-state-persistence settle margin came from. It does NOT buy: warmth across
+/// invocations — the first smoke of EVERY invocation is cold. The section after the
+/// table below is why that is acceptable rather than a defect to fix.
+///
+/// ## Why this exists (measured, not inferred)
+///
+/// Before [`cage_command`] set `HOME`, the app under `cage` inherited the developer's
+/// real `$HOME`, and therefore their real, long-warm `~/.cache`. Redirecting `HOME` to
+/// the per-run [`smoke_home`] — which is load-bearing for OCR determinism and must not
+/// be undone — silently made `$HOME/.cache` a FRESH directory on every smoke, so mesa
+/// rebuilt its shader cache (`mesa_shader_cache` + `radv_builtin_shaders`, ~4.9 MB)
+/// from scratch on every single launch. That is pure added latency between spawning
+/// the app and the window being able to accept keys, and `SETTLE` is the only budget
+/// covering it (see [`SCENARIO`]).
+///
+/// Measured, 20 iterations per cell, identical code, cache warmth the only variable:
+///
+/// | `SETTLE` | cold cache | warm cache |
+/// | --- | --- | --- |
+/// | 0.15 | 0/20 | 0/20 |
+/// | 0.20 | — | 0/20 |
+/// | 0.25 | 0/20 | **20/20** |
+/// | 0.30 | 0/20 | — |
+/// | 0.35 | **20/20** | 20/20 |
+/// | 0.40 | 20/20 | — |
+///
+/// Warm threshold ∈ (0.20, 0.25]; cold threshold ∈ (0.30, 0.35]. Pointing
+/// `XDG_CACHE_HOME` at one shared directory warms the cache once per invocation and
+/// keeps it warm across the smokes of THAT invocation: 26 of the 27 run warm instead
+/// of all 27 running cold. That removes most of the regression at its source rather
+/// than paying for it in settle time. It does not remove the cold column — the first
+/// smoke of every invocation still lands in it, because the directory moves with
+/// `TMPDIR` (see the section above).
+///
+/// ## Why one cold launch per invocation is ACCEPTABLE, not a defect to fix
+///
+/// Because `SETTLE = 1.0` covers the cold case on its own: it is ~2.9× the measured
+/// cold threshold in the table above, and the cold arm was run deliberately — a fresh
+/// `nix develop --command`, and therefore a guaranteed-empty shader cache, on every
+/// one of 100 iterations — for a result of 100/100 passes. Cross-invocation warmth is
+/// therefore a BONUS, not a requirement, and chasing a `TMPDIR`-proof location would
+/// be a design change bought with no measured benefit.
+///
+/// The tripwire, so the next reader does not have to re-derive it: that argument holds
+/// only while `SETTLE` carries that margin. Trim `SETTLE` and the cold case stops being
+/// covered by margin alone, at which point this directory's per-invocation instability
+/// starts to matter for real. The fix then is to put `SETTLE` back, not to go hunting
+/// for a stabler cache path.
+///
+/// ## Why sharing is SAFE here, and why it is shared ON PURPOSE
+///
+/// [`make_temp_cwd`] and [`smoke_state_dir`] are per-run precisely to stop one run's
+/// state reaching the next. **A GPU shader cache is not application state.** It is
+/// content-addressed — keyed by a hash of the shader source plus the driver build —
+/// and purely DERIVED: a hit hands back the compiled form of the exact same input a
+/// miss would have recompiled, so the only difference a warm cache can make is
+/// elapsed time. It cannot carry a fixture file, a Neovim buffer, an MRU row, a swap
+/// file or a `state.json` from one smoke into the next, so none of the coupling those
+/// two helpers exist to prevent is reachable through it.
+///
+/// So this is shared **deliberately**. Do not "fix" it into a per-smoke directory to
+/// match its neighbours: that is precisely the change that reintroduced the flake, and
+/// it reintroduces it invisibly — the symptom is a ~0.8% OCR failure in
+/// [`window_renders_typed_text_under_cage`] weeks later, not a red run here.
+///
+/// ## What else `XDG_CACHE_HOME` reaches, and what it does not
+///
+/// Not the captive Neovim: `wolf_core::nvim::spawn` pins the child's `XDG_CACHE_HOME`
+/// (with the other three `XDG_*` dirs) under the per-run `WOLF_STATE_DIR` state root,
+/// so nvim keeps its own isolated, per-smoke cache regardless of what is set here. Not
+/// fontconfig: `FONTCONFIG_FILE` pins both the font directory and its cache dir. Not
+/// `wolf-gnome` itself, which reads no cache directory at all — `state_dir()` resolves
+/// `WOLF_STATE_DIR` first and everything durable the app writes lives there. What is
+/// left is the GPU/toolkit derived-artifact caches, which is exactly the target.
+///
+/// The one shape worth naming: on a shared machine another user may already own this
+/// path. `create_dir_all` still returns `Ok` for an existing directory, and an
+/// unwritable cache directory is a cache MISS rather than an error, so the expected
+/// degradation is back to today's cold behaviour — not a failed run. `create_dir_all`
+/// is therefore the only thing that can panic here, and only if the path exists as a
+/// non-directory.
+///
+/// **That bounded failure mode is why a FIXED name is acceptable rather than reckless.**
+/// The worst case of a name collision is the cold column of the table above, and at
+/// `SETTLE = 1.0` cold still carries ~2.9× the measured cold threshold — so the
+/// degradation is covered by the settle margin by construction. A per-user or per-run
+/// name would buy nothing that margin does not already cover, while giving up the one
+/// property this directory exists for.
+fn smoke_shader_cache_dir() -> PathBuf {
+    let dir = std::env::temp_dir().join(SHARED_SHADER_CACHE_DIR);
+    std::fs::create_dir_all(&dir).unwrap_or_else(|e| {
+        panic!(
+            "failed to create the shared smoke shader cache dir {}: {e}. It is handed to every \
+             smoke as XDG_CACHE_HOME so mesa's shader cache stays warm across runs; without it \
+             every launch rebuilds ~4.9 MB of shaders and the fixed SETTLE budget loses most of \
+             its headroom. See `smoke_shader_cache_dir`.",
+            dir.display()
+        )
+    });
+    dir
+}
+
+/// The two directories, RELATIVE to the app's `$HOME`, that
+/// `wolf_core::state::state_dir()` would resolve to if `WOLF_STATE_DIR` were ever
+/// missing — the exact paths a leak would land in, and therefore the exact paths
+/// [`single_pane_file_survives_relaunch_under_cage`]'s assertion 4 proves are empty.
+///
+/// `state_dir()` is `dirs::state_dir().or_else(dirs::data_dir).map(|d| d.join("wolf"))`
+/// on Linux, and those two `dirs` functions default to `$XDG_STATE_HOME` (else
+/// `$HOME/.local/state`) and `$XDG_DATA_HOME` (else `$HOME/.local/share`). Both arms
+/// are listed because the chain has two, not because the second is expected: on Linux
+/// `dirs::state_dir()` is `Some` whenever `$HOME` resolves, so `data_dir` is
+/// effectively unreachable — checking it costs one `Path::exists` and removes the need
+/// for anyone to re-derive that.
+///
+/// These are spelled out here rather than obtained from `dirs`, which `wolf-gnome`
+/// does not depend on (and must not gain one for a test — see the plan's D2 /
+/// amendment A4 on `Cargo.lock` and `CARGO_BAZEL_REPIN`). That makes them a MIRROR of
+/// the XDG defaults, with the honest limitation written down: they are the right
+/// paths only while `$XDG_STATE_HOME` / `$XDG_DATA_HOME` are unset in the environment
+/// cage inherits, which is the case in this repo's devShell (`flake.nix` exports
+/// `XDG_DATA_DIRS` and `XDG_RUNTIME_DIR`, neither of these). On a host that DOES
+/// export one, a leak lands outside the temp tree instead — where the sibling check on
+/// the developer's real state file catches it. The two checks are complementary and
+/// between them cover both cases.
+const HOME_STATE_DIR_FALLBACKS: [&str; 2] = [".local/state/wolf", ".local/share/wolf"];
+
+/// Builds the `cage` invocation every smoke runs its scenario through — and is the
+/// SINGLE place in this file where the compositor is ever spawned.
+///
+/// It fixes the invocation (`cage -- sh -c <scenario>`, with `cwd` as the working
+/// directory, which is how the app comes to derive `CoreConfig.cwd` from it) plus
+/// the four environment variables EVERY smoke must have:
+///
+/// * `WOLF_FONT_PT` = [`SMOKE_FONT_PT`] — a large font, so the rendered glyphs are
+///   legible to `tesseract`, AND the exact number [`cell_metrics_for_smoke`]
+///   measures against: the pointer smokes derive every pixel target from it, so the
+///   app and this test must be handed the same string. The `:qa` smoke captures no
+///   image at all and keeps it only for parity, so that a manual repro of that
+///   scenario still renders legibly.
+/// * `WOLF_STATE_DIR` = [`smoke_state_dir`] — the isolation that keeps a smoke run
+///   out of the developer's real `~/.local/state/wolf/`. Read that function's doc
+///   comment before changing anything here. It is also what lets the two RELAUNCH
+///   smokes work at all: both launches inside one scenario are handed the same
+///   directory, so the second reads exactly the `state.json` the first wrote.
+/// * `HOME` = [`smoke_home`] — the cwd's PARENT, which is what pins the rendered
+///   window title to the constant `~/project`. See below; this one is an OCR
+///   DETERMINISM control, not tidiness.
+/// * `XDG_CACHE_HOME` = [`smoke_shader_cache_dir`] — ONE directory shared by every
+///   smoke of a `cargo test` invocation, so mesa's shader cache is warm for all of
+///   them but the first. It does NOT carry into the next invocation: the path is
+///   under `TMPDIR`, which `nix develop --command` rewrites every time (measured; see
+///   that function). This is the only one of the four that is deliberately NOT
+///   per-smoke, and it is the direct counterweight to the `HOME` line above:
+///   redirecting `HOME` also redirected `$HOME/.cache`, which made every launch
+///   rebuild ~4.9 MB of shaders and cost `SETTLE` most of its measured headroom. Read
+///   that function's doc comment — including why sharing carries no state between
+///   smokes, and why the one cold launch per invocation is covered by `SETTLE`
+///   alone — before changing it, and do not make it per-smoke.
+///
+/// ## Why `HOME` is set, and why it is the cwd's parent
+///
+/// Since the state-persistence unit the `adw::HeaderBar` renders the app's working
+/// directory, so the temp directory's name is page text in every capture — and
+/// `tesseract` classifies a word by the WHOLE page (see [`SIDEBAR_FILLER_COUNT`]).
+/// While the title drew the run-varying `<tmpdir>/wolf-gnome-smoke-<pid>-<nanos>`,
+/// the captured page differed on every run, measured:
+///
+/// | arm | five consecutive capture md5s | size |
+/// | --- | --- | --- |
+/// | title rendering the run-varying temp path | all five DIFFERENT | 34.2–35.0 KB, varying |
+/// | `set_title` suppressed (the base page) | `5ea4d070…` ×5, byte-identical | 26074 ×5 |
+///
+/// and [`window_renders_typed_text_under_cage`] failed ~2% of runs (2 in ~93) with
+/// the documented ligature signature. Setting `HOME` to the cwd's parent makes
+/// `title::display_title`'s home abbreviation collapse the entire varying prefix to
+/// `~`, leaving the constant **`~/project`** ([`TEMP_CWD_BASENAME`]) — so the page is
+/// bit-for-bit reproducible again, as it was before the title existed. **Removing
+/// this line, or reintroducing a run-varying cwd name, reintroduces that flake**, and
+/// raising [`SIDEBAR_FILLER_COUNT`] cannot fix it.
+///
+/// `HOME` is safe to move here. Everything else the app resolves from it is either
+/// overridden (`state_dir()` reads `WOLF_STATE_DIR` first; the captive Neovim runs
+/// `--clean -u <init.lua> -i NONE` with all four `XDG_*` dirs pinned under the state
+/// root) or absent-and-defaulted (GTK finds no `$HOME/.config/gtk-4.0`, so it uses
+/// its defaults — which is exactly how
+/// [`empty_state_shows_open_folder_button_under_cage`] has always run). Fontconfig is
+/// unaffected: `FONTCONFIG_FILE` pins both the font directory and a `/tmp` cache dir.
+///
+/// One consequence was NOT harmless and had to be paid for separately: `$HOME/.cache`
+/// moved too, so mesa's shader cache went cold on every launch. That is what the
+/// explicit `XDG_CACHE_HOME` above exists to undo; see [`smoke_shader_cache_dir`] for
+/// the measured cost and for why one shared directory is the right shape.
+///
+/// The cwd's parent is also never equal to the cwd, so `workspace::launch_decision`'s
+/// `cwd == home` branch does not fire and every smoke stays in the `Folder` branch —
+/// except the one that deliberately points both at the same directory.
+///
+/// Two smokes chain their OWN `HOME` after this call and deliberately win:
+/// [`empty_state_shows_open_folder_button_under_cage`] (`HOME` == the cwd, to fire
+/// the `EmptyState` branch) and
+/// [`window_title_shows_the_working_directory_under_cage`] (`HOME` == its nested
+/// project's parent, which is the value its abbreviation assertion is written
+/// against). Both still render a CONSTANT title (`~` and `~/titlezulu`
+/// respectively), so both keep the determinism property this default exists for.
+///
+/// Callers chain only their own scenario-specific `.env(...)` / `.arg(...)`
+/// additions on top. Two per-smoke notes that used to live on the `WOLF_FONT_PT`
+/// line stay at their call sites: the vsplit / hsplit / three-pane smokes point at
+/// the "Note (OCR width)" / "Note (OCR height)" paragraphs above their own consts,
+/// because if two or three panes are ever too narrow or too short for 28 pt OCR the
+/// fix is per-test (widen the window, or lower the font for THAT test) and must not
+/// be applied here to all twenty-three.
+///
+/// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
+/// property mechanically, because a smoke that spawned the compositor directly would
+/// silently lose ALL FOUR variables.
+fn cage_command(scenario: &str, cwd: &Path) -> Command {
+    let mut cmd = Command::new("cage");
+    cmd.arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg(scenario)
+        .current_dir(cwd)
+        .env("HOME", smoke_home(cwd))
+        .env("XDG_CACHE_HOME", smoke_shader_cache_dir())
+        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
+        .env("WOLF_STATE_DIR", smoke_state_dir(cwd));
+    cmd
+}
+
+/// The source text that spawns the compositor, assembled from THREE FRAGMENTS so
+/// that this file never contains it contiguously anywhere except inside
+/// [`cage_command`].
+///
+/// The fragment construction is load-bearing, not stylistic — see
+/// [`cage_is_only_spawned_through_the_isolating_helper`], which scans this file's own
+/// source for it. Written as one contiguous literal it would match ITSELF, the count
+/// would be two, and the guard would fail permanently no matter how correct the code
+/// was. Do not "simplify" it.
+const CAGE_SPAWN_NEEDLE: &str = concat!("Command::new(\"", "cage", "\")");
+
+/// Enforces mechanically that the compositor is spawned in exactly ONE place in this
+/// file — [`cage_command`] — which is the only thing that sets `WOLF_STATE_DIR`,
+/// `HOME` and `XDG_CACHE_HOME`.
+///
+/// ## What an extra occurrence costs
+///
+/// A smoke that builds its own `cage` command inherits the test process's
+/// environment and nothing else, so its app resolves `wolf_core::state_dir()` to the
+/// developer's REAL `~/.local/state/wolf/`. It then reads their real `state.json` at
+/// launch — restoring their window size, working directory and pane layout into a
+/// smoke that is supposed to start from a clean slate — and overwrites it at quit
+/// with a throwaway one-pane temp-cwd layout. The developer's saved session is
+/// destroyed by running the test suite, and the smoke stops being reproducible
+/// because its starting state now depends on what the developer last had open. That
+/// is the failure this guard exists to make impossible, and it is invisible in review:
+/// a new smoke is a hundred lines of scenario in which one `.env` line is missing.
+///
+/// It costs a second thing now. Inheriting the developer's real `HOME` means the
+/// header-bar title no longer abbreviates the temp cwd, so that smoke draws the full
+/// `<tmpdir>/wolf-gnome-smoke-<pid>-<nanos>/project` — a DIFFERENT page on every run,
+/// which is measured to make OCR stochastic (see [`cage_command`] and
+/// [`SIDEBAR_FILLER_COUNT`] for the md5 evidence). That failure is worse than the
+/// state-dir one in one respect: it is intermittent, so it looks like a flake in
+/// whatever change happens to be in flight rather than like a missing `.env` line.
+///
+/// And a third, of the same intermittent kind: without [`cage_command`]'s
+/// `XDG_CACHE_HOME` the app's mesa shader cache is whatever the inherited environment
+/// gives it, which under a redirected `HOME` is a cold per-run directory. That costs
+/// ~4.9 MB of shader rebuild inside the fixed `SETTLE` budget and was measured to turn
+/// a 20/20 cell into 0/20 at settle values that pass warm — again surfacing as an OCR
+/// flake somewhere else entirely. See [`smoke_shader_cache_dir`].
+///
+/// ## Why the needle is built from fragments, and why that is load-bearing
+///
+/// This test reads its own source with `include_str!`. Were [`CAGE_SPAWN_NEEDLE`]
+/// spelled as one contiguous literal, the const's own line would contain it, the
+/// count would be two, and the test would be red forever. The tempting "fix" for a
+/// permanently-red count is to relax it to `<= 1` — at which point a needle that
+/// matches NOTHING (someone renames the binary, or `cage` moves behind a const)
+/// satisfies it vacuously and the guard silently stops guarding. That is exactly the
+/// vacuity shape recorded in `crates/wolf-gnome/tests/README.md` ("Vacuity is not
+/// only a fixture-naming problem"), where a check aimed at the right property was
+/// looking somewhere the defect could not appear. So the count is asserted from BOTH
+/// sides: at least one (the guard is not vacuous) and at most one (the invariant
+/// holds).
+///
+/// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
+/// subprocess — the same shape as
+/// [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`], and it runs in
+/// microseconds on a machine with no smoke toolchain at all.
+#[test]
+fn cage_is_only_spawned_through_the_isolating_helper() {
+    let source = include_str!("smoke_headless.rs");
+    let occurrences = source.matches(CAGE_SPAWN_NEEDLE).count();
+
+    assert!(
+        occurrences > 0,
+        "the compositor-spawn needle {CAGE_SPAWN_NEEDLE:?} does not appear in this file's own \
+         source AT ALL, so this guard is VACUOUS: it would accept any number of unguarded spawns \
+         because it can no longer recognize one. Either the spawn in `cage_command` was reworded \
+         (a binary name moved behind a const, a builder replaced the constructor, rustfmt split \
+         the call across lines), or `include_str!` is no longer reading this file. Fix the needle \
+         or the helper so the two agree again — do NOT relax the exactly-once check below to an \
+         upper bound, which is what would let this zero-match state pass."
+    );
+    assert_eq!(
+        occurrences, 1,
+        "expected exactly ONE occurrence of {CAGE_SPAWN_NEEDLE:?} in this file (the one inside \
+         `cage_command`), found {occurrences}. Every extra one is a compositor spawned OUTSIDE \
+         `cage_command` and therefore WITHOUT `WOLF_STATE_DIR`: that smoke's app resolves \
+         `state_dir()` to the developer's real `~/.local/state/wolf/`, READS their real \
+         state.json at launch (so it starts from the developer's last session instead of a clean \
+         slate) and OVERWRITES it on quit with its own throwaway temp-cwd layout. Route the new \
+         smoke through `cage_command(scenario, &cwd)` and chain only its own `.env(...)` \
+         additions on top; do not copy the helper's body."
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3906,17 +5270,9 @@ fn run_pointer_scenario(
 ) -> ExitStatus {
     // Cargo sets this for integration tests of a crate that declares a `[[bin]]`.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
-    let mut cmd = Command::new("cage");
-    cmd.arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg(pointer_scenario(body))
-        .current_dir(cwd)
-        .env("WOLF_BIN", bin)
+    let mut cmd = cage_command(&pointer_scenario(body), cwd);
+    cmd.env("WOLF_BIN", bin)
         .env("OUT_PNG", out_png)
-        // Large font so the rendered glyphs are legible to tesseract, AND the exact
-        // number `cell_metrics_for_smoke` measures against.
-        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .env("CMD_FIFO", cwd.join(POINTER_CMD_FIFO_NAME))
         .env("ACK_FILE", cwd.join(POINTER_ACK_NAME))
         .env("HELPER_ERR", pointer_err_path(cwd))
@@ -3970,7 +5326,7 @@ fn assert_pointer_scenario_succeeded(smoke: &str, status: ExitStatus, cwd: &Path
 fn assert_png_present(smoke: &str, out_png: &Path) {
     let meta = std::fs::metadata(out_png).unwrap_or_else(|e| {
         panic!(
-            "{smoke}: expected screenshot {} to exist after the cage pointer scenario, but: {e}",
+            "{smoke}: expected screenshot {} to exist after its cage scenario, but: {e}",
             out_png.display()
         )
     });
@@ -4397,8 +5753,18 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// the second, i.e. it would turn a real proof into a spurious red — the same fixture
 /// bug either way, which is why it belongs here.
 ///
-/// Sixteen of the twenty smokes appear here. FOUR contribute no rows at all, on
-/// purpose, and it is worth being explicit about which and why:
+/// The three STATE-PERSISTENCE terms that are asserted ABSENT
+/// ([`SOLO_OCR_ABSENT`], [`TITLE_OCR_ABSENT`]) are listed for the same reason as
+/// the other must-NOT-contain rows. [`TITLE_OCR_ABSENT`] is the one whose fixture
+/// deliberately CONTAINS it — the smoke's HOME directory is named after it, and
+/// the assertion is precisely that the home segment is abbreviated to `~` and
+/// therefore never drawn. That is why
+/// [`restore_fixture_names_cannot_satisfy_their_own_assertions`] carries an
+/// explicit, documented exemption for the two title directory names rather than
+/// widening this table's guards to cover them.
+///
+/// Nineteen of the twenty-three smokes appear here. FOUR contribute no rows at
+/// all, on purpose, and it is worth being explicit about which and why:
 ///
 /// * [`colon_qa_closes_the_window_under_cage`] captures no PNG and asserts only that
 ///   the app process is gone, so it has no OCR term a fixture filename could satisfy.
@@ -4560,6 +5926,89 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         "RESTART_OCR_OVERLAY",
         "crash_overlay_and_restart_button_recover_under_cage",
     ),
+    (
+        RESTORE_OCR_ALFA,
+        "RESTORE_OCR_ALFA",
+        "pane_layout_survives_relaunch_under_cage",
+    ),
+    (
+        RESTORE_OCR_BRAVO,
+        "RESTORE_OCR_BRAVO",
+        "pane_layout_survives_relaunch_under_cage",
+    ),
+    (
+        RESTORE_OCR_CHARLIE,
+        "RESTORE_OCR_CHARLIE",
+        "pane_layout_survives_relaunch_under_cage",
+    ),
+    (
+        SOLO_OCR_PRESENT,
+        "SOLO_OCR_PRESENT",
+        "single_pane_file_survives_relaunch_under_cage",
+    ),
+    (
+        SOLO_OCR_ABSENT,
+        "SOLO_OCR_ABSENT",
+        "single_pane_file_survives_relaunch_under_cage",
+    ),
+    (
+        TITLE_OCR_PRESENT,
+        "TITLE_OCR_PRESENT",
+        "window_title_shows_the_working_directory_under_cage",
+    ),
+    (
+        TITLE_OCR_ABSENT,
+        "TITLE_OCR_ABSENT",
+        "window_title_shows_the_working_directory_under_cage",
+    ),
+];
+
+/// Every fixture NAME the three state-persistence smokes create inside their own
+/// working directory, as `(name, const name, the smoke that owns it)`.
+///
+/// The tree sidebar renders every cwd entry BY NAME, so each of these is page text
+/// in its own smoke's capture — the same hazard [`SIDEBAR_FILLER_FILES`] carries,
+/// aimed at a THIRD fixture. The readback files are listed too: they land in the
+/// temp cwd alongside the markdown, so the sidebar draws them as well.
+///
+/// The values are the CONSTS themselves, never re-typed literals, for the same
+/// reason [`ASSERTED_OCR_TERMS`] is.
+const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
+    (
+        RESTORE_FILE_LEFT,
+        "RESTORE_FILE_LEFT",
+        "pane_layout_survives_relaunch_under_cage",
+    ),
+    (
+        RESTORE_FILE_MID,
+        "RESTORE_FILE_MID",
+        "pane_layout_survives_relaunch_under_cage",
+    ),
+    (
+        RESTORE_FILE_RIGHT,
+        "RESTORE_FILE_RIGHT",
+        "pane_layout_survives_relaunch_under_cage",
+    ),
+    (
+        RESTORE_READBACK_NAME,
+        "RESTORE_READBACK_NAME",
+        "pane_layout_survives_relaunch_under_cage",
+    ),
+    (
+        SOLO_FILE,
+        "SOLO_FILE",
+        "single_pane_file_survives_relaunch_under_cage",
+    ),
+    (
+        SOLO_DECOY_FILE,
+        "SOLO_DECOY_FILE",
+        "single_pane_file_survives_relaunch_under_cage",
+    ),
+    (
+        SOLO_READBACK_NAME,
+        "SOLO_READBACK_NAME",
+        "single_pane_file_survives_relaunch_under_cage",
+    ),
 ];
 
 /// Mechanically enforces the naming invariant documented on [`SIDEBAR_FILLER_FILES`]:
@@ -4590,8 +6039,12 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
 /// with the pointer-harness unit — `wedgestay` ([`WEDGE_OCR_STAY`]) and `wedgeclick`
 /// ([`WEDGE_OCR_CLICK`]); and — added with the crash-recovery unit — `bounceback`
 /// ([`RESTART_OCR_HEADING`]), `unsavedburst` ([`RESTART_OCR_UNSAVED`]), `restarted`
-/// ([`RESTART_OCR_BANNER`]) and `crashed`
-/// ([`RESTART_OCR_OVERLAY`]). None is a substring of any [`SIDEBAR_FILLER_FILES`] entry,
+/// ([`RESTART_OCR_BANNER`]) and `crashed` ([`RESTART_OCR_OVERLAY`]); and — added
+/// with the state-persistence unit — `restorealfa` / `restorebravo` /
+/// `restorecharlie` ([`RESTORE_OCR_ALFA`] / [`RESTORE_OCR_BRAVO`] /
+/// [`RESTORE_OCR_CHARLIE`]), `solozulu` ([`SOLO_OCR_PRESENT`]), `soloalfa`
+/// ([`SOLO_OCR_ABSENT`]), `titlezulu` ([`TITLE_OCR_PRESENT`]) and `titlehome`
+/// ([`TITLE_OCR_ABSENT`]). None is a substring of any [`SIDEBAR_FILLER_FILES`] entry,
 /// and no filler may be renamed to make one so. Four smokes contribute no term:
 /// [`colon_qa_closes_the_window_under_cage`] asserts on the cage exit status and
 /// captures no image, and the click, drag and scroll pointer smokes assert on files
@@ -4601,8 +6054,11 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
 ///
 /// It inspects [`SIDEBAR_FILLER_FILES`] only — never a smoke's OWN fixture
 /// filenames — so it cannot catch a smoke whose fixture file is named after the
-/// word that smoke asserts. That gap was live, and an audit with the command-drain
-/// unit found exactly two instances:
+/// word that smoke asserts. (The state-persistence smokes' own fixtures ARE covered,
+/// but by a separate guard:
+/// [`restore_fixture_names_cannot_satisfy_their_own_assertions`], so the two
+/// failures stay separately diagnosable.) That gap was live, and an audit with the
+/// command-drain unit found exactly two instances:
 ///
 /// * [`picker_opens_and_loads_selected_file_under_cage`] shipped a
 ///   `pickertarget.md` fixture against a `pickertarget` assertion, and PASSED green
@@ -4615,14 +6071,17 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
 ///
 /// Both are fixed, and the convention they now follow is the one to apply to any
 /// new smoke: **when a smoke asserts on a file's CONTENT, the file's NAME must not
-/// contain the asserted word.** The single deliberate exception is
-/// [`tree_sidebar_shows_files_under_cage`], whose whole subject IS the sidebar row,
-/// so [`TREE_OCR`] is a filename word on purpose — which is also why this guard
-/// cannot simply be widened to cover fixture names without an opt-out list.
+/// contain the asserted word.** There are two deliberate exceptions, and both are
+/// smokes whose whole subject IS the rendered NAME:
+/// [`tree_sidebar_shows_files_under_cage`] (so [`TREE_OCR`] is a filename word on
+/// purpose) and [`window_title_shows_the_working_directory_under_cage`] (whose two
+/// DIRECTORY names are its asserted terms). That is why this guard cannot simply be
+/// widened to cover fixture names without an opt-out list, and why the
+/// state-persistence fixtures got their own guard with the exemption written down.
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the twenty smokes — still
+/// nothing to the smoke suite's runtime and — unlike the twenty-three smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
@@ -4670,6 +6129,255 @@ fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
     }
 }
 
+/// The same invariant as [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`],
+/// aimed at a SECOND fixture: the two fixed parts of every [`make_temp_cwd`] path —
+/// [`TEMP_CWD_BASENAME`], which the header bar actually draws, and
+/// [`TEMP_CWD_PREFIX`], which it draws only if the home abbreviation regresses.
+///
+/// ## Why the temp directory's NAME became page text
+///
+/// It did not used to be. The window title was the constant `"Wolf"`, so the only
+/// on-screen text a smoke could not account for came from file names. Since the
+/// window title renders the app's WORKING DIRECTORY, every smoke now draws part of
+/// its own temp-cwd path in the header bar, in the theme font, dark-on-light — i.e.
+/// in the most legible text on the page — and `tesseract` reads it along with
+/// everything else. A basename of `folder` would satisfy
+/// [`empty_state_shows_open_folder_button_under_cage`]'s assertion from the header
+/// bar alone, and that smoke would pass green with no status page drawn at all.
+///
+/// The two directions both matter, exactly as they do for the filler names: a
+/// must-CONTAIN term in the path makes a smoke pass vacuously, and a must-NOT-CONTAIN
+/// term makes it fail spuriously. [`ASSERTED_OCR_TERMS`] carries both kinds and this
+/// guard checks against all of them.
+///
+/// ## What is drawn, and what this guard therefore covers
+///
+/// [`make_temp_cwd`] returns `<unique>/project` and [`cage_command`] sets `HOME` to
+/// `<unique>`, so `title::display_title` abbreviates and the rendered title is the
+/// constant `~/project`. So [`TEMP_CWD_BASENAME`] is the part that is REALLY on the
+/// page, and it is checked first. [`TEMP_CWD_PREFIX`] and its `{pid}-{nanos}` tail
+/// are normally abbreviated away — but they are still checked, because a regression
+/// in the abbreviation draws the whole path, and a prefix carrying an asserted term
+/// would turn that clean red into a mysterious pass (or a mysterious spurious
+/// failure) in a different smoke entirely. Guarding the invisible half costs one loop
+/// and keeps the diagnosis honest.
+///
+/// ## Why it is a separate test from the filler guard
+///
+/// So the two failures stay separately diagnosable: one says "rename a filler file",
+/// the other says "rename the temp-directory basename or prefix", and they have
+/// different fixes. The filler guard is deliberately left untouched.
+///
+/// ## What it does not cover
+///
+/// Only the two fixed components. The variable part of the path is the process id and
+/// a nanosecond timestamp — ASCII digits and `-` — which the third loop below proves
+/// cannot contain any asserted term rather than merely asserting it in prose. The
+/// PARENT of the unique directory (`std::env::temp_dir()`, i.e. `TMPDIR` or `/tmp`)
+/// is NOT checked, because it is a property of the host rather than of this fixture;
+/// it is abbreviated away today, but a `TMPDIR` containing an asserted term would
+/// show up as a mysterious pass or failure if the abbreviation ever broke, and this
+/// note is the place to start looking.
+///
+/// PURE, like its two siblings: no compositor, no `require_smoke_env`, no
+/// `CAGE_LOCK`, no subprocess.
+#[test]
+fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
+    // Guard the guard: an empty term table would make every loop below run zero times
+    // and pass for the wrong reason.
+    assert!(
+        !ASSERTED_OCR_TERMS.is_empty(),
+        "`ASSERTED_OCR_TERMS` is empty, so this guard checks nothing at all. It is the single \
+         registry of every substring the cage smokes assert OCR must or must not contain; if a \
+         smoke's term is missing from it, neither this guard nor \
+         `sidebar_filler_names_cannot_satisfy_any_smoke_assertion` can protect that smoke."
+    );
+
+    // Well-formedness of the basename, because the whole determinism fix rests on it
+    // being exactly ONE ordinary path segment: an empty value (or `.`) would make
+    // `make_temp_cwd` return the unique parent itself, so HOME would become the temp
+    // ROOT and the title would draw the varying name again; an embedded separator
+    // would add a level `smoke_home` does not account for; and `..` would climb out.
+    let mut components = Path::new(TEMP_CWD_BASENAME).components();
+    let first = components.next();
+    let extra = components.next();
+    assert!(
+        matches!(first, Some(std::path::Component::Normal(_))) && extra.is_none(),
+        "TEMP_CWD_BASENAME = {TEMP_CWD_BASENAME:?} is not a single ordinary path segment (it \
+         parses as {first:?} followed by {extra:?}). `make_temp_cwd` joins it onto a unique parent \
+         and `cage_command` hands that parent to the app as HOME, so the header-bar title reads \
+         `~/{TEMP_CWD_BASENAME}`. An empty value collapses the two into one directory — HOME == \
+         cwd, which also flips `workspace::launch_decision` into its EmptyState branch for EVERY \
+         smoke — and a separator or a `..` moves the level HOME is taken from; both put \
+         run-varying text back on the page. See `make_temp_cwd` for the measured cost of that."
+    );
+
+    // The component that IS rendered: `HOME` is the cwd's parent, so the header bar
+    // reads `~/<TEMP_CWD_BASENAME>` in every smoke that does not override HOME.
+    let lowercased = TEMP_CWD_BASENAME.to_lowercase();
+    for &(term, const_name, smoke) in ASSERTED_OCR_TERMS {
+        assert!(
+            !lowercased.contains(term),
+            "the temp-cwd basename {TEMP_CWD_BASENAME:?} contains {const_name} = {term:?}. Every \
+             smoke's window title renders its working directory home-abbreviated, so this word is \
+             drawn in the header bar of EVERY capture as `~/{TEMP_CWD_BASENAME}`: it would satisfy \
+             (or, for a must-NOT-contain term, spuriously break) `{smoke}`'s OCR assertion with \
+             nothing else on screen having to work at all. Rename `TEMP_CWD_BASENAME` — keep it \
+             short and word-like, since it is glyph mass on every page — and do NOT change the OCR \
+             const or touch the smoke's assertion."
+        );
+    }
+
+    // The component that is normally abbreviated away, checked anyway: if
+    // `display_title` ever stops abbreviating, the FULL path is what gets drawn, and
+    // this is what keeps that bug from masquerading as a different smoke's failure.
+    let lowercased = TEMP_CWD_PREFIX.to_lowercase();
+    for &(term, const_name, smoke) in ASSERTED_OCR_TERMS {
+        assert!(
+            !lowercased.contains(term),
+            "the temp-cwd prefix {TEMP_CWD_PREFIX:?} contains {const_name} = {term:?}. It names \
+             the UNIQUE parent directory, which `cage_command` hands the app as HOME and which \
+             `title::display_title` therefore abbreviates to `~` — so it is not drawn today. But a \
+             regression in that abbreviation draws the whole path in the header bar, at which \
+             point this word would satisfy (or, for a must-NOT-contain term, spuriously break) \
+             `{smoke}`'s OCR assertion and the abbreviation bug would surface as an unrelated \
+             smoke behaving strangely instead of as a clean red. Rename `TEMP_CWD_PREFIX`; do NOT \
+             change the OCR const and do NOT touch the smoke's assertion."
+        );
+    }
+
+    // The variable part of the path is `{pid}-{nanos}`, so it is ASCII digits and `-`
+    // only. That is safe if and only if no asserted term is spellable in those
+    // characters — which is a property of the terms, so it is checked here rather than
+    // asserted in a comment.
+    for &(term, const_name, smoke) in ASSERTED_OCR_TERMS {
+        assert!(
+            term.chars().any(|c| c.is_ascii_alphabetic()),
+            "asserted OCR term {const_name} = {term:?} contains no ASCII letter, so it could be a \
+             substring of the digits-and-hyphens tail `make_temp_cwd` appends to \
+             {TEMP_CWD_PREFIX:?} (the process id and a nanosecond timestamp). `{smoke}` would \
+             then be satisfied — or spuriously broken — by whatever pid the test harness happened \
+             to get, on any run where the title's home abbreviation is not doing its job. Give the \
+             term a letter, or stop deriving the temp-dir name from numbers."
+        );
+    }
+}
+
+/// The same invariant again, aimed at a THIRD fixture: the files the three
+/// state-persistence smokes create in their OWN working directories
+/// ([`RELAUNCH_FIXTURE_NAMES`]), plus the two directory names the title smoke
+/// builds.
+///
+/// ## Why these fixtures need their own guard
+///
+/// [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`] inspects
+/// [`SIDEBAR_FILLER_FILES`] and nothing else, and its own doc comment records the
+/// gap: it "cannot catch a smoke whose fixture file is named after the word that
+/// smoke asserts", which is exactly how
+/// `picker_opens_and_loads_selected_file_under_cage` once passed green while the
+/// picker provably never opened, and how
+/// `vertical_split_shows_two_panes_under_cage` shipped `paneleft.md` /
+/// `paneright.md` against `paneleft` / `paneright`. The three smokes added with
+/// the state-persistence unit assert on FILE CONTENT (a rendered heading) while
+/// dropping their fixtures into a cwd the tree sidebar lists BY NAME, so they are
+/// in precisely that hazard class. Both directions matter: a must-CONTAIN term in
+/// a fixture name makes its smoke pass vacuously, and a must-NOT-CONTAIN term
+/// makes it fail spuriously.
+///
+/// ## The one deliberate, documented exemption
+///
+/// The title smoke's two DIRECTORY names are not files and are not in
+/// [`RELAUNCH_FIXTURE_NAMES`], because they are the assertion's subject rather
+/// than a hazard to it: [`TITLE_PROJECT_DIR`] must contain
+/// [`TITLE_OCR_PRESENT`] (the header bar rendering it is the whole point) and
+/// [`TITLE_HOME_DIR`] must contain [`TITLE_OCR_ABSENT`] (the assertion is that
+/// the home segment is abbreviated to `~` and therefore NOT drawn). This is the
+/// same shape as [`tree_sidebar_shows_files_under_cage`]'s exemption from the
+/// filler guard. Rather than leave that as prose, the last block below asserts
+/// the exemption's PRECONDITIONS — including the crossed pair, where a mistake
+/// really would be fatal.
+///
+/// PURE, like its two siblings: no compositor, no `require_smoke_env`, no
+/// `CAGE_LOCK`, no subprocess.
+#[test]
+fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
+    // Guard the guard: either empty table would make the loops below run zero times
+    // and pass for the wrong reason.
+    assert!(
+        !ASSERTED_OCR_TERMS.is_empty(),
+        "`ASSERTED_OCR_TERMS` is empty, so this guard checks nothing at all."
+    );
+    assert!(
+        !RELAUNCH_FIXTURE_NAMES.is_empty(),
+        "`RELAUNCH_FIXTURE_NAMES` is empty, so the state-persistence smokes' own fixtures are \
+         unguarded — which is the exact gap that let `picker_opens_and_loads_selected_file_under_cage` \
+         pass green while the picker never opened."
+    );
+
+    for &(name, name_const, owner) in RELAUNCH_FIXTURE_NAMES {
+        let lowercased = name.to_lowercase();
+        for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {
+            assert!(
+                !lowercased.contains(term),
+                "fixture {name_const} = {name:?} (created by `{owner}`) contains {term_const} = \
+                 {term:?}. The tree sidebar renders every cwd entry BY NAME, so that row would \
+                 satisfy — or, for a must-NOT-contain term, spuriously break — `{smoke}`'s OCR \
+                 assertion with the editor pane drawing nothing at all. Follow the convention the \
+                 sibling smokes already use: put the asserted word in the file's CONTENT and give \
+                 the file a name whose lowercase does not contain it. Do NOT change the OCR const \
+                 and do NOT touch the smoke's assertion."
+            );
+        }
+    }
+
+    // Distinct names, and distinct from the filler files: these all land in ONE temp
+    // cwd per smoke, so a collision would silently overwrite a fixture with another
+    // one's contents.
+    let mut seen = std::collections::HashSet::new();
+    for &(name, name_const, owner) in RELAUNCH_FIXTURE_NAMES {
+        assert!(
+            seen.insert(name),
+            "fixture {name_const} = {name:?} (owned by `{owner}`) is listed twice in \
+             `RELAUNCH_FIXTURE_NAMES`; two fixtures sharing a name overwrite each other on disk."
+        );
+        assert!(
+            !SIDEBAR_FILLER_FILES.contains(&name),
+            "fixture {name_const} = {name:?} (owned by `{owner}`) collides with a \
+             `SIDEBAR_FILLER_FILES` entry. Both are written into the same temp cwd, so one would \
+             clobber the other and the smoke would assert against the wrong contents."
+        );
+    }
+
+    // The title smoke's exemption, with its preconditions made executable rather
+    // than merely documented above.
+    assert!(
+        TITLE_PROJECT_DIR.to_lowercase().contains(TITLE_OCR_PRESENT),
+        "TITLE_PROJECT_DIR = {TITLE_PROJECT_DIR:?} no longer contains TITLE_OCR_PRESENT = \
+         {TITLE_OCR_PRESENT:?}. The header-bar title renders that directory's BASENAME, so if the \
+         two ever stop agreeing the smoke asserts on a word nothing draws and fails with no \
+         visible cause."
+    );
+    assert!(
+        TITLE_HOME_DIR.to_lowercase().contains(TITLE_OCR_ABSENT),
+        "TITLE_HOME_DIR = {TITLE_HOME_DIR:?} no longer contains TITLE_OCR_ABSENT = \
+         {TITLE_OCR_ABSENT:?}. The must-NOT-contain assertion is what proves the home prefix was \
+         ABBREVIATED to `~`; if the home directory is not named after that term, the assertion \
+         holds trivially and proves nothing — a vacuous test, not a passing one."
+    );
+    assert!(
+        !TITLE_PROJECT_DIR.to_lowercase().contains(TITLE_OCR_ABSENT),
+        "TITLE_PROJECT_DIR = {TITLE_PROJECT_DIR:?} contains TITLE_OCR_ABSENT = \
+         {TITLE_OCR_ABSENT:?}. The project basename IS rendered in the title, so the \
+         must-NOT-contain assertion would fire on a perfectly correct abbreviation."
+    );
+    assert!(
+        !TITLE_HOME_DIR.to_lowercase().contains(TITLE_OCR_PRESENT),
+        "TITLE_HOME_DIR = {TITLE_HOME_DIR:?} contains TITLE_OCR_PRESENT = {TITLE_OCR_PRESENT:?}. \
+         If the home segment ever did get rendered it would then satisfy the must-CONTAIN \
+         assertion on its own, and a broken abbreviation would look like a pass."
+    );
+}
+
 #[test]
 fn window_renders_typed_text_under_cage() {
     // Serialize against the other cage test (shared Wayland socket); recover from
@@ -4684,7 +6392,7 @@ fn window_renders_typed_text_under_cage() {
 
     // A fresh temp cwd, exactly like the other seventeen smokes. The app reads
     // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
-    // directory as its working directory (see `.current_dir` below). See
+    // directory as its working directory (see `cage_command` below). See
     // `make_temp_cwd` for why isolation is mandatory here: at a fixed cwd this
     // scenario's own `kill` leaves a stale `Untitled.md` swap that becomes the NEXT
     // run's fixture.
@@ -4718,17 +6426,10 @@ fn window_renders_typed_text_under_cage() {
     // tree, so wtype/grim inside the scenario see the headless display. We inherit
     // the parent environment (WOLF_NVIM_BIN, WLR_BACKENDS, XDG_RUNTIME_DIR,
     // FONTCONFIG_FILE, ...) and add the scenario-specific vars.
-    let status = Command::new("cage")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg(SCENARIO)
-        .current_dir(&cwd)
+    let status = cage_command(SCENARIO, &cwd)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("OCR_WORD", OCR_WORD)
-        // Large font so the rendered glyphs are legible to tesseract.
-        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .status()
         .expect("failed to spawn `cage` for the headless smoke scenario");
     assert!(
@@ -4760,23 +6461,52 @@ fn window_renders_typed_text_under_cage() {
         ocr_text.contains(OCR_WORD),
         "OCR of the rendered window did not contain the typed word {OCR_WORD:?}. The cursor was \
          moved off row 0 so it should not obscure any letter. PNG kept at {} — OPEN IT before \
-         concluding anything: (a) if nothing drew at all (no window, no tildes, no cursor), it is \
-         a rendering/launch failure; (b) if the window, sidebar, editor pane, tildes and cursor \
-         all drew correctly but row 0 is EMPTY and the cursor sits TWO rows below it, then \
-         exactly ONE keystroke — the leading `i` — was consumed before Neovim saw it, so \
-         {OCR_WORD:?} executed in NORMAL mode instead of being inserted. The KNOWN cause of that \
-         signature is the swap modal, and it is where to look FIRST: `nvim_buf_set_name` creates \
-         the startup buffer's swap file inside the rename, and a pre-existing swap for \
-         `<cwd>/Untitled.md` raises a blocking `do_dialog` ATTENTION/E325 prompt \
-         (`mode() == \"r?\"`) that answers itself with your first key. Check \
-         `state_dir()/swap/<hash-of-cwd>/` for a `%…%Untitled.md.swp` (on Linux that is \
-         `~/.local/state/wolf/swap/`), and see `crates/wolf-core/tests/swap_recovery.rs`'s \
+         concluding anything, and check these FOUR signatures in this order.\n\
+         \n\
+         (a) THE MOST LIKELY ONE, and the one to rule out FIRST: the whole page drew correctly \
+         and looks exactly like a PASSING capture except that row 0 is BLANK — the buffer holds \
+         exactly TWO empty lines with the block cursor on line 2, i.e. ONE row below the empty \
+         row 0. That means the ENTIRE first `wtype -- \"i{OCR_WORD}\"` AND its `Escape` were \
+         delivered before the client could accept keys, and were LOST; the trailing `o` + \
+         `Escape` then produced the second line on their own. This is a TIMING / MARGIN failure, \
+         NOT a rendering failure and NOT the swap modal. It was measured directly: capture md5 \
+         `c9a797d31d606335297b40823e64371a`, byte-identical to a deliberately induced \
+         cold-shader-cache run at `SETTLE=0.25`. Look at `SETTLE` (the ONLY real budget before \
+         the first keystroke — the `wtype` poll ahead of it gates nothing, see the module doc \
+         comment) and at `XDG_CACHE_HOME` in `cage_command` (a cold mesa shader cache costs ~4.9 \
+         MB of rebuild inside that budget). Here, unlike (c), more settle IS the fix.\n\
+         \n\
+         (b) if nothing drew at all (no window, no tildes, no cursor), it is a rendering/launch \
+         failure.\n\
+         \n\
+         (c) if the window, sidebar, editor pane, tildes and cursor all drew correctly but row 0 \
+         is EMPTY and the cursor sits TWO rows below it — THREE lines in the buffer, one row \
+         lower than signature (a) — then exactly ONE keystroke, the leading `i`, was consumed \
+         before Neovim saw it, so {OCR_WORD:?} executed in NORMAL mode instead of being inserted \
+         (its trailing `o` is what opened the extra line). Count the lines and the cursor row \
+         before choosing between (a) and (c); they are one row apart and nothing else \
+         distinguishes them. The KNOWN cause of (c) is the swap modal, and it is where to look \
+         first: `nvim_buf_set_name` creates the startup buffer's swap file inside the rename, and \
+         a pre-existing swap for `<cwd>/Untitled.md` raises a blocking `do_dialog` ATTENTION/E325 \
+         prompt (`mode() == \"r?\"`) that answers itself with your first key. Check \
+         `state_dir()/swap/<hash-of-cwd>/` for a `%…%Untitled.md.swp` — since the \
+         `WOLF_STATE_DIR` isolation landed that is this run's `-state` sibling of the temp cwd \
+         (see `smoke_state_dir`), NOT `~/.local/state/wolf/swap/` — and see \
+         `crates/wolf-core/tests/swap_recovery.rs`'s \
          `stale_untitled_swap_does_not_block_a_fresh_start`, which pins this headlessly \
          (and deterministically). Only if there is no such swap should you consider focus / \
          input routing (a Phase 2 pass chased that hypothesis and DISPROVED it — deferring \
-         `grab_focus()` into `window.connect_map()` changes nothing). Either way it is NOT a \
-         rendering failure, and no amount of extra settle time will fix it. OCR output \
-         was:\n{ocr_text}",
+         `grab_focus()` into `window.connect_map()` changes nothing). For (c) specifically it is \
+         NOT a rendering failure and no amount of extra settle time will fix it — that is exactly \
+         what separates it from (a).\n\
+         \n\
+         (d) if row 0 visibly DREW {OCR_WORD:?} but the OCR text below garbles it (measured: the \
+         isolated leading `h` classified as the ligature U+FB01), the page went sparse or \
+         run-varying and tesseract lost its calibration: see `SIDEBAR_FILLER_COUNT`, \
+         `make_temp_cwd` and `cage_command`'s `HOME`. Add page text; do not touch the \
+         assertion.\n\
+         \n\
+         OCR output was:\n{ocr_text}",
         out_png.display()
     );
 }
@@ -4794,7 +6524,7 @@ fn picker_opens_and_loads_selected_file_under_cage() {
 
     // Create a fresh temp cwd and drop the known markdown target into it. The app
     // reads `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with
-    // this directory as its working directory (see `.current_dir` below).
+    // this directory as its working directory (see `cage_command` below).
     let cwd = make_temp_cwd();
     let target = cwd.join(PICKER_FILE_NAME);
     std::fs::write(&target, format!("{PICKER_HEADING}\n"))
@@ -4814,17 +6544,10 @@ fn picker_opens_and_loads_selected_file_under_cage() {
 
     // Run the whole picker scenario inside cage, with the temp dir as the working
     // directory so the app picks it up as its cwd.
-    let status = Command::new("cage")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg(PICKER_SCENARIO)
-        .current_dir(&cwd)
+    let status = cage_command(PICKER_SCENARIO, &cwd)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("PICKER_QUERY", PICKER_QUERY)
-        // Large font so the rendered glyphs are legible to tesseract.
-        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .status()
         .expect("failed to spawn `cage` for the headless picker smoke scenario");
     assert!(
@@ -4881,7 +6604,7 @@ fn picker_arrow_navigation_selects_second_match_under_cage() {
 
     // Create a fresh temp cwd and drop BOTH known markdown targets into it. The
     // app reads `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage
-    // with this directory as its working directory (see `.current_dir` below).
+    // with this directory as its working directory (see `cage_command` below).
     // Neither file is in the MRU cache, so the picker's row order is determined
     // purely by the rank tiebreaks: `pick1.md` is row 0, `pick2.md` is row 1.
     let cwd = make_temp_cwd();
@@ -4914,17 +6637,10 @@ fn picker_arrow_navigation_selects_second_match_under_cage() {
 
     // Run the whole picker-navigation scenario inside cage, with the temp dir as
     // the working directory so the app picks it up as its cwd.
-    let status = Command::new("cage")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg(PICKER_NAV_SCENARIO)
-        .current_dir(&cwd)
+    let status = cage_command(PICKER_NAV_SCENARIO, &cwd)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("PICKER_NAV_QUERY", PICKER_NAV_QUERY)
-        // Large font so the rendered glyphs are legible to tesseract.
-        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .status()
         .expect("failed to spawn `cage` for the headless picker nav smoke scenario");
     assert!(
@@ -4986,7 +6702,7 @@ fn tree_sidebar_shows_files_under_cage() {
 
     // Create a fresh temp cwd and drop the distinctively-named markdown file into
     // it. The app reads `std::env::current_dir()` for `CoreConfig.cwd`, so we
-    // launch cage with this directory as its working directory (see `.current_dir`
+    // launch cage with this directory as its working directory (see `cage_command`
     // below); the long-lived FileSearch then populates the tree from this cwd.
     let cwd = make_temp_cwd();
     let target = cwd.join(TREE_FILE_NAME);
@@ -5007,16 +6723,9 @@ fn tree_sidebar_shows_files_under_cage() {
 
     // Run the whole tree scenario inside cage, with the temp dir as the working
     // directory so the app picks it up as its cwd and the tree populates from it.
-    let status = Command::new("cage")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg(TREE_SCENARIO)
-        .current_dir(&cwd)
+    let status = cage_command(TREE_SCENARIO, &cwd)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
-        // Large font so the rendered glyphs are legible to tesseract.
-        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .status()
         .expect("failed to spawn `cage` for the headless tree smoke scenario");
     assert!(
@@ -5068,7 +6777,7 @@ fn vertical_split_shows_two_panes_under_cage() {
 
     // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
     // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
-    // directory as its working directory (see `.current_dir` below); the scenario
+    // directory as its working directory (see `cage_command` below); the scenario
     // opens file A in the first pane and file B in the new (split) pane by name.
     let cwd = make_temp_cwd();
     let target_left = cwd.join(VSPLIT_FILE_LEFT);
@@ -5100,21 +6809,15 @@ fn vertical_split_shows_two_panes_under_cage() {
 
     // Run the whole vertical-split scenario inside cage, with the temp dir as the
     // working directory so the app picks it up as its cwd.
-    let status = Command::new("cage")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg(VSPLIT_SCENARIO)
-        .current_dir(&cwd)
+    // `cage_command` supplies WOLF_FONT_PT (and WOLF_STATE_DIR). See the "Note (OCR
+    // width)" paragraph above the VSPLIT_* consts: if two side-by-side panes are ever
+    // too narrow for 28pt OCR, widen the window or lower the font for THIS test —
+    // never for all twenty by editing the helper.
+    let status = cage_command(VSPLIT_SCENARIO, &cwd)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("VSPLIT_FILE_LEFT", VSPLIT_FILE_LEFT)
         .env("VSPLIT_FILE_RIGHT", VSPLIT_FILE_RIGHT)
-        // Large font so the rendered glyphs are legible to tesseract. (See the
-        // "Note (OCR width)" paragraph above the VSPLIT_* consts: if two
-        // side-by-side panes are too narrow for 28pt OCR, widen the window or lower
-        // the font for THIS test.)
-        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .status()
         .expect("failed to spawn `cage` for the headless vsplit smoke scenario");
     assert!(
@@ -5177,7 +6880,7 @@ fn horizontal_split_shows_two_panes_under_cage() {
 
     // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
     // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
-    // directory as its working directory (see `.current_dir` below); the scenario
+    // directory as its working directory (see `cage_command` below); the scenario
     // opens file A in the first pane and file B in the new (stacked) pane by name.
     let cwd = make_temp_cwd();
     let target_top = cwd.join(HSPLIT_FILE_TOP);
@@ -5209,21 +6912,15 @@ fn horizontal_split_shows_two_panes_under_cage() {
 
     // Run the whole horizontal-split scenario inside cage, with the temp dir as the
     // working directory so the app picks it up as its cwd.
-    let status = Command::new("cage")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg(HSPLIT_SCENARIO)
-        .current_dir(&cwd)
+    // `cage_command` supplies WOLF_FONT_PT (and WOLF_STATE_DIR). See the "Note (OCR
+    // height)" paragraph above the HSPLIT_* consts: if two stacked panes are ever too
+    // short for 28pt OCR, make the window taller or lower the font for THIS test —
+    // never for all twenty by editing the helper.
+    let status = cage_command(HSPLIT_SCENARIO, &cwd)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("HSPLIT_FILE_TOP", HSPLIT_FILE_TOP)
         .env("HSPLIT_FILE_BOTTOM", HSPLIT_FILE_BOTTOM)
-        // Large font so the rendered glyphs are legible to tesseract. (See the
-        // "Note (OCR height)" paragraph above the HSPLIT_* consts: if two stacked
-        // panes are too short for 28pt OCR, make the window taller or lower the font
-        // for THIS test.)
-        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .status()
         .expect("failed to spawn `cage` for the headless hsplit smoke scenario");
     assert!(
@@ -5280,7 +6977,7 @@ fn focus_move_returns_to_first_pane_under_cage() {
 
     // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
     // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
-    // directory as its working directory (see `.current_dir` below).
+    // directory as its working directory (see `cage_command` below).
     let cwd = make_temp_cwd();
     let target_left = cwd.join(FOCUS_FILE_LEFT);
     let target_right = cwd.join(FOCUS_FILE_RIGHT);
@@ -5311,18 +7008,12 @@ fn focus_move_returns_to_first_pane_under_cage() {
 
     // Run the whole focus-move scenario inside cage, with the temp dir as the
     // working directory so the app picks it up as its cwd.
-    let status = Command::new("cage")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg(FOCUS_SCENARIO)
-        .current_dir(&cwd)
+    let status = cage_command(FOCUS_SCENARIO, &cwd)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("FOCUS_FILE_LEFT", FOCUS_FILE_LEFT)
         .env("FOCUS_FILE_RIGHT", FOCUS_FILE_RIGHT)
         .env("FOCUS_MARKER", FOCUS_MARKER)
-        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .status()
         .expect("failed to spawn `cage` for the headless focus-move smoke scenario");
     assert!(
@@ -5388,7 +7079,7 @@ fn close_pane_leaves_one_under_cage() {
 
     // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
     // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
-    // directory as its working directory (see `.current_dir` below).
+    // directory as its working directory (see `cage_command` below).
     let cwd = make_temp_cwd();
     let target_keep = cwd.join(CLOSE_FILE_KEEP);
     let target_gone = cwd.join(CLOSE_FILE_GONE);
@@ -5419,17 +7110,11 @@ fn close_pane_leaves_one_under_cage() {
 
     // Run the whole close-pane scenario inside cage, with the temp dir as the
     // working directory so the app picks it up as its cwd.
-    let status = Command::new("cage")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg(CLOSE_SCENARIO)
-        .current_dir(&cwd)
+    let status = cage_command(CLOSE_SCENARIO, &cwd)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("CLOSE_FILE_KEEP", CLOSE_FILE_KEEP)
         .env("CLOSE_FILE_GONE", CLOSE_FILE_GONE)
-        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .status()
         .expect("failed to spawn `cage` for the headless close-pane smoke scenario");
     assert!(
@@ -5486,7 +7171,7 @@ fn three_panes_keep_all_files_visible_under_cage() {
 
     // Create a fresh temp cwd and drop ALL THREE markdown targets into it. The app
     // reads `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with
-    // this directory as its working directory (see `.current_dir` below).
+    // this directory as its working directory (see `cage_command` below).
     let cwd = make_temp_cwd();
     let target_a = cwd.join(TRI_FILE_A);
     let target_b = cwd.join(TRI_FILE_B);
@@ -5512,22 +7197,16 @@ fn three_panes_keep_all_files_visible_under_cage() {
 
     // Run the whole three-pane scenario inside cage, with the temp dir as the
     // working directory so the app picks it up as its cwd.
-    let status = Command::new("cage")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg(TRISPLIT_SCENARIO)
-        .current_dir(&cwd)
+    // `cage_command` supplies WOLF_FONT_PT (and WOLF_STATE_DIR). See the "Note (OCR
+    // width)" paragraph above the TRI_* consts: if three side-by-side panes are ever
+    // too narrow for 28pt OCR, widen the window or lower the font for THIS test —
+    // never for all twenty by editing the helper.
+    let status = cage_command(TRISPLIT_SCENARIO, &cwd)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("TRI_FILE_A", TRI_FILE_A)
         .env("TRI_FILE_B", TRI_FILE_B)
         .env("TRI_FILE_C", TRI_FILE_C)
-        // Large font so the rendered glyphs are legible to tesseract. (See the
-        // "Note (OCR width)" paragraph above the TRI_* consts: if three side-by-side
-        // panes are too narrow for 28pt OCR, widen the window or lower the font for
-        // THIS test.)
-        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .status()
         .expect("failed to spawn `cage` for the headless three-pane smoke scenario");
     assert!(
@@ -5610,19 +7289,21 @@ fn empty_state_shows_open_folder_button_under_cage() {
     // Run the whole empty-state scenario inside cage. Setting HOME to the SAME temp
     // directory we hand cage as its cwd is what fires `launch_decision`'s
     // `cwd == home` branch — the production rule, with no test-only env var — and
-    // keeps every $HOME-derived path (state_dir, the MRU sqlite, the swap dir)
-    // inside the temp dir too.
-    let status = Command::new("cage")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg(EMPTY_STATE_SCENARIO)
-        .current_dir(&cwd)
+    // keeps every remaining $HOME-derived path inside the temp dir too. (The state
+    // dir is no longer one of them: `cage_command` pins it with `WOLF_STATE_DIR`,
+    // which `state_dir()` resolves ahead of anything $HOME-derived, so the MRU sqlite
+    // and the swap dir land in this cwd's `-state` sibling.)
+    //
+    // This `.env("HOME", ...)` DELIBERATELY OVERRIDES the default `cage_command` now
+    // sets (the cwd's PARENT, which would leave this smoke in the `Folder` branch and
+    // defeat it entirely). It is chained AFTER the helper, so it wins — `Command::env`
+    // is last-write-wins per key. The determinism property the default exists for is
+    // preserved: with HOME == cwd, `title::display_title` renders the constant `~`,
+    // so this smoke's page is still byte-identical across runs.
+    let status = cage_command(EMPTY_STATE_SCENARIO, &cwd)
         .env("HOME", &cwd)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
-        // Large font so the rendered glyphs are legible to tesseract.
-        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .status()
         .expect("failed to spawn `cage` for the headless empty-state smoke scenario");
     assert!(
@@ -5675,7 +7356,7 @@ fn new_untitled_buffer_replaces_open_file_under_cage() {
 
     // Create a fresh temp cwd and drop the base markdown file into it. The app reads
     // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
-    // directory as its working directory (see `.current_dir` below).
+    // directory as its working directory (see `cage_command` below).
     let cwd = make_temp_cwd();
     let target = cwd.join(NEWBUF_FILE);
     std::fs::write(&target, format!("{NEWBUF_HEADING}\n"))
@@ -5695,18 +7376,11 @@ fn new_untitled_buffer_replaces_open_file_under_cage() {
 
     // Run the whole new-untitled-buffer scenario inside cage, with the temp dir as
     // the working directory so the app picks it up as its cwd.
-    let status = Command::new("cage")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg(NEWBUF_SCENARIO)
-        .current_dir(&cwd)
+    let status = cage_command(NEWBUF_SCENARIO, &cwd)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("NEWBUF_FILE", NEWBUF_FILE)
         .env("NEWBUF_MARKER", NEWBUF_MARKER)
-        // Large font so the rendered glyphs are legible to tesseract.
-        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .status()
         .expect("failed to spawn `cage` for the headless new-untitled-buffer smoke scenario");
     assert!(
@@ -5770,7 +7444,7 @@ fn colon_q_closes_focused_pane_under_cage() {
 
     // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
     // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
-    // directory as its working directory (see `.current_dir` below).
+    // directory as its working directory (see `cage_command` below).
     let cwd = make_temp_cwd();
     let target_keep = cwd.join(QUIT_FILE_KEEP);
     let target_gone = cwd.join(QUIT_FILE_GONE);
@@ -5801,17 +7475,11 @@ fn colon_q_closes_focused_pane_under_cage() {
 
     // Run the whole :q scenario inside cage, with the temp dir as the working
     // directory so the app picks it up as its cwd.
-    let status = Command::new("cage")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg(COLON_Q_SCENARIO)
-        .current_dir(&cwd)
+    let status = cage_command(COLON_Q_SCENARIO, &cwd)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("QUIT_FILE_KEEP", QUIT_FILE_KEEP)
         .env("QUIT_FILE_GONE", QUIT_FILE_GONE)
-        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .status()
         .expect("failed to spawn `cage` for the headless :q smoke scenario");
     assert!(
@@ -5877,16 +7545,8 @@ fn colon_qa_closes_the_window_under_cage() {
     // Run the whole :qa scenario inside cage. This smoke deliberately captures NO
     // PNG and runs neither grim nor tesseract: its assertion is that the app PROCESS
     // exited, and exited CLEANLY, which no pixel can show.
-    let status = Command::new("cage")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg(COLON_QA_SCENARIO)
-        .current_dir(&cwd)
+    let status = cage_command(COLON_QA_SCENARIO, &cwd)
         .env("WOLF_BIN", bin)
-        // Kept for parity with the other smokes: the window renders before :qa, and
-        // a legible window is what makes a retained-video/manual repro readable.
-        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .status()
         .expect("failed to spawn `cage` for the headless :qa smoke scenario");
 
@@ -5929,7 +7589,7 @@ fn close_pane_chord_closes_focused_pane_under_cage() {
 
     // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
     // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
-    // directory as its working directory (see `.current_dir` below).
+    // directory as its working directory (see `cage_command` below).
     let cwd = make_temp_cwd();
     let target_keep = cwd.join(CHORD_CLOSE_FILE_KEEP);
     let target_gone = cwd.join(CHORD_CLOSE_FILE_GONE);
@@ -5960,18 +7620,11 @@ fn close_pane_chord_closes_focused_pane_under_cage() {
 
     // Run the whole Ctrl+Shift+W close-pane scenario inside cage, with the temp dir
     // as the working directory so the app picks it up as its cwd.
-    let status = Command::new("cage")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg(CHORD_CLOSE_SCENARIO)
-        .current_dir(&cwd)
+    let status = cage_command(CHORD_CLOSE_SCENARIO, &cwd)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("CHORD_CLOSE_FILE_KEEP", CHORD_CLOSE_FILE_KEEP)
         .env("CHORD_CLOSE_FILE_GONE", CHORD_CLOSE_FILE_GONE)
-        // Large font so the rendered glyphs are legible to tesseract.
-        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .status()
         .expect("failed to spawn `cage` for the headless Ctrl+Shift+W close-pane smoke scenario");
     assert!(
@@ -7064,12 +8717,7 @@ fn nvim_crash_recovers_and_reopens_the_file_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    let status = Command::new("cage")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg(with_nvim_pid_helper(CRASH_SCENARIO))
-        .current_dir(&cwd)
+    let status = cage_command(&with_nvim_pid_helper(CRASH_SCENARIO), &cwd)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("OUT_PNG_BEFORE", &out_png_before)
@@ -7080,7 +8728,6 @@ fn nvim_crash_recovers_and_reopens_the_file_under_cage() {
         .env("AFTER", &after)
         .env("DIMS_AFTER", &dims_after)
         .env("PRESERVED", &preserved)
-        .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .status()
         .expect("failed to spawn `cage` for the headless crash/restart smoke scenario");
     assert!(
@@ -7723,6 +9370,714 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
          path (`apply_overlay(OverlayMode::Hidden)`) — an overlay left up would occlude exactly \
          this heading, which is the same defect the dwell assertion above proves the overlay is \
          capable of. PNG kept at {}. OCR output was:\n{ocr_after}",
+        out_png.display()
+    );
+}
+
+/// Writes the three [`RELAUNCH_FIXTURE_NAMES`] markdown fixtures a smoke owns into
+/// `cwd`, plus the [`SIDEBAR_FILLER_FILES`] page-density fixture.
+///
+/// The fillers are FIXTURE, not assertion: the asserted terms in both relaunch
+/// smokes are sparse, light-on-dark EDITOR text, which is exactly the case
+/// [`SIDEBAR_FILLER_COUNT`] documents — below the measured five-file floor
+/// `tesseract` misclassifies isolated glyphs on a nearly-blank page. Nothing
+/// asserts on a filler, and
+/// [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`] is what keeps one
+/// from satisfying an assertion by accident.
+fn write_relaunch_fixtures(smoke: &str, cwd: &Path, files: &[(&str, &str)]) {
+    for (name, heading) in files {
+        let path = cwd.join(name);
+        std::fs::write(&path, format!("{heading}\n"))
+            .unwrap_or_else(|e| panic!("{smoke}: failed to write fixture {}: {e}", path.display()));
+    }
+    for name in SIDEBAR_FILLER_FILES {
+        let filler = cwd.join(name);
+        std::fs::write(&filler, SIDEBAR_FILLER_BODY).unwrap_or_else(|e| {
+            panic!("{smoke}: failed to write filler {}: {e}", filler.display())
+        });
+    }
+}
+
+/// A fingerprint of a file that must NOT change across a smoke run: its length and
+/// modification time, or `None` when it does not exist.
+///
+/// `None` is a first-class answer, not an error: on a machine that has never run
+/// Wolf interactively — which includes CI and this host —
+/// `~/.local/state/wolf/state.json` simply does not exist, and "absent before,
+/// absent after" is exactly as strong an isolation proof as "unchanged". Taking
+/// `metadata().unwrap()` for the BEFORE snapshot would panic there instead.
+fn state_file_fingerprint(path: &Path) -> Option<(u64, Option<SystemTime>)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()))
+}
+
+/// Proves the tab's PANE-SPLIT TREE survives a quit and relaunch: three panes in an
+/// asymmetric layout, each holding its own file, rebuilt from `state.json`.
+///
+/// Two app launches run inside ONE `cage` instance (see [`RESTORE_LAYOUT_SCENARIO`]
+/// and the shared exit-code table above [`RELAUNCH_RESTORE_SETTLE`]), so `CAGE_LOCK`
+/// semantics are unchanged and no second compositor is started.
+///
+/// ## What it asserts
+///
+/// 1. **Load-bearing, and EXACT:** the restored Neovim's own
+///    `tabpagebuflist()` reads exactly `rleft.md rmid.md rright.md`. That is one
+///    comparison proving three things at once — the pane COUNT, the buffer
+///    IDENTITIES, and their ORDER — because nvim numbers windows by layout
+///    position.
+/// 2. **Corroboration (the GTK half):** OCR carries `restorealfa` AND
+///    `restorebravo` AND `restorecharlie`. Three distinct panes actually bound to
+///    grids and PAINTED, which no `winnr('$')` readback can show.
+///
+/// ## How it discriminates RESTORATION from COINCIDENCE
+///
+/// A fresh launch of `wolf-gnome` shows exactly ONE pane holding `Untitled.md`: the
+/// binary takes no CLI arguments, opens no file at startup, and has no MRU-reopen
+/// path — the readback would be `Untitled.md` and the OCR would carry none of the
+/// three terms. Neovim's own session behaviour cannot produce it either: the
+/// captive nvim is spawned fresh with `-u init.lua`, there is no `:mksession`, and
+/// nothing in `init.lua` restores windows. And the SHAPE is unreachable by
+/// accident: a three-pane asymmetric split — a left column split horizontally
+/// beside a full-height right pane — holding three DISTINCT files cannot arise from
+/// any single-file reopen, any MRU, or any swap recovery, all of which would give
+/// one pane and one name. Finally the three fixture names (`rleft.md`, `rmid.md`,
+/// `rright.md`) contain none of the three asserted terms, so neither a sidebar row
+/// nor an `:e` toast can satisfy one — enforced by
+/// [`restore_fixture_names_cannot_satisfy_their_own_assertions`].
+///
+/// ## What it does NOT prove
+///
+/// **Nothing here exercises non-equal pane WEIGHTS.** Divider drag-to-resize is not
+/// implemented on Linux, so every persisted weight is an equal share and no smoke
+/// can distinguish "the saved weights were applied to the dividers" from "the
+/// equal-share default was recomputed" — the two agree numerically. The weight
+/// FORMAT is pinned headlessly by `pane_layout::tests::decode_round_trips_encode`,
+/// which uses `[0.25, 0.75]`; only the pixels are unproven.
+///
+/// ## Red-run revert (one, and one line)
+///
+/// | assertion | revert | expected red symptom | measured |
+/// | --- | --- | --- | --- |
+/// | both | in `app.rs::build_ui`, delete `if let Some(layout) = plan.layout.clone() { panes.request_layout_rebuild(layout); }` — or, equivalently, make `pane_view::consume_pending_layout` `return false;` as its first statement | the readback reads `Untitled.md` instead of the three names, and the OCR carries none of `restorealfa` / `restorebravo` / `restorecharlie` | **AS PREDICTED.** Assertion 1 panicked first: `assertion 'left == right' failed … left: "Untitled.md" right: "rleft.md rmid.md rright.md"`. Because it fires first the OCR assertion is never reached, so the OCR half was confirmed out of band by running `tesseract --psm 11` over the retained PNG: zero hits for each of `restorealfa`, `restorebravo` and `restorecharlie`. Restoring the line returned the smoke to `1 passed`. |
+#[test]
+fn pane_layout_survives_relaunch_under_cage() {
+    const SMOKE: &str = "pane_layout_survives_relaunch_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd, exactly like every other smoke; see `make_temp_cwd` for why
+    // isolation is mandatory. BOTH launches use this same directory — relaunching
+    // in the project you saved from is the whole scenario.
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(
+        SMOKE,
+        &cwd,
+        &[
+            (RESTORE_FILE_LEFT, RESTORE_HEADING_LEFT),
+            (RESTORE_FILE_MID, RESTORE_HEADING_MID),
+            (RESTORE_FILE_RIGHT, RESTORE_HEADING_RIGHT),
+        ],
+    );
+
+    // Start from a clean slate: evidence that could be a previous run's leftover is
+    // not evidence. `clear_evidence` removes AND asserts absent.
+    let readback = cwd.join(RESTORE_READBACK_NAME);
+    clear_evidence(&readback, SMOKE);
+    let out_png = runtime_dir.join("wolf_gnome_restore_layout_smoke.png");
+    clear_evidence(&out_png, SMOKE);
+
+    // `cage_command` supplies WOLF_FONT_PT and WOLF_STATE_DIR. The state dir is what
+    // makes the two runs share a `state.json` at all — and what keeps them out of the
+    // developer's real one.
+    let status = cage_command(RESTORE_LAYOUT_SCENARIO, &cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("RESTORE_FILE_LEFT", RESTORE_FILE_LEFT)
+        .env("RESTORE_FILE_MID", RESTORE_FILE_MID)
+        .env("RESTORE_FILE_RIGHT", RESTORE_FILE_RIGHT)
+        .env("RESTORE_READBACK", &readback)
+        .env("RESTORE_SETTLE", RELAUNCH_RESTORE_SETTLE)
+        .status()
+        .expect("failed to spawn `cage` for the headless pane-layout relaunch scenario");
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage relaunch scenario exited unsuccessfully ({status}). Exit 11: run 1's \
+         app died before its window mapped. Exit 12: run 1 was still alive after `:qa` — the \
+         drained close_window never reached window.close(). Exit 13: run 1 exited NON-ZERO, i.e. \
+         it went away but not cleanly — after this unit that implicates a panic in \
+         `flush_on_close`, or a core.borrow() held across `wire_close`'s core.borrow_mut().take(). \
+         Exit 14: run 2's app died before its window mapped. Exit 15: the Neovim readback never \
+         appeared in run 2. Screenshot expected at {}; readback at {}.",
+        out_png.display(),
+        readback.display()
+    );
+
+    assert_png_present(SMOKE, &out_png);
+
+    // --- Assertion 1: the EXACT window list, from Neovim itself ---------------
+    let got = read_trimmed(&readback, SMOKE);
+    assert_eq!(
+        got,
+        RESTORE_READBACK_EXPECTED,
+        "{SMOKE}: after the relaunch, the restored Neovim's tabpagebuflist() names \
+         {got:?}, not {RESTORE_READBACK_EXPECTED:?}. `tabpagebuflist()` is in WINDOW-NUMBER order \
+         (a row left-to-right, a column top-to-bottom), so this one comparison covers the pane \
+         count, the buffer identities and their order. Read it this way: `Untitled.md` alone means \
+         NOTHING was restored (the saved layout was never queued, or `consume_pending_layout` \
+         never fired); the three right names in the WRONG ORDER means the DFS zip is inverted \
+         somewhere between `rebuild_layout_spec`, `wolf_rebuild_layout` and `pane_layout::decode`; \
+         and fewer than three names means the rebuild ran but produced the wrong topology. PNG \
+         kept at {}.",
+        out_png.display()
+    );
+
+    // --- Assertion 2: three panes really PAINTED ------------------------------
+    let ocr_text = ocr_to_lowercase(&out_png);
+    for (term, const_name, position) in [
+        (RESTORE_OCR_ALFA, "RESTORE_OCR_ALFA", "top-left"),
+        (RESTORE_OCR_BRAVO, "RESTORE_OCR_BRAVO", "bottom-left"),
+        (
+            RESTORE_OCR_CHARLIE,
+            "RESTORE_OCR_CHARLIE",
+            "full-height right",
+        ),
+    ] {
+        assert!(
+            ocr_text.contains(term),
+            "{SMOKE}: OCR did not contain {const_name} = {term:?} (the {position} pane's file). \
+             The readback assertion above passed, so NEOVIM has the three windows — this says the \
+             GTK side did not bind or paint all three. Check that `apply_layout_rebuild` zipped \
+             every returned handle onto a pane (`handles.len() != leaf_ids.len()` logs and \
+             returns, leaving the single pre-existing pane), and that `rebuild_pane_area` + \
+             `resolve_pending_grids` ran afterwards. PNG kept at {} for inspection. OCR output \
+             was:\n{ocr_text}",
+            out_png.display()
+        );
+    }
+}
+
+/// Proves the SINGLE-PANE case: one window, one tab, one pane, one file — the most
+/// common shape there is — survives a quit and relaunch.
+///
+/// This is the GTK-side regression guard for the macOS bug fixed by
+/// `fix/state-persistence-single-pane-bug`. A tab's open buffer paths have NO
+/// persistence channel of their own: they ride ONLY inside `TabState::layout`'s
+/// leaves. The macOS save side suppressed the layout by ARITY
+/// (`guard tree.leaves().count > 1 else { return nil }`), so this exact shape
+/// persisted its cwd and `sidebar_visible` and nothing else, and the file was not
+/// reopened. The fix — on both sides — is a CONTENT predicate: suppress ONLY an
+/// unnamed, non-preview lone leaf, and rebuild ANY saved layout with no arity guard
+/// at all.
+///
+/// ## What it asserts
+///
+/// 1. **The regression assertion, and it is on the FILE not on pixels.** The
+///    `state.json` RUN 1 wrote (frozen by the scenario into `$SOLO_STATE_COPY`
+///    before run 2 can write over it) carries
+///    `windows[0].tabs[0].layout == Some(Leaf { path, preview: false })` where
+///    `path` is non-empty and its file NAME is exactly `szulu.md`. The name rather
+///    than the whole path, deliberately: `/tmp` (or `TMPDIR`) may resolve through a
+///    symlink on this host, so nvim's reported `abs_path` need not be string-equal
+///    to any `PathBuf` this test could build — but an arity guard yields
+///    `layout: null`, which this catches perfectly, and an empty-path leaf cannot
+///    satisfy it either. No pixel can distinguish "the layout was saved and
+///    restored" from "the layout was never saved but the file came back another
+///    way", which is why this assertion exists at all.
+/// 2. **Load-bearing, and exact:** the restored Neovim's `bufname('%')` tail is
+///    exactly `szulu.md`.
+/// 3. **Corroboration:** OCR contains `solozulu` and does NOT contain `soloalfa`.
+/// 4. **State-dir isolation**, in four parts: this TEST process has no
+///    `WOLF_STATE_DIR` of its own (without which the whole check would be
+///    self-referential); the smoke's own state dir holds a non-empty `state.json`,
+///    proving the app honoured the variable; NEITHER `$HOME`-derived fallback
+///    directory ([`HOME_STATE_DIR_FALLBACKS`], under the temp `$HOME`
+///    [`cage_command`] gives the app) holds a `state.json`, which is the positive
+///    proof that `state_dir()` resolved the variable rather than `$HOME`; and the
+///    developer's REAL `state.json` is byte-identical across the run — including
+///    the normal case where it does not exist at all, which must still not exist
+///    afterwards. The last two are complementary, not redundant: a leak lands
+///    inside the temp tree when `$XDG_STATE_HOME` is unset and outside it when it
+///    is set, and one arm catches each.
+///
+/// ## How it discriminates RESTORATION from COINCIDENCE
+///
+/// A fresh launch in this cwd shows an untitled buffer (`Untitled.md`), which is
+/// the readback a broken build produces. The DECOY (`salfa.md`, alphabetically
+/// first, never opened) kills the other plausible hypothesis: if the app were
+/// reopening "the first file it found", the readback would be `salfa.md` and the
+/// OCR would carry `soloalfa` — both of which the assertions catch. And assertion 1
+/// cannot be satisfied by anything except the save path writing a single-leaf
+/// layout.
+///
+/// ## Red-run reverts (TWO, both one-liners, and BOTH must be run)
+///
+/// They isolate the two halves of the original bug and must produce
+/// DISTINGUISHABLE failures — which is exactly what makes assertion 1 worth having,
+/// and why the scenario freezes run 1's `state.json` before run 2 can overwrite it.
+///
+/// | half | revert | expected red symptom | measured |
+/// | --- | --- | --- | --- |
+/// | SAVE side | in `state_seam::persistable_layout`, replace `if pane_layout::is_empty_leaf(&node) { None } else { Some(node) }` with `if pane_layout::leaf_count(&node) < 2 { None } else { Some(node) }` | assertion 1 fails FIRST and names the arity guard (run 1's copy carries `layout: null`); assertions 2 and 3 also fail | **AS PREDICTED.** Assertion 1 panicked first, at the `layout: None` branch of the match, with the message that begins `run 1 persisted 'layout: None' for a single unsplit pane holding szulu.md`. The frozen copy carried the tab object with `cwd` and `sidebar_visible` and **no `layout` key at all** (serde skips `None`), which is precisely the on-disk shape of the original macOS bug. OCR of the retained run-2 PNG had zero hits for both `solozulu` and `soloalfa`, so assertions 2 and 3 would have failed as well. |
+/// | RESTORE side | in `app.rs::build_ui`, wrap the `request_layout_rebuild` call in `if pane_layout::leaf_count(&layout) > 1 { … }` | assertion 1 **passes** (the save side is correct and the frozen copy proves it) while assertions 2 and 3 fail | **AS PREDICTED, and DISTINGUISHABLY.** Assertion 1 PASSED — the frozen copy carried `"layout": { "type": "leaf", "path": "…/szulu.md", "preview": false }` — and the panic moved to assertion 2: `assertion 'left == right' failed … left: "Untitled.md" right: "szulu.md"`. Two different assertions, two different line numbers, and the assertion-2 message's own self-diagnosis ("assertion 1 above already proved it WAS saved correctly … this points squarely at the restore side") named the injected defect correctly. OCR again had zero hits for `solozulu`. |
+#[test]
+fn single_pane_file_survives_relaunch_under_cage() {
+    const SMOKE: &str = "single_pane_file_survives_relaunch_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    // --- Assertion 4, first part: this TEST process must be un-overridden -----
+    //
+    // Asserted BEFORE anything runs, because `wolf_core::state_dir()` below resolves
+    // `WOLF_STATE_DIR` ahead of everything else. Were it set here, the "developer's
+    // real state file" this test guards would be whatever that variable points at —
+    // very possibly the smoke's own temp dir — and the whole isolation check would
+    // become self-referential and prove nothing.
+    assert!(
+        std::env::var_os("WOLF_STATE_DIR").is_none(),
+        "{SMOKE}: WOLF_STATE_DIR is set in the TEST process. `wolf_core::state_dir()` resolves \
+         that variable FIRST, so the \"developer's real state file\" this smoke proves is \
+         untouched would be resolved against the override instead of against \
+         $XDG_STATE_HOME/wolf — the isolation assertion would then compare the smoke's own \
+         directory with itself and pass no matter what the app did. `cage_command` sets \
+         WOLF_STATE_DIR on the CHILD only, which is the whole design; nothing may set it on the \
+         test process."
+    );
+
+    let real_state_dir = state_dir().unwrap_or_else(|| {
+        panic!(
+            "{SMOKE}: wolf_core::state_dir() resolved to None in the test process, so this smoke \
+             cannot say WHICH file it is proving untouched and its isolation assertion would hold \
+             vacuously. On Linux it is $XDG_STATE_HOME/wolf (falling back to the data dir), so a \
+             None here means neither is resolvable — check $HOME."
+        )
+    });
+    let real_state_file = real_state_dir.join(STATE_FILE_NAME);
+    let real_before = state_file_fingerprint(&real_state_file);
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd shared by BOTH launches, holding the file to open and the
+    // never-opened decoy.
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(
+        SMOKE,
+        &cwd,
+        &[
+            (SOLO_FILE, SOLO_HEADING),
+            (SOLO_DECOY_FILE, SOLO_DECOY_HEADING),
+        ],
+    );
+
+    // The smoke's own state dir — the SAME sibling `cage_command` computes and hands
+    // the app as WOLF_STATE_DIR, so the two runs share one `state.json`.
+    let smoke_state = smoke_state_dir(&cwd);
+    let smoke_state_file = smoke_state.join(STATE_FILE_NAME);
+
+    // Where the scenario freezes RUN 1's save before run 2 can write over it. It is
+    // a DIRECTORY holding a `state.json`, because `wolf_core::load_state` takes the
+    // directory rather than the file. It lives under XDG_RUNTIME_DIR rather than in
+    // the temp cwd so the app's own FileSearch never lists it in the sidebar.
+    let run1_state_dir = runtime_dir.join("wolf_gnome_solo_run1_state");
+    std::fs::create_dir_all(&run1_state_dir).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: failed to create the run-1 state snapshot dir {}: {e}",
+            run1_state_dir.display()
+        )
+    });
+    let run1_state_file = run1_state_dir.join(STATE_FILE_NAME);
+
+    let readback = cwd.join(SOLO_READBACK_NAME);
+    let out_png = runtime_dir.join("wolf_gnome_restore_solo_smoke.png");
+    for path in [&readback, &out_png, &run1_state_file] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let status = cage_command(RESTORE_SOLO_SCENARIO, &cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("SOLO_FILE", SOLO_FILE)
+        .env("SOLO_READBACK", &readback)
+        .env("SOLO_STATE_SRC", &smoke_state_file)
+        .env("SOLO_STATE_COPY", &run1_state_file)
+        .env("RESTORE_SETTLE", RELAUNCH_RESTORE_SETTLE)
+        .status()
+        .expect("failed to spawn `cage` for the headless single-pane relaunch scenario");
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage single-pane relaunch scenario exited unsuccessfully ({status}). Exit \
+         11: run 1's app died before its window mapped. Exit 12: run 1 was still alive after \
+         `:qa`. Exit 13: run 1 exited NON-ZERO — it went away but not cleanly, which after this \
+         unit implicates a panic in `flush_on_close` or a core.borrow() held across `wire_close`'s \
+         core.borrow_mut().take(). Exit 14: run 2's app died before its window mapped. Exit 15: \
+         the Neovim readback never appeared in run 2. Exit 16: run 1 wrote NO state.json at all at \
+         {} — not the arity guard (which still writes the file, with a null layout) but something \
+         upstream of it. Screenshot expected at {}.",
+        smoke_state_file.display(),
+        out_png.display()
+    );
+
+    assert_png_present(SMOKE, &out_png);
+
+    // --- Assertion 1: RUN 1's saved layout is a single NAMED leaf --------------
+    let saved = load_state(&run1_state_dir).unwrap_or_else(|| {
+        panic!(
+            "{SMOKE}: wolf_core::load_state could not parse the frozen copy of run 1's state at \
+             {}. `load_state` is silently-ignore, so a None here means the file is absent, \
+             unreadable, malformed, or carries an unsupported version — the scenario already \
+             proved it was non-empty (it exits 16 otherwise), so suspect the shape.",
+            run1_state_file.display()
+        )
+    });
+    let window = saved.windows.first().unwrap_or_else(|| {
+        panic!(
+            "{SMOKE}: run 1's state.json carries NO windows at all, so nothing was persisted. \
+             `snapshot_state` writes exactly one window and one tab, so an empty `windows` means \
+             `may_snapshot` refused every snapshot (nvim not Alive, no bound pane, or no reported \
+             window) or `set_snapshot` was never called. File: {}",
+            run1_state_file.display()
+        )
+    });
+    let tab = window.tabs.first().unwrap_or_else(|| {
+        panic!(
+            "{SMOKE}: run 1's persisted window carries NO tabs. `snapshot_state` writes exactly \
+             one. File: {}",
+            run1_state_file.display()
+        )
+    });
+    match &tab.layout {
+        Some(PaneNode::Leaf { path, preview }) => {
+            assert!(
+                !path.is_empty(),
+                "{SMOKE}: run 1 persisted a lone leaf with an EMPTY path. The pane was showing \
+                 {SOLO_FILE}, so this means `layout_snapshot` could not resolve the pane's buffer \
+                 path: either the pane had no resolved grid, or `pane_status(grid).abs_path` came \
+                 back empty because nvim had not reported its per-window buffer map yet. That is \
+                 precisely what `may_snapshot`'s `reported_windows >= 1` gate exists to prevent. \
+                 File: {}",
+                run1_state_file.display()
+            );
+            assert!(
+                !*preview,
+                "{SMOKE}: run 1 persisted the lone leaf with `preview: true`. wolf-gnome has no \
+                 Markdown preview, so `pane_layout::encode` must set the flag to false \
+                 unconditionally; a true here would make the restore call `wolf_preview_file` \
+                 instead of `:edit`. File: {}",
+                run1_state_file.display()
+            );
+            let file_name = Path::new(path).file_name().and_then(OsStr::to_str);
+            assert_eq!(
+                file_name,
+                Some(SOLO_FILE),
+                "{SMOKE}: run 1 persisted a lone leaf naming {path:?}, whose file name is not \
+                 {SOLO_FILE:?}. The comparison is on the file NAME rather than the whole path \
+                 deliberately — /tmp may resolve through a symlink, so nvim's reported abs_path \
+                 need not be string-equal to anything this test could construct — but the name \
+                 itself is exact. `Untitled.md` here means the `:e` never landed before the quit. \
+                 File: {}",
+                run1_state_file.display()
+            );
+        }
+        other => panic!(
+            "{SMOKE}: run 1 persisted `layout: {other:?}` for a single unsplit pane holding \
+             {SOLO_FILE}, not a single named leaf. **`None` IS THE SINGLE-PANE REGRESSION**: it \
+             means the save side gated on ARITY (`leaf_count(..) > 1`) instead of on the CONTENT \
+             predicate `pane_layout::is_empty_leaf`. A tab's open buffer paths have no persistence \
+             channel of their own — they ride only inside `TabState::layout`'s leaves — so an \
+             arity guard makes the single most common shape (one window, one tab, one pane, one \
+             file) persist its cwd and nothing else, and the file is not reopened on relaunch. \
+             That is the exact macOS bug this smoke exists to keep out of the GTK front-end; see \
+             `state_seam::persistable_layout`. A SPLIT here would instead mean the run-1 scenario \
+             somehow split the pane. File: {}",
+            run1_state_file.display()
+        ),
+    }
+
+    // --- Assertion 2: the restored Neovim's current buffer, exactly ------------
+    let got = read_trimmed(&readback, SMOKE);
+    assert_eq!(
+        got,
+        SOLO_READBACK_EXPECTED,
+        "{SMOKE}: after the relaunch the restored Neovim's current buffer is {got:?}, not \
+         {SOLO_READBACK_EXPECTED:?}. `Untitled.md` means the saved layout was never rebuilt — \
+         assertion 1 above already proved it WAS saved correctly, so with that green this points \
+         squarely at the restore side: an arity guard around `request_layout_rebuild`, a \
+         `consume_pending_layout` that never fires, or a `pane_layout::decode` that rejected a \
+         lone leaf. {SOLO_DECOY_FILE:?} would instead mean the app reopened the first file it \
+         found rather than the saved one. PNG kept at {}.",
+        out_png.display()
+    );
+
+    // --- Assertion 3: it actually PAINTED, and the decoy did not --------------
+    let ocr_text = ocr_to_lowercase(&out_png);
+    assert!(
+        ocr_text.contains(SOLO_OCR_PRESENT),
+        "{SMOKE}: OCR did not contain {SOLO_OCR_PRESENT:?} (the restored file's heading). The \
+         readback above named {SOLO_FILE}, so NEOVIM has the right buffer — this says the GTK pane \
+         did not paint it. PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+    assert!(
+        !ocr_text.contains(SOLO_OCR_ABSENT),
+        "{SMOKE}: OCR unexpectedly contained {SOLO_OCR_ABSENT:?} — the heading of the DECOY \
+         {SOLO_DECOY_FILE}, which no scenario step ever opens. A hit means the app reopened a file \
+         it chose itself (the alphabetically first one in the cwd) rather than the one the saved \
+         layout names, which would make every other assertion here a coincidence. Note the decoy's \
+         FILENAME does not contain the term, so a sidebar row cannot cause this. PNG kept at {}. \
+         OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+
+    // --- Assertion 4: state-dir isolation --------------------------------------
+    //
+    // THREE checks, and each one covers a leak the others cannot see.
+    //
+    // 1. The POSITIVE check immediately below — run 1's `state.json` exists and is
+    //    non-empty at the smoke's own `WOLF_STATE_DIR` — is what pins the variable
+    //    directly: drop it and the file is not there (the scenario exits 16 first).
+    // 2. The `$HOME`-FALLBACK check is new, and it exists because `cage_command` now
+    //    redirects the app's `$HOME` into the temp tree. That redirect closed a hole
+    //    and opened a smaller one: with `$XDG_STATE_HOME` unset (this devShell), an
+    //    app that ignored `WOLF_STATE_DIR` would resolve `state_dir()` to
+    //    `$HOME/.local/state/wolf` — i.e. INSIDE the temp tree, where check 3 cannot
+    //    see it. So we assert those exact paths carry no `state.json`. It is a
+    //    positive proof that the variable was honoured, not merely that the real
+    //    directory happened not to change, and the path is derived from the same
+    //    `smoke_home` helper `cage_command` feeds to the child so the check and the
+    //    environment cannot drift apart. On a developer machine WITHOUT that redirect
+    //    this is exactly the leak that would land in their real
+    //    `~/.local/state/wolf/state.json`.
+    // 3. The real-state-file comparison stays exactly as it was. It is the arm that
+    //    bites on a host which DOES export `$XDG_STATE_HOME` / `$XDG_DATA_HOME` — a
+    //    leak there lands outside the temp tree, invisible to check 2 — so 2 and 3
+    //    are complementary and between them cover both environments.
+    let smoke_meta = std::fs::metadata(&smoke_state_file).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: expected the smoke's own state file {} to exist after the run, but: {e}. Its \
+             absence means the app did not honour WOLF_STATE_DIR — which also means it wrote \
+             somewhere else, most likely the developer's real ~/.local/state/wolf/.",
+            smoke_state_file.display()
+        )
+    });
+    assert!(
+        smoke_meta.len() > 0,
+        "{SMOKE}: the smoke's own state file {} exists but is empty",
+        smoke_state_file.display()
+    );
+
+    // Check 2: nothing was written to the app's `$HOME`-derived state directories.
+    // `smoke_home(&cwd)` is the SAME value `cage_command` hands the child as HOME, so
+    // this cannot be looking at a directory the app never had.
+    let app_home = smoke_home(&cwd);
+    assert!(
+        app_home.is_dir(),
+        "{SMOKE}: the app's HOME {} is not a directory, so the fallback checks below would pass \
+         vacuously — a non-existent path never holds a state.json. `make_temp_cwd` creates \
+         `<unique>/project` and `cage_command` hands `<unique>` to the app as HOME, so this must \
+         exist.",
+        app_home.display()
+    );
+    for rel in HOME_STATE_DIR_FALLBACKS {
+        let leaked = app_home.join(rel).join(STATE_FILE_NAME);
+        assert!(
+            !leaked.exists(),
+            "{SMOKE}: found a state file at {} — inside the app's own $HOME. That path is what \
+             `wolf_core::state::state_dir()` resolves to when WOLF_STATE_DIR is ABSENT (the \
+             `dirs::state_dir()` / `dirs::data_dir()` chain, XDG default `$HOME/{rel}`), so its \
+             existence means the app resolved its state directory from $HOME instead of from \
+             WOLF_STATE_DIR. Every smoke is then writing application state somewhere this harness \
+             does not control: the relaunch smokes stop sharing one state.json between their two \
+             launches, and — because the $HOME redirect is a TEST fixture that does not exist on a \
+             developer's machine — the same defect there writes to their real \
+             ~/.local/state/wolf/state.json, reading their saved session at launch and clobbering \
+             it at quit. `cage_command` is the single place WOLF_STATE_DIR is set and \
+             `cage_is_only_spawned_through_the_isolating_helper` is what keeps it single; start \
+             there, then check that `state_dir()` still resolves the variable FIRST.",
+            leaked.display()
+        );
+    }
+
+    let real_after = state_file_fingerprint(&real_state_file);
+    assert_eq!(
+        real_before,
+        real_after,
+        "{SMOKE}: the developer's REAL state file {} changed across this smoke run (before: \
+         {real_before:?}, after: {real_after:?}; `None` means the file did not exist, which is \
+         the normal state on a machine that has never run Wolf interactively and must stay that \
+         way). This is a STATE-DIR ISOLATION FAILURE: the app under cage resolved \
+         `wolf_core::state_dir()` to the real directory instead of the smoke's own, which means it \
+         READ the developer's saved window size, working directory and pane layout at launch (so \
+         this smoke did not start from a clean slate) and OVERWROTE them at quit with a throwaway \
+         one-pane temp-cwd layout. `cage_command` is the single place WOLF_STATE_DIR is set, and \
+         `cage_is_only_spawned_through_the_isolating_helper` is what keeps it single — start \
+         there. The ONE benign cause: a real Wolf running concurrently in another terminal, which \
+         writes that file on its own render wakes; close it and re-run before concluding anything \
+         else.",
+        real_state_file.display()
+    );
+}
+
+/// Proves the window TITLE renders the working directory, home-abbreviated.
+///
+/// A single-launch smoke. The title is drawn by the `adw::HeaderBar`'s title label
+/// in the theme font — dark-on-light, like the empty-state status page whose
+/// `folder` term already OCRs reliably at [`SMOKE_FONT_PT`].
+///
+/// ## Setup
+///
+/// Two NESTED temp directories, so the `~` abbreviation is exercised rather than
+/// merely "a title was set": the cage command runs with its working directory set
+/// to `<base>/titlehome-parent/titlezulu` and `HOME` set to
+/// `<base>/titlehome-parent`, where `<base>` is whatever [`make_temp_cwd`] returned
+/// (today `<unique>/project`, used only as a base — this smoke never launches
+/// there). `title::display_title` must then render `~/titlezulu`.
+///
+/// The `HOME` here is an explicit override of [`cage_command`]'s default. The two
+/// happen to agree — the default is the cwd's parent, which IS
+/// `<base>/titlehome-parent` — and it is stated anyway, because the assertions below
+/// are written against this specific value.
+/// The nine [`SIDEBAR_FILLER_FILES`] go into the project so the sidebar carries
+/// page density — the title alone is thin, and `tesseract` classifies a word by the
+/// whole page (see [`SIDEBAR_FILLER_COUNT`]). They are FIXTURE, not assertion.
+///
+/// ## Assertions
+///
+/// 1. OCR **contains** `titlezulu` — the cwd basename. It can only come from the
+///    header-bar title: the sidebar lists file names, `:e` toasts name files, and no
+///    fixture is named that (enforced by [`ASSERTED_OCR_TERMS`] plus the three
+///    fixture guards).
+/// 2. OCR does **not** contain `titlehome` — the home prefix was abbreviated to `~`
+///    rather than rendered. This is what makes the smoke test `display_title`'s
+///    ABBREVIATION and not merely "some title was set".
+///
+/// ## How it discriminates
+///
+/// Without the feature the title is the hardcoded `"Wolf"` from `app.rs`'s window
+/// builder, so `titlezulu` is simply absent. Without the abbreviation the title
+/// would be the full `/tmp/…/titlehome-parent/titlezulu` and assertion 2 fires.
+/// Note the two are independent: a title that renders the full path passes 1 and
+/// fails 2, and a title that never updates fails 1 and passes 2.
+///
+/// ## Pre-authorized contingency (no assertion may be weakened)
+///
+/// If the theme-font title ever proves too small for `tesseract` at cage's
+/// 1280x720, set `XDG_CONFIG_HOME` on the cage command to a smoke-owned directory
+/// containing `gtk-4.0/settings.ini` with a large `gtk-font-name`. **Do not lower
+/// the assertion, do not switch to a substring, and do not drop assertion 2.** (A
+/// manual repro at 28 pt OCRs both terms correctly, so this is expected to stay
+/// unused.)
+///
+/// ## Red-run revert (one line)
+///
+/// | assertion | revert | expected red symptom | measured |
+/// | --- | --- | --- | --- |
+/// | 1 (`titlezulu` present) | in `shell.rs::refresh_title`, delete the `self.inner.window.set_title(Some(&title));` line | OCR misses `titlezulu`; the header bar still reads `wolf` | **AS PREDICTED.** Assertion 1 panicked, and the OCR dump embedded in its own failure message read, in order: `®`, `wolf`, `-`, then the nine `fill*.md` filler names — the hardcoded `"Wolf"` from `app.rs`'s window builder and no `titlezulu` anywhere. Note the failure message's cause (a) is the one that actually applied. The `XDG_CONFIG_HOME` font contingency was NOT needed: the green run OCRs `titlezulu` (and correctly misses `titlehome`) at `SMOKE_FONT_PT`. |
+#[test]
+fn window_title_shows_the_working_directory_under_cage() {
+    const SMOKE: &str = "window_title_shows_the_working_directory_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp base, then the two NESTED directories the abbreviation needs.
+    // `smoke_state_dir` will make `<home>/titlezulu-state` a SIBLING of the project,
+    // so the app's own FileSearch (rooted at the project) never lists it.
+    //
+    // `make_temp_cwd` returns `<unique>/project`, and this smoke uses that only as a
+    // BASE — it never launches there — so the extra fixed component is inert here:
+    // the app's cwd is `<base>/titlehome-parent/titlezulu` and its HOME is
+    // `<base>/titlehome-parent`, exactly as before.
+    let base = make_temp_cwd();
+    let home = base.join(TITLE_HOME_DIR);
+    let project = home.join(TITLE_PROJECT_DIR);
+    std::fs::create_dir_all(&project).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: failed to create the nested project dir {}: {e}",
+            project.display()
+        )
+    });
+
+    // Page density for tesseract. Fixture only — nothing here asserts on them.
+    for name in SIDEBAR_FILLER_FILES {
+        let filler = project.join(name);
+        std::fs::write(&filler, SIDEBAR_FILLER_BODY).unwrap_or_else(|e| {
+            panic!("{SMOKE}: failed to write filler {}: {e}", filler.display())
+        });
+    }
+
+    let out_png = runtime_dir.join("wolf_gnome_title_smoke.png");
+    clear_evidence(&out_png, SMOKE);
+
+    // HOME is the PARENT of the working directory, which is what makes
+    // `display_title` abbreviate. It also keeps every remaining $HOME-derived path
+    // inside the temp tree; the state dir is not one of them, since `cage_command`
+    // pins it with WOLF_STATE_DIR (resolved ahead of anything $HOME-derived).
+    //
+    // This `.env("HOME", ...)` DELIBERATELY OVERRIDES `cage_command`'s default, and
+    // is kept explicit even though the two now agree: the helper's default is
+    // `smoke_home(cwd)` == the cwd's parent, and this smoke's cwd IS `home/titlezulu`,
+    // so both resolve to `home`. The assertions below are written against THIS value
+    // (`~/titlezulu`, with `titlehome-parent` abbreviated away), so it is stated here
+    // rather than inherited — a later change to the helper's rule must not silently
+    // retarget this smoke's subject. Chained after the helper, so it wins regardless.
+    let status = cage_command(TITLE_SCENARIO, &project)
+        .env("HOME", &home)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .status()
+        .expect("failed to spawn `cage` for the headless window-title smoke scenario");
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage window-title scenario exited unsuccessfully ({status}); the app may \
+         have failed to launch (exit 11 means it died before its window mapped) or grim failed. \
+         Screenshot expected at {}.",
+        out_png.display()
+    );
+
+    assert_png_present(SMOKE, &out_png);
+
+    let ocr_text = ocr_to_lowercase(&out_png);
+    assert!(
+        ocr_text.contains(TITLE_OCR_PRESENT),
+        "{SMOKE}: OCR did not contain {TITLE_OCR_PRESENT:?} — the basename of the app's working \
+         directory, which the header-bar title must render. The likely causes, in order: (a) \
+         `AppShell::refresh_title` never called `window.set_title` (the documented red-run \
+         revert), so the title is still the hardcoded \"Wolf\" from `app.rs`'s window builder; (b) \
+         `refresh_title` ran but `live_cwd()` was still None, so `title::window_title` returned \
+         the {WINDOW_TITLE_FALLBACK:?} fallback — that would be a settle/ordering problem rather \
+         than a title one; (c) the title IS set but the header bar did not render it legibly, in \
+         which case see this test's pre-authorized XDG_CONFIG_HOME font contingency and do NOT \
+         weaken the assertion. PNG kept at {} — open it to tell those apart. OCR output \
+         was:\n{ocr_text}",
+        out_png.display()
+    );
+    assert!(
+        !ocr_text.contains(TITLE_OCR_ABSENT),
+        "{SMOKE}: OCR unexpectedly contained {TITLE_OCR_ABSENT:?} — the HOME segment of the app's \
+         working directory. HOME is set to the project's parent for this run, so a correct title \
+         reads `~/{TITLE_PROJECT_DIR}` and that segment is never drawn. A hit means \
+         `title::display_title` did not abbreviate: check the segment-boundary rule (the match is \
+         on `home + \"/\"`, not on `home`), and check that `shell.rs` is injecting the captured \
+         `workspace::home_dir()` rather than an empty string — an empty `home` disables \
+         abbreviation entirely and is the most likely cause. PNG kept at {}. OCR output \
+         was:\n{ocr_text}",
         out_png.display()
     );
 }

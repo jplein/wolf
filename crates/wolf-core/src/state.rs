@@ -33,6 +33,14 @@
 //!
 //! Concurrent Wolf PROCESSES are out of scope: the last writer wins (each
 //! write is still atomic, so the file is never torn).
+//!
+//! ## Rendering a saved layout back to Neovim
+//!
+//! [`rebuild_layout_spec`] renders a [`PaneNode`] into the JSON string
+//! `runtime/nvim/init.lua`'s `_G.wolf_rebuild_layout` decodes. That wire shape is
+//! NOT [`PaneNode`]'s own serde shape, so the renderer lives here — next to the
+//! type it renders and inside the crate that already depends on `serde_json` —
+//! rather than being re-derived once per front-end.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -274,6 +282,70 @@ pub fn load_state(dir: &Path) -> Option<WolfState> {
     Some(WolfState {
         windows: file.windows,
     })
+}
+
+/// Renders `node` into the JSON string `runtime/nvim/init.lua`'s
+/// `_G.wolf_rebuild_layout` decodes — the Rust twin of the macOS
+/// `PaneLayoutCodec.specJSON`.
+///
+/// **This is NOT [`PaneNode`]'s serde shape.** The Lua helper reads a different,
+/// terser document:
+///
+/// - a leaf is `{ "leaf": true, "path": "<abs or empty>", "preview": true|false }`
+/// - a split is `{ "orientation": "v"|"h", "weights": [...], "children": [...] }`,
+///   where `"v"` is [`PaneOrientation::Vertical`] (side by side) and `"h"` is
+///   [`PaneOrientation::Horizontal`] (stacked).
+///
+/// Children — and therefore LEAVES — are emitted in DFS order, which is exactly
+/// the order [`crate::WolfCore::rebuild_layout`] returns nvim window handles in,
+/// so a front-end can zip the returned handles onto its own DFS leaf order.
+///
+/// TOTAL: it cannot fail and it never panics. A NON-FINITE weight (NaN, ±inf) is
+/// emitted as `0.0`, because `serde_json` has no representation for one; the
+/// substitution is purely cosmetic, since `wolf_rebuild_layout` produces the
+/// window COUNT and TOPOLOGY only and never reads `weights` (pane sizes come from
+/// the front-end). Serializing an already-built `Value` cannot fail either, but
+/// the `Err` arm degrades to `"{}"` rather than panicking — that is precisely
+/// what the Lua side's `pcall(vim.json.decode, …)` failure path produces, i.e. a
+/// no-op rebuild returning no handles.
+#[must_use]
+pub fn rebuild_layout_spec(node: &PaneNode) -> String {
+    serde_json::to_string(&spec_value(node)).unwrap_or_else(|_| "{}".to_string())
+}
+
+/// Recursively builds the `serde_json` document [`rebuild_layout_spec`] renders.
+///
+/// Weights are sanitized to `0.0` when non-finite BEFORE conversion:
+/// `serde_json::Number::from_f64` rejects NaN/±inf, and an unsanitized value
+/// would silently become `null` and change the document's shape.
+fn spec_value(node: &PaneNode) -> serde_json::Value {
+    match node {
+        PaneNode::Leaf { path, preview } => serde_json::json!({
+            "leaf": true,
+            "path": path,
+            "preview": preview,
+        }),
+        PaneNode::Split {
+            orientation,
+            weights,
+            children,
+        } => {
+            let tag = match orientation {
+                PaneOrientation::Vertical => "v",
+                PaneOrientation::Horizontal => "h",
+            };
+            let weights: Vec<serde_json::Value> = weights
+                .iter()
+                .map(|w| serde_json::Value::from(if w.is_finite() { *w } else { 0.0 }))
+                .collect();
+            let children: Vec<serde_json::Value> = children.iter().map(spec_value).collect();
+            serde_json::json!({
+                "orientation": tag,
+                "weights": weights,
+                "children": children,
+            })
+        }
+    }
 }
 
 /// The mutable heart of a [`StateStore`]: the in-memory truth plus the
