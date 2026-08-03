@@ -38,6 +38,8 @@ nix develop --command cargo run -p wolf-gnome # the GTK application
 
 Most tests spawn the pinned Neovim as a real child process rather than a mock, and they stay headless: `nvim --embed` speaks msgpack-RPC over stdio and needs no TTY, so the suite is safe to run unattended. Cargo discovers every `tests/*.rs`, so nothing needs wiring on this path.
 
+`cargo test` also runs the rustdoc doctests in `src/**`, which `rust_test` does not. A doctest is therefore Linux-only coverage, the exact mirror of the Bazel wiring gap under [Running the tests](#running-the-tests): a fenced or indented block in a `//!` or `///` comment compiles as Rust unless it is tagged `text` or `ignore`, and a prose list that only looks like code fails there and nowhere else.
+
 What each target covers lives with the tests: [`wolf-core/tests`](crates/wolf-core/tests/README.md), [`wolf-ffi/tests`](crates/wolf-ffi/tests/README.md), [`wolf-gnome/tests`](crates/wolf-gnome/tests/README.md). The GTK end-to-end smokes are `#[ignore]`d, because they launch the real window under a headless Wayland compositor; the wolf-gnome tests README has the invocation.
 
 ## macOS (Bazel)
@@ -155,6 +157,8 @@ The `.app` is self-contained, so a double-clicked bundle runs with no shell envi
 
 ## Running the tests
 
+This section is the macOS Bazel path. On Linux the whole suite is `cargo test`, under [Building and testing](#building-and-testing) above.
+
 Let Bazel expand the pattern rather than naming targets one by one:
 
 ```sh
@@ -246,6 +250,15 @@ bazel run  //tools/lint:fix     # every fixer, in place
 ```
 
 Every one of them is tagged `manual`, which is why `bazel test //...` leaves them alone and why the standard test path is unaffected by them. They are advisory rather than gating, and existing violations across the tree are expected: a check target passing means the linter ran, not that the tree is clean. The per-tool table, the toolchain each one resolves, and the caveats are in [`tools/lint/README.md`](tools/lint/README.md).
+
+Linux has no Bazel, so the Rust half runs through the devShell's own clippy and rustfmt instead:
+
+```sh
+cargo clippy --workspace   # --fix to apply the suggestions
+cargo fmt --check          # drop --check to rewrite in place
+```
+
+These cover `wolf-gnome` too, which the Bazel targets deliberately skip. swift-format has no Cargo equivalent and needs a macOS host.
 
 The markdown checker also runs standalone, which is how to check a document on a host without Bazel:
 
