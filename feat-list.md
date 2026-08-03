@@ -80,13 +80,13 @@ GTK paints a single-row bottom strip: an active command line, or the last toast 
 | Sidebar in the leading position             | `feat/sidebar-ui` (`ebc7300`)                                                | [x]   | [x]   |
 | Pickers hosted in a separate floating panel | `feat/markdown-preview` (`d763b3b`)                                          | [x]   | [ ]   |
 | Buffer picker (⌘E)                          | `feat/buffer-list`                                                           | [x]   | [ ]   |
-| Command palette (⌘P)                        | `feat/commands` (`4b3b53e`)                                                  | [x]   | [ ]   |
+| Command palette (⌘P)                        | `feat/commands` (`4b3b53e`)                                                  | [x]   | [x]   |
 | Open Recent (global recent-directories MRU) | `feat/commands`                                                              | [x]   | [ ]   |
 | Per-pane back/forward navigation history    | `feat/nav-buttons` (`597175b`)                                               | [x]   | [ ]   |
 | Project search UI (ripgrep-backed)          | `feat/search-ui`                                                             | [x]   | [ ]   |
 | Native file dialogs (open / save / save-as) | —                                                                            | [x]   | [ ]   |
 
-The `wolf-core` halves of the buffer picker, the palette, the recent-directories MRU, the navigation history and project search are platform-agnostic and already linked into `wolf-gnome`; only the GTK views and their wiring are missing. Those are the highest-leverage Linux tasks.
+The `wolf-core` halves of the buffer picker, the recent-directories MRU, the navigation history and project search are platform-agnostic and already linked into `wolf-gnome`; only the GTK views and their wiring are missing. Those are the highest-leverage Linux tasks. The GTK command palette lists only the registry commands `wolf-gnome` performs: Switch-to-Window rows need multiple windows, and Open Recent rows need the recent-directories row above.
 
 Two rows stay unticked for partial coverage. The file-dialog row covers all three dialogs, and `wolf-gnome` has native Open File and Open Folder but no save or save-as, so saving remains `:w` from within Neovim. The sidebar re-roots after an Open Folder but not after a user-typed `:cd`.
 
@@ -109,7 +109,9 @@ Two rows stay unticked for partial coverage. The file-dialog row covers all thre
 | `:q` / `:qa` mapped to close pane / window   | `feat/colon-q-remapping`                | [x]   | [x]   |
 | ⌘N opens a new untitled Markdown buffer      | `feat/colon-q-remapping` (`0266b96`)    | [x]   | [x]   |
 
-`wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Of the 26 commands, 8 dispatch, 1 has no GNOME equivalent (`HideApplication`, since the shell owns window visibility), and 17 are deferred with a distinct printed reason. The GNOME counterpart to the macOS menu bar is a header-bar primary menu driven by the same `gio` action namespace as the accelerators, so menu, chords and drained commands cannot drift apart. The accelerator scheme is documented in [`crates/wolf-gnome/README.md`](crates/wolf-gnome/README.md).
+`wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Of the 26 commands, 9 dispatch, 1 has no GNOME equivalent (`HideApplication`, since the shell owns window visibility), and 16 are deferred with a distinct printed reason.
+
+The GNOME counterpart to the macOS menu bar is a header-bar primary menu driven by the same `gio` action namespace as the accelerators, so menu, chords and drained commands cannot drift apart. The accelerator scheme is documented in [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md), "The accelerator namespace".
 
 The `state` module is read and written. `wolf-gnome` snapshots on every wake without a timer or debounce, which is affordable because `StateStore::set_snapshot` ignores an unchanged tree and the writer thread coalesces; it restores the working directory, window size and pane layout at launch.
 
@@ -189,7 +191,7 @@ Two limits are worth stating. The pane topology does not survive a restart — o
 
 Work already carried is recorded in the tables above. What remains, in order:
 
-1. **The three overlay pickers** (command palette, buffer picker, project search). Ranking is already shared, each command already lands in the drain as `Deferred`, and each chord is already reserved; each needs a GTK view of the shape the file picker already has. The buffer picker also carries the first `block_on_rpc` call on the GTK side, which is what will finally make `NotResponding` reachable — and testable — on Linux.
+1. **The two remaining overlay pickers** (buffer picker, project search). Ranking is already shared, each command already lands in the drain as `Deferred`, and each chord is already reserved; each needs a GTK view of the shape the file picker and the command palette already have. The buffer picker also carries the first `block_on_rpc` call on the GTK side, which is what will finally make `NotResponding` reachable — and testable — on Linux.
 2. **Config-driven typography**, then the completion popup and multi-line toast.
 3. **Markdown preview**, which is the largest single item: it introduces a second kind of pane content on the GTK side.
 4. **Multi-window and tabs**, which reshape `wolf-gnome` from a single-window application into a coordinator-plus-views one.

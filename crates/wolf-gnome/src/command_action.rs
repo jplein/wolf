@@ -24,14 +24,14 @@
 //!
 //! ## The three classes
 //!
-//! - **Dispatched** — the eight commands `wolf-gnome` performs today.
+//! - **Dispatched** — the nine commands `wolf-gnome` performs today.
 //! - [`UiAction::Deferred`] — implemented on macOS and planned on GTK; the string
 //!   names the concrete blocker so the deferral is auditable rather than a shrug.
 //! - [`UiAction::NoGnomeEquivalent`] — has no GNOME counterpart and will never be
 //!   implemented; the string says why.
 //!
-//! Every `Deferred` / `NoGnomeEquivalent` reason is DISTINCT, so no two rows of
-//! the README's command table can silently collapse into one.
+//! Every `Deferred` / `NoGnomeEquivalent` reason is DISTINCT, so no two commands
+//! can collapse into one indistinguishable diagnostic.
 
 use wolf_core::Command;
 
@@ -58,6 +58,8 @@ pub enum UiAction {
     MinimizeWindow,
     /// Quit the application by closing every window cleanly.
     QuitApplication,
+    /// Open the in-window command-palette overlay.
+    OpenCommandPalette,
     /// Implemented on macOS, planned on GTK; the string names the blocker.
     Deferred(&'static str),
     /// Has no GNOME equivalent and will never be implemented.
@@ -97,10 +99,7 @@ pub fn ui_action_for(command: Command) -> UiAction {
         Command::DecreaseFontSize => UiAction::Deferred(
             "decreasing the font size requires re-measuring CellMetrics and re-gridding every pane",
         ),
-        Command::CommandPalette => UiAction::Deferred(
-            "the GTK command-palette overlay is not built (wolf_core::rank_palette is already \
-             linked)",
-        ),
+        Command::CommandPalette => UiAction::OpenCommandPalette,
         Command::Copy => UiAction::Deferred(
             "the GTK clipboard bridge (gdk::Clipboard + copy_visual_selection) is not built",
         ),
@@ -151,13 +150,13 @@ mod tests {
 
     use wolf_core::COMMAND_SPECS;
 
-    /// The commands `wolf-gnome` DISPATCHES in this unit, by canonical
-    /// `CommandSpec::id`, sorted. Ids (not variants) so the failure message names
-    /// the registry row a reader can grep for. See plan section 3.2's
-    /// "Dispatched now (8)" line.
-    const EXPECTED_DISPATCHED_IDS: [&str; 8] = [
+    /// The commands `wolf-gnome` DISPATCHES, by canonical `CommandSpec::id`,
+    /// sorted. Ids (not variants) so the failure message names the registry row a
+    /// reader can grep for.
+    const EXPECTED_DISPATCHED_IDS: [&str; 9] = [
         "close_pane",
         "close_window",
+        "command_palette",
         "go_to_file",
         "minimize_window",
         "new_buffer",
@@ -263,9 +262,9 @@ mod tests {
             want: Want::Deferred,
         },
         Case {
-            desc: "13 CommandPalette: no GTK palette overlay yet",
+            desc: "13 CommandPalette: opens the in-window command-palette overlay",
             command: Command::CommandPalette,
-            want: Want::Deferred,
+            want: Want::Exact(UiAction::OpenCommandPalette),
         },
         Case {
             desc: "14 Copy: no GTK clipboard bridge yet",
@@ -407,9 +406,9 @@ mod tests {
         }
     }
 
-    /// The set of commands `wolf-gnome` actually dispatches is exactly the eight
-    /// of plan section 3.2 — no more (nothing quietly promoted) and no fewer
-    /// (nothing quietly demoted to `Deferred`).
+    /// The set of commands `wolf-gnome` actually dispatches is exactly
+    /// [`EXPECTED_DISPATCHED_IDS`] — no more (nothing quietly promoted) and no
+    /// fewer (nothing quietly demoted to `Deferred`).
     #[test]
     fn dispatched_commands_are_the_expected_set() {
         let mut dispatched: Vec<&'static str> = Vec::new();
@@ -426,20 +425,19 @@ mod tests {
 
         assert_eq!(
             dispatched, expected,
-            "the set of DISPATCHED commands changed. This unit dispatches exactly eight commands \
-             (plan section 3.2); everything else must be Deferred(reason) or \
-             NoGnomeEquivalent(reason) so the drain is never silent. If a command was genuinely \
-             implemented, tick its feat-list row and update this list and the README table \
-             together."
+            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly nine commands; \
+             everything else must be Deferred(reason) or NoGnomeEquivalent(reason) so the drain \
+             is never silent. If a command was genuinely implemented, tick its feat-list row and \
+             update this list with it."
         );
     }
 
     /// Every `Deferred` / `NoGnomeEquivalent` reason is non-empty, reads as a
     /// mid-sentence clause, and is UNIQUE.
     ///
-    /// Uniqueness is load-bearing twice over: it stops two rows of the README's
-    /// command table from collapsing into one indistinguishable entry, and it
-    /// keeps a future pedantic `clippy::match_same_arms` run clean.
+    /// Uniqueness is load-bearing twice over: it stops two commands collapsing
+    /// into one indistinguishable diagnostic, and it keeps a future pedantic
+    /// `clippy::match_same_arms` run clean.
     #[test]
     fn unimplemented_reasons_are_distinct_and_non_empty() {
         let mut seen: HashSet<&'static str> = HashSet::new();
@@ -470,8 +468,8 @@ mod tests {
             assert!(
                 seen.insert(reason),
                 "{class} reason for {:?} (id {:?}) duplicates another command's reason \
-                 ({reason:?}). Reasons must be DISTINCT so the README's command table cannot \
-                 collapse two rows, and so the printed diagnostic names the real blocker.",
+                 ({reason:?}). Reasons must be DISTINCT so the printed diagnostic names the real \
+                 blocker.",
                 spec.command,
                 spec.id
             );

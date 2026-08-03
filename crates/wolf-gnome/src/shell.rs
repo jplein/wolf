@@ -54,12 +54,16 @@
 //! crash; an explicit button press RESETS that counter, because the cap exists to
 //! stop a retry loop, never to refuse a user.
 //!
-//! ## Two entry paths, one namespace
+//! ## Three entry paths, one namespace
 //!
 //! A command that arrives from inside Neovim (`:WolfClosePane`, `require('wolf')`,
 //! `:q`/`:qa`) goes through the drain. A chord or a menu click activates the
 //! matching `gio::SimpleAction` directly, without a round trip through the core's
-//! command queue. Both end in [`UiAction`], so the two paths cannot diverge.
+//! command queue. A row activated in the command-palette overlay
+//! ([`crate::palette`]) hands its `Command` straight to
+//! [`AppShell::dispatch_command`], which is the same function the drain loop calls.
+//! All three end in [`UiAction`] and in [`AppShell::perform`], so they cannot
+//! diverge.
 //!
 //! ## Borrow discipline (load-bearing)
 //!
@@ -109,6 +113,7 @@ use crate::liveness_ui::{
     liveness_ui, reopen_order, restart_outcome, OverlayMode, RestartOutcome,
     MAX_AUTO_RESTART_ATTEMPTS,
 };
+use crate::palette::PaletteHandle;
 use crate::pane_view::PaneHandle;
 use crate::persistence::StateHandle;
 use crate::picker::PickerHandle;
@@ -175,6 +180,8 @@ pub struct ShellParts<'a> {
     pub window: &'a adw::ApplicationWindow,
     /// The file picker, opened by `win.go-to-file`.
     pub picker: &'a PickerHandle,
+    /// The command palette, opened by `win.command-palette`.
+    pub palette: &'a PaletteHandle,
     /// The file-tree sidebar, re-rooted after Open Folder.
     pub tree: &'a TreeHandle,
     /// The sidebar's root widget, hidden in the empty state.
@@ -204,6 +211,8 @@ struct ShellInner {
     window: adw::ApplicationWindow,
     /// The file picker opened by `win.go-to-file`.
     picker: PickerHandle,
+    /// The command palette opened by `win.command-palette`.
+    palette: PaletteHandle,
     /// The file-tree sidebar, re-rooted once a pending Open Folder settles.
     tree: TreeHandle,
     /// The sidebar's root widget; hidden in the empty state.
@@ -324,8 +333,9 @@ pub fn build_empty_state() -> gtk::Widget {
     container.upcast::<gtk::Widget>()
 }
 
-/// Builds the application shell over an already-constructed window, and wires the
-/// crash overlay's "Restart Neovim" button to [`AppShell::restart_nvim`].
+/// Builds the application shell over an already-constructed window, wires the
+/// crash overlay's "Restart Neovim" button to [`AppShell::restart_nvim`], and wires
+/// the command palette's row activation to [`AppShell::dispatch_command`].
 ///
 /// Installs nothing else by itself: call [`AppShell::install_actions`] (after the
 /// window exists, before `present()`) and [`AppShell::set_empty_state`] next.
@@ -335,6 +345,7 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         core: parts.core.clone(),
         window: parts.window.clone(),
         picker: parts.picker.clone(),
+        palette: parts.palette.clone(),
         tree: parts.tree.clone(),
         sidebar: parts.sidebar.clone(),
         paned: parts.paned.clone(),
@@ -378,6 +389,15 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         if let Some(shell) = upgrade(&weak) {
             shell.inner.restart_attempts.set(0);
             shell.restart_nvim();
+        }
+    });
+
+    // A palette row hands its command to the SAME function the drain loop uses, so
+    // the two entry paths cannot classify a command differently.
+    let weak_palette = Rc::downgrade(&shell.inner);
+    shell.inner.palette.connect_activate(move |command| {
+        if let Some(shell) = upgrade(&weak_palette) {
+            shell.dispatch_command(command);
         }
     });
 
@@ -600,8 +620,10 @@ impl AppShell {
     /// closing the picker (or yanking focus back to the cmdline strip) once per
     /// `Alive` frame would make the picker unusable.
     ///
-    /// - hidden -> visible: close the picker. A crashed core must not leave an
-    ///   overlay whose Open would send into a dead nvim reachable underneath.
+    /// - hidden -> visible: close BOTH transient overlays. A crashed core must not
+    ///   leave the picker's Open reachable underneath, nor a palette row whose
+    ///   activation would send into a dead nvim (`New`, `Close`) or open another
+    ///   overlay over the crash one (`Go to File…`).
     /// - visible -> hidden: if focus was inside the overlay (i.e. on the restart
     ///   button), park it back on the persistent cmdline strip. Hiding the focus
     ///   widget without a focus-return leaves the toplevel with no focus widget at
@@ -625,6 +647,7 @@ impl AppShell {
             }
         } else {
             self.inner.picker.close();
+            self.inner.palette.close();
         }
     }
 
@@ -827,20 +850,44 @@ impl AppShell {
             core.drain_commands()
         };
         for command in commands {
-            match ui_action_for(command) {
-                UiAction::Deferred(reason) | UiAction::NoGnomeEquivalent(reason) => {
-                    eprintln!("wolf-gnome: command {command:?} not dispatched: {reason}");
-                }
-                action => self.perform(action),
+            self.dispatch_command(command);
+        }
+    }
+
+    /// Classifies one [`Command`] through [`ui_action_for`] and performs it, or
+    /// PRINTS the recorded reason when this front-end does not implement it.
+    ///
+    /// The single funnel shared by the command drain and the command palette's row
+    /// activation, so a command cannot mean one thing when Neovim queues it and
+    /// another when the user picks it out of a list.
+    fn dispatch_command(&self, command: Command) {
+        match ui_action_for(command) {
+            UiAction::Deferred(reason) | UiAction::NoGnomeEquivalent(reason) => {
+                eprintln!("wolf-gnome: command {command:?} not dispatched: {reason}");
             }
+            action => self.perform(action),
         }
     }
 
     /// Performs one UI action. Exhaustive with no `_` arm, so a new [`UiAction`]
     /// variant is a compile error here.
+    ///
+    /// **At most one transient overlay is open at a time, and this is where that is
+    /// arbitrated**: opening either the picker or the palette closes the other
+    /// first. Both `close()`s are idempotent. This module holds both handles, so the
+    /// rule costs the two overlay modules no knowledge of each other — and it is
+    /// what keeps `app::wire_keys`' open-overlay guard honest and makes "Escape
+    /// closes the thing you can see" true.
     fn perform(&self, action: UiAction) {
         match action {
-            UiAction::OpenFilePicker => self.inner.picker.open(),
+            UiAction::OpenFilePicker => {
+                self.inner.palette.close();
+                self.inner.picker.open();
+            }
+            UiAction::OpenCommandPalette => {
+                self.inner.picker.close();
+                self.inner.palette.open();
+            }
             UiAction::OpenFileDialog => self.open_file_dialog(),
             UiAction::OpenFolderDialog => self.open_folder_dialog(),
             UiAction::NewUntitledBuffer => self.send_input(InputEvent::NewBuffer),
@@ -856,8 +903,8 @@ impl AppShell {
         }
     }
 
-    /// Closes the window through `close-request` so `app::wire_close` runs (picker
-    /// + tree closed, then `WolfCore::shutdown`).
+    /// Closes the window through `close-request` so `app::wire_close` runs (picker,
+    /// palette and tree closed, then `WolfCore::shutdown`).
     ///
     /// NEVER `destroy()`: that skips `close-request` entirely and leaks the nvim
     /// child. The `adw::ApplicationWindow` is owned by the application, so the app

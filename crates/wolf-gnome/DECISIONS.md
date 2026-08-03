@@ -6,7 +6,7 @@ The durable constraints behind this crate. Read this before changing anything he
 
 This is the GTK 4 / libadwaita front-end: a runnable single-window application that consumes [`wolf-core`](../wolf-core/README.md) as an ordinary Rust crate dependency. It renders Neovim natively rather than embedding a terminal, so every pixel comes from a Cairo/Pango paint of a core `Snapshot`.
 
-The window carries a file-tree sidebar, a native pane view with real split panes, a floating file picker, a GNOME primary menu, an empty state for when no project is open, and a bottom command-line strip. Split, close, and focus move are driven by core's layout-intent channel; a divider drag is the `gtk::Paned` handle's own gesture, landing in the pure tree's weights. Menu items, accelerators, and commands drained from Neovim all resolve through one `gio` action namespace.
+The window carries a file-tree sidebar, a native pane view with real split panes, a floating file picker and command palette, a GNOME primary menu, an empty state for when no project is open, and a bottom command-line strip. Split, close, and focus move are driven by core's layout-intent channel; a divider drag is the `gtk::Paned` handle's own gesture, landing in the pure tree's weights. Menu items, accelerators, and commands drained from Neovim all resolve through one `gio` action namespace.
 
 Files reach Neovim one way. The picker, the sidebar, and the menu's native Open File and Open Folder dialogs all end in `InputEvent::Open`, which core performs as `:e`; saving is `:w` or `:saveas` from inside Neovim, with no save dialog. The binary takes no command-line arguments, and hands GTK an empty argv so the real command line is never parsed.
 
@@ -60,9 +60,11 @@ The picker and the sidebar each run a long-lived `FileSearch` on the same patter
 
 The window is an `adw::ApplicationWindow` whose content is a vertical box: an `adw::HeaderBar` over a horizontal `gtk::Paned`. The Paned's start child is the file-tree sidebar; its end child is a `gtk::Overlay` whose main child is the pane view. The pane view is a tree of nested `gtk::Paned` with one `gtk::DrawingArea` per Neovim window, built from the pure pane tree, plus a one-row command-line strip along the bottom.
 
-The overlay's children are added empty state, then picker, then crash overlay, then restart banner, and that order is the stacking. A crashed core must cover both the picker's Open and the empty state's Open Folder, since either would send into a dead Neovim. The banner is topmost and click-through, so it confirms a restart without swallowing a click meant for the editor.
+The overlay's children are added empty state, then picker, then command palette, then crash overlay, then restart banner, and that order is the stacking. At most one of the two transient overlays is open — the shell closes one when it opens the other — so their relative order is not observable, while the palette must sit above the empty state or it would open invisibly in a project-less window.
 
-**GTK keyboard focus never lands on a pane area.** Pane drawing areas are not focusable and nothing grabs focus on them; a click parks focus on the persistent command-line strip instead, which is also the focus-return target the picker, the sidebar, and the crash overlay use. Every widget under the pane area is destroyed and rebuilt on each layout change, and a destroyed focus widget leaves the toplevel with no focus at all — after which window-level key dispatch dies outright while Neovim stays alive and silent.
+A crashed core must cover the picker's Open, a palette row and the empty state's Open Folder, since each would send into a dead Neovim. The banner is topmost and click-through, so it confirms a restart without swallowing a click meant for the editor.
+
+**GTK keyboard focus never lands on a pane area.** Pane drawing areas are not focusable and nothing grabs focus on them; a click parks focus on the persistent command-line strip instead, which is also the focus-return target the picker, the command palette, the sidebar, and the crash overlay use. Every widget under the pane area is destroyed and rebuilt on each layout change, and a destroyed focus widget leaves the toplevel with no focus at all — after which window-level key dispatch dies outright while Neovim stays alive and silent.
 
 `gtk::Paned` sets its dividers focusable itself and this crate cannot change that, so a rebuild additionally samples the toplevel's focus widget before unparenting anything and returns focus to the strip. That sample must stay above the teardown: the moment a widget is unparented rather than hidden, a later sample stops reporting it.
 
@@ -86,7 +88,7 @@ Every action name, its accelerator, its `Command` correspondence, and its menu p
 
 `Ctrl+Shift+<letter>` is the namespace because nothing else is available. There is effectively no free `Ctrl+<letter>` across all Neovim modes, and a terminal buffer forwards every key but one. A forwarded, unmapped Alt chord splits into `<Esc>` plus the base key, and a forwarded, unmapped Super chord drops the modifier in normal mode and inserts literal text in insert mode, so neither is a namespace Neovim can be given. The genuinely free keys are too few and too unidiomatic to carry a menu. The rule is memorable: take the macOS chord and replace the command key with Ctrl+Shift.
 
-Two consequences worth knowing. The file picker is `Ctrl+Shift+O`, and `Ctrl+Shift+P` is reserved for the command palette. And a disabled action's accelerator falls through to Neovim, which is what a real GTK accelerator does and what the chord controller deliberately reproduces, so in the empty state `Ctrl+Shift+O` reaches Neovim as `<C-o>`.
+Two consequences worth knowing. The file picker is `Ctrl+Shift+O` and the command palette is `Ctrl+Shift+P`. And a disabled action's accelerator falls through to Neovim, which is what a real GTK accelerator does and what the chord controller deliberately reproduces, so in the empty state `Ctrl+Shift+O` reaches Neovim as `<C-o>`.
 
 ## Application state
 
@@ -138,6 +140,7 @@ Three details are load-bearing. Every smoke holds a shared mutex for its whole b
 - The sidebar re-roots on Open Folder alone, never on a user-typed `:cd`.
 - No HiDPI scale handling: the cell-measurement probe assumes 96 dpi.
 - No input-method composition support.
-- There is no buffer-picker or command-palette overlay, and no About dialog. The core surface behind the pickers is available to this crate; no widget is wired to it.
+- There is no buffer-picker overlay and no About dialog. The core surface behind the buffer picker is available to this crate; no widget is wired to it.
+- The command palette lists only the registry commands this front-end performs. There are no Switch-to-Window rows, since there is one window, and no Open Recent rows, since the recent-directories MRU is not wired to it.
 - There is no Markdown preview and no terminal drawer. Core carries the drawer intent; this crate matches it explicitly and does nothing, so adding a fourth intent variant still fails the build here.
 - The empty state disables only the file picker. A new-buffer or close-pane chord still fires behind the opaque status page, where the result is invisible until a folder is opened.

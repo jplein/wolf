@@ -28,7 +28,7 @@ Purpose: the action namespace as data — every `gio` action name, its accelerat
 
 #### `app.rs`
 
-Purpose: all GTK and Adwaita window wiring. `run` builds the `adw::Application` and, on activate, constructs the window — header bar, sidebar, and an editor overlay holding the pane view, the picker, the empty state, and the crash overlay — attached to a freshly started `WolfCore`.
+Purpose: all GTK and Adwaita window wiring. `run` builds the `adw::Application` and, on activate, constructs the window — header bar, sidebar, and an editor overlay holding the pane view, the picker, the command palette, the empty state, and the crash overlay — attached to a freshly started `WolfCore`.
 
 **Public API**
 
@@ -37,13 +37,13 @@ Purpose: all GTK and Adwaita window wiring. `run` builds the `adw::Application` 
 **Decisions**
 
 - Before any widget exists, the state store is opened and turned into a restore plan, so the working directory, window size, and saved pane tree are known while the window is still being built. A missing state directory degrades every later state call to a no-op.
-- The saved layout is queued on the pane view with no arity guard, which is one half of the content-predicate rule in [DECISIONS.md](../DECISIONS.md).
+- The saved layout is queued on the pane view with no arity guard, one half of the content-predicate rule in [DECISIONS.md](../DECISIONS.md).
 - Cell metrics are measured once from a throwaway 1x1 `ImageSurface` (used only to obtain a Pango context) and shared by `Rc`, so a resize arriving before the first draw already has a size.
 - The close-request handler flushes state first, while the core and panes are still alive, and takes the core out in its own statement so the borrow is released before `shutdown` blocks. A flush after the take sees no core, is refused by the snapshot gate, and silently loses the session.
 
 **Gotchas**
 
-- The wake-channel capacity stays private, and its three tests live in this module so they read the production constant rather than a literal.
+- The wake-channel capacity stays private; its tests live here so they read the production constant rather than a literal.
 
 #### `command_action.rs`
 
@@ -169,7 +169,7 @@ Purpose: crate root. Declares the modules and re-exports the display-free seams 
 
 - `cell_at` is re-exported because `grid_size_for` is, and the two are a pair whose composition is the point.
 - `restart_button_rect` is re-exported for one concrete consumer: the crash-overlay smoke derives the pixel it clicks from the same function the widget builder realizes, so the two cannot drift.
-- Items in `actions`, `crash_overlay`, `cursor`, `layout`, `mouse`, `pane_layout`, `pane_view`, `persistence`, `shell`, `tree`, and `tree_view` are reached by module path rather than re-exported.
+- Items in `actions`, `crash_overlay`, `cursor`, `layout`, `mouse`, `palette`, `pane_layout`, `pane_view`, `persistence`, `picker`, `shell`, `tree`, and `tree_view` are reached by module path rather than re-exported.
 
 #### `liveness_ui.rs`
 
@@ -210,6 +210,28 @@ Purpose: the GDK pointer-translation rulebook, the analogue of [`input.rs`](#inp
 - An unknown scroll unit falls back to the wheel threshold on purpose: guessing wheel for a pixel delta is over-sensitive and recoverable, while guessing surface for a detent delta makes scrolling dead.
 - A rejected `consume` leaves the carry untouched, so it is indistinguishable from no call; a poisoned remainder would kill scrolling for the session. `PaneScroll` discards the carry when the target grid differs from the previous call, accepted or not, because a remainder is a fraction of a line of one grid.
 - **The scroll sign is the opposite of macOS's, deliberately.** A positive AppKit delta shows earlier content while a positive GDK delta moves toward the end of the buffer, so a positive step count maps to `Down` here and `Up` there. A test exists to stop that being "corrected".
+
+#### `palette.rs`
+
+Purpose: the command-palette overlay — a search entry over a ranked list of the registry commands this front-end performs, floating above the editor. Activating a row records its MRU key and hands the command to [`shell.rs`](#shellrs).
+
+**Public API**
+
+- `build(overlay, area, core) -> PaletteHandle` — starts hidden. `area` is the focus-return widget, not the results host.
+- `PaletteHandle::open`, `close` (both idempotent), `is_open`, and `connect_activate`, which the shell points at its own command dispatch.
+- `palette_rows`, `palette_action_for`, and `activation_index` — the pure seams.
+
+**Decisions**
+
+- `rank_palette` is fed empty window and recent-directory slices, so only `Static` rows exist: there is no second window to raise, and an Open Recent row would be an entry that does nothing.
+- Ranking runs unbounded and `max` applies after the classification filter, since `rank_palette` truncates first and undispatched rows would otherwise eat the budget.
+- The command MRU is read once at open: only an activation writes it, and an activation closes the palette, so a per-keystroke read buys nothing.
+- Activation records, closes, then dispatches. A dispatched Close Window tears the window down synchronously, so nothing may touch these widgets after it.
+- `PaletteAction::Unsupported` is unreachable while the filter stands. It exists so a new `PaletteRowKind` fails to compile here rather than becoming a dead row.
+
+**Gotchas**
+
+- Selection movement is [`picker.rs`](#pickerrs)'s `next_selection` and `restored_index`, so the two overlays navigate identically.
 
 #### `pane_layout.rs`
 
@@ -291,6 +313,7 @@ Purpose: the file-picker overlay — a search entry over a ranked results list f
 **Gotchas**
 
 - Closing drops the `FileSearch`, which cancels the background traversal.
+- `next_selection` and `restored_index` are `pub(crate)` and shared with [`palette.rs`](#paletters). They stay here rather than moving to a seam module because the macOS `PickerSeam` port names this file as its counterpart.
 
 #### `render.rs`
 
@@ -313,21 +336,22 @@ Purpose: the Cairo/Pango paint seam. `paint` rasterizes one grid and its highlig
 
 #### `shell.rs`
 
-Purpose: the glue for the action namespace — `gio` actions, the primary menu, the chord controller, the empty state, the command drain, and crash-recovery orchestration.
+Purpose: the glue for the action namespace — `gio` actions, the primary menu, the chord controller, the empty state, the command drain, and crash-recovery orchestration. A drained command and a palette row funnel through one dispatch.
 
 **Public API**
 
 - `build_menu_model()`, `build_empty_state()`, `build(parts) -> AppShell`.
-- `install_actions(app)` — must run after the window is constructed and before it is presented, so the menu and header button can resolve their actions.
+- `install_actions(app)` — after the window is constructed, before `present()`, so the menu and header button resolve their actions.
 - `set_empty_state(empty)`, `on_liveness_wake() -> bool`, `on_render_wake()`.
 
 **Decisions**
 
-- The chord controller matches keys itself rather than relying on GTK's accelerator matching, which is keymap-aware and does not fire under the smokes' keystroke injector. Accelerators are still registered, but only so the menu renders their labels. A disabled action falls through, matching what a real GTK accelerator does.
-- Because the controller lives on the window it also runs ahead of the picker's own controller and carries no open-picker guard, so an application command fires with the overlay up. The picker's own keys are unaffected: none is a bound chord.
+- The chord controller matches keys itself rather than through GTK's own matching, which is keymap-aware and does not fire under the smokes' keystroke injector. Accelerators are registered only so the menu renders their labels.
+- The controller lives on the window, so it runs ahead of either overlay's controller and carries no open-overlay guard: an application command fires with the picker or the palette up. Neither overlay's keys are bound chords.
+- At most one transient overlay is open, arbitrated here because this module holds both handles, so the two overlay modules need no knowledge of each other.
 - `install_actions` filters on the command's classification, so an implemented command installs its action even while its chord stays reserved.
-- Overlay side effects fire only on a real mode transition, and the focus sample is taken before the overlay is hidden. Do not move that sample below the hide: it stops reporting once the overlay is unparented rather than hidden.
-- An Open Folder result records a pending re-root rather than re-rooting synchronously, because the file search resolves its root from the live cwd, which updates only after Neovim reports the change.
+- Overlay side effects fire only on a real mode transition, and the focus sample is taken before the overlay is hidden, per the ordering rule in [DECISIONS.md](../DECISIONS.md).
+- An Open Folder result records a pending re-root rather than re-rooting synchronously: the file search resolves its root from the live cwd, which updates only after Neovim reports it.
 
 #### `state_seam.rs`
 
