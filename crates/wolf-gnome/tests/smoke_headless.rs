@@ -11,13 +11,20 @@
 //!
 //! ## What this file contains
 //!
-//! **Twenty-six cage smokes** — one window-render smoke, two file-picker smokes,
+//! **Twenty-nine cage smokes** — one window-render smoke, two file-picker smokes,
 //! one file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
-//! new-untitled-buffer smoke, one command-palette smoke, one Ctrl+Shift+W
+//! new-untitled-buffer smoke, one command-palette smoke, two BUFFER-PICKER smokes
+//! (Ctrl+Shift+E then a typed query, switching to the queried buffer; and
+//! Ctrl+Shift+E then a BARE Enter, switching to the most-recently-used OTHER buffer
+//! through the row-1 preselection), one
+//! Ctrl+Shift+W
 //! close-pane smoke (the accelerator path, as opposed to the split-pane suite's
 //! `<C-w>c`), two quit smokes (`:q`
 //! closes the focused pane, `:qa` closes the window), one keyboard-only CRASH /
-//! auto-restart smoke, six POINTER smokes (click-to-position, drag-to-select,
+//! auto-restart smoke, one keyboard-only STALL smoke (`SIGSTOP` the captive Neovim,
+//! then make the buffer picker's blocking RPC elapse its budget so the
+//! "stopped responding" overlay is raised), six POINTER smokes
+//! (click-to-position, drag-to-select,
 //! wheel scroll, the click-then-close focus-wedge regression, the crash
 //! overlay + "Restart Neovim" button, and a divider drag surviving a pane
 //! re-layout), and four STATE-PERSISTENCE smokes (a three-pane layout, a lone open
@@ -41,7 +48,7 @@
 //! and no `:e` toast can satisfy, and OCR is structurally incapable of answering
 //! "did the cursor land at exactly row 12, column 25".
 //!
-//! Twenty-one of the twenty-six OCR a screenshot of the live window. The `:qa`
+//! Twenty-four of the twenty-nine OCR a screenshot of the live window. The `:qa`
 //! smoke deliberately captures no image and asserts on the cage exit status alone
 //! (the app must be GONE, and gone with a ZERO exit status — a panic in the GTK main
 //! loop makes a process vanish just as a clean shutdown does); the click, drag,
@@ -79,7 +86,7 @@
 //! live here, next to the consts and helpers they read, rather than in a file of
 //! their own.
 //!
-//! So this target's summary line reads **`30 passed`**, not `26`: twenty-six cage
+//! So this target's summary line reads **`33 passed`**, not `29`: twenty-nine cage
 //! smokes plus those four guards.
 //!
 //! ## A vacuously-passing check recorded here: the `wtype ""` window-map poll
@@ -107,9 +114,9 @@
 //! HERE, beside the scenarios, because that is where the next reader meets it — while
 //! editing a scenario's poll knobs, not while reading Markdown;
 //! `crates/wolf-gnome/tests/README.md` keeps the running prose record of the others,
-//! under "Vacuity is not only a fixture-naming problem". It is the same shape as the
-//! entries already there (the drag smoke's false premise, the untested auto-restart
-//! cap, the centre-derived restart-button click): **a check aimed at the right
+//! under "A red-run demonstration is a deliverable, not a formality". It is the same
+//! shape as the entries already there (the drag smoke's false premise, the untested
+//! auto-restart cap, the centre-derived restart-button click): **a check aimed at the right
 //! property, looking somewhere the defect could not appear.**
 //!
 //! Its concrete cost was DIAGNOSTIC. A residual ~0.8% failure of
@@ -122,7 +129,7 @@
 //!
 //! ## When it runs
 //!
-//! The twenty-six cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The twenty-nine cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The Linux verification gate").
@@ -132,13 +139,13 @@
 //! suite command does not run is a silently-skipped test.
 //!
 //! They are, however, the slowest part of the suite: each drives a real
-//! compositor, and all twenty-six serialize behind `CAGE_LOCK` (see below).
+//! compositor, and all twenty-nine serialize behind `CAGE_LOCK` (see below).
 //!
 //! ```text
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the twenty-six cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the twenty-nine cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` and
 //!   `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
@@ -150,7 +157,7 @@
 //!   wolf-gnome tests; nvim is never taken from `PATH`).
 //! - `XDG_RUNTIME_DIR` set and writable (the Wayland socket lives there).
 //!
-//! Per project policy every one of the twenty-six FAILS LOUD if any of the above is
+//! Per project policy every one of the twenty-nine FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -174,7 +181,7 @@ use wolf_gnome::{CellMetrics, WINDOW_TITLE_FALLBACK};
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the twenty-six cage smoke tests. Each launches its own
+/// Serializes the twenty-nine cage smoke tests. Each launches its own
 /// `cage` compositor, and two compositors started concurrently contend for the
 /// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
 /// Under the default multi-threaded test harness these tests would otherwise run
@@ -290,7 +297,9 @@ const SIDEBAR_FILLER_COUNT: usize = 9;
 /// `quitkeep`/`quitgone`, `chordkeep`/`chordgone`, — added with the
 /// pointer-harness unit — `wedgestay`/`wedgeclick`, and — added with the
 /// state-persistence unit — `restorealfa`/`restorebravo`/`restorecharlie`,
-/// `solozulu`/`soloalfa` and `titlezulu`/`titlehome` — so a stray filler can never
+/// `solozulu`/`soloalfa` and `titlezulu`/`titlehome`, and — added with the
+/// buffer-picker unit — `bufpickalfa`/`bufpickbravo`, `responding` and
+/// `stallfixture` — so a stray filler can never
 /// satisfy one of those either. [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`]
 /// enforces this mechanically against [`ASSERTED_OCR_TERMS`], which holds the consts
 /// themselves; this list is a reader's summary and the test is the authority.
@@ -1273,6 +1282,225 @@ fn restart_fixture_body() -> String {
     }
     body
 }
+
+// ---------------------------------------------------------------------------
+// Buffer-picker smokes: fixtures, the query, and the MRU-order readback.
+//
+// Ctrl+Shift+E snapshots the captive Neovim's listed buffers, ranks them against
+// the typed query, and `Enter` switches the active window to the ranked row's
+// buffer. Three files are opened in a known order so the picker's list has a known
+// shape, and the smoke then types a query that matches exactly ONE of them.
+//
+// ## TWO smokes share this one fixture set, and pull it in opposite directions
+//
+// `buffer_picker_chord_switches_to_the_queried_buffer_under_cage` types
+// `BUFPICK_QUERY` and asserts the TARGET's heading is on screen and the PRESELECT's
+// is not. `buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage`
+// types nothing at all and asserts the exact opposite for those two terms, plus the
+// absence of the CURRENT file's heading.
+//
+// That opposition is what makes the pair discriminating rather than either alone.
+// `BUFPICK_OCR_ABSENT` is asserted PRESENT by the bare-Enter smoke, so a green run
+// of it is direct evidence that the term is producible on this page at all — and a
+// green run of the query smoke, with the same three fixtures in the same cwd, is
+// direct evidence that no sidebar row, no `:e` echo and no header-bar segment
+// produces it on its own. Neither smoke has to argue that from prose.
+//
+// ## Why THREE files and not two
+//
+// `buffer_picker::initial_selection` preselects ROW 1 — the most-recently-used
+// OTHER buffer — so with two files the target would BE the preselected row and a
+// picker that ignored the typed query entirely would still activate it. The query
+// smoke would pass permanently while proving nothing about filtering, and the
+// bare-Enter smoke's must-be-absent target term would name the row it expects to
+// land on. The third file pushes the target to index 2 or later, which is what
+// makes the query the only thing that can select it. That premise is not assumed:
+// each scenario reads the real `getbufinfo()` order back out of Neovim and the Rust
+// side asserts it (see `BUFPICK_READBACK_NAME`), and the same arithmetic is pinned
+// headlessly by
+// `buffer_picker::tests::buffer_rows_for_the_smoke_query_select_exactly_the_target`.
+//
+// ## Why the fixture NAMES and the asserted TERMS are deliberately unlike
+//
+// The tree sidebar renders every cwd entry by name and nvim's `:e` echoes the
+// filename, so a fixture named after an asserted term satisfies that assertion
+// whether or not the feature did anything — the permanent silent pass documented
+// on `PICKER_FILE_NAME`. The two vocabularies here are therefore disjoint by
+// construction: the files are `bp*` and the asserted words are `bufpick*`, so the
+// QUERY matches the file's NAME while the ASSERTION reads the file's CONTENT. All
+// four filenames are registered in `RELAUNCH_FIXTURE_NAMES` — once each, since the
+// two smokes share them and a duplicate row would trip that guard's own
+// distinct-names check — and all THREE terms in `ASSERTED_OCR_TERMS`, so the three
+// mechanical guards prove that rather than leaving it to this comment.
+
+/// Buffer-picker smoke: the file opened FIRST, and the one [`BUFPICK_QUERY`] must
+/// select. Opened first, so it is the OLDEST of the three by `lastused` and lands
+/// at index 2 or later in the picker's MRU-first list.
+const BUFPICK_FILE_TARGET: &str = "bpzulu.md";
+
+/// Heading written into [`BUFPICK_FILE_TARGET`]; lowercased, the rendered line
+/// contains [`BUFPICK_OCR_PRESENT`]. Deliberately unlike the filename, so neither
+/// the sidebar row nor nvim's `:e` toast can satisfy the assertion on its own.
+const BUFPICK_HEADING_TARGET: &str = "# BUFPICKALFA";
+
+/// Lowercased substring the QUERY smoke's OCR must find, and the BARE-ENTER smoke's
+/// must NOT: the heading of the buffer [`BUFPICK_QUERY`] selects.
+///
+/// It lives only in that file's CONTENT, so a hit can only mean the active window
+/// really was switched to it. In
+/// [`buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage`] no query
+/// is typed at all, so this heading appearing would mean the preselection landed on
+/// row 2 or deeper instead of on row 1.
+const BUFPICK_OCR_PRESENT: &str = "bufpickalfa";
+
+/// Buffer-picker smoke: the file opened SECOND — the row
+/// `buffer_picker::initial_selection` preselects, and therefore the row a picker
+/// that ignored the typed query would activate.
+const BUFPICK_FILE_PRESELECT: &str = "bpyankee.md";
+
+/// Heading written into [`BUFPICK_FILE_PRESELECT`]; lowercased it contains
+/// [`BUFPICK_OCR_ABSENT`].
+const BUFPICK_HEADING_PRESELECT: &str = "# BUFPICKBRAVO";
+
+/// Lowercased substring the QUERY smoke's OCR must NOT find, and the BARE-ENTER
+/// smoke's MUST: the heading of the PRESELECTED row.
+///
+/// The name records the direction the first smoke to use it asserts. In
+/// [`buffer_picker_chord_switches_to_the_queried_buffer_under_cage`] its
+/// contribution is naming WHICH wrong buffer was activated, not detecting that one
+/// was — with a single pane, two headings cannot both be on screen, so no revert
+/// reddens that assertion alone. In
+/// [`buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage`] the same
+/// term is the PRIMARY discriminator: with no query typed, this heading is on screen
+/// if and only if `buffer_picker::initial_selection`'s row-1 preselection reached the
+/// `ListBox` and `Enter` acted on it. See the revert tables on both.
+const BUFPICK_OCR_ABSENT: &str = "bufpickbravo";
+
+/// Buffer-picker smoke: the file opened THIRD — the buffer showing when the chord
+/// fires, and therefore row 0 of the picker's MRU-first list.
+const BUFPICK_FILE_CURRENT: &str = "bpxray.md";
+
+/// Heading written into [`BUFPICK_FILE_CURRENT`]; lowercased it contains
+/// [`BUFPICK_OCR_CURRENT`].
+///
+/// The QUERY smoke does not assert on it and only names it in failure messages, so a
+/// capture showing this heading reads as "the picker did nothing at all" rather than
+/// as an unexplained miss. The BARE-ENTER smoke asserts its ABSENCE, which is what
+/// says a switch happened at all.
+const BUFPICK_HEADING_CURRENT: &str = "# BUFPICKCHARLIE";
+
+/// Lowercased substring the BARE-ENTER smoke's OCR must NOT find: the heading of
+/// [`BUFPICK_FILE_CURRENT`], the buffer the editor is ALREADY showing when the chord
+/// fires.
+///
+/// It is the term that separates "the preselection switched the buffer" from "the
+/// picker closed on nothing and left the pane exactly as it was" — two states that
+/// are otherwise indistinguishable in a capture, since both simply lack the
+/// preselected row's heading.
+///
+/// It is asserted only in the post-Enter capture, taken after the overlay has closed
+/// (`activate_selection` closes on a successful switch, and the scenario's `o` +
+/// Escape only reach Neovim once it has). That matters: while the overlay IS open its
+/// opaque box sits over the top of the editor page and can occlude part of this
+/// heading, so the term's absence would not be evidence of anything. The failure
+/// message says so rather than leaving it to be re-derived.
+const BUFPICK_OCR_CURRENT: &str = "bufpickcharlie";
+
+/// Typed into the buffer picker's search entry.
+///
+/// `wolf_core::rank_matches` keeps every candidate the query is a case-insensitive
+/// SUBSEQUENCE of, and of the four listed buffers (`Untitled.md` plus the three
+/// fixtures) only [`BUFPICK_FILE_TARGET`] contains a `z` after its `bp`. That the
+/// list therefore holds exactly one row is pinned in the fast suite by
+/// `buffer_picker::tests::buffer_rows_for_the_smoke_query_select_exactly_the_target`,
+/// not left as prose here.
+const BUFPICK_QUERY: &str = "bpzulu";
+
+/// Name, in each buffer-picker smoke's own temp cwd, of the file the captive Neovim
+/// writes its own `getbufinfo({'buflisted': 1})` into — one `bufnr lastused tail`
+/// line per listed buffer.
+///
+/// One const for both smokes, and one row in [`RELAUNCH_FIXTURE_NAMES`]: each runs in
+/// a FRESH temp cwd, so the two files never meet, and a second row carrying the same
+/// name would trip that guard's distinct-names check.
+///
+/// It is each smoke's PREMISE, read back rather than assumed: the Rust side sorts
+/// those lines by the same rule `rank_buffers` uses (lastused DESC, bufnr ASC) and
+/// asserts the resulting order really does put the CURRENT file at index 0, the
+/// PRESELECT file at index 1 and the target below both. Without it, a picker that
+/// ignored the query would activate the preselected row — and if the three `:e`s had
+/// landed inside one `lastused` second, that row could BE the target, making the
+/// query smoke a permanent silent pass; the bare-Enter smoke would meanwhile be
+/// asserting on whichever row the collision happened to promote.
+const BUFPICK_READBACK_NAME: &str = "bp_buffers.txt";
+
+// ---------------------------------------------------------------------------
+// Stall smoke: the fixture, the terms, and the RPC timeout.
+//
+// This is the first end-to-end coverage the STALL half of the crash/stall overlay
+// has, and it is reachable only because the buffer picker exists: `list_buffers`
+// is the one blocking RPC a RUNNING wolf-gnome issues, so wedging the captive
+// Neovim with SIGSTOP and then firing Ctrl+Shift+E is what makes `block_on_rpc`
+// elapse its budget, mark the core NotResponding, and raise the overlay.
+//
+// The scenario captures AFTER the block, never during it: no frame is committed
+// while the main loop is blocked, so a capture taken then would return the
+// pre-chord frame and prove nothing.
+
+/// Stall smoke: the fixture opened before the wedge, so the editor has something
+/// distinctive on screen for the opaque overlay to cover.
+///
+/// Its name contains neither asserted term, for the reason documented on
+/// [`PICKER_FILE_NAME`]: the sidebar renders it and nvim's `:e` echoes it, so a
+/// name carrying [`STALL_OCR_ABSENT`] would break the opacity assertion no matter
+/// how opaque the overlay was.
+const STALL_FILE: &str = "stfrozen.md";
+
+/// Heading written into [`STALL_FILE`]; lowercased it contains
+/// [`STALL_OCR_ABSENT`].
+const STALL_HEADING: &str = "# STALLFIXTURE";
+
+/// Lowercased substring OCR must find in the CONTROL capture and must NOT find in
+/// the post-stall one.
+///
+/// The two directions do different jobs. In the control it is the precondition
+/// that the fixture rendered at all, without which the post-stall absence would be
+/// vacuous — an editor that drew nothing satisfies it trivially. In the post-stall
+/// capture its absence is what says the overlay is OPAQUE and full-bleed rather
+/// than merely present.
+const STALL_OCR_ABSENT: &str = "stallfixture";
+
+/// Lowercased substring OCR must find in the POST-STALL capture and must NOT find
+/// in the control: the distinctive word of `liveness_ui::STALLED_MESSAGE`
+/// ("Neovim stopped responding").
+///
+/// ## Vacuity analysis
+///
+/// It appears in no other overlay string. That it cannot be produced by either
+/// crash-overlay message, by the restart banner, or by the "Restart Neovim" button
+/// label — which sits INSIDE the overlay and is therefore on screen at exactly the
+/// moment this smoke captures — is pinned EXECUTABLY by
+/// `wolf_gnome::liveness_ui::tests::overlay_message_table`, in both directions. Do
+/// not restate that argument here; read that test. Nothing in the editor grid, the
+/// sidebar or a Neovim toast produces it either, and the three fixture-name guards
+/// re-check that mechanically.
+const STALL_OCR_PRESENT: &str = "responding";
+
+/// `WOLF_RPC_TIMEOUT_MS` for the stall smoke, as the string the app parses.
+///
+/// `WolfCore::start` reads it once from the process environment, so chaining
+/// `.env(…)` onto the `cage` command reaches the app through `cage -- sh -c`. A
+/// TIMING KNOB ONLY — no assertion depends on its value — but it has two bounds it
+/// must sit between: comfortably above a healthy round trip (sub-millisecond,
+/// measured) so nothing times out while Neovim is running, and comfortably below
+/// the scenario's post-chord sleep so the timeout has certainly elapsed before
+/// `grim` fires.
+///
+/// It is safe to shorten the budget for this run because the buffer picker's
+/// snapshot is the ONLY `block_on_rpc` the scenario reaches: with a fresh
+/// per-smoke `WOLF_STATE_DIR` there is no saved layout, so
+/// `pane_view::apply_layout_rebuild` — the crate's only other one — never runs.
+const STALL_RPC_TIMEOUT_MS: &str = "800";
 
 // ---------------------------------------------------------------------------
 // Pointer smokes: injected geometry.
@@ -2723,6 +2951,363 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
+/// The BUFFER-PICKER scenario, run as a single `sh -c` string INSIDE `cage` (same
+/// structure as [`PALETTE_SCENARIO`]): launch the app, poll until `cage` is up (NOT
+/// until the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle, open the
+/// three fixtures in a known order with a gap between them, read the resulting
+/// buffer list back out of Neovim, fire Ctrl+Shift+E, type the query, press Enter,
+/// park the block cursor off the asserted row, settle, and screenshot.
+///
+/// Standalone — it does NOT need [`with_nvim_pid_helper`], because nothing here
+/// identifies or signals the Neovim child.
+///
+/// ## `MRU_GAP` is not a settle, and it must exceed one second
+///
+/// `getbufinfo().lastused` is a WHOLE-SECOND Unix timestamp. Three `:e`s inside one
+/// second all tie, and `wolf_core::rank_buffers` then falls back to `bufnr` ASC —
+/// which INVERTS the MRU order: the startup buffer takes row 0 and the FIRST-opened
+/// file, the query's target, takes row 1. Row 1 is exactly the row
+/// `buffer_picker::initial_selection` preselects, so the collision does not merely
+/// reorder the list — it makes a picker that ignores the typed query activate the
+/// target anyway, i.e. a permanent silent pass rather than a flake. The gap is what
+/// buys distinct seconds; the readback in step 3 is what proves it worked on this
+/// run.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before its window mapped (the shared convention).
+/// * `14` — the buffer-list readback the captive Neovim was told to write never
+///   appeared, so the premise below cannot be checked at all.
+const BUFPICK_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+# How many WAIT_INTERVAL polls to allow for the readback file.
+FILE_TRIES=100
+#
+# MRU_GAP -- READ THIS BEFORE TRIMMING IT. It is NOT a settle.
+#
+# getbufinfo().lastused is a WHOLE-SECOND unix timestamp, so two `:e`s inside one
+# second tie and rank_buffers falls back to bufnr ASC -- which INVERTS the MRU
+# order and puts the query's target on row 1, the row initial_selection preselects.
+# The smoke would then pass with the picker ignoring the query entirely. It must
+# therefore exceed 1.0 with margin; the readback in step 3 is what proves it did.
+MRU_GAP=1.2
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome buffer-picker smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw before driving the editor.
+sleep "$SETTLE"
+
+# Poll for a readback file the captive Neovim writes. Nothing downstream may read a
+# file we merely hope is there. (The CRASH_SCENARIO body, verbatim.)
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome buffer-picker smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# --- Step 2: open the three fixtures, OLDEST FIRST --------------------------
+#
+# The order is the whole fixture. TARGET first makes it the oldest by `lastused`
+# and therefore index 2 or later in the picker's MRU-first list; CURRENT last makes
+# it row 0. PRESELECT lands in between, at row 1, which is the row
+# buffer_picker::initial_selection preselects -- so it is the row a picker that
+# ignored the typed query would activate, and the smoke asserts its heading is
+# ABSENT.
+#
+# The MRU_GAP sleeps are load-bearing, not settles: see the knob comment above.
+wtype -- ":e $BUFPICK_FILE_TARGET"
+wtype -k Return
+sleep "$MRU_GAP"
+
+wtype -- ":e $BUFPICK_FILE_PRESELECT"
+wtype -k Return
+sleep "$MRU_GAP"
+
+wtype -- ":e $BUFPICK_FILE_CURRENT"
+wtype -k Return
+sleep "$MRU_GAP"
+
+# --- Step 3: the PREMISE, read back out of Neovim ---------------------------
+#
+# One `bufnr lastused tail` line per listed buffer -- exactly the fields
+# wolf_core::rank_buffers orders by, so the Rust side can re-derive the picker's
+# list order from Neovim's own answer instead of assuming the sleeps above worked.
+wtype -- ":call writefile(map(getbufinfo({'buflisted':1}), {_, b -> printf('%d %d %s', b.bufnr, b.lastused, fnamemodify(b.name, ':t'))}), '$BUFPICK_READBACK')"
+wtype -k Return
+wait_file "$BUFPICK_READBACK" || exit 14
+
+# --- Step 4: fire the buffer-picker accelerator Ctrl+Shift+E ----------------
+#
+# The capture-phase chord controller resolves it through `actions::action_for_key`,
+# activates `win.buffer-picker`, and the shell performs UiAction::OpenBufferPicker,
+# which snapshots the listed buffers with ONE blocking RPC and shows the overlay.
+#
+# Note: `-M <mod>` / `-m <mod>` press / release a modifier and `-k <key>`
+# presses+releases a key while the held modifiers apply, exactly as in the picker,
+# new-buffer and palette scenarios. Chord delivery is isolated to this single line.
+wtype -M ctrl -M shift -k e -m shift -m ctrl
+
+# Let the overlay map and grab keyboard focus on its search entry.
+sleep "$SETTLE"
+
+# Type the query so the ranked list narrows to the single matching buffer.
+wtype -- "$BUFPICK_QUERY"
+
+# Let the SearchEntry's own search delay fire and the list re-rank. That delay lives
+# inside this budget, exactly as it does in PICKER_SCENARIO.
+sleep "$SETTLE"
+
+# Activate the selection: resolves the active window, sends
+# InputEvent::SwitchBuffer for the ranked row's bufnr, and closes the overlay.
+wtype -k Return
+
+# Let nvim switch the buffer and both the pane and the cmdline strip redraw.
+sleep "$SETTLE"
+
+# Move the cursor OFF the asserted heading's row so its inverted block does not sit
+# atop (and OCR-distort) the asserted word -- the SCENARIO / PALETTE_SCENARIO
+# precedent. In normal mode `o` opens a new line BELOW and enters insert on it;
+# Escape parks the cursor there. These keystrokes only reach nvim once the overlay
+# has closed, so they also corroborate that it did.
+wtype -- o
+wtype -k Escape
+
+# Let the redraw land before capturing.
+sleep "$SETTLE"
+
+# Capture the live window to the output PNG.
+grim "$OUT_PNG"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+/// The BARE-ENTER buffer-picker scenario, run as a single `sh -c` string INSIDE
+/// `cage`.
+///
+/// [`BUFPICK_SCENARIO`] up to and including the chord, and then deliberately
+/// different: **no query is typed**, and `Enter` is pressed immediately. Everything
+/// else — the same three `:e`s in the same order, the same `MRU_GAP`, the same
+/// readback, and the same cursor parking before the capture — is reused verbatim, so
+/// the two captures differ in exactly one input.
+///
+/// Standalone: like [`BUFPICK_SCENARIO`] it never identifies or signals the Neovim
+/// child, so it does not need [`with_nvim_pid_helper`].
+///
+/// ## What the missing query buys
+///
+/// With an empty search entry `wolf_core::rank_buffers` returns every listed buffer
+/// MRU-first, so the picker's first refresh takes `buffer_picker::initial_selection`
+/// rather than `restored_index` — the branch the query scenario never reaches,
+/// because typing re-enters `refresh` with `initial_open` already cleared. `Enter`
+/// then activates row 1, the most-recently-used OTHER buffer.
+///
+/// ## `MRU_GAP` is not a settle, and it must exceed one second
+///
+/// Same reason as in [`BUFPICK_SCENARIO`], with one clause more. `lastused` is a
+/// WHOLE-SECOND Unix timestamp; three `:e`s inside one second tie, `rank_buffers`
+/// falls back to `bufnr` ASC, and the order inverts. Here that does not merely move
+/// the target — it moves the row `initial_selection` PRESELECTS, which is the row
+/// this smoke's must-contain term is written against. The readback in step 3 is what
+/// proves the gap did its job on this run.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before its window mapped (the shared convention).
+/// * `14` — the buffer-list readback the captive Neovim was told to write never
+///   appeared, so the premise below cannot be checked at all.
+const BUFPICK_BARE_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+# How many WAIT_INTERVAL polls to allow for the readback file.
+FILE_TRIES=100
+#
+# MRU_GAP -- READ THIS BEFORE TRIMMING IT. It is NOT a settle.
+#
+# getbufinfo().lastused is a WHOLE-SECOND unix timestamp, so two `:e`s inside one
+# second tie and rank_buffers falls back to bufnr ASC -- which INVERTS the MRU
+# order. This smoke asserts on the heading of the file it expects at ROW 1, the row
+# initial_selection preselects, so an inverted order makes it assert against the
+# wrong file entirely. It must therefore exceed 1.0 with margin; the readback in
+# step 3 is what proves it did.
+MRU_GAP=1.2
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome buffer-picker bare-Enter smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw before driving the editor.
+sleep "$SETTLE"
+
+# Poll for a readback file the captive Neovim writes. Nothing downstream may read a
+# file we merely hope is there. (The CRASH_SCENARIO body, verbatim.)
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome buffer-picker bare-Enter smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# --- Step 2: open the three fixtures, OLDEST FIRST --------------------------
+#
+# Identical to BUFPICK_SCENARIO, and identical on purpose: the two smokes differ in
+# exactly one input, the query. TARGET first makes it the oldest by `lastused` and
+# therefore index 2 or later; CURRENT last makes it row 0, the buffer on screen when
+# the chord fires. PRESELECT lands at row 1 -- the row initial_selection preselects,
+# and the one this smoke asserts we end up in.
+#
+# The MRU_GAP sleeps are load-bearing, not settles: see the knob comment above.
+wtype -- ":e $BUFPICK_FILE_TARGET"
+wtype -k Return
+sleep "$MRU_GAP"
+
+wtype -- ":e $BUFPICK_FILE_PRESELECT"
+wtype -k Return
+sleep "$MRU_GAP"
+
+wtype -- ":e $BUFPICK_FILE_CURRENT"
+wtype -k Return
+sleep "$MRU_GAP"
+
+# --- Step 3: the PREMISE, read back out of Neovim ---------------------------
+#
+# One `bufnr lastused tail` line per listed buffer -- exactly the fields
+# wolf_core::rank_buffers orders by, so the Rust side can re-derive the picker's
+# list order from Neovim's own answer instead of assuming the sleeps above worked.
+wtype -- ":call writefile(map(getbufinfo({'buflisted':1}), {_, b -> printf('%d %d %s', b.bufnr, b.lastused, fnamemodify(b.name, ':t'))}), '$BUFPICK_READBACK')"
+wtype -k Return
+wait_file "$BUFPICK_READBACK" || exit 14
+
+# --- Step 4: fire the buffer-picker accelerator Ctrl+Shift+E ----------------
+#
+# The capture-phase chord controller resolves it through `actions::action_for_key`,
+# activates `win.buffer-picker`, and the shell performs UiAction::OpenBufferPicker,
+# which snapshots the listed buffers with ONE blocking RPC and shows the overlay.
+#
+# Note: `-M <mod>` / `-m <mod>` press / release a modifier and `-k <key>`
+# presses+releases a key while the held modifiers apply, exactly as in the picker,
+# new-buffer, palette and query buffer-picker scenarios. Chord delivery is isolated
+# to this single line.
+wtype -M ctrl -M shift -k e -m shift -m ctrl
+
+# Let the overlay map and grab keyboard focus on its search entry.
+sleep "$SETTLE"
+
+# --- Step 5: NO QUERY. Enter, immediately -----------------------------------
+#
+# This is the whole difference from BUFPICK_SCENARIO. The search entry is still
+# empty, so the list is every listed buffer MRU-first and the selection is whatever
+# the FIRST refresh after the open chose -- i.e. initial_selection's row 1. Do not
+# add a settle-and-type here "for symmetry" with the query scenario: typing anything
+# re-enters `refresh` with `initial_open` already cleared, which is precisely the
+# branch this smoke exists to avoid.
+wtype -k Return
+
+# Let nvim switch the buffer and both the pane and the cmdline strip redraw.
+sleep "$SETTLE"
+
+# Move the cursor OFF the asserted heading's row so its inverted block does not sit
+# atop (and OCR-distort) the asserted word -- the SCENARIO / PALETTE_SCENARIO
+# precedent. In normal mode `o` opens a new line BELOW and enters insert on it;
+# Escape parks the cursor there. These keystrokes only reach nvim once the overlay
+# has closed, so they also corroborate that it did.
+wtype -- o
+wtype -k Escape
+
+# Let the redraw land before capturing.
+sleep "$SETTLE"
+
+# Capture the live window to the output PNG.
+grim "$OUT_PNG"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
 /// The `:q` CLOSE-PANE scenario, run as a single `sh -c` string INSIDE `cage`
 /// (mirrors [`CLOSE_SCENARIO`] step for step): launch the app, poll until `cage` is
 /// up (NOT until the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle,
@@ -3018,8 +3603,18 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
-/// The `/proc` scan both crash smokes use to find — and to keep watch on — the
-/// captive Neovim child, as one `sh` fragment of pure function definitions.
+/// The `/proc` scan the two crash smokes and the STALL smoke use to find — and to
+/// keep watch on — the captive Neovim child, as one `sh` fragment of pure function
+/// definitions.
+///
+/// Its stderr echoes are prefixed `wolf-gnome smoke:` rather than naming one
+/// scenario, because three share it and a message claiming to come from the
+/// crash smoke while the stall smoke was running would mis-route the first minute
+/// of every diagnosis. No assertion reads those strings.
+///
+/// The stall smoke uses only `wait_nvim_pid` and `assert_app_alive` (it stops its
+/// Neovim rather than killing it, and never expects a respawn); the rest of the
+/// fragment is inert for it.
 ///
 /// ## Why `/proc` + `sed` and not `pgrep` / `ps`
 ///
@@ -3156,7 +3751,7 @@ wait_nvim_pid() {
         t=$((t + 1))
         sleep "$WAIT_INTERVAL"
     done
-    echo "wolf-gnome crash smoke: could not identify EXACTLY ONE live Neovim child of the app" >&2
+    echo "wolf-gnome smoke: could not identify EXACTLY ONE live Neovim child of the app" >&2
     echo "  (pid $app_pid) within budget; the last scan counted ${count:-0}." >&2
     echo "  0 means the app never spawned nvim, or nvim had already died -- nothing to kill." >&2
     echo "  2+ means the scan cannot tell which process to kill, so nothing below would mean" >&2
@@ -3194,7 +3789,7 @@ wait_nvim_respawn() {
         t=$((t + 1))
         sleep "$WAIT_INTERVAL"
     done
-    echo "wolf-gnome crash smoke: no Neovim child reappeared within the respawn budget." >&2
+    echo "wolf-gnome smoke: no Neovim child reappeared within the respawn budget." >&2
     echo "  Continuing anyway -- the recovery poll below is what decides the outcome." >&2
     return 1
 }
@@ -3209,7 +3804,7 @@ wait_nvim_gone() {
         t=$((t + 1))
         sleep "$WAIT_INTERVAL"
     done
-    echo "wolf-gnome crash smoke: Neovim (pid $nvim_pid) survived SIGKILL, or was never reaped," >&2
+    echo "wolf-gnome smoke: Neovim (pid $nvim_pid) survived SIGKILL, or was never reaped," >&2
     echo "  and is still a live process after the poll budget. Nothing downstream is about" >&2
     echo "  crash recovery until the process the smoke killed is actually gone." >&2
     exit 18
@@ -3221,7 +3816,7 @@ wait_nvim_gone() {
 # readback or a failed OCR.
 assert_app_alive() {
     if ! pid_is_live "$app_pid"; then
-        echo "wolf-gnome crash smoke: THE APP (pid $app_pid) DIED WITH ITS NEOVIM." >&2
+        echo "wolf-gnome smoke: THE APP (pid $app_pid) DIED WITH ITS NEOVIM." >&2
         echo "  This is the feature's worst failure mode: killing the captive Neovim must leave" >&2
         echo "  the GTK window up, showing the crash overlay. A dead app instead means the" >&2
         echo "  front-end panicked or aborted on the death wake -- look at the drain loop and at" >&2
@@ -3241,7 +3836,7 @@ assert_no_nvim_respawn() {
     while [ "$t" -lt "$NVIM_QUIET_TRIES" ]; do
         find_nvim_pid || true
         if [ "$count" -ne 0 ]; then
-            echo "wolf-gnome crash smoke: a NEW Neovim child (pid $nvim_pid) appeared during the" >&2
+            echo "wolf-gnome smoke: a NEW Neovim child (pid $nvim_pid) appeared during the" >&2
             echo "  quiet window, so the WOLF_NVIM_BIN wrapper did not refuse." >&2
             echo "  The crash overlay will not dwell, so the capture below would show a recovered" >&2
             echo "  window and nothing in this smoke would mean anything." >&2
@@ -3284,7 +3879,7 @@ assert_no_nvim_respawn() {
 assert_one_restart_attempt() {
     attempts=$(wc -l < "$ATTEMPTS" 2>/dev/null || echo 0)
     if [ "$attempts" -ne 1 ]; then
-        echo "wolf-gnome crash smoke: the app made $attempts automatic respawn attempt(s)" >&2
+        echo "wolf-gnome smoke: the app made $attempts automatic respawn attempt(s)" >&2
         echo "  against the refusing WOLF_NVIM_BIN wrapper; MAX_AUTO_RESTART_ATTEMPTS is 1, so" >&2
         echo "  exactly one is the contract." >&2
         echo "  MORE than one means the cap is gone and a permanently failing respawn now" >&2
@@ -3297,8 +3892,9 @@ assert_one_restart_attempt() {
 }
 "#;
 
-/// Prepends [`FIND_NVIM_PID_HELPER`] to a scenario (smoke A) or to a pointer body
-/// (smoke B). `Command::arg` and [`run_pointer_scenario`] both accept the result.
+/// Prepends [`FIND_NVIM_PID_HELPER`] to a keyboard-only scenario ([`CRASH_SCENARIO`],
+/// [`STALL_SCENARIO`]) or to a pointer body ([`POINTER_RESTART_BUTTON_BODY`]).
+/// `Command::arg` and [`run_pointer_scenario`] both accept the result.
 fn with_nvim_pid_helper(scenario: &str) -> String {
     format!("{FIND_NVIM_PID_HELPER}\n{scenario}\n")
 }
@@ -3570,6 +4166,185 @@ wait_file "$DIMS_AFTER" || exit 14
 # ever flakes, SHORTEN this gap -- do NOT raise BANNER_VISIBLE_SECS, which is a
 # product constant a user sees.
 grim "$OUT_PNG"
+
+# The trap installed above tears the app down on the way out.
+exit 0
+"#;
+
+/// The STALL scenario for [`stalled_nvim_raises_the_stall_overlay_under_cage`], run
+/// as a single `sh -c` string INSIDE `cage`. Keyboard only — no pointer helper.
+///
+/// Composed with [`with_nvim_pid_helper`], which supplies `wait_nvim_pid` and
+/// `assert_app_alive` and their exit codes. It uses nothing else from that fragment
+/// and never expands `$ATTEMPTS`, so `set -u` is satisfied — the helper defines
+/// functions only, and an uncalled function body is never evaluated.
+///
+/// ## The lever
+///
+/// `kill -STOP` on the captive Neovim, then Ctrl+Shift+E. The buffer picker's
+/// candidate snapshot is issued on the GTK main thread through `block_on_rpc`; the
+/// stopped peer cannot answer; the budget ([`STALL_RPC_TIMEOUT_MS`]) elapses;
+/// `block_on_rpc`'s `Err(Timeout)` arm marks the core `NotResponding` and fires the
+/// wake; `liveness_ui(NotResponding, _)` yields `OverlayMode::Stalled`, and
+/// `apply_overlay` raises the opaque overlay and closes the empty picker behind it.
+///
+/// This is only reachable because the buffer picker exists: it is the one blocking
+/// RPC a RUNNING `wolf-gnome` issues.
+///
+/// ## Capture AFTER the block, never during it
+///
+/// No frame is committed while the main loop is blocked, so a `grim` fired during
+/// the block would return the PRE-CHORD frame and prove nothing — it would look
+/// exactly like a stall overlay that never appeared, and exactly like one that
+/// appeared and was correct. `STALL_WAIT` is therefore longer than the timeout
+/// budget plus a settle, and the capture follows it. Nothing blocks the main loop
+/// after `list_buffers` returns (`apply_overlay` only toggles visibility), so the
+/// frame is presented through the same path the crash-overlay smoke already proves.
+///
+/// ## `SIGCONT` is teardown hygiene, not recovery
+///
+/// The resumed Neovim completes the detached task, but `block_on_rpc` already
+/// returned `Err(Timeout)` and its `Ok` auto-clear arm never runs, so liveness stays
+/// `NotResponding` and the overlay stays up. The capture is taken BEFORE the
+/// `SIGCONT` regardless, so the ordering is not something an assertion rests on.
+///
+/// ## Exit codes owned
+///
+/// * `11` — the app died before its window mapped (the shared convention).
+/// * `16` — THE APP DIED with its wedged Neovim. The worst failure of this feature,
+///   and its own code so it can never be confused with a missing overlay. See
+///   [`FIND_NVIM_PID_HELPER`].
+/// * `17` — the Neovim child could not be identified uniquely, so nothing was
+///   stopped and the chord below would have been fired at a healthy editor.
+const STALL_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below). Same
+# values the other keyboard-only smokes use, sized for the FULL workspace suite.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+# How many WAIT_INTERVAL polls `wait_nvim_pid` may spend identifying the child.
+FILE_TRIES=100
+#
+# STALL_WAIT -- how long to wait after the chord before capturing. It must exceed
+# the app's WOLF_RPC_TIMEOUT_MS budget (0.8s) plus a redraw settle, because the
+# frame the assertions read is the one presented AFTER block_on_rpc gives up:
+# nothing is committed while the main loop is blocked. A timing knob only, but a
+# value below the timeout captures the pre-chord frame and makes both post-stall
+# assertions meaningless rather than red.
+STALL_WAIT=2.0
+
+# Teardown, installed BEFORE the app is started so every `exit NN` below runs it.
+# This scenario has failure exits that happen while the app is UP (16, 17) and
+# while its Neovim is STOPPED, and an orphaned pair would otherwise outlive the
+# scenario. The CONT comes first: a stopped process cannot act on the app's
+# shutdown, and reaping it matters more than the order looks.
+#
+# Explicit `if` blocks rather than `[ -n ... ] && ...`: under `set -e` a compound
+# whose final command returns non-zero aborts the trap, which would leave the app
+# running.
+cleanup() {
+    set +e
+    if [ -n "${nvim_pid:-}" ]; then
+        kill -CONT "$nvim_pid" 2>/dev/null
+    fi
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome stall smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw before driving the editor.
+sleep "$SETTLE"
+
+# --- Step 3: open the fixture, so the editor has something distinctive up ---
+wtype -- ":e $STALL_FILE"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- Step 4: the HEALTHY CONTROL capture ------------------------------------
+#
+# Taken while everything still works. It carries both halves of the diagnosis: the
+# fixture heading MUST be readable here (otherwise its absence after the stall
+# proves nothing about opacity), and the overlay's own term must be ABSENT here
+# (otherwise the post-stall hit could have come from something at launch).
+grim "$OUT_PNG_BEFORE"
+
+# --- Step 5: identify the Neovim child, exactly one -------------------------
+#
+# Exit 17 if not exactly one. The STOP below is never aimed at a guess: stopping
+# the wrong process would leave a healthy Neovim answering the RPC, and the smoke
+# would go red with no indication that it had wedged nothing at all.
+wait_nvim_pid
+
+# --- Step 6: WEDGE it -------------------------------------------------------
+#
+# SIGSTOP, not SIGKILL: a killed Neovim is `Dead` and raises the CRASH overlay,
+# which is a different state with a different message and is already smoked
+# elsewhere. A stopped one is alive, holds its end of the RPC socket open, and
+# simply never answers -- which is the only thing that produces `NotResponding`.
+kill -STOP "$nvim_pid" 2>/dev/null || true
+
+# --- Step 7: fire the chord that issues the blocking RPC --------------------
+#
+# Ctrl+Shift+E -> win.buffer-picker -> UiAction::OpenBufferPicker -> the candidate
+# snapshot, which is `WolfCore::list_buffers` through `block_on_rpc` on the GTK
+# main thread. Against the stopped peer it cannot return, so the timeout budget
+# elapses and the core is marked NotResponding.
+wtype -M ctrl -M shift -k e -m shift -m ctrl
+
+# --- Step 8: wait out the block ---------------------------------------------
+#
+# Longer than the RPC budget plus a settle. The capture below is the frame
+# presented AFTER block_on_rpc gives up; there is no frame to capture before that.
+sleep "$STALL_WAIT"
+
+# --- Step 9: capture the stalled window -------------------------------------
+grim "$OUT_PNG"
+
+# --- Step 10: the APP must still be running ---------------------------------
+#
+# Exit 16, its own code. An app that blocked forever, or that panicked on the
+# liveness wake, is the worst outcome of this feature and must never be confused
+# with an overlay that merely failed to render.
+assert_app_alive
+
+# --- Step 11: let Neovim run again ------------------------------------------
+#
+# Teardown hygiene only, and the capture is already taken. The resumed Neovim
+# completes the detached task, but block_on_rpc has already returned Err(Timeout)
+# and never observes it, so the core stays NotResponding -- which is the concrete
+# evidence for the documented claim that a stall on Linux does not self-clear.
+kill -CONT "$nvim_pid" 2>/dev/null || true
 
 # The trap installed above tears the app down on the way out.
 exit 0
@@ -5875,7 +6650,7 @@ const SHARED_SHADER_CACHE_DIR: &str = "wolf-smoke-shader-cache";
 /// were counted on this host.
 ///
 /// So state honestly what this buys and what it does not. It buys: the first cage
-/// smoke of an invocation pays a cold cache and the other 26 run warm, which is where
+/// smoke of an invocation pays a cold cache and the other 28 run warm, which is where
 /// the pre-state-persistence settle margin came from. It does NOT buy: warmth across
 /// invocations — the first smoke of EVERY invocation is cold. The section after the
 /// table below is why that is acceptable rather than a defect to fix.
@@ -5904,8 +6679,8 @@ const SHARED_SHADER_CACHE_DIR: &str = "wolf-smoke-shader-cache";
 ///
 /// Warm threshold ∈ (0.20, 0.25]; cold threshold ∈ (0.30, 0.35]. Pointing
 /// `XDG_CACHE_HOME` at one shared directory warms the cache once per invocation and
-/// keeps it warm across the smokes of THAT invocation: 26 of the 27 run warm instead
-/// of all 27 running cold. That removes most of the regression at its source rather
+/// keeps it warm across the smokes of THAT invocation: 28 of the 29 run warm instead
+/// of all 29 running cold. That removes most of the regression at its source rather
 /// than paying for it in settle time. It does not remove the cold column — the first
 /// smoke of every invocation still lands in it, because the directory moves with
 /// `TMPDIR` (see the section above).
@@ -6088,7 +6863,7 @@ const HOME_STATE_DIR_FALLBACKS: [&str; 2] = [".local/state/wolf", ".local/share/
 /// the "Note (OCR width)" / "Note (OCR height)" paragraphs above their own consts,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
-/// be applied here to all twenty-six.
+/// be applied here to all twenty-nine.
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
@@ -6459,6 +7234,59 @@ fn read_selection(path: &Path, smoke: &str) -> (String, [i64; 4]) {
         *slot = parse_readback_int(token, path, &raw, smoke);
     }
     (mode, out)
+}
+
+/// Reads the buffer-picker smoke's MRU readback — one `bufnr lastused tail` line
+/// per `buflisted` buffer — and returns it as `(bufnr, lastused, tail)` SORTED by
+/// the rule `wolf_core::rank_buffers` uses: `lastused` DESCending, ties broken by
+/// `bufnr` ASCending.
+///
+/// Sorting here rather than trusting the file's own order is the point of the
+/// helper. `getbufinfo()` answers in `bufnr` order, which is the order the buffers
+/// were CREATED in; what the picker shows is the MRU order derived from it. Applying
+/// the production rule to Neovim's own numbers is what makes the caller's check a
+/// premise about the run rather than a restatement of the order the scenario typed
+/// its `:e`s in — and it is why a collided whole-second `lastused` shows up as a
+/// named, actionable failure instead of as a mysterious OCR miss.
+fn read_buffer_mru_order(path: &Path, smoke: &str) -> Vec<(i64, i64, String)> {
+    const LINE_TOKENS: usize = 3;
+
+    let raw = read_readback(path, smoke);
+    let mut rows: Vec<(i64, i64, String)> = Vec::new();
+
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        assert!(
+            tokens.len() == LINE_TOKENS,
+            "{smoke}: buffer readback line {line:?} in {} holds {} whitespace-separated token(s), \
+             expected {LINE_TOKENS} (bufnr, lastused, filename tail). Raw contents were {raw:?}. \
+             Each line is one `printf('%d %d %s', …)` over a `getbufinfo({{'buflisted':1}})` \
+             entry, so a different shape means the typed Ex command did not execute as written — \
+             a stray keystroke landing in the buffer rather than the cmdline is the usual cause. \
+             A tail containing a SPACE would also land here, which no fixture in this file has.",
+            path.display(),
+            tokens.len()
+        );
+        let bufnr = parse_readback_int(tokens[0], path, &raw, smoke);
+        let lastused = parse_readback_int(tokens[1], path, &raw, smoke);
+        rows.push((bufnr, lastused, tokens[2].to_string()));
+    }
+
+    assert!(
+        !rows.is_empty(),
+        "{smoke}: the buffer readback {} parsed to NO rows at all (raw contents {raw:?}), so every \
+         ordering assertion built on it would run zero times. The scenario polls for a non-empty \
+         file before continuing, so an empty parse here means the file held only whitespace.",
+        path.display()
+    );
+
+    // The production rule, re-applied to Neovim's own numbers.
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    rows
 }
 
 /// Parses `extents=<W>x<H>` out of the helper's readiness line, which the scenario
@@ -6866,6 +7694,14 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// present after the button click and ABSENT during the overlay dwell, which is how
 /// it proves the overlay is opaque. A filler row carrying it would break both.
 ///
+/// The two BUFPICK terms are the same shape reached differently: each is listed once,
+/// against the smoke that asserts it PRESENT, and the OTHER buffer-picker smoke
+/// asserts the same term ABSENT. [`BUFPICK_OCR_PRESENT`] is present after the query
+/// smoke's typed query and absent after the bare-Enter smoke's preselection;
+/// [`BUFPICK_OCR_ABSENT`] is the reverse. A filler row, a temp-cwd component or a
+/// fixture name carrying either would break one smoke and vacuously satisfy the
+/// other, which is why one row per term is enough to guard both.
+///
 /// [`RESTART_OCR_UNSAVED`] is likewise asserted in BOTH directions by the SAME smoke:
 /// present in the post-recovery capture (the unsaved edit came back out of the dead
 /// Neovim's swap file) and absent from the pre-crash control (which is taken before
@@ -6883,7 +7719,7 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// explicit, documented exemption for the two title directory names rather than
 /// widening this table's guards to cover them.
 ///
-/// Twenty-one of the twenty-six smokes appear here. FIVE contribute no rows at
+/// Twenty-four of the twenty-nine smokes appear here. FIVE contribute no rows at
 /// all, on purpose, and it is worth being explicit about which and why:
 ///
 /// * [`colon_qa_closes_the_window_under_cage`] captures no PNG and asserts only that
@@ -7009,6 +7845,31 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         PALETTE_OCR_ABSENT,
         "PALETTE_OCR_ABSENT",
         "command_palette_chord_runs_the_selected_command_under_cage",
+    ),
+    (
+        BUFPICK_OCR_PRESENT,
+        "BUFPICK_OCR_PRESENT",
+        "buffer_picker_chord_switches_to_the_queried_buffer_under_cage",
+    ),
+    (
+        BUFPICK_OCR_ABSENT,
+        "BUFPICK_OCR_ABSENT",
+        "buffer_picker_chord_switches_to_the_queried_buffer_under_cage",
+    ),
+    (
+        BUFPICK_OCR_CURRENT,
+        "BUFPICK_OCR_CURRENT",
+        "buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage",
+    ),
+    (
+        STALL_OCR_PRESENT,
+        "STALL_OCR_PRESENT",
+        "stalled_nvim_raises_the_stall_overlay_under_cage",
+    ),
+    (
+        STALL_OCR_ABSENT,
+        "STALL_OCR_ABSENT",
+        "stalled_nvim_raises_the_stall_overlay_under_cage",
     ),
     (
         QUIT_OCR_KEEP,
@@ -7192,6 +8053,31 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "PALETTE_FILE",
         "command_palette_chord_runs_the_selected_command_under_cage",
     ),
+    (
+        BUFPICK_FILE_TARGET,
+        "BUFPICK_FILE_TARGET",
+        "buffer_picker_chord_switches_to_the_queried_buffer_under_cage",
+    ),
+    (
+        BUFPICK_FILE_PRESELECT,
+        "BUFPICK_FILE_PRESELECT",
+        "buffer_picker_chord_switches_to_the_queried_buffer_under_cage",
+    ),
+    (
+        BUFPICK_FILE_CURRENT,
+        "BUFPICK_FILE_CURRENT",
+        "buffer_picker_chord_switches_to_the_queried_buffer_under_cage",
+    ),
+    (
+        BUFPICK_READBACK_NAME,
+        "BUFPICK_READBACK_NAME",
+        "buffer_picker_chord_switches_to_the_queried_buffer_under_cage",
+    ),
+    (
+        STALL_FILE,
+        "STALL_FILE",
+        "stalled_nvim_raises_the_stall_overlay_under_cage",
+    ),
 ];
 
 /// Mechanically enforces the naming invariant documented on [`SIDEBAR_FILLER_FILES`]:
@@ -7230,7 +8116,11 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 /// ([`TITLE_OCR_ABSENT`]); and — added with the divider-drag unit — `divideralfa`
 /// and `dividerbravo` ([`DIVIDER_OCR_LEFT`] / [`DIVIDER_OCR_RIGHT`]); and — added
 /// with the command-palette unit — `zzpalrun` ([`PALETTE_OCR_PRESENT`]) and
-/// `palcmdbase` ([`PALETTE_OCR_ABSENT`]). None is a
+/// `palcmdbase` ([`PALETTE_OCR_ABSENT`]); and — added with the buffer-picker unit —
+/// `bufpickalfa` ([`BUFPICK_OCR_PRESENT`]), `bufpickbravo`
+/// ([`BUFPICK_OCR_ABSENT`]), `bufpickcharlie` ([`BUFPICK_OCR_CURRENT`]),
+/// `responding` ([`STALL_OCR_PRESENT`]) and
+/// `stallfixture` ([`STALL_OCR_ABSENT`]). None is a
 /// substring of any [`SIDEBAR_FILLER_FILES`] entry, and no filler may be renamed to
 /// make one so. Five smokes contribute no term:
 /// [`colon_qa_closes_the_window_under_cage`] asserts on the cage exit status and
@@ -7268,7 +8158,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the twenty-six smokes — still
+/// nothing to the smoke suite's runtime and — unlike the twenty-nine smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
@@ -8866,6 +9756,571 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
     );
 }
 
+/// Ctrl+Shift+E opens the buffer picker, a typed query narrows its list to one row,
+/// and Enter switches the active window to THAT buffer.
+///
+/// ## What it covers that no other smoke does
+///
+/// The whole buffer-picker path end to end: the accelerator resolving through
+/// `actions::action_for_key` to `win.buffer-picker`, `shell::perform` mapping
+/// `UiAction::OpenBufferPicker` onto the overlay's `open`, the liveness guard
+/// letting a healthy core through, the ONE blocking `WolfCore::list_buffers`
+/// snapshot returning a candidate set, `wolf_core::rank_buffers` filtering it per
+/// keystroke, and activation resolving `active_win` plus the ranked row's `bufnr`
+/// into an `InputEvent::SwitchBuffer` Neovim acts on.
+///
+/// It is also the only smoke in which the app issues a synchronous RPC while the
+/// window is interactive, which is what makes
+/// [`stalled_nvim_raises_the_stall_overlay_under_cage`] possible at all.
+///
+/// ## The premise, and why it is READ BACK rather than assumed
+///
+/// `buffer_picker::initial_selection` preselects ROW 1, so a picker that ignored
+/// the typed query entirely would still activate a buffer — the most-recently-used
+/// OTHER one. The smoke is only a test of FILTERING while the target is neither row
+/// 0 nor row 1, and that ordering rests on `getbufinfo().lastused`, a WHOLE-SECOND
+/// timestamp: three `:e`s inside one second tie, `rank_buffers` falls back to
+/// `bufnr` ASC, the order inverts, and the target lands on exactly the row the
+/// preselection would have picked. The scenario therefore writes Neovim's own
+/// buffer list to [`BUFPICK_READBACK_NAME`] and assertion 3 re-derives the picker's
+/// order from it with the production rule. The same arithmetic is pinned headlessly
+/// by
+/// `buffer_picker::tests::buffer_rows_for_the_smoke_query_select_exactly_the_target`,
+/// so a ranking change reddens the fast suite rather than making this smoke
+/// stochastic.
+///
+/// ## Assertions, classified
+///
+/// A precondition gets NO revert: inventing one would manufacture a discriminator
+/// this smoke does not have. The `measured` column is the coder's to fill from an
+/// actual red run, per `tests/README.md`'s "A red-run demonstration is a
+/// deliverable, not a formality".
+///
+/// | # | assertion | kind | revert | measured |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | n/a |
+/// | 2 | [`assert_png_present`] | precondition — grim produced an image | none; do not invent one | n/a |
+/// | 3 | the readback's MRU order puts the CURRENT file at index 0, the PRESELECT file at index 1, and the target at index 2 or later | **precondition**, loud and self-checking | none. It is a property of the SCENARIO's timing, not of any source line: its failure means the three `:e`s landed inside one `lastused` second, and the fix is to raise `MRU_GAP`. Without it, assertions 4 and 5 are vacuous — a picker that ignored the query would activate the preselected row, and under a collided order that row could be the target itself, so the smoke would pass forever with no filtering at all. | n/a |
+/// | 4 | OCR contains [`BUFPICK_OCR_PRESENT`] | **discriminator** — the activation really switched the buffer | in `buffer_picker.rs`'s `activate_selection`, delete the `WolfCore::switch_buffer` call and keep the `close()`. The chord still fires, the overlay still opens, the query still filters and Enter still closes it — but the pane still shows `bpxray.md`, so the target's heading is absent. Isolated: assertion 5 stays green. | RED. `OCR did not contain "bufpickalfa" — the HEADING of bpzulu.md, which only renders once the active window really has been switched to that buffer`. The only asserted term in the capture was `bufpickcharlie`, i.e. the pane never left `bpxray.md`; `bufpickbravo` was absent, so assertion 5's condition held. Restored, green. |
+/// | 5 | OCR lacks [`BUFPICK_OCR_ABSENT`] | **discriminator, with NO isolated red run** | in `buffer_picker.rs`'s `refresh`, rank against `""` instead of `self.entry.text()`. The list then holds every buffer MRU-first and Enter activates the PRESELECTED row, so `bpyankee.md`'s heading is what the capture shows. That reddens assertion 4 as well, and no revert reddens 5 alone: with one pane, two headings cannot both be on screen. Recorded honestly — assertion 5's contribution is naming WHICH wrong buffer was activated, not detecting that one was. | No isolated red run, by design. Under assertion 4's revert this row's own condition HELD (the capture carried no `bufpickbravo`) and assertion 4 panicked before it was reached. Green in every run in which assertion 4 was green. |
+///
+/// A third, coarser revert, for use only if the two above are inconclusive: delete
+/// `self.inner.buffers.open()` from `shell::perform`'s new arm. Nothing opens, the
+/// query is typed into `bpxray.md` as normal-mode keys, and assertions 4 and 5 both
+/// go red.
+///
+/// ## Its sibling
+///
+/// [`buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage`] runs the
+/// same three fixtures in the same order and types NO query, so it asserts
+/// [`BUFPICK_OCR_ABSENT`] PRESENT and [`BUFPICK_OCR_PRESENT`] absent — the exact
+/// opposite of this smoke on both terms. It is also the only test that reaches
+/// `refresh`'s `initial_open` branch, which this one cannot: typing re-enters
+/// `refresh` with the flag already cleared, so the selection here comes from
+/// `restored_index`.
+#[test]
+fn buffer_picker_chord_switches_to_the_queried_buffer_under_cage() {
+    const SMOKE: &str = "buffer_picker_chord_switches_to_the_queried_buffer_under_cage";
+    // The captive Neovim always holds its startup buffer plus the three fixtures,
+    // so four is the expected count and three is the floor below which the
+    // ordering assertions stop being able to say anything.
+    const MIN_LISTED_BUFFERS: usize = 3;
+    // The first index at which the target may sit. Row 0 is the buffer the user is
+    // in and row 1 is the one `initial_selection` preselects, so anything below
+    // this makes the query redundant and assertion 4 vacuous.
+    const MIN_TARGET_INDEX: usize = 2;
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd holding the three fixtures. The app reads
+    // `std::env::current_dir()` for `CoreConfig.cwd`, so cage is launched with this
+    // directory as its working directory (see `cage_command`).
+    let cwd = make_temp_cwd();
+    for (name, heading) in [
+        (BUFPICK_FILE_TARGET, BUFPICK_HEADING_TARGET),
+        (BUFPICK_FILE_PRESELECT, BUFPICK_HEADING_PRESELECT),
+        (BUFPICK_FILE_CURRENT, BUFPICK_HEADING_CURRENT),
+    ] {
+        let path = cwd.join(name);
+        std::fs::write(&path, format!("{heading}\n"))
+            .unwrap_or_else(|e| panic!("{SMOKE}: failed to write fixture {}: {e}", path.display()));
+    }
+
+    // Page density. The asserted heading is a short line on an otherwise thin
+    // editor page, which is exactly the `SIDEBAR_FILLER_COUNT` hazard: below the
+    // measured five-file floor tesseract misclassifies isolated glyphs. The fillers
+    // are never opened, so they never join the picker's candidate list — that list
+    // comes from `getbufinfo`, not from a file search.
+    for name in SIDEBAR_FILLER_FILES {
+        let filler = cwd.join(name);
+        std::fs::write(&filler, SIDEBAR_FILLER_BODY).unwrap_or_else(|e| {
+            panic!("{SMOKE}: failed to write filler {}: {e}", filler.display())
+        });
+    }
+
+    // The premise readback lands in the cwd (the sidebar lists it, which is why its
+    // name is registered in `RELAUNCH_FIXTURE_NAMES`). Cleared first: evidence that
+    // could be a previous run's leftover is not evidence.
+    let readback = cwd.join(BUFPICK_READBACK_NAME);
+    clear_evidence(&readback, SMOKE);
+
+    let out_png = runtime_dir.join("wolf_gnome_bufpick_smoke.png");
+    clear_evidence(&out_png, SMOKE);
+
+    let status = cage_command(BUFPICK_SCENARIO, &cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("BUFPICK_FILE_TARGET", BUFPICK_FILE_TARGET)
+        .env("BUFPICK_FILE_PRESELECT", BUFPICK_FILE_PRESELECT)
+        .env("BUFPICK_FILE_CURRENT", BUFPICK_FILE_CURRENT)
+        .env("BUFPICK_QUERY", BUFPICK_QUERY)
+        .env("BUFPICK_READBACK", &readback)
+        .status()
+        .expect("failed to spawn `cage` for the headless buffer-picker smoke scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage buffer-picker scenario exited unsuccessfully ({status}). Read the exit \
+         code FIRST.\n\
+         Exit 11: the app died before its window ever mapped — a LAUNCH failure, and nothing \
+         below is about the buffer picker.\n\
+         Exit 14: the buffer-list readback the captive Neovim was told to write never appeared, \
+         so the premise assertion below cannot run at all. Keys are not reaching Neovim, or the \
+         typed `:call writefile(...)` did not execute — check the keyboard-only smokes first.\n\
+         Any other status means the app failed to map its window, a `:e` did not load, or \
+         wtype/grim failed. Note this assertion says nothing about whether the picker opened: the \
+         scenario exits 0 whatever the chord did.\n\
+         Screenshot expected at {}.",
+        out_png.display()
+    );
+
+    // --- Assertion 2 (precondition): grim produced an image -------------------
+    assert_png_present(SMOKE, &out_png);
+
+    // --- Assertion 3 (precondition): the MRU ORDER the whole smoke rests on ---
+    //
+    // Re-derived from Neovim's own `getbufinfo()` with the production rule
+    // (`lastused` DESC, ties by `bufnr` ASC), never assumed from the order the
+    // scenario typed its `:e`s in.
+    let order = read_buffer_mru_order(&readback, SMOKE);
+    let tails: Vec<&str> = order.iter().map(|(_, _, tail)| tail.as_str()).collect();
+
+    assert!(
+        order.len() >= MIN_LISTED_BUFFERS,
+        "{SMOKE}: Neovim listed only {} buflisted buffer(s) ({tails:?}), fewer than the \
+         {MIN_LISTED_BUFFERS} this smoke's premise needs. All three `:e` commands must have \
+         landed — with fewer buffers the target cannot be pushed below the preselected row, so \
+         assertions 4 and 5 would be measuring a picker whose query is redundant. Readback kept \
+         at {}.",
+        order.len(),
+        readback.display()
+    );
+    assert_eq!(
+        tails.first().copied(),
+        Some(BUFPICK_FILE_CURRENT),
+        "{SMOKE}: the MRU-ordered buffer list opens on {:?}, not the last-opened file \
+         {BUFPICK_FILE_CURRENT:?}. The order was re-derived from Neovim's own \
+         `bufnr lastused tail` readback with the same rule `rank_buffers` uses, so this is a \
+         PREMISE failure rather than a product one: the three `:e`s landed inside one \
+         `lastused` second (it is a WHOLE-SECOND timestamp), the tie fell back to `bufnr` ASC, \
+         and the whole order inverted. RAISE `MRU_GAP` in `BUFPICK_SCENARIO` — it must exceed \
+         1.0s with margin. Full order was {tails:?}; readback kept at {}.",
+        tails.first(),
+        readback.display()
+    );
+    assert_eq!(
+        tails.get(1).copied(),
+        Some(BUFPICK_FILE_PRESELECT),
+        "{SMOKE}: row 1 of the MRU-ordered buffer list is {:?}, not {BUFPICK_FILE_PRESELECT:?}. \
+         Row 1 is the row `buffer_picker::initial_selection` preselects, so it is the row a \
+         picker that IGNORED the typed query would activate — and assertion 5 asserts that \
+         file's heading is absent. With a different file there, assertion 5 names the wrong \
+         buffer and stops discriminating anything. The usual cause is the same one as above: \
+         three `:e`s inside one whole-second `lastused` tick, fixed by raising `MRU_GAP`. Full \
+         order was {tails:?}; readback kept at {}.",
+        tails.get(1),
+        readback.display()
+    );
+
+    let target_index = tails
+        .iter()
+        .position(|tail| *tail == BUFPICK_FILE_TARGET)
+        .unwrap_or_else(|| {
+            panic!(
+                "{SMOKE}: the buffer list does not contain {BUFPICK_FILE_TARGET:?} at all \
+                 ({tails:?}), so the query could not have selected it however well the ranking \
+                 worked — its `:e` never took effect. Readback kept at {}.",
+                readback.display()
+            )
+        });
+    assert!(
+        target_index >= MIN_TARGET_INDEX,
+        "{SMOKE}: the query's target {BUFPICK_FILE_TARGET:?} sits at index {target_index} of the \
+         MRU-ordered buffer list, but it must be at index {MIN_TARGET_INDEX} or later. At index 0 \
+         or 1 it is the row `initial_selection` preselects, so a picker that ignored the typed \
+         query ENTIRELY would still activate it: assertion 4 would pass permanently while proving \
+         nothing about filtering, and assertion 5 would pass because the preselected row and the \
+         target are the same file. This is a PREMISE failure, and its cause is timing rather than \
+         source: `lastused` is a whole-second timestamp, so three `:e`s inside one second tie and \
+         the order inverts. Raise `MRU_GAP` in `BUFPICK_SCENARIO`; do NOT relax this bound. Full \
+         order was {tails:?}; readback kept at {}.",
+        readback.display()
+    );
+
+    let ocr_text = ocr_to_lowercase(&out_png);
+
+    // --- Assertion 4 (discriminator): the activation SWITCHED the buffer ------
+    assert!(
+        ocr_text.contains(BUFPICK_OCR_PRESENT),
+        "{SMOKE}: OCR did not contain {BUFPICK_OCR_PRESENT:?} — the HEADING of \
+         {BUFPICK_FILE_TARGET}, which only renders once the active window really has been \
+         switched to that buffer. Assertion 3 passed, so the target was in the list and below \
+         the preselected row; this says the switch did not happen. The likely causes, in order: \
+         (a) the Ctrl+Shift+E chord never reached `win.buffer-picker` — check that the \
+         ACTION_TABLE row's BindingStatus is Bound rather than Reserved, and that \
+         `command_action::ui_action_for` maps `Command::BufferPicker` to a real UiAction (BOTH \
+         are required; neither alone installs the action); (b) the overlay opened but its \
+         `open_decision` refused, in which case the app's stderr carries \
+         \"buffer picker not opened\"; (c) Enter activated nothing, so `switch_target` returned \
+         None — `active_win` being None or 0 is the arm to check; (d) the switch was sent but \
+         `bpxray.md` is still on screen, which assertion 5 would also catch. If the capture shows \
+         {BUFPICK_HEADING_CURRENT} instead, the picker did nothing at all rather than picking \
+         wrongly. PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+
+    // --- Assertion 5 (discriminator, no isolated red run): WHICH buffer -------
+    //
+    // With one pane two headings cannot both be on screen, so nothing reddens this
+    // alone: its job is to name the wrong buffer when the query is ignored, not to
+    // detect that the switch failed. See the revert table on this test.
+    assert!(
+        !ocr_text.contains(BUFPICK_OCR_ABSENT),
+        "{SMOKE}: OCR unexpectedly contained {BUFPICK_OCR_ABSENT:?} — the heading of \
+         {BUFPICK_FILE_PRESELECT}, the row `buffer_picker::initial_selection` preselects. The \
+         picker therefore activated its PRESELECTED row rather than the row the query selected, \
+         which means the typed text never reached the ranking: check that `refresh` ranks against \
+         the SearchEntry's text rather than an empty query, and that `app::wire_keys` suppresses \
+         forwarding while the overlay is open (without that suppression the query is delivered to \
+         Neovim as normal-mode keys instead). Assertion 4 above is red too in that case, and it \
+         is the one to read first — this assertion's contribution is naming WHICH wrong buffer \
+         was activated. The assertion is sound: after `:e {BUFPICK_FILE_PRESELECT}` Neovim's \
+         toast and the sidebar row both show the FILENAME, whose lowercase does not contain \
+         {BUFPICK_OCR_ABSENT:?}. PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+}
+
+/// Ctrl+Shift+E and then a BARE Enter — no query typed — switches to the
+/// most-recently-used OTHER buffer.
+///
+/// ## What it covers that nothing else does
+///
+/// `buffer_picker::initial_selection`'s arithmetic is table-tested headlessly
+/// (`initial_selection_table`), but the branch that APPLIES it — `refresh`'s
+/// `initial_open` arm selecting that row in the real `ListBox` — is a rule living
+/// inside a widget closure the fast suite cannot execute at all. That is exactly the
+/// class `crates/wolf-gnome/DECISIONS.md` ("The pure seams") records as having
+/// "repeatedly meant a rule nothing verified" on this platform.
+///
+/// [`buffer_picker_chord_switches_to_the_queried_buffer_under_cage`] does not reach
+/// it either, and cannot: it types a query, and typing re-enters `refresh` with
+/// `initial_open` already cleared, so its selection comes from `restored_index`. The
+/// preselection is only ever applied on the FIRST refresh after an open, which is the
+/// only refresh this smoke performs.
+///
+/// It is also the behaviour that makes the feature a buffer SWITCHER rather than a
+/// list: open it, press Enter, land back in the file you came from. macOS does the
+/// same thing — `crates/wolf-macos/Sources/WolfMacOS/BufferPickerView.swift`'s
+/// `min(1, rows.count - 1)` behind an `isInitialOpen` flag.
+///
+/// ## It shares the query smoke's fixtures, and pulls them the other way
+///
+/// Same three files, same `:e` order, same `MRU_GAP`, same readback — so the two
+/// captures differ in exactly one input. [`BUFPICK_OCR_ABSENT`] is asserted PRESENT
+/// here and ABSENT there, and [`BUFPICK_OCR_PRESENT`] the reverse. That opposition is
+/// what makes the pair discriminating rather than either alone: the other smoke's
+/// green run, over the same fixture set in the same shape of cwd, is measured
+/// evidence that no sidebar row, no `:e` echo and no header-bar segment can produce
+/// [`BUFPICK_OCR_ABSENT`] by itself.
+///
+/// ## The premises, and how each is measured rather than assumed
+///
+/// * **The MRU order the preselection lands in.** `getbufinfo().lastused` is a
+///   WHOLE-SECOND timestamp: three `:e`s inside one second tie, `rank_buffers` falls
+///   back to `bufnr` ASC and the order inverts — which moves the row
+///   `initial_selection` picks, i.e. the row this smoke's must-contain term names.
+///   The scenario therefore writes Neovim's own buffer list to
+///   [`BUFPICK_READBACK_NAME`] and assertion 2 re-derives the picker's order from it
+///   with the production rule. `MRU_GAP` is what buys the distinct seconds; the
+///   readback is what proves it worked on THIS run.
+/// * **`Enter` in an EMPTY `gtk::SearchEntry` still emits `activate`.** The query
+///   smoke cannot say so — its entry holds text — and no headless test can reach a
+///   real `SearchEntry` at all. This smoke is what measures it against the real
+///   widget. If the premise is false the overlay never closes, so the capture shows
+///   the picker's row list (which draws FILENAMES, carrying none of the three
+///   asserted terms) over an unswitched pane: assertion 3 goes red and assertion 4
+///   may or may not, since the open overlay's opaque box can occlude part of the
+///   heading beneath it. Assertion 3's message enumerates that outcome next to the
+///   others so the two are told apart from the failure text rather than from the PNG.
+///
+/// ## Assertions, classified
+///
+/// A precondition gets NO revert: inventing one would manufacture a discriminator
+/// this smoke does not have. The `measured` column is the coder's to fill from an
+/// actual red run, per `tests/README.md`'s "A red-run demonstration is a deliverable,
+/// not a formality".
+///
+/// | # | assertion | kind | revert | measured |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | `status.success()` and [`assert_png_present`] | precondition — the cage scenario ran to completion and grim produced an image | none; do not invent one | n/a |
+/// | 2 | the readback's MRU order puts the CURRENT file at index 0, the PRESELECT file at index 1, and the target at index 2 or later | **precondition**, loud and self-checking | none. It is a property of the SCENARIO's timing, not of any source line: its failure means the three `:e`s landed inside one `lastused` second, and the fix is to raise `MRU_GAP`. Without its index-1 clause, assertion 3 asserts on the wrong row's heading and the whole smoke measures nothing. | n/a |
+/// | 3 | OCR contains [`BUFPICK_OCR_ABSENT`] — the PRESELECT file's heading | **discriminator** — the row-1 preselection reached the `ListBox` and Enter acted on it | in `buffer_picker.rs`'s `refresh`, replace the `initial_open` branch's `initial_selection(new_len)` with `restored_index(reset_to_top, prev_index, new_len)`: delete the preselection and fall through to the rule the other two overlays share, which selects row 0. Enter then re-selects the buffer the user is already in, so this heading never appears. | RED. `OCR did not contain "bufpickbravo" — the HEADING of bpyankee.md, which renders only once the active window really has been switched to that buffer`. The capture carried `bufpickcharlie`, i.e. row 0 — the buffer already on screen — was what Enter activated. Restored, green. |
+/// | 4 | OCR lacks [`BUFPICK_OCR_CURRENT`] — the CURRENT file's heading | **discriminator** — a switch happened at all, rather than the picker closing on nothing | the same revert. With row 0 selected the "switch" is to the buffer already on screen, so this heading is still there afterwards. The two assertions go red together under it and that is the point: one says we did not arrive, the other says we never left. | Not reached: assertion 3 panics first under that revert. Its condition WAS violated in the same capture, which carried `bufpickcharlie`, so the pair does fail together — but only assertion 3's message is emitted. |
+/// | 5 | OCR lacks [`BUFPICK_OCR_PRESENT`] — the TARGET file's heading | **discriminator, NOT reddened by the revert above** | it discriminates the opposite error: a preselection that is too DEEP, e.g. `Some(2.min(n_rows - 1))`, which lands on the target and reddens 3 and 5 while leaving 4 green. Recorded honestly rather than dressed up — that revert also reddens the fast suite's `initial_selection_table`, so it is not an isolated front-end change. | Not reached: under `Some(2.min(n_rows - 1))` assertion 3 panicked first, again on `OCR did not contain "bufpickbravo"`. That capture carried `bufpickalfa` — this row's forbidden term — and no `bufpickcharlie`, so assertion 4 would have passed and this one would have failed. Recorded as observed, not as an isolated red run. |
+#[test]
+fn buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage() {
+    const SMOKE: &str = "buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage";
+    // The captive Neovim always holds its startup buffer plus the three fixtures, so
+    // four is the expected count and three is the floor below which the ordering
+    // assertions stop being able to say anything.
+    const MIN_LISTED_BUFFERS: usize = 3;
+    // The first index at which the target may sit. Row 0 is the buffer the user is
+    // in and row 1 is the one `initial_selection` preselects, so a target above this
+    // would be the row Enter is EXPECTED to land on and assertion 5 would contradict
+    // assertion 3.
+    const MIN_TARGET_INDEX: usize = 2;
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd holding the same three fixtures the query smoke uses. The app
+    // reads `std::env::current_dir()` for `CoreConfig.cwd`, so cage is launched with
+    // this directory as its working directory (see `cage_command`).
+    let cwd = make_temp_cwd();
+    for (name, heading) in [
+        (BUFPICK_FILE_TARGET, BUFPICK_HEADING_TARGET),
+        (BUFPICK_FILE_PRESELECT, BUFPICK_HEADING_PRESELECT),
+        (BUFPICK_FILE_CURRENT, BUFPICK_HEADING_CURRENT),
+    ] {
+        let path = cwd.join(name);
+        std::fs::write(&path, format!("{heading}\n"))
+            .unwrap_or_else(|e| panic!("{SMOKE}: failed to write fixture {}: {e}", path.display()));
+    }
+
+    // Page density. The asserted heading is a short line on an otherwise thin editor
+    // page, which is exactly the `SIDEBAR_FILLER_COUNT` hazard: below the measured
+    // five-file floor tesseract misclassifies isolated glyphs. The fillers are never
+    // opened, so they never join the picker's candidate list — that list comes from
+    // `getbufinfo`, not from a file search — and therefore cannot shift which row
+    // `initial_selection` picks.
+    for name in SIDEBAR_FILLER_FILES {
+        let filler = cwd.join(name);
+        std::fs::write(&filler, SIDEBAR_FILLER_BODY).unwrap_or_else(|e| {
+            panic!("{SMOKE}: failed to write filler {}: {e}", filler.display())
+        });
+    }
+
+    // The premise readback lands in the cwd (the sidebar lists it, which is why its
+    // name is registered in `RELAUNCH_FIXTURE_NAMES`). Cleared first: evidence that
+    // could be a previous run's leftover is not evidence.
+    let readback = cwd.join(BUFPICK_READBACK_NAME);
+    clear_evidence(&readback, SMOKE);
+
+    let out_png = runtime_dir.join("wolf_gnome_bufpick_bare_smoke.png");
+    clear_evidence(&out_png, SMOKE);
+
+    let status = cage_command(BUFPICK_BARE_SCENARIO, &cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("BUFPICK_FILE_TARGET", BUFPICK_FILE_TARGET)
+        .env("BUFPICK_FILE_PRESELECT", BUFPICK_FILE_PRESELECT)
+        .env("BUFPICK_FILE_CURRENT", BUFPICK_FILE_CURRENT)
+        .env("BUFPICK_READBACK", &readback)
+        .status()
+        .expect("failed to spawn `cage` for the headless bare-Enter buffer-picker smoke scenario");
+
+    // --- Assertion 1 (preconditions): the scenario ran, and grim produced a PNG ---
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage bare-Enter buffer-picker scenario exited unsuccessfully ({status}). \
+         Read the exit code FIRST.\n\
+         Exit 11: the app died before its window ever mapped — a LAUNCH failure, and nothing \
+         below is about the buffer picker.\n\
+         Exit 14: the buffer-list readback the captive Neovim was told to write never appeared, \
+         so the premise assertion below cannot run at all. Keys are not reaching Neovim, or the \
+         typed `:call writefile(...)` did not execute — check the keyboard-only smokes first.\n\
+         Any other status means the app failed to map its window, a `:e` did not load, or \
+         wtype/grim failed. Note this assertion says nothing about whether the picker opened or \
+         what Enter did: the scenario exits 0 whatever the chord produced.\n\
+         Screenshot expected at {}.",
+        out_png.display()
+    );
+    assert_png_present(SMOKE, &out_png);
+
+    // --- Assertion 2 (precondition): the MRU ORDER the preselection lands in ---
+    //
+    // Re-derived from Neovim's own `getbufinfo()` with the production rule
+    // (`lastused` DESC, ties by `bufnr` ASC), never assumed from the order the
+    // scenario typed its `:e`s in. Index 1 is the load-bearing clause here: it is
+    // the row `initial_selection` chooses, so it decides which file assertion 3 is
+    // entitled to name.
+    let order = read_buffer_mru_order(&readback, SMOKE);
+    let tails: Vec<&str> = order.iter().map(|(_, _, tail)| tail.as_str()).collect();
+
+    assert!(
+        order.len() >= MIN_LISTED_BUFFERS,
+        "{SMOKE}: Neovim listed only {} buflisted buffer(s) ({tails:?}), fewer than the \
+         {MIN_LISTED_BUFFERS} this smoke's premise needs. All three `:e` commands must have \
+         landed — with fewer buffers there is no distinct row 1 for `initial_selection` to \
+         preselect, so assertions 3 to 5 would be measuring a list whose shape cannot \
+         discriminate the preselection from a clamp. Readback kept at {}.",
+        order.len(),
+        readback.display()
+    );
+    assert_eq!(
+        tails.first().copied(),
+        Some(BUFPICK_FILE_CURRENT),
+        "{SMOKE}: the MRU-ordered buffer list opens on {:?}, not the last-opened file \
+         {BUFPICK_FILE_CURRENT:?}. The order was re-derived from Neovim's own \
+         `bufnr lastused tail` readback with the same rule `rank_buffers` uses, so this is a \
+         PREMISE failure rather than a product one: the three `:e`s landed inside one `lastused` \
+         second (it is a WHOLE-SECOND timestamp), the tie fell back to `bufnr` ASC, and the whole \
+         order inverted. Row 0 is the buffer the user is IN, so with a different file there \
+         assertion 4's must-be-absent term names the wrong buffer as well. RAISE `MRU_GAP` in \
+         `BUFPICK_BARE_SCENARIO` — it must exceed 1.0s with margin. Full order was {tails:?}; \
+         readback kept at {}.",
+        tails.first(),
+        readback.display()
+    );
+    assert_eq!(
+        tails.get(1).copied(),
+        Some(BUFPICK_FILE_PRESELECT),
+        "{SMOKE}: row 1 of the MRU-ordered buffer list is {:?}, not {BUFPICK_FILE_PRESELECT:?}. \
+         Row 1 is the row `buffer_picker::initial_selection` preselects, and this smoke types no \
+         query at all — so it is the row Enter activates and the ONLY row whose heading assertion \
+         3 is entitled to demand. With a different file there, assertion 3 asserts the wrong \
+         row's heading: it would fail on a perfectly working preselection, or (if the file that \
+         moved into row 1 happened to be the one it names) pass without the preselection working \
+         at all. The usual cause is timing, not source: three `:e`s inside one whole-second \
+         `lastused` tick, fixed by raising `MRU_GAP`. Full order was {tails:?}; readback kept at \
+         {}.",
+        tails.get(1),
+        readback.display()
+    );
+
+    let target_index = tails
+        .iter()
+        .position(|tail| *tail == BUFPICK_FILE_TARGET)
+        .unwrap_or_else(|| {
+            panic!(
+                "{SMOKE}: the buffer list does not contain {BUFPICK_FILE_TARGET:?} at all \
+                 ({tails:?}), so assertion 5's must-be-absent heading could never have been \
+                 rendered whatever the picker did — its `:e` never took effect. Readback kept at \
+                 {}.",
+                readback.display()
+            )
+        });
+    // Implied by the two clauses above as they stand today — index 0 is CURRENT and
+    // index 1 is PRESELECT, and the three names are distinct — so it is stated as the
+    // DIRECT premise of assertion 5 rather than as an independent check. If either
+    // clause above is ever relaxed (a fourth fixture, a startup buffer that joins the
+    // list differently), this is what still keeps assertion 5's must-be-absent
+    // heading off the row a bare Enter lands on.
+    assert!(
+        target_index >= MIN_TARGET_INDEX,
+        "{SMOKE}: {BUFPICK_FILE_TARGET:?} sits at index {target_index} of the MRU-ordered buffer \
+         list, but it must be at index {MIN_TARGET_INDEX} or later. At index 1 it IS the row \
+         `initial_selection` preselects, so assertions 3 and 5 would demand that one capture both \
+         show and not show a heading — an unsatisfiable pair that would read as a product bug. At \
+         index 0 it is the buffer already on screen and assertion 5 merely duplicates assertion 4. \
+         This is a PREMISE failure and its cause is timing rather than source: `lastused` is a \
+         whole-second timestamp, so three `:e`s inside one second tie and the order inverts. Raise \
+         `MRU_GAP` in `BUFPICK_BARE_SCENARIO`; do NOT relax this bound. Full order was {tails:?}; \
+         readback kept at {}.",
+        readback.display()
+    );
+
+    let ocr_text = ocr_to_lowercase(&out_png);
+
+    // --- Assertion 3 (discriminator): the ROW-1 PRESELECTION was applied -------
+    assert!(
+        ocr_text.contains(BUFPICK_OCR_ABSENT),
+        "{SMOKE}: OCR did not contain {BUFPICK_OCR_ABSENT:?} — the HEADING of \
+         {BUFPICK_FILE_PRESELECT}, which renders only once the active window really has been \
+         switched to that buffer. Assertion 2 passed, so that file WAS row 1 of the picker's \
+         MRU-first list: the row `buffer_picker::initial_selection` preselects on the first \
+         refresh after an open, and with no query typed the only row a bare Enter can activate. \
+         The distinguishable causes, in order:\n\
+         (a) the preselection never reached the ListBox — `refresh`'s `initial_open` branch fell \
+         through to `restored_index`, which selects row 0, so the pane never left \
+         {BUFPICK_FILE_CURRENT} and ASSERTION 4 IS RED TOO. Read that one next; the pair says \
+         \"we never left\" and \"we did not arrive\".\n\
+         (b) the preselection landed too DEEP (row 2 or later), in which case assertion 5 is red \
+         and names the file it landed on instead.\n\
+         (c) Enter did nothing at all: `gtk::SearchEntry` did not emit `activate` for an EMPTY \
+         entry, or `switch_target` returned None (`active_win` None or 0). The overlay then never \
+         closed, and the capture shows its row list — which draws FILENAMES (`bp*`), none of \
+         which contains any asserted term — over the unswitched pane. Assertion 4 may or may not \
+         catch this, since the open overlay's opaque box can occlude the heading beneath it, so \
+         this assertion is the one that speaks for that case. The scenario's `o` + Escape also \
+         only reach Neovim once the overlay has closed.\n\
+         (d) the chord never reached `win.buffer-picker`, or `open_decision` refused — the app's \
+         stderr then carries \"buffer picker not opened\". \
+         PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+
+    // --- Assertion 4 (discriminator): a switch happened AT ALL ----------------
+    assert!(
+        !ocr_text.contains(BUFPICK_OCR_CURRENT),
+        "{SMOKE}: OCR unexpectedly contained {BUFPICK_OCR_CURRENT:?} — the heading of \
+         {BUFPICK_FILE_CURRENT}, the buffer the editor was ALREADY showing when the chord fired. \
+         A bare Enter must move the pane off it, so this is the assertion that separates \"the \
+         preselection switched the buffer\" from \"the picker closed on nothing and left the page \
+         exactly as it was\" — two states no other assertion here can tell apart, because both \
+         simply lack the preselected row's heading. The likeliest cause is the preselection \
+         falling through to row 0, which is the buffer the user is already in (`rank_buffers` \
+         sorts by `lastused` DESC): check that `refresh`'s `initial_open` branch still calls \
+         `initial_selection` rather than `restored_index`. Assertion 3 is red alongside this one \
+         in that case. PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+
+    // --- Assertion 5 (discriminator): the preselection was not TOO DEEP -------
+    //
+    // Not reddened by the revert named for 3 and 4; what it discriminates is the
+    // opposite error, a preselection past row 1. See the revert table on this test.
+    assert!(
+        !ocr_text.contains(BUFPICK_OCR_PRESENT),
+        "{SMOKE}: OCR unexpectedly contained {BUFPICK_OCR_PRESENT:?} — the heading of \
+         {BUFPICK_FILE_TARGET}, which assertion 2 proved sits at index {target_index} of the \
+         MRU-ordered list, i.e. below the row a bare Enter must activate. NO QUERY IS TYPED in \
+         this smoke, so nothing should be able to select that row: either \
+         `buffer_picker::initial_selection` returned an index past 1 (the rule is \
+         `min(1, n_rows - 1)`, and `initial_selection_table` pins it), or the list the picker \
+         built is not in the MRU order the readback describes — check that `refresh` ranks the \
+         snapshot taken at open rather than some re-fetched or re-sorted list. Assertion 3 is red \
+         with it in the first case. Full readback order was {tails:?}; PNG kept at {} for \
+         inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+}
+
 #[test]
 fn colon_q_closes_focused_pane_under_cage() {
     // Serialize against the other cage tests (shared Wayland socket); recover from
@@ -10400,16 +11855,228 @@ fn nvim_crash_recovers_and_reopens_the_file_under_cage() {
     );
 }
 
+/// A WEDGED (not dead) Neovim raises the opaque "Neovim stopped responding" overlay.
+///
+/// ## What it proves that nothing else can
+///
+/// The stall half of the crash/stall overlay, end to end, against a genuinely
+/// unresponsive Neovim: `SIGSTOP` the captive process, fire Ctrl+Shift+E so the
+/// buffer picker's candidate snapshot goes out through `block_on_rpc`, let the
+/// budget elapse, and read the raised overlay off a pixel. The chain it exercises —
+/// `block_on_rpc`'s `Err(Timeout)` arm marking the core `NotResponding` and firing
+/// the wake, `shell::on_liveness_wake` classifying it, `liveness_ui` yielding
+/// `OverlayMode::Stalled` with `paint: false`, and `apply_overlay` raising the
+/// opaque child and closing the empty picker behind it — has no other end-to-end
+/// coverage at all. `crates/wolf-core/tests/nvim_liveness.rs` covers the CORE side
+/// headlessly; what no core test can say is whether the GTK front-end ever raises
+/// anything.
+///
+/// It is reachable only because the buffer picker exists. Before it, `wolf-gnome`'s
+/// only `block_on_rpc` ran at launch, before the window was interactive, so a
+/// running app could not raise this overlay at all.
+///
+/// ## Why `SIGSTOP` and not `SIGKILL`
+///
+/// A killed Neovim is `Dead` and raises the CRASH overlay, which is a different
+/// state, carries a different message and is already smoked by
+/// [`nvim_crash_recovers_and_reopens_the_file_under_cage`] and
+/// [`crash_overlay_and_restart_button_recover_under_cage`]. A stopped one is alive,
+/// holds its end of the RPC socket open and simply never answers — which is the
+/// only thing that produces `NotResponding`. That the two states' messages cannot
+/// cross-satisfy each other's OCR terms is pinned in the fast suite by
+/// `wolf_gnome::liveness_ui::tests::overlay_message_table`.
+///
+/// ## Why the capture is taken AFTER the block, not during it
+///
+/// No frame is committed while the GTK main loop is blocked, so a `grim` fired
+/// during the block returns the PRE-CHORD frame — indistinguishable from an overlay
+/// that never appeared. The scenario therefore sleeps past the timeout budget and
+/// captures the frame presented once `list_buffers` has given up.
+///
+/// ## Assertions, classified
+///
+/// A precondition and a control get NO revert: inventing one would manufacture a
+/// discriminator this smoke does not have. The `measured` column is the coder's to
+/// fill from an actual red run.
+///
+/// | # | assertion | kind | revert | measured |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | `status.success()` | precondition — the scenario ran to completion | none; do not invent one. Exits 11 / 16 / 17 are documented in the failure message. | n/a |
+/// | 2 | both PNGs present | precondition — grim produced two images | none; do not invent one | n/a |
+/// | 3 | control OCR contains [`STALL_OCR_ABSENT`] | **precondition** — the fixture rendered at all | none. Without it assertion 6 is vacuous: an editor that drew nothing satisfies "the heading is absent" trivially, so the opacity claim would rest on nothing. | n/a |
+/// | 4 | control OCR lacks [`STALL_OCR_PRESENT`] | **control**, not falsifiable by a source revert | none, and that is deliberate. It proves the overlay was raised BY THE CHORD rather than being up all along (a launch-time stall, a mis-classified `Alive`), which is a property of the run and not of a line anyone could revert. Do not invent one. | n/a |
+/// | 5 | post OCR contains [`STALL_OCR_PRESENT`] | **discriminator** — a stall was detected and shown | in `buffer_picker.rs`'s `open`, replace the `core.list_buffers()` call with `Vec::new()`. No RPC is issued, nothing elapses, liveness stays `Alive`, and the capture shows the editor. This is the feature-disable, and it also reddens [`buffer_picker_chord_switches_to_the_queried_buffer_under_cage`] — expected, and stated. The tempting "isolated" alternative (`liveness_ui`'s `NotResponding` arm yielding `OverlayMode::Hidden`) is NOT isolated: it reddens `liveness_ui_table` and `not_responding_never_auto_restarts` in the fast suite. | RED. `after the wedge and the chord, OCR did not contain "responding" — the distinctive word of liveness_ui::STALLED_MESSAGE`. The capture was the healthy editor: `stallfixture` present, no overlay text. As stated, the same revert reddened [`buffer_picker_chord_switches_to_the_queried_buffer_under_cage`] too (`OCR did not contain "bufpickalfa"`). Restored, green. |
+/// | 6 | post OCR lacks [`STALL_OCR_ABSENT`] | **discriminator** — the overlay is OPAQUE and full-bleed | in `crash_overlay::build`, delete `overlay.add_css_class("background")`. The overlay goes transparent and the frozen fixture shows through. Shared with [`crash_overlay_and_restart_button_recover_under_cage`]'s own opacity assertion — the two smokes share the widget, which is why this revert reddens both. | RED. `the post-stall capture still contained "stallfixture" — the heading of stfrozen.md, which was on screen when Neovim was wedged`, while the same OCR dump also carried `neovim stopped responding`: the overlay was up and see-through, which is exactly what this row claims to catch. The sibling smoke went red too, but on its must-CONTAIN assertion (`the dwell capture did not contain "crashed"`) rather than on its opacity assertion; its dwell capture held the pre-crash editor body and none of the overlay's words. Restored, green. |
+/// | 7 | (in-scenario) `assert_app_alive` | discriminator, exit 16 | none needed as a Rust assertion; the exit code IS the observable, and it is the worst failure this feature has: the app dying alongside its wedged Neovim. | n/a |
+#[test]
+fn stalled_nvim_raises_the_stall_overlay_under_cage() {
+    const SMOKE: &str = "stalled_nvim_raises_the_stall_overlay_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd holding the one fixture; see `make_temp_cwd` for why
+    // isolation is mandatory.
+    let cwd = make_temp_cwd();
+    let fixture = cwd.join(STALL_FILE);
+    std::fs::write(&fixture, format!("{STALL_HEADING}\n")).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: failed to write the fixture {}: {e}",
+            fixture.display()
+        )
+    });
+
+    // Page density. The control capture asserts on a short heading over an
+    // otherwise thin editor page — the `SIDEBAR_FILLER_COUNT` hazard exactly.
+    for name in SIDEBAR_FILLER_FILES {
+        let filler = cwd.join(name);
+        std::fs::write(&filler, SIDEBAR_FILLER_BODY).unwrap_or_else(|e| {
+            panic!("{SMOKE}: failed to write filler {}: {e}", filler.display())
+        });
+    }
+
+    // TWO captures: the healthy control and the post-stall one. Both cleared first
+    // — evidence that could be a previous run's leftover is not evidence.
+    let out_png_before = runtime_dir.join("wolf_gnome_stall_before_smoke.png");
+    let out_png = runtime_dir.join("wolf_gnome_stall_after_smoke.png");
+    for path in [&out_png_before, &out_png] {
+        clear_evidence(path, SMOKE);
+    }
+
+    // `WOLF_RPC_TIMEOUT_MS` is read once at `WolfCore::start` from the process
+    // environment, so setting it here reaches the app through `cage -- sh -c`. It
+    // is a timing knob only; see `STALL_RPC_TIMEOUT_MS` for the two bounds it sits
+    // between and for why shortening it is safe in this scenario.
+    let status = cage_command(&with_nvim_pid_helper(STALL_SCENARIO), &cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("OUT_PNG_BEFORE", &out_png_before)
+        .env("STALL_FILE", STALL_FILE)
+        .env("WOLF_RPC_TIMEOUT_MS", STALL_RPC_TIMEOUT_MS)
+        .status()
+        .expect("failed to spawn `cage` for the headless stall smoke scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage stall scenario exited unsuccessfully ({status}). Read the exit code \
+         FIRST; each names a different failure.\n\
+         Exit 11: the app died before its window ever mapped — a LAUNCH failure, nothing to do \
+         with stall detection.\n\
+         Exit 16: THE APP DIED WITH ITS WEDGED NEOVIM. This is the worst possible failure of this \
+         feature and has its own code so it can never be confused with a missing overlay: the GTK \
+         window must survive a Neovim that stops answering, show the stall overlay, and stay \
+         interactive. A dead app means the main loop blocked forever (is `block_on_rpc` still \
+         bounded by WOLF_RPC_TIMEOUT_MS?) or panicked on the liveness wake — look at the drain \
+         loop and at the restart path's RefCell borrows.\n\
+         Exit 17: the scenario could not identify EXACTLY ONE live `nvim` child of the app, so it \
+         refused to SIGSTOP anything and the chord below was fired at a healthy editor. 0 means \
+         nvim never started or had already gone; 2+ means the scan cannot tell which to stop.\n\
+         Captures expected at {} (control) and {}.",
+        out_png_before.display(),
+        out_png.display()
+    );
+
+    // --- Assertion 2 (precondition): grim produced both images ----------------
+    assert_png_present(SMOKE, &out_png_before);
+    assert_png_present(SMOKE, &out_png);
+
+    let ocr_before = ocr_to_lowercase(&out_png_before);
+
+    // --- Assertion 3 (precondition): the fixture RENDERED while healthy -------
+    //
+    // Without this, assertion 6 is vacuous: "the heading is absent" is satisfied by
+    // an editor that drew nothing at all, by a window that never mapped, and by an
+    // unreadable capture just as well as by an opaque overlay.
+    assert!(
+        ocr_before.contains(STALL_OCR_ABSENT),
+        "{SMOKE}: the CONTROL capture — taken while everything was still healthy, before anything \
+         was stopped — did not contain {STALL_OCR_ABSENT:?}, the heading of {STALL_FILE}. Nothing \
+         about stall detection has happened yet, so this is a RENDERING or OCR failure: the `:e` \
+         did not load, the heading was not drawn, or the page was too sparse for tesseract (see \
+         `SIDEBAR_FILLER_COUNT`; this smoke writes all {SIDEBAR_FILLER_COUNT} filler files for \
+         exactly that reason). Fix this before reading anything below — without a passing control, \
+         the ABSENCE of this term after the stall proves nothing about the overlay's opacity. PNG \
+         kept at {}. OCR output was:\n{ocr_before}",
+        out_png_before.display()
+    );
+
+    // --- Assertion 4 (control): the overlay was NOT already up ----------------
+    //
+    // Not falsifiable by a source revert, and deliberately so: it says the overlay
+    // seen after the chord was raised BY THE CHORD rather than having been up since
+    // launch. Do not invent a revert for it.
+    assert!(
+        !ocr_before.contains(STALL_OCR_PRESENT),
+        "{SMOKE}: the CONTROL capture already contained {STALL_OCR_PRESENT:?} — the stall \
+         overlay's own word — but it was taken while Neovim was running normally and nothing had \
+         been signalled. The post-stall assertion below would then pass with the chord doing \
+         nothing at all. Something raised the overlay at LAUNCH: check whether \
+         `pane_view::apply_layout_rebuild`'s `block_on_rpc` ran (it should not — a fresh \
+         WOLF_STATE_DIR means there is no saved layout to rebuild) and whether \
+         {STALL_RPC_TIMEOUT_MS} ms is too short for a healthy round trip on this host, which is \
+         the one way a working core marks itself NotResponding by accident. PNG kept at {}. OCR \
+         output was:\n{ocr_before}",
+        out_png_before.display()
+    );
+
+    let ocr_after = ocr_to_lowercase(&out_png);
+
+    // --- Assertion 5 (discriminator): the stall was detected and SHOWN --------
+    assert!(
+        ocr_after.contains(STALL_OCR_PRESENT),
+        "{SMOKE}: after the wedge and the chord, OCR did not contain {STALL_OCR_PRESENT:?} — the \
+         distinctive word of `liveness_ui::STALLED_MESSAGE`. The app is still alive (the scenario \
+         exited 0, so `assert_app_alive` passed), so the overlay simply was not raised. The likely \
+         causes, in order: (a) the chord never reached `win.buffer-picker`, so no RPC was issued \
+         at all and the core stayed Alive — the buffer-picker smoke would be red too; (b) `open` \
+         issued no blocking call, so nothing could elapse; (c) `block_on_rpc`'s timeout arm no \
+         longer calls `mark_not_responding`, or the wake it fires is not reaching \
+         `shell::on_liveness_wake`; (d) `liveness_ui(NotResponding, _)` no longer yields \
+         `OverlayMode::Stalled` — which would also redden `liveness_ui_table` and \
+         `not_responding_never_auto_restarts` in the fast suite, so check those first; (e) the \
+         message was reworded to drop the word, which \
+         `liveness_ui::tests::overlay_message_table` pins precisely so it cannot happen silently. \
+         PNG kept at {}. OCR output was:\n{ocr_after}",
+        out_png.display()
+    );
+
+    // --- Assertion 6 (discriminator): the overlay is OPAQUE -------------------
+    //
+    // The frozen last frame is still behind it — `liveness_ui` sets `paint: false`,
+    // so nothing repaints, and the fixture's heading is exactly where it was. Only
+    // an opaque, full-bleed overlay hides it.
+    assert!(
+        !ocr_after.contains(STALL_OCR_ABSENT),
+        "{SMOKE}: the post-stall capture still contained {STALL_OCR_ABSENT:?} — the heading of \
+         {STALL_FILE}, which was on screen when Neovim was wedged. Assertion 3 proved it rendered \
+         while healthy, so a hit HERE means the overlay is up but SEE-THROUGH: the frozen editor \
+         frame is showing through it. Check that `crash_overlay::build` still adds the \
+         `background` CSS class to the overlay box, and that the overlay is still a full-bleed \
+         child rather than a centred one. This is the same widget the crash-overlay smoke asserts \
+         opacity on, so that smoke is red too — one fix serves both. PNG kept at {}. OCR output \
+         was:\n{ocr_after}",
+        out_png.display()
+    );
+}
+
 /// A FAILED respawn leaves an opaque crash overlay up, and clicking its "Restart
 /// Neovim" button recovers the session.
 ///
 /// ## Why this smoke has to break the respawn to exist at all
 ///
 /// The crash overlay is unobservable on the success path — it is shown and then
-/// cleared by the fresh Neovim's `Alive` wake within a frame or two — and
-/// `NotResponding` is unreachable from `wolf-gnome` entirely, because nothing in the
-/// front-end issues a synchronous RPC that could elapse the timeout budget. The one
-/// state in which the overlay genuinely DWELLS is a crash whose automatic restart
+/// cleared by the fresh Neovim's `Alive` wake within a frame or two — and the OTHER
+/// dwelling state, `NotResponding`, is a different overlay mode with a different
+/// message, smoked separately by
+/// [`stalled_nvim_raises_the_stall_overlay_under_cage`]. The one
+/// state in which the CRASH overlay genuinely DWELLS is a crash whose automatic restart
 /// FAILED, which is also a real production scenario (Neovim removed or upgraded
 /// mid-session, an `exec` failure, an OOM kill). So this smoke induces one, with a
 /// `/bin/sh` wrapper at `WOLF_NVIM_BIN` that refuses while a marker file exists —
@@ -11741,7 +13408,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// | the active-pane FOCUS RING's top edge — a long thin high-contrast line immediately above the heading | six ablations on one PNG; the top edge alone accounted for it | [`DIVIDER_RELAUNCH_SCENARIO`]'s closing `<C-w>h`, which moves the ring to the WIDE pane |
 /// | a single misclassified GLYPH at 15 columns | the same pixels read through both segmentation modes, twice over | the second reader, [`ocr_uniform_block_to_lowercase`] |
 ///
-/// The third is why this smoke, alone of the twenty-six, reads its capture twice.
+/// The third is why this smoke, alone of the twenty-nine, reads its capture twice.
 /// With the first two answered, on one retained PNG:
 ///
 /// | command | verbatim output |

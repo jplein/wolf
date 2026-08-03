@@ -31,11 +31,20 @@
 //!   command drain dispatches through ([`command_action`]).
 //! - [`mod@palette`]: the command-palette rulebook — the candidate list this
 //!   front-end may show ([`palette::palette_rows`], which ranks unbounded and
-//!   applies its cap after filtering), the TOTAL
+//!   applies its cap after filtering) and the TOTAL
 //!   [`wolf_core::PaletteRowKind`] → [`palette::PaletteAction`] classification that
 //!   keeps a row `wolf-gnome` cannot perform out of the list
-//!   ([`palette::palette_action_for`]), and which row `Enter` activates given the
-//!   `ListBox`'s reported selection ([`palette::activation_index`]).
+//!   ([`palette::palette_action_for`]).
+//! - [`mod@buffer_picker`]: the buffer-picker rulebook — the TOTAL
+//!   `Option<`[`wolf_core::Liveness`]`>` → [`buffer_picker::OpenDecision`] guard
+//!   that refuses to issue the candidate snapshot's BLOCKING RPC unless the core
+//!   is alive ([`buffer_picker::open_decision`]), the first-open preselection of
+//!   ROW 1 — the most-recently-used OTHER buffer, so a bare `Enter` is a switch
+//!   rather than a no-op — and the `(win, bufnr)` pair `Enter` resolves to
+//!   ([`buffer_picker::switch_target`], which refuses an active window of `0`
+//!   exactly as `wolf-ffi` does), plus the row's display label. Selection movement
+//!   and activation come from [`mod@picker`], whose `next_selection`,
+//!   `restored_index` and `activation_index` all three overlays share.
 //! - [`launch_decision`] / [`workspace::reroot_ready`]: whether a project is open,
 //!   where the captive Neovim starts, and when an Open Folder re-root has settled
 //!   ([`workspace`]). The launch rule is process cwd first, then the cwd restored
@@ -95,6 +104,7 @@
 
 pub mod actions;
 pub mod app;
+pub mod buffer_picker;
 pub mod command_action;
 pub mod crash_overlay;
 pub mod cursor;

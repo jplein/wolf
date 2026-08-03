@@ -28,10 +28,10 @@
 //! fails the filter rather than appearing as a dead entry.
 //!
 //! Almost all of this module is GTK widget wiring, which cannot be unit-tested
-//! headlessly. Its pure, display-free seams are [`palette_rows`],
-//! [`palette_action_for`] and [`activation_index`], unit-tested below; selection
-//! movement reuses [`crate::picker`]'s [`next_selection`] and [`restored_index`], so
-//! the two overlays navigate identically.
+//! headlessly. Its pure, display-free seams are [`palette_rows`] and
+//! [`palette_action_for`], unit-tested below; selection movement and activation
+//! reuse [`crate::picker`]'s [`next_selection`], [`restored_index`] and
+//! [`activation_index`], so every overlay in this crate navigates identically.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -42,7 +42,7 @@ use gtk::glib;
 use wolf_core::{rank_palette, Command, PaletteRow, PaletteRowKind, WolfCore};
 
 use crate::command_action::{ui_action_for, UiAction};
-use crate::picker::{next_selection, restored_index};
+use crate::picker::{activation_index, next_selection, restored_index};
 
 /// The maximum number of ranked rows shown in the palette list. Applied AFTER the
 /// classification filter — see [`palette_rows`].
@@ -142,26 +142,6 @@ pub fn palette_rows(command_mru_recent: &[String], query: &str, max: usize) -> V
         })
         .take(max)
         .collect()
-}
-
-/// Which row `Enter` activates, given the `ListBox`'s reported selection and the
-/// current row count.
-///
-/// With zero rows this is `None` — a true no-op, never a fallback to row 0. With
-/// rows present, an absent, negative or out-of-range selection resolves to the TOP
-/// row, which is what makes "type a query, press Enter" work with no arrow key.
-/// `Option<i32>` is the shape because `gtk::ListBoxRow::index()` returns an `i32`
-/// that is `-1` for a row not in a list.
-#[must_use]
-pub fn activation_index(selected: Option<i32>, n_rows: usize) -> Option<usize> {
-    if n_rows == 0 {
-        return None;
-    }
-    let index = selected
-        .and_then(|index| usize::try_from(index).ok())
-        .filter(|index| *index < n_rows)
-        .unwrap_or(0);
-    Some(index)
 }
 
 /// The palette's shared, interior-mutable state. All access happens on the single
@@ -1079,79 +1059,5 @@ mod tests {
              cap reordered the results. `.take(max)` must preserve the ranking order it \
              truncates."
         );
-    }
-
-    /// One `activation_index` table row.
-    struct ActivationCase {
-        desc: &'static str,
-        selected: Option<i32>,
-        n_rows: usize,
-        expected: Option<usize>,
-    }
-
-    /// Which row Enter activates, given the `ListBox`'s reported selection.
-    ///
-    /// Two behaviours are load-bearing. Zero rows is a TRUE no-op — Enter on an
-    /// empty palette must dispatch nothing rather than falling back to row 0, which
-    /// with no rows would panic or run an arbitrary command. And Enter with nothing
-    /// selected activates the TOP row, which is what makes "type a query, press
-    /// Enter" work without an arrow key. `Option<i32>` is the shape because
-    /// `gtk::ListBoxRow::index()` returns an `i32` that is `-1` for a row not in a
-    /// list.
-    #[test]
-    fn activation_index_table() {
-        const LEN: usize = 5;
-        let cases = [
-            ActivationCase {
-                desc: "no rows, nothing selected => no activation at all",
-                selected: None,
-                n_rows: 0,
-                expected: None,
-            },
-            ActivationCase {
-                desc: "no rows, but a stale selection index => still no activation",
-                selected: Some(0),
-                n_rows: 0,
-                expected: None,
-            },
-            ActivationCase {
-                desc: "rows but no selection => the top row (type-then-Enter)",
-                selected: None,
-                n_rows: LEN,
-                expected: Some(0),
-            },
-            ActivationCase {
-                desc: "GTK's -1 'row not in a list' index => the top row",
-                selected: Some(-1),
-                n_rows: LEN,
-                expected: Some(0),
-            },
-            ActivationCase {
-                desc: "a selection in range => that row",
-                selected: Some(2),
-                n_rows: LEN,
-                expected: Some(2),
-            },
-            ActivationCase {
-                desc: "a selection past the end => the top row, never out of bounds",
-                selected: Some(9),
-                n_rows: LEN,
-                expected: Some(0),
-            },
-        ];
-
-        for case in &cases {
-            assert_eq!(
-                activation_index(case.selected, case.n_rows),
-                case.expected,
-                "case: {} — activation_index({:?}, {}) must be {:?}. With zero rows a Some here \
-                 makes Enter index into an empty list; with rows present a None makes Enter do \
-                 nothing at all, which is the palette's whole purpose.",
-                case.desc,
-                case.selected,
-                case.n_rows,
-                case.expected
-            );
-        }
     }
 }

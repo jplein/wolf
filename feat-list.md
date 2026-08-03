@@ -79,14 +79,14 @@ GTK paints a single-row bottom strip: an active command line, or the last toast 
 | Sidebar re-roots on Neovim's live cwd       | `feat/macos-ui` (`075c91f`)                                                  | [x]   | [ ]   |
 | Sidebar in the leading position             | `feat/sidebar-ui` (`ebc7300`)                                                | [x]   | [x]   |
 | Pickers hosted in a separate floating panel | `feat/markdown-preview` (`d763b3b`)                                          | [x]   | [ ]   |
-| Buffer picker (⌘E)                          | `feat/buffer-list`                                                           | [x]   | [ ]   |
+| Buffer picker (⌘E)                          | `feat/buffer-list` / `linux-feat/buffer-picker`                              | [x]   | [x]   |
 | Command palette (⌘P)                        | `feat/commands` (`4b3b53e`)                                                  | [x]   | [x]   |
 | Open Recent (global recent-directories MRU) | `feat/commands`                                                              | [x]   | [ ]   |
 | Per-pane back/forward navigation history    | `feat/nav-buttons` (`597175b`)                                               | [x]   | [ ]   |
 | Project search UI (ripgrep-backed)          | `feat/search-ui`                                                             | [x]   | [ ]   |
 | Native file dialogs (open / save / save-as) | —                                                                            | [x]   | [ ]   |
 
-The `wolf-core` halves of the buffer picker, the recent-directories MRU, the navigation history and project search are platform-agnostic and already linked into `wolf-gnome`; only the GTK views and their wiring are missing. Those are the highest-leverage Linux tasks. The GTK command palette lists only the registry commands `wolf-gnome` performs: Switch-to-Window rows need multiple windows, and Open Recent rows need the recent-directories row above.
+The `wolf-core` halves of the recent-directories MRU, the navigation history and project search are platform-agnostic and already linked into `wolf-gnome`; only the GTK views and their wiring are missing. Those are the highest-leverage Linux tasks. The GTK command palette lists only the registry commands `wolf-gnome` performs: Switch-to-Window rows need multiple windows, and Open Recent rows need the recent-directories row above.
 
 Two rows stay unticked for partial coverage. The file-dialog row covers all three dialogs, and `wolf-gnome` has native Open File and Open Folder but no save or save-as, so saving remains `:w` from within Neovim. The sidebar re-roots after an Open Folder but not after a user-typed `:cd`.
 
@@ -185,13 +185,15 @@ Liveness, swap recovery, auto-reload and the hang fixes live in `wolf-core` or `
 
 Two limits are worth stating. The pane topology does not survive a restart — only the Tier-1 file set does, so a crash while the window was split returns one pane. macOS restores no more than that, so it is a shared limit rather than a Linux gap.
 
-`NotResponding` is unreachable from `wolf-gnome` for a running application: `wolf-core` marks a stall only from `block_on_rpc`'s timeout arm, and the only such call on the GTK side runs during the launch window. Its presentation is table-tested headlessly and has no end-to-end coverage. The buffer picker, Copy and the Markdown preview are all `block_on_rpc` paths, so any of them makes it reachable.
+`NotResponding` is reachable from `wolf-gnome` at two points. `wolf-core` marks a stall only from `block_on_rpc`'s timeout arm, and the GTK side issues two such calls: the layout rebuild at launch, and the buffer picker's candidate snapshot, which a running window issues on Ctrl+Shift+E. The overlay's presentation has end-to-end coverage — a cage smoke `SIGSTOP`s the captive Neovim and presses the chord. Copy and the Markdown preview will add further blocking paths.
+
+The second limit is that a stall does not clear itself on the GTK side. The buffer picker refuses to issue its snapshot unless the core reads `Alive`, so a wedged Neovim is never re-probed, and core's own auto-clear rides the success of a later synchronous call while a timed-out one is detached. The route back is the overlay's Restart button, which force-kills.
 
 ## Suggested order of work for Linux
 
 Work already carried is recorded in the tables above. What remains, in order:
 
-1. **The two remaining overlay pickers** (buffer picker, project search). Ranking is already shared, each command already lands in the drain as `Deferred`, and each chord is already reserved; each needs a GTK view of the shape the file picker and the command palette already have. The buffer picker also carries the first `block_on_rpc` call on the GTK side, which is what will finally make `NotResponding` reachable — and testable — on Linux.
+1. **The project-search overlay.** Ranking is already shared, its command already lands in the drain as `Deferred`, and its chord is already reserved; it needs a GTK view of the shape the file picker, the command palette and the buffer picker already have.
 2. **Config-driven typography**, then the completion popup and multi-line toast.
 3. **Markdown preview**, which is the largest single item: it introduces a second kind of pane content on the GTK side.
 4. **Multi-window and tabs**, which reshape `wolf-gnome` from a single-window application into a coordinator-plus-views one.

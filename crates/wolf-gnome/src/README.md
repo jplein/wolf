@@ -28,7 +28,7 @@ Purpose: the action namespace as data — every `gio` action name, its accelerat
 
 #### `app.rs`
 
-Purpose: all GTK and Adwaita window wiring. `run` builds the `adw::Application` and, on activate, constructs the window — header bar, sidebar, and an editor overlay holding the pane view, the picker, the command palette, the empty state, and the crash overlay — attached to a freshly started `WolfCore`.
+Purpose: all GTK and Adwaita window wiring. `run` builds the `adw::Application` and, on activate, constructs the window — header bar, sidebar, and an editor overlay holding the pane view, the picker, the command palette, the buffer picker, the empty state, and the crash overlay — attached to a freshly started `WolfCore`.
 
 **Public API**
 
@@ -43,7 +43,29 @@ Purpose: all GTK and Adwaita window wiring. `run` builds the `adw::Application` 
 
 **Gotchas**
 
-- The wake-channel capacity stays private; its tests live here so they read the production constant rather than a literal.
+- The wake-channel capacity stays private; its tests live here and read the production constant, not a literal.
+
+#### `buffer_picker.rs`
+
+Purpose: the buffer-picker overlay — a search entry over the captive Neovim's listed buffers, ranked by `wolf_core::rank_buffers`. Activating a row switches the active window to that buffer.
+
+**Public API**
+
+- `build(overlay, area, core) -> BufferPickerHandle` — starts hidden; `area` is the focus-return widget.
+- `BufferPickerHandle::open`, `close` (both idempotent), and `is_open`.
+- `open_decision`, `initial_selection`, `switch_target` and `row_label` — the pure seams.
+
+**Decisions**
+
+- Candidates are snapshotted once at open and re-ranked per keystroke. The snapshot is a blocking RPC on the GTK main thread, so [`picker.rs`](#pickerrs)'s wake bridge must not be added for symmetry: re-taking it puts a whole timeout budget of frozen main loop on the typing path.
+- `open_decision` refuses to open, and so refuses the RPC, for every liveness reading but `Alive`. It cannot prevent the first stall, and must not be strengthened into a guard that can never raise one.
+- A refusal returns before any widget is touched, and nothing is shown until the snapshot returns; neither is observable to any test.
+- The first refresh preselects row 1, because row 0 is the buffer the user is already in and a bare Enter must switch. It is the one selection rule the three overlays do not share, ported from macOS.
+- `switch_target` refuses an active window of `0` as firmly as none at all, per `wolf-ffi`'s rule: `0` binds the switch into whichever window Neovim considers current.
+
+**Gotchas**
+
+- Closing does not clear the snapshot; the next open overwrites it.
 
 #### `command_action.rs`
 
@@ -169,7 +191,7 @@ Purpose: crate root. Declares the modules and re-exports the display-free seams 
 
 - `cell_at` is re-exported because `grid_size_for` is, and the two are a pair whose composition is the point.
 - `restart_button_rect` is re-exported for one concrete consumer: the crash-overlay smoke derives the pixel it clicks from the same function the widget builder realizes, so the two cannot drift.
-- Items in `actions`, `crash_overlay`, `cursor`, `layout`, `mouse`, `palette`, `pane_layout`, `pane_view`, `persistence`, `picker`, `shell`, `tree`, and `tree_view` are reached by module path rather than re-exported.
+- Items in `actions`, `buffer_picker`, `crash_overlay`, `cursor`, `layout`, `mouse`, `palette`, `pane_layout`, `pane_view`, `persistence`, `picker`, `shell`, `tree`, and `tree_view` are reached by module path rather than re-exported.
 
 #### `liveness_ui.rs`
 
@@ -219,7 +241,7 @@ Purpose: the command-palette overlay — a search entry over a ranked list of th
 
 - `build(overlay, area, core) -> PaletteHandle` — starts hidden. `area` is the focus-return widget, not the results host.
 - `PaletteHandle::open`, `close` (both idempotent), `is_open`, and `connect_activate`, which the shell points at its own command dispatch.
-- `palette_rows`, `palette_action_for`, and `activation_index` — the pure seams.
+- `palette_rows` and `palette_action_for` — the pure seams.
 
 **Decisions**
 
@@ -231,7 +253,7 @@ Purpose: the command-palette overlay — a search entry over a ranked list of th
 
 **Gotchas**
 
-- Selection movement is [`picker.rs`](#pickerrs)'s `next_selection` and `restored_index`, so the two overlays navigate identically.
+- Selection movement and activation are [`picker.rs`](#pickerrs)'s shared seams, so all three overlays navigate identically.
 
 #### `pane_layout.rs`
 
@@ -313,7 +335,7 @@ Purpose: the file-picker overlay — a search entry over a ranked results list f
 **Gotchas**
 
 - Closing drops the `FileSearch`, which cancels the background traversal.
-- `next_selection` and `restored_index` are `pub(crate)` and shared with [`palette.rs`](#paletters). They stay here rather than moving to a seam module because the macOS `PickerSeam` port names this file as its counterpart.
+- `next_selection`, `restored_index` and `activation_index` are `pub(crate)` and shared with [`palette.rs`](#paletters) and [`buffer_picker.rs`](#buffer_pickerrs), so all three overlays navigate and activate identically. They stay here rather than moving to a seam module because the macOS `PickerSeam` port names this file as its counterpart.
 
 #### `render.rs`
 
@@ -347,8 +369,8 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 **Decisions**
 
 - The chord controller matches keys itself rather than through GTK's own matching, which is keymap-aware and does not fire under the smokes' keystroke injector. Accelerators are registered only so the menu renders their labels.
-- The controller lives on the window, so it runs ahead of either overlay's controller and carries no open-overlay guard: an application command fires with the picker or the palette up. Neither overlay's keys are bound chords.
-- At most one transient overlay is open, arbitrated here because this module holds both handles, so the two overlay modules need no knowledge of each other.
+- The controller lives on the window, so it runs ahead of any overlay's controller and carries no open-overlay guard: an application command fires with any of the three up. No overlay's keys are bound chords.
+- At most one of the three transient overlays is open, arbitrated here because this module holds all three handles, so they need no knowledge of each other.
 - `install_actions` filters on the command's classification, so an implemented command installs its action even while its chord stays reserved.
 - Overlay side effects fire only on a real mode transition, and the focus sample is taken before the overlay is hidden, per the ordering rule in [DECISIONS.md](../DECISIONS.md).
 - An Open Folder result records a pending re-root rather than re-rooting synchronously: the file search resolves its root from the live cwd, which updates only after Neovim reports it.

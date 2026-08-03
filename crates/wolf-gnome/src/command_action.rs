@@ -24,7 +24,7 @@
 //!
 //! ## The three classes
 //!
-//! - **Dispatched** — the nine commands `wolf-gnome` performs today.
+//! - **Dispatched** — the ten commands `wolf-gnome` performs today.
 //! - [`UiAction::Deferred`] — implemented on macOS and planned on GTK; the string
 //!   names the concrete blocker so the deferral is auditable rather than a shrug.
 //! - [`UiAction::NoGnomeEquivalent`] — has no GNOME counterpart and will never be
@@ -60,6 +60,8 @@ pub enum UiAction {
     QuitApplication,
     /// Open the in-window command-palette overlay.
     OpenCommandPalette,
+    /// Open the in-window buffer-picker overlay.
+    OpenBufferPicker,
     /// Implemented on macOS, planned on GTK; the string names the blocker.
     Deferred(&'static str),
     /// Has no GNOME equivalent and will never be implemented.
@@ -106,10 +108,7 @@ pub fn ui_action_for(command: Command) -> UiAction {
         Command::Paste => UiAction::Deferred(
             "the GTK clipboard bridge (gdk::Clipboard read + WolfCore::paste) is not built",
         ),
-        Command::BufferPicker => UiAction::Deferred(
-            "the GTK buffer-picker overlay is not built (wolf_core::rank_buffers is already \
-             linked)",
-        ),
+        Command::BufferPicker => UiAction::OpenBufferPicker,
         Command::NewTab => UiAction::Deferred(
             "GTK native tabs are not built; wolf-gnome binds exactly one nvim tabpage",
         ),
@@ -153,7 +152,8 @@ mod tests {
     /// The commands `wolf-gnome` DISPATCHES, by canonical `CommandSpec::id`,
     /// sorted. Ids (not variants) so the failure message names the registry row a
     /// reader can grep for.
-    const EXPECTED_DISPATCHED_IDS: [&str; 9] = [
+    const EXPECTED_DISPATCHED_IDS: [&str; 10] = [
+        "buffer_picker",
         "close_pane",
         "close_window",
         "command_palette",
@@ -277,9 +277,9 @@ mod tests {
             want: Want::Deferred,
         },
         Case {
-            desc: "16 BufferPicker: no GTK buffer-picker overlay yet",
+            desc: "16 BufferPicker: opens the in-window buffer-picker overlay",
             command: Command::BufferPicker,
-            want: Want::Deferred,
+            want: Want::Exact(UiAction::OpenBufferPicker),
         },
         Case {
             desc: "17 NewTab: no GTK native tabs",
@@ -425,7 +425,7 @@ mod tests {
 
         assert_eq!(
             dispatched, expected,
-            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly nine commands; \
+            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly ten commands; \
              everything else must be Deferred(reason) or NoGnomeEquivalent(reason) so the drain \
              is never silent. If a command was genuinely implemented, tick its feat-list row and \
              update this list with it."
