@@ -67,6 +67,14 @@ Rule of thumb: if 30 seconds of reading the source answers it, do not write it. 
 - History: what something used to be, was renamed from, or no longer does. Present tense only; git holds the past. Never write "now", "no longer", "the old", "previously", "this increment". There is no such thing as a limitation "in this increment" — real limitations are present-tense limitations.
 - Anything documented in another README. Link to it instead
 
+### Editing an existing doc
+
+Find the entry that already covers the file and edit it in place. Read it first. Never append a new sentence alongside a stale one: if an entry is wrong, rewrite it; if it describes something that was deleted, delete it. Appending is exactly how these docs once grew to the size of the code they describe.
+
+Expect to run net-negative as often as net-positive. A doc that only ever grows is a defect.
+
+Which side to correct depends on what just changed. The rule at the top of this file — documentation is the source of truth — is a design contract: it means a divergence is a bug that must be addressed, not that the prose automatically wins. When the implementation was just changed deliberately, the implementation is the fact and the doc is the thing that drifted. Fix the doc, and say so.
+
 ### Format
 
 - Budget: about 200 words per file entry. Exceeding it means you are transcribing implementation — cut, do not restructure.
