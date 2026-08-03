@@ -14,7 +14,7 @@ Files are opened through Neovim, never through a file dialog. The picker and the
 
 Linux only, built with Cargo inside the Nix devShell. Run everything through `nix develop --command`, because after a `flake.nix` edit an already-loaded direnv environment is stale and has no GTK.
 
-This crate deliberately has no Bazel target at all. That absence is what keeps the GTK stack out of `wolf-core`'s Bazel dependency graph, so the one hard rule in [`wolf-core/DECISIONS.md`](../wolf-core/DECISIONS.md) holds under the macOS Bazel build as well as under `cargo tree`. Adding a `BUILD.bazel` here breaks that guarantee. The verification queries live in [`build.md`](../../build.md).
+This crate deliberately has no Bazel target at all. That absence is what keeps the GTK stack out of `wolf-core`'s Bazel dependency graph, so the one hard rule in [`wolf-core/DECISIONS.md`](../wolf-core/DECISIONS.md) holds under the macOS Bazel build as well as under `cargo tree`. Adding a `BUILD.bazel` here breaks that guarantee. The verification queries live alongside the rule, in [`wolf-core/DECISIONS.md`](../wolf-core/DECISIONS.md).
 
 The devShell supplies the toolchain that the gtk-rs `-sys` crates probe for (gtk4, cairo, pango, glib, gdk-pixbuf, graphene, harfbuzz), exports `WOLF_NVIM_BIN` so the pinned Neovim is never taken from `PATH`, and pins the font stack. `FONTCONFIG_FILE` points at a generated copy of [`testdata/fonts.conf`](testdata/fonts.conf) exposing only DejaVu Sans Mono with no host font directories, which is what makes Pango measurement and Cairo rasterization reproducible enough to assert on pixels.
 

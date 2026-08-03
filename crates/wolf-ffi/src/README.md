@@ -158,7 +158,7 @@ One captive nvim is one project; each of its views binds to a distinct tabpage.
 
 - `is_markdown_active(&self) -> bool` — Gates View > Preview and its palette row.
 - `is_preview_active(&self) -> bool` — Gates View > Edit Source.
-- `open_preview(&self, mode: String) -> i64` — `mode` is `"split_right"` for a lone pane or `"active"` to replace the active pane's buffer. Returns the preview scratch bufnr, or 0.
+- `open_preview(&self, mode: String) -> i64` — `mode` is `"split_right"` (lone pane, new pane to the right), `"active"` (replace the active pane's buffer), or `"reuse_preview_pane"` (exactly two panes with the other already a preview: bind into that one, leaving the active editor untouched; falls back to `"active"`). Returns the preview scratch bufnr, or 0.
 - `edit_source(&self, mode: String) -> i64` — `mode` is `"split_left"`, `"active"`, or `"reuse_editor_pane"`. Returns the source bufnr, or 0.
 - `render_preview(&self, source_bufnr: i64) -> String` — The themed HTML document the web view loads; `""` on error.
 - `open_in_browser(&self) -> String` — Starts or reuses the loopback-only preview server pinned at the active markdown buffer and returns a `http://127.0.0.1:<port>/<relpath>` URL. The path is root-relative so links between markdown files resolve.

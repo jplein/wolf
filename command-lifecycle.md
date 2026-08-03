@@ -1,84 +1,79 @@
 # Command lifecycle
 
-Where a Wolf **command** is configured, and how it travels from a keystroke or menu click all the way into the captive Neovim and back. This is the end-to-end companion to [architecture.md](architecture.md) §10 ("Commands: one canonical id → two faces"); read that section first for the design rationale, then use this document to trace the code and to add a new command.
+Where a Wolf **command** is configured, and how it travels from a keystroke or a menu click into the captive Neovim and back. This is the end-to-end companion to [architecture.md](architecture.md) §10 ("Commands: one canonical id → two faces"): read that section for the design rationale, then use this document to trace the code and to add a command.
 
 ## 1. Overview
 
-A **Command** is a no-parameter, no-return user action — "New Window", "Close Pane", "Terminal". It is ONLY user-triggered: unlike a layout intent there is no emit-on-attach, so a freshly attached core has an empty command queue.
+A **Command** is a no-parameter, no-return user action — "New Window", "Close Pane", "Terminal". Commands are user-triggered only: unlike a layout intent there is no emit-on-attach, so a freshly attached core drains an empty queue.
 
-One canonical `snake_case` id (e.g. `close_window`, `terminal`) is the single source of truth, and it derives two faces:
+One canonical `snake_case` id (`close_window`, `terminal`) is the single source of truth, and it derives two faces:
 
-- **Face A — inside Neovim**: a PascalCase Ex-command `:WolfCloseWindow` (Neovim forces the uppercase-first user-command name) and an idiomatic Lua function `require('wolf').close_window()`.
-- **Face B — the native front-end**: a `command_kind` discriminant (a `u8`) carried across the FFI and, on macOS, stored in an `NSMenuItem.tag`.
+- **Face A, inside Neovim** — a PascalCase Ex-command `:WolfCloseWindow` (Neovim requires an uppercase-first user-command name) and an idiomatic Lua function `require('wolf').close_window()`.
+- **Face B, the native front-end** — a `command_kind` discriminant (a `u8`) carried across the FFI and, on macOS, stored in an `NSMenuItem.tag`.
 
-The `Command` enum's VARIANT ORDER is that discriminant contract. It is **append-only**: existing variants never move (a reorder is a breaking change that would silently remap every menu tag and every drained command), and a new command is always appended LAST. The same integer means the same command in Rust (`command.rs`), in the FFI (`command_kind`), and in Swift (`CommandKind`).
+The `Command` enum's variant order is that discriminant contract, and it is append-only. A reorder silently remaps every menu tag and every drained command, so existing variants never move and a new command is appended last. The same integer means the same command in `command.rs`, in the FFI's `command_kind`, and in Swift's `CommandKind`; the table of values is in [`crates/wolf-ffi/src/README.md`](crates/wolf-ffi/src/README.md#discriminant-tables).
 
-## 2. The registry (source of truth) — `crates/wolf-core/src/command.rs`
+## 2. The registry — `crates/wolf-core/src/command.rs`
 
-Everything starts here. The module is pure data + enums (no GUI toolkit, honoring wolf-core's one hard rule):
+Everything starts here. The module is pure data and enums (no GUI toolkit, honoring wolf-core's one hard rule): `Command`, `CommandSpec`, the `COMMAND_SPECS` slice, `MenuGroup`, and the `Command::from_id` / `Command::spec` lookups. Their contracts are in the [`command.rs` entry](crates/wolf-core/src/README.md#commandrs).
 
-- **`enum Command`** — one variant per command, in discriminant order (`NewWindow`(0), `CloseWindow`(1), … `NewTab`(17), `Preview`(18), `Edit`(19), `Terminal`(20), `PreviewInBrowser`(21), `FullWidth`(22), `ToggleSidebar`(23), `SidebarShowProject`(24), `SearchInProject`(25)). The doc comment on the enum spells out the full ordered list and restates the append-only rule. The last three are flavor (a) native-only sidebar UI actions (append LAST; the captive nvim is never touched — see §8a).
-- **`struct CommandSpec { command, id, ex_command, title, menu }`** — the canonical metadata for one command, all fields public. The `id` → `ex_command` mapping is stored EXPLICITLY as data (there is no snake→Pascal transform code), so the registry is the one source of truth.
-- **`const COMMAND_SPECS: &[CommandSpec]`** — one row per command, in variant order, so the **slice index equals the FFI discriminant**. Example row:
+Two properties matter to the rest of this trace. `COMMAND_SPECS` holds one row per command in variant order, so **the slice index equals the FFI discriminant**. And the id → `ex_command` mapping is stored as data rather than computed by a snake-to-Pascal transform, so a command's Ex-command name is chosen in exactly one place. One row:
 
-  ```rust
-  CommandSpec {
-      command: Command::Terminal,
-      id: "terminal",
-      ex_command: "WolfTerminal",
-      title: "Terminal",
-      menu: MenuGroup::View,
-  }
-  ```
+```rust
+CommandSpec {
+    command: Command::Terminal,
+    id: "terminal",
+    ex_command: "WolfTerminal",
+    title: "Terminal",
+    menu: MenuGroup::View,
+}
+```
 
-- **`enum MenuGroup`** — `App` / `File` / `View` / `Window` / `Edit`, the menu-grouping metadata (its order is cosmetic, NOT a discriminant).
-- **`Command::from_id(id) -> Option<Command>`** — a linear scan of `COMMAND_SPECS` resolving a `wolf_command` payload id back to its `Command` (unknown id → `None`).
-- **`Command::spec(self) -> &'static CommandSpec`** — the reverse lookup.
+`MenuGroup` is grouping metadata; its own variant order is cosmetic and backs no discriminant. The `#[cfg(test)]` tests in `command.rs` pin the row count (`EXPECTED_COMMAND_COUNT`), pin each command's slice index, and round-trip each id, so reordering or dropping a variant fails the suite.
 
-The registry is guarded by `#[cfg(test)]` unit tests that pin the count (`EXPECTED_COMMAND_COUNT`), pin each command's slice index (== its discriminant), and round-trip each id. Reordering or dropping a variant breaks them.
+## 3. Face A — the Ex-command and the Lua function
 
-## 3. Face A — the Neovim Ex-command + Lua function
+`crates/wolf-core/src/nvim.rs::setup_commands` builds an array of `[id, ex_command]` pairs from `COMMAND_SPECS` and hands it, together with this RPC channel's id, to `_G.wolf_setup_commands(chan, commands)` in `runtime/nvim/init.lua` over `nvim_exec_lua`. Both arguments travel as Lua varargs, never interpolated into the code string. It is one step of `WolfCore::start`'s attach sequence.
 
-`crates/wolf-core/src/nvim.rs::setup_commands` builds an array of `[id, ex_command]` string pairs from `COMMAND_SPECS` and hands it, together with this RPC channel's id, to the `_G.wolf_setup_commands(chan, commands)` helper in `runtime/nvim/init.lua` over `nvim_exec_lua` (both passed as Lua varargs, never interpolated into the code string). `WolfCore::start` calls it after the current-file / buffer / layout / dir / theme setups.
+For each pair the helper seeds `package.loaded["wolf"][id]` — the Lua face, and seeding `package.loaded` is what makes `require('wolf')` resolve under `--clean` — and creates the `:<ex_command>` user command, the Ex-command face. Both faces `rpcnotify` the same `wolf_command` channel with the canonical id. See [`runtime/nvim/README.md`](runtime/nvim/README.md#wolf_setup_commandschan-commands).
 
-For each `{id, ex_command}` pair the helper (see [`runtime/nvim/README.md`](runtime/nvim/README.md)):
+## 4. Face B — the native discriminant
 
-- seeds `package.loaded["wolf"][id] = function() vim.rpcnotify(chan, "wolf_command", id) end` — the **Lua face** `require('wolf').<id>()` (seeding `package.loaded` is required so `require('wolf')` resolves under `--clean`); and
-- registers `:<ex_command>` via `nvim_create_user_command(ex_command, <same callback>, { nargs = 0, force = true })` — the **Ex-command face** `:Wolf<Pascal>`.
+The native front-end never learns the ids; it speaks only the discriminant. Three ports keep it aligned with the registry.
 
-Both faces `rpcnotify` the SAME `wolf_command` channel with the canonical `id`. There is no autocmd and no emit-on-attach — commands are user-triggered only.
+- `mod command_kind` in `crates/wolf-ffi/src/lib.rs` — the `u8` constants, in `wolf_core::Command` order ([the table](crates/wolf-ffi/src/README.md#discriminant-tables)). `FfiCommand::from_command` is an exhaustive match over `Command`, so adding or reordering a variant is a compile error here.
+- `enum CommandKind` in `crates/wolf-macos/Sources/WolfKeyMap/CommandSeam.swift` — the AppKit-free Swift mirror. `init?(ffi:)` decodes the byte and returns `nil` for anything outside the contract, so an unrecognized discriminant is dropped rather than mis-dispatched.
+- `AppMenu`'s private `Tag` enum in `crates/wolf-macos/Sources/WolfMacOS/AppMenu.swift` — the macOS menu is hardcoded rather than read from the registry over the FFI, and each tagged Wolf item carries its `command_kind` in `NSMenuItem.tag`. Item titles mirror `COMMAND_SPECS`, so a title change belongs in both places. See the [`AppMenu.swift` entry](crates/wolf-macos/Sources/WolfMacOS/README.md#appmenuswift).
 
-## 4. Face B — the native menu FFI discriminant
-
-The native front-end never learns the ids; it speaks only the discriminant. Three ports keep it aligned with the registry:
-
-- **`mod command_kind`** in `crates/wolf-ffi/src/lib.rs` — the `u8` constants (`NEW_WINDOW = 0` … `NEW_TAB = 17`, `PREVIEW = 18`, `EDIT = 19`, `TERMINAL = 20`, `PREVIEW_IN_BROWSER = 21`, `FULL_WIDTH = 22`, `TOGGLE_SIDEBAR = 23`, `SIDEBAR_SHOW_PROJECT = 24`, `SEARCH_IN_PROJECT = 25`), in `wolf_core::Command` order. `FfiCommand::from_command` is an EXHAUSTIVE match over `Command` that packs each variant to its `command_kind` (so adding or reordering a variant is a compile error here).
-- **`enum CommandKind`** in `crates/wolf-macos/Sources/WolfKeyMap/CommandSeam.swift` — the AppKit-free Swift mirror. `init?(ffi: UInt8)` decodes the byte (`0` → `.newWindow` … `20` → `.terminal`, `21` → `.previewInBrowser`, `22` → `.fullWidth`, `23` → `.toggleSidebar`, `24` → `.sidebarShowProject`, `25` → `.searchInProject`, anything else → `nil`), guarding the contract.
-- **`AppMenu`'s `Tag` enum** in `crates/wolf-macos/Sources/WolfMacOS/AppMenu.swift` — the macOS menu is HARDCODED (it does not read the registry over the FFI); each Wolf menu item carries its `command_kind` discriminant in `NSMenuItem.tag`. The menu titles mirror `COMMAND_SPECS`.
+`Tag` covers only the commands that have a tagged menu item, which is fewer than the registry holds. A command can carry a `MenuGroup` and still have no `Tag` value: the sidebar commands are the palette and Ex-command faces of View-menu items that AppKit and the `AppDelegate` already own, so they reach the dispatcher from the drained and palette paths alone.
 
 ## 5. Invocation → drain
 
 Both faces converge on the same drain path.
 
-**Face A (inside nvim):** a `:WolfXxx` Ex-command or `require('wolf').xxx()` call fires the `wolf_command` notification. (The layout helper's `:q` / `:qa`-family interception is a THIRD, internal trigger of the same notification: on the LAST pane `do_quit` fires `wolf_command "close_window"` directly, and the `:qa` family (`all = true`) ALWAYS fires it — a whole-window close regardless of pane count — both reusing the existing `close_window` registry command with no new command, FFI, or discriminant — see [`runtime/nvim/README.md`](runtime/nvim/README.md).) In `crates/wolf-core/src/redraw.rs`, `handle_notify` routes `COMMAND_EVENT` (`"wolf_command"`) through `Command::from_id` (an unknown id is dropped) and pushes the resulting `Command` onto the sibling `CommandQueue` (a brief `Mutex`, never held across an `.await`, no `seq` bump), then wakes the front-end. `crates/wolf-core/src/api.rs::drain_commands` consumes that queue in arrival order; the FFI `WolfCoreHandle::drain_commands` maps each through `FfiCommand::from_command` into the `command_kind` discriminant. On macOS, `WolfWindowController.drainAndDispatchCommands` (called each render wake) decodes each `FfiCommand.kind()` via `CommandKind(ffi:)` and dispatches it against THIS window.
+**Face A (inside nvim).** A `:WolfXxx` Ex-command or a `require('wolf').xxx()` call fires the `wolf_command` notification. In `crates/wolf-core/src/redraw.rs`, `handle_notify` routes `COMMAND_EVENT` (`"wolf_command"`) through `Command::from_id` — an unknown id is dropped — and pushes the resulting `Command` onto the sibling `CommandQueue`, then wakes the front-end. That queue is a brief `Mutex`, never held across an `.await`, and a command bumps no `seq`.
 
-**Face B (native menu):** `AppDelegate.handleCommandMenuItem` reads the clicked item's `NSMenuItem.tag`, decodes it via `CommandKind(ffi:)`, finds the key window's controller, and dispatches. No round trip through nvim — the discriminant was already in the tag.
+`crates/wolf-core/src/api.rs::drain_commands` consumes the queue in arrival order, and the FFI's `WolfCoreHandle::drain_commands` maps each entry through `FfiCommand::from_command` into its discriminant. On macOS, `WolfWindowController.drainAndDispatchCommands` runs on each render wake, decodes every `FfiCommand.kind()` with `CommandKind(ffi:)`, and dispatches against its own window.
+
+The layout helper's `:q` and `:qa` interception is a third, internal source of the same notification: on the last pane `do_quit` fires `wolf_command "close_window"`, and the `:qa` family (`all = true`) fires it regardless of pane count, closing the whole window. Both reuse the existing `close_window` registry command and add no command, no FFI constant, and no discriminant — see [`runtime/nvim/README.md`](runtime/nvim/README.md).
+
+**Face B (the native menu).** `AppDelegate.handleCommandMenuItem` reads the clicked item's `NSMenuItem.tag`, decodes it with `CommandKind(ffi:)`, finds the key window's controller, and dispatches. There is no round trip through nvim — the discriminant was already in the tag.
 
 ## 6. Dispatch — `crates/wolf-macos/Sources/WolfMacOS/CommandDispatcher.swift`
 
-`CommandDispatcher.dispatch(_ kind:window:coordinator:originatingCwd:controller:)` is the single funnel every command flows through, so a command has ONE implementation regardless of face. It maps a decoded `CommandKind` to its native action, e.g. `.closePane → controller?.closePane()`, `.newBuffer → controller?.newBuffer()`, `.terminal → controller?.toggleTerminal()`, `.newWindow → coordinator?.makeNewWindow(...)`, `.previewInBrowser → controller?.openInBrowser()`, `.fullWidth → controller?.toggleFullWidth()`.
+`CommandDispatcher.dispatch(_:window:coordinator:originatingCwd:controller:)` is the single funnel every command flows through, so a command has one implementation regardless of face. Its switch carries no `default` case, so a new `CommandKind` fails to compile until it is handled here. See the [`CommandDispatcher.swift` entry](crates/wolf-macos/Sources/WolfMacOS/README.md#commanddispatcherswift).
 
-`.previewInBrowser` is a HYBRID flavor worth calling out: like the `.preview` / `.edit` arms (which reach the blocking `open_preview` / `render_preview` / `edit_source` core calls), its dispatcher arm invokes a BLOCKING core method — `handle.open_in_browser()` returns the loopback preview server's `http://127.0.0.1:<port>/<relpath>` URL (the pinned Markdown file's root-relative path) — and then the front-end opens that URL in the system default browser via `NSWorkspace`. It touches the captive nvim (a blocking RPC to resolve the pinned Markdown buffer + lazily start the per-project loopback HTTP server) but issues NO `InputEvent`, so it is neither the pure native-only flavor (a) nor the ordered-input editor-affecting flavor (b) — it is the same blocking-read-through-core shape as Preview.
+Three entry points route here:
 
-All three entry points route here:
-
-- the native-menu path (`AppDelegate.handleCommandMenuItem`, targeting `NSApp.keyWindow`);
+- the native menu (`AppDelegate.handleCommandMenuItem`, targeting `NSApp.keyWindow`);
 - the nvim-drained path (`WolfWindowController.drainAndDispatchCommands`, passing `self` as the controller); and
 - the command palette (`WolfWindowController.activatePaletteRow`, whose `.staticCommand` rows decode `row.commandKind` and dispatch the same way).
 
+`.previewInBrowser` is worth calling out as a third shape alongside the flavors of §8. Like the `.preview` and `.edit` arms it invokes a blocking core method — `handle.open_in_browser()` returns the loopback preview server's URL for the pinned Markdown file — and the front-end then opens that URL with `NSWorkspace`. It touches the captive nvim but issues no `InputEvent`, so it is neither purely native nor an ordered-input editor-affecting command.
+
 ## 7. The editor-affecting path back into nvim
 
-Many commands only touch the front-end (see §8a). Others must change editor state, and those loop BACK into the captive Neovim through a fixed chain:
+Many commands only touch the front-end (§8a). Others must change editor state, and those loop back into the captive Neovim through a fixed chain:
 
 ```
 WolfCoreHandle::<method>            (crates/wolf-ffi/src/lib.rs)
@@ -88,49 +83,46 @@ WolfCoreHandle::<method>            (crates/wolf-ffi/src/lib.rs)
         → nvim_command / nvim_exec_lua
 ```
 
-The input channel is ORDERED, so an editor-affecting command never races pending keystrokes. The `apply` arm is either a simple Ex-command or a call into a `wolf_*` Lua helper. Four worked examples span the range of complexity:
+The input channel is ordered, so an editor-affecting command never races pending keystrokes. The `apply` arm is either a plain Ex-command or a call into a `wolf_*` Lua helper, whose behavior is defined in [`runtime/nvim/README.md`](runtime/nvim/README.md) rather than in Rust. Four worked chains span the range:
 
-- **`NewBuffer` (helper):** `WolfCoreHandle::new_buffer` → `WolfCore::new_buffer` → `InputEvent::NewBuffer` → `apply` calls `nvim_exec_lua("wolf_new_untitled()", [])`, whose `init.lua` helper runs `:enew` and THEN names the buffer the next free `Untitled N.md` (`Untitled.md`, `Untitled 2.md`, …) — markdown-typed and unsaved (never written to disk), so it is never a bare `[No Name]`.
-- **`SwitchBuffer` (helper):** `WolfCoreHandle::switch_buffer(bufnr)` (resolving the active window live) → `WolfCore::switch_buffer(win, bufnr)` → `InputEvent::SwitchBuffer { win, bufnr }` → `apply` calls `nvim_exec_lua("wolf_switch_buffer(...)", [win, bufnr])`, whose `init.lua` helper does a window-scoped `nvim_win_set_buf` plus per-pane view restore atomically.
-- **`Terminal` (helper, no args):** `WolfCoreHandle::toggle_terminal` → `WolfCore::toggle_terminal` → `InputEvent::ToggleTerminal` → `apply` calls `nvim_exec_lua("wolf_toggle_terminal()", [])`. The `wolf_toggle_terminal()` helper in `init.lua` finds the shared, tagged (`b:wolf_terminal` + `buftype == 'terminal'`) per-project terminal buffer, hides its per-tabpage drawer window if visible (the buffer/job persist), or opens a bottom `:terminal` split showing it (recreating the buffer if the user exited the shell). On the OPEN path it ALSO emits a `drawer_open` **LAYOUT** intent (`_G.wolf_emit_drawer(win)` → `wolf_layout { action = "drawer_open", win }` → `LayoutIntent::DrawerOpen`, drained via `WolfCore::drain_intents` — distinct from this command-drain path) so the front-end renders the drawer as a root-bottom pane; hiding stays intent-less (the front-end observes the `win_close`). Terminal is thus a good illustration that an editor-affecting command can ALSO drive the layout-intent channel — the two channels are independent. See [`runtime/nvim/README.md`](runtime/nvim/README.md).
-- **`FullWidth` (helper, no args, source-buffer redirect):** `WolfCoreHandle::toggle_full_width` → `WolfCore::toggle_full_width` → `InputEvent::ToggleFullWidth` → `apply` calls `nvim_exec_lua("wolf_toggle_full_width()", [])`. The `wolf_toggle_full_width()` helper in `init.lua` resolves the EFFECTIVE buffer — the current buffer, UNLESS the active pane is a preview scratch (it carries `b:wolf_preview_source_bufnr`), in which case it targets the SOURCE buffer (OQ-1) so the visible preview resizes and the document's editor + preview views stay consistent — then flips that buffer's `b:wolf_full_width`, and re-emits the three state channels the toggle affects: `wolf_emit_current_file()` (the menu checkmark), `wolf_emit_full_width()` (the per-window editor-pane geometry), and `wolf_emit_previews()` (the preview-pane framing). The macOS dispatcher arm (`.fullWidth → controller?.toggleFullWidth()`) also calls `paneContainer?.onRenderWake()` so the panes resize promptly on the next wake. The View-menu item is ALWAYS enabled (OQ-2); only its checkmark tracks `is_full_width_active()`. See [`architecture.md`](architecture.md) §10.
+- **`NewBuffer`** — `WolfCoreHandle::new_buffer` → `WolfCore::new_buffer` → `InputEvent::NewBuffer` → `nvim_exec_lua("wolf_new_untitled()", [])`.
+- **`SwitchBuffer`** — `WolfCoreHandle::switch_buffer(bufnr)`, which resolves the active window live, → `WolfCore::switch_buffer(win, bufnr)` → `InputEvent::SwitchBuffer { win, bufnr }` → `nvim_exec_lua("wolf_switch_buffer(...)", [win, bufnr])`.
+- **`Terminal`** — `WolfCoreHandle::toggle_terminal` → `WolfCore::toggle_terminal` → `InputEvent::ToggleTerminal` → `nvim_exec_lua("wolf_toggle_terminal()", [])`. The helper's open path also emits a `drawer_open` **layout intent**, drained by `WolfCore::drain_intents` — a channel separate from this command drain. Terminal is the illustration that one command can drive both channels and that the two are independent.
+- **`FullWidth`** — `WolfCoreHandle::toggle_full_width` → `WolfCore::toggle_full_width` → `InputEvent::ToggleFullWidth` → `nvim_exec_lua("wolf_toggle_full_width()", [])`. The macOS arm additionally calls `paneContainer?.onRenderWake()` so the panes resize on the next wake. The View item is always enabled; only its checkmark tracks `is_full_width_active()`.
 
 ## 8. Checklist: adding a new command
 
-There are three flavors. Pick one, then do its steps PLUS the shared steps at the end.
+Three flavors. Pick one, do its steps, then the shared steps at the end.
 
-### (a) Native-only (e.g. `MinimizeWindow`)
+### (a) Native-only (`MinimizeWindow`, the sidebar commands)
 
 The action lives entirely in AppKit; nvim is never touched.
 
-1. Append a `Command` variant + a `COMMAND_SPECS` row (`command.rs`).
-2. Add its `command_kind` constant + the `FfiCommand::from_command` arm (`wolf-ffi/src/lib.rs`).
-3. Add its `CommandKind` case + the `init?(ffi:)` arm (`CommandSeam.swift`).
-4. Add a `CommandDispatcher` arm mapping it to the AppKit action.
-5. No `InputEvent`, no `input.rs` arm, no Lua helper.
+1. Add a `CommandDispatcher` arm mapping the command to its AppKit action.
+2. No `InputEvent`, no `input.rs` arm, no Lua helper.
 
-### (b) Editor-affecting (e.g. `NewBuffer`, `Terminal`)
+### (b) Editor-affecting (`NewBuffer`, `Terminal`)
 
-Everything in (a), PLUS the round trip of §7:
+Everything in (a), plus the round trip of §7:
 
-1. Add a `WolfCoreHandle` method (bridge `extern "Rust"` declaration + `impl`) that calls `core.send_input(InputEvent::…)` (`wolf-ffi/src/lib.rs`).
-2. Add the public `WolfCore` wrapper (`api.rs`).
-3. Add the `InputEvent` variant + its `apply` arm (`input.rs`) — a simple `nvim_command`, or an `nvim_exec_lua` call into a new `wolf_*` helper in `runtime/nvim/init.lua` when the logic is non-trivial.
-4. Wire the dispatcher arm to the controller method that calls the handle.
-5. **Regenerate the swift-bridge bindings** — `bazel run //crates/wolf-ffi:gen_bindings` — and commit `crates/wolf-ffi/generated/`.
+1. Add a `WolfCoreHandle` method — the bridge `extern "Rust"` declaration and its `impl` — that calls `core.send_input(InputEvent::…)` in `crates/wolf-ffi/src/lib.rs`.
+2. Add the public `WolfCore` wrapper in `api.rs`.
+3. Add the `InputEvent` variant and its `apply` arm in `input.rs`: a plain `nvim_command`, or an `nvim_exec_lua` call into a new `wolf_*` helper in `runtime/nvim/init.lua` when the logic is non-trivial.
+4. Point the dispatcher arm at the controller method that calls the handle.
+5. **Regenerate the swift-bridge bindings** with `bazel run //crates/wolf-ffi:gen_bindings`, and commit `crates/wolf-ffi/generated/`.
 
-### (c) Front-end overlay (e.g. `CommandPalette`, `BufferPicker`, `GoToFile`)
+### (c) Front-end overlay (`CommandPalette`, `BufferPicker`, `GoToFile`)
 
-Everything in (a); the `CommandDispatcher` arm opens a Swift overlay (`openCommandPalette()`, `openBufferPicker()`, `openFilePicker()`) rather than changing editor state, so there is no `InputEvent`. Note that `CommandPalette` is EXCLUDED from the palette's own candidate list (a palette cannot dispatch itself), so it does not appear as a palette row.
+Everything in (a); the dispatcher arm opens a Swift overlay (`openCommandPalette()`, `openBufferPicker()`, `openFilePicker()`) instead of changing editor state, so there is no `InputEvent`. `CommandPalette` is excluded from the palette's own candidate list — a palette cannot dispatch itself — so it is the one command with no palette row.
 
 ### Shared steps (every flavor)
 
-- **Append** the `Command` variant LAST — never reorder (the discriminant contract is append-only).
-- Add the `COMMAND_SPECS` row (id / ex_command / title / menu group).
-- Bump `EXPECTED_COMMAND_COUNT` and add the index / round-trip / spec-fields tests in `command.rs` (mirror the existing `preview_in_browser_*` tests; demote the previous "last row" guard to a fixed-index guard).
+- **Append** the `Command` variant last, and never reorder: the discriminant contract is append-only.
+- Add the `COMMAND_SPECS` row: id, ex_command, title, menu group.
+- Bump `EXPECTED_COMMAND_COUNT` and add the index, round-trip, and spec-field tests in `command.rs`, mirroring the existing `search_in_project_*` tests, and turn the standing last-row guard into a fixed-index guard.
 - Add the `command_kind` constant and extend `FfiCommand::from_command`.
-- Extend the Swift `CommandKind` `init?(ffi:)` and its `CommandSeamTests`.
-- Extend the `crates/wolf-ffi/tests/commands.rs` contract-guard array (the contiguous `0..=N` assertion) and add a `:Wolf<Pascal>` drain step.
-- If the command has a menu group, add an `AppMenu` `Tag` value + the menu item (with any accelerator). If it should only be enabled in some states, add a `Tag` case to `AppDelegate.validateMenuItem` backed by a `Snapshot` predicate bridged onto `WolfCoreHandle` (the `is_visual_mode` / `is_markdown_active` / `is_preview_active` precedent); commands with no such case — `Terminal`, for one — are always enabled.
-- If it becomes a command-palette candidate (any command except `CommandPalette`), update the `STATIC_COMMAND_COUNT` constant in `crates/wolf-core/tests/palette_rank.rs`.
+- Extend the Swift `CommandKind` and its `init?(ffi:)`, plus `CommandSeamTests`.
+- Extend the contiguous-`0..=N` guard array in `crates/wolf-ffi/tests/commands.rs` and add a `:Wolf<Pascal>` drain step.
+- If the command needs a tagged menu item, add an `AppMenu` `Tag` value and the item itself, with any accelerator. To enable it only in some states, add a case to `AppDelegate.validateMenuItem` backed by a `Snapshot` predicate bridged onto `WolfCoreHandle` — the `is_visual_mode` / `is_markdown_active` / `is_preview_active` precedent. A command with no such case, `Terminal` among them, is always enabled.
+- Every command except `CommandPalette` becomes a palette candidate, so bump `STATIC_COMMAND_COUNT` in `crates/wolf-core/tests/palette_rank.rs`.
 - Update the affected directory READMEs and this document, then run `prettier --write` on every edited Markdown file.

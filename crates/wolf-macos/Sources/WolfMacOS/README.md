@@ -45,7 +45,7 @@ Purpose: Builds and installs `NSApp.mainMenu` (App, File, Edit, View, History, W
 
 **Gotchas**
 
-- The front-end-only items (History, Project, Search) target the coordinator directly instead of carrying a tag, so `CommandKind.toggleSidebar`, `.sidebarShowProject` and `.searchInProject` reach `CommandDispatcher` only from the nvim-drained path.
+- The front-end-only items (History, Project, Search) target the coordinator directly instead of carrying a tag, so `CommandKind.toggleSidebar`, `.sidebarShowProject` and `.searchInProject` never reach `CommandDispatcher` from a menu item. They still reach it from the nvim-drained path and from the command palette, whose static rows dispatch through it.
 
 #### `BufferPickerView.swift`
 

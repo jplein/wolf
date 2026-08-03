@@ -22,9 +22,13 @@ Documentation has exactly two jobs. Content that serves neither is the thing to 
 
 ### Ownership: one file, one owner
 
+- `architecture.md` — the cross-crate view only: component boundaries, the contracts that cross them, and decisions that only make sense at the system level. It names a crate's local constraints and links; it never restates them.
+- `build.md` — how to build, run and test, per platform: commands, environment, workflows. What a given test target covers belongs in that directory's README, not here.
 - `crates/<crate>/README.md` — the outside view only: what the crate is, its public entry points, how it is built and tested, and links to the rest. No per-file entries.
 - `crates/<crate>/DECISIONS.md` — the durable "why": cross-cutting constraints, threading model, and decisions with a multi-year half-life. Read this before changing anything in the crate.
 - `<source-dir>/README.md` — the files in that directory only, one entry each.
+
+The test for whether something belongs in a workspace doc: would it still be true if you deleted one crate? A boundary or a contract survives; a crate's internal constraint does not, and belongs to that crate.
 
 Never describe the same file in two documents. Cross-reference by link, never by restating.
 

@@ -11,10 +11,12 @@ This is what lets one core serve both front-ends, and it is checked, not assumed
 ```sh
 cargo tree -e no-dev -p wolf-core
 
-bazel query 'deps(//crates/wolf-core:wolf_core)' | grep -iE \
+bazel query 'kind(rule, deps(//crates/wolf-core:wolf_core))' | grep -iE \
   'gtk|gdk|glib|cairo|pango|adwaita|objc|cocoa|core-graphics|winit|wgpu|skia|softbuffer' \
   || echo clean
 ```
+
+The `kind(rule, …)` wrapper is load-bearing. A bare `deps()` also returns every source file in the graph, and `libc` vendors its bindings under `src/new/glibc/…`, whose paths match the `glib` pattern — so the guard reports seven `libc` files on every run, `|| echo clean` never fires, and a check that always cries wolf is a check nobody reads. The `cargo tree` check matches on crate names and is unaffected.
 
 No occurrence of any of these is permitted:
 
