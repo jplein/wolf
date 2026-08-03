@@ -104,23 +104,24 @@ Purpose: pure, GTK-free cursor geometry and color logic — the pixel rectangle 
 
 #### `geometry.rs`
 
-Purpose: the pure pixel-to-grid conversions behind every resize and every pointer event, kept GTK- and pango-free so they are unit-tested headlessly.
+Purpose: the pure pixel conversions behind every resize, pointer event, and divider position, kept GTK- and pango-free so they are unit-tested headlessly.
 
 **Public API**
 
 - `grid_size_for(width_px, height_px, cell_w, cell_h) -> (u16, u16)` — floor division per axis, each clamped into `[1, u16::MAX]`.
-- `cell_at(x, y, cell_w, cell_h, cols, rows) -> (u32, u32)` — returns `(row, col)`, matching `wolf_core::MouseEvent`'s field order. The coordinates are widget-local; no grid origin is subtracted.
+- `cell_at(x, y, cell_w, cell_h, cols, rows) -> (u32, u32)` — returns `(row, col)`, matching `wolf_core::MouseEvent`'s field order. Coordinates are widget-local; no grid origin is subtracted.
+- `divider_position(min, max, fraction)` and `divider_travel_fraction(position, max)` — the `gtk::Paned` divider conversion, exact inverses.
 
 **Decisions**
 
-- Any degenerate input — a non-positive pixel dimension, or a zero, negative, NaN, or infinite cell size — collapses the whole result rather than only the offending axis, because a partial result would send Neovim a nonsense size for the good axis. Both functions clamp in `f64` space before the cast, so the truncating cast is exact by construction.
-- A point outside the grid clamps to the nearest edge cell rather than being rejected, which is what makes drag-past-the-edge selection work.
-- Non-finite coordinates are two rules, not one: NaN has no direction, so that axis reads as zero, while an infinity clamps to the far edge. The shorthand "non-finite means zero" would silently invert an overshooting drag.
+- Any degenerate input — a non-positive dimension, a zero, negative, NaN, or infinite cell size, a paned with no travel — collapses the whole result rather than only the offending axis, because a partial result would send Neovim a nonsense size for the good axis.
+- A point outside the grid clamps to the nearest edge cell rather than being rejected, which makes drag-past-the-edge selection work.
+- Non-finite coordinates are two rules: NaN has no direction, so that axis reads as zero, while an infinity clamps to the far edge. Collapsing both to zero would invert an overshooting drag.
+- A divider fraction is of the paned's travel (`max_position`), not of its width; that is what makes the pair exact inverses and stops the re-apply walking a weight further on every allocation pass.
 
 **Gotchas**
 
-- A test composes the two over a table of shapes and probe points, so a caller may pass a pointer position through with no bounds check.
-- This crate has no editor insets, no column cap, and no centering, so do not import the macOS grid-origin machinery. If any lands, this function grows an origin parameter.
+- This crate has no editor insets, no column cap, and no centering, so do not import the macOS grid-origin machinery.
 
 #### `input.rs`
 
@@ -142,22 +143,23 @@ Purpose: translates a GDK keyval plus modifier state into a `wolf_core::KeyEvent
 
 #### `layout.rs`
 
-Purpose: the pure, GTK-free n-ary pane-layout tree behind the split-panes UI, mirroring Neovim's frame model. `pane_view.rs` is the only place that turns it into widgets.
+Purpose: the pure, GTK-free n-ary pane-layout tree behind the split-panes UI, mirroring Neovim's frame model.
 
 **Public API**
 
-- `PaneTree::split(target, new_pane, orientation)` is a no-op when `target` is not a leaf, and `remove(pane)` is a no-op on the last pane, so the tree is never empty.
+- `PaneTree::split(target, new_pane, orientation)` is a no-op on a non-leaf target, and `remove(pane)` on the last pane, so the tree is never empty.
 - `PaneTree::leaves()` and `pane_rects(w, h)` — the same deterministic depth-first order; the rects tile the bounds exactly.
-- `PaneTree::neighbor(from, dir, w, h)` — the nearest pane in `dir` strictly overlapping `from` on the cross axis.
+- `PaneTree::neighbor(from, dir, w, h)` — the nearest pane in `dir` overlapping `from` on the cross axis.
 - `PaneTree::layout()` and `from_layout(&PaneLayout)` — a read-only mirror for the widget layer and its inverse; the frame type stays private.
-- `Orientation` — `Vertical` divides width, `Horizontal` divides height, matching `wolf_core::SplitOrientation`.
+- `PaneTree::divider_fraction(path, boundary)` and `set_divider_fraction(path, boundary, f)` — one divider, addressed by its split's path and the child it follows; the fraction is that child's share of the whole remainder, per [DECISIONS.md](../DECISIONS.md).
+- `Orientation` — `Vertical` divides width, `Horizontal` height, matching `wolf_core::SplitOrientation`.
 
 **Decisions**
 
-- A split whose orientation matches its containing frame inserts a flat sibling and re-equalizes the row; only a perpendicular split nests. A binary always-nest model turns a third same-orientation split into 25/25/50 and starves the pre-existing pane.
+- A split whose orientation matches its containing frame inserts a flat sibling and re-equalizes the row; only a perpendicular split nests. A binary always-nest model turns a third same-orientation split into 25/25/50, starving the pre-existing pane.
 - `remove` normalizes bottom-up — flatten same-orientation children, collapse a one-child split, re-equalize — so the tree stays canonical, matching Neovim's `equalalways`.
-- Cross-axis overlap must be strictly positive within `NEIGHBOR_EPS`, so a shared edge never counts and a 2x2 grid has unambiguous neighbours.
-- `from_layout` rebuilds verbatim, with no flatten, collapse, or re-equalize, because the restore path zips Neovim window handles onto its leaves by index. It validates rather than repairs: a malformed split reaching the widget builder panics.
+- Cross-axis overlap must be strictly positive within `NEIGHBOR_EPS`, so a shared edge never counts and a 2x2 grid is unambiguous.
+- `from_layout` rebuilds verbatim and validates rather than repairs, because the restore path zips Neovim window handles onto its leaves by index; a malformed split reaching the widget builder panics.
 
 #### `lib.rs`
 
@@ -240,11 +242,10 @@ Purpose: the GTK glue that turns `layout`'s pane tree into nested `gtk::Paned` w
 **Decisions**
 
 - Panes paint window grids only. Grid 1 empties under `ext_messages`, so the strip paints from the folded `Snapshot::cmdline` and `Snapshot::toast`.
-- The active-pane ring is an `outline`, not a `border`, so a focus change consumes no layout space.
-- Divider positions re-apply on every `max-position` notify, because nested allocation reports an intermediate maximum before settling.
-- Each area carries a one-cell content floor and its paneds refuse to shrink children, so no pane is allocated zero pixels.
-- Pointer input is one `gtk::GestureDrag`, not a click controller plus something else: a gesture takes an implicit grab and keeps delivering after the pointer leaves the widget, which is what makes drag-past-the-edge selection work.
-- The target grid and button number are pinned at press while modifiers are re-read live, so a drag that wanders out still edits the pane it started in.
+- Divider positions re-apply from the live tree on every `max-position` notify, because nested allocation reports an intermediate maximum before settling. A `notify::position` at an unchanged maximum is a user drag, written back through `set_divider_fraction`; rebuilding there would destroy the paned holding the live gesture.
+- A one-cell content floor per area plus non-shrinking paned children keeps every pane above zero pixels.
+- Pointer input is one `gtk::GestureDrag`, not a click controller: a gesture takes an implicit grab and keeps delivering after the pointer leaves the widget.
+- The target grid and button are pinned at press while modifiers are re-read live, so a wandering drag still edits the pane it started in.
 - `layout_snapshot` reads each leaf's raw absolute path, never the relativized display path.
 
 **Gotchas**
