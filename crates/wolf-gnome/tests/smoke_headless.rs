@@ -9615,7 +9615,7 @@ fn new_untitled_buffer_replaces_open_file_under_cage() {
 /// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | n/a |
 /// | 2 | [`assert_png_present`] | precondition — grim produced an image | none; do not invent one | n/a |
 /// | 3 | OCR lacks [`PALETTE_OCR_ABSENT`] | **discriminator** — the palette DISPATCHED something | in `palette.rs`'s `activate_selection`, delete the call that invokes the `on_activate` handler, keeping the `record` and the `close`. The chord still opens the palette and Enter still closes it, but no command is dispatched, so `pbase.md`'s heading is still drawn. Nothing else reads that closure, so this isolates the smoke. | RED. `OCR unexpectedly contained "palcmdbase" (the base file's heading), so the pane still shows pbase.md and NO command was dispatched`. The capture held both `palcmdbase` and `zzpalrun#`, i.e. the marker was typed into the still-open base file — so assertion 4 stayed green and this row failed alone, exactly as designed. |
-/// | 4 | OCR contains [`PALETTE_OCR_PRESENT`] | **precondition** — the marker reached the editor after the palette closed | none. Deleting `self.area.grab_focus()` from `PaletteInner::close` was run as the candidate revert and did NOT go red. | GREEN across three consecutive runs with the `grab_focus` deleted. Hiding the palette box does not leave the toplevel unable to dispatch keys: GTK4 routes a key event with no focus widget to the window itself, where the bubble-phase controller `app::wire_keys` installs still runs. This row is therefore reclassified from discriminator to precondition — it says the keystrokes after the activation landed somewhere, not that focus was returned. Do not substitute a different revert to manufacture a discriminator. |
+/// | 4 | OCR contains [`PALETTE_OCR_PRESENT`] | **precondition** — the marker reached the editor after the palette closed | none. Deleting `self.area.grab_focus()` from `PaletteInner::close` was run as the candidate revert and did NOT go red. | GREEN across three consecutive runs with the `grab_focus` deleted. That is the measurement; the mechanism behind it was not established, and no explanation should be recorded here without one. This row is therefore reclassified from discriminator to precondition — it says the keystrokes after the activation landed somewhere, not that focus was returned. Do not substitute a different revert to manufacture a discriminator, and do not read this as licence to delete a focus return elsewhere: the ones in `picker::close`, `rebuild_pane_area` and `on_pane_clicked` redden a smoke when removed. |
 /// | 5 | the command MRU holds [`PALETTE_MRU_KEY`] | **discriminator** — activation recorded the row's opaque key, and it is the registry id | delete the `CommandMru::record` call in `activate_selection`. | RED, three times out of three: `the command MRU at …/project-state/command-mru.sqlite does not hold "new_buffer"; it holds []`. No flakiness observed — the store read back non-empty on every run with the `record` in place, so the WAL-recovery worry in `tests/README.md` did not materialize here. |
 ///
 /// Assertion 3 is what separates "the palette ran a command" from "nothing happened",
@@ -9729,9 +9729,8 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
          editor to draw the marker, and assertion 5 below names the row that actually ran; (c) \
          the marker rendered but OCR misread it — check the retained PNG before touching \
          anything. NOT a cause: `PaletteInner::close` failing to return focus, which was measured \
-         green: GTK4 routes a key event with no focus widget to the window itself, where the \
-         bubble-phase controller `app::wire_keys` installs still runs. PNG kept at {} for \
-         inspection. OCR output was:\n{ocr_text}",
+         green across three runs; the mechanism behind that is unestablished, so do not \
+         generalize it. PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
         out_png.display()
     );
 

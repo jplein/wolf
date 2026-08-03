@@ -211,10 +211,15 @@ impl PaletteInner {
     ///
     /// The `grab_focus` parks focus back on the persistent cmdline strip, exactly as
     /// [`crate::picker`]'s `close` does, so every overlay in this crate leaves focus
-    /// in the same place. It is a convention, not a load-bearing guard: deleting it
-    /// leaves the command-palette smoke green, because GTK4 routes a key event with
-    /// no focus widget to the window itself, where the bubble-phase controller
-    /// `app::wire_keys` installs still runs.
+    /// in the same place — see [DECISIONS.md](../DECISIONS.md), "Window structure",
+    /// for why focus never rests on an ephemeral widget.
+    ///
+    /// Deleting this call left the command-palette smoke green across three runs.
+    /// That is the measurement; the mechanism behind it was not established, and no
+    /// explanation for it should be written here without one. It licenses nothing
+    /// elsewhere: the focus returns in [`crate::picker`]'s `close`, and in
+    /// `pane_view`'s `rebuild_pane_area` and `on_pane_clicked`, are proven
+    /// load-bearing by a smoke that reddens when they are removed.
     fn close(&self) {
         if !self.open.get() {
             return;
