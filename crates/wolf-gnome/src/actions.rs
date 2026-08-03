@@ -196,14 +196,16 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         note: "macOS Cmd+P; the strongest Linux idiom for this chord, and gives up only the \
                Ctrl+Shift alias for <C-p>",
     },
-    // --- Reserved for later units (declared here so the scheme is auditable) --
+    // --- The buffer-picker overlay -------------------------------------------
     ActionBinding {
         action: "win.buffer-picker",
         accel: Some("<Control><Shift>e"),
         command: Some(Command::BufferPicker),
-        status: BindingStatus::Reserved,
-        note: "macOS Cmd+E; gives up only the Ctrl+Shift alias for <C-e>",
+        status: BindingStatus::Bound,
+        note: "macOS Cmd+E; gives up only the Ctrl+Shift alias for <C-e> (scroll down one line), \
+               which is still typed as plain Ctrl+E",
     },
+    // --- Reserved for later units (declared here so the scheme is auditable) --
     ActionBinding {
         action: "win.copy",
         accel: Some("<Control><Shift>c"),
@@ -338,6 +340,10 @@ pub const MENU_SECTIONS: &[MenuSection] = &[
             MenuItemSpec {
                 label: "Command Palette…",
                 action: "win.command-palette",
+            },
+            MenuItemSpec {
+                label: "Buffer Picker…",
+                action: "win.buffer-picker",
             },
         ],
     },
@@ -557,8 +563,9 @@ mod tests {
 
     /// The actions whose accelerators are actually registered — the
     /// [`BindingStatus::Bound`] rows of [`ACTION_TABLE`] — sorted.
-    const EXPECTED_BOUND_ACTIONS: [&str; 5] = [
+    const EXPECTED_BOUND_ACTIONS: [&str; 6] = [
         "app.quit",
+        "win.buffer-picker",
         "win.close-pane",
         "win.command-palette",
         "win.go-to-file",
@@ -822,11 +829,12 @@ mod tests {
 
         assert_eq!(
             bound, expected,
-            "the set of BOUND accelerators changed. wolf-gnome registers exactly five \
+            "the set of BOUND accelerators changed. wolf-gnome registers exactly six \
              (Ctrl+Shift+O go-to-file, Ctrl+Shift+N new-buffer, Ctrl+Shift+P command-palette, \
-             Ctrl+Shift+W close-pane, Ctrl+Shift+Q quit); every other row of the table is \
-             Reserved for a later unit or MenuOnly. Binding a reserved chord early means shipping \
-             a menu/accelerator that does nothing."
+             Ctrl+Shift+E buffer-picker, Ctrl+Shift+W close-pane, Ctrl+Shift+Q quit); every other \
+             row of the table is Reserved for a later unit or MenuOnly. Binding a reserved chord \
+             early means shipping a menu/accelerator that does nothing — and DEMOTING one back to \
+             Reserved silently unbinds a chord the menu still advertises."
         );
 
         for binding in bound_bindings() {
@@ -847,7 +855,7 @@ mod tests {
     /// GTK's own keymap-aware matching does not fire under `wtype` (see the module
     /// docs) — so every row below is a user-visible behaviour:
     ///
-    /// * **The five Bound chords must fire, in BOTH letter cases.** A real keymap
+    /// * **The six Bound chords must fire, in BOTH letter cases.** A real keymap
     ///   delivers the SHIFTED glyph for Ctrl+Shift+O — keyval `O`, not `o`
     ///   (`input::gdk_key`'s shift contract, and what `tests/gdk_key.rs` pins) — so
     ///   a case-SENSITIVE comparison would mean the chord never fires on real
@@ -856,8 +864,9 @@ mod tests {
     ///   enforcement of the invariant in the module docs: the matcher runs in the
     ///   CAPTURE phase, ahead of the key controller that forwards to Neovim and
     ///   returning `Propagation::Stop`, so a match here is a Neovim key made
-    ///   UNREACHABLE. `<C-o>`, `<C-n>`, `<C-p>`, `<C-w>` (the window-command prefix)
-    ///   and `<C-q>` must all still reach Neovim.
+    ///   UNREACHABLE. `<C-o>`, `<C-n>`, `<C-p>`, `<C-e>` (scroll down one line),
+    ///   `<C-w>` (the window-command prefix) and `<C-q>` must all still reach
+    ///   Neovim.
     /// * **A Reserved row must NOT fire.** Its action is not installed this unit,
     ///   so a match would swallow the key and do nothing at all — worse than not
     ///   binding it.
@@ -874,7 +883,7 @@ mod tests {
 
         // (description, delivered keyval, modifier state, expected action)
         let cases: Vec<(&str, gdk::Key, gdk::ModifierType, Option<&'static str>)> = vec![
-            // --- The five BOUND chords, in both letter cases ------------------
+            // --- The six BOUND chords, in both letter cases -------------------
             (
                 "Ctrl+Shift+o -> win.go-to-file",
                 key_from_char('o'),
@@ -935,6 +944,18 @@ mod tests {
                 ctrl | shift,
                 Some("win.command-palette"),
             ),
+            (
+                "Ctrl+Shift+e -> win.buffer-picker",
+                key_from_char('e'),
+                ctrl | shift,
+                Some("win.buffer-picker"),
+            ),
+            (
+                "Ctrl+Shift+E (the SHIFTED glyph a real keymap delivers) -> win.buffer-picker",
+                key_from_char('E'),
+                ctrl | shift,
+                Some("win.buffer-picker"),
+            ),
             // --- Bare Ctrl+<letter> stays Neovim's ---------------------------
             (
                 "Ctrl+o (no Shift) -> None, so <C-o> still reaches Neovim",
@@ -963,6 +984,12 @@ mod tests {
             (
                 "Ctrl+p (no Shift) -> None, so <C-p> still reaches Neovim",
                 key_from_char('p'),
+                ctrl,
+                None,
+            ),
+            (
+                "Ctrl+e (no Shift) -> None, so <C-e> (scroll down one line) still reaches Neovim",
+                key_from_char('e'),
                 ctrl,
                 None,
             ),
@@ -1025,7 +1052,7 @@ mod tests {
 
     /// [`key_name_matches`] over every key-NAME shape [`ACTION_TABLE`] uses.
     ///
-    /// [`action_for_key`] scans only the five Bound rows, and all five are single
+    /// [`action_for_key`] scans only the six Bound rows, and all six are single
     /// letters — so the named-key (`Left` / `Right`) and punctuation-name (`equal`
     /// / `minus` / `grave`) branches are otherwise completely unexercised, while a
     /// later unit promotes exactly those rows from Reserved to Bound. Pinning them

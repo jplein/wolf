@@ -86,14 +86,15 @@
 //! whole RPC timeout budget on every single crash. The cheap, RPC-free
 //! `Snapshot::current_tabpage` field carries the same handle.
 //!
-//! That rule stands, but its old JUSTIFYING CLAIM — that `wolf-gnome` calls no
-//! `block_on_rpc` at all, so `Liveness::NotResponding` is unreachable here — no
-//! longer holds. The application-state restore added exactly ONE:
-//! `WolfCore::rebuild_layout`, issued at most once per launch from
-//! `pane_view::apply_layout_rebuild`, before the window is interactive and never
-//! on the crash path. A wedged nvim AT LAUNCH can therefore mark the core
-//! `NotResponding` and raise the stall overlay, which nothing else in this crate
-//! can cause. Nothing on the restart path issues one.
+//! Exactly TWO `block_on_rpc` call sites are reachable from this crate, and the
+//! restart path issues neither. The first is `WolfCore::rebuild_layout`, called at
+//! most once per launch from `pane_view::apply_layout_rebuild`, before the window
+//! is interactive. The second is `WolfCore::list_buffers`, the buffer picker's
+//! candidate snapshot — and it is reachable from a RUNNING application, which is
+//! what makes `Liveness::NotResponding` a state a user can actually reach here.
+//! [`crate::buffer_picker::open_decision`] guards it: the picker refuses to open
+//! unless the core reads `Alive`, so the snapshot can raise a stall ONCE and can
+//! never re-probe a core already known to be wedged.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -107,6 +108,7 @@ use wolf_core::{Command, InputEvent, Liveness, TabFiles, WolfCore};
 
 use crate::actions::{self, BindingStatus};
 use crate::app::TREE_PANE_WIDTH;
+use crate::buffer_picker::BufferPickerHandle;
 use crate::command_action::{ui_action_for, UiAction};
 use crate::crash_overlay::CrashOverlay;
 use crate::liveness_ui::{
@@ -182,6 +184,8 @@ pub struct ShellParts<'a> {
     pub picker: &'a PickerHandle,
     /// The command palette, opened by `win.command-palette`.
     pub palette: &'a PaletteHandle,
+    /// The buffer picker, opened by `win.buffer-picker`.
+    pub buffers: &'a BufferPickerHandle,
     /// The file-tree sidebar, re-rooted after Open Folder.
     pub tree: &'a TreeHandle,
     /// The sidebar's root widget, hidden in the empty state.
@@ -213,6 +217,8 @@ struct ShellInner {
     picker: PickerHandle,
     /// The command palette opened by `win.command-palette`.
     palette: PaletteHandle,
+    /// The buffer picker opened by `win.buffer-picker`.
+    buffers: BufferPickerHandle,
     /// The file-tree sidebar, re-rooted once a pending Open Folder settles.
     tree: TreeHandle,
     /// The sidebar's root widget; hidden in the empty state.
@@ -346,6 +352,7 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         window: parts.window.clone(),
         picker: parts.picker.clone(),
         palette: parts.palette.clone(),
+        buffers: parts.buffers.clone(),
         tree: parts.tree.clone(),
         sidebar: parts.sidebar.clone(),
         paned: parts.paned.clone(),
@@ -620,10 +627,14 @@ impl AppShell {
     /// closing the picker (or yanking focus back to the cmdline strip) once per
     /// `Alive` frame would make the picker unusable.
     ///
-    /// - hidden -> visible: close BOTH transient overlays. A crashed core must not
-    ///   leave the picker's Open reachable underneath, nor a palette row whose
+    /// - hidden -> visible: close ALL THREE transient overlays. A crashed core must
+    ///   not leave the picker's Open reachable underneath, nor a palette row whose
     ///   activation would send into a dead nvim (`New`, `Close`) or open another
-    ///   overlay over the crash one (`Go to File…`).
+    ///   overlay over the crash one (`Go to File…`). The buffer picker is the one
+    ///   this cannot skip: a stall is discovered BY its candidate snapshot timing
+    ///   out, so the transition to `Stalled` always finds it open with zero rows,
+    ///   and an overlay left open keeps `app::wire_keys`' guard suppressing every
+    ///   key to Neovim — including after a later restart.
     /// - visible -> hidden: if focus was inside the overlay (i.e. on the restart
     ///   button), park it back on the persistent cmdline strip. Hiding the focus
     ///   widget without a focus-return leaves the toplevel with no focus widget at
@@ -648,6 +659,7 @@ impl AppShell {
         } else {
             self.inner.picker.close();
             self.inner.palette.close();
+            self.inner.buffers.close();
         }
     }
 
@@ -872,21 +884,28 @@ impl AppShell {
     /// Performs one UI action. Exhaustive with no `_` arm, so a new [`UiAction`]
     /// variant is a compile error here.
     ///
-    /// **At most one transient overlay is open at a time, and this is where that is
-    /// arbitrated**: opening either the picker or the palette closes the other
-    /// first. Both `close()`s are idempotent. This module holds both handles, so the
-    /// rule costs the two overlay modules no knowledge of each other — and it is
-    /// what keeps `app::wire_keys`' open-overlay guard honest and makes "Escape
+    /// **There are three transient overlays and at most one is open at a time; this
+    /// is where that is arbitrated**: opening any one of them closes the other two
+    /// first. Every `close()` is idempotent. This module holds all three handles, so
+    /// the rule costs the three overlay modules no knowledge of each other — and it
+    /// is what keeps `app::wire_keys`' open-overlay guard honest and makes "Escape
     /// closes the thing you can see" true.
     fn perform(&self, action: UiAction) {
         match action {
             UiAction::OpenFilePicker => {
                 self.inner.palette.close();
+                self.inner.buffers.close();
                 self.inner.picker.open();
             }
             UiAction::OpenCommandPalette => {
                 self.inner.picker.close();
+                self.inner.buffers.close();
                 self.inner.palette.open();
+            }
+            UiAction::OpenBufferPicker => {
+                self.inner.picker.close();
+                self.inner.palette.close();
+                self.inner.buffers.open();
             }
             UiAction::OpenFileDialog => self.open_file_dialog(),
             UiAction::OpenFolderDialog => self.open_folder_dialog(),
@@ -904,7 +923,7 @@ impl AppShell {
     }
 
     /// Closes the window through `close-request` so `app::wire_close` runs (picker,
-    /// palette and tree closed, then `WolfCore::shutdown`).
+    /// palette, buffer picker and tree closed, then `WolfCore::shutdown`).
     ///
     /// NEVER `destroy()`: that skips `close-request` entirely and leaks the nvim
     /// child. The `adw::ApplicationWindow` is owned by the application, so the app

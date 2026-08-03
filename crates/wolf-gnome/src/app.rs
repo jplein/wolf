@@ -7,8 +7,9 @@
 //! ([`crate::pane_view`]) — a tree of nested [`gtk::Paned`]s with one
 //! [`gtk::DrawingArea`] per pane plus a bottom cmdline strip — and its overlay
 //! children are the empty state, the file picker ([`crate::picker`]), the command
-//! palette ([`crate::palette`]), and the crash overlay with its restart banner. The
-//! window is backed by a live [`WolfCore`]:
+//! palette ([`crate::palette`]), the buffer picker ([`crate::buffer_picker`]), and
+//! the crash overlay with its restart banner. The window is backed by a live
+//! [`WolfCore`]:
 //!
 //! - **Output / wake:** [`WolfCore`] runs Neovim on its own tokio runtime and
 //!   signals a single [`WakeFn`] when a new frame is ready. The wake fires on a
@@ -28,12 +29,15 @@
 //!   The layout is queued on the pane view
 //!   ([`crate::pane_view::PaneHandle::request_layout_rebuild`]) and realized on
 //!   the first wake with a window grid, through `WolfCore::rebuild_layout`. That
-//!   call is the ONE blocking RPC this front-end issues — at most once per launch,
-//!   before the window is interactive, never on the crash path — so
-//!   `Liveness::NotResponding` is reachable here for the first time (a wedged
-//!   nvim at launch raises the stall overlay). Writing back is
-//!   [`crate::persistence`]: a snapshot on every wake, and a final synchronous
-//!   snapshot + flush as the FIRST thing [`wire_close`] does.
+//!   is ONE of the TWO blocking RPCs this front-end issues — at most once per
+//!   launch, before the window is interactive, never on the crash path. The other
+//!   is the buffer picker's candidate snapshot (`WolfCore::list_buffers`), which a
+//!   RUNNING window can issue on Ctrl+Shift+E, behind
+//!   [`crate::buffer_picker::open_decision`]'s guard that it be issued only while
+//!   the core reads `Alive`. Either can mark the core `Liveness::NotResponding` and
+//!   raise the stall overlay. Writing back is [`crate::persistence`]: a snapshot on
+//!   every wake, and a final synchronous snapshot + flush as the FIRST thing
+//!   [`wire_close`] does.
 //! - **Liveness / crash recovery:** the liveness read is UNCONDITIONAL and at the
 //!   TOP of the drain-loop body, and it GATES the two paint handlers (see
 //!   [`mod@crate::liveness_ui`] for the mapping and [`crate::crash_overlay`] for the
@@ -70,7 +74,7 @@
 //!   menu from the same data, matches the accelerators, and drains
 //!   [`WolfCore::drain_commands`] on each wake. A row activated in the command
 //!   palette enters that same dispatch, and the shell keeps at most one of the
-//!   picker and the palette open at a time.
+//!   three transient overlays open at a time.
 //! - **Resize:** per-pane and global grid resizing live in [`crate::pane_view`]
 //!   (each pane's `connect_resize` → [`crate::grid_size_for`] → per-grid/global
 //!   resize).
@@ -100,6 +104,7 @@ use adw::prelude::*;
 use gtk::glib;
 use wolf_core::{CoreConfig, InputEvent, StateStore, WakeFn, WolfCore, WolfState};
 
+use crate::buffer_picker::{self, BufferPickerHandle};
 use crate::crash_overlay;
 use crate::palette::{self, PaletteHandle};
 use crate::pane_view;
@@ -285,19 +290,20 @@ fn build_ui(app: &adw::Application) {
     // The editor area is the overlay's main child. Overlay children stack in the
     // order they are added, and this order is a decision:
     //
-    //   empty_state -> picker -> command palette -> crash overlay -> restart banner
+    //   empty_state -> picker -> command palette -> buffer picker -> crash overlay
+    //   -> restart banner
     //
-    // Both transient overlays sit ABOVE the empty state, which is opaque and
-    // full-bleed: below it, opening either one in a project-less window would draw
-    // it behind the status page with no visible effect. Their order RELATIVE TO
-    // EACH OTHER is not observable, because `shell::perform` keeps at most one of
-    // the two open (it closes one when it opens the other).
+    // All three transient overlays sit ABOVE the empty state, which is opaque and
+    // full-bleed: below it, opening any one of them in a project-less window would
+    // draw it behind the status page with no visible effect. Their order RELATIVE
+    // TO EACH OTHER is not observable, because `shell::perform` keeps at most one
+    // of the three open (it closes the other two when it opens one).
     //
-    // The crash overlay covers all three (the picker's Open and a palette row would
-    // both send into a dead nvim; the empty state's Open Folder would `Chdir` one —
-    // the captive nvim runs in the empty state too, so it can crash there). The
-    // banner is topmost and click-through, so it confirms a restart without ever
-    // swallowing a click meant for the editor.
+    // The crash overlay covers all four (the picker's Open, a palette row and a
+    // buffer-picker row would all send into a dead nvim; the empty state's Open
+    // Folder would `Chdir` one — the captive nvim runs in the empty state too, so
+    // it can crash there). The banner is topmost and click-through, so it confirms
+    // a restart without ever swallowing a click meant for the editor.
     let overlay = gtk::Overlay::new();
     overlay.set_child(Some(&editor));
 
@@ -308,6 +314,7 @@ fn build_ui(app: &adw::Application) {
 
     let picker = picker::build(&overlay, &focus_area, &core);
     let palette = palette::build(&overlay, &focus_area, &core);
+    let buffers = buffer_picker::build(&overlay, &focus_area, &core);
 
     overlay.add_overlay(&crash.widget());
     overlay.add_overlay(&crash.banner_widget());
@@ -373,6 +380,7 @@ fn build_ui(app: &adw::Application) {
         window: &window,
         picker: &picker,
         palette: &palette,
+        buffers: &buffers,
         tree: &tree,
         sidebar: &sidebar,
         paned: &paned,
@@ -435,8 +443,8 @@ fn build_ui(app: &adw::Application) {
         panes.on_render_wake();
     }
 
-    wire_keys(&window, &core, &picker, &palette);
-    wire_close(&window, &core, &picker, &palette, &tree, &state);
+    wire_keys(&window, &core, &picker, &palette, &buffers);
+    wire_close(&window, &core, &picker, &palette, &buffers, &tree, &state);
 
     // The shell's first drain runs only AFTER `wire_close` has installed the
     // `close-request` handler. A drained `CloseWindow` calls `window.close()`,
@@ -453,35 +461,34 @@ fn build_ui(app: &adw::Application) {
     focus_area.grab_focus();
 }
 
-/// Installs the key controller. While either transient overlay (the file picker or
-/// the command palette) is open, keys are left for that overlay's focused widgets
-/// (forwarding to the core is suppressed). Otherwise every key is translated via the
-/// pure [`crate::gdk_key`] seam into core input.
-///
-/// The guard covers both overlays for the same reason it covered the picker alone: a
-/// key the overlay's `SearchEntry` does not consume would otherwise reach this
-/// bubble-phase controller and be forwarded to Neovim, so typing a query would also
-/// type into the buffer behind it.
+/// Installs the key controller. While any transient overlay (the file picker, the
+/// command palette or the buffer picker) is open, keys are left for that overlay's
+/// focused widgets (forwarding to the core is suppressed). Otherwise every key is
+/// translated via the pure [`crate::gdk_key`] seam into core input. No smoke
+/// discriminates it — see "What is still unproven" in
+/// `crates/wolf-gnome/tests/README.md`.
 ///
 /// The controller carries NO propagation phase (i.e. Bubble), so a chord Wolf
-/// binds — Ctrl+Shift+O opens the picker, Ctrl+Shift+P the palette — never reaches
-/// it: [`crate::shell`]'s chord controller matches it in the CAPTURE phase and stops
-/// propagation. That is deliberate; it is what guarantees a bound chord is not
-/// ALSO forwarded to Neovim.
+/// binds — Ctrl+Shift+O opens the picker, Ctrl+Shift+P the palette, Ctrl+Shift+E
+/// the buffer picker — never reaches it: [`crate::shell`]'s chord controller matches
+/// it in the CAPTURE phase and stops propagation. That is deliberate; it is what
+/// guarantees a bound chord is not ALSO forwarded to Neovim.
 fn wire_keys(
     window: &adw::ApplicationWindow,
     core: &Rc<RefCell<Option<WolfCore>>>,
     picker: &PickerHandle,
     palette: &PaletteHandle,
+    buffers: &BufferPickerHandle,
 ) {
     let core = core.clone();
     let picker = picker.clone();
     let palette = palette.clone();
+    let buffers = buffers.clone();
     let controller = gtk::EventControllerKey::new();
     controller.connect_key_pressed(move |_controller, keyval, _keycode, state| {
         // An overlay is open: let its focused widgets handle the key; never forward
         // to nvim/core.
-        if picker.is_open() || palette.is_open() {
+        if picker.is_open() || palette.is_open() || buffers.is_open() {
             return glib::Propagation::Proceed;
         }
         match crate::gdk_key(keyval, state) {
@@ -512,12 +519,14 @@ fn wire_close(
     core: &Rc<RefCell<Option<WolfCore>>>,
     picker: &PickerHandle,
     palette: &PaletteHandle,
+    buffers: &BufferPickerHandle,
     tree: &TreeHandle,
     state: &StateHandle,
 ) {
     let core = core.clone();
     let picker = picker.clone();
     let palette = palette.clone();
+    let buffers = buffers.clone();
     let tree = tree.clone();
     let state = state.clone();
     window.connect_close_request(move |_window| {
@@ -526,11 +535,12 @@ fn wire_close(
         // before it returns, so the `borrow_mut().take()` below cannot panic.
         state.flush_on_close();
         // Close the picker and tree first so their FileSearches are dropped
-        // (cancelling any in-flight traversal) before the core shuts down. The
-        // palette holds no FileSearch, so its close is teardown symmetry rather
-        // than cancellation — and it is idempotent.
+        // (cancelling any in-flight traversal) before the core shuts down. Neither
+        // the palette nor the buffer picker holds a FileSearch, so their closes are
+        // teardown symmetry rather than cancellation — and both are idempotent.
         picker.close();
         palette.close();
+        buffers.close();
         tree.close();
         // Take in its own statement so the RefCell borrow is released before
         // shutdown() (which consumes the core and blocks on teardown).

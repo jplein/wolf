@@ -21,12 +21,14 @@
 //! Almost all of this module is GTK widget wiring (an `Overlay` over the
 //! `DrawingArea`, a `SearchEntry` + `ListBox` fed by `wolf_core::start_file_search`
 //! / `rank_matches`) which cannot be unit-tested headlessly. Its pure, display-free
-//! seams are [`next_selection`] and [`restored_index`], unit-tested below.
+//! seams are [`next_selection`], [`restored_index`] and [`activation_index`],
+//! unit-tested below.
 //!
-//! Those two seams are `pub(crate)` and shared with [`crate::palette`]'s overlay,
-//! so the file list and the command list navigate identically — one arithmetic, one
-//! table of tests. The macOS `PickerSeam` port names this file as its counterpart,
-//! which is why the functions stay here rather than moving to a seam module.
+//! Those three seams are `pub(crate)` and shared with [`crate::palette`]'s and
+//! [`crate::buffer_picker`]'s overlays, so the file list, the command list and the
+//! buffer list navigate and activate identically — one arithmetic, one table of
+//! tests. The macOS `PickerSeam` port names this file as its counterpart, which is
+//! why the functions stay here rather than moving to a seam module.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -83,6 +85,26 @@ pub(crate) fn restored_index(
     } else {
         Some(prev.unwrap_or(0).min(new_len - 1))
     }
+}
+
+/// Which row `Enter` activates, given the `ListBox`'s reported selection and the
+/// current row count.
+///
+/// With zero rows this is `None` — a true no-op, never a fallback to row 0. With
+/// rows present, an absent, negative or out-of-range selection resolves to the TOP
+/// row, which is what makes "type a query, press Enter" work with no arrow key.
+/// `Option<i32>` is the shape because `gtk::ListBoxRow::index()` returns an `i32`
+/// that is `-1` for a row not in a list.
+#[must_use]
+pub(crate) fn activation_index(selected: Option<i32>, n_rows: usize) -> Option<usize> {
+    if n_rows == 0 {
+        return None;
+    }
+    let index = selected
+        .and_then(|index| usize::try_from(index).ok())
+        .filter(|index| *index < n_rows)
+        .unwrap_or(0);
+    Some(index)
 }
 
 /// The picker's shared, interior-mutable state. All access happens on the single
@@ -233,16 +255,10 @@ impl PickerInner {
     /// `InputEvent::Open { path }` to the core, then closes the picker. With ZERO
     /// rows it is a true no-op: it neither sends `Open` nor closes the picker.
     fn activate_selection(&self) {
+        let selected = self.list.selected_row().map(|row| row.index());
         let path = {
             let paths = self.row_paths.borrow();
-            if paths.is_empty() {
-                return;
-            }
-            let idx = self
-                .list
-                .selected_row()
-                .map_or(0, |row| usize::try_from(row.index()).unwrap_or(0));
-            paths.get(idx).or_else(|| paths.first()).cloned()
+            activation_index(selected, paths.len()).and_then(|index| paths.get(index).cloned())
         };
         let Some(path) = path else {
             return;
@@ -609,6 +625,84 @@ mod tests {
         for case in &cases {
             let got = restored_index(case.reset_to_top, case.prev, case.new_len);
             assert_eq!(got, case.expected, "case: {}", case.desc);
+        }
+    }
+
+    /// One `activation_index` table row.
+    struct ActivationCase {
+        desc: &'static str,
+        selected: Option<i32>,
+        n_rows: usize,
+        expected: Option<usize>,
+    }
+
+    /// Which row Enter activates, given the `ListBox`'s reported selection.
+    ///
+    /// Two behaviours are load-bearing. Zero rows is a TRUE no-op — Enter on an
+    /// empty list must activate nothing rather than falling back to row 0, which
+    /// with no rows would panic or act on an arbitrary entry. And Enter with nothing
+    /// selected activates the TOP row, which is what makes "type a query, press
+    /// Enter" work without an arrow key. `Option<i32>` is the shape because
+    /// `gtk::ListBoxRow::index()` returns an `i32` that is `-1` for a row not in a
+    /// list.
+    ///
+    /// All three overlays resolve their activation through this one function — the
+    /// file picker, the command palette and the buffer picker — so a row of this
+    /// table is a user-visible behaviour in three places at once.
+    #[test]
+    fn activation_index_table() {
+        const LEN: usize = 5;
+        let cases = [
+            ActivationCase {
+                desc: "no rows, nothing selected => no activation at all",
+                selected: None,
+                n_rows: 0,
+                expected: None,
+            },
+            ActivationCase {
+                desc: "no rows, but a stale selection index => still no activation",
+                selected: Some(0),
+                n_rows: 0,
+                expected: None,
+            },
+            ActivationCase {
+                desc: "rows but no selection => the top row (type-then-Enter)",
+                selected: None,
+                n_rows: LEN,
+                expected: Some(0),
+            },
+            ActivationCase {
+                desc: "GTK's -1 'row not in a list' index => the top row",
+                selected: Some(-1),
+                n_rows: LEN,
+                expected: Some(0),
+            },
+            ActivationCase {
+                desc: "a selection in range => that row",
+                selected: Some(2),
+                n_rows: LEN,
+                expected: Some(2),
+            },
+            ActivationCase {
+                desc: "a selection past the end => the top row, never out of bounds",
+                selected: Some(9),
+                n_rows: LEN,
+                expected: Some(0),
+            },
+        ];
+
+        for case in &cases {
+            assert_eq!(
+                activation_index(case.selected, case.n_rows),
+                case.expected,
+                "case: {} — activation_index({:?}, {}) must be {:?}. With zero rows a Some here \
+                 makes Enter index into an empty list; with rows present a None makes Enter do \
+                 nothing at all, which is the whole purpose of every overlay that calls this.",
+                case.desc,
+                case.selected,
+                case.n_rows,
+                case.expected
+            );
         }
     }
 }

@@ -521,6 +521,15 @@ mod tests {
     /// The word the restart-banner cage smoke asserts on, lowercased.
     const BANNER_OCR_TERM: &str = "restarted";
 
+    /// The word the STALL cage smoke
+    /// (`stalled_nvim_raises_the_stall_overlay_under_cage`) asserts on, lowercased.
+    ///
+    /// That smoke wedges the captive Neovim with `SIGSTOP`, fires Ctrl+Shift+E so
+    /// the buffer picker's blocking `list_buffers` elapses its timeout budget, and
+    /// reads this term off the raised overlay. Nothing else on that page may
+    /// produce it, which is what the block below pins in both directions.
+    const STALL_OCR_TERM: &str = "responding";
+
     /// Pins the message each overlay mode carries, and — just as importantly —
     /// keeps the two cage smokes' OCR terms from cross-satisfying each other.
     #[test]
@@ -590,12 +599,45 @@ mod tests {
                  allowed to produce that term, or the banner smoke would be satisfied by a crash \
                  overlay it should never have seen"
             );
+            assert!(
+                !message.contains(STALL_OCR_TERM),
+                "the Crashed{{ retrying: {retrying} }} message ({message:?}) must NOT contain \
+                 {STALL_OCR_TERM:?} once lowercased: the STALL overlay is the only thing allowed \
+                 to produce that term. A crash and a stall are different states with different \
+                 routes back — one auto-restarts, the other waits for the user's button — so a \
+                 shared word would let the stall smoke pass against a CRASHED core, i.e. against \
+                 a Neovim that died rather than wedged"
+            );
         }
 
         assert!(
             !STALLED_MESSAGE.to_lowercase().contains(BANNER_OCR_TERM),
             "the stall message ({STALLED_MESSAGE:?}) must not contain {BANNER_OCR_TERM:?} either, \
              for the same reason the crash messages must not"
+        );
+
+        // The POSITIVE half of the stall term, without which every "must not
+        // contain {STALL_OCR_TERM}" assertion around it is idle: the stall smoke
+        // reads this word off the raised overlay, so the message it reads it from
+        // has to carry it.
+        assert!(
+            STALLED_MESSAGE.to_lowercase().contains(STALL_OCR_TERM),
+            "the stall message ({STALLED_MESSAGE:?}) must contain {STALL_OCR_TERM:?} once \
+             lowercased — it is the only text the stall overlay draws, and the term \
+             `stalled_nvim_raises_the_stall_overlay_under_cage` reads off the capture. Rewording \
+             this message to drop the word (\"Neovim is wedged\", say) silently DISARMS that cage \
+             smoke: the overlay would still be raised correctly and the smoke would still go red, \
+             with nothing naming the wording as the cause. Change the smoke's STALL_OCR_PRESENT \
+             const together with this string, or leave both alone."
+        );
+        assert!(
+            !RESTARTED_BANNER_MESSAGE
+                .to_lowercase()
+                .contains(STALL_OCR_TERM),
+            "the banner message ({RESTARTED_BANNER_MESSAGE:?}) must not contain \
+             {STALL_OCR_TERM:?}: the banner flashes on the restart SUCCESS path, so a shared word \
+             would let the stall smoke's must-CONTAIN assertion be satisfied by a window that had \
+             just RECOVERED — the opposite of the state it is asserting on"
         );
 
         // The button sits INSIDE the crash overlay, so its label is on screen at
@@ -612,6 +654,14 @@ mod tests {
             "the restart button label ({RESTART_BUTTON_LABEL:?}) must not contain \
              {OVERLAY_OCR_TERM:?}: the overlay term must come from the MESSAGE, so that hiding \
              the message alone is enough to turn the smoke red"
+        );
+        assert!(
+            !button.contains(STALL_OCR_TERM),
+            "the restart button label ({RESTART_BUTTON_LABEL:?}) must not contain \
+             {STALL_OCR_TERM:?}. The button sits INSIDE the stall overlay, so its label is on \
+             screen at exactly the moment `stalled_nvim_raises_the_stall_overlay_under_cage` \
+             captures: a label carrying the term would satisfy that smoke's must-CONTAIN \
+             assertion even with the stall MESSAGE never drawn"
         );
 
         // The positive half: the banner really does carry the term the smoke reads,
