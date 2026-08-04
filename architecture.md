@@ -100,7 +100,7 @@ The registry stays canonical in core, and the front-end maps a discriminant to a
 
 The captive Neovim stays hermetic, and that shapes what a command can be. The `wolf` Lua module and the `:Wolf*` Ex-commands exist for Wolf's own bundled configuration, not as a user keybinding hook; no user-config source path is added. Because `--clean` means no clipboard integration, the front-end owns `NSPasteboard`: Copy yanks the visual-mode selection over a blocking RPC so the shell can write it out, and Paste inserts through `nvim_paste`.
 
-Not every user-visible menu item is a command. A path-parameterized action such as Open Recent does not fit the no-argument model, so it is a native dynamic submenu fed by a data accessor over the FFI, and a standard AppKit item such as Enter Full Screen carries no discriminant at all.
+Not every user-visible menu item is a command. A path-parameterized action such as Open Recent does not fit the no-argument model and is not a `Command` at all: macOS realizes it as a native dynamic submenu fed by a data accessor over the FFI, and `wolf-gnome` as a command-palette row carrying the path. A standard AppKit item such as Enter Full Screen carries no discriminant at all.
 
 See [Command lifecycle](command-lifecycle.md) for the per-command inventory, the invocation-to-dispatch path, the three command flavors, and the checklist for adding one.
 

@@ -31,10 +31,14 @@
 //!   command drain dispatches through ([`command_action`]).
 //! - [`mod@palette`]: the command-palette rulebook — the candidate list this
 //!   front-end may show ([`palette::palette_rows`], which ranks unbounded and
-//!   applies its cap after filtering) and the TOTAL
+//!   applies its cap after filtering); the recent directories it may offer as
+//!   Open Recent rows, which refuse the window's own working directory, a path
+//!   whose directory has gone, and a relative one
+//!   ([`palette::open_recent_candidates`]); and the TOTAL
 //!   [`wolf_core::PaletteRowKind`] → [`palette::PaletteAction`] classification that
-//!   keeps a row `wolf-gnome` cannot perform out of the list
-//!   ([`palette::palette_action_for`]).
+//!   keeps a row `wolf-gnome` cannot perform out of the list, and turns a folder row
+//!   into a [`palette::PaletteAction::OpenRecentFolder`] carrying a directory and no
+//!   window target ([`palette::palette_action_for`]).
 //! - [`mod@buffer_picker`]: the buffer-picker rulebook — the TOTAL
 //!   `Option<`[`wolf_core::Liveness`]`>` → [`buffer_picker::OpenDecision`] guard
 //!   that refuses to issue the candidate snapshot's BLOCKING RPC unless the core

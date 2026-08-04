@@ -235,25 +235,21 @@ Purpose: the GDK pointer-translation rulebook, the analogue of [`input.rs`](#inp
 
 #### `palette.rs`
 
-Purpose: the command-palette overlay — a search entry over a ranked list of the registry commands this front-end performs, floating above the editor. Activating a row records its MRU key and hands the command to [`shell.rs`](#shellrs).
+Purpose: the command-palette overlay — the registry commands this front-end performs, plus one Open Recent row per usable recent directory.
 
 **Public API**
 
-- `build(overlay, area, core) -> PaletteHandle` — starts hidden. `area` is the focus-return widget, not the results host.
-- `PaletteHandle::open`, `close` (both idempotent), `is_open`, and `connect_activate`, which the shell points at its own command dispatch.
-- `palette_rows` and `palette_action_for` — the pure seams.
+- `build(overlay, area, core) -> PaletteHandle` — starts hidden; `area` is the focus-return widget.
+- `PaletteHandle::open`, `close` (both idempotent), `is_open`, and `connect_activate`.
+- `open_recent_candidates`, `palette_rows` and `palette_action_for` — the pure seams.
 
 **Decisions**
 
-- `rank_palette` is fed empty window and recent-directory slices, so only `Static` rows exist: there is no second window to raise, and an Open Recent row would be an entry that does nothing.
+- An Open Recent row carries a directory and no window target, and [`shell.rs`](#shellrs)'s `on_palette_activation` is the one place that directory becomes a window action.
+- `open_recent_candidates` refuses the window's own working directory, because this front-end has one window and re-rooting it where it already is changes nothing; a relative path, which `chdir_to` would canonicalize against the application process's working directory rather than Neovim's; and a path `is_dir` rejects, because a failed `:tcd` is only a `tracing::warn!` in core, so the shell's pending re-root never settles. The shared store is never pruned, so a temporarily unmounted path returns.
+- The label is `PaletteRow::display` unchanged, so the string ranked against the query and the string on screen are one. [`title.rs`](#titlers)'s home abbreviation is not applied here: it would rank one string and show another, and a query matching the visible `~` would return nothing.
 - Ranking runs unbounded and `max` applies after the classification filter, since `rank_palette` truncates first and undispatched rows would otherwise eat the budget.
-- The command MRU is read once at open: only an activation writes it, and an activation closes the palette, so a per-keystroke read buys nothing.
-- Activation records, closes, then dispatches. A dispatched Close Window tears the window down synchronously, so nothing may touch these widgets after it.
-- `PaletteAction::Unsupported` is unreachable while the filter stands. It exists so a new `PaletteRowKind` fails to compile here rather than becoming a dead row.
-
-**Gotchas**
-
-- Selection movement and activation are [`picker.rs`](#pickerrs)'s shared seams, so all four overlays navigate identically.
+- Activation records, closes, then dispatches: a dispatched Close Window tears the window down synchronously.
 
 #### `pane_layout.rs`
 
@@ -382,7 +378,7 @@ Purpose: the project-search overlay — a `Ctrl+Shift+F` entry over a flat, stre
 
 #### `shell.rs`
 
-Purpose: the glue for the action namespace — `gio` actions, the primary menu, the chord controller, the empty state, the command drain, and crash-recovery orchestration. A drained command and a palette row funnel through one dispatch.
+Purpose: the glue for the action namespace — `gio` actions, the primary menu, the chord controller, the empty state, the command drain, and crash-recovery orchestration. A drained command and a palette command row funnel through one dispatch.
 
 **Public API**
 
@@ -393,11 +389,10 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 **Decisions**
 
 - The chord controller matches keys itself rather than through GTK's own matching, which is keymap-aware and does not fire under the smokes' keystroke injector. Accelerators are registered only so the menu renders their labels.
-- The controller lives on the window, so it runs ahead of any overlay's controller and carries no open-overlay guard: an application command fires with any of the four up. No overlay's keys are bound chords.
-- At most one of the four transient overlays is open, arbitrated here because this module holds all four handles, so they need no knowledge of each other.
-- `install_actions` filters on the command's classification, so an implemented command installs its action even while its chord stays reserved.
+- The controller lives on the window, so it runs ahead of any overlay's and needs no open-overlay guard: no overlay's keys are bound chords.
 - Overlay side effects fire only on a real mode transition, and the focus sample is taken before the overlay is hidden, per the ordering rule in [DECISIONS.md](../DECISIONS.md).
-- An Open Folder result records a pending re-root rather than re-rooting synchronously: the file search resolves its root from the live cwd, which updates only after Neovim reports it.
+- `on_palette_activation` is the one place an Open Recent row becomes a window action. It re-roots this window, because there is one window to re-root, and it does so through `chdir_to` — the same call the native Open Folder dialog makes, so the two settle through one pending re-root and cannot diverge.
+- Neither producer re-roots the sidebar synchronously: the file search resolves its root from the live cwd, which updates only after Neovim reports it.
 
 #### `state_seam.rs`
 
@@ -445,7 +440,7 @@ Purpose: the GTK glue for the file-tree sidebar — a `gtk::ListView` over a `gt
 - `build(core, area, start) -> TreeHandle` — `area` is the focus-return widget. `start` is false in the empty state, where no project is open and nothing is walked.
 - `widget()` — the scrolled window, placed as the app's `Paned` start child.
 - `on_render_wake()` — reveals and highlights the current file when it changes.
-- `reroot()` — restarts the traversal after an Open Folder has settled; `close()` drops the search, cancelling the traversal.
+- `reroot()` — restarts the traversal after a front-end directory change has settled; `close()` drops the search, cancelling the traversal.
 
 **Decisions**
 

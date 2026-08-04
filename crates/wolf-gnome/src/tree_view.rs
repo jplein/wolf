@@ -12,8 +12,9 @@
 //! [`build`] takes a `start` flag: the search begins at build time for a normal
 //! project launch, but NOT in the empty state (no project open — see
 //! [`crate::workspace`]), where the sidebar is hidden and there is nothing to
-//! walk. [`TreeHandle::reroot`] then starts (or restarts) it once the Open Folder
-//! path has settled, i.e. once nvim has reported the new cwd that
+//! walk. [`TreeHandle::reroot`] then starts (or restarts) it once a front-end
+//! directory change — the Open Folder dialog or an Open Recent palette row — has
+//! settled, i.e. once nvim has reported the new cwd that
 //! `WolfCore::start_file_search` resolves its root from.
 //!
 //! ## Model
@@ -232,8 +233,9 @@ impl TreeInner {
     /// traversal, clears every cached projection, then starts a fresh search and
     /// refreshes.
     ///
-    /// Driven only from the Open Folder path, and only once
-    /// [`crate::workspace::reroot_ready`] holds — `start_file_search` resolves its
+    /// Driven only from a front-end directory change — the Open Folder dialog or an
+    /// Open Recent palette row — and only once
+    /// [`crate::workspace::reroot_ready`] holds: `start_file_search` resolves its
     /// root from `live_cwd()`, which only updates after nvim reports `DirChanged`,
     /// so re-rooting earlier would re-root at the OLD cwd.
     fn reroot(&self) {
@@ -301,8 +303,9 @@ impl TreeHandle {
         self.inner.close();
     }
 
-    /// Re-roots the sidebar at the core's live cwd (used after Open Folder, once
-    /// nvim has reported the new directory).
+    /// Re-roots the sidebar at the core's live cwd (used after a front-end
+    /// directory change — the Open Folder dialog or an Open Recent palette row —
+    /// once nvim has reported the new directory).
     pub fn reroot(&self) {
         self.inner.reroot();
     }

@@ -60,10 +60,15 @@
 //! `:q`/`:qa`) goes through the drain. A chord or a menu click activates the
 //! matching `gio::SimpleAction` directly, without a round trip through the core's
 //! command queue. A row activated in the command-palette overlay
-//! ([`crate::palette`]) hands its `Command` straight to
-//! [`AppShell::dispatch_command`], which is the same function the drain loop calls.
-//! All three end in [`UiAction`] and in [`AppShell::perform`], so they cannot
-//! diverge.
+//! ([`crate::palette`]) hands its whole [`crate::palette::PaletteAction`] to
+//! [`AppShell::on_palette_activation`], whose command arm calls
+//! [`AppShell::dispatch_command`] — the same function the drain loop calls. All
+//! three end in [`UiAction`] and in [`AppShell::perform`], so they cannot diverge.
+//!
+//! An Open Recent palette row is the one activation that is NOT a `Command`: it
+//! carries a directory, and [`AppShell::on_palette_activation`] is the one place
+//! that directory becomes a window action. It re-roots this window, through the
+//! same [`AppShell::chdir_to`] the native Open Folder dialog calls.
 //!
 //! ## Borrow discipline (load-bearing)
 //!
@@ -122,7 +127,7 @@ use crate::liveness_ui::{
     liveness_ui, reopen_order, restart_outcome, OverlayMode, RestartOutcome,
     MAX_AUTO_RESTART_ATTEMPTS,
 };
-use crate::palette::PaletteHandle;
+use crate::palette::{PaletteAction, PaletteHandle};
 use crate::pane_view::PaneHandle;
 use crate::persistence::StateHandle;
 use crate::picker::PickerHandle;
@@ -200,7 +205,7 @@ pub struct ShellParts<'a> {
     pub buffers: &'a BufferPickerHandle,
     /// The project-search overlay, opened by `win.search-in-project`.
     pub search: &'a SearchHandle,
-    /// The file-tree sidebar, re-rooted after Open Folder.
+    /// The file-tree sidebar, re-rooted after a front-end directory change.
     pub tree: &'a TreeHandle,
     /// The sidebar's root widget, hidden in the empty state.
     pub sidebar: &'a gtk::Widget,
@@ -235,7 +240,7 @@ struct ShellInner {
     buffers: BufferPickerHandle,
     /// The project-search overlay opened by `win.search-in-project`.
     search: SearchHandle,
-    /// The file-tree sidebar, re-rooted once a pending Open Folder settles.
+    /// The file-tree sidebar, re-rooted once a pending re-root settles.
     tree: TreeHandle,
     /// The sidebar's root widget; hidden in the empty state.
     sidebar: gtk::Widget,
@@ -250,8 +255,10 @@ struct ShellInner {
     go_to_file: RefCell<Option<gio::SimpleAction>>,
     /// The `win.search-in-project` action, stashed for the same reason.
     search_in_project: RefCell<Option<gio::SimpleAction>>,
-    /// A directory the user chose in the Open Folder dialog, awaiting nvim's
-    /// `DirChanged`. Settled on a later wake by [`workspace::reroot_ready`].
+    /// A directory the user chose — in the Open Folder dialog or as an Open Recent
+    /// palette row — awaiting nvim's `DirChanged`. Both producers set it through
+    /// [`AppShell::chdir_to`]; a later wake settles it via
+    /// [`workspace::reroot_ready`].
     pending_reroot: RefCell<Option<PathBuf>>,
     /// The crash/stall overlay + banner, driven by [`AppShell::on_liveness_wake`].
     crash_overlay: CrashOverlay,
@@ -419,12 +426,13 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         }
     });
 
-    // A palette row hands its command to the SAME function the drain loop uses, so
-    // the two entry paths cannot classify a command differently.
+    // A palette row hands its whole `PaletteAction` to one function, whose command
+    // arm is the SAME dispatch the drain loop uses, so the two entry paths cannot
+    // classify a command differently.
     let weak_palette = Rc::downgrade(&shell.inner);
-    shell.inner.palette.connect_activate(move |command| {
+    shell.inner.palette.connect_activate(move |action| {
         if let Some(shell) = upgrade(&weak_palette) {
-            shell.dispatch_command(command);
+            shell.on_palette_activation(action);
         }
     });
 
@@ -844,8 +852,8 @@ impl AppShell {
         }
     }
 
-    /// Reacts to a render wake: settles a pending Open Folder re-root, then drains
-    /// and dispatches every queued command.
+    /// Reacts to a render wake: settles a pending re-root, then drains and
+    /// dispatches every queued command.
     ///
     /// The app calls this LAST on each wake (after the pane view and the tree),
     /// because a drained `close_window` tears the core down. Unlike the paint, it
@@ -902,6 +910,31 @@ impl AppShell {
         };
         for command in commands {
             self.dispatch_command(command);
+        }
+    }
+
+    /// Performs one palette-row activation: a registry command through the same
+    /// [`UiAction`] funnel the drain uses, or a recent folder through
+    /// [`AppShell::chdir_to`].
+    ///
+    /// **This is the one place a recent folder becomes a window action.** It
+    /// re-roots this window, because there is one window to re-root, and it reaches
+    /// it through `chdir_to` so an Open Recent activation is indistinguishable from
+    /// picking the same folder in the native Open Folder dialog — one
+    /// canonicalization, one [`InputEvent::Chdir`], one pending re-root, one settle.
+    ///
+    /// Exhaustive with no `_` arm, so a new [`PaletteAction`] variant is a compile
+    /// error here. The `Unsupported` arm is unreachable while
+    /// `palette::PaletteInner::activate_selection`'s own refusal stands, and is
+    /// printed rather than dropped for the same reason [`AppShell::perform`]'s
+    /// `Deferred | NoGnomeEquivalent` arm is.
+    fn on_palette_activation(&self, action: PaletteAction) {
+        match action {
+            PaletteAction::Dispatch(command) => self.dispatch_command(command),
+            PaletteAction::OpenRecentFolder(path) => self.chdir_to(path),
+            PaletteAction::Unsupported(reason) => {
+                eprintln!("wolf-gnome: palette activation not performed: {reason}");
+            }
         }
     }
 
@@ -1054,14 +1087,29 @@ impl AppShell {
     /// Changes the core's working directory to `path` and records the pending
     /// re-root (canonicalized, because `reroot_ready` compares it against the
     /// core's already-canonical `live_cwd`).
+    ///
+    /// Two producers reach this: the native Open Folder dialog and an Open Recent
+    /// palette row ([`AppShell::on_palette_activation`]). Both settle through
+    /// [`AppShell::settle_pending_reroot`], which is what makes an Open Recent
+    /// activation indistinguishable from picking the same folder in the dialog.
+    ///
+    /// A failed `:tcd` leaves the pending re-root set until the next successful
+    /// chdir: `wolf_core::input` degrades a failed apply to a `tracing::warn!`, so
+    /// Neovim never reports `DirChanged` and `reroot_ready` never holds.
+    /// `palette::open_recent_candidates`' `is_dir` refusal is what keeps that window
+    /// small for the palette; the dialog cannot offer a directory that has gone.
     fn chdir_to(&self, path: PathBuf) {
         let path = std::fs::canonicalize(&path).unwrap_or(path);
         self.send_input(InputEvent::Chdir { path: path.clone() });
         *self.inner.pending_reroot.borrow_mut() = Some(path);
     }
 
-    /// If a pending Open Folder re-root has been applied by nvim, clears the empty
-    /// state and re-roots the sidebar. Run on every wake, BEFORE the command drain.
+    /// If a pending re-root has been applied by nvim, clears the empty state and
+    /// re-roots the sidebar. Run on every wake, BEFORE the command drain.
+    ///
+    /// The one settle point both [`AppShell::chdir_to`] producers share, which is
+    /// why the Open Folder dialog and an Open Recent palette row cannot diverge in
+    /// what the sidebar does afterwards.
     fn settle_pending_reroot(&self) {
         let pending = self.inner.pending_reroot.borrow().clone();
         let Some(pending) = pending else {

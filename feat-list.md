@@ -81,14 +81,14 @@ GTK paints a single-row bottom strip: an active command line, or the last toast 
 | Pickers hosted in a separate floating panel | `feat/markdown-preview` (`d763b3b`)                                          | [x]   | [ ]   |
 | Buffer picker (⌘E)                          | `feat/buffer-list` / `linux-feat/buffer-picker`                              | [x]   | [x]   |
 | Command palette (⌘P)                        | `feat/commands` (`4b3b53e`)                                                  | [x]   | [x]   |
-| Open Recent (global recent-directories MRU) | `feat/commands`                                                              | [x]   | [ ]   |
+| Open Recent (global recent-directories MRU) | `feat/commands` / `linux-feat/open-recent`                                   | [x]   | [x]   |
 | Per-pane back/forward navigation history    | `feat/nav-buttons` (`597175b`)                                               | [x]   | [ ]   |
 | Project search UI (ripgrep-backed)          | `feat/search-ui` / `linux-feat/project-search`                               | [x]   | [x]   |
 | Native file dialogs (open / save / save-as) | —                                                                            | [x]   | [ ]   |
 
-The `wolf-core` halves of the recent-directories MRU and the navigation history are platform-agnostic and already linked into `wolf-gnome`; only the GTK views and their wiring are missing. Those are the highest-leverage Linux tasks. The GTK command palette lists only the registry commands `wolf-gnome` performs: Switch-to-Window rows need multiple windows, and Open Recent rows need the recent-directories row above.
+The `wolf-core` half of the per-pane navigation history is platform-agnostic and already linked into `wolf-gnome`; only the GTK view and its wiring are missing, which makes it the highest-leverage Linux task in this table. The GTK command palette lists the registry commands `wolf-gnome` performs plus one Open Recent row per usable recent directory, each of which re-roots the window through the same path the Open Folder dialog takes; there are no Switch-to-Window rows, since `wolf-gnome` has one window.
 
-Two rows stay unticked for partial coverage. The file-dialog row covers all three dialogs, and `wolf-gnome` has native Open File and Open Folder but no save or save-as, so saving remains `:w` from within Neovim. The sidebar re-roots after an Open Folder but not after a user-typed `:cd`.
+Two rows stay unticked for partial coverage. The file-dialog row covers all three dialogs, and `wolf-gnome` has native Open File and Open Folder but no save or save-as, so saving remains `:w` from within Neovim. The sidebar re-roots on a front-end directory change — the Open Folder dialog or an Open Recent palette row — but not on a user-typed `:cd`.
 
 ## Windows, tabs, commands
 
