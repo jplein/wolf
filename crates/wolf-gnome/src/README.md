@@ -54,7 +54,7 @@ Purpose: all GTK and Adwaita window wiring. `run` builds the `adw::Application` 
 - The saved layout is queued with no arity guard, one half of the content-predicate rule in [DECISIONS.md](../DECISIONS.md).
 - Cell metrics are measured once from a throwaway 1x1 `ImageSurface` (used only to obtain a Pango context) and shared by `Rc`, so a resize arriving before the first draw already has a size.
 - The close-request handler flushes state first, while the core and panes are still alive, and takes the core out in its own statement so the borrow is released before `shutdown` blocks. A flush after the take sees no core, is refused by the snapshot gate, and silently loses the session.
-- No title widget is set on the header bar, measured rather than stylistic: the pointer smokes' pane origin is this bar's height. See [DECISIONS.md](../DECISIONS.md).
+- No title widget is set on the header bar, measured rather than stylistic: this bar's height is one term of the pane origin every pointer smoke derives its targets from. See [DECISIONS.md](../DECISIONS.md).
 
 **Gotchas**
 
@@ -95,7 +95,7 @@ Purpose: the pure cell-metrics arithmetic the configured `line-height` drives �
 **Decisions**
 
 - The rule lives here and not in [`render.rs`](#renderrs) because `for_font` needs a live Cairo context, so a rule left inside it could only be executed by the golden-render target.
-- The function is unit-agnostic and rounds in whatever unit its caller uses: points on macOS, device pixels here, since device pixels are what Cairo paints in.
+- The function is unit-agnostic and rounds in whatever unit its caller uses: points on macOS, device pixels here, since device pixels are what Cairo paints in. [`statusbar_layout.rs`](#statusbar_layoutrs) follows the same convention.
 - Two divergences from Swift, both strictly more defensive and both confined to inputs macOS also mishandles: the percentage must be finite (Swift's guard accepts `+inf`), and a non-finite or non-positive result is floored (Swift can return `0` or `NaN`).
 
 #### `command_action.rs`
@@ -171,6 +171,28 @@ Purpose: pure, GTK-free cursor geometry and color logic — the pixel rectangle 
 - `wolf-ffi` carries a port of `cursor_colors`; the two are kept in lockstep, so change both together.
 - An out-of-range `mode_idx`, empty `mode_infos`, and an out-of-bounds cursor cell all fall through to inversion rather than panicking.
 
+#### `editor_inset.rs`
+
+Purpose: the chrome around a pane's text grid, as arithmetic — the rectangle the grid paints into, the map from a pane-local point into the space [`cell_at`](#geometryrs) speaks, and the grid size left over. A port of `WolfKeyMap/EditorInset.swift`.
+
+**Public API**
+
+- `EDITOR_PADDING_PX`, the inset on all four sides.
+- `grid_rect(pane_w, pane_h, statusbar_h, padding) -> GridRect` and `grid_local(x, y, rect) -> (f64, f64)`.
+- `grid_size_for_pane(pane_w, pane_h, statusbar_h, padding, cell_w, cell_h) -> (u16, u16)`.
+- `min_pane_size(cell_w, cell_h, statusbar_h, padding) -> (f64, f64)`, a pane's content floor.
+
+**Decisions**
+
+- The subtraction and the division stay separate: [`geometry.rs`](#geometryrs) states its composition guarantee over the division alone, and `resize_global` wants that un-inset division for grid 1.
+- Only `w` and `h` clamp at zero, so a pane smaller than its chrome still reports where the grid would start. A non-finite input collapses the whole rectangle, unlike Swift: a NaN origin would poison every pointer event in the pane.
+- No `StatusbarTextSpan` counterpart and no `text_left_inset`. That seam only adds the column cap's centring offset, which this crate has none of, so the painter reads `grid_rect(..).x` and the strip's text shares the grid's origin by construction.
+- The cmdline strip is deliberately not indented: macOS insets a per-pane cmdline; this crate's is one full-width strip at the window bottom.
+
+**Gotchas**
+
+- A point in the strip or in a gutter comes back negative, which `cell_at` clamps to the nearest edge cell; a NaN or an infinity passes through, so `cell_at`'s two non-finite rules survive.
+
 #### `geometry.rs`
 
 Purpose: the pure pixel conversions behind every resize, pointer event, and divider position, kept GTK- and pango-free so they are unit-tested headlessly.
@@ -178,7 +200,7 @@ Purpose: the pure pixel conversions behind every resize, pointer event, and divi
 **Public API**
 
 - `grid_size_for(width_px, height_px, cell_w, cell_h) -> (u16, u16)` — floor division per axis, each clamped into `[1, u16::MAX]`.
-- `cell_at(x, y, cell_w, cell_h, cols, rows) -> (u32, u32)` — returns `(row, col)`, matching `wolf_core::MouseEvent`'s field order. Coordinates are widget-local; no grid origin is subtracted.
+- `cell_at(x, y, cell_w, cell_h, cols, rows) -> (u32, u32)` — returns `(row, col)`, matching `wolf_core::MouseEvent`'s field order. Coordinates are grid-local; no origin is subtracted here.
 - `divider_position(min, max, fraction)` and `divider_travel_fraction(position, max)` — the `gtk::Paned` divider conversion, exact inverses.
 
 **Decisions**
@@ -190,7 +212,7 @@ Purpose: the pure pixel conversions behind every resize, pointer event, and divi
 
 **Gotchas**
 
-- This crate has no editor insets, no column cap, and no centering, so do not import the macOS grid-origin machinery.
+- `cell_at`'s coordinates are grid-local and this file subtracts no origin: the per-pane chrome is [`editor_inset.rs`](#editor_insetrs)'s, which reduces the rectangle before the division and translates a point before `cell_at`. This crate has no column cap and no centering, so the macOS grid-origin machinery has no counterpart here — do not import it.
 
 #### `input.rs`
 
@@ -238,7 +260,7 @@ Purpose: crate root. Declares the modules and re-exports the display-free seams 
 
 - `cell_at` is re-exported because `grid_size_for` is, and the two are a pair whose composition is the point.
 - `restart_button_rect` is re-exported for one concrete consumer: the crash-overlay smoke derives the pixel it clicks from the same function the widget builder realizes, so the two cannot drift.
-- Items in `about`, `actions`, `buffer_picker`, `cell_metrics_math`, `config_seam`, `crash_overlay`, `cursor`, `layout`, `mouse`, `nav_ui`, `palette`, `pane_layout`, `pane_view`, `persistence`, `picker`, `refresh_coalescer`, `search_overlay`, `shell`, `tree`, `tree_gate`, and `tree_view` are reached by module path rather than re-exported.
+- Items in `about`, `actions`, `buffer_picker`, `cell_metrics_math`, `config_seam`, `crash_overlay`, `cursor`, `editor_inset`, `layout`, `mouse`, `nav_ui`, `palette`, `pane_layout`, `pane_view`, `persistence`, `picker`, `refresh_coalescer`, `search_overlay`, `shell`, `statusbar_layout`, `tree`, `tree_gate`, and `tree_view` are reached by module path rather than re-exported. Neither pane-chrome seam is re-exported, because no consumer outside the crate needs one.
 
 #### `liveness_ui.rs`
 
@@ -350,10 +372,10 @@ Purpose: the GTK glue that turns `layout`'s pane tree into nested `gtk::Paned` w
 
 - Panes paint window grids only. Grid 1 empties under `ext_messages`, so the strip paints from the folded `Snapshot::cmdline` and `Snapshot::toast`.
 - Divider positions re-apply from the live tree on every `max-position` notify, because nested allocation reports an intermediate maximum before settling. A `notify::position` at an unchanged maximum is a user drag, written back through `set_divider_fraction`; rebuilding there would destroy the paned holding the live gesture.
-- A one-cell content floor per area plus non-shrinking paned children keeps every pane above zero pixels.
+- A pane's statusbar strip and padding are painted into its own `DrawingArea`, not built from widgets ([DECISIONS.md](../DECISIONS.md)), so every pixel-to-grid conversion here routes through [`editor_inset.rs`](#editor_insetrs).
 - Pointer input is one `gtk::GestureDrag`, not a click controller: a gesture takes an implicit grab and keeps delivering after the pointer leaves the widget.
 - The target grid and button are pinned at press while modifiers are re-read live, so a wandering drag still edits the pane it started in.
-- `layout_snapshot` reads each leaf's raw absolute path, never the relativized display path.
+- Each pane's status is read once per wake and cached: `draw_pane` holds a snapshot read guard while `pane_status` takes one internally, and a re-entrant read can deadlock. `layout_snapshot` reads the raw absolute path from that cache, not the relativized display path.
 
 **Gotchas**
 
@@ -427,8 +449,9 @@ Purpose: the Cairo/Pango paint seam. `paint` rasterizes one grid and its highlig
 
 **Public API**
 
-- `CellMetrics::for_font(cr, family, size_pt, line_height_percent)` — uses `cr` only for a Pango context, so the surface's size is irrelevant. The advance width is Pango's approximate char width, unrounded; the cell height and baseline come from [`cell_metrics_math`](#cell_metrics_mathrs), and the measured `ascent`/`descent` ride along on the result.
+- `CellMetrics::for_font(cr, family, size_pt, line_height_percent)` — uses `cr` only for a Pango context, so the surface's size is irrelevant. The advance width is Pango's approximate char width, unrounded; the cell height and baseline come from [`cell_metrics_math`](#cell_metrics_mathrs), and the measured `ascent`/`descent` plus `size_px`, the font size in device pixels the per-pane statusbar sizes its lines from, ride along on the result.
 - `paint(cr, grid, highlights, metrics)` — takes one grid rather than a whole `Snapshot`, because under `ext_multigrid` a front-end paints a single grid per surface.
+- `draw_text_line(cr, font, x, y, text, fg)` — one line of free text with its top at `y`, for the statusbar strip; weight and size ride on the caller's font description.
 
 **Decisions**
 
@@ -439,7 +462,7 @@ Purpose: the Cairo/Pango paint seam. `paint` rasterizes one grid and its highlig
 
 **Gotchas**
 
-- `FALLBACK_FG`, `FALLBACK_BG`, and `draw_glyph` are `pub(crate)` so `cursor.rs` and `pane_view.rs` reuse them. Reimplementing either in a caller lets cursor colors or glyph placement drift away from the grid paint.
+- `FALLBACK_FG`, `FALLBACK_BG`, `draw_glyph` and `draw_text_line` are `pub(crate)` so `cursor.rs` and `pane_view.rs` reuse them. Reimplementing one in a caller lets cursor colors, glyph placement or the strip's text drift away from the grid paint.
 
 #### `search_overlay.rs`
 
@@ -501,6 +524,24 @@ Purpose: the pure application-state seam — what to restore at launch, and what
 - `may_snapshot`'s match over `Liveness` is total, so a new variant cannot silently read as "not alive".
 - `snapshot_state` is the one place the single-window, single-tab shape lives, pinned by its own test so a later unit changes it deliberately.
 - `RestorePlan::sidebar_visible` is independent of the empty state; `sidebar_is_shown` applies that separately.
+
+#### `statusbar_layout.rs`
+
+Purpose: the per-pane statusbar's whole rulebook, decidable from values — the strip's height, the top and reserved height of each of its two lines, the secondary line's font size, and both lines' colour and weight. The vertical half ports `WolfKeyMap/StatusbarLayout.swift` constant for constant.
+
+**Public API**
+
+- `statusbar_layout(primary_font_size, secondary_font_size, vertical_padding, line_gap) -> StatusbarLayout`.
+- `secondary_font_size(primary_font_size) -> f64`, and `statusbar_text(fg, bg, active) -> StatusbarText`.
+- The seven named constants the two functions read, `STATUSBAR_LINE_FACTOR` through `STATUSBAR_INACTIVE_ALPHA`.
+
+**Decisions**
+
+- `statusbar_text` has no macOS counterpart: that side leaves the colour and weight rule inline in its paint function, where the fast suite cannot execute it.
+- Unit-agnostic, per [`cell_metrics_math.rs`](#cell_metrics_mathrs)'s convention; [`pane_view.rs`](#pane_viewrs) calls it in device pixels, from `CellMetrics::size_px`.
+- Both colours blend toward the background rather than toward black, which is exactly what compositing the foreground over an opaque, already-filled band would give — so the strip needs no alpha-capable draw path.
+- The colours are the editor's own defaults, and macOS's non-themed system-label tiers have no counterpart, because this front-end reads no OS theme in either direction ([DECISIONS.md](../DECISIONS.md)).
+- A degenerate input collapses the whole layout to zeros, and any non-finite font size falls to the floor. Swift guards neither, and an infinite strip height leaves an editor painting one cell.
 
 #### `title.rs`
 
