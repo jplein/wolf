@@ -172,20 +172,24 @@ Purpose: pure, GTK-free cursor geometry and color logic — the pixel rectangle 
 
 #### `editor_inset.rs`
 
-Purpose: the chrome around a pane's text grid, as arithmetic: the rectangle the grid paints into, the map into the space [`cell_at`](#geometryrs) speaks, and the grid size left over. A port of `WolfKeyMap/EditorInset.swift`.
+Purpose: the chrome around a pane's text grid as arithmetic — the rectangle the grid paints into, the map into the space [`cell_at`](#geometryrs) speaks, the content-width cap with its centring, and the grid size left over. A port of `WolfKeyMap/EditorInset.swift`.
 
 **Public API**
 
-- `EDITOR_PADDING_PX`, the inset on all four sides.
-- `grid_rect(pane_w, pane_h, statusbar_h, padding) -> GridRect` and `grid_local(x, y, rect) -> (f64, f64)`.
-- `grid_size_for_pane(pane_w, pane_h, statusbar_h, padding, cell_w, cell_h) -> (u16, u16)`.
+- `EDITOR_PADDING_PX`, the inset on all four sides, and `MAX_GRID_COLS`, the cap in columns.
+- `ColumnCap { max_cols: Option<u16>, cell_w }`, `ColumnCap::uncapped(cell_w)`, `apply(cols) -> u16`. The cell width rides inside the cap, so one call cannot be given two of them.
+- `column_cap(full_width, cell_w) -> ColumnCap` — where a window's `b:wolf_full_width` becomes geometry.
+- `grid_rect(pane_w, pane_h, statusbar_h, padding, cap) -> GridRect`, `grid_local(x, y, rect) -> (f64, f64)`.
+- `grid_size_for_pane(pane_w, pane_h, statusbar_h, padding, cell_h, cap) -> (u16, u16)`.
 - `min_pane_size(cell_w, cell_h, statusbar_h, padding) -> (f64, f64)`, a pane's content floor.
 
 **Decisions**
 
 - The subtraction and the division stay separate: [`geometry.rs`](#geometryrs) states its composition guarantee over the division alone, and `resize_global` wants that un-inset division for grid 1.
 - Only `w` and `h` clamp at zero, so a pane smaller than its chrome still reports where the grid would start. A non-finite input collapses the whole rectangle, unlike Swift: a NaN origin would poison every pointer event in the pane.
-- No `StatusbarTextSpan` counterpart and no `text_left_inset`: that seam only adds the column cap's centring offset, which this crate has none of, so the painter reads `grid_rect(..).x` and the strip's text shares the grid's origin.
+- The cap is a `min` on the width here and a `min` on the column count in `grid_size_for_pane`, the second taken over an uncapped rectangle: flooring a capped width to whole pixels first costs the last column at any non-integral cell width. A property test holds the two together.
+- The centring offset is floored to whole device pixels, unlike macOS: a half-pixel `cr.translate` resamples every glyph and this crate has no HiDPI handling, at the cost of a left margin up to a pixel wider than the right.
+- No `StatusbarTextSpan` counterpart and no `text_left_inset`: one rectangle carries the centring offset in its `x`, and the paint, the clip, the strip's text and both pointer paths all read that field, so strip and grid share an origin by construction. macOS needs the seam only because it splits the inset from the cap across two structs.
 
 **Gotchas**
 
@@ -210,7 +214,7 @@ Purpose: the pure pixel conversions behind every resize, pointer event, and divi
 
 **Gotchas**
 
-- `cell_at` takes grid-local coordinates; the per-pane chrome is [`editor_inset.rs`](#editor_insetrs)'s. This crate has no column cap and no centering, so do not import the macOS grid-origin machinery.
+- `cell_at` takes grid-local coordinates; the per-pane chrome is [`editor_inset.rs`](#editor_insetrs)'s. The content cap's centring offset lives in that module's `grid_rect(..).x` and `grid_local` subtracts it, so this function still takes no origin and macOS's `paintOffset` machinery has no counterpart. Do not add one.
 
 #### `input.rs`
 
@@ -258,7 +262,7 @@ Purpose: crate root. Declares the modules and re-exports the display-free seams 
 
 - `cell_at` is re-exported because `grid_size_for` is, and the two are a pair whose composition is the point.
 - `restart_button_rect` is re-exported for one concrete consumer: the crash-overlay smoke derives the pixel it clicks from the same function the widget builder realizes, so the two cannot drift.
-- Items in `about`, `actions`, `buffer_picker`, `cell_metrics_math`, `config_seam`, `crash_overlay`, `cursor`, `editor_inset`, `layout`, `mouse`, `nav_ui`, `palette`, `pane_layout`, `pane_view`, `persistence`, `picker`, `refresh_coalescer`, `search_overlay`, `shell`, `statusbar_layout`, `tree`, `tree_gate`, and `tree_view` are reached by module path rather than re-exported.
+- Items in `about`, `actions`, `buffer_picker`, `cell_metrics_math`, `config_seam`, `crash_overlay`, `cursor`, `editor_inset`, `layout`, `mouse`, `nav_ui`, `palette`, `pane_layout`, `pane_view`, `persistence`, `picker`, `refresh_coalescer`, `scrollbar`, `search_overlay`, `shell`, `statusbar_layout`, `tree`, `tree_gate`, and `tree_view` are reached by module path rather than re-exported.
 
 #### `liveness_ui.rs`
 
@@ -372,7 +376,9 @@ Purpose: the GTK glue that turns `layout`'s pane tree into nested `gtk::Paned`, 
 - Divider positions re-apply from the live tree on every `max-position` notify, because nested allocation reports intermediate values before settling. A `notify::position` whose maximum and span both held still is a user drag, written back through `set_divider_fraction`; rebuilding there would destroy the paned holding the live gesture.
 - Every pixel-to-grid conversion here routes through [`editor_inset.rs`](#editor_insetrs), because the strip and padding are painted into the pane's own area ([DECISIONS.md](../DECISIONS.md)).
 - Pointer input is one `gtk::GestureDrag`, not a click controller: a gesture takes an implicit grab and keeps delivering after the pointer leaves the widget. The target grid and button are pinned at press while modifiers are re-read live, so a wandering drag still edits the pane it started in.
-- Each pane's status is read once per wake and cached, because `draw_pane` holds a snapshot read guard and `pane_status` takes one internally: a re-entrant read can deadlock. `layout_snapshot` reads the raw absolute path from that cache, not the relativized display path.
+- Each pane's status and its window's `b:wolf_full_width` are read once per wake and cached, because `draw_pane` holds a snapshot read guard while both core calls take one internally: a re-entrant read can deadlock. Caching the flag is also what keeps the paint, the pointer translation and the resize request agreeing inside one frame. `layout_snapshot` reads the raw absolute path from that cache, not the relativized display path.
+- One funnel produces every grid resize, comparing against the size the pane last asked for rather than against the snapshot's live grid, which lags a fire-and-forget request. It runs on each wake as well as from the resize signal, because lifting the content cap changes a pane's column count while its allocation holds still, so no resize signal fires for it.
+- The scrollbar thumb is painted after the grid clip is dropped, since it lives in the right padding gutter; its rectangle and colour are [`scrollbar.rs`](#scrollbarrs)'s. A pane with no bound grid draws none, because `Snapshot::windows` is keyed by grid id and no viewport belongs to it.
 
 **Gotchas**
 
@@ -460,6 +466,27 @@ Purpose: the Cairo/Pango paint seam — one grid and its highlight table onto an
 
 - `FALLBACK_FG`, `FALLBACK_BG`, `draw_glyph` and `draw_text_line` are `pub(crate)` so `cursor.rs` and `pane_view.rs` reuse them; reimplementing one lets cursor colors, glyph placement or the strip's text drift from the grid paint.
 
+#### `scrollbar.rs`
+
+Purpose: the pure projection of a Neovim window's `win_viewport` onto a pane-local thumb rectangle and its colour. GTK-, Cairo- and Pango-free, so the whole rulebook runs in the fast suite; [`pane_view.rs`](#pane_viewrs) fills the rectangle and decides nothing.
+
+**Public API**
+
+- `scrollbar_thumb(pane_w, grid, viewport) -> Option<ScrollbarThumb>` — `None` when the whole buffer fits its window, when the pane is too narrow to hold the gutter, or on any degenerate input.
+- `scrollbar_thumb_color(bg) -> Rgb`, over the editor's own background.
+- The five constants those two read, `SCROLLBAR_THICKNESS_PX` through `SCROLLBAR_GREY`.
+
+**Decisions**
+
+- `x` is measured from the pane's right edge, not the grid rectangle's, so the thumb lies wholly inside the right padding gutter and covers no glyph at any pane width. macOS's `drawScrollbars` documents that rule and computes the other, putting its bar over the last text column below the cap.
+- It never enters `grid_size_for_pane`, and that is the load-bearing half: a thumb consuming grid width would drop a column the instant a buffer overflowed its window and restore it when it fit, reflowing text on the scroll path.
+- The height clamps to the track as well as to its own floor; macOS omits the upper clamp and draws a thumb taller than its track in a short pane.
+- The colour blends toward `bg` rather than compositing with an alpha, which keeps the crate's no-`set_source_rgba` draw path. The blend is [`statusbar_layout.rs`](#statusbar_layoutrs)'s.
+
+**Gotchas**
+
+- `Viewport::curline` is deliberately unread, matching macOS: a cursor move that scrolled nothing must not make the indicator jump.
+
 #### `search_overlay.rs`
 
 Purpose: the project-search overlay — a `Ctrl+Shift+F` entry over a flat, streaming list of ripgrep matches. Activating a row opens a location, not a file.
@@ -536,6 +563,10 @@ Purpose: the per-pane statusbar's rulebook, decidable from values. The vertical 
 - Unit-agnostic ([`cell_metrics_math.rs`](#cell_metrics_mathrs)); [`pane_view.rs`](#pane_viewrs) calls it in device pixels, from `CellMetrics::size_px`.
 - Both colours blend toward the background rather than toward black, which is what compositing over the already-filled band gives, so the strip needs no alpha-capable draw path.
 - A degenerate input collapses the whole layout to zeros and a non-finite font size falls to the floor, where Swift guards neither: an infinite strip height leaves an editor painting one cell.
+
+**Gotchas**
+
+- `blend` is `pub(crate)` for a second consumer, [`scrollbar.rs`](#scrollbarrs)'s thumb colour. Reimplementing it there would give two colours on one scale two rounding rules, which is how they drift apart.
 
 #### `title.rs`
 
