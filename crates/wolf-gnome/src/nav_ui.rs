@@ -788,6 +788,18 @@ mod tests {
     // The two rules stated over the whole domain
     // =========================================================================
 
+    /// How many inputs the seam is total over: four liveness readings times three
+    /// window shapes times five history readings.
+    ///
+    /// Written as LITERALS rather than as the product of the three domain consts'
+    /// lengths, and that is the whole point of it — the [`NAMED_BUTTON_CASES`]
+    /// precedent, and `buffer_picker`'s two independent consts. Counting iterations
+    /// of loops over those same three arrays and comparing the answer to their own
+    /// product is a TAUTOLOGY: an array that lost an entry shrinks both sides
+    /// together, so the check passes while the sweep silently covers less than the
+    /// domain it claims to.
+    const SWEEP_INPUTS: usize = 4 * 3 * 5;
+
     /// No button is ever sensitive where [`nav_press`] would refuse, over the WHOLE
     /// 60-input domain.
     ///
@@ -832,12 +844,16 @@ mod tests {
         }
 
         assert_eq!(
-            probed,
-            ALL_LIVENESS_INPUTS.len() * ALL_WIN_INPUTS.len() * ALL_HISTORY_INPUTS.len(),
-            "the sweep visited {probed} inputs, not the {} the seam is total over ({} liveness x {} \
-             window shapes x {} history readings). One of the three domain consts lost an entry, so \
-             the rule below is stated over less than the whole domain.",
-            ALL_LIVENESS_INPUTS.len() * ALL_WIN_INPUTS.len() * ALL_HISTORY_INPUTS.len(),
+            probed, SWEEP_INPUTS,
+            "the sweep visited {probed} inputs, not the {SWEEP_INPUTS} the seam is total over. It \
+             walked {} liveness input(s) x {} window shape(s) x {} history reading(s); \
+             whichever of those three is not 4, 3 and 5 is the one that changed. A SHRUNK \
+             domain means the rule above is stated over less than the whole input space, and \
+             the arm most likely to go missing is the ABSENT core (`None`) — the one that keeps \
+             a window whose close handler has already taken the core out from offering a live \
+             button. A GROWN one means `wolf_core::Liveness` gained a variant, in which case \
+             `nav_press`'s `_`-free match is an E0004 already and SWEEP_INPUTS is the second \
+             thing to update.",
             ALL_LIVENESS_INPUTS.len(),
             ALL_WIN_INPUTS.len(),
             ALL_HISTORY_INPUTS.len()
