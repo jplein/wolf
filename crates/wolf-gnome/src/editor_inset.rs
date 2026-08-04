@@ -15,8 +15,8 @@
 //! be restated — and would leave `pane_view::resize_global`, which genuinely wants
 //! the un-inset division for the global grid, with no seam to call.
 //! [`grid_size_for_pane`] is therefore a composition ON TOP of the unchanged
-//! `grid_size_for`, and [`cell_at_over_grid_local_never_exceeds_grid_size_for_pane`]
-//! is the inset pipeline's own companion guarantee.
+//! `grid_size_for`, and `cell_at_over_grid_local_never_exceeds_grid_size_for_pane`
+//! in this module's test block is the inset pipeline's own companion guarantee.
 //!
 //! ## There is no `StatusbarTextSpan` counterpart, and no `text_left_inset`
 //!

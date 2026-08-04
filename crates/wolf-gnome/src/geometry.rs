@@ -17,9 +17,12 @@
 //! which probes the statusbar band and all four gutters — so the two are
 //! discoverable from either side.
 //!
-//! [`divider_position`] and [`divider_travel_fraction`] are here for the same
+//! [`divider_position`] and [`divider_span_fraction`] are here for the same
 //! reason: they are the pixel half of a divider drag, the point where a
-//! `gtk::Paned` position and a pane weight meet, and they must be exact inverses.
+//! `gtk::Paned` position and a pane weight meet. They must be inverses — which
+//! constrains them to share a denominator, and, on its own, says nothing about
+//! which one. That second half is `equal_weights_give_equal_widths`'s, and the two
+//! properties are only meaningful together.
 
 // Contract the tests below assert (from the ARCHITECT PLAN):
 //   cols = floor(width_px / cell_w), rows = floor(height_px / cell_h),
@@ -166,13 +169,27 @@ fn floor_clamped(coord: f64, cell: f64, max_index: u16) -> u32 {
 }
 
 /// Converts a divider fraction into a `gtk::Paned` position, as
-/// `round(max * fraction)` clamped into `[max(min, 0), max]`.
+/// `round(span * fraction)` clamped into `[max(min, 0), max]`.
+///
+/// **The fraction is of the paned's own SPAN — its width for a horizontal paned,
+/// its height for a vertical one — and `min`/`max` are the CLAMP, never the
+/// scale.** A weight is a proportion of width: that is what [`crate::layout`]'s
+/// `PaneTree` holds, what `crate::pane_layout::encode` persists, what `state.json`
+/// carries, and what a user sees on screen. Scaling by `max_position` instead hands
+/// the start child `fraction * (span - handle - end_min)` and the end child
+/// everything left, so the two differ by the end child's minimum at EVERY fraction
+/// — including `0.5`, where a fresh split has to come out even.
+/// `equal_weights_give_equal_widths` is the test that says so.
 ///
 /// `min` and `max` are the paned's own `min_position` / `max_position`. Clamping
-/// into that range rather than into `[0, max]` matters because `min_position` is
+/// into that range rather than into `[0, span]` matters because `min_position` is
 /// the far side of the start child's minimum size: a position below it is one GTK
 /// would clamp itself, and every clamp GTK performs emits a `notify::position` the
-/// drag handler then has to tell apart from a user's.
+/// drag handler then has to tell apart from a user's. A fraction the clamp has to
+/// move snaps ONCE and then holds, which
+/// `clamped_fraction_snaps_once_and_then_holds` pins — and it is a clamp rather
+/// than a rescale into the reachable band, because a rescale would silently make a
+/// weight a proportion of that band instead of of the pane.
 ///
 /// That lower bound is itself capped at `max`, and the cap is a PANIC GUARD rather
 /// than tidiness: `gtk::Paned` transiently reports a `min_position` ABOVE its
@@ -181,15 +198,15 @@ fn floor_clamped(coord: f64, cell: f64, max_index: u16) -> u32 {
 /// max = 500.0`, measured). Capping collapses that instant to `max`, which the next
 /// `max-position` notify corrects.
 ///
-/// Degenerate inputs collapse the whole result, following this module's convention:
-/// a `max <= 0` (a paned measured before its first allocation) yields `0`, and a
-/// non-finite `fraction` yields the minimum, since neither names a position.
-///
-/// The fraction is of the paned's TRAVEL, not of its width; see
-/// [`divider_travel_fraction`].
+/// Degenerate inputs collapse the whole result, following this module's convention.
+/// `max <= 0` and `span <= 0` are separate arms and both yield `0`: a paned
+/// measured before its first allocation reports neither a travel nor an extent, and
+/// with the span as the scale a zero one would otherwise multiply out to `0` and be
+/// lifted to `min` by the clamp — a position that looks deliberate. A non-finite
+/// `fraction` yields the minimum, since it names no position.
 #[must_use]
-pub fn divider_position(min: i32, max: i32, fraction: f64) -> i32 {
-    if max <= 0 {
+pub fn divider_position(min: i32, max: i32, span: i32, fraction: f64) -> i32 {
+    if max <= 0 || span <= 0 {
         return 0;
     }
     let low = min.max(0).min(max);
@@ -198,12 +215,12 @@ pub fn divider_position(min: i32, max: i32, fraction: f64) -> i32 {
     }
     // Clamp in f64 space FIRST so the value is provably within i32 range before the
     // cast, exactly as `floor_div_clamped` does.
-    let v = (f64::from(max) * fraction)
+    let v = (f64::from(span) * fraction)
         .round()
         .clamp(f64::from(low), f64::from(max));
     #[allow(
         clippy::cast_possible_truncation,
-        reason = "v is clamped to [0, max] and rounded, so the cast is exact and in range"
+        reason = "v is clamped to [low, max], both i32, and rounded, so the cast is exact and in range"
     )]
     {
         v as i32
@@ -211,25 +228,33 @@ pub fn divider_position(min: i32, max: i32, fraction: f64) -> i32 {
 }
 
 /// Converts a `gtk::Paned` position back into a divider fraction, clamped into
-/// `[0, 1]`. The exact inverse of [`divider_position`], to within the half pixel
-/// `round` can move a position.
+/// `[0, 1]`. The inverse of [`divider_position`], to within the half pixel `round`
+/// can move a position.
 ///
-/// **The fraction is of the paned's TRAVEL (`max_position`), not of its width.**
-/// `max_position` excludes the handle and the far child's minimum, so a `0.5`
-/// fraction is not exactly half the pixels. That convention is what makes the pair
-/// exact inverses, which is what stops the `max-position` re-apply walking a weight
-/// a little further on every allocation pass. Do not "fix" it to divide by the
-/// allocation.
+/// **The hazard is a denominator the two functions do not share, not which
+/// denominator they share.** `round(d * (p / d)) == p` holds for any `d` and for no
+/// mismatched pair, so the inverse property constrains the two functions to agree
+/// and says nothing whatever about what they agree ON. Passing `max_position` here
+/// while [`divider_position`] scales by the span — or the reverse — makes the
+/// re-apply walk the weight a little further on every allocation pass, which is the
+/// failure `divider_position_and_span_fraction_round_trip` exists to catch.
 ///
-/// `None` when `max <= 0`: a paned notifies before it has been allocated, and there
-/// is no travel for a position to be a fraction OF. Answering `Some(0.0)` there
+/// **Agreement is necessary and nowhere near sufficient.** This pair agreed
+/// perfectly with each other for the entire life of the divider defect, while a
+/// fresh split came out visibly lopsided, because both scaled by `max_position` and
+/// a weight is a proportion of width. `equal_weights_give_equal_widths` is the other
+/// half of the contract and the two must be read together; a change that keeps the
+/// round trip green has established only half of what it needs to.
+///
+/// `None` when `span <= 0`: a paned notifies before it has been allocated, and there
+/// is no extent for a position to be a fraction OF. Answering `Some(0.0)` there
 /// would write a collapsed pane into the layout on the first notify.
 #[must_use]
-pub fn divider_travel_fraction(position: i32, max: i32) -> Option<f64> {
-    if max <= 0 {
+pub fn divider_span_fraction(position: i32, span: i32) -> Option<f64> {
+    if span <= 0 {
         return None;
     }
-    Some((f64::from(position) / f64::from(max)).clamp(0.0, 1.0))
+    Some((f64::from(position) / f64::from(span)).clamp(0.0, 1.0))
 }
 
 #[cfg(test)]

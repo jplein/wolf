@@ -1885,8 +1885,26 @@ fn build_chain(
     paned.set_shrink_end_child(false);
     paned.set_start_child(Some(&start));
     paned.set_end_child(Some(&end));
-    install_paned_position(&paned, ctx.tree, path.to_vec(), boundary);
+    // `gtk_orient` rather than a read-back `paned.orientation()`: this function is
+    // where the axis is DECIDED (from the split's own `Orientation`), so passing it
+    // down keeps one source of truth. A read-back would agree today and would be a
+    // second thing to keep in step.
+    install_paned_position(&paned, gtk_orient, ctx.tree, path.to_vec(), boundary);
     Some(paned.upcast::<gtk::Widget>())
+}
+
+/// A paned's own extent along the axis its divider travels: `width()` for a
+/// horizontal paned, `height()` for a vertical one.
+///
+/// This is what a divider fraction is a proportion OF (see
+/// [`geometry::divider_position`]), and it is deliberately not `max_position`: that
+/// excludes the handle and the end child's minimum, so scaling by it makes a fresh
+/// equal-weight split come out lopsided by exactly that minimum.
+fn paned_span(paned: &gtk::Paned, axis: gtk::Orientation) -> i32 {
+    match axis {
+        gtk::Orientation::Vertical => paned.height(),
+        _ => paned.width(),
+    }
 }
 
 /// The path of child `index` under the split addressed by `path`.
@@ -1907,6 +1925,11 @@ struct DividerGuard {
     /// maximum has moved since is one GTK produced while re-allocating, and the
     /// `max-position` handler is about to correct it.
     last_max: Cell<i32>,
+    /// The paned's SPAN at the last re-apply, alongside `last_max`. The span is what
+    /// [`geometry::divider_position`] scales by, so a `notify::position` whose span
+    /// has moved is one GTK produced mid-resize and would read back as a fraction of
+    /// an extent the re-apply never used.
+    last_span: Cell<i32>,
 }
 
 /// Ties one `gtk::Paned` to the divider `(path, boundary)` in `tree`, in both
@@ -1922,9 +1945,12 @@ struct DividerGuard {
 /// that re-apply.
 ///
 /// **Widget to tree.** A `notify::position` that is not this module's own write, and
-/// whose `max-position` has not moved, is a user drag, and is written into the tree
-/// through [`PaneTree::set_divider_fraction`]. That is what puts a drag on the save
-/// path (see this module's "Layout persistence" section).
+/// whose `max-position` and SPAN have both held still, is a user drag, and is
+/// written into the tree through [`PaneTree::set_divider_fraction`]. That is what
+/// puts a drag on the save path (see this module's "Layout persistence" section).
+/// The span is the quantity [`geometry::divider_position`] scales by, so it belongs
+/// in that staleness gate beside the maximum rather than being trusted to move with
+/// it — a resize can change one without the other.
 ///
 /// Two rules here are not stylistic:
 ///
@@ -1939,6 +1965,7 @@ struct DividerGuard {
 ///   because resizing a pane resizes its grid.
 fn install_paned_position(
     paned: &gtk::Paned,
+    axis: gtk::Orientation,
     tree: &Rc<RefCell<PaneTree>>,
     path: Vec<usize>,
     boundary: usize,
@@ -1946,6 +1973,7 @@ fn install_paned_position(
     let guard = Rc::new(DividerGuard {
         applying: Cell::new(false),
         last_max: Cell::new(0),
+        last_span: Cell::new(0),
     });
 
     {
@@ -1954,7 +1982,12 @@ fn install_paned_position(
         let path = path.clone();
         paned.connect_notify_local(Some("max-position"), move |p, _| {
             let max = p.max_position();
-            if max <= 0 {
+            let span = paned_span(p, axis);
+            // BOTH guards come before the staleness gate is armed. A pass that
+            // applied nothing must not record a `last_max`/`last_span`, or the very
+            // next `notify::position` compares against a pair no `set_position` ever
+            // ran with and is accepted as a user drag.
+            if max <= 0 || span <= 0 {
                 return;
             }
             // Its own statement: the `Ref` must be gone before any GTK call, which
@@ -1964,8 +1997,14 @@ fn install_paned_position(
                 return;
             };
             guard.last_max.set(max);
+            guard.last_span.set(span);
             guard.applying.set(true);
-            p.set_position(geometry::divider_position(p.min_position(), max, fraction));
+            p.set_position(geometry::divider_position(
+                p.min_position(),
+                max,
+                span,
+                fraction,
+            ));
             guard.applying.set(false);
         });
     }
@@ -1980,10 +2019,15 @@ fn install_paned_position(
                 return;
             }
             let max = p.max_position();
-            if max <= 0 || max != guard.last_max.get() {
+            let span = paned_span(p, axis);
+            // The span joins `max` in the staleness gate because it is what the
+            // fraction below is a proportion OF: a notify arriving mid-resize would
+            // otherwise store a weight measured against an extent the re-apply never
+            // used, and the tree would drift by the difference.
+            if max <= 0 || max != guard.last_max.get() || span != guard.last_span.get() {
                 return;
             }
-            let Some(fraction) = geometry::divider_travel_fraction(p.position(), max) else {
+            let Some(fraction) = geometry::divider_span_fraction(p.position(), span) else {
                 return;
             };
             tree.borrow_mut()
