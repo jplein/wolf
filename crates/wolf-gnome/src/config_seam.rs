@@ -1,5 +1,93 @@
 //! The pure configuration seam: every rule about CONSUMING a
 //! [`wolf_core::WolfConfig`], with no GTK and no environment read.
+//!
+//! The Linux counterpart of [`crate::state_seam`], and the same shape: `app.rs`
+//! does the environment read and the file load, this module decides what the
+//! values mean. Injecting the override rather than reading `WOLF_FONT_PT` here is
+//! what makes the precedence rule testable without touching the process
+//! environment, which a parallel test suite cannot safely do.
+//!
+//! Reading `wolf-config.yaml` itself belongs to `wolf_core::config`; nothing here
+//! touches the filesystem.
+
+use wolf_core::{Appearance, WolfConfig};
+
+/// The font size used when neither `WOLF_FONT_PT` nor the configured `font-size`
+/// is usable, in points.
+///
+/// The value the front-end ran at before it read a config at all, so a developer
+/// with no config file and no override sees what they saw then.
+pub const FALLBACK_FONT_PT: f64 = 14.0;
+
+/// One configuration setting this front-end reads and does not honour.
+///
+/// Reported once at launch rather than dropped silently: a user who wrote a
+/// setting deserves to learn it does nothing here.
+pub struct UnsupportedSetting {
+    /// The key's spelling in `wolf-config.yaml`, so the message names the line to
+    /// edit.
+    pub key: &'static str,
+    /// The value the user actually wrote, echoed back.
+    pub value: &'static str,
+    /// Why this front-end does not honour it.
+    pub reason: &'static str,
+}
+
+/// The `appearance` key, spelled as `wolf-config.yaml` spells it.
+const APPEARANCE_KEY: &str = "appearance";
+
+/// The point size to measure the cell at: the environment override when it is
+/// usable, else the configured `font-size`, else [`FALLBACK_FONT_PT`].
+///
+/// "Usable" is finite and strictly positive. Both inputs come from a human — one
+/// from a shell, one from a hand-edited YAML file — so `0`, a negative and a
+/// non-finite value are all reachable, and any of them reaching Pango produces a
+/// window that draws nothing with no error anywhere.
+///
+/// **The override wins on purpose.** That is parity, not a Linux quirk:
+/// `CellMetrics.defaultPointSize` gives `WOLF_FONT_PT` the same precedence on
+/// macOS, `crates/wolf-gnome/README.md` documents the override, and the compositor
+/// smokes drive it.
+#[must_use]
+pub fn resolve_font_pt(env_override: Option<f64>, config_font_size: f64) -> f64 {
+    if let Some(pt) = env_override {
+        if pt.is_finite() && pt > 0.0 {
+            return pt;
+        }
+    }
+    if config_font_size.is_finite() && config_font_size > 0.0 {
+        return config_font_size;
+    }
+    FALLBACK_FONT_PT
+}
+
+/// The configured settings this front-end reads and does not honour, one row each.
+///
+/// A forced `appearance` produces a row. `macos_option_as_alt` produces **none**,
+/// however it is set, and the asymmetry is deliberate: one `wolf-config.yaml` is
+/// shared across both platforms and the key's own name says which platform it is
+/// for, so a Linux warning would fire on every launch for a setting that is
+/// correct where its author wrote it. A forced appearance has no such excuse — it
+/// names no platform and it does nothing here.
+#[must_use]
+pub fn unsupported_settings(config: &WolfConfig) -> Vec<UnsupportedSetting> {
+    let mut rows = Vec::new();
+    let value = match config.appearance {
+        Appearance::Auto => None,
+        Appearance::Dark => Some("dark"),
+        Appearance::Light => Some("light"),
+    };
+    if let Some(value) = value {
+        rows.push(UnsupportedSetting {
+            key: APPEARANCE_KEY,
+            value,
+            reason: "wolf-gnome does no theming in either direction: it neither queries the OS \
+                     theme nor pushes one into Neovim, so the appearance follows Neovim's own \
+                     colorscheme and the system GTK theme",
+        });
+    }
+    rows
+}
 
 #[cfg(test)]
 mod tests {
@@ -94,8 +182,7 @@ mod tests {
         for (what, override_pt) in cases {
             let got = resolve_font_pt(override_pt, CONFIGURED_PT);
             assert_eq!(
-                got,
-                CONFIGURED_PT,
+                got, CONFIGURED_PT,
                 "the {what} override must fall through to the configured {CONFIGURED_PT} pt, but \
                  this returned {got}. Anything else means the `is_finite() && > 0.0` filter on the \
                  override arm was dropped: a 0 or a negative gives a zero-or-inverted cell size, \
@@ -128,8 +215,7 @@ mod tests {
         for (what, configured) in cases {
             let got = resolve_font_pt(None, configured);
             assert_eq!(
-                got,
-                EXPECT_FALLBACK_FONT_PT,
+                got, EXPECT_FALLBACK_FONT_PT,
                 "a {what} configured font-size must fall through to {EXPECT_FALLBACK_FONT_PT} pt, \
                  but this returned {got}. Returning the configured value unchecked means a \
                  hand-edited `font-size: 0` in `wolf-config.yaml` reaches `CellMetrics::for_font` \

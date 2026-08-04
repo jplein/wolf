@@ -151,6 +151,7 @@ use gtk::{gio, glib};
 
 use wolf_core::{Command, InputEvent, Liveness, TabFiles, WolfCore};
 
+use crate::about;
 use crate::actions::{self, BindingStatus};
 use crate::app::TREE_PANE_WIDTH;
 use crate::buffer_picker::BufferPickerHandle;
@@ -1242,6 +1243,7 @@ impl AppShell {
             UiAction::HistoryBack => self.navigate(false),
             UiAction::HistoryForward => self.navigate(true),
             UiAction::ToggleSidebar => self.toggle_sidebar(),
+            UiAction::ShowAbout => about::present(&self.inner.window),
             UiAction::OpenFileDialog => self.open_file_dialog(),
             UiAction::OpenFolderDialog => self.open_folder_dialog(),
             UiAction::NewUntitledBuffer => self.send_input(InputEvent::NewBuffer),

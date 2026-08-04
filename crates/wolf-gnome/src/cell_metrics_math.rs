@@ -1,5 +1,83 @@
 //! The pure cell-metrics arithmetic the configured `line-height` drives — a Rust
 //! port of `WolfKeyMap/CellMetricsMath.swift`, with no GTK, Pango or Cairo.
+//!
+//! Both functions take plain `f64`s, which is what lets the whole rule run in the
+//! fast unit suite: [`crate::render::CellMetrics::for_font`] needs a live Cairo
+//! context to obtain the metrics it feeds in, and a rule left inside `for_font`
+//! would be a rule only the golden-render target could execute.
+//!
+//! ## Units: the caller picks, and the two platforms pick differently
+//!
+//! The arithmetic is unit-agnostic — it rounds in whatever unit its caller uses.
+//! macOS calls it in POINTS, where 1 pt is 1 px at 1x. Linux calls it in DEVICE
+//! PIXELS, because that is the unit Cairo paints in, so `for_font` converts the
+//! configured point size to device pixels before calling. Both platforms therefore
+//! snap the cell to a whole device pixel and a shared `line-height: 130` gives the
+//! same visual ratio; only the sub-pixel snap can differ, and only above 1x.
+//!
+//! ## Two deliberate divergences from Swift
+//!
+//! Both are strictly more defensive, and both are confined to inputs macOS also
+//! mishandles, so no in-range result changes:
+//!
+//! - [`cell_height`] additionally requires the percentage to be FINITE. Swift's
+//!   `guard lineHeightPercent > 0` accepts `+inf` and yields an infinite cell.
+//! - [`cell_height`] floors a degenerate result at [`MIN_CELL_PX`]. Swift can
+//!   return `0` or `NaN`, either of which makes `geometry::grid_size_for`'s
+//!   division silently produce an unusable row count and the window paint nothing.
+
+/// The floor a degenerate [`cell_height`] result collapses to: one whole device
+/// unit.
+///
+/// Not zero. A zero cell height satisfies every `> 0.0` check downstream while
+/// still dividing a pane's height into an unbounded number of rows.
+pub const MIN_CELL_PX: f64 = 1.0;
+
+/// The cell height, in the caller's unit (device pixels on this front-end).
+///
+/// For a positive, finite `line_height_percent` the height is
+/// `round(font_size * line_height_percent / 100)` — driven by the font size alone
+/// and INDEPENDENT of the raw font metrics, so the cell does not change size when
+/// fontconfig substitutes a different face. `round` is half-away-from-zero,
+/// matching Swift's bare `.rounded()`.
+///
+/// Otherwise it falls back to the font's natural line height,
+/// `ceil(ascent + descent + leading)`.
+///
+/// A result that is not finite and `> 0.0` becomes [`MIN_CELL_PX`].
+#[must_use]
+pub fn cell_height(
+    font_size: f64,
+    line_height_percent: f64,
+    ascent: f64,
+    descent: f64,
+    leading: f64,
+) -> f64 {
+    let height = if line_height_percent.is_finite() && line_height_percent > 0.0 {
+        (font_size * line_height_percent / 100.0).round()
+    } else {
+        (ascent + descent + leading).ceil()
+    };
+    if height.is_finite() && height > 0.0 {
+        height
+    } else {
+        MIN_CELL_PX
+    }
+}
+
+/// The text baseline offset from the cell's TOP, in the caller's unit.
+///
+/// The leftover space (`cell_height - ascent - descent`) is split evenly above and
+/// below the glyph box, so a cell taller than the glyphs centres them rather than
+/// hanging them from the top.
+///
+/// When the cell is exactly the glyph box the leftover is zero and the baseline IS
+/// the ascent — which is why `render::draw_glyph`'s `baseline - ascent` offset can
+/// be exactly `0.0` and move no glyph at all.
+#[must_use]
+pub fn baseline(cell_height: f64, ascent: f64, descent: f64) -> f64 {
+    ascent + (cell_height - ascent - descent) / 2.0
+}
 
 #[cfg(test)]
 mod tests {
@@ -148,8 +226,7 @@ mod tests {
         for percent in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             let got = cell_height(10.0, percent, 8.0, 2.0, 1.5);
             assert_eq!(
-                got,
-                12.0,
+                got, 12.0,
                 "a non-finite `line-height` ({percent}) must take the natural-metrics branch, \
                  ceil(8 + 2 + 1.5) == 12, but this returned {got}. An infinite or NaN result means \
                  the `is_finite()` half of the guard was dropped, and `for_font` would then hand \

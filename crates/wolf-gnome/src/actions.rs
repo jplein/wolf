@@ -295,6 +295,15 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         note: "macOS Cmd+]; front-end-only navigation with no Command variant, and capturing \
                <A-Right> PREVENTS the destructive <Esc>+<Right> split",
     },
+    ActionBinding {
+        action: "win.about",
+        accel: None,
+        command: None,
+        status: BindingStatus::MenuOnly,
+        note: "no macOS counterpart in the registry; About is the one surface on this front-end \
+               that carries the bundled fonts' licence notices, and it is menu-only so it spends \
+               no chord",
+    },
 ];
 
 /// One item of the GNOME primary menu: a label and the action it activates.
@@ -382,10 +391,16 @@ pub const MENU_SECTIONS: &[MenuSection] = &[
         ],
     },
     MenuSection {
-        items: &[MenuItemSpec {
-            label: "Quit Wolf",
-            action: "app.quit",
-        }],
+        items: &[
+            MenuItemSpec {
+                label: "About Wolf",
+                action: "win.about",
+            },
+            MenuItemSpec {
+                label: "Quit Wolf",
+                action: "app.quit",
+            },
+        ],
     },
 ];
 

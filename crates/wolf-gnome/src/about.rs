@@ -1,5 +1,111 @@
 //! The About dialog: the pure text seam that carries the bundled fonts' licence
 //! notices, plus the transient `gtk::Window` that presents it.
+//!
+//! This is the one surface on this front-end that discharges the bundled fonts'
+//! attribution obligation, so its content has legal weight rather than cosmetic
+//! weight. [`about_text`] takes no arguments and reads
+//! [`wolf_core::FONT_LICENSE_NOTICES`] itself, deliberately: a version taking the
+//! notices as a parameter would let its test pass them in, which would prove
+//! nothing about what ships.
+//!
+//! ## Plain GTK, not `adw::AboutDialog`
+//!
+//! `adw::AboutDialog` needs `libadwaita`'s `v1_5` feature and `adw::AboutWindow`
+//! needs `v1_2`. `DECISIONS.md` records that this crate's `libadwaita` carries no
+//! version feature on purpose — the target is the system GTK already present, not
+//! a newer pinned ABI — so adding one for a single dialog would change the crate's
+//! build contract and put the whole smoke suite on the devShell's libadwaita
+//! version. A `gtk::Window` over a `gtk::TextView` needs neither.
+//!
+//! ## Why a separate toplevel
+//!
+//! The dialog is its own window, so the main window's focus widget is untouched
+//! and `DECISIONS.md`'s focus regime — which is about widgets INSIDE the main
+//! window being destroyed and taking the toplevel's focus with them — does not
+//! apply. That is why a transient window was chosen over a fifth in-window
+//! overlay.
+
+use adw::prelude::*;
+use gtk::glib;
+
+/// The dialog's window title.
+pub const ABOUT_TITLE: &str = "About Wolf";
+
+/// The dialog's default size in pixels; the licence bodies are long, so it opens
+/// tall enough to read one and scrolls for the rest.
+const ABOUT_WIDTH: i32 = 700;
+/// Default height in pixels (see [`ABOUT_WIDTH`]).
+const ABOUT_HEIGHT: i32 = 560;
+
+/// Margin around the text view, in pixels.
+const ABOUT_MARGIN: i32 = 12;
+
+/// The whole dialog body: a heading naming the application and its version, a
+/// short preamble, then [`wolf_core::FONT_LICENSE_NOTICES`] verbatim.
+///
+/// The heading is the first line, and the version comes from
+/// `CARGO_PKG_VERSION`, so a bug report can name the build it is against.
+#[must_use]
+pub fn about_text() -> String {
+    format!(
+        "Wolf {version}\n\
+         \n\
+         A Markdown editor that embeds Neovim as its editing engine.\n\
+         \n\
+         {notices}",
+        version = env!("CARGO_PKG_VERSION"),
+        notices = wolf_core::FONT_LICENSE_NOTICES,
+    )
+}
+
+/// Presents the About dialog as a modal window transient for `parent`.
+pub fn present(parent: &adw::ApplicationWindow) {
+    let text = gtk::TextView::builder()
+        .editable(false)
+        .cursor_visible(false)
+        .monospace(true)
+        .wrap_mode(gtk::WrapMode::WordChar)
+        .left_margin(ABOUT_MARGIN)
+        .right_margin(ABOUT_MARGIN)
+        .top_margin(ABOUT_MARGIN)
+        .bottom_margin(ABOUT_MARGIN)
+        .build();
+    text.buffer().set_text(&about_text());
+
+    let scroller = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vexpand(true)
+        .child(&text)
+        .build();
+
+    let window = gtk::Window::builder()
+        .title(ABOUT_TITLE)
+        .transient_for(parent)
+        .modal(true)
+        .default_width(ABOUT_WIDTH)
+        .default_height(ABOUT_HEIGHT)
+        .child(&scroller)
+        .build();
+
+    // Escape closes it, matching every other transient surface in this front-end.
+    let closer = gtk::EventControllerKey::new();
+    closer.connect_key_pressed(glib::clone!(
+        #[weak]
+        window,
+        #[upgrade_or]
+        glib::Propagation::Proceed,
+        move |_, key, _, _| {
+            if key == gtk::gdk::Key::Escape {
+                window.close();
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        }
+    ));
+    window.add_controller(closer);
+
+    window.present();
+}
 
 #[cfg(test)]
 mod tests {

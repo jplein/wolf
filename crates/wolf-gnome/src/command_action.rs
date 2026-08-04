@@ -31,7 +31,9 @@
 //!   implemented; the string says why.
 //! - **Front-end-only rows** — an [`crate::actions::ACTION_TABLE`] row that carries
 //!   no [`wolf_core::Command`] at all, because the behaviour is the front end's own
-//!   view of the core rather than something Neovim can queue. Those resolve through
+//!   rather than something Neovim can queue: the two navigation rows, whose visit
+//!   log is the front end's own view of the core, and About, which the registry has
+//!   no command for. Those resolve through
 //!   [`ui_action_for_front_end_action`], which is the ONLY other way an action is
 //!   installed.
 //!
@@ -75,6 +77,8 @@ pub enum UiAction {
     HistoryForward,
     /// Show or hide the file-tree sidebar.
     ToggleSidebar,
+    /// Present the About dialog carrying the bundled fonts' licence notices.
+    ShowAbout,
     /// Implemented on macOS, planned on GTK; the string names the blocker.
     Deferred(&'static str),
     /// Has no GNOME equivalent and will never be implemented.
@@ -154,12 +158,14 @@ pub fn ui_action_for(command: Command) -> UiAction {
 /// [`crate::actions::ACTION_TABLE`] row whose `command` is `None`. `None` for
 /// anything else.
 ///
-/// The navigation rows have no [`wolf_core::Command`] variant because a pane's
-/// visit log is the front end's own view of the core, so
+/// None of these rows has a [`wolf_core::Command`] variant, so
 /// [`crate::shell::AppShell::install_actions`] cannot reach them through
-/// [`ui_action_for`]. A row that resolves in NEITHER place is skipped with a
-/// printed reason while its accelerator is still registered, which swallows the
-/// chord and does nothing at all — strictly worse than not binding it.
+/// [`ui_action_for`]. The navigation rows have none because a pane's visit log is
+/// the front end's own view of the core; About has none because the registry
+/// carries no About command and the dialog is this front-end's own surface. A row
+/// that resolves in NEITHER place is skipped with a printed reason while its
+/// accelerator is still registered, which swallows the chord and does nothing at
+/// all — strictly worse than not binding it.
 ///
 /// This lives here rather than in [`crate::actions`] because this module owns
 /// [`UiAction`]; `actions.rs` stays free of the classification type. Only the test
@@ -169,6 +175,7 @@ pub fn ui_action_for_front_end_action(action: &str) -> Option<UiAction> {
     match action {
         "win.history-back" => Some(UiAction::HistoryBack),
         "win.history-forward" => Some(UiAction::HistoryForward),
+        "win.about" => Some(UiAction::ShowAbout),
         _ => None,
     }
 }
@@ -559,18 +566,20 @@ mod tests {
             !front_end_rows.is_empty(),
             "ACTION_TABLE declares no command-less rows at all, so both directions below run zero \
              times and this test proves nothing — a `ui_action_for_front_end_action` consisting of \
-             nothing but `_ => None` would pass it. The front-end-only rows are the navigation \
-             ones (`win.history-back` / `win.history-forward`): they have no `wolf_core::Command` \
-             variant because the history lives in the front end's own view of the core, so if they \
-             have gained one, this function has no purpose left and should go rather than be \
-             left guarding nothing."
+             nothing but `_ => None` would pass it. The front-end-only rows are the two navigation \
+             ones (`win.history-back` / `win.history-forward`), whose history lives in the front \
+             end's own view of the core, and `win.about`, which the registry carries no command \
+             for. If every one of them has gained a `wolf_core::Command`, this function has no \
+             purpose left and should go rather than be left guarding nothing."
         );
 
         // --- Forward: every command-less row is installable ------------------
         //
         // A `Vec` rather than a `HashSet` because `UiAction` is deliberately not
         // `Hash` — it carries `&'static str` payloads whose contract is equality and
-        // distinctness, not hashing — and the list is three rows long.
+        // distinctness, not hashing — and the list is short enough that the linear
+        // scan costs nothing. Its length is not asserted here: the row set is
+        // `ACTION_TABLE`'s to define, and the loop is over whatever it declares.
         let mut seen: Vec<UiAction> = Vec::new();
         for action in &front_end_rows {
             let resolved = ui_action_for_front_end_action(action);

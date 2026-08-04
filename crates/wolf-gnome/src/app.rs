@@ -102,12 +102,19 @@
 //! usable project, [`crate::workspace::launch_decision`] puts the window into an
 //! EMPTY STATE: the sidebar is hidden, no `FileSearch` starts, and an
 //! "Open Folder…" status page covers the editor. Mouse and vertical
-//! scroll are wired (see the Input bullet above). What is still deferred is THEMING
-//! and a native command line as Adw widgets: the cmdline strip already paints
-//! natively from the folded `Snapshot::cmdline` / `Snapshot::toast` — it never
-//! paints grid 1, which under `ext_messages` (`cmdheight=0`) is empty — but it draws
-//! a single row, with no `ext_popupmenu` completion popup and no multi-line
-//! scrollable toast.
+//! scroll are wired (see the Input bullet above).
+//!
+//! The shared `wolf-config.yaml` is read ONCE at window-build time, beside the
+//! state store: its `font-family`, `font-size` and `line-height` drive
+//! [`CellMetrics::for_font`], with `WOLF_FONT_PT` winning over the configured size
+//! ([`crate::config_seam::resolve_font_pt`]). A configured `appearance` other than
+//! `auto` is reported once on stderr and then ignored, because THEMING is deferred:
+//! this front-end neither queries the OS theme nor pushes one into Neovim. Also
+//! deferred is a native command line as Adw widgets: the cmdline strip already
+//! paints natively from the folded `Snapshot::cmdline` / `Snapshot::toast` — it
+//! never paints grid 1, which under `ext_messages` (`cmdheight=0`) is empty — but
+//! it draws a single row, with no `ext_popupmenu` completion popup and no
+//! multi-line scrollable toast.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -116,9 +123,10 @@ use std::sync::Arc;
 
 use adw::prelude::*;
 use gtk::glib;
-use wolf_core::{CoreConfig, InputEvent, StateStore, WakeFn, WolfCore, WolfState};
+use wolf_core::{CoreConfig, InputEvent, StateStore, WakeFn, WolfConfig, WolfCore, WolfState};
 
 use crate::buffer_picker::{self, BufferPickerHandle};
+use crate::config_seam;
 use crate::crash_overlay;
 use crate::palette::{self, PaletteHandle};
 use crate::pane_view;
@@ -139,15 +147,9 @@ use crate::CellMetrics;
 /// icon, and single-instance behavior.
 const APP_ID: &str = "org.wolf.Wolf";
 
-/// The monospace font family used for cell measurement and glyph rendering. Pinned
-/// to match the deterministic golden-render font stack provisioned by the flake.
-const FONT_FAMILY: &str = "DejaVu Sans Mono";
-
-/// Default font size in points when `WOLF_FONT_PT` is unset or unparseable.
-const DEFAULT_FONT_PT: f64 = 14.0;
-
 /// Environment override for the font size in points (used by the smoke test to
-/// enlarge glyphs for OCR).
+/// enlarge glyphs for OCR). It WINS over the configured `font-size`; the
+/// precedence rule and its reason live in [`config_seam::resolve_font_pt`].
 const FONT_PT_ENV: &str = "WOLF_FONT_PT";
 
 /// Initial grid size handed to [`WolfCore`]; the authoritative size is recomputed
@@ -194,23 +196,55 @@ pub fn run() -> glib::ExitCode {
     app.run_with_args::<&str>(&[])
 }
 
-/// Reads the font size from `WOLF_FONT_PT`, falling back to [`DEFAULT_FONT_PT`] if
-/// unset, empty, or not a positive finite number.
-fn font_pt_from_env() -> f64 {
+/// The raw `WOLF_FONT_PT` value, parsed but NOT validated — the sole environment
+/// read on this path.
+///
+/// Every rule about what a usable override is lives in
+/// [`config_seam::resolve_font_pt`], so it can be tested without touching the
+/// process environment.
+fn font_pt_override() -> Option<f64> {
     std::env::var(FONT_PT_ENV)
         .ok()
         .and_then(|v| v.trim().parse::<f64>().ok())
-        .filter(|pt| pt.is_finite() && *pt > 0.0)
-        .unwrap_or(DEFAULT_FONT_PT)
 }
 
-/// Measures the monospace cell metrics ONCE, using a throwaway 1x1 offscreen
-/// surface purely to obtain a Pango context (its pixel size is irrelevant).
-fn measure_metrics() -> CellMetrics {
+/// Loads the user configuration, mirroring `wolf_ffi_load_config`'s resolution so
+/// both front-ends read the same file the same way.
+///
+/// Degrades with ONE message, never a per-wake stream: an unresolvable
+/// preferences directory yields the built-in defaults and the app runs normally.
+/// `load_or_create` itself is infallible and CREATES the file when it is absent,
+/// which is why every smoke pins `WOLF_CONFIG_DIR`.
+fn load_config() -> WolfConfig {
+    let Some(dir) = wolf_core::preferences_dir() else {
+        eprintln!(
+            "wolf-gnome: no preferences directory could be resolved; using the built-in defaults"
+        );
+        return wolf_core::default_config();
+    };
+    wolf_core::load_or_create(&dir)
+}
+
+/// Prints one line per configured setting this front-end reads and does not
+/// honour, so a user who wrote one learns it does nothing here.
+fn report_unsupported_settings(config: &WolfConfig) {
+    for setting in config_seam::unsupported_settings(config) {
+        eprintln!(
+            "wolf-gnome: `{}: {}` in wolf-config.yaml is not honoured: {}",
+            setting.key, setting.value, setting.reason
+        );
+    }
+}
+
+/// Measures the monospace cell metrics ONCE from `config`, using a throwaway 1x1
+/// offscreen surface purely to obtain a Pango context (its pixel size is
+/// irrelevant).
+fn measure_metrics(config: &WolfConfig) -> CellMetrics {
     let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, 1, 1)
         .expect("failed to create probe surface for font measurement");
     let cr = cairo::Context::new(&surface).expect("failed to create probe Cairo context");
-    CellMetrics::for_font(&cr, FONT_FAMILY, font_pt_from_env())
+    let pt = config_seam::resolve_font_pt(font_pt_override(), config.font_size);
+    CellMetrics::for_font(&cr, &config.font_family, pt, config.line_height)
 }
 
 /// Resolves the location of the in-repo `runtime/nvim/init.lua` relative to this
@@ -257,9 +291,15 @@ fn launch_plan(saved: Option<&WolfState>) -> RestorePlan {
 /// [`WolfCore`]. If the core fails to start, logs and returns without building a
 /// window (so the application simply exits).
 fn build_ui(app: &adw::Application) {
+    // The config is read ONCE here, beside the state store and before any widget
+    // exists — matching macOS's `CellMetrics.measured(config:)` at launch. An edit
+    // to `wolf-config.yaml` therefore takes effect on the next launch.
+    let config = load_config();
+    report_unsupported_settings(&config);
+
     // Measure the cell once and share it (by Rc) with the draw and resize closures
     // so it is available even if a resize fires before the first draw.
-    let metrics = Rc::new(measure_metrics());
+    let metrics = Rc::new(measure_metrics(&config));
 
     // Wake plumbing: the tokio worker fires `wake` (Send + Sync); it only pushes
     // onto the channel. Dropping a "full" send is correct — a redraw is already
