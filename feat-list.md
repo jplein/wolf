@@ -148,9 +148,9 @@ The rendering pipeline and the loopback preview server are entirely in `wolf-cor
 
 | Feature                                          | Branch or commit                                      | macOS | Linux |
 | ------------------------------------------------ | ----------------------------------------------------- | ----- | ----- |
-| User config file (`wolf-config.yaml`)            | `feat/typography` (`2735a6d`)                         | [x]   | [ ]   |
-| Config-driven font family / size / line height   | `feat/typography` (`2735a6d`)                         | [x]   | [ ]   |
-| Bundled fonts (iA Writer Mono S, JetBrains Mono) | `feat/neovim-plugin-vendoring` (`129aa8f`, `be2e86c`) | [x]   | [ ]   |
+| User config file (`wolf-config.yaml`)            | `feat/neovim-plugin-vendoring` (`129aa8f`, `be2e86c`) | [x]   | [x]   |
+| Config-driven font family / size / line height   | `feat/neovim-plugin-vendoring` (`129aa8f`, `be2e86c`) | [x]   | [x]   |
+| Bundled fonts (iA Writer Mono S, JetBrains Mono) | `feat/neovim-plugin-vendoring` (`129aa8f`, `be2e86c`) | [x]   | [x]   |
 | Baseline-grid typography                         | `feat/typography` (`2735a6d`)                         | [x]   | [ ]   |
 | Status bar aligned to the content edge           | `feat/typography` (`460692d`)                         | [x]   | [ ]   |
 | Follows the OS dark/light appearance             | `fix/dark-mode` (`c81f7a2`)                           | [x]   | [ ]   |
@@ -159,7 +159,9 @@ The rendering pipeline and the loopback preview server are entirely in `wolf-cor
 | Vendored `lighthouse` colorscheme                | `jplein/lua-changes` (`0603937`)                      | [x]   | [ ]   |
 | Vendored treesitter plugins and parsers          | `feat/neovim-plugin-vendoring`                        | [x]   | [ ]   |
 
-`wolf-gnome` hardcodes DejaVu Sans Mono and reads only `WOLF_FONT_PT`; it never calls the `wolf_core::config` module. The three vendored assets are bundled by Bazel into `Wolf.app` only — the captive `init.lua` self-locates them and is a strict no-op when absent, so on Linux they are simply not there. Vendoring them through the Nix flake is a separate, already-anticipated task.
+`wolf-gnome` reads the shared `wolf-config.yaml` through `wolf_core::config` and drives its cell geometry from the configured font family, size and line height; `WOLF_FONT_PT` overrides the configured size, as it does on macOS. Both editor families are vendored into the Nix devShell and exposed through the repo-controlled fontconfig, so a configured `iA Writer Mono S` resolves on Linux.
+
+Baseline-grid typography is the 24px CSS grid inside the rendered preview document, so it belongs with the Markdown-preview rows above and is unreachable until Linux has a preview pane. The status-bar row waits on the per-pane status bar, which this front-end does not have. The three vendored plugin assets are bundled by Bazel into `Wolf.app` only — the captive `init.lua` self-locates them and is a strict no-op when absent, so on Linux they are simply not there.
 
 ## Terminal
 

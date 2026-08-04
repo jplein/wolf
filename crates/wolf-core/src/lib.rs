@@ -28,6 +28,9 @@
 //! - [`markdown`]: pure, GUI-free Markdown -> themed-HTML rendering for the
 //!   preview pane (with forward-compatible per-line / per-100-column markers).
 //! - [`files`]: the async streaming file-list traversal and `FileSearch` session.
+//! - [`licenses`]: the compiled-in licence texts of the four bundled fonts, plus
+//!   the constant plain-text block the preview document's head and the front-ends'
+//!   About surfaces carry.
 //! - [`mru`]: the global, directory-filtered most-recently-used file cache
 //!   (SQLite, `state_dir()/file-mru.sqlite`).
 //! - [`nav_history`]: the pure per-pane file navigation history (back/forward)
@@ -57,6 +60,7 @@ pub mod config;
 pub mod files;
 pub mod input;
 pub mod layout;
+pub mod licenses;
 pub mod liveness;
 pub mod logging;
 pub mod markdown;
@@ -86,6 +90,7 @@ pub use input::{
     ScrollDirection, ScrollEvent,
 };
 pub use layout::{FocusDir, LayoutIntent, SplitOrientation};
+pub use licenses::{FontLicense, FONT_LICENSES, FONT_LICENSE_NOTICES};
 pub use liveness::Liveness;
 pub use logging::init_tracing;
 pub use markdown::{

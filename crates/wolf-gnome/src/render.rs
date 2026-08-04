@@ -16,15 +16,34 @@
 //!    never-painted cells aligned).
 //! 4. If the cell text is empty (a wide-char trailing placeholder or a
 //!    never-painted cell) skip glyph rendering; otherwise lay the text out with
-//!    Pango (toggling bold/italic/underline per style) and draw it in fg.
+//!    Pango (toggling bold/italic/underline per style) and draw it in fg, offset
+//!    down the cell by `baseline - ascent` so the glyph box sits centred in a cell
+//!    the configured line-height made taller than it.
 //!
 //! Underline is rendered (single line). Undercurl and strikethrough are deferred
 //! for Tier 1.
 
 use wolf_core::{Grid, HighlightTable, ResolvedStyle, Rgb};
 
+use crate::cell_metrics_math;
+
 /// Divisor to convert an 8-bit channel (0–255) to Cairo's 0.0–1.0 range.
 const RGB_MAX: f64 = 255.0;
+
+/// The resolution assumed when the Pango context reports none, in dots per inch.
+///
+/// **This is the live path on every headless run, not a defensive guard.**
+/// `pangocairo::functions::context_get_resolution` returns `-1.0` on a context
+/// created over an `ImageSurface` — measured on this host — and the probe surface
+/// `app::measure_metrics`, `tests/paint_golden.rs` and
+/// `tests/smoke_headless.rs::cell_metrics_for_smoke` all measure against is
+/// exactly such a surface. `wolf-gnome/DECISIONS.md` records that this crate has
+/// no HiDPI handling and assumes 96 dpi; this constant is where that assumption
+/// stops being implicit.
+const PANGO_DEFAULT_DPI: f64 = 96.0;
+
+/// Points per inch, for converting a point size to device pixels.
+const POINTS_PER_INCH: f64 = 72.0;
 
 /// Fallback foreground when neither the highlight nor the editor defaults set one.
 pub(crate) const FALLBACK_FG: Rgb = Rgb {
@@ -38,8 +57,9 @@ pub(crate) const FALLBACK_BG: Rgb = Rgb { r: 0, g: 0, b: 0 };
 /// Per-cell geometry plus the base font used to paint a [`Grid`].
 ///
 /// A monospace cell is `cell_w` wide and `cell_h` tall; `baseline` is the text
-/// baseline measured from the cell's top edge. All values are in Cairo device
-/// units (pixels for an `ImageSurface`).
+/// baseline measured from the cell's top edge, and `ascent`/`descent` are the
+/// measured glyph box the baseline centres inside that cell. All values are in
+/// Cairo device units (pixels for an `ImageSurface`).
 pub struct CellMetrics {
     /// Cell advance width, in device units.
     pub cell_w: f64,
@@ -47,20 +67,46 @@ pub struct CellMetrics {
     pub cell_h: f64,
     /// Baseline offset from the cell top, in device units.
     pub baseline: f64,
+    /// The measured font ascent, in device units — the glyph box's top half.
+    pub ascent: f64,
+    /// The measured font descent, in device units — the glyph box's bottom half.
+    pub descent: f64,
     /// The base font description (cloned and toggled for bold/italic per cell).
     pub font: pango::FontDescription,
 }
 
 impl CellMetrics {
-    /// Measures monospace cell metrics for `family` at `size_pt` points, using
-    /// `cr` only to obtain a Pango context (its surface size is irrelevant).
+    /// Measures monospace cell metrics for `family` at `size_pt` points and
+    /// `line_height_percent` percent, using `cr` only to obtain a Pango context
+    /// (its surface size is irrelevant).
     ///
-    /// The advance width comes from Pango's approximate char width (exact for a
-    /// monospace font); the height/baseline come from the font's ascent/descent.
+    /// The advance width comes from Pango's approximate char width, exact for a
+    /// monospace font and deliberately UNROUNDED — macOS uses `ceil(advance)`
+    /// instead, a pre-existing divergence this function does not close, because
+    /// rounding it would move every pointer smoke's pixel targets.
+    ///
+    /// The cell height and baseline come from [`cell_metrics_math`], which rounds
+    /// in the unit its caller uses — so `size_pt` is converted to DEVICE PIXELS
+    /// here first, since device pixels are what Cairo paints in.
+    ///
+    /// **No family fallback of this crate's own.** `set_family` accepts any
+    /// string and fontconfig substitutes per lookup, always yielding usable
+    /// metrics, so an unresolvable family measures fine and the description keeps
+    /// the name the caller asked for. macOS needs a fallback because CoreText
+    /// returns a DIFFERENT family rather than substituting; here one could only
+    /// override fontconfig's better answer.
     #[must_use]
-    pub fn for_font(cr: &cairo::Context, family: &str, size_pt: f64) -> Self {
+    pub fn for_font(
+        cr: &cairo::Context,
+        family: &str,
+        size_pt: f64,
+        line_height_percent: f64,
+    ) -> Self {
         let mut font = pango::FontDescription::new();
         font.set_family(family);
+        // Deliberately `set_size` and not `set_absolute_size`: the latter changes
+        // how the face is rasterized, and every OCR assertion rides on the
+        // current rasterization.
         font.set_size((size_pt * f64::from(pango::SCALE)) as i32);
 
         let context = pangocairo::functions::create_context(cr);
@@ -70,11 +116,30 @@ impl CellMetrics {
         let cell_w = f64::from(metrics.approximate_char_width()) / scale;
         let ascent = f64::from(metrics.ascent()) / scale;
         let descent = f64::from(metrics.descent()) / scale;
+        // `FontMetrics::height` is Pango's recommended line height and is the
+        // counterpart of what `CTFontGetLeading` contributes on macOS. Clamped
+        // because a face whose recommended height is under its own glyph box
+        // would otherwise make the natural line height shrink.
+        let leading = (f64::from(metrics.height()) / scale - ascent - descent).max(0.0);
+
+        let dpi = pangocairo::functions::context_get_resolution(&context);
+        let dpi = if dpi.is_finite() && dpi > 0.0 {
+            dpi
+        } else {
+            PANGO_DEFAULT_DPI
+        };
+        let size_px = size_pt * dpi / POINTS_PER_INCH;
+
+        let cell_h =
+            cell_metrics_math::cell_height(size_px, line_height_percent, ascent, descent, leading);
+        let baseline = cell_metrics_math::baseline(cell_h, ascent, descent);
 
         Self {
             cell_w,
-            cell_h: ascent + descent,
-            baseline: ascent,
+            cell_h,
+            baseline,
+            ascent,
+            descent,
             font,
         }
     }
@@ -159,7 +224,12 @@ pub(crate) fn draw_glyph(
     }
 
     set_source(cr, fg);
-    // Pango lays out from the top-left of the line; move to the cell origin.
-    cr.move_to(x, y);
+    // Pango places the LAYOUT'S TOP at the move-to point, so moving to the cell
+    // origin would hang the glyphs from the cell's top edge. `baseline - ascent`
+    // is the leftover space above the glyph box, so this is what puts the glyph's
+    // baseline at `metrics.baseline` inside a cell the configured line-height made
+    // taller than the glyphs. When the cell is exactly the glyph box the offset is
+    // exactly 0.0 and nothing moves.
+    cr.move_to(x, y + metrics.baseline - metrics.ascent);
     pangocairo::functions::show_layout(cr, &layout);
 }

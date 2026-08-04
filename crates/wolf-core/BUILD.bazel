@@ -43,10 +43,19 @@ rust_test(
 rust_library(
     name = "wolf_core",
     srcs = glob(["src/**/*.rs"]),
-    # The markdown module include_str!'s its base + theme CSS (src/markdown/*.css)
-    # and the single-line base64 font sidecars (src/markdown/assets/*.b64), so those
-    # files must be available to rustc at compile time.
-    compile_data = glob(["src/markdown/**/*.css", "src/markdown/assets/*.b64"]),
+    # Every file a module include_str!'s must be available to rustc at compile
+    # time: the markdown module's base + theme CSS (src/markdown/*.css) and its
+    # single-line base64 font sidecars (src/markdown/assets/*.b64), plus the four
+    # bundled fonts' licence texts the licenses module compiles in — two beside the
+    # preview assets (src/markdown/assets/*.txt) and two of its own
+    # (src/licenses/*.txt). A .txt outside this glob compiles under Cargo and fails
+    # the Bazel build.
+    compile_data = glob([
+        "src/markdown/**/*.css",
+        "src/markdown/assets/*.b64",
+        "src/markdown/assets/*.txt",
+        "src/licenses/*.txt",
+    ]),
     crate_name = "wolf_core",
     edition = "2021",
     proc_macro_deps = all_crate_deps(proc_macro = True),

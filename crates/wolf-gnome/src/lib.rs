@@ -25,6 +25,17 @@
 //!   ([`mouse::scroll_steps`]).
 //! - [`cursor`]: the pure, GTK-free cursor geometry ([`cursor::cursor_rect`]) and
 //!   mode-aware color logic ([`cursor::cursor_colors`]).
+//! - [`mod@cell_metrics_math`]: the cell-metrics arithmetic the configured
+//!   `line-height` drives — the cell height as a function of the font size alone
+//!   ([`cell_metrics_math::cell_height`]) and the baseline that centres the glyph
+//!   box within it ([`cell_metrics_math::baseline`]). A port of
+//!   `WolfKeyMap/CellMetricsMath.swift`, with two deliberate divergences named in
+//!   that module's docs.
+//! - [`mod@config_seam`]: the rules for CONSUMING a [`wolf_core::WolfConfig`] —
+//!   the `WOLF_FONT_PT`-over-`font-size` precedence
+//!   ([`config_seam::resolve_font_pt`], which takes the override as an argument so
+//!   the rule is testable without the process environment) and the settings this
+//!   front-end reads and does not honour ([`config_seam::unsupported_settings`]).
 //! - [`layout`] / [`tree`]: the pure pane tree and the hierarchical file-tree
 //!   projection.
 //! - [`ui_action_for`]: the TOTAL [`wolf_core::Command`] → [`UiAction`] mapping the
@@ -150,10 +161,13 @@
 //! no multi-line scrollable toast. The seams above stay free functions (plus two
 //! plain value types) so they remain testable without a display.
 
+pub mod about;
 pub mod actions;
 pub mod app;
 pub mod buffer_picker;
+pub mod cell_metrics_math;
 pub mod command_action;
+pub mod config_seam;
 pub mod crash_overlay;
 pub mod cursor;
 pub mod geometry;

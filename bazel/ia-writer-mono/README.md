@@ -53,8 +53,12 @@ use_repo(ia_writer_mono, "ia_writer_mono")
 
 ## Bumping the pin
 
+**This asset has one pin and two consumers.** `flake.nix`'s `iaWriterMono` derivation fetches the same URL at the same sha256, so the family resolves in the Linux devShell's repo-controlled fontconfig, and `crates/wolf-core/src/licenses/ia-writer-mono-LICENSE.txt` is the same archive's `LICENSE.md` committed verbatim and compiled into the binary. All three move together; nothing enforces it mechanically, and a Bazel-side bump that forgets the flake silently gives Linux a different font from the one the `.app` ships.
+
 1. Pick the new commit SHA and update `_COMMIT` in `extensions.bzl`. The archive root name (`iA-Fonts-<commit>`) auto-follows.
 2. Recompute the checksum: `curl -L https://github.com/iaolo/iA-Fonts/archive/<commit>.tar.gz -o f.tgz && shasum -a 256 f.tgz`. Update `_SHA256`.
 3. Confirm the (spaced) TTF paths in the new archive: `tar -tzf f.tgz | grep 'iA Writer Mono/Static'` (verify the exact `iA Writer Mono/Static/iAWriterMonoS-<Face>.ttf` filenames and `iA Writer Mono/LICENSE.md` — a wrong path makes the explicit `runtime_files` list fail to resolve). If a face is renamed or relocated, update the `runtime_files` filegroup and/or the `replace_prefixes` map accordingly.
-4. Regenerate the lockfile (a plain build does this with `--lockfile_mode=update`) and commit `MODULE.bazel.lock`.
-5. Re-run `bazel test //bazel/ia-writer-mono:ia_writer_mono_tree_test`.
+4. Update `flake.nix`'s `iaWriterMono` `commit` and `sha256` to the same values, in the same change, and re-enter the devShell so the fontconfig template is regenerated.
+5. Compare the new archive's `iA Writer Mono/LICENSE.md` against `crates/wolf-core/src/licenses/ia-writer-mono-LICENSE.txt` and replace it if the text moved; that committed copy is what the shipped binary and every rendered preview document carry.
+6. Regenerate the lockfile (a plain build does this with `--lockfile_mode=update`) and commit `MODULE.bazel.lock`.
+7. Re-run `bazel test //bazel/ia-writer-mono:ia_writer_mono_tree_test`.

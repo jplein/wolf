@@ -11,7 +11,7 @@
 //!
 //! ## What this file contains
 //!
-//! **Thirty-four cage smokes** — one window-render smoke, two file-picker smokes,
+//! **Thirty-five cage smokes** — one window-render smoke, two file-picker smokes,
 //! one file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
 //! new-untitled-buffer smoke, one command-palette smoke, one OPEN RECENT smoke
 //! (Ctrl+Shift+P, a typed folder query, then Enter — the activated row re-roots the
@@ -43,16 +43,20 @@
 //! relative `:cd ..` re-rooting the whole window on Neovim's OWN working directory,
 //! which the captive Neovim's `getcwd()` readback plus two ordered OCR
 //! discriminators — a file that exists only in the new root, and the synthetic root
-//! row bearing the new cwd's basename — are what prove), and four
+//! row bearing the new cwd's basename — are what prove), four
 //! STATE-PERSISTENCE smokes (a
 //! three-pane layout, a lone open file, and a dragged divider's WEIGHTS each
 //! surviving a quit-and-relaunch, plus the window title rendering the working
-//! directory) — each of which launches the real binary under `cage`.
+//! directory), and one CONFIGURED-FONT-SIZE smoke (two launches at two
+//! `wolf-config.yaml` font sizes, each writing `winwidth(0)` into its own file, so
+//! the configured size reaching the cell metrics is an integer strict inequality
+//! rather than an OCR judgement) — each of which launches the real binary under
+//! `cage`.
 //!
-//! The three relaunch smokes run **two app launches inside ONE `cage` instance**
-//! (one scenario string, two sequential `"$WOLF_BIN" &` blocks), so `CAGE_LOCK`
-//! semantics are unchanged and the count of compositors started is still one per
-//! smoke.
+//! Four smokes run **two app launches inside ONE `cage` instance** (one scenario
+//! string, two sequential `"$WOLF_BIN" &` blocks) — the three relaunch ones and the
+//! configured-font-size one — so `CAGE_LOCK` semantics are unchanged and the count
+//! of compositors started is still one per smoke.
 //!
 //! Seven of them additionally run **`wolf-pointer-inject`** inside cage —
 //! this repo's own long-lived `zwlr_virtual_pointer_v1` client, see
@@ -65,9 +69,10 @@
 //! and no `:e` toast can satisfy, and OCR is structurally incapable of answering
 //! "did the cursor land at exactly row 12, column 25".
 //!
-//! Twenty-nine of the thirty-four OCR a screenshot of the live window. The `:qa`
-//! smoke deliberately captures no image and asserts on the cage exit status alone
-//! (the app must be GONE, and gone with a ZERO exit status — a panic in the GTK main
+//! Twenty-nine of the thirty-five OCR a screenshot of the live window. The `:qa`
+//! smoke and the configured-font-size smoke deliberately capture no image and
+//! assert on the cage exit status plus, for the second, two integer readbacks (the
+//! app must be GONE, and gone with a ZERO exit status — a panic in the GTK main
 //! loop makes a process vanish just as a clean shutdown does); the click, drag,
 //! scroll and divider-relayout smokes still capture and still RETAIN a screenshot
 //! for post-mortem, but assert on their readback files rather than on pixels. The
@@ -117,7 +122,7 @@
 //! live here, next to the consts and helpers they read, rather than in a file of
 //! their own.
 //!
-//! So this target's summary line reads **`38 passed`**, not `34`: thirty-four cage
+//! So this target's summary line reads **`39 passed`**, not `35`: thirty-five cage
 //! smokes plus those four guards.
 //!
 //! ## A vacuously-passing check recorded here: the `wtype ""` window-map poll
@@ -160,7 +165,7 @@
 //!
 //! ## When it runs
 //!
-//! The thirty-four cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The thirty-five cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The Linux verification gate").
@@ -170,13 +175,13 @@
 //! suite command does not run is a silently-skipped test.
 //!
 //! They are, however, the slowest part of the suite: each drives a real
-//! compositor, and all thirty-four serialize behind `CAGE_LOCK` (see below).
+//! compositor, and all thirty-five serialize behind `CAGE_LOCK` (see below).
 //!
 //! ```text
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the thirty-four cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the thirty-five cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` and
 //!   `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
@@ -193,7 +198,7 @@
 //!   empty result list.
 //! - `XDG_RUNTIME_DIR` set and writable (the Wayland socket lives there).
 //!
-//! Per project policy every one of the thirty-four FAILS LOUD if any of the above is
+//! Per project policy every one of the thirty-five FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -207,8 +212,11 @@ use std::process::{Command, ExitStatus};
 use std::time::SystemTime;
 
 use cairo::{Context, Format, ImageSurface};
+use wolf_core::config::CONFIG_FILE_NAME;
 use wolf_core::state::STATE_FILE_NAME;
-use wolf_core::{load_state, state_dir, CommandMru, PaneNode, PaneOrientation, RecentDirs};
+use wolf_core::{
+    load_state, preferences_dir, state_dir, CommandMru, PaneNode, PaneOrientation, RecentDirs,
+};
 use wolf_gnome::{CellMetrics, WINDOW_TITLE_FALLBACK};
 
 /// The lowercase word we type in insert mode (in the window smoke scenario).
@@ -217,7 +225,7 @@ use wolf_gnome::{CellMetrics, WINDOW_TITLE_FALLBACK};
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the thirty-four cage smoke tests. Each launches its own
+/// Serializes the thirty-five cage smoke tests. Each launches its own
 /// `cage` compositor, and two compositors started concurrently contend for the
 /// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
 /// Under the default multi-threaded test harness these tests would otherwise run
@@ -237,6 +245,46 @@ static CAGE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// interactive default so the rendered glyphs are big enough for `tesseract` to
 /// recognize reliably in a screenshot.
 const SMOKE_FONT_PT: &str = "28";
+
+/// The `line-height` (percent of the font size) every smoke's seeded
+/// `wolf-config.yaml` carries — see [`smoke_config_dir`], which writes it, and
+/// [`smoke_line_height`], which parses it back for this file's own measurement.
+///
+/// ## Why this exact number
+///
+/// It is the value at which the configured cell height reproduces the
+/// pre-config one EXACTLY, so no derived pixel target in this file moves.
+/// Measured on this host with the pinned DejaVu Sans Mono at
+/// [`SMOKE_FONT_PT`]: the Pango context over a 1x1 `ImageSurface` reports no
+/// resolution, so `CellMetrics::for_font` takes its 96 dpi arm and
+/// `size_px = 28 * 96 / 72 = 37.3333`; `ascent` is 35, `descent` is 9, and
+/// `metrics.height()` is 44, so the clamped `leading` is exactly 0. The cell
+/// height the app computes is therefore `round(37.3333 * 1.18) = round(44.05) =
+/// 44`, which is `ascent + descent` — byte-identical to the height the app used
+/// before it read a config at all.
+///
+/// Two consequences, both load-bearing. Every pointer target, the pane-origin
+/// precondition and the scroll threshold are derived from that cell size, so all
+/// of them are unmoved. And because `cell_h == ascent + descent`, the baseline
+/// offset `render::draw_glyph` applies (`baseline - ascent`, which is
+/// `(cell_h - ascent - descent) / 2`) is exactly `0.0`, so every glyph paints at
+/// the same coordinates it did before and no OCR assertion's calibration changes.
+///
+/// `117` and `119` round to 44 as well; `118` is chosen because it is the middle
+/// of that run (`37.3333 x 1.18 = 44.0533`, `0.447` clear of the 44.5 boundary and
+/// `0.553` clear of 43.5), so it is the most robust of the three to a float
+/// difference in a later Pango. `117` gives `43.68`, only `0.18` from a boundary —
+/// do not use it.
+///
+/// A `0` here would also reproduce today's cell height at any size, since the
+/// measured leading is zero and the non-positive branch is then
+/// `ceil(ascent + descent)`. It is deliberately NOT used: a positive percentage
+/// exercises the shipped code path these smokes exist to protect, and a `0` would
+/// leave that path untouched by any smoke at all.
+///
+/// **Changing this moves every derived pixel target in this file.** Re-measure
+/// before touching it; do not adjust it to make an assertion pass.
+const SMOKE_LINE_HEIGHT: &str = "118";
 
 /// How many tiny marker `.md` files [`window_renders_typed_text_under_cage`] drops
 /// into its temp cwd before launching the app, purely so the tree sidebar has rows
@@ -7992,6 +8040,109 @@ fn smoke_state_dir(cwd: &Path) -> PathBuf {
     dir
 }
 
+/// The config directory one smoke's app is given via `WOLF_CONFIG_DIR`: a
+/// **sibling** of `cwd`, named after it with a `-config` suffix, created eagerly
+/// and SEEDED with a `wolf-config.yaml`.
+///
+/// ## Why this exists at all — it is isolation, not hygiene
+///
+/// `wolf_core::preferences_dir()` resolves `WOLF_CONFIG_DIR` first and otherwise
+/// falls back to `dirs::config_dir()`, which honours **`XDG_CONFIG_HOME`** ahead of
+/// `$HOME/.config`. [`cage_command`] redirects `HOME` but **not**
+/// `XDG_CONFIG_HOME`, so on any host that exports it every smoke would read — and,
+/// on a first run, WRITE — the developer's real `wolf-config.yaml`.
+///
+/// Worse, and true on every host: `load_or_create` CREATES the file when it is
+/// absent. An unisolated smoke that found no config would be handed one carrying
+/// `default_config()` — family `iA Writer Mono S`, size 10 — and that family
+/// resolves under the pinned `FONTCONFIG_FILE`, which exposes it. Every glyph in
+/// every OCR smoke would change shape, and the change would arrive on whichever
+/// machine happened not to have the file yet.
+///
+/// ## Why the file is SEEDED rather than left absent
+///
+/// A seeded file makes `load_or_create` READ rather than write, so the smoke is
+/// deterministic and leaves nothing behind that a second run would read
+/// differently. It pins the family to [`SMOKE_FONT_FAMILY`] — the one
+/// [`cell_metrics_for_smoke`] measures against — and the line-height to
+/// [`SMOKE_LINE_HEIGHT`], whose doc comment carries the measurement behind the
+/// number. The `font-size` it carries is inert while `WOLF_FONT_PT` wins
+/// (`config_seam::resolve_font_pt`'s documented precedence), and is written
+/// anyway so the file is honest about what it configures.
+///
+/// ## Why a SIBLING and not a child
+///
+/// The same reason [`smoke_state_dir`] is: a child of `cwd` would be walked by the
+/// app's own `FileSearch`, so `wolf-config.yaml` would appear as a tree-sidebar row
+/// and a picker candidate, changing the page density every OCR assertion is
+/// calibrated against.
+fn smoke_config_dir(cwd: &Path) -> PathBuf {
+    smoke_config_dir_at(cwd, "", SMOKE_FONT_PT)
+}
+
+/// [`smoke_config_dir`] with an extra name suffix and an explicit `font-size`.
+///
+/// One smoke — [`config_font_size_changes_the_grid_under_cage`] — needs TWO seeded
+/// config directories in one scenario, at two different font sizes. Deriving both
+/// here keeps the sibling-not-child rule and the seeded file's shape in one place;
+/// see [`smoke_config_dir`] for why each matters.
+fn smoke_config_dir_at(cwd: &Path, suffix: &str, font_pt: &str) -> PathBuf {
+    let name = cwd.file_name().unwrap_or_else(|| {
+        panic!(
+            "smoke cwd {} has no final path component, so no `<name>-config` sibling can be \
+             derived for it. Every smoke's cwd comes from `make_temp_cwd`, which always produces \
+             one.",
+            cwd.display()
+        )
+    });
+    let parent = cwd.parent().unwrap_or_else(|| {
+        panic!(
+            "smoke cwd {} has no parent directory, so no SIBLING config dir can be derived for \
+             it. A child would be walked by the app's own `FileSearch` and is not an acceptable \
+             fallback; see `smoke_config_dir`.",
+            cwd.display()
+        )
+    });
+    let dir = parent.join(format!("{}-config{suffix}", name.to_string_lossy()));
+    write_smoke_config(&dir, font_pt);
+    dir
+}
+
+/// Creates `dir` and writes a `wolf-config.yaml` into it pinning
+/// [`SMOKE_FONT_FAMILY`], `font_pt`, and [`SMOKE_LINE_HEIGHT`].
+///
+/// Split out from [`smoke_config_dir`] because
+/// [`config_font_size_changes_the_grid_under_cage`] needs the same file at two
+/// DIFFERENT font sizes, and the seeded shape must not be written twice by hand.
+/// All three fields are required by `wolf_core`'s `ConfigSection`: a partial
+/// section fails to deserialize and `load_or_create` then falls back to the
+/// built-in defaults, which is exactly the `iA Writer Mono S` outcome this whole
+/// helper exists to prevent.
+fn write_smoke_config(dir: &Path, font_pt: &str) {
+    std::fs::create_dir_all(dir).unwrap_or_else(|e| {
+        panic!(
+            "failed to create the smoke config dir {}: {e}. Without it the app under cage resolves \
+             its preferences directory from XDG_CONFIG_HOME or $HOME and would read — or create — \
+             the developer's real wolf-config.yaml.",
+            dir.display()
+        )
+    });
+    let path = dir.join(CONFIG_FILE_NAME);
+    let yaml = format!(
+        "config:\n  font-family: {SMOKE_FONT_FAMILY}\n  font-size: {font_pt}\n  \
+         line-height: {SMOKE_LINE_HEIGHT}\n"
+    );
+    std::fs::write(&path, yaml).unwrap_or_else(|e| {
+        panic!(
+            "failed to write the smoke config {}: {e}. An absent file is NOT a benign fallback: \
+             `load_or_create` would create one carrying `default_config()` — family \
+             `iA Writer Mono S`, size 10 — and that family resolves under the pinned \
+             FONTCONFIG_FILE, so every glyph in every OCR smoke would change.",
+            path.display()
+        )
+    });
+}
+
 /// The `HOME` one smoke's app is given: the PARENT of `cwd`.
 ///
 /// For a plain smoke that is the `<unique>` directory [`make_temp_cwd`] built, whose
@@ -8178,12 +8329,33 @@ fn smoke_shader_cache_dir() -> PathBuf {
 /// between them cover both cases.
 const HOME_STATE_DIR_FALLBACKS: [&str; 2] = [".local/state/wolf", ".local/share/wolf"];
 
+/// The directory, RELATIVE to the app's `$HOME`, that
+/// `wolf_core::preferences_dir()` would resolve to if `WOLF_CONFIG_DIR` were ever
+/// missing — the exact path a leak would land in, and therefore the exact path
+/// [`single_pane_file_survives_relaunch_under_cage`]'s config-isolation assertion
+/// proves is empty.
+///
+/// `preferences_dir()` is `dirs::config_dir().map(|d| d.join("wolf"))` off macOS,
+/// and `dirs::config_dir()` defaults to `$XDG_CONFIG_HOME` (else
+/// `$HOME/.config`). There is only one arm here, unlike
+/// [`HOME_STATE_DIR_FALLBACKS`]' two, because the chain has only one.
+///
+/// It is spelled out rather than obtained from `dirs`, which `wolf-gnome` does not
+/// depend on and must not gain a dependency on for a test. That makes it a MIRROR
+/// of the XDG default, with the same honest limitation the state constant carries:
+/// it is the right path only while `$XDG_CONFIG_HOME` is unset in the environment
+/// cage inherits, which is the case in this repo's devShell. On a host that DOES
+/// export it, a leak lands outside the temp tree instead — where the sibling check
+/// on the developer's real config file catches it. The two checks are
+/// complementary and between them cover both cases.
+const HOME_CONFIG_DIR_FALLBACK: &str = ".config/wolf";
+
 /// Builds the `cage` invocation every smoke runs its scenario through — and is the
 /// SINGLE place in this file where the compositor is ever spawned.
 ///
 /// It fixes the invocation (`cage -- sh -c <scenario>`, with `cwd` as the working
 /// directory, which is how the app comes to derive `CoreConfig.cwd` from it) plus
-/// the four environment variables EVERY smoke must have:
+/// the five environment variables EVERY smoke must have:
 ///
 /// * `WOLF_FONT_PT` = [`SMOKE_FONT_PT`] — a large font, so the rendered glyphs are
 ///   legible to `tesseract`, AND the exact number [`cell_metrics_for_smoke`]
@@ -8196,6 +8368,17 @@ const HOME_STATE_DIR_FALLBACKS: [&str; 2] = [".local/state/wolf", ".local/share/
 ///   comment before changing anything here. It is also what lets the two RELAUNCH
 ///   smokes work at all: both launches inside one scenario are handed the same
 ///   directory, so the second reads exactly the `state.json` the first wrote.
+/// * `WOLF_CONFIG_DIR` = [`smoke_config_dir`] — the isolation that keeps a smoke
+///   run out of the developer's real `~/.config/wolf/`, and the thing that pins the
+///   app's font family and line-height to what [`cell_metrics_for_smoke`] measures.
+///   Read that function's doc comment before changing anything here. It buys two
+///   distinct properties. Without it `preferences_dir()` falls through to
+///   `XDG_CONFIG_HOME` — which the `HOME` line below does NOT redirect — so a host
+///   exporting that variable would have its real config read and, on a first run,
+///   written. And on ANY host `load_or_create` CREATES an absent file carrying
+///   `default_config()`: family `iA Writer Mono S`, which the pinned
+///   `FONTCONFIG_FILE` resolves, so every glyph in every OCR smoke would change
+///   shape.
 /// * `HOME` = [`smoke_home`] — the cwd's PARENT, which is what pins the rendered
 ///   window title to the constant `~/project`. See below; this one is an OCR
 ///   DETERMINISM control, not tidiness.
@@ -8263,11 +8446,11 @@ const HOME_STATE_DIR_FALLBACKS: [&str; 2] = [".local/state/wolf", ".local/share/
 /// the "Note (OCR width)" / "Note (OCR height)" paragraphs above their own consts,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
-/// be applied here to all thirty-four.
+/// be applied here to all thirty-five.
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
-/// silently lose ALL FOUR variables.
+/// silently lose ALL FIVE variables.
 fn cage_command(scenario: &str, cwd: &Path) -> Command {
     let mut cmd = Command::new("cage");
     cmd.arg("--")
@@ -8278,7 +8461,8 @@ fn cage_command(scenario: &str, cwd: &Path) -> Command {
         .env("HOME", smoke_home(cwd))
         .env("XDG_CACHE_HOME", smoke_shader_cache_dir())
         .env("WOLF_FONT_PT", SMOKE_FONT_PT)
-        .env("WOLF_STATE_DIR", smoke_state_dir(cwd));
+        .env("WOLF_STATE_DIR", smoke_state_dir(cwd))
+        .env("WOLF_CONFIG_DIR", smoke_config_dir(cwd));
     cmd
 }
 
@@ -8325,6 +8509,15 @@ const CAGE_SPAWN_NEEDLE: &str = concat!("Command::new(\"", "cage", "\")");
 /// a 20/20 cell into 0/20 at settle values that pass warm — again surfacing as an OCR
 /// flake somewhere else entirely. See [`smoke_shader_cache_dir`].
 ///
+/// A fourth, and it is the loudest of the set: without `WOLF_CONFIG_DIR` the app
+/// resolves its preferences directory from `XDG_CONFIG_HOME` — which the `HOME`
+/// redirect does not cover — or from `$HOME/.config`, where no file exists, at which
+/// point `load_or_create` WRITES one carrying `default_config()`. The family in it is
+/// `iA Writer Mono S`, which the pinned `FONTCONFIG_FILE` resolves, so that smoke
+/// renders in a different typeface from the one [`cell_metrics_for_smoke`] measured
+/// and every OCR term and every pointer target in it is computed against the wrong
+/// cell. See [`smoke_config_dir`].
+///
 /// ## Why the needle is built from fragments, and why that is load-bearing
 ///
 /// This test reads its own source with `include_str!`. Were [`CAGE_SPAWN_NEEDLE`]
@@ -8362,10 +8555,16 @@ fn cage_is_only_spawned_through_the_isolating_helper() {
         occurrences, 1,
         "expected exactly ONE occurrence of {CAGE_SPAWN_NEEDLE:?} in this file (the one inside \
          `cage_command`), found {occurrences}. Every extra one is a compositor spawned OUTSIDE \
-         `cage_command` and therefore WITHOUT `WOLF_STATE_DIR`: that smoke's app resolves \
-         `state_dir()` to the developer's real `~/.local/state/wolf/`, READS their real \
+         `cage_command` and therefore without `WOLF_STATE_DIR`, `WOLF_CONFIG_DIR`, `HOME` or \
+         `XDG_CACHE_HOME`. Two of those are destructive. Without `WOLF_STATE_DIR` that smoke's app \
+         resolves `state_dir()` to the developer's real `~/.local/state/wolf/`, READS their real \
          state.json at launch (so it starts from the developer's last session instead of a clean \
-         slate) and OVERWRITES it on quit with its own throwaway temp-cwd layout. Route the new \
+         slate) and OVERWRITES it on quit with its own throwaway temp-cwd layout. Without \
+         `WOLF_CONFIG_DIR` it resolves `preferences_dir()` from `XDG_CONFIG_HOME` or \
+         `$HOME/.config` and `load_or_create` READS the developer's real wolf-config.yaml — or, \
+         where none exists, CREATES one carrying `default_config()`, whose family \
+         `iA Writer Mono S` the pinned FONTCONFIG_FILE resolves, so that smoke draws every glyph \
+         in a different typeface from the one `cell_metrics_for_smoke` measured. Route the new \
          smoke through `cage_command(scenario, &cwd)` and chain only its own `.env(...)` \
          additions on top; do not copy the helper's body."
     );
@@ -8376,12 +8575,19 @@ fn cage_is_only_spawned_through_the_isolating_helper() {
 
 /// The monospace family the app measures its cell metrics with.
 ///
-/// This MUST match `wolf_gnome::app::FONT_FAMILY`, which is private — hence the
-/// duplication. `crates/wolf-gnome/tests/paint_golden.rs` carries the same local
-/// const for the same reason. If the app's family ever changes and this does not,
-/// [`cell_metrics_for_smoke`] silently measures a DIFFERENT cell size, every derived
-/// pixel target lands in the wrong cell, and the exact-delta assertions are what
-/// catch it — which is why their failure messages name this const.
+/// This is the family [`smoke_config_dir`] SEEDS into every smoke's own
+/// `wolf-config.yaml`, so the const and the value the app reads live in one file
+/// and cannot drift apart. `crates/wolf-gnome/tests/paint_golden.rs` carries the
+/// same local const because it measures headlessly and seeds no config.
+///
+/// It is not the family `wolf_core::default_config()` names. That one is
+/// `iA Writer Mono S`, which the pinned `FONTCONFIG_FILE` also resolves — so a
+/// smoke whose config went missing would render legibly in the WRONG typeface
+/// rather than failing to render at all. If this const and the seeded file ever
+/// disagree, [`cell_metrics_for_smoke`] silently measures a different cell size,
+/// every derived pixel target lands in the wrong cell, and the exact-delta
+/// assertions are what catch it — which is why their failure messages name this
+/// const.
 const SMOKE_FONT_FAMILY: &str = "DejaVu Sans Mono";
 
 /// [`SMOKE_FONT_PT`] as an `f64` — PARSED, never re-typed as a literal.
@@ -8400,6 +8606,24 @@ fn smoke_font_pt() -> f64 {
     })
 }
 
+/// [`SMOKE_LINE_HEIGHT`] as an `f64` — PARSED, never re-typed as a literal, for the
+/// same reason [`smoke_font_pt`] is.
+///
+/// The app reads that same STRING out of the `wolf-config.yaml`
+/// [`smoke_config_dir`] seeds, and this file feeds the parsed value to its own
+/// `CellMetrics::for_font` call. A re-typed `118.0` here would keep compiling after
+/// someone changed the const, and every pixel target in every pointer smoke would
+/// then be computed against a cell height the app does not use.
+fn smoke_line_height() -> f64 {
+    SMOKE_LINE_HEIGHT.parse::<f64>().unwrap_or_else(|e| {
+        panic!(
+            "SMOKE_LINE_HEIGHT = {SMOKE_LINE_HEIGHT:?} does not parse as an f64 ({e}). It is \
+             written verbatim into every smoke's seeded wolf-config.yaml and parsed here to size \
+             this test's own cell measurement; the two MUST be the same number, so it has to parse."
+        )
+    })
+}
+
 /// Measures the app's monospace cell size EXACTLY, by making the same call the app
 /// makes.
 ///
@@ -8407,22 +8631,29 @@ fn smoke_font_pt() -> f64 {
 /// `wolf_gnome::app::measure_metrics` and this function are the same
 /// `CellMetrics::for_font` call, on the same throwaway 1x1 `ImageSurface` probe
 /// (whose pixel size is irrelevant — it exists only to obtain a Pango context), with
-/// the same family, the same points, and the same `FONTCONFIG_FILE`-pinned DejaVu.
-/// `tests/paint_golden.rs::render_fixture` uses the identical idiom.
+/// the same family, the same points, the same line-height, and the same
+/// `FONTCONFIG_FILE`-pinned DejaVu. `tests/paint_golden.rs::probe_metrics` uses the
+/// identical idiom.
+///
+/// All three inputs reach the app through [`cage_command`]: the family and the
+/// line-height through the `wolf-config.yaml` [`smoke_config_dir`] seeds, the
+/// points through `WOLF_FONT_PT`, which wins over the file's `font-size`.
 fn cell_metrics_for_smoke() -> CellMetrics {
     let probe = ImageSurface::create(Format::ARgb32, 1, 1)
         .expect("failed to create the 1x1 probe surface for cell measurement");
     let cr = Context::new(&probe).expect("failed to create the probe Cairo context");
-    let metrics = CellMetrics::for_font(&cr, SMOKE_FONT_FAMILY, smoke_font_pt());
+    let metrics =
+        CellMetrics::for_font(&cr, SMOKE_FONT_FAMILY, smoke_font_pt(), smoke_line_height());
     drop(cr);
     assert!(
         metrics.cell_w > 0.0 && metrics.cell_h > 0.0,
-        "CellMetrics::for_font({SMOKE_FONT_FAMILY:?}, {}) produced a non-positive cell size \
+        "CellMetrics::for_font({SMOKE_FONT_FAMILY:?}, {}, {}) produced a non-positive cell size \
          (cell_w = {}, cell_h = {}). Every pixel target in every pointer smoke is derived from \
          these two numbers, so nothing below can mean anything. The usual cause is a missing \
          FONTCONFIG_FILE (the flake devShell pins DejaVu Sans Mono through it), which leaves Pango \
          resolving the family to nothing.",
         smoke_font_pt(),
+        smoke_line_height(),
         metrics.cell_w,
         metrics.cell_h
     );
@@ -8820,10 +9051,10 @@ fn assert_inside_extents(smoke: &str, label: &str, point: (i64, i64), extents: (
          compositor output `wolf-pointer-inject` reported on its `ready` line. \
          `zwlr_virtual_pointer_v1.motion_absolute` clamps to the output, so this point would land \
          somewhere other than the cell this smoke computed. Either the cage output shrank, or the \
-         measured cell size grew (check that WOLF_FONT_PT = {SMOKE_FONT_PT} still reaches the app \
-         and that SMOKE_FONT_FAMILY = {SMOKE_FONT_FAMILY:?} still matches `app::FONT_FAMILY`). \
-         Move PROBE_X/PROBE_Y or shrink the per-smoke cell deltas; do NOT loosen the delta \
-         assertion."
+         measured cell size grew (check that WOLF_FONT_PT = {SMOKE_FONT_PT} still reaches the app, \
+         and that the wolf-config.yaml `smoke_config_dir` seeds still carries SMOKE_FONT_FAMILY = \
+         {SMOKE_FONT_FAMILY:?} and SMOKE_LINE_HEIGHT = {SMOKE_LINE_HEIGHT}). Move PROBE_X/PROBE_Y \
+         or shrink the per-smoke cell deltas; do NOT loosen the delta assertion."
     );
 }
 
@@ -9172,11 +9403,14 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// [`SIDEBARTOGGLE_OCR_KEEP`] is an ordinary content term and follows the ordinary
 /// rule.
 ///
-/// Twenty-nine of the thirty-four smokes appear here. FIVE contribute no rows at
+/// Twenty-nine of the thirty-five smokes appear here. SIX contribute no rows at
 /// all, on purpose, and it is worth being explicit about which and why:
 ///
 /// * [`colon_qa_closes_the_window_under_cage`] captures no PNG and asserts only that
 ///   the app process is gone, so it has no OCR term a fixture filename could satisfy.
+/// * [`config_font_size_changes_the_grid_under_cage`] likewise captures no PNG: its
+///   two observables are the `winwidth(0)` integers the captive Neovim writes about
+///   its own grid, so no fixture filename can help or hurt it.
 /// * [`click_positions_the_cursor_under_cage`],
 ///   [`drag_selects_a_range_under_cage`] and
 ///   [`wheel_scroll_moves_the_viewport_under_cage`] assert on FILES the captive
@@ -9755,7 +9989,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the thirty-four smokes — still
+/// nothing to the smoke suite's runtime and — unlike the thirty-five smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
@@ -13152,8 +13386,9 @@ fn click_positions_the_cursor_under_cage() {
          reached Neovim at all — check `pane_view.rs::on_pane_press` still calls \
          `send_pane_mouse`. A WRONG NON-ZERO delta means the pixel->cell scale disagrees between \
          this test and the app — check that WOLF_FONT_PT = {SMOKE_FONT_PT} really reached the app \
-         (`app::font_pt_from_env`) and that SMOKE_FONT_FAMILY = {SMOKE_FONT_FAMILY:?} still \
-         matches the private `app::FONT_FAMILY`. PNG kept at {}.",
+         (`app::font_pt_override` feeding `config_seam::resolve_font_pt`) and that the \
+         wolf-config.yaml `smoke_config_dir` seeds still carries SMOKE_FONT_FAMILY = \
+         {SMOKE_FONT_FAMILY:?} and SMOKE_LINE_HEIGHT = {SMOKE_LINE_HEIGHT}. PNG kept at {}.",
         l1 - l0,
         metrics.cell_w,
         metrics.cell_h,
@@ -15145,6 +15380,20 @@ fn pane_layout_survives_relaunch_under_cage() {
 ///    afterwards. The last two are complementary, not redundant: a leak lands
 ///    inside the temp tree when `$XDG_STATE_HOME` is unset and outside it when it
 ///    is set, and one arm catches each.
+/// 5. **Config-dir isolation**, in the same four parts and for a sharper reason.
+///    `wolf_core::load_or_create` CREATES `wolf-config.yaml` when it finds none, so
+///    an app that ignored `WOLF_CONFIG_DIR` would not merely read the developer's
+///    preferences — on a machine that has never run Wolf interactively it would
+///    WRITE them, and every later smoke would then be handed the default family
+///    `iA Writer Mono S` instead of the seeded `DejaVu Sans Mono`. The four parts
+///    are: this TEST process has no `WOLF_CONFIG_DIR` of its own (without which
+///    `preferences_dir()` below would resolve the override and the check would be
+///    self-referential); the smoke's own config dir holds a non-empty
+///    `wolf-config.yaml`; the `$HOME`-derived fallback directory
+///    ([`HOME_CONFIG_DIR_FALLBACK`], under the temp `$HOME` [`cage_command`] gives
+///    the app) holds none; and the developer's REAL `wolf-config.yaml` is
+///    byte-identical across the run, including the normal case where it does not
+///    exist and must still not exist afterwards.
 ///
 /// ## How it discriminates RESTORATION from COINCIDENCE
 ///
@@ -15203,6 +15452,34 @@ fn single_pane_file_survives_relaunch_under_cage() {
     let real_state_file = real_state_dir.join(STATE_FILE_NAME);
     let real_before = state_file_fingerprint(&real_state_file);
 
+    // --- Assertion 5, first part: the same, for the CONFIG directory ----------
+    //
+    // `wolf_core::preferences_dir()` resolves WOLF_CONFIG_DIR ahead of everything
+    // else, so a variable set on the TEST process would make "the developer's real
+    // wolf-config.yaml" resolve to the override and the comparison below would be
+    // against the smoke's own file.
+    assert!(
+        std::env::var_os("WOLF_CONFIG_DIR").is_none(),
+        "{SMOKE}: WOLF_CONFIG_DIR is set in the TEST process. `wolf_core::preferences_dir()` \
+         resolves that variable FIRST, so the \"developer's real wolf-config.yaml\" this smoke \
+         proves is untouched would be resolved against the override instead of against \
+         $XDG_CONFIG_HOME/wolf — the isolation assertion would then compare the smoke's own \
+         directory with itself and pass no matter what the app did. `cage_command` sets \
+         WOLF_CONFIG_DIR on the CHILD only, which is the whole design; nothing may set it on the \
+         test process."
+    );
+
+    let real_config_dir = preferences_dir().unwrap_or_else(|| {
+        panic!(
+            "{SMOKE}: wolf_core::preferences_dir() resolved to None in the test process, so this \
+             smoke cannot say WHICH config file it is proving untouched and its isolation \
+             assertion would hold vacuously. On Linux it is $XDG_CONFIG_HOME/wolf (else \
+             $HOME/.config/wolf), so a None here means neither is resolvable — check $HOME."
+        )
+    });
+    let real_config_file = real_config_dir.join(CONFIG_FILE_NAME);
+    let real_config_before = state_file_fingerprint(&real_config_file);
+
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -15224,6 +15501,12 @@ fn single_pane_file_survives_relaunch_under_cage() {
     // the app as WOLF_STATE_DIR, so the two runs share one `state.json`.
     let smoke_state = smoke_state_dir(&cwd);
     let smoke_state_file = smoke_state.join(STATE_FILE_NAME);
+
+    // The smoke's own config dir — the SAME sibling `cage_command` computes and
+    // hands the app as WOLF_CONFIG_DIR, seeded with the wolf-config.yaml both runs
+    // read.
+    let smoke_config = smoke_config_dir(&cwd);
+    let smoke_config_file = smoke_config.join(CONFIG_FILE_NAME);
 
     // Where the scenario freezes RUN 1's save before run 2 can write over it. It is
     // a DIRECTORY holding a `state.json`, because `wolf_core::load_state` takes the
@@ -15465,6 +15748,402 @@ fn single_pane_file_survives_relaunch_under_cage() {
          writes that file on its own render wakes; close it and re-run before concluding anything \
          else.",
         real_state_file.display()
+    );
+
+    // --- Assertion 5: config-dir isolation -------------------------------------
+    //
+    // The same three remaining checks the state half runs, aimed at a variable whose
+    // failure mode is worse: `load_or_create` CREATES the file it cannot find, so a
+    // missing WOLF_CONFIG_DIR does not merely read the developer's preferences, it
+    // writes them.
+    let config_meta = std::fs::metadata(&smoke_config_file).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: expected the smoke's own config file {} to exist, but: {e}. \
+             `smoke_config_dir` SEEDS it before either launch, so its absence means the helper did \
+             not run — and the app under cage then had `load_or_create` write one for it carrying \
+             `default_config()`, whose family `iA Writer Mono S` the pinned FONTCONFIG_FILE \
+             resolves. Every glyph in this run was drawn in the wrong typeface.",
+            smoke_config_file.display()
+        )
+    });
+    assert!(
+        config_meta.len() > 0,
+        "{SMOKE}: the smoke's own config file {} exists but is empty. An empty file is not a \
+         partial config — `load_or_create` fails to deserialize it and falls back to \
+         `default_config()`, family `iA Writer Mono S`, exactly as an absent one would.",
+        smoke_config_file.display()
+    );
+
+    let leaked_config = app_home
+        .join(HOME_CONFIG_DIR_FALLBACK)
+        .join(CONFIG_FILE_NAME);
+    assert!(
+        !leaked_config.exists(),
+        "{SMOKE}: found a config file at {} — inside the app's own $HOME. That path is what \
+         `wolf_core::preferences_dir()` resolves to when WOLF_CONFIG_DIR is ABSENT (the \
+         `dirs::config_dir()` chain, XDG default `$HOME/{HOME_CONFIG_DIR_FALLBACK}`), so its \
+         existence means the app resolved its preferences directory from $HOME instead. Because \
+         `load_or_create` CREATES an absent file, the app did not just read the wrong place — it \
+         wrote there, with the built-in defaults. The $HOME redirect is a TEST fixture that does \
+         not exist on a developer's machine, so the same defect there lands in their real \
+         ~/.config/wolf/wolf-config.yaml. `cage_command` is the single place WOLF_CONFIG_DIR is \
+         set and `cage_is_only_spawned_through_the_isolating_helper` is what keeps it single.",
+        leaked_config.display()
+    );
+
+    let real_config_after = state_file_fingerprint(&real_config_file);
+    assert_eq!(
+        real_config_before,
+        real_config_after,
+        "{SMOKE}: the developer's REAL config file {} changed across this smoke run (before: \
+         {real_config_before:?}, after: {real_config_after:?}; `None` means the file did not \
+         exist, which is the normal state on a machine that has never run Wolf interactively and \
+         must stay that way). This is a CONFIG-DIR ISOLATION FAILURE. Read the `None` -> `Some` \
+         direction as the serious one: `load_or_create` CREATED a wolf-config.yaml in the \
+         developer's preferences directory, so every later interactive Wolf launch reads a file \
+         the test suite wrote. `cage_command` is the single place WOLF_CONFIG_DIR is set, and \
+         `cage_is_only_spawned_through_the_isolating_helper` is what keeps it single — start \
+         there. The ONE benign cause: a real Wolf launched concurrently in another terminal, which \
+         creates that file on its first run; close it and re-run before concluding anything else.",
+        real_config_file.display()
+    );
+}
+
+// --- The configured font size reaches the grid ------------------------------
+
+/// The `font-size` run 1's config directory carries, in points.
+///
+/// Both sizes are chosen well apart so the resulting column counts cannot be
+/// confused for a rounding wobble: DejaVu Sans Mono's advance is about `0.80` px
+/// per point at 96 dpi, so 20 pt and 40 pt give cells roughly 16 px and 32 px wide
+/// and therefore roughly twice as many columns at the small size as at the large
+/// one. Neither equals [`SMOKE_FONT_PT`], so a launch that fell back to the helper's
+/// own seeded config would report the same width for both runs and assertion 2
+/// would fire.
+const CONFIG_GRID_SMALL_FONT_PT: &str = "20";
+
+/// The `font-size` run 2's config directory carries, in points. See
+/// [`CONFIG_GRID_SMALL_FONT_PT`].
+const CONFIG_GRID_LARGE_FONT_PT: &str = "40";
+
+/// Name suffix of run 1's config directory sibling.
+const CONFIG_GRID_SMALL_SUFFIX: &str = "-small";
+
+/// Name suffix of run 2's config directory sibling.
+const CONFIG_GRID_LARGE_SUFFIX: &str = "-large";
+
+/// File run 1's Neovim writes its `winwidth(0)` into.
+///
+/// Both readbacks live under `XDG_RUNTIME_DIR` rather than in the smoke's cwd, so
+/// the app's own `FileSearch` never lists them and the file-tree sidebar is
+/// identical in both runs — the sidebar shares the window with the editor pane, so
+/// a row count that differed between runs would be a second variable in a
+/// comparison that must have exactly one.
+const CONFIG_GRID_SMALL_READBACK_NAME: &str = "wolf_gnome_config_grid_small.txt";
+
+/// File run 2's Neovim writes its `winwidth(0)` into. See
+/// [`CONFIG_GRID_SMALL_READBACK_NAME`].
+const CONFIG_GRID_LARGE_READBACK_NAME: &str = "wolf_gnome_config_grid_large.txt";
+
+/// The smallest column difference between the two runs that this smoke accepts.
+///
+/// Assertion 2 (a strict inequality) is the discriminating one; this bound is what
+/// stops it being satisfied by a one-column wobble from cell-width rounding or from
+/// a divider landing a pixel differently. The measured separation is roughly a
+/// factor of two — tens of columns at the window sizes `cage` provides — so five is
+/// far below what a working build produces and far above what noise can manufacture.
+const CONFIG_GRID_MIN_COLUMN_GAP: i64 = 5;
+
+/// The two-launch CONFIGURED-FONT-SIZE scenario, run as one `sh -c` string inside
+/// ONE `cage`, structurally the relaunch smokes' shape.
+///
+/// Each launch exports its own `WOLF_CONFIG_DIR`, deliberately overriding the one
+/// [`cage_command`] sets, and reads `winwidth(0)` back out of the captive Neovim
+/// into its own file. The readback is `winwidth()` and never
+/// `nvim_win_get_width()`: under `ext_multigrid` the former reports the GRID width
+/// the front-end drives from the measured cell size, while the latter reports the
+/// layout width, which is blind to it.
+///
+/// Exit codes, each naming one cause: `11` run 1's app died before its window
+/// mapped; `12` run 1 was still alive after `:qa!`; `13` run 1 exited non-zero;
+/// `14` run 1's width readback never appeared; `15`–`18` the same four for run 2.
+const CONFIG_GRID_SCENARIO: &str = r#"
+set -eu
+
+# SETTLE is the ONLY real budget between spawning either run's app and its first
+# keystroke: `wait_window`'s wtype probe does NOT gate input readiness (it breaks
+# at tries=0 on every run -- see the module doc comment).
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+QUIT_TRIES=75
+FILE_TRIES=100
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+# $1 is the exit code to use if the app dies first, so run 1 and run 2 stay
+# distinguishable.
+wait_window() {
+    tries=0
+    while [ "$tries" -lt "$WAIT_TRIES" ]; do
+        if ! kill -0 "$app_pid" 2>/dev/null; then
+            echo "wolf-gnome config-grid smoke: app process exited early (pid $app_pid)" >&2
+            exit "$1"
+        fi
+        if wtype "" >/dev/null 2>&1; then
+            return 0
+        fi
+        tries=$((tries + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    return 0
+}
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome config-grid smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# $1 is the exit code for "still alive after :qa!", $2 for "exited non-zero".
+quit_app() {
+    wtype -- ":qa!"
+    wtype -k Return
+
+    tries=0
+    gone=0
+    while [ "$tries" -lt "$QUIT_TRIES" ]; do
+        if ! kill -0 "$app_pid" 2>/dev/null; then
+            gone=1
+            break
+        fi
+        tries=$((tries + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    if [ "$gone" -ne 1 ]; then
+        echo "wolf-gnome config-grid smoke: app (pid $app_pid) still alive after :qa!." >&2
+        exit "$1"
+    fi
+    # `set -e` would abort before the status could be reported, so collect it
+    # through `||`, which is exempt from it.
+    rc=0
+    wait "$app_pid" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "wolf-gnome config-grid smoke: app (pid $app_pid) exited $rc, not 0." >&2
+        exit "$2"
+    fi
+    app_pid=
+}
+
+# =========================================================================
+# RUN 1 -- the SMALL configured font size.
+#
+# This export deliberately overrides the WOLF_CONFIG_DIR `cage_command` set: the
+# helper's directory pins the smokes' shared font size, and this smoke is the one
+# where the CONFIGURED size has to be what decides. WOLF_FONT_PT is removed on the
+# Rust side for the same reason.
+# =========================================================================
+WOLF_CONFIG_DIR="$CONFIG_DIR_SMALL"
+export WOLF_CONFIG_DIR
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_window 11
+sleep "$SETTLE"
+
+# `winwidth(0)`, NEVER `nvim_win_get_width()`: the former is the GRID width the
+# front-end drives from the measured cell size.
+wtype -- ":call writefile([printf('%d', winwidth(0))], '$WIDTH_SMALL')"
+wtype -k Return
+wait_file "$WIDTH_SMALL" || exit 14
+
+quit_app 12 13
+
+# =========================================================================
+# RUN 2 -- the LARGE configured font size, same cwd, same window.
+# =========================================================================
+WOLF_CONFIG_DIR="$CONFIG_DIR_LARGE"
+export WOLF_CONFIG_DIR
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_window 15
+sleep "$SETTLE"
+
+wtype -- ":call writefile([printf('%d', winwidth(0))], '$WIDTH_LARGE')"
+wtype -k Return
+wait_file "$WIDTH_LARGE" || exit 18
+
+quit_app 16 17
+
+exit 0
+"#;
+
+/// The `font-size` in `wolf-config.yaml` reaches the editor grid.
+///
+/// ## What it proves, and why it is not an OCR assertion
+///
+/// That the app READS the shared `wolf-config.yaml` and measures its cell from
+/// what it found there. OCR reads text, not size: a change in font size is visible
+/// to it only indirectly, through wrapping, which is a fragile thing to assert on.
+/// Two launches at two configured sizes, each writing `winwidth(0)` into its own
+/// file, yield an integer strict inequality instead — a value a config-ignoring
+/// build cannot produce, because both of its launches would measure the same cell
+/// and report the same number of columns.
+///
+/// Both launches run inside ONE `cage` instance, so `CAGE_LOCK` semantics are
+/// unchanged and no second compositor is started.
+///
+/// ## The one smoke that removes `WOLF_FONT_PT`
+///
+/// Every other smoke exports it, and it WINS over the file's `font-size` by design
+/// (`config_seam::resolve_font_pt`, matching `CellMetrics.defaultPointSize` on
+/// macOS). Here the configured size has to be what decides, so the override is
+/// removed on purpose — with the helper's four remaining variables left in place,
+/// since `cage_command` is still the only route to the compositor.
+///
+/// ## What it does NOT prove
+///
+/// That a configured `font-family` reaches a pixel: no smoke changes the family,
+/// because doing so would change every glyph on the page and put the OCR
+/// calibration at risk for no added confidence — `tests/paint_golden.rs` covers
+/// family resolution headlessly. And not that a configured `line-height` reaches a
+/// pixel: its arithmetic is unit-tested and [`cell_metrics_for_smoke`] demonstrably
+/// feeds it, but no capture reads a cell height.
+///
+/// ## Red-run reverts
+///
+/// In `app.rs::measure_metrics`, ignore the config and pass literals
+/// (`14.0` / `"DejaVu Sans Mono"` / `100.0`) to `CellMetrics::for_font`: both
+/// launches then report the same width and assertion 2 fires. A second, INDEPENDENT
+/// revert — making `resolve_font_pt` prefer `config_font_size` over the override —
+/// leaves this smoke green, since the override is absent here anyway. That is worth
+/// recording as a known non-discriminator: the precedence rule is pinned by
+/// `config_seam`'s own tests, not by this smoke.
+#[test]
+fn config_font_size_changes_the_grid_under_cage() {
+    const SMOKE: &str = "config_font_size_changes_the_grid_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd shared by both launches. The filler files are the usual
+    // sidebar population; nothing here is OCR'd, so no fixture carries a term.
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(SMOKE, &cwd, &[]);
+
+    let config_small =
+        smoke_config_dir_at(&cwd, CONFIG_GRID_SMALL_SUFFIX, CONFIG_GRID_SMALL_FONT_PT);
+    let config_large =
+        smoke_config_dir_at(&cwd, CONFIG_GRID_LARGE_SUFFIX, CONFIG_GRID_LARGE_FONT_PT);
+    assert_ne!(
+        config_small,
+        config_large,
+        "{SMOKE}: both runs were pointed at the SAME config directory {}, so they would read the \
+         same font-size and the strict inequality below could never hold. The two suffixes \
+         ({CONFIG_GRID_SMALL_SUFFIX:?} and {CONFIG_GRID_LARGE_SUFFIX:?}) must differ.",
+        config_small.display()
+    );
+
+    let width_small = runtime_dir.join(CONFIG_GRID_SMALL_READBACK_NAME);
+    let width_large = runtime_dir.join(CONFIG_GRID_LARGE_READBACK_NAME);
+    for path in [&width_small, &width_large] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let mut cmd = cage_command(CONFIG_GRID_SCENARIO, &cwd);
+    cmd.env("WOLF_BIN", bin)
+        .env("CONFIG_DIR_SMALL", &config_small)
+        .env("CONFIG_DIR_LARGE", &config_large)
+        .env("WIDTH_SMALL", &width_small)
+        .env("WIDTH_LARGE", &width_large);
+
+    // THE line that makes this smoke mean anything. `WOLF_FONT_PT` wins over the
+    // configured `font-size` everywhere else in this file and in the shipped app,
+    // so leaving it set would have BOTH launches measure at SMOKE_FONT_PT, report
+    // identical widths, and fail assertion 2 for a reason that has nothing to do
+    // with the config being read. It is removed here, and only here, on purpose.
+    cmd.env_remove("WOLF_FONT_PT");
+
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless configured-font-size scenario");
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage configured-font-size scenario exited unsuccessfully ({status}). Exit \
+         11: run 1's app died before its window mapped — with WOLF_FONT_PT removed, a panic in \
+         the config path (`load_config`, `resolve_font_pt`, or a non-positive size reaching \
+         `for_font`) is the first thing to look at. Exit 12: run 1 was still alive after `:qa!`. \
+         Exit 13: run 1 exited NON-ZERO — it went away, but not cleanly. Exit 14: run 1's width \
+         readback never appeared at {}. Exit 15/16/17/18: the same four for run 2, whose readback \
+         is at {}.",
+        width_small.display(),
+        width_large.display()
+    );
+
+    // --- Precondition: both runs came up and reported a real column count -----
+    //
+    // A missing or unparseable file means the app never got far enough to answer,
+    // NOT that the config was ignored — the two failures need different fixes, so
+    // they are separated here rather than folded into the comparison below.
+    let small_raw = read_trimmed(&width_small, SMOKE);
+    let large_raw = read_trimmed(&width_large, SMOKE);
+    let small_cols = parse_readback_int(&small_raw, &width_small, &small_raw, SMOKE);
+    let large_cols = parse_readback_int(&large_raw, &width_large, &large_raw, SMOKE);
+    for (label, cols, font_pt) in [
+        ("small", small_cols, CONFIG_GRID_SMALL_FONT_PT),
+        ("large", large_cols, CONFIG_GRID_LARGE_FONT_PT),
+    ] {
+        assert!(
+            cols > 0,
+            "{SMOKE}: the {label} run (font-size {font_pt}) reported winwidth(0) = {cols}. A \
+             non-positive column count means the pane never bound a grid, so the comparison below \
+             would be between a real measurement and a placeholder."
+        );
+    }
+
+    // --- Assertion 2: the discriminating one ----------------------------------
+    assert!(
+        small_cols > large_cols,
+        "{SMOKE}: the {CONFIG_GRID_SMALL_FONT_PT} pt run reported {small_cols} columns and the \
+         {CONFIG_GRID_LARGE_FONT_PT} pt run reported {large_cols}. A smaller font means a narrower \
+         cell and therefore MORE columns in the same pane, so the small run must report strictly \
+         more. EQUAL counts are the signature of a build that never read the config: \
+         `app::measure_metrics` is passing a literal family/size to `CellMetrics::for_font` \
+         instead of the loaded `WolfConfig`, or `load_config` resolved no preferences directory \
+         and silently degraded to the built-in defaults for both runs. INVERTED counts would mean \
+         the two config directories are wired to the wrong launches."
+    );
+
+    // --- Assertion 3: the sanity bound ----------------------------------------
+    let gap = small_cols - large_cols;
+    assert!(
+        gap >= CONFIG_GRID_MIN_COLUMN_GAP,
+        "{SMOKE}: the two runs differ by only {gap} column(s) ({small_cols} at \
+         {CONFIG_GRID_SMALL_FONT_PT} pt vs {large_cols} at {CONFIG_GRID_LARGE_FONT_PT} pt), below \
+         the {CONFIG_GRID_MIN_COLUMN_GAP}-column floor. Doubling the point size roughly halves the \
+         column count, so a difference this small says the size reaching the metrics is not the \
+         one the config names — a clamped or partially-applied value rather than an ignored one. \
+         Assertion 2 alone would accept it, which is exactly why this bound exists."
     );
 }
 
@@ -15842,7 +16521,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// | the active-pane FOCUS RING's top edge — a long thin high-contrast line immediately above the heading | six ablations on one PNG; the top edge alone accounted for it | [`DIVIDER_RELAUNCH_SCENARIO`]'s closing `<C-w>h`, which moves the ring to the WIDE pane |
 /// | a single misclassified GLYPH at 15 columns | the same pixels read through both segmentation modes, twice over | the second reader, [`ocr_uniform_block_to_lowercase`] |
 ///
-/// The third is why this smoke, alone of the thirty-four, reads its capture twice.
+/// The third is why this smoke, alone of the thirty-five, reads its capture twice.
 /// With the first two answered, on one retained PNG:
 ///
 /// | command | verbatim output |

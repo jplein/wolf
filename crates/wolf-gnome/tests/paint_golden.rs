@@ -37,6 +37,12 @@ const ROWS: usize = 2;
 const FONT_FAMILY: &str = "DejaVu Sans Mono";
 /// Pinned font size, in points.
 const FONT_SIZE_PT: f64 = 16.0;
+/// Line-height handed to `CellMetrics::for_font`, as a percentage of the font
+/// size. This is the value `wolf_core::default_config()` ships, so the fixture
+/// exercises the path a user gets rather than a special case; at 16 pt it makes
+/// the cell taller than the glyph box, which is what gives
+/// [`the_baseline_centres_the_glyph_box_in_the_cell`] something to measure.
+const LINE_HEIGHT_PERCENT: f64 = 130.0;
 
 /// Highlight id carrying a distinct fg/bg (anything non-zero; 0 is the default).
 const DEFINED_HL_ID: u64 = 7;
@@ -131,18 +137,26 @@ fn fixture_snapshot() -> Snapshot {
     snap
 }
 
+/// Measures `CellMetrics` for one family/size/line-height against a throwaway 1x1
+/// surface.
+///
+/// The probe surface's pixel size is irrelevant — it exists only to obtain a Pango
+/// context — which is the same idiom `wolf_gnome::app::measure_metrics` and
+/// `tests/smoke_headless.rs::cell_metrics_for_smoke` use, so all three measure the
+/// same way.
+fn probe_metrics(family: &str, size_pt: f64, line_height_percent: f64) -> CellMetrics {
+    let probe = ImageSurface::create(Format::ARgb32, 1, 1).expect("probe surface");
+    let probe_cr = Context::new(&probe).expect("probe context");
+    CellMetrics::for_font(&probe_cr, family, size_pt, line_height_percent)
+}
+
 /// Measures `CellMetrics` against a throwaway 1x1 surface, then sizes the real
 /// surface to exactly `COLS x ROWS` cells and paints the fixture onto it.
 ///
 /// Returns the painted surface plus the metrics so the caller can compute cell
 /// rectangles. The surface is returned `mut` so the caller can borrow its data.
 fn render_fixture() -> (ImageSurface, CellMetrics) {
-    // Metrics need a context to measure, but the measuring surface size is
-    // irrelevant; create a minimal one.
-    let probe = ImageSurface::create(Format::ARgb32, 1, 1).expect("probe surface");
-    let probe_cr = Context::new(&probe).expect("probe context");
-    let metrics = CellMetrics::for_font(&probe_cr, FONT_FAMILY, FONT_SIZE_PT);
-    drop(probe_cr);
+    let metrics = probe_metrics(FONT_FAMILY, FONT_SIZE_PT, LINE_HEIGHT_PERCENT);
 
     let width = (metrics.cell_w * COLS as f64).ceil() as i32;
     let height = (metrics.cell_h * ROWS as f64).ceil() as i32;
@@ -284,6 +298,264 @@ fn paint_draws_ink_for_glyph_cell() {
         found_ink,
         "glyph cell rect ({x0}..{x1}, {y0}..{y1}) should contain non-background \
          ink (the rendered glyph)"
+    );
+}
+
+// --- Cell metrics: what the configured line-height and family actually do ----
+
+/// A family fontconfig provably cannot resolve.
+///
+/// The devShell's generated `FONTCONFIG_FILE` exposes exactly three pinned font
+/// trees (DejaVu, JetBrains Mono, iA Writer Mono S) and no host font directory, so
+/// no installed font can carry this name. The hex suffix is there so the string
+/// cannot collide with a family someone adds later.
+const NO_SUCH_FAMILY: &str = "Wolf No Such Family 8f3a1c";
+
+/// The point size the two family-resolution and dpi cases below probe at.
+///
+/// It is the smokes' `WOLF_FONT_PT`, which is where the measured numbers in
+/// [`the_measured_cell_height_matches_the_96_dpi_arithmetic`] come from.
+const SMOKE_PROBE_SIZE_PT: f64 = 28.0;
+
+/// The line-height at which `round(28 * 96 / 72 * p / 100)` reproduces the
+/// measured 28 pt glyph box exactly.
+const SMOKE_PROBE_LINE_HEIGHT: f64 = 118.0;
+
+/// The cell height MEASURED for [`FONT_FAMILY`] at [`SMOKE_PROBE_SIZE_PT`] and
+/// [`SMOKE_PROBE_LINE_HEIGHT`] on this repo's pinned font stack, in device pixels.
+///
+/// Stated as a literal on purpose. Writing it as
+/// `(28.0 * 96.0 / 72.0 * 118.0 / 100.0).round()` would restate the
+/// implementation's own arithmetic and would then pass against whatever dpi
+/// `for_font` happened to use — which is exactly the value under test.
+const SMOKE_PROBE_CELL_H: f64 = 44.0;
+
+/// The line-height that selects `cell_metrics_math::cell_height`'s natural-metrics
+/// branch, which is any value that is not positive.
+///
+/// `wolf_core::load_or_create` does not validate the key, so a hand-written
+/// `line-height: 0` in a user's `wolf-config.yaml` arrives at `for_font` unchanged.
+const NATURAL_LINE_HEIGHT_PERCENT: f64 = 0.0;
+
+/// The cell height MEASURED for [`FONT_FAMILY`] at [`FONT_SIZE_PT`] and
+/// [`NATURAL_LINE_HEIGHT_PERCENT`] on this repo's pinned font stack, in device
+/// pixels.
+///
+/// A literal, and never `ceil(ascent + descent + leading)` or any other restatement
+/// of the arithmetic under test. A re-derived expectation moves with the code it
+/// checks: written that way, this one holds even with the `leading` clamp deleted,
+/// which is the single thing
+/// [`the_natural_line_height_clamps_a_face_whose_recommended_height_is_short`] is
+/// here to catch.
+const CLAMPED_NATURAL_CELL_H: f64 = 26.0;
+
+#[test]
+fn a_larger_line_height_yields_a_taller_cell() {
+    let small = probe_metrics(FONT_FAMILY, FONT_SIZE_PT, 100.0);
+    let large = probe_metrics(FONT_FAMILY, FONT_SIZE_PT, 160.0);
+
+    assert!(
+        large.cell_h > small.cell_h,
+        "cell height at 160% ({}) is not greater than at 100% ({}). Equal heights mean \
+         `for_font` ignores its `line_height_percent` argument entirely — the shape the \
+         pre-config code had, where `cell_h` was `ascent + descent` — so the configured \
+         line-height reaches no pixel at all.",
+        large.cell_h,
+        small.cell_h
+    );
+
+    // 160% must be 1.6x the 100% cell, to within the rounding to a whole device
+    // pixel that both calls perform. Without this the assertion above would be
+    // satisfied by any monotonic response, including one that ignored the
+    // magnitude and merely added a constant.
+    let expected = small.cell_h * 1.6;
+    let drift = (large.cell_h - expected).abs();
+    assert!(
+        drift <= 1.0,
+        "cell height at 160% is {}, which is {drift} away from 1.6x the 100% height ({expected} = \
+         {} * 1.6). Only whole-device-pixel rounding may separate them, so a drift above 1.0 means \
+         the percentage is being applied to something other than the font size.",
+        large.cell_h,
+        small.cell_h
+    );
+}
+
+#[test]
+fn the_advance_width_is_independent_of_the_line_height() {
+    let small = probe_metrics(FONT_FAMILY, FONT_SIZE_PT, 100.0);
+    let large = probe_metrics(FONT_FAMILY, FONT_SIZE_PT, 160.0);
+
+    // Bit-equal, not approximately equal: both come from the same
+    // `approximate_char_width` for the same face at the same size, so any
+    // difference at all means the width was derived from the height.
+    assert_eq!(
+        small.cell_w, large.cell_w,
+        "cell width moved with the line-height ({} at 100% vs {} at 160%). Line-height is a \
+         VERTICAL rule; a width that tracks it means `cell_w` was made a function of `cell_h`, \
+         which silently re-columns every pane and moves every pointer smoke's pixel targets.",
+        small.cell_w, large.cell_w
+    );
+}
+
+#[test]
+fn the_baseline_centres_the_glyph_box_in_the_cell() {
+    let m = probe_metrics(FONT_FAMILY, FONT_SIZE_PT, LINE_HEIGHT_PERCENT);
+
+    // Fixture precondition. With a cell exactly as tall as the glyph box the
+    // leftover is zero, the baseline IS the ascent, and the assertion below holds
+    // for the pre-config `baseline: ascent` too — a vacuous pass.
+    assert!(
+        m.cell_h > m.ascent + m.descent,
+        "fixture precondition: at {FONT_SIZE_PT} pt and {LINE_HEIGHT_PERCENT}% the cell ({}) must \
+         be TALLER than the glyph box (ascent {} + descent {} = {}), or there is no leftover space \
+         to split and this case cannot tell the centring rule from `baseline = ascent`. If the \
+         pinned font's metrics moved, raise LINE_HEIGHT_PERCENT for this case rather than dropping \
+         the assertion.",
+        m.cell_h,
+        m.ascent,
+        m.descent,
+        m.ascent + m.descent
+    );
+
+    let leftover_above = (m.cell_h - m.ascent - m.descent) / 2.0;
+    assert!(
+        (m.baseline - m.ascent - leftover_above).abs() < 1e-9,
+        "the baseline is {} with ascent {}, descent {} and cell height {}. It must be \
+         `ascent + (cell_h - ascent - descent) / 2` = {}, so the glyph box sits centred with \
+         {leftover_above} px above and the same below. A baseline equal to the ascent ({}) is the \
+         pre-config value, and with it `draw_glyph` paints every glyph flush against the cell top \
+         inside a taller cell.",
+        m.baseline,
+        m.ascent,
+        m.descent,
+        m.cell_h,
+        m.ascent + leftover_above,
+        m.ascent
+    );
+}
+
+#[test]
+fn an_unresolvable_family_still_measures_and_is_not_rewritten() {
+    let missing = probe_metrics(NO_SUCH_FAMILY, SMOKE_PROBE_SIZE_PT, LINE_HEIGHT_PERCENT);
+
+    // (a) Pango substitutes rather than failing. There is no error path and no
+    // zero-metrics path to detect, which is the premise the crate's
+    // no-fallback-of-our-own decision rests on — so it is measured here rather
+    // than assumed.
+    assert!(
+        missing.cell_w > 0.0 && missing.cell_h > 0.0 && missing.baseline.is_finite(),
+        "measuring the unresolvable family {NO_SUCH_FAMILY:?} produced cell_w = {}, cell_h = {}, \
+         baseline = {}. Pango is expected to substitute a face from the pinned fontconfig and \
+         always yield usable metrics; a zero or non-finite value here means it does not, and the \
+         crate would then need the explicit fallback it deliberately does not have.",
+        missing.cell_w,
+        missing.cell_h,
+        missing.baseline
+    );
+
+    // (b) With a positive line-height the cell height is a function of the font
+    // size alone, so it cannot depend on which face was substituted.
+    let pinned = probe_metrics(FONT_FAMILY, SMOKE_PROBE_SIZE_PT, LINE_HEIGHT_PERCENT);
+    assert_eq!(
+        missing.cell_h, pinned.cell_h,
+        "the unresolvable family measured cell_h = {} while {FONT_FAMILY:?} measured {}. At \
+         {LINE_HEIGHT_PERCENT}% the cell height is `round(size_px * percent / 100)` and reads no \
+         font metric, so the two MUST agree bit for bit. A difference means the positive path \
+         fell back to `ascent + descent`, and the row height would then change whenever \
+         fontconfig's substitution changed.",
+        missing.cell_h, pinned.cell_h
+    );
+
+    // (c) This crate performs no family substitution of its own: the description
+    // still carries exactly what the caller asked for.
+    let requested = missing.font.family();
+    assert_eq!(
+        requested.as_deref(),
+        Some(NO_SUCH_FAMILY),
+        "the measured font description reports family {requested:?}, not the requested \
+         {NO_SUCH_FAMILY:?}. Rewriting the family — a macOS-style `makeFont` fallback to \
+         `DejaVu Sans Mono` or to `monospace` — is the change this crate refuses: CoreText returns \
+         a DIFFERENT family and so must be checked, while Pango substitutes per lookup and always \
+         yields usable metrics, so a hand-rolled fallback here is dead code that can only override \
+         fontconfig's better answer."
+    );
+}
+
+#[test]
+fn the_measured_cell_height_matches_the_96_dpi_arithmetic() {
+    // `pangocairo::functions::context_get_resolution` returns -1.0 on a context
+    // created over an `ImageSurface` — measured on this host, not inferred — so
+    // `for_font`'s 96.0 dpi arm is the LIVE path on every headless run, not a
+    // defensive guard. Nothing else in the suite pins it: every other cell-metric
+    // assertion here is relative (taller than, equal to, centred within) and would
+    // hold at any dpi applied consistently.
+    //
+    // 44.0 is MEASURED for the pinned DejaVu Sans Mono at 28 pt and 118%, and is
+    // also that face's `ascent + descent` at that size. A change to it means one of
+    // two things and they need different fixes: the dpi fallback stopped firing (a
+    // context that reports a real resolution, or a changed fallback condition), or
+    // the pinned font moved (a different `FONTCONFIG_FILE`, or a nixpkgs bump of
+    // `dejavu_fonts`). Re-measure before touching the literal.
+    let m = probe_metrics(FONT_FAMILY, SMOKE_PROBE_SIZE_PT, SMOKE_PROBE_LINE_HEIGHT);
+
+    assert_eq!(
+        m.cell_h, SMOKE_PROBE_CELL_H,
+        "{FONT_FAMILY:?} at {SMOKE_PROBE_SIZE_PT} pt and {SMOKE_PROBE_LINE_HEIGHT}% measured \
+         cell_h = {}, not the measured {SMOKE_PROBE_CELL_H}. At 96 dpi that is \
+         round(28 * 96/72 * 1.18) = round(44.05); a value near 33 means 72 dpi (the fallback \
+         stopped firing and the context reported its own resolution), and any other value means \
+         the substituted face changed. Every compositor smoke's cell geometry rides on this \
+         number.",
+        m.cell_h
+    );
+
+    // The property that makes the smoke suite's pixel constants hold: with the cell
+    // exactly as tall as the glyph box, `baseline - ascent` is 0.0 and
+    // `draw_glyph`'s offset moves no glyph at all.
+    assert_eq!(
+        m.baseline, m.ascent,
+        "at the smokes' font size and line-height the cell is exactly the glyph box, so the \
+         baseline ({}) must equal the ascent ({}) and `draw_glyph`'s `baseline - ascent` offset \
+         must be exactly 0.0. A non-zero offset shifts every glyph vertically, and every OCR and \
+         pointer smoke is calibrated against the unshifted position.",
+        m.baseline, m.ascent
+    );
+}
+
+/// `for_font`'s clamp on `leading` is what keeps a face whose RECOMMENDED line
+/// height is shorter than its own glyph box from shrinking the natural cell.
+///
+/// Measured on this host, twice and independently, under the devShell's pinned
+/// `FONTCONFIG_FILE`: [`FONT_FAMILY`] at [`FONT_SIZE_PT`] pt reports an ascent of
+/// 20, a descent of 6 and a `metrics.height() / SCALE` of 25, so the raw
+/// `height - ascent - descent` is `-1`. The `.max(0.0)` in `render.rs` turns that
+/// into a `leading` of `0.0`, and the natural branch then gives
+/// `ceil(20 + 6 + 0) == 26` — the glyph box — where the unclamped `-1` gives 25.
+/// This repo's pinned font is a unit short of its own glyph box at this size, so
+/// the clamp is a live case rather than a hypothetical one.
+///
+/// This is the only case that reaches `cell_metrics_math::cell_height`'s
+/// non-positive branch THROUGH `for_font`. That module's own unit tests call
+/// `cell_height` directly with a hand-written `leading`, and the clamp sits between
+/// the real Pango metrics and that argument — so a synthetic fixture passes over it
+/// and no value one could hand in makes it observable. Only a case that measures a
+/// real face crosses it, which is why this one lives here and not in that module's
+/// `#[cfg(test)] mod tests`.
+#[test]
+fn the_natural_line_height_clamps_a_face_whose_recommended_height_is_short() {
+    let m = probe_metrics(FONT_FAMILY, FONT_SIZE_PT, NATURAL_LINE_HEIGHT_PERCENT);
+
+    assert_eq!(
+        m.cell_h, CLAMPED_NATURAL_CELL_H,
+        "{FONT_FAMILY:?} at {FONT_SIZE_PT} pt with `line-height: {NATURAL_LINE_HEIGHT_PERCENT}` \
+         measures cell_h = {}, not the measured {CLAMPED_NATURAL_CELL_H}. This face reports a \
+         recommended height of 25 against an ascent + descent of 26 at this size, so the \
+         `.max(0.0)` clamp on `leading` in `render.rs`'s `for_font` is the only thing standing \
+         between those two numbers. A 25 means that clamp is gone and the negative leading reached \
+         `cell_height`; a 1 means the non-positive branch is gone, so `round(21.33 * 0 / 100)` ran \
+         instead and the degenerate floor caught its 0; any other value means the substituted face \
+         or the 96 dpi conversion moved, and the literal is to be re-measured rather than adjusted.",
+        m.cell_h
     );
 }
 

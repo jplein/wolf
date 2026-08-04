@@ -45,15 +45,18 @@
 
         isDarwin = pkgs.stdenv.isDarwin;
 
-        # NOTE: `rustToolchain`, `wolfPointerInject` and the GTK/Neovim packages
-        # below are only ever forced when `linuxShell` is evaluated. On Darwin
-        # `devShells.default` resolves to `darwinShell`, which references none of
-        # them, so Nix's laziness keeps these Linux-only derivations off the
-        # Darwin eval path. `wolfPointerInject` in particular is a Wayland
-        # program that could not build on Darwin at all; it is safe only because
-        # nothing outside `linuxShell.packages` forces the thunk. Do not add a
-        # top-level reference to it, and do not wrap it in a `lib.optional`
-        # guard — a guard would imply this laziness argument is unsound.
+        # NOTE: `rustToolchain`, `wolfPointerInject`, `iaWriterMono` and the
+        # GTK/Neovim packages below are only ever forced when `linuxShell` is
+        # evaluated. On Darwin `devShells.default` resolves to `darwinShell`,
+        # which references none of them, so Nix's laziness keeps these
+        # Linux-only derivations off the Darwin eval path. `wolfPointerInject`
+        # in particular is a Wayland program that could not build on Darwin at
+        # all; it is safe only because nothing outside `linuxShell.packages`
+        # forces the thunk. `iaWriterMono` is arch-independent data and COULD
+        # build on Darwin, so the laziness argument is safer there than here —
+        # but the rule is the same for both. Do not add a top-level reference to
+        # either, and do not wrap either in a `lib.optional` guard: a guard would
+        # imply this laziness argument is unsound.
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [
             "rust-src"
@@ -137,6 +140,48 @@
             '';
           };
 
+        # The vendored iA Writer Mono S static faces plus their licence, from the
+        # SAME pinned commit tarball `bazel/ia-writer-mono/extensions.bzl`
+        # fetches.
+        #
+        # The URL and the sha256 below are THE SAME PIN as `_COMMIT` / `_SHA256`
+        # there, so the asset has one pin and not two. BUMP BOTH TOGETHER: this
+        # file and bazel/ia-writer-mono/extensions.bzl.
+        #
+        # Linux-only in practice — see the NOTE above about why it stays off the
+        # Darwin eval path.
+        iaWriterMono =
+          let
+            commit = "f32c04c3058a75d7ce28919ce70fe8800817491b";
+          in
+          pkgs.stdenv.mkDerivation {
+            pname = "ia-writer-mono-s";
+            # The pin is the commit, not a release.
+            version = "0-unstable-2023";
+            src = pkgs.fetchurl {
+              url = "https://github.com/iaolo/iA-Fonts/archive/${commit}.tar.gz";
+              sha256 = "826767eaea4ce43ccb7ca71327a5c63ac31206b99df400699e6744df6104e1b5";
+            };
+            sourceRoot = "iA-Fonts-${commit}";
+            dontConfigure = true;
+            dontBuild = true;
+
+            # Every path is quoted: the in-archive directory name contains
+            # spaces ("iA Writer Mono/Static/").
+            installPhase = ''
+              runHook preInstall
+              for f in Regular Italic Bold BoldItalic; do
+                install -Dm644 "iA Writer Mono/Static/iAWriterMonoS-$f.ttf" \
+                  "$out/share/fonts/truetype/iAWriterMonoS-$f.ttf"
+              done
+              # A font we ship carries its licence with it (SIL OFL 1.1,
+              # upstream LICENSE.md).
+              install -Dm644 "iA Writer Mono/LICENSE.md" \
+                "$out/share/licenses/ia-writer-mono/LICENSE.md"
+              runHook postInstall
+            '';
+          };
+
         darwinShell = pkgs.mkShell {
           packages = [
             pkgs.bazelisk
@@ -190,7 +235,16 @@
             pkgs.freetype
             pkgs.dejavu_fonts
 
-            # GATE-REQUIRED: the thirty-four headless end-to-end smoke tests in
+            # The two EDITOR font families the shared wolf-config.yaml can name;
+            # `iA Writer Mono S` is what `wolf_core::default_config()` asks for,
+            # so without these a default config would resolve to a substituted
+            # face. The deterministic-render property is preserved because the
+            # fontconfig template still exposes only these three pinned trees and
+            # no host font directory.
+            pkgs.jetbrains-mono
+            iaWriterMono
+
+            # GATE-REQUIRED: the thirty-five headless end-to-end smoke tests in
             # crates/wolf-gnome/tests/smoke_headless.rs run as part of a plain
             # `cargo test` (no `--ignored`). They launch the real window under a
             # headless Wayland compositor and OCR a screenshot, so these five
@@ -228,11 +282,15 @@
 
             # Pin the font stack for deterministic golden renders. We generate a
             # fontconfig file from the repo-controlled template that exposes ONLY
-            # the pinned DejaVu fonts (no host font dirs) and point FONTCONFIG_FILE
-            # at it. This keeps glyph measurement/rasterization reproducible.
+            # the three pinned font trees — DejaVu, JetBrains Mono and iA Writer
+            # Mono S — with no host font dirs, and point FONTCONFIG_FILE at it.
+            # This keeps glyph measurement/rasterization reproducible while
+            # letting the shared wolf-config.yaml name either editor family.
             __wolf_fonts_conf="$(mktemp -t wolf-fonts.XXXXXX.conf)"
             ${pkgs.gnused}/bin/sed \
-              "s|@DEJAVU_FONTS@|${pkgs.dejavu_fonts}|g" \
+              -e "s|@DEJAVU_FONTS@|${pkgs.dejavu_fonts}|g" \
+              -e "s|@JETBRAINS_MONO@|${pkgs.jetbrains-mono}|g" \
+              -e "s|@IA_WRITER_MONO@|${iaWriterMono}|g" \
               "$PWD/crates/wolf-gnome/testdata/fonts.conf" > "$__wolf_fonts_conf"
             export FONTCONFIG_FILE="$__wolf_fonts_conf"
 

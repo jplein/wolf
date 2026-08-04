@@ -20,7 +20,7 @@ The repo ships an `.envrc` that runs `use flake` on both Linux and macOS. Activa
 direnv allow
 ```
 
-The Linux shell supplies the pinned Rust toolchain (`rust-src`, `rust-analyzer`, `clippy`, `rustfmt`), a pinned hermetic Neovim exported as `WOLF_NVIM_BIN`, a pinned ripgrep exported as `WOLF_RG_BIN`, the GTK4 and libadwaita stack `wolf-gnome` needs, and a generated `FONTCONFIG_FILE` that pins the font stack so the offscreen golden render is reproducible. Do not reach for a system `cargo`, `rustc`, `nvim` or `rg` — `flake.nix` pins all four, and builds and tests must run inside the shell.
+The Linux shell supplies the pinned Rust toolchain (`rust-src`, `rust-analyzer`, `clippy`, `rustfmt`), a pinned hermetic Neovim exported as `WOLF_NVIM_BIN`, a pinned ripgrep exported as `WOLF_RG_BIN`, the GTK4 and libadwaita stack `wolf-gnome` needs, and a generated `FONTCONFIG_FILE` that pins the font stack to three vendored families — DejaVu plus the two the shared `wolf-config.yaml` can name — with no host font directory, so the offscreen golden render is reproducible. Do not reach for a system `cargo`, `rustc`, `nvim` or `rg` — `flake.nix` pins all four, and builds and tests must run inside the shell.
 
 `WOLF_NVIM_BIN` is the only way core and its tests locate Neovim: never `PATH`, never a scan of `/nix/store`. Unset, `WolfCore::start` fails with `NvimError::BinNotSet` and the wolf-core integration tests panic loudly rather than skip. `WOLF_RG_BIN` locates ripgrep the same way; unset, content search degrades to an empty session carrying an error.
 

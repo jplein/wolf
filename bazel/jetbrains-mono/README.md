@@ -6,6 +6,8 @@ This package downloads the pinned GitHub release-asset zip for JetBrains Mono (s
 
 `//crates/wolf-macos:Wolf` bundles the result at `Contents/Resources/fonts/` — the same directory the `//bazel/ia-writer-mono` tree merges into — where `FontRegistration.swift` registers the TTFs with CoreText (`CTFontManagerRegisterFontURLs`) so `"JetBrains Mono"` resolves in `CellMetrics.swift`. JetBrains Mono is bundled and registered but is not the config default font-family; iA Writer Mono S is (see [`bazel/ia-writer-mono/README.md`](../ia-writer-mono/README.md)).
 
+On Linux the same family comes from `pkgs.jetbrains-mono` in `flake.nix`, which resolves to `jetbrains-mono-2.304` at the pinned nixpkgs — the same version this package pins. The two are pinned independently and neither follows the other, so a bump here has to be checked against the flake's nixpkgs rather than assumed to move with it. Unlike [`//bazel/ia-writer-mono`](../ia-writer-mono/README.md), there is no shared URL or sha256 to keep in step.
+
 ## The pin
 
 - Version: `2.304`
@@ -48,5 +50,7 @@ use_repo(jetbrains_mono, "jetbrains_mono")
 1. Pick the new version and update `_VERSION` in `extensions.bzl`. The `_URL` (and the archive's inner filenames) auto-follow.
 2. Recompute the checksum: `curl -L https://github.com/JetBrains/JetBrainsMono/releases/download/v<version>/JetBrainsMono-<version>.zip -o f.zip && shasum -a 256 f.zip`. Update `_SHA256`.
 3. Confirm the TTF paths in the new archive with `unzip -l f.zip` (verify the flat layout and the exact `fonts/ttf/JetBrainsMono-<Face>.ttf` filenames — a wrong path makes the explicit `runtime_files` list fail to resolve). If a face is renamed or relocated, update the `runtime_files` filegroup and/or the `replace_prefixes` map accordingly.
-4. Regenerate the lockfile (a plain build does this with `--lockfile_mode=update`) and commit `MODULE.bazel.lock`.
-5. Re-run `bazel test //bazel/jetbrains-mono:jetbrains_mono_tree_test`.
+4. Check what version `pkgs.jetbrains-mono` resolves to at the flake's pinned nixpkgs, and record the divergence in this file if the two disagree.
+5. Compare the new archive's `OFL.txt` against `crates/wolf-core/src/licenses/jetbrains-mono-OFL.txt` and replace it if the text moved; that committed copy is what the shipped binary and every rendered preview document carry.
+6. Regenerate the lockfile (a plain build does this with `--lockfile_mode=update`) and commit `MODULE.bazel.lock`.
+7. Re-run `bazel test //bazel/jetbrains-mono:jetbrains_mono_tree_test`.

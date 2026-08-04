@@ -6,14 +6,28 @@ The GTK front-end's modules, one entry each. The pure seams here are the Linux c
 
 ## Files
 
+#### `about.rs`
+
+Purpose: the About dialog — a pure text seam over the bundled fonts' licence notices, plus the transient window that shows it. This is the one surface on this front-end that discharges the fonts' attribution obligation, so its content has legal weight rather than cosmetic weight.
+
+**Public API**
+
+- `about_text() -> String` — the whole dialog body. It takes no arguments and reads `wolf_core::FONT_LICENSE_NOTICES` itself, deliberately: a version taking the notices as a parameter would let its test pass them in, which proves nothing about what ships.
+- `present(parent)` — a modal `gtk::Window` transient for the main window, titled `ABOUT_TITLE`.
+
+**Decisions**
+
+- Plain GTK over `adw::AboutDialog` or `adw::AboutWindow`, which need the `v1_5` and `v1_2` `libadwaita` features. [DECISIONS.md](../DECISIONS.md) records that this crate's `libadwaita` carries no version feature on purpose, so adding one for a single dialog would change the crate's build contract and put the whole smoke suite on the devShell's libadwaita version.
+- A separate toplevel rather than a fifth in-window overlay, so the main window's focus widget is untouched and the focus regime — which is about widgets inside the main window being destroyed — does not apply.
+
 #### `actions.rs`
 
 Purpose: the action namespace as data — every `gio` action name, its accelerator, the `wolf_core::Command` behind it, its binding status, and its menu placement — plus the chord matcher and the invariant checker. It names no widget type, so it is tested with no display.
 
 **Public API**
 
-- `ACTION_TABLE` and `MENU_SECTIONS` — the source of truth the menu, the accelerators, and the command dispatch all read, so none can drift.
-- `BindingStatus` — `Bound` is registered and matched; `Reserved` is declared for a later unit and is neither; `MenuOnly` carries no chord.
+- `ACTION_TABLE` and `MENU_SECTIONS` — the one table the menu, the accelerators and the command dispatch all read; see [DECISIONS.md](../DECISIONS.md).
+- `BindingStatus` — `Bound` is registered and matched; `Reserved` is declared for a later unit and is neither; `MenuOnly`, which About uses, carries no chord.
 - `action_for_key(keyval, state)` — the matcher the chord controller calls. It scans `Bound` rows only: matching a reserved row would swallow the key and do nothing.
 - `parse_accel` and `forbidden_reason` — the invariant checker, run over every row by this module's tests.
 
@@ -36,11 +50,11 @@ Purpose: all GTK and Adwaita window wiring. `run` builds the `adw::Application` 
 
 **Decisions**
 
-- Before any widget exists, the state store is opened and turned into a restore plan, so the launch decisions are known while the window is still being built. A missing state directory degrades every later state call to a no-op.
+- Before any widget exists, the state store is opened into a restore plan and the user config is loaded, so the launch decisions are known while the window is still being built. Each degrades with one message: a no-op state store, or the built-in config defaults.
 - The saved layout is queued with no arity guard, one half of the content-predicate rule in [DECISIONS.md](../DECISIONS.md).
 - Cell metrics are measured once from a throwaway 1x1 `ImageSurface` (used only to obtain a Pango context) and shared by `Rc`, so a resize arriving before the first draw already has a size.
 - The close-request handler flushes state first, while the core and panes are still alive, and takes the core out in its own statement so the borrow is released before `shutdown` blocks. A flush after the take sees no core, is refused by the snapshot gate, and silently loses the session.
-- No title widget is set on the header bar, and that is measured rather than stylistic: the pointer smokes' pane origin is this bar's height. See [DECISIONS.md](../DECISIONS.md).
+- No title widget is set on the header bar, measured rather than stylistic: the pointer smokes' pane origin is this bar's height. See [DECISIONS.md](../DECISIONS.md).
 
 **Gotchas**
 
@@ -68,6 +82,22 @@ Purpose: the buffer-picker overlay — a search entry over the captive Neovim's 
 
 - Closing does not clear the snapshot; the next open overwrites it.
 
+#### `cell_metrics_math.rs`
+
+Purpose: the pure cell-metrics arithmetic the configured `line-height` drives — a port of `WolfKeyMap/CellMetricsMath.swift`, named for its counterpart so the parity obligation is legible. No GTK, Pango or Cairo; every input an `f64`.
+
+**Public API**
+
+- `cell_height(font_size, line_height_percent, ascent, descent, leading)` — a positive, finite percentage gives `round(font_size * percent / 100)`, driven by the font size alone and independent of the raw metrics; anything else gives `ceil(ascent + descent + leading)`.
+- `baseline(cell_height, ascent, descent)` — the baseline offset from the cell's top, splitting the leftover space evenly above and below the glyph box.
+- `MIN_CELL_PX` — the floor a degenerate result collapses to.
+
+**Decisions**
+
+- The rule lives here and not in [`render.rs`](#renderrs) because `for_font` needs a live Cairo context, so a rule left inside it could only be executed by the golden-render target.
+- The function is unit-agnostic and rounds in whatever unit its caller uses: points on macOS, device pixels here, since device pixels are what Cairo paints in.
+- Two divergences from Swift, both strictly more defensive and both confined to inputs macOS also mishandles: the percentage must be finite (Swift's guard accepts `+inf`), and a non-finite or non-positive result is floored (Swift can return `0` or `NaN`).
+
 #### `command_action.rs`
 
 Purpose: the pure mapping from a drained `wolf_core::Command` to the UI action this front-end performs for it. GTK-free, so the whole classification is tested headlessly.
@@ -75,7 +105,7 @@ Purpose: the pure mapping from a drained `wolf_core::Command` to the UI action t
 **Public API**
 
 - `ui_action_for(command) -> UiAction` — total.
-- `ui_action_for_front_end_action(action) -> Option<UiAction>` — what an `actions::ACTION_TABLE` row carrying no command performs, and `None` for anything else. It is the only other way an action is installed.
+- `ui_action_for_front_end_action(action) -> Option<UiAction>` — what an `actions::ACTION_TABLE` row carrying no command performs: the two navigation rows and About. `None` for anything else, and it is the only other way an action is installed.
 - `UiAction` — the dispatched variants, plus `Deferred` and `NoGnomeEquivalent`, each carrying the concrete blocker as a string.
 
 **Decisions**
@@ -88,6 +118,20 @@ Purpose: the pure mapping from a drained `wolf_core::Command` to the UI action t
 **Gotchas**
 
 - A `Deferred` or `NoGnomeEquivalent` command reaching the drain is printed with its reason, never dropped quietly.
+
+#### `config_seam.rs`
+
+Purpose: the pure configuration seam — every rule about consuming a `wolf_core::WolfConfig`. GTK-free and environment-free: [`app.rs`](#apprs) does the environment read and the file load, this module decides what the values mean. The Linux counterpart of [`state_seam.rs`](#state_seamrs).
+
+**Public API**
+
+- `resolve_font_pt(env_override, config_font_size) -> f64` — the first of the two that is finite and strictly positive, else `FALLBACK_FONT_PT`. Both inputs come from a human, so `0`, a negative and a non-finite value are all reachable, and any of them reaching Pango draws nothing with no error anywhere.
+- `unsupported_settings(config) -> Vec<UnsupportedSetting>` — one row per configured setting this front-end reads and does not honour, each carrying the key, the value and the reason.
+
+**Decisions**
+
+- The override is injected rather than read here, which is what makes the precedence rule testable without touching the process environment — something a parallel test suite cannot safely do.
+- A forced `appearance` produces a row; `macos_option_as_alt` produces none, however it is set. The asymmetry is deliberate: one config file is shared across both platforms and that key's own name says which platform it is for, so a warning would fire on every Linux launch for a setting that is correct where its author wrote it. A named test pins it.
 
 #### `crash_overlay.rs`
 
@@ -194,7 +238,7 @@ Purpose: crate root. Declares the modules and re-exports the display-free seams 
 
 - `cell_at` is re-exported because `grid_size_for` is, and the two are a pair whose composition is the point.
 - `restart_button_rect` is re-exported for one concrete consumer: the crash-overlay smoke derives the pixel it clicks from the same function the widget builder realizes, so the two cannot drift.
-- Items in `actions`, `buffer_picker`, `crash_overlay`, `cursor`, `layout`, `mouse`, `nav_ui`, `palette`, `pane_layout`, `pane_view`, `persistence`, `picker`, `refresh_coalescer`, `search_overlay`, `shell`, `tree`, `tree_gate`, and `tree_view` are reached by module path rather than re-exported.
+- Items in `about`, `actions`, `buffer_picker`, `cell_metrics_math`, `config_seam`, `crash_overlay`, `cursor`, `layout`, `mouse`, `nav_ui`, `palette`, `pane_layout`, `pane_view`, `persistence`, `picker`, `refresh_coalescer`, `search_overlay`, `shell`, `tree`, `tree_gate`, and `tree_view` are reached by module path rather than re-exported.
 
 #### `liveness_ui.rs`
 
@@ -383,13 +427,14 @@ Purpose: the Cairo/Pango paint seam. `paint` rasterizes one grid and its highlig
 
 **Public API**
 
-- `CellMetrics::for_font(cr, family, size_pt)` — uses `cr` only to obtain a Pango context, so the surface's size is irrelevant; the advance width comes from Pango's approximate char width, which is exact for a monospace font.
+- `CellMetrics::for_font(cr, family, size_pt, line_height_percent)` — uses `cr` only for a Pango context, so the surface's size is irrelevant. The advance width is Pango's approximate char width, unrounded; the cell height and baseline come from [`cell_metrics_math`](#cell_metrics_mathrs), and the measured `ascent`/`descent` ride along on the result.
 - `paint(cr, grid, highlights, metrics)` — takes one grid rather than a whole `Snapshot`, because under `ext_multigrid` a front-end paints a single grid per surface.
 
 **Decisions**
 
+- `draw_glyph` moves to `y + baseline - ascent`, not the cell top: Pango puts the layout's top at the move-to point, so a cell taller than the glyph box would hang the glyphs from its top edge. At a cell exactly the glyph box the offset is `0.0`.
+- The 96 dpi fallback behind the point-to-device-pixel conversion is the live path on every headless run, not a guard: `context_get_resolution` returns `-1.0` over an `ImageSurface`.
 - Every cell's background rectangle is filled, including empty ones, which keeps wide-character trailing placeholders and never-painted cells aligned.
-- A cell with empty text gets its background and no glyph.
 - Bold, italic, and single underline render; undercurl and strikethrough do not.
 
 **Gotchas**

@@ -205,7 +205,9 @@
 //!    That body-only swap is sound ONLY because the in-app preview's `<head>` is
 //!    INVARIANT: [`crate::nvim::Nvim::render_preview`] pins
 //!    [`PreviewTheme::Default`] + [`WidthMode::Full`], and everything
-//!    [`render_html`] puts in the head is a compile-time constant — so the head is
+//!    [`render_html`] puts in the head is a compile-time constant — the CSS, the
+//!    two inlined faces, and the HTML comment carrying
+//!    [`crate::licenses::FONT_LICENSE_NOTICES`] — so the head is
 //!    byte-identical on every render, INCLUDING across a dark/light flip (that flip
 //!    is a `prefers-color-scheme` media query inside the constant CSS; only the
 //!    body's inline `style="color:#…"` highlight spans change). It also matters
@@ -515,9 +517,11 @@ pub fn code_blocks(source: &str) -> Vec<CodeBlockInfo> {
 /// forward-compatible per-line / per-100-column position markers embedded.
 ///
 /// The rendered Markdown body is wrapped as
-/// `<!doctype html><html><head><meta charset="utf-8"><style>{INTER_FONT_FACE}{MATH_FONT_FACE}{BASE_CSS}{MATH_CSS}{theme_css}{width_css}</style></head><body class="wolf-markdown">{body}</body></html>`
-/// so the front-end web view can load the string directly. See the module docs for
-/// the marker scheme and its DOM placement.
+/// `<!doctype html><html><head><meta charset="utf-8"><!--\n{FONT_LICENSE_NOTICES}\n--><style>{INTER_FONT_FACE}{MATH_FONT_FACE}{BASE_CSS}{MATH_CSS}{theme_css}{width_css}</style></head><body class="wolf-markdown">{body}</body></html>`
+/// so the front-end web view can load the string directly. The comment carries
+/// [`crate::licenses::FONT_LICENSE_NOTICES`], which is how the four bundled fonts'
+/// attribution reaches a reader of the preview. See the module docs for the marker
+/// scheme and its DOM placement.
 ///
 /// `width_mode` selects the content-area sizing: [`WidthMode::Full`] appends no
 /// width CSS (full-bleed; the in-app webview frame caps it), while
@@ -583,10 +587,20 @@ pub fn render_html_with_highlights(
         WidthMode::Full => "",
     };
 
+    // The bundled fonts' licence notices go in the HEAD, as an HTML comment, and
+    // never inside the body: `base.css` selects the document's first and last real
+    // block with `body.wolf-markdown > *:not(.wolf-src):not(*:not(.wolf-src) ~ *)`
+    // and `:has(~ *:not(.wolf-src))`, so a new element child inside <body> takes
+    // `:last-child` and strips the real last block's bottom-margin reset. The
+    // leading `\n` is load-bearing too: `<!--` followed by `>` or `->` closes a
+    // comment immediately, and the newline puts the block's first character out of
+    // that position whatever it later becomes.
     format!(
         "<!doctype html><html><head><meta charset=\"utf-8\">\
+         <!--\n{licenses}\n-->\
          <style>{INTER_FONT_FACE}{MATH_FONT_FACE}{BASE_CSS}{MATH_CSS}{theme}{width_css}</style>\
          </head><body class=\"wolf-markdown\">{body}</body></html>",
+        licenses = crate::licenses::FONT_LICENSE_NOTICES,
         theme = theme_css(theme),
     )
 }

@@ -216,6 +216,23 @@ Pure Markdown to themed-HTML rendering for the preview pane: a `&str` to `String
 - Marker placement, its byte-identity guard, its exclusions, and the document-order guarantee consumers depend on are one contract with a long half-life: see [the preview position-marker contract](../DECISIONS.md).
 - Math and highlighted code are `Event::InlineHtml`, so the writer passes them through verbatim and the injector never reads them as a block start.
 - `CAPPED_WIDTH_CSS` is horizontal-only: the baseline grid depends on the body's vertical box.
+- The head carries [`licenses.rs`](#licensesrs)'s notices as a constant HTML comment — how the inlined faces' attribution reaches a reader. It may not move into the body; see [`markdown/README.md`](markdown/README.md).
+
+#### `licenses.rs`
+
+The four bundled fonts' verbatim licence texts, compiled in. Pure data, no GUI and no filesystem: Inter and Latin Modern Math ship as base64 faces inside every preview document, JetBrains Mono and iA Writer Mono S as editor faces. All four are redistributed, so all four owe attribution.
+
+**Public API**
+
+- `FontLicense` — `font`, `license`, `provenance`, `text`. `provenance` names the archive, the path inside it and the pinned sha256, so a bumped text can be re-derived rather than trusted.
+- `FONT_LICENSES` — one row per bundled font, preview faces first.
+- `FONT_LICENSE_NOTICES` — those rows as one plain-text block, and what both consumers read: [`markdown.rs`](#markdownrs)'s document head, and `wolf-gnome`'s About dialog.
+
+**Decisions**
+
+- The block is a `const` built with `concat!` rather than a function, because the preview head it lands in must be byte-identical on every render.
+- Every row carries an explicit trailing newline. `licenses/ia-writer-mono-LICENSE.txt` ends without one, and the three files that do end in one are exactly what would hide that.
+- The two texts under `licenses/` are committed as `.txt`, so prettier's Markdown gate cannot reformat a third party's licence. That directory has no README: per `CLAUDE.md`, a helper directory with no consumer of its own is documented by its parent's entry, which is this one.
 
 ### Search, traversal, and ranking
 

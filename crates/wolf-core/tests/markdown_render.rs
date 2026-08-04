@@ -2964,3 +2964,109 @@ fn nested_table_in_a_list_item_takes_no_inline_marker() {
          — excluded from the block, never dropped: {html}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Bundled-font licence notices in the document HEAD.
+//
+// The four fonts this crate bundles are compiled into `wolf_core::licenses` and
+// emitted into every rendered document's `<head>` as an HTML comment. These two
+// cases assert the user-facing half of that: that the notices REACH a rendered
+// document at all, and that they land where they cannot disturb the stylesheet.
+//
+// Following this file's stated re-declare-do-not-import discipline, the four
+// distinctive phrases are local literals. Importing them from
+// `wolf_core::licenses` would make these cases assert that a constant equals
+// itself, and they would keep passing with the head interpolation deleted.
+// ---------------------------------------------------------------------------
+
+/// Inter's distinctive phrase, from its own copyright line.
+///
+/// All four phrases below come from a copyright line rather than from the shared
+/// OFL boilerplate: three of the four texts are the same licence, so a boilerplate
+/// phrase would be present whichever texts were emitted and could not tell a
+/// complete block from a partial one.
+const LICENCE_PHRASE_INTER: &str = "The Inter Project Authors";
+/// Latin Modern Math's distinctive phrase. Shaped unlike the other three because
+/// the GUST file carries no copyright line — this is the only line naming the
+/// rights holder.
+const LICENCE_PHRASE_LATIN_MODERN: &str = "GUST is the Polish TeX Users Group";
+/// JetBrains Mono's distinctive phrase, from its copyright line.
+const LICENCE_PHRASE_JETBRAINS: &str = "The JetBrains Mono Project Authors";
+/// iA Writer Mono S's distinctive phrase. It deliberately omits the copyright
+/// glyph and the quoted reserved font name: a literal that has to match bytes
+/// exactly is safer with no non-ASCII character and no escaped quote in it.
+const LICENCE_PHRASE_IA_WRITER: &str = "Information Architects Inc.";
+
+/// Each bundled font paired with the phrase that identifies its licence text, so a
+/// failure message names which font lost its attribution.
+const LICENCE_PHRASES: [(&str, &str); 4] = [
+    ("Inter", LICENCE_PHRASE_INTER),
+    ("Latin Modern Math", LICENCE_PHRASE_LATIN_MODERN),
+    ("JetBrains Mono", LICENCE_PHRASE_JETBRAINS),
+    ("iA Writer Mono S", LICENCE_PHRASE_IA_WRITER),
+];
+
+#[test]
+fn every_bundled_font_licence_ships_in_the_rendered_document() {
+    // The obligation this discharges is a licence-compliance one, not a cosmetic
+    // one: two of these fonts are embedded in the document as base64 `@font-face`
+    // payloads, and the other two ship as editor faces in the same distribution.
+    let html = render_html("# Hi\n\ntext", PreviewTheme::Default, WidthMode::Full);
+
+    for (font, phrase) in LICENCE_PHRASES {
+        assert!(
+            html.contains(phrase),
+            "the rendered document does not contain {phrase:?}, the distinctive phrase \
+             from {font}'s licence. All four missing means the `{{licenses}}` \
+             interpolation was dropped from `render_html_with_highlights`'s format \
+             string; one missing means that font's row left `FONT_LICENSES` or its \
+             `include_str!` was re-pointed. Either way a rendered preview — the \
+             surface a reader actually sees — ships the font with no attribution."
+        );
+    }
+}
+
+#[test]
+fn the_licence_notices_sit_in_the_document_head() {
+    // Placement is load-bearing, not tidiness. `base.css` selects the first and last
+    // real block with `body.wolf-markdown > *:not(.wolf-src):not(*:not(.wolf-src) ~ *)`
+    // and `:has(~ *:not(.wolf-src))`, so a new element child inside <body> takes
+    // `:last-child` and the real last block loses its bottom-margin reset — which
+    // `every_vertical_dimension_is_on_the_baseline_grid` is the standing guard for.
+    // The head placement is also what keeps `markdown.rs`'s "the head is
+    // byte-identical on every render" premise true, since the notices are a
+    // compile-time constant.
+    let html = render_html("# Hi\n\ntext", PreviewTheme::Default, WidthMode::Full);
+
+    let body_at = html.find("<body").unwrap_or_else(|| {
+        panic!("the rendered document has no `<body` tag at all: {html}");
+    });
+
+    for (font, phrase) in LICENCE_PHRASES {
+        let first = html.find(phrase).unwrap_or_else(|| {
+            panic!(
+                "the rendered document does not contain {phrase:?} ({font}) anywhere, so its \
+                 PLACEMENT cannot be judged. Read \
+                 `every_bundled_font_licence_ships_in_the_rendered_document` first — it fails for \
+                 the same reason and explains it."
+            )
+        });
+        assert!(
+            first < body_at,
+            "{font}'s licence phrase {phrase:?} first appears at byte {first}, after `<body` at \
+             byte {body_at}. The notices must sit in the `<head>`: inside `<body>` they take \
+             `:last-child` (or, prepended, the first-block selector) and silently strip the \
+             margin reset off the document's real last block."
+        );
+
+        // The discriminating negative: a block emitted in BOTH places would satisfy
+        // the check above while still breaking the body's margin resets.
+        let last = html.rfind(phrase).unwrap_or(first);
+        assert!(
+            last < body_at,
+            "{font}'s licence phrase {phrase:?} also appears at byte {last}, after `<body` at byte \
+             {body_at}. A second copy inside the body is exactly as damaging to `base.css`'s \
+             first/last-block selectors as moving it there would be."
+        );
+    }
+}
