@@ -1151,19 +1151,26 @@ const RESTART_HEADING: &str = "# BOUNCEBACK";
 /// How many filler lines [`restart_fixture_body`] writes below the heading.
 ///
 /// LOAD-BEARING for smoke B, not decoration. Its probe click at
-/// `(PROBE_X, PROBE_Y)` must land on a REAL cell — measured `line 8, col 18` — or
-/// [`assert_probe_cell_and_pane_origin`]'s `MIN_PROBE_CELL` precondition fires and
-/// the whole pane-origin derivation (and therefore the button point) means nothing.
-/// A one-line fixture would clamp every click to `(1, 1)`. Nineteen filler lines
-/// plus the heading is twenty buffer lines, comfortably more than the measured
-/// `winheight(0)` of 14.
+/// `(PROBE_X, PROBE_Y)` must land on a REAL cell — measured 2026-08-04 as
+/// `line 5, col 17` — or [`assert_probe_cell_and_pane_origin`]'s `MIN_PROBE_CELL`
+/// precondition fires and the whole pane-origin derivation (and therefore the button
+/// point) means nothing. A one-line fixture would clamp every click to `(1, 1)`.
+/// Nineteen filler lines plus the heading is twenty buffer lines, comfortably more
+/// than the measured `winheight(0)` of 11. The margin scales the safe way: what this
+/// constant has to beat is the VISIBLE row count, which the per-pane chrome reduces.
 const RESTART_FILLER_LINE_COUNT: usize = 19;
 
 /// How many `x`s each filler line carries after its three-digit ordinal, so every
 /// filler line is exactly [`FIXTURE_LINE_WIDTH`] characters — the same width, and
 /// for the same two reasons, as the `:put` fixture in [`POINTER_PREAMBLE`]: wide
-/// enough that a click at column 18 is not clamped to end-of-line, and narrow enough
-/// that `opt.wrap` / `opt.linebreak` never soft-wrap it.
+/// enough that a click at the probe column (measured 2026-08-04 as column 17) is not
+/// clamped to end-of-line, and narrow enough that `opt.wrap` / `opt.linebreak` never
+/// soft-wrap it.
+///
+/// It is also the slack in [`RESTART_UNSAVED_MARKER`]'s zero-margin fit: 3 + this +
+/// the marker is the composed width that must not exceed the pane's `winwidth(0)`,
+/// and this term is the one to shorten if it ever does, since it is inert page
+/// density and the marker is an asserted term.
 const RESTART_FILLER_LINE_PAD: usize = 27;
 
 /// Lowercased substring OCR must find to prove the FIXTURE BUFFER is on screen and
@@ -1272,10 +1279,9 @@ const RESTART_OCR_OVERLAY: &str = "crashed";
 ///
 /// ## ZERO MARGIN, recorded rather than fixed
 ///
-/// That assertion now passes at exactly `43 <= 43`. The pane's `winwidth(0)` was 45
-/// before the per-pane chrome and is **43** after it (the coder's measurement,
-/// 2026-08-04), which is precisely the composed line's width: the fixture fits with
-/// nothing to spare. It is green, and it is one character from red.
+/// That assertion passes at exactly `43 <= 43`. The pane's `winwidth(0)` is **43**
+/// (measured 2026-08-04), which is precisely the composed line's width: the fixture
+/// fits with nothing to spare. It is green, and it is one character from red.
 ///
 /// **This is a note, not a licence to buy margin.** Shortening this marker would
 /// change an [`ASSERTED_OCR_TERMS`] entry, and widening the pane is not this
@@ -1826,12 +1832,22 @@ const STALL_RPC_TIMEOUT_MS: &str = "800";
 /// or surface offset under cage — `motion 640 360` was measured arriving at the GTK
 /// client as surface-local `640.00000000, 360.00000000`).
 ///
-/// MEASURED on this host at `WOLF_FONT_PT` = [`SMOKE_FONT_PT`] on a 1280x720 cage
-/// output: `(640, 360)` maps to Neovim cell `(line 8, col 18)`, which satisfies
-/// every geometry precondition at once — `l0 >= 2 && c0 >= 2`;
-/// `c0 + CLICK_DX(7) = 25 <= 30`; `c0 + DRAG_DX(9) = 27 <= 30`; and
-/// `l0 + DRAG_DY(5) = 13 <= 14` visible rows. It is also comfortably inside the LEFT
-/// pane after a 50/50 vertical split, which the wedge smoke depends on.
+/// MEASURED 2026-08-04 on this host at `WOLF_FONT_PT` = [`SMOKE_FONT_PT`] on a
+/// 1280x720 cage output: `(640, 360)` maps to Neovim cell `(line 5, col 17)`, against
+/// a pane of 11 visible rows. That satisfies every geometry precondition at once —
+/// `l0 >= 2 && c0 >= 2` (5 and 17); `c0 + CLICK_DX(7) = 24 <= 30`;
+/// `c0 + DRAG_DX(9) = 26 <= 30`; and `l0 + DRAG_DY(5) = 10 <= 11`. It is also
+/// comfortably inside the LEFT pane after a 50/50 vertical split, which the wedge
+/// smoke depends on.
+///
+/// **The row budget is the tight one, and it is tighter than it was.** The per-pane
+/// chrome costs three rows, so [`assert_fixture_fits`]'s
+/// `probe_line + rows_below <= winheight` clears by a SINGLE row (10 against 11)
+/// where it once cleared by one against 14. Anything that grows the statusbar strip
+/// or the padding spends that row, and the failure lands on `assert_fixture_fits`
+/// with a message naming the row budget — which is the right place, but it is one
+/// row away rather than a comfortable margin. The columns are not close: 26 against a
+/// 30-character fixture line.
 ///
 /// If a phase ever lands within half a pixel of a cell boundary and skews a delta
 /// assertion, the symptom is REPRODUCIBLE, not flaky (fixed output size,
@@ -2064,8 +2080,8 @@ const POINTER_READY_NAME: &str = "wolf-pointer.ready";
 /// How far either side of the MODELLED divider position each bisection starts.
 ///
 /// The model assumes equal shares of the editor pane's width, which is what
-/// `geometry::divider_position` now produces to within a handle — so the seed error
-/// is small, and this margin is sized for the things the model still cannot see: the
+/// `geometry::divider_position` produces to within a handle — so the seed error is
+/// small, and this margin is sized for the things the model cannot see: the
 /// handle's own width per divider in a chain, and the anchor the model starts from
 /// (`PANE_ORIGIN_X_EXPECTED`, which names the text grid's corner rather than the pane
 /// area's). It only has to exceed those while staying INSIDE the neighbouring panes,
@@ -9585,10 +9601,18 @@ fn assert_fixture_fits(smoke: &str, dims: (i64, i64), probe_line: i64, rows_belo
 /// The MODELLED on-screen x of the divider that follows column `index` (1-based)
 /// when the editor pane is divided into `columns` equal columns, in output pixels.
 ///
-/// A model, and knowingly a rough one: a `gtk::Paned` positions its divider at a
-/// fraction of its TRAVEL rather than of its width, so this over-estimates by the
-/// handle and the far child's minimum — worth ~15-20 px per divider here. It exists
-/// only to seed a bisection, which is what actually finds the handle.
+/// A model, and knowingly an approximate one, though the approximation is small:
+/// `geometry::divider_position` places a divider at a fraction of the paned's own
+/// SPAN, which is exactly what equal columns of that span means, so the only error
+/// left is the handle each divider consumes — one pixel under Adwaita's non-wide
+/// separator, and a few more in a chain.
+///
+/// It stays a SEED rather than a target because that handle's width is theme-owned
+/// and its grab area is wider still, so no arithmetic here can name the pixel a press
+/// has to land on. The bisection is what finds it. The second, smaller source of
+/// error is the anchor: [`PANE_ORIGIN_X_EXPECTED`] names the text GRID's left edge,
+/// which sits `editor_inset::EDITOR_PADDING_PX` inside the pane area this model
+/// divides.
 fn equal_share_divider_x(index: i64, columns: i64) -> f64 {
     let editor_w =
         exact_f64(CAGE_OUTPUT_W_EXPECTED, "CAGE_OUTPUT_W_EXPECTED") - PANE_ORIGIN_X_EXPECTED;
@@ -11268,9 +11292,10 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         DIVIDER_BODY_LINE_COUNT + 1,
         "`divider_right_fixture_body` produced {} line(s), expected the heading plus \
          DIVIDER_BODY_LINE_COUNT = {DIVIDER_BODY_LINE_COUNT} body lines. The body's whole job is \
-         to fill the narrow pane past the measured winheight(0) of 14 so no `~` end-of-buffer \
-         column is drawn; a short body puts that column back and tesseract misreads the heading \
-         above it (see DIVIDER_BODY_LINE_COUNT for the ablations that isolated it).",
+         to fill the narrow pane past its visible row count (measured 2026-08-04 at 11, and 14 \
+         before the per-pane chrome took three) so no `~` end-of-buffer column is drawn; a short \
+         body puts that column back and tesseract misreads the heading above it (see \
+         DIVIDER_BODY_LINE_COUNT for the ablations that isolated it).",
         lines.len()
     );
     assert_eq!(
@@ -11319,10 +11344,10 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         PROJSEARCH_BODY_LINE_COUNT + 1,
         "`search_target_fixture_body` produced {} line(s), expected the heading plus \
          PROJSEARCH_BODY_LINE_COUNT = {PROJSEARCH_BODY_LINE_COUNT} body lines. The body fills the \
-         pane past the measured winheight(0) of 14 so no `~` end-of-buffer column is drawn beside \
-         the heading the smoke OCRs (see DIVIDER_BODY_LINE_COUNT for the ablations that isolated \
-         that hazard), and it must be long enough to hold PROJSEARCH_MATCH_LINE = \
-         {PROJSEARCH_MATCH_LINE} at all.",
+         pane past its visible row count (measured 2026-08-04 at 11, and 14 before the per-pane \
+         chrome took three) so no `~` end-of-buffer column is drawn beside the heading the smoke \
+         OCRs (see DIVIDER_BODY_LINE_COUNT for the ablations that isolated that hazard), and it \
+         must be long enough to hold PROJSEARCH_MATCH_LINE = {PROJSEARCH_MATCH_LINE} at all.",
         search_lines.len()
     );
     assert_eq!(
@@ -13887,19 +13912,26 @@ fn close_pane_chord_closes_focused_pane_under_cage() {
 /// arithmetic. Neither can tell you whether a GTK controller ever fires. That —
 /// and only that — is this smoke's subject.
 ///
-/// ## Measured geometry (2026-08-02)
+/// ## Measured geometry (2026-08-04)
 ///
 /// This is the smoke that derives [`PANE_ORIGIN_X_EXPECTED`] /
-/// [`PANE_ORIGIN_Y_EXPECTED`]. On a **1280x720** cage output (the extents
-/// `wolf-pointer-inject` reported on its `ready` line, read back and asserted rather
-/// than assumed) at `WOLF_FONT_PT` = [`SMOKE_FONT_PT`]:
+/// [`PANE_ORIGIN_Y_EXPECTED`], so this table and those two constants are one
+/// measurement written down twice and must never disagree. On a **1280x720** cage
+/// output (the extents `wolf-pointer-inject` reported on its `ready` line, read back
+/// and asserted rather than assumed) at `WOLF_FONT_PT` = [`SMOKE_FONT_PT`]:
 ///
 /// | quantity | value |
 /// | --- | --- |
 /// | cage output size | `1280x720` |
 /// | `cell_w` / `cell_h` | `22.4765625` / `44.0` |
-/// | probe `(640, 360)` -> Neovim cell | `line 8, col 18` |
-/// | derived pane origin | `(257.8984375, 52.0)` |
+/// | probe `(640, 360)` -> Neovim cell | `line 5, col 17` |
+/// | derived GRID origin | `(280.375, 184.0)` |
+/// | the pane's visible rows | 11 |
+///
+/// The origin this smoke derives is the TEXT GRID's corner, not the pane widget's:
+/// it comes from a click-to-cell readback, and the per-pane chrome sits between the
+/// two. The pane area's own corner is a separate measurement,
+/// [`OVERLAY_ORIGIN_X_EXPECTED`] / [`OVERLAY_ORIGIN_Y_EXPECTED`].
 ///
 /// ## Red-run revert
 ///
@@ -14990,9 +15022,9 @@ fn nvim_crash_recovers_and_reopens_the_file_under_cage() {
     // composed from the SAME consts `restart_fixture_body` writes it from, so the two
     // cannot drift.
     //
-    // It now passes at exactly `43 <= 43`: zero margin, green, one column from red.
-    // See [`RESTART_UNSAVED_MARKER`] for what to shorten if the chrome ever grows
-    // again, and for why it is not this marker.
+    // It passes at exactly `43 <= 43`: zero margin, green, one column from red. See
+    // [`RESTART_UNSAVED_MARKER`] for what to shorten if the chrome grows, and for why
+    // it is not this marker.
     let composed_line = format!(
         "{:03}{}{RESTART_UNSAVED_MARKER}",
         1,
@@ -15478,9 +15510,14 @@ fn stalled_nvim_raises_the_stall_overlay_under_cage() {
 /// `(251 + 354.5 + 32, 47 + 344.5 + 32)` = `(637.5, 423.5)`, which
 /// [`pixel_target`]'s round-half-away-from-zero takes to **(638, 424)** — 32.5 px
 /// inside the button's left edge, and on its vertical centre line to within the half
-/// pixel that rounding adds. A verbatim
-/// confirmation of that point from a green run is owed; it is arithmetic from pinned
-/// constants here, not a measurement.
+/// pixel that rounding adds.
+///
+/// CONFIRMED BY EXECUTION, 2026-08-04: this smoke passed in the final verification
+/// gate. That discharges the derivation more directly than a transcript of the
+/// injected point would, because the point is not asserted on — it is either inside
+/// the button, or the restart never fires and the scenario's recovery poll exits 19.
+/// A green run is therefore the observation that the derived point hits the target,
+/// and it is the anchor above that it confirms.
 ///
 /// ## Red-run reverts (five; run EVERY one — pass 5 records the measured outcome)
 ///
@@ -17168,7 +17205,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 ///    grids and paint. The capture is read twice — `--psm 11` through
 ///    [`ocr_to_lowercase`] and `--psm 6` through [`ocr_uniform_block_to_lowercase`]
 ///    — and each term is accepted from either reading, for the reason under
-///    "Reading a 15-cell column" below. Both terms are still demanded literally.
+///    "Reading a narrow column" below. Both terms are still demanded literally.
 ///
 /// The two preconditions before them — the baseline pair is equal, and the drag
 /// moved it — are what separate "the press missed the divider handle" from "the
@@ -17182,47 +17219,61 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// divider drag at all; see [`DIVIDER_RELAUNCH_SCENARIO`]'s `read_widths` for the
 /// measurement that pins the difference.
 ///
-/// The table below is the 2026-08-02 measurement, taken against the PRE-CHROME build
-/// and before `geometry::divider_position` scaled by the paned's span. It is kept as
-/// the record of a real run, and **every numeric cell in it is stale**: the panes are
-/// narrower by the per-pane chrome, and a fresh split no longer lands unequal. **A
-/// re-measurement from a green run is owed** — it is not derivable from here, and
-/// adjusting these numbers to fit would be inventing a measurement.
+/// MEASURED 2026-08-04 on a **1280x720** cage output, from a green run:
 ///
-/// | quantity | value, as measured 2026-08-02 (pre-chrome, pre-span-fix) |
+/// | quantity | value |
 /// | --- | --- |
-/// | paned travel at the drag | `max_position` 1005 px, position 679 px after it, fraction 0.6756 |
-/// | run 1 post-drag, MEASURED at the `resize_grid` calls | 30 and 15 cells, ratio 0.667 |
-/// | run 2's restored panes, MEASURED in pixels | 679 and 349 px — the same 30 and 15 cells |
-/// | run 1 baseline | about 22 and 23 cells |
-/// | the narrow pane against the 14-character heading | 15 columns, one to spare |
+/// | the paned, read live | span 1029 px, `min_position` 63, `max_position` 965 |
+/// | run 1 baseline, a fresh split with equal weights | 21 and 21 cells |
+/// | run 1 post-drag | 28 and 13 cells |
+/// | run 2's restored panes | 28 and 13 cells, identical to run 1's |
+/// | the narrow pane against the asserted TERM | 13 columns against 12 characters |
 ///
-/// Two rows need reading with care rather than merely re-measuring:
+/// The paned's three numbers are one measurement rather than three: `965` is
+/// `(1029 - 1) - 63`, the span less the handle less the end child's floor, and `63`
+/// is `editor_inset::min_pane_size`'s own answer at this cell size. `geometry`'s
+/// [`equal_weights_give_equal_widths`] carries that exact paned as a table row, so
+/// the same arithmetic is asserted from a unit test with no compositor.
 ///
-/// * the `max_position` of 1005 is the OLD one-cell per-pane floor's. The raised
-///   floor makes it 965 at the same span, and `geometry`'s
-///   `equal_weights_give_equal_widths` carries both numbers as table rows precisely
-///   so the difference is visible from a unit test;
-/// * the baseline row is the defect's own fingerprint. Two nominally-equal panes
-///   came out a cell apart because the divider was placed at a fraction of
-///   `max_position`, which subtracts the end child's minimum from one side only.
-///   Equal weights now give equal widths to within the handle, so the re-measured
-///   baseline should read as a PAIR, not a spread — and if it does not, that is a
-///   product defect rather than a number to write down.
+/// The baseline PAIR is the thing to read first. Equal weights give equal widths to
+/// within the handle, which is what makes `21 and 21` the expected shape rather than
+/// a lucky one; a spread of cells there is a product defect with its own unit test,
+/// not a tolerance to widen (see [`BASELINE_TOLERANCE_CELLS`]).
 ///
-/// The margins those figures were sized against still hold in shape: [`MIN_DRAG_CELLS`]
-/// (3) against a move of several cells per pane, [`RATIO_TOLERANCE`] (0.08) against a
-/// run-1-to-run-2 difference of 0, and [`MIN_RATIO_OFFSET`] (0.08) against a ratio
-/// well off centre. The tightest is the heading's spare column, which is what
-/// [`DIVIDER_RELAUNCH_DRAG_PX`] is sized by: widen the drag and the narrow pane
-/// soft-wraps `# DIVIDERBRAVO`, and assertion 3 reads two fragments. That constant
-/// stays at its current value — both preconditions were measured to pass at it after
-/// the chrome landed — so what the re-measurement owes is the spare column's new
-/// size, not a new drag.
+/// The derived margins, from those cell counts: [`MIN_DRAG_CELLS`] (3) sits against a
+/// move of 7 and 8 cells, [`RATIO_TOLERANCE`] (0.08) against a run-1-to-run-2
+/// difference of 0 (the counts are identical), and [`MIN_RATIO_OFFSET`] (0.08)
+/// against a ratio of `28/41` = 0.683, i.e. 0.183 off centre.
 ///
-/// ## Reading a 15-cell column
+/// ## What actually bounds the drag — and it is NOT the heading
 ///
-/// Fitting the heading is necessary and was not sufficient, and three separate
+/// The tightest margin belongs to assertion 3, and its reason is easy to get wrong.
+/// The narrow pane is 13 columns and the heading `# DIVIDERBRAVO` is 14 characters,
+/// so the heading does **not** fit — and does not need to. `runtime/nvim/init.lua`
+/// sets `wrap` and `linebreak`, so the line breaks at the SPACE: the `#` lands alone
+/// on the first screen row and `DIVIDERBRAVO` — the 12-character asserted term — lands
+/// whole on the second, inside 13 columns with one to spare.
+///
+/// So the binding constraint is **12 characters in 13 columns**, and it holds only
+/// because `linebreak` never splits a word. Widening [`DIVIDER_RELAUNCH_DRAG_PX`]
+/// narrows that pane until the term itself no longer fits, at which point `linebreak`
+/// has nowhere left to break and assertion 3 reads two fragments.
+///
+/// **Do not lower the drag "so the 14-character heading fits":** that constraint does
+/// not exist, and tuning against it would trade a real margin for an imaginary one.
+/// The two things that would break the assertion are a narrow pane under 12 columns
+/// and a `linebreak` that stopped breaking at the space. The constant stays at its
+/// current value; both preconditions were measured to pass at it.
+///
+/// ## Reading a narrow column
+///
+/// The ablations below were run on a 15-column pane, before the per-pane chrome
+/// narrowed it to 13. All three findings are properties of the RENDER rather than of
+/// that width — an end-of-buffer marker column, a focus ring's edge, and a
+/// misclassified glyph — and the narrower the column, the more each one matters, so
+/// the answers hold a fortiori. The counts are left as they were measured.
+///
+/// Fitting the term is necessary and was not sufficient, and three separate
 /// things had to be answered before assertion 3 could read the narrow pane. Two are
 /// answered by FIXTURE and one by the READER; each was isolated by measurement on a
 /// retained PNG rather than argued.
@@ -18984,9 +19035,9 @@ fn typed_cd_reroots_the_sidebar_under_cage() {
 /// | 2 | [`assert_png_present`] | precondition — grim produced an image | none; do not invent one | n/a |
 /// | 3 | the `&laststatus` readback is `0` | **precondition** — Neovim draws no statusline of its own, so a filename on the page came from our strip. Asked of the CAPTIVE NEOVIM rather than read off `runtime/nvim/init.lua`, because that file is a premise this test does not control | none; do not invent one | n/a |
 /// | 4 | OCR contains [`STATUS_OCR_MARKER`] | **precondition, not a discriminator** — the capture's proof of life. Its absence means the capture is stale or the cmdline stopped painting, neither of which this unit touches | none; do not invent one | n/a |
-/// | 5 | OCR contains [`STATUS_OCR_A`] | **the discriminator for PER-PANE-ness** | in `draw_pane`, look the cached status up by `self.active_pane.get()` instead of by the `pane_id` being painted — a one-line change. Both strips then read `statusbravo.md`, so this row goes red while row 6 stays GREEN, which is the only revert here that discriminates per-pane-ness rather than presence. | not yet |
-/// | 6 | OCR contains [`STATUS_OCR_B`] | **discriminator for the strip rendering at all**, jointly with row 5 | delete the two `render::draw_text_line` calls from `draw_pane`. Rows 5 and 6 both go red; 5 fails first, so this row has no isolated red run under it. | not yet |
-/// | 7 | `winheight(0)` equals [`STATUS_EXPECTED_WINHEIGHT`] | **the discriminator for the editor inset and the strip's height** — the only end-to-end proof either reaches a pixel | delete the `- 2 * padding` term from `editor_inset::grid_rect`'s `h` (one more row survives) or the `statusbar_h` term (several more) | the constant itself came from this row: landed at `-1`, the first run reported 11, and 11 is what is now pinned (2026-08-04, 1280x720). A red run against a REVERT is still owed. |
+/// | 5 | OCR contains [`STATUS_OCR_A`] | **the discriminator for PER-PANE-ness** | in `draw_pane`, look the cached status up by `self.active_pane.get()` instead of by the `pane_id` being painted — a one-line change. Both strips then read `statusbravo.md`, so this row goes red while row 6 stays GREEN, which is the only revert here that discriminates per-pane-ness rather than presence. | RED: `OCR did not contain "statusalfa" — the name of statusalfa.md, which is open in the FIRST (left) pane and can be drawn only by that pane's status bar. Assertion 4 is GREEN`. **The panic alone does not carry the claim; the TERM COUNTS in that run's dump do: `statusbravo` 3, `statusalfa` 0, `statusready` 1.** Assertion 6's term survives on the page — twice over, as this row's own message tells the reader to check for — while assertion 5's is gone. That asymmetry is what makes the failure discriminate per-pane-ness rather than mere presence. |
+/// | 6 | OCR contains [`STATUS_OCR_B`] | **discriminator for the strip rendering at all**, jointly with row 5 | delete the two `render::draw_text_line` calls from `draw_pane`. Rows 5 and 6 both go red; 5 fails first, so this row has no isolated red run under it. | RED, and the panic NAMES ASSERTION 5 — the test is fail-fast and this row has no isolated red run, exactly as the revert column says. **Its evidence is again the term counts: `statusready` 1, and NOTHING else — neither `statusalfa` nor `statusbravo` is anywhere on the page.** That is what separates this revert from row 5's, where `statusbravo` survived: there one strip still drew, here neither does. |
+/// | 7 | `winheight(0)` equals [`STATUS_EXPECTED_WINHEIGHT`] | **the discriminator for the editor inset and the strip's height** — the only end-to-end proof either reaches a pixel | delete the `- 2 * padding` term from `editor_inset::grid_rect`'s `h` (one more row survives) or the `statusbar_h` term (two more) | RED under BOTH reverts, with assertions 4, 5 and 6 green under each, so both are observed here as a changed row count. **Three distinct values, which is what proves this assertion separates the two terms rather than merely noticing that the chrome changed: baseline 11; without `statusbar_h`, `the focused pane reports winheight(0) = 13`; without `- 2 * padding`, `= 12`.** Both messages read `expected -1` because the constant was still its placeholder when they were taken — the evidence is the REPORTED `winheight(0)`, which the constant since being pinned to 11 does not affect, so neither revert needs re-running. Against the pinned 11 they would read `left: 13` and `left: 12` against `right: 11`. |
 #[test]
 fn pane_status_bar_shows_each_panes_filename_under_cage() {
     const SMOKE: &str = "pane_status_bar_shows_each_panes_filename_under_cage";

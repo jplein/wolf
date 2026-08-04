@@ -220,24 +220,35 @@ mod tests {
     /// states its arithmetic inline and a reader checks a row against the RULE rather
     /// than against a neighbouring row.
     ///
-    /// FALSIFYING EDITS, each with the row aimed at it. Each carries a PREDICTED
-    /// outcome and a `Red run: owed.` — the verbatim failure is the coder's to record
-    /// from an actual red run, since nothing here has been executed.
+    /// FALSIFYING EDITS. Each names the edit, the row it fires on, and the verbatim
+    /// failure measured for it.
     ///
-    /// - Delete the `max(0, …)` on `w`: row 3 yields `w = -10` instead of `0`. That
-    ///   row is the clamp's ONLY discriminator anywhere — see
-    ///   [`grid_size_for_pane_table`]'s non-claim, and do not delete it as redundant.
-    ///   Red run: owed.
+    /// - Delete the `max(0, …)` on `w`: row 3 yields `w = -30` instead of `0`
+    ///   (`10 - 2 * 20`, as that row's own inline arithmetic states). That row is the
+    ///   clamp's ONLY discriminator anywhere — see [`grid_size_for_pane_table`]'s
+    ///   non-claim, and do not delete it as redundant. MEASURED: `case: narrower than
+    ///   the chrome clamps w only — grid_rect(10, 682, 30, 20)`, left
+    ///   `(20.0, 50.0, -30.0, 612.0)`, right `(20.0, 50.0, 0.0, 612.0)`.
     /// - Delete the `max(0, …)` on `h`: row 4 yields `h = -60` instead of `0`.
-    ///   Red run: owed.
+    ///   MEASURED: `case: shorter than the chrome clamps h only — grid_rect(840, 10,
+    ///   30, 20)`, left `(20.0, 50.0, 800.0, -60.0)`, right
+    ///   `(20.0, 50.0, 800.0, 0.0)`.
     /// - Swap `y = statusbar_h + padding` for `y = padding`: row 1 yields `y = 20`.
     ///   This is what covers the origins; a `max(0, …)` added to `x`/`y` is
-    ///   unobservable, since no row drives either origin negative. Red run: owed.
+    ///   unobservable, since no row drives either origin negative. MEASURED:
+    ///   `case: typical pane — grid_rect(840, 682, 30, 20)`, left
+    ///   `(20.0, 20.0, 800.0, 612.0)`, right `(20.0, 50.0, 800.0, 612.0)`.
     /// - Subtract `padding` once instead of twice on `w`: row 1 yields `w = 820`.
-    ///   Red run: owed.
-    /// - Delete the non-finite guard: rows 8, 9 and 10 produce NaN or infinite
-    ///   fields, and `assert_eq!` on a NaN field fails against every expectation.
-    ///   Red run: owed.
+    ///   MEASURED: `case: typical pane`, left `(20.0, 50.0, 820.0, 612.0)`, right
+    ///   `(20.0, 50.0, 800.0, 612.0)`.
+    /// - Delete the non-finite guard: rows 8, 9 and 10 all move, and row 8 fires
+    ///   first. What it produces there is NOT a NaN field: `f64::max` discards a NaN
+    ///   operand, so a NaN `pane_w` yields a `w` of `0.0` and the row fails because
+    ///   the WHOLE-result collapse did not happen, not because a NaN propagated.
+    ///   (Rows 9 and 10 do carry non-finite fields — an infinite `y` and a NaN `x`
+    ///   respectively — but the loop never reaches them.) MEASURED: `case: a NaN pane
+    ///   width collapses the whole result — grid_rect(NaN, 682, 30, 20)`, left
+    ///   `(20.0, 50.0, 0.0, 612.0)`, right `(0.0, 0.0, 0.0, 0.0)`.
     #[test]
     fn grid_rect_table() {
         let cases = [
@@ -377,21 +388,28 @@ mod tests {
     ///
     /// ATTRIBUTION — each falsifying edit leaves a different pair of rows green, so a
     /// failure names which subtraction went missing rather than merely reporting that
-    /// the arithmetic moved. Each carries a PREDICTED outcome and a `Red run: owed.`
-    /// — the verbatim failure is the coder's to record from an actual red run, since
-    /// nothing here has been executed.
+    /// the arithmetic moved. Each names the edit, the row it fires on, and the
+    /// verbatim failure measured for it.
     ///
     /// - Delete the padding subtraction entirely: A gives (105, 40) — 840/8 and
     ///   floor(648/16) — while C and D still pass, so the failure names the PADDING.
-    ///   Red run: owed.
+    ///   MEASURED: `case: A: the chrome costs whole cells in both axes —
+    ///   grid_size_for_pane(840, 680, 32, 20, 8, 16)`, left `(105, 40)`, right
+    ///   `(100, 38)`.
     /// - Delete the strip subtraction: A gives (100, 40) — floor(640/16) — while B
-    ///   and D still pass, so the failure names the STRIP. Red run: owed.
+    ///   and D still pass, so the failure names the STRIP. MEASURED: `case: A`, left
+    ///   `(100, 40)`, right `(100, 38)`.
     /// - Subtract `padding` once instead of twice: A gives (102, 39) and B gives
-    ///   (102, 41); C and D still pass. Red run: owed.
+    ///   (102, 41); C and D still pass. MEASURED: `case: A`, left `(102, 39)`, right
+    ///   `(100, 38)`. The loop is fail-fast, so B's `(102, 41)` is derived rather
+    ///   than observed — A aborts the run before B is reached.
     /// - Round instead of floor when converting the rect's `f64` dimensions to `i32`:
     ///   H gives (100, 38) instead of (100, 37). It is the ONLY row that can catch
     ///   that edit — see non-claim 2 — and its column axis stays green, so the
-    ///   failure names the axis the fractional input reached. Red run: owed.
+    ///   failure names the axis the fractional input reached. MEASURED: `case: H: a
+    ///   fractional strip height is floored, never rounded — grid_size_for_pane(840,
+    ///   680, 32.5, 20, 8, 16)`, left `(100, 38)`, right `(100, 37)` — and the
+    ///   column axis is 100 on both sides, as claimed.
     /// - Row D is the ANCHOR: it is `geometry.rs`'s own first row with no chrome at
     ///   all, so if D ever fails the division changed and this module did not.
     ///
@@ -567,23 +585,37 @@ mod tests {
     /// [`cell_at_over_grid_local_never_exceeds_grid_size_for_pane`] proves can never
     /// escape the grid.
     ///
-    /// FALSIFYING EDITS. Each carries a PREDICTED outcome and a `Red run: owed.` —
-    /// the verbatim failure is the coder's to record from an actual red run, since
-    /// nothing here has been executed.
+    /// FALSIFYING EDITS. Each names the edit, the row it fires on, and the verbatim
+    /// failure measured for it.
     ///
     /// - Return the pair in the other order, `(y - rect.y, x - rect.x)` — the mistake
     ///   `cell_at`'s `(row, col)` return order invites, since this function's is
     ///   `(x, y)`. Rows 2, 3 and 4 move; row 1 stays GREEN, which is why the origin
-    ///   row alone is not enough. Red run: owed.
+    ///   row alone is not enough. MEASURED, firing on row 2 and so leaving row 1
+    ///   green exactly as claimed: `case: one cell in from the origin — grid_local(28,
+    ///   68, GridRect { x: 20.0, y: 52.0, w: 800.0, h: 608.0 }) = (16.0, 8.0), want
+    ///   (8.0, 16.0)`.
     /// - Cross the two subtractions instead, `(x - rect.y, y - rect.x)`: every row
-    ///   including row 1 moves. Red run: owed.
-    /// - Use `rect.y = padding` (i.e. forget the strip): row 3's `-42` becomes `-10`.
-    ///   Red run: owed.
-    /// - Collapse a non-finite coordinate to `0.0` here: rows 6 and 7 move. That
-    ///   collapse would undo `cell_at`'s drag-past-the-edge rule, which distinguishes
-    ///   a NaN (no direction, treated as the origin) from an infinity (a direction,
-    ///   clamped to the far edge) — see `geometry::cell_at_table`, which this table
-    ///   must not contradict. Red run: owed.
+    ///   including row 1 moves. MEASURED, firing on row 1: `case: the grid origin maps
+    ///   to (0, 0) — grid_local(20, 52, …) = (-32.0, 32.0), want (0.0, 0.0)`.
+    /// - Collapse a non-finite coordinate to `0.0` here: rows 5, 6 and 7 all move, and
+    ///   the loop reports row 5 first. That collapse would undo `cell_at`'s
+    ///   drag-past-the-edge rule, which distinguishes a NaN (no direction, treated as
+    ///   the origin) from an infinity (a direction, clamped to the far edge) — see
+    ///   `geometry::cell_at_table`, which this table must not contradict. MEASURED:
+    ///   `case: a NaN x stays NaN — grid_local(NaN, 52, …) = (0.0, 0.0), want
+    ///   (NaN, 0.0)`.
+    ///
+    /// NON-CLAIM, stated because it is the discriminator a reader most expects this
+    /// table to carry: **forgetting the strip in [`grid_rect`] — `y = padding`
+    /// instead of `statusbar_h + padding` — cannot redden this test, and structurally
+    /// cannot.** The rect above is a LITERAL, on purpose, so no edit to `grid_rect`
+    /// reaches this table's inputs at all; that is the same property the paragraph
+    /// above claims as a feature, and it cuts both ways. The edit is caught by
+    /// [`grid_rect_table`]'s third falsifying edit, where row 1's `y` moves from 50 to
+    /// 20. Do not "fix" this by building the rect from a `grid_rect` call: that would
+    /// let a bug in `grid_rect` move these inputs underneath the table and leave every
+    /// row here green.
     #[test]
     fn grid_local_table() {
         let rect = GridRect {
@@ -837,9 +869,12 @@ mod tests {
     /// floor that forgot the strip produces — would satisfy the size assertion.
     ///
     /// FALSIFYING EDIT: drop the `statusbar_h` term from [`min_pane_size`]. Row 1's
-    /// height becomes `16 + 40 = 56`, so `grid_rect(48, 56, 32, 20).h` is
-    /// `56 - 32 - 40 = -16`, clamped to `0` — the `h >= cell_h` assertion fires, and
-    /// the `> 0.0` assertion behind it fires too. Red run: owed.
+    /// height becomes `16 + 40 = 56`, and the row's EQUALITY assertion fires on that
+    /// literal before either property assertion is reached — the `h >= cell_h` and
+    /// `> 0.0` checks behind it are what would catch the same edit in a table whose
+    /// literals had been updated to match it. MEASURED: `case: an integer cell with a
+    /// strip and padding — min_pane_size(8, 16, 32, 20) = (48.0, 56.0), want
+    /// (48.0, 88.0)`.
     ///
     /// FALSIFYING EDIT: use `floor` or a bare cast instead of `ceil` on the cell.
     /// Row 2's non-integer cell then yields `(49, 91)` and its equality assertion
@@ -848,7 +883,9 @@ mod tests {
     /// 9 x 19, too small for the 9.37 x 19.51 cell it is supposed to hold, while
     /// `grid_size_for_pane` still answers (1, 1) from `grid_size_for`'s own clamp —
     /// so a table whose literals were updated to match the broken floor would still
-    /// go red on `rect.w >= cell_w`. Red run: owed.
+    /// go red on `rect.w >= cell_w`. MEASURED: `case: a non-integer cell is ceiled
+    /// before the chrome is added — min_pane_size(9.37, 19.51, 32, 20) = (49.0, 91.0),
+    /// want (50.0, 92.0)`.
     #[test]
     fn min_pane_size_leaves_exactly_one_cell() {
         let cases = [

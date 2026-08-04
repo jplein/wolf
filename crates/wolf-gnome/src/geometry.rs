@@ -824,7 +824,8 @@ mod tests {
     ///   Every row whose fraction is neither 0 nor clamped moves: the loop reports
     ///   "half the SPAN" first, at 500 instead of 532, and the two band-edge rows
     ///   (0.93 -> 930 rather than 990, 0.95 -> 950 rather than the clamp) go with it.
-    ///   Red run: owed.
+    ///   MEASURED: `case: half the SPAN, not half the travel (min 0, max 1000, span
+    ///   1064, fraction 0.5)`, left `500`, right `532`.
     /// - Change the clamp's lower bound from `min` back to `0`. The `0.0 clamps UP`
     ///   row gives 0 instead of 100. MEASURED against the PRE-`span` signature, whose
     ///   message had no `span` field: `case: 0.0 clamps UP to the paned's own minimum
@@ -836,7 +837,10 @@ mod tests {
     ///   min = 900.0, max = 500.0` — which is the whole reason the cap is there.
     /// - Drop the `span <= 0` collapse: the two `span == 0` rows give 100, because
     ///   `round(0 * f)` is 0 and the clamp lifts it to the minimum. Those rows carry
-    ///   a NON-ZERO `min` for exactly that reason. Red run: owed.
+    ///   a NON-ZERO `min` for exactly that reason, and the measured value is that
+    ///   minimum rather than a zero, which is what proves the point. MEASURED:
+    ///   `case: span == 0 with a real travel and a real minimum -> 0 (min 100, max
+    ///   1000, span 0, fraction 0.5)`, left `100`, right `0`.
     ///
     /// A further one, aimed at the rounding rows rather than at either clamp:
     /// replacing `.round()` with `.floor()` fires this table too (MEASURED
@@ -879,7 +883,7 @@ mod tests {
                 expected: 0,
             },
             // --- A degenerate SPAN collapses it too, and that is a SECOND guard
-            // --- rather than a restatement: the span is now the scale, so a paned
+            // --- rather than a restatement: the span is the scale, so a paned
             // --- measured before its first allocation reports a zero one.
             // ---
             // --- Both rows carry min = 100, and that is load-bearing. With min = 0
@@ -970,10 +974,10 @@ mod tests {
             },
             // --- The TOP of the range, where the two quantities part company. A
             // --- fraction of 1 asks for the whole span (1064 px); `max_position`
-            // --- caps it at 1000. The number is what it always was, but it now
-            // --- proves the CLAMP binds rather than that the scale reached `max`
-            // --- exactly — those two are indistinguishable while span == max, which
-            // --- is why the rows below bracket the crossing at 1000/1064.
+            // --- caps it at 1000. What this row proves is that the CLAMP binds, and
+            // --- NOT that the scale reached `max` exactly: the two are
+            // --- indistinguishable at a single fraction of 1, which is why the rows
+            // --- below bracket the crossing at 1000/1064 from both sides.
             DividerCase {
                 desc: "1.0 asks for the WHOLE span, and max_position caps it",
                 min: MIN_POS,
@@ -1110,7 +1114,20 @@ mod tests {
     /// FALSIFYING EDIT: restore `round(max * fraction)`. Row 1 then answers 483,
     /// giving widths 483 and 545, and row 2 answers 503, giving 503 and 525 — spreads
     /// of 62 and 22 px against a bound of 2. Both rows go red, and the second is the
-    /// one that says the old floor was never safe either. Red run: owed.
+    /// one that says the old floor was never safe either.
+    ///
+    /// MEASURED, in two runs, because the loop is fail-fast and row 1 would otherwise
+    /// abort before row 2 ran — the second scoped the edit to the old floor's
+    /// `max_position` (`if max == 1005 { max } else { span }`) so row 2 could be
+    /// reached:
+    ///
+    /// * `case: the raised floor: a 63 px per-pane minimum — divider_position(63, 965,
+    ///   1029, 0.5) = 483, want 515`;
+    /// * `case: the OLD one-cell floor, which HID the defect — divider_position(23,
+    ///   1005, 1029, 0.5) = 503, want 515`.
+    ///
+    /// The second is the load-bearing one: 503 against 515 is the 22 px spread the
+    /// defect always had, measured on the floor that shipped before this unit.
     #[test]
     fn equal_weights_give_equal_widths() {
         let cases = [
@@ -1287,11 +1304,9 @@ mod tests {
     /// literal would suggest coverage that is not here.
     ///
     /// FALSIFYING EDIT: return `Some(0.0)` instead of `None` when `span <= 0`.
-    /// MEASURED against the PRE-rename function, whose message named
-    /// `divider_travel_fraction` and whose first row said "travel": `case: max == 0
-    /// has no travel to be a fraction OF — divider_travel_fraction(0, 0) = Some(0.0),
-    /// want None`. The outcome is unchanged by the rename; only the quoted text is
-    /// stale, so the current spelling is `Red run: owed.`
+    /// MEASURED: `case: span == 0 has nothing to be a fraction OF —
+    /// divider_span_fraction(0, 0) = Some(0.0), want None`, which is the first row of
+    /// the table.
     #[test]
     fn divider_span_fraction_table() {
         let cases = [
@@ -1415,10 +1430,11 @@ mod tests {
     /// "just past a .5 pixel boundary" row then floors 1064 * 0.5009 = 532.9576 to
     /// 532 and reads back 0.5, which is 9e-4 out against a bound of ~4.7e-4. (A bound
     /// of one whole pixel could NOT catch it: `floor`'s error is always strictly less
-    /// than one pixel, which is why the bound is half of one.) The recorded failure
-    /// from the pre-`span` signature quoted a 1000-pixel travel and no longer matches
-    /// anything this test prints, so it is struck rather than left to mislead.
-    /// Red run: owed.
+    /// than one pixel, which is why the bound is half of one.)
+    ///
+    /// MEASURED: `case just past a .5 pixel boundary: 0.5009 -> position 532 -> 0.5,
+    /// which is 0.0009000000000000119 out; at most 0.00046992481303007516 (half a
+    /// pixel of a 1064-pixel span) is allowed`.
     #[test]
     fn divider_position_and_span_fraction_round_trip() {
         // Every forward case must land strictly INSIDE the clamp, and that is a
@@ -1510,12 +1526,19 @@ mod tests {
     /// **The wrong fix this test exists to stop**, because it is the one a later
     /// reader reaches for on seeing that a fraction near 1 cannot be expressed:
     /// rescaling into the reachable band, `low + fraction * (max - low)`. It looks
-    /// like it removes the snap, and it reddens this test twice over — the unclamped
-    /// row's position becomes 550 rather than 532, and idempotence breaks outright
-    /// (550 reads back as 0.5169, which re-applies to 565). It also silently
-    /// redefines what a weight means, since a fraction would then be of the reachable
-    /// band rather than of the pane's width, which is the whole defect again in a new
-    /// spelling. Red run: owed.
+    /// like it removes the snap. It also silently redefines what a weight means, since
+    /// a fraction would then be of the reachable band rather than of the pane's width,
+    /// which is the whole defect again in a new spelling.
+    ///
+    /// MEASURED: `case an unclamped fraction is already its own fixed point:
+    /// divider_position(100, 1000, 1064, 0.5) = 550, want 532`.
+    ///
+    /// The position assertion is what fires, and it fires on the row that is NOT
+    /// clamped — which is the sharper of the two ways this test refuses the edit,
+    /// since it says the rescale is wrong even where nothing needed clamping. The
+    /// idempotence assertion behind it would also fail (550 reads back as 0.5169,
+    /// which re-applies to 565), but it sits after the position check and is never
+    /// reached, so that second failure is derived rather than observed.
     #[test]
     fn clamped_fraction_snaps_once_and_then_holds() {
         for (desc, min, max, span, fraction, expected_p1, clamped) in [

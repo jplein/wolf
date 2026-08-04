@@ -566,8 +566,7 @@ impl PaneInner {
                 .filter_map(|id| {
                     let p = panes.get(&id)?;
                     // A pane with no bound grid has no status to have been read,
-                    // and contributes no path — the same filter the core call used
-                    // to apply.
+                    // and contributes no path.
                     p.grid.get()?;
                     Some((id, p.status.borrow().abs_path.clone()))
                 })

@@ -265,29 +265,39 @@ mod tests {
     /// the two files can be read side by side — the convention
     /// `cell_metrics_math.rs` already follows for `CellMetricsMathTests.swift`.
     ///
-    /// FALSIFYING EDITS. Each carries a PREDICTED outcome and a `Red run: owed.` —
-    /// the verbatim failure is the coder's to record from an actual red run, since
-    /// nothing here has been executed.
+    /// FALSIFYING EDITS. Each names the edit, the row it fires on, and the verbatim
+    /// failure measured for it.
     ///
     /// - `round` instead of `ceil`: ROW 1 is the discriminator, not row 4.
     ///   `13 * 1.25 = 16.25` rounds to 16 and ceils to 17, so row 1 gives
     ///   `(36, 3, 16, 20, 13)`. Row 4's `10 * 1.25 = 12.5` is a TIE, and Rust's
     ///   `f64::round` is half-AWAY-from-zero, so `round` and `ceil` both answer 13
-    ///   there and row 4 stays green under this edit. Red run: owed.
+    ///   there and row 4 stays green under this edit. MEASURED: `case: the macOS
+    ///   worked example, case for case — statusbar_layout(13, 10, 3, 1)`, left
+    ///   `(36.0, 3.0, 16.0, 20.0, 13.0)`, right `(37.0, 3.0, 17.0, 21.0, 13.0)`.
     /// - `floor` or `trunc` instead of `ceil`: row 1 gives `(35, 3, 16, 20, 12)` —
     ///   both line boxes shrink, unlike the `round` edit, which shrinks only the
-    ///   primary — and row 4 moves too, to `(24, 0, 12, 12, 12)`. Red run: owed.
+    ///   primary — and row 4 moves too, to `(24, 0, 12, 12, 12)`. MEASURED: `case: the
+    ///   macOS worked example`, left `(35.0, 3.0, 16.0, 20.0, 12.0)`, right
+    ///   `(37.0, 3.0, 17.0, 21.0, 13.0)`.
     /// - `line_gap` omitted from `secondary_line_top`: row 1 gives sTop 20 and
     ///   height 36. That is the same PAIR the `round` edit produces, and the two are
     ///   told apart by `primary_line_height` — 17 here, 16 there — which is why the
-    ///   assertion compares all five fields rather than the height alone.
-    ///   Red run: owed.
+    ///   assertion compares all five fields rather than the height alone. MEASURED,
+    ///   and the two captures confirm the discrimination side by side: `case: the
+    ///   macOS worked example`, left `(36.0, 3.0, 17.0, 20.0, 13.0)` against the
+    ///   `round` edit's `(36.0, 3.0, 16.0, 20.0, 13.0)` — same height, different
+    ///   `primary_line_height`.
     /// - `vertical_padding` counted once instead of twice: row 1 gives height 34.
-    ///   Red run: owed.
+    ///   MEASURED: `case: the macOS worked example`, left
+    ///   `(34.0, 3.0, 17.0, 21.0, 13.0)`, right `(37.0, 3.0, 17.0, 21.0, 13.0)`.
     /// - [`STATUSBAR_LINE_FACTOR`] changed at all: row 1's `primary_line_height`
-    ///   moves off 17. Red run: owed.
+    ///   moves off 17. MEASURED at `1.5`: `case: the macOS worked example`, left
+    ///   `(42.0, 3.0, 20.0, 24.0, 15.0)`, right `(37.0, 3.0, 17.0, 21.0, 13.0)`.
     /// - Delete the non-finite / negative guard: rows 6, 7 and 8 produce NaN,
-    ///   infinite or negative fields. Red run: owed.
+    ///   infinite or negative fields. MEASURED, firing on row 6: `case: a NaN primary
+    ///   font size collapses the whole result — statusbar_layout(NaN, 10, 3, 1)`, left
+    ///   `(NaN, 3.0, NaN, NaN, 13.0)`, right `(0.0, 0.0, 0.0, 0.0, 0.0)`.
     ///
     /// The guard's own reason, so it is not tidied away as defensive noise: Swift has
     /// none, and an infinite strip height there makes `editor_inset::grid_rect`
@@ -432,19 +442,24 @@ mod tests {
     /// more defensive, in exactly the shape `cell_metrics_math.rs`'s two documented
     /// divergences from Swift already establish for this crate.
     ///
-    /// FALSIFYING EDITS. Each carries a PREDICTED outcome and a `Red run: owed.` —
-    /// the verbatim failure is the coder's to record from an actual red run, since
-    /// nothing here has been executed.
+    /// FALSIFYING EDITS. Each names the edit, the row it fires on, and the verbatim
+    /// failure measured for it.
     ///
     /// - Drop the floor: row 3 gives 4 instead of 9, i.e. a path line small enough
-    ///   that no OCR and few humans could read it. Red run: owed.
+    ///   that no OCR and few humans could read it. MEASURED: `case: the floor wins for
+    ///   a small font — secondary_font_size(5) = 4, want 9`.
     /// - Use `min` where `max` belongs: rows 1, 2 and 5 collapse to 9 and row 3 falls
-    ///   to 4; the loop reports row 1 first. Red run: owed.
+    ///   to 4; the loop reports row 1 first. MEASURED: `case: the scale applies above
+    ///   the floor — secondary_font_size(20) = 9, want 16`.
     /// - Change the scale: rows 1 and 2 move (they are two different multiples, so a
-    ///   changed factor cannot satisfy both by coincidence). Red run: owed.
+    ///   changed factor cannot satisfy both by coincidence). MEASURED at `0.7`:
+    ///   `case: the scale applies above the floor — secondary_font_size(20) = 14,
+    ///   want 16`.
     /// - Drop the `is_finite()` check and lean on `f64::max` alone: row 7 gives
     ///   `+inf`. Row 6 stays GREEN under that edit, which is why the two rows are not
-    ///   redundant — row 7 is the guard's only discriminator. Red run: owed.
+    ///   redundant — row 7 is the guard's only discriminator. MEASURED, and it fires
+    ///   on row 7 with row 6 green as claimed: `case: an infinite primary yields the
+    ///   floor too — secondary_font_size(inf) = inf, want 9`.
     ///
     /// ONE NON-CLAIM, so nobody reads more into row 6 than it holds: it does not on
     /// its own prove an explicit non-finite guard, because a bare
@@ -552,22 +567,45 @@ mod tests {
     /// the two apart, because rows 1 and 2 sit on a black background where they
     /// coincide.
     ///
-    /// FALSIFYING EDITS. Each carries a PREDICTED outcome and a `Red run: owed.` —
-    /// the verbatim failure is the coder's to record from an actual red run, since
-    /// nothing here has been executed.
+    /// FALSIFYING EDITS. Each names the edit, the row it fires on, and the verbatim
+    /// failure measured for it.
     ///
-    /// - Delete the `active` term from `primary_alpha`: row 2's primary becomes
-    ///   (255, 255, 255). Red run: owed.
+    /// - Delete the `active` term from `primary_alpha`. Which row fires depends on
+    ///   which way the term collapses, so both are named rather than left to a
+    ///   reader's assumption. Collapsing it to the INACTIVE factor unconditionally —
+    ///   `primary_alpha = STATUSBAR_INACTIVE_ALPHA` — fires on **row 1**, whose
+    ///   primary becomes (128, 128, 128) and whose secondary follows to (89, 89, 89);
+    ///   row 4 moves too, and the loop reports row 1 first. Collapsing it the other
+    ///   way, to `1.0` unconditionally, leaves row 1 alone and fires on row 2, whose
+    ///   primary becomes (255, 255, 255). MEASURED, and the run took the SECOND
+    ///   direction: `case: an inactive pane dims both lines and is not bold —
+    ///   statusbar_text(#ffffff, #000000, active = false)`, left
+    ///   `{ primary: #ffffff, secondary: #b3b3b3, primary_bold: false }`, right
+    ///   `{ primary: #808080, secondary: #595959, primary_bold: false }`.
     /// - Hardcode `primary_bold`: row 1 or row 2 fires, whichever way it is pinned.
-    ///   Red run: owed.
+    ///   MEASURED, pinned to `true` and so firing on row 2: `case: an inactive pane
+    ///   dims both lines and is not bold`, left `{ …, primary_bold: true }`, right
+    ///   `{ …, primary_bold: false }` — the two colour fields agree, so the flag is
+    ///   the whole of the difference.
     /// - Apply the secondary alpha to the primary line too: row 1's primary becomes
-    ///   (179, 179, 179). Red run: owed.
+    ///   (179, 179, 179). MEASURED: `case: an active pane is full strength and bold —
+    ///   statusbar_text(#ffffff, #000000, active = true)`, left
+    ///   `{ primary: #b3b3b3, secondary: #b3b3b3, … }`, right
+    ///   `{ primary: #ffffff, secondary: #b3b3b3, … }`.
     /// - Composite over black (`fg * alpha`) instead of blending toward `bg`: row 3
     ///   gives (100, 50, 0) and (70, 35, 0), and row 4's secondary gives
-    ///   (140, 70, 0). Red run: owed.
+    ///   (140, 70, 0). MEASURED on row 3, which is the first row a black background
+    ///   cannot hide the difference on: `case: the blend is toward the background, not
+    ///   toward black — statusbar_text(#c86400, #282828, active = false)`, left
+    ///   `{ primary: #643200, secondary: #462300, … }` — exactly (100, 50, 0) and
+    ///   (70, 35, 0) — right `{ primary: #784614, secondary: #603d1a, … }`.
     /// - Scale the secondary alpha by the inactive factor twice
-    ///   (`0.7 * 0.5 * 0.5`): row 2's secondary moves off (89, 89, 89).
-    ///   Red run: owed.
+    ///   (`0.7 * 0.5 * 0.5`): the extra factor applies unconditionally, so it moves
+    ///   the ACTIVE row too and row 1 fires first — row 2 moves behind it. MEASURED:
+    ///   `case: an active pane is full strength and bold`, left
+    ///   `{ primary: #ffffff, secondary: #595959, … }`, right
+    ///   `{ primary: #ffffff, secondary: #b3b3b3, … }`: the secondary lands on
+    ///   (89, 89, 89), the value row 2 expects, while row 1 expects (179, 179, 179).
     ///
     /// TWO NON-CLAIMS:
     ///

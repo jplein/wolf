@@ -94,7 +94,7 @@ Purpose: the pure cell-metrics arithmetic the configured `line-height` drives �
 **Decisions**
 
 - The rule lives here and not in [`render.rs`](#renderrs) because `for_font` needs a live Cairo context, so a rule left inside it could only be executed by the golden-render target.
-- The function is unit-agnostic and rounds in whatever unit its caller uses: points on macOS, device pixels here, since device pixels are what Cairo paints in. [`statusbar_layout.rs`](#statusbar_layoutrs) follows the same convention.
+- The function is unit-agnostic and rounds in whatever unit its caller uses: points on macOS, device pixels here, since device pixels are what Cairo paints in.
 - Two divergences from Swift, both strictly more defensive and both confined to inputs macOS also mishandles: the percentage must be finite (Swift's guard accepts `+inf`), and a non-finite or non-positive result is floored (Swift can return `0` or `NaN`).
 
 #### `command_action.rs`
@@ -172,7 +172,7 @@ Purpose: pure, GTK-free cursor geometry and color logic — the pixel rectangle 
 
 #### `editor_inset.rs`
 
-Purpose: the chrome around a pane's text grid, as arithmetic — the rectangle the grid paints into, the map from a pane-local point into the space [`cell_at`](#geometryrs) speaks, and the grid size left over. A port of `WolfKeyMap/EditorInset.swift`.
+Purpose: the chrome around a pane's text grid, as arithmetic: the rectangle the grid paints into, the map into the space [`cell_at`](#geometryrs) speaks, and the grid size left over. A port of `WolfKeyMap/EditorInset.swift`.
 
 **Public API**
 
@@ -185,12 +185,11 @@ Purpose: the chrome around a pane's text grid, as arithmetic — the rectangle t
 
 - The subtraction and the division stay separate: [`geometry.rs`](#geometryrs) states its composition guarantee over the division alone, and `resize_global` wants that un-inset division for grid 1.
 - Only `w` and `h` clamp at zero, so a pane smaller than its chrome still reports where the grid would start. A non-finite input collapses the whole rectangle, unlike Swift: a NaN origin would poison every pointer event in the pane.
-- No `StatusbarTextSpan` counterpart and no `text_left_inset`. That seam only adds the column cap's centring offset, which this crate has none of, so the painter reads `grid_rect(..).x` and the strip's text shares the grid's origin by construction.
-- The cmdline strip is deliberately not indented: macOS insets a per-pane cmdline; this crate's is one full-width strip at the window bottom.
+- No `StatusbarTextSpan` counterpart and no `text_left_inset`: that seam only adds the column cap's centring offset, which this crate has none of, so the painter reads `grid_rect(..).x` and the strip's text shares the grid's origin.
 
 **Gotchas**
 
-- A point in the strip or in a gutter comes back negative, which `cell_at` clamps to the nearest edge cell; a NaN or an infinity passes through, so `cell_at`'s two non-finite rules survive.
+- A point in the strip or a gutter comes back negative, and nothing is clamped or collapsed here, so `cell_at`'s edge and non-finite rules apply unchanged.
 
 #### `geometry.rs`
 
@@ -259,7 +258,7 @@ Purpose: crate root. Declares the modules and re-exports the display-free seams 
 
 - `cell_at` is re-exported because `grid_size_for` is, and the two are a pair whose composition is the point.
 - `restart_button_rect` is re-exported for one concrete consumer: the crash-overlay smoke derives the pixel it clicks from the same function the widget builder realizes, so the two cannot drift.
-- Items in `about`, `actions`, `buffer_picker`, `cell_metrics_math`, `config_seam`, `crash_overlay`, `cursor`, `editor_inset`, `layout`, `mouse`, `nav_ui`, `palette`, `pane_layout`, `pane_view`, `persistence`, `picker`, `refresh_coalescer`, `search_overlay`, `shell`, `statusbar_layout`, `tree`, `tree_gate`, and `tree_view` are reached by module path rather than re-exported. Neither pane-chrome seam is re-exported, because no consumer outside the crate needs one.
+- Items in `about`, `actions`, `buffer_picker`, `cell_metrics_math`, `config_seam`, `crash_overlay`, `cursor`, `editor_inset`, `layout`, `mouse`, `nav_ui`, `palette`, `pane_layout`, `pane_view`, `persistence`, `picker`, `refresh_coalescer`, `search_overlay`, `shell`, `statusbar_layout`, `tree`, `tree_gate`, and `tree_view` are reached by module path rather than re-exported.
 
 #### `liveness_ui.rs`
 
@@ -524,21 +523,19 @@ Purpose: the pure application-state seam — what to restore at launch, and what
 
 #### `statusbar_layout.rs`
 
-Purpose: the per-pane statusbar's whole rulebook, decidable from values — the strip's height, the top and reserved height of each of its two lines, the secondary line's font size, and both lines' colour and weight. The vertical half ports `WolfKeyMap/StatusbarLayout.swift` constant for constant.
+Purpose: the per-pane statusbar's rulebook, decidable from values. The vertical half ports `WolfKeyMap/StatusbarLayout.swift` constant for constant; the divergences are in [`macos-followups.md`](../../../macos-followups.md).
 
 **Public API**
 
 - `statusbar_layout(primary_font_size, secondary_font_size, vertical_padding, line_gap) -> StatusbarLayout`.
-- `secondary_font_size(primary_font_size) -> f64`, and `statusbar_text(fg, bg, active) -> StatusbarText`.
-- The seven named constants the two functions read, `STATUSBAR_LINE_FACTOR` through `STATUSBAR_INACTIVE_ALPHA`.
+- `secondary_font_size(primary_font_size) -> f64`, and `statusbar_text(fg, bg, active) -> StatusbarText` over the editor's own default foreground and background.
+- The seven named constants those two read, `STATUSBAR_LINE_FACTOR` through `STATUSBAR_INACTIVE_ALPHA`.
 
 **Decisions**
 
-- `statusbar_text` has no macOS counterpart: that side leaves the colour and weight rule inline in its paint function, where the fast suite cannot execute it.
-- Unit-agnostic, per [`cell_metrics_math.rs`](#cell_metrics_mathrs)'s convention; [`pane_view.rs`](#pane_viewrs) calls it in device pixels, from `CellMetrics::size_px`.
-- Both colours blend toward the background rather than toward black, which is exactly what compositing the foreground over an opaque, already-filled band would give — so the strip needs no alpha-capable draw path.
-- The colours are the editor's own defaults, and macOS's non-themed system-label tiers have no counterpart, because this front-end reads no OS theme in either direction ([DECISIONS.md](../DECISIONS.md)).
-- A degenerate input collapses the whole layout to zeros, and any non-finite font size falls to the floor. Swift guards neither, and an infinite strip height leaves an editor painting one cell.
+- Unit-agnostic ([`cell_metrics_math.rs`](#cell_metrics_mathrs)); [`pane_view.rs`](#pane_viewrs) calls it in device pixels, from `CellMetrics::size_px`.
+- Both colours blend toward the background rather than toward black, which is what compositing over the already-filled band gives, so the strip needs no alpha-capable draw path.
+- A degenerate input collapses the whole layout to zeros and a non-finite font size falls to the floor, where Swift guards neither: an infinite strip height leaves an editor painting one cell.
 
 #### `title.rs`
 
