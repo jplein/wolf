@@ -1265,10 +1265,27 @@ const RESTART_OCR_OVERLAY: &str = "crashed";
 /// `winwidth(0)` breaks across screen rows and the asserted word could be split.
 /// After the edit, line 2 is a filler line ([`FIXTURE_LINE_WIDTH`] = 30 characters)
 /// plus this const (13 characters) = **43 characters**, and the smoke asserts that
-/// composed width against the `winwidth(0)` Neovim itself reported (measured 45)
-/// rather than against any assumed number — so the derivation cannot rot silently.
-/// If the fixture or the marker ever grows past the reported width, shorten one of
-/// them; do not weaken the assertion.
+/// composed width against the `winwidth(0)` Neovim itself reported rather than
+/// against any assumed number — so the derivation cannot rot silently. If the fixture
+/// or the marker ever grows past the reported width, shorten one of them; do not
+/// weaken the assertion.
+///
+/// ## ZERO MARGIN, recorded rather than fixed
+///
+/// That assertion now passes at exactly `43 <= 43`. The pane's `winwidth(0)` was 45
+/// before the per-pane chrome and is **43** after it (the coder's measurement,
+/// 2026-08-04), which is precisely the composed line's width: the fixture fits with
+/// nothing to spare. It is green, and it is one character from red.
+///
+/// **This is a note, not a licence to buy margin.** Shortening this marker would
+/// change an [`ASSERTED_OCR_TERMS`] entry, and widening the pane is not this
+/// constant's to do. What it means in practice: any further growth of the per-pane
+/// chrome — a taller strip, more padding — takes a column off this pane and turns the
+/// zero margin into a soft-wrapped line 2, at which point the smoke fails on the
+/// FIXTURE precondition with a message that says so, which is the correct place for
+/// it to fail. Read a red there as "the chrome grew", and fix it by shortening
+/// [`RESTART_FILLER_LINE_PAD`] — which is inert page density — rather than the
+/// marker.
 const RESTART_UNSAVED_MARKER: &str = " UNSAVEDBURST";
 
 /// Lowercased substring OCR must find in the POST-RECOVERY capture, and must NOT
@@ -1863,24 +1880,21 @@ const PANE_ORIGIN_X_EXPECTED: f64 = 280.375;
 /// statusbar strip plus the top padding, so this is the header bar's height plus the
 /// strip plus `EDITOR_PADDING_PX`, plus the probe's sub-cell phase.
 ///
-/// **TRIPWIRE — this pair is no longer the pane AREA's origin.** It used to be both:
-/// the grid's top-left and the pane widget's top-left were the same point. The
-/// per-pane chrome separates them, and two derivations still read this pair as the
-/// area's corner:
+/// **This pair is the TEXT GRID's corner, and [`OVERLAY_ORIGIN_X_EXPECTED`] /
+/// [`OVERLAY_ORIGIN_Y_EXPECTED`] are the pane AREA's.** They are two different
+/// points, measured two different ways — this pair from a click-to-cell readback,
+/// that pair from the overlay's own allocation — and the per-pane chrome is the gap
+/// between them. They look interchangeable and are not: a derivation that wants the
+/// area's corner (the crash overlay's allocation, a divider seed) and reads this pair
+/// instead is out by a statusbar strip and a padding, which is enough to put a click
+/// outside a 320x64 button. Neither pair may be derived from the other; each is
+/// measured, and each carries its own provenance.
 ///
-/// * [`crash_overlay_and_restart_button_recover_under_cage`] derives the crash
-///   overlay's allocation as `output - (PANE_ORIGIN_X_EXPECTED,
-///   PANE_ORIGIN_Y_EXPECTED)`. That one MATTERS — it has to land a click inside a
-///   320x64 button — and its "No magic pixel" section carries the arithmetic of how
-///   far out it now is;
-/// * the two divider smokes seed their bisection from
-///   `PANE_ORIGIN_X_EXPECTED + editor_w * share`. Those are documented as SEEDS ONLY
-///   and the bisection converges from either, so the drift degrades rather than
-///   breaks — but the premise is the same one and should move with it.
-///
-/// The overlay still starts under the header bar; the GRID now starts a strip and a
-/// padding below that. Anything that wants the pane AREA's corner needs an anchor of
-/// its own, measured the same way this one is.
+/// The one place the distinction is currently invisible is the divider smokes' seeds,
+/// which read this pair as the area's left edge. They are documented as SEEDS ONLY
+/// and the bisection converges from either, so nothing there is wrong today — but the
+/// premise is the same one, and if a seed ever stops straddling the divider this is
+/// the first place to look.
 const PANE_ORIGIN_Y_EXPECTED: f64 = 184.0;
 
 /// Half-width of the band the derived pane origin must fall inside.
@@ -1892,6 +1906,40 @@ const PANE_ORIGIN_Y_EXPECTED: f64 = 184.0;
 /// `cell_w` / `cell_h` on top. Those two terms are an unavoidable phase allowance,
 /// NOT slack, and must not be grown to make a failing run pass.
 const PANE_ORIGIN_TOLERANCE_PX: f64 = 12.0;
+
+/// x of the crash OVERLAY's top-left corner in output pixels — the pane area's own
+/// left edge, which is the sidebar's right edge plus the `gtk::Paned` handle.
+///
+/// A SEPARATE measurement from [`PANE_ORIGIN_X_EXPECTED`], and it must stay separate.
+/// That constant is derived from a click-to-cell readback, so it names the TEXT
+/// GRID's corner; this one names the WIDGET's. The per-pane chrome is the difference,
+/// and the two are only ever equal in a build that has none.
+///
+/// MEASURED by the coder, 2026-08-04, on a **1280x720** cage output, from a temporary
+/// tick callback that printed every distinct overlay allocation across the crash, the
+/// restart and the click, and reproduced on a second run: origin `(251, 47)`,
+/// allocation `1029 x 673`. The two agree by construction — `1280 - 251 = 1029` and
+/// `720 - 47 = 673` — so they are one measurement, not two.
+///
+/// ## The cross-check, which is what makes the number trustworthy
+///
+/// It is confirmed a second, independent way: through
+/// `wolf_gnome::restart_button_rect`, against the rendered button as inspected on a
+/// retained capture.
+///
+/// `restart_button_rect(1029, 673)` is `(354.5, 344.5, 320, 64)` —
+/// `x = (1029 - 320) / 2`, and `y = (673 - 144) / 2 + 80` where 144 is the fixed
+/// message + gap + button block and 80 is the message plus the gap. Offset by the
+/// origin that gives absolute `x 605.5..925.5`, `y 391.5..455.5`, against an
+/// independently inspected render of `x 605..925`, `y 392..456`. The two routes agree
+/// to within the half pixel GTK snaps a centred block of odd leftover height by, which
+/// is as close as a pixel-inspected render and a real-valued rect can come.
+const OVERLAY_ORIGIN_X_EXPECTED: f64 = 251.0;
+
+/// y of the crash OVERLAY's top-left corner in output pixels — the `adw::HeaderBar`'s
+/// height, and nothing else. See [`OVERLAY_ORIGIN_X_EXPECTED`] for the measurement,
+/// its date, the cage output size, and the button cross-check that confirms it.
+const OVERLAY_ORIGIN_Y_EXPECTED: f64 = 47.0;
 
 /// The smallest Neovim `line`/`col` the probe click may report. `(1, 1)` is where
 /// the cursor already is, so anything below this means the press never landed and
@@ -2000,11 +2048,12 @@ const POINTER_READY_NAME: &str = "wolf-pointer.ready";
 //
 // A divider is the one target in this file that NO arithmetic here can predict.
 // Its handle is theme-owned (Adwaita's non-wide `paned > separator` is a single
-// pixel, widened by GTK's own invisible grab area), and its position is
-// `round(max_position * fraction)` where `max_position` has ALREADY subtracted the
-// handle and the far child's minimum — so a position modelled from the pane origin
-// and the cell size is out by tens of pixels before it starts, which is more than a
-// handle width.
+// pixel, widened by GTK's own invisible grab area) and its grab area is wider than
+// the pixel it draws, so a position modelled from the pane origin and the cell size
+// can be a handle's width out before anything else goes wrong. The position itself
+// is `round(span * fraction)` clamped into `[min_position, max_position]`, so the
+// model is right in the middle of its range and only approximate at the ends, where
+// the clamp binds.
 //
 // So the two divider smokes BISECT for it, against the only authority available:
 // which Neovim window a click focuses. That is exact and theme-independent. The
@@ -2014,11 +2063,13 @@ const POINTER_READY_NAME: &str = "wolf-pointer.ready";
 
 /// How far either side of the MODELLED divider position each bisection starts.
 ///
-/// The model assumes equal shares of the editor pane's width, but a `gtk::Paned`
-/// positions its divider at a fraction of its TRAVEL (`max_position`), which
-/// excludes the handle and the far child's minimum — worth ~15-20 px per divider at
-/// this output size. This margin only has to exceed that error while staying INSIDE
-/// the neighbouring panes, which are ~340 px wide in the three-pane case.
+/// The model assumes equal shares of the editor pane's width, which is what
+/// `geometry::divider_position` now produces to within a handle — so the seed error
+/// is small, and this margin is sized for the things the model still cannot see: the
+/// handle's own width per divider in a chain, and the anchor the model starts from
+/// (`PANE_ORIGIN_X_EXPECTED`, which names the text grid's corner rather than the pane
+/// area's). It only has to exceed those while staying INSIDE the neighbouring panes,
+/// which are ~340 px wide in the three-pane case.
 const BISECT_SEED_MARGIN_PX: i64 = 128;
 
 /// How many halvings each bisection runs.
@@ -2055,13 +2106,23 @@ const DIVIDER_RELAUNCH_DRAG_PX: i64 = 175;
 /// How far apart three nominally-equal columns may be, in cells, before the
 /// baseline precondition fails.
 ///
-/// They are not exactly equal and cannot be: each `gtk::Paned` positions its
-/// divider at a fraction of its own TRAVEL, which subtracts the handle and the far
-/// child's minimum, so a chain of them lands the columns within about a cell of
-/// each other rather than identical. The widths themselves are exact —
-/// `winwidth()` reports the grid size the front-end asked for, and
-/// `nvim_ui_try_resize_grid` was MEASURED not to reflow Neovim's own window layout,
-/// so resizing one pane's grid cannot take columns from another's.
+/// This is SLACK, not a modelled error. `geometry::divider_position` positions a
+/// divider at a fraction of the paned's own SPAN, so equal weights give equal widths
+/// to within the handle plus the half pixel rounding can move an odd span's midpoint
+/// — under one cell at this font size, and pinned as a unit property by
+/// `geometry::equal_weights_give_equal_widths`. Two cells therefore leaves room for a
+/// chain of paneds to accumulate their handles without ever describing a spread the
+/// arithmetic is expected to produce.
+///
+/// The widths themselves are exact — `winwidth()` reports the grid size the
+/// front-end asked for, and `nvim_ui_try_resize_grid` was MEASURED not to reflow
+/// Neovim's own window layout, so resizing one pane's grid cannot take columns from
+/// another's.
+///
+/// **Do not widen it to absorb a real spread.** A baseline that comes out cells apart
+/// means equal weights stopped giving equal widths, which is a product defect with
+/// its own unit test; the last time this constant was calibrated against one, it hid
+/// the defect for the whole life of the divider feature.
 const BASELINE_TOLERANCE_CELLS: i64 = 2;
 
 /// The smallest width change, in cells, that counts as "this drag moved the
@@ -9679,11 +9740,11 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
             && by + bh + margin <= overlay_h,
         "{smoke}: the derived restart-button rect ({bx}, {by}, {bw}, {bh}) does not sit at least \
          {margin} px clear of every edge of the {overlay_w}x{overlay_h} overlay allocation. The \
-         five candidate causes, in order of likelihood: (1) THE CALLER IS MODELLING THE WRONG \
-         ALLOCATION, because it derived it as `output - PANE_ORIGIN_*` and those two constants are \
-         the TEXT GRID's corner rather than the overlay's — see the TRIPWIRE on \
-         PANE_ORIGIN_Y_EXPECTED, and expect this overlay to be roughly the per-pane chrome too \
-         small; (2) an `adw::HeaderBar` height change (a \
+         five candidate causes, in order of likelihood: (1) THE CALLER SUBTRACTED THE WRONG \
+         ORIGIN — this allocation is `output - OVERLAY_ORIGIN_*`, the pane AREA's corner, and \
+         `PANE_ORIGIN_*` is the TEXT GRID's; the two look interchangeable and differ by the \
+         per-pane chrome, so an allocation roughly a statusbar strip and a padding too small is \
+         that mistake; (2) an `adw::HeaderBar` height change (a \
          libadwaita/GTK bump), which moves the overlay's top edge and therefore its height; (3) \
          an `app::TREE_PANE_WIDTH` or `gtk::Paned` divider-width change, which moves its left \
          edge; (4) a cage output-size change, which moves the bottom-right corner; (5) \
@@ -14923,10 +14984,15 @@ fn nvim_crash_recovers_and_reopens_the_file_under_cage() {
     // The unsaved edit is APPENDED to line 2 — the first filler line — so the
     // recovered line 2 is that filler line followed by the marker. `opt.wrap` +
     // `opt.linebreak` would split it across screen rows if it were wider than the
-    // window, and a split could fall inside the asserted word. Rather than trusting
-    // the measured `winwidth(0)` of 45, assert the composed width against the width
-    // Neovim actually reported. The line is composed from the SAME consts
-    // `restart_fixture_body` writes it from, so the two cannot drift.
+    // window, and a split could fall inside the asserted word. Rather than trusting a
+    // measured `winwidth(0)` — 45 before the per-pane chrome, 43 after it — assert
+    // the composed width against the width Neovim actually reported. The line is
+    // composed from the SAME consts `restart_fixture_body` writes it from, so the two
+    // cannot drift.
+    //
+    // It now passes at exactly `43 <= 43`: zero margin, green, one column from red.
+    // See [`RESTART_UNSAVED_MARKER`] for what to shorten if the chrome ever grows
+    // again, and for why it is not this marker.
     let composed_line = format!(
         "{:03}{}{RESTART_UNSAVED_MARKER}",
         1,
@@ -15350,58 +15416,71 @@ fn stalled_nvim_raises_the_stall_overlay_under_cage() {
 ///
 /// `wolf_gnome::restart_button_rect` is the SAME function the widget builder's size
 /// requests realise, so the two cannot drift. The composition is: the cage output
-/// extents; minus the pane origin; into
+/// extents; minus the OVERLAY origin ([`OVERLAY_ORIGIN_X_EXPECTED`] /
+/// [`OVERLAY_ORIGIN_Y_EXPECTED`]), which is the pane area's own top-left corner and
+/// therefore the overlay's, since the overlay's main child is the pane container and
+/// under cage the window is the output with zero CSD offset; into
 /// `restart_button_rect`; then a tenth of the way in from that rect's LEFT edge
 /// horizontally, and the rect's CENTRE vertically. That asymmetry is not stylistic —
 /// a centre-derived x was measured in pass 5 to be blind to the button-width revert.
 /// The derivation comment in the body carries the measurement, and states the width
 /// bound the inset does and does not discriminate.
 ///
-/// **TRIPWIRE — the premise under "minus the pane origin" no longer holds.** It used
-/// to read "which IS the overlay origin", and it was true: the overlay's main child
-/// is the pane container whose single `DrawingArea` sits at offset `(0, 0)`, and
-/// under cage the window is the output with zero CSD offset, so the pane's top-left
-/// and the grid's top-left were one point. The per-pane chrome separates them.
-/// [`PANE_ORIGIN_X_EXPECTED`] / [`PANE_ORIGIN_Y_EXPECTED`] are derived from a
-/// click-to-cell readback, so they now name the TEXT GRID's corner — inside the pane
-/// by `editor_inset::EDITOR_PADDING_PX` horizontally and by the statusbar strip plus
-/// that padding vertically. Subtracting them therefore models an overlay shorter and
-/// narrower than the real one, and every offset taken from them is displaced by the
-/// same amount: with the 2026-08-04 constants the modelled allocation is
-/// `999.6 x 536` against a real `~1029 x 674`, and the derived click lands roughly
-/// 130 px below the button's bottom edge. What this derivation needs is an overlay
-/// anchor of its own — the header bar's height and the sidebar's right edge —
-/// measured the way the pane origin is, NOT a widened margin. Until it has one, read
-/// a red here as this, not as a broken overlay.
+/// **The anchor is the OVERLAY origin, never the pane origin, and the two are
+/// separate measurements on purpose.** [`PANE_ORIGIN_X_EXPECTED`] /
+/// [`PANE_ORIGIN_Y_EXPECTED`] are derived from a click-to-cell readback, so they name
+/// the TEXT GRID's top-left — inside the pane widget by
+/// `editor_inset::EDITOR_PADDING_PX` horizontally and by the statusbar strip plus
+/// that padding vertically. The overlay is anchored to the pane WIDGET's top-left.
+/// The two differ by the per-pane chrome, they look interchangeable, and collapsing
+/// them puts the derived click a strip and a padding away from the button — which on
+/// a 320x64 target is a miss, reported as scenario exit 19. Neither may be derived
+/// from the other: `OVERLAY_ORIGIN_*` carries its own measurement and its own
+/// cross-check.
 ///
 /// Three self-checking preconditions guard it:
 /// [`assert_button_rect_is_the_named_size`] (a collapsed `(0,0,0,0)` must
 /// not silently retarget the click to the overlay's top-left),
 /// [`assert_button_rect_fits`] (a `PANE_ORIGIN_TOLERANCE_PX` analogue), and
-/// [`assert_inside_extents`]. After the run the whole derivation is REDONE from the
-/// run's own measured extents and its own derived origin, and the injected point is
-/// asserted to lie inside that rect — which, note, moves BOTH sides by the same wrong
-/// offset while the anchor is wrong, so it cannot catch the mismatch above; the
-/// scenario's own recovery poll (exit 19) is what does.
+/// [`assert_inside_extents`]. After the run the derivation is REDONE from the run's
+/// own reported extents and the injected point is asserted to lie inside the
+/// resulting rect.
 ///
-/// ## Measured geometry (2026-08-02)
+/// **What that redo cannot do, stated because its absence is what let an anchor
+/// error live here undetected:** the only origin this run measures for itself is the
+/// GRID's, so the redo pins the overlay origin on both sides and is self-consistent
+/// on the anchor — it moves with an anchor error rather than catching one. It still
+/// catches a changed output size, a collapsed rect, and a click derived from a stale
+/// button geometry. Anchor drift is caught by re-measuring the overlay origin the way
+/// its provenance was taken, and, cheaply, by the scenario's own recovery poll: a
+/// click that misses the button drives no restart and exits 19.
+///
+/// ## Measured geometry (overlay origin and allocation re-measured 2026-08-04)
 ///
 /// | quantity | value |
 /// | --- | --- |
 /// | cage output size | `1280x720` |
-/// | overlay origin | `(251, 46)` |
-/// | `restart_button_rect(1029.0, 674.0)` | `(354.5, 345.0, 320.0, 64.0)` |
-/// | button, absolute | `x 605.5..925.5`, `y 391..455` |
+/// | overlay origin | `(251, 47)` |
+/// | overlay allocation | `1029 x 673` (`1280 - 251`, `720 - 47`) |
+/// | `restart_button_rect(1029.0, 673.0)` | `(354.5, 344.5, 320.0, 64.0)` |
+/// | button, absolute | `x 605.5..925.5`, `y 391.5..455.5` |
 /// | rendered button, inspected | `x 605..925`, `y 392..456` |
 ///
-/// Those are MEASURED values, and the pre-run derivation does NOT use them: it is
-/// anchored on the pinned `PANE_ORIGIN_X_EXPECTED` / `PANE_ORIGIN_Y_EXPECTED`
-/// (257.9, 52.0), which sit a few px inside the origin these runs rendered at. The
-/// point it actually injects is therefore `(641, 426)` — the value the pass-5 red
-/// runs report verbatim — and not what this table on its own would imply. The gap is
-/// expected and small against the click's margins; the post-run assertion redoes the
-/// whole derivation from the run's OWN extents and origin and proves the injected
-/// point landed inside the real rect.
+/// The origin and the allocation are the coder's 2026-08-04 measurement, taken from
+/// a temporary tick callback over every distinct allocation across the crash, the
+/// restart and the click, and reproduced on a second run; the rendered button is an
+/// independent inspection of a retained capture. The two agree to within the half
+/// pixel GTK snaps a centred block of odd leftover height by, which is what makes the
+/// pair a cross-check rather than one number written down twice.
+///
+/// Unlike the pane-origin constants, these ARE what the pre-run derivation uses, so
+/// the table and the click are one composition rather than two: it injects
+/// `(251 + 354.5 + 32, 47 + 344.5 + 32)` = `(637.5, 423.5)`, which
+/// [`pixel_target`]'s round-half-away-from-zero takes to **(638, 424)** — 32.5 px
+/// inside the button's left edge, and on its vertical centre line to within the half
+/// pixel that rounding adds. A verbatim
+/// confirmation of that point from a green run is owed; it is arithmetic from pinned
+/// constants here, not a measurement.
 ///
 /// ## Red-run reverts (five; run EVERY one — pass 5 records the measured outcome)
 ///
@@ -15494,17 +15573,20 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
 
     // --- Derive the button point (no magic pixel) --------------------------
     //
-    // The pane origin IS the overlay origin, and under cage the window is the output,
-    // so the overlay runs from that origin to the bottom-right corner. Both inputs
-    // are the MEASURED constants, because the click point has to exist before `cage`
-    // is spawned while the authoritative extents only arrive afterwards on the
+    // The anchor is the OVERLAY origin — the pane area's own top-left corner — and
+    // under cage the window is the output with no CSD offset, so the overlay runs
+    // from that corner to the bottom-right one. It is NOT the pane origin: those
+    // constants come from a click-to-cell readback and name the text grid's corner,
+    // which the per-pane chrome puts a statusbar strip and a padding inside this one.
+    // Both inputs are MEASURED constants, because the click point has to exist before
+    // `cage` is spawned while the authoritative extents only arrive afterwards on the
     // helper's `ready` line — which is why the run asserts, below, that the reported
     // extents really are the ones this derivation used, and then redoes the whole
     // derivation from its own measurements.
     let output_w = exact_f64(CAGE_OUTPUT_W_EXPECTED, "the expected cage output width");
     let output_h = exact_f64(CAGE_OUTPUT_H_EXPECTED, "the expected cage output height");
-    let overlay_w = output_w - PANE_ORIGIN_X_EXPECTED;
-    let overlay_h = output_h - PANE_ORIGIN_Y_EXPECTED;
+    let overlay_w = output_w - OVERLAY_ORIGIN_X_EXPECTED;
+    let overlay_h = output_h - OVERLAY_ORIGIN_Y_EXPECTED;
     let rect = wolf_gnome::restart_button_rect(overlay_w, overlay_h);
     assert_button_rect_is_the_named_size(SMOKE, rect);
     assert_button_rect_fits(SMOKE, rect, (overlay_w, overlay_h));
@@ -15524,25 +15606,26 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
     // Both are centred on x 765, so a centre click hits both — and with a centre
     // click this smoke stayed GREEN with the builder reverted to 40. Even the 3/4
     // point (x 845) still lands inside the 193px button. A tenth in from the left
-    // edge puts the injected point at x 641 — the value pass 5's red runs record
-    // verbatim as `the click at (641, 426)` — which against those measured spans is
-    // 36px inside the CORRECT button and 28px clear of the natural-width one.
+    // edge puts the injected point at x 638 against those measured spans: 33px
+    // inside the CORRECT button and 31px clear of the natural-width one. (Pass 5's
+    // red runs record `the click at (641, 426)` verbatim; that was the same
+    // composition anchored on the pane origin, back when the two origins coincided,
+    // and the 3px is the anchor correction rather than a change of method.)
     //
-    // Both margins absorb both sources of error. The rect derivation itself agreed
-    // with the render to 1px once anchored on the run's own origin (pass 1: rendered
-    // x 605..925 y 392..456 against a derived x 605.5..925.5, y 391..455); on top of
-    // that, the PRE-RUN anchor `PANE_ORIGIN_X_EXPECTED` sits a few px right of the
-    // origin those runs actually rendered at (see this smoke's measured-geometry
-    // table), which is what shifts the injected point rightwards inside the rect.
-    // Neither error is close to eating a 28px margin.
+    // Both margins absorb the error left in the derivation, which is now small and
+    // one-sided: the rect agrees with the render to within half a pixel (rendered
+    // x 605..925 y 392..456 against a derived x 605.5..925.5, y 391.5..455.5), and
+    // the anchor is the overlay's own measured origin rather than a proxy for it, so
+    // there is no sub-cell phase term left on this path at all. Nothing here is close
+    // to eating a 31px margin.
     //
     // What the left-edge inset discriminates, as a BOUND rather than as an anecdote:
     // the button is `halign(Center)`, so it renders across [765 - W/2, 765 + W/2]
-    // where W = max(requested, natural ~193), and a click at x 641 misses it iff
-    // W < 248. This point therefore catches any builder width that has shrunk below
-    // ~248px: the documented 40px revert renders W 193, i.e. 55px inside that bound
-    // (the 28px of pixel clearance quoted above). It would NOT catch a shrink from
-    // 320 to, say, 260 — widths in (248, 320) are undiscriminated, and "it catches
+    // where W = max(requested, natural ~193), and a click at x 638 misses it iff
+    // W < 254. This point therefore catches any builder width that has shrunk below
+    // ~254px: the documented 40px revert renders W 193, i.e. 61px inside that bound
+    // (the 31px of pixel clearance quoted above). It would NOT catch a shrink from
+    // 320 to, say, 260 — widths in (254, 320) are undiscriminated, and "it catches
     // the 40px revert" must not be read as more than that.
     //
     // Y stays at the rect's vertical CENTRE: the vertical derivation is the
@@ -15551,11 +15634,11 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
     // which is the other axis this click leaves undiscriminated.
     const BUTTON_HIT_INSET_FRACTION: f64 = 0.1;
     let btn_x = pixel_target(
-        PANE_ORIGIN_X_EXPECTED + bx + bw * BUTTON_HIT_INSET_FRACTION,
+        OVERLAY_ORIGIN_X_EXPECTED + bx + bw * BUTTON_HIT_INSET_FRACTION,
         "the restart button x",
     );
     let btn_y = pixel_target(
-        PANE_ORIGIN_Y_EXPECTED + by + bh / 2.0,
+        OVERLAY_ORIGIN_Y_EXPECTED + by + bh / 2.0,
         "the restart button y",
     );
     let btn_x_env = btn_x.to_string();
@@ -15642,8 +15725,24 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
     let (origin_x, origin_y) =
         assert_probe_cell_and_pane_origin(SMOKE, (l0, c0), &metrics, extents, &out_png, &raw0);
 
-    let measured_overlay_w = exact_f64(extents.0, "the reported cage output width") - origin_x;
-    let measured_overlay_h = exact_f64(extents.1, "the reported cage output height") - origin_y;
+    // The redo uses this run's own EXTENTS with the pinned OVERLAY origin, and the
+    // limitation in that is worth stating rather than discovering: the only origin
+    // this run measures for itself is the GRID's, from the probe click, and the
+    // overlay is anchored to the pane WIDGET's. Deriving one from the other is
+    // exactly the collapse that has to stay undone, so the overlay origin is pinned
+    // on both sides here.
+    //
+    // The consequence, stated plainly: this check is self-consistent on the anchor
+    // and therefore CANNOT detect an anchor that has drifted — it moves with it. What
+    // it does still catch is a changed output size, a collapsed rect, and a click
+    // derived from a stale button geometry. Detecting anchor drift needs the overlay
+    // origin re-measured the way [`OVERLAY_ORIGIN_X_EXPECTED`]'s provenance was taken,
+    // and the cheap proxy for "someone should" is the scenario's own recovery poll:
+    // a click that misses the button exits 19.
+    let measured_overlay_w =
+        exact_f64(extents.0, "the reported cage output width") - OVERLAY_ORIGIN_X_EXPECTED;
+    let measured_overlay_h =
+        exact_f64(extents.1, "the reported cage output height") - OVERLAY_ORIGIN_Y_EXPECTED;
     let measured_rect = wolf_gnome::restart_button_rect(measured_overlay_w, measured_overlay_h);
     assert_button_rect_is_the_named_size(SMOKE, measured_rect);
     let measured_overlay = (measured_overlay_w, measured_overlay_h);
@@ -15652,23 +15751,24 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
     let hit_x = exact_f64(btn_x, "the injected button x");
     let hit_y = exact_f64(btn_y, "the injected button y");
     assert!(
-        hit_x >= origin_x + mbx
-            && hit_x <= origin_x + mbx + mbw
-            && hit_y >= origin_y + mby
-            && hit_y <= origin_y + mby + mbh,
+        hit_x >= OVERLAY_ORIGIN_X_EXPECTED + mbx
+            && hit_x <= OVERLAY_ORIGIN_X_EXPECTED + mbx + mbw
+            && hit_y >= OVERLAY_ORIGIN_Y_EXPECTED + mby
+            && hit_y <= OVERLAY_ORIGIN_Y_EXPECTED + mby + mbh,
         "{SMOKE}: the point actually injected, ({btn_x}, {btn_y}), lies OUTSIDE the button rect \
-         this run's own measurements describe: origin ({origin_x}, {origin_y}) plus \
+         this run's own extents describe: overlay origin ({OVERLAY_ORIGIN_X_EXPECTED}, \
+         {OVERLAY_ORIGIN_Y_EXPECTED}) plus \
          `restart_button_rect({measured_overlay_w}, {measured_overlay_h})` = ({mbx}, {mby}, \
-         {mbw}, {mbh}), i.e. absolute x {}..{}, y {}..{}. The pre-run derivation used the pinned \
-         PANE_ORIGIN_X_EXPECTED / PANE_ORIGIN_Y_EXPECTED, and the derived origin carries the probe \
-         click's sub-cell phase, so a small disagreement is expected and harmless — a disagreement \
-         large enough to leave a {mbw}x{mbh} button is not. Re-measure the origin constants (the \
-         band assertion above prints the derived value) rather than moving the click. PNG kept at \
-         {}.",
-        origin_x + mbx,
-        origin_x + mbx + mbw,
-        origin_y + mby,
-        origin_y + mby + mbh,
+         {mbw}, {mbh}), i.e. absolute x {}..{}, y {}..{}. Both sides use the pinned overlay \
+         origin, so this cannot be an anchor disagreement: what it names is a changed OUTPUT SIZE \
+         (the extents assertion above prints the reported one) or a `restart_button_rect` whose \
+         shape moved under the click derivation. The pane origin derived from this run's probe \
+         click was ({origin_x}, {origin_y}) — a DIFFERENT corner, the text grid's, and not \
+         comparable with these numbers. PNG kept at {}.",
+        OVERLAY_ORIGIN_X_EXPECTED + mbx,
+        OVERLAY_ORIGIN_X_EXPECTED + mbx + mbw,
+        OVERLAY_ORIGIN_Y_EXPECTED + mby,
+        OVERLAY_ORIGIN_Y_EXPECTED + mby + mbh,
         out_png.display()
     );
 
@@ -16928,9 +17028,14 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
     assert!(
         widest - narrowest <= BASELINE_TOLERANCE_CELLS,
         "{SMOKE}: the three fresh panes are {:?} cells wide, a spread of {} — more than the \
-         {BASELINE_TOLERANCE_CELLS} cells a chain of paneds positioned by TRAVEL rather than by \
-         width can account for. The bisection seeds are modelled on equal shares, so this also \
-         says those seeds are aimed at the wrong pixels. PNG kept at {}.",
+         {BASELINE_TOLERANCE_CELLS} cells of slack a chain of paneds needs for its handles and \
+         rounding. Equal weights are supposed to give equal widths: `geometry::divider_position` \
+         scales by the paned's SPAN, so the only asymmetry left is the handle. Read a real spread \
+         as a PRODUCT defect — scaling by `max_position` instead puts the end child's minimum \
+         between the two panes at every fraction, which is what \
+         `geometry::equal_weights_give_equal_widths` pins — and NOT as a tolerance to widen. It \
+         also says the bisection seeds, which are modelled on equal shares, are aimed at the wrong \
+         pixels. PNG kept at {}.",
         &w0[..3],
         widest - narrowest,
         out_png.display()
@@ -17077,20 +17182,43 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// divider drag at all; see [`DIVIDER_RELAUNCH_SCENARIO`]'s `read_widths` for the
 /// measurement that pins the difference.
 ///
-/// | quantity | value |
+/// The table below is the 2026-08-02 measurement, taken against the PRE-CHROME build
+/// and before `geometry::divider_position` scaled by the paned's span. It is kept as
+/// the record of a real run, and **every numeric cell in it is stale**: the panes are
+/// narrower by the per-pane chrome, and a fresh split no longer lands unequal. **A
+/// re-measurement from a green run is owed** — it is not derivable from here, and
+/// adjusting these numbers to fit would be inventing a measurement.
+///
+/// | quantity | value, as measured 2026-08-02 (pre-chrome, pre-span-fix) |
 /// | --- | --- |
 /// | paned travel at the drag | `max_position` 1005 px, position 679 px after it, fraction 0.6756 |
 /// | run 1 post-drag, MEASURED at the `resize_grid` calls | 30 and 15 cells, ratio 0.667 |
 /// | run 2's restored panes, MEASURED in pixels | 679 and 349 px — the same 30 and 15 cells |
-/// | run 1 baseline, DERIVED from half the same travel | about 22 and 23 cells |
+/// | run 1 baseline | about 22 and 23 cells |
 /// | the narrow pane against the 14-character heading | 15 columns, one to spare |
 ///
-/// So [`MIN_DRAG_CELLS`] (3) sits against a move of about 8 cells per pane,
-/// [`RATIO_TOLERANCE`] (0.08) against a run-1-to-run-2 difference of 0, and
-/// [`MIN_RATIO_OFFSET`] (0.08) against a ratio 0.167 off centre. The tightest of
-/// the five is the heading's one spare column, which is what
+/// Two rows need reading with care rather than merely re-measuring:
+///
+/// * the `max_position` of 1005 is the OLD one-cell per-pane floor's. The raised
+///   floor makes it 965 at the same span, and `geometry`'s
+///   `equal_weights_give_equal_widths` carries both numbers as table rows precisely
+///   so the difference is visible from a unit test;
+/// * the baseline row is the defect's own fingerprint. Two nominally-equal panes
+///   came out a cell apart because the divider was placed at a fraction of
+///   `max_position`, which subtracts the end child's minimum from one side only.
+///   Equal weights now give equal widths to within the handle, so the re-measured
+///   baseline should read as a PAIR, not a spread — and if it does not, that is a
+///   product defect rather than a number to write down.
+///
+/// The margins those figures were sized against still hold in shape: [`MIN_DRAG_CELLS`]
+/// (3) against a move of several cells per pane, [`RATIO_TOLERANCE`] (0.08) against a
+/// run-1-to-run-2 difference of 0, and [`MIN_RATIO_OFFSET`] (0.08) against a ratio
+/// well off centre. The tightest is the heading's spare column, which is what
 /// [`DIVIDER_RELAUNCH_DRAG_PX`] is sized by: widen the drag and the narrow pane
-/// soft-wraps `# DIVIDERBRAVO`, and assertion 3 reads two fragments.
+/// soft-wraps `# DIVIDERBRAVO`, and assertion 3 reads two fragments. That constant
+/// stays at its current value — both preconditions were measured to pass at it after
+/// the chrome landed — so what the re-measurement owes is the spare column's new
+/// size, not a new drag.
 ///
 /// ## Reading a 15-cell column
 ///
@@ -17302,9 +17430,14 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
     assert!(
         (base_left - base_right).abs() <= BASELINE_TOLERANCE_CELLS,
         "{SMOKE}: the fresh split gave panes of {base_left} and {base_right} cells, a spread of {} \
-         — more than the {BASELINE_TOLERANCE_CELLS} cells a paned positioned by TRAVEL rather than \
-         by width can account for. The bisection seed is modelled on equal shares, so this also \
-         says the seed is aimed at the wrong pixels. PNG kept at {}.",
+         — more than the {BASELINE_TOLERANCE_CELLS} cells of slack a paned needs for its handle \
+         and rounding. A fresh `<C-w>v` carries EQUAL weights and no drag, so the two panes are \
+         supposed to come out equal to within that handle: `geometry::divider_position` scales by \
+         the paned's SPAN, and `geometry::equal_weights_give_equal_widths` is the unit test for \
+         it. Read a real spread as a PRODUCT defect, not as a tolerance to widen — scaling by \
+         `max_position` instead leaves exactly the end child's minimum between the two panes. It \
+         also says the bisection seed, modelled on equal shares, is aimed at the wrong pixels. PNG \
+         kept at {}.",
         (base_left - base_right).abs(),
         out_png.display()
     );
