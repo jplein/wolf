@@ -11,7 +11,7 @@
 //!
 //! ## What this file contains
 //!
-//! **Thirty-five cage smokes** — one window-render smoke, two file-picker smokes,
+//! **Thirty-six cage smokes** — one window-render smoke, two file-picker smokes,
 //! one file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
 //! new-untitled-buffer smoke, one command-palette smoke, one OPEN RECENT smoke
 //! (Ctrl+Shift+P, a typed folder query, then Enter — the activated row re-roots the
@@ -43,7 +43,12 @@
 //! relative `:cd ..` re-rooting the whole window on Neovim's OWN working directory,
 //! which the captive Neovim's `getcwd()` readback plus two ordered OCR
 //! discriminators — a file that exists only in the new root, and the synthetic root
-//! row bearing the new cwd's basename — are what prove), four
+//! row bearing the new cwd's basename — are what prove), one keyboard-only PER-PANE
+//! STATUSBAR smoke (a vertical split with a different file open in each pane, whose
+//! two strips must draw two DIFFERENT filenames — the crossed pair is what makes that
+//! more than "a filename is on screen" — plus the captive Neovim's own
+//! `winheight(0)` readback, which is the only end-to-end number the editor inset and
+//! the strip's height reach), four
 //! STATE-PERSISTENCE smokes (a
 //! three-pane layout, a lone open file, and a dragged divider's WEIGHTS each
 //! surviving a quit-and-relaunch, plus the window title rendering the working
@@ -69,7 +74,7 @@
 //! and no `:e` toast can satisfy, and OCR is structurally incapable of answering
 //! "did the cursor land at exactly row 12, column 25".
 //!
-//! Twenty-nine of the thirty-five OCR a screenshot of the live window. The `:qa`
+//! Thirty of the thirty-six OCR a screenshot of the live window. The `:qa`
 //! smoke and the configured-font-size smoke deliberately capture no image and
 //! assert on the cage exit status plus, for the second, two integer readbacks (the
 //! app must be GONE, and gone with a ZERO exit status — a panic in the GTK main
@@ -101,15 +106,18 @@
 //!   name rule cannot reach the hazard at all: it checks the content of
 //!   [`divider_right_fixture_body`] and [`search_target_fixture_body`], the second
 //!   down to the match's line index and its byte offset, which the project-search
-//!   smoke's line and column assertions are derived from. It also pins FIVE crossed
+//!   smoke's line and column assertions are derived from. It also pins SIX crossed
 //!   pairs of OCR preconditions — the window-title smoke's deliberate exemption, the
 //!   project-search smoke's target-versus-starting headings, the Open Recent
 //!   smoke's target FILE versus target DIRECTORY, where the header bar draws the
 //!   directory on every capture, the sidebar-toggle smoke's tree-row subject
 //!   versus its proof-of-life heading, which must come from opposite halves of the
-//!   window or hiding one would remove the other, and the typed-`:cd` smoke's three
+//!   window or hiding one would remove the other, the typed-`:cd` smoke's three
 //!   fixed DIRECTORY components, whose crossing is what stops a header-bar title that
-//!   failed to abbreviate standing in for the synthetic root row.
+//!   failed to abbreviate standing in for the synthetic root row, and the per-pane
+//!   statusbar smoke's two FILENAMES, the only pair whose halves are both
+//!   must-CONTAIN terms — uncrossed, one pane's strip would satisfy both assertions
+//!   and "each pane draws its own file" would go unproven.
 //! * [`cage_is_only_spawned_through_the_isolating_helper`] — `cage` is spawned in
 //!   exactly one place, [`cage_command`], which is the only thing that sets
 //!   `WOLF_STATE_DIR` and so the only thing keeping the smokes off the developer's
@@ -122,7 +130,7 @@
 //! live here, next to the consts and helpers they read, rather than in a file of
 //! their own.
 //!
-//! So this target's summary line reads **`39 passed`**, not `35`: thirty-five cage
+//! So this target's summary line reads **`40 passed`**, not `36`: thirty-six cage
 //! smokes plus those four guards.
 //!
 //! ## A vacuously-passing check recorded here: the `wtype ""` window-map poll
@@ -165,7 +173,7 @@
 //!
 //! ## When it runs
 //!
-//! The thirty-five cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The thirty-six cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The Linux verification gate").
@@ -175,13 +183,13 @@
 //! suite command does not run is a silently-skipped test.
 //!
 //! They are, however, the slowest part of the suite: each drives a real
-//! compositor, and all thirty-five serialize behind `CAGE_LOCK` (see below).
+//! compositor, and all thirty-six serialize behind `CAGE_LOCK` (see below).
 //!
 //! ```text
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the thirty-five cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the thirty-six cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` and
 //!   `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
@@ -198,7 +206,7 @@
 //!   empty result list.
 //! - `XDG_RUNTIME_DIR` set and writable (the Wayland socket lives there).
 //!
-//! Per project policy every one of the thirty-five FAILS LOUD if any of the above is
+//! Per project policy every one of the thirty-six FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -225,7 +233,7 @@ use wolf_gnome::{CellMetrics, WINDOW_TITLE_FALLBACK};
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the thirty-five cage smoke tests. Each launches its own
+/// Serializes the thirty-six cage smoke tests. Each launches its own
 /// `cage` compositor, and two compositors started concurrently contend for the
 /// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
 /// Under the default multi-threaded test harness these tests would otherwise run
@@ -1143,19 +1151,26 @@ const RESTART_HEADING: &str = "# BOUNCEBACK";
 /// How many filler lines [`restart_fixture_body`] writes below the heading.
 ///
 /// LOAD-BEARING for smoke B, not decoration. Its probe click at
-/// `(PROBE_X, PROBE_Y)` must land on a REAL cell — measured `line 8, col 18` — or
-/// [`assert_probe_cell_and_pane_origin`]'s `MIN_PROBE_CELL` precondition fires and
-/// the whole pane-origin derivation (and therefore the button point) means nothing.
-/// A one-line fixture would clamp every click to `(1, 1)`. Nineteen filler lines
-/// plus the heading is twenty buffer lines, comfortably more than the measured
-/// `winheight(0)` of 14.
+/// `(PROBE_X, PROBE_Y)` must land on a REAL cell — measured 2026-08-04 as
+/// `line 5, col 17` — or [`assert_probe_cell_and_pane_origin`]'s `MIN_PROBE_CELL`
+/// precondition fires and the whole pane-origin derivation (and therefore the button
+/// point) means nothing. A one-line fixture would clamp every click to `(1, 1)`.
+/// Nineteen filler lines plus the heading is twenty buffer lines, comfortably more
+/// than the measured `winheight(0)` of 11. The margin scales the safe way: what this
+/// constant has to beat is the VISIBLE row count, which the per-pane chrome reduces.
 const RESTART_FILLER_LINE_COUNT: usize = 19;
 
 /// How many `x`s each filler line carries after its three-digit ordinal, so every
 /// filler line is exactly [`FIXTURE_LINE_WIDTH`] characters — the same width, and
 /// for the same two reasons, as the `:put` fixture in [`POINTER_PREAMBLE`]: wide
-/// enough that a click at column 18 is not clamped to end-of-line, and narrow enough
-/// that `opt.wrap` / `opt.linebreak` never soft-wrap it.
+/// enough that a click at the probe column (measured 2026-08-04 as column 17) is not
+/// clamped to end-of-line, and narrow enough that `opt.wrap` / `opt.linebreak` never
+/// soft-wrap it.
+///
+/// It is also the slack in [`RESTART_UNSAVED_MARKER`]'s zero-margin fit: 3 + this +
+/// the marker is the composed width that must not exceed the pane's `winwidth(0)`,
+/// and this term is the one to shorten if it ever does, since it is inert page
+/// density and the marker is an asserted term.
 const RESTART_FILLER_LINE_PAD: usize = 27;
 
 /// Lowercased substring OCR must find to prove the FIXTURE BUFFER is on screen and
@@ -1257,10 +1272,26 @@ const RESTART_OCR_OVERLAY: &str = "crashed";
 /// `winwidth(0)` breaks across screen rows and the asserted word could be split.
 /// After the edit, line 2 is a filler line ([`FIXTURE_LINE_WIDTH`] = 30 characters)
 /// plus this const (13 characters) = **43 characters**, and the smoke asserts that
-/// composed width against the `winwidth(0)` Neovim itself reported (measured 45)
-/// rather than against any assumed number — so the derivation cannot rot silently.
-/// If the fixture or the marker ever grows past the reported width, shorten one of
-/// them; do not weaken the assertion.
+/// composed width against the `winwidth(0)` Neovim itself reported rather than
+/// against any assumed number — so the derivation cannot rot silently. If the fixture
+/// or the marker ever grows past the reported width, shorten one of them; do not
+/// weaken the assertion.
+///
+/// ## ZERO MARGIN, recorded rather than fixed
+///
+/// That assertion passes at exactly `43 <= 43`. The pane's `winwidth(0)` is **43**
+/// (measured 2026-08-04), which is precisely the composed line's width: the fixture
+/// fits with nothing to spare. It is green, and it is one character from red.
+///
+/// **This is a note, not a licence to buy margin.** Shortening this marker would
+/// change an [`ASSERTED_OCR_TERMS`] entry, and widening the pane is not this
+/// constant's to do. What it means in practice: any further growth of the per-pane
+/// chrome — a taller strip, more padding — takes a column off this pane and turns the
+/// zero margin into a soft-wrapped line 2, at which point the smoke fails on the
+/// FIXTURE precondition with a message that says so, which is the correct place for
+/// it to fail. Read a red there as "the chrome grew", and fix it by shortening
+/// [`RESTART_FILLER_LINE_PAD`] — which is inert page density — rather than the
+/// marker.
 const RESTART_UNSAVED_MARKER: &str = " UNSAVEDBURST";
 
 /// Lowercased substring OCR must find in the POST-RECOVERY capture, and must NOT
@@ -1801,12 +1832,22 @@ const STALL_RPC_TIMEOUT_MS: &str = "800";
 /// or surface offset under cage — `motion 640 360` was measured arriving at the GTK
 /// client as surface-local `640.00000000, 360.00000000`).
 ///
-/// MEASURED on this host at `WOLF_FONT_PT` = [`SMOKE_FONT_PT`] on a 1280x720 cage
-/// output: `(640, 360)` maps to Neovim cell `(line 8, col 18)`, which satisfies
-/// every geometry precondition at once — `l0 >= 2 && c0 >= 2`;
-/// `c0 + CLICK_DX(7) = 25 <= 30`; `c0 + DRAG_DX(9) = 27 <= 30`; and
-/// `l0 + DRAG_DY(5) = 13 <= 14` visible rows. It is also comfortably inside the LEFT
-/// pane after a 50/50 vertical split, which the wedge smoke depends on.
+/// MEASURED 2026-08-04 on this host at `WOLF_FONT_PT` = [`SMOKE_FONT_PT`] on a
+/// 1280x720 cage output: `(640, 360)` maps to Neovim cell `(line 5, col 17)`, against
+/// a pane of 11 visible rows. That satisfies every geometry precondition at once —
+/// `l0 >= 2 && c0 >= 2` (5 and 17); `c0 + CLICK_DX(7) = 24 <= 30`;
+/// `c0 + DRAG_DX(9) = 26 <= 30`; and `l0 + DRAG_DY(5) = 10 <= 11`. It is also
+/// comfortably inside the LEFT pane after a 50/50 vertical split, which the wedge
+/// smoke depends on.
+///
+/// **The row budget is the tight one, and it is tighter than it was.** The per-pane
+/// chrome costs three rows, so [`assert_fixture_fits`]'s
+/// `probe_line + rows_below <= winheight` clears by a SINGLE row (10 against 11)
+/// where it once cleared by one against 14. Anything that grows the statusbar strip
+/// or the padding spends that row, and the failure lands on `assert_fixture_fits`
+/// with a message naming the row budget — which is the right place, but it is one
+/// row away rather than a comfortable margin. The columns are not close: 26 against a
+/// 30-character fixture line.
 ///
 /// If a phase ever lands within half a pixel of a cell boundary and skews a delta
 /// assertion, the symptom is REPRODUCIBLE, not flaky (fixed output size,
@@ -1817,26 +1858,60 @@ const PROBE_X: i32 = 640;
 /// y of the probe point, in absolute output pixels. See [`PROBE_X`].
 const PROBE_Y: i32 = 360;
 
-/// x of the editor pane's top-left corner in output pixels, as DERIVED from the
+/// x of the editor pane's TEXT GRID origin in output pixels, as DERIVED from the
 /// probe click: `PROBE_X - (c0 - 1) * cell_w`.
 ///
-/// MEASURED 2026-08-02 on a **1280x720** cage output at `WOLF_FONT_PT` =
-/// [`SMOKE_FONT_PT`]: the probe at `(640, 360)` landed on Neovim cell
-/// `(line 8, col 18)` with `cell_w = 22.4765625`, `cell_h = 44.0`, giving a derived
-/// origin of `(257.8984375, 52.0)`. Both numbers are also recorded in
-/// `crates/wolf-gnome/tests/README.md`.
+/// MEASURED 2026-08-04 on a **1280x720** cage output at `WOLF_FONT_PT` =
+/// [`SMOKE_FONT_PT`]: the probe at `(640, 360)` lands on Neovim cell
+/// `(line 5, col 17)` with `cell_w = 22.4765625`, `cell_h = 44.0`, giving a derived
+/// origin of `(280.375, 184.0)`.
+///
+/// ## Why it moved, and why the previous value was worse than wrong
+///
+/// The per-pane chrome — `editor_inset::EDITOR_PADDING_PX` and the statusbar strip —
+/// puts the text grid inside the pane widget instead of at its corner. In x that is
+/// the padding alone: the previous value, `257.8984375`, differs from this one by
+/// exactly `22.4765625`, one whole `cell_w`, because the probe landed one column
+/// earlier while the true origin moved 20 px right.
+///
+/// **The x band did not fail on that**, and that is the point worth recording. The
+/// shift was `+22.48` px inside a `+/-34.48` px band (`PANE_ORIGIN_TOLERANCE_PX` plus
+/// one `cell_w`), so the old value stayed green while describing a layout that no
+/// longer existed — the same class as a test that cannot detect its own failure. It
+/// is re-derived here deliberately, from a run, and NOT because anything went red.
+/// The y band did fail, loudly, as designed.
 ///
 /// The value carries the probe click's unknown SUB-CELL PHASE, so it OVER-estimates
 /// the true origin by up to one cell — which is exactly why the band adds `cell_w` /
 /// `cell_h` (see [`PANE_ORIGIN_TOLERANCE_PX`]). `-1.0` is the deliberate impossible
 /// placeholder the smoke is first landed with; re-deriving it is a matter of putting
 /// `-1.0` back and reading the band failure's message.
-const PANE_ORIGIN_X_EXPECTED: f64 = 257.8984375;
+const PANE_ORIGIN_X_EXPECTED: f64 = 280.375;
 
-/// y of the editor pane's top-left corner in output pixels, as DERIVED from the
+/// y of the editor pane's TEXT GRID origin in output pixels, as DERIVED from the
 /// probe click: `PROBE_Y - (l0 - 1) * cell_h`. See [`PANE_ORIGIN_X_EXPECTED`] for the
 /// measurement, its date and the cage output size it was taken on.
-const PANE_ORIGIN_Y_EXPECTED: f64 = 52.0;
+///
+/// MEASURED 2026-08-04: `184.0`, up from `52.0`. In y the chrome is the whole
+/// statusbar strip plus the top padding, so this is the header bar's height plus the
+/// strip plus `EDITOR_PADDING_PX`, plus the probe's sub-cell phase.
+///
+/// **This pair is the TEXT GRID's corner, and [`OVERLAY_ORIGIN_X_EXPECTED`] /
+/// [`OVERLAY_ORIGIN_Y_EXPECTED`] are the pane AREA's.** They are two different
+/// points, measured two different ways — this pair from a click-to-cell readback,
+/// that pair from the overlay's own allocation — and the per-pane chrome is the gap
+/// between them. They look interchangeable and are not: a derivation that wants the
+/// area's corner (the crash overlay's allocation, a divider seed) and reads this pair
+/// instead is out by a statusbar strip and a padding, which is enough to put a click
+/// outside a 320x64 button. Neither pair may be derived from the other; each is
+/// measured, and each carries its own provenance.
+///
+/// The one place the distinction is currently invisible is the divider smokes' seeds,
+/// which read this pair as the area's left edge. They are documented as SEEDS ONLY
+/// and the bisection converges from either, so nothing there is wrong today — but the
+/// premise is the same one, and if a seed ever stops straddling the divider this is
+/// the first place to look.
+const PANE_ORIGIN_Y_EXPECTED: f64 = 184.0;
 
 /// Half-width of the band the derived pane origin must fall inside.
 ///
@@ -1847,6 +1922,40 @@ const PANE_ORIGIN_Y_EXPECTED: f64 = 52.0;
 /// `cell_w` / `cell_h` on top. Those two terms are an unavoidable phase allowance,
 /// NOT slack, and must not be grown to make a failing run pass.
 const PANE_ORIGIN_TOLERANCE_PX: f64 = 12.0;
+
+/// x of the crash OVERLAY's top-left corner in output pixels — the pane area's own
+/// left edge, which is the sidebar's right edge plus the `gtk::Paned` handle.
+///
+/// A SEPARATE measurement from [`PANE_ORIGIN_X_EXPECTED`], and it must stay separate.
+/// That constant is derived from a click-to-cell readback, so it names the TEXT
+/// GRID's corner; this one names the WIDGET's. The per-pane chrome is the difference,
+/// and the two are only ever equal in a build that has none.
+///
+/// MEASURED by the coder, 2026-08-04, on a **1280x720** cage output, from a temporary
+/// tick callback that printed every distinct overlay allocation across the crash, the
+/// restart and the click, and reproduced on a second run: origin `(251, 47)`,
+/// allocation `1029 x 673`. The two agree by construction — `1280 - 251 = 1029` and
+/// `720 - 47 = 673` — so they are one measurement, not two.
+///
+/// ## The cross-check, which is what makes the number trustworthy
+///
+/// It is confirmed a second, independent way: through
+/// `wolf_gnome::restart_button_rect`, against the rendered button as inspected on a
+/// retained capture.
+///
+/// `restart_button_rect(1029, 673)` is `(354.5, 344.5, 320, 64)` —
+/// `x = (1029 - 320) / 2`, and `y = (673 - 144) / 2 + 80` where 144 is the fixed
+/// message + gap + button block and 80 is the message plus the gap. Offset by the
+/// origin that gives absolute `x 605.5..925.5`, `y 391.5..455.5`, against an
+/// independently inspected render of `x 605..925`, `y 392..456`. The two routes agree
+/// to within the half pixel GTK snaps a centred block of odd leftover height by, which
+/// is as close as a pixel-inspected render and a real-valued rect can come.
+const OVERLAY_ORIGIN_X_EXPECTED: f64 = 251.0;
+
+/// y of the crash OVERLAY's top-left corner in output pixels — the `adw::HeaderBar`'s
+/// height, and nothing else. See [`OVERLAY_ORIGIN_X_EXPECTED`] for the measurement,
+/// its date, the cage output size, and the button cross-check that confirms it.
+const OVERLAY_ORIGIN_Y_EXPECTED: f64 = 47.0;
 
 /// The smallest Neovim `line`/`col` the probe click may report. `(1, 1)` is where
 /// the cursor already is, so anything below this means the press never landed and
@@ -1955,11 +2064,12 @@ const POINTER_READY_NAME: &str = "wolf-pointer.ready";
 //
 // A divider is the one target in this file that NO arithmetic here can predict.
 // Its handle is theme-owned (Adwaita's non-wide `paned > separator` is a single
-// pixel, widened by GTK's own invisible grab area), and its position is
-// `round(max_position * fraction)` where `max_position` has ALREADY subtracted the
-// handle and the far child's minimum — so a position modelled from the pane origin
-// and the cell size is out by tens of pixels before it starts, which is more than a
-// handle width.
+// pixel, widened by GTK's own invisible grab area) and its grab area is wider than
+// the pixel it draws, so a position modelled from the pane origin and the cell size
+// can be a handle's width out before anything else goes wrong. The position itself
+// is `round(span * fraction)` clamped into `[min_position, max_position]`, so the
+// model is right in the middle of its range and only approximate at the ends, where
+// the clamp binds.
 //
 // So the two divider smokes BISECT for it, against the only authority available:
 // which Neovim window a click focuses. That is exact and theme-independent. The
@@ -1969,11 +2079,13 @@ const POINTER_READY_NAME: &str = "wolf-pointer.ready";
 
 /// How far either side of the MODELLED divider position each bisection starts.
 ///
-/// The model assumes equal shares of the editor pane's width, but a `gtk::Paned`
-/// positions its divider at a fraction of its TRAVEL (`max_position`), which
-/// excludes the handle and the far child's minimum — worth ~15-20 px per divider at
-/// this output size. This margin only has to exceed that error while staying INSIDE
-/// the neighbouring panes, which are ~340 px wide in the three-pane case.
+/// The model assumes equal shares of the editor pane's width, which is what
+/// `geometry::divider_position` produces to within a handle — so the seed error is
+/// small, and this margin is sized for the things the model cannot see: the
+/// handle's own width per divider in a chain, and the anchor the model starts from
+/// (`PANE_ORIGIN_X_EXPECTED`, which names the text grid's corner rather than the pane
+/// area's). It only has to exceed those while staying INSIDE the neighbouring panes,
+/// which are ~340 px wide in the three-pane case.
 const BISECT_SEED_MARGIN_PX: i64 = 128;
 
 /// How many halvings each bisection runs.
@@ -2010,13 +2122,23 @@ const DIVIDER_RELAUNCH_DRAG_PX: i64 = 175;
 /// How far apart three nominally-equal columns may be, in cells, before the
 /// baseline precondition fails.
 ///
-/// They are not exactly equal and cannot be: each `gtk::Paned` positions its
-/// divider at a fraction of its own TRAVEL, which subtracts the handle and the far
-/// child's minimum, so a chain of them lands the columns within about a cell of
-/// each other rather than identical. The widths themselves are exact —
-/// `winwidth()` reports the grid size the front-end asked for, and
-/// `nvim_ui_try_resize_grid` was MEASURED not to reflow Neovim's own window layout,
-/// so resizing one pane's grid cannot take columns from another's.
+/// This is SLACK, not a modelled error. `geometry::divider_position` positions a
+/// divider at a fraction of the paned's own SPAN, so equal weights give equal widths
+/// to within the handle plus the half pixel rounding can move an odd span's midpoint
+/// — under one cell at this font size, and pinned as a unit property by
+/// `geometry::equal_weights_give_equal_widths`. Two cells therefore leaves room for a
+/// chain of paneds to accumulate their handles without ever describing a spread the
+/// arithmetic is expected to produce.
+///
+/// The widths themselves are exact — `winwidth()` reports the grid size the
+/// front-end asked for, and `nvim_ui_try_resize_grid` was MEASURED not to reflow
+/// Neovim's own window layout, so resizing one pane's grid cannot take columns from
+/// another's.
+///
+/// **Do not widen it to absorb a real spread.** A baseline that comes out cells apart
+/// means equal weights stopped giving equal widths, which is a product defect with
+/// its own unit test; the last time this constant was calibrated against one, it hid
+/// the defect for the whole life of the divider feature.
 const BASELINE_TOLERANCE_CELLS: i64 = 2;
 
 /// The smallest width change, in cells, that counts as "this drag moved the
@@ -5718,12 +5840,15 @@ bisect_divider() {
         echo "wolf-gnome divider smoke: the bisection seeds $lo and $hi BOTH focused window $lo_win," >&2
         echo "  so they do not straddle a divider and no bisection can find one." >&2
         echo "  Candidate causes, in order of likelihood:" >&2
-        echo "    1. the editor pane's ORIGIN moved (an adw::HeaderBar height or a sidebar width" >&2
+        echo "    1. the PER-PANE CHROME changed (editor_inset::EDITOR_PADDING_PX or the statusbar" >&2
+        echo "       strip's height), which moves the text grid inside every pane;" >&2
+        echo "    2. the editor pane's ORIGIN moved (an adw::HeaderBar height or a sidebar width" >&2
         echo "       change) -- click_positions_the_cursor_under_cage derives it and fails first;" >&2
-        echo "    2. the measured CELL SIZE changed, so the panes are not the size modelled;" >&2
-        echo "    3. the divider HANDLE is far wider than the theme's one pixel, and both seeds" >&2
+        echo "    3. the measured CELL SIZE changed, so the panes are not the size modelled;" >&2
+        echo "    4. the divider HANDLE is far wider than the theme's one pixel, and both seeds" >&2
         echo "       landed on it;" >&2
-        echo "    4. a fresh split no longer produces EQUAL shares, which is what the seeds model." >&2
+        echo "    5. a fresh split no longer produces EQUAL shares, which is what the seeds model" >&2
+        echo "       -- geometry::equal_weights_give_equal_widths is the unit test for that half." >&2
         exit "$3"
     fi
     steps=0
@@ -6624,11 +6749,14 @@ bisect_divider() {
         echo "wolf-gnome divider relaunch smoke: the bisection seeds do not straddle the divider." >&2
         echo "  Seed $lo focused '$lo_buf' (expected $DIVIDER_FILE_LEFT) and seed $hi focused" >&2
         echo "  '$hi_buf' (expected $DIVIDER_FILE_RIGHT). Candidate causes, in order:" >&2
-        echo "    1. the editor pane's ORIGIN moved (an adw::HeaderBar height or sidebar width" >&2
+        echo "    1. the PER-PANE CHROME changed (editor_inset::EDITOR_PADDING_PX or the statusbar" >&2
+        echo "       strip's height), which moves the text grid inside every pane;" >&2
+        echo "    2. the editor pane's ORIGIN moved (an adw::HeaderBar height or sidebar width" >&2
         echo "       change) -- click_positions_the_cursor_under_cage derives it and fails first;" >&2
-        echo "    2. the measured CELL SIZE changed, so the panes are not the size modelled;" >&2
-        echo "    3. the divider HANDLE is far wider than the theme's one pixel;" >&2
-        echo "    4. a fresh split no longer produces EQUAL shares, which is what the seeds model." >&2
+        echo "    3. the measured CELL SIZE changed, so the panes are not the size modelled;" >&2
+        echo "    4. the divider HANDLE is far wider than the theme's one pixel;" >&2
+        echo "    5. a fresh split no longer produces EQUAL shares, which is what the seeds model" >&2
+        echo "       -- geometry::equal_weights_give_equal_widths is the unit test for that half." >&2
         echo "  An empty name means the click focused a pane holding no file at all, i.e. the :e" >&2
         echo "  never landed." >&2
         exit 21
@@ -7848,17 +7976,310 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
+// --- Per-pane statusbar fixtures: each pane's strip draws its OWN filename ---
+//
+// The asserted terms here are FILENAMES, which inverts this file's usual fixture
+// rule — and it inverts it for the same reason `tree_sidebar_shows_files_under_cage`,
+// `SIDEBARTOGGLE_FILE`, `OPENRECENT_TARGET_FILE` and `CD_TARGET_FILE` do: the
+// rendered NAME is the observable. A per-pane status bar's whole claim is that the
+// strip above each pane carries THAT pane's file, so there is nothing else to read.
+//
+// That leaves three ways a filename could reach the page without the strip drawing
+// it, and each is closed by construction rather than by hope:
+//
+// 1. **The tree sidebar** renders every cwd entry by name. Closed by putting the two
+//    fixtures OUTSIDE the working directory: `make_temp_cwd` returns
+//    `<unique>/project` and `cage_command` hands `<unique>` to the app as HOME, so a
+//    sibling `<unique>/sbfixtures/` is under home, outside the search root, and never
+//    listed. The scenario opens both by ABSOLUTE path.
+// 2. **The cmdline strip** paints the last toast, and `:e <path>` echoes the path it
+//    opened — which spells the second fixture's name. Closed by driving one more Ex
+//    command before the capture: an `:echo` of `STATUS_OCR_MARKER`, whose text carries
+//    neither filename. Without it, assertion 6 would be satisfiable by the cmdline
+//    with no strip drawn at all.
+// 3. **Neovim's own statusline**, which would draw the filename inside the grid.
+//    `runtime/nvim/init.lua` sets `laststatus = 0`, and that premise is measured
+//    rather than trusted: the readback below asks the CAPTIVE NEOVIM for
+//    `&laststatus`, and assertion 3 pins it at 0.
+//
+// The fixture tree:
+//
+// ```text
+// <unique>/                    the app's HOME (cage_command's default)
+//   project/                   TEMP_CWD_BASENAME -- the launch cwd and search root
+//     fill*.md                 nine fillers, page density
+//   sbfixtures/                STATUS_FIXTURE_DIR -- outside the search root
+//     statusalfa.md            STATUS_FILE_A, opened in the FIRST pane
+//     statusbravo.md           STATUS_FILE_B, opened in the SPLIT pane
+//   status_winheight.txt       STATUS_READBACK_NAME -- outside the search root too
+// ```
+
+/// Per-pane statusbar smoke: the directory holding the two opened fixtures, a
+/// SIBLING of the temp cwd and a child of the app's `HOME`.
+///
+/// It must carry none of the three asserted terms. It is drawn twice over — the
+/// strip's second line is the display path, and the typed `:e` command line spells
+/// the absolute path — so a directory named after an asserted term would satisfy that
+/// term's assertion from a component the strip's FILENAME line never drew. The
+/// seventh block of [`restore_fixture_names_cannot_satisfy_their_own_assertions`]
+/// asserts that rather than leaving it to this comment.
+const STATUS_FIXTURE_DIR: &str = "sbfixtures";
+
+/// Per-pane statusbar smoke: the file opened in the FIRST pane.
+///
+/// Its **name** is the asserted term, the same deliberate exception
+/// [`TREE_FILE_NAME`], [`OPENRECENT_TARGET_FILE`], [`SIDEBARTOGGLE_FILE`] and
+/// [`CD_TARGET_FILE`] carry, and the reason this const is absent from
+/// [`RELAUNCH_FIXTURE_NAMES`].
+const STATUS_FILE_A: &str = "statusalfa.md";
+
+/// Per-pane statusbar smoke: the file opened in the SPLIT pane. See
+/// [`STATUS_FILE_A`]; it is absent from [`RELAUNCH_FIXTURE_NAMES`] for the same
+/// reason.
+const STATUS_FILE_B: &str = "statusbravo.md";
+
+/// Body written into BOTH statusbar fixtures.
+///
+/// Deliberately wordless and identical in the two files. These are the only exempt
+/// fixtures in this file whose CONTENT is rendered — the scenario opens both — so a
+/// body carrying either filename would satisfy that file's assertion from the EDITOR
+/// GRID with no strip drawn at all, which is [`PICKER_FILE_NAME`]'s failure reached
+/// through content instead of through a name. The seventh block of
+/// [`restore_fixture_names_cannot_satisfy_their_own_assertions`] checks it against
+/// every asserted term.
+const STATUS_FIXTURE_BODY: &str = "# ZZCHROMEBODY";
+
+/// Lowercased substring OCR MUST find: [`STATUS_FILE_A`]'s name, drawn by the FIRST
+/// pane's status bar and by nothing else on the page.
+///
+/// The file lives outside the search root, so no sidebar row bears it; the cmdline
+/// carries [`STATUS_OCR_MARKER`] by capture time, not an `:e` path; and Neovim draws
+/// no statusline of its own (assertion 3).
+const STATUS_OCR_A: &str = "statusalfa";
+
+/// Lowercased substring OCR MUST find: [`STATUS_FILE_B`]'s name, drawn by the SPLIT
+/// pane's status bar. See [`STATUS_OCR_A`] for why nothing else can draw it.
+const STATUS_OCR_B: &str = "statusbravo";
+
+/// Lowercased substring OCR MUST find: the text the scenario `:echo`s just before
+/// `grim` fires.
+///
+/// It does TWO jobs, and only the first is a feature claim about anything:
+///
+/// * it replaces the `:e $STATUS_FILE_B` toast in the cmdline strip, which would
+///   otherwise put [`STATUS_OCR_B`] on the page with no status bar drawn at all;
+/// * it is this capture's PROOF OF LIFE — the window was still painting when `grim`
+///   ran — which is why assertion 4 is a precondition with no revert.
+const STATUS_OCR_MARKER: &str = "statusready";
+
+/// Name of the file the captive Neovim writes its `winheight(0)` and `&laststatus`
+/// into. It lands beside the temp cwd rather than inside it, outside the search root,
+/// so no sidebar row bears it.
+///
+/// Registered in [`RELAUNCH_FIXTURE_NAMES`] anyway, exactly as
+/// [`CD_READBACK_NAME`] is: its ABSOLUTE path is echoed in the typed
+/// `:call writefile(...)` command line, so a readback renamed to carry an asserted
+/// term would put that term on the page by a route the sidebar rule does not cover.
+const STATUS_READBACK_NAME: &str = "status_winheight.txt";
+
+/// The exact `winheight(0)` the focused pane must report once the chrome is
+/// subtracted — the ONLY end-to-end proof that the editor inset and the statusbar
+/// strip reach a pixel.
+///
+/// MEASURED 2026-08-04 on a **1280x720** cage output at `WOLF_FONT_PT` =
+/// [`SMOKE_FONT_PT`]: **11** rows, read off the smoke's own first failure against the
+/// `-1` placeholder it was landed with. The un-inset grid was 14 rows at the same
+/// font on the same output, so the chrome costs three whole rows.
+///
+/// It is derived from a RUN, never computed: the placeholder is the procedure, exactly
+/// as it is for [`PANE_ORIGIN_X_EXPECTED`] and [`PANE_ORIGIN_Y_EXPECTED`]. Put `-1`
+/// back, read the number the assertion message reports Neovim answered, and paste it
+/// here with the date and the cage output size. Do NOT compute it from the statusbar
+/// constants — a value derived from the constants the production code reads holds for
+/// whatever those constants become, which is the one thing this assertion exists to
+/// rule out.
+///
+/// It is not slack and it has no band: it is an exact equality, because the pointer
+/// smokes' x tolerance (`PANE_ORIGIN_TOLERANCE_PX + cell_w`) is wider than the 20 px
+/// the padding moves the pane origin by, so without an exact row count nothing in
+/// this file could tell the padding apart from no padding.
+const STATUS_EXPECTED_WINHEIGHT: i64 = 11;
+
+/// The PER-PANE STATUSBAR scenario, run as a single `sh -c` string inside `cage` (the
+/// [`VSPLIT_SCENARIO`] shape): launch + poll, settle, `:e` file A by ABSOLUTE path,
+/// settle, `<C-w>v`, settle, `:e` file B in the new pane, settle, park the block
+/// cursor, read `winheight(0)` and `&laststatus` back, `:echo` the marker, settle,
+/// screenshot.
+///
+/// ## Why the paths are absolute
+///
+/// Both fixtures live OUTSIDE the app's search root (see the block comment above), so
+/// the tree sidebar cannot draw either name and the strips are the only source. A
+/// relative `:e` would have to put them back in the cwd, at which point both
+/// assertions are satisfiable by a sidebar row with no strip on screen — the exact
+/// silent pass [`PICKER_FILE_NAME`]'s note records.
+///
+/// ## Why the `:echo` is LAST
+///
+/// The cmdline strip paints the last message, and `:e <path>` echoes the path it
+/// opened. Between the second `:e` and `grim` there must therefore be one more
+/// message, carrying neither filename. Anything typed after it that produces a
+/// message of its own — including the mode message from an insert-mode park — puts
+/// the ordering back at risk, which is why the park and the readback both run BEFORE
+/// it and nothing but a `sleep` runs after.
+///
+/// ## The block-cursor park
+///
+/// The normal-mode `o` plus Escape is this file's standing convention (the inverted
+/// cursor block corrupts the cell it covers). Here it is convention rather than
+/// protection — both asserted terms are STRIP text, which the editor's cursor never
+/// sits on — and it doubles as corroboration that keys still reach Neovim after the
+/// split.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before its window mapped (the shared convention). A LAUNCH
+///   failure; nothing below is about the status bar.
+/// * `14` — the readback never appeared, i.e. the Ex command never executed. DISTINCT
+///   from "the panes are the wrong size", which exits 0 and fails assertion 7.
+const STATUS_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+# How many WAIT_INTERVAL polls to allow for the readback file.
+FILE_TRIES=100
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome statusbar smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw before driving the editor.
+sleep "$SETTLE"
+
+# Poll for a readback file the captive Neovim writes. Nothing downstream may read a
+# file we merely hope is there. (The CD_SCENARIO body, verbatim.)
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome statusbar smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# Open file A in the (single) editor pane, by ABSOLUTE path: it lives outside the
+# app's search root on purpose, so no sidebar row can draw its name.
+wtype -- ":e $STATUS_PATH_A"
+wtype -k Return
+
+# Let nvim load file A and redraw before splitting.
+sleep "$SETTLE"
+
+# Trigger a VERTICAL split with the <C-w>v chord (the VSPLIT_SCENARIO form). The new
+# pane opens to the RIGHT of the current one, takes focus, and initially shows the
+# same buffer (file A) -- which is exactly why file B has to be opened into it below
+# before the two strips can differ.
+wtype -M ctrl -k w -m ctrl
+wtype -k v
+
+# Let the shell build the second pane (bind the new nvim window/grid) and redraw.
+sleep "$SETTLE"
+
+# In the now-focused new (right) pane, replace its buffer with file B.
+wtype -- ":e $STATUS_PATH_B"
+wtype -k Return
+
+# Let nvim load file B and both panes redraw.
+sleep "$SETTLE"
+
+# Park the block cursor off the buffer's first row, as every scenario here does.
+wtype -- o
+wtype -k Escape
+sleep "$SETTLE"
+
+# --- The readback: NEOVIM's own answer about the focused pane ----------------
+#
+# winheight(0) is the row count of the pane the front-end sized, which is the only
+# place the editor inset and the statusbar strip reach a number a test can compare.
+# &laststatus rides along because it is the premise the two OCR assertions rest on:
+# a Neovim drawing its own statusline would put the filename inside the GRID, and
+# both assertions would then hold with no strip painted at all.
+#
+# One printf, so both values describe one instant. The path is absolute and arrives
+# as an env var, so it does not depend on Neovim's cwd -- and it lands outside the
+# search root, so no sidebar row bears its name.
+wtype -- ":call writefile([printf('%d %d', winheight(0), &laststatus)], '$STATUS_READBACK')"
+wtype -k Return
+wait_file "$STATUS_READBACK" || exit 14
+
+# --- The marker, and it MUST be the last thing typed -------------------------
+#
+# The cmdline strip paints the last message. Without this, that message is the
+# `:e $STATUS_PATH_B` toast, which spells file B's name -- so the assertion that the
+# SPLIT pane's strip drew it would be satisfied by the cmdline with no status bar on
+# screen at all. This also doubles as the capture's proof of life.
+wtype -- ":echo '$STATUS_MARKER'"
+wtype -k Return
+
+# Let the redraw land before capturing.
+sleep "$SETTLE"
+
+# Capture the live window to the output PNG.
+grim "$OUT_PNG"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
 /// Creates a fresh, unique temp directory to serve as the launched app's working
 /// directory. The app derives `CoreConfig.cwd` from `std::env::current_dir()`, so
 /// this is the directory the file-search traversal walks and the directory the
 /// captive nvim runs in (the recent-files MRU lives in the global
 /// `state_dir()/file-mru.sqlite`, not under the cwd).
 ///
-/// ALL THIRTY-FOUR cage smokes derive their working directory from this — the window
-/// title smoke uses the result as the base for the two NESTED directories its `~`
-/// abbreviation needs, and the three relaunch smokes share one of these directories
-/// across BOTH of their launches, which is the whole scenario. A fresh cwd per run
-/// is MANDATORY, not tidiness:
+/// ALL THIRTY-SIX cage smokes derive their working directory from this — the window
+/// title smoke and the typed-`:cd` smoke use the result as the base for the NESTED
+/// directories their `~` abbreviation needs, the per-pane statusbar smoke hangs its
+/// fixture directory off the parent, and the three relaunch smokes share one of these
+/// directories across BOTH of their launches, which is the whole scenario. A fresh
+/// cwd per run is MANDATORY, not tidiness:
 ///
 /// * The captive nvim keeps a DURABLE, per-project swap dir keyed on the cwd
 ///   (`wolf_core::state::swap_dir_for` → `state_dir()/swap/<hash of cwd>`), which
@@ -8446,7 +8867,7 @@ const HOME_CONFIG_DIR_FALLBACK: &str = ".config/wolf";
 /// the "Note (OCR width)" / "Note (OCR height)" paragraphs above their own consts,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
-/// be applied here to all thirty-five.
+/// be applied here to all thirty-six.
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
@@ -9106,12 +9527,15 @@ fn assert_probe_cell_and_pane_origin(
     assert!(
         (origin_x - PANE_ORIGIN_X_EXPECTED).abs() <= PANE_ORIGIN_TOLERANCE_PX + metrics.cell_w,
         "{smoke}: the editor pane's derived X ORIGIN is {origin_x}, outside the band \
-         {PANE_ORIGIN_X_EXPECTED} +/- ({PANE_ORIGIN_TOLERANCE_PX} + cell_w). The four candidate \
-         causes, in order of likelihood: (1) a GTK4 client-side-decoration / shadow-margin offset \
+         {PANE_ORIGIN_X_EXPECTED} +/- ({PANE_ORIGIN_TOLERANCE_PX} + cell_w). The five candidate \
+         causes, in order of likelihood: (1) the PER-PANE CHROME changed — \
+         `editor_inset::EDITOR_PADDING_PX` or the statusbar strip's height — since this origin is \
+         the TEXT GRID's corner, which sits inside the pane widget by exactly that chrome; (2) a \
+         GTK4 client-side-decoration / shadow-margin offset \
          has appeared under cage (there was none: `motion 640 360` was measured arriving as \
-         surface-local `640.00000000, 360.00000000`); (2) the `adw::HeaderBar` height changed — a \
-         libadwaita/GTK bump; (3) `app::TREE_PANE_WIDTH` or the `gtk::Paned` divider width \
-         changed; (4) the cage output size changed. Derived origin ({origin_x}, {origin_y}); \
+         surface-local `640.00000000, 360.00000000`); (3) the `adw::HeaderBar` height changed — a \
+         libadwaita/GTK bump; (4) `app::TREE_PANE_WIDTH` or the `gtk::Paned` divider width \
+         changed; (5) the cage output size changed. Derived origin ({origin_x}, {origin_y}); \
          expected ({PANE_ORIGIN_X_EXPECTED}, {PANE_ORIGIN_Y_EXPECTED}); cell_w {}, cell_h {}; \
          probe ({PROBE_X}, {PROBE_Y}) -> (line {line}, col {col}); reported output extents \
          {width}x{height}. Raw readback was {raw:?}. PNG kept at {}. If \
@@ -9125,9 +9549,12 @@ fn assert_probe_cell_and_pane_origin(
     assert!(
         (origin_y - PANE_ORIGIN_Y_EXPECTED).abs() <= PANE_ORIGIN_TOLERANCE_PX + metrics.cell_h,
         "{smoke}: the editor pane's derived Y ORIGIN is {origin_y}, outside the band \
-         {PANE_ORIGIN_Y_EXPECTED} +/- ({PANE_ORIGIN_TOLERANCE_PX} + cell_h). Same four candidate \
-         causes as the X band, in the same order, but a Y-only shift points hardest at (2) — the \
-         `adw::HeaderBar` height — since the header bar is the only thing above the pane. Derived \
+         {PANE_ORIGIN_Y_EXPECTED} +/- ({PANE_ORIGIN_TOLERANCE_PX} + cell_h). Same five candidate \
+         causes as the X band, in the same order, but a Y-only shift points hardest at (1) and (3) \
+         — the STATUSBAR STRIP's height and the `adw::HeaderBar`'s — because those two are the \
+         whole of what sits above the grid, and only the strip is ours. The strip is a value: \
+         `statusbar_layout(metrics.size_px, secondary_font_size(..), ..)`, so a font-size change \
+         moves it too. Derived \
          origin ({origin_x}, {origin_y}); expected ({PANE_ORIGIN_X_EXPECTED}, \
          {PANE_ORIGIN_Y_EXPECTED}); cell_w {}, cell_h {}; probe ({PROBE_X}, {PROBE_Y}) -> \
          (line {line}, col {col}); reported output extents {width}x{height}. Raw readback was \
@@ -9174,10 +9601,18 @@ fn assert_fixture_fits(smoke: &str, dims: (i64, i64), probe_line: i64, rows_belo
 /// The MODELLED on-screen x of the divider that follows column `index` (1-based)
 /// when the editor pane is divided into `columns` equal columns, in output pixels.
 ///
-/// A model, and knowingly a rough one: a `gtk::Paned` positions its divider at a
-/// fraction of its TRAVEL rather than of its width, so this over-estimates by the
-/// handle and the far child's minimum — worth ~15-20 px per divider here. It exists
-/// only to seed a bisection, which is what actually finds the handle.
+/// A model, and knowingly an approximate one, though the approximation is small:
+/// `geometry::divider_position` places a divider at a fraction of the paned's own
+/// SPAN, which is exactly what equal columns of that span means, so the only error
+/// left is the handle each divider consumes — one pixel under Adwaita's non-wide
+/// separator, and a few more in a chain.
+///
+/// It stays a SEED rather than a target because that handle's width is theme-owned
+/// and its grab area is wider still, so no arithmetic here can name the pixel a press
+/// has to land on. The bisection is what finds it. The second, smaller source of
+/// error is the anchor: [`PANE_ORIGIN_X_EXPECTED`] names the text GRID's left edge,
+/// which sits `editor_inset::EDITOR_PADDING_PX` inside the pane area this model
+/// divides.
 fn equal_share_divider_x(index: i64, columns: i64) -> f64 {
     let editor_w =
         exact_f64(CAGE_OUTPUT_W_EXPECTED, "CAGE_OUTPUT_W_EXPECTED") - PANE_ORIGIN_X_EXPECTED;
@@ -9329,10 +9764,14 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
             && by + bh + margin <= overlay_h,
         "{smoke}: the derived restart-button rect ({bx}, {by}, {bw}, {bh}) does not sit at least \
          {margin} px clear of every edge of the {overlay_w}x{overlay_h} overlay allocation. The \
-         four candidate causes, in order of likelihood: (1) an `adw::HeaderBar` height change (a \
-         libadwaita/GTK bump), which moves the overlay's top edge and therefore its height; (2) \
+         five candidate causes, in order of likelihood: (1) THE CALLER SUBTRACTED THE WRONG \
+         ORIGIN — this allocation is `output - OVERLAY_ORIGIN_*`, the pane AREA's corner, and \
+         `PANE_ORIGIN_*` is the TEXT GRID's; the two look interchangeable and differ by the \
+         per-pane chrome, so an allocation roughly a statusbar strip and a padding too small is \
+         that mistake; (2) an `adw::HeaderBar` height change (a \
+         libadwaita/GTK bump), which moves the overlay's top edge and therefore its height; (3) \
          an `app::TREE_PANE_WIDTH` or `gtk::Paned` divider-width change, which moves its left \
-         edge; (3) a cage output-size change, which moves the bottom-right corner; (4) \
+         edge; (4) a cage output-size change, which moves the bottom-right corner; (5) \
          `crash_overlay.rs` having been rewritten to use an `adw::StatusPage`, or its root \
          `gtk::Box` having been given a NON-ZERO spacing — either of which breaks the derivation \
          outright, because `restart_button_rect` models exactly two `vexpand` spacers around a \
@@ -9403,7 +9842,7 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// [`SIDEBARTOGGLE_OCR_KEEP`] is an ordinary content term and follows the ordinary
 /// rule.
 ///
-/// Twenty-nine of the thirty-five smokes appear here. SIX contribute no rows at
+/// Thirty of the thirty-six smokes appear here. SIX contribute no rows at
 /// all, on purpose, and it is worth being explicit about which and why:
 ///
 /// * [`colon_qa_closes_the_window_under_cage`] captures no PNG and asserts only that
@@ -9703,6 +10142,21 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         "CD_OCR_UNABBREVIATED",
         "typed_cd_reroots_the_sidebar_under_cage",
     ),
+    (
+        STATUS_OCR_A,
+        "STATUS_OCR_A",
+        "pane_status_bar_shows_each_panes_filename_under_cage",
+    ),
+    (
+        STATUS_OCR_B,
+        "STATUS_OCR_B",
+        "pane_status_bar_shows_each_panes_filename_under_cage",
+    ),
+    (
+        STATUS_OCR_MARKER,
+        "STATUS_OCR_MARKER",
+        "pane_status_bar_shows_each_panes_filename_under_cage",
+    ),
 ];
 
 /// Every fixture NAME a smoke creates inside its OWN working directory, as
@@ -9901,6 +10355,23 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "CD_READBACK_NAME",
         "typed_cd_reroots_the_sidebar_under_cage",
     ),
+    // STATUS_FILE_A and STATUS_FILE_B are DELIBERATELY absent, for the fifth time in
+    // this table and for the same reason: their NAMES *are* the per-pane statusbar
+    // smoke's asserted terms, because the strip drawing the name is the observable, so
+    // the generic loop below — which forbids a fixture name from containing any
+    // asserted term — would reject them. They carry the same documented exemption
+    // TREE_FILE_NAME, OPENRECENT_TARGET_FILE, SIDEBARTOGGLE_FILE and CD_TARGET_FILE
+    // do, and the SEVENTH block of
+    // `restore_fixture_names_cannot_satisfy_their_own_assertions` asserts their
+    // preconditions, their crossed pair and their shared body instead.
+    //
+    // STATUS_FIXTURE_DIR is absent for the structural reason the title and typed-`:cd`
+    // smokes' directories are: it is not a file. That seventh block covers it too.
+    (
+        STATUS_READBACK_NAME,
+        "STATUS_READBACK_NAME",
+        "pane_status_bar_shows_each_panes_filename_under_cage",
+    ),
 ];
 
 /// Mechanically enforces the naming invariant documented on [`SIDEBAR_FILLER_FILES`]:
@@ -9951,12 +10422,19 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 /// ([`NAVBACK_OCR_ABSENT`]), `sbtangoleaf` ([`SIDEBARTOGGLE_OCR_ABSENT`]) and
 /// `sidebarkeepalfa` ([`SIDEBARTOGGLE_OCR_KEEP`]); and — added with the
 /// file-tree-sidebar-parity unit — `cdtango` ([`CD_OCR_ROOTED`]), `cdrootzulu`
-/// ([`CD_OCR_ROOT_NODE`]) and `cdouterhome` ([`CD_OCR_UNABBREVIATED`]). None is a
+/// ([`CD_OCR_ROOT_NODE`]) and `cdouterhome` ([`CD_OCR_UNABBREVIATED`]); and — added
+/// with the pane-chrome unit — `statusalfa` ([`STATUS_OCR_A`]), `statusbravo`
+/// ([`STATUS_OCR_B`]) and `statusready` ([`STATUS_OCR_MARKER`]). None is a
 /// substring of any [`SIDEBAR_FILLER_FILES`] entry, and no filler may be renamed to
-/// make one so. Five smokes contribute no term:
-/// [`colon_qa_closes_the_window_under_cage`] asserts on the cage exit status and
-/// captures no image, and the click, drag, scroll and divider-relayout smokes assert
-/// on files the captive Neovim writes about its own state rather than on pixels.
+/// make one so.
+///
+/// SIX smokes contribute no term, which is the same six [`ASSERTED_OCR_TERMS`]'s own
+/// doc comment enumerates — the two counts are of one set and must not drift apart
+/// again: [`colon_qa_closes_the_window_under_cage`] and
+/// [`config_font_size_changes_the_grid_under_cage`] capture no image at all (the
+/// first asserts on the cage exit status, the second on two `winwidth(0)` integers),
+/// and the click, drag, scroll and divider-relayout smokes assert on files the
+/// captive Neovim writes about its own state rather than on pixels.
 ///
 /// ## What it does NOT guard (and why that matters)
 ///
@@ -9989,7 +10467,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the thirty-five smokes — still
+/// nothing to the smoke suite's runtime and — unlike the thirty-six smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
@@ -10194,7 +10672,7 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// Both directions matter: a must-CONTAIN term in a fixture name makes its smoke
 /// pass vacuously, and a must-NOT-CONTAIN term makes it fail spuriously.
 ///
-/// ## The four deliberate, documented exemptions
+/// ## The five deliberate, documented exemptions
 ///
 /// The title smoke's two DIRECTORY names are not files and are not in
 /// [`RELAUNCH_FIXTURE_NAMES`], because they are the assertion's subject rather
@@ -10233,7 +10711,7 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// NAME, that its heading carries the keep-term, and that
 /// [`SIDEBARTOGGLE_FILE`] carries no OTHER asserted term.
 ///
-/// The typed-`:cd` smoke is the fourth, and it needs the widest block of the four
+/// The typed-`:cd` smoke is the fourth, and it needs the widest block of the five
 /// because THREE of its fixed path components are page text at once.
 /// [`CD_TARGET_FILE`]'s NAME is the subject of assertion 4 — it lives only inside the
 /// `:cd` target, so a sidebar row is the sole thing that can draw it — and it must
@@ -10248,6 +10726,24 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// [`CD_START_DIR`] is the launch cwd: the header bar draws `~/startdir` before the
 /// `:cd` and a sidebar `Dir` row draws it after, so it must neither carry nor be
 /// carried by any asserted term. The sixth block below asserts all of that.
+///
+/// The per-pane statusbar smoke is the fifth, and its crossed pair is the only one
+/// whose two halves are both must-CONTAIN terms. [`STATUS_FILE_A`] and
+/// [`STATUS_FILE_B`] are each the subject of their own assertion — the strip above a
+/// pane drawing THAT pane's filename is the whole feature — so each must contain its
+/// own term, which the generic loop forbids, and both are absent from
+/// [`RELAUNCH_FIXTURE_NAMES`]. The crossing is what makes the pair prove
+/// per-pane-ness rather than mere presence: if either filename also contained the
+/// OTHER's term, one pane's strip would satisfy both assertions and the documented
+/// revert — drawing the ACTIVE pane's status in every strip — would leave the smoke
+/// green. Beside them sit two more names. [`STATUS_FIXTURE_DIR`] is drawn by the
+/// strip's second line (the display path) and by the typed `:e` command line, and
+/// [`STATUS_FIXTURE_BODY`] is drawn by the editor grid itself, since these are the
+/// only exempt fixtures this file OPENS; either one carrying an asserted term would
+/// satisfy that term from a place the filename line never drew. The seventh block
+/// below asserts all of that, plus that neither filename carries
+/// [`STATUS_OCR_MARKER`] — which is the capture's proof of life and must not be
+/// satisfiable by the very thing it is proving was drawn.
 ///
 /// ## The two fixtures whose CONTENT is checked too
 ///
@@ -10487,7 +10983,7 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         );
     }
 
-    // The typed-`:cd` smoke's exemption — the widest of the four, because THREE fixed
+    // The typed-`:cd` smoke's exemption — the widest of the five, because THREE fixed
     // path components of its fixture tree are page text at once and they cross in
     // both directions. The tree is
     //
@@ -10626,6 +11122,162 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         }
     }
 
+    // The per-pane statusbar smoke's exemption — the only one whose crossed pair is
+    // two must-CONTAIN terms, because the feature under test is that TWO panes draw
+    // TWO DIFFERENT filenames. The fixtures are
+    //
+    //     <unique>/sbfixtures/{statusalfa.md, statusbravo.md}
+    //
+    // opened by absolute path from outside the app's search root, so no sidebar row
+    // draws either name and each strip is the sole source of its own.
+
+    // The SUBJECTS. Each filename is the term its own pane's strip must draw; if a
+    // name stops containing its term, that assertion is vacuous — the term is absent
+    // from the capture whatever the strip did.
+    for (name, name_const, term, term_const, which) in [
+        (
+            STATUS_FILE_A,
+            "STATUS_FILE_A",
+            STATUS_OCR_A,
+            "STATUS_OCR_A",
+            "first",
+        ),
+        (
+            STATUS_FILE_B,
+            "STATUS_FILE_B",
+            STATUS_OCR_B,
+            "STATUS_OCR_B",
+            "split",
+        ),
+    ] {
+        assert!(
+            name.to_lowercase().contains(term),
+            "{name_const} = {name:?} no longer contains {term_const} = {term:?}. That FILENAME is \
+             what the {which} pane's status bar must draw, and it is the ONLY thing on the page \
+             that can: the file lives outside the app's search root, so no sidebar row bears it, \
+             and the cmdline carries STATUS_OCR_MARKER by capture time. If the two stop agreeing \
+             the smoke asserts on a word nothing draws and reports a missing status bar that is in \
+             fact present. This file is exempt from the RELAUNCH_FIXTURE_NAMES loop above for \
+             exactly this reason."
+        );
+    }
+
+    // THE CROSSED PAIR, and here it is the whole discriminator rather than a
+    // supporting condition. The documented revert for this smoke makes every strip
+    // draw the ACTIVE pane's status; with the two names crossed, the surviving strip
+    // would satisfy BOTH assertions and that revert would leave the smoke green.
+    for (name, name_const, other_term, other_const) in [
+        (STATUS_FILE_A, "STATUS_FILE_A", STATUS_OCR_B, "STATUS_OCR_B"),
+        (STATUS_FILE_B, "STATUS_FILE_B", STATUS_OCR_A, "STATUS_OCR_A"),
+    ] {
+        assert!(
+            !name.to_lowercase().contains(other_term),
+            "{name_const} = {name:?} contains {other_const} = {other_term:?}, which is the OTHER \
+             pane's asserted term. The two assertions would then both be satisfiable by a single \
+             strip, so the smoke would stop proving that each pane draws its OWN file and would \
+             pass green against exactly the build its revert produces (draw_pane reading the \
+             ACTIVE pane's cached status instead of the pane it is painting). Rename the FILE; do \
+             NOT change either OCR const and do NOT touch the assertions."
+        );
+    }
+
+    // The proof-of-life marker must not be satisfiable by the very thing it exists to
+    // prove was drawn, and the fixture DIRECTORY is page text twice over — the
+    // strip's second line is the display path, and the typed `:e` command line spells
+    // the absolute path — so it must carry none of the three terms.
+    for (name, name_const, why) in [
+        (
+            STATUS_FILE_A,
+            "STATUS_FILE_A",
+            "a filename carrying the marker would satisfy the capture's proof-of-life assertion \
+             from the strip it is supposed to be independent of, so a window that had stopped \
+             painting the cmdline would read as healthy",
+        ),
+        (
+            STATUS_FILE_B,
+            "STATUS_FILE_B",
+            "the same: the marker is the one term on that page that must come from somewhere \
+             other than a status bar",
+        ),
+    ] {
+        assert!(
+            !name.to_lowercase().contains(STATUS_OCR_MARKER),
+            "{name_const} = {name:?} contains STATUS_OCR_MARKER = {STATUS_OCR_MARKER:?}: {why}."
+        );
+    }
+    for (term, term_const) in [
+        (STATUS_OCR_A, "STATUS_OCR_A"),
+        (STATUS_OCR_B, "STATUS_OCR_B"),
+        (STATUS_OCR_MARKER, "STATUS_OCR_MARKER"),
+    ] {
+        assert!(
+            !STATUS_FIXTURE_DIR.to_lowercase().contains(term),
+            "STATUS_FIXTURE_DIR = {STATUS_FIXTURE_DIR:?} contains {term_const} = {term:?}. The \
+             directory is drawn by the strip's SECOND line (the display path) and by the typed `:e` \
+             command line, neither of which is the filename line the assertions are about — so this \
+             word would satisfy its assertion from a component that says nothing about whether the \
+             pane's own file was drawn. Rename the DIRECTORY; do NOT change the OCR const."
+        );
+    }
+
+    // The two fixtures are the only exempt ones in this file that a scenario OPENS,
+    // so their shared body renders in the editor grid beside the strips. A body
+    // carrying an asserted term would satisfy that term from the grid with no strip
+    // drawn at all — `PICKER_FILE_NAME`'s failure reached through content.
+    for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {
+        assert!(
+            !STATUS_FIXTURE_BODY.to_lowercase().contains(term),
+            "STATUS_FIXTURE_BODY = {STATUS_FIXTURE_BODY:?} contains {term_const} = {term:?}. It is \
+             the CONTENT of both files the per-pane statusbar smoke opens, so it is drawn inside \
+             the editor grid of both panes: this word would satisfy — or, for a must-NOT-contain \
+             term, spuriously break — `{smoke}`'s OCR assertion with neither status bar painted. \
+             Keep the body wordless and unlike every asserted term."
+        );
+    }
+
+    // Every OTHER asserted term still applies to the two exempted filenames, exactly
+    // as it does to the three exemptions above.
+    for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {
+        for (name, name_const, exempt) in [
+            (STATUS_FILE_A, "STATUS_FILE_A", STATUS_OCR_A),
+            (STATUS_FILE_B, "STATUS_FILE_B", STATUS_OCR_B),
+        ] {
+            if term == exempt {
+                continue;
+            }
+            assert!(
+                !name.to_lowercase().contains(term),
+                "{name_const} = {name:?} contains {term_const} = {term:?}. It is page text in the \
+                 per-pane statusbar smoke's capture, drawn by a status bar, so this word would \
+                 satisfy — or, for a must-NOT-contain term, spuriously break — `{smoke}`'s OCR \
+                 assertion. This name is EXEMPT from the RELAUNCH_FIXTURE_NAMES loop above only \
+                 for its OWN term ({exempt:?}); every other asserted term still applies to it."
+            );
+        }
+    }
+
+    // Well-formedness of the fixture directory, the same check TEMP_CWD_BASENAME
+    // gets, because the smoke joins this onto the temp cwd's PARENT. Two of the three
+    // malformed shapes have real consequences. An empty value (or `.`) puts both
+    // fixtures directly in the app's HOME, at which point the checks above are about
+    // a path component that is not on the page and the display path they reason about
+    // is a different string. A leading `..` climbs out of the run's unique temp tree
+    // into `std::env::temp_dir()` itself, which is SHARED across runs — the fixtures
+    // would then be whatever a previous run left behind rather than what this one
+    // wrote, which is exactly the order-dependence `make_temp_cwd` exists to prevent.
+    let mut status_components = Path::new(STATUS_FIXTURE_DIR).components();
+    let status_first = status_components.next();
+    let status_extra = status_components.next();
+    assert!(
+        matches!(status_first, Some(std::path::Component::Normal(_))) && status_extra.is_none(),
+        "STATUS_FIXTURE_DIR = {STATUS_FIXTURE_DIR:?} is not a single ordinary path segment (it \
+         parses as {status_first:?} followed by {status_extra:?}). The per-pane statusbar smoke \
+         joins it onto `smoke_home(cwd)` — the temp cwd's parent, which `cage_command` hands the \
+         app as HOME — so the fixtures sit beside the search root rather than inside it. A value \
+         that resolves to the parent itself, or that climbs out of it, moves the fixtures \
+         somewhere the smoke's whole anti-vacuity argument no longer holds."
+    );
+
     // The one relaunch fixture whose CONTENT is more than a heading, checked here
     // rather than in a guard of its own so the smoke count this file's docs pin
     // stays put. Its lines are editor text in the very pane whose heading
@@ -10640,9 +11292,10 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         DIVIDER_BODY_LINE_COUNT + 1,
         "`divider_right_fixture_body` produced {} line(s), expected the heading plus \
          DIVIDER_BODY_LINE_COUNT = {DIVIDER_BODY_LINE_COUNT} body lines. The body's whole job is \
-         to fill the narrow pane past the measured winheight(0) of 14 so no `~` end-of-buffer \
-         column is drawn; a short body puts that column back and tesseract misreads the heading \
-         above it (see DIVIDER_BODY_LINE_COUNT for the ablations that isolated it).",
+         to fill the narrow pane past its visible row count (measured 2026-08-04 at 11, and 14 \
+         before the per-pane chrome took three) so no `~` end-of-buffer column is drawn; a short \
+         body puts that column back and tesseract misreads the heading above it (see \
+         DIVIDER_BODY_LINE_COUNT for the ablations that isolated it).",
         lines.len()
     );
     assert_eq!(
@@ -10691,10 +11344,10 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         PROJSEARCH_BODY_LINE_COUNT + 1,
         "`search_target_fixture_body` produced {} line(s), expected the heading plus \
          PROJSEARCH_BODY_LINE_COUNT = {PROJSEARCH_BODY_LINE_COUNT} body lines. The body fills the \
-         pane past the measured winheight(0) of 14 so no `~` end-of-buffer column is drawn beside \
-         the heading the smoke OCRs (see DIVIDER_BODY_LINE_COUNT for the ablations that isolated \
-         that hazard), and it must be long enough to hold PROJSEARCH_MATCH_LINE = \
-         {PROJSEARCH_MATCH_LINE} at all.",
+         pane past its visible row count (measured 2026-08-04 at 11, and 14 before the per-pane \
+         chrome took three) so no `~` end-of-buffer column is drawn beside the heading the smoke \
+         OCRs (see DIVIDER_BODY_LINE_COUNT for the ablations that isolated that hazard), and it \
+         must be long enough to hold PROJSEARCH_MATCH_LINE = {PROJSEARCH_MATCH_LINE} at all.",
         search_lines.len()
     );
     assert_eq!(
@@ -13259,19 +13912,26 @@ fn close_pane_chord_closes_focused_pane_under_cage() {
 /// arithmetic. Neither can tell you whether a GTK controller ever fires. That —
 /// and only that — is this smoke's subject.
 ///
-/// ## Measured geometry (2026-08-02)
+/// ## Measured geometry (2026-08-04)
 ///
 /// This is the smoke that derives [`PANE_ORIGIN_X_EXPECTED`] /
-/// [`PANE_ORIGIN_Y_EXPECTED`]. On a **1280x720** cage output (the extents
-/// `wolf-pointer-inject` reported on its `ready` line, read back and asserted rather
-/// than assumed) at `WOLF_FONT_PT` = [`SMOKE_FONT_PT`]:
+/// [`PANE_ORIGIN_Y_EXPECTED`], so this table and those two constants are one
+/// measurement written down twice and must never disagree. On a **1280x720** cage
+/// output (the extents `wolf-pointer-inject` reported on its `ready` line, read back
+/// and asserted rather than assumed) at `WOLF_FONT_PT` = [`SMOKE_FONT_PT`]:
 ///
 /// | quantity | value |
 /// | --- | --- |
 /// | cage output size | `1280x720` |
 /// | `cell_w` / `cell_h` | `22.4765625` / `44.0` |
-/// | probe `(640, 360)` -> Neovim cell | `line 8, col 18` |
-/// | derived pane origin | `(257.8984375, 52.0)` |
+/// | probe `(640, 360)` -> Neovim cell | `line 5, col 17` |
+/// | derived GRID origin | `(280.375, 184.0)` |
+/// | the pane's visible rows | 11 |
+///
+/// The origin this smoke derives is the TEXT GRID's corner, not the pane widget's:
+/// it comes from a click-to-cell readback, and the per-pane chrome sits between the
+/// two. The pane area's own corner is a separate measurement,
+/// [`OVERLAY_ORIGIN_X_EXPECTED`] / [`OVERLAY_ORIGIN_Y_EXPECTED`].
 ///
 /// ## Red-run revert
 ///
@@ -14356,10 +15016,15 @@ fn nvim_crash_recovers_and_reopens_the_file_under_cage() {
     // The unsaved edit is APPENDED to line 2 — the first filler line — so the
     // recovered line 2 is that filler line followed by the marker. `opt.wrap` +
     // `opt.linebreak` would split it across screen rows if it were wider than the
-    // window, and a split could fall inside the asserted word. Rather than trusting
-    // the measured `winwidth(0)` of 45, assert the composed width against the width
-    // Neovim actually reported. The line is composed from the SAME consts
-    // `restart_fixture_body` writes it from, so the two cannot drift.
+    // window, and a split could fall inside the asserted word. Rather than trusting a
+    // measured `winwidth(0)` — 45 before the per-pane chrome, 43 after it — assert
+    // the composed width against the width Neovim actually reported. The line is
+    // composed from the SAME consts `restart_fixture_body` writes it from, so the two
+    // cannot drift.
+    //
+    // It passes at exactly `43 <= 43`: zero margin, green, one column from red. See
+    // [`RESTART_UNSAVED_MARKER`] for what to shorten if the chrome grows, and for why
+    // it is not this marker.
     let composed_line = format!(
         "{:03}{}{RESTART_UNSAVED_MARKER}",
         1,
@@ -14783,41 +15448,76 @@ fn stalled_nvim_raises_the_stall_overlay_under_cage() {
 ///
 /// `wolf_gnome::restart_button_rect` is the SAME function the widget builder's size
 /// requests realise, so the two cannot drift. The composition is: the cage output
-/// extents; minus the pane origin (which IS the overlay origin — the overlay's main
-/// child is the pane container whose single `DrawingArea` sits at offset `(0, 0)`,
-/// and under cage the window is the output with zero CSD offset); into
+/// extents; minus the OVERLAY origin ([`OVERLAY_ORIGIN_X_EXPECTED`] /
+/// [`OVERLAY_ORIGIN_Y_EXPECTED`]), which is the pane area's own top-left corner and
+/// therefore the overlay's, since the overlay's main child is the pane container and
+/// under cage the window is the output with zero CSD offset; into
 /// `restart_button_rect`; then a tenth of the way in from that rect's LEFT edge
 /// horizontally, and the rect's CENTRE vertically. That asymmetry is not stylistic —
 /// a centre-derived x was measured in pass 5 to be blind to the button-width revert.
 /// The derivation comment in the body carries the measurement, and states the width
 /// bound the inset does and does not discriminate.
 ///
+/// **The anchor is the OVERLAY origin, never the pane origin, and the two are
+/// separate measurements on purpose.** [`PANE_ORIGIN_X_EXPECTED`] /
+/// [`PANE_ORIGIN_Y_EXPECTED`] are derived from a click-to-cell readback, so they name
+/// the TEXT GRID's top-left — inside the pane widget by
+/// `editor_inset::EDITOR_PADDING_PX` horizontally and by the statusbar strip plus
+/// that padding vertically. The overlay is anchored to the pane WIDGET's top-left.
+/// The two differ by the per-pane chrome, they look interchangeable, and collapsing
+/// them puts the derived click a strip and a padding away from the button — which on
+/// a 320x64 target is a miss, reported as scenario exit 19. Neither may be derived
+/// from the other: `OVERLAY_ORIGIN_*` carries its own measurement and its own
+/// cross-check.
+///
 /// Three self-checking preconditions guard it:
 /// [`assert_button_rect_is_the_named_size`] (a collapsed `(0,0,0,0)` must
 /// not silently retarget the click to the overlay's top-left),
 /// [`assert_button_rect_fits`] (a `PANE_ORIGIN_TOLERANCE_PX` analogue), and
-/// [`assert_inside_extents`]. After the run the whole derivation is REDONE from the
-/// run's own measured extents and its own derived origin, and the injected point is
-/// asserted to lie inside that rect.
+/// [`assert_inside_extents`]. After the run the derivation is REDONE from the run's
+/// own reported extents and the injected point is asserted to lie inside the
+/// resulting rect.
 ///
-/// ## Measured geometry (2026-08-02)
+/// **What that redo cannot do, stated because its absence is what let an anchor
+/// error live here undetected:** the only origin this run measures for itself is the
+/// GRID's, so the redo pins the overlay origin on both sides and is self-consistent
+/// on the anchor — it moves with an anchor error rather than catching one. It still
+/// catches a changed output size, a collapsed rect, and a click derived from a stale
+/// button geometry. Anchor drift is caught by re-measuring the overlay origin the way
+/// its provenance was taken, and, cheaply, by the scenario's own recovery poll: a
+/// click that misses the button drives no restart and exits 19.
+///
+/// ## Measured geometry (overlay origin and allocation re-measured 2026-08-04)
 ///
 /// | quantity | value |
 /// | --- | --- |
 /// | cage output size | `1280x720` |
-/// | overlay origin | `(251, 46)` |
-/// | `restart_button_rect(1029.0, 674.0)` | `(354.5, 345.0, 320.0, 64.0)` |
-/// | button, absolute | `x 605.5..925.5`, `y 391..455` |
+/// | overlay origin | `(251, 47)` |
+/// | overlay allocation | `1029 x 673` (`1280 - 251`, `720 - 47`) |
+/// | `restart_button_rect(1029.0, 673.0)` | `(354.5, 344.5, 320.0, 64.0)` |
+/// | button, absolute | `x 605.5..925.5`, `y 391.5..455.5` |
 /// | rendered button, inspected | `x 605..925`, `y 392..456` |
 ///
-/// Those are MEASURED values, and the pre-run derivation does NOT use them: it is
-/// anchored on the pinned `PANE_ORIGIN_X_EXPECTED` / `PANE_ORIGIN_Y_EXPECTED`
-/// (257.9, 52.0), which sit a few px inside the origin these runs rendered at. The
-/// point it actually injects is therefore `(641, 426)` — the value the pass-5 red
-/// runs report verbatim — and not what this table on its own would imply. The gap is
-/// expected and small against the click's margins; the post-run assertion redoes the
-/// whole derivation from the run's OWN extents and origin and proves the injected
-/// point landed inside the real rect.
+/// The origin and the allocation are the coder's 2026-08-04 measurement, taken from
+/// a temporary tick callback over every distinct allocation across the crash, the
+/// restart and the click, and reproduced on a second run; the rendered button is an
+/// independent inspection of a retained capture. The two agree to within the half
+/// pixel GTK snaps a centred block of odd leftover height by, which is what makes the
+/// pair a cross-check rather than one number written down twice.
+///
+/// Unlike the pane-origin constants, these ARE what the pre-run derivation uses, so
+/// the table and the click are one composition rather than two: it injects
+/// `(251 + 354.5 + 32, 47 + 344.5 + 32)` = `(637.5, 423.5)`, which
+/// [`pixel_target`]'s round-half-away-from-zero takes to **(638, 424)** — 32.5 px
+/// inside the button's left edge, and on its vertical centre line to within the half
+/// pixel that rounding adds.
+///
+/// CONFIRMED BY EXECUTION, 2026-08-04: this smoke passed in the final verification
+/// gate. That discharges the derivation more directly than a transcript of the
+/// injected point would, because the point is not asserted on — it is either inside
+/// the button, or the restart never fires and the scenario's recovery poll exits 19.
+/// A green run is therefore the observation that the derived point hits the target,
+/// and it is the anchor above that it confirms.
 ///
 /// ## Red-run reverts (five; run EVERY one — pass 5 records the measured outcome)
 ///
@@ -14910,17 +15610,20 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
 
     // --- Derive the button point (no magic pixel) --------------------------
     //
-    // The pane origin IS the overlay origin, and under cage the window is the output,
-    // so the overlay runs from that origin to the bottom-right corner. Both inputs
-    // are the MEASURED constants, because the click point has to exist before `cage`
-    // is spawned while the authoritative extents only arrive afterwards on the
+    // The anchor is the OVERLAY origin — the pane area's own top-left corner — and
+    // under cage the window is the output with no CSD offset, so the overlay runs
+    // from that corner to the bottom-right one. It is NOT the pane origin: those
+    // constants come from a click-to-cell readback and name the text grid's corner,
+    // which the per-pane chrome puts a statusbar strip and a padding inside this one.
+    // Both inputs are MEASURED constants, because the click point has to exist before
+    // `cage` is spawned while the authoritative extents only arrive afterwards on the
     // helper's `ready` line — which is why the run asserts, below, that the reported
     // extents really are the ones this derivation used, and then redoes the whole
     // derivation from its own measurements.
     let output_w = exact_f64(CAGE_OUTPUT_W_EXPECTED, "the expected cage output width");
     let output_h = exact_f64(CAGE_OUTPUT_H_EXPECTED, "the expected cage output height");
-    let overlay_w = output_w - PANE_ORIGIN_X_EXPECTED;
-    let overlay_h = output_h - PANE_ORIGIN_Y_EXPECTED;
+    let overlay_w = output_w - OVERLAY_ORIGIN_X_EXPECTED;
+    let overlay_h = output_h - OVERLAY_ORIGIN_Y_EXPECTED;
     let rect = wolf_gnome::restart_button_rect(overlay_w, overlay_h);
     assert_button_rect_is_the_named_size(SMOKE, rect);
     assert_button_rect_fits(SMOKE, rect, (overlay_w, overlay_h));
@@ -14940,25 +15643,26 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
     // Both are centred on x 765, so a centre click hits both — and with a centre
     // click this smoke stayed GREEN with the builder reverted to 40. Even the 3/4
     // point (x 845) still lands inside the 193px button. A tenth in from the left
-    // edge puts the injected point at x 641 — the value pass 5's red runs record
-    // verbatim as `the click at (641, 426)` — which against those measured spans is
-    // 36px inside the CORRECT button and 28px clear of the natural-width one.
+    // edge puts the injected point at x 638 against those measured spans: 33px
+    // inside the CORRECT button and 31px clear of the natural-width one. (Pass 5's
+    // red runs record `the click at (641, 426)` verbatim; that was the same
+    // composition anchored on the pane origin, back when the two origins coincided,
+    // and the 3px is the anchor correction rather than a change of method.)
     //
-    // Both margins absorb both sources of error. The rect derivation itself agreed
-    // with the render to 1px once anchored on the run's own origin (pass 1: rendered
-    // x 605..925 y 392..456 against a derived x 605.5..925.5, y 391..455); on top of
-    // that, the PRE-RUN anchor `PANE_ORIGIN_X_EXPECTED` sits a few px right of the
-    // origin those runs actually rendered at (see this smoke's measured-geometry
-    // table), which is what shifts the injected point rightwards inside the rect.
-    // Neither error is close to eating a 28px margin.
+    // Both margins absorb the error left in the derivation, which is now small and
+    // one-sided: the rect agrees with the render to within half a pixel (rendered
+    // x 605..925 y 392..456 against a derived x 605.5..925.5, y 391.5..455.5), and
+    // the anchor is the overlay's own measured origin rather than a proxy for it, so
+    // there is no sub-cell phase term left on this path at all. Nothing here is close
+    // to eating a 31px margin.
     //
     // What the left-edge inset discriminates, as a BOUND rather than as an anecdote:
     // the button is `halign(Center)`, so it renders across [765 - W/2, 765 + W/2]
-    // where W = max(requested, natural ~193), and a click at x 641 misses it iff
-    // W < 248. This point therefore catches any builder width that has shrunk below
-    // ~248px: the documented 40px revert renders W 193, i.e. 55px inside that bound
-    // (the 28px of pixel clearance quoted above). It would NOT catch a shrink from
-    // 320 to, say, 260 — widths in (248, 320) are undiscriminated, and "it catches
+    // where W = max(requested, natural ~193), and a click at x 638 misses it iff
+    // W < 254. This point therefore catches any builder width that has shrunk below
+    // ~254px: the documented 40px revert renders W 193, i.e. 61px inside that bound
+    // (the 31px of pixel clearance quoted above). It would NOT catch a shrink from
+    // 320 to, say, 260 — widths in (254, 320) are undiscriminated, and "it catches
     // the 40px revert" must not be read as more than that.
     //
     // Y stays at the rect's vertical CENTRE: the vertical derivation is the
@@ -14967,11 +15671,11 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
     // which is the other axis this click leaves undiscriminated.
     const BUTTON_HIT_INSET_FRACTION: f64 = 0.1;
     let btn_x = pixel_target(
-        PANE_ORIGIN_X_EXPECTED + bx + bw * BUTTON_HIT_INSET_FRACTION,
+        OVERLAY_ORIGIN_X_EXPECTED + bx + bw * BUTTON_HIT_INSET_FRACTION,
         "the restart button x",
     );
     let btn_y = pixel_target(
-        PANE_ORIGIN_Y_EXPECTED + by + bh / 2.0,
+        OVERLAY_ORIGIN_Y_EXPECTED + by + bh / 2.0,
         "the restart button y",
     );
     let btn_x_env = btn_x.to_string();
@@ -15058,8 +15762,24 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
     let (origin_x, origin_y) =
         assert_probe_cell_and_pane_origin(SMOKE, (l0, c0), &metrics, extents, &out_png, &raw0);
 
-    let measured_overlay_w = exact_f64(extents.0, "the reported cage output width") - origin_x;
-    let measured_overlay_h = exact_f64(extents.1, "the reported cage output height") - origin_y;
+    // The redo uses this run's own EXTENTS with the pinned OVERLAY origin, and the
+    // limitation in that is worth stating rather than discovering: the only origin
+    // this run measures for itself is the GRID's, from the probe click, and the
+    // overlay is anchored to the pane WIDGET's. Deriving one from the other is
+    // exactly the collapse that has to stay undone, so the overlay origin is pinned
+    // on both sides here.
+    //
+    // The consequence, stated plainly: this check is self-consistent on the anchor
+    // and therefore CANNOT detect an anchor that has drifted — it moves with it. What
+    // it does still catch is a changed output size, a collapsed rect, and a click
+    // derived from a stale button geometry. Detecting anchor drift needs the overlay
+    // origin re-measured the way [`OVERLAY_ORIGIN_X_EXPECTED`]'s provenance was taken,
+    // and the cheap proxy for "someone should" is the scenario's own recovery poll:
+    // a click that misses the button exits 19.
+    let measured_overlay_w =
+        exact_f64(extents.0, "the reported cage output width") - OVERLAY_ORIGIN_X_EXPECTED;
+    let measured_overlay_h =
+        exact_f64(extents.1, "the reported cage output height") - OVERLAY_ORIGIN_Y_EXPECTED;
     let measured_rect = wolf_gnome::restart_button_rect(measured_overlay_w, measured_overlay_h);
     assert_button_rect_is_the_named_size(SMOKE, measured_rect);
     let measured_overlay = (measured_overlay_w, measured_overlay_h);
@@ -15068,23 +15788,24 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
     let hit_x = exact_f64(btn_x, "the injected button x");
     let hit_y = exact_f64(btn_y, "the injected button y");
     assert!(
-        hit_x >= origin_x + mbx
-            && hit_x <= origin_x + mbx + mbw
-            && hit_y >= origin_y + mby
-            && hit_y <= origin_y + mby + mbh,
+        hit_x >= OVERLAY_ORIGIN_X_EXPECTED + mbx
+            && hit_x <= OVERLAY_ORIGIN_X_EXPECTED + mbx + mbw
+            && hit_y >= OVERLAY_ORIGIN_Y_EXPECTED + mby
+            && hit_y <= OVERLAY_ORIGIN_Y_EXPECTED + mby + mbh,
         "{SMOKE}: the point actually injected, ({btn_x}, {btn_y}), lies OUTSIDE the button rect \
-         this run's own measurements describe: origin ({origin_x}, {origin_y}) plus \
+         this run's own extents describe: overlay origin ({OVERLAY_ORIGIN_X_EXPECTED}, \
+         {OVERLAY_ORIGIN_Y_EXPECTED}) plus \
          `restart_button_rect({measured_overlay_w}, {measured_overlay_h})` = ({mbx}, {mby}, \
-         {mbw}, {mbh}), i.e. absolute x {}..{}, y {}..{}. The pre-run derivation used the pinned \
-         PANE_ORIGIN_X_EXPECTED / PANE_ORIGIN_Y_EXPECTED, and the derived origin carries the probe \
-         click's sub-cell phase, so a small disagreement is expected and harmless — a disagreement \
-         large enough to leave a {mbw}x{mbh} button is not. Re-measure the origin constants (the \
-         band assertion above prints the derived value) rather than moving the click. PNG kept at \
-         {}.",
-        origin_x + mbx,
-        origin_x + mbx + mbw,
-        origin_y + mby,
-        origin_y + mby + mbh,
+         {mbw}, {mbh}), i.e. absolute x {}..{}, y {}..{}. Both sides use the pinned overlay \
+         origin, so this cannot be an anchor disagreement: what it names is a changed OUTPUT SIZE \
+         (the extents assertion above prints the reported one) or a `restart_button_rect` whose \
+         shape moved under the click derivation. The pane origin derived from this run's probe \
+         click was ({origin_x}, {origin_y}) — a DIFFERENT corner, the text grid's, and not \
+         comparable with these numbers. PNG kept at {}.",
+        OVERLAY_ORIGIN_X_EXPECTED + mbx,
+        OVERLAY_ORIGIN_X_EXPECTED + mbx + mbw,
+        OVERLAY_ORIGIN_Y_EXPECTED + mby,
+        OVERLAY_ORIGIN_Y_EXPECTED + mby + mbh,
         out_png.display()
     );
 
@@ -16344,9 +17065,14 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
     assert!(
         widest - narrowest <= BASELINE_TOLERANCE_CELLS,
         "{SMOKE}: the three fresh panes are {:?} cells wide, a spread of {} — more than the \
-         {BASELINE_TOLERANCE_CELLS} cells a chain of paneds positioned by TRAVEL rather than by \
-         width can account for. The bisection seeds are modelled on equal shares, so this also \
-         says those seeds are aimed at the wrong pixels. PNG kept at {}.",
+         {BASELINE_TOLERANCE_CELLS} cells of slack a chain of paneds needs for its handles and \
+         rounding. Equal weights are supposed to give equal widths: `geometry::divider_position` \
+         scales by the paned's SPAN, so the only asymmetry left is the handle. Read a real spread \
+         as a PRODUCT defect — scaling by `max_position` instead puts the end child's minimum \
+         between the two panes at every fraction, which is what \
+         `geometry::equal_weights_give_equal_widths` pins — and NOT as a tolerance to widen. It \
+         also says the bisection seeds, which are modelled on equal shares, are aimed at the wrong \
+         pixels. PNG kept at {}.",
         &w0[..3],
         widest - narrowest,
         out_png.display()
@@ -16479,7 +17205,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 ///    grids and paint. The capture is read twice — `--psm 11` through
 ///    [`ocr_to_lowercase`] and `--psm 6` through [`ocr_uniform_block_to_lowercase`]
 ///    — and each term is accepted from either reading, for the reason under
-///    "Reading a 15-cell column" below. Both terms are still demanded literally.
+///    "Reading a narrow column" below. Both terms are still demanded literally.
 ///
 /// The two preconditions before them — the baseline pair is equal, and the drag
 /// moved it — are what separate "the press missed the divider handle" from "the
@@ -16493,24 +17219,61 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// divider drag at all; see [`DIVIDER_RELAUNCH_SCENARIO`]'s `read_widths` for the
 /// measurement that pins the difference.
 ///
+/// MEASURED 2026-08-04 on a **1280x720** cage output, from a green run:
+///
 /// | quantity | value |
 /// | --- | --- |
-/// | paned travel at the drag | `max_position` 1005 px, position 679 px after it, fraction 0.6756 |
-/// | run 1 post-drag, MEASURED at the `resize_grid` calls | 30 and 15 cells, ratio 0.667 |
-/// | run 2's restored panes, MEASURED in pixels | 679 and 349 px — the same 30 and 15 cells |
-/// | run 1 baseline, DERIVED from half the same travel | about 22 and 23 cells |
-/// | the narrow pane against the 14-character heading | 15 columns, one to spare |
+/// | the paned, read live | span 1029 px, `min_position` 63, `max_position` 965 |
+/// | run 1 baseline, a fresh split with equal weights | 21 and 21 cells |
+/// | run 1 post-drag | 28 and 13 cells |
+/// | run 2's restored panes | 28 and 13 cells, identical to run 1's |
+/// | the narrow pane against the asserted TERM | 13 columns against 12 characters |
 ///
-/// So [`MIN_DRAG_CELLS`] (3) sits against a move of about 8 cells per pane,
-/// [`RATIO_TOLERANCE`] (0.08) against a run-1-to-run-2 difference of 0, and
-/// [`MIN_RATIO_OFFSET`] (0.08) against a ratio 0.167 off centre. The tightest of
-/// the five is the heading's one spare column, which is what
-/// [`DIVIDER_RELAUNCH_DRAG_PX`] is sized by: widen the drag and the narrow pane
-/// soft-wraps `# DIVIDERBRAVO`, and assertion 3 reads two fragments.
+/// The paned's three numbers are one measurement rather than three: `965` is
+/// `(1029 - 1) - 63`, the span less the handle less the end child's floor, and `63`
+/// is `editor_inset::min_pane_size`'s own answer at this cell size. `geometry`'s
+/// [`equal_weights_give_equal_widths`] carries that exact paned as a table row, so
+/// the same arithmetic is asserted from a unit test with no compositor.
 ///
-/// ## Reading a 15-cell column
+/// The baseline PAIR is the thing to read first. Equal weights give equal widths to
+/// within the handle, which is what makes `21 and 21` the expected shape rather than
+/// a lucky one; a spread of cells there is a product defect with its own unit test,
+/// not a tolerance to widen (see [`BASELINE_TOLERANCE_CELLS`]).
 ///
-/// Fitting the heading is necessary and was not sufficient, and three separate
+/// The derived margins, from those cell counts: [`MIN_DRAG_CELLS`] (3) sits against a
+/// move of 7 and 8 cells, [`RATIO_TOLERANCE`] (0.08) against a run-1-to-run-2
+/// difference of 0 (the counts are identical), and [`MIN_RATIO_OFFSET`] (0.08)
+/// against a ratio of `28/41` = 0.683, i.e. 0.183 off centre.
+///
+/// ## What actually bounds the drag — and it is NOT the heading
+///
+/// The tightest margin belongs to assertion 3, and its reason is easy to get wrong.
+/// The narrow pane is 13 columns and the heading `# DIVIDERBRAVO` is 14 characters,
+/// so the heading does **not** fit — and does not need to. `runtime/nvim/init.lua`
+/// sets `wrap` and `linebreak`, so the line breaks at the SPACE: the `#` lands alone
+/// on the first screen row and `DIVIDERBRAVO` — the 12-character asserted term — lands
+/// whole on the second, inside 13 columns with one to spare.
+///
+/// So the binding constraint is **12 characters in 13 columns**, and it holds only
+/// because `linebreak` never splits a word. Widening [`DIVIDER_RELAUNCH_DRAG_PX`]
+/// narrows that pane until the term itself no longer fits, at which point `linebreak`
+/// has nowhere left to break and assertion 3 reads two fragments.
+///
+/// **Do not lower the drag "so the 14-character heading fits":** that constraint does
+/// not exist, and tuning against it would trade a real margin for an imaginary one.
+/// The two things that would break the assertion are a narrow pane under 12 columns
+/// and a `linebreak` that stopped breaking at the space. The constant stays at its
+/// current value; both preconditions were measured to pass at it.
+///
+/// ## Reading a narrow column
+///
+/// The ablations below were run on a 15-column pane, before the per-pane chrome
+/// narrowed it to 13. All three findings are properties of the RENDER rather than of
+/// that width — an end-of-buffer marker column, a focus ring's edge, and a
+/// misclassified glyph — and the narrower the column, the more each one matters, so
+/// the answers hold a fortiori. The counts are left as they were measured.
+///
+/// Fitting the term is necessary and was not sufficient, and three separate
 /// things had to be answered before assertion 3 could read the narrow pane. Two are
 /// answered by FIXTURE and one by the READER; each was isolated by measurement on a
 /// retained PNG rather than argued.
@@ -16521,7 +17284,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// | the active-pane FOCUS RING's top edge — a long thin high-contrast line immediately above the heading | six ablations on one PNG; the top edge alone accounted for it | [`DIVIDER_RELAUNCH_SCENARIO`]'s closing `<C-w>h`, which moves the ring to the WIDE pane |
 /// | a single misclassified GLYPH at 15 columns | the same pixels read through both segmentation modes, twice over | the second reader, [`ocr_uniform_block_to_lowercase`] |
 ///
-/// The third is why this smoke, alone of the thirty-five, reads its capture twice.
+/// The third is why this smoke, alone of the thirty-six, reads its capture twice.
 /// With the first two answered, on one retained PNG:
 ///
 /// | command | verbatim output |
@@ -16718,9 +17481,14 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
     assert!(
         (base_left - base_right).abs() <= BASELINE_TOLERANCE_CELLS,
         "{SMOKE}: the fresh split gave panes of {base_left} and {base_right} cells, a spread of {} \
-         — more than the {BASELINE_TOLERANCE_CELLS} cells a paned positioned by TRAVEL rather than \
-         by width can account for. The bisection seed is modelled on equal shares, so this also \
-         says the seed is aimed at the wrong pixels. PNG kept at {}.",
+         — more than the {BASELINE_TOLERANCE_CELLS} cells of slack a paned needs for its handle \
+         and rounding. A fresh `<C-w>v` carries EQUAL weights and no drag, so the two panes are \
+         supposed to come out equal to within that handle: `geometry::divider_position` scales by \
+         the paned's SPAN, and `geometry::equal_weights_give_equal_widths` is the unit test for \
+         it. Read a real spread as a PRODUCT defect, not as a tolerance to widen — scaling by \
+         `max_position` instead leaves exactly the end child's minimum between the two panes. It \
+         also says the bisection seed, modelled on equal shares, is aimed at the wrong pixels. PNG \
+         kept at {}.",
         (base_left - base_right).abs(),
         out_png.display()
     );
@@ -18209,6 +18977,282 @@ fn typed_cd_reroots_the_sidebar_under_cage() {
          store was left EMPTY, in which case assertion 4 would have failed first, so this cause is \
          already ruled out by the assertion above; (d) the row rendered and OCR misread it — check \
          the retained PNG first. PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+}
+
+/// Each pane's status bar draws THAT pane's filename, and the chrome it sits in
+/// costs the grid real rows.
+///
+/// ## What it covers that nothing else does
+///
+/// Three things, and the third is the one no other smoke can reach:
+///
+/// * that a per-pane status bar is painted at all — `draw_pane`'s two
+///   `render::draw_text_line` calls, over the `PaneStatus` cached on the wake;
+/// * that the two strips carry DIFFERENT filenames, i.e. that the paint reads the
+///   status of the pane it is painting rather than of the active one. That is what
+///   the crossed fixture pair buys, and it is the only property here a "the feature
+///   is roughly working" capture could not fake;
+/// * that the editor inset and the strip's height reach the GRID SIZE, through the
+///   captive Neovim's own `winheight(0)`. Nothing else in this file can see the
+///   padding: the pointer smokes' origin band is `PANE_ORIGIN_TOLERANCE_PX + cell_w`
+///   wide, which is wider than the 20 px the padding moves the pane origin by, so
+///   without an exact row count `EDITOR_PADDING_PX` would be table-tested and
+///   nothing more.
+///
+/// ## The premises, and where each is pinned
+///
+/// The two OCR assertions are about FILENAMES, which inverts this file's usual
+/// fixture rule. Everything that makes that safe is stated on the `STATUS_*` consts
+/// and asserted rather than assumed: the fixtures live outside the search root
+/// (assertion 0), the cmdline carries the marker rather than an `:e` path by capture
+/// time (assertion 4 reads it), and Neovim draws no statusline of its own
+/// (assertion 3 asks the captive Neovim, rather than trusting a `runtime/nvim`
+/// setting this test does not own).
+/// [`restore_fixture_names_cannot_satisfy_their_own_assertions`]'s seventh block
+/// covers the naming half mechanically.
+///
+/// ## What this smoke does NOT prove
+///
+/// The active/inactive treatment. `statusbar_layout::statusbar_text` pins both alphas
+/// and the bold flag as values, and `draw_pane` demonstrably reads `active_pane`, but
+/// OCR reads neither font weight nor a 50 % dim — both strips are legible either way,
+/// which is exactly why both are asserted PRESENT here. Same shape as the sidebar's
+/// current-file bold, recorded in `tests/README.md`.
+///
+/// ## Assertions, classified
+///
+/// A precondition gets NO revert: inventing one would manufacture a discriminator
+/// this smoke does not have. The `measured` column is the coder's to fill from an
+/// actual red run, per `tests/README.md`'s "A red-run demonstration is a deliverable,
+/// not a formality".
+///
+/// | # | assertion | kind | revert | measured |
+/// | --- | --- | --- | --- | --- |
+/// | 0 | the fixture directory and the readback sit OUTSIDE the app's search root | **precondition** — makes the anti-vacuity argument executable instead of prose: inside the root, the tree sidebar would draw both filenames and assertions 5 and 6 would hold with no status bar painted at all | none; do not invent one | n/a |
+/// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | n/a |
+/// | 2 | [`assert_png_present`] | precondition — grim produced an image | none; do not invent one | n/a |
+/// | 3 | the `&laststatus` readback is `0` | **precondition** — Neovim draws no statusline of its own, so a filename on the page came from our strip. Asked of the CAPTIVE NEOVIM rather than read off `runtime/nvim/init.lua`, because that file is a premise this test does not control | none; do not invent one | n/a |
+/// | 4 | OCR contains [`STATUS_OCR_MARKER`] | **precondition, not a discriminator** — the capture's proof of life. Its absence means the capture is stale or the cmdline stopped painting, neither of which this unit touches | none; do not invent one | n/a |
+/// | 5 | OCR contains [`STATUS_OCR_A`] | **the discriminator for PER-PANE-ness** | in `draw_pane`, look the cached status up by `self.active_pane.get()` instead of by the `pane_id` being painted — a one-line change. Both strips then read `statusbravo.md`, so this row goes red while row 6 stays GREEN, which is the only revert here that discriminates per-pane-ness rather than presence. | RED: `OCR did not contain "statusalfa" — the name of statusalfa.md, which is open in the FIRST (left) pane and can be drawn only by that pane's status bar. Assertion 4 is GREEN`. **The panic alone does not carry the claim; the TERM COUNTS in that run's dump do: `statusbravo` 3, `statusalfa` 0, `statusready` 1.** Assertion 6's term survives on the page — twice over, as this row's own message tells the reader to check for — while assertion 5's is gone. That asymmetry is what makes the failure discriminate per-pane-ness rather than mere presence. |
+/// | 6 | OCR contains [`STATUS_OCR_B`] | **discriminator for the strip rendering at all**, jointly with row 5 | delete the two `render::draw_text_line` calls from `draw_pane`. Rows 5 and 6 both go red; 5 fails first, so this row has no isolated red run under it. | RED, and the panic NAMES ASSERTION 5 — the test is fail-fast and this row has no isolated red run, exactly as the revert column says. **Its evidence is again the term counts: `statusready` 1, and NOTHING else — neither `statusalfa` nor `statusbravo` is anywhere on the page.** That is what separates this revert from row 5's, where `statusbravo` survived: there one strip still drew, here neither does. |
+/// | 7 | `winheight(0)` equals [`STATUS_EXPECTED_WINHEIGHT`] | **the discriminator for the editor inset and the strip's height** — the only end-to-end proof either reaches a pixel | delete the `- 2 * padding` term from `editor_inset::grid_rect`'s `h` (one more row survives) or the `statusbar_h` term (two more) | RED under BOTH reverts, with assertions 4, 5 and 6 green under each, so both are observed here as a changed row count. **Three distinct values, which is what proves this assertion separates the two terms rather than merely noticing that the chrome changed: baseline 11; without `statusbar_h`, `the focused pane reports winheight(0) = 13`; without `- 2 * padding`, `= 12`.** Both messages read `expected -1` because the constant was still its placeholder when they were taken — the evidence is the REPORTED `winheight(0)`, which the constant since being pinned to 11 does not affect, so neither revert needs re-running. Against the pinned 11 they would read `left: 13` and `left: 12` against `right: 11`. |
+#[test]
+fn pane_status_bar_shows_each_panes_filename_under_cage() {
+    const SMOKE: &str = "pane_status_bar_shows_each_panes_filename_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // The LAUNCH working directory, `<unique>/project` — the app's search root, and
+    // deliberately EMPTY of the two fixtures. It gets the nine density fillers and
+    // nothing else, so every row the tree sidebar draws is a filler and neither
+    // asserted filename can come from it.
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(SMOKE, &cwd, &[]);
+
+    // The fixtures, in a SIBLING of the cwd: `<unique>/sbfixtures`. `cage_command`
+    // hands the app `smoke_home(cwd)` == `cwd.parent()` as HOME, so this directory is
+    // under home (nothing walks home) and outside the search root (the app's
+    // `FileSearch` is rooted at the cwd). The scenario opens both by absolute path.
+    let fixture_dir = smoke_home(&cwd).join(STATUS_FIXTURE_DIR);
+    std::fs::create_dir_all(&fixture_dir).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: failed to create the statusbar fixture dir {}: {e}",
+            fixture_dir.display()
+        )
+    });
+
+    let path_a = fixture_dir.join(STATUS_FILE_A);
+    let path_b = fixture_dir.join(STATUS_FILE_B);
+    for path in [&path_a, &path_b] {
+        std::fs::write(path, format!("{STATUS_FIXTURE_BODY}\n")).unwrap_or_else(|e| {
+            panic!(
+                "{SMOKE}: failed to write the statusbar fixture {}: {e}",
+                path.display()
+            )
+        });
+    }
+
+    // The readback lands beside the cwd for the same reason the fixtures do: its name
+    // is drawn by nothing, and its absolute path is echoed in the typed
+    // `:call writefile(...)` command line.
+    let readback = smoke_home(&cwd).join(STATUS_READBACK_NAME);
+    let out_png = runtime_dir.join("wolf_gnome_statusbar_smoke.png");
+    for path in [&readback, &out_png] {
+        clear_evidence(path, SMOKE);
+    }
+
+    // --- Assertion 0 (precondition): the fixtures are outside the search root --
+    //
+    // This smoke's whole anti-vacuity argument is that the tree sidebar cannot draw
+    // either filename, and that argument lives in two other functions —
+    // `make_temp_cwd`, which decides the cwd is a fixed-name CHILD of a unique
+    // parent, and `smoke_home`, which decides HOME is that parent. Both are shared,
+    // so a later change to either must surface here rather than as a smoke that
+    // passes for the wrong reason.
+    for (path, what) in [
+        (&fixture_dir, "the fixture directory"),
+        (&readback, "the readback file"),
+    ] {
+        assert!(
+            !path.starts_with(&cwd),
+            "{SMOKE}: {what} {} is INSIDE the app's working directory {}, which is its file-search \
+             root. The tree sidebar renders every entry under that root BY NAME, so \
+             {STATUS_OCR_A:?} and {STATUS_OCR_B:?} would be on the page as sidebar rows and \
+             assertions 5 and 6 would hold with no status bar painted at all — a permanent silent \
+             pass, not a flake. Put them back beside the cwd (`smoke_home(&cwd).join(...)`); do NOT \
+             weaken the assertions.",
+            path.display(),
+            cwd.display()
+        );
+    }
+
+    let status = cage_command(STATUS_SCENARIO, &cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("STATUS_PATH_A", &path_a)
+        .env("STATUS_PATH_B", &path_b)
+        .env("STATUS_READBACK", &readback)
+        .env("STATUS_MARKER", STATUS_OCR_MARKER)
+        .status()
+        .expect("failed to spawn `cage` for the headless per-pane statusbar smoke scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage per-pane statusbar scenario exited unsuccessfully ({status}). Read the \
+         exit code FIRST; each names a different half of the run.\n\
+         Exit 11: the app died before its window ever mapped. A LAUNCH failure — nothing below is \
+         about the status bar.\n\
+         Exit 14: the `winheight(0)` readback never appeared, which means the Ex command never \
+         executed: keys stopped reaching Neovim, or the <C-w>v split left focus somewhere \
+         unexpected. That is DISTINCT from \"the panes are the wrong size\", which exits 0 and \
+         fails assertion 7 instead.\n\
+         Any other status means wtype or grim failed. Screenshot expected at {}.",
+        out_png.display()
+    );
+
+    // --- Assertion 2 (precondition): grim produced an image -------------------
+    assert_png_present(SMOKE, &out_png);
+
+    // --- Assertion 3 (PRECONDITION): Neovim draws no statusline of its own ----
+    //
+    // The premise underneath assertions 5 and 6. With `laststatus` non-zero Neovim
+    // paints the filename INSIDE the grid, and both OCR assertions would then hold
+    // for a build that draws no strip at all. `runtime/nvim/init.lua` sets it to 0,
+    // but that file is not this test's to control, so the captive Neovim is asked.
+    let readings = read_ints(&readback, 2, SMOKE);
+    let (got_winheight, got_laststatus) = (readings[0], readings[1]);
+    assert_eq!(
+        got_laststatus, 0,
+        "{SMOKE}: the captive Neovim reports `&laststatus` = {got_laststatus}, not 0. It then \
+         draws its OWN status line inside each window's grid, carrying the buffer name — so \
+         assertions 5 and 6 below would be satisfied by Neovim's chrome rather than by this \
+         front-end's status bar, and would keep passing with `draw_pane`'s text calls deleted. \
+         This is a PRECONDITION about the shared `runtime/nvim/init.lua`, not a front-end failure; \
+         read it as \"assertions 5 and 6 cannot be trusted this run\"."
+    );
+
+    let ocr_text = ocr_to_lowercase(&out_png);
+
+    // --- Assertion 4 (PRECONDITION, no revert): the capture is alive ----------
+    //
+    // The marker is the last thing the scenario types, so it is the cmdline strip's
+    // message when `grim` fires. Two jobs: it proves the window was still painting,
+    // and it displaces the `:e $STATUS_PATH_B` toast that would otherwise put
+    // assertion 6's term on the page from the cmdline. Nothing in this unit can break
+    // it, so it has NO revert and none may be invented for it.
+    assert!(
+        ocr_text.contains(STATUS_OCR_MARKER),
+        "{SMOKE}: OCR did not contain {STATUS_OCR_MARKER:?} — the text the scenario `:echo`s \
+         immediately before the capture, which the cmdline strip paints as the last message. This \
+         is a PRECONDITION with no revert of ours: its absence means the capture is stale, the \
+         cmdline stopped painting, or `:echo` under `ext_messages` produced no visible toast at \
+         all (in which case the fix is a different Ex command with a deterministic message — never \
+         a weaker assertion). Read this red as \"assertions 5 and 6 below cannot be trusted this \
+         run\": without the marker the cmdline may still be showing the `:e` path, which spells \
+         {STATUS_OCR_B:?}. PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+
+    // --- Assertion 5 (THE DISCRIMINATOR): the FIRST pane keeps its own file ---
+    //
+    // `statusalfa.md` is open in the left pane only, lives outside the search root,
+    // and is not what the cmdline is showing (assertion 4). The only thing on the
+    // page that can draw its name is that pane's own status bar.
+    //
+    // REVERT (the coder runs this in step 7): in `draw_pane`, look the cached status
+    // up by `self.active_pane.get()` instead of by the `pane_id` being painted. Both
+    // strips then draw `statusbravo.md`: this assertion goes red and assertion 6
+    // stays green, which is what makes it a test of PER-PANE-ness rather than of
+    // presence.
+    assert!(
+        ocr_text.contains(STATUS_OCR_A),
+        "{SMOKE}: OCR did not contain {STATUS_OCR_A:?} — the name of {STATUS_FILE_A}, which is \
+         open in the FIRST (left) pane and can be drawn only by that pane's status bar. Assertion \
+         4 is GREEN, so the window was painting and the cmdline is showing the marker rather than \
+         an `:e` path. The candidate causes, in order:\n\
+         (a) EVERY STRIP IS DRAWING THE ACTIVE PANE'S STATUS. That is the documented revert for \
+         this row, and it leaves assertion 6 green exactly as you see it — check the dump below \
+         for {STATUS_OCR_B:?} appearing TWICE.\n\
+         (b) no strip is drawn at all, in which case assertion 6 is red too and the cause is \
+         `draw_pane`'s text calls rather than which status they read.\n\
+         (c) the left pane's cached `PaneStatus` was never refreshed, so it still holds the \
+         `[No Name]` it was built with — the dump then carries `no name` where this term belongs.\n\
+         (d) the strip is drawn but clipped away, which would need the grid rect and the strip \
+         rect to disagree; assertion 7 is the one that would also move.\n\
+         PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+
+    // --- Assertion 6: the SPLIT pane draws its own file -----------------------
+    //
+    // Jointly with assertion 5 this is what proves a strip is painted at all;
+    // separately it names WHICH file the surviving strip is showing. It has no
+    // isolated red run: the revert that deletes `draw_pane`'s two text calls reddens
+    // assertion 5 first.
+    assert!(
+        ocr_text.contains(STATUS_OCR_B),
+        "{SMOKE}: OCR did not contain {STATUS_OCR_B:?} — the name of {STATUS_FILE_B}, which the \
+         scenario opened into the pane the <C-w>v split created. With assertion 5 GREEN the split \
+         pane's strip is the only thing missing, so the likely causes are that the split never \
+         happened (one pane, one strip), that the second `:e` did not land in the new pane, or \
+         that the new pane's cached status was never refreshed after the layout rebuild. With \
+         assertion 5 RED as well, no strip is being painted at all and this row adds nothing to \
+         that diagnosis. PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+
+    // --- Assertion 7 (THE DISCRIMINATOR for the inset and the strip height) ---
+    //
+    // Neovim's own answer about the pane the front-end sized. This is the ONLY place
+    // in this file where `EDITOR_PADDING_PX` and the statusbar's height reach a
+    // number: they cost whole ROWS, and a row count is exact.
+    //
+    // REVERT (the coder runs this in step 7): delete the `- 2 * padding` term from
+    // `editor_inset::grid_rect`'s `h` (the pane keeps one more row) or the
+    // `statusbar_h` term (it keeps several). Either leaves every OCR assertion above
+    // green, which is precisely why this row exists.
+    assert_eq!(
+        got_winheight, STATUS_EXPECTED_WINHEIGHT,
+        "{SMOKE}: the focused pane reports winheight(0) = {got_winheight}, expected \
+         {STATUS_EXPECTED_WINHEIGHT}. If STATUS_EXPECTED_WINHEIGHT is still the -1 placeholder \
+         this failure is EXPECTED and is how the value is derived: record {got_winheight} in that \
+         const together with today's date and the cage output size, exactly as PANE_ORIGIN_X_EXPECTED \
+         and PANE_ORIGIN_Y_EXPECTED were derived, and do NOT compute it from the statusbar \
+         constants. Otherwise the chrome changed size. A HIGHER number means the grid was given \
+         back space the chrome is supposed to take — one extra row per missing `padding` term, \
+         several per missing `statusbar_h` term — and a LOWER one means something is subtracted \
+         twice. Assertions 5 and 6 stay green under all of those, which is why this row is the \
+         only end-to-end proof the inset and the strip height exist at all. PNG kept at {}.",
         out_png.display()
     );
 }

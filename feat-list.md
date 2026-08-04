@@ -41,12 +41,14 @@ Linux gets the pinned Neovim from the flake devShell via `WOLF_NVIM_BIN`; there 
 | Text attributes: undercurl / strikethrough / special color | `feat/paint-special-attributes` (`0cdaedd`)                                   | [x]   | [ ]   |
 | Cursor color from the `WolfCursor` highlight group         | `feat/cursor-color`                                                           | [x]   | [x]   |
 | Editor background inherits the theme background            | `feat/cursor-color` (`ca8b3c3`)                                               | [x]   | [x]   |
-| Per-pane status bar (filename + display path)              | `feat/status-bar` (`ffc3c49`)                                                 | [x]   | [ ]   |
-| Active/inactive pane treatment (no dimming)                | `fix/dark-mode` (`745a8f5`)                                                   | [x]   | [ ]   |
-| Editor padding / insets                                    | `feat/ui-tweaks-2`                                                            | [x]   | [ ]   |
+| Per-pane status bar (filename + display path)              | `feat/status-bar` (`ffc3c49`)                                                 | [x]   | [x]   |
+| Active/inactive pane treatment (no dimming)                | `fix/dark-mode` (`745a8f5`)                                                   | [x]   | [x]   |
+| Editor padding / insets                                    | `feat/ui-tweaks-2` (`eadf266`, not the branch tip)                            | [x]   | [x]   |
 | macOS Option key composes accents (option-as-option)       | `feat/macos-alt-key-handling`                                                 | [x]   | [ ]   |
 
 Divider drag on GTK is the stock `gtk::Paned` handle drag, and the position it lands on is written back into the pure tree's weights, which is what makes it survive a re-layout and reach `state.json`. One divergence from macOS is real and deliberate: GTK renders an n-ary split as a right-leaning paned chain, so a divider governs its head child against the whole remainder, which is rescaled proportionally, where macOS's `setPairFraction` reweights only the adjacent pair.
+
+The per-pane status bar diverges from macOS in two visible ways, both following from GTK reading no OS theme: its band is the editor's own background rather than a titlebar match, and a path too long for its pane is clipped rather than ellipsized.
 
 Mouse and vertical scroll input work on both front-ends, as thin GTK glue over pure seams (`geometry::cell_at` and the `mouse` module).
 
@@ -152,7 +154,7 @@ The rendering pipeline and the loopback preview server are entirely in `wolf-cor
 | Config-driven font family / size / line height   | `feat/neovim-plugin-vendoring` (`129aa8f`, `be2e86c`) | [x]   | [x]   |
 | Bundled fonts (iA Writer Mono S, JetBrains Mono) | `feat/neovim-plugin-vendoring` (`129aa8f`, `be2e86c`) | [x]   | [x]   |
 | Baseline-grid typography                         | `feat/typography` (`2735a6d`)                         | [x]   | [ ]   |
-| Status bar aligned to the content edge           | `feat/typography` (`460692d`)                         | [x]   | [ ]   |
+| Status bar aligned to the content edge           | `feat/typography` (`460692d`)                         | [x]   | [x]   |
 | Follows the OS dark/light appearance             | `fix/dark-mode` (`c81f7a2`)                           | [x]   | [ ]   |
 | Application icon                                 | `feat/mac-application-icon`                           | [x]   | [ ]   |
 | Vendored `orlando` rendering plugin              | `jplein/lua-changes` (`6ee5c16`)                      | [x]   | [ ]   |
@@ -161,7 +163,7 @@ The rendering pipeline and the loopback preview server are entirely in `wolf-cor
 
 `wolf-gnome` reads the shared `wolf-config.yaml` through `wolf_core::config` and drives its cell geometry from the configured font family, size and line height; `WOLF_FONT_PT` overrides the configured size, as it does on macOS. Both editor families are vendored into the Nix devShell and exposed through the repo-controlled fontconfig, so a configured `iA Writer Mono S` resolves on Linux.
 
-Baseline-grid typography is the 24px CSS grid inside the rendered preview document, so it belongs with the Markdown-preview rows above and is unreachable until Linux has a preview pane. The status-bar row waits on the per-pane status bar, which this front-end does not have. The three vendored plugin assets are bundled by Bazel into `Wolf.app` only — the captive `init.lua` self-locates them and is a strict no-op when absent, so on Linux they are simply not there.
+Baseline-grid typography is the 24px CSS grid inside the rendered preview document, so it belongs with the Markdown-preview rows above and is unreachable until Linux has a preview pane. Both front-ends align a status bar's text with the grid text below it, out of one inset; the macOS `StatusbarTextSpan` seam has no Linux counterpart, because its whole content is the 90-column cap's centring offset and that row stays unticked here. The three vendored plugin assets are bundled by Bazel into `Wolf.app` only — the captive `init.lua` self-locates them and is a strict no-op when absent, so on Linux they are simply not there.
 
 ## Terminal
 

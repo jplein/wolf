@@ -71,6 +71,11 @@ pub struct CellMetrics {
     pub ascent: f64,
     /// The measured font descent, in device units — the glyph box's bottom half.
     pub descent: f64,
+    /// The configured font size converted to DEVICE PIXELS — the same number the
+    /// cell height is derived from, exposed because the per-pane statusbar sizes
+    /// its two lines from it (`statusbar_layout` is unit-agnostic and this crate
+    /// calls it in device pixels).
+    pub size_px: f64,
     /// The base font description (cloned and toggled for bold/italic per cell).
     pub font: pango::FontDescription,
 }
@@ -140,6 +145,7 @@ impl CellMetrics {
             baseline,
             ascent,
             descent,
+            size_px,
             font,
         }
     }
@@ -231,5 +237,41 @@ pub(crate) fn draw_glyph(
     // taller than the glyphs. When the cell is exactly the glyph box the offset is
     // exactly 0.0 and nothing moves.
     cr.move_to(x, y + metrics.baseline - metrics.ascent);
+    pangocairo::functions::show_layout(cr, &layout);
+}
+
+/// Lays out and draws ONE line of free text in `fg`, with the layout's TOP at `y`.
+///
+/// A sibling of [`draw_glyph`] rather than a widening of it. `draw_glyph` centres a
+/// glyph inside a CELL (`baseline - ascent`) and takes its face from
+/// [`CellMetrics::font`]; the per-pane statusbar has no cells, needs two different
+/// font sizes, and gets its line tops from `crate::statusbar_layout`, which already
+/// reserves a whole line box — so no baseline centring applies here. Widening
+/// `draw_glyph` instead would touch [`paint`], the cursor and the cmdline strip for
+/// nothing.
+///
+/// Weight and size ride on the caller's `font`, which is why there is no `style`
+/// argument: `crate::pane_view` builds its three descriptions once and picks
+/// between them per frame.
+///
+/// `pub(crate)` for the same reason [`draw_glyph`] is: a caller that reimplemented
+/// the Pango layout would let the strip's text drift away from the grid paint (see
+/// this module's Gotchas in `crates/wolf-gnome/src/README.md`).
+pub(crate) fn draw_text_line(
+    cr: &cairo::Context,
+    font: &pango::FontDescription,
+    x: f64,
+    y: f64,
+    text: &str,
+    fg: Rgb,
+) {
+    let layout = pangocairo::functions::create_layout(cr);
+    layout.set_font_description(Some(font));
+    layout.set_text(text);
+
+    set_source(cr, fg);
+    // Pango places the LAYOUT'S TOP at the move-to point, which is exactly what the
+    // caller's line top means.
+    cr.move_to(x, y);
     pangocairo::functions::show_layout(cr, &layout);
 }

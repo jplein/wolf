@@ -31,6 +31,19 @@
 //!   box within it ([`cell_metrics_math::baseline`]). A port of
 //!   `WolfKeyMap/CellMetricsMath.swift`, with two deliberate divergences named in
 //!   that module's docs.
+//! - [`mod@editor_inset`]: the chrome around a pane's text grid, as arithmetic —
+//!   the pane-local rectangle the grid paints into
+//!   ([`editor_inset::grid_rect`]), the pane-to-grid coordinate map every pointer
+//!   event routes through ([`editor_inset::grid_local`]), the grid size that
+//!   survives the chrome ([`editor_inset::grid_size_for_pane`], a composition on
+//!   top of the unchanged [`grid_size_for`]), and the pane content floor that
+//!   still leaves one whole cell ([`editor_inset::min_pane_size`]).
+//! - [`mod@statusbar_layout`]: the per-pane statusbar rulebook — the strip's
+//!   height and its two line boxes ([`statusbar_layout::statusbar_layout`]), the
+//!   second line's font size ([`statusbar_layout::secondary_font_size`]), and the
+//!   colour-and-weight rule that is the WHOLE active/inactive treatment
+//!   ([`statusbar_layout::statusbar_text`]), since the pane body is painted
+//!   identically either way.
 //! - [`mod@config_seam`]: the rules for CONSUMING a [`wolf_core::WolfConfig`] —
 //!   the `WOLF_FONT_PT`-over-`font-size` precedence
 //!   ([`config_seam::resolve_font_pt`], which takes the override as an argument so
@@ -170,6 +183,7 @@ pub mod command_action;
 pub mod config_seam;
 pub mod crash_overlay;
 pub mod cursor;
+pub mod editor_inset;
 pub mod geometry;
 pub mod input;
 pub mod layout;
@@ -186,6 +200,7 @@ pub mod render;
 pub mod search_overlay;
 pub mod shell;
 pub mod state_seam;
+pub mod statusbar_layout;
 pub mod title;
 pub mod tree;
 pub mod tree_gate;
