@@ -191,11 +191,12 @@ mod tests {
     /// The commands `wolf-gnome` DISPATCHES, by canonical `CommandSpec::id`,
     /// sorted. Ids (not variants) so the failure message names the registry row a
     /// reader can grep for.
-    const EXPECTED_DISPATCHED_IDS: [&str; 12] = [
+    const EXPECTED_DISPATCHED_IDS: [&str; 13] = [
         "buffer_picker",
         "close_pane",
         "close_window",
         "command_palette",
+        "full_width",
         "go_to_file",
         "minimize_window",
         "new_buffer",
@@ -348,9 +349,9 @@ mod tests {
             want: Want::Deferred,
         },
         Case {
-            desc: "22 FullWidth: wolf-gnome has no content-width cap",
+            desc: "22 FullWidth: toggles the focused buffer's content width",
             command: Command::FullWidth,
-            want: Want::Deferred,
+            want: Want::Exact(UiAction::ToggleFullWidth),
         },
         Case {
             desc: "23 ToggleSidebar: shows or hides the file-tree sidebar",
@@ -466,10 +467,10 @@ mod tests {
 
         assert_eq!(
             dispatched, expected,
-            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly twelve commands; \
-             everything else must be Deferred(reason) or NoGnomeEquivalent(reason) so the drain \
-             is never silent. If a command was genuinely implemented, tick its feat-list row and \
-             update this list with it."
+            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly thirteen \
+             commands; everything else must be Deferred(reason) or NoGnomeEquivalent(reason) so \
+             the drain is never silent. If a command was genuinely implemented, tick its feat-list \
+             row and update this list with it."
         );
     }
 
