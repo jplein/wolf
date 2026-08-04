@@ -212,13 +212,13 @@ On macOS the wake is routed rather than global, because one captive Neovim is sh
 
 ## Theming
 
-Theming runs in both directions, and both directions go through Neovim's highlight groups rather than through a parallel styling channel.
+Theming runs in both directions, and both directions go through Neovim's highlight groups rather than through a parallel styling channel. Both are realized in full by the macOS front-end alone. `wolf-gnome` pushes nothing into Neovim and reads no OS theme — a configured `appearance` other than `auto` is reported once at launch there and then ignored — while the `WolfCursor` group does reach its cursor paint; the limitation is recorded in [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md).
 
-**Front-end to Neovim.** The front-end reads the live OS theme — Adwaita named colors and accent on Linux, `NSColor` and appearance on macOS — converts to RGB, and pushes it into Neovim's highlight groups with `nvim_set_hl`. It re-applies on theme or accent change. The renderer stays dumb: Neovim re-emits `hl_attr_define` and the grid repaints.
+**Front-end to Neovim.** The macOS front-end reads the live OS theme — `NSColor` and appearance — converts to RGB, and pushes it into Neovim's highlight groups with `nvim_set_hl`. It re-applies on theme or accent change. The renderer stays dumb: Neovim re-emits `hl_attr_define` and the grid repaints.
 
 **Neovim to app chrome.** A colorscheme drives two app-level colors through the optional highlight groups `WolfCursor` (background is the cursor fill, foreground the glyph color) and `WolfTitlebar` (background is the titlebar). These are never painted on the grid, so the redraw stream never carries them. Core installs a `ColorScheme` autocmd that notifies `wolf_theme` with the groups' effective colors, folded into the snapshot's theme field. An unset `WolfCursor` falls back to the reverse-video logic; an unset `WolfTitlebar` keeps the system titlebar. The vendored lighthouse colorscheme defines both.
 
-**OS appearance to Neovim.** The user-level `appearance` config key (`auto`, `dark`, `light`; default `auto`) is read in core's GUI-free config module. The front-end resolves it at launch and pushes the result as `:set background=dark|light`, which re-sources the colorscheme, so the existing theme notification repaints the grid and the chrome with no new surface. In `auto` mode the front-end also observes live OS appearance changes and re-pushes; `dark` and `light` force the value and also set the app's own appearance so the chrome matches. The config value is read at startup, so only `auto`'s response is live.
+**OS appearance to Neovim.** The user-level `appearance` config key (`auto`, `dark`, `light`; default `auto`) is read in core's GUI-free config module. The macOS front-end resolves it at launch and pushes the result as `:set background=dark|light`, which re-sources the colorscheme, so the existing theme notification repaints the grid and the chrome with no new surface. In `auto` mode the front-end also observes live OS appearance changes and re-pushes; `dark` and `light` force the value and also set the app's own appearance so the chrome matches. The config value is read at startup, so only `auto`'s response is live.
 
 ## Build
 

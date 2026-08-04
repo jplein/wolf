@@ -18,7 +18,7 @@ Linux only, built with Cargo inside the Nix devShell. Run everything through `ni
 
 This crate deliberately has no Bazel target at all. That absence is what keeps the GTK stack out of `wolf-core`'s Bazel dependency graph, so the one hard rule in [`wolf-core/DECISIONS.md`](../wolf-core/DECISIONS.md) holds under the macOS Bazel build as well as under `cargo tree`. Adding a `BUILD.bazel` here breaks that guarantee. The verification queries live alongside the rule, in [`wolf-core/DECISIONS.md`](../wolf-core/DECISIONS.md).
 
-The devShell supplies the toolchain that the gtk-rs `-sys` crates probe for (gtk4, cairo, pango, glib, gdk-pixbuf, graphene, harfbuzz), exports `WOLF_NVIM_BIN` so the pinned Neovim is never taken from `PATH`, and pins the font stack. `FONTCONFIG_FILE` points at a generated copy of [`testdata/fonts.conf`](testdata/fonts.conf) exposing only DejaVu Sans Mono with no host font directories, which is what makes Pango measurement and Cairo rasterization reproducible enough to assert on pixels.
+The devShell supplies the toolchain that the gtk-rs `-sys` crates probe for (gtk4, cairo, pango, glib, gdk-pixbuf, graphene, harfbuzz), exports `WOLF_NVIM_BIN` so the pinned Neovim is never taken from `PATH`, and pins the font stack. `FONTCONFIG_FILE` points at a generated copy of [`testdata/fonts.conf`](testdata/fonts.conf) exposing three pinned font trees — DejaVu plus the two editor families the shared config can name — and no host font directory at all, which is what makes Pango measurement and Cairo rasterization reproducible enough to assert on pixels.
 
 ## The GUI denylist does not apply here
 
@@ -100,6 +100,18 @@ Two consequences worth knowing. The file picker is `Ctrl+Shift+O`, the command p
 
 **`Alt+Left` and `Alt+Right` are the namespace's one deliberate exception**, and the asymmetry it creates must not be tidied away. They carry Back and Forward, and capturing them is exactly what prevents the `<Esc>` plus `<Left>` split a forwarded Alt chord produces. So their actions stay enabled even where a press would refuse, unlike every `Ctrl+Shift+<letter>` row, which is disabled instead and gives up only an alias by falling through. The two toolbar buttons desensitize in their place, which costs nothing: a press with nothing to go back to issues no RPC anyway.
 
+## Typography
+
+The shared `wolf-config.yaml` is read once, at window build time, next to the state store and before any widget exists — the same point macOS reads it at, through the same resolution `wolf_ffi_load_config` uses. A config edit therefore takes effect on the next launch. An unresolvable preferences directory degrades with one message to the built-in defaults, matching the state store's convention; `wolf_core::load_or_create` creates the file when it is absent, which is why every smoke pins `WOLF_CONFIG_DIR`.
+
+**`WOLF_FONT_PT` wins over the configured `font-size`**, and that is parity rather than a Linux quirk: `CellMetrics.defaultPointSize` gives the override the same precedence on macOS, the crate README documents it, and the compositor smokes drive it — the one that must let the config decide the size removes it on purpose. The rule lives in a pure seam that takes the override as an argument, so it is testable without touching the process environment.
+
+The cell height and baseline are a Rust port of `WolfKeyMap/CellMetricsMath.swift`, kept as pure `f64` arithmetic in a file named for its counterpart. `CellMetrics::for_font` needs a live Cairo context to obtain the metrics it feeds in, so a rule left inside it would be a rule only the golden-render target could execute. Two divergences from Swift are deliberate and strictly more defensive: a non-finite `line-height` takes the natural-metrics branch, and a degenerate result is floored at one device unit.
+
+The arithmetic is unit-agnostic, and the two platforms hand it different units: macOS rounds in points, this crate in device pixels, because device pixels are what Cairo paints in. At 1x the two coincide, and this crate has no HiDPI handling in any case.
+
+**A family Pango cannot resolve is substituted by fontconfig, and this crate adds no fallback of its own.** macOS needs one because CoreText returns a different family rather than substituting; Pango substitutes per lookup and always yields usable metrics, so a hand-rolled fallback could only override a better answer. A test pins that the description keeps the family the caller asked for.
+
 ## Application state
 
 `state.json` is the shared `wolf_core::state` schema, unchanged. Its shape is common to this crate and the macOS front-end, so a Linux-only change to it is a macOS re-verification obligation. `wolf_core::state_dir()` is the single resolution point, and `WOLF_STATE_DIR` overrides it.
@@ -146,12 +158,12 @@ The GTK glue is covered by end-to-end smokes that launch the real binary under `
 
 They need `cage`, `wtype`, `grim`, `tesseract`, and `wolf-pointer-inject` on `PATH`, a set and writable `XDG_RUNTIME_DIR` where the Wayland socket lives, and both `WOLF_NVIM_BIN` and `WOLF_RG_BIN`. A missing precondition fails loud rather than skipping quietly, because absence means the smoke toolchain was not provisioned.
 
-Three details are load-bearing. Every smoke holds a shared mutex for its whole body, because two `cage` compositors started concurrently contend for the same Wayland socket and both fail. Each scenario runs inside `cage` as a single shell command, since `cage` exports its `WAYLAND_DISPLAY` only to its own child process tree. And every smoke's environment comes from one helper, which is the only thing keeping a smoke run out of the developer's real state directory.
+Three details are load-bearing. Every smoke holds a shared mutex for its whole body, because two `cage` compositors started concurrently contend for the same Wayland socket and both fail. Each scenario runs inside `cage` as a single shell command, since `cage` exports its `WAYLAND_DISPLAY` only to its own child process tree. And every smoke's environment comes from one helper, which is the only thing keeping a smoke run out of the developer's real state and configuration directories.
 
 ## Present limitations
 
 - No save or save-as dialog; saving is done from within Neovim. Open File and Open Folder are native dialogs.
-- No theming in either direction: the front-end neither queries the OS theme nor pushes one into Neovim. Neovim's own colorscheme reaches the grid paint, and the `WolfCursor` theme group reaches the cursor.
+- No theming in either direction: the front-end neither queries the OS theme nor pushes one into Neovim. Neovim's own colorscheme reaches the grid paint, and the `WolfCursor` theme group reaches the cursor. A configured `appearance` other than `auto` is read, reported once on stderr at launch, and then ignored — dropping it silently would leave someone who wrote `appearance: dark` with no way to learn it does nothing here. `macos-option-as-alt` is ignored with no message at all, because the key's own name says which platform it is for and one config file is shared across both.
 - Pointer input covers the primary button and vertical scroll. There is no context menu, no middle-click paste, no horizontal scroll, and no kinetic scrolling, all matching macOS, and no scrollbar is drawn.
 - The command-line strip renders a single row: an active command line, or the last message line when idle. There is no completion popup and no multi-line scrollable message view. Core folds all three UI extensions regardless, so adding the Adwaita widgets later is additive.
 - Only windows created through the overridden split commands become panes. A window from `:help`, quickfix, a preview, or `:diffsplit` gets a grid but no pane, and floating or external windows are ignored.
@@ -159,7 +171,6 @@ Three details are load-bearing. Every smoke holds a shared mutex for its whole b
 - The navigation surfaces are Back and Forward alone: two header-bar buttons, two menu items, and `Alt+Left` / `Alt+Right`. There is no jump list of a pane's recently visited files, which the macOS History menu carries. A dynamic list needs a `gio::Menu` rebuilt on each popover open and an action parameterized by stack index, where `MENU_SECTIONS` is const data with five invariants checked over it.
 - No HiDPI scale handling: the cell-measurement probe assumes 96 dpi.
 - No input-method composition support.
-- There is no About dialog.
 - The command palette lists the registry commands this front-end performs plus one Open Recent row per usable recent directory. There are no Switch-to-Window rows, since there is one window. An Open Recent row re-roots that window, through the same pending-re-root path the Open Folder dialog takes, and the directory the window is already in is not offered, since raising the window you are looking at does nothing.
 - An Open Recent row exists only for a directory the user changed into: core does not record the launch working directory (see [`runtime/nvim/README.md`](../../runtime/nvim/README.md)), so a project only ever launched into is absent from the palette until the user changes directory.
 - There is no Markdown preview and no terminal drawer. Core carries the drawer intent; this crate matches it explicitly and does nothing, so adding a fourth intent variant still fails the build here.

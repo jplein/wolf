@@ -34,6 +34,7 @@ Everything below is re-exported from the crate root as `wolf_core::…`. The own
 | File tree          | `children_of`, `ancestors_to_reveal`, `rel_path_for`, `TreeIndex`             |
 | Navigation history | `NavHistory`, `PaneHistory`, `NavTarget`, `MenuRow`                           |
 | Markdown preview   | `render_html`, `theme_css`, `PreviewTheme`, `WidthMode`, `BrowserPreview`     |
+| Font licences      | `FontLicense`, `FONT_LICENSES`, `FONT_LICENSE_NOTICES`                        |
 | Liveness           | `Liveness`                                                                    |
 | Preferences        | `WolfConfig`, `load_or_create`, `preferences_dir`, `Appearance`               |
 | Persisted state    | `StateStore`, `WolfState`, `WindowState`, `TabState`, `PaneNode`              |

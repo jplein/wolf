@@ -40,6 +40,7 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 **Covers**
 
 - `paint` onto an offscreen ARGB32 `ImageSurface` from a hand-built 4x2 `Snapshot`: exact equality on known background fills, background-only interiors for a wide-trailing empty-text cell (the skip-glyph path), and at least one non-background pixel in a glyph cell. Needs no display and no nvim, but does need the pinned DejaVu Sans Mono via `FONTCONFIG_FILE`.
+- The line-height argument to `CellMetrics::for_font`, at the shipped 130 % default rather than at a value chosen to reproduce anything: a larger percentage gives a taller cell, the advance width does not move with it, the baseline centres the glyph box, and the cell height matches the 96 dpi conversion. A family the pinned fontconfig cannot resolve still measures, gives the same cell height as a resolvable one, and keeps the family the caller asked for — this crate substitutes nothing of its own.
 
 **Gotchas**
 
@@ -61,9 +62,9 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 **Covers**
 
-- Thirty-four end-to-end smokes that launch the built binary under `cage`, drive it with `wtype` and [`wolf-pointer-inject`](../../../tools/wolf-pointer-inject/README.md), and read a `grim` screenshot back with `tesseract` in sparse-text mode, plus a second uniform-block reading in the divider-relaunch smoke, which is red without it.
-- The scenarios: text rendering and sidebar population; two picker, two command-palette, two buffer-picker and one project-search case; five split-pane and five command-drain cases; four pointer cases, two divider drags, two crash-recovery cases and one stall case; three application-state cases across a relaunch; one navigation case, one sidebar-toggle case, and `typed_cd_reroots_the_sidebar_under_cage`, which carries both a typed `:cd` re-root and the tree's synthetic root row.
-- Four compositor-free guards on the smokes' own fixtures and harness, which need no toolchain and run in microseconds. The target therefore reports `38 passed`, not `34`.
+- Thirty-five end-to-end smokes that launch the built binary under `cage`, drive it with `wtype` and [`wolf-pointer-inject`](../../../tools/wolf-pointer-inject/README.md), and read a `grim` screenshot back with `tesseract` in sparse-text mode, plus a second uniform-block reading in the divider-relaunch smoke, which is red without it.
+- The scenarios: text rendering and sidebar population; two picker, two command-palette, two buffer-picker and one project-search case; five split-pane and five command-drain cases; four pointer cases, two divider drags, two crash-recovery cases and one stall case; three application-state cases across a relaunch; one navigation case, one sidebar-toggle case, and `typed_cd_reroots_the_sidebar_under_cage`, which carries both a typed `:cd` re-root and the tree's synthetic root row; and `config_font_size_changes_the_grid_under_cage`, two launches at two configured font sizes whose `winwidth(0)` readbacks must differ.
+- Four compositor-free guards on the smokes' own fixtures and harness, which need no toolchain and run in microseconds. The target therefore reports `39 passed`, not `35`.
 
 **Gotchas**
 
@@ -84,7 +85,9 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 #### `../testdata/fonts.conf`
 
-Template fontconfig that exposes only the pinned DejaVu font directory and deliberately omits every host font dir, so Pango measurement and Cairo rasterization are reproducible across machines. The flake's `shellHook` substitutes `@DEJAVU_FONTS@` with the Nix store path of `pkgs.dejavu_fonts`, writes the result to a temp file, and points `FONTCONFIG_FILE` at that copy — so this file is never consumed directly. Edit it here; the generated copy is rebuilt on each `nix develop`.
+Template fontconfig that exposes three pinned font directories — DejaVu, JetBrains Mono and iA Writer Mono S — and deliberately omits every host font dir, so Pango measurement and Cairo rasterization are reproducible across machines. The two editor families are exposed because the shared `wolf-config.yaml` can name either; the `monospace` alias still resolves to DejaVu Sans Mono, which keeps a generic request deterministic with three families visible.
+
+The flake's `shellHook` substitutes `@DEJAVU_FONTS@`, `@JETBRAINS_MONO@` and `@IA_WRITER_MONO@` with Nix store paths, writes the result to a temp file, and points `FONTCONFIG_FILE` at that copy — so this file is never consumed directly. Edit it here; the generated copy is rebuilt on each `nix develop`.
 
 #### `../testdata/paint_golden.png`
 
@@ -110,13 +113,19 @@ The tables of asserted terms are built from the assertion constants themselves r
 
 **The rendered page must be identical on every run, not merely dense.** The temp cwd is a unique parent holding a fixed-name child, and the helper hands the parent to the app as its home directory, so the title seam abbreviates the varying part away and every header bar renders the same string. A run-varying title makes an unrelated, correct smoke stochastic; more page text helps only when it is the same text every time. Sparse pages have the opposite failure: an isolated leading glyph is misread as a ligature, which is why several smokes drop filler files purely for density. If that regresses, add filler files rather than weakening an assertion.
 
-**No pointer smoke hardcodes a pixel.** The cell size is measured through the same metrics path and font size the app is launched with, one probe click establishes the origin, and every later target is expressed as a delta from it. The derived pane origin is checked as a loud, self-checking precondition whose failure message names the candidate causes in order.
+**No pointer smoke hardcodes a pixel.** The cell size is measured through the same metrics path, font size and line height the app is launched with, one probe click establishes the origin, and every later target is expressed as a delta from it. The derived pane origin is checked as a loud, self-checking precondition whose failure message names the candidate causes in order.
 
 A divider handle cannot be modelled at all. Its width is theme-owned and its position is a fraction of the paned's `max_position`, so a drag smoke locates it by bisecting clicks against the window Neovim reports as current, with a reset click at the low seed before each probe — a click that lands on the handle changes no window, so without the reset that outcome reads as whichever pane the previous probe focused, and the search converges on the wrong side. The seeds the Rust side derives are seeds only.
 
 **Under `ext_multigrid`, a width readback must use `winwidth()`.** Resizing a grid changes the window's grid width, which `winwidth()` reports, and leaves its layout width, which `nvim_win_get_width()` reports, untouched. A readback built on the latter is blind to a divider drag — it reports 22 and 22 cells either side of a drag a screenshot shows plainly — and it drifts on its own across a relaunch.
 
 **Where the smokes' durable state goes is asserted, not assumed.** The environment helper redirects the state directory, and the relaunch smoke checks in four parts that the redirect held: that the test process has no such variable of its own, that the smoke's own directory holds a state file, that neither home-derived fallback directory does, and that the developer's real state file is byte-identical across the run — including the normal case where it does not exist and must still not exist afterwards.
+
+**Every smoke is given its own `WOLF_CONFIG_DIR`, and it is the loudest of those redirects.** `wolf_core::preferences_dir()` honours `XDG_CONFIG_HOME` ahead of `$HOME/.config`, and the environment helper redirects `HOME` but not `XDG_CONFIG_HOME`. Without the redirect a smoke would read the developer's real `wolf-config.yaml` — or, finding none, have one written for it carrying `iA Writer Mono S` at 10 pt, a family the pinned fontconfig resolves — and every glyph in all thirty-five smokes would change at once.
+
+The directory is a sibling of the working directory rather than a child, for the same reason the state directory is, and it is seeded with a config naming the pinned family, size and measured `line-height`, so `load_or_create` reads rather than writes. The one smoke that must let the config decide the font size removes `WOLF_FONT_PT` from its own command after the helper has built it.
+
+The relaunch smoke checks the config redirect in the same four parts as the state one, and the last part carries more weight there: `load_or_create` creates the file it does not find, so the case that matters is the developer having no `wolf-config.yaml` before the run and still having none after.
 
 ## Pointer injection
 
@@ -173,7 +182,9 @@ Being scrupulous about this is the point of the section.
 - **The restored `sidebar_visible` reaches no pixel.** No relaunch smoke hides the sidebar, quits and relaunches. The seam is table-tested and the applier demonstrably reads it; the write side is the half that could regress silently, since persisting the live visibility rather than the preference would hide the sidebar after any project-less session.
 - **The current-file bold and its bound-label registry.** Nothing reads bold, and OCR cannot. With the version gate suppressing the rebuild, the registry is the only thing keeping the highlight on the file being edited, and neither suite verifies that it moves — every assertion about the current file reads a revealed row's presence, not its weight.
 - **The visibility gate's deferral and its one catch-up.** No smoke hides the sidebar mid-traversal and re-shows it, so nothing observes a batch that landed while hidden reaching the widgets. The gate's own table pins the rule; the relay from the shell's single visibility site is the untested half.
-- **That the coalescer arms a real `glib` source.** Only the pure state machine is tested, and every smoke asserts on a settled end state, so a coalescer that performed its refresh on every request — arming nothing at all — would pass all 38.
+- **That the coalescer arms a real `glib` source.** Only the pure state machine is tested, and every smoke asserts on a settled end state, so a coalescer that performed its refresh on every request — arming nothing at all — would pass all 39.
+- **A configured font family reaches no pixel.** No smoke changes the family: doing so would change every glyph and put the whole OCR calibration at risk for no added confidence, since [`paint_golden.rs`](#paint_goldenrs) covers family resolution headlessly. What a smoke does prove about the config is the font size, through two launches whose `winwidth(0)` readbacks differ.
+- **A configured line-height reaches no pixel either.** Its arithmetic is unit-tested and `cell_metrics_for_smoke` demonstrably feeds it, but no capture reads a cell height — and the pinned value is the one that reproduces the glyph box exactly, so a capture could not tell it apart from no line-height at all.
 - **Manual expansion surviving a current-file change.** OCR cannot read expansion state, which is exactly the user-visible payoff the version gate exists for. Its inverse, a collapse on a version advance, is equally unobservable and is recorded as a limitation in [DECISIONS.md](../DECISIONS.md) instead.
 - **`typed_cd_reroots_the_sidebar_under_cage`'s assertion-4 revert is not isolated.** Measured: with no re-root at all the sidebar keeps its launch root label, so assertion 4 fails before assertion 6 is evaluated and assertion 6 has no red run under that revert. The asymmetry is inherent rather than a fixture weakness — the same shape as the project-search smoke's assertion 6 above — and the other direction is isolated: assertion 6's own revert reddens 6 alone, with 3, 4 and 5 green.
 
@@ -182,6 +193,7 @@ Being scrupulous about this is the point of the section.
 Behavior this front-end has that is deliberately not smoked, with what covers it instead.
 
 - **The primary menu popover.** The keystroke injector cannot click a header-bar menu button, and keyboard-navigating to it is too fragile to be worth the flake. The action namespace's own tests cover every item referencing a declared, implemented, non-reserved action and every label matching the command registry. Eight of the menu's items — New, Go to File…, Command Palette…, Buffer Picker…, Search in project, Close, Back and Toggle sidebar — have their action activated end to end by the accelerator smokes, and the `:qa` smoke performs Close Window's action through the command drain rather than through the menu's own action.
+- **The About dialog.** Its widget layer is covered by nothing, and cannot be: the row is reachable only from the primary menu popover, itself a gap above. What covers it instead is where the weight is — the dialog's text is asserted from the compiled artifact, against four licence phrases re-typed locally rather than imported, so the assertion is about what ships; the row's status is pinned by `actions.rs`, and its `UiAction` by `command_action.rs`.
 - **The header-bar buttons' click path**, all four: no pointer smoke clicks the sidebar toggle, Back, Forward or Open. Every pointer smoke derives its target from a probe click Neovim reports back and a header-bar button offers no such probe, so the honest alternatives are a theme-owned inset pinned as a second measured constant with nothing to cross-check it, or distorting the buttons to buy hit margin. What covers them instead: the two chord smokes drive the same `gio` actions end to end, and [`nav_ui.rs`](../src/README.md#nav_uirs)'s tables cover the sensitivity and per-pane rules.
 - **The native file dialogs.** There is no portal backend under `cage`, so a dialog cannot be driven at all. Their callback bodies are trivial, and the empty state's presentation is smoked.
 - **The Open Folder dialog's own path into a re-root**, for the same reason: nothing can drive the dialog. What it settles through is not a gap — an Open Recent palette row records the same pending re-root through the same `chdir_to`, and `open_recent_palette_row_reroots_the_window_under_cage` drives that settle into a re-rooted sidebar end to end.

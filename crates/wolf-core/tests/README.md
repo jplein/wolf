@@ -233,6 +233,7 @@ Headless: no Neovim, no filesystem, no staged runfiles.
 
 **Covers**
 
+- The four bundled fonts' licence notices reaching every rendered document, each located by a locally re-typed phrase from its own copyright line, and every one of them landing before `<body>` — the head placement `base.css`'s first-block and last-block margin resets depend on.
 - The public preview render surface (`render_html`, `render_html_with_highlights`, `code_blocks`, `theme_css`, `PreviewTheme`, `WidthMode`): `wl-{L}-{C}` anchor placement in both tiers — column-zero markers collapsing to a block's opening tag, and column markers landing inside a paragraph and inside a list item — the code-block, table and image-alt exclusions including the nested-in-a-container cases, MathML with inlined fonts, the paired dark/light palettes, and a sweep asserting every vertical dimension in the shipped `base.css` lands on the baseline grid.
 
 **Gotchas**

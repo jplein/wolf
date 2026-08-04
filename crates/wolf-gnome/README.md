@@ -28,7 +28,7 @@ nix develop --command cargo test -p wolf-gnome
 
 After editing `flake.nix`, use `nix develop --command` explicitly: an already-loaded direnv environment is stale and has no GTK.
 
-Running needs a Wayland or X11 session, or the headless compositor the smoke tests launch. `WOLF_FONT_PT` overrides the font size, and `WOLF_STATE_DIR` overrides where `state.json`, the MRU databases and the per-project swap directories are kept.
+Running needs a Wayland or X11 session, or the headless compositor the smoke tests launch. Three environment variables matter. `WOLF_FONT_PT` overrides the configured `font-size` and wins over it, as it does on macOS; `WOLF_CONFIG_DIR` overrides where `wolf-config.yaml` is read and created, and belongs to [`config.rs`](../wolf-core/src/README.md#configrs); `WOLF_STATE_DIR` overrides where `state.json`, the MRU databases and the per-project swap directories are kept.
 
 ## Testing
 

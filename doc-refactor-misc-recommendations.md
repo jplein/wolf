@@ -1,6 +1,6 @@
 # Documentation refactor — miscellaneous recommendations
 
-Findings surfaced while executing [`docs-refactor-plan.md`](docs-refactor-plan.md) that were out of that plan's scope. The plan covered Markdown under READMEs; everything below is either a source change, a build change, or a verification still owed, so none of it was actioned.
+Findings surfaced while executing [`docs-refactor-plan.md`](docs-refactor-plan.md) that were out of that plan's scope. The plan covered Markdown under READMEs; everything below is either a source change, a build change, or a verification still owed, so none of it was actioned in that pass. Each section states its own status.
 
 The `architecture.md` and `build.md` cleanup is tracked separately and is not repeated here.
 
@@ -9,31 +9,20 @@ Each item is marked with how it was established:
 - **Verified** — checked directly against the source or build files during this pass.
 - **Reported** — surfaced by a subagent and not independently re-checked. Confirm before acting.
 
-## 1. Font licence obligations are unmet in the shipped app
+## 1. Font licence obligations — discharged in the Rust tree
 
-**Verified. This is a legal obligation, not a style issue, and it is the highest-priority item here.**
+**Verified. Closed on `linux-feat/typography`, with one optional macOS-only residual.**
 
-`crates/wolf-core/src/markdown.rs` embeds two fonts into every rendered preview document by `include_str!`-ing base64 sidecars:
+The four bundled fonts' licence texts are compiled into `wolf-core` by `src/licenses.rs` and reach a reader two ways: `render_html` emits them as an HTML comment in every rendered preview document's `<head>`, and `wolf-gnome`'s About dialog shows the same block. `crates/wolf-core/BUILD.bazel`'s `compile_data` glob was widened to `src/markdown/assets/*.txt` and `src/licenses/*.txt` to match, which is mandatory rather than tidiness: without it the `rust_library` does not compile under Bazel at all.
 
-- `assets/inter-variable.woff2.b64` → `INTER_FONT_FACE`
-- `assets/latinmodern-math.woff2.b64` → `MATH_FONT_FACE`
-
-The font bytes therefore ship inside the binary and inside every preview page. The licence texts do not. `crates/wolf-core/BUILD.bazel` sets:
-
-```python
-compile_data = glob(["src/markdown/**/*.css", "src/markdown/assets/*.b64"]),
-```
-
-`inter-OFL.txt` and `latinmodern-math-GUST-FONT-LICENSE.txt` match neither pattern, are not compiled in, and are not placed in the `.app`. `crates/wolf-macos/bundle_layout_test.sh` checks `Contents/Resources/fonts/OFL.txt` and `Contents/Resources/fonts/LICENSE.md`, which cover JetBrains Mono and iA Writer Mono S — different fonts.
-
-What each licence requires of anyone shipping Wolf:
+The registry covers Inter and Latin Modern Math, which ship as base64 faces inside every preview document, and JetBrains Mono and iA Writer Mono S, which ship as editor faces. Its tests pin that each text is the licence its row names, that the rendered block carries all four, and that no text can terminate the HTML comment it is emitted inside. What the two preview faces' licences require of anyone shipping Wolf is unchanged, and the two editor faces ship under the same SIL OFL 1.1 as Inter:
 
 | Font              | Licence           | Obligation                                                                                                                                                         |
 | ----------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Inter             | SIL OFL 1.1       | The copyright notice and licence must accompany every copy of the font, including an embedded one. The font may not be sold on its own, and may not be relicensed. |
 | Latin Modern Math | GUST Font Licence | The licence text must accompany redistribution. A modified font must be marked as changed and renamed; GUST also requests a manifest of renamed files.             |
 
-Suggested fix: bundle both licence files into the `.app` alongside the fonts they cover, and extend `bundle_layout_test.sh` with checks for them so the obligation cannot silently regress. The obligations are documented in [`crates/wolf-core/src/markdown/README.md`](crates/wolf-core/src/markdown/README.md), but documenting an obligation does not discharge it.
+The residual is macOS-only and optional: whether the two preview fonts' texts should _also_ ship as files in `Contents/Resources/` with matching `crates/wolf-macos/bundle_layout_test.sh` checks, given both already ship compiled into the binary. That script checks `Contents/Resources/fonts/OFL.txt` and `Contents/Resources/fonts/LICENSE.md`, which are JetBrains Mono's and iA Writer Mono S's. It is tracked in [`macos-followups.md`](macos-followups.md), on that branch's `licenses`-module row.
 
 ## 2. A possible latent test failure
 
