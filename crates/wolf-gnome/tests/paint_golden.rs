@@ -330,6 +330,25 @@ const SMOKE_PROBE_LINE_HEIGHT: f64 = 118.0;
 /// `for_font` happened to use — which is exactly the value under test.
 const SMOKE_PROBE_CELL_H: f64 = 44.0;
 
+/// The line-height that selects `cell_metrics_math::cell_height`'s natural-metrics
+/// branch, which is any value that is not positive.
+///
+/// `wolf_core::load_or_create` does not validate the key, so a hand-written
+/// `line-height: 0` in a user's `wolf-config.yaml` arrives at `for_font` unchanged.
+const NATURAL_LINE_HEIGHT_PERCENT: f64 = 0.0;
+
+/// The cell height MEASURED for [`FONT_FAMILY`] at [`FONT_SIZE_PT`] and
+/// [`NATURAL_LINE_HEIGHT_PERCENT`] on this repo's pinned font stack, in device
+/// pixels.
+///
+/// A literal, and never `ceil(ascent + descent + leading)` or any other restatement
+/// of the arithmetic under test. A re-derived expectation moves with the code it
+/// checks: written that way, this one holds even with the `leading` clamp deleted,
+/// which is the single thing
+/// [`the_natural_line_height_clamps_a_face_whose_recommended_height_is_short`] is
+/// here to catch.
+const CLAMPED_NATURAL_CELL_H: f64 = 26.0;
+
 #[test]
 fn a_larger_line_height_yields_a_taller_cell() {
     let small = probe_metrics(FONT_FAMILY, FONT_SIZE_PT, 100.0);
@@ -500,6 +519,43 @@ fn the_measured_cell_height_matches_the_96_dpi_arithmetic() {
          must be exactly 0.0. A non-zero offset shifts every glyph vertically, and every OCR and \
          pointer smoke is calibrated against the unshifted position.",
         m.baseline, m.ascent
+    );
+}
+
+/// `for_font`'s clamp on `leading` is what keeps a face whose RECOMMENDED line
+/// height is shorter than its own glyph box from shrinking the natural cell.
+///
+/// Measured on this host, twice and independently, under the devShell's pinned
+/// `FONTCONFIG_FILE`: [`FONT_FAMILY`] at [`FONT_SIZE_PT`] pt reports an ascent of
+/// 20, a descent of 6 and a `metrics.height() / SCALE` of 25, so the raw
+/// `height - ascent - descent` is `-1`. The `.max(0.0)` in `render.rs` turns that
+/// into a `leading` of `0.0`, and the natural branch then gives
+/// `ceil(20 + 6 + 0) == 26` — the glyph box — where the unclamped `-1` gives 25.
+/// This repo's pinned font is a unit short of its own glyph box at this size, so
+/// the clamp is a live case rather than a hypothetical one.
+///
+/// This is the only case that reaches `cell_metrics_math::cell_height`'s
+/// non-positive branch THROUGH `for_font`. That module's own unit tests call
+/// `cell_height` directly with a hand-written `leading`, and the clamp sits between
+/// the real Pango metrics and that argument — so a synthetic fixture passes over it
+/// and no value one could hand in makes it observable. Only a case that measures a
+/// real face crosses it, which is why this one lives here and not in that module's
+/// `#[cfg(test)] mod tests`.
+#[test]
+fn the_natural_line_height_clamps_a_face_whose_recommended_height_is_short() {
+    let m = probe_metrics(FONT_FAMILY, FONT_SIZE_PT, NATURAL_LINE_HEIGHT_PERCENT);
+
+    assert_eq!(
+        m.cell_h, CLAMPED_NATURAL_CELL_H,
+        "{FONT_FAMILY:?} at {FONT_SIZE_PT} pt with `line-height: {NATURAL_LINE_HEIGHT_PERCENT}` \
+         measures cell_h = {}, not the measured {CLAMPED_NATURAL_CELL_H}. This face reports a \
+         recommended height of 25 against an ascent + descent of 26 at this size, so the \
+         `.max(0.0)` clamp on `leading` in `render.rs`'s `for_font` is the only thing standing \
+         between those two numbers. A 25 means that clamp is gone and the negative leading reached \
+         `cell_height`; a 1 means the non-positive branch is gone, so `round(21.33 * 0 / 100)` ran \
+         instead and the degenerate floor caught its 0; any other value means the substituted face \
+         or the 96 dpi conversion moved, and the literal is to be re-measured rather than adjusted.",
+        m.cell_h
     );
 }
 
