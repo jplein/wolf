@@ -6,9 +6,11 @@ The durable constraints behind this crate. Read this before changing anything he
 
 This is the GTK 4 / libadwaita front-end: a runnable single-window application that consumes [`wolf-core`](../wolf-core/README.md) as an ordinary Rust crate dependency. It renders Neovim natively rather than embedding a terminal, so every pixel comes from a Cairo/Pango paint of a core `Snapshot`.
 
-The window carries a file-tree sidebar, a native pane view with real split panes, a floating file picker, command palette and buffer picker, a GNOME primary menu, an empty state for when no project is open, and a bottom command-line strip. Split, close, and focus move are driven by core's layout-intent channel; a divider drag is the `gtk::Paned` handle's own gesture, landing in the pure tree's weights. Menu items, accelerators, and commands drained from Neovim all resolve through one `gio` action namespace.
+The window carries a file-tree sidebar, a native pane view with real split panes, a floating file picker, command palette, buffer picker and project search, a GNOME primary menu, an empty state for when no project is open, and a bottom command-line strip. Split, close, and focus move are driven by core's layout-intent channel; a divider drag is the `gtk::Paned` handle's own gesture, landing in the pure tree's weights. Menu items, accelerators, and commands drained from Neovim all resolve through one `gio` action namespace.
 
-Files reach Neovim one way. The picker, the sidebar, and the menu's native Open File and Open Folder dialogs all end in `InputEvent::Open`, which core performs as `:e`; saving is `:w` or `:saveas` from inside Neovim, with no save dialog. The binary takes no command-line arguments, and hands GTK an empty argv so the real command line is never parsed.
+Files reach Neovim two ways, and the second is what the project search exists for. The picker, the sidebar, and the menu's native Open File and Open Folder dialogs all end in `InputEvent::Open`, which core performs as `:e`. A search result row is a location rather than a file, so it ends in `InputEvent::OpenAt`, which core performs as `:edit` followed by `nvim_win_set_cursor` inside one input-pump step — the two cannot be interleaved with another event.
+
+Saving is `:w` or `:saveas` from inside Neovim, with no save dialog. The binary takes no command-line arguments, and hands GTK an empty argv so the real command line is never parsed.
 
 ## Platform and build
 
@@ -34,7 +36,7 @@ The gtk-rs crates form one coherent release set: `gtk4` 0.11.x, `gdk4` 0.11.x, `
 
 The crate is both a library and a binary, and the split is the most important structural fact about it. The binary is the window; the library holds every decision expressible as a function of values, so it can be unit-tested with no display server, no widget, and no Neovim.
 
-Those seams cover key and pointer translation, the Cairo paint, the pixel-to-grid geometry, the pane-layout tree and its persistence codec, the cursor rules, the action namespace, the command classification, the launch and application-state rulebooks, the window title, and the crash and stall rulebook. Each is a free function or a plain value type; [`src/README.md`](src/README.md) names them file by file.
+Those seams cover key and pointer translation, the Cairo paint, the pixel-to-grid geometry, the pane-layout tree and its persistence codec, the cursor rules, the action namespace, the command classification, the launch and application-state rulebooks, the window title, the project-search rulebook, and the crash and stall rulebook. Each is a free function or a plain value type; [`src/README.md`](src/README.md) names them file by file.
 
 The consequence is this crate's testing posture. Widget construction cannot be unit-tested at all, and is covered only by the smokes below. When you add behavior, put the decision in a seam and test it there: a rule left inside a widget closure is a rule the fast suite cannot execute, and on this platform that has repeatedly meant a rule nothing verified.
 
@@ -54,15 +56,17 @@ The drain order is fixed and every position is load-bearing. The liveness read r
 
 Nothing polls. No `glib::timeout` drives a redraw, a liveness read, or a state snapshot. A periodic liveness poll in particular is rejected: it would let a lossy wake transport still raise the crash overlay eventually, buying insurance by destroying the evidence the crash smoke exists to gather.
 
-The picker and the sidebar each run a long-lived `FileSearch` on the same pattern. Their drain tasks hold only a `Weak` reference, so dropping a handle ends the task instead of leaking a cycle, and closing either one drops its search to cancel the traversal.
+The picker and the sidebar each run a long-lived `FileSearch` on the same pattern, and the project search runs a transient `SearchSession` that is replaced on every Enter. Their drain tasks hold only a `Weak` reference, so dropping a handle ends the task instead of leaking a cycle, and closing any of them drops its search to cancel the work.
+
+Dropping a `SearchSession` kills its `rg` child, which is the whole of what makes closing the overlay mid-search safe. It is also why the live session is taken and dropped in a statement of its own before the next one starts, rather than being overwritten in place.
 
 ## Window structure
 
 The window is an `adw::ApplicationWindow` whose content is a vertical box: an `adw::HeaderBar` over a horizontal `gtk::Paned`. The Paned's start child is the file-tree sidebar; its end child is a `gtk::Overlay` whose main child is the pane view. The pane view is a tree of nested `gtk::Paned` with one `gtk::DrawingArea` per Neovim window, built from the pure pane tree, plus a one-row command-line strip along the bottom.
 
-The overlay's children are added empty state, then picker, then command palette, then buffer picker, then crash overlay, then restart banner, and that order is the stacking. At most one of the three transient overlays is open — the shell closes the other two when it opens one — so their relative order is not observable, while each must sit above the empty state or it would open invisibly in a project-less window.
+The overlay's children are added empty state, then picker, then command palette, then buffer picker, then project search, then crash overlay, then restart banner, and that order is the stacking. At most one of the four transient overlays is open — the shell closes the other three when it opens one — so their relative order is not observable, while each must sit above the empty state or it would open invisibly in a project-less window.
 
-A crashed core must cover the picker's Open, a palette row, a buffer-picker row and the empty state's Open Folder, since each would send into a dead Neovim. The banner is topmost and click-through, so it confirms a restart without swallowing a click meant for the editor.
+A crashed core must cover the picker's Open, a palette row, a buffer-picker row, a search result row and the empty state's Open Folder, since each would send into a dead Neovim. The banner is topmost and click-through, so it confirms a restart without swallowing a click meant for the editor.
 
 **GTK keyboard focus never lands on a pane area.** Pane drawing areas are not focusable and nothing grabs focus on them; a click parks focus on the persistent command-line strip instead, which is also the focus-return target the picker, the command palette, the sidebar, and the crash overlay use. Every widget under the pane area is destroyed and rebuilt on each layout change, and a destroyed focus widget leaves the toplevel with no focus at all — after which window-level key dispatch dies outright while Neovim stays alive and silent.
 
@@ -88,7 +92,7 @@ Every action name, its accelerator, its `Command` correspondence, and its menu p
 
 `Ctrl+Shift+<letter>` is the namespace because nothing else is available. There is effectively no free `Ctrl+<letter>` across all Neovim modes, and a terminal buffer forwards every key but one. A forwarded, unmapped Alt chord splits into `<Esc>` plus the base key, and a forwarded, unmapped Super chord drops the modifier in normal mode and inserts literal text in insert mode, so neither is a namespace Neovim can be given. The genuinely free keys are too few and too unidiomatic to carry a menu. The rule is memorable: take the macOS chord and replace the command key with Ctrl+Shift.
 
-Two consequences worth knowing. The file picker is `Ctrl+Shift+O`, the command palette `Ctrl+Shift+P` and the buffer picker `Ctrl+Shift+E`. And a disabled action's accelerator falls through to Neovim, which is what a real GTK accelerator does and what the chord controller deliberately reproduces, so in the empty state `Ctrl+Shift+O` reaches Neovim as `<C-o>`.
+Two consequences worth knowing. The file picker is `Ctrl+Shift+O`, the command palette `Ctrl+Shift+P`, the buffer picker `Ctrl+Shift+E` and the project search `Ctrl+Shift+F`. And a disabled action's accelerator falls through to Neovim, which is what a real GTK accelerator does and what the chord controller deliberately reproduces, so in the empty state `Ctrl+Shift+O` reaches Neovim as `<C-o>` and `Ctrl+Shift+F` as `<C-f>`.
 
 ## Application state
 
@@ -122,13 +126,15 @@ Only the open-file set comes back, reopened with the active file last because re
 
 Core marks a stall only from a synchronous call's timeout arm, and two such calls are reachable from this crate: the layout rebuild at launch, before the window is interactive, and the buffer picker's candidate snapshot, which a running window issues on Ctrl+Shift+E. `buffer_picker::open_decision` refuses to open unless the core reads `Alive`, so the picker can discover a stall once and never re-probes a Neovim already known to be wedged. Copy and a preview render would each add another such path.
 
+The project search adds no third one. `start_search` resolves its root from the tracked-cwd cell and hands `rg` to a worker, `open_at` is fire-and-forget on the ordered input channel, and `liveness` is an atomic read. `WolfCore::ignorecase()` is a blocking call and is deliberately never issued: its entire product would be the seed for a case-sensitivity toggle this front-end does not ship, bought with a third route into the state the paragraph below describes.
+
 **Nothing in this crate clears `NotResponding`.** Core's auto-clear rides the `Ok` arm of a later synchronous call, and a timed-out one is detached, so its eventual success is never observed — while the only blocking call a running window issues refuses to run in that state. The route back is the stall overlay's Restart button, which force-kills. The honest fix, if that ever becomes a user problem, is a non-blocking liveness probe in core; there is none.
 
 ## The headless smoke test
 
 The GTK glue is covered by end-to-end smokes that launch the real binary under `cage`, the headless wlroots compositor, drive it with `wtype` and [`wolf-pointer-inject`](../../tools/wolf-pointer-inject/README.md), screenshot the live window with `grim`, and read it back with `tesseract`. They prove the stack actually draws a window a human could see. They are not opt-in: they run in the ordinary `cargo test` suite, which is most of why it is slow. See [`tests/README.md`](tests/README.md) for the full list.
 
-They need `cage`, `wtype`, `grim`, `tesseract`, and `wolf-pointer-inject` on `PATH`, a set and writable `XDG_RUNTIME_DIR` where the Wayland socket lives, and `WOLF_NVIM_BIN`. A missing precondition fails loud rather than skipping quietly, because absence means the smoke toolchain was not provisioned.
+They need `cage`, `wtype`, `grim`, `tesseract`, and `wolf-pointer-inject` on `PATH`, a set and writable `XDG_RUNTIME_DIR` where the Wayland socket lives, and both `WOLF_NVIM_BIN` and `WOLF_RG_BIN`. A missing precondition fails loud rather than skipping quietly, because absence means the smoke toolchain was not provisioned.
 
 Three details are load-bearing. Every smoke holds a shared mutex for its whole body, because two `cage` compositors started concurrently contend for the same Wayland socket and both fail. Each scenario runs inside `cage` as a single shell command, since `cage` exports its `WAYLAND_DISPLAY` only to its own child process tree. And every smoke's environment comes from one helper, which is the only thing keeping a smoke run out of the developer's real state directory.
 
@@ -145,5 +151,5 @@ Three details are load-bearing. Every smoke holds a shared mutex for its whole b
 - There is no About dialog.
 - The command palette lists only the registry commands this front-end performs. There are no Switch-to-Window rows, since there is one window, and no Open Recent rows, since the recent-directories MRU is not wired to it.
 - There is no Markdown preview and no terminal drawer. Core carries the drawer intent; this crate matches it explicitly and does nothing, so adding a fourth intent variant still fails the build here.
-- The empty state disables only the file picker's action, and two routes go around it. A new-buffer or close-pane chord still fires behind the opaque status page, where the result is invisible until a folder is opened; and the command palette offers a live "Go to File…" row there, which reaches the file search on a project-less window while the identically named menu item is insensitive and the accelerator falls through to Neovim.
+- The empty state disables two actions, the file picker's and the project search's, and routes still go around them. A new-buffer or close-pane chord fires behind the opaque status page, where the result is invisible until a folder is opened. The palette offers a live row for every dispatched command, so its "Go to File…" row reaches the file search on a project-less window while the menu item is insensitive and the accelerator falls through; the search row is refused instead, by `search_overlay::open_decision`'s no-project arm.
 - The buffer picker stays enabled in the empty state, and that is a decision rather than an oversight: unlike a file search it has no project root to be rooted wrongly at, and the captive Neovim runs there too, with its `Untitled.md` buffer listed.

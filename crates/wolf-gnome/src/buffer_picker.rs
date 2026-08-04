@@ -42,7 +42,7 @@
 //! [`switch_target`] and [`row_label`], unit-tested below. Selection movement and
 //! activation reuse [`crate::picker`]'s [`next_selection`], [`restored_index`] and
 //! [`activation_index`]; [`initial_selection`] deliberately does NOT come from
-//! there, because it is the one selection rule the three overlays do not share.
+//! there, because it is the one selection rule the four overlays do not share.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -122,7 +122,7 @@ pub fn open_decision(liveness: Option<Liveness>) -> OpenDecision {
 /// Which row the FIRST refresh after an open preselects: `min(1, n_rows - 1)`, and
 /// `None` for an empty list.
 ///
-/// **This is the one selection rule the three overlays do NOT share.** The file
+/// **This is the one selection rule the four overlays do NOT share.** The file
 /// picker and the command palette preselect row 0, because their top row is their
 /// best match. Here row 0 is the buffer the user is ALREADY in — `rank_buffers`
 /// sorts by `lastused` DESC — so preselecting it would make a bare `Enter` on the
@@ -775,7 +775,7 @@ mod tests {
 
     /// Which row the FIRST refresh after `open` preselects.
     ///
-    /// This is the one selection rule the three overlays do NOT share, and the
+    /// This is the one selection rule the four overlays do NOT share, and the
     /// reason is the whole point of a buffer picker: row 0 is the buffer the user
     /// is already in, so a bare `Enter` on the empty-query open must switch to the
     /// most-recently-used OTHER buffer. The macOS `BufferPickerView` does exactly

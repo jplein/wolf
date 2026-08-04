@@ -15,11 +15,11 @@ The GTK 4 and libadwaita front-end: a runnable single-window Linux application t
 
 `src/main.rs` forwards the exit code from `app::run`, which builds the `adw::Application` and constructs the window on activate. The crate is also a library: every decision expressible as a function of values lives in a seam that needs no display server, and the binary is the widget glue over those seams.
 
-The binary takes no command-line arguments. The picker, the sidebar, the primary menu's native `gtk::FileDialog`s and Neovim itself all open files the same way, through `InputEvent::Open`, which core performs as `:e`. Saving is `:w` or `:saveas` from inside Neovim.
+The binary takes no command-line arguments. The picker, the sidebar, the primary menu's native `gtk::FileDialog`s and Neovim itself all open files the same way, through `InputEvent::Open`, which core performs as `:e`. A project-search result row opens a location rather than a file, through `InputEvent::OpenAt`, which core performs as `:edit` followed by `nvim_win_set_cursor` in one input-pump step. Saving is `:w` or `:saveas` from inside Neovim.
 
 ## Running
 
-Everything goes through the Nix devShell, which supplies the GTK toolchain and exports `WOLF_NVIM_BIN`:
+Everything goes through the Nix devShell, which supplies the GTK toolchain and exports `WOLF_NVIM_BIN` and `WOLF_RG_BIN`:
 
 ```sh
 nix develop --command cargo run -p wolf-gnome

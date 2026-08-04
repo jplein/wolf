@@ -24,7 +24,7 @@
 //!
 //! ## The three classes
 //!
-//! - **Dispatched** — the ten commands `wolf-gnome` performs today.
+//! - **Dispatched** — the eleven commands `wolf-gnome` performs today.
 //! - [`UiAction::Deferred`] — implemented on macOS and planned on GTK; the string
 //!   names the concrete blocker so the deferral is auditable rather than a shrug.
 //! - [`UiAction::NoGnomeEquivalent`] — has no GNOME counterpart and will never be
@@ -62,6 +62,8 @@ pub enum UiAction {
     OpenCommandPalette,
     /// Open the in-window buffer-picker overlay.
     OpenBufferPicker,
+    /// Open the in-window project-search overlay.
+    OpenSearchOverlay,
     /// Implemented on macOS, planned on GTK; the string names the blocker.
     Deferred(&'static str),
     /// Has no GNOME equivalent and will never be implemented.
@@ -135,9 +137,7 @@ pub fn ui_action_for(command: Command) -> UiAction {
             "wolf-gnome's sidebar has no panel switcher (there is no search panel to switch away \
              from)",
         ),
-        Command::SearchInProject => UiAction::Deferred(
-            "the GTK project-search panel is not built (wolf_core::search is already linked)",
-        ),
+        Command::SearchInProject => UiAction::OpenSearchOverlay,
     }
 }
 
@@ -152,7 +152,7 @@ mod tests {
     /// The commands `wolf-gnome` DISPATCHES, by canonical `CommandSpec::id`,
     /// sorted. Ids (not variants) so the failure message names the registry row a
     /// reader can grep for.
-    const EXPECTED_DISPATCHED_IDS: [&str; 10] = [
+    const EXPECTED_DISPATCHED_IDS: [&str; 11] = [
         "buffer_picker",
         "close_pane",
         "close_window",
@@ -163,6 +163,7 @@ mod tests {
         "open_file",
         "open_folder",
         "quit_application",
+        "search_in_project",
     ];
 
     /// What a [`Case`] row expects [`ui_action_for`] to return.
@@ -322,9 +323,9 @@ mod tests {
             want: Want::Deferred,
         },
         Case {
-            desc: "25 SearchInProject: no GTK project-search panel",
+            desc: "25 SearchInProject: opens the in-window project-search overlay",
             command: Command::SearchInProject,
-            want: Want::Deferred,
+            want: Want::Exact(UiAction::OpenSearchOverlay),
         },
     ];
 
@@ -425,7 +426,7 @@ mod tests {
 
         assert_eq!(
             dispatched, expected,
-            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly ten commands; \
+            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly eleven commands; \
              everything else must be Deferred(reason) or NoGnomeEquivalent(reason) so the drain \
              is never silent. If a command was genuinely implemented, tick its feat-list row and \
              update this list with it."
