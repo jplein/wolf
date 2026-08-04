@@ -1825,26 +1825,63 @@ const PROBE_X: i32 = 640;
 /// y of the probe point, in absolute output pixels. See [`PROBE_X`].
 const PROBE_Y: i32 = 360;
 
-/// x of the editor pane's top-left corner in output pixels, as DERIVED from the
+/// x of the editor pane's TEXT GRID origin in output pixels, as DERIVED from the
 /// probe click: `PROBE_X - (c0 - 1) * cell_w`.
 ///
-/// MEASURED 2026-08-02 on a **1280x720** cage output at `WOLF_FONT_PT` =
-/// [`SMOKE_FONT_PT`]: the probe at `(640, 360)` landed on Neovim cell
-/// `(line 8, col 18)` with `cell_w = 22.4765625`, `cell_h = 44.0`, giving a derived
-/// origin of `(257.8984375, 52.0)`. Both numbers are also recorded in
-/// `crates/wolf-gnome/tests/README.md`.
+/// MEASURED 2026-08-04 on a **1280x720** cage output at `WOLF_FONT_PT` =
+/// [`SMOKE_FONT_PT`]: the probe at `(640, 360)` lands on Neovim cell
+/// `(line 5, col 17)` with `cell_w = 22.4765625`, `cell_h = 44.0`, giving a derived
+/// origin of `(280.375, 184.0)`.
+///
+/// ## Why it moved, and why the previous value was worse than wrong
+///
+/// The per-pane chrome — `editor_inset::EDITOR_PADDING_PX` and the statusbar strip —
+/// puts the text grid inside the pane widget instead of at its corner. In x that is
+/// the padding alone: the previous value, `257.8984375`, differs from this one by
+/// exactly `22.4765625`, one whole `cell_w`, because the probe landed one column
+/// earlier while the true origin moved 20 px right.
+///
+/// **The x band did not fail on that**, and that is the point worth recording. The
+/// shift was `+22.48` px inside a `+/-34.48` px band (`PANE_ORIGIN_TOLERANCE_PX` plus
+/// one `cell_w`), so the old value stayed green while describing a layout that no
+/// longer existed — the same class as a test that cannot detect its own failure. It
+/// is re-derived here deliberately, from a run, and NOT because anything went red.
+/// The y band did fail, loudly, as designed.
 ///
 /// The value carries the probe click's unknown SUB-CELL PHASE, so it OVER-estimates
 /// the true origin by up to one cell — which is exactly why the band adds `cell_w` /
 /// `cell_h` (see [`PANE_ORIGIN_TOLERANCE_PX`]). `-1.0` is the deliberate impossible
 /// placeholder the smoke is first landed with; re-deriving it is a matter of putting
 /// `-1.0` back and reading the band failure's message.
-const PANE_ORIGIN_X_EXPECTED: f64 = 257.8984375;
+const PANE_ORIGIN_X_EXPECTED: f64 = 280.375;
 
-/// y of the editor pane's top-left corner in output pixels, as DERIVED from the
+/// y of the editor pane's TEXT GRID origin in output pixels, as DERIVED from the
 /// probe click: `PROBE_Y - (l0 - 1) * cell_h`. See [`PANE_ORIGIN_X_EXPECTED`] for the
 /// measurement, its date and the cage output size it was taken on.
-const PANE_ORIGIN_Y_EXPECTED: f64 = 52.0;
+///
+/// MEASURED 2026-08-04: `184.0`, up from `52.0`. In y the chrome is the whole
+/// statusbar strip plus the top padding, so this is the header bar's height plus the
+/// strip plus `EDITOR_PADDING_PX`, plus the probe's sub-cell phase.
+///
+/// **TRIPWIRE — this pair is no longer the pane AREA's origin.** It used to be both:
+/// the grid's top-left and the pane widget's top-left were the same point. The
+/// per-pane chrome separates them, and two derivations still read this pair as the
+/// area's corner:
+///
+/// * [`crash_overlay_and_restart_button_recover_under_cage`] derives the crash
+///   overlay's allocation as `output - (PANE_ORIGIN_X_EXPECTED,
+///   PANE_ORIGIN_Y_EXPECTED)`. That one MATTERS — it has to land a click inside a
+///   320x64 button — and its "No magic pixel" section carries the arithmetic of how
+///   far out it now is;
+/// * the two divider smokes seed their bisection from
+///   `PANE_ORIGIN_X_EXPECTED + editor_w * share`. Those are documented as SEEDS ONLY
+///   and the bisection converges from either, so the drift degrades rather than
+///   breaks — but the premise is the same one and should move with it.
+///
+/// The overlay still starts under the header bar; the GRID now starts a strip and a
+/// padding below that. Anything that wants the pane AREA's corner needs an anchor of
+/// its own, measured the same way this one is.
+const PANE_ORIGIN_Y_EXPECTED: f64 = 184.0;
 
 /// Half-width of the band the derived pane origin must fall inside.
 ///
@@ -5726,12 +5763,15 @@ bisect_divider() {
         echo "wolf-gnome divider smoke: the bisection seeds $lo and $hi BOTH focused window $lo_win," >&2
         echo "  so they do not straddle a divider and no bisection can find one." >&2
         echo "  Candidate causes, in order of likelihood:" >&2
-        echo "    1. the editor pane's ORIGIN moved (an adw::HeaderBar height or a sidebar width" >&2
+        echo "    1. the PER-PANE CHROME changed (editor_inset::EDITOR_PADDING_PX or the statusbar" >&2
+        echo "       strip's height), which moves the text grid inside every pane;" >&2
+        echo "    2. the editor pane's ORIGIN moved (an adw::HeaderBar height or a sidebar width" >&2
         echo "       change) -- click_positions_the_cursor_under_cage derives it and fails first;" >&2
-        echo "    2. the measured CELL SIZE changed, so the panes are not the size modelled;" >&2
-        echo "    3. the divider HANDLE is far wider than the theme's one pixel, and both seeds" >&2
+        echo "    3. the measured CELL SIZE changed, so the panes are not the size modelled;" >&2
+        echo "    4. the divider HANDLE is far wider than the theme's one pixel, and both seeds" >&2
         echo "       landed on it;" >&2
-        echo "    4. a fresh split no longer produces EQUAL shares, which is what the seeds model." >&2
+        echo "    5. a fresh split no longer produces EQUAL shares, which is what the seeds model" >&2
+        echo "       -- geometry::equal_weights_give_equal_widths is the unit test for that half." >&2
         exit "$3"
     fi
     steps=0
@@ -6632,11 +6672,14 @@ bisect_divider() {
         echo "wolf-gnome divider relaunch smoke: the bisection seeds do not straddle the divider." >&2
         echo "  Seed $lo focused '$lo_buf' (expected $DIVIDER_FILE_LEFT) and seed $hi focused" >&2
         echo "  '$hi_buf' (expected $DIVIDER_FILE_RIGHT). Candidate causes, in order:" >&2
-        echo "    1. the editor pane's ORIGIN moved (an adw::HeaderBar height or sidebar width" >&2
+        echo "    1. the PER-PANE CHROME changed (editor_inset::EDITOR_PADDING_PX or the statusbar" >&2
+        echo "       strip's height), which moves the text grid inside every pane;" >&2
+        echo "    2. the editor pane's ORIGIN moved (an adw::HeaderBar height or sidebar width" >&2
         echo "       change) -- click_positions_the_cursor_under_cage derives it and fails first;" >&2
-        echo "    2. the measured CELL SIZE changed, so the panes are not the size modelled;" >&2
-        echo "    3. the divider HANDLE is far wider than the theme's one pixel;" >&2
-        echo "    4. a fresh split no longer produces EQUAL shares, which is what the seeds model." >&2
+        echo "    3. the measured CELL SIZE changed, so the panes are not the size modelled;" >&2
+        echo "    4. the divider HANDLE is far wider than the theme's one pixel;" >&2
+        echo "    5. a fresh split no longer produces EQUAL shares, which is what the seeds model" >&2
+        echo "       -- geometry::equal_weights_give_equal_widths is the unit test for that half." >&2
         echo "  An empty name means the click focused a pane holding no file at all, i.e. the :e" >&2
         echo "  never landed." >&2
         exit 21
@@ -7966,20 +8009,24 @@ const STATUS_READBACK_NAME: &str = "status_winheight.txt";
 /// subtracted — the ONLY end-to-end proof that the editor inset and the statusbar
 /// strip reach a pixel.
 ///
-/// `-1` is a deliberate impossible PLACEHOLDER, landed with the smoke and derived
-/// from its first real failure, exactly as [`PANE_ORIGIN_X_EXPECTED`] and
-/// [`PANE_ORIGIN_Y_EXPECTED`] are derived: run the smoke, read the number the
-/// assertion message reports Neovim answered, and paste it here together with the
-/// date and the cage output size it was measured on. Do NOT compute it from the
-/// statusbar constants — a value derived from the constants the production code reads
-/// holds for whatever those constants become, which is the one thing this assertion
-/// exists to rule out.
+/// MEASURED 2026-08-04 on a **1280x720** cage output at `WOLF_FONT_PT` =
+/// [`SMOKE_FONT_PT`]: **11** rows, read off the smoke's own first failure against the
+/// `-1` placeholder it was landed with. The un-inset grid was 14 rows at the same
+/// font on the same output, so the chrome costs three whole rows.
+///
+/// It is derived from a RUN, never computed: the placeholder is the procedure, exactly
+/// as it is for [`PANE_ORIGIN_X_EXPECTED`] and [`PANE_ORIGIN_Y_EXPECTED`]. Put `-1`
+/// back, read the number the assertion message reports Neovim answered, and paste it
+/// here with the date and the cage output size. Do NOT compute it from the statusbar
+/// constants — a value derived from the constants the production code reads holds for
+/// whatever those constants become, which is the one thing this assertion exists to
+/// rule out.
 ///
 /// It is not slack and it has no band: it is an exact equality, because the pointer
 /// smokes' x tolerance (`PANE_ORIGIN_TOLERANCE_PX + cell_w`) is wider than the 20 px
 /// the padding moves the pane origin by, so without an exact row count nothing in
 /// this file could tell the padding apart from no padding.
-const STATUS_EXPECTED_WINHEIGHT: i64 = -1;
+const STATUS_EXPECTED_WINHEIGHT: i64 = 11;
 
 /// The PER-PANE STATUSBAR scenario, run as a single `sh -c` string inside `cage` (the
 /// [`VSPLIT_SCENARIO`] shape): launch + poll, settle, `:e` file A by ABSOLUTE path,
@@ -9403,12 +9450,15 @@ fn assert_probe_cell_and_pane_origin(
     assert!(
         (origin_x - PANE_ORIGIN_X_EXPECTED).abs() <= PANE_ORIGIN_TOLERANCE_PX + metrics.cell_w,
         "{smoke}: the editor pane's derived X ORIGIN is {origin_x}, outside the band \
-         {PANE_ORIGIN_X_EXPECTED} +/- ({PANE_ORIGIN_TOLERANCE_PX} + cell_w). The four candidate \
-         causes, in order of likelihood: (1) a GTK4 client-side-decoration / shadow-margin offset \
+         {PANE_ORIGIN_X_EXPECTED} +/- ({PANE_ORIGIN_TOLERANCE_PX} + cell_w). The five candidate \
+         causes, in order of likelihood: (1) the PER-PANE CHROME changed — \
+         `editor_inset::EDITOR_PADDING_PX` or the statusbar strip's height — since this origin is \
+         the TEXT GRID's corner, which sits inside the pane widget by exactly that chrome; (2) a \
+         GTK4 client-side-decoration / shadow-margin offset \
          has appeared under cage (there was none: `motion 640 360` was measured arriving as \
-         surface-local `640.00000000, 360.00000000`); (2) the `adw::HeaderBar` height changed — a \
-         libadwaita/GTK bump; (3) `app::TREE_PANE_WIDTH` or the `gtk::Paned` divider width \
-         changed; (4) the cage output size changed. Derived origin ({origin_x}, {origin_y}); \
+         surface-local `640.00000000, 360.00000000`); (3) the `adw::HeaderBar` height changed — a \
+         libadwaita/GTK bump; (4) `app::TREE_PANE_WIDTH` or the `gtk::Paned` divider width \
+         changed; (5) the cage output size changed. Derived origin ({origin_x}, {origin_y}); \
          expected ({PANE_ORIGIN_X_EXPECTED}, {PANE_ORIGIN_Y_EXPECTED}); cell_w {}, cell_h {}; \
          probe ({PROBE_X}, {PROBE_Y}) -> (line {line}, col {col}); reported output extents \
          {width}x{height}. Raw readback was {raw:?}. PNG kept at {}. If \
@@ -9422,9 +9472,12 @@ fn assert_probe_cell_and_pane_origin(
     assert!(
         (origin_y - PANE_ORIGIN_Y_EXPECTED).abs() <= PANE_ORIGIN_TOLERANCE_PX + metrics.cell_h,
         "{smoke}: the editor pane's derived Y ORIGIN is {origin_y}, outside the band \
-         {PANE_ORIGIN_Y_EXPECTED} +/- ({PANE_ORIGIN_TOLERANCE_PX} + cell_h). Same four candidate \
-         causes as the X band, in the same order, but a Y-only shift points hardest at (2) — the \
-         `adw::HeaderBar` height — since the header bar is the only thing above the pane. Derived \
+         {PANE_ORIGIN_Y_EXPECTED} +/- ({PANE_ORIGIN_TOLERANCE_PX} + cell_h). Same five candidate \
+         causes as the X band, in the same order, but a Y-only shift points hardest at (1) and (3) \
+         — the STATUSBAR STRIP's height and the `adw::HeaderBar`'s — because those two are the \
+         whole of what sits above the grid, and only the strip is ours. The strip is a value: \
+         `statusbar_layout(metrics.size_px, secondary_font_size(..), ..)`, so a font-size change \
+         moves it too. Derived \
          origin ({origin_x}, {origin_y}); expected ({PANE_ORIGIN_X_EXPECTED}, \
          {PANE_ORIGIN_Y_EXPECTED}); cell_w {}, cell_h {}; probe ({PROBE_X}, {PROBE_Y}) -> \
          (line {line}, col {col}); reported output extents {width}x{height}. Raw readback was \
@@ -9626,10 +9679,14 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
             && by + bh + margin <= overlay_h,
         "{smoke}: the derived restart-button rect ({bx}, {by}, {bw}, {bh}) does not sit at least \
          {margin} px clear of every edge of the {overlay_w}x{overlay_h} overlay allocation. The \
-         four candidate causes, in order of likelihood: (1) an `adw::HeaderBar` height change (a \
-         libadwaita/GTK bump), which moves the overlay's top edge and therefore its height; (2) \
+         five candidate causes, in order of likelihood: (1) THE CALLER IS MODELLING THE WRONG \
+         ALLOCATION, because it derived it as `output - PANE_ORIGIN_*` and those two constants are \
+         the TEXT GRID's corner rather than the overlay's — see the TRIPWIRE on \
+         PANE_ORIGIN_Y_EXPECTED, and expect this overlay to be roughly the per-pane chrome too \
+         small; (2) an `adw::HeaderBar` height change (a \
+         libadwaita/GTK bump), which moves the overlay's top edge and therefore its height; (3) \
          an `app::TREE_PANE_WIDTH` or `gtk::Paned` divider-width change, which moves its left \
-         edge; (3) a cage output-size change, which moves the bottom-right corner; (4) \
+         edge; (4) a cage output-size change, which moves the bottom-right corner; (5) \
          `crash_overlay.rs` having been rewritten to use an `adw::StatusPage`, or its root \
          `gtk::Box` having been given a NON-ZERO spacing — either of which breaks the derivation \
          outright, because `restart_button_rect` models exactly two `vexpand` spacers around a \
@@ -10280,12 +10337,19 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 /// ([`NAVBACK_OCR_ABSENT`]), `sbtangoleaf` ([`SIDEBARTOGGLE_OCR_ABSENT`]) and
 /// `sidebarkeepalfa` ([`SIDEBARTOGGLE_OCR_KEEP`]); and — added with the
 /// file-tree-sidebar-parity unit — `cdtango` ([`CD_OCR_ROOTED`]), `cdrootzulu`
-/// ([`CD_OCR_ROOT_NODE`]) and `cdouterhome` ([`CD_OCR_UNABBREVIATED`]). None is a
+/// ([`CD_OCR_ROOT_NODE`]) and `cdouterhome` ([`CD_OCR_UNABBREVIATED`]); and — added
+/// with the pane-chrome unit — `statusalfa` ([`STATUS_OCR_A`]), `statusbravo`
+/// ([`STATUS_OCR_B`]) and `statusready` ([`STATUS_OCR_MARKER`]). None is a
 /// substring of any [`SIDEBAR_FILLER_FILES`] entry, and no filler may be renamed to
-/// make one so. Five smokes contribute no term:
-/// [`colon_qa_closes_the_window_under_cage`] asserts on the cage exit status and
-/// captures no image, and the click, drag, scroll and divider-relayout smokes assert
-/// on files the captive Neovim writes about its own state rather than on pixels.
+/// make one so.
+///
+/// SIX smokes contribute no term, which is the same six [`ASSERTED_OCR_TERMS`]'s own
+/// doc comment enumerates — the two counts are of one set and must not drift apart
+/// again: [`colon_qa_closes_the_window_under_cage`] and
+/// [`config_font_size_changes_the_grid_under_cage`] capture no image at all (the
+/// first asserts on the cage exit status, the second on two `winwidth(0)` integers),
+/// and the click, drag, scroll and divider-relayout smokes assert on files the
+/// captive Neovim writes about its own state rather than on pixels.
 ///
 /// ## What it does NOT guard (and why that matters)
 ///
@@ -15286,14 +15350,29 @@ fn stalled_nvim_raises_the_stall_overlay_under_cage() {
 ///
 /// `wolf_gnome::restart_button_rect` is the SAME function the widget builder's size
 /// requests realise, so the two cannot drift. The composition is: the cage output
-/// extents; minus the pane origin (which IS the overlay origin — the overlay's main
-/// child is the pane container whose single `DrawingArea` sits at offset `(0, 0)`,
-/// and under cage the window is the output with zero CSD offset); into
+/// extents; minus the pane origin; into
 /// `restart_button_rect`; then a tenth of the way in from that rect's LEFT edge
 /// horizontally, and the rect's CENTRE vertically. That asymmetry is not stylistic —
 /// a centre-derived x was measured in pass 5 to be blind to the button-width revert.
 /// The derivation comment in the body carries the measurement, and states the width
 /// bound the inset does and does not discriminate.
+///
+/// **TRIPWIRE — the premise under "minus the pane origin" no longer holds.** It used
+/// to read "which IS the overlay origin", and it was true: the overlay's main child
+/// is the pane container whose single `DrawingArea` sits at offset `(0, 0)`, and
+/// under cage the window is the output with zero CSD offset, so the pane's top-left
+/// and the grid's top-left were one point. The per-pane chrome separates them.
+/// [`PANE_ORIGIN_X_EXPECTED`] / [`PANE_ORIGIN_Y_EXPECTED`] are derived from a
+/// click-to-cell readback, so they now name the TEXT GRID's corner — inside the pane
+/// by `editor_inset::EDITOR_PADDING_PX` horizontally and by the statusbar strip plus
+/// that padding vertically. Subtracting them therefore models an overlay shorter and
+/// narrower than the real one, and every offset taken from them is displaced by the
+/// same amount: with the 2026-08-04 constants the modelled allocation is
+/// `999.6 x 536` against a real `~1029 x 674`, and the derived click lands roughly
+/// 130 px below the button's bottom edge. What this derivation needs is an overlay
+/// anchor of its own — the header bar's height and the sidebar's right edge —
+/// measured the way the pane origin is, NOT a widened margin. Until it has one, read
+/// a red here as this, not as a broken overlay.
 ///
 /// Three self-checking preconditions guard it:
 /// [`assert_button_rect_is_the_named_size`] (a collapsed `(0,0,0,0)` must
@@ -15301,7 +15380,9 @@ fn stalled_nvim_raises_the_stall_overlay_under_cage() {
 /// [`assert_button_rect_fits`] (a `PANE_ORIGIN_TOLERANCE_PX` analogue), and
 /// [`assert_inside_extents`]. After the run the whole derivation is REDONE from the
 /// run's own measured extents and its own derived origin, and the injected point is
-/// asserted to lie inside that rect.
+/// asserted to lie inside that rect — which, note, moves BOTH sides by the same wrong
+/// offset while the anchor is wrong, so it cannot catch the mismatch above; the
+/// scenario's own recovery poll (exit 19) is what does.
 ///
 /// ## Measured geometry (2026-08-02)
 ///
