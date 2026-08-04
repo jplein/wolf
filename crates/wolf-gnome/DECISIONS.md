@@ -36,7 +36,7 @@ The gtk-rs crates form one coherent release set: `gtk4` 0.11.x, `gdk4` 0.11.x, `
 
 The crate is both a library and a binary, and the split is the most important structural fact about it. The binary is the window; the library holds every decision expressible as a function of values, so it can be unit-tested with no display server, no widget, and no Neovim.
 
-Those seams cover key and pointer translation, the Cairo paint, the pixel-to-grid geometry, the pane-layout tree and its persistence codec, the cursor rules, the action namespace, the command classification, the launch and application-state rulebooks, the window title, the project-search rulebook, and the crash and stall rulebook. Each is a free function or a plain value type; [`src/README.md`](src/README.md) names them file by file.
+Those seams cover key and pointer translation, the Cairo paint, the pixel-to-grid geometry, the pane-layout tree and its persistence codec, the cursor rules, the action namespace, the command classification, the launch and application-state rulebooks, the window title, the project-search rulebook, the per-pane navigation rulebook, and the crash and stall rulebook. Each is a free function or a plain value type; [`src/README.md`](src/README.md) names them file by file.
 
 The consequence is this crate's testing posture. Widget construction cannot be unit-tested at all, and is covered only by the smokes below. When you add behavior, put the decision in a seam and test it there: a rule left inside a widget closure is a rule the fast suite cannot execute, and on this platform that has repeatedly meant a rule nothing verified.
 
@@ -63,6 +63,8 @@ Dropping a `SearchSession` kills its `rg` child, which is the whole of what make
 ## Window structure
 
 The window is an `adw::ApplicationWindow` whose content is a vertical box: an `adw::HeaderBar` over a horizontal `gtk::Paned`. The Paned's start child is the file-tree sidebar; its end child is a `gtk::Overlay` whose main child is the pane view. The pane view is a tree of nested `gtk::Paned` with one `gtk::DrawingArea` per Neovim window, built from the pure pane tree, plus a one-row command-line strip along the bottom.
+
+The header bar is the unified toolbar: the sidebar toggle, a linked Back/Forward pair and Open at the start, the primary menu at the end, and the window title between them. **No title widget is set**, so Adwaita draws the title itself and the bar keeps its natural height. That is load-bearing rather than incidental — `PANE_ORIGIN_Y_EXPECTED` in the smokes is the header bar's height, and every pointer smoke derives its target from an origin measured against it, so a title widget silently retargets all seven.
 
 The overlay's children are added empty state, then picker, then command palette, then buffer picker, then project search, then crash overlay, then restart banner, and that order is the stacking. At most one of the four transient overlays is open — the shell closes the other three when it opens one — so their relative order is not observable, while each must sit above the empty state or it would open invisibly in a project-less window.
 
@@ -92,7 +94,9 @@ Every action name, its accelerator, its `Command` correspondence, and its menu p
 
 `Ctrl+Shift+<letter>` is the namespace because nothing else is available. There is effectively no free `Ctrl+<letter>` across all Neovim modes, and a terminal buffer forwards every key but one. A forwarded, unmapped Alt chord splits into `<Esc>` plus the base key, and a forwarded, unmapped Super chord drops the modifier in normal mode and inserts literal text in insert mode, so neither is a namespace Neovim can be given. The genuinely free keys are too few and too unidiomatic to carry a menu. The rule is memorable: take the macOS chord and replace the command key with Ctrl+Shift.
 
-Two consequences worth knowing. The file picker is `Ctrl+Shift+O`, the command palette `Ctrl+Shift+P`, the buffer picker `Ctrl+Shift+E` and the project search `Ctrl+Shift+F`. And a disabled action's accelerator falls through to Neovim, which is what a real GTK accelerator does and what the chord controller deliberately reproduces, so in the empty state `Ctrl+Shift+O` reaches Neovim as `<C-o>` and `Ctrl+Shift+F` as `<C-f>`.
+Two consequences worth knowing. The file picker is `Ctrl+Shift+O`, the command palette `Ctrl+Shift+P`, the buffer picker `Ctrl+Shift+E`, the project search `Ctrl+Shift+F` and the sidebar toggle `Ctrl+Shift+B`. And a disabled action's accelerator falls through to Neovim, which is what a real GTK accelerator does and what the chord controller deliberately reproduces, so in the empty state `Ctrl+Shift+O` reaches Neovim as `<C-o>`, `Ctrl+Shift+F` as `<C-f>` and `Ctrl+Shift+B` as `<C-b>`.
+
+**`Alt+Left` and `Alt+Right` are the namespace's one deliberate exception**, and the asymmetry it creates must not be tidied away. They carry Back and Forward, and capturing them is exactly what prevents the `<Esc>` plus `<Left>` split a forwarded Alt chord produces. So their actions stay enabled even where a press would refuse, unlike every `Ctrl+Shift+<letter>` row, which is disabled instead and gives up only an alias by falling through. The two toolbar buttons desensitize in their place, which costs nothing: a press with nothing to go back to issues no RPC anyway.
 
 ## Application state
 
@@ -106,7 +110,7 @@ A snapshot is taken on every render wake, with no timer and no debounce, plus on
 
 **Window position is deliberately never persisted, permanently.** A Wayland client is given neither its own position nor screen geometry, so there is no analogue of the macOS check that a restored frame still intersects a screen — a restored coordinate could not be validated even in principle. Only the size is restored, and the position is written as an explicit zero rather than a plausible-looking value a later reader might trust.
 
-`sidebar_visible` is likewise written but never read back. It is written so the field cannot rot out of the shared schema, and not applied because a user cannot legitimately produce a `false` while a folder is open, so honouring one from a hand-edited file would hide the sidebar with no way to bring it back.
+`sidebar_visible` carries the user's preference, and is restored at launch. What is written is that preference and never what is on screen: the empty state hides the sidebar without changing what the user asked for, so persisting the visible flag would make one project-less session hide the sidebar of every later one. `state_seam::sidebar_is_shown` combines the two at apply time, and a restored `false` is always reversible — from the header bar's toggle or from `Ctrl+Shift+B`.
 
 ## Crash and stall recovery
 
@@ -124,13 +128,15 @@ Only the open-file set comes back, reopened with the active file last because re
 
 **Never issue a blocking RPC on the restart path.** Against a dead Neovim it freezes the main loop for the whole timeout budget on every crash. The open-file mirror is read out of the snapshot instead.
 
-Core marks a stall only from a synchronous call's timeout arm, and two such calls are reachable from this crate: the layout rebuild at launch, before the window is interactive, and the buffer picker's candidate snapshot, which a running window issues on Ctrl+Shift+E. `buffer_picker::open_decision` refuses to open unless the core reads `Alive`, so the picker can discover a stall once and never re-probes a Neovim already known to be wedged. Copy and a preview render would each add another such path.
+Core marks a stall only from a synchronous call's timeout arm, and three such calls are reachable from this crate: the layout rebuild at launch, before the window is interactive; the buffer picker's candidate snapshot, which a running window issues on Ctrl+Shift+E; and a per-pane navigation move, which a running window issues on Alt+Left or Alt+Right. Copy and a preview render would each add another such path.
 
-The palette's Open Recent rows add no third one: reading the candidates is a SQLite read plus a bounded `stat` walk over the store's capped contents, taken at open and never per keystroke, so the two-call inventory is unchanged.
+Both calls a running window issues are gated in the same shape. `buffer_picker::open_decision` refuses to open unless the core reads `Alive`; `nav_ui::nav_press` refuses a move on the same `Alive`-only arm. Neither can prevent a first stall, and neither may be strengthened until it can — what they prevent is re-probing a Neovim already known to be wedged.
 
-The project search adds none either. `start_search` resolves its root from the tracked-cwd cell and hands `rg` to a worker, `open_at` is fire-and-forget on the ordered input channel, and `liveness` is an atomic read. `WolfCore::ignorecase()` is a blocking call and is deliberately never issued: its entire product would be the seed for a case-sensitivity toggle this front-end does not ship, bought with a third route into the state the paragraph below describes.
+The palette's Open Recent rows add no fourth one: reading the candidates is a SQLite read plus a bounded `stat` walk over the store's capped contents, taken at open and never per keystroke, so the inventory is unchanged.
 
-**Nothing in this crate clears `NotResponding`.** Core's auto-clear rides the `Ok` arm of a later synchronous call, and a timed-out one is detached, so its eventual success is never observed — while the only blocking call a running window issues refuses to run in that state. The route back is the stall overlay's Restart button, which force-kills. The honest fix, if that ever becomes a user problem, is a non-blocking liveness probe in core; there is none.
+The project search adds none either. `start_search` resolves its root from the tracked-cwd cell and hands `rg` to a worker, `open_at` is fire-and-forget on the ordered input channel, and `liveness` is an atomic read. `WolfCore::ignorecase()` is a blocking call and is deliberately never issued: its entire product would be the seed for a case-sensitivity toggle this front-end does not ship, bought with a further route into the state the paragraph below describes.
+
+**Nothing in this crate clears `NotResponding`.** Core's auto-clear rides the `Ok` arm of a later synchronous call, and a timed-out one is detached, so its eventual success is never observed — while both blocking calls a running window issues refuse to run in that state. The route back is the stall overlay's Restart button, which force-kills. The honest fix, if that ever becomes a user problem, is a non-blocking liveness probe in core; there is none.
 
 ## The headless smoke test
 
@@ -148,6 +154,7 @@ Three details are load-bearing. Every smoke holds a shared mutex for its whole b
 - The command-line strip renders a single row: an active command line, or the last message line when idle. There is no completion popup and no multi-line scrollable message view. Core folds all three UI extensions regardless, so adding the Adwaita widgets later is additive.
 - Only windows created through the overridden split commands become panes. A window from `:help`, quickfix, a preview, or `:diffsplit` gets a grid but no pane, and floating or external windows are ignored.
 - The sidebar re-roots on a front-end directory change — the Open Folder dialog or an Open Recent palette row — never on a user-typed `:cd`.
+- The navigation surfaces are Back and Forward alone: two header-bar buttons, two menu items, and `Alt+Left` / `Alt+Right`. There is no jump list of a pane's recently visited files, which the macOS History menu carries. A dynamic list needs a `gio::Menu` rebuilt on each popover open and an action parameterized by stack index, where `MENU_SECTIONS` is const data with five invariants checked over it.
 - No HiDPI scale handling: the cell-measurement probe assumes 96 dpi.
 - No input-method composition support.
 - There is no About dialog.

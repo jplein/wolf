@@ -9658,6 +9658,17 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// checked here rather than from guards of their own so the guard count this file's
 /// docs pin stays at four.
 ///
+/// ## Measured red run
+///
+/// The fifth exemption block was demonstrated RED by renaming [`SIDEBARTOGGLE_FILE`]
+/// to `"zzmikeleaf.md"`, i.e. by making the sidebar-toggle smoke's fixture stop
+/// carrying the term that smoke reads off it. The guard failed with
+/// `SIDEBARTOGGLE_FILE = "zzmikeleaf.md" no longer contains SIDEBARTOGGLE_OCR_ABSENT
+/// = "sbtangoleaf"`, naming the consequence — capture A would be VACUOUS, so the
+/// smoke's must-not-contain discriminator would hold permanently while proving
+/// nothing. Recorded here because this guard has no `measured` table of its own, and
+/// evidence that lives only in a run log is evidence that is about to be lost.
+///
 /// PURE, like its two siblings: no compositor, no `require_smoke_env`, no
 /// `CAGE_LOCK`, no subprocess.
 #[test]
@@ -16229,8 +16240,8 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
 /// | 2 | [`assert_png_present`] | precondition — grim produced an image | none; do not invent one | n/a — no revert of its own. GREEN under row 4's revert; that run's panic message names the retained capture at `/run/user/1000/wolf_gnome_navback_smoke.png`. |
 /// | 3 | `$BEFORE` names [`NAVBACK_FILE_SECOND`] | **precondition, not a discriminator** — it proves the second `:e` took effect, so a failure of assertion 4 can be attributed to the navigation rather than to a keystroke that never landed | none | n/a — no revert of its own. GREEN under row 4's revert, and load-bearing there: assertion 4's message could say "the pane really was on `nbyankee.md` going in" only because this row had already passed. |
 /// | 4 | `$AFTER` names [`NAVBACK_FILE_FIRST`] | **the discriminator** | replace `shell::perform`'s `UiAction::HistoryBack` arm body with `{}`. The chord still resolves and the action still activates, but nothing navigates, so `bufname('%')` still reads `nbyankee.md`. Isolated: every headless test stays green. | RED, in 6.57 s, with that arm body replaced by `{}`: `after Alt+Left Neovim reported its current buffer as "nbyankee.md", not "nbxray.md". Assertion 3 passed, so the pane really was on "nbyankee.md" going in — the navigation is what did not happen.` — `left: "nbyankee.md"`, `right: "nbxray.md"`; `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 36 filtered out; finished in 6.57s`. The isolation is measured rather than reasoned: `cargo test -p wolf-gnome --lib` under the SAME revert reported `test result: ok. 172 passed; 0 failed`, so this smoke is the only test in the tree that discriminates that arm. |
-/// | 5 | OCR contains [`NAVBACK_OCR_PRESENT`] | **discriminator** — the pane really repainted the file it moved to, which the readback alone cannot show | the same revert | NOT EVALUATED in the recorded red run: under row 4's revert the harness aborted at assertion 4, which is evaluated first and reddens under the same cause. Recorded as measured rather than dressed up as a red run of its own. What it independently discriminates — a Neovim that moved while the GTK side never redrew — leaves assertion 4 green, and no revert producing that shape has been run. |
-/// | 6 | OCR lacks [`NAVBACK_OCR_ABSENT`] | **discriminator with NO isolated red run** | the same revert reddens assertion 5 first, and 5 is evaluated first. With one pane two headings cannot both be on screen, so nothing reddens this alone: its contribution is naming WHICH file is showing, not detecting that the wrong one is. The same shape as the bare-Enter buffer-picker smoke's must-not-contain assertion. | n/a, by design — recorded rather than invented. It was not evaluated in the recorded red run either: that run ended at assertion 4, ahead of both OCR assertions. |
+/// | 5 | OCR contains [`NAVBACK_OCR_PRESENT`] | **aimed at a real property, but UNDISCRIMINATED by any executed revert** — it says the pane really REPAINTED the file it moved to, which the readback alone cannot show. The shape it would uniquely catch is a Neovim that moved while the GTK side never redrew, and that shape leaves assertion 4 GREEN. No revert producing it has been run, and none is invented here to manufacture one. | the same revert | NOT EVALUATED in the recorded red run: under row 4's revert the harness aborted at assertion 4, which is evaluated first and reddens under the same cause. Recorded as measured rather than dressed up as a red run of its own. What it independently discriminates — a Neovim that moved while the GTK side never redrew — leaves assertion 4 green, and no revert producing that shape has been run. |
+/// | 6 | OCR lacks [`NAVBACK_OCR_ABSENT`] | **discriminator with NO isolated red run** | the same `UiAction::HistoryBack` revert, which never reaches this assertion: the run aborts at assertion 4, ahead of BOTH OCR assertions, so neither 5 nor 6 has a red run of its own. Nor could anything redden this one alone — with a single pane two headings cannot both be on screen, so it is only ever reached once an earlier assertion has already failed. Its contribution is naming WHICH file is showing, not detecting that the wrong one is: the same shape as the bare-Enter buffer-picker smoke's must-not-contain assertion. | n/a, by design — recorded rather than invented. It was not evaluated in the recorded red run either: that run ended at assertion 4, ahead of both OCR assertions. |
 #[test]
 fn alt_left_navigates_back_to_the_previous_file_under_cage() {
     const SMOKE: &str = "alt_left_navigates_back_to_the_previous_file_under_cage";
@@ -16356,11 +16367,13 @@ fn alt_left_navigates_back_to_the_previous_file_under_cage() {
 
     let ocr_text = ocr_to_lowercase(&out_png);
 
-    // --- Assertion 5 (discriminator): the pane really REPAINTED ---------------
+    // --- Assertion 5 (undiscriminated): the pane really REPAINTED -------------
     //
     // The readback proves Neovim's own current buffer changed; only this proves the
     // GTK side drew the result. A pane view that never rebound the grid would leave
-    // assertion 4 green and this one red.
+    // assertion 4 green and this one red — but no revert producing that shape has
+    // been run, so the property is real and the discrimination is unmeasured. See
+    // this test's row 5.
     assert!(
         ocr_text.contains(NAVBACK_OCR_PRESENT),
         "{SMOKE}: OCR did not contain {NAVBACK_OCR_PRESENT:?} — the HEADING of \
@@ -16376,10 +16389,12 @@ fn alt_left_navigates_back_to_the_previous_file_under_cage() {
     // --- Assertion 6 (discriminator, NO isolated red run) ---------------------
     //
     // With one pane two headings cannot both be on screen, so no revert reddens this
-    // alone — assertion 5 fails first and is evaluated first. Its contribution is
-    // naming WHICH file is showing, not detecting that the wrong one is. Recorded
-    // rather than dressed up; the same shape as the bare-Enter buffer-picker smoke's
-    // must-not-contain assertion.
+    // alone: it is reached only once an earlier assertion has already failed. Under
+    // the recorded revert it is not reached at all — that run aborts at assertion 4,
+    // ahead of both OCR assertions. Its contribution is naming WHICH file is
+    // showing, not detecting that the wrong one is. Recorded rather than dressed up;
+    // the same shape as the bare-Enter buffer-picker smoke's must-not-contain
+    // assertion.
     assert!(
         !ocr_text.contains(NAVBACK_OCR_ABSENT),
         "{SMOKE}: OCR unexpectedly contained {NAVBACK_OCR_ABSENT:?} — the heading of \

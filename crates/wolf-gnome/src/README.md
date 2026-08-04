@@ -19,16 +19,16 @@ Purpose: the action namespace as data — every `gio` action name, its accelerat
 
 **Decisions**
 
-- `parse_accel` re-implements the accelerator grammar this crate allows rather than calling `gtk::accelerator_parse`, which asserts an initialized main thread and cannot run headlessly. A checker nobody can run is not a checker. The grammar admits only `<Control>`, `<Shift>`, and `<Alt>` with a key name, so `<Super>` and `<Primary>` never reach `forbidden_reason`.
+- `parse_accel` re-implements the accelerator grammar this crate allows rather than calling `gtk::accelerator_parse`, which asserts an initialized main thread and cannot run headlessly. The grammar admits only `<Control>`, `<Shift>`, and `<Alt>` with a key name, so `<Super>` and `<Primary>` never reach `forbidden_reason`.
 - `action_for_key` compares its three modifiers exactly and ignores every other bit: intercepting a Super-contaminated chord beats forwarding one Neovim mangles. Letters compare case-insensitively, since a shifted letter's keyval is keymap-dependent.
 
 **Gotchas**
 
-- Whether an action is installed follows from its command's classification, not from `status`. Promoting a reserved row means flipping `status` too, or the chord stays inert.
+- Whether an action is installed follows from its command's classification, not from `status`: a command-less row installs through `command_action::ui_action_for_front_end_action` instead. Promoting a reserved row means flipping `status` too, or the chord stays inert.
 
 #### `app.rs`
 
-Purpose: all GTK and Adwaita window wiring. `run` builds the `adw::Application` and, on activate, constructs the window — header bar, sidebar, and an editor overlay holding the pane view, the picker, the command palette, the buffer picker, the project search, the empty state, and the crash overlay — attached to a freshly started `WolfCore`.
+Purpose: all GTK and Adwaita window wiring. `run` builds the `adw::Application` and, on activate, constructs the window over a freshly started `WolfCore`; the window's structure is in [DECISIONS.md](../DECISIONS.md).
 
 **Public API**
 
@@ -36,10 +36,11 @@ Purpose: all GTK and Adwaita window wiring. `run` builds the `adw::Application` 
 
 **Decisions**
 
-- Before any widget exists, the state store is opened and turned into a restore plan, so the working directory, window size, and saved pane tree are known while the window is still being built. A missing state directory degrades every later state call to a no-op.
-- The saved layout is queued on the pane view with no arity guard, one half of the content-predicate rule in [DECISIONS.md](../DECISIONS.md).
+- Before any widget exists, the state store is opened and turned into a restore plan, so the launch decisions are known while the window is still being built. A missing state directory degrades every later state call to a no-op.
+- The saved layout is queued with no arity guard, one half of the content-predicate rule in [DECISIONS.md](../DECISIONS.md).
 - Cell metrics are measured once from a throwaway 1x1 `ImageSurface` (used only to obtain a Pango context) and shared by `Rc`, so a resize arriving before the first draw already has a size.
 - The close-request handler flushes state first, while the core and panes are still alive, and takes the core out in its own statement so the borrow is released before `shutdown` blocks. A flush after the take sees no core, is refused by the snapshot gate, and silently loses the session.
+- No title widget is set on the header bar, and that is measured rather than stylistic: the pointer smokes' pane origin is this bar's height. See [DECISIONS.md](../DECISIONS.md).
 
 **Gotchas**
 
@@ -74,11 +75,13 @@ Purpose: the pure mapping from a drained `wolf_core::Command` to the UI action t
 **Public API**
 
 - `ui_action_for(command) -> UiAction` — total.
+- `ui_action_for_front_end_action(action) -> Option<UiAction>` — what an `actions::ACTION_TABLE` row carrying no command performs, and `None` for anything else. It is the only other way an action is installed.
 - `UiAction` — the dispatched variants, plus `Deferred` and `NoGnomeEquivalent`, each carrying the concrete blocker as a string.
 
 **Decisions**
 
 - The match carries no catch-all arm, so appending a variant to `wolf_core::Command` fails to compile here until the new command is classified. A silently dropped command is indistinguishable from a broken one.
+- The front-end-only classification lives here rather than in [`actions.rs`](#actionsrs) because this module owns `UiAction` and `actions.rs` stays free of it. Nothing outside the tests here imports `actions`, so the two do not cycle.
 - A second check walks the command registry rather than the match, so the guard survives someone adding a catch-all arm.
 - Every unimplemented reason is distinct and non-empty, enforced by a test, so no two rows collapse into one indistinguishable diagnostic and the printed message always names the real blocker.
 
@@ -191,7 +194,7 @@ Purpose: crate root. Declares the modules and re-exports the display-free seams 
 
 - `cell_at` is re-exported because `grid_size_for` is, and the two are a pair whose composition is the point.
 - `restart_button_rect` is re-exported for one concrete consumer: the crash-overlay smoke derives the pixel it clicks from the same function the widget builder realizes, so the two cannot drift.
-- Items in `actions`, `buffer_picker`, `crash_overlay`, `cursor`, `layout`, `mouse`, `palette`, `pane_layout`, `pane_view`, `persistence`, `picker`, `search_overlay`, `shell`, `tree`, and `tree_view` are reached by module path rather than re-exported.
+- Items in `actions`, `buffer_picker`, `crash_overlay`, `cursor`, `layout`, `mouse`, `nav_ui`, `palette`, `pane_layout`, `pane_view`, `persistence`, `picker`, `search_overlay`, `shell`, `tree`, and `tree_view` are reached by module path rather than re-exported.
 
 #### `liveness_ui.rs`
 
@@ -232,6 +235,26 @@ Purpose: the GDK pointer-translation rulebook, the analogue of [`input.rs`](#inp
 - An unknown scroll unit falls back to the wheel threshold on purpose: guessing wheel for a pixel delta is over-sensitive and recoverable, while guessing surface for a detent delta makes scrolling dead.
 - A rejected `consume` leaves the carry untouched, so it is indistinguishable from no call; a poisoned remainder would kill scrolling for the session. `PaneScroll` discards the carry when the target grid differs from the previous call, accepted or not, because a remainder is a fraction of a line of one grid.
 - **The scroll sign is the opposite of macOS's, deliberately.** A positive AppKit delta shows earlier content while a positive GDK delta moves toward the end of the buffer, so a positive step count maps to `Down` here and `Up` there. A test exists to stop that being "corrected".
+
+#### `nav_ui.rs`
+
+Purpose: the pure, GTK-free rulebook for per-pane navigation — which window a Back or Forward press acts on, whether the press may be issued, and whether each toolbar button is sensitive. The navigation counterpart of [`liveness_ui.rs`](#liveness_uirs).
+
+**Public API**
+
+- `nav_query_win(active_win) -> Option<i64>` — the single place the "which window" question is answered, so the press path and the button refresh cannot disagree. It refuses `0`, per [`buffer_picker.rs`](#buffer_pickerrs)'s rule.
+- `nav_press(liveness, active_win) -> NavPress` — `Move(win)` or `Refuse(reason)`, the reason a mid-sentence clause the caller prints.
+- `nav_buttons(liveness, active_win, history) -> NavButtons` — the two buttons' sensitivity over core's per-pane availability.
+
+**Decisions**
+
+- Every function receives `active_win` rather than reading it, so the seam carries no single-window assumption and a focus change is only a change of argument.
+- `nav_press`'s match over `Option<Liveness>` has no catch-all arm, so a new variant fails to compile until classified. `None` is a classified arm, because the close handler leaves the core absent.
+- A sensitive button implies an accepted press; the converse is deliberately false. A live core on a pane with nothing behind it accepts the press and desensitizes both buttons, because core answers `None` and no RPC is issued.
+
+**Gotchas**
+
+- The buttons desensitize while the `gio` actions stay enabled — the opposite of `win.go-to-file`'s empty-state treatment, for the reason in [DECISIONS.md](../DECISIONS.md).
 
 #### `palette.rs`
 
@@ -299,12 +322,12 @@ Purpose: the glue that commits this crate's application state to `state.json`. I
 **Public API**
 
 - `build(parts) -> StateHandle` — a value constructor that installs no closures and takes no snapshot of its own.
-- `set_empty(empty)`, `on_render_wake()`, `flush_on_close()`.
+- `set_empty(empty)`, `set_sidebar_shown(shown)`, `on_render_wake()`, `flush_on_close()`.
 
 **Decisions**
 
 - An absent state store is the whole degradation story: every method early-returns, and the app runs normally while neither restoring nor saving. There is no error path and no second convention.
-- The size comes from the window's default size and the position is never written, per [DECISIONS.md](../DECISIONS.md). The persisted `sidebar_visible` is the inverse of the live empty-state flag.
+- The size comes from the window's default size and the position is never written, per [DECISIONS.md](../DECISIONS.md). The persisted `sidebar_visible` is the user's preference, tracked through `set_sidebar_shown`, and never the live visibility.
 - `flush_on_close` blocks on a bounded flush rather than trusting the writer thread, and a timeout prints rather than panicking. It exists to bound the quit path against a wedged filesystem, not to be reached.
 
 **Gotchas**
@@ -374,7 +397,7 @@ Purpose: the project-search overlay — a `Ctrl+Shift+F` entry over a flat, stre
 **Gotchas**
 
 - `all_files: true` reaches everything `rg --hidden` lists. Measured at this repository's root: 131 `.git/` paths out of 566, and a content search returns `.git/hooks` hits.
-- A same-file jump to another line records no navigation history: core folds a `NavTarget` per window, and `NavTarget::Edit` carries no line number. This crate references `nav_history` nowhere.
+- A same-file jump to another line records no history, while a cross-file one does: core folds a `NavTarget` per window, and `NavTarget::Edit` carries no line number.
 
 #### `shell.rs`
 
@@ -390,27 +413,30 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 
 - The chord controller matches keys itself rather than through GTK's own matching, which is keymap-aware and does not fire under the smokes' keystroke injector. Accelerators are registered only so the menu renders their labels.
 - The controller lives on the window, so it runs ahead of any overlay's and needs no open-overlay guard: no overlay's keys are bound chords.
-- Overlay side effects fire only on a real mode transition, and the focus sample is taken before the overlay is hidden, per the ordering rule in [DECISIONS.md](../DECISIONS.md).
-- `on_palette_activation` is the one place an Open Recent row becomes a window action. It re-roots this window, because there is one window to re-root, and it does so through `chdir_to` — the same call the native Open Folder dialog makes, so the two settle through one pending re-root and cannot diverge.
+- Overlay side effects fire only on a real mode transition, and the focus sample precedes the hide, per the ordering rule in [DECISIONS.md](../DECISIONS.md).
+- `on_palette_activation` re-roots this window through `chdir_to`, the same call the native Open Folder dialog makes, so the two settle through one pending re-root and cannot diverge.
 - Neither producer re-roots the sidebar synchronously: the file search resolves its root from the live cwd, which updates only after Neovim reports it.
+- The nav-button refresh caches nothing, unlike the title refresh: `set_sensitive` early-returns on an unchanged value.
+- One private applier is the only caller of `sidebar.set_visible`, over [`state_seam.rs`](#state_seamrs)'s `sidebar_is_shown`, or the next `set_empty_state(false)` would undo a user toggle.
 
 #### `state_seam.rs`
 
-Purpose: the pure application-state seam — what to restore at launch, and what to persist on each wake. GTK-free and IO-free, and it reads neither the environment nor the process cwd, so the whole rulebook is testable with no temp directory.
+Purpose: the pure application-state seam — what to restore at launch, and what to persist on each wake. GTK-free and IO-free, and every input is injected, so the whole rulebook is testable with no temp directory.
 
 **Public API**
 
-- `restore_plan(saved, process_cwd, home, is_dir) -> RestorePlan` — the working directory, the empty-state flag, the tab's saved layout, and the window size.
-- `restored_window_size(w, h)`, `persistable_layout(node)`, `snapshot_cwd(empty, launch_cwd, live_cwd)`, `may_snapshot(liveness, bound_panes, reported_windows)`, `snapshot_state(...)`.
+- `restore_plan(saved, process_cwd, home, is_dir) -> RestorePlan` — the working directory, the empty-state flag, the tab's saved layout, the window size, and the saved sidebar preference.
+- `restored_window_size(w, h)`, `persistable_layout(node)`, `sidebar_is_shown(user_wants, empty)`, `snapshot_cwd(empty, launch_cwd, live_cwd)`, `may_snapshot(liveness, bound_panes, reported_windows)`, `snapshot_state(...)`.
 
 **Decisions**
 
 - A saved layout is attached only when the chosen directory is the one it was saved from, because its leaves are absolute paths belonging to one project. Reopening one project's files inside another would look like data corruption.
-- `restored_window_size` collapses the whole result on any unusable dimension, following the geometry convention, because a usable width with a garbage height is not half a window size.
+- `restored_window_size` collapses the whole result on any unusable dimension, per the geometry convention: a usable width with a garbage height is not half a window size.
 - `persistable_layout` suppresses by content, never by arity; see [`pane_layout.rs`](#pane_layoutrs) and [DECISIONS.md](../DECISIONS.md).
 - The empty state persists an empty cwd always. A passive launch hands Neovim a home directory purely because a process needs one, and persisting it would turn every launcher start into a project at home.
-- `may_snapshot` is a data-loss guard, not tidiness, and its match over `Liveness` is total so a new variant cannot silently read as "not alive".
+- `may_snapshot`'s match over `Liveness` is total, so a new variant cannot silently read as "not alive".
 - `snapshot_state` is the one place the single-window, single-tab shape lives, pinned by its own test so a later unit changes it deliberately.
+- `RestorePlan::sidebar_visible` is independent of the empty state; `sidebar_is_shown` applies that separately.
 
 #### `title.rs`
 
