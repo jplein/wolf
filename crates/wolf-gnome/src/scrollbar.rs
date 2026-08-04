@@ -59,21 +59,6 @@
 //! range is not a scrollbar's subject — macOS ignores it too — and reading it would
 //! make the thumb jump on a cursor move that scrolled nothing.
 
-// `the_thumb_lies_wholly_inside_the_right_gutter` opens by asserting a RELATION
-// BETWEEN this module's constants and `editor_inset::EDITOR_PADDING_PX` — the thumb
-// fits in the gutter — which clippy const-folds to a literal and reports as an
-// assertion with a constant value. That relation is the point: its whole value is
-// the message it carries the day someone widens the bar past the padding it is
-// supposed to hide in. Scoped to `cfg(test)` so production code in this module is
-// still linted normally.
-#![cfg_attr(
-    test,
-    allow(
-        clippy::assertions_on_constants,
-        reason = "the gutter invariant is deliberately a relation between production constants"
-    )
-)]
-
 use crate::editor_inset::GridRect;
 use crate::statusbar_layout::blend;
 use wolf_core::{Rgb, Viewport};
@@ -254,7 +239,7 @@ mod tests {
         (thumb.x, thumb.y, thumb.w, thumb.h)
     }
 
-    /// Pins [`scrollbar_thumb`]: where the thumb sits, how tall it is, and the five
+    /// Pins [`scrollbar_thumb`]: where the thumb sits, how tall it is, and the seven
     /// distinct inputs that must produce no thumb at all.
     ///
     /// Every `x` below is 826 — `840 - 6 - 8`, measured from the PANE's right edge —
@@ -264,7 +249,9 @@ mod tests {
     ///
     /// ## The `None` rows are the interesting half
     ///
-    /// Four of the five are ordinary degenerate viewports. **Row 6 is not**: a
+    /// Six of the seven are ordinary degenerate inputs — an empty buffer, a zero-height
+    /// viewport, a buffer that fits its window, two non-finite fields and a pane
+    /// narrower than its own gutter. **Row 6 is not**: a
     /// `botline` below its `topline` is what a `u64` subtraction panics on in a debug
     /// build, so the rule that every viewport field is widened to `f64` BEFORE any
     /// subtraction is stricter here than macOS's reason for the same rule. A malformed
@@ -280,8 +267,13 @@ mod tests {
     /// - Delete `.min(track_h)`: row 8's `h` becomes 24 in a 10 px grid, so the thumb
     ///   is taller than the track it is drawn in and spills over the pane below. This
     ///   is a deliberate divergence from macOS, which omits the clamp.
-    /// - Delete the upper clamp on `y`: row 2's thumb runs past the grid's lower edge,
-    ///   which the containment assertion in the loop reports alongside the literal.
+    /// - Weaken or delete the upper clamp on `y` — either `raw.max(track_y)` or a bare
+    ///   `raw`: row 13's `y` becomes 659.93312 against its literal 636, and the loop's
+    ///   containment assertion fires alongside the literal because `659.93312 + 24`
+    ///   hangs 23.93 px below the grid's lower edge. **Row 2 does not fire and cannot**,
+    ///   which was measured rather than assumed: its thumb ends exactly on that edge,
+    ///   so the clamp is a no-op for it and for every other row here. Row 13 is the
+    ///   only discriminator for the clamp in this file.
     /// - Subtract in `u64` before widening to `f64`: row 6 **panics** with `attempt to
     ///   subtract with overflow` rather than failing. Record the verbatim panic as the
     ///   red run; a panicking test and a failing one are different evidence.
@@ -470,6 +462,36 @@ mod tests {
                 },
                 expected: Some((826.0, 52.0, 8.0, 33.44)),
             },
+            ThumbCase {
+                // THE ONLY ROW IN THIS TABLE ON WHICH THE UPPER `y` CLAMP BINDS, and
+                // the reason it exists. The floor lifts `h` above the proportional
+                // height — `max(608 * 11/100000, 24) = 24` — so the proportional
+                // POSITION no longer leaves room for it: `raw = 52 + (99989/100000) *
+                // 608 = 659.93312`, while the lowest top edge a 24 px thumb may have
+                // is `52 + 608 - 24 = 636`. The clamp is what turns the first number
+                // into the second, and without it the thumb hangs 23.93 px below the
+                // pane's grid — the real bug it prevents, a 100k-line file scrolled to
+                // its end.
+                //
+                // ROW 2 IS NOT A SUBSTITUTE AND THIS IS NOT A DUPLICATE OF IT. Row 2
+                // lands exactly on the boundary: `626.56 + 33.44` is precisely 660,
+                // the grid's own lower edge, so the clamp returns its argument
+                // untouched there and deleting the clamp outright leaves row 2 green.
+                // Every other `Some` row's raw `y` sits far BELOW the bound — rows 1,
+                // 7 and 12 at the track's top, row 8 in a track no taller than its own
+                // thumb — so the clamp is a no-op for them too. Delete this row and
+                // nothing in the file tests the clamp at all.
+                desc: "13: the floor's thumb is held inside the end of a huge buffer",
+                pane_w: 840.0,
+                grid: GRID,
+                viewport: Viewport {
+                    topline: 99_989,
+                    botline: 100_000,
+                    curline: 99_989,
+                    linecount: 100_000,
+                },
+                expected: Some((826.0, 636.0, 8.0, 24.0)),
+            },
         ];
 
         for case in &cases {
@@ -488,7 +510,10 @@ mod tests {
                          than the PANE's, which puts it over the last column of \
                          glyphs; an `h` below {SCROLLBAR_MIN_THUMB_PX} means the \
                          floor is gone, and one above the grid's own height means \
-                         the clamp is.",
+                         the clamp is; a `y` past the track's own lower bound — \
+                         grid.y + grid.h - h — means the UPPER clamp on `y` is gone \
+                         or weakened to a bare max against the track's top, so the \
+                         thumb hangs below the grid it belongs to.",
                         case.desc,
                         case.pane_w,
                         case.grid,
@@ -537,6 +562,19 @@ mod tests {
     /// FALSIFYING EDIT: raise [`SCROLLBAR_THICKNESS_PX`] to 24. The const relation
     /// fires first, naming the gutter, before any thumb is computed.
     #[test]
+    #[allow(
+        clippy::assertions_on_constants,
+        reason = "this test opens with two relations between production constants — \
+                  SCROLLBAR_THICKNESS_PX plus SCROLLBAR_MARGIN_PX fitting inside \
+                  EDITOR_PADDING_PX, and SCROLLBAR_MARGIN_PX clearing the 4 px the \
+                  active-pane outline covers — which clippy const-folds to a literal and \
+                  reports as vacuous. Being true at compile time is the point: each is a fact \
+                  about the constants whose whole value is the message it carries the day \
+                  SCROLLBAR_THICKNESS_PX is widened past the gutter it hides in, or the margin \
+                  is narrowed under the focus ring, and neither has any runtime input to \
+                  depend on. Scoped to this ONE function rather than the module so a genuinely \
+                  vacuous constant assertion added anywhere else here is still reported."
+    )]
     fn the_thumb_lies_wholly_inside_the_right_gutter() {
         assert!(
             SCROLLBAR_THICKNESS_PX + SCROLLBAR_MARGIN_PX <= EDITOR_PADDING_PX,
