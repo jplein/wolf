@@ -299,6 +299,7 @@ Real Neovim (`WOLF_NVIM_BIN`, `no-sandbox` target with staged nvim runfiles).
 **Covers**
 
 - The whole nav-history path end to end: the `wolf_buffers` emit, the fold over `win_buffers` and previews, the `win_close` prune, and the `WolfCore::history_*` moves driving a live nvim.
+- Which front-end input records an entry, measured against a live nvim rather than reasoned about: `InputEvent::Open` records; `OpenAt` records a jump to another file but not to another line of the same one; `SwitchBuffer` records; `Chdir` records nothing, with a following `Open` as its positive control.
 
 **Gotchas**
 

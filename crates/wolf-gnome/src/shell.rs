@@ -26,7 +26,11 @@
 //!   edge-triggered swallow.
 //! - [`AppShell::on_render_wake`] settles a pending re-root, refreshes the window
 //!   TITLE from the live cwd ([`AppShell::refresh_title`] over the pure
-//!   [`crate::title`] seam), asks [`crate::persistence`] for an application-state
+//!   [`crate::title`] seam), refreshes the two navigation buttons' sensitivity from
+//!   the FOCUSED pane ([`AppShell::refresh_nav_buttons`] over the pure
+//!   [`crate::nav_ui`] seam — the wake a `WinEnter` fires bumps no `seq`, so this is
+//!   what makes the toolbar follow the focus), asks [`crate::persistence`] for an
+//!   application-state
 //!   SNAPSHOT, and then drains [`wolf_core::WolfCore::drain_commands`] and
 //!   dispatches each command. A command `wolf-gnome` does not implement is
 //!   PRINTED with its recorded reason — never silently dropped. The drain runs
@@ -91,15 +95,36 @@
 //! whole RPC timeout budget on every single crash. The cheap, RPC-free
 //! `Snapshot::current_tabpage` field carries the same handle.
 //!
-//! Exactly TWO `block_on_rpc` call sites are reachable from this crate, and the
-//! restart path issues neither. The first is `WolfCore::rebuild_layout`, called at
-//! most once per launch from `pane_view::apply_layout_rebuild`, before the window
+//! Exactly THREE `block_on_rpc` call sites are reachable from this crate, and the
+//! restart path issues none of them. The first is `WolfCore::rebuild_layout`, called
+//! at most once per launch from `pane_view::apply_layout_rebuild`, before the window
 //! is interactive. The second is `WolfCore::list_buffers`, the buffer picker's
 //! candidate snapshot — and it is reachable from a RUNNING application, which is
 //! what makes `Liveness::NotResponding` a state a user can actually reach here.
 //! [`crate::buffer_picker::open_decision`] guards it: the picker refuses to open
 //! unless the core reads `Alive`, so the snapshot can raise a stall ONCE and can
 //! never re-probe a core already known to be wedged.
+//!
+//! The third is the NAVIGATION press. [`AppShell::navigate`] funnels through
+//! `WolfCore::history_back` / `history_forward` into `block_on_rpc`, so a Back or
+//! Forward against a wedged Neovim costs a full RPC timeout budget of frozen main
+//! loop. [`crate::nav_ui::nav_press`] guards it with exactly the buffer picker's
+//! argument and exactly its limits: it cannot prevent the FIRST stall and must not
+//! be strengthened into something that never raises one; what it prevents is the
+//! repeat freeze on every later press. One difference is worth writing down — a
+//! press against a LIVE core with nothing to go back to issues no RPC at all,
+//! because the nav mutex answers `None` before the RPC is reached. The button
+//! sensitivity ([`crate::nav_ui::nav_buttons`]) is therefore an affordance and the
+//! liveness arm is the guard.
+//!
+//! The BUTTONS desensitize while the two `gio` actions stay ENABLED, which is the
+//! opposite of `win.go-to-file`'s empty-state treatment and is deliberate: a
+//! disabled action's accelerator falls through, and `<Alt>Left` forwarded to an
+//! unmapped Neovim splits into `<Esc>` + `<Left>` — the destruction that capturing
+//! the chord exists to prevent. `win.toggle-sidebar` IS disabled in the empty
+//! state, for the same reason `win.go-to-file` is, and its `Ctrl+Shift+B`
+//! fall-through to `<C-b>` is the accepted wart of the `Ctrl+Shift+<letter>`
+//! namespace.
 //!
 //! The project-search overlay ([`crate::search_overlay`]) adds NO third one, and
 //! that is worth stating because the symmetry with the buffer picker suggests
@@ -121,17 +146,19 @@ use wolf_core::{Command, InputEvent, Liveness, TabFiles, WolfCore};
 use crate::actions::{self, BindingStatus};
 use crate::app::TREE_PANE_WIDTH;
 use crate::buffer_picker::BufferPickerHandle;
-use crate::command_action::{ui_action_for, UiAction};
+use crate::command_action::{ui_action_for, ui_action_for_front_end_action, UiAction};
 use crate::crash_overlay::CrashOverlay;
 use crate::liveness_ui::{
     liveness_ui, reopen_order, restart_outcome, OverlayMode, RestartOutcome,
     MAX_AUTO_RESTART_ATTEMPTS,
 };
+use crate::nav_ui::{self, NavAvailability, NavPress};
 use crate::palette::{PaletteAction, PaletteHandle};
 use crate::pane_view::PaneHandle;
 use crate::persistence::StateHandle;
 use crate::picker::PickerHandle;
 use crate::search_overlay::SearchHandle;
+use crate::state_seam;
 use crate::title;
 use crate::tree_view::TreeHandle;
 use crate::workspace;
@@ -146,6 +173,19 @@ pub(crate) const GO_TO_FILE_ACTION: &str = "win.go-to-file";
 /// The action that opens the in-window project-search overlay (disabled in the
 /// empty state, where the search root would fall back to the home directory).
 const SEARCH_IN_PROJECT_ACTION: &str = "win.search-in-project";
+
+/// The action that moves the focused pane one entry BACK in its navigation
+/// history. Also the header bar's Back button target.
+pub(crate) const HISTORY_BACK_ACTION: &str = "win.history-back";
+
+/// The action that moves the focused pane one entry FORWARD in its navigation
+/// history. Also the header bar's Forward button target.
+pub(crate) const HISTORY_FORWARD_ACTION: &str = "win.history-forward";
+
+/// The action that shows or hides the file-tree sidebar (disabled in the empty
+/// state, where there is no project to list). Also the header bar's sidebar
+/// button target.
+pub(crate) const TOGGLE_SIDEBAR_ACTION: &str = "win.toggle-sidebar";
 
 /// Title of the empty state's status page.
 const EMPTY_STATE_TITLE: &str = "No folder open";
@@ -215,6 +255,17 @@ pub struct ShellParts<'a> {
     pub empty_state: &'a gtk::Widget,
     /// The header bar's Open button, desensitized in the empty state.
     pub open_button: &'a gtk::Button,
+    /// The header bar's Back button, desensitized by
+    /// [`crate::nav_ui::nav_buttons`] on every wake.
+    pub nav_back_button: &'a gtk::Button,
+    /// The header bar's Forward button; see [`ShellParts::nav_back_button`].
+    pub nav_forward_button: &'a gtk::Button,
+    /// The header bar's sidebar-toggle button, desensitized in the empty state.
+    pub sidebar_button: &'a gtk::Button,
+    /// The user's restored sidebar PREFERENCE
+    /// ([`crate::state_seam::RestorePlan::sidebar_visible`]). The empty state
+    /// overrides it at apply time, never at restore time.
+    pub sidebar_shown: bool,
     /// The crash/stall overlay + banner, driven by the liveness read.
     pub crash_overlay: &'a CrashOverlay,
     /// The pane view, reset after a successful in-place Neovim restart. No cycle:
@@ -250,11 +301,28 @@ struct ShellInner {
     empty_state: gtk::Widget,
     /// The header bar's Open button; insensitive in the empty state.
     open_button: gtk::Button,
+    /// The header bar's Back button; its sensitivity is recomputed on every wake
+    /// by [`AppShell::refresh_nav_buttons`].
+    nav_back_button: gtk::Button,
+    /// The header bar's Forward button; see [`ShellInner::nav_back_button`].
+    nav_forward_button: gtk::Button,
+    /// The header bar's sidebar-toggle button; insensitive in the empty state.
+    sidebar_button: gtk::Button,
+    /// The user's sidebar PREFERENCE — what they last asked for, NOT what is on
+    /// screen. [`state_seam::sidebar_is_shown`] combines it with
+    /// [`ShellInner::empty`] to decide the latter.
+    sidebar_shown: Cell<bool>,
+    /// The LIVE empty-state flag. Stored because
+    /// [`AppShell::apply_sidebar_visibility`] needs both halves of the rule and
+    /// [`AppShell::toggle_sidebar`] is not given the flag.
+    empty: Cell<bool>,
     /// The `win.go-to-file` action, stashed by [`AppShell::install_actions`] so the
     /// empty state can disable it.
     go_to_file: RefCell<Option<gio::SimpleAction>>,
     /// The `win.search-in-project` action, stashed for the same reason.
     search_in_project: RefCell<Option<gio::SimpleAction>>,
+    /// The `win.toggle-sidebar` action, stashed for the same reason.
+    toggle_sidebar: RefCell<Option<gio::SimpleAction>>,
     /// A directory the user chose — in the Open Folder dialog or as an Open Recent
     /// palette row — awaiting nvim's `DirChanged`. Both producers set it through
     /// [`AppShell::chdir_to`]; a later wake settles it via
@@ -384,8 +452,16 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         paned: parts.paned.clone(),
         empty_state: parts.empty_state.clone(),
         open_button: parts.open_button.clone(),
+        nav_back_button: parts.nav_back_button.clone(),
+        nav_forward_button: parts.nav_forward_button.clone(),
+        sidebar_button: parts.sidebar_button.clone(),
+        sidebar_shown: Cell::new(parts.sidebar_shown),
+        // Pessimistic until `set_empty_state` says otherwise, which `app::build_ui`
+        // does immediately after `install_actions`. Nothing reads it before then.
+        empty: Cell::new(true),
         go_to_file: RefCell::new(None),
         search_in_project: RefCell::new(None),
+        toggle_sidebar: RefCell::new(None),
         pending_reroot: RefCell::new(None),
         crash_overlay: parts.crash_overlay.clone(),
         panes: parts.panes.clone(),
@@ -455,17 +531,35 @@ impl AppShell {
     /// Must run AFTER the window is constructed and BEFORE `window.present()`.
     pub fn install_actions(&self, app: &adw::Application) {
         for binding in actions::ACTION_TABLE {
-            let Some(command) = binding.command else {
-                // A front-end-only row (nav history) with nothing to dispatch yet.
-                continue;
+            // A row resolves in exactly one of two places: through its command, or
+            // — for a FRONT-END-ONLY row, which carries no `wolf_core::Command` at
+            // all — through `ui_action_for_front_end_action`. A row that resolves
+            // in neither is skipped with a printed reason, because its accelerator
+            // IS registered: the chord would then be swallowed in the capture phase
+            // and activate nothing, which is worse than not binding it.
+            let ui_action = match binding.command {
+                Some(command) => {
+                    let ui_action = ui_action_for(command);
+                    if matches!(
+                        ui_action,
+                        UiAction::Deferred(_) | UiAction::NoGnomeEquivalent(_)
+                    ) {
+                        continue;
+                    }
+                    ui_action
+                }
+                None => match ui_action_for_front_end_action(binding.action) {
+                    Some(ui_action) => ui_action,
+                    None => {
+                        eprintln!(
+                            "wolf-gnome: action {:?} carries no command and no front-end \
+                             classification; not installed",
+                            binding.action
+                        );
+                        continue;
+                    }
+                },
             };
-            let ui_action = ui_action_for(command);
-            if matches!(
-                ui_action,
-                UiAction::Deferred(_) | UiAction::NoGnomeEquivalent(_)
-            ) {
-                continue;
-            }
             let Some((namespace, name)) = binding.action.split_once('.') else {
                 eprintln!(
                     "wolf-gnome: action {:?} has no `app.`/`win.` namespace prefix; not installed",
@@ -491,6 +585,8 @@ impl AppShell {
                 *self.inner.go_to_file.borrow_mut() = Some(action);
             } else if binding.action == SEARCH_IN_PROJECT_ACTION {
                 *self.inner.search_in_project.borrow_mut() = Some(action);
+            } else if binding.action == TOGGLE_SIDEBAR_ACTION {
+                *self.inner.toggle_sidebar.borrow_mut() = Some(action);
             }
         }
 
@@ -599,22 +695,138 @@ impl AppShell {
     /// the palette offers a live row for every dispatched command.
     pub fn set_empty_state(&self, empty: bool) {
         self.inner.empty_state.set_visible(empty);
-        self.inner.sidebar.set_visible(!empty);
-        self.inner
-            .paned
-            .set_position(if empty { 0 } else { TREE_PANE_WIDTH });
+        self.inner.empty.set(empty);
+        // Never `sidebar.set_visible` directly: a user toggle and the empty state
+        // are two inputs to ONE rule, and applying either on its own is how the
+        // next `set_empty_state(false)` silently undoes what the user just asked
+        // for.
+        self.apply_sidebar_visibility();
         self.inner.open_button.set_sensitive(!empty);
+        self.inner.sidebar_button.set_sensitive(!empty);
         if let Some(action) = self.inner.go_to_file.borrow().as_ref() {
             action.set_enabled(!empty);
         }
         if let Some(action) = self.inner.search_in_project.borrow().as_ref() {
             action.set_enabled(!empty);
         }
+        if let Some(action) = self.inner.toggle_sidebar.borrow().as_ref() {
+            action.set_enabled(!empty);
+        }
         self.inner.search.set_project_open(!empty);
-        // The persisted `cwd` / `sidebar_visible` follow the LIVE empty-state
-        // flag, so an Open Folder into an empty-state window starts persisting
-        // that folder from the very next wake.
+        // The persisted `cwd` follows the LIVE empty-state flag, so an Open Folder
+        // into an empty-state window starts persisting that folder from the very
+        // next wake. `sidebar_visible` does NOT: it persists the user's
+        // preference, so an empty-state session cannot come back with the tree
+        // hidden.
         self.inner.state.set_empty(empty);
+    }
+
+    /// Applies the sidebar-visibility rule to the widgets. The ONE site that calls
+    /// `sidebar.set_visible` / `paned.set_position`.
+    ///
+    /// `sidebar.set_visible(false)` is the load-bearing half: the `gtk::Paned`
+    /// divider position is advisory (a start child merely positioned at 0 can still
+    /// be re-derived by a later allocation), while an invisible start child is never
+    /// allocated at all.
+    fn apply_sidebar_visibility(&self) {
+        let shown =
+            state_seam::sidebar_is_shown(self.inner.sidebar_shown.get(), self.inner.empty.get());
+        self.inner.sidebar.set_visible(shown);
+        self.inner
+            .paned
+            .set_position(if shown { TREE_PANE_WIDTH } else { 0 });
+    }
+
+    /// Flips the user's sidebar preference, applies it, and records it for
+    /// persistence.
+    ///
+    /// The preference is what is persisted and restored — not what is on screen —
+    /// so a session spent in the empty state cannot come back with the tree hidden.
+    fn toggle_sidebar(&self) {
+        let shown = !self.inner.sidebar_shown.get();
+        self.inner.sidebar_shown.set(shown);
+        self.apply_sidebar_visibility();
+        self.inner.state.set_sidebar_shown(shown);
+    }
+
+    /// Moves the FOCUSED pane one entry back or forward in its own navigation
+    /// history, or prints why it did not.
+    ///
+    /// **The move is a BLOCKING RPC on the GTK main thread**, so it is gated by
+    /// [`nav_ui::nav_press`] exactly as the buffer picker's candidate snapshot is;
+    /// see the module docs. The liveness read and the `Snapshot::active_win` read
+    /// take SEPARATE short borrows, and the `SnapshotReadGuard` is bound to a local
+    /// in its own statement so it is dropped before the core is touched again (the
+    /// [`AppShell::capture_open_files`] precedent: a re-entrant read can deadlock
+    /// behind a queued writer).
+    ///
+    /// The refresh at the end is what settles the buttons after a refused or failed
+    /// move, which fires no wake of its own.
+    fn navigate(&self, forward: bool) {
+        let liveness = self.read_liveness();
+        let active_win = self.read_active_win();
+
+        match nav_ui::nav_press(liveness, active_win) {
+            NavPress::Refuse(reason) => {
+                eprintln!("wolf-gnome: navigation not performed: {reason}");
+            }
+            NavPress::Move(win) => {
+                let core_ref = self.inner.core.borrow();
+                if let Some(core) = core_ref.as_ref() {
+                    if forward {
+                        core.history_forward(win);
+                    } else {
+                        core.history_back(win);
+                    }
+                }
+            }
+        }
+
+        self.refresh_nav_buttons();
+    }
+
+    /// Recomputes the two navigation buttons' sensitivity from the focused pane's
+    /// availability.
+    ///
+    /// Runs on EVERY render wake, including the wake a `WinEnter` fires (which
+    /// bumps no `seq`), which is what makes the buttons follow the focused pane.
+    /// All three reads are cheap and RPC-free: the liveness read is an atomic, the
+    /// `active_win` read is a snapshot field, and `history_can_back` /
+    /// `history_can_forward` are brief nav-mutex reads.
+    ///
+    /// **No `last_*` cache.** Unlike `set_title`, `gtk_widget_set_sensitive`
+    /// early-returns on an unchanged value, so a cache would be state to keep in
+    /// sync for nothing.
+    fn refresh_nav_buttons(&self) {
+        let liveness = self.read_liveness();
+        let active_win = self.read_active_win();
+        // The snapshot guard from `read_active_win` is already dropped here, which
+        // is what makes taking the nav mutex below safe.
+        let history = match nav_ui::nav_query_win(active_win) {
+            Some(win) => {
+                let core_ref = self.inner.core.borrow();
+                core_ref.as_ref().map(|core| NavAvailability {
+                    can_back: core.history_can_back(win),
+                    can_forward: core.history_can_forward(win),
+                })
+            }
+            None => None,
+        };
+
+        let buttons = nav_ui::nav_buttons(liveness, active_win, history);
+        self.inner.nav_back_button.set_sensitive(buttons.back);
+        self.inner.nav_forward_button.set_sensitive(buttons.forward);
+    }
+
+    /// The focused Neovim window handle, or `None` when there is no core.
+    ///
+    /// The `SnapshotReadGuard` is bound to a local so it is dropped at the end of
+    /// THIS function, before any caller takes another core lock.
+    fn read_active_win(&self) -> Option<i64> {
+        let core_ref = self.inner.core.borrow();
+        let core = core_ref.as_ref()?;
+        let snapshot = core.read_snapshot();
+        snapshot.active_win
     }
 
     /// Reads the captive nvim's [`Liveness`] ONCE per wake, applies the pure
@@ -861,6 +1073,7 @@ impl AppShell {
     pub fn on_render_wake(&self) {
         self.settle_pending_reroot();
         self.refresh_title();
+        self.refresh_nav_buttons();
         self.inner.state.on_render_wake();
         // LAST: a drained `close_window` tears the core down, so the state
         // snapshot above must already have happened.
@@ -988,6 +1201,9 @@ impl AppShell {
                 self.inner.buffers.close();
                 self.inner.search.open();
             }
+            UiAction::HistoryBack => self.navigate(false),
+            UiAction::HistoryForward => self.navigate(true),
+            UiAction::ToggleSidebar => self.toggle_sidebar(),
             UiAction::OpenFileDialog => self.open_file_dialog(),
             UiAction::OpenFolderDialog => self.open_folder_dialog(),
             UiAction::NewUntitledBuffer => self.send_input(InputEvent::NewBuffer),

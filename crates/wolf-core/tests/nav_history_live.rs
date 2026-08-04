@@ -26,6 +26,14 @@
 //!     non-test source. It runs under the `//crates/wolf-core:nav_history_live`
 //!     `rust_test` target, which mirrors `//crates/wolf-core:pane_buffers`.
 //!
+//! ## The four FRONT-END input paths (section 14)
+//!
+//! Sections 1-13 drive nvim by typing. Section 14 drives it through the
+//! `InputEvent`s a front-end sends — `Open`, `OpenAt`, `SwitchBuffer` and `Chdir` —
+//! so that which of them record a navigation entry is MEASURED here rather than
+//! reasoned about in `crates/wolf-gnome/src/README.md`. Two of the four cases are
+//! characterizations rather than discriminators and say so in their own docs.
+//!
 //! ## The startup buffer is a NAMED `Untitled.md`
 //!
 //! The anonymous-buffer feature names the startup buffer `<cwd>/Untitled.md` at
@@ -63,10 +71,29 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use common::{ch, key, type_str, FlushWaiter, FLUSH_TIMEOUT};
-use wolf_core::{Key, MenuRow, Snapshot, WolfCore};
+use wolf_core::{InputEvent, Key, MenuRow, Snapshot, WolfCore};
 
 /// Placeholder content for the temp markdown files opened by these tests.
 const DOC: &str = "# Nav History\nbody\n";
+
+/// How many BODY lines the multi-line fixture in section 14 carries, beneath its
+/// heading.
+///
+/// It must exceed the LARGER of the two lines
+/// [`open_at_records_an_entry_for_another_file_but_not_for_another_line_of_the_same_one`]
+/// jumps to. Neovim CLAMPS an out-of-range `nvim_win_set_cursor` line to the end of
+/// the buffer, so with a short fixture both jumps would land on the SAME row and
+/// the "another line of the same file" premise would be false while every assertion
+/// in that test still passed.
+const LONG_DOC_LINES: u64 = 12;
+
+/// The 1-based buffer line the FIRST `open_at` in section 14 targets.
+const FIRST_JUMP_LINE: u64 = 3;
+
+/// The 1-based buffer line the SECOND `open_at` in section 14 targets — a
+/// DIFFERENT line of the SAME file, which is the case `crates/wolf-gnome/src`'s
+/// README records as recording no history entry.
+const SECOND_JUMP_LINE: u64 = 9;
 
 /// The outer/global grid id. Window content lives on grids >= 2.
 const GLOBAL_GRID: u64 = 1;
@@ -271,6 +298,59 @@ fn seed_three_markdown_files(cwd: &Path) {
     for name in ["a.md", "b.md", "c.md"] {
         std::fs::write(cwd.join(name), DOC)
             .unwrap_or_else(|e| panic!("failed to write {name}: {e}"));
+    }
+}
+
+/// A markdown fixture of one heading plus [`LONG_DOC_LINES`] numbered body lines,
+/// so a cursor jump to a named line is OBSERVABLE rather than clamped to the end of
+/// a two-line buffer.
+fn long_doc() -> String {
+    let mut out = String::from("# Nav History Long\n");
+    for line in 1..=LONG_DOC_LINES {
+        out.push_str(&format!("line {line}\n"));
+    }
+    out
+}
+
+/// The cursor's 0-BASED buffer line for the window drawing into `grid`, as nvim's
+/// own `win_viewport` reports it, or `None` while that grid is unknown.
+fn cursor_line(core: &WolfCore, grid: u64) -> Option<u64> {
+    core.read_snapshot()
+        .windows
+        .get(&grid)
+        .map(|w| w.viewport.curline)
+}
+
+/// Polls until the window drawing into `grid` reports its cursor on the 0-based
+/// buffer line `line`.
+///
+/// ## The premise this measures rather than assumes
+///
+/// `WinInfo::viewport` is fed by nvim's `win_viewport` redraw event, and this helper
+/// exists because the test using it needs to KNOW — not hope — that a jump to a
+/// named line took effect. If nvim did not emit `win_viewport` on a cursor-line
+/// change, or if `nvim_win_set_cursor` clamped the line, this panics with the last
+/// value observed instead of letting the caller's "nothing changed" assertion pass
+/// against a jump that never happened.
+fn poll_cursor_line(core: &WolfCore, waiter: &FlushWaiter, grid: u64, line: u64) {
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    loop {
+        if cursor_line(core, grid) == Some(line) {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out after {FLUSH_TIMEOUT:?} waiting for grid {grid}'s cursor to reach \
+                 0-based buffer line {line}; last observed curline={:?}. Either the \
+                 `nvim_win_set_cursor` that follows `:edit` never ran, or the line was CLAMPED \
+                 because the fixture is shorter than the target (see LONG_DOC_LINES), or nvim \
+                 stopped emitting `win_viewport` on a cursor-line change — in which case this \
+                 file's cursor premise needs a different observable, not a longer timeout.",
+                cursor_line(core, grid)
+            );
+        }
+        waiter.drain();
+        std::thread::sleep(POLL_INTERVAL);
     }
 }
 
@@ -1838,6 +1918,539 @@ fn back_in_a_background_pane_updates_it_without_moving_focus() {
         displays(&core.history_entries(win_a)),
         rows_a_before,
         "pane A's history is untouched by pane B's Back"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+// =========================================================================
+// 14. What a FRONT-END input path records — one case per InputEvent.
+// =========================================================================
+//
+// Sections 1-13 drive nvim by TYPING. These four drive it the way a front-end
+// does, through the four `InputEvent`s a picker, a sidebar row, a project-search
+// hit, a buffer-picker row and an Open Recent row actually send. The claim each
+// establishes is EMPIRICAL: `crates/wolf-gnome/src/README.md` states which of them
+// record a navigation entry, and until now nothing measured it.
+//
+// ## Why every growth assertion is written against DISTINCT targets
+//
+// `history_entries` -> `PaneHistory::menu_rows` keeps the FIRST occurrence of each
+// distinct `NavTarget` walking newest-first, so a push of a target the pane has
+// ALREADY visited leaves the row COUNT unchanged. Row growth is therefore an
+// observable only when the newly-visited target is new to the pane, and each case
+// below arranges exactly that (and asserts the precondition rather than assuming
+// it). Where a case cannot arrange it -- the buffer-picker one, whose whole point
+// is switching to a buffer another pane listed -- the fixture is a buffer this pane
+// has never shown, built with `:badd`.
+
+/// The FILE-PICKER / sidebar / Open-File-dialog path records one navigation entry.
+///
+/// All three front-end affordances send the same `InputEvent::Open { path }`, which
+/// the input pump turns into `:edit`. The buffer the window holds changes, so
+/// `derive_target` yields a different `Edit{path}` and the fold pushes.
+///
+/// This is the first of the four cases that make
+/// `crates/wolf-gnome/src/README.md`'s claims about which front-end paths record
+/// EMPIRICAL rather than reasoned.
+#[test]
+fn open_records_a_navigation_entry() {
+    let cwd = common::fresh_cwd();
+    seed_three_markdown_files(&cwd);
+    let b_abs = cwd.join("b.md");
+
+    let (core, waiter) = start_core_in(cwd);
+    let grid = wait_for_active_window_grid(&core, &waiter);
+    let win = wait_for_win_handle(&core, &waiter, grid);
+
+    ex_command(&core, "e a.md");
+    poll_pane_filename(&core, &waiter, grid, "a.md");
+    poll_history(&core, &waiter, win, "an a.md row on top", |rows| {
+        !rows.is_empty() && rows[0].display == "a.md"
+    });
+    settle(&waiter, HISTORY_SETTLE);
+    let rows_before = displays(&core.history_entries(win));
+    assert!(
+        !rows_before.iter().any(|d| d == "b.md"),
+        "precondition: b.md must NOT already be in this pane's history, or the growth assertion \
+         below would be measuring a row `menu_rows` DEDUPLICATES away and would fail for a reason \
+         that has nothing to do with the Open path: {rows_before:?}"
+    );
+
+    // The front-end always resolves an ABSOLUTE path before sending: the picker
+    // ranks `FileSearch` entries, the sidebar row carries its own path, and the
+    // Open File dialog returns a `gio::File`.
+    core.send_input(InputEvent::Open { path: b_abs });
+    poll_pane_filename(&core, &waiter, grid, "b.md");
+    poll_history(&core, &waiter, win, "a b.md row on top", |rows| {
+        !rows.is_empty() && rows[0].display == "b.md"
+    });
+    settle(&waiter, HISTORY_SETTLE);
+
+    let rows_after = displays(&core.history_entries(win));
+    assert_eq!(
+        rows_after.len(),
+        rows_before.len() + 1,
+        "one InputEvent::Open must grow the pane's stack by EXACTLY ONE entry. Before: \
+         {rows_before:?}, after: {rows_after:?}"
+    );
+    assert_eq!(
+        &rows_after[1..],
+        &rows_before[..],
+        "the new entry sits ON TOP of the pane's previous rows, which are unchanged"
+    );
+    assert_eq!(
+        rows_after.first().map(String::as_str),
+        Some("b.md"),
+        "the NEWEST row must name the file that was opened: {rows_after:?}"
+    );
+    assert_eq!(
+        current_display(&core.history_entries(win)).as_deref(),
+        Some("b.md"),
+        "the checkmark follows the cursor onto the entry just pushed"
+    );
+    assert!(
+        core.history_can_back(win),
+        "a.md is behind the new entry, so Back is available"
+    );
+    assert!(
+        !core.history_can_forward(win),
+        "a push parks the cursor at the TOP, so Forward is exhausted"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// The PROJECT-SEARCH path, both halves in one case: activating a match in ANOTHER
+/// file records an entry, and activating a match on another LINE OF THE SAME FILE
+/// records nothing.
+///
+/// `InputEvent::OpenAt { path, line, col }` is `:edit` followed by
+/// `nvim_win_set_cursor`. The cross-file half changes the window's buffer, so
+/// `derive_target` yields a different `Edit{path}` and the fold pushes. The
+/// same-file half changes only the cursor, and `NavTarget::Edit` carries no line
+/// number, so the derived target is identical and nothing is pushed.
+///
+/// ## The same-file half is a CHARACTERIZATION, not a discriminator
+///
+/// No production line can be removed to make a same-file jump record: doing so
+/// needs `NavTarget` to carry a position, which is a `wolf-core` public-API change
+/// shared with `wolf-ffi` and the macOS front-end. What this half is for is to pin
+/// `crates/wolf-gnome/src/README.md`'s claim executably, and to go RED the day
+/// `NavTarget` does gain a position — at which point the claim is false and the
+/// README is the thing to fix.
+///
+/// ## The premises, measured rather than assumed
+///
+/// Both halves rest on the second `open_at` having taken effect at all; a "nothing
+/// was recorded" assertion is satisfied trivially by an event that never arrived.
+/// [`poll_cursor_line`] is what measures it, against nvim's own `win_viewport`
+/// report of the cursor's buffer line, and the fixture is long enough
+/// ([`LONG_DOC_LINES`]) that the two target lines cannot both clamp to the same row.
+///
+/// The last step is the sharp form of the negative claim. Row COUNT alone is weak
+/// here — `menu_rows` deduplicates, so a spuriously pushed DUPLICATE `Edit` entry
+/// would leave the count unchanged — so the case finishes by going Back and
+/// asserting the pane lands on `a.md`. A duplicate entry would put `long.md`
+/// immediately behind the cursor, and Back would appear to do nothing.
+#[test]
+fn open_at_records_an_entry_for_another_file_but_not_for_another_line_of_the_same_one() {
+    let cwd = common::fresh_cwd();
+    seed_three_markdown_files(&cwd);
+    // The fixture is MEASURED rather than described: the line count comes from the
+    // bytes actually written to disk, not from [`LONG_DOC_LINES`], so a `long_doc`
+    // that stops honouring that constant is caught by the precondition below instead
+    // of surfacing as a `poll_cursor_line` timeout two hundred lines further down.
+    let fixture = long_doc();
+    let doc_lines = u64::try_from(fixture.lines().count())
+        .expect("the fixture is a handful of lines, so its count fits in a u64");
+    std::fs::write(cwd.join("long.md"), &fixture).expect("failed to write long.md");
+    let long_abs = cwd.join("long.md");
+
+    // Both target lines must EXIST in that fixture, and they must be DIFFERENT
+    // lines. Neovim clamps an out-of-range `nvim_win_set_cursor` line to the end of
+    // the buffer, so either failure lands both jumps on the same row — and the second
+    // half of this case would then assert "another line of the same file records
+    // nothing" about a jump that moved the cursor nowhere.
+    assert!(
+        FIRST_JUMP_LINE < SECOND_JUMP_LINE && SECOND_JUMP_LINE <= doc_lines,
+        "the two jump targets must be DIFFERENT lines that the fixture actually holds, but \
+         `long_doc()` measures {doc_lines} line(s) while FIRST_JUMP_LINE is {FIRST_JUMP_LINE} and \
+         SECOND_JUMP_LINE is {SECOND_JUMP_LINE}. Two distinguishable failures land here. If \
+         SECOND_JUMP_LINE exceeds {doc_lines}, the fixture is too SHORT and nvim clamps the second \
+         jump to the end of the buffer, landing it on the same row as the first. If FIRST_JUMP_LINE \
+         is not below SECOND_JUMP_LINE, the two targets name the same line (or are inverted) and \
+         the second `open_at` moves the cursor nowhere at all. Either way the same-file half of \
+         this case goes vacuous: it would be asserting that a jump which never happened recorded \
+         nothing. Lengthen `long_doc`'s body or separate the two targets — never lower \
+         SECOND_JUMP_LINE to fit a short fixture."
+    );
+
+    let (core, waiter) = start_core_in(cwd);
+    let grid = wait_for_active_window_grid(&core, &waiter);
+    let win = wait_for_win_handle(&core, &waiter, grid);
+
+    ex_command(&core, "e a.md");
+    poll_pane_filename(&core, &waiter, grid, "a.md");
+    poll_history(&core, &waiter, win, "an a.md row on top", |rows| {
+        !rows.is_empty() && rows[0].display == "a.md"
+    });
+    settle(&waiter, HISTORY_SETTLE);
+    let rows_before = displays(&core.history_entries(win));
+    assert!(
+        !rows_before.iter().any(|d| d == "long.md"),
+        "precondition: long.md must NOT already be in this pane's history, or the cross-file \
+         growth assertion below is measuring a row `menu_rows` deduplicates away: {rows_before:?}"
+    );
+
+    // --- 1. CROSS-FILE: a match in another file pushes ONE entry ------------
+    core.open_at(long_abs.clone(), FIRST_JUMP_LINE, 0);
+    poll_pane_filename(&core, &waiter, grid, "long.md");
+    poll_cursor_line(&core, &waiter, grid, FIRST_JUMP_LINE - 1);
+    settle(&waiter, HISTORY_SETTLE);
+
+    let rows_mid = displays(&core.history_entries(win));
+    assert_eq!(
+        rows_mid.len(),
+        rows_before.len() + 1,
+        "a CROSS-FILE OpenAt must grow the pane's stack by EXACTLY ONE entry — the same fold every \
+         `:e` goes through. Before: {rows_before:?}, after: {rows_mid:?}"
+    );
+    assert_eq!(
+        rows_mid.first().map(String::as_str),
+        Some("long.md"),
+        "the newest row must name the file the search match was in: {rows_mid:?}"
+    );
+    assert_eq!(
+        &rows_mid[1..],
+        &rows_before[..],
+        "the new entry sits on top of the pane's previous rows, unchanged"
+    );
+    let can_back_mid = core.history_can_back(win);
+    let can_forward_mid = core.history_can_forward(win);
+    assert!(
+        can_back_mid,
+        "a.md is behind the new entry, so Back must be available BEFORE the same-file jump, or the \
+         final step of this case proves nothing"
+    );
+
+    // --- 2. SAME FILE, ANOTHER LINE: nothing is recorded --------------------
+    core.open_at(long_abs, SECOND_JUMP_LINE, 0);
+    poll_cursor_line(&core, &waiter, grid, SECOND_JUMP_LINE - 1);
+    settle(&waiter, HISTORY_SETTLE);
+
+    assert_eq!(
+        core.pane_status(grid).filename,
+        "long.md",
+        "precondition: the second OpenAt targets the SAME file, so the pane must still be showing \
+         it — otherwise this is a cross-file jump in disguise"
+    );
+    let rows_after = displays(&core.history_entries(win));
+    assert_eq!(
+        rows_after, rows_mid,
+        "a jump to another LINE of the SAME file must record NO history entry: `NavTarget::Edit` \
+         carries no line number, so the derived target is identical and the fold has nothing new \
+         to push. If this fails because `NavTarget` gained a position, the claim in \
+         `crates/wolf-gnome/src/README.md` is what must change — not this assertion."
+    );
+    assert_eq!(
+        core.history_can_back(win),
+        can_back_mid,
+        "a same-file jump must leave Back availability untouched"
+    );
+    assert_eq!(
+        core.history_can_forward(win),
+        can_forward_mid,
+        "a same-file jump must leave Forward availability untouched"
+    );
+    assert_eq!(
+        current_display(&core.history_entries(win)).as_deref(),
+        Some("long.md"),
+        "the checkmark has not moved: the pane is on the same entry it was on"
+    );
+
+    // --- 3. The SHARP form: Back lands on a.md, not on long.md again --------
+    //
+    // Row count cannot see a spuriously pushed DUPLICATE (menu_rows dedups it
+    // away), and neither can can_back/can_forward (a push at the top of the stack
+    // leaves both where they were). Back is what separates the two: with a
+    // duplicate entry behind the cursor it would land on long.md again.
+    assert!(
+        core.history_back(win),
+        "Back must report that the pane moved — a.md is genuinely behind the cursor"
+    );
+    settle(&waiter, HISTORY_SETTLE);
+    let landed = core.pane_status(grid).filename;
+    assert_eq!(
+        landed, "a.md",
+        "Back landed on {landed:?}, not on a.md. The entry immediately behind the cursor must be \
+         the file the pane came FROM: landing on long.md again means the same-file jump pushed a \
+         DUPLICATE Edit entry, which `menu_rows` deduplicates out of the row list and which none \
+         of the assertions above can see."
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// The BUFFER-PICKER path records one navigation entry.
+///
+/// `InputEvent::SwitchBuffer { win, bufnr }` is a window-scoped `nvim_win_set_buf`
+/// (never `:edit`), so it is the one front-end open path that does not go through a
+/// filename at all. The window's buffer still changes, so `derive_target` yields a
+/// different `Edit{path}` and the fold pushes.
+///
+/// ## Why the target is a `:badd`ed buffer, and not a file this pane already showed
+///
+/// `history_entries` deduplicates by distinct `NavTarget`, so switching back to a
+/// file the pane has already visited leaves the ROW COUNT unchanged and there is
+/// nothing to assert growth against. The buffer picker's candidate list is
+/// `getbufinfo({'buflisted': 1})` — every listed buffer in the whole nvim, including
+/// ones opened in another pane — so a listed buffer this pane has never shown is
+/// the realistic case as well as the measurable one. `:badd` produces exactly that
+/// in one command and without disturbing this window.
+///
+/// The bufnr is resolved through `WolfCore::list_buffers`, which is the same call
+/// `buffer_picker::BufferPickerInner::open` makes, so this case sends the number the
+/// front-end would have sent rather than one read out of a different map.
+#[test]
+fn switch_buffer_records_a_navigation_entry() {
+    let cwd = common::fresh_cwd();
+    seed_three_markdown_files(&cwd);
+
+    let (core, waiter) = start_core_in(cwd);
+    let grid = wait_for_active_window_grid(&core, &waiter);
+    let win = wait_for_win_handle(&core, &waiter, grid);
+
+    ex_command(&core, "e a.md");
+    poll_pane_filename(&core, &waiter, grid, "a.md");
+    poll_history(&core, &waiter, win, "an a.md row on top", |rows| {
+        !rows.is_empty() && rows[0].display == "a.md"
+    });
+
+    // A LISTED buffer this window has never displayed. `:badd` adds it to the
+    // buffer list without loading it and without touching any window, so the pane's
+    // own history is untouched by this line.
+    ex_command(&core, "badd c.md");
+    settle(&waiter, HISTORY_SETTLE);
+
+    let rows_before = displays(&core.history_entries(win));
+    assert!(
+        !rows_before.iter().any(|d| d == "c.md"),
+        "precondition: c.md must NOT be in this pane's history — `:badd` lists a buffer without \
+         showing it anywhere, so if it appears here the pane displayed it somehow and the growth \
+         assertion below would be measuring a row `menu_rows` deduplicates away: {rows_before:?}"
+    );
+
+    let listed = core.list_buffers();
+    let target = listed
+        .iter()
+        .find(|buf| buf.name.ends_with("c.md"))
+        .unwrap_or_else(|| {
+            panic!(
+                "`:badd c.md` did not put c.md in `getbufinfo({{'buflisted': 1}})`, which is the \
+                 candidate list the buffer picker itself reads, so this case has no bufnr to \
+                 switch to. Listed buffers were: {:?}",
+                listed.iter().map(|b| b.name.clone()).collect::<Vec<_>>()
+            )
+        });
+    let target_bufnr = target.bufnr;
+    assert!(
+        target_bufnr > 0,
+        "the `:badd`ed c.md must carry a real nvim bufnr, got {target_bufnr}"
+    );
+    assert_ne!(
+        target_bufnr,
+        win_bufnr(&core, win),
+        "precondition: the switch target must not be the buffer the window is ALREADY showing, or \
+         `nvim_win_set_buf` is a no-op and the fold has nothing to derive differently"
+    );
+
+    // --- The buffer-picker activation, verbatim ------------------------------
+    core.switch_buffer(win, target_bufnr);
+    poll_pane_filename(&core, &waiter, grid, "c.md");
+    poll_history(&core, &waiter, win, "a c.md row on top", |rows| {
+        !rows.is_empty() && rows[0].display == "c.md"
+    });
+    settle(&waiter, HISTORY_SETTLE);
+
+    let rows_after = displays(&core.history_entries(win));
+    assert_eq!(
+        rows_after.len(),
+        rows_before.len() + 1,
+        "one InputEvent::SwitchBuffer must grow the pane's stack by EXACTLY ONE entry. Before: \
+         {rows_before:?}, after: {rows_after:?}"
+    );
+    assert_eq!(
+        rows_after.first().map(String::as_str),
+        Some("c.md"),
+        "the NEWEST row must name the buffer that was switched to: {rows_after:?}"
+    );
+    assert_eq!(
+        &rows_after[1..],
+        &rows_before[..],
+        "the new entry sits on top of the pane's previous rows, unchanged"
+    );
+    assert_eq!(
+        win_bufnr(&core, win),
+        target_bufnr,
+        "the window must be holding the bufnr the picker sent, not some other buffer for the same \
+         file"
+    );
+    assert!(
+        core.history_can_back(win),
+        "a.md is behind the new entry, so Back is available"
+    );
+    assert!(
+        !core.history_can_forward(win),
+        "a push parks the cursor at the TOP, so Forward is exhausted"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// The OPEN RECENT path records NOTHING: a directory change is not a file visit.
+///
+/// `InputEvent::Chdir { path }` is `:tcd`. No window changes its buffer, so every
+/// pane's derived target is what it already was and the fold has nothing to push.
+/// The pane keeps showing what it was showing, which is exactly what the user sees.
+///
+/// ## The negative half is a CHARACTERIZATION; the POSITIVE CONTROL is the
+/// discriminator
+///
+/// No production line exists whose removal would make `:tcd` record, so nothing
+/// reverts to redden the "rows unchanged" assertions alone. Without the control
+/// they would also pass against a core that recorded NOTHING AT ALL — a deleted
+/// `hist.observe(..)` in the fold — which is why the case ends by opening a file in
+/// the NEW directory and asserting the stack grows by exactly one. That half
+/// carries the shared revert.
+///
+/// ## Two premises this case measures rather than assumes
+///
+/// * **The chdir really happened.** "Nothing changed" is satisfied trivially by an
+///   event that never arrived, so the case polls `WolfCore::live_cwd` — fed by the
+///   `wolf_cwd` / `DirChanged` notification `:tcd` fires — until it names the new
+///   directory.
+/// * **The pane is showing a REAL FILE, not the startup buffer.** The `Chdir` input
+///   handler re-homes an untouched ANONYMOUS buffer into the new cwd, which renames
+///   it and would legitimately push an entry. The guard makes that a no-op for a
+///   real file, so this case opens `a.md` first and asserts the pane is on it.
+#[test]
+fn changing_directory_records_no_navigation_entry() {
+    let cwd = common::fresh_cwd();
+    seed_three_markdown_files(&cwd);
+
+    // A SECOND project directory, with a file of its own for the positive control.
+    let other_dir = common::fresh_cwd();
+    std::fs::write(other_dir.join("d.md"), DOC).expect("failed to write d.md in the second dir");
+    let other_canon =
+        std::fs::canonicalize(&other_dir).expect("the second temp dir should canonicalize");
+    let d_abs = other_dir.join("d.md");
+
+    let (core, waiter) = start_core_in(cwd);
+    let grid = wait_for_active_window_grid(&core, &waiter);
+    let win = wait_for_win_handle(&core, &waiter, grid);
+
+    ex_command(&core, "e a.md");
+    poll_pane_filename(&core, &waiter, grid, "a.md");
+    poll_history(&core, &waiter, win, "an a.md row on top", |rows| {
+        !rows.is_empty() && rows[0].display == "a.md"
+    });
+    settle(&waiter, HISTORY_SETTLE);
+
+    assert_eq!(
+        core.pane_status(grid).filename,
+        "a.md",
+        "precondition: the pane must be showing a REAL file. The Chdir handler re-homes an \
+         UNTOUCHED anonymous buffer into the new cwd, which renames it and would push an entry of \
+         its own — the guard makes that a no-op only for a named, real file."
+    );
+    let rows_before = displays(&core.history_entries(win));
+    let can_back_before = core.history_can_back(win);
+    let can_forward_before = core.history_can_forward(win);
+    let current_before = current_display(&core.history_entries(win));
+
+    // --- 1. The Open Recent activation, verbatim ----------------------------
+    core.send_input(InputEvent::Chdir { path: other_dir });
+
+    // The chdir is PROVED before anything is asserted about it: `live_cwd` is fed by
+    // the `wolf_cwd` notification the `DirChanged` autocmd fires, and it is already
+    // canonicalized.
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    while Instant::now() < deadline && core.live_cwd().as_deref() != Some(other_canon.as_path()) {
+        waiter.drain();
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    assert_eq!(
+        core.live_cwd().as_deref(),
+        Some(other_canon.as_path()),
+        "the captive nvim never reported a working directory of {}. Every assertion below is a \
+         \"nothing changed\" assertion, and a chdir that never happened satisfies all of them — so \
+         this precondition is what stops the case passing vacuously.",
+        other_canon.display()
+    );
+
+    settle(&waiter, HISTORY_SETTLE);
+
+    // --- 2. Nothing was recorded (the CHARACTERIZATION half) ----------------
+    assert_eq!(
+        displays(&core.history_entries(win)),
+        rows_before,
+        "a `:tcd` must record NO navigation entry: a directory change is not a file visit, and no \
+         window changed its buffer, so every pane's derived target is what it already was"
+    );
+    assert_eq!(
+        core.history_can_back(win),
+        can_back_before,
+        "a chdir must leave Back availability untouched"
+    );
+    assert_eq!(
+        core.history_can_forward(win),
+        can_forward_before,
+        "a chdir must leave Forward availability untouched"
+    );
+    assert_eq!(
+        current_display(&core.history_entries(win)),
+        current_before,
+        "a chdir must leave the history CURSOR where it was — the pane is still showing the file \
+         it was showing"
+    );
+    assert_eq!(
+        core.pane_status(grid).filename,
+        "a.md",
+        "a chdir must not move the pane off its buffer either"
+    );
+
+    // --- 3. The POSITIVE CONTROL (the discriminator) ------------------------
+    //
+    // Without this, every assertion above would also pass against a core that
+    // recorded nothing at all — a deleted `hist.observe(..)` in `fold_nav_targets`.
+    // This half carries that revert.
+    core.send_input(InputEvent::Open { path: d_abs });
+    poll_pane_filename(&core, &waiter, grid, "d.md");
+    poll_history(&core, &waiter, win, "a d.md row on top", |rows| {
+        !rows.is_empty() && rows[0].display == "d.md"
+    });
+    settle(&waiter, HISTORY_SETTLE);
+
+    let rows_after = displays(&core.history_entries(win));
+    assert_eq!(
+        rows_after.len(),
+        rows_before.len() + 1,
+        "POSITIVE CONTROL: opening a file in the NEW directory must still grow the stack by exactly \
+         one. If this fails, the \"chdir records nothing\" assertions above are vacuous — the fold \
+         is recording nothing whatsoever — and THAT is the finding, not the chdir. Before: \
+         {rows_before:?}, after: {rows_after:?}"
+    );
+    assert_eq!(
+        rows_after.first().map(String::as_str),
+        Some("d.md"),
+        "POSITIVE CONTROL: the newest row must name the file opened after the chdir: {rows_after:?}"
+    );
+    assert_eq!(
+        &rows_after[1..],
+        &rows_before[..],
+        "POSITIVE CONTROL: the chdir left no entry BENEATH the new one either — the rows under it \
+         are exactly the ones that were there before the chdir"
     );
 
     core.shutdown().expect("shutdown should be Ok");

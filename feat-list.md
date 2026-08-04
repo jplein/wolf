@@ -82,42 +82,46 @@ GTK paints a single-row bottom strip: an active command line, or the last toast 
 | Buffer picker (⌘E)                          | `feat/buffer-list` / `linux-feat/buffer-picker`                              | [x]   | [x]   |
 | Command palette (⌘P)                        | `feat/commands` (`4b3b53e`)                                                  | [x]   | [x]   |
 | Open Recent (global recent-directories MRU) | `feat/commands` / `linux-feat/open-recent`                                   | [x]   | [x]   |
-| Per-pane back/forward navigation history    | `feat/nav-buttons` (`597175b`)                                               | [x]   | [ ]   |
+| Per-pane back/forward navigation history    | `feat/nav-buttons` (`597175b`) / `linux-feat/nav-history`                    | [x]   | [x]   |
 | Project search UI (ripgrep-backed)          | `feat/search-ui` / `linux-feat/project-search`                               | [x]   | [x]   |
 | Native file dialogs (open / save / save-as) | —                                                                            | [x]   | [ ]   |
 
-The `wolf-core` half of the per-pane navigation history is platform-agnostic and already linked into `wolf-gnome`; only the GTK view and its wiring are missing, which makes it the highest-leverage Linux task in this table. The GTK command palette lists the registry commands `wolf-gnome` performs plus one Open Recent row per usable recent directory, each of which re-roots the window through the same path the Open Folder dialog takes; there are no Switch-to-Window rows, since `wolf-gnome` has one window.
+Both front-ends surface the per-pane navigation history as two toolbar buttons and as menu items — `⌘[` / `⌘]` on macOS, `Alt+Left` / `Alt+Right` on Linux. The one difference left is the jump list: the macOS History menu also lists the active pane's recently visited files, where the GTK menu carries Back and Forward alone, for the reason recorded in [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md).
+
+The GTK command palette lists the registry commands `wolf-gnome` performs plus one Open Recent row per usable recent directory, each of which re-roots the window through the same path the Open Folder dialog takes; there are no Switch-to-Window rows, since `wolf-gnome` has one window.
 
 Two rows stay unticked for partial coverage. The file-dialog row covers all three dialogs, and `wolf-gnome` has native Open File and Open Folder but no save or save-as, so saving remains `:w` from within Neovim. The sidebar re-roots on a front-end directory change — the Open Folder dialog or an Open Recent palette row — but not on a user-typed `:cd`.
 
 ## Windows, tabs, commands
 
-| Feature                                      | Branch or commit                        | macOS | Linux |
-| -------------------------------------------- | --------------------------------------- | ----- | ----- |
-| Multiple windows                             | `feat/mac-ui-changes` (`2fd6256`)       | [x]   | [ ]   |
-| Command registry (`:Wolf*` + Lua faces)      | `feat/commands` (`fb0147c`)             | [x]   | [x]   |
-| Commands drained and dispatched to the UI    | `feat/commands` (`fb0147c`)             | [x]   | [x]   |
-| Native application menu bar                  | `feat/commands`                         | [x]   | [x]   |
-| Empty state ("Open folder…" button)          | `feat/commands` (`2a1eb94`)             | [x]   | [x]   |
-| Working directory in the window title        | `feat/status-bar` (`6fd2427`)           | [x]   | [x]   |
-| Unified toolbar (sidebar toggle, nav, title) | `feat/nav-buttons` (`96d2c97`)          | [x]   | [ ]   |
-| Native tabs, one Neovim per project          | `feat/window-tabs`                      | [x]   | [ ]   |
-| Application state persistence (`state.json`) | `feat/remember-working-directory`       | [x]   | [x]   |
-| Pane-layout persistence across relaunch      | `feat/macos-pane-dividers` (`5f8becb`)  | [x]   | [x]   |
-| Single-pane state-persistence fix            | `fix/state-persistence-single-pane-bug` | [x]   | [x]   |
-| Copy / paste through the system clipboard    | `feat/copy-paste`                       | [x]   | [ ]   |
-| `:q` / `:qa` mapped to close pane / window   | `feat/colon-q-remapping`                | [x]   | [x]   |
-| ⌘N opens a new untitled Markdown buffer      | `feat/colon-q-remapping` (`0266b96`)    | [x]   | [x]   |
+| Feature                                      | Branch or commit                                          | macOS | Linux |
+| -------------------------------------------- | --------------------------------------------------------- | ----- | ----- |
+| Multiple windows                             | `feat/mac-ui-changes` (`2fd6256`)                         | [x]   | [ ]   |
+| Command registry (`:Wolf*` + Lua faces)      | `feat/commands` (`fb0147c`)                               | [x]   | [x]   |
+| Commands drained and dispatched to the UI    | `feat/commands` (`fb0147c`)                               | [x]   | [x]   |
+| Native application menu bar                  | `feat/commands`                                           | [x]   | [x]   |
+| Empty state ("Open folder…" button)          | `feat/commands` (`2a1eb94`)                               | [x]   | [x]   |
+| Working directory in the window title        | `feat/status-bar` (`6fd2427`)                             | [x]   | [x]   |
+| Unified toolbar (sidebar toggle, nav, title) | `feat/nav-buttons` (`96d2c97`) / `linux-feat/nav-history` | [x]   | [x]   |
+| Native tabs, one Neovim per project          | `feat/window-tabs`                                        | [x]   | [ ]   |
+| Application state persistence (`state.json`) | `feat/remember-working-directory`                         | [x]   | [x]   |
+| Pane-layout persistence across relaunch      | `feat/macos-pane-dividers` (`5f8becb`)                    | [x]   | [x]   |
+| Single-pane state-persistence fix            | `fix/state-persistence-single-pane-bug`                   | [x]   | [x]   |
+| Copy / paste through the system clipboard    | `feat/copy-paste`                                         | [x]   | [ ]   |
+| `:q` / `:qa` mapped to close pane / window   | `feat/colon-q-remapping`                                  | [x]   | [x]   |
+| ⌘N opens a new untitled Markdown buffer      | `feat/colon-q-remapping` (`0266b96`)                      | [x]   | [x]   |
 
-`wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Of the 26 commands, 11 dispatch, 1 has no GNOME equivalent (`HideApplication`, since the shell owns window visibility), and 14 are deferred with a distinct printed reason.
+`wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Of the 26 commands, 12 dispatch, 1 has no GNOME equivalent (`HideApplication`, since the shell owns window visibility), and 13 are deferred with a distinct printed reason.
 
 The GNOME counterpart to the macOS menu bar is a header-bar primary menu driven by the same `gio` action namespace as the accelerators, so menu, chords and drained commands cannot drift apart. The accelerator scheme is documented in [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md), "The accelerator namespace".
+
+That header bar is also the unified toolbar: the sidebar toggle, Back and Forward, and Open at the start, the primary menu at the end, and the window title between them.
 
 The `state` module is read and written. `wolf-gnome` snapshots on every wake without a timer or debounce, which is affordable because `StateStore::set_snapshot` ignores an unchanged tree and the writer thread coalesces; it restores the working directory, window size and pane layout at launch.
 
 The single-pane fix is structural: the layout is suppressed by a content predicate, never by leaf arity, which is what made the original bug swallow the commonest shape of all — one window, one tab, one pane, one file.
 
-Two things are deliberately not persisted on Linux. Window position is unavailable, because Wayland gives a client neither its own position nor screen geometry, so only size is restored; and `sidebar_visible` is written so the field cannot rot, but never read back.
+One thing is deliberately not persisted on Linux: the window position, which Wayland gives a client no way to learn or to validate, so only the size is restored. The working directory, the pane layout and the sidebar preference all come back at launch.
 
 ## Markdown preview
 
@@ -185,9 +189,9 @@ Liveness, swap recovery, auto-reload and the hang fixes live in `wolf-core` or `
 
 Two limits are worth stating. The pane topology does not survive a restart — only the Tier-1 file set does, so a crash while the window was split returns one pane. macOS restores no more than that, so it is a shared limit rather than a Linux gap.
 
-`NotResponding` is reachable from `wolf-gnome` at two points. `wolf-core` marks a stall only from `block_on_rpc`'s timeout arm, and the GTK side issues two such calls: the layout rebuild at launch, and the buffer picker's candidate snapshot, which a running window issues on Ctrl+Shift+E. The overlay's presentation has end-to-end coverage — a cage smoke `SIGSTOP`s the captive Neovim and presses the chord. Copy and the Markdown preview will add further blocking paths.
+`NotResponding` is reachable from `wolf-gnome` at three points. `wolf-core` marks a stall only from `block_on_rpc`'s timeout arm, and the GTK side issues three such calls: the layout rebuild at launch, the buffer picker's candidate snapshot on Ctrl+Shift+E, and a per-pane navigation move on Alt+Left or Alt+Right. The overlay's presentation has end-to-end coverage — a cage smoke `SIGSTOP`s the captive Neovim and presses the chord. Copy and the Markdown preview will add further blocking paths.
 
-The second limit is that a stall does not clear itself on the GTK side. The buffer picker refuses to issue its snapshot unless the core reads `Alive`, so a wedged Neovim is never re-probed, and core's own auto-clear rides the success of a later synchronous call while a timed-out one is detached. The route back is the overlay's Restart button, which force-kills.
+The second limit is that a stall does not clear itself on the GTK side. Both the buffer picker and a navigation press refuse to issue their call unless the core reads `Alive`, so a wedged Neovim is never re-probed, and core's own auto-clear rides the success of a later synchronous call while a timed-out one is detached. The route back is the overlay's Restart button, which force-kills.
 
 ## Suggested order of work for Linux
 

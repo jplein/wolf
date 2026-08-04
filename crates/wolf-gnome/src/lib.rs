@@ -90,6 +90,16 @@
 //!   ([`reopen_order`]), and the derived geometry of the "Restart Neovim" button
 //!   inside the overlay ([`restart_button_rect`]) — one function shared by the
 //!   widget builder and the cage smoke so the two cannot drift.
+//! - [`mod@nav_ui`]: the PER-PANE NAVIGATION rulebook — the one place the "which
+//!   window does a Back/Forward press act on" question is answered
+//!   ([`nav_ui::nav_query_win`], which refuses an active window of `0` exactly as
+//!   [`buffer_picker::switch_target`] does); the TOTAL
+//!   `Option<`[`wolf_core::Liveness`]`>` → [`nav_ui::NavPress`] guard that refuses
+//!   to issue the BLOCKING history move unless the core is alive
+//!   ([`nav_ui::nav_press`]); and the sensitivity of the two toolbar buttons over
+//!   core's per-pane availability reading ([`nav_ui::nav_buttons`], which answers
+//!   both-insensitive for every input the press path would refuse, never the
+//!   converse).
 //! - [`actions`]: the action namespace as data — [`actions::ACTION_TABLE`],
 //!   [`actions::MENU_SECTIONS`], and the [`actions::parse_accel`] /
 //!   [`actions::forbidden_reason`] checker that mechanically enforces "no Neovim
@@ -135,6 +145,7 @@ pub mod input;
 pub mod layout;
 pub mod liveness_ui;
 pub mod mouse;
+pub mod nav_ui;
 pub mod palette;
 pub mod pane_layout;
 pub mod pane_view;

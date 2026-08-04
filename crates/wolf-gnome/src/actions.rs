@@ -235,7 +235,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         action: "win.toggle-sidebar",
         accel: Some("<Control><Shift>b"),
         command: Some(Command::ToggleSidebar),
-        status: BindingStatus::Reserved,
+        status: BindingStatus::Bound,
         note: "macOS Ctrl+Cmd+S; B is the cross-platform sidebar letter and gives up only the \
                Ctrl+Shift alias for <C-b>",
     },
@@ -283,7 +283,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         action: "win.history-back",
         accel: Some("<Alt>Left"),
         command: None,
-        status: BindingStatus::Reserved,
+        status: BindingStatus::Bound,
         note: "macOS Cmd+[; front-end-only navigation with no Command variant, and capturing \
                <A-Left> PREVENTS the destructive <Esc>+<Left> split",
     },
@@ -291,7 +291,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         action: "win.history-forward",
         accel: Some("<Alt>Right"),
         command: None,
-        status: BindingStatus::Reserved,
+        status: BindingStatus::Bound,
         note: "macOS Cmd+]; front-end-only navigation with no Command variant, and capturing \
                <A-Right> PREVENTS the destructive <Esc>+<Right> split",
     },
@@ -350,6 +350,22 @@ pub const MENU_SECTIONS: &[MenuSection] = &[
             MenuItemSpec {
                 label: "Search in project",
                 action: "win.search-in-project",
+            },
+        ],
+    },
+    MenuSection {
+        items: &[
+            MenuItemSpec {
+                label: "Back",
+                action: "win.history-back",
+            },
+            MenuItemSpec {
+                label: "Forward",
+                action: "win.history-forward",
+            },
+            MenuItemSpec {
+                label: "Toggle sidebar",
+                action: "win.toggle-sidebar",
             },
         ],
     },
@@ -569,14 +585,17 @@ mod tests {
 
     /// The actions whose accelerators are actually registered — the
     /// [`BindingStatus::Bound`] rows of [`ACTION_TABLE`] — sorted.
-    const EXPECTED_BOUND_ACTIONS: [&str; 7] = [
+    const EXPECTED_BOUND_ACTIONS: [&str; 10] = [
         "app.quit",
         "win.buffer-picker",
         "win.close-pane",
         "win.command-palette",
         "win.go-to-file",
+        "win.history-back",
+        "win.history-forward",
         "win.new-buffer",
         "win.search-in-project",
+        "win.toggle-sidebar",
     ];
 
     /// Whether a chord spelling is ACCEPTABLE for Wolf to bind: it must parse
@@ -836,13 +855,17 @@ mod tests {
 
         assert_eq!(
             bound, expected,
-            "the set of BOUND accelerators changed. wolf-gnome registers exactly seven \
+            "the set of BOUND accelerators changed. wolf-gnome registers exactly ten \
              (Ctrl+Shift+O go-to-file, Ctrl+Shift+N new-buffer, Ctrl+Shift+P command-palette, \
              Ctrl+Shift+E buffer-picker, Ctrl+Shift+F search-in-project, Ctrl+Shift+W close-pane, \
-             Ctrl+Shift+Q quit); every other \
+             Ctrl+Shift+Q quit, Alt+Left history-back, Alt+Right history-forward, Ctrl+Shift+B \
+             toggle-sidebar); every other \
              row of the table is Reserved for a later unit or MenuOnly. Binding a reserved chord \
              early means shipping a menu/accelerator that does nothing — and DEMOTING one back to \
-             Reserved silently unbinds a chord the menu still advertises."
+             Reserved silently unbinds a chord the menu still advertises. The two ALT rows are the \
+             namespace's deliberate exception and demoting either is worse than unbinding an alias: \
+             an uncaptured <Alt>Left reaches Neovim as <A-Left>, which unmapped splits into <Esc> \
+             plus <Left>."
         );
 
         for binding in bound_bindings() {
@@ -863,24 +886,30 @@ mod tests {
     /// GTK's own keymap-aware matching does not fire under `wtype` (see the module
     /// docs) — so every row below is a user-visible behaviour:
     ///
-    /// * **The seven Bound chords must fire, in BOTH letter cases.** A real keymap
-    ///   delivers the SHIFTED glyph for Ctrl+Shift+O — keyval `O`, not `o`
-    ///   (`input::gdk_key`'s shift contract, and what `tests/gdk_key.rs` pins) — so
-    ///   a case-SENSITIVE comparison would mean the chord never fires on real
-    ///   hardware while a lowercase-only test still passed.
+    /// * **The ten Bound chords must fire, in BOTH letter cases where they have
+    ///   one.** A real keymap delivers the SHIFTED glyph for Ctrl+Shift+O — keyval
+    ///   `O`, not `o` (`input::gdk_key`'s shift contract, and what
+    ///   `tests/gdk_key.rs` pins) — so a case-SENSITIVE comparison would mean the
+    ///   chord never fires on real hardware while a lowercase-only test still
+    ///   passed. The two ARROW chords (`<Alt>Left` / `<Alt>Right`) have no letter
+    ///   case at all: they resolve through [`key_name_matches`]' named-key branch,
+    ///   which compares `gdk::Key` constants directly, so they carry one row each.
     /// * **A bare `Ctrl+<letter>` must NOT fire.** This is the mechanical
     ///   enforcement of the invariant in the module docs: the matcher runs in the
     ///   CAPTURE phase, ahead of the key controller that forwards to Neovim and
     ///   returning `Propagation::Stop`, so a match here is a Neovim key made
     ///   UNREACHABLE. `<C-o>`, `<C-n>`, `<C-p>`, `<C-e>` (scroll down one line),
-    ///   `<C-f>` (page forward), `<C-w>` (the window-command prefix) and `<C-q>`
-    ///   must all still reach Neovim.
+    ///   `<C-f>` (page forward), `<C-b>` (page backward), `<C-w>` (the
+    ///   window-command prefix) and `<C-q>` must all still reach Neovim.
     /// * **A Reserved row must NOT fire.** Its action is not installed this unit,
     ///   so a match would swallow the key and do nothing at all — worse than not
-    ///   binding it.
+    ///   binding it. `Ctrl+minus` (`win.decrease-font-size`) is the row carrying
+    ///   that bucket.
     /// * **The modifier match is EXACT, not "at least".** Adding Alt to a bound
-    ///   chord must miss; a modifier bit outside Wolf's accel grammar (Super) is
-    ///   ignored, which the last two rows pin from both sides.
+    ///   Ctrl+Shift chord must miss, and adding Ctrl to a bound ALT chord must miss
+    ///   too — `Ctrl+Alt+Left` is not `<Alt>Left`, so it stays Neovim's. A modifier
+    ///   bit outside Wolf's accel grammar (Super) is ignored, which the last two
+    ///   rows pin from both sides.
     #[test]
     fn action_for_key_table() {
         let none = gdk::ModifierType::empty();
@@ -891,7 +920,7 @@ mod tests {
 
         // (description, delivered keyval, modifier state, expected action)
         let cases: Vec<(&str, gdk::Key, gdk::ModifierType, Option<&'static str>)> = vec![
-            // --- The seven BOUND chords, in both letter cases -----------------
+            // --- The ten BOUND chords, in both letter cases where they have one -
             (
                 "Ctrl+Shift+o -> win.go-to-file",
                 key_from_char('o'),
@@ -976,6 +1005,36 @@ mod tests {
                 ctrl | shift,
                 Some("win.search-in-project"),
             ),
+            (
+                "Ctrl+Shift+b -> win.toggle-sidebar",
+                key_from_char('b'),
+                ctrl | shift,
+                Some("win.toggle-sidebar"),
+            ),
+            (
+                "Ctrl+Shift+B (the SHIFTED glyph a real keymap delivers) -> win.toggle-sidebar",
+                key_from_char('B'),
+                ctrl | shift,
+                Some("win.toggle-sidebar"),
+            ),
+            // --- The two ARROW chords, which have no letter case --------------
+            //
+            // These are the accelerator namespace's deliberate exception: `<Alt>` is
+            // refused with a single-LETTER key (`forbidden_reason`) and permitted
+            // with a NAMED one, because capturing `<A-Left>` is precisely what stops
+            // it reaching Neovim and splitting into `<Esc>` + `<Left>`.
+            (
+                "Alt+Left -> win.history-back",
+                gdk::Key::Left,
+                alt,
+                Some("win.history-back"),
+            ),
+            (
+                "Alt+Right -> win.history-forward",
+                gdk::Key::Right,
+                alt,
+                Some("win.history-forward"),
+            ),
             // --- Bare Ctrl+<letter> stays Neovim's ---------------------------
             (
                 "Ctrl+o (no Shift) -> None, so <C-o> still reaches Neovim",
@@ -1019,17 +1078,30 @@ mod tests {
                 ctrl,
                 None,
             ),
-            // --- Reserved rows must never match ------------------------------
             (
-                "Alt+Left -> None: win.history-back is Reserved, not installed",
-                gdk::Key::Left,
-                alt,
+                "Ctrl+b (no Shift) -> None, so <C-b> (page backward) still reaches Neovim",
+                key_from_char('b'),
+                ctrl,
                 None,
             ),
+            // --- Reserved rows must never match ------------------------------
             (
                 "Ctrl+minus -> None: win.decrease-font-size is Reserved, not installed",
                 key_from_char('-'),
                 ctrl,
+                None,
+            ),
+            // --- The arrow chords match EXACTLY too ---------------------------
+            (
+                "Ctrl+Alt+Left -> None: the accel names Alt alone, and the match is exact",
+                gdk::Key::Left,
+                ctrl | alt,
+                None,
+            ),
+            (
+                "Alt+Up -> None: a named key with Alt that no row binds",
+                gdk::Key::Up,
+                alt,
                 None,
             ),
             // --- Modifier matching is EXACT on Ctrl / Shift / Alt -------------
@@ -1078,17 +1150,21 @@ mod tests {
 
     /// [`key_name_matches`] over every key-NAME shape [`ACTION_TABLE`] uses.
     ///
-    /// [`action_for_key`] scans only the seven Bound rows, and all seven are single
-    /// letters — so the named-key (`Left` / `Right`) and punctuation-name (`equal`
-    /// / `minus` / `grave`) branches are otherwise completely unexercised, while a
-    /// later unit promotes exactly those rows from Reserved to Bound. Pinning them
-    /// now makes that promotion a one-line status change instead of a debugging
-    /// session over a chord that silently never fires.
+    /// The NAMED-key branch (`Left` / `Right`) is LIVE: `<Alt>Left` and
+    /// `<Alt>Right` are Bound, so [`action_for_key`] reaches it on every press of
+    /// either arrow chord and `action_for_key_table` covers it end to end. What
+    /// remains reserved-only is the PUNCTUATION-name branch (`equal` / `minus` /
+    /// `grave`), which no Bound row uses — the three font-size rows and the
+    /// terminal row are Reserved — so those cases are exercised here and nowhere
+    /// else. Pinning them keeps a later promotion a one-line status change instead
+    /// of a debugging session over a chord that silently never fires.
     ///
     /// The negative rows are the point: a name outside the known set must be
     /// `false` rather than a guess, and a punctuation name compared against a
     /// non-printable keyval (whose `to_unicode()` is `None`) must be `false` rather
-    /// than a panic.
+    /// than a panic. `Up` is the sharpest of them — it is a real `gdk::Key`
+    /// constant that [`key_name_matches`] deliberately does not know, so it must
+    /// answer `false` rather than fall through to the alphanumeric branch.
     #[test]
     fn key_name_matches_table() {
         // (GTK key NAME, delivered keyval, whether the name denotes that keyval)

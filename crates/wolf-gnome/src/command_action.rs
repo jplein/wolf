@@ -24,11 +24,16 @@
 //!
 //! ## The three classes
 //!
-//! - **Dispatched** — the eleven commands `wolf-gnome` performs today.
+//! - **Dispatched** — the twelve commands `wolf-gnome` performs today.
 //! - [`UiAction::Deferred`] — implemented on macOS and planned on GTK; the string
 //!   names the concrete blocker so the deferral is auditable rather than a shrug.
 //! - [`UiAction::NoGnomeEquivalent`] — has no GNOME counterpart and will never be
 //!   implemented; the string says why.
+//! - **Front-end-only rows** — an [`crate::actions::ACTION_TABLE`] row that carries
+//!   no [`wolf_core::Command`] at all, because the behaviour is the front end's own
+//!   view of the core rather than something Neovim can queue. Those resolve through
+//!   [`ui_action_for_front_end_action`], which is the ONLY other way an action is
+//!   installed.
 //!
 //! Every `Deferred` / `NoGnomeEquivalent` reason is DISTINCT, so no two commands
 //! can collapse into one indistinguishable diagnostic.
@@ -64,6 +69,12 @@ pub enum UiAction {
     OpenBufferPicker,
     /// Open the in-window project-search overlay.
     OpenSearchOverlay,
+    /// Move the focused pane one entry BACK in its navigation history.
+    HistoryBack,
+    /// Move the focused pane one entry FORWARD in its navigation history.
+    HistoryForward,
+    /// Show or hide the file-tree sidebar.
+    ToggleSidebar,
     /// Implemented on macOS, planned on GTK; the string names the blocker.
     Deferred(&'static str),
     /// Has no GNOME equivalent and will never be implemented.
@@ -130,14 +141,35 @@ pub fn ui_action_for(command: Command) -> UiAction {
         Command::FullWidth => UiAction::Deferred(
             "the ~90-column content cap is a front-end feature wolf-gnome does not implement",
         ),
-        Command::ToggleSidebar => UiAction::Deferred(
-            "a user-toggleable sidebar is the feat-list 'Unified toolbar' / sidebar row",
-        ),
+        Command::ToggleSidebar => UiAction::ToggleSidebar,
         Command::SidebarShowProject => UiAction::Deferred(
             "wolf-gnome's sidebar has no panel switcher (there is no search panel to switch away \
              from)",
         ),
         Command::SearchInProject => UiAction::OpenSearchOverlay,
+    }
+}
+
+/// The UI action a FRONT-END-ONLY action row performs — an
+/// [`crate::actions::ACTION_TABLE`] row whose `command` is `None`. `None` for
+/// anything else.
+///
+/// The navigation rows have no [`wolf_core::Command`] variant because a pane's
+/// visit log is the front end's own view of the core, so
+/// [`crate::shell::AppShell::install_actions`] cannot reach them through
+/// [`ui_action_for`]. A row that resolves in NEITHER place is skipped with a
+/// printed reason while its accelerator is still registered, which swallows the
+/// chord and does nothing at all — strictly worse than not binding it.
+///
+/// This lives here rather than in [`crate::actions`] because this module owns
+/// [`UiAction`]; `actions.rs` stays free of the classification type. Only the test
+/// module below imports `actions`, so there is no module cycle.
+#[must_use]
+pub fn ui_action_for_front_end_action(action: &str) -> Option<UiAction> {
+    match action {
+        "win.history-back" => Some(UiAction::HistoryBack),
+        "win.history-forward" => Some(UiAction::HistoryForward),
+        _ => None,
     }
 }
 
@@ -152,7 +184,7 @@ mod tests {
     /// The commands `wolf-gnome` DISPATCHES, by canonical `CommandSpec::id`,
     /// sorted. Ids (not variants) so the failure message names the registry row a
     /// reader can grep for.
-    const EXPECTED_DISPATCHED_IDS: [&str; 11] = [
+    const EXPECTED_DISPATCHED_IDS: [&str; 12] = [
         "buffer_picker",
         "close_pane",
         "close_window",
@@ -164,6 +196,7 @@ mod tests {
         "open_folder",
         "quit_application",
         "search_in_project",
+        "toggle_sidebar",
     ];
 
     /// What a [`Case`] row expects [`ui_action_for`] to return.
@@ -313,9 +346,9 @@ mod tests {
             want: Want::Deferred,
         },
         Case {
-            desc: "23 ToggleSidebar: no user-toggleable sidebar yet",
+            desc: "23 ToggleSidebar: shows or hides the file-tree sidebar",
             command: Command::ToggleSidebar,
-            want: Want::Deferred,
+            want: Want::Exact(UiAction::ToggleSidebar),
         },
         Case {
             desc: "24 SidebarShowProject: the sidebar has no panel switcher",
@@ -426,7 +459,7 @@ mod tests {
 
         assert_eq!(
             dispatched, expected,
-            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly eleven commands; \
+            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly twelve commands; \
              everything else must be Deferred(reason) or NoGnomeEquivalent(reason) so the drain \
              is never silent. If a command was genuinely implemented, tick its feat-list row and \
              update this list with it."
@@ -473,6 +506,119 @@ mod tests {
                  blocker.",
                 spec.command,
                 spec.id
+            );
+        }
+    }
+
+    /// Action names that are NOT declared in [`crate::actions::ACTION_TABLE`] at
+    /// all, used to pin [`ui_action_for_front_end_action`]'s `_ => None` arm.
+    ///
+    /// The first is a plausible near-miss for a real row and the second is
+    /// well-formed but invented; a function that answered `Some` for either would
+    /// install an action for a name no table declares, which `gio` accepts silently
+    /// and the menu then renders as a dead entry.
+    const UNDECLARED_ACTIONS: [&str; 3] = [
+        "win.history-backward",
+        "win.history-sideways",
+        "app.not-a-real-action",
+    ];
+
+    /// Every FRONT-END-ONLY row of [`crate::actions::ACTION_TABLE`] — a row whose
+    /// `command` is `None` — resolves through [`ui_action_for_front_end_action`],
+    /// and nothing else does.
+    ///
+    /// ## Why both directions matter
+    ///
+    /// `shell::install_actions` resolves each row through exactly two places: a row
+    /// with a command goes to [`ui_action_for`], and a command-less row comes here.
+    /// A row that resolves in NEITHER is skipped with a printed reason, so its
+    /// accelerator is registered against an action that was never installed — the
+    /// chord is then swallowed in the capture phase and does nothing at all, which
+    /// is strictly worse than not binding it. The forward direction is what catches
+    /// that.
+    ///
+    /// The reverse direction catches the opposite mistake: an arm here for a name
+    /// that also carries a `Command` would give one action two classifications, and
+    /// which one wins would depend on the order `install_actions` happens to try
+    /// them in.
+    ///
+    /// The non-vacuity guard is load-bearing. With no command-less rows in the
+    /// table both loops run zero times, and a `ui_action_for_front_end_action` that
+    /// was nothing but `_ => None` would satisfy the whole test.
+    #[test]
+    fn front_end_action_rows_are_classified() {
+        use crate::actions::ACTION_TABLE;
+
+        let front_end_rows: Vec<&'static str> = ACTION_TABLE
+            .iter()
+            .filter(|binding| binding.command.is_none())
+            .map(|binding| binding.action)
+            .collect();
+
+        assert!(
+            !front_end_rows.is_empty(),
+            "ACTION_TABLE declares no command-less rows at all, so both directions below run zero \
+             times and this test proves nothing — a `ui_action_for_front_end_action` consisting of \
+             nothing but `_ => None` would pass it. The front-end-only rows are the navigation \
+             ones (`win.history-back` / `win.history-forward`): they have no `wolf_core::Command` \
+             variant because the history lives in the front end's own view of the core, so if they \
+             have gained one, this function has no purpose left and should go rather than be \
+             left guarding nothing."
+        );
+
+        // --- Forward: every command-less row is installable ------------------
+        //
+        // A `Vec` rather than a `HashSet` because `UiAction` is deliberately not
+        // `Hash` — it carries `&'static str` payloads whose contract is equality and
+        // distinctness, not hashing — and the list is three rows long.
+        let mut seen: Vec<UiAction> = Vec::new();
+        for action in &front_end_rows {
+            let resolved = ui_action_for_front_end_action(action);
+            let Some(ui_action) = resolved else {
+                panic!(
+                    "ACTION_TABLE row {action:?} carries no `command`, so `shell::install_actions` \
+                     resolves it through `ui_action_for_front_end_action` — which answered None. \
+                     The action is therefore never installed, while its accelerator IS registered: \
+                     the capture-phase chord matcher resolves the chord, swallows the key, and \
+                     activates nothing. Add an arm for {action:?} here, or give the row a Command."
+                )
+            };
+            assert!(
+                !seen.contains(&ui_action),
+                "two command-less ACTION_TABLE rows resolve to the SAME UiAction ({ui_action:?}); \
+                 {action:?} is the second. Back and Forward are the rows this bites: collapsing \
+                 them means one of the two chords navigates the wrong way, which looks like a \
+                 broken history rather than a broken classification."
+            );
+            seen.push(ui_action);
+        }
+
+        // --- Reverse: nothing ELSE resolves through this function -------------
+        for binding in ACTION_TABLE {
+            let resolved = ui_action_for_front_end_action(binding.action);
+            if binding.command.is_some() {
+                assert_eq!(
+                    resolved, None,
+                    "ACTION_TABLE row {:?} carries the command {:?} AND resolves through \
+                     `ui_action_for_front_end_action` to {resolved:?}. One action must have exactly \
+                     one classification: `shell::install_actions` takes the command branch first, \
+                     so this arm is dead code that silently disagrees with `ui_action_for` — and \
+                     the day the branch order changes, the action's behaviour changes with it.",
+                    binding.action,
+                    binding.command
+                );
+            }
+        }
+
+        for action in UNDECLARED_ACTIONS {
+            assert_eq!(
+                ui_action_for_front_end_action(action),
+                None,
+                "`ui_action_for_front_end_action({action:?})` answered a UiAction for a name that \
+                 ACTION_TABLE does not declare. Every installed action must come from a declared \
+                 row: an undeclared one has no accelerator and no menu entry, so it is reachable \
+                 from nowhere, and a near-miss name here means a real row's arm was misspelled and \
+                 the real row now resolves to None."
             );
         }
     }
