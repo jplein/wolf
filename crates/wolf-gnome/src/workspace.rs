@@ -34,9 +34,9 @@
 //! ## The re-root rule
 //!
 //! [`reroot_decision`] is the TOTAL decision behind "where is the sidebar rooted,
-//! and does it move now". Its authority is `rooted` — the directory the sidebar is
-//! CURRENTLY rooted at — compared against `live`, the working directory nvim last
-//! reported. A front-end request ([`reroot_ready`]'s `pending`) only decides whether
+//! and does this settle move it". Its authority is `rooted` — the directory the
+//! sidebar is CURRENTLY rooted at — compared against `live`, the working directory
+//! nvim last reported. A front-end request ([`reroot_ready`]'s `pending`) decides only whether
 //! that request's flag may be discarded in the same settle; it never decides WHERE
 //! to root, so a stuck request (a failed `:tcd`, which core degrades to a warning)
 //! blocks nothing and a typed `:cd` moves the sidebar with no request at all.

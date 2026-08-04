@@ -28,8 +28,9 @@
 //!
 //! [`RefreshCoalescer::cancel`] bumps the generation rather than removing the GLib
 //! source, because removing an already-fired source is a GLib warning. The armed
-//! closure still runs; its `fire` call no longer matches and performs nothing. This
-//! is the generation-token pattern `crate::crash_overlay`'s banner already uses.
+//! closure still runs; its `fire` call carries a generation the coalescer has moved
+//! past, so it performs nothing. This is the generation-token pattern
+//! `crate::crash_overlay`'s banner already uses.
 //!
 //! [`REFRESH_INTERVAL`]'s value is asserted nowhere: a constant compared against its
 //! own literal states nothing. What the tests pin is the mechanism.
@@ -155,14 +156,14 @@ mod tests {
     /// A batch arriving AFTER a fire arms a new fire, so the last batch of a
     /// traversal is never left undrawn.
     ///
-    /// This is what row 3 costs on Linux: the macOS defect (a wake routed to one
-    /// view while another view's traversal runs) has no counterpart in a
-    /// single-window front-end, so what this unit owes instead is the guarantee
-    /// that the coalescer itself cannot drop a traversal's final batch. A wake
-    /// either coalesces into an armed fire — which has not run yet, so it will
-    /// read the state that batch appended — or it finds nothing armed and arms a
-    /// new one. This test pins the second case, which is the only one where the
-    /// ordering inside `fire` decides the answer.
+    /// This is what row 3 costs on Linux: a wake routed to one view while another
+    /// view's traversal runs — the macOS defect — has no counterpart in a
+    /// single-window front-end, so the guarantee this seam carries is that the
+    /// coalescer itself cannot drop a traversal's final batch. A wake either
+    /// coalesces into an armed fire — which has not run yet, so it will read the
+    /// state that batch appended — or it finds nothing armed and arms a new one.
+    /// This test pins the second case, which is the only one where the ordering
+    /// inside `fire` decides the answer.
     ///
     /// Revert that must redden it: not clearing `armed` inside `fire` before it
     /// returns, so the request after the fire coalesces into a fire that has

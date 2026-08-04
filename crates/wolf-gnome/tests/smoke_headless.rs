@@ -6893,14 +6893,14 @@ exit 0
 // The one that matters more is the crossed pair. The header bar draws `~/orzulu` on
 // every capture of this smoke, so a TARGET DIRECTORY named after the asserted term
 // would satisfy assertion 5 from the title alone — with the sidebar never re-rooting
-// and `settle_pending_reroot` never firing. Both halves are asserted, not left to
+// and `settle_reroot` never firing. Both halves are asserted, not left to
 // this comment: see the exemption block in the third fixture guard.
 //
 // ## Why assertion 5 reads the SIDEBAR and not the title
 //
 // The title only proves `shell::refresh_title` read the new `live_cwd`, which
 // assertion 3's readback already implies. The sidebar row is the only observable that
-// proves `settle_pending_reroot` -> `tree_view::reroot` ran, and `ortango.md` lives
+// proves `settle_reroot` -> `tree_view::reroot` ran, and `ortango.md` lives
 // OUTSIDE the launch cwd, so it can reach the page only after the re-root.
 //
 // ## No must-NOT-contain assertion, deliberately
@@ -6940,7 +6940,7 @@ const OPENRECENT_TARGET_FILE: &str = "ortango.md";
 
 /// Lowercased substring OCR MUST find: the target directory's own file, drawn as a
 /// tree-sidebar row. It lives outside the launch cwd, so it can only be on the page
-/// once `settle_pending_reroot` re-rooted the sidebar at the new working directory.
+/// once `settle_reroot` re-rooted the sidebar at the new working directory.
 const OPENRECENT_OCR_PRESENT: &str = "ortango";
 
 /// Typed into the palette's search entry. Defined AS [`OPENRECENT_TARGET_DIR`] so
@@ -9981,7 +9981,7 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// The crossed half is the one that matters: the header bar draws
 /// `~/`[`OPENRECENT_TARGET_DIR`] on every capture of that smoke, so a target
 /// DIRECTORY carrying the asserted term would satisfy its OCR assertion from the
-/// title alone — with the sidebar never re-rooting and `settle_pending_reroot`
+/// title alone — with the sidebar never re-rooting and `settle_reroot`
 /// never firing. The fourth block below asserts both halves, plus that neither
 /// name carries any OTHER asserted term.
 ///
@@ -10135,7 +10135,7 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         "OPENRECENT_TARGET_FILE = {OPENRECENT_TARGET_FILE:?} no longer contains \
          OPENRECENT_OCR_PRESENT = {OPENRECENT_OCR_PRESENT:?}. That FILENAME is the subject of the \
          smoke's OCR assertion — the tree sidebar draws it, and it is the only observable proving \
-         `settle_pending_reroot` -> `tree_view::reroot` restarted the traversal at the new root. \
+         `settle_reroot` -> `tree_view::reroot` restarted the traversal at the new root. \
          If the two stop agreeing the smoke asserts on a word nothing draws and fails with no \
          visible cause."
     );
@@ -10148,7 +10148,7 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          `~/{OPENRECENT_TARGET_DIR}` on EVERY capture of that smoke (the target directory is a \
          child of the app's HOME, which is what pins the title to a constant string), so a target \
          directory whose name carried the asserted term would satisfy the smoke's OCR assertion \
-         from the TITLE alone — with the sidebar never re-rooting, `settle_pending_reroot` never \
+         from the TITLE alone — with the sidebar never re-rooting, `settle_reroot` never \
          firing and `tree_view::reroot` never running. The smoke would then pass green against \
          exactly the build its revert produces. Rename the DIRECTORY; do NOT change \
          OPENRECENT_OCR_PRESENT and do NOT touch the assertion."
@@ -10345,8 +10345,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
     // `~/startdir` before the `:cd`, and a sidebar `Dir` row bears it after — so it
     // must stay clear of every asserted term. The REVERSE direction is a drift
     // tripwire rather than a live hazard: an asserted term built out of this
-    // directory's name means the two are no longer independent, and a later rename of
-    // one would silently retarget the other.
+    // directory's name means the two are not independent, and a later rename of one
+    // would silently retarget the other.
     for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {
         assert!(
             !CD_START_DIR.to_lowercase().contains(term),
@@ -11003,12 +11003,11 @@ fn picker_arrow_navigation_selects_second_match_under_cage() {
 
 /// The tree sidebar lists a file in the working directory, by name.
 ///
-/// Since the file-tree-sidebar-parity unit this smoke also transitively covers the
-/// SYNTHETIC ROOT's auto-expand: the tree's top level is now a single root node whose
-/// children are `children_of(entries, "")`, so without the re-expand that follows
-/// every root-store rebuild [`TREE_FILE_NAME`] sits under a COLLAPSED root and never
-/// reaches a pixel. Its assertion is unchanged and still reads tree population; what
-/// changed is that a broken auto-expand now reddens it too.
+/// It also transitively covers the SYNTHETIC ROOT's auto-expand. The tree's top level
+/// is a single root node whose children are `children_of(entries, "")`, so without the
+/// re-expand that follows every root-store rebuild [`TREE_FILE_NAME`] sits under a
+/// COLLAPSED root and never reaches a pixel. Its one assertion therefore reddens for
+/// either cause: a tree that never populated, or a root that never expanded.
 #[test]
 fn tree_sidebar_shows_files_under_cage() {
     // Serialize against the other cage tests (shared Wayland socket); recover from
@@ -11581,16 +11580,15 @@ fn three_panes_keep_all_files_visible_under_cage() {
 
 /// The empty state renders its "Open Folder" status page.
 ///
-/// Since the file-tree-sidebar-parity unit this smoke is ALSO the regression guard
-/// for **"the empty state must not spuriously re-root"**. `ShellInner::rooted_cwd` is
-/// seeded from the canonicalized launch cwd, which in this smoke is `HOME` (the whole
-/// point of the `HOME == cwd` override below); the captive Neovim then reports that
-/// same directory as its live working directory, and `workspace::reroot_decision`'s
-/// `live == rooted` arm must answer `Stay`. A broken seed — an uncanonicalized one, or
-/// none at all — makes `live != rooted` on the very first wake, which re-roots the
-/// window at `HOME` and sets a `FileSearch` walking the whole home tree behind a
-/// status page that is supposed to mean "no project is open". Its assertion is
-/// unchanged; what it now additionally detects is that.
+/// It is ALSO the regression guard for **"the empty state must not spuriously
+/// re-root"**. `ShellInner::rooted_cwd` is seeded from the canonicalized launch cwd,
+/// which in this smoke is `HOME` (the whole point of the `HOME == cwd` override
+/// below); the captive Neovim reports that same directory as its live working
+/// directory, and `workspace::reroot_decision`'s `live == rooted` arm must answer
+/// `Stay`. A broken seed — an uncanonicalized one, or none at all — makes
+/// `live != rooted` on the very first wake, which re-roots the window at `HOME` and
+/// sets a `FileSearch` walking the whole home tree behind a status page that is
+/// supposed to mean "no project is open".
 #[test]
 fn empty_state_shows_open_folder_button_under_cage() {
     // Serialize against the other cage tests (shared Wayland socket); recover from
@@ -16410,7 +16408,7 @@ fn window_title_shows_the_working_directory_under_cage() {
 /// what survives; `palette_action_for` classifies it as
 /// `PaletteAction::OpenRecentFolder`; and `shell::on_palette_activation` performs it
 /// through the very same `AppShell::chdir_to` the native Open Folder dialog uses —
-/// `InputEvent::Chdir` (`:tcd`), then `settle_pending_reroot` on a later render wake,
+/// `InputEvent::Chdir` (`:tcd`), then `settle_reroot` on a later render wake,
 /// then `tree_view::reroot`.
 ///
 /// That last leg is why this is not a duplicate of
@@ -16454,26 +16452,18 @@ fn window_title_shows_the_working_directory_under_cage() {
 /// | 2 | [`assert_png_present`] | precondition — grim produced an image | none; do not invent one | n/a |
 /// | 3 | the `getcwd()` readback canonicalizes to the seeded target | **discriminator** — Neovim's working directory really changed | in `shell::on_palette_activation`, replace `self.chdir_to(path)` with an `eprintln!` and no send. The chord still opens the palette, the row still ranks, Enter still closes it and records the MRU key — but nothing is sent to Neovim, so the readback is the launch cwd. | RED. `assertion `left == right` failed: open_recent_palette_row_reroots_the_window_under_cage: after the Open Recent activation the captive Neovim's working directory is /tmp/nix-shell.kFZSo6/wolf-gnome-smoke-2578175-1785817088670263436/project, not the seeded target /tmp/nix-shell.kFZSo6/wolf-gnome-smoke-2578175-1785817088670263436/orzulu.`, `left: ".../project"`, `right: ".../orzulu"`, then `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 34 filtered out; finished in 8.00s`. The stubbed arm's own `eprintln!` printed the correct target path, so the row WAS activated and classified to `OpenRecentFolder` — what the readback reports is the launch cwd purely because nothing was sent. Restored, green. |
 /// | 4 | the command MRU holds `open_recent:<canonical target>` | **discriminator** — the row was ACTIVATED, it was an Open Recent row, and it carried core's key shape. Independent of the pixels entirely: nothing but a palette activation writes that store. | in `palette::activate_selection`, delete the `mru.record(&mru_key)` call → the key is absent and the store reads back empty. | RED. `open_recent_palette_row_reroots_the_window_under_cage: the command MRU at /tmp/nix-shell.HA9znD/wolf-gnome-smoke-2579118-1785817109092969527/project-state/command-mru.sqlite does not hold "open_recent:/tmp/nix-shell.HA9znD/wolf-gnome-smoke-2579118-1785817109092969527/orzulu"; it holds [].`, then `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 34 filtered out; finished in 7.98s`. Isolated: the panic is at assertion 4, so assertion 3 was green — Neovim did chdir and only the MRU write is gone. Restored, green. |
-/// | 5 | OCR contains [`OPENRECENT_OCR_PRESENT`] | **discriminator** — the FRONT-END settled the re-root and restarted the sidebar traversal at the new root | **REWRITTEN by the file-tree-sidebar-parity unit; see the note below.** In `shell::settle_reroot`, delete the `self.inner.tree.reroot(..)` call from the `Reroot` arm, keeping `set_empty_state` and the `rooted_cwd` write. Neither producer then re-roots the sidebar: `ortango` is absent, and assertions 3 and 4 stay GREEN — the same isolation the old revert had. | RED, and re-measured against the rewritten revert. `open_recent_palette_row_reroots_the_window_under_cage: OCR did not contain "ortango" — the name of ortango.md, which lives inside the target directory and can therefore only be drawn once the tree sidebar re-rooted there.`, then `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 37 filtered out; finished in 8.15s`. Isolated exactly as the old revert was: the panic is at assertion 5, so assertions 3 and 4 were green, and the captured page carries `~/orzulu` in the header bar — the title followed the live cwd — while the sidebar still draws the launch root `project` with `orbase.md` under it. Restored, green. The previous revert's measured red run is quoted in the note below rather than deleted, because it is still true of the build it was run against. |
+/// | 5 | OCR contains [`OPENRECENT_OCR_PRESENT`] | **discriminator** — the FRONT-END settled the re-root and restarted the sidebar traversal at the new root | In `shell::settle_reroot`, delete the `self.inner.tree.reroot(..)` call from the `Reroot` arm, keeping `set_empty_state` and the `rooted_cwd` write — see the note below for why it is this call and not `chdir_to`. Neither producer then re-roots the sidebar: `ortango` is absent, and assertions 3 and 4 stay GREEN. | RED. `open_recent_palette_row_reroots_the_window_under_cage: OCR did not contain "ortango" — the name of ortango.md, which lives inside the target directory and can therefore only be drawn once the tree sidebar re-rooted there.`, then `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 37 filtered out; finished in 8.15s`. Isolated: the panic is at assertion 5, so assertions 3 and 4 were green, and the captured page carries `~/orzulu` in the header bar — the title followed the live cwd — while the sidebar still draws the launch root `project` with `orbase.md` under it. Restored, green. |
 ///
-/// ## Why assertion 5's revert had to be REWRITTEN, and what the old one measured
+/// ## Why assertion 5's revert deletes the `tree.reroot` call
 ///
-/// The recorded revert was: in `shell::on_palette_activation`, replace
-/// `self.chdir_to(path)` with a bare `self.send_input(InputEvent::Chdir { path })`.
-/// It was genuinely measured RED and ISOLATED against the build of the day:
-/// `OCR did not contain "ortango" …`, panicking at assertion 5 with assertions 3 and
-/// 4 both green, the captured page carrying `~/orzulu` in the header bar while the
-/// sidebar still listed `orbase.md`.
-///
-/// The file-tree-sidebar-parity unit INVALIDATED it. `workspace::reroot_decision`'s
-/// `pending == None, live != rooted` arm now re-roots on Neovim's live working
-/// directory whether or not a front-end request was recorded — which is the whole
-/// point of that unit — so removing the pending record leaves this smoke GREEN. A
-/// revert row that no longer reddens is worse than no row at all, because it is a
-/// documented claim that is false; hence the replacement above, which deletes the one
-/// call both producers now share. The old text is kept here rather than deleted
-/// because it remains an accurate record of what was measured, against a build that
-/// no longer exists.
+/// It deletes `tree.reroot(..)` from `settle_reroot`'s `Reroot` arm rather than
+/// replacing `chdir_to` with a bare `InputEvent::Chdir` send, because the bare send
+/// leaves this smoke GREEN: `workspace::reroot_decision`'s `pending == None,
+/// live != rooted` arm re-roots on Neovim's live working directory whichever producer
+/// set the pending flag, so removing the pending record removes nothing observable.
+/// A revert row that does not redden is worse than no row at all — it is a documented
+/// claim that is false. Deleting the one call BOTH producers share is the smallest
+/// edit that removes the behaviour this assertion names.
 ///
 /// Assertion 5 reads the SIDEBAR rather than the header-bar title on purpose. The
 /// title would only prove `AppShell::refresh_title` read the new `live_cwd`, which
@@ -16710,9 +16700,10 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
          chdir), the likely causes in order: (a) the settle point did not run through to \
          `tree_view::reroot`, so the sidebar kept its old root — this is the documented revert for \
          this row, and it leaves assertion 3 green exactly as you see it. Note that a MISSING \
-         pending re-root is no longer a cause: `workspace::reroot_decision` re-roots on Neovim's \
-         live working directory even with no pending request, which is why this row's revert had \
-         to be rewritten; (b) the re-root fired but the sidebar's fresh `FileSearch` had not streamed its \
+         pending re-root is NOT among them: `workspace::reroot_decision` re-roots on Neovim's \
+         live working directory even with no pending request, which is why this row's revert \
+         deletes the `tree.reroot` call both producers share; (b) the re-root fired but the \
+         sidebar's fresh `FileSearch` had not streamed its \
          entries by the time `grim` ran, which is a TIMING problem and is fixed by raising the \
          scenario's two post-activation SETTLEs, never by weakening this assertion; (c) the row \
          rendered and OCR misread it — check the retained PNG before touching anything. Note the \
@@ -17171,11 +17162,11 @@ fn sidebar_toggle_chord_hides_the_file_tree_under_cage() {
 ///    `TreeNode::Dir` whose name is the cwd's basename and whose children are
 ///    `children_of(entries, "")`, auto-expanded once its first non-empty batch
 ///    arrives. Assertion 6 reads that row.
-/// 2. **The re-root on Neovim's OWN working directory.** Before this unit only a
-///    FRONT-END `chdir_to` could move the sidebar (the Open Folder dialog and the
-///    Open Recent palette row, both through `pending_reroot`); a directory change
-///    typed into Neovim moved the title and nothing else. Assertion 4 reads the
-///    re-rooted listing.
+/// 2. **The re-root on Neovim's OWN working directory.** A directory change typed
+///    into Neovim re-roots the sidebar with no front-end `chdir_to` and no
+///    `pending_reroot` record behind it: `workspace::reroot_decision`'s
+///    `pending == None, live != rooted` arm acts on Neovim's live working
+///    directory alone. Assertion 4 reads the re-rooted listing.
 ///
 /// It is the only cage coverage of either.
 /// [`open_recent_palette_row_reroots_the_window_under_cage`] drives the OTHER
@@ -17221,7 +17212,7 @@ fn sidebar_toggle_chord_hides_the_file_tree_under_cage() {
 /// | 3 | the `getcwd()` readback canonicalizes to [`CD_ROOT_DIR`] | **precondition** — the typed `:cd` reached Neovim at all. It is NOT a discriminator: no front-end revert can break it, because nothing in `wolf-gnome` sits between `wtype` and Neovim's own `:cd`. | none; **do not invent one** | n/a |
 /// | 4 | OCR contains [`CD_OCR_ROOTED`] | **discriminator, the re-root row** | in `shell::settle_reroot`, add `if self.inner.pending_reroot.borrow().is_none() { return; }` at the top — restoring "only a front-end chdir re-roots". Assertion 3 stays green; the sidebar goes on listing `startdir`'s files and `cdtango` never reaches the page. | RED. `typed_cd_reroots_the_sidebar_under_cage: OCR did not contain "cdtango" — the name of cdtango.md, which exists ONLY inside the directory the `:cd` moved to and is therefore drawable only as a child row under a re-rooted, EXPANDED synthetic root.`, then `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 37 filtered out; finished in 7.63s`. Assertion 3 was green, so the attribution held. NOT ISOLATED, as the section below predicts: the OCR dump read `v startdir` over the launch cwd's own files with `cdrootzulu` ALSO absent, i.e. cause (a) by the message's own discriminator — so assertion 6 was never evaluated under this revert. What makes the two rows independently falsifiable is the other direction, measured in row 6. |
 /// | 5 | OCR does **not** contain [`CD_OCR_UNABBREVIATED`] | **precondition guard for assertion 6**, asserted BEFORE it deliberately: a title that failed to abbreviate draws the whole path, which contains both this term and [`CD_OCR_ROOT_NODE`], and would satisfy assertion 6 spuriously | none of ours; it fires only if `title::display_title` or `workspace::home_dir` regressed | n/a |
-/// | 6 | OCR contains [`CD_OCR_ROOT_NODE`] | **discriminator, the synthetic-root row** | in `tree_view`'s root-store rebuild, append `tree::children_of(&entries, "")` instead of the single `root_node(..)` (the pre-unit body). Assertion 4 stays GREEN — the children still render, just at top level — but no row bears the cwd basename. Isolated. | RED, and ISOLATED as claimed. `typed_cd_reroots_the_sidebar_under_cage: OCR did not contain "cdrootzulu" — the basename of the working directory, which the sidebar's SYNTHETIC ROOT ROW must draw.`, then `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 37 filtered out; finished in 7.66s`. The panic is at assertion 6, so assertions 3, 4 and 5 were all green, and the captured OCR carries `cdtango.md` — the re-rooted listing rendered, at top level, with no row bearing the cwd basename. Restored, green. |
+/// | 6 | OCR contains [`CD_OCR_ROOT_NODE`] | **discriminator, the synthetic-root row** | in `tree_view`'s root-store rebuild, append `tree::children_of(&entries, "")` instead of the single `root_node(..)`. Assertion 4 stays GREEN — the children still render, just at top level — but no row bears the cwd basename. Isolated. | RED, and ISOLATED as claimed. `typed_cd_reroots_the_sidebar_under_cage: OCR did not contain "cdrootzulu" — the basename of the working directory, which the sidebar's SYNTHETIC ROOT ROW must draw.`, then `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 37 filtered out; finished in 7.66s`. The panic is at assertion 6, so assertions 3, 4 and 5 were all green, and the captured OCR carries `cdtango.md` — the re-rooted listing rendered, at top level, with no row bearing the cwd basename. Restored, green. |
 ///
 /// ## What the two reverts isolate, stated honestly
 ///
@@ -17521,10 +17512,10 @@ fn typed_cd_reroots_the_sidebar_under_cage() {
     // the only remaining source.
     //
     // REVERT (the coder runs this in step 7): in `tree_view`'s root-store rebuild,
-    // append `tree::children_of(&entries, "")` instead of the single `root_node(..)`
-    // — the pre-unit body. Assertion 4 stays GREEN, because the children still render,
-    // just at top level; only this row goes red. That is the isolation that makes rows
-    // 1 and 2 separately falsifiable despite sharing one scenario.
+    // append `tree::children_of(&entries, "")` instead of the single `root_node(..)`.
+    // Assertion 4 stays GREEN, because the children still render, just at top level;
+    // only this row goes red. That is the isolation that makes rows 1 and 2 separately
+    // falsifiable despite sharing one scenario.
     assert!(
         ocr_text.contains(CD_OCR_ROOT_NODE),
         "{SMOKE}: OCR did not contain {CD_OCR_ROOT_NODE:?} — the basename of the working \

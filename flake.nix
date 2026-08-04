@@ -190,7 +190,7 @@
             pkgs.freetype
             pkgs.dejavu_fonts
 
-            # GATE-REQUIRED: the thirty-three headless end-to-end smoke tests in
+            # GATE-REQUIRED: the thirty-four headless end-to-end smoke tests in
             # crates/wolf-gnome/tests/smoke_headless.rs run as part of a plain
             # `cargo test` (no `--ignored`). They launch the real window under a
             # headless Wayland compositor and OCR a screenshot, so these five

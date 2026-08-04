@@ -194,7 +194,7 @@ Purpose: crate root. Declares the modules and re-exports the display-free seams 
 
 - `cell_at` is re-exported because `grid_size_for` is, and the two are a pair whose composition is the point.
 - `restart_button_rect` is re-exported for one concrete consumer: the crash-overlay smoke derives the pixel it clicks from the same function the widget builder realizes, so the two cannot drift.
-- Items in `actions`, `buffer_picker`, `crash_overlay`, `cursor`, `layout`, `mouse`, `nav_ui`, `palette`, `pane_layout`, `pane_view`, `persistence`, `picker`, `search_overlay`, `shell`, `tree`, and `tree_view` are reached by module path rather than re-exported.
+- Items in `actions`, `buffer_picker`, `crash_overlay`, `cursor`, `layout`, `mouse`, `nav_ui`, `palette`, `pane_layout`, `pane_view`, `persistence`, `picker`, `refresh_coalescer`, `search_overlay`, `shell`, `tree`, `tree_gate`, and `tree_view` are reached by module path rather than re-exported.
 
 #### `liveness_ui.rs`
 
@@ -269,7 +269,7 @@ Purpose: the command-palette overlay — the registry commands this front-end pe
 **Decisions**
 
 - An Open Recent row carries a directory and no window target, and [`shell.rs`](#shellrs)'s `on_palette_activation` is the one place that directory becomes a window action.
-- `open_recent_candidates` refuses the window's own working directory, because this front-end has one window and re-rooting it where it already is changes nothing; a relative path, which `chdir_to` would canonicalize against the application process's working directory rather than Neovim's; and a path `is_dir` rejects, because a failed `:tcd` is only a `tracing::warn!` in core, so the shell's pending re-root never settles. The shared store is never pruned, so a temporarily unmounted path returns.
+- `open_recent_candidates` refuses the window's own working directory, because this front-end has one window and re-rooting it where it already is changes nothing; a relative path, which `chdir_to` would canonicalize against the application process's working directory rather than Neovim's; and a path `is_dir` rejects, because a failed `:tcd` is only a `tracing::warn!` in core, so Neovim reports no directory change and the row does nothing at all. The shared store is never pruned, so a temporarily unmounted path returns.
 - The label is `PaletteRow::display` unchanged, so the string ranked against the query and the string on screen are one. [`title.rs`](#titlers)'s home abbreviation is not applied here: it would rank one string and show another, and a query matching the visible `~` would return nothing.
 - Ranking runs unbounded and `max` applies after the classification filter, since `rank_palette` truncates first and undispatched rows would otherwise eat the budget.
 - Activation records, closes, then dispatches: a dispatched Close Window tears the window down synchronously.
@@ -357,6 +357,26 @@ Purpose: the file-picker overlay — a search entry over a ranked results list. 
 - Closing drops the `FileSearch`, which cancels the background traversal.
 - `next_selection`, `restored_index` and `activation_index` are `pub(crate)` and shared with [`palette.rs`](#paletters), [`buffer_picker.rs`](#buffer_pickerrs) and [`search_overlay.rs`](#search_overlayrs), so all four overlays navigate and activate identically. They stay here because the macOS `PickerSeam` port names this file as its counterpart.
 
+#### `refresh_coalescer.rs`
+
+Purpose: the pure, GTK-free state machine behind the sidebar's trailing refresh — a burst of streaming traversal batches collapsed into one rebuild per `REFRESH_INTERVAL`. A port of the macOS `PickerRefreshCoalescer`.
+
+**Public API**
+
+- `RefreshCoalescer::request() -> Option<u64>` — `Some(generation)` when the caller must arm a one-shot `glib` timeout carrying that generation, `None` when the request coalesced into an armed one.
+- `fire(generation) -> bool` — whether that timeout performs its refresh. `cancel()` disarms.
+- `REFRESH_INTERVAL` — the one site in this crate where the trailing delay lives.
+
+**Decisions**
+
+- `fire` clears the armed flag before answering, so a batch arriving during a refresh arms a fresh fire rather than coalescing into one that has already performed. That is what puts a traversal's final batch inside some later fire, and why the mechanism is a trailing timer rather than a frame budget, which would drop a wake with nothing armed.
+- `cancel` bumps a generation token instead of removing the GLib source, because removing an already-fired source is a GLib warning; the queued closure still runs and performs nothing. The same pattern as [`crash_overlay.rs`](#crash_overlayrs)'s banner.
+- **The picker deliberately does not share it**, unlike macOS, where one coalescer serves both the picker and the file tree. Widening the rule would put the two picker smokes at risk for nothing this crate needs.
+
+**Gotchas**
+
+- The interval's value is asserted nowhere — a constant compared against its own literal states nothing. What the tests pin is the mechanism.
+
 #### `render.rs`
 
 Purpose: the Cairo/Pango paint seam. `paint` rasterizes one grid and its highlight table onto any Cairo context — an offscreen `ImageSurface` in tests, a drawing area's context in production.
@@ -401,7 +421,7 @@ Purpose: the project-search overlay — a `Ctrl+Shift+F` entry over a flat, stre
 
 #### `shell.rs`
 
-Purpose: the glue for the action namespace — `gio` actions, the primary menu, the chord controller, the empty state, the command drain, and crash-recovery orchestration. A drained command and a palette command row funnel through one dispatch.
+Purpose: the glue for the action namespace — `gio` actions, the primary menu, the chord controller, the empty state, the command drain, and crash-recovery orchestration.
 
 **Public API**
 
@@ -411,11 +431,10 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 
 **Decisions**
 
-- The chord controller matches keys itself rather than through GTK's own matching, which is keymap-aware and does not fire under the smokes' keystroke injector. Accelerators are registered only so the menu renders their labels.
+- The chord controller matches keys itself, not through GTK's keymap-aware matching, which does not fire under the smokes' keystroke injector. Accelerators are registered only so the menu renders their labels.
 - The controller lives on the window, so it runs ahead of any overlay's and needs no open-overlay guard: no overlay's keys are bound chords.
-- Overlay side effects fire only on a real mode transition, and the focus sample precedes the hide, per the ordering rule in [DECISIONS.md](../DECISIONS.md).
-- `on_palette_activation` re-roots this window through `chdir_to`, the same call the native Open Folder dialog makes, so the two settle through one pending re-root and cannot diverge.
-- Neither producer re-roots the sidebar synchronously: the file search resolves its root from the live cwd, which updates only after Neovim reports it.
+- Overlay side effects fire only on a real mode transition, and the focus sample precedes the hide, per [DECISIONS.md](../DECISIONS.md).
+- One settle point moves the sidebar's root, over [`workspace.rs`](#workspacers)'s `reroot_decision`, so a front-end `chdir_to` and a typed `:cd` cannot diverge. Neither front-end producer re-roots synchronously: the search resolves its root from the live cwd, which updates only after Neovim reports it.
 - The nav-button refresh caches nothing, unlike the title refresh: `set_sensitive` early-returns on an unchanged value.
 - One private applier is the only caller of `sidebar.set_visible`, over [`state_seam.rs`](#state_seamrs)'s `sidebar_is_shown`, or the next `set_empty_state(false)` would undo a user toggle.
 
@@ -457,45 +476,57 @@ Purpose: the pure window-title seam — the working directory, rendered, with th
 
 Purpose: a re-export shim over `wolf_core::tree`. The hierarchical projection of the flat file list and its tests live in the core as one source of truth shared by every front-end; this module keeps the `crate::tree::…` paths resolving for the GTK glue.
 
-#### `tree_view.rs`
+#### `tree_gate.rs`
 
-Purpose: the GTK glue for the file-tree sidebar — a `gtk::ListView` over a `gtk::TreeListModel`, fed by a long-lived `FileSearch` and tracking the file being edited.
+Purpose: the pure, GTK-free gate every sidebar refresh passes — visibility first, snapshot version second. A port of the macOS `TreeRefreshGate`.
 
 **Public API**
 
-- `build(core, area, start) -> TreeHandle` — `area` is the focus-return widget. `start` is false in the empty state, where no project is open and nothing is walked.
-- `widget()` — the scrolled window, placed as the app's `Paned` start child.
-- `on_render_wake()` — reveals and highlights the current file when it changes.
-- `reroot()` — restarts the traversal after a front-end directory change has settled; `close()` drops the search, cancelling the traversal.
+- `TreeRefreshGate::new(visible)`, `request_refresh() -> bool`, `set_visible(visible) -> bool`, `should_rebuild(version) -> bool`, `reset_version_tracking()`.
+- A refresh requested while hidden is refused and recorded as owed; `set_visible` answers `true` for the one catch-up that owes, and `false` on every other transition.
 
 **Decisions**
 
-- Nodes are wrapped in `glib::BoxedAnyObject` rather than a custom GObject subclass.
-- Directory children materialize lazily against the latest shared entries, so a directory expanded mid-traversal shows whatever has streamed in by then.
-- The selection model disables autoselect, so row 0 is not highlighted at startup and a selection appears only when a reveal lands.
-- A reveal that cannot resolve stays pending and retries on each refresh, because the current file often arrives before the traversal has reached it.
-- Row positions are re-scanned after each ancestor expansion, since expanding a row shifts every later position.
+- The version half is what stops a current-file change collapsing manual expansion: rebuilding the root store destroys each row's `TreeListRow` along with its expanded state, and a current-file change advances no version.
+- `reset_version_tracking` exists because `wolf_core::files::FileSearchState` numbers versions per `FileSearch` rather than globally. A search started by a re-root begins again at 1, so a gate that kept its tracking would answer "no rebuild" to the new project's first batch and leave the departed project's files on screen.
 
 **Gotchas**
 
-- Each refresh rebuilds the root store, collapsing manual expansion; the reveal re-expands only the path to the current file.
+- Hiding the sidebar destroys no store, so a catch-up at an unchanged version correctly rebuilds nothing. The deferral is for a version that advanced while nobody could see it.
+
+#### `tree_view.rs`
+
+Purpose: the GTK glue for the file-tree sidebar — a `gtk::ListView` over a `gtk::TreeListModel`.
+
+**Public API**
+
+- `build(core, area, start, root_label) -> TreeHandle` — `area` is the focus-return widget; `start` is false in the empty state, where nothing is walked.
+- `widget()`, `on_render_wake()`, `close()`, `set_sidebar_visible(shown)` and `reroot(root_label)`, the last two relayed from [`shell.rs`](#shellrs)'s one visibility site and one settle point; this module reads no cwd.
+
+**Decisions**
+
+- The root store holds one item: a synthetic `Dir` named after the working directory whose rel-path is the empty cwd sentinel, so the create-func needs no special case. `remove_all` destroys its expanded state, so it is re-expanded after every rebuild and before a reveal walks ancestors.
+- Children materialize lazily through `wolf_core::tree::TreeIndexCache` under rule R1, on `children_for`: the memo and the entries are borrowed inside one statement touching no widget, because GTK re-enters the create-func and a borrow held across `set_expanded` or `set_list_row` is a panic.
+- Only a traversal batch is coalesced ([`refresh_coalescer.rs`](#refresh_coalescerrs)); every other refresh is immediate, and all pass both gates in [`tree_gate.rs`](#tree_gaters). A pending reveal retries even when the rebuild is skipped.
+- The current-file bold moves through a registry of bound labels, which is what the version gate costs: a suppressed rebuild re-binds no row.
+
+**Gotchas**
+
+- Manual expansion below the root does not survive a version advance: every streaming batch and every re-root rebuilds the root store. Preserving it means owning each expanded directory's `gio::ListStore` and diffing into it per snapshot; GTK has no identity-keyed reload.
 
 #### `workspace.rs`
 
-Purpose: the pure workspace decision — is a project open, where does Neovim start, and when has a pending re-root settled.
+Purpose: the pure workspace decisions — is a project open, where does Neovim start, and where is the sidebar rooted.
 
 **Public API**
 
-- `launch_decision(process_cwd, restored, home, is_dir) -> LaunchDecision` — `Folder` or `EmptyState`, the latter carrying the directory Neovim is started in.
-- `reroot_ready(pending, live) -> bool` and `home_dir()`.
+- `launch_decision(process_cwd, restored, home, is_dir) -> LaunchDecision` — `Folder`, or `EmptyState` carrying the directory Neovim starts in.
+- `reroot_decision(pending, live, rooted) -> RerootAction` — stay, discard a satisfied request, or re-root where Neovim is; `root_label(cwd)` is the root row's text.
+- `reroot_ready(pending, live) -> bool` and `home_dir()`, the one environment read here, which the shell captures once at build time.
 
 **Decisions**
 
-- Two candidates are offered and the first that satisfies one shared predicate wins: it is a directory, it is not home, and it is not the root. The order is the rule: the process cwd comes first because a terminal launch from a project is the Linux idiom, and the restored cwd comes second, so it gets its turn exactly when a launcher start yields home or the root — which is precisely "no project".
-- Applying that same predicate to the restored cwd is deliberate. A hand-edited state file naming the root would otherwise point the sidebar's file search at the whole filesystem, and home at the whole home tree — the pathological case core's search bounds exist to prune.
-- `is_dir` is an injected predicate rather than a filesystem call, which is what makes the rule testable with no temp directories and no real home.
-- `reroot_ready` is a plain equality, so a trailing separator is already ignored while `..` and symlinks are not. Callers canonicalize both sides first.
-
-**Gotchas**
-
-- `home_dir` is the one environment read in this crate, and the shell captures its result once at build time rather than re-reading per frame.
+- Two candidates are offered and the first to satisfy one shared predicate wins: a directory, not home, not the root. The process cwd comes first, because a terminal launch from a project is the Linux idiom; the restored cwd takes its turn when a launcher start yields home or the root. The same predicate on the restored cwd stops a hand-edited state file aiming the file search at the whole filesystem.
+- A re-root's authority is `rooted`, where the sidebar sits, against the cwd Neovim reports; a request decides only whether its own flag is discarded. So a typed `:cd` moves the sidebar with no request, and one `chdir` is exactly one re-root.
+- No project predicate guards a re-root: a typed `:cd /` is an explicit act, not the launch-time guess `is_usable_project` judges, with core's search bounds as the backstop.
+- Comparisons are plain equality, so callers canonicalize both sides: a trailing separator is ignored, `..` and symlinks are not.

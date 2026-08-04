@@ -1349,9 +1349,9 @@ impl AppShell {
     ///
     /// A failed `:tcd` leaves the pending re-root set until the next successful
     /// chdir — `wolf_core::input` degrades a failed apply to a `tracing::warn!`, so
-    /// Neovim never reports `DirChanged` — and that is now inert rather than
-    /// blocking: [`workspace::reroot_decision`] roots at the LIVE cwd regardless, and
-    /// discards the stale request the moment nvim ever reports that directory.
+    /// Neovim never reports `DirChanged`. That stranded flag blocks nothing:
+    /// [`workspace::reroot_decision`] roots at the LIVE cwd regardless of it, and
+    /// discards it the moment nvim ever reports that directory.
     fn chdir_to(&self, path: PathBuf) {
         let path = std::fs::canonicalize(&path).unwrap_or(path);
         self.send_input(InputEvent::Chdir { path: path.clone() });

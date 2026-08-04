@@ -72,9 +72,10 @@
 //!
 //! The bold is moved by a REGISTRY rather than by a rebuild, and that is what the
 //! version gate costs. `connect_bind` records each file row's label under its
-//! rel-path and `connect_unbind` drops it, so a current-file change can toggle the
-//! class on exactly two labels. Before the gate the bold was correct only because
-//! every refresh destroyed and re-bound every row.
+//! rel-path and `connect_unbind` drops it, so a current-file change toggles the class
+//! on exactly two labels. The registry is load-bearing precisely because the gate
+//! suppresses the rebuild: a current-file change advances no version, so it re-binds
+//! no row, and nothing else would move the bold.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -326,8 +327,9 @@ impl TreeInner {
         *self.pending_reveal.borrow_mut() = current.clone();
         *self.current_abs.borrow_mut() = current.clone();
 
-        // The version gate suppresses the rebuild that used to re-bind every row,
-        // so the highlight has to be moved explicitly.
+        // A current-file change advances no snapshot version, so the gate suppresses
+        // the rebuild and no row is re-bound: the highlight has to be moved
+        // explicitly.
         let (old_rel, new_rel) = {
             let entries = self.entries.borrow();
             (
@@ -488,7 +490,20 @@ impl TreeInner {
         // Drop the old search next, so its in-flight traversal (at the old root)
         // is cancelled before the new one starts.
         let _ = self.search.borrow_mut().take();
+
+        // The three that move TOGETHER, before any GTK call. `entries`, the memo and
+        // `entries_version` are one triple: `refresh` states the invariant that the
+        // shared entries and the version the memo keys on advance together, and every
+        // instant between these statements and the next GTK call is an instant a
+        // re-entrant create-func could answer a query. Clearing `entries` while the
+        // memo still holds the PREVIOUS project's index at the old version would
+        // answer that query out of the wrong index. A fresh `FileSearch` restarts
+        // `version` at 1, so a version-keyed memo is only ever valid within one
+        // search session.
         self.entries.borrow_mut().clear();
+        *self.memo.borrow_mut() = TreeIndexCache::new();
+        self.entries_version.set(0);
+
         self.root_store.remove_all();
         self.bound_labels.borrow_mut().clear();
         *self.pending_reveal.borrow_mut() = None;
@@ -496,12 +511,10 @@ impl TreeInner {
         // root rather than treating it as unchanged.
         *self.last_current.borrow_mut() = None;
         *self.root_label.borrow_mut() = root_label.to_string();
-        // A fresh `FileSearch` restarts `version` at 1, so BOTH version-keyed things
-        // — the memo and the gate's tracking — are only valid within one search
-        // session. Keeping either across a re-root serves the previous project.
-        *self.memo.borrow_mut() = TreeIndexCache::new();
+        // The gate's version tracking is the memo's counterpart and is reset for the
+        // same reason: version 1 of the new search shares nothing but its number with
+        // version 1 of the old one.
         self.gate.borrow_mut().reset_version_tracking();
-        self.entries_version.set(0);
         self.start_search();
         self.refresh();
     }
@@ -706,6 +719,14 @@ fn build_factory(
         let Some(list_item) = list_item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
+        // Resolved exactly as `connect_bind` resolves it, because the removal below
+        // is an IDENTITY test against this widget and not against the rel-path.
+        let Some(expander) = list_item.child().and_downcast::<gtk::TreeExpander>() else {
+            return;
+        };
+        let Some(label) = expander.child().and_downcast::<gtk::Label>() else {
+            return;
+        };
         let Some(row) = list_item.item().and_downcast::<gtk::TreeListRow>() else {
             return;
         };
@@ -719,7 +740,23 @@ fn build_factory(
                 TreeNode::Dir { .. } => None,
             }
         };
-        if let Some(rel_path) = rel_path {
+        let Some(rel_path) = rel_path else {
+            return;
+        };
+        // **Remove only our own registration.** GTK does not order bind and unbind
+        // across recycled widgets: collapsing a directory shifts rows UP, so the same
+        // file is BOUND onto the surviving list item before the surplus one is
+        // unbound, and both carry that file's rel_path. A blind `remove(&rel_path)`
+        // would delete the live registration the bind just made, leaving that row
+        // bold with no way to clear it — two bold rows until the next version
+        // advance. `gtk::Label`'s `PartialEq` is a glib pointer comparison, so this
+        // asks the only question that distinguishes them: is the mapped label THIS
+        // widget?
+        //
+        // Rule R1: the borrow lives in its own statement, and the removal below takes
+        // a fresh one, so neither is held across a widget call.
+        let is_ours = unbind_labels.borrow().get(&rel_path) == Some(&label);
+        if is_ours {
             unbind_labels.borrow_mut().remove(&rel_path);
         }
     });

@@ -75,8 +75,8 @@ GTK paints a single-row bottom strip: an active command line, or the last toast 
 | Per-directory MRU cache                     | `feat/mac-file-picker` (`31251f4`)                                           | [x]   | [x]   |
 | MRU cache relocated to the state directory  | `feat/nav-buttons` (`cceca62`)                                               | [x]   | [x]   |
 | File-tree sidebar                           | `feat/wolf-core-initial-implementation` (`c9ee895`) / `feat/mac-file-tree`   | [x]   | [x]   |
-| Sidebar synthetic cwd root node             | `feat/mac-file-tree`                                                         | [x]   | [ ]   |
-| Sidebar re-roots on Neovim's live cwd       | `feat/macos-ui` (`075c91f`)                                                  | [x]   | [ ]   |
+| Sidebar synthetic cwd root node             | `feat/mac-file-tree` / `linux-feat/sidebar`                                  | [x]   | [x]   |
+| Sidebar re-roots on Neovim's live cwd       | `feat/macos-ui` (`075c91f`) / `linux-feat/sidebar`                           | [x]   | [x]   |
 | Sidebar in the leading position             | `feat/sidebar-ui` (`ebc7300`)                                                | [x]   | [x]   |
 | Pickers hosted in a separate floating panel | `feat/markdown-preview` (`d763b3b`)                                          | [x]   | [ ]   |
 | Buffer picker (⌘E)                          | `feat/buffer-list` / `linux-feat/buffer-picker`                              | [x]   | [x]   |
@@ -90,7 +90,9 @@ Both front-ends surface the per-pane navigation history as two toolbar buttons a
 
 The GTK command palette lists the registry commands `wolf-gnome` performs plus one Open Recent row per usable recent directory, each of which re-roots the window through the same path the Open Folder dialog takes; there are no Switch-to-Window rows, since `wolf-gnome` has one window.
 
-Two rows stay unticked for partial coverage. The file-dialog row covers all three dialogs, and `wolf-gnome` has native Open File and Open Folder but no save or save-as, so saving remains `:w` from within Neovim. The sidebar re-roots on a front-end directory change — the Open Folder dialog or an Open Recent palette row — but not on a user-typed `:cd`.
+One row stays unticked for partial coverage: the file-dialog row covers all three dialogs, and `wolf-gnome` has native Open File and Open Folder but no save or save-as, so saving remains `:w` from within Neovim.
+
+The GTK sidebar re-roots from one settle point, on the working directory Neovim reports, so a `:cd` typed into Neovim moves it exactly as the Open Folder dialog and an Open Recent row do, and none of the three can move it twice.
 
 ## Windows, tabs, commands
 
@@ -170,22 +172,24 @@ The drawer is an `init.lua` helper driven by `InputEvent::ToggleTerminal`. `Comm
 
 ## Reliability and performance
 
-| Feature                                              | Branch or commit                                  | macOS | Linux |
-| ---------------------------------------------------- | ------------------------------------------------- | ----- | ----- |
-| Crash/stall detection (three-state liveness)         | `feat/neovim-crash-handling`                      | [x]   | [x]   |
-| Crash/stall overlay + "Restart Neovim" button        | `feat/neovim-crash-handling`                      | [x]   | [x]   |
-| In-place Neovim restart with open-file restore       | `feat/neovim-crash-handling`                      | [x]   | [x]   |
-| Swap-file recovery of unsaved edits                  | `feat/neovim-crash-handling`                      | [x]   | [x]   |
-| Auto-reload of externally changed files              | `feat/auto-refresh`                               | [x]   | [x]   |
-| Sporadic hang / beach-ball fixes                     | `fix/sporadic-crash`                              | [x]   | [x]   |
-| Large-repo traversal performance (core `TreeIndex`)  | `feat/commands` (`e31f521`, `e0d3933`)            | [x]   | [x]   |
-| Large-repo sidebar performance (memo + refresh gate) | `feat/commands` (`e0d3933`)                       | [x]   | [ ]   |
-| Streaming-refresh coalescing (~30 fps)               | `feat/commands`                                   | [x]   | [ ]   |
-| Sidebar full-tree load fix                           | `c649491`                                         | [x]   | [ ]   |
-| Typing-latency instrumentation + draw fixes          | `feat/slow-typing-latency`                        | [x]   | [ ]   |
-| Optimized release build target                       | `feat/slow-typing-latency` (`8ba033c`, `296954c`) | [x]   | [ ]   |
+| Feature                                              | Branch or commit                                   | macOS | Linux |
+| ---------------------------------------------------- | -------------------------------------------------- | ----- | ----- |
+| Crash/stall detection (three-state liveness)         | `feat/neovim-crash-handling`                       | [x]   | [x]   |
+| Crash/stall overlay + "Restart Neovim" button        | `feat/neovim-crash-handling`                       | [x]   | [x]   |
+| In-place Neovim restart with open-file restore       | `feat/neovim-crash-handling`                       | [x]   | [x]   |
+| Swap-file recovery of unsaved edits                  | `feat/neovim-crash-handling`                       | [x]   | [x]   |
+| Auto-reload of externally changed files              | `feat/auto-refresh`                                | [x]   | [x]   |
+| Sporadic hang / beach-ball fixes                     | `fix/sporadic-crash`                               | [x]   | [x]   |
+| Large-repo traversal performance (core `TreeIndex`)  | `feat/commands` (`e31f521`, `e0d3933`)             | [x]   | [x]   |
+| Large-repo sidebar performance (memo + refresh gate) | `feat/commands` (`e0d3933`) / `linux-feat/sidebar` | [x]   | [x]   |
+| Streaming-refresh coalescing (~30 fps)               | `feat/commands` / `linux-feat/sidebar`             | [x]   | [x]   |
+| Sidebar full-tree load fix                           | `c649491` / `linux-feat/sidebar`                   | [x]   | [x]   |
+| Typing-latency instrumentation + draw fixes          | `feat/slow-typing-latency`                         | [x]   | [ ]   |
+| Optimized release build target                       | `feat/slow-typing-latency` (`8ba033c`, `296954c`)  | [x]   | [ ]   |
 
 Liveness, swap recovery, auto-reload and the hang fixes live in `wolf-core` or `init.lua`, so they reach Linux without front-end work. The GTK side reads `liveness()` at the top of every wake and drives `restart_nvim()`: a dead captive Neovim raises a full-bleed opaque overlay with a "Restart Neovim" button, one automatic in-place restart is attempted, and on success the pane view resets, the captured Tier-1 files reopen with the active one last, and a transient banner reports the restart.
+
+The sidebar full-tree load row records a guarantee rather than a repair: the macOS defect was per-view wake routing, which a single-window front-end structurally cannot have, so what the Linux box states is that the sidebar's trailing refresh cannot drop a traversal's final batch.
 
 Two limits are worth stating. The pane topology does not survive a restart — only the Tier-1 file set does, so a crash while the window was split returns one pane. macOS restores no more than that, so it is a shared limit rather than a Linux gap.
 
