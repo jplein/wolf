@@ -11,7 +11,7 @@
 //!
 //! ## What this file contains
 //!
-//! **Thirty-five cage smokes** — one window-render smoke, two file-picker smokes,
+//! **Thirty-six cage smokes** — one window-render smoke, two file-picker smokes,
 //! one file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
 //! new-untitled-buffer smoke, one command-palette smoke, one OPEN RECENT smoke
 //! (Ctrl+Shift+P, a typed folder query, then Enter — the activated row re-roots the
@@ -43,7 +43,12 @@
 //! relative `:cd ..` re-rooting the whole window on Neovim's OWN working directory,
 //! which the captive Neovim's `getcwd()` readback plus two ordered OCR
 //! discriminators — a file that exists only in the new root, and the synthetic root
-//! row bearing the new cwd's basename — are what prove), four
+//! row bearing the new cwd's basename — are what prove), one keyboard-only PER-PANE
+//! STATUSBAR smoke (a vertical split with a different file open in each pane, whose
+//! two strips must draw two DIFFERENT filenames — the crossed pair is what makes that
+//! more than "a filename is on screen" — plus the captive Neovim's own
+//! `winheight(0)` readback, which is the only end-to-end number the editor inset and
+//! the strip's height reach), four
 //! STATE-PERSISTENCE smokes (a
 //! three-pane layout, a lone open file, and a dragged divider's WEIGHTS each
 //! surviving a quit-and-relaunch, plus the window title rendering the working
@@ -69,7 +74,7 @@
 //! and no `:e` toast can satisfy, and OCR is structurally incapable of answering
 //! "did the cursor land at exactly row 12, column 25".
 //!
-//! Twenty-nine of the thirty-five OCR a screenshot of the live window. The `:qa`
+//! Thirty of the thirty-six OCR a screenshot of the live window. The `:qa`
 //! smoke and the configured-font-size smoke deliberately capture no image and
 //! assert on the cage exit status plus, for the second, two integer readbacks (the
 //! app must be GONE, and gone with a ZERO exit status — a panic in the GTK main
@@ -101,15 +106,18 @@
 //!   name rule cannot reach the hazard at all: it checks the content of
 //!   [`divider_right_fixture_body`] and [`search_target_fixture_body`], the second
 //!   down to the match's line index and its byte offset, which the project-search
-//!   smoke's line and column assertions are derived from. It also pins FIVE crossed
+//!   smoke's line and column assertions are derived from. It also pins SIX crossed
 //!   pairs of OCR preconditions — the window-title smoke's deliberate exemption, the
 //!   project-search smoke's target-versus-starting headings, the Open Recent
 //!   smoke's target FILE versus target DIRECTORY, where the header bar draws the
 //!   directory on every capture, the sidebar-toggle smoke's tree-row subject
 //!   versus its proof-of-life heading, which must come from opposite halves of the
-//!   window or hiding one would remove the other, and the typed-`:cd` smoke's three
+//!   window or hiding one would remove the other, the typed-`:cd` smoke's three
 //!   fixed DIRECTORY components, whose crossing is what stops a header-bar title that
-//!   failed to abbreviate standing in for the synthetic root row.
+//!   failed to abbreviate standing in for the synthetic root row, and the per-pane
+//!   statusbar smoke's two FILENAMES, the only pair whose halves are both
+//!   must-CONTAIN terms — uncrossed, one pane's strip would satisfy both assertions
+//!   and "each pane draws its own file" would go unproven.
 //! * [`cage_is_only_spawned_through_the_isolating_helper`] — `cage` is spawned in
 //!   exactly one place, [`cage_command`], which is the only thing that sets
 //!   `WOLF_STATE_DIR` and so the only thing keeping the smokes off the developer's
@@ -122,7 +130,7 @@
 //! live here, next to the consts and helpers they read, rather than in a file of
 //! their own.
 //!
-//! So this target's summary line reads **`39 passed`**, not `35`: thirty-five cage
+//! So this target's summary line reads **`40 passed`**, not `36`: thirty-six cage
 //! smokes plus those four guards.
 //!
 //! ## A vacuously-passing check recorded here: the `wtype ""` window-map poll
@@ -165,7 +173,7 @@
 //!
 //! ## When it runs
 //!
-//! The thirty-five cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The thirty-six cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The Linux verification gate").
@@ -175,13 +183,13 @@
 //! suite command does not run is a silently-skipped test.
 //!
 //! They are, however, the slowest part of the suite: each drives a real
-//! compositor, and all thirty-five serialize behind `CAGE_LOCK` (see below).
+//! compositor, and all thirty-six serialize behind `CAGE_LOCK` (see below).
 //!
 //! ```text
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the thirty-five cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the thirty-six cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` and
 //!   `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
@@ -198,7 +206,7 @@
 //!   empty result list.
 //! - `XDG_RUNTIME_DIR` set and writable (the Wayland socket lives there).
 //!
-//! Per project policy every one of the thirty-five FAILS LOUD if any of the above is
+//! Per project policy every one of the thirty-six FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -225,7 +233,7 @@ use wolf_gnome::{CellMetrics, WINDOW_TITLE_FALLBACK};
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the thirty-five cage smoke tests. Each launches its own
+/// Serializes the thirty-six cage smoke tests. Each launches its own
 /// `cage` compositor, and two compositors started concurrently contend for the
 /// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
 /// Under the default multi-threaded test harness these tests would otherwise run
@@ -7848,17 +7856,306 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
+// --- Per-pane statusbar fixtures: each pane's strip draws its OWN filename ---
+//
+// The asserted terms here are FILENAMES, which inverts this file's usual fixture
+// rule — and it inverts it for the same reason `tree_sidebar_shows_files_under_cage`,
+// `SIDEBARTOGGLE_FILE`, `OPENRECENT_TARGET_FILE` and `CD_TARGET_FILE` do: the
+// rendered NAME is the observable. A per-pane status bar's whole claim is that the
+// strip above each pane carries THAT pane's file, so there is nothing else to read.
+//
+// That leaves three ways a filename could reach the page without the strip drawing
+// it, and each is closed by construction rather than by hope:
+//
+// 1. **The tree sidebar** renders every cwd entry by name. Closed by putting the two
+//    fixtures OUTSIDE the working directory: `make_temp_cwd` returns
+//    `<unique>/project` and `cage_command` hands `<unique>` to the app as HOME, so a
+//    sibling `<unique>/sbfixtures/` is under home, outside the search root, and never
+//    listed. The scenario opens both by ABSOLUTE path.
+// 2. **The cmdline strip** paints the last toast, and `:e <path>` echoes the path it
+//    opened — which spells the second fixture's name. Closed by driving one more Ex
+//    command before the capture: an `:echo` of `STATUS_OCR_MARKER`, whose text carries
+//    neither filename. Without it, assertion 6 would be satisfiable by the cmdline
+//    with no strip drawn at all.
+// 3. **Neovim's own statusline**, which would draw the filename inside the grid.
+//    `runtime/nvim/init.lua` sets `laststatus = 0`, and that premise is measured
+//    rather than trusted: the readback below asks the CAPTIVE NEOVIM for
+//    `&laststatus`, and assertion 3 pins it at 0.
+//
+// The fixture tree:
+//
+// ```text
+// <unique>/                    the app's HOME (cage_command's default)
+//   project/                   TEMP_CWD_BASENAME -- the launch cwd and search root
+//     fill*.md                 nine fillers, page density
+//   sbfixtures/                STATUS_FIXTURE_DIR -- outside the search root
+//     statusalfa.md            STATUS_FILE_A, opened in the FIRST pane
+//     statusbravo.md           STATUS_FILE_B, opened in the SPLIT pane
+//   status_winheight.txt       STATUS_READBACK_NAME -- outside the search root too
+// ```
+
+/// Per-pane statusbar smoke: the directory holding the two opened fixtures, a
+/// SIBLING of the temp cwd and a child of the app's `HOME`.
+///
+/// It must carry none of the three asserted terms. It is drawn twice over — the
+/// strip's second line is the display path, and the typed `:e` command line spells
+/// the absolute path — so a directory named after an asserted term would satisfy that
+/// term's assertion from a component the strip's FILENAME line never drew. The
+/// seventh block of [`restore_fixture_names_cannot_satisfy_their_own_assertions`]
+/// asserts that rather than leaving it to this comment.
+const STATUS_FIXTURE_DIR: &str = "sbfixtures";
+
+/// Per-pane statusbar smoke: the file opened in the FIRST pane.
+///
+/// Its **name** is the asserted term, the same deliberate exception
+/// [`TREE_FILE_NAME`], [`OPENRECENT_TARGET_FILE`], [`SIDEBARTOGGLE_FILE`] and
+/// [`CD_TARGET_FILE`] carry, and the reason this const is absent from
+/// [`RELAUNCH_FIXTURE_NAMES`].
+const STATUS_FILE_A: &str = "statusalfa.md";
+
+/// Per-pane statusbar smoke: the file opened in the SPLIT pane. See
+/// [`STATUS_FILE_A`]; it is absent from [`RELAUNCH_FIXTURE_NAMES`] for the same
+/// reason.
+const STATUS_FILE_B: &str = "statusbravo.md";
+
+/// Body written into BOTH statusbar fixtures.
+///
+/// Deliberately wordless and identical in the two files. These are the only exempt
+/// fixtures in this file whose CONTENT is rendered — the scenario opens both — so a
+/// body carrying either filename would satisfy that file's assertion from the EDITOR
+/// GRID with no strip drawn at all, which is [`PICKER_FILE_NAME`]'s failure reached
+/// through content instead of through a name. The seventh block of
+/// [`restore_fixture_names_cannot_satisfy_their_own_assertions`] checks it against
+/// every asserted term.
+const STATUS_FIXTURE_BODY: &str = "# ZZCHROMEBODY";
+
+/// Lowercased substring OCR MUST find: [`STATUS_FILE_A`]'s name, drawn by the FIRST
+/// pane's status bar and by nothing else on the page.
+///
+/// The file lives outside the search root, so no sidebar row bears it; the cmdline
+/// carries [`STATUS_OCR_MARKER`] by capture time, not an `:e` path; and Neovim draws
+/// no statusline of its own (assertion 3).
+const STATUS_OCR_A: &str = "statusalfa";
+
+/// Lowercased substring OCR MUST find: [`STATUS_FILE_B`]'s name, drawn by the SPLIT
+/// pane's status bar. See [`STATUS_OCR_A`] for why nothing else can draw it.
+const STATUS_OCR_B: &str = "statusbravo";
+
+/// Lowercased substring OCR MUST find: the text the scenario `:echo`s just before
+/// `grim` fires.
+///
+/// It does TWO jobs, and only the first is a feature claim about anything:
+///
+/// * it replaces the `:e $STATUS_FILE_B` toast in the cmdline strip, which would
+///   otherwise put [`STATUS_OCR_B`] on the page with no status bar drawn at all;
+/// * it is this capture's PROOF OF LIFE — the window was still painting when `grim`
+///   ran — which is why assertion 4 is a precondition with no revert.
+const STATUS_OCR_MARKER: &str = "statusready";
+
+/// Name of the file the captive Neovim writes its `winheight(0)` and `&laststatus`
+/// into. It lands beside the temp cwd rather than inside it, outside the search root,
+/// so no sidebar row bears it.
+///
+/// Registered in [`RELAUNCH_FIXTURE_NAMES`] anyway, exactly as
+/// [`CD_READBACK_NAME`] is: its ABSOLUTE path is echoed in the typed
+/// `:call writefile(...)` command line, so a readback renamed to carry an asserted
+/// term would put that term on the page by a route the sidebar rule does not cover.
+const STATUS_READBACK_NAME: &str = "status_winheight.txt";
+
+/// The exact `winheight(0)` the focused pane must report once the chrome is
+/// subtracted — the ONLY end-to-end proof that the editor inset and the statusbar
+/// strip reach a pixel.
+///
+/// `-1` is a deliberate impossible PLACEHOLDER, landed with the smoke and derived
+/// from its first real failure, exactly as [`PANE_ORIGIN_X_EXPECTED`] and
+/// [`PANE_ORIGIN_Y_EXPECTED`] are derived: run the smoke, read the number the
+/// assertion message reports Neovim answered, and paste it here together with the
+/// date and the cage output size it was measured on. Do NOT compute it from the
+/// statusbar constants — a value derived from the constants the production code reads
+/// holds for whatever those constants become, which is the one thing this assertion
+/// exists to rule out.
+///
+/// It is not slack and it has no band: it is an exact equality, because the pointer
+/// smokes' x tolerance (`PANE_ORIGIN_TOLERANCE_PX + cell_w`) is wider than the 20 px
+/// the padding moves the pane origin by, so without an exact row count nothing in
+/// this file could tell the padding apart from no padding.
+const STATUS_EXPECTED_WINHEIGHT: i64 = -1;
+
+/// The PER-PANE STATUSBAR scenario, run as a single `sh -c` string inside `cage` (the
+/// [`VSPLIT_SCENARIO`] shape): launch + poll, settle, `:e` file A by ABSOLUTE path,
+/// settle, `<C-w>v`, settle, `:e` file B in the new pane, settle, park the block
+/// cursor, read `winheight(0)` and `&laststatus` back, `:echo` the marker, settle,
+/// screenshot.
+///
+/// ## Why the paths are absolute
+///
+/// Both fixtures live OUTSIDE the app's search root (see the block comment above), so
+/// the tree sidebar cannot draw either name and the strips are the only source. A
+/// relative `:e` would have to put them back in the cwd, at which point both
+/// assertions are satisfiable by a sidebar row with no strip on screen — the exact
+/// silent pass [`PICKER_FILE_NAME`]'s note records.
+///
+/// ## Why the `:echo` is LAST
+///
+/// The cmdline strip paints the last message, and `:e <path>` echoes the path it
+/// opened. Between the second `:e` and `grim` there must therefore be one more
+/// message, carrying neither filename. Anything typed after it that produces a
+/// message of its own — including the mode message from an insert-mode park — puts
+/// the ordering back at risk, which is why the park and the readback both run BEFORE
+/// it and nothing but a `sleep` runs after.
+///
+/// ## The block-cursor park
+///
+/// The normal-mode `o` plus Escape is this file's standing convention (the inverted
+/// cursor block corrupts the cell it covers). Here it is convention rather than
+/// protection — both asserted terms are STRIP text, which the editor's cursor never
+/// sits on — and it doubles as corroboration that keys still reach Neovim after the
+/// split.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before its window mapped (the shared convention). A LAUNCH
+///   failure; nothing below is about the status bar.
+/// * `14` — the readback never appeared, i.e. the Ex command never executed. DISTINCT
+///   from "the panes are the wrong size", which exits 0 and fails assertion 7.
+const STATUS_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+# How many WAIT_INTERVAL polls to allow for the readback file.
+FILE_TRIES=100
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome statusbar smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw before driving the editor.
+sleep "$SETTLE"
+
+# Poll for a readback file the captive Neovim writes. Nothing downstream may read a
+# file we merely hope is there. (The CD_SCENARIO body, verbatim.)
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome statusbar smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# Open file A in the (single) editor pane, by ABSOLUTE path: it lives outside the
+# app's search root on purpose, so no sidebar row can draw its name.
+wtype -- ":e $STATUS_PATH_A"
+wtype -k Return
+
+# Let nvim load file A and redraw before splitting.
+sleep "$SETTLE"
+
+# Trigger a VERTICAL split with the <C-w>v chord (the VSPLIT_SCENARIO form). The new
+# pane opens to the RIGHT of the current one, takes focus, and initially shows the
+# same buffer (file A) -- which is exactly why file B has to be opened into it below
+# before the two strips can differ.
+wtype -M ctrl -k w -m ctrl
+wtype -k v
+
+# Let the shell build the second pane (bind the new nvim window/grid) and redraw.
+sleep "$SETTLE"
+
+# In the now-focused new (right) pane, replace its buffer with file B.
+wtype -- ":e $STATUS_PATH_B"
+wtype -k Return
+
+# Let nvim load file B and both panes redraw.
+sleep "$SETTLE"
+
+# Park the block cursor off the buffer's first row, as every scenario here does.
+wtype -- o
+wtype -k Escape
+sleep "$SETTLE"
+
+# --- The readback: NEOVIM's own answer about the focused pane ----------------
+#
+# winheight(0) is the row count of the pane the front-end sized, which is the only
+# place the editor inset and the statusbar strip reach a number a test can compare.
+# &laststatus rides along because it is the premise the two OCR assertions rest on:
+# a Neovim drawing its own statusline would put the filename inside the GRID, and
+# both assertions would then hold with no strip painted at all.
+#
+# One printf, so both values describe one instant. The path is absolute and arrives
+# as an env var, so it does not depend on Neovim's cwd -- and it lands outside the
+# search root, so no sidebar row bears its name.
+wtype -- ":call writefile([printf('%d %d', winheight(0), &laststatus)], '$STATUS_READBACK')"
+wtype -k Return
+wait_file "$STATUS_READBACK" || exit 14
+
+# --- The marker, and it MUST be the last thing typed -------------------------
+#
+# The cmdline strip paints the last message. Without this, that message is the
+# `:e $STATUS_PATH_B` toast, which spells file B's name -- so the assertion that the
+# SPLIT pane's strip drew it would be satisfied by the cmdline with no status bar on
+# screen at all. This also doubles as the capture's proof of life.
+wtype -- ":echo '$STATUS_MARKER'"
+wtype -k Return
+
+# Let the redraw land before capturing.
+sleep "$SETTLE"
+
+# Capture the live window to the output PNG.
+grim "$OUT_PNG"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
 /// Creates a fresh, unique temp directory to serve as the launched app's working
 /// directory. The app derives `CoreConfig.cwd` from `std::env::current_dir()`, so
 /// this is the directory the file-search traversal walks and the directory the
 /// captive nvim runs in (the recent-files MRU lives in the global
 /// `state_dir()/file-mru.sqlite`, not under the cwd).
 ///
-/// ALL THIRTY-FOUR cage smokes derive their working directory from this — the window
-/// title smoke uses the result as the base for the two NESTED directories its `~`
-/// abbreviation needs, and the three relaunch smokes share one of these directories
-/// across BOTH of their launches, which is the whole scenario. A fresh cwd per run
-/// is MANDATORY, not tidiness:
+/// ALL THIRTY-SIX cage smokes derive their working directory from this — the window
+/// title smoke and the typed-`:cd` smoke use the result as the base for the NESTED
+/// directories their `~` abbreviation needs, the per-pane statusbar smoke hangs its
+/// fixture directory off the parent, and the three relaunch smokes share one of these
+/// directories across BOTH of their launches, which is the whole scenario. A fresh
+/// cwd per run is MANDATORY, not tidiness:
 ///
 /// * The captive nvim keeps a DURABLE, per-project swap dir keyed on the cwd
 ///   (`wolf_core::state::swap_dir_for` → `state_dir()/swap/<hash of cwd>`), which
@@ -8446,7 +8743,7 @@ const HOME_CONFIG_DIR_FALLBACK: &str = ".config/wolf";
 /// the "Note (OCR width)" / "Note (OCR height)" paragraphs above their own consts,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
-/// be applied here to all thirty-five.
+/// be applied here to all thirty-six.
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
@@ -9403,7 +9700,7 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// [`SIDEBARTOGGLE_OCR_KEEP`] is an ordinary content term and follows the ordinary
 /// rule.
 ///
-/// Twenty-nine of the thirty-five smokes appear here. SIX contribute no rows at
+/// Thirty of the thirty-six smokes appear here. SIX contribute no rows at
 /// all, on purpose, and it is worth being explicit about which and why:
 ///
 /// * [`colon_qa_closes_the_window_under_cage`] captures no PNG and asserts only that
@@ -9703,6 +10000,21 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         "CD_OCR_UNABBREVIATED",
         "typed_cd_reroots_the_sidebar_under_cage",
     ),
+    (
+        STATUS_OCR_A,
+        "STATUS_OCR_A",
+        "pane_status_bar_shows_each_panes_filename_under_cage",
+    ),
+    (
+        STATUS_OCR_B,
+        "STATUS_OCR_B",
+        "pane_status_bar_shows_each_panes_filename_under_cage",
+    ),
+    (
+        STATUS_OCR_MARKER,
+        "STATUS_OCR_MARKER",
+        "pane_status_bar_shows_each_panes_filename_under_cage",
+    ),
 ];
 
 /// Every fixture NAME a smoke creates inside its OWN working directory, as
@@ -9901,6 +10213,23 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "CD_READBACK_NAME",
         "typed_cd_reroots_the_sidebar_under_cage",
     ),
+    // STATUS_FILE_A and STATUS_FILE_B are DELIBERATELY absent, for the fifth time in
+    // this table and for the same reason: their NAMES *are* the per-pane statusbar
+    // smoke's asserted terms, because the strip drawing the name is the observable, so
+    // the generic loop below — which forbids a fixture name from containing any
+    // asserted term — would reject them. They carry the same documented exemption
+    // TREE_FILE_NAME, OPENRECENT_TARGET_FILE, SIDEBARTOGGLE_FILE and CD_TARGET_FILE
+    // do, and the SEVENTH block of
+    // `restore_fixture_names_cannot_satisfy_their_own_assertions` asserts their
+    // preconditions, their crossed pair and their shared body instead.
+    //
+    // STATUS_FIXTURE_DIR is absent for the structural reason the title and typed-`:cd`
+    // smokes' directories are: it is not a file. That seventh block covers it too.
+    (
+        STATUS_READBACK_NAME,
+        "STATUS_READBACK_NAME",
+        "pane_status_bar_shows_each_panes_filename_under_cage",
+    ),
 ];
 
 /// Mechanically enforces the naming invariant documented on [`SIDEBAR_FILLER_FILES`]:
@@ -9989,7 +10318,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the thirty-five smokes — still
+/// nothing to the smoke suite's runtime and — unlike the thirty-six smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
@@ -10194,7 +10523,7 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// Both directions matter: a must-CONTAIN term in a fixture name makes its smoke
 /// pass vacuously, and a must-NOT-CONTAIN term makes it fail spuriously.
 ///
-/// ## The four deliberate, documented exemptions
+/// ## The five deliberate, documented exemptions
 ///
 /// The title smoke's two DIRECTORY names are not files and are not in
 /// [`RELAUNCH_FIXTURE_NAMES`], because they are the assertion's subject rather
@@ -10233,7 +10562,7 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// NAME, that its heading carries the keep-term, and that
 /// [`SIDEBARTOGGLE_FILE`] carries no OTHER asserted term.
 ///
-/// The typed-`:cd` smoke is the fourth, and it needs the widest block of the four
+/// The typed-`:cd` smoke is the fourth, and it needs the widest block of the five
 /// because THREE of its fixed path components are page text at once.
 /// [`CD_TARGET_FILE`]'s NAME is the subject of assertion 4 — it lives only inside the
 /// `:cd` target, so a sidebar row is the sole thing that can draw it — and it must
@@ -10248,6 +10577,24 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// [`CD_START_DIR`] is the launch cwd: the header bar draws `~/startdir` before the
 /// `:cd` and a sidebar `Dir` row draws it after, so it must neither carry nor be
 /// carried by any asserted term. The sixth block below asserts all of that.
+///
+/// The per-pane statusbar smoke is the fifth, and its crossed pair is the only one
+/// whose two halves are both must-CONTAIN terms. [`STATUS_FILE_A`] and
+/// [`STATUS_FILE_B`] are each the subject of their own assertion — the strip above a
+/// pane drawing THAT pane's filename is the whole feature — so each must contain its
+/// own term, which the generic loop forbids, and both are absent from
+/// [`RELAUNCH_FIXTURE_NAMES`]. The crossing is what makes the pair prove
+/// per-pane-ness rather than mere presence: if either filename also contained the
+/// OTHER's term, one pane's strip would satisfy both assertions and the documented
+/// revert — drawing the ACTIVE pane's status in every strip — would leave the smoke
+/// green. Beside them sit two more names. [`STATUS_FIXTURE_DIR`] is drawn by the
+/// strip's second line (the display path) and by the typed `:e` command line, and
+/// [`STATUS_FIXTURE_BODY`] is drawn by the editor grid itself, since these are the
+/// only exempt fixtures this file OPENS; either one carrying an asserted term would
+/// satisfy that term from a place the filename line never drew. The seventh block
+/// below asserts all of that, plus that neither filename carries
+/// [`STATUS_OCR_MARKER`] — which is the capture's proof of life and must not be
+/// satisfiable by the very thing it is proving was drawn.
 ///
 /// ## The two fixtures whose CONTENT is checked too
 ///
@@ -10487,7 +10834,7 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         );
     }
 
-    // The typed-`:cd` smoke's exemption — the widest of the four, because THREE fixed
+    // The typed-`:cd` smoke's exemption — the widest of the five, because THREE fixed
     // path components of its fixture tree are page text at once and they cross in
     // both directions. The tree is
     //
@@ -10625,6 +10972,162 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
             );
         }
     }
+
+    // The per-pane statusbar smoke's exemption — the only one whose crossed pair is
+    // two must-CONTAIN terms, because the feature under test is that TWO panes draw
+    // TWO DIFFERENT filenames. The fixtures are
+    //
+    //     <unique>/sbfixtures/{statusalfa.md, statusbravo.md}
+    //
+    // opened by absolute path from outside the app's search root, so no sidebar row
+    // draws either name and each strip is the sole source of its own.
+
+    // The SUBJECTS. Each filename is the term its own pane's strip must draw; if a
+    // name stops containing its term, that assertion is vacuous — the term is absent
+    // from the capture whatever the strip did.
+    for (name, name_const, term, term_const, which) in [
+        (
+            STATUS_FILE_A,
+            "STATUS_FILE_A",
+            STATUS_OCR_A,
+            "STATUS_OCR_A",
+            "first",
+        ),
+        (
+            STATUS_FILE_B,
+            "STATUS_FILE_B",
+            STATUS_OCR_B,
+            "STATUS_OCR_B",
+            "split",
+        ),
+    ] {
+        assert!(
+            name.to_lowercase().contains(term),
+            "{name_const} = {name:?} no longer contains {term_const} = {term:?}. That FILENAME is \
+             what the {which} pane's status bar must draw, and it is the ONLY thing on the page \
+             that can: the file lives outside the app's search root, so no sidebar row bears it, \
+             and the cmdline carries STATUS_OCR_MARKER by capture time. If the two stop agreeing \
+             the smoke asserts on a word nothing draws and reports a missing status bar that is in \
+             fact present. This file is exempt from the RELAUNCH_FIXTURE_NAMES loop above for \
+             exactly this reason."
+        );
+    }
+
+    // THE CROSSED PAIR, and here it is the whole discriminator rather than a
+    // supporting condition. The documented revert for this smoke makes every strip
+    // draw the ACTIVE pane's status; with the two names crossed, the surviving strip
+    // would satisfy BOTH assertions and that revert would leave the smoke green.
+    for (name, name_const, other_term, other_const) in [
+        (STATUS_FILE_A, "STATUS_FILE_A", STATUS_OCR_B, "STATUS_OCR_B"),
+        (STATUS_FILE_B, "STATUS_FILE_B", STATUS_OCR_A, "STATUS_OCR_A"),
+    ] {
+        assert!(
+            !name.to_lowercase().contains(other_term),
+            "{name_const} = {name:?} contains {other_const} = {other_term:?}, which is the OTHER \
+             pane's asserted term. The two assertions would then both be satisfiable by a single \
+             strip, so the smoke would stop proving that each pane draws its OWN file and would \
+             pass green against exactly the build its revert produces (draw_pane reading the \
+             ACTIVE pane's cached status instead of the pane it is painting). Rename the FILE; do \
+             NOT change either OCR const and do NOT touch the assertions."
+        );
+    }
+
+    // The proof-of-life marker must not be satisfiable by the very thing it exists to
+    // prove was drawn, and the fixture DIRECTORY is page text twice over — the
+    // strip's second line is the display path, and the typed `:e` command line spells
+    // the absolute path — so it must carry none of the three terms.
+    for (name, name_const, why) in [
+        (
+            STATUS_FILE_A,
+            "STATUS_FILE_A",
+            "a filename carrying the marker would satisfy the capture's proof-of-life assertion \
+             from the strip it is supposed to be independent of, so a window that had stopped \
+             painting the cmdline would read as healthy",
+        ),
+        (
+            STATUS_FILE_B,
+            "STATUS_FILE_B",
+            "the same: the marker is the one term on that page that must come from somewhere \
+             other than a status bar",
+        ),
+    ] {
+        assert!(
+            !name.to_lowercase().contains(STATUS_OCR_MARKER),
+            "{name_const} = {name:?} contains STATUS_OCR_MARKER = {STATUS_OCR_MARKER:?}: {why}."
+        );
+    }
+    for (term, term_const) in [
+        (STATUS_OCR_A, "STATUS_OCR_A"),
+        (STATUS_OCR_B, "STATUS_OCR_B"),
+        (STATUS_OCR_MARKER, "STATUS_OCR_MARKER"),
+    ] {
+        assert!(
+            !STATUS_FIXTURE_DIR.to_lowercase().contains(term),
+            "STATUS_FIXTURE_DIR = {STATUS_FIXTURE_DIR:?} contains {term_const} = {term:?}. The \
+             directory is drawn by the strip's SECOND line (the display path) and by the typed `:e` \
+             command line, neither of which is the filename line the assertions are about — so this \
+             word would satisfy its assertion from a component that says nothing about whether the \
+             pane's own file was drawn. Rename the DIRECTORY; do NOT change the OCR const."
+        );
+    }
+
+    // The two fixtures are the only exempt ones in this file that a scenario OPENS,
+    // so their shared body renders in the editor grid beside the strips. A body
+    // carrying an asserted term would satisfy that term from the grid with no strip
+    // drawn at all — `PICKER_FILE_NAME`'s failure reached through content.
+    for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {
+        assert!(
+            !STATUS_FIXTURE_BODY.to_lowercase().contains(term),
+            "STATUS_FIXTURE_BODY = {STATUS_FIXTURE_BODY:?} contains {term_const} = {term:?}. It is \
+             the CONTENT of both files the per-pane statusbar smoke opens, so it is drawn inside \
+             the editor grid of both panes: this word would satisfy — or, for a must-NOT-contain \
+             term, spuriously break — `{smoke}`'s OCR assertion with neither status bar painted. \
+             Keep the body wordless and unlike every asserted term."
+        );
+    }
+
+    // Every OTHER asserted term still applies to the two exempted filenames, exactly
+    // as it does to the three exemptions above.
+    for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {
+        for (name, name_const, exempt) in [
+            (STATUS_FILE_A, "STATUS_FILE_A", STATUS_OCR_A),
+            (STATUS_FILE_B, "STATUS_FILE_B", STATUS_OCR_B),
+        ] {
+            if term == exempt {
+                continue;
+            }
+            assert!(
+                !name.to_lowercase().contains(term),
+                "{name_const} = {name:?} contains {term_const} = {term:?}. It is page text in the \
+                 per-pane statusbar smoke's capture, drawn by a status bar, so this word would \
+                 satisfy — or, for a must-NOT-contain term, spuriously break — `{smoke}`'s OCR \
+                 assertion. This name is EXEMPT from the RELAUNCH_FIXTURE_NAMES loop above only \
+                 for its OWN term ({exempt:?}); every other asserted term still applies to it."
+            );
+        }
+    }
+
+    // Well-formedness of the fixture directory, the same check TEMP_CWD_BASENAME
+    // gets, because the smoke joins this onto the temp cwd's PARENT. Two of the three
+    // malformed shapes have real consequences. An empty value (or `.`) puts both
+    // fixtures directly in the app's HOME, at which point the checks above are about
+    // a path component that is not on the page and the display path they reason about
+    // is a different string. A leading `..` climbs out of the run's unique temp tree
+    // into `std::env::temp_dir()` itself, which is SHARED across runs — the fixtures
+    // would then be whatever a previous run left behind rather than what this one
+    // wrote, which is exactly the order-dependence `make_temp_cwd` exists to prevent.
+    let mut status_components = Path::new(STATUS_FIXTURE_DIR).components();
+    let status_first = status_components.next();
+    let status_extra = status_components.next();
+    assert!(
+        matches!(status_first, Some(std::path::Component::Normal(_))) && status_extra.is_none(),
+        "STATUS_FIXTURE_DIR = {STATUS_FIXTURE_DIR:?} is not a single ordinary path segment (it \
+         parses as {status_first:?} followed by {status_extra:?}). The per-pane statusbar smoke \
+         joins it onto `smoke_home(cwd)` — the temp cwd's parent, which `cage_command` hands the \
+         app as HOME — so the fixtures sit beside the search root rather than inside it. A value \
+         that resolves to the parent itself, or that climbs out of it, moves the fixtures \
+         somewhere the smoke's whole anti-vacuity argument no longer holds."
+    );
 
     // The one relaunch fixture whose CONTENT is more than a heading, checked here
     // rather than in a guard of its own so the smoke count this file's docs pin
@@ -16521,7 +17024,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// | the active-pane FOCUS RING's top edge — a long thin high-contrast line immediately above the heading | six ablations on one PNG; the top edge alone accounted for it | [`DIVIDER_RELAUNCH_SCENARIO`]'s closing `<C-w>h`, which moves the ring to the WIDE pane |
 /// | a single misclassified GLYPH at 15 columns | the same pixels read through both segmentation modes, twice over | the second reader, [`ocr_uniform_block_to_lowercase`] |
 ///
-/// The third is why this smoke, alone of the thirty-five, reads its capture twice.
+/// The third is why this smoke, alone of the thirty-six, reads its capture twice.
 /// With the first two answered, on one retained PNG:
 ///
 /// | command | verbatim output |
@@ -18209,6 +18712,282 @@ fn typed_cd_reroots_the_sidebar_under_cage() {
          store was left EMPTY, in which case assertion 4 would have failed first, so this cause is \
          already ruled out by the assertion above; (d) the row rendered and OCR misread it — check \
          the retained PNG first. PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+}
+
+/// Each pane's status bar draws THAT pane's filename, and the chrome it sits in
+/// costs the grid real rows.
+///
+/// ## What it covers that nothing else does
+///
+/// Three things, and the third is the one no other smoke can reach:
+///
+/// * that a per-pane status bar is painted at all — `draw_pane`'s two
+///   `render::draw_text_line` calls, over the `PaneStatus` cached on the wake;
+/// * that the two strips carry DIFFERENT filenames, i.e. that the paint reads the
+///   status of the pane it is painting rather than of the active one. That is what
+///   the crossed fixture pair buys, and it is the only property here a "the feature
+///   is roughly working" capture could not fake;
+/// * that the editor inset and the strip's height reach the GRID SIZE, through the
+///   captive Neovim's own `winheight(0)`. Nothing else in this file can see the
+///   padding: the pointer smokes' origin band is `PANE_ORIGIN_TOLERANCE_PX + cell_w`
+///   wide, which is wider than the 20 px the padding moves the pane origin by, so
+///   without an exact row count `EDITOR_PADDING_PX` would be table-tested and
+///   nothing more.
+///
+/// ## The premises, and where each is pinned
+///
+/// The two OCR assertions are about FILENAMES, which inverts this file's usual
+/// fixture rule. Everything that makes that safe is stated on the `STATUS_*` consts
+/// and asserted rather than assumed: the fixtures live outside the search root
+/// (assertion 0), the cmdline carries the marker rather than an `:e` path by capture
+/// time (assertion 4 reads it), and Neovim draws no statusline of its own
+/// (assertion 3 asks the captive Neovim, rather than trusting a `runtime/nvim`
+/// setting this test does not own).
+/// [`restore_fixture_names_cannot_satisfy_their_own_assertions`]'s seventh block
+/// covers the naming half mechanically.
+///
+/// ## What this smoke does NOT prove
+///
+/// The active/inactive treatment. `statusbar_layout::statusbar_text` pins both alphas
+/// and the bold flag as values, and `draw_pane` demonstrably reads `active_pane`, but
+/// OCR reads neither font weight nor a 50 % dim — both strips are legible either way,
+/// which is exactly why both are asserted PRESENT here. Same shape as the sidebar's
+/// current-file bold, recorded in `tests/README.md`.
+///
+/// ## Assertions, classified
+///
+/// A precondition gets NO revert: inventing one would manufacture a discriminator
+/// this smoke does not have. The `measured` column is the coder's to fill from an
+/// actual red run, per `tests/README.md`'s "A red-run demonstration is a deliverable,
+/// not a formality".
+///
+/// | # | assertion | kind | revert | measured |
+/// | --- | --- | --- | --- | --- |
+/// | 0 | the fixture directory and the readback sit OUTSIDE the app's search root | **precondition** — makes the anti-vacuity argument executable instead of prose: inside the root, the tree sidebar would draw both filenames and assertions 5 and 6 would hold with no status bar painted at all | none; do not invent one | n/a |
+/// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | n/a |
+/// | 2 | [`assert_png_present`] | precondition — grim produced an image | none; do not invent one | n/a |
+/// | 3 | the `&laststatus` readback is `0` | **precondition** — Neovim draws no statusline of its own, so a filename on the page came from our strip. Asked of the CAPTIVE NEOVIM rather than read off `runtime/nvim/init.lua`, because that file is a premise this test does not control | none; do not invent one | n/a |
+/// | 4 | OCR contains [`STATUS_OCR_MARKER`] | **precondition, not a discriminator** — the capture's proof of life. Its absence means the capture is stale or the cmdline stopped painting, neither of which this unit touches | none; do not invent one | n/a |
+/// | 5 | OCR contains [`STATUS_OCR_A`] | **the discriminator for PER-PANE-ness** | in `draw_pane`, look the cached status up by `self.active_pane.get()` instead of by the `pane_id` being painted — a one-line change. Both strips then read `statusbravo.md`, so this row goes red while row 6 stays GREEN, which is the only revert here that discriminates per-pane-ness rather than presence. | not yet |
+/// | 6 | OCR contains [`STATUS_OCR_B`] | **discriminator for the strip rendering at all**, jointly with row 5 | delete the two `render::draw_text_line` calls from `draw_pane`. Rows 5 and 6 both go red; 5 fails first, so this row has no isolated red run under it. | not yet |
+/// | 7 | `winheight(0)` equals [`STATUS_EXPECTED_WINHEIGHT`] | **the discriminator for the editor inset and the strip's height** — the only end-to-end proof either reaches a pixel | delete the `- 2 * padding` term from `editor_inset::grid_rect`'s `h` (one more row survives) or the `statusbar_h` term (several more) | not yet — and the FIRST run is expected to fail here while the constant is its `-1` placeholder. That failure is how the value is derived; see [`STATUS_EXPECTED_WINHEIGHT`]. |
+#[test]
+fn pane_status_bar_shows_each_panes_filename_under_cage() {
+    const SMOKE: &str = "pane_status_bar_shows_each_panes_filename_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // The LAUNCH working directory, `<unique>/project` — the app's search root, and
+    // deliberately EMPTY of the two fixtures. It gets the nine density fillers and
+    // nothing else, so every row the tree sidebar draws is a filler and neither
+    // asserted filename can come from it.
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(SMOKE, &cwd, &[]);
+
+    // The fixtures, in a SIBLING of the cwd: `<unique>/sbfixtures`. `cage_command`
+    // hands the app `smoke_home(cwd)` == `cwd.parent()` as HOME, so this directory is
+    // under home (nothing walks home) and outside the search root (the app's
+    // `FileSearch` is rooted at the cwd). The scenario opens both by absolute path.
+    let fixture_dir = smoke_home(&cwd).join(STATUS_FIXTURE_DIR);
+    std::fs::create_dir_all(&fixture_dir).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: failed to create the statusbar fixture dir {}: {e}",
+            fixture_dir.display()
+        )
+    });
+
+    let path_a = fixture_dir.join(STATUS_FILE_A);
+    let path_b = fixture_dir.join(STATUS_FILE_B);
+    for path in [&path_a, &path_b] {
+        std::fs::write(path, format!("{STATUS_FIXTURE_BODY}\n")).unwrap_or_else(|e| {
+            panic!(
+                "{SMOKE}: failed to write the statusbar fixture {}: {e}",
+                path.display()
+            )
+        });
+    }
+
+    // The readback lands beside the cwd for the same reason the fixtures do: its name
+    // is drawn by nothing, and its absolute path is echoed in the typed
+    // `:call writefile(...)` command line.
+    let readback = smoke_home(&cwd).join(STATUS_READBACK_NAME);
+    let out_png = runtime_dir.join("wolf_gnome_statusbar_smoke.png");
+    for path in [&readback, &out_png] {
+        clear_evidence(path, SMOKE);
+    }
+
+    // --- Assertion 0 (precondition): the fixtures are outside the search root --
+    //
+    // This smoke's whole anti-vacuity argument is that the tree sidebar cannot draw
+    // either filename, and that argument lives in two other functions —
+    // `make_temp_cwd`, which decides the cwd is a fixed-name CHILD of a unique
+    // parent, and `smoke_home`, which decides HOME is that parent. Both are shared,
+    // so a later change to either must surface here rather than as a smoke that
+    // passes for the wrong reason.
+    for (path, what) in [
+        (&fixture_dir, "the fixture directory"),
+        (&readback, "the readback file"),
+    ] {
+        assert!(
+            !path.starts_with(&cwd),
+            "{SMOKE}: {what} {} is INSIDE the app's working directory {}, which is its file-search \
+             root. The tree sidebar renders every entry under that root BY NAME, so \
+             {STATUS_OCR_A:?} and {STATUS_OCR_B:?} would be on the page as sidebar rows and \
+             assertions 5 and 6 would hold with no status bar painted at all — a permanent silent \
+             pass, not a flake. Put them back beside the cwd (`smoke_home(&cwd).join(...)`); do NOT \
+             weaken the assertions.",
+            path.display(),
+            cwd.display()
+        );
+    }
+
+    let status = cage_command(STATUS_SCENARIO, &cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("STATUS_PATH_A", &path_a)
+        .env("STATUS_PATH_B", &path_b)
+        .env("STATUS_READBACK", &readback)
+        .env("STATUS_MARKER", STATUS_OCR_MARKER)
+        .status()
+        .expect("failed to spawn `cage` for the headless per-pane statusbar smoke scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage per-pane statusbar scenario exited unsuccessfully ({status}). Read the \
+         exit code FIRST; each names a different half of the run.\n\
+         Exit 11: the app died before its window ever mapped. A LAUNCH failure — nothing below is \
+         about the status bar.\n\
+         Exit 14: the `winheight(0)` readback never appeared, which means the Ex command never \
+         executed: keys stopped reaching Neovim, or the <C-w>v split left focus somewhere \
+         unexpected. That is DISTINCT from \"the panes are the wrong size\", which exits 0 and \
+         fails assertion 7 instead.\n\
+         Any other status means wtype or grim failed. Screenshot expected at {}.",
+        out_png.display()
+    );
+
+    // --- Assertion 2 (precondition): grim produced an image -------------------
+    assert_png_present(SMOKE, &out_png);
+
+    // --- Assertion 3 (PRECONDITION): Neovim draws no statusline of its own ----
+    //
+    // The premise underneath assertions 5 and 6. With `laststatus` non-zero Neovim
+    // paints the filename INSIDE the grid, and both OCR assertions would then hold
+    // for a build that draws no strip at all. `runtime/nvim/init.lua` sets it to 0,
+    // but that file is not this test's to control, so the captive Neovim is asked.
+    let readings = read_ints(&readback, 2, SMOKE);
+    let (got_winheight, got_laststatus) = (readings[0], readings[1]);
+    assert_eq!(
+        got_laststatus, 0,
+        "{SMOKE}: the captive Neovim reports `&laststatus` = {got_laststatus}, not 0. It then \
+         draws its OWN status line inside each window's grid, carrying the buffer name — so \
+         assertions 5 and 6 below would be satisfied by Neovim's chrome rather than by this \
+         front-end's status bar, and would keep passing with `draw_pane`'s text calls deleted. \
+         This is a PRECONDITION about the shared `runtime/nvim/init.lua`, not a front-end failure; \
+         read it as \"assertions 5 and 6 cannot be trusted this run\"."
+    );
+
+    let ocr_text = ocr_to_lowercase(&out_png);
+
+    // --- Assertion 4 (PRECONDITION, no revert): the capture is alive ----------
+    //
+    // The marker is the last thing the scenario types, so it is the cmdline strip's
+    // message when `grim` fires. Two jobs: it proves the window was still painting,
+    // and it displaces the `:e $STATUS_PATH_B` toast that would otherwise put
+    // assertion 6's term on the page from the cmdline. Nothing in this unit can break
+    // it, so it has NO revert and none may be invented for it.
+    assert!(
+        ocr_text.contains(STATUS_OCR_MARKER),
+        "{SMOKE}: OCR did not contain {STATUS_OCR_MARKER:?} — the text the scenario `:echo`s \
+         immediately before the capture, which the cmdline strip paints as the last message. This \
+         is a PRECONDITION with no revert of ours: its absence means the capture is stale, the \
+         cmdline stopped painting, or `:echo` under `ext_messages` produced no visible toast at \
+         all (in which case the fix is a different Ex command with a deterministic message — never \
+         a weaker assertion). Read this red as \"assertions 5 and 6 below cannot be trusted this \
+         run\": without the marker the cmdline may still be showing the `:e` path, which spells \
+         {STATUS_OCR_B:?}. PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+
+    // --- Assertion 5 (THE DISCRIMINATOR): the FIRST pane keeps its own file ---
+    //
+    // `statusalfa.md` is open in the left pane only, lives outside the search root,
+    // and is not what the cmdline is showing (assertion 4). The only thing on the
+    // page that can draw its name is that pane's own status bar.
+    //
+    // REVERT (the coder runs this in step 7): in `draw_pane`, look the cached status
+    // up by `self.active_pane.get()` instead of by the `pane_id` being painted. Both
+    // strips then draw `statusbravo.md`: this assertion goes red and assertion 6
+    // stays green, which is what makes it a test of PER-PANE-ness rather than of
+    // presence.
+    assert!(
+        ocr_text.contains(STATUS_OCR_A),
+        "{SMOKE}: OCR did not contain {STATUS_OCR_A:?} — the name of {STATUS_FILE_A}, which is \
+         open in the FIRST (left) pane and can be drawn only by that pane's status bar. Assertion \
+         4 is GREEN, so the window was painting and the cmdline is showing the marker rather than \
+         an `:e` path. The candidate causes, in order:\n\
+         (a) EVERY STRIP IS DRAWING THE ACTIVE PANE'S STATUS. That is the documented revert for \
+         this row, and it leaves assertion 6 green exactly as you see it — check the dump below \
+         for {STATUS_OCR_B:?} appearing TWICE.\n\
+         (b) no strip is drawn at all, in which case assertion 6 is red too and the cause is \
+         `draw_pane`'s text calls rather than which status they read.\n\
+         (c) the left pane's cached `PaneStatus` was never refreshed, so it still holds the \
+         `[No Name]` it was built with — the dump then carries `no name` where this term belongs.\n\
+         (d) the strip is drawn but clipped away, which would need the grid rect and the strip \
+         rect to disagree; assertion 7 is the one that would also move.\n\
+         PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+
+    // --- Assertion 6: the SPLIT pane draws its own file -----------------------
+    //
+    // Jointly with assertion 5 this is what proves a strip is painted at all;
+    // separately it names WHICH file the surviving strip is showing. It has no
+    // isolated red run: the revert that deletes `draw_pane`'s two text calls reddens
+    // assertion 5 first.
+    assert!(
+        ocr_text.contains(STATUS_OCR_B),
+        "{SMOKE}: OCR did not contain {STATUS_OCR_B:?} — the name of {STATUS_FILE_B}, which the \
+         scenario opened into the pane the <C-w>v split created. With assertion 5 GREEN the split \
+         pane's strip is the only thing missing, so the likely causes are that the split never \
+         happened (one pane, one strip), that the second `:e` did not land in the new pane, or \
+         that the new pane's cached status was never refreshed after the layout rebuild. With \
+         assertion 5 RED as well, no strip is being painted at all and this row adds nothing to \
+         that diagnosis. PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+
+    // --- Assertion 7 (THE DISCRIMINATOR for the inset and the strip height) ---
+    //
+    // Neovim's own answer about the pane the front-end sized. This is the ONLY place
+    // in this file where `EDITOR_PADDING_PX` and the statusbar's height reach a
+    // number: they cost whole ROWS, and a row count is exact.
+    //
+    // REVERT (the coder runs this in step 7): delete the `- 2 * padding` term from
+    // `editor_inset::grid_rect`'s `h` (the pane keeps one more row) or the
+    // `statusbar_h` term (it keeps several). Either leaves every OCR assertion above
+    // green, which is precisely why this row exists.
+    assert_eq!(
+        got_winheight, STATUS_EXPECTED_WINHEIGHT,
+        "{SMOKE}: the focused pane reports winheight(0) = {got_winheight}, expected \
+         {STATUS_EXPECTED_WINHEIGHT}. If STATUS_EXPECTED_WINHEIGHT is still the -1 placeholder \
+         this failure is EXPECTED and is how the value is derived: record {got_winheight} in that \
+         const together with today's date and the cage output size, exactly as PANE_ORIGIN_X_EXPECTED \
+         and PANE_ORIGIN_Y_EXPECTED were derived, and do NOT compute it from the statusbar \
+         constants. Otherwise the chrome changed size. A HIGHER number means the grid was given \
+         back space the chrome is supposed to take — one extra row per missing `padding` term, \
+         several per missing `statusbar_h` term — and a LOWER one means something is subtracted \
+         twice. Assertions 5 and 6 stay green under all of those, which is why this row is the \
+         only end-to-end proof the inset and the strip height exist at all. PNG kept at {}.",
         out_png.display()
     );
 }
