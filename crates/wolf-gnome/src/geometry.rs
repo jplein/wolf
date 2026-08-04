@@ -9,7 +9,13 @@
 //!
 //! Those two live in ONE file on purpose: the composition guarantee — that a cell
 //! produced by [`cell_at`] is always inside the grid [`grid_size_for`] asked for —
-//! must be provable (and is mechanically asserted) in a single place.
+//! must be provable (and is mechanically asserted) in a single place. That
+//! guarantee is stated over the DIVISION alone, which is why the per-pane chrome
+//! subtracts in [`crate::editor_inset`] rather than growing this file's arguments.
+//! The inset pipeline carries its own companion guarantee over the pair —
+//! `editor_inset`'s `cell_at_over_grid_local_never_exceeds_grid_size_for_pane`,
+//! which probes the statusbar band and all four gutters — so the two are
+//! discoverable from either side.
 //!
 //! [`divider_position`] and [`divider_travel_fraction`] are here for the same
 //! reason: they are the pixel half of a divider drag, the point where a
@@ -88,15 +94,21 @@ fn floor_div_clamped(numer: f64, denom: f64) -> u16 {
 ///   never out of range. That clamping is what makes drag-past-the-edge selection
 ///   work: a drag whose pointer has left the pane keeps extending the selection to
 ///   the last row/column instead of silently stopping at the edge.
-/// - `(x, y)` are ALREADY pane-local. GTK gesture/motion callbacks deliver
-///   widget-local coordinates, and `pane_view::draw_pane` paints cell `(row, col)`
-///   at `(col * cell_w, row * cell_h)` from the `DrawingArea`'s own origin, so
-///   there is NO grid-origin subtraction here. `wolf-gnome` has no editor insets,
-///   no 90-column cap, no centering and no per-pane status bar — those are
-///   separate, still-unticked `feat-list.md` rows. **Do not import the macOS
-///   `gridRect`/`paintOffset` machinery.** TRIPWIRE: if any of those rows is ever
-///   implemented, this function grows a grid-origin parameter, and this paragraph
-///   is where that is meant to be noticed.
+/// - `(x, y)` are ALREADY GRID-LOCAL: measured from the grid's own top-left corner,
+///   not from the pane's. This function subtracts no origin. A pane's
+///   `DrawingArea` is bigger than its grid — it also carries the per-pane statusbar
+///   strip and the editor padding — so the translation is
+///   [`crate::editor_inset::grid_local`]'s job, applied by `pane_view` to every GTK
+///   gesture/motion coordinate before it arrives here, and
+///   [`crate::editor_inset::grid_size_for_pane`] is what hands [`grid_size_for`] the
+///   correspondingly reduced rectangle. Keeping the subtraction there is what lets
+///   the composition guarantee below stay a statement about the division alone.
+///   `wolf-gnome` has no 90-column cap and no centering — two still-unticked
+///   `feat-list.md` rows — so macOS's `paintOffset` machinery has no counterpart
+///   here. **Do not import it.** TRIPWIRE: if either row is ever implemented, the
+///   centring offset belongs in `editor_inset`'s rectangle rather than in a new
+///   parameter on this function, and this paragraph is where that is meant to be
+///   noticed.
 /// - Degenerate guards, mirroring [`grid_size_for`]'s whole-result collapse: if
 ///   `cell_w` or `cell_h` is non-finite or `<= 0.0`, or `cols == 0`, or
 ///   `rows == 0`, the WHOLE result is `(0, 0)`.

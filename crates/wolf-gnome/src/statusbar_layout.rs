@@ -1,4 +1,222 @@
-// PRODUCTION CODE GOES ABOVE THIS LINE — written by the coder per plan §3.2
+//! The whole per-pane statusbar rulebook, decidable from values: how tall the
+//! strip is, where its two lines sit inside it, how big the second line's font is,
+//! and what colour and weight each line takes in an active or an inactive pane.
+//!
+//! The vertical half is a port of `WolfKeyMap/StatusbarLayout.swift`, constant for
+//! constant. The colour half has NO macOS counterpart: `PaneContainerView`
+//! leaves that rule inline in its paint function, where the fast suite cannot
+//! execute it. Here it is [`statusbar_text`], a pure function over two colours and
+//! a flag, so the alphas and the bold rule are pinned by a table instead of by a
+//! screenshot.
+//!
+//! ## Units: the caller picks
+//!
+//! Unit-agnostic, exactly like [`crate::cell_metrics_math`] — see that module's
+//! "Units" section for the convention and why the two platforms pick differently.
+//! `crate::pane_view` calls this one in DEVICE PIXELS, feeding
+//! [`crate::render::CellMetrics::size_px`]. The consequence, stated rather than
+//! fixed: at 96 dpi a 3-unit pad is 3 px here and 3 pt (= 3 px at 1x) on macOS, so
+//! above 1x the strip's internal padding is proportionally tighter here by the dpi
+//! ratio.
+//!
+//! ## Colours come from the editor, not from the desktop
+//!
+//! macOS reads its titlebar theme and falls back to AppKit's label tiers.
+//! [`statusbar_text`] takes the editor's own default foreground and background —
+//! `crate::pane_view` resolves highlight 0, the source the cmdline strip already
+//! uses — because `crates/wolf-gnome/DECISIONS.md` records that this front-end
+//! reads no OS theme in either direction. macOS's non-themed AppKit-tier branch
+//! therefore has no counterpart here.
+//!
+//! The blend is toward the BACKGROUND rather than toward black, and that is
+//! load-bearing: the strip's background is opaque and known (the painter has just
+//! filled it), so blending toward it produces exactly the pixels alpha compositing
+//! would — with no `set_source_rgba` and no change to
+//! [`crate::render::draw_glyph`].
+
+use wolf_core::Rgb;
+
+/// The line-height multiplier applied to each font size.
+pub const STATUSBAR_LINE_FACTOR: f64 = 1.25;
+
+/// Vertical padding above the first line and below the last.
+pub const STATUSBAR_VERTICAL_PADDING: f64 = 3.0;
+
+/// Gap between the primary and secondary lines.
+pub const STATUSBAR_LINE_GAP: f64 = 1.0;
+
+/// The secondary line's font size as a fraction of the primary's.
+pub const STATUSBAR_SECONDARY_FONT_SCALE: f64 = 0.8;
+
+/// Floor for the secondary line's font size, in the caller's unit.
+pub const STATUSBAR_MIN_SECONDARY_FONT: f64 = 9.0;
+
+/// The secondary line's alpha against the primary line's.
+pub const STATUSBAR_SECONDARY_ALPHA: f64 = 0.7;
+
+/// The alpha BOTH lines are scaled by in an inactive pane.
+pub const STATUSBAR_INACTIVE_ALPHA: f64 = 0.5;
+
+/// The largest value a colour channel can take, as an `f64` for the blend.
+const CHANNEL_MAX: f64 = 255.0;
+
+/// The strip's height and the top and height of each of its two lines, all in the
+/// caller's unit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StatusbarLayout {
+    /// The whole strip's height.
+    pub height: f64,
+    /// The primary (filename) line's top, measured from the strip's top.
+    pub primary_line_top: f64,
+    /// The primary line's reserved box height.
+    pub primary_line_height: f64,
+    /// The secondary (path) line's top, measured from the strip's top.
+    pub secondary_line_top: f64,
+    /// The secondary line's reserved box height.
+    pub secondary_line_height: f64,
+}
+
+/// The all-zero strip a degenerate input collapses to.
+const COLLAPSED: StatusbarLayout = StatusbarLayout {
+    height: 0.0,
+    primary_line_top: 0.0,
+    primary_line_height: 0.0,
+    secondary_line_top: 0.0,
+    secondary_line_height: 0.0,
+};
+
+/// The strip's vertical layout for two font sizes, a vertical padding and a line
+/// gap, in whatever unit the caller uses.
+///
+/// Each line box is `ceil(font_size * `[`STATUSBAR_LINE_FACTOR`]`)`; the primary
+/// line sits at `vertical_padding`, the secondary a `line_gap` below it, and the
+/// height closes with a second `vertical_padding`.
+///
+/// **Divergence from Swift, deliberate and strictly more defensive:** any
+/// non-finite or negative input collapses the WHOLE result to zeros. Swift has no
+/// guard, so an infinite font size there yields an infinite strip height, which
+/// [`crate::editor_inset::grid_rect`] turns into a zero-extent grid and
+/// `geometry::grid_size_for` into a 1x1 one — an editor that paints a single cell.
+/// A zero-height strip instead leaves a pane that is all padding and still usable.
+#[must_use]
+pub fn statusbar_layout(
+    primary_font_size: f64,
+    secondary_font_size: f64,
+    vertical_padding: f64,
+    line_gap: f64,
+) -> StatusbarLayout {
+    if !usable(primary_font_size)
+        || !usable(secondary_font_size)
+        || !usable(vertical_padding)
+        || !usable(line_gap)
+    {
+        return COLLAPSED;
+    }
+
+    let primary_line_height = (primary_font_size * STATUSBAR_LINE_FACTOR).ceil();
+    let secondary_line_height = (secondary_font_size * STATUSBAR_LINE_FACTOR).ceil();
+    let primary_line_top = vertical_padding;
+    let secondary_line_top = vertical_padding + primary_line_height + line_gap;
+
+    StatusbarLayout {
+        height: secondary_line_top + secondary_line_height + vertical_padding,
+        primary_line_top,
+        primary_line_height,
+        secondary_line_top,
+        secondary_line_height,
+    }
+}
+
+/// Whether a vertical-layout input names a real distance: finite and not negative.
+fn usable(v: f64) -> bool {
+    v.is_finite() && v >= 0.0
+}
+
+/// The secondary line's font size: the primary scaled by
+/// [`STATUSBAR_SECONDARY_FONT_SCALE`], floored at [`STATUSBAR_MIN_SECONDARY_FONT`].
+///
+/// **Total by construction:** ANY non-finite input yields the floor, not just a
+/// NaN one. `f64::max` alone would give the NaN case for free (it discards a NaN
+/// operand) but would answer `+inf` for an infinite primary, and that infinity
+/// would reach both the strip's `pango::FontDescription` and [`statusbar_layout`],
+/// where it collapses the whole strip. One `is_finite` check stops it at the seam.
+#[must_use]
+pub fn secondary_font_size(primary_font_size: f64) -> f64 {
+    if !primary_font_size.is_finite() {
+        return STATUSBAR_MIN_SECONDARY_FONT;
+    }
+    STATUSBAR_MIN_SECONDARY_FONT.max(primary_font_size * STATUSBAR_SECONDARY_FONT_SCALE)
+}
+
+/// The two lines' colours plus the primary line's weight.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StatusbarText {
+    /// The primary (filename) line's colour.
+    pub primary: Rgb,
+    /// The secondary (path) line's colour.
+    pub secondary: Rgb,
+    /// Whether the primary line is drawn bold — true exactly when the pane is
+    /// active.
+    pub primary_bold: bool,
+}
+
+/// The strip's two colours and the primary line's weight, for a pane whose editor
+/// default foreground is `fg` over background `bg`.
+///
+/// The primary line is `fg` at full strength in an active pane and at
+/// [`STATUSBAR_INACTIVE_ALPHA`] in an inactive one; the secondary line is a further
+/// [`STATUSBAR_SECONDARY_ALPHA`] of that. Both blend toward `bg` (see the module
+/// docs), and the primary line is bold exactly when the pane is active.
+///
+/// This is the whole active/inactive treatment: the pane BODY is painted
+/// identically either way, with no scrim and no dim, so these two colours and this
+/// one flag are the only signal the strip carries.
+#[must_use]
+pub fn statusbar_text(fg: Rgb, bg: Rgb, active: bool) -> StatusbarText {
+    let primary_alpha = if active {
+        1.0
+    } else {
+        STATUSBAR_INACTIVE_ALPHA
+    };
+    let secondary_alpha = STATUSBAR_SECONDARY_ALPHA * primary_alpha;
+    StatusbarText {
+        primary: blend(fg, bg, primary_alpha),
+        secondary: blend(fg, bg, secondary_alpha),
+        primary_bold: active,
+    }
+}
+
+/// Blends `fg` toward `bg` by `alpha`, channel by channel.
+fn blend(fg: Rgb, bg: Rgb, alpha: f64) -> Rgb {
+    Rgb {
+        r: blend_channel(fg.r, bg.r, alpha),
+        g: blend_channel(fg.g, bg.g, alpha),
+        b: blend_channel(fg.b, bg.b, alpha),
+    }
+}
+
+/// One channel of [`blend`]: `round(bg + (fg - bg) * alpha)`, clamped into
+/// `[0, 255]`.
+///
+/// The clamp is defensive rather than reachable: both endpoints are `u8` and every
+/// alpha this module produces is in `[0, 1]`, so the result is already bounded by
+/// the two endpoints. It is what makes the cast below provably in range.
+fn blend_channel(fg: u8, bg: u8, alpha: f64) -> u8 {
+    let bg = f64::from(bg);
+    // Clamp in f64 space FIRST so the value is provably within u8 range before the
+    // cast, exactly as `geometry::floor_div_clamped` does.
+    let v = (bg + (f64::from(fg) - bg) * alpha)
+        .round()
+        .clamp(0.0, CHANNEL_MAX);
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "v is clamped to [0.0, 255.0] and rounded, so the cast is exact and in range"
+    )]
+    {
+        v as u8
+    }
+}
 
 #[cfg(test)]
 mod tests {

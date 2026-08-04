@@ -15,6 +15,15 @@
 //! [`crate::paint`] seam, and the cursor is drawn only in the pane that owns the
 //! cursor's grid (`cursor.grid`). Panes NEVER paint grid 1.
 //!
+//! A pane's `DrawingArea` is larger than its grid: it also carries a two-line
+//! **statusbar strip** along the top and a uniform padding on all four sides, both
+//! painted into the same area by [`PaneInner::draw_pane`] rather than being
+//! widgets of their own (`crates/wolf-gnome/DECISIONS.md` records why). Every
+//! pixel-to-grid conversion in this file therefore routes through
+//! [`crate::editor_inset`] — the resizer subtracts the chrome before dividing, and
+//! the pointer paths translate a pane-local point into grid-local space before
+//! [`cell_at`]. The strip's own rulebook is [`crate::statusbar_layout`].
+//!
 //! ## Cmdline strip (★ S3 requirement)
 //!
 //! Under `ext_multigrid` the command line, `/`-search, and messages live outside the
@@ -39,13 +48,22 @@
 //! This module is both halves of the pane-layout persistence path:
 //!
 //! - **Save.** [`PaneHandle::layout_snapshot`] walks the live tree, reads each
-//!   leaf's RAW buffer path from `WolfCore::pane_status(grid).abs_path` (RPC-free),
-//!   encodes it via [`crate::pane_layout::encode`], and applies
-//!   [`crate::state_seam::persistable_layout`]'s CONTENT suppression rule. It is
-//!   called from [`crate::persistence`] on every render wake and at
+//!   leaf's RAW buffer path out of the per-pane status cache
+//!   [`PaneInner::refresh_pane_status`] fills once per wake from the RPC-free
+//!   `WolfCore::pane_status(grid)`, encodes it via [`crate::pane_layout::encode`],
+//!   and applies [`crate::state_seam::persistable_layout`]'s CONTENT suppression
+//!   rule. It is called from [`crate::persistence`] on every render wake and at
 //!   `close-request`. [`PaneHandle::snapshot_readiness`] supplies the two counts
 //!   `state_seam::may_snapshot` gates on, so a snapshot taken before the first
 //!   pane binds can never wipe a good save.
+//!
+//!   The cache is refreshed inside `panes.on_render_wake()`, which runs strictly
+//!   before `shell.on_render_wake()` drives the persistence path, so the wake path
+//!   always reads the current wake's values. `close-request` is the one bounded
+//!   exception: [`crate::persistence`]'s final flush reads the cache as of the LAST
+//!   wake, so a buffer change made in the window between that wake and the close
+//!   request is not persisted. Every `:e` produces a redraw flush and therefore a
+//!   wake, so the gap is one frame.
 //! - **Restore.** [`PaneHandle::request_layout_rebuild`] queues the saved tree at
 //!   launch; the first wake at which a window grid exists consumes it
 //!   ([`PaneInner::consume_pending_layout`]) and realizes it
@@ -134,16 +152,20 @@ use adw::prelude::*;
 use gtk::glib;
 
 use wolf_core::{
-    CursorShape, LayoutIntent, MouseAction, MouseEvent, PaneNode, ScrollEvent, Snapshot,
-    SplitOrientation, WolfCore,
+    CursorShape, LayoutIntent, MouseAction, MouseEvent, PaneNode, PaneStatus, ScrollEvent,
+    Snapshot, SplitOrientation, WolfCore,
 };
 
+use crate::editor_inset::{self, GridRect, EDITOR_PADDING_PX};
 use crate::geometry;
 use crate::layout::{Orientation, PaneId, PaneLayout, PaneTree};
 use crate::mouse::{self, PaneScroll};
 use crate::pane_layout;
-use crate::render::{draw_glyph, FALLBACK_BG, FALLBACK_FG};
+use crate::render::{draw_glyph, draw_text_line, FALLBACK_BG, FALLBACK_FG};
 use crate::state_seam;
+use crate::statusbar_layout::{
+    self, StatusbarLayout, STATUSBAR_LINE_GAP, STATUSBAR_VERTICAL_PADDING,
+};
 use crate::{cell_at, cursor, grid_size_for, paint, CellMetrics};
 
 /// The id of the first (root) pane. The [`PaneTree`] is constructed with this as
@@ -173,11 +195,18 @@ const RGB_MAX: f64 = 255.0;
 
 /// The widgets and pointer state bound to one pane: its Neovim window handle, its
 /// grid (pending until `win_pos` is observed), its drawing area (reused across
-/// rebuilds by id), and the per-pane mouse/scroll bookkeeping.
+/// rebuilds by id), the per-pane mouse/scroll bookkeeping, and the statusbar text
+/// cached on the last wake.
 ///
-/// Every mutable field is a `Cell`, never a `RefCell`: all access is on the single
-/// GTK main thread, and a `Cell` cannot have a borrow accidentally held across a
-/// [`WolfCore`] call (the rule this whole module follows).
+/// Every mutable field is a `Cell` — with ONE exception, `status` — because all
+/// access is on the single GTK main thread and a `Cell` cannot have a borrow
+/// accidentally held across a [`WolfCore`] call (the rule this whole module
+/// follows). `status` is a `RefCell` because [`PaneStatus`] owns three `String`s
+/// and is therefore not `Copy`; it obeys the same rule by discipline instead. It is
+/// borrowed in exactly two places — cloned out inside a single statement in
+/// [`PaneInner::draw_pane`], written inside a single statement in
+/// [`PaneInner::refresh_pane_status`] — and neither borrow is ever live across a
+/// core call.
 struct PaneWidgets {
     /// The Neovim window handle this pane is bound to.
     win: i64,
@@ -203,6 +232,14 @@ struct PaneWidgets {
     /// Its ONLY consumer is the scroll handler, because GTK's `scroll` signal
     /// carries no coordinates of its own.
     pointer: Cell<(f64, f64)>,
+    /// This pane's statusbar strings, read from `WolfCore::pane_status` once per
+    /// wake by [`PaneInner::refresh_pane_status`].
+    ///
+    /// Cached rather than read at paint time because [`PaneInner::draw_pane`] holds
+    /// a snapshot read guard for its whole body while `pane_status` takes
+    /// `read_snapshot()` again internally, and `shell.rs`'s borrow-discipline
+    /// section records that a re-entrant read can deadlock behind a queued writer.
+    status: RefCell<PaneStatus>,
 }
 
 impl PaneWidgets {
@@ -220,17 +257,21 @@ impl PaneWidgets {
             drag_button: Cell::new(None),
             scroll: Cell::new(PaneScroll::new()),
             pointer: Cell::new((0.0, 0.0)),
+            // The unnamed-buffer shape, taken from the same pure seam the live
+            // value comes from rather than hand-written here.
+            status: RefCell::new(wolf_core::pane_status("", None, None)),
         }
     }
 }
 
-/// A mouse/scroll target: a grid id plus that grid's LIVE dimensions, read from the
-/// snapshot at the moment the event is handled.
+/// A mouse/scroll target: a grid id, that grid's LIVE dimensions read from the
+/// snapshot at the moment the event is handled, and the pane-local rectangle the
+/// grid paints into.
 ///
-/// The three fields travel together everywhere (`cell_at` needs the dims, the
-/// `MouseEvent`/`ScrollEvent` needs the id), so they are one value — which also
-/// keeps `send_pane_mouse` under clippy's argument-count threshold without an
-/// `#[allow]`.
+/// The four fields travel together everywhere (`cell_at` needs the dims, the
+/// translation needs the rect, the `MouseEvent`/`ScrollEvent` needs the id), so
+/// they are one value — which also keeps `send_pane_mouse` under clippy's
+/// argument-count threshold without an `#[allow]`.
 #[derive(Clone, Copy)]
 struct GridTarget {
     /// The Neovim grid the event targets. Always a WINDOW grid (`>= 2`).
@@ -239,6 +280,11 @@ struct GridTarget {
     cols: u16,
     /// That grid's live row count.
     rows: u16,
+    /// The pane-local rectangle this grid paints into, derived from the pane's
+    /// CURRENT allocation. Pointer coordinates arrive pane-local and are
+    /// translated through [`editor_inset::grid_local`] before [`cell_at`], so a
+    /// click in the statusbar strip or a padding gutter still names a real cell.
+    grid_rect: GridRect,
 }
 
 /// The pane view's shared, interior-mutable state. All access is on the single GTK
@@ -262,6 +308,17 @@ struct PaneInner {
     cmdline_area: gtk::DrawingArea,
     /// Shared cell metrics (measured once in `app.rs`).
     metrics: Rc<CellMetrics>,
+    /// The per-pane statusbar strip's vertical layout, in device pixels.
+    ///
+    /// Measured ONCE in [`build`] from `metrics.size_px`. The metrics never change
+    /// for the life of the process, so the strip is not re-derived per frame.
+    statusbar: StatusbarLayout,
+    /// The strip's primary (filename) font at regular weight, for an INACTIVE pane.
+    statusbar_primary: pango::FontDescription,
+    /// The strip's primary font at bold weight, for the ACTIVE pane.
+    statusbar_primary_bold: pango::FontDescription,
+    /// The strip's secondary (path) font.
+    statusbar_secondary: pango::FontDescription,
     /// The live core, shared with the rest of the app.
     core: Rc<RefCell<Option<WolfCore>>>,
     /// The currently active pane (focus ring + cursor target), if any.
@@ -274,8 +331,8 @@ struct PaneInner {
 
 impl PaneInner {
     /// Orchestrates a render wake: ensure a first pane exists, apply layout intents,
-    /// collapse closed panes, resolve pending grids, refresh the active pane, then
-    /// queue redraws.
+    /// collapse closed panes, resolve pending grids, refresh each pane's statusbar
+    /// text and the active pane, then queue redraws.
     fn on_render_wake(self: &Rc<Self>) {
         if self.core.borrow().is_none() {
             return;
@@ -290,6 +347,13 @@ impl PaneInner {
         self.apply_intents();
         self.detect_closes();
         self.resolve_pending_grids();
+        // AFTER `resolve_pending_grids` — that is the last step that can bind a
+        // grid, and a pane with no grid has no status to read — and BEFORE
+        // `queue_redraw`, or the frame this wake queues paints last wake's filename
+        // in a pane that just changed buffers. Placing it ahead of
+        // `update_active_pane` keeps "read core state" before "decide the active
+        // pane and paint", mirroring the order already here.
+        self.refresh_pane_status();
         self.update_active_pane();
         self.queue_redraw();
     }
@@ -423,35 +487,90 @@ impl PaneInner {
         self.rebuild_pane_area();
         self.set_active_pane(leaf_ids.first().copied());
         self.resolve_pending_grids();
+        // Without this every restored pane paints `[No Name]` for one frame: this
+        // path early-returns from the wake, so the normal refresh never runs.
+        self.refresh_pane_status();
         self.queue_redraw();
+    }
+
+    /// Reads every bound pane's statusbar strings from
+    /// `WolfCore::pane_status(grid)` and caches them on the pane.
+    ///
+    /// **This is the only place `pane_status` is called**, and the cache is what
+    /// makes that possible: [`Self::draw_pane`] holds a snapshot read guard for its
+    /// whole body while `pane_status` takes `read_snapshot()` again internally, and
+    /// `shell.rs`'s borrow-discipline section records that a re-entrant read can
+    /// deadlock behind a queued writer. The call is RPC-free (a snapshot read plus
+    /// `live_cwd`), and it costs exactly one call per bound pane per wake — the
+    /// same budget [`Self::layout_snapshot`] spends, since that reads this cache
+    /// rather than calling again, so all three of the result's fields come out of
+    /// one read.
+    ///
+    /// Two-phase, like [`Self::layout_snapshot`]: the `panes` borrow that collects
+    /// the targets is dropped before the core borrow is taken, and the core borrow
+    /// is dropped before the results are written back.
+    fn refresh_pane_status(&self) {
+        let targets: Vec<(PaneId, u64)> = {
+            let panes = self.panes.borrow();
+            panes
+                .iter()
+                .filter_map(|(id, p)| p.grid.get().map(|g| (*id, g)))
+                .collect()
+        };
+        if targets.is_empty() {
+            return;
+        }
+        let statuses: Vec<(PaneId, PaneStatus)> = {
+            let core_ref = self.core.borrow();
+            let Some(core) = core_ref.as_ref() else {
+                return;
+            };
+            targets
+                .into_iter()
+                .map(|(id, g)| (id, core.pane_status(g)))
+                .collect()
+        };
+        {
+            let panes = self.panes.borrow();
+            for (id, status) in statuses {
+                if let Some(p) = panes.get(&id) {
+                    *p.status.borrow_mut() = status;
+                }
+            }
+        }
     }
 
     /// The tab's persistable pane tree, or `None` for an unnamed lone pane.
     ///
-    /// Reads each leaf's buffer path from `WolfCore::pane_status(grid).abs_path`
-    /// — the RAW absolute path, NOT `display_path` (which is relativized for the
-    /// statusbar and would be useless to restore from). `pane_status` is RPC-free
-    /// (a snapshot read plus `live_cwd`), so this is cheap enough to run on every
-    /// wake.
+    /// Reads each leaf's buffer path out of the per-pane status cache
+    /// [`Self::refresh_pane_status`] fills — the RAW absolute path, NOT
+    /// `display_path` (which is relativized for the statusbar and would be useless
+    /// to restore from). No core call happens here at all.
     ///
-    /// The `panes` borrow is dropped before the core borrow is taken; the `None`
-    /// suppression is [`state_seam::persistable_layout`]'s CONTENT rule, never an
-    /// arity test.
+    /// The cache is refreshed inside `panes.on_render_wake()`, which runs strictly
+    /// before `shell.on_render_wake()` and therefore before `crate::persistence`
+    /// reads this, so the values are always the current wake's. The one bounded
+    /// staleness is `flush_on_close`: it reads the cache as of the LAST wake, so a
+    /// buffer change in the window between that wake and the close request is not
+    /// persisted. Every `:e` produces a redraw flush and therefore a wake, so the
+    /// gap is one frame.
+    ///
+    /// The `None` suppression is [`state_seam::persistable_layout`]'s CONTENT rule,
+    /// never an arity test.
     fn layout_snapshot(&self) -> Option<PaneNode> {
-        let leaves: Vec<(PaneId, Option<u64>)> = {
+        let paths: HashMap<PaneId, String> = {
             let tree = self.tree.borrow();
             let panes = self.panes.borrow();
             tree.leaves()
                 .into_iter()
-                .map(|id| (id, panes.get(&id).and_then(|p| p.grid.get())))
-                .collect()
-        };
-        let paths: HashMap<PaneId, String> = {
-            let core_ref = self.core.borrow();
-            let core = core_ref.as_ref()?;
-            leaves
-                .iter()
-                .filter_map(|(id, grid)| grid.map(|g| (*id, core.pane_status(g).abs_path)))
+                .filter_map(|id| {
+                    let p = panes.get(&id)?;
+                    // A pane with no bound grid has no status to have been read,
+                    // and contributes no path — the same filter the core call used
+                    // to apply.
+                    p.grid.get()?;
+                    Some((id, p.status.borrow().abs_path.clone()))
+                })
                 .collect()
         };
         let layout = self.tree.borrow().layout();
@@ -630,7 +749,7 @@ impl PaneInner {
                 p.grid.set(Some(g));
             }
             if w > 0 && h > 0 {
-                let (cols, rows) = grid_size_for(w, h, self.metrics.cell_w, self.metrics.cell_h);
+                let (cols, rows) = self.pane_grid_size(w, h);
                 if let Some(core) = self.core.borrow().as_ref() {
                     core.resize_grid(g, cols, rows);
                 }
@@ -713,6 +832,42 @@ impl PaneInner {
         }
     }
 
+    /// The Neovim grid size for a pane allocated `width` x `height` device pixels,
+    /// once its statusbar strip and its four padding gutters are removed.
+    ///
+    /// The one place a PANE's allocation becomes a grid size. `geometry::grid_size_for`
+    /// is still reachable and still correct — [`Self::resize_global`] uses it — but a
+    /// pane must never call it directly, or the grid it asks Neovim for is the size of
+    /// the whole `DrawingArea` and the bottom rows land under the neighbouring pane.
+    fn pane_grid_size(&self, width: i32, height: i32) -> (u16, u16) {
+        editor_inset::grid_size_for_pane(
+            width,
+            height,
+            self.statusbar.height,
+            EDITOR_PADDING_PX,
+            self.metrics.cell_w,
+            self.metrics.cell_h,
+        )
+    }
+
+    /// The pane-local rectangle the grid paints into, for a pane of `width` x
+    /// `height` device pixels.
+    ///
+    /// The paint path has its allocation handed to it by the draw func; the pointer
+    /// paths read it off the widget through [`Self::pane_grid_rect`]. Both derive
+    /// the rect fresh rather than caching it: the allocation moves with every
+    /// divider drag and window resize, and a stale rect would offset every click by
+    /// the difference.
+    fn pane_grid_rect_for(&self, width: f64, height: f64) -> GridRect {
+        editor_inset::grid_rect(width, height, self.statusbar.height, EDITOR_PADDING_PX)
+    }
+
+    /// The pane-local rectangle `area`'s grid paints into, from its CURRENT
+    /// allocation.
+    fn pane_grid_rect(&self, area: &gtk::DrawingArea) -> GridRect {
+        self.pane_grid_rect_for(f64::from(area.width()), f64::from(area.height()))
+    }
+
     /// Builds a pane's `DrawingArea`, wiring its draw func (paint its grid + cursor),
     /// resize (per-grid + global resize), and the three pointer controllers.
     ///
@@ -724,16 +879,26 @@ impl PaneInner {
             .hexpand(true)
             .vexpand(true)
             .build();
-        // A one-cell minimum so that, with `shrink-*-child(false)` on the enclosing
-        // paneds, a child can never be allocated to zero pixels (a starved pane).
-        area.set_content_width(cell_floor(self.metrics.cell_w));
-        area.set_content_height(cell_floor(self.metrics.cell_h));
+        // A one-cell-OF-GRID minimum so that, with `shrink-*-child(false)` on the
+        // enclosing paneds, a child can never be allocated to zero pixels (a
+        // starved pane). The floor covers the strip and both padding gutters as
+        // well: a floor of one bare cell would let GTK allocate a pane whose grid
+        // rounds down to nothing, and Neovim would reflow that window's whole
+        // buffer to one column.
+        let (min_w, min_h) = editor_inset::min_pane_size(
+            self.metrics.cell_w,
+            self.metrics.cell_h,
+            self.statusbar.height,
+            EDITOR_PADDING_PX,
+        );
+        area.set_content_width(cell_floor(min_w));
+        area.set_content_height(cell_floor(min_h));
 
         {
             let weak = Rc::downgrade(self);
-            area.set_draw_func(move |_area, cr, _w, _h| {
+            area.set_draw_func(move |_area, cr, w, h| {
                 if let Some(inner) = weak.upgrade() {
-                    inner.draw_pane(cr, pane_id);
+                    inner.draw_pane(cr, pane_id, f64::from(w), f64::from(h));
                 }
             });
         }
@@ -840,15 +1005,108 @@ impl PaneInner {
         area
     }
 
-    /// Paints pane `pane_id`: its bound grid (fallback active grid) plus the cursor
-    /// iff this pane owns the cursor's grid.
-    fn draw_pane(&self, cr: &cairo::Context, pane_id: PaneId) {
+    /// Paints the whole of pane `pane_id`: the editor background across the entire
+    /// allocation, the statusbar strip's two lines of text, then its bound grid
+    /// (fallback active grid) plus the cursor iff this pane owns the cursor's grid.
+    ///
+    /// The strip, the padding and the grid are all painted here rather than being
+    /// separate widgets, and the background fill is why: the padding must be the
+    /// EDITOR's background, a per-frame value out of the snapshot, whereas a GTK
+    /// widget's background is theme-owned. See `crates/wolf-gnome/DECISIONS.md`.
+    ///
+    /// **`WolfCore::pane_status` must never be called from here.** This function
+    /// holds a `SnapshotReadGuard` for its whole body and `pane_status` takes
+    /// `read_snapshot()` again internally; a re-entrant read can deadlock behind a
+    /// queued writer (`shell.rs`'s borrow-discipline section). The strings come out
+    /// of the per-pane cache [`Self::refresh_pane_status`] fills on the wake.
+    ///
+    /// **The grid clip is required, not decorative.** The resize round trip is
+    /// asynchronous — GTK allocates, we call `resize_grid`, Neovim answers on a
+    /// later flush — so `snap.grid(g)` can transiently be LARGER than the current
+    /// allocation. Without the clip those extra rows paint into this pane's bottom
+    /// padding and under the neighbouring pane's strip: the widget bounds are wider
+    /// than the grid rectangle, so they do not bound the overflow.
+    ///
+    /// The strip's clip bounds a long path to its own pane. There is no ellipsis:
+    /// macOS truncates the tail, and reproducing that here needs a second Pango
+    /// layout builder in the widget layer, which is exactly what `render.rs`'s
+    /// one-glyph-path rule exists to prevent.
+    fn draw_pane(&self, cr: &cairo::Context, pane_id: PaneId, width: f64, height: f64) {
         let core_ref = self.core.borrow();
         let Some(core) = core_ref.as_ref() else {
             return;
         };
         let snap = core.read_snapshot();
-        let grid_id = self.panes.borrow().get(&pane_id).and_then(|p| p.grid.get());
+
+        // The editor defaults — the same source `draw_cmdline` resolves for its own
+        // band, and the only colour channel this front-end has (it reads no OS
+        // theme, in either direction).
+        let style = snap.highlights.resolve(0);
+        let fg = style.fg.unwrap_or(FALLBACK_FG);
+        let bg = style.bg.unwrap_or(FALLBACK_BG);
+
+        // The WHOLE allocation, so the strip band and all four padding gutters are
+        // the editor's background rather than an unpainted or theme-coloured frame.
+        cr.set_source_rgb(
+            f64::from(bg.r) / RGB_MAX,
+            f64::from(bg.g) / RGB_MAX,
+            f64::from(bg.b) / RGB_MAX,
+        );
+        cr.rectangle(0.0, 0.0, width, height);
+        cr.fill().expect("cairo pane background fill failed");
+
+        // One borrow, one statement: `PaneStatus` is not `Copy`, so it is cloned
+        // out rather than held, and no core call happens while it is live.
+        let (grid_id, status) = {
+            let panes = self.panes.borrow();
+            panes.get(&pane_id).map_or_else(
+                || (None, wolf_core::pane_status("", None, None)),
+                |p| (p.grid.get(), p.status.borrow().clone()),
+            )
+        };
+        let rect = self.pane_grid_rect_for(width, height);
+        let text =
+            statusbar_layout::statusbar_text(fg, bg, self.active_pane.get() == Some(pane_id));
+
+        cr.save().expect("cairo save failed before the statusbar");
+        cr.rectangle(0.0, 0.0, width, self.statusbar.height);
+        cr.clip();
+        let primary_font = if text.primary_bold {
+            &self.statusbar_primary_bold
+        } else {
+            &self.statusbar_primary
+        };
+        // `rect.x` and not a separate inset: the strip's text and the grid's text
+        // share ONE origin by construction (see `editor_inset`'s module docs).
+        draw_text_line(
+            cr,
+            primary_font,
+            rect.x,
+            self.statusbar.primary_line_top,
+            &status.filename,
+            text.primary,
+        );
+        // An unnamed buffer has no path line at all (macOS parity), rather than a
+        // blank one that still consumes its box.
+        if !status.display_path.is_empty() {
+            draw_text_line(
+                cr,
+                &self.statusbar_secondary,
+                rect.x,
+                self.statusbar.secondary_line_top,
+                &status.display_path,
+                text.secondary,
+            );
+        }
+        cr.restore()
+            .expect("cairo restore failed after the statusbar");
+
+        cr.save().expect("cairo save failed before the grid");
+        cr.rectangle(rect.x, rect.y, rect.w, rect.h);
+        cr.clip();
+        // Translating the context covers every origin `paint` and `draw_cursor`
+        // compute, which is what leaves both of them unchanged.
+        cr.translate(rect.x, rect.y);
         let grid = grid_id
             .and_then(|g| snap.grid(g))
             .unwrap_or_else(|| snap.active_grid());
@@ -858,6 +1116,7 @@ impl PaneInner {
                 draw_cursor(cr, &snap, &self.metrics);
             }
         }
+        cr.restore().expect("cairo restore failed after the grid");
     }
 
     /// Handles a pane area resize: resize the pane's own grid, then the global grid.
@@ -865,8 +1124,7 @@ impl PaneInner {
         let grid = self.panes.borrow().get(&pane_id).and_then(|p| p.grid.get());
         if let Some(grid) = grid {
             if width > 0 && height > 0 {
-                let (cols, rows) =
-                    grid_size_for(width, height, self.metrics.cell_w, self.metrics.cell_h);
+                let (cols, rows) = self.pane_grid_size(width, height);
                 if let Some(core) = self.core.borrow().as_ref() {
                     core.resize_grid(grid, cols, rows);
                 }
@@ -877,6 +1135,15 @@ impl PaneInner {
 
     /// Resizes the outer/global grid (grid 1) to the full editor area, so the
     /// cmdline spans the width and nvim's overall layout tracks the window.
+    ///
+    /// **Deliberately the un-inset [`grid_size_for`], not
+    /// [`Self::pane_grid_size`].** Grid 1 is not a pane: it covers the whole editor
+    /// area, so with N panes there is no single statusbar strip to subtract and no
+    /// one set of padding gutters. Under `ext_multigrid` every window grid is sized
+    /// independently by `resize_grid`, which makes this size advisory (`&columns` /
+    /// `&lines`), so the bare division is both the status quo and the only
+    /// arithmetically meaningful answer here. A reader who greps `grid_size_for`,
+    /// finds three call sites and sees two changed is looking at this one.
     fn resize_global(&self) {
         let width = self.pane_area.width();
         let height = self.pane_area.height() + self.cmdline_area.height();
@@ -921,25 +1188,28 @@ impl PaneInner {
     /// The snapshot guard is dropped before this returns; nothing here calls into
     /// [`WolfCore`] while holding it.
     fn grid_and_dims(&self, pane_id: PaneId) -> Option<GridTarget> {
-        let grid = self
-            .panes
-            .borrow()
-            .get(&pane_id)
-            .and_then(|p| p.grid.get())?;
-        self.dims_for_grid(grid)
+        let (grid, rect) = {
+            let panes = self.panes.borrow();
+            let p = panes.get(&pane_id)?;
+            (p.grid.get()?, self.pane_grid_rect(&p.area))
+        };
+        self.dims_for_grid(grid, rect)
     }
 
-    /// The LIVE dimensions of `grid`, as a [`GridTarget`].
+    /// The LIVE dimensions of `grid`, paired with the pane rectangle `rect` the
+    /// event's coordinates are relative to, as a [`GridTarget`].
     ///
     /// Used by the drag/release path, which must NOT re-resolve the pane's current
     /// grid: the drag targets the grid PINNED at press, so following a rebind
-    /// mid-drag would silently retarget the selection.
+    /// mid-drag would silently retarget the selection. `rect` is the caller's
+    /// because it belongs to the pane the gesture started in, whatever grid is
+    /// pinned.
     ///
     /// `usize -> u16` goes through `try_from`, never `as`: a grid wider than
     /// `u16::MAX` is impossible in practice, but saturating is the only honest
     /// answer if it ever happened, and a wrapping cast would produce a cell inside
     /// a grid that does not exist.
-    fn dims_for_grid(&self, grid: u64) -> Option<GridTarget> {
+    fn dims_for_grid(&self, grid: u64, rect: GridRect) -> Option<GridTarget> {
         let core_ref = self.core.borrow();
         let core = core_ref.as_ref()?;
         let snap = core.read_snapshot();
@@ -948,6 +1218,7 @@ impl PaneInner {
             grid,
             cols: u16::try_from(g.cols).unwrap_or(u16::MAX),
             rows: u16::try_from(g.rows).unwrap_or(u16::MAX),
+            grid_rect: rect,
         })
     }
 
@@ -1014,14 +1285,20 @@ impl PaneInner {
         g: &gtk::GestureDrag,
     ) -> Option<(GridTarget, u32, f64, f64)> {
         let (start_x, start_y) = g.start_point()?;
-        let (grid, button) = {
+        let (grid, button, rect) = {
             let panes = self.panes.borrow();
             let p = panes.get(&pane_id)?;
-            (p.drag_grid.get()?, p.drag_button.get()?)
+            (
+                p.drag_grid.get()?,
+                p.drag_button.get()?,
+                // The gesture's coordinates are always widget-local to `pane_id`'s
+                // OWN area, whatever grid is pinned, so the rect is this pane's.
+                self.pane_grid_rect(&p.area),
+            )
         };
         // The PINNED grid's dims, re-read live — NOT `grid_and_dims(pane_id)`, which
         // would follow a rebind and retarget the drag mid-sequence.
-        let target = self.dims_for_grid(grid)?;
+        let target = self.dims_for_grid(grid, rect)?;
         Some((target, button, start_x + off_x, start_y + off_y))
     }
 
@@ -1059,9 +1336,13 @@ impl PaneInner {
         let Some(input) = mouse::mouse_input(button, g.current_event_state()) else {
             return;
         };
+        // GTK delivers PANE-local coordinates; `cell_at` speaks GRID-local ones.
+        // A press in the statusbar strip or a padding gutter translates to a
+        // negative coordinate, which `cell_at` clamps to the nearest edge cell.
+        let (gx, gy) = editor_inset::grid_local(x, y, target.grid_rect);
         let (row, col) = cell_at(
-            x,
-            y,
+            gx,
+            gy,
             self.metrics.cell_w,
             self.metrics.cell_h,
             target.cols,
@@ -1123,11 +1404,13 @@ impl PaneInner {
             return;
         };
         // GTK's `scroll` signal carries no coordinates, so the cell comes from the
-        // position the motion controller recorded.
+        // position the motion controller recorded — pane-local, and translated into
+        // grid-local space exactly as the mouse path's is.
         let (px, py) = pointer;
+        let (gx, gy) = editor_inset::grid_local(px, py, target.grid_rect);
         let (row, col) = cell_at(
-            px,
-            py,
+            gx,
+            gy,
             self.metrics.cell_w,
             self.metrics.cell_h,
             target.cols,
@@ -1430,6 +1713,19 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
     container.append(&pane_area);
     container.append(&cmdline_area);
 
+    // The strip is measured ONCE: `metrics` never changes for the life of the
+    // process, so nothing here belongs on the paint path. Everything is in DEVICE
+    // PIXELS, which is the unit `statusbar_layout` is called in on this front-end
+    // and the unit Cairo paints in.
+    let primary_px = metrics.size_px;
+    let secondary_px = statusbar_layout::secondary_font_size(primary_px);
+    let statusbar = statusbar_layout::statusbar_layout(
+        primary_px,
+        secondary_px,
+        STATUSBAR_VERTICAL_PADDING,
+        STATUSBAR_LINE_GAP,
+    );
+
     let inner = Rc::new(PaneInner {
         tree: Rc::new(RefCell::new(PaneTree::new(FIRST_PANE_ID))),
         panes: RefCell::new(HashMap::new()),
@@ -1437,6 +1733,10 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
         container,
         pane_area,
         cmdline_area: cmdline_area.clone(),
+        statusbar,
+        statusbar_primary: strip_font(&metrics.font, primary_px, false),
+        statusbar_primary_bold: strip_font(&metrics.font, primary_px, true),
+        statusbar_secondary: strip_font(&metrics.font, secondary_px, false),
         metrics: metrics.clone(),
         core: core.clone(),
         active_pane: Cell::new(None),
@@ -1692,8 +1992,30 @@ fn install_paned_position(
     }
 }
 
-/// Ceils a cell dimension (px) to at least one pixel, as a content-size floor under
-/// a non-shrinking paned child.
+/// The grid font at `size_px` DEVICE PIXELS, for one of the statusbar strip's two
+/// lines.
+///
+/// **`set_absolute_size`, not `set_size`, and the difference is deliberate.**
+/// [`CellMetrics::for_font`] uses `set_size` because that is a POINT size and
+/// changing it would change how the GRID face is rasterized — which every OCR
+/// assertion in the smoke suite rides on. That argument does not transfer to a font
+/// no assertion reads: the strip's line boxes, padding and gap are already in
+/// device pixels (which is why [`CellMetrics::size_px`] exists), so measuring its
+/// font in the same unit keeps the whole strip in one unit. At the 96 dpi this
+/// crate assumes the two spellings give the same physical size; above it they would
+/// not, which is subsumed by the crate's recorded absence of HiDPI handling.
+fn strip_font(base: &pango::FontDescription, size_px: f64, bold: bool) -> pango::FontDescription {
+    let mut font = base.clone();
+    font.set_absolute_size(size_px * f64::from(pango::SCALE));
+    if bold {
+        font.set_weight(pango::Weight::Bold);
+    }
+    font
+}
+
+/// Ceils a pane dimension (px) to at least one pixel, as a content-size floor under
+/// a non-shrinking paned child. Fed from [`editor_inset::min_pane_size`], so the
+/// floor covers the statusbar strip and the padding gutters as well as the cell.
 fn cell_floor(cell_px: f64) -> i32 {
     let v = cell_px.ceil().clamp(1.0, f64::from(i32::MAX));
     #[allow(

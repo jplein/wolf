@@ -1,4 +1,170 @@
-// PRODUCTION CODE GOES ABOVE THIS LINE — written by the coder per plan §3.1
+//! The chrome around a pane's text grid, as arithmetic: the pane-local rectangle
+//! the grid paints into, the map from a pane-local point into the grid-local space
+//! [`crate::geometry::cell_at`] speaks, and the grid size that survives the chrome.
+//!
+//! A port of `WolfKeyMap/EditorInset.swift`, named for it the way
+//! [`crate::cell_metrics_math`] is named for `CellMetricsMath.swift`. GTK-, Pango-
+//! and Cairo-free, so the whole rulebook runs in the fast unit suite.
+//!
+//! ## The subtraction and the division stay apart
+//!
+//! macOS keeps `EditorInset` (subtraction) and `PaneGeometry` (division) in
+//! separate files and never merges them. So does this: [`crate::geometry`]'s module
+//! doc states its composition guarantee over the DIVISION alone, and growing
+//! `grid_size_for` into something that also subtracts would force that guarantee to
+//! be restated — and would leave `pane_view::resize_global`, which genuinely wants
+//! the un-inset division for the global grid, with no seam to call.
+//! [`grid_size_for_pane`] is therefore a composition ON TOP of the unchanged
+//! `grid_size_for`, and [`cell_at_over_grid_local_never_exceeds_grid_size_for_pane`]
+//! is the inset pipeline's own companion guarantee.
+//!
+//! ## There is no `StatusbarTextSpan` counterpart, and no `text_left_inset`
+//!
+//! macOS's `StatusbarTextSpan.swift` exists solely to add `PaneGeometry`'s
+//! `paintOffsetX`, the centring inset its 90-column cap produces. This crate has no
+//! column cap and no centring, so that offset is identically zero and the whole
+//! struct degenerates to `grid_rect(..).x` and `grid_rect(..).w` — two fields the
+//! resizer's one call already produced. The painter reads them directly.
+//!
+//! There is no `text_left_inset` function either: a function returning its own
+//! argument names a rule without guaranteeing one, whereas reading `grid_rect(..).x`
+//! makes the strip's text and the grid's text share an origin BY CONSTRUCTION. A
+//! reader porting `StatusbarTextSpan.swift` would find it has no content here.
+//!
+//! ## The cmdline strip is deliberately not indented
+//!
+//! macOS's `EditorInset.textLeftInset` serves the statusbar AND the cmdline,
+//! because both are per-pane there. This crate's cmdline is one full-width strip at
+//! the WINDOW bottom, outside every pane, so the inset does not reach it.
+
+use crate::geometry;
+
+/// The uniform inset applied around every pane's text grid, in device pixels.
+///
+/// `EditorInset.swift`'s `padding` verbatim.
+pub const EDITOR_PADDING_PX: f64 = 20.0;
+
+/// A pane-local rectangle in device pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GridRect {
+    /// The rectangle's left edge, measured from the pane's own left edge.
+    pub x: f64,
+    /// The rectangle's top edge, measured from the pane's own top edge.
+    pub y: f64,
+    /// The rectangle's width.
+    pub w: f64,
+    /// The rectangle's height.
+    pub h: f64,
+}
+
+/// The all-zero rectangle a non-finite input collapses to.
+const COLLAPSED: GridRect = GridRect {
+    x: 0.0,
+    y: 0.0,
+    w: 0.0,
+    h: 0.0,
+};
+
+/// The pane-local rectangle a pane's text grid paints into, once the statusbar
+/// strip along the top and the uniform padding on all four sides are removed.
+///
+/// `EditorInset.swift`'s rule verbatim: `x = padding`,
+/// `y = statusbar_h + padding`, `w = max(0, pane_w - 2 * padding)`,
+/// `h = max(0, pane_h - statusbar_h - 2 * padding)`. **Only `w` and `h` clamp;
+/// `x` and `y` are fixed offsets**, so a pane too small for its own chrome still
+/// reports where the grid WOULD start.
+///
+/// **Divergence from Swift, deliberate and strictly more defensive:** any
+/// non-finite input collapses the WHOLE result to zeros, following
+/// [`crate::geometry`]'s whole-result-collapse convention. A NaN `x` origin would
+/// otherwise poison [`grid_local`] for every pointer event in the pane, and
+/// `cell_at` silently treats a NaN axis as the origin rather than rejecting it.
+#[must_use]
+pub fn grid_rect(pane_w: f64, pane_h: f64, statusbar_h: f64, padding: f64) -> GridRect {
+    if !pane_w.is_finite()
+        || !pane_h.is_finite()
+        || !statusbar_h.is_finite()
+        || !padding.is_finite()
+    {
+        return COLLAPSED;
+    }
+    GridRect {
+        x: padding,
+        y: statusbar_h + padding,
+        w: (pane_w - 2.0 * padding).max(0.0),
+        h: (pane_h - statusbar_h - 2.0 * padding).max(0.0),
+    }
+}
+
+/// Maps a PANE-LOCAL point into the GRID-LOCAL space
+/// [`crate::geometry::cell_at`] speaks: `(x - rect.x, y - rect.y)`, and nothing
+/// else.
+///
+/// A point in the statusbar strip or in one of the four gutters comes back
+/// NEGATIVE, which `cell_at` clamps to the nearest edge cell — exactly macOS's
+/// `PaneGeometry.cellAt`, and exactly what makes a click on the chrome name a real
+/// cell instead of being rejected.
+///
+/// No clamping and no non-finite handling happen here on purpose: a NaN stays NaN
+/// and an infinity keeps its sign, so `cell_at`'s two DIFFERENT non-finite rules —
+/// a NaN has no direction and becomes the origin, an infinity has one and clamps to
+/// the far edge — survive the translation. Collapsing either here would break
+/// drag-past-the-edge selection.
+#[must_use]
+pub fn grid_local(x: f64, y: f64, rect: GridRect) -> (f64, f64) {
+    (x - rect.x, y - rect.y)
+}
+
+/// The Neovim grid size `(cols, rows)` for a pane of `pane_w` x `pane_h` device
+/// pixels, once its chrome is removed.
+///
+/// The one place [`grid_rect`]'s subtraction and
+/// [`crate::geometry::grid_size_for`]'s division compose; see the module docs for
+/// why they are not one function.
+#[must_use]
+pub fn grid_size_for_pane(
+    pane_w: i32,
+    pane_h: i32,
+    statusbar_h: f64,
+    padding: f64,
+    cell_w: f64,
+    cell_h: f64,
+) -> (u16, u16) {
+    let rect = grid_rect(f64::from(pane_w), f64::from(pane_h), statusbar_h, padding);
+    geometry::grid_size_for(floor_to_px(rect.w), floor_to_px(rect.h), cell_w, cell_h)
+}
+
+/// Floors a rectangle dimension to whole pixels, clamped into `[0, i32::MAX]`.
+///
+/// FLOOR, never round: half a pixel of leftover strip must not buy a whole row of
+/// buffer text. `grid_rect` has already rejected every non-finite input, so the
+/// value here is finite.
+fn floor_to_px(v: f64) -> i32 {
+    // Clamp in f64 space FIRST so the value is provably within i32 range before the
+    // cast, exactly as `geometry::floor_div_clamped` does.
+    let n = v.floor().clamp(0.0, f64::from(i32::MAX));
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "n is clamped to [0.0, i32::MAX] and floored, so the cast is exact and in range"
+    )]
+    {
+        n as i32
+    }
+}
+
+/// The smallest pane, in device pixels, that still leaves one whole cell of grid:
+/// `(ceil(cell_w) + 2 * padding, ceil(cell_h) + statusbar_h + 2 * padding)`.
+///
+/// This is `pane_view::make_pane_area`'s content floor. The alternative — leaving
+/// the floor at one cell and letting a starved pane report a 1x1 grid — reflows
+/// that window's whole buffer to a single column, silently.
+#[must_use]
+pub fn min_pane_size(cell_w: f64, cell_h: f64, statusbar_h: f64, padding: f64) -> (f64, f64) {
+    (
+        cell_w.ceil() + 2.0 * padding,
+        cell_h.ceil() + statusbar_h + 2.0 * padding,
+    )
+}
 
 #[cfg(test)]
 mod tests {
@@ -329,8 +495,9 @@ mod tests {
                 // 38 — a whole extra row of buffer text, from half a pixel of strip.
                 //
                 // The strip height this seam is CALLED with is integral by
-                // construction: `statusbar_layout`'s `height` is a sum of two `ceil`s
-                // and two integral paddings. So this row pins the seam's stated
+                // construction: `statusbar_layout`'s `height` is two `ceil`ed line
+                // boxes plus the vertical padding twice and the line gap once, all of
+                // which ship as whole numbers. So this row pins the seam's stated
                 // CONTRACT — the conversion floors, whatever it is handed — rather
                 // than a state production can reach today. That is deliberate: the
                 // seam takes `f64`, and the day someone feeds it a scaled or
@@ -359,8 +526,9 @@ mod tests {
                 "case: {} — grid_size_for_pane({}, {}, {}, {}, {CELL_W}, {CELL_H}) as \
                  (cols, rows). Read the sibling rows before touching anything: if C \
                  and D are green the padding subtraction is what moved, if B and D \
-                 are green the strip subtraction is, and if D itself is red the \
-                 division in `geometry::grid_size_for` changed rather than this \
+                 are green the strip subtraction is, if H is red ALONE the `f64 -> \
+                 i32` conversion rounds where it must floor, and if D itself is red \
+                 the division in `geometry::grid_size_for` changed rather than this \
                  module.",
                 case.desc, case.pane_w, case.pane_h, case.statusbar_h, case.padding
             );
