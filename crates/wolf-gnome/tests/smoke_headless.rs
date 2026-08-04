@@ -9499,7 +9499,12 @@ fn assert_inside_extents(smoke: &str, label: &str, point: (i64, i64), extents: (
 
 /// Asserts the probe click moved the cursor off `(1, 1)`, derives the editor pane's
 /// on-screen origin from it, and asserts that origin sits inside the measured band.
-/// Returns the derived origin so the caller can print it.
+/// Returns that origin as `(x, y)` in the injected point's own output coordinates;
+/// every caller uses it only inside an `assert!` message, and `assert!` formats
+/// lazily, so the origin is observable on a FAILING run and never on a green one.
+/// Deriving it from a green run instead means reading the smoke's persisted probe
+/// readback and crossing it with an independently measured cell — the method
+/// `crates/wolf-gnome/tests/README.md` records.
 ///
 /// `probe_cell` is whatever Neovim reported for a gesture whose PRESS was at
 /// `(PROBE_X, PROBE_Y)`: the click smoke passes its probe click's `line('.')` /
