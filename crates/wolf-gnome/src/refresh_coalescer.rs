@@ -1,4 +1,104 @@
-//! Placeholder module doc: the production `RefreshCoalescer` is pending (plan §3).
+//! The pure, GTK-free state machine behind the sidebar's TRAILING refresh.
+//!
+//! A port of `WolfKeyMap/PickerRefreshCoalescer.swift`, with one deliberate
+//! divergence: macOS shares its coalescer between the picker and the file tree,
+//! while on Linux only the sidebar adopts it. The picker's refresh is not part of
+//! this rule and widening it would put the picker's cage smokes at risk for nothing.
+//!
+//! A streaming traversal fires a wake per batch. Left alone each wake rebuilds the
+//! whole root store, which on `wolf-gnome` also collapses every manually expanded
+//! directory. This collapses a burst into one trailing fire per
+//! [`REFRESH_INTERVAL`]: [`RefreshCoalescer::request`] answers `Some(generation)`
+//! when the caller must arm a one-shot `glib` timeout and `None` when the batch
+//! coalesced into an already-armed one.
+//!
+//! ## The final batch is never dropped
+//!
+//! Each batch appends to the shared search state and THEN wakes, and a fire reads
+//! that state at fire time. A wake therefore either coalesces into an armed fire —
+//! which by definition has not run yet, so it will read the state including that
+//! batch — or finds nothing armed and arms a new one. [`RefreshCoalescer::fire`]
+//! clears `armed` BEFORE it returns, which is what closes the third case: a batch
+//! arriving during or after a fire arms a fresh one rather than coalescing into a
+//! fire that has already performed. That property is what a frame-budget check
+//! (drop the wake if too little time has passed) cannot give, and it is the whole
+//! reason the mechanism is a trailing timer rather than a budget.
+//!
+//! ## Cancellation
+//!
+//! [`RefreshCoalescer::cancel`] bumps the generation rather than removing the GLib
+//! source, because removing an already-fired source is a GLib warning. The armed
+//! closure still runs; its `fire` call no longer matches and performs nothing. This
+//! is the generation-token pattern `crate::crash_overlay`'s banner already uses.
+//!
+//! [`REFRESH_INTERVAL`]'s value is asserted nowhere: a constant compared against its
+//! own literal states nothing. What the tests pin is the mechanism.
+
+use std::time::Duration;
+
+/// How long a trailing refresh waits before it fires — roughly 30 fps.
+///
+/// **The one site in this crate where this number lives.** The macOS counterpart is
+/// `PickerRefreshCoalescer.refreshInterval = 0.033`.
+pub const REFRESH_INTERVAL: Duration = Duration::from_millis(33);
+
+/// The trailing-refresh state machine: at most one armed fire at a time, plus a
+/// generation token that makes a cancelled fire a no-op.
+pub struct RefreshCoalescer {
+    /// Whether a fire is armed and has not yet performed.
+    armed: bool,
+    /// The token the currently armed fire must carry to perform.
+    generation: u64,
+}
+
+impl RefreshCoalescer {
+    /// A coalescer with nothing armed.
+    #[must_use]
+    pub fn new() -> RefreshCoalescer {
+        RefreshCoalescer {
+            armed: false,
+            generation: 0,
+        }
+    }
+
+    /// Records one refresh request, answering `Some(generation)` when the caller
+    /// must arm a trailing fire carrying that generation, and `None` when the
+    /// request coalesced into one that is already armed.
+    #[must_use]
+    pub fn request(&mut self) -> Option<u64> {
+        if self.armed {
+            return None;
+        }
+        self.armed = true;
+        Some(self.generation)
+    }
+
+    /// Whether the fire carrying `generation` should perform its refresh.
+    ///
+    /// Disarms FIRST when it does, so a batch arriving during the refresh arms a
+    /// new fire instead of coalescing into this one — see the module docs. A stale
+    /// generation (from a cancelled source) leaves any newly armed fire alone.
+    pub fn fire(&mut self, generation: u64) -> bool {
+        let performs = self.armed && generation == self.generation;
+        if performs {
+            self.armed = false;
+        }
+        performs
+    }
+
+    /// Disarms, and moves to a generation the already-queued GLib closure cannot
+    /// match. Called by the sidebar's re-root and close.
+    pub fn cancel(&mut self) {
+        self.armed = false;
+        self.generation = self.generation.wrapping_add(1);
+    }
+}
+
+impl Default for RefreshCoalescer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[cfg(test)]
 mod tests {

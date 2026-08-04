@@ -1,4 +1,92 @@
-//! Placeholder module doc: the production `TreeRefreshGate` is pending (plan §3).
+//! The pure, GTK-free gate that decides whether a sidebar refresh is worth doing.
+//!
+//! A deliberate port of `WolfKeyMap/TreeRefreshGate.swift`, holding both halves the
+//! macOS counterpart holds:
+//!
+//! - **Visibility.** A refresh requested while the sidebar is hidden is refused and
+//!   REMEMBERED; the sidebar reappearing owes exactly one catch-up. Rebuilding a
+//!   widget tree nobody can see is redundant work, and dropping the request without
+//!   remembering it would leave a re-shown sidebar holding whatever it last drew.
+//! - **Version.** A rebuild happens on the FIRST refresh at a snapshot version and
+//!   on no later one. That is what stops a current-file change — which advances no
+//!   version — collapsing every manually expanded directory, because in
+//!   `wolf-gnome` a rebuild of the root store destroys each row's `TreeListRow` and
+//!   with it its expanded state.
+//!
+//! [`TreeRefreshGate::reset_version_tracking`] exists because
+//! `wolf_core::files::FileSearchState` numbers versions PER `FileSearch`, not
+//! globally: a fresh search started by a re-root begins again at 1, so a gate that
+//! survived the re-root with its tracking intact would answer "no rebuild" to the
+//! new project's first batch and leave the previous project's files on screen.
+
+/// The sidebar's refresh gate: visibility plus snapshot version.
+///
+/// Not `Copy` and deliberately mutable — every method records something. Lives
+/// behind the sidebar's `RefCell` and is consulted twice per refresh: the
+/// visibility half first, the version half second.
+pub struct TreeRefreshGate {
+    /// Whether the sidebar is on screen.
+    visible: bool,
+    /// Whether a refresh was refused while hidden, and is therefore owed.
+    deferred: bool,
+    /// The snapshot version the widgets were last rebuilt from.
+    last_rebuilt_version: Option<u64>,
+}
+
+impl TreeRefreshGate {
+    /// A gate for a sidebar that is currently `visible`, with nothing deferred and
+    /// nothing yet rebuilt.
+    #[must_use]
+    pub fn new(visible: bool) -> TreeRefreshGate {
+        TreeRefreshGate {
+            visible,
+            deferred: false,
+            last_rebuilt_version: None,
+        }
+    }
+
+    /// Whether a requested refresh may proceed. While hidden it records that one
+    /// was owed and answers `false`.
+    pub fn request_refresh(&mut self) -> bool {
+        if self.visible {
+            return true;
+        }
+        self.deferred = true;
+        false
+    }
+
+    /// Records the sidebar's visibility, answering `true` iff this is a
+    /// hidden → visible transition that owes the one deferred catch-up (which it
+    /// then clears).
+    pub fn set_visible(&mut self, visible: bool) -> bool {
+        let was_visible = self.visible;
+        self.visible = visible;
+        if !visible || was_visible || !self.deferred {
+            return false;
+        }
+        self.deferred = false;
+        true
+    }
+
+    /// Whether the widgets must be rebuilt for `version`: `true` iff it differs
+    /// from the version last rebuilt, which it then records.
+    pub fn should_rebuild(&mut self, version: u64) -> bool {
+        if self.last_rebuilt_version == Some(version) {
+            return false;
+        }
+        self.last_rebuilt_version = Some(version);
+        true
+    }
+
+    /// Forgets the last rebuilt version.
+    ///
+    /// Called on a RE-ROOT: a fresh `wolf_core::FileSearch` restarts its version at
+    /// 1, so the new project's first batch would otherwise be indistinguishable
+    /// from a redundant wake at a version already drawn.
+    pub fn reset_version_tracking(&mut self) {
+        self.last_rebuilt_version = None;
+    }
+}
 
 #[cfg(test)]
 mod tests {

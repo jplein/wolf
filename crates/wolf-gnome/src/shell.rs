@@ -6,7 +6,8 @@
 //! [`crate::actions::ACTION_TABLE`] declares the action names, accelerators and
 //! their `Command` correspondence; [`crate::actions::MENU_SECTIONS`] declares the
 //! menu; [`crate::command_action::ui_action_for`] decides what each drained
-//! command means; [`crate::workspace`] decides when a pending re-root has settled.
+//! command means; [`crate::workspace`] decides whether a settle moves the sidebar's
+//! root.
 //! Because the menu, the accelerators and the drained commands all resolve through
 //! the same tables, they cannot drift apart.
 //!
@@ -24,8 +25,10 @@
 //!   LEVEL-triggered (an atomic read), and putting the read behind
 //!   `pane_view::on_render_wake`'s `core.is_none()` guard would reintroduce an
 //!   edge-triggered swallow.
-//! - [`AppShell::on_render_wake`] settles a pending re-root, refreshes the window
-//!   TITLE from the live cwd ([`AppShell::refresh_title`] over the pure
+//! - [`AppShell::on_render_wake`] reads the captive nvim's LIVE working directory
+//!   ONCE, settles the sidebar's root against it ([`AppShell::settle_reroot`] over
+//!   the pure [`workspace::reroot_decision`]), refreshes the window
+//!   TITLE from that same value ([`AppShell::refresh_title`] over the pure
 //!   [`crate::title`] seam), refreshes the two navigation buttons' sensitivity from
 //!   the FOCUSED pane ([`AppShell::refresh_nav_buttons`] over the pure
 //!   [`crate::nav_ui`] seam — the wake a `WinEnter` fires bumps no `seq`, so this is
@@ -94,6 +97,11 @@
 //! a `block_on_rpc`, and against a dead nvim it freezes the GTK main loop for the
 //! whole RPC timeout budget on every single crash. The cheap, RPC-free
 //! `Snapshot::current_tabpage` field carries the same handle.
+//!
+//! The sidebar's re-root adds NO fourth blocking call, which is worth stating
+//! because it is the one new per-wake core read this module makes:
+//! `WolfCore::live_cwd` is a `parking_lot` read of a tracked cell, taken once per
+//! wake in [`AppShell::on_render_wake`] and passed to both consumers.
 //!
 //! Exactly THREE `block_on_rpc` call sites are reachable from this crate, and the
 //! restart path issues none of them. The first is `WolfCore::rebuild_layout`, called
@@ -266,6 +274,10 @@ pub struct ShellParts<'a> {
     /// ([`crate::state_seam::RestorePlan::sidebar_visible`]). The empty state
     /// overrides it at apply time, never at restore time.
     pub sidebar_shown: bool,
+    /// The working directory the captive nvim was launched in — the seed for
+    /// [`ShellInner::rooted_cwd`]. Taken by value; `app::build_ui` already clones
+    /// `RestorePlan::core_cwd` for the core config and for persistence.
+    pub launch_cwd: PathBuf,
     /// The crash/stall overlay + banner, driven by the liveness read.
     pub crash_overlay: &'a CrashOverlay,
     /// The pane view, reset after a successful in-place Neovim restart. No cycle:
@@ -325,9 +337,22 @@ struct ShellInner {
     toggle_sidebar: RefCell<Option<gio::SimpleAction>>,
     /// A directory the user chose — in the Open Folder dialog or as an Open Recent
     /// palette row — awaiting nvim's `DirChanged`. Both producers set it through
-    /// [`AppShell::chdir_to`]; a later wake settles it via
-    /// [`workspace::reroot_ready`].
+    /// [`AppShell::chdir_to`]; a later wake discards it via
+    /// [`workspace::reroot_decision`] once nvim reports that directory.
+    ///
+    /// It records that a request is OUTSTANDING and nothing more: it never decides
+    /// where the sidebar roots, so a `:tcd` nvim refused (core degrades that to a
+    /// `tracing::warn!`) blocks no later re-root.
     pending_reroot: RefCell<Option<PathBuf>>,
+    /// The directory the sidebar is CURRENTLY rooted at, canonical. The authority
+    /// [`workspace::reroot_decision`] compares nvim's live cwd against.
+    ///
+    /// Seeded in [`build`] from the canonicalized [`ShellParts::launch_cwd`].
+    /// Canonicalizing the seed is load-bearing: `live_cwd` is already canonical
+    /// (core's `apply_cwd` canonicalizes) while a cwd restored from `state.json`
+    /// need not be, and a textual mismatch would cost a spurious full re-root — a
+    /// whole fresh traversal — on every launch.
+    rooted_cwd: RefCell<Option<PathBuf>>,
     /// The crash/stall overlay + banner, driven by [`AppShell::on_liveness_wake`].
     crash_overlay: CrashOverlay,
     /// The pane view, reset after a successful in-place restart.
@@ -463,6 +488,11 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         search_in_project: RefCell::new(None),
         toggle_sidebar: RefCell::new(None),
         pending_reroot: RefCell::new(None),
+        // Canonicalized so the comparison against the core's already-canonical
+        // `live_cwd` means what it says; see the field's docs.
+        rooted_cwd: RefCell::new(Some(
+            std::fs::canonicalize(&parts.launch_cwd).unwrap_or(parts.launch_cwd),
+        )),
         crash_overlay: parts.crash_overlay.clone(),
         panes: parts.panes.clone(),
         state: parts.state.clone(),
@@ -735,6 +765,10 @@ impl AppShell {
         self.inner
             .paned
             .set_position(if shown { TREE_PANE_WIDTH } else { 0 });
+        // Relayed from the ONE site, so the sidebar's refresh gate can never
+        // disagree with what is on screen: a refresh requested while hidden is
+        // deferred, and re-showing owes exactly one catch-up.
+        self.inner.tree.set_sidebar_visible(shown);
     }
 
     /// Flips the user's sidebar preference, applies it, and records it for
@@ -1071,8 +1105,16 @@ impl AppShell {
     /// because a drained `close_window` tears the core down. Unlike the paint, it
     /// runs in ALL THREE liveness states — see the module docs.
     pub fn on_render_wake(&self) {
-        self.settle_pending_reroot();
-        self.refresh_title();
+        // ONE read of the tracked-cwd cell per wake, in its own statement, shared by
+        // the re-root settle and the title. `WolfCore::live_cwd` is a `parking_lot`
+        // read of a tracked cell, never an RPC, so the blocking-RPC inventory is
+        // unchanged by the sidebar's re-root — see the module docs.
+        let live = {
+            let core_ref = self.inner.core.borrow();
+            core_ref.as_ref().and_then(WolfCore::live_cwd)
+        };
+        self.settle_reroot(live.as_deref());
+        self.refresh_title(live.as_deref());
         self.refresh_nav_buttons();
         self.inner.state.on_render_wake();
         // LAST: a drained `close_window` tears the core down, so the state
@@ -1080,24 +1122,20 @@ impl AppShell {
         self.drain_and_dispatch_commands();
     }
 
-    /// Sets the window title from the captive nvim's LIVE working directory,
-    /// through the pure [`title::window_title`] seam.
+    /// Sets the window title from `live` — the captive nvim's working directory,
+    /// read once per wake by [`AppShell::on_render_wake`] — through the pure
+    /// [`title::window_title`] seam.
     ///
-    /// The cwd read is RPC-free (`WolfCore::live_cwd` is a tracked-cell read) and
-    /// `home` was captured once at [`build`] time, so this costs a string compare
-    /// on a steady-state frame.
+    /// The cwd is passed IN rather than read here, so the re-root settle and the
+    /// title share one read; `home` was captured once at [`build`] time, so this
+    /// costs a string compare on a steady-state frame.
     ///
     /// **The `last_title` cache is not cosmetic.** `set_title` on every frame is
     /// pointless GTK churn; more to the point, the cage title smoke's red-run
     /// revert is the deletion of the single `set_title` call below, so that call
     /// has to be the only place a title is ever pushed.
-    fn refresh_title(&self) {
-        // Short borrow in its own statement, dropped before anything else.
-        let cwd = {
-            let core_ref = self.inner.core.borrow();
-            core_ref.as_ref().and_then(WolfCore::live_cwd)
-        };
-        let cwd = cwd.map(|cwd| cwd.to_string_lossy().into_owned());
+    fn refresh_title(&self, live: Option<&std::path::Path>) {
+        let cwd = live.map(|cwd| cwd.to_string_lossy().into_owned());
         let title = title::window_title(cwd.as_deref().unwrap_or_default(), &self.inner.home);
         // Bound to a local so the `RefCell` borrow cannot still be alive when the
         // `borrow_mut()` below runs.
@@ -1251,7 +1289,7 @@ impl AppShell {
     /// The sidebar is NOT re-rooted synchronously: `start_file_search` resolves its
     /// root from `live_cwd()`, which only updates once nvim reports `DirChanged`,
     /// so an immediate re-root would re-root at the OLD cwd. See
-    /// [`AppShell::settle_pending_reroot`].
+    /// [`AppShell::settle_reroot`].
     fn open_folder_dialog(&self) {
         let dialog = gtk::FileDialog::builder()
             .title(OPEN_FOLDER_DIALOG_TITLE)
@@ -1306,41 +1344,54 @@ impl AppShell {
     ///
     /// Two producers reach this: the native Open Folder dialog and an Open Recent
     /// palette row ([`AppShell::on_palette_activation`]). Both settle through
-    /// [`AppShell::settle_pending_reroot`], which is what makes an Open Recent
-    /// activation indistinguishable from picking the same folder in the dialog.
+    /// [`AppShell::settle_reroot`], which is what makes an Open Recent activation
+    /// indistinguishable from picking the same folder in the dialog.
     ///
     /// A failed `:tcd` leaves the pending re-root set until the next successful
-    /// chdir: `wolf_core::input` degrades a failed apply to a `tracing::warn!`, so
-    /// Neovim never reports `DirChanged` and `reroot_ready` never holds.
-    /// `palette::open_recent_candidates`' `is_dir` refusal is what keeps that window
-    /// small for the palette; the dialog cannot offer a directory that has gone.
+    /// chdir — `wolf_core::input` degrades a failed apply to a `tracing::warn!`, so
+    /// Neovim never reports `DirChanged` — and that is now inert rather than
+    /// blocking: [`workspace::reroot_decision`] roots at the LIVE cwd regardless, and
+    /// discards the stale request the moment nvim ever reports that directory.
     fn chdir_to(&self, path: PathBuf) {
         let path = std::fs::canonicalize(&path).unwrap_or(path);
         self.send_input(InputEvent::Chdir { path: path.clone() });
         *self.inner.pending_reroot.borrow_mut() = Some(path);
     }
 
-    /// If a pending re-root has been applied by nvim, clears the empty state and
-    /// re-roots the sidebar. Run on every wake, BEFORE the command drain.
+    /// Settles the sidebar's root against `live`, nvim's working directory: clears
+    /// the empty state and re-roots when they have diverged, and discards a
+    /// satisfied front-end request. Run on every wake, BEFORE the command drain.
     ///
-    /// The one settle point both [`AppShell::chdir_to`] producers share, which is
-    /// why the Open Folder dialog and an Open Recent palette row cannot diverge in
-    /// what the sidebar does afterwards.
-    fn settle_pending_reroot(&self) {
+    /// **The ONE settle point**, shared by all three producers — the Open Folder
+    /// dialog, an Open Recent palette row, and a `:cd` typed into Neovim — which is
+    /// what stops them diverging in what the sidebar does afterwards. The whole
+    /// decision is the pure [`workspace::reroot_decision`]; this function only
+    /// performs it. The match is exhaustive with no catch-all arm, so a new
+    /// [`workspace::RerootAction`] variant is a compile error here.
+    fn settle_reroot(&self, live: Option<&std::path::Path>) {
+        // Both borrows are cloned out in their own statements: the arms below write
+        // back to `pending_reroot` and call `set_empty_state`, which touches widgets.
         let pending = self.inner.pending_reroot.borrow().clone();
-        let Some(pending) = pending else {
-            return;
-        };
-        let live = {
-            let core_ref = self.inner.core.borrow();
-            core_ref.as_ref().and_then(WolfCore::live_cwd)
-        };
-        if !workspace::reroot_ready(Some(pending.as_path()), live.as_deref()) {
-            return;
+        let rooted = self.inner.rooted_cwd.borrow().clone();
+        match workspace::reroot_decision(pending.as_deref(), live, rooted.as_deref()) {
+            workspace::RerootAction::Stay => {}
+            workspace::RerootAction::ClearPending => {
+                *self.inner.pending_reroot.borrow_mut() = None;
+            }
+            workspace::RerootAction::Reroot {
+                target,
+                clear_pending,
+            } => {
+                if clear_pending {
+                    *self.inner.pending_reroot.borrow_mut() = None;
+                }
+                // Updated in the SAME settle as the re-root, which is what makes the
+                // next settle answer `Stay` and one chdir exactly one re-root.
+                *self.inner.rooted_cwd.borrow_mut() = Some(target.to_path_buf());
+                self.set_empty_state(false);
+                self.inner.tree.reroot(&workspace::root_label(target));
+            }
         }
-        *self.inner.pending_reroot.borrow_mut() = None;
-        self.set_empty_state(false);
-        self.inner.tree.reroot();
     }
 
     /// Sends one input event to the core, holding the borrow only for the call.

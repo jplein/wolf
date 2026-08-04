@@ -7,42 +7,77 @@
 //! traversal batch, `Rc`/`RefCell` interior mutability on the single GTK main
 //! thread, and a `Weak` upgrade in the drain task to avoid a reference cycle.
 //!
-//! ## When the search starts
+//! ## When the search starts, and where it is rooted
 //!
 //! [`build`] takes a `start` flag: the search begins at build time for a normal
 //! project launch, but NOT in the empty state (no project open — see
 //! [`crate::workspace`]), where the sidebar is hidden and there is nothing to
-//! walk. [`TreeHandle::reroot`] then starts (or restarts) it once a front-end
-//! directory change — the Open Folder dialog or an Open Recent palette row — has
-//! settled, i.e. once nvim has reported the new cwd that
-//! `WolfCore::start_file_search` resolves its root from.
+//! walk. [`TreeHandle::reroot`] then starts (or restarts) it, driven from
+//! [`crate::shell`]'s ONE settle point over the pure
+//! [`crate::workspace::reroot_decision`]. That covers both a front-end directory
+//! change (the Open Folder dialog, an Open Recent palette row) and a `:cd` typed
+//! into Neovim. This module reads no cwd of its own: the shell knows where the
+//! sidebar is rooted and passes the label in.
 //!
 //! ## Model
 //!
 //! Each [`crate::tree::TreeNode`] is wrapped in a `glib::BoxedAnyObject` (no custom
-//! GObject subclass). The root `gio::ListStore` holds the cwd's immediate children
-//! (`children_of(entries, "")`). A `gtk::TreeListModel` (passthrough = false,
-//! autoexpand = false) lazily materializes each directory's children via a
-//! create-func that re-runs `children_of` against the latest shared entries; files
-//! return `None` (no children). A `gtk::SingleSelection` wraps the tree model and a
-//! `gtk::SignalListItemFactory` binds each row into a `gtk::TreeExpander` + label.
+//! GObject subclass). The root `gio::ListStore` holds exactly ONE item: the
+//! synthetic root from [`root_node`], a `Dir` named after the working directory
+//! whose `rel_path` is the empty cwd sentinel. A `gtk::TreeListModel` (passthrough =
+//! false, autoexpand = false) lazily materializes each directory's children through
+//! [`children_for`]; files return `None` (no children). A `gtk::SingleSelection`
+//! wraps the tree model and a `gtk::SignalListItemFactory` binds each row into a
+//! `gtk::TreeExpander` + label.
+//!
+//! `remove_all()` destroys the root's `TreeListRow` and with it its expanded state,
+//! so the root is RE-EXPANDED after every root-store rebuild. macOS gets expansion
+//! preservation free from `NSOutlineView`'s identity-keyed `reloadData()` and
+//! carries a `didInitialExpand` flag instead; there is no such flag here and none is
+//! needed.
+//!
+//! **Rule R1 governs every borrow of the shared `entries` and `memo`** — see
+//! [`children_for`], which states it. A `RefCell` borrow held across a GTK call that
+//! re-enters the create-func is a panic.
+//!
+//! ## Refresh: what is coalesced, what is gated
+//!
+//! A traversal batch goes through [`crate::refresh_coalescer`], so a burst collapses
+//! into one trailing rebuild. Everything else refreshes immediately: the initial
+//! build, a render wake, a re-root, and the visibility catch-up.
+//!
+//! A refresh then passes two gates ([`crate::tree_gate`]): it is refused outright
+//! while the sidebar is hidden (and owed once when it returns), and it rebuilds only
+//! when the snapshot VERSION advanced. A pending reveal is retried either way,
+//! because a skipped rebuild still leaves selection and scroll to settle.
+//!
+//! **Present limitation: manual expansion does not survive a version advance.** A
+//! current-file change advances no version, so expansion survives opening a file,
+//! switching buffers and every ordinary redraw; each streaming batch and each
+//! re-root still rebuilds the root store and collapses it. Preserving it across a
+//! version advance means owning every expanded directory's `gio::ListStore` in a
+//! registry and diffing children into it per snapshot — a redesign of the model
+//! layer rather than a memo, and GTK has no `NSOutlineView` equivalent to get it
+//! from.
 //!
 //! ## Highlight + reveal
 //!
 //! The currently-edited file (from `Snapshot::current_file`, delivered on the
 //! existing render wake) is highlighted via the [`CURRENT_FILE_CSS`] class and
-//! revealed by expanding its ancestor directories then selecting its row. Because
-//! the current file can arrive before the tree has streamed in, the requested
-//! reveal is stashed in `pending_reveal` and retried on each refresh.
+//! revealed by expanding the synthetic root and then its ancestor directories,
+//! selecting its row, and scrolling it into view with `ListView::scroll_to` (the gtk
+//! `v4_12` feature). Because the current file can arrive before the tree has
+//! streamed in, the requested reveal is stashed in `pending_reveal` and retried on
+//! each refresh.
 //!
-//! ## v1 limitations
-//!
-//! Rebuilding the root store on each refresh collapses manual expansion (the reveal
-//! re-applies afterward). Reveal expands the file's ancestor directories, selects its
-//! row, and scrolls it into view via `ListView::scroll_to` (enabled by the gtk
-//! `v4_12` feature).
+//! The bold is moved by a REGISTRY rather than by a rebuild, and that is what the
+//! version gate costs. `connect_bind` records each file row's label under its
+//! rel-path and `connect_unbind` drops it, so a current-file change can toggle the
+//! class on exactly two labels. Before the gate the bold was correct only because
+//! every refresh destroyed and re-bound every row.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -50,12 +85,55 @@ use std::sync::Arc;
 use adw::prelude::*;
 use gtk::{gio, glib};
 
+use wolf_core::tree::TreeIndexCache;
 use wolf_core::{FileEntry, FileSearch, InputEvent, WakeFn, WolfCore};
 
+use crate::refresh_coalescer::{RefreshCoalescer, REFRESH_INTERVAL};
 use crate::tree::{self, TreeNode};
+use crate::tree_gate::TreeRefreshGate;
 
 /// CSS class applied to the label of the row whose file is the current buffer.
 const CURRENT_FILE_CSS: &str = "wolf-current-file";
+
+/// The sidebar's single top-level node: a synthetic directory named `label` whose
+/// `rel_path` is the CWD SENTINEL — the empty string, the same one macOS uses.
+///
+/// A `Dir`, which is what makes `TreeInner::activate` structurally unable to reach
+/// `InputEvent::Open` for the root row: only the `File` arm sends one. The empty
+/// `rel_path` is what lets the ordinary create-func resolve the root's children to
+/// the cwd's own top level with no special-casing.
+#[must_use]
+pub(crate) fn root_node(label: &str) -> TreeNode {
+    TreeNode::Dir {
+        name: label.to_string(),
+        rel_path: String::new(),
+    }
+}
+
+/// The immediate children of `rel_path` at snapshot `version`, through the
+/// version-keyed `memo` rather than a fresh full rescan per query.
+///
+/// **Rule R1 — the borrow rule this function exists to make keepable.** GTK invokes
+/// the `TreeListModel` create-func RE-ENTRANTLY: from `TreeListRow::set_expanded`,
+/// from `TreeExpander::set_list_row` inside `connect_bind`, and while deciding
+/// whether a row draws an expander arrow. So `memo` and `entries` are borrowed ONLY
+/// inside the single call statement of this function, which contains no GTK call of
+/// any kind, and every caller binds the returned `Vec` to a local. A `borrow_mut`
+/// held across `set_expanded`, `append` or `set_list_row` is a `RefCell` PANIC, not
+/// a warning — the same force `crate::persistence` gives its core-borrow rule.
+/// Because the borrow scope contains no GTK call, a nested create-func invocation
+/// cannot occur inside it: the borrow is uncontended by construction, not by luck.
+#[must_use]
+pub(crate) fn children_for(
+    memo: &mut TreeIndexCache,
+    version: u64,
+    entries: &[FileEntry],
+    rel_path: &str,
+) -> Vec<TreeNode> {
+    memo.index_for(version, entries)
+        .children_of(rel_path)
+        .to_vec()
+}
 
 /// The CSS that defines [`CURRENT_FILE_CSS`]. Loaded once into the default display.
 const CURRENT_FILE_CSS_DATA: &str = ".wolf-current-file { font-weight: bold; }";
@@ -95,30 +173,78 @@ struct TreeInner {
     /// The last current-file path acted on, so `on_render_wake` only reveals when
     /// the current buffer actually changes.
     last_current: RefCell<Option<PathBuf>>,
+    /// The synthetic root row's displayed name; replaced on each re-root.
+    root_label: RefCell<String>,
+    /// The snapshot version the shared `entries` hold. Shared with the create-func,
+    /// which keys the memo on it.
+    entries_version: Rc<Cell<u64>>,
+    /// The per-snapshot index behind every per-directory query. Shared with the
+    /// create-func; REPLACED outright on a re-root, because a fresh `FileSearch`
+    /// restarts its version at 1.
+    memo: Rc<RefCell<TreeIndexCache>>,
+    /// The visibility + version gate consulted by every refresh.
+    gate: RefCell<TreeRefreshGate>,
+    /// The trailing-refresh state machine behind the traversal-batch wake.
+    coalescer: RefCell<RefreshCoalescer>,
+    /// The current buffer's absolute path, shared with the bind closure so a bound
+    /// row can decide its highlight without taking a snapshot lock.
+    current_abs: Rc<RefCell<Option<PathBuf>>>,
+    /// Every currently-bound FILE row's label, keyed by `rel_path`. This is what
+    /// lets the current-file bold move without a rebuild; with the version gate in
+    /// place, a current-file change re-binds nothing.
+    bound_labels: Rc<RefCell<HashMap<String, gtk::Label>>>,
 }
 
 impl TreeInner {
-    /// Reads the current `FileSearch` view, copies its entries into the shared list,
-    /// rebuilds the root store from the cwd's immediate children, then retries any
-    /// pending reveal. No-op if the search is gone.
+    /// Refreshes the sidebar: consults both gates, and on a version advance copies
+    /// the search's entries into the shared list, rebuilds the root store from the
+    /// single synthetic root and re-expands it. A pending reveal is retried EITHER
+    /// WAY — a skipped rebuild leaves the structure alone but selection and scroll
+    /// still have to settle. No-op if the search is gone.
     fn refresh(&self) {
-        {
+        // No search at all: the empty state before its first re-root, or a closed
+        // sidebar. Nothing to read and nothing to draw.
+        if self.search.borrow().is_none() {
+            return;
+        }
+
+        // The VISIBILITY half, in its own statement: a refresh refused here is
+        // recorded and owed back when the sidebar returns.
+        let may_refresh = self.gate.borrow_mut().request_refresh();
+        if !may_refresh {
+            return;
+        }
+
+        // ONE read of the search view per refresh: the VERSION half of the gate and
+        // the entry copy both come out of it, so they cannot disagree. Every guard
+        // taken here is released before the first widget call below.
+        let rebuild = {
             let search = self.search.borrow();
             let Some(fs) = search.as_ref() else {
                 return;
             };
             let view = fs.read();
-            let mut entries = self.entries.borrow_mut();
-            entries.clear();
-            entries.extend(view.entries.iter().cloned());
-        }
+            // Own statement, as the visibility half above.
+            let rebuild = self.gate.borrow_mut().should_rebuild(view.version);
+            if rebuild {
+                let mut entries = self.entries.borrow_mut();
+                entries.clear();
+                entries.extend(view.entries.iter().cloned());
+                // The shared entries and the version the memo keys on move
+                // together, or a query would be answered out of the wrong index.
+                self.entries_version.set(view.version);
+            }
+            rebuild
+        };
 
-        // Rebuild the root store from the latest entries. (This collapses manual
-        // expansion; the reveal below re-applies the current-file path.)
-        let roots = tree::children_of(&self.entries.borrow(), "");
-        self.root_store.remove_all();
-        for node in roots {
-            self.root_store.append(&glib::BoxedAnyObject::new(node));
+        if rebuild {
+            // The root store holds exactly ONE item: the synthetic cwd root. Its
+            // children are materialized lazily by the create-func.
+            let label = self.root_label.borrow().clone();
+            self.root_store.remove_all();
+            self.root_store
+                .append(&glib::BoxedAnyObject::new(root_node(&label)));
+            self.expand_root();
         }
 
         let pending = self.pending_reveal.borrow().clone();
@@ -127,9 +253,62 @@ impl TreeInner {
         }
     }
 
+    /// Requests a refresh through the trailing coalescer: a burst of traversal
+    /// batches arms at most one `glib` timeout per
+    /// [`crate::refresh_coalescer::REFRESH_INTERVAL`].
+    ///
+    /// The armed closure reads the shared state at FIRE time, so it always sees
+    /// everything appended up to that instant; and because `fire` disarms before it
+    /// returns, a batch arriving after a fire arms a new one rather than being
+    /// dropped.
+    fn refresh_coalesced(self: &Rc<Self>) {
+        // Own statement: the borrow is gone before anything else runs.
+        let armed = self.coalescer.borrow_mut().request();
+        let Some(generation) = armed else {
+            return;
+        };
+        // A Weak, like the drain task's, so an armed fire cannot keep the sidebar
+        // alive past the window.
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local_once(REFRESH_INTERVAL, move || {
+            let Some(inner) = weak.upgrade() else {
+                return;
+            };
+            // Own statement: `refresh` rebuilds widgets, and no coalescer borrow
+            // may be live across that.
+            let performs = inner.coalescer.borrow_mut().fire(generation);
+            if performs {
+                inner.refresh();
+            }
+        });
+    }
+
+    /// Expands the synthetic root row, provided it has children.
+    ///
+    /// Called after EVERY root-store rebuild: `remove_all()` destroys the root's
+    /// `TreeListRow` along with its expanded state, so without this every streamed
+    /// file sits under a collapsed row.
+    fn expand_root(&self) {
+        // Rule R1: both borrows live inside this one call statement, whose callee
+        // touches no widget. The result is a local, so nothing is borrowed when
+        // `set_expanded` re-enters the create-func below.
+        let children = children_for(
+            &mut self.memo.borrow_mut(),
+            self.entries_version.get(),
+            &self.entries.borrow(),
+            "",
+        );
+        if children.is_empty() {
+            return;
+        }
+        if let Some(row) = self.row_at(0) {
+            row.set_expanded(true);
+        }
+    }
+
     /// Handles a render wake: if `Snapshot::current_file` changed since last time,
-    /// records it, stashes it as the reveal target, and refreshes (rebuilding the
-    /// store so highlight CSS re-applies, then revealing the new current file).
+    /// records it, moves the bold to the new row, stashes it as the reveal target,
+    /// and refreshes.
     fn on_render_wake(&self) {
         let current = {
             let core_ref = self.core.borrow();
@@ -137,14 +316,53 @@ impl TreeInner {
                 .as_ref()
                 .and_then(|c| c.read_snapshot().current_file.clone())
         };
-        if *self.last_current.borrow() == current {
+        // Bound to a local so the borrow is gone before the write below.
+        let unchanged = *self.last_current.borrow() == current;
+        if unchanged {
             return;
         }
+        let previous = self.last_current.borrow().clone();
         *self.last_current.borrow_mut() = current.clone();
         *self.pending_reveal.borrow_mut() = current.clone();
-        // Rebuild + reveal: fresh binds pick up the highlight for the new current
-        // file (and drop it from the old one); reveal re-expands the path to it.
+        *self.current_abs.borrow_mut() = current.clone();
+
+        // The version gate suppresses the rebuild that used to re-bind every row,
+        // so the highlight has to be moved explicitly.
+        let (old_rel, new_rel) = {
+            let entries = self.entries.borrow();
+            (
+                previous
+                    .as_deref()
+                    .and_then(|abs| tree::rel_path_for(&entries, abs)),
+                current
+                    .as_deref()
+                    .and_then(|abs| tree::rel_path_for(&entries, abs)),
+            )
+        };
+        self.apply_current_highlight(old_rel.as_deref(), new_rel.as_deref());
         self.refresh();
+    }
+
+    /// Moves the [`CURRENT_FILE_CSS`] class from the row bound to `old_rel` to the
+    /// one bound to `new_rel`.
+    ///
+    /// Both labels are resolved and CLONED under one short `borrow()` which is then
+    /// dropped, because a `gtk::Label` CSS change can run a style pass and nothing
+    /// may hold the registry borrow across it.
+    fn apply_current_highlight(&self, old_rel: Option<&str>, new_rel: Option<&str>) {
+        let (old_label, new_label) = {
+            let bound = self.bound_labels.borrow();
+            (
+                old_rel.and_then(|rel| bound.get(rel).cloned()),
+                new_rel.and_then(|rel| bound.get(rel).cloned()),
+            )
+        };
+        if let Some(label) = old_label {
+            label.remove_css_class(CURRENT_FILE_CSS);
+        }
+        if let Some(label) = new_label {
+            label.add_css_class(CURRENT_FILE_CSS);
+        }
     }
 
     /// Reveals `abs` in the tree: expands its ancestor directories (top-down,
@@ -160,6 +378,13 @@ impl TreeInner {
             // Not resolvable yet; leave pending_reveal set for the next refresh.
             return;
         };
+
+        // The SYNTHETIC ROOT first. Every ancestor row is materialized underneath
+        // it, so without this expansion no `find_row` below can ever match and every
+        // reveal silently fails. (macOS's `expandItem(rootItem)`.)
+        if let Some(row) = self.row_at(0) {
+            row.set_expanded(true);
+        }
 
         for ancestor in tree::ancestors_to_reveal(&rel) {
             if let Some(pos) = self.find_row(&ancestor) {
@@ -211,9 +436,24 @@ impl TreeInner {
         }
     }
 
-    /// Drops the file search, cancelling the background traversal.
+    /// Drops the file search, cancelling the background traversal, and disarms any
+    /// trailing refresh so a late fire cannot touch a torn-down sidebar.
     fn close(&self) {
+        self.coalescer.borrow_mut().cancel();
         let _ = self.search.borrow_mut().take();
+    }
+
+    /// Records the sidebar's visibility, refreshing once if a refresh was deferred
+    /// while it was hidden.
+    ///
+    /// Relayed from `shell::apply_sidebar_visibility`, the ONE site that calls
+    /// `sidebar.set_visible`.
+    fn set_sidebar_visible(&self, visible: bool) {
+        // Own statement: `refresh` consults the same gate.
+        let owed = self.gate.borrow_mut().set_visible(visible);
+        if owed {
+            self.refresh();
+        }
     }
 
     /// Starts (or restarts) the long-lived file search feeding the tree. The
@@ -229,25 +469,39 @@ impl TreeInner {
         *self.search.borrow_mut() = search;
     }
 
-    /// Re-roots the sidebar at the core's CURRENT live cwd: cancels the existing
-    /// traversal, clears every cached projection, then starts a fresh search and
-    /// refreshes.
+    /// Re-roots the sidebar at the core's CURRENT live cwd, drawing `root_label` on
+    /// the synthetic root row: cancels the existing traversal, clears every cached
+    /// projection, then starts a fresh search and refreshes.
     ///
-    /// Driven only from a front-end directory change — the Open Folder dialog or an
-    /// Open Recent palette row — and only once
-    /// [`crate::workspace::reroot_ready`] holds: `start_file_search` resolves its
-    /// root from `live_cwd()`, which only updates after nvim reports `DirChanged`,
-    /// so re-rooting earlier would re-root at the OLD cwd.
-    fn reroot(&self) {
-        // Drop the old search FIRST so its in-flight traversal (at the old root)
+    /// Driven only from [`crate::shell`]'s settle point over
+    /// [`crate::workspace::reroot_decision`], which fires once nvim has reported the
+    /// directory: `start_file_search` resolves its root from `live_cwd()`, so
+    /// re-rooting earlier would re-root at the OLD cwd.
+    ///
+    /// The pending reveal is CLEARED rather than re-armed (macOS re-arms). Re-arming
+    /// would make an unresolvable reveal — the ordinary case after a `:cd` away from
+    /// the current file — retry an O(N) row scan on every later refresh forever.
+    fn reroot(&self, root_label: &str) {
+        // Disarm FIRST. A fire armed against the old root would otherwise refresh
+        // the sidebar from the directory the user just left.
+        self.coalescer.borrow_mut().cancel();
+        // Drop the old search next, so its in-flight traversal (at the old root)
         // is cancelled before the new one starts.
         let _ = self.search.borrow_mut().take();
         self.entries.borrow_mut().clear();
         self.root_store.remove_all();
+        self.bound_labels.borrow_mut().clear();
         *self.pending_reveal.borrow_mut() = None;
         // Forget the last current file so the next wake re-reveals it under the new
         // root rather than treating it as unchanged.
         *self.last_current.borrow_mut() = None;
+        *self.root_label.borrow_mut() = root_label.to_string();
+        // A fresh `FileSearch` restarts `version` at 1, so BOTH version-keyed things
+        // — the memo and the gate's tracking — are only valid within one search
+        // session. Keeping either across a re-root serves the previous project.
+        *self.memo.borrow_mut() = TreeIndexCache::new();
+        self.gate.borrow_mut().reset_version_tracking();
+        self.entries_version.set(0);
         self.start_search();
         self.refresh();
     }
@@ -303,11 +557,17 @@ impl TreeHandle {
         self.inner.close();
     }
 
-    /// Re-roots the sidebar at the core's live cwd (used after a front-end
-    /// directory change — the Open Folder dialog or an Open Recent palette row —
-    /// once nvim has reported the new directory).
-    pub fn reroot(&self) {
-        self.inner.reroot();
+    /// Re-roots the sidebar at the core's live cwd, drawing `root_label` on the
+    /// synthetic root row. Called from the shell's one settle point, for both a
+    /// front-end directory change and a `:cd` typed into Neovim.
+    pub fn reroot(&self, root_label: &str) {
+        self.inner.reroot(root_label);
+    }
+
+    /// Relays the sidebar's visibility into the refresh gate, catching up once if a
+    /// refresh was deferred while it was hidden.
+    pub fn set_sidebar_visible(&self, visible: bool) {
+        self.inner.set_sidebar_visible(visible);
     }
 }
 
@@ -326,32 +586,57 @@ fn install_css() {
 }
 
 /// Builds the `TreeListModel` over `root_store`, lazily materializing each
-/// directory's children from `entries` via `children_of`.
+/// directory's children through [`children_for`] against the shared memo.
+///
+/// GTK calls this closure RE-ENTRANTLY, which is what rule R1 exists for: every
+/// borrow it takes ends inside one statement whose callee touches no widget.
 fn build_tree_model(
     root_store: &gio::ListStore,
     entries: &Rc<RefCell<Vec<FileEntry>>>,
+    entries_version: &Rc<Cell<u64>>,
+    memo: &Rc<RefCell<TreeIndexCache>>,
 ) -> gtk::TreeListModel {
     let entries = entries.clone();
+    let entries_version = entries_version.clone();
+    let memo = memo.clone();
     gtk::TreeListModel::new(root_store.clone(), false, false, move |obj| {
         let boxed = obj.downcast_ref::<glib::BoxedAnyObject>()?;
-        let node = boxed.borrow::<TreeNode>();
-        match &*node {
-            TreeNode::Dir { rel_path, .. } => {
-                let store = gio::ListStore::new::<glib::BoxedAnyObject>();
-                for child in tree::children_of(&entries.borrow(), rel_path) {
-                    store.append(&glib::BoxedAnyObject::new(child));
-                }
-                Some(store.upcast::<gio::ListModel>())
+        // The node borrow ends here, before the store below is populated.
+        let dir = {
+            let node = boxed.borrow::<TreeNode>();
+            match &*node {
+                TreeNode::Dir { rel_path, .. } => Some(rel_path.clone()),
+                TreeNode::File { .. } => None,
             }
-            TreeNode::File { .. } => None,
+        };
+        let rel_path = dir?;
+        // Rule R1: both borrows live inside this one call statement.
+        let children = children_for(
+            &mut memo.borrow_mut(),
+            entries_version.get(),
+            &entries.borrow(),
+            &rel_path,
+        );
+        let store = gio::ListStore::new::<glib::BoxedAnyObject>();
+        for child in children {
+            store.append(&glib::BoxedAnyObject::new(child));
         }
+        Some(store.upcast::<gio::ListModel>())
     })
 }
 
 /// Builds the list-item factory: a `TreeExpander` + `Label` per row, bound to the
-/// row's node (name + current-file highlight) on each (re)bind. `core` is read at
-/// bind time to decide the highlight.
-fn build_factory(core: &Rc<RefCell<Option<WolfCore>>>) -> gtk::SignalListItemFactory {
+/// row's node (name + current-file highlight) on each (re)bind.
+///
+/// The highlight is decided from the shared `current_abs` rather than from a
+/// per-bind `read_snapshot()`, which removes a snapshot-lock take per bound row and
+/// makes bind and [`TreeInner::apply_current_highlight`] read ONE source of truth.
+/// Each bound FILE row registers its label in `bound_labels` and `connect_unbind`
+/// drops it, which is what lets the bold move with no rebuild.
+fn build_factory(
+    current_abs: &Rc<RefCell<Option<PathBuf>>>,
+    bound_labels: &Rc<RefCell<HashMap<String, gtk::Label>>>,
+) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
 
     factory.connect_setup(|_factory, list_item| {
@@ -364,7 +649,8 @@ fn build_factory(core: &Rc<RefCell<Option<WolfCore>>>) -> gtk::SignalListItemFac
         list_item.set_child(Some(&expander));
     });
 
-    let core = core.clone();
+    let current_abs = current_abs.clone();
+    let bind_labels = bound_labels.clone();
     factory.connect_bind(move |_factory, list_item| {
         let Some(list_item) = list_item.downcast_ref::<gtk::ListItem>() else {
             return;
@@ -378,27 +664,63 @@ fn build_factory(core: &Rc<RefCell<Option<WolfCore>>>) -> gtk::SignalListItemFac
         let Some(row) = list_item.item().and_downcast::<gtk::TreeListRow>() else {
             return;
         };
+        // FIRST, and with nothing borrowed: computing a row's expandability
+        // re-enters the `TreeListModel` create-func.
         expander.set_list_row(Some(&row));
 
         let Some(boxed) = row.item().and_downcast::<glib::BoxedAnyObject>() else {
             return;
         };
-        let node = boxed.borrow::<TreeNode>();
-        let (name, is_current) = match &*node {
-            TreeNode::Dir { name, .. } => (name.clone(), false),
-            TreeNode::File { name, abs_path, .. } => {
-                let core_ref = core.borrow();
-                let current = core_ref.as_ref().is_some_and(|c| {
-                    c.read_snapshot().current_file.as_deref() == Some(abs_path.as_path())
-                });
-                (name.clone(), current)
+        // The node borrow ends here; every widget call below is outside it.
+        let (name, file) = {
+            let node = boxed.borrow::<TreeNode>();
+            match &*node {
+                TreeNode::Dir { name, .. } => (name.clone(), None),
+                TreeNode::File {
+                    name,
+                    rel_path,
+                    abs_path,
+                } => (name.clone(), Some((rel_path.clone(), abs_path.clone()))),
             }
         };
         label.set_text(&name);
+
+        let Some((rel_path, abs_path)) = file else {
+            // A directory row (the synthetic root included) is never the current
+            // file and is never registered.
+            label.remove_css_class(CURRENT_FILE_CSS);
+            return;
+        };
+        bind_labels.borrow_mut().insert(rel_path, label.clone());
+        // Bound to a local so the borrow is gone before the CSS change.
+        let is_current = current_abs.borrow().as_deref() == Some(abs_path.as_path());
         if is_current {
             label.add_css_class(CURRENT_FILE_CSS);
         } else {
             label.remove_css_class(CURRENT_FILE_CSS);
+        }
+    });
+
+    let unbind_labels = bound_labels.clone();
+    factory.connect_unbind(move |_factory, list_item| {
+        let Some(list_item) = list_item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let Some(row) = list_item.item().and_downcast::<gtk::TreeListRow>() else {
+            return;
+        };
+        let Some(boxed) = row.item().and_downcast::<glib::BoxedAnyObject>() else {
+            return;
+        };
+        let rel_path = {
+            let node = boxed.borrow::<TreeNode>();
+            match &*node {
+                TreeNode::File { rel_path, .. } => Some(rel_path.clone()),
+                TreeNode::Dir { .. } => None,
+            }
+        };
+        if let Some(rel_path) = rel_path {
+            unbind_labels.borrow_mut().remove(&rel_path);
         }
     });
 
@@ -415,23 +737,33 @@ fn build_factory(core: &Rc<RefCell<Option<WolfCore>>>) -> gtk::SignalListItemFac
 /// starts on the first [`TreeHandle::reroot`] instead. The wake-drain task is
 /// spawned either way and is a no-op while there is no search (`refresh` early
 /// returns).
+///
+/// `root_label` is the text the synthetic root row draws — the launch working
+/// directory's basename, from [`crate::workspace::root_label`]. This module reads no
+/// cwd; the shell passes it in here and again on each [`TreeHandle::reroot`].
 #[must_use]
 pub fn build(
     core: &Rc<RefCell<Option<WolfCore>>>,
     area: &gtk::DrawingArea,
     start: bool,
+    root_label: &str,
 ) -> TreeHandle {
     install_css();
 
     let entries: Rc<RefCell<Vec<FileEntry>>> = Rc::new(RefCell::new(Vec::new()));
+    let entries_version: Rc<Cell<u64>> = Rc::new(Cell::new(0));
+    let memo: Rc<RefCell<TreeIndexCache>> = Rc::new(RefCell::new(TreeIndexCache::new()));
+    let current_abs: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
+    let bound_labels: Rc<RefCell<HashMap<String, gtk::Label>>> =
+        Rc::new(RefCell::new(HashMap::new()));
 
     let root_store = gio::ListStore::new::<glib::BoxedAnyObject>();
-    let tree_model = build_tree_model(&root_store, &entries);
+    let tree_model = build_tree_model(&root_store, &entries, &entries_version, &memo);
     let selection = gtk::SingleSelection::new(Some(tree_model.clone()));
     // Don't auto-highlight row 0 at startup; a real selection only happens when a
     // current-file reveal lands.
     selection.set_autoselect(false);
-    let factory = build_factory(core);
+    let factory = build_factory(&current_abs, &bound_labels);
 
     let list_view = gtk::ListView::new(Some(selection.clone()), Some(factory));
     list_view.set_single_click_activate(true);
@@ -463,6 +795,16 @@ pub fn build(
         wake,
         pending_reveal: RefCell::new(None),
         last_current: RefCell::new(None),
+        root_label: RefCell::new(root_label.to_string()),
+        entries_version,
+        memo,
+        // Seeded VISIBLE and corrected by the first `set_empty_state`, which
+        // `app::build_ui` makes after `install_actions` and before `present()` —
+        // so the gate is right before anything renders.
+        gate: RefCell::new(TreeRefreshGate::new(true)),
+        coalescer: RefCell::new(RefreshCoalescer::new()),
+        current_abs,
+        bound_labels,
     });
 
     // Start the long-lived file search feeding the tree — unless this is the empty
@@ -471,15 +813,17 @@ pub fn build(
         inner.start_search();
     }
 
-    // Drain the wake channel on the GTK main thread, refreshing on each batch. A
-    // Weak avoids a reference cycle (inner owns the wake sender; the task holds only
-    // a weak ref so dropping the handle ends the task).
+    // Drain the wake channel on the GTK main thread. Each traversal batch goes
+    // through the COALESCER rather than refreshing directly, so a burst collapses
+    // into one trailing rebuild. A Weak avoids a reference cycle (inner owns the
+    // wake sender; the task holds only a weak ref so dropping the handle ends the
+    // task).
     {
         let inner_weak = Rc::downgrade(&inner);
         glib::spawn_future_local(async move {
             while wake_rx.recv().await.is_ok() {
                 if let Some(inner) = inner_weak.upgrade() {
-                    inner.refresh();
+                    inner.refresh_coalesced();
                 }
             }
         });

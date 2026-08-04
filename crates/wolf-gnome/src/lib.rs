@@ -67,10 +67,26 @@
 //!   ([`search_overlay::search_status`]), which is the only surface core's
 //!   `WOLF_RG_BIN unset` error ever reaches. Selection movement and activation come
 //!   from [`mod@picker`], as they do for the other three.
-//! - [`launch_decision`] / [`workspace::reroot_ready`]: whether a project is open,
-//!   where the captive Neovim starts, and when an Open Folder re-root has settled
+//! - [`launch_decision`] / [`workspace::reroot_ready`] /
+//!   [`workspace::reroot_decision`]: whether a project is open, where the captive
+//!   Neovim starts, and whether one settle moves the sidebar's root
 //!   ([`workspace`]). The launch rule is process cwd first, then the cwd restored
-//!   from `state.json`, under one shared predicate.
+//!   from `state.json`, under one shared predicate. The re-root rule's authority is
+//!   the directory the sidebar is CURRENTLY rooted at, compared against the one nvim
+//!   reports, so a typed `:cd` moves it while a satisfied front-end request cannot
+//!   move it twice; [`workspace::root_label`] is the text its synthetic root row
+//!   draws.
+//! - [`mod@tree_gate`]: the sidebar's refresh gate — a refresh refused while the
+//!   sidebar is hidden and owed exactly ONE catch-up when it returns, and a rebuild
+//!   allowed once per snapshot VERSION, which is what stops a current-file change
+//!   collapsing manual expansion ([`tree_gate::TreeRefreshGate`]). A port of
+//!   `WolfKeyMap/TreeRefreshGate.swift`.
+//! - [`mod@refresh_coalescer`]: the sidebar's TRAILING refresh — a burst of
+//!   traversal batches armed into one fire per
+//!   [`refresh_coalescer::REFRESH_INTERVAL`], with a generation token that turns a
+//!   cancelled fire into a genuine no-op ([`refresh_coalescer::RefreshCoalescer`]).
+//!   A port of `WolfKeyMap/PickerRefreshCoalescer.swift`; unlike macOS the picker
+//!   deliberately does not share it.
 //! - [`window_title`]: the working directory rendered as a window title, with the
 //!   home prefix abbreviated to `~` on a full path-SEGMENT boundary and an
 //!   ALWAYS-INJECTED `home` (never an implicit `$HOME` read) — [`title`].
@@ -151,12 +167,14 @@ pub mod pane_layout;
 pub mod pane_view;
 pub mod persistence;
 pub mod picker;
+pub mod refresh_coalescer;
 pub mod render;
 pub mod search_overlay;
 pub mod shell;
 pub mod state_seam;
 pub mod title;
 pub mod tree;
+pub mod tree_gate;
 pub mod tree_view;
 pub mod workspace;
 

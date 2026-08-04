@@ -350,8 +350,16 @@ fn build_ui(app: &adw::Application) {
     overlay.add_overlay(&crash.banner_widget());
 
     // The file-tree sidebar on the left; the editor (overlay) on the right. In the
-    // empty state there is no project to walk, so no FileSearch starts.
-    let tree = tree_view::build(&core, &focus_area, !empty);
+    // empty state there is no project to walk, so no FileSearch starts. The tree
+    // reads no cwd of its own: the synthetic root row's LABEL is passed in here and
+    // again on each `TreeHandle::reroot`, so the shell stays the one place that
+    // knows where the sidebar is rooted.
+    let tree = tree_view::build(
+        &core,
+        &focus_area,
+        !empty,
+        &workspace::root_label(&plan.core_cwd),
+    );
     let sidebar = tree.widget();
     let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
     paned.set_start_child(Some(&sidebar));
@@ -458,6 +466,7 @@ fn build_ui(app: &adw::Application) {
         nav_forward_button: &nav_forward_button,
         sidebar_button: &sidebar_button,
         sidebar_shown: plan.sidebar_visible,
+        launch_cwd: plan.core_cwd.clone(),
         crash_overlay: &crash,
         panes: &panes,
         state: &state,

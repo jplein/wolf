@@ -30,6 +30,25 @@
 //! plain `==`. `Path` equality compares COMPONENTS, so it already ignores a
 //! trailing separator but does NOT resolve `.` / `..` / symlinks — canonicalizing
 //! at the call site is what makes the comparison mean what it says.
+//!
+//! ## The re-root rule
+//!
+//! [`reroot_decision`] is the TOTAL decision behind "where is the sidebar rooted,
+//! and does it move now". Its authority is `rooted` — the directory the sidebar is
+//! CURRENTLY rooted at — compared against `live`, the working directory nvim last
+//! reported. A front-end request ([`reroot_ready`]'s `pending`) only decides whether
+//! that request's flag may be discarded in the same settle; it never decides WHERE
+//! to root, so a stuck request (a failed `:tcd`, which core degrades to a warning)
+//! blocks nothing and a typed `:cd` moves the sidebar with no request at all.
+//!
+//! One `chdir` is exactly ONE re-root: while nvim has not applied it `live ==
+//! rooted` and the answer is [`RerootAction::Stay`]; the settle that re-roots also
+//! updates `rooted`, after which the same inputs answer `Stay` forever.
+//!
+//! **No project predicate is applied to a re-root.** [`is_usable_project`] guards a
+//! launch-time GUESS about a directory the user did not choose; a typed `:cd /` is
+//! an explicit act, macOS honours it, and `wolf_core::files::SearchBounds` is the
+//! backstop. Do not re-derive the predicate here.
 
 use std::path::{Path, PathBuf};
 
@@ -122,6 +141,88 @@ pub fn reroot_ready(pending: Option<&Path>, live: Option<&Path>) -> bool {
         (Some(pending), Some(live)) => pending == live,
         _ => false,
     }
+}
+
+/// What one settle should do about the sidebar's root.
+///
+/// Returned by [`reroot_decision`]. The lifetime is the LIVE cwd's: a
+/// [`RerootAction::Reroot`] always targets the directory nvim reported, never the
+/// one a front-end request asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RerootAction<'a> {
+    /// Do nothing at all: nvim has reported no directory, or the sidebar is
+    /// already rooted where nvim is and no request has been satisfied.
+    Stay,
+    /// The sidebar is already rooted where nvim is and a front-end request for
+    /// exactly that directory has been satisfied: discard the request, move
+    /// nothing. This is what makes one `chdir` exactly one re-root.
+    ClearPending,
+    /// Re-root the sidebar at `target`.
+    Reroot {
+        /// Where to root: always the LIVE cwd.
+        target: &'a Path,
+        /// Whether the front-end request may be discarded in the same settle.
+        clear_pending: bool,
+    },
+}
+
+/// Decides what one settle does about the sidebar's root, from the front-end's
+/// `pending` request, nvim's `live` working directory, and the directory the
+/// sidebar is currently `rooted` at.
+///
+/// Three exhaustive rules, in order:
+///
+/// 1. `live` is `None` — nvim has reported no directory, so there is nowhere to
+///    root: [`RerootAction::Stay`].
+/// 2. `live == rooted` — the sidebar is already where nvim is:
+///    [`RerootAction::ClearPending`] when [`reroot_ready`] holds, else
+///    [`RerootAction::Stay`]. This arm is the ANTI-DOUBLE-RE-ROOT rule.
+/// 3. otherwise (including `rooted == None`) — [`RerootAction::Reroot`] at `live`,
+///    clearing the request iff [`reroot_ready`] holds.
+///
+/// All three paths canonicalize before calling, so the comparisons are plain
+/// `==`; see the module docs.
+#[must_use]
+pub fn reroot_decision<'a>(
+    pending: Option<&Path>,
+    live: Option<&'a Path>,
+    rooted: Option<&Path>,
+) -> RerootAction<'a> {
+    // Rule 1: silence is not a move.
+    let Some(live) = live else {
+        return RerootAction::Stay;
+    };
+    // The front-end request decides only whether its flag may be discarded — never
+    // where to root.
+    let satisfied = reroot_ready(pending, Some(live));
+    if rooted == Some(live) {
+        // Rule 2.
+        if satisfied {
+            RerootAction::ClearPending
+        } else {
+            RerootAction::Stay
+        }
+    } else {
+        // Rule 3.
+        RerootAction::Reroot {
+            target: live,
+            clear_pending: satisfied,
+        }
+    }
+}
+
+/// The text the sidebar's synthetic root row draws for `cwd`: its final component,
+/// falling back to the whole path when there is none.
+///
+/// Total. `/` yields `/` and `""` yields `""`; an empty label means the caller
+/// installs no root row, which production never reaches because `live_cwd` is
+/// always absolute.
+#[must_use]
+pub fn root_label(cwd: &Path) -> String {
+    cwd.file_name().map_or_else(
+        || cwd.to_string_lossy().into_owned(),
+        |name| name.to_string_lossy().into_owned(),
+    )
 }
 
 /// The canonicalized `$HOME`, or `None` when it is unset, empty, or does not
