@@ -655,7 +655,10 @@ mod tests {
                  here and is clamped by `geometry::cell_at`, never clamped here. A \
                  zero where a NaN or an infinity was expected means a non-finite \
                  coordinate was collapsed, which breaks drag-past-the-edge selection.",
-                case.desc, case.x, case.y, case.expected
+                case.desc,
+                case.x,
+                case.y,
+                case.expected
             );
         }
     }
@@ -902,15 +905,13 @@ mod tests {
                  `(ceil(cell_w) + 2 * padding, ceil(cell_h) + statusbar_h + 2 * \
                  padding)`; a missing term here becomes a pane GTK will allocate that \
                  has no room for a single cell.",
-                case.desc,
-                case.cell_w,
-                case.cell_h,
-                case.statusbar_h,
-                case.padding,
-                case.expected
+                case.desc, case.cell_w, case.cell_h, case.statusbar_h, case.padding, case.expected
             );
             assert_eq!(
-                (f64::from(case.expected_i32.0), f64::from(case.expected_i32.1)),
+                (
+                    f64::from(case.expected_i32.0),
+                    f64::from(case.expected_i32.1)
+                ),
                 case.expected,
                 "case: {} — the row's `expected_i32` {:?} and `expected` {:?} \
                  disagree. They are two spellings of one number, and the assertions \
