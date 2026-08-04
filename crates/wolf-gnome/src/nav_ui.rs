@@ -844,7 +844,8 @@ mod tests {
         }
 
         assert_eq!(
-            probed, SWEEP_INPUTS,
+            probed,
+            SWEEP_INPUTS,
             "the sweep visited {probed} inputs, not the {SWEEP_INPUTS} the seam is total over. It \
              walked {} liveness input(s) x {} window shape(s) x {} history reading(s); \
              whichever of those three is not 4, 3 and 5 is the one that changed. A SHRUNK \

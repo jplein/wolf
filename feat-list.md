@@ -82,7 +82,7 @@ GTK paints a single-row bottom strip: an active command line, or the last toast 
 | Buffer picker (⌘E)                          | `feat/buffer-list` / `linux-feat/buffer-picker`                              | [x]   | [x]   |
 | Command palette (⌘P)                        | `feat/commands` (`4b3b53e`)                                                  | [x]   | [x]   |
 | Open Recent (global recent-directories MRU) | `feat/commands` / `linux-feat/open-recent`                                   | [x]   | [x]   |
-| Per-pane back/forward navigation history    | `feat/nav-buttons` (`597175b`) / `linux-feat/nav-history`                                               | [x]   | [x]   |
+| Per-pane back/forward navigation history    | `feat/nav-buttons` (`597175b`) / `linux-feat/nav-history`                    | [x]   | [x]   |
 | Project search UI (ripgrep-backed)          | `feat/search-ui` / `linux-feat/project-search`                               | [x]   | [x]   |
 | Native file dialogs (open / save / save-as) | —                                                                            | [x]   | [ ]   |
 
@@ -94,22 +94,22 @@ Two rows stay unticked for partial coverage. The file-dialog row covers all thre
 
 ## Windows, tabs, commands
 
-| Feature                                      | Branch or commit                        | macOS | Linux |
-| -------------------------------------------- | --------------------------------------- | ----- | ----- |
-| Multiple windows                             | `feat/mac-ui-changes` (`2fd6256`)       | [x]   | [ ]   |
-| Command registry (`:Wolf*` + Lua faces)      | `feat/commands` (`fb0147c`)             | [x]   | [x]   |
-| Commands drained and dispatched to the UI    | `feat/commands` (`fb0147c`)             | [x]   | [x]   |
-| Native application menu bar                  | `feat/commands`                         | [x]   | [x]   |
-| Empty state ("Open folder…" button)          | `feat/commands` (`2a1eb94`)             | [x]   | [x]   |
-| Working directory in the window title        | `feat/status-bar` (`6fd2427`)           | [x]   | [x]   |
-| Unified toolbar (sidebar toggle, nav, title) | `feat/nav-buttons` (`96d2c97`) / `linux-feat/nav-history`          | [x]   | [x]   |
-| Native tabs, one Neovim per project          | `feat/window-tabs`                      | [x]   | [ ]   |
-| Application state persistence (`state.json`) | `feat/remember-working-directory`       | [x]   | [x]   |
-| Pane-layout persistence across relaunch      | `feat/macos-pane-dividers` (`5f8becb`)  | [x]   | [x]   |
-| Single-pane state-persistence fix            | `fix/state-persistence-single-pane-bug` | [x]   | [x]   |
-| Copy / paste through the system clipboard    | `feat/copy-paste`                       | [x]   | [ ]   |
-| `:q` / `:qa` mapped to close pane / window   | `feat/colon-q-remapping`                | [x]   | [x]   |
-| ⌘N opens a new untitled Markdown buffer      | `feat/colon-q-remapping` (`0266b96`)    | [x]   | [x]   |
+| Feature                                      | Branch or commit                                          | macOS | Linux |
+| -------------------------------------------- | --------------------------------------------------------- | ----- | ----- |
+| Multiple windows                             | `feat/mac-ui-changes` (`2fd6256`)                         | [x]   | [ ]   |
+| Command registry (`:Wolf*` + Lua faces)      | `feat/commands` (`fb0147c`)                               | [x]   | [x]   |
+| Commands drained and dispatched to the UI    | `feat/commands` (`fb0147c`)                               | [x]   | [x]   |
+| Native application menu bar                  | `feat/commands`                                           | [x]   | [x]   |
+| Empty state ("Open folder…" button)          | `feat/commands` (`2a1eb94`)                               | [x]   | [x]   |
+| Working directory in the window title        | `feat/status-bar` (`6fd2427`)                             | [x]   | [x]   |
+| Unified toolbar (sidebar toggle, nav, title) | `feat/nav-buttons` (`96d2c97`) / `linux-feat/nav-history` | [x]   | [x]   |
+| Native tabs, one Neovim per project          | `feat/window-tabs`                                        | [x]   | [ ]   |
+| Application state persistence (`state.json`) | `feat/remember-working-directory`                         | [x]   | [x]   |
+| Pane-layout persistence across relaunch      | `feat/macos-pane-dividers` (`5f8becb`)                    | [x]   | [x]   |
+| Single-pane state-persistence fix            | `fix/state-persistence-single-pane-bug`                   | [x]   | [x]   |
+| Copy / paste through the system clipboard    | `feat/copy-paste`                                         | [x]   | [ ]   |
+| `:q` / `:qa` mapped to close pane / window   | `feat/colon-q-remapping`                                  | [x]   | [x]   |
+| ⌘N opens a new untitled Markdown buffer      | `feat/colon-q-remapping` (`0266b96`)                      | [x]   | [x]   |
 
 `wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Of the 26 commands, 12 dispatch, 1 has no GNOME equivalent (`HideApplication`, since the shell owns window visibility), and 13 are deferred with a distinct printed reason.
 

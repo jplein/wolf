@@ -68,7 +68,7 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 **Gotchas**
 
-- These are not `#[ignore]`d. Run only them with `nix develop --command cargo test -p wolf-gnome --test smoke_headless`.
+- Run only these with `nix develop --command cargo test -p wolf-gnome --test smoke_headless`.
 - A new scenario must park the block cursor off the asserted row (a normal-mode `o` then Escape), since the inverted cursor block corrupts the cell it covers, and must keep sparse-text page segmentation, since the default mode returns nothing on the light-on-dark editor grid.
 - Read [Smoke conventions](#smoke-conventions) before adding one. Several of the rules there exist because a smoke passed while proving nothing.
 
