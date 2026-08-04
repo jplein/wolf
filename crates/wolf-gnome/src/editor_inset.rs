@@ -21,10 +21,13 @@
 //! ## There is no `StatusbarTextSpan` counterpart, and no `text_left_inset`
 //!
 //! macOS's `StatusbarTextSpan.swift` exists solely to add `PaneGeometry`'s
-//! `paintOffsetX`, the centring inset its 90-column cap produces. This crate has no
-//! column cap and no centring, so that offset is identically zero and the whole
-//! struct degenerates to `grid_rect(..).x` and `grid_rect(..).w` — two fields the
-//! resizer's one call already produced. The painter reads them directly.
+//! `paintOffsetX`, the centring inset its column cap produces. This crate has that
+//! cap and that centring — [`ColumnCap`], applied inside [`grid_rect`] — and still
+//! needs no such seam, because ONE rectangle carries the offset: it rides in
+//! `grid_rect(..).x`, and the painter, the strip's text and the pointer translation
+//! all read that one field. macOS needs the seam only because `EditorInset` and
+//! `PaneGeometry` are two structs, with the strip drawn from the first and the grid
+//! from the second, so the offset has to be re-derived for the strip.
 //!
 //! There is no `text_left_inset` function either: a function returning its own
 //! argument names a rule without guaranteeing one, whereas reading `grid_rect(..).x`
@@ -65,6 +68,65 @@ const COLLAPSED: GridRect = GridRect {
     h: 0.0,
 };
 
+/// The default content-width cap, in columns: `PaneContainerView.maxGridCols`.
+pub const MAX_GRID_COLS: u16 = 90;
+
+/// The column cap a pane's grid is measured against, and the cell width it is
+/// measured in.
+///
+/// The two travel together because the cap is a number of COLUMNS and every
+/// expression of it — a width in [`grid_rect`], a count in [`grid_size_for_pane`] —
+/// needs both. Keeping them one value removes the possibility of a caller handing
+/// one call two different cell widths.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ColumnCap {
+    /// The greatest number of columns the grid may occupy, or `None` for no cap.
+    pub max_cols: Option<u16>,
+    /// The cell width the cap is measured in, in device pixels.
+    pub cell_w: f64,
+}
+
+impl ColumnCap {
+    /// The uncapped cap at `cell_w` — the grid fills the whole inset rectangle.
+    #[must_use]
+    pub const fn uncapped(cell_w: f64) -> Self {
+        Self {
+            max_cols: None,
+            cell_w,
+        }
+    }
+
+    /// `cols` reduced to this cap.
+    ///
+    /// A cap of ZERO columns names no grid at all and is treated as NO cap, never
+    /// as a zero-width one: a zero-width grid hands Neovim a one-column window and
+    /// reflows the buffer, which is the failure [`min_pane_size`] exists to prevent.
+    #[must_use]
+    pub fn apply(self, cols: u16) -> u16 {
+        match self.max_cols {
+            Some(max) if max > 0 => cols.min(max),
+            _ => cols,
+        }
+    }
+}
+
+/// The cap a pane takes for its window's `b:wolf_full_width` flag.
+///
+/// **THE one place the flag becomes geometry.** A buffer that asked for the full
+/// pane width takes no cap; every other one takes [`MAX_GRID_COLS`]. The cell width
+/// rides along because the cap is measured in it.
+#[must_use]
+pub fn column_cap(full_width: bool, cell_w: f64) -> ColumnCap {
+    ColumnCap {
+        max_cols: if full_width {
+            None
+        } else {
+            Some(MAX_GRID_COLS)
+        },
+        cell_w,
+    }
+}
+
 /// The pane-local rectangle a pane's text grid paints into, once the statusbar
 /// strip along the top and the uniform padding on all four sides are removed.
 ///
@@ -75,23 +137,51 @@ const COLLAPSED: GridRect = GridRect {
 /// reports where the grid WOULD start.
 ///
 /// **Divergence from Swift, deliberate and strictly more defensive:** any
-/// non-finite input collapses the WHOLE result to zeros, following
+/// non-finite input collapses the WHOLE result to zeros — `cap.cell_w` included,
+/// since the cap is one of the terms `x` and `w` are built from — following
 /// [`crate::geometry`]'s whole-result-collapse convention. A NaN `x` origin would
 /// otherwise poison [`grid_local`] for every pointer event in the pane, and
 /// `cell_at` silently treats a NaN axis as the origin rather than rejecting it.
+///
+/// **`cap` widens the rule rather than replacing it.** `w` becomes
+/// `min(inset_w, max_cols * cell_w)` and `x` becomes
+/// `padding + floor((inset_w - w) / 2)`, so an uncapped pane — and a pane narrower
+/// than its own cap — produces exactly the rectangle above. A cap naming no usable
+/// width (zero columns, or a non-positive cell) is DISCARDED rather than obeyed:
+/// `min(inset_w, 0)` would be a zero-width grid, which hands Neovim a one-column
+/// window and reflows the buffer.
+///
+/// **The `.floor()` on the centring offset is deliberate and diverges from macOS.**
+/// Cairo rasterizes glyphs at the translated origin, so a half-pixel `cr.translate`
+/// resamples every glyph in the pane, and this crate has neither HiDPI nor
+/// subpixel-positioning handling where macOS runs on a 2x backing store. The cost is
+/// that the left margin can be one device pixel wider than the right.
 #[must_use]
-pub fn grid_rect(pane_w: f64, pane_h: f64, statusbar_h: f64, padding: f64) -> GridRect {
+pub fn grid_rect(
+    pane_w: f64,
+    pane_h: f64,
+    statusbar_h: f64,
+    padding: f64,
+    cap: ColumnCap,
+) -> GridRect {
     if !pane_w.is_finite()
         || !pane_h.is_finite()
         || !statusbar_h.is_finite()
         || !padding.is_finite()
+        || !cap.cell_w.is_finite()
     {
         return COLLAPSED;
     }
+    let inset_w = (pane_w - 2.0 * padding).max(0.0);
+    let capped_w = match cap.max_cols {
+        Some(max) if max > 0 && cap.cell_w > 0.0 => inset_w.min(f64::from(max) * cap.cell_w),
+        _ => inset_w,
+    };
+    let centre = ((inset_w - capped_w) / 2.0).max(0.0).floor();
     GridRect {
-        x: padding,
+        x: padding + centre,
         y: statusbar_h + padding,
-        w: (pane_w - 2.0 * padding).max(0.0),
+        w: capped_w,
         h: (pane_h - statusbar_h - 2.0 * padding).max(0.0),
     }
 }
@@ -121,17 +211,34 @@ pub fn grid_local(x: f64, y: f64, rect: GridRect) -> (f64, f64) {
 /// The one place [`grid_rect`]'s subtraction and
 /// [`crate::geometry::grid_size_for`]'s division compose; see the module docs for
 /// why they are not one function.
+///
+/// The cell WIDTH arrives inside `cap`, which is the one it is measured in, so a
+/// caller cannot hand one call two different widths.
 #[must_use]
 pub fn grid_size_for_pane(
     pane_w: i32,
     pane_h: i32,
     statusbar_h: f64,
     padding: f64,
-    cell_w: f64,
     cell_h: f64,
+    cap: ColumnCap,
 ) -> (u16, u16) {
-    let rect = grid_rect(f64::from(pane_w), f64::from(pane_h), statusbar_h, padding);
-    geometry::grid_size_for(floor_to_px(rect.w), floor_to_px(rect.h), cell_w, cell_h)
+    // The rect the DIVISION uses is deliberately the UNCAPPED one, and the cap is
+    // applied to the column COUNT below. `floor_to_px` truncates the rect's width to
+    // whole pixels, and a capped width is EXACTLY `max_cols * cell_w` — so flooring
+    // it first loses a fraction of a pixel and with it the last whole column, every
+    // time the cell width is not integral, which is every cell width the shipped app
+    // measures. Do not "simplify" this by passing `cap` down.
+    let rect = grid_rect(
+        f64::from(pane_w),
+        f64::from(pane_h),
+        statusbar_h,
+        padding,
+        ColumnCap::uncapped(cap.cell_w),
+    );
+    let (cols, rows) =
+        geometry::grid_size_for(floor_to_px(rect.w), floor_to_px(rect.h), cap.cell_w, cell_h);
+    (cap.apply(cols), rows)
 }
 
 /// Floors a rectangle dimension to whole pixels, clamped into `[0, i32::MAX]`.
@@ -679,11 +786,7 @@ mod tests {
                  answering None means every buffer is full width and the cap ships \
                  dead, and a `true` answering Some means the toggle does nothing a \
                  user can see.",
-                case.desc,
-                case.full_width,
-                case.cell_w,
-                got.max_cols,
-                case.expected_max
+                case.desc, case.full_width, case.cell_w, got.max_cols, case.expected_max
             );
             assert_eq!(
                 got.cell_w, case.cell_w,

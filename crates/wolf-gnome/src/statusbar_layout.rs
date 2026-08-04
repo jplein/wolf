@@ -187,7 +187,12 @@ pub fn statusbar_text(fg: Rgb, bg: Rgb, active: bool) -> StatusbarText {
 }
 
 /// Blends `fg` toward `bg` by `alpha`, channel by channel.
-fn blend(fg: Rgb, bg: Rgb, alpha: f64) -> Rgb {
+///
+/// `pub(crate)` for its second consumer,
+/// [`crate::scrollbar::scrollbar_thumb_color`], which reuses this rather than
+/// reimplementing the same blend: a second rounding rule is how two colours that
+/// are supposed to sit on one scale drift apart.
+pub(crate) fn blend(fg: Rgb, bg: Rgb, alpha: f64) -> Rgb {
     Rgb {
         r: blend_channel(fg.r, bg.r, alpha),
         g: blend_channel(fg.g, bg.g, alpha),

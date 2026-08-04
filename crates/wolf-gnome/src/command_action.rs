@@ -24,7 +24,7 @@
 //!
 //! ## The three classes
 //!
-//! - **Dispatched** — the twelve commands `wolf-gnome` performs today.
+//! - **Dispatched** — the thirteen commands `wolf-gnome` performs today.
 //! - [`UiAction::Deferred`] — implemented on macOS and planned on GTK; the string
 //!   names the concrete blocker so the deferral is auditable rather than a shrug.
 //! - [`UiAction::NoGnomeEquivalent`] — has no GNOME counterpart and will never be
@@ -77,6 +77,9 @@ pub enum UiAction {
     HistoryForward,
     /// Show or hide the file-tree sidebar.
     ToggleSidebar,
+    /// Toggle the focused buffer's content width between the column cap and the
+    /// whole pane.
+    ToggleFullWidth,
     /// Present the About dialog carrying the bundled fonts' licence notices.
     ShowAbout,
     /// Implemented on macOS, planned on GTK; the string names the blocker.
@@ -142,9 +145,7 @@ pub fn ui_action_for(command: Command) -> UiAction {
         Command::PreviewInBrowser => UiAction::Deferred(
             "the loopback preview server needs a GTK URI launcher and the preview row first",
         ),
-        Command::FullWidth => UiAction::Deferred(
-            "the ~90-column content cap is a front-end feature wolf-gnome does not implement",
-        ),
+        Command::FullWidth => UiAction::ToggleFullWidth,
         Command::ToggleSidebar => UiAction::ToggleSidebar,
         Command::SidebarShowProject => UiAction::Deferred(
             "wolf-gnome's sidebar has no panel switcher (there is no search panel to switch away \

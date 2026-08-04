@@ -106,12 +106,10 @@ fn floor_div_clamped(numer: f64, denom: f64) -> u16 {
 ///   [`crate::editor_inset::grid_size_for_pane`] is what hands [`grid_size_for`] the
 ///   correspondingly reduced rectangle. Keeping the subtraction there is what lets
 ///   the composition guarantee below stay a statement about the division alone.
-///   `wolf-gnome` has no 90-column cap and no centering — two still-unticked
-///   `feat-list.md` rows — so macOS's `paintOffset` machinery has no counterpart
-///   here. **Do not import it.** TRIPWIRE: if either row is ever implemented, the
-///   centring offset belongs in `editor_inset`'s rectangle rather than in a new
-///   parameter on this function, and this paragraph is where that is meant to be
-///   noticed.
+///   That holds for the content-width cap and its CENTRING as well: the offset the
+///   cap produces lives in [`crate::editor_inset::grid_rect`]'s `x`, which
+///   `grid_local` subtracts, so macOS's `paintOffset` machinery still has no
+///   counterpart here and this function still takes no origin. **Do not add one.**
 /// - Degenerate guards, mirroring [`grid_size_for`]'s whole-result collapse: if
 ///   `cell_w` or `cell_h` is non-finite or `<= 0.0`, or `cols == 0`, or
 ///   `rows == 0`, the WHOLE result is `(0, 0)`.

@@ -37,7 +37,19 @@
 //!   event routes through ([`editor_inset::grid_local`]), the grid size that
 //!   survives the chrome ([`editor_inset::grid_size_for_pane`], a composition on
 //!   top of the unchanged [`grid_size_for`]), and the pane content floor that
-//!   still leaves one whole cell ([`editor_inset::min_pane_size`]).
+//!   still leaves one whole cell ([`editor_inset::min_pane_size`]). The
+//!   content-width cap lives here too: [`editor_inset::MAX_GRID_COLS`] columns,
+//!   carried as an [`editor_inset::ColumnCap`] that both the rectangle's width and
+//!   the grid's column count are reduced by, and selected from a window's
+//!   `b:wolf_full_width` flag in the one place that flag becomes geometry
+//!   ([`editor_inset::column_cap`]). The centring offset the cap produces rides in
+//!   the rectangle's `x`, so every consumer reads one origin.
+//! - [`mod@scrollbar`]: the projection of a Neovim window's `win_viewport` onto a
+//!   pane-local thumb rectangle ([`scrollbar::scrollbar_thumb`]) and that thumb's
+//!   colour over the editor's own background
+//!   ([`scrollbar::scrollbar_thumb_color`]). The thumb sits in the pane's right
+//!   PADDING gutter rather than at the grid rectangle's right edge, so it covers no
+//!   glyph and costs the grid no column; there is no track, and no widget.
 //! - [`mod@statusbar_layout`]: the per-pane statusbar rulebook — the strip's
 //!   height and its two line boxes ([`statusbar_layout::statusbar_layout`]), the
 //!   second line's font size ([`statusbar_layout::secondary_font_size`]), and the
@@ -197,6 +209,7 @@ pub mod persistence;
 pub mod picker;
 pub mod refresh_coalescer;
 pub mod render;
+pub mod scrollbar;
 pub mod search_overlay;
 pub mod shell;
 pub mod state_seam;

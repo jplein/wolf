@@ -59,6 +59,146 @@
 //! range is not a scrollbar's subject — macOS ignores it too — and reading it would
 //! make the thumb jump on a cursor move that scrolled nothing.
 
+// `the_thumb_lies_wholly_inside_the_right_gutter` opens by asserting a RELATION
+// BETWEEN this module's constants and `editor_inset::EDITOR_PADDING_PX` — the thumb
+// fits in the gutter — which clippy const-folds to a literal and reports as an
+// assertion with a constant value. That relation is the point: its whole value is
+// the message it carries the day someone widens the bar past the padding it is
+// supposed to hide in. Scoped to `cfg(test)` so production code in this module is
+// still linted normally.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::assertions_on_constants,
+        reason = "the gutter invariant is deliberately a relation between production constants"
+    )
+)]
+
+use crate::editor_inset::GridRect;
+use crate::statusbar_layout::blend;
+use wolf_core::{Rgb, Viewport};
+
+/// Width of the scrollbar thumb, in device pixels.
+pub const SCROLLBAR_THICKNESS_PX: f64 = 8.0;
+
+/// Gap between the thumb's right edge and the pane's, in device pixels.
+pub const SCROLLBAR_MARGIN_PX: f64 = 6.0;
+
+/// Floor under the thumb's height, so a huge buffer still shows something
+/// grabbable.
+pub const SCROLLBAR_MIN_THUMB_PX: f64 = 24.0;
+
+/// The thumb's alpha against the editor background.
+pub const SCROLLBAR_THUMB_ALPHA: f64 = 0.45;
+
+/// The neutral grey the thumb is blended from, on every channel.
+pub const SCROLLBAR_GREY: u8 = 128;
+
+/// A pane-local rectangle: the scrollbar's thumb.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScrollbarThumb {
+    /// Left edge, measured from the pane's own left edge.
+    pub x: f64,
+    /// Top edge, measured from the pane's own top edge.
+    pub y: f64,
+    /// Width (always [`SCROLLBAR_THICKNESS_PX`]).
+    pub w: f64,
+    /// Height.
+    pub h: f64,
+}
+
+/// Widens one `win_viewport` field to `f64`.
+///
+/// **Every field is widened BEFORE any subtraction**, and that ordering is the
+/// rule rather than a style: `botline - topline` taken in `u64` on a malformed
+/// viewport is an overflow, which is a debug-build PANIC and not merely a wrapped
+/// value. macOS has the same rule for a weaker reason.
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "a buffer line count above 2^53 is unreachable, and the alternative — subtracting in \
+              u64 — panics on a malformed viewport"
+)]
+fn as_lines(v: u64) -> f64 {
+    v as f64
+}
+
+/// The thumb for a pane `pane_w` device pixels wide whose grid paints into `grid`,
+/// projected from `viewport`.
+///
+/// `None` when nothing is visible, when the whole buffer fits its window, when the
+/// pane is too narrow to hold the gutter, or when any input is degenerate. The
+/// thumb spans the GRID rectangle vertically, so it never rides up over the
+/// statusbar strip, and it sits in the pane's right padding gutter horizontally —
+/// see the module docs for both.
+#[must_use]
+pub fn scrollbar_thumb(pane_w: f64, grid: GridRect, viewport: Viewport) -> Option<ScrollbarThumb> {
+    if !pane_w.is_finite()
+        || !grid.x.is_finite()
+        || !grid.y.is_finite()
+        || !grid.w.is_finite()
+        || !grid.h.is_finite()
+    {
+        return None;
+    }
+
+    let total = as_lines(viewport.linecount);
+    if total <= 0.0 {
+        return None;
+    }
+    // `curline` is deliberately unread; see the module docs.
+    let visible = (as_lines(viewport.botline) - as_lines(viewport.topline)).max(0.0);
+    if visible <= 0.0 || visible >= total {
+        return None;
+    }
+
+    let x = pane_w - SCROLLBAR_MARGIN_PX - SCROLLBAR_THICKNESS_PX;
+    if x < 0.0 {
+        return None;
+    }
+
+    let track_y = grid.y;
+    let track_h = grid.h;
+    if track_h <= 0.0 {
+        return None;
+    }
+
+    // The `.min(track_h)` is a deliberate divergence from macOS, which omits it and
+    // so draws a thumb taller than its own track in a pane shorter than the floor.
+    let h = (track_h * (visible / total).min(1.0))
+        .max(SCROLLBAR_MIN_THUMB_PX)
+        .min(track_h);
+    let raw = track_y + (as_lines(viewport.topline) / total) * track_h;
+    let y = raw.clamp(track_y, (track_y + track_h - h).max(track_y));
+
+    Some(ScrollbarThumb {
+        x,
+        y,
+        w: SCROLLBAR_THICKNESS_PX,
+        h,
+    })
+}
+
+/// The thumb's colour over the editor's own default background.
+///
+/// [`SCROLLBAR_GREY`] on every channel, blended [`SCROLLBAR_THUMB_ALPHA`] of the
+/// way toward `bg` through [`crate::statusbar_layout`]'s own blend rather than a
+/// second copy of it: one rounding rule, so the strip's colours and this one cannot
+/// drift. Blending toward the background rather than compositing with an alpha also
+/// keeps this crate's "no `set_source_rgba` on the draw path" property — the thumb
+/// is painted over an already-filled background, so the two produce the same pixels.
+#[must_use]
+pub fn scrollbar_thumb_color(bg: Rgb) -> Rgb {
+    blend(
+        Rgb {
+            r: SCROLLBAR_GREY,
+            g: SCROLLBAR_GREY,
+            b: SCROLLBAR_GREY,
+        },
+        bg,
+        SCROLLBAR_THUMB_ALPHA,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
