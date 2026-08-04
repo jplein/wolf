@@ -407,28 +407,50 @@ mod tests {
     /// `cr.translate` resamples every glyph in the pane. Row 13 is the only row that
     /// can see it, because it is the only one whose leftover is odd.
     ///
-    /// FALSIFYING EDITS for the cap, each with the row it fires on:
+    /// FALSIFYING EDITS for the cap. Each names the edit, the row it fires on, and
+    /// the verbatim failure measured for it.
     ///
-    /// - Replace `inset_w.min(max * cell_w)` with `inset_w`: row 11's `w` becomes
-    ///   2460 instead of 720. Row 12, the uncapped twin of the same pane, stays
-    ///   GREEN, so the failure names the CAP rather than the pane arithmetic.
+    /// - Replace `inset_w.min(max * cell_w)` with `inset_w`: row 11 fires. MEASURED:
+    ///   `case: 11: a pane far wider than the cap is capped and centred`, left
+    ///   `(20.0, 52.0, 2460.0, 608.0)`, right `(890.0, 52.0, 720.0, 608.0)` — BOTH
+    ///   `x` and `w` move, because with no cap the centring leftover is zero and `x`
+    ///   falls back to the padding. Row 12, the uncapped twin of the same pane,
+    ///   carries no cap for the edit to reach; the fail-fast loop aborts at 11 before
+    ///   it runs, so the failure names the CAP rather than the pane arithmetic.
     /// - Drop the `+ centre` from `x`: row 11's `x` becomes 20 instead of 890. This
     ///   is the "click lands in the wrong cell" edit, and
     ///   [`a_capped_grid_maps_the_margins_and_its_own_edges_to_real_columns`] is
-    ///   what proves the consequence rather than merely the number.
-    /// - Drop the `.floor()` on `centre`: row 13's `x` becomes 890.5. It is the ONLY
-    ///   discriminator for the floor anywhere — row 11's leftover is even, so the
-    ///   two agree there — so do not delete row 13 as a near-duplicate of row 11.
+    ///   what proves the consequence rather than merely the number. MEASURED:
+    ///   `case: 11`, left `(20.0, 52.0, 720.0, 608.0)`, right
+    ///   `(890.0, 52.0, 720.0, 608.0)` — `w` stays 720 here and moves under the edit
+    ///   above, which is what tells the two apart from their output alone.
+    /// - Drop the `.floor()` on `centre`: row 13 fires. It is the ONLY discriminator
+    ///   for the floor anywhere — row 11's leftover is even, so the two agree there —
+    ///   so do not delete row 13 as a near-duplicate of row 11. MEASURED, and the
+    ///   measurement is what establishes that uniqueness rather than the arithmetic:
+    ///   the failure names row 13, not row 11, which passed under the same edit.
+    ///   `case: 13: an odd leftover floors the centring offset`, left
+    ///   `(890.5, 52.0, 720.0, 608.0)`, right `(890.0, 52.0, 720.0, 608.0)`.
     /// - Drop the `cap.cell_w > 0.0` guard: row 16's `w` collapses to 0, because
     ///   `min(2460, 90 * 0.0)` is 0. A zero-width grid hands Neovim a one-column
     ///   window and reflows the buffer, which is the failure [`min_pane_size`]
-    ///   exists to prevent.
+    ///   exists to prevent. MEASURED: `case: 16: a zero cell width discards the cap`,
+    ///   left `(1250.0, 52.0, 0.0, 608.0)`, right `(20.0, 52.0, 2460.0, 608.0)` — the
+    ///   `x` of 1250 is the visible symptom, the centring dutifully centring a
+    ///   zero-width grid in the middle of the pane.
     /// - Drop the `max > 0` guard: row 17's `w` collapses to 0 the same way.
+    ///   MEASURED: `case: 17: a zero-column cap is discarded, never obeyed`, left
+    ///   `(1250.0, 52.0, 0.0, 608.0)`, right `(20.0, 52.0, 2460.0, 608.0)` — the same
+    ///   pair as row 16 on a different row, so rows 16 and 17 are what tell the two
+    ///   guards apart and neither row alone would.
     /// - Drop `cap.cell_w` from the non-finite guard: row 18 yields
     ///   `(20.0, 52.0, 2460.0, 608.0)` instead of the whole-result collapse. Note
     ///   what it does NOT yield — a NaN field: `NaN > 0.0` is false, so the capping
     ///   arm is skipped and the row fails because the collapse did not happen, the
-    ///   same shape as row 8.
+    ///   same shape as row 8. MEASURED, confirming that shape rather than predicting
+    ///   it: `case: 18: a NaN cap cell width collapses the whole result`, left
+    ///   `(20.0, 52.0, 2460.0, 608.0)`, right `(0.0, 0.0, 0.0, 0.0)`, with no NaN
+    ///   field anywhere in the result.
     #[test]
     fn grid_rect_table() {
         let cases = [
@@ -736,7 +758,9 @@ mod tests {
     /// - Invert the flag in [`column_cap`] (`if full_width { Some(MAX_GRID_COLS) }
     ///   else { None }`): both flag rows fire and the `false` row goes first, so the
     ///   failure reads "an ordinary window was handed NO cap" rather than the
-    ///   less-alarming inverse.
+    ///   less-alarming inverse. MEASURED, which is what establishes that ordering:
+    ///   `case: an ordinary window takes the default cap — column_cap(false, 8)
+    ///   produced max_cols None, want Some(90)`, left `None`, right `Some(90)`.
     /// - Return `ColumnCap::uncapped(cell_w)` unconditionally: the `false` row fires
     ///   alone, and the `true` row stays green — which names the direction.
     /// - Substitute any other cell width in the returned cap: both flag rows fire on
@@ -858,7 +882,7 @@ mod tests {
 
     /// One [`grid_size_for_pane`] table row. The cell HEIGHT is 16 throughout,
     /// matching `geometry.rs`'s own table; the cell WIDTH rides inside the row's
-    /// [`ColumnCap`], which is where `grid_size_for_pane` now takes it.
+    /// [`ColumnCap`], which is where `grid_size_for_pane` takes it from.
     struct SizeCase {
         desc: &'static str,
         pane_w: i32,
@@ -880,8 +904,8 @@ mod tests {
     /// - Delete the padding subtraction entirely: A gives (105, 40) — 840/8 and
     ///   floor(648/16) — while C and D still pass, so the failure names the PADDING.
     ///   MEASURED: `case: A: the chrome costs whole cells in both axes —
-    ///   grid_size_for_pane(840, 680, 32, 20, 8, 16)`, left `(105, 40)`, right
-    ///   `(100, 38)`.
+    ///   grid_size_for_pane(840, 680, 32, 20, 16, ColumnCap { max_cols: None,
+    ///   cell_w: 8.0 })`, left `(105, 40)`, right `(100, 38)`.
     /// - Delete the strip subtraction: A gives (100, 40) — floor(640/16) — while B
     ///   and D still pass, so the failure names the STRIP. MEASURED: `case: A`, left
     ///   `(100, 40)`, right `(100, 38)`.
@@ -894,8 +918,9 @@ mod tests {
     ///   that edit — see non-claim 2 — and its column axis stays green, so the
     ///   failure names the axis the fractional input reached. MEASURED: `case: H: a
     ///   fractional strip height is floored, never rounded — grid_size_for_pane(840,
-    ///   680, 32.5, 20, 8, 16)`, left `(100, 38)`, right `(100, 37)` — and the
-    ///   column axis is 100 on both sides, as claimed.
+    ///   680, 32.5, 20, 16, ColumnCap { max_cols: None, cell_w: 8.0 })`, left
+    ///   `(100, 38)`, right `(100, 37)` — and the column axis is 100 on both sides,
+    ///   as claimed.
     /// - Row D is the ANCHOR: it is `geometry.rs`'s own first row with no chrome at
     ///   all, so if D ever fails the division changed and this module did not.
     ///
@@ -923,10 +948,13 @@ mod tests {
     /// `ColumnCap::uncapped(CELL_W)`, and each states the count the chrome
     /// arithmetic alone produces, which is the module doc's invariance claim.
     ///
-    /// - Return `cols` instead of `cap.apply(cols)`: row I reports 307. Rows J, K
-    ///   and L stay green — J because it is uncapped and already 307, K and L
-    ///   because their pane is narrower than the cap — so the failure names the
-    ///   COUNT's `min` and nothing else.
+    /// - Return `cols` instead of `cap.apply(cols)`: row I fires, so the failure
+    ///   names the COUNT's `min` and nothing else. Rows J, K and L carry nothing the
+    ///   edit can reach — J is uncapped and already 307, K and L are narrower than
+    ///   their own cap — and the fail-fast loop aborts at I before any of them runs.
+    ///   MEASURED: `case: I: a wide pane's column count is reduced to the cap —
+    ///   grid_size_for_pane(2500, 680, 32, 20, 16, ColumnCap { max_cols: Some(90),
+    ///   cell_w: 8.0 })`, left `(307, 38)`, right `(90, 38)`.
     /// - Pass `cap` into the internal [`grid_rect`] call instead of
     ///   `ColumnCap::uncapped(cap.cell_w)`: **row M is the only discriminator
     ///   anywhere, and row I cannot see this edit at all.** At row I's cell the
@@ -936,7 +964,12 @@ mod tests {
     ///   `89.96…` — so M reports **89**, one column short, and does so for every
     ///   non-integral cell width, which is every cell width the shipped app
     ///   measures. Do not delete row M as artificial: it is the whole reason the
-    ///   internal call is written the way it is.
+    ///   internal call is written the way it is. MEASURED: `case: M: a non-integral
+    ///   cell still reaches the whole cap`, left `(89, 38)`, right
+    ///   `(90, 38)`. Row I precedes M and the loop is fail-fast, so the run
+    ///   evaluated and PASSED I before reaching M: row I stays GREEN under this
+    ///   edit and M fires alone. Where a written prediction says row I reports 89,
+    ///   the measurement is the record.
     /// - Rows K and L are a crossed pair: a capped pane narrower than its own cap,
     ///   and the same pane uncapped, with the same expectation written out twice. A
     ///   cap that bound early — `<` where `<=` belongs, or a cap applied to the
@@ -1180,11 +1213,30 @@ mod tests {
     /// would satisfy the width property for any rectangle at all, including a
     /// collapsed one, so the guard is asserted rather than assumed.
     ///
+    /// EXPLICIT NON-CLAIM: this property constrains the two expressions of the cap
+    /// **against each other** and says nothing about either being right on its own.
+    /// [`grid_rect_table`] and [`grid_size_for_pane_table`] are what pin the values;
+    /// a pair that agreed on the wrong quantity — both capping at 80 columns, say —
+    /// satisfies this property perfectly at every row. That is the same lesson
+    /// `DECISIONS.md` records under "Pane weights and dividers" for
+    /// `divider_position` and `divider_span_fraction`, where the round trip agreed
+    /// for the defect's whole life; it is cross-referenced here rather than
+    /// restated.
+    ///
     /// FALSIFYING EDIT: in [`grid_rect`], cap the width at
     /// `f64::from(max - 1) * cap.cell_w`. The rect comes out one column narrower
-    /// than the count [`grid_size_for_pane`] reports, and this property fires while
-    /// [`grid_rect_table`] and [`grid_size_for_pane_table`] both stay green against
-    /// their own literals — the drift this test exists for.
+    /// than the count [`grid_size_for_pane`] reports. MEASURED: `case: a capped pane
+    /// at an integral cell, where the cap binds — grid_size_for_pane asked Neovim
+    /// for 90 columns, which need 720 px at a cell width of 8, but grid_rect
+    /// produced a rectangle only 712 px wide`.
+    ///
+    /// Measured in the same session, under the same edit:
+    /// **[`grid_size_for_pane_table`] stayed GREEN**, which is the half of the claim
+    /// that matters — the count table agrees with itself while the rect has drifted
+    /// out from under it, and that drift is the whole reason this test exists.
+    /// [`grid_rect_table`] does go red on its own literals under that edit, so the
+    /// two per-function tables are not symmetric here; only the count table is blind
+    /// to it.
     #[test]
     fn grid_rect_is_wide_enough_for_its_own_grid_size_for_pane() {
         let cases = [
@@ -1320,9 +1372,12 @@ mod tests {
     ///
     /// The rect is written as a LITERAL rather than as a call to [`grid_rect`], so a
     /// bug in `grid_rect` cannot move this table's inputs underneath it and leave it
-    /// green. It is the rect `grid_rect(840, 680, 32, 20)` produces — x = 20,
-    /// y = 32 + 20 = 52, w = 840 - 40 = 800, h = 680 - 32 - 40 = 608 — so the two
-    /// tables describe the same pane; only `x` and `y` are load-bearing here.
+    /// green. It is the rect `grid_rect(840, 680, 32, 20,
+    /// ColumnCap::uncapped(CELL_W))` produces — x = 20, y = 32 + 20 = 52,
+    /// w = 840 - 40 = 800, h = 680 - 32 - 40 = 608 — so the two tables describe the
+    /// same pane; only `x` and `y` are load-bearing here. The cap is spelled out
+    /// because it is not idle at this pane width: a 90-column cap at an 8 px cell
+    /// binds on an 800 px inset, and the rect would be `x` 60, `w` 720 instead.
     ///
     /// A point in the strip or in a gutter maps to a NEGATIVE coordinate, which
     /// `geometry::cell_at` clamps to the nearest edge cell. That is deliberate and is
@@ -1377,8 +1432,19 @@ mod tests {
     /// left, which is a hundred columns. The capped origin row fires on it, reading
     /// 870 where 0 is expected.
     ///
+    /// FALSIFYING EDIT for those rows: subtract `EDITOR_PADDING_PX` instead of
+    /// `rect.x`. MEASURED: `case: the capped grid's origin maps to (0, 0) —
+    /// grid_local(890, 52, GridRect { x: 890.0, y: 52.0, w: 720.0, h: 608.0 }) =
+    /// (870.0, 0.0), want (0.0, 0.0)`. **All seven uncapped rows stayed GREEN**, and
+    /// that is measured rather than reasoned: the failure is reported from the
+    /// CAPPED loop's assertion site, so the first loop ran to completion before it
+    /// was reached. The capped rows are therefore not decoration — they are the only
+    /// thing in the file that catches an implementation reading the constant.
+    ///
     /// FALSIFYING EDIT, additionally: return `(x, y - rect.y)`. Every row in both
-    /// loops moves, and the first loop's row 1 fires first.
+    /// loops moves, and the first loop's row 1 fires first. MEASURED: `case: the
+    /// grid origin maps to (0, 0) — grid_local(20, 52, GridRect { x: 20.0, y: 52.0,
+    /// w: 800.0, h: 608.0 }) = (20.0, 0.0), want (0.0, 0.0)`.
     #[test]
     fn grid_local_table() {
         let rect = GridRect {
@@ -1561,13 +1627,16 @@ mod tests {
     /// does. That is recorded here rather than dressed up as coverage.
     ///
     /// **The same is true of the CENTRING, including in the capped row below.**
-    /// Deleting the `+ centre` term from [`grid_rect`]'s `x` leaves this test green:
-    /// every probe here is on a pane edge, in a gutter, or far outside the pane, so
-    /// it clamps to an edge cell with the origin at 890 and with it at 20 alike.
-    /// What that edit breaks is which cell an ordinary click INSIDE the grid names,
-    /// and [`a_capped_grid_maps_the_margins_and_its_own_edges_to_real_columns`] is
-    /// what covers it. The capped row here adds the escape property under a cap, not
-    /// the centring.
+    /// Deleting the `+ centre` term from [`grid_rect`]'s `x` leaves this test green,
+    /// and that is MEASURED rather than reasoned: the edit was applied and the run
+    /// reported `test cell_at_over_grid_local_never_exceeds_grid_size_for_pane ...
+    /// ok`. The reason it cannot see the edit is that every probe here is on a pane
+    /// edge, in a gutter, or far outside the pane, so it clamps to an edge cell with
+    /// the origin at 890 and with it at 20 alike. What that edit breaks is which
+    /// cell an ordinary click INSIDE the grid names, and
+    /// [`a_capped_grid_maps_the_margins_and_its_own_edges_to_real_columns`] is
+    /// measured red under the very same edit, so it is what covers it. The capped
+    /// row here adds the escape property under a cap, not the centring.
     #[test]
     fn cell_at_over_grid_local_never_exceeds_grid_size_for_pane() {
         let cases = [
@@ -1715,7 +1784,13 @@ mod tests {
     /// probe at 894 — four pixels inside the real grid's left edge — translates to
     /// 874 instead of 4, `floor(874 / 8)` is 109, `cell_at` clamps that to the last
     /// column, and the col-0 row fires reporting 89. The two right-hand probes stay
-    /// green under it, which is what names the direction.
+    /// green under it, which is what names the direction. MEASURED, arithmetic and
+    /// all: `probe "just inside the grid's left edge" at pane-local x = 894 named
+    /// column 89, want 0`, left `89`, right `0`, against
+    /// `GridRect { x: 20.0, y: 52.0, w: 720.0, h: 608.0 }`. The `(cols, rows)`
+    /// precondition passed first in that run, so the grid really was 90 columns wide
+    /// and the clamp is what produced 89 — the row is not passing for the
+    /// "one-column grid" reason the precondition exists to rule out.
     #[test]
     fn a_capped_grid_maps_the_margins_and_its_own_edges_to_real_columns() {
         let cap = ColumnCap {

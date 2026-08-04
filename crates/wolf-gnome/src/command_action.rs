@@ -400,6 +400,15 @@ mod tests {
     ///
     /// The length assertion against `COMMAND_SPECS` is what makes the table
     /// non-vacuous: a newly appended core command cannot be absorbed silently.
+    ///
+    /// FALSIFYING EDIT for the row that carries the content-width cap: classify
+    /// `Command::FullWidth` as `UiAction::Deferred`. MEASURED: `case: 22 FullWidth:
+    /// toggles the focused buffer's content width — ui_action_for(FullWidth)
+    /// returned Deferred("the ~90-column content cap is a front-end feature
+    /// wolf-gnome does not implement"), which does not match the classification
+    /// pinned in plan section 3.2`. This test was run ALONE under that edit, so the
+    /// failure above is its own and not
+    /// [`dispatched_commands_are_the_expected_set`]'s showing through it.
     #[test]
     fn ui_action_table() {
         assert_eq!(
@@ -452,6 +461,13 @@ mod tests {
     /// The set of commands `wolf-gnome` actually dispatches is exactly
     /// [`EXPECTED_DISPATCHED_IDS`] — no more (nothing quietly promoted) and no
     /// fewer (nothing quietly demoted to `Deferred`).
+    ///
+    /// FALSIFYING EDIT: classify `Command::FullWidth` as `UiAction::Deferred`, and
+    /// run this test ALONE so its evidence is its own. MEASURED: the sorted `left`
+    /// comes back one element short of `right`, the missing element being
+    /// `"full_width"` in sorted position between `"command_palette"` and
+    /// `"go_to_file"` — a one-element diff that names the demoted command directly
+    /// rather than reporting that "the set changed".
     #[test]
     fn dispatched_commands_are_the_expected_set() {
         let mut dispatched: Vec<&'static str> = Vec::new();

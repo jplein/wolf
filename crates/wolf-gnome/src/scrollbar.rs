@@ -188,8 +188,8 @@ pub fn scrollbar_thumb_color(bg: Rgb) -> Rgb {
 mod tests {
     use super::*;
 
-    use crate::editor_inset::{GridRect, EDITOR_PADDING_PX};
-    use wolf_core::{Rgb, Viewport};
+    // The padding is the one name `use super::*` does not already bring in.
+    use crate::editor_inset::EDITOR_PADDING_PX;
 
     /// The grid rectangle every thumb row below is projected onto, unless the row
     /// carries its own.
@@ -257,33 +257,65 @@ mod tests {
     /// subtraction is stricter here than macOS's reason for the same rule. A malformed
     /// viewport must produce no thumb, not a crashed front-end.
     ///
-    /// FALSIFYING EDITS. Each names the edit and the row it fires on.
+    /// FALSIFYING EDITS. Each names the edit, the row it fires on, and the verbatim
+    /// failure measured for it.
     ///
     /// - Delete the `visible >= total` guard: row 5 returns `Some` for a buffer that
     ///   fits entirely in its window, so every pane draws a full-height thumb whether
-    ///   or not there is anything to scroll.
+    ///   or not there is anything to scroll. MEASURED: `case: 5: a buffer that fits
+    ///   entirely in its window has no thumb — … = Some(ScrollbarThumb { x: 826.0,
+    ///   y: 52.0, w: 8.0, h: 608.0 }), want None` — the `h` of 608 is the whole
+    ///   track, i.e. a full-height mark on every pane with nothing to scroll.
     /// - Delete `.max(SCROLLBAR_MIN_THUMB_PX)`: row 7's `h` shrinks to about 0.07 px
     ///   — a mark too small to see, which is exactly the case the floor exists for.
+    ///   MEASURED: `case: 7: a huge buffer's thumb stops shrinking at the floor —
+    ///   … = (826.0, 52.0, 8.0, 0.06688000000000001) as (x, y, w, h), want
+    ///   (826.0, 52.0, 8.0, 24.0)`.
     /// - Delete `.min(track_h)`: row 8's `h` becomes 24 in a 10 px grid, so the thumb
     ///   is taller than the track it is drawn in and spills over the pane below. This
-    ///   is a deliberate divergence from macOS, which omits the clamp.
+    ///   is a deliberate divergence from macOS, which omits the clamp. MEASURED:
+    ///   `case: 8: a grid shorter than the floor clamps the thumb to the grid —
+    ///   … = (826.0, 52.0, 8.0, 24.0) as (x, y, w, h), want (826.0, 52.0, 8.0,
+    ///   10.0)`.
     /// - Weaken or delete the upper clamp on `y` — either `raw.max(track_y)` or a bare
-    ///   `raw`: row 13's `y` becomes 659.93312 against its literal 636, and the loop's
-    ///   containment assertion fires alongside the literal because `659.93312 + 24`
-    ///   hangs 23.93 px below the grid's lower edge. **Row 2 does not fire and cannot**,
-    ///   which was measured rather than assumed: its thumb ends exactly on that edge,
-    ///   so the clamp is a no-op for it and for every other row here. Row 13 is the
-    ///   only discriminator for the clamp in this file.
+    ///   `raw`: row 13's `y` becomes 659.93312 against its literal 636, from the
+    ///   arithmetic in that row's own comment, and the loop's containment assertion
+    ///   fires alongside the literal because `659.93312 + 24` hangs 23.93 px below the
+    ///   grid's lower edge. **Row 13 is the only discriminator for the clamp in this
+    ///   file, and that is measured, not argued.** Both forms of the edit were run
+    ///   against the table as it stood WITHOUT row 13, and both were GREEN — `test
+    ///   scrollbar_thumb_table ... ok` for `raw.max(track_y)` and again for a bare
+    ///   `raw`, the latter leaving the whole module green (`3 passed; 0 failed`).
+    ///   Rows 1, 2, 7, 8 and 12 leave the clamp a no-op: row 2 ends flush on the
+    ///   bound (`626.56 + 33.44` is exactly 660), and the rest sit far below it. A
+    ///   table without row 13 tests this clamp not at all.
     /// - Subtract in `u64` before widening to `f64`: row 6 **panics** with `attempt to
-    ///   subtract with overflow` rather than failing. Record the verbatim panic as the
-    ///   red run; a panicking test and a failing one are different evidence.
+    ///   subtract with overflow` rather than failing. A panicking test and a failing
+    ///   one are different evidence, and the difference is visible in the measurement:
+    ///   the run prints `panicked at … attempt to subtract with overflow` and nothing
+    ///   else — no `case:` line, no `left:`/`right:`, and no indication of which row
+    ///   caused it. That silence is the row's point; a debug build dies rather than
+    ///   producing a wrong thumb.
     /// - Measure `x` from the grid rectangle (`grid.x + grid.w - THICKNESS - MARGIN`):
-    ///   every `Some` row's `x` becomes 806, and the first row fires.
+    ///   every `Some` row's `x` becomes 806, and the first row fires. MEASURED,
+    ///   firing on `case: 1: a viewport at the top of a long buffer` — the ordinary
+    ///   row, not a special one. Only the case line of that capture is quoted: its
+    ///   `= (…)` and `want (…)` tuples were captured identical, which this row's own
+    ///   format string cannot produce, so those two tuples are not evidence of
+    ///   anything and are left out rather than repaired by guesswork.
     /// - Delete the `x < 0.0` guard: row 11 returns a thumb at `x = -4` for a pane too
     ///   narrow to hold the gutter, i.e. a mark drawn outside the pane it belongs to.
+    ///   MEASURED: `case: 11: a pane too narrow to hold the gutter yields no thumb —
+    ///   … = Some(ScrollbarThumb { x: -4.0, y: 52.0, w: 8.0, h: 33.44 }), want None`.
     /// - Position the thumb from `curline` instead of `topline`: row 12 fires while
     ///   row 1 stays green, because row 1's cursor happens to sit on its top line and
-    ///   row 12's is deliberately nowhere near it.
+    ///   row 12's is deliberately nowhere near it. MEASURED, which is what establishes
+    ///   that row 1 stays green — it precedes row 12 and the loop is fail-fast:
+    ///   `case: 12: curline is unread, so a wild cursor line moves nothing —
+    ///   … = (826.0, 626.56, 8.0, 33.44) as (x, y, w, h), want (826.0, 52.0, 8.0,
+    ///   33.44)`. The `y` of 626.56 is the CLAMPED value, since `12345 / 200` puts
+    ///   the raw position far past the track — the one run in which the upper clamp
+    ///   was observed doing work.
     #[test]
     fn scrollbar_thumb_table() {
         let cases = [
@@ -466,7 +498,7 @@ mod tests {
                 // THE ONLY ROW IN THIS TABLE ON WHICH THE UPPER `y` CLAMP BINDS, and
                 // the reason it exists. The floor lifts `h` above the proportional
                 // height — `max(608 * 11/100000, 24) = 24` — so the proportional
-                // POSITION no longer leaves room for it: `raw = 52 + (99989/100000) *
+                // POSITION leaves no room for it: `raw = 52 + (99989/100000) *
                 // 608 = 659.93312`, while the lowest top edge a 24 px thumb may have
                 // is `52 + 608 - 24 = 636`. The clamp is what turns the first number
                 // into the second, and without it the thumb hangs 23.93 px below the
@@ -560,7 +592,10 @@ mod tests {
     /// rectangle that pane would really produce, and nothing here reads it.
     ///
     /// FALSIFYING EDIT: raise [`SCROLLBAR_THICKNESS_PX`] to 24. The const relation
-    /// fires first, naming the gutter, before any thumb is computed.
+    /// fires first, naming the gutter, before any thumb is computed. MEASURED, which
+    /// is what establishes that ordering — the per-width loop is never reached:
+    /// `the thumb is 24 px wide 6 px in from the pane's right edge, so it needs 30 px
+    /// of gutter — more than the 20 px of editor padding there is`.
     #[test]
     #[allow(
         clippy::assertions_on_constants,
@@ -660,6 +695,10 @@ mod tests {
     ///
     /// - Blend toward black rather than toward `bg`: the light row fires, 137 units
     ///   out on every channel, while the dark row would have been out by 16.
+    ///   MEASURED, which is what establishes the fail-fast ordering the paragraph
+    ///   above rests on: `case: a light editor background darkens the grey toward it
+    ///   — scrollbar_thumb_color(#fafafa) = #3a3a3a, want #c3c3c3`, left `#3a3a3a`,
+    ///   right `#c3c3c3`.
     /// - Change [`SCROLLBAR_THUMB_ALPHA`] or [`SCROLLBAR_GREY`]: both rows fire, and
     ///   the pair of literals says which — a grey change moves the two rows in the
     ///   same direction, an alpha change moves them in opposite ones.

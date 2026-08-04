@@ -128,7 +128,7 @@
 //!   real `~/.local/state/wolf/` — and, since the shader-cache fix, the only thing
 //!   that sets `XDG_CACHE_HOME` too (see [`smoke_shader_cache_dir`]).
 //! * [`the_column_cap_cannot_bind_at_the_ocr_smokes_geometry`] — the premise every
-//!   OCR smoke's geometry rests on since `editor_inset` grew a content-width cap:
+//!   OCR smoke's geometry rests on, given `editor_inset`'s content-width cap:
 //!   at the pinned output size, the measured pane origin and
 //!   `SMOKE_FONT_PT`, one pane is far too narrow for 90 columns, so the cap never
 //!   binds, no grid is ever centred, and no pixel target moves. That premise is
@@ -11602,7 +11602,7 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
 
 /// The fifth compositor-free guard: `editor_inset`'s content-width cap CANNOT bind
 /// at the geometry the OCR smokes run at, which is the unstated premise every one of
-/// them now rests on.
+/// them rests on.
 ///
 /// ## Why a premise needs a guard
 ///
@@ -11641,7 +11641,12 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
 ///
 /// FALSIFYING EDIT: set `editor_inset::MAX_GRID_COLS` to 20. Then
 /// `20 * 22.4765625 = 449.5` px fits inside 989 px, the cap binds in every smoke, and
-/// this guard fires.
+/// this guard fires. MEASURED, and the run's own live numbers are the point of the
+/// record: `One pane leaves 989 px of grid (1029 px of pane area, less two 20 px
+/// paddings), while 20 columns of the measured 22.4765625 px cell need only
+/// 449.53125 px`. That 22.4765625 is the cell [`cell_metrics_for_smoke`] really
+/// produced on the measuring host, which is what makes this a comparison against a
+/// real cell rather than between two literals.
 #[test]
 fn the_column_cap_cannot_bind_at_the_ocr_smokes_geometry() {
     let cell = cell_metrics_for_smoke();
@@ -11671,12 +11676,12 @@ fn the_column_cap_cannot_bind_at_the_ocr_smokes_geometry() {
         inset_w < cap_w,
         "THE COLUMN CAP HAS STARTED TO BIND IN THE OCR SMOKES. One pane leaves {inset_w} px of \
          grid ({pane_area_w} px of pane area, less two {} px paddings), while {} columns of the \
-         measured {} px cell need only {cap_w} px — so `editor_inset::grid_rect` now caps that \
+         measured {} px cell need only {cap_w} px — so `editor_inset::grid_rect` caps that \
          grid and CENTRES it, moving every glyph in every capture right by half the difference. \
-         What that means, in order: every OCR assertion is now reading a page laid out differently \
+         What that means, in order: every OCR assertion is reading a page laid out differently \
          from the one it was calibrated against; PANE_ORIGIN_X_EXPECTED = \
-         {PANE_ORIGIN_X_EXPECTED} is stale, because the text grid no longer starts at the padding; \
-         and every pointer smoke's derived click target moves with it. DO NOT relax this guard and \
+         {PANE_ORIGIN_X_EXPECTED} is stale, because the text grid starts at the centred origin \
+         rather than at the padding; and every pointer smoke's derived click target moves with it. DO NOT relax this guard and \
          DO NOT widen PANE_ORIGIN_TOLERANCE_PX to absorb it — re-derive the pane origin from a \
          probe click the way its own doc comment describes, and decide deliberately whether the \
          smokes should keep running at a size where the cap binds. Likely causes, in order: \
@@ -17187,7 +17192,11 @@ exit 0
 /// ## Red-run reverts, one per assertion
 ///
 /// Assertion 2: in `editor_inset::grid_size_for_pane`, return `cols` instead of
-/// `cap.apply(cols)` — readback 1 comes back around 123 instead of 90.
+/// `cap.apply(cols)` — readback 1 comes back around 123 instead of 90. MEASURED:
+/// `the captive Neovim reported winwidth(0) = 123, want exactly 90`, left `123`,
+/// right `90`. The uncapped count is 123 on the nose, which is the figure
+/// [`FULLWIDTH_SMOKE_FONT_PT`]'s own arithmetic predicts from `floor(989 / 8.03)` —
+/// a live readback confirming that constant's reasoning rather than restating it.
 ///
 /// Assertion 3, three independent ones. In `command_action::ui_action_for`, restore
 /// `Command::FullWidth => UiAction::Deferred(…)`: the toggle never becomes an action
@@ -17198,6 +17207,16 @@ exit 0
 /// did not change and `connect_resize` therefore never fires. **That third one is the
 /// only falsifier anywhere for the no-allocation-change resize path**, which is the
 /// mechanism a later reader is most likely to simplify away as redundant.
+///
+/// All three were MEASURED, and the measurement's lesson is that the panic text does
+/// NOT tell them apart: each reports `winwidth(0) = 90` against a capped 90 and
+/// prints the same four-cause message. What separates them is everything around it.
+/// The `ui_action_for` revert — and only that one — emits the app's own
+/// `wolf-gnome: command FullWidth not dispatched: …` line on stderr first. The
+/// `column_cap` revert additionally reddens `editor_inset::tests::column_cap_table`
+/// in the fast suite, while the `sync_pane_grids` revert leaves every headless test
+/// green: a red smoke over a green fast suite is the signature of that deletion, and
+/// is the most useful thing to know when this assertion fires.
 #[test]
 fn column_cap_and_full_width_toggle_change_the_grid_under_cage() {
     const SMOKE: &str = "column_cap_and_full_width_toggle_change_the_grid_under_cage";
@@ -17294,7 +17313,7 @@ fn column_cap_and_full_width_toggle_change_the_grid_under_cage() {
          order the value travels: (1) `command_action::ui_action_for` still classifies \
          `Command::FullWidth` as `Deferred`, so the drained command never becomes an action at \
          all; (2) `shell::perform` has no `UiAction::ToggleFullWidth` arm, so the action never \
-         becomes an `InputEvent`; (3) `PaneInner::on_render_wake` no longer calls \
+         becomes an `InputEvent`; (3) `PaneInner::on_render_wake` does not call \
          `sync_pane_grids`, so the flag flips and the paint re-clips but NO `resize_grid` is ever \
          issued — the widget allocation does not change when the cap lifts, so `connect_resize` \
          never fires and nothing else would tell Neovim; or (4) `editor_inset::column_cap` ignores \
