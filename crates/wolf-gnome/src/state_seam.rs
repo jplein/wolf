@@ -14,12 +14,6 @@
 //!   `restoredWindowFrame` "intersects some screen" check.
 //!   [`snapshot_state`] writes `x`/`y` as `0.0` unconditionally and
 //!   [`restored_window_size`] returns SIZE only.
-//! - **Applying `sidebar_visible` on restore.** It is WRITTEN (so the field
-//!   cannot silently rot out of the file) but never read back: `win.toggle-sidebar`
-//!   is `Reserved`, so a user can never legitimately produce
-//!   `sidebar_visible == false` with a folder open, and honouring a `false` from a
-//!   hand-edited file would hide the sidebar with no way to bring it back.
-//!   [`RestorePlan`] therefore does not carry the field at all.
 //! - **Multiple windows / tabs.** [`snapshot_state`] writes exactly one of each;
 //!   `wolf-gnome` is a single-window, single-tab front-end today, and that shape
 //!   lives in ONE place so a later unit has to change it deliberately.
@@ -44,6 +38,14 @@ pub struct RestorePlan {
     pub layout: Option<PaneNode>,
     /// The restored window size in pixels, or `None` for the unset sentinel.
     pub window_size: Option<(i32, i32)>,
+    /// The user's saved sidebar PREFERENCE, defaulting to `true` when there is no
+    /// saved tab.
+    ///
+    /// Independent of [`RestorePlan::empty`]: the empty state overrides the
+    /// preference at APPLY time, through [`sidebar_is_shown`], never at restore
+    /// time. Folding the override in here would lose the preference on the first
+    /// launch into an empty state, and the next save would then persist the fold.
+    pub sidebar_visible: bool,
 }
 
 /// Builds the whole launch plan from the loaded `state.json`, the process cwd and
@@ -96,7 +98,24 @@ pub fn restore_plan(
         empty,
         layout,
         window_size: window.and_then(|window| restored_window_size(window.width, window.height)),
+        sidebar_visible: tab.is_none_or(|tab| tab.sidebar_visible),
     }
+}
+
+/// Whether the file-tree sidebar is SHOWN: the user wants it AND a project is open.
+///
+/// The ONE place that rule lives. `crate::shell::AppShell::set_empty_state` and
+/// `AppShell::toggle_sidebar` both apply it through the same private applier, so a
+/// user toggle cannot be silently undone by the next `set_empty_state(false)` and
+/// the empty state cannot draw a file tree for a project that is not open.
+///
+/// The empty state always WINS: a window with no project root has nothing to list,
+/// so the tree would render whatever directory nvim happened to be handed
+/// (`$HOME` on a desktop-launcher start) beside a status page saying no folder is
+/// open.
+#[must_use]
+pub fn sidebar_is_shown(user_wants: bool, empty: bool) -> bool {
+    !empty && user_wants
 }
 
 /// The Linux half of macOS's `StateSeam.restoredWindowFrame`: the saved window

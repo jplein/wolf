@@ -16309,7 +16309,8 @@ fn alt_left_navigates_back_to_the_previous_file_under_cage() {
     // file's heading on screen.
     let before_name = read_trimmed(&before, SMOKE);
     assert_eq!(
-        before_name, NAVBACK_FILE_SECOND,
+        before_name,
+        NAVBACK_FILE_SECOND,
         "{SMOKE}: before the chord Neovim reported its current buffer as {before_name:?}, not \
          {NAVBACK_FILE_SECOND:?}. This is a PRECONDITION failure, not a navigation one: the second \
          `:e` never took effect, so the pane had nothing to go Back FROM and everything below \

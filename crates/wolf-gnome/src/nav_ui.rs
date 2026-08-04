@@ -98,7 +98,7 @@ pub enum NavPress {
 /// disagree about it.
 #[must_use]
 pub fn nav_query_win(active_win: Option<i64>) -> Option<i64> {
-    todo!("wired by the coder per plan section 2.1")
+    active_win.filter(|win| *win != 0)
 }
 
 /// Whether a Back/Forward press may be issued at all, given the core's liveness
@@ -110,7 +110,26 @@ pub fn nav_query_win(active_win: Option<i64>) -> Option<i64> {
 /// prints its reason, and issues no RPC.
 #[must_use]
 pub fn nav_press(liveness: Option<Liveness>, active_win: Option<i64>) -> NavPress {
-    todo!("wired by the coder per plan section 2.1")
+    match liveness {
+        Some(Liveness::Alive) => match nav_query_win(active_win) {
+            Some(win) => NavPress::Move(win),
+            None => NavPress::Refuse(
+                "no editor pane is focused, so there is no per-pane history to move through",
+            ),
+        },
+        Some(Liveness::NotResponding) => NavPress::Refuse(
+            "the captive Neovim is already known not to be responding, and a history move is a \
+             blocking RPC that would freeze the window for another full timeout budget",
+        ),
+        Some(Liveness::Dead) => NavPress::Refuse(
+            "the captive Neovim has died, so there is no pane left to move and an RPC against a \
+             dead handle is not reliably fast",
+        ),
+        None => NavPress::Refuse(
+            "the core has already been taken out by the window's close handler, so there is \
+             nothing left to navigate",
+        ),
+    }
 }
 
 /// Whether each toolbar navigation button is sensitive.
@@ -126,7 +145,21 @@ pub fn nav_buttons(
     active_win: Option<i64>,
     history: Option<NavAvailability>,
 ) -> NavButtons {
-    todo!("wired by the coder per plan section 2.1")
+    const BOTH_INSENSITIVE: NavButtons = NavButtons {
+        back: false,
+        forward: false,
+    };
+
+    if !matches!(nav_press(liveness, active_win), NavPress::Move(_)) {
+        return BOTH_INSENSITIVE;
+    }
+    match history {
+        Some(history) => NavButtons {
+            back: history.can_back,
+            forward: history.can_forward,
+        },
+        None => BOTH_INSENSITIVE,
+    }
 }
 
 #[cfg(test)]

@@ -24,11 +24,16 @@
 //!
 //! ## The three classes
 //!
-//! - **Dispatched** — the eleven commands `wolf-gnome` performs today.
+//! - **Dispatched** — the twelve commands `wolf-gnome` performs today.
 //! - [`UiAction::Deferred`] — implemented on macOS and planned on GTK; the string
 //!   names the concrete blocker so the deferral is auditable rather than a shrug.
 //! - [`UiAction::NoGnomeEquivalent`] — has no GNOME counterpart and will never be
 //!   implemented; the string says why.
+//! - **Front-end-only rows** — an [`crate::actions::ACTION_TABLE`] row that carries
+//!   no [`wolf_core::Command`] at all, because the behaviour is the front end's own
+//!   view of the core rather than something Neovim can queue. Those resolve through
+//!   [`ui_action_for_front_end_action`], which is the ONLY other way an action is
+//!   installed.
 //!
 //! Every `Deferred` / `NoGnomeEquivalent` reason is DISTINCT, so no two commands
 //! can collapse into one indistinguishable diagnostic.
@@ -64,6 +69,12 @@ pub enum UiAction {
     OpenBufferPicker,
     /// Open the in-window project-search overlay.
     OpenSearchOverlay,
+    /// Move the focused pane one entry BACK in its navigation history.
+    HistoryBack,
+    /// Move the focused pane one entry FORWARD in its navigation history.
+    HistoryForward,
+    /// Show or hide the file-tree sidebar.
+    ToggleSidebar,
     /// Implemented on macOS, planned on GTK; the string names the blocker.
     Deferred(&'static str),
     /// Has no GNOME equivalent and will never be implemented.
@@ -130,14 +141,35 @@ pub fn ui_action_for(command: Command) -> UiAction {
         Command::FullWidth => UiAction::Deferred(
             "the ~90-column content cap is a front-end feature wolf-gnome does not implement",
         ),
-        Command::ToggleSidebar => UiAction::Deferred(
-            "a user-toggleable sidebar is the feat-list 'Unified toolbar' / sidebar row",
-        ),
+        Command::ToggleSidebar => UiAction::ToggleSidebar,
         Command::SidebarShowProject => UiAction::Deferred(
             "wolf-gnome's sidebar has no panel switcher (there is no search panel to switch away \
              from)",
         ),
         Command::SearchInProject => UiAction::OpenSearchOverlay,
+    }
+}
+
+/// The UI action a FRONT-END-ONLY action row performs — an
+/// [`crate::actions::ACTION_TABLE`] row whose `command` is `None`. `None` for
+/// anything else.
+///
+/// The navigation rows have no [`wolf_core::Command`] variant because a pane's
+/// visit log is the front end's own view of the core, so
+/// [`crate::shell::AppShell::install_actions`] cannot reach them through
+/// [`ui_action_for`]. A row that resolves in NEITHER place is skipped with a
+/// printed reason while its accelerator is still registered, which swallows the
+/// chord and does nothing at all — strictly worse than not binding it.
+///
+/// This lives here rather than in [`crate::actions`] because this module owns
+/// [`UiAction`]; `actions.rs` stays free of the classification type. Only the test
+/// module below imports `actions`, so there is no module cycle.
+#[must_use]
+pub fn ui_action_for_front_end_action(action: &str) -> Option<UiAction> {
+    match action {
+        "win.history-back" => Some(UiAction::HistoryBack),
+        "win.history-forward" => Some(UiAction::HistoryForward),
+        _ => None,
     }
 }
 

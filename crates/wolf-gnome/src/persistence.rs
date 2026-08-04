@@ -73,6 +73,10 @@ pub struct StateParts<'a> {
     pub launch_cwd: PathBuf,
     /// Whether the app launched into the empty state.
     pub empty: bool,
+    /// The user's restored sidebar PREFERENCE
+    /// ([`crate::state_seam::RestorePlan::sidebar_visible`]), which is what is
+    /// persisted — never what is on screen.
+    pub sidebar_shown: bool,
 }
 
 /// The persistence glue's shared state. Single GTK main thread, so `Cell` /
@@ -90,6 +94,9 @@ struct PersistInner {
     launch_cwd: PathBuf,
     /// The LIVE empty-state flag, kept in step by [`StateHandle::set_empty`].
     empty: Cell<bool>,
+    /// The user's LIVE sidebar preference, kept in step by
+    /// [`StateHandle::set_sidebar_shown`].
+    sidebar_shown: Cell<bool>,
 }
 
 /// A cloneable handle to the state-persistence glue.
@@ -111,6 +118,7 @@ pub fn build(parts: StateParts<'_>) -> StateHandle {
             store: parts.store,
             launch_cwd: parts.launch_cwd,
             empty: Cell::new(parts.empty),
+            sidebar_shown: Cell::new(parts.sidebar_shown),
         }),
     }
 }
@@ -119,11 +127,21 @@ impl StateHandle {
     /// Records the live empty-state flag.
     ///
     /// Called from [`crate::shell::AppShell::set_empty_state`], so the persisted
-    /// `cwd` and `sidebar_visible` follow the empty state rather than being
-    /// frozen at whatever launch decided — opening a folder into an
-    /// empty-state window must start persisting that folder.
+    /// `cwd` follows the empty state rather than being frozen at whatever launch
+    /// decided — opening a folder into an empty-state window must start persisting
+    /// that folder.
     pub fn set_empty(&self, empty: bool) {
         self.inner.empty.set(empty);
+    }
+
+    /// Records the user's sidebar PREFERENCE, mirroring [`StateHandle::set_empty`].
+    ///
+    /// Called from [`crate::shell::AppShell::toggle_sidebar`]. The preference is
+    /// what is persisted, deliberately not what is on screen: an empty-state
+    /// session shows no sidebar, and persisting that would hand the next launch
+    /// into a real project a hidden tree the user never asked for.
+    pub fn set_sidebar_shown(&self, shown: bool) {
+        self.inner.sidebar_shown.set(shown);
     }
 
     /// Takes a snapshot on a render wake (gated by
@@ -186,10 +204,16 @@ impl StateHandle {
         let empty = self.inner.empty.get();
         let cwd = state_seam::snapshot_cwd(empty, &self.inner.launch_cwd, live.as_deref());
         let (width, height) = self.inner.window.default_size();
-        // `sidebar_visible` is the inverse of the empty-state flag: the sidebar is
-        // hidden exactly when no project is open.
+        // The user's PREFERENCE, never the live empty-state flag. `restore_plan`
+        // reads this field back, so writing `!empty` would make any session that
+        // ended in the empty state hide the sidebar on the next launch into a real
+        // project.
         store.set_snapshot(state_seam::snapshot_state(
-            width, height, cwd, !empty, layout,
+            width,
+            height,
+            cwd,
+            self.inner.sidebar_shown.get(),
+            layout,
         ));
     }
 }

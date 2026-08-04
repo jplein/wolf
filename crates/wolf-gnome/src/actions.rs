@@ -235,7 +235,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         action: "win.toggle-sidebar",
         accel: Some("<Control><Shift>b"),
         command: Some(Command::ToggleSidebar),
-        status: BindingStatus::Reserved,
+        status: BindingStatus::Bound,
         note: "macOS Ctrl+Cmd+S; B is the cross-platform sidebar letter and gives up only the \
                Ctrl+Shift alias for <C-b>",
     },
@@ -283,7 +283,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         action: "win.history-back",
         accel: Some("<Alt>Left"),
         command: None,
-        status: BindingStatus::Reserved,
+        status: BindingStatus::Bound,
         note: "macOS Cmd+[; front-end-only navigation with no Command variant, and capturing \
                <A-Left> PREVENTS the destructive <Esc>+<Left> split",
     },
@@ -291,7 +291,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         action: "win.history-forward",
         accel: Some("<Alt>Right"),
         command: None,
-        status: BindingStatus::Reserved,
+        status: BindingStatus::Bound,
         note: "macOS Cmd+]; front-end-only navigation with no Command variant, and capturing \
                <A-Right> PREVENTS the destructive <Esc>+<Right> split",
     },
@@ -350,6 +350,22 @@ pub const MENU_SECTIONS: &[MenuSection] = &[
             MenuItemSpec {
                 label: "Search in project",
                 action: "win.search-in-project",
+            },
+        ],
+    },
+    MenuSection {
+        items: &[
+            MenuItemSpec {
+                label: "Back",
+                action: "win.history-back",
+            },
+            MenuItemSpec {
+                label: "Forward",
+                action: "win.history-forward",
+            },
+            MenuItemSpec {
+                label: "Toggle sidebar",
+                action: "win.toggle-sidebar",
             },
         ],
     },

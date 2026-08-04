@@ -3,7 +3,11 @@
 //! [`run`] builds an [`adw::Application`], and on `activate` constructs an
 //! [`adw::ApplicationWindow`] containing an [`adw::HeaderBar`] over a horizontal
 //! [`gtk::Paned`] of the file-tree sidebar ([`crate::tree_view`]) and the editor
-//! [`gtk::Overlay`]. The overlay's main child is the **native pane view**
+//! [`gtk::Overlay`]. The header bar packs, at the start, the sidebar toggle, the
+//! linked Back/Forward pair and the Open button, and at the end the primary menu;
+//! it sets NO title widget, so Adwaita draws the window title itself and the
+//! header bar keeps the natural height the pointer smokes measured. The overlay's
+//! main child is the **native pane view**
 //! ([`crate::pane_view`]) — a tree of nested [`gtk::Paned`]s with one
 //! [`gtk::DrawingArea`] per pane plus a bottom cmdline strip — and its overlay
 //! children are the empty state, the file picker ([`crate::picker`]), the command
@@ -30,19 +34,24 @@
 //!   The layout is queued on the pane view
 //!   ([`crate::pane_view::PaneHandle::request_layout_rebuild`]) and realized on
 //!   the first wake with a window grid, through `WolfCore::rebuild_layout`. That
-//!   is ONE of the TWO blocking RPCs this front-end issues — at most once per
-//!   launch, before the window is interactive, never on the crash path. The other
+//!   is ONE of the THREE blocking RPCs this front-end issues — at most once per
+//!   launch, before the window is interactive, never on the crash path. The second
 //!   is the buffer picker's candidate snapshot (`WolfCore::list_buffers`), which a
 //!   RUNNING window can issue on Ctrl+Shift+E, behind
 //!   [`crate::buffer_picker::open_decision`]'s guard that it be issued only while
-//!   the core reads `Alive`. Either can mark the core `Liveness::NotResponding` and
-//!   raise the stall overlay. The project-search overlay adds NEITHER a third
-//!   blocking call nor a third stall path: `start_search` `spawn_blocking`s onto the
-//!   tokio runtime, `open_at` is fire-and-forget, and the one blocking call it could
-//!   have made — `WolfCore::ignorecase()` — is deliberately not made. Writing back
-//!   is [`crate::persistence`]: a snapshot on
+//!   the core reads `Alive`. The third is a per-pane navigation move
+//!   (`WolfCore::history_back` / `history_forward`) on Alt+Left / Alt+Right, behind
+//!   [`crate::nav_ui::nav_press`]'s guard of exactly the same shape. Any of the
+//!   three can mark the core `Liveness::NotResponding` and raise the stall overlay.
+//!   The project-search overlay adds NEITHER a fourth
+//!   blocking call nor a further stall path: `start_search` `spawn_blocking`s onto
+//!   the tokio runtime, `open_at` is fire-and-forget, and the one blocking call it
+//!   could have made — `WolfCore::ignorecase()` — is deliberately not made. Writing
+//!   back is [`crate::persistence`]: a snapshot on
 //!   every wake, and a final synchronous snapshot + flush as the FIRST thing
-//!   [`wire_close`] does.
+//!   [`wire_close`] does. The tab's `sidebar_visible` is written from the user's
+//!   PREFERENCE and read back at launch through
+//!   [`crate::state_seam::RestorePlan::sidebar_visible`].
 //! - **Liveness / crash recovery:** the liveness read is UNCONDITIONAL and at the
 //!   TOP of the drain-loop body, and it GATES the two paint handlers (see
 //!   [`mod@crate::liveness_ui`] for the mapping and [`crate::crash_overlay`] for the
@@ -116,7 +125,10 @@ use crate::pane_view;
 use crate::persistence::{self, StateHandle, StateParts};
 use crate::picker::{self, PickerHandle};
 use crate::search_overlay::{self, SearchHandle};
-use crate::shell::{self, ShellParts, GO_TO_FILE_ACTION};
+use crate::shell::{
+    self, ShellParts, GO_TO_FILE_ACTION, HISTORY_BACK_ACTION, HISTORY_FORWARD_ACTION,
+    TOGGLE_SIDEBAR_ACTION,
+};
 use crate::state_seam::{self, RestorePlan};
 use crate::title::WINDOW_TITLE_FALLBACK;
 use crate::tree_view::{self, TreeHandle};
@@ -160,6 +172,17 @@ pub(crate) const TREE_PANE_WIDTH: i32 = 250;
 /// a single queued redraw (a dropped "full" send just means a redraw is already
 /// pending).
 const WAKE_CHANNEL_CAP: usize = 1;
+
+/// Icon of the header bar's sidebar-toggle button. From `adwaita-icon-theme`,
+/// which the flake supplies and `XDG_DATA_DIRS` exposes; a missing icon renders as
+/// `image-missing` and breaks no assertion.
+const SIDEBAR_TOGGLE_ICON: &str = "sidebar-show-symbolic";
+
+/// Icon of the header bar's Back button (see [`SIDEBAR_TOGGLE_ICON`]).
+const HISTORY_BACK_ICON: &str = "go-previous-symbolic";
+
+/// Icon of the header bar's Forward button (see [`SIDEBAR_TOGGLE_ICON`]).
+const HISTORY_FORWARD_ICON: &str = "go-next-symbolic";
 
 /// Runs the windowed `wolf-gnome` application, returning the process exit code.
 #[must_use]
@@ -335,9 +358,37 @@ fn build_ui(app: &adw::Application) {
     paned.set_end_child(Some(&overlay));
     paned.set_position(TREE_PANE_WIDTH);
 
-    // Header bar: an "Open" button that triggers the file picker via its action,
-    // plus the GNOME primary (hamburger) menu.
+    // The unified toolbar: the sidebar toggle, the linked Back/Forward pair and the
+    // "Open" button at the start; the GNOME primary (hamburger) menu at the end.
+    //
+    // NO TITLE WIDGET IS SET, and that is a decision rather than an omission.
+    // `adw::HeaderBar` renders the window title itself when none is set (which
+    // `shell::refresh_title` keeps current), while setting one changes the header
+    // bar's natural height — and that height IS the smoke suite's measured
+    // `PANE_ORIGIN_Y_EXPECTED`, which seven pointer smokes derive their click
+    // targets from.
     let header = adw::HeaderBar::new();
+
+    let sidebar_button = gtk::Button::builder()
+        .icon_name(SIDEBAR_TOGGLE_ICON)
+        .tooltip_text("Toggle sidebar (Ctrl+Shift+B)")
+        .build();
+    header.pack_start(&sidebar_button);
+
+    let nav_back_button = gtk::Button::builder()
+        .icon_name(HISTORY_BACK_ICON)
+        .tooltip_text("Back (Alt+Left)")
+        .build();
+    let nav_forward_button = gtk::Button::builder()
+        .icon_name(HISTORY_FORWARD_ICON)
+        .tooltip_text("Forward (Alt+Right)")
+        .build();
+    let nav_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    nav_box.add_css_class("linked");
+    nav_box.append(&nav_back_button);
+    nav_box.append(&nav_forward_button);
+    header.pack_start(&nav_box);
+
     let open_button = gtk::Button::builder()
         .icon_name("document-open-symbolic")
         .tooltip_text("Open file (Ctrl+Shift+O)")
@@ -377,6 +428,7 @@ fn build_ui(app: &adw::Application) {
         store,
         launch_cwd: plan.core_cwd.clone(),
         empty,
+        sidebar_shown: plan.sidebar_visible,
     });
 
     // The action namespace (win.* / app.*), the accelerators, and the command
@@ -394,6 +446,10 @@ fn build_ui(app: &adw::Application) {
         paned: &paned,
         empty_state: &empty_state,
         open_button: &open_button,
+        nav_back_button: &nav_back_button,
+        nav_forward_button: &nav_forward_button,
+        sidebar_button: &sidebar_button,
+        sidebar_shown: plan.sidebar_visible,
         crash_overlay: &crash,
         panes: &panes,
         state: &state,
@@ -416,6 +472,42 @@ fn build_ui(app: &adw::Application) {
                 gtk::prelude::WidgetExt::activate_action(&window, GO_TO_FILE_ACTION, None)
             {
                 eprintln!("wolf-gnome: failed to activate {GO_TO_FILE_ACTION}: {err}");
+            }
+        });
+    }
+
+    // The three toolbar buttons activate exactly the actions their chords do, in
+    // the same shape as the Open button above (including why the call is
+    // qualified). No smoke clicks any of them — see "Deliberate test gaps" in
+    // `crates/wolf-gnome/tests/README.md` — so keeping the shape identical is what
+    // the coverage rests on.
+    {
+        let window = window.clone();
+        sidebar_button.connect_clicked(move |_button| {
+            if let Err(err) =
+                gtk::prelude::WidgetExt::activate_action(&window, TOGGLE_SIDEBAR_ACTION, None)
+            {
+                eprintln!("wolf-gnome: failed to activate {TOGGLE_SIDEBAR_ACTION}: {err}");
+            }
+        });
+    }
+    {
+        let window = window.clone();
+        nav_back_button.connect_clicked(move |_button| {
+            if let Err(err) =
+                gtk::prelude::WidgetExt::activate_action(&window, HISTORY_BACK_ACTION, None)
+            {
+                eprintln!("wolf-gnome: failed to activate {HISTORY_BACK_ACTION}: {err}");
+            }
+        });
+    }
+    {
+        let window = window.clone();
+        nav_forward_button.connect_clicked(move |_button| {
+            if let Err(err) =
+                gtk::prelude::WidgetExt::activate_action(&window, HISTORY_FORWARD_ACTION, None)
+            {
+                eprintln!("wolf-gnome: failed to activate {HISTORY_FORWARD_ACTION}: {err}");
             }
         });
     }
