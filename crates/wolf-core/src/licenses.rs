@@ -157,10 +157,12 @@ mod tests {
 
     /// The shortest a real licence text can plausibly be, in bytes.
     ///
-    /// The smallest of the four is iA Writer Mono S's at 1417 bytes, so this floor
-    /// clears it by a wide margin while still failing an `include_str!` pointed at
-    /// an empty or truncated file — which otherwise produces a row that satisfies
-    /// every other check here.
+    /// The smallest of the four is Latin Modern Math's GUST licence at 1417 bytes.
+    /// The three OFL texts are several times that: 4380 (Inter), 4399 (JetBrains
+    /// Mono) and 4506 (iA Writer Mono S, the largest of the four). This floor
+    /// therefore clears every one of them by a wide margin while still failing an
+    /// `include_str!` pointed at an empty or truncated file — which otherwise
+    /// produces a row that satisfies every other check here.
     const MIN_LICENCE_BYTES: usize = 500;
 
     /// The distinctive phrase from each font's licence, RE-TYPED here as local

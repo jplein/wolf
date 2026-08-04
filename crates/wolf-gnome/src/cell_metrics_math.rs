@@ -293,16 +293,31 @@ mod tests {
         );
     }
 
-    /// When the cell is exactly the glyph box, the baseline IS the ascent.
+    /// PRECONDITION: a cell exactly as tall as the glyph box leaves the baseline
+    /// at the ascent.
     ///
-    /// This deserves its own name because it is the property the whole smoke suite
-    /// rests on: at the measured `line-height` the cell height equals
-    /// `ascent + descent`, so `baseline - ascent` is exactly `0.0` and
-    /// `render::draw_glyph`'s new offset moves no glyph by a single device pixel.
-    /// If this stops holding, every OCR and pointer smoke's calibration moves with
-    /// it.
+    /// This pins a premise, not a rule. Both rows below give the cell the glyph
+    /// box's own height (`16 == 12 + 4`, `44 == 35 + 9`), so the leftover space is
+    /// `0.0` and the offset `render::draw_glyph` applies, `baseline - ascent`, is
+    /// exactly `0.0` — it moves no glyph by a single device pixel.
+    ///
+    /// That zero is what the compositor smokes rest on. `smoke_headless.rs` pins
+    /// `SMOKE_LINE_HEIGHT = 118`, and its doc comment carries the measurement
+    /// behind the number: at the smoke's font size the app's cell height is
+    /// `round(37.3333 * 1.18) == 44`, which is exactly `ascent + descent` for the
+    /// pinned DejaVu Sans Mono (35 + 9). Every glyph therefore paints at the
+    /// coordinates a top-aligned layout puts it at, and every OCR and pointer
+    /// target calibrated against those coordinates holds unchanged. A cell height
+    /// that stopped equalling the glyph box would move all of them at once, so the
+    /// premise is asserted here rather than assumed.
+    ///
+    /// It gives NO coverage of the centring rule itself, and cannot: with a
+    /// leftover of `0.0` the centring term contributes nothing under any divisor,
+    /// and a `baseline` that returned the bare `ascent` satisfies both rows.
+    /// [`the_baseline_splits_the_leftover_space_evenly`] is the test that covers
+    /// the rule, with two ratios so a changed divisor cannot pass by coincidence.
     #[test]
-    fn the_baseline_equals_the_ascent_when_the_cell_matches_the_glyph_box() {
+    fn precondition_a_cell_that_matches_the_glyph_box_leaves_the_baseline_at_the_ascent() {
         assert_eq!(
             baseline(16.0, 12.0, 4.0),
             12.0,
