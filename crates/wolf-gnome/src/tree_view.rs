@@ -500,3 +500,237 @@ pub fn build(
 
     TreeHandle { inner }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use wolf_core::tree::TreeIndexCache;
+
+    // --- The fixtures -------------------------------------------------------
+    //
+    // Every entry below is written out by hand, and so is every expected node:
+    // nothing in this module derives an expectation by calling the projection it
+    // is asserting on.
+
+    /// The directory every fixture entry lives under.
+    ///
+    /// Deliberately unrelated to [`ROOT_LABEL`]: a fixture path that carried the
+    /// asserted label would let a projection keyed on the WRONG string still
+    /// return the right children.
+    const FIXTURE_ROOT: &str = "/wsroot";
+
+    /// The label handed to `root_node`. It names no directory in any fixture, so
+    /// `children_of(entries, "myproj")` is empty — which is what makes the
+    /// sentinel assertion below able to fail.
+    const ROOT_LABEL: &str = "myproj";
+
+    /// One fixture entry. CONVENTION: the absolute path is
+    /// `{FIXTURE_ROOT}/{display}`, and the MRU rank is irrelevant to the
+    /// projection, so it is always `None`.
+    fn fe(display: &str) -> FileEntry {
+        FileEntry {
+            path: PathBuf::from(format!("{FIXTURE_ROOT}/{display}")),
+            display: display.to_string(),
+            mru_rank: None,
+        }
+    }
+
+    /// A hand-built expected `Dir` node. BOTH fields are stated by the caller;
+    /// neither is derived from the other.
+    fn dir(name: &str, rel_path: &str) -> TreeNode {
+        TreeNode::Dir {
+            name: name.to_string(),
+            rel_path: rel_path.to_string(),
+        }
+    }
+
+    /// A hand-built expected `File` node, whose `abs_path` follows [`fe`]'s
+    /// convention.
+    fn file(name: &str, rel_path: &str) -> TreeNode {
+        TreeNode::File {
+            name: name.to_string(),
+            rel_path: rel_path.to_string(),
+            abs_path: PathBuf::from(format!("{FIXTURE_ROOT}/{rel_path}")),
+        }
+    }
+
+    // =========================================================================
+    // root_node
+    // =========================================================================
+
+    /// The sidebar's top level is ONE synthetic directory node named after the
+    /// working directory, whose rel-path is the cwd sentinel.
+    ///
+    /// Two independent claims, so a failure says which broke:
+    ///
+    /// 1. It is a `Dir`. That arm is what makes `activate` unable to reach
+    ///    `InputEvent::Open` for the root row — `activate` matches the node and
+    ///    only its `File` arm sends an `Open` — so "clicking the root must not
+    ///    open a file" is satisfied by construction rather than by a guard.
+    /// 2. Its `rel_path` is `""`, the same sentinel macOS uses, so the existing
+    ///    create-func resolves the root's children to the cwd's top level with no
+    ///    special-casing.
+    ///
+    /// Revert that must redden it: giving the root node the label as its
+    /// `rel_path` instead of the empty sentinel — claim 1 stays green and the
+    /// children assertion fails, since no fixture directory is named `myproj`.
+    #[test]
+    fn root_node_uses_the_cwd_sentinel() {
+        let entries = [fe("src/main.rs"), fe("docs/intro.md"), fe("readme.md")];
+
+        let node = root_node(ROOT_LABEL);
+
+        let TreeNode::Dir { name, rel_path } = &node else {
+            panic!(
+                "root_node must return a Dir, but returned {node:?}. A File root would be \
+                 openable: `activate` sends InputEvent::Open for exactly the File arm, so the \
+                 first click on the root row would ask nvim to edit the working DIRECTORY as a \
+                 buffer."
+            );
+        };
+
+        assert_eq!(
+            name.as_str(),
+            ROOT_LABEL,
+            "the synthetic root row must draw the label it was handed ({ROOT_LABEL:?}), which is \
+             the working directory's basename; the shell is the one place that knows where the \
+             sidebar is rooted and passes it in"
+        );
+
+        assert_eq!(
+            rel_path.as_str(),
+            "",
+            "the synthetic root's rel_path must be the EMPTY cwd sentinel, but was \
+             {rel_path:?} — the create-func resolves a Dir's children by calling the projection \
+             with its rel_path, and only the empty string names the cwd's own top level"
+        );
+
+        let want = vec![
+            dir("docs", "docs"),
+            dir("src", "src"),
+            file("readme.md", "readme.md"),
+        ];
+        assert_eq!(
+            tree::children_of(&entries, rel_path),
+            want,
+            "resolving the synthetic root's rel_path against the fixture must yield the cwd's top \
+             level (dirs first, case-insensitively by name, then files): {want:?}. An empty \
+             result means the root's rel_path names a directory that does not exist, so the root \
+             row would draw with no children and nothing under it would ever be reachable."
+        );
+    }
+
+    // =========================================================================
+    // children_for
+    // =========================================================================
+
+    /// Every per-directory query at one snapshot version shares ONE built index.
+    ///
+    /// This is the discriminator for adopting `TreeIndexCache`: the free
+    /// `children_of` rebuilds the whole index per call, so a create-func that
+    /// still called it would answer every child list correctly while doing O(N)
+    /// work per expanded directory. The two counts below are the only assertions
+    /// that can tell those two implementations apart.
+    ///
+    /// Both expected counts are literals — 1 after four call sites, 2 after the
+    /// fifth — never a count of the calls the test made.
+    ///
+    /// Revert that must redden it: replacing `children_for`'s body with
+    /// `tree::children_of(entries, rel_path)`, the pre-memo form. Every child-list
+    /// assertion stays green and `build_count()` stays 0, so both count
+    /// assertions fail — which is exactly "the memo is not adopted".
+    #[test]
+    fn children_for_builds_the_index_once_per_version() {
+        let entries = [
+            fe("src/main.rs"),
+            fe("src/lib.rs"),
+            fe("docs/intro.md"),
+            fe("readme.md"),
+            fe("Cargo.toml"),
+        ];
+
+        let mut memo = TreeIndexCache::new();
+
+        // --- Four call sites, all at version 1 -------------------------------
+        //
+        // Each result is bound to a local so the `&mut memo` borrow ends at the
+        // end of its own statement — rule R1, which is what keeps a re-entrant
+        // create-func from hitting a RefCell panic in production.
+
+        let root = children_for(&mut memo, 1, &entries, "");
+        assert_eq!(
+            root,
+            vec![
+                dir("docs", "docs"),
+                dir("src", "src"),
+                file("Cargo.toml", "Cargo.toml"),
+                file("readme.md", "readme.md"),
+            ],
+            "query 1 (the cwd's top level) must project dirs first, case-insensitively by name, \
+             then files the same way"
+        );
+
+        let src_first = children_for(&mut memo, 1, &entries, "src");
+        assert_eq!(
+            src_first,
+            vec![file("lib.rs", "src/lib.rs"), file("main.rs", "src/main.rs")],
+            "query 2 (a directory expanded for the first time) must list its two leaf files"
+        );
+
+        let src_again = children_for(&mut memo, 1, &entries, "src");
+        assert_eq!(
+            src_again,
+            vec![file("lib.rs", "src/lib.rs"), file("main.rs", "src/main.rs")],
+            "query 3 repeats query 2 — GTK re-asks for a row's children when it binds the row and \
+             again when it decides whether to draw an expander arrow — and must answer identically"
+        );
+
+        let docs = children_for(&mut memo, 1, &entries, "docs");
+        assert_eq!(
+            docs,
+            vec![file("intro.md", "docs/intro.md")],
+            "query 4 (a second expanded directory) must list its single leaf file"
+        );
+
+        assert_eq!(
+            memo.build_count(),
+            1,
+            "four queries at snapshot version 1 must have built the index exactly ONCE, but the \
+             count was {}. A count of 0 means children_for never consults the memo at all and is \
+             re-running the free children_of's full rescan per query; a count above 1 means the \
+             memo is rebuilding per query, which is the same O(N) storm with an extra allocation.",
+            memo.build_count()
+        );
+
+        // --- The version advances: one more build, and the new file appears ---
+        let entries_v2 = [
+            fe("src/main.rs"),
+            fe("src/lib.rs"),
+            fe("docs/intro.md"),
+            fe("readme.md"),
+            fe("Cargo.toml"),
+            fe("src/streamed_late.rs"),
+        ];
+
+        let src_v2 = children_for(&mut memo, 2, &entries_v2, "src");
+        assert_eq!(
+            src_v2,
+            vec![
+                file("lib.rs", "src/lib.rs"),
+                file("main.rs", "src/main.rs"),
+                file("streamed_late.rs", "src/streamed_late.rs"),
+            ],
+            "a query at snapshot version 2 must see the entry that batch appended; serving the \
+             version-1 index here would leave a streamed file permanently invisible in the sidebar"
+        );
+
+        assert_eq!(
+            memo.build_count(),
+            2,
+            "the version advance must have rebuilt the index exactly once more, for a total of \
+             2, but the count was {}",
+            memo.build_count()
+        );
+    }
+}

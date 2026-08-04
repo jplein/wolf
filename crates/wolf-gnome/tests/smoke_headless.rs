@@ -331,7 +331,9 @@ const SIDEBAR_FILLER_COUNT: usize = 9;
 /// `stallfixture`, and — added with the project-search unit —
 /// `projsearchalfa`/`projsearchdelta`, and — added with the Open Recent unit —
 /// `ortango`, and — added with the navigation-history unit —
-/// `navbackalfa`/`navbackbravo` and `sbtangoleaf`/`sidebarkeepalfa` — so a stray
+/// `navbackalfa`/`navbackbravo` and `sbtangoleaf`/`sidebarkeepalfa`, and — added
+/// with the file-tree-sidebar-parity unit —
+/// `cdtango`/`cdrootzulu`/`cdouterhome` — so a stray
 /// filler can never satisfy one of those either. [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`]
 /// enforces this mechanically against [`ASSERTED_OCR_TERMS`], which holds the consts
 /// themselves; this list is a reader's summary and the test is the authority.
@@ -7487,6 +7489,310 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
+// --- Typed-`:cd` fixtures: a live `:cd` re-roots the sidebar ----------------
+//
+// One scenario carrying BOTH of the sidebar unit's user-visible correctness rows —
+// the synthetic cwd ROOT NODE and the re-root on Neovim's OWN working directory —
+// with two independently-reverted discriminators. Folding them is FORCED, not
+// convenient, and the reason is worth stating once here rather than being
+// re-derived:
+//
+// A standalone synthetic-root smoke has no discriminating assertion available. The
+// root row draws the cwd's BASENAME, and the `adw::HeaderBar` draws `~/<basename>`
+// on every capture — so `contains(basename)` is satisfied by the TITLE with no root
+// row on screen at all, which is exactly the silent-pass shape `PICKER_FILE_NAME`'s
+// note documents. The only way to stop the title drawing the basename is to make
+// `cwd == home`, which `title::display_title` rule 4 renders as the bare `~` — and
+// `workspace::launch_decision` refuses `home` as a launch project, so the ONLY route
+// into that state is a live `:cd`. Hence one scenario, two ordered discriminators.
+// (The alternative — a `grim -g` region capture of the sidebar strip — introduces a
+// hardcoded geometry this file's conventions reject.)
+//
+// ## The fixture tree, and the three load-bearing facts in it
+//
+// ```text
+// <unique>/project/            base (make_temp_cwd, used ONLY as a base)
+//   cdouterhome/               CD_OUTER_DIR   -- drawn only if the ~ abbreviation fails
+//     cdrootzulu/              CD_ROOT_DIR    -- the app's HOME and the :cd target
+//       cdtango.md             CD_TARGET_FILE -- asserted PRESENT (a sidebar row)
+//       fill*.md               nine fillers, post-re-root page density
+//       startdir/              CD_START_DIR   -- the LAUNCH cwd
+//         cdbase.md            CD_BASE_FILE (# ZZCDBASE) + nine fillers
+//   cdstate/                   CD_STATE_DIR -- the WOLF_STATE_DIR override
+//   cdcwd.txt                  CD_READBACK_NAME
+// ```
+//
+// 1. **`cage_command`'s default `HOME` is `smoke_home(cwd)` == `cwd.parent()`**, and
+//    this smoke's cwd is `.../cdrootzulu/startdir`, so the app's HOME is exactly
+//    `cdrootzulu`. MEASURED against the helper, not assumed: `cage_command` sets
+//    `.env("HOME", smoke_home(cwd))` and `smoke_home` returns `cwd.parent()`. So NO
+//    `HOME` override is needed here, and after `:cd ..` the working directory IS the
+//    home directory — `display_title` rule 4 — so the header bar reads the bare `~`
+//    and the word `cdrootzulu` can reach the page only from a sidebar row.
+// 2. **`WOLF_STATE_DIR` MUST be overridden** to `base/cdstate`, chained after
+//    `cage_command` (the `window_title_shows_the_working_directory_under_cage`
+//    precedent for overriding a helper default). The default is
+//    `smoke_state_dir(cwd)` == `<cwd's parent>/<cwd's name>-state` ==
+//    `cdrootzulu/startdir-state`, which sits INSIDE the post-`:cd` search root.
+//    Neovim's swap files there encode the full buffer path with `%` separators and
+//    therefore literally contain `cdrootzulu`, which would satisfy assertion 6 from a
+//    swap-file sidebar row with no synthetic root on screen. The EMPTY
+//    `startdir-state` directory `cage_command` still creates is harmless:
+//    `wolf_core::tree::TreeIndex::build` derives directory nodes from FILE entries
+//    only, so a directory holding no files yields no row.
+// 3. **The readback lands in `base`**, outside both search roots, so it is never a
+//    sidebar row — and the ABSOLUTE path echoed in the typed `:call writefile(...)`
+//    command line carries no asserted term either.
+//
+// ## Why the `:cd` is RELATIVE
+//
+// `:cd ..` rather than `:cd <absolute path>`. The typed command line is page text and
+// a residual toast can outlive it, so an absolute `:cd` would put `cdrootzulu` on the
+// page with nothing having re-rooted — assertion 6 satisfied by the cmdline strip.
+
+/// Typed-`:cd` smoke: the OUTER directory, one level above the `:cd` target.
+///
+/// It is drawn ONLY if `title::display_title`'s home abbreviation regresses, which
+/// is precisely what assertion 5 asserts it does not. It therefore deliberately
+/// CONTAINS [`CD_OCR_UNABBREVIATED`]: an outer directory not named after that term
+/// would make assertion 5 hold vacuously.
+const CD_OUTER_DIR: &str = "cdouterhome";
+
+/// Typed-`:cd` smoke: the `:cd` target, which is ALSO the app's `HOME` (it is the
+/// launch cwd's parent, and [`cage_command`] hands that to the app — see the block
+/// comment above).
+///
+/// Its BASENAME is what the synthetic root row must draw, so it deliberately
+/// contains [`CD_OCR_ROOT_NODE`]. Because `cwd == home` after the `:cd`, the header
+/// bar renders the bare `~` and this word cannot come from the title.
+const CD_ROOT_DIR: &str = "cdrootzulu";
+
+/// Typed-`:cd` smoke: the LAUNCH working directory, a child of [`CD_ROOT_DIR`].
+///
+/// It is page text twice over — the header bar reads `~/startdir` before the `:cd`,
+/// and a sidebar `Dir` row bears it afterwards — so it must stay clear of every
+/// asserted term in both directions. The crossed-pair block in
+/// [`restore_fixture_names_cannot_satisfy_their_own_assertions`] asserts that rather
+/// than leaving it to this comment.
+const CD_START_DIR: &str = "startdir";
+
+/// Typed-`:cd` smoke: the file that lives in the `:cd` TARGET and nowhere else.
+///
+/// Its **name** is the asserted term, because a sidebar row IS the observable here —
+/// the same deliberate exception [`TREE_FILE_NAME`], [`OPENRECENT_TARGET_FILE`] and
+/// [`SIDEBARTOGGLE_FILE`] carry, and the reason this const is absent from
+/// [`RELAUNCH_FIXTURE_NAMES`]. It is never opened, so its body is only
+/// [`SIDEBAR_FILLER_BODY`].
+const CD_TARGET_FILE: &str = "cdtango.md";
+
+/// Lowercased substring OCR MUST find: [`CD_TARGET_FILE`]'s name, drawn as a child
+/// row of the synthetic root. It lives OUTSIDE the launch cwd, so it can reach the
+/// page only once the window re-rooted on Neovim's live working directory AND the
+/// synthetic root auto-expanded.
+const CD_OCR_ROOTED: &str = "cdtango";
+
+/// Lowercased substring OCR MUST find: [`CD_ROOT_DIR`]'s basename, drawn by the
+/// SYNTHETIC ROOT ROW and by nothing else on the page.
+///
+/// After the `:cd` the working directory is the app's `HOME`, so the header bar
+/// reads `~`; the launch cwd's own name is [`CD_START_DIR`]; and no fixture is named
+/// this. The root row is the only remaining source.
+const CD_OCR_ROOT_NODE: &str = "cdrootzulu";
+
+/// Lowercased substring OCR must NOT find: [`CD_OUTER_DIR`]'s basename.
+///
+/// This is a PRECONDITION GUARD for [`CD_OCR_ROOT_NODE`], not a feature assertion. A
+/// title that failed to abbreviate would draw the whole path — which contains BOTH
+/// this term and [`CD_OCR_ROOT_NODE`] — and would therefore satisfy the root-node
+/// assertion with no root row on screen. Asserting this FIRST is what closes that.
+const CD_OCR_UNABBREVIATED: &str = "cdouterhome";
+
+/// Typed-`:cd` smoke: the file opened in the LAUNCH cwd before the `:cd` fires.
+///
+/// Nothing asserts on it — it exists so the editor pane is not blank and so the
+/// scenario has a buffer to park the block cursor in. Deliberately unlike every
+/// asserted term, the ordinary convention; it is registered in
+/// [`RELAUNCH_FIXTURE_NAMES`] so that is enforced rather than merely intended.
+const CD_BASE_FILE: &str = "cdbase.md";
+
+/// Heading written into [`CD_BASE_FILE`]. Not an [`ASSERTED_OCR_TERMS`] entry: `:cd`
+/// closes no buffer, so this line is still painted after a perfectly correct re-root
+/// and asserting its absence would assert something the feature does not do.
+const CD_BASE_HEADING: &str = "# ZZCDBASE";
+
+/// Typed-`:cd` smoke: the basename of the smoke-owned `WOLF_STATE_DIR`, created
+/// under `base` — OUTSIDE both search roots.
+///
+/// See fact 2 of the block comment above: the helper's default state dir would sit
+/// inside the post-`:cd` search root, and the captive Neovim's swap file names there
+/// literally contain [`CD_OCR_ROOT_NODE`].
+const CD_STATE_DIR: &str = "cdstate";
+
+/// Name of the file the captive Neovim writes its `getcwd()` into. It lands in
+/// `base`, outside both search roots, so it is never a sidebar row.
+///
+/// Pixel-independent: OCR is structurally incapable of answering "is Neovim's
+/// working directory now exactly this path".
+const CD_READBACK_NAME: &str = "cdcwd.txt";
+
+/// The TYPED-`:cd` scenario, run as a single `sh -c` string inside `cage` (the
+/// [`OPENRECENT_SCENARIO`] shape): launch + poll, settle, `:e` the base file, type
+/// **`:cd ..`**, settle three times, read `getcwd()` back, park the block cursor,
+/// settle, screenshot.
+///
+/// ## Why the `:cd` is relative
+///
+/// An absolute `:cd <path>` would put [`CD_OCR_ROOT_NODE`] into the typed command
+/// line — page text — and into any residual toast, satisfying assertion 6 with
+/// nothing having re-rooted. `..` names the target without spelling it.
+///
+/// ## Why THREE settles after the `:cd`
+///
+/// One keystroke has to travel four hops before the assertions' observables exist:
+/// Neovim applies the `:cd` and emits `DirChanged`; core tracks it into `live_cwd`;
+/// the shell's next render wake settles the re-root; and the sidebar's FRESH
+/// `FileSearch` then streams the new root's entries into the list. Only the last of
+/// those puts [`CD_OCR_ROOTED`] on the page, and it is a full directory traversal —
+/// hence the [`TREE_SCENARIO`] `TREE_SETTLE` on top of the two `SETTLE`s
+/// [`OPENRECENT_SCENARIO`] already found necessary for the same four hops. If
+/// assertion 4 ever fails alone while assertion 3 is green, raise these; never weaken
+/// an assertion.
+///
+/// ## The block-cursor park
+///
+/// Both asserted terms are SIDEBAR text, which the editor's inverted cursor block can
+/// never sit on top of, so the `o` + Escape is convention here rather than protection
+/// — kept because every scenario in this file does it and a reader should not have to
+/// work out which ones may skip it. It also corroborates that keys still reach Neovim
+/// after the `:cd`.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before its window mapped (the shared convention). A LAUNCH
+///   failure; nothing below is about the `:cd`.
+/// * `14` — the `getcwd()` readback never appeared, i.e. the Ex command never
+///   executed. DISTINCT from "the `:cd` went to the wrong place", which exits 0 and
+///   fails assertion 3 instead.
+const CD_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+# Extra settle for the RE-ROOTED FileSearch to stream the new root's listing into
+# the sidebar. Matches TREE_SCENARIO, and is load-bearing here for the same reason
+# it is there: the asserted terms are sidebar rows.
+TREE_SETTLE=1.5
+# How many WAIT_INTERVAL polls to allow for the readback file.
+FILE_TRIES=100
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome typed-cd smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw before driving the editor.
+sleep "$SETTLE"
+
+# Poll for a readback file the captive Neovim writes. Nothing downstream may read a
+# file we merely hope is there. (The OPENRECENT_SCENARIO body, verbatim.)
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome typed-cd smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# Open the base file so the pane is not blank and so there is a buffer to park the
+# block cursor in. Nothing asserts on it: `:cd` closes no buffer, so it is still
+# painted after a perfectly correct re-root.
+wtype -- ":e $CD_BASE_FILE"
+wtype -k Return
+
+# Let nvim load the base file and redraw before typing the command under test.
+sleep "$SETTLE"
+
+# --- The command under test -------------------------------------------------
+#
+# RELATIVE on purpose. `..` is the parent of the launch cwd, which is the app's HOME
+# -- so after this the header bar reads the bare `~` and the target directory's name
+# can only reach the page from a sidebar row. An absolute `:cd <path>` would spell
+# that name into the command line itself and satisfy the assertion from the cmdline
+# strip. Do not "clarify" this into an absolute path.
+wtype -- ":cd .."
+wtype -k Return
+
+# THREE settles, all load-bearing -- see the doc comment above. The first two cover
+# nvim applying the :cd, core tracking the DirChanged into live_cwd, and the shell
+# settling the re-root on a render wake; the third covers the sidebar's FRESH
+# FileSearch traversing the new root. Only that last step puts the asserted rows on
+# the page.
+sleep "$SETTLE"
+sleep "$SETTLE"
+sleep "$TREE_SETTLE"
+
+# --- The readback: Neovim's OWN answer about its working directory -----------
+#
+# Pixel-independent. OCR cannot answer "is the working directory exactly this path",
+# and the header-bar title only shows what refresh_title read. The path is absolute
+# and lives OUTSIDE both search roots, so neither this command line nor the written
+# file can put an asserted term on the page.
+wtype -- ":call writefile([getcwd()], '$CD_READBACK')"
+wtype -k Return
+wait_file "$CD_READBACK" || exit 14
+
+# Park the block cursor off the buffer's first row, as every scenario here does. Both
+# asserted terms are SIDEBAR rows, so this is convention rather than protection -- see
+# the doc comment. These keystrokes also corroborate that keys still reach Neovim.
+wtype -- o
+wtype -k Escape
+
+# Let the redraw land before capturing.
+sleep "$SETTLE"
+
+# Capture the live window to the output PNG.
+grim "$OUT_PNG"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
 /// Creates a fresh, unique temp directory to serve as the launched app's working
 /// directory. The app derives `CoreConfig.cwd` from `std::env::current_dir()`, so
 /// this is the directory the file-search traversal walks and the directory the
@@ -9141,6 +9447,21 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         "SIDEBARTOGGLE_OCR_KEEP",
         "sidebar_toggle_chord_hides_the_file_tree_under_cage",
     ),
+    (
+        CD_OCR_ROOTED,
+        "CD_OCR_ROOTED",
+        "typed_cd_reroots_the_sidebar_under_cage",
+    ),
+    (
+        CD_OCR_ROOT_NODE,
+        "CD_OCR_ROOT_NODE",
+        "typed_cd_reroots_the_sidebar_under_cage",
+    ),
+    (
+        CD_OCR_UNABBREVIATED,
+        "CD_OCR_UNABBREVIATED",
+        "typed_cd_reroots_the_sidebar_under_cage",
+    ),
 ];
 
 /// Every fixture NAME a smoke creates inside its OWN working directory, as
@@ -9309,6 +9630,36 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "SIDEBARTOGGLE_OPEN_FILE",
         "sidebar_toggle_chord_hides_the_file_tree_under_cage",
     ),
+    // CD_TARGET_FILE is DELIBERATELY absent, for the fourth time in this table and
+    // for the same reason: its NAME *is* the typed-`:cd` smoke's asserted term
+    // (CD_OCR_ROOTED), because the sidebar row is the observable, so the generic loop
+    // below — which forbids a fixture name from containing any asserted term — would
+    // reject it. It carries the same documented exemption TREE_FILE_NAME,
+    // OPENRECENT_TARGET_FILE and SIDEBARTOGGLE_FILE do, and the SIXTH block of
+    // `restore_fixture_names_cannot_satisfy_their_own_assertions` asserts its
+    // preconditions and its three crossed pairs instead.
+    //
+    // The three DIRECTORY components of that smoke's fixture tree (CD_OUTER_DIR,
+    // CD_ROOT_DIR and CD_START_DIR) are absent for the same structural reason the
+    // title smoke's two directories are: they are not files, and two of them are the
+    // assertion's subject rather than a hazard to it. That sixth block covers them.
+    (
+        CD_BASE_FILE,
+        "CD_BASE_FILE",
+        "typed_cd_reroots_the_sidebar_under_cage",
+    ),
+    // CD_READBACK_NAME is page text by a route no other entry in this table takes: it
+    // lands in `base`, OUTSIDE both of that smoke's search roots, so no sidebar row
+    // ever bears it — but its ABSOLUTE path is echoed in the typed
+    // `:call writefile(...)` command line, which is in the cmdline strip of the very
+    // capture assertions 4, 5 and 6 read. A readback renamed to carry an asserted term
+    // would satisfy one of them from the cmdline with the sidebar never re-rooting,
+    // which is the same hazard class the loop below exists for.
+    (
+        CD_READBACK_NAME,
+        "CD_READBACK_NAME",
+        "typed_cd_reroots_the_sidebar_under_cage",
+    ),
 ];
 
 /// Mechanically enforces the naming invariant documented on [`SIDEBAR_FILLER_FILES`]:
@@ -9357,7 +9708,9 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 /// ([`OPENRECENT_OCR_PRESENT`]); and — added with the navigation-history unit —
 /// `navbackalfa` ([`NAVBACK_OCR_PRESENT`]), `navbackbravo`
 /// ([`NAVBACK_OCR_ABSENT`]), `sbtangoleaf` ([`SIDEBARTOGGLE_OCR_ABSENT`]) and
-/// `sidebarkeepalfa` ([`SIDEBARTOGGLE_OCR_KEEP`]). None is a
+/// `sidebarkeepalfa` ([`SIDEBARTOGGLE_OCR_KEEP`]); and — added with the
+/// file-tree-sidebar-parity unit — `cdtango` ([`CD_OCR_ROOTED`]), `cdrootzulu`
+/// ([`CD_OCR_ROOT_NODE`]) and `cdouterhome` ([`CD_OCR_UNABBREVIATED`]). None is a
 /// substring of any [`SIDEBAR_FILLER_FILES`] entry, and no filler may be renamed to
 /// make one so. Five smokes contribute no term:
 /// [`colon_qa_closes_the_window_under_cage`] asserts on the cage exit status and
@@ -9639,6 +9992,22 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// NAME, that its heading carries the keep-term, and that
 /// [`SIDEBARTOGGLE_FILE`] carries no OTHER asserted term.
 ///
+/// The typed-`:cd` smoke is the fourth, and it needs the widest block of the four
+/// because THREE of its fixed path components are page text at once.
+/// [`CD_TARGET_FILE`]'s NAME is the subject of assertion 4 — it lives only inside the
+/// `:cd` target, so a sidebar row is the sole thing that can draw it — and it must
+/// therefore contain [`CD_OCR_ROOTED`], which the generic loop forbids; it is
+/// likewise absent from [`RELAUNCH_FIXTURE_NAMES`]. Beside it sit three directories.
+/// [`CD_ROOT_DIR`] must contain [`CD_OCR_ROOT_NODE`] (assertion 6 reads the synthetic
+/// root row, which draws that basename) and must NOT contain [`CD_OCR_ROOTED`] or
+/// [`CD_OCR_UNABBREVIATED`]. [`CD_OUTER_DIR`] must contain [`CD_OCR_UNABBREVIATED`]
+/// (or assertion 5 is vacuous) and must NOT contain [`CD_OCR_ROOT_NODE`] — that is
+/// the sharpest crossed pair here, because a failed title abbreviation draws the
+/// whole path and assertion 5 is what tells that apart from a real root row.
+/// [`CD_START_DIR`] is the launch cwd: the header bar draws `~/startdir` before the
+/// `:cd` and a sidebar `Dir` row draws it after, so it must neither carry nor be
+/// carried by any asserted term. The sixth block below asserts all of that.
+///
 /// ## The two fixtures whose CONTENT is checked too
 ///
 /// Most relaunch fixtures are a bare heading, so the name is the only thing that
@@ -9875,6 +10244,145 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
              name is EXEMPT from the RELAUNCH_FIXTURE_NAMES loop above only for \
              SIDEBARTOGGLE_OCR_ABSENT itself; every other asserted term still applies to it."
         );
+    }
+
+    // The typed-`:cd` smoke's exemption — the widest of the four, because THREE fixed
+    // path components of its fixture tree are page text at once and they cross in
+    // both directions. The tree is
+    //
+    //     <base>/cdouterhome/cdrootzulu/{cdtango.md, startdir/}
+    //
+    // with `cdrootzulu` doubling as the app's HOME, so after `:cd ..` the header bar
+    // reads the bare `~` and every asserted term must come from the sidebar.
+
+    // The SUBJECT of assertion 4. `cdtango.md` exists only inside the `:cd` target, so
+    // a sidebar row is the only thing that can draw its name; that is why it is exempt
+    // from the RELAUNCH_FIXTURE_NAMES loop above.
+    assert!(
+        CD_TARGET_FILE.to_lowercase().contains(CD_OCR_ROOTED),
+        "CD_TARGET_FILE = {CD_TARGET_FILE:?} no longer contains CD_OCR_ROOTED = \
+         {CD_OCR_ROOTED:?}. That FILENAME is the subject of the typed-`:cd` smoke's assertion 4 — \
+         the file is never opened, so nothing but a tree row under the re-rooted synthetic root can \
+         draw the word. If the two stop agreeing the smoke asserts on a word nothing draws and \
+         fails with no visible cause, reporting a re-root failure that did not happen."
+    );
+
+    // The SUBJECT of assertion 6: the synthetic root row draws this directory's
+    // BASENAME, and after the `:cd` nothing else on the page can.
+    assert!(
+        CD_ROOT_DIR.to_lowercase().contains(CD_OCR_ROOT_NODE),
+        "CD_ROOT_DIR = {CD_ROOT_DIR:?} no longer contains CD_OCR_ROOT_NODE = \
+         {CD_OCR_ROOT_NODE:?}. The synthetic root row draws the working directory's BASENAME, so if \
+         the two stop agreeing assertion 6 asserts on a word nothing draws and the smoke reports a \
+         missing root node that is in fact present under another name."
+    );
+
+    // Assertion 5's non-vacuity. The must-NOT-contain assertion is what proves the
+    // title ABBREVIATED to `~`; if the outer directory is not named after that term,
+    // the assertion holds trivially and assertion 6 loses its guard.
+    assert!(
+        CD_OUTER_DIR.to_lowercase().contains(CD_OCR_UNABBREVIATED),
+        "CD_OUTER_DIR = {CD_OUTER_DIR:?} no longer contains CD_OCR_UNABBREVIATED = \
+         {CD_OCR_UNABBREVIATED:?}. Assertion 5 is what proves the header-bar title abbreviated the \
+         home prefix to `~`; if the directory that would be drawn by an UNABBREVIATED title is not \
+         named after that term, assertion 5 holds no matter what the title did — and assertion 6, \
+         which it guards, becomes satisfiable by a full-path title instead of by the synthetic root \
+         row. A vacuous guard is worse than none, because it reads as coverage."
+    );
+
+    // THE CROSSED PAIR THAT MATTERS. A title that failed to abbreviate draws
+    // `.../cdouterhome/cdrootzulu` in the header bar, which contains BOTH terms — so
+    // assertion 5 firing is what tells that state apart from a real root row. If the
+    // outer directory carried the root-node term, a broken abbreviation would satisfy
+    // assertion 6 from the title alone, with the sidebar never re-rooting.
+    assert!(
+        !CD_OUTER_DIR.to_lowercase().contains(CD_OCR_ROOT_NODE),
+        "CD_OUTER_DIR = {CD_OUTER_DIR:?} contains CD_OCR_ROOT_NODE = {CD_OCR_ROOT_NODE:?}. This is \
+         the crossed pair that matters most in this block. Assertion 6's whole claim is that the \
+         word came from the SYNTHETIC ROOT ROW; the only other thing that could draw it is a \
+         header-bar title that failed to abbreviate and rendered the full path, which is what \
+         assertion 5 exists to rule out. With the outer directory named after the root-node term, \
+         that ruling-out is defeated in a second way — the term is on the page from the outer \
+         segment as well — so a completely broken re-root could still pass assertion 6. Rename the \
+         DIRECTORY; do NOT change CD_OCR_ROOT_NODE and do NOT touch the assertion."
+    );
+
+    // The `:cd` target's own name must not carry the OTHER two terms. Carrying the
+    // rooted-term would let the root row satisfy assertion 4 with no child row drawn,
+    // i.e. with the synthetic root's auto-expand broken; carrying the unabbreviated-
+    // term would make assertion 5 fire on a perfectly correct abbreviation, since the
+    // root row draws this name on every correct run.
+    for (term, term_const, why) in [
+        (
+            CD_OCR_ROOTED,
+            "CD_OCR_ROOTED",
+            "the root row would satisfy assertion 4 on its own, so a synthetic root that never \
+             auto-expanded — its children hidden under a collapsed row — would look exactly like a \
+             correct one",
+        ),
+        (
+            CD_OCR_UNABBREVIATED,
+            "CD_OCR_UNABBREVIATED",
+            "the root row draws this name on every CORRECT run, so assertion 5 would fire even \
+             though the title abbreviated exactly as it should",
+        ),
+    ] {
+        assert!(
+            !CD_ROOT_DIR.to_lowercase().contains(term),
+            "CD_ROOT_DIR = {CD_ROOT_DIR:?} contains {term_const} = {term:?}: {why}. Rename the \
+             DIRECTORY; do not change the OCR const and do not touch the assertion."
+        );
+    }
+
+    // The LAUNCH cwd's basename is page text twice over — the header bar reads
+    // `~/startdir` before the `:cd`, and a sidebar `Dir` row bears it after — so it
+    // must stay clear of every asserted term. The REVERSE direction is a drift
+    // tripwire rather than a live hazard: an asserted term built out of this
+    // directory's name means the two are no longer independent, and a later rename of
+    // one would silently retarget the other.
+    for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {
+        assert!(
+            !CD_START_DIR.to_lowercase().contains(term),
+            "CD_START_DIR = {CD_START_DIR:?} contains {term_const} = {term:?}. It is the typed-`:cd` \
+             smoke's LAUNCH working directory, so it is drawn by the header bar before the `:cd` \
+             (as `~/{CD_START_DIR}`) and by a sidebar Dir row after it — on the very capture the \
+             assertions read. This word would therefore satisfy, or for a must-NOT-contain term \
+             spuriously break, `{smoke}`'s OCR assertion with nothing having re-rooted. Rename the \
+             DIRECTORY."
+        );
+        assert!(
+            !term.to_lowercase().contains(CD_START_DIR),
+            "asserted OCR term {term_const} = {term:?} (owned by `{smoke}`) CONTAINS \
+             CD_START_DIR = {CD_START_DIR:?}. The two are supposed to be independent: this \
+             directory is inert page text on the typed-`:cd` smoke's capture and no assertion may \
+             be derived from it. A term spelled out of this name means a later rename of the \
+             directory silently retargets the term, which is exactly the drift the tables in this \
+             file exist to prevent."
+        );
+    }
+
+    // Every OTHER asserted term still applies to the three exempted names, exactly as
+    // it does to the Open Recent and sidebar-toggle exemptions above.
+    for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {
+        for (name, name_const, exempt) in [
+            (CD_TARGET_FILE, "CD_TARGET_FILE", CD_OCR_ROOTED),
+            (CD_ROOT_DIR, "CD_ROOT_DIR", CD_OCR_ROOT_NODE),
+            (CD_OUTER_DIR, "CD_OUTER_DIR", CD_OCR_UNABBREVIATED),
+        ] {
+            if term == exempt {
+                continue;
+            }
+            assert!(
+                !name.to_lowercase().contains(term),
+                "{name_const} = {name:?} contains {term_const} = {term:?}. All three of these are \
+                 page text in the typed-`:cd` smoke's capture — one as a tree-sidebar row, one as \
+                 the synthetic root row, and one only if the title's abbreviation regresses — so \
+                 this word would satisfy, or for a must-NOT-contain term spuriously break, \
+                 `{smoke}`'s OCR assertion. These names are EXEMPT from the \
+                 RELAUNCH_FIXTURE_NAMES loop above only for their OWN term ({exempt:?}); every \
+                 other asserted term still applies to them."
+            );
+        }
     }
 
     // The one relaunch fixture whose CONTENT is more than a heading, checked here
