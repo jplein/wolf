@@ -36,7 +36,7 @@ The gtk-rs crates form one coherent release set: `gtk4` 0.11.x, `gdk4` 0.11.x, `
 
 The crate is both a library and a binary, and the split is the most important structural fact about it. The binary is the window; the library holds every decision expressible as a function of values, so it can be unit-tested with no display server, no widget, and no Neovim.
 
-Those seams cover key and pointer translation, the Cairo paint, the pixel-to-grid geometry, the pane-layout tree and its persistence codec, the cursor rules, the action namespace, the command classification, the launch and application-state rulebooks, the window title, the project-search rulebook, the per-pane navigation rulebook, and the crash and stall rulebook. Each is a free function or a plain value type; [`src/README.md`](src/README.md) names them file by file.
+Those seams cover key and pointer translation, the Cairo paint, the pixel-to-grid geometry, the pane-layout tree and its persistence codec, the cursor rules, the action namespace, the command classification, the launch, re-root and application-state rulebooks, the window title, the project-search rulebook, the per-pane navigation rulebook, the sidebar's refresh gate and its trailing-refresh coalescer, and the crash and stall rulebook. Each is a free function or a plain value type; [`src/README.md`](src/README.md) names them file by file.
 
 The consequence is this crate's testing posture. Widget construction cannot be unit-tested at all, and is covered only by the smokes below. When you add behavior, put the decision in a seam and test it there: a rule left inside a widget closure is a rule the fast suite cannot execute, and on this platform that has repeatedly meant a rule nothing verified.
 
@@ -54,7 +54,9 @@ The drain order is fixed and every position is load-bearing. The liveness read r
 
 `WolfCore` is not `Send`. It lives only on the main thread in an `Rc<RefCell<Option<_>>>` shared by the widget closures, and the wake closure is the only thing that crosses a thread boundary. Every core borrow is taken and dropped in its own statement, because the close-request handler does `borrow_mut().take()` and an outstanding borrow on that path is a panic rather than a warning.
 
-Nothing polls. No `glib::timeout` drives a redraw, a liveness read, or a state snapshot. A periodic liveness poll in particular is rejected: it would let a lossy wake transport still raise the crash overlay eventually, buying insurance by destroying the evidence the crash smoke exists to gather.
+Nothing polls. No timer is periodic and no timer drives a read: neither a redraw, a liveness read, nor a state snapshot is scheduled by the clock. A periodic liveness poll in particular is rejected — it would let a lossy wake transport still raise the crash overlay eventually, buying insurance by destroying the evidence the crash smoke exists to gather.
+
+Two one-shot timers exist and neither is a poll. Each is armed by an arriving event, fires once, and disarms: the deferred restart, which exists because the overlay must be presented before a synchronous respawn blocks the main loop, and the sidebar's trailing refresh, which collapses a burst of traversal batches into one rebuild. Neither re-arms itself, so no timer exists while the application is idle.
 
 The picker and the sidebar each run a long-lived `FileSearch` on the same pattern, and the project search runs a transient `SearchSession` that is replaced on every Enter. Their drain tasks hold only a `Weak` reference, so dropping a handle ends the task instead of leaking a cycle, and closing any of them drops its search to cancel the work.
 
@@ -128,7 +130,7 @@ Only the open-file set comes back, reopened with the active file last because re
 
 **Never issue a blocking RPC on the restart path.** Against a dead Neovim it freezes the main loop for the whole timeout budget on every crash. The open-file mirror is read out of the snapshot instead.
 
-Core marks a stall only from a synchronous call's timeout arm, and three such calls are reachable from this crate: the layout rebuild at launch, before the window is interactive; the buffer picker's candidate snapshot, which a running window issues on Ctrl+Shift+E; and a per-pane navigation move, which a running window issues on Alt+Left or Alt+Right. Copy and a preview render would each add another such path.
+Core marks a stall only from a synchronous call's timeout arm, and three such calls are reachable from this crate: the layout rebuild at launch, before the window is interactive; the buffer picker's candidate snapshot, which a running window issues on Ctrl+Shift+E; and a per-pane navigation move, which a running window issues on Alt+Left or Alt+Right. Copy and a preview render would each add another such path. The sidebar's re-root adds none: `WolfCore::live_cwd` is a `parking_lot` read of a tracked cell, taken once per wake and shared with the title refresh.
 
 Both calls a running window issues are gated in the same shape. `buffer_picker::open_decision` refuses to open unless the core reads `Alive`; `nav_ui::nav_press` refuses a move on the same `Alive`-only arm. Neither can prevent a first stall, and neither may be strengthened until it can — what they prevent is re-probing a Neovim already known to be wedged.
 
@@ -153,7 +155,7 @@ Three details are load-bearing. Every smoke holds a shared mutex for its whole b
 - Pointer input covers the primary button and vertical scroll. There is no context menu, no middle-click paste, no horizontal scroll, and no kinetic scrolling, all matching macOS, and no scrollbar is drawn.
 - The command-line strip renders a single row: an active command line, or the last message line when idle. There is no completion popup and no multi-line scrollable message view. Core folds all three UI extensions regardless, so adding the Adwaita widgets later is additive.
 - Only windows created through the overridden split commands become panes. A window from `:help`, quickfix, a preview, or `:diffsplit` gets a grid but no pane, and floating or external windows are ignored.
-- The sidebar re-roots on a front-end directory change — the Open Folder dialog or an Open Recent palette row — never on a user-typed `:cd`.
+- A snapshot-version advance rebuilds the sidebar's root store, so a directory the user expanded by hand collapses on every streaming traversal batch and on a re-root. Manual expansion does survive a current-file change, which is what the version gate buys; carrying it across a version advance needs the model layer redesigned around per-directory stores.
 - The navigation surfaces are Back and Forward alone: two header-bar buttons, two menu items, and `Alt+Left` / `Alt+Right`. There is no jump list of a pane's recently visited files, which the macOS History menu carries. A dynamic list needs a `gio::Menu` rebuilt on each popover open and an action parameterized by stack index, where `MENU_SECTIONS` is const data with five invariants checked over it.
 - No HiDPI scale handling: the cell-measurement probe assumes 96 dpi.
 - No input-method composition support.

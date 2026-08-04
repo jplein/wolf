@@ -61,16 +61,15 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 **Covers**
 
-- Thirty-three end-to-end smokes that launch the built binary under `cage`, drive it with `wtype` and [`wolf-pointer-inject`](../../../tools/wolf-pointer-inject/README.md), screenshot the live window with `grim`, and read it back with `tesseract` in sparse-text mode, plus a second uniform-block reading in the divider-relaunch smoke, which is red without it.
-- The scenarios: text rendering, sidebar population, two picker cases, two command-palette cases (one an Open Recent row), two buffer-picker cases (a typed query, and a bare Enter on the preselected row), one project-search case, five split-pane cases, and five command-drain cases.
-- The rest: four pointer cases (including the drag clamp and the click-then-close focus regression), two divider-drag cases, two crash-recovery cases, one stall case (`SIGSTOP` the captive Neovim, then let the buffer picker's blocking call elapse), three application-state cases across a relaunch, one navigation case (`Alt+Left`), and one sidebar-toggle case (`Ctrl+Shift+B`).
-- Four compositor-free guards on the smokes' own fixtures and harness, which need no toolchain and run in microseconds. The target therefore reports `37 passed`, not `33`.
+- Thirty-four end-to-end smokes that launch the built binary under `cage`, drive it with `wtype` and [`wolf-pointer-inject`](../../../tools/wolf-pointer-inject/README.md), and read a `grim` screenshot back with `tesseract` in sparse-text mode, plus a second uniform-block reading in the divider-relaunch smoke, which is red without it.
+- The scenarios: text rendering and sidebar population; two picker, two command-palette, two buffer-picker and one project-search case; five split-pane and five command-drain cases; four pointer cases, two divider drags, two crash-recovery cases and one stall case; three application-state cases across a relaunch; one navigation case, one sidebar-toggle case, and `typed_cd_reroots_the_sidebar_under_cage`, which carries both a typed `:cd` re-root and the tree's synthetic root row.
+- Four compositor-free guards on the smokes' own fixtures and harness, which need no toolchain and run in microseconds. The target therefore reports `38 passed`, not `34`.
 
 **Gotchas**
 
 - Run only these with `nix develop --command cargo test -p wolf-gnome --test smoke_headless`.
 - A new scenario must park the block cursor off the asserted row (a normal-mode `o` then Escape), since the inverted cursor block corrupts the cell it covers, and must keep sparse-text page segmentation, since the default mode returns nothing on the light-on-dark editor grid.
-- Read [Smoke conventions](#smoke-conventions) before adding one. Several of the rules there exist because a smoke passed while proving nothing.
+- Read [Smoke conventions](#smoke-conventions) before adding one; several of those rules exist because a smoke passed while proving nothing.
 
 #### `common/mod.rs`
 
@@ -172,6 +171,11 @@ Being scrupulous about this is the point of the section.
 - **Nothing asserts that the navigation buttons follow the focused pane at the widget level.** The rule is table-tested in the seam, and OCR cannot read a sensitivity state in any case. Related and equally unmeasured: `refresh_nav_buttons`' deadlock hazard — a read guard held across the nav mutex would hang on a wake, indistinguishable from a slow machine.
 - **`nav_press`'s `Refuse` arms are unreached by any integration test.** The seam's table covers the whole domain, but no smoke can arrange a dead, stalled or absent core behind a chord press. The buffer picker's and the search overlay's refusals above are the same shape.
 - **The restored `sidebar_visible` reaches no pixel.** No relaunch smoke hides the sidebar, quits and relaunches. The seam is table-tested and the applier demonstrably reads it; the write side is the half that could regress silently, since persisting the live visibility rather than the preference would hide the sidebar after any project-less session.
+- **The current-file bold and its bound-label registry.** Nothing reads bold, and OCR cannot. With the version gate suppressing the rebuild, the registry is the only thing keeping the highlight on the file being edited, and neither suite verifies that it moves — every assertion about the current file reads a revealed row's presence, not its weight.
+- **The visibility gate's deferral and its one catch-up.** No smoke hides the sidebar mid-traversal and re-shows it, so nothing observes a batch that landed while hidden reaching the widgets. The gate's own table pins the rule; the relay from the shell's single visibility site is the untested half.
+- **That the coalescer arms a real `glib` source.** Only the pure state machine is tested, and every smoke asserts on a settled end state, so a coalescer that performed its refresh on every request — arming nothing at all — would pass all 38.
+- **Manual expansion surviving a current-file change.** OCR cannot read expansion state, which is exactly the user-visible payoff the version gate exists for. Its inverse, a collapse on a version advance, is equally unobservable and is recorded as a limitation in [DECISIONS.md](../DECISIONS.md) instead.
+- **`typed_cd_reroots_the_sidebar_under_cage`'s assertion-4 revert is not isolated.** Measured: with no re-root at all the sidebar keeps its launch root label, so assertion 4 fails before assertion 6 is evaluated and assertion 6 has no red run under that revert. The asymmetry is inherent rather than a fixture weakness — the same shape as the project-search smoke's assertion 6 above — and the other direction is isolated: assertion 6's own revert reddens 6 alone, with 3, 4 and 5 green.
 
 ## Deliberate test gaps
 
