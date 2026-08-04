@@ -1317,4 +1317,74 @@ mod tests {
             }
         }
     }
+
+    /// The About row spends no chord, and therefore cannot shadow a Neovim key.
+    ///
+    /// Every accelerator invariant in this module opens with
+    /// `let Some(accel) = binding.accel else { continue; }`, so a row with no
+    /// accelerator is SKIPPED by all four rather than checked by them. That is
+    /// correct, and it is also why the property has to be stated somewhere: with
+    /// `accel: None` there is nothing for `no_accel_makes_a_neovim_key_unreachable`
+    /// to evaluate, so the four together say nothing whatsoever about this row.
+    ///
+    /// The row is menu-only by design. About carries the bundled fonts' licence
+    /// notices, which is a surface a user opens once, and `Ctrl+Shift+<letter>` is
+    /// the whole of this front-end's available namespace — spending one of its
+    /// letters here would give up a Neovim alias for nothing.
+    #[test]
+    fn the_about_row_carries_no_chord() {
+        const ABOUT_ACTION: &str = "win.about";
+
+        let binding = binding_for_action(ABOUT_ACTION).unwrap_or_else(|| {
+            panic!(
+                "no ACTION_TABLE row declares {ABOUT_ACTION:?}. The About dialog is installed \
+                 through this table — `shell::install_actions` skips an action it cannot resolve \
+                 and prints a reason — so without the row the menu item renders insensitive and \
+                 the licence notices are unreachable from the running application."
+            )
+        });
+
+        assert_eq!(
+            binding.accel, None,
+            "the {ABOUT_ACTION:?} row declares an accelerator ({:?}). Two things follow and both \
+             are unwanted: it spends one of the finitely many `Ctrl+Shift+<letter>` chords on a \
+             dialog opened once, and it starts being evaluated by \
+             `no_accel_makes_a_neovim_key_unreachable`, which is the test that decides whether a \
+             Neovim key just became unreachable.",
+            binding.accel
+        );
+        assert_eq!(
+            binding.status,
+            BindingStatus::MenuOnly,
+            "the {ABOUT_ACTION:?} row is {:?}, not MenuOnly. `Bound` would put it in the set \
+             `bound_set_is_exactly_this_unit` enumerates while it has no chord to register; \
+             `Reserved` would make `menu_never_lists_a_reserved_action` reject the menu item, and \
+             a reserved action is not installed at all — the menu entry would then be present and \
+             do nothing when clicked.",
+            binding.status
+        );
+        assert_eq!(
+            binding.command, None,
+            "the {ABOUT_ACTION:?} row claims registry command {:?}. There is no About command in \
+             `wolf_core::COMMAND_SPECS`: this action is front-end-only and resolves through \
+             `command_action::ui_action_for_front_end_action`. A command here would also subject \
+             the menu label to `menu_labels_match_the_registry`, which would then demand a title \
+             the registry does not have.",
+            binding.command
+        );
+
+        // Menu-only means exactly that: the primary menu is the ONLY route to it,
+        // so a row absent from MENU_SECTIONS is an action nothing can ever activate.
+        let listed = MENU_SECTIONS
+            .iter()
+            .flat_map(|section| section.items)
+            .any(|item| item.action == ABOUT_ACTION);
+        assert!(
+            listed,
+            "the {ABOUT_ACTION:?} row is MenuOnly but no MENU_SECTIONS item references it, so \
+             nothing reaches it: it has no accelerator, no registry command to be drained, and now \
+             no menu entry either. `menu_items_reference_declared_actions` checks the other \
+             direction and cannot see this."
+        );
+    }
 }
