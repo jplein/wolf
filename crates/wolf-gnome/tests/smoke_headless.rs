@@ -11,7 +11,7 @@
 //!
 //! ## What this file contains
 //!
-//! **Thirty-six cage smokes** — one window-render smoke, two file-picker smokes,
+//! **Thirty-seven cage smokes** — one window-render smoke, two file-picker smokes,
 //! one file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
 //! new-untitled-buffer smoke, one command-palette smoke, one OPEN RECENT smoke
 //! (Ctrl+Shift+P, a typed folder query, then Enter — the activated row re-roots the
@@ -52,11 +52,14 @@
 //! STATE-PERSISTENCE smokes (a
 //! three-pane layout, a lone open file, and a dragged divider's WEIGHTS each
 //! surviving a quit-and-relaunch, plus the window title rendering the working
-//! directory), and one CONFIGURED-FONT-SIZE smoke (two launches at two
+//! directory), one CONFIGURED-FONT-SIZE smoke (two launches at two
 //! `wolf-config.yaml` font sizes, each writing `winwidth(0)` into its own file, so
 //! the configured size reaching the cell metrics is an integer strict inequality
-//! rather than an OCR judgement) — each of which launches the real binary under
-//! `cage`.
+//! rather than an OCR judgement), and one COLUMN-CAP smoke (one launch at a
+//! deliberately SMALL font size, the only geometry at which the 90-column content
+//! cap binds at all under `cage`, whose two `winwidth(0)` readbacks either side of
+//! `:WolfFullWidth` are what prove the cap and the per-buffer override that lifts
+//! it) — each of which launches the real binary under `cage`.
 //!
 //! Four smokes run **two app launches inside ONE `cage` instance** (one scenario
 //! string, two sequential `"$WOLF_BIN" &` blocks) — the three relaunch ones and the
@@ -74,9 +77,10 @@
 //! and no `:e` toast can satisfy, and OCR is structurally incapable of answering
 //! "did the cursor land at exactly row 12, column 25".
 //!
-//! Thirty of the thirty-six OCR a screenshot of the live window. The `:qa`
-//! smoke and the configured-font-size smoke deliberately capture no image and
-//! assert on the cage exit status plus, for the second, two integer readbacks (the
+//! Thirty of the thirty-seven OCR a screenshot of the live window. The `:qa`
+//! smoke, the configured-font-size smoke and the column-cap smoke deliberately
+//! capture no image and assert on the cage exit status plus, for the latter two,
+//! two integer readbacks each (the
 //! app must be GONE, and gone with a ZERO exit status — a panic in the GTK main
 //! loop makes a process vanish just as a clean shutdown does); the click, drag,
 //! scroll and divider-relayout smokes still capture and still RETAIN a screenshot
@@ -86,7 +90,7 @@
 //! project-search smoke does both as well, and its readback carries the two values
 //! OCR structurally cannot: the LINE and the COLUMN the cursor landed on.
 //!
-//! **Four pure guards**, which mechanically enforce invariants the cage smokes
+//! **Five pure guards**, which mechanically enforce invariants the cage smokes
 //! depend on but cannot check themselves:
 //!
 //! * [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`] — no
@@ -123,15 +127,29 @@
 //!   `WOLF_STATE_DIR` and so the only thing keeping the smokes off the developer's
 //!   real `~/.local/state/wolf/` — and, since the shader-cache fix, the only thing
 //!   that sets `XDG_CACHE_HOME` too (see [`smoke_shader_cache_dir`]).
+//! * [`the_column_cap_cannot_bind_at_the_ocr_smokes_geometry`] — the premise every
+//!   OCR smoke's geometry rests on, given `editor_inset`'s content-width cap:
+//!   at the pinned output size, the measured pane origin and
+//!   `SMOKE_FONT_PT`, one pane is far too narrow for 90 columns, so the cap never
+//!   binds, no grid is ever centred, and no pixel target moves. That premise is
+//!   exactly the kind that stops being true when someone changes a font size, and
+//!   nothing else would notice.
 //!
-//! All four are compositor-free: none calls `require_smoke_env`, none takes
-//! `CAGE_LOCK`, none spawns a subprocess and none needs any of the toolchain below,
-//! so they still guard on a machine where the smoke toolchain is unavailable. They
-//! live here, next to the consts and helpers they read, rather than in a file of
-//! their own.
+//! All five are compositor-free: none calls `require_smoke_env`, none takes
+//! `CAGE_LOCK` and none spawns a subprocess, so they still guard on a machine where
+//! the smoke toolchain is unavailable. They live here, next to the consts and
+//! helpers they read, rather than in a file of their own.
 //!
-//! So this target's summary line reads **`40 passed`**, not `36`: thirty-six cage
-//! smokes plus those four guards.
+//! Four of the five additionally need NO environment at all. The fifth is the
+//! exception and the claim is stated precisely rather than loosely: it measures a
+//! real cell through [`cell_metrics_for_smoke`], so it needs the devShell's pinned
+//! `FONTCONFIG_FILE`. That is not part of the cage toolchain listed below — it is
+//! the same font pinning `tests/paint_golden.rs` needs — but it is not nothing, and
+//! a run outside the devShell fails it for that reason rather than for the reason
+//! its message names.
+//!
+//! So this target's summary line reads **`42 passed`**, not `37`: thirty-seven cage
+//! smokes plus those five guards.
 //!
 //! ## A vacuously-passing check recorded here: the `wtype ""` window-map poll
 //!
@@ -173,7 +191,7 @@
 //!
 //! ## When it runs
 //!
-//! The thirty-six cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The thirty-seven cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The Linux verification gate").
@@ -183,13 +201,13 @@
 //! suite command does not run is a silently-skipped test.
 //!
 //! They are, however, the slowest part of the suite: each drives a real
-//! compositor, and all thirty-six serialize behind `CAGE_LOCK` (see below).
+//! compositor, and all thirty-seven serialize behind `CAGE_LOCK` (see below).
 //!
 //! ```text
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the thirty-six cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the thirty-seven cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` and
 //!   `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
@@ -206,7 +224,7 @@
 //!   empty result list.
 //! - `XDG_RUNTIME_DIR` set and writable (the Wayland socket lives there).
 //!
-//! Per project policy every one of the thirty-six FAILS LOUD if any of the above is
+//! Per project policy every one of the thirty-seven FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -233,7 +251,7 @@ use wolf_gnome::{CellMetrics, WINDOW_TITLE_FALLBACK};
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the thirty-six cage smoke tests. Each launches its own
+/// Serializes the thirty-seven cage smoke tests. Each launches its own
 /// `cage` compositor, and two compositors started concurrently contend for the
 /// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
 /// Under the default multi-threaded test harness these tests would otherwise run
@@ -8274,7 +8292,7 @@ exit 0
 /// captive nvim runs in (the recent-files MRU lives in the global
 /// `state_dir()/file-mru.sqlite`, not under the cwd).
 ///
-/// ALL THIRTY-SIX cage smokes derive their working directory from this — the window
+/// ALL THIRTY-SEVEN cage smokes derive their working directory from this — the window
 /// title smoke and the typed-`:cd` smoke use the result as the base for the NESTED
 /// directories their `~` abbreviation needs, the per-pane statusbar smoke hangs its
 /// fixture directory off the parent, and the three relaunch smokes share one of these
@@ -8867,7 +8885,7 @@ const HOME_CONFIG_DIR_FALLBACK: &str = ".config/wolf";
 /// the "Note (OCR width)" / "Note (OCR height)" paragraphs above their own consts,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
-/// be applied here to all thirty-six.
+/// be applied here to all thirty-seven.
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
@@ -9481,7 +9499,12 @@ fn assert_inside_extents(smoke: &str, label: &str, point: (i64, i64), extents: (
 
 /// Asserts the probe click moved the cursor off `(1, 1)`, derives the editor pane's
 /// on-screen origin from it, and asserts that origin sits inside the measured band.
-/// Returns the derived origin so the caller can print it.
+/// Returns that origin as `(x, y)` in the injected point's own output coordinates;
+/// every caller uses it only inside an `assert!` message, and `assert!` formats
+/// lazily, so the origin is observable on a FAILING run and never on a green one.
+/// Deriving it from a green run instead means reading the smoke's persisted probe
+/// readback and crossing it with an independently measured cell — the method
+/// `crates/wolf-gnome/tests/README.md` records.
 ///
 /// `probe_cell` is whatever Neovim reported for a gesture whose PRESS was at
 /// `(PROBE_X, PROBE_Y)`: the click smoke passes its probe click's `line('.')` /
@@ -9842,7 +9865,7 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// [`SIDEBARTOGGLE_OCR_KEEP`] is an ordinary content term and follows the ordinary
 /// rule.
 ///
-/// Thirty of the thirty-six smokes appear here. SIX contribute no rows at
+/// Thirty of the thirty-seven smokes appear here. SEVEN contribute no rows at
 /// all, on purpose, and it is worth being explicit about which and why:
 ///
 /// * [`colon_qa_closes_the_window_under_cage`] captures no PNG and asserts only that
@@ -9850,6 +9873,11 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// * [`config_font_size_changes_the_grid_under_cage`] likewise captures no PNG: its
 ///   two observables are the `winwidth(0)` integers the captive Neovim writes about
 ///   its own grid, so no fixture filename can help or hurt it.
+/// * [`column_cap_and_full_width_toggle_change_the_grid_under_cage`] for the same
+///   reason: two `winwidth(0)` integers either side of `:WolfFullWidth`, no capture
+///   at all. It is also the one smoke that could not use OCR even if it wanted to —
+///   what it measures is a COLUMN COUNT and a horizontal offset, and tesseract's
+///   `contains` is position-agnostic by construction.
 /// * [`click_positions_the_cursor_under_cage`],
 ///   [`drag_selects_a_range_under_cage`] and
 ///   [`wheel_scroll_moves_the_viewport_under_cage`] assert on FILES the captive
@@ -10467,7 +10495,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the thirty-six smokes — still
+/// nothing to the smoke suite's runtime and — unlike the thirty-seven smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
@@ -11574,6 +11602,99 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          searched whatever `search_overlay::search_options_for` set `all_files` to — and the \
          `all_files: false` revert, which is one of the two independent reverts for the smoke's \
          must-contain assertion, would stop reddening anything."
+    );
+}
+
+/// The fifth compositor-free guard: `editor_inset`'s content-width cap CANNOT bind
+/// at the geometry the OCR smokes run at, which is the unstated premise every one of
+/// them rests on.
+///
+/// ## Why a premise needs a guard
+///
+/// `editor_inset::grid_rect` caps a pane's grid at
+/// `wolf_gnome::editor_inset::MAX_GRID_COLS` columns and CENTRES what is left, so a
+/// pane wide enough for the cap draws its first glyph at
+/// `EDITOR_PADDING_PX + (inset_w - cap_w) / 2` instead of at `EDITOR_PADDING_PX`.
+/// Every pointer smoke's derived origin, every derived click target, and the position
+/// of every glyph on every OCR page assume that offset is zero.
+///
+/// It is zero today by arithmetic and not by design: one pane at the pinned output
+/// size leaves 989 px of grid, while 90 columns of the measured 28 pt cell need
+/// 2022.89 px. The margin is a factor of two, so nothing in this unit could move it —
+/// but the font size, the output size and the header bar's width are all things a
+/// later change touches routinely, and the first symptom of the cap binding would be
+/// every OCR assertion failing at once for no visible reason.
+///
+/// ## What this guard reads, and what it therefore needs
+///
+/// The pane area's width from [`CAGE_OUTPUT_W_EXPECTED`] and
+/// [`OVERLAY_ORIGIN_X_EXPECTED`], the padding and the cap from the production
+/// constants, and the cell from [`cell_metrics_for_smoke`] — the same
+/// `CellMetrics::for_font` call the app itself makes.
+///
+/// That last one is why this guard, ALONE of the five, needs the devShell's pinned
+/// `FONTCONFIG_FILE`: with no pinned DejaVu, Pango resolves the family to something
+/// else and the cell width is not the one the app measures.
+/// [`cell_metrics_for_smoke`] fails loudly on a non-positive cell, so an
+/// unprovisioned host fails there rather than here. It still needs no compositor, no
+/// [`require_smoke_env`], no `CAGE_LOCK` and no subprocess.
+///
+/// ## What it does not cover
+///
+/// One pane only. A split makes each pane NARROWER, so it can only widen the margin,
+/// and no smoke ever gives a pane more room than an unsplit one has.
+///
+/// FALSIFYING EDIT: set `editor_inset::MAX_GRID_COLS` to 20. Then
+/// `20 * 22.4765625 = 449.5` px fits inside 989 px, the cap binds in every smoke, and
+/// this guard fires. MEASURED, and the run's own live numbers are the point of the
+/// record: `One pane leaves 989 px of grid (1029 px of pane area, less two 20 px
+/// paddings), while 20 columns of the measured 22.4765625 px cell need only
+/// 449.53125 px`. That 22.4765625 is the cell [`cell_metrics_for_smoke`] really
+/// produced on the measuring host, which is what makes this a comparison against a
+/// real cell rather than between two literals.
+#[test]
+fn the_column_cap_cannot_bind_at_the_ocr_smokes_geometry() {
+    let cell = cell_metrics_for_smoke();
+
+    // The pane AREA's width: the output minus the sidebar and the paned handle, which
+    // is what OVERLAY_ORIGIN_X_EXPECTED measures. Deliberately NOT derived from
+    // PANE_ORIGIN_X_EXPECTED — that pair is the TEXT GRID's corner, this one is the
+    // widget's, and neither may be derived from the other.
+    let pane_area_w =
+        exact_f64(CAGE_OUTPUT_W_EXPECTED, "CAGE_OUTPUT_W_EXPECTED") - OVERLAY_ORIGIN_X_EXPECTED;
+    let inset_w = pane_area_w - 2.0 * wolf_gnome::editor_inset::EDITOR_PADDING_PX;
+    let cap_w = f64::from(wolf_gnome::editor_inset::MAX_GRID_COLS) * cell.cell_w;
+
+    // Non-vacuity: a non-positive inset width satisfies the comparison below for any
+    // cap at all, and would mean the two pinned constants had crossed rather than that
+    // the cap is safely out of reach.
+    assert!(
+        inset_w > 0.0,
+        "the pane area derived from CAGE_OUTPUT_W_EXPECTED ({CAGE_OUTPUT_W_EXPECTED}) and \
+         OVERLAY_ORIGIN_X_EXPECTED ({OVERLAY_ORIGIN_X_EXPECTED}) leaves {inset_w} px of grid once \
+         both editor paddings are removed. A non-positive width means those two constants have \
+         crossed, at which point the cap comparison below holds for ANY cap and proves nothing. \
+         Re-measure the overlay origin before reading anything else in this file."
+    );
+
+    assert!(
+        inset_w < cap_w,
+        "THE COLUMN CAP HAS STARTED TO BIND IN THE OCR SMOKES. One pane leaves {inset_w} px of \
+         grid ({pane_area_w} px of pane area, less two {} px paddings), while {} columns of the \
+         measured {} px cell need only {cap_w} px — so `editor_inset::grid_rect` caps that \
+         grid and CENTRES it, moving every glyph in every capture right by half the difference. \
+         What that means, in order: every OCR assertion is reading a page laid out differently \
+         from the one it was calibrated against; PANE_ORIGIN_X_EXPECTED = \
+         {PANE_ORIGIN_X_EXPECTED} is stale, because the text grid starts at the centred origin \
+         rather than at the padding; and every pointer smoke's derived click target moves with it. DO NOT relax this guard and \
+         DO NOT widen PANE_ORIGIN_TOLERANCE_PX to absorb it — re-derive the pane origin from a \
+         probe click the way its own doc comment describes, and decide deliberately whether the \
+         smokes should keep running at a size where the cap binds. Likely causes, in order: \
+         SMOKE_FONT_PT was lowered (a smaller cell fits more columns in the same pane), the cage \
+         output was widened, the sidebar narrowed, or MAX_GRID_COLS was raised.",
+        wolf_gnome::editor_inset::EDITOR_PADDING_PX,
+        wolf_gnome::editor_inset::MAX_GRID_COLS,
+        cell.cell_w
     );
 }
 
@@ -16868,6 +16989,344 @@ fn config_font_size_changes_the_grid_under_cage() {
     );
 }
 
+// --- The column cap, and the per-buffer override that lifts it ---------------
+
+/// The font size THIS smoke launches at, in points, overriding [`SMOKE_FONT_PT`].
+///
+/// It is the whole reason the smoke is possible, and the arithmetic is the point:
+///
+/// At [`SMOKE_FONT_PT`] (28) the measured DejaVu Sans Mono cell is 22.4765625 px
+/// wide, so `MAX_GRID_COLS` columns need 2022.89 px while one pane under `cage`
+/// leaves 989 px of grid. The cap cannot bind — that is what
+/// [`the_column_cap_cannot_bind_at_the_ocr_smokes_geometry`] asserts, deliberately,
+/// for every other smoke in this file.
+///
+/// At 10 pt the same font gives `10 * 96/72 * 0.60205 = 8.03` px per cell, so 90
+/// columns need about 723 px and the cap binds with room to spare; uncapped, the same
+/// 989 px pane is about 123 columns. That ~33-column separation is what makes both
+/// readbacks two-sided rather than a rounding judgement.
+///
+/// Nothing on this page is OCR'd, so a size far too small to read is free here and
+/// would be unusable anywhere else in this file.
+const FULLWIDTH_SMOKE_FONT_PT: &str = "10";
+
+/// File the captive Neovim writes its `winwidth(0)` into BEFORE the toggle, i.e.
+/// while the content-width cap is in force.
+///
+/// Both readbacks live under `XDG_RUNTIME_DIR` rather than in the smoke's cwd, so the
+/// app's own `FileSearch` never lists them and neither becomes a tree-sidebar row.
+/// Nothing here is OCR'd, so that is belt-and-braces rather than load-bearing — but
+/// it also keeps this smoke's page identical to the other single-launch ones, which
+/// is what makes a failure here about the grid and not about the fixture.
+const FULLWIDTH_CAPPED_READBACK_NAME: &str = "wolf_gnome_fullwidth_capped.txt";
+
+/// File the captive Neovim writes its `winwidth(0)` into AFTER `:WolfFullWidth`. See
+/// [`FULLWIDTH_CAPPED_READBACK_NAME`].
+const FULLWIDTH_FULL_READBACK_NAME: &str = "wolf_gnome_fullwidth_full.txt";
+
+/// The single-launch COLUMN-CAP scenario, run as one `sh -c` string inside one
+/// `cage`, structurally [`CONFIG_GRID_SCENARIO`]'s shape with one launch instead of
+/// two.
+///
+/// The readback is `winwidth()` and never `nvim_win_get_width()`: under
+/// `ext_multigrid` the former reports the GRID width the front-end drives from the
+/// column cap, while the latter reports the layout width, which is blind to it.
+///
+/// Exit codes, each naming one cause: `11` the app died before its window mapped;
+/// `12` the CAPPED readback never appeared; `13` the FULL-WIDTH readback never
+/// appeared; `14` the app was still alive after `:qa!`; `15` the app exited non-zero.
+/// 12 and 13 are separate on purpose — the first says the app never got as far as
+/// answering at all, the second says it answered once and then stopped, and the two
+/// have different first suspects.
+const FULLWIDTH_SCENARIO: &str = r#"
+set -eu
+
+# SETTLE is the ONLY real budget between spawning the app and its first keystroke:
+# `wait_window`'s wtype probe does NOT gate input readiness (it breaks at tries=0 on
+# every run -- see the module doc comment).
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+# TWICE the settle, and the doubling is deliberate. The first readback follows a
+# keystroke that Neovim answers by itself. The second follows a round trip with seven
+# hops: :WolfFullWidth -> the command queue -> the front-end's drain on the next wake
+# -> InputEvent::ToggleFullWidth -> wolf_toggle_full_width flipping b:wolf_full_width
+# -> wolf_emit_full_width -> the snapshot -> the NEXT wake's sync_pane_grids issuing
+# resize_grid -> Neovim's flush. Every hop is a separate main-loop turn, and the
+# resize is fire-and-forget, so nothing here is observable to poll for.
+TOGGLE_SETTLE=2.0
+QUIT_TRIES=75
+FILE_TRIES=100
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+wait_window() {
+    tries=0
+    while [ "$tries" -lt "$WAIT_TRIES" ]; do
+        if ! kill -0 "$app_pid" 2>/dev/null; then
+            echo "wolf-gnome column-cap smoke: app process exited early (pid $app_pid)" >&2
+            exit 11
+        fi
+        if wtype "" >/dev/null 2>&1; then
+            return 0
+        fi
+        tries=$((tries + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    return 0
+}
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome column-cap smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# $1 is the exit code for "still alive after :qa!", $2 for "exited non-zero".
+quit_app() {
+    wtype -- ":qa!"
+    wtype -k Return
+
+    tries=0
+    gone=0
+    while [ "$tries" -lt "$QUIT_TRIES" ]; do
+        if ! kill -0 "$app_pid" 2>/dev/null; then
+            gone=1
+            break
+        fi
+        tries=$((tries + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    if [ "$gone" -ne 1 ]; then
+        echo "wolf-gnome column-cap smoke: app (pid $app_pid) still alive after :qa!." >&2
+        exit "$1"
+    fi
+    # `set -e` would abort before the status could be reported, so collect it
+    # through `||`, which is exempt from it.
+    rc=0
+    wait "$app_pid" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "wolf-gnome column-cap smoke: app (pid $app_pid) exited $rc, not 0." >&2
+        exit "$2"
+    fi
+    app_pid=
+}
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_window
+sleep "$SETTLE"
+
+# READBACK 1 -- the grid while the content-width cap is in force.
+wtype -- ":call writefile([printf('%d', winwidth(0))], '$WIDTH_CAPPED')"
+wtype -k Return
+wait_file "$WIDTH_CAPPED" || exit 12
+
+# The toggle. It is typed as the Ex command rather than driven from a menu or a
+# chord, deliberately: this command has neither, and `:WolfFullWidth` is the surface
+# it does have (plus the command palette row, which resolves through the same
+# `ui_action_for`).
+wtype -- ":WolfFullWidth"
+wtype -k Return
+sleep "$TOGGLE_SETTLE"
+
+# READBACK 2 -- the grid with the cap lifted for this buffer.
+wtype -- ":call writefile([printf('%d', winwidth(0))], '$WIDTH_FULL')"
+wtype -k Return
+wait_file "$WIDTH_FULL" || exit 13
+
+quit_app 14 15
+
+exit 0
+"#;
+
+/// The 90-column content cap reaches the grid Neovim is given, and
+/// `:WolfFullWidth` lifts it for the focused buffer.
+///
+/// ## What it proves, and why it needs its own font size
+///
+/// Two `winwidth(0)` readbacks from one launch, either side of one Ex command. The
+/// first must be EXACTLY `editor_inset::MAX_GRID_COLS`, which no uncapped build can
+/// produce at this pane width; the second must be strictly greater, which no build
+/// that drops the toggle anywhere along its seven-hop path can produce.
+///
+/// It is the ONLY end-to-end proof of the cap that is possible at all, and it is
+/// possible only because a smoke may choose its own font size. At the shared
+/// [`SMOKE_FONT_PT`] the cap cannot bind — one pane leaves 989 px of grid and 90
+/// columns need 2022.89 px — which is a premise
+/// [`the_column_cap_cannot_bind_at_the_ocr_smokes_geometry`] asserts rather than
+/// assumes, precisely so that no OCR smoke silently starts running in the capped
+/// regime. See [`FULLWIDTH_SMOKE_FONT_PT`] for the arithmetic at 10 pt.
+///
+/// ## The one line that makes it mean anything
+///
+/// `WOLF_FONT_PT` is set AFTER [`cage_command`] has built the command, so this
+/// smoke's value wins over the shared one. The seeded `WOLF_CONFIG_DIR` is left in
+/// place: the override beats the file's `font-size` by design, so the config's family
+/// and line-height still apply and only the size moves.
+///
+/// ## What it does NOT prove
+///
+/// **That the grid is CENTRED.** Neovim is told a column count and nothing about
+/// where its grid is painted, so `winwidth(0)` is blind to the centring offset — and
+/// no OCR assertion can read a horizontal offset either, since tesseract's `contains`
+/// is position-agnostic. The centring is pinned headlessly, by
+/// `editor_inset::grid_rect_table`'s capped rows.
+///
+/// **That a click inside a capped, centred grid lands in the right cell.** No pointer
+/// smoke runs at a font size where the cap binds, and adding one would need a second
+/// pointer calibration at a second cell size. That is
+/// `editor_inset::a_capped_grid_maps_the_margins_and_its_own_edges_to_real_columns`'s
+/// job, headlessly, with literal probe coordinates.
+///
+/// ## Red-run reverts, one per assertion
+///
+/// Assertion 2: in `editor_inset::grid_size_for_pane`, return `cols` instead of
+/// `cap.apply(cols)` — readback 1 comes back around 123 instead of 90. MEASURED:
+/// `the captive Neovim reported winwidth(0) = 123, want exactly 90`, left `123`,
+/// right `90`. The uncapped count is 123 on the nose, which is the figure
+/// [`FULLWIDTH_SMOKE_FONT_PT`]'s own arithmetic predicts from `floor(989 / 8.03)` —
+/// a live readback confirming that constant's reasoning rather than restating it.
+///
+/// Assertion 3, three independent ones. In `command_action::ui_action_for`, restore
+/// `Command::FullWidth => UiAction::Deferred(…)`: the toggle never becomes an action
+/// and readback 2 stays 90. In `editor_inset::column_cap`, ignore the flag and always
+/// answer `Some(MAX_GRID_COLS)`: the flag flips and changes nothing. And delete
+/// `self.sync_pane_grids();` from `PaneInner::on_render_wake`: the flag flips, the
+/// paint re-clips, but no `resize_grid` is ever issued because the widget allocation
+/// did not change and `connect_resize` therefore never fires. **That third one is the
+/// only falsifier anywhere for the no-allocation-change resize path**, which is the
+/// mechanism a later reader is most likely to simplify away as redundant.
+///
+/// All three were MEASURED, and the measurement's lesson is that the panic text does
+/// NOT tell them apart: each reports `winwidth(0) = 90` against a capped 90 and
+/// prints the same four-cause message. What separates them is everything around it.
+/// The `ui_action_for` revert — and only that one — emits the app's own
+/// `wolf-gnome: command FullWidth not dispatched: …` line on stderr first. The
+/// `column_cap` revert additionally reddens `editor_inset::tests::column_cap_table`
+/// in the fast suite, while the `sync_pane_grids` revert leaves every headless test
+/// green: a red smoke over a green fast suite is the signature of that deletion, and
+/// is the most useful thing to know when this assertion fires.
+#[test]
+fn column_cap_and_full_width_toggle_change_the_grid_under_cage() {
+    const SMOKE: &str = "column_cap_and_full_width_toggle_change_the_grid_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd, mandatory: the captive Neovim's swap directory is keyed on it
+    // and outlives the process, so a fixed cwd would let one run's leftover swap file
+    // raise a blocking prompt that eats the next run's first keystroke.
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(SMOKE, &cwd, &[]);
+
+    let width_capped = runtime_dir.join(FULLWIDTH_CAPPED_READBACK_NAME);
+    let width_full = runtime_dir.join(FULLWIDTH_FULL_READBACK_NAME);
+    for path in [&width_capped, &width_full] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let mut cmd = cage_command(FULLWIDTH_SCENARIO, &cwd);
+    cmd.env("WOLF_BIN", bin)
+        .env("WIDTH_CAPPED", &width_capped)
+        .env("WIDTH_FULL", &width_full);
+
+    // THE line that makes this smoke possible. `cage_command` sets WOLF_FONT_PT to
+    // SMOKE_FONT_PT, at which the cap provably cannot bind in a 989 px pane; a later
+    // `.env` on the same key wins, and this one puts the app in the only regime where
+    // the cap is observable at all. Everything else the helper set is left alone.
+    cmd.env("WOLF_FONT_PT", FULLWIDTH_SMOKE_FONT_PT);
+
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless column-cap scenario");
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage column-cap scenario exited unsuccessfully ({status}). Exit 11: the app \
+         died before its window mapped — at {FULLWIDTH_SMOKE_FONT_PT} pt a panic in the cell \
+         measurement or in `min_pane_size` is the first thing to look at. Exit 12: the CAPPED \
+         readback never appeared at {}, so the app never answered at all. Exit 13: the FULL-WIDTH \
+         readback never appeared at {} — it answered once and then stopped, which is what a panic \
+         on the `:WolfFullWidth` drain path looks like from out here. Exit 14: still alive after \
+         `:qa!`. Exit 15: it went away, but not cleanly.",
+        width_capped.display(),
+        width_full.display()
+    );
+
+    // --- Precondition: both readbacks are real column counts ------------------
+    //
+    // A missing or unparseable file means the app never got far enough to answer, NOT
+    // that the cap is wrong — different failures, different fixes, so they are
+    // separated from the comparisons below rather than folded into them.
+    let capped_raw = read_trimmed(&width_capped, SMOKE);
+    let full_raw = read_trimmed(&width_full, SMOKE);
+    let capped = parse_readback_int(&capped_raw, &width_capped, &capped_raw, SMOKE);
+    let full = parse_readback_int(&full_raw, &width_full, &full_raw, SMOKE);
+    for (label, cols) in [("capped", capped), ("full-width", full)] {
+        assert!(
+            cols > 0,
+            "{SMOKE}: the {label} readback reported winwidth(0) = {cols}. A non-positive column \
+             count means the pane never bound a grid, so the comparisons below would be between a \
+             real measurement and a placeholder."
+        );
+    }
+
+    // --- Assertion 2: the cap reaches the grid, EXACTLY -----------------------
+    //
+    // Read from the production constant rather than retyped as 90, so the two cannot
+    // drift: the number this smoke expects is by construction the number the app caps
+    // at, and what is being compared is a live readback from Neovim against it.
+    let expected_cap = i64::from(wolf_gnome::editor_inset::MAX_GRID_COLS);
+    assert_eq!(
+        capped, expected_cap,
+        "{SMOKE}: with the content-width cap in force the captive Neovim reported \
+         winwidth(0) = {capped}, want exactly {expected_cap} \
+         (`editor_inset::MAX_GRID_COLS`). A count well ABOVE the cap — around 123 at \
+         {FULLWIDTH_SMOKE_FONT_PT} pt in this pane — is the signature of a build that never \
+         applies it: check that `editor_inset::grid_size_for_pane` still returns \
+         `cap.apply(cols)` rather than `cols`, and that `pane_view` passes the pane's own cap \
+         rather than an uncapped one. A count BELOW it means the pane is narrower than the cap \
+         here, at which point this smoke is measuring nothing and the font size or the window \
+         size has moved."
+    );
+
+    // --- Assertion 3: the toggle lifts it -------------------------------------
+    assert!(
+        full > capped,
+        "{SMOKE}: after `:WolfFullWidth` the captive Neovim reported winwidth(0) = {full}, which \
+         is not more than the {capped} it reported while capped (expect roughly 123 here). EQUAL \
+         counts mean the toggle changed no geometry, and there are four candidate causes, in the \
+         order the value travels: (1) `command_action::ui_action_for` still classifies \
+         `Command::FullWidth` as `Deferred`, so the drained command never becomes an action at \
+         all; (2) `shell::perform` has no `UiAction::ToggleFullWidth` arm, so the action never \
+         becomes an `InputEvent`; (3) `PaneInner::on_render_wake` does not call \
+         `sync_pane_grids`, so the flag flips and the paint re-clips but NO `resize_grid` is ever \
+         issued — the widget allocation does not change when the cap lifts, so `connect_resize` \
+         never fires and nothing else would tell Neovim; or (4) `editor_inset::column_cap` ignores \
+         its flag and answers the default cap either way. A count LOWER than the capped one would \
+         mean the toggle is wired backwards."
+    );
+}
+
 /// A user's divider drag becomes the LAYOUT'S WEIGHTS, so it survives the next
 /// re-allocation of the paned that carries it.
 ///
@@ -17284,7 +17743,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// | the active-pane FOCUS RING's top edge — a long thin high-contrast line immediately above the heading | six ablations on one PNG; the top edge alone accounted for it | [`DIVIDER_RELAUNCH_SCENARIO`]'s closing `<C-w>h`, which moves the ring to the WIDE pane |
 /// | a single misclassified GLYPH at 15 columns | the same pixels read through both segmentation modes, twice over | the second reader, [`ocr_uniform_block_to_lowercase`] |
 ///
-/// The third is why this smoke, alone of the thirty-six, reads its capture twice.
+/// The third is why this smoke, alone of the thirty-seven, reads its capture twice.
 /// With the first two answered, on one retained PNG:
 ///
 /// | command | verbatim output |

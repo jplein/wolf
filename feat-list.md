@@ -34,9 +34,9 @@ Linux gets the pinned Neovim from the flake devShell via `WOLF_NVIM_BIN`; there 
 | Divider drag-to-resize (persisted weights)                 | `feat/macos-pane-dividers` (`5f8becb`, `03a4647`) / `linux-feat/divider-drag` | [x]   | [x]   |
 | Mouse input (click to position, drag to select)            | `feat/mac-panes` (`9051f0f`) / `linux-feat/mouse-scroll`                      | [x]   | [x]   |
 | Scroll / trackpad input                                    | `feat/mac-panes` (`9051f0f`, `4b7fdc5`) / `linux-feat/mouse-scroll`           | [x]   | [x]   |
-| Synthetic per-pane scrollbars from `win_viewport`          | `feat/mac-panes` (`9051f0f`)                                                  | [x]   | [ ]   |
-| Max column width (90-col cap, centered grid)               | `feat/mac-panes` (`b6f545c`)                                                  | [x]   | [ ]   |
-| "Use full width for content" toggle                        | `feat/use-whole-width`                                                        | [x]   | [ ]   |
+| Synthetic per-pane scrollbars from `win_viewport`          | `feat/mac-panes` (`9051f0f`) / `linux-feat/grid-geometry`                     | [x]   | [x]   |
+| Max column width (90-col cap, centered grid)               | `feat/mac-panes` (`b6f545c`) / `linux-feat/grid-geometry`                     | [x]   | [x]   |
+| "Use full width for content" toggle                        | `feat/use-whole-width` / `linux-feat/grid-geometry`                           | [x]   | [x]   |
 | Text attributes: bold / italic / underline                 | `feat/paint-special-attributes` (`0cdaedd`)                                   | [x]   | [x]   |
 | Text attributes: undercurl / strikethrough / special color | `feat/paint-special-attributes` (`0cdaedd`)                                   | [x]   | [ ]   |
 | Cursor color from the `WolfCursor` highlight group         | `feat/cursor-color`                                                           | [x]   | [x]   |
@@ -52,7 +52,9 @@ The per-pane status bar diverges from macOS in two visible ways, both following 
 
 Mouse and vertical scroll input work on both front-ends, as thin GTK glue over pure seams (`geometry::cell_at` and the `mouse` module).
 
-Horizontal scroll, non-primary buttons and kinetic scrolling are handled on neither platform, so they are gaps against other editors rather than against macOS. The synthetic per-pane scrollbar stays its own unticked row: scroll input reaches Neovim on Linux, but nothing draws a scrollbar there.
+Horizontal scroll, non-primary buttons and kinetic scrolling are handled on neither platform, so they are gaps against other editors rather than against macOS.
+
+The content cap, its centred grid, the full-width toggle and the synthetic scrollbar land together on Linux, with three deliberate divergences from macOS. The thumb sits in the pane's right padding gutter rather than over the last text column, which is what macOS's own `drawScrollbars` prose describes and its code does not implement. Only the thumb is drawn and it never fades, because a fade needs the periodic timer [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md) forbids. And the centring offset is floored to whole device pixels, because a half-pixel `cr.translate` resamples every glyph and this front-end has no HiDPI story.
 
 Pointer input is verified at two levels — the seams through a live Neovim, and four cage smokes injecting real pointer events into the running application via [`wolf-pointer-inject`](tools/wolf-pointer-inject/README.md). What that leaves unproven is listed in [`crates/wolf-gnome/tests/README.md`](crates/wolf-gnome/tests/README.md).
 
@@ -163,7 +165,7 @@ The rendering pipeline and the loopback preview server are entirely in `wolf-cor
 
 `wolf-gnome` reads the shared `wolf-config.yaml` through `wolf_core::config` and drives its cell geometry from the configured font family, size and line height; `WOLF_FONT_PT` overrides the configured size, as it does on macOS. Both editor families are vendored into the Nix devShell and exposed through the repo-controlled fontconfig, so a configured `iA Writer Mono S` resolves on Linux.
 
-Baseline-grid typography is the 24px CSS grid inside the rendered preview document, so it belongs with the Markdown-preview rows above and is unreachable until Linux has a preview pane. Both front-ends align a status bar's text with the grid text below it, out of one inset; the macOS `StatusbarTextSpan` seam has no Linux counterpart, because its whole content is the 90-column cap's centring offset and that row stays unticked here. The three vendored plugin assets are bundled by Bazel into `Wolf.app` only — the captive `init.lua` self-locates them and is a strict no-op when absent, so on Linux they are simply not there.
+Baseline-grid typography is the 24px CSS grid inside the rendered preview document, so it belongs with the Markdown-preview rows above and is unreachable until Linux has a preview pane. Both front-ends align a status bar's text with the grid text below it, out of one inset; the macOS `StatusbarTextSpan` seam has no Linux counterpart, because `editor_inset::grid_rect` carries the centring offset in its own `x` and the painter, the pointer translation and the strip's text all read that one origin by construction. The three vendored plugin assets are bundled by Bazel into `Wolf.app` only — the captive `init.lua` self-locates them and is a strict no-op when absent, so on Linux they are simply not there.
 
 ## Terminal
 

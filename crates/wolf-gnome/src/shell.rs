@@ -1248,6 +1248,10 @@ impl AppShell {
             UiAction::OpenFolderDialog => self.open_folder_dialog(),
             UiAction::NewUntitledBuffer => self.send_input(InputEvent::NewBuffer),
             UiAction::ClosePane => self.send_input(InputEvent::ClosePane),
+            // Over the shared ordered input channel and not `WolfCore::toggle_full_width`,
+            // which is itself a one-line `send_input` onto the same channel: same path,
+            // and the neighbouring arms' shape wins.
+            UiAction::ToggleFullWidth => self.send_input(InputEvent::ToggleFullWidth),
             UiAction::CloseWindow => self.close_window(),
             UiAction::MinimizeWindow => self.inner.window.minimize(),
             UiAction::QuitApplication => self.quit_application(),

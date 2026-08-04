@@ -24,7 +24,7 @@
 //!
 //! ## The three classes
 //!
-//! - **Dispatched** — the twelve commands `wolf-gnome` performs today.
+//! - **Dispatched** — the thirteen commands `wolf-gnome` performs today.
 //! - [`UiAction::Deferred`] — implemented on macOS and planned on GTK; the string
 //!   names the concrete blocker so the deferral is auditable rather than a shrug.
 //! - [`UiAction::NoGnomeEquivalent`] — has no GNOME counterpart and will never be
@@ -77,6 +77,9 @@ pub enum UiAction {
     HistoryForward,
     /// Show or hide the file-tree sidebar.
     ToggleSidebar,
+    /// Toggle the focused buffer's content width between the column cap and the
+    /// whole pane.
+    ToggleFullWidth,
     /// Present the About dialog carrying the bundled fonts' licence notices.
     ShowAbout,
     /// Implemented on macOS, planned on GTK; the string names the blocker.
@@ -142,9 +145,7 @@ pub fn ui_action_for(command: Command) -> UiAction {
         Command::PreviewInBrowser => UiAction::Deferred(
             "the loopback preview server needs a GTK URI launcher and the preview row first",
         ),
-        Command::FullWidth => UiAction::Deferred(
-            "the ~90-column content cap is a front-end feature wolf-gnome does not implement",
-        ),
+        Command::FullWidth => UiAction::ToggleFullWidth,
         Command::ToggleSidebar => UiAction::ToggleSidebar,
         Command::SidebarShowProject => UiAction::Deferred(
             "wolf-gnome's sidebar has no panel switcher (there is no search panel to switch away \
@@ -191,11 +192,12 @@ mod tests {
     /// The commands `wolf-gnome` DISPATCHES, by canonical `CommandSpec::id`,
     /// sorted. Ids (not variants) so the failure message names the registry row a
     /// reader can grep for.
-    const EXPECTED_DISPATCHED_IDS: [&str; 12] = [
+    const EXPECTED_DISPATCHED_IDS: [&str; 13] = [
         "buffer_picker",
         "close_pane",
         "close_window",
         "command_palette",
+        "full_width",
         "go_to_file",
         "minimize_window",
         "new_buffer",
@@ -348,9 +350,9 @@ mod tests {
             want: Want::Deferred,
         },
         Case {
-            desc: "22 FullWidth: wolf-gnome has no content-width cap",
+            desc: "22 FullWidth: toggles the focused buffer's content width",
             command: Command::FullWidth,
-            want: Want::Deferred,
+            want: Want::Exact(UiAction::ToggleFullWidth),
         },
         Case {
             desc: "23 ToggleSidebar: shows or hides the file-tree sidebar",
@@ -398,6 +400,15 @@ mod tests {
     ///
     /// The length assertion against `COMMAND_SPECS` is what makes the table
     /// non-vacuous: a newly appended core command cannot be absorbed silently.
+    ///
+    /// FALSIFYING EDIT for the row that carries the content-width cap: classify
+    /// `Command::FullWidth` as `UiAction::Deferred`. MEASURED: `case: 22 FullWidth:
+    /// toggles the focused buffer's content width — ui_action_for(FullWidth)
+    /// returned Deferred("the ~90-column content cap is a front-end feature
+    /// wolf-gnome does not implement"), which does not match the classification
+    /// pinned in plan section 3.2`. This test was run ALONE under that edit, so the
+    /// failure above is its own and not
+    /// [`dispatched_commands_are_the_expected_set`]'s showing through it.
     #[test]
     fn ui_action_table() {
         assert_eq!(
@@ -450,6 +461,13 @@ mod tests {
     /// The set of commands `wolf-gnome` actually dispatches is exactly
     /// [`EXPECTED_DISPATCHED_IDS`] — no more (nothing quietly promoted) and no
     /// fewer (nothing quietly demoted to `Deferred`).
+    ///
+    /// FALSIFYING EDIT: classify `Command::FullWidth` as `UiAction::Deferred`, and
+    /// run this test ALONE so its evidence is its own. MEASURED: the sorted `left`
+    /// comes back one element short of `right`, the missing element being
+    /// `"full_width"` in sorted position between `"command_palette"` and
+    /// `"go_to_file"` — a one-element diff that names the demoted command directly
+    /// rather than reporting that "the set changed".
     #[test]
     fn dispatched_commands_are_the_expected_set() {
         let mut dispatched: Vec<&'static str> = Vec::new();
@@ -466,10 +484,10 @@ mod tests {
 
         assert_eq!(
             dispatched, expected,
-            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly twelve commands; \
-             everything else must be Deferred(reason) or NoGnomeEquivalent(reason) so the drain \
-             is never silent. If a command was genuinely implemented, tick its feat-list row and \
-             update this list with it."
+            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly thirteen \
+             commands; everything else must be Deferred(reason) or NoGnomeEquivalent(reason) so \
+             the drain is never silent. If a command was genuinely implemented, tick its feat-list \
+             row and update this list with it."
         );
     }
 

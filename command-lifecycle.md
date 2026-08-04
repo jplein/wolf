@@ -88,7 +88,9 @@ The input channel is ordered, so an editor-affecting command never races pending
 - **`NewBuffer`** — `WolfCoreHandle::new_buffer` → `WolfCore::new_buffer` → `InputEvent::NewBuffer` → `nvim_exec_lua("wolf_new_untitled()", [])`.
 - **`SwitchBuffer`** — `WolfCoreHandle::switch_buffer(bufnr)`, which resolves the active window live, → `WolfCore::switch_buffer(win, bufnr)` → `InputEvent::SwitchBuffer { win, bufnr }` → `nvim_exec_lua("wolf_switch_buffer(...)", [win, bufnr])`.
 - **`Terminal`** — `WolfCoreHandle::toggle_terminal` → `WolfCore::toggle_terminal` → `InputEvent::ToggleTerminal` → `nvim_exec_lua("wolf_toggle_terminal()", [])`. The helper's open path also emits a `drawer_open` **layout intent**, drained by `WolfCore::drain_intents` — a channel separate from this command drain. Terminal is the illustration that one command can drive both channels and that the two are independent.
-- **`FullWidth`** — `WolfCoreHandle::toggle_full_width` → `WolfCore::toggle_full_width` → `InputEvent::ToggleFullWidth` → `nvim_exec_lua("wolf_toggle_full_width()", [])`. The macOS arm additionally calls `paneContainer?.onRenderWake()` so the panes resize on the next wake. The View item is always enabled; only its checkmark tracks `is_full_width_active()`.
+- **`FullWidth`** — `WolfCoreHandle::toggle_full_width` → `WolfCore::toggle_full_width` → `InputEvent::ToggleFullWidth` → `nvim_exec_lua("wolf_toggle_full_width()", [])`. Lifting the cap changes a pane's column count while its widget allocation holds still, so each front-end re-requests the grid size itself on the next wake: macOS through `paneContainer?.onRenderWake()`, GTK through `wolf_gnome::pane_view::PaneInner::sync_pane_grids`.
+
+  The macOS View item is always enabled; only its checkmark tracks `is_full_width_active()`. GTK has no menu item and no chord, so it has no checkmark either: its surfaces are `:WolfFullWidth` and the command palette row, which appears automatically because the palette filters on `command_action::ui_action_for` — see [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md), "Present limitations".
 
 ## 8. Checklist: adding a new command
 
