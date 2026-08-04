@@ -8642,12 +8642,8 @@ fn cell_metrics_for_smoke() -> CellMetrics {
     let probe = ImageSurface::create(Format::ARgb32, 1, 1)
         .expect("failed to create the 1x1 probe surface for cell measurement");
     let cr = Context::new(&probe).expect("failed to create the probe Cairo context");
-    let metrics = CellMetrics::for_font(
-        &cr,
-        SMOKE_FONT_FAMILY,
-        smoke_font_pt(),
-        smoke_line_height(),
-    );
+    let metrics =
+        CellMetrics::for_font(&cr, SMOKE_FONT_FAMILY, smoke_font_pt(), smoke_line_height());
     drop(cr);
     assert!(
         metrics.cell_w > 0.0 && metrics.cell_h > 0.0,
@@ -16055,8 +16051,10 @@ fn config_font_size_changes_the_grid_under_cage() {
     let cwd = make_temp_cwd();
     write_relaunch_fixtures(SMOKE, &cwd, &[]);
 
-    let config_small = smoke_config_dir_at(&cwd, CONFIG_GRID_SMALL_SUFFIX, CONFIG_GRID_SMALL_FONT_PT);
-    let config_large = smoke_config_dir_at(&cwd, CONFIG_GRID_LARGE_SUFFIX, CONFIG_GRID_LARGE_FONT_PT);
+    let config_small =
+        smoke_config_dir_at(&cwd, CONFIG_GRID_SMALL_SUFFIX, CONFIG_GRID_SMALL_FONT_PT);
+    let config_large =
+        smoke_config_dir_at(&cwd, CONFIG_GRID_LARGE_SUFFIX, CONFIG_GRID_LARGE_FONT_PT);
     assert_ne!(
         config_small,
         config_large,

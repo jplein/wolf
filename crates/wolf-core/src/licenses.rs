@@ -1,6 +1,148 @@
 //! The compiled-in font licence registry: the four bundled fonts' verbatim licence
 //! texts, plus the one plain-text block every front-end and every rendered preview
 //! document carries.
+//!
+//! Two of the four fonts ship inside every rendered preview document as base64
+//! `@font-face` payloads ([`crate::markdown`]); the other two ship as editor faces
+//! in the same distribution. All four are redistributed, so all four owe
+//! attribution, and the only way to discharge that from a self-contained binary is
+//! to compile the texts in.
+//!
+//! ## Why [`FONT_LICENSE_NOTICES`] is a `const` and not a function
+//!
+//! [`crate::markdown::render_html`] emits it into every document's `<head>`, and
+//! that head must be byte-identical on every render — the front-end's typing path
+//! swaps only the `<body>` and self-checks by comparing head lengths. A
+//! compile-time constant satisfies that by construction.
+//!
+//! ## Why the notices are separated with explicit newlines
+//!
+//! `licenses/ia-writer-mono-LICENSE.txt` carries no trailing newline. A `concat!`
+//! that abuts the texts and trusts them to end in one welds `…SOFTWARE.` onto the
+//! next row's header. Three of the four texts do end in a newline, which is
+//! exactly what would make the fourth's omission invisible, so every row is
+//! followed by an explicit `"\n"` here.
+
+/// One bundled font's licence: what it is, where its text came from, and the text.
+///
+/// `provenance` is the field that makes a later bump checkable: it records the
+/// archive, the path inside it, and the sha256 the archive was pinned at, so the
+/// committed text can be re-derived rather than trusted.
+pub struct FontLicense {
+    /// The font family as a reader knows it, e.g. `"iA Writer Mono S"`.
+    pub font: &'static str,
+    /// The licence's name, e.g. `"SIL Open Font License 1.1"`.
+    pub license: &'static str,
+    /// Where the text came from: archive, in-archive path, pinned sha256, and any
+    /// rename applied on the way in.
+    pub provenance: &'static str,
+    /// The verbatim licence text, `include_str!`'d from the committed copy.
+    pub text: &'static str,
+}
+
+// Each text is `include_str!`'d twice: once into the named constant a
+// `FONT_LICENSES` row carries, and once into `FONT_LICENSE_NOTICES`' `concat!`.
+// `concat!` accepts only literal tokens, so it cannot be handed the constant, and
+// there is no way to build the block from the registry at compile time without a
+// new dependency. The pair of tests that compare a row's `text` against the block
+// is what keeps the two spellings of each path honest.
+
+/// Inter's licence text.
+const INTER_TEXT: &str = include_str!("markdown/assets/inter-OFL.txt");
+/// Latin Modern Math's licence text. CRLF throughout, and it ends `\r\n\r\n`; the
+/// block is therefore mixed-EOL, which is harmless inside an HTML comment and is
+/// noted so nobody "fixes" a third party's file.
+const LATIN_MODERN_TEXT: &str =
+    include_str!("markdown/assets/latinmodern-math-GUST-FONT-LICENSE.txt");
+/// JetBrains Mono's licence text.
+const JETBRAINS_TEXT: &str = include_str!("licenses/jetbrains-mono-OFL.txt");
+/// iA Writer Mono S's licence text. The one file with **no trailing newline** —
+/// see the module docs.
+const IA_WRITER_TEXT: &str = include_str!("licenses/ia-writer-mono-LICENSE.txt");
+
+/// The SIL Open Font License 1.1, which three of the four fonts ship under.
+const OFL_1_1: &str = "SIL Open Font License 1.1";
+/// The GUST Font License, which Latin Modern Math ships under.
+const GUST_1_0: &str = "GUST Font License 1.0 (LPPL 1.3c)";
+
+/// Every bundled font's licence, in the order [`FONT_LICENSE_NOTICES`] renders
+/// them: the two preview faces first, then the two editor faces.
+pub const FONT_LICENSES: &[FontLicense] = &[
+    FontLicense {
+        font: "Inter",
+        license: OFL_1_1,
+        provenance: "src/markdown/assets/inter-OFL.txt, committed alongside the woff2 subset the \
+                     preview document inlines",
+        text: INTER_TEXT,
+    },
+    FontLicense {
+        font: "Latin Modern Math",
+        license: GUST_1_0,
+        provenance: "src/markdown/assets/latinmodern-math-GUST-FONT-LICENSE.txt, committed \
+                     alongside the woff2 subset the preview document inlines. The file names no \
+                     copyright holder; GUST, the Polish TeX Users Group, is named in its second \
+                     line",
+        text: LATIN_MODERN_TEXT,
+    },
+    FontLicense {
+        font: "JetBrains Mono",
+        license: OFL_1_1,
+        provenance: "OFL.txt at the root of JetBrainsMono-2.304.zip, archive sha256 \
+                     6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf — the pin \
+                     in bazel/jetbrains-mono/extensions.bzl",
+        text: JETBRAINS_TEXT,
+    },
+    FontLicense {
+        font: "iA Writer Mono S",
+        license: OFL_1_1,
+        provenance: "\"iA Writer Mono/LICENSE.md\" inside \
+                     iA-Fonts-f32c04c3058a75d7ce28919ce70fe8800817491b.tar.gz, archive sha256 \
+                     826767eaea4ce43ccb7ca71327a5c63ac31206b99df400699e6744df6104e1b5 — the pin \
+                     in bazel/ia-writer-mono/extensions.bzl. Committed as .txt rather than .md so \
+                     prettier's **/*.md gate cannot reformat a verbatim third-party licence. The \
+                     face derives from IBM Plex, so the text carries a second copyright line for \
+                     IBM Corp",
+        text: IA_WRITER_TEXT,
+    },
+];
+
+/// Every registered licence rendered as one plain-text block, in
+/// [`FONT_LICENSES`] order.
+///
+/// Built with `concat!` so it is a compile-time constant — see the module docs for
+/// why that is a requirement rather than a convenience, and for why every row
+/// carries an explicit trailing newline. The row headers here restate each row's
+/// `font` and `license`; `licenses.rs`'s tests are what stop the two copies
+/// drifting.
+///
+/// It deliberately starts with a letter: [`crate::markdown`] emits it inside an
+/// HTML comment, and `<!--` followed by `>` or `->` closes the comment
+/// immediately.
+pub const FONT_LICENSE_NOTICES: &str = concat!(
+    "Wolf bundles the following fonts. Each is redistributed under the licence\n",
+    "reproduced beneath its name.\n",
+    "\n",
+    "================================================================\n",
+    "Inter — SIL Open Font License 1.1\n",
+    "================================================================\n",
+    include_str!("markdown/assets/inter-OFL.txt"),
+    "\n",
+    "================================================================\n",
+    "Latin Modern Math — GUST Font License 1.0 (LPPL 1.3c)\n",
+    "================================================================\n",
+    include_str!("markdown/assets/latinmodern-math-GUST-FONT-LICENSE.txt"),
+    "\n",
+    "================================================================\n",
+    "JetBrains Mono — SIL Open Font License 1.1\n",
+    "================================================================\n",
+    include_str!("licenses/jetbrains-mono-OFL.txt"),
+    "\n",
+    "================================================================\n",
+    "iA Writer Mono S — SIL Open Font License 1.1\n",
+    "================================================================\n",
+    include_str!("licenses/ia-writer-mono-LICENSE.txt"),
+    "\n",
+);
 
 #[cfg(test)]
 mod tests {
