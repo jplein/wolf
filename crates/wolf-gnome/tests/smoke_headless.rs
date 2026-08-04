@@ -11,7 +11,7 @@
 //!
 //! ## What this file contains
 //!
-//! **Thirty-one cage smokes** — one window-render smoke, two file-picker smokes,
+//! **Thirty-three cage smokes** — one window-render smoke, two file-picker smokes,
 //! one file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
 //! new-untitled-buffer smoke, one command-palette smoke, one OPEN RECENT smoke
 //! (Ctrl+Shift+P, a typed folder query, then Enter — the activated row re-roots the
@@ -34,10 +34,15 @@
 //! (click-to-position, drag-to-select,
 //! wheel scroll, the click-then-close focus-wedge regression, the crash
 //! overlay + "Restart Neovim" button, and a divider drag surviving a pane
-//! re-layout), and four STATE-PERSISTENCE smokes (a three-pane layout, a lone open
-//! file, and a dragged divider's WEIGHTS each surviving a quit-and-relaunch, plus
-//! the window title rendering the working directory) — each of which launches the
-//! real binary under `cage`.
+//! re-layout), one keyboard-only NAVIGATION-HISTORY smoke (Alt+Left returning the
+//! pane to the previously-open file, which the captive Neovim's own `bufname('%')`
+//! readbacks either side of the chord are what prove), one keyboard-only
+//! SIDEBAR-TOGGLE smoke (Ctrl+Shift+B hiding the file tree, read off TWO captures
+//! so that neither a tree that never populated nor a window that stopped drawing
+//! can satisfy the must-not-contain half), and four STATE-PERSISTENCE smokes (a
+//! three-pane layout, a lone open file, and a dragged divider's WEIGHTS each
+//! surviving a quit-and-relaunch, plus the window title rendering the working
+//! directory) — each of which launches the real binary under `cage`.
 //!
 //! The three relaunch smokes run **two app launches inside ONE `cage` instance**
 //! (one scenario string, two sequential `"$WOLF_BIN" &` blocks), so `CAGE_LOCK`
@@ -55,7 +60,7 @@
 //! and no `:e` toast can satisfy, and OCR is structurally incapable of answering
 //! "did the cursor land at exactly row 12, column 25".
 //!
-//! Twenty-six of the thirty-one OCR a screenshot of the live window. The `:qa`
+//! Twenty-eight of the thirty-three OCR a screenshot of the live window. The `:qa`
 //! smoke deliberately captures no image and asserts on the cage exit status alone
 //! (the app must be GONE, and gone with a ZERO exit status — a panic in the GTK main
 //! loop makes a process vanish just as a clean shutdown does); the click, drag,
@@ -86,11 +91,13 @@
 //!   name rule cannot reach the hazard at all: it checks the content of
 //!   [`divider_right_fixture_body`] and [`search_target_fixture_body`], the second
 //!   down to the match's line index and its byte offset, which the project-search
-//!   smoke's line and column assertions are derived from. It also pins THREE crossed
+//!   smoke's line and column assertions are derived from. It also pins FOUR crossed
 //!   pairs of OCR preconditions — the window-title smoke's deliberate exemption, the
-//!   project-search smoke's target-versus-starting headings, and the Open Recent
+//!   project-search smoke's target-versus-starting headings, the Open Recent
 //!   smoke's target FILE versus target DIRECTORY, where the header bar draws the
-//!   directory on every capture.
+//!   directory on every capture, and the sidebar-toggle smoke's tree-row subject
+//!   versus its proof-of-life heading, which must come from opposite halves of the
+//!   window or hiding one would remove the other.
 //! * [`cage_is_only_spawned_through_the_isolating_helper`] — `cage` is spawned in
 //!   exactly one place, [`cage_command`], which is the only thing that sets
 //!   `WOLF_STATE_DIR` and so the only thing keeping the smokes off the developer's
@@ -103,7 +110,7 @@
 //! live here, next to the consts and helpers they read, rather than in a file of
 //! their own.
 //!
-//! So this target's summary line reads **`35 passed`**, not `31`: thirty-one cage
+//! So this target's summary line reads **`37 passed`**, not `33`: thirty-three cage
 //! smokes plus those four guards.
 //!
 //! ## A vacuously-passing check recorded here: the `wtype ""` window-map poll
@@ -146,7 +153,7 @@
 //!
 //! ## When it runs
 //!
-//! The thirty-one cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The thirty-three cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The Linux verification gate").
@@ -156,13 +163,13 @@
 //! suite command does not run is a silently-skipped test.
 //!
 //! They are, however, the slowest part of the suite: each drives a real
-//! compositor, and all thirty-one serialize behind `CAGE_LOCK` (see below).
+//! compositor, and all thirty-three serialize behind `CAGE_LOCK` (see below).
 //!
 //! ```text
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the thirty-one cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the thirty-three cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` and
 //!   `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
@@ -179,7 +186,7 @@
 //!   empty result list.
 //! - `XDG_RUNTIME_DIR` set and writable (the Wayland socket lives there).
 //!
-//! Per project policy every one of the thirty-one FAILS LOUD if any of the above is
+//! Per project policy every one of the thirty-three FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -203,7 +210,7 @@ use wolf_gnome::{CellMetrics, WINDOW_TITLE_FALLBACK};
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the thirty-one cage smoke tests. Each launches its own
+/// Serializes the thirty-three cage smoke tests. Each launches its own
 /// `cage` compositor, and two compositors started concurrently contend for the
 /// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
 /// Under the default multi-threaded test harness these tests would otherwise run
@@ -323,8 +330,9 @@ const SIDEBAR_FILLER_COUNT: usize = 9;
 /// buffer-picker unit — `bufpickalfa`/`bufpickbravo`, `responding` and
 /// `stallfixture`, and — added with the project-search unit —
 /// `projsearchalfa`/`projsearchdelta`, and — added with the Open Recent unit —
-/// `ortango` — so a stray filler can never
-/// satisfy one of those either. [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`]
+/// `ortango`, and — added with the navigation-history unit —
+/// `navbackalfa`/`navbackbravo` and `sbtangoleaf`/`sidebarkeepalfa` — so a stray
+/// filler can never satisfy one of those either. [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`]
 /// enforces this mechanically against [`ASSERTED_OCR_TERMS`], which holds the consts
 /// themselves; this list is a reader's summary and the test is the authority.
 ///
@@ -7105,6 +7113,380 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
+// ---------------------------------------------------------------------------
+// Navigation-history smoke: Alt+Left goes BACK to the previously-open file.
+//
+// This is the only end-to-end coverage of the whole per-pane navigation path: the
+// capture-phase chord controller resolving <Alt>Left through
+// `actions::action_for_key` to `win.history-back`, that action being installed from
+// `command_action::ui_action_for_front_end_action` (it has NO wolf_core::Command,
+// so the ordinary command branch never sees it), `shell::perform`'s
+// `UiAction::HistoryBack` arm, `nav_ui::nav_press` accepting against a live core,
+// `WolfCore::history_back` moving the pane through `_G.wolf_history_set_buf`, and
+// the repaint that follows.
+//
+// ## The fixture/term convention, applied
+//
+// Both files' names are deliberately UNLIKE the words asserted on: the tree sidebar
+// renders every cwd entry by name and nvim's `:e` echoes the filename, so a fixture
+// named after its own asserted word satisfies the assertion whether or not anything
+// navigated (the permanent silent pass documented on `PICKER_FILE_NAME`). The
+// asserted words live only in the files' CONTENT, so only a RENDERED BUFFER can
+// produce them. `restore_fixture_names_cannot_satisfy_their_own_assertions` checks
+// that mechanically, in both directions.
+//
+// ## Why the two readbacks exist
+//
+// OCR alone cannot distinguish "Back worked" from "the second `:e` never happened":
+// both leave the FIRST file's heading on screen. The scenario therefore has the
+// captive Neovim write `bufname('%')` before and after the chord, so the failure is
+// ATTRIBUTED rather than merely detected. The BEFORE readback is a PRECONDITION —
+// it proves the second `:e` took effect — and the AFTER readback is the
+// discriminator.
+
+/// Nav-back smoke: the file opened FIRST, which Back must return to.
+///
+/// Deliberately unlike [`NAVBACK_OCR_PRESENT`]: this NAME is drawn by the sidebar
+/// row and by nvim's `:e` toast, so a name carrying the asserted word would satisfy
+/// the assertion with nothing having navigated.
+const NAVBACK_FILE_FIRST: &str = "nbxray.md";
+
+/// Heading written into [`NAVBACK_FILE_FIRST`]; lowercased it contains
+/// [`NAVBACK_OCR_PRESENT`]. This line renders only once the pane really holds that
+/// buffer again, which is what makes it the honest evidence Back moved.
+const NAVBACK_HEADING_FIRST: &str = "# NAVBACKALFA";
+
+/// Lowercased substring OCR MUST find after Alt+Left: the heading of the file the
+/// pane was on BEFORE the second `:e`.
+const NAVBACK_OCR_PRESENT: &str = "navbackalfa";
+
+/// Nav-back smoke: the file opened SECOND — the one Back must leave.
+const NAVBACK_FILE_SECOND: &str = "nbyankee.md";
+
+/// Heading written into [`NAVBACK_FILE_SECOND`]; lowercased it contains
+/// [`NAVBACK_OCR_ABSENT`].
+const NAVBACK_HEADING_SECOND: &str = "# NAVBACKBRAVO";
+
+/// Lowercased substring OCR must NOT find after Alt+Left: the heading of the file
+/// the pane navigated AWAY from.
+const NAVBACK_OCR_ABSENT: &str = "navbackbravo";
+
+/// Nav-back smoke: the readback the captive Neovim writes with `bufname('%')`
+/// BEFORE the chord fires. Its presence proves the second `:e` took effect.
+const NAVBACK_READBACK_BEFORE: &str = "nb_before.txt";
+
+/// Nav-back smoke: the readback the captive Neovim writes with `bufname('%')`
+/// AFTER the chord fires. This is the smoke's discriminator, and unlike OCR it is
+/// an exact string no sidebar row and no `:e` toast can forge.
+const NAVBACK_READBACK_AFTER: &str = "nb_after.txt";
+
+/// The NAV-BACK scenario, run as a single `sh -c` string INSIDE `cage` (the
+/// [`SCENARIO`] shape): launch the app, poll until `cage` is up (NOT until the
+/// window maps — see [`SCENARIO`]'s `SETTLE` comment), settle, `:e` the two
+/// fixtures in order, read `bufname('%')` back, fire Alt+Left, read `bufname('%')`
+/// back again, park the block cursor off the asserted row, settle, and screenshot.
+///
+/// Standalone — it does NOT need [`with_nvim_pid_helper`], because nothing here
+/// identifies or signals the Neovim child.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before its window mapped (the shared convention).
+/// * `24` — the BEFORE `bufname('%')` readback never appeared, so the premise that
+///   the second `:e` landed cannot be checked at all.
+/// * `25` — the AFTER `bufname('%')` readback never appeared. Distinct from `24` on
+///   purpose: `24` means keys were never reaching Neovim, while `25` means they
+///   were and then stopped — which is what a chord that wedged the app looks like.
+const NAVBACK_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+# How many WAIT_INTERVAL polls to allow for a readback file.
+FILE_TRIES=100
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome nav-back smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw before driving the editor.
+sleep "$SETTLE"
+
+# Poll for a readback file the captive Neovim writes. Nothing downstream may read a
+# file we merely hope is there. (The CRASH_SCENARIO body, verbatim.)
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome nav-back smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# --- Step 2: build the pane's history, FIRST then SECOND --------------------
+#
+# Two `:e`s in one pane give it a two-entry navigation stack on top of the startup
+# buffer, so Back has somewhere to go and the file it goes to is known.
+wtype -- ":e $NAVBACK_FILE_FIRST"
+wtype -k Return
+sleep "$SETTLE"
+
+wtype -- ":e $NAVBACK_FILE_SECOND"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- Step 3: the BEFORE state, read out of Neovim ---------------------------
+#
+# A PRECONDITION, not a discriminator: it proves the second `:e` took effect, so a
+# failure of the AFTER readback below can be attributed to the navigation rather
+# than to a keystroke that never landed.
+wtype -- ":call writefile([bufname('%')], '$BEFORE')"
+wtype -k Return
+wait_file "$BEFORE" || exit 24
+
+# --- Step 4: the chord under test -------------------------------------------
+#
+# `-M <mod>` / `-m <mod>` press / release a modifier and `-k <key>` presses+releases
+# a key while the held modifiers apply, exactly as in the Ctrl+Shift chord
+# scenarios. Chord delivery is isolated to this single line.
+#
+# If the action were NOT installed, `AppShell::install_chord_controller` returns
+# Propagation::Proceed and this reaches Neovim as <A-Left>, which unmapped splits
+# into <Esc> + <Left> -- so a broken build does not merely fail to navigate, it
+# types into the buffer. The AFTER readback below is what tells the two apart.
+wtype -M alt -k Left -m alt
+
+# Let the blocking history move and the repaint land.
+sleep "$SETTLE"
+
+# --- Step 5: the AFTER state, read out of Neovim ----------------------------
+#
+# THE DISCRIMINATOR. An exact buffer name, which no sidebar row and no `:e` toast
+# can forge and which OCR is structurally incapable of answering precisely.
+wtype -- ":call writefile([bufname('%')], '$AFTER')"
+wtype -k Return
+wait_file "$AFTER" || exit 25
+
+# --- Step 6: park the block cursor off the asserted row ---------------------
+#
+# The inverted cursor block corrupts the cell it covers, and the asserted heading is
+# on row 0. In normal mode `o` opens a new line BELOW and enters insert on it;
+# Escape parks the cursor there (the SCENARIO precedent).
+wtype -- o
+wtype -k Escape
+
+# Let the redraw land before capturing.
+sleep "$SETTLE"
+
+# Capture the live window to the output PNG.
+grim "$OUT_PNG"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+// ---------------------------------------------------------------------------
+// Sidebar-toggle smoke: Ctrl+Shift+B hides the file tree.
+//
+// The only end-to-end coverage of `win.toggle-sidebar`: the chord resolving through
+// `actions::action_for_key`, `command_action::ui_action_for` classifying
+// `Command::ToggleSidebar` as a dispatched `UiAction::ToggleSidebar` rather than a
+// Deferred one, `shell::perform`'s arm flipping the stored preference, and
+// `AppShell::apply_sidebar_visibility` -- over `state_seam::sidebar_is_shown` --
+// being the single site that touches the widget.
+//
+// ## The observable is a NAME, and that is deliberate
+//
+// The sidebar's only text is the file names it lists, so the honest observable for
+// "the sidebar is gone" is a filename that vanishes. `SIDEBARTOGGLE_FILE` is
+// therefore named AFTER its asserted term -- the same exemption `TREE_FILE_NAME` and
+// `OPENRECENT_TARGET_FILE` carry -- and it is never opened, so nothing but a
+// sidebar row can draw it. Its exemption's preconditions, including the crossed
+// pair against the keep-term, are asserted in
+// `restore_fixture_names_cannot_satisfy_their_own_assertions` rather than left as
+// prose here.
+//
+// ## Why a `!contains` needs three guards
+//
+// A must-NOT-contain assertion is satisfied by a crashed window, a blank one, and
+// one whose sidebar never populated in the first place. All three are closed:
+// capture A must CONTAIN the term (the tree was populated at all), capture B must
+// contain the KEEP term (the window is still drawing, so a crash cannot satisfy the
+// next line), and the fixture/term crossed pair is asserted in guard 3. Do not
+// weaken any of the three.
+
+/// Sidebar-toggle smoke: the file that is NEVER opened. Its NAME is the sidebar
+/// observable, so it deliberately CONTAINS [`SIDEBARTOGGLE_OCR_ABSENT`] — the
+/// documented exemption this smoke shares with
+/// [`tree_sidebar_shows_files_under_cage`].
+const SIDEBARTOGGLE_FILE: &str = "sbtangoleaf.md";
+
+/// Lowercased substring OCR must find in capture A and must NOT find in capture B:
+/// the sidebar row for [`SIDEBARTOGGLE_FILE`].
+const SIDEBARTOGGLE_OCR_ABSENT: &str = "sbtangoleaf";
+
+/// Sidebar-toggle smoke: the file the pane OPENS, so the editor keeps drawing text
+/// after the sidebar is hidden.
+///
+/// Deliberately unlike [`SIDEBARTOGGLE_OCR_KEEP`], the ordinary convention: the
+/// keep-term must come from a rendered BUFFER, or a hidden sidebar plus a blank
+/// editor would still satisfy it.
+const SIDEBARTOGGLE_OPEN_FILE: &str = "sbwhiskey.md";
+
+/// Heading written into [`SIDEBARTOGGLE_OPEN_FILE`]; lowercased it contains
+/// [`SIDEBARTOGGLE_OCR_KEEP`].
+const SIDEBARTOGGLE_HEADING: &str = "# SIDEBARKEEPALFA";
+
+/// Lowercased substring OCR must find in BOTH captures: the heading of the file the
+/// editor holds throughout.
+///
+/// In capture B it is the ANTI-VACUITY assertion — the window is still drawing, so
+/// a crash or a blank frame cannot satisfy the must-NOT-contain assertion that
+/// follows it.
+const SIDEBARTOGGLE_OCR_KEEP: &str = "sidebarkeepalfa";
+
+/// The SIDEBAR-TOGGLE scenario, run as a single `sh -c` string INSIDE `cage`:
+/// launch the app, poll until `cage` is up (NOT until the window maps — see
+/// [`SCENARIO`]'s `SETTLE` comment), settle long enough for the streamed
+/// `FileSearch` to populate the tree (the [`TREE_SCENARIO`] budget), open the
+/// editor fixture, park the block cursor, capture A, fire Ctrl+Shift+B, settle,
+/// capture B.
+///
+/// Standalone — it does NOT need [`with_nvim_pid_helper`], and it writes no
+/// readback file: both of its observables are pixels, and the three-way guard
+/// described above the `SIDEBARTOGGLE_*` consts is what keeps the `!contains` half
+/// honest.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before its window mapped (the shared convention).
+const SIDEBARTOGGLE_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+# Extra settle for the streamed FileSearch traversal to populate the tree. Capture A
+# asserts a sidebar ROW is on screen, so this budget is load-bearing here in a way
+# it is not in the keyboard smokes: without it capture A is empty of the term and
+# the smoke fails at its own precondition. Matches TREE_SCENARIO.
+TREE_SETTLE=1.5
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome sidebar-toggle smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw, plus extra time for the tree's FileSearch
+# to stream the cwd listing into the sidebar.
+sleep "$SETTLE"
+sleep "$TREE_SETTLE"
+
+# --- Step 2: open the editor fixture ----------------------------------------
+#
+# The editor must keep drawing text after the sidebar goes away, or capture B's
+# anti-vacuity assertion has nothing to find and a blank window would satisfy the
+# must-NOT-contain assertion that follows it.
+wtype -- ":e $SIDEBARTOGGLE_OPEN_FILE"
+wtype -k Return
+sleep "$SETTLE"
+
+# Park the block cursor off the asserted heading's row (the SCENARIO precedent):
+# the inverted cursor block corrupts the cell it covers, and the heading is row 0.
+wtype -- o
+wtype -k Escape
+sleep "$SETTLE"
+
+# --- Step 3: capture A, with the sidebar still SHOWN ------------------------
+#
+# Both of its assertions are PRECONDITIONS: that the tree was populated at all, and
+# that the editor is drawing the keep-term. Without them the whole smoke could pass
+# against a window that never rendered a sidebar in the first place.
+grim "$OUT_PNG_BEFORE"
+
+# --- Step 4: the chord under test -------------------------------------------
+#
+# Ctrl+Shift+B is `win.toggle-sidebar`. If the action were not installed the chord
+# falls through to Neovim as <C-b> (page backward), which on this one-line buffer
+# does nothing visible -- so a broken build leaves the sidebar exactly where it was,
+# which is precisely what capture B's must-NOT-contain assertion detects.
+wtype -M ctrl -M shift -k b -m shift -m ctrl
+
+# Let the widget hide and the paned re-allocate before capturing.
+sleep "$SETTLE"
+
+# --- Step 5: capture B, with the sidebar HIDDEN -----------------------------
+grim "$OUT_PNG"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
 /// Creates a fresh, unique temp directory to serve as the launched app's working
 /// directory. The app derives `CoreConfig.cwd` from `std::env::current_dir()`, so
 /// this is the directory the file-search traversal walks and the directory the
@@ -7568,7 +7950,7 @@ const HOME_STATE_DIR_FALLBACKS: [&str; 2] = [".local/state/wolf", ".local/share/
 /// the "Note (OCR width)" / "Note (OCR height)" paragraphs above their own consts,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
-/// be applied here to all thirty-one.
+/// be applied here to all thirty-three.
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
@@ -8469,7 +8851,15 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// documented exemption block for it and for the target DIRECTORY the header bar
 /// draws beside it.
 ///
-/// Twenty-six of the thirty-one smokes appear here. FIVE contribute no rows at
+/// [`SIDEBARTOGGLE_OCR_ABSENT`] is the third of that kind and the only one asserted
+/// in BOTH directions by the SAME smoke: its subject is the sidebar ROW for
+/// [`SIDEBARTOGGLE_FILE`], present in the first capture (the tree was populated) and
+/// absent from the second (the toggle hid it). That file is therefore likewise
+/// absent from [`RELAUNCH_FIXTURE_NAMES`], with its own exemption block.
+/// [`SIDEBARTOGGLE_OCR_KEEP`] is an ordinary content term and follows the ordinary
+/// rule.
+///
+/// Twenty-eight of the thirty-three smokes appear here. FIVE contribute no rows at
 /// all, on purpose, and it is worth being explicit about which and why:
 ///
 /// * [`colon_qa_closes_the_window_under_cage`] captures no PNG and asserts only that
@@ -8731,6 +9121,26 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         "DIVIDER_OCR_RIGHT",
         "dragged_divider_weights_survive_relaunch_under_cage",
     ),
+    (
+        NAVBACK_OCR_PRESENT,
+        "NAVBACK_OCR_PRESENT",
+        "alt_left_navigates_back_to_the_previous_file_under_cage",
+    ),
+    (
+        NAVBACK_OCR_ABSENT,
+        "NAVBACK_OCR_ABSENT",
+        "alt_left_navigates_back_to_the_previous_file_under_cage",
+    ),
+    (
+        SIDEBARTOGGLE_OCR_ABSENT,
+        "SIDEBARTOGGLE_OCR_ABSENT",
+        "sidebar_toggle_chord_hides_the_file_tree_under_cage",
+    ),
+    (
+        SIDEBARTOGGLE_OCR_KEEP,
+        "SIDEBARTOGGLE_OCR_KEEP",
+        "sidebar_toggle_chord_hides_the_file_tree_under_cage",
+    ),
 ];
 
 /// Every fixture NAME a smoke creates inside its OWN working directory, as
@@ -8868,6 +9278,37 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "STALL_FILE",
         "stalled_nvim_raises_the_stall_overlay_under_cage",
     ),
+    (
+        NAVBACK_FILE_FIRST,
+        "NAVBACK_FILE_FIRST",
+        "alt_left_navigates_back_to_the_previous_file_under_cage",
+    ),
+    (
+        NAVBACK_FILE_SECOND,
+        "NAVBACK_FILE_SECOND",
+        "alt_left_navigates_back_to_the_previous_file_under_cage",
+    ),
+    (
+        NAVBACK_READBACK_BEFORE,
+        "NAVBACK_READBACK_BEFORE",
+        "alt_left_navigates_back_to_the_previous_file_under_cage",
+    ),
+    (
+        NAVBACK_READBACK_AFTER,
+        "NAVBACK_READBACK_AFTER",
+        "alt_left_navigates_back_to_the_previous_file_under_cage",
+    ),
+    // SIDEBARTOGGLE_FILE is DELIBERATELY absent: its NAME is the sidebar-toggle
+    // smoke's assertion subject, so the generic loop below — which forbids a fixture
+    // name from containing any asserted term — would reject it. It carries the same
+    // documented exemption TREE_FILE_NAME and OPENRECENT_TARGET_FILE do, and the
+    // fifth block of `restore_fixture_names_cannot_satisfy_their_own_assertions`
+    // asserts its crossed pair instead.
+    (
+        SIDEBARTOGGLE_OPEN_FILE,
+        "SIDEBARTOGGLE_OPEN_FILE",
+        "sidebar_toggle_chord_hides_the_file_tree_under_cage",
+    ),
 ];
 
 /// Mechanically enforces the naming invariant documented on [`SIDEBAR_FILLER_FILES`]:
@@ -8913,7 +9354,10 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 /// `stallfixture` ([`STALL_OCR_ABSENT`]); and — added with the project-search unit
 /// — `projsearchalfa` ([`PROJSEARCH_OCR_PRESENT`]) and `projsearchdelta`
 /// ([`PROJSEARCH_OCR_ABSENT`]); and — added with the Open Recent unit — `ortango`
-/// ([`OPENRECENT_OCR_PRESENT`]). None is a
+/// ([`OPENRECENT_OCR_PRESENT`]); and — added with the navigation-history unit —
+/// `navbackalfa` ([`NAVBACK_OCR_PRESENT`]), `navbackbravo`
+/// ([`NAVBACK_OCR_ABSENT`]), `sbtangoleaf` ([`SIDEBARTOGGLE_OCR_ABSENT`]) and
+/// `sidebarkeepalfa` ([`SIDEBARTOGGLE_OCR_KEEP`]). None is a
 /// substring of any [`SIDEBAR_FILLER_FILES`] entry, and no filler may be renamed to
 /// make one so. Five smokes contribute no term:
 /// [`colon_qa_closes_the_window_under_cage`] asserts on the cage exit status and
@@ -8951,7 +9395,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the thirty-one smokes — still
+/// nothing to the smoke suite's runtime and — unlike the thirty-three smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
@@ -9156,7 +9600,7 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// Both directions matter: a must-CONTAIN term in a fixture name makes its smoke
 /// pass vacuously, and a must-NOT-CONTAIN term makes it fail spuriously.
 ///
-/// ## The two deliberate, documented exemptions
+/// ## The three deliberate, documented exemptions
 ///
 /// The title smoke's two DIRECTORY names are not files and are not in
 /// [`RELAUNCH_FIXTURE_NAMES`], because they are the assertion's subject rather
@@ -9180,6 +9624,20 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// title alone — with the sidebar never re-rooting and `settle_pending_reroot`
 /// never firing. The fourth block below asserts both halves, plus that neither
 /// name carries any OTHER asserted term.
+///
+/// The sidebar-toggle smoke is the third, and its crossed pair is the sharpest of
+/// the three because both halves are asserted by the SAME smoke on the SAME pair of
+/// captures. [`SIDEBARTOGGLE_FILE`]'s NAME is the observable — the file is never
+/// opened, so only a tree row can draw it — and it must therefore contain
+/// [`SIDEBARTOGGLE_OCR_ABSENT`], which the generic loop forbids; it is likewise
+/// absent from [`RELAUNCH_FIXTURE_NAMES`]. The crossed half is that it must NOT
+/// contain [`SIDEBARTOGGLE_OCR_KEEP`]: that term is the ANTI-VACUITY assertion on
+/// the second capture, so it has to come from the EDITOR rather than the sidebar,
+/// or hiding the sidebar would remove the proof-of-life along with the subject and
+/// the two assertions would contradict each other on a correct run. The fifth block
+/// below asserts both halves, that the editor fixture carries neither term in its
+/// NAME, that its heading carries the keep-term, and that
+/// [`SIDEBARTOGGLE_FILE`] carries no OTHER asserted term.
 ///
 /// ## The two fixtures whose CONTENT is checked too
 ///
@@ -9326,6 +9784,86 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
                  other asserted term still applies to them."
             );
         }
+    }
+
+    // The sidebar-toggle smoke's exemption, the same shape as the title smoke's and
+    // the Open Recent one's: one fixture whose NAME is the assertion's subject, and
+    // one that is on screen beside it and must therefore stay clear of both terms.
+    //
+    // The CROSSED half is the one that matters. Capture A asserts the term is
+    // PRESENT, and the only thing that can draw it is the sidebar row for
+    // SIDEBARTOGGLE_FILE — so if the name stops containing the term, capture A's
+    // precondition fails for a fixture reason and the smoke reports it as if the
+    // sidebar had never populated.
+    assert!(
+        SIDEBARTOGGLE_FILE
+            .to_lowercase()
+            .contains(SIDEBARTOGGLE_OCR_ABSENT),
+        "SIDEBARTOGGLE_FILE = {SIDEBARTOGGLE_FILE:?} no longer contains SIDEBARTOGGLE_OCR_ABSENT = \
+         {SIDEBARTOGGLE_OCR_ABSENT:?}. That FILENAME is the sidebar's only observable — the file is \
+         never opened, so nothing but a tree row can draw the word — and capture A asserts it is \
+         PRESENT. If the two stop agreeing, capture A is VACUOUS: the term is absent from BOTH \
+         captures whatever the toggle did, so the smoke's must-NOT-contain discriminator would \
+         hold permanently while proving nothing. This file is exempt from the \
+         RELAUNCH_FIXTURE_NAMES loop above for exactly this reason."
+    );
+    assert!(
+        !SIDEBARTOGGLE_FILE
+            .to_lowercase()
+            .contains(SIDEBARTOGGLE_OCR_KEEP),
+        "SIDEBARTOGGLE_FILE = {SIDEBARTOGGLE_FILE:?} contains SIDEBARTOGGLE_OCR_KEEP = \
+         {SIDEBARTOGGLE_OCR_KEEP:?}. The keep-term is the ANTI-VACUITY assertion on capture B — it \
+         is what proves the window is still DRAWING, so that a crashed or blank window cannot \
+         satisfy the must-NOT-contain assertion beside it. Sourcing it from a sidebar row would \
+         destroy that: the row and the thing being hidden are the same object, so hiding the \
+         sidebar would remove the proof-of-life along with the subject and the two assertions \
+         would contradict each other on a perfectly correct run."
+    );
+    for (name, name_const) in [
+        (SIDEBARTOGGLE_OPEN_FILE, "SIDEBARTOGGLE_OPEN_FILE"),
+        (SIDEBARTOGGLE_HEADING, "SIDEBARTOGGLE_HEADING"),
+    ] {
+        assert!(
+            !name.to_lowercase().contains(SIDEBARTOGGLE_OCR_ABSENT),
+            "{name_const} = {name:?} contains SIDEBARTOGGLE_OCR_ABSENT = \
+             {SIDEBARTOGGLE_OCR_ABSENT:?}. Both of these are drawn by the EDITOR — the filename by \
+             nvim's `:e` toast and the sidebar row, the heading by the pane itself — and the editor \
+             keeps drawing after the sidebar is hidden. Either one carrying the term would make \
+             capture B's must-NOT-contain assertion fail on a correct run, i.e. a hidden sidebar \
+             would look like a broken one."
+        );
+    }
+    assert!(
+        SIDEBARTOGGLE_HEADING
+            .to_lowercase()
+            .contains(SIDEBARTOGGLE_OCR_KEEP),
+        "SIDEBARTOGGLE_HEADING = {SIDEBARTOGGLE_HEADING:?} does not contain \
+         SIDEBARTOGGLE_OCR_KEEP = {SIDEBARTOGGLE_OCR_KEEP:?}. That heading is the only place the \
+         keep-term exists, so if the two stop agreeing both captures assert on a word nothing \
+         draws and the smoke fails with no visible cause."
+    );
+    assert!(
+        !SIDEBARTOGGLE_OPEN_FILE
+            .to_lowercase()
+            .contains(SIDEBARTOGGLE_OCR_KEEP),
+        "SIDEBARTOGGLE_OPEN_FILE = {SIDEBARTOGGLE_OPEN_FILE:?} contains SIDEBARTOGGLE_OCR_KEEP = \
+         {SIDEBARTOGGLE_OCR_KEEP:?}. The keep-term must come from a RENDERED BUFFER: with the term \
+         in the filename, the sidebar row and the `:e` toast would satisfy capture B's \
+         proof-of-life assertion even with the editor pane drawing nothing at all, and the \
+         must-NOT-contain assertion beside it would then be unguarded again."
+    );
+    for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {
+        if term == SIDEBARTOGGLE_OCR_ABSENT {
+            continue;
+        }
+        assert!(
+            !SIDEBARTOGGLE_FILE.to_lowercase().contains(term),
+            "SIDEBARTOGGLE_FILE = {SIDEBARTOGGLE_FILE:?} contains {term_const} = {term:?}. It is \
+             page text in its smoke's capture A as a tree-sidebar row, so this word would satisfy \
+             — or, for a must-NOT-contain term, spuriously break — `{smoke}`'s OCR assertion. This \
+             name is EXEMPT from the RELAUNCH_FIXTURE_NAMES loop above only for \
+             SIDEBARTOGGLE_OCR_ABSENT itself; every other asserted term still applies to it."
+        );
     }
 
     // The one relaunch fixture whose CONTENT is more than a heading, checked here
@@ -14760,7 +15298,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// | the active-pane FOCUS RING's top edge — a long thin high-contrast line immediately above the heading | six ablations on one PNG; the top edge alone accounted for it | [`DIVIDER_RELAUNCH_SCENARIO`]'s closing `<C-w>h`, which moves the ring to the WIDE pane |
 /// | a single misclassified GLYPH at 15 columns | the same pixels read through both segmentation modes, twice over | the second reader, [`ocr_uniform_block_to_lowercase`] |
 ///
-/// The third is why this smoke, alone of the thirty-one, reads its capture twice.
+/// The third is why this smoke, alone of the thirty-three, reads its capture twice.
 /// With the first two answered, on one retained PNG:
 ///
 /// | command | verbatim output |
@@ -15641,6 +16179,411 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
         real_recent_file.display(),
         real_before.as_ref().map(Vec::len),
         real_after.as_ref().map(Vec::len)
+    );
+}
+
+/// Alt+Left navigates the focused pane BACK to the file it was showing before.
+///
+/// ## What it covers that nothing else does
+///
+/// The whole per-pane navigation path, end to end and in the only place all of it
+/// is joined together:
+///
+/// * the capture-phase chord controller resolving `<Alt>Left` through
+///   `actions::action_for_key` — GTK's own keymap-aware matching does not fire
+///   under `wtype`, so this is the real matcher;
+/// * `win.history-back` being INSTALLED at all. It is the first action in this
+///   crate with no `wolf_core::Command`, so `shell::install_actions` reaches it
+///   only through `command_action::ui_action_for_front_end_action`; the ordinary
+///   command branch never sees it, and a row that resolves in neither place is
+///   skipped with a printed reason and an accelerator pointing at nothing;
+/// * `shell::perform`'s `UiAction::HistoryBack` arm and `AppShell::navigate`;
+/// * `nav_ui::nav_press` ACCEPTING against a live core with a focused window —
+///   the seam's tables cover the refusals, and nothing but this smoke covers the
+///   acceptance reaching a real `WolfCore`;
+/// * `WolfCore::history_back`'s blocking move through `_G.wolf_history_set_buf`,
+///   and the repaint that follows it.
+///
+/// Forward is NOT smoked. `nav_press` / `nav_buttons` treat the two symmetrically
+/// and `history_forward` mirrors `history_back` in core, but the widget wiring for
+/// Forward is undiscriminated — recorded in `tests/README.md`, "What is still
+/// unproven".
+///
+/// ## Why the readbacks exist
+///
+/// OCR alone cannot tell "Back worked" from "the second `:e` never happened":
+/// both leave [`NAVBACK_HEADING_FIRST`] on screen. The scenario therefore has the
+/// captive Neovim write `bufname('%')` before and after the chord, with their own
+/// exit codes, so the failure is ATTRIBUTED rather than merely detected.
+///
+/// ## Assertions, classified
+///
+/// A precondition gets NO revert: inventing one would manufacture a discriminator
+/// this smoke does not have. The `measured` column is the coder's to fill from an
+/// actual red run, per `tests/README.md`'s "A red-run demonstration is a
+/// deliverable, not a formality".
+///
+/// | # | assertion | kind | revert | measured |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | |
+/// | 2 | [`assert_png_present`] | precondition — grim produced an image | none; do not invent one | |
+/// | 3 | `$BEFORE` names [`NAVBACK_FILE_SECOND`] | **precondition, not a discriminator** — it proves the second `:e` took effect, so a failure of assertion 4 can be attributed to the navigation rather than to a keystroke that never landed | none | |
+/// | 4 | `$AFTER` names [`NAVBACK_FILE_FIRST`] | **the discriminator** | replace `shell::perform`'s `UiAction::HistoryBack` arm body with `{}`. The chord still resolves and the action still activates, but nothing navigates, so `bufname('%')` still reads `nbyankee.md`. Isolated: every headless test stays green. | |
+/// | 5 | OCR contains [`NAVBACK_OCR_PRESENT`] | **discriminator** — the pane really repainted the file it moved to, which the readback alone cannot show | the same revert | |
+/// | 6 | OCR lacks [`NAVBACK_OCR_ABSENT`] | **discriminator with NO isolated red run** | the same revert reddens assertion 5 first, and 5 is evaluated first. With one pane two headings cannot both be on screen, so nothing reddens this alone: its contribution is naming WHICH file is showing, not detecting that the wrong one is. The same shape as the bare-Enter buffer-picker smoke's must-not-contain assertion. | |
+#[test]
+fn alt_left_navigates_back_to_the_previous_file_under_cage() {
+    const SMOKE: &str = "alt_left_navigates_back_to_the_previous_file_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd holding the two fixtures plus the sidebar fillers. See
+    // `make_temp_cwd` for why the isolation is mandatory rather than tidy, and
+    // `SIDEBAR_FILLER_COUNT` for why the page needs the density.
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(
+        SMOKE,
+        &cwd,
+        &[
+            (NAVBACK_FILE_FIRST, NAVBACK_HEADING_FIRST),
+            (NAVBACK_FILE_SECOND, NAVBACK_HEADING_SECOND),
+        ],
+    );
+
+    // The two readbacks land in the cwd (the sidebar lists them, which is why their
+    // names are registered in `RELAUNCH_FIXTURE_NAMES`). Cleared first: evidence
+    // that could be a previous run's leftover is not evidence.
+    let before = cwd.join(NAVBACK_READBACK_BEFORE);
+    let after = cwd.join(NAVBACK_READBACK_AFTER);
+    let out_png = runtime_dir.join("wolf_gnome_navback_smoke.png");
+    for path in [&before, &after, &out_png] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let status = cage_command(NAVBACK_SCENARIO, &cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("NAVBACK_FILE_FIRST", NAVBACK_FILE_FIRST)
+        .env("NAVBACK_FILE_SECOND", NAVBACK_FILE_SECOND)
+        .env("BEFORE", &before)
+        .env("AFTER", &after)
+        .status()
+        .expect("failed to spawn `cage` for the headless nav-back smoke scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage nav-back scenario exited unsuccessfully ({status}). Read the exit code \
+         FIRST.\n\
+         Exit 11: the app died before its window ever mapped — a LAUNCH failure, and nothing below \
+         is about navigation.\n\
+         Exit 24: the BEFORE `bufname('%')` readback never appeared, so keys were not reaching \
+         Neovim at all. Check the keyboard-only smokes first; nothing here is diagnosable.\n\
+         Exit 25: the AFTER readback never appeared even though the BEFORE one did. Keys were \
+         reaching Neovim and then stopped, which is what a chord that WEDGED the app looks like — \
+         `AppShell::navigate` holding a `RefCell` borrow across the blocking \
+         `WolfCore::history_back` is the first thing to check, and the snapshot read guard being \
+         bound to a local in its own statement is the second (the `capture_open_files` \
+         precedent).\n\
+         Any other status means wtype or grim failed, or a `:e` did not load. Note this assertion \
+         says nothing about whether the chord did anything: the scenario exits 0 either way.\n\
+         Screenshot expected at {}.",
+        out_png.display()
+    );
+
+    // --- Assertion 2 (precondition): grim produced an image -------------------
+    assert_png_present(SMOKE, &out_png);
+
+    // --- Assertion 3 (PRECONDITION, not a discriminator) ----------------------
+    //
+    // It proves the second `:e` took effect. Without it, a failure of assertion 4
+    // could equally mean "Back did not work" or "the pane was never on the second
+    // file to begin with", and OCR cannot separate those: both leave the FIRST
+    // file's heading on screen.
+    let before_name = read_trimmed(&before, SMOKE);
+    assert_eq!(
+        before_name, NAVBACK_FILE_SECOND,
+        "{SMOKE}: before the chord Neovim reported its current buffer as {before_name:?}, not \
+         {NAVBACK_FILE_SECOND:?}. This is a PRECONDITION failure, not a navigation one: the second \
+         `:e` never took effect, so the pane had nothing to go Back FROM and everything below \
+         would be measuring the wrong starting state. Keys reaching the buffer instead of the \
+         cmdline is the usual cause. Readback kept at {}.",
+        before.display()
+    );
+
+    // --- Assertion 4 (THE DISCRIMINATOR): the pane moved back -----------------
+    //
+    // An exact buffer name, which no sidebar row, no `:e` toast and no header-bar
+    // segment can forge, and which OCR is structurally incapable of answering
+    // precisely.
+    let after_name = read_trimmed(&after, SMOKE);
+    assert_eq!(
+        after_name, NAVBACK_FILE_FIRST,
+        "{SMOKE}: after Alt+Left Neovim reported its current buffer as {after_name:?}, not \
+         {NAVBACK_FILE_FIRST:?}. Assertion 3 passed, so the pane really was on \
+         {NAVBACK_FILE_SECOND:?} going in — the navigation is what did not happen. The likely \
+         causes, in order:\n\
+         (a) THE CHORD NEVER FIRED. `actions::action_for_key` only scans BOUND rows, so check that \
+         `win.history-back`'s BindingStatus is Bound rather than Reserved. If the chord fell \
+         through to Neovim instead, it arrived as <A-Left>, which unmapped splits into <Esc> + \
+         <Left> — so look for a stray cursor move rather than for nothing at all.\n\
+         (b) THE ACTION WAS NOT INSTALLED. `win.history-back` carries no `wolf_core::Command`, so \
+         `shell::install_actions` can only reach it through \
+         `command_action::ui_action_for_front_end_action`. A row that resolves in NEITHER place is \
+         skipped with a printed reason while its accelerator is still registered: the chord is \
+         then swallowed in the capture phase and does nothing at all. The app's stderr names it.\n\
+         (c) `nav_ui::nav_press` REFUSED. It prints \"navigation not performed: <reason>\" to \
+         stderr, and the reason names which arm: a core that is not Alive, or a `Snapshot::active_win` \
+         that is None or 0.\n\
+         (d) THE MOVE FAILED AND REVERTED. `WolfCore::history_back` returns false when the \
+         recorded target is gone or the bind throws, and `apply_nav` then reverts the cursor — the \
+         pane legitimately does not move. That is covered headlessly by \
+         `crates/wolf-core/tests/nav_history_live.rs`; if it is happening HERE, the pane's history \
+         is not what this scenario built.\n\
+         Readbacks kept at {} and {}; screenshot at {}.",
+        before.display(),
+        after.display(),
+        out_png.display()
+    );
+
+    let ocr_text = ocr_to_lowercase(&out_png);
+
+    // --- Assertion 5 (discriminator): the pane really REPAINTED ---------------
+    //
+    // The readback proves Neovim's own current buffer changed; only this proves the
+    // GTK side drew the result. A pane view that never rebound the grid would leave
+    // assertion 4 green and this one red.
+    assert!(
+        ocr_text.contains(NAVBACK_OCR_PRESENT),
+        "{SMOKE}: OCR did not contain {NAVBACK_OCR_PRESENT:?} — the HEADING of \
+         {NAVBACK_FILE_FIRST}, which renders only once the pane really holds that buffer again. \
+         Assertion 4 passed, so NEOVIM moved; this says the WINDOW did not draw the result. Check \
+         that `AppShell::navigate` ends in a refresh rather than waiting for a wake that may not \
+         come, and that the pane view rebinds the grid. If the capture looks right to the eye, \
+         suspect OCR density before touching anything — the fillers are written for that reason \
+         (see SIDEBAR_FILLER_COUNT). PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+
+    // --- Assertion 6 (discriminator, NO isolated red run) ---------------------
+    //
+    // With one pane two headings cannot both be on screen, so no revert reddens this
+    // alone — assertion 5 fails first and is evaluated first. Its contribution is
+    // naming WHICH file is showing, not detecting that the wrong one is. Recorded
+    // rather than dressed up; the same shape as the bare-Enter buffer-picker smoke's
+    // must-not-contain assertion.
+    assert!(
+        !ocr_text.contains(NAVBACK_OCR_ABSENT),
+        "{SMOKE}: OCR unexpectedly contained {NAVBACK_OCR_ABSENT:?} — the heading of \
+         {NAVBACK_FILE_SECOND}, the file the pane was asked to navigate AWAY from. The pane is \
+         still showing it, so either the chord did nothing or the move was reverted. Assertion 5 \
+         above is red too in that case and it is the one to read first. The assertion is sound: \
+         after `:e {NAVBACK_FILE_SECOND}` Neovim's toast and the sidebar row both show the \
+         FILENAME, whose lowercase does not contain {NAVBACK_OCR_ABSENT:?}. PNG kept at {} for \
+         inspection. OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+}
+
+/// Ctrl+Shift+B hides the file-tree sidebar, and the editor keeps drawing.
+///
+/// ## What it covers that nothing else does
+///
+/// The only end-to-end coverage of `win.toggle-sidebar`, which this unit promotes
+/// from Reserved: the chord resolving through `actions::action_for_key`,
+/// `command_action::ui_action_for` classifying `Command::ToggleSidebar` as a
+/// DISPATCHED `UiAction::ToggleSidebar` rather than a `Deferred` one,
+/// `shell::perform`'s arm flipping the stored preference, and
+/// `AppShell::apply_sidebar_visibility` — over `state_seam::sidebar_is_shown` —
+/// being the single site that touches the widget.
+///
+/// It does NOT cover the RESTORE half: no smoke hides the sidebar, quits and
+/// relaunches. That gap is recorded in `tests/README.md`, "What is still unproven",
+/// together with the reason it matters — the persistence write side changed from
+/// `!empty` to the stored preference, and a stale write plus a live read would hide
+/// the sidebar after any empty-state session.
+///
+/// ## The three-way guard on a `!contains` assertion
+///
+/// A must-NOT-contain assertion is satisfied by a crashed window, a blank one, and
+/// one whose sidebar never populated in the first place. All three are closed, and
+/// none of the three may be weakened:
+///
+/// 1. capture A must CONTAIN [`SIDEBARTOGGLE_OCR_ABSENT`] — the tree was populated
+///    at all, so there was something to hide;
+/// 2. capture B must contain [`SIDEBARTOGGLE_OCR_KEEP`] — the window is still
+///    DRAWING, so a crash or a blank frame cannot satisfy assertion 6;
+/// 3. the fixture/term crossed pair is asserted in
+///    [`restore_fixture_names_cannot_satisfy_their_own_assertions`], so the
+///    subject cannot silently stop being drawable.
+///
+/// ## Assertions, classified
+///
+/// | # | assertion | kind | revert | measured |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | |
+/// | 2 | both PNGs present | precondition — grim produced two images | none; do not invent one | |
+/// | 3 | capture A contains [`SIDEBARTOGGLE_OCR_ABSENT`] | **precondition** — the sidebar was populated before the chord. Without it assertion 6 holds for a tree that never rendered. | none | |
+/// | 4 | capture A contains [`SIDEBARTOGGLE_OCR_KEEP`] | **precondition** — the editor was drawing before the chord, so assertion 5 is measuring a change rather than a starting state | none | |
+/// | 5 | capture B contains [`SIDEBARTOGGLE_OCR_KEEP`] | **anti-vacuity, not a discriminator** — the window is still drawing after the chord, which is what stops a crashed or blank window satisfying assertion 6 | none; it is deliberately insensitive to the toggle | |
+/// | 6 | capture B lacks [`SIDEBARTOGGLE_OCR_ABSENT`] | **the discriminator** | replace `shell::perform`'s `UiAction::ToggleSidebar` arm body with `{}`. The chord still resolves and the action still activates, but the widget never hides, so the row is still on screen in capture B. | |
+#[test]
+fn sidebar_toggle_chord_hides_the_file_tree_under_cage() {
+    const SMOKE: &str = "sidebar_toggle_chord_hides_the_file_tree_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd holding both fixtures plus the sidebar fillers. The fillers
+    // are page density for capture A and, incidentally, more rows for the toggle to
+    // take away.
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(
+        SMOKE,
+        &cwd,
+        &[(SIDEBARTOGGLE_OPEN_FILE, SIDEBARTOGGLE_HEADING)],
+    );
+
+    // The observable file is written by hand rather than through the helper, because
+    // it is deliberately absent from `RELAUNCH_FIXTURE_NAMES` (its NAME is the
+    // assertion's subject — see the fifth block of
+    // `restore_fixture_names_cannot_satisfy_their_own_assertions`). It is never
+    // opened, so its body is never rendered and exists only so the file is non-empty.
+    let observable = cwd.join(SIDEBARTOGGLE_FILE);
+    std::fs::write(&observable, SIDEBAR_FILLER_BODY).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: failed to write the sidebar observable {}: {e}",
+            observable.display()
+        )
+    });
+
+    // TWO captures: with the sidebar shown, and with it hidden. Both cleared first —
+    // evidence that could be a previous run's leftover is not evidence.
+    let out_png_before = runtime_dir.join("wolf_gnome_sidebartoggle_before_smoke.png");
+    let out_png = runtime_dir.join("wolf_gnome_sidebartoggle_after_smoke.png");
+    for path in [&out_png_before, &out_png] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let status = cage_command(SIDEBARTOGGLE_SCENARIO, &cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("OUT_PNG_BEFORE", &out_png_before)
+        .env("SIDEBARTOGGLE_OPEN_FILE", SIDEBARTOGGLE_OPEN_FILE)
+        .status()
+        .expect("failed to spawn `cage` for the headless sidebar-toggle smoke scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage sidebar-toggle scenario exited unsuccessfully ({status}).\n\
+         Exit 11: the app died before its window ever mapped — a LAUNCH failure, and nothing below \
+         is about the sidebar.\n\
+         Any other status means wtype or grim failed, or the `:e` did not load. This scenario \
+         writes no readback file, so it has no other exit codes of its own; note that it exits 0 \
+         whatever the chord did.\n\
+         Captures expected at {} (sidebar shown) and {} (sidebar hidden).",
+        out_png_before.display(),
+        out_png.display()
+    );
+
+    // --- Assertion 2 (precondition): grim produced both images ----------------
+    assert_png_present(SMOKE, &out_png_before);
+    assert_png_present(SMOKE, &out_png);
+
+    let before_text = ocr_to_lowercase(&out_png_before);
+    let after_text = ocr_to_lowercase(&out_png);
+
+    // --- Assertion 3 (PRECONDITION, not a discriminator) ----------------------
+    //
+    // The sidebar was populated at all. Without this, assertion 6 holds for a tree
+    // that never rendered a single row — the classic way a `!contains` assertion
+    // passes while proving nothing.
+    assert!(
+        before_text.contains(SIDEBARTOGGLE_OCR_ABSENT),
+        "{SMOKE}: the FIRST capture, taken with the sidebar still shown, does not contain \
+         {SIDEBARTOGGLE_OCR_ABSENT:?} — the tree row for {SIDEBARTOGGLE_FILE}. This is a \
+         PRECONDITION failure: the sidebar never listed the file, so assertion 6 below would hold \
+         whatever the toggle chord did. The likely causes, in order: (a) the streamed FileSearch \
+         had not reached the file when grim fired — raise TREE_SETTLE in \
+         SIDEBARTOGGLE_SCENARIO, do not touch the assertion; (b) the app launched into the EMPTY \
+         state, in which the sidebar is hidden from the start (check that `make_temp_cwd`'s \
+         directory is not also HOME); (c) the row rendered but OCR misread it — look at the \
+         retained capture first. PNG kept at {}. OCR output was:\n{before_text}",
+        out_png_before.display()
+    );
+
+    // --- Assertion 4 (PRECONDITION) -------------------------------------------
+    //
+    // The editor was drawing BEFORE the chord, so assertion 5 measures a state that
+    // survived rather than one that was never there.
+    assert!(
+        before_text.contains(SIDEBARTOGGLE_OCR_KEEP),
+        "{SMOKE}: the FIRST capture does not contain {SIDEBARTOGGLE_OCR_KEEP:?} — the heading of \
+         {SIDEBARTOGGLE_OPEN_FILE}, which the scenario opens before capturing. This is a \
+         PRECONDITION failure: the editor was not drawing the keep-term even before the chord, so \
+         assertion 5 could not distinguish \"the window is still alive\" from \"it never drew this \
+         at all\". Check that the `:e` landed. PNG kept at {}. OCR output was:\n{before_text}",
+        out_png_before.display()
+    );
+
+    // --- Assertion 5 (ANTI-VACUITY, not a discriminator) ----------------------
+    //
+    // Deliberately insensitive to the toggle: it is what stops a crashed, blank or
+    // frozen window from satisfying assertion 6. No revert reddens it on purpose.
+    assert!(
+        after_text.contains(SIDEBARTOGGLE_OCR_KEEP),
+        "{SMOKE}: the SECOND capture does not contain {SIDEBARTOGGLE_OCR_KEEP:?} — the heading of \
+         {SIDEBARTOGGLE_OPEN_FILE}, which the toggle must not affect. The window has stopped \
+         drawing, which means assertion 6 below cannot be trusted: a blank or crashed window \
+         satisfies a must-NOT-contain assertion just as a correctly hidden sidebar does, and this \
+         assertion exists precisely to tell the two apart. Look for a crash on the toggle path \
+         (`apply_sidebar_visibility` is the single site that calls `set_visible` and \
+         `set_position`) before concluding anything about the sidebar. Assertion 4 passed, so the \
+         editor WAS drawing this heading a moment earlier.\n\
+         One non-product cause to rule out FIRST, from the retained capture: hiding the sidebar \
+         also removes every sidebar row from the page, and `tesseract` classifies a word by the \
+         whole page (see SIDEBAR_FILLER_COUNT). If the heading is plainly legible in the PNG and \
+         only OCR disagrees, the fix is page DENSITY inside the editor — give \
+         SIDEBARTOGGLE_OPEN_FILE a digits-and-`x` body, the `divider_right_fixture_body` / \
+         `search_target_fixture_body` precedent, and register that body with the content loop in \
+         `restore_fixture_names_cannot_satisfy_their_own_assertions`. Never weaken this assertion: \
+         it is the only thing standing between assertion 6 and a blank window. PNG kept at {}. OCR \
+         output was:\n{after_text}",
+        out_png.display()
+    );
+
+    // --- Assertion 6 (THE DISCRIMINATOR): the sidebar is gone -----------------
+    assert!(
+        !after_text.contains(SIDEBARTOGGLE_OCR_ABSENT),
+        "{SMOKE}: the SECOND capture still contains {SIDEBARTOGGLE_OCR_ABSENT:?} — the tree row \
+         for {SIDEBARTOGGLE_FILE} — so Ctrl+Shift+B did not hide the sidebar. Assertion 3 proved \
+         the row was there to begin with and assertion 5 proved the window is still drawing, so \
+         this is the toggle itself. The likely causes, in order: (a) the chord never fired — check \
+         that `win.toggle-sidebar`'s BindingStatus is Bound rather than Reserved; if it fell \
+         through to Neovim it arrived as <C-b> (page backward), which on this buffer does nothing \
+         visible; (b) `command_action::ui_action_for` still classifies `Command::ToggleSidebar` as \
+         `Deferred`, in which case the app's stderr carries \"command ToggleSidebar not \
+         dispatched\"; (c) the action IS installed but is disabled — it is disabled in the empty \
+         state, and `AppShell::install_chord_controller` returns Propagation::Proceed for a \
+         disabled action; (d) `apply_sidebar_visibility` ran but `state_seam::sidebar_is_shown` \
+         answered true — its table is the fast-suite test to read. PNG kept at {} (and the \
+         before-capture at {}). OCR output was:\n{after_text}",
+        out_png.display(),
+        out_png_before.display()
     );
 }
 

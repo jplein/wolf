@@ -289,8 +289,13 @@ mod tests {
         }
     }
 
-    /// A `state.json` tree with one window carrying one tab at `cwd` with `layout`.
-    fn saved_state(cwd: &str, layout: Option<PaneNode>) -> WolfState {
+    /// A `state.json` tree with one window carrying one tab at `cwd` with `layout`,
+    /// and the sidebar preference the tab persisted.
+    fn saved_state_with_sidebar(
+        cwd: &str,
+        layout: Option<PaneNode>,
+        sidebar_visible: bool,
+    ) -> WolfState {
         WolfState {
             windows: vec![WindowState {
                 x: 0.0,
@@ -299,11 +304,17 @@ mod tests {
                 height: SAVED_H,
                 tabs: vec![TabState {
                     cwd: cwd.to_string(),
-                    sidebar_visible: true,
+                    sidebar_visible,
                     layout,
                 }],
             }],
         }
+    }
+
+    /// A `state.json` tree with one window carrying one tab at `cwd` with `layout`,
+    /// saved with the sidebar SHOWN — the shape every pre-existing row uses.
+    fn saved_state(cwd: &str, layout: Option<PaneNode>) -> WolfState {
+        saved_state_with_sidebar(cwd, layout, true)
     }
 
     /// A `state.json` tree with one window and NO tabs at all.
@@ -343,8 +354,10 @@ mod tests {
         let cases = [
             PlanCase {
                 // The compatibility row: with nothing saved, the plan is exactly
-                // today's `launch_decision` plus two `None`s.
-                desc: "no saved state at all => today's launch decision, no layout, no size",
+                // today's `launch_decision` plus two `None`s — and the sidebar
+                // DEFAULT, which is `true`: a first launch shows the file tree.
+                desc: "no saved state at all => today's launch decision, no layout, no size, and \
+                       the sidebar default of SHOWN",
                 saved: None,
                 process_cwd: Some(PROJECT),
                 home: Some(HOME),
@@ -354,6 +367,7 @@ mod tests {
                     empty: false,
                     layout: None,
                     window_size: None,
+                    sidebar_visible: true,
                 },
             },
             PlanCase {
@@ -372,6 +386,7 @@ mod tests {
                         preview: false,
                     }),
                     window_size: Some(SAVED_SIZE),
+                    sidebar_visible: true,
                 },
             },
             PlanCase {
@@ -388,6 +403,7 @@ mod tests {
                     empty: true,
                     layout: None,
                     window_size: Some(SAVED_SIZE),
+                    sidebar_visible: true,
                 },
             },
             PlanCase {
@@ -403,6 +419,7 @@ mod tests {
                     empty: true,
                     layout: None,
                     window_size: None,
+                    sidebar_visible: true,
                 },
             },
             PlanCase {
@@ -418,6 +435,7 @@ mod tests {
                     empty: true,
                     layout: None,
                     window_size: Some(SAVED_SIZE),
+                    sidebar_visible: true,
                 },
             },
             PlanCase {
@@ -433,6 +451,7 @@ mod tests {
                     empty: true,
                     layout: None,
                     window_size: Some(SAVED_SIZE),
+                    sidebar_visible: true,
                 },
             },
             PlanCase {
@@ -446,6 +465,7 @@ mod tests {
                     empty: false,
                     layout: None,
                     window_size: Some(SAVED_SIZE),
+                    sidebar_visible: true,
                 },
             },
             PlanCase {
@@ -462,6 +482,51 @@ mod tests {
                     empty: true,
                     layout: None,
                     window_size: Some(SAVED_SIZE),
+                    sidebar_visible: true,
+                },
+            },
+            PlanCase {
+                // THE READ-BACK ROW. Every row above saved the sidebar SHOWN, so a
+                // `restore_plan` that hardcoded `sidebar_visible: true` and never
+                // looked at the tab would satisfy all eight of them. This is the one
+                // that makes the field a reading rather than an assumption.
+                desc: "a tab saved with the sidebar HIDDEN restores hidden",
+                saved: Some(saved_state_with_sidebar(
+                    SAVED,
+                    Some(leaf(SAVED_FILE)),
+                    false,
+                )),
+                process_cwd: Some(SAVED),
+                home: Some(HOME),
+                dirs: &[HOME, SAVED],
+                want: RestorePlan {
+                    core_cwd: PathBuf::from(SAVED),
+                    empty: false,
+                    layout: Some(PaneNode::Leaf {
+                        path: SAVED_FILE.to_string(),
+                        preview: false,
+                    }),
+                    window_size: Some(SAVED_SIZE),
+                    sidebar_visible: false,
+                },
+            },
+            PlanCase {
+                // The preference is INDEPENDENT of the launch decision: the empty
+                // state overrides it at APPLY time (`state_seam::sidebar_is_shown`),
+                // not at restore time. Folding the override in here would lose the
+                // user's preference the first time they launched into an empty state,
+                // and the next save would then persist the fold.
+                desc: "a HIDDEN sidebar survives an empty-state launch decision unchanged",
+                saved: Some(saved_state_with_sidebar(GONE, None, false)),
+                process_cwd: Some(HOME),
+                home: Some(HOME),
+                dirs: &[HOME],
+                want: RestorePlan {
+                    core_cwd: PathBuf::from(HOME),
+                    empty: true,
+                    layout: None,
+                    window_size: Some(SAVED_SIZE),
+                    sidebar_visible: false,
                 },
             },
         ];
@@ -536,6 +601,7 @@ mod tests {
                 empty: false,
                 layout: Some(layout),
                 window_size: Some(SAVED_SIZE),
+                sidebar_visible: true,
             },
             "relaunching IN the saved project must restore its layout verbatim. This is the exact \
              shape the relaunch smokes run: same cwd, same state dir, layout expected back."
@@ -571,6 +637,114 @@ mod tests {
             Some(SAVED_SIZE),
             "the restored window SIZE must survive a dropped cwd and a dropped layout. It is a \
              property of the window, not of the project."
+        );
+    }
+
+    // =====================================================================
+    // sidebar_is_shown — the user preference versus the empty state
+    // =====================================================================
+
+    /// One [`sidebar_is_shown`] table row. The expectation is DATA, deliberately
+    /// not re-derived from the same boolean expression the function under test uses
+    /// — a mirror implementation would agree with any bug it also contained (the
+    /// [`may_snapshot_table`] precedent).
+    struct SidebarCase {
+        desc: &'static str,
+        user_wants: bool,
+        empty: bool,
+        want: bool,
+    }
+
+    /// The whole two-by-two domain: the sidebar is shown exactly when the user
+    /// wants it AND there is a project to show.
+    ///
+    /// Every row is load-bearing, and each falsifies a different wrong rule. Row 1
+    /// falsifies a constant `false` (which would hide the tree permanently). Row 2
+    /// falsifies `!empty` — the rule the persistence side used to write — which
+    /// would ignore the user's toggle entirely. Row 3 falsifies `user_wants`, which
+    /// would show an empty-state sidebar listing the files of a project that is not
+    /// open. Row 4 is the agreement corner, and on its own says nothing.
+    #[test]
+    fn sidebar_is_shown_table() {
+        let cases = [
+            SidebarCase {
+                desc: "a project is open and the user wants the tree => shown",
+                user_wants: true,
+                empty: false,
+                want: true,
+            },
+            SidebarCase {
+                desc: "a project is open and the user toggled the tree away => hidden",
+                user_wants: false,
+                empty: false,
+                want: false,
+            },
+            SidebarCase {
+                desc: "the EMPTY state overrides the preference: there is no project to list",
+                user_wants: true,
+                empty: true,
+                want: false,
+            },
+            SidebarCase {
+                desc: "the empty state with the preference already off => still hidden",
+                user_wants: false,
+                empty: true,
+                want: false,
+            },
+        ];
+
+        assert_eq!(
+            cases.len(),
+            4,
+            "the sidebar_is_shown table must carry all four (user_wants, empty) inputs — two \
+             booleans is four rows, not {}. A missing row leaves one of the two conjuncts \
+             unmeasured, and each conjunct is the whole of a different bug: without `empty` the \
+             empty state draws a file tree for a project that is not open, and without \
+             `user_wants` the toggle chord and its button do nothing at all.",
+            cases.len()
+        );
+
+        for case in &cases {
+            assert_eq!(
+                sidebar_is_shown(case.user_wants, case.empty),
+                case.want,
+                "sidebar_is_shown(user_wants = {}, empty = {}) must be {} — {}. This is the ONE \
+                 place the rule lives: `AppShell::set_empty_state` and `AppShell::toggle_sidebar` \
+                 both apply it through the same private applier, so a wrong answer here means the \
+                 next `set_empty_state(false)` silently undoes whatever the user just toggled.",
+                case.user_wants,
+                case.empty,
+                case.want,
+                case.desc
+            );
+        }
+    }
+
+    /// The override direction stated on its own, so a failure names the rule rather
+    /// than quoting a row index.
+    ///
+    /// The empty state is not a preference and never becomes one: whatever the user
+    /// wants, a window with no project open has nothing to list.
+    #[test]
+    fn the_empty_state_always_wins() {
+        for user_wants in [true, false] {
+            assert!(
+                !sidebar_is_shown(user_wants, true),
+                "sidebar_is_shown({user_wants}, empty = true) said the sidebar is SHOWN. The empty \
+                 state has no project root, so the tree would render the file list of whatever \
+                 directory nvim happened to be handed — `$HOME` on a desktop-launcher start — \
+                 beside a status page that says no folder is open."
+            );
+        }
+
+        // Non-vacuity: the loop above is an implication over the `empty` half alone,
+        // so a `sidebar_is_shown` of `|_, _| false` would satisfy it while hiding
+        // the tree in every project too.
+        assert!(
+            sidebar_is_shown(true, false),
+            "the happy path (the user wants the sidebar, a project is open) MUST show it — \
+             otherwise the file tree is never drawn at all and every assertion above holds \
+             vacuously."
         );
     }
 
@@ -1077,8 +1251,9 @@ mod tests {
         assert_eq!(tab.cwd, SAVED, "the cwd round-trips verbatim");
         assert!(
             tab.sidebar_visible,
-            "`sidebar_visible` is WRITTEN (so the field cannot silently rot out of the file) even \
-             though `RestorePlan` deliberately never reads it back"
+            "`sidebar_visible` must round-trip the argument it was given. `restore_plan` READS this \
+             field back, so a write side that ignored its argument would hand the next launch a \
+             preference the user never expressed"
         );
         assert_eq!(
             tab.layout,
@@ -1091,8 +1266,8 @@ mod tests {
         let hidden = snapshot_state(WIDTH, HEIGHT, String::new(), false, None);
         assert!(
             !hidden.windows[0].tabs[0].sidebar_visible,
-            "`sidebar_visible` must follow its argument; a hardcoded `true` would make the empty \
-             state claim a visible sidebar"
+            "`sidebar_visible` must follow its argument; a hardcoded `true` would make a session \
+             the user spent with the tree hidden come back with it shown"
         );
         assert_eq!(
             hidden.windows[0].tabs[0].layout, None,
