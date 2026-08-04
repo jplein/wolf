@@ -190,13 +190,34 @@ mod tests {
 
     /// With ZERO leading the natural line height is the glyph box itself.
     ///
-    /// This is the arm that actually executes in this repo. Measured on this host:
-    /// `pango::FontMetrics::height` equals `ascent + descent` for DejaVu Sans Mono
-    /// at both the smoke's 28 pt and the golden fixture's 16 pt, so
-    /// `render::for_font` clamps `leading` to exactly `0.0` and every real
-    /// non-positive-line-height call lands here. The 35/9/44 numbers below are the
-    /// measured 28 pt ascent, descent and cell height, so the case reads as the
-    /// thing it stands in for.
+    /// A zero `leading` is what `render::for_font` hands in for the pinned DejaVu
+    /// Sans Mono at both sizes this repo measures — but for two DIFFERENT reasons,
+    /// and only one of them is equality. Measured on this host under the devShell's
+    /// `FONTCONFIG_FILE`:
+    ///
+    /// | size | ascent | descent | `metrics.height()/SCALE` | `height - ascent - descent` |
+    /// | --- | --- | --- | --- | --- |
+    /// | 28 pt (the smokes) | 35 | 9 | 44 | `0` |
+    /// | 16 pt (the golden fixture) | 20 | 6 | 25 | `-1` |
+    ///
+    /// At 28 pt the recommended height IS the glyph box, so `for_font`'s `.max(0.0)`
+    /// is a no-op. At 16 pt the recommended height is one unit UNDER the glyph box,
+    /// and the clamp alone is what makes `leading` `0.0`: without it this branch
+    /// would give the 16 pt fixture a natural cell of 25 rather than 26.
+    /// `render.rs`'s own comment on the clamp — "a face whose recommended height is
+    /// under its own glyph box would otherwise make the natural line height shrink"
+    /// — therefore describes a live case on this repo's pinned font, not a
+    /// hypothetical one. The clamp is load-bearing; do not delete it.
+    ///
+    /// The 35/9/44 numbers below are the measured 28 pt ascent, descent and cell
+    /// height, so the case reads as the thing it stands in for.
+    ///
+    /// NOTHING SHIPPED REACHES THIS BRANCH TODAY. Every `line_height_percent` that
+    /// arrives at `for_font` is positive: `wolf_core::default_config()`'s 130, the
+    /// smokes' 118, the golden fixture's 130/100/160. `load_or_create` does not
+    /// validate the key, so a hand-written `line-height: 0` in a user's
+    /// `wolf-config.yaml` would land here — that is what the branch is for, and this
+    /// test and its sibling are the only callers exercising it.
     ///
     /// It also discriminates the guard: with the `line_height_percent <= 0` arm
     /// deleted, `round(37 * 0 / 100)` is `0`, which the final floor turns into

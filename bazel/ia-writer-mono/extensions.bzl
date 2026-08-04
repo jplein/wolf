@@ -37,12 +37,25 @@ This is a BUILD-only extension: the vendored fonts are bundled into the macOS
 `.app` and registered with CoreText by `FontRegistration.swift`; they never enter
 the `wolf-core` dependency graph. To bump the pin: change `_COMMIT`, recompute
 `_SHA256` (`curl -L <url> -o f.tgz && shasum -a 256 f.tgz`; confirm the TTF paths
-with `tar -tzf f.tgz`; the archive root name auto-follows the commit), then
-regenerate `MODULE.bazel.lock`.
+with `tar -tzf f.tgz`; the archive root name auto-follows the commit), regenerate
+`MODULE.bazel.lock`, then update `flake.nix`'s `iaWriterMono` to the SAME commit
+and sha256.
+
+BUMP BOTH TOGETHER: this file and `flake.nix`. The Linux devShell vendors this
+same tarball into its pinned fontconfig from its OWN copy of the commit and the
+sha256, so the asset has one pin expressed in two files. A bump made here alone
+leaves Linux rendering the OLD faces and nothing catches it — each side fetches
+successfully against its own sha256, and neither reads the other's. `flake.nix`
+carries the reciprocal note.
 """
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
+# BUMP BOTH TOGETHER: `_COMMIT` and `_SHA256` are duplicated verbatim in
+# `flake.nix`'s `iaWriterMono`, which vendors this same tarball into the Linux
+# devShell's pinned fontconfig. Changing them here alone leaves Linux on the old
+# faces with nothing failing anywhere, since each side only checks its own
+# sha256. See the bump procedure in this file's docstring.
 _COMMIT = "f32c04c3058a75d7ce28919ce70fe8800817491b"
 
 _SHA256 = "826767eaea4ce43ccb7ca71327a5c63ac31206b99df400699e6744df6104e1b5"
