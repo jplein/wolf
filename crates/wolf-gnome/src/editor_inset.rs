@@ -706,7 +706,10 @@ mod tests {
                  the cap produces. A NaN or infinite field means the non-finite guard \
                  is gone. An `x` of {} where {} was expected means the `+ centre` term \
                  went missing, and a `w` equal to the whole inset means the `min` \
-                 against `max_cols * cell_w` did.",
+                 against `max_cols * cell_w` did. Read the two together before blaming \
+                 either: an `x` that moved ALONE is the centring, while an `x` off by \
+                 half a cell WITH a `w` short by a whole one is the `min` against \
+                 `max_cols * cell_w`, which leaves more to centre — not the centring.",
                 case.desc,
                 case.pane_w,
                 case.pane_h,
@@ -1231,12 +1234,19 @@ mod tests {
     /// produced a rectangle only 712 px wide`.
     ///
     /// Measured in the same session, under the same edit:
-    /// **[`grid_size_for_pane_table`] stayed GREEN**, which is the half of the claim
-    /// that matters — the count table agrees with itself while the rect has drifted
-    /// out from under it, and that drift is the whole reason this test exists.
+    /// **[`grid_size_for_pane_table`] stayed GREEN**, run alone (`test result: ok.
+    /// 1 passed`), which is the half of the claim that matters — the count table
+    /// agrees with itself, still answering 90, while the rect has drifted out from
+    /// under it, and that drift is the whole reason this test exists.
     /// [`grid_rect_table`] does go red on its own literals under that edit, so the
     /// two per-function tables are not symmetric here; only the count table is blind
-    /// to it.
+    /// to it. MEASURED: `case: 11: a pane far wider than the cap is capped and
+    /// centred — grid_rect(2500, 680, 32, 20, ColumnCap { max_cols: Some(90),
+    /// cell_w: 8.0 }) as (x, y, w, h)`, left `(894.0, 52.0, 712.0, 608.0)`,
+    /// right `(890.0, 52.0, 720.0, 608.0)`. The two fields move by different amounts,
+    /// which is not obvious from the edit: `w` drops one whole cell (720 → 712) while
+    /// `x` moves RIGHT by half of one (890 → 894), because a narrower capped width
+    /// leaves more leftover to centre.
     #[test]
     fn grid_rect_is_wide_enough_for_its_own_grid_size_for_pane() {
         let cases = [

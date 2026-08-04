@@ -278,12 +278,18 @@ mod tests {
     ///   … = (826.0, 52.0, 8.0, 24.0) as (x, y, w, h), want (826.0, 52.0, 8.0,
     ///   10.0)`.
     /// - Weaken or delete the upper clamp on `y` — either `raw.max(track_y)` or a bare
-    ///   `raw`: row 13's `y` becomes 659.93312 against its literal 636, from the
-    ///   arithmetic in that row's own comment, and the loop's containment assertion
-    ///   fires alongside the literal because `659.93312 + 24` hangs 23.93 px below the
-    ///   grid's lower edge. **Row 13 is the only discriminator for the clamp in this
-    ///   file, and that is measured, not argued.** Both forms of the edit were run
-    ///   against the table as it stood WITHOUT row 13, and both were GREEN — `test
+    ///   `raw`: row 13 fires. MEASURED in both forms, whose output is byte-identical,
+    ///   because row 13's raw `y` sits far below the track's TOP and the lower clamp
+    ///   therefore never participates: `case: 13: the floor's thumb is held inside the
+    ///   end of a huge buffer — … = (826.0, 659.9331199999999, 8.0, 24.0) as
+    ///   (x, y, w, h), want (826.0, 636.0, 8.0, 24.0)` — 23.93 px of thumb hanging
+    ///   below the grid's lower edge. What fires is the LITERAL tuple assertion; the
+    ///   loop's containment assertion follows it and the test is fail-fast, so it is
+    ///   never reached on this edit. Containment is a second line of defence against an
+    ///   edit that moves `y` without moving it off row 13's literal, not something a
+    ///   reader sees here. **Row 13 is the only discriminator for the clamp in this
+    ///   file, and that is measured, not argued.** Both forms were run against the
+    ///   table as it stood WITHOUT row 13, and both were GREEN — `test
     ///   scrollbar_thumb_table ... ok` for `raw.max(track_y)` and again for a bare
     ///   `raw`, the latter leaving the whole module green (`3 passed; 0 failed`).
     ///   Rows 1, 2, 7, 8 and 12 leave the clamp a no-op: row 2 ends flush on the
@@ -297,12 +303,12 @@ mod tests {
     ///   caused it. That silence is the row's point; a debug build dies rather than
     ///   producing a wrong thumb.
     /// - Measure `x` from the grid rectangle (`grid.x + grid.w - THICKNESS - MARGIN`):
-    ///   every `Some` row's `x` becomes 806, and the first row fires. MEASURED,
-    ///   firing on `case: 1: a viewport at the top of a long buffer` — the ordinary
-    ///   row, not a special one. Only the case line of that capture is quoted: its
-    ///   `= (…)` and `want (…)` tuples were captured identical, which this row's own
-    ///   format string cannot produce, so those two tuples are not evidence of
-    ///   anything and are left out rather than repaired by guesswork.
+    ///   every `Some` row's `x` becomes 806, and the first row fires. MEASURED:
+    ///   `case: 1: a viewport at the top of a long buffer — … =
+    ///   (806.0, 52.0, 8.0, 33.44) as (x, y, w, h), want (826.0, 52.0, 8.0, 33.44)` —
+    ///   the ordinary row rather than a special one, one field apart, in the field the
+    ///   message's own diagnostic names (an earlier transcription of this run recorded
+    ///   the two tuples as identical, which a re-run settled as a copy error).
     /// - Delete the `x < 0.0` guard: row 11 returns a thumb at `x = -4` for a pane too
     ///   narrow to hold the gutter, i.e. a mark drawn outside the pane it belongs to.
     ///   MEASURED: `case: 11: a pane too narrow to hold the gutter yields no thumb —
