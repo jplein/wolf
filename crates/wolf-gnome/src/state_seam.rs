@@ -679,7 +679,7 @@ mod tests {
     ///
     /// Every row is load-bearing, and each falsifies a different wrong rule. Row 1
     /// falsifies a constant `false` (which would hide the tree permanently). Row 2
-    /// falsifies `!empty` — the rule the persistence side used to write — which
+    /// falsifies `!empty` — a rule that reads only the project state — which
     /// would ignore the user's toggle entirely. Row 3 falsifies `user_wants`, which
     /// would show an empty-state sidebar listing the files of a project that is not
     /// open. Row 4 is the agreement corner, and on its own says nothing.

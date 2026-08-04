@@ -375,13 +375,21 @@ fn build_ui(app: &adw::Application) {
         .build();
     header.pack_start(&sidebar_button);
 
+    // Both start INSENSITIVE, and the first `AppShell::refresh_nav_buttons` on the
+    // first render wake settles them. Until that wake there is no `Snapshot`, so
+    // `active_win` is `None` and `nav_ui::nav_press` refuses every press: a
+    // sensitive button in that window offers a navigation that prints a refusal and
+    // does nothing. The sidebar toggle needs no such treatment — its sensitivity
+    // comes from `set_empty_state`, which runs before `present()`.
     let nav_back_button = gtk::Button::builder()
         .icon_name(HISTORY_BACK_ICON)
         .tooltip_text("Back (Alt+Left)")
+        .sensitive(false)
         .build();
     let nav_forward_button = gtk::Button::builder()
         .icon_name(HISTORY_FORWARD_ICON)
         .tooltip_text("Forward (Alt+Right)")
+        .sensitive(false)
         .build();
     let nav_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     nav_box.add_css_class("linked");

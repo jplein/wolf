@@ -7493,7 +7493,7 @@ exit 0
 /// captive nvim runs in (the recent-files MRU lives in the global
 /// `state_dir()/file-mru.sqlite`, not under the cwd).
 ///
-/// ALL THIRTY-ONE cage smokes derive their working directory from this — the window
+/// ALL THIRTY-THREE cage smokes derive their working directory from this — the window
 /// title smoke uses the result as the base for the two NESTED directories its `~`
 /// abbreviation needs, and the three relaunch smokes share one of these directories
 /// across BOTH of their launches, which is the whole scenario. A fresh cwd per run
@@ -16225,12 +16225,12 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
-/// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | |
-/// | 2 | [`assert_png_present`] | precondition — grim produced an image | none; do not invent one | |
-/// | 3 | `$BEFORE` names [`NAVBACK_FILE_SECOND`] | **precondition, not a discriminator** — it proves the second `:e` took effect, so a failure of assertion 4 can be attributed to the navigation rather than to a keystroke that never landed | none | |
-/// | 4 | `$AFTER` names [`NAVBACK_FILE_FIRST`] | **the discriminator** | replace `shell::perform`'s `UiAction::HistoryBack` arm body with `{}`. The chord still resolves and the action still activates, but nothing navigates, so `bufname('%')` still reads `nbyankee.md`. Isolated: every headless test stays green. | |
-/// | 5 | OCR contains [`NAVBACK_OCR_PRESENT`] | **discriminator** — the pane really repainted the file it moved to, which the readback alone cannot show | the same revert | |
-/// | 6 | OCR lacks [`NAVBACK_OCR_ABSENT`] | **discriminator with NO isolated red run** | the same revert reddens assertion 5 first, and 5 is evaluated first. With one pane two headings cannot both be on screen, so nothing reddens this alone: its contribution is naming WHICH file is showing, not detecting that the wrong one is. The same shape as the bare-Enter buffer-picker smoke's must-not-contain assertion. | |
+/// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | n/a — no revert of its own. GREEN under row 4's revert, which is the designed behaviour: the scenario exits 0 whether or not the chord did anything, so the run got as far as assertion 4. |
+/// | 2 | [`assert_png_present`] | precondition — grim produced an image | none; do not invent one | n/a — no revert of its own. GREEN under row 4's revert; that run's panic message names the retained capture at `/run/user/1000/wolf_gnome_navback_smoke.png`. |
+/// | 3 | `$BEFORE` names [`NAVBACK_FILE_SECOND`] | **precondition, not a discriminator** — it proves the second `:e` took effect, so a failure of assertion 4 can be attributed to the navigation rather than to a keystroke that never landed | none | n/a — no revert of its own. GREEN under row 4's revert, and load-bearing there: assertion 4's message could say "the pane really was on `nbyankee.md` going in" only because this row had already passed. |
+/// | 4 | `$AFTER` names [`NAVBACK_FILE_FIRST`] | **the discriminator** | replace `shell::perform`'s `UiAction::HistoryBack` arm body with `{}`. The chord still resolves and the action still activates, but nothing navigates, so `bufname('%')` still reads `nbyankee.md`. Isolated: every headless test stays green. | RED, in 6.57 s, with that arm body replaced by `{}`: `after Alt+Left Neovim reported its current buffer as "nbyankee.md", not "nbxray.md". Assertion 3 passed, so the pane really was on "nbyankee.md" going in — the navigation is what did not happen.` — `left: "nbyankee.md"`, `right: "nbxray.md"`; `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 36 filtered out; finished in 6.57s`. The isolation is measured rather than reasoned: `cargo test -p wolf-gnome --lib` under the SAME revert reported `test result: ok. 172 passed; 0 failed`, so this smoke is the only test in the tree that discriminates that arm. |
+/// | 5 | OCR contains [`NAVBACK_OCR_PRESENT`] | **discriminator** — the pane really repainted the file it moved to, which the readback alone cannot show | the same revert | NOT EVALUATED in the recorded red run: under row 4's revert the harness aborted at assertion 4, which is evaluated first and reddens under the same cause. Recorded as measured rather than dressed up as a red run of its own. What it independently discriminates — a Neovim that moved while the GTK side never redrew — leaves assertion 4 green, and no revert producing that shape has been run. |
+/// | 6 | OCR lacks [`NAVBACK_OCR_ABSENT`] | **discriminator with NO isolated red run** | the same revert reddens assertion 5 first, and 5 is evaluated first. With one pane two headings cannot both be on screen, so nothing reddens this alone: its contribution is naming WHICH file is showing, not detecting that the wrong one is. The same shape as the bare-Enter buffer-picker smoke's must-not-contain assertion. | n/a, by design — recorded rather than invented. It was not evaluated in the recorded red run either: that run ended at assertion 4, ahead of both OCR assertions. |
 #[test]
 fn alt_left_navigates_back_to_the_previous_file_under_cage() {
     const SMOKE: &str = "alt_left_navigates_back_to_the_previous_file_under_cage";
@@ -16397,10 +16397,11 @@ fn alt_left_navigates_back_to_the_previous_file_under_cage() {
 ///
 /// ## What it covers that nothing else does
 ///
-/// The only end-to-end coverage of `win.toggle-sidebar`, which this unit promotes
-/// from Reserved: the chord resolving through `actions::action_for_key`,
-/// `command_action::ui_action_for` classifying `Command::ToggleSidebar` as a
-/// DISPATCHED `UiAction::ToggleSidebar` rather than a `Deferred` one,
+/// The only end-to-end coverage of `win.toggle-sidebar`, whose `BindingStatus` is
+/// `Bound` and which is therefore visible to the chord matcher at all: the chord
+/// resolving through `actions::action_for_key`, `command_action::ui_action_for`
+/// classifying `Command::ToggleSidebar` as a DISPATCHED
+/// `UiAction::ToggleSidebar` rather than a `Deferred` one,
 /// `shell::perform`'s arm flipping the stored preference, and
 /// `AppShell::apply_sidebar_visibility` — over `state_seam::sidebar_is_shown` —
 /// being the single site that touches the widget.
@@ -16429,12 +16430,12 @@ fn alt_left_navigates_back_to_the_previous_file_under_cage() {
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
-/// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | |
-/// | 2 | both PNGs present | precondition — grim produced two images | none; do not invent one | |
-/// | 3 | capture A contains [`SIDEBARTOGGLE_OCR_ABSENT`] | **precondition** — the sidebar was populated before the chord. Without it assertion 6 holds for a tree that never rendered. | none | |
-/// | 4 | capture A contains [`SIDEBARTOGGLE_OCR_KEEP`] | **precondition** — the editor was drawing before the chord, so assertion 5 is measuring a change rather than a starting state | none | |
-/// | 5 | capture B contains [`SIDEBARTOGGLE_OCR_KEEP`] | **anti-vacuity, not a discriminator** — the window is still drawing after the chord, which is what stops a crashed or blank window satisfying assertion 6 | none; it is deliberately insensitive to the toggle | |
-/// | 6 | capture B lacks [`SIDEBARTOGGLE_OCR_ABSENT`] | **the discriminator** | replace `shell::perform`'s `UiAction::ToggleSidebar` arm body with `{}`. The chord still resolves and the action still activates, but the widget never hides, so the row is still on screen in capture B. | |
+/// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | n/a — no revert of its own. GREEN under row 6's revert: the scenario exits 0 whether or not the sidebar hid, so the run reached assertion 6. |
+/// | 2 | both PNGs present | precondition — grim produced two images | none; do not invent one | n/a — no revert of its own. GREEN under row 6's revert; both captures were retained (`/run/user/1000/wolf_gnome_sidebartoggle_before_smoke.png` and `…_after_smoke.png`) and that run's failure message quotes the OCR of the second. |
+/// | 3 | capture A contains [`SIDEBARTOGGLE_OCR_ABSENT`] | **precondition** — the sidebar was populated before the chord. Without it assertion 6 holds for a tree that never rendered. | none | n/a — no revert of its own. GREEN under row 6's revert, which is exactly what makes that red run readable: the tree row was there before the chord, so its survival afterwards is the toggle's doing. |
+/// | 4 | capture A contains [`SIDEBARTOGGLE_OCR_KEEP`] | **precondition** — the editor was drawing before the chord, so assertion 5 is measuring a change rather than a starting state | none | n/a — no revert of its own. GREEN under row 6's revert. |
+/// | 5 | capture B contains [`SIDEBARTOGGLE_OCR_KEEP`] | **anti-vacuity, not a discriminator** — the window is still drawing after the chord, which is what stops a crashed or blank window satisfying assertion 6 | none; it is deliberately insensitive to the toggle | n/a — no revert of its own, and GREEN under row 6's revert by design: the same OCR dump that still held `sbtangoleaf` also held `sidebarkeepalfa`, so the window was demonstrably still drawing and assertion 6's failure is attributable to the toggle alone. |
+/// | 6 | capture B lacks [`SIDEBARTOGGLE_OCR_ABSENT`] | **the discriminator** | replace `shell::perform`'s `UiAction::ToggleSidebar` arm body with `{}`. The chord still resolves and the action still activates, but the widget never hides, so the row is still on screen in capture B. | RED, in 6.11 s, with that arm body replaced by `{}`: `the SECOND capture still contains "sbtangoleaf" — the tree row for sbtangoleaf.md — so Ctrl+Shift+B did not hide the sidebar.` The dumped OCR carried the whole tree (`fillalfa.md` … `sbtangoleaf.md`, `sbwhiskey.md`) alongside `sidebarkeepalfa`, so assertions 3, 4 and 5 all passed under it and this row failed alone; `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 36 filtered out; finished in 6.11s`. |
 #[test]
 fn sidebar_toggle_chord_hides_the_file_tree_under_cage() {
     const SMOKE: &str = "sidebar_toggle_chord_hides_the_file_tree_under_cage";
