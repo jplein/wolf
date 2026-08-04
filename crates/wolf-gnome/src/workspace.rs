@@ -108,10 +108,11 @@ fn is_usable_project(path: &Path, home: Option<&Path>, is_dir: &impl Fn(&Path) -
 
 /// Whether a pending re-root for `pending` is satisfied by the core's live cwd.
 ///
-/// `false` unless BOTH are `Some` and equal. The Open Folder path sets `pending`
-/// and then waits: `start_file_search` resolves its root from `live_cwd()`, which
-/// only updates once nvim reports `DirChanged`, so re-rooting the sidebar before
-/// this returns `true` would re-root it at the OLD cwd.
+/// `false` unless BOTH are `Some` and equal. A front-end directory change — the
+/// Open Folder dialog or an Open Recent palette row — sets `pending` and then
+/// waits: `start_file_search` resolves its root from `live_cwd()`, which only
+/// updates once nvim reports `DirChanged`, so re-rooting the sidebar before this
+/// returns `true` would re-root it at the OLD cwd.
 #[must_use]
 pub fn reroot_ready(pending: Option<&Path>, live: Option<&Path>) -> bool {
     // A plain `==`: `Path: PartialEq` compares COMPONENTS, so a trailing separator
