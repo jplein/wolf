@@ -62,15 +62,15 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 **Covers**
 
-- Thirty-seven end-to-end smokes that launch the built binary under `cage`, drive it with `wtype` and [`wolf-pointer-inject`](../../../tools/wolf-pointer-inject/README.md), and OCR a `grim` screenshot with `tesseract` in sparse-text mode, plus a second uniform-block reading in the divider-relaunch smoke, which is red without it.
-- The scenarios span text rendering and the sidebar, the four overlays, splits and the command drain, pointer input and divider drags, crash and stall recovery, application state across a relaunch, navigation and the sidebar toggle.
-- Four turn on a value the captive Neovim writes back rather than on OCR alone: `typed_cd_reroots_the_sidebar_under_cage` (`getcwd()`, beside the tree's synthetic root row), `pane_status_bar_shows_each_panes_filename_under_cage` (two panes drawing two different filenames, and the `winheight(0)` that is the only end-to-end number the editor inset and the strip's height reach), `config_font_size_changes_the_grid_under_cage` (two launches whose `winwidth(0)` readbacks must differ), and `column_cap_and_full_width_toggle_change_the_grid_under_cage` (two `winwidth(0)` readbacks either side of one `:WolfFullWidth`, at a font size the smoke chooses itself so the content cap can bind at all).
-- Five compositor-free guards on the smokes' own fixtures and harness, which need no compositor and run in microseconds. The target therefore reports `42 passed`, not `37`. Four of them need no environment either; `the_column_cap_cannot_bind_at_the_ocr_smokes_geometry` measures a real cell, so it alone needs the devShell's pinned `FONTCONFIG_FILE`, which is not part of the cage toolchain.
+- Thirty-seven end-to-end smokes launch the built binary under `cage`, drive it with `wtype` and [`wolf-pointer-inject`](../../../tools/wolf-pointer-inject/README.md), and OCR a `grim` screenshot with `tesseract` in sparse-text mode, plus a uniform-block reading in the divider-relaunch smoke, which is red without it.
+- The scenarios span text rendering, the sidebar, the four overlays, splits, pointer input and divider drags, crash and stall recovery, relaunch state and navigation.
+- Four turn on a value the captive Neovim writes back rather than on OCR alone: `typed_cd_reroots_the_sidebar_under_cage` (`getcwd()`), `pane_status_bar_shows_each_panes_filename_under_cage` (two panes drawing two different filenames, plus `winheight(0)`), `config_font_size_changes_the_grid_under_cage` (two launches whose `winwidth(0)` readbacks differ), and `column_cap_and_full_width_toggle_change_the_grid_under_cage` (two `winwidth(0)` readbacks either side of one `:WolfFullWidth`, at a font size it chooses itself so the cap can bind).
+- Five compositor-free guards on the smokes' own fixtures and harness run in microseconds, so the target reports `42 passed`, not `37`. Four need no environment; `the_column_cap_cannot_bind_at_the_ocr_smokes_geometry` measures a real cell, so it alone needs the devShell's pinned `FONTCONFIG_FILE`, which the cage toolchain does not include.
 
 **Gotchas**
 
 - Run only these with `nix develop --command cargo test -p wolf-gnome --test smoke_headless`.
-- A new scenario must park the block cursor off the asserted row (a normal-mode `o` then Escape), since the inverted cursor block corrupts the cell it covers, and must keep sparse-text page segmentation, since the default mode returns nothing on the light-on-dark editor grid.
+- A new scenario must park the block cursor off the asserted row (a normal-mode `o` then Escape), since the inverted block corrupts the cell it covers, and must keep sparse-text segmentation, since the default mode reads nothing on the light-on-dark grid.
 - Read [Smoke conventions](#smoke-conventions) before adding one; several of those rules exist because a smoke passed while proving nothing.
 
 #### `common/mod.rs`
