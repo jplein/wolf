@@ -324,4 +324,98 @@ mod tests {
              was swallowed and a streamed batch never reached the widgets."
         );
     }
+
+    /// A traversal batch that advances the version while the sidebar is HIDDEN must
+    /// produce a rebuild on the catch-up: the deferral remembers that work is owed,
+    /// and the version gate must then agree that work is owed.
+    ///
+    /// This drives the composition `TreeInner::refresh` actually performs — the
+    /// visibility half first, the version half second — which is the one interaction
+    /// neither half proves alone. `visibility_gate_defers_and_catches_up_once` pins
+    /// the visibility half by itself and never calls `should_rebuild` at all, so a
+    /// gate that owed the catch-up and then refused to rebuild on it passes that
+    /// test; `version_gate_rebuilds_once_per_version` never hides the sidebar, so a
+    /// gate that forgot the deferral passes that one. The two are therefore not
+    /// duplicates of this: what is added here is the JOIN, a catch-up whose version
+    /// advanced during the hidden window and which the widgets have never drawn.
+    ///
+    /// The converse is deliberately NOT asserted as a rebuild. Hiding the sidebar is
+    /// `sidebar.set_visible(false)`, which destroys neither the `gio::ListStore` nor
+    /// the `gtk::TreeListModel`, so the widgets still hold whatever version they last
+    /// drew and a catch-up at that same version correctly answers "no rebuild" rather
+    /// than leaving anything stale. Step 6 pins that answer.
+    ///
+    /// Reverts that must redden it, with the step each hits:
+    ///
+    /// - Deleting `self.deferred = true;` from `request_refresh` fails STEP 4. This
+    ///   is the failure the test exists to catch: the batch that landed while hidden
+    ///   is forgotten, no catch-up is owed, and the re-shown sidebar is missing every
+    ///   file that streamed in. It also reddens step 2 of
+    ///   `visibility_gate_defers_and_catches_up_once`, which shares that half.
+    /// - Answering `false` from `should_rebuild` whenever anything has already been
+    ///   drawn (`if self.last_rebuilt_version.is_some() { return false; }`) fails
+    ///   STEP 5 — the assertion that names the invariant — while leaving steps 1-4
+    ///   green.
+    /// - Making `request_refresh` always return `true` fails STEP 3.
+    /// - Making `should_rebuild` always return `true` fails STEP 6.
+    #[test]
+    fn a_batch_arriving_while_hidden_rebuilds_on_the_catch_up() {
+        // --- the launch: sidebar on screen, first batch drawn -----------------
+        let mut gate = TreeRefreshGate::new(true);
+        assert!(
+            gate.request_refresh(),
+            "step 1a: a refresh requested at launch, with the sidebar VISIBLE, must proceed — \
+             refused here, the sidebar never draws its first batch at all"
+        );
+        assert!(
+            gate.should_rebuild(1),
+            "step 1b: version 1 is the first batch of the session and must rebuild; without this \
+             the launch leaves an empty tree, and the hidden window below would start from a gate \
+             that had drawn nothing"
+        );
+
+        // --- the user hides the sidebar --------------------------------------
+        assert!(
+            !gate.set_visible(false),
+            "step 2: HIDING the sidebar owes no catch-up — nothing has been refused yet, and a \
+             catch-up owed on the way out would rebuild a tree nobody can see"
+        );
+
+        // --- a batch lands at version 2 while hidden --------------------------
+        //
+        // The refresh is REFUSED here, so production returns before ever reading
+        // the search view: `should_rebuild` is NEVER called for version 2, and the
+        // gate's version tracking is still sitting at 1 when the sidebar comes
+        // back. That is exactly what makes step 5 the interesting one — the
+        // catch-up is the first and only call that ever sees version 2.
+        assert!(
+            !gate.request_refresh(),
+            "step 3: a traversal batch arriving while the sidebar is HIDDEN must be refused, and \
+             recorded as owed; rebuilding an off-screen widget tree is the redundant work this \
+             gate removes"
+        );
+
+        // --- the user shows it again ------------------------------------------
+        assert!(
+            gate.set_visible(true),
+            "step 4: re-showing the sidebar after a refused batch must owe exactly one catch-up. \
+             A false here means the deferral was dropped, so no refresh is ever attempted and the \
+             version advance below is never even offered to the version gate."
+        );
+
+        // --- the catch-up: the payload of this test ---------------------------
+        assert!(
+            gate.should_rebuild(2),
+            "step 5: the catch-up refresh carries version 2, which the widgets have never drawn, \
+             so it MUST rebuild. A false here is the composed failure neither gate shows alone: \
+             the sidebar re-appears missing every file that streamed in while it was hidden, and \
+             stays wrong until the next batch happens to advance the version again."
+        );
+        assert!(
+            !gate.should_rebuild(2),
+            "step 6: the catch-up is ONE rebuild, not a licence to rebuild on every later wake. A \
+             true here means a redundant wake at an unchanged version rebuilds the root store, \
+             collapsing every directory the user had manually expanded."
+        );
+    }
 }
