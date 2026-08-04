@@ -83,10 +83,10 @@ GTK paints a single-row bottom strip: an active command line, or the last toast 
 | Command palette (⌘P)                        | `feat/commands` (`4b3b53e`)                                                  | [x]   | [x]   |
 | Open Recent (global recent-directories MRU) | `feat/commands`                                                              | [x]   | [ ]   |
 | Per-pane back/forward navigation history    | `feat/nav-buttons` (`597175b`)                                               | [x]   | [ ]   |
-| Project search UI (ripgrep-backed)          | `feat/search-ui`                                                             | [x]   | [ ]   |
+| Project search UI (ripgrep-backed)          | `feat/search-ui` / `linux-feat/project-search`                               | [x]   | [x]   |
 | Native file dialogs (open / save / save-as) | —                                                                            | [x]   | [ ]   |
 
-The `wolf-core` halves of the recent-directories MRU, the navigation history and project search are platform-agnostic and already linked into `wolf-gnome`; only the GTK views and their wiring are missing. Those are the highest-leverage Linux tasks. The GTK command palette lists only the registry commands `wolf-gnome` performs: Switch-to-Window rows need multiple windows, and Open Recent rows need the recent-directories row above.
+The `wolf-core` halves of the recent-directories MRU and the navigation history are platform-agnostic and already linked into `wolf-gnome`; only the GTK views and their wiring are missing. Those are the highest-leverage Linux tasks. The GTK command palette lists only the registry commands `wolf-gnome` performs: Switch-to-Window rows need multiple windows, and Open Recent rows need the recent-directories row above.
 
 Two rows stay unticked for partial coverage. The file-dialog row covers all three dialogs, and `wolf-gnome` has native Open File and Open Folder but no save or save-as, so saving remains `:w` from within Neovim. The sidebar re-roots after an Open Folder but not after a user-typed `:cd`.
 
@@ -109,7 +109,7 @@ Two rows stay unticked for partial coverage. The file-dialog row covers all thre
 | `:q` / `:qa` mapped to close pane / window   | `feat/colon-q-remapping`                | [x]   | [x]   |
 | ⌘N opens a new untitled Markdown buffer      | `feat/colon-q-remapping` (`0266b96`)    | [x]   | [x]   |
 
-`wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Of the 26 commands, 9 dispatch, 1 has no GNOME equivalent (`HideApplication`, since the shell owns window visibility), and 16 are deferred with a distinct printed reason.
+`wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Of the 26 commands, 11 dispatch, 1 has no GNOME equivalent (`HideApplication`, since the shell owns window visibility), and 14 are deferred with a distinct printed reason.
 
 The GNOME counterpart to the macOS menu bar is a header-bar primary menu driven by the same `gio` action namespace as the accelerators, so menu, chords and drained commands cannot drift apart. The accelerator scheme is documented in [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md), "The accelerator namespace".
 
@@ -193,7 +193,6 @@ The second limit is that a stall does not clear itself on the GTK side. The buff
 
 Work already carried is recorded in the tables above. What remains, in order:
 
-1. **The project-search overlay.** Ranking is already shared, its command already lands in the drain as `Deferred`, and its chord is already reserved; it needs a GTK view of the shape the file picker, the command palette and the buffer picker already have.
-2. **Config-driven typography**, then the completion popup and multi-line toast.
-3. **Markdown preview**, which is the largest single item: it introduces a second kind of pane content on the GTK side.
-4. **Multi-window and tabs**, which reshape `wolf-gnome` from a single-window application into a coordinator-plus-views one.
+1. **Config-driven typography**, then the completion popup and multi-line toast.
+2. **Markdown preview**, which is the largest single item: it introduces a second kind of pane content on the GTK side.
+3. **Multi-window and tabs**, which reshape `wolf-gnome` from a single-window application into a coordinator-plus-views one.

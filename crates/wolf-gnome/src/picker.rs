@@ -24,11 +24,26 @@
 //! seams are [`next_selection`], [`restored_index`] and [`activation_index`],
 //! unit-tested below.
 //!
-//! Those three seams are `pub(crate)` and shared with [`crate::palette`]'s and
-//! [`crate::buffer_picker`]'s overlays, so the file list, the command list and the
-//! buffer list navigate and activate identically — one arithmetic, one table of
-//! tests. The macOS `PickerSeam` port names this file as its counterpart, which is
-//! why the functions stay here rather than moving to a seam module.
+//! Those three seams are `pub(crate)` and shared with [`crate::palette`]'s,
+//! [`crate::buffer_picker`]'s and [`crate::search_overlay`]'s overlays, so the file
+//! list, the command list, the buffer list and the project-search result list
+//! navigate and activate identically — one arithmetic, one table of tests. The macOS
+//! `PickerSeam` port names this file as its counterpart, which is why the functions
+//! stay here rather than moving to a seam module.
+//!
+//! **No shared overlay WIDGET is extracted, and that is a judgement rather than an
+//! omission.** The four overlays already share every rule that is genuinely shared —
+//! this file's three seams, which is where the duplication actually was. What
+//! remains is ~40 lines of widget construction each, and the fourth instance
+//! diverges from the other three in four places at once: it has no
+//! `connect_search_changed`, it carries an extra status label, its `Enter` is a
+//! two-way decision rather than an activation, and its `open` starts nothing. A
+//! shared widget would need those four as configuration hooks, which is more surface
+//! than the code it removes. The decisive argument is risk: `DECISIONS.md` records
+//! that the widget layer of these modules is covered only by the cage smokes, so
+//! refactoring three working overlays behind a common type would put their five
+//! smokes at risk (two for the file picker, one for the palette, two for the buffer
+//! picker) to save boilerplate no test executes.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -95,6 +110,9 @@ pub(crate) fn restored_index(
 /// row, which is what makes "type a query, press Enter" work with no arrow key.
 /// `Option<i32>` is the shape because `gtk::ListBoxRow::index()` returns an `i32`
 /// that is `-1` for a row not in a list.
+///
+/// All FOUR overlays resolve their activation through this one function — the file
+/// picker, the command palette, the buffer picker and the project search.
 #[must_use]
 pub(crate) fn activation_index(selected: Option<i32>, n_rows: usize) -> Option<usize> {
     if n_rows == 0 {
@@ -646,9 +664,10 @@ mod tests {
     /// `gtk::ListBoxRow::index()` returns an `i32` that is `-1` for a row not in a
     /// list.
     ///
-    /// All three overlays resolve their activation through this one function — the
-    /// file picker, the command palette and the buffer picker — so a row of this
-    /// table is a user-visible behaviour in three places at once.
+    /// All four overlays resolve their activation through this one function — the
+    /// file picker, the command palette, the buffer picker and the project-search
+    /// overlay — so a row of this table is a user-visible behaviour in four places at
+    /// once.
     #[test]
     fn activation_index_table() {
         const LEN: usize = 5;

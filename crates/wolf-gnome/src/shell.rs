@@ -95,6 +95,13 @@
 //! [`crate::buffer_picker::open_decision`] guards it: the picker refuses to open
 //! unless the core reads `Alive`, so the snapshot can raise a stall ONCE and can
 //! never re-probe a core already known to be wedged.
+//!
+//! The project-search overlay ([`crate::search_overlay`]) adds NO third one, and
+//! that is worth stating because the symmetry with the buffer picker suggests
+//! otherwise: `start_search` resolves its root from the tracked-cwd cell and
+//! `spawn_blocking`s, `open_at` is fire-and-forget on the ordered input channel, and
+//! `liveness` is an atomic read. `WolfCore::ignorecase()` IS a `block_on_rpc` and is
+//! deliberately never called from this crate.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -119,6 +126,7 @@ use crate::palette::PaletteHandle;
 use crate::pane_view::PaneHandle;
 use crate::persistence::StateHandle;
 use crate::picker::PickerHandle;
+use crate::search_overlay::SearchHandle;
 use crate::title;
 use crate::tree_view::TreeHandle;
 use crate::workspace;
@@ -129,6 +137,10 @@ const OPEN_FOLDER_ACTION: &str = "win.open-folder";
 /// The action that opens the in-window file picker (disabled in the empty state).
 /// Also the header bar's Open button target.
 pub(crate) const GO_TO_FILE_ACTION: &str = "win.go-to-file";
+
+/// The action that opens the in-window project-search overlay (disabled in the
+/// empty state, where the search root would fall back to the home directory).
+const SEARCH_IN_PROJECT_ACTION: &str = "win.search-in-project";
 
 /// Title of the empty state's status page.
 const EMPTY_STATE_TITLE: &str = "No folder open";
@@ -186,6 +198,8 @@ pub struct ShellParts<'a> {
     pub palette: &'a PaletteHandle,
     /// The buffer picker, opened by `win.buffer-picker`.
     pub buffers: &'a BufferPickerHandle,
+    /// The project-search overlay, opened by `win.search-in-project`.
+    pub search: &'a SearchHandle,
     /// The file-tree sidebar, re-rooted after Open Folder.
     pub tree: &'a TreeHandle,
     /// The sidebar's root widget, hidden in the empty state.
@@ -219,6 +233,8 @@ struct ShellInner {
     palette: PaletteHandle,
     /// The buffer picker opened by `win.buffer-picker`.
     buffers: BufferPickerHandle,
+    /// The project-search overlay opened by `win.search-in-project`.
+    search: SearchHandle,
     /// The file-tree sidebar, re-rooted once a pending Open Folder settles.
     tree: TreeHandle,
     /// The sidebar's root widget; hidden in the empty state.
@@ -232,6 +248,8 @@ struct ShellInner {
     /// The `win.go-to-file` action, stashed by [`AppShell::install_actions`] so the
     /// empty state can disable it.
     go_to_file: RefCell<Option<gio::SimpleAction>>,
+    /// The `win.search-in-project` action, stashed for the same reason.
+    search_in_project: RefCell<Option<gio::SimpleAction>>,
     /// A directory the user chose in the Open Folder dialog, awaiting nvim's
     /// `DirChanged`. Settled on a later wake by [`workspace::reroot_ready`].
     pending_reroot: RefCell<Option<PathBuf>>,
@@ -353,12 +371,14 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         picker: parts.picker.clone(),
         palette: parts.palette.clone(),
         buffers: parts.buffers.clone(),
+        search: parts.search.clone(),
         tree: parts.tree.clone(),
         sidebar: parts.sidebar.clone(),
         paned: parts.paned.clone(),
         empty_state: parts.empty_state.clone(),
         open_button: parts.open_button.clone(),
         go_to_file: RefCell::new(None),
+        search_in_project: RefCell::new(None),
         pending_reroot: RefCell::new(None),
         crash_overlay: parts.crash_overlay.clone(),
         panes: parts.panes.clone(),
@@ -461,6 +481,8 @@ impl AppShell {
             }
             if binding.action == GO_TO_FILE_ACTION {
                 *self.inner.go_to_file.borrow_mut() = Some(action);
+            } else if binding.action == SEARCH_IN_PROJECT_ACTION {
+                *self.inner.search_in_project.borrow_mut() = Some(action);
             }
         }
 
@@ -555,10 +577,18 @@ impl AppShell {
     /// can still be re-derived by a later allocation), while an invisible start
     /// child is never allocated at all.
     ///
-    /// Disabling `win.go-to-file` uses the documented global escape hatch: a
-    /// disabled action's accelerator does not activate AND the event falls through,
-    /// so in the empty state Ctrl+Shift+O reaches Neovim as `<C-O>` (identical to
-    /// `<C-o>`). That is an accepted wart, recorded in the README.
+    /// Disabling `win.go-to-file` and `win.search-in-project` uses the documented
+    /// global escape hatch: a disabled action's accelerator does not activate AND the
+    /// event falls through, so in the empty state Ctrl+Shift+O reaches Neovim as
+    /// `<C-O>` (identical to `<C-o>`) and Ctrl+Shift+F reaches it as `<C-F>`
+    /// (identical to `<C-f>`, page forward). That is an accepted wart, recorded in
+    /// the README.
+    ///
+    /// The project-search overlay is guarded TWICE, and both halves are needed: the
+    /// disabled action is what the chord and the menu item see, while
+    /// [`crate::search_overlay::open_decision`]'s `project_open` arm — fed by the
+    /// `set_project_open` call below — is what the command palette's row sees, since
+    /// the palette offers a live row for every dispatched command.
     pub fn set_empty_state(&self, empty: bool) {
         self.inner.empty_state.set_visible(empty);
         self.inner.sidebar.set_visible(!empty);
@@ -569,6 +599,10 @@ impl AppShell {
         if let Some(action) = self.inner.go_to_file.borrow().as_ref() {
             action.set_enabled(!empty);
         }
+        if let Some(action) = self.inner.search_in_project.borrow().as_ref() {
+            action.set_enabled(!empty);
+        }
+        self.inner.search.set_project_open(!empty);
         // The persisted `cwd` / `sidebar_visible` follow the LIVE empty-state
         // flag, so an Open Folder into an empty-state window starts persisting
         // that folder from the very next wake.
@@ -627,7 +661,7 @@ impl AppShell {
     /// closing the picker (or yanking focus back to the cmdline strip) once per
     /// `Alive` frame would make the picker unusable.
     ///
-    /// - hidden -> visible: close ALL THREE transient overlays. A crashed core must
+    /// - hidden -> visible: close ALL FOUR transient overlays. A crashed core must
     ///   not leave the picker's Open reachable underneath, nor a palette row whose
     ///   activation would send into a dead nvim (`New`, `Close`) or open another
     ///   overlay over the crash one (`Go to File…`). The buffer picker is the one
@@ -660,6 +694,11 @@ impl AppShell {
             self.inner.picker.close();
             self.inner.palette.close();
             self.inner.buffers.close();
+            // A fourth idempotent close, for the same reason as the buffer picker's:
+            // an overlay left flagged open keeps `app::wire_keys`' guard suppressing
+            // every key to Neovim, including after a restart. Here it also cancels
+            // any `rg` still running behind the overlay.
+            self.inner.search.close();
         }
     }
 
@@ -884,10 +923,10 @@ impl AppShell {
     /// Performs one UI action. Exhaustive with no `_` arm, so a new [`UiAction`]
     /// variant is a compile error here.
     ///
-    /// **There are three transient overlays and at most one is open at a time; this
-    /// is where that is arbitrated**: opening any one of them closes the other two
-    /// first. Every `close()` is idempotent. This module holds all three handles, so
-    /// the rule costs the three overlay modules no knowledge of each other — and it
+    /// **There are four transient overlays and at most one is open at a time; this
+    /// is where that is arbitrated**: opening any one of them closes the other three
+    /// first. Every `close()` is idempotent. This module holds all four handles, so
+    /// the rule costs the four overlay modules no knowledge of each other — and it
     /// is what keeps `app::wire_keys`' open-overlay guard honest and makes "Escape
     /// closes the thing you can see" true.
     fn perform(&self, action: UiAction) {
@@ -895,17 +934,26 @@ impl AppShell {
             UiAction::OpenFilePicker => {
                 self.inner.palette.close();
                 self.inner.buffers.close();
+                self.inner.search.close();
                 self.inner.picker.open();
             }
             UiAction::OpenCommandPalette => {
                 self.inner.picker.close();
                 self.inner.buffers.close();
+                self.inner.search.close();
                 self.inner.palette.open();
             }
             UiAction::OpenBufferPicker => {
                 self.inner.picker.close();
                 self.inner.palette.close();
+                self.inner.search.close();
                 self.inner.buffers.open();
+            }
+            UiAction::OpenSearchOverlay => {
+                self.inner.picker.close();
+                self.inner.palette.close();
+                self.inner.buffers.close();
+                self.inner.search.open();
             }
             UiAction::OpenFileDialog => self.open_file_dialog(),
             UiAction::OpenFolderDialog => self.open_folder_dialog(),
@@ -923,7 +971,8 @@ impl AppShell {
     }
 
     /// Closes the window through `close-request` so `app::wire_close` runs (picker,
-    /// palette, buffer picker and tree closed, then `WolfCore::shutdown`).
+    /// palette, buffer picker, project search and tree closed, then
+    /// `WolfCore::shutdown`).
     ///
     /// NEVER `destroy()`: that skips `close-request` entirely and leaks the nvim
     /// child. The `adw::ApplicationWindow` is owned by the application, so the app

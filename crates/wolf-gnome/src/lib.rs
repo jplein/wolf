@@ -44,7 +44,25 @@
 //!   ([`buffer_picker::switch_target`], which refuses an active window of `0`
 //!   exactly as `wolf-ffi` does), plus the row's display label. Selection movement
 //!   and activation come from [`mod@picker`], whose `next_selection`,
-//!   `restored_index` and `activation_index` all three overlays share.
+//!   `restored_index` and `activation_index` all four overlays share.
+//! - [`mod@search_overlay`]: the PROJECT-SEARCH rulebook — the TOTAL
+//!   `(Option<`[`wolf_core::Liveness`]`>, project_open)` →
+//!   [`search_overlay::SearchOpenDecision`] guard, whose no-project arm is what
+//!   stops a `--hidden` ripgrep run being rooted at the user's home directory
+//!   ([`search_overlay::open_decision`]); the fixed
+//!   [`wolf_core::SearchOptions`] this front-end ships — literal,
+//!   case-insensitive, every file, with no toggles and no `ignorecase()` read
+//!   ([`search_overlay::search_options_for`]); the FLAT row assembly over
+//!   [`wolf_core::project`] / [`wolf_core::file_label`] /
+//!   [`wolf_core::context_window`], capped and ellipsised
+//!   ([`search_overlay::result_rows`]); the TWO-WAY `Enter` decision — run the
+//!   search, or open the selected row — which refuses an empty query outright
+//!   ([`search_overlay::enter_action`]); the `(path, line, col)` triple that makes a
+//!   result row a LOCATION rather than a file
+//!   ([`search_overlay::activation_target`]); and the six-arm status line
+//!   ([`search_overlay::search_status`]), which is the only surface core's
+//!   `WOLF_RG_BIN unset` error ever reaches. Selection movement and activation come
+//!   from [`mod@picker`], as they do for the other three.
 //! - [`launch_decision`] / [`workspace::reroot_ready`]: whether a project is open,
 //!   where the captive Neovim starts, and when an Open Folder re-root has settled
 //!   ([`workspace`]). The launch rule is process cwd first, then the cwd restored
@@ -119,6 +137,7 @@ pub mod pane_view;
 pub mod persistence;
 pub mod picker;
 pub mod render;
+pub mod search_overlay;
 pub mod shell;
 pub mod state_seam;
 pub mod title;
