@@ -2057,25 +2057,33 @@ fn open_records_a_navigation_entry() {
 fn open_at_records_an_entry_for_another_file_but_not_for_another_line_of_the_same_one() {
     let cwd = common::fresh_cwd();
     seed_three_markdown_files(&cwd);
-    std::fs::write(cwd.join("long.md"), long_doc()).expect("failed to write long.md");
+    // The fixture is MEASURED rather than described: the line count comes from the
+    // bytes actually written to disk, not from [`LONG_DOC_LINES`], so a `long_doc`
+    // that stops honouring that constant is caught by the precondition below instead
+    // of surfacing as a `poll_cursor_line` timeout two hundred lines further down.
+    let fixture = long_doc();
+    let doc_lines = u64::try_from(fixture.lines().count())
+        .expect("the fixture is a handful of lines, so its count fits in a u64");
+    std::fs::write(cwd.join("long.md"), &fixture).expect("failed to write long.md");
     let long_abs = cwd.join("long.md");
 
-    // The fixture must actually HOLD both target lines. Neovim clamps an
-    // out-of-range `nvim_win_set_cursor` line, so a short fixture would land both
-    // jumps on the same row: the second half would then assert "another line of the
-    // same file records nothing" about a jump that moved the cursor nowhere.
+    // Both target lines must EXIST in that fixture, and they must be DIFFERENT
+    // lines. Neovim clamps an out-of-range `nvim_win_set_cursor` line to the end of
+    // the buffer, so either failure lands both jumps on the same row — and the second
+    // half of this case would then assert "another line of the same file records
+    // nothing" about a jump that moved the cursor nowhere.
     assert!(
-        SECOND_JUMP_LINE <= LONG_DOC_LINES + 1,
-        "the fixture carries a heading plus LONG_DOC_LINES = {LONG_DOC_LINES} body lines, i.e. {} \
-         lines in all, but SECOND_JUMP_LINE is {SECOND_JUMP_LINE}. Lengthen the fixture rather \
-         than lowering the jump target: two jumps that clamp to the same row make the same-file \
-         half of this case vacuous.",
-        LONG_DOC_LINES + 1
-    );
-    assert!(
-        FIRST_JUMP_LINE < SECOND_JUMP_LINE,
-        "the two jump targets must be DIFFERENT lines ({FIRST_JUMP_LINE} and {SECOND_JUMP_LINE}), \
-         or the second `open_at` moves the cursor nowhere and the same-file half proves nothing"
+        FIRST_JUMP_LINE < SECOND_JUMP_LINE && SECOND_JUMP_LINE <= doc_lines,
+        "the two jump targets must be DIFFERENT lines that the fixture actually holds, but \
+         `long_doc()` measures {doc_lines} line(s) while FIRST_JUMP_LINE is {FIRST_JUMP_LINE} and \
+         SECOND_JUMP_LINE is {SECOND_JUMP_LINE}. Two distinguishable failures land here. If \
+         SECOND_JUMP_LINE exceeds {doc_lines}, the fixture is too SHORT and nvim clamps the second \
+         jump to the end of the buffer, landing it on the same row as the first. If FIRST_JUMP_LINE \
+         is not below SECOND_JUMP_LINE, the two targets name the same line (or are inverted) and \
+         the second `open_at` moves the cursor nowhere at all. Either way the same-file half of \
+         this case goes vacuous: it would be asserting that a jump which never happened recorded \
+         nothing. Lengthen `long_doc`'s body or separate the two targets — never lower \
+         SECOND_JUMP_LINE to fit a short fixture."
     );
 
     let (core, waiter) = start_core_in(cwd);
