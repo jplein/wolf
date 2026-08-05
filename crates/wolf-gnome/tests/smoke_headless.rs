@@ -19746,7 +19746,6 @@ fn pane_status_bar_shows_each_panes_filename_under_cage() {
     );
 }
 
-
 // ---------------------------------------------------------------------------
 // Command line, messages and completion: the completion popup, the multi-line
 // message toast, and a `confirm()` dialog shown then dismissed once answered.
@@ -20129,7 +20128,6 @@ fn confirm_prompt_shows_then_clears_once_answered_under_cage() {
         out_png2.display()
     );
 }
-
 
 /// Runs `tesseract <png> stdout --psm 11` and returns its lowercased text output.
 /// (`--psm 11` — "sparse text" — is needed because the default page-segmentation

@@ -175,7 +175,11 @@ pub fn toast_scroll_clamp(total: usize, budget: usize, requested: i64) -> usize 
 #[must_use]
 pub fn carried_scroll(prev_lines: usize, next_lines: usize, budget: usize, scroll: usize) -> usize {
     if prev_lines == next_lines {
-        toast_scroll_clamp(next_lines, budget, i64::try_from(scroll).unwrap_or(i64::MAX))
+        toast_scroll_clamp(
+            next_lines,
+            budget,
+            i64::try_from(scroll).unwrap_or(i64::MAX),
+        )
     } else {
         0
     }
@@ -312,21 +316,45 @@ mod tests {
     fn cmdline_columns_snaps_a_mid_character_offset_down_and_clamps_past_the_end() {
         // "é" is two bytes; byte 1 is inside it.
         assert_eq!(cmdline_columns(":", "é", 1), 1, "mid-character snaps down");
-        assert_eq!(cmdline_columns(":", "é", 2), 2, "the boundary counts one char");
+        assert_eq!(
+            cmdline_columns(":", "é", 2),
+            2,
+            "the boundary counts one char"
+        );
         assert_eq!(cmdline_columns(":", "é", 99), 2, "past the end clamps");
-        assert_eq!(cmdline_columns(":", "", 99), 1, "empty text clamps to firstc");
+        assert_eq!(
+            cmdline_columns(":", "", 99),
+            1,
+            "empty text clamps to firstc"
+        );
     }
 
     #[test]
     fn toast_budget_rows_is_half_the_space_and_never_zero() {
-        assert_eq!(toast_budget_rows(400.0, 20.0), 10, "400 px, half, 20 px cells");
+        assert_eq!(
+            toast_budget_rows(400.0, 20.0),
+            10,
+            "400 px, half, 20 px cells"
+        );
         assert_eq!(toast_budget_rows(41.0, 20.0), 1, "one whole line fits");
-        assert_eq!(toast_budget_rows(20.0, 20.0), 1, "a partial line still gives one");
+        assert_eq!(
+            toast_budget_rows(20.0, 20.0),
+            1,
+            "a partial line still gives one"
+        );
         assert_eq!(toast_budget_rows(0.0, 20.0), 1, "no space still gives one");
-        assert_eq!(toast_budget_rows(-100.0, 20.0), 1, "a negative extent gives one");
+        assert_eq!(
+            toast_budget_rows(-100.0, 20.0),
+            1,
+            "a negative extent gives one"
+        );
         assert_eq!(toast_budget_rows(f64::NAN, 20.0), 1, "NaN collapses");
         assert_eq!(toast_budget_rows(400.0, 0.0), 1, "a zero cell collapses");
-        assert_eq!(toast_budget_rows(400.0, f64::INFINITY), 1, "an infinite cell collapses");
+        assert_eq!(
+            toast_budget_rows(400.0, f64::INFINITY),
+            1,
+            "an infinite cell collapses"
+        );
     }
 
     #[test]
@@ -357,17 +385,29 @@ mod tests {
 
     #[test]
     fn toast_scroll_clamp_refuses_a_negative_and_stops_at_the_oldest_line() {
-        assert_eq!(toast_scroll_clamp(5, 2, -3), 0, "negative clamps to the newest");
+        assert_eq!(
+            toast_scroll_clamp(5, 2, -3),
+            0,
+            "negative clamps to the newest"
+        );
         assert_eq!(toast_scroll_clamp(5, 2, 0), 0);
         assert_eq!(toast_scroll_clamp(5, 2, 2), 2);
-        assert_eq!(toast_scroll_clamp(5, 2, 3), 3, "the oldest line is reachable");
+        assert_eq!(
+            toast_scroll_clamp(5, 2, 3),
+            3,
+            "the oldest line is reachable"
+        );
         assert_eq!(toast_scroll_clamp(5, 2, 400), 3, "past the oldest clamps");
         assert_eq!(toast_scroll_clamp(2, 5, 4), 0, "nothing to scroll");
     }
 
     #[test]
     fn carried_scroll_forgets_the_offset_when_the_message_changes() {
-        assert_eq!(carried_scroll(5, 5, 2, 3), 3, "the same message keeps its offset");
+        assert_eq!(
+            carried_scroll(5, 5, 2, 3),
+            3,
+            "the same message keeps its offset"
+        );
         assert_eq!(carried_scroll(5, 6, 2, 3), 0, "a longer message re-pins");
         assert_eq!(carried_scroll(5, 1, 2, 3), 0, "a shorter message re-pins");
         assert_eq!(
@@ -380,7 +420,10 @@ mod tests {
     #[test]
     fn toast_is_shown_needs_both_a_visible_flag_and_a_line() {
         assert!(toast_is_shown(true, 1));
-        assert!(!toast_is_shown(true, 0), "an empty message is not a surface");
+        assert!(
+            !toast_is_shown(true, 0),
+            "an empty message is not a surface"
+        );
         assert!(!toast_is_shown(false, 3));
         assert!(!toast_is_shown(false, 0));
     }

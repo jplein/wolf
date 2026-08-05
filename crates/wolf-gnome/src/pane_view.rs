@@ -1750,8 +1750,8 @@ impl PaneInner {
         let metrics = &self.metrics;
         let selected = cmdline_ui::pum_selection(snap.pum.items.len(), snap.pum.selected);
         let available = f64::from(self.pane_area.height().max(0));
-        let budget = cmdline_ui::toast_budget_rows(available, metrics.cell_h)
-            .min(cmdline_ui::PUM_MAX_ROWS);
+        let budget =
+            cmdline_ui::toast_budget_rows(available, metrics.cell_h).min(cmdline_ui::PUM_MAX_ROWS);
         let view = cmdline_ui::pum_view(snap.pum.items.len(), selected, budget);
         let cols = cmdline_ui::pum_width_cols(&snap.pum.items, view);
         let w = (cols as f64).mul_add(metrics.cell_w, 2.0 * cmdline_ui::SURFACE_PADDING_PX);
@@ -1860,8 +1860,8 @@ impl PaneInner {
 
         let selected = cmdline_ui::pum_selection(snap.pum.items.len(), snap.pum.selected);
         let available = f64::from(self.pane_area.height().max(0));
-        let budget = cmdline_ui::toast_budget_rows(available, metrics.cell_h)
-            .min(cmdline_ui::PUM_MAX_ROWS);
+        let budget =
+            cmdline_ui::toast_budget_rows(available, metrics.cell_h).min(cmdline_ui::PUM_MAX_ROWS);
         let view = cmdline_ui::pum_view(snap.pum.items.len(), selected, budget);
         let cols = cmdline_ui::pum_width_cols(&snap.pum.items, view);
         let pad = cmdline_ui::SURFACE_PADDING_PX;
@@ -1890,7 +1890,10 @@ impl PaneInner {
             } else {
                 fg
             };
-            let label: String = cmdline_ui::pum_item_label(item).chars().take(cols).collect();
+            let label: String = cmdline_ui::pum_item_label(item)
+                .chars()
+                .take(cols)
+                .collect();
             if !label.is_empty() {
                 draw_glyph(cr, metrics, pad, y, &label, text_fg, &base);
             }
