@@ -677,6 +677,23 @@ const MIN_BAND_WIDTH_PX: usize = 8;
 /// blend pixel and would pass against a build that draws no strike at all.
 const MIN_STRIKE_INK_PX: usize = 10;
 
+/// The fewest device pixels of vertical spread the undercurl's top edge must show
+/// across the cell for it to be a wave rather than a straight line.
+///
+/// Two, chosen between two measurements rather than picked: the wave's measured
+/// top-edge spread is about 3 device pixels (see
+/// [`the_undercurl_is_wavy_rather_than_straight`]) and a horizontal rectangle —
+/// which is what `Underline::Single` draws — gives exactly 0, since every column
+/// of a rectangle has the same top edge. That leaves one pixel of headroom under
+/// the measurement and two above the value the revert produces.
+const MIN_WAVE_SPREAD_PX: usize = 2;
+
+/// The fewest of the wave band's columns that must carry the wave's own colour
+/// before a spread measured over them describes a shape.
+///
+/// A spread over two or three columns would be a statement about antialiasing.
+const MIN_WAVE_SAMPLED_COLUMNS: usize = 8;
+
 /// Builds the decoration fixture: one row of five cells, all carrying
 /// [`DECORATION_GLYPH`] on white-on-black, differing only in their decoration.
 ///
@@ -850,6 +867,27 @@ fn sub_baseline_rows(metrics: &CellMetrics, height: usize) -> (usize, usize) {
     (top, bottom.min(height))
 }
 
+/// The `[y0, y1)` device-pixel rows the undercurl's WAVE occupies — a taller band
+/// than [`sub_baseline_rows`], starting at the baseline's own row.
+///
+/// MEASURED at [`SMOKE_PROBE_SIZE_PT`] / [`LINE_HEIGHT_PERCENT`] on the pinned
+/// font stack: `cell_w = 22.4765625`, `cell_h = 49`, `baseline = 37.5`,
+/// `ascent = 35`, `descent = 9`, and Pango's wave occupies device rows 37 to 43.
+/// [`sub_baseline_rows`] starts at `ceil(baseline + SUB_BASELINE_GUARD_PX) == 39`
+/// and so cuts the wave's whole upper half away; rows 39 and 40 are near-solid,
+/// which is why a top-edge measurement taken over that band can only ever report a
+/// spread of about 1 and reads as a shallow wave when the wave is not shallow.
+///
+/// This band starts at `floor(baseline) == 37` instead, and it keeps no guard row
+/// against the glyph. The guard is what stops GLYPH ink entering an INK-based
+/// band, and the one case that reads this band separates the two by colour rather
+/// than by position — see [`topmost_reddish_rows`].
+fn wave_band_rows(metrics: &CellMetrics, height: usize) -> (usize, usize) {
+    let top = metrics.baseline.floor() as usize;
+    let bottom = metrics.cell_h as usize;
+    (top, bottom.min(height))
+}
+
 /// The `[y0, y1)` device-pixel rows of a whole cell's interior, inset top and
 /// bottom.
 fn cell_interior_rows(metrics: &CellMetrics, height: usize) -> (usize, usize) {
@@ -876,6 +914,53 @@ fn column_pixels(
         }
     }
     out
+}
+
+/// For each sampled x of `col`, the topmost row in `rows` carrying the DECORATION's
+/// colour; columns with none contribute nothing.
+///
+/// Reddish rather than merely inked, and that is the whole defence of the case
+/// that reads it. [`wave_band_rows`] deliberately includes the baseline's own row,
+/// where the glyph `x`'s two leg terminals still put ink at the left and right
+/// extremes of the sample — nearer the cell top than any part of the wave. A
+/// topmost-INK measurement would take those columns' glyph ink as the wave's crest
+/// and report a spread the decoration never had: it would pass over a straight
+/// line as readily as over a wave, which is the one failure mode that matters
+/// here.
+///
+/// Colour separates them exactly, where a wider horizontal inset would only
+/// separate them approximately and would rest on this glyph's own outline. The
+/// fixture's glyph is white and its `special` is pure red: composite a red of
+/// coverage `c` over ANY greyscale value and the red channel exceeds the other two
+/// by exactly `255 * c`, so glyph ink beneath the wave cannot invent a reddish
+/// pixel. The other order is not symmetric — an opaque glyph pixel painted over
+/// the wave hides it — but that direction only drops a column from the sample, and
+/// a dropped column can shrink the measured spread, never fabricate one.
+///
+/// It inherits one premise from
+/// [`undercurl_draws_ink_below_the_glyph_box_in_the_special_colour`]: that the wave
+/// is drawn in `special` at all. If that stops holding, this sampler returns
+/// nothing and its caller's first assertion names the cause.
+fn topmost_reddish_rows(
+    data: &[u8],
+    stride: usize,
+    metrics: &CellMetrics,
+    col: usize,
+    rows: (usize, usize),
+) -> Vec<usize> {
+    let (y0, y1) = rows;
+    let x0 = band_x0(metrics, col);
+
+    let mut tops = Vec::new();
+    for x in x0..x0 + band_width(metrics) {
+        for y in y0..y1 {
+            if is_reddish(pixel_at(data, stride, x, y)) {
+                tops.push(y);
+                break;
+            }
+        }
+    }
+    tops
 }
 
 /// An undercurl paints below the glyph box, and it paints there in `special`.
@@ -1056,6 +1141,73 @@ fn strikethrough_adds_foreground_ink_across_the_glyph() {
          pixel means AttrColor::new_strikethrough_color was added — the constructor exists, and \
          not calling it is the decision.",
         reddish_count(&struck)
+    );
+}
+
+/// The undercurl's top edge rises and falls across the cell, which no straight
+/// line can do.
+///
+/// This is the one case that tells a wave from a thicker or a vertically offset
+/// straight line. [`undercurl_and_underline_do_not_draw_the_same_thing`] proves
+/// only that the two marks DIFFER, and every one of those alternatives differs
+/// from a plain underline too.
+///
+/// MEASURED at [`SMOKE_PROBE_SIZE_PT`] / [`LINE_HEIGHT_PERCENT`] on the pinned
+/// font stack: `cell_w = 22.4765625`, `cell_h = 49`, `baseline = 37.5`,
+/// `ascent = 35`, `descent = 9`; Pango's wave occupies device rows 37 to 43, a
+/// seven-row band whose top edge spans about 3 device pixels. Anyone moving this
+/// fixture's font size or line-height is moving all of those numbers at once and
+/// owes the band and [`MIN_WAVE_SPREAD_PX`] a fresh measurement — the wave's
+/// amplitude scales with the face's underline thickness, not with the cell.
+///
+/// The sample is the FULL band width, and glyph ink is excluded by colour rather
+/// than by insetting the columns; [`topmost_reddish_rows`] carries the reason and
+/// the hazard it defends against. It reads one row per column, so it is blind to
+/// the wave's thickness and to its period: what it discriminates is a decoration
+/// whose top edge is CONSTANT across the cell.
+///
+/// Falsifier: map `undercurl` to `pango::Underline::Single` in
+/// `glyph_style::glyph_decoration` — a rectangle's top edge is the same row in
+/// every column, so the spread collapses to 0.
+#[test]
+fn the_undercurl_is_wavy_rather_than_straight() {
+    let (mut surface, metrics) = render_decoration_fixture();
+
+    let height = surface.height() as usize;
+    let stride = surface.stride() as usize;
+    let data = surface.data().expect("surface data");
+
+    let rows = wave_band_rows(&metrics, height);
+    let (y0, y1) = rows;
+    let tops = topmost_reddish_rows(&data, stride, &metrics, UNDERCURL_COL, rows);
+
+    assert!(
+        tops.len() >= MIN_WAVE_SAMPLED_COLUMNS,
+        "only {} of the {} sampled columns of the wave band (rows {y0}..{y1}) carry the \
+         decoration's colour, under the {MIN_WAVE_SAMPLED_COLUMNS} this case needs. A wave is \
+         drawn across the run's whole advance, so this few means one of three things: no undercurl \
+         was drawn; the wave is drawn in the layout foreground rather than in `special`, which \
+         `undercurl_draws_ink_below_the_glyph_box_in_the_special_colour` would also report; or the \
+         band is aimed past the wave, which is what `wave_band_rows`' measured geometry exists to \
+         prevent. The spread below would otherwise be describing antialiasing rather than a shape.",
+        tops.len(),
+        band_width(&metrics)
+    );
+
+    let min = *tops.iter().min().expect("a non-empty top-edge sample");
+    let max = *tops.iter().max().expect("a non-empty top-edge sample");
+    let spread = max - min;
+    assert!(
+        spread >= MIN_WAVE_SPREAD_PX,
+        "the undercurl's topmost coloured row runs between {min} and {max} across the cell — a \
+         spread of {spread} device pixels, under {MIN_WAVE_SPREAD_PX}. A spread of 0 means every \
+         column's decoration starts on the same row, which is a horizontal RECTANGLE: exactly what \
+         Underline::Single draws and what macOS folds undercurl into. A spread of 1 is not \
+         evidence of a wave either — an antialiased or one-pixel-offset straight edge produces it \
+         — which is why the threshold is 2 and not 1. The measured wave spans about 3, so a 1 here \
+         is far likelier to mean the band is clipping the wave's upper half than that the wave \
+         went shallow: RE-MEASURE the band before touching this threshold, and never lower it to \
+         match what was observed."
     );
 }
 

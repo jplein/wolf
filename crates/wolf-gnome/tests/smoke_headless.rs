@@ -18123,30 +18123,41 @@ exit 0
 ///
 /// ## The four falsifiers, and how their DIAGNOSTICS differ
 ///
-/// All four produce ONE occurrence, so the panic text alone does not separate them.
-/// What separates them is everything around it:
+/// All four produce ONE occurrence, so the panic text alone separates none of them.
+/// What separates them is everything around it. MEASURED — all four reverts were
+/// run, and the columns below are what each one actually produced:
 ///
-/// | revert | what happens | how to recognise it |
-/// | --- | --- | --- |
-/// | delete `clipboard.set_text(text)` in `shell::copy_selection` | the async read comes back `Ok(None)`, so nothing is pasted | red smoke, GREEN fast suite, no extra stderr |
-/// | delete `core.paste(..)` in the async callback | the clipboard holds the text and nothing consumes it | red smoke, GREEN fast suite, no extra stderr |
-/// | restore `Command::Copy => UiAction::Deferred(..)` | the action is never installed, so the chord falls through as `<C-c>` | red smoke, GREEN fast suite, and the app prints `wolf-gnome: command Copy not dispatched: …` — **that stderr line is the discriminator** |
-/// | set `win.copy`'s `status` back to `Reserved` | `action_for_key` answers `None`, so the chord falls through as `<C-c>` | red smoke over a **RED** fast suite, at `actions::bound_set_is_exactly_this_unit` |
+/// | revert | smoke | fast suite | app stderr |
+/// | --- | --- | --- | --- |
+/// | **A** delete `clipboard.set_text(text)` in `shell::copy_selection` | red | green | `wolf-gnome: clipboard read failed: No compatible transfer format found` |
+/// | **B** delete `core.paste(..)` in the async read callback | red | green | nothing extra |
+/// | **C** restore `Command::Copy => UiAction::Deferred(..)` | red | **red** at `command_action::ui_action_table` and `dispatched_commands_are_the_expected_set` | the same `clipboard read failed:` line |
+/// | **D** set `win.copy`'s `status` back to `Reserved` | red | **red** at `actions::action_for_key_table`, `bound_set_is_exactly_this_unit` and `menu_never_lists_a_reserved_action` | the same `clipboard read failed:` line |
 ///
-/// The LAST two both end with the chord reaching Neovim as `<C-c>` — which is the
-/// accelerator invariant holding, not failing: a broken build here is one where
-/// Ctrl+Shift+C interrupts rather than copies, never one where a Neovim key became
-/// unreachable. Only their surroundings separate them, and that is the whole reason
-/// this table exists: a red smoke over a RED fast suite is the demoted accelerator,
-/// a red smoke over a GREEN one is the demoted classification.
+/// Read them in two steps. **The stderr line says which HALF broke.** It appears
+/// whenever the copy half wrote nothing at all — A, C and D — because an empty
+/// clipboard makes `read_text_async` resolve `Err`, not `Ok(None)`, and
+/// `shell::paste_clipboard` prints it rather than swallowing it. Its ABSENCE is
+/// therefore B's signature, and B alone: the text reached the clipboard and the
+/// paste side dropped it. That the diagnostic exists at all is the "never swallow
+/// the `Err`" rule paying for itself.
 ///
-/// The FIRST two are stated honestly as indistinguishable from out here, and that
-/// is a real limit rather than a gap to be closed by a better message: both leave
-/// every headless test green and print nothing, so a red run narrows the cause to
-/// "one of the two `shell.rs` halves" and no further. Separating them needs a
-/// second observable the clipboard does not offer — a `wl-paste` between the two
-/// chords, which [`REQUIRED_TOOLS`] deliberately does not carry and which could not
-/// see the selection under `cage` in any case.
+/// **Then the fast suite says which of A, C and D.** A leaves it green; C and D
+/// redden it, at different tests, because each is a revert of a rule the fast suite
+/// pins directly. C and D produce identical stderr, so the reddened test names are
+/// the whole of what tells them apart.
+///
+/// One natural guess is wrong and is worth stating, because it would send a reader
+/// looking for a line that never comes: **C prints no `command Copy not dispatched:`
+/// line.** That line is emitted by `dispatch_command` alone, which is the drain and
+/// palette path. A chord takes `install_chord_controller` → `action_is_enabled`,
+/// which answers false for an action `install_actions` skipped, and returns
+/// `Propagation::Proceed` — forwarding the key and printing nothing.
+///
+/// C and D do both end with the chord reaching Neovim as `<C-c>`, which is the
+/// accelerator invariant holding rather than failing: a broken build here is one
+/// where Ctrl+Shift+C interrupts rather than copies, never one where a Neovim key
+/// became unreachable.
 ///
 /// ## The conventions it obeys, including the one that does not bite
 ///
@@ -18227,19 +18238,22 @@ fn copy_and_paste_round_trip_through_the_clipboard_under_cage() {
         "{SMOKE}: {CLIP_MARK:?} appears {occurrences} time(s) in the buffer readback, want exactly \
          {CLIP_EXPECTED_OCCURRENCES} — once for the line the scenario seeded and once for the copy \
          that came back through the system clipboard.\n\
-         ZERO occurrences is a HARNESS failure, not a feature one: the seeding `:call setline(...)` \
-         never executed, so nothing was ever selected and nothing could have been copied. Check \
-         that keys are reaching Neovim at all (the keyboard-only smokes first), not the clipboard \
-         code.\n\
-         ONE occurrence is the FEATURE failure, and it has four candidate causes that this message \
-         cannot tell apart — read the surroundings, per the table in this test's doc comment. If \
-         the fast suite is also RED at `actions::bound_set_is_exactly_this_unit`, the accelerator \
-         was demoted to Reserved and the chord fell through to Neovim as <C-c>. If the fast suite \
-         is GREEN and the app printed `wolf-gnome: command Copy not dispatched:` on stderr, \
-         `command_action::ui_action_for` still classifies Copy as Deferred. If the fast suite is \
-         GREEN and there is no such line, the break is in `shell.rs`: either \
-         `clipboard.set_text(text)` on the copy side or `core.paste(..)` inside the async read \
-         callback on the paste side.\n\
+         ZERO occurrences is a HARNESS failure, not a feature one: the seeding \
+         `:call nvim_buf_set_lines(...)` never executed, so nothing was ever selected and nothing \
+         could have been copied. Check that keys are reaching Neovim at all (the keyboard-only \
+         smokes first), not the clipboard code.\n\
+         ONE occurrence is the FEATURE failure, and it has four candidate causes this message \
+         cannot name on its own. The doc comment's MEASURED table separates them in two steps. \
+         FIRST, look on the app's stderr for `wolf-gnome: clipboard read failed:`. It appears \
+         whenever the COPY half wrote nothing — an empty clipboard makes `read_text_async` resolve \
+         Err, not Ok(None) — so its ABSENCE means the copy worked and the paste side dropped it: \
+         `core.paste(..)` is missing from the async read callback in `shell.rs`. SECOND, if the \
+         line IS there, read the fast suite: GREEN means `clipboard.set_text(text)` is missing \
+         from `shell::copy_selection`; RED at `command_action::ui_action_table` means Copy was \
+         demoted to Deferred; RED at `actions::action_for_key_table` means `win.copy` was demoted \
+         to Reserved. Do NOT go looking for a `command Copy not dispatched:` line — a chord never \
+         takes the `dispatch_command` path that prints it, so it does not appear under any of the \
+         four.\n\
          MORE than {CLIP_EXPECTED_OCCURRENCES} means the paste was delivered more than once — a \
          chord handled in both the capture and the bubble phase, or an `InputEvent::Paste` queued \
          per callback invocation.\n\

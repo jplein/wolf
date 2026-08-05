@@ -10,31 +10,12 @@
 //! Reading `wolf-config.yaml` itself belongs to `wolf_core::config`; nothing here
 //! touches the filesystem.
 
-use wolf_core::{Appearance, WolfConfig};
-
 /// The font size used when neither `WOLF_FONT_PT` nor the configured `font-size`
 /// is usable, in points.
 ///
 /// The value the front-end ran at before it read a config at all, so a developer
 /// with no config file and no override sees what they saw then.
 pub const FALLBACK_FONT_PT: f64 = 14.0;
-
-/// One configuration setting this front-end reads and does not honour.
-///
-/// Reported once at launch rather than dropped silently: a user who wrote a
-/// setting deserves to learn it does nothing here.
-pub struct UnsupportedSetting {
-    /// The key's spelling in `wolf-config.yaml`, so the message names the line to
-    /// edit.
-    pub key: &'static str,
-    /// The value the user actually wrote, echoed back.
-    pub value: &'static str,
-    /// Why this front-end does not honour it.
-    pub reason: &'static str,
-}
-
-/// The `appearance` key, spelled as `wolf-config.yaml` spells it.
-const APPEARANCE_KEY: &str = "appearance";
 
 /// The point size to measure the cell at: the environment override when it is
 /// usable, else the configured `font-size`, else [`FALLBACK_FONT_PT`].
@@ -61,39 +42,9 @@ pub fn resolve_font_pt(env_override: Option<f64>, config_font_size: f64) -> f64 
     FALLBACK_FONT_PT
 }
 
-/// The configured settings this front-end reads and does not honour, one row each.
-///
-/// A forced `appearance` produces a row. `macos_option_as_alt` produces **none**,
-/// however it is set, and the asymmetry is deliberate: one `wolf-config.yaml` is
-/// shared across both platforms and the key's own name says which platform it is
-/// for, so a Linux warning would fire on every launch for a setting that is
-/// correct where its author wrote it. A forced appearance has no such excuse — it
-/// names no platform and it does nothing here.
-#[must_use]
-pub fn unsupported_settings(config: &WolfConfig) -> Vec<UnsupportedSetting> {
-    let mut rows = Vec::new();
-    let value = match config.appearance {
-        Appearance::Auto => None,
-        Appearance::Dark => Some("dark"),
-        Appearance::Light => Some("light"),
-    };
-    if let Some(value) = value {
-        rows.push(UnsupportedSetting {
-            key: APPEARANCE_KEY,
-            value,
-            reason: "wolf-gnome does no theming in either direction: it neither queries the OS \
-                     theme nor pushes one into Neovim, so the appearance follows Neovim's own \
-                     colorscheme and the system GTK theme",
-        });
-    }
-    rows
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use wolf_core::{default_config, Appearance, WolfConfig};
 
     /// The `font-size` a Linux `wolf-config.yaml` carries by default, in points.
     /// Used as the "configured" arm so a pass cannot be faked by the last-resort
@@ -114,32 +65,6 @@ mod tests {
     /// the guard exists to reject. Stating 14 independently means a change to the
     /// constant fails here rather than moving with it.
     const EXPECT_FALLBACK_FONT_PT: f64 = 14.0;
-
-    /// The config key an unsupported forced appearance must be reported under.
-    const APPEARANCE_KEY: &str = "appearance";
-
-    /// The config key that must NEVER be reported, however it is spelled.
-    const OPTION_AS_ALT_KEY: &str = "macos-option-as-alt";
-
-    /// A config carrying the requested `appearance` and `macos_option_as_alt`, with
-    /// every other field left at the shipped defaults.
-    ///
-    /// Built by mutating [`default_config`] rather than by a struct literal so a
-    /// later field added to `WolfConfig` does not break this file — the seam under
-    /// test reads two fields and a new one is not this file's business.
-    fn cfg_with(appearance: Appearance, macos_option_as_alt: bool) -> WolfConfig {
-        let mut config = default_config();
-        config.appearance = appearance;
-        config.macos_option_as_alt = macos_option_as_alt;
-        config
-    }
-
-    /// The reported keys, in order — a `Vec<&str>` so a failure message can name
-    /// what was actually produced without `UnsupportedSetting` having to derive
-    /// `Debug`.
-    fn keys(rows: &[UnsupportedSetting]) -> Vec<&'static str> {
-        rows.iter().map(|row| row.key).collect()
-    }
 
     // =====================================================================
     // resolve_font_pt — the WOLF_FONT_PT over `font-size` precedence (D1)
@@ -222,117 +147,5 @@ mod tests {
                  and the window comes up blank — with the config file, not the code, as the cause."
             );
         }
-    }
-
-    // =====================================================================
-    // unsupported_settings — what is reported once at launch, and what is not
-    // =====================================================================
-
-    /// The default `appearance: auto` is fully supported, so nothing is reported.
-    ///
-    /// Without this case a `unsupported_settings` that returned the appearance row
-    /// unconditionally would still satisfy every positive case below, and every
-    /// launch would print a warning about a setting the user never wrote.
-    #[test]
-    fn appearance_auto_reports_no_unsupported_setting() {
-        let rows = unsupported_settings(&cfg_with(Appearance::Auto, false));
-        assert!(
-            rows.is_empty(),
-            "`appearance: auto` is what the shipped default writes and it is honoured (the \
-             front-end simply follows nothing), so it must produce NO row. Got {:?}. An \
-             unconditional row means every launch prints a warning about a setting the user did \
-             not choose, which trains the reader to ignore the one that matters.",
-            keys(&rows)
-        );
-    }
-
-    /// A forced `appearance` is reported exactly once, with a key and a reason.
-    ///
-    /// D2: a user who wrote `appearance: dark` deserves to learn it does nothing on
-    /// this front-end, and gets told once at launch rather than never.
-    #[test]
-    fn a_forced_appearance_reports_one_unsupported_setting() {
-        let mut values: Vec<&'static str> = Vec::new();
-        for appearance in [Appearance::Dark, Appearance::Light] {
-            let rows = unsupported_settings(&cfg_with(appearance, false));
-            assert_eq!(
-                rows.len(),
-                1,
-                "a forced {appearance:?} appearance must produce exactly ONE row, got {:?}. Zero \
-                 means the appearance arm was deleted and the setting is silently dropped — the \
-                 outcome D2 rejects. More than one means the same setting is reported twice and \
-                 the launch log stops being readable.",
-                keys(&rows)
-            );
-            let row = &rows[0];
-            assert_eq!(
-                row.key, APPEARANCE_KEY,
-                "the row for a forced {appearance:?} appearance must be keyed {APPEARANCE_KEY:?} — \
-                 the exact spelling of the key in `wolf-config.yaml`, so the message tells the user \
-                 which line to edit."
-            );
-            assert!(
-                !row.reason.is_empty(),
-                "the {appearance:?} row carries an EMPTY reason, so the launch message would name \
-                 a setting and say nothing about why it does nothing. The reason is where the \
-                 \"no theming in either direction\" limitation reaches the user."
-            );
-            assert!(
-                !row.value.is_empty(),
-                "the {appearance:?} row carries an EMPTY value, so the message cannot echo back \
-                 what the user actually wrote."
-            );
-            values.push(row.value);
-        }
-        assert_ne!(
-            values[0], values[1],
-            "`Dark` and `Light` reported the same value {:?}. The value must be the setting the \
-             user wrote, so a hardcoded string here means the message misquotes one of the two \
-             configs back at its author.",
-            values[0]
-        );
-    }
-
-    /// `macos_option_as_alt` is never reported, however the config sets it.
-    ///
-    /// D3, and the "helpful" addition it rejects: one `wolf-config.yaml` is shared
-    /// across both platforms, and the key's own name says which platform it is for,
-    /// so a Linux warning would fire on every launch for a setting that is correct
-    /// where its author wrote it. Both halves matter — the `Auto` half proves the
-    /// flag alone produces nothing, and the `Dark` half proves it does not sneak in
-    /// alongside a row that IS produced.
-    #[test]
-    fn macos_option_as_alt_is_never_reported_as_unsupported() {
-        let rows = unsupported_settings(&cfg_with(Appearance::Auto, true));
-        assert!(
-            rows.is_empty(),
-            "`macos-option-as-alt: true` with a supported appearance must produce NO row at all, \
-             got {:?}. A row here is the exact change D3 rejects: the setting is correct on the \
-             macOS host that shares this file, so the warning would fire on every Linux launch \
-             forever and could not be silenced without breaking the other platform.",
-            keys(&rows)
-        );
-
-        let mixed = unsupported_settings(&cfg_with(Appearance::Dark, true));
-        assert_eq!(
-            mixed.len(),
-            1,
-            "with a forced appearance AND `macos-option-as-alt: true`, only the appearance is \
-             unsupported, so exactly one row is expected; got {:?}.",
-            keys(&mixed)
-        );
-        let key = mixed[0].key;
-        assert_ne!(
-            key, OPTION_AS_ALT_KEY,
-            "the single reported row is keyed {OPTION_AS_ALT_KEY:?}, so the appearance row was \
-             replaced by an option-as-alt row rather than joined by one — the forced appearance is \
-             silently dropped as well."
-        );
-        assert!(
-            !key.contains("option"),
-            "the reported row is keyed {key:?}, which names the option-as-alt setting under some \
-             other spelling. The rule is that this setting is never reported, not that one \
-             particular string is never used."
-        );
     }
 }

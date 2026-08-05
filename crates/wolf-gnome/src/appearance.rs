@@ -107,10 +107,44 @@ pub struct ResolvedAppearance {
 /// [`Appearance`] with no `_` arm.
 #[must_use]
 pub fn appearance_decision(configured: Appearance, os_dark: bool) -> ResolvedAppearance {
-    todo!(
-        "appearance::appearance_decision is not implemented yet (configured: {configured:?}, \
-         os_dark: {os_dark})"
-    )
+    match configured {
+        // `ColorScheme::Default` IS "follow the desktop", which libadwaita already
+        // does live and for free — so the chrome half of `auto` is a deliberate
+        // no-op rather than an omission, and forcing a scheme for a user who never
+        // asked for one is the one thing libadwaita's guidance says not to do.
+        Appearance::Auto => ResolvedAppearance {
+            dark: os_dark,
+            color_scheme: adw::ColorScheme::Default,
+            observe_os: true,
+        },
+        // `Force*` and never `Prefer*`: a `Prefer…` scheme yields to the desktop's
+        // own preference, so it would leave the setting the user wrote the config
+        // line to override in charge after all.
+        Appearance::Dark => ResolvedAppearance {
+            dark: true,
+            color_scheme: adw::ColorScheme::ForceDark,
+            observe_os: false,
+        },
+        Appearance::Light => ResolvedAppearance {
+            dark: false,
+            color_scheme: adw::ColorScheme::ForceLight,
+            observe_os: false,
+        },
+    }
+}
+
+/// Pushes `background=dark|light` into the captive Neovim, taking and releasing
+/// the core borrow within this call.
+///
+/// A function rather than an inline `if let` so the borrow's lifetime is the
+/// statement's, per `crates/wolf-gnome/DECISIONS.md`'s borrow discipline: the
+/// notify handler shares it, and neither caller may hold the `RefCell` across the
+/// call it makes next.
+fn push_background(core: &Rc<RefCell<Option<WolfCore>>>, dark: bool) {
+    let core_ref = core.borrow();
+    if let Some(core) = core_ref.as_ref() {
+        core.set_background(dark);
+    }
 }
 
 /// Applies the resolved appearance at launch: sets the chrome's colour scheme,
@@ -127,8 +161,28 @@ pub fn appearance_decision(configured: Appearance, os_dark: bool) -> ResolvedApp
 /// `tests/smoke_headless.rs` is what proves. The step order this function must
 /// keep is in the module docs.
 pub fn apply_at_launch(config: &WolfConfig, core: &Rc<RefCell<Option<WolfCore>>>) {
-    let _ = (config, core);
-    todo!("appearance::apply_at_launch is not implemented yet")
+    let manager = adw::StyleManager::default();
+    // `Appearance` is `Copy`, so the notify handler below can carry the configured
+    // value by value rather than borrowing the config.
+    let configured = config.appearance;
+    let decided = appearance_decision(configured, manager.is_dark());
+
+    manager.set_color_scheme(decided.color_scheme);
+
+    push_background(core, decided.dark);
+
+    if decided.observe_os {
+        // A `Weak`, so an armed handler cannot keep the core alive past the close
+        // handler that takes it out of the `Option`.
+        let weak = Rc::downgrade(core);
+        manager.connect_dark_notify(move |manager| {
+            let Some(core) = weak.upgrade() else {
+                return;
+            };
+            let decided = appearance_decision(configured, manager.is_dark());
+            push_background(&core, decided.dark);
+        });
+    }
 }
 
 #[cfg(test)]

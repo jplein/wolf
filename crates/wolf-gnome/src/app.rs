@@ -115,10 +115,13 @@
 //! The shared `wolf-config.yaml` is read ONCE at window-build time, beside the
 //! state store: its `font-family`, `font-size` and `line-height` drive
 //! [`CellMetrics::for_font`], with `WOLF_FONT_PT` winning over the configured size
-//! ([`crate::config_seam::resolve_font_pt`]). A configured `appearance` other than
-//! `auto` is reported once on stderr and then ignored, because THEMING is deferred:
-//! this front-end neither queries the OS theme nor pushes one into Neovim. Also
-//! deferred is a native command line as Adw widgets: the cmdline strip, the message
+//! ([`crate::config_seam::resolve_font_pt`]). Its `appearance` is resolved against
+//! libadwaita's own light/dark reading and applied in both directions the resolved
+//! value reaches — `background=dark|light` into the captive Neovim and the GTK
+//! chrome's colour scheme — by [`crate::appearance::apply_at_launch`], called once
+//! here as soon as the core exists. No OS COLOUR is read into Neovim's highlight
+//! groups; that direction is macOS-only. Deferred is a native command line as Adw
+//! widgets: the cmdline strip, the message
 //! toast and the `ext_popupmenu` completion popup are all painted from the folded
 //! `Snapshot::cmdline` / `Snapshot::toast` / `Snapshot::pum`, and none of them paints
 //! grid 1, which under `ext_messages` (`cmdheight=0`) is empty. The strip stays one
@@ -134,6 +137,7 @@ use adw::prelude::*;
 use gtk::glib;
 use wolf_core::{CoreConfig, InputEvent, StateStore, WakeFn, WolfConfig, WolfCore, WolfState};
 
+use crate::appearance;
 use crate::buffer_picker::{self, BufferPickerHandle};
 use crate::config_seam;
 use crate::crash_overlay;
@@ -234,17 +238,6 @@ fn load_config() -> WolfConfig {
     wolf_core::load_or_create(&dir)
 }
 
-/// Prints one line per configured setting this front-end reads and does not
-/// honour, so a user who wrote one learns it does nothing here.
-fn report_unsupported_settings(config: &WolfConfig) {
-    for setting in config_seam::unsupported_settings(config) {
-        eprintln!(
-            "wolf-gnome: `{}: {}` in wolf-config.yaml is not honoured: {}",
-            setting.key, setting.value, setting.reason
-        );
-    }
-}
-
 /// Measures the monospace cell metrics ONCE from `config`, using a throwaway 1x1
 /// offscreen surface purely to obtain a Pango context (its pixel size is
 /// irrelevant).
@@ -304,7 +297,6 @@ fn build_ui(app: &adw::Application) {
     // exists — matching macOS's `CellMetrics.measured(config:)` at launch. An edit
     // to `wolf-config.yaml` therefore takes effect on the next launch.
     let config = load_config();
-    report_unsupported_settings(&config);
 
     // Measure the cell once and share it (by Rc) with the draw and resize closures
     // so it is available even if a resize fires before the first draw.
@@ -346,6 +338,12 @@ fn build_ui(app: &adw::Application) {
     // The core is non-Send; it lives only here on the main thread, shared by the
     // draw/key/resize/close closures via Rc, and taken out on close.
     let core = Rc::new(RefCell::new(Some(core)));
+
+    // The configured appearance, resolved and applied: the chrome's colour scheme
+    // and the `background` push into the captive Neovim. AFTER the core exists, so
+    // the push has somewhere to go, and BEFORE any widget is built, so the window
+    // is realized under the resolved scheme with no visible flash.
+    appearance::apply_at_launch(&config, &core);
 
     // The native pane tree (one DrawingArea per pane + a cmdline strip), replacing
     // the former single editor DrawingArea. Its container is the overlay's main
