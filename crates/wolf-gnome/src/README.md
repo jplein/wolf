@@ -59,6 +59,21 @@ Purpose: all GTK and Adwaita window wiring. `run` builds the `adw::Application` 
 
 - The wake-channel capacity stays private; its tests live here and read the production constant, not a literal.
 
+#### `appearance.rs`
+
+Purpose: the OS dark/light rulebook — what a configured `appearance` resolves to against libadwaita's reading of the desktop — plus the glue that applies it at launch.
+
+**Public API**
+
+- `appearance_decision(configured, os_dark) -> ResolvedAppearance` — total over `wolf_core::Appearance` with no `_` arm: the `background` pushed into Neovim, the chrome's `adw::ColorScheme`, and whether a live desktop toggle is followed at all.
+- `apply_at_launch(config, core)` — the one `StyleManager::is_dark()` read, then the scheme, the push, and the `dark` notify handler in `auto` alone.
+
+**Decisions**
+
+- `os_dark` is a parameter and is never read here: `adw::StyleManager::default()` asserts an initialized main thread, so a seam reaching for it could not run headlessly. Naming `adw::ColorScheme` in a pure module is [`actions.rs`](#actionsrs)'s precedent.
+- A forced appearance takes `ForceDark`/`ForceLight` rather than `PreferDark`/`PreferLight`, which yield to the desktop preference the user wrote the config line to override. `auto` takes `Default`, which is libadwaita's own "follow the desktop".
+- The notify handler pushes `background` and never re-sets the scheme, because re-applying a property inside its own notify handler is the shape that loops; it is armed after the launch-time set for the same reason.
+
 #### `buffer_picker.rs`
 
 Purpose: the buffer-picker overlay — a search entry over the captive Neovim's listed buffers, ranked by `wolf_core::rank_buffers`. Activating a row switches the active window to that buffer.
@@ -97,6 +112,20 @@ Purpose: the pure cell-metrics arithmetic the configured `line-height` drives �
 - The function is unit-agnostic and rounds in whatever unit its caller uses: points on macOS, device pixels here, since device pixels are what Cairo paints in.
 - Two divergences from Swift, both strictly more defensive and both confined to inputs macOS also mishandles: the percentage must be finite (Swift's guard accepts `+inf`), and a non-finite or non-positive result is floored (Swift can return `0` or `NaN`).
 
+#### `clipboard_ui.rs`
+
+Purpose: the pure rulebook for Copy and Paste through the system clipboard — whether each chord may act, and what crosses the boundary in each direction. GTK-free; [`shell.rs`](#shellrs) owns the `gdk::Clipboard` handle and the asynchronous read.
+
+**Public API**
+
+- `copy_decision(liveness) -> CopyPress` and `paste_decision(liveness) -> PastePress` — both total over `Option<Liveness>` with no `_` arm. Only `Some(Alive)` acts; every refusal carries a distinct mid-sentence clause the caller prints.
+- `clipboard_write(selection)` and `paste_payload(read)` — `None` for an absent or empty string.
+
+**Decisions**
+
+- `clipboard_write`'s `None` means write nothing, never clear. Clearing would destroy whatever the user copied from another application, in answer to a chord that yanked nothing.
+- Copy is a bounded blocking RPC and is gated for that reason ([DECISIONS.md](../DECISIONS.md)). Nothing on the paste path blocks, and its refusals are about a paste queued behind an opaque overlay reaching a restarted Neovim minutes later — the two reasons must not be collapsed into one.
+
 #### `cmdline_ui.rs`
 
 Purpose: the pure rulebook behind the command-line strip, the message toast and the completion popup.
@@ -104,8 +133,8 @@ Purpose: the pure rulebook behind the command-line strip, the message toast and 
 **Public API**
 
 - `cmdline_columns(prefix, text, byte)` — `prefix` is the dialog `prompt` plus `firstc`.
-- `toast_budget_rows(available_px, cell_h)`, `toast_view(total, budget, scroll) -> ToastView`, `toast_scroll_next(current, steps, total, budget)`, `toast_scroll_clamp(total, budget, requested)`, `toast_width_cols(lines, view)`, `carried_scroll(prev, next, budget, scroll)`, `toast_is_shown(visible, lines)`, `prompt_answered(was_prompt, now_visible)`.
-- `pum_selection(items, selected) -> Option<usize>`, `pum_view(items, selected, budget) -> PumView`, `pum_item_label(item)`, `pum_width_cols(items, view)`.
+- The toast rules: `toast_budget_rows`, `toast_view`, `toast_scroll_next`, `toast_scroll_clamp`, `toast_width_cols`, `carried_scroll`, `toast_is_shown`, `prompt_answered`.
+- The popup rules: `pum_selection`, `pum_view`, `pum_item_label`, `pum_width_cols`.
 
 **Decisions**
 
@@ -146,12 +175,11 @@ Purpose: the pure configuration seam — every rule about consuming a `wolf_core
 **Public API**
 
 - `resolve_font_pt(env_override, config_font_size) -> f64` — the first of the two that is finite and strictly positive, else `FALLBACK_FONT_PT`. Both inputs come from a human, so `0`, a negative and a non-finite value are all reachable, and any of them reaching Pango draws nothing with no error anywhere.
-- `unsupported_settings(config) -> Vec<UnsupportedSetting>` — one row per configured setting this front-end reads and does not honour, each carrying the key, the value and the reason.
 
 **Decisions**
 
 - The override is injected rather than read here, which is what makes the precedence rule testable without touching the process environment — something a parallel test suite cannot safely do.
-- A forced `appearance` produces a row; `macos_option_as_alt` produces none, however it is set. The asymmetry is deliberate: one config file is shared across both platforms and that key's own name says which platform it is for, so a warning would fire on every Linux launch for a setting that is correct where its author wrote it. A named test pins it.
+- The configured `appearance` is not resolved here: it belongs to [`appearance.rs`](#appearancers), whose answer names an `adw::ColorScheme` and would falsify this module's GTK-free property.
 
 #### `crash_overlay.rs`
 
@@ -232,6 +260,22 @@ Purpose: the pure pixel conversions behind every resize, pointer event, and divi
 **Gotchas**
 
 - `cell_at` takes grid-local coordinates, and the cap's centring offset is already in [`editor_inset.rs`](#editor_insetrs)'s `grid_rect(..).x`, which `grid_local` subtracts. So this function takes no origin, and macOS's `paintOffset` machinery has no counterpart. Do not add one.
+
+#### `glyph_style.rs`
+
+Purpose: the pure rulebook for the three attribute-borne decorations a cell carries — underline, undercurl and strikethrough — and the colour the first two are drawn in. A port of `WolfKeyMap/GlyphStyle.swift`; [`render.rs`](#renderrs) turns the answer into Pango attributes.
+
+**Public API**
+
+- `glyph_decoration(&ResolvedStyle) -> GlyphDecoration` — total. `GlyphDecoration::is_empty` is what lets an undecorated cell build no `AttrList` at all.
+- `pango_channels(Rgb) -> (u16, u16, u16)` — the 8-bit to 16-bit widening, by 257 rather than 256 so `255` reaches the top of Pango's range exactly.
+
+**Decisions**
+
+- `undercurl` asks Pango for `Underline::Error`, its own wave, rather than a hand-stroked Cairo path: the underline's position and thickness come from face metrics Pango reads and this crate does not, and a second drawing mechanism is what the one-glyph-path rule exists to prevent.
+- Pango carries one underline attribute per run, so `underline` and `undercurl` cannot coexist and undercurl wins. macOS folds both into a straight underline, so the wave is a deliberate divergence, pinned by [`paint_golden.rs`](../tests/README.md#paint_goldenrs).
+- No strikethrough colour is ever set, so Pango strikes in the layout's foreground — which is macOS's behaviour, bought for free and one attribute cheaper.
+- The face is not resolved here: weight and style ride on the `FontDescription`, so this module covers the attribute-borne decorations only.
 
 #### `input.rs`
 
@@ -429,7 +473,6 @@ Purpose: the file-picker overlay — a search entry over a ranked results list. 
 - The key controller runs in the capture phase, so Escape and the arrows are seen before the `SearchEntry` consumes them, and the arrows move the list selection while focus stays in the entry.
 - The selection is preserved across a streaming rebuild unless the query changed, so an arriving batch does not yank the user back to the top row.
 - Activation with zero rows is a true no-op: it neither opens anything nor closes the picker.
-- No shared overlay widget is extracted for the four overlays, and that is a judgement: a common type would need four configuration hooks, and the widget layer's only coverage is the cage smokes a refactor would risk.
 
 **Gotchas**
 
@@ -469,6 +512,7 @@ Purpose: the Cairo/Pango paint seam — one grid and its highlight table onto an
 **Decisions**
 
 - `draw_glyph` moves to `y + baseline - ascent`, not the cell top: Pango puts the layout's top at the move-to point, so a cell taller than the glyph box would hang the glyphs from its top edge.
+- Bold and italic ride on the cloned `FontDescription`; underline, undercurl, strikethrough and the decoration colour arrive as Pango attributes out of [`glyph_style.rs`](#glyph_stylers), and a cell wanting none builds no `AttrList`.
 - The 96 dpi fallback behind the point-to-pixel conversion is the live path on every headless run, not a guard: `context_get_resolution` returns `-1.0` over an `ImageSurface`.
 - Every cell's background rectangle is filled, including empty ones, which keeps wide-character trailing placeholders and never-painted cells aligned.
 
@@ -518,7 +562,7 @@ Purpose: the project-search overlay — a `Ctrl+Shift+F` entry over a flat, stre
 
 **Gotchas**
 
-- `all_files: true` reaches everything `rg --hidden` lists. Measured at this repository's root: 131 `.git/` paths out of 566, and a content search returns `.git/hooks` hits.
+- `all_files: true` reaches everything `rg --hidden` lists, `.git/` included; the measured counts are in [`macos-followups.md`](../../../macos-followups.md).
 - A same-file jump to another line records no history, while a cross-file one does: core folds a `NavTarget` per window, and `NavTarget::Edit` carries no line number.
 
 #### `shell.rs`
@@ -634,7 +678,7 @@ Purpose: the GTK glue for the file-tree sidebar — a `gtk::ListView` over a `gt
 
 **Gotchas**
 
-- Manual expansion below the root does not survive a version advance: every streaming batch and every re-root rebuilds the root store. Preserving it means owning each expanded directory's `gio::ListStore` and diffing into it per snapshot; GTK has no identity-keyed reload.
+- Manual expansion below the root does not survive a root-store rebuild; [DECISIONS.md](../DECISIONS.md) owns that limitation and what preserving it would cost.
 
 #### `workspace.rs`
 
