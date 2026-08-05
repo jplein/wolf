@@ -17357,6 +17357,359 @@ fn column_cap_and_full_width_toggle_change_the_grid_under_cage() {
     );
 }
 
+// --- Copy and paste through the system clipboard -----------------------------
+
+/// The word the captive Neovim puts on line 1, copies to the system clipboard, and
+/// pastes back.
+///
+/// It is deliberately NOT a fixture filename and NOT an OCR term: nothing in this
+/// smoke is captured or OCR'd, so it contributes no row to [`ASSERTED_OCR_TERMS`]
+/// and no fixture may be named after it either — no file called `zzclipmark.md` is
+/// written anywhere. What the assertion counts is occurrences inside a file the
+/// captive Neovim wrote OUT OF ITS OWN BUFFER, so a sidebar row, a header-bar
+/// title or an `:e` toast cannot contribute to the count even in principle.
+///
+/// All-caps and `ZZ`-prefixed for the same reason the other in-buffer markers are
+/// ([`NEWBUF_MARKER`], [`FOCUS_MARKER`]): it cannot collide with a word Neovim, the
+/// chrome or a fixture would produce on its own, so a count of two can only mean
+/// the text made the round trip.
+const CLIP_MARK: &str = "ZZCLIPMARK";
+
+/// File the captive Neovim writes EVERY LINE of its buffer into, after the paste.
+///
+/// It lives under `XDG_RUNTIME_DIR` rather than in the smoke's cwd, so the app's own
+/// `FileSearch` never lists it and it never becomes a tree-sidebar row — the same
+/// treatment [`FULLWIDTH_CAPPED_READBACK_NAME`] gets, and belt-and-braces here for
+/// the same reason: nothing on this page is read by OCR.
+const CLIP_READBACK_NAME: &str = "wolf_gnome_clipboard_lines.txt";
+
+/// How many times [`CLIP_MARK`] must appear in the readback: ONCE for the line the
+/// scenario seeded, ONCE for the copy that came back through the clipboard.
+///
+/// Written as a named constant rather than a literal `2` so the assertion's message
+/// and the number it checks cannot drift apart.
+///
+/// The count is a SUBSTRING count, which is only meaningful because the scenario
+/// lands the paste on an empty line; see [`CLIPBOARD_SCENARIO`]'s seeding comment
+/// for why a paste onto the marker's own line would splice the two into a single
+/// occurrence and make a working build indistinguishable from a broken one.
+const CLIP_EXPECTED_OCCURRENCES: usize = 2;
+
+/// The single-launch CLIPBOARD ROUND-TRIP scenario, run as one `sh -c` string inside
+/// one `cage`, structurally [`FULLWIDTH_SCENARIO`]'s shape.
+///
+/// Both buffer accesses go through `nvim_buf_set_lines` / `nvim_buf_get_lines`
+/// rather than `setline` / `getline(1, '$')`: the scenario is a double-quoted shell
+/// string, and a `'$'` inside one sits one edit away from being read as a parameter
+/// expansion. Each API line carries exactly one `$`, which is the readback path, so
+/// there is nothing to get wrong.
+///
+/// Exit codes, each naming ONE cause and no two folded together: `11` the app died
+/// before its window mapped; `12` the buffer readback never appeared (or was empty);
+/// `13` the app was still alive after `:qa!`; `14` the app exited non-zero. 13 and 14
+/// are separate because a process that panicked in the GTK main loop and one that
+/// shut down cleanly are equally GONE — only the status tells them apart.
+const CLIPBOARD_SCENARIO: &str = r#"
+set -eu
+
+# SETTLE is the ONLY real budget between spawning the app and its first keystroke:
+# `wait_window`'s wtype probe does NOT gate input readiness (it breaks at tries=0 on
+# every run -- see the module doc comment).
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+# TWICE the settle, and the doubling is deliberate. Every other pause in this
+# scenario follows a key Neovim answers by itself. The paste follows a round trip
+# with six hops, each a separate main-loop turn and NONE of them pollable from out
+# here: the chord -> gdk::Clipboard::read_text_async -> the async callback landing on
+# a later turn of the GTK main context -> WolfCore::paste's send on the ordered input
+# channel -> the input pump's nvim_paste(text, true, -1) -> Neovim's flush. The read
+# is asynchronous and the insert is fire-and-forget, so nothing on that path
+# reports completion and there is no file to wait on until the buffer already holds
+# the text.
+PASTE_SETTLE=2.0
+QUIT_TRIES=75
+FILE_TRIES=100
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+wait_window() {
+    tries=0
+    while [ "$tries" -lt "$WAIT_TRIES" ]; do
+        if ! kill -0 "$app_pid" 2>/dev/null; then
+            echo "wolf-gnome clipboard smoke: app process exited early (pid $app_pid)" >&2
+            exit 11
+        fi
+        if wtype "" >/dev/null 2>&1; then
+            return 0
+        fi
+        tries=$((tries + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    return 0
+}
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome clipboard smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# $1 is the exit code for "still alive after :qa!", $2 for "exited non-zero".
+quit_app() {
+    wtype -- ":qa!"
+    wtype -k Return
+
+    tries=0
+    gone=0
+    while [ "$tries" -lt "$QUIT_TRIES" ]; do
+        if ! kill -0 "$app_pid" 2>/dev/null; then
+            gone=1
+            break
+        fi
+        tries=$((tries + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    if [ "$gone" -ne 1 ]; then
+        echo "wolf-gnome clipboard smoke: app (pid $app_pid) still alive after :qa!." >&2
+        exit "$1"
+    fi
+    # `set -e` would abort before the status could be reported, so collect it
+    # through `||`, which is exempt from it.
+    rc=0
+    wait "$app_pid" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "wolf-gnome clipboard smoke: app (pid $app_pid) exited $rc, not 0." >&2
+        exit "$2"
+    fi
+    app_pid=
+}
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_window
+sleep "$SETTLE"
+
+# Seed the whole buffer: the marker on line 1, then TWO EMPTY LINES. Set through the
+# API rather than typed in insert mode, so the marker cannot be corrupted by a dropped
+# or doubled keystroke -- either the whole Ex command executed or none of it did, and
+# the "none of it did" case is the ZERO-occurrence arm of the Rust assertion.
+#
+# THE EMPTY LINES ARE LOAD-BEARING, and they are the one thing here that is easy to
+# "simplify" away. `nvim_paste` splits the linewise register "ZZCLIPMARK\n" into
+# ["ZZCLIPMARK", ""] and, in normal mode, `vim.paste` performs a CHARWISE
+# `nvim_put(..., 'c', true, false)` -- an insert AFTER the cursor character, not a
+# linewise put. Pasted onto the marker's own line that splices the two into
+# "ZZZCLIPMARK" plus "ZCLIPMARK", in which the marker occurs exactly ONCE: a fully
+# working build would then fail with the same count a broken one produces. Landing the
+# paste on an EMPTY line is what makes the two occurrences separate strings, whatever
+# `nvim_put` does with the boundary.
+wtype -- ":call nvim_buf_set_lines(0, 0, -1, v:false, ['$CLIP_MARK', '', ''])"
+wtype -k Return
+sleep "$SETTLE"
+
+# Park on line 1 and select it LINEWISE. `V` and not `v`: core's yank accepts v, V
+# and <C-v> alike, and a linewise selection needs no motion to cover the whole word.
+wtype -- "gg"
+wtype -- "V"
+sleep "$SETTLE"
+
+# The COPY chord. Wolf matches it in a CAPTURE-phase EventControllerKey
+# (actions::action_for_key), so Neovim is sent no key at all and the visual selection
+# is STILL LIVE when copy_visual_selection's nvim_feedkeys('y','nx',false) consumes
+# it. That is what makes the feature work rather than a happy accident.
+wtype -M ctrl -M shift -k c -m shift -m ctrl
+sleep "$SETTLE"
+
+# Park at the last line -- one of the two EMPTY ones seeded above -- before pasting.
+# See the seeding comment: this is what stops the pasted text splicing into the
+# marker's own line and being counted as a single occurrence.
+wtype -- "G"
+sleep "$SETTLE"
+
+# The PASTE chord. Same capture-phase route; see PASTE_SETTLE above for why the
+# settle after it is doubled.
+wtype -M ctrl -M shift -k v -m shift -m ctrl
+sleep "$PASTE_SETTLE"
+
+# READBACK -- every line of the buffer, as Neovim itself sees it.
+wtype -- ":call writefile(nvim_buf_get_lines(0, 0, -1, v:false), '$CLIP_READBACK')"
+wtype -k Return
+wait_file "$CLIP_READBACK" || exit 12
+
+quit_app 13 14
+
+exit 0
+"#;
+
+/// Copy and Paste carry text through the SYSTEM CLIPBOARD and back into the buffer:
+/// Ctrl+Shift+C on a linewise visual selection, then Ctrl+Shift+V, and the marker is
+/// in the buffer TWICE.
+///
+/// ## What it proves, and why the observable is a file rather than a pixel
+///
+/// One launch, no capture, one readback. The scenario seeds the buffer with
+/// [`CLIP_MARK`] on line 1 and two empty lines under it, selects line 1 with `V`,
+/// presses the copy chord, moves to the last (empty) line, presses the paste chord,
+/// and asks Neovim to write EVERY LINE of its own buffer out. The assertion is that
+/// [`CLIP_MARK`] appears exactly [`CLIP_EXPECTED_OCCURRENCES`] times.
+///
+/// The empty landing line is not padding — [`CLIPBOARD_SCENARIO`] carries the
+/// derivation. `nvim_paste` performs a CHARWISE put in normal mode, so a paste onto
+/// the marker's own line splices the two into one occurrence and a working build
+/// fails with a broken build's count.
+///
+/// That is an integer-shaped assertion on a file the captive Neovim wrote ABOUT ITS
+/// OWN BUFFER, which is why this smoke needs no row in any fixture-name guard: no
+/// sidebar row, no header-bar title and no `:e` toast can contribute to a count taken
+/// inside the buffer, so the vacuity that
+/// [`restore_fixture_names_cannot_satisfy_their_own_assertions`] exists to prevent is
+/// structurally unreachable here. It also captures no PNG, so it contributes no row
+/// to [`ASSERTED_OCR_TERMS`] either — the same treatment the divider-relayout and
+/// column-cap smokes get, and for the same reason.
+///
+/// ## The four falsifiers, and how their DIAGNOSTICS differ
+///
+/// All four produce ONE occurrence, so the panic text alone does not separate them.
+/// What separates them is everything around it:
+///
+/// | revert | what happens | how to recognise it |
+/// | --- | --- | --- |
+/// | delete `clipboard.set_text(text)` in `shell::copy_selection` | the async read comes back `Ok(None)`, so nothing is pasted | red smoke, GREEN fast suite, no extra stderr |
+/// | delete `core.paste(..)` in the async callback | the clipboard holds the text and nothing consumes it | red smoke, GREEN fast suite, no extra stderr |
+/// | restore `Command::Copy => UiAction::Deferred(..)` | the action is never installed, so the chord falls through as `<C-c>` | red smoke, GREEN fast suite, and the app prints `wolf-gnome: command Copy not dispatched: …` — **that stderr line is the discriminator** |
+/// | set `win.copy`'s `status` back to `Reserved` | `action_for_key` answers `None`, so the chord falls through as `<C-c>` | red smoke over a **RED** fast suite, at `actions::bound_set_is_exactly_this_unit` |
+///
+/// The LAST two both end with the chord reaching Neovim as `<C-c>` — which is the
+/// accelerator invariant holding, not failing: a broken build here is one where
+/// Ctrl+Shift+C interrupts rather than copies, never one where a Neovim key became
+/// unreachable. Only their surroundings separate them, and that is the whole reason
+/// this table exists: a red smoke over a RED fast suite is the demoted accelerator,
+/// a red smoke over a GREEN one is the demoted classification.
+///
+/// The FIRST two are stated honestly as indistinguishable from out here, and that
+/// is a real limit rather than a gap to be closed by a better message: both leave
+/// every headless test green and print nothing, so a red run narrows the cause to
+/// "one of the two `shell.rs` halves" and no further. Separating them needs a
+/// second observable the clipboard does not offer — a `wl-paste` between the two
+/// chords, which [`REQUIRED_TOOLS`] deliberately does not carry and which could not
+/// see the selection under `cage` in any case.
+///
+/// ## The conventions it obeys, including the one that does not bite
+///
+/// A fresh temp working directory ([`make_temp_cwd`], mandatory — the captive
+/// Neovim's swap directory is keyed on it); [`CAGE_LOCK`] for the whole body; one
+/// `sh -c` string through [`cage_command`], which is the single environment helper
+/// and the only place the compositor is spawned; and four exit codes that name four
+/// causes with no two folded together.
+///
+/// The "press no key after one that produced a message" rule does not bite here,
+/// and the reason is worth stating rather than leaving as an omission: that rule
+/// protects an OCR assertion on a toast, and this smoke reads no pixels at all. The
+/// keys after the paste chord are one Ex command whose only product is the readback
+/// file.
+///
+/// ## What it does NOT prove
+///
+/// **That the clipboard reaches another Wayland client.** `gdk::Clipboard` can serve
+/// a `read_text_async` out of its own local content provider when the same client
+/// owns the selection, so this round trip may never leave the process. `wl-copy` /
+/// `wl-paste` are deliberately not in [`REQUIRED_TOOLS`] and would not settle it
+/// either: wlroots delivers a selection offer to the KEYBOARD-FOCUSED client, and a
+/// second client started under `cage` alongside the app has no focus. Proving the
+/// compositor half needs a focus dance no smoke here performs.
+///
+/// **That the refusal arms are ever taken.** No smoke can arrange a dead, wedged or
+/// absent core behind a chord press; `clipboard_ui`'s own tables cover the whole
+/// domain headlessly, the same shape as `nav_ui`'s and the buffer picker's refusals.
+#[test]
+fn copy_and_paste_round_trip_through_the_clipboard_under_cage() {
+    const SMOKE: &str = "copy_and_paste_round_trip_through_the_clipboard_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd, mandatory: the captive Neovim's swap directory is keyed on it
+    // and outlives the process, so a fixed cwd would let one run's leftover swap file
+    // raise a blocking prompt that eats the next run's first keystroke.
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(SMOKE, &cwd, &[]);
+
+    let readback = runtime_dir.join(CLIP_READBACK_NAME);
+    clear_evidence(&readback, SMOKE);
+
+    let mut cmd = cage_command(CLIPBOARD_SCENARIO, &cwd);
+    cmd.env("WOLF_BIN", bin)
+        .env("CLIP_MARK", CLIP_MARK)
+        .env("CLIP_READBACK", &readback);
+
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless clipboard scenario");
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage clipboard scenario exited unsuccessfully ({status}). Exit 11: the app \
+         died before its window mapped, so no chord was ever pressed and nothing below is about \
+         the clipboard. Exit 12: the buffer readback never appeared at {}, so the app never got as \
+         far as executing the final `:call writefile(...)` — a panic on the paste path (the async \
+         clipboard callback runs on the GTK main thread and takes the core borrow) is the first \
+         thing to look at. Exit 13: still alive after `:qa!`. Exit 14: it went away, but not \
+         cleanly — a panic in the GTK main loop makes a process vanish exactly as a clean shutdown \
+         does, which is why these last two are separate codes.",
+        readback.display()
+    );
+
+    // --- The assertion: the marker made the round trip ------------------------
+    //
+    // Counted inside a file Neovim wrote out of its own buffer, so the count is a
+    // property of the document and of nothing else on screen.
+    let lines = read_readback(&readback, SMOKE);
+    let occurrences = lines.matches(CLIP_MARK).count();
+    assert_eq!(
+        occurrences, CLIP_EXPECTED_OCCURRENCES,
+        "{SMOKE}: {CLIP_MARK:?} appears {occurrences} time(s) in the buffer readback, want exactly \
+         {CLIP_EXPECTED_OCCURRENCES} — once for the line the scenario seeded and once for the copy \
+         that came back through the system clipboard.\n\
+         ZERO occurrences is a HARNESS failure, not a feature one: the seeding `:call setline(...)` \
+         never executed, so nothing was ever selected and nothing could have been copied. Check \
+         that keys are reaching Neovim at all (the keyboard-only smokes first), not the clipboard \
+         code.\n\
+         ONE occurrence is the FEATURE failure, and it has four candidate causes that this message \
+         cannot tell apart — read the surroundings, per the table in this test's doc comment. If \
+         the fast suite is also RED at `actions::bound_set_is_exactly_this_unit`, the accelerator \
+         was demoted to Reserved and the chord fell through to Neovim as <C-c>. If the fast suite \
+         is GREEN and the app printed `wolf-gnome: command Copy not dispatched:` on stderr, \
+         `command_action::ui_action_for` still classifies Copy as Deferred. If the fast suite is \
+         GREEN and there is no such line, the break is in `shell.rs`: either \
+         `clipboard.set_text(text)` on the copy side or `core.paste(..)` inside the async read \
+         callback on the paste side.\n\
+         MORE than {CLIP_EXPECTED_OCCURRENCES} means the paste was delivered more than once — a \
+         chord handled in both the capture and the bubble phase, or an `InputEvent::Paste` queued \
+         per callback invocation.\n\
+         Readback file kept at {}. Its contents were:\n{lines}",
+        readback.display()
+    );
+}
+
 /// A user's divider drag becomes the LAYOUT'S WEIGHTS, so it survives the next
 /// re-allocation of the paned that carries it.
 ///
