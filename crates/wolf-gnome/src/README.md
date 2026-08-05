@@ -99,24 +99,24 @@ Purpose: the pure cell-metrics arithmetic the configured `line-height` drives �
 
 #### `cmdline_ui.rs`
 
-Purpose: the pure rulebook behind the command-line strip, the message toast and the completion popup — which lines a toast shows for a height budget, which completion items a popup shows for a selection, and where a byte offset in the command line lands on screen.
+Purpose: the pure rulebook behind the command-line strip, the message toast and the completion popup.
 
 **Public API**
 
-- `cmdline_columns(prefix, text, byte)` — the column for a byte offset, where `prefix` is the dialog `prompt` plus `firstc`.
-- `toast_budget_rows(available_px, cell_h)`, `toast_view(total, budget, scroll) -> ToastView`, `toast_scroll_clamp(total, budget, requested)`, `carried_scroll(prev, next, budget, scroll)`, `toast_is_shown(visible, lines)`, `prompt_answered(was_prompt, now_visible)`.
+- `cmdline_columns(prefix, text, byte)` — `prefix` is the dialog `prompt` plus `firstc`.
+- `toast_budget_rows(available_px, cell_h)`, `toast_view(total, budget, scroll) -> ToastView`, `toast_scroll_next(current, steps, total, budget)`, `toast_scroll_clamp(total, budget, requested)`, `toast_width_cols(lines, view)`, `carried_scroll(prev, next, budget, scroll)`, `toast_is_shown(visible, lines)`, `prompt_answered(was_prompt, now_visible)`.
 - `pum_selection(items, selected) -> Option<usize>`, `pum_view(items, selected, budget) -> PumView`, `pum_item_label(item)`, `pum_width_cols(items, view)`.
 
 **Decisions**
 
 - `cmdline_columns` is one function because the caret and the popup's cmdline anchor both need it, and a second copy is how a popup ends up a column away from the caret it belongs to.
-- A scroll offset of zero pins the toast to its newest line, so a one-line message needs no special case; `carried_scroll` drops the offset when the line count changes, since that is a different message.
+- A zero offset pins the toast to its newest line — `toast_scroll_next` inverts the grid's sign for that reason — and `carried_scroll` drops the offset when the line count changes, since that is a different message.
 - `pum_selection` refuses an out-of-range index rather than clamping: a selection the item list cannot explain is a fold error, and highlighting the last row would hide it.
-- `pum_width_cols` measures the visible rows only, or the popup would jump wider the moment a long item scrolled into range.
+- Both width seams measure the visible rows only: measuring the whole list would make the popup jump wider the moment a long item scrolled into range, and would leave a scrolled toast sized for a line it is not drawing.
 
 **Gotchas**
 
-- Key-driven paging of a toast is impossible, not merely unimplemented: `wolf_core::InputEvent::is_toast_dismissing` makes every `Key` dismiss a non-prompt toast. That is why the offset is gesture-driven; see [DECISIONS.md](../DECISIONS.md).
+- The offset is gesture-driven because key-driven paging is impossible; [DECISIONS.md](../DECISIONS.md) owns that rule.
 
 #### `command_action.rs`
 
@@ -392,7 +392,7 @@ Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one
 - Pointer input is one `gtk::GestureDrag`, not a click controller, since a gesture keeps delivering after the pointer leaves the widget. Grid and button pin at press and modifiers re-read live, so a wandering drag edits its starting pane.
 - Each pane's status and its `b:wolf_full_width` cache once per wake: reading at use time re-enters the guard `draw_pane` holds, and paint, pointer and resize must agree inside one frame.
 - One funnel produces every grid resize, compared against the size the pane last asked for rather than the lagging snapshot grid, and runs on every wake, since lifting the content cap changes a column count under a still allocation.
-- The scrollbar thumb paints outside the grid clip, in the right padding gutter ([`scrollbar.rs`](#scrollbarrs)). The toast and the popup are overlay children, never a taller strip ([DECISIONS.md](../DECISIONS.md)); `draw_cmdline` draws the dialog `prompt`, which makes a `confirm()` answerable.
+- The scrollbar thumb paints outside the grid clip, in the right padding gutter ([`scrollbar.rs`](#scrollbarrs)). The toast and the popup are overlay children and the strip draws the dialog `prompt`, both for reasons [DECISIONS.md](../DECISIONS.md) owns.
 
 #### `persistence.rs`
 

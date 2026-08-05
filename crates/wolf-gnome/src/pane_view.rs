@@ -27,12 +27,17 @@
 //! ## Cmdline strip (★ S3 requirement)
 //!
 //! Under `ext_multigrid` the command line, `/`-search, and messages live outside the
-//! window grids the panes paint. The [`PaneInner::cmdline_area`] is a one-row
-//! `DrawingArea` along the bottom that makes them visible again — and it paints
-//! them NATIVELY, from the folded [`Snapshot::cmdline`] / [`Snapshot::toast`]. It
-//! never reads grid 1: `ext_messages` implicitly enables `ext_cmdline` and sets
-//! `cmdheight=0`, so grid 1 is EMPTY and painting its last row would draw nothing.
-//! See [`PaneInner::draw_cmdline`].
+//! window grids the panes paint. Three surfaces make them visible again, each painted
+//! NATIVELY from one folded field of the snapshot. The [`PaneInner::cmdline_area`] is
+//! a one-row `DrawingArea` along the bottom, and it paints [`Snapshot::cmdline`]
+//! ALONE ([`PaneInner::draw_cmdline`]). It never reads grid 1: `ext_messages`
+//! implicitly enables `ext_cmdline` and sets `cmdheight=0`, so grid 1 is EMPTY and
+//! painting its last row would draw nothing.
+//!
+//! The other two are overlay surfaces above the strip, handed to `app.rs` for
+//! placement by [`PaneHandle::toast_widget`] / [`PaneHandle::pum_widget`]:
+//! [`PaneInner::toast_area`] paints [`Snapshot::toast`] ([`PaneInner::draw_toast`])
+//! and [`PaneInner::pum_area`] paints [`Snapshot::pum`] ([`PaneInner::draw_pum`]).
 //!
 //! ## Intents
 //!
@@ -127,7 +132,7 @@
 //! [`PaneHandle::cmdline_widget`] already documents for the picker and the tree.
 //! See `crates/wolf-gnome/src/README.md` for the defect this prevents.
 //!
-//! That invariant is no longer a structural argument only: it is executed end to
+//! That invariant is more than a structural argument: it is executed end to
 //! end by the cage smoke `click_then_close_keeps_keyboard_input_alive_under_cage`
 //! in `crates/wolf-gnome/tests/smoke_headless.rs`, which CLICKS a pane, closes that
 //! same pane, and asserts keys still reach Neovim afterwards. Read its doc comment
@@ -156,11 +161,11 @@ use wolf_core::{
     Snapshot, SplitOrientation, ToastChunk, WolfCore,
 };
 
-use crate::cmdline_ui::{self, ToastView};
+use crate::cmdline_ui::{self, PumView, ToastView};
 use crate::editor_inset::{self, ColumnCap, GridRect, EDITOR_PADDING_PX};
 use crate::geometry;
 use crate::layout::{Orientation, PaneId, PaneLayout, PaneTree};
-use crate::mouse::{self, PaneScroll};
+use crate::mouse::{self, PaneScroll, ScrollAccumulator};
 use crate::pane_layout;
 use crate::render::{draw_glyph, draw_text_line, FALLBACK_BG, FALLBACK_FG};
 use crate::scrollbar;
@@ -332,7 +337,7 @@ struct PaneInner {
     container: gtk::Box,
     /// Hosts the nested `gtk::Paned`/`DrawingArea` tree (rebuilt from `tree`).
     pane_area: gtk::Box,
-    /// The one-row cmdline strip painting grid 1's last row.
+    /// The one-row cmdline strip, painted from [`Snapshot::cmdline`].
     cmdline_area: gtk::DrawingArea,
     /// The message toast, an overlay surface sitting directly above the strip.
     ///
@@ -350,6 +355,19 @@ struct PaneInner {
     pum_area: gtk::DrawingArea,
     /// How many lines back from the newest the toast is scrolled.
     toast_scroll: Cell<usize>,
+    /// The toast's own carried sub-threshold scroll remainder.
+    ///
+    /// A bare [`ScrollAccumulator`] rather than a [`PaneScroll`]: the toast has no
+    /// target grid, so `PaneScroll`'s reset-on-grid-change rule would have nothing
+    /// to compare and a synthetic grid id would make it silently inert. The
+    /// consequence is that nothing clears the carry — neither the prompt-answered
+    /// branch of [`refresh_message_surfaces`], which zeroes `toast_scroll` and
+    /// `toast_lines`, nor [`cmdline_ui::carried_scroll`] — so a sub-threshold
+    /// remainder left by one message counts toward the first step on the next. It is
+    /// bounded by one threshold and self-correcting, which is why it is left alone.
+    ///
+    /// [`refresh_message_surfaces`]: PaneInner::refresh_message_surfaces
+    toast_scroll_acc: Cell<ScrollAccumulator>,
     /// The toast's line count on the previous wake, for
     /// [`cmdline_ui::carried_scroll`].
     toast_lines: Cell<usize>,
@@ -1664,6 +1682,22 @@ impl PaneInner {
         (lines, view)
     }
 
+    /// Re-measures the toast against the CURRENT scroll offset and re-places the
+    /// surface, without touching the per-wake bookkeeping in
+    /// [`refresh_message_surfaces`].
+    ///
+    /// Two callers with two reasons: a render wake, where the message itself may have
+    /// changed; and a scroll gesture, which changes only which lines are visible — and
+    /// [`place_toast`] sizes the box from the widest VISIBLE line, so the size is a
+    /// function of the offset either way.
+    ///
+    /// [`refresh_message_surfaces`]: PaneInner::refresh_message_surfaces
+    /// [`place_toast`]: PaneInner::place_toast
+    fn reflow_toast(&self, snap: &Snapshot) {
+        let (lines, view) = self.toast_layout(snap);
+        self.place_toast(snap.toast.visible, &lines, view);
+    }
+
     /// Sizes, positions and shows or hides the two overlay surfaces for this frame.
     ///
     /// Both are sized to their own content rather than filling the overlay, which is
@@ -1677,10 +1711,11 @@ impl PaneInner {
         };
         let snap = core.read_snapshot();
 
-        // An answered prompt takes its scroll offset with it: core hides the toast
-        // the instant the dialog resolves and restores it only for a matching
-        // re-prompt, so whatever arrives next is a different message and must not
-        // open part-scrolled. Nothing here dismisses a prompt on its own.
+        // A prompt that stops being shown takes its scroll offset with it: core
+        // stashes and hides a confirm toast on EVERY hide, restoring it only for a
+        // matching re-prompt, so the next frame carries either a different message
+        // or a re-prompt — and neither may open part-scrolled into lines the reader
+        // has not seen. Nothing here dismisses a prompt on its own.
         if cmdline_ui::prompt_answered(self.toast_was_prompt.get(), snap.toast.visible) {
             self.toast_scroll.set(0);
             self.toast_lines.set(0);
@@ -1700,8 +1735,7 @@ impl PaneInner {
         self.toast_scroll.set(scroll);
         self.toast_lines.set(lines.len());
 
-        let (lines, view) = self.toast_layout(&snap);
-        self.place_toast(snap.toast.visible, &lines, view);
+        self.reflow_toast(&snap);
         self.place_pum(&snap);
     }
 
@@ -1712,13 +1746,7 @@ impl PaneInner {
             return;
         }
         let metrics = &self.metrics;
-        let cols = lines
-            .iter()
-            .skip(view.first)
-            .take(view.len)
-            .map(|l| l.iter().map(|c| c.text.chars().count()).sum::<usize>())
-            .max()
-            .unwrap_or(0);
+        let cols = cmdline_ui::toast_width_cols(lines, view);
         let container_w = f64::from(self.container.width().max(0));
         let w = (cols as f64).mul_add(metrics.cell_w, 2.0 * cmdline_ui::SURFACE_PADDING_PX);
         let w = if container_w > 0.0 {
@@ -1732,6 +1760,28 @@ impl PaneInner {
         self.toast_area
             .set_margin_bottom(strip_height(metrics.cell_h));
         self.toast_area.set_visible(true);
+    }
+
+    /// The selection, the visible slice and the width in cells the completion popup
+    /// would draw this frame.
+    ///
+    /// One function so [`place_pum`] and [`draw_pum`] cannot disagree about which items
+    /// are on screen or how wide the surface is: the first sizes the widget and the
+    /// second fills it, and a second copy of the arithmetic is how a popup ends up a
+    /// column narrower than the label it truncates. The budget is the toast's, capped at
+    /// [`cmdline_ui::PUM_MAX_ROWS`], because both surfaces share the space above the
+    /// strip.
+    ///
+    /// [`place_pum`]: PaneInner::place_pum
+    /// [`draw_pum`]: PaneInner::draw_pum
+    fn pum_layout(&self, snap: &Snapshot) -> (Option<usize>, PumView, usize) {
+        let selected = cmdline_ui::pum_selection(snap.pum.items.len(), snap.pum.selected);
+        let available = f64::from(self.pane_area.height().max(0));
+        let budget = cmdline_ui::toast_budget_rows(available, self.metrics.cell_h)
+            .min(cmdline_ui::PUM_MAX_ROWS);
+        let view = cmdline_ui::pum_view(snap.pum.items.len(), selected, budget);
+        let cols = cmdline_ui::pum_width_cols(&snap.pum.items, view);
+        (selected, view, cols)
     }
 
     /// Sizes and anchors the completion popup, or hides it.
@@ -1748,12 +1798,7 @@ impl PaneInner {
             return;
         }
         let metrics = &self.metrics;
-        let selected = cmdline_ui::pum_selection(snap.pum.items.len(), snap.pum.selected);
-        let available = f64::from(self.pane_area.height().max(0));
-        let budget =
-            cmdline_ui::toast_budget_rows(available, metrics.cell_h).min(cmdline_ui::PUM_MAX_ROWS);
-        let view = cmdline_ui::pum_view(snap.pum.items.len(), selected, budget);
-        let cols = cmdline_ui::pum_width_cols(&snap.pum.items, view);
+        let (_, view, cols) = self.pum_layout(snap);
         let w = (cols as f64).mul_add(metrics.cell_w, 2.0 * cmdline_ui::SURFACE_PADDING_PX);
         let h = (view.len as f64).mul_add(metrics.cell_h, 2.0 * cmdline_ui::SURFACE_PADDING_PX);
 
@@ -1858,12 +1903,7 @@ impl PaneInner {
         let bg = base.bg.unwrap_or(FALLBACK_BG);
         fill_surface(cr, width, height, fg, bg);
 
-        let selected = cmdline_ui::pum_selection(snap.pum.items.len(), snap.pum.selected);
-        let available = f64::from(self.pane_area.height().max(0));
-        let budget =
-            cmdline_ui::toast_budget_rows(available, metrics.cell_h).min(cmdline_ui::PUM_MAX_ROWS);
-        let view = cmdline_ui::pum_view(snap.pum.items.len(), selected, budget);
-        let cols = cmdline_ui::pum_width_cols(&snap.pum.items, view);
+        let (selected, view, cols) = self.pum_layout(&snap);
         let pad = cmdline_ui::SURFACE_PADDING_PX;
 
         for (i, item) in snap
@@ -1900,30 +1940,56 @@ impl PaneInner {
         }
     }
 
-    /// Applies a scroll gesture on the toast, moving its window back through the
-    /// older lines. Returns whether anything moved.
+    /// Applies a scroll gesture on the toast, moving its window back through the older
+    /// lines. Returns whether anything moved.
     ///
-    /// The gesture is CONSUMED by the caller either way, which is the front-end half
-    /// of core's toast-dismissal rule: `InputEvent::is_toast_dismissing` counts a
-    /// scroll as dismissing, so a scroll forwarded from over the toast would clear
-    /// the message the user was scrolling.
-    fn scroll_toast(&self, dy: f64) -> bool {
-        if !dy.is_finite() || dy == 0.0 {
+    /// The delta is routed through the same seam a pane's is: `mouse::scroll_threshold`
+    /// picks the per-`gdk::ScrollUnit` threshold and a carried [`ScrollAccumulator`]
+    /// turns it into whole line steps, so a `ScrollUnit::Surface` device's many sub-line
+    /// deltas park a carry instead of stepping a line per callback, and one flick moves
+    /// as many lines as it earned. The accumulator is this surface's own rather than a
+    /// [`PaneScroll`]: the toast has no target grid, so the reset-on-grid-change rule
+    /// `PaneScroll` exists for would have nothing to compare. The non-finite and
+    /// zero-delta cases are `ScrollAccumulator::consume`'s and are not re-stated here.
+    ///
+    /// The step count becomes an offset through [`cmdline_ui::toast_scroll_next`].
+    ///
+    /// **The surface is re-placed before the draw is queued.** [`place_toast`] sizes the
+    /// box from the widest VISIBLE line, and this gesture is deliberately never
+    /// forwarded to core, so no render wake follows it: a `queue_draw` on its own would
+    /// repaint longer lines into a box measured for shorter ones and clip them
+    /// mid-glyph until some unrelated flush arrived.
+    ///
+    /// The gesture is CONSUMED by the caller either way, which is the front-end half of
+    /// core's toast-dismissal rule: `InputEvent::is_toast_dismissing` counts a scroll as
+    /// dismissing, so a scroll forwarded from over the toast would clear the message the
+    /// user was scrolling.
+    ///
+    /// [`place_toast`]: PaneInner::place_toast
+    fn scroll_toast(&self, dy: f64, unit: gdk::ScrollUnit) -> bool {
+        let threshold = mouse::scroll_threshold(unit, self.metrics.cell_h);
+        let mut acc = self.toast_scroll_acc.get();
+        let steps = acc.consume(dy, threshold);
+        self.toast_scroll_acc.set(acc);
+        if steps == 0 {
             return false;
         }
         let lines = self.toast_lines.get();
         let available = f64::from(self.pane_area.height().max(0));
         let budget = cmdline_ui::toast_budget_rows(available, self.metrics.cell_h);
-        // A negative `dy` is GDK's "scroll up", which reveals OLDER lines, so it
-        // increases the offset. The inverse of the grid's sign convention, because
-        // the offset counts backwards from the newest line.
-        let step = if dy < 0.0 { 1 } else { -1 };
-        let requested = i64::try_from(self.toast_scroll.get()).unwrap_or(i64::MAX) + step;
-        let next = cmdline_ui::toast_scroll_clamp(lines, budget, requested);
+        let next = cmdline_ui::toast_scroll_next(self.toast_scroll.get(), steps, lines, budget);
         if next == self.toast_scroll.get() {
             return false;
         }
         self.toast_scroll.set(next);
+        let snap = {
+            let core_ref = self.core.borrow();
+            let Some(core) = core_ref.as_ref() else {
+                return true;
+            };
+            core.read_snapshot()
+        };
+        self.reflow_toast(&snap);
         self.toast_area.queue_draw();
         true
     }
@@ -2196,6 +2262,7 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
         toast_area: toast_area.clone(),
         pum_area: pum_area.clone(),
         toast_scroll: Cell::new(0),
+        toast_scroll_acc: Cell::new(ScrollAccumulator::new()),
         toast_lines: Cell::new(0),
         toast_was_prompt: Cell::new(false),
         statusbar,
@@ -2239,9 +2306,9 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
         // `InputEvent::is_toast_dismissing` would clear the message being read.
         let weak = Rc::downgrade(&inner);
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
-        scroll.connect_scroll(move |_c, _dx, dy| {
+        scroll.connect_scroll(move |controller, _dx, dy| {
             if let Some(inner) = weak.upgrade() {
-                inner.scroll_toast(dy);
+                inner.scroll_toast(dy, controller.unit());
             }
             glib::Propagation::Stop
         });
