@@ -61,18 +61,18 @@ Purpose: all GTK and Adwaita window wiring. `run` builds the `adw::Application` 
 
 #### `appearance.rs`
 
-Purpose: the OS dark/light rulebook — what a configured `appearance` resolves to against libadwaita's reading of the desktop — plus the glue that applies it at launch.
+Purpose: the OS dark/light rulebook — what a configured `appearance` resolves to against the desktop's preference — plus the glue that applies it at launch.
 
 **Public API**
 
-- `appearance_decision(configured, os_dark) -> ResolvedAppearance` — total over `wolf_core::Appearance` with no `_` arm: the `background` pushed into Neovim, the chrome's `adw::ColorScheme`, and whether a live desktop toggle is followed at all.
-- `apply_at_launch(config, core)` — the one `StyleManager::is_dark()` read, then the scheme, the push, and the `dark` notify handler in `auto` alone.
+- `appearance_decision(configured, os_dark) -> ResolvedAppearance` — total over `wolf_core::Appearance` with no `_` arm, so a fourth variant is a compile error here.
+- `apply_at_launch(config, core)` — makes the one `StyleManager::is_dark()` read and carries the decision out; its step order is load-bearing.
 
 **Decisions**
 
-- `os_dark` is a parameter and is never read here: `adw::StyleManager::default()` asserts an initialized main thread, so a seam reaching for it could not run headlessly. Naming `adw::ColorScheme` in a pure module is [`actions.rs`](#actionsrs)'s precedent.
-- A forced appearance takes `ForceDark`/`ForceLight` rather than `PreferDark`/`PreferLight`, which yield to the desktop preference the user wrote the config line to override. `auto` takes `Default`, which is libadwaita's own "follow the desktop".
-- The notify handler pushes `background` and never re-sets the scheme, because re-applying a property inside its own notify handler is the shape that loops; it is armed after the launch-time set for the same reason.
+- `os_dark` is a parameter and is never read here: `adw::StyleManager::default()` asserts an initialized main thread, so a seam reaching for it could not run headlessly.
+- A forced appearance takes `ForceDark`/`ForceLight`, never `PreferDark`/`PreferLight`, which yield to the desktop preference the user wrote the config line to override.
+- The notify handler pushes `background` and never re-sets the scheme, and is armed after the launch-time set: re-applying a property from inside its own notify handler is the shape that loops.
 
 #### `buffer_picker.rs`
 
@@ -114,17 +114,17 @@ Purpose: the pure cell-metrics arithmetic the configured `line-height` drives �
 
 #### `clipboard_ui.rs`
 
-Purpose: the pure rulebook for Copy and Paste through the system clipboard — whether each chord may act, and what crosses the boundary in each direction. GTK-free; [`shell.rs`](#shellrs) owns the `gdk::Clipboard` handle and the asynchronous read.
+Purpose: the pure rulebook for Copy and Paste through the system clipboard. GTK-free; [`shell.rs`](#shellrs) owns the `gdk::Clipboard` handle and the asynchronous read.
 
 **Public API**
 
-- `copy_decision(liveness) -> CopyPress` and `paste_decision(liveness) -> PastePress` — both total over `Option<Liveness>` with no `_` arm. Only `Some(Alive)` acts; every refusal carries a distinct mid-sentence clause the caller prints.
+- `copy_decision(liveness) -> CopyPress` and `paste_decision(liveness) -> PastePress` — both total over `Option<Liveness>` with no `_` arm; only `Some(Alive)` acts.
 - `clipboard_write(selection)` and `paste_payload(read)` — `None` for an absent or empty string.
 
 **Decisions**
 
 - `clipboard_write`'s `None` means write nothing, never clear. Clearing would destroy whatever the user copied from another application, in answer to a chord that yanked nothing.
-- Copy is a bounded blocking RPC and is gated for that reason ([DECISIONS.md](../DECISIONS.md)). Nothing on the paste path blocks, and its refusals are about a paste queued behind an opaque overlay reaching a restarted Neovim minutes later — the two reasons must not be collapsed into one.
+- Copy is a bounded blocking RPC and is gated for that reason ([DECISIONS.md](../DECISIONS.md)). Nothing on the paste path blocks: its refusals are about a paste queued behind an opaque overlay reaching a restarted Neovim minutes later, and the two reasons must not be collapsed.
 
 #### `cmdline_ui.rs`
 
@@ -263,19 +263,18 @@ Purpose: the pure pixel conversions behind every resize, pointer event, and divi
 
 #### `glyph_style.rs`
 
-Purpose: the pure rulebook for the three attribute-borne decorations a cell carries — underline, undercurl and strikethrough — and the colour the first two are drawn in. A port of `WolfKeyMap/GlyphStyle.swift`; [`render.rs`](#renderrs) turns the answer into Pango attributes.
+Purpose: the pure rulebook for the three attribute-borne decorations — underline, undercurl, strikethrough — and the colour the first two take. A port of `WolfKeyMap/GlyphStyle.swift`; [`render.rs`](#renderrs) applies the answer as Pango attributes.
 
 **Public API**
 
-- `glyph_decoration(&ResolvedStyle) -> GlyphDecoration` — total. `GlyphDecoration::is_empty` is what lets an undecorated cell build no `AttrList` at all.
-- `pango_channels(Rgb) -> (u16, u16, u16)` — the 8-bit to 16-bit widening, by 257 rather than 256 so `255` reaches the top of Pango's range exactly.
+- `glyph_decoration(&ResolvedStyle) -> GlyphDecoration` — total; `is_empty` is what lets an undecorated cell build no `AttrList`.
+- `pango_channels(Rgb)` — widens by 257, never 256, so `255` reaches the top of Pango's range exactly.
 
 **Decisions**
 
-- `undercurl` asks Pango for `Underline::Error`, its own wave, rather than a hand-stroked Cairo path: the underline's position and thickness come from face metrics Pango reads and this crate does not, and a second drawing mechanism is what the one-glyph-path rule exists to prevent.
-- Pango carries one underline attribute per run, so `underline` and `undercurl` cannot coexist and undercurl wins. macOS folds both into a straight underline, so the wave is a deliberate divergence, pinned by [`paint_golden.rs`](../tests/README.md#paint_goldenrs).
-- No strikethrough colour is ever set, so Pango strikes in the layout's foreground — which is macOS's behaviour, bought for free and one attribute cheaper.
-- The face is not resolved here: weight and style ride on the `FontDescription`, so this module covers the attribute-borne decorations only.
+- The wave is Pango's (`Underline::Error`), never a hand-stroked Cairo path: the underline's placement comes from face metrics Pango reads and this crate does not.
+- Pango carries one underline attribute per run, so `underline` and `undercurl` cannot coexist and undercurl wins. macOS folds both into a straight underline; the wave is a divergence pinned by [`paint_golden.rs`](../tests/README.md#paint_goldenrs).
+- No strikethrough colour is ever set, so Pango strikes in the layout foreground — macOS's behaviour, bought for free.
 
 #### `input.rs`
 

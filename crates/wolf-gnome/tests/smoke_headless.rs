@@ -11,7 +11,7 @@
 //!
 //! ## What this file contains
 //!
-//! **Forty cage smokes** — one window-render smoke, two file-picker smokes,
+//! **Forty-two cage smokes** — one window-render smoke, two file-picker smokes,
 //! one file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
 //! new-untitled-buffer smoke, one command-palette smoke, one OPEN RECENT smoke
 //! (Ctrl+Shift+P, a typed folder query, then Enter — the activated row re-roots the
@@ -55,16 +55,24 @@
 //! directory), one CONFIGURED-FONT-SIZE smoke (two launches at two
 //! `wolf-config.yaml` font sizes, each writing `winwidth(0)` into its own file, so
 //! the configured size reaching the cell metrics is an integer strict inequality
-//! rather than an OCR judgement), and one COLUMN-CAP smoke (one launch at a
+//! rather than an OCR judgement), one COLUMN-CAP smoke (one launch at a
 //! deliberately SMALL font size, the only geometry at which the 90-column content
 //! cap binds at all under `cage`, whose two `winwidth(0)` readbacks either side of
 //! `:WolfFullWidth` are what prove the cap and the per-buffer override that lifts
-//! it) — each of which launches the real binary under `cage`.
+//! it), one CONFIGURED-APPEARANCE smoke (two launches at two `wolf-config.yaml`
+//! `appearance` values, each writing `&background` into its own file, so the
+//! configured appearance reaching the captive Neovim is a pair of exact string
+//! equalities — and the PAIR is what discriminates, since `dark` alone is satisfied
+//! by a build that pushes nothing and `light` alone by one that always pushes
+//! light), and one CLIPBOARD smoke (a linewise yank over Ctrl+Shift+C, a put over
+//! Ctrl+Shift+V, and one buffer readback that must carry the marker exactly TWICE)
+//! — each of which launches the real binary under `cage`.
 //!
-//! Four smokes run **two app launches inside ONE `cage` instance** (one scenario
-//! string, two sequential `"$WOLF_BIN" &` blocks) — the three relaunch ones and the
-//! configured-font-size one — so `CAGE_LOCK` semantics are unchanged and the count
-//! of compositors started is still one per smoke.
+//! Five smokes run **two app launches inside ONE `cage` instance** (one scenario
+//! string, two sequential `"$WOLF_BIN" &` blocks) — the three relaunch ones, the
+//! configured-font-size one and the configured-appearance one — so `CAGE_LOCK`
+//! semantics are unchanged and the count of compositors started is still one per
+//! smoke.
 //!
 //! Seven of them additionally run **`wolf-pointer-inject`** inside cage —
 //! this repo's own long-lived `zwlr_virtual_pointer_v1` client, see
@@ -77,10 +85,11 @@
 //! and no `:e` toast can satisfy, and OCR is structurally incapable of answering
 //! "did the cursor land at exactly row 12, column 25".
 //!
-//! Thirty-three of the forty OCR a screenshot of the live window. The `:qa`
-//! smoke, the configured-font-size smoke and the column-cap smoke deliberately
-//! capture no image and assert on the cage exit status plus, for the latter two,
-//! two integer readbacks each (the
+//! Thirty-three of the forty-two OCR a screenshot of the live window. Five
+//! deliberately capture no image at all: the `:qa` smoke asserts on the cage exit
+//! status alone, while the configured-font-size and column-cap smokes add two
+//! integers each, the configured-appearance smoke two exact strings, and the
+//! clipboard smoke one buffer readback (the
 //! app must be GONE, and gone with a ZERO exit status — a panic in the GTK main
 //! loop makes a process vanish just as a clean shutdown does); the click, drag,
 //! scroll and divider-relayout smokes still capture and still RETAIN a screenshot
@@ -90,7 +99,7 @@
 //! project-search smoke does both as well, and its readback carries the two values
 //! OCR structurally cannot: the LINE and the COLUMN the cursor landed on.
 //!
-//! **Five pure guards**, which mechanically enforce invariants the cage smokes
+//! **Six pure guards**, which mechanically enforce invariants the cage smokes
 //! depend on but cannot check themselves:
 //!
 //! * [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`] — no
@@ -134,22 +143,31 @@
 //!   binds, no grid is ever centred, and no pixel target moves. That premise is
 //!   exactly the kind that stops being true when someone changes a font size, and
 //!   nothing else would notice.
+//! * [`the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes`] — the
+//!   SECOND premise those thirty-three rest on: the seeded `wolf-config.yaml` pins
+//!   `appearance: dark`, which is what keeps the grid light-on-dark for sparse-text
+//!   segmentation. It asserts both halves — the pinned VALUE, re-typed locally so
+//!   the check is not a comparison with itself, and the artifact
+//!   [`write_smoke_config`] actually writes — because the pin and the assertions it
+//!   can disarm sit thousands of lines apart, exactly the shape the three
+//!   fixture-name guards above exist for.
 //!
-//! All five are compositor-free: none calls `require_smoke_env`, none takes
+//! All six are compositor-free: none calls `require_smoke_env`, none takes
 //! `CAGE_LOCK` and none spawns a subprocess, so they still guard on a machine where
 //! the smoke toolchain is unavailable. They live here, next to the consts and
 //! helpers they read, rather than in a file of their own.
 //!
-//! Four of the five additionally need NO environment at all. The fifth is the
-//! exception and the claim is stated precisely rather than loosely: it measures a
+//! Five of the six additionally need NO environment at all. The exception is
+//! [`the_column_cap_cannot_bind_at_the_ocr_smokes_geometry`], and the claim is
+//! stated precisely rather than loosely: it measures a
 //! real cell through [`cell_metrics_for_smoke`], so it needs the devShell's pinned
 //! `FONTCONFIG_FILE`. That is not part of the cage toolchain listed below — it is
 //! the same font pinning `tests/paint_golden.rs` needs — but it is not nothing, and
 //! a run outside the devShell fails it for that reason rather than for the reason
 //! its message names.
 //!
-//! So this target's summary line reads **`45 passed`**, not `40`: forty cage
-//! smokes plus those five guards.
+//! So this target's summary line reads **`48 passed`**, not `42`: forty-two cage
+//! smokes plus those six guards.
 //!
 //! ## A vacuously-passing check recorded here: the `wtype ""` window-map poll
 //!
@@ -191,7 +209,7 @@
 //!
 //! ## When it runs
 //!
-//! The forty cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The forty-two cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The Linux verification gate").
@@ -201,13 +219,13 @@
 //! suite command does not run is a silently-skipped test.
 //!
 //! They are, however, the slowest part of the suite: each drives a real
-//! compositor, and all forty serialize behind `CAGE_LOCK` (see below).
+//! compositor, and all forty-two serialize behind `CAGE_LOCK` (see below).
 //!
 //! ```text
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the forty cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the forty-two cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` and
 //!   `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
@@ -224,7 +242,7 @@
 //!   empty result list.
 //! - `XDG_RUNTIME_DIR` set and writable (the Wayland socket lives there).
 //!
-//! Per project policy every one of the forty FAILS LOUD if any of the above is
+//! Per project policy every one of the forty-two FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -251,7 +269,7 @@ use wolf_gnome::{CellMetrics, WINDOW_TITLE_FALLBACK};
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the forty cage smoke tests. Each launches its own
+/// Serializes the forty-two cage smoke tests. Each launches its own
 /// `cage` compositor, and two compositors started concurrently contend for the
 /// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
 /// Under the default multi-threaded test harness these tests would otherwise run
@@ -8300,7 +8318,7 @@ exit 0
 /// captive nvim runs in (the recent-files MRU lives in the global
 /// `state_dir()/file-mru.sqlite`, not under the cwd).
 ///
-/// ALL THIRTY-SEVEN cage smokes derive their working directory from this — the window
+/// ALL FORTY-TWO cage smokes derive their working directory from this — the window
 /// title smoke and the typed-`:cd` smoke use the result as the base for the NESTED
 /// directories their `~` abbreviation needs, the per-pane statusbar smoke hangs its
 /// fixture directory off the parent, and the three relaunch smokes share one of these
@@ -8917,7 +8935,7 @@ const HOME_CONFIG_DIR_FALLBACK: &str = ".config/wolf";
 /// the "Note (OCR width)" / "Note (OCR height)" paragraphs above their own consts,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
-/// be applied here to all forty.
+/// be applied here to all forty-two.
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
@@ -9060,7 +9078,7 @@ const EXPECT_SMOKE_APPEARANCE: &str = "dark";
 /// `crates/wolf-gnome/tests/README.md` records as the premise for sparse-text
 /// segmentation. That grid is the captive Neovim's default colorscheme responding
 /// to `&background`, and the front-end pushes `&background` from the configured
-/// `appearance`. So the seeded value is now upstream of all thirty-three OCR
+/// `appearance`. So the seeded value sits upstream of all thirty-three OCR
 /// assertions at once — and it is written in [`write_smoke_config`], thousands of
 /// lines from every assertion it can disarm. That distance is the same reason the
 /// three fixture-name guards exist.
@@ -9995,7 +10013,7 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// [`SIDEBARTOGGLE_OCR_KEEP`] is an ordinary content term and follows the ordinary
 /// rule.
 ///
-/// Thirty-three of the forty smokes appear here. SEVEN contribute no rows at
+/// Thirty-three of the forty-two smokes appear here. NINE contribute no rows at
 /// all, on purpose, and it is worth being explicit about which and why:
 ///
 /// * [`colon_qa_closes_the_window_under_cage`] captures no PNG and asserts only that
@@ -10019,6 +10037,16 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 ///   asserts on the pane WIDTHS Neovim reports for its own windows, writes no
 ///   fixture file at all, and its retained screenshot is post-mortem evidence
 ///   rather than an observable.
+/// * [`configured_appearance_reaches_neovims_background_under_cage`] invokes `grim`
+///   nowhere: its two observables are the `&background` strings the captive Neovim
+///   writes about its own option, one per launch, so no fixture filename can help
+///   or hurt it. The same treatment the configured-font-size smoke gets, and for
+///   the same reason.
+/// * [`copy_and_paste_round_trip_through_the_clipboard_under_cage`] likewise
+///   captures nothing: its observable is the buffer readback the captive Neovim
+///   writes about its own lines, and the assertion is an exact OCCURRENCE COUNT of
+///   a marker that smoke seeds itself — which no sidebar row and no `:e` toast can
+///   move in either direction.
 ///
 /// The other two pointer smokes DO OCR and their terms are listed below. For
 /// [`click_then_close_keeps_keyboard_input_alive_under_cage`] the OCR pair is
@@ -10655,7 +10683,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the forty smokes — still
+/// nothing to the smoke suite's runtime and — unlike the forty-two smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
@@ -10950,7 +10978,7 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// the cursor landed on) are all properties of that body, so the block below pins
 /// the match's line index and its byte offset as well as the vocabulary. Both are
 /// checked here rather than from guards of their own so the guard count this file's
-/// docs pin stays at four.
+/// docs pin stays at six.
 ///
 /// ## Measured red run
 ///
@@ -18678,7 +18706,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// | the active-pane FOCUS RING's top edge — a long thin high-contrast line immediately above the heading | six ablations on one PNG; the top edge alone accounted for it | [`DIVIDER_RELAUNCH_SCENARIO`]'s closing `<C-w>h`, which moves the ring to the WIDE pane |
 /// | a single misclassified GLYPH at 15 columns | the same pixels read through both segmentation modes, twice over | the second reader, [`ocr_uniform_block_to_lowercase`] |
 ///
-/// The third is why this smoke, alone of the forty, reads its capture twice.
+/// The third is why this smoke, alone of the forty-two, reads its capture twice.
 /// With the first two answered, on one retained PNG:
 ///
 /// | command | verbatim output |
