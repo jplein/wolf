@@ -97,6 +97,27 @@ Purpose: the pure cell-metrics arithmetic the configured `line-height` drives �
 - The function is unit-agnostic and rounds in whatever unit its caller uses: points on macOS, device pixels here, since device pixels are what Cairo paints in.
 - Two divergences from Swift, both strictly more defensive and both confined to inputs macOS also mishandles: the percentage must be finite (Swift's guard accepts `+inf`), and a non-finite or non-positive result is floored (Swift can return `0` or `NaN`).
 
+#### `cmdline_ui.rs`
+
+Purpose: the pure rulebook behind the command-line strip, the message toast and the completion popup — which lines a toast shows for a height budget, which completion items a popup shows for a selection, and where a byte offset in the command line lands on screen.
+
+**Public API**
+
+- `cmdline_columns(prefix, text, byte)` — the column for a byte offset, where `prefix` is the dialog `prompt` plus `firstc`.
+- `toast_budget_rows(available_px, cell_h)`, `toast_view(total, budget, scroll) -> ToastView`, `toast_scroll_clamp(total, budget, requested)`, `carried_scroll(prev, next, budget, scroll)`, `toast_is_shown(visible, lines)`, `prompt_answered(was_prompt, now_visible)`.
+- `pum_selection(items, selected) -> Option<usize>`, `pum_view(items, selected, budget) -> PumView`, `pum_item_label(item)`, `pum_width_cols(items, view)`.
+
+**Decisions**
+
+- `cmdline_columns` is one function because the caret and the popup's cmdline anchor both need it, and a second copy is how a popup ends up a column away from the caret it belongs to.
+- A scroll offset of zero pins the toast to its newest line, so a one-line message needs no special case; `carried_scroll` drops the offset when the line count changes, since that is a different message.
+- `pum_selection` refuses an out-of-range index rather than clamping: a selection the item list cannot explain is a fold error, and highlighting the last row would hide it.
+- `pum_width_cols` measures the visible rows only, or the popup would jump wider the moment a long item scrolled into range.
+
+**Gotchas**
+
+- Key-driven paging of a toast is impossible, not merely unimplemented: `wolf_core::InputEvent::is_toast_dismissing` makes every `Key` dismiss a non-prompt toast. That is why the offset is gesture-driven; see [DECISIONS.md](../DECISIONS.md).
+
 #### `command_action.rs`
 
 Purpose: the pure mapping from a drained `wolf_core::Command` to the UI action this front-end performs for it. GTK-free, so the whole classification is tested headlessly.
@@ -258,7 +279,6 @@ Purpose: crate root. Declares the modules and re-exports the display-free seams 
 
 - `cell_at` is re-exported because `grid_size_for` is, and the two are a pair whose composition is the point.
 - `restart_button_rect` is re-exported for one concrete consumer: the crash-overlay smoke derives the pixel it clicks from the same function the widget builder realizes, so the two cannot drift.
-- Items in `about`, `actions`, `buffer_picker`, `cell_metrics_math`, `config_seam`, `crash_overlay`, `cursor`, `editor_inset`, `layout`, `mouse`, `nav_ui`, `palette`, `pane_layout`, `pane_view`, `persistence`, `picker`, `refresh_coalescer`, `scrollbar`, `search_overlay`, `shell`, `statusbar_layout`, `tree`, `tree_gate`, and `tree_view` are reached by module path rather than re-exported.
 
 #### `liveness_ui.rs`
 
@@ -358,21 +378,21 @@ Purpose: the pure codec between the live pane tree, whose leaves are pane ids, a
 
 #### `pane_view.rs`
 
-Purpose: the GTK glue that turns `layout`'s pane tree into nested `gtk::Paned`, one `gtk::DrawingArea` per Neovim window, plus the command-line strip.
+Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one `gtk::DrawingArea` per window, plus the command-line strip and the two surfaces above it.
 
 **Public API**
 
-- `build(core, metrics) -> PaneHandle` — panes appear only with the first window grid.
-- `cmdline_widget()` — the focus-return target for overlays and sidebar.
+- `build(core, metrics) -> PaneHandle` — panes appear with the first grid.
+- `cmdline_widget()` — the focus-return target for overlays and sidebar; `toast_widget()` / `pum_widget()` — the surfaces `app.rs` overlays.
 - `reset_after_restart()`, `request_layout_rebuild(saved)`, `layout_snapshot()`, `snapshot_readiness()`.
 
 **Decisions**
 
-- Divider positions re-apply from the live tree on every `max-position` notify, since nested allocation reports intermediate values before settling. A `notify::position` at an unchanged maximum and span is a user drag: write it back, because a rebuild destroys the paned holding the gesture.
-- Pointer input is one `gtk::GestureDrag`, not a click controller, since a gesture keeps delivering after the pointer leaves the widget. Grid and button are pinned at press, modifiers re-read live, so a wandering drag edits the pane it started in.
-- Each pane's status and its window's `b:wolf_full_width` are cached once per wake: reading at use time would re-enter the snapshot guard `draw_pane` holds, and paint, pointer translation and resize must agree inside one frame.
-- One funnel produces every grid resize, compared against the size the pane last asked for rather than the lagging snapshot grid. It runs on every wake, not only from the resize signal, because lifting the content cap changes a pane's column count while the allocation holds still.
-- The scrollbar thumb is painted outside the grid clip, since it lives in the right padding gutter; [`scrollbar.rs`](#scrollbarrs) supplies it.
+- Divider positions re-apply from the live tree on every `max-position` notify, since nested allocation reports intermediate values before settling. A `notify::position` at an unchanged maximum and span is a user drag, written back because a rebuild destroys the paned.
+- Pointer input is one `gtk::GestureDrag`, not a click controller, since a gesture keeps delivering after the pointer leaves the widget. Grid and button pin at press and modifiers re-read live, so a wandering drag edits its starting pane.
+- Each pane's status and its `b:wolf_full_width` cache once per wake: reading at use time re-enters the guard `draw_pane` holds, and paint, pointer and resize must agree inside one frame.
+- One funnel produces every grid resize, compared against the size the pane last asked for rather than the lagging snapshot grid, and runs on every wake, since lifting the content cap changes a column count under a still allocation.
+- The scrollbar thumb paints outside the grid clip, in the right padding gutter ([`scrollbar.rs`](#scrollbarrs)). The toast and the popup are overlay children, never a taller strip ([DECISIONS.md](../DECISIONS.md)); `draw_cmdline` draws the dialog `prompt`, which makes a `confirm()` answerable.
 
 #### `persistence.rs`
 

@@ -60,16 +60,20 @@ Pointer input is verified at two levels — the seams through a live Neovim, and
 
 ## Command line, messages, completion
 
-| Feature                                                           | Branch or commit                     | macOS | Linux |
-| ----------------------------------------------------------------- | ------------------------------------ | ----- | ----- |
-| `ext_cmdline` / `ext_messages` / `ext_popupmenu` folded core-side | `feat/command-line-ui`               | [x]   | [x]   |
-| Native command-line rendering                                     | `feat/command-line-ui` (`acbe13e`)   | [x]   | [x]   |
-| Completion popup (`ext_popupmenu`)                                | `feat/command-line-ui` (`acbe13e`)   | [x]   | [ ]   |
-| Multi-line scrollable message toast                               | `feat/command-line-ui` (`acbe13e`)   | [x]   | [ ]   |
-| Neovim `confirm` prompts handled                                  | `fix/sporadic-crash` (`6807c0e`)     | [x]   | [ ]   |
-| Prompt toasts dismissed once answered                             | `fix/persistent-prompts` (`abf6e2a`) | [x]   | [ ]   |
+| Feature                                                           | Branch or commit                                               | macOS | Linux |
+| ----------------------------------------------------------------- | -------------------------------------------------------------- | ----- | ----- |
+| `ext_cmdline` / `ext_messages` / `ext_popupmenu` folded core-side | `feat/command-line-ui`                                         | [x]   | [x]   |
+| Native command-line rendering                                     | `feat/command-line-ui` (`acbe13e`)                             | [x]   | [x]   |
+| Completion popup (`ext_popupmenu`)                                | `feat/command-line-ui` (`acbe13e`) / `linux-feat/cmdline-ui`   | [x]   | [x]   |
+| Multi-line scrollable message toast                               | `feat/command-line-ui` (`acbe13e`) / `linux-feat/cmdline-ui`   | [x]   | [x]   |
+| Neovim `confirm` prompts handled                                  | `fix/sporadic-crash` (`6807c0e`) / `linux-feat/cmdline-ui`     | [x]   | [x]   |
+| Prompt toasts dismissed once answered                             | `fix/persistent-prompts` (`abf6e2a`) / `linux-feat/cmdline-ui` | [x]   | [x]   |
 
-GTK paints a single-row bottom strip: an active command line, or the last toast line when idle. The Adw completion popup and a multi-line scrollable toast are the accepted GTK deferral (OD4), which also means a multi-line `confirm` prompt shows only its final line on Linux.
+GTK paints a one-row bottom strip carrying the command line — its dialog `prompt`, its `firstc`, its text and its caret — plus two painted overlay surfaces above it: the message toast and the completion popup. Painted rather than widgets, because each one's background is the editor's own per-frame background out of the snapshot, which a theme-owned widget background cannot be; overlay children rather than a taller strip, because the strip's height is subtracted from the pane area and one that grew with its content would resize the Neovim grid on every message.
+
+A toast shows as many lines as fit half the space above the strip, and a scroll gesture over it pages back through the older ones without reaching Neovim. Key-driven paging is not a rejected alternative but an impossible one: any key is dismissing input for a non-prompt toast, so a paging key would destroy what it paged. A `confirm` dialog is answerable because its question and its options line are on screen at the same time — the question is a `confirm`-kind message and the options line is the command line's `prompt` — and it clears when the dialog resolves, which core decides.
+
+Two divergences from macOS are deliberate. The popup accepts no input at all, matching the synthesized scrollbar's rule that an indicator beats a control that visibly refuses. And the selected completion row is drawn in reverse video out of the snapshot's own colours rather than a theme accent, since this front-end reads no OS theme in either direction.
 
 ## Navigation and file access
 
@@ -207,6 +211,5 @@ The second limit is that a stall does not clear itself on the GTK side. Both the
 
 Work already carried is recorded in the tables above. What remains, in order:
 
-1. **Config-driven typography**, then the completion popup and multi-line toast.
-2. **Markdown preview**, which is the largest single item: it introduces a second kind of pane content on the GTK side.
-3. **Multi-window and tabs**, which reshape `wolf-gnome` from a single-window application into a coordinator-plus-views one.
+1. **Markdown preview**, which is the largest single item: it introduces a second kind of pane content on the GTK side.
+2. **Multi-window and tabs**, which reshape `wolf-gnome` from a single-window application into a coordinator-plus-views one.
