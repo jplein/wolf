@@ -969,7 +969,7 @@ mod tests {
 
         // (description, delivered keyval, modifier state, expected action)
         let cases: Vec<(&str, gdk::Key, gdk::ModifierType, Option<&'static str>)> = vec![
-            // --- The ten BOUND chords, in both letter cases where they have one -
+            // --- The twelve BOUND chords, in both letter cases where they have one
             (
                 "Ctrl+Shift+o -> win.go-to-file",
                 key_from_char('o'),

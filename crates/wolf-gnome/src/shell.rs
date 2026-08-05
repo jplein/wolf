@@ -98,7 +98,7 @@
 //! whole RPC timeout budget on every single crash. The cheap, RPC-free
 //! `Snapshot::current_tabpage` field carries the same handle.
 //!
-//! The sidebar's re-root adds NO fourth blocking call, which is worth stating
+//! The sidebar's re-root adds NO blocking call, which is worth stating
 //! because it is the one new per-wake core read this module makes:
 //! `WolfCore::live_cwd` is a `parking_lot` read of a tracked cell, taken once per
 //! wake in [`AppShell::on_render_wake`] and passed to both consumers.
@@ -148,7 +148,8 @@
 //! fall-through to `<C-b>` is the accepted wart of the `Ctrl+Shift+<letter>`
 //! namespace.
 //!
-//! The project-search overlay ([`crate::search_overlay`]) adds NO third one, and
+//! The project-search overlay ([`crate::search_overlay`]) adds NO blocking call
+//! either, and
 //! that is worth stating because the symmetry with the buffer picker suggests
 //! otherwise: `start_search` resolves its root from the tracked-cwd cell and
 //! `spawn_blocking`s, `open_at` is fire-and-forget on the ordered input channel, and

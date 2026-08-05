@@ -1790,9 +1790,10 @@ fn search_target_fixture_body() -> String {
 //
 // This is the first end-to-end coverage the STALL half of the crash/stall overlay
 // has, and it is reachable only because the buffer picker exists: `list_buffers`
-// is the one blocking RPC a RUNNING wolf-gnome issues, so wedging the captive
-// Neovim with SIGSTOP and then firing Ctrl+Shift+E is what makes `block_on_rpc`
-// elapse its budget, mark the core NotResponding, and raise the overlay.
+// is the blocking RPC a RUNNING wolf-gnome issues from a chord this harness can
+// type, so wedging the captive Neovim with SIGSTOP and then firing Ctrl+Shift+E is
+// what makes `block_on_rpc` elapse its budget, mark the core NotResponding, and
+// raise the overlay.
 //
 // The scenario captures AFTER the block, never during it: no frame is committed
 // while the main loop is blocked, so a capture taken then would return the
@@ -4861,8 +4862,9 @@ exit 0
 /// wake; `liveness_ui(NotResponding, _)` yields `OverlayMode::Stalled`, and
 /// `apply_overlay` raises the opaque overlay and closes the empty picker behind it.
 ///
-/// This is only reachable because the buffer picker exists: it is the one blocking
-/// RPC a RUNNING `wolf-gnome` issues.
+/// This is only reachable because the buffer picker exists: of the blocking RPCs a
+/// RUNNING `wolf-gnome` issues, its candidate snapshot is the one a chord this
+/// harness can type reaches with no selection or history to set up first.
 ///
 /// ## Capture AFTER the block, never during it
 ///

@@ -48,7 +48,7 @@
 //! directories), one `live_cwd` lock read, and one `stat` per recorded directory
 //! through [`open_recent_candidates`]' injected predicate — bounded by the store's
 //! own cap. All of it happens at open, never per keystroke, and none of it is an
-//! RPC to Neovim, so this module adds no third `block_on_rpc` route (see
+//! RPC to Neovim, so this module adds no `block_on_rpc` route at all (see
 //! `crates/wolf-gnome/DECISIONS.md`, "Crash and stall recovery").
 //!
 //! Almost all of this module is GTK widget wiring, which cannot be unit-tested

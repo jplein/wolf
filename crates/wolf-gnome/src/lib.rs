@@ -7,6 +7,14 @@
 //!   [`wolf_core::KeyEvent`], honoring the shift-glyph contract.
 //! - [`paint`]: paints a [`wolf_core::Snapshot`] onto a Cairo context (an offscreen
 //!   `ImageSurface` in tests, a `DrawingArea` context in production).
+//! - [`mod@glyph_style`]: the DECORATION half of that paint, as data — one cell's
+//!   [`wolf_core::ResolvedStyle`] to the underline, undercurl and strikethrough
+//!   Pango is asked for and the colour the first two take
+//!   ([`glyph_style::glyph_decoration`]), plus the 8-bit to 16-bit channel widening
+//!   Pango's colour attributes need ([`glyph_style::pango_channels`]). Pango's
+//!   underline attribute is SINGLE-VALUED per run, so `underline` and `undercurl`
+//!   cannot coexist and undercurl wins; the wave is Pango's own
+//!   `Underline::Error`, never a hand-stroked Cairo path.
 //! - [`grid_size_for`]: the pure pixel-to-grid geometry used by the window's
 //!   resize handler (testable without GTK).
 //! - [`cell_at`]: the POINTER half of that same geometry, in the same file — a
@@ -176,6 +184,14 @@
 //!   core's per-pane availability reading ([`nav_ui::nav_buttons`], which answers
 //!   both-insensitive for every input the press path would refuse, never the
 //!   converse).
+//! - [`mod@clipboard_ui`]: the CLIPBOARD rulebook — two TOTAL
+//!   `Option<`[`wolf_core::Liveness`]`>` guards, one refusing the Copy yank's
+//!   BLOCKING RPC ([`clipboard_ui::copy_decision`]) and one refusing a Paste for a
+//!   reason that is NOT about blocking ([`clipboard_ui::paste_decision`]: nothing
+//!   on that path blocks, but a paste queued behind a crash or stall overlay would
+//!   land in a RESTARTED Neovim minutes later). Plus what may cross in each
+//!   direction ([`clipboard_ui::clipboard_write`], whose `None` means write NOTHING
+//!   rather than clear, and [`clipboard_ui::paste_payload`]).
 //! - [`actions`]: the action namespace as data — [`actions::ACTION_TABLE`],
 //!   [`actions::MENU_SECTIONS`], and the [`actions::parse_accel`] /
 //!   [`actions::forbidden_reason`] checker that mechanically enforces "no Neovim

@@ -263,7 +263,7 @@ pub enum InputEvent {
     },
     /// Set the global `background` option (delegated to `:set background=…`).
     ///
-    /// The macOS front-end pushes the resolved appearance at launch and, in
+    /// Both front-ends push the resolved appearance at launch and, in
     /// `auto` mode, live when the OS toggles. `:set background=…` re-sources the
     /// colorscheme, which re-fires the existing `ColorScheme` → `wolf_theme`
     /// path, so the grid + titlebar follow automatically. Enqueued on the ordered

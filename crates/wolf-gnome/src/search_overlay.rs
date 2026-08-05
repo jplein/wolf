@@ -45,7 +45,7 @@
 //! `WOLF_RG_BIN`, resolves the search root from the tracked-cwd cell and
 //! `spawn_blocking`s onto the tokio runtime; `open_at` is fire-and-forget on the
 //! ordered input channel; `liveness` is a lock-free atomic read. So this overlay
-//! adds NO third blocking-RPC path to the crate, and
+//! adds NO blocking-RPC path to the crate at all, and
 //! `WolfCore::ignorecase()` — which IS a blocking RPC — is deliberately never
 //! called: it would buy only the seed for a case-sensitivity toggle this front-end
 //! does not ship.

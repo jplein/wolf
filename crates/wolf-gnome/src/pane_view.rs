@@ -73,7 +73,7 @@
 //!   launch; the first wake at which a window grid exists consumes it
 //!   ([`PaneInner::consume_pending_layout`]) and realizes it
 //!   ([`PaneInner::apply_layout_rebuild`]) through `WolfCore::rebuild_layout`, one
-//!   of the three blocking RPCs this front-end issues, documented there.
+//!   of the four blocking RPCs this front-end issues, documented there.
 //!
 //! A user's DIVIDER DRAG feeds the save half. [`install_paned_position`] writes the
 //! dragged `gtk::Paned` position back into the tree's weights through

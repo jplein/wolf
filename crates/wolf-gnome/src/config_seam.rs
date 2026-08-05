@@ -82,7 +82,7 @@ mod tests {
             resolve_font_pt(Some(ENV_PT), CONFIGURED_PT),
             ENV_PT,
             "a usable WOLF_FONT_PT must beat the configured font-size. Getting {CONFIGURED_PT} \
-             means the precedence is reversed, which re-sizes the cell in all thirty-five \
+             means the precedence is reversed, which re-sizes the cell in all forty-two \
              compositor smokes at once and drops `crates/wolf-gnome/README.md`'s documented \
              override on the floor."
         );
