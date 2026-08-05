@@ -272,6 +272,14 @@ static CAGE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// recognize reliably in a screenshot.
 const SMOKE_FONT_PT: &str = "28";
 
+/// The `appearance` every smoke's seeded `wolf-config.yaml` carries — see
+/// [`write_smoke_config`], whose doc comment holds the reason the key is PINNED at
+/// all and the reason it is pinned to this value in particular.
+///
+/// Only the two-launch appearance smoke passes anything else, and it passes both
+/// of the other values in one run.
+const SMOKE_APPEARANCE: &str = "dark";
+
 /// The `line-height` (percent of the font size) every smoke's seeded
 /// `wolf-config.yaml` carries — see [`smoke_config_dir`], which writes it, and
 /// [`smoke_line_height`], which parses it back for this file's own measurement.
@@ -8503,11 +8511,12 @@ fn smoke_state_dir(cwd: &Path) -> PathBuf {
 /// A seeded file makes `load_or_create` READ rather than write, so the smoke is
 /// deterministic and leaves nothing behind that a second run would read
 /// differently. It pins the family to [`SMOKE_FONT_FAMILY`] — the one
-/// [`cell_metrics_for_smoke`] measures against — and the line-height to
+/// [`cell_metrics_for_smoke`] measures against — the line-height to
 /// [`SMOKE_LINE_HEIGHT`], whose doc comment carries the measurement behind the
-/// number. The `font-size` it carries is inert while `WOLF_FONT_PT` wins
-/// (`config_seam::resolve_font_pt`'s documented precedence), and is written
-/// anyway so the file is honest about what it configures.
+/// number, and the appearance to [`SMOKE_APPEARANCE`], whose reason lives in
+/// [`write_smoke_config`]. The `font-size` it carries is inert while
+/// `WOLF_FONT_PT` wins (`config_seam::resolve_font_pt`'s documented precedence),
+/// and is written anyway so the file is honest about what it configures.
 ///
 /// ## Why a SIBLING and not a child
 ///
@@ -8516,16 +8525,19 @@ fn smoke_state_dir(cwd: &Path) -> PathBuf {
 /// and a picker candidate, changing the page density every OCR assertion is
 /// calibrated against.
 fn smoke_config_dir(cwd: &Path) -> PathBuf {
-    smoke_config_dir_at(cwd, "", SMOKE_FONT_PT)
+    smoke_config_dir_at(cwd, "", SMOKE_FONT_PT, SMOKE_APPEARANCE)
 }
 
-/// [`smoke_config_dir`] with an extra name suffix and an explicit `font-size`.
+/// [`smoke_config_dir`] with an extra name suffix and an explicit `font-size` and
+/// `appearance`.
 ///
-/// One smoke — [`config_font_size_changes_the_grid_under_cage`] — needs TWO seeded
-/// config directories in one scenario, at two different font sizes. Deriving both
-/// here keeps the sibling-not-child rule and the seeded file's shape in one place;
-/// see [`smoke_config_dir`] for why each matters.
-fn smoke_config_dir_at(cwd: &Path, suffix: &str, font_pt: &str) -> PathBuf {
+/// Two smokes need TWO seeded config directories in one scenario:
+/// [`config_font_size_changes_the_grid_under_cage`] at two different font sizes,
+/// and [`configured_appearance_reaches_neovims_background_under_cage`] at two
+/// different appearances. Deriving all four here keeps the sibling-not-child rule
+/// and the seeded file's shape in one place; see [`smoke_config_dir`] for why each
+/// matters.
+fn smoke_config_dir_at(cwd: &Path, suffix: &str, font_pt: &str, appearance: &str) -> PathBuf {
     let name = cwd.file_name().unwrap_or_else(|| {
         panic!(
             "smoke cwd {} has no final path component, so no `<name>-config` sibling can be \
@@ -8543,21 +8555,41 @@ fn smoke_config_dir_at(cwd: &Path, suffix: &str, font_pt: &str) -> PathBuf {
         )
     });
     let dir = parent.join(format!("{}-config{suffix}", name.to_string_lossy()));
-    write_smoke_config(&dir, font_pt);
+    write_smoke_config(&dir, font_pt, appearance);
     dir
 }
 
 /// Creates `dir` and writes a `wolf-config.yaml` into it pinning
-/// [`SMOKE_FONT_FAMILY`], `font_pt`, and [`SMOKE_LINE_HEIGHT`].
+/// [`SMOKE_FONT_FAMILY`], `font_pt`, [`SMOKE_LINE_HEIGHT`] and `appearance`.
 ///
-/// Split out from [`smoke_config_dir`] because
-/// [`config_font_size_changes_the_grid_under_cage`] needs the same file at two
-/// DIFFERENT font sizes, and the seeded shape must not be written twice by hand.
-/// All three fields are required by `wolf_core`'s `ConfigSection`: a partial
+/// Split out from [`smoke_config_dir`] because two smokes need the same file at
+/// two DIFFERENT values — [`config_font_size_changes_the_grid_under_cage`] at two
+/// font sizes and [`configured_appearance_reaches_neovims_background_under_cage`]
+/// at two appearances — and the seeded shape must not be written twice by hand.
+/// The three font fields are required by `wolf_core`'s `ConfigSection`: a partial
 /// section fails to deserialize and `load_or_create` then falls back to the
 /// built-in defaults, which is exactly the `iA Writer Mono S` outcome this whole
 /// helper exists to prevent.
-fn write_smoke_config(dir: &Path, font_pt: &str) {
+///
+/// ## Why `appearance` is pinned, and why to [`SMOKE_APPEARANCE`]
+///
+/// `appearance` is the one seeded field that is NOT required — `wolf_core`'s
+/// `ConfigSection` gives it a `#[serde(default)]` of `auto` — so an unpinned file
+/// leaves every smoke running in `auto`. That is the same class of hazard the
+/// family and the size are pinned against, one step further out: in `auto` the
+/// resolved appearance comes from libadwaita's reading of the desktop, and under
+/// `cage` there is no settings portal and no xsettings bridge to read. The
+/// rendered page would then depend on the compositor's ABSENT theme state, which
+/// is not a value this suite controls and not one it could re-derive after a
+/// failure.
+///
+/// `dark` specifically, because it is what Neovim already defaults to under
+/// `--embed`: pinning it pushes the grid to the background it was already at, so
+/// NO OCR page moves. Pinning `light` would invert every one of the OCR smokes at
+/// once, and their sparse-text segmentation is calibrated on a light-on-dark grid.
+/// Changing this is therefore a change to every OCR assertion in this file; do not
+/// adjust it to make one of them pass.
+fn write_smoke_config(dir: &Path, font_pt: &str, appearance: &str) {
     std::fs::create_dir_all(dir).unwrap_or_else(|e| {
         panic!(
             "failed to create the smoke config dir {}: {e}. Without it the app under cage resolves \
@@ -8569,7 +8601,7 @@ fn write_smoke_config(dir: &Path, font_pt: &str) {
     let path = dir.join(CONFIG_FILE_NAME);
     let yaml = format!(
         "config:\n  font-family: {SMOKE_FONT_FAMILY}\n  font-size: {font_pt}\n  \
-         line-height: {SMOKE_LINE_HEIGHT}\n"
+         line-height: {SMOKE_LINE_HEIGHT}\n  appearance: {appearance}\n"
     );
     std::fs::write(&path, yaml).unwrap_or_else(|e| {
         panic!(
@@ -16923,10 +16955,21 @@ fn config_font_size_changes_the_grid_under_cage() {
     let cwd = make_temp_cwd();
     write_relaunch_fixtures(SMOKE, &cwd, &[]);
 
-    let config_small =
-        smoke_config_dir_at(&cwd, CONFIG_GRID_SMALL_SUFFIX, CONFIG_GRID_SMALL_FONT_PT);
-    let config_large =
-        smoke_config_dir_at(&cwd, CONFIG_GRID_LARGE_SUFFIX, CONFIG_GRID_LARGE_FONT_PT);
+    // Both runs carry SMOKE_APPEARANCE: the font size is the ONE variable this
+    // smoke may have, and an unpinned appearance would let the two launches differ
+    // in a second one — see `write_smoke_config`.
+    let config_small = smoke_config_dir_at(
+        &cwd,
+        CONFIG_GRID_SMALL_SUFFIX,
+        CONFIG_GRID_SMALL_FONT_PT,
+        SMOKE_APPEARANCE,
+    );
+    let config_large = smoke_config_dir_at(
+        &cwd,
+        CONFIG_GRID_LARGE_SUFFIX,
+        CONFIG_GRID_LARGE_FONT_PT,
+        SMOKE_APPEARANCE,
+    );
     assert_ne!(
         config_small,
         config_large,
@@ -17016,6 +17059,389 @@ fn config_font_size_changes_the_grid_under_cage() {
          column count, so a difference this small says the size reaching the metrics is not the \
          one the config names — a clamped or partially-applied value rather than an ignored one. \
          Assertion 2 alone would accept it, which is exactly why this bound exists."
+    );
+}
+
+// --- The configured appearance reaches Neovim's `background` -----------------
+
+/// The `appearance` run 1's config directory carries.
+///
+/// Deliberately its OWN const rather than [`SMOKE_APPEARANCE`], even though the
+/// two spell the same word today. This smoke has to drive BOTH forced values
+/// whatever the rest of the file happens to be pinned to, so re-pinning the shared
+/// value must not quietly turn one of these two launches into a copy of the other.
+const APPEARANCE_FORCED_DARK: &str = "dark";
+
+/// The `appearance` run 2's config directory carries. See
+/// [`APPEARANCE_FORCED_DARK`].
+const APPEARANCE_FORCED_LIGHT: &str = "light";
+
+/// Name suffix of run 1's config directory sibling.
+const APPEARANCE_DARK_SUFFIX: &str = "-appearance-dark";
+
+/// Name suffix of run 2's config directory sibling.
+const APPEARANCE_LIGHT_SUFFIX: &str = "-appearance-light";
+
+/// File run 1's Neovim writes `&background` into.
+///
+/// Both readbacks live under `XDG_RUNTIME_DIR` rather than in the smoke's cwd, so
+/// the app's own `FileSearch` never lists them and neither name can reach the tree
+/// sidebar, the header bar or an `:e` echo. Nothing here is OCR'd in any case —
+/// the assertion reads the CONTENT of a file the captive Neovim wrote about its
+/// own option, and a file name is not on that path at all.
+const APPEARANCE_DARK_READBACK_NAME: &str = "wolf_gnome_appearance_background_1.txt";
+
+/// File run 2's Neovim writes `&background` into. See
+/// [`APPEARANCE_DARK_READBACK_NAME`].
+const APPEARANCE_LIGHT_READBACK_NAME: &str = "wolf_gnome_appearance_background_2.txt";
+
+/// The two-launch CONFIGURED-APPEARANCE scenario, run as one `sh -c` string inside
+/// ONE `cage`, structurally [`CONFIG_GRID_SCENARIO`]'s shape.
+///
+/// Each launch exports its own `WOLF_CONFIG_DIR`, deliberately overriding the one
+/// [`cage_command`] sets, and reads `&background` back out of the captive Neovim
+/// into its own file. `&background` and not a highlight-group colour: the option
+/// is the value the front-end pushes, it is a plain string Neovim will write out,
+/// and the colours it selects are the colorscheme's business rather than this
+/// crate's.
+///
+/// Exit codes, each naming ONE cause: `11` an app died before its window mapped;
+/// `12` run 1's readback never appeared (or stayed empty); `13` run 2's readback
+/// never appeared; `14` an app was still alive after `:qa!`; `15` an app exited
+/// non-zero. 14 and 15 are separate because a process that panicked in the GTK
+/// main loop and one that shut down cleanly are equally GONE — only the status
+/// tells them apart.
+///
+/// Codes 11, 14 and 15 are shared by the two launches rather than doubled, so each
+/// of the three prints the run's LABEL on stderr and the Rust side names the
+/// second recovery route: which of the two readback files exists says how far the
+/// scenario got.
+const APPEARANCE_SCENARIO: &str = r#"
+set -eu
+
+# SETTLE is the ONLY real budget between spawning either run's app and its first
+# keystroke: `wait_window`'s wtype probe does NOT gate input readiness (it breaks
+# at tries=0 on every run -- see the module doc comment).
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+QUIT_TRIES=75
+FILE_TRIES=100
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+# $1 is the run LABEL, printed so a shared exit code still says which launch died.
+wait_window() {
+    tries=0
+    while [ "$tries" -lt "$WAIT_TRIES" ]; do
+        if ! kill -0 "$app_pid" 2>/dev/null; then
+            echo "wolf-gnome appearance smoke: $1 app exited early (pid $app_pid)" >&2
+            exit 11
+        fi
+        if wtype "" >/dev/null 2>&1; then
+            return 0
+        fi
+        tries=$((tries + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    return 0
+}
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome appearance smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# $1 is the run LABEL; see wait_window.
+quit_app() {
+    wtype -- ":qa!"
+    wtype -k Return
+
+    tries=0
+    gone=0
+    while [ "$tries" -lt "$QUIT_TRIES" ]; do
+        if ! kill -0 "$app_pid" 2>/dev/null; then
+            gone=1
+            break
+        fi
+        tries=$((tries + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    if [ "$gone" -ne 1 ]; then
+        echo "wolf-gnome appearance smoke: $1 app (pid $app_pid) still alive after :qa!." >&2
+        exit 14
+    fi
+    # `set -e` would abort before the status could be reported, so collect it
+    # through `||`, which is exempt from it.
+    rc=0
+    wait "$app_pid" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "wolf-gnome appearance smoke: $1 app (pid $app_pid) exited $rc, not 0." >&2
+        exit 15
+    fi
+    app_pid=
+}
+
+# =========================================================================
+# RUN 1 -- appearance: dark.
+#
+# This export deliberately overrides the WOLF_CONFIG_DIR `cage_command` set: the
+# helper's directory pins the shared appearance, and this smoke is the one where
+# the CONFIGURED appearance has to be what decides.
+# =========================================================================
+WOLF_CONFIG_DIR="$CONFIG_DIR_DARK"
+export WOLF_CONFIG_DIR
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_window "run 1 (appearance: dark)"
+sleep "$SETTLE"
+
+# `&background` is a global option, so no window or buffer has to be current for
+# this to be the value the front-end pushed.
+wtype -- ":call writefile([&background], '$BG_DARK')"
+wtype -k Return
+wait_file "$BG_DARK" || exit 12
+
+quit_app "run 1 (appearance: dark)"
+
+# =========================================================================
+# RUN 2 -- appearance: light, same cwd, same window.
+# =========================================================================
+WOLF_CONFIG_DIR="$CONFIG_DIR_LIGHT"
+export WOLF_CONFIG_DIR
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_window "run 2 (appearance: light)"
+sleep "$SETTLE"
+
+wtype -- ":call writefile([&background], '$BG_LIGHT')"
+wtype -k Return
+wait_file "$BG_LIGHT" || exit 13
+
+quit_app "run 2 (appearance: light)"
+
+exit 0
+"#;
+
+/// The `appearance` in `wolf-config.yaml` reaches the captive Neovim's
+/// `background` option: `dark` gives `dark`, `light` gives `light`.
+///
+/// ## What it proves, and why the observable is an option rather than a pixel
+///
+/// Two launches inside ONE `cage` instance, two seeded `WOLF_CONFIG_DIR`s, no
+/// capture at all. Each launch asks its Neovim to write `&background` into its own
+/// file, and the assertions are two exact string equalities.
+///
+/// OCR reads no colour, so the appearance cannot be read off a screenshot at all —
+/// but the readback route is not a consolation prize here, it is stronger:
+/// `&background` is the exact value `WolfCore::set_background` pushes, written out
+/// by the process that received it. The push rides the ordered input channel and
+/// is enqueued at launch, before the window is built, so it is applied ahead of
+/// every keystroke the scenario later types; the settle is margin, not a race.
+///
+/// ## THE PAIR IS WHAT DISCRIMINATES, AND NEITHER HALF DOES IT ALONE
+///
+/// This is the whole design of the smoke, and it is why a future edit must not
+/// drop one launch as redundant:
+///
+/// - Assertion 1 (`dark`) is satisfied by a build that pushes NOTHING. `dark` is
+///   Neovim's own default under `--embed`, so a front-end that never called
+///   `set_background` produces exactly the value assertion 1 demands.
+/// - Assertion 2 (`light`) is satisfied by a build that ALWAYS pushes light —
+///   `appearance_decision` returning a constant, or `apply_at_launch` pushing a
+///   literal.
+///
+/// Together they exclude both, because no single constant satisfies the two.
+///
+/// The premise under assertion 1 is stated rather than assumed: nothing rests on
+/// Neovim's default really being `dark`, because that premise only makes assertion
+/// 1 WEAKER. If the default were `light`, assertion 1 would become discriminating
+/// too and this smoke would be strictly stronger than described.
+///
+/// ## The named falsifiers
+///
+/// | revert | what happens |
+/// | --- | --- |
+/// | delete the `core.set_background(decided.dark)` call in `appearance::apply_at_launch` | run 2 reads `dark` (Neovim's default) and assertion 2 fires; the fast suite stays GREEN, which is the diagnostic — the rule is right and nothing carries it out |
+/// | return `dark: true` for `Appearance::Light` in `appearance::appearance_decision` | run 2 reads `dark` as well, AND `appearance::tests::appearance_decision_table` goes red. A red smoke over a red fast suite is the rule itself being wrong; over a green one it is the applier |
+///
+/// ## What it does NOT prove
+///
+/// Three entries for `tests/README.md`'s "What is still unproven", named here so
+/// they are not lost.
+///
+/// **The `auto` arm.** Under `cage` there is no settings portal and no xsettings
+/// bridge, so `adw::StyleManager::is_dark()` is constant for a whole run and no
+/// smoke can vary it. `auto` is table-tested in `appearance::appearance_decision`
+/// and reached by nothing here.
+///
+/// **The live OS-toggle re-push.** `connect_dark_notify` fires only on a real
+/// change of libadwaita's `dark` property, which nothing under `cage` can produce.
+/// That `observe_os` is decided correctly is table-tested; that the handler is
+/// ever INVOKED is unobserved on this platform.
+///
+/// **That any colour reaches a pixel.** OCR reads no colour — the same shape as
+/// the status bar's active treatment and the popup's reverse video. This smoke
+/// says nothing about the GTK chrome's colour scheme, which
+/// `appearance_decision` pins as a value and `apply_at_launch` demonstrably passes
+/// to `set_color_scheme`, and nothing about the grid's colours, which are the
+/// captive Neovim's colorscheme responding to the option this smoke reads.
+///
+/// ## The conventions it obeys
+///
+/// A fresh temp working directory ([`make_temp_cwd`], mandatory — the captive
+/// Neovim's swap directory is keyed on it); [`CAGE_LOCK`] for the whole body; one
+/// `sh -c` string through [`cage_command`], the single environment helper and the
+/// only place the compositor is spawned; and five exit codes naming five causes.
+/// It asserts no OCR term and captures no PNG, so it contributes no row to any
+/// fixture-name guard — the treatment the divider-relayout, column-cap and
+/// clipboard smokes already get.
+#[test]
+fn configured_appearance_reaches_neovims_background_under_cage() {
+    const SMOKE: &str = "configured_appearance_reaches_neovims_background_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd shared by both launches. The filler files are the usual
+    // sidebar population; nothing here is OCR'd, so no fixture carries a term.
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(SMOKE, &cwd, &[]);
+
+    // Both launches run at SMOKE_FONT_PT: the appearance is the ONE variable this
+    // smoke may have.
+    let config_dark = smoke_config_dir_at(
+        &cwd,
+        APPEARANCE_DARK_SUFFIX,
+        SMOKE_FONT_PT,
+        APPEARANCE_FORCED_DARK,
+    );
+    let config_light = smoke_config_dir_at(
+        &cwd,
+        APPEARANCE_LIGHT_SUFFIX,
+        SMOKE_FONT_PT,
+        APPEARANCE_FORCED_LIGHT,
+    );
+    assert_ne!(
+        config_dark,
+        config_light,
+        "{SMOKE}: both runs were pointed at the SAME config directory {}, so they would read the \
+         same appearance and one of the two assertions below could never hold. The two suffixes \
+         ({APPEARANCE_DARK_SUFFIX:?} and {APPEARANCE_LIGHT_SUFFIX:?}) must differ.",
+        config_dark.display()
+    );
+
+    // --- Precondition: each seeded file really carries its own appearance -----
+    //
+    // `appearance` is the one seeded key `wolf_core`'s ConfigSection does NOT
+    // require — it has a `#[serde(default)]` of `auto` — so a `write_smoke_config`
+    // that stopped emitting it would leave BOTH launches in `auto`, reading the
+    // same value from the same absent settings portal. That failure is a harness
+    // failure and would otherwise surface as assertion 2, i.e. as a claim about the
+    // front-end. Separated here so the two cannot be confused.
+    for (label, dir, want) in [
+        ("run 1", &config_dark, APPEARANCE_FORCED_DARK),
+        ("run 2", &config_light, APPEARANCE_FORCED_LIGHT),
+    ] {
+        let path = dir.join(CONFIG_FILE_NAME);
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "{SMOKE}: could not read the {label} config file {} that `smoke_config_dir_at` \
+                 just seeded: {e}",
+                path.display()
+            )
+        });
+        let key = format!("appearance: {want}");
+        assert!(
+            text.contains(&key),
+            "{SMOKE}: the {label} config file {} does not carry {key:?}. Its contents were:\n\
+             {text}\nWithout the key `wolf_core::config` defaults the field to `auto`, so this \
+             launch would resolve its appearance from a settings portal that does not exist under \
+             `cage` — and BOTH launches would then report the same value, failing an assertion \
+             below for a reason that has nothing to do with the front-end honouring the setting.",
+            path.display()
+        );
+    }
+
+    let bg_dark = runtime_dir.join(APPEARANCE_DARK_READBACK_NAME);
+    let bg_light = runtime_dir.join(APPEARANCE_LIGHT_READBACK_NAME);
+    for path in [&bg_dark, &bg_light] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let mut cmd = cage_command(APPEARANCE_SCENARIO, &cwd);
+    cmd.env("WOLF_BIN", bin)
+        .env("CONFIG_DIR_DARK", &config_dark)
+        .env("CONFIG_DIR_LIGHT", &config_light)
+        .env("BG_DARK", &bg_dark)
+        .env("BG_LIGHT", &bg_light);
+
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless configured-appearance scenario");
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage configured-appearance scenario exited unsuccessfully ({status}). Exit \
+         11: an app died before its window mapped — a panic while resolving the appearance \
+         (`appearance::apply_at_launch` runs before any widget is built, so a panic there takes \
+         the whole launch) is the first thing to look at. Exit 12: run 1's readback never appeared \
+         at {}. Exit 13: run 2's readback never appeared at {}. Exit 14: an app was still alive \
+         after `:qa!`. Exit 15: an app went away, but NOT cleanly — a panic in the GTK main loop \
+         makes a process vanish exactly as a clean shutdown does, which is why 14 and 15 are \
+         separate codes. Codes 11, 14 and 15 do not name WHICH launch on their own: the scenario \
+         prints the run label beside each on stderr, and which of the two readback files exists \
+         says how far it got.",
+        bg_dark.display(),
+        bg_light.display()
+    );
+
+    // --- The two assertions. NEITHER discriminates alone; see the doc comment --
+    let got_dark = read_trimmed(&bg_dark, SMOKE);
+    let got_light = read_trimmed(&bg_light, SMOKE);
+
+    assert_eq!(
+        got_dark, APPEARANCE_FORCED_DARK,
+        "{SMOKE}: run 1 was launched with `appearance: {APPEARANCE_FORCED_DARK}` and its Neovim \
+         reported `&background` = {got_dark:?}. This half of the pair is the WEAK one on purpose — \
+         `{APPEARANCE_FORCED_DARK}` is what Neovim defaults to under `--embed`, so a build that \
+         pushes nothing at all still satisfies it. A FAILURE here therefore means something \
+         stronger than a missing push: the front-end pushed the OPPOSITE of what was configured, \
+         or the readback ran in a Neovim that never received the launch push at all. Run 2's \
+         assertion is the one that detects a missing push."
+    );
+    assert_eq!(
+        got_light, APPEARANCE_FORCED_LIGHT,
+        "{SMOKE}: run 2 was launched with `appearance: {APPEARANCE_FORCED_LIGHT}` and its Neovim \
+         reported `&background` = {got_light:?}. THIS is the discriminating half. Reading \
+         {APPEARANCE_FORCED_DARK:?} means the configured appearance never reached Neovim: either \
+         `appearance::apply_at_launch` does not call `core.set_background(decided.dark)`, or \
+         `appearance::appearance_decision` resolves `Appearance::Light` to `dark: true`. Those two \
+         are told apart by the fast suite — `appearance::tests::appearance_decision_table` is RED \
+         for the second and GREEN for the first. Anything that is neither {APPEARANCE_FORCED_DARK:?} \
+         nor {APPEARANCE_FORCED_LIGHT:?} means the Ex command did not execute as typed; check for a \
+         stray keystroke landing in the buffer instead of the cmdline."
     );
 }
 
