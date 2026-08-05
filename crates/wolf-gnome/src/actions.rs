@@ -214,23 +214,24 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         note: "macOS Shift+Cmd+F; gives up only the Ctrl+Shift alias for <C-f> (page forward), \
                which is still typed as plain Ctrl+F",
     },
-    // --- Reserved for later units (declared here so the scheme is auditable) --
+    // --- The system clipboard -------------------------------------------------
     ActionBinding {
         action: "win.copy",
         accel: Some("<Control><Shift>c"),
         command: Some(Command::Copy),
-        status: BindingStatus::Reserved,
+        status: BindingStatus::Bound,
         note: "macOS Cmd+C; the GNOME Terminal spelling, and gives up only the Ctrl+Shift alias \
-               for <C-c>",
+               for <C-c>, the INTERRUPT, which is still typed as plain Ctrl+C",
     },
     ActionBinding {
         action: "win.paste",
         accel: Some("<Control><Shift>v"),
         command: Some(Command::Paste),
-        status: BindingStatus::Reserved,
+        status: BindingStatus::Bound,
         note: "macOS Cmd+V; the GNOME Terminal spelling, and gives up only the Ctrl+Shift alias \
-               for <C-v>",
+               for <C-v>, visual BLOCK, which is still typed as plain Ctrl+V",
     },
+    // --- The file-tree sidebar ------------------------------------------------
     ActionBinding {
         action: "win.toggle-sidebar",
         accel: Some("<Control><Shift>b"),
@@ -239,6 +240,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         note: "macOS Ctrl+Cmd+S; B is the cross-platform sidebar letter and gives up only the \
                Ctrl+Shift alias for <C-b>",
     },
+    // --- Reserved for later units (declared here so the scheme is auditable) --
     ActionBinding {
         action: "win.sidebar-show-project",
         accel: Some("<Control><Shift>s"),
@@ -375,6 +377,18 @@ pub const MENU_SECTIONS: &[MenuSection] = &[
             MenuItemSpec {
                 label: "Toggle sidebar",
                 action: "win.toggle-sidebar",
+            },
+        ],
+    },
+    MenuSection {
+        items: &[
+            MenuItemSpec {
+                label: "Copy",
+                action: "win.copy",
+            },
+            MenuItemSpec {
+                label: "Paste",
+                action: "win.paste",
             },
         ],
     },

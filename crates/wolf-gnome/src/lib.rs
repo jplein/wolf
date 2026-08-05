@@ -210,6 +210,7 @@ pub mod actions;
 pub mod app;
 pub mod buffer_picker;
 pub mod cell_metrics_math;
+pub mod clipboard_ui;
 pub mod cmdline_ui;
 pub mod command_action;
 pub mod config_seam;

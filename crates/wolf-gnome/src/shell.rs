@@ -103,7 +103,7 @@
 //! `WolfCore::live_cwd` is a `parking_lot` read of a tracked cell, taken once per
 //! wake in [`AppShell::on_render_wake`] and passed to both consumers.
 //!
-//! Exactly THREE `block_on_rpc` call sites are reachable from this crate, and the
+//! Exactly FOUR `block_on_rpc` call sites are reachable from this crate, and the
 //! restart path issues none of them. The first is `WolfCore::rebuild_layout`, called
 //! at most once per launch from `pane_view::apply_layout_rebuild`, before the window
 //! is interactive. The second is `WolfCore::list_buffers`, the buffer picker's
@@ -124,6 +124,20 @@
 //! because the nav mutex answers `None` before the RPC is reached. The button
 //! sensitivity ([`crate::nav_ui::nav_buttons`]) is therefore an affordance and the
 //! liveness arm is the guard.
+//!
+//! The fourth is the COPY yank. [`AppShell::copy_selection`] funnels through
+//! `WolfCore::copy_visual_selection` into `block_on_rpc`, so a Ctrl+Shift+C against
+//! a wedged Neovim costs a full RPC timeout budget of frozen main loop.
+//! [`crate::clipboard_ui::copy_decision`] guards it with the buffer picker's
+//! argument and its limits. PASTE adds no fifth: `gdk::Clipboard::read_text_async`
+//! resolves on a later main-loop turn and `WolfCore::paste` is fire-and-forget on
+//! the ordered input channel, so nothing on that path can time out and nothing on
+//! it can mark the core `NotResponding`. [`crate::clipboard_ui::paste_decision`]
+//! gates it anyway, for a reason that is not about blocking — see that module's
+//! docs.
+//!
+//! Neither clipboard action is disabled in the empty state, for the buffer
+//! picker's recorded reason: the captive Neovim runs in a project-less window too.
 //!
 //! The BUTTONS desensitize while the two `gio` actions stay ENABLED, which is the
 //! opposite of `win.go-to-file`'s empty-state treatment and is deliberate: a
@@ -155,6 +169,7 @@ use crate::about;
 use crate::actions::{self, BindingStatus};
 use crate::app::TREE_PANE_WIDTH;
 use crate::buffer_picker::BufferPickerHandle;
+use crate::clipboard_ui::{self, CopyPress, PastePress};
 use crate::command_action::{ui_action_for, ui_action_for_front_end_action, UiAction};
 use crate::crash_overlay::CrashOverlay;
 use crate::liveness_ui::{
@@ -784,6 +799,96 @@ impl AppShell {
         self.inner.state.set_sidebar_shown(shown);
     }
 
+    /// Yanks the focused Neovim's visual-mode selection and writes it to the
+    /// system clipboard, or prints why it did not.
+    ///
+    /// **The yank is a BLOCKING RPC on the GTK main thread**
+    /// (`WolfCore::copy_visual_selection` over `block_on_rpc`), so it is gated by
+    /// [`clipboard_ui::copy_decision`] exactly as the buffer picker's candidate
+    /// snapshot and a navigation move are; see the module docs.
+    ///
+    /// The core borrow is taken and dropped in a statement of its own, BEFORE the
+    /// clipboard is touched. `clipboard_write` answering `None` means write
+    /// NOTHING: `set_text("")` would clear the selection and destroy whatever the
+    /// user copied from another application, which is why there is no `else` arm
+    /// here.
+    fn copy_selection(&self) {
+        let liveness = self.read_liveness();
+
+        match clipboard_ui::copy_decision(liveness) {
+            CopyPress::Refuse(reason) => {
+                eprintln!("wolf-gnome: copy not performed: {reason}");
+            }
+            CopyPress::Copy => {
+                let selection = {
+                    let core_ref = self.inner.core.borrow();
+                    core_ref.as_ref().and_then(WolfCore::copy_visual_selection)
+                };
+                if let Some(text) = clipboard_ui::clipboard_write(selection.as_deref()) {
+                    self.clipboard().set_text(text);
+                }
+            }
+        }
+    }
+
+    /// Reads the system clipboard and inserts it through `nvim_paste`, or prints
+    /// why it did not.
+    ///
+    /// **Nothing on this path blocks**, so it adds no entry to the module docs'
+    /// blocking inventory: `gdk::Clipboard::read_text_async` hands GLib a
+    /// trampoline and returns immediately, and `WolfCore::paste` is a send on the
+    /// ordered input channel. [`clipboard_ui::paste_decision`] gates it for a
+    /// different reason, which that module's docs state and which must not be
+    /// collapsed into the copy gate's.
+    ///
+    /// The callback holds a `Weak<ShellInner>` and takes the core borrow in a
+    /// statement of its own, so a read landing after `app::wire_close` has taken
+    /// the core out performs nothing rather than colliding with its `borrow_mut`.
+    /// An `Err` is printed, never swallowed, and then flattened to `None` for the
+    /// pure rule.
+    fn paste_clipboard(&self) {
+        let liveness = self.read_liveness();
+
+        match clipboard_ui::paste_decision(liveness) {
+            PastePress::Refuse(reason) => {
+                eprintln!("wolf-gnome: paste not performed: {reason}");
+            }
+            PastePress::Read => {
+                let weak = Rc::downgrade(&self.inner);
+                self.clipboard()
+                    .read_text_async(gio::Cancellable::NONE, move |result| {
+                        let Some(shell) = upgrade(&weak) else {
+                            return;
+                        };
+                        let read = match result {
+                            Ok(text) => text,
+                            Err(err) => {
+                                eprintln!("wolf-gnome: clipboard read failed: {err}");
+                                None
+                            }
+                        };
+                        let Some(text) = clipboard_ui::paste_payload(read.as_deref()) else {
+                            return;
+                        };
+                        let core_ref = shell.inner.core.borrow();
+                        if let Some(core) = core_ref.as_ref() {
+                            core.paste(text.to_owned());
+                        }
+                    });
+            }
+        }
+    }
+
+    /// The window's `gdk::Clipboard` — the display's CLIPBOARD selection, not the
+    /// primary one.
+    ///
+    /// Spelled as a fully qualified `WidgetExt::clipboard` call because the
+    /// `adw::prelude::*` glob brings several traits carrying a `clipboard` method
+    /// into scope, the same footgun `app.rs` documents for `activate_action`.
+    fn clipboard(&self) -> gdk::Clipboard {
+        gtk::prelude::WidgetExt::clipboard(&self.inner.window)
+    }
+
     /// Moves the FOCUSED pane one entry back or forward in its own navigation
     /// history, or prints why it did not.
     ///
@@ -1243,6 +1348,8 @@ impl AppShell {
             UiAction::HistoryBack => self.navigate(false),
             UiAction::HistoryForward => self.navigate(true),
             UiAction::ToggleSidebar => self.toggle_sidebar(),
+            UiAction::CopySelection => self.copy_selection(),
+            UiAction::PasteClipboard => self.paste_clipboard(),
             UiAction::ShowAbout => about::present(&self.inner.window),
             UiAction::OpenFileDialog => self.open_file_dialog(),
             UiAction::OpenFolderDialog => self.open_folder_dialog(),

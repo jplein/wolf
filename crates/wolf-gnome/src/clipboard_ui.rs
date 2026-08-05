@@ -87,7 +87,20 @@ pub enum PastePress {
 /// every other input refuses, prints its reason, and issues no RPC.
 #[must_use]
 pub fn copy_decision(liveness: Option<Liveness>) -> CopyPress {
-    todo!("clipboard_ui::copy_decision is not implemented yet (liveness: {liveness:?})")
+    match liveness {
+        Some(Liveness::Alive) => CopyPress::Copy,
+        Some(Liveness::NotResponding) => CopyPress::Refuse(
+            "the captive Neovim is not responding, and the yank is a blocking RPC that would \
+             freeze the window for another whole timeout budget",
+        ),
+        Some(Liveness::Dead) => CopyPress::Refuse(
+            "the captive Neovim has crashed, so there is no visual selection left to yank",
+        ),
+        None => CopyPress::Refuse(
+            "the window is shutting down and the core has already been taken out, so there is \
+             nothing to yank from",
+        ),
+    }
 }
 
 /// Whether the Paste chord may start its clipboard read at all, given the core's
@@ -98,7 +111,21 @@ pub fn copy_decision(liveness: Option<Liveness>) -> CopyPress {
 /// into "both are blocking". Nothing on this path blocks.
 #[must_use]
 pub fn paste_decision(liveness: Option<Liveness>) -> PastePress {
-    todo!("clipboard_ui::paste_decision is not implemented yet (liveness: {liveness:?})")
+    match liveness {
+        Some(Liveness::Alive) => PastePress::Read,
+        Some(Liveness::NotResponding) => PastePress::Refuse(
+            "the stall overlay is up over a wedged Neovim, so the text would be queued now and \
+             applied to a buffer the user cannot see",
+        ),
+        Some(Liveness::Dead) => PastePress::Refuse(
+            "the crash overlay is up, so the text would be applied to a RESTARTED Neovim minutes \
+             later, at whatever cursor position that one happens to have",
+        ),
+        None => PastePress::Refuse(
+            "the window is shutting down and the core has already been taken out, so there is \
+             nowhere to deliver the text",
+        ),
+    }
 }
 
 /// The text to write to the system clipboard for a completed yank, or `None` to
@@ -108,7 +135,7 @@ pub fn paste_decision(liveness: Option<Liveness>) -> PastePress {
 /// selection passed through unchanged.
 #[must_use]
 pub fn clipboard_write(selection: Option<&str>) -> Option<&str> {
-    todo!("clipboard_ui::clipboard_write is not implemented yet (selection: {selection:?})")
+    selection.filter(|text| !text.is_empty())
 }
 
 /// The text to hand `WolfCore::paste`, or `None` to queue no input event at all.
@@ -117,7 +144,7 @@ pub fn clipboard_write(selection: Option<&str>) -> Option<&str> {
 /// an error the caller has already printed and for a clipboard holding no text.
 #[must_use]
 pub fn paste_payload(read: Option<&str>) -> Option<&str> {
-    todo!("clipboard_ui::paste_payload is not implemented yet (read: {read:?})")
+    read.filter(|text| !text.is_empty())
 }
 
 #[cfg(test)]
@@ -438,7 +465,10 @@ mod tests {
     #[test]
     fn copy_and_paste_refusals_are_distinct_and_non_empty() {
         let probes = [
-            ("a wedged (NotResponding) core", Some(Liveness::NotResponding)),
+            (
+                "a wedged (NotResponding) core",
+                Some(Liveness::NotResponding),
+            ),
             ("a dead core", Some(Liveness::Dead)),
             ("an absent core, after shutdown took it out", None),
         ];

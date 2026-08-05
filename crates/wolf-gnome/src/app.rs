@@ -36,16 +36,22 @@
 //!   The layout is queued on the pane view
 //!   ([`crate::pane_view::PaneHandle::request_layout_rebuild`]) and realized on
 //!   the first wake with a window grid, through `WolfCore::rebuild_layout`. That
-//!   is ONE of the THREE blocking RPCs this front-end issues — at most once per
+//!   is ONE of the FOUR blocking RPCs this front-end issues — at most once per
 //!   launch, before the window is interactive, never on the crash path. The second
 //!   is the buffer picker's candidate snapshot (`WolfCore::list_buffers`), which a
 //!   RUNNING window can issue on Ctrl+Shift+E, behind
 //!   [`crate::buffer_picker::open_decision`]'s guard that it be issued only while
 //!   the core reads `Alive`. The third is a per-pane navigation move
 //!   (`WolfCore::history_back` / `history_forward`) on Alt+Left / Alt+Right, behind
-//!   [`crate::nav_ui::nav_press`]'s guard of exactly the same shape. Any of the
-//!   three can mark the core `Liveness::NotResponding` and raise the stall overlay.
-//!   The project-search overlay adds NEITHER a fourth
+//!   [`crate::nav_ui::nav_press`]'s guard of exactly the same shape. The FOURTH is
+//!   the Copy yank (`WolfCore::copy_visual_selection`), which a RUNNING window
+//!   issues on Ctrl+Shift+C, behind [`crate::clipboard_ui::copy_decision`]'s guard
+//!   of that same shape. Any of the
+//!   four can mark the core `Liveness::NotResponding` and raise the stall overlay.
+//!   PASTE adds none: `gdk::Clipboard::read_text_async` resolves on a later
+//!   main-loop turn and `WolfCore::paste` is fire-and-forget on the ordered input
+//!   channel, so nothing on that path can time out.
+//!   The project-search overlay adds NEITHER a fifth
 //!   blocking call nor a further stall path: `start_search` `spawn_blocking`s onto
 //!   the tokio runtime, `open_at` is fire-and-forget, and the one blocking call it
 //!   could have made — `WolfCore::ignorecase()` — is deliberately not made. Writing

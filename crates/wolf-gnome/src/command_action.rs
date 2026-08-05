@@ -24,7 +24,7 @@
 //!
 //! ## The three classes
 //!
-//! - **Dispatched** — the thirteen commands `wolf-gnome` performs today.
+//! - **Dispatched** — the fifteen commands `wolf-gnome` performs today.
 //! - [`UiAction::Deferred`] — implemented on macOS and planned on GTK; the string
 //!   names the concrete blocker so the deferral is auditable rather than a shrug.
 //! - [`UiAction::NoGnomeEquivalent`] — has no GNOME counterpart and will never be
@@ -77,6 +77,12 @@ pub enum UiAction {
     HistoryForward,
     /// Show or hide the file-tree sidebar.
     ToggleSidebar,
+    /// Yank the visual-mode selection over a BLOCKING RPC and write it to the
+    /// system clipboard.
+    CopySelection,
+    /// Read the system clipboard ASYNCHRONOUSLY and insert it through
+    /// `nvim_paste`.
+    PasteClipboard,
     /// Toggle the focused buffer's content width between the column cap and the
     /// whole pane.
     ToggleFullWidth,
@@ -122,12 +128,8 @@ pub fn ui_action_for(command: Command) -> UiAction {
             "decreasing the font size requires re-measuring CellMetrics and re-gridding every pane",
         ),
         Command::CommandPalette => UiAction::OpenCommandPalette,
-        Command::Copy => UiAction::Deferred(
-            "the GTK clipboard bridge (gdk::Clipboard + copy_visual_selection) is not built",
-        ),
-        Command::Paste => UiAction::Deferred(
-            "the GTK clipboard bridge (gdk::Clipboard read + WolfCore::paste) is not built",
-        ),
+        Command::Copy => UiAction::CopySelection,
+        Command::Paste => UiAction::PasteClipboard,
         Command::BufferPicker => UiAction::OpenBufferPicker,
         Command::NewTab => UiAction::Deferred(
             "GTK native tabs are not built; wolf-gnome binds exactly one nvim tabpage",
