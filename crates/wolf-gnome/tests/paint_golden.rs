@@ -681,11 +681,11 @@ const MIN_STRIKE_INK_PX: usize = 10;
 /// across the cell for it to be a wave rather than a straight line.
 ///
 /// Two, chosen between two measurements rather than picked: the wave's measured
-/// top-edge spread is about 3 device pixels (see
-/// [`the_undercurl_is_wavy_rather_than_straight`]) and a horizontal rectangle —
-/// which is what `Underline::Single` draws — gives exactly 0, since every column
-/// of a rectangle has the same top edge. That leaves one pixel of headroom under
-/// the measurement and two above the value the revert produces.
+/// top-edge spread is exactly 3 device pixels, rows 37 to 40 across all 18 sampled
+/// columns (see [`the_undercurl_is_wavy_rather_than_straight`]), and a horizontal
+/// rectangle — which is what `Underline::Single` draws — measures exactly 0, since
+/// every column of a rectangle has the same top edge. That leaves one pixel of
+/// headroom under the measurement and two above the value the revert produces.
 const MIN_WAVE_SPREAD_PX: usize = 2;
 
 /// The fewest of the wave band's columns that must carry the wave's own colour
@@ -1155,10 +1155,15 @@ fn strikethrough_adds_foreground_ink_across_the_glyph() {
 /// MEASURED at [`SMOKE_PROBE_SIZE_PT`] / [`LINE_HEIGHT_PERCENT`] on the pinned
 /// font stack: `cell_w = 22.4765625`, `cell_h = 49`, `baseline = 37.5`,
 /// `ascent = 35`, `descent = 9`; Pango's wave occupies device rows 37 to 43, a
-/// seven-row band whose top edge spans about 3 device pixels. Anyone moving this
-/// fixture's font size or line-height is moving all of those numbers at once and
-/// owes the band and [`MIN_WAVE_SPREAD_PX`] a fresh measurement — the wave's
-/// amplitude scales with the face's underline thickness, not with the cell.
+/// seven-row band whose top edge spans exactly 3 device pixels. All 18 sampled
+/// columns carry the decoration's colour, and their topmost coloured rows run 37,
+/// 38, 39, 40 and back — so the spread is measured over the full band, not over a
+/// subset the colour threshold happened to keep. The same sampler over the
+/// plain-underline column reports row 37 in every one of those 18 columns, a
+/// spread of 0. Anyone moving this fixture's font size or line-height is moving
+/// all of those numbers at once and owes the band and [`MIN_WAVE_SPREAD_PX`] a
+/// fresh measurement — the wave's amplitude scales with the face's underline
+/// thickness, not with the cell.
 ///
 /// The sample is the FULL band width, and glyph ink is excluded by colour rather
 /// than by insetting the columns; [`topmost_reddish_rows`] carries the reason and
