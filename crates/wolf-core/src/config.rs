@@ -29,14 +29,15 @@ const DEFAULT_FONT_SIZE_LINUX: f64 = 10.0;
 
 /// The app appearance mode: whether to follow the OS or force dark/light.
 ///
-/// A GUI-toolkit-free value type surfaced to the front-end. `Auto` means the app
-/// tracks the macOS system dark/light setting live; `Dark`/`Light` force that
-/// appearance regardless of the OS. Serialized as kebab-case (`auto`/`dark`/
-/// `light`) in `wolf-config.yaml`.
+/// A GUI-toolkit-free value type surfaced to the front-end, and both front-ends
+/// resolve it. `Auto` means the app tracks the desktop's own dark/light setting
+/// live; `Dark`/`Light` force that appearance regardless of the OS. Serialized as
+/// kebab-case (`auto`/`dark`/`light`) in `wolf-config.yaml`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Appearance {
-    /// Follow the macOS system appearance, switching live when the OS changes.
+    /// Follow the desktop's own light/dark appearance, switching live when the
+    /// OS changes.
     Auto,
     /// Force dark mode regardless of the OS setting.
     Dark,

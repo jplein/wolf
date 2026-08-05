@@ -25,7 +25,7 @@
 //! [`statusbar_text`] takes the editor's own default foreground and background —
 //! `crate::pane_view` resolves highlight 0, the source the cmdline strip already
 //! uses — because `crates/wolf-gnome/DECISIONS.md` records that this front-end
-//! reads no OS theme in either direction. macOS's non-themed AppKit-tier branch
+//! takes no colour from the OS theme. macOS's non-themed AppKit-tier branch
 //! therefore has no counterpart here.
 //!
 //! The blend is toward the BACKGROUND rather than toward black, and that is

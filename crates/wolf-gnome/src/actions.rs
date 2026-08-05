@@ -214,23 +214,24 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         note: "macOS Shift+Cmd+F; gives up only the Ctrl+Shift alias for <C-f> (page forward), \
                which is still typed as plain Ctrl+F",
     },
-    // --- Reserved for later units (declared here so the scheme is auditable) --
+    // --- The system clipboard -------------------------------------------------
     ActionBinding {
         action: "win.copy",
         accel: Some("<Control><Shift>c"),
         command: Some(Command::Copy),
-        status: BindingStatus::Reserved,
+        status: BindingStatus::Bound,
         note: "macOS Cmd+C; the GNOME Terminal spelling, and gives up only the Ctrl+Shift alias \
-               for <C-c>",
+               for <C-c>, the INTERRUPT, which is still typed as plain Ctrl+C",
     },
     ActionBinding {
         action: "win.paste",
         accel: Some("<Control><Shift>v"),
         command: Some(Command::Paste),
-        status: BindingStatus::Reserved,
+        status: BindingStatus::Bound,
         note: "macOS Cmd+V; the GNOME Terminal spelling, and gives up only the Ctrl+Shift alias \
-               for <C-v>",
+               for <C-v>, visual BLOCK, which is still typed as plain Ctrl+V",
     },
+    // --- The file-tree sidebar ------------------------------------------------
     ActionBinding {
         action: "win.toggle-sidebar",
         accel: Some("<Control><Shift>b"),
@@ -239,6 +240,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         note: "macOS Ctrl+Cmd+S; B is the cross-platform sidebar letter and gives up only the \
                Ctrl+Shift alias for <C-b>",
     },
+    // --- Reserved for later units (declared here so the scheme is auditable) --
     ActionBinding {
         action: "win.sidebar-show-project",
         accel: Some("<Control><Shift>s"),
@@ -375,6 +377,18 @@ pub const MENU_SECTIONS: &[MenuSection] = &[
             MenuItemSpec {
                 label: "Toggle sidebar",
                 action: "win.toggle-sidebar",
+            },
+        ],
+    },
+    MenuSection {
+        items: &[
+            MenuItemSpec {
+                label: "Copy",
+                action: "win.copy",
+            },
+            MenuItemSpec {
+                label: "Paste",
+                action: "win.paste",
             },
         ],
     },
@@ -600,15 +614,17 @@ mod tests {
 
     /// The actions whose accelerators are actually registered — the
     /// [`BindingStatus::Bound`] rows of [`ACTION_TABLE`] — sorted.
-    const EXPECTED_BOUND_ACTIONS: [&str; 10] = [
+    const EXPECTED_BOUND_ACTIONS: [&str; 12] = [
         "app.quit",
         "win.buffer-picker",
         "win.close-pane",
         "win.command-palette",
+        "win.copy",
         "win.go-to-file",
         "win.history-back",
         "win.history-forward",
         "win.new-buffer",
+        "win.paste",
         "win.search-in-project",
         "win.toggle-sidebar",
     ];
@@ -870,17 +886,19 @@ mod tests {
 
         assert_eq!(
             bound, expected,
-            "the set of BOUND accelerators changed. wolf-gnome registers exactly ten \
+            "the set of BOUND accelerators changed. wolf-gnome registers exactly twelve \
              (Ctrl+Shift+O go-to-file, Ctrl+Shift+N new-buffer, Ctrl+Shift+P command-palette, \
              Ctrl+Shift+E buffer-picker, Ctrl+Shift+F search-in-project, Ctrl+Shift+W close-pane, \
              Ctrl+Shift+Q quit, Alt+Left history-back, Alt+Right history-forward, Ctrl+Shift+B \
-             toggle-sidebar); every other \
+             toggle-sidebar, Ctrl+Shift+C copy, Ctrl+Shift+V paste); every other \
              row of the table is Reserved for a later unit or MenuOnly. Binding a reserved chord \
              early means shipping a menu/accelerator that does nothing — and DEMOTING one back to \
              Reserved silently unbinds a chord the menu still advertises. The two ALT rows are the \
              namespace's deliberate exception and demoting either is worse than unbinding an alias: \
              an uncaptured <Alt>Left reaches Neovim as <A-Left>, which unmapped splits into <Esc> \
-             plus <Left>."
+             plus <Left>. Demoting win.copy or win.paste back to Reserved unbinds the chord AND \
+             leaves `command_action::ui_action_for` dispatching a command nothing can reach from \
+             the keyboard, which is why the two tests move together."
         );
 
         for binding in bound_bindings() {
@@ -901,7 +919,7 @@ mod tests {
     /// GTK's own keymap-aware matching does not fire under `wtype` (see the module
     /// docs) — so every row below is a user-visible behaviour:
     ///
-    /// * **The ten Bound chords must fire, in BOTH letter cases where they have
+    /// * **The twelve Bound chords must fire, in BOTH letter cases where they have
     ///   one.** A real keymap delivers the SHIFTED glyph for Ctrl+Shift+O — keyval
     ///   `O`, not `o` (`input::gdk_key`'s shift contract, and what
     ///   `tests/gdk_key.rs` pins) — so a case-SENSITIVE comparison would mean the
@@ -915,7 +933,23 @@ mod tests {
     ///   returning `Propagation::Stop`, so a match here is a Neovim key made
     ///   UNREACHABLE. `<C-o>`, `<C-n>`, `<C-p>`, `<C-e>` (scroll down one line),
     ///   `<C-f>` (page forward), `<C-b>` (page backward), `<C-w>` (the
-    ///   window-command prefix) and `<C-q>` must all still reach Neovim.
+    ///   window-command prefix), `<C-q>`, `<C-c>` and `<C-v>` must all still reach
+    ///   Neovim.
+    ///
+    ///   `<C-c>` and `<C-v>` are named separately because they are the two rows
+    ///   where "it is only an alias" is not a good enough answer, and where the
+    ///   argument has to come from the ENCODER rather than from the general rule.
+    ///   `<C-c>` is Neovim's INTERRUPT — the key that aborts a running mapping, a
+    ///   hung `:global` or a pending operator — and `<C-v>` is visual-BLOCK in
+    ///   normal mode and the literal-next-character prefix in insert and cmdline
+    ///   mode. Losing either would be losing a capability, not an alias. Neither
+    ///   is lost: `input::gdk_key` reads the modifier out of `state` and never out
+    ///   of the keyval, so plain Ctrl+C arrives as keyval `c` whose
+    ///   `to_unicode()` is `'c'` (never the control character 0x03, which the
+    ///   `is_control` rejection would drop), [`action_for_key`] compares all three
+    ///   modifiers EXACTLY so `<Control><Shift>c` cannot match a state without
+    ///   Shift, and the bubble-phase controller then encodes `Key::Char('c')` with
+    ///   `ctrl: true` as `<C-c>`. The two rows below are what keep that true.
     /// * **A Reserved row must NOT fire.** Its action is not installed this unit,
     ///   so a match would swallow the key and do nothing at all — worse than not
     ///   binding it. `Ctrl+minus` (`win.decrease-font-size`) is the row carrying
@@ -935,7 +969,7 @@ mod tests {
 
         // (description, delivered keyval, modifier state, expected action)
         let cases: Vec<(&str, gdk::Key, gdk::ModifierType, Option<&'static str>)> = vec![
-            // --- The ten BOUND chords, in both letter cases where they have one -
+            // --- The twelve BOUND chords, in both letter cases where they have one
             (
                 "Ctrl+Shift+o -> win.go-to-file",
                 key_from_char('o'),
@@ -1032,6 +1066,30 @@ mod tests {
                 ctrl | shift,
                 Some("win.toggle-sidebar"),
             ),
+            (
+                "Ctrl+Shift+c -> win.copy",
+                key_from_char('c'),
+                ctrl | shift,
+                Some("win.copy"),
+            ),
+            (
+                "Ctrl+Shift+C (the SHIFTED glyph a real keymap delivers) -> win.copy",
+                key_from_char('C'),
+                ctrl | shift,
+                Some("win.copy"),
+            ),
+            (
+                "Ctrl+Shift+v -> win.paste",
+                key_from_char('v'),
+                ctrl | shift,
+                Some("win.paste"),
+            ),
+            (
+                "Ctrl+Shift+V (the SHIFTED glyph a real keymap delivers) -> win.paste",
+                key_from_char('V'),
+                ctrl | shift,
+                Some("win.paste"),
+            ),
             // --- The two ARROW chords, which have no letter case --------------
             //
             // These are the accelerator namespace's deliberate exception: `<Alt>` is
@@ -1096,6 +1154,20 @@ mod tests {
             (
                 "Ctrl+b (no Shift) -> None, so <C-b> (page backward) still reaches Neovim",
                 key_from_char('b'),
+                ctrl,
+                None,
+            ),
+            (
+                "Ctrl+c (no Shift) -> None, so <C-c> (INTERRUPT: aborts a running mapping, a hung \
+                 :global or a pending operator) still reaches Neovim",
+                key_from_char('c'),
+                ctrl,
+                None,
+            ),
+            (
+                "Ctrl+v (no Shift) -> None, so <C-v> (visual BLOCK in normal mode, literal-next \
+                 in insert and cmdline) still reaches Neovim",
+                key_from_char('v'),
                 ctrl,
                 None,
             ),

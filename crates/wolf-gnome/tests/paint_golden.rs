@@ -559,6 +559,663 @@ fn the_natural_line_height_clamps_a_face_whose_recommended_height_is_short() {
     );
 }
 
+// --- Text decorations: undercurl, strikethrough and the `special` colour -----
+//
+// A SECOND fixture and a second render helper, deliberately independent of
+// `fixture_snapshot` / `render_fixture`: the five cases above are calibrated
+// against a 4x2 grid at 16 pt, and widening that grid to carry decorations would
+// put every one of them at risk for nothing. Nothing below reads or modifies the
+// first fixture.
+
+/// Columns in the decoration fixture — control, underline, undercurl,
+/// strikethrough, undercurl-without-special.
+const DECORATION_COLS: usize = 5;
+/// Rows in the decoration fixture.
+const DECORATION_ROWS: usize = 1;
+/// The single row the decoration fixture paints into.
+///
+/// The fixture is exactly [`DECORATION_ROWS`] rows tall, so this row's top edge is
+/// `y == 0` and its bottom edge is `cell_h`. The row-range helpers below rely on
+/// that and fold in no row origin; a second row would have to.
+const DECORATION_ROW: usize = 0;
+
+/// The glyph every decoration cell carries.
+///
+/// `x` has no descender, so every pixel the GLYPH contributes sits above the
+/// baseline and anything found below it is decoration. Its name is not the value
+/// any assertion here reads — the assertions read colours and ink counts — so it
+/// cannot satisfy one by itself.
+const DECORATION_GLYPH: &str = "x";
+
+/// The undecorated control cell.
+const CONTROL_COL: usize = 0;
+/// A plain underline, with `special` set.
+const UNDERLINE_COL: usize = 1;
+/// An undercurl, with `special` set.
+const UNDERCURL_COL: usize = 2;
+/// A strikethrough, with `special` set.
+const STRIKETHROUGH_COL: usize = 3;
+/// An undercurl with `special` UNSET, so its decoration must fall back to the
+/// layout foreground.
+const UNDERCURL_NO_SPECIAL_COL: usize = 4;
+
+/// Highlight id for [`UNDERLINE_COL`].
+const UNDERLINE_HL_ID: u64 = 11;
+/// Highlight id for [`UNDERCURL_COL`].
+const UNDERCURL_HL_ID: u64 = 12;
+/// Highlight id for [`STRIKETHROUGH_COL`].
+const STRIKETHROUGH_HL_ID: u64 = 13;
+/// Highlight id for [`UNDERCURL_NO_SPECIAL_COL`].
+const UNDERCURL_NO_SPECIAL_HL_ID: u64 = 14;
+
+/// The `special` colour the three decorated ids carry: pure red.
+///
+/// Red because the fixture's foreground and background are white and black, which
+/// are both grey — no blend of them can ever satisfy [`is_reddish`], so a reddish
+/// pixel is evidence of `special` reaching a decoration and of nothing else. The
+/// editor defaults deliberately carry `special: None`
+/// ([`decoration_fixture_snapshot`]), since `HighlightTable::resolve` folds the
+/// default `special` into every style and a default red would put this colour in
+/// cells that never asked for it.
+const DECORATION_SPECIAL: Rgb = Rgb { r: 255, g: 0, b: 0 };
+
+/// How far a pixel's red channel must exceed BOTH its green and its blue for
+/// [`is_reddish`] to count it as carrying [`DECORATION_SPECIAL`].
+///
+/// Wide enough that no antialiased blend of the fixture's white ink over its
+/// black background — where all three channels move together — can pass, and low
+/// enough that a heavily blended red edge still does.
+const REDDISH_MARGIN: u8 = 40;
+
+/// Horizontal inset, in device pixels, applied to every sampled column.
+///
+/// A cell origin is `col * cell_w` with a FRACTIONAL `cell_w`, so each column
+/// starts at a different sub-pixel phase and the pixel at a cell's edge is
+/// partially covered by whatever the neighbouring cell drew. Two pixels of inset
+/// puts every sample fully inside one cell, which is what lets
+/// [`undercurl_and_underline_do_not_draw_the_same_thing`] compare two columns
+/// pixel for pixel at all: without it, two IDENTICAL decorations in two different
+/// columns would still differ at their edges and that comparison would pass
+/// against the very revert it exists to catch.
+const BAND_SIDE_INSET_PX: usize = 2;
+
+/// Vertical inset applied to a whole-cell sample, so a neighbouring row's
+/// antialiasing cannot bleed into an ink count.
+const INTERIOR_INSET_PX: usize = 1;
+
+/// Guard, in device pixels, between the baseline and the top of the sub-baseline
+/// band.
+///
+/// The glyph's bottom edge sits ON the baseline, which falls inside a pixel row
+/// rather than between two, so that row can carry antialiased GLYPH ink. One row
+/// of guard keeps it out of a band whose whole purpose is to contain nothing but
+/// decoration.
+const SUB_BASELINE_GUARD_PX: f64 = 1.0;
+
+/// The fewest rows the sub-baseline band may have for the decoration cases to
+/// mean anything.
+///
+/// Derived, not guessed: at [`SMOKE_PROBE_SIZE_PT`] the font size is
+/// `28 * 96/72 == 37.33` device pixels, so [`LINE_HEIGHT_PERCENT`] gives
+/// `round(37.33 * 1.3) == 49`; the pinned DejaVu Sans Mono measures ascent 35 and
+/// descent 9 at that size (the table in `src/cell_metrics_math.rs`'s own docs), so
+/// the baseline centres at `35 + (49 - 44)/2 == 37.5` and roughly ten rows remain
+/// below it once [`SUB_BASELINE_GUARD_PX`] is spent. That derivation rests on
+/// measurements taken elsewhere, which is why [`render_decoration_fixture`]
+/// asserts it rather than assuming it.
+const MIN_SUB_BASELINE_ROWS: usize = 4;
+
+/// The fewest device pixels wide a sampled band may be.
+const MIN_BAND_WIDTH_PX: usize = 8;
+
+/// The fewest pixels of ink a strikethrough must add over the undecorated
+/// control.
+///
+/// A strike spans the run's whole advance — some twenty device pixels at this
+/// font size — so a margin an order of magnitude above antialiasing noise still
+/// leaves the case unambiguous. A bare `>` would be satisfied by a single stray
+/// blend pixel and would pass against a build that draws no strike at all.
+const MIN_STRIKE_INK_PX: usize = 10;
+
+/// The fewest device pixels of vertical spread the undercurl's top edge must show
+/// across the cell for it to be a wave rather than a straight line.
+///
+/// Two, chosen between two measurements rather than picked: the wave's measured
+/// top-edge spread is exactly 3 device pixels, rows 37 to 40 across all 18 sampled
+/// columns (see [`the_undercurl_is_wavy_rather_than_straight`]), and a horizontal
+/// rectangle — which is what `Underline::Single` draws — measures exactly 0, since
+/// every column of a rectangle has the same top edge. That leaves one pixel of
+/// headroom under the measurement and two above the value the revert produces.
+const MIN_WAVE_SPREAD_PX: usize = 2;
+
+/// The fewest of the wave band's columns that must carry the wave's own colour
+/// before a spread measured over them describes a shape.
+///
+/// A spread over two or three columns would be a statement about antialiasing.
+const MIN_WAVE_SAMPLED_COLUMNS: usize = 8;
+
+/// Builds the decoration fixture: one row of five cells, all carrying
+/// [`DECORATION_GLYPH`] on white-on-black, differing only in their decoration.
+///
+/// The editor defaults set `special: None` on purpose. `HighlightTable::resolve`
+/// folds the default `special` into EVERY resolved style, so a default red would
+/// give [`UNDERCURL_NO_SPECIAL_COL`] a `special` after all and quietly destroy the
+/// one negative case that proves the decoration colour comes from `special`.
+fn decoration_fixture_snapshot() -> Snapshot {
+    let mut snap = Snapshot::new(DECORATION_COLS, DECORATION_ROWS);
+
+    snap.highlights.set_defaults(DefaultColors {
+        fg: Some(DEFAULT_FG),
+        bg: Some(DEFAULT_BG),
+        special: None,
+    });
+    snap.highlights.define(
+        UNDERLINE_HL_ID,
+        HlAttr {
+            special: Some(DECORATION_SPECIAL),
+            underline: true,
+            ..HlAttr::default()
+        },
+    );
+    snap.highlights.define(
+        UNDERCURL_HL_ID,
+        HlAttr {
+            special: Some(DECORATION_SPECIAL),
+            undercurl: true,
+            ..HlAttr::default()
+        },
+    );
+    snap.highlights.define(
+        STRIKETHROUGH_HL_ID,
+        HlAttr {
+            special: Some(DECORATION_SPECIAL),
+            strikethrough: true,
+            ..HlAttr::default()
+        },
+    );
+    snap.highlights.define(
+        UNDERCURL_NO_SPECIAL_HL_ID,
+        HlAttr {
+            undercurl: true,
+            ..HlAttr::default()
+        },
+    );
+
+    let ids = [
+        (CONTROL_COL, 0),
+        (UNDERLINE_COL, UNDERLINE_HL_ID),
+        (UNDERCURL_COL, UNDERCURL_HL_ID),
+        (STRIKETHROUGH_COL, STRIKETHROUGH_HL_ID),
+        (UNDERCURL_NO_SPECIAL_COL, UNDERCURL_NO_SPECIAL_HL_ID),
+    ];
+    for (col, hl_id) in ids {
+        snap.grid_mut(1).set_cell(
+            DECORATION_ROW,
+            col,
+            Cell {
+                text: DECORATION_GLYPH.to_string(),
+                hl_id,
+            },
+        );
+    }
+
+    snap
+}
+
+/// Measures metrics at [`SMOKE_PROBE_SIZE_PT`] and [`LINE_HEIGHT_PERCENT`], sizes
+/// a surface to exactly `DECORATION_COLS x DECORATION_ROWS` cells, and paints the
+/// decoration fixture onto it.
+///
+/// The smokes' 28 pt rather than this file's 16 pt, and the shipped 130 % rather
+/// than the smokes' 118 %: the decorations need a cell TALLER than the glyph box,
+/// so there is room below the baseline for a wave to be a wave. The two
+/// preconditions at the end are what keep that a measured property of the pinned
+/// font stack rather than an assumption; both name what to fix if they fire.
+fn render_decoration_fixture() -> (ImageSurface, CellMetrics) {
+    let metrics = probe_metrics(FONT_FAMILY, SMOKE_PROBE_SIZE_PT, LINE_HEIGHT_PERCENT);
+
+    let width = (metrics.cell_w * DECORATION_COLS as f64).ceil() as i32;
+    let height = (metrics.cell_h * DECORATION_ROWS as f64).ceil() as i32;
+    assert!(
+        width > 0 && height > 0,
+        "CellMetrics produced a non-positive cell size for the decoration fixture: cell_w={}, \
+         cell_h={}",
+        metrics.cell_w,
+        metrics.cell_h
+    );
+
+    let surface =
+        ImageSurface::create(Format::ARgb32, width, height).expect("decoration render surface");
+    let cr = Context::new(&surface).expect("decoration render context");
+
+    let snap = decoration_fixture_snapshot();
+    paint(&cr, snap.active_grid(), &snap.highlights, &metrics);
+
+    // Drop the context before any caller reads pixels, exactly as `render_fixture`
+    // does.
+    drop(cr);
+    surface.flush();
+
+    let height = height as usize;
+    let (y0, y1) = sub_baseline_rows(&metrics, height);
+    assert!(
+        y1.saturating_sub(y0) >= MIN_SUB_BASELINE_ROWS,
+        "fixture precondition: the band below the baseline is rows {y0}..{y1} of a {height}px \
+         surface, fewer than the {MIN_SUB_BASELINE_ROWS} rows every decoration case reads. At \
+         {SMOKE_PROBE_SIZE_PT} pt and {LINE_HEIGHT_PERCENT}% the cell ({}) must stand clear of the \
+         baseline ({}) by more than that. If the pinned font's metrics moved, RAISE \
+         LINE_HEIGHT_PERCENT for this fixture rather than shrinking the guard — a band that \
+         reaches up into the glyph box makes every case below read glyph ink as decoration.",
+        metrics.cell_h,
+        metrics.baseline
+    );
+    assert!(
+        band_width(&metrics) >= MIN_BAND_WIDTH_PX,
+        "fixture precondition: a sampled band is {} px wide, under the {MIN_BAND_WIDTH_PX} px \
+         these cases need. The cell advance is {} px and {BAND_SIDE_INSET_PX} px are inset from \
+         each side; a band this narrow means the measured advance collapsed.",
+        band_width(&metrics),
+        metrics.cell_w
+    );
+
+    (surface, metrics)
+}
+
+/// The exact background pixel every decoration cell is filled with.
+fn decoration_background() -> Pixel {
+    (DEFAULT_BG.r, DEFAULT_BG.g, DEFAULT_BG.b, OPAQUE)
+}
+
+/// Whether `px` carries the fixture's `special` colour rather than its greyscale
+/// foreground or background.
+fn is_reddish(px: Pixel) -> bool {
+    let (r, g, b, _a) = px;
+    r > g.saturating_add(REDDISH_MARGIN) && r > b.saturating_add(REDDISH_MARGIN)
+}
+
+/// How many of `pixels` differ from the fixture's exact background — the ink a
+/// cell drew.
+fn ink_count(pixels: &[Pixel]) -> usize {
+    let bg = decoration_background();
+    pixels.iter().filter(|px| **px != bg).count()
+}
+
+/// How many of `pixels` [`is_reddish`] accepts.
+fn reddish_count(pixels: &[Pixel]) -> usize {
+    pixels.iter().filter(|px| is_reddish(**px)).count()
+}
+
+/// The x of the first sampled pixel in `col`.
+fn band_x0(metrics: &CellMetrics, col: usize) -> usize {
+    (col as f64 * metrics.cell_w) as usize + BAND_SIDE_INSET_PX
+}
+
+/// The width every sampled band shares, so two columns' samples are the same
+/// shape and can be compared elementwise.
+fn band_width(metrics: &CellMetrics) -> usize {
+    (metrics.cell_w as usize).saturating_sub(2 * BAND_SIDE_INSET_PX)
+}
+
+/// The `[y0, y1)` device-pixel rows of the band BELOW the glyph box, clamped to a
+/// `height`-pixel surface.
+///
+/// [`DECORATION_ROW`]'s top edge is `y == 0`, so the baseline offset from the cell
+/// top IS the baseline's absolute y here.
+fn sub_baseline_rows(metrics: &CellMetrics, height: usize) -> (usize, usize) {
+    let top = (metrics.baseline + SUB_BASELINE_GUARD_PX).ceil() as usize;
+    let bottom = metrics.cell_h as usize;
+    (top, bottom.min(height))
+}
+
+/// The `[y0, y1)` device-pixel rows the undercurl's WAVE occupies — a taller band
+/// than [`sub_baseline_rows`], starting at the baseline's own row.
+///
+/// MEASURED at [`SMOKE_PROBE_SIZE_PT`] / [`LINE_HEIGHT_PERCENT`] on the pinned
+/// font stack: `cell_w = 22.4765625`, `cell_h = 49`, `baseline = 37.5`,
+/// `ascent = 35`, `descent = 9`, and Pango's wave occupies device rows 37 to 43.
+/// [`sub_baseline_rows`] starts at `ceil(baseline + SUB_BASELINE_GUARD_PX) == 39`
+/// and so cuts the wave's whole upper half away; rows 39 and 40 are near-solid,
+/// which is why a top-edge measurement taken over that band can only ever report a
+/// spread of about 1 and reads as a shallow wave when the wave is not shallow.
+///
+/// This band starts at `floor(baseline) == 37` instead, and it keeps no guard row
+/// against the glyph. The guard is what stops GLYPH ink entering an INK-based
+/// band, and the one case that reads this band separates the two by colour rather
+/// than by position — see [`topmost_reddish_rows`].
+fn wave_band_rows(metrics: &CellMetrics, height: usize) -> (usize, usize) {
+    let top = metrics.baseline.floor() as usize;
+    let bottom = metrics.cell_h as usize;
+    (top, bottom.min(height))
+}
+
+/// The `[y0, y1)` device-pixel rows of a whole cell's interior, inset top and
+/// bottom.
+fn cell_interior_rows(metrics: &CellMetrics, height: usize) -> (usize, usize) {
+    let bottom = (metrics.cell_h as usize).min(height);
+    (INTERIOR_INSET_PX, bottom.saturating_sub(INTERIOR_INSET_PX))
+}
+
+/// Reads `col`'s pixels over the row range `rows`, in row-major order.
+fn column_pixels(
+    data: &[u8],
+    stride: usize,
+    metrics: &CellMetrics,
+    col: usize,
+    rows: (usize, usize),
+) -> Vec<Pixel> {
+    let (y0, y1) = rows;
+    let x0 = band_x0(metrics, col);
+    let width = band_width(metrics);
+
+    let mut out = Vec::with_capacity(width * y1.saturating_sub(y0));
+    for y in y0..y1 {
+        for x in x0..x0 + width {
+            out.push(pixel_at(data, stride, x, y));
+        }
+    }
+    out
+}
+
+/// For each sampled x of `col`, the topmost row in `rows` carrying the DECORATION's
+/// colour; columns with none contribute nothing.
+///
+/// Reddish rather than merely inked, and that is the whole defence of the case
+/// that reads it. [`wave_band_rows`] deliberately includes the baseline's own row,
+/// where the glyph `x`'s two leg terminals still put ink at the left and right
+/// extremes of the sample — nearer the cell top than any part of the wave. A
+/// topmost-INK measurement would take those columns' glyph ink as the wave's crest
+/// and report a spread the decoration never had: it would pass over a straight
+/// line as readily as over a wave, which is the one failure mode that matters
+/// here.
+///
+/// Colour separates them exactly, where a wider horizontal inset would only
+/// separate them approximately and would rest on this glyph's own outline. The
+/// fixture's glyph is white and its `special` is pure red: composite a red of
+/// coverage `c` over ANY greyscale value and the red channel exceeds the other two
+/// by exactly `255 * c`, so glyph ink beneath the wave cannot invent a reddish
+/// pixel. The other order is not symmetric — an opaque glyph pixel painted over
+/// the wave hides it — but that direction only drops a column from the sample, and
+/// a dropped column can shrink the measured spread, never fabricate one.
+///
+/// It inherits one premise from
+/// [`undercurl_draws_ink_below_the_glyph_box_in_the_special_colour`]: that the wave
+/// is drawn in `special` at all. If that stops holding, this sampler returns
+/// nothing and its caller's first assertion names the cause.
+fn topmost_reddish_rows(
+    data: &[u8],
+    stride: usize,
+    metrics: &CellMetrics,
+    col: usize,
+    rows: (usize, usize),
+) -> Vec<usize> {
+    let (y0, y1) = rows;
+    let x0 = band_x0(metrics, col);
+
+    let mut tops = Vec::new();
+    for x in x0..x0 + band_width(metrics) {
+        for y in y0..y1 {
+            if is_reddish(pixel_at(data, stride, x, y)) {
+                tops.push(y);
+                break;
+            }
+        }
+    }
+    tops
+}
+
+/// An undercurl paints below the glyph box, and it paints there in `special`.
+///
+/// Falsifiers: (a) delete the `AttrColor::new_underline_color` insert in
+/// `draw_glyph` — the undercurl column keeps its ink and loses its red; (b) return
+/// `Underline::None` for `undercurl` in `glyph_style::glyph_decoration` — that
+/// column loses all sub-baseline ink.
+///
+/// This case is also the MEASUREMENT the plan owes for whether Pango honours an
+/// underline colour on `PANGO_UNDERLINE_ERROR` as it does on `Single`. A red here
+/// that reports ink but no reddish pixel is that answer, not a broken test: the
+/// recorded response is to keep the wave, drop the colour from the undercurl arm,
+/// and record the limitation — never to fall back to a straight `Single`.
+#[test]
+fn undercurl_draws_ink_below_the_glyph_box_in_the_special_colour() {
+    let (mut surface, metrics) = render_decoration_fixture();
+
+    let height = surface.height() as usize;
+    let stride = surface.stride() as usize;
+    let data = surface.data().expect("surface data");
+
+    let rows = sub_baseline_rows(&metrics, height);
+    let (y0, y1) = rows;
+
+    // PREMISE, not coverage: a plain underline is what this renderer already drew
+    // before decorations existed, so ink in ITS band is what establishes that the
+    // band is aimed at the rows a decoration lands in. Without it, "no ink in the
+    // undercurl's band" would be equally explained by a mis-placed band.
+    let underline = column_pixels(&data, stride, &metrics, UNDERLINE_COL, rows);
+    assert!(
+        ink_count(&underline) > 0,
+        "fixture premise: the plain-underline cell's band (rows {y0}..{y1}) holds no ink at all. \
+         A single underline is drawn by this renderer independently of anything undercurl adds, so \
+         an empty band here means the band is aimed at the wrong rows — SUB_BASELINE_GUARD_PX, the \
+         measured baseline, or the cell height moved — and every other assertion in this case is \
+         reading an empty rectangle."
+    );
+
+    let curl = column_pixels(&data, stride, &metrics, UNDERCURL_COL, rows);
+    assert!(
+        reddish_count(&curl) > 0,
+        "the undercurl cell's band (rows {y0}..{y1}) holds {} inked pixels but none of them is \
+         reddish. Two outcomes are distinguishable here and they need different fixes. Ink but no \
+         red means Pango draws PANGO_UNDERLINE_ERROR in the layout foreground and ignores \
+         AttrColor::new_underline_color — that is the open measurement, and the answer is to keep \
+         the wave, drop the colour from the undercurl arm and record the limitation, NOT to fall \
+         back to Underline::Single. No ink at all (0 above) means glyph_decoration answered \
+         Underline::None for undercurl, or the AttrList never reached the layout.",
+        ink_count(&curl)
+    );
+
+    let control = column_pixels(&data, stride, &metrics, CONTROL_COL, rows);
+    assert_eq!(
+        reddish_count(&control),
+        0,
+        "the undecorated control cell's band holds {} reddish pixels. Its job is the DETECTOR, not \
+         the feature: nothing in this fixture is red except `special` on the three decorated ids, \
+         and hl 0 carries no decoration, so a reddish pixel here means is_reddish is accepting the \
+         white glyph ink or the black background and every red-based assertion in this file is \
+         meaningless.",
+        reddish_count(&control)
+    );
+
+    let no_special = column_pixels(&data, stride, &metrics, UNDERCURL_NO_SPECIAL_COL, rows);
+    assert!(
+        ink_count(&no_special) > 0,
+        "the undercurl-WITHOUT-special cell's band holds no ink. Its `special` is unset, which is \
+         a request to leave the colour to Pango — not a request to draw nothing. An empty band \
+         means the undercurl arm is gated on a `special` being present, which silently drops the \
+         decoration for every group set with a bare `cterm=undercurl`."
+    );
+    assert_eq!(
+        reddish_count(&no_special),
+        0,
+        "the undercurl-without-special cell's band holds {} reddish pixels. Its `special` is None, \
+         so its wave must take the layout foreground (white). Red here means the decoration colour \
+         came from something other than this cell's own `special`: a hard-coded colour in \
+         draw_glyph, a fallback reading another id, or the fixture's editor defaults having \
+         acquired a `special`, which HighlightTable::resolve folds into every style.",
+        reddish_count(&no_special)
+    );
+}
+
+/// The undercurl is not the mark a plain underline draws.
+///
+/// This is what proves the wave is a wave WITHOUT measuring a wave: it asserts no
+/// amplitude, no period and no shape — only that the two decorations differ over
+/// the same rectangle. The two columns are sampled at the same inset and the same
+/// width, and the comparison is elementwise.
+///
+/// Falsifier: map `undercurl` to `pango::Underline::Single` in
+/// `glyph_style::glyph_decoration` — which is exactly macOS's behaviour — and the
+/// two bands become identical.
+#[test]
+fn undercurl_and_underline_do_not_draw_the_same_thing() {
+    let (mut surface, metrics) = render_decoration_fixture();
+
+    let height = surface.height() as usize;
+    let stride = surface.stride() as usize;
+    let data = surface.data().expect("surface data");
+
+    let rows = sub_baseline_rows(&metrics, height);
+    let straight = column_pixels(&data, stride, &metrics, UNDERLINE_COL, rows);
+    let wavy = column_pixels(&data, stride, &metrics, UNDERCURL_COL, rows);
+
+    // Two EMPTY bands are also identical, and would redden this case for a reason
+    // that has nothing to do with the rule. Name that cause before asserting on
+    // the difference.
+    assert!(
+        ink_count(&straight) > 0 && ink_count(&wavy) > 0,
+        "fixture premise: the two bands hold {} and {} inked pixels. A band with no ink means no \
+         decoration was drawn there at all, and the difference asserted below would then be \
+         reporting on two empty rectangles.",
+        ink_count(&straight),
+        ink_count(&wavy)
+    );
+
+    // `assert!` rather than `assert_ne!`: the two operands are hundreds of pixels
+    // and printing both twice would bury the message that says what the failure
+    // means.
+    assert!(
+        straight != wavy,
+        "the plain-underline band and the undercurl band are byte-identical over {} sampled \
+         pixels. That is what mapping `undercurl` to Underline::Single produces — macOS's own \
+         `hasUnderline = underline || undercurl` — a straight line where Neovim asked for a wave. \
+         Both columns are sampled at the same inset and the same width, so identical bytes cannot \
+         be a sampling artefact: they mean one Pango attribute was used for both.",
+        straight.len()
+    );
+}
+
+/// A strikethrough adds ink across the glyph, and that ink is NOT the `special`
+/// colour.
+///
+/// The second half is the macOS-parity half: `AttrColor::new_strikethrough_color`
+/// is deliberately never called, so Pango strikes in the layout foreground exactly
+/// as `GlyphStyleResolver.resolve`'s unconditional `strikethroughColor: fg` does.
+///
+/// Falsifiers: (a) drop the `AttrInt::new_strikethrough(true)` insert in
+/// `draw_glyph` — the two ink counts converge to within antialiasing noise, well
+/// under [`MIN_STRIKE_INK_PX`]; (b) add
+/// `AttrColor::new_strikethrough_color(special)` — a reddish pixel appears and the
+/// parity half reddens.
+#[test]
+fn strikethrough_adds_foreground_ink_across_the_glyph() {
+    let (mut surface, metrics) = render_decoration_fixture();
+
+    let height = surface.height() as usize;
+    let stride = surface.stride() as usize;
+    let data = surface.data().expect("surface data");
+
+    let rows = cell_interior_rows(&metrics, height);
+    let struck = column_pixels(&data, stride, &metrics, STRIKETHROUGH_COL, rows);
+    let control = column_pixels(&data, stride, &metrics, CONTROL_COL, rows);
+
+    let struck_ink = ink_count(&struck);
+    let control_ink = ink_count(&control);
+    assert!(
+        struck_ink >= control_ink + MIN_STRIKE_INK_PX,
+        "the struck cell's interior holds {struck_ink} inked pixels against the undecorated \
+         control's {control_ink} — a difference of {}, under the {MIN_STRIKE_INK_PX} px margin. \
+         Both cells draw the same glyph, so the whole difference is the strike, and a strike spans \
+         the run's entire advance ({} px here): a difference this small means the \
+         new_strikethrough(true) attribute never reached the layout and the two cells differ only \
+         by antialiasing. The margin is here because a bare `greater than` would be satisfied by \
+         one stray blend pixel.",
+        struck_ink as i64 - control_ink as i64,
+        metrics.cell_w
+    );
+
+    assert_eq!(
+        reddish_count(&struck),
+        0,
+        "the struck cell holds {} reddish pixels. Its `special` IS set, and it must not reach the \
+         strike: with no strikethrough-colour attribute Pango strikes in the layout foreground, \
+         which is what gives parity with macOS's unconditional `strikethroughColor: fg`. A reddish \
+         pixel means AttrColor::new_strikethrough_color was added — the constructor exists, and \
+         not calling it is the decision.",
+        reddish_count(&struck)
+    );
+}
+
+/// The undercurl's top edge rises and falls across the cell, which no straight
+/// line can do.
+///
+/// This is the one case that tells a wave from a thicker or a vertically offset
+/// straight line. [`undercurl_and_underline_do_not_draw_the_same_thing`] proves
+/// only that the two marks DIFFER, and every one of those alternatives differs
+/// from a plain underline too.
+///
+/// MEASURED at [`SMOKE_PROBE_SIZE_PT`] / [`LINE_HEIGHT_PERCENT`] on the pinned
+/// font stack: `cell_w = 22.4765625`, `cell_h = 49`, `baseline = 37.5`,
+/// `ascent = 35`, `descent = 9`; Pango's wave occupies device rows 37 to 43, a
+/// seven-row band whose top edge spans exactly 3 device pixels. All 18 sampled
+/// columns carry the decoration's colour, and their topmost coloured rows run 37,
+/// 38, 39, 40 and back — so the spread is measured over the full band, not over a
+/// subset the colour threshold happened to keep. The same sampler over the
+/// plain-underline column reports row 37 in every one of those 18 columns, a
+/// spread of 0. Anyone moving this fixture's font size or line-height is moving
+/// all of those numbers at once and owes the band and [`MIN_WAVE_SPREAD_PX`] a
+/// fresh measurement — the wave's amplitude scales with the face's underline
+/// thickness, not with the cell.
+///
+/// The sample is the FULL band width, and glyph ink is excluded by colour rather
+/// than by insetting the columns; [`topmost_reddish_rows`] carries the reason and
+/// the hazard it defends against. It reads one row per column, so it is blind to
+/// the wave's thickness and to its period: what it discriminates is a decoration
+/// whose top edge is CONSTANT across the cell.
+///
+/// Falsifier: map `undercurl` to `pango::Underline::Single` in
+/// `glyph_style::glyph_decoration` — a rectangle's top edge is the same row in
+/// every column, so the spread collapses to 0.
+#[test]
+fn the_undercurl_is_wavy_rather_than_straight() {
+    let (mut surface, metrics) = render_decoration_fixture();
+
+    let height = surface.height() as usize;
+    let stride = surface.stride() as usize;
+    let data = surface.data().expect("surface data");
+
+    let rows = wave_band_rows(&metrics, height);
+    let (y0, y1) = rows;
+    let tops = topmost_reddish_rows(&data, stride, &metrics, UNDERCURL_COL, rows);
+
+    assert!(
+        tops.len() >= MIN_WAVE_SAMPLED_COLUMNS,
+        "only {} of the {} sampled columns of the wave band (rows {y0}..{y1}) carry the \
+         decoration's colour, under the {MIN_WAVE_SAMPLED_COLUMNS} this case needs. A wave is \
+         drawn across the run's whole advance, so this few means one of three things: no undercurl \
+         was drawn; the wave is drawn in the layout foreground rather than in `special`, which \
+         `undercurl_draws_ink_below_the_glyph_box_in_the_special_colour` would also report; or the \
+         band is aimed past the wave, which is what `wave_band_rows`' measured geometry exists to \
+         prevent. The spread below would otherwise be describing antialiasing rather than a shape.",
+        tops.len(),
+        band_width(&metrics)
+    );
+
+    let min = *tops.iter().min().expect("a non-empty top-edge sample");
+    let max = *tops.iter().max().expect("a non-empty top-edge sample");
+    let spread = max - min;
+    assert!(
+        spread >= MIN_WAVE_SPREAD_PX,
+        "the undercurl's topmost coloured row runs between {min} and {max} across the cell — a \
+         spread of {spread} device pixels, under {MIN_WAVE_SPREAD_PX}. A spread of 0 means every \
+         column's decoration starts on the same row, which is a horizontal RECTANGLE: exactly what \
+         Underline::Single draws and what macOS folds undercurl into. A spread of 1 is not \
+         evidence of a wave either — an antialiased or one-pixel-offset straight edge produces it \
+         — which is why the threshold is 2 and not 1. The measured wave spans about 3, so a 1 here \
+         is far likelier to mean the band is clipping the wave's upper half than that the wave \
+         went shallow: RE-MEASURE the band before touching this threshold, and never lower it to \
+         match what was observed."
+    );
+}
+
 /// Dev aid (NOT part of the CI gate): regenerates an optional PNG golden under
 /// `tests/testdata/paint_golden.png`. Run explicitly with:
 ///

@@ -7,6 +7,14 @@
 //!   [`wolf_core::KeyEvent`], honoring the shift-glyph contract.
 //! - [`paint`]: paints a [`wolf_core::Snapshot`] onto a Cairo context (an offscreen
 //!   `ImageSurface` in tests, a `DrawingArea` context in production).
+//! - [`mod@glyph_style`]: the DECORATION half of that paint, as data — one cell's
+//!   [`wolf_core::ResolvedStyle`] to the underline, undercurl and strikethrough
+//!   Pango is asked for and the colour the first two take
+//!   ([`glyph_style::glyph_decoration`]), plus the 8-bit to 16-bit channel widening
+//!   Pango's colour attributes need ([`glyph_style::pango_channels`]). Pango's
+//!   underline attribute is SINGLE-VALUED per run, so `underline` and `undercurl`
+//!   cannot coexist and undercurl wins; the wave is Pango's own
+//!   `Underline::Error`, never a hand-stroked Cairo path.
 //! - [`grid_size_for`]: the pure pixel-to-grid geometry used by the window's
 //!   resize handler (testable without GTK).
 //! - [`cell_at`]: the POINTER half of that same geometry, in the same file — a
@@ -74,8 +82,17 @@
 //! - [`mod@config_seam`]: the rules for CONSUMING a [`wolf_core::WolfConfig`] —
 //!   the `WOLF_FONT_PT`-over-`font-size` precedence
 //!   ([`config_seam::resolve_font_pt`], which takes the override as an argument so
-//!   the rule is testable without the process environment) and the settings this
-//!   front-end reads and does not honour ([`config_seam::unsupported_settings`]).
+//!   the rule is testable without the process environment).
+//! - [`mod@appearance`]: the OS DARK/LIGHT rulebook — the TOTAL
+//!   `(`[`wolf_core::Appearance`]`, os_dark)` →
+//!   [`appearance::ResolvedAppearance`] resolution
+//!   ([`appearance::appearance_decision`]), which answers all three of what
+//!   `background` is pushed into Neovim, what colour scheme the GTK chrome is set
+//!   to, and whether a live desktop toggle is followed at all. The desktop's
+//!   reading is INJECTED rather than read here, because
+//!   `adw::StyleManager::default()` asserts an initialized main thread;
+//!   [`appearance::apply_at_launch`] is the glue that makes that one call and
+//!   carries the answer out.
 //! - [`layout`] / [`tree`]: the pure pane tree and the hierarchical file-tree
 //!   projection.
 //! - [`ui_action_for`]: the TOTAL [`wolf_core::Command`] → [`UiAction`] mapping the
@@ -167,6 +184,14 @@
 //!   core's per-pane availability reading ([`nav_ui::nav_buttons`], which answers
 //!   both-insensitive for every input the press path would refuse, never the
 //!   converse).
+//! - [`mod@clipboard_ui`]: the CLIPBOARD rulebook — two TOTAL
+//!   `Option<`[`wolf_core::Liveness`]`>` guards, one refusing the Copy yank's
+//!   BLOCKING RPC ([`clipboard_ui::copy_decision`]) and one refusing a Paste for a
+//!   reason that is NOT about blocking ([`clipboard_ui::paste_decision`]: nothing
+//!   on that path blocks, but a paste queued behind a crash or stall overlay would
+//!   land in a RESTARTED Neovim minutes later). Plus what may cross in each
+//!   direction ([`clipboard_ui::clipboard_write`], whose `None` means write NOTHING
+//!   rather than clear, and [`clipboard_ui::paste_payload`]).
 //! - [`actions`]: the action namespace as data — [`actions::ACTION_TABLE`],
 //!   [`actions::MENU_SECTIONS`], and the [`actions::parse_accel`] /
 //!   [`actions::forbidden_reason`] checker that mechanically enforces "no Neovim
@@ -196,8 +221,13 @@
 //! (`:e`), the picker/tree, or the menu's native Open File / Open Folder dialogs;
 //! there are no save / save-as dialogs. Click-to-position, drag-to-select and
 //! vertical scroll ARE wired (per-pane, in [`pane_view`]); horizontal scroll, the
-//! non-primary buttons and kinetic scrolling are not, matching macOS. What remains
-//! deferred is THEMING and a native command line as Adw widgets: the one-row strip,
+//! non-primary buttons and kinetic scrolling are not, matching macOS. Theming is
+//! ONE-DIRECTIONAL: the configured `appearance` is resolved against the desktop's
+//! light/dark preference and pushed into Neovim as `background=dark|light`, with
+//! the GTK chrome's colour scheme set to match ([`mod@appearance`]) — but no OS
+//! COLOUR is read into Neovim's highlight groups, so macOS's `nvim_set_hl` push has
+//! no counterpart here. What remains
+//! deferred is a native command line as Adw widgets: the one-row strip,
 //! the message toast and the `ext_popupmenu` completion popup are all painted from
 //! the folded `Snapshot::cmdline` / `Snapshot::toast` / `Snapshot::pum`, never from
 //! grid 1, with the toast and the popup as overlay surfaces that cost the pane area
@@ -208,8 +238,10 @@
 pub mod about;
 pub mod actions;
 pub mod app;
+pub mod appearance;
 pub mod buffer_picker;
 pub mod cell_metrics_math;
+pub mod clipboard_ui;
 pub mod cmdline_ui;
 pub mod command_action;
 pub mod config_seam;
@@ -217,6 +249,7 @@ pub mod crash_overlay;
 pub mod cursor;
 pub mod editor_inset;
 pub mod geometry;
+pub mod glyph_style;
 pub mod input;
 pub mod layout;
 pub mod liveness_ui;

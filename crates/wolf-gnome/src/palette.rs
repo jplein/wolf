@@ -48,7 +48,7 @@
 //! directories), one `live_cwd` lock read, and one `stat` per recorded directory
 //! through [`open_recent_candidates`]' injected predicate — bounded by the store's
 //! own cap. All of it happens at open, never per keystroke, and none of it is an
-//! RPC to Neovim, so this module adds no third `block_on_rpc` route (see
+//! RPC to Neovim, so this module adds no `block_on_rpc` route at all (see
 //! `crates/wolf-gnome/DECISIONS.md`, "Crash and stall recovery").
 //!
 //! Almost all of this module is GTK widget wiring, which cannot be unit-tested
@@ -1026,12 +1026,22 @@ mod tests {
                 want: WantAction::Dispatch(Command::GoToFile),
             },
             PaletteCase {
-                desc: "Static + Copy: Deferred on GTK, so the row is unsupported",
+                desc: "Static + Copy: dispatched, so the row runs the clipboard yank",
                 kind: PaletteRowKind::Static,
                 command: Some(Command::Copy),
                 path: None,
-                want: WantAction::Unsupported,
+                want: WantAction::Dispatch(Command::Copy),
             },
+            // No HARDCODED example of the Deferred class follows, and that is
+            // deliberate rather than an omission. The class is covered in this same
+            // table by the `undispatched_probe()` row below, which resolves from the
+            // registry and therefore cannot go stale, and totally by
+            // `every_registered_command_is_classified_by_the_palette`. A hardcoded
+            // Deferred row adds no coverage and goes red the day someone SHIPS the
+            // feature it names — the false-alarm direction — which is how the Copy
+            // row came to need moving. `HideApplication` below stays hardcoded
+            // because NoGnomeEquivalent means "will never be implemented", so that
+            // one cannot move.
             PaletteCase {
                 desc: "Static + HideApplication: NoGnomeEquivalent, so unsupported",
                 kind: PaletteRowKind::Static,

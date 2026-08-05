@@ -38,7 +38,7 @@ Linux gets the pinned Neovim from the flake devShell via `WOLF_NVIM_BIN`; there 
 | Max column width (90-col cap, centered grid)               | `feat/mac-panes` (`b6f545c`) / `linux-feat/grid-geometry`                     | [x]   | [x]   |
 | "Use full width for content" toggle                        | `feat/use-whole-width` / `linux-feat/grid-geometry`                           | [x]   | [x]   |
 | Text attributes: bold / italic / underline                 | `feat/paint-special-attributes` (`0cdaedd`)                                   | [x]   | [x]   |
-| Text attributes: undercurl / strikethrough / special color | `feat/paint-special-attributes` (`0cdaedd`)                                   | [x]   | [ ]   |
+| Text attributes: undercurl / strikethrough / special color | `feat/paint-special-attributes` (`0cdaedd`)                                   | [x]   | [x]   |
 | Cursor color from the `WolfCursor` highlight group         | `feat/cursor-color`                                                           | [x]   | [x]   |
 | Editor background inherits the theme background            | `feat/cursor-color` (`ca8b3c3`)                                               | [x]   | [x]   |
 | Per-pane status bar (filename + display path)              | `feat/status-bar` (`ffc3c49`)                                                 | [x]   | [x]   |
@@ -48,9 +48,11 @@ Linux gets the pinned Neovim from the flake devShell via `WOLF_NVIM_BIN`; there 
 
 Divider drag on GTK is the stock `gtk::Paned` handle drag, and the position it lands on is written back into the pure tree's weights, which is what makes it survive a re-layout and reach `state.json`. One divergence from macOS is real and deliberate: GTK renders an n-ary split as a right-leaning paned chain, so a divider governs its head child against the whole remainder, which is rescaled proportionally, where macOS's `setPairFraction` reweights only the adjacent pair.
 
-The per-pane status bar diverges from macOS in two visible ways, both following from GTK reading no OS theme: its band is the editor's own background rather than a titlebar match, and a path too long for its pane is clipped rather than ellipsized.
+The per-pane status bar diverges from macOS in two visible ways, each for its own reason: its band is the editor's per-frame background out of the snapshot rather than a titlebar match, since a theme-owned widget background cannot be that colour, and a path too long for its pane is clipped rather than ellipsized, since ellipsizing needs a second Pango layout builder in the widget layer, which is what the one-glyph-path rule exists to prevent.
 
 Mouse and vertical scroll input work on both front-ends, as thin GTK glue over pure seams (`geometry::cell_at` and the `mouse` module).
+
+One text-attribute divergence is worth knowing: `undercurl` is drawn as Pango's wave on Linux, where macOS's `GlyphStyleResolver` folds it into a straight underline. Both take the decoration's colour from `special`, and both strike through in the layout foreground.
 
 Horizontal scroll, non-primary buttons and kinetic scrolling are handled on neither platform, so they are gaps against other editors rather than against macOS.
 
@@ -73,7 +75,7 @@ GTK paints a one-row bottom strip carrying the command line — its dialog `prom
 
 A toast shows as many lines as fit half the space above the strip, and a scroll gesture over it pages back through the older ones without reaching Neovim. Key-driven paging is not a rejected alternative but an impossible one: any key is dismissing input for a non-prompt toast, so a paging key would destroy what it paged. A `confirm` dialog is answerable because its question and its options line are on screen at the same time — the question is a `confirm`-kind message and the options line is the command line's `prompt` — and core, not either front-end, decides when that toast goes.
 
-Two divergences from macOS are deliberate. The popup accepts no input at all, matching the synthesized scrollbar's rule that an indicator beats a control that visibly refuses. And the selected completion row is drawn in reverse video out of the snapshot's own colours rather than a theme accent, since this front-end reads no OS theme in either direction.
+Two divergences from macOS are deliberate. The popup accepts no input at all, matching the synthesized scrollbar's rule that an indicator beats a control that visibly refuses. And the selected completion row is drawn in reverse video out of the snapshot's own colours rather than a theme accent, since every colour on these surfaces comes from the snapshot and a theme accent colour is not something this front-end can obtain — resolving a light/dark preference gives it no palette.
 
 ## Navigation and file access
 
@@ -117,11 +119,11 @@ The GTK sidebar re-roots from one settle point, on the working directory Neovim 
 | Application state persistence (`state.json`) | `feat/remember-working-directory`                         | [x]   | [x]   |
 | Pane-layout persistence across relaunch      | `feat/macos-pane-dividers` (`5f8becb`)                    | [x]   | [x]   |
 | Single-pane state-persistence fix            | `fix/state-persistence-single-pane-bug`                   | [x]   | [x]   |
-| Copy / paste through the system clipboard    | `feat/copy-paste`                                         | [x]   | [ ]   |
+| Copy / paste through the system clipboard    | `feat/copy-paste`                                         | [x]   | [x]   |
 | `:q` / `:qa` mapped to close pane / window   | `feat/colon-q-remapping`                                  | [x]   | [x]   |
 | ⌘N opens a new untitled Markdown buffer      | `feat/colon-q-remapping` (`0266b96`)                      | [x]   | [x]   |
 
-`wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Of the 26 commands, 12 dispatch, 1 has no GNOME equivalent (`HideApplication`, since the shell owns window visibility), and 13 are deferred with a distinct printed reason.
+`wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Of the 26 commands, 15 dispatch, 1 has no GNOME equivalent (`HideApplication`, since the shell owns window visibility), and 10 are deferred with a distinct printed reason.
 
 The GNOME counterpart to the macOS menu bar is a header-bar primary menu driven by the same `gio` action namespace as the accelerators, so menu, chords and drained commands cannot drift apart. The accelerator scheme is documented in [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md), "The accelerator namespace".
 
@@ -161,13 +163,15 @@ The rendering pipeline and the loopback preview server are entirely in `wolf-cor
 | Bundled fonts (iA Writer Mono S, JetBrains Mono) | `feat/neovim-plugin-vendoring` (`129aa8f`, `be2e86c`) | [x]   | [x]   |
 | Baseline-grid typography                         | `feat/typography` (`2735a6d`)                         | [x]   | [ ]   |
 | Status bar aligned to the content edge           | `feat/typography` (`460692d`)                         | [x]   | [x]   |
-| Follows the OS dark/light appearance             | `fix/dark-mode` (`c81f7a2`)                           | [x]   | [ ]   |
+| Follows the OS dark/light appearance             | `fix/dark-mode` (`c81f7a2`)                           | [x]   | [x]   |
 | Application icon                                 | `feat/mac-application-icon`                           | [x]   | [ ]   |
 | Vendored `orlando` rendering plugin              | `jplein/lua-changes` (`6ee5c16`)                      | [x]   | [ ]   |
 | Vendored `lighthouse` colorscheme                | `jplein/lua-changes` (`0603937`)                      | [x]   | [ ]   |
 | Vendored treesitter plugins and parsers          | `feat/neovim-plugin-vendoring`                        | [x]   | [ ]   |
 
 `wolf-gnome` reads the shared `wolf-config.yaml` through `wolf_core::config` and drives its cell geometry from the configured font family, size and line height; `WOLF_FONT_PT` overrides the configured size, as it does on macOS. Both editor families are vendored into the Nix devShell and exposed through the repo-controlled fontconfig, so a configured `iA Writer Mono S` resolves on Linux.
+
+The `appearance` key resolves on both front-ends, and on Linux it reaches two places: the captive Neovim, as `:set background=dark|light`, and the GTK chrome, as an `adw::ColorScheme` — `auto` following libadwaita's own live reading and a forced value overriding it. What has no Linux counterpart is the other direction: macOS reads live OS colours and pushes them into Neovim's highlight groups with `nvim_set_hl`, and `wolf-gnome` reads no OS colour at all.
 
 Baseline-grid typography is the 24px CSS grid inside the rendered preview document, so it belongs with the Markdown-preview rows above and is unreachable until Linux has a preview pane. Both front-ends align a status bar's text with the grid text below it, out of one inset; the macOS `StatusbarTextSpan` seam has no Linux counterpart, because `editor_inset::grid_rect` carries the centring offset in its own `x` and the painter, the pointer translation and the strip's text all read that one origin by construction. The three vendored plugin assets are bundled by Bazel into `Wolf.app` only — the captive `init.lua` self-locates them and is a strict no-op when absent, so on Linux they are simply not there.
 
@@ -203,9 +207,9 @@ The sidebar full-tree load row records a guarantee rather than a repair: the mac
 
 Two limits are worth stating. The pane topology does not survive a restart — only the Tier-1 file set does, so a crash while the window was split returns one pane. macOS restores no more than that, so it is a shared limit rather than a Linux gap.
 
-`NotResponding` is reachable from `wolf-gnome` at three points. `wolf-core` marks a stall only from `block_on_rpc`'s timeout arm, and the GTK side issues three such calls: the layout rebuild at launch, the buffer picker's candidate snapshot on Ctrl+Shift+E, and a per-pane navigation move on Alt+Left or Alt+Right. The overlay's presentation has end-to-end coverage — a cage smoke `SIGSTOP`s the captive Neovim and presses the chord. Copy and the Markdown preview will add further blocking paths.
+`NotResponding` is reachable from `wolf-gnome` at four points. `wolf-core` marks a stall only from `block_on_rpc`'s timeout arm, and the GTK side issues four such calls: the layout rebuild at launch, the buffer picker's candidate snapshot on Ctrl+Shift+E, a per-pane navigation move on Alt+Left or Alt+Right, and the Copy yank on Ctrl+Shift+C. The overlay's presentation has end-to-end coverage — a cage smoke `SIGSTOP`s the captive Neovim and presses the chord. Paste adds none, because the clipboard read is asynchronous and the insert is fire-and-forget; the Markdown preview would add another.
 
-The second limit is that a stall does not clear itself on the GTK side. Both the buffer picker and a navigation press refuse to issue their call unless the core reads `Alive`, so a wedged Neovim is never re-probed, and core's own auto-clear rides the success of a later synchronous call while a timed-out one is detached. The route back is the overlay's Restart button, which force-kills.
+The second limit is that a stall does not clear itself on the GTK side. The buffer picker, a navigation press and the Copy chord all refuse to issue their call unless the core reads `Alive`, so a wedged Neovim is never re-probed, and core's own auto-clear rides the success of a later synchronous call while a timed-out one is detached. The route back is the overlay's Restart button, which force-kills.
 
 ## Suggested order of work for Linux
 

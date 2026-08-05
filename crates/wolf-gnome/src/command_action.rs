@@ -24,7 +24,7 @@
 //!
 //! ## The three classes
 //!
-//! - **Dispatched** — the thirteen commands `wolf-gnome` performs today.
+//! - **Dispatched** — the fifteen commands `wolf-gnome` performs today.
 //! - [`UiAction::Deferred`] — implemented on macOS and planned on GTK; the string
 //!   names the concrete blocker so the deferral is auditable rather than a shrug.
 //! - [`UiAction::NoGnomeEquivalent`] — has no GNOME counterpart and will never be
@@ -77,6 +77,12 @@ pub enum UiAction {
     HistoryForward,
     /// Show or hide the file-tree sidebar.
     ToggleSidebar,
+    /// Yank the visual-mode selection over a BLOCKING RPC and write it to the
+    /// system clipboard.
+    CopySelection,
+    /// Read the system clipboard ASYNCHRONOUSLY and insert it through
+    /// `nvim_paste`.
+    PasteClipboard,
     /// Toggle the focused buffer's content width between the column cap and the
     /// whole pane.
     ToggleFullWidth,
@@ -122,12 +128,8 @@ pub fn ui_action_for(command: Command) -> UiAction {
             "decreasing the font size requires re-measuring CellMetrics and re-gridding every pane",
         ),
         Command::CommandPalette => UiAction::OpenCommandPalette,
-        Command::Copy => UiAction::Deferred(
-            "the GTK clipboard bridge (gdk::Clipboard + copy_visual_selection) is not built",
-        ),
-        Command::Paste => UiAction::Deferred(
-            "the GTK clipboard bridge (gdk::Clipboard read + WolfCore::paste) is not built",
-        ),
+        Command::Copy => UiAction::CopySelection,
+        Command::Paste => UiAction::PasteClipboard,
         Command::BufferPicker => UiAction::OpenBufferPicker,
         Command::NewTab => UiAction::Deferred(
             "GTK native tabs are not built; wolf-gnome binds exactly one nvim tabpage",
@@ -192,17 +194,19 @@ mod tests {
     /// The commands `wolf-gnome` DISPATCHES, by canonical `CommandSpec::id`,
     /// sorted. Ids (not variants) so the failure message names the registry row a
     /// reader can grep for.
-    const EXPECTED_DISPATCHED_IDS: [&str; 13] = [
+    const EXPECTED_DISPATCHED_IDS: [&str; 15] = [
         "buffer_picker",
         "close_pane",
         "close_window",
         "command_palette",
+        "copy",
         "full_width",
         "go_to_file",
         "minimize_window",
         "new_buffer",
         "open_file",
         "open_folder",
+        "paste",
         "quit_application",
         "search_in_project",
         "toggle_sidebar",
@@ -310,14 +314,14 @@ mod tests {
             want: Want::Exact(UiAction::OpenCommandPalette),
         },
         Case {
-            desc: "14 Copy: no GTK clipboard bridge yet",
+            desc: "14 Copy: yanks the visual selection and writes it to the system clipboard",
             command: Command::Copy,
-            want: Want::Deferred,
+            want: Want::Exact(UiAction::CopySelection),
         },
         Case {
-            desc: "15 Paste: no GTK clipboard bridge yet",
+            desc: "15 Paste: reads the system clipboard and inserts it through nvim_paste",
             command: Command::Paste,
-            want: Want::Deferred,
+            want: Want::Exact(UiAction::PasteClipboard),
         },
         Case {
             desc: "16 BufferPicker: opens the in-window buffer-picker overlay",
@@ -484,10 +488,15 @@ mod tests {
 
         assert_eq!(
             dispatched, expected,
-            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly thirteen \
+            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly fifteen \
              commands; everything else must be Deferred(reason) or NoGnomeEquivalent(reason) so \
              the drain is never silent. If a command was genuinely implemented, tick its feat-list \
-             row and update this list with it."
+             row and update this list with it. A one-element diff naming \"copy\" or \"paste\" \
+             means the clipboard bridge was demoted back to Deferred, in which case the chord \
+             falls through to Neovim as <C-c> or <C-v> and the app prints its own \
+             \"command Copy not dispatched:\" line on stderr — that stderr line is what tells this \
+             failure apart from `actions::bound_set_is_exactly_this_unit`'s, which reddens instead \
+             when the ACCELERATOR was demoted to Reserved."
         );
     }
 

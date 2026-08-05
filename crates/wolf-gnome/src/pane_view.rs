@@ -73,7 +73,7 @@
 //!   launch; the first wake at which a window grid exists consumes it
 //!   ([`PaneInner::consume_pending_layout`]) and realizes it
 //!   ([`PaneInner::apply_layout_rebuild`]) through `WolfCore::rebuild_layout`, one
-//!   of the three blocking RPCs this front-end issues, documented there.
+//!   of the four blocking RPCs this front-end issues, documented there.
 //!
 //! A user's DIVIDER DRAG feeds the save half. [`install_paned_position`] writes the
 //! dragged `gtk::Paned` position back into the tree's weights through
@@ -1188,8 +1188,8 @@ impl PaneInner {
         let snap = core.read_snapshot();
 
         // The editor defaults — the same source `draw_cmdline` resolves for its own
-        // band, and the only colour channel this front-end has (it reads no OS
-        // theme, in either direction).
+        // band, and the only colour channel this front-end has (it takes no colour
+        // from the GTK theme).
         let style = snap.highlights.resolve(0);
         let fg = style.fg.unwrap_or(FALLBACK_FG);
         let bg = style.bg.unwrap_or(FALLBACK_BG);
@@ -1889,8 +1889,9 @@ impl PaneInner {
     }
 
     /// Paints the completion popup: one row per visible item, the selected row drawn
-    /// in reverse video so the selection reads without a theme accent colour this
-    /// front-end has no way to obtain.
+    /// in reverse video so the selection reads without a theme ACCENT colour, which
+    /// this front-end has no way to obtain — it resolves a light/dark preference
+    /// ([`mod@crate::appearance`]) and takes no colour from the GTK theme at all.
     fn draw_pum(&self, cr: &cairo::Context, width: f64, height: f64) {
         let core_ref = self.core.borrow();
         let Some(core) = core_ref.as_ref() else {

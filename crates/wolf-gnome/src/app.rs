@@ -36,16 +36,22 @@
 //!   The layout is queued on the pane view
 //!   ([`crate::pane_view::PaneHandle::request_layout_rebuild`]) and realized on
 //!   the first wake with a window grid, through `WolfCore::rebuild_layout`. That
-//!   is ONE of the THREE blocking RPCs this front-end issues — at most once per
+//!   is ONE of the FOUR blocking RPCs this front-end issues — at most once per
 //!   launch, before the window is interactive, never on the crash path. The second
 //!   is the buffer picker's candidate snapshot (`WolfCore::list_buffers`), which a
 //!   RUNNING window can issue on Ctrl+Shift+E, behind
 //!   [`crate::buffer_picker::open_decision`]'s guard that it be issued only while
 //!   the core reads `Alive`. The third is a per-pane navigation move
 //!   (`WolfCore::history_back` / `history_forward`) on Alt+Left / Alt+Right, behind
-//!   [`crate::nav_ui::nav_press`]'s guard of exactly the same shape. Any of the
-//!   three can mark the core `Liveness::NotResponding` and raise the stall overlay.
-//!   The project-search overlay adds NEITHER a fourth
+//!   [`crate::nav_ui::nav_press`]'s guard of exactly the same shape. The FOURTH is
+//!   the Copy yank (`WolfCore::copy_visual_selection`), which a RUNNING window
+//!   issues on Ctrl+Shift+C, behind [`crate::clipboard_ui::copy_decision`]'s guard
+//!   of that same shape. Any of the
+//!   four can mark the core `Liveness::NotResponding` and raise the stall overlay.
+//!   PASTE adds none: `gdk::Clipboard::read_text_async` resolves on a later
+//!   main-loop turn and `WolfCore::paste` is fire-and-forget on the ordered input
+//!   channel, so nothing on that path can time out.
+//!   The project-search overlay adds NEITHER a fifth
 //!   blocking call nor a further stall path: `start_search` `spawn_blocking`s onto
 //!   the tokio runtime, `open_at` is fire-and-forget, and the one blocking call it
 //!   could have made — `WolfCore::ignorecase()` — is deliberately not made. Writing
@@ -109,10 +115,13 @@
 //! The shared `wolf-config.yaml` is read ONCE at window-build time, beside the
 //! state store: its `font-family`, `font-size` and `line-height` drive
 //! [`CellMetrics::for_font`], with `WOLF_FONT_PT` winning over the configured size
-//! ([`crate::config_seam::resolve_font_pt`]). A configured `appearance` other than
-//! `auto` is reported once on stderr and then ignored, because THEMING is deferred:
-//! this front-end neither queries the OS theme nor pushes one into Neovim. Also
-//! deferred is a native command line as Adw widgets: the cmdline strip, the message
+//! ([`crate::config_seam::resolve_font_pt`]). Its `appearance` is resolved against
+//! libadwaita's own light/dark reading and applied in both directions the resolved
+//! value reaches — `background=dark|light` into the captive Neovim and the GTK
+//! chrome's colour scheme — by [`crate::appearance::apply_at_launch`], called once
+//! here as soon as the core exists. No OS COLOUR is read into Neovim's highlight
+//! groups; that direction is macOS-only. Deferred is a native command line as Adw
+//! widgets: the cmdline strip, the message
 //! toast and the `ext_popupmenu` completion popup are all painted from the folded
 //! `Snapshot::cmdline` / `Snapshot::toast` / `Snapshot::pum`, and none of them paints
 //! grid 1, which under `ext_messages` (`cmdheight=0`) is empty. The strip stays one
@@ -128,6 +137,7 @@ use adw::prelude::*;
 use gtk::glib;
 use wolf_core::{CoreConfig, InputEvent, StateStore, WakeFn, WolfConfig, WolfCore, WolfState};
 
+use crate::appearance;
 use crate::buffer_picker::{self, BufferPickerHandle};
 use crate::config_seam;
 use crate::crash_overlay;
@@ -228,17 +238,6 @@ fn load_config() -> WolfConfig {
     wolf_core::load_or_create(&dir)
 }
 
-/// Prints one line per configured setting this front-end reads and does not
-/// honour, so a user who wrote one learns it does nothing here.
-fn report_unsupported_settings(config: &WolfConfig) {
-    for setting in config_seam::unsupported_settings(config) {
-        eprintln!(
-            "wolf-gnome: `{}: {}` in wolf-config.yaml is not honoured: {}",
-            setting.key, setting.value, setting.reason
-        );
-    }
-}
-
 /// Measures the monospace cell metrics ONCE from `config`, using a throwaway 1x1
 /// offscreen surface purely to obtain a Pango context (its pixel size is
 /// irrelevant).
@@ -298,7 +297,6 @@ fn build_ui(app: &adw::Application) {
     // exists — matching macOS's `CellMetrics.measured(config:)` at launch. An edit
     // to `wolf-config.yaml` therefore takes effect on the next launch.
     let config = load_config();
-    report_unsupported_settings(&config);
 
     // Measure the cell once and share it (by Rc) with the draw and resize closures
     // so it is available even if a resize fires before the first draw.
@@ -340,6 +338,12 @@ fn build_ui(app: &adw::Application) {
     // The core is non-Send; it lives only here on the main thread, shared by the
     // draw/key/resize/close closures via Rc, and taken out on close.
     let core = Rc::new(RefCell::new(Some(core)));
+
+    // The configured appearance, resolved and applied: the chrome's colour scheme
+    // and the `background` push into the captive Neovim. AFTER the core exists, so
+    // the push has somewhere to go, and BEFORE any widget is built, so the window
+    // is realized under the resolved scheme with no visible flash.
+    appearance::apply_at_launch(&config, &core);
 
     // The native pane tree (one DrawingArea per pane + a cmdline strip), replacing
     // the former single editor DrawingArea. Its container is the overlay's main

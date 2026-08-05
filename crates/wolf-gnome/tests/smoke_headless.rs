@@ -11,7 +11,7 @@
 //!
 //! ## What this file contains
 //!
-//! **Forty cage smokes** — one window-render smoke, two file-picker smokes,
+//! **Forty-two cage smokes** — one window-render smoke, two file-picker smokes,
 //! one file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
 //! new-untitled-buffer smoke, one command-palette smoke, one OPEN RECENT smoke
 //! (Ctrl+Shift+P, a typed folder query, then Enter — the activated row re-roots the
@@ -55,16 +55,24 @@
 //! directory), one CONFIGURED-FONT-SIZE smoke (two launches at two
 //! `wolf-config.yaml` font sizes, each writing `winwidth(0)` into its own file, so
 //! the configured size reaching the cell metrics is an integer strict inequality
-//! rather than an OCR judgement), and one COLUMN-CAP smoke (one launch at a
+//! rather than an OCR judgement), one COLUMN-CAP smoke (one launch at a
 //! deliberately SMALL font size, the only geometry at which the 90-column content
 //! cap binds at all under `cage`, whose two `winwidth(0)` readbacks either side of
 //! `:WolfFullWidth` are what prove the cap and the per-buffer override that lifts
-//! it) — each of which launches the real binary under `cage`.
+//! it), one CONFIGURED-APPEARANCE smoke (two launches at two `wolf-config.yaml`
+//! `appearance` values, each writing `&background` into its own file, so the
+//! configured appearance reaching the captive Neovim is a pair of exact string
+//! equalities — and the PAIR is what discriminates, since `dark` alone is satisfied
+//! by a build that pushes nothing and `light` alone by one that always pushes
+//! light), and one CLIPBOARD smoke (a linewise yank over Ctrl+Shift+C, a put over
+//! Ctrl+Shift+V, and one buffer readback that must carry the marker exactly TWICE)
+//! — each of which launches the real binary under `cage`.
 //!
-//! Four smokes run **two app launches inside ONE `cage` instance** (one scenario
-//! string, two sequential `"$WOLF_BIN" &` blocks) — the three relaunch ones and the
-//! configured-font-size one — so `CAGE_LOCK` semantics are unchanged and the count
-//! of compositors started is still one per smoke.
+//! Five smokes run **two app launches inside ONE `cage` instance** (one scenario
+//! string, two sequential `"$WOLF_BIN" &` blocks) — the three relaunch ones, the
+//! configured-font-size one and the configured-appearance one — so `CAGE_LOCK`
+//! semantics are unchanged and the count of compositors started is still one per
+//! smoke.
 //!
 //! Seven of them additionally run **`wolf-pointer-inject`** inside cage —
 //! this repo's own long-lived `zwlr_virtual_pointer_v1` client, see
@@ -77,10 +85,11 @@
 //! and no `:e` toast can satisfy, and OCR is structurally incapable of answering
 //! "did the cursor land at exactly row 12, column 25".
 //!
-//! Thirty-three of the forty OCR a screenshot of the live window. The `:qa`
-//! smoke, the configured-font-size smoke and the column-cap smoke deliberately
-//! capture no image and assert on the cage exit status plus, for the latter two,
-//! two integer readbacks each (the
+//! Thirty-three of the forty-two OCR a screenshot of the live window. Five
+//! deliberately capture no image at all: the `:qa` smoke asserts on the cage exit
+//! status alone, while the configured-font-size and column-cap smokes add two
+//! integers each, the configured-appearance smoke two exact strings, and the
+//! clipboard smoke one buffer readback (the
 //! app must be GONE, and gone with a ZERO exit status — a panic in the GTK main
 //! loop makes a process vanish just as a clean shutdown does); the click, drag,
 //! scroll and divider-relayout smokes still capture and still RETAIN a screenshot
@@ -90,7 +99,7 @@
 //! project-search smoke does both as well, and its readback carries the two values
 //! OCR structurally cannot: the LINE and the COLUMN the cursor landed on.
 //!
-//! **Five pure guards**, which mechanically enforce invariants the cage smokes
+//! **Six pure guards**, which mechanically enforce invariants the cage smokes
 //! depend on but cannot check themselves:
 //!
 //! * [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`] — no
@@ -134,22 +143,31 @@
 //!   binds, no grid is ever centred, and no pixel target moves. That premise is
 //!   exactly the kind that stops being true when someone changes a font size, and
 //!   nothing else would notice.
+//! * [`the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes`] — the
+//!   SECOND premise those thirty-three rest on: the seeded `wolf-config.yaml` pins
+//!   `appearance: dark`, which is what keeps the grid light-on-dark for sparse-text
+//!   segmentation. It asserts both halves — the pinned VALUE, re-typed locally so
+//!   the check is not a comparison with itself, and the artifact
+//!   [`write_smoke_config`] actually writes — because the pin and the assertions it
+//!   can disarm sit thousands of lines apart, exactly the shape the three
+//!   fixture-name guards above exist for.
 //!
-//! All five are compositor-free: none calls `require_smoke_env`, none takes
+//! All six are compositor-free: none calls `require_smoke_env`, none takes
 //! `CAGE_LOCK` and none spawns a subprocess, so they still guard on a machine where
 //! the smoke toolchain is unavailable. They live here, next to the consts and
 //! helpers they read, rather than in a file of their own.
 //!
-//! Four of the five additionally need NO environment at all. The fifth is the
-//! exception and the claim is stated precisely rather than loosely: it measures a
+//! Five of the six additionally need NO environment at all. The exception is
+//! [`the_column_cap_cannot_bind_at_the_ocr_smokes_geometry`], and the claim is
+//! stated precisely rather than loosely: it measures a
 //! real cell through [`cell_metrics_for_smoke`], so it needs the devShell's pinned
 //! `FONTCONFIG_FILE`. That is not part of the cage toolchain listed below — it is
 //! the same font pinning `tests/paint_golden.rs` needs — but it is not nothing, and
 //! a run outside the devShell fails it for that reason rather than for the reason
 //! its message names.
 //!
-//! So this target's summary line reads **`45 passed`**, not `40`: forty cage
-//! smokes plus those five guards.
+//! So this target's summary line reads **`48 passed`**, not `42`: forty-two cage
+//! smokes plus those six guards.
 //!
 //! ## A vacuously-passing check recorded here: the `wtype ""` window-map poll
 //!
@@ -191,7 +209,7 @@
 //!
 //! ## When it runs
 //!
-//! The forty cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The forty-two cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The Linux verification gate").
@@ -201,13 +219,13 @@
 //! suite command does not run is a silently-skipped test.
 //!
 //! They are, however, the slowest part of the suite: each drives a real
-//! compositor, and all forty serialize behind `CAGE_LOCK` (see below).
+//! compositor, and all forty-two serialize behind `CAGE_LOCK` (see below).
 //!
 //! ```text
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the forty cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the forty-two cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` and
 //!   `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
@@ -224,7 +242,7 @@
 //!   empty result list.
 //! - `XDG_RUNTIME_DIR` set and writable (the Wayland socket lives there).
 //!
-//! Per project policy every one of the forty FAILS LOUD if any of the above is
+//! Per project policy every one of the forty-two FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -251,7 +269,7 @@ use wolf_gnome::{CellMetrics, WINDOW_TITLE_FALLBACK};
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the forty cage smoke tests. Each launches its own
+/// Serializes the forty-two cage smoke tests. Each launches its own
 /// `cage` compositor, and two compositors started concurrently contend for the
 /// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
 /// Under the default multi-threaded test harness these tests would otherwise run
@@ -271,6 +289,14 @@ static CAGE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// interactive default so the rendered glyphs are big enough for `tesseract` to
 /// recognize reliably in a screenshot.
 const SMOKE_FONT_PT: &str = "28";
+
+/// The `appearance` every smoke's seeded `wolf-config.yaml` carries — see
+/// [`write_smoke_config`], whose doc comment holds the reason the key is PINNED at
+/// all and the reason it is pinned to this value in particular.
+///
+/// Only the two-launch appearance smoke passes anything else, and it passes both
+/// of the other values in one run.
+const SMOKE_APPEARANCE: &str = "dark";
 
 /// The `line-height` (percent of the font size) every smoke's seeded
 /// `wolf-config.yaml` carries — see [`smoke_config_dir`], which writes it, and
@@ -1764,9 +1790,10 @@ fn search_target_fixture_body() -> String {
 //
 // This is the first end-to-end coverage the STALL half of the crash/stall overlay
 // has, and it is reachable only because the buffer picker exists: `list_buffers`
-// is the one blocking RPC a RUNNING wolf-gnome issues, so wedging the captive
-// Neovim with SIGSTOP and then firing Ctrl+Shift+E is what makes `block_on_rpc`
-// elapse its budget, mark the core NotResponding, and raise the overlay.
+// is the blocking RPC a RUNNING wolf-gnome issues from a chord this harness can
+// type, so wedging the captive Neovim with SIGSTOP and then firing Ctrl+Shift+E is
+// what makes `block_on_rpc` elapse its budget, mark the core NotResponding, and
+// raise the overlay.
 //
 // The scenario captures AFTER the block, never during it: no frame is committed
 // while the main loop is blocked, so a capture taken then would return the
@@ -4835,8 +4862,9 @@ exit 0
 /// wake; `liveness_ui(NotResponding, _)` yields `OverlayMode::Stalled`, and
 /// `apply_overlay` raises the opaque overlay and closes the empty picker behind it.
 ///
-/// This is only reachable because the buffer picker exists: it is the one blocking
-/// RPC a RUNNING `wolf-gnome` issues.
+/// This is only reachable because the buffer picker exists: of the blocking RPCs a
+/// RUNNING `wolf-gnome` issues, its candidate snapshot is the one a chord this
+/// harness can type reaches with no selection or history to set up first.
 ///
 /// ## Capture AFTER the block, never during it
 ///
@@ -8292,7 +8320,7 @@ exit 0
 /// captive nvim runs in (the recent-files MRU lives in the global
 /// `state_dir()/file-mru.sqlite`, not under the cwd).
 ///
-/// ALL THIRTY-SEVEN cage smokes derive their working directory from this — the window
+/// ALL FORTY-TWO cage smokes derive their working directory from this — the window
 /// title smoke and the typed-`:cd` smoke use the result as the base for the NESTED
 /// directories their `~` abbreviation needs, the per-pane statusbar smoke hangs its
 /// fixture directory off the parent, and the three relaunch smokes share one of these
@@ -8503,11 +8531,12 @@ fn smoke_state_dir(cwd: &Path) -> PathBuf {
 /// A seeded file makes `load_or_create` READ rather than write, so the smoke is
 /// deterministic and leaves nothing behind that a second run would read
 /// differently. It pins the family to [`SMOKE_FONT_FAMILY`] — the one
-/// [`cell_metrics_for_smoke`] measures against — and the line-height to
+/// [`cell_metrics_for_smoke`] measures against — the line-height to
 /// [`SMOKE_LINE_HEIGHT`], whose doc comment carries the measurement behind the
-/// number. The `font-size` it carries is inert while `WOLF_FONT_PT` wins
-/// (`config_seam::resolve_font_pt`'s documented precedence), and is written
-/// anyway so the file is honest about what it configures.
+/// number, and the appearance to [`SMOKE_APPEARANCE`], whose reason lives in
+/// [`write_smoke_config`]. The `font-size` it carries is inert while
+/// `WOLF_FONT_PT` wins (`config_seam::resolve_font_pt`'s documented precedence),
+/// and is written anyway so the file is honest about what it configures.
 ///
 /// ## Why a SIBLING and not a child
 ///
@@ -8516,16 +8545,19 @@ fn smoke_state_dir(cwd: &Path) -> PathBuf {
 /// and a picker candidate, changing the page density every OCR assertion is
 /// calibrated against.
 fn smoke_config_dir(cwd: &Path) -> PathBuf {
-    smoke_config_dir_at(cwd, "", SMOKE_FONT_PT)
+    smoke_config_dir_at(cwd, "", SMOKE_FONT_PT, SMOKE_APPEARANCE)
 }
 
-/// [`smoke_config_dir`] with an extra name suffix and an explicit `font-size`.
+/// [`smoke_config_dir`] with an extra name suffix and an explicit `font-size` and
+/// `appearance`.
 ///
-/// One smoke — [`config_font_size_changes_the_grid_under_cage`] — needs TWO seeded
-/// config directories in one scenario, at two different font sizes. Deriving both
-/// here keeps the sibling-not-child rule and the seeded file's shape in one place;
-/// see [`smoke_config_dir`] for why each matters.
-fn smoke_config_dir_at(cwd: &Path, suffix: &str, font_pt: &str) -> PathBuf {
+/// Two smokes need TWO seeded config directories in one scenario:
+/// [`config_font_size_changes_the_grid_under_cage`] at two different font sizes,
+/// and [`configured_appearance_reaches_neovims_background_under_cage`] at two
+/// different appearances. Deriving all four here keeps the sibling-not-child rule
+/// and the seeded file's shape in one place; see [`smoke_config_dir`] for why each
+/// matters.
+fn smoke_config_dir_at(cwd: &Path, suffix: &str, font_pt: &str, appearance: &str) -> PathBuf {
     let name = cwd.file_name().unwrap_or_else(|| {
         panic!(
             "smoke cwd {} has no final path component, so no `<name>-config` sibling can be \
@@ -8543,21 +8575,41 @@ fn smoke_config_dir_at(cwd: &Path, suffix: &str, font_pt: &str) -> PathBuf {
         )
     });
     let dir = parent.join(format!("{}-config{suffix}", name.to_string_lossy()));
-    write_smoke_config(&dir, font_pt);
+    write_smoke_config(&dir, font_pt, appearance);
     dir
 }
 
 /// Creates `dir` and writes a `wolf-config.yaml` into it pinning
-/// [`SMOKE_FONT_FAMILY`], `font_pt`, and [`SMOKE_LINE_HEIGHT`].
+/// [`SMOKE_FONT_FAMILY`], `font_pt`, [`SMOKE_LINE_HEIGHT`] and `appearance`.
 ///
-/// Split out from [`smoke_config_dir`] because
-/// [`config_font_size_changes_the_grid_under_cage`] needs the same file at two
-/// DIFFERENT font sizes, and the seeded shape must not be written twice by hand.
-/// All three fields are required by `wolf_core`'s `ConfigSection`: a partial
+/// Split out from [`smoke_config_dir`] because two smokes need the same file at
+/// two DIFFERENT values — [`config_font_size_changes_the_grid_under_cage`] at two
+/// font sizes and [`configured_appearance_reaches_neovims_background_under_cage`]
+/// at two appearances — and the seeded shape must not be written twice by hand.
+/// The three font fields are required by `wolf_core`'s `ConfigSection`: a partial
 /// section fails to deserialize and `load_or_create` then falls back to the
 /// built-in defaults, which is exactly the `iA Writer Mono S` outcome this whole
 /// helper exists to prevent.
-fn write_smoke_config(dir: &Path, font_pt: &str) {
+///
+/// ## Why `appearance` is pinned, and why to [`SMOKE_APPEARANCE`]
+///
+/// `appearance` is the one seeded field that is NOT required — `wolf_core`'s
+/// `ConfigSection` gives it a `#[serde(default)]` of `auto` — so an unpinned file
+/// leaves every smoke running in `auto`. That is the same class of hazard the
+/// family and the size are pinned against, one step further out: in `auto` the
+/// resolved appearance comes from libadwaita's reading of the desktop, and under
+/// `cage` there is no settings portal and no xsettings bridge to read. The
+/// rendered page would then depend on the compositor's ABSENT theme state, which
+/// is not a value this suite controls and not one it could re-derive after a
+/// failure.
+///
+/// `dark` specifically, because it is what Neovim already defaults to under
+/// `--embed`: pinning it pushes the grid to the background it was already at, so
+/// NO OCR page moves. Pinning `light` would invert every one of the OCR smokes at
+/// once, and their sparse-text segmentation is calibrated on a light-on-dark grid.
+/// Changing this is therefore a change to every OCR assertion in this file; do not
+/// adjust it to make one of them pass.
+fn write_smoke_config(dir: &Path, font_pt: &str, appearance: &str) {
     std::fs::create_dir_all(dir).unwrap_or_else(|e| {
         panic!(
             "failed to create the smoke config dir {}: {e}. Without it the app under cage resolves \
@@ -8569,7 +8621,7 @@ fn write_smoke_config(dir: &Path, font_pt: &str) {
     let path = dir.join(CONFIG_FILE_NAME);
     let yaml = format!(
         "config:\n  font-family: {SMOKE_FONT_FAMILY}\n  font-size: {font_pt}\n  \
-         line-height: {SMOKE_LINE_HEIGHT}\n"
+         line-height: {SMOKE_LINE_HEIGHT}\n  appearance: {appearance}\n"
     );
     std::fs::write(&path, yaml).unwrap_or_else(|e| {
         panic!(
@@ -8885,7 +8937,7 @@ const HOME_CONFIG_DIR_FALLBACK: &str = ".config/wolf";
 /// the "Note (OCR width)" / "Note (OCR height)" paragraphs above their own consts,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
-/// be applied here to all forty.
+/// be applied here to all forty-two.
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
@@ -9006,6 +9058,104 @@ fn cage_is_only_spawned_through_the_isolating_helper() {
          in a different typeface from the one `cell_metrics_for_smoke` measured. Route the new \
          smoke through `cage_command(scenario, &cwd)` and chain only its own `.env(...)` \
          additions on top; do not copy the helper's body."
+    );
+}
+
+/// [`SMOKE_APPEARANCE`] re-typed here as a LITERAL, per this file's
+/// re-declare-do-not-import discipline (the `config_seam` tests'
+/// `EXPECT_FALLBACK_FONT_PT` precedent).
+///
+/// Reading the const and comparing it to itself would hold for whatever value it
+/// took, including the one that inverts every OCR page in this file. Stating
+/// `dark` independently means a change to the shared pin fails HERE, loudly and in
+/// microseconds, rather than thirty-three OCR assertions later.
+const EXPECT_SMOKE_APPEARANCE: &str = "dark";
+
+/// Enforces mechanically that the SHARED seeded `wolf-config.yaml` — the one
+/// [`cage_command`] hands every smoke — pins `appearance` to `dark`.
+///
+/// ## The premise, and why it needs a guard rather than a comment
+///
+/// Every OCR smoke reads a light-on-dark grid, which is what
+/// `crates/wolf-gnome/tests/README.md` records as the premise for sparse-text
+/// segmentation. That grid is the captive Neovim's default colorscheme responding
+/// to `&background`, and the front-end pushes `&background` from the configured
+/// `appearance`. So the seeded value sits upstream of all thirty-three OCR
+/// assertions at once — and it is written in [`write_smoke_config`], thousands of
+/// lines from every assertion it can disarm. That distance is the same reason the
+/// three fixture-name guards exist.
+///
+/// ## The two ways the premise dies, and both are covered
+///
+/// **The key stops being emitted.** `appearance` is the one seeded field
+/// `wolf_core`'s `ConfigSection` does NOT require: it carries a
+/// `#[serde(default)]` of `auto`, so an omitted key is not a parse error and not a
+/// fallback to `default_config()` either. The file still loads, every font field
+/// still applies, and the appearance silently becomes `auto` — resolved against a
+/// settings portal that does not exist under `cage`. Nothing else in this file
+/// would notice.
+///
+/// **The value is re-pinned.** A containment check alone cannot see that, since
+/// `appearance: light` is just as present as `appearance: dark`. Hence the literal
+/// [`EXPECT_SMOKE_APPEARANCE`] rather than a comparison against the const itself.
+///
+/// ## Falsifiers
+///
+/// Delete the ` appearance: {appearance}\n` fragment from the `format!` in
+/// [`write_smoke_config`] — assertion 2 fires. Re-pin [`SMOKE_APPEARANCE`] to
+/// `"light"` — assertion 1 fires, ahead of the OCR smokes that would otherwise
+/// invert together with no single failure naming the cause.
+///
+/// ## What it needs
+///
+/// NO environment: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
+/// subprocess, and — unlike
+/// [`the_column_cap_cannot_bind_at_the_ocr_smokes_geometry`] — no pinned
+/// `FONTCONFIG_FILE`, because it measures no cell. It writes into a fresh temp
+/// directory through the same [`smoke_config_dir`] every smoke's `cage_command`
+/// call goes through, so what it reads back is the artifact itself rather than a
+/// re-derivation of it.
+#[test]
+fn the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes() {
+    const GUARD: &str = "the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes";
+
+    // --- Assertion 1: the VALUE, stated independently -------------------------
+    assert_eq!(
+        SMOKE_APPEARANCE, EXPECT_SMOKE_APPEARANCE,
+        "{GUARD}: SMOKE_APPEARANCE is {SMOKE_APPEARANCE:?}, but every OCR smoke in this file is \
+         calibrated on a light-on-dark grid and {EXPECT_SMOKE_APPEARANCE:?} is what produces one. \
+         It is also what Neovim already defaults to under `--embed`, which is why pinning it moves \
+         no page at all. Re-pinning to \"light\" inverts all thirty-three OCR pages simultaneously, \
+         and no single one of their failures would name this const as the cause — which is exactly \
+         why the expected value is re-typed here instead of read from the pin."
+    );
+
+    // --- Assertion 2: the seeded FILE really carries it -----------------------
+    //
+    // Through `smoke_config_dir`, the same call `cage_command` makes, so this
+    // reads the artifact every smoke's app reads rather than a restatement of it.
+    let cwd = make_temp_cwd();
+    let dir = smoke_config_dir(&cwd);
+    let path = dir.join(CONFIG_FILE_NAME);
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "{GUARD}: could not read the shared seeded config {} that `smoke_config_dir` just \
+             wrote: {e}. That helper is infallible by construction (it panics on a failed write), \
+             so an unreadable file here means the path it returned is not the path it wrote.",
+            path.display()
+        )
+    });
+    let key = format!("appearance: {EXPECT_SMOKE_APPEARANCE}");
+    assert!(
+        text.contains(&key),
+        "{GUARD}: the shared seeded config {} does not carry {key:?}. Its contents were:\n{text}\n\
+         `appearance` is the one seeded field `wolf_core`'s ConfigSection does NOT require — it \
+         has a `#[serde(default)]` of `auto` — so an omitted key does NOT fail the parse and does \
+         NOT fall back to `default_config()`. The file loads, every font field applies, and the \
+         appearance silently becomes `auto`, resolved against a settings portal that does not \
+         exist under `cage`. Every OCR smoke would then depend on the compositor's absent theme \
+         state. Restore the `appearance: {{appearance}}` line in `write_smoke_config`'s `format!`.",
+        path.display()
     );
 }
 
@@ -9865,7 +10015,7 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// [`SIDEBARTOGGLE_OCR_KEEP`] is an ordinary content term and follows the ordinary
 /// rule.
 ///
-/// Thirty-three of the forty smokes appear here. SEVEN contribute no rows at
+/// Thirty-three of the forty-two smokes appear here. NINE contribute no rows at
 /// all, on purpose, and it is worth being explicit about which and why:
 ///
 /// * [`colon_qa_closes_the_window_under_cage`] captures no PNG and asserts only that
@@ -9889,6 +10039,16 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 ///   asserts on the pane WIDTHS Neovim reports for its own windows, writes no
 ///   fixture file at all, and its retained screenshot is post-mortem evidence
 ///   rather than an observable.
+/// * [`configured_appearance_reaches_neovims_background_under_cage`] invokes `grim`
+///   nowhere: its two observables are the `&background` strings the captive Neovim
+///   writes about its own option, one per launch, so no fixture filename can help
+///   or hurt it. The same treatment the configured-font-size smoke gets, and for
+///   the same reason.
+/// * [`copy_and_paste_round_trip_through_the_clipboard_under_cage`] likewise
+///   captures nothing: its observable is the buffer readback the captive Neovim
+///   writes about its own lines, and the assertion is an exact OCCURRENCE COUNT of
+///   a marker that smoke seeds itself — which no sidebar row and no `:e` toast can
+///   move in either direction.
 ///
 /// The other two pointer smokes DO OCR and their terms are listed below. For
 /// [`click_then_close_keeps_keyboard_input_alive_under_cage`] the OCR pair is
@@ -10525,7 +10685,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the forty smokes — still
+/// nothing to the smoke suite's runtime and — unlike the forty-two smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
@@ -10820,7 +10980,7 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// the cursor landed on) are all properties of that body, so the block below pins
 /// the match's line index and its byte offset as well as the vocabulary. Both are
 /// checked here rather than from guards of their own so the guard count this file's
-/// docs pin stays at four.
+/// docs pin stays at six.
 ///
 /// ## Measured red run
 ///
@@ -16923,10 +17083,21 @@ fn config_font_size_changes_the_grid_under_cage() {
     let cwd = make_temp_cwd();
     write_relaunch_fixtures(SMOKE, &cwd, &[]);
 
-    let config_small =
-        smoke_config_dir_at(&cwd, CONFIG_GRID_SMALL_SUFFIX, CONFIG_GRID_SMALL_FONT_PT);
-    let config_large =
-        smoke_config_dir_at(&cwd, CONFIG_GRID_LARGE_SUFFIX, CONFIG_GRID_LARGE_FONT_PT);
+    // Both runs carry SMOKE_APPEARANCE: the font size is the ONE variable this
+    // smoke may have, and an unpinned appearance would let the two launches differ
+    // in a second one — see `write_smoke_config`.
+    let config_small = smoke_config_dir_at(
+        &cwd,
+        CONFIG_GRID_SMALL_SUFFIX,
+        CONFIG_GRID_SMALL_FONT_PT,
+        SMOKE_APPEARANCE,
+    );
+    let config_large = smoke_config_dir_at(
+        &cwd,
+        CONFIG_GRID_LARGE_SUFFIX,
+        CONFIG_GRID_LARGE_FONT_PT,
+        SMOKE_APPEARANCE,
+    );
     assert_ne!(
         config_small,
         config_large,
@@ -17016,6 +17187,403 @@ fn config_font_size_changes_the_grid_under_cage() {
          column count, so a difference this small says the size reaching the metrics is not the \
          one the config names — a clamped or partially-applied value rather than an ignored one. \
          Assertion 2 alone would accept it, which is exactly why this bound exists."
+    );
+}
+
+// --- The configured appearance reaches Neovim's `background` -----------------
+
+/// The `appearance` run 1's config directory carries.
+///
+/// Deliberately its OWN const rather than [`SMOKE_APPEARANCE`], even though the
+/// two spell the same word today. This smoke has to drive BOTH forced values
+/// whatever the rest of the file happens to be pinned to, so re-pinning the shared
+/// value must not quietly turn one of these two launches into a copy of the other.
+const APPEARANCE_FORCED_DARK: &str = "dark";
+
+/// The `appearance` run 2's config directory carries. See
+/// [`APPEARANCE_FORCED_DARK`].
+const APPEARANCE_FORCED_LIGHT: &str = "light";
+
+/// Name suffix of run 1's config directory sibling.
+const APPEARANCE_DARK_SUFFIX: &str = "-appearance-dark";
+
+/// Name suffix of run 2's config directory sibling.
+const APPEARANCE_LIGHT_SUFFIX: &str = "-appearance-light";
+
+/// File run 1's Neovim writes `&background` into.
+///
+/// Both readbacks live under `XDG_RUNTIME_DIR` rather than in the smoke's cwd, so
+/// the app's own `FileSearch` never lists them and neither name can reach the tree
+/// sidebar, the header bar or an `:e` echo. Nothing here is OCR'd in any case —
+/// the assertion reads the CONTENT of a file the captive Neovim wrote about its
+/// own option, and a file name is not on that path at all.
+const APPEARANCE_DARK_READBACK_NAME: &str = "wolf_gnome_appearance_background_1.txt";
+
+/// File run 2's Neovim writes `&background` into. See
+/// [`APPEARANCE_DARK_READBACK_NAME`].
+const APPEARANCE_LIGHT_READBACK_NAME: &str = "wolf_gnome_appearance_background_2.txt";
+
+/// The two-launch CONFIGURED-APPEARANCE scenario, run as one `sh -c` string inside
+/// ONE `cage`, structurally [`CONFIG_GRID_SCENARIO`]'s shape.
+///
+/// Each launch exports its own `WOLF_CONFIG_DIR`, deliberately overriding the one
+/// [`cage_command`] sets, and reads `&background` back out of the captive Neovim
+/// into its own file. `&background` and not a highlight-group colour: the option
+/// is the value the front-end pushes, it is a plain string Neovim will write out,
+/// and the colours it selects are the colorscheme's business rather than this
+/// crate's.
+///
+/// Exit codes are PER LAUNCH, [`CONFIG_GRID_SCENARIO`]'s scheme exactly: `11` run
+/// 1's app died before its window mapped; `12` run 1 was still alive after `:qa!`;
+/// `13` run 1 exited non-zero; `14` run 1's `&background` readback never appeared
+/// (or stayed empty); `15`–`18` the same four for run 2.
+///
+/// Eight codes and not five, because a code shared between the launches folds two
+/// causes into one: "an app died before its window mapped" is a different
+/// investigation depending on whether it was the launch reading a forced `dark` or
+/// the one reading a forced `light`, and the convention
+/// `crates/wolf-gnome/tests/README.md` states is about the CODE carrying the
+/// meaning rather than about the cause being recoverable by other means. `12` and
+/// `13` are separate for the reason that convention gives directly: a process that
+/// panicked in the GTK main loop and one that shut down cleanly are equally GONE,
+/// and only the status tells them apart.
+///
+/// Each of the three process-level codes additionally prints the run's LABEL on
+/// stderr, which costs nothing and makes a truncated log readable without the
+/// code table.
+const APPEARANCE_SCENARIO: &str = r#"
+set -eu
+
+# SETTLE is the ONLY real budget between spawning either run's app and its first
+# keystroke: `wait_window`'s wtype probe does NOT gate input readiness (it breaks
+# at tries=0 on every run -- see the module doc comment).
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+QUIT_TRIES=75
+FILE_TRIES=100
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+# $1 is the exit code to use if the app dies first, so run 1 and run 2 stay
+# distinguishable by the CODE alone; $2 is the run label, printed as well so a
+# truncated log needs no code table.
+wait_window() {
+    tries=0
+    while [ "$tries" -lt "$WAIT_TRIES" ]; do
+        if ! kill -0 "$app_pid" 2>/dev/null; then
+            echo "wolf-gnome appearance smoke: $2 app exited early (pid $app_pid)" >&2
+            exit "$1"
+        fi
+        if wtype "" >/dev/null 2>&1; then
+            return 0
+        fi
+        tries=$((tries + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    return 0
+}
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome appearance smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# $1 is the exit code for "still alive after :qa!", $2 for "exited non-zero", and
+# $3 is the run label; see wait_window.
+quit_app() {
+    wtype -- ":qa!"
+    wtype -k Return
+
+    tries=0
+    gone=0
+    while [ "$tries" -lt "$QUIT_TRIES" ]; do
+        if ! kill -0 "$app_pid" 2>/dev/null; then
+            gone=1
+            break
+        fi
+        tries=$((tries + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    if [ "$gone" -ne 1 ]; then
+        echo "wolf-gnome appearance smoke: $3 app (pid $app_pid) still alive after :qa!." >&2
+        exit "$1"
+    fi
+    # `set -e` would abort before the status could be reported, so collect it
+    # through `||`, which is exempt from it.
+    rc=0
+    wait "$app_pid" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "wolf-gnome appearance smoke: $3 app (pid $app_pid) exited $rc, not 0." >&2
+        exit "$2"
+    fi
+    app_pid=
+}
+
+# =========================================================================
+# RUN 1 -- appearance: dark.
+#
+# This export deliberately overrides the WOLF_CONFIG_DIR `cage_command` set: the
+# helper's directory pins the shared appearance, and this smoke is the one where
+# the CONFIGURED appearance has to be what decides.
+# =========================================================================
+WOLF_CONFIG_DIR="$CONFIG_DIR_DARK"
+export WOLF_CONFIG_DIR
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_window 11 "run 1 (appearance: dark)"
+sleep "$SETTLE"
+
+# `&background` is a global option, so no window or buffer has to be current for
+# this to be the value the front-end pushed.
+wtype -- ":call writefile([&background], '$BG_DARK')"
+wtype -k Return
+wait_file "$BG_DARK" || exit 14
+
+quit_app 12 13 "run 1 (appearance: dark)"
+
+# =========================================================================
+# RUN 2 -- appearance: light, same cwd, same window.
+# =========================================================================
+WOLF_CONFIG_DIR="$CONFIG_DIR_LIGHT"
+export WOLF_CONFIG_DIR
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_window 15 "run 2 (appearance: light)"
+sleep "$SETTLE"
+
+wtype -- ":call writefile([&background], '$BG_LIGHT')"
+wtype -k Return
+wait_file "$BG_LIGHT" || exit 18
+
+quit_app 16 17 "run 2 (appearance: light)"
+
+exit 0
+"#;
+
+/// The `appearance` in `wolf-config.yaml` reaches the captive Neovim's
+/// `background` option: `dark` gives `dark`, `light` gives `light`.
+///
+/// ## What it proves, and why the observable is an option rather than a pixel
+///
+/// Two launches inside ONE `cage` instance, two seeded `WOLF_CONFIG_DIR`s, no
+/// capture at all. Each launch asks its Neovim to write `&background` into its own
+/// file, and the assertions are two exact string equalities.
+///
+/// OCR reads no colour, so the appearance cannot be read off a screenshot at all —
+/// but the readback route is not a consolation prize here, it is stronger:
+/// `&background` is the exact value `WolfCore::set_background` pushes, written out
+/// by the process that received it. The push rides the ordered input channel and
+/// is enqueued at launch, before the window is built, so it is applied ahead of
+/// every keystroke the scenario later types; the settle is margin, not a race.
+///
+/// ## THE PAIR IS WHAT DISCRIMINATES, AND NEITHER HALF DOES IT ALONE
+///
+/// This is the whole design of the smoke, and it is why a future edit must not
+/// drop one launch as redundant:
+///
+/// - Assertion 1 (`dark`) is satisfied by a build that pushes NOTHING. `dark` is
+///   Neovim's own default under `--embed`, so a front-end that never called
+///   `set_background` produces exactly the value assertion 1 demands.
+/// - Assertion 2 (`light`) is satisfied by a build that ALWAYS pushes light —
+///   `appearance_decision` returning a constant, or `apply_at_launch` pushing a
+///   literal.
+///
+/// Together they exclude both, because no single constant satisfies the two.
+///
+/// The premise under assertion 1 is stated rather than assumed: nothing rests on
+/// Neovim's default really being `dark`, because that premise only makes assertion
+/// 1 WEAKER. If the default were `light`, assertion 1 would become discriminating
+/// too and this smoke would be strictly stronger than described.
+///
+/// ## The named falsifiers
+///
+/// | revert | what happens |
+/// | --- | --- |
+/// | delete the `core.set_background(decided.dark)` call in `appearance::apply_at_launch` | run 2 reads `dark` (Neovim's default) and assertion 2 fires; the fast suite stays GREEN, which is the diagnostic — the rule is right and nothing carries it out |
+/// | return `dark: true` for `Appearance::Light` in `appearance::appearance_decision` | run 2 reads `dark` as well, AND `appearance::tests::appearance_decision_table` goes red. A red smoke over a red fast suite is the rule itself being wrong; over a green one it is the applier |
+///
+/// ## What it does NOT prove
+///
+/// Three entries for `tests/README.md`'s "What is still unproven", named here so
+/// they are not lost.
+///
+/// **The `auto` arm.** Under `cage` there is no settings portal and no xsettings
+/// bridge, so `adw::StyleManager::is_dark()` is constant for a whole run and no
+/// smoke can vary it. `auto` is table-tested in `appearance::appearance_decision`
+/// and reached by nothing here.
+///
+/// **The live OS-toggle re-push.** `connect_dark_notify` fires only on a real
+/// change of libadwaita's `dark` property, which nothing under `cage` can produce.
+/// That `observe_os` is decided correctly is table-tested; that the handler is
+/// ever INVOKED is unobserved on this platform.
+///
+/// **That any colour reaches a pixel.** OCR reads no colour — the same shape as
+/// the status bar's active treatment and the popup's reverse video. This smoke
+/// says nothing about the GTK chrome's colour scheme, which
+/// `appearance_decision` pins as a value and `apply_at_launch` demonstrably passes
+/// to `set_color_scheme`, and nothing about the grid's colours, which are the
+/// captive Neovim's colorscheme responding to the option this smoke reads.
+///
+/// ## The conventions it obeys
+///
+/// A fresh temp working directory ([`make_temp_cwd`], mandatory — the captive
+/// Neovim's swap directory is keyed on it); [`CAGE_LOCK`] for the whole body; one
+/// `sh -c` string through [`cage_command`], the single environment helper and the
+/// only place the compositor is spawned; and eight exit codes naming eight causes,
+/// four per launch, so no code covers both — see [`APPEARANCE_SCENARIO`] for why
+/// the per-launch split is not merely tidiness.
+/// It asserts no OCR term and captures no PNG, so it contributes no row to any
+/// fixture-name guard — the treatment the divider-relayout, column-cap and
+/// clipboard smokes already get.
+#[test]
+fn configured_appearance_reaches_neovims_background_under_cage() {
+    const SMOKE: &str = "configured_appearance_reaches_neovims_background_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd shared by both launches. The filler files are the usual
+    // sidebar population; nothing here is OCR'd, so no fixture carries a term.
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(SMOKE, &cwd, &[]);
+
+    // Both launches run at SMOKE_FONT_PT: the appearance is the ONE variable this
+    // smoke may have.
+    let config_dark = smoke_config_dir_at(
+        &cwd,
+        APPEARANCE_DARK_SUFFIX,
+        SMOKE_FONT_PT,
+        APPEARANCE_FORCED_DARK,
+    );
+    let config_light = smoke_config_dir_at(
+        &cwd,
+        APPEARANCE_LIGHT_SUFFIX,
+        SMOKE_FONT_PT,
+        APPEARANCE_FORCED_LIGHT,
+    );
+    assert_ne!(
+        config_dark,
+        config_light,
+        "{SMOKE}: both runs were pointed at the SAME config directory {}, so they would read the \
+         same appearance and one of the two assertions below could never hold. The two suffixes \
+         ({APPEARANCE_DARK_SUFFIX:?} and {APPEARANCE_LIGHT_SUFFIX:?}) must differ.",
+        config_dark.display()
+    );
+
+    // --- Precondition: each seeded file really carries its own appearance -----
+    //
+    // `appearance` is the one seeded key `wolf_core`'s ConfigSection does NOT
+    // require — it has a `#[serde(default)]` of `auto` — so a `write_smoke_config`
+    // that stopped emitting it would leave BOTH launches in `auto`, reading the
+    // same value from the same absent settings portal. That failure is a harness
+    // failure and would otherwise surface as assertion 2, i.e. as a claim about the
+    // front-end. Separated here so the two cannot be confused.
+    for (label, dir, want) in [
+        ("run 1", &config_dark, APPEARANCE_FORCED_DARK),
+        ("run 2", &config_light, APPEARANCE_FORCED_LIGHT),
+    ] {
+        let path = dir.join(CONFIG_FILE_NAME);
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "{SMOKE}: could not read the {label} config file {} that `smoke_config_dir_at` \
+                 just seeded: {e}",
+                path.display()
+            )
+        });
+        let key = format!("appearance: {want}");
+        assert!(
+            text.contains(&key),
+            "{SMOKE}: the {label} config file {} does not carry {key:?}. Its contents were:\n\
+             {text}\nWithout the key `wolf_core::config` defaults the field to `auto`, so this \
+             launch would resolve its appearance from a settings portal that does not exist under \
+             `cage` — and BOTH launches would then report the same value, failing an assertion \
+             below for a reason that has nothing to do with the front-end honouring the setting.",
+            path.display()
+        );
+    }
+
+    let bg_dark = runtime_dir.join(APPEARANCE_DARK_READBACK_NAME);
+    let bg_light = runtime_dir.join(APPEARANCE_LIGHT_READBACK_NAME);
+    for path in [&bg_dark, &bg_light] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let mut cmd = cage_command(APPEARANCE_SCENARIO, &cwd);
+    cmd.env("WOLF_BIN", bin)
+        .env("CONFIG_DIR_DARK", &config_dark)
+        .env("CONFIG_DIR_LIGHT", &config_light)
+        .env("BG_DARK", &bg_dark)
+        .env("BG_LIGHT", &bg_light);
+
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless configured-appearance scenario");
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage configured-appearance scenario exited unsuccessfully ({status}). Every \
+         code names ONE cause in ONE launch. Exit 11: run 1's app (`appearance: \
+         {APPEARANCE_FORCED_DARK}`) died before its window mapped — a panic while resolving the \
+         appearance is the first thing to look at, since `appearance::apply_at_launch` runs before \
+         any widget is built and takes the whole launch with it. Exit 12: run 1 was still alive \
+         after `:qa!`. Exit 13: run 1 exited NON-ZERO — it went away, but not cleanly, and that is \
+         a separate code from 12 because a panic in the GTK main loop makes a process vanish \
+         exactly as a clean shutdown does. Exit 14: run 1's `&background` readback never appeared \
+         at {}. Exit 15/16/17/18: the same four for run 2 (`appearance: \
+         {APPEARANCE_FORCED_LIGHT}`), whose readback is at {}. A run-2 code with run 1's readback \
+         already written means the front-end handled the forced-dark launch and fell over on the \
+         forced-light one, which is a much narrower finding than the code alone suggests.",
+        bg_dark.display(),
+        bg_light.display()
+    );
+
+    // --- The two assertions. NEITHER discriminates alone; see the doc comment --
+    let got_dark = read_trimmed(&bg_dark, SMOKE);
+    let got_light = read_trimmed(&bg_light, SMOKE);
+
+    assert_eq!(
+        got_dark, APPEARANCE_FORCED_DARK,
+        "{SMOKE}: run 1 was launched with `appearance: {APPEARANCE_FORCED_DARK}` and its Neovim \
+         reported `&background` = {got_dark:?}. This half of the pair is the WEAK one on purpose — \
+         `{APPEARANCE_FORCED_DARK}` is what Neovim defaults to under `--embed`, so a build that \
+         pushes nothing at all still satisfies it. A FAILURE here therefore means something \
+         stronger than a missing push: the front-end pushed the OPPOSITE of what was configured, \
+         or the readback ran in a Neovim that never received the launch push at all. Run 2's \
+         assertion is the one that detects a missing push."
+    );
+    assert_eq!(
+        got_light, APPEARANCE_FORCED_LIGHT,
+        "{SMOKE}: run 2 was launched with `appearance: {APPEARANCE_FORCED_LIGHT}` and its Neovim \
+         reported `&background` = {got_light:?}. THIS is the discriminating half. Reading \
+         {APPEARANCE_FORCED_DARK:?} means the configured appearance never reached Neovim: either \
+         `appearance::apply_at_launch` does not call `core.set_background(decided.dark)`, or \
+         `appearance::appearance_decision` resolves `Appearance::Light` to `dark: true`. Those two \
+         are told apart by the fast suite — `appearance::tests::appearance_decision_table` is RED \
+         for the second and GREEN for the first. Anything that is neither {APPEARANCE_FORCED_DARK:?} \
+         nor {APPEARANCE_FORCED_LIGHT:?} means the Ex command did not execute as typed; check for a \
+         stray keystroke landing in the buffer instead of the cmdline."
     );
 }
 
@@ -17354,6 +17922,373 @@ fn column_cap_and_full_width_toggle_change_the_grid_under_cage() {
          never fires and nothing else would tell Neovim; or (4) `editor_inset::column_cap` ignores \
          its flag and answers the default cap either way. A count LOWER than the capped one would \
          mean the toggle is wired backwards."
+    );
+}
+
+// --- Copy and paste through the system clipboard -----------------------------
+
+/// The word the captive Neovim puts on line 1, copies to the system clipboard, and
+/// pastes back.
+///
+/// It is deliberately NOT a fixture filename and NOT an OCR term: nothing in this
+/// smoke is captured or OCR'd, so it contributes no row to [`ASSERTED_OCR_TERMS`]
+/// and no fixture may be named after it either — no file called `zzclipmark.md` is
+/// written anywhere. What the assertion counts is occurrences inside a file the
+/// captive Neovim wrote OUT OF ITS OWN BUFFER, so a sidebar row, a header-bar
+/// title or an `:e` toast cannot contribute to the count even in principle.
+///
+/// All-caps and `ZZ`-prefixed for the same reason the other in-buffer markers are
+/// ([`NEWBUF_MARKER`], [`FOCUS_MARKER`]): it cannot collide with a word Neovim, the
+/// chrome or a fixture would produce on its own, so a count of two can only mean
+/// the text made the round trip.
+const CLIP_MARK: &str = "ZZCLIPMARK";
+
+/// File the captive Neovim writes EVERY LINE of its buffer into, after the paste.
+///
+/// It lives under `XDG_RUNTIME_DIR` rather than in the smoke's cwd, so the app's own
+/// `FileSearch` never lists it and it never becomes a tree-sidebar row — the same
+/// treatment [`FULLWIDTH_CAPPED_READBACK_NAME`] gets, and belt-and-braces here for
+/// the same reason: nothing on this page is read by OCR.
+const CLIP_READBACK_NAME: &str = "wolf_gnome_clipboard_lines.txt";
+
+/// How many times [`CLIP_MARK`] must appear in the readback: ONCE for the line the
+/// scenario seeded, ONCE for the copy that came back through the clipboard.
+///
+/// Written as a named constant rather than a literal `2` so the assertion's message
+/// and the number it checks cannot drift apart.
+///
+/// The count is a SUBSTRING count, which is only meaningful because the scenario
+/// lands the paste on an empty line; see [`CLIPBOARD_SCENARIO`]'s seeding comment
+/// for why a paste onto the marker's own line would splice the two into a single
+/// occurrence and make a working build indistinguishable from a broken one.
+const CLIP_EXPECTED_OCCURRENCES: usize = 2;
+
+/// The single-launch CLIPBOARD ROUND-TRIP scenario, run as one `sh -c` string inside
+/// one `cage`, structurally [`FULLWIDTH_SCENARIO`]'s shape.
+///
+/// Both buffer accesses go through `nvim_buf_set_lines` / `nvim_buf_get_lines`
+/// rather than `setline` / `getline(1, '$')`: the scenario is a double-quoted shell
+/// string, and a `'$'` inside one sits one edit away from being read as a parameter
+/// expansion. Each API line carries exactly one `$`, which is the readback path, so
+/// there is nothing to get wrong.
+///
+/// Exit codes, each naming ONE cause and no two folded together: `11` the app died
+/// before its window mapped; `12` the buffer readback never appeared (or was empty);
+/// `13` the app was still alive after `:qa!`; `14` the app exited non-zero. 13 and 14
+/// are separate because a process that panicked in the GTK main loop and one that
+/// shut down cleanly are equally GONE — only the status tells them apart.
+const CLIPBOARD_SCENARIO: &str = r#"
+set -eu
+
+# SETTLE is the ONLY real budget between spawning the app and its first keystroke:
+# `wait_window`'s wtype probe does NOT gate input readiness (it breaks at tries=0 on
+# every run -- see the module doc comment).
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+# TWICE the settle, and the doubling is deliberate. Every other pause in this
+# scenario follows a key Neovim answers by itself. The paste follows a round trip
+# with six hops, each a separate main-loop turn and NONE of them pollable from out
+# here: the chord -> gdk::Clipboard::read_text_async -> the async callback landing on
+# a later turn of the GTK main context -> WolfCore::paste's send on the ordered input
+# channel -> the input pump's nvim_paste(text, true, -1) -> Neovim's flush. The read
+# is asynchronous and the insert is fire-and-forget, so nothing on that path
+# reports completion and there is no file to wait on until the buffer already holds
+# the text.
+PASTE_SETTLE=2.0
+QUIT_TRIES=75
+FILE_TRIES=100
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+wait_window() {
+    tries=0
+    while [ "$tries" -lt "$WAIT_TRIES" ]; do
+        if ! kill -0 "$app_pid" 2>/dev/null; then
+            echo "wolf-gnome clipboard smoke: app process exited early (pid $app_pid)" >&2
+            exit 11
+        fi
+        if wtype "" >/dev/null 2>&1; then
+            return 0
+        fi
+        tries=$((tries + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    return 0
+}
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome clipboard smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# $1 is the exit code for "still alive after :qa!", $2 for "exited non-zero".
+quit_app() {
+    wtype -- ":qa!"
+    wtype -k Return
+
+    tries=0
+    gone=0
+    while [ "$tries" -lt "$QUIT_TRIES" ]; do
+        if ! kill -0 "$app_pid" 2>/dev/null; then
+            gone=1
+            break
+        fi
+        tries=$((tries + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    if [ "$gone" -ne 1 ]; then
+        echo "wolf-gnome clipboard smoke: app (pid $app_pid) still alive after :qa!." >&2
+        exit "$1"
+    fi
+    # `set -e` would abort before the status could be reported, so collect it
+    # through `||`, which is exempt from it.
+    rc=0
+    wait "$app_pid" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "wolf-gnome clipboard smoke: app (pid $app_pid) exited $rc, not 0." >&2
+        exit "$2"
+    fi
+    app_pid=
+}
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_window
+sleep "$SETTLE"
+
+# Seed the whole buffer: the marker on line 1, then TWO EMPTY LINES. Set through the
+# API rather than typed in insert mode, so the marker cannot be corrupted by a dropped
+# or doubled keystroke -- either the whole Ex command executed or none of it did, and
+# the "none of it did" case is the ZERO-occurrence arm of the Rust assertion.
+#
+# THE EMPTY LINES ARE LOAD-BEARING, and they are the one thing here that is easy to
+# "simplify" away. `nvim_paste` splits the linewise register "ZZCLIPMARK\n" into
+# ["ZZCLIPMARK", ""] and, in normal mode, `vim.paste` performs a CHARWISE
+# `nvim_put(..., 'c', true, false)` -- an insert AFTER the cursor character, not a
+# linewise put. Pasted onto the marker's own line that splices the two into
+# "ZZZCLIPMARK" plus "ZCLIPMARK", in which the marker occurs exactly ONCE: a fully
+# working build would then fail with the same count a broken one produces. Landing the
+# paste on an EMPTY line is what makes the two occurrences separate strings, whatever
+# `nvim_put` does with the boundary.
+wtype -- ":call nvim_buf_set_lines(0, 0, -1, v:false, ['$CLIP_MARK', '', ''])"
+wtype -k Return
+sleep "$SETTLE"
+
+# Park on line 1 and select it LINEWISE. `V` and not `v`: core's yank accepts v, V
+# and <C-v> alike, and a linewise selection needs no motion to cover the whole word.
+wtype -- "gg"
+wtype -- "V"
+sleep "$SETTLE"
+
+# The COPY chord. Wolf matches it in a CAPTURE-phase EventControllerKey
+# (actions::action_for_key), so Neovim is sent no key at all and the visual selection
+# is STILL LIVE when copy_visual_selection's nvim_feedkeys('y','nx',false) consumes
+# it. That is what makes the feature work rather than a happy accident.
+wtype -M ctrl -M shift -k c -m shift -m ctrl
+sleep "$SETTLE"
+
+# Park at the last line -- one of the two EMPTY ones seeded above -- before pasting.
+# See the seeding comment: this is what stops the pasted text splicing into the
+# marker's own line and being counted as a single occurrence.
+wtype -- "G"
+sleep "$SETTLE"
+
+# The PASTE chord. Same capture-phase route; see PASTE_SETTLE above for why the
+# settle after it is doubled.
+wtype -M ctrl -M shift -k v -m shift -m ctrl
+sleep "$PASTE_SETTLE"
+
+# READBACK -- every line of the buffer, as Neovim itself sees it.
+wtype -- ":call writefile(nvim_buf_get_lines(0, 0, -1, v:false), '$CLIP_READBACK')"
+wtype -k Return
+wait_file "$CLIP_READBACK" || exit 12
+
+quit_app 13 14
+
+exit 0
+"#;
+
+/// Copy and Paste carry text through the SYSTEM CLIPBOARD and back into the buffer:
+/// Ctrl+Shift+C on a linewise visual selection, then Ctrl+Shift+V, and the marker is
+/// in the buffer TWICE.
+///
+/// ## What it proves, and why the observable is a file rather than a pixel
+///
+/// One launch, no capture, one readback. The scenario seeds the buffer with
+/// [`CLIP_MARK`] on line 1 and two empty lines under it, selects line 1 with `V`,
+/// presses the copy chord, moves to the last (empty) line, presses the paste chord,
+/// and asks Neovim to write EVERY LINE of its own buffer out. The assertion is that
+/// [`CLIP_MARK`] appears exactly [`CLIP_EXPECTED_OCCURRENCES`] times.
+///
+/// The empty landing line is not padding — [`CLIPBOARD_SCENARIO`] carries the
+/// derivation. `nvim_paste` performs a CHARWISE put in normal mode, so a paste onto
+/// the marker's own line splices the two into one occurrence and a working build
+/// fails with a broken build's count.
+///
+/// That is an integer-shaped assertion on a file the captive Neovim wrote ABOUT ITS
+/// OWN BUFFER, which is why this smoke needs no row in any fixture-name guard: no
+/// sidebar row, no header-bar title and no `:e` toast can contribute to a count taken
+/// inside the buffer, so the vacuity that
+/// [`restore_fixture_names_cannot_satisfy_their_own_assertions`] exists to prevent is
+/// structurally unreachable here. It also captures no PNG, so it contributes no row
+/// to [`ASSERTED_OCR_TERMS`] either — the same treatment the divider-relayout and
+/// column-cap smokes get, and for the same reason.
+///
+/// ## The four falsifiers, and how their DIAGNOSTICS differ
+///
+/// All four produce ONE occurrence, so the panic text alone separates none of them.
+/// What separates them is everything around it. MEASURED — all four reverts were
+/// run, and the columns below are what each one actually produced:
+///
+/// | revert | smoke | fast suite | app stderr |
+/// | --- | --- | --- | --- |
+/// | **A** delete `clipboard.set_text(text)` in `shell::copy_selection` | red | green | `wolf-gnome: clipboard read failed: No compatible transfer format found` |
+/// | **B** delete `core.paste(..)` in the async read callback | red | green | nothing extra |
+/// | **C** restore `Command::Copy => UiAction::Deferred(..)` | red | **red** at `command_action::ui_action_table` and `dispatched_commands_are_the_expected_set` | the same `clipboard read failed:` line |
+/// | **D** set `win.copy`'s `status` back to `Reserved` | red | **red** at `actions::action_for_key_table`, `bound_set_is_exactly_this_unit` and `menu_never_lists_a_reserved_action` | the same `clipboard read failed:` line |
+///
+/// Read them in two steps. **The stderr line says which HALF broke.** It appears
+/// whenever the copy half wrote nothing at all — A, C and D — because an empty
+/// clipboard makes `read_text_async` resolve `Err`, not `Ok(None)`, and
+/// `shell::paste_clipboard` prints it rather than swallowing it. Its ABSENCE is
+/// therefore B's signature, and B alone: the text reached the clipboard and the
+/// paste side dropped it. That the diagnostic exists at all is the "never swallow
+/// the `Err`" rule paying for itself.
+///
+/// **Then the fast suite says which of A, C and D.** A leaves it green; C and D
+/// redden it, at different tests, because each is a revert of a rule the fast suite
+/// pins directly. C and D produce identical stderr, so the reddened test names are
+/// the whole of what tells them apart.
+///
+/// One natural guess is wrong and is worth stating, because it would send a reader
+/// looking for a line that never comes: **C prints no `command Copy not dispatched:`
+/// line.** That line is emitted by `dispatch_command` alone, which is the drain and
+/// palette path. A chord takes `install_chord_controller` → `action_is_enabled`,
+/// which answers false for an action `install_actions` skipped, and returns
+/// `Propagation::Proceed` — forwarding the key and printing nothing.
+///
+/// C and D do both end with the chord reaching Neovim as `<C-c>`, which is the
+/// accelerator invariant holding rather than failing: a broken build here is one
+/// where Ctrl+Shift+C interrupts rather than copies, never one where a Neovim key
+/// became unreachable.
+///
+/// ## The conventions it obeys, including the one that does not bite
+///
+/// A fresh temp working directory ([`make_temp_cwd`], mandatory — the captive
+/// Neovim's swap directory is keyed on it); [`CAGE_LOCK`] for the whole body; one
+/// `sh -c` string through [`cage_command`], which is the single environment helper
+/// and the only place the compositor is spawned; and four exit codes that name four
+/// causes with no two folded together.
+///
+/// The "press no key after one that produced a message" rule does not bite here,
+/// and the reason is worth stating rather than leaving as an omission: that rule
+/// protects an OCR assertion on a toast, and this smoke reads no pixels at all. The
+/// keys after the paste chord are one Ex command whose only product is the readback
+/// file.
+///
+/// ## What it does NOT prove
+///
+/// **That the clipboard reaches another Wayland client.** `gdk::Clipboard` can serve
+/// a `read_text_async` out of its own local content provider when the same client
+/// owns the selection, so this round trip may never leave the process. `wl-copy` /
+/// `wl-paste` are deliberately not in [`REQUIRED_TOOLS`] and would not settle it
+/// either: wlroots delivers a selection offer to the KEYBOARD-FOCUSED client, and a
+/// second client started under `cage` alongside the app has no focus. Proving the
+/// compositor half needs a focus dance no smoke here performs.
+///
+/// **That the refusal arms are ever taken.** No smoke can arrange a dead, wedged or
+/// absent core behind a chord press; `clipboard_ui`'s own tables cover the whole
+/// domain headlessly, the same shape as `nav_ui`'s and the buffer picker's refusals.
+#[test]
+fn copy_and_paste_round_trip_through_the_clipboard_under_cage() {
+    const SMOKE: &str = "copy_and_paste_round_trip_through_the_clipboard_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd, mandatory: the captive Neovim's swap directory is keyed on it
+    // and outlives the process, so a fixed cwd would let one run's leftover swap file
+    // raise a blocking prompt that eats the next run's first keystroke.
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(SMOKE, &cwd, &[]);
+
+    let readback = runtime_dir.join(CLIP_READBACK_NAME);
+    clear_evidence(&readback, SMOKE);
+
+    let mut cmd = cage_command(CLIPBOARD_SCENARIO, &cwd);
+    cmd.env("WOLF_BIN", bin)
+        .env("CLIP_MARK", CLIP_MARK)
+        .env("CLIP_READBACK", &readback);
+
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless clipboard scenario");
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage clipboard scenario exited unsuccessfully ({status}). Exit 11: the app \
+         died before its window mapped, so no chord was ever pressed and nothing below is about \
+         the clipboard. Exit 12: the buffer readback never appeared at {}, so the app never got as \
+         far as executing the final `:call writefile(...)` — a panic on the paste path (the async \
+         clipboard callback runs on the GTK main thread and takes the core borrow) is the first \
+         thing to look at. Exit 13: still alive after `:qa!`. Exit 14: it went away, but not \
+         cleanly — a panic in the GTK main loop makes a process vanish exactly as a clean shutdown \
+         does, which is why these last two are separate codes.",
+        readback.display()
+    );
+
+    // --- The assertion: the marker made the round trip ------------------------
+    //
+    // Counted inside a file Neovim wrote out of its own buffer, so the count is a
+    // property of the document and of nothing else on screen.
+    let lines = read_readback(&readback, SMOKE);
+    let occurrences = lines.matches(CLIP_MARK).count();
+    assert_eq!(
+        occurrences, CLIP_EXPECTED_OCCURRENCES,
+        "{SMOKE}: {CLIP_MARK:?} appears {occurrences} time(s) in the buffer readback, want exactly \
+         {CLIP_EXPECTED_OCCURRENCES} — once for the line the scenario seeded and once for the copy \
+         that came back through the system clipboard.\n\
+         ZERO occurrences is a HARNESS failure, not a feature one: the seeding \
+         `:call nvim_buf_set_lines(...)` never executed, so nothing was ever selected and nothing \
+         could have been copied. Check that keys are reaching Neovim at all (the keyboard-only \
+         smokes first), not the clipboard code.\n\
+         ONE occurrence is the FEATURE failure, and it has four candidate causes this message \
+         cannot name on its own. The doc comment's MEASURED table separates them in two steps. \
+         FIRST, look on the app's stderr for `wolf-gnome: clipboard read failed:`. It appears \
+         whenever the COPY half wrote nothing — an empty clipboard makes `read_text_async` resolve \
+         Err, not Ok(None) — so its ABSENCE means the copy worked and the paste side dropped it: \
+         `core.paste(..)` is missing from the async read callback in `shell.rs`. SECOND, if the \
+         line IS there, read the fast suite: GREEN means `clipboard.set_text(text)` is missing \
+         from `shell::copy_selection`; RED at `command_action::ui_action_table` means Copy was \
+         demoted to Deferred; RED at `actions::action_for_key_table` means `win.copy` was demoted \
+         to Reserved. Do NOT go looking for a `command Copy not dispatched:` line — a chord never \
+         takes the `dispatch_command` path that prints it, so it does not appear under any of the \
+         four.\n\
+         MORE than {CLIP_EXPECTED_OCCURRENCES} means the paste was delivered more than once — a \
+         chord handled in both the capture and the bubble phase, or an `InputEvent::Paste` queued \
+         per callback invocation.\n\
+         Readback file kept at {}. Its contents were:\n{lines}",
+        readback.display()
     );
 }
 
@@ -17773,7 +18708,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// | the active-pane FOCUS RING's top edge — a long thin high-contrast line immediately above the heading | six ablations on one PNG; the top edge alone accounted for it | [`DIVIDER_RELAUNCH_SCENARIO`]'s closing `<C-w>h`, which moves the ring to the WIDE pane |
 /// | a single misclassified GLYPH at 15 columns | the same pixels read through both segmentation modes, twice over | the second reader, [`ocr_uniform_block_to_lowercase`] |
 ///
-/// The third is why this smoke, alone of the forty, reads its capture twice.
+/// The third is why this smoke, alone of the forty-two, reads its capture twice.
 /// With the first two answered, on one retained PNG:
 ///
 /// | command | verbatim output |

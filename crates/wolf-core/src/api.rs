@@ -493,8 +493,8 @@ impl WolfCore {
     /// [`InputEvent::SetBackground`]).
     ///
     /// `dark: true` selects `background=dark`, `false` selects `background=light`.
-    /// The macOS front-end calls this with the resolved appearance at launch and,
-    /// in `auto` mode, live when the OS toggles. Enqueued on the ordered input
+    /// Both front-ends call this with the resolved appearance at launch and, in
+    /// `auto` mode, live when the OS toggles. Enqueued on the ordered input
     /// channel, so it applies in FIFO order relative to pending keystrokes.
     pub fn set_background(&self, dark: bool) {
         self.send_input(InputEvent::SetBackground { dark });
