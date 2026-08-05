@@ -11,7 +11,7 @@
 //!
 //! ## What this file contains
 //!
-//! **Thirty-seven cage smokes** — one window-render smoke, two file-picker smokes,
+//! **Forty cage smokes** — one window-render smoke, two file-picker smokes,
 //! one file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
 //! new-untitled-buffer smoke, one command-palette smoke, one OPEN RECENT smoke
 //! (Ctrl+Shift+P, a typed folder query, then Enter — the activated row re-roots the
@@ -77,7 +77,7 @@
 //! and no `:e` toast can satisfy, and OCR is structurally incapable of answering
 //! "did the cursor land at exactly row 12, column 25".
 //!
-//! Thirty of the thirty-seven OCR a screenshot of the live window. The `:qa`
+//! Thirty-three of the forty OCR a screenshot of the live window. The `:qa`
 //! smoke, the configured-font-size smoke and the column-cap smoke deliberately
 //! capture no image and assert on the cage exit status plus, for the latter two,
 //! two integer readbacks each (the
@@ -148,7 +148,7 @@
 //! a run outside the devShell fails it for that reason rather than for the reason
 //! its message names.
 //!
-//! So this target's summary line reads **`42 passed`**, not `37`: thirty-seven cage
+//! So this target's summary line reads **`45 passed`**, not `40`: forty cage
 //! smokes plus those five guards.
 //!
 //! ## A vacuously-passing check recorded here: the `wtype ""` window-map poll
@@ -191,7 +191,7 @@
 //!
 //! ## When it runs
 //!
-//! The thirty-seven cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The forty cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The Linux verification gate").
@@ -201,13 +201,13 @@
 //! suite command does not run is a silently-skipped test.
 //!
 //! They are, however, the slowest part of the suite: each drives a real
-//! compositor, and all thirty-seven serialize behind `CAGE_LOCK` (see below).
+//! compositor, and all forty serialize behind `CAGE_LOCK` (see below).
 //!
 //! ```text
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the thirty-seven cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the forty cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` and
 //!   `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
@@ -224,7 +224,7 @@
 //!   empty result list.
 //! - `XDG_RUNTIME_DIR` set and writable (the Wayland socket lives there).
 //!
-//! Per project policy every one of the thirty-seven FAILS LOUD if any of the above is
+//! Per project policy every one of the forty FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -251,7 +251,7 @@ use wolf_gnome::{CellMetrics, WINDOW_TITLE_FALLBACK};
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the thirty-seven cage smoke tests. Each launches its own
+/// Serializes the forty cage smoke tests. Each launches its own
 /// `cage` compositor, and two compositors started concurrently contend for the
 /// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
 /// Under the default multi-threaded test harness these tests would otherwise run
@@ -8885,7 +8885,7 @@ const HOME_CONFIG_DIR_FALLBACK: &str = ".config/wolf";
 /// the "Note (OCR width)" / "Note (OCR height)" paragraphs above their own consts,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
-/// be applied here to all thirty-seven.
+/// be applied here to all forty.
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
@@ -9865,7 +9865,7 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// [`SIDEBARTOGGLE_OCR_KEEP`] is an ordinary content term and follows the ordinary
 /// rule.
 ///
-/// Thirty of the thirty-seven smokes appear here. SEVEN contribute no rows at
+/// Thirty-three of the forty smokes appear here. SEVEN contribute no rows at
 /// all, on purpose, and it is worth being explicit about which and why:
 ///
 /// * [`colon_qa_closes_the_window_under_cage`] captures no PNG and asserts only that
@@ -10525,7 +10525,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the thirty-seven smokes — still
+/// nothing to the smoke suite's runtime and — unlike the forty smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
@@ -17773,7 +17773,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// | the active-pane FOCUS RING's top edge — a long thin high-contrast line immediately above the heading | six ablations on one PNG; the top edge alone accounted for it | [`DIVIDER_RELAUNCH_SCENARIO`]'s closing `<C-w>h`, which moves the ring to the WIDE pane |
 /// | a single misclassified GLYPH at 15 columns | the same pixels read through both segmentation modes, twice over | the second reader, [`ocr_uniform_block_to_lowercase`] |
 ///
-/// The third is why this smoke, alone of the thirty-seven, reads its capture twice.
+/// The third is why this smoke, alone of the forty, reads its capture twice.
 /// With the first two answered, on one retained PNG:
 ///
 /// | command | verbatim output |

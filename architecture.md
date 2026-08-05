@@ -74,7 +74,9 @@ Core attaches with `ext_linegrid`, `ext_multigrid`, `ext_popupmenu`, `ext_messag
 
 `ext_multigrid` moves window content onto per-window grids (id 2 and up), which is what lets a shell own a native split-pane layout instead of receiving Neovim's own splits drawn into a single grid.
 
-How the three surfaces are presented is a front-end decision, per decision 2: each paints them from the snapshot fields with whatever native widget suits it. The captive `init.lua` sets `wildoptions+=pum`, so cmdline completion arrives as a vertical popup rather than the horizontal wildmenu.
+How the three surfaces are presented is a front-end decision, per decision 2: each paints them from the snapshot fields with whatever native widget suits it, and both front-ends realize all three. The captive `init.lua` sets `wildoptions+=pum`, so cmdline completion arrives as a vertical popup rather than the horizontal wildmenu.
+
+Two contract details bind any presentation. A `confirm()` dialog splits across two of the three fields — its question is a `confirm`-kind message in `toast` and its options line is `cmdline.prompt` — so a front-end that shows only one of them leaves the dialog unanswerable. And core, not the front-end, decides when a prompt toast goes: `redraw::cmdline_hide` stashes a confirm toast's messages and hides it, restoring them only for a matching re-prompt, because a resolve and an invalid keypress produce byte-identical hides.
 
 ### 8. The captive Neovim is hermetic, pinned, and Markdown-only
 
@@ -230,7 +232,6 @@ The `.app` bundles its own pinned Neovim, the captive `init.lua`, the vendored p
 
 ## Deferred and open
 
-- The GTK native completion popup and multi-line scrollable toast. Both exist on macOS.
 - Whether a shared portable renderer, rather than a native paint backend per platform, ever earns its keep. See decision 2.
 - **Marker granularity below the block.** A source line longer than `MARKER_COLUMN_STRIDE` is anchored inside its block, at the marker's true position in the rendered inline flow. A paragraph hard-wrapped into several shorter source lines is not: all of its `wl-{L}-0` markers resolve to the block's opening tag. Injection is suppressed entirely in a fenced code block, an HTML block and a table, which anchor to their opening tag, and in an image's alt text, which anchors just after the image. Generalizing is rejected rather than pending — an anchor between `<tbody>` and `<tr>` is foster-parented out of the table by the HTML parser, and one between `<ul>` and `<li>` is invalid.
 - **Preview scroll-sync is macOS-only.** The GTK shell has no Markdown preview pane, and the browser preview reloads on a poll with no cursor coupling.
