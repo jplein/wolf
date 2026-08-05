@@ -66,7 +66,8 @@ pub const PUM_MAX_ROWS: usize = 10;
 /// stretch the popup past the window edge.
 pub const PUM_MAX_COLS: usize = 60;
 
-/// The column a byte offset into the command line lands on.
+/// The column a byte offset into the command line lands on, counting from the
+/// strip's left edge.
 ///
 /// `Cmdline::pos` and a cmdline-anchored `Pum::col` are both BYTE offsets into
 /// `Cmdline::text()`, while the strip is painted in whole cells from its left edge
@@ -74,17 +75,21 @@ pub const PUM_MAX_COLS: usize = 60;
 /// function because the caret and the popup anchor must not drift apart: a second
 /// copy is exactly how a popup ends up one column from the caret it belongs to.
 ///
+/// `prefix` is everything drawn ahead of the content — the `prompt` a `confirm()` or
+/// `input()` dialog supplies, followed by `firstc`. Both are drawn, so both are paid
+/// for here.
+///
 /// An offset inside a multi-byte character is snapped DOWN to a character boundary,
 /// and one past the end is clamped, so no input panics the paint path. Column
 /// counting is by character, which makes it approximate for a double-width glyph —
 /// the same approximation the grid paint makes.
 #[must_use]
-pub fn cmdline_columns(firstc: &str, text: &str, byte: usize) -> usize {
+pub fn cmdline_columns(prefix: &str, text: &str, byte: usize) -> usize {
     let mut b = byte.min(text.len());
     while b > 0 && !text.is_char_boundary(b) {
         b -= 1;
     }
-    firstc.chars().count() + text[..b].chars().count()
+    prefix.chars().count() + text[..b].chars().count()
 }
 
 /// How many toast lines fit in `available_px` of space above the strip.

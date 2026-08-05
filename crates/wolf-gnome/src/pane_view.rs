@@ -152,10 +152,11 @@ use adw::prelude::*;
 use gtk::glib;
 
 use wolf_core::{
-    CursorShape, LayoutIntent, MouseAction, MouseEvent, PaneNode, PaneStatus, ScrollEvent,
-    Snapshot, SplitOrientation, WolfCore,
+    CursorShape, LayoutIntent, MouseAction, MouseEvent, PaneNode, PaneStatus, Rgb, ScrollEvent,
+    Snapshot, SplitOrientation, ToastChunk, WolfCore,
 };
 
+use crate::cmdline_ui::{self, ToastView};
 use crate::editor_inset::{self, ColumnCap, GridRect, EDITOR_PADDING_PX};
 use crate::geometry;
 use crate::layout::{Orientation, PaneId, PaneLayout, PaneTree};
@@ -182,6 +183,13 @@ const CMDLINE_STRIP_ROWS: f64 = 1.0;
 
 /// Width of the command-line caret, in pixels.
 const CMDLINE_CARET_WIDTH: f64 = 2.0;
+
+/// Width of the edge drawn around the toast and the completion popup, in pixels.
+const SURFACE_EDGE_PX: f64 = 1.0;
+
+/// How far the surfaces' edge is blended from the editor background towards its
+/// foreground. Low enough to read as a separator rather than as content.
+const SURFACE_EDGE_ALPHA: f64 = 0.35;
 
 /// CSS class applied to the active pane's `DrawingArea` to draw a focus ring.
 const ACTIVE_PANE_CSS: &str = "wolf-active-pane";
@@ -326,6 +334,28 @@ struct PaneInner {
     pane_area: gtk::Box,
     /// The one-row cmdline strip painting grid 1's last row.
     cmdline_area: gtk::DrawingArea,
+    /// The message toast, an overlay surface sitting directly above the strip.
+    ///
+    /// An overlay child rather than a taller strip: the strip's height is
+    /// subtracted from the pane area, so a strip that grew with its content would
+    /// issue a `resize_grid` on every message and reflow the buffer under the
+    /// reader. It takes pointer input, which is what consumes a scroll gesture
+    /// landing on it instead of forwarding it into Neovim.
+    toast_area: gtk::DrawingArea,
+    /// The completion popup, an overlay surface anchored to a cell.
+    ///
+    /// `can_target(false)`: it accepts no input at all, for the reason
+    /// [`crate::scrollbar`] gives — an indicator that never claimed to take any
+    /// beats a control that visibly refuses it.
+    pum_area: gtk::DrawingArea,
+    /// How many lines back from the newest the toast is scrolled.
+    toast_scroll: Cell<usize>,
+    /// The toast's line count on the previous wake, for
+    /// [`cmdline_ui::carried_scroll`].
+    toast_lines: Cell<usize>,
+    /// Whether the previous wake's toast was an unanswered `confirm` prompt, for
+    /// [`cmdline_ui::prompt_answered`].
+    toast_was_prompt: Cell<bool>,
     /// Shared cell metrics (measured once in `app.rs`).
     metrics: Rc<CellMetrics>,
     /// The per-pane statusbar strip's vertical layout, in device pixels.
@@ -379,6 +409,10 @@ impl PaneInner {
         // "read core state, then decide, then paint" is the order already here.
         self.sync_pane_grids();
         self.update_active_pane();
+        // AFTER `sync_pane_grids`, because a grid-anchored popup reads the pane
+        // rectangle that call may have just re-requested, and BEFORE `queue_redraw`,
+        // because it decides whether either surface is on screen at all.
+        self.refresh_message_surfaces();
         self.queue_redraw();
     }
 
@@ -834,6 +868,8 @@ impl PaneInner {
             }
         }
         self.cmdline_area.queue_draw();
+        self.toast_area.queue_draw();
+        self.pum_area.queue_draw();
     }
 
     /// Allocates the next pane id.
@@ -1551,15 +1587,24 @@ impl PaneInner {
         }
     }
 
-    /// Paints the native command-line / message strip (OD4 minimal-but-correct).
+    /// Paints the native command-line strip.
     ///
     /// Under `ext_messages` (which implicitly enables `ext_cmdline` and sets
     /// `cmdheight=0`) the outer grid 1 empties, so this paints from the folded
-    /// [`Snapshot::cmdline`] / [`Snapshot::toast`] rather than grid 1's last row:
-    /// when a command line is active, `firstc` + the flattened cmdline text with a
-    /// caret at the byte position `pos`; otherwise the LAST toast line (so the
-    /// emptied strip never shows blank). The Adw completion popup + the multi-line
-    /// scrollable toast are deferred (OD4).
+    /// [`Snapshot::cmdline`] rather than grid 1's last row: the dialog `prompt`,
+    /// then `firstc`, then the flattened cmdline text, with a caret at the byte
+    /// position `pos`.
+    ///
+    /// **The `prompt` is drawn, and that is what makes a `confirm()` dialog
+    /// answerable.** A confirm's question is a `confirm`-kind message and its options
+    /// line arrives as the cmdline's `prompt`; dropping the prompt leaves the user
+    /// pressing keys at a strip that shows nothing.
+    ///
+    /// Messages are NOT drawn here. They are their own surface ([`draw_toast`]), so a
+    /// prompt's question and its options line are on screen at the same time rather
+    /// than taking turns in one row.
+    ///
+    /// [`draw_toast`]: PaneInner::draw_toast
     fn draw_cmdline(&self, cr: &cairo::Context, width: f64) {
         let core_ref = self.core.borrow();
         let Some(core) = core_ref.as_ref() else {
@@ -1582,38 +1627,302 @@ impl PaneInner {
         cr.rectangle(0.0, 0.0, width, metrics.cell_h);
         cr.fill().expect("cairo cmdline background fill failed");
 
-        if snap.cmdline.active {
-            // `firstc` + the flattened command-line text on the strip's single row.
-            let text = snap.cmdline.text();
-            let line = format!("{}{}", snap.cmdline.firstc, text);
-            if !line.is_empty() {
-                draw_glyph(cr, metrics, 0.0, 0.0, &line, fg, &style);
+        if !snap.cmdline.active {
+            return;
+        }
+        let prefix = format!("{}{}", snap.cmdline.prompt, snap.cmdline.firstc);
+        let text = snap.cmdline.text();
+        let line = format!("{prefix}{text}");
+        if !line.is_empty() {
+            draw_glyph(cr, metrics, 0.0, 0.0, &line, fg, &style);
+        }
+        let caret_cols = cmdline_ui::cmdline_columns(&prefix, &text, snap.cmdline.pos);
+        let caret_x = caret_cols as f64 * metrics.cell_w;
+        cr.set_source_rgb(
+            f64::from(fg.r) / RGB_MAX,
+            f64::from(fg.g) / RGB_MAX,
+            f64::from(fg.b) / RGB_MAX,
+        );
+        cr.rectangle(caret_x, 0.0, CMDLINE_CARET_WIDTH, metrics.cell_h);
+        cr.fill().expect("cairo cmdline caret fill failed");
+    }
+
+    /// The line count, budget and view the toast surface would draw this frame.
+    ///
+    /// One function so [`refresh_message_surfaces`] and [`draw_toast`] cannot
+    /// disagree about which lines are on screen: the first sizes the widget and the
+    /// second fills it, and a second copy of the arithmetic is how a surface ends up
+    /// one line taller than its content.
+    ///
+    /// [`refresh_message_surfaces`]: PaneInner::refresh_message_surfaces
+    /// [`draw_toast`]: PaneInner::draw_toast
+    fn toast_layout(&self, snap: &Snapshot) -> (Vec<Vec<ToastChunk>>, ToastView) {
+        let lines = snap.toast.lines();
+        let available = f64::from(self.pane_area.height().max(0));
+        let budget = cmdline_ui::toast_budget_rows(available, self.metrics.cell_h);
+        let view = cmdline_ui::toast_view(lines.len(), budget, self.toast_scroll.get());
+        (lines, view)
+    }
+
+    /// Sizes, positions and shows or hides the two overlay surfaces for this frame.
+    ///
+    /// Both are sized to their own content rather than filling the overlay, which is
+    /// what keeps the toast's pointer target confined to the box it draws — an
+    /// overlay child spanning the window would swallow every click meant for the
+    /// buffer underneath it.
+    fn refresh_message_surfaces(&self) {
+        let core_ref = self.core.borrow();
+        let Some(core) = core_ref.as_ref() else {
+            return;
+        };
+        let snap = core.read_snapshot();
+
+        // An answered prompt takes its scroll offset with it: core hides the toast
+        // the instant the dialog resolves and restores it only for a matching
+        // re-prompt, so whatever arrives next is a different message and must not
+        // open part-scrolled. Nothing here dismisses a prompt on its own.
+        if cmdline_ui::prompt_answered(self.toast_was_prompt.get(), snap.toast.visible) {
+            self.toast_scroll.set(0);
+            self.toast_lines.set(0);
+        }
+        self.toast_was_prompt
+            .set(snap.toast.visible && snap.toast.is_prompt());
+
+        let lines = snap.toast.lines();
+        let available = f64::from(self.pane_area.height().max(0));
+        let budget = cmdline_ui::toast_budget_rows(available, self.metrics.cell_h);
+        let scroll = cmdline_ui::carried_scroll(
+            self.toast_lines.get(),
+            lines.len(),
+            budget,
+            self.toast_scroll.get(),
+        );
+        self.toast_scroll.set(scroll);
+        self.toast_lines.set(lines.len());
+
+        let (lines, view) = self.toast_layout(&snap);
+        self.place_toast(snap.toast.visible, &lines, view);
+        self.place_pum(&snap);
+    }
+
+    /// Sizes and places the toast surface, or hides it.
+    fn place_toast(&self, visible: bool, lines: &[Vec<ToastChunk>], view: ToastView) {
+        if !cmdline_ui::toast_is_shown(visible, lines.len()) {
+            self.toast_area.set_visible(false);
+            return;
+        }
+        let metrics = &self.metrics;
+        let cols = lines
+            .iter()
+            .skip(view.first)
+            .take(view.len)
+            .map(|l| l.iter().map(|c| c.text.chars().count()).sum::<usize>())
+            .max()
+            .unwrap_or(0);
+        let container_w = f64::from(self.container.width().max(0));
+        let w = (cols as f64).mul_add(metrics.cell_w, 2.0 * cmdline_ui::SURFACE_PADDING_PX);
+        let w = if container_w > 0.0 {
+            w.min(container_w)
+        } else {
+            w
+        };
+        let h = (view.len as f64).mul_add(metrics.cell_h, 2.0 * cmdline_ui::SURFACE_PADDING_PX);
+        self.toast_area.set_content_width(px(w));
+        self.toast_area.set_content_height(px(h));
+        self.toast_area
+            .set_margin_bottom(strip_height(metrics.cell_h));
+        self.toast_area.set_visible(true);
+    }
+
+    /// Sizes and anchors the completion popup, or hides it.
+    ///
+    /// Two anchors, both reusing arithmetic that already exists.
+    /// `Pum::grid == -1` anchors to the command line, whose `col` is a BYTE offset
+    /// into the cmdline text — [`cmdline_ui::cmdline_columns`] converts it, the same
+    /// call the caret makes. Any other grid anchors to that pane's cell, which is
+    /// [`editor_inset::grid_rect`]'s rectangle (the centring offset, in the one place
+    /// it lives) offset by the pane's own position inside the container.
+    fn place_pum(&self, snap: &Snapshot) {
+        if !snap.pum.visible || snap.pum.items.is_empty() {
+            self.pum_area.set_visible(false);
+            return;
+        }
+        let metrics = &self.metrics;
+        let selected = cmdline_ui::pum_selection(snap.pum.items.len(), snap.pum.selected);
+        let available = f64::from(self.pane_area.height().max(0));
+        let budget = cmdline_ui::toast_budget_rows(available, metrics.cell_h)
+            .min(cmdline_ui::PUM_MAX_ROWS);
+        let view = cmdline_ui::pum_view(snap.pum.items.len(), selected, budget);
+        let cols = cmdline_ui::pum_width_cols(&snap.pum.items, view);
+        let w = (cols as f64).mul_add(metrics.cell_w, 2.0 * cmdline_ui::SURFACE_PADDING_PX);
+        let h = (view.len as f64).mul_add(metrics.cell_h, 2.0 * cmdline_ui::SURFACE_PADDING_PX);
+
+        let container_w = f64::from(self.container.width().max(0));
+        let anchor = self.pum_anchor(snap, metrics);
+        let x = match container_w {
+            cw if cw > 0.0 => anchor.0.clamp(0.0, (cw - w).max(0.0)),
+            _ => anchor.0.max(0.0),
+        };
+
+        self.pum_area.set_content_width(px(w));
+        self.pum_area.set_content_height(px(h));
+        self.pum_area.set_margin_start(px(x));
+        match anchor.1 {
+            // Anchored to the command line: the popup sits directly above the strip.
+            None => {
+                self.pum_area.set_valign(gtk::Align::End);
+                self.pum_area.set_margin_top(0);
+                self.pum_area
+                    .set_margin_bottom(strip_height(metrics.cell_h));
             }
-            // Caret at the byte offset `pos` (snapped to a char boundary), placed
-            // after the `firstc` prefix. Column-approximate (single-width cells).
-            let mut byte = snap.cmdline.pos.min(text.len());
-            while byte > 0 && !text.is_char_boundary(byte) {
-                byte -= 1;
-            }
-            let caret_cols = snap.cmdline.firstc.chars().count() + text[..byte].chars().count();
-            let caret_x = caret_cols as f64 * metrics.cell_w;
-            cr.set_source_rgb(
-                f64::from(fg.r) / RGB_MAX,
-                f64::from(fg.g) / RGB_MAX,
-                f64::from(fg.b) / RGB_MAX,
-            );
-            cr.rectangle(caret_x, 0.0, CMDLINE_CARET_WIDTH, metrics.cell_h);
-            cr.fill().expect("cairo cmdline caret fill failed");
-        } else if snap.toast.visible {
-            // Inactive: paint the LAST toast line so the strip is not blank (the
-            // multi-line scrollable toast is deferred — OD4).
-            if let Some(last_line) = snap.toast.lines().last() {
-                let text: String = last_line.iter().map(|c| c.text.as_str()).collect();
-                if !text.is_empty() {
-                    draw_glyph(cr, metrics, 0.0, 0.0, &text, fg, &style);
-                }
+            // Anchored to a grid cell: `row` is the first row BELOW the completed
+            // word, so the popup's top edge is that row's top edge.
+            Some(y) => {
+                self.pum_area.set_valign(gtk::Align::Start);
+                self.pum_area.set_margin_bottom(0);
+                self.pum_area.set_margin_top(px(y.max(0.0)));
             }
         }
+        self.pum_area.set_visible(true);
+    }
+
+    /// The popup's container-local `(x, Some(y))`, or `(x, None)` when it is anchored
+    /// to the command line and belongs directly above the strip.
+    fn pum_anchor(&self, snap: &Snapshot, metrics: &CellMetrics) -> (f64, Option<f64>) {
+        if snap.pum.grid < 0 {
+            let prefix = format!("{}{}", snap.cmdline.prompt, snap.cmdline.firstc);
+            let byte = usize::try_from(snap.pum.col).unwrap_or(0);
+            let cols = cmdline_ui::cmdline_columns(&prefix, &snap.cmdline.text(), byte);
+            return (cols as f64 * metrics.cell_w, None);
+        }
+        let grid = u64::try_from(snap.pum.grid).unwrap_or(0);
+        let panes = self.panes.borrow();
+        let Some(pane) = panes.values().find(|p| p.grid.get() == Some(grid)) else {
+            return (0.0, None);
+        };
+        let Some(bounds) = pane.area.compute_bounds(&self.container) else {
+            return (0.0, None);
+        };
+        let rect = self.pane_grid_rect(&pane.area, self.pane_cap(pane.full_width.get()));
+        let col = snap.pum.col.max(0) as f64;
+        let row = snap.pum.row.max(0) as f64;
+        (
+            f64::from(bounds.x()) + rect.x + col * metrics.cell_w,
+            Some(f64::from(bounds.y()) + rect.y + row * metrics.cell_h),
+        )
+    }
+
+    /// Paints the message toast: an opaque band in the editor's own background with a
+    /// low-contrast edge, carrying the visible slice of the message lines with each
+    /// chunk in its own highlight.
+    fn draw_toast(&self, cr: &cairo::Context, width: f64, height: f64) {
+        let core_ref = self.core.borrow();
+        let Some(core) = core_ref.as_ref() else {
+            return;
+        };
+        let snap = core.read_snapshot();
+        let metrics = &self.metrics;
+        let base = snap.highlights.resolve(0);
+        let fg = base.fg.unwrap_or(FALLBACK_FG);
+        let bg = base.bg.unwrap_or(FALLBACK_BG);
+        fill_surface(cr, width, height, fg, bg);
+
+        let (lines, view) = self.toast_layout(&snap);
+        let pad = cmdline_ui::SURFACE_PADDING_PX;
+        for (i, line) in lines.iter().skip(view.first).take(view.len).enumerate() {
+            let y = (i as f64).mul_add(metrics.cell_h, pad);
+            let mut x = pad;
+            for chunk in line {
+                let style = snap.highlights.resolve(chunk.attr_id);
+                let chunk_fg = style.fg.unwrap_or(fg);
+                if !chunk.text.is_empty() {
+                    draw_glyph(cr, metrics, x, y, &chunk.text, chunk_fg, &style);
+                }
+                x += chunk.text.chars().count() as f64 * metrics.cell_w;
+            }
+        }
+    }
+
+    /// Paints the completion popup: one row per visible item, the selected row drawn
+    /// in reverse video so the selection reads without a theme accent colour this
+    /// front-end has no way to obtain.
+    fn draw_pum(&self, cr: &cairo::Context, width: f64, height: f64) {
+        let core_ref = self.core.borrow();
+        let Some(core) = core_ref.as_ref() else {
+            return;
+        };
+        let snap = core.read_snapshot();
+        let metrics = &self.metrics;
+        let base = snap.highlights.resolve(0);
+        let fg = base.fg.unwrap_or(FALLBACK_FG);
+        let bg = base.bg.unwrap_or(FALLBACK_BG);
+        fill_surface(cr, width, height, fg, bg);
+
+        let selected = cmdline_ui::pum_selection(snap.pum.items.len(), snap.pum.selected);
+        let available = f64::from(self.pane_area.height().max(0));
+        let budget = cmdline_ui::toast_budget_rows(available, metrics.cell_h)
+            .min(cmdline_ui::PUM_MAX_ROWS);
+        let view = cmdline_ui::pum_view(snap.pum.items.len(), selected, budget);
+        let cols = cmdline_ui::pum_width_cols(&snap.pum.items, view);
+        let pad = cmdline_ui::SURFACE_PADDING_PX;
+
+        for (i, item) in snap
+            .pum
+            .items
+            .iter()
+            .skip(view.first)
+            .take(view.len)
+            .enumerate()
+        {
+            let y = (i as f64).mul_add(metrics.cell_h, pad);
+            let is_selected = selected == Some(view.first + i);
+            let text_fg = if is_selected {
+                if width > 0.0 {
+                    cr.set_source_rgb(
+                        f64::from(fg.r) / RGB_MAX,
+                        f64::from(fg.g) / RGB_MAX,
+                        f64::from(fg.b) / RGB_MAX,
+                    );
+                    cr.rectangle(pad, y, width - 2.0 * pad, metrics.cell_h);
+                    cr.fill().expect("cairo pum selection fill failed");
+                }
+                bg
+            } else {
+                fg
+            };
+            let label: String = cmdline_ui::pum_item_label(item).chars().take(cols).collect();
+            if !label.is_empty() {
+                draw_glyph(cr, metrics, pad, y, &label, text_fg, &base);
+            }
+        }
+    }
+
+    /// Applies a scroll gesture on the toast, moving its window back through the
+    /// older lines. Returns whether anything moved.
+    ///
+    /// The gesture is CONSUMED by the caller either way, which is the front-end half
+    /// of core's toast-dismissal rule: `InputEvent::is_toast_dismissing` counts a
+    /// scroll as dismissing, so a scroll forwarded from over the toast would clear
+    /// the message the user was scrolling.
+    fn scroll_toast(&self, dy: f64) -> bool {
+        if !dy.is_finite() || dy == 0.0 {
+            return false;
+        }
+        let lines = self.toast_lines.get();
+        let available = f64::from(self.pane_area.height().max(0));
+        let budget = cmdline_ui::toast_budget_rows(available, self.metrics.cell_h);
+        // A negative `dy` is GDK's "scroll up", which reveals OLDER lines, so it
+        // increases the offset. The inverse of the grid's sign convention, because
+        // the offset counts backwards from the newest line.
+        let step = if dy < 0.0 { 1 } else { -1 };
+        let requested = i64::try_from(self.toast_scroll.get()).unwrap_or(i64::MAX) + step;
+        let next = cmdline_ui::toast_scroll_clamp(lines, budget, requested);
+        if next == self.toast_scroll.get() {
+            return false;
+        }
+        self.toast_scroll.set(next);
+        self.toast_area.queue_draw();
+        true
     }
 
     /// Rebuilds `pane_area`'s child widget tree from the current [`PaneTree`],
@@ -1729,6 +2038,22 @@ impl PaneHandle {
         self.inner.cmdline_area.clone()
     }
 
+    /// The message toast surface, for placement in the app's editor overlay.
+    ///
+    /// An overlay child rather than a taller strip, because the strip's height is
+    /// subtracted from the pane area: a strip that grew with its content would issue
+    /// a `resize_grid` on every message.
+    #[must_use]
+    pub fn toast_widget(&self) -> gtk::DrawingArea {
+        self.inner.toast_area.clone()
+    }
+
+    /// The completion popup surface, for placement in the app's editor overlay.
+    #[must_use]
+    pub fn pum_widget(&self) -> gtk::DrawingArea {
+        self.inner.pum_area.clone()
+    }
+
     /// Reacts to a render wake (see [`PaneInner::on_render_wake`]).
     pub fn on_render_wake(&self) {
         self.inner.on_render_wake();
@@ -1821,6 +2146,22 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
         .build();
     cmdline_area.set_content_height(strip_height(metrics.cell_h));
 
+    // Both surfaces are sized to their own content on each wake and start hidden, so
+    // neither covers the buffer or intercepts a pointer event while there is nothing
+    // to show. `halign`/`valign` keep them at their measured size inside the overlay;
+    // filling it would make the toast's pointer target the whole window.
+    let toast_area = gtk::DrawingArea::builder()
+        .halign(gtk::Align::Start)
+        .valign(gtk::Align::End)
+        .visible(false)
+        .build();
+    let pum_area = gtk::DrawingArea::builder()
+        .halign(gtk::Align::Start)
+        .valign(gtk::Align::End)
+        .visible(false)
+        .can_target(false)
+        .build();
+
     let pane_area = gtk::Box::new(gtk::Orientation::Vertical, 0);
     pane_area.set_hexpand(true);
     pane_area.set_vexpand(true);
@@ -1849,6 +2190,11 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
         container,
         pane_area,
         cmdline_area: cmdline_area.clone(),
+        toast_area: toast_area.clone(),
+        pum_area: pum_area.clone(),
+        toast_scroll: Cell::new(0),
+        toast_lines: Cell::new(0),
+        toast_was_prompt: Cell::new(false),
         statusbar,
         statusbar_primary: strip_font(&metrics.font, primary_px, false),
         statusbar_primary_bold: strip_font(&metrics.font, primary_px, true),
@@ -1866,6 +2212,37 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
                 inner.draw_cmdline(cr, f64::from(w));
             }
         });
+    }
+    {
+        let weak = Rc::downgrade(&inner);
+        toast_area.set_draw_func(move |_area, cr, w, h| {
+            if let Some(inner) = weak.upgrade() {
+                inner.draw_toast(cr, f64::from(w), f64::from(h));
+            }
+        });
+    }
+    {
+        let weak = Rc::downgrade(&inner);
+        pum_area.set_draw_func(move |_area, cr, w, h| {
+            if let Some(inner) = weak.upgrade() {
+                inner.draw_pum(cr, f64::from(w), f64::from(h));
+            }
+        });
+    }
+    {
+        // The toast's own scroll controller. It always stops propagation, whether or
+        // not the offset moved: the point is that a gesture landing on the toast
+        // never reaches a pane's controller and so never reaches core, where
+        // `InputEvent::is_toast_dismissing` would clear the message being read.
+        let weak = Rc::downgrade(&inner);
+        let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+        scroll.connect_scroll(move |_c, _dx, dy| {
+            if let Some(inner) = weak.upgrade() {
+                inner.scroll_toast(dy);
+            }
+            glib::Propagation::Stop
+        });
+        toast_area.add_controller(scroll);
     }
 
     PaneHandle { inner }
@@ -2185,6 +2562,51 @@ fn cell_floor(cell_px: f64) -> i32 {
     {
         v as i32
     }
+}
+
+/// Rounds a device-pixel extent up to the `i32` GTK sizing calls take.
+fn px(v: f64) -> i32 {
+    let v = if v.is_finite() { v } else { 0.0 };
+    let v = v.ceil().clamp(0.0, f64::from(i32::MAX));
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "v is clamped to [0, i32::MAX] and ceil'd, so the cast is exact and in range"
+    )]
+    {
+        v as i32
+    }
+}
+
+/// Fills an overlay surface: the editor's own background, then a one-pixel edge.
+///
+/// The background is a per-frame snapshot value, which is the reason both surfaces
+/// are painted rather than being widgets — a theme-owned widget background cannot be
+/// the colour Neovim just reported. The edge is a blend rather than a second theme
+/// colour, so a surface stays legible against a buffer of the same background
+/// without introducing a colour from outside the snapshot.
+fn fill_surface(cr: &cairo::Context, width: f64, height: f64, fg: Rgb, bg: Rgb) {
+    cr.set_source_rgb(
+        f64::from(bg.r) / RGB_MAX,
+        f64::from(bg.g) / RGB_MAX,
+        f64::from(bg.b) / RGB_MAX,
+    );
+    cr.rectangle(0.0, 0.0, width, height);
+    cr.fill().expect("cairo surface background fill failed");
+
+    let edge = statusbar_layout::blend(fg, bg, SURFACE_EDGE_ALPHA);
+    cr.set_source_rgb(
+        f64::from(edge.r) / RGB_MAX,
+        f64::from(edge.g) / RGB_MAX,
+        f64::from(edge.b) / RGB_MAX,
+    );
+    cr.set_line_width(SURFACE_EDGE_PX);
+    cr.rectangle(
+        SURFACE_EDGE_PX / 2.0,
+        SURFACE_EDGE_PX / 2.0,
+        (width - SURFACE_EDGE_PX).max(0.0),
+        (height - SURFACE_EDGE_PX).max(0.0),
+    );
+    cr.stroke().expect("cairo surface edge stroke failed");
 }
 
 /// Computes the cmdline strip's pixel height from the cell height.

@@ -359,8 +359,15 @@ fn build_ui(app: &adw::Application) {
     // The editor area is the overlay's main child. Overlay children stack in the
     // order they are added, and this order is a decision:
     //
-    //   empty_state -> picker -> command palette -> buffer picker -> project search
-    //   -> crash overlay -> restart banner
+    //   empty_state -> message toast -> completion popup -> picker -> command palette
+    //   -> buffer picker -> project search -> crash overlay -> restart banner
+    //
+    // The toast and the popup sit just above the empty state and below all four
+    // transient overlays. Above the empty state because the captive nvim runs in a
+    // project-less window too, so its messages must be readable there; below the
+    // overlays because a picker the user just opened must not have a message drawn
+    // over its rows. They are sized to their own content and hidden when there is
+    // nothing to show, so neither takes layout space or a pointer event at rest.
     //
     // All four transient overlays sit ABOVE the empty state, which is opaque and
     // full-bleed: below it, opening any one of them in a project-less window would
@@ -378,6 +385,8 @@ fn build_ui(app: &adw::Application) {
 
     let empty_state = shell::build_empty_state();
     overlay.add_overlay(&empty_state);
+    overlay.add_overlay(&panes.toast_widget());
+    overlay.add_overlay(&panes.pum_widget());
 
     let crash = crash_overlay::build();
 

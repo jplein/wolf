@@ -10185,6 +10185,36 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         "STATUS_OCR_MARKER",
         "pane_status_bar_shows_each_panes_filename_under_cage",
     ),
+    (
+        PUM_OCR_ITEM,
+        "PUM_OCR_ITEM",
+        "completion_popup_lists_matches_under_cage",
+    ),
+    (
+        PUM_OCR_ITEM2,
+        "PUM_OCR_ITEM2",
+        "completion_popup_lists_matches_under_cage",
+    ),
+    (
+        MSG_OCR_FIRST,
+        "MSG_OCR_FIRST",
+        "multi_line_message_shows_more_than_its_last_line_under_cage",
+    ),
+    (
+        MSG_OCR_SECOND,
+        "MSG_OCR_SECOND",
+        "multi_line_message_shows_more_than_its_last_line_under_cage",
+    ),
+    (
+        CONFIRM_OCR_QUESTION,
+        "CONFIRM_OCR_QUESTION",
+        "confirm_prompt_shows_then_clears_once_answered_under_cage",
+    ),
+    (
+        CONFIRM_OCR_OPTIONS,
+        "CONFIRM_OCR_OPTIONS",
+        "confirm_prompt_shows_then_clears_once_answered_under_cage",
+    ),
 ];
 
 /// Every fixture NAME a smoke creates inside its OWN working directory, as
@@ -19715,6 +19745,391 @@ fn pane_status_bar_shows_each_panes_filename_under_cage() {
         out_png.display()
     );
 }
+
+
+// ---------------------------------------------------------------------------
+// Command line, messages and completion: the completion popup, the multi-line
+// message toast, and a `confirm()` dialog shown then dismissed once answered.
+//
+// All three drive surfaces that did not exist while the GTK deferral stood: the
+// strip drew one row, either an active command line or a message's LAST line, and
+// never both. Each smoke's terms are chosen to be absent from every other surface
+// on the page, so nothing but the feature can satisfy them.
+// ---------------------------------------------------------------------------
+
+/// The COMPLETION-POPUP scenario: launch, settle, type `:se` and press Tab, then
+/// capture without pressing anything else.
+///
+/// The trailing `Tab` is what opens the popup — `wildoptions+=pum` in the captive
+/// `init.lua` is what makes it a vertical popup rather than the horizontal wildmenu —
+/// and NOTHING may be typed afterwards, because the next key closes it.
+const PUM_SCENARIO: &str = r#"
+set -eu
+
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+
+"$WOLF_BIN" &
+app_pid=$!
+
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome pum smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+sleep "$SETTLE"
+
+# Park the block cursor on its own row so it cannot corrupt a glyph the OCR reads.
+wtype -k o
+wtype -k Escape
+sleep "$SETTLE"
+
+# A partial Ex command, then the completion key. `:se` has four matches, so
+# wildmenu shows the menu rather than completing outright.
+wtype -- ":se"
+sleep "$SETTLE"
+wtype -k Tab
+
+# Let the popupmenu_show land and the overlay draw. NO further keys: the next one
+# closes the popup.
+sleep "$SETTLE"
+
+grim "$OUT_PNG"
+
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+/// Lowercased substring OCR must find in the completion-popup capture: a `:se`
+/// completion item that exists ONLY inside the popup.
+///
+/// Not `set`, which the popup's own selected row also completes INTO the command
+/// line — asserting on it would be satisfied by the strip alone, with no popup drawn.
+/// `setglobal` is long, unambiguous to OCR, and cannot appear anywhere else on the
+/// page: no fixture, no path component and no menu label contains it.
+const PUM_OCR_ITEM: &str = "setglobal";
+
+/// A SECOND completion item, asserted alongside [`PUM_OCR_ITEM`].
+///
+/// One item could in principle be the longest-common-prefix completion Neovim writes
+/// into the command line; two items on screen at once can only be a list.
+const PUM_OCR_ITEM2: &str = "setfiletype";
+
+/// The MULTI-LINE MESSAGE scenario: launch, settle, `:echo` a two-line string,
+/// then capture without pressing anything else.
+///
+/// The trailing keystroke rule is load-bearing here for a second reason: any key is
+/// dismissing input for a non-prompt toast (`wolf_core::InputEvent::is_toast_dismissing`),
+/// so one stray key after the Return clears the message this smoke exists to read.
+const MSG_SCENARIO: &str = r#"
+set -eu
+
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+
+"$WOLF_BIN" &
+app_pid=$!
+
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome message smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+sleep "$SETTLE"
+
+wtype -k o
+wtype -k Escape
+sleep "$SETTLE"
+
+# One `msg_show` carrying TWO lines: core splits the content on "\n", so the toast
+# holds two lines rather than two messages.
+wtype -- ":echo \"$MSG_FIRST\n$MSG_SECOND\""
+wtype -k Return
+
+sleep "$SETTLE"
+
+grim "$OUT_PNG"
+
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+/// The FIRST line of the two-line `:echo`, and the one that discriminates.
+///
+/// It is the line a single-row strip cannot show: with only the last line drawn this
+/// term is absent and [`MSG_OCR_SECOND`] is present, which is exactly the shape of
+/// the behaviour that stood while the deferral did.
+const MSG_OCR_FIRST: &str = "victorlima";
+
+/// The SECOND (last) line of the two-line `:echo`.
+///
+/// Asserted as a control rather than as the feature: it is present both before and
+/// after this unit, so on its own it proves only that the message arrived at all.
+const MSG_OCR_SECOND: &str = "oscarhotel";
+
+/// The CONFIRM-PROMPT scenario: make an unsaved edit, run `:confirm bdelete`,
+/// capture the dialog, answer it with Cancel, and capture again.
+///
+/// `bdelete` rather than `quit`: an unanswered or mishandled `:confirm q` kills the
+/// captive Neovim and the app with it, which would turn a rendering regression into a
+/// crash-overlay capture. `bdelete` cannot end the process however the dialog goes,
+/// so a failure here stays a failure about pixels.
+///
+/// Exit codes: `11` the app died before the window mapped; `14` the app was gone
+/// before the second capture, i.e. answering the dialog took the process down.
+const CONFIRM_SCENARIO: &str = r#"
+set -eu
+
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+
+"$WOLF_BIN" &
+app_pid=$!
+
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome confirm smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+sleep "$SETTLE"
+
+# An unsaved edit, which is what gives `:confirm bdelete` something to ask about.
+wtype -- "i$CONFIRM_EDIT"
+wtype -k Escape
+sleep "$SETTLE"
+
+wtype -- ":confirm bdelete"
+wtype -k Return
+
+# Let the dialog's `msg_show` (kind `confirm`) and its `cmdline_show` prompt land.
+sleep "$SETTLE"
+
+grim "$OUT_PNG"
+
+# Answer it: Cancel. Core keeps a `confirm` toast alive across this keypress and
+# clears it only when the dialog actually resolves.
+wtype -k c
+sleep "$SETTLE"
+
+if ! kill -0 "$app_pid" 2>/dev/null; then
+    echo "wolf-gnome confirm smoke: app died while answering the dialog" >&2
+    exit 14
+fi
+
+grim "$OUT_PNG2"
+
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+/// The text typed into the startup buffer to make it modified.
+///
+/// Deliberately NOT an asserted term: it is drawn in the buffer and would still be
+/// on screen after the dialog closes, so asserting on it would say nothing about the
+/// dialog.
+const CONFIRM_EDIT: &str = "dirtybuffer";
+
+/// Lowercased substring OCR must find in the DIALOG capture and must NOT find after
+/// the dialog is answered: the distinctive word of Neovim's own
+/// `Save changes to "…"?` question, which arrives as a `confirm`-kind message.
+const CONFIRM_OCR_QUESTION: &str = "changes";
+
+/// Lowercased substring OCR must find in the DIALOG capture: a fragment of the
+/// options line `[Y]es, (N)o, (C)ancel:`, which arrives as the command line's
+/// `prompt` rather than as part of the message.
+///
+/// A FRAGMENT on purpose. The word is wrapped in parentheses on screen, and `--psm
+/// 11` reads a parenthesis inconsistently as `(`, `[` or nothing, so the leading `c`
+/// cannot be relied on. Everything after it can.
+const CONFIRM_OCR_OPTIONS: &str = "ancel";
+
+#[test]
+fn completion_popup_lists_matches_under_cage() {
+    const SMOKE: &str = "completion_popup_lists_matches_under_cage";
+
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(SMOKE, &cwd, &[]);
+
+    let out_png = runtime_dir.join("wolf_gnome_pum.png");
+    clear_evidence(&out_png, SMOKE);
+
+    let status = cage_command(PUM_SCENARIO, &cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .status()
+        .expect("failed to spawn `cage` for the completion-popup scenario");
+    assert!(
+        status.success(),
+        "{SMOKE}: cage scenario exited unsuccessfully ({status}). Screenshot expected at {}.",
+        out_png.display()
+    );
+    assert_png_present(SMOKE, &out_png);
+
+    let ocr_text = ocr_to_lowercase(&out_png);
+    assert!(
+        ocr_text.contains(PUM_OCR_ITEM),
+        "{SMOKE}: OCR did not contain the completion item {PUM_OCR_ITEM:?}. That item exists only \
+         inside the `ext_popupmenu` popup, so its absence means no popup was drawn — check that \
+         `pane_view::place_pum` made the overlay surface visible and that `wildoptions+=pum` is \
+         still set in the captive init.lua. If instead the command line reads `:set` and nothing \
+         else is on the strip, Neovim completed outright rather than showing a menu, which means \
+         the match set changed. PNG kept at {}.\n\nOCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+    assert!(
+        ocr_text.contains(PUM_OCR_ITEM2),
+        "{SMOKE}: OCR contained {PUM_OCR_ITEM:?} but not {PUM_OCR_ITEM2:?}. One item can be a \
+         completion written into the command line; two at once can only be a list, so this is the \
+         row that separates a popup from a completed word. PNG kept at {}.\n\nOCR output was:\n\
+         {ocr_text}",
+        out_png.display()
+    );
+}
+
+#[test]
+fn multi_line_message_shows_more_than_its_last_line_under_cage() {
+    const SMOKE: &str = "multi_line_message_shows_more_than_its_last_line_under_cage";
+
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(SMOKE, &cwd, &[]);
+
+    let out_png = runtime_dir.join("wolf_gnome_message.png");
+    clear_evidence(&out_png, SMOKE);
+
+    let status = cage_command(MSG_SCENARIO, &cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("MSG_FIRST", MSG_OCR_FIRST)
+        .env("MSG_SECOND", MSG_OCR_SECOND)
+        .status()
+        .expect("failed to spawn `cage` for the multi-line message scenario");
+    assert!(
+        status.success(),
+        "{SMOKE}: cage scenario exited unsuccessfully ({status}). Screenshot expected at {}.",
+        out_png.display()
+    );
+    assert_png_present(SMOKE, &out_png);
+
+    let ocr_text = ocr_to_lowercase(&out_png);
+    assert!(
+        ocr_text.contains(MSG_OCR_SECOND),
+        "{SMOKE}: OCR did not contain the message's LAST line {MSG_OCR_SECOND:?}. This is the \
+         control, not the feature: it was on screen before this unit too, so its absence means \
+         the `:echo` never ran or the toast never drew at all, and the next assertion would be \
+         meaningless. PNG kept at {}.\n\nOCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+    assert!(
+        ocr_text.contains(MSG_OCR_FIRST),
+        "{SMOKE}: OCR contained the message's last line {MSG_OCR_SECOND:?} but not its FIRST line \
+         {MSG_OCR_FIRST:?}. That is exactly the single-row behaviour this unit replaced: a \
+         two-line `msg_show` reduced to its final line. Check `pane_view::place_toast`'s height \
+         and `cmdline_ui::toast_view`'s budget. PNG kept at {}.\n\nOCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+}
+
+#[test]
+fn confirm_prompt_shows_then_clears_once_answered_under_cage() {
+    const SMOKE: &str = "confirm_prompt_shows_then_clears_once_answered_under_cage";
+
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(SMOKE, &cwd, &[]);
+
+    let out_png = runtime_dir.join("wolf_gnome_confirm.png");
+    let out_png2 = runtime_dir.join("wolf_gnome_confirm_answered.png");
+    clear_evidence(&out_png, SMOKE);
+    clear_evidence(&out_png2, SMOKE);
+
+    let status = cage_command(CONFIRM_SCENARIO, &cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG", &out_png)
+        .env("OUT_PNG2", &out_png2)
+        .env("CONFIRM_EDIT", CONFIRM_EDIT)
+        .status()
+        .expect("failed to spawn `cage` for the confirm-prompt scenario");
+    assert!(
+        status.success(),
+        "{SMOKE}: cage scenario exited unsuccessfully ({status}). Exit 14 means the app died \
+         while the dialog was being answered. Screenshots expected at {} and {}.",
+        out_png.display(),
+        out_png2.display()
+    );
+    assert_png_present(SMOKE, &out_png);
+    assert_png_present(SMOKE, &out_png2);
+
+    let dialog = ocr_to_lowercase(&out_png);
+    assert!(
+        dialog.contains(CONFIRM_OCR_QUESTION),
+        "{SMOKE}: OCR of the DIALOG capture did not contain {CONFIRM_OCR_QUESTION:?}. The \
+         question is a `confirm`-kind message and reaches the screen only through the toast \
+         surface, so its absence means the toast was not drawn while the command line was \
+         active — the two used to take turns in one row. PNG kept at {}.\n\nOCR output was:\n\
+         {dialog}",
+        out_png.display()
+    );
+    assert!(
+        dialog.contains(CONFIRM_OCR_OPTIONS),
+        "{SMOKE}: OCR of the DIALOG capture contained the question but not the options fragment \
+         {CONFIRM_OCR_OPTIONS:?}. The options line arrives as the command line's `prompt`, which \
+         is a field `draw_cmdline` has to draw explicitly: dropping it leaves the user answering \
+         a dialog whose answers are invisible. PNG kept at {}.\n\nOCR output was:\n{dialog}",
+        out_png.display()
+    );
+
+    let answered = ocr_to_lowercase(&out_png2);
+    assert!(
+        !answered.contains(CONFIRM_OCR_QUESTION),
+        "{SMOKE}: the dialog was answered with Cancel, but OCR of the SECOND capture still \
+         contained {CONFIRM_OCR_QUESTION:?}. A prompt toast must disappear once its dialog \
+         resolves; core clears it on that flush, so a surviving one means the front-end kept \
+         drawing a hidden toast. PNG kept at {}.\n\nOCR output was:\n{answered}",
+        out_png2.display()
+    );
+}
+
 
 /// Runs `tesseract <png> stdout --psm 11` and returns its lowercased text output.
 /// (`--psm 11` — "sparse text" — is needed because the default page-segmentation
