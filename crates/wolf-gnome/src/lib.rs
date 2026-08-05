@@ -56,6 +56,21 @@
 //!   colour-and-weight rule that is the WHOLE active/inactive treatment
 //!   ([`statusbar_layout::statusbar_text`]), since the pane body is painted
 //!   identically either way.
+//! - [`mod@cmdline_ui`]: the rulebook behind the command-line strip and the two
+//!   overlay surfaces above it — the column a BYTE offset into the command line
+//!   lands on, which the caret and the popup's cmdline anchor share so the two
+//!   cannot drift apart ([`cmdline_ui::cmdline_columns`]); the toast's height
+//!   budget, the slice that budget shows, the offset a scroll gesture's step count
+//!   lands on and the clamp under it, the width that slice measures, and the offset
+//!   carried into the next frame ([`cmdline_ui::toast_budget_rows`],
+//!   [`cmdline_ui::toast_view`], [`cmdline_ui::toast_scroll_next`],
+//!   [`cmdline_ui::toast_scroll_clamp`], [`cmdline_ui::toast_width_cols`],
+//!   [`cmdline_ui::carried_scroll`]); whether the surface is on screen at all
+//!   ([`cmdline_ui::toast_is_shown`]) and whether a prompt that was showing has
+//!   stopped ([`cmdline_ui::prompt_answered`]); and the completion popup's
+//!   selection, visible slice, row label and width in cells
+//!   ([`cmdline_ui::pum_selection`], [`cmdline_ui::pum_view`],
+//!   [`cmdline_ui::pum_item_label`], [`cmdline_ui::pum_width_cols`]).
 //! - [`mod@config_seam`]: the rules for CONSUMING a [`wolf_core::WolfConfig`] —
 //!   the `WOLF_FONT_PT`-over-`font-size` precedence
 //!   ([`config_seam::resolve_font_pt`], which takes the override as an argument so
@@ -168,11 +183,13 @@
 //! header bar whose editor area is a **native pane view** ([`pane_view`]) — a tree
 //! of nested `gtk::Paned`s with one `gtk::DrawingArea` per Neovim window, driven by
 //! the pure [`layout`] `PaneTree` — plus a bottom **cmdline strip** showing the
-//! command line and messages (which live outside the window grids under
-//! `ext_multigrid`). It attaches a live [`wolf_core::WolfCore`], paints each pane's
-//! grid via [`paint`], routes keys via [`gdk_key`] and pointer events via
-//! [`mouse`] and [`cell_at`], consumes layout intents (split / focus / close) on
-//! each wake, resizes each grid via [`grid_size_for`], and — through [`shell`] —
+//! command line, with the message toast and the completion popup as the pane view's
+//! two overlay surfaces above it (the command line, messages and completions all live
+//! outside the window grids under `ext_multigrid`, which is why these surfaces exist).
+//! It attaches a live [`wolf_core::WolfCore`], paints each pane's grid via [`paint`],
+//! routes keys via [`gdk_key`] and pointer events via [`mouse`] and [`cell_at`],
+//! consumes layout intents (split / focus / close) on each wake, resizes each grid via
+//! [`grid_size_for`], and — through [`shell`] —
 //! installs a `gio` action namespace shared by the GNOME primary menu and the
 //! accelerator table, shows an empty state when no project is open, and drains
 //! `WolfCore::drain_commands()` on every wake. Files are opened via Neovim commands
@@ -180,10 +197,12 @@
 //! there are no save / save-as dialogs. Click-to-position, drag-to-select and
 //! vertical scroll ARE wired (per-pane, in [`pane_view`]); horizontal scroll, the
 //! non-primary buttons and kinetic scrolling are not, matching macOS. What remains
-//! deferred is THEMING and a native command line as Adw widgets: the strip already
-//! paints natively from the folded `Snapshot::cmdline` / `Snapshot::toast` (never
-//! grid 1), but it draws a single row, with no `ext_popupmenu` completion popup and
-//! no multi-line scrollable toast. The seams above stay free functions (plus two
+//! deferred is THEMING and a native command line as Adw widgets: the one-row strip,
+//! the message toast and the `ext_popupmenu` completion popup are all painted from
+//! the folded `Snapshot::cmdline` / `Snapshot::toast` / `Snapshot::pum`, never from
+//! grid 1, with the toast and the popup as overlay surfaces that cost the pane area
+//! no height — so a message taller than its budget scrolls under a pointer gesture
+//! rather than growing the strip. The seams above stay free functions (plus two
 //! plain value types) so they remain testable without a display.
 
 pub mod about;

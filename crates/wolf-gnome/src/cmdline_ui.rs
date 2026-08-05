@@ -37,9 +37,9 @@
 //! restoring them only when a matching re-prompt arrives in a later flush. So the
 //! front-end owes no dismissal logic of its own: [`prompt_answered`] names the
 //! observable that follows from core's rule, and the only thing it drives is
-//! forgetting a scroll offset into messages that are gone.
+//! forgetting a scroll offset into messages that may be gone.
 
-use wolf_core::PumItem;
+use wolf_core::{PumItem, ToastChunk};
 
 /// The fraction of the space above the strip a toast may occupy.
 ///
@@ -166,12 +166,32 @@ pub fn toast_scroll_clamp(total: usize, budget: usize, requested: i64) -> usize 
     requested.min(max)
 }
 
+/// The offset a scroll gesture worth `steps` whole lines lands on.
+///
+/// A positive `steps` DECREASES the offset and a negative one increases it, the
+/// inverse of the grid's sign convention: a positive GDK `dy` moves toward the end of
+/// the buffer, which for a toast is its NEWEST line, while the offset counts lines
+/// back from that newest line.
+///
+/// The negation is done in `i64` (`-i64::from(steps)`) and never in `i32`, because
+/// `-i32::MIN` overflows and panics in a debug build.
+///
+/// The result is clamped rather than refused, which is what makes a fast flick land
+/// at the oldest line instead of being dropped; see [`toast_scroll_clamp`].
+#[must_use]
+pub fn toast_scroll_next(current: usize, steps: i32, total: usize, budget: usize) -> usize {
+    let requested = i64::try_from(current)
+        .unwrap_or(i64::MAX)
+        .saturating_add(-i64::from(steps));
+    toast_scroll_clamp(total, budget, requested)
+}
+
 /// The scroll offset to carry into the next frame.
 ///
 /// A changed line count is a different message, so the surface re-pins to the newest
-/// line rather than keeping an offset into lines that no longer exist. Otherwise the
-/// offset survives, re-clamped against the current budget so a window resize cannot
-/// strand it past the end.
+/// line rather than keeping an offset into lines the message does not have. Otherwise
+/// the offset survives, re-clamped against the current budget so a window resize
+/// cannot strand it past the end.
 #[must_use]
 pub fn carried_scroll(prev_lines: usize, next_lines: usize, budget: usize, scroll: usize) -> usize {
     if prev_lines == next_lines {
@@ -194,14 +214,21 @@ pub fn toast_is_shown(visible: bool, lines: usize) -> bool {
     visible && lines > 0
 }
 
-/// Whether a `confirm` prompt that was on screen has been answered.
+/// Whether a `confirm` prompt that was on screen has stopped being shown.
 ///
 /// Core owns the decision and this is only its observable: `redraw::cmdline_hide`
-/// hides a confirm toast the instant its dialog closes and restores it only for a
-/// matching re-prompt, so from here "answered" is exactly "a prompt was showing and
-/// the toast is no longer visible". Nothing in this crate may dismiss a prompt on its
-/// own — an invalid keypress re-prompts, and a front-end that hid the toast on the
-/// keypress would leave the user answering a question they can no longer read.
+/// stashes a confirm toast's messages and hides the toast on EVERY hide, restoring
+/// them when a matching re-prompt arrives in a later flush. So the predicate is
+/// exactly "a prompt was showing and the toast is hidden this frame", which is a
+/// resolved dialog most of the time and a transient the rest: an invalid keypress
+/// produces a wake in which the toast is hidden while the dialog is still open, the
+/// front-end forgets the scroll offset, and the surface blinks for one frame until
+/// the re-prompt restores it. Benign, shared with macOS, and the whole of what this
+/// predicate drives is that forgotten offset.
+///
+/// Nothing in this crate may dismiss a prompt on its own. The re-prompt is core's,
+/// and a front-end that hid the toast on the keypress would leave the user answering
+/// a question it had already erased.
 #[must_use]
 pub fn prompt_answered(was_prompt: bool, now_visible: bool) -> bool {
     was_prompt && !now_visible
@@ -279,6 +306,25 @@ pub fn pum_width_cols(items: &[PumItem], view: PumView) -> usize {
         .min(PUM_MAX_COLS)
 }
 
+/// The toast's width in cells: its widest VISIBLE line, where a line's width is the
+/// sum of its chunks.
+///
+/// Measured over the visible slice only, which is what makes the surface's size a
+/// function of the scroll offset — the reason `pane_view` re-places the box on a
+/// scroll gesture rather than only repainting it. There is no column cap here: the
+/// toast's only cap is a pixel clamp against the live container width, which the
+/// widget layer owns.
+#[must_use]
+pub fn toast_width_cols(lines: &[Vec<ToastChunk>], view: ToastView) -> usize {
+    lines
+        .iter()
+        .skip(view.first)
+        .take(view.len)
+        .map(|l| l.iter().map(|c| c.text.chars().count()).sum::<usize>())
+        .max()
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,6 +336,19 @@ mod tests {
             menu: menu.to_string(),
             info: String::new(),
         }
+    }
+
+    // `attr_id` is fixed at 0 rather than varied: width is a function of text alone,
+    // and a varying id would read as if the highlight mattered here.
+    fn chunk(text: &str) -> ToastChunk {
+        ToastChunk {
+            text: text.to_string(),
+            attr_id: 0,
+        }
+    }
+
+    fn line(texts: &[&str]) -> Vec<ToastChunk> {
+        texts.iter().copied().map(chunk).collect()
     }
 
     #[test]
@@ -401,6 +460,59 @@ mod tests {
         assert_eq!(toast_scroll_clamp(2, 5, 4), 0, "nothing to scroll");
     }
 
+    // The premise under the sign, which nothing in this suite can measure: GDK's
+    // smooth-scroll `dy > 0` is `GDK_SCROLL_DOWN`, the viewport moving toward the END
+    // of the buffer. `crate::mouse::scroll_steps` maps that to `ScrollDirection::Down`,
+    // and `crates/wolf-ffi/tests/mouse_scroll.rs` measures against a real Neovim that
+    // `Down` strictly increases `win_viewport.topline` — so the premise is pinned
+    // there, against the real component, rather than assumed here. A toast's newest
+    // line is its end and the offset counts lines BACK from it, so this seam must
+    // invert that sign; that inversion is all this test pins.
+    #[test]
+    fn toast_scroll_next_inverts_the_grids_sign_and_moves_by_the_earned_magnitude() {
+        // 10 lines in a 2-line budget, so the oldest reachable offset is 8. The first
+        // six rows land strictly inside 0..=8, which is what makes them discriminating:
+        // a seam that added the steps instead of subtracting them lands on the mirror
+        // image rather than saturating to the same answer. The last two are the
+        // deliberate flicks, and they clamp at opposite ends.
+        // (current, steps, total, budget, expected)
+        let table: &[(usize, i32, usize, usize, usize)] = &[
+            (5, 1, 10, 2, 4),
+            (5, -1, 10, 2, 6),
+            (5, 2, 10, 2, 3),
+            (5, -2, 10, 2, 7),
+            (4, 3, 10, 2, 1),
+            (1, -3, 10, 2, 4),
+            (8, 50, 10, 2, 0),
+            (0, -50, 10, 2, 8),
+        ];
+        for (current, steps, total, budget, want) in table {
+            assert_eq!(
+                toast_scroll_next(*current, *steps, *total, *budget),
+                *want,
+                "current {current} steps {steps} total {total} budget {budget}: a \
+                 positive step count moves toward the newest line and DECREASES the \
+                 offset, a negative one moves back through the older lines and \
+                 increases it, and either moves by the whole magnitude the gesture \
+                 earned. Three distinguishable failures: the mirrored offset means \
+                 the sign was not inverted, an offset one away from `current` means a \
+                 flick was reduced to a single line, and an unmoved `current` means \
+                 the steps were dropped"
+            );
+        }
+
+        assert_eq!(
+            toast_scroll_next(0, i32::MIN, 10, 2),
+            8,
+            "i32::MIN must invert without panicking and land on the oldest line. The \
+             production expression is `-i64::from(steps)` precisely because \
+             `i64::from(-steps)` would negate in i32, where `-i32::MIN` overflows and \
+             PANICS in a debug build — so a panic here rather than a wrong number is \
+             the outcome this case exists to catch. A 0 instead would mean the sign \
+             was not inverted at all"
+        );
+    }
+
     #[test]
     fn carried_scroll_forgets_the_offset_when_the_message_changes() {
         assert_eq!(
@@ -502,6 +614,69 @@ mod tests {
             pum_width_cols(&items, PumView { first: 0, len: 0 }),
             0,
             "nothing visible is zero wide"
+        );
+    }
+
+    #[test]
+    fn toast_width_cols_measures_the_visible_lines_only() {
+        // Line 0 is the oldest and line 3 the newest; only the newest is 10 wide.
+        let lines = vec![
+            line(&["a"]),
+            line(&["bbbb"]),
+            line(&["cc"]),
+            line(&["zzzzzzzzzz"]),
+        ];
+        let scrolled_back = ToastView {
+            first: 0,
+            len: 3,
+            scrollable: true,
+        };
+        let at_the_newest = ToastView {
+            first: 3,
+            len: 1,
+            scrollable: true,
+        };
+        let nothing_visible = ToastView {
+            first: 0,
+            len: 0,
+            scrollable: true,
+        };
+        let one_whole_line = ToastView {
+            first: 0,
+            len: 1,
+            scrollable: false,
+        };
+
+        assert_eq!(
+            toast_width_cols(&lines, scrolled_back),
+            4,
+            "the newest line is off screen and is not paid for; a 10 would mean the \
+             whole list was measured instead of the visible slice"
+        );
+        assert_eq!(
+            toast_width_cols(&lines, at_the_newest),
+            10,
+            "the same message at two offsets has two widths, which is why a scroll \
+             gesture must re-place the surface and not only repaint it; a 4 here \
+             would mean the offset was ignored and this line would be clipped"
+        );
+        assert_eq!(
+            toast_width_cols(&[line(&["ab", "cde"])], one_whole_line),
+            5,
+            "a line's chunks sum; a 3 would mean the widest chunk was taken rather \
+             than the whole line, and the row would overrun the box by two cells"
+        );
+        assert_eq!(
+            toast_width_cols(&lines, nothing_visible),
+            0,
+            "nothing visible is zero wide; any other value sizes a box for lines \
+             that are not drawn"
+        );
+        assert_eq!(
+            toast_width_cols(&[line(&["éé"])], one_whole_line),
+            2,
+            "counting is by character: \"éé\" is 4 bytes, so a 4 would mean len() \
+             was measured instead of chars().count()"
         );
     }
 }
