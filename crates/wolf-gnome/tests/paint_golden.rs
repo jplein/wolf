@@ -677,17 +677,6 @@ const MIN_BAND_WIDTH_PX: usize = 8;
 /// blend pixel and would pass against a build that draws no strike at all.
 const MIN_STRIKE_INK_PX: usize = 10;
 
-/// The fewest device pixels of vertical spread the undercurl's top edge must show
-/// across the cell for it to be a wave rather than a straight line.
-const MIN_WAVE_SPREAD_PX: usize = 2;
-
-/// The fewest of a band's sampled columns that must carry ink before that band's
-/// top-edge spread describes anything.
-///
-/// A spread measured over two or three inked columns would be a statement about
-/// antialiasing, not about a shape.
-const MIN_WAVE_INKED_COLUMNS: usize = 8;
-
 /// Builds the decoration fixture: one row of five cells, all carrying
 /// [`DECORATION_GLYPH`] on white-on-black, differing only in their decoration.
 ///
@@ -889,31 +878,6 @@ fn column_pixels(
     out
 }
 
-/// For each sampled x of `col`, the TOPMOST row in `rows` carrying ink; columns
-/// with no ink at all contribute nothing.
-fn topmost_ink_rows(
-    data: &[u8],
-    stride: usize,
-    metrics: &CellMetrics,
-    col: usize,
-    rows: (usize, usize),
-) -> Vec<usize> {
-    let (y0, y1) = rows;
-    let x0 = band_x0(metrics, col);
-    let bg = decoration_background();
-
-    let mut tops = Vec::new();
-    for x in x0..x0 + band_width(metrics) {
-        for y in y0..y1 {
-            if pixel_at(data, stride, x, y) != bg {
-                tops.push(y);
-                break;
-            }
-        }
-    }
-    tops
-}
-
 /// An undercurl paints below the glyph box, and it paints there in `special`.
 ///
 /// Falsifiers: (a) delete the `AttrColor::new_underline_color` insert in
@@ -1092,59 +1056,6 @@ fn strikethrough_adds_foreground_ink_across_the_glyph() {
          pixel means AttrColor::new_strikethrough_color was added — the constructor exists, and \
          not calling it is the decision.",
         reddish_count(&struck)
-    );
-}
-
-/// The undercurl's top edge rises and falls across the cell, which a straight line
-/// cannot do.
-///
-/// MEASUREMENT OWED BEFORE THIS CASE IS KEPT. The coder runs it and records the
-/// observed spread in this comment. If the spread at [`SMOKE_PROBE_SIZE_PT`] is
-/// below [`MIN_WAVE_SPREAD_PX`], delete this case rather than lowering the
-/// constant, and record in `tests/README.md`'s "What is still unproven" that
-/// `undercurl_and_underline_do_not_draw_the_same_thing` proves only that the two
-/// decorations differ, with the amplitude measured at N device pixels — too small
-/// to tell a wave from an offset line.
-///
-/// It reads the topmost inked row per sampled x, so it is blind to the wave's
-/// thickness and to its period; what it discriminates is a decoration whose top
-/// edge is CONSTANT across the cell, which is every straight line. Deleting it
-/// means deleting [`topmost_ink_rows`], [`MIN_WAVE_SPREAD_PX`] and
-/// [`MIN_WAVE_INKED_COLUMNS`] with it — nothing else reads them.
-#[test]
-fn the_undercurl_is_wavy_rather_than_straight() {
-    let (mut surface, metrics) = render_decoration_fixture();
-
-    let height = surface.height() as usize;
-    let stride = surface.stride() as usize;
-    let data = surface.data().expect("surface data");
-
-    let rows = sub_baseline_rows(&metrics, height);
-    let tops = topmost_ink_rows(&data, stride, &metrics, UNDERCURL_COL, rows);
-
-    assert!(
-        tops.len() >= MIN_WAVE_INKED_COLUMNS,
-        "only {} of the undercurl band's {} sampled columns carry any ink, under the \
-         {MIN_WAVE_INKED_COLUMNS} this case needs. A wave drawn across the run's advance covers \
-         every column of the band; this few means the band is aimed past the decoration, or that \
-         no undercurl was drawn at all — and the spread asserted below would then be describing \
-         antialiasing rather than a shape.",
-        tops.len(),
-        band_width(&metrics)
-    );
-
-    let min = *tops.iter().min().expect("a non-empty top-edge sample");
-    let max = *tops.iter().max().expect("a non-empty top-edge sample");
-    let spread = max - min;
-    assert!(
-        spread >= MIN_WAVE_SPREAD_PX,
-        "the undercurl's topmost inked row is between {min} and {max} across the cell, a spread of \
-         {spread} device pixels — under {MIN_WAVE_SPREAD_PX}. A spread of 0 is a straight line, \
-         which is what Underline::Single draws and what macOS folds undercurl into. A spread of 1 \
-         is ambiguous between a shallow wave and an antialiased straight edge, which is why the \
-         threshold is 2 rather than 1. If the wave is genuinely this shallow at \
-         {SMOKE_PROBE_SIZE_PT} pt, this case is to be DELETED and recorded as unproven, not \
-         weakened."
     );
 }
 

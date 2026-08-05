@@ -16,16 +16,16 @@
 //!    never-painted cells aligned).
 //! 4. If the cell text is empty (a wide-char trailing placeholder or a
 //!    never-painted cell) skip glyph rendering; otherwise lay the text out with
-//!    Pango (toggling bold/italic/underline per style) and draw it in fg, offset
-//!    down the cell by `baseline - ascent` so the glyph box sits centred in a cell
-//!    the configured line-height made taller than it.
-//!
-//! Underline is rendered (single line). Undercurl and strikethrough are deferred
-//! for Tier 1.
+//!    Pango — the style's bold and italic toggling the cloned
+//!    [`pango::FontDescription`], its underline, undercurl and strikethrough
+//!    arriving as the Pango attributes [`crate::glyph_style`] resolves — and draw
+//!    it in fg, offset down the cell by `baseline - ascent` so the glyph box sits
+//!    centred in a cell the configured line-height made taller than it.
 
 use wolf_core::{Grid, HighlightTable, ResolvedStyle, Rgb};
 
 use crate::cell_metrics_math;
+use crate::glyph_style;
 
 /// Divisor to convert an 8-bit channel (0–255) to Cairo's 0.0–1.0 range.
 const RGB_MAX: f64 = 255.0;
@@ -199,8 +199,12 @@ fn set_source(cr: &cairo::Context, color: Rgb) {
     );
 }
 
-/// Lays out and draws one cell's text in `fg`, toggling bold/italic/underline per
-/// `style`.
+/// Lays out and draws one cell's text in `fg`, toggling bold and italic on the
+/// cloned face and asking Pango for the decorations [`glyph_style`] resolves.
+///
+/// The undecorated cell — nearly every cell of nearly every frame — builds no
+/// `AttrList` at all, which is what
+/// [`glyph_style::GlyphDecoration::is_empty`]'s early skip is for.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_glyph(
     cr: &cairo::Context,
@@ -223,9 +227,22 @@ pub(crate) fn draw_glyph(
     layout.set_font_description(Some(&font));
     layout.set_text(text);
 
-    if style.underline {
+    let decoration = glyph_style::glyph_decoration(style);
+    if !decoration.is_empty() {
         let attrs = pango::AttrList::new();
-        attrs.insert(pango::AttrInt::new_underline(pango::Underline::Single));
+        if decoration.underline != pango::Underline::None {
+            attrs.insert(pango::AttrInt::new_underline(decoration.underline));
+        }
+        if decoration.strikethrough {
+            // Deliberately no `AttrColor::new_strikethrough_color`: with no such
+            // attribute Pango strikes in the layout's foreground, which is the
+            // macOS behaviour. See `glyph_style`'s module docs.
+            attrs.insert(pango::AttrInt::new_strikethrough(true));
+        }
+        if let Some(color) = decoration.underline_color {
+            let (r, g, b) = glyph_style::pango_channels(color);
+            attrs.insert(pango::AttrColor::new_underline_color(r, g, b));
+        }
         layout.set_attributes(Some(&attrs));
     }
 

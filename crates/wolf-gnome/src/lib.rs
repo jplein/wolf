@@ -217,6 +217,7 @@ pub mod crash_overlay;
 pub mod cursor;
 pub mod editor_inset;
 pub mod geometry;
+pub mod glyph_style;
 pub mod input;
 pub mod layout;
 pub mod liveness_ui;

@@ -9041,6 +9041,104 @@ fn cage_is_only_spawned_through_the_isolating_helper() {
     );
 }
 
+/// [`SMOKE_APPEARANCE`] re-typed here as a LITERAL, per this file's
+/// re-declare-do-not-import discipline (the `config_seam` tests'
+/// `EXPECT_FALLBACK_FONT_PT` precedent).
+///
+/// Reading the const and comparing it to itself would hold for whatever value it
+/// took, including the one that inverts every OCR page in this file. Stating
+/// `dark` independently means a change to the shared pin fails HERE, loudly and in
+/// microseconds, rather than thirty-three OCR assertions later.
+const EXPECT_SMOKE_APPEARANCE: &str = "dark";
+
+/// Enforces mechanically that the SHARED seeded `wolf-config.yaml` — the one
+/// [`cage_command`] hands every smoke — pins `appearance` to `dark`.
+///
+/// ## The premise, and why it needs a guard rather than a comment
+///
+/// Every OCR smoke reads a light-on-dark grid, which is what
+/// `crates/wolf-gnome/tests/README.md` records as the premise for sparse-text
+/// segmentation. That grid is the captive Neovim's default colorscheme responding
+/// to `&background`, and the front-end pushes `&background` from the configured
+/// `appearance`. So the seeded value is now upstream of all thirty-three OCR
+/// assertions at once — and it is written in [`write_smoke_config`], thousands of
+/// lines from every assertion it can disarm. That distance is the same reason the
+/// three fixture-name guards exist.
+///
+/// ## The two ways the premise dies, and both are covered
+///
+/// **The key stops being emitted.** `appearance` is the one seeded field
+/// `wolf_core`'s `ConfigSection` does NOT require: it carries a
+/// `#[serde(default)]` of `auto`, so an omitted key is not a parse error and not a
+/// fallback to `default_config()` either. The file still loads, every font field
+/// still applies, and the appearance silently becomes `auto` — resolved against a
+/// settings portal that does not exist under `cage`. Nothing else in this file
+/// would notice.
+///
+/// **The value is re-pinned.** A containment check alone cannot see that, since
+/// `appearance: light` is just as present as `appearance: dark`. Hence the literal
+/// [`EXPECT_SMOKE_APPEARANCE`] rather than a comparison against the const itself.
+///
+/// ## Falsifiers
+///
+/// Delete the ` appearance: {appearance}\n` fragment from the `format!` in
+/// [`write_smoke_config`] — assertion 2 fires. Re-pin [`SMOKE_APPEARANCE`] to
+/// `"light"` — assertion 1 fires, ahead of the OCR smokes that would otherwise
+/// invert together with no single failure naming the cause.
+///
+/// ## What it needs
+///
+/// NO environment: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
+/// subprocess, and — unlike
+/// [`the_column_cap_cannot_bind_at_the_ocr_smokes_geometry`] — no pinned
+/// `FONTCONFIG_FILE`, because it measures no cell. It writes into a fresh temp
+/// directory through the same [`smoke_config_dir`] every smoke's `cage_command`
+/// call goes through, so what it reads back is the artifact itself rather than a
+/// re-derivation of it.
+#[test]
+fn the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes() {
+    const GUARD: &str = "the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes";
+
+    // --- Assertion 1: the VALUE, stated independently -------------------------
+    assert_eq!(
+        SMOKE_APPEARANCE, EXPECT_SMOKE_APPEARANCE,
+        "{GUARD}: SMOKE_APPEARANCE is {SMOKE_APPEARANCE:?}, but every OCR smoke in this file is \
+         calibrated on a light-on-dark grid and {EXPECT_SMOKE_APPEARANCE:?} is what produces one. \
+         It is also what Neovim already defaults to under `--embed`, which is why pinning it moves \
+         no page at all. Re-pinning to \"light\" inverts all thirty-three OCR pages simultaneously, \
+         and no single one of their failures would name this const as the cause — which is exactly \
+         why the expected value is re-typed here instead of read from the pin."
+    );
+
+    // --- Assertion 2: the seeded FILE really carries it -----------------------
+    //
+    // Through `smoke_config_dir`, the same call `cage_command` makes, so this
+    // reads the artifact every smoke's app reads rather than a restatement of it.
+    let cwd = make_temp_cwd();
+    let dir = smoke_config_dir(&cwd);
+    let path = dir.join(CONFIG_FILE_NAME);
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "{GUARD}: could not read the shared seeded config {} that `smoke_config_dir` just \
+             wrote: {e}. That helper is infallible by construction (it panics on a failed write), \
+             so an unreadable file here means the path it returned is not the path it wrote.",
+            path.display()
+        )
+    });
+    let key = format!("appearance: {EXPECT_SMOKE_APPEARANCE}");
+    assert!(
+        text.contains(&key),
+        "{GUARD}: the shared seeded config {} does not carry {key:?}. Its contents were:\n{text}\n\
+         `appearance` is the one seeded field `wolf_core`'s ConfigSection does NOT require — it \
+         has a `#[serde(default)]` of `auto` — so an omitted key does NOT fail the parse and does \
+         NOT fall back to `default_config()`. The file loads, every font field applies, and the \
+         appearance silently becomes `auto`, resolved against a settings portal that does not \
+         exist under `cage`. Every OCR smoke would then depend on the compositor's absent theme \
+         state. Restore the `appearance: {{appearance}}` line in `write_smoke_config`'s `format!`.",
+        path.display()
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Pointer smokes: shared Rust helpers.
 
@@ -17105,17 +17203,24 @@ const APPEARANCE_LIGHT_READBACK_NAME: &str = "wolf_gnome_appearance_background_2
 /// and the colours it selects are the colorscheme's business rather than this
 /// crate's.
 ///
-/// Exit codes, each naming ONE cause: `11` an app died before its window mapped;
-/// `12` run 1's readback never appeared (or stayed empty); `13` run 2's readback
-/// never appeared; `14` an app was still alive after `:qa!`; `15` an app exited
-/// non-zero. 14 and 15 are separate because a process that panicked in the GTK
-/// main loop and one that shut down cleanly are equally GONE — only the status
-/// tells them apart.
+/// Exit codes are PER LAUNCH, [`CONFIG_GRID_SCENARIO`]'s scheme exactly: `11` run
+/// 1's app died before its window mapped; `12` run 1 was still alive after `:qa!`;
+/// `13` run 1 exited non-zero; `14` run 1's `&background` readback never appeared
+/// (or stayed empty); `15`–`18` the same four for run 2.
 ///
-/// Codes 11, 14 and 15 are shared by the two launches rather than doubled, so each
-/// of the three prints the run's LABEL on stderr and the Rust side names the
-/// second recovery route: which of the two readback files exists says how far the
-/// scenario got.
+/// Eight codes and not five, because a code shared between the launches folds two
+/// causes into one: "an app died before its window mapped" is a different
+/// investigation depending on whether it was the launch reading a forced `dark` or
+/// the one reading a forced `light`, and the convention
+/// `crates/wolf-gnome/tests/README.md` states is about the CODE carrying the
+/// meaning rather than about the cause being recoverable by other means. `12` and
+/// `13` are separate for the reason that convention gives directly: a process that
+/// panicked in the GTK main loop and one that shut down cleanly are equally GONE,
+/// and only the status tells them apart.
+///
+/// Each of the three process-level codes additionally prints the run's LABEL on
+/// stderr, which costs nothing and makes a truncated log readable without the
+/// code table.
 const APPEARANCE_SCENARIO: &str = r#"
 set -eu
 
@@ -17137,13 +17242,15 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM HUP
 
-# $1 is the run LABEL, printed so a shared exit code still says which launch died.
+# $1 is the exit code to use if the app dies first, so run 1 and run 2 stay
+# distinguishable by the CODE alone; $2 is the run label, printed as well so a
+# truncated log needs no code table.
 wait_window() {
     tries=0
     while [ "$tries" -lt "$WAIT_TRIES" ]; do
         if ! kill -0 "$app_pid" 2>/dev/null; then
-            echo "wolf-gnome appearance smoke: $1 app exited early (pid $app_pid)" >&2
-            exit 11
+            echo "wolf-gnome appearance smoke: $2 app exited early (pid $app_pid)" >&2
+            exit "$1"
         fi
         if wtype "" >/dev/null 2>&1; then
             return 0
@@ -17168,7 +17275,8 @@ wait_file() {
     return 1
 }
 
-# $1 is the run LABEL; see wait_window.
+# $1 is the exit code for "still alive after :qa!", $2 for "exited non-zero", and
+# $3 is the run label; see wait_window.
 quit_app() {
     wtype -- ":qa!"
     wtype -k Return
@@ -17184,16 +17292,16 @@ quit_app() {
         sleep "$WAIT_INTERVAL"
     done
     if [ "$gone" -ne 1 ]; then
-        echo "wolf-gnome appearance smoke: $1 app (pid $app_pid) still alive after :qa!." >&2
-        exit 14
+        echo "wolf-gnome appearance smoke: $3 app (pid $app_pid) still alive after :qa!." >&2
+        exit "$1"
     fi
     # `set -e` would abort before the status could be reported, so collect it
     # through `||`, which is exempt from it.
     rc=0
     wait "$app_pid" || rc=$?
     if [ "$rc" -ne 0 ]; then
-        echo "wolf-gnome appearance smoke: $1 app (pid $app_pid) exited $rc, not 0." >&2
-        exit 15
+        echo "wolf-gnome appearance smoke: $3 app (pid $app_pid) exited $rc, not 0." >&2
+        exit "$2"
     fi
     app_pid=
 }
@@ -17210,16 +17318,16 @@ export WOLF_CONFIG_DIR
 
 "$WOLF_BIN" &
 app_pid=$!
-wait_window "run 1 (appearance: dark)"
+wait_window 11 "run 1 (appearance: dark)"
 sleep "$SETTLE"
 
 # `&background` is a global option, so no window or buffer has to be current for
 # this to be the value the front-end pushed.
 wtype -- ":call writefile([&background], '$BG_DARK')"
 wtype -k Return
-wait_file "$BG_DARK" || exit 12
+wait_file "$BG_DARK" || exit 14
 
-quit_app "run 1 (appearance: dark)"
+quit_app 12 13 "run 1 (appearance: dark)"
 
 # =========================================================================
 # RUN 2 -- appearance: light, same cwd, same window.
@@ -17229,14 +17337,14 @@ export WOLF_CONFIG_DIR
 
 "$WOLF_BIN" &
 app_pid=$!
-wait_window "run 2 (appearance: light)"
+wait_window 15 "run 2 (appearance: light)"
 sleep "$SETTLE"
 
 wtype -- ":call writefile([&background], '$BG_LIGHT')"
 wtype -k Return
-wait_file "$BG_LIGHT" || exit 13
+wait_file "$BG_LIGHT" || exit 18
 
-quit_app "run 2 (appearance: light)"
+quit_app 16 17 "run 2 (appearance: light)"
 
 exit 0
 "#;
@@ -17310,7 +17418,9 @@ exit 0
 /// A fresh temp working directory ([`make_temp_cwd`], mandatory — the captive
 /// Neovim's swap directory is keyed on it); [`CAGE_LOCK`] for the whole body; one
 /// `sh -c` string through [`cage_command`], the single environment helper and the
-/// only place the compositor is spawned; and five exit codes naming five causes.
+/// only place the compositor is spawned; and eight exit codes naming eight causes,
+/// four per launch, so no code covers both — see [`APPEARANCE_SCENARIO`] for why
+/// the per-launch split is not merely tidiness.
 /// It asserts no OCR term and captures no PNG, so it contributes no row to any
 /// fixture-name guard — the treatment the divider-relayout, column-cap and
 /// clipboard smokes already get.
@@ -17403,16 +17513,18 @@ fn configured_appearance_reaches_neovims_background_under_cage() {
         .expect("failed to spawn `cage` for the headless configured-appearance scenario");
     assert!(
         status.success(),
-        "{SMOKE}: the cage configured-appearance scenario exited unsuccessfully ({status}). Exit \
-         11: an app died before its window mapped — a panic while resolving the appearance \
-         (`appearance::apply_at_launch` runs before any widget is built, so a panic there takes \
-         the whole launch) is the first thing to look at. Exit 12: run 1's readback never appeared \
-         at {}. Exit 13: run 2's readback never appeared at {}. Exit 14: an app was still alive \
-         after `:qa!`. Exit 15: an app went away, but NOT cleanly — a panic in the GTK main loop \
-         makes a process vanish exactly as a clean shutdown does, which is why 14 and 15 are \
-         separate codes. Codes 11, 14 and 15 do not name WHICH launch on their own: the scenario \
-         prints the run label beside each on stderr, and which of the two readback files exists \
-         says how far it got.",
+        "{SMOKE}: the cage configured-appearance scenario exited unsuccessfully ({status}). Every \
+         code names ONE cause in ONE launch. Exit 11: run 1's app (`appearance: \
+         {APPEARANCE_FORCED_DARK}`) died before its window mapped — a panic while resolving the \
+         appearance is the first thing to look at, since `appearance::apply_at_launch` runs before \
+         any widget is built and takes the whole launch with it. Exit 12: run 1 was still alive \
+         after `:qa!`. Exit 13: run 1 exited NON-ZERO — it went away, but not cleanly, and that is \
+         a separate code from 12 because a panic in the GTK main loop makes a process vanish \
+         exactly as a clean shutdown does. Exit 14: run 1's `&background` readback never appeared \
+         at {}. Exit 15/16/17/18: the same four for run 2 (`appearance: \
+         {APPEARANCE_FORCED_LIGHT}`), whose readback is at {}. A run-2 code with run 1's readback \
+         already written means the front-end handled the forced-dark launch and fell over on the \
+         forced-light one, which is a much narrower finding than the code alone suggests.",
         bg_dark.display(),
         bg_light.display()
     );

@@ -106,7 +106,7 @@ impl GlyphDecoration {
     /// whenever `underline` is [`pango::Underline::None`].
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        todo!("is_empty: underline is Underline::None and strikethrough is false")
+        self.underline == pango::Underline::None && !self.strikethrough
     }
 }
 
@@ -129,7 +129,26 @@ impl GlyphDecoration {
 /// Takes `&ResolvedStyle` to match `draw_glyph`'s own parameter.
 #[must_use]
 pub fn glyph_decoration(style: &ResolvedStyle) -> GlyphDecoration {
-    todo!("glyph_decoration: implement the table above")
+    // `undercurl` is tested FIRST, and that order is the rule: Pango carries one
+    // underline attribute per run, so a style with both bits set has to lose one
+    // and the wave is the one Neovim asked for.
+    let underline = if style.undercurl {
+        pango::Underline::Error
+    } else if style.underline {
+        pango::Underline::Single
+    } else {
+        pango::Underline::None
+    };
+
+    GlyphDecoration {
+        underline,
+        strikethrough: style.strikethrough,
+        underline_color: if underline == pango::Underline::None {
+            None
+        } else {
+            style.special
+        },
+    }
 }
 
 /// Widens an [`Rgb`] to the 16-bit channel triple Pango's colour attributes take.
@@ -137,7 +156,11 @@ pub fn glyph_decoration(style: &ResolvedStyle) -> GlyphDecoration {
 /// `255` must reach `65535` exactly; see [`PANGO_CHANNEL_SCALE`].
 #[must_use]
 pub fn pango_channels(color: Rgb) -> (u16, u16, u16) {
-    todo!("pango_channels: scale each channel by PANGO_CHANNEL_SCALE")
+    (
+        u16::from(color.r) * PANGO_CHANNEL_SCALE,
+        u16::from(color.g) * PANGO_CHANNEL_SCALE,
+        u16::from(color.b) * PANGO_CHANNEL_SCALE,
+    )
 }
 
 #[cfg(test)]
@@ -227,22 +250,70 @@ mod tests {
     #[test]
     fn glyph_decoration_table() {
         let rows: [(Inputs, Expected); 16] = [
-            ((false, false, false, NO_SPECIAL), (Underline::None, false, NO_SPECIAL, true)),
-            ((false, false, false, SPECIAL), (Underline::None, false, NO_SPECIAL, true)),
-            ((false, false, true, NO_SPECIAL), (Underline::None, true, NO_SPECIAL, false)),
-            ((false, false, true, SPECIAL), (Underline::None, true, NO_SPECIAL, false)),
-            ((false, true, false, NO_SPECIAL), (Underline::Error, false, NO_SPECIAL, false)),
-            ((false, true, false, SPECIAL), (Underline::Error, false, SPECIAL, false)),
-            ((false, true, true, NO_SPECIAL), (Underline::Error, true, NO_SPECIAL, false)),
-            ((false, true, true, SPECIAL), (Underline::Error, true, SPECIAL, false)),
-            ((true, false, false, NO_SPECIAL), (Underline::Single, false, NO_SPECIAL, false)),
-            ((true, false, false, SPECIAL), (Underline::Single, false, SPECIAL, false)),
-            ((true, false, true, NO_SPECIAL), (Underline::Single, true, NO_SPECIAL, false)),
-            ((true, false, true, SPECIAL), (Underline::Single, true, SPECIAL, false)),
-            ((true, true, false, NO_SPECIAL), (Underline::Error, false, NO_SPECIAL, false)),
-            ((true, true, false, SPECIAL), (Underline::Error, false, SPECIAL, false)),
-            ((true, true, true, NO_SPECIAL), (Underline::Error, true, NO_SPECIAL, false)),
-            ((true, true, true, SPECIAL), (Underline::Error, true, SPECIAL, false)),
+            (
+                (false, false, false, NO_SPECIAL),
+                (Underline::None, false, NO_SPECIAL, true),
+            ),
+            (
+                (false, false, false, SPECIAL),
+                (Underline::None, false, NO_SPECIAL, true),
+            ),
+            (
+                (false, false, true, NO_SPECIAL),
+                (Underline::None, true, NO_SPECIAL, false),
+            ),
+            (
+                (false, false, true, SPECIAL),
+                (Underline::None, true, NO_SPECIAL, false),
+            ),
+            (
+                (false, true, false, NO_SPECIAL),
+                (Underline::Error, false, NO_SPECIAL, false),
+            ),
+            (
+                (false, true, false, SPECIAL),
+                (Underline::Error, false, SPECIAL, false),
+            ),
+            (
+                (false, true, true, NO_SPECIAL),
+                (Underline::Error, true, NO_SPECIAL, false),
+            ),
+            (
+                (false, true, true, SPECIAL),
+                (Underline::Error, true, SPECIAL, false),
+            ),
+            (
+                (true, false, false, NO_SPECIAL),
+                (Underline::Single, false, NO_SPECIAL, false),
+            ),
+            (
+                (true, false, false, SPECIAL),
+                (Underline::Single, false, SPECIAL, false),
+            ),
+            (
+                (true, false, true, NO_SPECIAL),
+                (Underline::Single, true, NO_SPECIAL, false),
+            ),
+            (
+                (true, false, true, SPECIAL),
+                (Underline::Single, true, SPECIAL, false),
+            ),
+            (
+                (true, true, false, NO_SPECIAL),
+                (Underline::Error, false, NO_SPECIAL, false),
+            ),
+            (
+                (true, true, false, SPECIAL),
+                (Underline::Error, false, SPECIAL, false),
+            ),
+            (
+                (true, true, true, NO_SPECIAL),
+                (Underline::Error, true, NO_SPECIAL, false),
+            ),
+            (
+                (true, true, true, SPECIAL),
+                (Underline::Error, true, SPECIAL, false),
+            ),
         ];
 
         let mut failures: Vec<String> = Vec::new();
