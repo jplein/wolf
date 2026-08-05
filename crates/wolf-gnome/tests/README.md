@@ -39,14 +39,14 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 **Covers**
 
-- `paint` onto an offscreen ARGB32 `ImageSurface` from a hand-built 4x2 `Snapshot`: exact equality on known background fills, background-only interiors for a wide-trailing empty-text cell (the skip-glyph path), and at least one non-background pixel in a glyph cell. Needs no display and no nvim, but does need the pinned DejaVu Sans Mono via `FONTCONFIG_FILE`.
-- The line-height argument to `CellMetrics::for_font`, at the shipped 130 % default rather than at a value chosen to reproduce anything: a larger percentage gives a taller cell, the advance width does not move with it, the baseline centres the glyph box, and the cell height matches the 96 dpi conversion. A family the pinned fontconfig cannot resolve still measures, gives the same cell height as a resolvable one, and keeps the family the caller asked for — this crate substitutes nothing of its own.
-- The three text decorations at the pixel level, over a second fixture and render helper of their own so the tests above are untouched: undercurl draws ink below the glyph box, in `special` when it is set and in the layout foreground when it is not; undercurl and a plain underline do not draw the same mark; and strikethrough adds foreground ink while drawing no `special` pixel, which is the macOS-parity half. `the_undercurl_is_wavy_rather_than_straight` measures the top-edge spread of the wave's own band, since that is what separates a wave from a thicker or offset straight line; the geometry it measured is recorded in its own `MEASURED:` note.
+- `paint` onto an offscreen ARGB32 `ImageSurface` from a hand-built 4x2 `Snapshot`: exact equality on known background fills, background-only interiors for a wide-trailing empty cell (the skip-glyph path), and ink in a glyph cell.
+- The line-height argument to `CellMetrics::for_font`, at the shipped 130 % default rather than a value chosen to reproduce anything: a larger percentage gives a taller cell, the advance width does not move with it, and the baseline centres the glyph box. An unresolvable family still measures, matches a resolvable one's cell height, and keeps the name the caller asked for — this crate substitutes nothing of its own.
+- The three decorations, over a fixture of their own so the tests above are untouched: undercurl draws ink below the glyph box, in `special` when set and in the foreground when not; undercurl and a plain underline draw different marks; strikethrough adds foreground ink and no `special` pixel. `the_undercurl_is_wavy_rather_than_straight` is what separates a wave from a thicker straight line; its own `MEASURED:` note carries the geometry.
 
 **Gotchas**
 
 - Deliberately not a whole-image hash, which is too brittle across freetype/fontconfig versions. Pixel reads assume little-endian ARGB32, in-memory byte order `B, G, R, A`.
-- The PNG golden is a dev aid nothing asserts against; regenerate it with `nix develop --command cargo test -p wolf-gnome --test paint_golden -- --ignored regenerate_png_golden`, which needs the `png` feature on the `cairo` dependency. It is the one ignored test in the repo.
+- The PNG golden is a dev aid nothing asserts against; regenerate it with `cargo test -p wolf-gnome --test paint_golden -- --ignored regenerate_png_golden`, which needs the `png` feature on the `cairo` dependency.
 
 #### `roundtrip_nvim.rs`
 
@@ -63,12 +63,11 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 **Covers**
 
-- Forty-two end-to-end smokes launch the built binary under `cage`, drive it with `wtype` and [`wolf-pointer-inject`](../../../tools/wolf-pointer-inject/README.md), and OCR a `grim` screenshot with `tesseract` in sparse-text mode, plus a uniform-block reading in the divider-relaunch smoke.
-- The scenarios span text rendering, the sidebar, the four overlays, splits, pointer input and divider drags, crash and stall recovery, relaunch state, navigation, the system clipboard, the configured appearance, and the command line's surfaces — a completion popup, a two-line message, and a `confirm()` dialog answered with Cancel.
-- Six turn on a value the captive Neovim writes back rather than OCR alone. Four of them: `typed_cd_reroots_the_sidebar_under_cage` (`getcwd()`), `pane_status_bar_shows_each_panes_filename_under_cage` (two panes' filenames plus `winheight(0)`), `config_font_size_changes_the_grid_under_cage` (two launches whose `winwidth(0)` readbacks differ), and `column_cap_and_full_width_toggle_change_the_grid_under_cage` (two `winwidth(0)` readbacks either side of one `:WolfFullWidth`, at a font size it chooses so the cap can bind).
-- The other two, neither of which captures an image: `configured_appearance_reaches_neovims_background_under_cage`, whose two launches must read back exactly `dark` and exactly `light` — and the pair is what discriminates, since `dark` alone is satisfied by a build that pushes nothing and `light` alone by one that always pushes light — and `copy_and_paste_round_trip_through_the_clipboard_under_cage`, whose one buffer readback must carry the yanked marker exactly twice.
-- Five of the forty-two run two app launches inside one `cage` instance: the three relaunch smokes, the configured-font-size one and the appearance one.
-- Six compositor-free guards on the smokes' own fixtures and harness run in microseconds, so the target reports `48 passed`, not `42`. Five need no environment; `the_column_cap_cannot_bind_at_the_ocr_smokes_geometry` measures a real cell, so it alone needs the devShell's pinned `FONTCONFIG_FILE`, which the cage toolchain does not include.
+- Forty-two end-to-end smokes launch the built binary under `cage`, drive it with `wtype` and [`wolf-pointer-inject`](../../../tools/wolf-pointer-inject/README.md), and OCR a `grim` screenshot with `tesseract` in sparse-text mode.
+- The scenarios span text rendering, the sidebar, the four overlays, splits, pointer input and divider drags, crash and stall recovery, relaunch state, navigation, the clipboard, the appearance and the command line's three surfaces.
+- Six turn on a value the captive Neovim writes back rather than on OCR — an exact integer, string or occurrence count that no sidebar row and no `:e` toast can satisfy. Two of the six capture no image at all.
+- Five of the forty-two run two app launches inside one `cage` instance.
+- Six compositor-free guards on the smokes' own fixtures and harness run in microseconds, so the target reports `48 passed`, not `42`. Five need no environment; `the_column_cap_cannot_bind_at_the_ocr_smokes_geometry` alone needs the devShell's pinned `FONTCONFIG_FILE`.
 
 **Gotchas**
 

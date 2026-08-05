@@ -500,19 +500,19 @@ Purpose: the pure, GTK-free state machine behind the sidebar's trailing refresh 
 
 #### `render.rs`
 
-Purpose: the Cairo/Pango paint seam — one grid and its highlight table onto any Cairo context, offscreen in tests and a drawing area in production.
+Purpose: the Cairo/Pango paint seam — one grid and its highlight table onto any Cairo context.
 
 **Public API**
 
-- `CellMetrics::for_font(cr, family, size_pt, line_height_percent)` — uses `cr` only for a Pango context, so the surface's size is irrelevant. The cell height and baseline come from [`cell_metrics_math`](#cell_metrics_mathrs); the measured `ascent`/`descent` and `size_px`, the font size in device pixels, ride along on the result.
+- `CellMetrics::for_font(cr, family, size_pt, line_height_percent)` — uses `cr` only for a Pango context, so the surface's size is irrelevant; the cell height and baseline come from [`cell_metrics_math`](#cell_metrics_mathrs).
 - `paint(cr, grid, highlights, metrics)` — takes one grid rather than a whole `Snapshot`, because under `ext_multigrid` a front-end paints a single grid per surface.
-- `draw_text_line(cr, font, x, y, text, fg)` — one line of free text with its top at `y`, for the statusbar strip; weight and size ride on the caller's font description.
+- `draw_text_line(cr, font, x, y, text, fg)` — one line of free text with its top at `y`, for the statusbar strip.
 
 **Decisions**
 
-- `draw_glyph` moves to `y + baseline - ascent`, not the cell top: Pango puts the layout's top at the move-to point, so a cell taller than the glyph box would hang the glyphs from its top edge.
-- Bold and italic ride on the cloned `FontDescription`; underline, undercurl, strikethrough and the decoration colour arrive as Pango attributes out of [`glyph_style.rs`](#glyph_stylers), and a cell wanting none builds no `AttrList`.
-- The 96 dpi fallback behind the point-to-pixel conversion is the live path on every headless run, not a guard: `context_get_resolution` returns `-1.0` over an `ImageSurface`.
+- `draw_glyph` moves to `y + baseline - ascent`, not the cell top: Pango puts the layout's top at the move-to point, so a taller cell would hang its glyphs from the top edge.
+- The three decorations arrive as Pango attributes out of [`glyph_style.rs`](#glyph_stylers), and a cell wanting none builds no `AttrList`.
+- The 96 dpi fallback in the point-to-pixel conversion is the live path on every headless run, not a guard: `context_get_resolution` returns `-1.0` over an `ImageSurface`.
 - Every cell's background rectangle is filled, including empty ones, which keeps wide-character trailing placeholders and never-painted cells aligned.
 
 **Gotchas**
