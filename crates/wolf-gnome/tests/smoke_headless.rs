@@ -11,7 +11,7 @@
 //!
 //! ## What this file contains
 //!
-//! **Forty-three cage smokes** — one window-render smoke, two file-picker smokes,
+//! **Forty-four cage smokes** — one window-render smoke, two file-picker smokes,
 //! one file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
 //! new-untitled-buffer smoke, one command-palette smoke, one OPEN RECENT smoke
 //! (Ctrl+Shift+P, a typed folder query, then Enter — the activated row re-roots the
@@ -71,12 +71,16 @@
 //! of a LIVE EDIT typed into the source, so the second reads text that reached the
 //! DOM through the JSON body swap and no other way, plus a preview-only statusbar, a
 //! frozen `state.json` whose preview leaf carries the SOURCE path, and two
-//! `tabpagebuflist()` readbacks that name the preview scratch buffer)
+//! `tabpagebuflist()` readbacks that name the preview scratch buffer), and one
+//! PREVIEW-APPEARANCE smoke (two launches at the two `wolf-config.yaml`
+//! `appearance` values, each opening the same document into a preview pane, whose
+//! evidence is RAW PIXELS decoded out of its own captures)
 //! — each of which launches the real binary under `cage`.
 //!
-//! Five smokes run **two app launches inside ONE `cage` instance** (one scenario
+//! Six smokes run **two app launches inside ONE `cage` instance** (one scenario
 //! string, two sequential `"$WOLF_BIN" &` blocks) — the three relaunch ones, the
-//! configured-font-size one and the configured-appearance one — so `CAGE_LOCK`
+//! configured-font-size one, the configured-appearance one and the
+//! preview-appearance one — so `CAGE_LOCK`
 //! semantics are unchanged and the count of compositors started is still one per
 //! smoke.
 //!
@@ -91,7 +95,7 @@
 //! and no `:e` toast can satisfy, and OCR is structurally incapable of answering
 //! "did the cursor land at exactly row 12, column 25".
 //!
-//! Thirty-four of the forty-three OCR a screenshot of the live window. Five
+//! Thirty-four of the forty-four OCR a screenshot of the live window. Five
 //! deliberately capture no image at all: the `:qa` smoke asserts on the cage exit
 //! status alone, while the configured-font-size and column-cap smokes add two
 //! integers each, the configured-appearance smoke two exact strings, and the
@@ -107,6 +111,13 @@
 //! markdown-preview smoke does all three at once — two captures, two readbacks and a
 //! `state.json` frozen mid-run — because the pane it asserts on is the one surface
 //! here whose pixels come from WebKit rather than from this crate's own painter.
+//!
+//! The forty-fourth, [`preview_document_follows_the_configured_appearance_under_cage`],
+//! is a CATEGORY OF ITS OWN and the only member of it: it captures two images, runs
+//! `tesseract` over neither, and asserts on RAW PIXELS sampled at a derived
+//! rectangle out of each capture — which is the only route this harness has to a
+//! COLOUR claim, since OCR reads no colour and cannot tell light-on-dark from
+//! dark-on-light.
 //!
 //! **Six pure guards**, which mechanically enforce invariants the cage smokes
 //! depend on but cannot check themselves:
@@ -178,7 +189,7 @@
 //! a run outside the devShell fails it for that reason rather than for the reason
 //! its message names.
 //!
-//! So this target's summary line reads **`49 passed`**, not `43`: forty-three cage
+//! So this target's summary line reads **`50 passed`**, not `44`: forty-four cage
 //! smokes plus those six guards.
 //!
 //! ## A vacuously-passing check recorded here: the `wtype ""` window-map poll
@@ -221,7 +232,7 @@
 //!
 //! ## When it runs
 //!
-//! The forty-three cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The forty-four cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The Linux verification gate").
@@ -231,13 +242,13 @@
 //! suite command does not run is a silently-skipped test.
 //!
 //! They are, however, the slowest part of the suite: each drives a real
-//! compositor, and all forty-three serialize behind `CAGE_LOCK` (see below).
+//! compositor, and all forty-four serialize behind `CAGE_LOCK` (see below).
 //!
 //! ```text
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the forty-three cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the forty-four cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` and
 //!   `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
@@ -254,7 +265,7 @@
 //!   empty result list.
 //! - `XDG_RUNTIME_DIR` set and writable (the Wayland socket lives there).
 //!
-//! Per project policy every one of the forty-three FAILS LOUD if any of the above is
+//! Per project policy every one of the forty-four FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -281,7 +292,7 @@ use wolf_gnome::{CellMetrics, WINDOW_TITLE_FALLBACK};
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the forty-three cage smoke tests. Each launches its own
+/// Serializes the forty-four cage smoke tests. Each launches its own
 /// `cage` compositor, and two compositors started concurrently contend for the
 /// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
 /// Under the default multi-threaded test harness these tests would otherwise run
@@ -8752,7 +8763,7 @@ exit 0
 /// captive nvim runs in (the recent-files MRU lives in the global
 /// `state_dir()/file-mru.sqlite`, not under the cwd).
 ///
-/// ALL FORTY-THREE cage smokes derive their working directory from this — the window
+/// ALL FORTY-FOUR cage smokes derive their working directory from this — the window
 /// title smoke and the typed-`:cd` smoke use the result as the base for the NESTED
 /// directories their `~` abbreviation needs, the per-pane statusbar smoke hangs its
 /// fixture directory off the parent, and the three relaunch smokes share one of these
@@ -8911,6 +8922,34 @@ const TEMP_CWD_BASENAME: &str = "project";
 /// spuriously fail — an assertion. Naming it after `cwd` keeps the pairing obvious
 /// when reading a post-mortem, and like the temp cwd it is deliberately not deleted.
 fn smoke_state_dir(cwd: &Path) -> PathBuf {
+    smoke_state_dir_at(cwd, "")
+}
+
+/// [`smoke_state_dir`] with an extra name suffix, so ONE scenario can hand its two
+/// launches two DIFFERENT state directories — exactly the split
+/// [`smoke_config_dir_at`] already is, and derived here for the same reason: the
+/// sibling-not-child rule lives in one place.
+///
+/// ## When a shared state dir is right, and when it is a coupling
+///
+/// [`cage_command`] hands both launches of a two-launch scenario the one directory
+/// this returns for `""`, and for the three RELAUNCH smokes that sharing IS the
+/// scenario: launch 2 must read exactly the `state.json` launch 1 wrote.
+///
+/// For a two-launch smoke whose subject is not restore, the same sharing is a
+/// coupling that silently changes what launch 2 is measuring.
+/// [`preview_document_follows_the_configured_appearance_under_cage`] is the case
+/// that forced this split: its launch 1 quits with a preview pane open, so its
+/// `state.json` records a two-leaf layout with a live preview leaf, and launch 2
+/// would then restore TWO panes before its own Preview press. That press's
+/// `preview_ui::preview_placement` input would be `pane_count = 2` rather than `1`,
+/// the placement would be `active` rather than `split_right`, and every derived
+/// rectangle in that smoke — all of which assume the preview is the RIGHT half —
+/// would be aimed at the wrong pane. Worse, it would make a colour claim depend on
+/// the restore path, which is a different unit's subject entirely.
+///
+/// A suffix per launch is what keeps each launch's own persistence its own.
+fn smoke_state_dir_at(cwd: &Path, suffix: &str) -> PathBuf {
     let name = cwd.file_name().unwrap_or_else(|| {
         panic!(
             "smoke cwd {} has no final path component, so no `<name>-state` sibling can be \
@@ -8927,7 +8966,7 @@ fn smoke_state_dir(cwd: &Path) -> PathBuf {
             cwd.display()
         )
     });
-    let dir = parent.join(format!("{}-state", name.to_string_lossy()));
+    let dir = parent.join(format!("{}-state{suffix}", name.to_string_lossy()));
     std::fs::create_dir_all(&dir).unwrap_or_else(|e| {
         panic!(
             "failed to create the smoke state dir {}: {e}. Without it the app under cage falls \
@@ -9383,7 +9422,7 @@ const HOME_CONFIG_DIR_FALLBACK: &str = ".config/wolf";
 /// the "Note (OCR width)" / "Note (OCR height)" paragraphs above their own consts,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
-/// be applied here to all forty-three.
+/// be applied here to all forty-four.
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
@@ -10519,7 +10558,7 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// [`SIDEBARTOGGLE_OCR_KEEP`] is an ordinary content term and follows the ordinary
 /// rule.
 ///
-/// Thirty-four of the forty-three smokes appear here. NINE contribute no rows at
+/// Thirty-four of the forty-four smokes appear here. TEN contribute no rows at
 /// all, on purpose, and it is worth being explicit about which and why:
 ///
 /// * [`colon_qa_closes_the_window_under_cage`] captures no PNG and asserts only that
@@ -10553,6 +10592,12 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 ///   writes about its own lines, and the assertion is an exact OCCURRENCE COUNT of
 ///   a marker that smoke seeds itself — which no sidebar row and no `:e` toast can
 ///   move in either direction.
+/// * [`preview_document_follows_the_configured_appearance_under_cage`] is the one
+///   entry here that DOES capture — two PNGs — and still contributes nothing,
+///   because it runs `tesseract` over neither. Its observables are pixel COUNTS at
+///   a derived rectangle inside one pane, so no rendered word can satisfy or break
+///   an assertion of its: a filler row is text, and text is not the colour of the
+///   background it is drawn on.
 ///
 /// The other two pointer smokes DO OCR and their terms are listed below. For
 /// [`click_then_close_keeps_keyboard_input_alive_under_cage`] the OCR pair is
@@ -11194,7 +11239,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 /// substring of any [`SIDEBAR_FILLER_FILES`] entry, and no filler may be renamed to
 /// make one so.
 ///
-/// NINE smokes contribute no term, which is the same nine [`ASSERTED_OCR_TERMS`]'s
+/// TEN smokes contribute no term, which is the same ten [`ASSERTED_OCR_TERMS`]'s
 /// own doc comment enumerates — the two counts are of one set and must not drift
 /// apart again. Five capture no image at all:
 /// [`colon_qa_closes_the_window_under_cage`] (the cage exit status),
@@ -11203,9 +11248,12 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 /// integers each), [`configured_appearance_reaches_neovims_background_under_cage`]
 /// (two `&background` strings) and
 /// [`copy_and_paste_round_trip_through_the_clipboard_under_cage`] (an exact
-/// occurrence count in a buffer readback). The other four — the click, drag, scroll
+/// occurrence count in a buffer readback). Four more — the click, drag, scroll
 /// and divider-relayout smokes — assert on files the captive Neovim writes about its
-/// own state rather than on pixels.
+/// own state rather than on pixels. The tenth,
+/// [`preview_document_follows_the_configured_appearance_under_cage`], captures TWO
+/// images and OCRs neither: it counts raw pixels of an exact colour inside a derived
+/// rectangle, and a filler filename cannot change a background's colour.
 ///
 /// ## What it does NOT guard (and why that matters)
 ///
@@ -11238,7 +11286,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the forty-three smokes — still
+/// nothing to the smoke suite's runtime and — unlike the forty-four smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
@@ -18553,7 +18601,11 @@ exit 0
 /// says nothing about the GTK chrome's colour scheme, which
 /// `appearance_decision` pins as a value and `apply_at_launch` demonstrably passes
 /// to `set_color_scheme`, and nothing about the grid's colours, which are the
-/// captive Neovim's colorscheme responding to the option this smoke reads.
+/// captive Neovim's colorscheme responding to the option this smoke reads. That
+/// scoping is exact and stays; the colour claim belongs to a SIBLING —
+/// [`preview_document_follows_the_configured_appearance_under_cage`] decodes
+/// pixels instead of OCR'ing, and is the one test here that observes
+/// `set_color_scheme`.
 ///
 /// ## The conventions it obeys
 ///
@@ -18696,6 +18748,1214 @@ fn configured_appearance_reaches_neovims_background_under_cage() {
          for the second and GREEN for the first. Anything that is neither {APPEARANCE_FORCED_DARK:?} \
          nor {APPEARANCE_FORCED_LIGHT:?} means the Ex command did not execute as typed; check for a \
          stray keystroke landing in the buffer instead of the cmdline."
+    );
+}
+
+// --- The PREVIEW DOCUMENT follows the configured appearance ------------------
+//
+// Everything from here down to the column-cap section belongs to ONE smoke,
+// [`preview_document_follows_the_configured_appearance_under_cage`], and it is the
+// only smoke in this file whose evidence is RAW PIXELS: the two theme colours, the
+// derived sampling geometry, the PNG decoder, the two-launch scenario and the smoke
+// itself. Nothing here is OCR'd and nothing here is shared with another smoke.
+
+/// The markdown file both launches open and then preview.
+///
+/// Nothing in this smoke is OCR'd, so this name carries none of the
+/// [`SIDEBAR_FILLER_FILES`] hazard and this smoke contributes no row to
+/// [`RELAUNCH_FIXTURE_NAMES`]: a sidebar row is TEXT, and text cannot satisfy an
+/// assertion whose subject is the colour of a background.
+const PREVIEW_THEME_SOURCE_FILE: &str = "pvtheme.md";
+
+/// The whole body of [`PREVIEW_THEME_SOURCE_FILE`]: ONE paragraph, long enough to
+/// soft-wrap across the preview pane's content width, and nothing else.
+///
+/// ## Why a paragraph and NOT a heading, which is the load-bearing choice
+///
+/// Assertion 6 asks whether the document's first line box sits flush against the top
+/// of the web view. That question is only about `body.wolf-markdown`'s own padding if
+/// nothing ELSE can push the first block down, and `base.css` gives `p` a flat
+/// `margin: 0 0 24px` — a zero top margin on EVERY paragraph, not just the first. A
+/// heading would instead carry `margin-top: 48px` and depend on the edge-rule
+/// selector (`body.wolf-markdown > *:not(.wolf-src):not(...)`) to reset it, so a
+/// heading-led fixture would fail assertion 6 for either of TWO causes and the
+/// assertion could not name which. With a paragraph, the body's padding is the only
+/// term left.
+///
+/// ## Why it must WRAP
+///
+/// The sampled columns are a band across the middle of the preview pane, not the
+/// whole of it, so a short first line would put its ink to the LEFT of everything
+/// assertion 6 looks at and the band would read empty on a perfectly good render.
+/// A paragraph that soft-wraps fills the content width edge to edge.
+///
+/// ## Why it must stay SHORT overall
+///
+/// Assertion 5's band is the lower half of the pane, and its `>= 90%` threshold
+/// assumes that region is document BACKGROUND rather than text. Roughly four wrapped
+/// lines of 16 px body text is about 96 px of content against a web view some 500 px
+/// tall, so the band sits far below the last line. Growing this fixture eats that
+/// margin; if more ink is ever needed at the TOP, make the LINE longer, not the
+/// document taller.
+const PREVIEW_THEME_SOURCE_BODY: &str = "alfa bravo charlie delta echo foxtrot golf hotel india \
+                                         juliett kilo lima mike november oscar papa quebec romeo \
+                                         sierra tango uniform victor whiskey xray yankee zulu, \
+                                         and around again once more.";
+
+/// Name suffix of run 1's config AND state directory siblings.
+///
+/// One suffix for both so a post-mortem pairs `…-config-preview-dark` with
+/// `…-state-preview-dark` by eye. See [`smoke_state_dir_at`] for why the state
+/// directories must not be shared between the two launches.
+const PREVIEW_THEME_DARK_SUFFIX: &str = "-preview-dark";
+
+/// Name suffix of run 2's config and state directory siblings. See
+/// [`PREVIEW_THEME_DARK_SUFFIX`].
+const PREVIEW_THEME_LIGHT_SUFFIX: &str = "-preview-light";
+
+/// Run 1's capture, taken with its preview pane live.
+///
+/// Both captures live under `XDG_RUNTIME_DIR` rather than in the smoke's cwd, so the
+/// app's own `FileSearch` never lists them and neither becomes a tree-sidebar row.
+/// Nothing here is OCR'd, so that is the sibling smokes' convention rather than a
+/// load-bearing property — but a PNG appearing in the sidebar would still change the
+/// page the EDITOR pane draws, which assertion 4 samples.
+const PREVIEW_THEME_DARK_PNG_NAME: &str = "wolf_gnome_preview_theme_dark.png";
+
+/// Run 2's capture. See [`PREVIEW_THEME_DARK_PNG_NAME`].
+const PREVIEW_THEME_LIGHT_PNG_NAME: &str = "wolf_gnome_preview_theme_light.png";
+
+/// File run 1's Neovim writes its window/buffer list into.
+const PREVIEW_THEME_DARK_WINS_NAME: &str = "wolf_gnome_preview_theme_wins_1.txt";
+
+/// File run 2's Neovim writes its window/buffer list into.
+const PREVIEW_THEME_LIGHT_WINS_NAME: &str = "wolf_gnome_preview_theme_wins_2.txt";
+
+/// The `background-color` `wolf_core`'s `markdown/themes/default.css` gives
+/// `body.wolf-markdown` in DARK, as `(r, g, b)`.
+///
+/// RE-TYPED here as a literal, never imported from `wolf-core`, and that is the
+/// whole point rather than a stylistic preference: this smoke's claim is that the
+/// pixels on screen are THIS colour, and reading the value out of the crate that
+/// produced them would make the assertion a comparison with itself — it would hold
+/// for whatever the stylesheet became, including a stylesheet that stopped
+/// distinguishing the two appearances at all. [`PREVIEW_OCR_STATUS`] sets the same
+/// precedent for a string.
+///
+/// MEASURED against the real WebKitGTK, not read off the CSS:
+/// `getComputedStyle(body).backgroundColor` is `rgb(27, 27, 27)` with
+/// `StyleManager::set_color_scheme(ForceDark)` applied before any widget exists.
+const PREVIEW_DARK_BG: (u8, u8, u8) = (0x1b, 0x1b, 0x1b);
+
+/// The same in LIGHT, from the `@media (prefers-color-scheme: light)` block. See
+/// [`PREVIEW_DARK_BG`] for why it is re-typed rather than imported.
+///
+/// MEASURED the same way: `rgb(244, 244, 244)` under `ForceLight`, on a desktop that
+/// was reading DARK before the call — so the forced value OVERRIDES the ambient one
+/// rather than coinciding with it.
+const PREVIEW_LIGHT_BG: (u8, u8, u8) = (0xf4, 0xf4, 0xf4);
+
+/// A pixel's colour as `(r, g, b)`. No alpha: see [`decode_capture`].
+type Rgb8 = (u8, u8, u8);
+
+/// Bytes per pixel in a decoded `grim` capture. Four even for
+/// [`cairo::Format::Rgb24`], whose fourth byte is PADDING — see [`decode_capture`].
+const CAPTURE_BYTES_PER_PIXEL: usize = 4;
+
+/// How far inside a pane's own left and right edges the sampled columns start.
+///
+/// It clears three things at once, and names them rather than its number. First, half
+/// of the `gtk::Paned` handle between the two panes — this file deliberately never
+/// models that handle's width, so the boundary between the two halves is known only
+/// to within it. Second, the pane's own `editor_inset::EDITOR_PADDING_PX` gutter.
+/// Third, the WebKit scrollbar a document taller than its viewport would draw down
+/// the view's right edge (this fixture is far shorter than that, so the clearance is
+/// belt-and-braces there).
+///
+/// FOUR paddings, because the padding is the only one of the three whose size this
+/// file knows: at the pinned output that is 80 px, against a GTK handle of
+/// single-digit pixels and a scrollbar of roughly fifteen. Derived values at
+/// 1280x720: the preview band spans columns 846..1200 and the editor band 331..686.
+const BAND_X_INSET_PX: f64 = 4.0 * wolf_gnome::editor_inset::EDITOR_PADDING_PX;
+
+/// How far above the output's bottom edge the sampled rows stop.
+///
+/// It clears the window's full-width command-line strip, the pane's own bottom
+/// `EDITOR_PADDING_PX` gutter, and the message toast that would sit above the strip
+/// if the captive Neovim emitted one. SIX paddings — 120 px at the pinned output —
+/// against a strip one grid row tall (44 px at [`SMOKE_FONT_PT`]) plus that 20 px
+/// gutter. Derived value: the sampled rows end at y = 600.
+const BAND_BOTTOM_CLEARANCE_PX: f64 = 6.0 * wolf_gnome::editor_inset::EDITOR_PADDING_PX;
+
+/// How many rows below the web view's own top edge assertion 6 counts ink in.
+///
+/// ONE baseline unit, re-typed rather than imported from `base.css`'s
+/// `--wolf-baseline`, because the document's first line box is exactly that tall:
+/// `body.wolf-markdown` sets `line-height: 24px` as a LENGTH, so every line box in
+/// the body is 24 px whatever font size sits inside it.
+///
+/// ## Why not more, and why not less
+///
+/// The named falsifier is `padding-top: 48px` on `body.wolf-markdown` — TWO baseline
+/// units — so any band up to 48 rows tall is emptied by it. Stopping at 24 leaves a
+/// factor of two in hand on the falsifying side, which is where the discrimination
+/// lives. Going below 24 would start to depend on where inside its line box the
+/// first line's ink falls, which is a font-metric question this file must not take a
+/// position on.
+///
+/// ## The premise it rests on, stated rather than assumed
+///
+/// That the leading `.wolf-src` marker span `markdown.rs` flushes at the top of the
+/// first block costs NO vertical space. It is an empty, zero-size inline anchor, so
+/// per CSS 2.1 §10.8 the anonymous block box around it holds a line box that must be
+/// treated as not existing — but `base.css`'s own header calls that corner
+/// "engine-dependent territory", so it is MEASURED rather than reasoned: against the
+/// real `render_html` output in WebKitGTK 2.52.4, `body` padding read `0px` on all
+/// four sides and the first block's top offset read `0`. If a leading anchor ever
+/// did cost a line box, the first ink would land at row 24 and this band would read
+/// empty on a good render.
+///
+/// MEASURED (first-ink row inside the band, from a retained green-run capture, at
+/// GTK 4.22.4 / libadwaita 1.9.0 / WebKitGTK 2.52.4): the located `web_top` is
+/// absolute row 159 on BOTH launches, and the first row carrying any non-theme pixel
+/// is absolute row 165 — OFFSET 6 into the band, with rows 0..5 pure background. So
+/// the leading `.wolf-src` anchor costs no line box here: had it cost one, the first
+/// ink would have landed at offset 24 and this band would have read empty. Offset 6
+/// against a 24-row band leaves the whole rest of the first line box in hand, so 24
+/// stands and is NOT raised towards 48 — raising it would only weaken the
+/// discrimination the falsifier depends on.
+const FLUSH_BAND_PX: f64 = 24.0;
+
+/// The fewest non-theme pixels assertion 6 accepts inside the flush band.
+///
+/// ACCEPTANCE CRITERION, not a tuned number: it must sit far above what stray
+/// antialiasing at a band edge could produce, and far below what a wrapped line of
+/// 16 px body text across the sampled columns really draws. The estimate behind the
+/// value: the first line box's glyph rows are roughly two thirds of its 24, the
+/// sampled columns are 354 wide, and text covers something like a fifth of that
+/// area — order 1,000 pixels, so 200 is a fivefold margin.
+///
+/// MEASURED (actual ink count in a green run): 1,987 non-theme pixels on run 1
+/// (dark) and 1,987 on run 2 (light) — just under TEN times this floor, and twice
+/// the order-1,000 estimate above. The two launches read the SAME count because the
+/// two documents differ only in colour, so the set of pixels that are not the
+/// background is the same set of glyph pixels in both. Under the named falsifier
+/// (`padding-top: 48px`) both counts read 0. No change to the fixture is needed.
+const MIN_FLUSH_INK_PX: usize = 200;
+
+/// The most of assertion 4's CONTROL band that may be the launch's theme colour.
+///
+/// A ceiling rather than an exact zero: the editor pane draws glyphs, and an
+/// antialiased edge between the editor's foreground and background sweeps a range of
+/// colours. 2% is far above any plausible coincidence and far below the ~100% a real
+/// collision would produce, so the two readings are never ambiguous.
+const CONTROL_MAX_THEME_FRACTION: f64 = 0.02;
+
+/// The least of assertion 5's SAMPLE band that must be the launch's own theme
+/// colour.
+///
+/// Not 100%: the band is inside the web view, and a document that grew — or a WebKit
+/// that drew a scrollbar — would put a little non-background ink in it. Phase 0
+/// measured the dominant colour of a whole-screen preview frame at 79.8% with the
+/// app chrome included; inside the pane, with the fixture deliberately short, the
+/// band is background almost everywhere.
+const SAMPLE_MIN_THEME_FRACTION: f64 = 0.90;
+
+/// The most of assertion 5's sample band that may be the OTHER appearance's theme
+/// colour.
+///
+/// The half that makes assertion 5 a DISCRIMINATOR rather than a presence check: a
+/// launch that rendered the wrong appearance would put the other colour at ~100%
+/// here, and the two thresholds cannot both be satisfied by one frame.
+const SAMPLE_MAX_OTHER_FRACTION: f64 = 0.01;
+
+/// A rectangle of output pixels this smoke samples, in absolute compositor
+/// coordinates. Half-open on both axes: `x0 <= x < x1`, `y0 <= y < y1`.
+///
+/// A struct rather than four loose `usize`s because the samplers below would
+/// otherwise take five and six arguments — `clippy::too_many_arguments` territory —
+/// and because four same-typed positional arguments are exactly the shape a later
+/// edit transposes silently.
+#[derive(Clone, Copy, Debug)]
+struct SampleRect {
+    x0: usize,
+    x1: usize,
+    y0: usize,
+    y1: usize,
+}
+
+impl SampleRect {
+    /// How many pixels the rectangle covers.
+    fn pixels(self) -> usize {
+        (self.x1 - self.x0) * (self.y1 - self.y0)
+    }
+}
+
+/// A decoded `grim` capture: its pixels COPIED out of the cairo surface, plus the
+/// three numbers needed to address them.
+struct Capture {
+    /// The surface's bytes, owned. See [`decode_capture`] for why they are copied.
+    data: Vec<u8>,
+    /// Bytes per row, which is NOT `width * 4` in general.
+    stride: usize,
+    /// The capture's width in pixels.
+    width: usize,
+    /// The capture's height in pixels.
+    height: usize,
+}
+
+impl Capture {
+    /// The `(r, g, b)` at `(x, y)`.
+    ///
+    /// Little-endian byte order inside a pixel is `B, G, R, X`. The fourth byte is
+    /// read by NOTHING here — see [`decode_capture`].
+    fn pixel(&self, x: usize, y: usize) -> Rgb8 {
+        let i = y * self.stride + x * CAPTURE_BYTES_PER_PIXEL;
+        (self.data[i + 2], self.data[i + 1], self.data[i])
+    }
+
+    /// How many pixels inside `rect` are exactly `colour`.
+    fn count_exactly(&self, rect: SampleRect, colour: Rgb8) -> usize {
+        let mut hits = 0;
+        for y in rect.y0..rect.y1 {
+            for x in rect.x0..rect.x1 {
+                if self.pixel(x, y) == colour {
+                    hits += 1;
+                }
+            }
+        }
+        hits
+    }
+
+    /// The first row in `rows` every one of whose sampled columns is exactly
+    /// `colour`, or `None` if there is none.
+    ///
+    /// This is how assertion 6 locates the web view's own top edge without modelling
+    /// the per-pane chrome above it. EVERY column has to match, so a row of statusbar
+    /// text — which is mostly the editor's background with glyphs through it — can
+    /// never be mistaken for the first row of the document. A stray pixel in the web
+    /// view's own first row costs one row of the band and nothing more.
+    fn first_uniform_row(
+        &self,
+        columns: (usize, usize),
+        rows: (usize, usize),
+        colour: Rgb8,
+    ) -> Option<usize> {
+        let (x0, x1) = columns;
+        let (y0, y1) = rows;
+        (y0..y1).find(|&y| (x0..x1).all(|x| self.pixel(x, y) == colour))
+    }
+}
+
+/// `count / total`, with both sides widened to `f64` without an `as` cast.
+///
+/// `u32` is the intermediate because `f64::from(u32)` is lossless and a sampled band
+/// is tens of thousands of pixels, so the narrowing can only fail on a rect that is
+/// already nonsense.
+fn band_fraction(count: usize, total: usize, what: &str) -> f64 {
+    assert!(
+        total > 0,
+        "{what}: the sampled band is EMPTY, so every fraction computed from it would be a division \
+         by zero and every threshold below would be vacuous. Re-derive the band's rectangle from \
+         CAGE_OUTPUT_*_EXPECTED and OVERLAY_ORIGIN_*_EXPECTED."
+    );
+    let numerator = u32::try_from(count)
+        .unwrap_or_else(|e| panic!("{what}: pixel count {count} does not fit in a u32 ({e})"));
+    let denominator = u32::try_from(total)
+        .unwrap_or_else(|e| panic!("{what}: band size {total} does not fit in a u32 ({e})"));
+    f64::from(numerator) / f64::from(denominator)
+}
+
+/// Rounds a derived pixel coordinate to the `usize` index [`Capture::pixel`]
+/// addresses rows and columns with, through [`pixel_target`]'s finite-and-in-range
+/// check — never a bare `as` cast.
+fn pixel_index(value: f64, what: &str) -> usize {
+    let rounded = pixel_target(value, what);
+    usize::try_from(rounded).unwrap_or_else(|e| {
+        panic!(
+            "{what} = {rounded} is not a usable pixel index ({e}). `pixel_target` has already \
+             proved it non-negative and finite, so this is unreachable unless that bound changed."
+        )
+    })
+}
+
+/// The pane AREA in absolute output pixels, as `(x, y, w, h)`.
+///
+/// The same pair [`the_column_cap_cannot_bind_at_the_ocr_smokes_geometry`] reads, and
+/// for the same reason: [`OVERLAY_ORIGIN_X_EXPECTED`] / [`OVERLAY_ORIGIN_Y_EXPECTED`]
+/// name the WIDGET's corner, which is what a band inside a pane has to be built from.
+/// `PANE_ORIGIN_*` names the TEXT GRID's corner and must NOT be substituted: the two
+/// differ by a statusbar strip and a padding.
+///
+/// Derived at the pinned output size: `(251, 47, 1029, 673)`.
+fn preview_theme_pane_area() -> (f64, f64, f64, f64) {
+    let output_w = exact_f64(CAGE_OUTPUT_W_EXPECTED, "CAGE_OUTPUT_W_EXPECTED");
+    let output_h = exact_f64(CAGE_OUTPUT_H_EXPECTED, "CAGE_OUTPUT_H_EXPECTED");
+    (
+        OVERLAY_ORIGIN_X_EXPECTED,
+        OVERLAY_ORIGIN_Y_EXPECTED,
+        output_w - OVERLAY_ORIGIN_X_EXPECTED,
+        output_h - OVERLAY_ORIGIN_Y_EXPECTED,
+    )
+}
+
+/// The rows BOTH bands sample, as absolute output pixel indices `y0..y1`.
+///
+/// It starts at the pane area's vertical MIDPOINT, which puts it below everything
+/// [`PREVIEW_THEME_SOURCE_BODY`] renders (about four wrapped lines, some 96 px, under
+/// a web view whose top edge sits about 160 px down the output), and ends
+/// [`BAND_BOTTOM_CLEARANCE_PX`] above the output's bottom edge.
+///
+/// Derived at the pinned output size: rows 384..600.
+fn preview_theme_band_rows() -> (usize, usize) {
+    let (_, area_y, _, area_h) = preview_theme_pane_area();
+    let output_h = exact_f64(CAGE_OUTPUT_H_EXPECTED, "CAGE_OUTPUT_H_EXPECTED");
+    let y0 = pixel_index(area_y + area_h / 2.0, "the sampled band's first row");
+    let y1 = pixel_index(
+        output_h - BAND_BOTTOM_CLEARANCE_PX,
+        "the sampled band's last row",
+    );
+    (y0, y1)
+}
+
+/// The columns sampled inside the PREVIEW (right) pane, as `x0..x1`.
+///
+/// Derived at the pinned output size: columns 846..1200.
+fn preview_theme_preview_columns() -> (usize, usize) {
+    let (area_x, _, area_w, _) = preview_theme_pane_area();
+    let output_w = exact_f64(CAGE_OUTPUT_W_EXPECTED, "CAGE_OUTPUT_W_EXPECTED");
+    let x0 = pixel_index(
+        area_x + area_w / 2.0 + BAND_X_INSET_PX,
+        "the preview band's first column",
+    );
+    let x1 = pixel_index(output_w - BAND_X_INSET_PX, "the preview band's last column");
+    (x0, x1)
+}
+
+/// The columns sampled inside the EDITOR (left) pane — assertion 4's control — as
+/// `x0..x1`.
+///
+/// Derived at the pinned output size: columns 331..686.
+fn preview_theme_editor_columns() -> (usize, usize) {
+    let (area_x, _, area_w, _) = preview_theme_pane_area();
+    let x0 = pixel_index(area_x + BAND_X_INSET_PX, "the control band's first column");
+    let x1 = pixel_index(
+        area_x + area_w / 2.0 - BAND_X_INSET_PX,
+        "the control band's last column",
+    );
+    (x0, x1)
+}
+
+/// The rows assertion 6 scans for the web view's own top edge, as `y0..y1`: from the
+/// pane area's top edge down to the sampled band's first row.
+///
+/// It deliberately starts ABOVE the web view, in the preview pane's statusbar strip,
+/// so that "the first row that is entirely the theme colour" is a real transition
+/// rather than the first row it happened to look at.
+///
+/// Derived at the pinned output size: rows 47..384.
+fn preview_theme_scan_rows() -> (usize, usize) {
+    let (_, area_y, _, _) = preview_theme_pane_area();
+    let y0 = pixel_index(area_y, "the web-view scan's first row");
+    let (band_y0, _) = preview_theme_band_rows();
+    (y0, band_y0)
+}
+
+/// Decodes one `grim` capture into owned pixels, checking its format and size first.
+///
+/// ## Two PNG facts a later reader will "simplify" back, both MEASURED
+///
+/// **The decoded format is [`cairo::Format::Rgb24`], NOT `ARgb32`.** `grim` writes an
+/// OPAQUE PNG, so cairo picks the format with no alpha channel. A decoder written
+/// against `paint_golden.rs`'s in-memory surfaces — which really are `ARgb32` —
+/// asserts the wrong one and fails on a perfectly good capture.
+///
+/// **The little-endian byte order inside a pixel is `B, G, R, X`, where the fourth
+/// byte is PADDING and not alpha.** Cairo keeps the 32-bit stride for `Rgb24`, so the
+/// arithmetic is the same as `ARgb32`'s and only the meaning of the last byte
+/// changes. Its contents are UNDEFINED, so nothing here may read it — which is why
+/// [`Rgb8`] carries no alpha component and why every comparison in this smoke is on
+/// three channels.
+///
+/// ## Why the bytes are copied
+///
+/// `ImageSurface::data` hands out a borrow of the live surface and refuses while any
+/// other reference exists. Copying into an owned `Vec` and dropping the surface here
+/// means no caller has to keep the surface alive alongside its samples, and no
+/// assertion below can fail to compile for a borrow reason that has nothing to do
+/// with what it is measuring.
+///
+/// This is also ASSERTION 2 of
+/// [`preview_document_follows_the_configured_appearance_under_cage`]: the size check
+/// is what makes every derived rectangle in this section mean what it says.
+fn decode_capture(path: &Path, smoke: &str, label: &str) -> Capture {
+    let mut file = std::fs::File::open(path).unwrap_or_else(|e| {
+        panic!(
+            "{smoke}: could not open {label}'s capture {}: {e}. The scenario runs `grim` under \
+             `set -eu`, so a cage status of 0 with no file here means grim wrote somewhere else.",
+            path.display()
+        )
+    });
+    let mut surface = ImageSurface::create_from_png(&mut file).unwrap_or_else(|e| {
+        panic!(
+            "{smoke}: cairo could not decode {label}'s capture {} as a PNG: {e}. A zero-length \
+             file means `grim` produced no image data; a decode error on a non-empty file means \
+             it is not a PNG at all.",
+            path.display()
+        )
+    });
+    let format = surface.format();
+    assert!(
+        matches!(format, Format::Rgb24),
+        "{smoke}: {label}'s capture {} decoded as {format:?}, not Rgb24. `grim` writes an OPAQUE \
+         PNG and cairo picks the format with no alpha channel for one, so Rgb24 is what a real \
+         capture gives. An ARgb32 here means the file did not come from `grim`. Do NOT relax this \
+         to accept both: the per-pixel byte layout this smoke reads is written down against Rgb24 \
+         in `decode_capture`'s doc comment, and its fourth byte is PADDING rather than alpha.",
+        path.display()
+    );
+    let width = usize::try_from(surface.width())
+        .unwrap_or_else(|e| panic!("{smoke}: {label}'s capture has a negative width ({e})"));
+    let height = usize::try_from(surface.height())
+        .unwrap_or_else(|e| panic!("{smoke}: {label}'s capture has a negative height ({e})"));
+    let stride = usize::try_from(surface.stride())
+        .unwrap_or_else(|e| panic!("{smoke}: {label}'s capture has a negative stride ({e})"));
+
+    let want_w = usize::try_from(CAGE_OUTPUT_W_EXPECTED)
+        .expect("CAGE_OUTPUT_W_EXPECTED is a small positive literal");
+    let want_h = usize::try_from(CAGE_OUTPUT_H_EXPECTED)
+        .expect("CAGE_OUTPUT_H_EXPECTED is a small positive literal");
+    assert!(
+        width == want_w && height == want_h,
+        "{smoke}: {label}'s capture {} is {width}x{height}, not the {want_w}x{want_h} this file \
+         pins as the cage output. EVERY sampling rectangle in this smoke is derived from those two \
+         numbers plus OVERLAY_ORIGIN_*_EXPECTED, so a different output size does not merely shift \
+         the bands — it aims them at panes that are not where they were measured, and assertions \
+         4, 5 and 6 would all be reading the wrong region while still producing plausible \
+         percentages. Re-measure the output and the overlay origin together; do not adjust one.",
+        path.display()
+    );
+    assert!(
+        stride >= width * CAPTURE_BYTES_PER_PIXEL,
+        "{smoke}: {label}'s capture reports a stride of {stride} bytes for {width} pixels, which \
+         is less than the {} its own format needs. Every pixel read would then run into the \
+         previous row. This is a cairo invariant, so a failure here means the surface is not the \
+         image surface it claims to be.",
+        width * CAPTURE_BYTES_PER_PIXEL
+    );
+
+    let data = surface
+        .data()
+        .unwrap_or_else(|e| {
+            panic!(
+                "{smoke}: cairo refused to lend {label}'s decoded pixels ({e}). That happens when \
+                 another reference to the surface is still alive, which cannot be the case here."
+            )
+        })
+        .to_vec();
+    drop(surface);
+
+    Capture {
+        data,
+        stride,
+        width,
+        height,
+    }
+}
+
+/// One launch's evidence, so the per-launch assertions read as ONE loop rather than
+/// as two copies that can drift.
+///
+/// Named fields rather than a tuple: four of the six are `&str` and two are `Rgb8`,
+/// which is exactly the shape a positional literal transposes silently — and a
+/// transposed `own` / `other` would turn assertion 5 into its own negation while
+/// still compiling.
+struct ThemeLaunch<'a> {
+    /// How a failure names this launch, matching the scenario's own stderr labels.
+    label: &'a str,
+    /// The launch's decoded capture.
+    capture: &'a Capture,
+    /// The theme colour this launch's `appearance` should have produced.
+    own: Rgb8,
+    /// The const name of `own`, for the failure message.
+    own_name: &'a str,
+    /// The OTHER appearance's theme colour.
+    other: Rgb8,
+    /// The const name of `other`, for the failure message.
+    other_name: &'a str,
+}
+
+/// The two-launch PREVIEW-APPEARANCE scenario, run as one `sh -c` string inside ONE
+/// `cage`: [`APPEARANCE_SCENARIO`]'s two-launch shape with [`PREVIEW_SCENARIO`]'s
+/// preview leg inside each launch.
+///
+/// Each launch exports its own `WOLF_CONFIG_DIR` **and** its own `WOLF_STATE_DIR`,
+/// deliberately overriding both of the ones [`cage_command`] sets. The config one is
+/// what makes the appearance the variable; the state one is what keeps launch 1's
+/// persisted two-pane layout out of launch 2 — see [`smoke_state_dir_at`], where the
+/// consequence of sharing is written out.
+///
+/// The launch body is a shell FUNCTION rather than two copies, because the two runs
+/// must differ in nothing but their four paths and their four exit codes: a preview
+/// leg duplicated by hand is a preview leg that can be edited on one side only, and
+/// this smoke's whole design is that the two launches are the same run at two
+/// settings. Its nine positional parameters are saved into named variables
+/// immediately, since `wait_window` and `quit_app` rebind `$1`.
+///
+/// Exit codes are PER LAUNCH, [`APPEARANCE_SCENARIO`]'s scheme exactly: `11` run 1's
+/// app died before its window mapped; `12` run 1 was still alive after `:qa!`; `13`
+/// run 1 exited non-zero; `14` run 1's window-list readback never appeared; `15`–`18`
+/// the same four for run 2. Eight and not four, for the reason that smoke gives: "an
+/// app died before its window mapped" is a different investigation depending on which
+/// appearance it was reading.
+///
+/// A `grim` failure has no code of its own: it aborts under `set -eu` and the cage
+/// status carries grim's own. That is deliberate — a capture that did not happen is
+/// not a preview finding, and assertion 2 names it anyway.
+const PREVIEW_THEME_SCENARIO: &str = r#"
+set -eu
+
+# SETTLE is the ONLY real budget between spawning either run's app and its first
+# keystroke: `wait_window`'s wtype probe does NOT gate input readiness (it breaks
+# at tries=0 on every run -- see the module doc comment).
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+QUIT_TRIES=75
+FILE_TRIES=100
+# PREVIEW_SETTLE -- budgeted FROM THE CALL, not from the web view's Started event.
+# PREVIEW_SCENARIO's doc comment carries the measurement behind it (~255 ms for a
+# cold open, about 110 ms of that spent spawning the WebProcess before Started
+# fires). It is spent TWICE here, and BOTH spends are cold opens: run 2 is a brand
+# new process with a brand new WebProcess. Do not trim it.
+PREVIEW_SETTLE=2.0
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+# $1 is the exit code to use if the app dies first, so run 1 and run 2 stay
+# distinguishable by the CODE alone; $2 is the run label, printed as well so a
+# truncated log needs no code table.
+wait_window() {
+    tries=0
+    while [ "$tries" -lt "$WAIT_TRIES" ]; do
+        if ! kill -0 "$app_pid" 2>/dev/null; then
+            echo "wolf-gnome preview-appearance smoke: $2 app exited early (pid $app_pid)" >&2
+            exit "$1"
+        fi
+        if wtype "" >/dev/null 2>&1; then
+            return 0
+        fi
+        tries=$((tries + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    return 0
+}
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome preview-appearance smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# $1 is the exit code for "still alive after :qa!", $2 for "exited non-zero", and
+# $3 is the run label; see wait_window.
+quit_app() {
+    wtype -- ":qa!"
+    wtype -k Return
+
+    tries=0
+    gone=0
+    while [ "$tries" -lt "$QUIT_TRIES" ]; do
+        if ! kill -0 "$app_pid" 2>/dev/null; then
+            gone=1
+            break
+        fi
+        tries=$((tries + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    if [ "$gone" -ne 1 ]; then
+        echo "wolf-gnome preview-appearance smoke: $3 app (pid $app_pid) still alive after :qa!." >&2
+        exit "$1"
+    fi
+    # `set -e` would abort before the status could be reported, so collect it
+    # through `||`, which is exempt from it.
+    rc=0
+    wait "$app_pid" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "wolf-gnome preview-appearance smoke: $3 app (pid $app_pid) exited $rc, not 0." >&2
+        exit "$2"
+    fi
+    app_pid=
+}
+
+# ONE launch, end to end. The two runs call it with different paths and different
+# exit codes and are otherwise the same run -- which is the whole design of this
+# smoke, so the body must never be duplicated.
+#
+# The nine parameters are saved into named variables FIRST: wait_window and
+# quit_app below rebind $1..$3 for their own calls.
+run_launch() {
+    cfg=$1
+    state=$2
+    png=$3
+    wins=$4
+    code_died=$5
+    code_alive=$6
+    code_status=$7
+    code_file=$8
+    label=$9
+
+    # Both exports deliberately override what `cage_command` set: the helper's
+    # directories are shared, and this smoke needs the appearance to be the one
+    # variable AND each launch's persistence to be its own.
+    WOLF_CONFIG_DIR="$cfg"
+    WOLF_STATE_DIR="$state"
+    export WOLF_CONFIG_DIR WOLF_STATE_DIR
+
+    "$WOLF_BIN" &
+    app_pid=$!
+    wait_window "$code_died" "$label"
+    sleep "$SETTLE"
+
+    # --- Step 1: open the SOURCE in the window's ONE pane --------------------
+    #
+    # One pane is what makes the placement deterministic: `preview_placement`
+    # answers `split_right` for a pane count of 1 whatever the two preview inputs
+    # say. See the smoke's doc comment for the rest of that chain.
+    wtype -- ":e $SRC_FILE"
+    wtype -k Return
+    sleep "$SETTLE"
+
+    # --- Step 2: drive PREVIEW through the command palette -------------------
+    #
+    # Ctrl+Shift+P, the query, Enter. Preview has no accelerator row of its own, so
+    # the palette and the :WolfPreview Ex command are its only two routes.
+    wtype -M ctrl -M shift -k p -m shift -m ctrl
+    sleep "$SETTLE"
+    wtype -- "$PREVIEW_QUERY"
+    sleep "$SETTLE"
+    wtype -k Return
+    sleep "$PREVIEW_SETTLE"
+
+    # --- Step 3: the capture, with the preview pane live ---------------------
+    grim "$png"
+
+    # --- Step 4: NEOVIM's own answer about what its windows hold -------------
+    #
+    # Taken AFTER the capture on purpose: this typed command line is drawn by the
+    # cmdline strip, and the capture must not carry it. Joined with a COMMA rather
+    # than a space because a preview scratch's own name contains one.
+    wtype -- ":call writefile([join(map(tabpagebuflist(), {_, b -> fnamemodify(bufname(b), ':t')}), ',')], '$wins')"
+    wtype -k Return
+    wait_file "$wins" || exit "$code_file"
+
+    quit_app "$code_alive" "$code_status" "$label"
+}
+
+run_launch "$CONFIG_DIR_DARK" "$STATE_DIR_DARK" "$OUT_PNG_DARK" "$WINS_DARK" \
+    11 12 13 14 "run 1 (appearance: dark)"
+
+run_launch "$CONFIG_DIR_LIGHT" "$STATE_DIR_LIGHT" "$OUT_PNG_LIGHT" "$WINS_LIGHT" \
+    15 16 17 18 "run 2 (appearance: light)"
+
+exit 0
+"#;
+
+/// The rendered preview document's background follows the `appearance` in
+/// `wolf-config.yaml`, and the document sits FLUSH against the top of the web view.
+///
+/// ## What it proves that nothing else can
+///
+/// It is the first test in this repository that observes
+/// `adw::StyleManager::set_color_scheme` at all, and the only one whose evidence is
+/// the COLOUR of a pixel. `tesseract` reads no colour — it cannot tell light-on-dark
+/// from dark-on-light — so every other smoke here is structurally incapable of the
+/// claim. Two launches inside ONE `cage`, at the two configured appearances, each
+/// opening the same document into a preview pane and each capturing its own PNG,
+/// which this test decodes with `cairo::ImageSurface::create_from_png` and samples at
+/// a derived rectangle.
+///
+/// ## THE PAIR IS WHAT DISCRIMINATES, AND A FUTURE EDIT MUST NOT DROP ONE LAUNCH
+///
+/// Under `cage` there is no settings portal and no xsettings bridge, so
+/// `adw::StyleManager::is_dark()` is HOST-DETERMINED and constant for the whole run.
+/// This file may not assert a value for it and does not try to. The consequence is
+/// the design: with `set_color_scheme` removed, both launches render whatever the
+/// ambient scheme happens to be, so one of the two launches still reads the colour it
+/// expected — the WEAK half — and the other reads the opposite one and fires. WHICH
+/// of the two is the weak half is not knowable from inside this file, so both are
+/// required and neither may be dropped as redundant.
+///
+/// This is a DIFFERENT argument from the one
+/// [`configured_appearance_reaches_neovims_background_under_cage`] makes, and the two
+/// must not be conflated. There, the weak half is fixed and knowable — `dark` is
+/// Neovim's own default under `--embed`, so run 1 is weak on every host. Here the
+/// weak half is whichever one the host's ambient scheme happens to agree with, and it
+/// can differ between machines and between GTK versions.
+///
+/// MEASURED on the development host (GTK 4.22.4, libadwaita 1.9.0, WebKitGTK 2.52.4,
+/// `cage` 0.3.0), by deleting `set_color_scheme` and re-running: run 1 (`appearance:
+/// dark`) stayed GREEN and run 2 (`appearance: light`) fired, reading 1.0000 of
+/// [`PREVIEW_DARK_BG`] where its own [`PREVIEW_LIGHT_BG`] was required. So the
+/// ambient scheme reaching WebKit under `cage` here is DARK, run 1 is the weak half
+/// on this host, and run 2 is the one carrying the discrimination. This is a reading
+/// of one host at one moment, NOT a property of the harness — libadwaita resolves it
+/// off the session's own settings, so a machine whose desktop reads light swaps the
+/// two halves and the smoke is equally sound. It is recorded so a later reader knows
+/// which half went red when the falsifier was applied, and does not conclude from a
+/// single green launch that the other one is redundant.
+///
+/// ## Why the preview is deterministically the RIGHT half
+///
+/// The whole geometry rests on this and it is not obvious, so it is written out
+/// rather than assumed. Each launch opens the source in the window's ONE pane, so:
+///
+/// 1. `preview_ui::preview_placement` takes its `pane_count <= 1` branch and answers
+///    `MODE_SPLIT_RIGHT`. That branch DOMINATES both preview inputs, so nothing about
+///    what the pane holds can change the answer.
+/// 2. The Lua's `wolf_do_split('v')` emits a Split intent naming the ORIGINAL window
+///    as `from`.
+/// 3. `pane_view::apply_split` builds `Frame::Split { children: [Leaf(target),
+///    Leaf(new_pane)] }` — the target first, the new pane second.
+/// 4. `PaneTree::pane_rects` walks a split's children LEFT TO RIGHT.
+/// 5. `PaneTree::split` gives that new two-child frame EQUAL weights
+///    (`layout::DEFAULT_RATIO` twice), so the boundary between the two panes lands
+///    at the pane area's horizontal MIDPOINT — which is exactly where
+///    [`preview_theme_preview_columns`] and [`preview_theme_editor_columns`] cut.
+///    A change to those weights would move the boundary and silently eat part of
+///    the sample band without reddening anything.
+///
+/// So the new pane is the right half whatever Neovim's `'splitright'` says, and the
+/// source stays in the left one. Assertion 4 is what makes that self-checking rather
+/// than merely argued: if the two panes were the other way round, the "control" band
+/// would be inside the preview and would read ~100% of the theme colour.
+///
+/// ## Why assertion 4 is read FIRST, and what it licenses
+///
+/// Assertion 6 locates the web view's top edge by scanning DOWN the sampled columns
+/// for the first row that is entirely the theme colour. Everything above the web view
+/// in those columns is the preview pane's statusbar strip and its padding, painted
+/// with the EDITOR's background — so the scan only means what it says if the editor's
+/// background is not the theme colour. Assertion 4 is exactly that measurement, taken
+/// in the other pane, which is why it is a named control rather than a formality.
+///
+/// ## Assertion 6 is deliberately INSENSITIVE to `pane_view::apply_preview_frame`
+///
+/// `web_top` is self-located, so a change to where the pane puts its web view moves
+/// the band WITH the view and cannot redden anything. State that plainly, or the next
+/// reader tries `apply_preview_frame` as a revert, sees green and concludes the
+/// assertion is vacuous. What assertion 6 measures is the distance from the web
+/// view's own top edge to the document's first ink, which is a property of the CSS
+/// and of nothing in this crate.
+///
+/// ## What assertion 6 does and does NOT pin of the typography row
+///
+/// It pins ONE of that commit's four observable changes: the removed `body` padding,
+/// which is the only one that is a positive pixel statement. The other three — the
+/// `h1`/`h2` bottom borders and their padding, and the `blockquote` left border — are
+/// ABSENCES, and proving an absence from a screenshot is the vacuity trap this
+/// harness's conventions exist to prevent (an absent border and an unrendered
+/// document look identical). Those three stay pinned by `markdown_render.rs`'s
+/// CSS-text assertions in the fast suite, and this smoke deliberately does not
+/// restate them.
+///
+/// ## Assertions, classified
+///
+/// A precondition gets NO revert: inventing one would manufacture a discriminator
+/// this smoke does not have. The `measured` column carries the readings from actual
+/// runs, per `tests/README.md`'s "A red-run demonstration is a deliverable, not a
+/// formality", taken at GTK 4.22.4, libadwaita 1.9.0, WebKitGTK 2.52.4 and `cage`
+/// 0.3.0 on a 1280x720 output. A cell reading `n/a` is a precondition with no red run
+/// by design; the three discriminators each carry both their green and their red
+/// reading.
+///
+/// | # | assertion | kind | falsifying edit | measured |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | `status.success()` | precondition — the two-launch cage scenario ran to completion | none; do not invent one | n/a |
+/// | 2 | both PNGs present, and each decodes at exactly `CAGE_OUTPUT_W_EXPECTED` x `CAGE_OUTPUT_H_EXPECTED` | precondition — and the one that makes every derived rectangle below mean what it says | none; do not invent one | n/a |
+/// | 3 | each launch's `tabpagebuflist()` readback, sorted, is the preview scratch plus the source | precondition — a preview pane exists at all, and exactly two panes do | none; do not invent one. Without it, assertions 5 and 6 would be describing a pane that never became a preview. | n/a |
+/// | 4 | fewer than [`CONTROL_MAX_THEME_FRACTION`] of the CONTROL band is this launch's theme colour | **control, self-checking** | none. Its failure means the EDITOR's background collides with the preview theme's, and the response is to RE-DERIVE the two colours against the real render — never to raise the fraction, which would disarm the premise assertion 6's `web_top` scan rests on. | green: EXACTLY 0.0000 on both launches — 0 of the control band's 76,680 pixels, not merely fewer than the ceiling. The editor pane's own background reads `(20, 22, 27)` in run 1 and `(224, 226, 234)` in run 2, so it follows the appearance too and collides with NEITHER theme colour at either setting. That the margin is the whole ceiling rather than a sliver is what makes assertion 6's `web_top` scan safe. |
+/// | 5 | at least [`SAMPLE_MIN_THEME_FRACTION`] of the SAMPLE band is this launch's own theme colour, and at most [`SAMPLE_MAX_OTHER_FRACTION`] is the other appearance's | **discriminator** — the configured appearance reaches the rendered document | delete `manager.set_color_scheme(decided.color_scheme);` from `appearance::apply_at_launch`. Isolated: the whole fast suite and every other smoke stay green, because nothing else in the repository observes that call. | green: 1.0000 own / 0.0000 other on BOTH launches — the sample band is uniformly one colour, all 76,464 pixels of it. Red: RUN 2 (light) fired, reading `0.0000 its own PREVIEW_LIGHT_BG … and 1.0000 the other appearance's PREVIEW_DARK_BG`; run 1 (dark) stayed green. So the ambient scheme under `cage` on this host is DARK and run 1 is the weak half — see the pair-discriminates section above. Isolation CONFIRMED by a full `cargo test --workspace` under the falsifier: 49 of the target's 50 tests and every other target passed, this smoke alone failed. |
+/// | 5b | the same, with the theme's own light palette removed | **discriminator** — the light palette is what `prefers-color-scheme: light` selects | delete the `@media (prefers-color-scheme: light)` block from `wolf-core`'s `markdown/themes/default.css`; run 2 reddens. | red: run 2 (light) fired with the same 0.0000 own / 1.0000 other reading as 5's. `markdown_render.rs` REDDENED alongside — 43 passed, 2 failed: `default_theme_carries_dark_and_light_palettes` ("the light media query must mirror the light-mode link color `#0969da`") and `hr_occupies_whole_baselines_and_is_painted_by_its_border` ("the LIGHT (`prefers-color-scheme: light`) theme must color the hr via `border-top-color: #d0d0d0`"). Red smoke over a RED fast suite, so this pairing reads as the THEME being wrong rather than the applier — which is the diagnostic separating 5b from 5, where the fast suite stayed fully green. |
+/// | 6 | with `web_top` self-located from the pixels, the first [`FLUSH_BAND_PX`] rows carry at least [`MIN_FLUSH_INK_PX`] non-theme pixels | **discriminator** — the document is flush against the top of the view | add `padding-top: 48px;` to `body.wolf-markdown` in `wolf-core`'s `markdown/base.css`; both launches redden. | green: 1,987 non-theme pixels in the band on run 1 and 1,987 on run 2, against the 200 floor, with `web_top` located at row 159 on both and the first ink 6 rows into the band. Red: 0 on BOTH launches (the harness reports run 1 and stops, so run 2's 0 is read out of its own retained capture — the scenario runs both launches before any assertion). The fast suite STAYED GREEN under the falsifier: `markdown_render.rs` 45 passed, `wolf-core` unit tests 223 passed, exactly as predicted — 48 is a multiple of 24, so the grid sweep accepts it and the `padding` shorthand assertion is untouched. No fallback to `padding: 48px 40px` was needed. |
+///
+/// ## The conventions it obeys
+///
+/// A fresh temp working directory ([`make_temp_cwd`], mandatory — the captive
+/// Neovim's swap directory is keyed on it); [`CAGE_LOCK`] for the whole body; one
+/// `sh -c` string through [`cage_command`], the single environment helper and the
+/// only place the compositor is spawned; per-launch config AND state directories; and
+/// eight exit codes naming eight causes, four per launch.
+///
+/// It asserts no OCR term, so it contributes no row to [`ASSERTED_OCR_TERMS`], and it
+/// creates its one fixture only in its own cwd where nothing reads it as text, so it
+/// contributes no row to [`RELAUNCH_FIXTURE_NAMES`] either. That the seeded config
+/// really carries an `appearance` key at all — the one field `wolf_core` defaults to
+/// `auto`, which under `cage` resolves against a settings portal that does not exist
+/// — is guarded once for the whole file by
+/// [`the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes`], so it is
+/// not restated here.
+#[test]
+fn preview_document_follows_the_configured_appearance_under_cage() {
+    const SMOKE: &str = "preview_document_follows_the_configured_appearance_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd shared by both launches, holding the one source fixture and
+    // the usual density fillers. Nothing here is OCR'd; the fillers are kept for
+    // parity so this smoke's page is the same shape as every other smoke's.
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(
+        SMOKE,
+        &cwd,
+        &[(PREVIEW_THEME_SOURCE_FILE, PREVIEW_THEME_SOURCE_BODY)],
+    );
+
+    // Both launches run at SMOKE_FONT_PT: the appearance is the ONE variable.
+    let config_dark = smoke_config_dir_at(
+        &cwd,
+        PREVIEW_THEME_DARK_SUFFIX,
+        SMOKE_FONT_PT,
+        APPEARANCE_FORCED_DARK,
+    );
+    let config_light = smoke_config_dir_at(
+        &cwd,
+        PREVIEW_THEME_LIGHT_SUFFIX,
+        SMOKE_FONT_PT,
+        APPEARANCE_FORCED_LIGHT,
+    );
+    let state_dark = smoke_state_dir_at(&cwd, PREVIEW_THEME_DARK_SUFFIX);
+    let state_light = smoke_state_dir_at(&cwd, PREVIEW_THEME_LIGHT_SUFFIX);
+
+    assert_ne!(
+        config_dark,
+        config_light,
+        "{SMOKE}: both runs were pointed at the SAME config directory {}, so they would read the \
+         same appearance and one of the two halves of assertion 5 could never hold. The two \
+         suffixes ({PREVIEW_THEME_DARK_SUFFIX:?} and {PREVIEW_THEME_LIGHT_SUFFIX:?}) must differ.",
+        config_dark.display()
+    );
+    assert_ne!(
+        state_dark,
+        state_light,
+        "{SMOKE}: both runs were pointed at the SAME state directory {}. Launch 1 quits with a \
+         preview pane open, so its `state.json` records a two-leaf layout with a live preview leaf \
+         — which launch 2 would then RESTORE, making its own Preview press a two-pane placement \
+         (`active`, not `split_right`) and putting its preview in a pane none of the derived \
+         rectangles below is aimed at. See `smoke_state_dir_at`.",
+        state_dark.display()
+    );
+
+    let png_dark = runtime_dir.join(PREVIEW_THEME_DARK_PNG_NAME);
+    let png_light = runtime_dir.join(PREVIEW_THEME_LIGHT_PNG_NAME);
+    let wins_dark = runtime_dir.join(PREVIEW_THEME_DARK_WINS_NAME);
+    let wins_light = runtime_dir.join(PREVIEW_THEME_LIGHT_WINS_NAME);
+    for path in [&png_dark, &png_light, &wins_dark, &wins_light] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let mut cmd = cage_command(PREVIEW_THEME_SCENARIO, &cwd);
+    cmd.env("WOLF_BIN", bin)
+        .env("SRC_FILE", PREVIEW_THEME_SOURCE_FILE)
+        .env("PREVIEW_QUERY", PREVIEW_QUERY)
+        .env("CONFIG_DIR_DARK", &config_dark)
+        .env("CONFIG_DIR_LIGHT", &config_light)
+        .env("STATE_DIR_DARK", &state_dark)
+        .env("STATE_DIR_LIGHT", &state_light)
+        .env("OUT_PNG_DARK", &png_dark)
+        .env("OUT_PNG_LIGHT", &png_light)
+        .env("WINS_DARK", &wins_dark)
+        .env("WINS_LIGHT", &wins_light);
+
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless preview-appearance scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage preview-appearance scenario exited unsuccessfully ({status}). Every \
+         code names ONE cause in ONE launch. Exit 11: run 1's app (`appearance: \
+         {APPEARANCE_FORCED_DARK}`) died before its window mapped — `appearance::apply_at_launch` \
+         runs before any widget is built and takes the whole launch with it, so a panic there is \
+         the first thing to look at. Exit 12: run 1 was still alive after `:qa!`. Exit 13: run 1 \
+         exited NON-ZERO — it went away, but not cleanly, which is a separate code from 12 because \
+         a panic in the GTK main loop makes a process vanish exactly as a clean shutdown does. \
+         Exit 14: run 1's window-list readback never appeared at {}. Exit 15/16/17/18: the same \
+         four for run 2 (`appearance: {APPEARANCE_FORCED_LIGHT}`), whose readback is at {}. Any \
+         OTHER status is `grim` or `wtype` failing under `set -eu`, and a grim failure has no code \
+         of its own on purpose: a capture that did not happen is not a preview finding. Note this \
+         assertion says nothing about whether a preview ever opened — the scenario exits 0 whatever \
+         the palette did.",
+        wins_dark.display(),
+        wins_light.display()
+    );
+
+    // --- Assertion 2 (precondition): both captures decode at the pinned size --
+    //
+    // Presence first, through the shared helper, so "grim wrote nothing" reads as
+    // that rather than as a decode error. `decode_capture` then carries the size
+    // check, the format check and the two PNG gotchas; see its doc comment before
+    // touching anything below, because every rectangle in this smoke is derived from
+    // the size it asserts.
+    assert_png_present(SMOKE, &png_dark);
+    assert_png_present(SMOKE, &png_light);
+    let dark = decode_capture(&png_dark, SMOKE, "run 1 (appearance: dark)");
+    let light = decode_capture(&png_light, SMOKE, "run 2 (appearance: light)");
+
+    // --- Assertion 3 (precondition): a preview pane exists, in each launch ----
+    //
+    // Pixel-independent: the buffer NAMES the captive Neovim reports for its own
+    // windows. The preview scratch is named by `wolf_ensure_preview_buf` after the
+    // SOURCE's cwd-relative path, so this states the pane count, the preview's
+    // existence and the file it previews in one comparison — and it is read before
+    // any pixel, because a band sampled inside a pane that never became a preview
+    // would fail assertion 5 while saying nothing about the appearance.
+    let want_windows = {
+        let mut want = vec![
+            format!("{PREVIEW_READBACK_PREFIX}{PREVIEW_THEME_SOURCE_FILE}"),
+            PREVIEW_THEME_SOURCE_FILE.to_string(),
+        ];
+        want.sort();
+        want
+    };
+    for (label, path) in [
+        ("run 1 (appearance: dark)", &wins_dark),
+        ("run 2 (appearance: light)", &wins_light),
+    ] {
+        let got = read_window_buffer_names(path, SMOKE);
+        assert_eq!(
+            got, want_windows,
+            "{SMOKE}: after {label}'s Preview leg the captive Neovim's windows hold {got:?}, not \
+             {want_windows:?} (both sorted, so window order is not the subject). A SINGLE entry \
+             naming {PREVIEW_THEME_SOURCE_FILE:?} means no preview was bound at all — the palette \
+             dispatched nothing, or `shell::perform` has no `OpenPreview` arm, or the \
+             {PREVIEW_QUERY:?} query matched no row. A SINGLE entry naming the preview scratch \
+             means the placement was `active` rather than `split_right`: the preview replaced the \
+             window's only pane, so there is no editor pane for assertion 4's control band and no \
+             right half for assertion 5's sample band. THREE entries mean it split twice, which \
+             also moves the preview out of the right half. Every rectangle below is derived on the \
+             assumption of exactly two side-by-side panes, so none of them means anything until \
+             this holds."
+        );
+    }
+
+    // --- Assertions 4, 5 and 6, per launch -----------------------------------
+    //
+    // This loop ASSERTS per launch, so a red run panics on the first failing launch
+    // and reports only that one. The scenario above completes BOTH launches before
+    // any assertion runs, so the second launch's capture is always on disk — read
+    // its number out of the retained PNG rather than concluding it was green.
+    for launch in [
+        ThemeLaunch {
+            label: "run 1 (appearance: dark)",
+            capture: &dark,
+            own: PREVIEW_DARK_BG,
+            own_name: "PREVIEW_DARK_BG",
+            other: PREVIEW_LIGHT_BG,
+            other_name: "PREVIEW_LIGHT_BG",
+        },
+        ThemeLaunch {
+            label: "run 2 (appearance: light)",
+            capture: &light,
+            own: PREVIEW_LIGHT_BG,
+            own_name: "PREVIEW_LIGHT_BG",
+            other: PREVIEW_DARK_BG,
+            other_name: "PREVIEW_DARK_BG",
+        },
+    ] {
+        assert_preview_theme_launch(SMOKE, &launch);
+    }
+}
+
+/// Assertions 4, 5 and 6 for ONE launch of
+/// [`preview_document_follows_the_configured_appearance_under_cage`].
+///
+/// Split out so the two launches run the identical checks: a per-launch block written
+/// twice is a per-launch block that can be edited on one side only, and this smoke's
+/// whole design is that the two launches differ in exactly one setting.
+fn assert_preview_theme_launch(smoke: &str, launch: &ThemeLaunch<'_>) {
+    let label = launch.label;
+    let capture = launch.capture;
+    let (band_y0, band_y1) = preview_theme_band_rows();
+    let (preview_x0, preview_x1) = preview_theme_preview_columns();
+    let (editor_x0, editor_x1) = preview_theme_editor_columns();
+
+    let control = SampleRect {
+        x0: editor_x0,
+        x1: editor_x1,
+        y0: band_y0,
+        y1: band_y1,
+    };
+    let sample = SampleRect {
+        x0: preview_x0,
+        x1: preview_x1,
+        y0: band_y0,
+        y1: band_y1,
+    };
+
+    // Non-vacuity: every band must lie inside the capture and be non-degenerate.
+    // Without this a rectangle that had collapsed or run off the edge would either
+    // panic deep inside the sampler with an index message, or -- worse -- report
+    // clean percentages over nothing at all.
+    for (what, rect) in [("control", control), ("sample", sample)] {
+        assert!(
+            rect.x0 < rect.x1
+                && rect.y0 < rect.y1
+                && rect.x1 <= capture.width
+                && rect.y1 <= capture.height,
+            "{smoke}: {label}'s {what} band {rect:?} is degenerate or falls outside the \
+             {}x{} capture. The bands are derived from CAGE_OUTPUT_*_EXPECTED, \
+             OVERLAY_ORIGIN_*_EXPECTED, BAND_X_INSET_PX and BAND_BOTTOM_CLEARANCE_PX, so this \
+             means two of those have crossed — most likely the overlay origin moved right or down \
+             past the inset. Re-measure the overlay origin; do NOT shrink the insets, which are \
+             what keep the bands clear of the `gtk::Paned` handle and the command-line strip.",
+            capture.width,
+            capture.height
+        );
+    }
+
+    // --- Assertion 4 (control, self-checking) --------------------------------
+    //
+    // Read FIRST. It establishes the premise assertion 6's `web_top` scan rests on:
+    // that the EDITOR's background is not the preview theme's colour, so everything
+    // above the web view in the sampled columns is distinguishable from the document
+    // behind it.
+    let control_hits = capture.count_exactly(control, launch.own);
+    let control_fraction = band_fraction(
+        control_hits,
+        control.pixels(),
+        "the control band's theme-colour fraction",
+    );
+    assert!(
+        control_fraction < CONTROL_MAX_THEME_FRACTION,
+        "{smoke}: {label}: {control_fraction:.4} of the CONTROL band {control:?} — inside the \
+         LEFT, editor pane — is exactly {} = {:?}, which is at or above the \
+         {CONTROL_MAX_THEME_FRACTION} ceiling. Two readings are possible and they are told apart \
+         by the size of the number. A fraction near 1.0 means the two panes are the wrong way \
+         round: the preview landed LEFT, so this band is inside the web view and the smoke's whole \
+         geometry is inverted — check `preview_ui::preview_placement`, `pane_view::apply_split`'s \
+         child order and `PaneTree::pane_rects`. A fraction just above the ceiling means the \
+         captive Neovim's own background has COLLIDED with the preview theme's, at which point \
+         assertion 6 below can no longer tell the pane chrome from the document. The response to \
+         either is to RE-DERIVE the two theme colours against a real render and to re-measure the \
+         editor background beside them. Do NOT raise this ceiling: it is not a tolerance, it is \
+         the statement that makes assertion 6 mean anything.",
+        launch.own_name,
+        launch.own
+    );
+
+    // --- Assertion 5 (discriminator): the CONFIGURED appearance reached the DOM
+    let own_hits = capture.count_exactly(sample, launch.own);
+    let other_hits = capture.count_exactly(sample, launch.other);
+    let own_fraction = band_fraction(
+        own_hits,
+        sample.pixels(),
+        "the sample band's own-theme fraction",
+    );
+    let other_fraction = band_fraction(
+        other_hits,
+        sample.pixels(),
+        "the sample band's other-theme fraction",
+    );
+    assert!(
+        own_fraction >= SAMPLE_MIN_THEME_FRACTION && other_fraction <= SAMPLE_MAX_OTHER_FRACTION,
+        "{smoke}: {label}: the SAMPLE band {sample:?} — inside the RIGHT, preview pane — is \
+         {own_fraction:.4} its own theme colour {} = {:?} (needs >= {SAMPLE_MIN_THEME_FRACTION}) \
+         and {other_fraction:.4} the other appearance's {} = {:?} (needs <= \
+         {SAMPLE_MAX_OTHER_FRACTION}). The likely causes, in order. (a) The OTHER colour is \
+         dominant: the configured appearance never reached WebKit, and the chain to check is \
+         `appearance::apply_at_launch` calling `StyleManager::set_color_scheme`, libadwaita \
+         propagating that to GtkSettings' `gtk-application-prefer-dark-theme` — which upstream \
+         does only while the running GTK is OLDER than 4.23.1 — and WebKitGTK reading that \
+         property for `prefers-color-scheme`. A GTK bump past 4.23.1 removes that propagation \
+         SILENTLY, and this assertion is the only thing in the repository that would notice. (b) \
+         NEITHER colour is dominant: the web view is showing something that is not the rendered \
+         document — `about:blank` (white), or the empty string `WolfCore::render_preview` answers \
+         on an RPC failure. (c) Both fractions are small but the band is not uniform: the fixture \
+         grew tall enough to reach the lower half of the pane, which is a fixture bug — shorten \
+         `PREVIEW_THEME_SOURCE_BODY` rather than lowering the threshold. Captures are retained; \
+         read the band's actual colours out of them before changing any number here.",
+        launch.own_name,
+        launch.own,
+        launch.other_name,
+        launch.other
+    );
+
+    // --- Assertion 6 (discriminator): the document is FLUSH to the view's top -
+    //
+    // `web_top` is self-located, so this says nothing about where the pane puts its
+    // web view and everything about the distance from that view's own top edge to the
+    // document's first ink. See the smoke's doc comment.
+    let scan_rows = preview_theme_scan_rows();
+    let web_top = capture
+        .first_uniform_row((preview_x0, preview_x1), scan_rows, launch.own)
+        .unwrap_or_else(|| {
+            panic!(
+                "{smoke}: {label}: no row between {} and {} is entirely {} = {:?} across columns \
+                 {preview_x0}..{preview_x1}, so the web view's own top edge could not be located \
+                 and assertion 6 has nothing to measure from. Assertion 5 just passed, so the band \
+                 lower down IS the theme colour — which leaves a document that starts with \
+                 full-width ink at its very first row (an `hr` or a table as the first block would \
+                 do it, and neither belongs in this fixture) or a web view whose top edge is below \
+                 the scan's end at row {}.",
+                scan_rows.0, scan_rows.1, launch.own_name, launch.own, scan_rows.1
+            )
+        });
+
+    let flush_height = pixel_index(FLUSH_BAND_PX, "FLUSH_BAND_PX");
+    let flush = SampleRect {
+        x0: preview_x0,
+        x1: preview_x1,
+        y0: web_top,
+        y1: web_top + flush_height,
+    };
+    assert!(
+        flush.y1 <= capture.height,
+        "{smoke}: {label}: the flush band {flush:?} runs off the bottom of the {}x{} capture. The \
+         web view's located top edge is row {web_top}, which is far lower than the pane chrome can \
+         account for.",
+        capture.width,
+        capture.height
+    );
+
+    let flush_ink = flush.pixels() - capture.count_exactly(flush, launch.own);
+    assert!(
+        flush_ink >= MIN_FLUSH_INK_PX,
+        "{smoke}: {label}: the first {FLUSH_BAND_PX} rows below the web view's own top edge (row \
+         {web_top}) carry only {flush_ink} non-{} pixels, fewer than the {MIN_FLUSH_INK_PX} floor. \
+         The document is NOT flush against the top of its view: something above the first line box \
+         is painting pure background where the first line's ink should be. The named cause is \
+         `body.wolf-markdown` regaining vertical padding in `wolf-core`'s `markdown/base.css` — \
+         the document is flush to the pane edges BY DESIGN, and any inset belongs to the pane \
+         chrome. Two things this is NOT. It is not a change to \
+         `pane_view::apply_preview_frame`: {web_top} is located from the pixels, so moving the web \
+         view moves this band with it and cannot redden it. And it is not the first block's own \
+         top margin: the fixture's first block is a PARAGRAPH, and `base.css` gives `p` a flat \
+         `margin: 0 0 24px`, so no edge-rule selector is on this path. If a green run ever \
+         measures the first ink BELOW row {FLUSH_BAND_PX}, re-measure and raise FLUSH_BAND_PX \
+         towards 48 with the reason recorded — do not lower this floor.",
+        launch.own_name
     );
 }
 
@@ -19820,7 +21080,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// | the active-pane FOCUS RING's top edge — a long thin high-contrast line immediately above the heading | six ablations on one PNG; the top edge alone accounted for it | [`DIVIDER_RELAUNCH_SCENARIO`]'s closing `<C-w>h`, which moves the ring to the WIDE pane |
 /// | a single misclassified GLYPH at 15 columns | the same pixels read through both segmentation modes, twice over | the second reader, [`ocr_uniform_block_to_lowercase`] |
 ///
-/// The third is why this smoke, alone of the forty-three, reads its capture twice.
+/// The third is why this smoke, alone of the forty-four, reads its capture twice.
 /// With the first two answered, on one retained PNG:
 ///
 /// | command | verbatim output |

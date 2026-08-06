@@ -65,7 +65,12 @@ adw = { version = "0.9", package = "libadwaita" }
 #     --> webkit6-0.6.1/src/auto/web_view_base.rs:10:128
 webkit6 = { version = "0.6", features = ["v2_52"] }
 # cairo-rs is renamed to `cairo` and needs the `png` feature for ImageSurface PNG
-# I/O (used by the #[ignore]d golden-regeneration dev-aid test).
+# I/O. Two consumers, and the second one GATES: the #[ignore]d
+# golden-regeneration dev aid writes a PNG with it, and
+# `preview_document_follows_the_configured_appearance_under_cage` DECODES its two
+# `grim` captures with `ImageSurface::create_from_png` to sample raw pixels — so
+# dropping this feature breaks a test that runs on every `cargo test`, not just an
+# opt-in aid. As with the gdk entry above, a feature change moves no lock file.
 cairo = { version = "0.22", package = "cairo-rs", features = ["png"] }
 pango = "0.22"
 pangocairo = "0.22"
