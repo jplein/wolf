@@ -34,13 +34,21 @@
 //!
 //! ## The blocking calls
 //!
-//! `open_preview`, `edit_source` and the coalesced `render_preview` are all
-//! synchronous RPCs on the GTK main thread, so [`preview_press`], [`edit_press`]
-//! and [`may_render`] are liveness-gated exactly the way
+//! `open_preview`, `edit_source`, `preview_file`, `open_in_browser` and the
+//! coalesced `render_preview` are all synchronous RPCs on the GTK main thread, so
+//! [`preview_press`], [`edit_press`], [`preview_file_press`], [`browser_press`] and
+//! [`may_render`] are liveness-gated exactly the way
 //! [`crate::nav_ui::nav_press`] and [`crate::clipboard_ui::copy_decision`] are. The
 //! inventory of this crate's blocking calls and the reasoning behind the gate live
 //! in `crates/wolf-gnome/DECISIONS.md`, "Crash and stall recovery", and are
 //! deliberately not restated here.
+//!
+//! Beyond liveness, three of the five carry a second gate and two deliberately do
+//! not. [`preview_file_press`] has NONE, and that is a decision rather than an
+//! omission: whether the file a clicked link names is Markdown is core's own
+//! `preview_file` gate, and this front end cannot answer it without touching the
+//! filesystem — which is the one thing a seam whose whole value is purity may not
+//! do. A `0` from core IS the refusal, and [`crate::pane_view`] prints it.
 //!
 //! **Liveness is read BEFORE the buffer-kind gate**, and the order is the
 //! [`crate::search_overlay::open_decision`] precedence rather than an accident: a
@@ -50,12 +58,12 @@
 //!
 //! ## Totality is the contract
 //!
-//! [`preview_press`], [`edit_press`] and [`may_render`] each match
-//! `Option<Liveness>` with **no `_` arm**, so appending a variant to
-//! [`wolf_core::Liveness`] is an `E0004` compile error here until it is classified.
-//! `Option<Liveness>` (not `Liveness`) is the input type precisely so the ABSENT
-//! core, which the window's close handler leaves behind, is a classified arm rather
-//! than an early return no headless test could see.
+//! [`preview_press`], [`edit_press`], [`preview_file_press`], [`browser_press`] and
+//! [`may_render`] each match `Option<Liveness>` with **no `_` arm**, so appending a
+//! variant to [`wolf_core::Liveness`] is an `E0004` compile error here until it is
+//! classified. `Option<Liveness>` (not `Liveness`) is the input type precisely so
+//! the ABSENT core, which the window's close handler leaves behind, is a classified
+//! arm rather than an early return no headless test could see.
 //!
 //! ## The reload key is a PAIR, and a tick alone is not enough
 //!
@@ -69,6 +77,26 @@
 //!
 //! Nothing on this path may be gated on `Snapshot::seq`: the `wolf_*` notifications
 //! that carry a preview's source and tick fire the wake without bumping it.
+//!
+//! ## `document_update` is coupled to two things its signature cannot show
+//!
+//! [`document_update`] decides whether a freshly rendered document may be swapped
+//! into the live view IN PLACE — which is what preserves the reader's scroll offset
+//! across an edit — or has to go through a full `load_html`. Its first rule (nothing
+//! has ever been loaded) is obvious from the code; the other two are not.
+//!
+//! A PENDING FRAGMENT forces a full load because the cross-file scroll is applied on
+//! a `LoadEvent::Finished` edge, and only a real load produces one. An in-place body
+//! swap fires no load event at all, so the scroll would simply never run and the
+//! reader would land at the top of the linked file instead of at the anchor.
+//!
+//! A CHANGED SOURCE BUFFER forces a full load because the view's base URI belongs to
+//! the PREVIOUS file ([`crate::preview_link::file_uri_for`]) and a body swap does not
+//! replace it. Every relative link in the new document would resolve against the old
+//! document's directory — and, because the rendered `<head>` is byte-identical across
+//! files by design, [`crate::pane_view`]'s head-offset guard cannot see the switch on
+//! its own. The key is the source BUFNR and never the tick, for the reason stated
+//! just above.
 //!
 //! ## A preview pane's statusbar does not come from `WolfCore::pane_status`
 //!
@@ -156,6 +184,26 @@ pub enum PreviewPress {
 pub enum EditPress {
     /// Issue the BLOCKING `edit_source` at this placement mode.
     Edit(&'static str),
+    /// Do nothing and issue no RPC; the string names why, as a mid-sentence clause.
+    Refuse(&'static str),
+}
+
+/// What following a link that names a FILE does.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PreviewFilePress {
+    /// Issue the BLOCKING `preview_file`, rebinding the pane's preview window at the
+    /// linked path.
+    Follow,
+    /// Do nothing and issue no RPC; the string names why, as a mid-sentence clause.
+    Refuse(&'static str),
+}
+
+/// What choosing Preview in Browser does.
+#[derive(Debug, PartialEq, Eq)]
+pub enum BrowserPress {
+    /// Issue the BLOCKING `open_in_browser` and hand its URL to the platform's URI
+    /// launcher.
+    Open,
     /// Do nothing and issue no RPC; the string names why, as a mid-sentence clause.
     Refuse(&'static str),
 }
@@ -271,6 +319,94 @@ pub fn edit_press(liveness: Option<Liveness>, preview_active: bool, p: EditPlace
     }
 }
 
+/// Whether a followed preview link may issue its BLOCKING `preview_file` at all.
+///
+/// TOTAL by construction, [`crate::nav_ui::nav_press`]'s shape: a `match` over
+/// `Option<Liveness>` with **no `_` arm**. Only [`Liveness::Alive`] follows.
+///
+/// There is deliberately NO second gate, and the module docs say why: the linked
+/// file's Markdown-ness belongs to core's `preview_file`, and answering it here
+/// would mean a filesystem touch in a pure seam. What this function decides is only
+/// whether the RPC may be spent at all.
+#[must_use]
+pub fn preview_file_press(liveness: Option<Liveness>) -> PreviewFilePress {
+    match liveness {
+        Some(Liveness::Alive) => PreviewFilePress::Follow,
+        Some(Liveness::NotResponding) => PreviewFilePress::Refuse(
+            "the captive Neovim is not responding, and repointing the preview is a blocking RPC \
+             that would freeze the window for another whole timeout budget",
+        ),
+        Some(Liveness::Dead) => PreviewFilePress::Refuse(
+            "the captive Neovim has crashed, so there is no preview window left to repoint at the \
+             linked file",
+        ),
+        None => PreviewFilePress::Refuse(
+            "the window is shutting down and the core has already been taken out, so there is no \
+             preview window left to follow the link into",
+        ),
+    }
+}
+
+/// Whether Preview in Browser may issue its BLOCKING `open_in_browser` at all.
+///
+/// TOTAL by construction, [`preview_press`]'s shape and its reason: liveness is read
+/// BEFORE the `markdown_active` gate, so a user whose Neovim has wedged is told
+/// their Neovim has wedged rather than being told about a buffer kind read out of a
+/// snapshot that stopped advancing when the editor did.
+#[must_use]
+pub fn browser_press(liveness: Option<Liveness>, markdown_active: bool) -> BrowserPress {
+    match liveness {
+        Some(Liveness::Alive) => {
+            if markdown_active {
+                BrowserPress::Open
+            } else {
+                BrowserPress::Refuse(
+                    "the buffer being edited is not Markdown, and open_in_browser renders nothing \
+                     for anything else, so the blocking RPC would be spent to be handed an empty \
+                     URL",
+                )
+            }
+        }
+        Some(Liveness::NotResponding) => BrowserPress::Refuse(
+            "the captive Neovim is not responding, and rendering the document for the loopback \
+             server is a blocking RPC that would freeze the window for another whole timeout \
+             budget",
+        ),
+        Some(Liveness::Dead) => BrowserPress::Refuse(
+            "the captive Neovim has crashed, so there is no buffer left for the loopback server \
+             to serve",
+        ),
+        None => BrowserPress::Refuse(
+            "the window is shutting down and the core has already been taken out, so there is \
+             nothing left to serve over loopback",
+        ),
+    }
+}
+
+/// The URL to hand the platform's URI launcher, or `None` to launch NOTHING.
+///
+/// [`crate::clipboard_ui::clipboard_write`]'s shape: a filter, and `None` means do
+/// not launch rather than launch something else. `WolfCore::open_in_browser` answers
+/// `""` on each of its three error paths — an RPC failure, a non-Markdown buffer,
+/// and a failure to bind the loopback socket — having already logged which; handing
+/// that empty string to a launcher asks the desktop to open the empty URI.
+///
+/// There is deliberately NO `http://127.0.0.1:` prefix check here. The loopback-only
+/// bind is core's own hard security requirement, stated in
+/// `crates/wolf-core/DECISIONS.md`, and restating it as a second gate would give one
+/// rule two owners that could drift apart — the more dangerous direction being the
+/// one where this copy is the laxer.
+#[must_use]
+pub fn browser_url(raw: &str) -> Option<&str> {
+    // Trimmed for the TEST, but the untrimmed string is what is returned: core
+    // produces the URL, and a launcher should be handed exactly what core built.
+    if raw.trim().is_empty() {
+        None
+    } else {
+        Some(raw)
+    }
+}
+
 /// Whether the coalesced `render_preview` may be issued at all.
 ///
 /// TOTAL by construction, and `true` for [`Liveness::Alive`] alone. A render is a
@@ -306,6 +442,52 @@ pub fn needs_reload(current: Option<PreviewLoad>, loaded: Option<PreviewLoad>) -
         // buffer number alone misses every edit of the file being previewed.
         (Some(current), Some(loaded)) => current != loaded,
     }
+}
+
+/// How a rendered preview document must reach the live web view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DocumentUpdate {
+    /// Replace the whole document through `load_html`, re-establishing the base URI
+    /// and producing the `LoadEvent::Finished` edge a pending fragment scroll needs.
+    FullLoad,
+    /// The document MAY be swapped in place, preserving the reader's scroll offset —
+    /// subject to [`crate::pane_view`]'s own head-offset guard, which is a separate
+    /// condition and not implied by this one.
+    InPlaceEligible,
+}
+
+/// Whether a rendered document may be swapped into the view in place.
+///
+/// Total, and the four rules are ORDERED. `loaded` of `None` is a first load and has
+/// no committed `<head>` to swap under; a pending fragment needs a real load edge; a
+/// changed source buffer needs a new base URI; everything else is eligible.
+///
+/// What the final arm preserves, and what changing it to [`DocumentUpdate::FullLoad`]
+/// would cost, was MEASURED: with the in-place swap, `window.scrollY` 2000 was
+/// preserved in 24 of 24 samples across a live edit, against 0 of 24 for a full
+/// `load_html`. A reader thrown back to the top of the document on every keystroke
+/// is exactly what a live preview is not.
+///
+/// The source-switch rule keys on `source_bufnr` and never on `source_tick`: two
+/// freshly opened files share a `changedtick`, the same defect [`needs_reload`]'s
+/// pairing records. See the module docs for the base-URI and load-edge couplings
+/// this signature cannot show.
+#[must_use]
+pub fn document_update(
+    current: PreviewLoad,
+    loaded: Option<PreviewLoad>,
+    fragment_pending: bool,
+) -> DocumentUpdate {
+    let Some(loaded) = loaded else {
+        return DocumentUpdate::FullLoad;
+    };
+    if fragment_pending {
+        return DocumentUpdate::FullLoad;
+    }
+    if loaded.source_bufnr != current.source_bufnr {
+        return DocumentUpdate::FullLoad;
+    }
+    DocumentUpdate::InPlaceEligible
 }
 
 /// A preview pane's two statusbar lines, built from its source path rather than

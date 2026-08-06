@@ -194,18 +194,35 @@
 //!   land in a RESTARTED Neovim minutes later). Plus what may cross in each
 //!   direction ([`clipboard_ui::clipboard_write`], whose `None` means write NOTHING
 //!   rather than clear, and [`clipboard_ui::paste_payload`]).
+//! - [`mod@preview_link`]: the URI arithmetic behind a link CLICKED inside the
+//!   preview — the seven-row classification of a resolved link target into an
+//!   external launch, a same-document scroll, a repointed pane or a refusal
+//!   ([`preview_link::classify`], [`preview_link::PreviewLink`]); the `file:` base
+//!   URI a document is loaded against, which names the FILE and carries no trailing
+//!   slash because a relative link REPLACES the last segment, and which is `None`
+//!   for an empty or relative source path rather than a synthesized cwd
+//!   ([`preview_link::file_uri_for`]); and the one-line scroll script, encoded ONCE
+//!   because nothing re-parses it ([`preview_link::scroll_into_view_js`]). A port of
+//!   `WolfKeyMap/PreviewLinkSeam.swift` with two deliberate divergences named in
+//!   that module's docs. It owns URI arithmetic and nothing else; the liveness gates
+//!   and the load strategy are [`mod@preview_ui`]'s.
 //! - [`mod@preview_ui`]: the MARKDOWN PREVIEW rulebook — where a Preview press opens
 //!   its pane and where its inverse lands the source editor, two rules whose reuse
 //!   branches differ ONLY in the polarity of `active_is_preview`
-//!   ([`preview_ui::preview_placement`], [`preview_ui::edit_placement`]); three
-//!   TOTAL `Option<`[`wolf_core::Liveness`]`>` guards over the three BLOCKING RPCs
-//!   this adds, two for the presses and one for the per-wake render
-//!   ([`preview_ui::preview_press`], [`preview_ui::edit_press`],
+//!   ([`preview_ui::preview_placement`], [`preview_ui::edit_placement`]); five
+//!   TOTAL `Option<`[`wolf_core::Liveness`]`>` guards over the five BLOCKING RPCs
+//!   this adds — the two presses, a followed preview link, Preview in Browser, and
+//!   the per-wake render ([`preview_ui::preview_press`], [`preview_ui::edit_press`],
+//!   [`preview_ui::preview_file_press`], [`preview_ui::browser_press`],
 //!   [`preview_ui::may_render`]); whether a bound web view must be reloaded, keyed
 //!   on the source buffer's number AND its `changedtick` because two freshly opened
 //!   files share a tick ([`preview_ui::needs_reload`], [`preview_ui::PreviewLoad`]);
-//!   and a preview pane's two statusbar lines, which come from its own source path
-//!   rather than from `WolfCore::pane_status` ([`preview_ui::preview_status`]).
+//!   whether a rendered document may be swapped in place or must go through a full
+//!   load, which is what preserves the reader's scroll offset across an edit
+//!   ([`preview_ui::document_update`]); what may be handed to the URI launcher
+//!   ([`preview_ui::browser_url`], whose `None` means launch NOTHING); and a preview
+//!   pane's two statusbar lines, which come from its own source path rather than
+//!   from `WolfCore::pane_status` ([`preview_ui::preview_status`]).
 //! - [`actions`]: the action namespace as data — [`actions::ACTION_TABLE`],
 //!   [`actions::MENU_SECTIONS`], and the [`actions::parse_accel`] /
 //!   [`actions::forbidden_reason`] checker that mechanically enforces "no Neovim
@@ -276,6 +293,7 @@ pub mod pane_layout;
 pub mod pane_view;
 pub mod persistence;
 pub mod picker;
+pub mod preview_link;
 pub mod preview_ui;
 pub mod refresh_coalescer;
 pub mod render;
