@@ -672,6 +672,26 @@ mod tests {
     /// that makes the key assertion a JOIN rather than a discriminator.
     const SMOKE_RECENT_MRU_PREFIX: &str = "open_recent:";
 
+    /// The two queries the cage smoke
+    /// `preview_pane_renders_and_edit_source_returns_under_cage` types into the
+    /// palette (its `PREVIEW_QUERY` and `EDIT_QUERY`), each paired with the registry
+    /// id its row must record and the smallest number of UNFILTERED candidates that
+    /// query is allowed to match.
+    ///
+    /// Duplicated here for the reason [`SMOKE_QUERY`] is, and joined to the smoke by
+    /// [`palette_rows_for_the_preview_smoke_select_one_row_each`].
+    ///
+    /// The two floors differ, and the difference is the point. `prv` matches
+    /// `Preview in Browser` as well before the classification filter runs, so a floor
+    /// of 2 states that it is the FILTER making the row unique — the same non-vacuity
+    /// clause [`palette_rows_query_new_selects_exactly_the_new_buffer_row`] carries.
+    /// `edts` matches one title in the whole registry, filtered or not, so claiming
+    /// the same of it would be false.
+    const PREVIEW_SMOKE_QUERIES: [(&str, Command, &str, usize); 2] = [
+        ("prv", Command::Preview, "preview", 2),
+        ("edts", Command::Edit, "edit", 1),
+    ];
+
     /// Whether `command` is one this front-end DISPATCHES — i.e. `ui_action_for`
     /// classifies it as neither of the two unimplemented variants.
     fn is_dispatched(command: Command) -> bool {
@@ -1492,6 +1512,103 @@ mod tests {
                  and looks for exactly that key.",
                 row.mru_key
             );
+        }
+    }
+
+    /// The markdown-preview smoke's two queries each select EXACTLY ONE palette row,
+    /// and each selects the row it names.
+    ///
+    /// ## What this pins for that smoke
+    ///
+    /// `preview_pane_renders_and_edit_source_returns_under_cage` drives Preview and
+    /// then Edit Source by typing a query and pressing Enter, so "exactly one row"
+    /// is what makes which command runs deterministic. That premise cannot be checked
+    /// from the smoke — the overlay is closed before `grim` fires and a screenshot
+    /// cannot count rows — so a registry change that added a second matching title
+    /// would make it stochastic rather than red. It reddens here instead.
+    ///
+    /// The `mru_key` half is the other end of the same join: that smoke asserts the
+    /// command MRU holds `preview` and `edit` after the two activations, which only
+    /// means anything while those are the ids these rows record.
+    ///
+    /// ## The unfiltered floor, per query
+    ///
+    /// [`PREVIEW_SMOKE_QUERIES`] carries a per-row floor rather than one shared
+    /// number, and its doc comment says why: `prv` is unique only AFTER the
+    /// classification filter (`Preview in Browser` is Deferred and matches it too), so
+    /// its floor of 2 is what keeps the uniqueness assertion from holding with that
+    /// filter deleted; `edts` is unique in the whole registry, so a floor of 2 would
+    /// be a false claim about it rather than a stronger test.
+    ///
+    /// Falsifier: give `Command::Preview` or `Command::Edit` a title that another
+    /// actionable command's title also matches — or delete the classification filter
+    /// from [`palette_rows`], which fails the `prv` row alone.
+    #[test]
+    fn palette_rows_for_the_preview_smoke_select_one_row_each() {
+        for (query, command, id, unfiltered_floor) in PREVIEW_SMOKE_QUERIES {
+            // Precondition: the literal the smoke reads back is still this command's
+            // registry id. The smoke is a separate crate and cannot import it.
+            assert_eq!(
+                command.spec().id,
+                id,
+                "{command:?}'s registry id is {:?}, but the cage smoke asserts the palette \
+                 activation recorded the literal {id:?} in the command MRU. Update \
+                 `PREVIEW_MRU_KEYS` in `tests/smoke_headless.rs` and PREVIEW_SMOKE_QUERIES here \
+                 together, or that smoke's MRU precondition becomes unfalsifiable.",
+                command.spec().id
+            );
+
+            let unfiltered = rank_palette(&[], &[], &[], query, usize::MAX);
+            assert!(
+                unfiltered.len() >= unfiltered_floor,
+                "`rank_palette` matches only {} candidate(s) for {query:?} before the \
+                 classification filter runs, below the floor of {unfiltered_floor} this query \
+                 claims. For a floor of 2 that means the filter is no longer what makes the row \
+                 unique, so the assertion below would hold with the filter deleted; for a floor of \
+                 1 it means the query matches NOTHING and the smoke would find an empty palette. \
+                 Titles matching {query:?} were: {:?}",
+                unfiltered.len(),
+                unfiltered
+                    .iter()
+                    .map(|row| &row.display)
+                    .collect::<Vec<_>>()
+            );
+
+            // Both MRU states, exactly as the sibling test does: the smoke opens the
+            // palette twice and the first activation warms the store, so the second
+            // query runs against a NON-empty MRU.
+            let mrus: [Vec<String>; 2] = [Vec::new(), vec![Command::Preview.spec().id.to_string()]];
+            for recent in &mrus {
+                let rows = palette_rows(&[], recent, query, PALETTE_MAX_ROWS);
+                assert_eq!(
+                    rows.len(),
+                    1,
+                    "`palette_rows` returned {} row(s) for {query:?} with command MRU {recent:?}; \
+                     the cage smoke presses Enter on the top row, so a second matching row makes \
+                     which command runs depend on ranking tie-breaks. Rows were: {:?}",
+                    rows.len(),
+                    rows.iter().map(|row| &row.display).collect::<Vec<_>>()
+                );
+
+                let row = &rows[0];
+                assert_eq!(
+                    row.command,
+                    Some(command),
+                    "the sole row matching {query:?} (with command MRU {recent:?}) carries {:?}, \
+                     not {command:?}. The smoke would then drive a command it does not name — and \
+                     for these two rows that means opening a preview where a source edit was meant, \
+                     or the reverse.",
+                    row.command
+                );
+                assert_eq!(
+                    row.mru_key.as_str(),
+                    id,
+                    "the sole row matching {query:?} (with command MRU {recent:?}) records {:?} on \
+                     activation, not {id:?}. The smoke reads the command-MRU sqlite back and looks \
+                     for exactly that key.",
+                    row.mru_key
+                );
+            }
         }
     }
 

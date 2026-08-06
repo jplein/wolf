@@ -47,32 +47,54 @@ pub const MAX_RESTORE_LEAVES: usize = 64;
 /// recursion) against a pathological hand-edited nesting.
 pub const MAX_RESTORE_DEPTH: usize = 32;
 
-/// Maps a live [`PaneLayout`] (leaf IDs) into a persistable [`PaneNode`] (leaf
-/// PATHS), looking each leaf id up in `paths`.
+/// What one live pane contributes to a persisted leaf: the buffer path it holds
+/// and whether that buffer is a Markdown PREVIEW rather than an editable file.
 ///
-/// A leaf id MISSING from `paths` becomes `path: ""` (macOS parity: an unbound or
-/// unnamed pane persists as an empty leaf). `preview` is always `false`:
-/// `wolf-gnome` has no Markdown preview yet, so that is a VALUE choice, not a
-/// shape choice — the flag is already carried end to end by `PaneNode`,
-/// `wolf_core::state::rebuild_layout_spec` and `wolf_rebuild_layout`, so the
-/// preview unit will add a value rather than a field.
+/// The two travel together because [`is_empty_leaf`] reads both, and a caller that
+/// carried only the path would have to re-derive the flag at the encode site —
+/// where the pane it belongs to is no longer in hand.
+///
+/// [`Default`] is the "no such pane" value, which is what makes a leaf id missing
+/// from [`encode`]'s map an empty, non-preview leaf without a second lookup.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LeafContent {
+    /// The pane's RAW absolute buffer path (`""` for an unbound or unnamed pane).
+    pub path: String,
+    /// Whether the pane shows a Markdown preview.
+    pub preview: bool,
+}
+
+/// Maps a live [`PaneLayout`] (leaf IDs) into a persistable [`PaneNode`] (leaf
+/// PATHS), looking each leaf id up in `contents`.
+///
+/// A leaf id MISSING from `contents` becomes `Leaf { path: "", preview: false }`
+/// (macOS parity: an unbound or unnamed pane persists as an empty leaf) rather than
+/// being dropped, because dropping it would change the topology and desynchronise
+/// the DFS zip the restore path depends on.
 ///
 /// Weights and orientation are copied VERBATIM.
 #[must_use]
-pub fn encode(layout: &PaneLayout, paths: &HashMap<PaneId, String>) -> PaneNode {
+pub fn encode(layout: &PaneLayout, contents: &HashMap<PaneId, LeafContent>) -> PaneNode {
     match layout {
-        PaneLayout::Leaf(id) => PaneNode::Leaf {
-            path: paths.get(id).cloned().unwrap_or_default(),
-            preview: false,
-        },
+        PaneLayout::Leaf(id) => {
+            // `LeafContent::default()` IS the "no such pane" value, which is why a
+            // missing id needs no second branch.
+            let content = contents.get(id).cloned().unwrap_or_default();
+            PaneNode::Leaf {
+                path: content.path,
+                preview: content.preview,
+            }
+        }
         PaneLayout::Split {
             orientation,
             children,
             weights,
         } => PaneNode::Split {
             orientation: to_core_orientation(*orientation),
+            children: children.iter().map(|c| encode(c, contents)).collect(),
+            // VERBATIM. Equalizing here would silently re-centre every dragged
+            // divider on the next launch while the restore side looked correct.
             weights: weights.clone(),
-            children: children.iter().map(|c| encode(c, paths)).collect(),
         },
     }
 }
@@ -257,10 +279,26 @@ mod tests {
         }
     }
 
-    /// A PREVIEW leaf bound to `path` (never produced on Linux yet; the predicate
-    /// tests need one to prove `is_empty_leaf` is not just "the path is empty").
+    /// A PREVIEW leaf bound to `path` (the predicate tests need one to prove
+    /// `is_empty_leaf` is not just "the path is empty").
     fn preview_leaf(path: &str) -> PaneNode {
         PaneNode::Leaf {
+            path: path.to_string(),
+            preview: true,
+        }
+    }
+
+    /// One live pane holding an ordinary editable buffer at `path`.
+    fn editor_pane(path: &str) -> LeafContent {
+        LeafContent {
+            path: path.to_string(),
+            preview: false,
+        }
+    }
+
+    /// One live pane showing a Markdown PREVIEW of `path`.
+    fn preview_pane(path: &str) -> LeafContent {
+        LeafContent {
             path: path.to_string(),
             preview: true,
         }
@@ -347,20 +385,37 @@ mod tests {
     // encode
     // =====================================================================
 
+    /// `encode` carries each leaf id's [`LeafContent`] — path AND preview flag —
+    /// onto the persisted node, and an id it has no entry for becomes the empty,
+    /// non-preview leaf.
+    ///
+    /// The three leaves are deliberately three DIFFERENT shapes, so one comparison
+    /// discriminates all of them: an editor pane, a pane with no entry at all, and a
+    /// PREVIEW pane. A seam that wrote `preview: false` unconditionally reddens on
+    /// the third alone, and one that wrote `preview: true` unconditionally reddens
+    /// on the first two — neither could be mistaken for a topology or weight
+    /// failure, since those are pinned by the same value.
+    ///
+    /// FALSIFYING EDIT: write `preview: false` on every leaf. The preview pane then
+    /// persists as an ordinary editor leaf, so the next launch reopens the source
+    /// file in what was the preview pane — and, worse, `is_empty_leaf` starts
+    /// suppressing an unnamed preview leaf, which is the one thing it exists not to
+    /// do.
     #[test]
     fn encode_maps_ids_to_paths() {
-        let mut paths = HashMap::new();
-        paths.insert(P0, PATH_A.to_string());
+        let mut contents = HashMap::new();
+        contents.insert(P0, editor_pane(PATH_A));
         // P1 is DELIBERATELY absent: an unbound / unnamed pane must encode as an
         // empty leaf rather than being dropped from the tree (macOS parity), because
         // dropping it would change the topology and desynchronise the DFS zip.
-        paths.insert(P2, PATH_C.to_string());
+        contents.insert(P2, preview_pane(PATH_C));
 
-        let got = encode(&asymmetric_layout(), &paths);
+        let got = encode(&asymmetric_layout(), &contents);
 
-        // The WHOLE value in one comparison: mapped id -> its path, unmapped id ->
-        // "", both orientations, both weight vectors verbatim, and `preview: false`
-        // on every leaf.
+        // The WHOLE value in one comparison: an editor id -> its path with
+        // `preview: false`, an unmapped id -> `Leaf { path: "", preview: false }`, a
+        // preview id -> its path with `preview: true`, and both orientations and
+        // both weight vectors verbatim.
         assert_eq!(
             got,
             split(
@@ -372,12 +427,34 @@ mod tests {
                         &[WEIGHT_HALF, WEIGHT_HALF],
                         vec![leaf(PATH_A), leaf("")],
                     ),
-                    leaf(PATH_C),
+                    preview_leaf(PATH_C),
                 ],
             ),
-            "encode must map each leaf id through `paths` (an ABSENT id becoming the empty leaf \
-             `\"\"`), copy both orientations and both weight vectors verbatim, and set \
-             `preview: false` on every leaf"
+            "encode must map each leaf id through `contents` — carrying the pane's PREVIEW flag as \
+             well as its path, and turning an ABSENT id into `Leaf {{ path: \"\", preview: false }}` \
+             rather than dropping it — and copy both orientations and both weight vectors verbatim"
+        );
+
+        // The two rules the whole-value comparison above could be read past, stated
+        // where a failure names them.
+        let PaneNode::Split { children, .. } = &got else {
+            panic!("encode turned the asymmetric layout into {got:?}, which is not a split at all");
+        };
+        assert_eq!(
+            children[1],
+            preview_leaf(PATH_C),
+            "the leaf for the PREVIEW pane must carry `preview: true`. The flag is the only thing \
+             that tells a restored preview pane from a restored editor pane, and `is_empty_leaf` \
+             reads it too: a preview leaf that lost its flag and its path becomes the one shape \
+             the save path suppresses outright."
+        );
+        assert_eq!(
+            encode(&PaneLayout::Leaf(P1), &contents),
+            leaf(""),
+            "a leaf id with NO entry in `contents` must encode as `Leaf {{ path: \"\", \
+             preview: false }}`. `LeafContent::default()` is that value, which is why the lookup \
+             needs no second branch — but a missing id that came back as a PREVIEW leaf would \
+             survive `is_empty_leaf` and persist an empty pane the restore path then rebuilds."
         );
     }
 
@@ -592,11 +669,11 @@ mod tests {
             children: vec![PaneLayout::Leaf(P0), PaneLayout::Leaf(P1)],
             weights: vec![WEIGHT_SMALL, WEIGHT_LARGE],
         };
-        let mut paths = HashMap::new();
-        paths.insert(P0, PATH_A.to_string());
-        paths.insert(P1, PATH_B.to_string());
+        let mut contents = HashMap::new();
+        contents.insert(P0, editor_pane(PATH_A));
+        contents.insert(P1, editor_pane(PATH_B));
 
-        let node = encode(&layout, &paths);
+        let node = encode(&layout, &contents);
         let Some((tree, leaf_ids)) = decode(&node, P0) else {
             panic!("decode rejected the encoding of a well-formed two-leaf tree: {node:?}");
         };
@@ -629,11 +706,11 @@ mod tests {
 
         // The same round trip over the three-leaf asymmetric tree, whose nested split
         // carries its own (equal) weights beneath a non-equal outer pair.
-        let mut tri_paths = HashMap::new();
-        tri_paths.insert(P0, PATH_A.to_string());
-        tri_paths.insert(P1, PATH_B.to_string());
-        tri_paths.insert(P2, PATH_C.to_string());
-        let tri_node = encode(&asymmetric_layout(), &tri_paths);
+        let mut tri_contents = HashMap::new();
+        tri_contents.insert(P0, editor_pane(PATH_A));
+        tri_contents.insert(P1, editor_pane(PATH_B));
+        tri_contents.insert(P2, editor_pane(PATH_C));
+        let tri_node = encode(&asymmetric_layout(), &tri_contents);
         assert_eq!(
             tri_node,
             asymmetric_tree(),
@@ -824,12 +901,13 @@ mod tests {
         tree
     }
 
-    /// The `PaneId` -> path map the drag tests encode with.
-    fn dragged_paths() -> HashMap<PaneId, String> {
-        let mut paths = HashMap::new();
-        paths.insert(P0, PATH_A.to_string());
-        paths.insert(P1, PATH_B.to_string());
-        paths
+    /// The `PaneId` -> [`LeafContent`] map the drag tests encode with. Both panes
+    /// are ordinary editors: the subject here is the WEIGHT vector, not the leaves.
+    fn dragged_contents() -> HashMap<PaneId, LeafContent> {
+        let mut contents = HashMap::new();
+        contents.insert(P0, editor_pane(PATH_A));
+        contents.insert(P1, editor_pane(PATH_B));
+        contents
     }
 
     /// [`encode`] carries a DRAGGED weight vector onto the persisted node verbatim.
@@ -867,7 +945,7 @@ mod tests {
             "precondition: the dragged head weight should be {DRAGGED_HEAD_FRACTION}, got {live:?}"
         );
 
-        let node = encode(&tree.layout(), &dragged_paths());
+        let node = encode(&tree.layout(), &dragged_contents());
 
         let PaneNode::Split {
             orientation,
@@ -912,7 +990,7 @@ mod tests {
     /// MEASURED: `the restored divider fraction is 0.5, not the dragged 0.7`.
     #[test]
     fn decode_restores_a_dragged_weight_vector() {
-        let node = encode(&dragged_two_leaf_tree().layout(), &dragged_paths());
+        let node = encode(&dragged_two_leaf_tree().layout(), &dragged_contents());
 
         let Some((rebuilt, leaf_ids)) = decode(&node, P0) else {
             panic!("decode rejected the encoding of a dragged two-leaf split: {node:?}");
