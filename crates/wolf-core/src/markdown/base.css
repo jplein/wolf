@@ -43,7 +43,10 @@
  * Unit: 24px (16px body text x 1.5), declared once as the documented token
  * `--wolf-baseline: 24px` on body.wolf-markdown. Written B below.
  *
- * INVARIANT
+ * INVARIANT -- a claim about the values this file DECLARES, not about the
+ * laid-out document, whose line boxes exceed them wherever two faces meet (see
+ * THE INLINE-CODE PADDING CLAIM IS CORRECT AND IS NOT THE WHOLE STORY below for
+ * the mechanism, the measured excess, and why no declaration can express it):
  *
  *   Every element's vertical margin is 0 or a whole multiple of 24px, AND every
  *   element's border-box height (content + padding + border) is a whole
@@ -113,6 +116,41 @@
  * its vertical padding is 0, so its border-box height is just the sum of its
  * on-grid children), pre (no border), or inline code (vertical padding on an
  * inline box paints background but does not grow the line box).
+ *
+ * THE INLINE-CODE PADDING CLAIM IS CORRECT AND IS NOT THE WHOLE STORY
+ *
+ * Padding is not what inline code costs the grid. FONT METRICS are.
+ * line-height inherits as a computed LENGTH, so the inline code box is 24px
+ * tall exactly like the text around it -- but an inline box's leading is
+ * distributed as HALF-LEADING around THAT BOX'S OWN font metrics, not around
+ * the containing block's. With line-height L, ascent A and descent D, a box
+ * extends (L + A - D) / 2 above its baseline and (L - A + D) / 2 below it. Two
+ * baseline-aligned 24px boxes in different faces therefore do not coincide:
+ * the line box is their union, L + (max(A - D) - min(A - D)) / 2 over the faces
+ * present on the line, which exceeds L whenever two faces disagree on A - D.
+ * The body face and the monospace code face do disagree, so any line carrying
+ * a code element is taller than its 24px unit. How much taller is set by the
+ * pair of faces on that line and is NOT a constant: 2px over for a paragraph
+ * and for a list, 3px over for pre, which pairs a different two faces because
+ * the UA stylesheet gives pre its own monospace family rather than the body's.
+ * And because every later block's top offset shifts with it, the error
+ * ACCUMULATES rather than being constant like the table residual above.
+ *
+ * MEASURED against the real rendered document in WebKitGTK 2.52.4: border-box
+ * heights of 26 for a paragraph carrying inline code (unit 24), 74 for a list
+ * (72) and 123 for pre (120). Attributed by A/B rather than by reasoning:
+ * overriding the code element's font-family to inherit gives 25 / 73 / 120,
+ * and overriding its line-height to 0 gives 24 / 72 / 120. Neither override
+ * ships -- they are measurements, not a fix, and the fix is an open question
+ * because this document renders on two platforms.
+ *
+ * THE DECLARED-VALUE SWEEP STRUCTURALLY CANNOT SEE THIS. markdown_render.rs
+ * checks the values this file DECLARES, and every one of them is legal here:
+ * the body's 24px length, the code element's 0.875em font-size, its zero
+ * vertical padding. The excess exists only in the LAID-OUT box, which no
+ * text-level assertion produces. A green sweep is therefore not evidence that
+ * the grid holds line by line -- exactly as with the edge-rule bug below,
+ * which is invisible to it for a different reason.
  *
  * EDGE RULES (and why their selectors are not just :first-child/:last-child)
  *
