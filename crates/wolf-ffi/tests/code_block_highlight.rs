@@ -18,11 +18,15 @@
 //!
 //! Like `treesitter_highlight.rs`, this test needs a pinned nvim
 //! (`nvim_bin_or_skip`) AND both staged trees (`nvim_treesitter_dir_or_none`,
-//! `parsers_dir_or_none`). When any is absent — the cargo / Linux path, where the
-//! vendored trees and compiled parsers are not built — the captive treesitter block
-//! is a strict no-op and `wolf_highlight_code_blocks` self-degrades to `false`, so
-//! this test is a loud no-op pass (it asserts styled spans only when there is a real
-//! treesitter layout to exercise, on Bazel/macOS).
+//! `parsers_dir_or_none`). Skipping when either tree is absent is correct for THIS
+//! fixture, but the reason is the FIXTURE'S LANGUAGE, not a disabled highlighter:
+//! `wolf_highlight_code_blocks` sits at MODULE level in `runtime/nvim/init.lua`,
+//! outside the vendored-tree gate, so it is live on the cargo / Linux path too and
+//! gates per LANGUAGE. It answers `false` here because the fixture fences `go`,
+//! whose parser and `highlights` query ship only in the vendored trees — while the
+//! seven the pinned Neovim ships (`c`, `lua`, `markdown`, `markdown_inline`,
+//! `query`, `vim`, `vimdoc`) do highlight there. So off Bazel/macOS this is a loud
+//! no-op pass: it asserts styled spans only where the `go` parser exists.
 //!
 //! ## NOTE to coder — Bazel target
 //!

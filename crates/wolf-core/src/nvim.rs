@@ -1383,10 +1383,16 @@ impl NvimProcess {
 /// [`crate::markdown::PreviewTheme::Default`] (OD5) and the given `width_mode`
 /// (in-app callers pass [`crate::markdown::WidthMode::Full`] and let the webview
 /// frame cap; the browser preview passes [`crate::markdown::WidthMode::Capped`]).
-/// The highlight pass degrades gracefully: any block Neovim cannot highlight
-/// (unknown language, missing parser/query, or the no-op treesitter path on
-/// Linux/cargo) renders as plain `<pre><code>`. An RPC error (e.g. an
-/// unloaded/closed buffer) reading the buffer is propagated as [`NvimError::Rpc`].
+/// The highlight pass degrades gracefully and PER FENCE: any block Neovim cannot
+/// highlight (no language on the fence, or no parser AND `highlights` query for it
+/// on the runtimepath) renders as plain `<pre><code>`. This is NOT a per-platform
+/// switch — `wolf_highlight_code_blocks` sits at MODULE level in
+/// `runtime/nvim/init.lua`, deliberately outside the vendored-tree gate, so it runs
+/// on Linux/cargo too. The pinned Neovim ships seven parsers with queries (`c`,
+/// `lua`, `markdown`, `markdown_inline`, `query`, `vim`, `vimdoc`), so a `lua` or
+/// `c` fence highlights there while a `go` one falls back to plain. An RPC error
+/// (e.g. an unloaded/closed buffer) reading the buffer is propagated as
+/// [`NvimError::Rpc`].
 ///
 /// Extracted from [`NvimProcess::render_preview`] so the loopback browser-preview
 /// server ([`crate::browser_preview`]) can re-render off a bare RPC handle
@@ -1422,8 +1428,10 @@ pub(crate) async fn render_source_html(
         .join("\n");
 
     // Enumerate the fenced/indented code blocks and ask the captive Neovim's
-    // treesitter to highlight each. ANY failure (RPC error, no parser/query,
-    // Linux/cargo no-op) degrades to `None` per block, i.e. the plain render.
+    // treesitter to highlight each. ANY failure (RPC error, or no parser AND
+    // `highlights` query on the runtimepath for that fence's language) degrades to
+    // `None` per block, i.e. the plain render. The helper is module-level Lua and
+    // runs on every platform; the gate is per LANGUAGE, not per platform.
     let blocks = crate::markdown::code_blocks(&source);
     let highlights = if blocks.is_empty() {
         Vec::new()
@@ -1444,10 +1452,16 @@ pub(crate) async fn render_source_html(
 ///
 /// Calls the module-level Lua helper `wolf_highlight_code_blocks(blocks)` (see
 /// `runtime/nvim/init.lua`) with an array of `[text, lang]` pairs. The reply is an
-/// array whose i-th entry is either `false`/nil (not highlightable — unknown
-/// language, missing parser/query, or the whole treesitter block a no-op as on
-/// Linux/cargo) or an array of 7-element span tuples
+/// array whose i-th entry is either `false`/nil (not highlightable — the fence
+/// carries no language, or that language has no parser AND `highlights` query on
+/// the runtimepath) or an array of 7-element span tuples
 /// `[row, start_col, end_col, fg, bold, italic, underline]`.
+///
+/// The helper is defined at MODULE level, outside `init.lua`'s vendored-tree gate,
+/// so this call is live on every platform and the `false` decision is taken per
+/// LANGUAGE. On Linux/cargo the seven parsers the pinned Neovim ships (`c`, `lua`,
+/// `markdown`, `markdown_inline`, `query`, `vim`, `vimdoc`) highlight; anything
+/// else, `go` included, comes back `false`.
 ///
 /// This is TOTAL graceful fallback: any RPC error, a non-array reply, or a
 /// length mismatch yields `vec![None; blocks.len()]` (every block plain), and any

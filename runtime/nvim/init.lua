@@ -595,8 +595,13 @@ end
 -- scalar `false`. Each span is always a full 7-element array.
 --
 -- Defined at MODULE LEVEL (not inside the conditional treesitter block) so it exists
--- on EVERY platform. On Linux/cargo (no vendored parsers/queries) it self-degrades
--- to `false` for every block because get_string_parser / query.get find nothing.
+-- on EVERY platform, and the `false` decision above is taken per LANGUAGE rather than
+-- per platform. It is deliberately NOT gated on the vendored trees: nvim ships seven
+-- parsers of its own -- c, lua, markdown, markdown_inline, query, vim, vimdoc -- and
+-- each resolves through get_string_parser AND carries a `highlights` query, so a
+-- ```lua or ```c fence highlights on Linux/cargo with nothing vendored at all. What
+-- the vendored trees add is every OTHER language: go, rust, python, javascript and
+-- the rest find nothing and degrade to `false` until they are staged.
 function _G.wolf_highlight_code_blocks(blocks)
 	-- Resolve a treesitter capture NAME (e.g. "function.call") to its effective
 	-- highlight style via an @-prefixed `nvim_get_hl` lookup (link = false so a
