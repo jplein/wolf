@@ -11,7 +11,7 @@
 //!
 //! ## What this file contains
 //!
-//! **Forty-two cage smokes** — one window-render smoke, two file-picker smokes,
+//! **Forty-three cage smokes** — one window-render smoke, two file-picker smokes,
 //! one file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
 //! new-untitled-buffer smoke, one command-palette smoke, one OPEN RECENT smoke
 //! (Ctrl+Shift+P, a typed folder query, then Enter — the activated row re-roots the
@@ -64,8 +64,14 @@
 //! configured appearance reaching the captive Neovim is a pair of exact string
 //! equalities — and the PAIR is what discriminates, since `dark` alone is satisfied
 //! by a build that pushes nothing and `light` alone by one that always pushes
-//! light), and one CLIPBOARD smoke (a linewise yank over Ctrl+Shift+C, a put over
-//! Ctrl+Shift+V, and one buffer readback that must carry the marker exactly TWICE)
+//! light), one CLIPBOARD smoke (a linewise yank over Ctrl+Shift+C, a put over
+//! Ctrl+Shift+V, and one buffer readback that must carry the marker exactly TWICE),
+//! and one MARKDOWN-PREVIEW smoke (Preview and then Edit Source driven through the
+//! command palette, which is one of their only two routes: TWO captures either side
+//! of a LIVE EDIT typed into the source, so the second reads text that reached the
+//! DOM through the JSON body swap and no other way, plus a preview-only statusbar, a
+//! frozen `state.json` whose preview leaf carries the SOURCE path, and two
+//! `tabpagebuflist()` readbacks that name the preview scratch buffer)
 //! — each of which launches the real binary under `cage`.
 //!
 //! Five smokes run **two app launches inside ONE `cage` instance** (one scenario
@@ -85,7 +91,7 @@
 //! and no `:e` toast can satisfy, and OCR is structurally incapable of answering
 //! "did the cursor land at exactly row 12, column 25".
 //!
-//! Thirty-three of the forty-two OCR a screenshot of the live window. Five
+//! Thirty-four of the forty-three OCR a screenshot of the live window. Five
 //! deliberately capture no image at all: the `:qa` smoke asserts on the cage exit
 //! status alone, while the configured-font-size and column-cap smokes add two
 //! integers each, the configured-appearance smoke two exact strings, and the
@@ -97,7 +103,10 @@
 //! three relaunch smokes OCR **and** assert on a Neovim readback, and two of them
 //! additionally assert on the `state.json` the first launch wrote. The
 //! project-search smoke does both as well, and its readback carries the two values
-//! OCR structurally cannot: the LINE and the COLUMN the cursor landed on.
+//! OCR structurally cannot: the LINE and the COLUMN the cursor landed on. The
+//! markdown-preview smoke does all three at once — two captures, two readbacks and a
+//! `state.json` frozen mid-run — because the pane it asserts on is the one surface
+//! here whose pixels come from WebKit rather than from this crate's own painter.
 //!
 //! **Six pure guards**, which mechanically enforce invariants the cage smokes
 //! depend on but cannot check themselves:
@@ -115,11 +124,14 @@
 //!   aimed at a THIRD fixture, [`RELAUNCH_FIXTURE_NAMES`]: the SMOKE-OWNED files a
 //!   smoke writes into its own working directory (the state-persistence ones were
 //!   the first), which the tree sidebar renders by name. It pins more than names,
-//!   because for the two fixtures built from a BODY rather than a bare heading a
+//!   because for the three fixtures built from a BODY rather than a bare heading a
 //!   name rule cannot reach the hazard at all: it checks the content of
 //!   [`divider_right_fixture_body`] and [`search_target_fixture_body`], the second
 //!   down to the match's line index and its byte offset, which the project-search
-//!   smoke's line and column assertions are derived from. It also pins SIX crossed
+//!   smoke's line and column assertions are derived from, and the markdown-preview
+//!   source, whose rendered text is the one body that reaches a pixel through WebKit
+//!   and the only one checked against an ordinary English word
+//!   ([`PREVIEW_OCR_STATUS`]). It also pins SIX crossed
 //!   pairs of OCR preconditions — the window-title smoke's deliberate exemption, the
 //!   project-search smoke's target-versus-starting headings, the Open Recent
 //!   smoke's target FILE versus target DIRECTORY, where the header bar draws the
@@ -144,7 +156,7 @@
 //!   exactly the kind that stops being true when someone changes a font size, and
 //!   nothing else would notice.
 //! * [`the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes`] — the
-//!   SECOND premise those thirty-three rest on: the seeded `wolf-config.yaml` pins
+//!   SECOND premise those thirty-four rest on: the seeded `wolf-config.yaml` pins
 //!   `appearance: dark`, which is what keeps the grid light-on-dark for sparse-text
 //!   segmentation. It asserts both halves — the pinned VALUE, re-typed locally so
 //!   the check is not a comparison with itself, and the artifact
@@ -166,7 +178,7 @@
 //! a run outside the devShell fails it for that reason rather than for the reason
 //! its message names.
 //!
-//! So this target's summary line reads **`48 passed`**, not `42`: forty-two cage
+//! So this target's summary line reads **`49 passed`**, not `43`: forty-three cage
 //! smokes plus those six guards.
 //!
 //! ## A vacuously-passing check recorded here: the `wtype ""` window-map poll
@@ -209,7 +221,7 @@
 //!
 //! ## When it runs
 //!
-//! The forty-two cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The forty-three cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The Linux verification gate").
@@ -219,13 +231,13 @@
 //! suite command does not run is a silently-skipped test.
 //!
 //! They are, however, the slowest part of the suite: each drives a real
-//! compositor, and all forty-two serialize behind `CAGE_LOCK` (see below).
+//! compositor, and all forty-three serialize behind `CAGE_LOCK` (see below).
 //!
 //! ```text
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the forty-two cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the forty-three cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` and
 //!   `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
@@ -242,7 +254,7 @@
 //!   empty result list.
 //! - `XDG_RUNTIME_DIR` set and writable (the Wayland socket lives there).
 //!
-//! Per project policy every one of the forty-two FAILS LOUD if any of the above is
+//! Per project policy every one of the forty-three FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -269,7 +281,7 @@ use wolf_gnome::{CellMetrics, WINDOW_TITLE_FALLBACK};
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the forty-two cage smoke tests. Each launches its own
+/// Serializes the forty-three cage smoke tests. Each launches its own
 /// `cage` compositor, and two compositors started concurrently contend for the
 /// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
 /// Under the default multi-threaded test harness these tests would otherwise run
@@ -440,7 +452,9 @@ const SIDEBAR_FILLER_COUNT: usize = 9;
 /// `ortango`, and — added with the navigation-history unit —
 /// `navbackalfa`/`navbackbravo` and `sbtangoleaf`/`sidebarkeepalfa`, and — added
 /// with the file-tree-sidebar-parity unit —
-/// `cdtango`/`cdrootzulu`/`cdouterhome` — so a stray
+/// `cdtango`/`cdrootzulu`/`cdouterhome`, and — added with the Markdown-preview unit
+/// — `zzbodyoscar`/`zzothertango`/`zzlivekilo` and the one ORDINARY WORD in the whole
+/// table, `preview` — so a stray
 /// filler can never satisfy one of those either. [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`]
 /// enforces this mechanically against [`ASSERTED_OCR_TERMS`], which holds the consts
 /// themselves; this list is a reader's summary and the test is the authority.
@@ -8314,13 +8328,431 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
+// ---------------------------------------------------------------------------
+// MARKDOWN-PREVIEW fixtures: a rendered preview pane, its statusbar, its
+// persisted leaf, a LIVE EDIT of the source, and Edit Source's inverse placement.
+//
+// ## Why the placement has to be MODE_ACTIVE, and what it buys
+//
+// The scenario opens the OTHER file, splits with `<C-w>v`, opens the Markdown
+// SOURCE in the new pane, and drives Preview from there. `preview_ui::preview_placement`
+// answers `active` for that shape (two panes, an editor active, no other preview),
+// so `wolf_open_preview` REPLACES the source pane's buffer with the preview scratch
+// — and the source's raw text is then displayed in NO pane at all.
+//
+// That is the whole soundness argument for the body assertion: nvim cannot draw
+// [`PREVIEW_OCR_BODY`] anywhere, the sidebar and the `:e` toast draw FILENAMES, and
+// neither filename contains it. An OCR hit on the rendered heading can therefore
+// only be WebKit's pixels. A placement that split a THIRD pane instead would leave
+// the source on screen and make that assertion vacuous, which is why the persisted
+// layout is asserted to hold exactly TWO leaves and the readback exactly two
+// windows: two independent statements of the premise, either of which catches it.
+//
+// ## Why the live edit runs AFTER Edit Source rather than before it
+//
+// Only a SECOND load into a live web view takes the JSON body-swap branch
+// (`pane_view::preview_swap_payload`); the first goes through `load_html` and looks
+// perfect whatever the encoding does. So a smoke that opens a preview and asserts
+// on it, without then editing the source, cannot see a single-encoded payload at
+// all — the measured bug printed `JSON Parse error: Unrecognized token '<'` on every
+// keystroke while the preview silently kept showing the stale document.
+//
+// Editing the source needs the source in a WINDOW, and Edit Source is what puts it
+// back there — into the OTHER pane, which is the leg's own discriminator. The marker
+// is then typed into that pane, where nvim draws it too, so the scenario opens the
+// other file over it before capturing: at capture B the marker's raw text is off
+// screen again and only the preview pane can draw it. Doing the live edit BEFORE
+// the Edit leg would need a `:e` of the source into the other pane, which would
+// satisfy that leg's readback by itself.
+//
+// ## The fixture-naming rule, as everywhere else here
+//
+// Neither filename contains either heading term, so no sidebar row and no `:e`
+// toast can satisfy an assertion on its own, and both are registered in
+// `RELAUNCH_FIXTURE_NAMES` — as are the two readback files, which land in the same
+// temp cwd. [`PREVIEW_OCR_STATUS`] is the one asserted term here that is an ORDINARY
+// WORD rather than a coined one, so it carries an extra content check in
+// `restore_fixture_names_cannot_satisfy_their_own_assertions`: nothing this smoke
+// puts on screen — least of all the rendered document — may spell it.
+
+/// Markdown-preview smoke: the SOURCE file, opened in the split pane and then
+/// replaced by its own preview.
+///
+/// Its name contains neither [`PREVIEW_OCR_BODY`] nor [`PREVIEW_OCR_STATUS`], so the
+/// sidebar row and the `:e` toast that both spell `pvsrc.md` can satisfy no
+/// assertion of this smoke's.
+const PREVIEW_SOURCE_FILE: &str = "pvsrc.md";
+
+/// Heading written into [`PREVIEW_SOURCE_FILE`]; lowercased it contains
+/// [`PREVIEW_OCR_BODY`].
+///
+/// An `h1`, deliberately: `wolf_core`'s preview stylesheet sets `body` to 16 px and
+/// `h1` to 32 px, and the asserted term has to survive `tesseract` at whatever size
+/// WebKit rasterizes it — which is the ONE glyph source in this file that is not the
+/// pinned editor face. If this ever reads unreliably, make the heading LOWERCASE (the
+/// shapes tesseract reads best, per [`SIDEBAR_FILLER_FILES`]) before touching the
+/// assertion.
+const PREVIEW_SOURCE_HEADING: &str = "# ZZBODYOSCAR";
+
+/// The paragraph under [`PREVIEW_SOURCE_HEADING`], for page density INSIDE the web
+/// view — the [`SIDEBAR_FILLER_COUNT`] hazard, aimed at the one region of this
+/// capture the filler files do not reach.
+///
+/// Every word is checked against [`ASSERTED_OCR_TERMS`] by
+/// [`restore_fixture_names_cannot_satisfy_their_own_assertions`]: this body is
+/// RENDERED text, so a word carrying an asserted term would satisfy that assertion
+/// from the preview with the heading never drawn.
+const PREVIEW_SOURCE_PARAGRAPH: &str = "victor whiskey juliett mike, romeo sierra.";
+
+/// Lowercased substring OCR MUST find in BOTH captures: the rendered heading of the
+/// previewed document, which only the web view can draw.
+const PREVIEW_OCR_BODY: &str = "zzbodyoscar";
+
+/// Markdown-preview smoke: the OTHER file, opened in the starting pane and drawn by
+/// the editor throughout the first capture.
+const PREVIEW_OTHER_FILE: &str = "pvoth.md";
+
+/// Heading written into [`PREVIEW_OTHER_FILE`]; lowercased it contains
+/// [`PREVIEW_OCR_OTHER`].
+const PREVIEW_OTHER_HEADING: &str = "# ZZOTHERTANGO";
+
+/// Lowercased substring OCR MUST find in capture A: the editor pane's own file,
+/// which is this capture's proof of life and its proof that the preview took over
+/// exactly ONE of the two panes.
+const PREVIEW_OCR_OTHER: &str = "zzothertango";
+
+/// Lowercased substring OCR MUST find in capture A: the word a preview pane's
+/// statusbar leads with.
+///
+/// It is [`wolf_gnome::preview_ui::PREVIEW_STATUS_PREFIX`]'s first word, re-typed
+/// here as a literal per this file's re-declare-do-not-import discipline. Reading the
+/// crate's own constant would make the assertion a comparison with itself and would
+/// hold for whatever that constant became — including the `[No Name]` a preview
+/// window's `WolfCore::pane_status` answers, which is the value this assertion exists
+/// to rule out.
+///
+/// **It is an ordinary English word**, unlike every other term in
+/// [`ASSERTED_OCR_TERMS`], so the usual "no fixture may be named after it" rule is
+/// not enough on its own: the rendered document, the paragraph above and both
+/// filenames are checked against it too.
+const PREVIEW_OCR_STATUS: &str = "preview";
+
+/// Typed (in insert mode, after Edit Source has put the source back in a pane) into
+/// the SOURCE buffer while the preview pane is live — the keystrokes whose only route
+/// to a pixel is the JSON body swap.
+///
+/// An `h1` for the same OCR reason [`PREVIEW_SOURCE_HEADING`] is.
+const PREVIEW_LIVE_MARKER: &str = "# ZZLIVEKILO";
+
+/// Lowercased substring OCR MUST find in capture B: [`PREVIEW_LIVE_MARKER`] as the
+/// web view rendered it.
+const PREVIEW_OCR_LIVE: &str = "zzlivekilo";
+
+/// Typed into the palette's search entry to reach the `Preview` row.
+///
+/// ## Why it is a SUBSEQUENCE rather than a prefix
+///
+/// `wolf_core::rank_matches` matches a term as a case-insensitive SUBSEQUENCE, and
+/// `prv` is one of exactly ONE actionable palette title. Walking the sixteen the
+/// palette lists (the seventeen `command_action` dispatches, minus the palette's own
+/// invoking command, which `rank_palette` excludes): `Preview` alone carries `p`,
+/// then `r`, then `v`. `Buffer Picker…` and `Search in project` have `p` then `r`
+/// with no later `v`; `Copy`, `Paste`, `Open File…` and `Open Folder…` have a `p`
+/// but no usable `r`; the rest have no `p` at all.
+///
+/// The literal `preview` would work too and is deliberately NOT used: it is
+/// [`PREVIEW_OCR_STATUS`], so a palette that failed to CLOSE would leave the typed
+/// query on screen and satisfy the statusbar assertion with no preview pane in
+/// existence. `prv` cannot.
+///
+/// Unfiltered the query matches `Preview in Browser` as well, which is `Deferred` —
+/// so it is the palette's classification filter that makes the row unique, exactly
+/// as it is for [`PALETTE_QUERY`]. Both premises are pinned executably in the fast
+/// suite by `palette::tests::palette_rows_for_the_preview_smoke_select_one_row_each`,
+/// so a registry change reddens that rather than making this smoke stochastic.
+const PREVIEW_QUERY: &str = "prv";
+
+/// Typed into the palette's search entry to reach the `Edit Source` row.
+///
+/// `edts` is a subsequence of `Edit Source` and of no other palette title, actionable
+/// or not: `Close Window`, `Use full width for content`, `Toggle sidebar`,
+/// `Open Folder…` and `New Window` each carry `e` then `d` but never a later `t`
+/// followed by an `s`. Unlike [`PREVIEW_QUERY`] it is unique even BEFORE the
+/// classification filter, which is why its unit-test row asserts a smaller
+/// unfiltered floor rather than the same one.
+const EDIT_QUERY: &str = "edts";
+
+/// The two canonical `CommandSpec::id`s the palette records when the `Preview` and
+/// `Edit Source` rows are activated — the smoke's proof that the two queries reached
+/// the rows they name.
+///
+/// A PRECONDITION rather than a discriminator, and the ordering is why:
+/// `PaletteInner::activate_selection` records BEFORE it dispatches, so a hit here says
+/// the right row was activated and says nothing about what `shell::perform` then did
+/// with it. [`command_palette_chord_runs_the_selected_command_under_cage`] is where
+/// the `record` call itself is discriminated.
+///
+/// `palette::tests::palette_rows_for_the_preview_smoke_select_one_row_each` pins the
+/// same two ids against the same two queries in the fast suite, which is the join
+/// that keeps this literal honest.
+const PREVIEW_MRU_KEYS: [&str; 2] = ["preview", "edit"];
+
+/// Name of the file the captive Neovim writes its window/buffer list into AFTER the
+/// Preview leg. It lands in the temp cwd, so the sidebar draws its name — hence the
+/// `RELAUNCH_FIXTURE_NAMES` registration and the `pv` prefix that keeps it clear of
+/// every asserted term.
+const PREVIEW_READBACK_A_NAME: &str = "pvwinsa.txt";
+
+/// Name of the same readback taken again AFTER the Edit Source leg.
+const PREVIEW_READBACK_B_NAME: &str = "pvwinsb.txt";
+
+/// The prefix `runtime/nvim/init.lua`'s `wolf_ensure_preview_buf` gives a preview
+/// scratch buffer, before the source's cwd-relative path.
+///
+/// Re-typed here rather than imported from `wolf_gnome::preview_ui`, and the
+/// distinction is not pedantry: the string this smoke reads back is NEOVIM's buffer
+/// NAME, produced by the Lua, while the crate's constant is what the front-end's
+/// STATUSBAR prints. They are two ends of one contract, and importing one to check
+/// the other would make the readback assertion hold by construction.
+const PREVIEW_READBACK_PREFIX: &str = "Preview: ";
+
+/// The MARKDOWN-PREVIEW scenario, run as a single `sh -c` string inside `cage` (the
+/// [`PALETTE_SCENARIO`] shape, with [`STATUS_SCENARIO`]'s `<C-w>v` split and
+/// [`BUFPICK_SCENARIO`]'s `wait_file`): launch + poll, settle, open the OTHER file,
+/// park the block cursor, `<C-w>v`, open the SOURCE in the new pane, drive Preview
+/// through the palette, capture A, read the window list back, freeze `state.json`,
+/// drive Edit Source through the palette, read the window list back again, type the
+/// live marker into the source, hide the source behind the other file, capture B.
+///
+/// ## The two budgets that are not settles
+///
+/// `PREVIEW_SETTLE` is measured FROM THE CALL, not from `LoadEvent::Started`. A cold
+/// preview open costs 254.57 / 256.51 / 265.22 ms call→`Finished` on the measurement
+/// host, of which about 110 ms elapses before `Started` fires at all (spawning
+/// WebKit's WebProcess), so a `Started`-anchored figure hides nearly half of it. The
+/// value here is roughly eight times the measured cold open. Steady-state reloads
+/// have no such gap — the body swap itself is 5.3-12.4 ms — but the same budget is
+/// spent after the live edit, because what has to land there is a keystroke, a
+/// notification, a wake, a blocking `render_preview` and a JavaScript evaluation.
+///
+/// ## Why the block cursor is parked in only ONE pane
+///
+/// The convention is to park it off every ASSERTED row. In the starting pane it is
+/// parked the usual way (`o` then Escape), because that pane's heading is asserted in
+/// capture A. The split pane needs no park at all: by capture time it is a PREVIEW
+/// pane, and `draw_pane` skips the grid, the scrollbar and the cursor for one — so
+/// there is no block to sit anywhere, and everything asserted in it is either web-view
+/// pixels or the statusbar strip.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before its window ever mapped (the shared convention). A
+///   LAUNCH failure; nothing else in this smoke is about the preview.
+/// * `14` — a window-list readback the captive Neovim was told to write never
+///   appeared, so the leg it belongs to cannot be checked at all.
+/// * `16` — no `state.json` existed to freeze while the preview pane was live.
+///   DISTINCT from "the persisted leaf is wrong", which exits 0 and fails an
+///   assertion: this one means nothing was persisted at all.
+const PREVIEW_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
+# integration-test binaries (most spawning a real nvim) run in parallel. A timing
+# knob only -- no assertion depends on it.
+#
+# SETTLE is the ONLY real budget between spawning the app and the first
+# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
+# tries=0 on every run -- see the module doc comment). SCENARIO carries the
+# measured margin table behind this value; do not trim it back.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+# How many WAIT_INTERVAL polls to allow for a readback file.
+FILE_TRIES=100
+#
+# PREVIEW_SETTLE -- budgeted FROM THE CALL, not from the web view's Started event.
+# A cold open is ~255 ms call->Finished (about 110 ms of it spent spawning the
+# WebProcess before Started fires), and the live-edit swap has to carry a keystroke
+# through a notification, a wake, a blocking render_preview and a JS evaluation.
+# See the doc comment above before trimming it.
+PREVIEW_SETTLE=2.0
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+
+# Wait for the app to still be alive AND for the compositor to be up. The no-op
+# `wtype ""` does NOT prove a surface has mapped: cage advertises
+# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
+# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome markdown-preview smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw before driving the editor.
+sleep "$SETTLE"
+
+# Poll for a readback file the captive Neovim writes. Nothing downstream may read a
+# file we merely hope is there. (The STATUS_SCENARIO body, verbatim.)
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome markdown-preview smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# --- Step 1: the OTHER file in the starting pane -----------------------------
+#
+# It stays in this pane for the whole first half, so capture A has an EDITOR pane
+# beside the preview pane -- which is what makes "the preview replaced exactly one
+# of the two panes" observable at all.
+wtype -- ":e $PREVIEW_OTHER_FILE"
+wtype -k Return
+sleep "$SETTLE"
+
+# Park the block cursor off row 0 of THIS pane: its heading is asserted in capture
+# A, and the inverted block corrupts the cell it covers.
+wtype -- o
+wtype -k Escape
+sleep "$SETTLE"
+
+# --- Step 2: split, and open the SOURCE in the new pane ----------------------
+#
+# The `<C-w>v` CHORD, never a typed `:vsplit`: the init.lua keymap is what emits the
+# wolf_layout Split intent the front-end binds a new pane from. A typed `:vsplit`
+# reaches the same abbreviation, but the chord is the path a user takes and the one
+# every sibling split smoke drives.
+wtype -M ctrl -k w -m ctrl
+wtype -k v
+sleep "$SETTLE"
+
+wtype -- ":e $PREVIEW_SOURCE_FILE"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- Step 3: drive PREVIEW through the command palette -----------------------
+#
+# Ctrl+Shift+P, the query, Enter. Preview has no accelerator row of its own -- the
+# palette and the :WolfPreview Ex command are its only routes -- so this is also the
+# only end-to-end exercise `shell::perform`'s UiAction::OpenPreview arm gets.
+wtype -M ctrl -M shift -k p -m shift -m ctrl
+sleep "$SETTLE"
+wtype -- "$PREVIEW_QUERY"
+sleep "$SETTLE"
+wtype -k Return
+
+# The COLD open budget: the blocking open_preview RPC, the wake that carries the
+# wolf_preview notification, the lazily-created WebView's WebProcess spawn, the
+# blocking render_preview and the full load_html.
+sleep "$PREVIEW_SETTLE"
+
+# --- Step 4: capture A, with the preview pane live ---------------------------
+grim "$OUT_PNG_BEFORE"
+
+# --- The first readback: NEOVIM's own answer about what its windows hold -----
+#
+# Taken AFTER the capture on purpose: the typed command line is drawn by the cmdline
+# strip, and capture A must carry the `:e` toast rather than this path. Joined with a
+# COMMA rather than a space because a preview scratch's own name contains one (it is
+# "Preview: <cwd-relative path>"), and split back on the comma by the Rust side, which
+# sorts before comparing -- so the assertion is on the SET of buffers and does not
+# depend on which side of the split nvim put the new window.
+wtype -- ":call writefile([join(map(tabpagebuflist(), {_, b -> fnamemodify(bufname(b), ':t')}), ',')], '$PREVIEW_READBACK_A')"
+wtype -k Return
+wait_file "$PREVIEW_READBACK_A" || exit 14
+
+# --- Freeze the persisted layout while the preview pane is still live --------
+#
+# Persistence runs on every render wake, so the live file is rewritten as soon as the
+# Edit leg below lands -- at which point BOTH leaves name the source and the
+# editor-leaf half of the assertion would prove nothing. Copying here is what pins the
+# one moment where the two leaves differ. The write itself is a tmp-file rename, so a
+# copy taken from a running app is never torn.
+if [ ! -s "$PREVIEW_STATE_SRC" ]; then
+    echo "wolf-gnome markdown-preview smoke: no state.json at $PREVIEW_STATE_SRC." >&2
+    echo "  Nothing was persisted at all, so this is not the preview flag: suspect" >&2
+    echo "  may_snapshot refusing every wake (snapshot_readiness counts previews too)," >&2
+    echo "  open_state_store resolving no directory, or WOLF_STATE_DIR not reaching" >&2
+    echo "  the app." >&2
+    exit 16
+fi
+cp "$PREVIEW_STATE_SRC" "$PREVIEW_STATE_COPY"
+
+# --- Step 5: drive EDIT SOURCE through the same palette ----------------------
+#
+# The active pane IS the preview, and exactly one other pane is an editor, so
+# `edit_placement` answers `reuse_editor_pane`: the source binds into the OTHER pane
+# and focus follows it. That is what puts the source back in a window the next step
+# can type into.
+wtype -M ctrl -M shift -k p -m shift -m ctrl
+sleep "$SETTLE"
+wtype -- "$EDIT_QUERY"
+sleep "$SETTLE"
+wtype -k Return
+sleep "$SETTLE"
+
+# The second readback, same shape as the first.
+wtype -- ":call writefile([join(map(tabpagebuflist(), {_, b -> fnamemodify(bufname(b), ':t')}), ',')], '$PREVIEW_READBACK_B')"
+wtype -k Return
+wait_file "$PREVIEW_READBACK_B" || exit 14
+
+# --- Step 6: the LIVE EDIT ---------------------------------------------------
+#
+# `G` to the last line, `o` to open one below it, then the marker. This is the ONLY
+# step that reaches the body-swap branch: the first load into a view goes through
+# load_html, and a payload encoded once instead of twice throws inside JSON.parse
+# and leaves the previous document on screen.
+wtype -- G
+wtype -- "o$PREVIEW_LIVE_MARKER"
+wtype -k Escape
+sleep "$PREVIEW_SETTLE"
+
+# --- Step 7: take the source's RAW text back off the screen ------------------
+#
+# The marker was typed into a pane nvim is drawing, so without this the capture would
+# carry it twice and an OCR hit would prove nothing about the web view. Opening the
+# other file over it leaves the marker readable in exactly one place. The source
+# buffer stays loaded and modified (nvim's 'hidden' default), so the preview keeps
+# rendering from it.
+wtype -- ":e $PREVIEW_OTHER_FILE"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- Step 8: capture B, with the swapped document live -----------------------
+grim "$OUT_PNG"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
 /// Creates a fresh, unique temp directory to serve as the launched app's working
 /// directory. The app derives `CoreConfig.cwd` from `std::env::current_dir()`, so
 /// this is the directory the file-search traversal walks and the directory the
 /// captive nvim runs in (the recent-files MRU lives in the global
 /// `state_dir()/file-mru.sqlite`, not under the cwd).
 ///
-/// ALL FORTY-TWO cage smokes derive their working directory from this — the window
+/// ALL FORTY-THREE cage smokes derive their working directory from this — the window
 /// title smoke and the typed-`:cd` smoke use the result as the base for the NESTED
 /// directories their `~` abbreviation needs, the per-pane statusbar smoke hangs its
 /// fixture directory off the parent, and the three relaunch smokes share one of these
@@ -8846,7 +9278,8 @@ const HOME_CONFIG_DIR_FALLBACK: &str = ".config/wolf";
 ///
 /// It fixes the invocation (`cage -- sh -c <scenario>`, with `cwd` as the working
 /// directory, which is how the app comes to derive `CoreConfig.cwd` from it) plus
-/// the five environment variables EVERY smoke must have:
+/// the five environment variables EVERY smoke must have — and the one it must NOT
+/// have:
 ///
 /// * `WOLF_FONT_PT` = [`SMOKE_FONT_PT`] — a large font, so the rendered glyphs are
 ///   legible to `tesseract`, AND the exact number [`cell_metrics_for_smoke`]
@@ -8884,6 +9317,19 @@ const HOME_CONFIG_DIR_FALLBACK: &str = ".config/wolf";
 ///   that function's doc comment — including why sharing carries no state between
 ///   smokes, and why the one cold launch per invocation is covered by `SETTLE`
 ///   alone — before changing it, and do not make it per-smoke.
+/// * `DBUS_SESSION_BUS_ADDRESS` is REMOVED rather than set, and it is the only
+///   variable here that is. **A DANGLING one kills the app before its first frame**:
+///   measured under `cage` in three cases, a path that does not exist is FATAL (the
+///   proximate message on the measurement host is
+///   `bwrap: Can't create file at /.flatpak-info: Permission denied`, from WebKit's
+///   mandatory bubblewrap sandbox), while unset is fine and an existing-but-dead
+///   socket path is fine. `WEBKIT_FORCE_SANDBOX=0` does not exist in this ABI — the
+///   sandbox cannot be turned off — so clearing the variable is the only lever there
+///   is. Every smoke inherits the developer's environment except for what this
+///   function overrides, so before the `env_remove` the smokes were safe here purely
+///   by luck: a developer whose session bus address points at a stale path would see
+///   every one of them fail at launch (exit 11), reading as a launch failure in
+///   whatever change happened to be in flight.
 ///
 /// ## Why `HOME` is set, and why it is the cwd's parent
 ///
@@ -8937,7 +9383,7 @@ const HOME_CONFIG_DIR_FALLBACK: &str = ".config/wolf";
 /// the "Note (OCR width)" / "Note (OCR height)" paragraphs above their own consts,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
-/// be applied here to all forty-two.
+/// be applied here to all forty-three.
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
@@ -8953,7 +9399,12 @@ fn cage_command(scenario: &str, cwd: &Path) -> Command {
         .env("XDG_CACHE_HOME", smoke_shader_cache_dir())
         .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .env("WOLF_STATE_DIR", smoke_state_dir(cwd))
-        .env("WOLF_CONFIG_DIR", smoke_config_dir(cwd));
+        .env("WOLF_CONFIG_DIR", smoke_config_dir(cwd))
+        // Removed, never set: a DANGLING session-bus address kills the app before its
+        // first frame under WebKit's mandatory sandbox. See the doc comment above for
+        // the three measured cases and for why there is no way to disable the sandbox
+        // instead.
+        .env_remove("DBUS_SESSION_BUS_ADDRESS");
     cmd
 }
 
@@ -8970,7 +9421,8 @@ const CAGE_SPAWN_NEEDLE: &str = concat!("Command::new(\"", "cage", "\")");
 
 /// Enforces mechanically that the compositor is spawned in exactly ONE place in this
 /// file — [`cage_command`] — which is the only thing that sets `WOLF_STATE_DIR`,
-/// `HOME` and `XDG_CACHE_HOME`.
+/// `HOME` and `XDG_CACHE_HOME`, and the only thing that CLEARS
+/// `DBUS_SESSION_BUS_ADDRESS`.
 ///
 /// ## What an extra occurrence costs
 ///
@@ -9008,6 +9460,17 @@ const CAGE_SPAWN_NEEDLE: &str = concat!("Command::new(\"", "cage", "\")");
 /// renders in a different typeface from the one [`cell_metrics_for_smoke`] measured
 /// and every OCR term and every pointer target in it is computed against the wrong
 /// cell. See [`smoke_config_dir`].
+///
+/// And a fifth, which is a REMOVAL rather than a setting and is the only one of the
+/// five that can take the app down before it draws anything at all. A smoke that
+/// spawns `cage` itself inherits the developer's `DBUS_SESSION_BUS_ADDRESS`, and a
+/// DANGLING one — a path that does not exist — is fatal under WebKit's mandatory
+/// bubblewrap sandbox (measured: non-existent path fatal, unset fine,
+/// existing-but-dead fine). The app dies before its first frame, so the scenario's
+/// window poll reports `exit 11` and the run reads as a LAUNCH failure in whatever
+/// change is in flight, on the developer's machine and nowhere else. See
+/// [`cage_command`]'s bullet for the measurement and for why the sandbox cannot
+/// simply be turned off.
 ///
 /// ## Why the needle is built from fragments, and why that is load-bearing
 ///
@@ -9047,7 +9510,11 @@ fn cage_is_only_spawned_through_the_isolating_helper() {
         "expected exactly ONE occurrence of {CAGE_SPAWN_NEEDLE:?} in this file (the one inside \
          `cage_command`), found {occurrences}. Every extra one is a compositor spawned OUTSIDE \
          `cage_command` and therefore without `WOLF_STATE_DIR`, `WOLF_CONFIG_DIR`, `HOME` or \
-         `XDG_CACHE_HOME`. Two of those are destructive. Without `WOLF_STATE_DIR` that smoke's app \
+         `XDG_CACHE_HOME`, and WITH whatever `DBUS_SESSION_BUS_ADDRESS` the developer's session \
+         exported. Two of those are destructive and one is fatal: a DANGLING session-bus address \
+         kills the app before its first frame under WebKit's mandatory sandbox, so that smoke \
+         exits 11 and reads as a launch failure in whatever change is in flight. Without \
+         `WOLF_STATE_DIR` that smoke's app \
          resolves `state_dir()` to the developer's real `~/.local/state/wolf/`, READS their real \
          state.json at launch (so it starts from the developer's last session instead of a clean \
          slate) and OVERWRITES it on quit with its own throwaway temp-cwd layout. Without \
@@ -9068,7 +9535,7 @@ fn cage_is_only_spawned_through_the_isolating_helper() {
 /// Reading the const and comparing it to itself would hold for whatever value it
 /// took, including the one that inverts every OCR page in this file. Stating
 /// `dark` independently means a change to the shared pin fails HERE, loudly and in
-/// microseconds, rather than thirty-three OCR assertions later.
+/// microseconds, rather than thirty-four OCR assertions later.
 const EXPECT_SMOKE_APPEARANCE: &str = "dark";
 
 /// Enforces mechanically that the SHARED seeded `wolf-config.yaml` — the one
@@ -9080,7 +9547,7 @@ const EXPECT_SMOKE_APPEARANCE: &str = "dark";
 /// `crates/wolf-gnome/tests/README.md` records as the premise for sparse-text
 /// segmentation. That grid is the captive Neovim's default colorscheme responding
 /// to `&background`, and the front-end pushes `&background` from the configured
-/// `appearance`. So the seeded value sits upstream of all thirty-three OCR
+/// `appearance`. So the seeded value sits upstream of all thirty-four OCR
 /// assertions at once — and it is written in [`write_smoke_config`], thousands of
 /// lines from every assertion it can disarm. That distance is the same reason the
 /// three fixture-name guards exist.
@@ -9125,7 +9592,7 @@ fn the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes() {
         "{GUARD}: SMOKE_APPEARANCE is {SMOKE_APPEARANCE:?}, but every OCR smoke in this file is \
          calibrated on a light-on-dark grid and {EXPECT_SMOKE_APPEARANCE:?} is what produces one. \
          It is also what Neovim already defaults to under `--embed`, which is why pinning it moves \
-         no page at all. Re-pinning to \"light\" inverts all thirty-three OCR pages simultaneously, \
+         no page at all. Re-pinning to \"light\" inverts all thirty-four OCR pages simultaneously, \
          and no single one of their failures would name this const as the cause — which is exactly \
          why the expected value is re-typed here instead of read from the pin."
     );
@@ -9869,6 +10336,43 @@ fn leaf_tail(node: &PaneNode) -> Option<&str> {
     }
 }
 
+/// The buffer TAIL NAMES a `tabpagebuflist()` readback reports, SORTED.
+///
+/// The scenario joins them with a COMMA rather than a space, because a preview
+/// scratch's own name carries one (`Preview: <cwd-relative path>`), and this sorts
+/// them so the caller asserts on the SET of buffers rather than on nvim's window
+/// order — which for a `:vsplit` depends on `'splitright'` and is not what any
+/// assertion here is about.
+fn read_window_buffer_names(path: &Path, smoke: &str) -> Vec<String> {
+    let raw = read_readback(path, smoke);
+    let mut names: Vec<String> = raw
+        .trim()
+        .split(',')
+        .map(|name| name.trim().to_string())
+        .collect();
+    assert!(
+        names.iter().all(|name| !name.is_empty()),
+        "{smoke}: the window-buffer readback {} holds an EMPTY name among {names:?}. Raw contents \
+         were {raw:?}. An empty entry means a window is bound to an unnamed buffer, or that the \
+         typed `writefile` produced no list at all.",
+        path.display()
+    );
+    names.sort();
+    names
+}
+
+/// Whether a persisted leaf is a Markdown PREVIEW — `None` for a split.
+///
+/// Read beside [`leaf_tail`] rather than folded into it: the two answer different
+/// questions about one leaf, and a `(tail, preview)` pair is what
+/// [`preview_pane_renders_and_edit_source_returns_under_cage`] compares as a set.
+fn leaf_preview(node: &PaneNode) -> Option<bool> {
+    match node {
+        PaneNode::Leaf { preview, .. } => Some(*preview),
+        PaneNode::Split { .. } => None,
+    }
+}
+
 /// The width, in columns, of the pane showing the buffer whose tail name is `name`.
 ///
 /// Panics naming every pane that WAS present, because "the pane holding this file
@@ -10015,7 +10519,7 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// [`SIDEBARTOGGLE_OCR_KEEP`] is an ordinary content term and follows the ordinary
 /// rule.
 ///
-/// Thirty-three of the forty-two smokes appear here. NINE contribute no rows at
+/// Thirty-four of the forty-three smokes appear here. NINE contribute no rows at
 /// all, on purpose, and it is worth being explicit about which and why:
 ///
 /// * [`colon_qa_closes_the_window_under_cage`] captures no PNG and asserts only that
@@ -10375,6 +10879,26 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         "CONFIRM_OCR_OPTIONS",
         "confirm_prompt_shows_then_clears_once_answered_under_cage",
     ),
+    (
+        PREVIEW_OCR_BODY,
+        "PREVIEW_OCR_BODY",
+        "preview_pane_renders_and_edit_source_returns_under_cage",
+    ),
+    (
+        PREVIEW_OCR_OTHER,
+        "PREVIEW_OCR_OTHER",
+        "preview_pane_renders_and_edit_source_returns_under_cage",
+    ),
+    (
+        PREVIEW_OCR_STATUS,
+        "PREVIEW_OCR_STATUS",
+        "preview_pane_renders_and_edit_source_returns_under_cage",
+    ),
+    (
+        PREVIEW_OCR_LIVE,
+        "PREVIEW_OCR_LIVE",
+        "preview_pane_renders_and_edit_source_returns_under_cage",
+    ),
 ];
 
 /// Every fixture NAME a smoke creates inside its OWN working directory, as
@@ -10590,6 +11114,26 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "STATUS_READBACK_NAME",
         "pane_status_bar_shows_each_panes_filename_under_cage",
     ),
+    (
+        PREVIEW_SOURCE_FILE,
+        "PREVIEW_SOURCE_FILE",
+        "preview_pane_renders_and_edit_source_returns_under_cage",
+    ),
+    (
+        PREVIEW_OTHER_FILE,
+        "PREVIEW_OTHER_FILE",
+        "preview_pane_renders_and_edit_source_returns_under_cage",
+    ),
+    (
+        PREVIEW_READBACK_A_NAME,
+        "PREVIEW_READBACK_A_NAME",
+        "preview_pane_renders_and_edit_source_returns_under_cage",
+    ),
+    (
+        PREVIEW_READBACK_B_NAME,
+        "PREVIEW_READBACK_B_NAME",
+        "preview_pane_renders_and_edit_source_returns_under_cage",
+    ),
 ];
 
 /// Mechanically enforces the naming invariant documented on [`SIDEBAR_FILLER_FILES`]:
@@ -10642,17 +11186,26 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 /// file-tree-sidebar-parity unit — `cdtango` ([`CD_OCR_ROOTED`]), `cdrootzulu`
 /// ([`CD_OCR_ROOT_NODE`]) and `cdouterhome` ([`CD_OCR_UNABBREVIATED`]); and — added
 /// with the pane-chrome unit — `statusalfa` ([`STATUS_OCR_A`]), `statusbravo`
-/// ([`STATUS_OCR_B`]) and `statusready` ([`STATUS_OCR_MARKER`]). None is a
+/// ([`STATUS_OCR_B`]) and `statusready` ([`STATUS_OCR_MARKER`]); and — added with
+/// the Markdown-preview unit — `zzbodyoscar` ([`PREVIEW_OCR_BODY`]), `zzothertango`
+/// ([`PREVIEW_OCR_OTHER`]), `zzlivekilo` ([`PREVIEW_OCR_LIVE`]) and `preview`
+/// ([`PREVIEW_OCR_STATUS`]), the only ordinary English word in the table and
+/// therefore the only one a filler could plausibly acquire by accident. None is a
 /// substring of any [`SIDEBAR_FILLER_FILES`] entry, and no filler may be renamed to
 /// make one so.
 ///
-/// SIX smokes contribute no term, which is the same six [`ASSERTED_OCR_TERMS`]'s own
-/// doc comment enumerates — the two counts are of one set and must not drift apart
-/// again: [`colon_qa_closes_the_window_under_cage`] and
-/// [`config_font_size_changes_the_grid_under_cage`] capture no image at all (the
-/// first asserts on the cage exit status, the second on two `winwidth(0)` integers),
-/// and the click, drag, scroll and divider-relayout smokes assert on files the
-/// captive Neovim writes about its own state rather than on pixels.
+/// NINE smokes contribute no term, which is the same nine [`ASSERTED_OCR_TERMS`]'s
+/// own doc comment enumerates — the two counts are of one set and must not drift
+/// apart again. Five capture no image at all:
+/// [`colon_qa_closes_the_window_under_cage`] (the cage exit status),
+/// [`config_font_size_changes_the_grid_under_cage`] and
+/// [`column_cap_and_full_width_toggle_change_the_grid_under_cage`] (two `winwidth(0)`
+/// integers each), [`configured_appearance_reaches_neovims_background_under_cage`]
+/// (two `&background` strings) and
+/// [`copy_and_paste_round_trip_through_the_clipboard_under_cage`] (an exact
+/// occurrence count in a buffer readback). The other four — the click, drag, scroll
+/// and divider-relayout smokes — assert on files the captive Neovim writes about its
+/// own state rather than on pixels.
 ///
 /// ## What it does NOT guard (and why that matters)
 ///
@@ -10685,7 +11238,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the forty-two smokes — still
+/// nothing to the smoke suite's runtime and — unlike the forty-three smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
@@ -10963,11 +11516,11 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// [`STATUS_OCR_MARKER`] — which is the capture's proof of life and must not be
 /// satisfiable by the very thing it is proving was drawn.
 ///
-/// ## The two fixtures whose CONTENT is checked too
+/// ## The three fixtures whose CONTENT is checked too
 ///
 /// Most relaunch fixtures are a bare heading, so the name is the only thing that
-/// can collide with an assertion. Two carry a built body, and both bodies render in
-/// the same pane as a heading their smoke asserts on — so a body line carrying an
+/// can collide with an assertion. Three carry a built body, and each body renders in
+/// the same pane as a heading its smoke asserts on — so a body line carrying an
 /// asserted term would satisfy that assertion with the heading never drawn, which is
 /// the [`PICKER_FILE_NAME`] failure reached through CONTENT instead of through a
 /// name.
@@ -10978,9 +11531,19 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// content is load-bearing in a stronger sense than page density — the
 /// project-search smoke's three exact assertions (the file, the LINE and the COLUMN
 /// the cursor landed on) are all properties of that body, so the block below pins
-/// the match's line index and its byte offset as well as the vocabulary. Both are
-/// checked here rather than from guards of their own so the guard count this file's
-/// docs pin stays at six.
+/// the match's line index and its byte offset as well as the vocabulary.
+/// [`PREVIEW_SOURCE_FILE`] carries [`PREVIEW_SOURCE_HEADING`] plus
+/// [`PREVIEW_SOURCE_PARAGRAPH`], and it is the only one of the three whose body
+/// reaches a pixel through WebKit rather than through the editor grid. Three rules
+/// there, and the other two fixtures need none of them. [`PREVIEW_OCR_STATUS`] is an
+/// ordinary English word, so every string that smoke puts on screen — both headings,
+/// the paragraph and the live marker — is checked against it. The live marker is
+/// checked NOT to be in the source already, or the capture that discriminates the
+/// body swap would hold before a single keystroke reached the DOM. And the two
+/// headings are CROSSED, because they are drawn by different renderers: an editor
+/// heading carrying the web view's term would satisfy a web-view assertion from the
+/// grid beside it. All three fixtures are checked here rather than from guards of
+/// their own so the guard count this file's docs pin stays at six.
 ///
 /// ## Measured red run
 ///
@@ -11792,6 +12355,124 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          searched whatever `search_overlay::search_options_for` set `all_files` to — and the \
          `all_files: false` revert, which is one of the two independent reverts for the smoke's \
          must-contain assertion, would stop reddening anything."
+    );
+
+    // ---- The markdown-preview fixture, whose content is RENDERED text ----------
+    //
+    // The third fixture whose body is checked, and the only one whose body reaches a
+    // pixel through WebKit rather than through the editor grid. Two distinct hazards
+    // live here.
+    //
+    // First the ordinary one: the heading and the paragraph render in the same pane
+    // as each other, so a paragraph word carrying an asserted term would satisfy that
+    // assertion with the heading never drawn.
+    //
+    // Second, and the reason this block exists at all: PREVIEW_OCR_STATUS is the
+    // ordinary English word `preview`, not a coined one, so the "no fixture may be
+    // NAMED after the asserted term" rule is not sufficient for it. The word must
+    // appear on that page in exactly one place — the preview pane's statusbar — and
+    // the rendered document is the easiest place for it to appear by accident.
+    let preview_body = format!("{PREVIEW_SOURCE_HEADING}\n{PREVIEW_SOURCE_PARAGRAPH}");
+    for (label, text) in [
+        ("PREVIEW_SOURCE_HEADING", PREVIEW_SOURCE_HEADING),
+        ("PREVIEW_SOURCE_PARAGRAPH", PREVIEW_SOURCE_PARAGRAPH),
+        ("PREVIEW_OTHER_HEADING", PREVIEW_OTHER_HEADING),
+        ("PREVIEW_LIVE_MARKER", PREVIEW_LIVE_MARKER),
+    ] {
+        assert!(
+            !text.to_lowercase().contains(PREVIEW_OCR_STATUS),
+            "{label} = {text:?} contains PREVIEW_OCR_STATUS = {PREVIEW_OCR_STATUS:?}. That word is \
+             asserted to be on the page BECAUSE a preview pane's statusbar draws it, and it is an \
+             ordinary English word rather than a coined one — so any rendered text spelling it \
+             satisfies `preview_pane_renders_and_edit_source_returns_under_cage`'s statusbar \
+             assertion with `refresh_pane_state` taking `core.pane_status` for the preview pane, \
+             which is precisely the revert that assertion exists to catch. Reword the fixture; do \
+             NOT change PREVIEW_OCR_STATUS and do NOT touch the assertion."
+        );
+    }
+    for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {
+        // The status word is checked by the loop above, with a message about the one
+        // hazard that is peculiar to it; every other term — including this smoke's own
+        // heading words — is an ordinary must-not-appear.
+        if term == PREVIEW_OCR_STATUS {
+            continue;
+        }
+        assert!(
+            !PREVIEW_SOURCE_PARAGRAPH.to_lowercase().contains(term),
+            "PREVIEW_SOURCE_PARAGRAPH = {PREVIEW_SOURCE_PARAGRAPH:?} contains {term_const} = \
+             {term:?}. It is rendered in the SAME pane as PREVIEW_SOURCE_HEADING, so it would \
+             satisfy — or, for a must-NOT-contain term, spuriously break — `{smoke}`'s OCR \
+             assertion with the heading itself unrendered. The paragraph is page density for the \
+             web view and nothing else; reword it."
+        );
+    }
+    assert!(
+        preview_body.to_lowercase().contains(PREVIEW_OCR_BODY),
+        "the markdown-preview source body {preview_body:?} no longer contains PREVIEW_OCR_BODY = \
+         {PREVIEW_OCR_BODY:?}. That heading word is the ONLY thing proving the web view rendered \
+         anything: if the fixture stops carrying it the assertion fails with no visible cause, and \
+         the same term is what capture B reads to tell a frozen preview apart from a blank one."
+    );
+    assert!(
+        PREVIEW_OTHER_HEADING
+            .to_lowercase()
+            .contains(PREVIEW_OCR_OTHER),
+        "PREVIEW_OTHER_HEADING = {PREVIEW_OTHER_HEADING:?} no longer contains PREVIEW_OCR_OTHER = \
+         {PREVIEW_OCR_OTHER:?}. The editor pane drawing that heading is capture A's proof of life; \
+         if the fixture stops carrying it the smoke fails at its own precondition and says nothing \
+         about the preview."
+    );
+    // The CROSSED pair, and it is the sharpest check in this block. The two headings
+    // are drawn by DIFFERENT renderers — one by WebKit inside the preview pane, one by
+    // this crate's own painter in the editor pane beside it — and the whole soundness
+    // argument for the web-view assertions is that nvim cannot draw their term. If
+    // either heading carried the other's term, the editor pane would satisfy a
+    // web-view assertion on its own and the smoke would pass against a build whose
+    // preview never rendered at all.
+    for (label, text, forbidden, forbidden_const) in [
+        (
+            "PREVIEW_OTHER_HEADING",
+            PREVIEW_OTHER_HEADING,
+            PREVIEW_OCR_BODY,
+            "PREVIEW_OCR_BODY",
+        ),
+        (
+            "PREVIEW_OTHER_HEADING",
+            PREVIEW_OTHER_HEADING,
+            PREVIEW_OCR_LIVE,
+            "PREVIEW_OCR_LIVE",
+        ),
+        (
+            "PREVIEW_SOURCE_HEADING",
+            PREVIEW_SOURCE_HEADING,
+            PREVIEW_OCR_OTHER,
+            "PREVIEW_OCR_OTHER",
+        ),
+    ] {
+        assert!(
+            !text.to_lowercase().contains(forbidden),
+            "{label} = {text:?} contains {forbidden_const} = {forbidden:?}. That is the crossed \
+             pair: the editor pane and the preview pane must be readable apart, or an OCR hit \
+             attributed to WebKit could have come from the grid beside it — and the reverse, an \
+             editor-pane term satisfied by the rendered document."
+        );
+    }
+    assert!(
+        PREVIEW_LIVE_MARKER
+            .to_lowercase()
+            .contains(PREVIEW_OCR_LIVE),
+        "PREVIEW_LIVE_MARKER = {PREVIEW_LIVE_MARKER:?} no longer contains PREVIEW_OCR_LIVE = \
+         {PREVIEW_OCR_LIVE:?}. The typed marker and the asserted term are two halves of one fact — \
+         that the body swap reached the DOM — and a marker that does not spell the term makes that \
+         assertion unfalsifiable."
+    );
+    assert!(
+        !preview_body.to_lowercase().contains(PREVIEW_OCR_LIVE),
+        "the markdown-preview source body {preview_body:?} already contains PREVIEW_OCR_LIVE = \
+         {PREVIEW_OCR_LIVE:?}, so the FIRST load into the web view would render the live-edit \
+         marker. Capture B's discriminator would then hold whether or not a single keystroke ever \
+         reached the DOM — the vacuity this whole guard exists for, aimed at the one assertion in \
+         this file that covers `preview_swap_payload`."
     );
 }
 
@@ -13139,6 +13820,435 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
          fails, and it fails intermittently, suspect SQLite WAL recovery from the scenario's \
          `kill` rather than the palette — see tests/README.md, \"What is still unproven\".",
         smoke_state.join("command-mru.sqlite").display()
+    );
+}
+
+/// A Markdown preview pane RENDERS its source, names it in its statusbar, persists
+/// as a preview leaf, updates LIVE as the source is typed into, and hands the source
+/// back to the other pane when Edit Source is run.
+///
+/// ## What it covers that no other smoke does
+///
+/// Everything work unit 17 added, and nothing else in this repository touches any of
+/// it: `shell::perform`'s `OpenPreview` / `EditSource` arms and the two blocking RPCs
+/// beneath them, `preview_ui`'s two placement seams carried out by a real Neovim,
+/// `pane_view`'s lazily-created `webkit6::WebView` inside the per-pane overlay host,
+/// the `previews` × `markdown_ticks` join that decides a reload, the JSON body swap
+/// that performs one, the preview-only statusbar built from `preview_ui::preview_status`,
+/// and `layout_snapshot`'s per-pane preview flag. Measured before this smoke existed:
+/// with `AppShell::open_preview` neutered by an early `return`, the whole workspace
+/// stayed green.
+///
+/// Preview and Edit Source have no `actions::ACTION_TABLE` row, so the command
+/// palette and the `:WolfPreview` / `:WolfEdit` Ex commands are their only routes —
+/// which is why both legs go through the palette.
+///
+/// ## The premises, and where each is measured
+///
+/// **The placement is `active`.** Two panes, an editor active, no other preview, so
+/// `wolf_open_preview` replaces the source pane's buffer and the source's raw text is
+/// drawn NOWHERE. That is what makes assertion 6 a statement about WebKit's pixels
+/// rather than about nvim's. It is not assumed: assertions 5 and 8 both fail if a
+/// third pane appeared instead, and `preview_ui::tests::preview_placement_table` pins
+/// the rule headlessly. Assertion 5 is ordered AHEAD of the two OCR assertions for
+/// exactly that reason — the premise is established before it is used.
+///
+/// **Each palette query yields exactly one row.** Pinned in the fast suite by
+/// `palette::tests::palette_rows_for_the_preview_smoke_select_one_row_each`, which
+/// also pins that the two rows still carry the ids assertion 3 reads back. A
+/// screenshot cannot count palette rows — the overlay is closed before `grim` fires.
+///
+/// **The live edit takes the SWAP branch, not `load_html`.** The first load into a
+/// view records `</head>`'s offset; the second finds it unmoved and swaps the body.
+/// `crates/wolf-core/src/nvim.rs` documents the head as byte-identical across calls,
+/// which is the premise that branch rests on.
+///
+/// ## Assertions, classified
+///
+/// A precondition gets NO revert: inventing one would manufacture a discriminator
+/// this smoke does not have. The `measured` column is the coder's to fill from an
+/// actual red run, per `tests/README.md`'s "A red-run demonstration is a deliverable,
+/// not a formality".
+///
+/// | # | assertion | kind | revert | measured |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | `status.success()` | precondition — the scenario ran to completion | none; do not invent one | n/a |
+/// | 2 | both captures present | precondition — `grim` produced two images | none; do not invent one | n/a |
+/// | 3 | the command MRU holds both [`PREVIEW_MRU_KEYS`] | precondition — both palette rows were ACTIVATED (`record` runs before the dispatch) | none; the `record` call is [`command_palette_chord_runs_the_selected_command_under_cage`]'s discriminator | n/a |
+/// | 4 | capture A carries [`PREVIEW_OCR_OTHER`] | precondition — the window is drawing, and the preview took over exactly ONE of the two panes | none; do not invent one | n/a |
+/// | 5 | readback A is `{Preview: <source>, <other>}` | **discriminator** — Neovim really bound a preview scratch, of the right source, in one of two windows | restore the stub `perform` arm that classified `UiAction::OpenPreview` as unhandled. NOT isolated: assertion 7 fails under it as well, and goes unevaluated only because this one aborts first. Assertion 6 does NOT fail under it — measured twice, independently: a preview that never opens leaves the source's raw Markdown on screen, so [`PREVIEW_OCR_BODY`] is satisfied by the editor grid rather than by WebKit. That is why this assertion is ordered ahead of the two OCR ones: it states the same fact WITHOUT pixels. | RED, and it aborted FIRST, which is what the reordering exists for: `after the Preview leg the captive Neovim's windows hold ["pvoth.md", "pvsrc.md"], not ["Preview: pvsrc.md", "pvoth.md"]`, with `left: ["pvoth.md", "pvsrc.md"]` against `right: ["Preview: pvsrc.md", "pvoth.md"]`. Assertions 3 and 4 stayed green and 6 onward went unevaluated; the app printed `wolf-gnome: ui action not performed: markdown preview is not wired` once per leg. Assertion 6 was then checked directly, by OCRing the retained capture A: it CONTAINS `zzbodyoscar` and lacks `preview`, so 6 would have passed under this revert and 7 is the one that would have reported next. |
+/// | 6 | capture A carries [`PREVIEW_OCR_BODY`] | **discriminator** — the web view rendered the document | delete the `self.load_preview_document(id, &html);` call in `PaneInner::refresh_previews`, leaving the `loaded.set(..)` beneath it so nothing re-arms. The pane still becomes a preview and still gets a view; the view is simply never given a document. | RED, isolated: `capture A did not contain "zzbodyoscar" — the rendered heading of pvsrc.md`. Assertions 3, 4 and 5 stayed green, so the preview really was bound and only the DOCUMENT was missing; the OCR dump beside the failure still carries the `preview:` statusbar line, which is assertion 7 passing over an empty view. |
+/// | 7 | capture A carries [`PREVIEW_OCR_STATUS`] | **discriminator** — a preview pane's statusbar comes from `preview_ui::preview_status` | in `PaneInner::refresh_pane_state`'s `Some(info)` arm, use `core.pane_status(j.grid)` for a preview pane. Preview windows are omitted from `win_buffers`, so it answers `[No Name]`. NOT isolated: it empties `abs_path` too, so assertion 8 would also fail — but 7 is evaluated first. | RED: `capture A did not contain "preview", so no pane's statusbar named itself a preview`. Assertions 3 through 6 stayed green — the web view still rendered its document — so this reddened the statusbar alone, and assertion 8 went unevaluated exactly as the revert column predicts. |
+/// | 8 | the frozen `state.json`'s two leaves | **discriminator** — `layout_snapshot` persists the per-pane preview flag, against the SOURCE path | set `preview: false` unconditionally in `pane_view::layout_snapshot`'s `LeafContent`, which is the stub this unit replaced. Reddens this alone. | RED, and isolated as claimed: `the frozen state persisted leaves [(Some("pvoth.md"), Some(false)), (Some("pvsrc.md"), Some(false))], not [(Some("pvoth.md"), Some(false)), (Some("pvsrc.md"), Some(true))]`. Assertions 3 through 7 stayed green, so both panes were right on screen and only the PERSISTED flag was wrong — which is the whole reason this one is read from a frozen file rather than from pixels. |
+/// | 9 | readback B is `{Preview: <source>, <source>}` | **discriminator** — Edit Source reused the OTHER pane rather than clobbering the preview | write `edit_placement`'s reuse clause as `!p.active_is_preview`, i.e. `preview_placement`'s polarity copied across. The placement becomes `active`, the source replaces the PREVIEW, and the readback carries the other file instead of the preview scratch. | RED, isolated: `after the Edit Source leg the captive Neovim's windows hold ["pvoth.md", "pvsrc.md"], not ["Preview: pvsrc.md", "pvsrc.md"]`. That is the inversion's exact signature — the preview scratch GONE and the other file still open — with assertions 3 through 8 green, so the first half of the scenario was untouched by it. |
+/// | 10 | capture B carries [`PREVIEW_OCR_BODY`] | precondition — the preview pane is still showing a document at all | none; it is what separates "the swap failed and froze the stale document" from "the pane went blank" for assertion 11 | n/a |
+/// | 11 | capture B carries [`PREVIEW_OCR_LIVE`] | **discriminator** — the LIVE EDIT reached the DOM through the JSON body swap | in `pane_view::preview_swap_payload`, encode ONCE (`Ok(serde_json::to_string(body)?)` plus the two replacements). `JSON.parse` is then handed HTML, throws `Unrecognized token '<'` on every keystroke, and the preview keeps showing the document assertion 10 just found. | RED, isolated, and with the predicted stderr: `capture B did not contain "zzlivekilo" — the marker typed into the SOURCE buffer while the preview pane was live`, beside five copies of `wolf-gnome: preview body swap failed: about:blank:1:68: SyntaxError: JSON Parse error: Unrecognized token '<'`. Assertion 10 stayed green, which is the frozen-stale-document half of the signature this row names. |
+///
+/// Assertion 11 is the highest-value assertion of the set and the reason the scenario
+/// has a second half at all: it is the ONLY one that reaches the body-swap branch, and
+/// the single-encoding bug it guards shipped green past every other check here.
+#[test]
+fn preview_pane_renders_and_edit_source_returns_under_cage() {
+    const SMOKE: &str = "preview_pane_renders_and_edit_source_returns_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd holding the two fixtures and the filler files. The source
+    // carries a heading AND a paragraph: the paragraph is page density INSIDE the web
+    // view, which is the one region of this capture the sidebar fillers cannot reach.
+    let cwd = make_temp_cwd();
+    let source_body = format!("{PREVIEW_SOURCE_HEADING}\n\n{PREVIEW_SOURCE_PARAGRAPH}");
+    write_relaunch_fixtures(
+        SMOKE,
+        &cwd,
+        &[
+            (PREVIEW_SOURCE_FILE, source_body.as_str()),
+            (PREVIEW_OTHER_FILE, PREVIEW_OTHER_HEADING),
+        ],
+    );
+
+    // The state dir `cage_command` hands the app as WOLF_STATE_DIR — the same one the
+    // scenario freezes a copy of and the same one the command MRU lands in.
+    let smoke_state = smoke_state_dir(&cwd);
+    let smoke_state_file = smoke_state.join(STATE_FILE_NAME);
+
+    // Where the scenario freezes the state file while the preview pane is still live.
+    // A DIRECTORY holding a `state.json`, because `wolf_core::load_state` takes the
+    // directory rather than the file; under XDG_RUNTIME_DIR rather than in the temp
+    // cwd so the app's own `FileSearch` never lists it in the sidebar.
+    let frozen_state_dir = runtime_dir.join("wolf_gnome_preview_state");
+    std::fs::create_dir_all(&frozen_state_dir).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: failed to create the frozen-state dir {}: {e}",
+            frozen_state_dir.display()
+        )
+    });
+    let frozen_state_file = frozen_state_dir.join(STATE_FILE_NAME);
+
+    let readback_a = cwd.join(PREVIEW_READBACK_A_NAME);
+    let readback_b = cwd.join(PREVIEW_READBACK_B_NAME);
+    let out_png_before = runtime_dir.join("wolf_gnome_preview_open_smoke.png");
+    let out_png = runtime_dir.join("wolf_gnome_preview_live_smoke.png");
+    for path in [
+        &readback_a,
+        &readback_b,
+        &out_png_before,
+        &out_png,
+        &frozen_state_file,
+    ] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let status = cage_command(PREVIEW_SCENARIO, &cwd)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG_BEFORE", &out_png_before)
+        .env("OUT_PNG", &out_png)
+        .env("PREVIEW_SOURCE_FILE", PREVIEW_SOURCE_FILE)
+        .env("PREVIEW_OTHER_FILE", PREVIEW_OTHER_FILE)
+        .env("PREVIEW_QUERY", PREVIEW_QUERY)
+        .env("EDIT_QUERY", EDIT_QUERY)
+        .env("PREVIEW_LIVE_MARKER", PREVIEW_LIVE_MARKER)
+        .env("PREVIEW_READBACK_A", &readback_a)
+        .env("PREVIEW_READBACK_B", &readback_b)
+        .env("PREVIEW_STATE_SRC", &smoke_state_file)
+        .env("PREVIEW_STATE_COPY", &frozen_state_file)
+        .status()
+        .expect("failed to spawn `cage` for the headless markdown-preview smoke scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage markdown-preview scenario exited unsuccessfully ({status}). Exit 11: \
+         the app died before its window ever mapped — a LAUNCH failure, and nothing below is about \
+         the preview. Exit 14: a window-list readback never appeared, so the captive Neovim never \
+         ran the typed Ex command. Exit 16: the app persisted no state.json at all while the \
+         preview pane was live, which is `may_snapshot` refusing rather than the preview flag \
+         being wrong. Otherwise wtype, grim or cp failed. Note this assertion says nothing about \
+         whether a preview ever opened: the scenario exits 0 whatever the palette did. Captures \
+         expected at {} and {}.",
+        out_png_before.display(),
+        out_png.display()
+    );
+
+    // --- Assertion 2 (precondition): both captures exist ----------------------
+    assert_png_present(SMOKE, &out_png_before);
+    assert_png_present(SMOKE, &out_png);
+
+    // --- Assertion 3 (precondition): both palette rows were ACTIVATED ---------
+    //
+    // `activate_selection` records the row's MRU key BEFORE it dispatches, so this is
+    // a statement about the palette reaching the right rows and about nothing the
+    // shell then did. It is read first because every assertion below rests on it: a
+    // missing key here means the query matched the wrong row (or no row), and the
+    // failures below would be describing a command that never ran.
+    let recent = CommandMru::open(&smoke_state).recent();
+    for key in PREVIEW_MRU_KEYS {
+        assert!(
+            recent.iter().any(|k| k == key),
+            "{SMOKE}: the command MRU at {} does not hold {key:?}; it holds {recent:?}. Both \
+             palette rows must have been activated — {PREVIEW_QUERY:?} for `preview` and \
+             {EDIT_QUERY:?} for `edit`. An EMPTY list means neither palette ever opened or Enter \
+             activated nothing; a list holding ONE of the two names which leg failed; a list \
+             holding some OTHER id means a query matched a row it does not name, which \
+             `palette::tests::palette_rows_for_the_preview_smoke_select_one_row_each` would also \
+             have caught in the fast suite.",
+            smoke_state.join("command-mru.sqlite").display()
+        );
+    }
+
+    let ocr_before = ocr_to_lowercase(&out_png_before);
+
+    // --- Assertion 4 (precondition): the editor pane is still drawing ---------
+    //
+    // Two jobs: the window was painting when `grim` ran, and the preview replaced
+    // exactly ONE of the two panes. Without it a blank or dead window would leave
+    // assertion 6's failure ambiguous between "no preview" and "no window".
+    assert!(
+        ocr_before.contains(PREVIEW_OCR_OTHER),
+        "{SMOKE}: capture A did not contain {PREVIEW_OCR_OTHER:?} — the heading of \
+         {PREVIEW_OTHER_FILE}, which the EDITOR pane held throughout the first half. The likely \
+         causes, in order: (a) the app was not drawing at all when grim fired; (b) the `<C-w>v` \
+         chord never split, so there is one pane and the preview replaced the only file on screen; \
+         (c) the preview opened into the wrong pane. Note the fixture's NAME does not contain this \
+         term, so a sidebar row cannot satisfy it — only the rendered buffer can. PNG kept at {}. \
+         OCR output was:\n{ocr_before}",
+        out_png_before.display()
+    );
+
+    // --- Assertion 5 (discriminator): NEOVIM's own view of the two windows ----
+    //
+    // Pixel-independent: the buffer NAMES the captive Neovim reports for its own
+    // windows. The preview scratch is named by `wolf_ensure_preview_buf` after the
+    // SOURCE's cwd-relative path, so this states the pane count, the preview's
+    // existence and the file it previews in one comparison.
+    //
+    // It is read BEFORE the two OCR assertions because it is what establishes their
+    // premise: assertion 6's "only WebKit can draw this term" holds only once the
+    // `active` placement has really taken the source's raw text off the screen.
+    let want_open = {
+        let mut want = vec![
+            format!("{PREVIEW_READBACK_PREFIX}{PREVIEW_SOURCE_FILE}"),
+            PREVIEW_OTHER_FILE.to_string(),
+        ];
+        want.sort();
+        want
+    };
+    let got_open = read_window_buffer_names(&readback_a, SMOKE);
+    assert_eq!(
+        got_open, want_open,
+        "{SMOKE}: after the Preview leg the captive Neovim's windows hold {got_open:?}, not \
+         {want_open:?} (both sorted, so window order is not the subject). {PREVIEW_SOURCE_FILE:?} \
+         in place of the preview scratch means NO preview was bound — the palette dispatched \
+         nothing, or `shell::perform` has no `OpenPreview` arm. THREE entries mean the placement \
+         split a new pane instead of replacing the active one, which would also leave the source \
+         on screen and make assertion 6 below vacuous. A preview scratch naming a DIFFERENT file \
+         means the wrong buffer was previewed."
+    );
+
+    // --- Assertion 6 (discriminator): the web view RENDERED the document ------
+    //
+    // The placement is `active`, so `wolf_open_preview` replaced the source pane's
+    // buffer with the preview scratch and the source's raw text is displayed in NO
+    // pane. The sidebar row and the `:e` toast both spell `pvsrc.md`, whose lowercase
+    // does not contain this heading word. So the only thing on this page that can
+    // draw it is WebKit — GIVEN the placement, which assertion 5 above is what
+    // establishes.
+    assert!(
+        ocr_before.contains(PREVIEW_OCR_BODY),
+        "{SMOKE}: capture A did not contain {PREVIEW_OCR_BODY:?} — the rendered heading of \
+         {PREVIEW_SOURCE_FILE}, which after an `active` placement only the WEB VIEW can draw. The \
+         likely causes, in order: (a) no `render_preview` / `load_preview_document` ran, so the \
+         view holds `about:blank`; (b) the view was never created, or was created and then \
+         unparented by a pane-tree rebuild; (c) the render returned the empty string, which is \
+         what `WolfCore::render_preview` answers on an RPC failure; (d) WebKit drew the document \
+         but tesseract misread it at the stylesheet's 32 px h1 — check the retained PNG BEFORE \
+         touching the assertion, and if the web view's glyphs are the problem, lowercase the \
+         fixture heading rather than weakening this. Assertion 5 above answers the same question \
+         without pixels and is the first thing to read beside this one. PNG kept at {}. OCR output \
+         was:\n{ocr_before}",
+        out_png_before.display()
+    );
+
+    // --- Assertion 7 (discriminator): the preview pane's OWN statusbar --------
+    //
+    // `WolfCore::pane_status` answers `[No Name]` for a preview window — preview
+    // windows are omitted from `win_buffers` entirely — so this word can only come
+    // from `preview_ui::preview_status`. Nothing else on the page spells it, and each
+    // half of that is checked by the guard that owns it: the two fixture names by
+    // `restore_fixture_names_cannot_satisfy_their_own_assertions`' generic loop, both
+    // headings and the rendered paragraph by its markdown-preview content block, the
+    // filler filenames by `sidebar_filler_names_cannot_satisfy_any_smoke_assertion`,
+    // and the header-bar title by `temp_cwd_name_cannot_satisfy_any_smoke_assertion`.
+    // The typed palette query is deliberately `prv` rather than the word itself, so a
+    // palette that failed to close cannot satisfy this either.
+    assert!(
+        ocr_before.contains(PREVIEW_OCR_STATUS),
+        "{SMOKE}: capture A did not contain {PREVIEW_OCR_STATUS:?}, so no pane's statusbar named \
+         itself a preview. The likely causes, in order: (a) `refresh_pane_state` took \
+         `core.pane_status` for the preview pane, which answers `[No Name]`; (b) the pane was \
+         never recognised as a preview at all, in which case assertion 6 above is red too and THAT \
+         is the finding; (c) the strip drew the text but tesseract misread it — the sibling \
+         per-pane statusbar smoke reads strip text at this same font size, so suspect this last. \
+         PNG kept at {}. OCR output was:\n{ocr_before}",
+        out_png_before.display()
+    );
+
+    // --- Assertion 8 (discriminator): the PERSISTED preview leaf --------------
+    //
+    // Read from the copy the scenario froze while the preview pane was live: the live
+    // file is rewritten on every wake, and after the Edit leg both leaves name the
+    // source, at which point the editor-leaf half proves nothing.
+    let saved = load_state(&frozen_state_dir).unwrap_or_else(|| {
+        panic!(
+            "{SMOKE}: wolf_core::load_state could not parse the frozen state at {}. `load_state` \
+             is silently-ignore, so a None means the file is absent, unreadable, malformed or \
+             carries an unsupported version — the scenario already proved it was non-empty (it \
+             exits 16 otherwise), so suspect the shape.",
+            frozen_state_file.display()
+        )
+    });
+    let window = saved.windows.first().unwrap_or_else(|| {
+        panic!(
+            "{SMOKE}: the frozen state.json carries NO windows at all, so nothing was persisted. \
+             File: {}",
+            frozen_state_file.display()
+        )
+    });
+    let tab = window.tabs.first().unwrap_or_else(|| {
+        panic!(
+            "{SMOKE}: the persisted window carries NO tabs. `snapshot_state` writes exactly one. \
+             File: {}",
+            frozen_state_file.display()
+        )
+    });
+    match &tab.layout {
+        Some(PaneNode::Split {
+            orientation,
+            children,
+            ..
+        }) => {
+            assert_eq!(
+                *orientation,
+                PaneOrientation::Vertical,
+                "{SMOKE}: the frozen state persisted a {orientation:?} split for a `<C-w>v`, which \
+                 divides WIDTH and must persist as Vertical. File: {}",
+                frozen_state_file.display()
+            );
+            // Compared as a SET: which side of the split holds which pane is
+            // `dragged_divider_weights_survive_relaunch_under_cage`'s subject, not
+            // this one's, and pinning it here would add a way to fail that says
+            // nothing about the preview flag.
+            let mut got: Vec<(Option<&str>, Option<bool>)> = children
+                .iter()
+                .map(|child| (leaf_tail(child), leaf_preview(child)))
+                .collect();
+            got.sort();
+            let mut want = vec![
+                (Some(PREVIEW_OTHER_FILE), Some(false)),
+                (Some(PREVIEW_SOURCE_FILE), Some(true)),
+            ];
+            want.sort();
+            assert_eq!(
+                got,
+                want,
+                "{SMOKE}: the frozen state persisted leaves {got:?}, not {want:?} (each entry is \
+                 `(file name, preview flag)`, sorted). `Some(false)` on BOTH is the stub this unit \
+                 replaced — `layout_snapshot` writing `preview: false` unconditionally, so a \
+                 preview pane is restored with `:edit` and the next launch reopens the SOURCE \
+                 where the preview was. A `None` NAME on the preview leaf means \
+                 `preview_status`'s `abs_path` came back empty or relativized, which is \
+                 unopenable on the next launch since state.json records no working directory to \
+                 resolve it against. THREE entries mean the placement split a third pane. The \
+                 comparison is on the file NAME rather than the whole path because /tmp may \
+                 resolve through a symlink. File: {}",
+                frozen_state_file.display()
+            );
+        }
+        other => panic!(
+            "{SMOKE}: the frozen state persisted `layout: {other:?}` for two side-by-side panes, \
+             not a two-child Vertical split. A `None` means the snapshot gate refused every wake — \
+             which after this unit specifically implicates `snapshot_readiness`, whose reported \
+             count must be `win_buffers.len() + previews.len()`, since a preview window appears in \
+             neither map otherwise. A `Leaf` means the split never reached the pane tree at all. \
+             File: {}",
+            frozen_state_file.display()
+        ),
+    }
+
+    // --- Assertion 9 (discriminator): Edit Source REUSED the editor pane ------
+    //
+    // The active pane was the preview and exactly one other pane was an editor, so
+    // `edit_placement` must answer `reuse_editor_pane`: the source binds into the
+    // OTHER pane and the preview survives. Both facts are in this one comparison.
+    let want_edit = {
+        let mut want = vec![
+            format!("{PREVIEW_READBACK_PREFIX}{PREVIEW_SOURCE_FILE}"),
+            PREVIEW_SOURCE_FILE.to_string(),
+        ];
+        want.sort();
+        want
+    };
+    let got_edit = read_window_buffer_names(&readback_b, SMOKE);
+    assert_eq!(
+        got_edit, want_edit,
+        "{SMOKE}: after the Edit Source leg the captive Neovim's windows hold {got_edit:?}, not \
+         {want_edit:?} (both sorted). {PREVIEW_OTHER_FILE:?} still present, with the preview \
+         scratch GONE, is the POLARITY INVERSION: `edit_placement`'s reuse clause written as \
+         `!p.active_is_preview` answers `active`, so the source replaces the preview it was fired \
+         from and the pane the user was reading is the one that gets clobbered. \
+         {PREVIEW_OTHER_FILE:?} present WITH the preview scratch means Edit Source did nothing at \
+         all — check `shell::perform`'s `EditSource` arm and `edit_press`'s preview gate. THREE \
+         entries mean it took `split_left`, i.e. the pane count was read as one."
+    );
+
+    let ocr_live = ocr_to_lowercase(&out_png);
+
+    // --- Assertion 10 (precondition): the preview still shows a document ------
+    //
+    // What separates the two failure shapes of assertion 11: with this GREEN and 11
+    // red, the preview is frozen at the document it loaded before the edit — the
+    // single-encoding signature. With both red, the pane went blank or the view was
+    // lost, which is a different bug entirely.
+    assert!(
+        ocr_live.contains(PREVIEW_OCR_BODY),
+        "{SMOKE}: capture B did not contain {PREVIEW_OCR_BODY:?}, so the preview pane is not \
+         showing its document at all any more — and assertion 11 below cannot be read, since a \
+         blank pane fails it for a reason that has nothing to do with the body swap. The likely \
+         causes: the pane stopped being a preview (Edit Source bound the source into it — but then \
+         assertion 9 above is red and that is the finding), the web view was unparented by the \
+         pane-tree rebuild the `:e` in step 7 cannot cause but a close would, or the swap replaced \
+         the body with nothing. PNG kept at {}. OCR output was:\n{ocr_live}",
+        out_png.display()
+    );
+
+    // --- Assertion 11 (discriminator): the LIVE EDIT reached the DOM ----------
+    //
+    // The only assertion in this repository that reaches `preview_swap_payload`. The
+    // first load into a view goes through `load_html` and looks perfect whatever the
+    // encoding does; only this second one takes the swap branch. The marker's raw
+    // text was typed into a pane nvim draws, so step 7 opened the other file over it
+    // — at this capture the marker exists in exactly one place on screen.
+    assert!(
+        ocr_live.contains(PREVIEW_OCR_LIVE),
+        "{SMOKE}: capture B did not contain {PREVIEW_OCR_LIVE:?} — the marker typed into the \
+         SOURCE buffer while the preview pane was live — although assertion 10 just proved the \
+         preview is still rendering its document. That pair is the SINGLE-ENCODING signature: with \
+         `preview_swap_payload` encoding once instead of twice, the JS literal's value is the HTML \
+         itself, `JSON.parse` is handed `<` and throws `Unrecognized token '<'`, and the view \
+         keeps showing the document it already had. Check the app's stderr for `preview body swap \
+         failed`. The other candidates, in order: `needs_reload` never fired (the \
+         `previews`×`markdown_ticks` join is keyed on the SOURCE bufnr, and nothing on that path \
+         may be gated on `Snapshot::seq`); `may_render` refused; or the `head_len` guard sent the \
+         reload down `load_html` instead, which would still show the marker — so a MISSING marker \
+         is never that. PNG kept at {}. OCR output was:\n{ocr_live}",
+        out_png.display()
     );
 }
 
@@ -16182,7 +17292,9 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
 ///
 /// Each `contents` is a whole file, newline-terminated here rather than by the
 /// caller. Most callers pass a bare heading; the divider smoke's right-hand fixture
-/// passes a heading plus a body ([`divider_right_fixture_body`]).
+/// passes a heading plus a body ([`divider_right_fixture_body`]), and the
+/// markdown-preview smoke's source passes a heading plus a paragraph, whose density
+/// is for the WEB VIEW rather than for the editor grid.
 ///
 /// The fillers are FIXTURE, not assertion: the asserted terms in both relaunch
 /// smokes are sparse, light-on-dark EDITOR text, which is exactly the case
@@ -18708,7 +19820,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// | the active-pane FOCUS RING's top edge — a long thin high-contrast line immediately above the heading | six ablations on one PNG; the top edge alone accounted for it | [`DIVIDER_RELAUNCH_SCENARIO`]'s closing `<C-w>h`, which moves the ring to the WIDE pane |
 /// | a single misclassified GLYPH at 15 columns | the same pixels read through both segmentation modes, twice over | the second reader, [`ocr_uniform_block_to_lowercase`] |
 ///
-/// The third is why this smoke, alone of the forty-two, reads its capture twice.
+/// The third is why this smoke, alone of the forty-three, reads its capture twice.
 /// With the first two answered, on one retained PNG:
 ///
 /// | command | verbatim output |
