@@ -123,7 +123,7 @@ The GTK sidebar re-roots from one settle point, on the working directory Neovim 
 | `:q` / `:qa` mapped to close pane / window   | `feat/colon-q-remapping`                                  | [x]   | [x]   |
 | ⌘N opens a new untitled Markdown buffer      | `feat/colon-q-remapping` (`0266b96`)                      | [x]   | [x]   |
 
-`wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Of the 26 commands, 15 dispatch, 1 has no GNOME equivalent (`HideApplication`, since the shell owns window visibility), and 10 are deferred with a distinct printed reason.
+`wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Of the 26 commands, 17 dispatch, 1 has no GNOME equivalent (`HideApplication`, since the shell owns window visibility), and 8 are deferred with a distinct printed reason.
 
 The GNOME counterpart to the macOS menu bar is a header-bar primary menu driven by the same `gio` action namespace as the accelerators, so menu, chords and drained commands cannot drift apart. The accelerator scheme is documented in [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md), "The accelerator namespace".
 
@@ -140,19 +140,21 @@ One thing is deliberately not persisted on Linux: the window position, which Way
 | Feature                                           | Branch or commit                       | macOS | Linux |
 | ------------------------------------------------- | -------------------------------------- | ----- | ----- |
 | Markdown → HTML rendering (`wolf_core::markdown`) | `feat/markdown-preview`                | [x]   | [x]   |
-| In-app live preview pane                          | `feat/markdown-preview` (`b159793`)    | [x]   | [ ]   |
-| Preview pane reuse / placement modes              | `feat/markdown-preview` (`937bb7f`)    | [x]   | [ ]   |
+| In-app live preview pane                          | `feat/markdown-preview` (`b159793`)    | [x]   | [x]   |
+| Preview pane reuse / placement modes              | `feat/markdown-preview` (`937bb7f`)    | [x]   | [x]   |
 | Follow links inside the preview                   | `feat/markdown-preview` (`61204b7`)    | [x]   | [ ]   |
-| Full path in a preview pane's status bar          | `feat/markdown-preview` (`2116415`)    | [x]   | [ ]   |
+| Full path in a preview pane's status bar          | `feat/markdown-preview` (`2116415`)    | [x]   | [x]   |
 | Math symbols / Inter font in the preview          | `feat/markdown-preview` (`6f6abd1`)    | [x]   | [ ]   |
-| "Edit Source" (preview's inverse)                 | `feat/markdown-preview` (`8a72e50`)    | [x]   | [ ]   |
+| "Edit Source" (preview's inverse)                 | `feat/markdown-preview` (`8a72e50`)    | [x]   | [x]   |
 | Preview theme follows light/dark                  | `fix/dark-mode` (`3edf74e`, `66ce35e`) | [x]   | [ ]   |
 | Typography tuning for the preview                 | `feat/typography` (`6838614`)          | [x]   | [ ]   |
 | Syntax-highlighted code blocks                    | `feat/code-block-syntax-highlighting`  | [x]   | [ ]   |
 | Preview of anonymous / unsaved buffers            | `feat/preview-anonymous-files`         | [x]   | [ ]   |
 | Preview in browser (loopback HTTP server)         | `feat/preview-server` (`4728086`)      | [x]   | [ ]   |
 
-The rendering pipeline and the loopback preview server are entirely in `wolf-core` and stay GUI-free by design; the Linux gap is the second kind of pane content (a web view — `WebKitGTK` would be the GTK analogue of `WKWebView`) and the pane-kind plumbing around it.
+The rendering pipeline and the loopback preview server are entirely in `wolf-core` and stay GUI-free by design. `wolf-gnome` hosts the second kind of pane content in a `webkit6::WebView`, the GTK analogue of `WKWebView`: every pane leaf is an overlay whose main child is the editor's drawing area, so a preview replaces a pane's grid without replacing its widget, and a live edit reaches the DOM as a JSON-encoded body swap that preserves the reader's scroll offset where a full reload would not.
+
+The unticked rows are unimplemented on GTK rather than blocked: the pane they all needed exists. Two limits of the pane itself are recorded in [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md) — a click inside a preview cannot focus it, because the web view must take pointer input to be scrollable at all, and nothing has captured a picker composited over a preview, which is why the floating-panel row above stays unticked too.
 
 ## Appearance, typography, theming
 
@@ -173,7 +175,7 @@ The rendering pipeline and the loopback preview server are entirely in `wolf-cor
 
 The `appearance` key resolves on both front-ends, and on Linux it reaches two places: the captive Neovim, as `:set background=dark|light`, and the GTK chrome, as an `adw::ColorScheme` — `auto` following libadwaita's own live reading and a forced value overriding it. What has no Linux counterpart is the other direction: macOS reads live OS colours and pushes them into Neovim's highlight groups with `nvim_set_hl`, and `wolf-gnome` reads no OS colour at all.
 
-Baseline-grid typography is the 24px CSS grid inside the rendered preview document, so it belongs with the Markdown-preview rows above and is unreachable until Linux has a preview pane. Both front-ends align a status bar's text with the grid text below it, out of one inset; the macOS `StatusbarTextSpan` seam has no Linux counterpart, because `editor_inset::grid_rect` carries the centring offset in its own `x` and the painter, the pointer translation and the strip's text all read that one origin by construction. The three vendored plugin assets are bundled by Bazel into `Wolf.app` only — the captive `init.lua` self-locates them and is a strict no-op when absent, so on Linux they are simply not there.
+Baseline-grid typography is the 24px CSS grid inside the rendered preview document, so it belongs with the Markdown-preview rows above and is a property of the document `wolf-core` renders rather than of the GTK pane that displays it. Both front-ends align a status bar's text with the grid text below it, out of one inset; the macOS `StatusbarTextSpan` seam has no Linux counterpart, because `editor_inset::grid_rect` carries the centring offset in its own `x` and the painter, the pointer translation and the strip's text all read that one origin by construction. The three vendored plugin assets are bundled by Bazel into `Wolf.app` only — the captive `init.lua` self-locates them and is a strict no-op when absent, so on Linux they are simply not there.
 
 ## Terminal
 
@@ -207,13 +209,13 @@ The sidebar full-tree load row records a guarantee rather than a repair: the mac
 
 Two limits are worth stating. The pane topology does not survive a restart — only the Tier-1 file set does, so a crash while the window was split returns one pane. macOS restores no more than that, so it is a shared limit rather than a Linux gap.
 
-`NotResponding` is reachable from `wolf-gnome` at four points. `wolf-core` marks a stall only from `block_on_rpc`'s timeout arm, and the GTK side issues four such calls: the layout rebuild at launch, the buffer picker's candidate snapshot on Ctrl+Shift+E, a per-pane navigation move on Alt+Left or Alt+Right, and the Copy yank on Ctrl+Shift+C. The overlay's presentation has end-to-end coverage — a cage smoke `SIGSTOP`s the captive Neovim and presses the chord. Paste adds none, because the clipboard read is asynchronous and the insert is fire-and-forget; the Markdown preview would add another.
+`NotResponding` is reachable from `wolf-gnome` at seven points. `wolf-core` marks a stall only from `block_on_rpc`'s timeout arm, and the GTK side issues seven such calls: the layout rebuild at launch, the buffer picker's candidate snapshot on Ctrl+Shift+E, a per-pane navigation move on Alt+Left or Alt+Right, the Copy yank on Ctrl+Shift+C, opening a Markdown preview, returning from one to its source, and the preview render, which is the only one that repeats while the user types. The overlay's presentation has end-to-end coverage — a cage smoke `SIGSTOP`s the captive Neovim and presses the chord. Paste adds none, because the clipboard read is asynchronous and the insert is fire-and-forget.
 
-The second limit is that a stall does not clear itself on the GTK side. The buffer picker, a navigation press and the Copy chord all refuse to issue their call unless the core reads `Alive`, so a wedged Neovim is never re-probed, and core's own auto-clear rides the success of a later synchronous call while a timed-out one is detached. The route back is the overlay's Restart button, which force-kills.
+The second limit is that a stall does not clear itself on the GTK side. All six calls a running window issues — the buffer picker, a navigation press, the Copy chord and the three preview ones — refuse to run unless the core reads `Alive`, so a wedged Neovim is never re-probed, and core's own auto-clear rides the success of a later synchronous call while a timed-out one is detached. The route back is the overlay's Restart button, which force-kills.
 
 ## Suggested order of work for Linux
 
 Work already carried is recorded in the tables above. What remains, in order:
 
-1. **Markdown preview**, which is the largest single item: it introduces a second kind of pane content on the GTK side.
-2. **Multi-window and tabs**, which reshape `wolf-gnome` from a single-window application into a coordinator-plus-views one.
+1. **Multi-window and tabs**, which reshape `wolf-gnome` from a single-window application into a coordinator-plus-views one, and are the largest single item left.
+2. **The remaining Markdown-preview rows**, each of which extends a pane that exists rather than introducing one: link following, an anonymous-buffer preview, the browser preview, and the three document-rendering rows.

@@ -223,6 +223,24 @@
             # activate. They are exposed to the app via XDG_DATA_DIRS /
             # GSETTINGS_SCHEMA_DIR in the shellHook below.
             pkgs.libadwaita
+
+            # webkitgtk does TWO jobs, and both are required. At BUILD time it
+            # supplies `webkitgtk-6.0.pc`, which is what `webkit6-sys`'s
+            # `system-deps` probe resolves — without it the crate does not
+            # configure. At RUN time it supplies the out-of-process
+            # `WebKitNetworkProcess` and `WebKitWebProcess` helpers that a
+            # `WebKitWebView` spawns; a web view with no helpers on PATH renders
+            # nothing.
+            #
+            # libsoup_3 is NOT optional and not transitive here:
+            # `webkitgtk-6.0.pc` declares
+            # `Requires: glib-2.0 gtk4 libsoup-3.0 javascriptcoregtk-6.0`, and
+            # `libsoup-3.0.pc` is otherwise absent from this devShell, so
+            # `soup3-sys` fails to configure. Removing it breaks the build, not
+            # just the runtime.
+            pkgs.webkitgtk_6_0
+            pkgs.libsoup_3
+
             pkgs.gsettings-desktop-schemas
             pkgs.adwaita-icon-theme
             pkgs.hicolor-icon-theme
@@ -244,7 +262,7 @@
             pkgs.jetbrains-mono
             iaWriterMono
 
-            # GATE-REQUIRED: the forty-two headless end-to-end smoke tests in
+            # GATE-REQUIRED: the forty-three headless end-to-end smoke tests in
             # crates/wolf-gnome/tests/smoke_headless.rs run as part of a plain
             # `cargo test` (no `--ignored`). They launch the real window under a
             # headless Wayland compositor and OCR a screenshot, so these five

@@ -103,7 +103,7 @@
 //! `WolfCore::live_cwd` is a `parking_lot` read of a tracked cell, taken once per
 //! wake in [`AppShell::on_render_wake`] and passed to both consumers.
 //!
-//! Exactly FOUR `block_on_rpc` call sites are reachable from this crate, and the
+//! Exactly SEVEN `block_on_rpc` call sites are reachable from this crate, and the
 //! restart path issues none of them. The first is `WolfCore::rebuild_layout`, called
 //! at most once per launch from `pane_view::apply_layout_rebuild`, before the window
 //! is interactive. The second is `WolfCore::list_buffers`, the buffer picker's
@@ -135,6 +135,16 @@
 //! it can mark the core `NotResponding`. [`crate::clipboard_ui::paste_decision`]
 //! gates it anyway, for a reason that is not about blocking — see that module's
 //! docs.
+//!
+//! The last three are the MARKDOWN PREVIEW's. [`AppShell::open_preview`] and
+//! [`AppShell::edit_source`] funnel through `WolfCore::open_preview` /
+//! `WolfCore::edit_source`, and `pane_view::refresh_previews` issues
+//! `WolfCore::render_preview` once per changed source per wake — the only one of the
+//! seven that can repeat while the user simply types. All three are gated through
+//! [`crate::preview_ui`] ([`preview_ui::preview_press`], [`preview_ui::edit_press`],
+//! `preview_ui::may_render`) with the buffer picker's argument and its limits.
+//! Neither press has an [`crate::actions`] accelerator row, so their only routes are
+//! the command palette and the `:WolfPreview` / `:WolfEdit` Ex commands.
 //!
 //! Neither clipboard action is disabled in the empty state, for the buffer
 //! picker's recorded reason: the captive Neovim runs in a project-less window too.
@@ -182,6 +192,7 @@ use crate::palette::{PaletteAction, PaletteHandle};
 use crate::pane_view::PaneHandle;
 use crate::persistence::StateHandle;
 use crate::picker::PickerHandle;
+use crate::preview_ui::{self, EditPlacement, EditPress, PreviewPlacement, PreviewPress};
 use crate::search_overlay::SearchHandle;
 use crate::state_seam;
 use crate::title;
@@ -254,6 +265,28 @@ const OPEN_FILE_DIALOG_TITLE: &str = "Open File";
 /// [`crate::liveness_ui::CRASHED_FAILED_MESSAGE`] too, which is the state that
 /// genuinely dwells.
 const RESTART_DEFER: Duration = Duration::from_millis(50);
+
+/// Everything the two Markdown-preview presses are decided against, read from ONE
+/// snapshot pass by [`AppShell::preview_shape`].
+///
+/// One value rather than five reads, because the five must describe the SAME
+/// instant: a pane count taken from one snapshot and a preview-active flag from
+/// another can name a shape that never existed, and the placement seams answer
+/// "replace the pane the user is reading" for exactly such a shape.
+#[derive(Clone, Copy)]
+struct PreviewShape {
+    /// `Snapshot::is_markdown_active` — the Preview press's buffer-kind gate.
+    markdown_active: bool,
+    /// `Snapshot::is_preview_active` — the Edit press's gate, and both placements'
+    /// `active_is_preview` polarity input.
+    preview_active: bool,
+    /// Editor windows plus preview windows.
+    pane_count: usize,
+    /// Preview windows other than the active one.
+    other_preview_panes: usize,
+    /// Editor windows other than the active one.
+    other_editor_panes: usize,
+}
 
 /// The widgets and handles [`build`] needs, as one struct rather than eight
 /// positional parameters (`clippy::too_many_arguments` bites at seven).
@@ -970,6 +1003,127 @@ impl AppShell {
         snapshot.active_win
     }
 
+    /// The whole window shape both preview presses are decided against, read in ONE
+    /// snapshot pass — or `None` when there is no core.
+    ///
+    /// [`AppShell::read_active_win`]'s idiom: one core borrow, one
+    /// `SnapshotReadGuard` bound to a local so it is dropped before the caller takes
+    /// another core lock.
+    ///
+    /// **`WolfCore::is_markdown_active()` and `is_preview_active()` must never be
+    /// called from a scope that already holds a snapshot guard** — they take their
+    /// own, and a re-entrant read can deadlock behind a queued writer, which is the
+    /// hazard this module's borrow discipline exists to prevent. The two flags are
+    /// therefore read off the `Snapshot` already in hand, through
+    /// [`Snapshot::is_markdown_active`] and [`Snapshot::is_preview_active`].
+    ///
+    /// The counts are `win_buffers` (whose keys are exactly the EDITOR windows,
+    /// preview scratches being excluded from it) and `previews` (keyed by the preview
+    /// WINDOW handle), which are disjoint — so their sum is the pane count and each
+    /// "other" count is that map's keys minus the active window.
+    ///
+    /// [`Snapshot::is_markdown_active`]: wolf_core::Snapshot::is_markdown_active
+    /// [`Snapshot::is_preview_active`]: wolf_core::Snapshot::is_preview_active
+    fn preview_shape(&self) -> Option<PreviewShape> {
+        let core_ref = self.inner.core.borrow();
+        let core = core_ref.as_ref()?;
+        let snapshot = core.read_snapshot();
+        let active = snapshot.active_win;
+        Some(PreviewShape {
+            markdown_active: snapshot.is_markdown_active(),
+            preview_active: snapshot.is_preview_active(),
+            pane_count: snapshot.win_buffers.len() + snapshot.previews.len(),
+            other_preview_panes: snapshot
+                .previews
+                .keys()
+                .filter(|win| Some(**win) != active)
+                .count(),
+            other_editor_panes: snapshot
+                .win_buffers
+                .keys()
+                .filter(|win| Some(**win) != active)
+                .count(),
+        })
+    }
+
+    /// Opens a Markdown preview of the active buffer at the placement
+    /// [`preview_ui::preview_placement`] gives for the live window shape, or prints
+    /// why it did not.
+    ///
+    /// **The open is a BLOCKING RPC on the GTK main thread**
+    /// (`WolfCore::open_preview` over `block_on_rpc`), so it is gated by
+    /// [`preview_ui::preview_press`] exactly as the buffer picker's candidate
+    /// snapshot and a navigation move are; see the module docs.
+    ///
+    /// [`AppShell::copy_selection`]'s shape: the two reads happen first, each in its
+    /// own short borrow, and the core borrow for the RPC is taken in a statement of
+    /// its own.
+    fn open_preview(&self) {
+        let liveness = self.read_liveness();
+        let shape = self.preview_shape();
+
+        let press = preview_ui::preview_press(
+            liveness,
+            shape.is_some_and(|s| s.markdown_active),
+            PreviewPlacement {
+                pane_count: shape.map_or(0, |s| s.pane_count),
+                active_is_preview: shape.is_some_and(|s| s.preview_active),
+                other_preview_panes: shape.map_or(0, |s| s.other_preview_panes),
+            },
+        );
+
+        match press {
+            PreviewPress::Refuse(reason) => {
+                eprintln!("wolf-gnome: preview not opened: {reason}");
+            }
+            PreviewPress::Open(mode) => {
+                let core_ref = self.inner.core.borrow();
+                if let Some(core) = core_ref.as_ref() {
+                    // The returned bufnr is deliberately discarded: the front-end
+                    // learns the new pane from the next wake's `wolf_preview`
+                    // notification, never from this answer.
+                    let _ = core.open_preview(mode);
+                }
+            }
+        }
+    }
+
+    /// Returns from the active preview pane to its source file at the placement
+    /// [`preview_ui::edit_placement`] gives, or prints why it did not.
+    ///
+    /// **The return is a BLOCKING RPC on the GTK main thread**
+    /// (`WolfCore::edit_source` over `block_on_rpc`), gated by
+    /// [`preview_ui::edit_press`]. [`AppShell::open_preview`]'s shape, with the
+    /// polarity inverted where the seam inverts it.
+    fn edit_source(&self) {
+        let liveness = self.read_liveness();
+        let shape = self.preview_shape();
+
+        let press = preview_ui::edit_press(
+            liveness,
+            shape.is_some_and(|s| s.preview_active),
+            EditPlacement {
+                pane_count: shape.map_or(0, |s| s.pane_count),
+                active_is_preview: shape.is_some_and(|s| s.preview_active),
+                other_editor_panes: shape.map_or(0, |s| s.other_editor_panes),
+            },
+        );
+
+        match press {
+            EditPress::Refuse(reason) => {
+                eprintln!("wolf-gnome: source not edited: {reason}");
+            }
+            EditPress::Edit(mode) => {
+                let core_ref = self.inner.core.borrow();
+                if let Some(core) = core_ref.as_ref() {
+                    // Discarded for the same reason `open_preview`'s is: the pane the
+                    // source lands in arrives with the next wake's notifications.
+                    let _ = core.edit_source(mode);
+                }
+            }
+        }
+    }
+
     /// Reads the captive nvim's [`Liveness`] ONCE per wake, applies the pure
     /// [`liveness_ui`] mapping, and reports whether the pane view and the file
     /// tree should run.
@@ -1363,6 +1517,8 @@ impl AppShell {
             UiAction::CloseWindow => self.close_window(),
             UiAction::MinimizeWindow => self.inner.window.minimize(),
             UiAction::QuitApplication => self.quit_application(),
+            UiAction::OpenPreview => self.open_preview(),
+            UiAction::EditSource => self.edit_source(),
             // Unreachable through an installed action (install_actions skips these)
             // and already reported by the drain, but never silent either way.
             UiAction::Deferred(reason) | UiAction::NoGnomeEquivalent(reason) => {

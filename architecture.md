@@ -46,7 +46,7 @@ The render-state model is toolkit-agnostic, and each front-end paints it nativel
 
 The corollary is itself a contract: what to paint is a front-end decision and is not part of the core↔front-end contract. Core always publishes the full render state for every grid, and a front-end may decline to paint any of it. Core is never told, and the render state does not change.
 
-A skip has to be provably invisible. macOS is the one exercise of this: a pane whose text grid is fully covered by an opaque Markdown-preview web view paints no grid and does not read that grid's frame across the FFI, decided by the zero-tolerance containment seam in [`PaneOcclusion.swift`](crates/wolf-macos/Sources/WolfKeyMap/README.md).
+A skip has to be provably invisible, and both front-ends exercise it on the same surface: a pane whose text grid is covered by an opaque Markdown-preview web view paints no grid. macOS proves the invisibility with the zero-tolerance containment seam in [`PaneOcclusion.swift`](crates/wolf-macos/Sources/WolfKeyMap/README.md), and additionally declines to read that grid's frame across the FFI. The GTK front-end needs no containment test at all, for a structural reason recorded in [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md).
 
 A shared portable canvas such as Skia or wgpu is rejected: it would force surface handles across the FFI and give up native text quality. The render-state model sits behind a clean interface, so a shared renderer could still be introduced later without touching core's logic.
 
@@ -236,14 +236,14 @@ The `.app` bundles its own pinned Neovim, the captive `init.lua`, the vendored p
 
 - Whether a shared portable renderer, rather than a native paint backend per platform, ever earns its keep. See decision 2.
 - **Marker granularity below the block.** A source line longer than `MARKER_COLUMN_STRIDE` is anchored inside its block, at the marker's true position in the rendered inline flow. A paragraph hard-wrapped into several shorter source lines is not: all of its `wl-{L}-0` markers resolve to the block's opening tag. Injection is suppressed entirely in a fenced code block, an HTML block and a table, which anchor to their opening tag, and in an image's alt text, which anchors just after the image. Generalizing is rejected rather than pending — an anchor between `<tbody>` and `<tr>` is foster-parented out of the table by the HTML parser, and one between `<ul>` and `<li>` is invalid.
-- **Preview scroll-sync is macOS-only.** The GTK shell has no Markdown preview pane, and the browser preview reloads on a poll with no cursor coupling.
+- **Preview scroll-sync is macOS-only.** The GTK preview pane reads none of the `wl-{L}-{C}` markers `render_html` emits, and the browser preview reloads on a poll with no cursor coupling.
 - **One preview theme ships.** The `PreviewTheme` enum, `theme_css`, and the embedded stylesheets are structured for more, with a config key as the intended selector. The preview follows the app's resolved light or dark appearance through a `prefers-color-scheme` block, and is not wired to the live Neovim colorscheme.
 
 ### Split panes — present limitations
 
 These are scoped deliberately, and each has a clear direction.
 
-- **Only windows opened through the overridden split commands become panes.** Panes come from `Split` intents, which only the rebound chords and Ex-commands emit. A window created another way — `:help`, quickfix, a location list, a preview window, `:diffsplit` — still gets a grid and a `WinInfo` but no pane, so its content is not shown. The direction is to auto-pane any unbound window grid.
+- **Only windows opened through the overridden split commands become panes.** Panes come from `Split` intents, which only the rebound chords and Ex-commands emit. A window created another way — `:help`, quickfix, a location list, `:pedit`, `:diffsplit` — still gets a grid and a `WinInfo` but no pane, so its content is not shown. The direction is to auto-pane any unbound window grid.
 - **Floating and external windows are ignored**, so they never appear as panes.
 
 The macOS project-and-tabpage model adds two more, both detailed in [`crates/wolf-macos/DECISIONS.md`](crates/wolf-macos/DECISIONS.md): the lockout on Neovim-internal tabpage navigation is best-effort and a determined user can still desync a view from its tabpage, and a visible non-current window of a project can blank during a live resize until refocused.

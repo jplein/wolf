@@ -1,6 +1,6 @@
 # wolf-gnome
 
-The GTK 4 and libadwaita front-end: a runnable single-window Linux application that consumes [`wolf-core`](../wolf-core/README.md) as an ordinary Rust crate dependency and paints the Neovim grid with Cairo and Pango.
+The GTK 4 and libadwaita front-end: a runnable single-window Linux application that consumes [`wolf-core`](../wolf-core/README.md) as an ordinary Rust crate dependency and paints the Neovim grid with Cairo and Pango. A Markdown preview pane is the one surface it does not paint — those pixels come from a `webkit6::WebView`, which is why the devShell supplies WebKitGTK.
 
 **Read [DECISIONS.md](DECISIONS.md) before changing anything in this crate.** In particular, this crate deliberately has no Bazel target, and that absence is load-bearing.
 

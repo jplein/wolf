@@ -1,692 +1,517 @@
-# Plan: Resolve `git merge main` documentation conflicts on `feat/docs-review`
-
-## Status
-
-Architect pass **complete**. Coder pass **complete**. Architect amendment pending on four `entry-budget` lint findings; then reviewer, then technical-writer.
-
-### Coder results
-
-All 14 conflicts resolved, all post-conflict edits applied across 18 `.md` files. **Zero source files modified.** `bazelisk test //...` — **93/93 targets pass**, including `//crates/wolf-core:markdown_cursor`, `:markdown_render`, `//crates/wolf-ffi:preview`, and `//crates/wolf-macos:WolfKeyMapTests` (confirmed to include `PreviewScrollSeamTests.swift`). `prettier --write` was a no-op on first invocation and on re-run. No `long-line`, `changelog`, `allcaps`, or `big-file` findings.
-
-The merge is resolved and **uncommitted**.
-
-**Open: four `entry-budget` findings.** Every targeted entry was already within 2–7 words of the 250-word ceiling before the edits, so HEAD's refactor left no headroom:
-
-| entry                                                | baseline | after |
-| ---------------------------------------------------- | -------- | ----- |
-| `crates/wolf-core/src/README.md` → `render.rs`       | 243      | 284   |
-| `crates/wolf-core/src/README.md` → `markdown.rs`     | 247      | 411   |
-| `Sources/WolfKeyMap/README.md` → `FrameStats.swift`  | 246      | 285   |
-| `Sources/WolfMacOS/README.md` → `PaneContainerView.swift` | 248 | 413   |
-
-Coder tightening already cleared `redraw.rs` (253→249) and `PreviewScrollSeam.swift` (265→250). **Orchestrator ruling: raising `MAX_ENTRY_WORDS` is not an option** — CLAUDE.md says exceeding the budget means transcribing implementation, so the fix is to cut or to relocate to the crate's `DECISIONS.md`, not to change the ruler. Routed to the architect for a per-entry amendment.
-
-### Coder deviations from the plan (accepted)
-
-1. **§2.4c wording** — plan said "nearest whitespace"; source says word boundary (`crates/wolf-core/src/markdown.rs:147`, const doc at :1208). Coder wrote "word boundary". Pending architect confirmation.
-2. **§2.4c four bullets → three** — applied §7's merge guidance pre-emptively and folded the pre-existing `Event::InlineHtml` bullet into the suppression bullet. No decision dropped.
-3. **§2.1 dropped one bold** — CLAUDE.md reserves bold for genuine warnings; "not a byte offset" already carries the point.
-4. **§3.6c added a `**Gotchas**` heading** — `PaneContainerView.swift`'s entry had none.
-
-### Flake recorded, not caused by this change
-
-`//crates/wolf-core:commands` failed once with a truncated log (5 of 15 tests reported `ok`, no panic, no `test result:` line), then passed on isolated re-run and on the confirming full run. Distinct from the documented `//crates/wolf-core:redraw_grid` flake, which passed here. A docs-only change cannot cause it; noted for follow-up.
-
-**Orchestrator decision — the test-writer step is skipped for this change.** The architect's §4 is explicit that no test is added, changed, or removed: this is a documentation-only resolution layered on an already-clean source merge. `main`'s tests came across cleanly and are the verification surface. Inventing tests here would mean writing tests for prose. The coder's job is to confirm the merged tree is still green, not to extend it. If the coder finds a genuine test gap, it reports it and the orchestrator decides then — it does not write one.
-
-## Problem statement
-
-`git merge main` is in progress in the worktree
-`/Users/jplein/Git/jplein/wolf/.worktrees/feat/docs-review`. The merge stopped with 14 conflicted files, all of them Markdown documentation:
-
-| File                                      | Conflict hunks |
-| ----------------------------------------- | -------------- |
-| `architecture.md`                         | 2              |
-| `build.md`                                | 1              |
-| `crates/wolf-core/README.md`              | 1              |
-| `crates/wolf-core/src/README.md`          | 4              |
-| `crates/wolf-core/src/markdown/README.md` | 3              |
-| `crates/wolf-core/tests/README.md`        | 2              |
-| `crates/wolf-ffi/README.md`               | 1              |
-| `crates/wolf-ffi/src/README.md`           | 1              |
-| `crates/wolf-ffi/tests/README.md`         | 1              |
-| `crates/wolf-gnome/README.md`             | 1              |
-| `crates/wolf-macos/README.md`             | 3              |
-| `crates/wolf-macos/Sources/README.md`     | 1              |
-| `crates/wolf-macos/Tests/README.md`       | 1              |
-| `runtime/nvim/README.md`                  | 2              |
-
-Everything else merged cleanly, including every source file and `BUILD.bazel`.
-
-## The two sides
-
-- **HEAD (`feat/docs-review`)** — a pure documentation refactor. It restructured every doc in the repo to the ownership rules in `CLAUDE.md`: one file one owner, per-file `####` entries, the two-question test, no history, ~200 words per entry. It changed no source.
-- **`main`** — real feature work (preview scroll seam, keeping edited content in view), adding `crates/wolf-macos/Sources/WolfKeyMap/PreviewScrollSeam.swift`, `Sources/WolfMacOS/PreviewScrollStateHandler.swift`, `Sources/WolfMacOS/PreviewNavigationDelegate.swift`, large `PaneContainerView.swift` changes, `runtime/nvim/init.lua` changes, `crates/wolf-core/tests/markdown_cursor.rs`, and `Tests/WolfKeyMapTests/PreviewScrollSeamTests.swift`. It also documented that new code in the pre-refactor doc structure.
-
-`main`'s own orchestrator plan for that feature is archived at `/private/tmp/claude-501/-Users-jplein-Git-jplein-wolf--worktrees-feat-docs-review/70f13771-5d94-450c-b668-b4e5f0e7c15b/scratchpad/main-plan-archive.md` — background on what the new code does and why. (This plan file replaced it; it is a transient working file, not a deliverable.)
-
-## Resolution contract
-
-1. Keep HEAD's refactored document structure, ownership split, and per-entry format.
-2. Carry forward every fact `main` added about its new code — rewritten into HEAD's structure and subject to `CLAUDE.md`'s rules. Do not paste `main`'s prose verbatim where it restates a signature, narrates history, or duplicates another doc.
-3. No source file may be modified. This is a docs-only resolution on top of an already-clean source merge.
-4. Every source file `main` added must end up documented in exactly one document — the directory README that owns it.
-5. Verify: no conflict markers remain, `prettier --write` leaves the files unchanged, `./tools/lint/markdown_check.sh` passes, and the test suites pass on the merged tree.
-
-## Non-goals
-
-- No new tests. See the orchestrator decision under Status.
-- No re-litigating HEAD's refactor decisions, and no re-litigating `main`'s feature design.
-
----
-
-# Architect's plan
-
-## 1. Summary
-
-In almost every hunk the resolution is **take HEAD's side wholesale and delete `main`'s**, because `main`'s side is a fragment of a document structure that no longer exists. The real work is _outside_ the conflict markers: HEAD's refactored documents were written against a tree that did not yet contain `PreviewScrollSeam.swift`, `PreviewScrollStateHandler.swift`, `markdown_cursor.rs`, the `wolf_markdown_cursor` notification, or two-tier marker placement — so they are stale or silently missing entries, and several of them state the opposite of what the merged code does. Those edits are mandatory, not optional; skipping them leaves the merge with a documentation-is-source-of-truth bug.
-
-**Non-negotiable constraints for the coder:** modify no source file (`.rs`, `.swift`, `.lua`, `.css`, `BUILD.bazel`, `.bzl`); do not add or change tests; do not re-litigate either side's design.
-
----
-
-## 2. Conflict-by-conflict resolution
-
-Line numbers are as they appear in the current working tree. Resolve files in the order given in §5.
-
-### 2.1 `architecture.md` — 2 hunks
-
-**Hunk 1 (lines 177–191), inside `### Output: preview`.**
-HEAD's side: three paragraphs — placement modes (`open_preview` / `edit_source` / `preview_file` / `open_in_browser`), the two scratch-buffer gotchas, and `**Content width.**` plus its contract paragraph. `main`'s side: three enormous paragraphs restating the whole scroll-sync feature, the entire `PreviewScrollSeam` internals, and a differently-worded content-width paragraph.
-
-**Resolution: keep HEAD's side verbatim; delete `main`'s side.** Rule: `architecture.md` is "the cross-crate view only… it never restates" a crate's local constraints. `main`'s second paragraph (the in-place body swap, `captureDecision`, `loadCommitOutcome`, the JS ordering contract) is entirely `wolf-macos`-local and belongs to that crate's file entries — it is carried in §3.5/§3.6, not here.
-
-**Then** insert one genuinely cross-crate fact `main` added, as a new paragraph immediately after HEAD's `**Content width.**` contract paragraph (i.e. after the current line 184, before the `### Input: events` heading). Exact text:
-
-> **Cursor position.** A third out-of-band notification closes the loop from the editor cursor to the preview's scroll position. `wolf_markdown_cursor` carries three flat scalars `(source_bufnr, line, col)`, which core upserts into `Snapshot.markdown_cursors` keyed by the source buffer number — the same key space as `markdown_ticks` and `PreviewInfo.source_bufnr`, so a front-end joins all three on one key. An absent entry, or a `line` of `0`, is the cursor-unknown sentinel, and a front-end must not scroll for it.
->
-> The column semantics are the contract: `line` is a 1-based hard buffer line and `col` a 0-based **character** column, not a byte offset, so nothing on the path converts. They pair with the `wl-{L}-{C}` position markers `render_html` emits into the preview HTML. Whether a front-end scrolls at all is its own decision, per decision 2.
-
-**Also** append one sentence to HEAD's existing `render_preview` sentence in the paragraph at line 175 (unconflicted), which is the boundary guarantee the macOS in-place body swap depends on:
-
-> Because the in-app render pins one theme and full width, that document's `<head>` is byte-identical on every render, including across a dark/light flip, so a front-end may replace only the body.
-
-**Hunk 2 (lines 231–238), at the end of `## Build`.**
-HEAD's side: one sentence, "The `.app` bundles its own pinned Neovim, the captive `init.lua`, the vendored plugin and colorscheme trees, and both font families…". `main`'s side: four bullets that are the tail of `main`'s own deferred list (GTK popup, shared renderer, "scroll-sync **is built**", multiple preview themes). Git mis-aligned them; they are not a build paragraph.
-
-**Resolution: keep HEAD's single sentence; delete `main`'s four bullets.**
-
-**Then — required, outside the markers — rewrite `## Deferred and open` (lines 240–246).** HEAD's bullets 244 and 245 assert the feature is unbuilt and that markers collapse at block granularity. Both are false against the merged source (`runtime/nvim/init.lua`'s `emit_cursor`, `Snapshot::markdown_cursors`, `MarkerInjector`'s tier-2 splitting). Replace bullets 244 and 245 with:
-
-> - **Marker granularity below the block.** A source line longer than `MARKER_COLUMN_STRIDE` is anchored inside its block, at the marker's true position in the rendered inline flow. A paragraph hard-wrapped into several shorter source lines is not: all of its `wl-{L}-0` markers resolve to the block's opening tag, so cursor-follow is paragraph-granular there, as it is inside a fenced code block, a table, or an image's alt text, where injection is suppressed. Generalizing is rejected rather than pending — an anchor between `<tbody>` and `<tr>` is foster-parented out of the table by the HTML parser, and one between `<ul>` and `<li>` is invalid.
-> - **Preview scroll-sync is macOS-only.** The GTK shell has no Markdown preview pane, and the browser preview reloads on a poll with no cursor coupling.
-
-Keep bullets 242, 243 and 246 unchanged.
-
-### 2.2 `build.md` — 1 hunk
-
-**Hunk (lines 172–176), inside `## Running the tests`.**
-HEAD: "Tests run in the default configuration, not `-c opt`… `@testable import` requires `-enable-testing`…". `main`: a paragraph enumerating every `WOLF_FRAME_STATS` bucket and its two caveats.
-
-**Resolution: keep HEAD; delete `main`'s side.** Rule: `build.md` holds commands, environment and workflow; "what a given test target covers belongs in that directory's README". HEAD already delegates the bucket set at line 222 to `Sources/WolfKeyMap/README.md`.
-
-The one _new_ fact in `main`'s paragraph — that `prev.html` is deliberately shared by `loadHTMLString` and `callAsyncJavaScript` — is carried into the `FrameStats.swift` entry in §3.4, not here. No other edit to `build.md`.
-
-### 2.3 `crates/wolf-core/README.md` — 1 hunk
-
-**Hunk (lines 42–296).** HEAD: 4 lines opening `## Building and testing`. `main`: 250 lines — the entire pre-refactor per-method narrative.
-
-**Resolution: keep HEAD's 4 lines; delete `main`'s entire side.** Rule: a crate README is "the outside view only… No per-file entries." Every fact in `main`'s side about `WolfCore::start`, `render_preview`, `MARKER_COLUMN_STRIDE` and the marker rules belongs in `src/README.md`'s `api.rs` and `markdown.rs` entries, which HEAD already owns.
-
-**No further edits to this file.** Do **not** add `MarkdownCursor` to the `Public API surface` table: that table is already a curated summary that omits `PreviewInfo`, `WinBuffer` and `TabFiles`, and adding one sibling would be inconsistent without adding all.
-
-### 2.4 `crates/wolf-core/src/README.md` — 4 hunks
-
-All four are the same shape: HEAD's side is a `####` heading or a `**Decisions**` label; `main`'s side is a slab of the pre-refactor bullet list that git happened to align there.
-
-| Hunk    | HEAD's side                            | `main`'s side                              | Resolution                  |
-| ------- | -------------------------------------- | ------------------------------------------ | --------------------------- |
-| 13–15   | `#### \`api.rs\``                      | `render.rs` type bullets incl. `MarkdownCursor` | **Take HEAD**, delete `main` |
-| 95–97   | `**Decisions**` (under `redraw.rs`)    | the `markdown.rs` mega-bullet              | **Take HEAD**, delete `main` |
-| 125–130 | four `render.rs` Decisions bullets     | `redraw.rs` type/handler bullets           | **Take HEAD**, delete `main` |
-| 159–161 | the `logging.rs` `WOLF_LOG` bullet     | markdown-cursor + buffer-tracking prose    | **Take HEAD**, delete `main` |
-
-**Then, outside the markers, three required edits:**
-
-**(a) `redraw.rs` Purpose, line 93.** Replace the parenthesised list so the new notification is named:
-
-> …and routes the out-of-band `wolf_*` notifications (cwd, buffers, previews, markdown ticks and cursors, tabpages, theme, open files, commands, intents) into the snapshot's sibling cells and queues.
-
-**(b) `render.rs` `**Public API**`, after the `Toast::is_prompt` bullet (line 121).** Add:
-
-> - `Snapshot.markdown_cursors` is keyed by the source Markdown buffer number, the same key space as `markdown_ticks` and `PreviewInfo.source_bufnr`, so a consumer joins all three on one key. `MarkdownCursor.line` is 1-based and `col` is a 0-based character column; an absent entry, or a `line` of `0`, means the cursor is unknown.
-
-**(c) `markdown.rs` Decisions, line 282 — this bullet is false and must be rewritten in place.** It currently reads "Markers are injected only before block-level `Start` tags, so one never splits inline content… interior line markers therefore collapse to their block's top." Replace that single bullet with these four:
-
-> - Markers are placed by two rules. A column-zero marker is flushed as a raw span immediately before its block's opening tag; a `col != 0` marker inside a paragraph, heading, blockquote, list or footnote definition is deferred and split into the `Event::Text` that contains it, so it sits at its true position in the rendered inline flow.
-> - A `Text` is split only when `source[range]` equals the payload byte for byte. A length check is not enough — a same-length entity such as `&nvap;` passes it and is then corrupted — so a failed check leaves the marker to a later placement point rather than dropping it.
-> - The split point snaps to the nearest whitespace within `MARKER_SNAP_MAX_BYTES`, because an inline-box edge breaks glyph shaping across it and cutting mid-word would lose a ligature or kern pair. The id and `data-*` attributes still name the exact `(L, C)`.
-> - Injection is suppressed inside code blocks, HTML blocks, tables and image alt text, and those markers keep the before-the-tag placement. A raw span in a table interior is foster-parented out by the HTML parser, and pulldown-cmark builds an `alt` attribute with `raw_text`, which drops an `Event::Html` — which is also why a marker must never be emitted as `Event::InlineHtml`.
-> - Only the column-zero markers are guaranteed to be in ascending document order, because a block's inline markers follow a later line's column-zero marker. A consumer sweeping markers in document order has to filter on `data-col="0"`.
-
-Keep the existing bullets at lines 280, 281, 283 and 284 unchanged. If `markdown_check.sh` reports `entry-budget` on this entry (250-word ceiling), tighten by merging the second and third bullets — never by dropping a decision.
-
-### 2.5 `crates/wolf-core/src/markdown/README.md` — 3 hunks
-
-| Hunk  | HEAD's side                          | `main`'s side                                              | Resolution                  |
-| ----- | ------------------------------------ | ---------------------------------------------------------- | --------------------------- |
-| 9–15  | `#### \`base.css\`` heading          | three pre-refactor bullets about `.wolf-src`, layout, grid | **Take HEAD**, delete `main` |
-| 39–45 | the `themes/default.css` paragraph   | the edge-rule and residuals paragraphs                      | **Take HEAD**, delete `main` |
-| 69–100| the ten `## Decisions` bullets       | the `## assets/` section                                    | **Take HEAD**, delete `main` |
-
-**Then, outside the markers, two required edits:**
-
-**(a) `base.css` Decisions, replace the bullet at line 21** — it is incomplete against the merged renderer, which places anchors mid-text. Exact replacement:
-
-> - `.wolf-src` is an inline box clamped to zero width and height, with `font-size: 0` and `line-height: 0`. The zero leading is load-bearing twice over: the body sets `line-height` as a length, so a marker that inherited it would get a hard 24px line box, and a marker also sits between two characters of a paragraph, heading, list item or link, where an inherited strut would grow that line.
-> - The rule is `visibility: hidden`, never `display: none`. A hidden element still generates a box and reports a real `getBoundingClientRect()`, which is exactly what the macOS cursor-follow resolver measures; a `display: none` marker reports zeros and silently collapses every anchor to the top of the document.
-
-**(b) `## Decisions`, append one sentence to the bullet at line 77** (the "not an anchor, and no non-anchor sibling precedes it" bullet):
-
-> Each is a `body.wolf-markdown > *` child selector, so an anchor placed inside a block is a descendant and can never match one; leading and trailing anchor runs come only from column-zero markers and from markers flushed at a block boundary.
-
-**Explicitly do not carry over** `main`'s "Why the front-end never re-loads the document while you type" paragraph or its asset provenance table. The ~965 KiB head cost is a `wolf-macos` rationale (§3.6), and provenance is already in HEAD's two per-asset entries at lines 51–65.
-
-### 2.6 `crates/wolf-core/tests/README.md` — 2 hunks
-
-| Hunk    | HEAD's side                         | `main`'s side                                                          | Resolution                  |
-| ------- | ----------------------------------- | ---------------------------------------------------------------------- | --------------------------- |
-| 125–132 | two `commands.rs` Gotchas bullets   | the pre-refactor `markdown_render.rs` narrative                        | **Take HEAD**, delete `main` |
-| 136–156 | the `copy_paste.rs` target line     | a whole scroll-sync section plus a stray `### Layout-intent parsing`   | **Take HEAD**, delete `main` |
-
-**Then, outside the markers, two required edits:**
-
-**(a) New entry — `markdown_cursor.rs` is a source file `main` added that no document owns.** Insert it in the alphabetical `## Files` list between `#### \`layout_intents.rs\`` (line 229) and `#### \`markdown_render.rs\`` (line 242), in HEAD's exact three-part shape:
-
-> #### `markdown_cursor.rs`
->
-> Real Neovim (`//crates/wolf-core:markdown_cursor`: staged nvim runfiles, `WOLF_NVIM_BIN`, `no-sandbox`).
->
-> **Covers**
->
-> - `Snapshot.markdown_cursors`: the 1-based line and 0-based character column contract, including `charcol`'s past-end-of-line value in insert mode; entry on buffer enter with no motion; independence from `markdown_ticks`; the filetype, preview-scratch and window-type guards; and the source-bufnr key the FFI join depends on.
->
-> **Gotchas**
->
-> - `wolf_markdown_cursor` arrives out of band, so every assertion polls `read_snapshot()` and drains wakes. `seq` invariance is deliberately not asserted: a cursor motion legitimately produces its own redraw batch, so the no-bump property is structural.
-> - The startup buffer is a markdown `Untitled.md` that is itself reported, so the map legitimately holds more than one entry; resolve the opened file's bufnr from `Snapshot.win_buffers` rather than assuming a single key.
-> - A background `bufload` case is what pins the `win_gettype()` guard; without it nvim's synthetic autocmd window reports a fabricated cursor that passes every other guard.
-
-**(b) `markdown_render.rs` Covers bullet, line 248.** Extend the existing bullet so the inline-anchoring half of the coverage is named:
-
-> - The public preview render surface (`render_html`, `render_html_with_highlights`, `code_blocks`, `theme_css`, `PreviewTheme`, `WidthMode`): `wl-{L}-{C}` anchor placement in both tiers — column-zero markers collapsing to a block's opening tag, and column markers landing inside a paragraph, heading or list item — the code-block, table and image-alt exclusions including the nested-in-a-container cases, MathML with inlined fonts, the paired dark/light palettes, and a sweep asserting every vertical dimension in the shipped `base.css` lands on the baseline grid.
-
-### 2.7 `crates/wolf-ffi/README.md` — 1 hunk
-
-**Hunk (lines 9–271).** HEAD: the 5-row `## Layout` table. `main`: 256 lines of the pre-refactor per-method bridge narrative.
-
-**Resolution: keep HEAD's table; delete `main`'s entire side.** Rule: crate README is the outside view; the bridge surface belongs to `src/README.md`, which HEAD owns. No further edits to this file.
-
-### 2.8 `crates/wolf-ffi/src/README.md` — 1 hunk
-
-**Hunk (lines 62–66).** HEAD: the `FfiColor` paragraph. `main`: the pre-refactor `FfiPreview` mega-bullet.
-
-**Resolution: keep HEAD's `FfiColor` paragraph; delete `main`'s side.**
-
-**Then, outside the markers, one required edit — the two new accessors are undocumented.** In the `### Preview` section, insert after the `FfiPreview::source_full_width()` bullet (line 173):
-
-> - `FfiPreview::source_cursor_line() -> u32` / `source_cursor_col() -> u32` — the source buffer's editing cursor, joined in `previews()` from `Snapshot.markdown_cursors` by `source_bufnr`. `line` is 1-based to match the `wl-{L}-{C}` markers and `col` is a 0-based character column, which the front-end rounds down to a marker stride. A `line` of `0` means the cursor is unknown, and the front-end must not scroll for it. Both are opaque-type accessors, so they are additive and `wolf_ffi_wake.h` is unaffected.
-
-### 2.9 `crates/wolf-ffi/tests/README.md` — 1 hunk
-
-**Hunk (lines 48–52), inside `#### \`attribute_highlight.rs\``.** HEAD: the one-paragraph Covers for attribute highlighting. `main`: the pre-refactor `preview.rs` narrative, mis-aligned into the wrong entry.
-
-**Resolution: keep HEAD's paragraph; delete `main`'s side.**
-
-**Then, outside the markers, extend the `preview.rs` Covers paragraph at line 319** so the cursor-join coverage `main` added is named. Append to that sentence:
-
-> …and `preview_file(win, path)` link-follow, plus the scroll-sync cursor join — a row's `source_cursor_line()` / `source_cursor_col()` matching `Snapshot.markdown_cursors` for its own source buffer, and the `line == 0` sentinel a background-loaded source produces.
-
-### 2.10 `crates/wolf-gnome/README.md` — 1 hunk
-
-**Hunk (lines 25–156).** HEAD: one sentence about the binary taking no arguments. `main`: 130 lines of the pre-refactor `## Architecture wiring` narrative.
-
-**Resolution: keep HEAD's sentence; delete `main`'s entire side.** Nothing in `main`'s side concerns the new feature — GTK has no preview pane. No further edits.
-
-### 2.11 `crates/wolf-macos/README.md` — 3 hunks
-
-| Hunk    | HEAD's side                                          | `main`'s side                                 | Resolution                  |
-| ------- | ---------------------------------------------------- | --------------------------------------------- | --------------------------- |
-| 17–19   | the `main.swift` / `AppDelegate` entry-point paragraph| the `WolfKeyMap.translate` narrative           | **Take HEAD**, delete `main` |
-| 161–165 | "The AppKit half of the crate has no automated coverage…" | the frame-stats narrative                 | **Take HEAD**, delete `main` |
-| 176–194 | the whole `## Bundle contents` section (table + two paragraphs) | one huge paragraph covering every feature ever shipped | **Take HEAD**, delete `main` |
-
-Rule: `crates/<crate>/README.md` is the outside view with no per-file entries. Every scroll-sync fact in hunk 3 is carried into the three directory READMEs per §3.4–§3.7. No further edits to this file.
-
-### 2.12 `crates/wolf-macos/Sources/README.md` — 1 hunk
-
-**Hunk (lines 8–104).** HEAD: one sentence, "Each directory's README owns the entries for the files in that directory, and nothing else describes them." `main`: 95 lines of per-file `WolfKeyMap` bullets.
-
-**Resolution: keep HEAD's sentence; delete `main`'s side.** Note `main`'s side opens "Forty deliberately AppKit-free files" — a count that would be wrong the moment a file lands; HEAD deliberately carries no count. No further edits.
-
-### 2.13 `crates/wolf-macos/Tests/README.md` — 1 hunk
-
-**Hunk (lines 3–175).** HEAD: two lines pointing at `WolfKeyMapTests/README.md` plus the no-AppKit-target note. `main`: 170 lines including a full seam roll-call (which does name `PreviewScrollSeamTests.swift`) and per-file test sections.
-
-**Resolution: keep HEAD's two lines; delete `main`'s side.** The `PreviewScrollSeamTests.swift` entry lands in `Tests/WolfKeyMapTests/README.md` instead (§3.7). No further edits to this file.
-
-### 2.14 `runtime/nvim/README.md` — 2 hunks
-
-| Hunk    | HEAD's side                                        | `main`'s side                                                    | Resolution                  |
-| ------- | -------------------------------------------------- | ---------------------------------------------------------------- | --------------------------- |
-| 183–190 | `#### \`wolf_preview_file(win, path)\`` heading    | pre-refactor `wolf_open_preview` bullets                          | **Take HEAD**, delete `main` |
-| 202–213 | `#### \`wolf_name_untitled(...)\`` plus paragraph  | pre-refactor `wolf_setup_preview` bullets, incl. `wolf_markdown_cursor` | **Take HEAD**, delete `main` |
-
-**Then, outside the markers, five required edits.** `runtime/nvim/README.md` owns `init.lua`, so every fact `main` added about it lands here.
-
-**(a) `#### \`wolf_setup_preview(chan)\`` (lines 91–95).** Change the opening of line 93 from "Registers two things in one augroup" to "Registers three things in one augroup". Then, after the `wolf_markdown_dirty` paragraph at line 95, insert a new paragraph and rewrite that paragraph's closing sentence:
-
-> `CursorMoved`/`CursorMovedI`/`BufEnter`/`BufWinEnter` autocmds notify **`wolf_markdown_cursor`** with three flat scalars `(source_bufnr, line, char_col)` — a 1-based `line('.')` and a 0-based `charcol('.') - 1`. That column is a character index rather than a byte index, which is what lets it pair with the `wl-{L}-{C}` markers with no conversion anywhere downstream; core upserts it into `Snapshot.markdown_cursors`. Five guards decide whether to emit: the buffer must be valid, must be current, its window must be a normal window, its filetype must be `markdown`, and `b:wolf_preview_source` must be nil.
->
-> Exposes `_G.wolf_emit_previews` and `_G.wolf_emit_markdown_cursor`.
-
-(Delete the trailing "Exposes `_G.wolf_emit_previews`." from line 95 so it is not stated twice.)
-
-**(b) `#### \`wolf_emit_current_file\`, …` heading (line 97).** Add the new closure to the heading: `#### \`wolf_emit_current_file\`, \`wolf_emit_buffers\`, \`wolf_emit_full_width\`, \`wolf_emit_previews\`, \`wolf_emit_markdown_cursor\`, \`wolf_emit_drawer\``.
-
-**(c) `#### \`wolf_open_preview(mode)\`` (lines 171–175).** Append one sentence to the `mode` paragraph at line 175:
-
-> It re-emits the source buffer's cursor before any placement branch, because `split_right` and `active` make the preview scratch current and the cursor emit's preview-scratch guard would then bail, leaving a freshly opened preview with no anchor.
-
-**(d) `wolf_preview_file` (lines 192–194).** Append one sentence to the paragraph at line 194:
-
-> It deliberately does not re-emit the cursor: the source is loaded in the background with no window, so it carries no meaningful position.
-
-**(e) `## Decisions` — add one new paragraph** (place it immediately after the "A background `nvim_win_set_buf` does fire `BufEnter` and `BufWinEnter`" paragraph at line 265, whose flavor it matches):
-
-> **The cursor emit needs both buffer-entry events and the `win_gettype()` guard, and neither is redundant.** `:edit foo.md` fires `CursorMoved` before filetype detection, so the steady-state autocmds alone would leave an opened-but-untouched buffer reporting no cursor at all. Adding `BufEnter` and `BufWinEnter` fixes that but opens a hole: `vim.fn.bufload()` fires both inside nvim's synthetic autocmd window, where the target buffer is genuinely current and every other guard passes, over a fabricated line 1 that belongs to no user pane. Only a normal window carries a real cursor, so the guard is what preserves the `line == 0` unknown sentinel a background-loaded source must report.
-
----
-
-## 3. Files to modify that are **not** conflicted (mandatory)
-
-These are HEAD-authored documents written before `main`'s feature existed. Each is either stale against the merged source or is the sole owner of a file that no document describes.
-
-### 3.1 Coverage audit — every source file `main` added, and its one owner
-
-| Source file `main` added or changed                            | Owning document                       | State                             |
-| -------------------------------------------------------------- | ------------------------------------- | --------------------------------- |
-| `Sources/WolfKeyMap/PreviewScrollSeam.swift`                    | `Sources/WolfKeyMap/README.md`        | **Missing — gap, add (§3.5)**     |
-| `Sources/WolfMacOS/PreviewScrollStateHandler.swift`             | `Sources/WolfMacOS/README.md`         | **Missing — gap, add (§3.6a)**    |
-| `Sources/WolfMacOS/PreviewNavigationDelegate.swift`             | `Sources/WolfMacOS/README.md`         | Present but stale — update (§3.6b)|
-| `Sources/WolfMacOS/PaneContainerView.swift`                     | `Sources/WolfMacOS/README.md`         | Present but stale — update (§3.6c)|
-| `Tests/WolfKeyMapTests/PreviewScrollSeamTests.swift`            | `Tests/WolfKeyMapTests/README.md`     | **Missing — gap, add (§3.7)**     |
-| `crates/wolf-core/tests/markdown_cursor.rs`                     | `crates/wolf-core/tests/README.md`    | **Missing — gap, add (§2.6a)**    |
-| `runtime/nvim/init.lua` (cursor emit)                           | `runtime/nvim/README.md`              | Stale — update (§2.14)            |
-| `crates/wolf-core/src/markdown.rs` (two-tier placement)          | `crates/wolf-core/src/README.md`      | **Contradicts source** — (§2.4c)  |
-| `crates/wolf-core/src/{render,redraw}.rs` (`markdown_cursors`)   | `crates/wolf-core/src/README.md`      | Missing — add (§2.4a, §2.4b)      |
-| `crates/wolf-ffi/src/lib.rs` (two accessors)                    | `crates/wolf-ffi/src/README.md`       | Missing — add (§2.8)              |
-| `crates/wolf-core/src/markdown/base.css` (mid-text anchors)      | `src/markdown/README.md`              | Incomplete — update (§2.5a)       |
-
-No new source file is left undocumented after these edits, and no source file is described in two documents.
-
-### 3.2 Inverse check — prose that must **lose** its home
-
-| `main`'s prose                                                  | Where it must **not** land                        | Where it lands instead                                  |
-| ---------------------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------- |
-| Full `PreviewScrollSeam` internals (update strategy, capture rules, JS ordering) | `architecture.md`, `crates/wolf-macos/README.md` | `Sources/WolfKeyMap/README.md` + `Sources/WolfMacOS/README.md` |
-| The frame-stats bucket table and its caveats                     | `build.md`, `crates/wolf-macos/README.md`        | `Sources/WolfKeyMap/README.md` → `FrameStats.swift`     |
-| "~965 KiB base64 head, so the front-end swaps the body"         | `crates/wolf-core/src/markdown/README.md`         | `architecture.md` boundary sentence + `PaneContainerView.swift` |
-| Marker-rule detail                                               | `crates/wolf-core/README.md`, `architecture.md`   | `crates/wolf-core/src/README.md` → `markdown.rs`        |
-| Per-test narratives for `markdown_render.rs` / `preview.rs`      | crate-level READMEs                               | the respective `tests/README.md` entries                |
-
-### 3.3 `crates/wolf-macos/DECISIONS.md`
-
-**Line 73 is false.** Replace:
-
-> - Markdown preview ships one theme. Cursor-follow anchors to the containing block's top inside a fenced code block, a table or an image's alt text, and inside a paragraph hard-wrapped across several short source lines; the marker rules are in [`wolf-core/src/README.md`](../wolf-core/src/README.md).
-
-Do **not** add a new `## Preview scroll-sync` section to this file. The in-place-versus-navigate model is a per-file decision belonging to `PreviewScrollSeam.swift` and `PaneContainerView.swift`; a section here would duplicate them.
-
-### 3.4 `Sources/WolfKeyMap/README.md` — `FrameStats.swift`
-
-Add one bullet to the entry's `**Gotchas**` (after line 222):
-
-> - `prev.html` is shared by both document-update paths — the `loadHTMLString` call and the `callAsyncJavaScript` issue — because both measure the same thing, dispatching one update. It times only the synchronous dispatch, never the WebKit parse, layout or JavaScript execution that dispatch queues.
-
-### 3.5 `Sources/WolfKeyMap/README.md` — new `PreviewScrollSeam.swift` entry
-
-Insert alphabetically between `#### \`PreviewLinkSeam.swift\`` (line 442) and `#### \`PreviewSeam.swift\`` (line 461):
-
-> #### `PreviewScrollSeam.swift`
->
-> Purpose: Every decision behind Markdown-preview scroll-sync — which marker a source cursor anchors to, whether that anchor's position warrants scrolling, how a fresh render reaches the page, and every JavaScript string the preview web view evaluates. Foundation only.
->
-> **Public API**
->
-> - `CursorPos` — `line` is 1-based with `0` meaning unknown, `col` a 0-based character column. `anchorColumn(_:)` and `anchorIds(line:col:)` give the id preference order the injected script mirrors.
-> - `edgeThreshold(viewportHeight:)` and `followDecision(anchorTop:viewportHeight:)` — the comfort band, inclusive at both ends, and where an anchor lands once it leaves it.
-> - `winsNeedingScroll(current:applied:)`, `captureDecision(…)`, `splitDocument(_:)`, `updateStrategy(…)`, `loadCommitOutcome(remaining:pending:succeeded:)` — the per-window gates; each carries its ordered rules on its own doc comment.
-> - `stateHandlerName`, `stateScriptJS(handlerName:)`, `followJS(line:col:)`, `restoreJS(_:)`, `inPlaceUpdateArgumentNames`, `inPlaceUpdateJS()`.
->
-> **Decisions**
->
-> - Every tuning constant is interpolated into the generated JavaScript rather than written twice, so a test proves what the page actually runs.
-> - `markerColumnStride` mirrors `wolf_core::markdown::MARKER_COLUMN_STRIDE`; a change on the Rust side has to be mirrored here, and a test pins it.
-> - The capture and commit rules live here rather than in `PaneContainerView` because both shipping-blocker defects found in review were ordering bugs in that untestable AppKit block. The caller keeps only a mechanical `switch`.
-> - `updateStrategy` compares head lengths rather than hashing, so a future theme or width selector degrades to a full load instead of stale CSS.
->
-> **Gotchas**
->
-> - The fallback sweep filters on `data-col="0"` and must never be widened: only that subsequence is in ascending document order. See the marker rules in [`wolf-core/src/README.md`](../../../wolf-core/src/README.md).
-> - `stateHandlerName` and `PreviewSeam.clickFocusHandlerName` are registered on the same `WKUserContentController`, so they must differ and both must be removed on teardown.
-
-### 3.6 `Sources/WolfMacOS/README.md` — three edits
-
-**(a) New entry, `PreviewScrollStateHandler.swift`,** inserted between `PreviewNavigationDelegate.swift` (line 438) and `Project.swift` (line 452):
-
-> #### `PreviewScrollStateHandler.swift`
->
-> Purpose: The `WKScriptMessageHandler` that forwards a preview page's pushed scroll state, posted by `PreviewScrollSeam.stateScriptJS`, into its `PaneContainerView`'s per-window cache.
->
-> **Public API**
->
-> - `init(win:container:)` — `win` is the Neovim window handle identifying the pane in the container's per-window maps.
->
-> **Decisions**
->
-> - The page pushes rather than being polled. A full `loadHTMLString` destroys `window`, so nothing survives a reload inside the page, and `evaluateJavaScript` is asynchronous, so state cannot be pulled in the instant before one. A continuously refreshed Swift-side copy makes the pre-reload capture a plain dictionary read.
-> - A body missing `s` degrades to `0` rather than dropping the message, so a partially decodable push still refreshes the cache.
-> - `container` is weak: the web view's `WKUserContentController` retains this handler strongly.
-
-**(b) `PreviewNavigationDelegate.swift` entry (lines 438–450) — add one Decisions bullet** after the existing weak-reference bullet:
-
-> - The two `didFail…` callbacks are routine bookkeeping, not an error path: they decrement that window's outstanding-navigation count so `PreviewScrollSeam.updateStrategy`'s in-flight rule cannot pin the window on the full-load path forever. A count rather than a flag, because two navigations can straddle one page load and WebKit reports the superseded one as a failure. A cancelled policy decision — every clicked link — also arrives here, so the container ignores a callback for which it counted no navigation.
-
-**(c) `PaneContainerView.swift` entry (lines 315–332) — add three Decisions bullets and one Gotcha.** Keep the existing bullets; append:
-
-> - A `changedtick` bump does not necessarily navigate the web view. `PreviewScrollSeam.updateStrategy` picks per window between `loadHTMLString` and an in-place body swap, and the typing path takes the swap, which is what stops the inlined base64 font CSS in the head from being re-shipped and re-parsed on every keystroke.
-> - The in-place body travels as a real `callAsyncJavaScript` argument in the `.page` content world, never interpolated into JavaScript source. A wrong content world returns the falsy sentinel on every call, pinning every window on the full-load path silently and with a green suite.
-> - A failed in-place update clears that window's live-document descriptor and re-arms the reload gate, so the next pass takes the full path — one extra reload, no loop, and recovery once a load commits.
->
-> **Gotchas** (append)
->
-> - Two script-message handlers are registered on one preview web view's content controller — click-to-focus and scroll state. Both must be removed when the web view is torn down, or the controller keeps the container alive.
-
-### 3.7 `Tests/WolfKeyMapTests/README.md` — new entry
-
-Insert alphabetically after `#### \`PreviewSeamTests.swift\`` (line 250) and before `#### \`RestoreSeamTests.swift\`` (line 262):
-
-> #### `PreviewScrollSeamTests.swift`
->
-> **Covers**
->
-> - `PreviewScrollSeam`'s anchor arithmetic (`anchorColumn`, `anchorIds` and their dedup at column zero), the edge-threshold band including its inclusive boundaries and the short-viewport cap, `winsNeedingScroll`, and the ordered rules of `captureDecision`, `splitDocument`, `updateStrategy` and `loadCommitOutcome`.
-> - The synthesized JavaScript: that each tuning constant's rendered value appears in the generated source, and that `inPlaceUpdateJS`'s free identifiers are exactly `inPlaceUpdateArgumentNames`.
->
-> **Gotchas**
->
-> - Scalar and string inputs only — no AppKit, no `WKWebView`, no Neovim. The on-screen scrolling and the `PaneContainerView` wiring are compile-and-manual-smoke only.
-> - `markerColumnStride` is pinned against `wolf_core::markdown::MARKER_COLUMN_STRIDE`; that assertion is the only automated guard on a cross-language constant.
-
----
-
-## 4. Test plan
-
-**No tests are added, changed, or removed.** Documentation-only resolution on an already-clean source merge; `main`'s tests merged cleanly and are the verification surface. The coder confirms the merged tree is still green, and does not extend it.
-
-**Behaviors to confirm still pass, unmodified:**
-
-- `//crates/wolf-core:markdown_render` and `//crates/wolf-core:wolf_core_lib_test` — the two-tier marker placement.
-- `//crates/wolf-core:markdown_cursor` — the Lua-to-core cursor signal.
-- `//crates/wolf-ffi:preview` — the FFI cursor join.
-- `//crates/wolf-macos:WolfKeyMapTests` — includes `PreviewScrollSeamTests.swift`, already listed in `srcs` at `crates/wolf-macos/BUILD.bazel:289`.
-
-**Wiring already verified, do not touch:** `PreviewScrollSeam.swift` at `BUILD.bazel:91`, `PreviewScrollSeamTests.swift` at `:289`, the `markdown_cursor` `rust_test` at `crates/wolf-core/BUILD.bazel:461` with staged runfiles and `tags = ["no-sandbox"]`, and `Sources/WolfMacOS/*.swift` is a glob so `PreviewScrollStateHandler.swift` compiles. No `BUILD.bazel` edit is needed or permitted.
-
-**Edge cases the coder must check by inspection, not by test:**
-
-- No `<<<<<<<`, `=======` or `>>>>>>>` remains anywhere: `git diff --check` and a repo-wide grep.
-- No file outside `*.md` appears in the working-tree diff.
-- No entry describes a file that another entry also describes.
-
----
-
-## 5. Implementation order
-
-1. **Resolve the pure take-HEAD files first** — no judgment, fastest confidence: `crates/wolf-gnome/README.md`, `crates/wolf-ffi/README.md`, `crates/wolf-core/README.md`, `crates/wolf-macos/README.md`, `crates/wolf-macos/Sources/README.md`, `crates/wolf-macos/Tests/README.md`.
-2. **Resolve the remaining eight conflicts**, HEAD-side only, deleting `main`'s side, without yet making any post-conflict edit: `architecture.md`, `build.md`, `crates/wolf-core/src/README.md`, `crates/wolf-core/src/markdown/README.md`, `crates/wolf-core/tests/README.md`, `crates/wolf-ffi/src/README.md`, `crates/wolf-ffi/tests/README.md`, `runtime/nvim/README.md`.
-3. **Verify zero markers remain** before writing a single word of new prose. This checkpoint separates "merge resolved" from "docs corrected".
-4. **Fix the contradictions** — where prose asserts the opposite of the merged code, in dependency order (core outward): §2.4c, §2.5, §2.1 deferred bullets, §3.3.
-5. **Fill the additive gaps** — new facts about existing files: §2.4a/b, §2.8, §2.14a–e, §2.1 preview paragraphs, §2.9, §2.6b, §3.4, §3.6b/c.
-6. **Add the four missing entries** last, so they can link to prose that already exists: §2.6a, §3.5, §3.6a, §3.7.
-7. **Format, lint, test** (§7).
-8. **Do not commit.** Leave the merge staged-but-uncommitted for the reviewer. The orchestrator decides when to conclude the merge.
-
----
-
-## 6. Dependencies
-
-**None.** No new external packages, no Bazel targets, no `MODULE.bazel` or `Cargo.toml` change. `prettier` is already the repo's Markdown formatter and `tools/lint/markdown_check.sh` already exists.
-
----
-
-## 7. Lint considerations and verification
-
-**Formatting.** Run `prettier --write` on every file touched. `.prettierrc` sets `proseWrap: never`, so each paragraph stays one long line and prettier will never split it — shortening a paragraph is an authorial act the coder must perform. Re-run `prettier --write` afterwards and confirm no further change.
-
-**The Markdown checker.** `./tools/lint/markdown_check.sh <files>` (or `bazel test //tools/lint:markdown`, which covers only per-package `README.md` and `DECISIONS.md` — `architecture.md` and `build.md` must be passed to the script by hand). Advisory and `manual`-tagged, but every finding below is real for this change:
-
-- **`long-line`** — a paragraph over 800 characters. `main`'s prose routinely exceeds this; any paragraph composed from it must be split.
-- **`changelog`** — bans `now`, `no longer`, `previously`, `the old`, `renamed from`, `this increment`, `used to be`. `main`'s side is saturated with these. Every replacement above is present tense; do not reintroduce the banned words when paraphrasing.
-- **`allcaps`** — `main`'s prose shouts constantly. Use bold sparingly or lowercase. The allowlist covers genuine acronyms and tokens containing a digit.
-- **`entry-budget`** — 250 words per `####` entry. Most at risk: `markdown.rs` (§2.4c) and `PreviewScrollSeam.swift` (§3.5). If either trips, tighten by merging bullets, never by dropping a decision.
-- **`big-file`** — warning only, at 50,000 bytes. Expect this change to run net-negative in bytes, which is correct.
-
-**No linter ignore directives are needed or appropriate.** The checker has no suppression syntax; none should be invented.
-
-**Test commands (macOS host, so the Bazel path per `build.md`):**
-
-```
-bazel test //...
-```
-
-`//tools/lint/...` and `//crates/wolf-macos:WolfRelease` are `manual`-tagged and excluded from that wildcard; run the linters explicitly:
-
-```
-bazel test --config=lint //tools/lint:markdown
-./tools/lint/markdown_check.sh architecture.md build.md
-```
-
-**Known pre-existing flake:** `//crates/wolf-core:redraw_grid` (`scroll_up_shifts_grid_content_down`) is a real-Neovim timing flake, bisected to pre-date this branch. A single failure there is not caused by this change; re-run before investigating.
-
-**Final gate:**
-
-- `git diff --name-only --diff-filter=U` is empty.
-- A repo-wide grep for `^<<<<<<<`, `^=======`, `^>>>>>>>` returns nothing outside `.claude/`.
-- `git status` shows no modified file whose extension is not `.md`.
-- `prettier --write` on the touched files is a no-op.
-
----
-
-# Amendment 1 — closing the four `entry-budget` findings
-
-**Orchestrator: approved.** The relocations are legitimate under CLAUDE.md's charter for `DECISIONS.md` ("cross-cutting constraints … decisions with a multi-year half-life"), not a dodge around the word budget: the marker scheme spans two crates and two languages, and the preview-update model is jointly honored by four files. Both are net-negative. The architect's §E duplicate-ownership removals are mandatory and land in the same pass.
-
-## Ruling summary
-
-| Entry                    | Over by | Ruling                                            |
-| ------------------------ | ------- | ------------------------------------------------- |
-| `render.rs` (284)        | 34      | Cut in place                                       |
-| `FrameStats.swift` (285) | 35      | Cut in place                                       |
-| `markdown.rs` (411)      | 161     | Relocate to `crates/wolf-core/DECISIONS.md`        |
-| `PaneContainerView.swift` (413) | 163 | Relocate to `crates/wolf-macos/DECISIONS.md`   |
-
-**§3.3 is reversed.** The in-place-versus-navigate model is jointly honored by four files across two directories: `PreviewScrollSeam` owns the rules, `PaneContainerView` the bookkeeping, `PreviewScrollStateHandler` the state channel, `PreviewNavigationDelegate` the navigation count. Leaving it inside one file's entry means the other three can be changed by an agent who never reads it — the exact failure `DECISIONS.md` prevents.
-
-## A. `render.rs` — cut in place
-
-In `crates/wolf-core/src/README.md`, under `#### \`render.rs\``:
-
-1. Trim the `HighlightTable::resolve` bullet to drop its parenthetical (owned by `architecture.md`'s render-state contract): "- `HighlightTable::resolve` applies defaults and reverse video, so a front-end paints `fg`/`bg` verbatim."
-2. Delete the sentence "Grid 1 (`OUTER_GRID_ID`) always exists but is never painted as window content." Owned by `architecture.md`'s grid description. Keep the preceding sentence.
-3. Trim the `WinInfo.hidden` bullet to: "- `WinInfo.hidden` is always `false`: a `win_hide` removes the window from `windows` outright rather than flagging it. The field exists to keep the FFI and Swift surface stable." The dropped clause is owned by `architecture.md`'s current-tabpage rule.
-
-Keep the new `markdown_cursors` bullet untouched. **Measure, do not trust the ≈248 estimate.** If still over: delete the `HighlightTable::resolve` bullet outright — `architecture.md` states it in full.
-
-## B. `FrameStats.swift` — cut in place
-
-In `crates/wolf-macos/Sources/WolfKeyMap/README.md`, under `#### \`FrameStats.swift\``:
-
-1. Delete the bullet listing `record(_:nanos:)`, `reset()`, `summarize(…)`, `format(_:)`, `percentile(_:_:)`, `isEnabled(env:)`, `reportInterval(env:)` in full — a signature restatement, banned by name. Keep the `FrameStatsBucket` bullet.
-2. Trim the percentile bullet to: "- Percentiles are nearest-rank, not interpolated, so every number in the table was actually observed. Only the percentile window is capped; `count`, the sum and `max` stay exact, and a bucket past the cap reports `truncated`."
-
-Keep the new `prev.html` gotcha untouched. Estimate ≈246.
-
-## C. `markdown.rs` — relocate
-
-### C.1 New section in `crates/wolf-core/DECISIONS.md`
-
-Insert between `## Browser preview security` and `## Present limitations` (verify both headings exist; if not, place it before `## Present limitations`). Exact prose:
-
-```markdown
-## The preview position-marker contract
-
-`render_html` seeds every rendered document with position markers — `<span class="wolf-src" id="wl-{L}-{C}" data-line="{L}" data-col="{C}"></span>` — one per hard source line at column zero, plus one every `MARKER_COLUMN_STRIDE` characters along a longer line. `L` is a 1-based hard buffer line and `C` a 0-based character column, matching what `wolf_markdown_cursor` reports, so nothing along the path converts between bytes and characters. pulldown-cmark is chosen for `Parser::into_offset_iter`, which pairs each event with its source byte range; a plain event iterator cannot support this scheme at all.
-
-Placement has two tiers. A column-zero marker is flushed as a raw span immediately before its block's opening tag. A `col != 0` marker inside a paragraph, heading, blockquote, list or footnote definition is deferred and split into the `Event::Text` that contains it, so it lands at its true position in the rendered inline flow rather than collapsing to the block top.
-
-Three properties are load-bearing on consumers and must survive any rewrite. Every marker the rule predicts exists exactly once, because a marker is deferred rather than dropped. Only the column-zero markers are guaranteed to appear in ascending document order — a block's inline markers follow a later line's column-zero marker — so a consumer sweeping the document must filter on `data-col="0"`. And `MARKER_COLUMN_STRIDE` is mirrored in Swift as `PreviewScrollSeam.markerColumnStride`, a cross-language coupling one test pins.
-
-Splitting is guarded, and each guard has a reason. A `Text` is split only when `source[range]` matches the payload byte for byte: a length check passes a same-length entity such as `&nvap;` and then corrupts it at a character boundary, and a failed match defers the marker instead of dropping it. The split point snaps to the nearest word boundary within `MARKER_SNAP_MAX_BYTES`, because an inline-box edge breaks glyph shaping across it and a mid-word cut loses a ligature or kern pair; with no boundary in the window it splits at the exact offset. The id and `data-*` attributes always name the exact `(L, C)`.
-
-Injection is suppressed inside code blocks, HTML blocks, tables and image alt text, and those markers keep the before-the-tag placement. A raw span between `<tbody>` and `<tr>` is foster-parented out of the table by the HTML parser. An `alt` attribute is built by pulldown-cmark's `raw_text`, which drops an `Event::Html` outright — which is also why a marker is emitted as `Event::Html` and never as `Event::InlineHtml`, so a leak loses one anchor instead of corrupting the attribute.
-
-What the markers cost the stylesheet is in [`src/markdown/README.md`](src/markdown/README.md); the granularity that remains out of reach is in [`architecture.md`](../../architecture.md).
-```
-
-### C.2 Trim the entry
-
-In `crates/wolf-core/src/README.md` under `#### \`markdown.rs\``: delete the four marker-placement bullets (the two-tier rule, the byte-identity guard, the snap rule, the exclusions/document-order bullets) and insert in their place:
-
-> - Marker placement, its byte-identity guard, its exclusions, and the document-order guarantee consumers depend on are one contract with a long half-life: see [the preview position-marker contract](../DECISIONS.md).
-
-One sentence is **not** part of the marker contract and must be preserved as its own bullet:
-
-> - Math and highlighted code are `Event::InlineHtml`, so the writer passes them through verbatim and the injector never reads them as a block start.
-
-Estimate ≈240.
-
-## D. `PaneContainerView.swift` — relocate
-
-### D.1 New section in `crates/wolf-macos/DECISIONS.md`
-
-Insert between `## One flat pane view, not nested split views` and `## Present limitations`. Exact prose:
-
-```markdown
-## How a preview reaches its web view
-
-Four files jointly honor one model, so do not change any of them without reading this section: `WolfKeyMap/PreviewScrollSeam` owns the rules, `PaneContainerView` the bookkeeping, `PreviewScrollStateHandler` the state channel, and `PreviewNavigationDelegate` the navigation count.
-
-A rendered document reaches the page one of two ways, chosen per preview window by `PreviewScrollSeam.updateStrategy`. The typing path swaps only the body in place, which is what stops the inlined base64 font CSS in the head from being re-shipped across the WebKit boundary and re-parsed on every keystroke. Every other case navigates with `loadHTMLString`. The swap is sound only because the in-app render pins one theme and one width, so the head is byte-identical every time; the strategy compares head lengths so that premise is self-enforcing rather than a comment.
-
-The in-place body travels as a real `callAsyncJavaScript` argument, never interpolated into JavaScript source, and it must run in the content world `addUserScript` installed the page script into. A wrong world returns the falsy sentinel on every call, pinning every window on the full-load path silently and with a green suite. That is the one failure here no test catches, so it is what the manual smoke check is for.
-
-Scroll state is pushed out of the page, never pulled. A full load destroys `window`, so nothing can be stashed in the page across a reload, and `evaluateJavaScript` is asynchronous, so state cannot be read in the instant before one. A continuously refreshed Swift-side cache makes the pre-reload capture a plain dictionary read with no race.
-
-Navigations are counted, not flagged. Two can straddle one page load, because the reload coalescer does not wait for `didFinish`, and WebKit reports the superseded one as a failure — so a failure callback is a routine part of the typing path, not an error path. A count lets a superseded callback decline to commit anything; a flag let it clear the gate out from under a still-navigating load, which is what put the flicker back.
-
-Recovery is one step and self-limiting. A failed in-place update clears that window's live-document descriptor and re-arms the reload gate, so the next pass takes the full path: at most one extra load, no loop, and normal service resumes as soon as one commits.
-```
-
-### D.2 Trim the entry
-
-In `crates/wolf-macos/Sources/WolfMacOS/README.md` under `#### \`PaneContainerView.swift\``:
-
-1. Delete the three preview Decisions bullets added in §3.6c. Replace with: "- Preview updating is a four-file model this class implements only part of; read [how a preview reaches its web view](../../DECISIONS.md) before changing the strategy switch, the navigation count, or the live-document bookkeeping."
-2. Replace the occlusion bullet with: "- A grid is skipped only when an opaque, loaded preview web view fully covers it, and the loaded flag survives reloads, because WebKit keeps displaying the previous document while the next one loads." (Containment is owned by `architecture.md` decision 2 and `PaneOcclusion.swift`; the reload behavior is local and must not be lost.)
-3. Delete the `onRenderWake()` Public API bullet — a signature restatement.
-4. Tighten Purpose to: "Purpose: The editor area — one flat, flipped `NSView` that paints every split pane itself, owns the pure `PaneTree`, hosts the preview web views and overlays, and is the editor's first responder. The flat-view choice is in [DECISIONS.md](../../DECISIONS.md)."
-
-Keep the other Decisions bullets and the Gotcha. **Measure — the ≈250 estimate is too close to call.** If still over, apply in order and stop as soon as it passes: (i) fold the Gotcha's second sentence into the first; (ii) drop `layoutSnapshot()`'s "save and restore the split layout" clause, keeping only the `nil`-for-a-lone-empty-pane fact. Do not cut the remaining Decisions bullets.
-
-## E. Duplicate-ownership removals — required, same pass
-
-1. **`Sources/WolfMacOS/README.md` → `PreviewScrollStateHandler.swift`**: delete the push-not-pull Decisions bullet, replace with "- The push direction, and why it cannot be a pull, is in [DECISIONS.md](../../DECISIONS.md)." Keep the `s`-degrades-to-`0` and weak-reference bullets.
-2. **`Sources/WolfMacOS/README.md` → `PreviewNavigationDelegate.swift`**: replace the §3.6b bullet with "- The two `didFail…` callbacks are routine bookkeeping, not an error path: they decrement that window's outstanding-navigation count — see [DECISIONS.md](../../DECISIONS.md) for why it is a count. A cancelled policy decision, meaning every clicked link, also arrives here, so the container ignores a callback for which it counted no navigation."
-3. **`Sources/WolfKeyMap/README.md` → `PreviewScrollSeam.swift`** (at exactly 250, so this is also its headroom): delete the `updateStrategy` head-length Decisions bullet; retarget the fallback-sweep Gotcha to "- The fallback sweep filters on `data-col=\"0\"` and must never be widened — see [the position-marker contract](../../../wolf-core/DECISIONS.md)." Drop the restated ascending-order clause; the link carries it. Keep the constant-interpolation, `markerColumnStride`, capture-rules bullets and the two-handler Gotcha.
-4. **`crates/wolf-core/src/README.md` → `markdown.rs`** — covered by C.2.
-
-**Checked clean, no action:** `base.css`'s entry describes the stylesheet rule, not placement. `architecture.md`'s deferred bullet describes the remaining limitation, not the rule. Neither `DECISIONS.md` contained overlapping prose before this change.
-
-## F. Confirmations
-
-- **"Word boundary" is correct**; §2.4c's "nearest whitespace" was wrong. `snap_split_point` uses `char::is_whitespace` on either side of a candidate offset, and the source names that a word boundary. Keep the coder's wording. The relocated prose additionally records the no-boundary-in-window fallback (split at the exact offset), which an agent would otherwise assume means the marker is dropped.
-- **`//crates/wolf-core:commands` flake — follow-up only, nothing in this pass.** Do not write it into `tests/README.md`: a flake is not a present-tense property of the code, and it would be stale the moment it is fixed. Both it and `redraw_grid` are real-Neovim `no-sandbox` targets that spawn a child; if it recurs, check whether they share a child-reaping or output-capture path before treating them as two bugs.
-
-## G. Verification for this amendment
-
-1. Apply A, B, C, D, then E last.
-2. `prettier --write` on the five touched files.
-3. `./tools/lint/markdown_check.sh` on them — expect **zero** findings of every class. The new `##` sections are not entry-budget-counted but are still subject to `long-line`, `changelog` and `allcaps`.
-4. Confirm both `DECISIONS.md` files stay under the 50,000-byte `big-file` warning.
-5. Re-run `bazel test //...`. Green expected; treat `commands` or `redraw_grid` failures as the known flakes and re-run in isolation.
-6. Confirm the working-tree diff still contains no non-`.md` file.
-
----
-
-# Amendment 2 — orchestrator rulings on the two open items
-
-Amendment 1 landed: `render.rs` 284→248, `FrameStats.swift` 285→248, `markdown.rs` 411→211. `bazelisk test //...` green at 93/93. Two items needed a ruling.
-
-## Ruling 1 — `PaneContainerView.swift` stalled at 276
-
-Both amendment tie-breakers were applied and it did not converge (288→276). **Relocate the two-handler teardown Gotcha into `## How a preview reaches its web view`.** It is a lifecycle constraint binding the same four files, so it fits that section's charter, and it is the only option on the table that drops no decision. The five surviving non-preview Decisions bullets stay fenced — do not cut one to make a word count. If it still does not pass afterward, **accept the documented overage** rather than lose a decision an agent would otherwise undo.
-
-## Ruling 2 — the relocations ran net-positive (+219 and +177), and that is accepted
-
-CLAUDE.md's "expect to run net-negative as often as net-positive" targets editing passes over existing docs. This merge lands a real feature across four new source files, so some growth is legitimate, and `DECISIONS.md` is the correct home for both contracts independent of the word count. The sections stay.
-
-**But** new prose does not enter unaudited on the back of a lint fix. One pass over only the two new `##` sections, applying the two-question test sentence by sentence.
-
-Already ruled: D.1's "a flag let it clear the gate out from under a still-navigating load, which is what put the flicker back" is **history** — it narrates a past regression, banned by name. Rewrite present-tense as the failure a flag would cause. The `changelog` linter does not catch this shape, since it greps for specific words; check both sections for other past-tense constructions of the same form.
-
-Kept as load-bearing (each passes question 1): the no-word-boundary-in-window fallback, the exists-exactly-once guarantee, the manual-smoke-check note, the head-length premise being self-enforcing.
-
-## Coder judgment calls — both approved
-
-1. **`crates/wolf-macos/DECISIONS.md:83` was false** against the merged source, claiming the `prev.html` bucket times only the synchronous `loadHTMLString` call when there are two update paths. A documentation-is-source-of-truth bug plus a duplicate-ownership pair §E did not enumerate. Rewritten to drop the stale half and link to the entry; the entry's duplicate `wakesPerKeystroke` gotcha deleted. One owner each.
-2. **The pulldown-cmark / `into_offset_iter` bullet** was restated in C.1, so it was deleted from the entry — `DECISIONS.md` states it more completely. Same class as §E.
-
-## Re-verification scope
-
-prettier, `markdown_check.sh`, and the `big-file` check only. **No `bazel test //...` re-run required**: there is a clean 93/93 on a tree whose only subsequent changes are Markdown, and no source file has been touched in any pass.
-
----
-
-# Audit round — reviewer and technical-writer
-
-Both ran concurrently and independently converged on the same two principal defects, which raises confidence in each.
-
-## Defects found and fixed
-
-1. **Image-alt marker placement was false in three documents.** They claimed an image's alt-text marker "keeps the before-the-tag placement". `MarkerInjector` defers it across the inline `Image` so it lands *after* the `<img>`; `is_block_start` does not match `Tag::Image` and `drains_deferred` deliberately excludes `TagEnd::Image`. Fixed in `crates/wolf-core/DECISIONS.md`, `crates/wolf-macos/DECISIONS.md`, `architecture.md`.
-2. **`markerColumnStride` promised a cross-language guard that does not exist.** Three sites claimed it was pinned against `wolf_core::markdown::MARKER_COLUMN_STRIDE`. The assertion is a Swift-side literal (`XCTAssertEqual(markerColumnStride, 100)`); nothing reads across the boundary, and the Rust suite re-declares its own copy. A Rust-side change fails no test in either suite. All three sites now say Swift-side drift only, mirrored by hand.
-3. Overstated heading coverage in `crates/wolf-core/tests/README.md`; overbroad "every JavaScript string" in `Sources/WolfKeyMap/README.md`; stale "two caveats" in `build.md`; a duplicate teardown fact; a history-voice sentence the linter cannot catch ("both defects **were** ordering bugs"); an alphabetical break; six precision fixes in the two `DECISIONS.md` sections.
-
-## Orchestrator verification (no agent could run these)
-
-The reviewer had no shell; these were run directly:
-
-- The six pure take-HEAD files are **byte-identical to HEAD** — zero diff lines. No content main auto-merged was lost to a wholesale take-HEAD.
-- **No unstaged changes to any non-`.md` file.** Every non-`.md` entry in `git status` is staged-only, from the merge itself.
-- Both `BUILD.bazel` files differ from main's version by exactly HEAD's own `markdown_srcs` filegroups — a **clean union**, with main's additions intact.
-
-## Deliberately out of scope — two stale source comments
-
-Both audits independently found **source comments that are wrong**, and one is the root cause of defect 1:
-
-- `crates/wolf-core/src/markdown.rs:168-173` claims "a fenced code block, a table and an image's alt text anchor to their block top by construction", contradicting `:114-120` in the same module. All three doc sites were faithful transcriptions of this stale sentence.
-- `Sources/WolfKeyMap/FrameStats.swift:74` describes `previewLoadHTML` as "One synchronous `loadHTMLString` call" — the same two-path staleness already corrected on the Markdown side.
-
-**Not fixed here.** Source must not change in a merge-resolution commit: it mixes two unrelated concerns and makes the merge hard to review. Reported to the user as follow-up work. The corrected prose describes what the code does, so no document works around them.
+# Work unit 17 — Markdown preview foundation for `wolf-gnome`
+
+Branch: `linux-feat/markdown-preview` off `linux`.
+
+## Scope
+
+Four `feat-list.md` "Markdown preview" rows and no more:
+
+1. In-app live preview pane (`b159793`)
+2. Preview pane reuse / placement modes (`937bb7f`)
+3. "Edit Source" (preview's inverse) (`8a72e50`)
+4. Full path in a preview pane's status bar (`2116415`)
+
+Not in scope, not to be ticked: follow-links, math/Inter font, preview theme
+following light/dark, typography tuning, syntax-highlighted code blocks,
+anonymous-buffer preview, preview-in-browser, and the "Pickers hosted in a
+separate floating panel" row.
+
+## WebKitGTK viability — measured, closed
+
+`webkitgtk_6_0` from the repo's own pinned nixpkgs is `webkitgtk-2.52.4+abi=6.0`,
+prebuilt in `cache.nixos.org`. **Incremental** devShell closure cost: 21 store
+paths, 210,011,768 bytes (0.196 GiB), 58.1 MiB compressed, 26.17 s warm fetch.
+`webkit6` 0.6.1 resolves against the workspace's exact pins with six new packages
+and zero version bumps, and builds in 28.66 s.
+
+It **renders under `cage` with zero extra environment variables**. OCR:
+`WEBKIT RENDER OK` / `PREVIEW PANE ALIVE`. A plain-`gtk::Label` control OCRs its
+own distinct string, proving the reader sees live pixels. A `WebView` in a
+`gtk::Paned` renders and clips correctly.
+
+Caveats carried, not designed around: the spike host has a real GPU and cage
+opened a DRM render node, so a render-node-less machine is inferred (forced
+pixman plus software GL also passed); and the probe document was tiny, while the
+real document inlines ~965 KiB of base64 fonts.
+
+## Design decisions
+
+**Where the web view lives.** Each pane leaf becomes a `gtk::Overlay` host whose
+main child is the existing `gtk::DrawingArea` and whose only overlay child is a
+`webkit6::WebView`, added and removed as the pane becomes and stops being a
+preview. Framed by margins from the same `editor_inset::grid_rect` under the same
+cap the grid would have used. `set_measure_overlay` stays `false`, or the web
+view's size request would inflate the pane minimum the whole crate is calibrated
+against. A window-level overlay child is rejected: a divider drag rebuilds
+nothing and issues no wake, so a margin-positioned window child would sit stale.
+
+**What occludes what — no `PaneOcclusion` analogue is needed.** `draw_pane`
+already fills the whole allocation with the editor background before anything
+else, so skipping the grid leaves the editor background rather than garbage —
+which is the exact failure macOS's zero-tolerance containment rule exists to
+prevent. The preview scratch buffer also has no lines, so its grid paints
+background and nothing else. The skip is therefore a one-bit predicate with no
+containment test and no tolerance. The statusbar strip is never skipped.
+
+**The floating-panel problem does not appear.** The four overlays are children of
+the window-level `gtk::Overlay`; the web view is a child of a per-pane overlay
+nested inside that overlay's main child. GTK 4 paints overlay children after the
+main child and all its descendants, so a picker composites over a preview by
+construction. Residual risk if WebKit renders via a Wayland subsurface — the
+smoke's picker-over-preview capture is what would catch it. Do not tick that row.
+
+**Focus.** `set_focusable(false)` plus `set_can_focus(false)` on both the web view
+and its host, so focus cannot enter the subtree. `focus_inside_pane_area()`'s
+guard already covers everything under `pane_area` and must not be weakened.
+
+**Placement and reuse** — a pure seam, ported from `PreviewSeam`/`EditSeam`:
+`pane_count <= 1` → `split_right` / `split_left`; `pane_count == 2` with the
+right polarity and exactly one counterpart → `reuse_preview_pane` /
+`reuse_editor_pane`; else `active`.
+
+**Blocking RPCs go from four to seven**: `open_preview`, `edit_source`, and the
+coalesced `render_preview`. Each gated on `Some(Liveness::Alive)` through a total
+match, the shape `nav_ui::nav_press` already uses.
+
+**The reload trigger** joins `Snapshot.previews` to `Snapshot.markdown_ticks` on
+`source_bufnr`, keyed as `PreviewLoad { source_bufnr, source_tick }`. Keying on
+the tick alone is wrong — two freshly opened files share a `changedtick`.
+Nothing on this path may be gated on `Snapshot.seq`, because the `wolf_*`
+notifications fire the wake without bumping it.
+
+**Status bar (row 4).** `WolfCore::pane_status` returns `[No Name]` for a preview
+pane, because preview windows are omitted from `win_buffers` entirely. A preview
+pane's status comes from `PreviewInfo` instead: `"Preview: " + basename`, with
+`core.display_path(source_path)` beneath it. `statusbar_layout` is untouched.
+
+**A preview pane's cap comes from `PreviewInfo.source_full_width`**, never from
+`full_width_for_win`, whose entry for a preview window is meaningless.
+
+**`snapshot_readiness`** returns `win_buffers.len() + previews.len()`, or an
+all-preview tab stalls persistence.
+
+## Corrections, as measured
+
+1. `flake.nix` needs **`pkgs.libsoup_3` as well as** `pkgs.webkitgtk_6_0` —
+   `webkitgtk-6.0.pc` requires `libsoup-3.0`, absent from the devShell. Applied.
+2. **Corrected — the earlier claim in this file was wrong.** `webkit6` *does*
+   compile against the locked `gtk4` 0.11.3, where `Accessible` is exported
+   ungated. The `v4_10` gate appears in **0.11.4**, which `^0.11` admits on any
+   `cargo update`, so the coupling is **latent rather than live**. Proven with a
+   throwaway crate pinned to `=0.11.4` + `v4_8`, which fails at **two** sites,
+   not one: `web_view.rs:27:129` and `web_view_base.rs:10:128`.
+3. `WEBKIT_FORCE_SANDBOX=0` does not exist in this ABI. The sandbox is mandatory.
+4. **A dangling `DBUS_SESSION_BUS_ADDRESS` kills the app before its first
+   frame.** Confirmed under `cage` in three cases: non-existent path fatal, unset
+   fine, existing-but-dead path fine. The proximate message on this host is
+   `bwrap: Can't create file at /.flatpak-info: Permission denied`, not the
+   `Can't find source path` quoted earlier. `cage_command` neither sets nor
+   clears the variable, so the smokes are safe here **by luck**. Fix:
+   `.env_remove("DBUS_SESSION_BUS_ADDRESS")` in `cage_command`, plus a fifth
+   entry in `cage_is_only_spawned_through_the_isolating_helper`'s asserted set.
+
+## The reload measurement
+
+Real document: **1,106,790 bytes** (body alone 79,943; head base64 986,960).
+Six runs, six samples each, under `cage`:
+
+| measurement | n | min | median | max |
+| --- | --- | --- | --- | --- |
+| full `load_html`, `Started`→`Finished` | 36 | 57.3 ms | **59.20 ms** | 70.6 ms |
+| `evaluate_javascript` body swap | 36 | 5.3 ms | **12.10 ms** | 16.7 ms |
+| first load in a fresh process | 6 | 154.6 ms | 157.60 ms | 178.0 ms |
+
+**The spike's 477-511 ms was a cold-start WebProcess-spawn figure**, not steady
+state. The two inlined faces are genuinely inside the 59 ms window
+(`document.fonts.ready` resolved at `Finished`, `status=loaded faces=2`), so the
+number is not misleading.
+
+Concurrent loads **serialize cleanly**: a second load issued 33 ms into a first
+does not reach `Started` until the first `Finished`; no dropped load, no
+`load_failed`, correct final document. A five-load burst at 33 ms produced four
+cycles — a still-pending request is superseded, so the backlog is bounded at one
+— with the final document landing 117.6 ms after the last keystroke.
+
+## The reload decision — measured, closed: JSON-encoded body swap
+
+**A full `load_html` destroys the scroll offset.** Measured on a 1,114,719-byte
+document rendered by the real `wolf_core::markdown::render_html` (body 87,872
+bytes; `scrollHeight` 10,802 px, so a 2,000 px offset is real and the
+measurement is not vacuous), under `cage`, across three processes:
+
+| measurement | n | min | median | max |
+| --- | --- | --- | --- | --- |
+| `scrollY` before a full `load_html` | 24 | 2000 | 2000 | 2000 |
+| **`scrollY` after `Finished`** | 24 | **0** | **0** | **0** |
+| `scrollY` around a JSON body swap | 24 | 2000 | 2000 | 2000 |
+| full `load_html`, `Started`→`Finished` | 24 | 54.53 ms | 55.66 ms | 57.50 ms |
+| body swap, layout deferred | 12 | 4.21 ms | 5.31 ms | 6.48 ms |
+| body swap, layout forced in-window | 12 | 11.80 ms | 12.41 ms | 14.92 ms |
+
+Zero in 24 of 24, having been 2000 immediately before. The earlier medians
+re-confirm: 55.66 ms `Started`→`Finished` against the recorded 59.20 ms — which
+matches this run's call→`Finished` of 58.94 ms almost exactly, so the two
+harnesses were timing slightly different endpoints. The recorded 12.10 ms swap
+figure corresponds to the forced-layout variant.
+
+**Decision: the JSON-encoded `evaluate_javascript` body swap.** It preserves
+scroll natively with no restore at all, costs 5.3 ms against 55.7 ms, ships
+~102 KB per keystroke instead of 1.11 MB, and avoids re-decoding ~1 MB of
+inlined base64 font every time. The one argument the reload had — no
+HTML-into-JS escaping — is answered by `serde_json::to_string` plus `JSON.parse`,
+which is three lines and immune to quotes in prose.
+
+Save-and-restore around a full reload was measured too and does work — restored
+offset exact in 24/24, ~2.04 ms after `Finished`, with exactly one rendered frame
+at offset 0. A `grim` sampler that provably catches a genuine single painted
+frame 2.9% of the time caught nothing in 210 captures of that path, so the frame
+is very likely never presented. It is rejected anyway: it is strictly more
+machinery for strictly worse numbers, and letting the restore slip four frames
+(measured) makes the flash plainly visible.
+
+**Do not "simplify" the body swap back to `load_html`.** That is the edit this
+measurement exists to prevent, and its symptom — the reader thrown to the top of
+the document on every keystroke — is exactly what hollows out the "live preview
+pane" row this unit ticks.
+
+### Two numbers that were not in the earlier table
+
+**Cold open costs ~255 ms from the call, not ~145 ms.** `Started`→`Finished` for
+a first load in a fresh process is 143-152 ms, but call→`Finished` is
+254.57 / 256.51 / 265.22 ms: about 110 ms elapses before `Started` fires at all,
+spawning the WebProcess, and the `Started`-anchored figure hides all of it. Any
+smoke that waits on a preview must budget from the call. Steady-state reloads
+have no such gap.
+
+Residual and unmeasured, identical under either strategy: scroll is preserved in
+PIXELS, so an edit above the viewport shifts the reader's content even though the
+offset is kept.
+
+## Process note
+
+The test-writer and this coder were run concurrently against one worktree, which
+produced spurious clippy failures from half-applied work. That was an
+orchestration error. Repo-writing agents are serialized from here.
+
+## The Bazel repin — first unit in this series that owes one
+
+`MODULE.bazel`'s `crate.from_cargo` reads `//:Cargo.lock`, and `Cargo.Bazel.lock`
+carries `wolf-gnome` in `workspace_members` with rendered `gtk4`/`libadwaita`
+nodes plus a top-level `checksum`. Adding `webkit6` moves `Cargo.lock` and
+invalidates it. There is no `bazel` or `bazelisk` on this host, so the branch
+necessarily lands with the two out of sync. Recommendation: an **unconditional**
+`[dependencies]` entry matching `gtk`/`adw`/`cairo`, since `gtk4-sys` already
+sits unconditionally in `Cargo.Bazel.lock` with a green macOS build.
+
+## Test-writer pass 1 — complete
+
+Created `crates/wolf-gnome/src/preview_ui.rs` (full API, bodies `todo!()`, ten
+tests). Modified `pane_layout.rs` (`LeafContent`, `encode` signature),
+`command_action.rs` (`UiAction::OpenPreview` / `EditSource`,
+`EXPECTED_DISPATCHED_IDS` 15 → 17, arms left `Deferred` so the table is red) and
+`lib.rs` (`pub mod preview_ui;`).
+
+**It corrected a vacuity in the orchestrator's own specification.** The five
+`needs_reload` rows I gave were *all* satisfiable by comparing `source_bufnr`
+alone — nothing distinguished the tick. A sixth row, "same buffer, advanced tick
+→ true", is the ordinary live-edit case and the only one that fails a
+bufnr-only implementation; row 4 remains the one that fails a tick-only one.
+`NAMED_RELOAD_ROWS = 6`.
+
+**Two production edits outside its remit, both needed or nothing compiles, both
+owed real work by the coder:**
+
+1. `pane_view.rs` `layout_snapshot` builds `LeafContent` with `preview: false`
+   and a `TODO(work unit 17)`. Behaviour-preserving, but the coder must supply
+   the real per-pane preview flag or preview panes persist as editor leaves.
+2. `shell.rs` `AppShell::perform` gained one combined arm for the two new
+   variants (an `E0004` otherwise). **This stub is covered by nothing** — no
+   fast-suite test reaches `perform`. The cage smoke must drive Preview through
+   the palette so this path is exercised end to end, or it ships silently dead.
+
+## Documentation debt (for the technical writer)
+
+- `src/README.md`: new `#### preview_ui.rs` entry; `#### pane_layout.rs` has two
+  stale lines (`encode(layout, paths)`, and "`preview` is always written false").
+- `src/lib.rs` crate-level seam list: no `preview_ui` bullet.
+- `command_action.rs` module doc says "the fifteen commands"; seventeen once the
+  arms flip. `Command::PreviewInBrowser`'s deferral reason claims it needs "the
+  preview row first", which this unit makes false.
+
+## The readiness hazard, sized against the real gate
+
+`state_seam::may_snapshot` (state_seam.rs 197-204) is
+`bound_panes >= 1 && reported_windows >= 1`, **not** a `bound == reported`
+equality. So a mixed editor/preview tab is unaffected: any single editor pane
+keeps `win_buffers` non-empty.
+
+The stall is real but narrow — it needs EVERY window in the tab to be a preview,
+which drives `win_buffers.len()` to 0 while `bound_panes` stays positive. That is
+reachable: preview into the active pane (`MODE_ACTIVE`) from a one-pane window.
+`snapshot_readiness` returning `win_buffers.len() + previews.len()` is the right
+fix, and the failure it prevents is losing the saved layout for an all-preview
+tab, not a general persistence stall.
+
+## Resumption workflow (orchestrator)
+
+Repo-writing agents are SERIALIZED. Order:
+
+0. Coder: the scroll-offset measurement, scratchpad only, no repo writes.
+1. Architect (read-only, concurrent with 0): the remaining wiring plan.
+2. Coder: implement everything but the new cage smoke.
+3. Test-writer: the cage smoke + the `cage_command` guard's fifth entry.
+4. Coder: run it, capture failure evidence with the feature disabled.
+5. Reviewer.
+6. Technical writer: the documentation debt above, plus `feat-list.md`.
+7. Orchestrator: commits, then merge into `linux`.
+
+## Amendment: the implementation spec
+
+Four places the code contradicts the sections above, and the second changes a
+scope decision.
+
+1. The readiness hazard is the narrow one described two sections up, not a
+   general stall. `snapshot_now` early-returns before it writes, so the failure is
+   "persistence silently stops updating", not "the saved layout is wiped".
+2. **`Command::Preview` and `Command::Edit` have no `actions::ACTION_TABLE`
+   row.** After the flip their only routes are the command palette and the
+   `:WolfPreview` / `:WolfEdit` Ex commands. Adding accelerator rows is OUT of
+   scope: it reddens `actions::bound_set_is_exactly_this_unit` and buys no
+   feat-list row. This is also why the cage smoke must go through the palette.
+3. `wolf-gnome` has no `BUILD.bazel` at all, so the new smoke needs no
+   `rust_test` target; `cargo test`'s discovery satisfies the CLAUDE.md rule. The
+   `Cargo.Bazel.lock` repin obligation is unaffected.
+4. `DECISIONS.md` carries the blocking inventory in three more places than the
+   documentation-debt list records: lines 101, 181 and 191.
+
+`crates/wolf-core/src/nvim.rs` 400-419 documents that `render_preview` renders at
+`WidthMode::Full` — the web-view FRAME applies the column cap, not the HTML — and
+that the `<head>` is byte-identical on every call, only the body changing. That is
+the premise the body-swap branch rests on.
+
+### `preview_ui.rs` — the seven bodies
+
+The ten tests determine all seven bodies except the eight refusal strings.
+`preview_placement`: `pane_count <= 1` FIRST (the `dominated` case forces the
+order) → `MODE_SPLIT_RIGHT`; then `pane_count == 2 && !active_is_preview &&
+other_preview_panes == 1` → `MODE_REUSE_PREVIEW_PANE`; else `MODE_ACTIVE`.
+`edit_placement` mirrors it with the polarity INVERTED — `active_is_preview` is
+true, not negated.
+
+Both presses match `Option<Liveness>` with no `_` arm, liveness first, and the
+accepted arm CALLS the placement function rather than re-deriving a mode.
+`may_render` writes its three false arms separately rather than as an or-pattern
+with a wildcard, so a new `Liveness` variant is an `E0004` as the module docs
+promise. `needs_reload` is `(None, _) => false`, `(Some, None) => true`,
+`(Some(c), Some(l)) => c != l`. `preview_status` forces BOTH paths empty for an
+empty source and returns the bare word with no trailing space.
+
+The eight refusal strings must be pairwise distinct across both directions,
+non-empty, and not sentence-cased. Write them in `nav_ui.rs`'s diction; the three
+liveness pairs are deliberately near-twins differing in the noun phrase, so
+`preview not opened: …` reads correctly beside `source not edited: …`.
+
+### `pane_view.rs`
+
+`PaneWidgets` gains four fields: `host: gtk::Overlay` (parented into the `Paned`
+tree, with the `DrawingArea` as its `set_child`), `preview:
+RefCell<Option<PreviewInfo>>`, `web: RefCell<Option<webkit6::WebView>>`, and
+`loaded: Cell<Option<PreviewLoad>>`. `PaneWidgets::new` builds the host, so all
+three call sites are unchanged. Import `webkit6::prelude::WebViewExt` TARGETED —
+the `webkit6::prelude::*` glob re-exports `gtk::prelude::*` and collides with the
+existing `adw::prelude::*`.
+
+The web view is created LAZILY when a pane first becomes a preview and removed
+when it stops being one; N eager WebProcesses at launch would move every existing
+smoke's timing budget. `set_measure_overlay(view, false)` is set EXPLICITLY even
+though `false` is GTK's default, because the reason it must stay false — the
+view's size request would inflate the pane minimum the crate is calibrated
+against — is exactly what gets simplified away.
+
+The join happens in `refresh_pane_state`, keeping its two-phase borrow shape.
+One snapshot guard, bound to a local, reads `previews.get(&win)` (keyed by the
+preview WINDOW handle, which is `PaneWidgets::win`, so it is a map lookup rather
+than a scan) and `markdown_ticks.get(&source_bufnr)`; the guard drops; then the
+guard-free per-pane core calls. An editor pane takes `pane_status` +
+`full_width_for_win` as today. A preview pane takes `display_path` +
+`preview_ui::preview_status` and its cap from `PreviewInfo.source_full_width`,
+and `pane_status` is NOT called for it at all.
+
+`draw_pane` extends its single existing borrow statement to a four-tuple carrying
+`is_preview`, then skips exactly two things: the grid block and the scrollbar
+thumb. The whole-allocation background fill and the entire statusbar strip are
+never skipped. The cursor goes with the grid — under an opaque web view it would
+paint invisibly.
+
+`build_layout_widget` and `rebuild_pane_area` switch to `p.host`. **The web view
+is a child of the host, so a rebuild never unparents it** and it keeps its
+WebProcess and its loaded document across every split, close and divider drag.
+Getting this wrong is silent and costs a respawn plus a fresh ~160 ms load on
+every layout change.
+
+### `shell.rs`
+
+One new reader `preview_shape`, in `read_active_win`'s idiom: one core borrow,
+one snapshot guard bound to a local. `pane_count` is `win_buffers.len() +
+previews.len()`; `other_editor_panes` counts `win_buffers`' keys (which are
+exactly the editor windows) minus the active one; `other_preview_panes` the same
+over `previews`. Then `open_preview` / `edit_source` in `copy_selection`'s exact
+shape, printing `preview not opened: {reason}` and `source not edited: {reason}`.
+The `i64` returns are explicitly discarded with a one-line reason: the front-end
+learns the new pane from the next wake's `wolf_preview` notification.
+
+**Never fold `is_markdown_active()` into a scope that already holds a snapshot
+guard** — it takes its own, and that is the deadlock `shell.rs`'s borrow
+discipline exists to prevent.
+
+### The cage smoke
+
+One test, two legs: `preview_pane_renders_and_edit_source_returns_under_cage`.
+Two fixtures whose filenames cannot satisfy their own assertions, both registered
+in `RELAUNCH_FIXTURE_NAMES` and `ASSERTED_OCR_TERMS`. Open the other file, vsplit
+via the `<C-w>v` chord (not a typed `:vsplit` — the keymap is what emits the
+`wolf_layout` Split intent), open the Markdown file in the new pane, then drive
+Preview through the palette. The placement is `MODE_ACTIVE`, so the source text is
+no longer displayed anywhere and an OCR hit on the body can only be WebKit's
+pixels. Then drive Edit through the palette; the placement is
+`MODE_REUSE_EDITOR_PANE`, so the other pane's buffer is replaced.
+
+Four discriminators: OCR of the rendered body (falsified by dropping the
+`load_preview_document` call); OCR of `preview` in the statusbar (falsified by
+letting a preview pane keep `core.pane_status`); a `writefile` readback showing
+exactly one `Preview: ` buffer among two windows (falsified by restoring today's
+stub arm in `perform`); and a second readback showing the source bound into the
+other pane with `zother.md` gone (falsified by copying `preview_placement`'s
+polarity into `edit_placement`). The `CommandMru` check is a precondition, not a
+discriminator — `record` runs BEFORE the dispatch.
+
+### Deliberately not tested, not ticked
+
+Picker-over-preview compositing (the residual Wayland-subsurface risk) and
+scroll-offset preservation. No smoke here can read a scroll offset.
+
+### Known present-tense limitation to record, not fix
+
+A click inside a preview pane never reaches `on_pane_clicked`, because the web
+view takes pointer input — which it must, or the pane cannot be scrolled. So a
+preview pane cannot be focused by clicking; `<C-w>w` and nvim's own
+post-placement focus are the routes. **Do not "fix" this with
+`set_can_target(false)`**, which kills scrolling and with it most of what makes
+the pane a preview rather than a picture.
+
+### Order
+
+`preview_ui` bodies → `pane_layout::encode` → `command_action` arms →
+`pane_view` structure (host overlay only, no behaviour change; re-run
+`click_then_close_keeps_keyboard_input_alive_under_cage` here, before any preview
+code exists, so a regression is diagnosable as a widget-tree bug) → the
+`pane_view` join → the web view → `shell.rs` → the smoke → failure evidence →
+correction 4.
+
+## A test claims more than it does
+
+`the_two_placements_are_inverses` does NOT catch the polarity inversion.
+Measured: with `edit_placement`'s reuse clause written as `!p.active_is_preview`,
+the whole `--lib` suite goes 253 → 252 passed with `edit_placement_table` the
+single failure; the inverses test stays green. It asserts each function's RANGE
+over the sweep, and an inverted clause still produces all three modes — just for
+different inputs. So `edit_placement_table`'s row 4 is the sole guard on the
+single most likely edit in the file, and `preview_ui.rs`'s module doc (lines
+25-33) overstates it.
+
+Resolution: strengthen the test to state the separation it claims, rather than
+weaken the doc to match. The doc describes the intended design and the design is
+right; one row is too thin a guard for it.
+
+## The payload must be double-encoded, and that was a measured bug
+
+The first implementation encoded the body ONCE, so the JS literal's value was the
+HTML itself and `JSON.parse` was handed HTML. Every keystroke printed
+`preview body swap failed: about:blank:1:68: SyntaxError: JSON Parse error:
+Unrecognized token '<'` while the preview silently kept showing the stale
+document. `preview_swap_payload` applies `serde_json::to_string` twice — inner
+makes JSON text, outer makes the JS string literal, the script's `JSON.parse`
+undoes the inner — then escapes U+2028/U+2029 in the outer text.
+
+**This would have shipped green.** The initial open goes through `load_html` and
+looks perfect; only the SECOND load into a view takes the swap branch. A smoke
+that opens a preview and asserts on it, without then editing the source, cannot
+see it. That is why the smoke needs a live-edit leg.
+
+## Measured: the suite guards none of this
+
+With `AppShell::open_preview` neutered by an early `return` — which removes the
+RPC, the preview window, the `PreviewInfo`, the web view, the statusbar and the
+persisted flag — the whole workspace stayed green: 253 lib passed, 48 smokes
+passed, exit 0. No assertion anywhere in the repository covers a single
+behaviour this unit adds. Closing that is the test-writer's pass.
+
+## The all-preview tab is reachable, so `snapshot_readiness`'s fix is not dead
+
+The coder doubted it, reasoning that `preview_placement` never answers
+`MODE_ACTIVE` for a lone pane. True, but the route runs through three panes: at
+`pane_count == 3` every shape falls to `MODE_ACTIVE`, so pressing Preview in each
+pane in turn converts all three, driving `win_buffers.len()` to 0 while
+`bound_panes` stays at 3. The two-pane route is genuinely closed — with one
+preview already present, `other_preview_panes == 1` sends the press to
+`reuse_preview_pane` instead.
+
+Not covered by a test: the smoke always has two panes, and a three-pane cage
+scenario costs a launch to guard one integer. Recorded here instead.
+
+## Review verdict: needs revision, on evidence rather than on code
+
+The reviewer found no defect in the borrow discipline, the blocking gates, the
+totality, the reload strategy or the widget structure, and confirmed nothing out
+of scope was built or ticked. Four items block:
+
+1. The smoke's assertion table has six empty `measured` cells. The red runs were
+   all performed and captured; they were never pasted back into the table the
+   file's own header says is the coder's to fill.
+2. Row 7's prose is wrong, confirmed independently: under the stub-`perform`
+   revert, assertion 5 PASSES — the split pane still draws `pvsrc.md`'s raw
+   Markdown, which contains the asserted heading — and assertion 6 reports first.
+3. `head_offset` and `body_inner` are pure, decision-carrying functions with zero
+   coverage, in a module that already unit-tests their two siblings. The head
+   guard's four fall-back conditions and `body_inner`'s first-open/last-close
+   asymmetry are exactly what `load_preview_document` is built on.
+4. `command_action.rs`'s test `desc` for `PreviewInBrowser` still asserts a
+   blocker this unit removed, though the runtime reason beside it was corrected.
+
+### Recorded, not fixed
+
+- `refresh_previews` sets `loaded` even on the path where the document never
+  reached a view. Unreachable today because `sync_preview_view` runs over the
+  same ids first, but the invariant is load-bearing and undocumented at the write
+  site.
+- `body_inner`'s first-`<body` scan runs over the head too, and the head carries
+  the font licence notices inside an HTML comment. A licence text containing the
+  literal `<body` would move the start offset into the head. `wolf-core`'s
+  `the_notices_cannot_terminate_an_html_comment` guards `<!--`/`-->`/`--!>` and
+  nothing else. Shared with macOS, so parity rather than regression.
+- A non-UTF-8 source path goes through `to_string_lossy` and is persisted as
+  `abs_path`, so it would not reopen. Bounded by `PaneStatus`'s `String` fields.
+- `wolf-core`'s GUI-dependency denylist grep does not name `webkit`, `soup` or
+  `javascriptcore`. Not broken — `webkit6` requires `gtk4`, which the existing
+  pattern catches — but one class behind the workspace.
+
+## Status: complete
+
+Whole workspace green — 93 test targets, 0 failed; 261 `wolf-gnome` lib tests and
+49 smokes. `cargo fmt --check`, `prettier --check "**/*.md"`, `cargo clippy
+--workspace --all-targets -D warnings` and `cargo build --workspace
+--all-targets` all clean. `markdown_check.sh` reports no findings across the
+seven edited documents.
+
+Every discriminator has a fresh red run captured against the final tree, pasted
+into the smoke's own `measured` column. The reordering worked: the pixel-free
+readback now aborts first under the stub-`perform` revert, and assertion 6 was
+confirmed independently by OCR-ing the retained capture NOT to fail under it.
+
+Four `feat-list.md` rows ticked and no others.
+
+Owed and not doable here: `Cargo.Bazel.lock` is out of sync with `Cargo.lock`,
+which gained six packages (`webkit6`, `webkit6-sys`, `javascriptcore6`,
+`javascriptcore6-sys`, `soup3`, `soup3-sys`). There is no `bazel`/`bazelisk` on
+this host. It needs `CARGO_BAZEL_REPIN=1` on a macOS host. `wolf-gnome` has no
+`BUILD.bazel`, so no test-target wiring is owed — only the lock.
