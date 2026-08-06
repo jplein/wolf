@@ -74,6 +74,10 @@ Purpose: the OS dark/light rulebook — what a configured `appearance` resolves 
 - A forced appearance takes `ForceDark`/`ForceLight`, never `PreferDark`/`PreferLight`, which yield to the desktop preference the user wrote the config line to override.
 - The notify handler pushes `background` and never re-sets the scheme, and is armed after the launch-time set: re-applying a property from inside its own notify handler is the shape that loops.
 
+**Gotchas**
+
+- What `set_color_scheme` reaches beyond the chrome, and the GTK version that ends it: [The preview's light and dark](../DECISIONS.md#the-previews-light-and-dark).
+
 #### `buffer_picker.rs`
 
 Purpose: the buffer-picker overlay — a search entry over the captive Neovim's listed buffers, ranked by `wolf_core::rank_buffers`. Activating a row switches the active window to that buffer.

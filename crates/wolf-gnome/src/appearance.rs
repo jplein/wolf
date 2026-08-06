@@ -155,11 +155,20 @@ fn push_background(core: &Rc<RefCell<Option<WolfCore>>>, dark: bool) {
 /// whose `assert_initialized_main_thread!()` aborts without a live GTK main
 /// thread, so there is no headless test for this function and none should be
 /// added. What is testable is the decision it carries out, which is
-/// [`appearance_decision`]'s six-row table; what is observable end to end is that
-/// the configured value reaches Neovim's `background`, which
-/// `configured_appearance_reaches_neovims_background_under_cage` in
-/// `tests/smoke_headless.rs` is what proves. The step order this function must
-/// keep is in the module docs.
+/// [`appearance_decision`]'s six-row table.
+///
+/// Both effects this function applies are observed end to end, by two compositor
+/// smokes in `tests/smoke_headless.rs`:
+///
+/// - `configured_appearance_reaches_neovims_background_under_cage` observes the
+///   `push_background` call — that the configured value reaches Neovim's
+///   `background`.
+/// - `preview_document_follows_the_configured_appearance_under_cage` observes the
+///   `set_color_scheme` call, by decoding the rendered preview's pixels at both
+///   configured appearances. Deleting that one line reddens it and nothing else
+///   in the repository, because nothing else observes it.
+///
+/// The step order this function must keep is in the module docs.
 pub fn apply_at_launch(config: &WolfConfig, core: &Rc<RefCell<Option<WolfCore>>>) {
     let manager = adw::StyleManager::default();
     // `Appearance` is `Copy`, so the notify handler below can carry the configured
