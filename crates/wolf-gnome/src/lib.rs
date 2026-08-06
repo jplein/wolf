@@ -159,9 +159,11 @@
 //!   home prefix abbreviated to `~` on a full path-SEGMENT boundary and an
 //!   ALWAYS-INJECTED `home` (never an implicit `$HOME` read) — [`title`].
 //! - [`mod@pane_layout`]: the codec between the live [`layout`] `PaneLayout` (leaf
-//!   IDS) and the persisted `wolf_core::PaneNode` (leaf PATHS), including
-//!   [`pane_layout::is_empty_leaf`] — the CONTENT predicate that decides whether a
-//!   layout is persisted at all, and which must never be an arity test.
+//!   IDS) and the persisted `wolf_core::PaneNode`, whose leaves carry a
+//!   [`pane_layout::LeafContent`] — a RAW absolute path plus the flag saying the pane
+//!   shows a Markdown preview of it. Includes [`pane_layout::is_empty_leaf`] — the
+//!   CONTENT predicate that decides whether a layout is persisted at all, and which
+//!   must never be an arity test.
 //! - [`restore_plan`]: the whole launch plan (cwd, empty state, saved pane tree,
 //!   window size) plus the write-side rules — which snapshots may be committed,
 //!   what cwd is persisted, and the one-window/one-tab shape ([`state_seam`]).
@@ -192,6 +194,18 @@
 //!   land in a RESTARTED Neovim minutes later). Plus what may cross in each
 //!   direction ([`clipboard_ui::clipboard_write`], whose `None` means write NOTHING
 //!   rather than clear, and [`clipboard_ui::paste_payload`]).
+//! - [`mod@preview_ui`]: the MARKDOWN PREVIEW rulebook — where a Preview press opens
+//!   its pane and where its inverse lands the source editor, two rules whose reuse
+//!   branches differ ONLY in the polarity of `active_is_preview`
+//!   ([`preview_ui::preview_placement`], [`preview_ui::edit_placement`]); three
+//!   TOTAL `Option<`[`wolf_core::Liveness`]`>` guards over the three BLOCKING RPCs
+//!   this adds, two for the presses and one for the per-wake render
+//!   ([`preview_ui::preview_press`], [`preview_ui::edit_press`],
+//!   [`preview_ui::may_render`]); whether a bound web view must be reloaded, keyed
+//!   on the source buffer's number AND its `changedtick` because two freshly opened
+//!   files share a tick ([`preview_ui::needs_reload`], [`preview_ui::PreviewLoad`]);
+//!   and a preview pane's two statusbar lines, which come from its own source path
+//!   rather than from `WolfCore::pane_status` ([`preview_ui::preview_status`]).
 //! - [`actions`]: the action namespace as data — [`actions::ACTION_TABLE`],
 //!   [`actions::MENU_SECTIONS`], and the [`actions::parse_accel`] /
 //!   [`actions::forbidden_reason`] checker that mechanically enforces "no Neovim
@@ -206,8 +220,10 @@
 //!
 //! [`app::run`] builds an `adw::ApplicationWindow` with a
 //! header bar whose editor area is a **native pane view** ([`pane_view`]) — a tree
-//! of nested `gtk::Paned`s with one `gtk::DrawingArea` per Neovim window, driven by
-//! the pure [`layout`] `PaneTree` — plus a bottom **cmdline strip** showing the
+//! of nested `gtk::Paned`s with one `gtk::Overlay` host per Neovim window, whose main
+//! child is that pane's `gtk::DrawingArea` and whose only overlay child is a
+//! `webkit6::WebView`, present exactly while the pane shows a Markdown preview,
+//! driven by the pure [`layout`] `PaneTree` — plus a bottom **cmdline strip** showing the
 //! command line, with the message toast and the completion popup as the pane view's
 //! two overlay surfaces above it (the command line, messages and completions all live
 //! outside the window grids under `ext_multigrid`, which is why these surfaces exist).
@@ -260,6 +276,7 @@ pub mod pane_layout;
 pub mod pane_view;
 pub mod persistence;
 pub mod picker;
+pub mod preview_ui;
 pub mod refresh_coalescer;
 pub mod render;
 pub mod scrollbar;

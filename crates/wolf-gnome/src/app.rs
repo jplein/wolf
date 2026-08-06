@@ -36,26 +36,35 @@
 //!   The layout is queued on the pane view
 //!   ([`crate::pane_view::PaneHandle::request_layout_rebuild`]) and realized on
 //!   the first wake with a window grid, through `WolfCore::rebuild_layout`. That
-//!   is ONE of the FOUR blocking RPCs this front-end issues — at most once per
-//!   launch, before the window is interactive, never on the crash path. The second
-//!   is the buffer picker's candidate snapshot (`WolfCore::list_buffers`), which a
-//!   RUNNING window can issue on Ctrl+Shift+E, behind
-//!   [`crate::buffer_picker::open_decision`]'s guard that it be issued only while
-//!   the core reads `Alive`. The third is a per-pane navigation move
-//!   (`WolfCore::history_back` / `history_forward`) on Alt+Left / Alt+Right, behind
-//!   [`crate::nav_ui::nav_press`]'s guard of exactly the same shape. The FOURTH is
-//!   the Copy yank (`WolfCore::copy_visual_selection`), which a RUNNING window
-//!   issues on Ctrl+Shift+C, behind [`crate::clipboard_ui::copy_decision`]'s guard
-//!   of that same shape. Any of the
-//!   four can mark the core `Liveness::NotResponding` and raise the stall overlay.
+//!   is ONE of the SEVEN blocking RPCs this front-end issues — at most once per
+//!   launch, before the window is interactive, never on the crash path.
+//!
+//!   The second is the buffer picker's candidate snapshot
+//!   (`WolfCore::list_buffers`), which a RUNNING window can issue on Ctrl+Shift+E,
+//!   behind [`crate::buffer_picker::open_decision`]'s guard that it be issued only
+//!   while the core reads `Alive`. The third is a per-pane navigation move
+//!   (`WolfCore::history_back` / `history_forward`) on Alt+Left / Alt+Right and the
+//!   fourth the Copy yank (`WolfCore::copy_visual_selection`) on Ctrl+Shift+C, each
+//!   behind a guard of exactly that shape ([`crate::nav_ui::nav_press`],
+//!   [`crate::clipboard_ui::copy_decision`]).
+//!
+//!   The last three are the MARKDOWN PREVIEW's: `WolfCore::open_preview`,
+//!   `WolfCore::edit_source`, and the `WolfCore::render_preview` that
+//!   `pane_view::refresh_previews` issues once per changed source per wake — the
+//!   only one of the seven that can repeat while the user simply types. All three
+//!   are gated through [`mod@crate::preview_ui`] with the buffer picker's argument
+//!   and its limits. Any of the seven can mark the core `Liveness::NotResponding`
+//!   and raise the stall overlay.
+//!
 //!   PASTE adds none: `gdk::Clipboard::read_text_async` resolves on a later
 //!   main-loop turn and `WolfCore::paste` is fire-and-forget on the ordered input
-//!   channel, so nothing on that path can time out.
-//!   The project-search overlay adds NEITHER a fifth
-//!   blocking call nor a further stall path: `start_search` `spawn_blocking`s onto
-//!   the tokio runtime, `open_at` is fire-and-forget, and the one blocking call it
-//!   could have made — `WolfCore::ignorecase()` — is deliberately not made. Writing
-//!   back is [`crate::persistence`]: a snapshot on
+//!   channel, so nothing on that path can time out. The project-search overlay adds
+//!   NEITHER an eighth blocking call nor a further stall path: `start_search`
+//!   `spawn_blocking`s onto the tokio runtime, `open_at` is fire-and-forget, and the
+//!   one blocking call it could have made — `WolfCore::ignorecase()` — is
+//!   deliberately not made.
+//!
+//!   Writing back is [`crate::persistence`]: a snapshot on
 //!   every wake, and a final synchronous snapshot + flush as the FIRST thing
 //!   [`wire_close`] does. The tab's `sidebar_visible` is written from the user's
 //!   PREFERENCE and read back at launch through

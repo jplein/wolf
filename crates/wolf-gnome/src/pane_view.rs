@@ -154,11 +154,15 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use gtk::glib;
+use gtk::{gio, glib};
+// TARGETED, never `webkit6::prelude::*`: that glob re-exports `gtk::prelude::*`,
+// which collides with the `adw::prelude::*` already in scope above and makes every
+// `WidgetExt` method ambiguous. Only the web view's own methods are wanted here.
+use webkit6::prelude::WebViewExt;
 
 use wolf_core::{
-    CursorShape, LayoutIntent, MouseAction, MouseEvent, PaneNode, PaneStatus, Rgb, ScrollEvent,
-    Snapshot, SplitOrientation, ToastChunk, WolfCore,
+    CursorShape, LayoutIntent, MouseAction, MouseEvent, PaneNode, PaneStatus, PreviewInfo, Rgb,
+    ScrollEvent, Snapshot, SplitOrientation, ToastChunk, WolfCore,
 };
 
 use crate::cmdline_ui::{self, PumView, ToastView};
@@ -167,6 +171,7 @@ use crate::geometry;
 use crate::layout::{Orientation, PaneId, PaneLayout, PaneTree};
 use crate::mouse::{self, PaneScroll, ScrollAccumulator};
 use crate::pane_layout;
+use crate::preview_ui::{self, PreviewLoad};
 use crate::render::{draw_glyph, draw_text_line, FALLBACK_BG, FALLBACK_FG};
 use crate::scrollbar;
 use crate::state_seam;
@@ -208,24 +213,35 @@ const ACTIVE_PANE_CSS_DATA: &str =
 const RGB_MAX: f64 = 255.0;
 
 /// The widgets and pointer state bound to one pane: its Neovim window handle, its
-/// grid (pending until `win_pos` is observed), its drawing area (reused across
-/// rebuilds by id), the per-pane mouse/scroll bookkeeping, and the statusbar text
-/// cached on the last wake.
+/// grid (pending until `win_pos` is observed), its host overlay and drawing area
+/// (both reused across rebuilds by id), the per-pane mouse/scroll bookkeeping, the
+/// statusbar text cached on the last wake, and — for a preview pane — its bound
+/// source, its web view and what that view was last loaded from.
 ///
-/// Every mutable field is a `Cell` — with ONE exception, `status` — because all
-/// access is on the single GTK main thread and a `Cell` cannot have a borrow
-/// accidentally held across a [`WolfCore`] call (the rule this whole module
-/// follows). `status` is a `RefCell` because [`PaneStatus`] owns three `String`s
-/// and is therefore not `Copy`; it obeys the same rule by discipline instead. It is
-/// borrowed in exactly two places — cloned out inside a single statement in
-/// [`PaneInner::draw_pane`], written inside a single statement in
-/// [`PaneInner::refresh_pane_state`] — and neither borrow is ever live across a
-/// core call.
+/// Every mutable field is a `Cell` where its type allows, because all access is on
+/// the single GTK main thread and a `Cell` cannot have a borrow accidentally held
+/// across a [`WolfCore`] call (the rule this whole module follows). Three fields
+/// cannot be: `status` ([`PaneStatus`] owns three `String`s), `preview`
+/// ([`PreviewInfo`] owns a `PathBuf`) and `web` (a `webkit6::WebView` is a
+/// refcounted `GObject`), so they are `RefCell`s obeying the same rule by
+/// discipline instead. Each is borrowed only inside a single statement — cloned or
+/// copied out where it is read, written where [`PaneInner::refresh_pane_state`] or
+/// [`PaneInner::sync_preview_view`] fills it — and no such borrow is ever live
+/// across a core call.
 struct PaneWidgets {
     /// The Neovim window handle this pane is bound to.
     win: i64,
     /// The grid id this pane paints, or `None` until resolved via `grid_for_win`.
     grid: Cell<Option<u64>>,
+    /// The pane's leaf widget: a `gtk::Overlay` whose main child is `area` and whose
+    /// only overlay child is the preview `web` view, when there is one.
+    ///
+    /// **This — not `area` — is what the `gtk::Paned` tree parents**, which is what
+    /// keeps a web view attached across every split, close and divider drag: a
+    /// rebuild re-parents the host, and the view is the host's child rather than the
+    /// tree's. Unparenting it instead would cost a WebProcess respawn and a fresh
+    /// cold load (~255 ms from the call) on every layout change.
+    host: gtk::Overlay,
     /// The pane's drawing area (reused by [`PaneId`] across tree rebuilds).
     area: gtk::DrawingArea,
     /// The grid captured at PRESS, pinning the drag target for the rest of the
@@ -271,18 +287,65 @@ struct PaneWidgets {
     /// against the snapshot would re-request the same size on every wake until it
     /// caught up.
     requested_grid: Cell<Option<(u16, u16)>>,
+    /// This pane's [`PreviewInfo`] when it is a preview pane, `None` when it is an
+    /// ordinary editor pane. Filled once per wake by
+    /// [`PaneInner::refresh_pane_state`] from `Snapshot::previews`, keyed by this
+    /// pane's own `win`.
+    ///
+    /// It is the ONE per-pane preview predicate: the statusbar source,
+    /// [`PaneInner::draw_pane`]'s grid skip, the persisted leaf's `preview` flag and
+    /// [`PaneInner::sync_preview_view`]'s create/remove decision all read it, so a
+    /// pane cannot be a preview for one of them and an editor for another.
+    preview: RefCell<Option<PreviewInfo>>,
+    /// This pane's web view, created when it first becomes a preview and dropped
+    /// when it stops being one ([`PaneInner::sync_preview_view`]).
+    ///
+    /// Lazily rather than eagerly: a `WebView` spawns its own WebProcess, and N of
+    /// them at launch would move every existing cage smoke's timing budget.
+    web: RefCell<Option<webkit6::WebView>>,
+    /// The `(source_bufnr, source_tick)` pair this pane's view was last loaded from,
+    /// for [`preview_ui::needs_reload`]. `None` for a view that has never been
+    /// loaded, and cleared with the view itself.
+    loaded: Cell<Option<PreviewLoad>>,
+    /// The join of `Snapshot::previews` and `Snapshot::markdown_ticks` for THIS
+    /// wake, filled beside `preview` by [`PaneInner::refresh_pane_state`] and
+    /// compared against `loaded` by [`PaneInner::refresh_previews`].
+    ///
+    /// Cached rather than re-read where it is used, so the one function that issues
+    /// the BLOCKING `render_preview` holds no snapshot guard at all — the strongest
+    /// form of the rule the rest of this file follows by keeping its guards short.
+    current_load: Cell<Option<PreviewLoad>>,
+    /// The byte offset of `</head>` in the document last loaded into this pane's
+    /// view, or `0` when no document has been loaded into it.
+    ///
+    /// `0` is an unambiguous sentinel: a rendered preview always opens with a
+    /// `<!doctype html><html><head>` prologue, so a real `</head>` can never sit at
+    /// offset 0. See [`PaneInner::load_preview_document`] for what it guards.
+    head_len: Cell<usize>,
 }
 
 impl PaneWidgets {
-    /// Binds `area` to window `win` (and `grid`, when already resolved), with the
-    /// pointer state zeroed.
+    /// Binds `area` to window `win` (and `grid`, when already resolved), wraps it in
+    /// the pane's host overlay, and zeroes the pointer state.
     ///
     /// Both construction sites (`ensure_initial_pane`, `apply_split`) go through
     /// here, so a future field is one edit rather than two.
     fn new(win: i64, grid: Option<u64>, area: gtk::DrawingArea) -> Self {
+        let host = gtk::Overlay::builder().hexpand(true).vexpand(true).build();
+        host.set_child(Some(&area));
+        // Focus must not be able to enter this subtree: `focusable(false)` keeps the
+        // host itself out of the focus chain and `can_focus(false)` keeps every
+        // descendant — including a `webkit6::WebView` added later — out of it too.
+        // The pane areas' non-focusability is the invariant
+        // `click_then_close_keeps_keyboard_input_alive_under_cage` executes; a
+        // focusable widget under `pane_area` that a rebuild destroys is the wedge it
+        // exists to prevent.
+        host.set_focusable(false);
+        host.set_can_focus(false);
         Self {
             win,
             grid: Cell::new(grid),
+            host,
             area,
             drag_grid: Cell::new(None),
             drag_button: Cell::new(None),
@@ -293,8 +356,53 @@ impl PaneWidgets {
             status: RefCell::new(wolf_core::pane_status("", None, None)),
             full_width: Cell::new(false),
             requested_grid: Cell::new(None),
+            preview: RefCell::new(None),
+            web: RefCell::new(None),
+            loaded: Cell::new(None),
+            current_load: Cell::new(None),
+            head_len: Cell::new(0),
         }
     }
+}
+
+/// One pane's raw SNAPSHOT join: what [`PaneInner::refresh_pane_state`]'s guarded
+/// read phase produces, before its guard-free core calls turn it into a
+/// [`PaneState`].
+struct PaneJoin {
+    /// The pane this join belongs to.
+    id: PaneId,
+    /// Its bound grid, for `WolfCore::pane_status`.
+    grid: u64,
+    /// Its bound Neovim window, for `WolfCore::full_width_for_win` and as the key
+    /// `Snapshot::previews` was looked up under.
+    win: i64,
+    /// Its `Snapshot::previews` entry, or `None` for an editor pane.
+    preview: Option<PreviewInfo>,
+    /// `previews` joined to `markdown_ticks` on `source_bufnr`, `None` for an editor
+    /// pane.
+    load: Option<PreviewLoad>,
+}
+
+/// One pane's per-wake state, carried from [`PaneInner::refresh_pane_state`]'s
+/// read phase to its write-back phase.
+///
+/// One value rather than a five-tuple, because two of its fields are `Option`s of
+/// unrelated types and a positional tuple of that shape is exactly where a preview's
+/// info and a preview's load get swapped.
+struct PaneState {
+    /// The pane this state belongs to.
+    id: PaneId,
+    /// Its statusbar strings, from `WolfCore::pane_status` or
+    /// [`preview_ui::preview_status`].
+    status: PaneStatus,
+    /// Its column-cap flag, from `WolfCore::full_width_for_win` or
+    /// [`PreviewInfo::source_full_width`].
+    full_width: bool,
+    /// Its bound preview source, or `None` for an editor pane.
+    preview: Option<PreviewInfo>,
+    /// The `(source_bufnr, source_tick)` join for this wake, `None` for an editor
+    /// pane.
+    load: Option<PreviewLoad>,
 }
 
 /// A mouse/scroll target: a grid id, that grid's LIVE dimensions read from the
@@ -422,6 +530,11 @@ impl PaneInner {
         // `update_active_pane` keeps "read core state" before "decide the active
         // pane and paint", mirroring the order already here.
         self.refresh_pane_state();
+        // AFTER `refresh_pane_state`, which is what fills the per-pane `preview` and
+        // `current_load` this reads, and BEFORE `sync_pane_grids`, so a pane that
+        // just became (or stopped being) a preview has its web view attached or gone
+        // before any resize is issued against the frame it shares.
+        self.refresh_previews();
         // AFTER `refresh_pane_state`, because the cap it re-requests against depends
         // on the flag that call just cached; BEFORE `update_active_pane`, because
         // "read core state, then decide, then paint" is the order already here.
@@ -568,24 +681,37 @@ impl PaneInner {
         // Without this every restored pane paints `[No Name]` for one frame: this
         // path early-returns from the wake, so the normal refresh never runs.
         self.refresh_pane_state();
-        // Same reason, for the same early return: a restored pane whose buffer
-        // carries the full-width flag would otherwise spend a frame at the capped
-        // width, since nothing else on this path re-requests a grid size.
+        // Same early return, same reason: a restored preview pane would otherwise
+        // wait a whole wake for its web view, showing the empty scratch grid where
+        // the document belongs.
+        self.refresh_previews();
+        // Same reason again: a restored pane whose buffer carries the full-width
+        // flag would otherwise spend a frame at the capped width, since nothing else
+        // on this path re-requests a grid size.
         self.sync_pane_grids();
         self.queue_redraw();
     }
 
-    /// Reads every bound pane's statusbar strings from
-    /// `WolfCore::pane_status(grid)` and its window's `b:wolf_full_width` from
-    /// `WolfCore::full_width_for_win(win)`, and caches both on the pane.
+    /// Reads every bound pane's statusbar strings, its column-cap flag and — for a
+    /// preview pane — its bound source and that source's `changedtick`, and caches
+    /// all of them on the pane.
     ///
-    /// **This is the only place either is called**, and the cache is what makes
-    /// that possible: [`Self::draw_pane`] holds a snapshot read guard for its whole
-    /// body while both take `read_snapshot()` again internally, and `shell.rs`'s
-    /// borrow-discipline section records that a re-entrant read can deadlock behind
-    /// a queued writer. Both calls are RPC-free, and they cost exactly two per bound
-    /// pane per wake — the same budget [`Self::layout_snapshot`] spends, since that
-    /// reads this cache rather than calling again.
+    /// **This is the only place `WolfCore::pane_status`, `full_width_for_win` and
+    /// `display_path` are called**, and the cache is what makes that possible:
+    /// [`Self::draw_pane`] holds a snapshot read guard for its whole body while all
+    /// three take `read_snapshot()` or `live_cwd()` again internally, and
+    /// `shell.rs`'s borrow-discipline section records that a re-entrant read can
+    /// deadlock behind a queued writer. All of them are RPC-free, and they cost
+    /// exactly two per bound pane per wake — the same budget [`Self::layout_snapshot`]
+    /// spends, since that reads this cache rather than calling again.
+    ///
+    /// An EDITOR pane takes `pane_status` + `full_width_for_win`. A PREVIEW pane
+    /// takes `display_path` + [`preview_ui::preview_status`] and its cap from
+    /// [`PreviewInfo::source_full_width`], and **`pane_status` is not called for it
+    /// at all**: preview windows are omitted from `win_buffers` entirely, so core
+    /// answers `[No Name]` for one. `full_width_for_win` is skipped for the same
+    /// reason — its entry for a preview window describes the scratch buffer, not the
+    /// source the pane is showing.
     ///
     /// The full-width flag is per WINDOW and never per application, because
     /// `b:wolf_full_width` is a BUFFER variable reported per window: two panes side
@@ -593,8 +719,10 @@ impl PaneInner {
     /// another's.
     ///
     /// Two-phase, like [`Self::layout_snapshot`]: the `panes` borrow that collects
-    /// the targets is dropped before the core borrow is taken, and the core borrow
-    /// is dropped before the results are written back.
+    /// the targets is dropped before the core borrow is taken, the ONE snapshot
+    /// guard that joins `Snapshot::previews` to `Snapshot::markdown_ticks` is bound
+    /// to a local and dropped before any core call, and the core borrow is dropped
+    /// before the results are written back.
     fn refresh_pane_state(&self) {
         let targets: Vec<(PaneId, u64, i64)> = {
             let panes = self.panes.borrow();
@@ -606,22 +734,75 @@ impl PaneInner {
         if targets.is_empty() {
             return;
         }
-        let states: Vec<(PaneId, PaneStatus, bool)> = {
+        let states: Vec<PaneState> = {
             let core_ref = self.core.borrow();
             let Some(core) = core_ref.as_ref() else {
                 return;
             };
-            targets
+            // Phase one: the snapshot join, under a guard bound to a local so it is
+            // gone before the guard-free core calls below. `previews` is keyed by the
+            // preview WINDOW handle, which is `PaneWidgets::win`, so this is a map
+            // lookup per pane rather than a scan.
+            let joined: Vec<PaneJoin> = {
+                let snap = core.read_snapshot();
+                targets
+                    .into_iter()
+                    .map(|(id, grid, win)| {
+                        let preview = snap.previews.get(&win).cloned();
+                        let load = preview.as_ref().map(|info| PreviewLoad {
+                            source_bufnr: info.source_bufnr,
+                            // A source nvim has never reported a tick for reads 0,
+                            // which is a real key rather than a missing one: the pair
+                            // still changes when the tick arrives.
+                            source_tick: snap
+                                .markdown_ticks
+                                .get(&info.source_bufnr)
+                                .copied()
+                                .unwrap_or(0),
+                        });
+                        PaneJoin {
+                            id,
+                            grid,
+                            win,
+                            preview,
+                            load,
+                        }
+                    })
+                    .collect()
+            };
+            // Phase two: the core calls, with no guard held.
+            joined
                 .into_iter()
-                .map(|(id, g, win)| (id, core.pane_status(g), core.full_width_for_win(win)))
+                .map(|j| match j.preview {
+                    Some(info) => {
+                        let source = info.source_path.to_string_lossy().into_owned();
+                        let display = core.display_path(&source);
+                        PaneState {
+                            id: j.id,
+                            status: preview_ui::preview_status(&source, &display),
+                            full_width: info.source_full_width,
+                            preview: Some(info),
+                            load: j.load,
+                        }
+                    }
+                    None => PaneState {
+                        id: j.id,
+                        status: core.pane_status(j.grid),
+                        full_width: core.full_width_for_win(j.win),
+                        preview: None,
+                        load: None,
+                    },
+                })
                 .collect()
         };
         {
             let panes = self.panes.borrow();
-            for (id, status, full_width) in states {
-                if let Some(p) = panes.get(&id) {
-                    *p.status.borrow_mut() = status;
-                    p.full_width.set(full_width);
+            for state in states {
+                if let Some(p) = panes.get(&state.id) {
+                    *p.status.borrow_mut() = state.status;
+                    p.full_width.set(state.full_width);
+                    *p.preview.borrow_mut() = state.preview;
+                    p.current_load.set(state.load);
                 }
             }
         }
@@ -645,7 +826,7 @@ impl PaneInner {
     /// The `None` suppression is [`state_seam::persistable_layout`]'s CONTENT rule,
     /// never an arity test.
     fn layout_snapshot(&self) -> Option<PaneNode> {
-        let paths: HashMap<PaneId, String> = {
+        let contents: HashMap<PaneId, pane_layout::LeafContent> = {
             let tree = self.tree.borrow();
             let panes = self.panes.borrow();
             tree.leaves()
@@ -655,16 +836,29 @@ impl PaneInner {
                     // A pane with no bound grid has no status to have been read,
                     // and contributes no path.
                     p.grid.get()?;
-                    Some((id, p.status.borrow().abs_path.clone()))
+                    Some((
+                        id,
+                        pane_layout::LeafContent {
+                            path: p.status.borrow().abs_path.clone(),
+                            preview: p.preview.borrow().is_some(),
+                        },
+                    ))
                 })
                 .collect()
         };
         let layout = self.tree.borrow().layout();
-        state_seam::persistable_layout(pane_layout::encode(&layout, &paths))
+        state_seam::persistable_layout(pane_layout::encode(&layout, &contents))
     }
 
-    /// `(panes with a RESOLVED grid, windows nvim has reported buffers for)` —
-    /// the two readiness counts [`state_seam::may_snapshot`] gates on.
+    /// `(panes with a RESOLVED grid, windows nvim has reported a buffer or a preview
+    /// source for)` — the two readiness counts [`state_seam::may_snapshot`] gates on.
+    ///
+    /// The reported count is `win_buffers.len() + previews.len()`, not
+    /// `win_buffers.len()` alone: preview windows are omitted from `win_buffers`
+    /// entirely, so a tab in which EVERY window is a preview reports zero, and
+    /// `may_snapshot` refuses. Persistence then silently stops updating for that tab
+    /// — reachable by previewing into the active pane of a one-pane window. The two
+    /// maps are disjoint by construction, so summing them cannot double-count.
     fn snapshot_readiness(&self) -> (usize, usize) {
         let bound = self
             .panes
@@ -674,9 +868,10 @@ impl PaneInner {
             .count();
         let reported = {
             let core_ref = self.core.borrow();
-            core_ref
-                .as_ref()
-                .map_or(0, |core| core.read_snapshot().win_buffers.len())
+            core_ref.as_ref().map_or(0, |core| {
+                let snap = core.read_snapshot();
+                snap.win_buffers.len() + snap.previews.len()
+            })
         };
         (bound, reported)
     }
@@ -1017,6 +1212,238 @@ impl PaneInner {
         }
     }
 
+    /// Brings every pane's web view into line with its preview state: creates or
+    /// removes the view, frames it, and re-loads the ones whose bound source moved.
+    ///
+    /// Called from [`Self::on_render_wake`] AFTER [`Self::refresh_pane_state`], which
+    /// is what fills `preview` and `current_load`, and BEFORE [`Self::sync_pane_grids`];
+    /// and from [`Self::apply_layout_rebuild`] after its own `refresh_pane_state`, for
+    /// the same reason that path re-runs the other per-wake steps.
+    ///
+    /// **Nothing on this path may be gated on `Snapshot::seq`.** The `wolf_preview`
+    /// and `wolf_markdown_dirty` notifications that carry a preview's source and its
+    /// `changedtick` fire the wake WITHOUT bumping `seq`, so a `seq` gate would
+    /// suppress every reload this function exists to issue.
+    fn refresh_previews(&self) {
+        let ids: Vec<PaneId> = self.panes.borrow().keys().copied().collect();
+        for id in &ids {
+            self.sync_preview_view(*id);
+            self.apply_preview_frame(*id);
+        }
+
+        // `WolfCore::render_preview` is a BLOCKING RPC on the GTK main thread, so it
+        // carries the same liveness gate the two presses do rather than a weaker one
+        // (`crates/wolf-gnome/DECISIONS.md`, "Crash and stall recovery"). The read is
+        // a lock-free atomic in a borrow of its own.
+        let liveness = {
+            let core_ref = self.core.borrow();
+            core_ref.as_ref().map(WolfCore::liveness)
+        };
+        if !preview_ui::may_render(liveness) {
+            return;
+        }
+
+        let due: Vec<(PaneId, PreviewLoad)> = {
+            let panes = self.panes.borrow();
+            ids.iter()
+                .filter_map(|id| {
+                    let p = panes.get(id)?;
+                    let current = p.current_load.get()?;
+                    preview_ui::needs_reload(Some(current), p.loaded.get())
+                        .then_some((*id, current))
+                })
+                .collect()
+        };
+        for (id, load) in due {
+            let html = {
+                let core_ref = self.core.borrow();
+                let Some(core) = core_ref.as_ref() else {
+                    return;
+                };
+                core.render_preview(load.source_bufnr)
+            };
+            self.load_preview_document(id, &html);
+            // Recorded WHATEVER the HTML was, the empty string included: an RPC
+            // failure answers empty, and leaving `loaded` behind on that would
+            // re-arm the reload and re-issue the blocking render on every wake for
+            // ever. The next real edit bumps the tick and reloads anyway.
+            //
+            // It is also recorded on `load_preview_document`'s no-view early return,
+            // and that is sound only because of an INVARIANT this loop depends on:
+            // `sync_preview_view` ran over these same ids above, and `current_load` is
+            // `Some` exactly when `preview` is, so every pane that reaches here already
+            // has a web view. Move either of those and this records a document that
+            // was loaded into nothing, leaving the pane blank until the source's tick
+            // moves again.
+            if let Some(p) = self.panes.borrow().get(&id) {
+                p.loaded.set(Some(load));
+            }
+        }
+    }
+
+    /// Creates pane `pane_id`'s web view when it becomes a preview, and removes and
+    /// drops it when it stops being one. No-op when the two already agree.
+    ///
+    /// **Lazy, never eager.** A `WebView` spawns its own WebProcess; creating one per
+    /// pane at launch would move every existing cage smoke's timing budget for panes
+    /// that will never show a preview.
+    ///
+    /// The view is an OVERLAY child of the pane's `host`, so it composites above the
+    /// `DrawingArea` and below the window-level overlay the pickers live in — GTK 4
+    /// paints overlay children after the main child and all its descendants, so a
+    /// picker is over a preview by construction.
+    fn sync_preview_view(&self, pane_id: PaneId) {
+        let panes = self.panes.borrow();
+        let Some(p) = panes.get(&pane_id) else {
+            return;
+        };
+        let wants = p.preview.borrow().is_some();
+        let has = p.web.borrow().is_some();
+        if wants == has {
+            return;
+        }
+        if wants {
+            let view = webkit6::WebView::new();
+            // Focus must not enter the view, matching its host: `focus_inside_pane_area`
+            // guards everything under `pane_area`, and a focusable widget there that a
+            // rebuild destroys is the wedge that guard exists to prevent.
+            view.set_focusable(false);
+            view.set_can_focus(false);
+            p.host.add_overlay(&view);
+            // EXPLICIT, even though `false` is GTK's default, because the reason it
+            // must stay false is exactly what gets simplified away: a measured overlay
+            // child adds its own size request to the overlay's, and a `WebView`'s would
+            // inflate the pane minimum this whole crate is calibrated against
+            // (`editor_inset::min_pane_size` and every smoke's window geometry).
+            p.host.set_measure_overlay(&view, false);
+            *p.web.borrow_mut() = Some(view);
+        } else {
+            // Taken out in its own statement, so no borrow of `web` is live across the
+            // GTK teardown below.
+            let existing = p.web.borrow_mut().take();
+            if let Some(view) = existing {
+                p.host.remove_overlay(&view);
+                // Both belong to the VIEW, not to the pane: a pane that becomes a
+                // preview again gets a fresh view with an empty document, and a
+                // surviving `head_len` would let the first load into it take the body
+                // -swap branch against a `<head>` that is not there.
+                p.loaded.set(None);
+                p.head_len.set(0);
+            }
+        }
+    }
+
+    /// Frames pane `pane_id`'s web view to the rectangle its grid would have used —
+    /// the same [`Self::pane_grid_rect_for`] under the same [`Self::pane_cap`] — by
+    /// margins on the overlay child.
+    ///
+    /// The cap comes from the pane's own cached `full_width`, which for a preview pane
+    /// is [`PreviewInfo::source_full_width`]: the SOURCE buffer's flag, never the
+    /// preview window's, whose entry describes a scratch buffer nobody reads. The
+    /// HTML itself is rendered at full width (`crates/wolf-core/src/nvim.rs`), so this
+    /// frame is the only thing that applies the column cap at all.
+    fn apply_preview_frame(&self, pane_id: PaneId) {
+        let panes = self.panes.borrow();
+        let Some(p) = panes.get(&pane_id) else {
+            return;
+        };
+        let view = p.web.borrow().clone();
+        let Some(view) = view else {
+            return;
+        };
+        let width = f64::from(p.area.width());
+        let height = f64::from(p.area.height());
+        let rect = self.pane_grid_rect_for(width, height, self.pane_cap(p.full_width.get()));
+        view.set_margin_start(px(rect.x));
+        view.set_margin_top(px(rect.y));
+        view.set_margin_end(px(width - (rect.x + rect.w)));
+        view.set_margin_bottom(px(height - (rect.y + rect.h)));
+    }
+
+    /// Puts `html` on screen in pane `pane_id`'s web view: IN PLACE by swapping the
+    /// body where that is sound, and by a full `load_html` where it is not.
+    ///
+    /// ## The scroll measurement — do NOT simplify this back to `load_html`
+    ///
+    /// A full `load_html` DESTROYS the scroll offset. Measured under `cage` on a
+    /// 1,114,719-byte document from the real renderer: `window.scrollY` read **0 in 24
+    /// of 24** samples having been 2000 immediately before, while the JSON body swap
+    /// preserved it in 24 of 24 — at 5.3 ms against 55.7 ms, shipping ~102 KB per
+    /// keystroke instead of 1.11 MB, and re-decoding no inlined base64 font at all.
+    /// The symptom of "simplifying" this is the reader thrown back to the top of the
+    /// document on every keystroke, which is exactly what a live preview is not.
+    ///
+    /// ## The head guard
+    ///
+    /// `crates/wolf-core/src/nvim.rs` documents the rendered `<head>` as
+    /// BYTE-IDENTICAL on every call — theme and width mode are fixed, so only the body
+    /// changes — and documents this same guard as the macOS front-end's. A body swap
+    /// leaves the committed `<head>` in place, so a head that MOVED would mean stale
+    /// CSS. A first load into a view, an absent `</head>`, an offset differing from
+    /// the recorded one, a body that cannot be carved out, or a JSON encoding that
+    /// fails all fall back to `load_html` and re-record the offset.
+    ///
+    /// ## The one behavioural asymmetry between the two paths
+    ///
+    /// A `<script>` element created by `DOMParser` is flagged "already started" and
+    /// does NOT run when it is adopted into the live document, whereas `load_html`
+    /// runs it. pulldown-cmark passes raw HTML straight through, so a Markdown source
+    /// containing a literal `<script>` behaves differently on the two paths. The
+    /// in-place behaviour is the safer of the two, and making them uniform is not
+    /// worth trading the measurement above for.
+    fn load_preview_document(&self, pane_id: PaneId, html: &str) {
+        let Some((view, recorded)) = ({
+            let panes = self.panes.borrow();
+            panes
+                .get(&pane_id)
+                .and_then(|p| p.web.borrow().clone().map(|v| (v, p.head_len.get())))
+        }) else {
+            return;
+        };
+
+        let head = head_offset(html);
+        // The whole in-place branch, or nothing: the head must be present AND
+        // unmoved AND a body must be carveable out of the document.
+        let swap = match (head, body_inner(html)) {
+            (Some(offset), Some(body)) if recorded != 0 && offset == recorded => Some(body),
+            _ => None,
+        };
+
+        if let Some(body) = swap {
+            match preview_swap_payload(body) {
+                Ok(literal) => {
+                    let script = preview_swap_script(&literal);
+                    view.evaluate_javascript(
+                        &script,
+                        None,
+                        None,
+                        gio::Cancellable::NONE,
+                        // A failed swap leaves the PREVIOUS document on screen and
+                        // prints; it is not re-armed, because the next edit bumps the
+                        // tick and reloads anyway.
+                        |result| {
+                            if let Err(err) = result {
+                                eprintln!("wolf-gnome: preview body swap failed: {err}");
+                            }
+                        },
+                    );
+                    return;
+                }
+                Err(err) => {
+                    eprintln!(
+                        "wolf-gnome: preview body could not be encoded ({err}); \
+                         falling back to a full load"
+                    );
+                }
+            }
+        }
+
+        view.load_html(html, None);
+        if let Some(p) = self.panes.borrow().get(&pane_id) {
+            p.head_len.set(head.unwrap_or(0));
+        }
+    }
+
     /// Builds a pane's `DrawingArea`, wiring its draw func (paint its grid + cursor),
     /// resize (per-grid + global resize), and the three pointer controllers.
     ///
@@ -1163,7 +1590,9 @@ impl PaneInner {
     /// EDITOR's background, a per-frame value out of the snapshot, whereas a GTK
     /// widget's background is theme-owned. See `crates/wolf-gnome/DECISIONS.md`.
     ///
-    /// **`WolfCore::pane_status` must never be called from here.** This function
+    /// **`WolfCore::pane_status` must never be called from here**, and neither may
+    /// `display_path` or `render_preview` — the same rule, for the same reason, over
+    /// the three calls a preview pane adds. This function
     /// holds a `SnapshotReadGuard` for its whole body and `pane_status` takes
     /// `read_snapshot()` again internally; a re-entrant read can deadlock behind a
     /// queued writer (`shell.rs`'s borrow-discipline section). The strings come out
@@ -1207,12 +1636,21 @@ impl PaneInner {
         // One borrow, one statement: `PaneStatus` is not `Copy`, so it is cloned
         // out rather than held, and no core call happens while it is live. The
         // full-width flag comes out of the same borrow, so the rect this frame is
-        // painted into and the rect its clicks are translated through are one.
-        let (grid_id, status, full_width) = {
+        // painted into and the rect its clicks are translated through are one, and
+        // so does the preview predicate, so the strip and the grid cannot disagree
+        // about what kind of pane this is inside one frame.
+        let (grid_id, status, full_width, is_preview) = {
             let panes = self.panes.borrow();
             panes.get(&pane_id).map_or_else(
-                || (None, wolf_core::pane_status("", None, None), false),
-                |p| (p.grid.get(), p.status.borrow().clone(), p.full_width.get()),
+                || (None, wolf_core::pane_status("", None, None), false, false),
+                |p| {
+                    (
+                        p.grid.get(),
+                        p.status.borrow().clone(),
+                        p.full_width.get(),
+                        p.preview.borrow().is_some(),
+                    )
+                },
             )
         };
         let rect = self.pane_grid_rect_for(width, height, self.pane_cap(full_width));
@@ -1252,50 +1690,69 @@ impl PaneInner {
         cr.restore()
             .expect("cairo restore failed after the statusbar");
 
-        cr.save().expect("cairo save failed before the grid");
-        cr.rectangle(rect.x, rect.y, rect.w, rect.h);
-        cr.clip();
-        // Translating the context covers every origin `paint` and `draw_cursor`
-        // compute, which is what leaves both of them unchanged.
-        cr.translate(rect.x, rect.y);
-        let grid = grid_id
-            .and_then(|g| snap.grid(g))
-            .unwrap_or_else(|| snap.active_grid());
-        paint(cr, grid, &snap.highlights, &self.metrics);
-        if let Some(g) = grid_id {
-            if snap.cursor.grid == g {
-                draw_cursor(cr, &snap, &self.metrics);
+        // A preview pane skips EXACTLY the grid block and the scrollbar thumb, and
+        // nothing else: the whole-allocation background fill above and the entire
+        // statusbar strip are painted for it exactly as for an editor pane, so the
+        // margins around the web view are the editor's background rather than
+        // garbage and the preview's filename and path still read. The cursor goes
+        // with the grid — under an opaque web view it would paint invisibly — and
+        // the thumb goes with it because the web view scrolls itself and a synthetic
+        // thumb would track the scratch buffer instead. The skip needs no
+        // containment test: the preview scratch buffer has no lines, so its grid
+        // would paint background and nothing else anyway.
+        if !is_preview {
+            cr.save().expect("cairo save failed before the grid");
+            cr.rectangle(rect.x, rect.y, rect.w, rect.h);
+            cr.clip();
+            // Translating the context covers every origin `paint` and `draw_cursor`
+            // compute, which is what leaves both of them unchanged.
+            cr.translate(rect.x, rect.y);
+            let grid = grid_id
+                .and_then(|g| snap.grid(g))
+                .unwrap_or_else(|| snap.active_grid());
+            paint(cr, grid, &snap.highlights, &self.metrics);
+            if let Some(g) = grid_id {
+                if snap.cursor.grid == g {
+                    draw_cursor(cr, &snap, &self.metrics);
+                }
             }
-        }
-        cr.restore().expect("cairo restore failed after the grid");
+            cr.restore().expect("cairo restore failed after the grid");
 
-        // Deliberately OUTSIDE the grid clip: the thumb lives in the pane's right
-        // padding gutter, which the clip above excludes. `Snapshot::windows` is
-        // keyed by GRID id, so an unbound pane — which falls back to the active
-        // grid for its paint — correctly gets no thumb, because no viewport belongs
-        // to it.
-        let viewport = grid_id
-            .and_then(|g| snap.windows.get(&g))
-            .map(|w| w.viewport);
-        if let Some(thumb) = viewport.and_then(|v| scrollbar::scrollbar_thumb(width, rect, v)) {
-            let c = scrollbar::scrollbar_thumb_color(bg);
-            cr.set_source_rgb(
-                f64::from(c.r) / RGB_MAX,
-                f64::from(c.g) / RGB_MAX,
-                f64::from(c.b) / RGB_MAX,
-            );
-            cr.rectangle(thumb.x, thumb.y, thumb.w, thumb.h);
-            cr.fill().expect("cairo scrollbar thumb fill failed");
+            // Deliberately OUTSIDE the grid clip: the thumb lives in the pane's right
+            // padding gutter, which the clip above excludes. `Snapshot::windows` is
+            // keyed by GRID id, so an unbound pane — which falls back to the active
+            // grid for its paint — correctly gets no thumb, because no viewport
+            // belongs to it.
+            let viewport = grid_id
+                .and_then(|g| snap.windows.get(&g))
+                .map(|w| w.viewport);
+            if let Some(thumb) = viewport.and_then(|v| scrollbar::scrollbar_thumb(width, rect, v)) {
+                let c = scrollbar::scrollbar_thumb_color(bg);
+                cr.set_source_rgb(
+                    f64::from(c.r) / RGB_MAX,
+                    f64::from(c.g) / RGB_MAX,
+                    f64::from(c.b) / RGB_MAX,
+                );
+                cr.rectangle(thumb.x, thumb.y, thumb.w, thumb.h);
+                cr.fill().expect("cairo scrollbar thumb fill failed");
+            }
         }
     }
 
-    /// Handles a pane area resize: resize the pane's own grid, then the global grid.
+    /// Handles a pane area resize: resize the pane's own grid, re-frame a preview's
+    /// web view, then resize the global grid.
     fn on_pane_resize(&self, pane_id: PaneId, width: i32, height: i32) {
         if let Some((grid, cols, rows)) = self.pending_resize(pane_id, width, height) {
             if let Some(core) = self.core.borrow().as_ref() {
                 core.resize_grid(grid, cols, rows);
             }
         }
+        // Re-framed HERE as well as on the wake, because the frame is margins in
+        // ABSOLUTE PIXELS: a divider drag that moves the allocation without changing
+        // the cell-rounded grid size issues no `resize_grid`, so no flush and no wake
+        // follow it, and the view would stay framed for the old allocation until some
+        // unrelated redraw arrived. A pane with no web view returns immediately.
+        self.apply_preview_frame(pane_id);
         self.resize_global();
     }
 
@@ -2013,13 +2470,15 @@ impl PaneInner {
         // gone the root reports no focus at all and there is nothing left to test.
         let had_focus = self.focus_inside_pane_area();
 
-        // Detach every reusable pane area from its current parent so it can be
-        // re-inserted into the freshly built widget tree.
+        // Detach every reusable pane HOST from its current parent so it can be
+        // re-inserted into the freshly built widget tree. The host, not the area:
+        // unparenting the area would tear it out of its own overlay and leave a
+        // preview's web view parented to a host that is no longer in the tree.
         {
             let panes = self.panes.borrow();
             for p in panes.values() {
-                if p.area.parent().is_some() {
-                    p.area.unparent();
+                if p.host.parent().is_some() {
+                    p.host.unparent();
                 }
             }
         }
@@ -2382,10 +2841,12 @@ fn build_layout_widget(
     path: &[usize],
 ) -> Option<gtk::Widget> {
     match layout {
+        // The HOST, never the bare `area`: the web view is the host's overlay child,
+        // so parenting the host is what carries a live preview through a rebuild.
         PaneLayout::Leaf(id) => ctx
             .panes
             .get(id)
-            .map(|p| p.area.clone().upcast::<gtk::Widget>()),
+            .map(|p| p.host.clone().upcast::<gtk::Widget>()),
         PaneLayout::Split {
             orientation,
             children,
@@ -2635,6 +3096,91 @@ fn cell_floor(cell_px: f64) -> i32 {
     }
 }
 
+/// The byte offset of `</head>` in a rendered preview document, or `None` when the
+/// document has no head at all (an empty string, which is what
+/// `WolfCore::render_preview` answers on an RPC failure, is the common case).
+///
+/// `0` is never a real answer — the render always opens with a
+/// `<!doctype html><html><head>` prologue — which is what lets
+/// [`PaneWidgets::head_len`] use it as its "nothing loaded" sentinel.
+fn head_offset(html: &str) -> Option<usize> {
+    html.find("</head>")
+}
+
+/// The INNER html of a rendered preview document's `<body>`, or `None` when the
+/// document does not have the renderer's fixed wrapper shape.
+///
+/// FIRST-open, LAST-close, and the asymmetry is deliberate: raw HTML passes straight
+/// through pulldown-cmark, so a Markdown source can put a literal `</body>` into the
+/// rendered body — but the wrapper's own closing tag is always the LAST one, and any
+/// `<body` in content is always AFTER the wrapper's opening tag.
+///
+/// A SCAN, not a parse. The body is returned byte for byte, never sanitized or
+/// re-encoded: the `.wolf-src` position markers are looked up by id and the inline
+/// `style="color:#…"` highlight spans are what a re-render actually changes.
+fn body_inner(html: &str) -> Option<&str> {
+    let open = html.find("<body")?;
+    let start = open + html[open..].find('>')? + 1;
+    let end = html.rfind("</body>")?;
+    if end < start {
+        return None;
+    }
+    Some(&html[start..end])
+}
+
+/// `body` as a JavaScript string literal whose VALUE is `body`'s JSON text, ready to
+/// embed in [`preview_swap_script`]'s `JSON.parse(…)`.
+///
+/// **Encoded TWICE, and both halves are load-bearing.** The inner
+/// `serde_json::to_string` turns the html into a JSON text; the outer one turns that
+/// text into a JS string literal. The script's `JSON.parse` undoes exactly the inner
+/// encoding, so what reaches the DOM is `body` byte for byte.
+///
+/// Dropping either half is a runtime failure, not a style change, and it was
+/// MEASURED: with one encoding, the literal's value is the html itself, and
+/// `JSON.parse` on html throws `SyntaxError: JSON Parse error: Unrecognized token '<'`
+/// on the very first swap — the preview then silently keeps showing the previous
+/// document while the user types.
+///
+/// What the encoding buys is that an arbitrary document is safe to embed: `"` and
+/// `\` and every control character (a newline becomes `\n`) are escaped, so an
+/// apostrophe, a quote, a backslash or a literal `</script>` anywhere in the user's
+/// prose is inert — this is JS SOURCE handed to `evaluate_javascript`, never HTML, so
+/// `</script>` has nothing to close. **Never build such a script by concatenation.**
+///
+/// The two replacements close JSON's one gap as a JS literal: U+2028 and U+2029 are
+/// legal raw inside a JSON string but are LINE TERMINATORS to a JavaScript grammar
+/// before ES2019, where they would end the literal mid-string. Escaping them keeps
+/// the value identical and removes the dependency on the engine's conformance —
+/// applied to the OUTER text, since that is the one the JS parser reads.
+fn preview_swap_payload(body: &str) -> Result<String, serde_json::Error> {
+    let json = serde_json::to_string(body)?;
+    Ok(serde_json::to_string(&json)?
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029"))
+}
+
+/// The body-swap script, over an already-encoded `literal` carrying the new body's
+/// inner html (see [`preview_swap_payload`]).
+///
+/// The children are moved into a `DocumentFragment` by a `while (doc.body.firstChild)`
+/// loop and committed with ONE `replaceChildren(frag)` — deliberately **not**
+/// `replaceChildren.apply(body, Array.from(...))`, which spreads every top-level node
+/// as an argument: a long README has thousands of them, and
+/// `Function.prototype.apply` can throw `RangeError` on exactly the documents where
+/// the swap matters most.
+fn preview_swap_script(literal: &str) -> String {
+    format!(
+        "(function () {{ \
+           var doc = new DOMParser().parseFromString(JSON.parse({literal}), \"text/html\"); \
+           if (!doc.body || !document.body) {{ return; }} \
+           var frag = document.createDocumentFragment(); \
+           while (doc.body.firstChild) {{ frag.appendChild(doc.body.firstChild); }} \
+           document.body.replaceChildren(frag); \
+         }})();"
+    )
+}
+
 /// Rounds a device-pixel extent up to the `i32` GTK sizing calls take.
 fn px(v: f64) -> i32 {
     let v = if v.is_finite() { v } else { 0.0 };
@@ -2722,6 +3268,595 @@ fn install_pane_css() {
             &display,
             &provider,
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One [`preview_swap_payload`] row: a body, and the reason it is here.
+    struct PayloadCase {
+        desc: &'static str,
+        body: &'static str,
+    }
+
+    /// How many named rows the payload table carries.
+    ///
+    /// It is the ARRAY'S LENGTH in the type below, not something a runtime assertion
+    /// compares against: dropping a row is then a compile error rather than a check
+    /// that could itself be edited away. The rows are not a sample — each names one
+    /// character class that can end a JS string literal early — so losing one silently
+    /// is exactly the failure to prevent.
+    const NAMED_PAYLOAD_ROWS: usize = 9;
+
+    /// Every character class that can end a JavaScript string literal early, plus the
+    /// two that end it early only in JS and not in JSON.
+    ///
+    /// The bodies are what a Markdown document really produces: an apostrophe in
+    /// prose, a quoted phrase, a Windows path in a fenced block, a paragraph break,
+    /// and — because pulldown-cmark passes raw HTML straight through — a literal
+    /// `</script>`.
+    const PAYLOAD_CASES: [PayloadCase; NAMED_PAYLOAD_ROWS] = [
+        PayloadCase {
+            desc: "empty: the render answers this on an RPC failure",
+            body: "",
+        },
+        PayloadCase {
+            desc: "ordinary html, no escaping needed at all",
+            body: "<h1>plain</h1>",
+        },
+        PayloadCase {
+            desc: "an APOSTROPHE in prose",
+            body: "<p>don't</p>",
+        },
+        PayloadCase {
+            desc: "a DOUBLE QUOTE, which is the literal's own delimiter",
+            body: "<p>she said \"go\"</p>",
+        },
+        PayloadCase {
+            desc: "a BACKSLASH, which is the literal's own escape character",
+            body: "<pre><code>C:\\Users\\wolf</code></pre>",
+        },
+        PayloadCase {
+            desc: "a NEWLINE: a raw one ends a JS string literal",
+            body: "<p>one</p>\n<p>two</p>",
+        },
+        PayloadCase {
+            desc: "a literal </script>, which pulldown-cmark passes straight through",
+            body: "<p>text</p><script>alert(1)</script>",
+        },
+        PayloadCase {
+            desc: "U+2028 LINE SEPARATOR: legal raw in JSON, a line terminator in JS",
+            body: "<p>before\u{2028}after</p>",
+        },
+        PayloadCase {
+            desc: "U+2029 PARAGRAPH SEPARATOR: U+2028's twin, and just as fatal",
+            body: "<p>before\u{2029}after</p>",
+        },
+    ];
+
+    /// [`preview_swap_payload`] produces a well-formed JS string literal whose
+    /// DOUBLE decode is the body, byte for byte.
+    ///
+    /// ## What "well-formed JS string literal" means here, executably
+    ///
+    /// JSON's string grammar is a subset of JavaScript's with exactly one gap: U+2028
+    /// and U+2029 are legal raw inside a JSON string but are LINE TERMINATORS to a
+    /// JavaScript grammar before ES2019, where they end the literal mid-string. So
+    /// `serde_json::from_str::<String>` parsing the payload, plus the absence of those
+    /// two code points and of any raw line break, is the whole property — checked
+    /// against a real JSON parser rather than by eyeballing the escaping.
+    ///
+    /// ## The two decodes, and why the first must NOT return the body
+    ///
+    /// The inner `serde_json::to_string` turns the html into JSON TEXT; the outer one
+    /// turns that text into a JS string literal, whose VALUE is therefore JSON text
+    /// rather than html — and [`preview_swap_script`]'s `JSON.parse` is what undoes
+    /// the inner encoding at the far end. `assert_ne!(once, body)` is the row that
+    /// states that: with a single encoding the literal's value IS the html, `JSON.parse`
+    /// is handed `<`, and every swap throws `SyntaxError: JSON Parse error:
+    /// Unrecognized token '<'` while the preview silently keeps showing the previous
+    /// document. That was a measured bug, not a hypothetical.
+    ///
+    /// **`</script>` is deliberately NOT escaped**, and its row asserts only the round
+    /// trip. The payload is JS SOURCE handed to `evaluate_javascript`, never HTML
+    /// injected into a `<script>` element, so there is no element for it to close.
+    ///
+    /// Falsifier: replace the body with a single `serde_json::to_string`. Every row
+    /// fails at the `assert_ne!`, and the rows carrying `<` fail the second decode as
+    /// well — which is the same pair of symptoms the real defect produced.
+    #[test]
+    fn preview_swap_payload_double_encodes_and_round_trips() {
+        // The row count is enforced by [`PAYLOAD_CASES`]' own type, so there is no
+        // arity assertion here: one would be a tautology against the same constant.
+        for case in &PAYLOAD_CASES {
+            let (desc, body) = (case.desc, case.body);
+            let payload = preview_swap_payload(body).unwrap_or_else(|e| {
+                panic!(
+                    "preview_swap_payload({body:?}) failed to encode ({e}) — {desc}. Both encodings \
+                     are infallible for a `&str`, so an error here means the function does \
+                     something other than encode a string."
+                )
+            });
+
+            // --- well-formedness of the LITERAL --------------------------------
+            assert!(
+                payload.starts_with('"') && payload.ends_with('"') && payload.len() >= 2,
+                "preview_swap_payload({body:?}) produced {payload:?}, which is not delimited by \
+                 double quotes — {desc}. It is interpolated into `JSON.parse({{literal}})` as JS \
+                 SOURCE, so anything that is not a complete string literal is a syntax error in the \
+                 whole swap script."
+            );
+            for (name, ch) in [
+                ("a raw newline", '\n'),
+                ("a raw carriage return", '\r'),
+                ("U+2028 LINE SEPARATOR", '\u{2028}'),
+                ("U+2029 PARAGRAPH SEPARATOR", '\u{2029}'),
+            ] {
+                assert!(
+                    !payload.contains(ch),
+                    "preview_swap_payload({body:?}) left {name} raw in {payload:?} — {desc}. All \
+                     four are LINE TERMINATORS to a JavaScript grammar before ES2019, so each ends \
+                     the literal mid-string and turns the swap script into a syntax error. JSON \
+                     escapes the first two for us; the last two it does NOT, which is exactly what \
+                     the two explicit replacements are for."
+                );
+            }
+
+            // --- the first decode: JSON text, NOT the body ---------------------
+            let once: String = serde_json::from_str(&payload).unwrap_or_else(|e| {
+                panic!(
+                    "preview_swap_payload({body:?}) produced {payload:?}, which a JSON parser \
+                     rejects ({e}) — {desc}. JSON's string grammar is a subset of JavaScript's, so \
+                     a payload JSON cannot read is a payload JavaScript cannot read either."
+                )
+            });
+            assert_ne!(
+                once, body,
+                "preview_swap_payload({body:?}) produced a literal whose VALUE is the body itself \
+                 — {desc}. That is the SINGLE-ENCODING defect: `preview_swap_script` hands this \
+                 value to `JSON.parse`, which is then parsing html and throws `Unrecognized token \
+                 '<'` on the very first swap, leaving the previous document on screen while the \
+                 user types. The value must be the body's JSON TEXT, which the script's `JSON.parse` \
+                 decodes."
+            );
+
+            // --- the second decode: the body, byte for byte --------------------
+            let twice: String = serde_json::from_str(&once).unwrap_or_else(|e| {
+                panic!(
+                    "the value of preview_swap_payload({body:?}) is {once:?}, which is not JSON text \
+                     ({e}) — {desc}. `preview_swap_script`'s `JSON.parse` performs exactly this \
+                     decode in the web view, so what fails here fails there."
+                )
+            });
+            assert_eq!(
+                twice, body,
+                "double-decoding preview_swap_payload({body:?}) gave {twice:?} — {desc}. The two \
+                 encodings and the script's one `JSON.parse` must compose to the identity, or the \
+                 document that reaches the DOM is not the document `render_preview` produced."
+            );
+        }
+    }
+
+    /// The payload and the script are ONE mechanism: the script's `JSON.parse` is what
+    /// undoes the payload's inner encoding.
+    ///
+    /// Property: [`preview_swap_script`] embeds the literal verbatim, inside a
+    /// `JSON.parse(` call. Without this, deleting the `JSON.parse` from the script
+    /// would leave [`preview_swap_payload_double_encodes_and_round_trips`] green while
+    /// the web view was handed JSON text as if it were html — the two halves are only
+    /// correct together, so the pairing is asserted rather than assumed.
+    ///
+    /// Falsifier: drop `JSON.parse(` from [`preview_swap_script`], or embed the literal
+    /// through anything that rewrites it.
+    #[test]
+    fn preview_swap_script_parses_the_literal_it_is_given() {
+        let body = "<p>she said \"go\"</p>";
+        let payload = preview_swap_payload(body).expect("encoding a &str cannot fail");
+        let script = preview_swap_script(&payload);
+
+        assert!(
+            script.contains(&format!("JSON.parse({payload})")),
+            "preview_swap_script did not embed the payload inside a `JSON.parse(...)` call. The \
+             payload is DOUBLE encoded precisely because this parse undoes the inner half: without \
+             it the DOMParser is handed JSON text — quotes, backslash escapes and all — and \
+             renders the document's source instead of the document. Script was:\n{script}"
+        );
+        assert!(
+            script.contains("replaceChildren"),
+            "preview_swap_script no longer commits through `replaceChildren`. The body swap is what \
+             preserves the reader's scroll offset (measured: 2000 px preserved in 24 of 24 against \
+             0 in 24 of 24 for a full `load_html`), and this assertion is what keeps this test from \
+             passing against a script that merely parses the payload and drops it. Script \
+             was:\n{script}"
+        );
+    }
+
+    // -----------------------------------------------------------------------------
+    // The head guard. [`PaneInner::load_preview_document`] takes the in-place branch
+    // only when the recorded offset is not the `0` sentinel, `</head>` is present, the
+    // offset is UNMOVED, and a body can be carved out; the two functions below are what
+    // decide three of those four, and nothing else in this crate executes them.
+    // -----------------------------------------------------------------------------
+
+    /// The Markdown fixture the real-renderer tests below render. Prose and a heading:
+    /// enough for a non-empty body, and carrying none of the head markers those tests
+    /// assert are ABSENT from a carved body.
+    const RENDER_SOURCE: &str = "# Alfa bravo\n\nCharlie delta echo.\n";
+
+    /// A second source, differing from [`RENDER_SOURCE`] in LENGTH as well as content,
+    /// so two documents cannot agree on a head offset by coincidence.
+    const RENDER_SOURCE_OTHER: &str = "## Foxtrot\n\nGolf hotel india juliett kilo.\n";
+
+    /// A document from the REAL renderer, in the exact configuration
+    /// `WolfCore::render_preview` calls it with: `PreviewTheme::Default` and
+    /// `WidthMode::Full`. Using the real one is the point — every claim these tests
+    /// make about "the head" is a claim about `wolf-core`'s output, so measuring it
+    /// against a hand-typed prologue would measure the fixture instead.
+    fn rendered(source: &str) -> String {
+        wolf_core::markdown::render_html(
+            source,
+            wolf_core::markdown::PreviewTheme::Default,
+            wolf_core::markdown::WidthMode::Full,
+        )
+    }
+
+    /// [`head_offset`] answers the POSITION of `</head>`, and `None` for a document
+    /// that has no head — so `0` is free to mean "nothing loaded" in
+    /// [`PaneWidgets::head_len`].
+    ///
+    /// Property, over the real renderer's output: `Some(n)` with `n != 0` and the
+    /// document reading `</head>` at `n`. Two of the guard's four fall-backs rest on
+    /// exactly this. A first load into a view is recognised by the recorded offset
+    /// being the `0` sentinel, which a real document must therefore never produce; and
+    /// a document with no `</head>` — the empty string is the common case, being what
+    /// `WolfCore::render_preview` answers on an RPC failure — is refused outright.
+    ///
+    /// The `starts_with` assertion is what stops this passing on a function that finds
+    /// something else. `find("<head>")` also answers a non-zero `Some`, and the guard
+    /// built on it would compare OPENING-tag positions, which are identical in every
+    /// possible document: the head could then change freely and the swap would still
+    /// fire, putting a new body under a stylesheet that moved.
+    ///
+    /// Falsifier: `html.find("<head>")` — the `starts_with` row fails. Second
+    /// falsifier: `Some(html.find("</head>").unwrap_or(0))`, the "simplify the Option
+    /// away" edit — both `None` rows fail.
+    #[test]
+    fn head_offset_answers_the_head_position_and_never_the_sentinel() {
+        let html = rendered(RENDER_SOURCE);
+        let offset = head_offset(&html).unwrap_or_else(|| {
+            panic!(
+                "head_offset found no `</head>` in a {} byte document from the real renderer. \
+                 Nothing crashes when that happens — the guard simply falls back forever, which is \
+                 a preview that re-loads its whole ~1 MB document on every keystroke and throws \
+                 the reader back to the top each time.",
+                html.len()
+            )
+        });
+
+        assert_ne!(
+            offset, 0,
+            "head_offset answered 0 for a document from the real renderer. `PaneWidgets::head_len` \
+             uses 0 as its NOTHING-LOADED sentinel, so a real document producing it would be read \
+             as a first load on every wake and the body swap would never fire at all."
+        );
+        assert!(
+            html[offset..].starts_with("</head>"),
+            "head_offset answered {offset}, where the document reads {:?} rather than `</head>`. \
+             The guard compares this number across renders to decide the head has not MOVED, so a \
+             number that points at anything constant — `<head>`'s own position is the likely edit \
+             — makes that comparison hold for every document and swaps a body under a stylesheet \
+             that changed.",
+            html.get(offset..offset + 16).unwrap_or("<end of document>")
+        );
+
+        let empty = head_offset("");
+        assert_eq!(
+            empty, None,
+            "head_offset(\"\") answered a position. The empty string is what \
+             `WolfCore::render_preview` answers on an RPC failure, so it arrives here on any \
+             timeout — and any number would let the guard's `offset == recorded` test succeed \
+             against a document that does not exist."
+        );
+
+        let headless = head_offset("<html><body><p>one</p></body></html>");
+        assert_eq!(
+            headless, None,
+            "head_offset answered a position for a document with a body and no head. A document \
+             with no `</head>` has no head to compare against, so the swap must not be permitted \
+             into it: the branch leaves the committed head in place, and here there is none."
+        );
+    }
+
+    /// The recorded head offset moves when the HEAD moves, and not when the body does
+    /// — measured against the real renderer rather than assumed of it.
+    ///
+    /// `crates/wolf-core/src/nvim.rs` documents the rendered `<head>` as BYTE-IDENTICAL
+    /// on every call, and that is the premise `load_preview_document`'s
+    /// `offset == recorded` test stands on. It is a claim about a DEPENDENCY, so it is
+    /// measured here against `wolf_core::markdown::render_html` in the configuration
+    /// `render_preview` uses: two different sources give one offset, while the same
+    /// source at `WidthMode::Capped` — the one parameter whose CSS lands in the head —
+    /// gives a different one. Without the second half the first is satisfied by a
+    /// function that answers a constant.
+    ///
+    /// What this does not establish, and what no test of this function can: the guard
+    /// compares an OFFSET, so a head that changed without changing LENGTH is invisible
+    /// to it. That is why the invariant is `wolf-core`'s to keep, and why adding a
+    /// theme or width parameter to `render_preview` costs the swap.
+    ///
+    /// Falsifier: return `Some(html.len())`. Every render then records a different
+    /// number, `offset == recorded` never holds on a live edit, and the swap silently
+    /// degrades to the full `load_html` the measurement in this module exists to avoid
+    /// — a regression nothing else here reddens, and one whose only symptom is the
+    /// reader losing their place on every keystroke.
+    #[test]
+    fn head_offset_moves_only_when_the_head_moves() {
+        let one = rendered(RENDER_SOURCE);
+        let two = rendered(RENDER_SOURCE_OTHER);
+
+        let (body_one, body_two) = (body_inner(&one), body_inner(&two));
+        assert_ne!(
+            body_one, body_two,
+            "the two fixture sources rendered to the same BODY, so the offsets below could agree \
+             for a reason that has nothing to do with the head. Change RENDER_SOURCE_OTHER."
+        );
+
+        let (head_one, head_two) = (head_offset(&one), head_offset(&two));
+        assert_eq!(
+            head_one, head_two,
+            "two documents from the real renderer, differing only in their source, report \
+             different `</head>` offsets. `crates/wolf-core/src/nvim.rs` documents that head as \
+             byte-identical on every call, and this is that premise made executable: if it does \
+             not hold, every live edit falls back to a full `load_html`. Suspect a new \
+             non-constant in `render_html`'s head — a timestamp, a source-derived title, a \
+             per-render theme — before suspecting this function."
+        );
+
+        let capped = wolf_core::markdown::render_html(
+            RENDER_SOURCE,
+            wolf_core::markdown::PreviewTheme::Default,
+            wolf_core::markdown::WidthMode::Capped,
+        );
+        let head_capped = head_offset(&capped);
+        assert_ne!(
+            head_one, head_capped,
+            "the same source rendered at `WidthMode::Full` and at `WidthMode::Capped` reports the \
+             SAME `</head>` offset, although the width mode's CSS is emitted INTO the head. The \
+             guard's whole job is to notice a head that moved, so with these equal it would swap a \
+             fresh body in under the previous stylesheet and the document would render at the \
+             wrong width until something forced a full load."
+        );
+    }
+
+    /// [`body_inner`] carves the rendered document's BODY, and none of the ~1 MB head
+    /// that precedes it.
+    ///
+    /// Property, over the real renderer's output: the returned slice is the document's
+    /// tail up to the wrapper's closing tags, it carries the rendered markdown, and it
+    /// carries no `@font-face`, no `<style`, no `<body` and no `</head>` — the four
+    /// head markers that would appear if the first-`<body` scan had landed anywhere but
+    /// the wrapper's own start tag.
+    ///
+    /// That the head contains no `<body` is a PREMISE about `wolf-core`, not a property
+    /// of this function, and this is where it is measured rather than assumed: the head
+    /// embeds four font licences inside an HTML comment, and `wolf-core`'s
+    /// `the_notices_cannot_terminate_an_html_comment` checks those texts for `<!--`,
+    /// `-->` and `--!>` and for nothing else. A licence bump that introduced the five
+    /// characters `<body` reddens this test — see
+    /// [`body_inner_starts_inside_a_head_that_carries_a_literal_body_tag`] for what the
+    /// function does in that case.
+    ///
+    /// Falsifiers, either alone: scan for `<style` instead of `<body`, and the slice
+    /// arrives carrying the inlined base64 faces; or drop the `find('>')? + 1` so the
+    /// slice opens on the start tag itself, which the `<body` row catches.
+    #[test]
+    fn body_inner_carves_the_real_documents_body_and_none_of_its_head() {
+        let html = rendered(RENDER_SOURCE);
+        let inner = body_inner(&html).unwrap_or_else(|| {
+            panic!(
+                "body_inner carved nothing out of a {} byte document from the real renderer, so \
+                 the guard falls back to a full `load_html` on every keystroke. Either the \
+                 renderer stopped emitting the fixed `<body …>` wrapper this scan depends on, or \
+                 the scan stopped matching it.",
+                html.len()
+            )
+        });
+
+        assert!(
+            html.ends_with(&format!("{inner}</body></html>")),
+            "the carved body is not the document's tail up to its closing tags, so the slice's END \
+             is wrong: `rfind(\"</body>\")` is what places it, and the wrapper's close is always \
+             the document's last one. Carved {} bytes out of {}.",
+            inner.len(),
+            html.len()
+        );
+        assert!(
+            inner.contains("delta"),
+            "the carved body does not contain a word of the rendered source, so it is not the body \
+             at all — this is the row that keeps the four absence checks below from holding \
+             vacuously against an empty slice. Carved: {inner:?}"
+        );
+
+        for (what, needle) in [
+            ("the inlined base64 faces", "@font-face"),
+            ("the stylesheet element", "<style"),
+            ("a body START TAG", "<body"),
+            ("the head's own closing tag", "</head>"),
+        ] {
+            assert!(
+                !inner.contains(needle),
+                "the carved body carries {needle:?} — {what} — so the scan started inside the \
+                 HEAD. What reaches the live document is then ~1 MB of stylesheet adopted as \
+                 content, on the second load into a view and never on the first, which is the \
+                 shape of defect this whole branch is most able to hide. Carved {} bytes out of \
+                 {}.",
+                inner.len(),
+                html.len()
+            );
+        }
+    }
+
+    /// One [`body_inner`] row: a document, the carve it must produce, and the reason
+    /// the row is here.
+    struct BodyCase {
+        desc: &'static str,
+        html: &'static str,
+        want: Option<&'static str>,
+    }
+
+    /// How many named rows the carve table carries — the ARRAY'S length, for exactly
+    /// the reason [`NAMED_PAYLOAD_ROWS`] is: dropping a row is a compile error rather
+    /// than a check that could itself be edited away.
+    const NAMED_BODY_ROWS: usize = 8;
+
+    /// The first-open / last-close asymmetry, and every shape the carve refuses.
+    ///
+    /// Rows 2 and 3 are the asymmetry itself, stated in the only inputs that can tell
+    /// the two scans apart: a document whose CONTENT carries a literal `</body>`, and
+    /// one whose content carries a literal `<body …>`. Both are reachable — raw HTML
+    /// passes straight through pulldown-cmark — and neither is exotic in a Markdown
+    /// file about HTML.
+    const BODY_CASES: [BodyCase; NAMED_BODY_ROWS] = [
+        BodyCase {
+            desc: "the wrapper shape, with nothing unusual inside it",
+            html: "<html><head></head><body class=\"wolf-markdown\"><p>one</p></body></html>",
+            want: Some("<p>one</p>"),
+        },
+        BodyCase {
+            desc: "LAST close: a literal </body> in the CONTENT stays inside the carve",
+            html: "<html><head></head><body class=\"wolf-markdown\"><p>a</p></body>\
+                   <p>b</p></body></html>",
+            want: Some("<p>a</p></body><p>b</p>"),
+        },
+        BodyCase {
+            desc: "FIRST open: a literal <body ...> in the CONTENT stays inside the carve",
+            html: "<html><head></head><body class=\"wolf-markdown\"><p>a</p>\
+                   <body id=\"x\"><p>b</p></body></html>",
+            want: Some("<p>a</p><body id=\"x\"><p>b</p>"),
+        },
+        BodyCase {
+            desc: "empty: the render answers this on an RPC failure",
+            html: "",
+            want: None,
+        },
+        BodyCase {
+            desc: "a head and no body at all",
+            html: "<html><head></head></html>",
+            want: None,
+        },
+        BodyCase {
+            desc: "a start tag no `>` ever closes",
+            html: "<html><head></head><body class=\"wolf-markdown\"",
+            want: None,
+        },
+        BodyCase {
+            desc: "a start tag with no matching close",
+            html: "<html><head></head><body><p>one</p></html>",
+            want: None,
+        },
+        BodyCase {
+            desc: "the close BEFORE the open, which is refused rather than reversed",
+            html: "</body><body><p>one</p>",
+            want: None,
+        },
+    ];
+
+    /// [`body_inner`] opens at the FIRST `<body` and closes at the LAST `</body>`, and
+    /// refuses every document that does not have the wrapper shape.
+    ///
+    /// The asymmetry is the decision this test exists for, and it is not symmetric by
+    /// accident: the wrapper's closing tag is always the document's last one, so
+    /// `rfind` is right there; and any `<body` in CONTENT is always after the wrapper's
+    /// opening tag, so `find` is right there. Reversing either one is a silent
+    /// truncation that only appears for documents carrying the other tag in their
+    /// prose, which is why both rows carry one.
+    ///
+    /// The last row is the `end < start` refusal. Without it that pair would index a
+    /// reversed range and panic inside a draw-driven refresh, which takes the window
+    /// down rather than the preview.
+    ///
+    /// Falsifiers, one per direction: `rfind("</body>")` → `find("</body>")` fails row
+    /// 2, and `find("<body")` → `rfind("<body")` fails row 3. Deleting the `end < start`
+    /// guard turns row 8 into a panic rather than a failed comparison.
+    #[test]
+    fn body_inner_opens_at_the_first_body_and_closes_at_the_last() {
+        // The row count is enforced by [`BODY_CASES`]' own type, so there is no arity
+        // assertion here: one would be a tautology against the same constant.
+        for case in &BODY_CASES {
+            let (desc, html, want) = (case.desc, case.html, case.want);
+            let got = body_inner(html);
+            assert_eq!(
+                got, want,
+                "body_inner({html:?}) — {desc}. A wrong `Some` is swapped into the live document \
+                 as content and a wrong `None` costs a full `load_html` (and the reader's scroll \
+                 position) on every keystroke, so neither direction is the safe one."
+            );
+        }
+    }
+
+    /// A document whose HEAD carries a literal `<body` is carved from INSIDE the head,
+    /// and the head guard cannot notice.
+    ///
+    /// This states what the function DOES rather than that it is safe, because it is
+    /// not: `wolf_core::markdown::render_html` embeds four font licences in an HTML
+    /// comment in the head, and `wolf-core`'s
+    /// `the_notices_cannot_terminate_an_html_comment` checks those texts for `<!--`,
+    /// `-->` and `--!>` and for nothing else. A licence bump introducing the five
+    /// characters `<body` moves the carve's start into the head — and the second
+    /// assertion is the reason that is worse than it sounds: the head offset is
+    /// unchanged, so a CONSISTENTLY wrong carve passes `offset == recorded` on every
+    /// render and the guard degrades to nothing. `wolf-core`'s
+    /// `markup_in_stylesheet_failure` names the same hazard for the stylesheets, which
+    /// it does guard; the licence texts are the half nothing covers.
+    ///
+    /// The macOS front-end's `PreviewScrollSeam.splitDocument` scans the same way, so
+    /// this is a shared exposure rather than a regression of this crate's, and
+    /// [`body_inner_carves_the_real_documents_body_and_none_of_its_head`] is what
+    /// measures that today's head does not trip it.
+    ///
+    /// It has no falsifier in production, which is deliberate: the edit that reddens it
+    /// is the FIX — starting the scan after `</head>` — at which point delete this test
+    /// and rewrite the paragraph of [`body_inner`]'s doc it belongs to.
+    #[test]
+    fn body_inner_starts_inside_a_head_that_carries_a_literal_body_tag() {
+        fn hazard(body: &str) -> String {
+            format!(
+                "<html><head><!-- font licence FAQ: put the font in <body> -->\
+                 <style>@font-face{{}}</style></head>\
+                 <body class=\"wolf-markdown\">{body}</body></html>"
+            )
+        }
+
+        // What the carve actually is: the comment's own terminator, the whole
+        // stylesheet, the head's closing tag and the real body start tag, all arriving
+        // as CONTENT — with the document's genuine body tacked on the end.
+        const CARVED_FROM_THE_HEAD: &str =
+            " --><style>@font-face{}</style></head><body class=\"wolf-markdown\"><p>one</p>";
+
+        let one = hazard("<p>one</p>");
+        let carved = body_inner(&one);
+        assert_eq!(
+            carved,
+            Some(CARVED_FROM_THE_HEAD),
+            "body_inner did not carve from the FIRST `<body` in the whole document. If the scan \
+             was deliberately moved past `</head>`, this test has done its job: delete it, and \
+             rewrite the first-open paragraph of `body_inner`'s doc, which promises this \
+             behaviour. If it was not deliberate, the carve now depends on the head's contents in \
+             some new way, which is worse than either fixed rule. Document was:\n{one}"
+        );
+
+        let two = hazard("<p>two</p>");
+        let (head_one, head_two) = (head_offset(&one), head_offset(&two));
+        assert_eq!(
+            head_one, head_two,
+            "the two hazard documents report different head offsets, which would make this test's \
+             point moot rather than making the hazard safe. The point is that they agree: the head \
+             guard compares `</head>`'s position, that position is unmoved by a body edit, and a \
+             carve that is CONSISTENTLY wrong therefore passes the guard on every render — so the \
+             stylesheet is swapped in as content on the second load and forever after."
         );
     }
 }
