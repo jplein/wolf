@@ -30,7 +30,7 @@ The gtk-rs crates form one coherent release set: `gtk4` 0.11.x, `gdk4` 0.11.x, `
 
 `libadwaita` carries no version feature, because the target is the system GTK already present rather than a newer pinned ABI. The set builds against the flake's GTK 4.22, cairo 1.18, and pango 1.57.
 
-`gtk4` enables `v4_12`, which the sidebar's `ListView::scroll_to` requires and which `webkit6` silently depends on as well: it names `gtk::Accessible`, a type `gtk4` gates behind `v4_10` from 0.11.4 onward, so trimming the feature below that breaks the build with an error naming accessibility and pointing at neither the feature nor `webkit6`. That raises the minimum system GTK to 4.12; the flake satisfies it, and the feature is scoped to this crate. `cairo-rs` enables `png` for the ignored golden-regeneration dev aid.
+`gtk4` enables `v4_12`, which the sidebar's `ListView::scroll_to` requires and which `webkit6` silently depends on as well: it names `gtk::Accessible`, a type `gtk4` gates behind `v4_10` from 0.11.4 onward, so trimming the feature below that breaks the build with an error naming accessibility and pointing at neither the feature nor `webkit6`. That raises the minimum system GTK to 4.12; the flake satisfies it, and the feature is scoped to this crate. `cairo-rs` enables `png` for two consumers, and the second gates the suite: the ignored golden-regeneration dev aid writes a PNG with it, and the preview-appearance smoke decodes its `grim` captures with it.
 
 ## The pure seams
 
@@ -152,6 +152,18 @@ The arithmetic is unit-agnostic, and the two platforms hand it different units: 
 
 **A family Pango cannot resolve is substituted by fontconfig, and this crate adds no fallback of its own.** macOS needs one because CoreText returns a different family rather than substituting; Pango substitutes per lookup and always yields usable metrics, so a hand-rolled fallback could only override a better answer. A test pins that the description keeps the family the caller asked for.
 
+## The preview's light and dark
+
+A Markdown preview follows the configured appearance through a chain whose links are all in libadwaita and WebKitGTK rather than in this crate, and one version bump ends it. What the document itself carries — a dark palette, a `prefers-color-scheme: light` block, and one compile-time-constant stylesheet serving both appearances — belongs to [`wolf-core/src/markdown/README.md`](../wolf-core/src/markdown/README.md).
+
+`appearance::apply_at_launch` calls `AdwStyleManager::set_color_scheme`; libadwaita sets `GtkSettings:gtk-application-prefer-dark-theme` from it; WebKitGTK reads exactly that property and reports it to the page as `prefers-color-scheme`; the theme's light block takes. `libwebkitgtk-6.0.so` carries exactly two GTK settings notifications — `notify::gtk-application-prefer-dark-theme` and `notify::gtk-theme-name` — and neither `gtk-interface-color-scheme` nor `org.freedesktop.appearance` appears in it at all, so those two properties are its whole idea of the system preference.
+
+**libadwaita propagates that property only while the running GTK is older than 4.23.1.** The flake pins 4.20/4.22, so the chain is live. Raising GTK past that version removes it, and the preview stops following the configured appearance with nothing in this repository changed.
+
+**The write is silent.** libadwaita carries a warning string for exactly this property and suppresses its own warning while it performs the write; zero occurrences reached stderr across six `cage` runs. Nothing logs it, so `preview_document_follows_the_configured_appearance_under_cage` in [`tests/README.md`](tests/README.md) is the only tripwire.
+
+**Do not move the theme's `color-scheme` declaration to `:root`.** Measured and falsified: the declaration sits on `body.wolf-markdown`, `getComputedStyle(documentElement).colorScheme` computes `normal`, and dark takes anyway; injecting it on the root changed nothing in either direction.
+
 ## Application state
 
 `state.json` is the shared `wolf_core::state` schema, unchanged. Its shape is common to this crate and the macOS front-end, so a Linux-only change to it is a macOS re-verification obligation. `wolf_core::state_dir()` is the single resolution point, and `WOLF_STATE_DIR` overrides it.
@@ -207,7 +219,7 @@ Three details are load-bearing. Every smoke holds a shared mutex for its whole b
 ## Present limitations
 
 - No save or save-as dialog; saving is done from within Neovim. Open File and Open Folder are native dialogs.
-- Theming is one-directional: the configured `appearance` is resolved against libadwaita's light/dark reading, pushed into Neovim as `background=dark|light` and matched on the chrome's colour scheme. No OS colour is read into Neovim's highlight groups, so macOS's `nvim_set_hl` push has no counterpart; Neovim's own colorscheme reaches the grid paint and the `WolfCursor` group reaches the cursor. `macos-option-as-alt` is the one configured key this front-end ignores, silently and with nothing reported at launch, because its own name says which platform it is for and one config file is shared across both.
+- Theming is one-directional: the configured `appearance` is resolved against libadwaita's light/dark reading, pushed into Neovim as `background=dark|light`, matched on the chrome's colour scheme, and carried by that scheme into a preview document's `prefers-color-scheme` ([The preview's light and dark](#the-previews-light-and-dark)). No OS colour is read into Neovim's highlight groups, so macOS's `nvim_set_hl` push has no counterpart; Neovim's own colorscheme reaches the grid paint and the `WolfCursor` group reaches the cursor. `macos-option-as-alt` is the one configured key this front-end ignores, silently and with nothing reported at launch, because its own name says which platform it is for and one config file is shared across both.
 - Pointer input covers the primary button and vertical scroll. There is no context menu, no middle-click paste, no horizontal scroll, and no kinetic scrolling, all matching macOS. The scrollbar is a projection with no thumb drag: it shows where the viewport sits and accepts no input at all, which macOS defers too.
 - A per-pane status bar's text is clipped to its own pane rather than tail-truncated with an ellipsis, so a path too long for its pane ends mid-glyph. macOS ellipsizes; reproducing that here means a second Pango layout builder in the widget layer, which is the thing `render.rs`'s one-glyph-path rule exists to prevent.
 - Only windows created through the overridden split commands become panes. A window from `:help`, quickfix, `:pedit`, or `:diffsplit` gets a grid but no pane, and floating or external windows are ignored. A Markdown preview is not one of those: it is placed through the same split path, so it is a real pane.
