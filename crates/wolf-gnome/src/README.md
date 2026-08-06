@@ -407,7 +407,7 @@ Purpose: the pure codec between the live pane tree, whose leaves are pane ids, a
 
 **Public API**
 
-- `encode(layout, paths) -> PaneNode` — an id missing from `paths` becomes an empty leaf.
+- `encode(layout, contents) -> PaneNode` — `contents` maps each leaf id to its `LeafContent` (raw path plus preview flag); a missing id becomes an empty, non-preview leaf.
 - `decode(node, first_leaf_id) -> Option<(PaneTree, Vec<PaneId>)>` — ids allocated sequentially in depth-first order, so leaf `i` is the pane for handle `i`.
 - `is_empty_leaf(node)`, `leaf_count(node)`, `leaf_paths_dfs(node)`.
 - `MAX_RESTORE_LEAVES` and `MAX_RESTORE_DEPTH`.
@@ -417,11 +417,11 @@ Purpose: the pure codec between the live pane tree, whose leaves are pane ids, a
 - `is_empty_leaf` is the content predicate the save path gates on: true only for an unnamed, non-preview lone leaf. `leaf_count` exists solely to validate the handle count a rebuild returns, and gating persistence on it reintroduces the macOS bug described in [DECISIONS.md](../DECISIONS.md). A named test states that rule on its own so a regression names it.
 - `decode` validates before anything is rendered, so Neovim is never asked to realize a malformed tree. The two caps are restore policy against a hand-edited file, not a limit on the tree type.
 - The orientation mapping lives here in both directions, so an inversion is one edit to make and one test to catch rather than two half-inversions that cancel.
-- `preview` is always written false. The flag is already carried end to end by the schema and the rebuild spec, so a preview pane adds a value here, not a field.
+- `LeafContent` carries the path and the preview flag together, because `is_empty_leaf` reads both and the encode site does not hold the pane a caller would re-derive the flag from.
 
 #### `pane_view.rs`
 
-Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one `gtk::DrawingArea` per window, plus the command-line strip and the two surfaces above it.
+Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one `gtk::Overlay` host per window over its `gtk::DrawingArea` and a preview pane's `webkit6::WebView`, plus the command-line strip and the two surfaces above it.
 
 **Public API**
 
@@ -431,11 +431,11 @@ Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one
 
 **Decisions**
 
-- Divider positions re-apply from the live tree on every `max-position` notify, since nested allocation reports intermediate values before settling. A `notify::position` at an unchanged maximum and span is a user drag, written back because a rebuild destroys the paned.
-- Pointer input is one `gtk::GestureDrag`, not a click controller, since a gesture keeps delivering after the pointer leaves the widget. Grid and button pin at press and modifiers re-read live, so a wandering drag edits its starting pane.
-- Each pane's status and its `b:wolf_full_width` cache once per wake: reading at use time re-enters the guard `draw_pane` holds, and paint, pointer and resize must agree inside one frame.
-- One funnel produces every grid resize, compared against the size the pane last asked for rather than the lagging snapshot grid, and runs on every wake, since lifting the content cap changes a column count under a still allocation.
-- The scrollbar thumb paints outside the grid clip, in the right padding gutter ([`scrollbar.rs`](#scrollbarrs)). The toast and the popup are overlay children and the strip draws the dialog `prompt`, both for reasons [DECISIONS.md](../DECISIONS.md) owns.
+- Divider positions re-apply from the live tree on every `max-position` notify, since nested allocation reports intermediate values before settling. An unchanged maximum and span makes a `notify::position` a user drag, written back because a rebuild destroys the paned.
+- Pointer input is one `gtk::GestureDrag`, not a click controller: a gesture keeps delivering after the pointer leaves the widget. Grid and button pin at press, modifiers re-read live, so a wandering drag edits its starting pane.
+- Each pane's status and `b:wolf_full_width` cache once per wake: reading at use time re-enters the guard `draw_pane` holds, and paint, pointer and resize must agree inside one frame.
+- One funnel produces every grid resize, compared against the size the pane last asked for rather than the lagging snapshot grid, and it runs on every wake, since a lifted content cap re-divides a still allocation.
+- The `gtk::Paned` tree parents each pane's host overlay, not its `DrawingArea`: a rebuild re-parents the host, so a live preview keeps its `WebProcess` and its loaded document across every split, close and divider drag.
 
 #### `persistence.rs`
 
@@ -477,6 +477,24 @@ Purpose: the file-picker overlay — a search entry over a ranked results list. 
 
 - Closing drops the `FileSearch`, which cancels the background traversal.
 - `next_selection`, `restored_index` and `activation_index` are `pub(crate)` and shared with [`palette.rs`](#paletters), [`buffer_picker.rs`](#buffer_pickerrs) and [`search_overlay.rs`](#search_overlayrs), so all four overlays navigate and activate identically. They stay here because the macOS `PickerSeam` port names this file as its counterpart.
+
+#### `preview_ui.rs`
+
+Purpose: the pure, GTK-free rulebook for the Markdown preview pane — where a preview opens, where its inverse lands the source editor, whether either press or a render may be issued, when a bound web view reloads, and what a preview pane's statusbar reads. A port of macOS's `PreviewSeam` and `EditSeam`, joined because the two placements are inverses.
+
+**Public API**
+
+- The five `MODE_*` strings — the exact `mode` argument `runtime/nvim/init.lua` dispatches on.
+- `preview_placement` and `edit_placement` — one rule at opposite polarities of `active_is_preview`.
+- `preview_press`, `edit_press` and `may_render` — total over `Option<Liveness>` with no `_` arm.
+- `PreviewLoad`, `needs_reload(current, loaded)` and `preview_status(source_path, display_path)`.
+
+**Decisions**
+
+- A mode string renamed here compiles and does nothing there: the Lua falls through to binding the current window, so the preview replaces the pane the user was reading.
+- Liveness is read before the buffer-kind gate, so a wedged Neovim is reported as wedged rather than as a non-Markdown buffer — a claim its stalled snapshot could not support anyway.
+- `PreviewLoad` carries the source bufnr as well as its `changedtick`, because two freshly opened files share a tick.
+- `preview_status`'s `abs_path` is the source path verbatim, since [`pane_view.rs`](#pane_viewrs) persists that field as a pane-layout leaf and `state.json` records no working directory to resolve a relative one against.
 
 #### `refresh_coalescer.rs`
 
@@ -581,6 +599,7 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 - Overlay side effects fire only on a real mode transition, and the focus sample precedes the hide, per [DECISIONS.md](../DECISIONS.md).
 - One settle point moves the sidebar's root, over [`workspace.rs`](#workspacers)'s `reroot_decision`, so a front-end `chdir_to` and a typed `:cd` cannot diverge. Neither front-end producer re-roots synchronously: the search resolves its root from the live cwd, which updates only after Neovim reports it.
 - The nav-button refresh caches nothing, unlike the title refresh: `set_sensitive` early-returns on an unchanged value.
+- Both Markdown-preview presses read one `preview_shape` pass: a pane count and a preview-active flag from two snapshot reads describe no window that existed. Each is a blocking RPC, gated through [`preview_ui.rs`](#preview_uirs).
 - One private applier is the only caller of `sidebar.set_visible`, over [`state_seam.rs`](#state_seamrs)'s `sidebar_is_shown`, or the next `set_empty_state(false)` would undo a user toggle.
 
 #### `state_seam.rs`
