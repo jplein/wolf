@@ -27,16 +27,6 @@
 //! seven the pinned Neovim ships (`c`, `lua`, `markdown`, `markdown_inline`,
 //! `query`, `vim`, `vimdoc`) do highlight there. So off Bazel/macOS this is a loud
 //! no-op pass: it asserts styled spans only where the `go` parser exists.
-//!
-//! ## NOTE to coder — Bazel target
-//!
-//! This file needs a `//crates/wolf-ffi:code_block_highlight` `rust_test` target
-//! added to `crates/wolf-ffi/BUILD.bazel` (a copy of the `:treesitter_highlight`
-//! stanza: `srcs = ["tests/common/mod.rs", "tests/code_block_highlight.rs"]`,
-//! `crate_root = "tests/code_block_highlight.rs"`, same tags/size/edition, same
-//! `data` (nvim_tree, nvim_treesitter_tree, parsers_tree, init.lua), same four env
-//! vars (WOLF_TEST_INIT_LUA, WOLF_TEST_NVIM_DIR, WOLF_TEST_NVIM_TREESITTER_DIR,
-//! WOLF_TEST_PARSERS_DIR), same deps). This test file does NOT touch BUILD files.
 
 mod common;
 

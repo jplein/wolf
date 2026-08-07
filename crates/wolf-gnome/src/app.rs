@@ -438,8 +438,9 @@ fn build_ui(app: &adw::Application) {
     // `adw::HeaderBar` renders the window title itself when none is set (which
     // `shell::refresh_title` keeps current), while setting one changes the header
     // bar's natural height — and that height IS the smoke suite's measured
-    // `PANE_ORIGIN_Y_EXPECTED`, which seven pointer smokes derive their click
-    // targets from.
+    // `PANE_ORIGIN_Y_EXPECTED`, which seven of the eight pointer smokes derive
+    // their click targets from. The eighth measures its own click point off the
+    // rendered preview link, which the same height moves.
     let header = adw::HeaderBar::new();
 
     let sidebar_button = gtk::Button::builder()

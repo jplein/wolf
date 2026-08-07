@@ -2145,8 +2145,9 @@ end
 -- over nvim_exec_lua from WolfCore::preview_file.
 --
 -- Returns the linked file's SOURCE bufnr (> 0) on success; 0 when `path` is
--- empty, unreadable, or not Markdown. On 0 the front-end leaves the pane as-is
--- (and applies its own O3 fallback for a real-but-non-previewable file).
+-- empty, unreadable, or not Markdown. A 0 always leaves the pane as it was; what
+-- the front-end does NEXT is its own policy and the two differ, so this file
+-- states neither. This runtime is shared by both.
 --
 -- Contract: this does NO relative-path resolution -- `path` is already absolute.
 function _G.wolf_preview_file(win, path)

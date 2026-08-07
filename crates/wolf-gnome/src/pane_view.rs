@@ -1679,11 +1679,46 @@ impl PaneInner {
     /// A full load hands `load_html` [`preview_link::file_uri_for`]`(source_path)`,
     /// which names the SOURCE FILE rather than its directory — so a relative
     /// `beta.md` in the document resolves by replacing the last segment. `None` for a
-    /// nameless buffer, which is passed straight through: WebKitGTK then substitutes
-    /// `about:blank`, and [`preview_link::classify`]'s first two rows are what handle
-    /// a click in that document. One observable consequence of having a file origin
-    /// at all is that a relative `![](img.png)` can resolve from disk; everything else
-    /// the renderer emits is inlined.
+    /// nameless buffer, which is passed straight through, and what a click in THAT
+    /// document delivers is half documented and half measured.
+    /// `webkit_web_view_load_html` says a `NULL` base "defaults to `about:blank`", so
+    /// a fragment-only href is EXPECTED to arrive as `about:blank#frag` — unmeasured
+    /// here, and the reason [`preview_link::classify`]'s first two rows exist. A
+    /// RELATIVE href was MEASURED to arrive RAW (`uri="lnkinto.md"`), which is that
+    /// table's row 9 rather than anything `about:`. Neither shape is reachable from
+    /// the running application, because [`preview_link::file_uri_for`] answers `Some`
+    /// for every real source path; its own docs carry the two inputs that answer
+    /// `None` and why neither occurs. One observable consequence of having a file
+    /// origin at all is that a relative `![](img.png)` can resolve from disk;
+    /// everything else the renderer emits is inlined.
+    ///
+    /// ## The documented "an absolute path kills the web process" hazard does NOT fire
+    ///
+    /// `webkit_web_view_load_html`'s own documentation — still shipped in the pinned
+    /// 2.52.4 GIR — says that when `base_uri` is non-null, "absolute local paths that
+    /// are not children of @base_uri will cause the web process to terminate". Core
+    /// passes `Tag::Image` and raw HTML blocks through verbatim, so an ordinary user
+    /// document arrives here carrying whatever absolute path its author wrote. Were
+    /// that sentence true on this port, a base URI would be WORSE than none: merely
+    /// previewing a file would kill the pane.
+    ///
+    /// MEASURED under `cage` against webkitgtk 2.52.4 on 2026-08-06, one run per
+    /// document, each read from a temporarily connected `web-process-terminated`
+    /// handler: an `<img>` naming a real file by absolute path OUTSIDE the base's
+    /// directory (it rendered), an absolute path that does not exist,
+    /// `<img src="/etc/hosts">`, `/etc/passwd`, `file:///etc/shadow`, a `../`
+    /// traversal, an out-of-base `<link rel=stylesheet>` and `<script src>` (both
+    /// applied), an out-of-base `<iframe>`, and the relative and in-base controls.
+    ///
+    /// **The signal fired in none of the eleven.** Every run reached
+    /// `LoadEvent::Finished` with the preview still bound and the app alive. The
+    /// handler's own falsifier was run rather than assumed: `SIGKILL` to the
+    /// WebProcess produced `reason=Crashed` on the same build, so the silence is
+    /// evidence and not an unwired signal.
+    ///
+    /// Pixels are NOT a reading of this and a re-measurement must not use them: after
+    /// that deliberate kill the capture was byte-identical to the healthy one, because
+    /// the last committed frame stays on screen. Connect the signal.
     ///
     /// ## The one behavioural asymmetry between the two paths
     ///

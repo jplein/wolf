@@ -37,30 +37,51 @@
 //! | 9 | no scheme, a non-empty path | [`PreviewLink::PreviewFile`] (defensive) |
 //! | 10 | no scheme and no path (an empty href) | [`PreviewLink::Refuse`] |
 //!
-//! ## Rows 1, 2, 9 and 10 are DEFENSIVE: a preview with no source path never
-//! reaches a web view
+//! ## Rows 1, 2, 9 and 10 are DEFENSIVE, and the two pairs rest on different
+//! evidence
 //!
-//! They cover the document [`file_uri_for`] answers `None` for. WebKitGTK's
-//! `load_html(content, NULL)` does not leave such a document with no base at all —
-//! its API documentation is explicit that `NULL` "defaults to `about:blank`"
-//! (`webkit_web_view_load_html`, WebKit-6.0) — so a click there would arrive
-//! carrying an `about` scheme rather than schemeless, and without row 1 it would
-//! fall through to row 3 and be handed to `gtk::UriLauncher`. Asking the desktop to
-//! open a browser on `about:blank#intro` is wrong in a way that has no upside, which
-//! is why `about` is refused outright. Row 1 is the useful half: an anchor in a
+//! All four cover the document [`file_uri_for`] answers `None` for, which is the
+//! document `load_html` is handed a `NULL` base for. What a click in it delivers
+//! depends on the KIND of href, and only one of the two kinds has been observed on
+//! this port — so they are recorded apart rather than folded into one inference.
+//!
+//! **Rows 1 and 2 rest on the API documentation and are UNMEASURED.**
+//! `webkit_web_view_load_html` (WebKit-6.0) is explicit that a `NULL` base
+//! "defaults to `about:blank`", so a FRAGMENT-ONLY href is expected to arrive as
+//! `about:blank#intro` — carrying an `about` scheme, which without row 1 would fall
+//! through to row 3 and be handed to `gtk::UriLauncher`. Asking the desktop to open
+//! a browser on `about:blank#intro` is wrong in a way that has no upside, which is
+//! why `about` is refused outright, and row 1 is the useful half: an anchor in a
 //! document with no location is still an anchor, and scrolling to it needs the
-//! element id and nothing else.
+//! element id and nothing else. That expectation is why both rows are kept. It has
+//! not been observed here, and the citation is the whole of its support.
 //!
-//! **Nothing in the running application produces that document, and the gate is in
-//! Lua.** `runtime/nvim/init.lua`'s `wolf_setup_preview` emits a `wolf_preview` entry
-//! only for a preview window whose `b:wolf_preview_source` is non-empty, so a preview
-//! of a buffer with no name never reaches `Snapshot::previews`, never becomes a
-//! [`crate::pane_view`] preview pane, and never gets a web view at all. MEASURED
-//! under `cage` on 2026-08-06: `:enew` plus `:setlocal filetype=markdown` plus
-//! `:WolfPreview` binds a preview scratch inside Neovim, and the front end draws two
-//! ORDINARY editor panes — no `decide-policy` is emitted for any click in either.
+//! **Rows 9 and 10 are MEASURED, and what arrives is not `about:` at all.** With
+//! `load_html(html, None)` a RELATIVE href reaches the handler RAW — observed
+//! `uri="lnkinto.md"` under `cage` on 2026-08-06 — rather than resolved against
+//! `about:blank`. That is row 9 exactly, and row 10 is the empty-href sibling it
+//! shares a branch with. **Do not write down that nothing produces a schemeless
+//! target**: one `load_html` argument does, which is what the second falsifier on
+//! `smoke_headless::preview_link_click_repoints_the_pane_under_cage` exercises.
 //!
-//! An UNSAVED buffer is not that document. `_G.wolf_new_untitled` names its buffer,
+//! What makes those two unreachable is [`file_uri_for`]'s DOMAIN instead: it answers
+//! `Some` for every source path the running application can produce, so the base is
+//! never `None` in the first place. Exactly two inputs make it answer `None`, and
+//! neither occurs.
+//!
+//! * An EMPTY source path. `runtime/nvim/init.lua:2229`, inside
+//!   `wolf_setup_preview`'s `emit_previews`, filters an empty
+//!   `b:wolf_preview_source` out of the `wolf_preview` notification, so a preview of
+//!   a buffer with no name never reaches `Snapshot::previews`, never becomes a
+//!   [`crate::pane_view`] preview pane, and never gets a web view at all. MEASURED
+//!   under `cage` on 2026-08-06: `:enew` plus `:setlocal filetype=markdown` plus
+//!   `:WolfPreview` binds a preview scratch inside Neovim, and the front end draws
+//!   two ORDINARY editor panes — no `decide-policy` is emitted for any click in
+//!   either.
+//! * A RELATIVE source path, which `nvim_buf_get_name` never yields: it answers an
+//!   absolute path or an empty one.
+//!
+//! An UNSAVED buffer is not the no-base document. `_G.wolf_new_untitled` names it,
 //! so `nvim_buf_get_name` answers an absolute `…/Untitled N.md` for a file that was
 //! never written, and the base URI is an ordinary `file:` URI. Measured in the same
 //! run: base `file:///…/project/Untitled%202.md` — the space percent-encoded, which
@@ -213,10 +234,13 @@ pub fn classify(uri: &str, source_path: &str) -> PreviewLink {
     };
 
     // Rows 1 and 2, and they must be tested BEFORE the foreign-scheme row: an
-    // `about` URI has a scheme and it is not `file`, so row 3 would launch it. See
-    // the module docs — `about:blank` is the base WebKitGTK substitutes when a
-    // document is loaded with none, so this is the nameless-buffer path, not an
-    // exotic one.
+    // `about` URI has a scheme and it is not `file`, so row 3 would launch it.
+    // `webkit_web_view_load_html` documents `about:blank` as the base a `NULL`
+    // argument defaults to, so this is the shape a FRAGMENT-ONLY href is expected to
+    // take in a document loaded with no base — expected from that documentation, not
+    // observed here. The module docs carry what a RELATIVE href in the same document
+    // was MEASURED to deliver (its raw self, which is row 9) and why neither shape is
+    // reachable from the running application.
     if scheme.eq_ignore_ascii_case("about") {
         let anchor = fragment.filter(|_| before_fragment.eq_ignore_ascii_case("about:blank"));
         return match anchor {

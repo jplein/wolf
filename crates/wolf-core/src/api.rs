@@ -709,8 +709,14 @@ impl WolfCore {
     /// `path` is ABSOLUTE — resolved by the front-end from WebKit's `file://` URL;
     /// no relative resolution happens here. Returns the linked file's source bufnr
     /// (`> 0`) on success; `0` when `path` is empty, unreadable, or not Markdown, or
-    /// on RPC error (including a [`NvimError::Timeout`] on a wedged nvim, logged). The front-end applies its own O3 fallback on `0` (hand
-    /// an existing-but-non-previewable file to the OS default app; no-op if missing).
+    /// on RPC error (including a [`NvimError::Timeout`] on a wedged nvim, logged).
+    ///
+    /// `0` means CORE DECLINED and carries no instruction about what to do next: it
+    /// does not distinguish a missing file from a readable non-Markdown one, so a
+    /// caller that wants that distinction must make it itself. What follows a `0` is
+    /// each front-end's own policy and the two deliberately differ — one hands an
+    /// existing-but-non-previewable file to the desktop's default application, the
+    /// other refuses and prints. Neither is this function's contract.
     #[must_use]
     pub fn preview_file(&self, win: i64, path: &str) -> i64 {
         let nvim = self.nvim.borrow();

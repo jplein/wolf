@@ -1668,8 +1668,12 @@ mod tests {
     ///
     /// Property 1: `None` for an empty or all-whitespace string, `Some(raw)` — the
     /// UNTRIMMED input, verbatim — for everything else. Property 2 (non-vacuity): the
-    /// range over the sweep carries both a `Some` and a `None`, so neither a function
-    /// that launches everything nor one that launches nothing satisfies the table.
+    /// range over the sweep carries BOTH a `Some` and a `None`. As in
+    /// [`document_update_table`], property 2 is BELT-AND-BRACES against `browser_url`
+    /// — a function that launches everything fails property 1's `""` row long before
+    /// the range is compared, and one that launches nothing fails its first row — and
+    /// a live guard on this TABLE, catching a trim that deletes the last `Some` or the
+    /// last `None` row and lowers [`NAMED_BROWSER_URL_ROWS`] to match.
     ///
     /// The last row is the one that looks wrong and is not. There is deliberately NO
     /// `http://127.0.0.1:` prefix check: the loopback-only bind is core's own hard
