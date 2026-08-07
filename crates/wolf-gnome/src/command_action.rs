@@ -510,8 +510,12 @@ mod tests {
              `preview_ui::browser_press` and `shell::AppShell::preview_in_browser` are unreachable \
              from any command AND the palette's `prv` collision disappears — so \
              `palette::tests::palette_rows_for_the_preview_smoke_rank_the_named_command_first` \
-             reddens beside this one, on its unfiltered floor, which is how that pair is told \
-             apart from a registry change. A two-element diff naming \"preview\" and \"edit\" \
+             reddens beside this one. MEASURED: it reddens on its `actionable_rows` clause, NOT \
+             on its unfiltered floor. `rank_palette` runs BEFORE the classification filter, so \
+             `Preview in Browser` is still among its candidates and the floor of 2 still holds; \
+             it is `palette_rows`, which applies the filter, that drops to one row. That pairing \
+             is how this failure is told apart from a registry change. A two-element diff naming \
+             \"preview\" and \"edit\" \
              means the Markdown preview pair was demoted back to Deferred, in which case \
              `preview_ui`'s press seams are unreachable from any command. A one-element diff \
              naming \"copy\" or \"paste\" \

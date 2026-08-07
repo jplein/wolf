@@ -8802,23 +8802,77 @@ exit 0
 // drew rather than at something this crate painted. It shares POINTER_PREAMBLE with
 // the six other `pointer_scenario` bodies and joins them on CAGE_LOCK.
 //
+// ## Both fixtures live in a SUBDIRECTORY, and that is what arms a falsifier
+//
+// The cwd is deliberately NOT the directory the link resolves in. A red run measured
+// that with `load_html(html, None)` restored, WebKitGTK hands the handler the RAW
+// relative href (`uri="lnkinto.md"`), `preview_link::classify` takes its schemeless
+// row, and `WolfCore::preview_file` passes that relative path to Lua's
+// `filereadable`, which resolves it against the captive Neovim's WORKING DIRECTORY.
+// With the fixtures at the project root that is the same directory as the source, so
+// the follow succeeded by coincidence and the base URI could not be seen at all.
+// LINK_FIXTURE_DIR is what separates the two answers; LINK_TARGET_HREF carries the
+// arithmetic.
+//
 // ## The fixture naming rule, as everywhere else here
 //
-// Neither filename contains any ASSERTED_OCR_TERMS entry — `preview` included, which
+// No fixture PATH contains any ASSERTED_OCR_TERMS entry — `preview` included, which
 // is the one ordinary English word in that table — and both are registered in
 // RELAUNCH_FIXTURE_NAMES along with the two readback files, which land in the same
-// temp cwd and are drawn as sidebar rows. This smoke asserts no OCR term of its own:
-// its two observables are RAW PIXELS inside the preview pane and a `tabpagebuflist()`
-// readback, neither of which a sidebar row can move.
+// temp cwd and are drawn as sidebar rows. The registered names carry the
+// LINK_FIXTURE_DIR prefix, so that guard's substring loop covers the DIRECTORY name
+// too and it needs no exemption block of its own. This smoke asserts no OCR term of
+// its own: its two observables are RAW PIXELS inside the preview pane and a
+// `tabpagebuflist()` readback, neither of which a sidebar row can move.
 // ============================================================================
 
-/// Preview-link smoke: the SOURCE file, whose first line is one wide link.
-const LINK_SOURCE_FILE: &str = "lnkfrom.md";
+/// Preview-link smoke: the subdirectory of the temp cwd both fixtures live in.
+///
+/// **Load-bearing, not tidiness.** It is the one thing that makes the base URI
+/// FALSIFIABLE: it puts the directory the link resolves in somewhere other than the
+/// captive Neovim's working directory, so a `None` base — which delivers the raw
+/// relative href — resolves to a path that does not exist. Moving either fixture back
+/// to the project root silently disarms the second falsifier on
+/// [`preview_link_click_repoints_the_pane_under_cage`], which is exactly how that
+/// falsifier was found to be no falsifier at all.
+const LINK_FIXTURE_DIR: &str = "lnkdir";
 
-/// Preview-link smoke: the file the link points at, by a RELATIVE href — so the base
-/// URI [`wolf_gnome::preview_link::file_uri_for`] builds is what resolves it, and a
-/// `None` base makes the click resolve against `about:blank` instead.
-const LINK_TARGET_FILE: &str = "lnkinto.md";
+/// Preview-link smoke: the SOURCE file, whose first line is one wide link, as a path
+/// RELATIVE TO THE TEMP CWD.
+///
+/// It carries the [`LINK_FIXTURE_DIR`] prefix because the readback asserts on this
+/// exact string twice over: `:e` is given it verbatim, and
+/// `wolf_ensure_preview_buf` names the preview scratch
+/// `Preview: <cwd-relative path>`, which for this source is
+/// `Preview: lnkdir/lnkfrom.md`.
+const LINK_SOURCE_FILE: &str = "lnkdir/lnkfrom.md";
+
+/// Preview-link smoke: the file the link points at, as a path relative to the temp
+/// cwd — the answer a CORRECT base URI produces.
+const LINK_TARGET_FILE: &str = "lnkdir/lnkinto.md";
+
+/// The href written into [`LINK_SOURCE_LINE`]: the target named RELATIVE TO THE
+/// SOURCE, so it carries no directory component at all.
+///
+/// ## The arithmetic, which is the whole point of the subdirectory
+///
+/// With the base URI in place, WebKit resolves this against
+/// `file://<cwd>/lnkdir/lnkfrom.md` — RFC 3986 replaces the last segment — and the
+/// handler is given `<cwd>/lnkdir/lnkinto.md`, which exists.
+///
+/// With a `None` base the handler is given this string RAW (measured:
+/// `uri="lnkinto.md"`), `classify` answers its schemeless row, and Lua's
+/// `filereadable` resolves it against the captive Neovim's cwd — `<cwd>/lnkinto.md`,
+/// which does NOT exist. `wolf_preview_file` answers 0, the pane is left alone, and
+/// the readback assertion reddens.
+///
+/// Both halves are checked executably in the smoke rather than trusted: this string
+/// must appear in [`LINK_SOURCE_LINE`] as a whole markdown destination `](…)`, must
+/// carry no path separator, must equal [`LINK_TARGET_FILE`] minus its
+/// [`LINK_FIXTURE_DIR`] prefix, and the file the wrong resolution would find must be
+/// absent from the temp cwd. Put a directory back into the href and both resolutions
+/// succeed again.
+const LINK_TARGET_HREF: &str = "lnkinto.md";
 
 /// First line of [`LINK_SOURCE_FILE`], MEASURED as the geometry
 /// [`LINK_CLICK_X`] / [`LINK_CLICK_Y`] were derived against.
@@ -8829,6 +8883,9 @@ const LINK_TARGET_FILE: &str = "lnkinto.md";
 /// blue-dominant predicate plenty of pixels to find. **Changing the link text moves
 /// the cluster and invalidates the click constants**; the calibration assertion is
 /// what turns that into a named failure rather than a silent miss.
+///
+/// The href half is [`LINK_TARGET_HREF`] spelled out, because a const cannot
+/// interpolate another; the smoke asserts the two agree.
 const LINK_SOURCE_LINE: &str = "[LLLLLLLLLLLLLLLLLLLLLLLL](lnkinto.md)";
 
 /// Body of [`LINK_TARGET_FILE`]. Never OCR'd — the readback is the observable — but
@@ -8896,12 +8953,29 @@ const LINK_SEARCH_INSET_Y_PX: f64 = 40.0;
 /// preview scratch to the target's, and the handler logged `nav=LinkClicked` with a
 /// `file:` URI naming the target.
 ///
-/// The measurement run used the fixture FILENAMES `alpha.md` / `beta.md` rather than
-/// [`LINK_SOURCE_FILE`] / [`LINK_TARGET_FILE`], and that difference cannot move the
-/// rectangle: an href is not drawn, only the link TEXT is, and
-/// [`LINK_SOURCE_LINE`]'s text is byte-identical to the measured one. It is recorded
-/// rather than smoothed over, because a reader comparing this note with the run log
-/// would otherwise wonder which fixture the numbers came from.
+/// The measurement run used the fixture FILENAMES `alpha.md` / `beta.md` at the
+/// project ROOT rather than [`LINK_SOURCE_FILE`] / [`LINK_TARGET_FILE`] under
+/// [`LINK_FIXTURE_DIR`]. Neither difference can move the rectangle, and the reasons
+/// are structural rather than hopeful:
+///
+/// * An href is never drawn — only the link TEXT is — and [`LINK_SOURCE_LINE`]'s text
+///   is byte-identical to the measured one, so the rendered document is the same
+///   bytes. `render_preview` puts no filename in the page.
+/// * The source's PATH does grow, and it is drawn: the pane's statusbar strip renders
+///   it on the secondary line. That strip cannot move the web view's origin, because
+///   `statusbar_layout::statusbar_layout` derives its height from the two FONT SIZES
+///   alone and never from its text, and it cannot enter the search rectangle either,
+///   since [`LINK_SEARCH_INSET_Y_PX`] starts the search below it. It is grey theme
+///   text in any case, which [`is_link_blue`]'s blue-over-red margin rejects.
+/// * The sidebar gains a directory row. The pane area is built from
+///   [`OVERLAY_ORIGIN_X_EXPECTED`], a fixed widget corner every pane smoke shares, so
+///   a row's text cannot move it.
+///
+/// It is recorded rather than smoothed over, because a reader comparing this note with
+/// the run log would otherwise wonder which fixture the numbers came from — and
+/// because the constant is RE-VERIFIED on every run by the calibration assertion,
+/// which re-derives the cluster from that run's own capture A. That assertion, not
+/// this note, is what makes the claim above checked rather than argued.
 ///
 /// **Do not tune this to make a run pass.** The smoke re-asserts the calibration out
 /// of its own capture before it uses the number, so a layout change fails there, with
@@ -8972,6 +9046,9 @@ PREVIEW_SETTLE=2.0
 #
 # One pane is what makes the placement `split_right`, which is what puts the preview
 # in the RIGHT half the click constants were measured against.
+#
+# $LINK_SOURCE_FILE carries its SUBDIRECTORY, and is typed RELATIVE so the buffer's
+# name is the cwd-relative path the readback below compares against.
 wtype -- ":e $LINK_SOURCE_FILE"
 wtype -k Return
 sleep "$SETTLE"
@@ -8980,8 +9057,19 @@ sleep "$SETTLE"
 # with a COMMA rather than a space because a preview scratch's own name contains one
 # (it is "Preview: <cwd-relative path>"); the Rust side splits on the comma and sorts
 # before comparing, so window order is not the subject.
+#
+# `bufname(b)` RAW, deliberately unlike the sibling preview scenarios' `:t`: this
+# smoke's fixtures live in a subdirectory, and a tail would drop it -- turning
+# "Preview: lnkdir/lnkinto.md" into "lnkinto.md", which is also what the SOURCE
+# pane's entry would tail to. That collapse would cost the assertion both its
+# "Preview: " prefix (the half no sidebar row or :e toast can forge) and the
+# directory (the half that separates the correct resolution from the cwd-relative
+# one). PREMISE, and the reason the BEFORE readback is asserted as a precondition:
+# a buffer's name is the string it was given -- the relative path typed at `:e` for
+# the source, and nvim_buf_set_name's argument for the preview scratch, which
+# wolf_ensure_preview_buf builds as "Preview: " .. fnamemodify(abs, ':.').
 read_wins() {
-    wtype -- ":call writefile([join(map(tabpagebuflist(), {_, b -> fnamemodify(bufname(b), ':t')}), ',')], '$1')"
+    wtype -- ":call writefile([join(map(tabpagebuflist(), {_, b -> bufname(b)}), ',')], '$1')"
     wtype -k Return
     wait_file "$1" || exit 14
 }
@@ -10873,13 +10961,18 @@ fn leaf_tail(node: &PaneNode) -> Option<&str> {
     }
 }
 
-/// The buffer TAIL NAMES a `tabpagebuflist()` readback reports, SORTED.
+/// The buffer NAMES a `tabpagebuflist()` readback reports, SORTED.
 ///
 /// The scenario joins them with a COMMA rather than a space, because a preview
 /// scratch's own name carries one (`Preview: <cwd-relative path>`), and this sorts
 /// them so the caller asserts on the SET of buffers rather than on nvim's window
 /// order — which for a `:vsplit` depends on `'splitright'` and is not what any
 /// assertion here is about.
+///
+/// WHICH name each scenario writes is the scenario's own choice, not this function's:
+/// most reduce it to the tail with `:t`, while [`POINTER_LINK_BODY`] writes
+/// `bufname(b)` raw because its fixtures live in a subdirectory a tail would drop.
+/// This only splits, trims and sorts.
 fn read_window_buffer_names(path: &Path, smoke: &str) -> Vec<String> {
     let raw = read_readback(path, smoke);
     let mut names: Vec<String> = raw
@@ -11700,6 +11793,12 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
     // fixture name from containing ANY asserted term, which is what stops a later
     // rename from quietly turning one of these into page text that breaks somebody
     // else's. `preview` is in that table, so `lnk*` is not an aesthetic choice.
+    //
+    // The first two entries are PATHS carrying LINK_FIXTURE_DIR rather than bare
+    // filenames, which is deliberate: the sidebar renders the directory row by name
+    // too, and registering the prefixed path puts it inside the same substring loop
+    // instead of giving this smoke a directory exemption block like the title and
+    // typed-`:cd` smokes carry.
     (
         LINK_SOURCE_FILE,
         "LINK_SOURCE_FILE",
@@ -14966,6 +15065,27 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
 /// produced by Neovim itself, and no sidebar row, `:e` toast or web-view pixel can
 /// satisfy it.
 ///
+/// ## The fixtures live in a SUBDIRECTORY, and that is what makes the BASE URI visible
+///
+/// Read [`LINK_FIXTURE_DIR`] and [`LINK_TARGET_HREF`] before touching either fixture.
+/// The short version: with both files at the project root — where they started — the
+/// second falsifier below was **no falsifier at all**. A red run restored
+/// `view.load_html(html, None)` and this smoke stayed green, because WebKitGTK then
+/// hands the handler the RAW relative href (measured: `uri="lnkinto.md"`),
+/// `preview_link::classify` answers its schemeless row, and `WolfCore::preview_file`
+/// passes that relative path to Lua's `filereadable`, which resolves it against the
+/// captive Neovim's WORKING DIRECTORY — which was the source's directory too. The
+/// follow succeeded by coincidence of the cwd and the assertion could not see the base
+/// URI at all: a check aimed at the right property, looking somewhere the defect could
+/// not appear.
+///
+/// The subdirectory separates the two answers. `lnkinto.md` against the source's own
+/// directory is `<cwd>/lnkdir/lnkinto.md`, which exists; the same string against the
+/// cwd is `<cwd>/lnkinto.md`, which does not. **Moving either fixture back to the
+/// project root, or putting a directory into the href, silently disarms the falsifier
+/// again** — which is why the smoke checks both properties, and the absence of
+/// `<cwd>/lnkinto.md`, before it launches anything.
+///
 /// ## The MEASUREMENT behind the click constants
 ///
 /// Taken 2026-08-06 under `cage` at a 1280x720 output (GTK 4.22.4, libadwaita 1.9.0,
@@ -14975,8 +15095,10 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
 /// `#4ea1ff` at 265 of them, which is the dark theme's link colour. Its centroid is
 /// `(900, 171)`. Clicking there moved the readback from the source's preview scratch to
 /// the target's and logged `nav=LinkClicked` with a `file:` URI naming the target. See
-/// [`LINK_CLICK_X`] for the one difference between the measurement run and this smoke —
-/// the fixture FILENAMES — and why it cannot move the rectangle.
+/// [`LINK_CLICK_X`] for the two differences between the measurement run and this smoke
+/// — the fixture FILENAMES and the subdirectory they were moved into — and for why
+/// neither can move the rectangle. Neither is taken on trust: assertion 3 re-derives
+/// the cluster from every run's own capture.
 ///
 /// **Do not tune a constant to make a run pass.** Assertion 3 exists precisely so a
 /// moved layout is a named failure rather than a silent miss; if it fires, re-measure
@@ -15012,7 +15134,7 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
 /// | 1 | `status.success()` | precondition — the pointer scenario ran to completion | none; do not invent one |
 /// | 2 | both captures present, and the click point is inside the reported output | precondition — `grim` produced images and the injected point was not clamped | none; do not invent one |
 /// | 3 | capture A's blue cluster is ONE small rectangle and contains the click constant | **calibration** — the constant still names the rendered link | change `PREVIEW_SOURCE_HEADING`-style typography, the fixture's link text, or the output size. It is a TRIPWIRE rather than a feature revert, and a failure here says nothing about the click path. |
-/// | 4 | the readback goes from `Preview: <source>` to `Preview: <target>` | **discriminator** — the click reached WebKit AND the whole follow path ran | best: in `pane_view`'s `decide-policy` handler, return `false` for a `LinkClicked` navigation WITHOUT calling `ignore()`, letting WebKit navigate itself. The view then loads the target as a document of its own and the readback still names `Preview: <source>` — exactly the defect the answer-first rule prevents. Second: restore `view.load_html(html, None)`; the relative href then resolves against `about:blank`, `classify` sees no `file` scheme, and the readback is unchanged. |
+/// | 4 | the readback goes from `Preview: <source>` to `Preview: <target>` | **discriminator** — the click reached WebKit AND the whole follow path ran | best: in `pane_view`'s `decide-policy` handler, return `false` for a `LinkClicked` navigation WITHOUT calling `ignore()`, letting WebKit navigate itself. The view then loads the target as a document of its own and the readback still names `Preview: <source>` — exactly the defect the answer-first rule prevents. Second: restore `view.load_html(html, None)`; WebKit then delivers the raw relative href, `classify` answers its schemeless row, and `filereadable` resolves it against the captive Neovim's cwd — a directory the target is NOT in, thanks to [`LINK_FIXTURE_DIR`] — so `preview_file` answers 0 and the readback is unchanged. |
 #[test]
 fn preview_link_click_repoints_the_pane_under_cage() {
     const SMOKE: &str = "preview_link_click_repoints_the_pane_under_cage";
@@ -15028,17 +15150,61 @@ fn preview_link_click_repoints_the_pane_under_cage() {
     // a renamed target would leave the click landing on a link to a file that does not
     // exist, `preview_file` would answer 0, and assertion 4 would fail with no
     // indication that the FIXTURE was the problem.
+    let markdown_destination = format!("]({LINK_TARGET_HREF})");
     assert!(
-        LINK_SOURCE_LINE.contains(LINK_TARGET_FILE),
-        "{SMOKE}: LINK_SOURCE_LINE = {LINK_SOURCE_LINE:?} does not name LINK_TARGET_FILE = \
-         {LINK_TARGET_FILE:?}. The link's href is written into the fixture as a literal because a \
-         const cannot interpolate another; if the two drift, the click follows a link to a file \
-         that was never written, core answers 0, and the readback assertion fails while the \
-         calibration passes — which would read as \"the click did not reach WebKit\" when the \
-         truth is that the fixture is wrong."
+        LINK_SOURCE_LINE.contains(&markdown_destination),
+        "{SMOKE}: LINK_SOURCE_LINE = {LINK_SOURCE_LINE:?} does not carry the markdown destination \
+         {markdown_destination:?}. The link's href is written into the fixture as a literal \
+         because a const cannot interpolate another; if the two drift, the click follows a link \
+         to a file that was never written, core answers 0, and the readback assertion fails while \
+         the calibration passes — which would read as \"the click did not reach WebKit\" when the \
+         truth is that the fixture is wrong. The whole destination is matched, parentheses \
+         included, rather than the bare name: a bare `contains` would also accept \
+         `]({LINK_FIXTURE_DIR}/{LINK_TARGET_HREF})`, which is the one variant that must NOT \
+         pass — see below."
+    );
+    let target_inside_dir = format!("{LINK_FIXTURE_DIR}/{LINK_TARGET_HREF}");
+    assert_eq!(
+        LINK_TARGET_FILE, target_inside_dir,
+        "{SMOKE}: LINK_TARGET_FILE = {LINK_TARGET_FILE:?} is not LINK_TARGET_HREF = \
+         {LINK_TARGET_HREF:?} inside LINK_FIXTURE_DIR = {LINK_FIXTURE_DIR:?}. The href is written \
+         RELATIVE to the source, so the two must name one file; if they drift, the fixture is \
+         written at one path and the link points at another and the click can never follow."
+    );
+    let dir_prefix = format!("{LINK_FIXTURE_DIR}/");
+    assert!(
+        LINK_SOURCE_FILE.starts_with(&dir_prefix),
+        "{SMOKE}: LINK_SOURCE_FILE = {LINK_SOURCE_FILE:?} is not inside LINK_FIXTURE_DIR = \
+         {LINK_FIXTURE_DIR:?}. The source has to sit somewhere OTHER than the captive Neovim's \
+         working directory or the base URI stops being falsifiable — see LINK_FIXTURE_DIR."
+    );
+    // The clause that keeps the base URI falsifiable, and the one a later "tidy-up" is
+    // most likely to undo. An href of `lnkdir/lnkinto.md` would resolve correctly BOTH
+    // ways — against the base URI and against the cwd — so restoring
+    // `load_html(html, None)` would leave this smoke green again, which is exactly the
+    // state the red runs found and this fixture layout exists to fix.
+    assert!(
+        !LINK_TARGET_HREF.contains('/'),
+        "{SMOKE}: LINK_TARGET_HREF = {LINK_TARGET_HREF:?} carries a path separator, so the href \
+         is no longer relative to the SOURCE. A directory in the href resolves to the same file \
+         whether WebKit applies the base URI or the raw string is handed to Lua's `filereadable` \
+         against the cwd — which disarms this smoke's second falsifier (restore \
+         `view.load_html(html, None)`) and makes it pass while the base URI does nothing. Keep \
+         the href a bare filename and keep the fixtures in {LINK_FIXTURE_DIR:?}."
     );
 
     let cwd = make_temp_cwd();
+    // `write_relaunch_fixtures` writes with `std::fs::write` and creates no parents, so
+    // the subdirectory has to exist first. It is created HERE rather than inside that
+    // shared helper so the one smoke whose fixture layout is load-bearing says so at
+    // the point where it matters.
+    let fixture_dir = cwd.join(LINK_FIXTURE_DIR);
+    std::fs::create_dir_all(&fixture_dir).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: failed to create the fixture subdirectory {}: {e}",
+            fixture_dir.display()
+        )
+    });
     write_relaunch_fixtures(
         SMOKE,
         &cwd,
@@ -15046,6 +15212,34 @@ fn preview_link_click_repoints_the_pane_under_cage() {
             (LINK_SOURCE_FILE, LINK_SOURCE_LINE),
             (LINK_TARGET_FILE, LINK_TARGET_BODY),
         ],
+    );
+
+    // The arithmetic of the subdirectory, made executable against the filesystem the
+    // scenario is about to run on rather than argued in prose. The RIGHT answer — the
+    // href resolved against the source's own directory — must exist, or assertion 4
+    // could only ever fail; the WRONG answer — the same href resolved against the
+    // captive Neovim's working directory — must NOT, or the base URI is unfalsifiable
+    // again because both resolutions find a readable Markdown file.
+    let resolved = cwd.join(LINK_TARGET_FILE);
+    assert!(
+        resolved.is_file(),
+        "{SMOKE}: the link target {} was not written. Assertion 4 expects the click to repoint \
+         the pane at it, so without the file on disk `wolf_preview_file`'s `filereadable` gate \
+         answers 0 and the smoke could only ever fail.",
+        resolved.display()
+    );
+    let cwd_relative = cwd.join(LINK_TARGET_HREF);
+    assert!(
+        !cwd_relative.exists(),
+        "{SMOKE}: {} exists, so the href {LINK_TARGET_HREF:?} resolves to a real file against the \
+         captive Neovim's WORKING DIRECTORY as well as against the source's own. That makes the \
+         base URI invisible to this smoke: with `view.load_html(html, None)` restored WebKit \
+         hands the handler the raw relative href, `classify` answers its schemeless row, and \
+         `filereadable` finds this file — so the follow succeeds and the named falsifier stays \
+         green. A SIDEBAR_FILLER_FILES entry or another smoke's fixture renamed to \
+         {LINK_TARGET_HREF:?} is the likely cause; rename that, do not move this smoke's \
+         fixtures out of {LINK_FIXTURE_DIR:?}.",
+        cwd_relative.display()
     );
 
     let wins_before = cwd.join(LINK_READBACK_BEFORE_NAME);
@@ -15162,6 +15356,12 @@ fn preview_link_click_repoints_the_pane_under_cage() {
     // by `wolf_ensure_preview_buf` after the bound SOURCE's cwd-relative path, so the
     // pair of readbacks states which file the pane previewed BEFORE the click and which
     // it previews after — in strings Neovim produced.
+    //
+    // Both expectations are CWD-RELATIVE, because `POINTER_LINK_BODY` writes
+    // `bufname(b)` rather than its tail. The premise that carries is stated there and
+    // is checked HERE, by the BEFORE readback: if `bufname` ever answered an absolute
+    // path this assertion fails first, with both strings printed, and nothing about the
+    // click is implicated.
     let want_before = {
         let mut want = vec![
             format!("{PREVIEW_READBACK_PREFIX}{LINK_SOURCE_FILE}"),
@@ -15180,7 +15380,12 @@ fn preview_link_click_repoints_the_pane_under_cage() {
          entry means `:WolfPreview` opened nothing — check `wolf_open_preview`'s markdown \
          filetype gate and `shell::perform`'s `OpenPreview` arm. A preview scratch already naming \
          {LINK_TARGET_FILE:?} means the click landed before this readback was taken, which would \
-         make the pair below vacuous."
+         make the pair below vacuous. An ABSOLUTE path in either entry means `bufname()` stopped \
+         answering the SHORT name this scenario's premise rests on — the fix is to write \
+         `fnamemodify(bufname(b), ':.')` in `read_wins`, and it says nothing about the click \
+         path. A TAILED entry ({LINK_TARGET_HREF:?} with no directory) means `read_wins` was \
+         \"tidied\" back to `:t`, which collapses the preview scratch's name onto the source \
+         pane's and drops the directory this smoke's falsifier depends on."
     );
 
     let want_after = {
@@ -15202,10 +15407,13 @@ fn preview_link_click_repoints_the_pane_under_cage() {
          calling `ignore()`, so WebKit navigated itself and the view is now showing the linked \
          file as a document of its own while Neovim knows nothing about it (the app's stderr \
          carries no refusal line in that case, which is how it is told from the others); (b) the \
-         view was loaded with a `None` base URI, so the relative href resolved against \
-         `about:blank`, `classify` saw no `file` scheme and printed a refusal naming an `about:` \
-         URI; (c) `preview_file_press` refused, which prints \"wolf-gnome: preview link not \
-         followed:\" with a liveness reason. THREE entries mean a new pane was opened rather than \
+         view was loaded with a `None` base URI, so WebKit delivered the RAW relative href \
+         {LINK_TARGET_HREF:?}, `classify` answered its schemeless row, and Lua's `filereadable` \
+         looked for that name in the captive Neovim's working directory rather than in \
+         {LINK_FIXTURE_DIR:?} — stderr then carries \"the captive Neovim declined to preview \
+         {LINK_TARGET_HREF:?}\", naming the bare filename, which is the signature; (c) \
+         `preview_file_press` refused, which prints \"wolf-gnome: preview link not followed:\" \
+         with a liveness reason. THREE entries mean a new pane was opened rather than \
          the existing preview window rebound, which `WolfCore::preview_file` must never do — it \
          rebinds a window and never creates one. Captures kept at {} and {}.",
         out_png_before.display(),

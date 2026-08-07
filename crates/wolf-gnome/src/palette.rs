@@ -1601,6 +1601,13 @@ mod tests {
     /// `Preview in Browser` as the top row. Deleting the classification filter from
     /// [`palette_rows`] reddens the `actionable_rows` clause instead, which is what
     /// the unfiltered floor exists to keep meaningful.
+    ///
+    /// Reverting `Command::PreviewInBrowser` to `UiAction::Deferred` reddens the
+    /// `actionable_rows` clause too, and MEASURED it is that clause and not the
+    /// unfiltered floor: `rank_palette` runs before the filter, so the floor of 2 still
+    /// holds while `palette_rows` drops to one row.
+    /// `command_action::tests::dispatched_commands_are_the_expected_set` reddens beside
+    /// it, which is how the pair is told apart from a registry change.
     #[test]
     fn palette_rows_for_the_preview_smoke_rank_the_named_command_first() {
         for case in PREVIEW_SMOKE_QUERIES {

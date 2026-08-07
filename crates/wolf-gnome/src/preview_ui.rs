@@ -2129,18 +2129,27 @@ mod tests {
 
     /// Pins how a freshly rendered document reaches the live web view.
     ///
-    /// Property 1: each named shape gets the strategy the rules give it. Property 2
-    /// (non-vacuity): the range over the sweep is EXACTLY both variants — without which
-    /// a `document_update` that answered [`DocumentUpdate::FullLoad`] for everything
-    /// would satisfy five of the eight rows and every negative reading of the rest, and
-    /// a reader would be thrown back to the top of the document on every keystroke with
-    /// nothing anywhere reddening.
+    /// Property 1: each named shape gets the strategy the rules give it. Property 2:
+    /// the range over the sweep is EXACTLY both variants.
+    ///
+    /// Property 2 is BELT-AND-BRACES against `document_update` and a guard on this
+    /// TABLE, exactly as [`crate::preview_link`]'s classification table records for its
+    /// own range assertion. A `document_update` that answered
+    /// [`DocumentUpdate::FullLoad`] for everything does not reach it: the range is
+    /// accumulated inside the loop and row 3 fails first. What property 2 does catch,
+    /// and catches alone, is a TRIMMED table — delete the three `InPlaceEligible` rows
+    /// and lower [`NAMED_UPDATE_ROWS`] to match, and the length assertion and property 1
+    /// both stay green while the strategy that preserves the reader's scroll offset
+    /// stops being swept at all.
     ///
     /// **Rows 3 and 5 are the pair that measures the KEY.** Row 3 is a live edit of the
     /// file on screen and MUST stay in place; row 5 is a reused preview pane switching
     /// sources at the SAME `changedtick`, which two freshly opened files really do
-    /// share, and MUST reload. A rule keyed on the tick answers row 5 wrong; the final
-    /// arm turned into a full load answers row 3 wrong. Neither row alone can see both.
+    /// share, and MUST reload. A rule keyed on the tick answers BOTH wrong — row 5 by
+    /// reading a source switch as an in-place edit, row 3 by reading an edit as a
+    /// source switch — and the final arm turned into a full load answers row 3 wrong.
+    /// Neither row alone can see both, which is why they are a pair and not a
+    /// duplicate.
     ///
     /// **Row 4 is the fragment coupling**, and it is the one this signature cannot
     /// show: a cross-file scroll is applied on a `LoadEvent::Finished` edge, and an
@@ -2154,13 +2163,20 @@ mod tests {
     /// compare against until `loaded` is `Some` — which Rust enforces rather than this
     /// test.
     ///
-    /// Falsifiers, one row each:
-    /// * Change the final arm to [`DocumentUpdate::FullLoad`] — rows 3, 6 and 7 redden.
-    ///   What that costs was MEASURED in unit 17: `window.scrollY` 2000 was preserved
-    ///   in 24 of 24 samples across a live edit with the in-place swap, against 0 of 24
-    ///   for a full `load_html`.
-    /// * Compare `source_tick` instead of `source_bufnr` in rule 3 — row 5 reddens and
-    ///   nothing else does.
+    /// Falsifiers, and which row each one actually reports — the loop aborts on its
+    /// FIRST failure, so "reddens" without "first" is not a usable prediction:
+    /// * Change the final arm to [`DocumentUpdate::FullLoad`] — rows 3, 6 and 7 all
+    ///   fail and row 3 is reported. What that costs was MEASURED in unit 17:
+    ///   `window.scrollY` 2000 was preserved in 24 of 24 samples across a live edit
+    ///   with the in-place swap, against 0 of 24 for a full `load_html`.
+    /// * DELETE rule 3 — this is the edit that isolates row 5, and MEASURED it is the
+    ///   row reported. (Row 8 fails under it too and is reached later; nothing else
+    ///   moves, because every other row either answers through rule 1 or 2 or wants
+    ///   `InPlaceEligible` anyway.)
+    /// * Compare `source_tick` instead of `source_bufnr` in rule 3 — rows 3 AND 5 both
+    ///   fail, and MEASURED the report names row 3. It falsifies the PAIR without
+    ///   isolating either half, so it is not evidence about row 5; the deletion above
+    ///   is.
     /// * Delete the `fragment_pending` clause — row 4 reddens and nothing else does
     ///   (row 2 still answers `FullLoad` through rule 1, which is what isolates it).
     #[test]
@@ -2236,8 +2252,10 @@ mod tests {
             NAMED_UPDATE_ROWS,
             "the document-update table must carry its {NAMED_UPDATE_ROWS} named rows, not {}. \
              Rows 3, 4 and 5 are the three that name one rule each, and no two of them can be \
-             collapsed: 3 is the only row the final arm decides, 4 the only row the \
-             fragment clause decides, and 5 the only row that separates the bufnr from the tick.",
+             collapsed: 3 is the FIRST row the final arm decides (6 and 7 follow it), 4 the only \
+             row the fragment clause decides, and 5 the FIRST row that separates the bufnr from \
+             the tick (8 follows it). The loop reports its first failure, so those two \
+             \"first\"s are what the falsifier list in the doc comment predicts.",
             cases.len()
         );
 
@@ -2262,19 +2280,22 @@ mod tests {
 
         // --- Property 2: the range, which no individual row can state --------
         //
+        // Reached only when every row above passed, so it is a statement about this
+        // TABLE's coverage rather than about `document_update` — see the doc comment.
         // The two names are typed out as LITERALS rather than derived from a sweep of
-        // the enum: comparing the observed range against a list computed the same way
-        // would be a tautology, and it is what makes "a constant strategy fails this"
-        // true.
+        // the enum, because comparing the observed range against a list computed the
+        // same way would be a tautology.
         let both: HashSet<&'static str> = ["FullLoad", "InPlaceEligible"].into_iter().collect();
         assert_eq!(
             seen, both,
             "document_update's range over all {NAMED_UPDATE_ROWS} rows must be exactly both \
-             variants. Only FullLoad means the in-place swap is unreachable and the live preview \
-             throws the reader back to the top of the document on every keystroke, which is \
-             exactly what a live preview is not. Only InPlaceEligible means a first load has no \
-             document to swap under, a source switch keeps the previous file's base URI, and a \
-             pending cross-file fragment never gets the load edge its scroll fires on."
+             variants. A MISSING variant means no row left in the table exercises that strategy: \
+             every surviving row pins one and they all passed, so the only way to get here is by \
+             DELETING the rows that carried it and lowering NAMED_UPDATE_ROWS to match. Restore \
+             them rather than shrinking this set. Losing InPlaceEligible leaves nothing measuring \
+             the swap that preserves the reader's scroll offset on a live edit; losing FullLoad \
+             leaves nothing measuring the first load, the source switch that re-establishes the \
+             base URI, or the load edge a pending cross-file fragment scrolls on."
         );
 
         // The two fixtures rows 3 and 5 lean on, checked rather than trusted — the

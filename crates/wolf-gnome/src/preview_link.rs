@@ -645,22 +645,40 @@ mod tests {
     /// Property 1: every row answers what the module's ten-row table says it does —
     /// PAYLOAD INCLUDED for the three acting variants, since the path and the fragment
     /// ARE the decision, and by CLASS for a refusal (see [`WantLink`]). Property 2
-    /// (non-vacuity): the RANGE over the whole sweep is exactly the four variants —
-    /// without which a `classify` that answered `Refuse` for everything would satisfy
-    /// every refusing row and every negative clause here.
+    /// (non-vacuity): the RANGE over the whole sweep is exactly the four variants. It
+    /// is BELT-AND-BRACES against `classify` and a live guard on this TABLE — see the
+    /// falsifier list below, which says which edits reach it and which do not.
     ///
-    /// ## The rows that are DEFENSIVE, and the one Lua `if` that makes them so
+    /// ## The rows that are DEFENSIVE, and what actually makes them so
     ///
-    /// The three `about:` rows and the two schemeless ones cover a preview document
-    /// with no base URI, and **nothing in the running application produces one**:
-    /// `runtime/nvim/init.lua:2229` filters an empty `b:wolf_preview_source` out of the
-    /// `wolf_preview` notification, so a preview of a nameless buffer never reaches
-    /// `Snapshot::previews`, never becomes a pane and never gets a web view. MEASURED
-    /// under `cage` on 2026-08-06: `:enew` + `:setlocal filetype=markdown` +
-    /// `:WolfPreview` emitted ZERO `decide-policy` lines and drew two ordinary editor
-    /// panes. They are kept because a guard whose reachability rests on one Lua `if` is
-    /// worth keeping — not because they are "the nameless-buffer path", which they are
-    /// not.
+    /// The three `about:` rows and the two schemeless ones all describe a preview
+    /// document loaded with NO base URI, and the reason none of them is reachable is
+    /// [`file_uri_for`]'s DOMAIN: it answers `Some` for every source path the running
+    /// application can produce, and exactly two inputs make it answer `None`.
+    ///
+    /// * An EMPTY source path. `runtime/nvim/init.lua:2229` filters an empty
+    ///   `b:wolf_preview_source` out of the `wolf_preview` notification, so a preview
+    ///   of a nameless buffer never reaches `Snapshot::previews`, never becomes a pane
+    ///   and never gets a web view at all. MEASURED under `cage` on 2026-08-06:
+    ///   `:enew` + `:setlocal filetype=markdown` + `:WolfPreview` emitted ZERO
+    ///   `decide-policy` lines and drew two ordinary editor panes.
+    /// * A RELATIVE source path. `PreviewInfo.source_path` comes from
+    ///   `nvim_buf_get_name`, which answers an absolute path or an empty one and never
+    ///   a relative one — including for a never-saved `Untitled N.md`, which is what
+    ///   the [`UNSAVED_SOURCE`] rows are here to show.
+    ///
+    /// Those two inputs are [`file_uri_for_table`]'s two `None` rows, so that table and
+    /// this section state one fact from two sides.
+    ///
+    /// **Do not write down that "nothing produces a schemeless target".** It was
+    /// measured FALSE: with `load_html(html, None)` a relative href arrives at the
+    /// handler RAW — `uri="lnkinto.md"` — rather than resolved against `about:blank`,
+    /// which is row 9 exactly. Row 9 is one `load_html` argument away from being live,
+    /// and it is what the second falsifier on
+    /// `smoke_headless::preview_link_click_repoints_the_pane_under_cage` exercises. The
+    /// five rows are kept because a guard whose reachability rests on one Lua `if` and
+    /// one function argument is worth keeping — not because nothing could ever reach
+    /// them, and not because they are "the nameless-buffer path", which they are not.
     ///
     /// The row that carries real MEASURED behaviour is the link resolved against
     /// [`UNSAVED_SOURCE`], and its `desc` says so: a never-saved Ctrl+Shift+N buffer
@@ -679,14 +697,45 @@ mod tests {
     ///   `mailto` rows redden.
     /// * Compare the two paths raw instead of through [`normalize_path`] — the
     ///   `/a/./x.md` rows redden from both sides.
-    /// * Drop `classify`'s `.filter(|f| !f.is_empty())` — the bare-`#` row reddens.
-    ///   Note it is guarded TWICE: making [`split_fragment`] return `Some("")` alone
-    ///   leaves the row green, because the filter still collapses it. That redundancy
-    ///   is stated rather than hidden, so nobody reads a green run under the second
-    ///   edit as this row being vacuous.
     /// * Answer [`PreviewLink::PreviewFile`] where a refusal is due — the five
     ///   refusing rows redden.
-    /// * Make `classify` a constant — property 2 reddens and nothing else does.
+    ///
+    /// ## The bare-`#` row has NO individual falsifier, and that is a property of the
+    /// code rather than of the row
+    ///
+    /// The empty fragment is guarded twice, on either side of [`percent_decode`]:
+    /// [`split_fragment`] collapses an empty raw fragment to `None`, and `classify`'s
+    /// `.filter(|f| !f.is_empty())` collapses an empty DECODED one. Either guard alone
+    /// satisfies the row, so **neither is individually falsifiable** — deleting the
+    /// filter leaves the row green because `split_fragment` already answered `None`,
+    /// and making `split_fragment` return `Some("")` leaves it green because the filter
+    /// still collapses it. Both were run; both stayed green. The row is attached to the
+    /// CONJUNCTION, and deleting both together reddens it.
+    ///
+    /// No row can earn the filter an individual falsifier, because [`percent_decode`]
+    /// cannot answer `""` for a non-empty input: every loop iteration pushes at least
+    /// one byte (a `%XX` escape consumes three and pushes one, including for `%00`,
+    /// which yields a one-byte NUL string), and `String::from_utf8_lossy` REPLACES an
+    /// invalid byte with U+FFFD rather than dropping it. So the filter is unreachable
+    /// today and is kept anyway: it guards the decoder's output, which is a different
+    /// step from the splitter's input, and removing a guard to win a falsifier is the
+    /// wrong trade. This paragraph exists so a green run under either single edit is
+    /// read as the redundancy it is, not as the row being vacuous.
+    ///
+    /// ## Property 2 is BELT-AND-BRACES against `classify`, and a guard on this table
+    ///
+    /// Making `classify` a constant does NOT reach it: the range is accumulated inside
+    /// the loop, so property 1's first row (`about:blank#intro`, which a constant
+    /// `Refuse` answers wrong) reddens first and the sweep never finishes. Measured.
+    /// Over THIS row set property 2 is implied by property 1 — every row pins a variant
+    /// exactly or by class, and all four classes appear — so no edit to `classify`
+    /// alone can reach it.
+    ///
+    /// The edit it does catch, and catches alone, is a trimmed TABLE: delete the three
+    /// [`PreviewLink::OpenExternally`] rows and lower [`NAMED_CLASSIFY_ROWS`] to match,
+    /// and the length assertion and property 1 both stay green while a whole class of
+    /// `classify`'s behaviour silently stops being swept. Property 2 reddens naming the
+    /// missing variant. That is what it is for.
     #[test]
     fn classify_table() {
         let cases = [
@@ -778,7 +827,9 @@ mod tests {
                 want: preview("/a/x.md", None),
             },
             ClassifyCase {
-                desc: "row 7: a BARE `#` is an empty fragment, which collapses to None",
+                desc: "row 7: a BARE `#` is an empty fragment, which collapses to None — \
+                       guarded TWICE, so this row can only be reddened by removing both \
+                       guards (see this table's doc comment)",
                 uri: "file:///a/x.md#",
                 source: SOURCE,
                 want: preview("/a/x.md", None),
@@ -852,16 +903,20 @@ mod tests {
                 want: preview("/tmp/ünïcode.md", None),
             },
             ClassifyCase {
-                desc: "DEFENSIVE (module row 9), O12: a colon inside a PATH SEGMENT is not a \
-                       scheme, so the file is previewed rather than handed to an external \
-                       launcher — the grammar itself is pinned on reachable inputs by \
+                desc: "module row 9 (defensive only because `file_uri_for` answers Some for \
+                       every real source path — a schemeless target IS produced when the base \
+                       is None), O12: a colon inside a PATH SEGMENT is not a scheme, so the \
+                       file is previewed rather than handed to an external launcher — the \
+                       grammar itself is pinned on reachable inputs by \
                        scheme_of_follows_the_rfc_grammar",
                 uri: "/notes/12:30 standup.md",
                 source: SOURCE,
                 want: preview("/notes/12:30 standup.md", None),
             },
             ClassifyCase {
-                desc: "DEFENSIVE (module row 10): an empty target names nothing at all",
+                desc: "module row 10: an empty target names nothing at all — defensive for the \
+                       same reason row 9 is, `file_uri_for`'s domain rather than anything \
+                       about what WebKit delivers",
                 uri: "",
                 source: SOURCE,
                 want: WantLink::Refuse,
@@ -902,16 +957,21 @@ mod tests {
         }
 
         // --- Property 2: the RANGE, which no individual row can state -------
+        //
+        // Reached only when every row above passed, so it is a statement about this
+        // TABLE's coverage rather than about `classify` — see the doc comment.
         let want: HashSet<&'static str> = ALL_VARIANTS.into_iter().collect();
         assert_eq!(
             seen, want,
             "classify's range over all {NAMED_CLASSIFY_ROWS} rows must be exactly the four \
-             PreviewLink variants. A MISSING variant means a whole class is unreachable and \
-             every row above that expected it is being satisfied by something else — the case \
-             that matters is a classifier that refuses everything, which satisfies each \
-             refusing row and each negative clause in this file while making every link in \
-             every preview dead. An EXTRA name is impossible while `variant_name` has no `_` \
-             arm, so if one appears here a catch-all was added to it."
+             PreviewLink variants. A MISSING variant means no row left in the table exercises \
+             that class at all: every surviving row pins its class and they all passed, so the \
+             only way to get here is by DELETING the rows that carried it and lowering \
+             NAMED_CLASSIFY_ROWS to match. Restore them rather than shrinking this set — a class \
+             nothing sweeps is a class `classify` can stop answering with no test noticing, and \
+             for OpenExternally that means every external link in every preview silently going \
+             dead. An EXTRA name is impossible while `variant_name` has no `_` arm, so if one \
+             appears here a catch-all was added to it."
         );
     }
 
@@ -1013,10 +1073,19 @@ mod tests {
     /// Pins the base URI a preview document is loaded against.
     ///
     /// Property 1: each named source path yields exactly the base URI stated.
-    /// Property 2 (non-vacuity): the range over the sweep carries BOTH a `Some` and a
-    /// `None`, so neither a function that always answers `None` — every link in every
-    /// preview then resolves against `about:blank` and nothing can be followed — nor
-    /// one that always answers `Some` can satisfy the table.
+    /// Property 2: the range over the sweep carries BOTH a `Some` and a `None`. As in
+    /// [`classify_table`], property 2 is BELT-AND-BRACES against `file_uri_for` — a
+    /// constant function fails property 1's first row long before the range is compared
+    /// — and a live guard on this TABLE, catching a trim that deletes the last `Some`
+    /// or the last `None` row and lowers [`NAMED_BASE_URI_ROWS`] to match.
+    ///
+    /// The two `None` rows name the only two INPUT SHAPES this function answers `None`
+    /// for — an empty path and a relative one — and that is what makes [`classify`]'s
+    /// `about:` and schemeless rows defensive rather than dead. [`classify_table`]'s
+    /// doc comment states the same fact from the other side. What a `None` base really costs was MEASURED: a relative link arrives at
+    /// the handler as its RAW href (`uri="lnkinto.md"`), not resolved against
+    /// `about:blank`, so core is handed a relative path and answers 0 for every link
+    /// that is not sitting in the captive Neovim's working directory.
     ///
     /// Falsifiers, one clause each:
     /// * Append a trailing `/` to the produced URI — the `"/a/x.md"` row reddens, and
@@ -1037,12 +1106,15 @@ mod tests {
                 want: Some("file:///a/x.md"),
             },
             BaseUriCase {
-                desc: "DEFENSIVE: an EMPTY source path has no location to synthesize one from",
+                desc: "DEFENSIVE, and one of the only two None inputs: an EMPTY source path has \
+                       no location to synthesize one from (init.lua:2229 keeps such a preview \
+                       from ever becoming a pane)",
                 source: "",
                 want: None,
             },
             BaseUriCase {
-                desc: "DEFENSIVE: a RELATIVE path would parse its first segment as the AUTHORITY",
+                desc: "DEFENSIVE, and the other None input: a RELATIVE path would parse its \
+                       first segment as the AUTHORITY (nvim_buf_get_name never yields one)",
                 source: "notes/x.md",
                 want: None,
             },
@@ -1125,11 +1197,15 @@ mod tests {
         assert_eq!(
             answers, both,
             "file_uri_for's range over all {NAMED_BASE_URI_ROWS} rows must contain BOTH a Some \
-             and a None. Only `None` means no preview document ever gets a base URI, so every \
-             relative link resolves against `about:blank` and every follow is refused; only \
-             `Some` means the two guards this function exists for — the empty path and the \
-             relative path — have stopped guarding, and a relative source path would produce a \
-             URI naming a HOST."
+             and a None. Every row above pins one or the other and they all passed, so reaching \
+             here means the rows carrying one answer were DELETED and NAMED_BASE_URI_ROWS lowered \
+             to match — restore them. With no `Some` row, nothing measures that a preview \
+             document gets a base URI at all, and MEASURED the cost of not having one is that a \
+             relative link reaches the handler as its RAW href, so core is handed a relative path \
+             and answers 0 for every file outside the captive Neovim's working directory. With no \
+             `None` row, nothing measures the two guards this function exists for — the empty \
+             path and the relative path — and a relative source path would produce a URI naming a \
+             HOST."
         );
     }
 
