@@ -142,14 +142,14 @@ One thing is deliberately not persisted on Linux: the window position, which Way
 | Markdown → HTML rendering (`wolf_core::markdown`) | `feat/markdown-preview`                | [x]   | [x]   |
 | In-app live preview pane                          | `feat/markdown-preview` (`b159793`)    | [x]   | [x]   |
 | Preview pane reuse / placement modes              | `feat/markdown-preview` (`937bb7f`)    | [x]   | [x]   |
-| Follow links inside the preview                   | `feat/markdown-preview` (`61204b7`)    | [x]   | [ ]   |
+| Follow links inside the preview                   | `feat/markdown-preview` (`61204b7`)    | [x]   | [x]   |
 | Full path in a preview pane's status bar          | `feat/markdown-preview` (`2116415`)    | [x]   | [x]   |
 | Math symbols / Inter font in the preview          | `feat/markdown-preview` (`6f6abd1`)    | [x]   | [x]   |
 | "Edit Source" (preview's inverse)                 | `feat/markdown-preview` (`8a72e50`)    | [x]   | [x]   |
 | Preview theme follows light/dark                  | `fix/dark-mode` (`3edf74e`, `66ce35e`) | [x]   | [x]   |
 | Typography tuning for the preview                 | `feat/typography` (`6838614`)          | [x]   | [x]   |
 | Syntax-highlighted code blocks                    | `feat/code-block-syntax-highlighting`  | [x]   | [ ]   |
-| Preview of anonymous / unsaved buffers            | `feat/preview-anonymous-files`         | [x]   | [ ]   |
+| Preview of anonymous / unsaved buffers            | `feat/preview-anonymous-files`         | [x]   | [x]   |
 | Preview in browser (loopback HTTP server)         | `feat/preview-server` (`4728086`)      | [x]   | [ ]   |
 
 The rendering pipeline and the loopback preview server are entirely in `wolf-core` and stay GUI-free by design. `wolf-gnome` hosts the second kind of pane content in a `webkit6::WebView`, the GTK analogue of `WKWebView`: every pane leaf is an overlay whose main child is the editor's drawing area, so a preview replaces a pane's grid without replacing its widget, and a live edit reaches the DOM as a JSON-encoded body swap that preserves the reader's scroll offset where a full reload would not.
@@ -158,7 +158,11 @@ The three Linux boxes for the rendered document do not rest on the same evidence
 
 Math and Inter rest on a recorded measurement instead, because the only decisive discriminator is deleting the `@font-face` rules from inside the running web view and re-measuring, and a smoke drives the app from outside. The smoke's own readings live in its assertion table in `crates/wolf-gnome/tests/smoke_headless.rs`; the font measurement lives in [`crates/wolf-gnome/tests/README.md`](crates/wolf-gnome/tests/README.md).
 
-Three of the unticked rows are unimplemented on GTK rather than blocked — link following, the anonymous-buffer preview and the browser preview — since the pane they all need exists. Syntax-highlighted code blocks is blocked, and on parser coverage rather than on a missing code path: `wolf_highlight_code_blocks` is defined at module level in the captive `init.lua`, outside the vendored-tree gate, so it runs on Linux and returns false for every fence whose language has no parser and `highlights` query on the runtimepath.
+Link following and the anonymous-buffer preview are ticked on different evidence again. Link following is proved by a pointer smoke that clicks a rendered link and reads `tabpagebuflist()` back out of the captive Neovim, with the click point re-derived from the smoke's own capture so a stale constant cannot pass; its fixtures sit in a subdirectory precisely so a missing base URI cannot be answered by the working directory instead. The anonymous-buffer row is proved by a never-written `Untitled 2.md` reaching a bound preview, which one readback string establishes for the naming autocmd, the Markdown filetype gate and the preview binding at once.
+
+Preview in browser stays unticked deliberately, and not because it is unimplemented. The code is written and dispatched, and the running GTK application produces a real loopback address and hands it to the platform URI launcher; what is unverified is the final hand-off. The development compositor has neither a browser nor a session bus, and the launcher reports success there while doing nothing at all. Deliberately exercising it is a hazard rather than merely untested, for the reason [`crates/wolf-gnome/tests/README.md`](crates/wolf-gnome/tests/README.md) records, so the tick is one character to add on a host where a human has watched a tab open.
+
+Syntax-highlighted code blocks is the one row still blocked, and on parser coverage rather than on a missing code path: `wolf_highlight_code_blocks` is defined at module level in the captive `init.lua`, outside the vendored-tree gate, so it runs on Linux and returns false for every fence whose language has no parser and `highlights` query on the runtimepath.
 
 The pinned Neovim supplies seven — `c`, `lua`, `markdown`, `markdown_inline`, `query`, `vim`, `vimdoc` — so a `lua` or `c` fence already highlights. Unblocking the rest is a flake-side vendoring of `ELF` parsers, a sibling of the Appearance table's "Vendored treesitter plugins and parsers" row rather than a consumer of it, since `bazel/treesitter-parsers` emits Mach-O objects that buy Linux nothing.
 
@@ -219,13 +223,13 @@ The sidebar full-tree load row records a guarantee rather than a repair: the mac
 
 Two limits are worth stating. The pane topology does not survive a restart — only the Tier-1 file set does, so a crash while the window was split returns one pane. macOS restores no more than that, so it is a shared limit rather than a Linux gap.
 
-`NotResponding` is reachable from `wolf-gnome` at seven points. `wolf-core` marks a stall only from `block_on_rpc`'s timeout arm, and the GTK side issues seven such calls: the layout rebuild at launch, the buffer picker's candidate snapshot on Ctrl+Shift+E, a per-pane navigation move on Alt+Left or Alt+Right, the Copy yank on Ctrl+Shift+C, opening a Markdown preview, returning from one to its source, and the preview render, which is the only one that repeats while the user types. The overlay's presentation has end-to-end coverage — a cage smoke `SIGSTOP`s the captive Neovim and presses the chord. Paste adds none, because the clipboard read is asynchronous and the insert is fire-and-forget.
+`NotResponding` is reachable from `wolf-gnome` at nine points. `wolf-core` marks a stall only from `block_on_rpc`'s timeout arm, and the GTK side issues nine such calls: the layout rebuild at launch, plus eight a running window issues, which [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md) enumerates and keeps current. Only the preview render repeats while the user simply types. The overlay's presentation has end-to-end coverage — a cage smoke `SIGSTOP`s the captive Neovim and presses the chord. Paste adds none, because the clipboard read is asynchronous and the insert is fire-and-forget.
 
-The second limit is that a stall does not clear itself on the GTK side. All six calls a running window issues — the buffer picker, a navigation press, the Copy chord and the three preview ones — refuse to run unless the core reads `Alive`, so a wedged Neovim is never re-probed, and core's own auto-clear rides the success of a later synchronous call while a timed-out one is detached. The route back is the overlay's Restart button, which force-kills.
+The second limit is that a stall does not clear itself on the GTK side. All eight calls a running window issues refuse to run unless the core reads `Alive`, so a wedged Neovim is never re-probed, and core's own auto-clear rides the success of a later synchronous call while a timed-out one is detached. The route back is the overlay's Restart button, which force-kills.
 
 ## Suggested order of work for Linux
 
 Work already carried is recorded in the tables above. What remains, in order:
 
 1. **Multi-window and tabs**, which reshape `wolf-gnome` from a single-window application into a coordinator-plus-views one, and are the largest single item left.
-2. **The remaining Markdown-preview rows**, each of which extends a pane that exists rather than introducing one: link following, an anonymous-buffer preview, and the browser preview. Syntax-highlighted code blocks sits behind a prerequisite instead — a flake-side vendoring of treesitter parsers built for Linux, which the Appearance table's vendoring row does not supply.
+2. **The remaining Markdown-preview rows.** Preview in browser is written and dispatched and needs only a host where a human can watch the hand-off land, per the Markdown-preview table above. Syntax-highlighted code blocks sits behind a prerequisite instead — a flake-side vendoring of treesitter parsers built for Linux, which the Appearance table's vendoring row does not supply.

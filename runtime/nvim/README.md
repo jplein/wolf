@@ -92,6 +92,8 @@ Takes no channel id and emits nothing, so no scroll or cursor payload ever cross
 
 Registers three things in one augroup. A window scan on `WinEnter`/`BufWinEnter`/`WinNew`/`WinClosed`/`BufWinLeave` notifies **`wolf_preview`** with a list of `{ preview_win, source_bufnr, source_abs_path, source_full_width }` tuples, one per window showing a `b:wolf_preview_source` scratch buffer; core wholesale-replaces `Snapshot.previews`. `source_bufnr` is `-1` when the source is unknown, and `source_full_width` is the source buffer's flag, which decides whether the preview renders capped or full-width.
 
+**A window whose `b:wolf_preview_source` is present but empty is filtered out of that list**, which is what makes a preview of a genuinely nameless buffer unreachable from either front-end: the pane never enters `Snapshot.previews`. An unsaved buffer is not that case — [`wolf_new_untitled`](#wolf_new_untitled) gives it a real `Untitled N.md` name first.
+
 Markdown-guarded `TextChanged`/`TextChangedI`/`BufWritePost` autocmds notify **`wolf_markdown_dirty`** with `{ source_bufnr, changedtick }`. Core upserts it into `Snapshot.markdown_ticks`; the front-end joins a preview's source bufnr to its tick to decide when to re-pull rendered HTML. `init.lua` never renders Markdown — `wolf_core::markdown` does.
 
 `CursorMoved`/`CursorMovedI`/`BufEnter`/`BufWinEnter` autocmds notify **`wolf_markdown_cursor`** with three flat scalars `(source_bufnr, line, char_col)` — a 1-based `line('.')` and a 0-based `charcol('.') - 1`. That column is a character index rather than a byte index, which is what lets it pair with the `wl-{L}-{C}` markers with no conversion anywhere downstream; core upserts it into `Snapshot.markdown_cursors`. Five guards decide whether to emit: the buffer must be valid, must be current, its window must be a normal window, its filetype must be `markdown`, and `b:wolf_preview_source` must be nil.
@@ -240,7 +242,7 @@ Two criteria, either sufficient. The first stats the `%`-mangled name nvim's own
 
 **nvim-treesitter is used purely as an on-`runtimepath` query provider.** Its `.setup{}` and `:TSInstall` machinery are non-deterministic under `--clean`. A `FileType=markdown` autocmd calls `vim.treesitter.start` under `pcall`, so a query-loader incompatibility degrades to `syntax on` rather than raising. `markdown` and `markdown_inline` parsers ship with nvim and are not re-vendored.
 
-**`wolf_highlight_code_blocks` is defined at module level, outside the conditional treesitter block**, so it exists on every platform and self-degrades to `false` for every block where no parsers or queries are staged.
+**`wolf_highlight_code_blocks` is defined at module level, outside the conditional treesitter block**, so it runs on every platform and gates per language: it answers `false` only for a fence whose language has no parser and `highlights` query on the runtimepath. A fence in a language the pinned Neovim already ships therefore highlights with nothing vendored; what the vendored trees add is every other language.
 
 **Two payloads dodge the same msgpack ambiguity: an empty Lua table cannot be told apart from an empty map.** `wolf_theme` therefore sends four flat scalars with a `-1` sentinel rather than a table, and `wolf_highlight_code_blocks` returns the scalar `false` rather than an empty array for a non-highlightable block.
 
