@@ -103,7 +103,7 @@ End-to-end treesitter highlighting of fenced code blocks in `render_preview` out
 
 **Gotchas**
 
-- It also needs `WOLF_TEST_NVIM_TREESITTER_DIR` and `WOLF_TEST_PARSERS_DIR`, and loud-skips when either is absent — without them the captive treesitter block self-degrades and there is nothing to assert.
+- It also needs `WOLF_TEST_NVIM_TREESITTER_DIR` and `WOLF_TEST_PARSERS_DIR`, and loud-skips when either is absent — the fixture fences `go`, whose parser and `highlights` query ship only in the vendored trees, so without them there is nothing to assert. The skip is about this fixture's language, not about the highlighter: `wolf_highlight_code_blocks` sits at module level in `runtime/nvim/init.lua`, outside the vendored-tree gate, so it runs everywhere and gates per language.
 - The fixture rebuilds the bundle layout in a temp dir (`init.lua` beside sibling `nvim-treesitter/` and `parsers/`) because the captive block self-locates relative to the init file's own directory, and sanity-checks the staged `go.so` and injections query before paying for an nvim launch.
 - The styled-span probe omits the space in `color:#`, which the emitted CSS rules (`color: #`) do not match.
 

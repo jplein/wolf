@@ -18,21 +18,15 @@
 //!
 //! Like `treesitter_highlight.rs`, this test needs a pinned nvim
 //! (`nvim_bin_or_skip`) AND both staged trees (`nvim_treesitter_dir_or_none`,
-//! `parsers_dir_or_none`). When any is absent — the cargo / Linux path, where the
-//! vendored trees and compiled parsers are not built — the captive treesitter block
-//! is a strict no-op and `wolf_highlight_code_blocks` self-degrades to `false`, so
-//! this test is a loud no-op pass (it asserts styled spans only when there is a real
-//! treesitter layout to exercise, on Bazel/macOS).
-//!
-//! ## NOTE to coder — Bazel target
-//!
-//! This file needs a `//crates/wolf-ffi:code_block_highlight` `rust_test` target
-//! added to `crates/wolf-ffi/BUILD.bazel` (a copy of the `:treesitter_highlight`
-//! stanza: `srcs = ["tests/common/mod.rs", "tests/code_block_highlight.rs"]`,
-//! `crate_root = "tests/code_block_highlight.rs"`, same tags/size/edition, same
-//! `data` (nvim_tree, nvim_treesitter_tree, parsers_tree, init.lua), same four env
-//! vars (WOLF_TEST_INIT_LUA, WOLF_TEST_NVIM_DIR, WOLF_TEST_NVIM_TREESITTER_DIR,
-//! WOLF_TEST_PARSERS_DIR), same deps). This test file does NOT touch BUILD files.
+//! `parsers_dir_or_none`). Skipping when either tree is absent is correct for THIS
+//! fixture, but the reason is the FIXTURE'S LANGUAGE, not a disabled highlighter:
+//! `wolf_highlight_code_blocks` sits at MODULE level in `runtime/nvim/init.lua`,
+//! outside the vendored-tree gate, so it is live on the cargo / Linux path too and
+//! gates per LANGUAGE. It answers `false` here because the fixture fences `go`,
+//! whose parser and `highlights` query ship only in the vendored trees — while the
+//! seven the pinned Neovim ships (`c`, `lua`, `markdown`, `markdown_inline`,
+//! `query`, `vim`, `vimdoc`) do highlight there. So off Bazel/macOS this is a loud
+//! no-op pass: it asserts styled spans only where the `go` parser exists.
 
 mod common;
 

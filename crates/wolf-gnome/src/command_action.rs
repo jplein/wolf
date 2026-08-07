@@ -24,7 +24,7 @@
 //!
 //! ## The three classes
 //!
-//! - **Dispatched** — the seventeen commands `wolf-gnome` performs today.
+//! - **Dispatched** — the eighteen commands `wolf-gnome` performs today.
 //! - [`UiAction::Deferred`] — implemented on macOS and planned on GTK; the string
 //!   names the concrete blocker so the deferral is auditable rather than a shrug.
 //! - [`UiAction::NoGnomeEquivalent`] — has no GNOME counterpart and will never be
@@ -92,6 +92,11 @@ pub enum UiAction {
     /// Leave the focused preview pane for its source file, at the placement
     /// [`crate::preview_ui::edit_placement`] gives.
     EditSource,
+    /// Serve the focused Markdown buffer from core's loopback preview server over a
+    /// BLOCKING RPC and hand the resulting `http://127.0.0.1:<port>/…` address to the
+    /// platform's URI launcher, at the gate
+    /// [`crate::preview_ui::browser_press`] gives.
+    OpenInBrowser,
     /// Present the About dialog carrying the bundled fonts' licence notices.
     ShowAbout,
     /// Implemented on macOS, planned on GTK; the string names the blocker.
@@ -146,10 +151,7 @@ pub fn ui_action_for(command: Command) -> UiAction {
             "pane_view drops LayoutIntent::DrawerOpen, so toggling would open a :terminal window \
              GTK never paints",
         ),
-        Command::PreviewInBrowser => UiAction::Deferred(
-            "the loopback preview server needs a GTK URI launcher to hand its address to the \
-             system browser",
-        ),
+        Command::PreviewInBrowser => UiAction::OpenInBrowser,
         Command::FullWidth => UiAction::ToggleFullWidth,
         Command::ToggleSidebar => UiAction::ToggleSidebar,
         Command::SidebarShowProject => UiAction::Deferred(
@@ -197,7 +199,7 @@ mod tests {
     /// The commands `wolf-gnome` DISPATCHES, by canonical `CommandSpec::id`,
     /// sorted. Ids (not variants) so the failure message names the registry row a
     /// reader can grep for.
-    const EXPECTED_DISPATCHED_IDS: [&str; 17] = [
+    const EXPECTED_DISPATCHED_IDS: [&str; 18] = [
         "buffer_picker",
         "close_pane",
         "close_window",
@@ -212,6 +214,7 @@ mod tests {
         "open_folder",
         "paste",
         "preview",
+        "preview_in_browser",
         "quit_application",
         "search_in_project",
         "toggle_sidebar",
@@ -354,9 +357,9 @@ mod tests {
             want: Want::Deferred,
         },
         Case {
-            desc: "21 PreviewInBrowser: needs a GTK URI launcher for the loopback server",
+            desc: "21 PreviewInBrowser: serves the buffer over loopback and launches the URL",
             command: Command::PreviewInBrowser,
-            want: Want::Deferred,
+            want: Want::Exact(UiAction::OpenInBrowser),
         },
         Case {
             desc: "22 FullWidth: toggles the focused buffer's content width",
@@ -471,12 +474,18 @@ mod tests {
     /// [`EXPECTED_DISPATCHED_IDS`] — no more (nothing quietly promoted) and no
     /// fewer (nothing quietly demoted to `Deferred`).
     ///
-    /// FALSIFYING EDIT: classify `Command::FullWidth` as `UiAction::Deferred`, and
-    /// run this test ALONE so its evidence is its own. MEASURED: the sorted `left`
+    /// FALSIFYING EDIT: classify `Command::PreviewInBrowser` as `UiAction::Deferred`,
+    /// and run this test ALONE so its evidence is its own. Expected: the sorted `left`
     /// comes back one element short of `right`, the missing element being
-    /// `"full_width"` in sorted position between `"edit"` and `"go_to_file"` — a
-    /// one-element diff that names the demoted command directly rather than
-    /// reporting that "the set changed".
+    /// `"preview_in_browser"` in sorted position between `"preview"` and
+    /// `"quit_application"`. That command is the one this unit promoted, so it is the
+    /// edit a reverting change would actually make.
+    ///
+    /// MEASURED with the same shape on a different row, which is what says the diff
+    /// really is one element and really names the command rather than reporting that
+    /// "the set changed": classifying `Command::FullWidth` as `UiAction::Deferred` puts
+    /// `"full_width"` in sorted position between `"edit"` and `"go_to_file"` and
+    /// changes nothing else.
     #[test]
     fn dispatched_commands_are_the_expected_set() {
         let mut dispatched: Vec<&'static str> = Vec::new();
@@ -493,10 +502,20 @@ mod tests {
 
         assert_eq!(
             dispatched, expected,
-            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly seventeen \
+            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly eighteen \
              commands; everything else must be Deferred(reason) or NoGnomeEquivalent(reason) so \
              the drain is never silent. If a command was genuinely implemented, tick its feat-list \
-             row and update this list with it. A two-element diff naming \"preview\" and \"edit\" \
+             row and update this list with it. A one-element diff naming \"preview_in_browser\" \
+             means the loopback-preview command was demoted back to Deferred, in which case \
+             `preview_ui::browser_press` and `shell::AppShell::preview_in_browser` are unreachable \
+             from any command AND the palette's `prv` collision disappears — so \
+             `palette::tests::palette_rows_for_the_preview_smoke_rank_the_named_command_first` \
+             reddens beside this one. MEASURED: it reddens on its `actionable_rows` clause, NOT \
+             on its unfiltered floor. `rank_palette` runs BEFORE the classification filter, so \
+             `Preview in Browser` is still among its candidates and the floor of 2 still holds; \
+             it is `palette_rows`, which applies the filter, that drops to one row. That pairing \
+             is how this failure is told apart from a registry change. A two-element diff naming \
+             \"preview\" and \"edit\" \
              means the Markdown preview pair was demoted back to Deferred, in which case \
              `preview_ui`'s press seams are unreachable from any command. A one-element diff \
              naming \"copy\" or \"paste\" \

@@ -2,7 +2,7 @@
 
 The GTK front-end's modules, one entry each. The pure seams here are the Linux counterparts of the ones in [`wolf-macos/Sources/WolfKeyMap/`](../../wolf-macos/Sources/WolfKeyMap/README.md), and the two are kept deliberately close.
 
-**Read [DECISIONS.md](../DECISIONS.md) first** for the gtk-rs version constraints, the threading and wake model, the window structure and focus regime, the accelerator invariant, the application-state rules, the crash-recovery model, and why this crate has no Bazel target.
+**Read [DECISIONS.md](../DECISIONS.md) first**: it owns every constraint that spans more than one file here, and most of this directory's rules exist because of one.
 
 ## Files
 
@@ -17,8 +17,8 @@ Purpose: the About dialog — a pure text seam over the bundled fonts' licence n
 
 **Decisions**
 
-- Plain GTK over `adw::AboutDialog` or `adw::AboutWindow`, which need the `v1_5` and `v1_2` `libadwaita` features. [DECISIONS.md](../DECISIONS.md) records that this crate's `libadwaita` carries no version feature on purpose, so adding one for a single dialog would change the crate's build contract and put the whole smoke suite on the devShell's libadwaita version.
-- A separate toplevel rather than a fifth in-window overlay, so the main window's focus widget is untouched and the focus regime — which is about widgets inside the main window being destroyed — does not apply.
+- Plain GTK over `adw::AboutDialog` or `adw::AboutWindow`, which need `libadwaita` version features this crate deliberately carries none of ([DECISIONS.md](../DECISIONS.md)): adding one for a single dialog would change the build contract and put the whole smoke suite on the devShell's libadwaita version.
+- A separate toplevel rather than a fifth in-window overlay, so the main window's focus widget is untouched and the focus regime does not apply to it at all.
 
 #### `actions.rs`
 
@@ -52,8 +52,7 @@ Purpose: all GTK and Adwaita window wiring. `run` builds the `adw::Application` 
 
 - The state store is opened into a restore plan and the user config loaded before any widget exists, so the launch decisions are known while the window is built. Each degrades with one message: a no-op state store, or the built-in config defaults.
 - Cell metrics are measured once and shared by `Rc`, so a resize arriving before the first draw already has a size.
-- The close-request handler flushes state before taking the core out, and takes it out in its own statement so the borrow is released before `shutdown` blocks. A flush after the take sees no core, is refused by the snapshot gate, and silently loses the session.
-- No title widget is set on the header bar, measured rather than stylistic: its height is one term of the pane origin every pointer smoke derives its targets from ([DECISIONS.md](../DECISIONS.md)).
+- The close-request handler flushes state before taking the core out. A flush after the take sees no core, is refused by the snapshot gate, and silently loses the session.
 
 **Gotchas**
 
@@ -92,7 +91,7 @@ Purpose: the buffer-picker overlay — a search entry over the captive Neovim's 
 
 - Candidates are snapshotted once at open and re-ranked per keystroke. The snapshot is a blocking RPC on the GTK main thread, so [`picker.rs`](#pickerrs)'s wake bridge must not be added for symmetry: re-taking it puts a whole timeout budget of frozen main loop on the typing path.
 - `open_decision` refuses to open, and so refuses the RPC, for every liveness reading but `Alive`. It cannot prevent the first stall, and must not be strengthened into a guard that can never raise one.
-- A refusal returns before any widget is touched, and nothing is shown until the snapshot returns; neither is observable to any test.
+- A refusal returns before any widget is touched, and nothing is shown until the snapshot returns.
 - The first refresh preselects row 1, because row 0 is the buffer the user is already in and a bare Enter must switch. It is the one selection rule the other three overlays do not share, ported from macOS.
 - `switch_target` refuses an active window of `0` as firmly as none at all, per `wolf-ffi`'s rule: `0` binds the switch into whichever window Neovim considers current.
 
@@ -259,7 +258,7 @@ Purpose: the pure pixel conversions behind every resize, pointer event, and divi
 - Any degenerate input collapses the whole result rather than only the offending axis, because a partial result would send Neovim a nonsense size for the good axis.
 - A point outside the grid clamps to the nearest edge cell rather than being rejected, which makes drag-past-the-edge selection work.
 - Non-finite coordinates are two rules: a NaN axis reads as zero, an infinity clamps to the far edge. Collapsing both to zero would invert an overshooting drag.
-- `divider_position` scales by the paned's own span, with `min_position`/`max_position` as the clamp rather than the scale; both it and `divider_span_fraction` must share that denominator ([DECISIONS.md](../DECISIONS.md)).
+- `divider_position` and `divider_span_fraction` must share one denominator, and which one it is decides whether a fresh split is even; see [DECISIONS.md](../DECISIONS.md).
 
 **Gotchas**
 
@@ -296,7 +295,7 @@ Purpose: translates a GDK keyval plus modifier state into a `wolf_core::KeyEvent
 
 **Gotchas**
 
-- `SUPER_MASK` maps to `meta`, so an unmapped Super chord is forwarded and Neovim mangles it. The chord controller intercepts the ones this crate binds; the rest is a known limitation.
+- `SUPER_MASK` maps to `meta`, so an unmapped Super chord is forwarded for Neovim to mangle ([DECISIONS.md](../DECISIONS.md)); the chord controller intercepts only the ones this crate binds.
 
 #### `layout.rs`
 
@@ -320,7 +319,7 @@ Purpose: the pure, GTK-free n-ary pane-layout tree behind the split-panes UI, mi
 
 #### `lib.rs`
 
-Purpose: crate root. Declares the modules and re-exports the display-free seams a consumer reaches for: the key and geometry conversions, the paint, the command classification, the crash rulebook, the launch and restore plans, and the window title.
+Purpose: crate root. Declares the modules and re-exports the display-free seams a consumer reaches for.
 
 **Gotchas**
 
@@ -361,7 +360,7 @@ Purpose: the GDK pointer-translation rulebook, the analogue of [`input.rs`](#inp
 
 **Decisions**
 
-- Only the primary button is forwarded; every other number yields `None`. That is parity with macOS, and the one place the decision is recorded and tested.
+- Only the primary button is forwarded; every other number yields `None`, which is parity with macOS.
 - Every modifier bit outside `C-`, `S-`, `A-` is dropped rather than translated, because Neovim's mouse grammar has nowhere to put it. Unlike `gdk_key`, which has a meta notation.
 - An unknown scroll unit falls back to the wheel threshold on purpose: guessing wheel for a pixel delta is over-sensitive and recoverable, while guessing surface for a detent delta makes scrolling dead.
 - A rejected `consume` leaves the carry untouched, so it is indistinguishable from no call; a poisoned remainder would kill scrolling for the session. `PaneScroll` discards the carry when the target grid differs from the previous call, accepted or not, because a remainder is a fraction of a line of one grid.
@@ -425,21 +424,21 @@ Purpose: the pure codec between the live pane tree, whose leaves are pane ids, a
 
 #### `pane_view.rs`
 
-Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one `gtk::Overlay` host per window over its `gtk::DrawingArea` and a preview pane's `webkit6::WebView`, plus the command-line strip and the two surfaces above it.
+Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one `gtk::Overlay` host per window over its `gtk::DrawingArea` and a preview pane's `webkit6::WebView`.
 
 **Public API**
 
 - `build(core, metrics) -> PaneHandle` — panes appear with the first grid.
-- `cmdline_widget()` — the focus-return target for overlays and sidebar; `toast_widget()` / `pum_widget()` — the surfaces `app.rs` overlays.
+- `cmdline_widget()` — the focus-return target for overlays and sidebar; plus `toast_widget()` and `pum_widget()`.
 - `reset_after_restart()`, `request_layout_rebuild(saved)`, `layout_snapshot()`, `snapshot_readiness()`.
 
 **Decisions**
 
-- Divider positions re-apply from the live tree on every `max-position` notify, since nested allocation reports intermediate values before settling. An unchanged maximum and span makes a `notify::position` a user drag, written back because a rebuild destroys the paned.
+- Divider positions re-apply from the live tree on every `max-position` notify, since nested allocation reports intermediate values before settling; an unchanged maximum and span marks a `notify::position` as a user drag, written back because a rebuild destroys the paned.
 - Pointer input is one `gtk::GestureDrag`, not a click controller: a gesture keeps delivering after the pointer leaves the widget. Grid and button pin at press, modifiers re-read live, so a wandering drag edits its starting pane.
 - Each pane's status and `b:wolf_full_width` cache once per wake: reading at use time re-enters the guard `draw_pane` holds, and paint, pointer and resize must agree inside one frame.
-- One funnel produces every grid resize, compared against the size the pane last asked for rather than the lagging snapshot grid, and it runs on every wake, since a lifted content cap re-divides a still allocation.
-- The `gtk::Paned` tree parents each pane's host overlay, not its `DrawingArea`: a rebuild re-parents the host, so a live preview keeps its `WebProcess` and its loaded document across every split, close and divider drag.
+- One funnel produces every grid resize, compared against the size the pane last asked for rather than the lagging snapshot grid, and it runs on every wake since a lifted content cap re-divides a still allocation.
+- A clicked link never navigates the view itself, and a full `load_html` carries the source file's own `file:` base URI. [DECISIONS.md](../DECISIONS.md#following-a-link-in-the-preview) owns every rule on that path, including which loads [`preview_ui.rs`](#preview_uirs)'s `document_update` forces.
 
 #### `persistence.rs`
 
@@ -455,11 +454,6 @@ Purpose: the glue that commits this crate's application state to `state.json`. I
 - An absent state store is the whole degradation story: every method early-returns, and the app runs normally while neither restoring nor saving. There is no error path and no second convention.
 - The size comes from the window's default size and the position is never written, per [DECISIONS.md](../DECISIONS.md). The persisted `sidebar_visible` is the user's preference, tracked through `set_sidebar_shown`, and never the live visibility.
 - `flush_on_close` blocks on a bounded flush rather than trusting the writer thread, and a timeout prints rather than panicking. It exists to bound the quit path against a wedged filesystem, not to be reached.
-
-**Gotchas**
-
-- Borrow discipline is load-bearing here specifically. `flush_on_close` runs inside the close-request handler, which then takes the core out, so every core borrow in this module is taken and dropped in its own statement.
-- This module has no unit tests and needs none: it holds no rules. Its coverage is the relaunch smokes plus the seam tables.
 
 #### `picker.rs`
 
@@ -482,23 +476,39 @@ Purpose: the file-picker overlay — a search entry over a ranked results list. 
 - Closing drops the `FileSearch`, which cancels the background traversal.
 - `next_selection`, `restored_index` and `activation_index` are `pub(crate)` and shared with [`palette.rs`](#paletters), [`buffer_picker.rs`](#buffer_pickerrs) and [`search_overlay.rs`](#search_overlayrs), so all four overlays navigate and activate identically. They stay here because the macOS `PickerSeam` port names this file as its counterpart.
 
-#### `preview_ui.rs`
+#### `preview_link.rs`
 
-Purpose: the pure, GTK-free rulebook for the Markdown preview pane — where a preview opens, where its inverse lands the source editor, whether either press or a render may be issued, when a bound web view reloads, and what a preview pane's statusbar reads. A port of macOS's `PreviewSeam` and `EditSeam`, joined because the two placements are inverses.
+Purpose: the pure, GTK-free URI rulebook for a link clicked inside the Markdown preview — what the click means, what base URI the document loads against, and the JavaScript that scrolls a fragment into view. A port of macOS's `PreviewLinkSeam`: this module owns URI arithmetic, [`preview_ui.rs`](#preview_uirs) owns liveness gates and load strategy.
 
 **Public API**
 
-- The five `MODE_*` strings — the exact `mode` argument `runtime/nvim/init.lua` dispatches on.
-- `preview_placement` and `edit_placement` — one rule at opposite polarities of `active_is_preview`.
-- `preview_press`, `edit_press` and `may_render` — total over `Option<Liveness>` with no `_` arm.
+- `classify(uri, source_path) -> PreviewLink` — total over the URI WebKit has already resolved against the base, so no relative-to-absolute arithmetic happens here. The variants are `OpenExternally`, `ScrollToFragment`, `PreviewFile` and `Refuse`.
+- `file_uri_for(source_path) -> Option<String>` — the base URI, percent-encoded; `None` for an empty or relative path. Its exact form is load-bearing, and [DECISIONS.md](../DECISIONS.md#following-a-link-in-the-preview) states it.
+- `scroll_into_view_js(fragment) -> Result<String, serde_json::Error>`.
+
+**Decisions**
+
+- Four shapes are refused where macOS calls `NSWorkspace.open`: a non-anchor `about:` URI, a `file:` URI with an empty path, a target with neither scheme nor path, and a `file:` authority other than empty or `localhost`.
+- Whether a linked file is Markdown needs the filesystem, so this module never decides it: it always answers `PreviewFile` and core's own gate declines.
+
+#### `preview_ui.rs`
+
+Purpose: the pure, GTK-free rulebook for the Markdown preview pane — its placements, its gates, how a rendered document reaches the view, and what the pane's statusbar reads. [`preview_link.rs`](#preview_linkrs) owns a clicked link's URI arithmetic.
+
+**Public API**
+
+- The five `MODE_*` strings `runtime/nvim/init.lua` dispatches on, chosen by `preview_placement` and `edit_placement` — one rule at opposite polarities of `active_is_preview`.
+- `preview_press`, `edit_press`, `may_render`, `preview_file_press` and `browser_press` — the gate on every blocking preview RPC, total over `Option<Liveness>` with no `_` arm.
+- `browser_url(raw)` — `None` for an empty or all-whitespace address; the loopback-prefix check is core's contract, deliberately not duplicated.
+- `document_update(current, loaded, fragment_pending)` — swap in place, or full load.
 - `PreviewLoad`, `needs_reload(current, loaded)` and `preview_status(source_path, display_path)`.
 
 **Decisions**
 
-- A mode string renamed here compiles and does nothing there: the Lua falls through to binding the current window, so the preview replaces the pane the user was reading.
-- Liveness is read before the buffer-kind gate, so a wedged Neovim is reported as wedged rather than as a non-Markdown buffer — a claim its stalled snapshot could not support anyway.
-- `PreviewLoad` carries the source bufnr as well as its `changedtick`, because two freshly opened files share a tick.
-- `preview_status`'s `abs_path` is the source path verbatim, since [`pane_view.rs`](#pane_viewrs) persists that field as a pane-layout leaf and `state.json` records no working directory to resolve a relative one against.
+- A mode string renamed here compiles and does nothing there: the Lua binds the current window instead, replacing the pane the user was reading.
+- Liveness is read before the buffer-kind gate, so a wedged Neovim is reported as wedged rather than as a non-Markdown buffer. `preview_file_press` has no buffer-kind gate at all: a linked file's Markdown-ness is core's, unanswerable here without the filesystem.
+- Both `PreviewLoad` comparisons key on the source bufnr, never the `changedtick`: two freshly opened files share a tick, so a tick-keyed source switch would swap a linked file's body under the previous file's base URI.
+- `preview_status`'s `abs_path` is the source path verbatim: [`pane_view.rs`](#pane_viewrs) persists it as a pane-layout leaf, and `state.json` records no working directory to resolve a relative one against.
 
 #### `refresh_coalescer.rs`
 
@@ -533,7 +543,7 @@ Purpose: the Cairo/Pango paint seam — one grid and its highlight table onto an
 **Decisions**
 
 - `draw_glyph` moves to `y + baseline - ascent`, not the cell top: Pango puts the layout's top at the move-to point, so a taller cell would hang its glyphs from the top edge.
-- The three decorations arrive as Pango attributes out of [`glyph_style.rs`](#glyph_stylers), and a cell wanting none builds no `AttrList`.
+- The three decorations arrive as Pango attributes out of [`glyph_style.rs`](#glyph_stylers).
 - The 96 dpi fallback in the point-to-pixel conversion is the live path on every headless run, not a guard: `context_get_resolution` returns `-1.0` over an `ImageSurface`.
 - Every cell's background rectangle is filled, including empty ones, which keeps wide-character trailing placeholders and never-painted cells aligned.
 
@@ -557,7 +567,7 @@ Purpose: a Neovim window's `win_viewport` projected onto a pane-local thumb rect
 - `x` is measured from the pane's right edge, not the grid rectangle's, so the thumb lies wholly inside the right padding gutter and covers no glyph at any pane width. macOS's `drawScrollbars` documents that rule and computes the other.
 - It never enters `grid_size_for_pane`: a thumb consuming grid width would drop a column the instant a buffer overflowed its window and restore it when it fit, reflowing text on the scroll path.
 - The height clamps to the track as well as to its own floor; macOS omits the upper clamp and draws a thumb taller than its track in a short pane.
-- The colour blends toward `bg` rather than compositing with an alpha, keeping the crate's no-`set_source_rgba` draw path; the blend is [`statusbar_layout.rs`](#statusbar_layoutrs)'s.
+- The colour uses [`statusbar_layout.rs`](#statusbar_layoutrs)'s `blend`, which is what keeps the thumb off an alpha-capable draw path.
 
 **Gotchas**
 
@@ -600,10 +610,9 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 
 - The chord controller matches keys itself, not through GTK's keymap-aware matching, which does not fire under the smokes' keystroke injector. Accelerators are registered only so the menu renders their labels.
 - The controller lives on the window, so it runs ahead of any overlay's and needs no open-overlay guard: no overlay's keys are bound chords.
-- Overlay side effects fire only on a real mode transition, and the focus sample precedes the hide, per [DECISIONS.md](../DECISIONS.md).
-- One settle point moves the sidebar's root, over [`workspace.rs`](#workspacers)'s `reroot_decision`, so a front-end `chdir_to` and a typed `:cd` cannot diverge. Neither front-end producer re-roots synchronously: the search resolves its root from the live cwd, which updates only after Neovim reports it.
+- One settle point moves the sidebar's root, over [`workspace.rs`](#workspacers)'s `reroot_decision`, so a front-end `chdir_to` and a typed `:cd` cannot diverge. Neither re-roots synchronously: the live cwd updates only after Neovim reports it.
 - The nav-button refresh caches nothing, unlike the title refresh: `set_sensitive` early-returns on an unchanged value.
-- Both Markdown-preview presses read one `preview_shape` pass: a pane count and a preview-active flag from two snapshot reads describe no window that existed. Each is a blocking RPC, gated through [`preview_ui.rs`](#preview_uirs).
+- The three Markdown-preview presses read one `preview_shape` pass each: a pane count and a preview-active flag from two snapshot reads describe no window that existed. Each is a blocking RPC gated through [`preview_ui.rs`](#preview_uirs), and each refusal is worded so a stderr log separates the gate declining from core failing.
 - One private applier is the only caller of `sidebar.set_visible`, over [`state_seam.rs`](#state_seamrs)'s `sidebar_is_shown`, or the next `set_empty_state(false)` would undo a user toggle.
 
 #### `state_seam.rs`

@@ -157,8 +157,9 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 // TARGETED, never `webkit6::prelude::*`: that glob re-exports `gtk::prelude::*`,
 // which collides with the `adw::prelude::*` already in scope above and makes every
-// `WidgetExt` method ambiguous. Only the web view's own methods are wanted here.
-use webkit6::prelude::WebViewExt;
+// `WidgetExt` method ambiguous. Only the web view's own methods, and the one
+// `PolicyDecision` method the `decide-policy` handler answers with, are wanted here.
+use webkit6::prelude::{PolicyDecisionExt, WebViewExt};
 
 use wolf_core::{
     CursorShape, LayoutIntent, MouseAction, MouseEvent, PaneNode, PaneStatus, PreviewInfo, Rgb,
@@ -171,7 +172,8 @@ use crate::geometry;
 use crate::layout::{Orientation, PaneId, PaneLayout, PaneTree};
 use crate::mouse::{self, PaneScroll, ScrollAccumulator};
 use crate::pane_layout;
-use crate::preview_ui::{self, PreviewLoad};
+use crate::preview_link::{self, PreviewLink};
+use crate::preview_ui::{self, DocumentUpdate, PreviewFilePress, PreviewLoad};
 use crate::render::{draw_glyph, draw_text_line, FALLBACK_BG, FALLBACK_FG};
 use crate::scrollbar;
 use crate::state_seam;
@@ -220,10 +222,11 @@ const RGB_MAX: f64 = 255.0;
 ///
 /// Every mutable field is a `Cell` where its type allows, because all access is on
 /// the single GTK main thread and a `Cell` cannot have a borrow accidentally held
-/// across a [`WolfCore`] call (the rule this whole module follows). Three fields
+/// across a [`WolfCore`] call (the rule this whole module follows). Four fields
 /// cannot be: `status` ([`PaneStatus`] owns three `String`s), `preview`
-/// ([`PreviewInfo`] owns a `PathBuf`) and `web` (a `webkit6::WebView` is a
-/// refcounted `GObject`), so they are `RefCell`s obeying the same rule by
+/// ([`PreviewInfo`] owns a `PathBuf`), `web` (a `webkit6::WebView` is a
+/// refcounted `GObject`) and `pending_fragment` (a `String`), so they are `RefCell`s
+/// obeying the same rule by
 /// discipline instead. Each is borrowed only inside a single statement — cloned or
 /// copied out where it is read, written where [`PaneInner::refresh_pane_state`] or
 /// [`PaneInner::sync_preview_view`] fills it — and no such borrow is ever live
@@ -322,6 +325,19 @@ struct PaneWidgets {
     /// `<!doctype html><html><head>` prologue, so a real `</head>` can never sit at
     /// offset 0. See [`PaneInner::load_preview_document`] for what it guards.
     head_len: Cell<usize>,
+    /// The fragment a CROSS-FILE link click asked to scroll to, waiting for the
+    /// linked document's `LoadEvent::Finished` edge.
+    ///
+    /// It belongs to the VIEW, not to the pane — cleared beside `loaded` and
+    /// `head_len` when the view goes — because a fragment held for a document that no
+    /// longer exists would be applied to whatever loads next.
+    ///
+    /// A successful `preview_file` writes this slot UNCONDITIONALLY, to `Some` or to
+    /// `None` ([`PaneInner::on_preview_link`]). Writing it only for a `Some` leaves a
+    /// stale fragment behind: click a cross-file link carrying `#a`, then before the
+    /// render lands click another carrying none, and the second file scrolls to the
+    /// first file's anchor.
+    pending_fragment: RefCell<Option<String>>,
 }
 
 impl PaneWidgets {
@@ -361,6 +377,7 @@ impl PaneWidgets {
             loaded: Cell::new(None),
             current_load: Cell::new(None),
             head_len: Cell::new(0),
+            pending_fragment: RefCell::new(None),
         }
     }
 }
@@ -403,6 +420,29 @@ struct PaneState {
     /// The `(source_bufnr, source_tick)` join for this wake, `None` for an editor
     /// pane.
     load: Option<PreviewLoad>,
+}
+
+/// One pane whose preview document has to be re-rendered on this wake, with
+/// everything the render and the load need — all of it read in ONE `panes` borrow.
+///
+/// A named value rather than [`PaneInner::refresh_previews`]'s former
+/// `(PaneId, PreviewLoad)` tuple, the file's own [`PaneJoin`] / [`PaneState`]
+/// precedent. The four fields are read at the SAME INSTANT, and that is the whole
+/// reason the load strategy is decided here rather than at the load: `update`
+/// depends on `loaded` and on whether a fragment is pending, and both can move
+/// between the borrow and the blocking `render_preview` that follows it.
+struct DueRender {
+    /// The pane to load into.
+    id: PaneId,
+    /// The `(source_bufnr, source_tick)` pair being rendered, recorded as `loaded`
+    /// once the document is on screen.
+    load: PreviewLoad,
+    /// The source file's absolute path, for [`preview_link::file_uri_for`]. Empty
+    /// for a nameless buffer, which is exactly the case that yields no base URI.
+    source_path: String,
+    /// Whether this document may be swapped in place or must go through a full
+    /// `load_html` ([`preview_ui::document_update`]).
+    update: DocumentUpdate,
 }
 
 /// A mouse/scroll target: a grid id, that grid's LIVE dimensions read from the
@@ -1224,7 +1264,7 @@ impl PaneInner {
     /// and `wolf_markdown_dirty` notifications that carry a preview's source and its
     /// `changedtick` fire the wake WITHOUT bumping `seq`, so a `seq` gate would
     /// suppress every reload this function exists to issue.
-    fn refresh_previews(&self) {
+    fn refresh_previews(self: &Rc<Self>) {
         let ids: Vec<PaneId> = self.panes.borrow().keys().copied().collect();
         for id in &ids {
             self.sync_preview_view(*id);
@@ -1243,18 +1283,45 @@ impl PaneInner {
             return;
         }
 
-        let due: Vec<(PaneId, PreviewLoad)> = {
+        // Every field of every row is read inside THIS ONE borrow, at one instant.
+        // `update` in particular is decided here rather than at the load, because it
+        // is a function of `loaded` and of whether a fragment is pending, and the
+        // blocking `render_preview` below sits between this borrow and that load.
+        let due: Vec<DueRender> = {
             let panes = self.panes.borrow();
             ids.iter()
                 .filter_map(|id| {
                     let p = panes.get(id)?;
                     let current = p.current_load.get()?;
-                    preview_ui::needs_reload(Some(current), p.loaded.get())
-                        .then_some((*id, current))
+                    let loaded = p.loaded.get();
+                    if !preview_ui::needs_reload(Some(current), loaded) {
+                        return None;
+                    }
+                    // Each `RefCell` read is its own statement, so no borrow outlives
+                    // the value it produces.
+                    let source_path = p
+                        .preview
+                        .borrow()
+                        .as_ref()
+                        .map(|info| info.source_path.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let fragment_pending = p.pending_fragment.borrow().is_some();
+                    Some(DueRender {
+                        id: *id,
+                        load: current,
+                        source_path,
+                        update: preview_ui::document_update(current, loaded, fragment_pending),
+                    })
                 })
                 .collect()
         };
-        for (id, load) in due {
+        for DueRender {
+            id,
+            load,
+            source_path,
+            update,
+        } in due
+        {
             let html = {
                 let core_ref = self.core.borrow();
                 let Some(core) = core_ref.as_ref() else {
@@ -1262,7 +1329,7 @@ impl PaneInner {
                 };
                 core.render_preview(load.source_bufnr)
             };
-            self.load_preview_document(id, &html);
+            self.load_preview_document(id, &html, &source_path, update);
             // Recorded WHATEVER the HTML was, the empty string included: an RPC
             // failure answers empty, and leaving `loaded` behind on that would
             // re-arm the reload and re-issue the blocking render on every wake for
@@ -1292,7 +1359,16 @@ impl PaneInner {
     /// `DrawingArea` and below the window-level overlay the pickers live in — GTK 4
     /// paints overlay children after the main child and all its descendants, so a
     /// picker is over a preview by construction.
-    fn sync_preview_view(&self, pane_id: PaneId) {
+    ///
+    /// The two signal handlers are connected HERE, on the one path that creates a
+    /// view, so a view can never exist without them: `decide-policy` routes a clicked
+    /// link through [`Self::on_preview_link`], and `load-changed` applies a waiting
+    /// cross-file fragment through [`Self::on_preview_load_finished`]. Both capture a
+    /// [`Weak`] rather than the `Rc`, since the view outlives nothing but is owned by
+    /// a `PaneWidgets` this `PaneInner` owns.
+    ///
+    /// [`Weak`]: std::rc::Weak
+    fn sync_preview_view(self: &Rc<Self>, pane_id: PaneId) {
         let panes = self.panes.borrow();
         let Some(p) = panes.get(&pane_id) else {
             return;
@@ -1309,6 +1385,60 @@ impl PaneInner {
             // rebuild destroys is the wedge that guard exists to prevent.
             view.set_focusable(false);
             view.set_can_focus(false);
+            {
+                let weak = Rc::downgrade(self);
+                view.connect_decide_policy(move |_view, decision, decision_type| {
+                    // `PolicyDecisionType` FIRST, and it is not redundant with the
+                    // downcast below: a `NewWindowAction` decision is the SAME class,
+                    // so a downcast-only filter would treat a `target="_blank"` as an
+                    // in-page navigation. Answering `false` for one is correct — the
+                    // default handler opens it the way WebKit would.
+                    if decision_type != webkit6::PolicyDecisionType::NavigationAction {
+                        return false;
+                    }
+                    let Some(nav) = decision.downcast_ref::<webkit6::NavigationPolicyDecision>()
+                    else {
+                        return false;
+                    };
+                    let Some(action) = nav.navigation_action() else {
+                        return false;
+                    };
+                    // `Other` is what the initial `load_html` itself arrives as, so
+                    // filtering on `LinkClicked` is exactly "anything that is not a
+                    // user click is allowed through untouched".
+                    if action.navigation_type() != webkit6::NavigationType::LinkClicked {
+                        return false;
+                    }
+                    let uri = action.request().and_then(|r| r.uri());
+                    let Some(uri) = uri.filter(|u| !u.is_empty()) else {
+                        return false;
+                    };
+                    // ANSWER FIRST, act second. `on_preview_link` can issue the
+                    // BLOCKING `preview_file`, and running it before `ignore()` would
+                    // hold WebKit's signal emission open for a whole timeout budget.
+                    decision.ignore();
+                    if let Some(inner) = weak.upgrade() {
+                        inner.on_preview_link(pane_id, &uri);
+                    }
+                    // `true` means "this handler answered the decision"; returning
+                    // `false` here would let the default handler call `use_()` on a
+                    // decision already answered. Returning `true` UNCONDITIONALLY is
+                    // the opposite trap: the initial `load_html`'s own decision would
+                    // never be answered and the preview would be permanently blank.
+                    true
+                });
+            }
+            {
+                let weak = Rc::downgrade(self);
+                view.connect_load_changed(move |_view, event| {
+                    if event != webkit6::LoadEvent::Finished {
+                        return;
+                    }
+                    if let Some(inner) = weak.upgrade() {
+                        inner.on_preview_load_finished(pane_id);
+                    }
+                });
+            }
             p.host.add_overlay(&view);
             // EXPLICIT, even though `false` is GTK's default, because the reason it
             // must stay false is exactly what gets simplified away: a measured overlay
@@ -1323,14 +1453,166 @@ impl PaneInner {
             let existing = p.web.borrow_mut().take();
             if let Some(view) = existing {
                 p.host.remove_overlay(&view);
-                // Both belong to the VIEW, not to the pane: a pane that becomes a
-                // preview again gets a fresh view with an empty document, and a
-                // surviving `head_len` would let the first load into it take the body
-                // -swap branch against a `<head>` that is not there.
+                // All three belong to the VIEW, not to the pane: a pane that becomes a
+                // preview again gets a fresh view with an empty document, a surviving
+                // `head_len` would let the first load into it take the body-swap branch
+                // against a `<head>` that is not there, and a surviving
+                // `pending_fragment` would scroll the next document loaded into the
+                // pane to an anchor the previous one named.
                 p.loaded.set(None);
                 p.head_len.set(0);
+                *p.pending_fragment.borrow_mut() = None;
             }
         }
+    }
+
+    /// Carries out what a click on a link inside pane `pane_id`'s preview means,
+    /// having already answered WebKit's navigation decision.
+    ///
+    /// `uri` is what WebKit resolved against the document's base URI, so the
+    /// relative-to-absolute arithmetic is already done and
+    /// [`preview_link::classify`] only has to name the shape. The match carries no
+    /// `_` arm, so a new [`PreviewLink`] variant is an `E0004` here.
+    ///
+    /// The pane's window handle and its bound source path are looked up PER EVENT
+    /// rather than captured in the signal closure ([`Self::on_pane_press`]'s pattern):
+    /// both move when the pane is rebound, and following the previous binding would
+    /// repoint a pane the user is no longer looking at.
+    ///
+    /// A `file:` link core declines is PRINTED and never handed to the desktop's
+    /// default handler; [`crate::preview_link`] states why that divergence from macOS
+    /// is deliberate.
+    fn on_preview_link(self: &Rc<Self>, pane_id: PaneId, uri: &str) {
+        let win = self.panes.borrow().get(&pane_id).map(|p| p.win);
+        let Some(win) = win else {
+            return;
+        };
+        let source_path = self
+            .panes
+            .borrow()
+            .get(&pane_id)
+            .map(|p| {
+                p.preview
+                    .borrow()
+                    .as_ref()
+                    .map(|info| info.source_path.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+
+        match preview_link::classify(uri, &source_path) {
+            PreviewLink::OpenExternally { uri } => {
+                let parent = self.toplevel_window();
+                launch_uri(parent.as_ref(), &uri, "preview link");
+            }
+            PreviewLink::ScrollToFragment { fragment } => {
+                self.scroll_preview_to_fragment(pane_id, &fragment);
+            }
+            PreviewLink::PreviewFile { path, fragment } => {
+                // `preview_file` is a BLOCKING RPC on the GTK main thread, so it
+                // carries the same liveness gate every other one in this crate does
+                // (`crates/wolf-gnome/DECISIONS.md`, "Crash and stall recovery").
+                let liveness = {
+                    let core_ref = self.core.borrow();
+                    core_ref.as_ref().map(WolfCore::liveness)
+                };
+                match preview_ui::preview_file_press(liveness) {
+                    PreviewFilePress::Refuse(reason) => {
+                        eprintln!("wolf-gnome: preview link not followed: {reason}");
+                    }
+                    PreviewFilePress::Follow => {
+                        let source_bufnr = {
+                            let core_ref = self.core.borrow();
+                            core_ref
+                                .as_ref()
+                                .map_or(0, |core| core.preview_file(win, &path))
+                        };
+                        if source_bufnr > 0 {
+                            // UNCONDITIONALLY, to `Some` or to `None`. Writing only a
+                            // `Some` leaves a stale fragment behind: click a link
+                            // carrying `#a`, then before the render lands click another
+                            // carrying none, and the second file scrolls to the first
+                            // file's anchor.
+                            if let Some(p) = self.panes.borrow().get(&pane_id) {
+                                *p.pending_fragment.borrow_mut() = fragment;
+                            }
+                        } else {
+                            eprintln!(
+                                "wolf-gnome: preview link not followed: the captive Neovim \
+                                 declined to preview {path:?} — it is unreadable, it is not \
+                                 Markdown, or the RPC failed"
+                            );
+                        }
+                    }
+                }
+            }
+            PreviewLink::Refuse(reason) => {
+                eprintln!("wolf-gnome: preview link not followed: {reason}");
+            }
+        }
+    }
+
+    /// Applies a waiting cross-file fragment once pane `pane_id`'s new document has
+    /// finished loading.
+    ///
+    /// Connected to `load-changed` and reached on [`webkit6::LoadEvent::Finished`]
+    /// alone. That edge is produced by a real `load_html` and NEVER by an in-place
+    /// body swap, which is why [`preview_ui::document_update`] forces a full load
+    /// whenever this slot is occupied.
+    ///
+    /// The slot is TAKEN in a statement of its own, so the scroll runs once and a
+    /// later unrelated load — the next edit's re-render — does not repeat it.
+    fn on_preview_load_finished(&self, pane_id: PaneId) {
+        let fragment = self
+            .panes
+            .borrow()
+            .get(&pane_id)
+            .and_then(|p| p.pending_fragment.borrow_mut().take());
+        let Some(fragment) = fragment else {
+            return;
+        };
+        self.scroll_preview_to_fragment(pane_id, &fragment);
+    }
+
+    /// Scrolls pane `pane_id`'s preview to the element with id `fragment`.
+    ///
+    /// Shared by the same-document arm of [`Self::on_preview_link`] and by
+    /// [`Self::on_preview_load_finished`], because the two differ only in WHEN they
+    /// run. An encoding failure prints and issues nothing rather than falling back to
+    /// a raw interpolation, which would be a script-injection seam
+    /// ([`preview_link::scroll_into_view_js`]).
+    fn scroll_preview_to_fragment(&self, pane_id: PaneId, fragment: &str) {
+        let view = self
+            .panes
+            .borrow()
+            .get(&pane_id)
+            .and_then(|p| p.web.borrow().clone());
+        let Some(view) = view else {
+            return;
+        };
+        match preview_link::scroll_into_view_js(fragment) {
+            Ok(script) => {
+                view.evaluate_javascript(&script, None, None, gio::Cancellable::NONE, |result| {
+                    if let Err(err) = result {
+                        eprintln!("wolf-gnome: preview fragment scroll failed: {err}");
+                    }
+                })
+            }
+            Err(err) => eprintln!(
+                "wolf-gnome: preview fragment {fragment:?} could not be encoded ({err}); \
+                 no scroll issued"
+            ),
+        }
+    }
+
+    /// The toplevel [`gtk::Window`] this pane view is inside, or `None` before it is
+    /// rooted.
+    ///
+    /// Only [`launch_uri`] needs it, as the parent the desktop portal centres its
+    /// chooser on, and `None` is legal there — it costs the dialog its parent and
+    /// nothing else.
+    fn toplevel_window(&self) -> Option<gtk::Window> {
+        self.pane_area.root().and_downcast::<gtk::Window>()
     }
 
     /// Frames pane `pane_id`'s web view to the rectangle its grid would have used —
@@ -1373,7 +1655,7 @@ impl PaneInner {
     /// The symptom of "simplifying" this is the reader thrown back to the top of the
     /// document on every keystroke, which is exactly what a live preview is not.
     ///
-    /// ## The head guard
+    /// ## The two guards, and why the head alone is not enough
     ///
     /// `crates/wolf-core/src/nvim.rs` documents the rendered `<head>` as
     /// BYTE-IDENTICAL on every call — theme and width mode are fixed, so only the body
@@ -1383,6 +1665,61 @@ impl PaneInner {
     /// the recorded one, a body that cannot be carved out, or a JSON encoding that
     /// fails all fall back to `load_html` and re-record the offset.
     ///
+    /// That byte-identity is also precisely why the head offset cannot see a SOURCE
+    /// SWITCH: two different files render to the same head at the same offset. So the
+    /// caller's [`preview_ui::document_update`] is a SEPARATE conjunct ahead of it,
+    /// and it is what forces a full load when the pane's source buffer changed or a
+    /// cross-file fragment is waiting. Without it, following a link would swap the
+    /// linked file's body into a document whose base URI still names the previous
+    /// file's directory, and the waiting fragment would have no `LoadEvent::Finished`
+    /// edge to fire on.
+    ///
+    /// ## The base URI
+    ///
+    /// A full load hands `load_html` [`preview_link::file_uri_for`]`(source_path)`,
+    /// which names the SOURCE FILE rather than its directory — so a relative
+    /// `beta.md` in the document resolves by replacing the last segment. `None` for a
+    /// nameless buffer, which is passed straight through, and what a click in THAT
+    /// document delivers is half documented and half measured.
+    /// `webkit_web_view_load_html` says a `NULL` base "defaults to `about:blank`", so
+    /// a fragment-only href is EXPECTED to arrive as `about:blank#frag` — unmeasured
+    /// here, and the reason [`preview_link::classify`]'s first two rows exist. A
+    /// RELATIVE href was MEASURED to arrive RAW (`uri="lnkinto.md"`), which is that
+    /// table's row 9 rather than anything `about:`. Neither shape is reachable from
+    /// the running application, because [`preview_link::file_uri_for`] answers `Some`
+    /// for every real source path; its own docs carry the two inputs that answer
+    /// `None` and why neither occurs. One observable consequence of having a file
+    /// origin at all is that a relative `![](img.png)` can resolve from disk;
+    /// everything else the renderer emits is inlined.
+    ///
+    /// ## The documented "an absolute path kills the web process" hazard does NOT fire
+    ///
+    /// `webkit_web_view_load_html`'s own documentation — still shipped in the pinned
+    /// 2.52.4 GIR — says that when `base_uri` is non-null, "absolute local paths that
+    /// are not children of @base_uri will cause the web process to terminate". Core
+    /// passes `Tag::Image` and raw HTML blocks through verbatim, so an ordinary user
+    /// document arrives here carrying whatever absolute path its author wrote. Were
+    /// that sentence true on this port, a base URI would be WORSE than none: merely
+    /// previewing a file would kill the pane.
+    ///
+    /// MEASURED under `cage` against webkitgtk 2.52.4 on 2026-08-06, one run per
+    /// document, each read from a temporarily connected `web-process-terminated`
+    /// handler: an `<img>` naming a real file by absolute path OUTSIDE the base's
+    /// directory (it rendered), an absolute path that does not exist,
+    /// `<img src="/etc/hosts">`, `/etc/passwd`, `file:///etc/shadow`, a `../`
+    /// traversal, an out-of-base `<link rel=stylesheet>` and `<script src>` (both
+    /// applied), an out-of-base `<iframe>`, and the relative and in-base controls.
+    ///
+    /// **The signal fired in none of the eleven.** Every run reached
+    /// `LoadEvent::Finished` with the preview still bound and the app alive. The
+    /// handler's own falsifier was run rather than assumed: `SIGKILL` to the
+    /// WebProcess produced `reason=Crashed` on the same build, so the silence is
+    /// evidence and not an unwired signal.
+    ///
+    /// Pixels are NOT a reading of this and a re-measurement must not use them: after
+    /// that deliberate kill the capture was byte-identical to the healthy one, because
+    /// the last committed frame stays on screen. Connect the signal.
+    ///
     /// ## The one behavioural asymmetry between the two paths
     ///
     /// A `<script>` element created by `DOMParser` is flagged "already started" and
@@ -1391,7 +1728,13 @@ impl PaneInner {
     /// containing a literal `<script>` behaves differently on the two paths. The
     /// in-place behaviour is the safer of the two, and making them uniform is not
     /// worth trading the measurement above for.
-    fn load_preview_document(&self, pane_id: PaneId, html: &str) {
+    fn load_preview_document(
+        &self,
+        pane_id: PaneId,
+        html: &str,
+        source_path: &str,
+        update: DocumentUpdate,
+    ) {
         let Some((view, recorded)) = ({
             let panes = self.panes.borrow();
             panes
@@ -1402,10 +1745,17 @@ impl PaneInner {
         };
 
         let head = head_offset(html);
-        // The whole in-place branch, or nothing: the head must be present AND
-        // unmoved AND a body must be carveable out of the document.
+        // The whole in-place branch, or nothing: the caller's strategy must allow it
+        // AND the head must be present AND unmoved AND a body must be carveable out
+        // of the document.
         let swap = match (head, body_inner(html)) {
-            (Some(offset), Some(body)) if recorded != 0 && offset == recorded => Some(body),
+            (Some(offset), Some(body))
+                if update == DocumentUpdate::InPlaceEligible
+                    && recorded != 0
+                    && offset == recorded =>
+            {
+                Some(body)
+            }
             _ => None,
         };
 
@@ -1438,7 +1788,7 @@ impl PaneInner {
             }
         }
 
-        view.load_html(html, None);
+        view.load_html(html, preview_link::file_uri_for(source_path).as_deref());
         if let Some(p) = self.panes.borrow().get(&pane_id) {
             p.head_len.set(head.unwrap_or(0));
         }
@@ -3179,6 +3529,38 @@ fn preview_swap_script(literal: &str) -> String {
            document.body.replaceChildren(frag); \
          }})();"
     )
+}
+
+/// Hands `uri` to the platform's URI launcher — the desktop portal on a session
+/// that has one, `xdg-open`'s equivalent otherwise — and PRINTS on failure.
+///
+/// Shared by the two places that ask the desktop to open something: this module's
+/// [`PaneInner::on_preview_link`], for a foreign-scheme link clicked inside a
+/// preview ([`preview_link::PreviewLink::OpenExternally`]), and
+/// `shell::AppShell::preview_in_browser`, for core's loopback address. One function
+/// rather than two because the failure diagnostic is the whole observable behaviour
+/// on a host with no browser, and two copies would drift into two different
+/// diagnostics for the same failure. It lives here rather than in a module of its
+/// own because `shell` already depends on `pane_view`, so the direction stays
+/// acyclic.
+///
+/// `what` names the caller in the printed line, which is what tells the two apart
+/// in a captured stderr log. The launch is ASYNCHRONOUS: `launch` returns as soon as
+/// the request is made, and the callback carries the portal's answer, so nothing on
+/// this path blocks the GTK main thread.
+///
+/// `parent` is the toplevel the portal parents its chooser on; `None` is legal and
+/// only costs the dialog its parent window.
+pub(crate) fn launch_uri(parent: Option<&gtk::Window>, uri: &str, what: &str) {
+    let launcher = gtk::UriLauncher::new(uri);
+    // Owned before the closure, because the callback outlives this frame.
+    let uri = uri.to_string();
+    let what = what.to_string();
+    launcher.launch(parent, gio::Cancellable::NONE, move |result| {
+        if let Err(err) = result {
+            eprintln!("wolf-gnome: {what} launch failed for {uri}: {err}");
+        }
+    });
 }
 
 /// Rounds a device-pixel extent up to the `i32` GTK sizing calls take.

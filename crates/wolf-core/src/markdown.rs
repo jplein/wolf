@@ -242,8 +242,10 @@
 //! (which applies the results) concatenate the SAME `Event::Text` bodies —
 //! INCLUDING the trailing `\n` pulldown-cmark yields — so Neovim's `(row,
 //! byte-col)` indices align with `text.split('\n')` here. When a block has no
-//! highlight data (unknown language, missing parser, Linux/cargo no-op treesitter),
-//! it falls back to the plain output with zero change.
+//! highlight data — the fence carries no language, or that language has no parser
+//! and `highlights` query on Neovim's runtimepath — it falls back to the plain
+//! output with zero change. That decision is per LANGUAGE, not per platform: the
+//! producing Lua helper is module-level and runs everywhere.
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
