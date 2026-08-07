@@ -672,24 +672,61 @@ mod tests {
     /// that makes the key assertion a JOIN rather than a discriminator.
     const SMOKE_RECENT_MRU_PREFIX: &str = "open_recent:";
 
-    /// The two queries the cage smoke
-    /// `preview_pane_renders_and_edit_source_returns_under_cage` types into the
-    /// palette (its `PREVIEW_QUERY` and `EDIT_QUERY`), each paired with the registry
-    /// id its row must record and the smallest number of UNFILTERED candidates that
-    /// query is allowed to match.
+    /// One query the two markdown-preview cage smokes type into the palette, with
+    /// everything about it those smokes cannot check for themselves.
     ///
-    /// Duplicated here for the reason [`SMOKE_QUERY`] is, and joined to the smoke by
-    /// [`palette_rows_for_the_preview_smoke_select_one_row_each`].
+    /// A struct rather than a four-field tuple because two of the four are `usize`
+    /// and sit next to each other, which is exactly the shape a later edit transposes
+    /// silently — and a swapped floor and row count would leave both numbers looking
+    /// plausible.
+    struct PreviewSmokeQuery {
+        /// The literal typed into the palette's search entry.
+        query: &'static str,
+        /// The command the query's TOP row must carry.
+        command: Command,
+        /// That command's canonical registry id, which the smokes read back out of
+        /// the command MRU.
+        id: &'static str,
+        /// The smallest number of candidates [`rank_palette`] may match for the query
+        /// BEFORE this crate's classification filter runs.
+        unfiltered_floor: usize,
+        /// How many ACTIONABLE rows the palette shows for it — the number a user sees
+        /// and the number Enter is pressed against.
+        actionable_rows: usize,
+    }
+
+    /// The two queries the cage smokes
+    /// `preview_pane_renders_and_edit_source_returns_under_cage` and
+    /// `preview_of_an_unsaved_buffer_renders_under_cage` type into the palette (their
+    /// `PREVIEW_QUERY` and `EDIT_QUERY`).
     ///
-    /// The two floors differ, and the difference is the point. `prv` matches
-    /// `Preview in Browser` as well before the classification filter runs, so a floor
-    /// of 2 states that it is the FILTER making the row unique — the same non-vacuity
-    /// clause [`palette_rows_query_new_selects_exactly_the_new_buffer_row`] carries.
-    /// `edts` matches one title in the whole registry, filtered or not, so claiming
-    /// the same of it would be false.
-    const PREVIEW_SMOKE_QUERIES: [(&str, Command, &str, usize); 2] = [
-        ("prv", Command::Preview, "preview", 2),
-        ("edts", Command::Edit, "edit", 1),
+    /// Duplicated here for the reason [`SMOKE_QUERY`] is, and joined to the smokes by
+    /// [`palette_rows_for_the_preview_smoke_rank_the_named_command_first`] — which is
+    /// also where the `prv` collision and its tie-break are pinned.
+    ///
+    /// The two rows differ in both numbers, and the difference is the point. `prv` is
+    /// a subsequence of `Preview` AND of `Preview in Browser`, and both commands are
+    /// DISPATCHED, so the classification filter removes neither: the query really
+    /// shows two rows and the smokes depend on the RANKING rather than on uniqueness.
+    /// The floor of 2 states that the collision is still there, which is what keeps
+    /// "the top row carries `Command::Preview`" from silently becoming a claim about a
+    /// query that matches one title. `edts` matches exactly one title in the whole
+    /// registry, filtered or not, so claiming either of those of it would be false.
+    const PREVIEW_SMOKE_QUERIES: [PreviewSmokeQuery; 2] = [
+        PreviewSmokeQuery {
+            query: "prv",
+            command: Command::Preview,
+            id: "preview",
+            unfiltered_floor: 2,
+            actionable_rows: 2,
+        },
+        PreviewSmokeQuery {
+            query: "edts",
+            command: Command::Edit,
+            id: "edit",
+            unfiltered_floor: 1,
+            actionable_rows: 1,
+        },
     ];
 
     /// Whether `command` is one this front-end DISPATCHES — i.e. `ui_action_for`
@@ -1515,46 +1552,75 @@ mod tests {
         }
     }
 
-    /// The markdown-preview smoke's two queries each select EXACTLY ONE palette row,
-    /// and each selects the row it names.
+    /// The markdown-preview smokes' two queries each rank the row they name FIRST,
+    /// and the ONE state that would invert `prv` is stated outright rather than
+    /// assumed away.
     ///
-    /// ## What this pins for that smoke
+    /// ## What this pins for those smokes
     ///
-    /// `preview_pane_renders_and_edit_source_returns_under_cage` drives Preview and
-    /// then Edit Source by typing a query and pressing Enter, so "exactly one row"
-    /// is what makes which command runs deterministic. That premise cannot be checked
-    /// from the smoke — the overlay is closed before `grim` fires and a screenshot
-    /// cannot count rows — so a registry change that added a second matching title
-    /// would make it stochastic rather than red. It reddens here instead.
+    /// `preview_pane_renders_and_edit_source_returns_under_cage` and
+    /// `preview_of_an_unsaved_buffer_renders_under_cage` drive Preview (and, in the
+    /// first, Edit Source) by typing a query and pressing Enter on the preselected TOP
+    /// row, so "the top row carries the command the query names" is what makes which
+    /// command runs deterministic. That premise cannot be checked from a smoke — the
+    /// overlay is closed before `grim` fires and a screenshot can neither count rows
+    /// nor read their order — so a registry change that reordered them would make both
+    /// smokes stochastic rather than red. They redden here instead.
     ///
-    /// The `mru_key` half is the other end of the same join: that smoke asserts the
-    /// command MRU holds `preview` and `edit` after the two activations, which only
-    /// means anything while those are the ids these rows record.
+    /// The `mru_key` half is the other end of the same join: those smokes assert the
+    /// command MRU holds `preview` and `edit` after the activations, which only means
+    /// anything while those are the ids these rows record.
     ///
-    /// ## The unfiltered floor, per query
+    /// ## `prv` matches TWO rows, and NO query can separate them
     ///
-    /// [`PREVIEW_SMOKE_QUERIES`] carries a per-row floor rather than one shared
-    /// number, and its doc comment says why: `prv` is unique only AFTER the
-    /// classification filter (`Preview in Browser` is Deferred and matches it too), so
-    /// its floor of 2 is what keeps the uniqueness assertion from holding with that
-    /// filter deleted; `edts` is unique in the whole registry, so a floor of 2 would
-    /// be a false claim about it rather than a stronger test.
+    /// `Command::PreviewInBrowser` is dispatched, so [`palette_rows`]' classification
+    /// filter does not remove it and `prv` selects `Preview` and `Preview in Browser`
+    /// both. Uniqueness is unrecoverable and must not be chased: `rank_matches`
+    /// matches a term as a case-insensitive SUBSEQUENCE, and `Preview` is a PREFIX of
+    /// `Preview in Browser`, so every subsequence of the first is a subsequence of the
+    /// second. What decides is therefore the tie-break — the two rows tie on
+    /// `mru_group`, `mru_rank`, `score`, `match_start` and `span`, and separate only at
+    /// `len`, where `Preview`'s 7 characters sort ahead of the other's 18.
     ///
-    /// Falsifier: give `Command::Preview` or `Command::Edit` a title that another
-    /// actionable command's title also matches — or delete the classification filter
-    /// from [`palette_rows`], which fails the `prv` row alone.
+    /// ## The adversarial MRU INVERTS the order, and that is asserted, not hidden
+    ///
+    /// `mru_group` is the LEADING key of `MatchKey`, so a command MRU holding
+    /// `preview_in_browser` puts that row first however much better `Preview` matches —
+    /// and the smoke would then hand a document to the system browser instead of
+    /// opening a preview pane. The third block below asserts that inversion as a
+    /// measured fact rather than weakening the first two to accommodate it, because it
+    /// is precisely the condition the smokes' determinism rests on NOT holding: each
+    /// runs against a fresh `WOLF_STATE_DIR` (`smoke_state_dir`) and neither ever
+    /// activates Preview in Browser, so the MRU they meet holds `preview` at most. If
+    /// that block ever stops inverting, the tie-break has changed and the first two
+    /// blocks have stopped being statements about ranking at all.
+    ///
+    /// Falsifier: rename `Command::Preview`'s title to `Preview the document` — still
+    /// a `prv` subsequence, but 20 characters against `Preview in Browser`'s 18, so
+    /// the `len` tie-break inverts and the empty-MRU block reddens naming
+    /// `Preview in Browser` as the top row. Deleting the classification filter from
+    /// [`palette_rows`] reddens the `actionable_rows` clause instead, which is what
+    /// the unfiltered floor exists to keep meaningful.
     #[test]
-    fn palette_rows_for_the_preview_smoke_select_one_row_each() {
-        for (query, command, id, unfiltered_floor) in PREVIEW_SMOKE_QUERIES {
-            // Precondition: the literal the smoke reads back is still this command's
-            // registry id. The smoke is a separate crate and cannot import it.
+    fn palette_rows_for_the_preview_smoke_rank_the_named_command_first() {
+        for case in PREVIEW_SMOKE_QUERIES {
+            let PreviewSmokeQuery {
+                query,
+                command,
+                id,
+                unfiltered_floor,
+                actionable_rows,
+            } = case;
+
+            // Precondition: the literal the smokes read back is still this command's
+            // registry id. They are a separate crate and cannot import it.
             assert_eq!(
                 command.spec().id,
                 id,
-                "{command:?}'s registry id is {:?}, but the cage smoke asserts the palette \
+                "{command:?}'s registry id is {:?}, but the cage smokes assert the palette \
                  activation recorded the literal {id:?} in the command MRU. Update \
                  `PREVIEW_MRU_KEYS` in `tests/smoke_headless.rs` and PREVIEW_SMOKE_QUERIES here \
-                 together, or that smoke's MRU precondition becomes unfalsifiable.",
+                 together, or those smokes' MRU precondition becomes unfalsifiable.",
                 command.spec().id
             );
 
@@ -1563,10 +1629,11 @@ mod tests {
                 unfiltered.len() >= unfiltered_floor,
                 "`rank_palette` matches only {} candidate(s) for {query:?} before the \
                  classification filter runs, below the floor of {unfiltered_floor} this query \
-                 claims. For a floor of 2 that means the filter is no longer what makes the row \
-                 unique, so the assertion below would hold with the filter deleted; for a floor of \
-                 1 it means the query matches NOTHING and the smoke would find an empty palette. \
-                 Titles matching {query:?} were: {:?}",
+                 claims. For a floor of 2 that means the `Preview` / `Preview in Browser` \
+                 COLLISION is gone, so the top-row assertion below would hold for a query that \
+                 matches one title and would no longer be a statement about ranking; for a floor \
+                 of 1 it means the query matches NOTHING and the smokes would find an empty \
+                 palette. Titles matching {query:?} were: {:?}",
                 unfiltered.len(),
                 unfiltered
                     .iter()
@@ -1574,42 +1641,102 @@ mod tests {
                     .collect::<Vec<_>>()
             );
 
-            // Both MRU states, exactly as the sibling test does: the smoke opens the
-            // palette twice and the first activation warms the store, so the second
-            // query runs against a NON-empty MRU.
+            // Both MRU states a smoke can actually meet: a fresh store, and the store
+            // the FIRST activation warmed. `preview_in_browser` is not among them —
+            // see the third block below, which is where that case is pinned.
             let mrus: [Vec<String>; 2] = [Vec::new(), vec![Command::Preview.spec().id.to_string()]];
             for recent in &mrus {
                 let rows = palette_rows(&[], recent, query, PALETTE_MAX_ROWS);
                 assert_eq!(
                     rows.len(),
-                    1,
-                    "`palette_rows` returned {} row(s) for {query:?} with command MRU {recent:?}; \
-                     the cage smoke presses Enter on the top row, so a second matching row makes \
-                     which command runs depend on ranking tie-breaks. Rows were: {:?}",
+                    actionable_rows,
+                    "`palette_rows` returned {} actionable row(s) for {query:?} with command MRU \
+                     {recent:?}, not the {actionable_rows} this query claims. FEWER means the \
+                     classification filter removed a row that is dispatched today — for {query:?} \
+                     that is the `Preview in Browser` collision disappearing, which makes the \
+                     top-row assertion below vacuous. MORE means a registry addition matched the \
+                     query too, and whether it outranks the named row is then decided by a \
+                     tie-break nobody chose. Rows were: {:?}",
                     rows.len(),
                     rows.iter().map(|row| &row.display).collect::<Vec<_>>()
                 );
 
-                let row = &rows[0];
+                let row = rows.first().unwrap_or_else(|| {
+                    panic!(
+                        "`palette_rows` returned NO rows for {query:?} with command MRU \
+                         {recent:?}, so the smokes would press Enter on an empty palette and \
+                         nothing at all would be dispatched. The assertion above should have \
+                         caught this first."
+                    )
+                });
                 assert_eq!(
                     row.command,
                     Some(command),
-                    "the sole row matching {query:?} (with command MRU {recent:?}) carries {:?}, \
-                     not {command:?}. The smoke would then drive a command it does not name — and \
-                     for these two rows that means opening a preview where a source edit was meant, \
-                     or the reverse.",
-                    row.command
+                    "the TOP row for {query:?} (with command MRU {recent:?}) carries {:?}, not \
+                     {command:?}. The smokes press Enter on the preselected first row, so they \
+                     would drive a command they do not name. For {query:?} = \"prv\" the row that \
+                     displaces it is `Preview in Browser`, which serves the buffer over loopback \
+                     and hands the URL to the system browser — on a host where that launcher works \
+                     it opens a real browser tab, so this is a safety failure and not only a \
+                     ranking one. Rows were: {:?}",
+                    row.command,
+                    rows.iter().map(|r| &r.display).collect::<Vec<_>>()
                 );
                 assert_eq!(
                     row.mru_key.as_str(),
                     id,
-                    "the sole row matching {query:?} (with command MRU {recent:?}) records {:?} on \
-                     activation, not {id:?}. The smoke reads the command-MRU sqlite back and looks \
+                    "the TOP row for {query:?} (with command MRU {recent:?}) records {:?} on \
+                     activation, not {id:?}. The smokes read the command-MRU sqlite back and look \
                      for exactly that key.",
                     row.mru_key
                 );
             }
         }
+
+        // --- The adversarial MRU, asserted as the measured inversion it is ----
+        //
+        // Stated here once rather than as a third `mrus` entry, because its expected
+        // answer is the OPPOSITE of the loop's and folding it in would need a per-row
+        // expectation that reads as though either answer were acceptable. It is not: it
+        // is a live fragility of both preview smokes, and the assertion is what keeps
+        // it from being rediscovered as a mystery.
+        // Taken from the table rather than re-typed, so the two blocks can never end up
+        // inverting a query the loop above never ran.
+        let preview_query = PREVIEW_SMOKE_QUERIES
+            .iter()
+            .find(|case| case.command == Command::Preview)
+            .map(|case| case.query)
+            .unwrap_or_else(|| {
+                panic!(
+                    "PREVIEW_SMOKE_QUERIES carries no row for Command::Preview, so the block \
+                     below has no query to invert and the fragility it records goes unstated."
+                )
+            });
+        let browser_id = Command::PreviewInBrowser.spec().id;
+        let adversarial: Vec<String> = vec![browser_id.to_string()];
+        let inverted = palette_rows(&[], &adversarial, preview_query, PALETTE_MAX_ROWS);
+        let top = inverted.first().unwrap_or_else(|| {
+            panic!(
+                "`palette_rows` returned NO rows for {preview_query:?} with command MRU \
+                 [{browser_id:?}], which contradicts the row count asserted above for the same \
+                 query."
+            )
+        });
+        assert_eq!(
+            top.command,
+            Some(Command::PreviewInBrowser),
+            "with a command MRU holding {browser_id:?}, the top row for {preview_query:?} carries \
+             {:?} rather than Command::PreviewInBrowser. This test asserts the INVERSION on \
+             purpose: `MatchKey`'s leading field is `mru_group`, so an MRU hit outranks every \
+             match-quality key, and a state directory that had once run Preview in Browser would \
+             make the preview smokes launch a browser instead of opening a preview pane. Both \
+             smokes are safe from it only because `smoke_state_dir` is fresh per run and neither \
+             ever activates that command. If this assertion is what went red, the tie-break itself \
+             changed — re-derive `rank_matches`' key order before touching either smoke, because \
+             the two blocks above have stopped being statements about ranking. Rows were: {:?}",
+            top.command,
+            inverted.iter().map(|row| &row.display).collect::<Vec<_>>()
+        );
     }
 
     /// `max` is applied AFTER the classification filter, so a cap counts only rows

@@ -1491,23 +1491,308 @@ mod tests {
     }
 
     // =========================================================================
+    // preview_file_press
+    // =========================================================================
+
+    /// A followed preview link issues its BLOCKING `preview_file` for a live core and
+    /// for nothing else.
+    ///
+    /// Property: [`preview_file_press`] answers [`PreviewFilePress::Follow`] for
+    /// `Some(Liveness::Alive)` ALONE, over the whole `Option<Liveness>` domain. Stated
+    /// as an exact SET as well as per input — [`may_render_is_alive_only`]'s shape —
+    /// because "Alive follows" on its own is satisfied by a seam that follows for
+    /// everything, which is exactly the regression the falsifier below produces.
+    ///
+    /// This seam takes ONE argument, and that is the decision the module docs record:
+    /// whether the linked file is Markdown belongs to core's own `preview_file` gate,
+    /// and answering it here would mean a filesystem touch in a seam whose whole value
+    /// is purity. A `0` from core IS the refusal, and [`crate::pane_view`] prints it.
+    /// So there is no `(liveness, gate)` product to sweep here, and no second gate
+    /// whose ORDER against the liveness read could be got wrong — which is why this
+    /// test has no counterpart to [`preview_press_table`]'s property 2.
+    ///
+    /// Falsifier: add `Some(Liveness::NotResponding) => PreviewFilePress::Follow`.
+    /// Every link click in every preview then spends a blocking RPC against a Neovim
+    /// known not to answer, freezing the GTK main loop for another full `rpc_timeout`
+    /// budget — and unlike a chord, a click is something a reader does while simply
+    /// reading.
+    #[test]
+    fn preview_file_press_is_alive_only() {
+        let following: Vec<Option<Liveness>> = ALL_LIVENESS_INPUTS
+            .into_iter()
+            .filter(|liveness| preview_file_press(*liveness) == PreviewFilePress::Follow)
+            .collect();
+        let only_alive = [Some(Liveness::Alive)];
+
+        assert_eq!(
+            following.as_slice(),
+            only_alive.as_slice(),
+            "exactly ONE of the {NAMED_LIVENESS_INPUTS} liveness inputs may follow a preview \
+             link — a core reading Alive. An EXTRA entry means the blocking `preview_file` is \
+             issued against a core already known to be wedged, dead or taken out. An entry \
+             MISSING means a clicked link never repoints the pane at all, which is the whole \
+             feature, and the click would appear to do nothing with a printed reason naming a \
+             hazard that is not present."
+        );
+
+        for liveness in ALL_LIVENESS_INPUTS {
+            let got = preview_file_press(liveness);
+            if liveness == Some(Liveness::Alive) {
+                assert_eq!(
+                    got,
+                    PreviewFilePress::Follow,
+                    "preview_file_press for {} must Follow. Stated per input as well as over the \
+                     whole domain so a failure names the reading rather than quoting a slice.",
+                    liveness_name(liveness)
+                );
+            } else {
+                assert!(
+                    matches!(got, PreviewFilePress::Refuse(_)),
+                    "preview_file_press for {} returned {got:?}, but this input MUST refuse: \
+                     `WolfCore::preview_file` funnels through `block_on_rpc` on the GTK main \
+                     thread.",
+                    liveness_name(liveness)
+                );
+            }
+        }
+
+        assert_eq!(
+            ALL_LIVENESS_INPUTS.len(),
+            NAMED_LIVENESS_INPUTS,
+            "ALL_LIVENESS_INPUTS carries {} entries but the gate is total over \
+             {NAMED_LIVENESS_INPUTS}; a shrunk array makes the sweep above cover less than the \
+             domain it claims to.",
+            ALL_LIVENESS_INPUTS.len()
+        );
+    }
+
+    // =========================================================================
+    // browser_press
+    // =========================================================================
+
+    /// Pins Preview in Browser for every `(Option<Liveness>, markdown_active)` input.
+    ///
+    /// [`preview_press_table`]'s first two properties, mirrored, and for the same
+    /// reasons. There is no third: this seam carries no placement.
+    ///
+    /// 1. Only a live core with a Markdown buffer active may issue the BLOCKING
+    ///    `open_in_browser`; the other seven inputs refuse and issue nothing.
+    /// 2. LIVENESS IS READ FIRST. A dead or wedged core refuses with the SAME reason
+    ///    whether or not the Markdown gate is open, which is only true if the gate is
+    ///    never consulted on those arms.
+    ///
+    /// Falsifier for property 2: test `markdown_active` before the liveness match. The
+    /// two refusal reasons for a dead core then differ, and a user whose Neovim has
+    /// crashed is told their buffer is not Markdown — read out of a snapshot that
+    /// stopped advancing when the editor did.
+    ///
+    /// **No smoke exercises this seam's accepting arm, deliberately**, so this table is
+    /// the whole of its coverage. Under `cage` `gtk::UriLauncher::launch` reports
+    /// `Ok(())` and invokes no handler, so there is nothing to observe; and on a host
+    /// where it does work, `XDG_DATA_DIRS` reaches the system applications directory
+    /// even under the smoke harness's `HOME` redirect, so a smoke would open a tab in
+    /// the developer's real browser. Do not add one.
+    #[test]
+    fn browser_press_table() {
+        // --- 1: the decision itself ------------------------------------------
+        for case in PRESS_CASES {
+            let got = browser_press(case.liveness, case.gate);
+            match case.want {
+                WantPress::Act => assert_eq!(
+                    got,
+                    BrowserPress::Open,
+                    "browser_press({}, markdown_active = {}) returned {got:?}, but this input \
+                     MUST open. A refusal here makes the View menu's Preview in Browser row do \
+                     nothing at all on a healthy editor showing a Markdown file.",
+                    liveness_name(case.liveness),
+                    case.gate
+                ),
+                WantPress::Refuse => assert!(
+                    matches!(got, BrowserPress::Refuse(_)),
+                    "browser_press({}, markdown_active = {}) returned {got:?}, but this input \
+                     MUST refuse. `WolfCore::open_in_browser` RENDERS the document and binds a \
+                     loopback socket behind a blocking RPC on the GTK main thread, so an Open \
+                     against a core known not to answer freezes the window for another full \
+                     `rpc_timeout` budget; with the Markdown gate CLOSED it answers the empty \
+                     string, so the RPC is spent to be handed nothing.",
+                    liveness_name(case.liveness),
+                    case.gate
+                ),
+            }
+        }
+
+        // --- 2: liveness is read BEFORE the Markdown gate ---------------------
+        for liveness in ALL_LIVENESS_INPUTS {
+            if liveness == Some(Liveness::Alive) {
+                continue;
+            }
+            let with_gate = browser_press(liveness, true);
+            let without_gate = browser_press(liveness, false);
+            assert_eq!(
+                with_gate,
+                without_gate,
+                "browser_press for {} answered {with_gate:?} with the Markdown gate OPEN and \
+                 {without_gate:?} with it CLOSED. The two must be identical: liveness is read \
+                 first, so the gate is never consulted on this arm.",
+                liveness_name(liveness)
+            );
+        }
+        let alive_gate_shut = browser_press(Some(Liveness::Alive), false);
+        assert!(
+            matches!(alive_gate_shut, BrowserPress::Refuse(_)),
+            "a LIVE core with a non-Markdown buffer active returned {alive_gate_shut:?} rather \
+             than a refusal, so the clause above compares two refusals that mean nothing. This is \
+             the one arm where the Markdown gate must decide."
+        );
+    }
+
+    // =========================================================================
+    // browser_url
+    // =========================================================================
+
+    /// A loopback URL to hand the launcher, taken from what `WolfCore::open_in_browser`
+    /// really answers.
+    const BROWSER_URL: &str = "http://127.0.0.1:33393/alpha.md";
+
+    /// One [`browser_url`] table row.
+    struct BrowserUrlCase {
+        desc: &'static str,
+        raw: &'static str,
+        want: Option<&'static str>,
+    }
+
+    /// How many named rows the browser-URL table carries, as a literal.
+    const NAMED_BROWSER_URL_ROWS: usize = 6;
+
+    /// Pins which strings reach the platform's URI launcher and which are dropped.
+    ///
+    /// Property 1: `None` for an empty or all-whitespace string, `Some(raw)` — the
+    /// UNTRIMMED input, verbatim — for everything else. Property 2 (non-vacuity): the
+    /// range over the sweep carries both a `Some` and a `None`, so neither a function
+    /// that launches everything nor one that launches nothing satisfies the table.
+    ///
+    /// The last row is the one that looks wrong and is not. There is deliberately NO
+    /// `http://127.0.0.1:` prefix check: the loopback-only bind is core's own hard
+    /// security requirement (`crates/wolf-core/DECISIONS.md`), and restating it here
+    /// would give one rule two owners that could drift apart — the dangerous direction
+    /// being the one where this copy is the laxer, since it is the one the launcher
+    /// actually consults. Deleting that row would turn its absence back into something
+    /// a reader could mistake for an oversight.
+    ///
+    /// Falsifier: return `Some(raw)` unconditionally. The empty and all-whitespace rows
+    /// redden, and the behaviour they describe is asking the desktop to open the empty
+    /// URI on each of core's three error paths — an RPC failure, a non-Markdown buffer
+    /// and a failure to bind the loopback socket — every one of which it has already
+    /// logged.
+    #[test]
+    fn browser_url_table() {
+        let cases = [
+            BrowserUrlCase {
+                desc: "the ordinary case: core's own address, passed straight through",
+                raw: BROWSER_URL,
+                want: Some(BROWSER_URL),
+            },
+            BrowserUrlCase {
+                desc: "core's THREE error paths all answer the empty string",
+                raw: "",
+                want: None,
+            },
+            BrowserUrlCase {
+                desc: "all-whitespace is the same nothing, spelled differently",
+                raw: "   ",
+                want: None,
+            },
+            BrowserUrlCase {
+                desc: "tabs and newlines are whitespace too",
+                raw: "\t\n ",
+                want: None,
+            },
+            BrowserUrlCase {
+                desc: "trimmed for the TEST, UNTRIMMED for the answer: the launcher is handed \
+                       exactly what core built",
+                raw: "  http://127.0.0.1:33393/alpha.md  ",
+                want: Some("  http://127.0.0.1:33393/alpha.md  "),
+            },
+            BrowserUrlCase {
+                desc: "a NON-loopback address passes: the loopback-only bind is core's rule and \
+                       is deliberately not restated here",
+                raw: "https://example.com/x",
+                want: Some("https://example.com/x"),
+            },
+        ];
+
+        assert_eq!(
+            cases.len(),
+            NAMED_BROWSER_URL_ROWS,
+            "the browser-URL table must carry its {NAMED_BROWSER_URL_ROWS} named rows, not {}.",
+            cases.len()
+        );
+
+        let mut answers: HashSet<bool> = HashSet::new();
+        for case in &cases {
+            let got = browser_url(case.raw);
+            assert_eq!(
+                got, case.want,
+                "browser_url({:?}) must be {:?}, got {got:?} — {}. A spurious `Some` asks the \
+                 desktop's URI launcher to open a string core has already logged as a failure; a \
+                 spurious `None` makes Preview in Browser silently do nothing on a perfectly good \
+                 address. A `Some` carrying a TRIMMED copy is the third failure and the quietest: \
+                 the launcher would then be handed a URL this seam edited rather than the one \
+                 core built.",
+                case.raw, case.want, case.desc
+            );
+            answers.insert(got.is_some());
+        }
+
+        let both: HashSet<bool> = [true, false].into_iter().collect();
+        assert_eq!(
+            answers, both,
+            "browser_url's range over all {NAMED_BROWSER_URL_ROWS} rows must contain BOTH a Some \
+             and a None. Only `Some` means the filter is gone and every error path reaches the \
+             launcher; only `None` means Preview in Browser can never launch anything at all."
+        );
+    }
+
+    // =========================================================================
     // the refusal strings
     // =========================================================================
 
-    /// All eight refusal reasons — four per direction — are non-empty, read as a
+    /// How many refusal reasons this module carries, as a LITERAL: four from each of
+    /// the three seams that have a buffer-kind gate ([`preview_press`], [`edit_press`],
+    /// [`browser_press`]) plus three from the one that has none
+    /// ([`preview_file_press`], whose `Alive` arm always follows).
+    ///
+    /// A literal rather than anything derived from the sweep below, for the reason
+    /// [`NAMED_LIVENESS_INPUTS`] is one: a count computed from the probes shrinks with
+    /// them, so a seam dropped from the sweep would leave the total agreeing with
+    /// itself.
+    const NAMED_REFUSAL_REASONS: usize = 15;
+
+    /// All fifteen refusal reasons this module can print are non-empty, read as a
     /// mid-sentence clause, and are pairwise DISTINCT.
     ///
-    /// Distinctness is the load-bearing half, and it is asserted ACROSS the two
-    /// directions as well as within each. The reason is the whole of what a reader
-    /// sees when a command appears to do nothing, and it is printed as
-    /// `preview not opened: {reason}` / `source not edited: {reason}`. Two arms
-    /// sharing a string make "the editor is wedged" indistinguishable from "the
-    /// editor has crashed" — two states with completely different routes back, one
-    /// of which resolves by itself — and one shared across the directions makes an
-    /// Edit that did nothing read exactly like a Preview that did nothing.
+    /// Distinctness is the load-bearing half, and it is asserted ACROSS the four seams
+    /// as well as within each. The reason is the whole of what a reader sees when a
+    /// command appears to do nothing, and it is printed as `preview not opened:
+    /// {reason}` / `source not edited: {reason}` / `preview link not followed:
+    /// {reason}` / `preview in browser not opened: {reason}`. Two arms sharing a string
+    /// make "the editor is wedged" indistinguishable from "the editor has crashed" —
+    /// two states with completely different routes back, one of which resolves by
+    /// itself — and one shared ACROSS seams makes a link that did nothing read exactly
+    /// like a Preview that did nothing, which are different investigations.
     ///
-    /// Falsifier: give `Some(Liveness::Dead)` and `Some(Liveness::NotResponding)`
-    /// the same string on either side.
+    /// All four seams are swept in ONE test rather than one test each, because
+    /// distinctness is a property of the whole module: a per-seam test checks a seam's
+    /// strings against each other and leaves them free to collide with another seam's,
+    /// which is the collision a reader is least able to spot — two files apart, two
+    /// prefixes apart, and identical on the line the user actually reads.
+    ///
+    /// [`preview_file_press`]'s `Alive` arm is asserted to FOLLOW rather than skipped
+    /// silently, so "this seam contributes three reasons and not four" is measured
+    /// rather than assumed — it is the one seam here with no second gate.
+    ///
+    /// Falsifier: give `Some(Liveness::Dead)` and `Some(Liveness::NotResponding)` the
+    /// same string on any one seam, or give two seams' `None` arms the same string.
     #[test]
     fn refusal_reasons_are_distinct_and_mid_sentence() {
         let probes = [
@@ -1525,10 +1810,24 @@ mod tests {
             ("an absent core, after shutdown took it out", None, true),
         ];
 
+        // The one seam with no second gate: its Alive arm ACTS, which is why it
+        // contributes three reasons rather than four. Measured here so the count below
+        // rests on a check rather than on a belief.
+        assert_eq!(
+            preview_file_press(Some(Liveness::Alive)),
+            PreviewFilePress::Follow,
+            "preview_file_press(Alive) refused. It has NO buffer-kind gate — the linked file's \
+             Markdown-ness is core's own `preview_file` gate and this seam cannot answer it \
+             without touching the filesystem — so its live arm must always follow. If it now \
+             refuses it contributes a SIXTEENTH reason and the count below is wrong for a reason \
+             that has nothing to do with distinctness."
+        );
+
         let mut seen: HashSet<&'static str> = HashSet::new();
+        let mut collected = 0_usize;
 
         for (source, liveness, gate) in probes {
-            // Rendered BEFORE the destructuring, because neither press type is
+            // Rendered BEFORE the destructuring, because none of the press types is
             // `Copy` and the `else` arm must be able to name what it actually got.
             let preview = preview_press(liveness, gate, LONE_EDITOR);
             let preview_shown = format!("{preview:?}");
@@ -1550,41 +1849,85 @@ mod tests {
                      no longer selects the arm it names."
                 )
             };
+            let browser = browser_press(liveness, gate);
+            let browser_shown = format!("{browser:?}");
+            let BrowserPress::Refuse(browser_reason) = browser else {
+                panic!(
+                    "browser_press for {source} produced {browser_shown} rather than a refusal, so \
+                     this test cannot check the reason it exists to check. Either that arm now \
+                     issues the blocking open_in_browser (in which case `browser_press_table` is \
+                     also red) or the probe no longer selects the arm it names."
+                )
+            };
 
-            for (direction, reason) in [("preview", preview_reason), ("edit", edit_reason)] {
+            let mut reasons = vec![
+                ("preview", preview_reason),
+                ("edit", edit_reason),
+                ("preview in browser", browser_reason),
+            ];
+
+            // The link seam has no gate, so its `Alive` probe ACTS and contributes no
+            // reason. Skipped by the liveness rather than by the probe index, so a
+            // reordered probe list cannot silently drop a different arm.
+            if liveness != Some(Liveness::Alive) {
+                let link = preview_file_press(liveness);
+                let link_shown = format!("{link:?}");
+                let PreviewFilePress::Refuse(link_reason) = link else {
+                    panic!(
+                        "preview_file_press for {source} produced {link_shown} rather than a \
+                         refusal, so this test cannot check the reason it exists to check. Either \
+                         that arm now issues the blocking preview_file (in which case \
+                         `preview_file_press_is_alive_only` is also red) or the probe no longer \
+                         selects the arm it names."
+                    )
+                };
+                reasons.push(("preview link", link_reason));
+            }
+
+            for (seam, reason) in reasons {
+                collected += 1;
                 assert!(
                     !reason.trim().is_empty(),
-                    "the {direction} refusal reason for {source} is empty. It is printed as \
-                     \"wolf-gnome: {direction} not performed: {{reason}}\", so an empty one makes \
-                     a deliberate refusal indistinguishable from a command that silently did \
+                    "the {seam} refusal reason for {source} is empty. It is printed as \
+                     \"wolf-gnome: {seam} not performed: {{reason}}\", so an empty one makes a \
+                     deliberate refusal indistinguishable from a command that silently did \
                      nothing."
                 );
                 assert!(
                     !is_sentence_cased(reason),
-                    "the {direction} refusal reason for {source} is sentence-cased ({reason:?}). \
-                     It is interpolated MID-SENTENCE into the printed diagnostic, exactly as \
+                    "the {seam} refusal reason for {source} is sentence-cased ({reason:?}). It is \
+                     interpolated MID-SENTENCE into the printed diagnostic, exactly as \
                      `command_action.rs`'s, `nav_ui.rs`'s and `clipboard_ui.rs`'s reasons are, so \
                      it must start lowercase (an ALL-CAPS proper noun such as \"GNOME\" is fine)."
                 );
                 assert!(
                     seen.insert(reason),
-                    "the {direction} refusal reason for {source} ({reason:?}) duplicates another \
-                     arm's reason. All eight must be DISTINCT so the printed line names the real \
-                     blocker: a wedged Neovim is recoverable and a dead one is not, an absent core \
-                     means the window is already tearing down, and a closed buffer-kind gate is \
-                     not a core problem at all. One shared string collapses two of those into a \
-                     message that cannot be acted on."
+                    "the {seam} refusal reason for {source} ({reason:?}) duplicates another arm's \
+                     reason. All {NAMED_REFUSAL_REASONS} must be DISTINCT so the printed line \
+                     names the real blocker: a wedged Neovim is recoverable and a dead one is \
+                     not, an absent core means the window is already tearing down, and a closed \
+                     buffer-kind gate is not a core problem at all. Across seams the collapse is \
+                     worse still, because the four prefixes name four different surfaces — a \
+                     command, a menu row, its inverse and a CLICK inside a rendered document — \
+                     and the reason is the only part of the line that says which one refused."
                 );
             }
         }
 
         assert_eq!(
+            collected, NAMED_REFUSAL_REASONS,
+            "the sweep collected {collected} refusal reason(s), not the \
+             {NAMED_REFUSAL_REASONS} this module carries (four each from preview_press, \
+             edit_press and browser_press, three from preview_file_press). FEWER means a seam \
+             stopped being probed and its strings are unguarded; MORE means one gained an arm \
+             nothing here classified."
+        );
+        assert_eq!(
             seen.len(),
-            probes.len() * 2,
-            "the eight probed refusals produced {} distinct reason(s), not {}. See the per-probe \
-             message above for which pair collapsed.",
-            seen.len(),
-            probes.len() * 2
+            NAMED_REFUSAL_REASONS,
+            "the {NAMED_REFUSAL_REASONS} probed refusals produced {} distinct reason(s). See the \
+             per-probe message above for which pair collapsed.",
+            seen.len()
         );
     }
 
@@ -1739,6 +2082,223 @@ mod tests {
             SOURCE_A.source_tick, SOURCE_B_SAME_TICK.source_tick,
             "precondition: the two fixtures must share a changedtick, or row 4 is an ordinary \
              tick-advance row and the defect it exists for goes unmeasured"
+        );
+    }
+
+    // =========================================================================
+    // document_update
+    // =========================================================================
+
+    /// A source buffer nvim has NEVER reported a `changedtick` for — the `0` sentinel
+    /// `refresh_pane_state` produces when `Snapshot::markdown_ticks` carries no entry
+    /// for the bound source yet (the `wolf_markdown_dirty` notification upserts it, so
+    /// a freshly bound preview has none until the first edit or write).
+    ///
+    /// It is a real reading rather than an invented one, and it is here because `0` is
+    /// the value most likely to be special-cased by an "optimization" that treats an
+    /// unknown tick as "nothing has changed".
+    const SOURCE_C_NEVER_TICKED: PreviewLoad = PreviewLoad {
+        source_bufnr: 9,
+        source_tick: 0,
+    };
+
+    /// A [`DocumentUpdate`] as the name a failure quotes.
+    ///
+    /// A name rather than the value itself because [`DocumentUpdate`] deliberately
+    /// derives no `Hash` — nothing in production keys a map on it — and the range
+    /// assertion below needs a set. The `match` is `_`-FREE, so appending a variant is
+    /// an `E0004` here rather than a strategy that silently stops being swept.
+    fn update_name(update: DocumentUpdate) -> &'static str {
+        match update {
+            DocumentUpdate::FullLoad => "FullLoad",
+            DocumentUpdate::InPlaceEligible => "InPlaceEligible",
+        }
+    }
+
+    /// One [`document_update`] table row.
+    struct UpdateCase {
+        desc: &'static str,
+        current: PreviewLoad,
+        loaded: Option<PreviewLoad>,
+        fragment_pending: bool,
+        want: DocumentUpdate,
+    }
+
+    /// How many named rows the document-update table carries, as a literal.
+    const NAMED_UPDATE_ROWS: usize = 8;
+
+    /// Pins how a freshly rendered document reaches the live web view.
+    ///
+    /// Property 1: each named shape gets the strategy the rules give it. Property 2
+    /// (non-vacuity): the range over the sweep is EXACTLY both variants — without which
+    /// a `document_update` that answered [`DocumentUpdate::FullLoad`] for everything
+    /// would satisfy five of the eight rows and every negative reading of the rest, and
+    /// a reader would be thrown back to the top of the document on every keystroke with
+    /// nothing anywhere reddening.
+    ///
+    /// **Rows 3 and 5 are the pair that measures the KEY.** Row 3 is a live edit of the
+    /// file on screen and MUST stay in place; row 5 is a reused preview pane switching
+    /// sources at the SAME `changedtick`, which two freshly opened files really do
+    /// share, and MUST reload. A rule keyed on the tick answers row 5 wrong; the final
+    /// arm turned into a full load answers row 3 wrong. Neither row alone can see both.
+    ///
+    /// **Row 4 is the fragment coupling**, and it is the one this signature cannot
+    /// show: a cross-file scroll is applied on a `LoadEvent::Finished` edge, and an
+    /// in-place body swap fires no load event at all — so with the clause gone the
+    /// scroll simply never runs and the reader lands at the top of the linked file
+    /// instead of at the anchor, with no error anywhere.
+    ///
+    /// PREMISE, stated rather than assumed: rules 2 and 3 both answer `FullLoad`, so
+    /// their ORDER against each other is unobservable and this table deliberately makes
+    /// no claim about it. Rule 1 must precede both structurally — there is nothing to
+    /// compare against until `loaded` is `Some` — which Rust enforces rather than this
+    /// test.
+    ///
+    /// Falsifiers, one row each:
+    /// * Change the final arm to [`DocumentUpdate::FullLoad`] — rows 3, 6 and 7 redden.
+    ///   What that costs was MEASURED in unit 17: `window.scrollY` 2000 was preserved
+    ///   in 24 of 24 samples across a live edit with the in-place swap, against 0 of 24
+    ///   for a full `load_html`.
+    /// * Compare `source_tick` instead of `source_bufnr` in rule 3 — row 5 reddens and
+    ///   nothing else does.
+    /// * Delete the `fragment_pending` clause — row 4 reddens and nothing else does
+    ///   (row 2 still answers `FullLoad` through rule 1, which is what isolates it).
+    #[test]
+    fn document_update_table() {
+        let cases = [
+            UpdateCase {
+                desc: "FIRST LOAD: nothing has ever been loaded, so there is no committed \
+                       <head> to swap a body under",
+                current: SOURCE_A,
+                loaded: None,
+                fragment_pending: false,
+                want: DocumentUpdate::FullLoad,
+            },
+            UpdateCase {
+                desc: "first load WITH a fragment waiting: rule 1 already answers, so rule 2 \
+                       cannot be what decides this row",
+                current: SOURCE_A,
+                loaded: None,
+                fragment_pending: true,
+                want: DocumentUpdate::FullLoad,
+            },
+            UpdateCase {
+                desc: "SAME source, NEW tick: a live edit of the file on screen — the row that \
+                       preserves the reader's scroll offset",
+                current: SOURCE_A_EDITED,
+                loaded: Some(SOURCE_A),
+                fragment_pending: false,
+                want: DocumentUpdate::InPlaceEligible,
+            },
+            UpdateCase {
+                desc: "the same edit with a CROSS-FILE fragment waiting: the scroll needs a \
+                       LoadEvent::Finished edge, which only a real load produces",
+                current: SOURCE_A_EDITED,
+                loaded: Some(SOURCE_A),
+                fragment_pending: true,
+                want: DocumentUpdate::FullLoad,
+            },
+            UpdateCase {
+                desc: "DIFFERENT source, SAME tick: a reused preview pane switching files, \
+                       which needs a new BASE URI",
+                current: SOURCE_B_SAME_TICK,
+                loaded: Some(SOURCE_A),
+                fragment_pending: false,
+                want: DocumentUpdate::FullLoad,
+            },
+            UpdateCase {
+                desc: "an identical pair: the same document re-rendered, still eligible",
+                current: SOURCE_A,
+                loaded: Some(SOURCE_A),
+                fragment_pending: false,
+                want: DocumentUpdate::InPlaceEligible,
+            },
+            UpdateCase {
+                desc: "the `0` tick SENTINEL on both sides: an unreported changedtick is not a \
+                       source switch",
+                current: SOURCE_C_NEVER_TICKED,
+                loaded: Some(SOURCE_C_NEVER_TICKED),
+                fragment_pending: false,
+                want: DocumentUpdate::InPlaceEligible,
+            },
+            UpdateCase {
+                desc: "the `0` tick sentinel against a DIFFERENT buffer: still a source switch, \
+                       decided on the bufnr and not on the tick",
+                current: SOURCE_C_NEVER_TICKED,
+                loaded: Some(SOURCE_A),
+                fragment_pending: false,
+                want: DocumentUpdate::FullLoad,
+            },
+        ];
+
+        assert_eq!(
+            cases.len(),
+            NAMED_UPDATE_ROWS,
+            "the document-update table must carry its {NAMED_UPDATE_ROWS} named rows, not {}. \
+             Rows 3, 4 and 5 are the three that name one rule each, and no two of them can be \
+             collapsed: 3 is the only row the final arm decides, 4 the only row the \
+             fragment clause decides, and 5 the only row that separates the bufnr from the tick.",
+            cases.len()
+        );
+
+        let mut seen: HashSet<&'static str> = HashSet::new();
+        for case in &cases {
+            let got = document_update(case.current, case.loaded, case.fragment_pending);
+            assert_eq!(
+                got, case.want,
+                "document_update(current = {:?}, loaded = {:?}, fragment_pending = {}) must be \
+                 {:?}, got {got:?} — {}. A wrong FullLoad costs the reader their scroll position \
+                 on every keystroke (MEASURED: 2000 preserved in 24 of 24 samples in place, 0 of \
+                 24 through load_html). A wrong InPlaceEligible is quieter and worse: the view's \
+                 BASE URI still belongs to the previous file, so every relative link in the new \
+                 document resolves against the old document's directory and core is handed a path \
+                 that does not exist — and because the rendered <head> is byte-identical across \
+                 files by design, `pane_view`'s head-offset guard cannot see the switch on its \
+                 own.",
+                case.current, case.loaded, case.fragment_pending, case.want, case.desc
+            );
+            seen.insert(update_name(got));
+        }
+
+        // --- Property 2: the range, which no individual row can state --------
+        //
+        // The two names are typed out as LITERALS rather than derived from a sweep of
+        // the enum: comparing the observed range against a list computed the same way
+        // would be a tautology, and it is what makes "a constant strategy fails this"
+        // true.
+        let both: HashSet<&'static str> = ["FullLoad", "InPlaceEligible"].into_iter().collect();
+        assert_eq!(
+            seen, both,
+            "document_update's range over all {NAMED_UPDATE_ROWS} rows must be exactly both \
+             variants. Only FullLoad means the in-place swap is unreachable and the live preview \
+             throws the reader back to the top of the document on every keystroke, which is \
+             exactly what a live preview is not. Only InPlaceEligible means a first load has no \
+             document to swap under, a source switch keeps the previous file's base URI, and a \
+             pending cross-file fragment never gets the load edge its scroll fires on."
+        );
+
+        // The two fixtures rows 3 and 5 lean on, checked rather than trusted — the
+        // `needs_reload_table` precedent, restated here because a fixture edited for
+        // THAT table would silently disarm this one.
+        assert_ne!(
+            SOURCE_A.source_bufnr, SOURCE_B_SAME_TICK.source_bufnr,
+            "precondition: the two fixtures must name DIFFERENT buffers, or row 5 is an identical \
+             pair wearing a different name and the bufnr rule goes unmeasured"
+        );
+        assert_eq!(
+            SOURCE_A.source_tick, SOURCE_B_SAME_TICK.source_tick,
+            "precondition: the two fixtures must share a changedtick, or row 5 is satisfied by a \
+             tick comparison too and stops separating the two keys"
+        );
+        assert_eq!(
+            SOURCE_A.source_bufnr, SOURCE_A_EDITED.source_bufnr,
+            "precondition: row 3's two loads must name the SAME buffer, or it is a source switch \
+             wearing an edit's name"
+        );
+        assert_ne!(
+            SOURCE_A.source_tick, SOURCE_A_EDITED.source_tick,
+            "precondition: row 3's two loads must differ in their tick, or it is an identical pair \
+             and says nothing about a live edit"
         );
     }
 

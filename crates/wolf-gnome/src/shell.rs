@@ -189,10 +189,12 @@ use crate::liveness_ui::{
 };
 use crate::nav_ui::{self, NavAvailability, NavPress};
 use crate::palette::{PaletteAction, PaletteHandle};
-use crate::pane_view::PaneHandle;
+use crate::pane_view::{self, PaneHandle};
 use crate::persistence::StateHandle;
 use crate::picker::PickerHandle;
-use crate::preview_ui::{self, EditPlacement, EditPress, PreviewPlacement, PreviewPress};
+use crate::preview_ui::{
+    self, BrowserPress, EditPlacement, EditPress, PreviewPlacement, PreviewPress,
+};
 use crate::search_overlay::SearchHandle;
 use crate::state_seam;
 use crate::title;
@@ -1124,6 +1126,60 @@ impl AppShell {
         }
     }
 
+    /// Serves the active Markdown buffer from core's loopback preview server and
+    /// hands its address to the platform's URI launcher, or prints why it did not.
+    ///
+    /// **The render is a BLOCKING RPC on the GTK main thread**
+    /// (`WolfCore::open_in_browser` renders the document and binds the loopback
+    /// socket), so it is gated by [`preview_ui::browser_press`] exactly as
+    /// [`AppShell::open_preview`] is gated by `preview_press`; see the module docs.
+    ///
+    /// **The two refusal lines are deliberately DISTINGUISHABLE**, and that
+    /// separation is what makes a captured stderr log readable. A `BrowserPress::Refuse`
+    /// says the RPC was never issued and names the gate that stopped it; the
+    /// [`preview_ui::browser_url`] refusal says the RPC RAN and answered an empty
+    /// string, which core has already logged the real cause of at `warn`. Collapsing
+    /// them into one message would make "the gate declined" and "core failed" the same
+    /// observation.
+    ///
+    /// The launch itself is asynchronous and its failure is printed by
+    /// [`pane_view::launch_uri`], the same function a foreign-scheme link clicked
+    /// inside the preview goes through.
+    fn preview_in_browser(&self) {
+        let liveness = self.read_liveness();
+        let shape = self.preview_shape();
+
+        let press = preview_ui::browser_press(liveness, shape.is_some_and(|s| s.markdown_active));
+
+        match press {
+            BrowserPress::Refuse(reason) => {
+                eprintln!("wolf-gnome: preview in browser not opened: {reason}");
+            }
+            BrowserPress::Open => {
+                // The core borrow is taken in a statement of its own and dropped
+                // before the launcher runs, `copy_selection`'s discipline.
+                let url = {
+                    let core_ref = self.inner.core.borrow();
+                    core_ref.as_ref().map(WolfCore::open_in_browser)
+                };
+                let url = url.unwrap_or_default();
+                match preview_ui::browser_url(&url) {
+                    Some(url) => pane_view::launch_uri(
+                        Some(self.inner.window.upcast_ref::<gtk::Window>()),
+                        url,
+                        "preview in browser",
+                    ),
+                    None => eprintln!(
+                        "wolf-gnome: preview in browser not opened: the loopback preview server \
+                         answered an empty address, which is what open_in_browser returns when the \
+                         render RPC failed, the buffer was not Markdown, or the socket could not \
+                         be bound — core has already logged which at warn"
+                    ),
+                }
+            }
+        }
+    }
+
     /// Reads the captive nvim's [`Liveness`] ONCE per wake, applies the pure
     /// [`liveness_ui`] mapping, and reports whether the pane view and the file
     /// tree should run.
@@ -1519,6 +1575,7 @@ impl AppShell {
             UiAction::QuitApplication => self.quit_application(),
             UiAction::OpenPreview => self.open_preview(),
             UiAction::EditSource => self.edit_source(),
+            UiAction::OpenInBrowser => self.preview_in_browser(),
             // Unreachable through an installed action (install_actions skips these)
             // and already reported by the drain, but never silent either way.
             UiAction::Deferred(reason) | UiAction::NoGnomeEquivalent(reason) => {
