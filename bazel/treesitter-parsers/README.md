@@ -4,15 +4,17 @@ Hermetic, pinned, host-compiled treesitter parsers for bundling into `Wolf.app`.
 
 This package downloads sha256-pinned GitHub source tarballs for a curated set of treesitter grammars, compiles each grammar's `src/parser.c` (plus an optional `src/scanner.c`) into a loadable shared object with the host (apple_support / Xcode) cc toolchain, and assembles them into a structure-preserving directory artifact. `//crates/wolf-macos:Wolf` bundles the result at `Contents/Resources/parsers/`, so each parser lands at `Contents/Resources/parsers/parser/<lang>.so`.
 
-These parsers are vendored, shipped, and active on macOS: the captive `runtime/nvim/init.lua` prepends the sibling `parsers/` and `nvim-treesitter/` trees to `runtimepath` and runs a pcall-wrapped `vim.treesitter.start` on markdown buffers, so markdown highlighting and fenced-code injection are live in the `.app`. On Linux/cargo that `init.lua` block is a strict no-op and `syntax on` stays the highlight source. The Linux/Nix vendoring path is deferred.
+These parsers are vendored, shipped, and active on macOS: the captive `runtime/nvim/init.lua` prepends the sibling `parsers/` and `nvim-treesitter/` trees to `runtimepath`, so fenced-code injection is live in the `.app`. This package is the macOS half of a two-platform arrangement — Linux fires the same gate over a nix-built grammar set the flake devShell exports, and [`runtime/nvim`](../../runtime/nvim/README.md) owns the resolution order that serves both.
 
 ## Why host-compile, rather than nix-built or the parsers inside nvim
 
-Pinned Neovim 0.12.3 ships only the `markdown` and `markdown_inline` parsers. To highlight the languages Wolf cares about, the parsers must be present in the bundle, be ABI-compatible with pinned nvim's treesitter runtime, and be signable, relocatable, host-compiled Mach-O.
+The pinned Neovim ships seven parsers carrying `highlights` queries and no more — `c`, `lua`, `markdown`, `markdown_inline`, `query`, `vim`, `vimdoc` — measured with `--clean` against the Linux flake's 0.12.2. To highlight the languages Wolf cares about, the parsers must be present in the bundle, be ABI-compatible with pinned nvim's treesitter runtime, and be signable, relocatable, host-compiled Mach-O.
+
+The two platforms are not on the same Neovim: [`bazel/nvim`](../nvim/README.md) pins 0.12.3 for macOS while the flake's `pkgs.neovim` is 0.12.2. That is recorded rather than fixed — grammar ABIs are stable across both, and `:treesitter_parser_abi` proves the pairing on each host it runs on.
 
 A nix-built `.so` embeds `/nix/store` install names and is not relocatable inside a signed `.app`, so the parsers are compiled from source with the same apple_support host-Xcode cc toolchain that builds `wolf-core`'s bundled SQLite. The resulting `.so`s are `MH_DYLIB` Mach-O shared libraries with `NOUNDEFS` — self-contained, needing no runtime symbol resolution — which `dlopen` and `vim.treesitter.language.add` accept.
 
-`//crates/wolf-ffi:treesitter_parser_abi` proves the ABI end to end: it drives a live pinned nvim 0.12.3, `add`s the compiled `parser/go.so` by absolute path, and parses Go source with it.
+`//crates/wolf-ffi:treesitter_parser_abi` proves the ABI end to end: on the macOS Bazel path it drives the live pinned 0.12.3, `add`s the compiled `parser/go.so` by absolute path, and parses Go source with it.
 
 ## Provenance of the pins
 
@@ -91,6 +93,7 @@ The tree test and the bundle-layout test fail only on the low-risk core (go, rus
 3. Add a `(repo_name, gh_repo, rev, sha256, scanner?)` tuple to `root_grammars` in `extensions.bzl`, or a custom overlay for the odd cases above.
 4. Add its `ts_<lang>` to `use_repo(treesitter_parsers, ...)` in `MODULE.bazel` and its `@ts_<lang>//:<lang>_parser` to the `copy_to_directory` srcs in `BUILD.bazel`.
 5. `bazel build @ts_<lang>//:<lang>.so` to verify it compiles; then regenerate `MODULE.bazel.lock` and re-run `bazel test //bazel/treesitter-parsers:parsers_tree_test`.
+6. Add the language to `wolfTreesitterLanguages` in `flake.nix`, which is the Linux half of the same set. The curated set is defined here and the flake mirrors it, so a one-sided edit is a cross-platform divergence rather than a preference — and nothing on either side can see one, since no host runs both builds.
 
 ## Bumping a pinned grammar
 

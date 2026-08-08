@@ -14,6 +14,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 /// Default grid width used by the bridge smoke test, in columns.
 pub const DEFAULT_COLS: u16 = 80;
@@ -59,21 +60,40 @@ fn resolve_runfile(env_key: &str) -> Option<PathBuf> {
         .find(|c| c.exists())
 }
 
-/// Returns a usable pinned-nvim binary path, or `None` after printing a LOUD skip
-/// banner to stderr.
+/// Caches the pinned-nvim resolution for the whole test BINARY, so `WOLF_NVIM_BIN`
+/// is written at most once and every reader is ordered after that write.
 ///
-/// Resolution order:
+/// `setenv(3)` is not safe against a concurrent `getenv(3)` — glibc may `realloc`
+/// the `environ` array, so the failure mode is a rare use-after-free rather than a
+/// wrong value, which is why edition 2024 makes [`std::env::set_var`] `unsafe`.
+/// `cargo test` runs a binary's `#[test]`s on parallel threads and several of the
+/// helpers here read the environment, so a per-test write would race its
+/// neighbours' reads. [`OnceLock::get_or_init`] collapses it to one write that
+/// every caller of [`nvim_bin_or_skip`] happens-after.
+static NVIM_BIN: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Resolves the pinned nvim and PUBLISHES it in `WOLF_NVIM_BIN`. Runs exactly once
+/// per test binary, behind [`NVIM_BIN`].
+///
+/// The publish is what the Bazel path needs: there the binary comes out of the
+/// staged `WOLF_TEST_NVIM_DIR` tree, while `wolf_ffi_start` (through wolf-core)
+/// looks only at `WOLF_NVIM_BIN`. On the cargo / devShell path the variable already
+/// holds exactly the resolved path, so nothing is written at all.
+fn resolve_and_publish_nvim_bin() -> Option<PathBuf> {
+    let bin = resolve_nvim_bin()?;
+    if std::env::var_os("WOLF_NVIM_BIN").as_deref() != Some(bin.as_os_str()) {
+        std::env::set_var("WOLF_NVIM_BIN", &bin);
+    }
+    Some(bin)
+}
+
+/// The resolution order behind [`nvim_bin_or_skip`], with no side effects:
 /// 1. An explicit `WOLF_NVIM_BIN` (the cargo / Linux-devShell path — wins so a
 ///    developer can point at a specific nvim).
 /// 2. The Bazel-staged pinned Neovim tree (`WOLF_TEST_NVIM_DIR` → the
 ///    `//bazel/nvim:nvim_tree` runfiles dir), whose binary is `nvim/bin/nvim`
 ///    (the `replace_prefixes` inner `nvim/`), with `bin/nvim` as a fallback.
-///
-/// A caller that gets `None` must `return` from the test (a no-op pass), NOT panic
-/// and NOT silently assert success. The banner makes the skip visible in
-/// `--nocapture` output so a misconfigured env is never mistaken for real coverage.
-#[must_use]
-pub fn nvim_bin_or_skip() -> Option<PathBuf> {
+fn resolve_nvim_bin() -> Option<PathBuf> {
     if let Ok(v) = std::env::var("WOLF_NVIM_BIN") {
         if !v.trim().is_empty() {
             return Some(PathBuf::from(v));
@@ -90,6 +110,28 @@ pub fn nvim_bin_or_skip() -> Option<PathBuf> {
         if let Some(bin) = candidates.into_iter().find(|b| b.exists()) {
             return Some(bin);
         }
+    }
+
+    None
+}
+
+/// Returns a usable pinned-nvim binary path, or `None` after printing a LOUD skip
+/// banner to stderr. Resolution order is [`resolve_nvim_bin`]'s.
+///
+/// It also PUBLISHES the resolved path in `WOLF_NVIM_BIN`, which is how a caller
+/// that goes through `wolf_ffi_start` gets the Bazel-staged binary launched: the
+/// bridge offers no per-spawn environment and reads that one variable. The write
+/// happens once per binary behind [`NVIM_BIN`] — a per-test write would race the
+/// other tests' environment reads.
+///
+/// A caller that gets `None` must `return` from the test (a no-op pass), NOT panic
+/// and NOT silently assert success. The banner makes the skip visible in
+/// `--nocapture` output so a misconfigured env is never mistaken for real coverage,
+/// and it is printed on every skipping call, not just the first.
+#[must_use]
+pub fn nvim_bin_or_skip() -> Option<PathBuf> {
+    if let Some(bin) = NVIM_BIN.get_or_init(resolve_and_publish_nvim_bin) {
+        return Some(bin.clone());
     }
 
     eprintln!(
@@ -160,36 +202,60 @@ pub fn lighthouse_dir_or_none() -> Option<PathBuf> {
     resolve_runfile("WOLF_TEST_LIGHTHOUSE_DIR")
 }
 
-/// Resolves the Bazel-staged compiled treesitter-parsers tree
-/// (`WOLF_TEST_PARSERS_DIR` → `$(rootpath //bazel/treesitter-parsers:parsers_tree)`):
-/// the `parsers_tree` TreeArtifact whose inner content is `parsers/` (i.e.
-/// `<dir>/parsers/parser/go.so`).
+/// Resolves a compiled treesitter-parsers tree from either platform's provider,
+/// Bazel first:
 ///
-/// Returns `None` when the env var is unset (the cargo / Linux path, where the
-/// compiled parsers are not built at all) or when nothing resolves — so the
-/// `treesitter_parser_abi` test SKIPS gracefully rather than failing. Mirrors the
-/// `*_or_none` / `*_or_skip` convention of the other runfile helpers and reuses
-/// the same [`resolve_runfile`] mechanism as [`init_lua_path`] /
-/// [`nvim_bin_or_skip`].
+/// 1. `WOLF_TEST_PARSERS_DIR` → `$(rootpath //bazel/treesitter-parsers:parsers_tree)`,
+///    the `parsers_tree` TreeArtifact whose inner content is `parsers/` (i.e.
+///    `<dir>/parsers/parser/go.so`).
+/// 2. `WOLF_PARSERS_DIR`, the Linux devShell's export (`flake.nix`), a store path
+///    whose content is flat (`<dir>/parser/go.so`). It is the same variable
+///    `runtime/nvim/init.lua`'s gate falls back to.
+///
+/// **The Bazel variable wins, and the order is load-bearing.** Under Bazel the
+/// staged runfiles are what the target's `data` guarantees and what its assertions
+/// were written against, so a stray devShell variable inherited into a Bazel
+/// invocation must never shadow them. On the cargo path `WOLF_TEST_PARSERS_DIR` is
+/// never set, so the second arm is reached unconditionally.
+///
+/// Returns `None` only when NEITHER resolves — a host with neither the Bazel
+/// staging nor the devShell exports — so `treesitter_parser_abi` SKIPS gracefully
+/// there rather than failing. Mirrors the `*_or_none` / `*_or_skip` convention of
+/// the other runfile helpers and reuses the same [`resolve_runfile`] mechanism as
+/// [`init_lua_path`] / [`nvim_bin_or_skip`]; that helper returns an absolute
+/// existing path unchanged, which is what lets a `/nix/store/…` value work with no
+/// change to it.
 #[must_use]
 pub fn parsers_dir_or_none() -> Option<PathBuf> {
-    resolve_runfile("WOLF_TEST_PARSERS_DIR")
+    resolve_runfile("WOLF_TEST_PARSERS_DIR").or_else(|| resolve_runfile("WOLF_PARSERS_DIR"))
 }
 
-/// Resolves the Bazel-staged vendored nvim-treesitter (main queries) tree
-/// (`WOLF_TEST_NVIM_TREESITTER_DIR` → `$(rootpath //bazel/nvim-treesitter:nvim_treesitter_tree)`):
-/// the `nvim_treesitter_tree` TreeArtifact whose inner content is `nvim-treesitter/`
-/// (i.e. `<dir>/nvim-treesitter/queries/markdown/injections.scm`).
+/// Resolves a vendored nvim-treesitter (main queries) tree from either platform's
+/// provider, Bazel first:
 ///
-/// Returns `None` when the env var is unset (the cargo / Linux path, where the
-/// vendored queries are not built at all) or when nothing resolves — so the
-/// `treesitter_highlight` test SKIPS gracefully rather than failing. Mirrors the
-/// `*_or_none` / `*_or_skip` convention of the other runfile helpers and reuses
-/// the same [`resolve_runfile`] mechanism as [`init_lua_path`] /
-/// [`nvim_bin_or_skip`].
+/// 1. `WOLF_TEST_NVIM_TREESITTER_DIR` →
+///    `$(rootpath //bazel/nvim-treesitter:nvim_treesitter_tree)`, the
+///    `nvim_treesitter_tree` TreeArtifact whose inner content is `nvim-treesitter/`
+///    (i.e. `<dir>/nvim-treesitter/queries/markdown/injections.scm`).
+/// 2. `WOLF_NVIM_TREESITTER_DIR`, the Linux devShell's export (`flake.nix`),
+///    pointing at the nvim-treesitter plugin's own `runtime` directory, which
+///    carries `queries/` directly (i.e. `<dir>/queries/markdown/injections.scm`).
+///    It is the same variable `runtime/nvim/init.lua`'s gate falls back to, and the
+///    same upstream revision Bazel pins, so both platforms get identical queries.
+///
+/// **The Bazel variable wins, and the order is load-bearing** — see
+/// [`parsers_dir_or_none`] for why. Callers must accommodate both layouts: probe
+/// for an inner `nvim-treesitter/` and fall back to the directory itself.
+///
+/// Returns `None` only when NEITHER resolves — a host with neither the Bazel
+/// staging nor the devShell exports — so `treesitter_highlight` SKIPS gracefully
+/// there rather than failing. Mirrors the `*_or_none` / `*_or_skip` convention of
+/// the other runfile helpers and reuses the same [`resolve_runfile`] mechanism as
+/// [`init_lua_path`] / [`nvim_bin_or_skip`].
 #[must_use]
 pub fn nvim_treesitter_dir_or_none() -> Option<PathBuf> {
     resolve_runfile("WOLF_TEST_NVIM_TREESITTER_DIR")
+        .or_else(|| resolve_runfile("WOLF_NVIM_TREESITTER_DIR"))
 }
 
 /// Recursively copies the directory tree at `src` into `dst` (creating `dst` and

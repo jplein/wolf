@@ -772,8 +772,9 @@ rust_test(
 # (`//bazel/treesitter-parsers:parsers_tree`), passing its runfiles path via
 # WOLF_TEST_PARSERS_DIR; the test loads `parser/go.so` by absolute path via
 # `vim.treesitter.language.add` and parses with it, proving the shipped `.so` is
-# ABI-compatible with pinned nvim 0.12.3. SKIPS when the tree is not staged (cargo /
-# Linux path). Reuses `tests/common/mod.rs`.
+# ABI-compatible with pinned nvim 0.12.3. The tree also resolves from the Linux
+# devShell's WOLF_PARSERS_DIR, so the test runs there too; it SKIPS only on a host
+# where neither provider resolves. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "treesitter_parser_abi",
     srcs = [
@@ -806,11 +807,14 @@ rust_test(
 # (`//bazel/nvim-treesitter:nvim_treesitter_tree`) and the compiled parsers tree
 # (`//bazel/treesitter-parsers:parsers_tree`) as siblings `nvim-treesitter/` +
 # `parsers/` next to a temp `init.lua`; the test opens a markdown buffer with a
-# fenced ```go``` block and asserts treesitter highlighting is ACTIVE
-# (`vim.treesitter.highlighter.active[buf]`) AND that the fenced block produces an
-# injected `go` langtree — the automated proof of `init.lua`'s conditional
-# treesitter-enablement block. SKIPS when Neovim or either tree is not staged (the
-# cargo / Linux path). Reuses `tests/common/mod.rs`.
+# fenced ```go``` block and asserts that treesitter is attached to the buffer
+# (`vim.treesitter.highlighter.active[buf]`, a precondition — the pinned nvim starts
+# treesitter on markdown by itself) AND, the discriminating half, that the fenced
+# block produces an injected `go` langtree, which is the automated proof of
+# `init.lua`'s conditional treesitter block. Both trees also resolve from the Linux
+# devShell's WOLF_NVIM_TREESITTER_DIR / WOLF_PARSERS_DIR, so the test runs there too;
+# it SKIPS only on a host where neither provider resolves. Reuses
+# `tests/common/mod.rs`.
 rust_test(
     name = "treesitter_highlight",
     srcs = [
@@ -842,8 +846,10 @@ rust_test(
 # blocks in the Markdown preview (task #4). Stages the same nvim-treesitter + parsers
 # bundle as `treesitter_highlight`, opens a markdown doc with a fenced `go` block,
 # calls `render_preview`, and asserts the HTML contains inline-styled color spans for
-# the go tokens; an unknown language yields plain `<pre><code>`. SKIPS when Neovim or
-# either tree is not staged (the cargo / Linux path). Reuses `tests/common/mod.rs`.
+# the go tokens; an unknown language yields plain `<pre><code>`. Both trees also
+# resolve from the Linux devShell's WOLF_NVIM_TREESITTER_DIR / WOLF_PARSERS_DIR, so
+# the test runs there too; it SKIPS only on a host where neither provider resolves.
+# Reuses `tests/common/mod.rs`.
 rust_test(
     name = "code_block_highlight",
     srcs = [

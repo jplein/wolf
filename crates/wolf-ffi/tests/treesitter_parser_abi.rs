@@ -13,22 +13,9 @@
 //! and parses a string in-memory. It does NOT call `vim.treesitter.start`, does
 //! NOT wire runtimepath for highlighting, and — CRUCIALLY — uses the REAL captive
 //! `runtime/nvim/init.lua` UNCHANGED (resolved via `common::init_lua_path`). It
-//! stages NO sibling bundle layout and MODIFIES NO init.lua. Enablement has since
-//! landed on macOS (proven separately by `//crates/wolf-ffi:treesitter_highlight`);
-//! this test's scope is unchanged — it only proves compiled-parser ↔ pinned-nvim
-//! ABI compatibility.
-//!
-//! ## Coder wiring (BUILD.bazel — NOT done here)
-//!
-//! This file does NOT touch BUILD files. The coder adds a
-//! `//crates/wolf-ffi:treesitter_parser_abi` `rust_test` modeled on `orlando_load`
-//! (`srcs = ["tests/common/mod.rs", "tests/treesitter_parser_abi.rs"]`,
-//! `crate_root = "tests/treesitter_parser_abi.rs"`, `tags = ["no-sandbox"]`,
-//! `size = "small"`), and MUST wire, alongside the existing WOLF_TEST_INIT_LUA /
-//! WOLF_TEST_NVIM_DIR:
-//!   * `data`: add `"//bazel/treesitter-parsers:parsers_tree"`
-//!   * `env`:  add `"WOLF_TEST_PARSERS_DIR": "$(rootpath //bazel/treesitter-parsers:parsers_tree)"`
-//!     `tempfile` is already a `[dev-dependencies]` of the crate (used by `panes`).
+//! stages NO sibling bundle layout and MODIFIES NO init.lua. Highlighting
+//! enablement is proven separately by `//crates/wolf-ffi:treesitter_highlight`;
+//! this test's scope is compiled-parser ↔ pinned-nvim ABI compatibility alone.
 //!
 //! ## How this proves ABI compat (no exec_lua seam on the FFI surface)
 //!
@@ -43,10 +30,13 @@
 //! ## SKIP-when-unset policy
 //!
 //! Like its siblings this test needs a pinned nvim (`nvim_bin_or_skip`); it ALSO
-//! needs the staged parsers tree (`parsers_dir_or_none`) and the go parser `.so`
-//! within it. When any is absent — e.g. the cargo / Linux path, where the compiled
-//! parsers are not built — the test is a loud no-op pass, so it only ASSERTS when
-//! there is a real compiled parser to load (Bazel/macOS).
+//! needs a parsers tree (`parsers_dir_or_none`) and the go parser `.so` within it.
+//! That tree resolves from either provider — the Bazel-staged `WOLF_TEST_PARSERS_DIR`
+//! first, then the Linux devShell's `WOLF_PARSERS_DIR` — and the two lay it out
+//! differently (nested `parsers/parser/go.so` under Bazel, flat `parser/go.so` from
+//! the devShell's symlinkJoin), which is why the probe accepts both. The test is a
+//! loud no-op pass only where neither resolves, or where the tree that did resolve
+//! carries no go parser.
 
 mod common;
 
@@ -120,13 +110,13 @@ fn compiled_go_parser_is_abi_compatible_with_pinned_nvim() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // SKIP too when the compiled parsers tree is not staged (cargo / Linux path):
-    // the compiled parsers only exist on the Bazel/macOS bundle path, so this test
+    // SKIP too when no parsers tree resolves from either provider, since this test
     // asserts only when there is a real `.so` to load.
     let Some(parsers_dir) = common::parsers_dir_or_none() else {
         eprintln!(
-            "\nSKIP: wolf-ffi treesitter_parser_abi — WOLF_TEST_PARSERS_DIR not staged \
-             (compiled treesitter parsers are Bazel/macOS-only). No-op pass.\n"
+            "\nSKIP: wolf-ffi treesitter_parser_abi — no treesitter parsers tree: neither \
+             WOLF_TEST_PARSERS_DIR (Bazel) nor WOLF_PARSERS_DIR (Linux devShell) resolves. \
+             No-op pass.\n"
         );
         return;
     };

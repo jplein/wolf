@@ -17,16 +17,17 @@
 //! ## SKIP-when-unset policy
 //!
 //! Like `treesitter_highlight.rs`, this test needs a pinned nvim
-//! (`nvim_bin_or_skip`) AND both staged trees (`nvim_treesitter_dir_or_none`,
-//! `parsers_dir_or_none`). Skipping when either tree is absent is correct for THIS
-//! fixture, but the reason is the FIXTURE'S LANGUAGE, not a disabled highlighter:
-//! `wolf_highlight_code_blocks` sits at MODULE level in `runtime/nvim/init.lua`,
-//! outside the vendored-tree gate, so it is live on the cargo / Linux path too and
-//! gates per LANGUAGE. It answers `false` here because the fixture fences `go`,
-//! whose parser and `highlights` query ship only in the vendored trees — while the
-//! seven the pinned Neovim ships (`c`, `lua`, `markdown`, `markdown_inline`,
-//! `query`, `vim`, `vimdoc`) do highlight there. So off Bazel/macOS this is a loud
-//! no-op pass: it asserts styled spans only where the `go` parser exists.
+//! (`nvim_bin_or_skip`) AND both trees (`nvim_treesitter_dir_or_none`,
+//! `parsers_dir_or_none`). Each resolves from either provider — the Bazel-staged
+//! `WOLF_TEST_*` variables first, then the Linux devShell's exports — so this test
+//! asserts on both platforms and skips only on a host carrying neither.
+//!
+//! Skipping is correct for THIS fixture, but the reason is the FIXTURE'S LANGUAGE,
+//! not a disabled highlighter: `wolf_highlight_code_blocks` sits at MODULE level in
+//! `runtime/nvim/init.lua`, outside the vendored-tree gate, so it is live wherever
+//! nvim runs and gates per LANGUAGE. With no vendored trees it answers `false` here
+//! because the fixture fences `go`, while the seven the pinned Neovim ships (`c`,
+//! `lua`, `markdown`, `markdown_inline`, `query`, `vim`, `vimdoc`) still highlight.
 
 mod common;
 
@@ -228,16 +229,18 @@ fn code_block_go_highlighted_and_unknown_lang_plain() {
 
     let Some(nt_dir) = common::nvim_treesitter_dir_or_none() else {
         eprintln!(
-            "\nSKIP: wolf-ffi code_block_highlight — WOLF_TEST_NVIM_TREESITTER_DIR not staged \
-             (vendored nvim-treesitter queries are Bazel/macOS-only). No-op pass.\n"
+            "\nSKIP: wolf-ffi code_block_highlight — no nvim-treesitter queries tree: neither \
+             WOLF_TEST_NVIM_TREESITTER_DIR (Bazel) nor WOLF_NVIM_TREESITTER_DIR (Linux \
+             devShell) resolves. No-op pass.\n"
         );
         return;
     };
 
     let Some(parsers_dir) = common::parsers_dir_or_none() else {
         eprintln!(
-            "\nSKIP: wolf-ffi code_block_highlight — WOLF_TEST_PARSERS_DIR not staged \
-             (compiled treesitter parsers are Bazel/macOS-only). No-op pass.\n"
+            "\nSKIP: wolf-ffi code_block_highlight — no treesitter parsers tree: neither \
+             WOLF_TEST_PARSERS_DIR (Bazel) nor WOLF_PARSERS_DIR (Linux devShell) resolves. \
+             No-op pass.\n"
         );
         return;
     };

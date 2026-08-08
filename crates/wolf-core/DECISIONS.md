@@ -116,4 +116,4 @@ Leaf order is the other half of the contract. Children are emitted depth-first, 
 
 ## Deferred
 
-Full `wrapNeovim` plugin baking (treesitter grammars, `marksman` LSP, formatter), and the non-layout intents (open and save dialogs, window title).
+Full `wrapNeovim` plugin baking (`marksman` LSP, formatter), and the non-layout intents (open and save dialogs, window title).

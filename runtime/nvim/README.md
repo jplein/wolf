@@ -12,7 +12,9 @@ with `NVIM_APPNAME=wolf`, the `XDG_*` dirs pinned under a private temp dir, and 
 
 Which copy is loaded depends on the tree. The macOS app resolves a `WOLF_INIT_LUA` override first, then the bundled `Contents/Resources/init.lua` via `Bundle.main.path(forResource:ofType:)`, then the in-repo `runtime/nvim/init.lua` (see [`Project.swift`](../../crates/wolf-macos/Sources/WolfMacOS/Project.swift)'s `initLuaPath`). Bazel tests pass the staged copy through `WOLF_TEST_INIT_LUA`.
 
-`init.lua` self-locates its own directory and conditionally loads sibling trees — `orlando/`, `lighthouse/`, `nvim-treesitter/`, `parsers/`, `nvim-treesitter-textobjects/` — which the `.app` bundle places alongside it under `Contents/Resources/`. In the dev tree and under cargo they are absent and every one of those blocks is a strict no-op.
+`init.lua` self-locates its own directory and conditionally loads sibling trees — `orlando/`, `lighthouse/`, `nvim-treesitter/`, `parsers/`, `nvim-treesitter-textobjects/` — which the `.app` bundle places alongside it under `Contents/Resources/`. The orlando and lighthouse blocks are strict no-ops wherever their sibling is absent.
+
+The two treesitter trees resolve sibling first and environment second. With no sibling, the queries tree comes from `WOLF_NVIM_TREESITTER_DIR` and the compiled grammars from `WOLF_PARSERS_DIR`, both exported by the Linux devShell — see [`build.md`](../../build.md), which owns the environment. Sibling first is what keeps a bundle self-contained: a developer with those variables exported who launches the `.app` must not have its Mach-O parsers silently replaced by the Linux-built tree, and a `dlopen` failure inside a `pcall` would be the only symptom. A resolved path that has since vanished falls through to nothing rather than being prepended.
 
 Everything wolf-core reaches is a global on `_G`. Channel ids and arguments are passed as Lua varargs to `nvim_exec_lua`, never interpolated into the code string.
 
@@ -240,7 +242,9 @@ Two criteria, either sufficient. The first stats the `%`-mangled name nvim's own
 
 **A colorscheme on `runtimepath` does nothing on its own**, unlike a plugin, so the lighthouse block must both prepend the directory and run `:colorscheme`. The orlando block instead sources its plugin file explicitly, because `--clean` does not scan plugin directories and a bare `runtimepath` prepend would never auto-source it.
 
-**nvim-treesitter is used purely as an on-`runtimepath` query provider.** Its `.setup{}` and `:TSInstall` machinery are non-deterministic under `--clean`. A `FileType=markdown` autocmd calls `vim.treesitter.start` under `pcall`, so a query-loader incompatibility degrades to `syntax on` rather than raising. `markdown` and `markdown_inline` parsers ship with nvim and are not re-vendored.
+**nvim-treesitter is used purely as an on-`runtimepath` query provider.** Its `.setup{}` and `:TSInstall` machinery are non-deterministic under `--clean`. The gate fires wherever the two trees resolve, by sibling or by environment, and what it contributes is nvim-treesitter's queries ahead of Neovim's own plus the vendored grammars. `markdown` and `markdown_inline` ship with nvim and are not re-vendored.
+
+**What the gate buys the editor is injected fenced-language highlighting, not markdown highlighting.** Measured on the pinned Neovim: a markdown buffer under `--clean -u NONE`, with no plugin and no gate, already reports `vim.treesitter.highlighter.active[buf] ~= nil`, so that expression cannot witness the gate and must not be used as evidence for it. The discriminating readback is an injected child langtree for the fenced language. The `FileType=markdown` autocmd's `vim.treesitter.start` is `pcall`-wrapped, so a query-loader incompatibility is swallowed at startup rather than raised.
 
 **`wolf_highlight_code_blocks` is defined at module level, outside the conditional treesitter block**, so it runs on every platform and gates per language: it answers `false` only for a fence whose language has no parser and `highlights` query on the runtimepath. A fence in a language the pinned Neovim already ships therefore highlights with nothing vendored; what the vendored trees add is every other language.
 
@@ -279,7 +283,7 @@ Name avoidance is the only defence. Yielding `Untitled 2.md` also keeps a fresh 
 - Unnamed buffers are outside the open-file restore; only file-backed buffers are mirrored.
 - Crash recovery of unsaved edits is best-effort. A SIGKILL or OOM skips Neovim's `preserve_exit`, so only edits synced to the swap before the kill are recoverable.
 - Nothing reaps a stale swap file, because a reaper would be deleting the only copy of someone's unsaved edits and a wrong staleness predicate loses them silently. The one targeted delete is the `SwapExists` recover branch's, which runs after the contents are already in a buffer. Repeated crashes in one project therefore accumulate stale swaps, so a later launch there may name its startup buffer `Untitled 3.md` or `Untitled 4.md`. That is cosmetic and self-correcting once the recovered buffers are opened, which consumes their swaps.
-- Treesitter highlighting and fenced-code injection depend on the vendored sibling trees, which only the macOS bundle stages. Elsewhere `syntax on` is the highlight source and every preview code block renders plain.
-- `nvim-treesitter-textobjects` ships bundled and inert: it is on `runtimepath` with no setup and no keymaps.
+- Fenced-code injection depends on the two vendored trees resolving. A host with neither the bundle's siblings nor the devShell's exports still gets base markdown highlighting from the pinned Neovim, but no injections, and every fence outside the seven parsers Neovim ships renders plain in the preview.
+- `nvim-treesitter-textobjects` ships bundled and inert: it is on `runtimepath` with no setup and no keymaps. Unlike the other two trees it deliberately has no environment fallback — nothing off the bundle produces such a tree, so the variable would have no producer, and because the tree is inert no test could tell a fallback for it from its absence.
 - A Markdown LSP and a formatter are not wired.
 - `:checktime` on focus regain depends on the front-end forwarding OS focus through `nvim_ui_set_focus`. The macOS front-end does; the GNOME one does not, so there the reload is driven by buffer entry and idle.

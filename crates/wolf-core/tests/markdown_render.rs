@@ -532,13 +532,19 @@ const HEADING_SCALE: &[(&str, i32, i32)] = &[
 /// rule, converting a real audit into a rubber stamp. A comment is the honest
 /// record.
 ///
-/// - **`code` and `pre code`** — `code` sets `padding: 2px 4px`, which is
-///   off-grid and CORRECT. Per plan §3.4 an inline box's vertical padding
-///   paints its background but does NOT grow the line box, so those 2px are
-///   layout-neutral: they cannot move a baseline. Sweeping `code` would flag a
-///   value the grid does not care about; allowlisting it would then stop the
-///   sweep from ever noticing if `code` later grew a genuinely vertical
-///   dimension. `pre code` (`padding: 0`) is asserted directly by
+/// - **`code` and `pre code`** — `code` DOES carry a genuinely vertical
+///   dimension, `line-height: 0`, and that value is on grid: zero is a legal
+///   multiple of 24, so sweeping the rule would prove nothing about it. What
+///   keeps the rule off this list is its `padding: 2px 4px`, whose 2px block
+///   edges are off-grid and CORRECT — an inline box's vertical padding paints
+///   its background but does NOT grow the line box, so those 2px are
+///   layout-neutral and cannot move a baseline. Listing `code` here would fail
+///   the sweep on a value the grid does not care about, and allowlisting that
+///   value would rubber-stamp the whole rule. The zero is pinned directly and
+///   on its own terms instead, by
+///   [`inline_code_declares_zero_leading_so_it_cannot_grow_a_line_box`], which
+///   is also where the reason it must be zero rather than 24 is written down.
+///   `pre code` (`padding: 0`) is asserted directly by
 ///   [`pre_sits_on_the_baseline_grid`] for its `font-size: inherit` instead.
 /// - **`img`** — `height: auto` is the accepted intrinsic-height drift (plan
 ///   §3.4 / the header's DOCUMENTED RESIDUALS). It is unparseable as px by
@@ -1224,6 +1230,112 @@ fn pre_sits_on_the_baseline_grid() {
         decls.get("font-size").map(String::as_str),
         Some("14px"),
         "`pre` must set the code font-size once, in absolute px: {decls:?}"
+    );
+}
+
+#[test]
+fn inline_code_declares_zero_leading_so_it_cannot_grow_a_line_box() {
+    let css = rendered_stylesheet();
+
+    // The FULL selector, never a bare `code`, and that choice is load-bearing.
+    // `selector_entry_matches` strips a purely-descendant ancestor prefix, so the
+    // query `code` would ALSO match `body.wolf-markdown pre code` and merge its
+    // declarations in — and a future edit that moved this zero onto `pre code`
+    // alone would then keep this test green while inline `code` in a paragraph
+    // silently regained its 24px box, which is the case the zero exists for.
+    // `body.wolf-markdown code` cannot match `body.wolf-markdown pre code`
+    // (`strip_suffix` fails), so the merge here is only with `themes/*.css`'s own
+    // `body.wolf-markdown code` rules, which declare colour and background only
+    // and so cannot supply a `line-height` this assertion would read.
+    let decls = rule_decls(&css, "body.wolf-markdown code");
+
+    assert_eq!(
+        decls.get("line-height").and_then(|v| px(v)),
+        Some(0),
+        "`body.wolf-markdown code` must declare `line-height: 0`, and the zero is \
+         not cosmetic.\n\n\
+         WHY ZERO. The body declares its line-height as a LENGTH ({BASELINE}px), \
+         which inherits onto the inline code box as a computed length. An inline \
+         box's leading is then distributed as HALF-LEADING around THAT BOX'S OWN \
+         font metrics, not around the containing block's, and the line box is the \
+         UNION of the boxes on the line. Two baseline-aligned boxes whose faces \
+         disagree on (ascent - descent) therefore produce a line TALLER than \
+         either of them, and the body face and the monospace code face do \
+         disagree. So a code box at ANY non-zero leading pushes its line past its \
+         {BASELINE}px unit — and, because every later block's top offset shifts \
+         with it, the error ACCUMULATES down the document instead of staying \
+         constant. `base.css`'s header records the A/B: 26 / 74 / 123 for a \
+         paragraph, a list and a pre against units of 24 / 72 / 120, and 24 / 72 \
+         / 120 with this declaration in place. Zero removes the code box's union \
+         term and nothing else.\n\n\
+         WHAT ZERO DOES NOT DO. It does not collapse the chip: an inline box's \
+         CONTENT area — what its background and border-radius paint over — is \
+         derived from the font's metrics, not from `line-height`, which governs \
+         only the line box. And it does not thin out a code block: `pre` declares \
+         its own `line-height: {BASELINE}px` and a block container's own strut \
+         governs its line boxes, which is why the measured pre case lands on 120 \
+         with the zero inherited into it.\n\n\
+         Distinguishable failures: `None` with no `line-height` key means the \
+         declaration was deleted, or moved onto another rule — `pre code` is the \
+         tempting one and is exactly the move this full-selector query exists to \
+         catch, because it would leave inline code in a paragraph off-grid. \
+         `None` WITH a `line-height` key present means a non-px value such as \
+         `normal`, which leaves the union term in place exactly as a missing \
+         declaration does. `Some(n)` for n != 0 means the code element was given \
+         leading back: {decls:?}"
+    );
+}
+
+#[test]
+fn pre_code_declares_no_leading_of_its_own() {
+    let css = rendered_stylesheet();
+
+    // The companion to the test above, and the ONE case that test structurally
+    // cannot see. `selector_entry_matches` requires the query to be the entry, or
+    // the entry's suffix after a purely-descendant prefix, so
+    // `body.wolf-markdown code` cannot match `body.wolf-markdown pre code` — the
+    // `strip_suffix` succeeds but the discarded prefix is `body.wolf-markdown pre `,
+    // which is not what that query names. Adding a `line-height` HERE would
+    // therefore leave the zero-leading test fully green.
+    let decls = rule_decls(&css, "body.wolf-markdown pre code");
+
+    assert!(
+        !decls.is_empty(),
+        "base.css must keep the `body.wolf-markdown pre code` rule. An EMPTY result \
+         means the rule was deleted or renamed, at which point this test is \
+         vacuous — `line-height` is absent from a rule that does not exist, and it \
+         would stay absent however the stylesheet changed. Restore the rule (it \
+         carries `padding: 0`, `font-size: inherit` and `background: transparent`) \
+         before reading the assertion below: {decls:?}"
+    );
+    assert!(
+        !decls.contains_key("line-height"),
+        "`body.wolf-markdown pre code` must declare NO `line-height`, and the \
+         absence is load-bearing rather than an omission.\n\n\
+         WHY. `body.wolf-markdown code` declares `line-height: 0` to remove the \
+         inline code box's union term from the line box — see \
+         `inline_code_declares_zero_leading_so_it_cannot_grow_a_line_box` for the \
+         mechanism. The highlight spans `markdown.rs` emits carry colour and the \
+         three emphases and never a `line-height`, so inside a code block they \
+         inherit that computed zero, and `pre`'s own `line-height: {BASELINE}px` \
+         governs the block's line boxes as the container's strut. Re-declaring a \
+         `line-height` here — on `pre code`, or on the spans — puts the union term \
+         back, and puts it back ONLY on the lines that happen to carry a \
+         highlighted token: a PER-TOKEN grid error, which is strictly worse than \
+         the constant one the zero removed, because it varies with the document's \
+         content instead of being a fixed offset.\n\n\
+         WHY THIS TEST AND NOT THE OTHER ONE. \
+         `inline_code_declares_zero_leading_so_it_cannot_grow_a_line_box` queries \
+         the FULL selector `body.wolf-markdown code`, which cannot match \
+         `body.wolf-markdown pre code`, so a `line-height` added here is invisible \
+         to it — it goes on reading the zero off the rule it names and stays green. \
+         That is deliberate on its side (a bare `code` query would merge the two \
+         rules and hide the opposite defect), and it is exactly why this assertion \
+         exists as a separate one rather than as a clause of that one. Neither the \
+         baseline-grid sweep nor any other test in this file reaches this rule's \
+         vertical dimensions either: `code` is deliberately outside \
+         `GRID_SELECTORS`.\n\n\
+         Found: {decls:?}"
     );
 }
 
