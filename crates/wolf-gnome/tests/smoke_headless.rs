@@ -11,7 +11,7 @@
 //!
 //! ## What this file contains
 //!
-//! **Forty-six cage smokes** — one window-render smoke, two file-picker smokes,
+//! **Forty-eight cage smokes** — one window-render smoke, two file-picker smokes,
 //! one file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
 //! new-untitled-buffer smoke, one command-palette smoke, one OPEN RECENT smoke
 //! (Ctrl+Shift+P, a typed folder query, then Enter — the activated row re-roots the
@@ -83,7 +83,16 @@
 //! never written to disk, Preview through the palette, and then the source pane
 //! covered by another file — so the readback naming `Preview: Untitled 2.md` and the
 //! marker on screen together say the anonymous-buffer naming and the preview path
-//! compose), one COMPLETION-POPUP smoke, one MULTI-LINE MESSAGE smoke (a two-line
+//! compose), one CODE-BLOCK-HIGHLIGHT smoke (one `go` fence and one
+//! unknown-language fence carrying BYTE-IDENTICAL text, whose evidence is a
+//! chromatic-pixel count in the first against an in-capture control count in the
+//! second — an unhighlighted block is neutral on neutral — plus a Neovim readback
+//! naming the INJECTED `go` langtree, which is the editor-side half and a different
+//! feat-list row), one INLINE-CODE GRID smoke (three paragraphs each carrying an
+//! inline code element above a full-width rule, whose evidence is the pixel distance
+//! from the document's own top edge down to that rule, and the count of exact chip
+//! pixels inside the first paragraph — two assertions with two DIFFERENT
+//! falsifiers), one COMPLETION-POPUP smoke, one MULTI-LINE MESSAGE smoke (a two-line
 //! `:echo`, whose LAST line is the control and whose FIRST line is the assertion) and
 //! one CONFIRM-PROMPT smoke (a `:confirm` question drawn and then cleared once
 //! answered)
@@ -108,7 +117,7 @@
 //! and no `:e` toast can satisfy, and OCR is structurally incapable of answering
 //! "did the cursor land at exactly row 12, column 25".
 //!
-//! Thirty-five of the forty-six OCR a screenshot of the live window. Five
+//! Thirty-five of the forty-eight OCR a screenshot of the live window. Five
 //! deliberately capture no image at all: the `:qa` smoke asserts on the cage exit
 //! status alone, while the configured-font-size and column-cap smokes add two
 //! integers each, the configured-appearance smoke two exact strings, and the
@@ -125,18 +134,24 @@
 //! `state.json` frozen mid-run — because the pane it asserts on is the one surface
 //! here whose pixels come from WebKit rather than from this crate's own painter.
 //!
-//! Two of the forty-six read RAW PIXELS out of their own captures, which is the only
-//! route this harness has to a claim OCR cannot make — it reads no colour, and it
-//! cannot answer "where on the page is this".
+//! Four of the forty-eight read RAW PIXELS out of their own captures, which is the
+//! only route this harness has to a claim OCR cannot make — it reads no colour, and
+//! it cannot answer "where on the page is this".
 //! [`preview_document_follows_the_configured_appearance_under_cage`] captures two
 //! images, runs `tesseract` over neither, and samples exact colours at a derived
 //! rectangle, which is how it tells light-on-dark from dark-on-light.
+//! [`preview_highlights_a_fenced_code_block_under_cage`] locates two rendered code
+//! blocks by their own background and counts CHROMATIC pixels in each, which is how
+//! it tells a highlighted block from a plain one without counting distinct colours.
+//! [`preview_inline_code_keeps_the_baseline_grid_under_cage`] measures a DISTANCE in
+//! pixel rows between two self-located landmarks, which is the only laid-out-box
+//! reading either suite takes, and counts exact chip pixels for the paint claim.
 //! [`preview_link_click_repoints_the_pane_under_cage`] decodes ONE of its two captures
 //! and locates the rendered link's ink in it, purely to re-assert that its measured
 //! click constant still names the link before it uses it; its own evidence is a Neovim
 //! readback.
 //!
-//! **Six pure guards**, which mechanically enforce invariants the cage smokes
+//! **Seven pure guards**, which mechanically enforce invariants the cage smokes
 //! depend on but cannot check themselves:
 //!
 //! * [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`] — no
@@ -190,20 +205,29 @@
 //!   exactly the kind that stops being true when someone changes a font size, and
 //!   nothing else would notice.
 //! * [`the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes`] — the
-//!   SECOND premise those thirty-four rest on: the seeded `wolf-config.yaml` pins
+//!   SECOND premise those thirty-five rest on: the seeded `wolf-config.yaml` pins
 //!   `appearance: dark`, which is what keeps the grid light-on-dark for sparse-text
 //!   segmentation. It asserts both halves — the pinned VALUE, re-typed locally so
 //!   the check is not a comparison with itself, and the artifact
 //!   [`write_smoke_config`] actually writes — because the pin and the assertions it
 //!   can disarm sit thousands of lines apart, exactly the shape the three
 //!   fixture-name guards above exist for.
+//! * [`codehl_chroma_thresholds_are_separated`] — [`CODEHL_MIN_CHROMA_PX`] must stay
+//!   at least five times [`CODEHL_MAX_CHROMA_PX`]. The code-block smoke's pair of
+//!   assertions discriminates only while the floor sits well ABOVE the ceiling: set
+//!   the floor at or below what the CONTROL block itself reads and a block that lost
+//!   its highlighting entirely would still clear it, with nothing in the run naming
+//!   the constant that disarmed it. It asserts on the SHORTFALL rather than on the
+//!   comparison, because `clippy::assertions_on_constants` rejects an `assert!` whose
+//!   whole condition is constant and an `#[allow]` would suppress that lint for
+//!   anything added here later.
 //!
-//! All six are compositor-free: none calls `require_smoke_env`, none takes
+//! All seven are compositor-free: none calls `require_smoke_env`, none takes
 //! `CAGE_LOCK` and none spawns a subprocess, so they still guard on a machine where
 //! the smoke toolchain is unavailable. They live here, next to the consts and
 //! helpers they read, rather than in a file of their own.
 //!
-//! Five of the six additionally need NO environment at all. The exception is
+//! Six of the seven additionally need NO environment at all. The exception is
 //! [`the_column_cap_cannot_bind_at_the_ocr_smokes_geometry`], and the claim is
 //! stated precisely rather than loosely: it measures a
 //! real cell through [`cell_metrics_for_smoke`], so it needs the devShell's pinned
@@ -212,8 +236,8 @@
 //! a run outside the devShell fails it for that reason rather than for the reason
 //! its message names.
 //!
-//! So this target's summary line reads **`52 passed`**, not `46`: forty-six cage
-//! smokes plus those six guards.
+//! So this target's summary line reads **`55 passed`**, not `48`: forty-eight cage
+//! smokes plus those seven guards.
 //!
 //! ## A vacuously-passing check recorded here: the `wtype ""` window-map poll
 //!
@@ -255,7 +279,7 @@
 //!
 //! ## When it runs
 //!
-//! The forty-six cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The forty-eight cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The Linux verification gate").
@@ -265,13 +289,13 @@
 //! suite command does not run is a silently-skipped test.
 //!
 //! They are, however, the slowest part of the suite: each drives a real
-//! compositor, and all forty-six serialize behind `CAGE_LOCK` (see below).
+//! compositor, and all forty-eight serialize behind `CAGE_LOCK` (see below).
 //!
 //! ```text
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the forty-six cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the forty-eight cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` and
 //!   `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
@@ -288,7 +312,7 @@
 //!   empty result list.
 //! - `XDG_RUNTIME_DIR` set and writable (the Wayland socket lives there).
 //!
-//! Per project policy every one of the forty-six FAILS LOUD if any of the above is
+//! Per project policy every one of the forty-eight FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -315,7 +339,7 @@ use wolf_gnome::{CellMetrics, WINDOW_TITLE_FALLBACK};
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the forty-six cage smoke tests. Each launches its own
+/// Serializes the forty-eight cage smoke tests. Each launches its own
 /// `cage` compositor, and two compositors started concurrently contend for the
 /// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
 /// Under the default multi-threaded test harness these tests would otherwise run
@@ -9349,7 +9373,7 @@ exit 0
 /// captive nvim runs in (the recent-files MRU lives in the global
 /// `state_dir()/file-mru.sqlite`, not under the cwd).
 ///
-/// ALL FORTY-SIX cage smokes derive their working directory from this — the window
+/// ALL FORTY-EIGHT cage smokes derive their working directory from this — the window
 /// title smoke and the typed-`:cd` smoke use the result as the base for the NESTED
 /// directories their `~` abbreviation needs, the per-pane statusbar smoke hangs its
 /// fixture directory off the parent, and the three relaunch smokes share one of these
@@ -10008,7 +10032,7 @@ const HOME_CONFIG_DIR_FALLBACK: &str = ".config/wolf";
 /// the "Note (OCR width)" / "Note (OCR height)" paragraphs above their own consts,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
-/// be applied here to all forty-six.
+/// be applied here to all forty-eight.
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
@@ -11149,7 +11173,7 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// [`SIDEBARTOGGLE_OCR_KEEP`] is an ordinary content term and follows the ordinary
 /// rule.
 ///
-/// Thirty-five of the forty-six smokes appear here. ELEVEN contribute no rows at
+/// Thirty-five of the forty-eight smokes appear here. THIRTEEN contribute no rows at
 /// all, on purpose, and it is worth being explicit about which and why:
 ///
 /// * [`colon_qa_closes_the_window_under_cage`] captures no PNG and asserts only that
@@ -11183,18 +11207,26 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 ///   writes about its own lines, and the assertion is an exact OCCURRENCE COUNT of
 ///   a marker that smoke seeds itself — which no sidebar row and no `:e` toast can
 ///   move in either direction.
-/// * [`preview_document_follows_the_configured_appearance_under_cage`] is one of two
+/// * [`preview_document_follows_the_configured_appearance_under_cage`] is one of four
 ///   entries here that DO capture — two PNGs — and still contribute nothing,
 ///   because it runs `tesseract` over neither. Its observables are pixel COUNTS at
 ///   a derived rectangle inside one pane, so no rendered word can satisfy or break
 ///   an assertion of its: a filler row is text, and text is not the colour of the
 ///   background it is drawn on.
-/// * [`preview_link_click_repoints_the_pane_under_cage`] is the other, and for a
+/// * [`preview_link_click_repoints_the_pane_under_cage`] is a second, and for a
 ///   related reason: it captures twice and OCRs neither. Its evidence is the pair of
 ///   `tabpagebuflist()` readbacks either side of the click, and the one thing it does
 ///   read out of a capture is the BOUNDING BOX of the rendered link's ink — a colour
 ///   claim inside the preview pane, which no sidebar row can reach and no rendered
 ///   word can move.
+/// * [`preview_highlights_a_fenced_code_block_under_cage`] is a third: one capture,
+///   OCRed nowhere. Its observables are a CHROMATIC-PIXEL count inside each of two
+///   self-located code blocks, plus the Neovim readback naming the injected langtree.
+///   No rendered word is a colour, so no fixture filename can reach either half.
+/// * [`preview_inline_code_keeps_the_baseline_grid_under_cage`] is the fourth, the
+///   same way: one capture, no OCR, and its observables are a DISTANCE in pixel rows
+///   between two self-located landmarks and a count of exact chip pixels. A filename
+///   can put text on the page; it cannot move a rule.
 ///
 /// The other two pointer smokes DO OCR and their terms are listed below. For
 /// [`click_then_close_keeps_keyboard_input_alive_under_cage`] the OCR pair is
@@ -11940,7 +11972,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the forty-six smokes — still
+/// nothing to the smoke suite's runtime and — unlike the forty-eight smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
@@ -18628,8 +18660,11 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
     );
 }
 
-/// Writes the [`RELAUNCH_FIXTURE_NAMES`] markdown fixtures a smoke owns into `cwd`,
-/// plus the [`SIDEBAR_FILLER_FILES`] page-density fixture.
+/// Writes the markdown fixtures a smoke owns into `cwd`, plus the
+/// [`SIDEBAR_FILLER_FILES`] page-density fixture. Most of those names are
+/// [`RELAUNCH_FIXTURE_NAMES`] rows; the ones deliberately absent from that table
+/// carry their exemption at their own const, so do not read this helper as a
+/// guarantee that every file it writes is registered there.
 ///
 /// Each `contents` is a whole file, newline-terminated here rather than by the
 /// caller. Most callers pass a bare heading; the divider smoke's right-hand fixture
@@ -21388,6 +21423,1556 @@ fn assert_preview_theme_launch(smoke: &str, launch: &ThemeLaunch<'_>) {
     );
 }
 
+// --- SYNTAX-HIGHLIGHTED CODE BLOCKS, and the inline-code BASELINE GRID --------
+//
+// Two smokes and one compositor-free guard, sharing this section's constants and
+// samplers and nothing else. Both smokes read RAW PIXELS out of their own capture,
+// both reuse the preview-appearance smoke's derived geometry verbatim
+// ([`preview_theme_preview_columns`], [`preview_theme_scan_rows`],
+// [`preview_theme_band_rows`]) rather than restating it, and neither OCRs anything.
+//
+// They are deliberately SEPARATE smokes with separate scenarios and separate exit
+// codes, for the reason `tests/README.md` states about exit codes carrying meaning:
+// they are two different feat-list rows, and a shared failure would name the wrong
+// one. Their fixtures are also incompatible — one is two fenced blocks and the other
+// is three inline-code paragraphs above a rule — so a shared document could satisfy
+// neither smoke's geometry.
+
+/// The markdown file the code-highlight smoke opens and then previews.
+///
+/// Nothing in this smoke is OCR'd — its observables are chromatic pixels inside a
+/// rendered `pre` block and a `writefile` readback the captive Neovim produces — so
+/// this name carries none of the [`SIDEBAR_FILLER_FILES`] hazard and contributes no
+/// row to [`RELAUNCH_FIXTURE_NAMES`]. That mirrors [`PREVIEW_THEME_SOURCE_FILE`]
+/// exactly, which is absent from that table for the same stated reason: a sidebar row
+/// is TEXT, and text can satisfy no assertion whose subject is a colour.
+const CODEHL_SOURCE_FILE: &str = "cbhl.md";
+
+/// The leading paragraph of [`codehl_source_body`]: NATO words, no markdown syntax.
+///
+/// ## Why a leading paragraph is MANDATORY
+///
+/// `web_top` is located as the first row that is entirely [`PREVIEW_DARK_BG`] across
+/// the sampled columns. If the document's FIRST block were the `pre`, the first such
+/// row would be the 24 px gap BETWEEN the two blocks, and every rectangle derived
+/// from `web_top` would be one block too low. A paragraph guarantees a run of pure
+/// body background at the top of the document — the same mechanism
+/// [`preview_document_follows_the_configured_appearance_under_cage`] measured at
+/// absolute row 159.
+///
+/// ## Why it carries no markdown syntax
+///
+/// A heading or a link would put a second colour into the document, and the whole
+/// discriminator here is that the only CHROMATIC ink on the page comes from the
+/// highlighter. The theme's five dark palette entries are all neutral (r = g = b), so
+/// plain prose contributes no chroma at any threshold.
+///
+/// MEASURED (GTK 4.22.4, libadwaita 1.9.0, WebKitGTK 2.52.4, `cage` 0.3.0, 1280x720):
+/// this paragraph WRAPS to two lines, so the first `pre` block starts 72 rows below
+/// `web_top` rather than 48. Nothing asserts that offset — the blocks are located
+/// from the pixels — but a longer paragraph pushes both blocks down, and the scan
+/// only reaches [`preview_theme_band_rows`]'s last row (600 at the pinned output).
+///
+/// ## The 57-row margin, and what it rules out
+///
+/// The measured second block ends at absolute row 543, so 57 rows remain before that
+/// bound binds: two more wrapped lines here still fit (543 + 48 = 591 < 600) and a
+/// third does not.
+///
+/// The same margin is why [`CODEHL_FENCE_BODY`] carries FOUR code lines rather than
+/// five. A five-line fence makes each block 168 rows instead of 144, so the second one
+/// would end at 591 and leave 9 rows — and one extra wrapped line HERE would then clip
+/// it. A clipped control block is not a missing block: it is still exactly one run, so
+/// the run count cannot see it, and the smaller rectangle can only LOWER the control's
+/// chroma count, which is the silent under-count the equal-height guard in
+/// [`preview_highlights_a_fenced_code_block_under_cage`] exists to catch. MEASURED on a
+/// six-line candidate: two runs, the second truncated to 153 rows against the first's
+/// 192, with 20 % of the control never sampled. Growing this paragraph or that fence
+/// spends the margin, so re-measure both if either changes.
+const CODEHL_PARAGRAPH: &str =
+    "alfa bravo charlie delta echo foxtrot golf hotel india juliett kilo lima.";
+
+/// The body of BOTH fenced blocks in [`codehl_source_body`] — four lines of Go.
+///
+/// ONE const interpolated twice, so the two blocks carry byte-identical text BY
+/// CONSTRUCTION rather than by a coincidence a later edit could break on one side.
+/// That identity is what makes block 2 an IN-CAPTURE CONTROL: the two blocks differ
+/// in their fence's language and in nothing else, so antialiasing, glyph shapes and
+/// every other rendering variable except the highlighter's answer are held constant.
+/// Do NOT "simplify" the two fences into two literals — the identity would then be a
+/// coincidence one edit could break on one side, which is what this const prevents.
+///
+/// ## Why THIS Go, and not any four lines of it
+///
+/// MEASURED against the pinned Neovim with the vendored trees: under this colorscheme
+/// Go has only THREE chromatic token colours — chroma 108 (function names and calls,
+/// and the builtin types, so `string`, `int`, `len`, `Sprintf`), chroma 89 (struct
+/// field members) and chroma 67 (string literals). Keywords, numbers, operators,
+/// punctuation, user type names and package identifiers are all `#e0e2ea`, chroma 10,
+/// and comments are chroma 9. A fence led by comments or by a `const` block therefore
+/// buys almost no chromatic ink: two such candidates of this height measured 528 and
+/// 605 chromatic pixels against this one's 1209. Density of CALLS, TYPES and STRING
+/// LITERALS is what [`CODEHL_MIN_CHROMA_PX`]'s headroom is bought with; more lines of
+/// the wrong tokens buy nothing.
+///
+/// The height is four code lines because of the scan margin [`CODEHL_PARAGRAPH`]
+/// records, not because four is special.
+///
+/// Line 3 begins with a literal TAB, as `gofmt` writes it. It is spelt `\t` rather than
+/// typed, so no editor or formatter can silently turn it into spaces.
+///
+/// **Do NOT reason about the two blocks' INK masses.** They are not equal — MEASURED
+/// 2697 and 2622 non-background pixels despite byte-identical text — because chromatic
+/// ink produces more pixels that differ from the background than neutral ink does.
+/// The CHROMA comparison below is the sound one; an ink comparison would not be.
+const CODEHL_FENCE_BODY: &str = "import \"fmt\"\n\
+                                 func Greet(a string, b string) string {\n\
+                                 \treturn fmt.Sprintf(\"hi %s and %s\", a, b)\n\
+                                 }";
+
+/// The language of the HIGHLIGHTED fence, and the language whose injected child
+/// langtree the readback asks the captive Neovim about.
+///
+/// ## This choice is the single most likely way this smoke gets silently disarmed
+///
+/// The pinned Neovim ships seven parsers with `highlights` queries — `c`, `lua`,
+/// `markdown`, `markdown_inline`, `query`, `vim`, `vimdoc` ([`NVIM_BUILTIN_PARSERS`]).
+/// A fence in ANY of those seven would highlight with nothing vendored at all, so the
+/// named falsifier (deleting `init.lua`'s environment fallback) would leave this smoke
+/// GREEN — a check aimed at the right property, looking somewhere the defect cannot
+/// appear. `go` is not one of the seven and IS one of the sixteen `flake.nix` vendors,
+/// which is exactly the combination the discriminator needs.
+///
+/// The smoke asserts the "not a builtin" half mechanically before it launches
+/// anything, because the rule and the assertion it can disarm are hundreds of lines
+/// apart.
+const CODEHL_HL_LANG: &str = "go";
+
+/// The language of the CONTROL fence: a coined string no grammar exists for, on
+/// either platform.
+///
+/// `render_source_html` degrades per block to the plain render when no parser answers,
+/// so this block still renders as a `pre` — MEASURED, and load-bearing: an unknown
+/// language that produced NO block at all would leave one run where the smoke expects
+/// two, and the control would be missing rather than plain.
+///
+/// It must not be a real language under any spelling. Being absent from the seven
+/// builtins is checked mechanically; being absent from `flake.nix`'s sixteen is not,
+/// because re-typing that list here would be a second copy to keep in step. The `zzz`
+/// prefix is this file's convention for a coined term precisely so the answer is
+/// visible without a lookup.
+const CODEHL_PLAIN_LANG: &str = "zzznotalang";
+
+/// The languages the pinned Neovim ships a parser AND a `highlights` query for, with
+/// nothing vendored.
+///
+/// MEASURED against the pinned Neovim with `--clean` (a probe without `--clean` reads
+/// the developer's own `~/.local/share/nvim/site/parser/*.so` and reports false
+/// positives). Re-typed here rather than imported, because there is nothing to import
+/// it from and because the point of the list is to constrain a FIXTURE.
+const NVIM_BUILTIN_PARSERS: &[&str] = &[
+    "c",
+    "lua",
+    "markdown",
+    "markdown_inline",
+    "query",
+    "vim",
+    "vimdoc",
+];
+
+/// The whole body of [`CODEHL_SOURCE_FILE`], in this exact order: the leading
+/// paragraph, the [`CODEHL_HL_LANG`] fence, then the [`CODEHL_PLAIN_LANG`] fence.
+///
+/// The ORDER is fixed and asserted on: run 1 of the located blocks is the highlighted
+/// one and run 2 is the control, so swapping the two fences would invert the
+/// discriminator and its control while still compiling.
+fn codehl_source_body() -> String {
+    format!(
+        "{CODEHL_PARAGRAPH}\n\n\
+         ```{CODEHL_HL_LANG}\n{CODEHL_FENCE_BODY}\n```\n\n\
+         ```{CODEHL_PLAIN_LANG}\n{CODEHL_FENCE_BODY}\n```"
+    )
+}
+
+/// Name suffix of the code-highlight smoke's config directory sibling.
+const CODEHL_SUFFIX: &str = "-codehl";
+
+/// The code-highlight smoke's capture.
+///
+/// Under `XDG_RUNTIME_DIR` rather than in the smoke's cwd, so the app's own
+/// `FileSearch` never lists it and it never becomes a tree-sidebar row — which would
+/// change the page the editor pane draws for no reason.
+const CODEHL_PNG_NAME: &str = "wolf_gnome_code_highlight.png";
+
+/// File the captive Neovim writes its window/buffer list into. See
+/// [`CODEHL_PNG_NAME`] for why it lives outside the cwd.
+const CODEHL_WINS_NAME: &str = "wolf_gnome_code_highlight_wins.txt";
+
+/// File the captive Neovim writes the INJECTED-LANGTREE answer into.
+const CODEHL_LANGTREE_NAME: &str = "wolf_gnome_code_highlight_langtree.txt";
+
+/// The marker the langtree readback's Lua writes when the source buffer's markdown
+/// langtree has an injected [`CODEHL_HL_LANG`] child.
+///
+/// Re-typed as a literal rather than imported from
+/// `crates/wolf-ffi/tests/treesitter_highlight.rs`'s `MARK_OK`: each `tests/*.rs` is
+/// its own crate, and the two files state the same contract independently on purpose.
+const CODEHL_LANGTREE_OK: &str = "OK";
+
+/// The `background-color` `wolf_core`'s `markdown/themes/default.css` gives
+/// `body.wolf-markdown pre` in DARK, as `(r, g, b)`.
+///
+/// RE-TYPED here as a literal, never imported, for the reason [`PREVIEW_DARK_BG`]'s
+/// doc comment gives at length: reading the value out of the crate that produced the
+/// pixels would make the assertion a comparison with itself.
+///
+/// It is what LOCATES the two code blocks: a `pre` paints this colour across the
+/// document's whole content width, while the 24 px gap between two blocks is 100 %
+/// [`PREVIEW_DARK_BG`] and 0 % this, so the gap breaks a run cleanly.
+const CODEHL_PRE_BG: Rgb8 = (0x16, 0x16, 0x16);
+
+/// The least CHROMA a pixel must carry to count as highlighter ink.
+///
+/// `chroma = max(r, g, b) - min(r, g, b)`, so a neutral pixel is 0 whatever its
+/// brightness. Every colour in an UNHIGHLIGHTED block is neutral — `#e6e6e6` ink on
+/// `#161616`, both r = g = b — and blending two neutral colours channel-independently
+/// yields another neutral colour, so an unhighlighted block cannot produce chroma at
+/// ALL: the control block MEASURES 0 at every threshold down to `>= 1`.
+///
+/// ## What this threshold separates is NOT antialiasing
+///
+/// A HIGHLIGHTED block is not chromatic throughout, so reading this constant as a guard
+/// against antialiasing gets it wrong. MEASURED: inside the highlighted block the
+/// keywords, numbers, operators, punctuation and plain identifiers are `#e0e2ea` —
+/// chroma 10 — and only function names, builtin types, struct fields and string
+/// literals carry real colour, at chroma 108, 89 and 67. What this constant separates
+/// is therefore real token colour from the near-neutral BULK of the same block, and the
+/// histogram cliff between them is sharp: chroma bucket 10 holds 216 pixels and bucket
+/// 11 holds 7, a 31x drop. The legal window is [11, 67] — above the near-neutral spike,
+/// at or below the weakest real token colour. 32 sits 3.2x above the spike and 2.1x
+/// below that weakest colour, near the window's log-midpoint.
+///
+/// MEASURED chromatic-pixel counts inside the highlighted block at rising thresholds:
+/// `>= 1` 2630, `>= 8` 1961, `>= 12` 1544, `>= 32` 1209, `>= 64` 658, maximum chroma
+/// 108. Any threshold in [12, 66] leaves a count between 658 and 1544, so no floor in
+/// the low hundreds can be flipped by the choice.
+///
+/// Only ONE of the two ways to get this wrong is self-announcing on this host. Too HIGH
+/// — past 67 — and the count collapses towards zero, which fires on the highlighted
+/// block in the GREEN run. Too LOW does NOT fire here, because this host's antialiasing
+/// is grayscale and its control reads 0 at every threshold; it becomes self-announcing
+/// only on a host whose subpixel antialiasing puts colour on glyph edges, where the
+/// control's count lifts through [`CODEHL_MAX_CHROMA_PX`]. On this host the [11, 67]
+/// window is what protects the choice, not the control.
+const CODEHL_CHROMA_MIN: u16 = 32;
+
+/// The fewest chromatic pixels the HIGHLIGHTED block must carry.
+///
+/// MEASURED 1209 at [`CODEHL_CHROMA_MIN`] over the block's 354 x 144 = 50,976 pixels,
+/// so this floor leaves 4.0x of headroom. An ACCEPTANCE CRITERION and not a tuned
+/// number: it is 12x above the smallest floor
+/// [`codehl_chroma_thresholds_are_separated`] admits, and it stays 2.2x clear at the
+/// most pessimistic threshold [`CODEHL_CHROMA_MIN`]'s legal window allows (658 at
+/// `>= 64`). A block that lost its highlighting reads 0 rather than a smaller positive
+/// number — the control block measures exactly that, in the same capture.
+///
+/// Do NOT lower it to make a run pass. [`codehl_chroma_thresholds_are_separated`]
+/// exists because a floor set below the CONTROL block's own ceiling would let a
+/// de-highlighted block clear it, which is the one way this pair of assertions can be
+/// disarmed without either of them going red.
+const CODEHL_MIN_CHROMA_PX: usize = 300;
+
+/// The most chromatic pixels the CONTROL block may carry.
+///
+/// MEASURED **0** — at every threshold down to `>= 1`, over all 50,976 pixels of the
+/// block. This host's antialiasing is grayscale and contributes no chroma at all, so
+/// the separation between the two blocks is unbounded rather than merely sufficient,
+/// and the "not at least 5x apart, therefore not shippable" clause the design
+/// reserved never fired.
+///
+/// A small non-zero ceiling rather than an exact 0 because subpixel antialiasing on
+/// another host would put a handful of chromatic pixels on any glyph edge, and a
+/// smoke that failed on a font-rendering setting would be reporting the wrong thing.
+/// Five is far below [`CODEHL_MIN_CHROMA_PX`] and far below what a single coloured
+/// token draws.
+const CODEHL_MAX_CHROMA_PX: usize = 5;
+
+/// The fewest rows a majority-[`CODEHL_PRE_BG`] run must span to count as a code
+/// block.
+///
+/// TWO baseline units. A `pre` holding [`CODEHL_FENCE_BODY`]'s four lines is
+/// 24 (padding) + 4 x 24 (lines) + 24 (padding) = 144 rows, and the gap between the two
+/// blocks is 24 rows of pure background. MEASURED: both blocks 144 rows tall (absolute
+/// 231..375 and 399..543), separated by a 24-row gap that is 0 % [`CODEHL_PRE_BG`].
+///
+/// The floor is a third of a real block and many times the one- or two-row artifact at
+/// a block's own antialiased edge that it exists to discard, so it discriminates
+/// without sitting near either. It is a floor on a run's height and NOT a check that a
+/// run is the right height — a run truncated by the scan limit clears it comfortably,
+/// which is why the smoke also compares the two runs' heights to each other.
+const CODEHL_MIN_BLOCK_ROWS: usize = 48;
+
+/// A pixel's CHROMA: `max(r, g, b) - min(r, g, b)`.
+///
+/// Computed in `u16` and widened BEFORE the subtraction, mirroring [`is_link_blue`]'s
+/// stated reason: a `u8` subtraction can wrap and silently classify a pixel as the
+/// opposite of what it is. Here the wrap would turn a neutral pixel into a maximally
+/// chromatic one, which would make the control assertion fail on a good render and —
+/// worse — could make the discriminator pass on a de-highlighted one.
+fn chroma(pixel: Rgb8) -> u16 {
+    let (r, g, b) = pixel;
+    let (r, g, b) = (u16::from(r), u16::from(g), u16::from(b));
+    r.max(g).max(b) - r.min(g).min(b)
+}
+
+/// What one pass over a rectangle found: how many pixels cleared
+/// [`CODEHL_CHROMA_MIN`], and the largest chroma seen at all.
+///
+/// The maximum is carried purely so a failure message can tell two very different
+/// states apart: "there is ink, and it is neutral" (the highlighter did not run) from
+/// "there is ink, and it is faintly coloured but below the threshold" (the threshold
+/// or the palette moved). Without it both read as a bare count and the reader cannot
+/// choose between them.
+#[derive(Clone, Copy, Debug)]
+struct ChromaSample {
+    /// Pixels whose chroma is at least [`CODEHL_CHROMA_MIN`].
+    count: usize,
+    /// The largest chroma anywhere in the rectangle.
+    max: u16,
+}
+
+/// Counts the chromatic pixels inside `rect`, and the largest chroma in it.
+///
+/// Takes a [`SampleRect`] rather than four `usize`s for the reason that struct's own
+/// doc comment gives.
+fn chroma_sample(capture: &Capture, rect: SampleRect) -> ChromaSample {
+    let mut sample = ChromaSample { count: 0, max: 0 };
+    for y in rect.y0..rect.y1 {
+        for x in rect.x0..rect.x1 {
+            let c = chroma(capture.pixel(x, y));
+            if c >= CODEHL_CHROMA_MIN {
+                sample.count += 1;
+            }
+            sample.max = sample.max.max(c);
+        }
+    }
+    sample
+}
+
+/// A maximal run of rows in which one colour is a strict majority of the sampled
+/// columns, half-open: `y0 <= y < y1`.
+#[derive(Clone, Copy, Debug)]
+struct BlockRun {
+    /// First row of the run.
+    y0: usize,
+    /// One past the last row of the run.
+    y1: usize,
+}
+
+impl BlockRun {
+    /// How many rows the run spans.
+    fn rows(self) -> usize {
+        self.y1 - self.y0
+    }
+
+    /// The run crossed with `columns`, as a rectangle the samplers take.
+    fn rect(self, columns: (usize, usize)) -> SampleRect {
+        SampleRect {
+            x0: columns.0,
+            x1: columns.1,
+            y0: self.y0,
+            y1: self.y1,
+        }
+    }
+}
+
+/// Whether pixels exactly `colour` are a STRICT MAJORITY of row `y`'s sampled columns.
+///
+/// A strict majority rather than "any" or "all". "Any" would call a single stray pixel
+/// a block; "all" would be defeated by the code glyphs themselves, which are ink
+/// ON the block's background and so are not the background colour.
+fn row_is_majority(capture: &Capture, rect: SampleRect, y: usize, colour: Rgb8) -> bool {
+    let width = rect.x1 - rect.x0;
+    let hits = (rect.x0..rect.x1)
+        .filter(|&x| capture.pixel(x, y) == colour)
+        .count();
+    hits * 2 > width
+}
+
+/// Every maximal run of majority-`colour` rows inside `rect`, in top-to-bottom order,
+/// with runs shorter than `min_rows` discarded.
+///
+/// This is how the two code blocks are LOCATED, with no magic constant: the blocks are
+/// wherever the renderer put them, and the 24 px inter-block gap — 100 %
+/// [`PREVIEW_DARK_BG`], 0 % [`CODEHL_PRE_BG`] — is what separates them. The
+/// `min_rows` filter is what stops a single antialiased row at a block's own edge from
+/// being reported as a third block.
+fn majority_colour_runs(
+    capture: &Capture,
+    rect: SampleRect,
+    colour: Rgb8,
+    min_rows: usize,
+) -> Vec<BlockRun> {
+    let mut runs: Vec<BlockRun> = Vec::new();
+    let mut open: Option<usize> = None;
+    for y in rect.y0..rect.y1 {
+        if row_is_majority(capture, rect, y, colour) {
+            if open.is_none() {
+                open = Some(y);
+            }
+        } else if let Some(y0) = open.take() {
+            runs.push(BlockRun { y0, y1: y });
+        }
+    }
+    if let Some(y0) = open.take() {
+        runs.push(BlockRun { y0, y1: rect.y1 });
+    }
+    runs.retain(|run| run.rows() >= min_rows);
+    runs
+}
+
+/// The FIRST row inside `rect` in which pixels exactly `colour` are a strict majority
+/// of the sampled columns, or `None`.
+///
+/// Distinct from [`Capture::first_uniform_row`], which requires EVERY column to match:
+/// that is right for locating a background edge, and wrong for locating a hairline
+/// whose own antialiasing may leave a column or two off-colour.
+fn first_majority_row(capture: &Capture, rect: SampleRect, colour: Rgb8) -> Option<usize> {
+    (rect.y0..rect.y1).find(|&y| row_is_majority(capture, rect, y, colour))
+}
+
+/// The CODE-HIGHLIGHT scenario, run as a single `sh -c` string inside ONE `cage`:
+/// [`PREVIEW_THEME_SCENARIO`]'s single-launch body with two readbacks instead of one.
+///
+/// ONE launch, at a forced `dark` appearance. Unlike the preview-appearance smoke, the
+/// appearance is not this smoke's SUBJECT — it is a precondition for the two theme
+/// colours the samplers compare against — so "the pair is what discriminates" does not
+/// apply here and a second launch would buy nothing but runtime.
+///
+/// ## Exit codes, and why there are only two
+///
+/// * `11` — the app died before its window ever mapped (the shared convention).
+/// * `14` — a readback the captive Neovim was told to write never appeared, so the
+///   assertion that reads it cannot be evaluated at all.
+///
+/// `12` ("still alive after `:qa!`") and `13` ("exited non-zero") are DELIBERATELY
+/// absent, and their absence is not an oversight. Nothing here depends on a clean
+/// exit: there is no second launch to isolate from the first, and no persisted state
+/// any assertion reads back, so the scenario ends with [`PREVIEW_SCENARIO`]'s
+/// best-effort `kill` + `wait` rather than a `:qa!` handshake. Adding those codes would
+/// mean asserting on a shutdown this smoke makes no claim about.
+///
+/// ## Both readbacks are taken AFTER the capture, and that is load-bearing
+///
+/// Each is a typed Ex command, drawn by the window's command-line strip. Taken before
+/// `grim`, the typed text would be in the PNG — and the second one is a 400-character
+/// `:lua` line, which would redraw a large part of the window.
+const CODEHL_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: WAIT_TRIES * WAIT_INTERVAL for CAGE to come up -- NOT for the window
+# to map, which this poll cannot observe (see the module doc comment). SETTLE is the
+# only real budget between spawning the app and the first keystroke.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+FILE_TRIES=100
+# PREVIEW_SETTLE -- budgeted FROM THE CALL, not from the web view's Started event;
+# PREVIEW_SCENARIO's doc comment carries the measurement behind it (~255 ms for a
+# cold open, about 110 ms of that spent spawning the WebProcess before Started
+# fires). This spend is a cold open. Do not trim it.
+PREVIEW_SETTLE=2.0
+
+"$WOLF_BIN" &
+app_pid=$!
+
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome code-highlight smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+sleep "$SETTLE"
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome code-highlight smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# --- Step 1: open the SOURCE in the window's ONE pane ------------------------
+#
+# One pane is what makes the placement deterministic: `preview_placement` answers
+# `split_right` for a pane count of 1 whatever the two preview inputs say, so the
+# preview is the RIGHT half and the derived rectangles mean what they say.
+wtype -- ":e $SRC_FILE"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- Step 2: drive PREVIEW through the command palette -----------------------
+#
+# Ctrl+Shift+P, the query, Enter. Preview has no accelerator row of its own, so the
+# palette and the :WolfPreview Ex command are its only two routes.
+wtype -M ctrl -M shift -k p -m shift -m ctrl
+sleep "$SETTLE"
+wtype -- "$PREVIEW_QUERY"
+sleep "$SETTLE"
+wtype -k Return
+sleep "$PREVIEW_SETTLE"
+
+# --- Step 3: the capture, with the preview pane live -------------------------
+grim "$OUT_PNG"
+
+# --- Step 4: NEOVIM's own answer about what its windows hold -----------------
+#
+# Joined with a COMMA rather than a space because a preview scratch's own name
+# contains one.
+wtype -- ":call writefile([join(map(tabpagebuflist(), {_, b -> fnamemodify(bufname(b), ':t')}), ',')], '$WINS')"
+wtype -k Return
+wait_file "$WINS" || exit 14
+
+# --- Step 5: NEOVIM's own answer about the SOURCE buffer's LANGTREE ----------
+#
+# The SOURCE buffer is found through b:wolf_preview_source_bufnr, which
+# wolf_ensure_preview_buf sets on the preview scratch. `vim.fn.bufnr('<file>')` is
+# WRONG here and must not be substituted: the scratch is named "Preview: <file>", so
+# that pattern matches TWO buffers and bufnr() answers -1.
+#
+# The answer is the injected CHILD LANGTREE for the fenced language, primary check
+# children()[lang] with a child:lang() fallback -- the same expression
+# crates/wolf-ffi/tests/treesitter_highlight.rs uses. It is NOT
+# `vim.treesitter.highlighter.active[buf]`: that reads true even with no wolf
+# init.lua at all, because the pinned Neovim starts treesitter on markdown by
+# itself, so it would pass under this smoke's own falsifier.
+wtype -- ":lua local s=-1 for _,b in ipairs(vim.fn.tabpagebuflist()) do local v=vim.b[b].wolf_preview_source_bufnr if v~=nil then s=v end end local m='NO' if s>0 then local ok,p=pcall(vim.treesitter.get_parser, s) if ok and p then pcall(function() p:parse(true) local k=p:children() if k['$HL_LANG']~=nil then m='OK' else for _,c in pairs(k) do if c:lang()=='$HL_LANG' then m='OK' end end end end) end end vim.fn.writefile({m..' src='..s}, '$LANGTREE')"
+wtype -k Return
+wait_file "$LANGTREE" || exit 14
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+/// A fenced code block in the rendered preview is SYNTAX HIGHLIGHTED, with an
+/// identical unknown-language block beside it that is not.
+///
+/// ## What it proves that nothing else can
+///
+/// That the vendored treesitter parsers reach the RUNNING GTK application and put
+/// colour on the screen. `crates/wolf-ffi/tests/code_block_highlight.rs` proves that
+/// `wolf_core` produces styled spans for a `go` fence; it says nothing about whether
+/// a preview pane shows them, and it stages its own sibling trees in a temp directory
+/// rather than going through the delivery route the application uses. This smoke
+/// launches the built binary, opens a real preview, and reads the pixels.
+///
+/// ## The two blocks are the SAME TEXT, and that is the design
+///
+/// [`CODEHL_FENCE_BODY`] is interpolated into both fences, so the only difference
+/// between them is the fence's language. Block 2 is therefore an IN-CAPTURE CONTROL
+/// rather than a second measurement: it is rendered by the same engine, in the same
+/// document, in the same run, at the same font, and every rendering variable except
+/// the highlighter's answer is held constant across the pair.
+///
+/// ## Chroma, not "more than one colour"
+///
+/// "A highlighted block contains more than one ink colour" cannot be counted as
+/// distinct RGB values: antialiasing produces hundreds of intermediates and the count
+/// would be large for a plain block too. The rigorous form of the same claim is
+/// [`chroma`]: every colour in an unhighlighted block is NEUTRAL, and blending two
+/// neutral colours channel-independently yields a neutral colour, so an unhighlighted
+/// block cannot produce chroma at all. Treesitter's token colours are chromatic.
+///
+/// ## Row B's evidence, and the expression that is NOT it
+///
+/// Claim 8 is the only place in this repository where the vendored trees are observed
+/// inside the running application. It asks the captive Neovim whether the SOURCE
+/// buffer's markdown langtree has an injected child for [`CODEHL_HL_LANG`] — a fact
+/// Neovim produces, that no pixel and no OCR term can satisfy, and that is MEASURED to
+/// answer NO when the gate does not fire.
+///
+/// `vim.treesitter.highlighter.active[buf] ~= nil` is the expression NOT used, and it
+/// was the obvious candidate. MEASURED under three conditions with `--clean`: bare
+/// nvim with no wolf `init.lua` at all, wolf `init.lua` with the gate NOT firing, and
+/// wolf `init.lua` with the gate firing — it reads true in ALL THREE, because the
+/// pinned Neovim starts treesitter on markdown by itself. It is a tautology, and an
+/// assertion on it would have passed under this smoke's own named falsifier. The
+/// injected langtree reads NO / NO / OK across the same three.
+///
+/// ## Claims 6, 7 and 8 are judged TOGETHER, and that is not a style choice
+///
+/// A chain of `assert!`s panics on the first one that fails, so a claim that only ever
+/// fails alongside an earlier one has NO verbatim red of its own — nobody has ever read
+/// its failure text, and nothing proves it can produce one. That is claim 8's position:
+/// MEASURED, BOTH named falsifiers make the langtree read `NO src=2`, because an
+/// injected child langtree needs the compiled parser as well as the injections query.
+/// So every edit that reddens claim 8 reddens claim 6 first.
+///
+/// The three claims are therefore accumulated and reported in one combined failure,
+/// each naming itself and its feat-list row. That matters because claims 6 and 8 are
+/// DIFFERENT rows — Row A's preview colour and Row B's editor-side injections — and a
+/// shared failure that named only the first would name the wrong one, which is the same
+/// argument that made these two smokes separate in the first place. Row A also has
+/// `crates/wolf-ffi/tests/code_block_highlight.rs` corroborating it; Row B's editor half
+/// has no other evidence anywhere, so its own red text is the only text there is.
+///
+/// The preconditions (rows 0 to 5 below) are NOT accumulated: each one is what makes the
+/// next meaningful, so evaluating past a failed precondition would report readings taken
+/// from a rectangle that means nothing. They panic where they stand, and the code calls
+/// them ASSERTIONS; rows 6, 7 and 8 are the accumulated ones and the code calls them
+/// CLAIMS, so a message can be traced to its shape without counting.
+///
+/// ## Assertions, classified
+///
+/// A precondition gets NO revert: inventing one would manufacture a discriminator this
+/// smoke does not have. Readings are from actual runs at GTK 4.22.4, libadwaita 1.9.0,
+/// WebKitGTK 2.52.4 and `cage` 0.3.0 on a 1280x720 output.
+///
+/// | # | assertion (0–5) or claim (6–8) | kind | falsifying edit | measured |
+/// | --- | --- | --- | --- | --- |
+/// | 0 | [`CODEHL_HL_LANG`] is not one of [`NVIM_BUILTIN_PARSERS`], and the two fence languages differ | **tripwire on the fixture** — no `src/` falsifier by construction | re-point the fence at `c` or `lua` | n/a. It runs before the compositor. Without it, a fence in one of the seven builtins would highlight with nothing vendored and claim 6 would stay green under its own falsifier. |
+/// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | n/a |
+/// | 2 | the PNG is present and decodes at exactly `CAGE_OUTPUT_W_EXPECTED` x `CAGE_OUTPUT_H_EXPECTED` | precondition — and what makes every derived rectangle mean what it says | none; do not invent one | n/a |
+/// | 3 | `tabpagebuflist()`, sorted, is the preview scratch plus the source | precondition — a preview pane exists, and exactly two panes do | none; do not invent one | green: `Preview: cbhl.md,cbhl.md` |
+/// | 4 | `web_top` is locatable | precondition — the document's own top edge, self-located from the pixels | none; do not invent one | green: absolute row 159 |
+/// | 5 | exactly TWO majority-[`CODEHL_PRE_BG`] runs of at least [`CODEHL_MIN_BLOCK_ROWS`] rows, of EQUAL height | precondition — BOTH fences rendered as `pre` blocks, and NEITHER was clipped by the scan limit. The run COUNT cannot see a clipped block: a truncated run is still exactly one run, and a control rect short of its subject can only LOWER claim 7's count, which would make the control read stronger than it is. | none; do not invent one | green: rows 231..375 and 399..543, both 144 tall, 24-row gap at 0 % `CODEHL_PRE_BG`, 57 rows of margin below. MEASURED on a rejected six-line fixture: two runs, the second clipped to 153 rows against 192, 20 % of the control unsampled. |
+/// | 6 | run 1 carries at least [`CODEHL_MIN_CHROMA_PX`] chromatic pixels | **discriminator** — the vendored parsers reach the rendered document (feat-list row "Syntax-highlighted code blocks") | in `runtime/nvim/init.lua`, revert the PARSERS probe to a bare sibling `uv.fs_stat` (leave the queries fallback). `parser/go.so` is then off the runtimepath, the block renders plain, and this count collapses to the control's level. ISOLATED against the FFI suite, and this is not obvious: all three `wolf-ffi` treesitter tests stay GREEN, because none of them reaches `init.lua`'s environment fallback — two stage real siblings in a temp directory and the third loads the `.so` by absolute path. It is NOT isolated from claim 8, which reddens with it. | green: 1209 at threshold 32, max chroma 108, over 50,976 pixels |
+/// | 7 | run 2 carries at most [`CODEHL_MAX_CHROMA_PX`] chromatic pixels | **in-capture control** — the chroma in run 1 comes from the highlighter and not from the renderer | none of its own. On a host with subpixel antialiasing it would fire in the GREEN run if `CODEHL_CHROMA_MIN` were ever set too low; on this host, whose antialiasing is grayscale, that failure mode is invisible and the threshold's legal window is what guards it instead. | green: **0**, at every threshold down to `>= 1`, over all 50,976 pixels |
+/// | 8 | the langtree readback's first token is [`CODEHL_LANGTREE_OK`] | **discriminator** — the vendored trees fire `init.lua`'s gate inside the running application (feat-list row "Vendored treesitter plugins and parsers", its editor half) | in `runtime/nvim/init.lua`, delete the environment fallback from the QUERIES probe (leave the parsers one). The outer gate then does not fire, so NEITHER tree lands on the runtimepath and this reads NO. Claim 6 reddens under this edit too, and claim 6's OWN falsifier reddens this one — MEASURED, the parsers-probe edit also reads `NO src=2`, because an injected child langtree needs the parser as well as the injections query. Neither falsifier isolates it, which is exactly why the three claims are accumulated instead of chained. | green: `OK src=2` |
+///
+/// ## The conventions it obeys
+///
+/// A fresh temp working directory ([`make_temp_cwd`], mandatory — the captive
+/// Neovim's swap directory is keyed on it); [`CAGE_LOCK`] for the whole body; one
+/// `sh -c` string through [`cage_command`], the single environment helper and the only
+/// place the compositor is spawned; and a config directory of its own pinning the
+/// appearance the two theme colours are measured at.
+///
+/// It asserts no OCR term, so it contributes no row to [`ASSERTED_OCR_TERMS`], and its
+/// one fixture is read as text by nothing — the sidebar draws its NAME, and a name
+/// cannot satisfy a claim about a colour — so it contributes no row to
+/// [`RELAUNCH_FIXTURE_NAMES`] either. That is [`PREVIEW_THEME_SOURCE_FILE`]'s stated
+/// precedent, which is absent from that table for the same reason.
+#[test]
+fn preview_highlights_a_fenced_code_block_under_cage() {
+    const SMOKE: &str = "preview_highlights_a_fenced_code_block_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    // --- Assertion 0 (tripwire on the fixture) -------------------------------
+    //
+    // Before anything is launched, because it costs microseconds and because the rule
+    // it enforces and the assertion it can disarm sit hundreds of lines apart — the
+    // same distance the three fixture-name guards in this file exist for.
+    assert!(
+        !NVIM_BUILTIN_PARSERS.contains(&CODEHL_HL_LANG),
+        "{SMOKE}: the highlighted fence's language {CODEHL_HL_LANG:?} is one of \
+         {NVIM_BUILTIN_PARSERS:?} — the parsers the pinned Neovim ships with a `highlights` query \
+         and NOTHING vendored. A fence in one of those seven highlights on a bare checkout, so \
+         claim 6 below would stay GREEN under its own named falsifier (deleting `init.lua`'s \
+         environment fallback) and this smoke would prove nothing about the vendoring at all. Pick \
+         a language that is in `flake.nix`'s sixteen and NOT in this list; `go` is the one this \
+         fixture was measured with."
+    );
+    assert_ne!(
+        CODEHL_HL_LANG, CODEHL_PLAIN_LANG,
+        "{SMOKE}: both fences name the same language, so the document carries two highlighted \
+         blocks or two plain ones and the in-capture control is a second copy of the \
+         discriminator. The control fence must name a language NO grammar exists for."
+    );
+    assert!(
+        !NVIM_BUILTIN_PARSERS.contains(&CODEHL_PLAIN_LANG),
+        "{SMOKE}: the control fence's language {CODEHL_PLAIN_LANG:?} is one of \
+         {NVIM_BUILTIN_PARSERS:?}, so the control block would be highlighted too and claim 7 \
+         would fail on a perfectly good render. The control must name a language nothing can \
+         parse."
+    );
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    let cwd = make_temp_cwd();
+    let body = codehl_source_body();
+    write_relaunch_fixtures(SMOKE, &cwd, &[(CODEHL_SOURCE_FILE, body.as_str())]);
+
+    // Its own config directory, at a FORCED dark appearance. `cage_command` seeds a
+    // shared one that happens to pin the same value today, and this smoke must not
+    // depend on that: `CODEHL_PRE_BG` and `PREVIEW_DARK_BG` are the DARK palette's
+    // colours, so a re-pin of the shared value would leave every rectangle here
+    // sampling a light document while still finding rows.
+    let config = smoke_config_dir_at(&cwd, CODEHL_SUFFIX, SMOKE_FONT_PT, APPEARANCE_FORCED_DARK);
+
+    let out_png = runtime_dir.join(CODEHL_PNG_NAME);
+    let wins = runtime_dir.join(CODEHL_WINS_NAME);
+    let langtree = runtime_dir.join(CODEHL_LANGTREE_NAME);
+    for path in [&out_png, &wins, &langtree] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let mut cmd = cage_command(CODEHL_SCENARIO, &cwd);
+    cmd.env("WOLF_BIN", bin)
+        // Chained AFTER `cage_command`, deliberately winning over the shared config
+        // directory it set — the same override two smokes make for `HOME`.
+        .env("WOLF_CONFIG_DIR", &config)
+        .env("SRC_FILE", CODEHL_SOURCE_FILE)
+        .env("PREVIEW_QUERY", PREVIEW_QUERY)
+        .env("HL_LANG", CODEHL_HL_LANG)
+        .env("OUT_PNG", &out_png)
+        .env("WINS", &wins)
+        .env("LANGTREE", &langtree);
+
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless code-highlight scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage code-highlight scenario exited unsuccessfully ({status}). Exit 11: the \
+         app died before its window mapped. Exit 14: one of the two readbacks never appeared — \
+         {} (the window list) or {} (the injected langtree); the second is a long typed `:lua` \
+         line, so an empty file there means the command line did not execute as typed rather than \
+         that treesitter answered anything. Codes 12 and 13 do not exist here on purpose: nothing \
+         in this smoke depends on a clean exit, so the scenario ends with a best-effort kill. Any \
+         OTHER status is `grim` or `wtype` failing under `set -eu`. Note this assertion says \
+         nothing about whether a preview ever opened — the scenario exits 0 whatever the palette \
+         did.",
+        wins.display(),
+        langtree.display()
+    );
+
+    // --- Assertion 2 (precondition): the capture decodes at the pinned size ---
+    assert_png_present(SMOKE, &out_png);
+    let capture = decode_capture(&out_png, SMOKE, "the code-highlight capture");
+
+    // --- Assertion 3 (precondition): a preview pane exists --------------------
+    //
+    // Pixel-independent: the buffer NAMES the captive Neovim reports for its own
+    // windows. Read before any pixel, because a band sampled inside a pane that never
+    // became a preview would fail claim 6 while saying nothing about highlighting.
+    let want_windows = {
+        let mut want = vec![
+            format!("{PREVIEW_READBACK_PREFIX}{CODEHL_SOURCE_FILE}"),
+            CODEHL_SOURCE_FILE.to_string(),
+        ];
+        want.sort();
+        want
+    };
+    let got_windows = read_window_buffer_names(&wins, SMOKE);
+    assert_eq!(
+        got_windows, want_windows,
+        "{SMOKE}: after the Preview leg the captive Neovim's windows hold {got_windows:?}, not \
+         {want_windows:?} (both sorted, so window order is not the subject). A SINGLE entry naming \
+         {CODEHL_SOURCE_FILE:?} means no preview was bound at all — the palette dispatched \
+         nothing, or the {PREVIEW_QUERY:?} query matched no row. A SINGLE entry naming the preview \
+         scratch means the placement was `active` rather than `split_right`, so the preview \
+         replaced the window's only pane and there is no right half for the sampled columns. THREE \
+         entries mean it split twice. Every rectangle below assumes exactly two side-by-side \
+         panes, so none of them means anything until this holds."
+    );
+
+    let preview_columns = preview_theme_preview_columns();
+    let (preview_x0, preview_x1) = preview_columns;
+    let scan_rows = preview_theme_scan_rows();
+    let (_, band_y1) = preview_theme_band_rows();
+
+    // --- Assertion 4 (precondition): the web view's own top edge ---------------
+    //
+    // Self-located from the pixels, exactly as the preview-appearance smoke does it,
+    // so a change to where the pane puts its web view moves every rectangle below WITH
+    // the view rather than reddening anything.
+    let web_top = capture
+        .first_uniform_row(preview_columns, scan_rows, PREVIEW_DARK_BG)
+        .unwrap_or_else(|| {
+            panic!(
+                "{SMOKE}: no row between {} and {} is entirely PREVIEW_DARK_BG = {PREVIEW_DARK_BG:?} \
+                 across columns {preview_x0}..{preview_x1}, so the web view's top edge could not be \
+                 located and nothing below has an origin. Two causes: the document is not rendering \
+                 at all (an empty `render_preview`, or `about:blank`), or its FIRST block is not the \
+                 leading paragraph `CODEHL_PARAGRAPH` puts there — a document that starts with a \
+                 `pre` has no run of pure background above it, which is exactly why that paragraph \
+                 is mandatory. Capture kept at {}.",
+                scan_rows.0,
+                scan_rows.1,
+                out_png.display()
+            )
+        });
+
+    // --- Assertion 5 (precondition): BOTH fences rendered as `pre` blocks -----
+    let block_scan = SampleRect {
+        x0: preview_x0,
+        x1: preview_x1,
+        y0: web_top,
+        y1: band_y1,
+    };
+    assert!(
+        block_scan.y0 < block_scan.y1 && block_scan.y1 <= capture.height,
+        "{SMOKE}: the block-scan rectangle {block_scan:?} is degenerate or runs off the bottom of \
+         the {}x{} capture. It spans from the located web view top ({web_top}) to \
+         `preview_theme_band_rows`'s last row, so this means the located top edge is below that \
+         row — far lower than the pane chrome can account for.",
+        capture.width,
+        capture.height
+    );
+    let blocks = majority_colour_runs(&capture, block_scan, CODEHL_PRE_BG, CODEHL_MIN_BLOCK_ROWS);
+    assert_eq!(
+        blocks.len(),
+        2,
+        "{SMOKE}: found {} majority-CODEHL_PRE_BG run(s) of at least {CODEHL_MIN_BLOCK_ROWS} rows \
+         below the web view's top edge (row {web_top}), expected exactly 2: {blocks:?}. ZERO means \
+         no code block rendered as a `pre` at all — the document is not the fixture, or \
+         `CODEHL_PRE_BG` = {CODEHL_PRE_BG:?} is no longer the `pre` background in \
+         `wolf-core`'s `markdown/themes/default.css`, or the appearance is not dark. ONE means the \
+         two blocks merged, which needs the 24 px inter-block gap to have disappeared — or means \
+         one fence did not render as a block, which for the {CODEHL_PLAIN_LANG:?} one would say \
+         `render_source_html` stopped degrading an unknown language to the plain render. MORE than \
+         two means something else on the page paints that colour across the sampled width. Both \
+         blocks are located from the PIXELS, so this says nothing about where the renderer put \
+         them. Capture kept at {}.",
+        blocks.len(),
+        out_png.display()
+    );
+
+    // Same run count, and the same HEIGHT. A run truncated by the scan limit is still
+    // exactly one run, so `blocks.len()` cannot see it — MEASURED on a rejected six-line
+    // fixture, which produced two runs with the second clipped to 153 rows against the
+    // first's 192. That matters because the shorter rectangle is the CONTROL's: a
+    // control rect smaller than the block it controls samples fewer pixels, and fewer
+    // pixels can only LOWER its chroma count, so claim 7 would read stronger than it is
+    // while nothing went red. Equal height is the guard rather than
+    // `blocks[1].y1 < block_scan.y1`, because it also catches a FIRST block clipped by
+    // something other than the scan limit.
+    assert_eq!(
+        blocks[0].rows(),
+        blocks[1].rows(),
+        "{SMOKE}: the two code blocks are {} and {} rows tall ({blocks:?}), and byte-identical \
+         fence bodies must render at identical heights. Three readings, told apart by WHERE the \
+         short one ends. Run 2 ending at exactly {} — the block scan's own last row — means the \
+         document outgrew the scan: the control block is CLIPPED, so it samples fewer pixels than \
+         the block it controls, and since a smaller rectangle can only lower a chroma count the \
+         control below would read stronger than it is. The fix is to shorten the fixture — fewer \
+         fence lines, or a shorter `CODEHL_PARAGRAPH` — never to raise the scan limit or lower a \
+         threshold. Run 2 shorter but ending ABOVE that row means the two fences no longer carry \
+         the same text, so the in-capture control has stopped being a control. Run 1 shorter means \
+         the FIRST block is the clipped or altered one, which inverts the reading. Capture kept at \
+         {}.",
+        blocks[0].rows(),
+        blocks[1].rows(),
+        block_scan.y1,
+        out_png.display()
+    );
+
+    let hl_rect = blocks[0].rect(preview_columns);
+    let plain_rect = blocks[1].rect(preview_columns);
+    let hl = chroma_sample(&capture, hl_rect);
+    let plain = chroma_sample(&capture, plain_rect);
+
+    // The langtree readback is read HERE, before any claim is judged, so that claim 8 is
+    // evaluated from data already in hand rather than after two claims that could panic.
+    let raw = read_readback(&langtree, SMOKE);
+    let first = raw.split_whitespace().next().unwrap_or("");
+
+    // --- Claims 6, 7 and 8: accumulated, then reported in ONE failure ---------
+    //
+    // Not a chain of asserts, and the reason is in this smoke's doc comment: every edit
+    // that reddens claim 8 reddens claim 6 first (MEASURED — both named falsifiers read
+    // `NO src=2`), so a chain would leave claim 8 with no verbatim red of its own. Claims
+    // 6 and 8 are DIFFERENT feat-list rows, and a failure that named only the first would
+    // name the wrong one.
+    //
+    // Every claim below must push on the failing branch. A claim that is evaluated and
+    // not pushed is a claim that passes silently, which is the one way this shape can go
+    // wrong that a chain of asserts cannot.
+    let mut unmet: Vec<String> = Vec::new();
+
+    // Claim 6 (discriminator, Row A): the HIGHLIGHTED block carries chroma.
+    if hl.count < CODEHL_MIN_CHROMA_PX {
+        unmet.push(format!(
+            "CLAIM 6 — feat-list row \"Syntax-highlighted code blocks\". The FIRST code block, the \
+             {CODEHL_HL_LANG:?} fence at {hl_rect:?} ({} pixels), carries only {} pixels whose \
+             chroma reaches {CODEHL_CHROMA_MIN}, below the {CODEHL_MIN_CHROMA_PX} floor; its \
+             largest chroma anywhere was {}. The control block beside it read {} chromatic pixels \
+             with a maximum of {}, and the two blocks carry BYTE-IDENTICAL text, so a reading at \
+             the control's level means the block was not highlighted rather than that it rendered \
+             differently.\n\
+             The named cause is the vendored parsers not reaching the captive Neovim: \
+             `runtime/nvim/init.lua`'s gate resolves `parsers/` from a sibling directory first and \
+             `WOLF_PARSERS_DIR` second, and on Linux only the second exists. CLAIM 8 tells that \
+             cause apart from a downstream one, and it is judged in this same run: if CLAIM 8 is \
+             ALSO in this message, the gate did not deliver the trees at all and this is the \
+             vendoring. If it is NOT, the parser is working and the colour was lost downstream, in \
+             `wolf_core`'s `render_source_html` or in the inline `style=\"color:…\"` spans it \
+             emits.\n\
+             A max chroma near zero with plenty of ink means the block rendered NEUTRAL. A max \
+             chroma above {CODEHL_CHROMA_MIN} with a count below the floor means the palette \
+             moved rather than the highlighting stopped — a re-measurement, not a regression, and \
+             the MEASURED headroom is 4.0x, so one lost token cannot get you here. Do NOT lower \
+             this floor: `codehl_chroma_thresholds_are_separated` exists because a floor below \
+             the control's ceiling disarms the pair.",
+            hl_rect.pixels(),
+            hl.count,
+            hl.max,
+            plain.count,
+            plain.max
+        ));
+    }
+
+    // Claim 7 (in-capture control for claim 6): the PLAIN block carries none. What makes
+    // claim 6 evidence about the HIGHLIGHTER rather than about the renderer — the two
+    // blocks are the same text in the same document in the same run, so any chroma the
+    // engine produced on its own would appear in both.
+    if plain.count > CODEHL_MAX_CHROMA_PX {
+        unmet.push(format!(
+            "CLAIM 7 — the IN-CAPTURE CONTROL that makes claim 6 evidence about the highlighter. \
+             The SECOND code block, the {CODEHL_PLAIN_LANG:?} fence at {plain_rect:?}, carries {} \
+             pixels whose chroma reaches {CODEHL_CHROMA_MIN}, above the {CODEHL_MAX_CHROMA_PX} \
+             ceiling (largest chroma {}). The measured value is 0, at every threshold down to 1, \
+             so this is a real change and not drift. Two readings, told apart by the size of the \
+             number. A count near the highlighted block's {} means a grammar was found for \
+             {CODEHL_PLAIN_LANG:?} — which would make it a second measurement rather than a \
+             control, and the fix is to rename the fence, never to raise this ceiling. A small \
+             count means this host's antialiasing produces subpixel colour fringes where the \
+             measurement host's produced none, at which point `CODEHL_CHROMA_MIN` is the constant \
+             to re-derive: raise it until the control reads zero again and re-measure the \
+             highlighted block against the new threshold.",
+            plain.count, plain.max, hl.count
+        ));
+    }
+
+    // Claim 8 (discriminator, Row B): the injected langtree, from Neovim. The one claim
+    // here no pixel can satisfy, and the only evidence anywhere that the vendored trees
+    // reach the running application.
+    if first != CODEHL_LANGTREE_OK {
+        unmet.push(format!(
+            "CLAIM 8 — feat-list row \"Vendored treesitter plugins and parsers\", its EDITOR half. \
+             The captive Neovim's langtree readback begins {first:?}, not {CODEHL_LANGTREE_OK:?}. \
+             Raw contents were {raw:?} (the trailing `src=<n>` is the source buffer the preview \
+             scratch's `b:wolf_preview_source_bufnr` named; `src=-1` means NO preview scratch \
+             carried that variable, which is a different failure — the readback found no preview \
+             at all, and assertion 3 above should have caught it).\n\
+             What this asks: after a forced full parse, does the SOURCE buffer's markdown langtree \
+             have an injected child for {CODEHL_HL_LANG:?}? That needs BOTH vendored trees on the \
+             runtimepath — nvim-treesitter's `queries/markdown/injections.scm` to route the fenced \
+             region, and a compiled `parser/{CODEHL_HL_LANG}.so` to parse it — so a NO means \
+             `runtime/nvim/init.lua`'s gate did not deliver them. MEASURED: BOTH named falsifiers \
+             produce `NO src=2`, the queries one because the outer gate then does not fire at all \
+             and neither tree lands, the parsers one because an injected child needs the compiled \
+             parser too. Nothing here isolates which probe lost its environment fallback; read \
+             `init.lua`'s gate to find out.\n\
+             Do NOT replace this with `vim.treesitter.highlighter.active[buf] ~= nil`. MEASURED: \
+             that reads true with no wolf `init.lua` at all, because the pinned Neovim starts \
+             treesitter on markdown by itself — it is a tautology that would pass under this \
+             smoke's own falsifier."
+        ));
+    }
+
+    assert!(
+        unmet.is_empty(),
+        "{SMOKE}: {} of this smoke's three claims are unmet, and ALL of them are stated below. \
+         They are reported together rather than chained because they belong to different \
+         feat-list rows — claim 6 is Row A (the preview shows colour), claim 7 is claim 6's \
+         in-capture control, and claim 8 is Row B's editor half, which has no other evidence \
+         anywhere in this repository. A chain would panic on the first and name the wrong row. \
+         Capture kept at {}; the langtree readback is kept at {}.\n\n{}",
+        unmet.len(),
+        out_png.display(),
+        langtree.display(),
+        unmet.join("\n\n")
+    );
+}
+
+/// The chroma floor and the chroma ceiling are far enough apart that a de-highlighted
+/// block cannot clear the floor.
+///
+/// ## What it closes
+///
+/// [`CODEHL_MIN_CHROMA_PX`] and [`CODEHL_MAX_CHROMA_PX`] are two numbers a thousand
+/// lines from each other, and the pair of assertions they drive is only a
+/// discriminator while the floor sits well ABOVE the ceiling. Set the floor at or
+/// below what the CONTROL block itself reads, and a block that lost its highlighting
+/// entirely would still clear it: both assertions would pass, the smoke would be green,
+/// and nothing in it would name the constant that disarmed it.
+///
+/// Five times is an ACCEPTANCE CRITERION rather than a tuned number: it is the same
+/// separation the design required of the two blocks' own measured counts before the
+/// pixel assertion was allowed to ship. The measured values clear it with room —
+/// 300 >= 25 — and the measured control is 0, so the real separation is unbounded.
+///
+/// ## Why it asserts on a SHORTFALL rather than on the comparison
+///
+/// `assert!(CODEHL_MIN_CHROMA_PX >= CODEHL_MAX_CHROMA_PX * 5)` compares two constants,
+/// and `clippy::assertions_on_constants` rejects an `assert!` whose whole condition is
+/// constant — under `-D warnings` that is a build failure, and suppressing it with an
+/// `#[allow]` would suppress the same lint for anything added here later. `assert_eq!`
+/// is outside that lint entirely, which is why
+/// [`the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes`] can compare
+/// two constants directly. So the inequality is restated as an equality on the amount
+/// by which the floor falls SHORT of the required separation: zero exactly when the
+/// floor clears it, and the shortfall itself is a more useful number in the failure
+/// than either operand. A `const {}` block would also compile away the lint, but it
+/// would turn a named test failure into a compile error and lose the message below —
+/// which is the whole point of the guard.
+///
+/// ## It is a tripwire on a pin, with NO `src/` falsifier by construction
+///
+/// It guards two constants in this test file, so both of its red runs are edits to
+/// THIS file rather than to production code: lower [`CODEHL_MIN_CHROMA_PX`] below five
+/// times [`CODEHL_MAX_CHROMA_PX`], or raise the ceiling past a fifth of the floor.
+/// That is exactly the shape
+/// [`the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes`] has, and it
+/// is recorded as such rather than presented as coverage of anything the application
+/// does.
+///
+/// ## What it needs
+///
+/// NO environment: no compositor, no [`require_smoke_env`], no [`CAGE_LOCK`], no
+/// subprocess. It runs in microseconds and still guards on a machine where the smoke
+/// toolchain is unavailable.
+#[test]
+fn codehl_chroma_thresholds_are_separated() {
+    const GUARD: &str = "codehl_chroma_thresholds_are_separated";
+    // The multiple of the CONTROL block's ceiling that the HIGHLIGHTED block's floor
+    // must reach.
+    const SEPARATION: usize = 5;
+
+    let required_floor = CODEHL_MAX_CHROMA_PX * SEPARATION;
+    let shortfall = required_floor.saturating_sub(CODEHL_MIN_CHROMA_PX);
+    assert_eq!(
+        shortfall, 0,
+        "{GUARD}: CODEHL_MIN_CHROMA_PX is {CODEHL_MIN_CHROMA_PX} and CODEHL_MAX_CHROMA_PX is \
+         {CODEHL_MAX_CHROMA_PX}, so the floor the HIGHLIGHTED block must clear falls {shortfall} \
+         pixels short of {SEPARATION} times the ceiling the CONTROL block must stay under \
+         ({required_floor}). At that separation \
+         `preview_highlights_a_fenced_code_block_under_cage` stops discriminating: a block that \
+         lost its highlighting completely reads at the control's level, and if that level clears \
+         the floor then BOTH of its chroma claims pass on a document with no colour in it at all \
+         — green, with nothing naming the constant that disarmed it. The measured values are 1209 \
+         chromatic pixels in the highlighted block and 0 in the control, so restore the floor and \
+         the ceiling to values that keep this ratio rather than widening it to admit them."
+    );
+}
+
+// --- Row C: an inline code element must not grow its line box ----------------
+
+/// The markdown file the baseline-grid smoke opens and then previews.
+///
+/// Nothing here is OCR'd either, so this name contributes no row to
+/// [`RELAUNCH_FIXTURE_NAMES`] for the reason [`CODEHL_SOURCE_FILE`] does not.
+const CODEGRID_SOURCE_FILE: &str = "cgrid.md";
+
+/// The whole body of [`CODEGRID_SOURCE_FILE`]: three one-line paragraphs, each
+/// carrying exactly ONE inline code element, then a thematic break.
+///
+/// ## Every part of this shape is load-bearing
+///
+/// **Three paragraphs, not one.** The defect the fix removes is CUMULATIVE: each line
+/// carrying inline code was 26 px rather than 24, so the error grows by 2 px per
+/// preceding code-carrying block. One paragraph would separate the two states by 2 px;
+/// three separate them by 6, which is well outside any antialiasing question.
+///
+/// **One code element per paragraph, and each paragraph fits ONE line.** A paragraph
+/// that wrapped would add a line box that carries no code, and the arithmetic below
+/// counts code-carrying lines.
+///
+/// **The trailing thematic break is the RULER.** `base.css` gives `hr` a 24 px box
+/// whose 1 px hairline is its first pixel row, and the theme colours that hairline
+/// through `border-top-color` — so the rule's top edge is locatable to a single pixel
+/// row, across the full content width. Nothing else in this stylesheet is.
+///
+/// **A blank line before it.** Without one, CommonMark reads `---` as a setext
+/// underline for the paragraph above and there is no rule at all.
+///
+/// The words are NATO and the code spans are NATO, so no part of the document is an
+/// [`ASSERTED_OCR_TERMS`] entry — this smoke asserts none, but a rendered body is page
+/// text and the rule is the file's, not the smoke's.
+const CODEGRID_SOURCE_BODY: &str = "alfa `bravo` charlie.\n\n\
+                                    delta `echo` foxtrot.\n\n\
+                                    golf `hotel` india.\n\n\
+                                    ---";
+
+/// Name suffix of the baseline-grid smoke's config directory sibling.
+const CODEGRID_SUFFIX: &str = "-codegrid";
+
+/// The baseline-grid smoke's capture. Under `XDG_RUNTIME_DIR`, for the reason
+/// [`CODEHL_PNG_NAME`] gives.
+const CODEGRID_PNG_NAME: &str = "wolf_gnome_code_grid.png";
+
+/// File the captive Neovim writes its window/buffer list into.
+const CODEGRID_WINS_NAME: &str = "wolf_gnome_code_grid_wins.txt";
+
+/// The `border-top-color` `wolf_core`'s `markdown/themes/default.css` gives
+/// `body.wolf-markdown hr` in DARK, as `(r, g, b)`.
+///
+/// RE-TYPED here as a literal, never imported, for the reason [`PREVIEW_DARK_BG`]'s
+/// doc comment gives: reading the value out of the crate that produced the pixels
+/// would make the assertion a comparison with itself, and it would hold for whatever
+/// the stylesheet became.
+const CODEGRID_HR_COLOUR: Rgb8 = (0x3a, 0x3a, 0x3a);
+
+/// How far below the web view's own top edge the rule's hairline must sit.
+///
+/// SIX baseline units. The arithmetic, which is the whole subject of the smoke: with
+/// the inline code element declaring `line-height: 0`, each paragraph is one 24 px line
+/// box, so p1 occupies 0..24, its 24 px bottom margin puts p2 at 48, p3 at 96 ending at
+/// 120, and p3's bottom margin collapses with the rule's own 24 px top margin to put
+/// the rule's box — and therefore its hairline — at exactly 144.
+///
+/// Without that declaration each of the three lines is 26 px instead of 24, because the
+/// line box is the UNION of the body face's box and the monospace code box and the two
+/// disagree on (ascent - descent). The rule then lands at 150, which is not a multiple
+/// of 24.
+///
+/// MEASURED, three consecutive runs with the declaration and two with it reverted:
+/// 144 x3 against 150 x2, absolute rows 303 and 309 with `web_top` at 159. A fourth
+/// green run with a completely different glyph set also read 144. The feared "no row
+/// matches the rule's colour exactly" outcome — which a fractional device-pixel landing
+/// would produce — did not occur: the match is 354 of 354 sampled columns EXACT on a
+/// single row in every run.
+const CODEGRID_HR_OFFSET_PX: usize = 144;
+
+/// The `background-color` `wolf_core`'s `markdown/themes/default.css` gives
+/// `body.wolf-markdown code` in DARK — the inline code CHIP — as `(r, g, b)`.
+///
+/// RE-TYPED, for the reason [`CODEGRID_HR_COLOUR`] gives.
+const CODEGRID_CHIP_COLOUR: Rgb8 = (0x2b, 0x2b, 0x2b);
+
+/// How many rows below the web view's top edge the chip band covers: the FIRST
+/// paragraph's line box and nothing else.
+///
+/// One baseline unit, so the band ends before the second paragraph's line box begins
+/// at 48. Measuring one paragraph's chip rather than all three is deliberate: three
+/// bands summed would let two surviving chips cover for one that vanished.
+///
+/// MEASURED: exact-chip pixels occupy three 20-row bands at absolute rows 163..182,
+/// 211..230 and 259..278, each inside its own 24 px line box. With `web_top` at 159 the
+/// first of those is offsets 4..23, entirely inside this band, and the second starts at
+/// offset 52, entirely outside it.
+const CODEGRID_CHIP_BAND_PX: usize = 24;
+
+/// The fewest exactly-[`CODEGRID_CHIP_COLOUR`] pixels the first paragraph's band must
+/// carry.
+///
+/// MEASURED **748** in the sampled band, at 20–50 exact pixels per row across the 20
+/// rows the chip occupies. The per-row figure varies because GLYPH INK sits on top of
+/// the chip: the rows through the middle of the letterforms carry the FEWEST exact
+/// pixels (20–30) and the chip's first and last rows carry 40, which is the opposite of
+/// what a rounded-corner explanation would predict. For scale, the same capture reads
+/// 2115 across all three paragraphs' chips and 346 inside the narrow
+/// [`preview_theme_preview_columns`] band.
+///
+/// The floor is set well below 748 rather than at it, per this file's discipline of
+/// picking a floor with headroom rather than the measured value: 6.2x, which is what
+/// keeps the assertion from failing on a host whose glyph rasterization differs. The
+/// falsifier — removing `background-color` from the code rule in `wolf-core`'s
+/// `markdown/themes/default.css` — takes the count to **1**, so the discrimination is
+/// not marginal at any floor in this range.
+///
+/// That measured 1 also settles the question the WIDE band raised, and it settles it
+/// affirmatively: a band reaching further left than the rule's could in principle pick
+/// up `#2b2b2b` from the EDITOR half and mask a genuine collapse, which would make this
+/// assertion measure the wrong thing. With the chip's background removed the whole band
+/// reads a single pixel, so it carries no contamination worth a floor at all — the
+/// argument that a wider band can only add to a floor is MEASURED here rather than
+/// merely reasoned.
+const CODEGRID_MIN_CHIP_PX: usize = 120;
+
+/// How far inside the preview pane's LEFT and RIGHT edges the chip band starts.
+///
+/// [`BAND_X_INSET_PX`] cannot be reused, and the reason is the one
+/// [`LINK_SEARCH_INSET_X_PX`] records: it is 80 px, while the rendered document's first
+/// glyph sits 22 px right of the pane boundary, so an 80 px inset starts 58 px INSIDE
+/// the content. The first paragraph's code span begins only a few characters into that
+/// line, so an 80 px inset would cut the chip roughly in half and the counted floor
+/// would depend on exactly where a proportional face breaks.
+///
+/// Ten pixels is [`LINK_SEARCH_INSET_X_PX`]'s value and clears the same thing: the 2 px
+/// `#3584e4` focus ring `pane_view`'s `ACTIVE_PANE_CSS` draws inside the pane's own
+/// edge. That ring cannot satisfy an exact-[`CODEGRID_CHIP_COLOUR`] test in any case;
+/// what the inset really buys here is that the band cannot reach the OTHER pane, whose
+/// background is the editor's and is a colour this assertion takes no position on.
+///
+/// That the wide band adds only chip pixels, and not contamination that could mask a
+/// collapse, is MEASURED rather than argued — see [`CODEGRID_MIN_CHIP_PX`], which
+/// records what this band reads with the chip's background removed. The narrow
+/// [`preview_theme_preview_columns`] stays the right band for the rule below, where the
+/// measured 354-of-354 exact match was taken.
+const CODEGRID_CHIP_INSET_X_PX: f64 = 10.0;
+
+/// The columns the chip band samples: the whole PREVIEW half, inset by
+/// [`CODEGRID_CHIP_INSET_X_PX`] on both sides.
+///
+/// Derived at the pinned output size: columns 776..1270.
+fn codegrid_chip_columns() -> (usize, usize) {
+    let (area_x, _, area_w, _) = preview_theme_pane_area();
+    let output_w = exact_f64(CAGE_OUTPUT_W_EXPECTED, "CAGE_OUTPUT_W_EXPECTED");
+    let x0 = pixel_index(
+        area_x + area_w / 2.0 + CODEGRID_CHIP_INSET_X_PX,
+        "the chip band's first column",
+    );
+    let x1 = pixel_index(
+        output_w - CODEGRID_CHIP_INSET_X_PX,
+        "the chip band's last column",
+    );
+    (x0, x1)
+}
+
+/// The BASELINE-GRID scenario: [`CODEHL_SCENARIO`] without the langtree readback.
+///
+/// The two are separate strings rather than one with a conditional leg, for the reason
+/// this file gives about exit codes carrying meaning: a shared body would need a branch,
+/// and a branch that silently skipped its readback would leave a smoke green with one of
+/// its two subjects unobserved. What they share is their SHAPE, and the shared shape is
+/// documented on [`CODEHL_SCENARIO`] rather than restated here.
+///
+/// Exit codes, the same two and for the same reasons: `11` the app died before its
+/// window mapped, `14` the window-list readback never appeared. `12` and `13` are
+/// deliberately absent — nothing here depends on a clean exit.
+const CODEGRID_SCENARIO: &str = r#"
+set -eu
+
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+FILE_TRIES=100
+# See CODEHL_SCENARIO for the measurement behind PREVIEW_SETTLE; this spend is a
+# cold open too.
+PREVIEW_SETTLE=2.0
+
+"$WOLF_BIN" &
+app_pid=$!
+
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome baseline-grid smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+sleep "$SETTLE"
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome baseline-grid smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# --- Step 1: open the SOURCE in the window's ONE pane ------------------------
+wtype -- ":e $SRC_FILE"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- Step 2: drive PREVIEW through the command palette -----------------------
+wtype -M ctrl -M shift -k p -m shift -m ctrl
+sleep "$SETTLE"
+wtype -- "$PREVIEW_QUERY"
+sleep "$SETTLE"
+wtype -k Return
+sleep "$PREVIEW_SETTLE"
+
+# --- Step 3: the capture, with the preview pane live -------------------------
+grim "$OUT_PNG"
+
+# --- Step 4: NEOVIM's own answer about what its windows hold -----------------
+#
+# AFTER the capture: this typed command line is drawn by the cmdline strip, and the
+# capture must not carry it.
+wtype -- ":call writefile([join(map(tabpagebuflist(), {_, b -> fnamemodify(bufname(b), ':t')}), ',')], '$WINS')"
+wtype -k Return
+wait_file "$WINS" || exit 14
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+/// Three rendered lines carrying inline code sit on the 24 px baseline grid, and the
+/// code chip is still painted.
+///
+/// ## What it proves that nothing else can
+///
+/// `markdown_render.rs` pins the DECLARED value — that `body.wolf-markdown code`
+/// declares `line-height: 0` — and that is the floor. It cannot say what the engine
+/// did with it. This smoke measures a LAID-OUT box: the distance from the document's
+/// own top edge to a rule three code-carrying paragraphs below it, in pixels, out of a
+/// real WebKitGTK render. Nothing else in either suite measures a laid-out box at all.
+///
+/// ## Why the rule is the ruler
+///
+/// A locator has to be findable to one pixel row and has to span the content width, or
+/// "the first row that matches" is a statement about where a glyph happened to fall.
+/// `base.css` gives `hr` a 24 px box with `border: 0` and a 1 px `border-top`, and
+/// `box-sizing: border-box` is inherited, so the hairline IS the box's first pixel row;
+/// the theme colours it through `border-top-color`, which is a colour nothing else in
+/// this document paints. MEASURED: 354 of 354 sampled columns match it EXACTLY, on a
+/// single row, in every run.
+///
+/// ## The two assertions have DIFFERENT falsifiers, and that is the point
+///
+/// Assertion 5 is geometry and assertion 6 is paint. Removing the declaration moves the
+/// rule from 144 to 150 and leaves the chip untouched; removing the chip's
+/// `background-color` empties the chip band and leaves the rule at 144. Neither
+/// falsifier can produce the other's red, so a run that reddens both is saying
+/// something a single assertion could not.
+///
+/// ## Assertion 6 is what stops a documented claim from rotting silently
+///
+/// "The zero does not collapse the chip" is the fact the whole one-line CSS change
+/// rests on — an inline box's CONTENT area, which is what its background paints over,
+/// comes from its font's metrics rather than from `line-height`, which governs only the
+/// line box. That is engine behaviour, so it was eyeballed on one capture at one
+/// WebKitGTK version, and `base.css`'s header asserts it as measured fact. An
+/// observation asserted in a document and pinned by nothing is an observation that
+/// stops being true without anybody noticing.
+///
+/// ## Assertions, classified
+///
+/// A precondition gets NO revert. Readings are from actual runs at GTK 4.22.4,
+/// libadwaita 1.9.0, WebKitGTK 2.52.4 and `cage` 0.3.0 on a 1280x720 output.
+///
+/// | # | assertion | kind | falsifying edit | measured |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | n/a |
+/// | 2 | the PNG is present and decodes at the pinned output size | precondition | none; do not invent one | n/a |
+/// | 3 | `tabpagebuflist()`, sorted, is the preview scratch plus the source | precondition — a preview pane exists, and exactly two panes do | none; do not invent one | n/a |
+/// | 4 | `web_top` is locatable, and a row matching [`CODEGRID_HR_COLOUR`] exists below it | precondition — both ends of the measured distance were found | none; do not invent one | green: `web_top` 159, rule at absolute 303 |
+/// | 5 | `hr_row - web_top` is exactly [`CODEGRID_HR_OFFSET_PX`] | **discriminator** — three lines carrying inline code each occupy exactly one baseline unit | delete `line-height: 0;` from `body.wolf-markdown code` in `wolf-core`'s `markdown/base.css`. NOT isolated: `markdown_render.rs`'s declared-value test reddens too, and the PAIRING is the diagnosis — a red smoke over a RED declared-value test says the declaration went missing, while a red smoke over a GREEN one says the engine stopped honouring it, which is a very different investigation. | green: 144, three consecutive runs. Red: 150, two consecutive runs. 150 / 24 = 6.25. |
+/// | 6 | the first paragraph's band carries at least [`CODEGRID_MIN_CHIP_PX`] exactly-[`CODEGRID_CHIP_COLOUR`] pixels | **discriminator** — `line-height: 0` removed the line box's union term and NOT the chip's background | remove `background-color` from `body.wolf-markdown code` in `wolf-core`'s `markdown/themes/default.css`. ISOLATED, and that is the reason it was added: removing a background changes no geometry, so assertion 5's 144 and the declared-value test both stay green and this assertion alone reddens. | green: 748 in the band, at 20–50 exact pixels per row over the chip's 20 rows. Red: **1**, which is also what proves the wide band carries no contamination from the editor half. |
+#[test]
+fn preview_inline_code_keeps_the_baseline_grid_under_cage() {
+    const SMOKE: &str = "preview_inline_code_keeps_the_baseline_grid_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(SMOKE, &cwd, &[(CODEGRID_SOURCE_FILE, CODEGRID_SOURCE_BODY)]);
+
+    // Its own config directory, at a FORCED dark appearance: both asserted colours are
+    // the DARK palette's, so a re-pin of the shared seeded value would leave this smoke
+    // sampling a light document and finding neither.
+    let config = smoke_config_dir_at(&cwd, CODEGRID_SUFFIX, SMOKE_FONT_PT, APPEARANCE_FORCED_DARK);
+
+    let out_png = runtime_dir.join(CODEGRID_PNG_NAME);
+    let wins = runtime_dir.join(CODEGRID_WINS_NAME);
+    for path in [&out_png, &wins] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let mut cmd = cage_command(CODEGRID_SCENARIO, &cwd);
+    cmd.env("WOLF_BIN", bin)
+        .env("WOLF_CONFIG_DIR", &config)
+        .env("SRC_FILE", CODEGRID_SOURCE_FILE)
+        .env("PREVIEW_QUERY", PREVIEW_QUERY)
+        .env("OUT_PNG", &out_png)
+        .env("WINS", &wins);
+
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless baseline-grid scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage baseline-grid scenario exited unsuccessfully ({status}). Exit 11: the \
+         app died before its window mapped. Exit 14: the window-list readback at {} never \
+         appeared. Codes 12 and 13 do not exist here on purpose: nothing in this smoke depends on \
+         a clean exit, so the scenario ends with a best-effort kill. Any OTHER status is `grim` or \
+         `wtype` failing under `set -eu`.",
+        wins.display()
+    );
+
+    // --- Assertion 2 (precondition): the capture decodes at the pinned size ---
+    assert_png_present(SMOKE, &out_png);
+    let capture = decode_capture(&out_png, SMOKE, "the baseline-grid capture");
+
+    // --- Assertion 3 (precondition): a preview pane exists --------------------
+    let want_windows = {
+        let mut want = vec![
+            format!("{PREVIEW_READBACK_PREFIX}{CODEGRID_SOURCE_FILE}"),
+            CODEGRID_SOURCE_FILE.to_string(),
+        ];
+        want.sort();
+        want
+    };
+    let got_windows = read_window_buffer_names(&wins, SMOKE);
+    assert_eq!(
+        got_windows, want_windows,
+        "{SMOKE}: after the Preview leg the captive Neovim's windows hold {got_windows:?}, not \
+         {want_windows:?} (both sorted). A SINGLE entry naming {CODEGRID_SOURCE_FILE:?} means no \
+         preview was bound at all; a SINGLE entry naming the preview scratch means the placement \
+         was `active` rather than `split_right`, so there is no right half for the sampled columns \
+         to be inside. Every rectangle below assumes exactly two side-by-side panes."
+    );
+
+    let preview_columns = preview_theme_preview_columns();
+    let (preview_x0, preview_x1) = preview_columns;
+    let scan_rows = preview_theme_scan_rows();
+    let (_, band_y1) = preview_theme_band_rows();
+
+    // --- Assertion 4a (precondition): the web view's own top edge -------------
+    let web_top = capture
+        .first_uniform_row(preview_columns, scan_rows, PREVIEW_DARK_BG)
+        .unwrap_or_else(|| {
+            panic!(
+                "{SMOKE}: no row between {} and {} is entirely PREVIEW_DARK_BG = {PREVIEW_DARK_BG:?} \
+                 across columns {preview_x0}..{preview_x1}, so the web view's top edge could not be \
+                 located and the measured distance has no origin. Either the document is not \
+                 rendering, or its first block is not a paragraph — this fixture's is, and the rule \
+                 it ends with is the only full-width block in it. Capture kept at {}.",
+                scan_rows.0,
+                scan_rows.1,
+                out_png.display()
+            )
+        });
+
+    // --- Assertion 4b (precondition): the rule's hairline ---------------------
+    //
+    // Searched from the row BELOW `web_top`, so the located top edge itself can never
+    // be reported as the rule.
+    let rule_scan = SampleRect {
+        x0: preview_x0,
+        x1: preview_x1,
+        y0: web_top + 1,
+        y1: band_y1,
+    };
+    assert!(
+        rule_scan.y0 < rule_scan.y1 && rule_scan.y1 <= capture.height,
+        "{SMOKE}: the rule-scan rectangle {rule_scan:?} is degenerate or runs off the bottom of \
+         the {}x{} capture, so the located web view top ({web_top}) is below \
+         `preview_theme_band_rows`'s last row.",
+        capture.width,
+        capture.height
+    );
+    let hr_row = first_majority_row(&capture, rule_scan, CODEGRID_HR_COLOUR).unwrap_or_else(|| {
+        panic!(
+            "{SMOKE}: no row between {} and {} has CODEGRID_HR_COLOUR = {CODEGRID_HR_COLOUR:?} as a \
+             strict majority of columns {preview_x0}..{preview_x1}, so the rule's hairline could \
+             not be located and assertion 5 has nothing to measure to. The measured match is 354 of \
+             354 columns EXACT, so a near miss is not the expected failure here. Causes, in order: \
+             the fixture's trailing `---` did not render as a thematic break (a missing blank line \
+             above it makes CommonMark read it as a setext underline instead); the theme stopped \
+             colouring `hr` through `border-top-color` — a `background-color` there would fill the \
+             whole 24 px box rather than draw a hairline, which would still be found but would put \
+             the located row at the box's own top edge anyway; or the rule was pushed below row {} \
+             by a document taller than this fixture. Capture kept at {}.",
+            rule_scan.y0,
+            rule_scan.y1,
+            rule_scan.y1,
+            out_png.display()
+        )
+    });
+
+    // --- Assertion 5 (discriminator): three code lines, three baseline units --
+    let offset = hr_row - web_top;
+    assert_eq!(
+        offset,
+        CODEGRID_HR_OFFSET_PX,
+        "{SMOKE}: the rule's hairline sits {offset} px below the web view's own top edge (absolute \
+         row {hr_row}, web view top {web_top}), not {CODEGRID_HR_OFFSET_PX}. The fixture is three \
+         one-line paragraphs each carrying one inline code element, then the rule: with each line \
+         box at one 24 px unit the rule's box lands at 6 x 24 = {CODEGRID_HR_OFFSET_PX}.\n\
+         A reading of 150 is the NAMED failure and has one cause: `body.wolf-markdown code` in \
+         `wolf-core`'s `markdown/base.css` lost its `line-height: 0`. The body declares its \
+         line-height as a LENGTH, so it inherits onto the inline code box and is distributed as \
+         half-leading around the MONOSPACE face's own metrics; the line box is the union over the \
+         faces present, and the two faces disagree on (ascent - descent), so each of the three \
+         lines becomes 26 px and the error ACCUMULATES — 6 px over three paragraphs, which is why \
+         the fixture has three and not one.\n\
+         Read this beside `markdown_render.rs`'s \
+         `inline_code_declares_zero_leading_so_it_cannot_grow_a_line_box`. RED there too means the \
+         declaration went missing, which is the ordinary case. GREEN there with this red means the \
+         declaration is present and the ENGINE stopped honouring it — a WebKitGTK change — and \
+         that is a completely different investigation. Any other offset that is not a multiple of \
+         24 is a third state: re-derive the arithmetic before touching this constant, and do not \
+         adjust it to make a run pass. Capture kept at {}.",
+        out_png.display()
+    );
+
+    // --- Assertion 6 (discriminator): the chip is still painted ---------------
+    //
+    // Its falsifier is deliberately NOT assertion 5's: removing the chip's background
+    // changes no geometry, so this is the only assertion in either suite that would
+    // notice.
+    let chip_columns = codegrid_chip_columns();
+    let chip = SampleRect {
+        x0: chip_columns.0,
+        x1: chip_columns.1,
+        y0: web_top,
+        y1: web_top + CODEGRID_CHIP_BAND_PX,
+    };
+    assert!(
+        chip.x0 < chip.x1
+            && chip.y0 < chip.y1
+            && chip.x1 <= capture.width
+            && chip.y1 <= capture.height,
+        "{SMOKE}: the chip band {chip:?} is degenerate or falls outside the {}x{} capture. It is \
+         derived from CAGE_OUTPUT_*_EXPECTED, OVERLAY_ORIGIN_*_EXPECTED and \
+         CODEGRID_CHIP_INSET_X_PX, so this means two of those have crossed.",
+        capture.width,
+        capture.height
+    );
+    let chip_hits = capture.count_exactly(chip, CODEGRID_CHIP_COLOUR);
+    assert!(
+        chip_hits >= CODEGRID_MIN_CHIP_PX,
+        "{SMOKE}: the FIRST paragraph's line box (band {chip:?}, {} pixels) carries {chip_hits} \
+         pixels that are exactly CODEGRID_CHIP_COLOUR = {CODEGRID_CHIP_COLOUR:?}, below the \
+         {CODEGRID_MIN_CHIP_PX} floor. The measured value is 748, at 20–50 per row across the 20 \
+         rows the chip occupies.\n\
+         A count of ONE — measured, not rounded — is the NAMED failure: `body.wolf-markdown code` \
+         in `wolf-core`'s `markdown/themes/default.css` lost its `background-color`, so the inline \
+         code chip is no longer painted and the whole band reads a single stray pixel. Assertion 5 \
+         above is green in that case — removing a background changes no geometry — and this \
+         assertion is the only one in either suite that can see it.\n\
+         A SMALL non-zero count is a different reading and means the chip is painted but smaller \
+         than it was: the code element's `padding` or its `font-size` shrank, or `line-height: 0` \
+         is being applied to the CONTENT area rather than to the line box, which is the engine \
+         behaviour this assertion exists to pin. An inline box's content area — what its \
+         background paints over — comes from the font's metrics, not from `line-height`; if that \
+         ever stops holding, the fix is a stylesheet change and NOT a lower floor. Capture kept at \
+         {}.",
+        chip.pixels(),
+        out_png.display()
+    );
+}
+
 // --- The column cap, and the per-buffer override that lifts it ---------------
 
 /// The font size THIS smoke launches at, in points, overriding [`SMOKE_FONT_PT`].
@@ -22509,7 +24094,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// | the active-pane FOCUS RING's top edge — a long thin high-contrast line immediately above the heading | six ablations on one PNG; the top edge alone accounted for it | [`DIVIDER_RELAUNCH_SCENARIO`]'s closing `<C-w>h`, which moves the ring to the WIDE pane |
 /// | a single misclassified GLYPH at 15 columns | the same pixels read through both segmentation modes, twice over | the second reader, [`ocr_uniform_block_to_lowercase`] |
 ///
-/// The third is why this smoke, alone of the forty-six, reads its capture twice.
+/// The third is why this smoke, alone of the forty-eight, reads its capture twice.
 /// With the first two answered, on one retained PNG:
 ///
 /// | command | verbatim output |

@@ -45,18 +45,21 @@
 
         isDarwin = pkgs.stdenv.isDarwin;
 
-        # NOTE: `rustToolchain`, `wolfPointerInject`, `iaWriterMono` and the
-        # GTK/Neovim packages below are only ever forced when `linuxShell` is
-        # evaluated. On Darwin `devShells.default` resolves to `darwinShell`,
-        # which references none of them, so Nix's laziness keeps these
-        # Linux-only derivations off the Darwin eval path. `wolfPointerInject`
-        # in particular is a Wayland program that could not build on Darwin at
-        # all; it is safe only because nothing outside `linuxShell.packages`
-        # forces the thunk. `iaWriterMono` is arch-independent data and COULD
-        # build on Darwin, so the laziness argument is safer there than here —
-        # but the rule is the same for both. Do not add a top-level reference to
-        # either, and do not wrap either in a `lib.optional` guard: a guard would
-        # imply this laziness argument is unsound.
+        # NOTE: `rustToolchain`, `wolfPointerInject`, `iaWriterMono`,
+        # `wolfTreesitterLanguages` / `wolfTreesitterParsers` /
+        # `wolfTreesitterQueries`, and the GTK/Neovim packages below are only
+        # ever forced when `linuxShell` is evaluated. On Darwin
+        # `devShells.default` resolves to `darwinShell`, which references none of
+        # them, so Nix's laziness keeps these Linux-only derivations off the
+        # Darwin eval path. `wolfPointerInject` in particular is a Wayland
+        # program that could not build on Darwin at all; it is safe only because
+        # nothing outside `linuxShell` forces the thunk. `iaWriterMono` is
+        # arch-independent data, and the treesitter grammars are ordinary C that
+        # COULD compile on Darwin, so for those the argument is the weaker
+        # "safer there than here" one rather than "could not build" — but the
+        # rule is the same for all of them. Do not add a top-level reference to
+        # any of them, and do not wrap any of them in a `lib.optional` guard: a
+        # guard would imply this laziness argument is unsound.
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [
             "rust-src"
@@ -182,6 +185,83 @@
             '';
           };
 
+        # The curated treesitter grammar set, and the ONE place it is written
+        # down on the Nix side.
+        #
+        # 1. This list is DEFINED BY `bazel/treesitter-parsers/BUILD.bazel`'s
+        #    `srcs`, and the two must not diverge: the point of vendoring these
+        #    on Linux at all is cross-platform parity, so a divergence is the
+        #    bug, not a preference. It is kept in that file's alphabetical order
+        #    so a side-by-side diff makes a drift eyeball-visible.
+        # 2. `c` is kept even though the pinned Neovim ships a `c` parser of its
+        #    own. Taking the parser and the highlights query from the SAME
+        #    nvim-treesitter revision is more consistent than mixing sources, and
+        #    macOS does exactly that.
+        # 3. `markdown` and `markdown_inline` are deliberately ABSENT. Neovim
+        #    ships both, macOS excludes both, and re-vendoring them here would
+        #    shadow Neovim's own parsers with a second copy.
+        # 4. `python` is deliberately ABSENT. Adding it here alone would make
+        #    macOS the laggard on a feature macOS already owns; the honest route
+        #    is to add it to both sides in one change.
+        # 5. ADDING A LANGUAGE MEANS EDITING BOTH SIDES: this list, and
+        #    `bazel/treesitter-parsers/BUILD.bazel`'s `srcs` together with the
+        #    grammar's pin in that package's `extensions.bzl` and `MODULE.bazel`.
+        #    A one-sided edit is a silent platform divergence.
+        # 6. Do NOT reach for `pkgs.tree-sitter-grammars.tree-sitter-<lang>`.
+        #    Its shared object is named `parser`, not `<lang>.so`, so Neovim
+        #    never resolves it; its queries are flat and written in the upstream
+        #    tree-sitter dialect rather than nvim-treesitter's; and its grammar
+        #    revisions do not match the queries we ship.
+        wolfTreesitterLanguages = [
+          "bash"
+          "c"
+          "cpp"
+          "css"
+          "go"
+          "html"
+          "java"
+          "javascript"
+          "json"
+          "kotlin"
+          "rust"
+          "swift"
+          "toml"
+          "tsx"
+          "typescript"
+          "yaml"
+        ];
+
+        # The parser half. Each `nvim-treesitter.parsers.<lang>` derivation
+        # contains exactly `parser/<lang>.so`, so the join is
+        # `$out/parser/<lang>.so` — precisely the runtimepath layout Neovim
+        # resolves a parser from. No two inputs can collide, because each one
+        # contributes a single, distinct filename.
+        #
+        # Do NOT reach for `nvim-treesitter.withPlugins` / `.withAllGrammars`.
+        # Both build to the SAME store path as the bare plugin and only set
+        # `passthru.dependencies`, which nothing here materializes — so they
+        # would deliver no parsers at all. `withAllGrammars` additionally costs
+        # 249.9 MiB and 313 local builds for a set far wider than point 1's.
+        #
+        # Linux-only in practice — see the NOTE above about the Darwin eval path.
+        wolfTreesitterParsers = pkgs.symlinkJoin {
+          name = "wolf-treesitter-parsers";
+          paths = map (lang: pkgs.vimPlugins.nvim-treesitter.parsers.${lang}) wolfTreesitterLanguages;
+        };
+
+        # The query half: the nvim-treesitter plugin's `runtime` directory,
+        # WHOLE and UNFILTERED. It already contains `queries/<lang>/`, so it is
+        # itself a runtimepath entry and needs no assembly.
+        #
+        # Unfiltered is deliberate, and asymmetric with the curated parser list
+        # above on purpose. This is the same upstream revision
+        # `bazel/nvim-treesitter/extensions.bzl` pins for macOS
+        # (4916d6592ede8c07973490d9322f187e07dfefac), so the two platforms get
+        # byte-identical queries; and the macOS package already globs queries
+        # with no per-language filter. Parsers stay curated because each one is a
+        # compile; queries are data and cost nothing to carry.
+        wolfTreesitterQueries = "${pkgs.vimPlugins.nvim-treesitter}/runtime";
+
         darwinShell = pkgs.mkShell {
           packages = [
             pkgs.bazelisk
@@ -262,14 +342,15 @@
             pkgs.jetbrains-mono
             iaWriterMono
 
-            # GATE-REQUIRED: the forty-six headless end-to-end smoke tests in
-            # crates/wolf-gnome/tests/smoke_headless.rs run as part of a plain
-            # `cargo test` (no `--ignored`). They launch the real window under a
-            # headless Wayland compositor and OCR a screenshot, so these five
-            # must be present or the suite fails loud. cage = headless wlroots
-            # compositor, wtype = synthetic keystrokes, grim = screenshot,
-            # tesseract = OCR, wolf-pointer-inject = synthetic pointer (motion /
-            # button / axis). Not needed to *build*.
+            # GATE-REQUIRED: the forty-eight headless end-to-end smoke tests in
+            # crates/wolf-gnome/tests/smoke_headless.rs (of that file's
+            # fifty-five tests; the other seven need no compositor) run as part
+            # of a plain `cargo test` (no `--ignored`). They launch the real
+            # window under a headless Wayland compositor and OCR a screenshot,
+            # so these five must be present or the suite fails loud. cage =
+            # headless wlroots compositor, wtype = synthetic keystrokes,
+            # grim = screenshot, tesseract = OCR, wolf-pointer-inject =
+            # synthetic pointer (motion / button / axis). Not needed to *build*.
             #
             # wolf-pointer-inject is the repo's OWN tool, built from
             # tools/wolf-pointer-inject by the derivation above, not an upstream
@@ -296,6 +377,33 @@
             # WOLF_RG_BIN is how wolf-core's content search + its tests locate the
             # ripgrep binary on the Linux/cargo path. Do not rely on PATH.
             export WOLF_RG_BIN="${pkgs.lib.getExe pkgs.ripgrep}"
+            # The two directories `runtime/nvim/init.lua`'s treesitter gate falls
+            # back to when the macOS .app's sibling `nvim-treesitter/` and
+            # `parsers/` trees are absent, which on Linux they always are.
+            # WITHOUT THESE THE GATE IS A STRICT NO-OP, and what that costs was
+            # MEASURED rather than assumed: the two runtimepath entries never
+            # land — the vendored grammars, and nvim-treesitter's
+            # `queries/markdown/injections.scm` — so the editor loses INJECTED
+            # fenced-language highlighting, and the Markdown preview loses every
+            # fence the pinned Neovim does not itself ship a parser for. BASE
+            # markdown highlighting is unaffected either way: nvim starts
+            # treesitter on a markdown buffer by itself, gate or no gate, so
+            # `vim.treesitter.highlighter.active[buf]` cannot witness this and
+            # must not be cited as evidence for it (runtime/nvim/init.lua).
+            # The names deliberately carry no TEST —
+            # `WOLF_TEST_NVIM_TREESITTER_DIR` / `WOLF_TEST_PARSERS_DIR` keep
+            # their own meaning as the Bazel test staging variables.
+            #
+            # Neither tree goes into `packages`, and that is deliberate: neither
+            # carries a `bin/`, a `lib/` or a `.pc` file, so membership would
+            # only add them to PATH and PKG_CONFIG_PATH for nothing. A store path
+            # interpolated into `shellHook` acquires a Nix string context, which
+            # makes it an input of the shell derivation and therefore built or
+            # substituted before the shell is entered — exactly how the
+            # `${pkgs.gnused}/bin/sed` call below works, and `gnused` is in no
+            # `packages` list either.
+            export WOLF_NVIM_TREESITTER_DIR="${wolfTreesitterQueries}"
+            export WOLF_PARSERS_DIR="${wolfTreesitterParsers}"
             export RUST_SRC_PATH="${rustToolchain}/lib/rustlib/src/rust/library"
 
             # Pin the font stack for deterministic golden renders. We generate a

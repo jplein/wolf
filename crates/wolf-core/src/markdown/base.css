@@ -128,29 +128,53 @@
  * baseline-aligned 24px boxes in different faces therefore do not coincide:
  * the line box is their union, L + (max(A - D) - min(A - D)) / 2 over the faces
  * present on the line, which exceeds L whenever two faces disagree on A - D.
- * The body face and the monospace code face do disagree, so any line carrying
- * a code element is taller than its 24px unit. How much taller is set by the
- * pair of faces on that line and is NOT a constant: 2px over for a paragraph
- * and for a list, 3px over for pre, which pairs a different two faces because
- * the UA stylesheet gives pre its own monospace family rather than the body's.
- * And because every later block's top offset shifts with it, the error
- * ACCUMULATES rather than being constant like the table residual above.
+ * The body face and the monospace code face do disagree, so an unmanaged line
+ * carrying a code element is taller than its 24px unit. How much taller is set
+ * by the pair of faces on that line and is NOT a constant: 2px for a paragraph
+ * and for a list, 3px for pre, which pairs a different two faces because the UA
+ * stylesheet gives pre its own monospace family rather than the body's. And
+ * because every later block's top offset shifts with it, that error would
+ * ACCUMULATE rather than stay constant like the table residual above.
  *
- * MEASURED against the real rendered document in WebKitGTK 2.52.4: border-box
- * heights of 26 for a paragraph carrying inline code (unit 24), 74 for a list
- * (72) and 123 for pre (120). Attributed by A/B rather than by reasoning:
- * overriding the code element's font-family to inherit gives 25 / 73 / 120,
- * and overriding its line-height to 0 gives 24 / 72 / 120. Neither override
- * ships -- they are measurements, not a fix, and the fix is an open question
- * because this document renders on two platforms.
+ * THE FIX IS line-height: 0 ON THE CODE ELEMENT, and it ships. The rule itself
+ * carries why zero rather than 24. MEASURED against the real rendered document
+ * in WebKitGTK 2.52.4: border-box heights of 26 for a paragraph carrying inline
+ * code (unit 24), 74 for a list (72) and 123 for pre (120) become 24 / 72 / 120
+ * -- fully on grid. Attributed by A/B rather than by reasoning, which is also
+ * how the alternative was rejected: overriding the code element's font-family
+ * to inherit gives 25 / 73 / 120 and destroys the monospace face, so it is not
+ * the fix and does not ship.
+ *
+ * TWO CONSEQUENCES OF THE ZERO WERE EYEBALLED rather than reasoned, on one
+ * capture at WebKitGTK 2.52.4, because engine behaviour settles them and
+ * arithmetic cannot. The chip's background SURVIVES: exact chip pixels occupy a
+ * 20-row band inside each 24px line box. Glyphs do NOT overflow their line --
+ * against a fixture of deliberate descenders and tall ascenders, every line's
+ * ink stays strictly inside its own 24px unit. Both are pinned out of a real
+ * render by preview_inline_code_keeps_the_baseline_grid_under_cage, so neither
+ * observation can rot silently.
+ *
+ * MACOS IS UNVERIFIED. The rule changes the document macOS renders too, and no
+ * macOS host was available to measure it on. Every number above is a Linux
+ * WebKitGTK reading; the macOS ones are inferred from the shared engine.
+ *
+ * DO NOT UNDO IT IN EITHER OF THE TWO AVAILABLE WAYS.
+ *   1. Do not give pre code, or the highlight spans inside it, a line-height.
+ *      That reintroduces the union term this zero removes, and only on lines
+ *      carrying a highlighted token -- a PER-TOKEN grid error, worse than the
+ *      constant one the zero removes. Pinned by
+ *      pre_code_declares_no_leading_of_its_own.
+ *   2. Do not delete the zero on the grounds that pre declares its own 24px.
+ *      The zero is not for pre. It is for INLINE code in a paragraph or list
+ *      item, where the block strut is the body face's and its union with the
+ *      monospace box is what overflows. pre is the one place the zero is
+ *      redundant, so deleting it there deletes it everywhere.
  *
  * THE DECLARED-VALUE SWEEP STRUCTURALLY CANNOT SEE THIS. markdown_render.rs
- * checks the values this file DECLARES, and every one of them is legal here:
- * the body's 24px length, the code element's 0.875em font-size, its zero
- * vertical padding. The excess exists only in the LAID-OUT box, which no
- * text-level assertion produces. A green sweep is therefore not evidence that
- * the grid holds line by line -- exactly as with the edge-rule bug below,
- * which is invisible to it for a different reason.
+ * checks the values this file DECLARES; the excess it cannot see exists only in
+ * the LAID-OUT box, which no text-level assertion produces. A green sweep is
+ * therefore not evidence that the grid holds line by line -- exactly as with
+ * the edge-rule bug below, which is invisible to it for a different reason.
  *
  * EDGE RULES (and why their selectors are not just :first-child/:last-child)
  *
@@ -394,6 +418,17 @@ body.wolf-markdown code {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
   font-size: 0.875em;
+  /* Zero, not 24px and not absent. The body declares its line-height as a
+   * LENGTH, so it inherits onto this inline box and is then distributed as
+   * half-leading around the MONOSPACE face's own metrics rather than the
+   * containing block's; the line box is the union over the faces present, so any
+   * non-zero leading here makes every line carrying inline code taller than its
+   * 24px unit and shifts each block below it. Zero removes that union term and
+   * nothing else: the chip still paints, because an inline box's content area
+   * comes from the font metrics rather than from line-height, and a code block
+   * is still governed by the 24px strut pre declares for itself. See the header
+   * comment for the measured A/B. */
+  line-height: 0;
   padding: 2px 4px;
   border-radius: 6px;
 }

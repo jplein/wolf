@@ -233,13 +233,15 @@ Headless: no Neovim, no filesystem, no staged runfiles.
 
 **Covers**
 
-- The four bundled fonts' licence notices reaching every rendered document, each located by a locally re-typed phrase from its own copyright line, and every one of them landing before `<body>` — the head placement `base.css`'s first-block and last-block margin resets depend on.
-- The public preview render surface (`render_html`, `render_html_with_highlights`, `code_blocks`, `theme_css`, `PreviewTheme`, `WidthMode`): `wl-{L}-{C}` anchor placement in both tiers — column-zero markers collapsing to a block's opening tag, and column markers landing inside a paragraph and inside a list item — the code-block, table and image-alt exclusions including the nested-in-a-container cases, MathML with inlined fonts, the paired dark/light palettes, and a sweep asserting every vertical dimension in the shipped `base.css` lands on the baseline grid.
+- The four bundled fonts' licence notices reaching every rendered document, each located by a locally re-typed phrase from its copyright line, and all landing before `<body>` — the head placement `base.css`'s margin resets depend on.
+- The public preview render surface (`render_html`, `render_html_with_highlights`, `code_blocks`, `theme_css`, `PreviewTheme`, `WidthMode`): `wl-{L}-{C}` anchor placement in both tiers — column-zero markers collapsing onto a block's opening tag, column markers inside a paragraph and a list item — the code-block, table and image-alt exclusions and their nested cases, MathML with inlined fonts, the paired dark/light palettes, and a sweep asserting every vertical dimension in the shipped `base.css` lands on the baseline grid.
+- Two per-rule leading pins the grid sweep cannot make, `code` being outside it: inline `code` declares zero leading, so a line carrying it stays on grid, and `pre code` declares none of its own.
 
 **Gotchas**
 
 - `COLUMN_STRIDE` and `BASELINE` are re-declared locally instead of imported from the crate, deliberately: an assertion must state its expectation independently, so changing the source const fails this test rather than moving with it. Follow that when adding cases.
 - The selectors `GRID_SELECTORS` omits are argued in its doc comment. Adding a rule to `COMPENSATION_ALLOWLIST` instead of fixing its arithmetic converts the audit into a rubber stamp.
+- A per-rule assertion must name `body.wolf-markdown code` in full; a bare `code` also matches the `pre code` rule, so a declaration moved onto that rule alone stays green.
 
 #### `messages.rs`
 

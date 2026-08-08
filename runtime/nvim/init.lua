@@ -10,14 +10,20 @@
 -- settings below make the captive editor deterministic for headless rendering
 -- tests and tuned for editing Markdown.
 --
--- Treesitter markdown highlighting + fenced-code-block injections are
--- conditionally ENABLED when the vendored `nvim-treesitter/` (main queries) and
--- `parsers/` siblings are present next to this init.lua (the macOS .app bundle;
--- see the conditional block below). On Linux/cargo — and any test that does not
--- stage those siblings — the block is a strict NO-OP and Neovim's built-in
--- `syntax on` remains the highlight source. A Markdown LSP (e.g. marksman) and a
--- formatter are still DEFERRED to a later phase; the vendored
--- nvim-treesitter-textobjects plugin is bundled-but-INERT (no keymaps wired).
+-- Fenced-code-block INJECTIONS are what the vendored-treesitter gate below buys.
+-- Base markdown highlighting is not: the pinned Neovim ships the markdown and
+-- markdown_inline parsers and starts treesitter on a markdown buffer BY ITSELF,
+-- gate or no gate (measured — see the `syntax on` note further down). What the
+-- gate adds is two runtimepath entries: the vendored grammars, and
+-- nvim-treesitter's queries/markdown/injections.scm, which is what routes a fenced
+-- block to an embedded parser so its own language is highlighted. It resolves each
+-- tree from a SIBLING directory next to this init.lua (staged by the macOS .app
+-- bundle) and, failing that, from `WOLF_NVIM_TREESITTER_DIR` / `WOLF_PARSERS_DIR`
+-- (exported unconditionally by the Linux devShell), so both platforms fire it. A
+-- host that provides neither keeps plain markdown highlighting and renders every
+-- fenced block unhighlighted. A Markdown LSP (e.g. marksman) and a formatter are
+-- DEFERRED to a later phase; the vendored nvim-treesitter-textobjects plugin is
+-- bundled-but-INERT (no keymaps wired).
 
 local opt = vim.opt
 
@@ -155,10 +161,25 @@ opt.smoothscroll = true
 -- Treat opened files as markdown by default (Wolf is a Markdown editor).
 vim.filetype.add({ extension = { md = "markdown" } })
 
--- Enable built-in syntax highlighting (markdown) so the grid carries varied
--- hl_ids. This is the highlight source on Linux/cargo and the fallback when
--- treesitter is unavailable; the conditional treesitter block below layers over it
--- (via its own namespace) on the macOS .app.
+-- Enable built-in syntax highlighting so the grid carries varied hl_ids. It is the
+-- highlight source for every buffer treesitter does NOT attach to, and the
+-- fallback where an attach fails.
+--
+-- It is NOT the markdown highlight source, and assuming it is has misled readers
+-- before. MEASURED on the pinned nvim 0.12.2: a markdown buffer under
+-- `--clean -u NONE`, with no plugin and no gate below, already reports
+-- `vim.treesitter.highlighter.active[buf] ~= nil` — nvim ships the markdown
+-- parser and its queries and starts treesitter on markdown itself. So markdown is
+-- treesitter-highlighted whether or not the gate below fires, and
+-- `vim.treesitter.start` disables regex syntax for a buffer it attaches to
+-- (`:h vim.treesitter.start`).
+--
+-- What the gate below adds for markdown is therefore the nvim-treesitter QUERIES
+-- ahead of nvim's own on runtimepath, plus the parsers that let the injections
+-- query route a fenced block. `highlighter.active` cannot discriminate those:
+-- it reads true with the gate absent. The discriminating readback is an INJECTED
+-- child langtree for the fenced language, which is what
+-- `crates/wolf-ffi/tests/treesitter_highlight.rs` asserts as its second sentinel.
 vim.cmd("syntax on")
 
 -- Vendored orlando plugin (Bazel macOS bundle only).
@@ -207,36 +228,92 @@ if uv and uv.fs_stat(lighthouse_dir) then
 	vim.cmd.colorscheme("lighthouse")
 end
 
--- Vendored treesitter highlighting + fenced-code injections (Bazel macOS bundle
--- only).
+-- Vendored treesitter highlighting + fenced-code injections.
 --
--- Like orlando/lighthouse, the macOS .app places sibling trees next to this
--- init.lua at Contents/Resources/: `nvim-treesitter/` (the main-branch queries
--- provider: queries/<lang>/highlights.scm + queries/markdown/injections.scm),
--- `parsers/` (host-compiled parser/<lang>.so for the embedded fenced languages),
--- and `nvim-treesitter-textobjects/` (bundled but INERT — no source, no setup, no
--- keymaps). On Linux/cargo they are ABSENT, so this whole block is a strict NO-OP:
--- no runtimepath change, no autocmd, no error — `syntax on` above stays the
--- highlight source. We reuse the already-computed `this_dir` / `uv` locals.
+-- Two trees feed this gate: `nvim-treesitter/` (the main-branch queries provider:
+-- queries/<lang>/highlights.scm + queries/markdown/injections.scm) and `parsers/`
+-- (compiled parser/<lang>.so for the embedded fenced languages). Each resolves
+-- from one of TWO sources, and both platforms are served by the same gate:
 --
--- GATE on the queries provider (`nvim-treesitter/`). When present we prepend it to
--- runtimepath (so `vim.treesitter.start` finds highlights + injections queries),
--- then prepend `parsers/` (so nvim resolves <rtp>/parser/<lang>.so for embedded
--- languages) and the inert textobjects tree, each only if it independently exists.
--- markdown / markdown_inline parsers already ship with nvim, so they are NOT
--- re-vendored. We do NOT call nvim-treesitter's heavy `.setup{}` (its :TSInstall
--- machinery is non-deterministic under --clean); the vendored plugin is used purely
--- as an on-rtp query provider. A FileType=markdown autocmd runs
--- `vim.treesitter.start` on each markdown buffer (wrapped in pcall so a query-loader
--- incompatibility degrades to syntax-on rather than raising), which lights markdown
--- highlighting AND routes fenced blocks through the injections query on rtp.
-local nvim_treesitter_dir = this_dir .. "/nvim-treesitter"
-if uv and uv.fs_stat(nvim_treesitter_dir) then
+--   1. A SIBLING directory next to this init.lua. The macOS .app stages both at
+--      Contents/Resources/ (//bazel/nvim-treesitter, //bazel/treesitter-parsers).
+--   2. Failing that, an ENVIRONMENT VARIABLE — `WOLF_NVIM_TREESITTER_DIR` and
+--      `WOLF_PARSERS_DIR`, which the Linux devShell exports unconditionally
+--      (`flake.nix`). Neither is a `WOLF_TEST_*` variable: those keep their own
+--      meaning and their own readers in the Bazel test targets.
+--
+-- SIBLING FIRST, environment second, and do NOT reorder. A developer inside the
+-- devShell has `WOLF_PARSERS_DIR` exported; under env-first, running the macOS
+-- .app from that shell would silently swap the bundle's own Mach-O parsers for a
+-- Linux ELF tree, and the mis-load has no symptom until a dlopen fails inside a
+-- pcall. Sibling-first is also what makes "macOS behaviour is unchanged" a
+-- construction rather than a hope: there both siblings exist, so the resolver
+-- returns at branch 1 and `vim.env` is never read at all.
+--
+-- THE ENVIRONMENT FALLBACK IS THE ONLY THING THAT FIRES THIS GATE ON LINUX, since
+-- no sibling tree exists there. Deleting it does more than shorten runtimepath: it
+-- also removes the FileType=markdown autocmd below. What that costs was MEASURED
+-- rather than assumed, and it is narrower than it looks. nvim 0.12.2 starts
+-- treesitter on a markdown buffer by ITSELF — under `--clean -u NONE`, with no
+-- plugin and no gate, `vim.treesitter.highlighter.active[buf] ~= nil` already
+-- reads true. So that expression CANNOT witness this gate and must not be used as
+-- evidence for it.
+--
+-- What the gate actually buys the EDITOR is nvim-treesitter's queries ahead of
+-- nvim's own on runtimepath, plus the parsers that let the injections query route
+-- a fenced block to a real grammar. The discriminating readback is an INJECTED
+-- child langtree for the fenced language: measured NO with the gate off and OK
+-- with it on, whereas `highlighter.active` reads OK in both.
+--
+-- `nvim-treesitter-textobjects/` (bundled but INERT — no source, no setup, no
+-- keymaps) DELIBERATELY has no environment fallback. Nothing on Linux produces
+-- such a tree, so the variable would have no producer — dead surface for a later
+-- agent to wire up wrongly — and because the tree is inert its absence changes
+-- nothing observable, so no test could discriminate a fallback for it.
+--
+-- `vim.env` is a table view over getenv/setenv and is UNAFFECTED by `--clean`,
+-- which suppresses user config, plugins and shada but not the process
+-- environment (this file already relies on that at `WOLF_SWAP_DIR` above). The
+-- captive nvim inherits it: `nvim.rs` overrides six variables on the child and
+-- calls no `env_clear`, and `cage` clears nothing either.
+--
+-- A resolved path that has VANISHED falls through to nil rather than being
+-- prepended, so a store path garbage-collected under a long-lived shell degrades
+-- to the bare-checkout no-op instead of putting a dead entry on runtimepath.
+--
+-- GATE on the queries provider. When it resolves we prepend it to runtimepath (so
+-- `vim.treesitter.start` finds highlights + injections queries), then prepend the
+-- parsers tree (so nvim resolves <rtp>/parser/<lang>.so) and the inert textobjects
+-- tree, each only if it independently resolves. markdown / markdown_inline parsers
+-- already ship with nvim, so they are NOT re-vendored. We do NOT call
+-- nvim-treesitter's heavy `.setup{}` (its :TSInstall machinery is
+-- non-deterministic under --clean); the vendored plugin is used purely as an
+-- on-rtp query provider. A FileType=markdown autocmd runs `vim.treesitter.start`
+-- on each markdown buffer (wrapped in pcall so a query-loader incompatibility
+-- degrades to syntax-on rather than raising). Base markdown highlighting is NOT
+-- what that buys — nvim starts treesitter on such a buffer by itself, as above.
+-- What the autocmd and the two rtp entries buy is routing a fenced block through
+-- the injections query to its own grammar.
+local function resolve_vendored_dir(sibling, env_name)
+	if uv and uv.fs_stat(sibling) then
+		return sibling
+	end
+	local from_env = vim.env[env_name]
+	if from_env ~= nil and from_env ~= "" and uv and uv.fs_stat(from_env) then
+		return from_env
+	end
+	return nil
+end
+
+local nvim_treesitter_dir =
+	resolve_vendored_dir(this_dir .. "/nvim-treesitter", "WOLF_NVIM_TREESITTER_DIR")
+if nvim_treesitter_dir then
 	vim.opt.runtimepath:prepend(nvim_treesitter_dir)
-	local parsers_dir = this_dir .. "/parsers"
-	if uv.fs_stat(parsers_dir) then
+	local parsers_dir = resolve_vendored_dir(this_dir .. "/parsers", "WOLF_PARSERS_DIR")
+	if parsers_dir then
 		vim.opt.runtimepath:prepend(parsers_dir)
 	end
+	-- Bare sibling probe, no environment fallback: see the note above.
 	local textobjects_dir = this_dir .. "/nvim-treesitter-textobjects"
 	if uv.fs_stat(textobjects_dir) then
 		vim.opt.runtimepath:prepend(textobjects_dir)

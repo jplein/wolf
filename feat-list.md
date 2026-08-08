@@ -148,13 +148,13 @@ One thing is deliberately not persisted on Linux: the window position, which Way
 | "Edit Source" (preview's inverse)                 | `feat/markdown-preview` (`8a72e50`)    | [x]   | [x]   |
 | Preview theme follows light/dark                  | `fix/dark-mode` (`3edf74e`, `66ce35e`) | [x]   | [x]   |
 | Typography tuning for the preview                 | `feat/typography` (`6838614`)          | [x]   | [x]   |
-| Syntax-highlighted code blocks                    | `feat/code-block-syntax-highlighting`  | [x]   | [ ]   |
+| Syntax-highlighted code blocks                    | `feat/code-block-syntax-highlighting`  | [x]   | [x]   |
 | Preview of anonymous / unsaved buffers            | `feat/preview-anonymous-files`         | [x]   | [x]   |
 | Preview in browser (loopback HTTP server)         | `feat/preview-server` (`4728086`)      | [x]   | [ ]   |
 
 The rendering pipeline and the loopback preview server are entirely in `wolf-core` and stay GUI-free by design. `wolf-gnome` hosts the second kind of pane content in a `webkit6::WebView`, the GTK analogue of `WKWebView`: every pane leaf is an overlay whose main child is the editor's drawing area, so a preview replaces a pane's grid without replacing its widget, and a live edit reaches the DOM as a JSON-encoded body swap that preserves the reader's scroll offset where a full reload would not.
 
-The three Linux boxes for the rendered document do not rest on the same evidence, and which is which matters. Light/dark is proved by a smoke that samples raw pixels out of its own `grim` captures at the two configured appearances, and that smoke also pins one of the typography commit's four observable changes: the removed body padding. The other three are absences, which no pixel can prove without vacuity, and stay pinned by `markdown_render.rs`'s CSS-text assertions.
+The Linux boxes for the rendered document do not rest on the same evidence, and which is which matters. Light/dark is proved by a smoke that samples raw pixels out of its own `grim` captures at the two configured appearances, and that smoke also pins one of the typography commit's four observable changes: the removed body padding. The other three are absences, which no pixel can prove without vacuity, and stay pinned by `markdown_render.rs`'s CSS-text assertions.
 
 Math and Inter rest on a recorded measurement instead, because the only decisive discriminator is deleting the `@font-face` rules from inside the running web view and re-measuring, and a smoke drives the app from outside. The smoke's own readings live in its assertion table in `crates/wolf-gnome/tests/smoke_headless.rs`; the font measurement lives in [`crates/wolf-gnome/tests/README.md`](crates/wolf-gnome/tests/README.md).
 
@@ -162,9 +162,11 @@ Link following and the anonymous-buffer preview are ticked on different evidence
 
 Preview in browser stays unticked deliberately, and not because it is unimplemented. The code is written and dispatched, and the running GTK application produces a real loopback address and hands it to the platform URI launcher; what is unverified is the final hand-off. The development compositor has neither a browser nor a session bus, and the launcher reports success there while doing nothing at all. Deliberately exercising it is a hazard rather than merely untested, for the reason [`crates/wolf-gnome/tests/README.md`](crates/wolf-gnome/tests/README.md) records, so the tick is one character to add on a host where a human has watched a tab open.
 
-Syntax-highlighted code blocks is the one row still blocked, and on parser coverage rather than on a missing code path: `wolf_highlight_code_blocks` is defined at module level in the captive `init.lua`, outside the vendored-tree gate, so it runs on Linux and returns false for every fence whose language has no parser and `highlights` query on the runtimepath.
+Syntax-highlighted code blocks turns on parser coverage rather than on a code path: `wolf_highlight_code_blocks` is defined at module level in the captive `init.lua`, outside the vendored-tree gate, so it runs on every platform and answers false for a fence whose language has no parser and `highlights` query on the runtimepath.
 
-The pinned Neovim supplies seven — `c`, `lua`, `markdown`, `markdown_inline`, `query`, `vim`, `vimdoc` — so a `lua` or `c` fence already highlights. Unblocking the rest is a flake-side vendoring of `ELF` parsers, a sibling of the Appearance table's "Vendored treesitter plugins and parsers" row rather than a consumer of it, since `bazel/treesitter-parsers` emits Mach-O objects that buy Linux nothing.
+The pinned Neovim supplies seven of those — `c`, `lua`, `markdown`, `markdown_inline`, `query`, `vim`, `vimdoc` — and a curated sixteen more are vendored, each platform building the same list its own way: Mach-O objects host-compiled by `bazel/treesitter-parsers`, and the same sixteen grammars from nixpkgs exported by `flake.nix`. One gate in the captive `init.lua` picks up whichever is present, so this row and the Appearance table's vendoring row are siblings rather than one depending on the other.
+
+The Linux tick rests on raw pixels out of the running GTK application. A smoke renders one `go` fence and one unknown-language fence carrying byte-identical text and counts chromatic pixels in each: an unhighlighted block is neutral grey on grey, so the control counts zero, and the shared text holds every rendering variable except the highlighter's answer constant. `crates/wolf-ffi/tests/code_block_highlight.rs`, which asserts on the emitted HTML, corroborates it.
 
 Two limits of the pane itself are recorded in [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md) — a click inside a preview cannot focus it, because the web view must take pointer input to be scrollable at all, and nothing has captured a picker composited over a preview, which is why the floating-panel row above stays unticked too.
 
@@ -181,15 +183,17 @@ Two limits of the pane itself are recorded in [`crates/wolf-gnome/DECISIONS.md`]
 | Application icon                                 | `feat/mac-application-icon`                           | [x]   | [ ]   |
 | Vendored `orlando` rendering plugin              | `jplein/lua-changes` (`6ee5c16`)                      | [x]   | [ ]   |
 | Vendored `lighthouse` colorscheme                | `jplein/lua-changes` (`0603937`)                      | [x]   | [ ]   |
-| Vendored treesitter plugins and parsers          | `feat/neovim-plugin-vendoring`                        | [x]   | [ ]   |
+| Vendored treesitter plugins and parsers          | `feat/neovim-plugin-vendoring`                        | [x]   | [x]   |
 
 `wolf-gnome` reads the shared `wolf-config.yaml` through `wolf_core::config` and drives its cell geometry from the configured font family, size and line height; `WOLF_FONT_PT` overrides the configured size, as it does on macOS. Both editor families are vendored into the Nix devShell and exposed through the repo-controlled fontconfig, so a configured `iA Writer Mono S` resolves on Linux.
 
 The `appearance` key resolves on both front-ends, and on Linux it reaches two places: the captive Neovim, as `:set background=dark|light`, and the GTK chrome, as an `adw::ColorScheme` — `auto` following libadwaita's own live reading and a forced value overriding it. What has no Linux counterpart is the other direction: macOS reads live OS colours and pushes them into Neovim's highlight groups with `nvim_set_hl`, and `wolf-gnome` reads no OS colour at all.
 
-Baseline-grid typography is the 24px CSS grid inside the rendered preview document, so it belongs with the Markdown-preview rows above and is a property of the document `wolf-core` renders rather than of the GTK pane that displays it. What that grid guarantees is every value the stylesheet declares; a line carrying an inline `code` element still overflows the 24px unit and shifts every block below it, which is a residual shared with macOS rather than a Linux gap, since both front-ends render this document in WebKit — see [`crates/wolf-core/src/markdown/README.md`](crates/wolf-core/src/markdown/README.md).
+Baseline-grid typography is the 24px CSS grid inside the rendered preview document, so it belongs with the Markdown-preview rows above: it is a property of the document `wolf-core` renders, not of the GTK pane that displays it. What the grid guarantees is every value the stylesheet declares, plus one laid-out reading — a smoke measures the pixel distance from the document's top edge to a rule three code-carrying paragraphs below, and gets a whole multiple of the 24px unit. What buys that is one declaration, zero leading on the inline `code` element. It changes the document macOS renders too, and no macOS host was available, so the macOS half of the claim is inferred rather than measured. See [`crates/wolf-core/src/markdown/README.md`](crates/wolf-core/src/markdown/README.md).
 
-Both front-ends align a status bar's text with the grid text below it, out of one inset; the macOS `StatusbarTextSpan` seam has no Linux counterpart, because `editor_inset::grid_rect` carries the centring offset in its own `x` and the painter, the pointer translation and the strip's text all read that one origin by construction. The three vendored plugin assets are bundled by Bazel into `Wolf.app` only — the captive `init.lua` self-locates them and is a strict no-op when absent, so on Linux they are simply not there.
+Both front-ends align a status bar's text with the grid text below it, out of one inset; the macOS `StatusbarTextSpan` seam has no Linux counterpart, because `editor_inset::grid_rect` carries the centring offset in its own `x` and the painter, the pointer translation and the strip's text all read that one origin by construction.
+
+Two of the three vendored plugin assets are bundled by Bazel into `Wolf.app` only: the captive `init.lua` self-locates `orlando` and `lighthouse` and is a strict no-op when absent, so on Linux they are simply not there. The treesitter trees are the exception — the same gate falls back to two paths the flake devShell exports, so both platforms reach the queries and the grammars. Its Linux evidence is `crates/wolf-ffi/tests/treesitter_highlight.rs`, where a fenced `go` block yields an injected `go` langtree, and `treesitter_parser_abi.rs`, where a nix-built grammar loads and parses under the pinned Neovim.
 
 ## Terminal
 
@@ -232,4 +236,4 @@ The second limit is that a stall does not clear itself on the GTK side. All eigh
 Work already carried is recorded in the tables above. What remains, in order:
 
 1. **Multi-window and tabs**, which reshape `wolf-gnome` from a single-window application into a coordinator-plus-views one, and are the largest single item left.
-2. **The remaining Markdown-preview rows.** Preview in browser is written and dispatched and needs only a host where a human can watch the hand-off land, per the Markdown-preview table above. Syntax-highlighted code blocks sits behind a prerequisite instead — a flake-side vendoring of treesitter parsers built for Linux, which the Appearance table's vendoring row does not supply.
+2. **The remaining Markdown-preview row.** Preview in browser is written and dispatched and needs only a host where a human can watch the hand-off land, per the Markdown-preview table above.

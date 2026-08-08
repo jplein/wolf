@@ -24,6 +24,10 @@ The Linux shell supplies the pinned Rust toolchain (`rust-src`, `rust-analyzer`,
 
 `WOLF_NVIM_BIN` is the only way core and its tests locate Neovim: never `PATH`, never a scan of `/nix/store`. Unset, `WolfCore::start` fails with `NvimError::BinNotSet` and the wolf-core integration tests panic loudly rather than skip. `WOLF_RG_BIN` locates ripgrep the same way; unset, content search degrades to an empty session carrying an error.
 
+Two more exports name vendored Neovim assets rather than binaries. `WOLF_NVIM_TREESITTER_DIR` points at the nvim-treesitter plugin's `runtime` directory, which carries the highlight and injection queries, and `WOLF_PARSERS_DIR` at a `symlinkJoin` of sixteen compiled grammars laid out as `parser/<lang>.so`. The captive `init.lua` reads both as the fallback half of its treesitter gate — see [`runtime/nvim`](runtime/nvim/README.md), which owns the resolution order and what the gate delivers.
+
+Both trees are fetched, not compiled. Measured with `nix build --dry-run` against an empty chroot store: 66 paths fetched, 22.2 MiB of download, and the only local build is the `symlinkJoin` itself, which runs no compiler. `nix path-info` against `cache.nixos.org` agrees, every grammar reporting a substitute. No cold wall clock was ever taken — the measuring host's store was already warm — so this document quotes none, and neither should anything derived from it.
+
 After editing `flake.nix`, run through `nix develop --command`. An already-loaded direnv environment is stale until the shell is re-entered, and a stale one has no GTK.
 
 ### Building and testing

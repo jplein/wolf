@@ -1388,11 +1388,16 @@ impl NvimProcess {
 /// on the runtimepath) renders as plain `<pre><code>`. This is NOT a per-platform
 /// switch — `wolf_highlight_code_blocks` sits at MODULE level in
 /// `runtime/nvim/init.lua`, deliberately outside the vendored-tree gate, so it runs
-/// on Linux/cargo too. The pinned Neovim ships seven parsers with queries (`c`,
-/// `lua`, `markdown`, `markdown_inline`, `query`, `vim`, `vimdoc`), so a `lua` or
-/// `c` fence highlights there while a `go` one falls back to plain. An RPC error
-/// (e.g. an unloaded/closed buffer) reading the buffer is propagated as
-/// [`NvimError::Rpc`].
+/// wherever the captive Neovim runs. Which fences highlight is decided by the
+/// RUNTIMEPATH, and the runtimepath is decided by that gate: it resolves a vendored
+/// queries tree and a vendored parsers tree from a sibling directory first and an
+/// environment variable second, and both the macOS `.app` (Bazel-staged siblings)
+/// and the Linux devShell (`WOLF_NVIM_TREESITTER_DIR` / `WOLF_PARSERS_DIR` from
+/// `flake.nix`) satisfy it, so a `go` fence highlights on both. The seven parsers
+/// the pinned Neovim ships with `highlights` queries (`c`, `lua`, `markdown`,
+/// `markdown_inline`, `query`, `vim`, `vimdoc`) are the FALLBACK set — what a host
+/// that satisfies neither route is left with. An RPC error (e.g. an unloaded/closed
+/// buffer) reading the buffer is propagated as [`NvimError::Rpc`].
 ///
 /// Extracted from [`NvimProcess::render_preview`] so the loopback browser-preview
 /// server ([`crate::browser_preview`]) can re-render off a bare RPC handle

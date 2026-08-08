@@ -11,16 +11,19 @@ structure-preserving `parsers_tree` TreeArtifact bundled into Wolf.app at
 
 ## Why host-compile (not the parsers bundled in nvim, not nix-built)
 
-Pinned Neovim 0.12.3 ships only markdown/markdown_inline parsers. To highlight the
-languages Wolf cares about, the parsers must be present in the bundle, be
+The pinned Neovim ships seven parsers carrying `highlights` queries and no more
+(c, lua, markdown, markdown_inline, query, vim, vimdoc) — measured with --clean against
+the Linux flake's 0.12.2, not this package's pin; the directory README records why. To
+highlight the languages Wolf cares about, the parsers must be present in the bundle, be
 ABI-compatible with pinned nvim's treesitter runtime, and — crucially — be
 signable, RELOCATABLE host-compiled Mach-O. A nix-built `.so` embeds `/nix/store`
 install names and is not relocatable inside a signed `.app`, so we compile from
 source with the apple_support host-Xcode cc toolchain (the same toolchain that
 builds wolf-core's bundled SQLite). These parsers are VENDORED + SHIPPED and
 ENABLED on macOS: the captive init.lua prepends them (with the vendored
-nvim-treesitter queries) to runtimepath and runs `vim.treesitter.start` on markdown
-buffers, so markdown highlighting + fenced-code injection are live in the .app.
+nvim-treesitter queries) to runtimepath, so fenced-code injection is live in the
+.app. Base markdown highlighting is not what this buys — the pinned nvim starts
+treesitter on a markdown buffer on its own.
 
 ## The `ts_grammar` overlay template
 
