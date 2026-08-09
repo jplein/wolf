@@ -11,7 +11,7 @@
 //!   silently reopening yesterday's project instead would be surprising.
 //! - A desktop-launcher / `.desktop` launch yields `$HOME` or `/`, which is
 //!   exactly "no project" — and THAT is when the cwd restored from `state.json`
-//!   (see [`crate::state_seam::restore_plan`]) gets its turn, which is the macOS
+//!   (see [`crate::state_seam::restore_plans`]) gets its turn, which is the macOS
 //!   behaviour (`StateSeam.launchDecision` consults only the restored cwd).
 //! - With neither usable, the empty state.
 //!

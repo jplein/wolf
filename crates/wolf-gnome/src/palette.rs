@@ -14,24 +14,37 @@
 //!
 //! **The candidate set is fixed at open, so this module has no wake bridge at
 //! all.** [`wolf_core::rank_palette`] assembles its rows from
-//! [`wolf_core::COMMAND_SPECS`] plus two snapshots taken at open — the command MRU
-//! and the recent directories. Neither store is written except by an activation,
-//! and an activation closes the palette, so re-filtering per keystroke is a
-//! synchronous, IO-free call and the picker's `async-channel` + wake-drain plumbing
-//! would be dead weight here. Do not add it back for symmetry. (Both stores are
-//! global and shared with any other Wolf process, so a concurrent one can write
-//! either while the palette is up; the list shows the snapshot it opened with.)
+//! [`wolf_core::COMMAND_SPECS`] plus three snapshots taken at open — the command
+//! MRU, the recent directories and the other open windows. Neither store is
+//! written except by an activation, and an activation closes the palette, so
+//! re-filtering per keystroke is a synchronous, IO-free call and the picker's
+//! `async-channel` + wake-drain plumbing would be dead weight here. Do not add it
+//! back for symmetry. (Both stores are global and shared with any other Wolf
+//! process, so a concurrent one can write either while the palette is up; the list
+//! shows the snapshot it opened with. So can the window list change under it, for
+//! the same reason and with the same answer.)
 //!
 //! ## Which row kinds are reachable
 //!
-//! `rank_palette` is fed a REAL recent-directories slice —
-//! [`WolfCore::recent_dirs`] put through [`open_recent_candidates`] — and an EMPTY
-//! window slice, because this front-end has one window and there is no other to
-//! raise. So [`PaletteRowKind::Static`] and [`PaletteRowKind::OpenRecent`] rows are
-//! produced and [`PaletteRowKind::SwitchWindow`] rows are not;
-//! [`palette_action_for`] classifies the last kind as
-//! [`PaletteAction::Unsupported`] as well, so one would fail [`palette_rows`]'
-//! filter rather than appearing as a dead entry.
+//! All THREE core row kinds are produced. `rank_palette` is fed a real
+//! recent-directories slice — [`WolfCore::recent_dirs`] put through
+//! [`open_recent_candidates`] — and a real window slice, the coordinator's
+//! [`crate::coordinator::Coordinator::palette_windows`] for every window EXCEPT
+//! the one this palette belongs to. So [`PaletteRowKind::Static`],
+//! [`PaletteRowKind::SwitchWindow`] and [`PaletteRowKind::OpenRecent`] rows all
+//! appear.
+//!
+//! One directory can therefore produce TWO rows — "Switch to Window: /proj/x" and
+//! "Open Recent Folder: /proj/x" — and that is the honest surface rather than a
+//! duplicate: the first raises the window already editing that project, the second
+//! re-roots THIS window onto it. [`open_recent_candidates`] refuses only the
+//! invoking window's own directory, and refuses it for a reason a second window
+//! does not change.
+//!
+//! A `SwitchWindow` row carrying no window index is still
+//! [`PaletteAction::Unsupported`] and fails [`palette_rows`]' filter rather than
+//! appearing as a dead entry. `rank_palette` always sets one, so that arm is a
+//! shape guard on core's contract, not a case this crate produces.
 //!
 //! ## The Open Recent label is the ranked string
 //!
@@ -45,11 +58,14 @@
 //! [`crate::search_overlay`] pays it.
 //!
 //! Opening costs two synchronous SQLite reads (the command MRU and the recent
-//! directories), one `live_cwd` lock read, and one `stat` per recorded directory
+//! directories), one `live_cwd` lock read, one `stat` per recorded directory
 //! through [`open_recent_candidates`]' injected predicate — bounded by the store's
-//! own cap. All of it happens at open, never per keystroke, and none of it is an
-//! RPC to Neovim, so this module adds no `block_on_rpc` route at all (see
-//! `crates/wolf-gnome/DECISIONS.md`, "Crash and stall recovery").
+//! own cap — and one walk of the coordinator's window registry. All of it happens
+//! at open, never per keystroke, and none of it is an RPC to Neovim, so this
+//! module adds no `block_on_rpc` route at all (see
+//! `crates/wolf-gnome/DECISIONS.md`, "Crash and stall recovery"). The window walk
+//! in particular reads each window's already-cached persisted subtree, so no other
+//! window's core is touched.
 //!
 //! Almost all of this module is GTK widget wiring, which cannot be unit-tested
 //! headlessly. Its pure, display-free seams are [`open_recent_candidates`],
@@ -65,7 +81,7 @@ use std::rc::Rc;
 use adw::prelude::*;
 use gtk::glib;
 
-use wolf_core::{rank_palette, Command, PaletteRow, PaletteRowKind, WolfCore};
+use wolf_core::{rank_palette, Command, PaletteRow, PaletteRowKind, PaletteWindow, WolfCore};
 
 use crate::command_action::{ui_action_for, UiAction};
 use crate::picker::{activation_index, next_selection, restored_index};
@@ -92,13 +108,30 @@ const PALETTE_LIST_MAX_HEIGHT: i32 = 400;
 /// before calling it.
 type ActivateHandler = Rc<dyn Fn(PaletteAction)>;
 
+/// Where a palette's window rows come from: the coordinator's live registry, minus
+/// the window this palette belongs to.
+///
+/// A named alias for the same reason [`ActivateHandler`] is one — the inline
+/// spelling trips `clippy::type_complexity` — and a closure rather than a slice
+/// because the answer must be taken fresh at each open: windows come and go while
+/// the palette is closed.
+pub type WindowSource = Rc<dyn Fn() -> Vec<PaletteWindow>>;
+
 /// What activating one palette row does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaletteAction {
     /// Dispatch this registry command through the shell's [`UiAction`] funnel.
     Dispatch(Command),
-    /// Re-root the window at this directory. The payload is a directory and
-    /// nothing else — no window target — because this front-end has one window;
+    /// Raise the window with this id, leaving THIS window's project alone.
+    ///
+    /// The payload is the coordinator's `WindowId`, which is what
+    /// `wolf_core::PaletteWindow::index` carries, so the palette needs no second
+    /// numbering. Best-effort on Wayland: presenting a backgrounded toplevel is the
+    /// compositor's decision, and `cage` declines it.
+    SwitchWindow(u16),
+    /// Re-root THIS window at this directory. The payload is a directory and no
+    /// window target: the row acts on the window whose palette it was picked in,
+    /// and raising a different one is [`PaletteAction::SwitchWindow`]'s row.
     /// `shell::AppShell::on_palette_activation` is the one place that directory
     /// becomes a window action.
     OpenRecentFolder(PathBuf),
@@ -119,10 +152,14 @@ pub enum PaletteAction {
 /// A directory is kept exactly when all three hold, and each refusal is a row this
 /// front-end would otherwise list with nothing useful behind it:
 ///
-/// * `Some(dir) != live_cwd` — the window's OWN working directory is refused,
-///   because this front-end has one window and re-rooting it where it already is
-///   changes nothing. It is also the commonest entry in the store, so without this
-///   the top folder row is usually the dead one.
+/// * `Some(dir) != live_cwd` — the INVOKING window's own working directory is
+///   refused, because this row re-roots that window and re-rooting it where it
+///   already is changes nothing. It is also the commonest entry in the store, so
+///   without this the top folder row is usually the dead one. A second window
+///   editing that directory does not revive the row: raising that window is
+///   [`PaletteAction::SwitchWindow`]'s job, and re-rooting THIS window onto
+///   another's project would put two Neovims on one swap directory for a raise the
+///   user could have asked for directly.
 /// * `is_dir(dir)` — a directory that has gone is refused, because a failed `:tcd`
 ///   is only a `tracing::warn!` in [`wolf_core::input`]: Neovim never reports
 ///   `DirChanged`, so `shell`'s pending re-root never settles and the front-end
@@ -168,13 +205,16 @@ pub fn open_recent_candidates(
 /// that lists a no-op, the same rule `actions::MENU_SECTIONS` and
 /// `shell::AppShell::install_actions` already hold to.
 ///
-/// `path` is [`PaletteRow::path`], which core sets on an `OpenRecent` row and on no
-/// other kind. The two kinds that do not read it ignore it rather than refusing it,
-/// so the classification never depends on a field their rows do not carry.
+/// `window_index` is [`PaletteRow::window_index`] and `path` is
+/// [`PaletteRow::path`], each of which core sets on exactly one row kind. A kind
+/// that does not read one IGNORES it rather than refusing it, so the
+/// classification never depends on a field its rows do not carry — the arguments
+/// are a projection of the row, in the row's own field order.
 #[must_use]
 pub fn palette_action_for(
     kind: PaletteRowKind,
     command: Option<Command>,
+    window_index: Option<u16>,
     path: Option<&Path>,
 ) -> PaletteAction {
     match kind {
@@ -196,9 +236,12 @@ pub fn palette_action_for(
                 "a static palette row carrying no registry command has nothing to dispatch",
             ),
         },
-        PaletteRowKind::SwitchWindow => PaletteAction::Unsupported(
-            "wolf-gnome is a single-window application, so there is no other window to raise",
-        ),
+        PaletteRowKind::SwitchWindow => match window_index {
+            Some(index) => PaletteAction::SwitchWindow(index),
+            None => PaletteAction::Unsupported(
+                "a switch-window palette row carrying no window index has no window to raise",
+            ),
+        },
         PaletteRowKind::OpenRecent => match path {
             Some(path) => PaletteAction::OpenRecentFolder(path.to_path_buf()),
             None => PaletteAction::Unsupported(
@@ -213,10 +256,10 @@ pub fn palette_action_for(
 /// rows this front-end can actually perform, capped at `max`.
 ///
 /// `recent_dirs` is [`open_recent_candidates`]' output, so every folder row offered
-/// here is one an activation can act on. The EMPTY window slice handed to
-/// [`rank_palette`] is where the single-window decision lives: no
-/// [`PaletteRowKind::SwitchWindow`] row is produced at all. `rank_palette` excludes
-/// [`Command::CommandPalette`] itself, so the palette cannot dispatch itself.
+/// here is one an activation can act on. `windows` is every OTHER live window (the
+/// caller excludes its own), so every switch row offered here has a window to
+/// raise. `rank_palette` excludes [`Command::CommandPalette`] itself, so the
+/// palette cannot dispatch itself.
 ///
 /// **Ranking is unbounded and `max` is applied AFTER the filter**, deliberately.
 /// [`rank_palette`] truncates to its own `max` before this crate's classification
@@ -225,15 +268,16 @@ pub fn palette_action_for(
 #[must_use]
 pub fn palette_rows(
     recent_dirs: &[PathBuf],
+    windows: &[PaletteWindow],
     command_mru_recent: &[String],
     query: &str,
     max: usize,
 ) -> Vec<PaletteRow> {
-    rank_palette(recent_dirs, &[], command_mru_recent, query, usize::MAX)
+    rank_palette(recent_dirs, windows, command_mru_recent, query, usize::MAX)
         .into_iter()
         .filter(|row| {
             !matches!(
-                palette_action_for(row.kind, row.command, row.path.as_deref()),
+                palette_action_for(row.kind, row.command, row.window_index, row.path.as_deref()),
                 PaletteAction::Unsupported(_)
             )
         })
@@ -259,6 +303,16 @@ struct PaletteInner {
     /// second Wolf process can write it while the palette is up, and the list keeps
     /// showing the snapshot it opened with until the next open.
     recent_dirs: RefCell<Vec<PathBuf>>,
+    /// The OTHER live windows offered as Switch to Window rows, snapshotted ONCE at
+    /// [`PaletteInner::open`] from [`Self::window_source`]. Taken at open for the
+    /// same reason the two above are: a window opened or closed while this palette
+    /// is up is not worth a registry walk per keystroke, and the raise is
+    /// best-effort anyway — a row for a window that has since closed raises
+    /// nothing.
+    windows: RefCell<Vec<PaletteWindow>>,
+    /// Where [`Self::windows`] comes from: the coordinator's registry minus this
+    /// window.
+    window_source: WindowSource,
     /// The overlay child holding the search entry + results list.
     palette_box: gtk::Box,
     /// The search entry whose text filters/ranks the rows.
@@ -280,9 +334,9 @@ struct PaletteInner {
 }
 
 impl PaletteInner {
-    /// Opens the palette: snapshots the command MRU and the recent directories,
-    /// shows + focuses the entry, and does an initial refresh so the MRU-first list
-    /// appears immediately. No-op if already open.
+    /// Opens the palette: snapshots the command MRU, the recent directories and the
+    /// other live windows, shows + focuses the entry, and does an initial refresh so
+    /// the MRU-first list appears immediately. No-op if already open.
     ///
     /// Unlike [`crate::picker`]'s `open` this does NOT early-return when the core is
     /// gone: the registry rows are a function of `COMMAND_SPECS`, not of the core.
@@ -313,6 +367,11 @@ impl PaletteInner {
         *self.mru_recent.borrow_mut() = recent;
         *self.recent_dirs.borrow_mut() =
             open_recent_candidates(&recorded, live.as_deref(), Path::is_dir);
+        // The third snapshot, and the cheapest: a walk of the coordinator's window
+        // registry reading each window's already-cached subtree. Called with no
+        // borrow of this cell live, because it re-enters the coordinator.
+        let windows = (self.window_source)();
+        *self.windows.borrow_mut() = windows;
 
         self.open.set(true);
         self.palette_box.set_visible(true);
@@ -372,11 +431,18 @@ impl PaletteInner {
             self.list.remove(&child);
         }
 
-        // Both snapshot borrows are held for the ranking call and nothing else.
+        // All three snapshot borrows are held for the ranking call and nothing else.
         let ranked = {
             let dirs = self.recent_dirs.borrow();
+            let windows = self.windows.borrow();
             let recent = self.mru_recent.borrow();
-            palette_rows(dirs.as_slice(), recent.as_slice(), &query, PALETTE_MAX_ROWS)
+            palette_rows(
+                dirs.as_slice(),
+                windows.as_slice(),
+                recent.as_slice(),
+                &query,
+                PALETTE_MAX_ROWS,
+            )
         };
 
         for row in &ranked {
@@ -425,7 +491,7 @@ impl PaletteInner {
     ///
     /// **That order is load-bearing and diverges from macOS's record → dispatch →
     /// close.** A dispatched `CloseWindow` / `QuitApplication` synchronously runs
-    /// `app::wire_close`'s handler, which takes the core out and tears the window
+    /// `window::wire_close`'s handler, which takes the core out and tears the window
     /// down, so nothing may touch palette widgets afterwards. The handler `Rc` is
     /// cloned OUT of its `RefCell` for the same reason: no borrow may be live across
     /// a call that can re-enter this widget.
@@ -440,7 +506,12 @@ impl PaletteInner {
                 .map(|row| {
                     (
                         row.mru_key.clone(),
-                        palette_action_for(row.kind, row.command, row.path.as_deref()),
+                        palette_action_for(
+                            row.kind,
+                            row.command,
+                            row.window_index,
+                            row.path.as_deref(),
+                        ),
                     )
                 })
         };
@@ -520,11 +591,18 @@ impl PaletteHandle {
 ///
 /// `area` is the focus-return widget — the persistent cmdline strip, never a pane
 /// drawing area (`DECISIONS.md`, "Window structure").
+///
+/// `windows` is asked for the OTHER live windows on each open. It is a closure
+/// rather than a value because this palette outlives any particular set of
+/// windows, and it must hold the coordinator only WEAKLY: the coordinator owns
+/// every window, a window owns its overlays, and an overlay owning the coordinator
+/// back would leak the entire graph.
 #[must_use]
 pub fn build(
     overlay: &gtk::Overlay,
     area: &gtk::DrawingArea,
     core: &Rc<RefCell<Option<WolfCore>>>,
+    windows: WindowSource,
 ) -> PaletteHandle {
     let entry = gtk::SearchEntry::new();
     entry.set_hexpand(true);
@@ -556,6 +634,8 @@ pub fn build(
         rows: RefCell::new(Vec::new()),
         mru_recent: RefCell::new(Vec::new()),
         recent_dirs: RefCell::new(Vec::new()),
+        windows: RefCell::new(Vec::new()),
+        window_source: windows,
         palette_box,
         entry: entry.clone(),
         list: list.clone(),
@@ -645,14 +725,32 @@ mod tests {
     /// types into the palette's search entry (its `PALETTE_QUERY`).
     ///
     /// Duplicated here rather than shared because `tests/smoke_headless.rs` is a
-    /// separate crate; [`palette_rows_query_new_selects_exactly_the_new_buffer_row`]
-    /// is what keeps the two from drifting, by proving in the FAST suite that this
-    /// query still yields exactly one row.
+    /// separate crate; [`palette_rows_query_new_ranks_the_new_buffer_row_first`] is
+    /// what keeps the two from drifting, by proving in the FAST suite that this
+    /// query still puts the New row at the TOP of the list. It matches more than
+    /// one row, and no query can match fewer — see that test.
     const SMOKE_QUERY: &str = "new";
 
     /// The MRU key that same smoke asserts the activation recorded (its
     /// `PALETTE_MRU_KEY`). Checked against the registry rather than trusted.
     const SMOKE_MRU_KEY: &str = "new_buffer";
+
+    /// The query the cage smoke
+    /// `two_windows_two_neovims_and_two_saved_sessions_under_cage` types into the
+    /// palette to open its second window (its `TWOWIN_NEW_WINDOW_QUERY`).
+    ///
+    /// TWO terms, and the second is what does the work: `rank_matches` requires
+    /// every whitespace-separated term to be a subsequence of the row's label, and
+    /// `window` is not a subsequence of `New` — so this query drops the row that
+    /// [`SMOKE_QUERY`] selects rather than merely out-ranking it.
+    /// [`the_new_window_palette_query_selects_the_new_window_row`] is where that is
+    /// asserted, and it is the measurement the smoke's own copy of this literal
+    /// comes from.
+    ///
+    /// The smoke carries its own copy of the literal for the reason [`SMOKE_QUERY`]
+    /// does — `tests/smoke_headless.rs` is a separate crate — and that test is the
+    /// join that keeps the two from drifting.
+    const NEW_WINDOW_PALETTE_QUERY: &str = "new window";
 
     /// The query the cage smoke `open_recent_palette_row_reroots_the_window_under_cage`
     /// types into the palette's search entry (its `OPENRECENT_QUERY`, which that file
@@ -794,6 +892,8 @@ mod tests {
     enum WantAction {
         /// An exact `PaletteAction::Dispatch(command)`.
         Dispatch(Command),
+        /// An exact `PaletteAction::SwitchWindow(<this window id>)`.
+        SwitchWindow(u16),
         /// An exact `PaletteAction::OpenRecentFolder(<this path>)`.
         OpenRecentFolder(&'static str),
         /// `PaletteAction::Unsupported(_)` — the palette must not offer this row.
@@ -805,6 +905,10 @@ mod tests {
         desc: &'static str,
         kind: PaletteRowKind,
         command: Option<Command>,
+        /// The row's kind-specific raise target, as `PaletteRow::window_index`
+        /// carries it. `Some` on a `SwitchWindow` row; deliberately also exercised
+        /// on the two kinds that must IGNORE it.
+        window_index: Option<u16>,
         /// The row's kind-specific folder path, as `PaletteRow::path` carries it.
         /// `Some` on an `OpenRecent` row; deliberately also exercised on the two
         /// kinds that must IGNORE it.
@@ -832,16 +936,17 @@ mod tests {
     ///
     /// ## What each refusal buys, and what its absence costs
     ///
-    /// * **The window's own working directory.** `wolf-gnome` has one window, so an
-    ///   activation has exactly one window to act on and re-rooting is the only thing
-    ///   it can do — and for the directory that window is already rooted at, that
-    ///   changes nothing. Two consequences follow and neither is the reason: the full
-    ///   sidebar re-traversal would be wasted, and whether Neovim fires `DirChanged`
-    ///   for a same-directory `:tcd` is unestablished, which this design avoids
-    ///   needing to know. It is also the commonest entry in the store, so without
-    ///   this refusal the palette's top folder row is usually the dead one.
-    ///   [`open_recent_activation_targets_the_single_window`] is where that shape is
-    ///   named.
+    /// * **The window's own working directory.** This row acts on the INVOKING
+    ///   window and re-roots it, so for the directory that window is already rooted
+    ///   at it changes nothing. Two consequences follow and neither is the reason:
+    ///   the full sidebar re-traversal would be wasted, and whether Neovim fires
+    ///   `DirChanged` for a same-directory `:tcd` is unestablished, which this design
+    ///   avoids needing to know. It is also the commonest entry in the store, so
+    ///   without this refusal the palette's top folder row is usually the dead one. A
+    ///   SECOND window editing that directory does not revive it either — raising
+    ///   that window is [`PaletteAction::SwitchWindow`]'s row, and re-rooting this
+    ///   one onto another's project would put two Neovims on one swap directory.
+    ///   [`open_recent_targets_the_invoking_window`] is where that shape is named.
     /// * **A directory that has gone.** `RecentDirs::recent` deliberately does not
     ///   prune vanished paths, and a failed `:tcd` in `wolf_core::input` degrades to
     ///   a `tracing::warn!` — Neovim never fires `DirChanged`, so `shell`'s
@@ -964,45 +1069,55 @@ mod tests {
         }
     }
 
-    /// The single-window shape, as Open Recent expresses it, with a name of its own.
+    /// Open Recent acts on the window whose palette the row was picked in, with a
+    /// name of its own.
     ///
-    /// `wolf-gnome` has one window. Two facts are what that means here, and no other
-    /// test states them together:
+    /// Three facts are what that means, and no other test states them together:
     ///
-    /// 1. A recorded directory that IS the window's working directory is not offered,
-    ///    because there is no second window to raise and re-rooting this one where it
-    ///    already is changes nothing.
+    /// 1. A recorded directory that IS the invoking window's working directory is not
+    ///    offered, because re-rooting that window where it already is changes nothing.
     /// 2. A recorded directory that is NOT it classifies to
     ///    [`PaletteAction::OpenRecentFolder`], whose payload is a directory and
-    ///    NOTHING ELSE — no window index, no raise-or-open choice. The activation has
-    ///    one window to act on and one action to take.
+    ///    NOTHING ELSE — no window index, no raise-or-open choice for the shell to
+    ///    make.
+    /// 3. The capability that payload lacks is not missing from the palette: the same
+    ///    directory, seen as ANOTHER window's, is offered as a Switch to Window row
+    ///    and classifies to [`PaletteAction::SwitchWindow`], carrying the window id
+    ///    and no path.
     ///
     /// Half 2's destructuring is the mechanical half of that claim: a variant that
     /// grew a window target would stop compiling here rather than quietly giving the
     /// palette a decision to make. The classification's full domain is
     /// [`palette_action_table`]'s; this asserts only the shape.
     ///
-    /// `state_seam::snapshot_state` is the same idea for persistence, and
-    /// `state_seam::tests::snapshot_state_is_one_window_one_tab` says it in the same
-    /// words. A unit that gives this front-end more than one window changes these two
-    /// facts here, deliberately, instead of discovering the coupling from a palette
-    /// row that raises nothing.
+    /// **Two rows for one directory is the honest surface, not a duplicate.** Raising
+    /// the window already editing a project and re-rooting THIS window onto it are
+    /// different acts with different costs — the second puts a second Neovim on that
+    /// project's swap directory, which is a thing to ask for deliberately rather than
+    /// to be given when a raise was meant. Half 3 is where the pair is pinned
+    /// together, so a later unit that "deduplicates" them has to delete an assertion
+    /// that says why they are two.
     ///
     /// ## It is not an independent discriminator, and must not be dressed as one
     ///
     /// Half 1 shares [`open_recent_candidates_table`]'s revert — delete the
     /// `Some(dir) != live_cwd` conjunct and both go red together. Half 2 shares
-    /// [`palette_action_table`]'s. What this test adds is that the shape has a
-    /// greppable name and one home, not a falsifier neither of those already has.
+    /// [`palette_action_table`]'s `OpenRecent` revert and half 3 its `SwitchWindow`
+    /// one. What this test adds is that the shape has a greppable name and one home,
+    /// not a falsifier the table does not already carry.
     #[test]
-    fn open_recent_activation_targets_the_single_window() {
+    fn open_recent_targets_the_invoking_window() {
+        // The other window's id, deliberately not `0`: a row that lost its payload
+        // and defaulted would then be visibly wrong rather than accidentally right.
+        const OTHER_WINDOW: u16 = 4;
+
         let window_cwd = PathBuf::from("/proj/live");
         let other = PathBuf::from("/proj/alpha");
 
-        // The store holds the window's own working directory and one other project.
-        // `is_dir` answers true for EVERYTHING, so the only thing that can drop a row
-        // below is the window-cwd rule — the other two refusals are given no
-        // opportunity to explain the result.
+        // The store holds the invoking window's own working directory and one other
+        // project. `is_dir` answers true for EVERYTHING, so the only thing that can
+        // drop a row below is the window-cwd rule — the other two refusals are given
+        // no opportunity to explain the result.
         let recorded = vec![window_cwd.clone(), other.clone()];
         let offered =
             open_recent_candidates(&recorded, Some(window_cwd.as_path()), |_: &Path| true);
@@ -1011,51 +1126,134 @@ mod tests {
         assert_eq!(
             offered,
             vec![other.clone()],
-            "with the window rooted at {window_cwd:?}, `open_recent_candidates` offered \
-             {offered:?} out of {recorded:?}. wolf-gnome has ONE window, so an Open Recent \
-             activation has exactly one window to act on and re-rooting is the only thing it can \
-             do — which, for the directory that window is already rooted at, changes nothing. \
-             Offering it puts a row in the palette that does nothing when the user presses Enter, \
-             and it is the commonest entry in the store, so it is usually the TOP row. A unit that \
-             gives this front-end more than one window changes this rule here, deliberately: with \
-             a second window the right answer is to raise it, not to hide the row."
+            "with the invoking window rooted at {window_cwd:?}, `open_recent_candidates` offered \
+             {offered:?} out of {recorded:?}. This row acts on the window whose palette it was \
+             picked in and re-roots it, so for the directory that window is already rooted at it \
+             does nothing at all — and it is the commonest entry in the store, so the dead row \
+             would usually be the TOP one. Raising a DIFFERENT window that happens to be editing \
+             this directory is not what un-hiding this row would do: that is \
+             `PaletteAction::SwitchWindow`'s row, asserted in half 3, and re-rooting this window \
+             onto another's project would put a second Neovim on that project's swap directory."
         );
 
         // (2) The offered directory classifies to an action carrying a directory and
         //     no window target. The `let … else` is the assertion's mechanical half:
         //     a variant that grew a window field stops compiling here.
-        let action = palette_action_for(PaletteRowKind::OpenRecent, None, Some(other.as_path()));
+        let action = palette_action_for(
+            PaletteRowKind::OpenRecent,
+            None,
+            None,
+            Some(other.as_path()),
+        );
         let PaletteAction::OpenRecentFolder(target) = &action else {
             panic!(
                 "an Open Recent row for {other:?} classified to {action:?}, not \
-                 OpenRecentFolder. wolf-gnome has one window, so the only thing this row can do \
-                 is re-root it, and that is the action that says so; an Unsupported here makes \
-                 every folder row fail `palette_rows`' filter and the palette offers none at all."
+                 OpenRecentFolder. The only thing this row does is re-root the invoking window, \
+                 and that is the action that says so; an Unsupported here makes every folder row \
+                 fail `palette_rows`' filter and the palette offers none at all."
             )
         };
         assert_eq!(
             target, &other,
             "the Open Recent action for {other:?} carries {target:?}. The payload is a DIRECTORY \
-             and nothing else — there is no window index in it, because wolf-gnome has one window \
-             and `shell::on_palette_activation` has one window to hand this path to. It is what \
-             `AppShell::chdir_to` `:tcd`s to, so a rewritten path re-roots that window somewhere \
-             the user did not pick."
+             and nothing else — no window index, because the row's target is the window \
+             `shell::on_palette_activation` was called for and there is nothing to choose. It is \
+             what `AppShell::chdir_to` `:tcd`s to, so a rewritten path re-roots that window \
+             somewhere the user did not pick."
+        );
+
+        // (3) The same directory, seen as ANOTHER window's, is a Switch to Window row
+        //     — so hiding it from half 1 hides a dead row, not a capability.
+        let windows = [PaletteWindow {
+            index: OTHER_WINDOW,
+            cwd: other.to_string_lossy().into_owned(),
+        }];
+        let rows = palette_rows(&offered, &windows, &[], "", PALETTE_MAX_ROWS);
+
+        let switch_row = rows
+            .iter()
+            .find(|row| row.kind == PaletteRowKind::SwitchWindow)
+            .unwrap_or_else(|| {
+                panic!(
+                    "with one other window rooted at {other:?}, `palette_rows` offered NO \
+                     SwitchWindow row. Half 1 refuses to offer a directory as an Open Recent row \
+                     on the ground that raising is SwitchWindow's job; with no switch row the \
+                     directory another window is editing is unreachable from the palette \
+                     altogether, and half 1's justification becomes false. Rows were: {:?}",
+                    rows.iter().map(|row| &row.display).collect::<Vec<_>>()
+                )
+            });
+        let recent_row = rows
+            .iter()
+            .find(|row| row.kind == PaletteRowKind::OpenRecent)
+            .unwrap_or_else(|| {
+                panic!(
+                    "the Open Recent row for {other:?} vanished once a window was editing that \
+                     same directory. The two rows are DIFFERENT acts — raise that window, or \
+                     re-root this one onto its project — and dropping either is a decision to \
+                     make deliberately, not a deduplication. Rows were: {:?}",
+                    rows.iter().map(|row| &row.display).collect::<Vec<_>>()
+                )
+            });
+
+        assert_eq!(
+            palette_action_for(
+                switch_row.kind,
+                switch_row.command,
+                switch_row.window_index,
+                switch_row.path.as_deref()
+            ),
+            PaletteAction::SwitchWindow(OTHER_WINDOW),
+            "the Switch to Window row {:?} does not classify to SwitchWindow({OTHER_WINDOW}). An \
+             Unsupported makes it fail `palette_rows`' filter, so the row disappears and the only \
+             thing the palette offers for {other:?} is the Open Recent row that re-roots THIS \
+             window — the choice half 1 says the user has is then not there.",
+            switch_row.display
+        );
+        assert_ne!(
+            switch_row.display, recent_row.display,
+            "the Switch to Window row and the Open Recent row for {other:?} render identically \
+             ({:?}). They perform different acts on different windows, so a user picking between \
+             them by sight cannot: `rank_palette` prefixes each with what it does, and a label \
+             that dropped the prefix would leave the palette showing one directory twice with no \
+             way to tell which row raises and which re-roots.",
+            switch_row.display
         );
     }
 
     /// A row is actionable exactly when its command classifies to a real
-    /// [`UiAction`] or it is an `OpenRecent` row carrying a folder path; every other
-    /// `(kind, command, path)` triple is `Unsupported`.
+    /// [`UiAction`], it is a `SwitchWindow` row carrying a window index, or it is an
+    /// `OpenRecent` row carrying a folder path; every other
+    /// `(kind, command, window_index, path)` tuple is `Unsupported`.
     ///
     /// The regression this pins is a palette row that prints "not dispatched" when
     /// the user presses Enter — the one surface in this crate that would list a
     /// no-op, which `actions.rs`'s `menu_never_lists_a_reserved_action` and
     /// `shell::install_actions` both refuse to do.
     ///
-    /// The `path` column is exercised on all three kinds deliberately, not only on
-    /// the one that reads it: a `Static` or `SwitchWindow` row that started honouring
-    /// a path would make the classification depend on a field core sets only for
-    /// `OpenRecent`, and nothing else in this crate would notice.
+    /// The two payload columns are exercised on all three kinds deliberately, not
+    /// only on the kind that reads each: a `Static` row that started honouring a
+    /// path, or an `OpenRecent` row that started honouring a window index, would
+    /// make the classification depend on a field core sets only for another kind,
+    /// and nothing else in this crate would notice. The arguments are a PROJECTION
+    /// of the row, in the row's own field order.
+    ///
+    /// The `Some(0)` row is not decoration: `0` is the first id the coordinator
+    /// mints, so it is the id the very first window holds, and an implementation
+    /// that reached for `unwrap_or_default()` or treated a zero index as "no window"
+    /// would make the palette refuse to raise exactly that window while every other
+    /// row worked.
+    ///
+    /// FALSIFYING EDIT: restore `PaletteRowKind::SwitchWindow => Unsupported(…)`.
+    /// PREDICTED: the assertion sits inside the loop, so the run reports the first
+    /// failing row — `SwitchWindow + a window index`, expecting `SwitchWindow(7)`.
+    /// PREDICTED NOT ISOLATED: [`open_recent_targets_the_invoking_window`]'s third
+    /// half and [`palette_rows_offer_one_switch_row_per_other_window`] redden beside
+    /// it, both because every switch row then fails [`palette_rows`]' filter and
+    /// disappears from the list.
+    /// [`palette_unsupported_reasons_are_distinct_and_non_empty`] stays GREEN
+    /// through it, and deliberately: its probe passes no window index, so it
+    /// exercises the arm that is `Unsupported` either way.
     #[test]
     fn palette_action_table() {
         let undispatched = undispatched_probe();
@@ -1065,6 +1263,7 @@ mod tests {
                 desc: "Static + NewBuffer: dispatched, so the row runs the command",
                 kind: PaletteRowKind::Static,
                 command: Some(Command::NewBuffer),
+                window_index: None,
                 path: None,
                 want: WantAction::Dispatch(Command::NewBuffer),
             },
@@ -1072,13 +1271,23 @@ mod tests {
                 desc: "Static + NewBuffer + a folder path: the path is IGNORED",
                 kind: PaletteRowKind::Static,
                 command: Some(Command::NewBuffer),
+                window_index: None,
                 path: Some("/proj/alpha"),
+                want: WantAction::Dispatch(Command::NewBuffer),
+            },
+            PaletteCase {
+                desc: "Static + NewBuffer + a window index: the index is IGNORED",
+                kind: PaletteRowKind::Static,
+                command: Some(Command::NewBuffer),
+                window_index: Some(3),
+                path: None,
                 want: WantAction::Dispatch(Command::NewBuffer),
             },
             PaletteCase {
                 desc: "Static + GoToFile: dispatched (it opens the file picker)",
                 kind: PaletteRowKind::Static,
                 command: Some(Command::GoToFile),
+                window_index: None,
                 path: None,
                 want: WantAction::Dispatch(Command::GoToFile),
             },
@@ -1086,6 +1295,7 @@ mod tests {
                 desc: "Static + Copy: dispatched, so the row runs the clipboard yank",
                 kind: PaletteRowKind::Static,
                 command: Some(Command::Copy),
+                window_index: None,
                 path: None,
                 want: WantAction::Dispatch(Command::Copy),
             },
@@ -1103,6 +1313,7 @@ mod tests {
                 desc: "Static + HideApplication: NoGnomeEquivalent, so unsupported",
                 kind: PaletteRowKind::Static,
                 command: Some(Command::HideApplication),
+                window_index: None,
                 path: None,
                 want: WantAction::Unsupported,
             },
@@ -1110,6 +1321,7 @@ mod tests {
                 desc: "Static + the first registry row this front-end does not dispatch",
                 kind: PaletteRowKind::Static,
                 command: Some(undispatched),
+                window_index: None,
                 path: None,
                 want: WantAction::Unsupported,
             },
@@ -1117,20 +1329,47 @@ mod tests {
                 desc: "Static + no command at all: nothing to dispatch",
                 kind: PaletteRowKind::Static,
                 command: None,
+                window_index: None,
                 path: None,
                 want: WantAction::Unsupported,
             },
             PaletteCase {
-                desc: "SwitchWindow: wolf-gnome is single-window, so there is nothing to raise",
+                desc: "SwitchWindow + a window index: raise that window",
                 kind: PaletteRowKind::SwitchWindow,
                 command: None,
+                window_index: Some(7),
+                path: None,
+                want: WantAction::SwitchWindow(7),
+            },
+            PaletteCase {
+                desc: "SwitchWindow + window index 0: the FIRST window's id is not \"no window\"",
+                kind: PaletteRowKind::SwitchWindow,
+                command: None,
+                window_index: Some(0),
+                path: None,
+                want: WantAction::SwitchWindow(0),
+            },
+            PaletteCase {
+                desc: "SwitchWindow + a window index + a folder path: the path is IGNORED",
+                kind: PaletteRowKind::SwitchWindow,
+                command: None,
+                window_index: Some(7),
+                path: Some("/proj/alpha"),
+                want: WantAction::SwitchWindow(7),
+            },
+            PaletteCase {
+                desc: "SwitchWindow + NO window index: no window to raise",
+                kind: PaletteRowKind::SwitchWindow,
+                command: None,
+                window_index: None,
                 path: None,
                 want: WantAction::Unsupported,
             },
             PaletteCase {
-                desc: "SwitchWindow + a folder path: still nothing to raise, path IGNORED",
+                desc: "SwitchWindow + a folder path but no index: still nothing to raise",
                 kind: PaletteRowKind::SwitchWindow,
                 command: None,
+                window_index: None,
                 path: Some("/proj/alpha"),
                 want: WantAction::Unsupported,
             },
@@ -1138,6 +1377,15 @@ mod tests {
                 desc: "OpenRecent + a folder path: re-root the window to that folder",
                 kind: PaletteRowKind::OpenRecent,
                 command: None,
+                window_index: None,
+                path: Some("/proj/alpha"),
+                want: WantAction::OpenRecentFolder("/proj/alpha"),
+            },
+            PaletteCase {
+                desc: "OpenRecent + a folder path + a window index: the index is IGNORED",
+                kind: PaletteRowKind::OpenRecent,
+                command: None,
+                window_index: Some(9),
                 path: Some("/proj/alpha"),
                 want: WantAction::OpenRecentFolder("/proj/alpha"),
             },
@@ -1145,6 +1393,7 @@ mod tests {
                 desc: "OpenRecent + NO folder path: nothing to change the cwd to",
                 kind: PaletteRowKind::OpenRecent,
                 command: None,
+                window_index: None,
                 path: None,
                 want: WantAction::Unsupported,
             },
@@ -1152,24 +1401,41 @@ mod tests {
 
         for case in &cases {
             let path = case.path.map(Path::new);
-            let got = palette_action_for(case.kind, case.command, path);
+            let got = palette_action_for(case.kind, case.command, case.window_index, path);
             match case.want {
                 WantAction::Dispatch(expected) => assert_eq!(
                     got,
                     PaletteAction::Dispatch(expected),
-                    "case: {} — palette_action_for({:?}, {:?}, {:?}) returned {got:?}. A command \
-                     `ui_action_for` classifies as a real UiAction MUST resolve to \
+                    "case: {} — palette_action_for({:?}, {:?}, {:?}, {:?}) returned {got:?}. A \
+                     command `ui_action_for` classifies as a real UiAction MUST resolve to \
                      Dispatch(command): anything else silently drops the row out of the \
                      palette's list, so a working command becomes unreachable from the palette.",
                     case.desc,
                     case.kind,
                     case.command,
+                    case.window_index,
+                    case.path
+                ),
+                WantAction::SwitchWindow(expected) => assert_eq!(
+                    got,
+                    PaletteAction::SwitchWindow(expected),
+                    "case: {} — palette_action_for({:?}, {:?}, {:?}, {:?}) returned {got:?}, not \
+                     SwitchWindow({expected}). An Unsupported here makes every switch row fail \
+                     `palette_rows`' filter, so the palette lists no window rows at all and a \
+                     user with two windows cannot reach the other one from it. The INDEX must \
+                     come through unchanged: it is the coordinator's `WindowId`, which \
+                     `Coordinator::raise` looks up in its registry, so a rewritten one presents a \
+                     different window — or, for an id no window holds, silently nothing.",
+                    case.desc,
+                    case.kind,
+                    case.command,
+                    case.window_index,
                     case.path
                 ),
                 WantAction::OpenRecentFolder(expected) => assert_eq!(
                     got,
                     PaletteAction::OpenRecentFolder(PathBuf::from(expected)),
-                    "case: {} — palette_action_for({:?}, {:?}, {:?}) returned {got:?}, not \
+                    "case: {} — palette_action_for({:?}, {:?}, {:?}, {:?}) returned {got:?}, not \
                      OpenRecentFolder({expected:?}). An Unsupported here makes every Open Recent \
                      row fail `palette_rows`' filter, so the palette lists no folder rows at all \
                      and the feature is unreachable; a Dispatch here would hand the shell a \
@@ -1179,20 +1445,23 @@ mod tests {
                     case.desc,
                     case.kind,
                     case.command,
+                    case.window_index,
                     case.path
                 ),
                 WantAction::Unsupported => assert!(
                     matches!(got, PaletteAction::Unsupported(_)),
-                    "case: {} — palette_action_for({:?}, {:?}, {:?}) returned {got:?}, but this \
-                     row is one wolf-gnome could not perform when the row was written. A Dispatch \
-                     or an OpenRecentFolder here puts a row in the palette that does nothing (or \
-                     something unintended) when the user presses Enter — the exact failure \
-                     `menu_never_lists_a_reserved_action` exists to prevent for the menu. If the \
-                     command was GENUINELY implemented since, move this row to \
-                     WantAction::Dispatch and tick its feat-list entry; do not relax the arm.",
+                    "case: {} — palette_action_for({:?}, {:?}, {:?}, {:?}) returned {got:?}, but \
+                     this row is one wolf-gnome could not perform when the row was written. A \
+                     Dispatch, a SwitchWindow or an OpenRecentFolder here puts a row in the \
+                     palette that does nothing (or something unintended) when the user presses \
+                     Enter — the exact failure `menu_never_lists_a_reserved_action` exists to \
+                     prevent for the menu. If the row was GENUINELY given a payload since, move \
+                     it to the matching WantAction and tick its feat-list entry; do not relax \
+                     the arm.",
                     case.desc,
                     case.kind,
                     case.command,
+                    case.window_index,
                     case.path
                 ),
             }
@@ -1216,7 +1485,7 @@ mod tests {
         let mut unsupported = 0usize;
 
         for spec in COMMAND_SPECS {
-            let got = palette_action_for(PaletteRowKind::Static, Some(spec.command), None);
+            let got = palette_action_for(PaletteRowKind::Static, Some(spec.command), None, None);
             if is_dispatched(spec.command) {
                 dispatched += 1;
                 assert_eq!(
@@ -1263,9 +1532,10 @@ mod tests {
     ///
     /// Distinctness matters for the same reason it does in `command_action.rs`: the
     /// reason is what a reader sees when a row refuses to run, and two arms sharing
-    /// a string make "this folder row carries no path" indistinguishable from "there
-    /// is only one window". Mid-sentence casing matters because the reason is
-    /// interpolated into a printed diagnostic, never used as a sentence of its own.
+    /// a string make "this folder row carries no path" indistinguishable from "this
+    /// switch row carries no window to raise". Mid-sentence casing matters because
+    /// the reason is interpolated into a printed diagnostic, never used as a
+    /// sentence of its own.
     #[test]
     fn palette_unsupported_reasons_are_distinct_and_non_empty() {
         // One probe per arm of `palette_action_for` that can return Unsupported.
@@ -1276,19 +1546,24 @@ mod tests {
         let probes = [
             (
                 "a Static row whose command this front-end does not dispatch",
-                palette_action_for(PaletteRowKind::Static, Some(undispatched_probe()), None),
+                palette_action_for(
+                    PaletteRowKind::Static,
+                    Some(undispatched_probe()),
+                    None,
+                    None,
+                ),
             ),
             (
                 "a Static row carrying no command at all",
-                palette_action_for(PaletteRowKind::Static, None, None),
+                palette_action_for(PaletteRowKind::Static, None, None, None),
             ),
             (
-                "a SwitchWindow row",
-                palette_action_for(PaletteRowKind::SwitchWindow, None, None),
+                "a SwitchWindow row carrying no window index",
+                palette_action_for(PaletteRowKind::SwitchWindow, None, None, None),
             ),
             (
                 "an OpenRecent row carrying no folder path",
-                palette_action_for(PaletteRowKind::OpenRecent, None, None),
+                palette_action_for(PaletteRowKind::OpenRecent, None, None, None),
             ),
         ];
 
@@ -1320,7 +1595,7 @@ mod tests {
                 "the Unsupported reason for {source} ({reason:?}) duplicates another arm's \
                  reason. Reasons must be DISTINCT so the printed diagnostic names the real \
                  cause: with two arms sharing a string, \"this folder row carries no path\" \
-                 and \"there is only one window\" become the same message."
+                 and \"this switch row carries no window to raise\" become the same message."
             );
         }
     }
@@ -1329,16 +1604,17 @@ mod tests {
     /// registry commands this front-end performs — no deferred row, no `SwitchWindow`
     /// row, no `OpenRecent` row, and never the palette's own invoking command.
     ///
-    /// The empty slice is this test's fixture, not a claim about production:
-    /// [`palette_rows_include_recent_dirs`] is the one that pins what a NON-empty
-    /// slice adds.
+    /// The empty slices are this test's fixture, not a claim about production:
+    /// [`palette_rows_include_recent_dirs`] and
+    /// [`palette_rows_offer_one_switch_row_per_other_window`] are the ones that pin
+    /// what a NON-empty recent-dirs or window slice adds.
     ///
     /// The expected count is computed from `COMMAND_SPECS` here, never written as a
     /// literal, so appending a command or promoting one cannot leave this test
     /// asserting a stale number.
     #[test]
     fn palette_rows_lists_only_actionable_commands() {
-        let rows = palette_rows(&[], &[], "", PALETTE_MAX_ROWS);
+        let rows = palette_rows(&[], &[], &[], "", PALETTE_MAX_ROWS);
         let actionable = actionable_specs();
 
         assert!(
@@ -1369,12 +1645,13 @@ mod tests {
             assert_eq!(
                 row.kind,
                 PaletteRowKind::Static,
-                "palette row {:?} has kind {:?}. This test passes an EMPTY recent-dirs slice, and \
-                 `palette_rows` passes `rank_palette` an empty window slice, so a non-`Static` row \
-                 here means `palette_rows` is manufacturing rows from somewhere other than its \
-                 arguments. Note this says nothing about production, which DOES feed real recent \
-                 directories (`PaletteInner::open` -> `open_recent_candidates`); the test that \
-                 pins what a non-empty slice adds is `palette_rows_include_recent_dirs`.",
+                "palette row {:?} has kind {:?}. This test passes an EMPTY recent-dirs slice AND \
+                 an empty window slice, so a non-`Static` row here means `palette_rows` is \
+                 manufacturing rows from somewhere other than its arguments. Note this says \
+                 nothing about production, which DOES feed both (`PaletteInner::open` -> \
+                 `open_recent_candidates` and the coordinator's window registry); the tests that \
+                 pin what a non-empty slice adds are `palette_rows_include_recent_dirs` and \
+                 `palette_rows_offer_one_switch_row_per_other_window`.",
                 row.display,
                 row.kind
             );
@@ -1387,7 +1664,7 @@ mod tests {
                 )
             };
             assert_eq!(
-                palette_action_for(row.kind, row.command, row.path.as_deref()),
+                palette_action_for(row.kind, row.command, row.window_index, row.path.as_deref()),
                 PaletteAction::Dispatch(command),
                 "palette row {:?} ({command:?}) does not classify as Dispatch, so it is a row \
                  the user can select and activate to no effect. That is the one thing the \
@@ -1442,7 +1719,7 @@ mod tests {
              test, not a passing one. Pick a probe that is not first in COMMAND_SPECS order."
         );
 
-        let cold = palette_rows(&[], &[], "", PALETTE_MAX_ROWS);
+        let cold = palette_rows(&[], &[], &[], "", PALETTE_MAX_ROWS);
         assert_eq!(
             cold.first().map(|row| row.mru_key.as_str()),
             Some(first.id),
@@ -1453,7 +1730,7 @@ mod tests {
         );
 
         let recent = vec![probe.to_string()];
-        let warm = palette_rows(&[], &recent, "", PALETTE_MAX_ROWS);
+        let warm = palette_rows(&[], &[], &recent, "", PALETTE_MAX_ROWS);
         assert_eq!(
             warm.first().map(|row| row.mru_key.as_str()),
             Some(probe),
@@ -1466,29 +1743,59 @@ mod tests {
     }
 
     /// The cage smoke's premise, made executable: the query
-    /// `command_palette_chord_runs_the_selected_command_under_cage` types matches
-    /// EXACTLY ONE palette row, that row is New (`new_buffer`), and that holds with
-    /// a non-empty command MRU too.
+    /// `command_palette_chord_runs_the_selected_command_under_cage` types ranks the
+    /// New (`new_buffer`) row FIRST, and the one MRU state that inverts that is
+    /// asserted rather than assumed away.
     ///
-    /// Without this, a registry rename — or a second `new`-matching command being
-    /// promoted to dispatched — would not fail anything in the fast suite. It would
-    /// instead make the smoke stochastic: a second row would appear, `restored_index`
-    /// would still select the top one, and which command Enter ran would depend on
-    /// the ranking tie-breaks and on whatever the MRU happened to hold.
+    /// Without this, a registry rename would not fail anything in the fast suite. It
+    /// would instead make the smoke stochastic: `restored_index` selects the top row
+    /// whatever it is, so which command Enter runs would be decided by ranking
+    /// tie-breaks nobody chose.
+    ///
+    /// ## Why this is an ORDER guard and not a uniqueness guard
+    ///
+    /// "Exactly one row" is not available for this query, and the mechanism is what
+    /// says so: `score_entry` matches a term as a case-insensitive SUBSEQUENCE of
+    /// `display`, and `New` is a PREFIX of `New Window`, so every query that matches
+    /// one matches the other. No query separates them, exactly as no query separates
+    /// `Preview` from `Preview in Browser` (see
+    /// [`palette_rows_for_the_preview_smoke_rank_the_named_command_first`], which
+    /// this test is shaped like). Chasing uniqueness here is therefore work that
+    /// cannot succeed.
+    ///
+    /// What makes the smoke deterministic is therefore the TIE-BREAK. `rank_matches`
+    /// sorts on `(mru_group, mru_rank, Reverse(score), match_start, span, len,
+    /// display)`, and for the term `new` the two rows tie on the first five: both
+    /// score 124 (component start + word start + contiguous), both match from index
+    /// 0, and both span 2. They separate at `len` — 3 characters against 10 — so the
+    /// shorter title wins. That is the whole of why Enter runs New.
+    ///
+    /// ## The MRU premise is load-bearing, so it is asserted
+    ///
+    /// `mru_group` is `MatchKey`'s LEADING field, so a command MRU holding
+    /// `new_window` puts that row first however much better `New` matches, and the
+    /// smoke would open a second WINDOW instead of a new buffer. Its capture-based
+    /// assertions could not tell those apart — `cage` shows one toplevel and keeps
+    /// the newest on top, so a fresh window hides the base file's heading exactly as
+    /// a fresh buffer replaces it — which is why the guard has to be here.
+    ///
+    /// The smoke is safe from it for a reason outside this crate, and the last block
+    /// below is what keeps that reason stated rather than lucky: its `WOLF_STATE_DIR`
+    /// is a fresh per-run directory, so `command-mru.sqlite` starts empty, and
+    /// nothing but a palette activation ever writes that store.
     ///
     /// ## The recent-directories premise
     ///
-    /// "Exactly one row" holds GIVEN an empty recent-dirs slice, which is what this
-    /// test passes. The smoke gets that from two independent facts, neither of which
-    /// this test can check: its `WOLF_STATE_DIR` is a fresh per-run directory, so
-    /// `folder-mru.sqlite` starts empty; and `wolf_core::redraw::apply_cwd` never
-    /// records the LAUNCH working directory (the initial `wolf_cwd` emit is flagged),
-    /// so nothing is added before the chord fires. A recorded directory whose path
-    /// happened to contain `n`, `e` and `w` in that order would otherwise add a
-    /// second matching row and make that smoke stochastic in exactly the way this
-    /// test exists to prevent.
+    /// Every assertion here holds GIVEN an empty recent-dirs slice, which is what
+    /// this test passes. The smoke gets that from two independent facts, neither of
+    /// which this test can check: the same fresh `WOLF_STATE_DIR` leaves
+    /// `folder-mru.sqlite` empty, and `wolf_core::redraw::apply_cwd` never records
+    /// the LAUNCH working directory (the initial `wolf_cwd` emit is flagged), so
+    /// nothing is added before the chord fires. A recorded directory whose path
+    /// happened to contain `n`, `e` and `w` in that order would otherwise rank
+    /// against the same query.
     #[test]
-    fn palette_rows_query_new_selects_exactly_the_new_buffer_row() {
+    fn palette_rows_query_new_ranks_the_new_buffer_row_first() {
         let key = Command::NewBuffer.spec().id;
 
         // Precondition: the literals the smoke carries still name this row. The
@@ -1501,16 +1808,17 @@ mod tests {
              or that smoke's MRU assertion becomes unfalsifiable."
         );
 
-        // Precondition: the FILTER is what makes this query unique, not the query
-        // being rare. Unfiltered, `New Window` and `New Tab` match it too — both
-        // Deferred — so a filter regression turns one row into three.
+        // Precondition: the query COLLIDES, so everything below is a statement about
+        // ranking rather than about a query that happens to be rare. Unfiltered it
+        // matches `New`, `New Window` and `New Tab`; the filter removes `New Tab`
+        // alone.
         let unfiltered = rank_palette(&[], &[], &[], SMOKE_QUERY, usize::MAX);
         assert!(
             unfiltered.len() > 1,
             "`rank_palette` matches only {} candidate(s) for {SMOKE_QUERY:?} before the \
-             classification filter runs, so the \"exactly one row\" assertion below would hold \
-             even with the filter deleted and would stop discriminating it. Titles matching \
-             {SMOKE_QUERY:?} were: {:?}",
+             classification filter runs, so the ranking assertions below would be about a query \
+             that selects one title and would stop being statements about ranking at all. Titles \
+             matching {SMOKE_QUERY:?} were: {:?}",
             unfiltered.len(),
             unfiltered
                 .iter()
@@ -1520,14 +1828,164 @@ mod tests {
 
         let mrus: [Vec<String>; 2] = [Vec::new(), vec![Command::ClosePane.spec().id.to_string()]];
         for recent in &mrus {
-            let rows = palette_rows(&[], recent, SMOKE_QUERY, PALETTE_MAX_ROWS);
+            let rows = palette_rows(&[], &[], recent, SMOKE_QUERY, PALETTE_MAX_ROWS);
+            assert!(
+                rows.len() > 1,
+                "`palette_rows` returned {} actionable row(s) for {SMOKE_QUERY:?} with command \
+                 MRU {recent:?}. The collision survives the classification filter — `New Window` \
+                 is dispatched — so one row here means it was demoted back to Deferred, and the \
+                 top-row assertion below would be about uniqueness again rather than about the \
+                 `len` tie-break it names. Rows were: {:?}",
+                rows.len(),
+                rows.iter().map(|row| &row.display).collect::<Vec<_>>()
+            );
+
+            let row = rows.first().unwrap_or_else(|| {
+                panic!(
+                    "`palette_rows` returned NO rows for {SMOKE_QUERY:?} with command MRU \
+                     {recent:?}, so the smoke would press Enter on an empty palette and nothing \
+                     would be dispatched at all."
+                )
+            });
+            assert_eq!(
+                row.command,
+                Some(Command::NewBuffer),
+                "the TOP row for {SMOKE_QUERY:?} (with command MRU {recent:?}) carries {:?}, not \
+                 Command::NewBuffer. The smoke presses Enter on the preselected first row and \
+                 asserts the base file's heading is GONE from the capture — which a second \
+                 WINDOW satisfies just as well as a new buffer, since `cage` keeps the newest \
+                 toplevel on top, so this is the guard and the capture is not. The two rows tie \
+                 down to `len`, so a title rename is all it takes to invert them. Rows were: {:?}",
+                row.command,
+                rows.iter().map(|r| &r.display).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                row.mru_key.as_str(),
+                key,
+                "the TOP row for {SMOKE_QUERY:?} (with command MRU {recent:?}) records {:?} on \
+                 activation, not {key:?}. The smoke reads the command-MRU sqlite back and looks \
+                 for exactly that key.",
+                row.mru_key
+            );
+        }
+
+        // --- The adversarial MRU, asserted as the inversion it is --------------
+        //
+        // Stated here rather than as a third `mrus` entry, because its expected answer
+        // is the OPPOSITE of the loop's and folding it in would need a per-row
+        // expectation reading as though either answer were acceptable. It is not: it
+        // is a live fragility of the smoke, and this assertion is what keeps it from
+        // being rediscovered as a mystery.
+        let window_id = Command::NewWindow.spec().id;
+        let adversarial: Vec<String> = vec![window_id.to_string()];
+        let inverted = palette_rows(&[], &[], &adversarial, SMOKE_QUERY, PALETTE_MAX_ROWS);
+        let top = inverted.first().unwrap_or_else(|| {
+            panic!(
+                "`palette_rows` returned NO rows for {SMOKE_QUERY:?} with command MRU \
+                 [{window_id:?}], which contradicts the row count asserted above for the same \
+                 query."
+            )
+        });
+        assert_eq!(
+            top.command,
+            Some(Command::NewWindow),
+            "with a command MRU holding {window_id:?}, the top row for {SMOKE_QUERY:?} carries \
+             {:?} rather than Command::NewWindow. This test asserts the INVERSION on purpose: \
+             `MatchKey`'s leading field is `mru_group`, so one MRU hit outranks every \
+             match-quality key, and a state directory that had once opened a window from the \
+             palette would make the smoke open another one instead of a buffer. The smoke is safe \
+             from that only because `smoke_state_dir` is fresh per run and nothing but a palette \
+             activation writes `command-mru.sqlite`. If THIS assertion is what went red, the \
+             tie-break itself changed — re-derive `rank_matches`' key order before touching the \
+             smoke, because the blocks above have stopped being statements about ranking. Rows \
+             were: {:?}",
+            top.command,
+            inverted.iter().map(|row| &row.display).collect::<Vec<_>>()
+        );
+    }
+
+    /// The query the New Window smoke types selects the New Window row, and does it
+    /// by MATCHING rather than by out-ranking anything.
+    ///
+    /// This is the sibling of
+    /// [`palette_rows_query_new_ranks_the_new_buffer_row_first`] and the measurement
+    /// [`NEW_WINDOW_PALETTE_QUERY`] comes from, so the two are read together. They
+    /// look like they disagree and do not: `new` ranks New (`new_buffer`) first
+    /// because `New` is the SHORTER of two titles that tie down to `len`, while
+    /// `new window` drops that row entirely, because `rank_matches` requires EVERY
+    /// whitespace-separated term to be a subsequence of the label and `window` is not
+    /// a subsequence of `New`. One query cannot serve both smokes, and the second
+    /// term is exactly what makes this one unambiguous.
+    ///
+    /// Uniqueness here is a property of the QUERY, not of the classification filter,
+    /// which is why the count is asserted on `rank_palette`'s output as well: no
+    /// deferred row is being hidden behind it, so the count cannot change meaning if
+    /// a command is promoted.
+    ///
+    /// ## What the smoke needs from this
+    ///
+    /// `two_windows_two_neovims_and_two_saved_sessions_under_cage` types this query
+    /// into the palette of the window it launched, then presses Enter on the
+    /// preselected top row. Two of its premises are outside this test and are
+    /// recorded rather than checked: it opens the palette while that window is the
+    /// ONLY one, so the coordinator offers no Switch to Window rows (whose labels
+    /// would otherwise rank against these terms), and its per-run `WOLF_STATE_DIR`
+    /// leaves both MRU stores empty.
+    ///
+    /// A third lives in the smoke's own file, because it is about the COPY rather
+    /// than about the query: the eighth block of
+    /// `restore_fixture_names_cannot_satisfy_their_own_assertions` asserts that
+    /// `TWOWIN_NEW_WINDOW_QUERY` still splits into exactly two lowercase ASCII terms
+    /// on a single space. This test would keep passing against a copy that had picked
+    /// up a doubled space or a capital on the way across the crate boundary.
+    ///
+    /// FALSIFYING EDIT: set [`NEW_WINDOW_PALETTE_QUERY`] to `"new"`. PREDICTED: the
+    /// UNFILTERED count reddens first, reporting 3 candidates and printing `New`,
+    /// `New Window` and `New Tab`; relaxing it, the actionable count reports 2; and
+    /// relaxing that, the command assertion names `New` / `Command::NewBuffer` as
+    /// the row that would run instead — the smoke would replace the buffer in the
+    /// window it already had and never open a second one, so its `nvim`-child count
+    /// would stay at 1. PREDICTED ISOLATED: yes — no other test reads this constant.
+    #[test]
+    fn the_new_window_palette_query_selects_the_new_window_row() {
+        let key = Command::NewWindow.spec().id;
+
+        // Precondition: the query really does what its name says, before any
+        // classification filter runs. If `rank_palette` matched more than one
+        // candidate, the assertions below would be about the filter or about a
+        // tie-break rather than about the query.
+        let unfiltered = rank_palette(&[], &[], &[], NEW_WINDOW_PALETTE_QUERY, usize::MAX);
+        assert_eq!(
+            unfiltered.len(),
+            1,
+            "`rank_palette` matches {} candidate(s) for {NEW_WINDOW_PALETTE_QUERY:?} before the \
+             classification filter runs, not 1. This query is chosen so that MATCHING selects the \
+             row — the second term `window` is not a subsequence of `New`, which is what \
+             separates it from {SMOKE_QUERY:?} — so a second candidate means the smoke's Enter \
+             now lands on whichever row a tie-break favours. Titles matching \
+             {NEW_WINDOW_PALETTE_QUERY:?} were: {:?}",
+            unfiltered.len(),
+            unfiltered
+                .iter()
+                .map(|row| &row.display)
+                .collect::<Vec<_>>()
+        );
+
+        // Both MRU states the smoke can meet: a fresh store, and one warmed by an
+        // unrelated activation. A single row cannot be reordered, so the MRU can only
+        // change the answer by changing the SET — which is what these two check.
+        let mrus: [Vec<String>; 2] = [Vec::new(), vec![Command::ClosePane.spec().id.to_string()]];
+        for recent in &mrus {
+            let rows = palette_rows(&[], &[], recent, NEW_WINDOW_PALETTE_QUERY, PALETTE_MAX_ROWS);
             assert_eq!(
                 rows.len(),
                 1,
-                "`palette_rows` returned {} row(s) for the query {SMOKE_QUERY:?} with command \
-                 MRU {recent:?}; the cage smoke presses Enter on the top row and asserts a NEW \
-                 BUFFER replaced the open file, so a second matching row makes which command it \
-                 runs depend on ranking tie-breaks. Rows were: {:?}",
+                "`palette_rows` returned {} actionable row(s) for {NEW_WINDOW_PALETTE_QUERY:?} \
+                 with command MRU {recent:?}, not 1. ZERO means the New Window row was demoted \
+                 back to Deferred, so the smoke would type its query into an empty list and Enter \
+                 would open nothing — its `nvim`-child count would still read 1 and it would fail \
+                 with no visible cause. MORE than one means the query stopped being unambiguous \
+                 and which row Enter runs is decided by a tie-break nobody chose. Rows were: {:?}",
                 rows.len(),
                 rows.iter().map(|row| &row.display).collect::<Vec<_>>()
             );
@@ -1535,18 +1993,20 @@ mod tests {
             let row = &rows[0];
             assert_eq!(
                 row.command,
-                Some(Command::NewBuffer),
-                "the sole row matching {SMOKE_QUERY:?} (with command MRU {recent:?}) carries \
-                 {:?}, not Command::NewBuffer. The smoke asserts the base file's heading is GONE \
-                 from the capture, which only a new untitled buffer produces.",
-                row.command
+                Some(Command::NewWindow),
+                "the sole row matching {NEW_WINDOW_PALETTE_QUERY:?} (with command MRU {recent:?}) \
+                 carries {:?}, not Command::NewWindow. The smoke asserts the app process gains a \
+                 SECOND `nvim` child, which only opening a window produces; every other `New …` \
+                 command acts inside the window that is already there. Rows were: {:?}",
+                row.command,
+                rows.iter().map(|r| &r.display).collect::<Vec<_>>()
             );
             assert_eq!(
                 row.mru_key.as_str(),
                 key,
-                "the sole row matching {SMOKE_QUERY:?} (with command MRU {recent:?}) records \
-                 {:?} on activation, not {key:?}. The smoke reads the command-MRU sqlite back \
-                 and looks for exactly that key.",
+                "the sole row matching {NEW_WINDOW_PALETTE_QUERY:?} (with command MRU {recent:?}) \
+                 records {:?} on activation, not {key:?} — the canonical registry id, and what a \
+                 command-MRU readback would have to look for.",
                 row.mru_key
             );
         }
@@ -1653,7 +2113,7 @@ mod tests {
             // see the third block below, which is where that case is pinned.
             let mrus: [Vec<String>; 2] = [Vec::new(), vec![Command::Preview.spec().id.to_string()]];
             for recent in &mrus {
-                let rows = palette_rows(&[], recent, query, PALETTE_MAX_ROWS);
+                let rows = palette_rows(&[], &[], recent, query, PALETTE_MAX_ROWS);
                 assert_eq!(
                     rows.len(),
                     actionable_rows,
@@ -1721,7 +2181,7 @@ mod tests {
             });
         let browser_id = Command::PreviewInBrowser.spec().id;
         let adversarial: Vec<String> = vec![browser_id.to_string()];
-        let inverted = palette_rows(&[], &adversarial, preview_query, PALETTE_MAX_ROWS);
+        let inverted = palette_rows(&[], &[], &adversarial, preview_query, PALETTE_MAX_ROWS);
         let top = inverted.first().unwrap_or_else(|| {
             panic!(
                 "`palette_rows` returned NO rows for {preview_query:?} with command MRU \
@@ -1751,36 +2211,81 @@ mod tests {
     ///
     /// Ranking unbounded and truncating afterwards is not a micro-optimization in
     /// reverse: `rank_palette` truncates before this crate's filter can see the
-    /// list, so passing `max` through would let deferred rows eat the budget and
-    /// hand the user a short — or empty — palette. With `max == 1` the single
-    /// ranked candidate is `COMMAND_SPECS[0]` (`NewWindow`, deferred), so the
-    /// regression shows up here as zero rows rather than one.
+    /// list, so passing `max` through would let unsupported rows eat the budget and
+    /// hand the user a short — or empty — palette.
+    ///
+    /// **The cap is COMPUTED, and that is the whole design of this test.** A cap
+    /// discriminates only if it reaches PAST the first candidate the filter removes,
+    /// and where that candidate sits is a property of the REGISTRY rather than of
+    /// this crate. A hardcoded cap is what that rules out: `max == 1` discriminates
+    /// exactly while `COMMAND_SPECS[0]` is a command this front-end does not
+    /// dispatch, and the day it is promoted the same literal quietly stops
+    /// discriminating anything — the first row survives either way, the assertion
+    /// still passes, and nothing says the test has gone inert. Reading the position
+    /// out of `rank_palette`'s own output means the row can move without disarming
+    /// the guard.
     #[test]
     fn palette_rows_cap_counts_only_actionable_rows() {
-        let full = palette_rows(&[], &[], "", PALETTE_MAX_ROWS);
+        let full = palette_rows(&[], &[], &[], "", PALETTE_MAX_ROWS);
+
+        // Where the first unsupported candidate sits in the UNFILTERED empty-query
+        // order — which is `COMMAND_SPECS` order, since nothing is in the MRU.
+        let candidates = rank_palette(&[], &[], &[], "", usize::MAX);
+        let first_unsupported = candidates
+            .iter()
+            .position(|row| {
+                matches!(
+                    palette_action_for(
+                        row.kind,
+                        row.command,
+                        row.window_index,
+                        row.path.as_deref()
+                    ),
+                    PaletteAction::Unsupported(_)
+                )
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "no ranked candidate is Unsupported, so a pre-filter cap and a post-filter \
+                     cap return the same list for every `max` and this test cannot tell them \
+                     apart. That would mean wolf-gnome dispatches every registered command — a \
+                     milestone, not a failure — and this test should then be deleted along with \
+                     the filter it guards rather than left passing vacuously."
+                )
+            });
+        let cap = first_unsupported + 1;
+
         assert!(
-            full.len() > 1,
-            "the uncapped empty-query list holds {} row(s), so capping it at 1 removes nothing \
-             and this test cannot tell a post-filter cap from a pre-filter one.",
+            full.len() > cap,
+            "the uncapped empty-query list holds {} row(s) and the cap under test is {cap}, so \
+             capping removes nothing and a pre-filter cap would be indistinguishable from a \
+             post-filter one.",
             full.len()
         );
 
-        let capped = palette_rows(&[], &[], "", 1);
+        let capped = palette_rows(&[], &[], &[], "", cap);
         assert_eq!(
             capped.len(),
-            1,
-            "`palette_rows(&[], &[], \"\", 1)` returned {} row(s), not 1. Zero means `max` is being \
-             handed to `rank_palette`, which truncates BEFORE the classification filter runs: \
-             the one ranked candidate is the registry's first row, that row is deferred, and the \
-             filter then empties the list. Rank unbounded and `.take(max)` after the filter.",
-            capped.len()
+            cap,
+            "`palette_rows(.., {cap})` returned {} row(s), not {cap}. FEWER means `max` is being \
+             handed to `rank_palette`, which truncates BEFORE the classification filter runs: the \
+             first {cap} ranked candidates include one the filter then removes, so the user is \
+             handed a short list — and with a small enough cap, an empty one. Rank unbounded and \
+             `.take(max)` after the filter. Rows were: {:?}",
+            capped.len(),
+            capped.iter().map(|row| &row.display).collect::<Vec<_>>()
         );
         assert_eq!(
-            capped.first().map(|row| row.mru_key.as_str()),
-            full.first().map(|row| row.mru_key.as_str()),
-            "the capped list's single row is not the uncapped list's first row, so applying the \
-             cap reordered the results. `.take(max)` must preserve the ranking order it \
-             truncates."
+            capped
+                .iter()
+                .map(|row| row.mru_key.as_str())
+                .collect::<Vec<_>>(),
+            full.iter()
+                .take(cap)
+                .map(|row| row.mru_key.as_str())
+                .collect::<Vec<_>>(),
+            "the capped list is not the uncapped list's first {cap} rows, so applying the cap \
+             reordered the results. `.take(max)` must preserve the ranking order it truncates."
         );
     }
 
@@ -1804,7 +2309,7 @@ mod tests {
         let dir_text = dir.to_string_lossy().into_owned();
         let actionable = actionable_specs();
 
-        let rows = palette_rows(std::slice::from_ref(&dir), &[], "", PALETTE_MAX_ROWS);
+        let rows = palette_rows(std::slice::from_ref(&dir), &[], &[], "", PALETTE_MAX_ROWS);
 
         assert_eq!(
             rows.len(),
@@ -1871,7 +2376,7 @@ mod tests {
     fn palette_rows_open_recent_row_is_activatable() {
         let dir = PathBuf::from("/proj/alpha");
 
-        let rows = palette_rows(std::slice::from_ref(&dir), &[], "", PALETTE_MAX_ROWS);
+        let rows = palette_rows(std::slice::from_ref(&dir), &[], &[], "", PALETTE_MAX_ROWS);
 
         let row = rows
             .iter()
@@ -1888,13 +2393,201 @@ mod tests {
             });
 
         assert_eq!(
-            palette_action_for(row.kind, row.command, row.path.as_deref()),
+            palette_action_for(row.kind, row.command, row.window_index, row.path.as_deref()),
             PaletteAction::OpenRecentFolder(dir.clone()),
             "the surviving Open Recent row {:?} does not classify to \
              OpenRecentFolder({dir:?}). `PaletteInner::activate_selection` performs whatever this \
              returns, so anything else means pressing Enter on the row prints a refusal (or \
              dispatches something unrelated) rather than re-rooting the window.",
             row.display
+        );
+    }
+
+    /// A live window really reaches [`rank_palette`]: one OTHER window yields
+    /// exactly one Switch to Window row, carrying that window's id and core's
+    /// verbatim label.
+    ///
+    /// This is the switch half's primary falsifier, and it is the twin of
+    /// [`palette_rows_include_recent_dirs`]. **Revert:** restore
+    /// `rank_palette(recent_dirs, &[], …)` in [`palette_rows`] — i.e. drop the
+    /// `windows` argument on the floor. PREDICTED: the count assertion reports the
+    /// registry's size instead of one more than it, and the switch-row count reports
+    /// 0. PREDICTED NOT ISOLATED — [`open_recent_targets_the_invoking_window`]'s
+    /// third half reddens beside it, which is the pairing that says the argument was
+    /// dropped rather than that the classification changed.
+    ///
+    /// The CONTROL case is what makes the rest attributable: with no windows passed,
+    /// no switch row exists at all, so a row found afterwards came from the argument
+    /// and not from something else manufacturing rows.
+    ///
+    /// The label is asserted against a string BUILT from the fixture's own cwd
+    /// rather than typed out, so an implementation that rewrote the label — a
+    /// basename, a `~` abbreviation — fails it while a passthrough cannot satisfy it
+    /// by accident. It matters beyond cosmetics: `rank_matches` is a subsequence
+    /// matcher over `display`, so the shown string is also the string the user's
+    /// query is matched against.
+    ///
+    /// The TWO-window case is not a repetition of the one-window case, and it is the
+    /// only part of this test that can see a `.first()`-shaped defect: a source that
+    /// offered the first other window and dropped the rest satisfies every assertion
+    /// above it, since with one other window "the first" and "all of them" are the
+    /// same list. It asserts the SET of ids rather than a count, so a failure names
+    /// which window became unreachable.
+    ///
+    /// The empty-cwd row is the shape a fresh New Window has: it has started no
+    /// project, contributes `""` as its persisted directory, and core renders that as
+    /// `Untitled`. Without a row for it, the palette's only offer for the window a
+    /// user just opened would be a blank label.
+    #[test]
+    fn palette_rows_offer_one_switch_row_per_other_window() {
+        const BETA: &str = "/proj/beta";
+        const BETA_INDEX: u16 = 7;
+        const GAMMA: &str = "/proj/gamma";
+        const GAMMA_INDEX: u16 = 5;
+        const UNTITLED_INDEX: u16 = 2;
+
+        let actionable = actionable_specs();
+
+        // --- Control: no windows, no switch rows --------------------------------
+        let control = palette_rows(&[], &[], &[], "", PALETTE_MAX_ROWS);
+        assert!(
+            control
+                .iter()
+                .all(|row| row.kind != PaletteRowKind::SwitchWindow),
+            "with an EMPTY window slice the palette already offers a SwitchWindow row, so every \
+             assertion below would hold whether or not the `windows` argument reached \
+             `rank_palette` at all. Rows were: {:?}",
+            control.iter().map(|row| &row.display).collect::<Vec<_>>()
+        );
+
+        // --- One other window ---------------------------------------------------
+        let windows = [PaletteWindow {
+            index: BETA_INDEX,
+            cwd: BETA.to_string(),
+        }];
+        let rows = palette_rows(&[], &windows, &[], "", PALETTE_MAX_ROWS);
+
+        assert_eq!(
+            rows.len(),
+            actionable.len() + 1,
+            "`palette_rows` returned {} row(s) for the empty query with ONE other window, but \
+             the registry has {} actionable command(s), so exactly {} were expected. The \
+             registry's own count means the window produced NO row: `palette_rows` is not passing \
+             its `windows` argument through to `rank_palette`, so the palette would offer no way \
+             to reach another window however many are open — and on Wayland, where a backgrounded \
+             toplevel cannot raise itself, the palette is the only way to ask. Rows were: {:?}",
+            rows.len(),
+            actionable.len(),
+            actionable.len() + 1,
+            rows.iter().map(|row| &row.display).collect::<Vec<_>>()
+        );
+
+        let switch_rows: Vec<&PaletteRow> = rows
+            .iter()
+            .filter(|row| row.kind == PaletteRowKind::SwitchWindow)
+            .collect();
+        assert_eq!(
+            switch_rows.len(),
+            1,
+            "the empty-query list holds {} row(s) of kind SwitchWindow for ONE other window, not \
+             1. Zero means the row was ranked and then dropped by `palette_rows`' classification \
+             filter, which is the shape a reverted `palette_action_for` produces; more than one \
+             means a window was duplicated, and two rows for one window would raise the same \
+             window whichever the user picked. Rows were: {:?}",
+            switch_rows.len(),
+            rows.iter().map(|row| &row.display).collect::<Vec<_>>()
+        );
+
+        let row = switch_rows[0];
+        assert_eq!(
+            row.window_index,
+            Some(BETA_INDEX),
+            "the Switch to Window row carries window index {:?}, not the {BETA_INDEX:?} it was \
+             given. That index is the coordinator's `WindowId` and the argument \
+             `Coordinator::raise` looks up in its registry, so a rewritten one presents a \
+             different window — and an id no window holds presents nothing at all, silently.",
+            row.window_index
+        );
+        assert_eq!(
+            row.display,
+            format!("Switch to Window: {BETA}"),
+            "the Switch to Window row is labelled {:?}. The label is `rank_palette`'s verbatim — \
+             the prefix plus the window's directory — and this crate rewrites it nowhere. It is \
+             also the string `rank_matches` ranks the query against, so an abbreviated or \
+             prettified label makes the user unable to type what they can see, exactly as it \
+             would for an Open Recent row.",
+            row.display
+        );
+        assert_eq!(
+            palette_action_for(row.kind, row.command, row.window_index, row.path.as_deref()),
+            PaletteAction::SwitchWindow(BETA_INDEX),
+            "the surviving Switch to Window row {:?} does not classify to \
+             SwitchWindow({BETA_INDEX}). `PaletteInner::activate_selection` performs whatever \
+             this returns, so anything else means pressing Enter on the row prints a refusal \
+             rather than asking the coordinator to raise that window.",
+            row.display
+        );
+
+        // --- Two other windows: one row EACH, both raise targets preserved -------
+        let two = [
+            PaletteWindow {
+                index: BETA_INDEX,
+                cwd: BETA.to_string(),
+            },
+            PaletteWindow {
+                index: GAMMA_INDEX,
+                cwd: GAMMA.to_string(),
+            },
+        ];
+        let rows = palette_rows(&[], &two, &[], "", PALETTE_MAX_ROWS);
+        let mut indices: Vec<Option<u16>> = rows
+            .iter()
+            .filter(|row| row.kind == PaletteRowKind::SwitchWindow)
+            .map(|row| row.window_index)
+            .collect();
+        indices.sort_unstable();
+        assert_eq!(
+            indices,
+            vec![Some(GAMMA_INDEX), Some(BETA_INDEX)],
+            "with TWO other windows the palette offered switch rows for {indices:?}. One row per \
+             window is the contract: a missing id means that window is unreachable from every \
+             other window's palette, and since the raise is best-effort on Wayland anyway, an \
+             absent row leaves the user no way to ask at all. Rows were: {:?}",
+            rows.iter().map(|row| &row.display).collect::<Vec<_>>()
+        );
+
+        // --- An empty-state window: the shape a fresh New Window has -------------
+        let untitled = [PaletteWindow {
+            index: UNTITLED_INDEX,
+            cwd: String::new(),
+        }];
+        let rows = palette_rows(&[], &untitled, &[], "", PALETTE_MAX_ROWS);
+        let row = rows
+            .iter()
+            .find(|row| row.kind == PaletteRowKind::SwitchWindow)
+            .unwrap_or_else(|| {
+                panic!(
+                    "a window whose persisted directory is \"\" — the state a window opened by \
+                     New Window is in until it is given a project — produced no SwitchWindow row \
+                     at all, so the window the user just opened is the one they cannot get back \
+                     to. Rows were: {:?}",
+                    rows.iter().map(|row| &row.display).collect::<Vec<_>>()
+                )
+            });
+        assert_eq!(
+            row.display, "Switch to Window: Untitled",
+            "an empty-state window is labelled {:?}. `rank_palette` renders an empty cwd as \
+             `Untitled`, and that is the label this front-end depends on: the raw string would \
+             render as a bare prefix with nothing after it, and a row a user cannot name is one \
+             they cannot type a query for.",
+            row.display
+        );
+        assert_eq!(
+            row.window_index,
+            Some(UNTITLED_INDEX),
+            "the empty-state window's row carries window index {:?}, not {UNTITLED_INDEX:?}. A \
+             window with no project still has an id, and it is the one thing that row needs.",
+            row.window_index
         );
     }
 
@@ -1926,7 +2619,7 @@ mod tests {
 
         let dir = PathBuf::from(format!("/proj/{DISTINCTIVE}"));
 
-        let registry_only = palette_rows(&[], &[], DISTINCTIVE, PALETTE_MAX_ROWS);
+        let registry_only = palette_rows(&[], &[], &[], DISTINCTIVE, PALETTE_MAX_ROWS);
         assert!(
             registry_only.is_empty(),
             "with NO recent directories the query {DISTINCTIVE:?} already matches {} registry \
@@ -1942,6 +2635,7 @@ mod tests {
 
         let rows = palette_rows(
             std::slice::from_ref(&dir),
+            &[],
             &[],
             DISTINCTIVE,
             PALETTE_MAX_ROWS,
@@ -1977,7 +2671,7 @@ mod tests {
     }
 
     /// The Open Recent cage smoke's premise, made executable — the sibling of
-    /// [`palette_rows_query_new_selects_exactly_the_new_buffer_row`], for the folder
+    /// [`palette_rows_query_new_ranks_the_new_buffer_row_first`], for the folder
     /// row instead of the command row.
     ///
     /// `open_recent_palette_row_reroots_the_window_under_cage` seeds ONE directory
@@ -2009,7 +2703,7 @@ mod tests {
 
         // Assertion 1 (precondition): the query is unique because of the SEEDED
         // FOLDER, not because the palette happens to be small.
-        let registry_only = palette_rows(&[], &[], SMOKE_RECENT_QUERY, PALETTE_MAX_ROWS);
+        let registry_only = palette_rows(&[], &[], &[], SMOKE_RECENT_QUERY, PALETTE_MAX_ROWS);
         assert!(
             registry_only.is_empty(),
             "the smoke's query {SMOKE_RECENT_QUERY:?} matches {} registry row(s) with NO recent \
@@ -2029,6 +2723,7 @@ mod tests {
         // query yields exactly its row.
         let rows = palette_rows(
             std::slice::from_ref(&dir),
+            &[],
             &[],
             SMOKE_RECENT_QUERY,
             PALETTE_MAX_ROWS,

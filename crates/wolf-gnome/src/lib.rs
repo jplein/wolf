@@ -175,9 +175,11 @@
 //!   shows a Markdown preview of it. Includes [`pane_layout::is_empty_leaf`] — the
 //!   CONTENT predicate that decides whether a layout is persisted at all, and which
 //!   must never be an arity test.
-//! - [`restore_plan`]: the whole launch plan (cwd, empty state, saved pane tree,
-//!   window size) plus the write-side rules — which snapshots may be committed,
-//!   what cwd is persisted, and the one-window/one-tab shape ([`state_seam`]).
+//! - [`restore_plans`]: ONE launch plan per saved window (cwd, empty state, saved
+//!   pane tree, window size), in saved order and never an empty vec, plus the
+//!   write-side rules — which snapshots may be committed, what cwd is persisted,
+//!   one window's one-tab subtree, the tree assembled from every window's, and
+//!   what closing one window does to it ([`state_seam`]).
 //! - [`mod@liveness_ui`]: the CRASH/STALL recovery rulebook — the TOTAL
 //!   [`wolf_core::Liveness`] → `(overlay mode, auto_restart, paint)` mapping the
 //!   wake drain gates on ([`liveness_ui()`]), the message each overlay mode
@@ -240,13 +242,15 @@
 //!   key becomes unreachable".
 //!
 //! The windowed application restores its state at launch and persists it as it
-//! runs: [`app::run`] opens a `wolf_core::StateStore` over `state.json` before any
-//! widget exists, turns it into a [`RestorePlan`] (working directory, window size,
-//! the tab's saved pane-split tree), realizes the saved layout through
-//! `WolfCore::rebuild_layout`, and — via [`persistence`] — writes the live tree
-//! back on every render wake and authoritatively at `close-request`.
+//! runs: [`app::run`] activates a [`mod@coordinator`], which opens the ONE
+//! `wolf_core::StateStore` over `state.json` before any widget exists and turns
+//! the loaded tree into one [`RestorePlan`] per saved window (working directory,
+//! window size, the tab's saved pane-split tree). Each [`mod@window`] realizes its
+//! saved layout through `WolfCore::rebuild_layout` and — via [`persistence`] —
+//! contributes its own subtree on every render wake and at `close-request`; the
+//! coordinator assembles those subtrees into the tree and commits it.
 //!
-//! [`app::run`] builds an `adw::ApplicationWindow` with a
+//! [`window::build`] builds an `adw::ApplicationWindow` with a
 //! header bar whose editor area is a **native pane view** ([`pane_view`]) — a tree
 //! of nested `gtk::Paned`s with one `gtk::Overlay` host per Neovim window, whose main
 //! child is that pane's `gtk::DrawingArea` and whose only overlay child is a
@@ -289,6 +293,7 @@ pub mod clipboard_ui;
 pub mod cmdline_ui;
 pub mod command_action;
 pub mod config_seam;
+pub mod coordinator;
 pub mod crash_overlay;
 pub mod cursor;
 pub mod drawer;
@@ -318,6 +323,7 @@ pub mod title;
 pub mod tree;
 pub mod tree_gate;
 pub mod tree_view;
+pub mod window;
 pub mod workspace;
 
 pub use command_action::{ui_action_for, UiAction};
@@ -327,6 +333,6 @@ pub use liveness_ui::{
     liveness_ui, reopen_order, restart_button_rect, LivenessUi, OverlayMode, RestartOutcome,
 };
 pub use render::{paint, CellMetrics};
-pub use state_seam::{restore_plan, RestorePlan};
+pub use state_seam::{restore_plans, RestorePlan};
 pub use title::{window_title, WINDOW_TITLE_FALLBACK};
 pub use workspace::{launch_decision, LaunchDecision};

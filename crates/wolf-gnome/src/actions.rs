@@ -106,8 +106,13 @@ pub enum BindingStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActionBinding {
     /// The `gio` action name, e.g. `"win.go-to-file"` or `"app.quit"`. The `win.`
-    /// prefix scopes the action to the window (so the deferred multi-window row
-    /// needs no rework); `app.` is used only for application-wide actions.
+    /// prefix scopes the action to ONE window and `app.` to the whole process, and
+    /// the split decides who installs the row: `app.` rows are installed exactly
+    /// once by [`crate::coordinator::Coordinator::install_app_actions`], while
+    /// every `win.` row is installed per window by
+    /// `shell::AppShell::install_actions`. `gio::ActionMap::add_action` REPLACES an
+    /// existing entry, so an `app.` row installed per window would leave the last
+    /// window's closure owning it for the whole application.
     pub action: &'static str,
     /// The GTK accelerator string, or `None` for a menu-only action.
     pub accel: Option<&'static str>,
@@ -179,8 +184,10 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: Some(Command::NewWindow),
         status: BindingStatus::MenuOnly,
-        note: "macOS Shift+Cmd+N; deferred because wolf-gnome is single-window, so it is neither \
-               bound nor listed in the menu yet",
+        note:
+            "macOS Shift+Cmd+N; menu-only because Ctrl+Shift+N is spent on win.new-buffer and no \
+               Ctrl+Shift+<letter> is free, so the menu, the palette and :WolfNewWindow are its \
+               routes",
     },
     ActionBinding {
         action: "win.new-tab",
@@ -391,6 +398,10 @@ pub const MENU_SECTIONS: &[MenuSection] = &[
             MenuItemSpec {
                 label: "New",
                 action: "win.new-buffer",
+            },
+            MenuItemSpec {
+                label: "New Window",
+                action: "app.new-window",
             },
             MenuItemSpec {
                 label: "Open Folder…",
@@ -2039,6 +2050,187 @@ mod tests {
              nothing reaches it: it has no accelerator, no registry command to be drained, and now \
              no menu entry either. `menu_items_reference_declared_actions` checks the other \
              direction and cannot see this."
+        );
+    }
+
+    /// The rows installed ONCE PER PROCESS — the `app.` namespace — sorted.
+    ///
+    /// A literal set rather than a count, so a red names the row that moved.
+    const EXPECTED_APP_SCOPED_ACTIONS: [&str; 2] = ["app.new-window", "app.quit"];
+
+    /// Exactly two rows are `app.`-scoped, and both are actions that need no
+    /// PARTICULAR window to mean something.
+    ///
+    /// The namespace is not a naming convention: it decides who installs the row.
+    /// [`crate::coordinator::Coordinator::install_app_actions`] installs every
+    /// `app.` row exactly once, against the application, and
+    /// `shell::AppShell::install_actions` installs every `win.` row once per
+    /// window and skips the `app.` half entirely — so an `app.` row has exactly
+    /// one closure for the whole process, and that closure holds the COORDINATOR
+    /// rather than any window.
+    ///
+    /// An `app.` row whose behaviour needs a particular window therefore has none
+    /// to act on. It would either act on an arbitrary window (whichever the single
+    /// closure happened to capture) or, once that window closed, on none at all —
+    /// silently, since `gio` activates the action either way. New Window opens a
+    /// window that does not exist yet and Quit closes every window there is, so
+    /// neither has that problem; every other row in the table is one window's.
+    ///
+    /// `gio::ActionMap::add_action` REPLACES an existing entry, which is what makes
+    /// the split load-bearing rather than tidy: installing `app.quit` per window
+    /// would leave the LAST window's closure owning the whole application's Quit,
+    /// and closing that window would kill Ctrl+Shift+Q for every window still open.
+    ///
+    /// `command_action::tests::app_scoped_commands_classify_to_an_action_the_coordinator_performs`
+    /// is the other half of the rule and the two are read together: this test pins
+    /// WHICH rows are `app.`-scoped, that one pins what those rows may mean.
+    ///
+    /// FALSIFYING EDIT: rename `win.close-window` to `app.close-window`.
+    /// PREDICTED: the set gains a third element, `"app.close-window"`, in sorted
+    /// position before `"app.new-window"`. PREDICTED NOT ISOLATED, and by more
+    /// than `action_names_are_valid` (which accepts either namespace and stays
+    /// green): a `MENU_SECTIONS` item still names `"win.close-window"`, so
+    /// `menu_items_reference_declared_actions` reddens and
+    /// `menu_never_lists_a_reserved_action` panics on its lookup, and
+    /// `command_action`'s classification test reddens because `CloseWindow` is not
+    /// an action the coordinator performs. The isolating variant is
+    /// `win.minimize-window`, which no menu item references and no chord binds:
+    /// renaming it reddens this test and the classification test, and nothing else.
+    #[test]
+    fn app_scoped_rows_are_performable_without_a_window() {
+        // The namespace is read the way both installers read it — `split_once('.')`
+        // on the action name — rather than by `starts_with("app.")`, so a row named
+        // `"apple.thing"` cannot be counted as app-scoped here while `gio` scopes it
+        // somewhere else entirely.
+        let mut app_scoped: Vec<&'static str> = ACTION_TABLE
+            .iter()
+            .filter(|binding| matches!(binding.action.split_once('.'), Some(("app", _))))
+            .map(|binding| binding.action)
+            .collect();
+        app_scoped.sort_unstable();
+
+        let mut expected: Vec<&'static str> = EXPECTED_APP_SCOPED_ACTIONS.to_vec();
+        expected.sort_unstable();
+
+        assert_eq!(
+            app_scoped, expected,
+            "the set of `app.`-scoped actions changed. These rows are installed ONCE per process \
+             by `Coordinator::install_app_actions`, against a closure holding the coordinator and \
+             no window at all, and no window's shell installs any of them. An EXTRA row means an \
+             action whose behaviour needs a particular window now has none: it would act on \
+             whichever window the single closure captured, or — once that window closed — on \
+             nothing, with `gio` activating it just the same either way. A MISSING row means an \
+             application-wide action became one window's: `add_action` REPLACES an existing entry, \
+             so installing it per window leaves the last window's closure owning it for the whole \
+             process, and closing that window silently unbinds it everywhere. Only two behaviours \
+             qualify: New Window acts on a window that does not exist yet, and Quit acts on every \
+             window there is."
+        );
+    }
+
+    /// The New Window row spends no chord, and the primary menu is what makes it
+    /// reachable.
+    ///
+    /// The sibling of [`the_about_row_carries_no_chord`], and it exists for the
+    /// same structural reason: every accelerator invariant in this module opens
+    /// with `let Some(accel) = binding.accel else { continue; }`, so a row with no
+    /// accelerator is SKIPPED by all four rather than checked by them, and the
+    /// property has to be stated somewhere.
+    ///
+    /// **Why this row spends no chord is a collision, not a preference.** macOS
+    /// gives New Window Shift+Cmd+N, and the Linux transliteration of that is
+    /// Ctrl+Shift+N — which `win.new-buffer` already holds (macOS Cmd+N), and
+    /// `Ctrl+Shift+<letter>` is the whole of this front-end's available namespace.
+    /// Giving this row that chord would not merely duplicate a binding: GTK
+    /// resolves a duplicate to ONE action, so New would silently stop firing.
+    ///
+    /// The row is nevertheless DISPATCHED, so it is reachable from three routes
+    /// with no accelerator among them: the primary menu item asserted below, the
+    /// command palette (which offers a live row for every dispatched command), and
+    /// `:WolfNewWindow`.
+    ///
+    /// FALSIFYING EDIT 1: delete the `"New Window"` item from `MENU_SECTIONS[0]`.
+    /// PREDICTED: the `listed` assertion fails — the row then has no chord and no
+    /// menu entry, leaving only the palette and the Ex command, which is a
+    /// user-visible regression no other test sees.
+    /// PREDICTED ISOLATED: yes — `menu_items_reference_declared_actions` and
+    /// `menu_labels_match_the_registry` both walk MENU_SECTIONS and cannot see an
+    /// item that is not there.
+    ///
+    /// FALSIFYING EDIT 2: give the row `accel: Some("<Control><Shift>n")`.
+    /// PREDICTED: the `accel` assertion below fails, AND `accels_are_unique`
+    /// reddens on the second occurrence of that spelling, naming
+    /// `"app.new-window"`. PREDICTED NOT ISOLATED — and the collision is precisely
+    /// why the row spends no chord, so the pair moving together is the evidence
+    /// rather than noise.
+    #[test]
+    fn the_new_window_row_is_menu_only_and_listed() {
+        const NEW_WINDOW_ACTION: &str = "app.new-window";
+
+        let binding = binding_for_action(NEW_WINDOW_ACTION).unwrap_or_else(|| {
+            panic!(
+                "no ACTION_TABLE row declares {NEW_WINDOW_ACTION:?}. The row is how \
+                 `Coordinator::install_app_actions` learns to install New Window at all, so \
+                 without it the primary menu item renders insensitive and the coordinator's \
+                 `open_new_window` is reachable only from the palette and `:WolfNewWindow`."
+            )
+        });
+
+        assert_eq!(
+            binding.accel, None,
+            "the {NEW_WINDOW_ACTION:?} row declares an accelerator ({:?}). The Linux \
+             transliteration of macOS's Shift+Cmd+N is Ctrl+Shift+N, which `win.new-buffer` \
+             already holds, and `Ctrl+Shift+<letter>` is the whole of this front-end's available \
+             namespace — GTK resolves a duplicate chord to ONE action, so spelling it here would \
+             silently stop New from firing rather than give New Window a chord. It would also \
+             start this row being evaluated by `no_accel_makes_a_neovim_key_unreachable`, the \
+             test that decides whether a Neovim key just became unreachable.",
+            binding.accel
+        );
+        assert_eq!(
+            binding.ctrl_fold, None,
+            "the {NEW_WINDOW_ACTION:?} row declares ctrl_fold {:?} while carrying no accelerator. \
+             Every folding rule is reached only through `parse_accel(binding.accel?)`, so the \
+             declaration is READ BY NOTHING: it states a control byte this row gives up while the \
+             row gives up no key at all, and a reviewer takes the declaration for the price.",
+            binding.ctrl_fold
+        );
+        assert_eq!(
+            binding.status,
+            BindingStatus::MenuOnly,
+            "the {NEW_WINDOW_ACTION:?} row is {:?}, not MenuOnly. `Bound` would put it in the set \
+             `bound_set_is_exactly_this_unit` enumerates while it has no chord to register; \
+             `Reserved` would make `menu_never_lists_a_reserved_action` reject the menu item that \
+             is this row's ONLY route, and would falsely declare a chord held for a later unit. \
+             Installation follows from neither: both installers key on the `UiAction` \
+             classification and never read `status`.",
+            binding.status
+        );
+        assert_eq!(
+            binding.command,
+            Some(Command::NewWindow),
+            "the {NEW_WINDOW_ACTION:?} row carries command {:?}, not Command::NewWindow. \
+             `Coordinator::install_app_actions` resolves an `app.` row through its command and \
+             nothing else, so a None here means the row is printed and skipped (the menu item \
+             renders insensitive) and any other command means the New Window menu item runs \
+             something else entirely.",
+            binding.command
+        );
+
+        // MenuOnly means exactly that: with no chord, an absent menu item leaves
+        // only the palette row and `:WolfNewWindow`.
+        let listed = MENU_SECTIONS
+            .iter()
+            .flat_map(|section| section.items)
+            .any(|item| item.action == NEW_WINDOW_ACTION);
+        assert!(
+            listed,
+            "the {NEW_WINDOW_ACTION:?} row is MenuOnly but no MENU_SECTIONS item references it. \
+             It has no accelerator by design, so the primary menu is the only pointing-device \
+             route to a second window — what remains is the command palette and `:WolfNewWindow`, \
+             neither of which a user discovers by looking. \
+             `menu_items_reference_declared_actions` checks the other direction and cannot see \
+             this."
         );
     }
 }

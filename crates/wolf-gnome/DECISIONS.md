@@ -4,7 +4,7 @@ The durable constraints behind this crate. Read this before changing anything he
 
 ## Scope
 
-This is the GTK 4 / libadwaita front-end: a runnable single-window application that consumes [`wolf-core`](../wolf-core/README.md) as an ordinary Rust crate dependency. It renders Neovim natively rather than embedding a terminal, so every pixel comes from a Cairo/Pango paint of a core `Snapshot`.
+This is the GTK 4 / libadwaita front-end: a runnable multi-window application that consumes [`wolf-core`](../wolf-core/README.md) as an ordinary Rust crate dependency. It renders Neovim natively rather than embedding a terminal, so every pixel comes from a Cairo/Pango paint of a core `Snapshot`. One process holds N windows and one captive Neovim per window; [The coordinator and its windows](#the-coordinator-and-its-windows) owns that split.
 
 Split, close, and focus move are driven by core's layout-intent channel; a divider drag is the `gtk::Paned` handle's own gesture, landing in the pure tree's weights. Menu items, accelerators, and commands drained from Neovim all resolve through one `gio` action namespace.
 
@@ -34,7 +34,7 @@ The gtk-rs crates form one coherent release set: `gtk4` 0.11.x, `gdk4` 0.11.x, `
 
 The crate is both a library and a binary, and the split is the most important structural fact about it. The binary is the window; the library holds every decision expressible as a function of values, so it can be unit-tested with no display server, no widget, and no Neovim.
 
-Those seams cover key and pointer translation, the Cairo paint and its glyph decorations, the pixel-to-grid geometry, the pane-layout tree and its persistence codec, the cursor rules, the action namespace, the command classification, the launch, re-root and application-state rulebooks, the window title, the project-search rulebook, the per-pane navigation rulebook, the clipboard rulebook, the resolved appearance, the sidebar's refresh gate and its trailing-refresh coalescer, and the crash and stall rulebook. Each is a free function or a plain value type; [`src/README.md`](src/README.md) names them file by file.
+Every seam is a free function or a plain value type, and [`src/README.md`](src/README.md) names them file by file rather than repeating the inventory here.
 
 The consequence is this crate's testing posture. Widget construction cannot be unit-tested at all, and is covered only by the smokes below. When you add behavior, put the decision in a seam and test it there: a rule left inside a widget closure is a rule the fast suite cannot execute, and on this platform that has repeatedly meant a rule nothing verified.
 
@@ -48,7 +48,7 @@ The single slot is deliberate. It coalesces a burst of flushes into one queued r
 
 Coalescing is safe even for a signal that fires exactly once, such as a death. `async-channel` reports the channel full only while an item is queued, and the receiver frees the slot before its future resolves, so a dropped send always implies a later full handler run — and liveness is a level-triggered atomic read rather than a message, so that later run observes the death.
 
-The drain order is fixed and every position is load-bearing. The liveness read runs first, before any handler that can early-return, and reports whether painting this wake is worth anything; the pane view and the sidebar run only if it said yes. The shell runs last and ungated: it settles a pending re-root, refreshes the title, takes an application-state snapshot, and only then drains commands, because a drained close tears the core down and a command queued in the instant before a crash must not be stranded behind an opaque overlay.
+The drain order is fixed and every position is load-bearing. The liveness read runs first, before any handler that can early-return, and reports whether painting this wake is worth anything; the pane view and the sidebar run only if it said yes. The shell runs last and ungated: it settles a pending re-root, refreshes the title, contributes its window's application-state subtree, and only then drains commands, because a drained close tears the core down and a command queued in the instant before a crash must not be stranded behind an opaque overlay.
 
 `WolfCore` is not `Send`. It lives only on the main thread in an `Rc<RefCell<Option<_>>>` shared by the widget closures, and the wake closure is the only thing that crosses a thread boundary. Every core borrow is taken and dropped in its own statement, because the close-request handler does `borrow_mut().take()` and an outstanding borrow on that path is a panic rather than a warning.
 
@@ -64,6 +64,34 @@ The picker and the sidebar each run a long-lived `FileSearch` on the same patter
 
 Dropping a `SearchSession` kills its `rg` child, which is the whole of what makes closing the overlay mid-search safe. It is also why the live session is taken and dropped in a statement of its own before the next one starts, rather than being overwritten in place.
 
+## The coordinator and its windows
+
+A process-scoped coordinator sits above the window-scoped shell, and exactly five things live up there, each because a second copy of it would be wrong rather than merely wasteful: the one `StateStore`, the one config read, the one `CellMetrics` measurement, the `app.`-namespace actions, and the session's launch plans. Everything else is per-window and stays there.
+
+The config is read once so two windows cannot disagree about the font mid-session; the metrics because they are deterministic given the config and already shared by `Rc` inside a window; the plans because a launch restores a session rather than a window. The store's reason is sharper.
+
+**The store is process-scoped because two stores over one directory clobber each other silently.** Measured: both report a successful flush, the file holds whichever tree was written last, each store still claims its own tree in memory, and a fresh open reads back the loser's. No panic and no corruption — one window's entire session is simply gone, non-deterministically. `wolf-ffi` records the same rule for macOS.
+
+Each window contributes a `WindowState` subtree and the coordinator assembles the tree and commits it. A window whose snapshot gate is shut contributes the subtree it last cached rather than vanishing, and **an empty contribution set commits nothing at all** — never an empty tree, which would overwrite a whole saved session with a well-formed file holding no windows.
+
+Closing one window has three answers, and each guards a different way to lose a session. Closing the last window is quitting, so its subtree is kept and the session survives — the path `:qa` takes. Closing one of several drops that window, or one the user deliberately dismissed reappears at the next launch.
+
+A close arriving during a quit commits nothing at all. The quit path has already committed the whole tree once, while every core and every pane was still alive, and then closes each window in turn; committing again per window would shrink that tree to nothing one window at a time.
+
+**The `app.` rows are installed once for the process and every window's shell installs `win.` rows only.** `gio::ActionMap::add_action` replaces an existing entry, so installing `app.quit` per window would leave the last window's closure owning the whole application's Quit — and closing that window would silently kill Ctrl+Shift+Q for every window still open.
+
+**Two display-global CSS providers are deliberately not hoisted up here, and the hoist is a named follow-up.** Each window's build adds one to the default display for [`pane_view.rs`](src/README.md#pane_viewrs)'s focus ring and one for [`tree_view.rs`](src/README.md#tree_viewrs)'s current-file bold, so a second window adds a second identical provider — inert, since the rule resolves the same either way.
+
+What holds the hoist is evidence: neither class reaches a pixel. [`tests/README.md`](tests/README.md) records that for the bold, and the outline is chrome no assertion reads, so moving the calls would be an unverifiable edit to a startup path.
+
+New Window opens a fresh, empty window at `$HOME` with its own core, inheriting nothing from the window it was asked from: not the working directory, not the layout, not the size. That is what macOS's `makeNewWindow` does and parity is the row's whole subject; inheriting a project is a new tab's behaviour.
+
+**Restore is positional, never grouped by working directory.** macOS groups restored windows by directory because several of its views share one project's Neovim; here one window owns one core, so there is nothing to group, and inventing a grouping would merge two windows the user opened deliberately. A saved tree holding two windows on one directory restores both, and `MAX_RESTORE_WINDOWS` caps a corrupt or hand-edited file — it is a restore policy against forking dozens of Neovim processes before the first frame, not a limit on the schema.
+
+**Raising a window is best-effort on Wayland**, and that is the platform rather than this call: a client cannot raise itself, so `present()` is a request the compositor may decline. Measured under `cage`: two toplevels exist and the newest stays on top, and presenting the backgrounded one raises nothing. A session compositor normally carries it through xdg-activation. Nothing may assert on it here.
+
+Two windows on one project collide on the durable swap directory, and that is left alone deliberately. The swap directory outlives the process on purpose — that is what makes swap recovery work — so scoping it per core would break a shipped feature to silence a warning, and Neovim's own `W325` toast is the honest report. Windows are not deduped by working directory for the same reason restore is not grouped.
+
 ## Window structure
 
 The window is an `adw::ApplicationWindow` whose content is a vertical box: an `adw::HeaderBar` over a horizontal `gtk::Paned`. The Paned's start child is the file-tree sidebar; its end child is a `gtk::Overlay` whose main child is the pane view. The pane view is a tree of nested `gtk::Paned` with one host `gtk::Overlay` per Neovim window, built from the pure pane tree, plus a one-row command-line strip along the bottom.
@@ -78,7 +106,7 @@ Each pane leaf is a host `gtk::Overlay` whose main child is a `gtk::DrawingArea`
 
 **A preview pane skips exactly its text grid and its scrollbar thumb, and needs no containment seam to do it.** The draw func fills the whole allocation with the editor background before anything else, so a skipped grid leaves that background rather than garbage, and a preview scratch buffer carries no lines in any case — which makes the skip a one-bit predicate with no tolerance, unlike the macOS rule [`architecture.md`](../../architecture.md) names. The statusbar strip is never skipped, and the cursor goes with the grid, since under an opaque view it would paint invisibly.
 
-The pane's statusbar strip, its editor padding, its text grid and its scrollbar thumb are all painted into the drawing area with Cairo rather than being widgets of their own. The padding has to be filled in the editor's background, which is a per-frame value out of the snapshot, and this front-end takes no colour from the GTK theme into the grid — so a widget leaf would draw a theme-coloured frame around a Neovim-coloured grid. A widget strip would also remove only the strip's subtraction and not the padding's, so every pixel-to-grid conversion routes through the inset either way, while the leaf gains a second widget for each rebuild to reuse by id.
+The pane's statusbar strip, its editor padding, its text grid and its scrollbar thumb are all painted into the drawing area with Cairo rather than being widgets of their own. The padding must be filled in the editor's own per-frame background out of the snapshot, and this front-end takes no colour from the GTK theme into the grid, so a widget leaf would draw a theme-coloured frame around a Neovim-coloured grid. Every pixel-to-grid conversion routes through [`editor_inset.rs`](src/README.md#editor_insetrs)'s arithmetic either way.
 
 **The scrollbar is painted rather than a `gtk::Scrollbar`, and three reasons hold independently of the strip's.** A `gtk::Scrollbar` is a control: it carries a `gtk::Adjustment` and accepts input, so shipping one invites a thumb drag with no feedback path into Neovim, and a control that visibly refuses input is worse than an indicator that never claimed to take any.
 
@@ -142,7 +170,7 @@ Every action name, its accelerator, its `Command` correspondence, and its menu p
 
 Single-letter rows declare no fold, and the reason is the modifier mask rather than the character class. The rule above already refuses a bare `Ctrl+<letter>`, so every surviving letter row carries Shift, and `action_for_key` matches masks exactly: plain `Ctrl+I` and `Ctrl+M` still reach Neovim as `<C-I>` and `<C-M>` while `Ctrl+Shift+I` and `Ctrl+Shift+M` are bound. `<Control>grave` carries no Shift, which is precisely why it does consume the byte it folds to.
 
-`Ctrl+Shift+<letter>` is the namespace because nothing else is available. There is effectively no free `Ctrl+<letter>` across all Neovim modes, and a terminal buffer forwards every key but five: the terminal-mode escape and the four `<C-w>` chords `runtime/nvim/init.lua` maps for the drawer.
+`Ctrl+Shift+<letter>` is the namespace because nothing else is available. There is effectively no free `Ctrl+<letter>` across all Neovim modes, and a terminal buffer forwards every key but five: the terminal-mode escape and the four `<C-w>` chords `runtime/nvim/init.lua` maps for the drawer. New Window is where that scarcity bites: `Ctrl+Shift+N` is spent on the new-buffer row (macOS Cmd+N) and no `Ctrl+Shift+<letter>` is free, so the row carries no chord at all and declares no fold, reaching the user through the primary menu, the command palette and `:WolfNewWindow`.
 
 A forwarded, unmapped Alt chord splits into `<Esc>` plus the base key, and a forwarded, unmapped Super chord drops the modifier in normal mode and inserts literal text in insert mode, so neither is a namespace Neovim can be given. The genuinely free keys are too few and too unidiomatic to carry a menu. The rule is memorable: take the macOS chord and replace the command key with Ctrl+Shift.
 
@@ -152,7 +180,7 @@ One consequence is worth knowing: a disabled action's accelerator falls through 
 
 ## Typography
 
-The shared `wolf-config.yaml` is read once, at window build time, next to the state store and before any widget exists — the same point macOS reads it at, through the same resolution `wolf_ffi_load_config` uses. A config edit therefore takes effect on the next launch. An unresolvable preferences directory degrades with one message to the built-in defaults, matching the state store's convention; `wolf_core::load_or_create` creates the file when it is absent, which is why every smoke pins `WOLF_CONFIG_DIR`.
+The shared `wolf-config.yaml` is read once per process, at activate, next to the state store and before any window exists — the same point macOS reads it at, through the same resolution `wolf_ffi_load_config` uses. A config edit therefore takes effect on the next launch. An unresolvable preferences directory degrades with one message to the built-in defaults, matching the state store's convention; `wolf_core::load_or_create` creates the file when it is absent, which is why every smoke pins `WOLF_CONFIG_DIR`.
 
 **`WOLF_FONT_PT` wins over the configured `font-size`**, and that is parity rather than a Linux quirk: `CellMetrics.defaultPointSize` gives the override the same precedence on macOS, the crate README documents it, and the compositor smokes drive it — the one that must let the config decide the size removes it on purpose. The rule lives in a pure seam that takes the override as an argument, so it is testable without touching the process environment.
 
@@ -188,7 +216,7 @@ Only a `LinkClicked` navigation is touched, and the decision-type check ahead of
 
 **The bound is as load-bearing as the hazard.** This crate sets nothing on `webkit6::Settings`, so `allow-file-access-from-file-urls` and `allow-universal-access-from-file-urls` keep their `FALSE` defaults: script-initiated cross-origin access is gated, the declarative loads above are not. Such a document runs local script and style but cannot read local files back out.
 
-Arbitrary script in a preview is not new — an inline `<script>` already runs on the full-load path — but sourcing it from an arbitrary path is. Dropping the base URI to be rid of that takes every relative link with it; `load_preview_document`'s doc comment in [`src/pane_view.rs`](src/pane_view.rs) carries the measurement, including why the termination hazard its own API documentation warns of does not fire on this port.
+An inline `<script>` runs on the full-load path in any case; what the base URI adds is sourcing one from an arbitrary path, and dropping the base URI to be rid of that takes every relative link with it. `load_preview_document`'s doc comment in [`src/pane_view.rs`](src/pane_view.rs) carries the measurement, including why the termination hazard its own API documentation warns of does not fire on this port.
 
 **A source switch needs a full load, and the head-offset guard cannot see one.** The rendered `<head>` is byte-identical across files by design, which is exactly why the in-place body swap's own guard is blind to a link follow. `preview_ui::document_update` is a separate conjunct ahead of it, keyed on the source bufnr; without it a linked file's body lands in a document whose base URI still names the previous file's directory.
 
@@ -200,9 +228,11 @@ The same rule forces a full load whenever a cross-file fragment is waiting, and 
 
 `state.json` is the shared `wolf_core::state` schema, unchanged. Its shape is common to this crate and the macOS front-end, so a Linux-only change to it is a macOS re-verification obligation. `wolf_core::state_dir()` is the single resolution point, and `WOLF_STATE_DIR` overrides it.
 
-A snapshot is taken on every render wake, with no timer and no debounce, plus one final synchronous snapshot at close. That is affordable because two coalescers already sit beneath it: the store is a no-op on an unchanged tree, and the writer thread coalesces before it writes. The crate's no-polling property survives, and a kill loses at most one coalesce window.
+Each window re-gathers its own subtree on every render wake, with no timer and no debounce, and once more as the first thing its close handler does; the coordinator assembles the tree from every window and commits it. A wake refreshes only the waking window and reads the others out of their caches, so the cost does not grow with idle neighbours.
 
-**Every snapshot is gated, and the gate prevents data loss rather than churn.** A snapshot taken while Neovim is dead, before the first pane binds a grid, or before Neovim has reported its per-window buffer map would persist an empty layout and overwrite the user's saved one with nothing.
+That is affordable because two coalescers already sit beneath it: the store is a no-op on an unchanged tree, and the writer thread coalesces before it writes. The crate's no-polling property survives, and a kill loses at most one coalesce window.
+
+**Every gather is gated, and the gate prevents data loss rather than churn.** A subtree built while Neovim is dead, before the first pane binds a grid, or before Neovim has reported its per-window buffer map would persist an empty layout and overwrite the user's saved one with nothing. The gate is read once per window, against that window's own core, and a window is always its core's current tabpage — so it is only ever asked about the view it can see.
 
 **Suppression is by content, never by arity.** A tab's open buffer paths have no persistence channel of their own — they ride only inside the layout's leaves — so a save side that skipped a lone leaf would silently stop persisting the single most common shape there is: one window, one tab, one pane, one file. The save path suppresses only an unnamed, non-preview lone leaf, and the restore path rebuilds any saved layout with no arity guard at all. That is the shape of a bug already fixed on macOS; do not reintroduce it here.
 
@@ -228,7 +258,7 @@ Only the open-file set comes back, reopened with the active file last because re
 
 **Never issue a blocking RPC on the restart path.** Against a dead Neovim it freezes the main loop for the whole timeout budget on every crash. The open-file mirror is read out of the snapshot instead.
 
-Core marks a stall only from a synchronous call's timeout arm, and nine such calls are reachable from this crate. One is the layout rebuild at launch, before the window is interactive.
+Core marks a stall only from a synchronous call's timeout arm, and nine such calls are reachable from this crate, counting Back and Forward as the one navigation move they are. One is the layout rebuild at launch, before the window is interactive.
 
 The other eight a running window issues: the buffer picker's candidate snapshot on Ctrl+Shift+E; a per-pane navigation move on Alt+Left or Alt+Right; the Copy yank on Ctrl+Shift+C; opening a Markdown preview and returning from one to its source, both reached from the command palette or from `:WolfPreview` / `:WolfEdit`; repointing a bound preview at a linked file, which only a click inside a rendered preview reaches; rendering that document for the loopback server behind Preview in Browser; and the preview render, the only one of the nine that repeats while the user simply types.
 
@@ -265,7 +295,9 @@ Three details are load-bearing. Every smoke holds a shared mutex for its whole b
 - The content-width toggle carries no menu item and no accelerator. `MENU_SECTIONS` is const data with no stateful check item to show a per-buffer flag in, and a chord would spend one of the scarce free `Ctrl+Shift` letters on a preference. Its surfaces are `:WolfFullWidth` and the command palette's own row, which appears automatically because the palette filters on the same classification the menu resolves through.
 - No HiDPI scale handling: the cell-measurement probe assumes 96 dpi.
 - No input-method composition support.
-- The command palette lists the registry commands this front-end performs plus one Open Recent row per usable recent directory. There are no Switch-to-Window rows, since there is one window. An Open Recent row re-roots that window, through the same pending-re-root path the Open Folder dialog takes.
+- The command palette lists the registry commands this front-end performs, one Open Recent row per usable recent directory, and one Switch to Window row per other open window. One directory can appear as both, which is the honest surface rather than a duplicate: an Open Recent row re-roots the invoking window through the same pending-re-root path the Open Folder dialog takes, and a Switch to Window row leaves it alone and raises the other window. An Open Recent row is refused only for the invoking window's own directory, and a second window editing that directory does not revive it.
+- A backgrounded window cannot be brought forward under the headless compositor the smokes run in, so activating a Switch to Window row there does nothing visible ([The coordinator and its windows](#the-coordinator-and-its-windows)). On a session compositor it is xdg-activation's answer, not this crate's.
+- A window's saved subtree carries exactly one tab, because a window binds exactly one Neovim tabpage. Native tabs are a different mechanism — a second view of one Neovim — and the schema already has the field they would fill.
 - An Open Recent row exists only for a directory the user changed into: core does not record the launch working directory (see [`runtime/nvim/README.md`](../../runtime/nvim/README.md)), so a project only ever launched into is absent from the palette until the user changes directory.
 - The terminal drawer's status bar reads `bash` over the raw `term:///…/<pid>:…/bin/bash` buffer name, because `wolf_core::pane_status` falls through to that string and neither front-end special-cases a terminal. It is parity rather than a Linux quirk, and prettifying it would change what macOS renders, so it is recorded in [`macos-followups.md`](../../macos-followups.md) rather than fixed one-sidedly.
 - The drawer does not survive a quit and relaunch. It lives outside the pane tree and therefore outside `state.json` ([Window structure](#window-structure)), so every session starts with it closed.

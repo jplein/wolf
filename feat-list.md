@@ -98,7 +98,7 @@ Two divergences from macOS are deliberate. The popup accepts no input at all, ma
 
 Both front-ends surface the per-pane navigation history as two toolbar buttons and as menu items — `⌘[` / `⌘]` on macOS, `Alt+Left` / `Alt+Right` on Linux. The one difference left is the jump list: the macOS History menu also lists the active pane's recently visited files, where the GTK menu carries Back and Forward alone, for the reason recorded in [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md).
 
-The GTK command palette lists the registry commands `wolf-gnome` performs plus one Open Recent row per usable recent directory, each of which re-roots the window through the same path the Open Folder dialog takes; there are no Switch-to-Window rows, since `wolf-gnome` has one window.
+The GTK command palette lists the registry commands `wolf-gnome` performs, one Open Recent row per usable recent directory, and one Switch to Window row per other open window. An Open Recent row re-roots the invoking window through the same path the Open Folder dialog takes; a Switch to Window row leaves that window alone and raises the other one, so a single directory can honestly appear as both. Raising is best-effort on Wayland: a client cannot raise itself, and the headless compositor the smokes run under declines it.
 
 One row stays unticked for partial coverage: the file-dialog row covers all three dialogs, and `wolf-gnome` has native Open File and Open Folder but no save or save-as, so saving remains `:w` from within Neovim.
 
@@ -108,7 +108,7 @@ The GTK sidebar re-roots from one settle point, on the working directory Neovim 
 
 | Feature                                      | Branch or commit                                          | macOS | Linux |
 | -------------------------------------------- | --------------------------------------------------------- | ----- | ----- |
-| Multiple windows                             | `feat/mac-ui-changes` (`2fd6256`)                         | [x]   | [ ]   |
+| Multiple windows                             | `feat/mac-ui-changes` (`2fd6256`)                         | [x]   | [x]   |
 | Command registry (`:Wolf*` + Lua faces)      | `feat/commands` (`fb0147c`)                               | [x]   | [x]   |
 | Commands drained and dispatched to the UI    | `feat/commands` (`fb0147c`)                               | [x]   | [x]   |
 | Native application menu bar                  | `feat/commands`                                           | [x]   | [x]   |
@@ -123,13 +123,15 @@ The GTK sidebar re-roots from one settle point, on the working directory Neovim 
 | `:q` / `:qa` mapped to close pane / window   | `feat/colon-q-remapping`                                  | [x]   | [x]   |
 | ⌘N opens a new untitled Markdown buffer      | `feat/colon-q-remapping` (`0266b96`)                      | [x]   | [x]   |
 
-`wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Of the 26 commands, 17 dispatch, 1 has no GNOME equivalent (`HideApplication`, since the shell owns window visibility), and 8 are deferred with a distinct printed reason.
+`wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Of the 26 commands, 20 dispatch, 1 has no GNOME equivalent (`HideApplication`, since the shell owns window visibility), and 5 are deferred with a distinct printed reason.
+
+The Linux multiple-windows box means N windows in one process: a coordinator owns the single state store, the one config read and the one cell measurement, while each window carries its own captive Neovim, its own wake and its own subtree of `state.json`. New Window opens a fresh empty window and inherits nothing from the window it was asked from — not the working directory, not the layout, not the size — which is macOS's behaviour for the same row. Native tabs stay unticked because a tab is a second view of one Neovim, a different mechanism with its own row.
 
 The GNOME counterpart to the macOS menu bar is a header-bar primary menu driven by the same `gio` action namespace as the accelerators, so menu, chords and drained commands cannot drift apart. The accelerator scheme is documented in [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md), "The accelerator namespace".
 
 That header bar is also the unified toolbar: the sidebar toggle, Back and Forward, and Open at the start, the primary menu at the end, and the window title between them.
 
-The `state` module is read and written. `wolf-gnome` snapshots on every wake without a timer or debounce, which is affordable because `StateStore::set_snapshot` ignores an unchanged tree and the writer thread coalesces; it restores the working directory, window size and pane layout at launch.
+The `state` module is read and written. `wolf-gnome` snapshots on every wake without a timer or debounce, which is affordable because `StateStore::set_snapshot` ignores an unchanged tree and the writer thread coalesces; the tree carries every open window, and a launch restores each saved window's working directory, size and pane layout in saved order.
 
 The single-pane fix is structural: the layout is suppressed by a content predicate, never by leaf arity, which is what made the original bug swallow the commonest shape of all — one window, one tab, one pane, one file.
 
@@ -225,11 +227,11 @@ Full width costs neither front-end any code: `b:wolf_full_width` is seeded on th
 
 Liveness, swap recovery, auto-reload and the hang fixes live in `wolf-core` or `init.lua`, so they reach Linux without front-end work. The GTK side reads `liveness()` at the top of every wake and drives `restart_nvim()`: a dead captive Neovim raises a full-bleed opaque overlay with a "Restart Neovim" button, one automatic in-place restart is attempted, and on success the pane view resets, the captured Tier-1 files reopen with the active one last, and a transient banner reports the restart.
 
-The sidebar full-tree load row records a guarantee rather than a repair: the macOS defect was per-view wake routing, which a single-window front-end structurally cannot have, so what the Linux box states is that the sidebar's trailing refresh cannot drop a traversal's final batch.
+The sidebar full-tree load row records a guarantee rather than a repair: the macOS defect was per-view wake routing, which a front-end holding one Neovim per window structurally cannot have, so what the Linux box states is that the sidebar's trailing refresh cannot drop a traversal's final batch.
 
 Two limits are worth stating. The pane topology does not survive a restart — only the Tier-1 file set does, so a crash while the window was split returns one pane. macOS restores no more than that, so it is a shared limit rather than a Linux gap.
 
-`NotResponding` is reachable from `wolf-gnome` at nine points. `wolf-core` marks a stall only from `block_on_rpc`'s timeout arm, and the GTK side issues nine such calls: the layout rebuild at launch, plus eight a running window issues, which [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md) enumerates and keeps current. Only the preview render repeats while the user simply types. The overlay's presentation has end-to-end coverage — a cage smoke `SIGSTOP`s the captive Neovim and presses the chord. Paste adds none, because the clipboard read is asynchronous and the insert is fire-and-forget.
+`NotResponding` is reachable from `wolf-gnome` at nine points. `wolf-core` marks a stall only from `block_on_rpc`'s timeout arm, and the GTK side issues nine such calls, counting Back and Forward as one navigation move: the layout rebuild at launch, plus eight a running window issues, which [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md) enumerates and keeps current. Only the preview render repeats while the user simply types. The overlay's presentation has end-to-end coverage — a cage smoke `SIGSTOP`s the captive Neovim and presses the chord. Paste adds none, because the clipboard read is asynchronous and the insert is fire-and-forget.
 
 The second limit is that a stall does not clear itself on the GTK side. All eight calls a running window issues refuse to run unless the core reads `Alive`, so a wedged Neovim is never re-probed, and core's own auto-clear rides the success of a later synchronous call while a timed-out one is detached. The route back is the overlay's Restart button, which force-kills.
 
@@ -237,5 +239,6 @@ The second limit is that a stall does not clear itself on the GTK side. All eigh
 
 Work already carried is recorded in the tables above. What remains, in order:
 
-1. **Multi-window and tabs**, which reshape `wolf-gnome` from a single-window application into a coordinator-plus-views one, and are the largest single item left.
-2. **The remaining Markdown-preview row.** Preview in browser is written and dispatched and needs only a host where a human can watch the hand-off land, per the Markdown-preview table above.
+1. **Native tabs.** A tab is a second view of one Neovim, so it needs grid rebinding, a per-view open-file capture, per-view wake fan-out and an `adw::TabView` this crate has never used. It is the largest single item left.
+2. **The floating-panel picker row.** The GTK answer is built — the overlays are children of the window-level overlay, which GTK 4 paints after the main child and its descendants — and what is missing is a capture of a picker composited over a preview. It depends on nothing else in this list.
+3. **The remaining Markdown-preview row.** Preview in browser is written and dispatched and needs only a host where a human can watch the hand-off land, per the Markdown-preview table above.

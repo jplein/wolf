@@ -136,7 +136,8 @@ pub(crate) fn children_for(
         .to_vec()
 }
 
-/// The CSS that defines [`CURRENT_FILE_CSS`]. Loaded once into the default display.
+/// The CSS that defines [`CURRENT_FILE_CSS`]. Loaded into the default display by
+/// [`install_css`], once per window.
 const CURRENT_FILE_CSS_DATA: &str = ".wolf-current-file { font-weight: bold; }";
 
 /// Capacity of the tree's wake channel. One slot is enough: it coalesces a burst of
@@ -584,8 +585,15 @@ impl TreeHandle {
     }
 }
 
-/// Ensures the [`CURRENT_FILE_CSS`] class is defined by loading its CSS once into
-/// the default display.
+/// Ensures the [`CURRENT_FILE_CSS`] class is defined, by adding a display-global
+/// provider carrying its CSS.
+///
+/// [`build`] calls this, so a second window adds a SECOND identical provider to
+/// the same default display. Two identical providers are inert — the rule
+/// resolves the same either way — and the call is deliberately NOT hoisted into
+/// [`crate::coordinator`]: `crates/wolf-gnome/tests/README.md` records that the
+/// current-file bold reaches no pixel in either suite, so the hoist would be an
+/// unverifiable edit to the startup path.
 fn install_css() {
     if let Some(display) = gdk::Display::default() {
         let provider = gtk::CssProvider::new();
@@ -836,7 +844,7 @@ pub fn build(
         entries_version,
         memo,
         // Seeded VISIBLE and corrected by the first `set_empty_state`, which
-        // `app::build_ui` makes after `install_actions` and before `present()` —
+        // `window::build` makes after `install_actions` and before `present()` —
         // so the gate is right before anything renders.
         gate: RefCell::new(TreeRefreshGate::new(true)),
         coalescer: RefCell::new(RefreshCoalescer::new()),

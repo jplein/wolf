@@ -73,7 +73,7 @@
 //!   launch; the first wake at which a window grid exists consumes it
 //!   ([`PaneInner::consume_pending_layout`]) and realizes it
 //!   ([`PaneInner::apply_layout_rebuild`]) through `WolfCore::rebuild_layout`, one
-//!   of the four blocking RPCs this front-end issues, documented there.
+//!   of the nine blocking RPCs this front-end issues, documented there.
 //!
 //! A user's DIVIDER DRAG feeds the save half. [`install_paned_position`] writes the
 //! dragged `gtk::Paned` position back into the tree's weights through
@@ -208,7 +208,8 @@ const SURFACE_EDGE_ALPHA: f64 = 0.35;
 const ACTIVE_PANE_CSS: &str = "wolf-active-pane";
 
 /// CSS defining [`ACTIVE_PANE_CSS`]. An `outline` (not a `border`) so the ring does
-/// NOT consume layout space (no resize churn on focus changes). Loaded once.
+/// NOT consume layout space (no resize churn on focus changes). Loaded into the
+/// default display by [`install_pane_css`], once per window.
 const ACTIVE_PANE_CSS_DATA: &str =
     ".wolf-active-pane { outline: 2px solid #3584e4; outline-offset: -2px; }";
 
@@ -3208,8 +3209,8 @@ impl PaneHandle {
     /// Queues a saved pane tree to be realized ONCE, on the first wake at which a
     /// window grid exists.
     ///
-    /// Called from `app::build_ui` before `present()`, with the layout
-    /// `state_seam::restore_plan` attached. It cannot be applied here: no Neovim
+    /// Called from `window::build` before `present()`, with the layout carried on
+    /// that window's `state_seam::RestorePlan`. It cannot be applied here: no Neovim
     /// window has appeared yet, so there is nothing to rebuild from. See
     /// [`PaneInner::consume_pending_layout`] for the three outcomes.
     pub fn request_layout_rebuild(&self, saved: PaneNode) {
@@ -3909,7 +3910,14 @@ fn pick_initial_window(snap: &Snapshot) -> Option<(i64, u64)> {
         .map(|w| (w.win, w.grid))
 }
 
-/// Loads the [`ACTIVE_PANE_CSS`] definition once into the default display.
+/// Adds a display-global provider carrying the [`ACTIVE_PANE_CSS`] definition.
+///
+/// [`build`] calls this, so a second window adds a SECOND identical provider to
+/// the same default display. Two identical providers are inert — the rule
+/// resolves the same either way — and the call is deliberately NOT hoisted into
+/// [`crate::coordinator`]: no smoke observes this outline (the OCR smokes read
+/// text, not chrome), so the hoist would be an unverifiable edit to the startup
+/// path.
 fn install_pane_css() {
     if let Some(display) = gdk::Display::default() {
         let provider = gtk::CssProvider::new();

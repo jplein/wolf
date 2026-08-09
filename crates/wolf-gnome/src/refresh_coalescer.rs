@@ -157,8 +157,9 @@ mod tests {
     /// traversal is never left undrawn.
     ///
     /// This is what row 3 costs on Linux: a wake routed to one view while another
-    /// view's traversal runs — the macOS defect — has no counterpart in a
-    /// single-window front-end, so the guarantee this seam carries is that the
+    /// view's traversal runs — the macOS defect — has no counterpart here, because
+    /// each window owns its core, its sidebar and its own coalescer, so no wake
+    /// crosses between them. The guarantee this seam carries is therefore that the
     /// coalescer itself cannot drop a traversal's final batch. A wake either
     /// coalesces into an armed fire — which has not run yet, so it will read the
     /// state that batch appended — or it finds nothing armed and arms a new one.

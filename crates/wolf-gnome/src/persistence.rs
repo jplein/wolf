@@ -8,15 +8,16 @@
 //! mutability via `Cell`, and short borrows that are never held across a
 //! [`WolfCore`] call.
 //!
-//! ## When a snapshot is taken
+//! ## When a subtree is gathered
 //!
 //! On **every render wake**, with no timer and no debounce. That is affordable
 //! because two coalescers already exist beneath us: `StateStore::set_snapshot` is
 //! a no-op when the submitted tree is identical to the current one, and the
-//! `wolf-state-writer` thread coalesces at 100 ms. Rebuilding a one-window /
-//! one-tab tree costs a `leaves()` walk plus one RPC-free `pane_status` per pane,
-//! so a resize drag produces at most ~10 disk writes per second. This preserves
-//! the crate's documented zero-polling property (no `glib::timeout` is added).
+//! `wolf-state-writer` thread coalesces at 100 ms. Rebuilding one window's
+//! one-tab subtree costs a `leaves()` walk plus one RPC-free `pane_status` per
+//! pane, so a resize drag produces at most ~10 disk writes per second. This
+//! preserves the crate's documented zero-polling property (no `glib::timeout` is
+//! added).
 //!
 //! It is also strictly better than macOS, whose snapshot is trigger-driven
 //! (window move / resize-end / sidebar KVO) and therefore does NOT capture a file
@@ -24,37 +25,39 @@
 //! only at clean quit. Here it is captured within one frame, and a SIGKILL loses
 //! at most the writer's 100 ms coalesce window.
 //!
-//! Every snapshot is gated by [`crate::state_seam::may_snapshot`], because a
-//! snapshot taken while nvim is dead or before the first pane binds would persist
+//! Every gather is gated by [`crate::state_seam::may_snapshot`], because a
+//! subtree built while nvim is dead or before the first pane binds would persist
 //! an empty layout and destroy the user's saved one.
+//!
+//! **A refused gate contributes the CACHE, and never nothing.** This window keeps
+//! its last good subtree and hands that over when the gate is shut, so a window
+//! whose panes have not bound yet — or whose Neovim has just died — keeps
+//! whatever it last persisted instead of vanishing from the tree the coordinator
+//! commits. That is what makes the refusal mechanically identical to the
+//! single-window behaviour it replaces, where a refused gate simply meant no call
+//! to `set_snapshot`.
+//!
+//! This module submits nothing itself: [`crate::coordinator::Coordinator`] walks
+//! every window, assembles the tree from these caches, and commits it.
 //!
 //! ## Borrow discipline (load-bearing)
 //!
-//! [`StateHandle::flush_on_close`] runs INSIDE `app::wire_close`'s
+//! [`StateHandle::refresh_subtree`] runs INSIDE `window::wire_close`'s
 //! `close-request` handler, which goes on to do `core.borrow_mut().take()`. Every
 //! `core.borrow()` below is therefore taken and dropped in its OWN statement, and
-//! none is live when [`StateHandle::flush_on_close`] returns. An outstanding
+//! none is live when [`StateHandle::refresh_subtree`] returns. An outstanding
 //! `borrow()` there is a `RefCell` panic, not a warning.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::Duration;
 
 use adw::prelude::*;
 
-use wolf_core::{StateStore, WolfCore};
+use wolf_core::{WindowState, WolfCore};
 
 use crate::pane_view::PaneHandle;
 use crate::state_seam;
-
-/// How long [`StateHandle::flush_on_close`] blocks waiting for the writer thread
-/// to land the final snapshot, mirroring `wolf-ffi`'s shutdown flush.
-///
-/// The writer coalesces at 100 ms and each write is one small `serde_json`
-/// document plus a rename, so two seconds is generous; it exists to bound the
-/// quit path against a wedged filesystem, not to be reached.
-const STATE_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The live handles [`build`] needs, as one struct rather than six positional
 /// parameters (the `ShellParts` precedent).
@@ -65,9 +68,6 @@ pub struct StateParts<'a> {
     pub window: &'a adw::ApplicationWindow,
     /// The pane view, which supplies the layout and the readiness counts.
     pub panes: &'a PaneHandle,
-    /// The opened state store, or `None` when no state directory could be
-    /// resolved (state is then neither saved nor restored).
-    pub store: Option<StateStore>,
     /// The cwd the core was launched with, persisted until nvim reports a live
     /// one.
     pub launch_cwd: PathBuf,
@@ -88,8 +88,10 @@ struct PersistInner {
     window: adw::ApplicationWindow,
     /// The pane view (layout snapshot + readiness counts).
     panes: PaneHandle,
-    /// The state store, or `None` when there is nowhere to save.
-    store: Option<StateStore>,
+    /// The last subtree the gate allowed, and this window's contribution to the
+    /// tree whenever the gate is shut. `None` only before the first gather ever
+    /// succeeds.
+    subtree: RefCell<Option<WindowState>>,
     /// The launch cwd, persisted until nvim reports a live one.
     launch_cwd: PathBuf,
     /// The LIVE empty-state flag, kept in step by [`StateHandle::set_empty`].
@@ -105,9 +107,8 @@ pub struct StateHandle {
     inner: Rc<PersistInner>,
 }
 
-/// Builds the persistence glue. Installs no closures and takes no snapshot by
-/// itself — the shell drives it from the wake, and `app::wire_close` from the
-/// close request.
+/// Builds the persistence glue. Installs no closures and gathers nothing by
+/// itself — the coordinator drives it from the wake and from the close request.
 #[must_use]
 pub fn build(parts: StateParts<'_>) -> StateHandle {
     StateHandle {
@@ -115,7 +116,7 @@ pub fn build(parts: StateParts<'_>) -> StateHandle {
             core: parts.core.clone(),
             window: parts.window.clone(),
             panes: parts.panes.clone(),
-            store: parts.store,
+            subtree: RefCell::new(None),
             launch_cwd: parts.launch_cwd,
             empty: Cell::new(parts.empty),
             sidebar_shown: Cell::new(parts.sidebar_shown),
@@ -144,42 +145,32 @@ impl StateHandle {
         self.inner.sidebar_shown.set(shown);
     }
 
-    /// Takes a snapshot on a render wake (gated by
-    /// [`state_seam::may_snapshot`]). Called from
-    /// [`crate::shell::AppShell::on_render_wake`].
-    pub fn on_render_wake(&self) {
-        self.snapshot_now();
+    /// This window's contribution to the persisted tree: the last subtree the
+    /// gate allowed, or `None` before the first one ever succeeds.
+    ///
+    /// Read by [`crate::coordinator::Coordinator`] when it assembles the tree. A
+    /// `None` from EVERY window is what makes
+    /// [`crate::state_seam::snapshot_state`] answer `None` and the coordinator
+    /// commit nothing at all.
+    #[must_use]
+    pub fn cached_subtree(&self) -> Option<WindowState> {
+        self.inner.subtree.borrow().clone()
     }
 
-    /// Takes a FINAL snapshot and blocks until it has been written.
+    /// Gathers the live values into this window's cached subtree, gated by
+    /// [`state_seam::may_snapshot`].
     ///
-    /// Called as the FIRST statement of `app::wire_close`'s `close-request`
-    /// handler — while the core and the panes are still alive. After that handler
-    /// runs `core.borrow_mut().take()`, a snapshot would see no core and do
-    /// nothing, so this ordering is what makes a clean quit persist the session
-    /// at all.
-    pub fn flush_on_close(&self) {
-        self.snapshot_now();
-        let Some(store) = &self.inner.store else {
-            return;
-        };
-        if !store.flush(STATE_FLUSH_TIMEOUT) {
-            eprintln!(
-                "wolf-gnome: timed out after {STATE_FLUSH_TIMEOUT:?} waiting for state.json to \
-                 be written; the last session may not have been saved"
-            );
-        }
-    }
-
-    /// Gathers the live values and submits one whole-tree snapshot.
+    /// Called from [`crate::shell::AppShell::on_render_wake`] via the
+    /// coordinator, and as the FIRST thing `window::wire_close`'s
+    /// `close-request` handler does — while the core and the panes are still
+    /// alive. After that handler runs `core.borrow_mut().take()` there is no core
+    /// to gather from, so this ordering is what makes a clean quit persist the
+    /// session at all.
     ///
-    /// Each core borrow is taken and dropped in its own statement; see the module
-    /// docs on why that is load-bearing here specifically.
-    fn snapshot_now(&self) {
-        let Some(store) = &self.inner.store else {
-            return;
-        };
-
+    /// A refused gate leaves the cache untouched rather than clearing it; see the
+    /// module docs. Each core borrow is taken and dropped in its own statement,
+    /// which is load-bearing for the same reason.
+    pub fn refresh_subtree(&self) {
         // `Liveness` is `Copy` and `WolfCore::liveness` is a lock-free atomic
         // read, never an RPC.
         let liveness = {
@@ -204,16 +195,12 @@ impl StateHandle {
         let empty = self.inner.empty.get();
         let cwd = state_seam::snapshot_cwd(empty, &self.inner.launch_cwd, live.as_deref());
         let (width, height) = self.inner.window.default_size();
-        // The user's PREFERENCE, never the live empty-state flag. `restore_plan`
+        // The user's PREFERENCE, never the live empty-state flag. `restore_plans`
         // reads this field back, so writing `!empty` would make any session that
         // ended in the empty state hide the sidebar on the next launch into a real
         // project.
-        store.set_snapshot(state_seam::snapshot_state(
-            width,
-            height,
-            cwd,
-            self.inner.sidebar_shown.get(),
-            layout,
-        ));
+        let subtree =
+            state_seam::window_subtree(width, height, cwd, self.inner.sidebar_shown.get(), layout);
+        *self.inner.subtree.borrow_mut() = Some(subtree);
     }
 }
