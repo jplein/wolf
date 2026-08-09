@@ -22,7 +22,7 @@ Purpose: the About dialog — a pure text seam over the bundled fonts' licence n
 
 #### `actions.rs`
 
-Purpose: the action namespace as data — every `gio` action name, its accelerator, the Ctrl-fold it declares, its command, its binding status, and its menu placement — plus the chord matcher and the invariant checker.
+Purpose: the action namespace as data — one row per `gio` action — plus the chord matcher and the invariant checker.
 
 **Public API**
 
@@ -32,30 +32,32 @@ Purpose: the action namespace as data — every `gio` action name, its accelerat
 
 **Decisions**
 
-- `parse_accel` re-implements the accelerator grammar this crate allows rather than calling `gtk::accelerator_parse`, which asserts an initialized main thread and cannot run headlessly. The grammar admits only `<Control>`, `<Shift>`, and `<Alt>` with a key name, so `<Super>` never reaches `forbidden_reason`.
+- `parse_accel` re-implements the accelerator grammar this crate allows rather than calling `gtk::accelerator_parse`, which asserts an initialized main thread and cannot run headlessly.
 - `action_for_key` compares its three modifiers exactly and ignores every other bit: intercepting a Super-contaminated chord beats forwarding one Neovim mangles. Letters compare case-insensitively, since a shifted letter's keyval is keymap-dependent.
 
 **Gotchas**
 
 - Whether an action is installed follows from its command's classification, not from `status`: a command-less row installs through `command_action::ui_action_for_front_end_action` instead. Promoting a reserved row means flipping `status` too, and declaring the byte a `Ctrl+<symbol>` chord folds onto, or the chord stays inert or the checker refuses the row.
+- A row's `win.` or `app.` prefix decides who installs it: [`coordinator.rs`](#coordinatorrs) the `app.` rows once per process, each window's [`shell.rs`](#shellrs) the `win.` ones ([DECISIONS.md](../DECISIONS.md#the-coordinator-and-its-windows)).
 
 #### `app.rs`
 
-Purpose: all GTK and Adwaita window wiring. `run` builds the `adw::Application` and, on activate, constructs the window over a freshly started `WolfCore`; the window's structure is in [DECISIONS.md](../DECISIONS.md).
+Purpose: the entry point — activate, and delegate. `run` builds the `adw::Application`; the first activate builds the coordinator, installs the `app.` actions on it and restores the saved session, and any later one opens a fresh window.
 
 **Public API**
 
 - `run() -> glib::ExitCode` — hands GTK an empty argv, so the process command line is never parsed or rejected.
+- `load_config`, `measure_metrics`, `open_state_store` and `init_lua_path` are `pub(crate)`, called once each by [`coordinator.rs`](#coordinatorrs).
 
 **Decisions**
 
-- The state store is opened into a restore plan and the user config loaded before any widget exists, so the launch decisions are known while the window is built. Each degrades with one message: a no-op state store, or the built-in config defaults.
-- Cell metrics are measured once and shared by `Rc`, so a resize arriving before the first draw already has a size.
-- The close-request handler flushes state before taking the core out. A flush after the take sees no core, is refused by the snapshot gate, and silently loses the session.
+- The coordinator is held in an `Rc<RefCell<Option<_>>>` captured by the activate closure rather than in a `static`. This crate has no process-global state of its own, and keeping it that way is what makes two cores in one process independent.
+- Nothing is built before the first activate: the config read and the cell measurement both need a running GTK, and the state store must not be opened in a process that turns out to be a remote instance.
+- An unresolvable preferences or state directory degrades with one message — the built-in config defaults, or a store whose every operation is a no-op — never a per-wake stream.
 
 **Gotchas**
 
-- The wake-channel capacity stays private; its tests live here and read the production constant, not a literal.
+- The later-activate path is a desktop's "launch it again, get a window". No smoke reaches it: the harness strips `DBUS_SESSION_BUS_ADDRESS`, so a second process becomes its own primary instance instead.
 
 #### `appearance.rs`
 
@@ -182,6 +184,24 @@ Purpose: the pure configuration seam — every rule about consuming a `wolf_core
 
 - The override is injected rather than read here, which is what makes the precedence rule testable without touching the process environment — something a parallel test suite cannot safely do.
 - The configured `appearance` is not resolved here: it belongs to [`appearance.rs`](#appearancers), whose answer names an `adw::ColorScheme` and would falsify this module's GTK-free property.
+
+#### `coordinator.rs`
+
+Purpose: the process-scoped layer above the windows — the one state store, the one config read, the one cell measurement, the ordered registry of live windows, and the `app.`-namespace actions. [DECISIONS.md](../DECISIONS.md#the-coordinator-and-its-windows) owns why each is process-scoped, and the state protocol.
+
+**Public API**
+
+- `build() -> Coordinator`, then `install_app_actions(app)` and `restore_session(app)`, in that order.
+- `open_new_window(app)`, `commit(waking)`, `on_window_closing(id)`, `quit(app)`, `raise(id)`, `palette_windows(exclude)`, `register(handle)`, `window_count()`.
+- `next_free_id(next, live) -> WindowId`, the pure id arithmetic, and `upgrade(&weak)` for the window-side closures.
+
+**Decisions**
+
+- The coordinator holds strong `WindowHandle`s and every window-side closure a `Weak` it upgrades per use, so a dropped coordinator performs nothing rather than panicking. The other direction is a cycle through the whole graph, so nothing would ever be dropped.
+- `install_app_actions` runs before the first window exists, so the menu and the chord controller resolve `app.quit` from the first frame. Each window's [`shell.rs`](#shellrs) registers their accelerators, per-application and idempotent, so the menu draws the chord beside its Quit item.
+- Quit and New Window funnel through here from a drained command, a palette row and a chord alike. A window that has lost its application or its coordinator opens nothing, and quits by closing itself.
+- `quit` closes every window the _application_ holds rather than every registered one, since a transient toplevel such as About would otherwise keep the process alive.
+- `next_free_id` is a free function because the wrap it guards is unreachable through the registry, and a reused id deregisters and raises the wrong window.
 
 #### `crash_overlay.rs`
 
@@ -361,7 +381,7 @@ Purpose: the pure, GTK-free rulebook for crash and stall recovery — everything
 
 #### `main.rs`
 
-Purpose: the binary entry point. `main` forwards the exit code from `wolf_gnome::app::run`; all wiring lives in `app.rs`.
+Purpose: the binary entry point. `main` forwards the exit code from `wolf_gnome::app::run`; the wiring starts in [`app.rs`](#apprs).
 
 #### `mouse.rs`
 
@@ -402,19 +422,20 @@ Purpose: the pure, GTK-free rulebook for per-pane navigation — which window a 
 
 #### `palette.rs`
 
-Purpose: the command-palette overlay — the registry commands this front-end performs, plus one Open Recent row per usable recent directory.
+Purpose: the command-palette overlay — registry commands, one Open Recent row per usable recent directory, one Switch to Window row per other window.
 
 **Public API**
 
-- `build(overlay, area, core) -> PaletteHandle` — starts hidden; `area` is the focus-return widget.
+- `build(overlay, area, core, windows) -> PaletteHandle` — starts hidden; `area` is the focus-return widget, `windows` a `WindowSource`.
 - `PaletteHandle::open`, `close` (both idempotent), `is_open`, and `connect_activate`.
-- `open_recent_candidates`, `palette_rows` and `palette_action_for` — the pure seams.
+- `open_recent_candidates`, `palette_rows` and `palette_action_for` — the pure seams — and `PaletteAction`, whose `SwitchWindow` payload is the coordinator's own window id.
 
 **Decisions**
 
-- An Open Recent row carries a directory and no window target, and [`shell.rs`](#shellrs)'s `on_palette_activation` is the one place that directory becomes a window action.
-- `open_recent_candidates` refuses the window's own working directory, because this front-end has one window and re-rooting it where it already is changes nothing; a relative path, which `chdir_to` would canonicalize against the application process's working directory rather than Neovim's; and a path `is_dir` rejects, because a failed `:tcd` is only a `tracing::warn!` in core, so Neovim reports no directory change and the row does nothing at all. The shared store is never pruned, so a temporarily unmounted path returns.
-- The label is `PaletteRow::display` unchanged, so the string ranked against the query and the string on screen are one. [`title.rs`](#titlers)'s home abbreviation is not applied here: it would rank one string and show another, and a query matching the visible `~` would return nothing.
+- One directory can yield both a Switch to Window row and an Open Recent row: the first raises that window, the second re-roots this one.
+- `open_recent_candidates` refuses three directories: the invoking window's own, since re-rooting where it already is changes nothing; a relative path, which `chdir_to` would canonicalize against the process cwd rather than Neovim's; and one `is_dir` rejects, since a failed `:tcd` is only a `tracing::warn!` in core. The shared store is never pruned, so a temporarily unmounted path returns.
+- The window list is a closure taken fresh at each open over each window's cached subtree, so the open touches no other core and adds no RPC.
+- The label is `PaletteRow::display` unchanged: [`title.rs`](#titlers)'s home abbreviation would rank one string and show another, and a query matching the visible `~` would return nothing.
 - Ranking runs unbounded and `max` applies after the classification filter, since `rank_palette` truncates first and undispatched rows would otherwise eat the budget.
 - Activation records, closes, then dispatches: a dispatched Close Window tears the window down synchronously.
 
@@ -457,18 +478,22 @@ Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one
 
 #### `persistence.rs`
 
-Purpose: the glue that commits this crate's application state to `state.json`. It is thin by construction: every decision lives in [`state_seam.rs`](#state_seamrs) and [`pane_layout.rs`](#pane_layoutrs), so this module gathers live values and hands them over.
+Purpose: the glue that gathers one window's contribution to `state.json`. It is thin by construction: every decision lives in [`state_seam.rs`](#state_seamrs) and [`pane_layout.rs`](#pane_layoutrs), so this module gathers live values and caches them.
 
 **Public API**
 
-- `build(parts) -> StateHandle` — a value constructor that installs no closures and takes no snapshot of its own.
-- `set_empty(empty)`, `set_sidebar_shown(shown)`, `on_render_wake()`, `flush_on_close()`.
+- `build(parts) -> StateHandle` — a value constructor that installs no closures and gathers nothing of its own.
+- `set_empty(empty)`, `set_sidebar_shown(shown)`, `refresh_subtree()`, `cached_subtree() -> Option<WindowState>`.
 
 **Decisions**
 
-- An absent state store is the whole degradation story: every method early-returns, and the app runs normally while neither restoring nor saving. There is no error path and no second convention.
+- A refused gate leaves the cache untouched rather than clearing it, so a window whose panes have not bound — or whose Neovim has just died — keeps what it last persisted instead of vanishing from the tree.
 - The size comes from the window's default size and the position is never written, per [DECISIONS.md](../DECISIONS.md). The persisted `sidebar_visible` is the user's preference, tracked through `set_sidebar_shown`, and never the live visibility.
-- `flush_on_close` blocks on a bounded flush rather than trusting the writer thread, and a timeout prints rather than panicking. It exists to bound the quit path against a wedged filesystem, not to be reached.
+- This module holds no store and submits nothing: [`coordinator.rs`](#coordinatorrs) assembles the tree from every window's cache and commits it.
+
+**Gotchas**
+
+- `refresh_subtree` runs inside the close handler, which goes on to take the core out, so every core borrow is taken and dropped in its own statement.
 
 #### `picker.rs`
 
@@ -617,37 +642,40 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 
 **Public API**
 
-- `build_menu_model()`, `build_empty_state()`, `build(parts) -> AppShell`.
-- `install_actions(app)` — after the window is constructed, before `present()`, so the menu and header button resolve their actions.
+- `build_menu_model()`, `build_empty_state()`, `build(parts) -> AppShell`; `ShellParts` carries a `Weak` coordinator and this window's id.
+- `install_actions(app)` — the `win.` rows only, after the window is constructed and before `present()`, so the menu and header button resolve their actions.
 - `set_empty_state(empty)`, `on_liveness_wake() -> bool`, `on_render_wake()`.
 
 **Decisions**
 
-- The chord controller matches keys itself, not through GTK's keymap-aware matching, which does not fire under the smokes' keystroke injector. Accelerators are registered only so the menu renders their labels.
+- The chord controller matches keys itself, not through GTK's keymap-aware matching, which does not fire under the smokes' keystroke injector. Accelerators are registered only so the menu renders their labels, `app.` rows included ([`coordinator.rs`](#coordinatorrs)).
 - The controller lives on the window, so it runs ahead of any overlay's and needs no open-overlay guard: no overlay's keys are bound chords.
 - One settle point moves the sidebar's root, over [`workspace.rs`](#workspacers)'s `reroot_decision`, so a front-end `chdir_to` and a typed `:cd` cannot diverge. Neither re-roots synchronously: the live cwd updates only after Neovim reports it.
 - The nav-button refresh caches nothing, unlike the title refresh: `set_sensitive` early-returns on an unchanged value.
-- The three Markdown-preview presses read one `preview_shape` pass each: a pane count and a preview-active flag from two snapshot reads describe no window that existed. Each is a blocking RPC gated through [`preview_ui.rs`](#preview_uirs), and each refusal is worded so a stderr log separates the gate declining from core failing.
+- The three Markdown-preview presses read one `preview_shape` pass each: two snapshot reads would describe no window that existed. Each is a blocking RPC gated through [`preview_ui.rs`](#preview_uirs), and each refusal is worded so a stderr log separates the gate declining from core failing.
 - One private applier is the only caller of `sidebar.set_visible`, over [`state_seam.rs`](#state_seamrs)'s `sidebar_is_shown`, or the next `set_empty_state(false)` would undo a user toggle.
 
 #### `state_seam.rs`
 
-Purpose: the pure application-state seam — what to restore at launch, and what to persist on each wake. GTK-free and IO-free, and every input is injected, so the whole rulebook is testable with no temp directory.
+Purpose: the pure application-state seam — what to restore at launch, and what each window persists per wake. GTK-free, IO-free, every input injected.
 
 **Public API**
 
-- `restore_plan(saved, process_cwd, home, is_dir) -> RestorePlan` — the working directory, the empty-state flag, the tab's saved layout, the window size, and the saved sidebar preference.
-- `restored_window_size(w, h)`, `persistable_layout(node)`, `sidebar_is_shown(user_wants, empty)`, `snapshot_cwd(empty, launch_cwd, live_cwd)`, `may_snapshot(liveness, bound_panes, reported_windows)`, `snapshot_state(...)`.
+- `restore_plans(saved, process_cwd, home, is_dir) -> Vec<RestorePlan>` — one plan per saved window in saved order, capped at `MAX_RESTORE_WINDOWS`.
+- `window_subtree(..) -> WindowState`, `snapshot_state(windows) -> Option<WolfState>`, `close_commit(shutting_down, other_live_windows) -> CloseCommit`.
+- `restored_window_size`, `persistable_layout`, `sidebar_is_shown`, `snapshot_cwd`, `may_snapshot`.
 
 **Decisions**
 
-- A saved layout is attached only when the chosen directory is the one it was saved from, because its leaves are absolute paths belonging to one project. Reopening one project's files inside another would look like data corruption.
-- `restored_window_size` collapses the whole result on any unusable dimension, per the geometry convention: a usable width with a garbage height is not half a window size.
+- A saved layout is attached only when the chosen directory is the one it saved from: its leaves are absolute paths belonging to one project.
+- Offering the process cwd past the first saved window merges every window onto one project, drops every layout, and the next gather writes the merge back over the save.
+- `restore_plans` never answers an empty vec and `snapshot_state(vec![])` is `None`: a launch with no window exits at once, and an empty tree overwrites a saved session.
+- `restored_window_size` collapses the whole result on any unusable dimension: a usable width with a garbage height is not half a window size.
 - `persistable_layout` suppresses by content, never by arity; see [`pane_layout.rs`](#pane_layoutrs) and [DECISIONS.md](../DECISIONS.md).
-- The empty state persists an empty cwd always. A passive launch hands Neovim a home directory purely because a process needs one, and persisting it would turn every launcher start into a project at home.
-- `may_snapshot`'s match over `Liveness` is total, so a new variant cannot silently read as "not alive".
-- `snapshot_state` is the one place the single-window, single-tab shape lives, pinned by its own test so a later unit changes it deliberately.
-- `RestorePlan::sidebar_visible` is independent of the empty state; `sidebar_is_shown` applies that separately.
+- The empty state persists an empty cwd always, or every launcher start would become a project at home.
+- `may_snapshot`'s match over `Liveness` is total, and the gate is read once per window against its own core.
+- `window_subtree` is the one place the single-tab shape lives, pinned by a test so a tabs unit changes it deliberately.
+- `RestorePlan::sidebar_visible` is independent of the empty state; `sidebar_is_shown` applies it.
 
 #### `statusbar_layout.rs`
 
@@ -725,6 +753,28 @@ Purpose: the GTK glue for the file-tree sidebar — a `gtk::ListView` over a `gt
 **Gotchas**
 
 - Manual expansion below the root does not survive a root-store rebuild; [DECISIONS.md](../DECISIONS.md) owns that limitation and what preserving it would cost.
+
+#### `window.rs`
+
+Purpose: one window and everything scoped to it — an `adw::ApplicationWindow` over a live `WolfCore`, with its own wake channel, pane view, overlays, `win.` actions and state subtree. Its widget structure and overlay stacking are [DECISIONS.md](../DECISIONS.md#window-structure)'s.
+
+**Public API**
+
+- `build(parts) -> Option<WindowHandle>` — `None`, after one message, when the core fails to start; a launch whose only window fails then exits.
+- `WindowParts` — the six construction inputs as a struct, because `clippy::too_many_arguments` bites at seven.
+- `WindowHandle::id`, `present`, `refresh_subtree`, `cached_subtree` and `display_cwd`.
+
+**Decisions**
+
+- Telling the coordinator is the first statement of the close handler, while the core and panes are still alive: a subtree gathered after the core is taken out sees none, the gate refuses it, and the session is silently lost.
+- The window registers with the coordinator before its first command drain, so nothing the drain reaches acts on a coordinator that does not know the window exists.
+- `display_cwd` reads the cached subtree rather than recomputing, so the palette and `state.json` cannot disagree about where a window is.
+- `WindowInner` does not hold the shell: the wake-drain future already owns it for exactly the window's lifetime, and a second owner would add a lifetime nothing reads.
+
+**Gotchas**
+
+- The key controller carries no propagation phase, so it runs after [`shell.rs`](#shellrs)'s capture-phase chord controller — which is what stops a bound chord also reaching Neovim.
+- The wake-channel capacity stays private; its tests live here and read the production constant, not a literal.
 
 #### `workspace.rs`
 

@@ -237,9 +237,11 @@ impl BufferPickerInner {
             OpenDecision::Snapshot => {}
         }
 
-        // One of the three blocking RPCs a running wolf-gnome issues (the others
-        // are a navigation move — see `crate::nav_ui` — and the Copy yank, see
-        // `crate::clipboard_ui`), plus the RPC-free cwd read, under a borrow of
+        // One of the EIGHT blocking RPCs a running wolf-gnome issues (the ninth,
+        // the layout rebuild, runs before the window is interactive); the others
+        // are a navigation move — see `crate::nav_ui` — the Copy yank, see
+        // `crate::clipboard_ui`, and the five preview calls, see
+        // `crate::preview_ui`. Plus the RPC-free cwd read, under a borrow of
         // their own.
         let snapshot = {
             let core_ref = self.core.borrow();

@@ -210,7 +210,7 @@ Core owns a tokio runtime on its own threads and updates the render-state snapsh
 
 The wake is the one piece each front-end implements. The snapshot and the RPC are entirely in core. Core's locking discipline around that snapshot is in [`crates/wolf-core/DECISIONS.md`](crates/wolf-core/DECISIONS.md).
 
-On macOS the wake is routed rather than global, because one captive Neovim is shared by several windows. Each wake carries a per-project token that the front-end resolves to the owning project before fanning out. The mechanism, and why identity crosses the boundary as a plain scalar, is in [`crates/wolf-ffi/DECISIONS.md`](crates/wolf-ffi/DECISIONS.md); how a project fans a wake out to its views is in [`crates/wolf-macos/DECISIONS.md`](crates/wolf-macos/DECISIONS.md).
+On macOS the wake is routed rather than global, because one captive Neovim is shared by several windows. Each wake carries a per-project token that the front-end resolves to the owning project before fanning out. The mechanism, and why identity crosses the boundary as a plain scalar, is in [`crates/wolf-ffi/DECISIONS.md`](crates/wolf-ffi/DECISIONS.md); how a project fans a wake out to its views is in [`crates/wolf-macos/DECISIONS.md`](crates/wolf-macos/DECISIONS.md). `wolf-gnome` runs one core per window, so its wake closure belongs to that core alone, carries no token, and needs no routing at all.
 
 ## Theming
 

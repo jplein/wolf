@@ -183,7 +183,7 @@ pub enum SearchOpenDecision {
 /// [`crate::buffer_picker::open_decision`] gives, and copying that reasoning here
 /// would be wrong: nothing on this path blocks. They refuse because the stall and
 /// crash overlays are OPAQUE and cover the editor, so the search box would open
-/// invisibly beneath one of them while its open flag kept `app::wire_keys`
+/// invisibly beneath one of them while its open flag kept `window::wire_keys`
 /// suppressing every key to Neovim — and an `OpenAt` into a dead Neovim performs
 /// nothing anyway.
 #[must_use]
@@ -1099,7 +1099,7 @@ mod tests {
                      `workspace::launch_decision` refuses to hand the FILE search. With a wedged \
                      or dead core the opaque stall / crash overlay already covers the editor, so \
                      the box would open invisibly beneath it while its open flag kept \
-                     `app::wire_keys` suppressing every key to Neovim.",
+                     `window::wire_keys` suppressing every key to Neovim.",
                     case.desc,
                     case.liveness,
                     case.project_open

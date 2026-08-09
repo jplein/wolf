@@ -24,7 +24,7 @@
 //!
 //! ## The three classes
 //!
-//! - **Dispatched** — the nineteen commands `wolf-gnome` performs today.
+//! - **Dispatched** — the twenty commands `wolf-gnome` performs today.
 //! - [`UiAction::Deferred`] — implemented on macOS and planned on GTK; the string
 //!   names the concrete blocker so the deferral is auditable rather than a shrug.
 //! - [`UiAction::NoGnomeEquivalent`] — has no GNOME counterpart and will never be
@@ -59,6 +59,13 @@ pub enum UiAction {
     NewUntitledBuffer,
     /// Close the focused editor pane (Neovim performs the `:close`).
     ClosePane,
+    /// Open a FRESH, EMPTY application window with its own core, at `$HOME`.
+    ///
+    /// It inherits nothing from the window it was asked from — not its working
+    /// directory, not its layout, not its size — because that is what macOS's
+    /// `makeNewWindow` does and parity is this row's whole subject. Inheriting a
+    /// project is New TAB's behaviour, and belongs to the tabs unit.
+    NewWindow,
     /// Close the application window (via `close-request`, never `destroy`).
     CloseWindow,
     /// Minimize the application window.
@@ -117,10 +124,7 @@ pub enum UiAction {
 #[must_use]
 pub fn ui_action_for(command: Command) -> UiAction {
     match command {
-        Command::NewWindow => UiAction::Deferred(
-            "wolf-gnome is a single-window application; multi-window is the feat-list 'Multiple \
-             windows' row",
-        ),
+        Command::NewWindow => UiAction::NewWindow,
         Command::CloseWindow => UiAction::CloseWindow,
         Command::QuitApplication => UiAction::QuitApplication,
         Command::HideApplication => UiAction::NoGnomeEquivalent(
@@ -199,7 +203,7 @@ mod tests {
     /// The commands `wolf-gnome` DISPATCHES, by canonical `CommandSpec::id`,
     /// sorted. Ids (not variants) so the failure message names the registry row a
     /// reader can grep for.
-    const EXPECTED_DISPATCHED_IDS: [&str; 19] = [
+    const EXPECTED_DISPATCHED_IDS: [&str; 20] = [
         "buffer_picker",
         "close_pane",
         "close_window",
@@ -210,6 +214,7 @@ mod tests {
         "go_to_file",
         "minimize_window",
         "new_buffer",
+        "new_window",
         "open_file",
         "open_folder",
         "paste",
@@ -255,9 +260,9 @@ mod tests {
     /// checks the table against the registry, so neither can drift alone.
     const CASES: &[Case] = &[
         Case {
-            desc: "0 NewWindow: wolf-gnome is single-window",
+            desc: "0 NewWindow: opens a fresh, empty window with its own core",
             command: Command::NewWindow,
-            want: Want::Deferred,
+            want: Want::Exact(UiAction::NewWindow),
         },
         Case {
             desc: "1 CloseWindow: the :qa path — closes the window",
@@ -505,10 +510,18 @@ mod tests {
 
         assert_eq!(
             dispatched, expected,
-            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly nineteen \
+            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly twenty \
              commands; everything else must be Deferred(reason) or NoGnomeEquivalent(reason) so \
              the drain is never silent. If a command was genuinely implemented, tick its feat-list \
-             row and update this list with it. A one-element diff naming \"terminal\" \
+             row and update this list with it. A one-element diff naming \"new_window\" \
+             means New Window was demoted back to Deferred, in which case the coordinator's \
+             `open_new_window` is unreachable from the primary menu's New Window item, from the \
+             palette row and from `:WolfNewWindow` alike — the application is single-window again \
+             however many windows the coordinator can hold. That demotion is NOT isolated in this \
+             module: `ui_action_table`'s case 0 reddens beside this test, since one \
+             reclassification falsifies both, and the pair moving together is what says the \
+             classification changed rather than the registry. A one-element diff naming \
+             \"terminal\" \
              means the terminal drawer was demoted back to Deferred, in which case the drawer is \
              unreachable from the Ctrl+backtick chord, from the primary menu's Terminal item and \
              from the command palette alike — and `actions::bound_set_is_exactly_this_unit` stays \
@@ -695,5 +708,87 @@ mod tests {
                  the real row now resolves to None."
             );
         }
+    }
+
+    /// The two [`UiAction`]s the COORDINATOR performs, which is the whole of what
+    /// an `app.`-namespace row may classify to.
+    ///
+    /// `Coordinator::perform` is deliberately NOT exhaustive over [`UiAction`] —
+    /// every other variant belongs to a window's own shell — so a third arm added
+    /// there without being added here makes this list the stale half.
+    const APP_SCOPED_UI_ACTIONS: [UiAction; 2] = [UiAction::NewWindow, UiAction::QuitApplication];
+
+    /// Every `app.`-namespace [`crate::actions::ACTION_TABLE`] row classifies to a
+    /// [`UiAction`] the coordinator has an arm for.
+    ///
+    /// The two installation paths are mirror images that read the SAME table:
+    /// [`crate::coordinator::Coordinator::install_app_actions`] installs the `app.`
+    /// rows once per process and `shell::AppShell::install_actions` installs the
+    /// `win.` rows once per window. Both skip a row whose command classifies to
+    /// `Deferred` / `NoGnomeEquivalent`, and both install everything else — so an
+    /// `app.` row classifying to any OTHER real `UiAction` is installed, listed in
+    /// the primary menu, and does nothing at all when activated: the coordinator's
+    /// `perform` falls through to its `other =>` arm, prints
+    /// "app-scoped ui action not performed: … needs a window and belongs in the
+    /// win. namespace", and returns. That is the palette's "a surface that lists a
+    /// no-op" failure, arriving through the menu instead.
+    ///
+    /// `crate::actions::tests::app_scoped_rows_are_performable_without_a_window`
+    /// is the other half of the same rule and the two are read together: that one
+    /// pins WHICH rows are `app.`-scoped, this one pins what those rows may mean.
+    ///
+    /// FALSIFYING EDIT: point the `app.new-window` row at `Command::NewBuffer`.
+    /// PREDICTED: this test reddens naming `app.new-window` and
+    /// `NewUntitledBuffer`. PREDICTED NOT ISOLATED —
+    /// `the_new_window_row_is_menu_only_and_listed` reddens on its `command`
+    /// assertion, `menu_labels_match_the_registry` on the "New Window" label
+    /// against the `New` title, and `command_action_round_trip` on two rows
+    /// claiming `Command::NewBuffer`. The pairing is the disclosure: a red here
+    /// ALONE would mean the row kept its command and the CLASSIFICATION of that
+    /// command moved, which is a different bug in a different file.
+    #[test]
+    fn app_scoped_commands_classify_to_an_action_the_coordinator_performs() {
+        use crate::actions::ACTION_TABLE;
+
+        let mut checked = 0_usize;
+        for binding in ACTION_TABLE {
+            let Some(("app", _)) = binding.action.split_once('.') else {
+                continue;
+            };
+            let Some(command) = binding.command else {
+                panic!(
+                    "the app-scoped row {:?} carries no `wolf_core::Command`. \
+                     `Coordinator::install_app_actions` resolves a row through its command and \
+                     nothing else — there is no `ui_action_for_front_end_action` fallback in the \
+                     `app.` half — so the row is printed and skipped, and its menu item renders \
+                     insensitive while its accelerator (if any) is still registered and swallows \
+                     the chord.",
+                    binding.action
+                )
+            };
+
+            let ui_action = ui_action_for(command);
+            assert!(
+                APP_SCOPED_UI_ACTIONS.contains(&ui_action),
+                "the app-scoped row {:?} carries {command:?}, which classifies to {ui_action:?} — \
+                 not one of {APP_SCOPED_UI_ACTIONS:?}, the arms `Coordinator::perform` matches. \
+                 The row is still INSTALLED (both installers skip only Deferred and \
+                 NoGnomeEquivalent), so the primary menu offers a working-looking item that \
+                 prints \"app-scoped ui action not performed\" and does nothing. Either give the \
+                 behaviour a `win.` row, where `AppShell::perform` has a window to act on, or add \
+                 the arm to `Coordinator::perform` AND to the list above.",
+                binding.action
+            );
+            checked += 1;
+        }
+
+        assert!(
+            checked > 0,
+            "ACTION_TABLE declares no `app.`-namespace row at all, so the loop above ran zero \
+             times and this test proves nothing. Two rows are expected — `app.new-window` and \
+             `app.quit` — and if both really have become window-scoped then \
+             `Coordinator::install_app_actions` installs nothing, Ctrl+Shift+Q is unbound, and \
+             this test should go with it rather than be left guarding an empty set."
+        );
     }
 }

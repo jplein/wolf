@@ -1,6 +1,6 @@
 # wolf-gnome
 
-The GTK 4 and libadwaita front-end: a runnable single-window Linux application that consumes [`wolf-core`](../wolf-core/README.md) as an ordinary Rust crate dependency and paints the Neovim grid with Cairo and Pango. A Markdown preview pane is the one surface it does not paint — those pixels come from a `webkit6::WebView`, which is why the devShell supplies WebKitGTK.
+The GTK 4 and libadwaita front-end: a runnable multi-window Linux application that consumes [`wolf-core`](../wolf-core/README.md) as an ordinary Rust crate dependency and paints the Neovim grid with Cairo and Pango. Each window carries a captive Neovim of its own. A Markdown preview pane is the one surface it does not paint — those pixels come from a `webkit6::WebView`, which is why the devShell supplies WebKitGTK.
 
 **Read [DECISIONS.md](DECISIONS.md) before changing anything in this crate.** In particular, this crate deliberately has no Bazel target, and that absence is load-bearing.
 
@@ -13,7 +13,7 @@ The GTK 4 and libadwaita front-end: a runnable single-window Linux application t
 
 ## Entry point
 
-`src/main.rs` forwards the exit code from `app::run`, which builds the `adw::Application` and constructs the window on activate. The crate is also a library: every decision expressible as a function of values lives in a seam that needs no display server, and the binary is the widget glue over those seams.
+`src/main.rs` forwards the exit code from `app::run`, which builds the `adw::Application` and, on activate, builds the process-scoped coordinator and asks it to restore the saved session — one window per saved window, or one empty-state window when there is nothing to restore. The crate is also a library: every decision expressible as a function of values lives in a seam that needs no display server, and the binary is the widget glue over those seams.
 
 The binary takes no command-line arguments. The picker, the sidebar, the primary menu's native `gtk::FileDialog`s and Neovim itself all open files the same way, through `InputEvent::Open`, which core performs as `:e`. A project-search result row opens a location rather than a file, through `InputEvent::OpenAt`, which core performs as `:edit` followed by `nvim_win_set_cursor` in one input-pump step. Saving is `:w` or `:saveas` from inside Neovim.
 

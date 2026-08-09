@@ -72,17 +72,20 @@
 //! [`AppShell::dispatch_command`] — the same function the drain loop calls. All
 //! three end in [`UiAction`] and in [`AppShell::perform`], so they cannot diverge.
 //!
-//! An Open Recent palette row is the one activation that is NOT a `Command`: it
-//! carries a directory, and [`AppShell::on_palette_activation`] is the one place
-//! that directory becomes a window action. It re-roots this window, through the
-//! same [`AppShell::chdir_to`] the native Open Folder dialog calls.
+//! Two palette activations are NOT `Command`s, and [`AppShell::on_palette_activation`]
+//! is the one place each becomes a window action. An Open Recent row carries a
+//! directory and re-roots THIS window, through the same [`AppShell::chdir_to`] the
+//! native Open Folder dialog calls. A Switch to Window row carries another window's
+//! id and leaves this window alone: it goes to the coordinator, which presents that
+//! window. The pair is deliberate — one directory can be offered as both, and the
+//! two rows do opposite things with it.
 //!
 //! ## Borrow discipline (load-bearing)
 //!
 //! `drain_and_dispatch_commands` takes a SHORT `core.borrow()`, collects the
 //! commands into a `Vec`, and drops the borrow before dispatching any of them.
 //! `UiAction::CloseWindow` / `UiAction::QuitApplication` synchronously run
-//! `app::wire_close`'s `close-request` handler, which does `core.borrow_mut()
+//! `window::wire_close`'s `close-request` handler, which does `core.borrow_mut()
 //! .take()`; an outstanding `borrow()` there is a `RefCell` panic, not a warning.
 //!
 //! The restart path adds a SECOND rule: **never hold a snapshot read guard across
@@ -103,9 +106,13 @@
 //! `WolfCore::live_cwd` is a `parking_lot` read of a tracked cell, taken once per
 //! wake in [`AppShell::on_render_wake`] and passed to both consumers.
 //!
-//! Exactly SEVEN `block_on_rpc` call sites are reachable from this crate, and the
-//! restart path issues none of them. The first is `WolfCore::rebuild_layout`, called
-//! at most once per launch from `pane_view::apply_layout_rebuild`, before the window
+//! Exactly NINE blocking core calls are reachable from this crate, and the restart
+//! path issues none of them. `WolfCore::history_back` and `history_forward` count
+//! as the ONE navigation move they are, one per direction; nothing else is folded
+//! together, and [`crate::window`] and `DECISIONS.md` carry the same nine.
+//!
+//! The first is `WolfCore::rebuild_layout`, called at most once per launch from
+//! `pane_view::apply_layout_rebuild`, before the window
 //! is interactive. The second is `WolfCore::list_buffers`, the buffer picker's
 //! candidate snapshot — and it is reachable from a RUNNING application, which is
 //! what makes `Liveness::NotResponding` a state a user can actually reach here.
@@ -136,15 +143,22 @@
 //! gates it anyway, for a reason that is not about blocking — see that module's
 //! docs.
 //!
-//! The last three are the MARKDOWN PREVIEW's. [`AppShell::open_preview`] and
+//! The last five are the MARKDOWN PREVIEW's. [`AppShell::open_preview`] and
 //! [`AppShell::edit_source`] funnel through `WolfCore::open_preview` /
 //! `WolfCore::edit_source`, and `pane_view::refresh_previews` issues
 //! `WolfCore::render_preview` once per changed source per wake — the only one of the
-//! seven that can repeat while the user simply types. All three are gated through
+//! nine that can repeat while the user simply types. All three are gated through
 //! [`crate::preview_ui`] ([`preview_ui::preview_press`], [`preview_ui::edit_press`],
 //! `preview_ui::may_render`) with the buffer picker's argument and its limits.
 //! Neither press has an [`crate::actions`] accelerator row, so their only routes are
 //! the command palette and the `:WolfPreview` / `:WolfEdit` Ex commands.
+//!
+//! The remaining two need a preview that already exists, so neither is reachable
+//! at launch. `pane_view::on_preview_link` repoints a bound preview at a linked
+//! file through `WolfCore::preview_file`, which only a click inside a RENDERED
+//! preview reaches, gated by [`preview_ui::preview_file_press`]; and
+//! [`AppShell::preview_in_browser`] renders the document for the loopback server
+//! through `WolfCore::open_in_browser`, gated by [`preview_ui::browser_press`].
 //!
 //! Neither clipboard action is disabled in the empty state, for the buffer
 //! picker's recorded reason: the captive Neovim runs in a project-less window too.
@@ -178,10 +192,10 @@ use wolf_core::{Command, InputEvent, Liveness, TabFiles, WolfCore};
 
 use crate::about;
 use crate::actions::{self, BindingStatus};
-use crate::app::TREE_PANE_WIDTH;
 use crate::buffer_picker::BufferPickerHandle;
 use crate::clipboard_ui::{self, CopyPress, PastePress};
 use crate::command_action::{ui_action_for, ui_action_for_front_end_action, UiAction};
+use crate::coordinator::{self, CoordinatorInner, WindowId};
 use crate::crash_overlay::CrashOverlay;
 use crate::liveness_ui::{
     liveness_ui, reopen_order, restart_outcome, OverlayMode, RestartOutcome,
@@ -199,6 +213,7 @@ use crate::search_overlay::SearchHandle;
 use crate::state_seam;
 use crate::title;
 use crate::tree_view::TreeHandle;
+use crate::window::TREE_PANE_WIDTH;
 use crate::workspace;
 
 /// The action the empty state's button and the primary menu use to pick a folder.
@@ -327,7 +342,7 @@ pub struct ShellParts<'a> {
     /// overrides it at apply time, never at restore time.
     pub sidebar_shown: bool,
     /// The working directory the captive nvim was launched in — the seed for
-    /// [`ShellInner::rooted_cwd`]. Taken by value; `app::build_ui` already clones
+    /// [`ShellInner::rooted_cwd`]. Taken by value; `window::build` already clones
     /// `RestorePlan::core_cwd` for the core config and for persistence.
     pub launch_cwd: PathBuf,
     /// The crash/stall overlay + banner, driven by the liveness read.
@@ -335,9 +350,15 @@ pub struct ShellParts<'a> {
     /// The pane view, reset after a successful in-place Neovim restart. No cycle:
     /// [`crate::pane_view`] does not reference the shell.
     pub panes: &'a PaneHandle,
-    /// The application-state persistence glue, driven from the render wake and
-    /// kept in step with the empty-state flag.
+    /// The application-state persistence glue, kept in step with the empty-state
+    /// flag. The render wake drives it through the coordinator, never directly.
     pub state: &'a StateHandle,
+    /// The process-scoped coordinator, as a `Weak`: it owns this window's handle,
+    /// and this shell is owned by that window. See [`mod@crate::coordinator`].
+    pub coordinator: Weak<CoordinatorInner>,
+    /// This window's identity, so the coordinator knows which window is waking or
+    /// closing.
+    pub window_id: WindowId,
 }
 
 /// The shell's shared state. All access happens on the single GTK main thread, so
@@ -411,6 +432,10 @@ struct ShellInner {
     panes: PaneHandle,
     /// The application-state persistence glue.
     state: StateHandle,
+    /// The process-scoped coordinator, upgraded per use.
+    coordinator: Weak<CoordinatorInner>,
+    /// This window's identity, passed to every coordinator call.
+    window_id: WindowId,
     /// The user's home directory, stringified ONCE at [`build`] time — the
     /// injected `home` for [`title::window_title`]. Captured rather than read per
     /// frame because [`title`] deliberately never touches the environment, and
@@ -533,7 +558,7 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         nav_forward_button: parts.nav_forward_button.clone(),
         sidebar_button: parts.sidebar_button.clone(),
         sidebar_shown: Cell::new(parts.sidebar_shown),
-        // Pessimistic until `set_empty_state` says otherwise, which `app::build_ui`
+        // Pessimistic until `set_empty_state` says otherwise, which `window::build`
         // does immediately after `install_actions`. Nothing reads it before then.
         empty: Cell::new(true),
         go_to_file: RefCell::new(None),
@@ -548,6 +573,8 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         crash_overlay: parts.crash_overlay.clone(),
         panes: parts.panes.clone(),
         state: parts.state.clone(),
+        coordinator: parts.coordinator,
+        window_id: parts.window_id,
         home: workspace::home_dir()
             .map(|home| home.to_string_lossy().into_owned())
             .unwrap_or_default(),
@@ -598,8 +625,8 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
 }
 
 impl AppShell {
-    /// Installs one `gio::SimpleAction` per IMPLEMENTED action of
-    /// [`actions::ACTION_TABLE`], registers the accelerator of every
+    /// Installs one `gio::SimpleAction` per IMPLEMENTED `win.`-namespace action
+    /// of [`actions::ACTION_TABLE`], registers the accelerator of every
     /// [`BindingStatus::Bound`] row, and installs the capture-phase chord
     /// controller that actually matches them
     /// ([`AppShell::install_chord_controller`]).
@@ -610,9 +637,29 @@ impl AppShell {
     /// chord out of both the accelerator registration and the chord controller for
     /// the same reason.
     ///
+    /// **`app.`-namespace rows are deliberately NOT installed here.** They are
+    /// [`crate::coordinator::Coordinator::install_app_actions`]', installed once
+    /// for the process, because `gio::ActionMap::add_action` REPLACES an existing
+    /// entry: installing them per window would leave the last window's closure
+    /// owning the whole application's Quit, and closing that window would kill
+    /// Ctrl+Shift+Q for every window still open. Nothing else moves — the chord
+    /// controller's `activate_action(&window, "app.quit")` and
+    /// [`AppShell::action_is_enabled`]'s `app.` lookup both resolve up the
+    /// window's action muxer to the application, exactly as before.
+    ///
+    /// `set_accels_for_action` below still covers `app.` rows: it is idempotent,
+    /// it is per-application rather than per-window, and it is what makes
+    /// `gio::Menu` draw "Ctrl+Shift+Q" beside the Quit item.
+    ///
     /// Must run AFTER the window is constructed and BEFORE `window.present()`.
-    pub fn install_actions(&self, app: &adw::Application) {
+    pub fn install_actions(&self, app: &gtk::Application) {
         for binding in actions::ACTION_TABLE {
+            // The coordinator's, not this window's — see the doc comment. Checked
+            // BEFORE the classification below so an `app.` row can never reach
+            // `window.add_action` by any path.
+            if binding.action.starts_with("app.") {
+                continue;
+            }
             // A row resolves in exactly one of two places: through its command, or
             // — for a FRONT-END-ONLY row, which carries no `wolf_core::Command` at
             // all — through `ui_action_for_front_end_action`. A row that resolves
@@ -642,7 +689,7 @@ impl AppShell {
                     }
                 },
             };
-            let Some((namespace, name)) = binding.action.split_once('.') else {
+            let Some(("win", name)) = binding.action.split_once('.') else {
                 eprintln!(
                     "wolf-gnome: action {:?} has no `app.`/`win.` namespace prefix; not installed",
                     binding.action
@@ -658,11 +705,7 @@ impl AppShell {
                 }
             });
 
-            if namespace == "app" {
-                app.add_action(&action);
-            } else {
-                self.inner.window.add_action(&action);
-            }
+            self.inner.window.add_action(&action);
             if binding.action == GO_TO_FILE_ACTION {
                 *self.inner.go_to_file.borrow_mut() = Some(action);
             } else if binding.action == SEARCH_IN_PROJECT_ACTION {
@@ -883,7 +926,7 @@ impl AppShell {
     /// collapsed into the copy gate's.
     ///
     /// The callback holds a `Weak<ShellInner>` and takes the core borrow in a
-    /// statement of its own, so a read landing after `app::wire_close` has taken
+    /// statement of its own, so a read landing after `window::wire_close` has taken
     /// the core out performs nothing rather than colliding with its `borrow_mut`.
     /// An `Err` is printed, never swallowed, and then flattened to `None` for the
     /// pure rule.
@@ -1243,7 +1286,7 @@ impl AppShell {
     ///   overlay over the crash one (`Go to File…`). The buffer picker is the one
     ///   this cannot skip: a stall is discovered BY its candidate snapshot timing
     ///   out, so the transition to `Stalled` always finds it open with zero rows,
-    ///   and an overlay left open keeps `app::wire_keys`' guard suppressing every
+    ///   and an overlay left open keeps `window::wire_keys`' guard suppressing every
     ///   key to Neovim — including after a later restart.
     /// - visible -> hidden: if focus was inside the overlay (i.e. on the restart
     ///   button), park it back on the persistent cmdline strip. Hiding the focus
@@ -1271,7 +1314,7 @@ impl AppShell {
             self.inner.palette.close();
             self.inner.buffers.close();
             // A fourth idempotent close, for the same reason as the buffer picker's:
-            // an overlay left flagged open keeps `app::wire_keys`' guard suppressing
+            // an overlay left flagged open keeps `window::wire_keys`' guard suppressing
             // every key to Neovim, including after a restart. Here it also cancels
             // any `rg` still running behind the overlay.
             self.inner.search.close();
@@ -1438,7 +1481,12 @@ impl AppShell {
         self.settle_reroot(live.as_deref());
         self.refresh_title(live.as_deref());
         self.refresh_nav_buttons();
-        self.inner.state.on_render_wake();
+        // This window's subtree is re-gathered and the WHOLE tree committed, both
+        // by the coordinator: one window's wake must not commit a tree that has
+        // forgotten the others.
+        if let Some(coordinator) = coordinator::upgrade(&self.inner.coordinator) {
+            coordinator.commit(self.inner.window_id);
+        }
         // LAST: a drained `close_window` tears the core down, so the state
         // snapshot above must already have happened.
         self.drain_and_dispatch_commands();
@@ -1487,14 +1535,21 @@ impl AppShell {
     }
 
     /// Performs one palette-row activation: a registry command through the same
-    /// [`UiAction`] funnel the drain uses, or a recent folder through
-    /// [`AppShell::chdir_to`].
+    /// [`UiAction`] funnel the drain uses, a recent folder through
+    /// [`AppShell::chdir_to`], or another window through the coordinator.
     ///
     /// **This is the one place a recent folder becomes a window action.** It
-    /// re-roots this window, because there is one window to re-root, and it reaches
-    /// it through `chdir_to` so an Open Recent activation is indistinguishable from
-    /// picking the same folder in the native Open Folder dialog — one
-    /// canonicalization, one [`InputEvent::Chdir`], one pending re-root, one settle.
+    /// re-roots THIS window — the window whose palette the row was picked in — and
+    /// it reaches it through `chdir_to` so an Open Recent activation is
+    /// indistinguishable from picking the same folder in the native Open Folder
+    /// dialog: one canonicalization, one [`InputEvent::Chdir`], one pending
+    /// re-root, one settle.
+    ///
+    /// **And the one place a switch row becomes a raise.** It touches this window's
+    /// project not at all; the coordinator presents the other window, best-effort
+    /// (see [`crate::coordinator::Coordinator::raise`]). Where a directory is
+    /// offered as both kinds of row, the two are opposites and the user picked
+    /// which one they meant.
     ///
     /// Exhaustive with no `_` arm, so a new [`PaletteAction`] variant is a compile
     /// error here. The `Unsupported` arm is unreachable while
@@ -1505,10 +1560,28 @@ impl AppShell {
         match action {
             PaletteAction::Dispatch(command) => self.dispatch_command(command),
             PaletteAction::OpenRecentFolder(path) => self.chdir_to(path),
+            PaletteAction::SwitchWindow(index) => self.raise_window(index),
             PaletteAction::Unsupported(reason) => {
                 eprintln!("wolf-gnome: palette activation not performed: {reason}");
             }
         }
+    }
+
+    /// Asks the coordinator to present another window.
+    ///
+    /// Nothing of this window changes, and nothing is done here beyond the
+    /// forwarding: which window `index` names, whether it is still open, and what a
+    /// Wayland compositor does with the request are all
+    /// [`crate::coordinator::Coordinator::raise`]'s to answer.
+    fn raise_window(&self, index: WindowId) {
+        let Some(coordinator) = coordinator::upgrade(&self.inner.coordinator) else {
+            eprintln!(
+                "wolf-gnome: Switch to Window not performed: the coordinator is gone, so no \
+                 window can be looked up to raise"
+            );
+            return;
+        };
+        coordinator.raise(index);
     }
 
     /// Classifies one [`Command`] through [`ui_action_for`] and performs it, or
@@ -1533,7 +1606,7 @@ impl AppShell {
     /// is where that is arbitrated**: opening any one of them closes the other three
     /// first. Every `close()` is idempotent. This module holds all four handles, so
     /// the rule costs the four overlay modules no knowledge of each other — and it
-    /// is what keeps `app::wire_keys`' open-overlay guard honest and makes "Escape
+    /// is what keeps `window::wire_keys`' open-overlay guard honest and makes "Escape
     /// closes the thing you can see" true.
     fn perform(&self, action: UiAction) {
         match action {
@@ -1570,6 +1643,7 @@ impl AppShell {
             UiAction::OpenFileDialog => self.open_file_dialog(),
             UiAction::OpenFolderDialog => self.open_folder_dialog(),
             UiAction::NewUntitledBuffer => self.send_input(InputEvent::NewBuffer),
+            UiAction::NewWindow => self.new_window(),
             UiAction::ClosePane => self.send_input(InputEvent::ClosePane),
             // Over the shared ordered input channel and not `WolfCore::toggle_full_width`,
             // which is itself a one-line `send_input` onto the same channel: same path,
@@ -1593,7 +1667,7 @@ impl AppShell {
         }
     }
 
-    /// Closes the window through `close-request` so `app::wire_close` runs (picker,
+    /// Closes the window through `close-request` so `window::wire_close` runs (picker,
     /// palette, buffer picker, project search and tree closed, then
     /// `WolfCore::shutdown`).
     ///
@@ -1604,19 +1678,65 @@ impl AppShell {
         self.inner.window.close();
     }
 
-    /// Quits by closing EVERY application window, for the same clean-shutdown
-    /// reason as [`AppShell::close_window`].
+    /// Opens a fresh, empty window through
+    /// [`crate::coordinator::Coordinator::open_new_window`], which is the process's
+    /// job rather than this window's: the new window gets its own core, its own
+    /// [`AppShell`] and its own subtree of the persisted tree.
     ///
-    /// Deliberately not `gio::Application::quit()`, which bypasses `close-request`
-    /// and leaves the captive Neovim orphaned.
+    /// Nothing of THIS window is passed along — not its working directory, not its
+    /// size — and the coordinator is where that rule lives, so a reader wondering
+    /// what the new window inherits finds one answer rather than two.
+    ///
+    /// Reached from the drained `Command::NewWindow` (`:WolfNewWindow`) and from
+    /// the palette's New Window row; the primary menu's item and the `app.`
+    /// namespace reach the coordinator directly, without passing through here.
+    /// Both routes end in the same call, so they cannot diverge.
+    ///
+    /// Refused with a printed reason when the window has no application (nothing to
+    /// add a window to) or the coordinator is gone (nothing to own it), matching
+    /// [`AppShell::quit_application`]'s shape — except that there is no useful
+    /// fallback here: closing or opening nothing is the only honest answer.
+    fn new_window(&self) {
+        let Some(app) = self.inner.window.application() else {
+            eprintln!(
+                "wolf-gnome: New Window not performed: this window belongs to no application, so \
+                 there is nothing to open a second window on"
+            );
+            return;
+        };
+        let Some(coordinator) = coordinator::upgrade(&self.inner.coordinator) else {
+            eprintln!(
+                "wolf-gnome: New Window not performed: the coordinator is gone, so nothing would \
+                 own the new window's state"
+            );
+            return;
+        };
+        coordinator.open_new_window(&app);
+    }
+
+    /// Quits through [`crate::coordinator::Coordinator::quit`], which commits the
+    /// whole tree once while every core is still alive and only then closes every
+    /// window — for the same clean-shutdown reason as [`AppShell::close_window`].
+    ///
+    /// Routing the drained `Command::QuitApplication` and the palette's Quit Wolf
+    /// row through the coordinator is what makes them take the same funnel as the
+    /// `app.quit` chord, so a quit cannot mean one thing when Neovim asks for it
+    /// and another when the chord does.
+    ///
+    /// The fallback closes this window alone: without an application there are no
+    /// other windows to close, and without a coordinator there is no tree to
+    /// commit. Deliberately not `gio::Application::quit()`, which bypasses
+    /// `close-request` and leaves the captive Neovim orphaned.
     fn quit_application(&self) {
         let Some(app) = self.inner.window.application() else {
             self.close_window();
             return;
         };
-        for window in app.windows() {
-            window.close();
-        }
+        let Some(coordinator) = coordinator::upgrade(&self.inner.coordinator) else {
+            self.close_window();
+            return;
+        };
+        coordinator.quit(&app);
     }
 
     /// Opens a native folder chooser; on success `:tcd`s the core there and records

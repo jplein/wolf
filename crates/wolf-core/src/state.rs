@@ -116,8 +116,13 @@ pub enum PaneNode {
     },
 }
 
-/// One tab's persisted state (a tab is its own captive Neovim: buffers, splits,
-/// scroll, sidebar, and working directory).
+/// One tab's persisted state: buffers, splits, scroll, sidebar, and working
+/// directory.
+///
+/// A tab is ONE TABPAGE, never a captive Neovim of its own. On GTK a window owns
+/// one core and one tab; on macOS N views share their project's single Neovim,
+/// each bound to a tabpage of it (`crates/wolf-macos/DECISIONS.md`, "One Neovim
+/// per project").
 ///
 /// `cwd` is the absolute canonicalized path nvim reported, or `""` when it has
 /// not been reported yet (a fresh empty-state tab); restore validates it is a
@@ -170,7 +175,8 @@ pub struct WindowState {
     pub width: f64,
     /// The window height, in points (`<= 0` == unset).
     pub height: f64,
-    /// The window's tabs, in tab order (each its own captive Neovim).
+    /// The window's tabs, in tab order (each a TABPAGE of the window's Neovim,
+    /// never a Neovim of its own).
     pub tabs: Vec<TabState>,
 }
 
