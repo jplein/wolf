@@ -46,18 +46,19 @@ Spawns and supervises the captive Neovim child, and wraps every RPC core issues 
 
 #### `redraw.rs`
 
-The `nvim-rs` handler: it folds each `redraw` batch into `Snapshot` and routes the out-of-band `wolf_*` notifications (cwd, buffers, previews, markdown ticks and cursors, tabpages, theme, open files, commands, intents) into its sibling cells and queues.
+The `nvim-rs` handler: it folds each `redraw` batch into `Snapshot` and routes the out-of-band `wolf_*` notifications into sibling cells and queues.
 
 **Decisions**
 
-- Only `flush` bumps `seq`. Out-of-band notifications fire the wake without bumping it, so a front-end gating on `seq` alone misses every cwd, buffer, theme, and preview update.
-- In `grid_line`, each cell tuple maps to exactly one column and `repeat` counts columns including the first, so an explicit `0` is a real zero-width no-op. Clamping it to 1 paints a cell one column past the event's span; Neovim's shadow grid never repaints it, so a wrong-background cell persists. Likewise Neovim already sends the trailing half of a double-width glyph as its own empty-text cell, so synthesizing a placeholder shifts the rest of the row right.
-- `win_hide` removes the window entry but keeps its grid: Neovim reuses that grid id and may re-`win_pos` the window without resizing it first.
+- Only `flush` bumps `seq`. Out-of-band notifications fire the wake without bumping it, so a front-end gating on `seq` alone misses every one of them.
+- In `grid_line`, `repeat` counts columns including the first, so an explicit `0` is a real zero-width no-op; clamping it to 1 paints past the event's span, which Neovim's shadow grid never repaints, leaving a wrong-background cell. Neovim also sends a double-width glyph's trailing half as its own empty-text cell, so synthesizing a placeholder shifts the row right.
+- `win_hide` removes the window entry but keeps its grid: Neovim reuses that grid id and may re-`win_pos` without resizing first.
 - A resolved `confirm()` and an invalid-key re-prompt produce byte-identical `cmdline_hide` batches, so the toast is stashed with its prompt and restored only if a later `cmdline_show` prompt matches.
+- The open-file mirror drops terminal buffers from `files` and from `active`, because a front-end replays it as `:edit` after a crash. Measured: the replay does not fail — Neovim re-runs `termopen()`, so each crash silently spawns another shell.
 
 **Gotchas**
 
-- `RedrawHandler` is `Clone`; every clone shares the same snapshot, queues, and history cell, which is how a respawn keeps them.
+- `RedrawHandler` is `Clone`; every clone shares one snapshot, queues and history cell, which is how a respawn keeps them.
 - Lock order: the nav-history fold takes the snapshot write lock first and the nav mutex second with no `.await` between; `WolfCore` takes the nav mutex alone. Reversing either creates a cycle.
 
 #### `render.rs`

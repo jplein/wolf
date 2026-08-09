@@ -200,6 +200,26 @@ const TAB_CWDS_EVENT: &str = "wolf_tab_cwds";
 /// separately from `redraw` in [`RedrawHandler::handle_notify`].
 const OPEN_FILES_EVENT: &str = "wolf_open_files";
 
+/// The scheme prefix Neovim gives every terminal buffer's name
+/// (`term://<cwd>//<pid>:<command>`).
+///
+/// A buffer name carrying it is a running job, not a file on disk, so it must not
+/// reach [`Snapshot::open_files`] — see [`is_terminal_buffer_name`].
+const TERMINAL_BUFFER_PREFIX: &str = "term://";
+
+/// Whether a buffer name denotes a Neovim TERMINAL buffer rather than a file.
+///
+/// A terminal buffer is not a file to reopen. Replaying one through the crash
+/// mirror does not fail harmlessly: MEASURED against the pinned nvim 0.12.2 by
+/// driving `InputEvent::Open { path: "term://…" }` into a real `WolfCore`, Neovim's
+/// own `BufReadCmd term://*` autocmd re-runs `termopen()`, so the replay SPAWNS A
+/// SECOND SHELL — a new buffer whose name is the same string with a fresh pid, no
+/// error and no message, taking over the window it was opened in. The new name then
+/// re-enters the mirror, so every crash costs another shell.
+fn is_terminal_buffer_name(name: &str) -> bool {
+    name.starts_with(TERMINAL_BUFFER_PREFIX)
+}
+
 /// `nvim-rs` [`Handler`] that applies redraw batches to a [`SharedSnapshot`].
 #[derive(Clone)]
 pub struct RedrawHandler {
@@ -789,6 +809,20 @@ impl RedrawHandler {
     /// canonical paths the rest of core keys on), falling back to the raw path if
     /// canonicalization fails. A triple missing its handle is SKIPPED.
     ///
+    /// TERMINAL buffers are dropped from BOTH halves — an `active` naming one
+    /// becomes `None`, and terminal entries never enter `files` — because the mirror
+    /// exists to be REPLAYED as `:edit` after a crash and a terminal buffer is not a
+    /// file to reopen. See [`is_terminal_buffer_name`] for what the replay was
+    /// measured to do instead. The test is applied BEFORE [`canon`], which also
+    /// spares a pointless `canonicalize` syscall on a scheme string.
+    ///
+    /// **Considered and rejected: filtering in `init.lua`'s `listed_files()` on
+    /// `buftype ~= ""`.** That is more precise at the source and would also drop help
+    /// and quickfix buffers. The fix lives here anyway because core additionally
+    /// protects a front-end running against a mirror an OLDER `init.lua` produced,
+    /// and because a pure fold over the decoded payload is testable in the fast tier
+    /// where a Lua-side filter would need a live Neovim.
+    ///
     /// The new map is built in full BEFORE the write guard is taken (so no
     /// filesystem work happens under the lock), then assigned wholesale. The lock is
     /// acquired via [`SharedSnapshot::write_async`], is NOT held across any
@@ -814,13 +848,19 @@ impl RedrawHandler {
                 let Some(tp) = triple.first().and_then(ext_handle) else {
                     continue;
                 };
-                let active = triple.get(1).and_then(Value::as_str).and_then(canon);
+                let active = triple
+                    .get(1)
+                    .and_then(Value::as_str)
+                    .filter(|s| !is_terminal_buffer_name(s))
+                    .and_then(canon);
                 let files = triple
                     .get(2)
                     .and_then(Value::as_array)
                     .map(|arr| {
                         arr.iter()
-                            .filter_map(|v| v.as_str().and_then(canon))
+                            .filter_map(Value::as_str)
+                            .filter(|s| !is_terminal_buffer_name(s))
+                            .filter_map(canon)
                             .collect()
                     })
                     .unwrap_or_default();
@@ -1745,6 +1785,11 @@ mod tests {
     //! deterministically by feeding synthetic `msg_show`-shaped params straight
     //! through the fold. The real-nvim `tests/messages.rs` covers the observable
     //! push + clear-on-input paths.
+    //!
+    //! Also home to [`is_terminal_buffer_name`]'s table, for the same reason in a
+    //! different shape: the predicate is private, so nothing under
+    //! `crates/wolf-core/tests/` can reach it. Its EFFECT on the open-file mirror is
+    //! covered against a real Neovim by `tests/nvim_restart.rs`.
 
     use super::*;
 
@@ -2059,5 +2104,85 @@ mod tests {
             snap.toast.messages.is_empty(),
             "the dropped confirm leaves no toast messages"
         );
+    }
+
+    /// One [`is_terminal_buffer_name`] row.
+    struct TerminalNameCase {
+        desc: &'static str,
+        name: &'static str,
+        expected: bool,
+    }
+
+    /// Pins [`is_terminal_buffer_name`]: a buffer name denotes a terminal exactly
+    /// when it BEGINS with [`TERMINAL_BUFFER_PREFIX`] — never when it merely
+    /// contains it somewhere.
+    ///
+    /// This is the predicate [`RedrawHandler::apply_open_files`] applies to both
+    /// halves of the crash mirror, so a wrong answer in either direction is a real
+    /// user-visible defect: a `true` for a real path drops that file from the set
+    /// the front-end reopens after a crash, and a `false` for a terminal name puts
+    /// `term://…` back into the replay — which, MEASURED against the pinned nvim
+    /// 0.12.2, spawns a second shell rather than failing.
+    ///
+    /// FALSIFYING EDITS:
+    ///
+    /// - Change [`TERMINAL_BUFFER_PREFIX`] to `"terminal://"`: the first row,
+    ///   `term:///tmp/x//123:/bin/bash`, returns false. That is the shape Neovim
+    ///   actually produces (`term://<cwd>//<pid>:<command>`), so the scheme has no
+    ///   second `al`.
+    /// - "Simplify" `starts_with` to `contains`: the row whose name is a real
+    ///   absolute path with `term://` in the MIDDLE returns true, and that file
+    ///   would then be silently dropped from the crash mirror and never reopened.
+    #[test]
+    fn terminal_buffer_names_are_recognised() {
+        let cases = [
+            TerminalNameCase {
+                desc: "the shape nvim gives a terminal buffer: term://<cwd>//<pid>:<cmd>",
+                name: "term:///tmp/x//123:/bin/bash",
+                expected: true,
+            },
+            TerminalNameCase {
+                desc: "the bare scheme, with nothing after it",
+                name: "term://",
+                expected: true,
+            },
+            TerminalNameCase {
+                desc: "an ordinary absolute path to a file on disk",
+                name: "/home/u/notes/alpha.md",
+                expected: false,
+            },
+            TerminalNameCase {
+                // A real path CAN contain the scheme text: `//` is legal in a POSIX
+                // path, and a directory may be called `term:`. This is the row that
+                // pins `starts_with` against a later `contains`.
+                desc: "a real path containing term:// somewhere other than the start",
+                name: "/home/u/notes/term://weird.md",
+                expected: false,
+            },
+            TerminalNameCase {
+                desc: "a file whose basename merely begins with the letters `term`",
+                name: "/home/u/terminal-notes.md",
+                expected: false,
+            },
+            TerminalNameCase {
+                desc: "an unnamed buffer",
+                name: "",
+                expected: false,
+            },
+        ];
+
+        for case in &cases {
+            assert_eq!(
+                is_terminal_buffer_name(case.name),
+                case.expected,
+                "case: {} (name {:?}). `true` means the mirror DROPS this name, so a \
+                 `true` for a real path loses a file the crash restore was supposed to \
+                 reopen, and a `false` for a `term://` name lets the restore replay it \
+                 as `:edit term://…` — which spawns a fresh shell, with no error and \
+                 no message, once per crash.",
+                case.desc,
+                case.name
+            );
+        }
     }
 }

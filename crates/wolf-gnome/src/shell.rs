@@ -775,6 +775,11 @@ impl AppShell {
     /// [`crate::search_overlay::open_decision`]'s `project_open` arm — fed by the
     /// `set_project_open` call below — is what the command palette's row sees, since
     /// the palette offers a live row for every dispatched command.
+    ///
+    /// `win.terminal` is deliberately NOT among the actions disabled here, for the
+    /// buffer picker's recorded reason: the captive Neovim runs in a project-less
+    /// window too, and a drawer there is a working shell rather than a dead
+    /// surface.
     pub fn set_empty_state(&self, empty: bool) {
         self.inner.empty_state.set_visible(empty);
         self.inner.empty.set(empty);
@@ -1570,6 +1575,10 @@ impl AppShell {
             // which is itself a one-line `send_input` onto the same channel: same path,
             // and the neighbouring arms' shape wins.
             UiAction::ToggleFullWidth => self.send_input(InputEvent::ToggleFullWidth),
+            // Same argument as the arm above: `WolfCore::toggle_terminal` is itself a
+            // one-line `send_input` onto this same ordered channel, so going through it
+            // would buy nothing and diverge from the neighbouring arms' shape.
+            UiAction::ToggleTerminal => self.send_input(InputEvent::ToggleTerminal),
             UiAction::CloseWindow => self.close_window(),
             UiAction::MinimizeWindow => self.inner.window.minimize(),
             UiAction::QuitApplication => self.quit_application(),
