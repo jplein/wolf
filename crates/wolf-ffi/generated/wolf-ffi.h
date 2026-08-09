@@ -442,6 +442,8 @@ void* __swift_bridge__$WolfCoreHandle$render_preview(void* self, int64_t source_
 void* __swift_bridge__$WolfCoreHandle$open_in_browser(void* self);
 int64_t __swift_bridge__$WolfCoreHandle$preview_file(void* self, int64_t win, void* path);
 int64_t __swift_bridge__$WolfCoreHandle$preview_buffer(void* self, int64_t win, int64_t bufnr);
+int64_t __swift_bridge__$WolfCoreHandle$preview_in_other(void* self, int64_t target_win);
+int64_t __swift_bridge__$WolfCoreHandle$edit_in_other(void* self, int64_t target_win);
 void* __swift_bridge__$WolfCoreHandle$previews(void* self);
 bool __swift_bridge__$WolfCoreHandle$history_can_back(void* self, int64_t win);
 bool __swift_bridge__$WolfCoreHandle$history_can_forward(void* self, int64_t win);

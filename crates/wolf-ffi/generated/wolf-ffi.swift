@@ -484,6 +484,14 @@ extension WolfCoreHandleRef {
         __swift_bridge__$WolfCoreHandle$preview_buffer(ptr, win, bufnr)
     }
 
+    public func preview_in_other(_ target_win: Int64) -> Int64 {
+        __swift_bridge__$WolfCoreHandle$preview_in_other(ptr, target_win)
+    }
+
+    public func edit_in_other(_ target_win: Int64) -> Int64 {
+        __swift_bridge__$WolfCoreHandle$edit_in_other(ptr, target_win)
+    }
+
     public func previews() -> RustVec<FfiPreview> {
         RustVec(ptr: __swift_bridge__$WolfCoreHandle$previews(ptr))
     }

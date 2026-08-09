@@ -16,8 +16,9 @@
 //    decreaseFontSize = 12, commandPalette = 13, copy = 14, paste = 15,
 //    bufferPicker = 16, newTab = 17, preview = 18, edit = 19, terminal = 20,
 //    previewInBrowser = 21, fullWidth = 22, toggleSidebar = 23,
-//    sidebarShowProject = 24, searchInProject = 25 (the range 0..25). Any
-//    out-of-range discriminant decodes to `nil`.
+//    sidebarShowProject = 24, searchInProject = 25, previewInOtherPane = 26,
+//    editInOtherPane = 27 (the range 0..27). Any out-of-range discriminant
+//    decodes to `nil`.
 //
 //  NOTE to coder: this references the pure `WolfKeyMap.CommandKind` enum the coder
 //  adds in `Sources/WolfKeyMap/CommandSeam.swift` (Foundation only, no AppKit),
@@ -73,18 +74,21 @@ final class CommandSeamTests: XCTestCase {
       "ffi 24 -> .sidebarShowProject")
     XCTAssertEqual(
       CommandKind(ffi: 25), .searchInProject, "ffi 25 -> .searchInProject")
+    XCTAssertEqual(
+      CommandKind(ffi: 26), .previewInOtherPane,
+      "ffi 26 -> .previewInOtherPane")
+    XCTAssertEqual(
+      CommandKind(ffi: 27), .editInOtherPane, "ffi 27 -> .editInOtherPane")
   }
 
   // MARK: - out-of-range discriminants decode to nil
 
-  // The first out-of-range probe tracks the registry's high-water mark: it was 21
-  // while `previewInBrowser` was the last case, then 23 while `fullWidth` claimed 22,
-  // and moves to 26 now that `searchInProject` claims 25 (with `toggleSidebar` = 23
-  // and `sidebarShowProject` = 24). Appending a command WITHOUT bumping this probe
-  // turns the new case's decode into a silent nil assertion, so it must be updated in
-  // lockstep with the enum.
+  // The first out-of-range probe tracks the registry's high-water mark: it sits at
+  // 28 while `editInOtherPane` claims 27 (with `previewInOtherPane` = 26). Appending
+  // a command WITHOUT bumping this probe turns the new case's decode into a silent
+  // nil assertion, so it must be updated in lockstep with the enum.
   func testCommandKindOutOfRangeIsNil() {
-    XCTAssertNil(CommandKind(ffi: 26), "the first out-of-range discriminant -> nil")
+    XCTAssertNil(CommandKind(ffi: 28), "the first out-of-range discriminant -> nil")
     XCTAssertNil(CommandKind(ffi: 255), "a far out-of-range discriminant -> nil")
   }
 }

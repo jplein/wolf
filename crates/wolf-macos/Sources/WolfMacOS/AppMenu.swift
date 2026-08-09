@@ -43,6 +43,8 @@ enum AppMenu {
     static let terminal = 20
     static let previewInBrowser = 21
     static let fullWidth = 22
+    static let previewInOtherPane = 26
+    static let editInOtherPane = 27
   }
 
   /// The dynamic submenus `install` hands back to the coordinator: the Window
@@ -247,9 +249,10 @@ enum AppMenu {
   /// The View menu (Toggle Sidebar `⌃⌘s` / Project `⇧⌘e` / Search
   /// `⇧⌘f` / a separator / Reset Font Size `⌘0` / Increase Font Size `⌘=` /
   /// Decrease Font Size `⌘-` / a separator / Command Palette… `⌘p` / Buffer
-  /// Picker… `⌘e` / Preview / Edit / Terminal `` ⌃` `` / a separator /
-  /// Enter Full Screen `⌃⌘f`). The font-size, palette, preview and terminal
-  /// titles mirror `wolf_core::COMMAND_SPECS`.
+  /// Picker… `⌘e` / Preview / Edit / Preview in Another Pane / Edit in Another
+  /// Pane / Terminal `` ⌃` `` / a separator / Enter Full Screen `⌃⌘f`). The
+  /// font-size, palette, preview and terminal titles mirror
+  /// `wolf_core::COMMAND_SPECS`.
   ///
   /// Project / Search are AppDelegate-targeted view-state items
   /// (`showProjectTreeMenuItem`/`showSearchMenuItem`): each reveals the sidebar
@@ -324,6 +327,22 @@ enum AppMenu {
     menu.addItem(
       commandItem(
         title: "Edit", tag: Tag.edit, keyEquivalent: "", target: target))
+    // View > Preview in Another Pane: previews the active pane's Markdown file
+    // in another pane (reuse or split right). Enabled only on a Markdown buffer
+    // (gated in AppDelegate.validateMenuItem, mirroring Preview). NO key
+    // equivalent.
+    menu.addItem(
+      commandItem(
+        title: "Preview in Another Pane", tag: Tag.previewInOtherPane,
+        keyEquivalent: "", target: target))
+    // View > Edit in Another Pane: edits the active preview's source in another
+    // pane (reuse or split, source lands left). Enabled only from a preview
+    // pane (gated in AppDelegate.validateMenuItem, mirroring Edit). NO key
+    // equivalent.
+    menu.addItem(
+      commandItem(
+        title: "Edit in Another Pane", tag: Tag.editInOtherPane,
+        keyEquivalent: "", target: target))
     // View > Terminal: toggles the per-project terminal drawer. Always enabled
     // (unlike Preview / Edit it is not gated in
     // AppDelegate.validateMenuItem).

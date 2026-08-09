@@ -84,6 +84,10 @@ enum CommandDispatcher {
       controller?.showSidebar(panel: .tree)
     case .searchInProject:
       controller?.showSidebar(panel: .search)
+    case .previewInOtherPane:
+      controller?.previewInOtherPane()
+    case .editInOtherPane:
+      controller?.editInOtherPane()
     }
   }
 }

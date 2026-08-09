@@ -198,6 +198,18 @@ The disk-path front half of `wolf_preview_buffer`: previews the Markdown file `p
 
 It `bufadd`s and `bufload`s the source, then delegates the gate, bind, and re-emits to `wolf_preview_buffer`. Only on success does it mark the source buflisted: a `bufadd`-ed background buffer is unlisted, and listing it is what gives a preview-only file its buffer-picker row, while a rejected non-markdown path must not gain one. It deliberately does not re-emit the cursor: the source is loaded in the background with no window, so it carries no meaningful position.
 
+#### `wolf_preview_in_other(target_win)`
+
+Previews the active pane's Markdown file in another pane and returns the source bufnr — not the scratch, since the front-end joins `previews()` rows on the source — or `0` unless the active filetype is `markdown`. The gate runs before any split, so a mis-timed palette activation is a pure no-op that never changes the layout. `target_win` is the front-end-resolved window, `0` when the front-end wants a split.
+
+A usable target — non-nil, non-zero, a valid window, not the current window, and not the terminal drawer (`b:wolf_terminal` / `w:wolf_terminal`) — receives the scratch via `nvim_win_set_buf` with focus untouched. Anything else takes the split path: `wolf_do_split("v")` (the shell's applySplit inserts the new pane after `from`, so it lands to the right), the scratch bound into the new window, focus handed back to `from`. Focus follows the edit-mode view of the document, so the source editor stays focused either way. The cursor pre-emit, the two guarded re-emits, and the no-MRU rule mirror `wolf_open_preview`.
+
+#### `wolf_edit_in_other(target_win)`
+
+Edits the active preview pane's source in another pane and returns `nvim_win_get_buf` of the bound window, or `0` unless the current buffer carries `b:wolf_preview_source` — gated before any split, like its sibling. Returning the bound window's buffer rather than the recorded bufnr is deliberate: the stale-bufnr `:edit` fallback still reports non-zero, a divergence from `wolf_edit_source`.
+
+Target validation is shared with `wolf_preview_in_other`, and an unusable target falls back to the split path. A usable target has the source bound into it — preferring the window-scoped bufnr bind, falling back to focusing plus `:edit` of the recorded path — and is then focused. On the split path the new right window keeps the scratch and the source is bound into the original window, which is focused: net editor-left, preview-right. Focus follows the edit-mode view of the document. No MRU is recorded; the two guarded re-emits mirror `wolf_edit_source`.
+
 #### `wolf_next_untitled(cwd, exclude_buf, extra_collision)`
 
 Pure name generator. Returns `(name, abspath)` for the first index whose name collides with neither a file or directory on disk in `cwd` nor any existing buffer's name, skipping `exclude_buf`. Index 1 is un-numbered `Untitled.md`, so the literal `Untitled 1.md` is never generated.

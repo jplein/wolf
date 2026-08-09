@@ -164,6 +164,8 @@ One captive nvim is one project; each of its views binds to a distinct tabpage.
 - `open_in_browser(&self) -> String` — Starts or reuses the loopback-only preview server pinned at the active markdown buffer and returns a `http://127.0.0.1:<port>/<relpath>` URL. The path is root-relative so links between markdown files resolve.
 - `preview_file(&self, win: i64, path: String) -> i64` — Previews the markdown file at `path` in window `win` — the link-follow entry, and where the file picker and open dialog route when the active pane is in preview mode. `path` is absolute — no relative resolution happens here. Returns the file's source bufnr, left buflisted so a preview-only file keeps its picker row, or 0, and the front-end has its own fallback for 0.
 - `preview_buffer(&self, win: i64, bufnr: i64) -> i64` — Previews an already-open buffer in window `win` — where the buffer picker routes in preview mode. Returns the source bufnr, or 0 when the buffer is invalid, unnamed, or not markdown; on 0 the front-end falls back to `switch_buffer`, converting the pane to edit mode.
+- `preview_in_other(&self, target_win: i64) -> i64` — Previews the active markdown buffer in another pane. `target_win` is the front-end-resolved target window, `0` to split a new pane on the right; the Lua helper gates before any split, so a rejected call never changes the layout, and a split surfaces as an ordinary vertical Split intent. Focus stays in the source editor. Blocks briefly; returns the source bufnr, or 0 off a markdown buffer or after shutdown.
+- `edit_in_other(&self, target_win: i64) -> i64` — The other-pane inverse: binds the active preview's source into `target_win` (or splits, with the source landing left) and focuses the pane editing it. Returns the bound window's bufnr — non-zero even on the stale-bufnr `:edit` fallback — or 0 off a preview pane or after shutdown.
 - `previews(&self) -> Vec<FfiPreview>` — One entry per window showing a preview scratch buffer.
 - `FfiPreview::win/source_bufnr/source_name/source_path/source_display_path` — `win` is the pane the web view overlays. `source_name` is the basename, `source_display_path` the cwd-relative or `~`-prefixed form.
 - `FfiPreview::source_tick() -> u64` — The source buffer's `changedtick`; the front-end reloads the web view when it advances. 0 until the first dirty notification.
@@ -246,34 +248,36 @@ These `u8` values are the ABI: Swift decodes raw integers, so the numbers are co
 
 `mod command_kind` mirrors `wolf_core::Command` and is contiguous from 0.
 
-| Value | Constant               | Meaning                                                                         |
-| ----- | ---------------------- | ------------------------------------------------------------------------------- |
-| 0     | `NEW_WINDOW`           | Open a new editor window.                                                       |
-| 1     | `CLOSE_WINDOW`         | Close the focused window.                                                       |
-| 2     | `QUIT_APPLICATION`     | Quit the application.                                                           |
-| 3     | `HIDE_APPLICATION`     | Hide the application.                                                           |
-| 4     | `MINIMIZE_WINDOW`      | Minimize the focused window.                                                    |
-| 5     | `GO_TO_FILE`           | Open the file-picker overlay.                                                   |
-| 6     | `OPEN_FILE`            | Native open-file dialog.                                                        |
-| 7     | `OPEN_FOLDER`          | Native dialog to change the working directory.                                  |
-| 8     | `CLOSE_PANE`           | Close the current split, not the buffer.                                        |
-| 9     | `NEW_BUFFER`           | New empty buffer in the current window.                                         |
-| 10    | `RESET_FONT_SIZE`      | Back to the configured default size.                                            |
-| 11    | `INCREASE_FONT_SIZE`   | One point larger.                                                               |
-| 12    | `DECREASE_FONT_SIZE`   | One point smaller.                                                              |
-| 13    | `COMMAND_PALETTE`      | Open the palette; excluded from the palette's own rows.                         |
-| 14    | `COPY`                 | Visual selection to the system clipboard.                                       |
-| 15    | `PASTE`                | System clipboard into the active document.                                      |
-| 16    | `BUFFER_PICKER`        | Open the buffer-picker overlay.                                                 |
-| 17    | `NEW_TAB`              | New tab in the current window.                                                  |
-| 18    | `PREVIEW`              | Render the active markdown buffer into a preview pane.                          |
-| 19    | `EDIT`                 | From a preview pane back to its source file.                                    |
-| 20    | `TERMINAL`             | Toggle the per-project terminal drawer.                                         |
-| 21    | `PREVIEW_IN_BROWSER`   | Render the active markdown buffer and open it in the system browser.            |
-| 22    | `FULL_WIDTH`           | Toggle the active buffer between the default content width and full pane width. |
-| 23    | `TOGGLE_SIDEBAR`       | Collapse or expand the sidebar; a native-only action.                           |
-| 24    | `SIDEBAR_SHOW_PROJECT` | Reveal the sidebar's file tree; a native-only action.                           |
-| 25    | `SEARCH_IN_PROJECT`    | Reveal and focus the sidebar's search panel; a native-only action.              |
+| Value | Constant                | Meaning                                                                         |
+| ----- | ----------------------- | ------------------------------------------------------------------------------- |
+| 0     | `NEW_WINDOW`            | Open a new editor window.                                                       |
+| 1     | `CLOSE_WINDOW`          | Close the focused window.                                                       |
+| 2     | `QUIT_APPLICATION`      | Quit the application.                                                           |
+| 3     | `HIDE_APPLICATION`      | Hide the application.                                                           |
+| 4     | `MINIMIZE_WINDOW`       | Minimize the focused window.                                                    |
+| 5     | `GO_TO_FILE`            | Open the file-picker overlay.                                                   |
+| 6     | `OPEN_FILE`             | Native open-file dialog.                                                        |
+| 7     | `OPEN_FOLDER`           | Native dialog to change the working directory.                                  |
+| 8     | `CLOSE_PANE`            | Close the current split, not the buffer.                                        |
+| 9     | `NEW_BUFFER`            | New empty buffer in the current window.                                         |
+| 10    | `RESET_FONT_SIZE`       | Back to the configured default size.                                            |
+| 11    | `INCREASE_FONT_SIZE`    | One point larger.                                                               |
+| 12    | `DECREASE_FONT_SIZE`    | One point smaller.                                                              |
+| 13    | `COMMAND_PALETTE`       | Open the palette; excluded from the palette's own rows.                         |
+| 14    | `COPY`                  | Visual selection to the system clipboard.                                       |
+| 15    | `PASTE`                 | System clipboard into the active document.                                      |
+| 16    | `BUFFER_PICKER`         | Open the buffer-picker overlay.                                                 |
+| 17    | `NEW_TAB`               | New tab in the current window.                                                  |
+| 18    | `PREVIEW`               | Render the active markdown buffer into a preview pane.                          |
+| 19    | `EDIT`                  | From a preview pane back to its source file.                                    |
+| 20    | `TERMINAL`              | Toggle the per-project terminal drawer.                                         |
+| 21    | `PREVIEW_IN_BROWSER`    | Render the active markdown buffer and open it in the system browser.            |
+| 22    | `FULL_WIDTH`            | Toggle the active buffer between the default content width and full pane width. |
+| 23    | `TOGGLE_SIDEBAR`        | Collapse or expand the sidebar; a native-only action.                           |
+| 24    | `SIDEBAR_SHOW_PROJECT`  | Reveal the sidebar's file tree; a native-only action.                           |
+| 25    | `SEARCH_IN_PROJECT`     | Reveal and focus the sidebar's search panel; a native-only action.              |
+| 26    | `PREVIEW_IN_OTHER_PANE` | Preview the active pane's markdown file in another pane.                        |
+| 27    | `EDIT_IN_OTHER_PANE`    | Edit the active preview's source file in another pane.                          |
 
 #### `bin/gen_bindings.rs`
 

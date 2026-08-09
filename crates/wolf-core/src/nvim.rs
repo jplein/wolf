@@ -594,6 +594,76 @@ impl NvimProcess {
         }
     }
 
+    /// Previews the active pane's Markdown file in ANOTHER pane — binding the
+    /// preview scratch into `target_win` when it is usable, else splitting a new
+    /// pane to the right — and returns the SOURCE bufnr.
+    ///
+    /// Runs the `_G.wolf_preview_in_other` helper (defined in
+    /// `runtime/nvim/init.lua`) over `nvim_exec_lua`, passing `target_win` as a
+    /// Lua vararg (never interpolated) — see
+    /// [`crate::api::WolfCore::preview_in_other`]. The helper gates FIRST
+    /// (returns `0` unless the active buffer is Markdown, before any split),
+    /// binds the scratch into the target or the new split window, and keeps
+    /// focus in the source-editing pane. Returns the source bufnr (`> 0`) on
+    /// success, decoded via [`Value::as_i64`]; RPC failure maps to
+    /// [`NvimError::Rpc`].
+    pub fn preview_in_other(
+        &self,
+        target_win: i64,
+    ) -> impl std::future::Future<Output = Result<i64, NvimError>> + Send + 'static {
+        let nvim = self.nvim.clone();
+        async move {
+            let value = nvim
+                .call(
+                    "nvim_exec_lua",
+                    vec![
+                        Value::from("return wolf_preview_in_other(...)"),
+                        Value::Array(vec![Value::from(target_win)]),
+                    ],
+                )
+                .await
+                .map_err(|e| NvimError::Rpc(e.to_string()))?
+                .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+            Ok(value.as_i64().unwrap_or_default())
+        }
+    }
+
+    /// Edits the active preview pane's SOURCE file in ANOTHER pane — binding the
+    /// source into `target_win` when it is usable, else splitting (the scratch
+    /// keeps the new right window, the source lands in the original) — and
+    /// returns the bufnr bound into that pane.
+    ///
+    /// Runs the `_G.wolf_edit_in_other` helper (defined in
+    /// `runtime/nvim/init.lua`) over `nvim_exec_lua`, passing `target_win` as a
+    /// Lua vararg (never interpolated) — see
+    /// [`crate::api::WolfCore::edit_in_other`]. The helper gates FIRST (returns
+    /// `0` unless the active buffer is a preview scratch, before any split) and
+    /// FOCUSES the pane now editing the source. Returns
+    /// `nvim_win_get_buf` of the bound window (`> 0`) on success, decoded via
+    /// [`Value::as_i64`]; RPC failure maps to [`NvimError::Rpc`].
+    pub fn edit_in_other(
+        &self,
+        target_win: i64,
+    ) -> impl std::future::Future<Output = Result<i64, NvimError>> + Send + 'static {
+        let nvim = self.nvim.clone();
+        async move {
+            let value = nvim
+                .call(
+                    "nvim_exec_lua",
+                    vec![
+                        Value::from("return wolf_edit_in_other(...)"),
+                        Value::Array(vec![Value::from(target_win)]),
+                    ],
+                )
+                .await
+                .map_err(|e| NvimError::Rpc(e.to_string()))?
+                .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+            Ok(value.as_i64().unwrap_or_default())
+        }
+    }
+
     /// Binds the buffer for absolute `path` into window `win` (loading it if
     /// needed) and restores that pane's saved view, for a per-pane navigation-history
     /// move to an [`Edit`](crate::nav_history::NavTarget::Edit) target.

@@ -2087,6 +2087,36 @@ final class PaneContainerView: NSView {
     }
   }
 
+  /// Resolves the OTHER pane for an other-pane bind ("Preview in Another Pane" /
+  /// "Edit in Another Pane"): the pure `OtherPaneSeam.target` over the live
+  /// tree, resolved with the SAME width/height pair `applyFocus` uses (the
+  /// drawer-reduced `DrawerLayout.editorHeight`, so the geometry matches what
+  /// the user sees), then mapped to the target pane's nvim window handle.
+  ///
+  /// Returns `nil` when the command must no-op (no active pane, the active pane
+  /// is not a tree leaf — the drawer — or the resolved pane has no bound window
+  /// yet); `0` when core should split; the target pane's window handle
+  /// otherwise.
+  func otherPaneTarget(prefer: OtherPaneSeam.Side) -> Int64? {
+    guard let active = activePane else { return nil }
+    let dl = DrawerLayout(
+      paneAreaHeight: Double(paneAreaHeight),
+      hasDrawer: drawerPaneId != nil,
+      weight: DrawerLayout.defaultWeight)
+    guard
+      let target = OtherPaneSeam.target(
+        active: active, prefer: prefer, tree: tree,
+        width: Double(bounds.width), height: dl.editorHeight)
+    else { return nil }
+    switch target {
+    case .split:
+      return 0
+    case .existing(let pane):
+      guard let win = panes[pane]?.win, win != 0 else { return nil }
+      return win
+    }
+  }
+
   /// Detects panes whose bound grid has vanished (a window close) and collapses
   /// them from the tree, never emptying the tree.
   private func detectCloses() {

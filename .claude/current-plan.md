@@ -1,96 +1,96 @@
-# Pane-mode preview/edit rework
+# "Preview in Another Pane" / "Edit in Another Pane" commands
 
 ## Status
 
-Phase: complete (reviewed, documented, all tests green, lint clean)
-
-### Approved deviation
-
-`wolf_preview_file` marks the source buflisted only after the markdown gate passes (the plan's literal wording was "set buflisted, then delegate"). Rationale: a rejected non-markdown file must not gain a permanent picker row. Pinned by a test; record in the decisions doc.
+Phase: complete (reviewed, documented, all tests green, lint clean; Linux/Cargo path not exercisable from this host — run once on Linux before/after landing)
 
 ## Problem statement
 
-Wolf's Preview command currently opens a preview in a new pane if there is only one pane, and uses a heuristic to find an existing preview pane when there is more than one. The Edit ("Edit Source") command uses a three-mode placement decision (`split_left` / `reuse_editor_pane` / `active`, see `preview-edit-command-decisions.md`). Replace both with a per-pane mode model: each pane is in **preview** mode or **edit** mode.
+The per-pane-mode rework landed: `open_preview()` / `edit_source()` are no-arg in-place; pane mode derives from the `previews` snapshot; `preview_buffer(win, bufnr)` / `preview_file(win, path)` bind previews into arbitrary windows. Add a complementary command pair targeting **another** pane.
 
 ### Required behavior
 
-1. **Rename** the "Edit Source" command's display title to "Edit" (registry `id` stays `edit`).
-2. **Preview command**: if the active pane is editing a file, preview that file **in the active pane** (in place — no new pane, no pane-hunting heuristic).
-3. **Edit command**: if the active pane is previewing a file, edit that file **in the active pane** (in place).
-4. **Pane mode drives navigation**:
-   - Buffer picker: active pane in edit mode → chosen buffer is edited; preview mode → chosen buffer is previewed.
-   - File picker / open dialog: same rule (edit mode edits, preview mode previews the chosen file).
-5. **Buffer picker listing**: one entry per file — the union of files previewed and edited, with no preview/edit distinction ("Preview: " rows disappear).
+1. **Preview in Another Pane** — previews the active pane's file in another pane.
+2. **Edit in Another Pane** — edits the active pane's previewed file in another pane.
+3. **One pane**: split — Preview adds a new pane to the **right** (preview there); Edit adds a new pane to the **left** (edit there).
+4. **More than one pane**: use an existing other pane. Prefer the pane to the **right** for preview, the pane to the **left** for edit; otherwise any other existing pane.
 
-### Project rules
+### Correction to the original statement
 
-- Docs are source of truth and must be updated; prefer real-Neovim integration tests over mocks.
-- Every new test file must be wired into its Bazel target explicitly (`rust_test` in the crate's BUILD.bazel with nvim runfiles + `tags = ["no-sandbox"]` for real-nvim tests; Swift test files into the hand-maintained `//crates/wolf-macos:WolfKeyMapTests` `srcs` list).
+Discriminants 20/21 were stale: the registry ends at `SearchInProject` = 25. The new commands take **26 (`PreviewInOtherPane`) and 27 (`EditInOtherPane`)** (append-only across `wolf_core::Command`, `wolf-ffi` `command_kind`, Swift `CommandKind`).
 
 ## Architect plan (approved)
 
 ### Design resolutions
 
-- **Q1 Pane mode is derived, no new state.** A pane bound to nvim window `win` is in preview mode iff `win` appears in `Snapshot.previews` (front-end: `handle.previews()`; Lua: the window's buffer carries `b:wolf_preview_source`). Everything else is edit mode. `Snapshot.current_is_preview` / `is_preview_active()` untouched (still the Edit menu gate).
-- **Q2 In-place semantics.** `_G.wolf_open_preview()` and `_G.wolf_edit_source()` lose their `mode` parameter and keep only the in-place ("active") arm: `nvim_win_set_buf(0, preview_buf)` / `edit_into(0)`, with existing gates, cursor pre-emit, and re-emits. Delete `split_left` / `reuse_editor_pane` / `split_right` / `reuse_preview_pane` branches and other-window scans.
-- **Q3 Seams.** `EditSeam.swift` deleted entirely. `PreviewSeam.placementMode` deleted (keep `PreviewLoad`, `winsNeedingReload`, click-focus members). `PaneContainerView`'s `PreviewPlacementInputs` / `EditPlacementInputs` + accessors deleted; replaced by `var activePaneIsPreview: Bool` via new pure seam `PaneModeSeam`.
-- **Q4 Picker union.** `wolf_ensure_preview_buf` creates the scratch **unlisted** (`nvim_create_buf(false, true)`, keeps `Preview: <rel>` name); `wolf_preview_file` sets `vim.bo[source_buf].buflisted = true` after `bufload`. Listed set = deduplicated union; no core `rank_buffers` change. New Lua helper `_G.wolf_preview_buffer(win, bufnr)`: validates bufnr, markdown gate (`filetype == "markdown"` or `vim.filetype.match`), ensures scratch, binds into `win` (0 → current), re-emits, returns source bufnr or 0. `wolf_preview_file` becomes the disk-path front half delegating to it.
-- **Q5 Routing.** `PickerView.activateSelection()` and `WolfWindowController.presentOpenFileDialog()`: if active pane is preview mode → `handle.preview_file(activeWin, path)`, falling back to `handle.open(path)` on `0` (non-markdown → pane converts to edit mode). Buffer picker (`activateBufferRow`): preview mode → `handle.preview_buffer(activeWin, bufnr)`, fallback `switch_buffer(bufnr)` on `0`. Sidebar file tree and search results deliberately out of scope (record in decisions doc).
-- **Q6 FFI/Swift surface.** `wolf-ffi`: `open_preview()` / `edit_source()` lose `mode`; add `preview_buffer(win, bufnr) -> i64`. No discriminant changes (EDIT stays 19). Regenerate `generated/wolf-ffi.swift`. Swift: menu title "Edit Source" → "Edit"; `validateMenuItem` gates kept (Preview on `isMarkdownActive`, Edit on `isPreviewActive`). `wolf_current_file` / Snapshot: no changes.
-- **Q7 Edge cases.** Non-markdown Preview: gated/no-op (unchanged). Edit off-preview: gated/returns 0 (unchanged). Non-markdown or unnamed pick in preview mode: helper returns 0 → edit fallback, pane becomes edit pane. Two panes previewing same file: same scratch bound in both, one picker row. Source stays buflisted after its preview pane closes. Preview binds record no MRU (deliberate); edit-mode `open` keeps recording.
+- **D1 Target choice is front-end, pure seam.** New `OtherPaneSeam` (WolfKeyMap, Foundation only): `enum Side { left, right }`, `enum Target { split, existing(PaneId) }`, `static func target(active: PaneId, prefer: Side, tree: PaneTree, width: Double, height: Double) -> Target?`. Rules in order: (1) active not a leaf (unknown/drawer) → nil; (2) single leaf → `.split`; (3) `tree.neighbor(active, dir, …)` resolves → `.existing`; (4) deterministic fallback: DFS-adjacent leaf with wrap (`.right` → next in `leaves()` order wrapping to first; `.left` → previous wrapping to last). Purely geometric — no buffer-content preference (the common round-trip works out naturally; a fallback target that is itself a preview gets repointed, ordinary bind semantics).
+- **D2 Core/Lua: atomic split+bind helpers** (front-end split rejected — no FFI split call, async round trip has no window handle). Verified mechanics: `wolf_do_split("v")` makes the new window current and notifies Split `{from, win}`; `applySplit` inserts the new pane **after** `from` (always lands right). So: preview-split binds the scratch into the **new** (right) window, source stays in original (left); edit-split keeps the scratch in the **new** (right) window and binds the **source** into the **original** (left) window. **Focus rule: focus follows the edit-mode view of the document** — Preview keeps focus in the source editor; Edit moves focus to the pane now editing the source.
+  - `_G.wolf_preview_in_other(target_win)` → source bufnr or 0. Gate first (markdown, before any split — palette misfires must not split); cursor pre-emit; ensure scratch; validate target (non-nil/non-zero, valid, not current window, not drawer via `b:wolf_terminal`/`w:wolf_terminal`) else split path; reuse: `nvim_win_set_buf(target_win, preview_buf)` (focus untouched); split: `from = current`, `wolf_do_split("v")`, bind scratch into new window, `nvim_set_current_win(from)`; guarded `wolf_emit_previews()` + `wolf_emit_current_file()`; no MRU.
+  - `_G.wolf_edit_in_other(target_win)` → bufnr bound into target or 0. Gate: `b:wolf_preview_source`; same target validation; `bind_source_into(win)` mirrors `edit_into` (prefer `nvim_win_set_buf`, fallback focus+`:edit`); reuse: bind then focus target; split: `wolf_do_split("v")` (new right window keeps scratch), bind source into `from`, focus `from`; same re-emits. Returns `nvim_win_get_buf` of the bound window (so an `:edit` fallback reports non-zero — deliberate divergence from `wolf_edit_source`).
+- **D3 Registry/FFI/Swift.** Specs: `{ id: "preview_in_other_pane", ex: "WolfPreviewInOtherPane", title: "Preview in Another Pane", MenuGroup::View }` (26) and `{ id: "edit_in_other_pane", ex: "WolfEditInOtherPane", title: "Edit in Another Pane", View }` (27). No key equivalents. Menu gates: PreviewInOtherPane iff `isMarkdownActive`; EditInOtherPane iff `isPreviewActive` (never both true).
+- **D4** Blocking-call flavor; first command whose dispatch carries a front-end-derived argument (target win or 0) into core — one sentence for `command-lifecycle.md` §6.
+- **D5** Palette: both listed ungated; Lua gate-first-return-0 means a mis-timed palette activation is a no-op with no stray split.
+
+### Files to create
+
+1. `crates/wolf-macos/Sources/WolfKeyMap/OtherPaneSeam.swift`
+2. `crates/wolf-macos/Tests/WolfKeyMapTests/OtherPaneSeamTests.swift`
+3. `crates/wolf-ffi/tests/other_pane.rs` (modeled on preview.rs/edit.rs, common/mod.rs, loud SKIP)
 
 ### Files to modify
 
-1. `runtime/nvim/init.lua` — scratch unlisted; `wolf_open_preview()` / `wolf_edit_source()` drop mode, in-place only; new `_G.wolf_preview_buffer(win, bufnr)`; `wolf_preview_file` delegates + `buflisted = true`.
-2. `crates/wolf-core/src/command.rs` — Edit row `title: "Edit"`; update `edit_spec_fields` test.
-3. `crates/wolf-core/src/nvim.rs` — `open_preview()` / `edit_source()` no-arg; new `preview_buffer(&self, win: i64, bufnr: i64)` mirroring `preview_file` (impl Future + Send + 'static shape, varargs never interpolated).
-4. `crates/wolf-core/src/api.rs` — no-arg `open_preview` / `edit_source`; new `#[must_use] pub fn preview_buffer(&self, win: i64, bufnr: i64) -> i64` (0 on error/timeout, `block_on_rpc`).
-5. `crates/wolf-ffi/src/lib.rs` — bridge updates + `preview_buffer`; regenerate `crates/wolf-ffi/generated/wolf-ffi.swift`.
-6. `crates/wolf-macos`: delete `EditSeam.swift`; trim `PreviewSeam.swift`; new `Sources/WolfKeyMap/PaneModeSeam.swift` (`enum PaneMode { case edit, preview }`, `static func mode(activeWin: Int64, previewWins: Set<Int64>) -> PaneMode`, `activeWin == 0` → `.edit`); `PaneContainerView` (delete placement inputs, add `activePaneIsPreview`); `WolfWindowController` (`openPreview`/`editSource` no-mode, `activateBufferRow`, `presentOpenFileDialog`); `PickerView.activateSelection`; `AppMenu` title; `BUILD.bazel` WolfKeyMapTests srcs (remove EditSeamTests.swift, add PaneModeSeamTests.swift).
+- `crates/wolf-core/src/command.rs` — two variants + spec rows; tests: `EXPECTED_COMMAND_COUNT` 26 → 28, new index constants 26/27, from_id round-trips, spec-field tests, fixed-index guards; `search_in_project_is_the_last_row` becomes a fixed-index guard, `edit_in_other_pane` is the new last-row guard.
+- `crates/wolf-core/src/nvim.rs` — `preview_in_other(target_win)` / `edit_in_other(target_win)` exec-lua futures (mirror `preview_buffer`).
+- `crates/wolf-core/src/api.rs` — two `#[must_use]` blocking wrappers, 0 on error.
+- `crates/wolf-core/tests/palette_rank.rs` — `STATIC_COMMAND_COUNT` 25 → 27.
+- `crates/wolf-core/tests/commands.rs` — check for count/enumeration assertions.
+- `runtime/nvim/init.lua` — the two helpers per D2, after `wolf_preview_file`.
+- `crates/wolf-ffi/src/lib.rs` — `command_kind` 26/27, `FfiCommand::from_command` arms, bridge methods `preview_in_other` / `edit_in_other` (neutral 0 when shut down); regenerate `generated/` via `bazel run //crates/wolf-ffi:gen_bindings`.
+- `crates/wolf-ffi/tests/commands.rs` — contiguous guard array to 27; drain steps for the two new ex-commands.
+- `crates/wolf-ffi/BUILD.bazel` — new `rust_test(name = "other_pane", …)` mirroring `preview` verbatim (no-sandbox, nvim_tree + init.lua data, WOLF_TEST_* env).
+- Swift: `CommandSeam.swift` cases + init arms 26/27 (update doc table); `PaneContainerView.swift` — `otherPaneTarget(prefer:)` using the same width/height pair `applyFocus` uses (drawer-reduced height), maps PaneId → win, nil when unbound; `WolfWindowController.swift` — `previewInOtherPane()` / `editInOtherPane()` (resolve target, call handle, `onRenderWake()`, no-op on nil); `CommandDispatcher.swift` two arms; `AppMenu.swift` tags 26/27 + two View items after Edit (empty key equivalents); `AppDelegate.swift` validateMenuItem arms; `crates/wolf-macos/BUILD.bazel` — OtherPaneSeamTests.swift into WolfKeyMapTests srcs (mandatory); `CommandSeamTests.swift` — decode 26/27, move out-of-range probe 26 → 28.
 
 ### Test plan
 
-Swift (`//crates/wolf-macos:WolfKeyMapTests`, hand-maintained srcs):
-- Delete `EditSeamTests.swift` (and BUILD entry).
-- `PreviewSeamTests.swift`: delete `placementMode` tests, keep `winsNeedingReload` / click-focus.
-- New `PaneModeSeamTests.swift`: active win in previewWins → .preview; absent → .edit; activeWin == 0 → .edit; empty set → .edit; other pane previewing → .edit.
+Swift `OtherPaneSeamTests.swift` (headless, build PaneTrees):
+1. Single leaf → `.split` both sides.
+2. Two side-by-side, active left, prefer right → existing(right).
+3. Two side-by-side, active left, prefer left → fallback wraps → existing(right pane).
+4. Three in a row [A][B][C], active B: right → C; left → A.
+5. Active C prefer right → wraps → A; active A prefer left → wraps → C.
+6. Vertical stack, prefer right → no lateral neighbor → fallback → other pane.
+7. 2×2 grid: right from top-left → top-right (cross-axis-overlap rule, not diagonal).
+8. Active not a leaf (fresh PaneId — drawer case) → nil.
 
-Rust real-nvim (`crates/wolf-ffi/tests`, existing Bazel stanzas keep their srcs):
-- `preview.rs` rewrite: in-place open_preview (window count 1, previews maps active win); scratch reuse across edit/preview cycles; no "Preview: " picker rows, one row per source (incl. `docs/alpha.md` relative case); two panes previewing same source (both in previews(), one picker row); `preview_buffer` (markdown → binds+returns bufnr; non-markdown → 0; unsaved Untitled.md works); `preview_file` leaves source buflisted; post-shutdown neutral 0 with no-arg signatures.
-- `edit.rs` rewrite: in-place edit_source (same window, previews drops win, is_preview_active falls, is_markdown_active rises); off-preview returns 0; delete split_left/reuse_editor_pane scenarios.
-- `buffer_picker.rs`: union case (edit A + preview A → one row); preview-only file appears as own row.
-- `commands.rs` + `crates/wolf-core/tests/palette_rank.rs`: "Edit Source" → "Edit" title assertions.
-- `crates/wolf-core/tests/{markdown_cursor.rs,pane_buffers.rs,nav_history_live.rs}`: rework `open_preview("split_right")` call sites to split first (typed `:vsplit`) then in-place `open_preview()`; `nav_history_live.rs` edit_source → no-arg.
-- `crates/wolf-ffi/tests/{full_width.rs,code_block_highlight.rs}`: update call sites.
+Rust `other_pane.rs` (real nvim, siblings' poll idiom):
+1. Split-preview: `preview_in_other(0)` → source bufnr; 2 windows; Split intent vertical, from = original; `previews()` single entry win == intent's new win; `active_win()` == from; markdown_active true / preview_active false.
+2. Split-edit: in-place `open_preview()` then `edit_in_other(0)` → non-zero; 2 windows; previews entry win == new win (scratch right); focus from; `current_file()` == md path; preview_active false.
+3. Reuse-preview: typed `:vsplit`, focus editor, `preview_in_other(other_win)` → previews gains entry win == other_win; still 2 windows; no new Split intent; focus unchanged.
+4. Reuse-edit: preview in one window + second window; `edit_in_other(other_win)` → non-zero; `active_win() == other_win`; `current_file()` == source; original preview window still in previews(); window count unchanged.
+5. Gates: non-markdown → `preview_in_other(0) == 0`, no split, no intent (pins gate-before-split); off-preview → `edit_in_other(0) == 0`.
+6. Invalid target (the active win itself) → falls back to split.
+7. Post-shutdown neutrals: both 0.
 
-Swift routing glue (activateBufferRow / activateSelection / presentOpenFileDialog) is manual-smoke per existing picker precedent; decision logic covered by PaneModeSeamTests + Rust tests.
+Existing tests touched: `command.rs` inline (counts/guards), `palette_rank.rs`, `wolf-ffi/tests/commands.rs`, `CommandSeamTests.swift` (probe 26 → 28).
 
-### Documentation updates
+### Documentation updates (technical-writer, after implementation)
 
-- `architecture.md` preview section: in-place commands, derived pane mode, `preview_file`/`preview_buffer`.
-- `preview-edit-command-decisions.md`: rewrite in present tense for the pane-mode model (delete three-mode Decisions 3–5 content).
-- `runtime/nvim/README.md`: helper entries updated, `wolf_preview_buffer` added, scratch-unlisted + source-buflisted decision.
-- `crates/wolf-ffi/src/README.md`, `crates/wolf-macos/Sources/WolfKeyMap/README.md` (delete EditSeam entry, add PaneModeSeam), test READMEs (`crates/wolf-macos/Tests/WolfKeyMapTests/README.md`, `crates/wolf-ffi/tests/README.md`), `feat-list.md`, `crates/wolf-core/src/README.md` (only if mode strings named).
-- `prettier --write` on all edited Markdown; `./tools/lint/markdown_check.sh`. No changelog words ("now", "no longer", "previously").
+`crates/wolf-ffi/src/README.md` (command_kind rows 26/27, preview-section entries); `runtime/nvim/README.md` (two helper entries: gate-before-split, bind-placement contract with applySplit, target validation, focus rule, no MRU); `crates/wolf-core/src/README.md` (in place, if surface listed); `crates/wolf-macos/Sources/WolfKeyMap/README.md` (OtherPaneSeam entry); `crates/wolf-macos/Sources/WolfMacOS/README.md` (AppMenu/WolfWindowController/PaneContainerView entries in place); test READMEs; `architecture.md` (1–2 sentences: target chosen front-end from PaneTree geometry, split+bind atomic in Lua via ordinary Split intent); `command-lifecycle.md` §6 (front-end-computed argument); `preview-edit-command-decisions.md` (new decision section: 26/27, geometric rules + DFS fallback, bind-placement mechanics, focus-follows-editor, gate-before-split, no MRU); `feat-list.md`.
 
 ### Implementation order
 
-1. `runtime/nvim/init.lua`
-2. `wolf-core` (command.rs, nvim.rs, api.rs)
-3. `wolf-core/tests` updates
-4. `wolf-ffi` lib + regenerate swift + `wolf-ffi/tests` updates
-5. `wolf-macos` sources + tests + BUILD.bazel
-6. Docs, then `bazelisk test` across wolf-ffi, wolf-core, and WolfKeyMapTests targets.
+1. command.rs → 2. init.lua → 3. nvim.rs/api.rs → 4. wolf-core test counts → 5. wolf-ffi lib + regen → 6. wolf-ffi tests + BUILD → 7+8. Swift seams and glue in one change (CommandKind cases won't compile without dispatcher arms) → 9. Docs + prettier + markdown_check.
 
 ## Progress log
 
 - Orchestration started; problem statement written.
-- Architect plan received and approved (agent afa55c755aed496f8).
-- Test-writer pass 1: Swift PaneModeSeamTests added, EditSeamTests removed, Rust suites rewritten for in-place model, BUILD srcs updated.
-- Coder pass 1: full implementation landed (init.lua, wolf-core, wolf-ffi + regenerated bindings, wolf-macos). All suites green: 36/36 wolf-ffi, 46/46 wolf-core, WolfKeyMapTests 390 tests, app builds, lint clean.
-- Test-writer pass 2: two pin tests added in preview.rs (success-gated buflisted; bufload of :badd-ed buffer).
-- Coder pass 2: `//crates/wolf-ffi:preview` 9/9 pass, no source changes needed; 36/36 overall.
-- Reviewer: approved with minor notes (stale BUILD comments, test-header comment, doc divergences).
-- Coder pass 3: BUILD comments rewritten, PaneModeSeamTests header trimmed, EditSeam deletions confirmed staged; targets re-run green.
-- Technical-writer: nine Markdown files updated (architecture.md, runtime/nvim/README.md, ffi/macos READMEs, test READMEs, feat-list.md, doc-refactor-misc-recommendations.md, preview-edit-command-decisions.md rewritten for the pane-mode model).
-- Coder pass 4: prettier — all nine unchanged; markdown_check — no findings. Orchestration complete.
+- Architect plan received and approved (agent a4535421f7e347365); discriminant correction 20/21 → 26/27 noted.
+- Test-writer pass 1: OtherPaneSeamTests (8 cases), other_pane.rs (5 fns), CommandSeamTests 26/27 + probe→28, guard/count updates, BUILD wiring both crates.
+- Coder pass 1: full implementation landed; 83/83 Rust targets, other_pane 5/5 executed fresh, WolfKeyMapTests green incl. all 8 seam cases, app builds, lint clean.
+- Test-writer pass 2: drawer-rejection and stale-bufnr-fallback tests added (7 total in other_pane.rs).
+- Coder pass 2: other_pane 7/7 fresh; flagged unused_assignments warning in a test helper.
+- Test-writer pass 3: warning fixed (dead pre-loop init removed). Coder verified 7/7 warning-free.
+- Reviewer: approved; only doc divergences + shell checks outstanding.
+- Coder: gen_bindings byte-identity confirmed (hash check; regeneration changes zero bytes).
+- Technical-writer: ten Markdown files updated (helper entries, command_kind rows, OtherPaneSeam entries, architecture/command-lifecycle sentences, Decision 7 in preview-edit-command-decisions.md, feat-list row); two lint findings fixed on a second pass (entry budget, long line).
+- Coder: final prettier unchanged, markdown_check no findings. Orchestration complete.

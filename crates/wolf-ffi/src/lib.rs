@@ -214,6 +214,12 @@ mod command_kind {
     /// Reveal the sidebar showing the search UI (and focus the search field) — a
     /// native-only AppKit action.
     pub const SEARCH_IN_PROJECT: u8 = 25;
+    /// Preview the active pane's Markdown file in another pane (reuse or split
+    /// right).
+    pub const PREVIEW_IN_OTHER_PANE: u8 = 26;
+    /// Edit the active preview pane's source file in another pane (reuse or
+    /// split, source lands left).
+    pub const EDIT_IN_OTHER_PANE: u8 = 27;
 }
 
 /// The palette-row-kind discriminants packed into [`FfiCommandRow::row_kind`].
@@ -637,6 +643,21 @@ mod ffi {
         // is invalid, unnamed, or not Markdown, on error, or when the core is
         // gone. On 0 the front-end falls back to switch_buffer (edit mode).
         fn preview_buffer(&self, win: i64, bufnr: i64) -> i64;
+        // Previews the active pane's Markdown file in ANOTHER pane: binds the
+        // preview scratch into `target_win` when it is a usable other pane, else
+        // splits a new pane to the right (an ordinary vertical Split intent).
+        // Focus stays in the source-editing pane. Blocks briefly on the captive
+        // nvim. Returns the SOURCE bufnr (> 0) on success; 0 when the active
+        // buffer is not Markdown, on error, or when the core is gone.
+        fn preview_in_other(&self, target_win: i64) -> i64;
+        // Edits the active preview pane's SOURCE file in ANOTHER pane: binds the
+        // source into `target_win` when it is a usable other pane, else splits
+        // (the scratch keeps the new right window, the source lands in the
+        // original). Focuses the pane now editing the source. Blocks briefly on
+        // the captive nvim. Returns the bufnr bound into that pane (> 0) on
+        // success; 0 when the active pane is not a preview, on error, or when
+        // the core is gone.
+        fn edit_in_other(&self, target_win: i64) -> i64;
         // A snapshot of the open preview panes: one `FfiPreview` per window
         // showing a preview scratch buffer, each joined to its source's live
         // changedtick. `FfiPreview` is opaque so a `Vec<FfiPreview>` is supported.
@@ -1035,7 +1056,7 @@ mod ffi {
     extern "Rust" {
         type FfiCommand;
 
-        // The command kind (`command_kind::NEW_WINDOW` .. `SEARCH_IN_PROJECT`).
+        // The command kind (`command_kind::NEW_WINDOW` .. `EDIT_IN_OTHER_PANE`).
         fn kind(&self) -> u8;
     }
 
@@ -2751,6 +2772,38 @@ impl WolfCoreHandle {
             .map_or(0, |c| c.preview_buffer(win, bufnr))
     }
 
+    /// Previews the active pane's Markdown file in ANOTHER pane: binds the
+    /// preview scratch into `target_win` when it is a usable other pane, else
+    /// splits a new pane to the right (surfacing as an ordinary vertical Split
+    /// layout intent). Focus stays in the source-editing pane.
+    ///
+    /// Blocks briefly on the captive nvim. Returns the SOURCE bufnr (`> 0`) on
+    /// success; `0` when the active buffer is not Markdown, on error, or once
+    /// the core has been shut down.
+    #[must_use]
+    pub fn preview_in_other(&self, target_win: i64) -> i64 {
+        self.core
+            .borrow()
+            .as_ref()
+            .map_or(0, |c| c.preview_in_other(target_win))
+    }
+
+    /// Edits the active preview pane's SOURCE file in ANOTHER pane: binds the
+    /// source into `target_win` when it is a usable other pane, else splits (the
+    /// scratch keeps the new right window, the source lands in the original).
+    /// Focuses the pane now editing the source.
+    ///
+    /// Blocks briefly on the captive nvim. Returns the bufnr bound into that
+    /// pane (`> 0`) on success; `0` when the active pane is not a preview, on
+    /// error, or once the core has been shut down.
+    #[must_use]
+    pub fn edit_in_other(&self, target_win: i64) -> i64 {
+        self.core
+            .borrow()
+            .as_ref()
+            .map_or(0, |c| c.edit_in_other(target_win))
+    }
+
     /// A snapshot of the open preview panes: one [`FfiPreview`] per window showing a
     /// preview scratch buffer, each joined to its source buffer's live
     /// `changedtick` (from `Snapshot::markdown_ticks`, `0` until the first
@@ -3107,7 +3160,7 @@ pub struct FfiCommand {
 }
 
 impl FfiCommand {
-    /// The command kind (`command_kind::NEW_WINDOW` .. `SEARCH_IN_PROJECT`).
+    /// The command kind (`command_kind::NEW_WINDOW` .. `EDIT_IN_OTHER_PANE`).
     #[must_use]
     pub fn kind(&self) -> u8 {
         self.kind
@@ -3144,6 +3197,8 @@ impl FfiCommand {
             Command::ToggleSidebar => command_kind::TOGGLE_SIDEBAR,
             Command::SidebarShowProject => command_kind::SIDEBAR_SHOW_PROJECT,
             Command::SearchInProject => command_kind::SEARCH_IN_PROJECT,
+            Command::PreviewInOtherPane => command_kind::PREVIEW_IN_OTHER_PANE,
+            Command::EditInOtherPane => command_kind::EDIT_IN_OTHER_PANE,
         };
         Self { kind }
     }

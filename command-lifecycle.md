@@ -71,6 +71,8 @@ Three entry points route here:
 
 `.previewInBrowser` is worth calling out as a third shape alongside the flavors of §8. Like the `.preview` and `.edit` arms it invokes a blocking core method — `handle.open_in_browser()` returns the loopback preview server's URL for the pinned Markdown file — and the front-end then opens that URL with `NSWorkspace`. It touches the captive nvim but issues no `InputEvent`, so it is neither purely native nor an ordered-input editor-affecting command.
 
+`.previewInOtherPane` and `.editInOtherPane` add one more wrinkle: their dispatch carries a front-end-derived argument — the target window the controller resolves from its own pane geometry (`0` to request a split) — into the blocking `preview_in_other` / `edit_in_other` calls, where every other command's dispatch is argument-free.
+
 ## 7. The editor-affecting path back into nvim
 
 Many commands only touch the front-end (§8a). Others must change editor state, and those loop back into the captive Neovim through a fixed chain:

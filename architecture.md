@@ -176,6 +176,8 @@ A preview pane is a real Neovim scratch buffer carrying `b:wolf_preview_source`,
 
 A pane's mode is derived, never stored: a pane is in preview mode iff its window appears in `Snapshot.previews`, and in edit mode otherwise. The Preview and Edit commands act in place on the active pane — `open_preview()` replaces its buffer with the preview scratch, and its inverse `edit_source()` replaces the preview with the source. Both return the resulting buffer number, or `0`, and the front-end learns the new bind on the next wake rather than from the return value.
 
+Their other-pane flavors, `preview_in_other(target_win)` and `edit_in_other(target_win)`, split the decision across the boundary: the front-end chooses the target window from its own pane-tree geometry and passes it to core, with `0` requesting a split. The split and bind then happen atomically in the Lua helper, and a split surfaces to the shell as an ordinary vertical `Split` intent.
+
 Pane mode also routes navigation: a preview-mode pane previews what a picker or open dialog chooses, through `preview_file(win, path)` (an absolute path — also the link-follow entry) or `preview_buffer(win, bufnr)`. Each returns the source bufnr or `0`, and on `0` the front-end falls back to a plain open or buffer switch, converting the pane to edit mode. `open_in_browser()` returns a loopback URL for the same rendered document (decision 10).
 
 Two gotchas fall out of the scratch-buffer design. The path-based trackers skip preview scratch buffers, so a scratch name never surfaces as a real path in `current_file` or `buffers`. A preview scratch reports its source buffer's flags rather than its own, which is what keeps a menu gate or checkmark tracking the document instead of the pane.

@@ -753,6 +753,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
       return keyController?.isMarkdownActive ?? false
     case .edit:
       return keyController?.isPreviewActive ?? false
+    case .previewInOtherPane:
+      return keyController?.isMarkdownActive ?? false
+    case .editInOtherPane:
+      return keyController?.isPreviewActive ?? false
     case .fullWidth:
       // ALWAYS enabled (OQ-2); only the checkmark tracks the active buffer's
       // full-width state.

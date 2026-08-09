@@ -314,22 +314,23 @@ Purpose: The crash/stall overlay — a full-bleed opaque cover over a broken edi
 
 #### `PaneContainerView.swift`
 
-Purpose: The editor area — one flat, flipped `NSView` that paints every split pane itself, owns the pure `PaneTree`, hosts the preview web views and overlays, and is the editor's first responder. The flat-view choice is in [DECISIONS.md](../../DECISIONS.md).
+Purpose: The editor area — one flat, flipped `NSView` that paints every split pane, owns the pure `PaneTree`, hosts the preview web views and overlays, and is the editor's first responder. The flat-view choice is in [DECISIONS.md](../../DECISIONS.md).
 
 **Public API**
 
 - `markRefocusRebind()` / `rebind(tabpageHandle:)` — arm a grid rebind after a tabpage switch or crash restart.
 - `layoutSnapshot()` / `requestLayoutRebuild(_:)` — the snapshot is `nil` for a lone empty pane.
 - `activeWin` — the per-view active window; prefer it over the tabpage-shared `WolfCoreHandle.active_win()`.
+- `otherPaneTarget(prefer:)` — maps `OtherPaneSeam.target` to the window argument for `preview_in_other` / `edit_in_other`: `0` means split, `nil` means no-op.
 
 **Decisions**
 
 - The refocus rebind waits for `handle.active_tabpage()` to match this view's tabpage and skips close detection on that pass: the vacated tabpage's grids are gone and would prune live panes.
 - Web-view frame, occlusion test, and statusbar span come from one `geometry(_:fullWidth:)` call, written together before `needsDisplay`, so no frame paints preview alignment without a web view.
-- A grid is skipped only when an opaque, loaded preview web view fully covers it, and the loaded flag survives reloads, because WebKit keeps displaying the previous document while the next one loads.
-- Scroll direction is the sign of `scrollingDeltaY` alone; it already reflects natural scrolling, so `isDirectionInvertedFromDevice` double-corrects.
+- A grid is skipped only when an opaque, loaded preview web view fully covers it; the loaded flag survives reloads because WebKit keeps displaying the previous document while the next loads.
+- Scroll direction is the sign of `scrollingDeltaY`, which already reflects natural scrolling; `isDirectionInvertedFromDevice` double-corrects.
 - The terminal drawer pane lives in the pane map but outside `tree`, so leaves, neighbours, and splits exclude it.
-- Preview updating is a four-file model this class implements only part of; read [how a preview reaches its web view](../../DECISIONS.md) before changing the strategy switch, the navigation count, or the live-document bookkeeping.
+- Preview updating is a four-file model this class implements only part of; read [how a preview reaches its web view](../../DECISIONS.md) before touching it.
 
 #### `PickerPanel.swift`
 

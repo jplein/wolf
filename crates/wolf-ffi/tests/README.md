@@ -268,6 +268,17 @@ Real-nvim coverage of multi-core identity and wake routing, running two cores at
 - Deliberately one `#[test]`: it installs the process-global wake callback and sets `WOLF_STATE_DIR`, so new cases belong inside that test rather than beside it.
 - Baselines are captured after a settle pause, so a late startup redraw wake is not mistaken for a misrouted one.
 
+#### `other_pane.rs`
+
+**Covers**
+
+`preview_in_other(target_win)` / `edit_in_other(target_win)`: the split path (a vertical Split intent from the original window; preview binds the scratch into the new right window and keeps focus in the source editor, edit binds the source into the original window and focuses it), reuse of an existing target window with no new intent, the gate-before-split no-ops (non-markdown and off-preview return 0 with no layout change), the fall-back-to-split for an invalid target and for the terminal drawer, the stale-bufnr `:edit` fallback still returning non-zero, and post-shutdown neutrals. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:other_pane` target stages the nvim runfiles and is tagged `no-sandbox`.
+
+**Gotchas**
+
+- The no-split and no-focus-move assertions hold a settle pause before checking, because the failure they guard against arrives asynchronously; a synchronous check passes vacuously.
+- The drawer-rejection case opens the real drawer through `toggle_terminal()` and waits on its `DRAWER_OPEN` intent, so the `w:wolf_terminal` tag is exercised on a live drawer window rather than a hand-set variable.
+
 #### `orlando_bg_stress.rs`
 
 Real-nvim regression test for cells drawing with the wrong background inside an orlando code block: it stages the vendored plugin like `orlando_load` and hammers a fenced-code document with seeded-random scrolling, motion, edit+undo, and fence churn. Target `//crates/wolf-ffi:orlando_bg_stress` stages the nvim runfiles, `//bazel/orlando:orlando_tree`, and `//bazel/lighthouse:lighthouse_tree`, runs unsandboxed, and is `size = "medium"`; it skips without a pinned nvim or the orlando tree, but lighthouse is optional.

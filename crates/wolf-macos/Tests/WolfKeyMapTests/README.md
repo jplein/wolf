@@ -147,6 +147,12 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 
 **Gotchas** — the `Kind` discriminants and `kVK_*` codes are local copies that must stay in lockstep with the Rust `FfiKeyEvent` and `wolf-core/src/input.rs`; note that Backspace is `kVK_Delete` and forward-delete is `kVK_ForwardDelete`, which are easy to transpose. `assertKey` compares field by field because the generated `FfiKeyEvent` is not `Equatable`.
 
+#### `OtherPaneSeamTests.swift`
+
+**Covers** — `OtherPaneSeam.target(active:prefer:tree:width:height:)` over hand-built `PaneTree`s: a single leaf splits on both sides, the preferred-side geometric neighbor wins when it resolves, a missing neighbor falls back to the DFS-adjacent leaf with wrap (edge panes wrap; a vertical stack with no lateral neighbor still finds the other pane), a 2×2 grid resolves the cross-axis-overlap neighbor rather than the diagonal, and a non-leaf active pane — the drawer case, a fresh `PaneId` — yields `nil`.
+
+**Gotchas** — fixtures reuse `PaneTreeTests`' vocabulary (explicit pane ids, the same non-square 100×40 bounds) so width and height math stay distinguishable; the AppKit glue that maps a `Target` to a window handle (`PaneContainerView.otherPaneTarget`) is manual-smoke, with the nvim-side bind covered by the real-nvim `//crates/wolf-ffi:other_pane` test.
+
 #### `PaletteSeamTests.swift`
 
 **Covers** — `PaletteSeam.isPaletteTrigger(charactersIgnoringModifiers:command:)`, the case-insensitive Command+P chord, and `PaletteSeam.PaletteRowKind(ffi:)`, which decodes the FFI row-kind discriminant and must stay in lockstep with wolf-ffi's `mod palette_row_kind`.

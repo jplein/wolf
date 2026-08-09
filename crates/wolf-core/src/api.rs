@@ -737,6 +737,58 @@ impl WolfCore {
         }
     }
 
+    /// Previews the active pane's Markdown file in ANOTHER pane — binding the
+    /// preview scratch into `target_win` when it is a usable other pane, else
+    /// splitting a new pane to the right — and returns the SOURCE bufnr (`0` on
+    /// error or when the active buffer is not Markdown).
+    ///
+    /// Blocks briefly on the captive nvim via
+    /// [`block_on_rpc`](Self::block_on_rpc) (bounded by
+    /// [`rpc_timeout`](Self::rpc_timeout) — [`RPC_TIMEOUT_DEFAULT`],
+    /// `WOLF_RPC_TIMEOUT_MS`) to run the `wolf_preview_in_other` helper (see
+    /// [`crate::nvim::NvimProcess::preview_in_other`]). The helper gates before
+    /// any split, so a rejected call never changes the layout; a split surfaces
+    /// as an ordinary vertical Split layout intent on the next wake. Focus stays
+    /// in the source-editing pane. An RPC error (including a
+    /// [`NvimError::Timeout`] on a wedged nvim) is logged and returns `0`.
+    #[must_use]
+    pub fn preview_in_other(&self, target_win: i64) -> i64 {
+        let nvim = self.nvim.borrow();
+        match self.block_on_rpc("preview_in_other", nvim.preview_in_other(target_win)) {
+            Ok(bufnr) => bufnr,
+            Err(e) => {
+                tracing::warn!("preview_in_other({target_win}) failed: {e}");
+                0
+            }
+        }
+    }
+
+    /// Edits the active preview pane's SOURCE file in ANOTHER pane — binding the
+    /// source into `target_win` when it is a usable other pane, else splitting
+    /// (the scratch keeps the new right window, the source lands in the
+    /// original) — and returns the bufnr bound into that pane (`0` on error or
+    /// when the active pane is not a preview).
+    ///
+    /// Blocks briefly on the captive nvim via
+    /// [`block_on_rpc`](Self::block_on_rpc) (bounded by
+    /// [`rpc_timeout`](Self::rpc_timeout) — [`RPC_TIMEOUT_DEFAULT`],
+    /// `WOLF_RPC_TIMEOUT_MS`) to run the `wolf_edit_in_other` helper (see
+    /// [`crate::nvim::NvimProcess::edit_in_other`]). The helper gates before any
+    /// split and FOCUSES the pane now editing the source. An RPC error
+    /// (including a [`NvimError::Timeout`] on a wedged nvim) is logged and
+    /// returns `0`.
+    #[must_use]
+    pub fn edit_in_other(&self, target_win: i64) -> i64 {
+        let nvim = self.nvim.borrow();
+        match self.block_on_rpc("edit_in_other", nvim.edit_in_other(target_win)) {
+            Ok(bufnr) => bufnr,
+            Err(e) => {
+                tracing::warn!("edit_in_other({target_win}) failed: {e}");
+                0
+            }
+        }
+    }
+
     /// Whether pane `win` has an older entry to go Back to.
     ///
     /// A cheap, LOCK-FREE-of-the-snapshot read of the sibling navigation-history

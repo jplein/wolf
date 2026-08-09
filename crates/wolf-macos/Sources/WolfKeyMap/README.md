@@ -279,6 +279,21 @@ Purpose: Pure key translation for the macOS front end — the fields an `NSView.
 
 - On macOS the Backspace key is `kVK_Delete` and forward-delete is `kVK_ForwardDelete` — easy to transpose.
 
+#### `OtherPaneSeam.swift`
+
+Purpose: Resolves which other pane receives an other-pane bind — Preview in Another Pane and Edit in Another Pane — as an existing pane or a fresh split. Foundation only, over `PaneTree` and scalar bounds; the split-and-bind mechanics belong to core and the Lua helpers.
+
+**Public API**
+
+- `Side` — the preferred side: preview prefers `.right`, edit `.left`.
+- `Target` — `.split` or `.existing(PaneId)`.
+- `target(active:prefer:tree:width:height:)` — rules in order: an `active` that is not a tree leaf (the drawer, an unknown pane) yields `nil`, so the command no-ops rather than splitting; a single leaf yields `.split`; a `tree.neighbor` on the preferred side yields `.existing`; otherwise the DFS-adjacent leaf in `leaves()` order with wrap — `.right` the next leaf, `.left` the previous.
+
+**Decisions**
+
+- Purely geometric, with no buffer-content preference: a fallback target that is itself a preview is simply repointed under ordinary bind semantics.
+- `width` / `height` must be the same bounds pair the caller's focus resolution uses (the drawer-reduced editor height), so the neighbor geometry matches what the user sees.
+
 #### `PaletteSeam.swift`
 
 Purpose: The command palette's pure decision seam, the sibling of `PickerSeam`. Foundation only, so it is unit-testable headlessly.

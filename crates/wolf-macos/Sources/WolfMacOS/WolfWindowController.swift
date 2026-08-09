@@ -913,6 +913,34 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     paneContainer.onRenderWake()
   }
 
+  /// Previews the active pane's Markdown file in ANOTHER pane
+  /// (`:WolfPreviewInOtherPane`): the container resolves the target — prefer the
+  /// pane to the RIGHT, else any other pane, else a split (`0`) — and core
+  /// performs the bind (or the atomic split+bind) via `preview_in_other`. Focus
+  /// stays in the source-editing pane. A no-op when the resolution is `nil` (the
+  /// drawer is focused) or the handle is gone.
+  func previewInOtherPane() {
+    guard let handle, let paneContainer,
+      let target = paneContainer.otherPaneTarget(prefer: .right)
+    else { return }
+    _ = handle.preview_in_other(target)
+    paneContainer.onRenderWake()
+  }
+
+  /// Edits the active preview pane's SOURCE file in ANOTHER pane
+  /// (`:WolfEditInOtherPane`): the container resolves the target — prefer the
+  /// pane to the LEFT, else any other pane, else a split (`0`) — and core
+  /// performs the bind (or the atomic split+bind) via `edit_in_other`, focusing
+  /// the pane now editing the source. A no-op when the resolution is `nil` (the
+  /// drawer is focused) or the handle is gone.
+  func editInOtherPane() {
+    guard let handle, let paneContainer,
+      let target = paneContainer.otherPaneTarget(prefer: .left)
+    else { return }
+    _ = handle.edit_in_other(target)
+    paneContainer.onRenderWake()
+  }
+
   /// Renders the active Markdown buffer and opens it in the system default web
   /// browser (`:WolfPreviewInBrowser`).
   ///
