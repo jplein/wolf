@@ -329,11 +329,13 @@ Real Neovim (`WOLF_NVIM_BIN`, `no-sandbox` target with staged nvim runfiles).
 **Covers**
 
 - `restart_nvim()` and Tier-1 restore: from a `Dead` core it respawns (`Ok(true)`), carries none of the files that were open before the crash, and the open-file mirror captured before the crash drives the reopen. On a live core it is a no-op (`Ok(false)`) that leaves nvim undisturbed.
+- That the same mirror carries no `term://` entry and no terminal `active` while a drawer is open, so the reopen cannot replay one as `:edit`. What such a replay does instead is [`redraw.rs`](../src/README.md#redrawrs)'s.
 
 **Gotchas**
 
 - The Tier-1 set includes the never-saved startup `Untitled.md`: reopening it via `:e` is what triggers Neovim's swap-based recovery of unsaved edits, so filtering it out would lose them permanently.
 - The respawn wipes the mirror, so capture it before restarting, and canonicalize every path (macOS `/tmp` and `/var` are symlinks).
+- The drawer case polls `win_buffers` for an `is_terminal` entry before reading the mirror. Reading straight after `toggle_terminal()` races the emit that fills it.
 
 #### `palette_rank.rs`
 

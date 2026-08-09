@@ -22,23 +22,22 @@ Purpose: the About dialog — a pure text seam over the bundled fonts' licence n
 
 #### `actions.rs`
 
-Purpose: the action namespace as data — every `gio` action name, its accelerator, the `wolf_core::Command` behind it, its binding status, and its menu placement — plus the chord matcher and the invariant checker. It names no widget type, so it is tested with no display.
+Purpose: the action namespace as data — every `gio` action name, its accelerator, the Ctrl-fold it declares, its command, its binding status, and its menu placement — plus the chord matcher and the invariant checker.
 
 **Public API**
 
 - `ACTION_TABLE` and `MENU_SECTIONS` — the one table the menu, the accelerators and the command dispatch all read; see [DECISIONS.md](../DECISIONS.md).
-- `BindingStatus` — `Bound` is registered and matched; `Reserved` is declared for a later unit and is neither; `MenuOnly`, which About uses, carries no chord.
 - `action_for_key(keyval, state)` — the matcher the chord controller calls. It scans `Bound` rows only: matching a reserved row would swallow the key and do nothing.
-- `parse_accel` and `forbidden_reason` — the invariant checker, run over every row by this module's tests.
+- `parse_accel`, `ctrl_fold` and `forbidden_reason(&ParsedAccel, declared)` — the invariant checker, run over every row by this module's tests. It takes the declaration as a parameter so no caller can run half of it.
 
 **Decisions**
 
-- `parse_accel` re-implements the accelerator grammar this crate allows rather than calling `gtk::accelerator_parse`, which asserts an initialized main thread and cannot run headlessly. The grammar admits only `<Control>`, `<Shift>`, and `<Alt>` with a key name, so `<Super>` and `<Primary>` never reach `forbidden_reason`.
+- `parse_accel` re-implements the accelerator grammar this crate allows rather than calling `gtk::accelerator_parse`, which asserts an initialized main thread and cannot run headlessly. The grammar admits only `<Control>`, `<Shift>`, and `<Alt>` with a key name, so `<Super>` never reaches `forbidden_reason`.
 - `action_for_key` compares its three modifiers exactly and ignores every other bit: intercepting a Super-contaminated chord beats forwarding one Neovim mangles. Letters compare case-insensitively, since a shifted letter's keyval is keymap-dependent.
 
 **Gotchas**
 
-- Whether an action is installed follows from its command's classification, not from `status`: a command-less row installs through `command_action::ui_action_for_front_end_action` instead. Promoting a reserved row means flipping `status` too, or the chord stays inert.
+- Whether an action is installed follows from its command's classification, not from `status`: a command-less row installs through `command_action::ui_action_for_front_end_action` instead. Promoting a reserved row means flipping `status` too, and declaring the byte a `Ctrl+<symbol>` chord folds onto, or the chord stays inert or the checker refuses the row.
 
 #### `app.rs`
 
@@ -221,6 +220,21 @@ Purpose: pure, GTK-free cursor geometry and color logic — the pixel rectangle 
 
 - `wolf-ffi` carries a port of `cursor_colors`; the two are kept in lockstep, so change both together.
 - An out-of-range `mode_idx`, empty `mode_infos`, and an out-of-bounds cursor cell all fall through to inversion rather than panicking.
+
+#### `drawer.rs`
+
+Purpose: the terminal drawer's pure rulebook — how the pane area divides between the editor tree and the drawer strip below it, and which pane a `<C-w>h/j/k/l` intent focuses once a drawer exists. GTK-free, so it runs in the fast tier. Why the drawer sits outside the pane tree at all is in [DECISIONS.md](../DECISIONS.md).
+
+**Public API**
+
+- `DRAWER_WEIGHT`, and `drawer_split(pane_area_height, has_drawer, weight, min_drawer_height) -> DrawerSplit`, whose two heights always sum to the input.
+- `focus_target(tree, origin, dir, state, width, height)` — the whole editor-to-drawer bridge as one value. Neovim emits a focus move as a pure intent and declines to act on it, so with no answer here a user who opens the drawer cannot leave it. `bottom_most_leaf` and `drawer_up_target` are its `<C-w>k` half.
+- `DrawerState` — `Copy`, so [`pane_view.rs`](#pane_viewrs) holds it in a `Cell`; `clear()` empties both the bound drawer and the remembered editor pane, which is what a restart needs.
+
+**Decisions**
+
+- One module where macOS has two files, `DrawerLayout.swift` and `DrawerFocusSeam.swift`: neither has a consumer outside the drawer, and `focus_target` needs both halves in one expression.
+- Three divergences from that pair, each pinned by a table rather than only stated: a `min_drawer_height` floor Swift has none of, a non-finite guard that collapses the whole result, and a `focus_target` taking the raw pane-area size where `applyFocus` passes the editor height, since `PaneTree::pane_rects` feeds only ordering here.
 
 #### `editor_inset.rs`
 
@@ -424,7 +438,7 @@ Purpose: the pure codec between the live pane tree, whose leaves are pane ids, a
 
 #### `pane_view.rs`
 
-Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one `gtk::Overlay` host per window over its `gtk::DrawingArea` and a preview pane's `webkit6::WebView`.
+Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one `gtk::Overlay` host per window, and the drawer strip below them.
 
 **Public API**
 
@@ -435,10 +449,11 @@ Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one
 **Decisions**
 
 - Divider positions re-apply from the live tree on every `max-position` notify, since nested allocation reports intermediate values before settling; an unchanged maximum and span marks a `notify::position` as a user drag, written back because a rebuild destroys the paned.
-- Pointer input is one `gtk::GestureDrag`, not a click controller: a gesture keeps delivering after the pointer leaves the widget. Grid and button pin at press, modifiers re-read live, so a wandering drag edits its starting pane.
+- Pointer input is one `gtk::GestureDrag`, not a click controller: a gesture keeps delivering after the pointer leaves the widget. Grid and button pin at press, so a wandering drag edits its starting pane.
 - Each pane's status and `b:wolf_full_width` cache once per wake: reading at use time re-enters the guard `draw_pane` holds, and paint, pointer and resize must agree inside one frame.
 - One funnel produces every grid resize, compared against the size the pane last asked for rather than the lagging snapshot grid, and it runs on every wake since a lifted content cap re-divides a still allocation.
-- A clicked link never navigates the view itself, and a full `load_html` carries the source file's own `file:` base URI. [DECISIONS.md](../DECISIONS.md#following-a-link-in-the-preview) owns every rule on that path, including which loads [`preview_ui.rs`](#preview_uirs)'s `document_update` forces.
+- The preview link path is [DECISIONS.md](../DECISIONS.md#following-a-link-in-the-preview)'s in full, including which loads [`preview_ui.rs`](#preview_uirs)'s `document_update` forces.
+- The drawer strip's height re-applies on every wake, so a toplevel resize converges over two frames; `reset_after_restart` clears the drawer, because a restart leaves its dead grid in the snapshot where `detect_closes` can never reach it.
 
 #### `persistence.rs`
 

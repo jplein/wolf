@@ -199,10 +199,12 @@ Two of the three vendored plugin assets are bundled by Bazel into `Wolf.app` onl
 
 | Feature                         | Branch or commit                   | macOS | Linux |
 | ------------------------------- | ---------------------------------- | ----- | ----- |
-| Terminal drawer (⌃\`)           | `feat/terminal-drawer`             | [x]   | [ ]   |
-| Terminal defaults to full width | `feat/use-whole-width` (`0506e92`) | [x]   | [ ]   |
+| Terminal drawer (⌃\`)           | `feat/terminal-drawer`             | [x]   | [x]   |
+| Terminal defaults to full width | `feat/use-whole-width` (`0506e92`) | [x]   | [x]   |
 
-The drawer is an `init.lua` helper driven by `InputEvent::ToggleTerminal`. `Command::Terminal` reaches the GTK drain and is deliberately deferred there, because `pane_view` drops the `DRAWER_OPEN` layout intent and toggling would open a `:terminal` window GTK never paints. The `<Control>grave` chord is reserved for it in `crates/wolf-gnome/src/actions.rs` but not bound.
+The drawer is an `init.lua` helper driven by `InputEvent::ToggleTerminal`. On GTK it is a full-width strip below the editor tree, held outside the pane tree exactly as macOS holds it outside its own, bound to `<Control>grave` and reachable from the primary menu. The price is the backtick spelling of `<C-@>`, and `Ctrl+Shift+2` is the spelling that survives it; `crates/wolf-gnome/DECISIONS.md` owns that bargain and the ctrl-folding rule that makes claiming a control byte a declared act.
+
+Full width costs neither front-end any code: `b:wolf_full_width` is seeded on the drawer buffer in `init.lua` and rides the ordinary `full_width_for_win` path both front-ends already consume, so neither special-cases a terminal. Measured under `cage` at ten-point type, the editor window reports ninety columns against the drawer's hundred and twenty-three.
 
 ## Reliability and performance
 

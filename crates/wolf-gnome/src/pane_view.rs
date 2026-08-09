@@ -167,6 +167,7 @@ use wolf_core::{
 };
 
 use crate::cmdline_ui::{self, PumView, ToastView};
+use crate::drawer::{self, DrawerState};
 use crate::editor_inset::{self, ColumnCap, GridRect, EDITOR_PADDING_PX};
 use crate::geometry;
 use crate::layout::{Orientation, PaneId, PaneLayout, PaneTree};
@@ -539,6 +540,18 @@ struct PaneInner {
     core: Rc<RefCell<Option<WolfCore>>>,
     /// The currently active pane (focus ring + cursor target), if any.
     active_pane: Cell<Option<PaneId>>,
+    /// The terminal drawer's binding: the pane bound to the drawer window, plus the
+    /// most recently active EDITOR pane the focus bridge returns to.
+    ///
+    /// A `Cell` rather than a `RefCell` because [`DrawerState`] is [`Copy`], the same
+    /// reason `active_pane` is one — every read is a copy out and every write a copy
+    /// back, so no borrow can be held across a [`WolfCore`] call.
+    ///
+    /// The drawer is deliberately NOT a [`PaneTree`] leaf; `crate::drawer` and
+    /// `crates/wolf-gnome/DECISIONS.md` hold the reasons. It IS an ordinary `panes`
+    /// entry, which is what gives it a statusbar, a column cap, a grid resize and a
+    /// paint with no drawer branch anywhere on those paths.
+    drawer: Cell<DrawerState>,
     /// A saved pane tree awaiting realization, set ONCE at launch by
     /// [`PaneHandle::request_layout_rebuild`] and consumed by the first wake at
     /// which a window grid exists (see [`PaneInner::consume_pending_layout`]).
@@ -575,6 +588,11 @@ impl PaneInner {
         // just became (or stopped being) a preview has its web view attached or gone
         // before any resize is issued against the frame it shares.
         self.refresh_previews();
+        // BEFORE `sync_pane_grids`, which is what turns an allocation into a
+        // `resize_grid`: re-stating the strip's height request here is what makes a
+        // toplevel resize reach the drawer at all, since a content height set on a
+        // frame is only allocated on the next one.
+        self.apply_drawer_frame();
         // AFTER `refresh_pane_state`, because the cap it re-requests against depends
         // on the flag that call just cached; BEFORE `update_active_pane`, because
         // "read core state, then decide, then paint" is the order already here.
@@ -710,6 +728,16 @@ impl PaneInner {
         *self.panes.borrow_mut() = new_panes;
         self.next_pane_id
             .set(first_id + u64::try_from(leaf_ids.len()).unwrap_or(0));
+        // `panes` was replaced wholesale, so a bound drawer's pane is gone with it —
+        // and the drawer is never one of the restored leaves, because it is excluded
+        // from the saved layout by construction (see `Self::layout_snapshot`).
+        //
+        // This call is DEFENSIVE, not dead, and it can never actually fire: the only
+        // caller is `consume_pending_layout`, which runs at launch and only while
+        // exactly one pane exists, so no chord has had a window to open a drawer in
+        // yet. It stays because the alternative is a `panes` replacement that leaves
+        // `DrawerState` pointing at a pane id nothing holds.
+        self.clear_drawer();
 
         // The guarded path: it samples `focus_inside_pane_area()` BEFORE tearing
         // anything down, and its `pane_area.remove(..)` loop unparents the old
@@ -763,6 +791,12 @@ impl PaneInner {
     /// guard that joins `Snapshot::previews` to `Snapshot::markdown_ticks` is bound
     /// to a local and dropped before any core call, and the core borrow is dropped
     /// before the results are written back.
+    ///
+    /// **The terminal drawer takes this path with NO branch of its own**, because it
+    /// iterates `panes` and the drawer is an ordinary entry in it. That is how the
+    /// drawer gets a statusbar — `bash` over the raw `term://…` string, which is
+    /// exactly what macOS shows, since `paintStatusbar` has no drawer case either —
+    /// and how it gets the `b:wolf_full_width` flag that makes it span the window.
     fn refresh_pane_state(&self) {
         let targets: Vec<(PaneId, u64, i64)> = {
             let panes = self.panes.borrow();
@@ -865,6 +899,13 @@ impl PaneInner {
     ///
     /// The `None` suppression is [`state_seam::persistable_layout`]'s CONTENT rule,
     /// never an arity test.
+    ///
+    /// **The terminal drawer is excluded BY CONSTRUCTION and needs no branch here.**
+    /// This walks `tree.leaves()`, and the drawer is not a leaf, so its
+    /// `term://<cwd>//<pid>:…` buffer name can never enter `state.json` — where the
+    /// restore path would hand it to `:edit` at the next launch and Neovim would
+    /// spawn a shell for it. Putting the drawer in the tree is what would break
+    /// this, not editing this function.
     fn layout_snapshot(&self) -> Option<PaneNode> {
         let contents: HashMap<PaneId, pane_layout::LeafContent> = {
             let tree = self.tree.borrow();
@@ -916,17 +957,19 @@ impl PaneInner {
         (bound, reported)
     }
 
-    /// Drains and applies all pending layout intents (splits + focus moves).
+    /// Drains and applies all pending layout intents (splits, focus moves and the
+    /// terminal drawer).
     ///
-    /// [`LayoutIntent::DrawerOpen`] is drained and DROPPED: the terminal drawer is
-    /// a macOS-only front-end feature today (`wolf-macos` renders it as a
-    /// full-width, root-bottom pane held outside the pure `PaneTree`). wolf-gnome
-    /// exposes no way to reach it — it binds no `wolf_toggle_terminal` trigger — so
-    /// this arm is unreachable in practice. It exists so that adding a variant to
-    /// the shared `wolf_core::LayoutIntent` cannot silently break the GTK build,
-    /// and so the drop is a deliberate, documented decision rather than a `_`
-    /// wildcard that would swallow the NEXT variant too. Building the GTK drawer is
-    /// tracked as a wolf-gnome gap (see `crates/wolf-gnome/src/README.md`).
+    /// [`LayoutIntent::DrawerOpen`] binds the drawer through
+    /// [`Self::apply_drawer_open`]. There is no matching CLOSE intent and there is
+    /// not meant to be one — `wolf_core::layout` records that hiding the drawer is a
+    /// plain window close, so [`Self::detect_closes`] is what unbinds it. The
+    /// drawer's own rulebook is [`crate::drawer`] and its durable constraints are in
+    /// `crates/wolf-gnome/DECISIONS.md`.
+    ///
+    /// The match stays EXHAUSTIVE rather than taking a `_` wildcard, so adding a
+    /// variant to the shared `wolf_core::LayoutIntent` breaks this build rather than
+    /// being silently swallowed here.
     fn apply_intents(self: &Rc<Self>) {
         let intents = {
             let core_ref = self.core.borrow();
@@ -943,14 +986,65 @@ impl PaneInner {
                     win,
                 } => self.apply_split(orientation, from, win),
                 LayoutIntent::FocusDir { dir, from } => self.apply_focus(dir, from),
-                LayoutIntent::DrawerOpen { .. } => {}
+                LayoutIntent::DrawerOpen { win } => self.apply_drawer_open(win),
             }
         }
+    }
+
+    /// Binds the terminal drawer to Neovim window `win`: a new pane recorded in
+    /// [`Self::drawer`] and in `panes`, but NOT in [`PaneTree`].
+    ///
+    /// A port of `PaneContainerView.applyDrawerOpen`. The pane is an ordinary
+    /// `panes` entry, so it picks up its statusbar, its column cap, its own
+    /// `resize_grid` and its paint from the existing per-pane paths; what it does
+    /// not pick up is a place in the tree, and [`Self::rebuild_pane_area`] is
+    /// therefore the one thing that has to know about it structurally.
+    ///
+    /// **The idempotence guard reads [`DrawerState::is_open`], never
+    /// `panes.contains_key`, and that is deliberate.** A guard that consulted
+    /// `panes` would SELF-HEAL after an in-place Neovim restart — the restart
+    /// clears `panes` but not this field — and would thereby delete the only
+    /// falsifier the restart smoke has. The clearing belongs to
+    /// [`Self::reset_after_restart`], where it can be observed to be missing; it
+    /// must not be papered over here.
+    ///
+    /// The grid may be unresolved at this point and is left pending if so, the same
+    /// as [`Self::apply_split`]. Nothing races it: the drawer's grid is created
+    /// before the intent is emitted, so `grid_for_win` answers on this very wake.
+    fn apply_drawer_open(self: &Rc<Self>, win: i64) {
+        let mut state = self.drawer.get();
+        if state.is_open() || self.pane_for_win(win).is_some() {
+            return;
+        }
+        let id = self.alloc_pane_id();
+        state.bind(id);
+        // Published BEFORE the rebuild, because `rebuild_pane_area` reads this field
+        // to find the host it has to append below the tree.
+        self.drawer.set(state);
+
+        let grid = {
+            let core_ref = self.core.borrow();
+            core_ref
+                .as_ref()
+                .and_then(|c| c.read_snapshot().grid_for_win(win))
+        };
+        let area = self.make_pane_area(id);
+        self.panes
+            .borrow_mut()
+            .insert(id, PaneWidgets::new(win, grid, area));
+        self.rebuild_pane_area();
+        self.set_active_pane(Some(id));
     }
 
     /// Applies a split intent: split the `from` pane (fallback: active pane), then
     /// bind a new pane to `win` (grid resolved now or pending). Idempotent if a pane
     /// already exists for `win`.
+    ///
+    /// A split fired from inside the DRAWER is dropped, matching
+    /// `PaneContainerView.applySplit`. The drawer is not a tree leaf, so
+    /// [`PaneTree::split`] would no-op on it while the rest of this function still
+    /// inserted a [`PaneWidgets`] — an invisible pane bound to a real Neovim window,
+    /// which nothing would ever paint, size or close.
     fn apply_split(self: &Rc<Self>, orientation: SplitOrientation, from: i64, win: i64) {
         if self.pane_for_win(win).is_some() {
             return;
@@ -958,6 +1052,9 @@ impl PaneInner {
         let Some(target) = self.pane_for_win(from).or_else(|| self.active_pane.get()) else {
             return;
         };
+        if self.drawer.get().is_drawer(target) {
+            return;
+        }
         let orient = match orientation {
             SplitOrientation::Vertical => Orientation::Vertical,
             SplitOrientation::Horizontal => Orientation::Horizontal,
@@ -979,15 +1076,34 @@ impl PaneInner {
         self.set_active_pane(Some(new_id));
     }
 
-    /// Applies a focus-direction intent: resolve the neighbour of the `from` pane
-    /// (fallback: active pane) in `dir`, then `focus_win` its window.
+    /// Applies a focus-direction intent: resolve the target of the `from` pane
+    /// (fallback: active pane) in `dir` through [`drawer::focus_target`], then
+    /// `focus_win` its window.
+    ///
+    /// **The whole answer comes from the pure seam, including the editor <-> drawer
+    /// bridge**, because Neovim emits `<C-w>h/j/k/l` as a PURE intent and declines to
+    /// act on it: `<C-w>k` pressed inside the drawer leaves `active_win` where it
+    /// was, so without the value this function computes the drawer is a room with no
+    /// exit. The six rules, and why the raw pane-area size is the right thing to
+    /// resolve them over, are [`drawer::focus_target`]'s.
+    ///
+    /// The tree borrow is a temporary bound to the `target` statement and is
+    /// therefore dropped before the core borrow below — this file's rule, and not
+    /// optional here: `focus_win` is a core call.
     fn apply_focus(&self, dir: wolf_core::FocusDir, from: i64) {
         let width = f64::from(self.pane_area.width());
         let height = f64::from(self.pane_area.height());
         let Some(origin) = self.pane_for_win(from).or_else(|| self.active_pane.get()) else {
             return;
         };
-        let target = self.tree.borrow().neighbor(origin, dir, width, height);
+        let target = drawer::focus_target(
+            &self.tree.borrow(),
+            origin,
+            dir,
+            self.drawer.get(),
+            width,
+            height,
+        );
         let Some(target) = target else {
             return;
         };
@@ -1001,6 +1117,22 @@ impl PaneInner {
 
     /// Detects panes whose bound grid has vanished (a `win_close`/`grid_destroy`)
     /// and collapses them from the tree, never emptying the tree.
+    ///
+    /// **This is also the drawer's only unbind path.** Hiding the drawer emits no
+    /// intent at all (`wolf_core::layout` records why), so the vanished grid is the
+    /// whole signal. The drawer is handled BEFORE the loop and separately from it,
+    /// for three reasons, each of which is a bug if it is undone:
+    ///
+    /// - no [`PaneTree::remove`], because it was never a leaf;
+    /// - no last-leaf guard, because that guard exists to keep the TREE non-empty
+    ///   and the drawer is not in it;
+    /// - and it is skipped by the loop rather than merely handled first, because a
+    ///   drawer left in the list could trip the loop's `leaves().len() <= 1` `break`
+    ///   and leave a genuinely closed editor pane on screen.
+    ///
+    /// A restart is a different matter and this function cannot help there: the dead
+    /// Neovim's grid SURVIVES in the snapshot, so no pane looks closed. See
+    /// [`Self::reset_after_restart`].
     fn detect_closes(&self) {
         let closed: Vec<PaneId> = {
             let core_ref = self.core.borrow();
@@ -1021,10 +1153,20 @@ impl PaneInner {
             return;
         }
 
+        let closed_drawer = self.drawer.get().id().filter(|d| closed.contains(d));
         {
             let mut tree = self.tree.borrow_mut();
             let mut panes = self.panes.borrow_mut();
-            for id in &closed {
+            if let Some(drawer_id) = closed_drawer {
+                panes.remove(&drawer_id);
+                // `clear()` drops the remembered EDITOR pane along with the drawer,
+                // where macOS keeps its `lastEditorPane` across a drawer close. A
+                // deliberate simplification: it costs one MRU hop the first time the
+                // drawer is reopened — `drawer_up_target` falls back to the
+                // bottom-most leaf — and removes a second lifetime to reason about.
+                self.clear_drawer();
+            }
+            for id in closed.iter().filter(|id| Some(**id) != closed_drawer) {
                 // Never empty the tree (nvim guards last-window close, but be safe).
                 if tree.leaves().len() <= 1 {
                     break;
@@ -1113,6 +1255,11 @@ impl PaneInner {
     }
 
     /// Queues a redraw of every pane area and the cmdline strip.
+    ///
+    /// Every pane area means the drawer's too: it iterates `panes`, and
+    /// [`Self::draw_pane`] resolves whatever grid a pane is bound to without ever
+    /// looking at its buffer type, so a terminal grid paints through the same
+    /// [`crate::paint`] seam an editor grid does.
     fn queue_redraw(&self) {
         {
             let panes = self.panes.borrow();
@@ -1123,6 +1270,82 @@ impl PaneInner {
         self.cmdline_area.queue_draw();
         self.toast_area.queue_draw();
         self.pum_area.queue_draw();
+    }
+
+    /// Unbinds the drawer and forgets the remembered editor pane
+    /// ([`DrawerState::clear`]).
+    ///
+    /// Its three callers are the three places a pane set stops describing the live
+    /// Neovim: the drawer's own window closing ([`Self::detect_closes`]), a restored
+    /// layout replacing `panes` wholesale ([`Self::apply_layout_rebuild`]), and an
+    /// in-place restart ([`Self::reset_after_restart`]). A `Cell` cannot be mutated
+    /// through a method, so the copy-out/copy-back lives here once rather than three
+    /// times.
+    fn clear_drawer(&self) {
+        let mut state = self.drawer.get();
+        state.clear();
+        self.drawer.set(state);
+    }
+
+    /// Sizes the drawer strip: no vertical expansion, and a content height of
+    /// [`drawer::drawer_split`]'s share of the CURRENT pane-area height.
+    ///
+    /// A no-op when no drawer is bound, which is the overwhelmingly common case.
+    ///
+    /// ## Why a fixed height and not a `gtk::Paned`
+    ///
+    /// A paned would hand GTK the whole re-derivation for free, and it is still the
+    /// wrong control. Its handle is DRAGGABLE, and a drag of it has nowhere to go:
+    /// the drawer is not in the [`PaneTree`], so [`PaneTree::set_divider_fraction`]
+    /// — the sole path a dragged position takes to the tree, and from there to
+    /// `state.json` — cannot represent it. The position would also be re-applied
+    /// from the weights on the next `max-position` notify, so the handle would snap
+    /// back under the user's pointer. That is a control which visibly refuses input,
+    /// which is exactly the trade [`crate::scrollbar`] and
+    /// `crates/wolf-gnome/DECISIONS.md` already rule out.
+    ///
+    /// ## Two frames to converge on a resize
+    ///
+    /// The height is computed from `pane_area`'s allocation, and setting a content
+    /// height does not change an allocation — GTK does that on the next layout pass.
+    /// So a toplevel resize settles in two frames: this reads the OLD pane-area
+    /// height on the frame the resize lands, and the corrected one on the next wake.
+    /// **No test observes it**: nothing under `cage` can resize the toplevel, so the
+    /// convergence is an unproven row in `crates/wolf-gnome/tests/README.md` rather
+    /// than an asserted behaviour.
+    ///
+    /// A collapsed split — which only a pane area of zero or non-finite height
+    /// produces, i.e. before the first allocation — leaves the minimum content
+    /// height [`Self::make_pane_area`] set, so the strip is never REQUESTED at zero
+    /// pixels and recovers on the next wake.
+    fn apply_drawer_frame(&self) {
+        let Some(id) = self.drawer.get().id() else {
+            return;
+        };
+        let panes = self.panes.borrow();
+        let Some(p) = panes.get(&id) else {
+            return;
+        };
+        // The same floor every other pane gets, so a short window cannot allocate a
+        // strip too thin to show one row of its grid.
+        let (_, min_h) = editor_inset::min_pane_size(
+            self.metrics.cell_w,
+            self.metrics.cell_h,
+            self.statusbar.height,
+            EDITOR_PADDING_PX,
+        );
+        let split = drawer::drawer_split(
+            f64::from(self.pane_area.height()),
+            true,
+            drawer::DRAWER_WEIGHT,
+            min_h,
+        );
+        // The HOST is what `pane_area` parents, so the expansion flag belongs to it;
+        // the height request belongs to the `DrawingArea` the overlay measures.
+        p.host.set_vexpand(false);
+        if split.drawer_height > 0.0 {
+            p.area.set_content_height(px(split.drawer_height));
+        }
     }
 
     /// Allocates the next pane id.
@@ -1141,9 +1364,22 @@ impl PaneInner {
             .map(|(id, _)| *id)
     }
 
-    /// Sets the active pane and refreshes the focus-ring CSS across all panes.
+    /// Sets the active pane, records it as the drawer bridge's most-recently-used
+    /// EDITOR pane, and refreshes the focus-ring CSS across all panes.
+    ///
+    /// The MRU is recorded HERE and nowhere else, so every route into a pane —
+    /// intent, click, restore, `active_win` reconciliation — funnels through one
+    /// place. [`DrawerState::record_active`] applies the rule: only a live tree LEAF
+    /// that is not the drawer is remembered, which is what makes `<C-w>k` from the
+    /// drawer able to leave it.
     fn set_active_pane(&self, pane: Option<PaneId>) {
         self.active_pane.set(pane);
+        if let Some(pane) = pane {
+            let is_leaf = self.tree.borrow().leaves().contains(&pane);
+            let mut state = self.drawer.get();
+            state.record_active(pane, is_leaf);
+            self.drawer.set(state);
+        }
         let panes = self.panes.borrow();
         for (pid, p) in panes.iter() {
             if Some(*pid) == pane {
@@ -1233,6 +1469,12 @@ impl PaneInner {
     /// tell Neovim. [`Self::pending_resize`]'s `requested_grid` comparison is what
     /// keeps this from issuing a resize per wake in the overwhelmingly common case
     /// where nothing moved.
+    ///
+    /// **This is also what sizes the terminal drawer's grid, with no branch for it**,
+    /// since it iterates `panes`. That is not a convenience: an outer `resize`
+    /// re-divides only the grids the front-end has NOT sized itself, so a drawer left
+    /// unsized would keep Neovim's own third-of-`&lines` split and drift away from
+    /// its GTK strip on the first window resize.
     fn sync_pane_grids(&self) {
         let ids: Vec<PaneId> = self.panes.borrow().keys().copied().collect();
         for id in ids {
@@ -2805,6 +3047,12 @@ impl PaneInner {
     /// Rebuilds `pane_area`'s child widget tree from the current [`PaneTree`],
     /// REUSING each pane's `DrawingArea` by id (so bound grids are preserved).
     ///
+    /// `pane_area`'s children end up as `[editor tree (expands)][drawer strip
+    /// (fixed height)]`. The unparent loop below needs no drawer case — the drawer
+    /// is an ordinary `panes` entry, so its host is detached with every other — but
+    /// the RE-parenting does, because [`build_layout_widget`] walks the tree and the
+    /// drawer is deliberately not in it.
+    ///
     /// The pane `DrawingArea`s survive (they are only detached and re-parented),
     /// but every inner `gtk::Paned` [`build_chain`] created is DESTROYED here, on
     /// every call — and a `GtkPaned` is `focusable` by default
@@ -2847,7 +3095,18 @@ impl PaneInner {
                 widget.set_vexpand(true);
                 self.pane_area.append(&widget);
             }
+            // The drawer strip, AFTER the tree: `pane_area` is a vertical box, so
+            // appending last is what puts it along the bottom. It is not in the
+            // layout `build_layout_widget` walks and never will be, so this append is
+            // the one place the widget TREE knows the drawer exists. Its height is a
+            // separate matter and `apply_drawer_frame` below owns it.
+            if let Some(p) = self.drawer.get().id().and_then(|id| panes.get(&id)) {
+                self.pane_area.append(&p.host);
+            }
         }
+        // The tree widget expands and the strip does not, so the strip's own height
+        // request is what divides them. See its "why not a `gtk::Paned`" note.
+        self.apply_drawer_frame();
 
         // AFTER the rebuild, so the strip is focused against the settled tree.
         if had_focus {
@@ -2865,6 +3124,14 @@ impl PaneInner {
         self.panes.borrow_mut().clear();
         self.next_pane_id.set(FIRST_PANE_ID);
         self.active_pane.set(None);
+        // The drawer is NOT reachable through `panes`, so clearing that map does not
+        // clear it — and nothing else can. `detect_closes` is the drawer's only other
+        // unbind path and it cannot fire here: a restart leaves the dead Neovim's
+        // grid and its `WinInfo` in the snapshot, so the drawer's grid never appears
+        // to vanish. A surviving id would keep `apply_drawer_open`'s `is_open()`
+        // guard true against a pane of a process that no longer exists, and the
+        // drawer could never be opened again for the rest of the session.
+        self.clear_drawer();
         // Unparents and destroys everything and builds nothing (an empty `panes`
         // map makes `build_layout_widget` return `None` for the root leaf) — and,
         // critically, runs its own `focus_inside_pane_area()` guard, parking focus
@@ -3082,6 +3349,7 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
         metrics: metrics.clone(),
         core: core.clone(),
         active_pane: Cell::new(None),
+        drawer: Cell::new(DrawerState::new()),
         pending_layout: RefCell::new(None),
     });
 

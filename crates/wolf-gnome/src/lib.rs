@@ -95,6 +95,17 @@
 //!   carries the answer out.
 //! - [`layout`] / [`tree`]: the pure pane tree and the hierarchical file-tree
 //!   projection.
+//! - [`mod@drawer`]: the TERMINAL DRAWER's rulebook, for the one pane that lives
+//!   OUTSIDE [`layout`]'s tree — how the pane area divides between the editor
+//!   region and the full-width bottom strip at a fixed
+//!   [`drawer::DRAWER_WEIGHT`] ([`drawer::drawer_split`]), and the whole
+//!   editor <-> drawer focus bridge as one value ([`drawer::focus_target`], over
+//!   [`drawer::drawer_up_target`] / [`drawer::bottom_most_leaf`] and the bound-pane
+//!   plus most-recently-used-editor pair [`drawer::DrawerState`]). That bridge is
+//!   not a convenience: `<C-w>k` from the drawer is a PURE intent Neovim declines to
+//!   act on, so without an answer here the drawer is a room with no exit. A merge of
+//!   `WolfKeyMap/DrawerLayout.swift` and `WolfKeyMap/DrawerFocusSeam.swift`, with
+//!   three deliberate divergences named in that module's docs.
 //! - [`ui_action_for`]: the TOTAL [`wolf_core::Command`] → [`UiAction`] mapping the
 //!   command drain dispatches through ([`command_action`]).
 //! - [`mod@palette`]: the command-palette rulebook — the candidate list this
@@ -280,6 +291,7 @@ pub mod command_action;
 pub mod config_seam;
 pub mod crash_overlay;
 pub mod cursor;
+pub mod drawer;
 pub mod editor_inset;
 pub mod geometry;
 pub mod glyph_style;

@@ -342,9 +342,9 @@
             pkgs.jetbrains-mono
             iaWriterMono
 
-            # GATE-REQUIRED: the forty-eight headless end-to-end smoke tests in
+            # GATE-REQUIRED: the fifty-one headless end-to-end smoke tests in
             # crates/wolf-gnome/tests/smoke_headless.rs (of that file's
-            # fifty-five tests; the other seven need no compositor) run as part
+            # fifty-eight tests; the other seven need no compositor) run as part
             # of a plain `cargo test` (no `--ignored`). They launch the real
             # window under a headless Wayland compositor and OCR a screenshot,
             # so these five must be present or the suite fails loud. cage =

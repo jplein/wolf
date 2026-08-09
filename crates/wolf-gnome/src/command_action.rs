@@ -24,7 +24,7 @@
 //!
 //! ## The three classes
 //!
-//! - **Dispatched** — the eighteen commands `wolf-gnome` performs today.
+//! - **Dispatched** — the nineteen commands `wolf-gnome` performs today.
 //! - [`UiAction::Deferred`] — implemented on macOS and planned on GTK; the string
 //!   names the concrete blocker so the deferral is auditable rather than a shrug.
 //! - [`UiAction::NoGnomeEquivalent`] — has no GNOME counterpart and will never be
@@ -86,6 +86,9 @@ pub enum UiAction {
     /// Toggle the focused buffer's content width between the column cap and the
     /// whole pane.
     ToggleFullWidth,
+    /// Show or hide the terminal drawer, the full-width shell Neovim opens along
+    /// the bottom of the pane area.
+    ToggleTerminal,
     /// Open the Markdown preview for the focused buffer, at the placement
     /// [`crate::preview_ui::preview_placement`] gives.
     OpenPreview,
@@ -147,10 +150,7 @@ pub fn ui_action_for(command: Command) -> UiAction {
         ),
         Command::Preview => UiAction::OpenPreview,
         Command::Edit => UiAction::EditSource,
-        Command::Terminal => UiAction::Deferred(
-            "pane_view drops LayoutIntent::DrawerOpen, so toggling would open a :terminal window \
-             GTK never paints",
-        ),
+        Command::Terminal => UiAction::ToggleTerminal,
         Command::PreviewInBrowser => UiAction::OpenInBrowser,
         Command::FullWidth => UiAction::ToggleFullWidth,
         Command::ToggleSidebar => UiAction::ToggleSidebar,
@@ -199,7 +199,7 @@ mod tests {
     /// The commands `wolf-gnome` DISPATCHES, by canonical `CommandSpec::id`,
     /// sorted. Ids (not variants) so the failure message names the registry row a
     /// reader can grep for.
-    const EXPECTED_DISPATCHED_IDS: [&str; 18] = [
+    const EXPECTED_DISPATCHED_IDS: [&str; 19] = [
         "buffer_picker",
         "close_pane",
         "close_window",
@@ -217,14 +217,17 @@ mod tests {
         "preview_in_browser",
         "quit_application",
         "search_in_project",
+        "terminal",
         "toggle_sidebar",
     ];
 
     /// What a [`Case`] row expects [`ui_action_for`] to return.
     ///
     /// The two unimplemented classes are matched on their CLASS, not on their
-    /// reason string: the reason is documentation, and pinning ~18 sentences here
-    /// would make a wording tweak look like a behaviour regression. The reason
+    /// reason string: the reason is documentation, and pinning one sentence of prose
+    /// per unimplemented command here would make a wording tweak look like a
+    /// behaviour regression. A count is deliberately not given — it moves with every
+    /// classification change, which is exactly what this file does. The reason
     /// strings' actual contract (non-empty, clause-shaped, unique) is asserted by
     /// [`unimplemented_reasons_are_distinct_and_non_empty`].
     enum Want {
@@ -352,9 +355,9 @@ mod tests {
             want: Want::Exact(UiAction::EditSource),
         },
         Case {
-            desc: "20 Terminal: pane_view drops LayoutIntent::DrawerOpen",
+            desc: "20 Terminal: shows or hides the terminal drawer",
             command: Command::Terminal,
-            want: Want::Deferred,
+            want: Want::Exact(UiAction::ToggleTerminal),
         },
         Case {
             desc: "21 PreviewInBrowser: serves the buffer over loopback and launches the URL",
@@ -502,10 +505,18 @@ mod tests {
 
         assert_eq!(
             dispatched, expected,
-            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly eighteen \
+            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly nineteen \
              commands; everything else must be Deferred(reason) or NoGnomeEquivalent(reason) so \
              the drain is never silent. If a command was genuinely implemented, tick its feat-list \
-             row and update this list with it. A one-element diff naming \"preview_in_browser\" \
+             row and update this list with it. A one-element diff naming \"terminal\" \
+             means the terminal drawer was demoted back to Deferred, in which case the drawer is \
+             unreachable from the Ctrl+backtick chord, from the primary menu's Terminal item and \
+             from the command palette alike — and `actions::bound_set_is_exactly_this_unit` stays \
+             GREEN while it happens, because the accelerator row is a separate switch from this \
+             classification. That demotion is NOT isolated in this module: `ui_action_table`'s \
+             case 20 reddens beside this test, since one reclassification falsifies both, and the \
+             pair moving together is what says the classification changed rather than the \
+             registry. A one-element diff naming \"preview_in_browser\" \
              means the loopback-preview command was demoted back to Deferred, in which case \
              `preview_ui::browser_press` and `shell::AppShell::preview_in_browser` are unreachable \
              from any command AND the palette's `prv` collision disappears — so \
