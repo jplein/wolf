@@ -46,7 +46,7 @@ use wolf_core::{rank_palette, Command, PaletteRow, PaletteRowKind, PaletteWindow
 ///
 /// Preview, Edit, Terminal, PreviewInBrowser, FullWidth, ToggleSidebar,
 /// SidebarShowProject and SearchInProject are all NEW palette static rows (OD4:
-/// unlike the macOS menu items, which gate Preview/Edit Source/Preview in
+/// unlike the macOS menu items, which gate Preview/Edit/Preview in
 /// Browser/Use full width/sidebar actions on the active buffer/pane, the palette
 /// does not gate any spec — it lists them all).
 const STATIC_COMMAND_COUNT: usize = 25;

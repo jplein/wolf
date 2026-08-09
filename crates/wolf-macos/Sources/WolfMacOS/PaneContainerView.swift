@@ -40,27 +40,6 @@ private struct PaneBinding {
   var boundGrid: UInt64?
 }
 
-/// The scalar inputs `PreviewSeam.placementMode` reads to choose a preview
-/// placement, gathered from a `PaneContainerView`'s live pane/preview state.
-/// Internal (not `private`) so `WolfWindowController.openPreview()` — in a sibling
-/// file of the same module — can feed it through the pure seam.
-struct PreviewPlacementInputs {
-  let paneCount: Int
-  let activePaneIsPreview: Bool
-  let otherPreviewPaneCount: Int
-}
-
-/// The scalar inputs `EditSeam.placementMode` reads to choose a source-editor
-/// placement for the Edit command (the inverse of `PreviewPlacementInputs`),
-/// gathered from a `PaneContainerView`'s live pane/preview state. Internal (not
-/// `private`) so `WolfWindowController.editSource()` — in a sibling file of the
-/// same module — can feed it through the pure seam.
-struct EditPlacementInputs {
-  let paneCount: Int
-  let activePaneIsPreview: Bool
-  let otherEditorPaneCount: Int
-}
-
 /// The split-panes editor container: a single painting view.
 final class PaneContainerView: NSView {
   /// The id of the first (root) pane: the `PaneTree` is constructed with this as
@@ -672,11 +651,12 @@ final class PaneContainerView: NSView {
   /// project's tabpages, while `activePane` is per-VIEW — it is what the user sees.
   var activeWin: Int64 { activePane.flatMap { panes[$0]?.win } ?? 0 }
 
-  /// The scalar inputs `PreviewSeam.placementMode` needs to choose a preview
-  /// placement, read from this container's live pane/preview state (no new state):
-  /// the live pane count, whether the ACTIVE pane is itself a preview, and how
-  /// many OTHER panes are previews. See `previewPlacementInputs()`.
-  func previewPlacementInputs() -> PreviewPlacementInputs {
+  /// Whether the ACTIVE pane is in PREVIEW mode: its window carries a preview in
+  /// the live `previews()` snapshot (`PaneModeSeam` — derived, never stored).
+  /// Read by the window controller / picker to route a file or buffer activation
+  /// (preview mode → `preview_file` / `preview_buffer`; edit mode → `open` /
+  /// `switch_buffer`).
+  var activePaneIsPreview: Bool {
     // The set of window handles currently showing a preview. `previews()`
     // yields borrowed `FfiPreviewRef`s valid only for the loop body, so each
     // `win()` scalar is copied out INSIDE the iteration (mirror the caution in
@@ -685,44 +665,7 @@ final class PaneContainerView: NSView {
     for preview in handle.previews() {
       previewWins.insert(preview.win())
     }
-
-    let activeWin = activePane.flatMap { panes[$0]?.win }
-    let activePaneIsPreview = activeWin.map(previewWins.contains) ?? false
-    let otherPreviewPaneCount = panes.values.filter { binding in
-      previewWins.contains(binding.win) && binding.win != activeWin
-    }.count
-
-    return PreviewPlacementInputs(
-      paneCount: tree.leaves().count,
-      activePaneIsPreview: activePaneIsPreview,
-      otherPreviewPaneCount: otherPreviewPaneCount)
-  }
-
-  /// The scalar inputs `EditSeam.placementMode` needs to choose a source-editor
-  /// placement for the Edit command, read from this container's live pane/preview
-  /// state (no new state): the live pane count, whether the ACTIVE pane is itself
-  /// a preview, and how many OTHER panes are editors (non-preview). The inverse of
-  /// `previewPlacementInputs()`.
-  func editPlacementInputs() -> EditPlacementInputs {
-    // The set of window handles currently showing a preview. `previews()`
-    // yields borrowed `FfiPreviewRef`s valid only for the loop body, so each
-    // `win()` scalar is copied out INSIDE the iteration (mirror the caution in
-    // `syncPreviewWebViews`).
-    var previewWins = Set<Int64>()
-    for preview in handle.previews() {
-      previewWins.insert(preview.win())
-    }
-
-    let activeWin = activePane.flatMap { panes[$0]?.win }
-    let activePaneIsPreview = activeWin.map(previewWins.contains) ?? false
-    let otherEditorPaneCount = panes.values.filter { binding in
-      !previewWins.contains(binding.win) && binding.win != activeWin
-    }.count
-
-    return EditPlacementInputs(
-      paneCount: tree.leaves().count,
-      activePaneIsPreview: activePaneIsPreview,
-      otherEditorPaneCount: otherEditorPaneCount)
+    return PaneModeSeam.mode(activeWin: activeWin, previewWins: previewWins) == .preview
   }
 
   /// Re-measures against `newMetrics` (a per-window font-size change): swaps the

@@ -157,12 +157,13 @@ One captive nvim is one project; each of its views binds to a distinct tabpage.
 ### Preview
 
 - `is_markdown_active(&self) -> bool` — Gates View > Preview and its palette row.
-- `is_preview_active(&self) -> bool` — Gates View > Edit Source.
-- `open_preview(&self, mode: String) -> i64` — `mode` is `"split_right"` (lone pane, new pane to the right), `"active"` (replace the active pane's buffer), or `"reuse_preview_pane"` (exactly two panes with the other already a preview: bind into that one, leaving the active editor untouched; falls back to `"active"`). Returns the preview scratch bufnr, or 0.
-- `edit_source(&self, mode: String) -> i64` — `mode` is `"split_left"`, `"active"`, or `"reuse_editor_pane"`. Returns the source bufnr, or 0.
+- `is_preview_active(&self) -> bool` — Gates View > Edit.
+- `open_preview(&self) -> i64` — Previews the active markdown buffer in place: the active pane's buffer is replaced with the preview scratch. Returns the scratch bufnr, or 0 when the active buffer is not markdown.
+- `edit_source(&self) -> i64` — The inverse: replaces the active pane's preview with its source, in place. Returns the source bufnr, or 0 off a preview pane.
 - `render_preview(&self, source_bufnr: i64) -> String` — The themed HTML document the web view loads; `""` on error.
 - `open_in_browser(&self) -> String` — Starts or reuses the loopback-only preview server pinned at the active markdown buffer and returns a `http://127.0.0.1:<port>/<relpath>` URL. The path is root-relative so links between markdown files resolve.
-- `preview_file(&self, win: i64, path: String) -> i64` — Repoints preview window `win` at a linked markdown file. `path` is absolute — no relative resolution happens here. Returns the linked file's source bufnr, or 0, and the front-end has its own fallback for 0.
+- `preview_file(&self, win: i64, path: String) -> i64` — Previews the markdown file at `path` in window `win` — the link-follow entry, and where the file picker and open dialog route when the active pane is in preview mode. `path` is absolute — no relative resolution happens here. Returns the file's source bufnr, left buflisted so a preview-only file keeps its picker row, or 0, and the front-end has its own fallback for 0.
+- `preview_buffer(&self, win: i64, bufnr: i64) -> i64` — Previews an already-open buffer in window `win` — where the buffer picker routes in preview mode. Returns the source bufnr, or 0 when the buffer is invalid, unnamed, or not markdown; on 0 the front-end falls back to `switch_buffer`, converting the pane to edit mode.
 - `previews(&self) -> Vec<FfiPreview>` — One entry per window showing a preview scratch buffer.
 - `FfiPreview::win/source_bufnr/source_name/source_path/source_display_path` — `win` is the pane the web view overlays. `source_name` is the basename, `source_display_path` the cwd-relative or `~`-prefixed form.
 - `FfiPreview::source_tick() -> u64` — The source buffer's `changedtick`; the front-end reloads the web view when it advances. 0 until the first dirty notification.

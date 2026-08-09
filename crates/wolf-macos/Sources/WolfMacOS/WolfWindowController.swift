@@ -503,11 +503,21 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     bufferPicker?.open()
   }
 
-  /// Switches the active pane to the chosen row's buffer via
-  /// `WolfCoreHandle.switch_buffer` (window-scoped; the active window is resolved
-  /// core-side).
+  /// Opens the chosen row's buffer in the active pane, routed by the pane's
+  /// mode: a PREVIEW pane previews the buffer (`preview_buffer`, falling back to
+  /// a plain `switch_buffer` when the buffer is not previewable — the pane
+  /// converts to edit mode); an EDIT pane switches to it (`switch_buffer`,
+  /// window-scoped; the active window is resolved core-side).
   private func activateBufferRow(_ row: BufferPickerRow) {
-    handle?.switch_buffer(row.bufnr)
+    guard let handle else { return }
+    if let paneContainer, paneContainer.activePaneIsPreview {
+      let activeWin = paneContainer.activeWin
+      if handle.preview_buffer(activeWin, row.bufnr) != 0 {
+        paneContainer.onRenderWake()
+        return
+      }
+    }
+    handle.switch_buffer(row.bufnr)
   }
 
   /// Performs a chosen palette row's action, dispatched by its kind:
@@ -535,8 +545,11 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   }
 
   /// Presents a native `NSOpenPanel` (files only) as a sheet on this window and,
-  /// on confirmation, opens the chosen file in this window's Neovim (`handle.open`)
-  /// then returns first responder to the editor pane.
+  /// on confirmation, opens the chosen file in this window's Neovim, routed by
+  /// the active pane's mode: a PREVIEW pane previews the file
+  /// (`handle.preview_file`, falling back to `handle.open` when the file is not
+  /// previewable — the pane converts to edit mode); an EDIT pane edits it
+  /// (`handle.open`). Then returns first responder to the editor pane.
   func presentOpenFileDialog() {
     guard let window else { return }
     let panel = NSOpenPanel()
@@ -549,9 +562,24 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     }
     panel.beginSheetModal(for: window) { [weak self] response in
       guard response == .OK, let url = panel.url else { return }
-      self?.handle?.open(url.path)
+      self?.openChosenFile(url.path)
       self?.refocusEditor()
     }
+  }
+
+  /// Opens `path` in the active pane, routed by the pane's mode (preview mode →
+  /// `preview_file` with the `open` fallback on `0`; edit mode → `open`). The
+  /// shared routing behind the open dialog's confirmation.
+  private func openChosenFile(_ path: String) {
+    guard let handle else { return }
+    if let paneContainer, paneContainer.activePaneIsPreview {
+      let activeWin = paneContainer.activeWin
+      if handle.preview_file(activeWin, path) != 0 {
+        paneContainer.onRenderWake()
+        return
+      }
+    }
+    handle.open(path)
   }
 
   /// Presents a native `NSOpenPanel` (directories only) as a sheet on this window
@@ -774,7 +802,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   var isMarkdownActive: Bool { handle?.is_markdown_active() ?? false }
 
   /// Whether this window's active pane is a PREVIEW pane. Read by the
-  /// coordinator's menu validation to enable the View > Edit Source command only
+  /// coordinator's menu validation to enable the View > Edit command only
   /// from a preview pane.
   var isPreviewActive: Bool { handle?.is_preview_active() ?? false }
 
@@ -859,46 +887,29 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
       currentFlags: entries.map { $0.is_current() })
   }
 
-  /// Opens (or reuses) the Markdown preview pane for the active source buffer.
+  /// Previews the active source buffer IN PLACE: the active pane becomes the
+  /// preview pane (core's `open_preview()`, no placement decision).
   ///
-  /// The placement mode is chosen from this window's live pane/preview state via
-  /// the pure `PreviewSeam.placementMode` (three modes: single pane → new pane to
-  /// the right; two panes whose OTHER pane already previews → reuse THAT preview
-  /// pane rather than clobbering the active editor; every other multi-pane case →
-  /// replace the active pane), then handed to core's `open_preview(mode)`. The
-  /// front-end learns the new/reused pane + the source↔preview mapping on the next
-  /// wake (via `previews()`), so no synchronous window handle is needed here; a
-  /// repaint is requested so the web view surfaces promptly.
+  /// The front-end learns the source↔preview mapping on the next wake (via
+  /// `previews()`), so no synchronous window handle is needed here; a repaint is
+  /// requested so the web view surfaces promptly.
   func openPreview() {
     guard let handle, let paneContainer else { return }
-    let inputs = paneContainer.previewPlacementInputs()
-    let mode = PreviewSeam.placementMode(
-      paneCount: inputs.paneCount,
-      activePaneIsPreview: inputs.activePaneIsPreview,
-      otherPreviewPaneCount: inputs.otherPreviewPaneCount)
-    _ = handle.open_preview(mode)
+    _ = handle.open_preview()
     paneContainer.onRenderWake()
   }
 
-  /// Navigates from the active PREVIEW pane back to its source file (the inverse
-  /// of `openPreview`).
+  /// Navigates from the active PREVIEW pane back to its source file IN PLACE:
+  /// the active pane becomes an edit pane (core's `edit_source()`, no placement
+  /// decision — the inverse of `openPreview`).
   ///
-  /// The placement mode is chosen from this window's live pane/preview state via
-  /// the pure `EditSeam.placementMode` (three modes: single pane → new editor pane
-  /// to the LEFT, preview stays right; two panes whose OTHER pane is an editor →
-  /// bind the source into THAT editor pane and focus it; every other case → replace
-  /// the active preview pane), then handed to core's `edit_source(mode)`. The
-  /// front-end learns the new pane + updated snapshot on the next wake (via
-  /// `previews()` / the current-file notification), so no synchronous window handle
-  /// is needed here; a repaint is requested so the editor surfaces promptly.
+  /// The front-end learns the updated snapshot on the next wake (via
+  /// `previews()` / the current-file notification), so no synchronous window
+  /// handle is needed here; a repaint is requested so the editor surfaces
+  /// promptly.
   func editSource() {
     guard let handle, let paneContainer else { return }
-    let inputs = paneContainer.editPlacementInputs()
-    let mode = EditSeam.placementMode(
-      paneCount: inputs.paneCount,
-      activePaneIsPreview: inputs.activePaneIsPreview,
-      otherEditorPaneCount: inputs.otherEditorPaneCount)
-    _ = handle.edit_source(mode)
+    _ = handle.edit_source()
     paneContainer.onRenderWake()
   }
 

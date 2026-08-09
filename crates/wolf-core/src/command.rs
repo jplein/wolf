@@ -284,7 +284,7 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         command: Command::Edit,
         id: "edit",
         ex_command: "WolfEdit",
-        title: "Edit Source",
+        title: "Edit",
         menu: MenuGroup::View,
     },
     CommandSpec {
@@ -658,7 +658,7 @@ mod tests {
         let spec = Command::Edit.spec();
         assert_eq!(spec.id, "edit", "id");
         assert_eq!(spec.ex_command, "WolfEdit", "ex_command");
-        assert_eq!(spec.title, "Edit Source", "title");
+        assert_eq!(spec.title, "Edit", "title");
         assert_eq!(spec.menu, MenuGroup::View, "menu group");
     }
 

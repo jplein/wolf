@@ -1,12 +1,12 @@
 //
 //  PreviewSeam.swift
-//  Pure, AppKit-free Markdown-preview placement seam.
+//  Pure, AppKit-free Markdown-preview reload arithmetic.
 //
 //  The sibling of `CommandSeam` / `FontSizeSeam`: a pure, display-free decision
 //  exercised with scalar inputs only — NO AppKit, NO WKWebView, NO live Neovim. It
-//  decides where a Preview command opens its pane from the window's pane count, and
-//  which preview WINDOWS need their web view reloaded by comparing each window's
-//  last-loaded `(sourceBufnr, sourceTick)` against the live one.
+//  decides which preview WINDOWS need their web view reloaded by comparing each
+//  window's last-loaded `(sourceBufnr, sourceTick)` against the live one, and it
+//  owns the click-to-focus script a preview pane's web view injects.
 //
 //  Imports ONLY Foundation, so it lives in the Foundation-only `WolfKeyMap` module
 //  alongside `CommandSeam.swift` / `PaneTree.swift`.
@@ -14,44 +14,8 @@
 
 import Foundation
 
-/// Pure Markdown-preview placement + reload arithmetic.
+/// Pure Markdown-preview reload arithmetic.
 public enum PreviewSeam {
-  /// The `mode` string threaded into core's `wolf_open_preview(mode)` for a
-  /// window with `paneCount` panes (requirement 4 / OD3). Three modes:
-  ///
-  ///  - `"split_right"` (when `paneCount <= 1`, unconditional): open the preview
-  ///    in a NEW pane to the right (a vertical split, reusing the `:vsplit`
-  ///    `wolf_layout` intent path). A degenerate/empty count (`0`) falls here.
-  ///  - `"reuse_preview_pane"` (when `paneCount == 2`, the active pane is NOT
-  ///    itself a preview, and EXACTLY one OTHER pane is a preview): bind the
-  ///    active source's preview buffer into that OTHER (preview) window rather
-  ///    than clobbering the active editor pane.
-  ///  - `"active"` (every other case — `paneCount == 2` with the reuse condition
-  ///    unmet, and every `paneCount > 2`): replace the ACTIVE pane's buffer with
-  ///    the preview (a bare `nvim_win_set_buf`).
-  ///
-  /// - Parameters:
-  ///   - paneCount: The window's live pane count.
-  ///   - activePaneIsPreview: Whether the ACTIVE pane is itself a preview pane;
-  ///     when true the reuse case is declined (defensive) so a preview is never
-  ///     opened from within a preview pane. Defaults to `false`.
-  ///   - otherPreviewPaneCount: How many panes OTHER than the active one are
-  ///     preview panes. The reuse case fires only when this is exactly `1`.
-  ///     Defaults to `0`.
-  public static func placementMode(
-    paneCount: Int,
-    activePaneIsPreview: Bool = false,
-    otherPreviewPaneCount: Int = 0
-  ) -> String {
-    if paneCount <= 1 {
-      return "split_right"
-    }
-    if paneCount == 2, !activePaneIsPreview, otherPreviewPaneCount == 1 {
-      return "reuse_preview_pane"
-    }
-    return "active"
-  }
-
   /// The `(sourceBufnr, sourceTick)` a preview WINDOW's web view was last loaded
   /// at. A struct (not a tuple) so `Optional<PreviewLoad>` inequality compiles,
   /// letting `winsNeedingReload` compare a window's live load against its last one.

@@ -107,8 +107,8 @@ const CMD_KIND_BUFFER_PICKER: u8 = 16;
 const CMD_KIND_NEW_TAB: u8 = 17;
 /// `FfiCommand::kind()` for Preview (the appended discriminant 18, View menu).
 const CMD_KIND_PREVIEW: u8 = 18;
-/// `FfiCommand::kind()` for Edit Source (the appended discriminant 19, View menu;
-/// the inverse of Preview).
+/// `FfiCommand::kind()` for Edit (the appended discriminant 19, View menu; the
+/// inverse of Preview — its registry `id` stays `edit`, title "Edit").
 const CMD_KIND_EDIT: u8 = 19;
 /// `FfiCommand::kind()` for Terminal (the appended discriminant 20, View menu).
 /// Renumbered from 18 to 20 when the terminal drawer merged alongside the

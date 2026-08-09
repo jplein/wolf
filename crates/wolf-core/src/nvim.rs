@@ -452,35 +452,27 @@ impl NvimProcess {
         }
     }
 
-    /// Opens (or reuses) the Markdown preview pane for the active source buffer and
-    /// returns the preview scratch buffer's number (`0` when the active buffer is
-    /// not Markdown).
+    /// Previews the active source buffer in place (the active pane becomes the
+    /// preview pane) and returns the preview scratch buffer's number (`0` when the
+    /// active buffer is not Markdown).
     ///
     /// Runs the `_G.wolf_open_preview` helper (defined in `runtime/nvim/init.lua`)
-    /// over `nvim_exec_lua`, passing `mode` as a Lua vararg (never interpolated).
-    /// `mode` is `"split_right"` (single-pane placement: reuse `wolf_do_split('v')`
-    /// then `nvim_win_set_buf(0, previewbuf)`), `"active"` (multi-pane: just
-    /// `nvim_win_set_buf(0, previewbuf)`), or `"reuse_preview_pane"` (exactly two
-    /// panes with the OTHER pane already a preview: scan the current tabpage for the
-    /// other window carrying `b:wolf_preview_source` and bind into it, leaving the
-    /// current window untouched; falls back to the `"active"` current-window bind
-    /// when none) — see [`crate::api::WolfCore::open_preview`].
-    /// The helper no-ops (returns `0`) unless `&filetype == "markdown"`, else
-    /// creates-or-reuses the per-source scratch buffer and returns its bufnr,
-    /// decoded via [`Value::as_i64`].
+    /// over `nvim_exec_lua` — see [`crate::api::WolfCore::open_preview`]. The helper
+    /// no-ops (returns `0`) unless `&filetype == "markdown"`, else creates-or-reuses
+    /// the per-source scratch buffer, binds it into the current window
+    /// (`nvim_win_set_buf(0, previewbuf)`), and returns its bufnr, decoded via
+    /// [`Value::as_i64`].
     pub fn open_preview(
         &self,
-        mode: &str,
     ) -> impl std::future::Future<Output = Result<i64, NvimError>> + Send + 'static {
         let nvim = self.nvim.clone();
-        let mode = mode.to_string();
         async move {
             let value = nvim
                 .call(
                     "nvim_exec_lua",
                     vec![
                         Value::from("return wolf_open_preview(...)"),
-                        Value::Array(vec![Value::from(mode)]),
+                        Value::Array(vec![]),
                     ],
                 )
                 .await
@@ -491,33 +483,26 @@ impl NvimProcess {
         }
     }
 
-    /// Navigates from the active PREVIEW pane back to its source file and returns
-    /// the source buffer's number (`0` when the active buffer is not a preview).
+    /// Navigates from the active PREVIEW pane back to its source file in place (the
+    /// active pane becomes an edit pane) and returns the source buffer's number
+    /// (`0` when the active buffer is not a preview).
     ///
     /// Runs the `_G.wolf_edit_source` helper (defined in `runtime/nvim/init.lua`)
-    /// over `nvim_exec_lua`, passing `mode` as a Lua vararg (never interpolated).
-    /// `mode` is `"split_left"` (single-pane placement: capture the original
-    /// window, `wolf_do_split('v')`, bind the source into the original so the
-    /// editor lands LEFT and the preview stays RIGHT), `"active"` (replace the
-    /// preview in the current window with the source), or `"reuse_editor_pane"`
-    /// (exactly two panes with the OTHER pane an editor: bind the source into that
-    /// other window and focus it; falls back to the current window when none) — see
-    /// [`crate::api::WolfCore::edit_source`]. The helper no-ops (returns `0`) unless
-    /// the active buffer carries `b:wolf_preview_source`, else binds its source
-    /// buffer and returns that source bufnr, decoded via [`Value::as_i64`].
+    /// over `nvim_exec_lua` — see [`crate::api::WolfCore::edit_source`]. The helper
+    /// no-ops (returns `0`) unless the active buffer carries
+    /// `b:wolf_preview_source`, else binds its source buffer into the current
+    /// window and returns that source bufnr, decoded via [`Value::as_i64`].
     pub fn edit_source(
         &self,
-        mode: &str,
     ) -> impl std::future::Future<Output = Result<i64, NvimError>> + Send + 'static {
         let nvim = self.nvim.clone();
-        let mode = mode.to_string();
         async move {
             let value = nvim
                 .call(
                     "nvim_exec_lua",
                     vec![
                         Value::from("return wolf_edit_source(...)"),
-                        Value::Array(vec![Value::from(mode)]),
+                        Value::Array(vec![]),
                     ],
                 )
                 .await
@@ -559,6 +544,46 @@ impl NvimProcess {
                     vec![
                         Value::from("return wolf_preview_file(...)"),
                         Value::Array(vec![Value::from(win), Value::from(path)]),
+                    ],
+                )
+                .await
+                .map_err(|e| NvimError::Rpc(e.to_string()))?
+                .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+            Ok(value.as_i64().unwrap_or_default())
+        }
+    }
+
+    /// Previews the already-open buffer `bufnr` in window `win` (`0` = current),
+    /// replacing that pane's buffer with the source's preview scratch, and returns
+    /// the source bufnr.
+    ///
+    /// Runs the `_G.wolf_preview_buffer` helper (defined in
+    /// `runtime/nvim/init.lua`) over `nvim_exec_lua`, passing `win` and `bufnr` as
+    /// Lua varargs (never interpolated). The helper validates `bufnr`, gates it
+    /// through `vim.filetype.match` (setting `filetype=markdown` when it matches),
+    /// creates or reuses that source's preview scratch buffer via
+    /// `_G.wolf_ensure_preview_buf`, binds it into `win` (falling back to the
+    /// current window when `win` is missing/zero/invalid), and re-emits the
+    /// previews / current-file snapshots.
+    ///
+    /// Returns the source bufnr (`> 0`) on success; `0` when `bufnr` is invalid,
+    /// unnamed, or not Markdown (decoded via [`Value::as_i64`]). RPC failure maps
+    /// to [`NvimError::Rpc`]; the caller
+    /// ([`crate::api::WolfCore::preview_buffer`]) maps that to `0`.
+    pub fn preview_buffer(
+        &self,
+        win: i64,
+        bufnr: i64,
+    ) -> impl std::future::Future<Output = Result<i64, NvimError>> + Send + 'static {
+        let nvim = self.nvim.clone();
+        async move {
+            let value = nvim
+                .call(
+                    "nvim_exec_lua",
+                    vec![
+                        Value::from("return wolf_preview_buffer(...)"),
+                        Value::Array(vec![Value::from(win), Value::from(bufnr)]),
                     ],
                 )
                 .await

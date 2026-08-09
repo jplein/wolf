@@ -597,24 +597,19 @@ mod ffi {
         // when the core is gone.
         fn is_markdown_active(&self) -> bool;
         // Whether the active buffer is a PREVIEW buffer (`current_is_preview`,
-        // i.e. it carries `b:wolf_preview_source`). Gates the View > Edit Source
+        // i.e. it carries `b:wolf_preview_source`). Gates the View > Edit
         // menu item. False when the core is gone.
         fn is_preview_active(&self) -> bool;
-        // Navigates from the active PREVIEW pane back to its source file and
-        // returns the source buffer's number. `mode` is "split_left" (single-pane:
-        // new editor pane to the left, preview stays right), "active" (replace the
-        // active preview's buffer with the source), or "reuse_editor_pane"
-        // (two panes, other is an editor: bind source into it and focus it). Blocks
-        // briefly on the captive nvim. Returns 0 when the active buffer is not a
-        // preview, on error, or when the core is gone.
-        fn edit_source(&self, mode: String) -> i64;
-        // Opens (or reuses) the Markdown preview pane for the active source buffer
-        // and returns the preview scratch buffer's number. `mode` is
-        // "split_right" (single-pane: new pane to the right) or "active"
-        // (multi-pane: replace the active pane's buffer). Blocks briefly on the
-        // captive nvim. Returns 0 when the active buffer is not Markdown, on error,
-        // or when the core is gone.
-        fn open_preview(&self, mode: String) -> i64;
+        // Navigates from the active PREVIEW pane back to its source file in place
+        // (the active pane becomes an edit pane) and returns the source buffer's
+        // number. Blocks briefly on the captive nvim. Returns 0 when the active
+        // buffer is not a preview, on error, or when the core is gone.
+        fn edit_source(&self) -> i64;
+        // Previews the active source buffer in place (the active pane becomes the
+        // preview pane) and returns the preview scratch buffer's number. Blocks
+        // briefly on the captive nvim. Returns 0 when the active buffer is not
+        // Markdown, on error, or when the core is gone.
+        fn open_preview(&self) -> i64;
         // Renders the Markdown SOURCE buffer `source_bufnr` to a themed HTML
         // document the front-end web view loads. Blocks briefly on the captive
         // nvim. Returns the empty string on error / when the core is gone.
@@ -635,6 +630,13 @@ mod ffi {
         // is gone. `path` is ABSOLUTE (no relative resolution). On 0 the front-end
         // applies its own O3 fallback.
         fn preview_file(&self, win: i64, path: String) -> i64;
+        // Previews the already-open buffer `bufnr` in window `win` (0 = current),
+        // replacing that pane's buffer with the source's preview scratch (the
+        // preview-mode buffer-picker activation path). Blocks briefly on the
+        // captive nvim. Returns the source bufnr (> 0) on success; 0 when `bufnr`
+        // is invalid, unnamed, or not Markdown, on error, or when the core is
+        // gone. On 0 the front-end falls back to switch_buffer (edit mode).
+        fn preview_buffer(&self, win: i64, bufnr: i64) -> i64;
         // A snapshot of the open preview panes: one `FfiPreview` per window
         // showing a preview scratch buffer, each joined to its source's live
         // changedtick. `FfiPreview` is opaque so a `Vec<FfiPreview>` is supported.
@@ -2655,7 +2657,7 @@ impl WolfCoreHandle {
     }
 
     /// Whether the active buffer is a PREVIEW buffer (`current_is_preview`). Gates
-    /// the View > Edit Source menu item. False once the core has been shut down.
+    /// the View > Edit menu item. False once the core has been shut down.
     #[must_use]
     pub fn is_preview_active(&self) -> bool {
         self.core
@@ -2664,37 +2666,28 @@ impl WolfCoreHandle {
             .is_some_and(|c| c.read_snapshot().is_preview_active())
     }
 
-    /// Navigates from the active PREVIEW pane back to its source file and returns the
-    /// source buffer's number.
+    /// Navigates from the active PREVIEW pane back to its source file in place —
+    /// the active pane becomes an edit pane — and returns the source buffer's
+    /// number.
     ///
-    /// `mode` is `"split_left"` (single-pane placement), `"active"` (replace the
-    /// active preview's buffer), or `"reuse_editor_pane"` (bind into the other
-    /// editor pane and focus it) — chosen by the front-end via
-    /// `EditSeam.placementMode`. Blocks briefly on the captive nvim. Returns `0`
-    /// when the active buffer is not a preview, on error, or once the core has been
-    /// shut down.
+    /// Blocks briefly on the captive nvim. Returns `0` when the active buffer is
+    /// not a preview, on error, or once the core has been shut down.
     #[must_use]
-    pub fn edit_source(&self, mode: String) -> i64 {
-        self.core
-            .borrow()
-            .as_ref()
-            .map_or(0, |c| c.edit_source(&mode))
+    pub fn edit_source(&self) -> i64 {
+        self.core.borrow().as_ref().map_or(0, WolfCore::edit_source)
     }
 
-    /// Opens (or reuses) the Markdown preview pane for the active source buffer and
-    /// returns the preview scratch buffer's number.
+    /// Previews the active source buffer in place — the active pane becomes the
+    /// preview pane — and returns the preview scratch buffer's number.
     ///
-    /// `mode` is `"split_right"` (single-pane placement) or `"active"` (multi-pane
-    /// placement) — chosen by the front-end from the pane count via
-    /// `PreviewSeam.placementMode`. Blocks briefly on the captive nvim. Returns `0`
-    /// when the active buffer is not Markdown, on error, or once the core has been
-    /// shut down.
+    /// Blocks briefly on the captive nvim. Returns `0` when the active buffer is
+    /// not Markdown, on error, or once the core has been shut down.
     #[must_use]
-    pub fn open_preview(&self, mode: String) -> i64 {
+    pub fn open_preview(&self) -> i64 {
         self.core
             .borrow()
             .as_ref()
-            .map_or(0, |c| c.open_preview(&mode))
+            .map_or(0, WolfCore::open_preview)
     }
 
     /// Renders the Markdown SOURCE buffer `source_bufnr` to a themed HTML document
@@ -2740,6 +2733,22 @@ impl WolfCoreHandle {
             .borrow()
             .as_ref()
             .map_or(0, |c| c.preview_file(win, &path))
+    }
+
+    /// Previews the already-open buffer `bufnr` in window `win` (`0` = the current
+    /// window), replacing that pane's buffer with the source's preview scratch —
+    /// the preview-mode buffer-picker activation path.
+    ///
+    /// Blocks briefly on the captive nvim. Returns the source bufnr (`> 0`) on
+    /// success; `0` when `bufnr` is invalid, unnamed, or not Markdown, on error, or
+    /// once the core has been shut down. On `0` the front-end falls back to
+    /// [`switch_buffer`](Self::switch_buffer) (the pane converts to edit mode).
+    #[must_use]
+    pub fn preview_buffer(&self, win: i64, bufnr: i64) -> i64 {
+        self.core
+            .borrow()
+            .as_ref()
+            .map_or(0, |c| c.preview_buffer(win, bufnr))
     }
 
     /// A snapshot of the open preview panes: one [`FfiPreview`] per window showing a

@@ -247,7 +247,7 @@ enum AppMenu {
   /// The View menu (Toggle Sidebar `⌃⌘s` / Project `⇧⌘e` / Search
   /// `⇧⌘f` / a separator / Reset Font Size `⌘0` / Increase Font Size `⌘=` /
   /// Decrease Font Size `⌘-` / a separator / Command Palette… `⌘p` / Buffer
-  /// Picker… `⌘e` / Preview / Edit Source / Terminal `` ⌃` `` / a separator /
+  /// Picker… `⌘e` / Preview / Edit / Terminal `` ⌃` `` / a separator /
   /// Enter Full Screen `⌃⌘f`). The font-size, palette, preview and terminal
   /// titles mirror `wolf_core::COMMAND_SPECS`.
   ///
@@ -319,13 +319,13 @@ enum AppMenu {
     menu.addItem(
       commandItem(
         title: "Preview", tag: Tag.preview, keyEquivalent: "", target: target))
-    // View > Edit Source: the inverse of Preview, enabled only from a preview
+    // View > Edit: the inverse of Preview, enabled only from a preview
     // pane (gated in AppDelegate.validateMenuItem). NO key equivalent.
     menu.addItem(
       commandItem(
-        title: "Edit Source", tag: Tag.edit, keyEquivalent: "", target: target))
+        title: "Edit", tag: Tag.edit, keyEquivalent: "", target: target))
     // View > Terminal: toggles the per-project terminal drawer. Always enabled
-    // (unlike Preview / Edit Source it is not gated in
+    // (unlike Preview / Edit it is not gated in
     // AppDelegate.validateMenuItem).
     menu.addItem(
       commandItem(

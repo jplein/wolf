@@ -109,11 +109,11 @@ The `wolf-core` halves of the buffer picker (`buffer_picker::rank_buffers`), the
 | ------------------------------------------------- | -------------------------------------- | ----- | ----- |
 | Markdown → HTML rendering (`wolf_core::markdown`) | `feat/markdown-preview`                | [x]   | [x]   |
 | In-app live preview pane                          | `feat/markdown-preview` (`b159793`)    | [x]   | [ ]   |
-| Preview pane reuse / placement modes              | `feat/markdown-preview` (`937bb7f`)    | [x]   | [ ]   |
+| Per-pane preview/edit mode, in-place Preview      | `feat/markdown-preview` (`937bb7f`)    | [x]   | [ ]   |
 | Follow links inside the preview                   | `feat/markdown-preview` (`61204b7`)    | [x]   | [ ]   |
 | Full path in a preview pane's status bar          | `feat/markdown-preview` (`2116415`)    | [x]   | [ ]   |
 | Math symbols / Inter font in the preview          | `feat/markdown-preview` (`6f6abd1`)    | [x]   | [ ]   |
-| "Edit Source" (preview's inverse)                 | `feat/markdown-preview` (`8a72e50`)    | [x]   | [ ]   |
+| "Edit" (preview's inverse)                        | `feat/markdown-preview` (`8a72e50`)    | [x]   | [ ]   |
 | Preview theme follows light/dark                  | `fix/dark-mode` (`3edf74e`, `66ce35e`) | [x]   | [ ]   |
 | Typography tuning for the preview                 | `feat/typography` (`6838614`)          | [x]   | [ ]   |
 | Syntax-highlighted code blocks                    | `feat/code-block-syntax-highlighting`  | [x]   | [ ]   |

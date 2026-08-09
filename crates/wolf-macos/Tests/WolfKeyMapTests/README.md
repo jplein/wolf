@@ -105,16 +105,6 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 
 - Two pane-area heights are fixed deliberately — one divisible by three, one not — because the only thing distinguishing them is the rounding in `drawerHeight`. A new case should state which side it exercises.
 
-#### `EditSeamTests.swift`
-
-**Covers**
-
-- `EditSeam.placementMode(paneCount:activePaneIsPreview:otherEditorPaneCount:)`, in particular how narrow the reuse branch is: exactly two panes, the active pane a preview, and exactly one other editor pane. Every other shape, including three or more panes, falls to the active-pane branch; a pane count of one or zero splits left.
-
-**Gotchas**
-
-- The returned strings are the literal `mode` argument passed to `edit_source` in `crates/wolf-ffi/src/lib.rs`, not display labels — changing one here without changing the Rust side breaks the call silently. What those modes actually do to the layout is covered by the real-nvim `//crates/wolf-ffi:edit` test.
-
 #### `EditorInsetTests.swift`
 
 **Covers** — `EditorInset`, the per-pane text-grid inset arithmetic. Pins the padding constant, one exact `gridRect` for a representative pane, the additive invariants tying `gridRect` back to the pane and statusbar dimensions, and the clamp edges.
@@ -174,6 +164,16 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 **Covers** — the `PaneLayoutCodec` / `SavedPaneNode` bridge: `encode` (leaf ids to buffer paths, an unmapped leaf to the empty path, preview marking), the `postOrderTokens` / `decodeTokens` round-trip over leaf, two-child, n-ary and perpendicular-nested trees, `isEmptyLeaf`, `PaneTree.rebuilt(from:firstLeafId:)`, and the `specJSON` object shape.
 
 **Gotchas** — the `specJSON` cases parse with `JSONSerialization` and assert only the object graph, so key ordering and float spelling stay unpinned on purpose; the key names themselves must match `runtime/nvim/init.lua`'s `wolf_rebuild_layout`. A preview leaf's `path` is its source Markdown file, and `isEmptyLeaf` is false for an empty-path preview leaf because preview-ness has to survive persistence.
+
+#### `PaneModeSeamTests.swift`
+
+**Covers**
+
+- `PaneModeSeam.mode(activeWin:previewWins:)`: an active window in `previewWins` is preview mode; one absent from it is edit mode; `activeWin == 0` is edit mode even with previews live elsewhere; an empty set is edit mode; and a preview in a different pane leaves the active pane in edit mode, because the decision keys on the active pane's own window.
+
+**Gotchas**
+
+- Scalar inputs only. The `activePaneIsPreview` glue in `PaneContainerView` and the picker and open-dialog routing that consume it are manual-smoke; the nvim-side behavior behind each route is covered by the real-nvim `//crates/wolf-ffi:preview` and `:edit` tests.
 
 #### `PaneOcclusionTests.swift`
 
@@ -263,7 +263,7 @@ The three pure file-picker seams, each as a table of cases: `isPickerTrigger` (t
 
 **Covers**
 
-Two unrelated `PreviewSeam` decisions plus the click-to-focus surface. `placementMode(...)` is pinned across its three modes, including the two-pane branch that reuses an existing preview pane and the defensive cases that fall back to the active pane. `winsNeedingReload(current:loaded:)` is the per-preview-window reload gate, covered for first bind, source change, tick advance, an unchanged no-op, independent windows, and windows dropped from `current`.
+The `PreviewSeam` reload gate plus the click-to-focus surface. `winsNeedingReload(current:loaded:)` is the per-preview-window reload gate, covered for first bind, source change, tick advance, an unchanged no-op, independent windows, and windows dropped from `current`; the click-to-focus cases pin the handler name and that the generated script registers a capture-phase `mousedown` posting to it.
 
 **Gotchas**
 

@@ -636,62 +636,51 @@ impl WolfCore {
         }
     }
 
-    /// Opens (or reuses) the Markdown preview pane for the active source buffer and
-    /// returns the preview scratch buffer's number (`0` on error or when the active
-    /// buffer is not Markdown).
+    /// Previews the active source buffer in place — the active pane becomes the
+    /// preview pane — and returns the preview scratch buffer's number (`0` on error
+    /// or when the active buffer is not Markdown).
     ///
     /// Blocks briefly on the captive nvim via
     /// [`block_on_rpc`](Self::block_on_rpc) (bounded by
     /// [`rpc_timeout`](Self::rpc_timeout) — [`RPC_TIMEOUT_DEFAULT`],
     /// `WOLF_RPC_TIMEOUT_MS`) to run the `wolf_open_preview` helper (see
-    /// [`crate::nvim::NvimProcess::open_preview`]).
-    /// `mode` is chosen by the front-end via `PreviewSeam.placementMode`:
-    /// `"split_right"` (single pane → new pane on the right), `"active"` (multi
-    /// pane → replace the active pane's buffer), or `"reuse_preview_pane"` (exactly
-    /// two panes with the OTHER pane already a preview → bind into that OTHER preview
-    /// window, leaving the active editor untouched; falls back to `"active"` when
-    /// none). The
-    /// front-end learns the new pane + the source↔preview mapping on the next wake
-    /// (via the `wolf_preview` notification), so no synchronous window handle is
-    /// needed. An RPC error (including a [`NvimError::Timeout`] on a wedged nvim) is
-    /// logged and returns `0`.
+    /// [`crate::nvim::NvimProcess::open_preview`]). The bind never creates a pane;
+    /// the front-end learns the source↔preview mapping on the next wake (via the
+    /// `wolf_preview` notification), so no synchronous window handle is needed. An
+    /// RPC error (including a [`NvimError::Timeout`] on a wedged nvim) is logged
+    /// and returns `0`.
     #[must_use]
-    pub fn open_preview(&self, mode: &str) -> i64 {
+    pub fn open_preview(&self) -> i64 {
         let nvim = self.nvim.borrow();
-        match self.block_on_rpc("open_preview", nvim.open_preview(mode)) {
+        match self.block_on_rpc("open_preview", nvim.open_preview()) {
             Ok(bufnr) => bufnr,
             Err(e) => {
-                tracing::warn!("open_preview({mode}) failed: {e}");
+                tracing::warn!("open_preview() failed: {e}");
                 0
             }
         }
     }
 
-    /// Navigates from the active PREVIEW pane back to its source file and returns
-    /// the source buffer's number (`0` on error or when the active buffer is not a
-    /// preview pane).
+    /// Navigates from the active PREVIEW pane back to its source file in place —
+    /// the active pane becomes an edit pane — and returns the source buffer's
+    /// number (`0` on error or when the active buffer is not a preview pane).
     ///
     /// Blocks briefly on the captive nvim via
     /// [`block_on_rpc`](Self::block_on_rpc) (bounded by
     /// [`rpc_timeout`](Self::rpc_timeout) — [`RPC_TIMEOUT_DEFAULT`],
     /// `WOLF_RPC_TIMEOUT_MS`) to run the `wolf_edit_source` helper (see
-    /// [`crate::nvim::NvimProcess::edit_source`]).
-    /// `mode` is chosen by the front-end via `EditSeam.placementMode`:
-    /// `"split_left"` (single pane → new editor pane on the LEFT, preview stays
-    /// right), `"active"` (replace the active preview's buffer with the source), or
-    /// `"reuse_editor_pane"` (exactly two panes with the OTHER pane an editor → bind
-    /// the source into that OTHER editor window and focus it; falls back to
-    /// `"active"` when none). The front-end learns the new pane + updated snapshot on
-    /// the next wake (via the `wolf_preview` / `wolf_current_file` notifications), so
-    /// no synchronous window handle is needed. An RPC error (including a
-    /// [`NvimError::Timeout`] on a wedged nvim) is logged and returns `0`.
+    /// [`crate::nvim::NvimProcess::edit_source`]). The bind never creates a pane;
+    /// the front-end learns the updated snapshot on the next wake (via the
+    /// `wolf_preview` / `wolf_current_file` notifications), so no synchronous
+    /// window handle is needed. An RPC error (including a [`NvimError::Timeout`] on
+    /// a wedged nvim) is logged and returns `0`.
     #[must_use]
-    pub fn edit_source(&self, mode: &str) -> i64 {
+    pub fn edit_source(&self) -> i64 {
         let nvim = self.nvim.borrow();
-        match self.block_on_rpc("edit_source", nvim.edit_source(mode)) {
+        match self.block_on_rpc("edit_source", nvim.edit_source()) {
             Ok(bufnr) => bufnr,
             Err(e) => {
-                tracing::warn!("edit_source({mode}) failed: {e}");
+                tracing::warn!("edit_source() failed: {e}");
                 0
             }
         }
@@ -718,6 +707,31 @@ impl WolfCore {
             Ok(bufnr) => bufnr,
             Err(e) => {
                 tracing::warn!("preview_file({win}, {path}) failed: {e}");
+                0
+            }
+        }
+    }
+
+    /// Previews the already-open buffer `bufnr` in window `win` (`0` = the current
+    /// window), replacing that pane's buffer with the source's preview scratch, and
+    /// returns the source bufnr — the preview-mode buffer-picker activation path.
+    ///
+    /// Blocks briefly on the captive nvim via
+    /// [`block_on_rpc`](Self::block_on_rpc) (bounded by
+    /// [`rpc_timeout`](Self::rpc_timeout) — [`RPC_TIMEOUT_DEFAULT`],
+    /// `WOLF_RPC_TIMEOUT_MS`) to run the `wolf_preview_buffer` helper (see
+    /// [`crate::nvim::NvimProcess::preview_buffer`]). Returns the source bufnr
+    /// (`> 0`) on success; `0` when `bufnr` is invalid, unnamed, or not Markdown,
+    /// or on RPC error (including a [`NvimError::Timeout`] on a wedged nvim,
+    /// logged). The front-end falls back to a plain buffer switch on `0` (the pane
+    /// converts to edit mode).
+    #[must_use]
+    pub fn preview_buffer(&self, win: i64, bufnr: i64) -> i64 {
+        let nvim = self.nvim.borrow();
+        match self.block_on_rpc("preview_buffer", nvim.preview_buffer(win, bufnr)) {
+            Ok(source) => source,
+            Err(e) => {
+                tracing::warn!("preview_buffer({win}, {bufnr}) failed: {e}");
                 0
             }
         }

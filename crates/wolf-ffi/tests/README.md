@@ -67,7 +67,7 @@ The baseline handle lifecycle: `wolf_ffi_start`, `read_frame` (dense `cols * row
 
 **Covers**
 
-`buffer_picker()` and its `ranked(query, max)` (buflisted-only, most-recently-used first), the window-scoped `switch_buffer(bufnr)`, and the per-`(winid, bufnr)` view round-trip. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:buffer_picker` target stages the nvim runfiles and is tagged `no-sandbox`.
+`buffer_picker()` and its `ranked(query, max)` (buflisted-only, most-recently-used first), the window-scoped `switch_buffer(bufnr)`, the per-`(winid, bufnr)` view round-trip, and the union listing: a file both edited and previewed gets one row, and a preview-only file gets a row of its own with no `Preview: ` row anywhere. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:buffer_picker` target stages the nvim runfiles and is tagged `no-sandbox`.
 
 **Gotchas**
 
@@ -156,7 +156,7 @@ The command channel: typing each `:Wolf…` Ex command and draining an `FfiComma
 
 **Covers**
 
-The Edit surface: the `is_preview_active()` gate and `edit_source(mode)` for `split_left`, `reuse_editor_pane` and `active`, plus the reuse fallback with no other editor pane, the not-a-preview no-op, and neutral values after `shutdown()`. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:edit` target stages the nvim runfiles and is tagged `no-sandbox`.
+The Edit surface: the `is_preview_active()` gate and the in-place `edit_source()` — the active pane's preview becomes its source in the same window while a second pane is left alone, `previews()` drops the window, `is_preview_active()` falls and `is_markdown_active()` rises — plus the off-preview no-op and neutral values after `shutdown()`. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:edit` target stages the nvim runfiles and is tagged `no-sandbox`.
 
 **Gotchas**
 
@@ -312,7 +312,9 @@ Real-nvim coverage of the split-panes bridge — `windows()`, `active_win`, `gri
 
 #### `preview.rs`
 
-**Covers** — the Markdown-preview bridge: the `is_markdown_active` gate, `open_preview(mode)` placements plus the reuse-pane fallback, the `previews()` rows, `render_preview` HTML (headings, slugs, LaTeX), and `preview_file(win, path)` link-follow, plus the scroll-sync cursor join — a row's `source_cursor_line()` / `source_cursor_col()` matching `Snapshot.markdown_cursors` for its own source buffer, and the `line == 0` sentinel a background-loaded source produces. Real nvim; target `//crates/wolf-ffi:preview` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`). Each case seeds its own temp cwd and polls the local `wait_for_*` helpers.
+**Covers** — the Markdown-preview bridge: the `is_markdown_active` gate, the in-place `open_preview()` and its round-trip with `edit_source()` including scratch reuse across cycles, the `previews()` rows (two panes previewing one source share the scratch), the buffer picker's one-row-per-file union with no `Preview: ` rows, and `render_preview` HTML (headings, slugs, LaTeX).
+
+Also `preview_buffer(win, bufnr)` — markdown binds and returns the source bufnr, non-markdown returns 0, an unsaved `Untitled.md` works — `preview_file(win, path)` link-follow with the source left buflisted only on success, and the scroll-sync cursor join: a row's `source_cursor_line()` / `source_cursor_col()` matching `Snapshot.markdown_cursors` for its own source buffer, and the `line == 0` sentinel a background-loaded source produces. Real nvim; target `//crates/wolf-ffi:preview` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`). Each case seeds its own temp cwd and polls the local `wait_for_*` helpers.
 
 **Gotchas** — the startup buffer is already a markdown `Untitled.md`, so `wait_for_markdown_active(true)` returns instantly across a markdown-to-markdown `:e`; use `wait_for_current_file` as the switch barrier before a synchronous `open_preview`. The temp cwd is nvim's working dir and search root, so keep it alive until after `shutdown()`.
 

@@ -168,27 +168,35 @@ The flag is cleared even when `fn` errors, which is what keeps buffer tracking a
 
 #### `wolf_ensure_preview_buf(source_buf, source_path)`
 
-Creates or reuses the preview scratch buffer for `source_buf` and returns its bufnr, memoized in `_G.wolf_preview_bufs` keyed by source buffer number. The buffer is listed (so it surfaces in the buffer picker) and scratch, is named `Preview: <cwd-relative path>`, is `nomodifiable`, and carries `b:wolf_preview_source` (the source's absolute path) and `b:wolf_preview_source_bufnr`. Those two variables are what the path-based trackers skip on and what the preview window scan reads.
+Creates or reuses the preview scratch buffer for `source_buf` and returns its bufnr, memoized in `_G.wolf_preview_bufs` keyed by source buffer number. The buffer is an unlisted scratch, is named `Preview: <cwd-relative path>`, is `nomodifiable`, and carries `b:wolf_preview_source` (the source's absolute path) and `b:wolf_preview_source_bufnr`. Those two variables are what the path-based trackers skip on and what the preview window scan reads.
+
+Unlisted is deliberate: the buffer picker lists one row per file — the source buffers — so the scratch contributes no `Preview: ` row of its own, and its name exists only for window-title display.
 
 Naming falls back to a bufnr-disambiguated name when two sources share a cwd-relative path, so the second preview still opens.
 
-#### `wolf_open_preview(mode)`
+#### `wolf_open_preview()`
 
-Opens or reuses the Markdown preview for the active source buffer and returns the preview buffer's number, or `0` when the active buffer's filetype is not `markdown` — the same gate as the Preview command.
+Previews the active source buffer in place — the active pane's buffer is replaced with the preview scratch — and returns the preview buffer's number, or `0` when the active buffer's filetype is not `markdown`, the same gate as the Preview command.
 
-`mode` selects placement. `split_right` reuses `wolf_do_split("v")` so the shell creates and binds a new pane, then binds the preview into it. `reuse_preview_pane` binds into the other window that already carries `b:wolf_preview_source`, leaving the current window focused, and falls back to the current window when there is none. `active`, and any unknown mode, replaces the current window's buffer. Every mode ends with a guarded `_G.wolf_emit_previews` and `_G.wolf_emit_current_file`. It re-emits the source buffer's cursor before any placement branch, because `split_right` and `active` make the preview scratch current and the cursor emit's preview-scratch guard would then bail, leaving a freshly opened preview with no anchor.
+It re-emits the source buffer's cursor before the bind, while the source is still current: after the bind the cursor emit's preview-scratch guard would bail, leaving a freshly opened preview with no anchor. Ends with a guarded `_G.wolf_emit_previews` and `_G.wolf_emit_current_file`.
 
-#### `wolf_edit_source(mode)`
+#### `wolf_edit_source()`
 
-The inverse of `wolf_open_preview`: navigates the active preview pane back to its source file and returns the source bufnr, or `0` unless the current buffer is a preview scratch.
+The inverse of `wolf_open_preview`: replaces the active pane's preview with its source file in place and returns the source bufnr, or `0` unless the current buffer is a preview scratch.
 
-Binding prefers `nvim_win_set_buf` with the recorded source bufnr and falls back to focusing the target window and `:edit`ing the path. `split_left` splits, binds the source into the _original_ window, and refocuses it — the front-end inserts the new leaf after the original, so this is what puts the editor left and the preview right. `reuse_editor_pane` binds into the first other non-preview window and focuses it; `active` replaces the current window's preview. No MRU is recorded. Ends with the same two guarded re-emits.
+Binding prefers `nvim_win_set_buf` with the recorded source bufnr — window-scoped, no disk re-read — and falls back to `:edit`ing the recorded path when that bufnr is stale. No MRU is recorded. Ends with the same two guarded re-emits.
+
+#### `wolf_preview_buffer(win, bufnr)`
+
+Previews an already-open buffer: binds `bufnr`'s preview scratch into window `win`, falling back to the current window when `win` is missing, zero, or invalid, and returns the source bufnr, or `0` when `bufnr` is invalid, unnamed, or not Markdown. On `0` the front-end falls back to a plain `switch_buffer`, so a non-markdown pick converts the pane to edit mode.
+
+The gate honors an already-set filetype and otherwise asks `vim.filetype.match`, setting the filetype on a match. It `bufload`s the buffer first, because a `:badd`-ed buffer can be buflisted yet unloaded and the render pull needs its lines. Ends with the same two guarded re-emits.
 
 #### `wolf_preview_file(win, path)`
 
-Repoints preview window `win` at the Markdown file `path`, which the front-end has already resolved to an absolute path from a clicked `file://` link. This helper does no relative-path resolution. Returns the linked file's source bufnr, or `0` when `path` is empty, unreadable, or not Markdown — on `0` the front-end leaves the pane alone.
+The disk-path front half of `wolf_preview_buffer`: previews the Markdown file `path` in window `win`, where `path` is already absolute — resolved by the front-end from a clicked `file://` link or a picked file. This helper does no relative-path resolution. Returns the source bufnr, or `0` when `path` is empty, unreadable, or not Markdown — on `0` the front-end leaves the pane alone or applies its own fallback.
 
-It `bufadd`s and `bufload`s the source, honors an already-set filetype or asks `vim.filetype.match`, builds the preview buffer through `wolf_ensure_preview_buf`, and binds it into `win`, falling back to the current window when `win` is missing or invalid. Ends with the same two guarded re-emits. It deliberately does not re-emit the cursor: the source is loaded in the background with no window, so it carries no meaningful position.
+It `bufadd`s and `bufload`s the source, then delegates the gate, bind, and re-emits to `wolf_preview_buffer`. Only on success does it mark the source buflisted: a `bufadd`-ed background buffer is unlisted, and listing it is what gives a preview-only file its buffer-picker row, while a rejected non-markdown path must not gain one. It deliberately does not re-emit the cursor: the source is loaded in the background with no window, so it carries no meaningful position.
 
 #### `wolf_next_untitled(cwd, exclude_buf, extra_collision)`
 
@@ -254,7 +262,7 @@ Whether a Wolf-owned swap file already exists for `abspath`, meaning a crashed n
 
 **The cursor emit needs both buffer-entry events and the `win_gettype()` guard, and neither is redundant.** `:edit foo.md` fires `CursorMoved` before filetype detection, so the steady-state autocmds alone would leave an opened-but-untouched buffer reporting no cursor at all. Adding `BufEnter` and `BufWinEnter` fixes that but opens a hole: `vim.fn.bufload()` fires both inside nvim's synthetic autocmd window, where the target buffer is genuinely current and every other guard passes, over a fabricated line 1 that belongs to no user pane. Only a normal window carries a real cursor, so the guard is what preserves the `line == 0` unknown sentinel a background-loaded source must report.
 
-**A preview pane is a real listed nvim scratch buffer, not a synthetic front-end pseudo-pane.** Being listed is what makes it surface in the buffer picker as `Preview: <path>` with no front-end injection; carrying `b:wolf_preview_source` is what lets the path-based trackers skip it.
+**A preview pane is a real nvim scratch buffer — unlisted, with its source buflisted instead.** Carrying `b:wolf_preview_source` is what lets the path-based trackers skip it and what marks its window as a preview-mode pane. The buffer picker lists the union of edited and previewed files, one row per file: the row is always the source buffer, which `wolf_preview_file` marks buflisted on a successful preview, and the unlisted scratch contributes none of its own.
 
 **The full-width flag lives per buffer and, from a preview, targets the source buffer.** Full width is a property of the document, so toggling from either view resizes both and the menu checkmark tracks the document rather than the scratch. The terminal drawer seeds the same flag to `true` as its default, and remains user-toggleable.
 
